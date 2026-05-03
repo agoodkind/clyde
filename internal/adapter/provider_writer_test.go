@@ -402,6 +402,19 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 	if err := writer.WriteEvent(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: "finalized text"}); err != nil {
 		t.Fatalf("WriteEvent: %v", err)
 	}
+	if err := writer.WriteEvent(adapterrender.Event{
+		Kind: adapterrender.EventToolCallDelta,
+		ToolCalls: []adapteropenai.ToolCall{{
+			ID:   "call_task",
+			Type: "function",
+			Function: adapteropenai.ToolCallFunction{
+				Name:      "Task",
+				Arguments: `{"prompt":"redacted from summary logs"}`,
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("WriteEvent tool call: %v", err)
+	}
 	err = writer.finalizeStream(adapterprovider.Result{
 		FinishReason: "stop",
 		Usage: adapteropenai.Usage{
@@ -437,28 +450,40 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 	if evt.UpstreamResponseID != "resp-final" {
 		t.Fatalf("upstream_response_id=%q want resp-final", evt.UpstreamResponseID)
 	}
+	if evt.ToolCallNameCount != 1 || len(evt.ToolCallNames) != 1 || evt.ToolCallNames[0] != "Task" {
+		t.Fatalf("tool call summary=%+v", evt)
+	}
+	if !evt.HasSubagentToolCall {
+		t.Fatalf("has_subagent_tool_call=false want true")
+	}
+	if strings.Contains(buf.String(), "redacted from summary logs") {
+		t.Fatalf("assistant summary leaked tool arguments: %s", buf.String())
+	}
 	if !strings.Contains(rec.Body.String(), "data: [DONE]") {
 		t.Fatalf("stream did not finish: %s", rec.Body.String())
 	}
 }
 
 type providerAssistantTextSummaryLogEntry struct {
-	Msg                   string `json:"msg"`
-	RequestID             string `json:"request_id"`
-	TraceID               string `json:"trace_id"`
-	SpanID                string `json:"span_id"`
-	ParentSpanID          string `json:"parent_span_id"`
-	CursorRequestID       string `json:"cursor_request_id"`
-	CursorConversationID  string `json:"cursor_conversation_id"`
-	UpstreamResponseID    string `json:"upstream_response_id"`
-	Backend               string `json:"backend"`
-	Model                 string `json:"model"`
-	FinishReason          string `json:"finish_reason"`
-	DeltaCount            int    `json:"assistant_text_delta_count"`
-	Chars                 int    `json:"assistant_text_chars"`
-	UsagePromptTokens     int    `json:"usage_prompt_tokens"`
-	UsageCompletionTokens int    `json:"usage_completion_tokens"`
-	UsageTotalTokens      int    `json:"usage_total_tokens"`
+	Msg                   string   `json:"msg"`
+	RequestID             string   `json:"request_id"`
+	TraceID               string   `json:"trace_id"`
+	SpanID                string   `json:"span_id"`
+	ParentSpanID          string   `json:"parent_span_id"`
+	CursorRequestID       string   `json:"cursor_request_id"`
+	CursorConversationID  string   `json:"cursor_conversation_id"`
+	UpstreamResponseID    string   `json:"upstream_response_id"`
+	Backend               string   `json:"backend"`
+	Model                 string   `json:"model"`
+	FinishReason          string   `json:"finish_reason"`
+	DeltaCount            int      `json:"assistant_text_delta_count"`
+	Chars                 int      `json:"assistant_text_chars"`
+	UsagePromptTokens     int      `json:"usage_prompt_tokens"`
+	UsageCompletionTokens int      `json:"usage_completion_tokens"`
+	UsageTotalTokens      int      `json:"usage_total_tokens"`
+	ToolCallNameCount     int      `json:"tool_call_name_count"`
+	ToolCallNames         []string `json:"tool_call_names"`
+	HasSubagentToolCall   bool     `json:"has_subagent_tool_call"`
 }
 
 func providerAssistantTextSummaryLog(t *testing.T, logs string) providerAssistantTextSummaryLogEntry {

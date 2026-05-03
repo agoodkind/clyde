@@ -164,6 +164,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		DerivedCacheCreationTokens: runResult.DerivedCacheCreationTokens,
 		UpstreamResponseID:         runResult.ResponseID,
 		ToolCallCount:              runResult.ToolCallCount,
+		ToolCallNames:              runResult.ToolCallNames,
 		HasSubagentToolCall:        runResult.HasSubagentToolCall,
 	}, nil
 }

@@ -475,9 +475,37 @@ func TestParseSSETracksSubagentToolCalls(t *testing.T) {
 	if !res.HasSubagentToolCall {
 		t.Fatalf("HasSubagentToolCall=false want true")
 	}
+	if got := strings.Join(res.ToolCallNames, ","); got != "Task" {
+		t.Fatalf("ToolCallNames=%q want Task", got)
+	}
 	calls := collectToolCallsLocal(got)
 	if len(calls) == 0 || calls[0].Function.Name != "Task" {
 		t.Fatalf("tool calls=%#v want first name Task", calls)
+	}
+}
+
+func TestParseSSETracksCursorSubagentToolCalls(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"Subagent","arguments":"{\"prompt\":\"inspect\",\"run_in_background\":true}"}}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
+		"",
+	}, "\n") + "\n")
+	got, res, err := parseSSEChunksForTest(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if !res.HasSubagentToolCall {
+		t.Fatalf("HasSubagentToolCall=false want true")
+	}
+	if got := strings.Join(res.ToolCallNames, ","); got != "Subagent" {
+		t.Fatalf("ToolCallNames=%q want Subagent", got)
+	}
+	calls := collectToolCallsLocal(got)
+	if len(calls) == 0 || calls[0].Function.Name != "Subagent" {
+		t.Fatalf("tool calls=%#v want first name Subagent", calls)
 	}
 }
 
@@ -500,9 +528,36 @@ func TestParseSSEPreservesLegacySpawnAgentName(t *testing.T) {
 	if !res.HasSubagentToolCall {
 		t.Fatalf("HasSubagentToolCall=false want true")
 	}
+	if got := strings.Join(res.ToolCallNames, ","); got != "spawn_agent" {
+		t.Fatalf("ToolCallNames=%q want spawn_agent", got)
+	}
 	calls := collectToolCallsLocal(got)
 	if len(calls) == 0 || calls[0].Function.Name != "spawn_agent" {
 		t.Fatalf("tool calls=%#v want first name spawn_agent", calls)
+	}
+}
+
+func TestParseSSEDoesNotMarkOrdinaryToolCallsAsSubagent(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"Read","arguments":""}}`,
+		"",
+		"event: response.function_call_arguments.delta",
+		`data: {"item_id":"fc_1","delta":"{\"path\":\"README.md\"}"}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}},"sequence_number":10}`,
+		"",
+	}, "\n") + "\n")
+	_, res, err := parseSSEChunksForTest(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.HasSubagentToolCall {
+		t.Fatalf("HasSubagentToolCall=true want false")
+	}
+	if got := strings.Join(res.ToolCallNames, ","); got != "Read" {
+		t.Fatalf("ToolCallNames=%q want Read", got)
 	}
 }
 

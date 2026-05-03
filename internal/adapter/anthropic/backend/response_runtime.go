@@ -76,6 +76,7 @@ type StreamExecutionResult struct {
 	AnthropicUsage      anthropic.Usage
 	EmittedContent      bool
 	ToolCallCount       int
+	ToolCallNames       []string
 	HasSubagentToolCall bool
 }
 
@@ -179,13 +180,15 @@ func RunStreamExecution(
 ) (StreamExecutionResult, error) {
 	emittedContent := false
 	toolCallCount := 0
+	var toolCallNames []string
 	hasSubagentToolCall := false
 	emitTracked := func(ev adapterrender.Event) error {
 		if eventHasVisibleContent(ev) {
 			emittedContent = true
 		}
-		count, hasSubagent := toolCallStats(ev)
+		count, names, hasSubagent := toolCallStats(ev)
 		toolCallCount += count
+		appendUniqueStrings(&toolCallNames, names)
 		hasSubagentToolCall = hasSubagentToolCall || hasSubagent
 		return emit(ev)
 	}
@@ -211,6 +214,7 @@ func RunStreamExecution(
 		AnthropicUsage:      anthUsage,
 		EmittedContent:      emittedContent,
 		ToolCallCount:       toolCallCount,
+		ToolCallNames:       toolCallNames,
 		HasSubagentToolCall: hasSubagentToolCall,
 	}, err
 }
@@ -512,6 +516,7 @@ func StreamResponse(
 		DurationMs:          time.Since(started).Milliseconds(),
 		Stream:              true,
 		ToolCallCount:       result.ToolCallCount,
+		ToolCallNames:       result.ToolCallNames,
 		HasSubagentToolCall: result.HasSubagentToolCall,
 	})
 	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
@@ -538,6 +543,7 @@ func StreamResponse(
 			CacheCreationTokens: anthUsage.CacheCreationInputTokens,
 			CostMicrocents:      breakdown.TotalMicrocents,
 			ToolCallCount:       result.ToolCallCount,
+			ToolCallNames:       result.ToolCallNames,
 			HasSubagentToolCall: result.HasSubagentToolCall,
 			DurationMs:          time.Since(started).Milliseconds(),
 		})
@@ -556,21 +562,42 @@ func eventHasVisibleContent(ev adapterrender.Event) bool {
 	}
 }
 
-func toolCallStats(ev adapterrender.Event) (count int, hasSubagent bool) {
+func toolCallStats(ev adapterrender.Event) (count int, names []string, hasSubagent bool) {
 	if ev.Kind != adapterrender.EventToolCallDelta {
-		return 0, false
+		return 0, nil, false
 	}
 	for _, tc := range ev.ToolCalls {
-		if strings.TrimSpace(tc.ID) == "" && strings.TrimSpace(tc.Function.Name) == "" {
+		name := strings.TrimSpace(tc.Function.Name)
+		if strings.TrimSpace(tc.ID) == "" && name == "" {
 			continue
 		}
 		count++
-		switch tc.Function.Name {
+		appendUniqueStrings(&names, []string{name})
+		switch name {
 		case "Subagent", "Task", "spawn_agent":
 			hasSubagent = true
 		}
 	}
-	return count, hasSubagent
+	return count, names, hasSubagent
+}
+
+func appendUniqueStrings(dst *[]string, values []string) {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		seen := false
+		for _, existing := range *dst {
+			if existing == value {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			*dst = append(*dst, value)
+		}
+	}
 }
 
 func backendJSONCoercion(coercion anthropic.JSONCoercion) JSONCoercion {

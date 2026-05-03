@@ -31,6 +31,7 @@ type RunResult struct {
 	ResponseID                 string
 	OutputItems                []map[string]any
 	ToolCallCount              int
+	ToolCallNames              []string
 	HasSubagentToolCall        bool
 }
 
@@ -480,8 +481,10 @@ func (p *sseEventParser) handleFunctionCallOutputItem(eventName string, raw tran
 	if state.Name == "" && name != "" {
 		state.Name = name
 	}
-	if state.Name == "Task" || state.NativeName == "spawn_agent" {
-		p.out.HasSubagentToolCall = true
+	if name != "" {
+		p.observeActualToolCallName(name)
+	} else {
+		p.observeActualToolCallName(state.Name)
 	}
 	p.appendCompletedFunctionCallItem(eventName, item, state)
 	p.out.SetFinishReason("tool_calls")
@@ -548,6 +551,7 @@ func (p *sseEventParser) handleLocalShellOutputItem(eventName string, raw transp
 	itemID := strings.TrimSpace(item.string("id"))
 	callID := strings.TrimSpace(item.string("call_id"))
 	state, created := p.getToolState(itemID, callID, "Shell")
+	p.observeActualToolCallName(state.Name)
 	if created {
 		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
@@ -579,8 +583,10 @@ func (p *sseEventParser) handleCustomToolOutputItem(eventName string, raw transp
 		cursorName = "ApplyPatch"
 	}
 	state, created := p.getToolState(itemID, callID, cursorName)
-	if state.Name == "Task" || name == "spawn_agent" {
-		p.out.HasSubagentToolCall = true
+	if name != "" {
+		p.observeActualToolCallName(name)
+	} else {
+		p.observeActualToolCallName(state.Name)
 	}
 	if created {
 		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
@@ -641,6 +647,7 @@ func (p *sseEventParser) handleCustomToolCallInputDelta(eventName string, raw tr
 	callID := strings.TrimSpace(raw.CallID)
 	delta := raw.Delta
 	state, created := p.getToolState(itemID, callID, "ApplyPatch")
+	p.observeActualToolCallName(state.Name)
 	if created {
 		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
@@ -880,9 +887,6 @@ func (p *sseEventParser) createToolState(itemID, callID, name string) *toolCallS
 	}
 	p.nextToolIndex++
 	p.out.ToolCallCount = max(p.out.ToolCallCount, p.nextToolIndex)
-	if name == "Task" || name == "spawn_agent" {
-		p.out.HasSubagentToolCall = true
-	}
 	if itemID != "" {
 		p.toolCallsByItemID[itemID] = state
 	}
@@ -890,6 +894,39 @@ func (p *sseEventParser) createToolState(itemID, callID, name string) *toolCallS
 		p.toolCallsByItemID[callID] = state
 	}
 	return state
+}
+
+func (p *sseEventParser) observeActualToolCallName(name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	p.recordToolCallName(name)
+	if isSubagentToolCallName(name) {
+		p.out.HasSubagentToolCall = true
+	}
+}
+
+func (p *sseEventParser) recordToolCallName(name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	for _, existing := range p.out.ToolCallNames {
+		if existing == name {
+			return
+		}
+	}
+	p.out.ToolCallNames = append(p.out.ToolCallNames, name)
+}
+
+func isSubagentToolCallName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "Task", "Subagent", "spawn_agent":
+		return true
+	default:
+		return false
+	}
 }
 
 func isContextWindowError(err error) bool {

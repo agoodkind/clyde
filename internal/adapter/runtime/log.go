@@ -32,6 +32,7 @@ type RequestEvent struct {
 	CacheCreationTokens        int
 	DerivedCacheCreationTokens int
 	ToolCallCount              int
+	ToolCallNames              []string
 	HasSubagentToolCall        bool
 	CostMicrocents             int64
 	DurationMs                 int64
@@ -55,6 +56,7 @@ type CompletedAttrs struct {
 	DurationMs                 int64
 	Stream                     bool
 	ToolCallCount              int
+	ToolCallNames              []string
 	HasSubagentToolCall        bool
 
 	// Path tags which dispatch leg handled the request so aggregators
@@ -119,6 +121,7 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 		slog.Int64("duration_ms", attrs.DurationMs),
 		slog.Bool("stream", attrs.Stream),
 		slog.Int("tool_call_count", attrs.ToolCallCount),
+		slog.Any("tool_call_names", attrs.ToolCallNames),
 		slog.Bool("has_subagent_tool_call", attrs.HasSubagentToolCall),
 		slog.Bool("cost_rates_known", breakdown.RatesKnown),
 		slog.Int64("cost_microcents", breakdown.TotalMicrocents),
@@ -295,6 +298,7 @@ func LogTerminal(log *slog.Logger, ctx context.Context, sink RequestEventSink, e
 		slog.Int("cache_creation_tokens", ev.CacheCreationTokens),
 		slog.Int("derived_cache_creation_tokens", ev.DerivedCacheCreationTokens),
 		slog.Int("tool_call_count", ev.ToolCallCount),
+		slog.Any("tool_call_names", ev.ToolCallNames),
 		slog.Bool("has_subagent_tool_call", ev.HasSubagentToolCall),
 		slog.Int64("cost_microcents", ev.CostMicrocents),
 		slog.Int64("duration_ms", ev.DurationMs),

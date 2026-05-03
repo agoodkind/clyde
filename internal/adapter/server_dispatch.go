@@ -312,7 +312,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.Int("input_tokens_budget", resolvedReq.ContextBudget.InputTokens),
 			slog.Int("output_tokens_budget", resolvedReq.ContextBudget.OutputTokens),
 			slog.String("conversation_id", cursorReq.ConversationID),
-			slog.Bool("has_subagent_tool", cursorReq.HasSubagentTool),
+			slog.Bool("subagent_tool_available", cursorReq.HasSubagentTool),
 			slog.Bool("has_create_plan_tool", cursorReq.HasCreatePlanTool),
 			slog.Bool("has_apply_patch_tool", cursorReq.HasApplyPatchTool),
 			slog.Int("mcp_tool_count", len(cursorReq.MCPToolNames)),
@@ -354,12 +354,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.received",
 		attrs...,
 	)
-	if cursorReq.HasSubagentTool && cursorReq.GenerationID == "" {
+	if cursorReq.PathKind == adaptercursor.RequestPathSubagent && cursorReq.GenerationID == "" {
 		missingAttrs := []slog.Attr{
 			slog.String("request_id", reqID),
 			slog.String("cursor_conversation_id", cursorReq.ConversationID),
 			slog.String("cursor_request_path", string(cursorReq.PathKind)),
-			slog.Bool("has_subagent_tool", true),
+			slog.Bool("subagent_tool_available", cursorReq.HasSubagentTool),
 			slog.Any("metadata_keys", discovery.MetadataKeys),
 			slog.Any("header_names", HeaderNames(r.Header)),
 		}

@@ -139,6 +139,7 @@ func (s *Server) dispatchCodexProviderStream(
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
 		slog.Int("tool_call_count", result.ToolCallCount),
+		slog.Any("tool_call_names", result.ToolCallNames),
 		slog.Bool("has_subagent_tool_call", result.HasSubagentToolCall),
 	}
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
@@ -158,6 +159,7 @@ func (s *Server) dispatchCodexProviderStream(
 		CacheCreationTokens:        0,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 		ToolCallCount:              result.ToolCallCount,
+		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
 		DurationMs:                 time.Since(started).Milliseconds(),
 		Correlation:                corr,
@@ -216,6 +218,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		ReasoningVisible:           result.ReasoningVisible,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 		ToolCallCount:              result.ToolCallCount,
+		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
 	}
 	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, collector.events, runResult)
@@ -244,6 +247,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
 		slog.Bool("reasoning_visible", result.ReasoningVisible),
 		slog.Int("tool_call_count", result.ToolCallCount),
+		slog.Any("tool_call_names", result.ToolCallNames),
 		slog.Bool("has_subagent_tool_call", result.HasSubagentToolCall),
 	}
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
@@ -263,6 +267,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		CacheCreationTokens:        0,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 		ToolCallCount:              result.ToolCallCount,
+		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
 		DurationMs:                 time.Since(started).Milliseconds(),
 		Correlation:                corr,

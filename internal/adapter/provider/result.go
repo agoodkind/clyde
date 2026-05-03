@@ -48,6 +48,10 @@ type Result struct {
 	// the provider in this response. It lets the dispatcher distinguish
 	// plain text stops from tool-call turns during finalization.
 	ToolCallCount int
+	// ToolCallNames contains unique assistant tool-call names emitted by
+	// the provider in this response. It is diagnostic-only and must not
+	// affect wire rendering.
+	ToolCallNames []string
 	// HasSubagentToolCall reports whether this response emitted a
 	// Cursor subagent/spawn_agent tool call.
 	HasSubagentToolCall bool

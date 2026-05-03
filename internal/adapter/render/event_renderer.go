@@ -79,6 +79,8 @@ type EventRenderer struct {
 	syntheticReasoning    bool
 	assistantText         assistantTextAggregate
 	assistantTextLogged   bool
+	toolCallNames         []string
+	hasSubagentToolCall   bool
 }
 
 type deltaSummary struct {
@@ -173,6 +175,9 @@ func (r *EventRenderer) LogAssistantTextSummary(finishReason string, usage *adap
 		slog.Bool("assistant_text_repeated_half", summary.RepeatedHalf),
 		slog.Bool("assistant_text_repeated_suffix", summary.RepeatedSuffix),
 		slog.Int("assistant_text_repeated_suffix_chars", summary.RepeatedSuffixChars),
+		slog.Int("tool_call_name_count", len(r.toolCallNames)),
+		slog.Any("tool_call_names", r.toolCallNames),
+		slog.Bool("has_subagent_tool_call", r.hasSubagentToolCall),
 	}
 	attrs = correlation.AppendAttrs(attrs, correlation.FromContext(r.logContext()))
 	if usage != nil {
@@ -190,6 +195,9 @@ func (r *EventRenderer) LogAssistantTextSummary(finishReason string, usage *adap
 }
 
 func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
+	if ev.Kind == EventToolCallDelta {
+		r.recordToolCallNames(ev.ToolCalls)
+	}
 	logEvent := shouldLogEvent(ev)
 	if logEvent {
 		r.flushSuppressedEventSummaries()
@@ -268,6 +276,33 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 		}
 	}
 	return out
+}
+
+func (r *EventRenderer) recordToolCallNames(toolCalls []adapteropenai.ToolCall) {
+	if r == nil {
+		return
+	}
+	for _, tc := range toolCalls {
+		name := strings.TrimSpace(tc.Function.Name)
+		if name == "" {
+			continue
+		}
+		if !slices.Contains(r.toolCallNames, name) {
+			r.toolCallNames = append(r.toolCallNames, name)
+		}
+		if isSubagentToolCallName(name) {
+			r.hasSubagentToolCall = true
+		}
+	}
+}
+
+func isSubagentToolCallName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "Task", "Subagent", "spawn_agent":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *EventRenderer) renderText(text string) *adapteropenai.StreamChunk {

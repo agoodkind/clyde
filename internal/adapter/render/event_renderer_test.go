@@ -89,6 +89,47 @@ func TestEventRendererLogsToolCallIdentitySummary(t *testing.T) {
 	}
 }
 
+func TestEventRendererAssistantSummaryIncludesToolDiagnostics(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r := NewEventRenderer("req", "alias", "codex", log)
+
+	_ = r.HandleEvent(Event{
+		Kind: EventToolCallDelta,
+		ToolCalls: []adapteropenai.ToolCall{{
+			Index: 0,
+			ID:    "call_1",
+			Type:  "function",
+			Function: adapteropenai.ToolCallFunction{
+				Name: "Subagent",
+			},
+		}},
+	})
+	r.LogAssistantTextSummary("tool_calls", nil)
+
+	var summary map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			t.Fatalf("unmarshal log: %v", err)
+		}
+		if evt["msg"] == "adapter.render.assistant_text_summary" {
+			summary = evt
+			break
+		}
+	}
+	if summary == nil {
+		t.Fatalf("assistant summary not found: %s", buf.String())
+	}
+	names, _ := summary["tool_call_names"].([]any)
+	if len(names) != 1 || names[0] != "Subagent" {
+		t.Fatalf("tool_call_names=%v", summary["tool_call_names"])
+	}
+	if summary["has_subagent_tool_call"] != true {
+		t.Fatalf("has_subagent_tool_call=%v want true", summary["has_subagent_tool_call"])
+	}
+}
+
 func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	r := NewEventRenderer("req-thinking", "alias", "codex", nil)
 	chunks := r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "checking constraints"})
