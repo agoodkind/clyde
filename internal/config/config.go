@@ -294,12 +294,23 @@ type AdapterOpenAICompatPassthrough struct {
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
 }
 
-// AdapterNotices controls whether notice injection happens on direct
-// Anthropic backend responses. The field is a pointer so absence in config
-// can still map to enabled=true.
+// AdapterNotices controls the synthetic notice injection path across
+// direct provider responses. Omitted defaults to enabled=true with the
+// built-in usage warning thresholds.
 type AdapterNotices struct {
-	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Enabled *bool              `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Usage   AdapterNoticeUsage `json:"usage,omitzero" toml:"usage,omitempty"`
 }
+
+// AdapterNoticeUsage configures when usage-related notices should be
+// injected into assistant responses. Threshold values represent used
+// percent, not remaining percent. For example, 75 means inject once the
+// provider reports 75%% used or higher.
+type AdapterNoticeUsage struct {
+	ThresholdsUsedPercent []float64 `json:"thresholdsUsedPercent,omitempty" toml:"thresholds_used_percent,omitempty"`
+}
+
+var defaultNoticeUsageThresholdsUsedPercent = []float64{75, 95}
 
 // EnabledOrDefault returns true when the stanza is absent or enabled is unset.
 func (n AdapterNotices) EnabledOrDefault() bool {
@@ -307,6 +318,15 @@ func (n AdapterNotices) EnabledOrDefault() bool {
 		return true
 	}
 	return *n.Enabled
+}
+
+// UsageThresholdsUsedPercentOrDefault returns the normalized used-percent
+// thresholds for chat usage notices.
+func (n AdapterNotices) UsageThresholdsUsedPercentOrDefault() []float64 {
+	if len(n.Usage.ThresholdsUsedPercent) == 0 {
+		return append([]float64(nil), defaultNoticeUsageThresholdsUsedPercent...)
+	}
+	return append([]float64(nil), n.Usage.ThresholdsUsedPercent...)
 }
 
 // AdapterOAuth holds endpoints and OAuth client metadata supplied by

@@ -49,6 +49,7 @@ type ResponseDispatcher interface {
 	LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage)
 	CacheTTL() string
 	NoticesEnabled() bool
+	NoticeUsageThresholdsUsedPercent() []float64
 	ClaimNotice(string, time.Time) bool
 	UnclaimNotice(string, time.Time)
 }
@@ -238,7 +239,12 @@ func CollectResponse(
 		if previousOnHeaders != nil {
 			previousOnHeaders(h)
 		}
-		notice = adapterruntime.EvaluateNoticeFromHeaders(h, d.NoticesEnabled(), d.ClaimNotice)
+		notice = adapterruntime.EvaluateNoticeFromHeaders(
+			h,
+			d.NoticesEnabled(),
+			d.NoticeUsageThresholdsUsedPercent(),
+			d.ClaimNotice,
+		)
 	}
 	emit := func(ev adapterrender.Event) error {
 		return d.WriteEvent(ev)
@@ -380,6 +386,7 @@ func StreamResponse(
 			model.Alias,
 			h,
 			d.NoticesEnabled(),
+			d.NoticeUsageThresholdsUsedPercent(),
 			func(chunk adapteropenai.StreamChunk) error {
 				return emitChunk(chunk)
 			},

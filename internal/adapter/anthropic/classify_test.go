@@ -3,6 +3,7 @@ package anthropic
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -184,8 +185,27 @@ func TestClassifyHeadersMatchesClassify(t *testing.T) {
 // warning headers must yield no notice without reaching the per-claim
 // formatters.
 func TestEvaluateNoticeShortCircuitsCleanSuccess(t *testing.T) {
-	if got := EvaluateNotice(http.Header{}, timeUTC()); got != nil {
+	if got := EvaluateNotice(http.Header{}, timeUTC(), []float64{75, 95}); got != nil {
 		t.Fatalf("clean 200 should produce no notice, got %+v", got)
+	}
+}
+
+func TestEvaluateNoticeUsesConfiguredThresholds(t *testing.T) {
+	t.Parallel()
+	h := http.Header{
+		"Anthropic-Ratelimit-Unified-Status":         []string{"allowed_warning"},
+		"Anthropic-Ratelimit-Unified-7d-Utilization": []string{"0.80"},
+		"Anthropic-Ratelimit-Unified-7d-Reset":       []string{"1735689600"},
+	}
+	if got := EvaluateNotice(h, timeUTC(), []float64{90}); got != nil {
+		t.Fatalf("configured threshold should suppress 80%% notice, got %+v", got)
+	}
+	got := EvaluateNotice(h, timeUTC(), []float64{75, 90})
+	if got == nil {
+		t.Fatal("expected notice at configured 75%% threshold")
+	}
+	if !strings.Contains(got.Text, "You've used 75% of your weekly limit") {
+		t.Fatalf("notice text=%q", got.Text)
 	}
 }
 

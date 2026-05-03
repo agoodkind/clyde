@@ -17,11 +17,12 @@ type UsageWarning struct {
 }
 
 type usageWarningProbeConfig struct {
-	HTTPClient *http.Client
-	BaseURL    string
-	Token      string
-	AccountID  string
-	Now        func() time.Time
+	HTTPClient            *http.Client
+	BaseURL               string
+	Token                 string
+	AccountID             string
+	Now                   func() time.Time
+	ThresholdsUsedPercent []float64
 }
 
 type whamUsageResponse struct {
@@ -82,20 +83,20 @@ func ProbeUsageWarnings(ctx context.Context, cfg usageWarningProbeConfig) ([]Usa
 
 	now := cfg.Now().UTC()
 	warnings := make([]UsageWarning, 0, 2)
-	if warning, ok := warningForUsageWindow("weekly", payload.RateLimit.SecondaryWindow, now); ok {
+	if warning, ok := warningForUsageWindow("weekly", payload.RateLimit.SecondaryWindow, now, cfg.ThresholdsUsedPercent); ok {
 		warnings = append(warnings, warning)
 	}
-	if warning, ok := warningForUsageWindow("primary", payload.RateLimit.PrimaryWindow, now); ok {
+	if warning, ok := warningForUsageWindow("primary", payload.RateLimit.PrimaryWindow, now, cfg.ThresholdsUsedPercent); ok {
 		warnings = append(warnings, warning)
 	}
 	return warnings, nil
 }
 
-func warningForUsageWindow(kindPrefix string, window *whamUsageWindow, now time.Time) (UsageWarning, bool) {
+func warningForUsageWindow(kindPrefix string, window *whamUsageWindow, now time.Time, thresholdsUsedPercent []float64) (UsageWarning, bool) {
 	if window == nil {
 		return UsageWarning{}, false
 	}
-	highestThreshold, ok := highestUsageThreshold(window.UsedPercent)
+	highestThreshold, ok := highestUsageThreshold(window.UsedPercent, thresholdsUsedPercent)
 	if !ok {
 		return UsageWarning{}, false
 	}
@@ -112,10 +113,13 @@ func warningForUsageWindow(kindPrefix string, window *whamUsageWindow, now time.
 	}, true
 }
 
-func highestUsageThreshold(usedPercent float64) (float64, bool) {
+func highestUsageThreshold(usedPercent float64, thresholdsUsedPercent []float64) (float64, bool) {
+	if len(thresholdsUsedPercent) == 0 {
+		thresholdsUsedPercent = usageWarningThresholds
+	}
 	var highest float64
 	matched := false
-	for _, threshold := range usageWarningThresholds {
+	for _, threshold := range thresholdsUsedPercent {
 		if usedPercent >= threshold {
 			highest = threshold
 			matched = true

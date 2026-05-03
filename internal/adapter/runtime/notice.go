@@ -18,11 +18,11 @@ type (
 )
 
 // EvaluateNoticeFromHeaders checks the Anthropic headers and claims a notice slot.
-func EvaluateNoticeFromHeaders(h http.Header, noticesEnabled bool, claim noticeClaimer) *anthropic.Notice {
+func EvaluateNoticeFromHeaders(h http.Header, noticesEnabled bool, usageThresholdsUsedPercent []float64, claim noticeClaimer) *anthropic.Notice {
 	if !noticesEnabled {
 		return nil
 	}
-	notice := anthropic.EvaluateNotice(h, runtimeClock.Now().UTC())
+	notice := anthropic.EvaluateNotice(h, runtimeClock.Now().UTC(), usageThresholdsUsedPercent)
 	if notice == nil || claim == nil {
 		return nil
 	}
@@ -73,6 +73,7 @@ func NoticeForStreamHeaders(
 	modelAlias string,
 	h http.Header,
 	noticesEnabled bool,
+	usageThresholdsUsedPercent []float64,
 	emit func(adapteropenai.StreamChunk) error,
 	claim noticeClaimer,
 	unclaim noticeUnclaimer,
@@ -80,7 +81,7 @@ func NoticeForStreamHeaders(
 	if emit == nil {
 		return nil, nil
 	}
-	notice := EvaluateNoticeFromHeaders(h, noticesEnabled, claim)
+	notice := EvaluateNoticeFromHeaders(h, noticesEnabled, usageThresholdsUsedPercent, claim)
 	if notice == nil {
 		return nil, nil
 	}

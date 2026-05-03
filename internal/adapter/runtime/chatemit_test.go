@@ -110,6 +110,7 @@ func TestNoticeForStreamHeadersInjectsAndSkipsOnError(t *testing.T) {
 		"model",
 		h,
 		true,
+		[]float64{75, 95},
 		func(chunk adapteropenai.StreamChunk) error {
 			calls++
 			return nil
@@ -131,6 +132,7 @@ func TestNoticeForStreamHeadersInjectsAndSkipsOnError(t *testing.T) {
 		"model",
 		h,
 		true,
+		[]float64{75, 95},
 		func(chunk adapteropenai.StreamChunk) error {
 			calls++
 			return errors.New("emit failed")

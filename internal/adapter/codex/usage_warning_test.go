@@ -42,11 +42,12 @@ func TestProbeUsageWarningsReturnsWeeklyAndPrimaryWarnings(t *testing.T) {
 	defer server.Close()
 
 	warnings, err := ProbeUsageWarnings(context.Background(), usageWarningProbeConfig{
-		HTTPClient: server.Client(),
-		BaseURL:    server.URL + "/backend-api/codex/responses",
-		Token:      "token-123",
-		AccountID:  "acct-123",
-		Now:        func() time.Time { return time.Unix(1735682400, 0).UTC() },
+		HTTPClient:            server.Client(),
+		BaseURL:               server.URL + "/backend-api/codex/responses",
+		Token:                 "token-123",
+		AccountID:             "acct-123",
+		Now:                   func() time.Time { return time.Unix(1735682400, 0).UTC() },
+		ThresholdsUsedPercent: []float64{75, 95},
 	})
 	if err != nil {
 		t.Fatalf("ProbeUsageWarnings: %v", err)
@@ -91,8 +92,38 @@ func TestProbeUsageWarningsSkipsBelowThreshold(t *testing.T) {
 	defer server.Close()
 
 	warnings, err := ProbeUsageWarnings(context.Background(), usageWarningProbeConfig{
-		HTTPClient: server.Client(),
-		BaseURL:    server.URL + "/backend-api/codex/responses",
+		HTTPClient:            server.Client(),
+		BaseURL:               server.URL + "/backend-api/codex/responses",
+		ThresholdsUsedPercent: []float64{75, 95},
+	})
+	if err != nil {
+		t.Fatalf("ProbeUsageWarnings: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings=%+v want none", warnings)
+	}
+}
+
+func TestProbeUsageWarningsUsesConfiguredThresholds(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+            "rate_limit": {
+                "secondary_window": {
+                    "used_percent": 80,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1735689600
+                }
+            }
+        }`))
+	}))
+	defer server.Close()
+
+	warnings, err := ProbeUsageWarnings(context.Background(), usageWarningProbeConfig{
+		HTTPClient:            server.Client(),
+		BaseURL:               server.URL + "/backend-api/codex/responses",
+		ThresholdsUsedPercent: []float64{90},
 	})
 	if err != nil {
 		t.Fatalf("ProbeUsageWarnings: %v", err)

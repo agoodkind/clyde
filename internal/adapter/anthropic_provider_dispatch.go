@@ -446,6 +446,10 @@ func (d *collectResponseDispatcher) NoticesEnabled() bool {
 	return d.server.cfg.Notices.EnabledOrDefault()
 }
 
+func (d *collectResponseDispatcher) NoticeUsageThresholdsUsedPercent() []float64 {
+	return d.server.cfg.Notices.UsageThresholdsUsedPercentOrDefault()
+}
+
 func (d *collectResponseDispatcher) ClaimNotice(kind string, resetsAt time.Time) bool {
 	return Claim(kind, resetsAt)
 }
@@ -536,6 +540,10 @@ func (d *streamResponseDispatcher) CacheTTL() string {
 
 func (d *streamResponseDispatcher) NoticesEnabled() bool {
 	return d.server.cfg.Notices.EnabledOrDefault()
+}
+
+func (d *streamResponseDispatcher) NoticeUsageThresholdsUsedPercent() []float64 {
+	return d.server.cfg.Notices.UsageThresholdsUsedPercentOrDefault()
 }
 
 func (d *streamResponseDispatcher) ClaimNotice(kind string, resetsAt time.Time) bool {

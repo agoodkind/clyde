@@ -147,6 +147,80 @@ func TestProviderExecuteInjectsUsageWarningBeforeAssistantText(t *testing.T) {
 	}
 }
 
+func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/wham/usage":
+			_, _ = w.Write([]byte(`{
+				"rate_limit": {
+					"secondary_window": {
+						"used_percent": 80,
+						"limit_window_seconds": 604800,
+						"reset_at": 1735689600
+					}
+				}
+			}`))
+		case "/backend-api/codex/responses":
+			upgrader := websocket.Upgrader{}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Fatalf("upgrade: %v", err)
+			}
+			defer conn.Close()
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Fatalf("read request: %v", err)
+			}
+			if err := conn.WriteMessage(1, []byte(`{"type":"response.output_text.delta","delta":"answer"}`)); err != nil {
+				t.Fatalf("write delta: %v", err)
+			}
+			if err := conn.WriteMessage(1, []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)); err != nil {
+				t.Fatalf("write complete: %v", err)
+			}
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	deps := adapterprovider.Deps{
+		Auth:       fakeAuth{token: "token-123"},
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return time.Unix(1735682400, 0).UTC() },
+	}
+	deps.Config.Notices.Usage.ThresholdsUsedPercent = []float64{90}
+	deps.Config.Codex.BaseURL = server.URL + "/backend-api/codex/responses"
+	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
+	w := &capturingWriter{}
+	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
+		Model:  "gpt-5.4",
+		Effort: adapterresolver.EffortMedium,
+		OpenAI: adapteropenai.ChatRequest{
+			Messages: []adapteropenai.ChatMessage{{
+				Role:    "user",
+				Content: json.RawMessage(`"hello"`),
+			}},
+		},
+	}, w)
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if len(w.events) != 2 {
+		t.Fatalf("events len=%d want 2", len(w.events))
+	}
+	if got := w.events[0].Text; got != "answer" {
+		t.Fatalf("assistant event=%q", got)
+	}
+	if got := w.events[1].Kind; got != adapterrender.EventReasoningFinished {
+		t.Fatalf("final event kind=%q", got)
+	}
+	if got := w.events[1].Text; got != "" {
+		t.Fatalf("final event text=%q", got)
+	}
+	if result.ReasoningSummary != "" {
+		t.Fatalf("reasoning summary=%q", result.ReasoningSummary)
+	}
+}
+
 func TestCodexBaseURLDefaults(t *testing.T) {
 	if got := codexBaseURL(""); got != "https://chatgpt.com/backend-api/codex/responses" {
 		t.Errorf("codexBaseURL(\"\") = %q, want default", got)

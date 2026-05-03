@@ -222,6 +222,10 @@ func (d *fakeResponseDispatcher) NoticesEnabled() bool {
 	return true
 }
 
+func (d *fakeResponseDispatcher) NoticeUsageThresholdsUsedPercent() []float64 {
+	return []float64{75, 95}
+}
+
 func (d *fakeResponseDispatcher) ClaimNotice(string, time.Time) bool {
 	return true
 }

@@ -195,6 +195,32 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Profiles).To(BeEmpty())
 	})
 
+	It("loads adapter notice usage thresholds", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.notices.usage]\nthresholds_used_percent = [95, 75, 75]\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Adapter.Notices.UsageThresholdsUsedPercentOrDefault()).To(Equal([]float64{75, 95}))
+	})
+
+	It("rejects invalid adapter notice usage thresholds", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter.notices.usage]\nthresholds_used_percent = [0, 75]\n"), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("adapter.notices.usage.thresholds_used_percent"))
+	})
+
 	It("applies logging defaults when logging stanza is omitted", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

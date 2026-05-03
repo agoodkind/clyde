@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -292,6 +293,12 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	default:
 		return fmt.Errorf("adapter.codex.reasoning_summary must be one of auto|concise|detailed|none")
 	}
+
+	thresholds, err := normalizeNoticeUsageThresholds(cfg.Adapter.Notices.Usage.ThresholdsUsedPercent)
+	if err != nil {
+		return err
+	}
+	cfg.Adapter.Notices.Usage.ThresholdsUsedPercent = thresholds
 	return nil
 }
 
@@ -334,6 +341,30 @@ func normalizeCodexReasoningSummary(v string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(v))
 	}
+}
+
+func normalizeNoticeUsageThresholds(raw []float64) ([]float64, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	thresholds := make([]float64, 0, len(raw))
+	for _, threshold := range raw {
+		if threshold <= 0 || threshold >= 100 {
+			return nil, fmt.Errorf("adapter.notices.usage.thresholds_used_percent values must be between 0 and 100")
+		}
+		thresholds = append(thresholds, threshold)
+	}
+	slices.Sort(thresholds)
+	out := thresholds[:0]
+	var previous float64
+	for index, threshold := range thresholds {
+		if index > 0 && threshold == previous {
+			continue
+		}
+		out = append(out, threshold)
+		previous = threshold
+	}
+	return append([]float64(nil), out...), nil
 }
 
 // MergedProfiles helper removed; callers now use LoadGlobalOrDefault and project

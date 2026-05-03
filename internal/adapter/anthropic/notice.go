@@ -30,7 +30,7 @@ type Notice struct {
 // all?" gate; EvaluateNotice short-circuits on
 // ResponseClassSuccessNoWarning so the per-claim formatting logic
 // only runs when at least one warning flag is set.
-func EvaluateNotice(h http.Header, now time.Time) *Notice {
+func EvaluateNotice(h http.Header, now time.Time, usageThresholdsUsedPercent []float64) *Notice {
 	if ClassifyHeaders(h, http.StatusOK).Class == ResponseClassSuccessNoWarning {
 		return nil
 	}
@@ -65,7 +65,7 @@ func EvaluateNotice(h http.Header, now time.Time) *Notice {
 		return nil
 	}
 
-	if n := earlyWarningNotice(h, now); n != nil {
+	if n := earlyWarningNotice(h, now, usageThresholdsUsedPercent); n != nil {
 		return n
 	}
 
@@ -81,7 +81,7 @@ func hasSurpassedThreshold(h http.Header) bool {
 	return false
 }
 
-func earlyWarningNotice(h http.Header, now time.Time) *Notice {
+func earlyWarningNotice(h http.Header, now time.Time, usageThresholdsUsedPercent []float64) *Notice {
 	for _, claim := range []string{"five_hour", "seven_day", "overage"} {
 		headerClaim := earlyWarningHeaderClaim(claim)
 		threshold := strings.TrimSpace(h.Get("anthropic-ratelimit-unified-" + headerClaim + "-surpassed-threshold"))
@@ -95,7 +95,7 @@ func earlyWarningNotice(h http.Header, now time.Time) *Notice {
 			continue
 		}
 
-		text := earlyWarningText(claim, util, hasUtil, resetsAt, now)
+		text := earlyWarningText(claim, util, hasUtil, resetsAt, now, usageThresholdsUsedPercent)
 		if text == "" {
 			return nil
 		}
@@ -132,7 +132,14 @@ func overageActiveText(claim string, resetsAt time.Time, now time.Time) string {
 	return fmt.Sprintf("You're now using extra usage · %s resets %s", limit, formatResetTime(resetsAt, now))
 }
 
-func earlyWarningText(claim string, utilization float64, hasUtil bool, resetsAt time.Time, now time.Time) string {
+func earlyWarningText(
+	claim string,
+	utilization float64,
+	hasUtil bool,
+	resetsAt time.Time,
+	now time.Time,
+	usageThresholdsUsedPercent []float64,
+) string {
 	limit := rateLimitLabel(claim)
 	if limit == "" {
 		limit = "usage"
@@ -140,7 +147,12 @@ func earlyWarningText(claim string, utilization float64, hasUtil bool, resetsAt 
 	if !hasUtil {
 		return ""
 	}
-	used := int(utilization * 100)
+	usedPercent := utilization * 100
+	highestThreshold, ok := highestUsageThreshold(usedPercent, usageThresholdsUsedPercent)
+	if !ok {
+		return ""
+	}
+	used := int(highestThreshold)
 	if used < 1 {
 		used = 0
 	}
@@ -148,6 +160,18 @@ func earlyWarningText(claim string, utilization float64, hasUtil bool, resetsAt 
 		return fmt.Sprintf("You've used %d%% of your %s", used, limit)
 	}
 	return fmt.Sprintf("You've used %d%% of your %s · resets %s", used, limit, formatResetTime(resetsAt, now))
+}
+
+func highestUsageThreshold(usedPercent float64, thresholdsUsedPercent []float64) (float64, bool) {
+	var highest float64
+	matched := false
+	for _, threshold := range thresholdsUsedPercent {
+		if usedPercent >= threshold {
+			highest = threshold
+			matched = true
+		}
+	}
+	return highest, matched
 }
 
 func rateLimitLabel(claim string) string {

@@ -22,6 +22,7 @@ import (
 // normalized event emission together.
 type Provider struct {
 	cfg             config.AdapterCodex
+	notices         config.AdapterNotices
 	auth            adapterprovider.AuthLookup
 	log             *slog.Logger
 	httpClient      *http.Client
@@ -69,6 +70,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	ConfigureCodexFileLogger(opts.FileLog)
 	return &Provider{
 		cfg:             deps.Config.Codex,
+		notices:         deps.Config.Notices,
 		auth:            deps.Auth,
 		log:             log,
 		httpClient:      httpClient,
@@ -144,11 +146,12 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	}
 
 	warnings, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
-		HTTPClient: directCfg.HTTPClient,
-		BaseURL:    directCfg.BaseURL,
-		Token:      directCfg.Token,
-		AccountID:  directCfg.AccountID,
-		Now:        p.now,
+		HTTPClient:            directCfg.HTTPClient,
+		BaseURL:               directCfg.BaseURL,
+		Token:                 directCfg.Token,
+		AccountID:             directCfg.AccountID,
+		Now:                   p.now,
+		ThresholdsUsedPercent: p.notices.UsageThresholdsUsedPercentOrDefault(),
 	})
 	if usageWarningErr != nil {
 		p.log.WarnContext(ctx, "adapter.codex.usage_warning_probe_failed",
