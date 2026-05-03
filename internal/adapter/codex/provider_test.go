@@ -2,10 +2,17 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -67,6 +74,76 @@ func TestProviderExecuteAuthErrorSurfaces(t *testing.T) {
 	_, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{}, w)
 	if !errors.Is(err, want) {
 		t.Fatalf("Execute() err = %v, want %v", err, want)
+	}
+}
+
+func TestProviderExecuteInjectsUsageWarningBeforeAssistantText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/wham/usage":
+			_, _ = w.Write([]byte(`{
+				"rate_limit": {
+					"secondary_window": {
+						"used_percent": 80,
+						"limit_window_seconds": 604800,
+						"reset_at": 1735689600
+					}
+				}
+			}`))
+		case "/backend-api/codex/responses":
+			upgrader := websocket.Upgrader{}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Fatalf("upgrade: %v", err)
+			}
+			defer conn.Close()
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Fatalf("read request: %v", err)
+			}
+			if err := conn.WriteMessage(1, []byte(`{"type":"response.output_text.delta","delta":"answer"}`)); err != nil {
+				t.Fatalf("write delta: %v", err)
+			}
+			if err := conn.WriteMessage(1, []byte(`{"type":"response.completed","response":{"id":"resp-1","status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)); err != nil {
+				t.Fatalf("write complete: %v", err)
+			}
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	deps := adapterprovider.Deps{
+		Auth:       fakeAuth{token: "token-123"},
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return time.Unix(1735682400, 0).UTC() },
+	}
+	deps.Config.Codex.BaseURL = server.URL + "/backend-api/codex/responses"
+	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
+	w := &capturingWriter{}
+	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
+		Model:  "gpt-5.4",
+		Effort: adapterresolver.EffortMedium,
+		OpenAI: adapteropenai.ChatRequest{
+			Messages: []adapteropenai.ChatMessage{{
+				Role:    "user",
+				Content: json.RawMessage(`"hello"`),
+			}},
+		},
+	}, w)
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if len(w.events) < 2 {
+		t.Fatalf("events len=%d want at least 2", len(w.events))
+	}
+	if got := w.events[0].Text; got != formatUsageWarningNotice("Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.") {
+		t.Fatalf("warning event=%q", got)
+	}
+	if got := w.events[1].Text; got != "answer" {
+		t.Fatalf("assistant event=%q", got)
+	}
+	if result.ReasoningSummary != "Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown." {
+		t.Fatalf("reasoning summary=%q", result.ReasoningSummary)
 	}
 }
 

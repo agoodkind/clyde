@@ -11,7 +11,6 @@ import (
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
-	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
 )
@@ -144,10 +143,24 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		ReasoningSummary: p.cfg.ReasoningSummary,
 	}
 
-	model := resolvedModelFromRequest(req)
-	emit := func(ev adapterrender.Event) error {
-		return w.WriteEvent(ev)
+	warnings, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
+		HTTPClient: directCfg.HTTPClient,
+		BaseURL:    directCfg.BaseURL,
+		Token:      directCfg.Token,
+		AccountID:  directCfg.AccountID,
+		Now:        p.now,
+	})
+	if usageWarningErr != nil {
+		p.log.WarnContext(ctx, "adapter.codex.usage_warning_probe_failed",
+			"component", "adapter",
+			"subcomponent", "codex_provider",
+			"request_id", directCfg.RequestID,
+			"err", usageWarningErr,
+		)
 	}
+
+	model := resolvedModelFromRequest(req)
+	emit := warningInjectingEventWriter(w, firstUsageWarningText(warnings))
 
 	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, model, req.Effort.String(), emit)
 	if runErr != nil {
@@ -161,6 +174,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		FinishReason:               runResult.FinishReason,
 		ReasoningSignaled:          runResult.ReasoningSignaled,
 		ReasoningVisible:           runResult.ReasoningVisible,
+		ReasoningSummary:           firstUsageWarningText(warnings),
 		DerivedCacheCreationTokens: runResult.DerivedCacheCreationTokens,
 		UpstreamResponseID:         runResult.ResponseID,
 		ToolCallCount:              runResult.ToolCallCount,

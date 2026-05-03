@@ -221,7 +221,8 @@ func (s *Server) dispatchCodexProviderCollect(
 		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
 	}
-	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, collector.events, runResult)
+	mergedEvents := adaptercodex.EventsWithInjectedUsageWarning(collector.events, result.ReasoningSummary)
+	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, mergedEvents, runResult)
 	usage := result.Usage
 	if model.Context > 0 {
 		usage.MaxTokens = model.Context
