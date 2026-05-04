@@ -56,7 +56,6 @@ func (g *UsageNoticeGate) Evaluate(
 	}
 	policy := notices.UsageRepeatPolicyOrDefault()
 	thresholds := notices.UsageThresholdsUsedPercentOrDefault()
-	now = now.UTC()
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -152,7 +151,7 @@ func formatThresholdForKind(threshold float64) string {
 
 func usageNoticeText(remainingPercent int, limitLabel string, resetsAt time.Time, now time.Time) string {
 	return fmt.Sprintf(
-		"Heads up, you have about %d%% of your %s limit left. The limit resets %s.",
+		"⚠️ You have about %d%% of your %s limit left. The limit resets %s.",
 		remainingPercent,
 		limitLabel,
 		usageResetPhrase(resetsAt, now),
@@ -163,12 +162,17 @@ func usageResetPhrase(resetsAt time.Time, now time.Time) string {
 	if resetsAt.IsZero() {
 		return "at an unknown time"
 	}
-	resetUTC := resetsAt.UTC()
+	localReset := resetsAt.In(now.Location())
+	zone, _ := localReset.Zone()
+	if zone == "" {
+		zone = localReset.Format("MST")
+	}
 	return fmt.Sprintf(
-		"in %s on %s at %s UTC",
-		formatResetDuration(resetUTC.Sub(now.UTC())),
-		resetUTC.Format("01/02/06"),
-		resetUTC.Format("15:04"),
+		"in %s on %s at %s %s",
+		formatResetDuration(localReset.Sub(now.In(localReset.Location()))),
+		localReset.Format("01/02/06"),
+		localReset.Format("15:04"),
+		zone,
 	)
 }
 
@@ -227,7 +231,7 @@ func FormattedNoticeText(text string) string {
 	if trimmedText == "" {
 		return ""
 	}
-	return "\n\n" + trimmedText
+	return "\n\n> " + trimmedText
 }
 
 func noticeEvent(text string) (adapterrender.Event, bool) {

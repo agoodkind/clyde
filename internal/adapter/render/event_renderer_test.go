@@ -140,8 +140,8 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	if !strings.Contains(delta.Content, "<!--clyde-thinking-->") {
 		t.Fatalf("missing content thinking marker: %q", delta.Content)
 	}
-	if !strings.Contains(delta.Content, "> **Thinking...**\n>\n> checking constraints") {
-		t.Fatalf("thinking block=%q missing quoted spacer layout", delta.Content)
+	if delta.Content != FormatThinkingInlineDelta(true, "checking constraints") {
+		t.Fatalf("content=%q want %q", delta.Content, FormatThinkingInlineDelta(true, "checking constraints"))
 	}
 	if delta.ReasoningContent != "checking constraints" {
 		t.Fatalf("reasoning_content=%q want checking constraints", delta.ReasoningContent)

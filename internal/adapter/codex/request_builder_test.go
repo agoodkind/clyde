@@ -85,82 +85,6 @@ func clientMetadataForTest(installationID, windowID string) map[string]string {
 	return ClientMetadataWithTurn(installationID, windowID, "")
 }
 
-func lifecycleEventForTest(item RPCThreadItem, completed bool) (adapterrender.Event, bool) {
-	itemType := strings.TrimSpace(item.Type)
-	status := strings.TrimSpace(item.Status)
-	switch itemType {
-	case "commandExecution", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "contextCompaction":
-		kind := adapterrender.EventToolStarted
-		if completed {
-			kind = adapterrender.EventToolCompleted
-		}
-		toolName := strings.TrimSpace(item.Command)
-		if toolName == "" {
-			toolName = strings.TrimSpace(item.Tool)
-		}
-		if toolName == "" {
-			toolName = strings.Trim(strings.Join([]string{strings.TrimSpace(item.Server), strings.TrimSpace(item.Tool)}, "/"), "/")
-		}
-		if toolName == "" {
-			toolName = itemType
-		}
-		if toolName == "" {
-			toolName = "tool"
-		}
-		return adapterrender.Event{
-			Kind:       kind,
-			ItemType:   itemType,
-			ItemStatus: status,
-			ItemID:     item.ID,
-			ToolName:   toolName,
-			ServerName: item.Server,
-			Command:    item.Command,
-			Completed:  completed,
-		}, true
-	case "fileChange":
-		changeCount := len(item.Changes)
-		if changeCount == 0 {
-			changeCount = 1
-		}
-		kind := adapterrender.EventFileChangeStarted
-		if completed {
-			kind = adapterrender.EventFileChangeCompleted
-		}
-		return adapterrender.Event{
-			Kind:        kind,
-			ItemType:    itemType,
-			ItemStatus:  status,
-			ItemID:      item.ID,
-			ChangeCount: changeCount,
-			Completed:   completed,
-		}, true
-	default:
-		return adapterrender.Event{}, false
-	}
-}
-
-func planEventForTest(explanation string, plan []RPCTurnPlanStep) (adapterrender.Event, bool) {
-	event := adapterrender.Event{
-		Kind:            adapterrender.EventPlanUpdated,
-		PlanExplanation: strings.TrimSpace(explanation),
-		Plan:            make([]adapterrender.EventPlanStep, 0, len(plan)),
-	}
-	for _, step := range plan {
-		label := strings.TrimSpace(step.Step)
-		if label == "" {
-			continue
-		}
-		event.Plan = append(event.Plan, adapterrender.EventPlanStep{
-			Step:   label,
-			Status: strings.TrimSpace(step.Status),
-		})
-	}
-	if event.PlanExplanation == "" && len(event.Plan) == 0 {
-		return adapterrender.Event{}, false
-	}
-	return event, true
-}
-
 func buildPromptForTest(messages []ChatMessage) (system, prompt string) {
 	var sys []string
 	var body []string
@@ -1192,43 +1116,6 @@ func TestBuildCodexManagedPromptPlanStripsThinkingEnvelopeFromAssistantAnchor(t 
 	})
 	if plan.AssistantAnchor != "Final answer." {
 		t.Fatalf("AssistantAnchor=%q want %q", plan.AssistantAnchor, "Final answer.")
-	}
-}
-
-func TestCodexLifecycleEventSummarizesFileChange(t *testing.T) {
-	item := RPCThreadItem{
-		Type:   "fileChange",
-		Status: "completed",
-		Changes: []RPCFileUpdateChange{
-			{Path: "a.txt", Kind: "update", Diff: "@@ a"},
-			{Path: "b.txt", Kind: "update", Diff: "@@ b"},
-		},
-	}
-	got, ok := lifecycleEventForTest(item, true)
-	if !ok {
-		t.Fatalf("expected lifecycle event")
-	}
-	if got.Kind != adapterrender.EventFileChangeCompleted {
-		t.Fatalf("kind=%q", got.Kind)
-	}
-	if got.ChangeCount != 2 {
-		t.Fatalf("change_count=%d", got.ChangeCount)
-	}
-}
-
-func TestCodexPlanEventFormatsSteps(t *testing.T) {
-	got, ok := planEventForTest("Clarifying tool usage", []RPCTurnPlanStep{
-		{Step: "inspect payloads", Status: "completed"},
-		{Step: "render tool output", Status: "inProgress"},
-	})
-	if !ok {
-		t.Fatalf("expected plan event")
-	}
-	if got.PlanExplanation != "Clarifying tool usage" {
-		t.Fatalf("explanation=%q", got.PlanExplanation)
-	}
-	if len(got.Plan) != 2 {
-		t.Fatalf("plan_len=%d", len(got.Plan))
 	}
 }
 

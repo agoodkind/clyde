@@ -307,7 +307,7 @@ release: ## Run a full GoReleaser release with 1Password-backed Apple notarizati
 release-snapshot: ## Build release artifacts locally without publishing or notarizing
 	@GOFLAGS= goreleaser release --snapshot --clean --skip=publish --skip=notarize
 
-install: dist/clyde ## Install the signed clyde binary to ~/.local/bin/clyde
+install: build ## Install the signed clyde binary to ~/.local/bin/clyde
 	@mkdir -p "$(HOME)/.local/bin"
 	@tmp="$$(mktemp -t clyde-install.XXXXXX)"; \
 	out="$(CLYDE_BIN).new.$$"; \
@@ -359,11 +359,11 @@ setup-hooks: ## Configure git hooks
 
 deploy: ## Install/start the daemon if needed; otherwise hand it off to the new binary
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		if [ ! -f "$(LAUNCH_AGENT_PLIST)" ] || ! launchctl list "$(LAUNCH_AGENT_LABEL)" >/dev/null 2>&1 || ! launchctl list "$(LAUNCH_AGENT_LABEL)" 2>/dev/null | grep -q '"PID" = [0-9]'; then \
+		if [ ! -f "$(LAUNCH_AGENT_PLIST)" ] || ! launchctl list "$(LAUNCH_AGENT_LABEL)" >/dev/null 2>&1; then \
 			$(MAKE) install-launch-agent; \
 		else \
 			$(MAKE) install; \
-			"$(CLYDE_BIN)" daemon reload; \
+			"$(CLYDE_BIN)" daemon reload || $(MAKE) install-launch-agent; \
 		fi; \
 	elif command -v systemctl >/dev/null 2>&1; then \
 		if [ ! -f "$(SYSTEMD_USER_UNIT)" ] || ! systemctl --user is-active --quiet "$(SYSTEMD_USER_SERVICE)"; then \
