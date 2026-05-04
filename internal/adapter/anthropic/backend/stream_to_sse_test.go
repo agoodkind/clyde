@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
@@ -79,7 +80,7 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
 	}
-	_, err := RunStreamExecution(dispatcher, context.Background(), req, model, "req-stream-test", "tracker", emit)
+	_, err := RunStreamExecution(dispatcher, context.Background(), req, model, "req-stream-test", time.Now(), "tracker", emit)
 	if err != nil {
 		t.Fatalf("RunStreamExecution: %v", err)
 	}

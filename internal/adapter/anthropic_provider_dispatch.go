@@ -247,12 +247,14 @@ func (s *Server) executeAnthropicPreparedStream(
 	}
 	runtime := &streamResponseDispatcher{server: s, eventWriter: writer}
 	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
+	started := adapterClock.Now()
 	result, err := anthropicbackend.RunStreamExecution(
 		runtime,
 		ctx,
 		reqWithWindows,
 		prepared.Model,
 		prepared.RequestID,
+		started,
 		prepared.TrackerKey,
 		writer.WriteEvent,
 	)
