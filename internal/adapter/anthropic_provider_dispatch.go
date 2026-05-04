@@ -333,13 +333,26 @@ func anthropicProviderAdapterError(err error) *adapterError {
 		}
 		switch {
 		case upstreamErr.Class() == anthropic.ResponseClassRetryableError && upstreamErr.Status == http.StatusTooManyRequests:
-			aerr = newAdapterError(adapterErrorRateLimited, message)
+			// Cursor does not reliably surface the upstream message when a
+			// custom OpenAI-compatible provider returns HTTP 429 with
+			// rate_limit_error/rate_limit_exceeded. In that shape Cursor routes
+			// to its BYOK rate-limit fallback UI ("User Provided API Key Rate
+			// Limit Exceeded") and hides Clyde's actual Anthropic reset text.
+			//
+			// Keep the true upstream status in logs via UpstreamStatus below, but
+			// present the client-facing envelope like the Codex context-window
+			// path: HTTP 400 + invalid_request_error + a specific code + the
+			// legible upstream message in error.message.
+			aerr = newAdapterError(adapterErrorInvalidRequest, message)
+			aerr.OpenAICode = "upstream_rate_limited"
 		case upstreamErr.Class() == anthropic.ResponseClassRetryableError:
 			aerr = newAdapterError(adapterErrorUpstreamUnavailable, message)
 		default:
 			aerr = newAdapterError(adapterErrorUpstreamFailed, message)
 		}
-		aerr.HTTPStatus = status
+		if upstreamErr.Status != http.StatusTooManyRequests {
+			aerr.HTTPStatus = status
+		}
 		aerr.Provider = "anthropic"
 		aerr.UpstreamStatus = upstreamErr.Status
 		aerr.Cause = err

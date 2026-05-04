@@ -113,6 +113,7 @@ The adapter is a safety boundary. For model aliases, effort tiers, context budge
 - Do not add new hard-coded model facts unless the task explicitly requires it and the follow-up toward config-driven behavior is documented.
 - Keep Cursor/Codex observations in `docs/adapter-refactor/` or tests, not in this file.
 - Preserve adapter-side preflight for known context-window overflows. Do not open an upstream provider turn when Clyde can already tell the request exceeds the resolved model budget.
+- For Cursor/OpenAI-compatible ingress, upstream provider non-2xx failures must be returned as canonical OpenAI error envelopes with a legible `error.message`. Prefer Cursor-safe invalid-request shapes for provider limit conditions, following the Codex context-window pattern. Do not leak provider-specific status/type pairs that trigger Cursor fallback UI, such as mapping an Anthropic 429 directly to OpenAI `rate_limit_error`.
 - Do not log raw prompts, request bodies, response bodies, tokens, credentials, cookies, API keys, or personal data unless an explicit local debugging policy enables sanitized or raw body logging.
 
 ## Logging and observability
@@ -137,12 +138,12 @@ Start debugging by checking Clyde's structured logs before guessing from symptom
 - Main TUI log: `$XDG_STATE_HOME/clyde/clyde-tui.jsonl`.
 - Concern logs: `$XDG_STATE_HOME/clyde/logs/<concern-path>.jsonl`, where concern names from `internal/slogger/concerns.go` map dots to nested paths.
 - Dedicated Codex sidecar log: `$XDG_STATE_HOME/clyde/codex.jsonl`, unless `CLYDE_CODEX_LOG_PATH` overrides it.
-- MITM captures: `$XDG_STATE_HOME/clyde/mitm/capture.jsonl` by default, or the configured `[mitm].capture_dir`.
+- MITM captures: `$XDG_STATE_HOME/clyde/mitm/capture.jsonl` by default, or the configured `[mitm].capture_dir`. MITM is only for Clyde-launched Codex CLI and Claude CLI baseline/header capture and drift checks; it is not Cursor ingress and is not part of the OpenAI-compatible adapter request path.
 - macOS LaunchAgent stderr/stdout fallback: `~/.local/state/clyde/daemon.log`.
 
 Operators may override main process log paths with `[logging.paths].daemon`, `[logging.paths].tui`, or `CLYDE_SLOG_PATH`. Check the active config before assuming the defaults.
 
-For adapter, Cursor, Codex, Anthropic, passthrough, MITM, live-session, and daemon issues, prefer the matching concern log first. Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `session`, `process.daemon`, and `ui`.
+For adapter, Cursor, Codex, Anthropic, passthrough, MITM, live-session, and daemon issues, prefer the matching concern log first. Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `session`, `process.daemon`, and `ui`. Do not use MITM logs to prove Cursor ingress behavior; use adapter logs for Cursor ingress and MITM logs only for CLI capture/baseline behavior.
 
 Use correlation fields to follow one operation across files: `trace_id`, `span_id`, `parent_span_id`, `request_id`, `cursor_request_id`, `cursor_conversation_id`, `upstream_request_id`, and `upstream_response_id`. Avoid raw body logging unless the user explicitly enables a safe local debugging policy, and never paste secrets, prompts, tokens, cookies, or API keys into chat.
 
@@ -168,4 +169,3 @@ Keep `AGENTS.md` durable and concise.
 - Move runbooks to `docs/`, and point to them from this file only when agents need to know they exist.
 - Move task lists and stale audit findings to issues or dedicated planning docs.
 - When behavior changes, update the code, tests, and closest specific documentation. Update this file only when the durable agent rule changes.
-

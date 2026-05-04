@@ -74,8 +74,12 @@ implementation. Avoid adding session transcripts or dated progress logs here.
 
 ## Error And Notice Handling
 
-- Anthropic 429 maps to a retryable upstream error and OpenAI-native
-  `rate_limit_error` / `rate_limit_exceeded` envelopes.
+- Anthropic 429 maps to a retryable upstream error, but Cursor/OpenAI ingress
+  must return a canonical OpenAI invalid-request envelope with the upstream
+  reset text in `error.message`, following the Codex context-window error
+  pattern. Do not expose it as OpenAI
+  `rate_limit_error` / `rate_limit_exceeded`, because Cursor treats that as
+  BYOK key exhaustion and replaces the message with fallback UI.
 - Anthropic 200 responses with overage or rate-limit warning headers are
   successful responses with notices, not failures.
 - Streaming errors after headers are committed should be surfaced as SSE error

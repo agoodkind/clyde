@@ -54,7 +54,7 @@ func TestPrepareAnthropicProviderRequestPreservesOpenAIStreamIntent(t *testing.T
 	}
 }
 
-func TestAnthropicProviderErrorResponseMapsUpstreamRateLimit(t *testing.T) {
+func TestAnthropicProviderErrorResponseMapsUpstreamRateLimitToCursorSafeInvalidRequest(t *testing.T) {
 	t.Parallel()
 
 	upstreamErr := &anthropic.UpstreamError{
@@ -65,14 +65,24 @@ func TestAnthropicProviderErrorResponseMapsUpstreamRateLimit(t *testing.T) {
 	aerr := anthropicProviderAdapterError(upstreamErr)
 	status, body := aerr.HTTPStatus, aerr.openAIErrorBody()
 
-	if status != http.StatusTooManyRequests {
-		t.Fatalf("status=%d want %d", status, http.StatusTooManyRequests)
+	// This intentionally does not preserve HTTP 429 or OpenAI
+	// rate_limit_error on the Cursor/OpenAI surface. Cursor treats that
+	// pair as a user-provided API-key failure and replaces Clyde's real
+	// Anthropic message with fallback chrome. The contract here is the
+	// Codex context-limit style: invalid_request_error with the actual
+	// message in error.message, while the original 429 remains available
+	// to logs and diagnostics through UpstreamStatus.
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
 	}
-	if body.Type != "rate_limit_error" || body.Code != "rate_limit_exceeded" {
+	if body.Type != "invalid_request_error" || body.Code != "upstream_rate_limited" {
 		t.Fatalf("body=%+v", body)
 	}
 	if body.Message != "rate limit reached" {
 		t.Fatalf("message=%q", body.Message)
+	}
+	if aerr.UpstreamStatus != http.StatusTooManyRequests {
+		t.Fatalf("upstream status=%d want %d", aerr.UpstreamStatus, http.StatusTooManyRequests)
 	}
 }
 
