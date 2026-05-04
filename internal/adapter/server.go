@@ -23,6 +23,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/oauth"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
@@ -92,6 +93,13 @@ func encodeBodyB64(body []byte, maxBytes int) string {
 	return base64.StdEncoding.EncodeToString(body)
 }
 
+func (s *Server) evaluateUsageNotices(windows []adapterruntime.UsageWindowNoticeInput) []adapterruntime.UsageNotice {
+	if s == nil || s.usageNoticeGate == nil {
+		return nil
+	}
+	return s.usageNoticeGate.Evaluate(windows, s.cfg.Notices, adapterClock.Now())
+}
+
 // systemFingerprint is the value the adapter reports in the OpenAI
 // response field of the same name. It changes when the binary is
 // rebuilt so clients can detect a behavioral change. Kept stable
@@ -119,6 +127,7 @@ type Server struct {
 	anthr             *anthropic.Client
 	httpClient        *http.Client
 	ctxUsage          *contextUsageTracker
+	usageNoticeGate   *adapterruntime.UsageNoticeGate
 	providerRegistry  *adapterprovider.Registry
 	codexProvider     *adaptercodex.Provider
 	anthropicProvider *anthropic.Provider
@@ -170,7 +179,8 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
-		ctxUsage: newContextUsageTracker(),
+		ctxUsage:        newContextUsageTracker(),
+		usageNoticeGate: adapterruntime.NewUsageNoticeGate(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
 	if cfg.Codex.Enabled {

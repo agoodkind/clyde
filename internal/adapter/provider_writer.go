@@ -10,6 +10,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -245,6 +246,11 @@ func (p *providerStreamWriter) Flush() error {
 func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, includeUsage bool) error {
 	if err := p.Flush(); err != nil {
 		return err
+	}
+	for _, notice := range result.UsageNotices {
+		if err := p.writeRenderedChunk(adapterruntime.OpenAINoticeChunk(p.reqID, p.modelAlias, adapterruntime.FormattedNoticeText(notice.Text))); err != nil {
+			return err
+		}
 	}
 	finishReason := normalizedProviderFinishReason(result)
 	if p != nil && p.renderer != nil {

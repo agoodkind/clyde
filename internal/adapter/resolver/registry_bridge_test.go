@@ -37,10 +37,6 @@ func TestModelRegistryAdapterNilInner(t *testing.T) {
 	}
 }
 
-func boolPtr(value bool) *bool {
-	return &value
-}
-
 func TestModelRegistryAdapterPreservesInstructions(t *testing.T) {
 	cfg := config.AdapterConfig{
 		DefaultModel: "clyde-haiku-4.5",
@@ -59,8 +55,8 @@ func TestModelRegistryAdapterPreservesInstructions(t *testing.T) {
 				Efforts:         []string{"medium"},
 				ThinkingModes:   []string{"default"},
 				MaxOutputTokens: 16000,
-				SupportsTools:   boolPtr(true),
-				SupportsVision:  boolPtr(true),
+				SupportsTools:   new(true),
+				SupportsVision:  new(true),
 				Contexts: []config.AdapterModelContext{{
 					Tokens: 200000,
 				}},

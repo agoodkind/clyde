@@ -108,7 +108,7 @@ func TestEventRendererAssistantSummaryIncludesToolDiagnostics(t *testing.T) {
 	r.LogAssistantTextSummary("tool_calls", nil)
 
 	var summary map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		var evt map[string]any
 		if err := json.Unmarshal([]byte(line), &evt); err != nil {
 			t.Fatalf("unmarshal log: %v", err)
@@ -139,6 +139,9 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	delta := chunks[0].Choices[0].Delta
 	if !strings.Contains(delta.Content, "<!--clyde-thinking-->") {
 		t.Fatalf("missing content thinking marker: %q", delta.Content)
+	}
+	if !strings.Contains(delta.Content, "> **Thinking...**\n>\n> checking constraints") {
+		t.Fatalf("thinking block=%q missing quoted spacer layout", delta.Content)
 	}
 	if delta.ReasoningContent != "checking constraints" {
 		t.Fatalf("reasoning_content=%q want checking constraints", delta.ReasoningContent)

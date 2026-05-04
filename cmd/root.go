@@ -224,7 +224,9 @@ func (builder appCallbackBuilder) subscribeProviderStats() (<-chan ui.ProviderSt
 		return nil, nil, err
 	}
 	out := make(chan ui.ProviderStats, 8)
-	go forwardProviderStats(ctx, raw, out)
+	go func() { //nolint:goroutine_without_recover
+		forwardProviderStats(ctx, raw, out)
+	}()
 	return out, cancel, nil
 }
 
@@ -337,7 +339,9 @@ func (builder appCallbackBuilder) refreshSummary(sess *session.Session, onDone f
 		return fmt.Errorf("nil session")
 	}
 	ctx := builder.childContext("dashboard.summary.refresh")
-	go refreshSummaryWorker(ctx, sess.Name, sess.Metadata.WorkspaceRoot, onDone)
+	go func() { //nolint:goroutine_without_recover
+		refreshSummaryWorker(ctx, sess.Name, sess.Metadata.WorkspaceRoot, onDone)
+	}()
 	return nil
 }
 
@@ -445,7 +449,9 @@ func (builder appCallbackBuilder) subscribeRegistry() (<-chan ui.SessionEvent, f
 		return nil, nil, err
 	}
 	out := make(chan ui.SessionEvent, 8)
-	go forwardRegistryEvents(ctx, raw, out)
+	go func() { //nolint:goroutine_without_recover
+		forwardRegistryEvents(ctx, raw, out)
+	}()
 	return out, cancel, nil
 }
 
@@ -495,7 +501,9 @@ func (builder appCallbackBuilder) streamLiveSession(sessionID string) (<-chan ui
 		return nil, nil, err
 	}
 	out := make(chan ui.LiveSessionEvent, 32)
-	go forwardLiveSessionEvents(ctx, sessionID, raw, out)
+	go func() { //nolint:goroutine_without_recover
+		forwardLiveSessionEvents(ctx, sessionID, raw, out)
+	}()
 	return out, cancel, nil
 }
 
@@ -543,7 +551,9 @@ func (builder appCallbackBuilder) streamCompactEvents(ctx context.Context, req u
 		return nil, nil, nil, err
 	}
 	out := make(chan ui.CompactEvent, 64)
-	go forwardCompactEvents(ctx, req.SessionName, raw, out, panicEvent)
+	go func() { //nolint:goroutine_without_recover
+		forwardCompactEvents(ctx, req.SessionName, raw, out, panicEvent)
+	}()
 	return out, done, cancel, nil
 }
 

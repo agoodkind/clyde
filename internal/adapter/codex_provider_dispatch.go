@@ -108,11 +108,16 @@ func (s *Server) dispatchCodexProviderStream(
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
 	ctx = correlation.WithContext(ctx, corr)
 	usage := result.Usage
+	finishReason := normalizedProviderFinishReason(result)
+	var notices []adapterruntime.UsageNotice
+	if finishReason == defaultProviderFinishReason {
+		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+	}
+	result.UsageNotices = notices
 	if model.Context > 0 {
 		usage.MaxTokens = model.Context
 	}
 	result.Usage = usage
-	finishReason := normalizedProviderFinishReason(result)
 	if err := writer.finalizeStream(result, req.StreamOptions != nil && req.StreamOptions.IncludeUsage); err != nil {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_error",
 			slog.String("backend", "codex"),
@@ -211,9 +216,15 @@ func (s *Server) dispatchCodexProviderCollect(
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
 	ctx = correlation.WithContext(ctx, corr)
+	finishReason := normalizedProviderFinishReason(result)
+	var notices []adapterruntime.UsageNotice
+	if finishReason == defaultProviderFinishReason {
+		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+	}
+	result.UsageNotices = notices
 	runResult := adaptercodex.RunResult{
 		Usage:                      result.Usage,
-		FinishReason:               normalizedProviderFinishReason(result),
+		FinishReason:               finishReason,
 		ReasoningSignaled:          result.ReasoningSignaled,
 		ReasoningVisible:           result.ReasoningVisible,
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
@@ -221,7 +232,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
 	}
-	mergedEvents := adaptercodex.EventsWithInjectedUsageWarning(collector.events, result.ReasoningSummary)
+	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(collector.events, notices)
 	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, mergedEvents, runResult)
 	usage := result.Usage
 	if model.Context > 0 {
@@ -231,7 +242,6 @@ func (s *Server) dispatchCodexProviderCollect(
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
 	writeJSON(w, http.StatusOK, merged)
-	finishReason := normalizedProviderFinishReason(result)
 	completedAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("model", model.Alias),

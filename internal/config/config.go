@@ -307,7 +307,24 @@ type AdapterNotices struct {
 // percent, not remaining percent. For example, 75 means inject once the
 // provider reports 75%% used or higher.
 type AdapterNoticeUsage struct {
-	ThresholdsUsedPercent []float64 `json:"thresholdsUsedPercent,omitempty" toml:"thresholds_used_percent,omitempty"`
+	ThresholdsUsedPercent []float64                 `json:"thresholdsUsedPercent,omitempty" toml:"thresholds_used_percent,omitempty"`
+	Repeat                AdapterNoticeRepeatPolicy `json:"repeat,omitzero" toml:"repeat,omitempty"`
+}
+
+type AdapterNoticeRepeatMode string
+
+const (
+	AdapterNoticeRepeatEvery                      AdapterNoticeRepeatMode = "every"
+	AdapterNoticeRepeatOncePerThresholdUntilReset AdapterNoticeRepeatMode = "once_per_threshold_until_reset"
+	AdapterNoticeRepeatTimeCooldown               AdapterNoticeRepeatMode = "time_cooldown"
+	AdapterNoticeRepeatTurnCooldown               AdapterNoticeRepeatMode = "turn_cooldown"
+)
+
+type AdapterNoticeRepeatPolicy struct {
+	Mode             AdapterNoticeRepeatMode `json:"mode,omitempty" toml:"mode,omitempty"`
+	Cooldown         string                  `json:"cooldown,omitempty" toml:"cooldown,omitempty"`
+	CooldownDuration time.Duration           `json:"-" toml:"-"`
+	CooldownTurns    int                     `json:"cooldownTurns,omitempty" toml:"cooldown_turns,omitempty"`
 }
 
 var defaultNoticeUsageThresholdsUsedPercent = []float64{75, 95}
@@ -327,6 +344,14 @@ func (n AdapterNotices) UsageThresholdsUsedPercentOrDefault() []float64 {
 		return append([]float64(nil), defaultNoticeUsageThresholdsUsedPercent...)
 	}
 	return append([]float64(nil), n.Usage.ThresholdsUsedPercent...)
+}
+
+func (n AdapterNotices) UsageRepeatPolicyOrDefault() AdapterNoticeRepeatPolicy {
+	policy := n.Usage.Repeat
+	if policy.Mode == "" {
+		policy.Mode = AdapterNoticeRepeatEvery
+	}
+	return policy
 }
 
 // AdapterOAuth holds endpoints and OAuth client metadata supplied by

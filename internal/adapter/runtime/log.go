@@ -58,25 +58,13 @@ type CompletedAttrs struct {
 	ToolCallCount              int
 	ToolCallNames              []string
 	HasSubagentToolCall        bool
-
-	// Path tags which dispatch leg handled the request so aggregators
-	// can compare costs across backends. Known values include "oauth"
-	// for the direct Anthropic bucket. Leave empty when the leg cannot
-	// be identified.
-	Path string
-	// SessionID, when set, links log lines from the same conversation
-	// across requests. For OAuth this is the adapter-generated
-	// request-scoped id.
-	SessionID string
-	// CacheTTL records the ttl used on cache_control markers ("",
-	// "5m", "1h"). Drives the cache-write rate when estimating cost.
-	CacheTTL    string
-	Provider    string
-	Correlation correlation.Context
+	Path                       string
+	SessionID                  string
+	CacheTTL                   string
+	Provider                   string
+	Correlation                correlation.Context
 }
 
-// LogCompleted emits a normalized adapter chat completion log with model_id
-// plus the provider-specific model key expected by existing log queries.
 func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 	if log == nil {
 		return
@@ -135,43 +123,6 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 	args = append(args, corr.Attrs()...)
 	args = append(args, slog.String("model", attrs.ModelID))
 	log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", args...)
-}
-
-type FailedAttrs struct {
-	Backend     string
-	RequestID   string
-	Alias       string
-	ModelID     string
-	Err         error
-	DurationMs  int64
-	Provider    string
-	Correlation correlation.Context
-}
-
-// LogFailed emits shared failure metadata for chat handlers.
-func LogFailed(log *slog.Logger, ctx context.Context, attrs FailedAttrs) {
-	if log == nil {
-		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	corr := attrs.Correlation
-	if corr.TraceID == "" {
-		corr = correlation.FromContext(ctx)
-	}
-	for _, attr := range corr.Attrs() {
-		log = log.With(attr)
-	}
-	log.LogAttrs(ctx, slog.LevelError, "adapter.chat.failed",
-		slog.String("backend", attrs.Backend),
-		slog.String("provider", attrs.Provider),
-		slog.String("request_id", attrs.RequestID),
-		slog.String("alias", attrs.Alias),
-		slog.String("model", attrs.ModelID),
-		slog.Int64("duration_ms", attrs.DurationMs),
-		slog.Any("err", attrs.Err),
-	)
 }
 
 type StartedAttrs struct {

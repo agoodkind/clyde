@@ -1,6 +1,9 @@
 package provider
 
-import adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+import (
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+)
 
 // Result is the typed return value of Provider.Execute. It captures
 // the post-execution metadata the dispatcher needs for response
@@ -55,4 +58,11 @@ type Result struct {
 	// HasSubagentToolCall reports whether this response emitted a
 	// Cursor subagent/spawn_agent tool call.
 	HasSubagentToolCall bool
+	// UsageNoticeWindows carries normalized provider usage windows.
+	// The shared adapter boundary owns threshold matching, repeat gating,
+	// formatting, and final injection.
+	UsageNoticeWindows []adapterruntime.UsageWindowNoticeInput
+	// UsageNotices carries fully evaluated notices that are due for this
+	// response after the shared gate applies thresholds and repeat policy.
+	UsageNotices []adapterruntime.UsageNotice
 }

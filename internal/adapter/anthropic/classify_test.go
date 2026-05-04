@@ -3,12 +3,9 @@ package anthropic
 import (
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 )
-
-func timeUTC() time.Time { return time.Unix(1700000000, 0).UTC() }
 
 func TestClassifyTransportError(t *testing.T) {
 	c := Classify(nil, errors.New("dial tcp: connection refused"))
@@ -184,28 +181,32 @@ func TestClassifyHeadersMatchesClassify(t *testing.T) {
 // classifier owns the warning-presence gate: a successful 200 with no
 // warning headers must yield no notice without reaching the per-claim
 // formatters.
-func TestEvaluateNoticeShortCircuitsCleanSuccess(t *testing.T) {
-	if got := EvaluateNotice(http.Header{}, timeUTC(), []float64{75, 95}); got != nil {
-		t.Fatalf("clean 200 should produce no notice, got %+v", got)
-	}
-}
-
-func TestEvaluateNoticeUsesConfiguredThresholds(t *testing.T) {
+func TestEarlyWarningUsageWindowsUsesHeaderUtilization(t *testing.T) {
 	t.Parallel()
 	h := http.Header{
 		"Anthropic-Ratelimit-Unified-Status":         []string{"allowed_warning"},
 		"Anthropic-Ratelimit-Unified-7d-Utilization": []string{"0.80"},
 		"Anthropic-Ratelimit-Unified-7d-Reset":       []string{"1735689600"},
 	}
-	if got := EvaluateNotice(h, timeUTC(), []float64{90}); got != nil {
-		t.Fatalf("configured threshold should suppress 80%% notice, got %+v", got)
+	windows := EarlyWarningUsageWindows(h)
+	if len(windows) != 1 {
+		t.Fatalf("windows len=%d want 1", len(windows))
 	}
-	got := EvaluateNotice(h, timeUTC(), []float64{75, 90})
-	if got == nil {
-		t.Fatal("expected notice at configured 75%% threshold")
+	window := windows[0]
+	if window.Provider != "anthropic" {
+		t.Fatalf("provider=%q", window.Provider)
 	}
-	if !strings.Contains(got.Text, "You've used 75% of your weekly limit") {
-		t.Fatalf("notice text=%q", got.Text)
+	if window.WindowKey != "seven_day" {
+		t.Fatalf("window key=%q", window.WindowKey)
+	}
+	if window.LimitLabel != "weekly limit" {
+		t.Fatalf("limit label=%q", window.LimitLabel)
+	}
+	if window.UsedPercent != 80 {
+		t.Fatalf("used percent=%v", window.UsedPercent)
+	}
+	if !window.ResetsAt.Equal(time.Unix(1735689600, 0).UTC()) {
+		t.Fatalf("resets_at=%v", window.ResetsAt)
 	}
 }
 

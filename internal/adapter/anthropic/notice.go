@@ -1,87 +1,24 @@
 package anthropic
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
+
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
 const (
-	NoticeKindOverageActive   = "overage_active"
-	NoticeKindOverageWarning  = "overage_warning"
 	NoticeKindEarlyWarning5H  = "early_warning_5h"
 	NoticeKindEarlyWarning7D  = "early_warning_7d"
 	NoticeKindEarlyWarningOVR = "early_warning_overage"
 )
 
-// Notice is the in-band billing message emitted by EvaluateNotice.
-type Notice struct {
-	Kind     string
-	Text     string
-	ResetsAt time.Time
-}
-
-// EvaluateNotice inspects unified Anthropic rate-limit headers from a successful
-// messages response and returns one synthetic notice, or nil when no notice applies.
-//
-// The classifier in classify.go owns the "is there any warning at
-// all?" gate; EvaluateNotice short-circuits on
-// ResponseClassSuccessNoWarning so the per-claim formatting logic
-// only runs when at least one warning flag is set.
-func EvaluateNotice(h http.Header, now time.Time, usageThresholdsUsedPercent []float64) *Notice {
+func EarlyWarningUsageWindows(h http.Header) []adapterruntime.UsageWindowNoticeInput {
 	if ClassifyHeaders(h, http.StatusOK).Class == ResponseClassSuccessNoWarning {
 		return nil
 	}
-	status := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-status")))
-	overageStatus := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-overage-status")))
-	repClaim := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-representative-claim")))
-
-	if status == "rejected" && (overageStatus == "allowed" || overageStatus == "allowed_warning") {
-		overageResetAt := parseUnix(h.Get("anthropic-ratelimit-unified-overage-reset"))
-		fallbackResetAt := parseUnix(h.Get("anthropic-ratelimit-unified-reset"))
-		resetsAt := overageResetAt
-		if resetsAt.IsZero() {
-			resetsAt = fallbackResetAt
-		}
-
-		if overageStatus == "allowed_warning" {
-			return &Notice{
-				Kind:     NoticeKindOverageWarning,
-				Text:     "You're close to your extra usage spending limit",
-				ResetsAt: resetsAt,
-			}
-		}
-
-		return &Notice{
-			Kind:     NoticeKindOverageActive,
-			Text:     overageActiveText(repClaim, resetsAt, now),
-			ResetsAt: resetsAt,
-		}
-	}
-
-	if status != "allowed_warning" && !hasSurpassedThreshold(h) {
-		return nil
-	}
-
-	if n := earlyWarningNotice(h, now, usageThresholdsUsedPercent); n != nil {
-		return n
-	}
-
-	return nil
-}
-
-func hasSurpassedThreshold(h http.Header) bool {
-	for _, claim := range []string{"5h", "7d", "overage"} {
-		if strings.TrimSpace(h.Get("anthropic-ratelimit-unified-"+claim+"-surpassed-threshold")) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func earlyWarningNotice(h http.Header, now time.Time, usageThresholdsUsedPercent []float64) *Notice {
+	windows := make([]adapterruntime.UsageWindowNoticeInput, 0, 3)
 	for _, claim := range []string{"five_hour", "seven_day", "overage"} {
 		headerClaim := earlyWarningHeaderClaim(claim)
 		threshold := strings.TrimSpace(h.Get("anthropic-ratelimit-unified-" + headerClaim + "-surpassed-threshold"))
@@ -94,20 +31,23 @@ func earlyWarningNotice(h http.Header, now time.Time, usageThresholdsUsedPercent
 		if threshold == "" && !hasUtil && !strings.EqualFold(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-status")), "allowed_warning") {
 			continue
 		}
-
-		text := earlyWarningText(claim, util, hasUtil, resetsAt, now, usageThresholdsUsedPercent)
-		if text == "" {
-			return nil
+		if !hasUtil {
+			continue
 		}
-		kind := earlyWarningKind(claim)
-		return &Notice{
-			Kind:     kind,
-			Text:     text,
-			ResetsAt: resetsAt,
+		limitLabel := rateLimitLabel(claim)
+		if limitLabel == "" {
+			limitLabel = "usage"
 		}
+		windows = append(windows, adapterruntime.UsageWindowNoticeInput{
+			Provider:    "anthropic",
+			WindowKey:   claim,
+			LimitLabel:  limitLabel,
+			UsedPercent: util * 100,
+			ResetsAt:    resetsAt,
+			Kind:        earlyWarningKind(claim),
+		})
 	}
-
-	return nil
+	return windows
 }
 
 func earlyWarningKind(claim string) string {
@@ -119,59 +59,6 @@ func earlyWarningKind(claim string) string {
 	default:
 		return NoticeKindEarlyWarning7D
 	}
-}
-
-func overageActiveText(claim string, resetsAt time.Time, now time.Time) string {
-	limit := "usage"
-	if claimName := rateLimitLabel(claim); claimName != "" {
-		limit = claimName
-	}
-	if resetsAt.IsZero() {
-		return "You're now using extra usage"
-	}
-	return fmt.Sprintf("You're now using extra usage · %s resets %s", limit, formatResetTime(resetsAt, now))
-}
-
-func earlyWarningText(
-	claim string,
-	utilization float64,
-	hasUtil bool,
-	resetsAt time.Time,
-	now time.Time,
-	usageThresholdsUsedPercent []float64,
-) string {
-	limit := rateLimitLabel(claim)
-	if limit == "" {
-		limit = "usage"
-	}
-	if !hasUtil {
-		return ""
-	}
-	usedPercent := utilization * 100
-	highestThreshold, ok := highestUsageThreshold(usedPercent, usageThresholdsUsedPercent)
-	if !ok {
-		return ""
-	}
-	used := int(highestThreshold)
-	if used < 1 {
-		used = 0
-	}
-	if resetsAt.IsZero() {
-		return fmt.Sprintf("You've used %d%% of your %s", used, limit)
-	}
-	return fmt.Sprintf("You've used %d%% of your %s · resets %s", used, limit, formatResetTime(resetsAt, now))
-}
-
-func highestUsageThreshold(usedPercent float64, thresholdsUsedPercent []float64) (float64, bool) {
-	var highest float64
-	matched := false
-	for _, threshold := range thresholdsUsedPercent {
-		if usedPercent >= threshold {
-			highest = threshold
-			matched = true
-		}
-	}
-	return highest, matched
 }
 
 func rateLimitLabel(claim string) string {

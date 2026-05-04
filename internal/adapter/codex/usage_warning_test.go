@@ -27,27 +27,27 @@ func TestProbeUsageWarningsReturnsWeeklyAndPrimaryWarnings(t *testing.T) {
 		_, _ = w.Write([]byte(`{
             "rate_limit": {
                 "primary_window": {
-                    "used_percent": 95,
+                    "used_percent": 88,
                     "limit_window_seconds": 18000,
-                    "reset_after_seconds": 7200
+                    "reset_after_seconds": 2580
                 },
                 "secondary_window": {
-                    "used_percent": 80,
+                    "used_percent": 93,
                     "limit_window_seconds": 604800,
-                    "reset_at": 1735689600
+                    "reset_at": 1735855200
                 }
             }
         }`))
 	}))
 	defer server.Close()
 
+	now := time.Unix(1735682400, 0).UTC()
 	warnings, err := ProbeUsageWarnings(context.Background(), usageWarningProbeConfig{
-		HTTPClient:            server.Client(),
-		BaseURL:               server.URL + "/backend-api/codex/responses",
-		Token:                 "token-123",
-		AccountID:             "acct-123",
-		Now:                   func() time.Time { return time.Unix(1735682400, 0).UTC() },
-		ThresholdsUsedPercent: []float64{75, 95},
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL + "/backend-api/codex/responses",
+		Token:      "token-123",
+		AccountID:  "acct-123",
+		Now:        func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("ProbeUsageWarnings: %v", err)
@@ -55,24 +55,33 @@ func TestProbeUsageWarningsReturnsWeeklyAndPrimaryWarnings(t *testing.T) {
 	if len(warnings) != 2 {
 		t.Fatalf("warnings len=%d want 2", len(warnings))
 	}
-	if warnings[0].Text != "Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown." {
-		t.Fatalf("weekly warning=%q", warnings[0].Text)
+	if warnings[0].Provider != "codex" || warnings[0].WindowKey != "weekly" {
+		t.Fatalf("weekly window=%+v", warnings[0])
 	}
-	if warnings[0].Kind != "codex_weekly_remaining_25" {
-		t.Fatalf("weekly kind=%q", warnings[0].Kind)
+	if warnings[0].LimitLabel != "weekly" {
+		t.Fatalf("weekly limit label=%q", warnings[0].LimitLabel)
 	}
-	if got := warnings[0].ResetsAt.UTC(); !got.Equal(time.Unix(1735689600, 0).UTC()) {
+	if warnings[0].UsedPercent != 93 {
+		t.Fatalf("weekly used percent=%v", warnings[0].UsedPercent)
+	}
+	if got := warnings[0].ResetsAt.UTC(); !got.Equal(time.Unix(1735855200, 0).UTC()) {
 		t.Fatalf("weekly reset=%v", got)
 	}
-	if warnings[1].Text != "Heads up, you have less than 5% of your 5h limit left. Run /status for a breakdown." {
-		t.Fatalf("primary warning=%q", warnings[1].Text)
+	if warnings[1].Provider != "codex" || warnings[1].WindowKey != "primary" {
+		t.Fatalf("primary window=%+v", warnings[1])
 	}
-	if warnings[1].Kind != "codex_primary_remaining_5" {
-		t.Fatalf("primary kind=%q", warnings[1].Kind)
+	if warnings[1].LimitLabel != "5h" {
+		t.Fatalf("primary limit label=%q", warnings[1].LimitLabel)
+	}
+	if warnings[1].UsedPercent != 88 {
+		t.Fatalf("primary used percent=%v", warnings[1].UsedPercent)
+	}
+	if got := warnings[1].ResetsAt.UTC(); !got.Equal(now.Add(43 * time.Minute)) {
+		t.Fatalf("primary reset=%v", got)
 	}
 }
 
-func TestProbeUsageWarningsSkipsBelowThreshold(t *testing.T) {
+func TestProbeUsageWarningsReturnsWindowsBelowThresholds(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -92,19 +101,21 @@ func TestProbeUsageWarningsSkipsBelowThreshold(t *testing.T) {
 	defer server.Close()
 
 	warnings, err := ProbeUsageWarnings(context.Background(), usageWarningProbeConfig{
-		HTTPClient:            server.Client(),
-		BaseURL:               server.URL + "/backend-api/codex/responses",
-		ThresholdsUsedPercent: []float64{75, 95},
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL + "/backend-api/codex/responses",
 	})
 	if err != nil {
 		t.Fatalf("ProbeUsageWarnings: %v", err)
 	}
-	if len(warnings) != 0 {
-		t.Fatalf("warnings=%+v want none", warnings)
+	if len(warnings) != 2 {
+		t.Fatalf("warnings len=%d want 2", len(warnings))
+	}
+	if warnings[0].UsedPercent != 50 || warnings[1].UsedPercent != 74 {
+		t.Fatalf("warnings=%+v", warnings)
 	}
 }
 
-func TestProbeUsageWarningsUsesConfiguredThresholds(t *testing.T) {
+func TestProbeUsageWarningsReturnsConfiguredWindowsWithoutFiltering(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -121,14 +132,19 @@ func TestProbeUsageWarningsUsesConfiguredThresholds(t *testing.T) {
 	defer server.Close()
 
 	warnings, err := ProbeUsageWarnings(context.Background(), usageWarningProbeConfig{
-		HTTPClient:            server.Client(),
-		BaseURL:               server.URL + "/backend-api/codex/responses",
-		ThresholdsUsedPercent: []float64{90},
+		HTTPClient: server.Client(),
+		BaseURL:    server.URL + "/backend-api/codex/responses",
 	})
 	if err != nil {
 		t.Fatalf("ProbeUsageWarnings: %v", err)
 	}
-	if len(warnings) != 0 {
-		t.Fatalf("warnings=%+v want none", warnings)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings len=%d want 1", len(warnings))
+	}
+	if warnings[0].UsedPercent != 80 {
+		t.Fatalf("used percent=%v", warnings[0].UsedPercent)
+	}
+	if warnings[0].WindowKey != "weekly" {
+		t.Fatalf("window key=%q", warnings[0].WindowKey)
 	}
 }

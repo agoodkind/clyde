@@ -2,12 +2,13 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"time"
+	"sync"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
@@ -52,7 +53,18 @@ func (s *Server) dispatchAnthropicProviderCollect(
 	if result.FinalResponse == nil {
 		return adapterErrUpstreamFailed("anthropic", "anthropic provider collect path produced no final response", nil)
 	}
-	writeJSON(w, http.StatusOK, *result.FinalResponse)
+	finishReason := normalizedProviderFinishReason(result)
+	var notices []adapterruntime.UsageNotice
+	if finishReason == defaultProviderFinishReason {
+		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+	}
+	result.UsageNotices = notices
+	finalResponse := *result.FinalResponse
+	updated, _ := adapterruntime.AppendUsageNoticesToResponse(finalResponse, notices, json.Marshal)
+	if len(notices) > 0 {
+		finalResponse = updated
+	}
+	writeJSON(w, http.StatusOK, finalResponse)
 	return nil
 }
 
@@ -67,7 +79,8 @@ func (s *Server) dispatchAnthropicProviderStream(
 	if err != nil {
 		return adapterErrInternal(err.Error(), err)
 	}
-	_, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
+	s.emitRequestStreamOpened(ctx, model, "oauth", reqID, resolvedReq.Model, true)
+	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	if runErr != nil {
 		aerr := anthropicProviderAdapterError(runErr)
 		if streamWriter.headersWritten {
@@ -81,6 +94,15 @@ func (s *Server) dispatchAnthropicProviderStream(
 			return nil
 		}
 		return aerr
+	}
+	finishReason := normalizedProviderFinishReason(result)
+	var notices []adapterruntime.UsageNotice
+	if finishReason == defaultProviderFinishReason {
+		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+	}
+	result.UsageNotices = notices
+	if err := streamWriter.finalizeStream(result, resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage); err != nil {
+		return adapterErrUpstreamFailed("anthropic", err.Error(), err)
 	}
 	return nil
 }
@@ -163,33 +185,48 @@ func (s *Server) executeAnthropicPreparedCollect(
 		}
 		return s.executeAnthropicPreparedCollectNative(ctx, prepared, nativeWriter)
 	}
-	dispatcher := &collectResponseDispatcher{
-		server:      s,
-		eventWriter: writer,
+	collector, ok := writer.(*providerCollectorWriter)
+	if !ok || collector == nil {
+		return adapterprovider.Result{}, &anthropic.ExecuteError{
+			Status:  http.StatusInternalServerError,
+			Code:    "internal_error",
+			Message: "anthropic collect provider requires a collector event writer",
+		}
 	}
+	runtime := &collectResponseDispatcher{server: s, eventWriter: writer}
+	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
 	started := adapterClock.Now()
-	if err := anthropicbackend.CollectResponse(
-		dispatcher,
-		nil,
+	result, err := anthropicbackend.RunCollectExecution(
+		runtime,
 		ctx,
-		prepared.Request,
+		reqWithWindows,
 		prepared.Model,
 		prepared.RequestID,
 		started,
-		prepared.JSONCoercion,
-		true,
 		prepared.TrackerKey,
-	); err != nil {
+		writer.WriteEvent,
+		writer.Flush,
+		func() []adapterrender.Event { return collector.events },
+	)
+	if err != nil {
 		return adapterprovider.Result{}, err
 	}
-	if dispatcher.finalResponse == nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusBadGateway,
-			Code:    "upstream_failed",
-			Message: "anthropic provider collect path produced no final response",
-		}
-	}
-	return anthropicProviderResultFromResponse(dispatcher.finalResponse), nil
+	resp := anthropicbackend.MergeCollectedEvents(
+		prepared.RequestID,
+		prepared.Model.Alias,
+		systemFingerprint,
+		result.Events,
+		result.Usage,
+		result.FinishReason,
+		anthropicbackend.JSONCoercion{
+			Coerce:   prepared.JSONCoercion.Coerce,
+			Validate: prepared.JSONCoercion.Validate,
+		},
+		result.AnthropicStopReason,
+	)
+	providerResult := anthropicProviderResultFromResponse(&resp)
+	providerResult.UsageNoticeWindows = usageWindows()
+	return providerResult, nil
 }
 
 func (s *Server) executeAnthropicPreparedStream(
@@ -208,37 +245,30 @@ func (s *Server) executeAnthropicPreparedStream(
 		}
 		return s.executeAnthropicPreparedStreamNative(ctx, prepared, nativeWriter)
 	}
-	streamWriter, ok := writer.(*providerStreamWriter)
-	if !ok || streamWriter == nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusInternalServerError,
-			Code:    "internal_error",
-			Message: "anthropic stream provider requires a streaming event writer",
-		}
-	}
-
-	dispatcher := &streamResponseDispatcher{
-		server:      s,
-		sse:         &providerAnthropicSSEWriter{writer: streamWriter},
-		eventWriter: writer,
-	}
-	started := adapterClock.Now()
-	request := (&http.Request{}).WithContext(ctx)
-	if err := anthropicbackend.StreamResponse(
-		dispatcher,
-		nil,
-		request,
-		prepared.Request,
+	runtime := &streamResponseDispatcher{server: s, eventWriter: writer}
+	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
+	result, err := anthropicbackend.RunStreamExecution(
+		runtime,
+		ctx,
+		reqWithWindows,
 		prepared.Model,
 		prepared.RequestID,
-		started,
-		true,
-		prepared.IncludeUsage,
 		prepared.TrackerKey,
-	); err != nil {
+		writer.WriteEvent,
+	)
+	if err != nil {
 		return adapterprovider.Result{}, err
 	}
-	return adapterprovider.Result{SystemFingerprint: systemFingerprint}, nil
+	providerResult := adapterprovider.Result{
+		Usage:               result.Usage,
+		FinishReason:        result.FinishReason,
+		SystemFingerprint:   systemFingerprint,
+		ToolCallCount:       result.ToolCallCount,
+		ToolCallNames:       result.ToolCallNames,
+		HasSubagentToolCall: result.HasSubagentToolCall,
+		UsageNoticeWindows:  usageWindows(),
+	}
+	return providerResult, nil
 }
 
 func (s *Server) executeAnthropicPreparedCollectNative(
@@ -357,10 +387,34 @@ func anthropicProviderResultFromResponse(resp *adapteropenai.ChatResponse) adapt
 	return result
 }
 
+func anthropicRequestWithUsageWindowCapture(req anthropic.Request) (anthropic.Request, func() []adapterruntime.UsageWindowNoticeInput) {
+	var mu sync.Mutex
+	var captured []adapterruntime.UsageWindowNoticeInput
+	previousOnHeaders := req.OnHeaders
+	req.OnHeaders = func(h http.Header) {
+		if previousOnHeaders != nil {
+			previousOnHeaders(h)
+		}
+		windows := anthropic.EarlyWarningUsageWindows(h)
+		mu.Lock()
+		captured = append(captured[:0], windows...)
+		mu.Unlock()
+	}
+	return req, func() []adapterruntime.UsageWindowNoticeInput {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(captured) == 0 {
+			return nil
+		}
+		out := make([]adapterruntime.UsageWindowNoticeInput, len(captured))
+		copy(out, captured)
+		return out
+	}
+}
+
 type collectResponseDispatcher struct {
-	server        *Server
-	finalResponse *adapteropenai.ChatResponse
-	eventWriter   adapterprovider.EventWriter
+	server      *Server
+	eventWriter adapterprovider.EventWriter
 }
 
 func (d *collectResponseDispatcher) Log() *slog.Logger {
@@ -422,9 +476,7 @@ func (d *collectResponseDispatcher) TrackAnthropicContextUsage(key string, raw a
 	}
 }
 
-func (d *collectResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, resp adapteropenai.ChatResponse) {
-	captured := resp
-	d.finalResponse = &captured
+func (d *collectResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, _ adapteropenai.ChatResponse) {
 }
 
 func (d *collectResponseDispatcher) WriteErrorJSON(http.ResponseWriter, int, adapteropenai.ErrorResponse) {
@@ -442,25 +494,8 @@ func (d *collectResponseDispatcher) CacheTTL() string {
 	return d.server.cfg.ClientIdentity.PromptCacheTTL
 }
 
-func (d *collectResponseDispatcher) NoticesEnabled() bool {
-	return d.server.cfg.Notices.EnabledOrDefault()
-}
-
-func (d *collectResponseDispatcher) NoticeUsageThresholdsUsedPercent() []float64 {
-	return d.server.cfg.Notices.UsageThresholdsUsedPercentOrDefault()
-}
-
-func (d *collectResponseDispatcher) ClaimNotice(kind string, resetsAt time.Time) bool {
-	return Claim(kind, resetsAt)
-}
-
-func (d *collectResponseDispatcher) UnclaimNotice(kind string, resetsAt time.Time) {
-	Unclaim(kind, resetsAt)
-}
-
 type streamResponseDispatcher struct {
 	server      *Server
-	sse         anthropicbackend.ResponseSSEWriter
 	eventWriter adapterprovider.EventWriter
 }
 
@@ -477,7 +512,7 @@ func (d *streamResponseDispatcher) EmitRequestStreamOpened(ctx context.Context, 
 }
 
 func (d *streamResponseDispatcher) NewAnthropicSSEWriter(http.ResponseWriter) (anthropicbackend.ResponseSSEWriter, error) {
-	return d.sse, nil
+	return nil, fmt.Errorf("anthropic stream provider dispatch does not expose a backend SSE writer")
 }
 
 func (d *streamResponseDispatcher) AnthropicStreamClient() anthropicbackend.StreamClient {
@@ -536,63 +571,4 @@ func (d *streamResponseDispatcher) LogCacheUsageAnthropic(ctx context.Context, b
 
 func (d *streamResponseDispatcher) CacheTTL() string {
 	return d.server.cfg.ClientIdentity.PromptCacheTTL
-}
-
-func (d *streamResponseDispatcher) NoticesEnabled() bool {
-	return d.server.cfg.Notices.EnabledOrDefault()
-}
-
-func (d *streamResponseDispatcher) NoticeUsageThresholdsUsedPercent() []float64 {
-	return d.server.cfg.Notices.UsageThresholdsUsedPercentOrDefault()
-}
-
-func (d *streamResponseDispatcher) ClaimNotice(kind string, resetsAt time.Time) bool {
-	return Claim(kind, resetsAt)
-}
-
-func (d *streamResponseDispatcher) UnclaimNotice(kind string, resetsAt time.Time) {
-	Unclaim(kind, resetsAt)
-}
-
-type providerAnthropicSSEWriter struct {
-	writer *providerStreamWriter
-}
-
-func (w *providerAnthropicSSEWriter) WriteSSEHeaders() {
-	if w == nil || w.writer == nil || w.writer.headersWritten {
-		return
-	}
-	w.writer.sse.WriteSSEHeaders()
-	w.writer.headersWritten = true
-}
-
-func (w *providerAnthropicSSEWriter) EmitStreamChunk(systemFingerprint string, chunk adapteropenai.StreamChunk) error {
-	if w == nil || w.writer == nil {
-		return fmt.Errorf("provider stream writer missing")
-	}
-	if !w.writer.headersWritten {
-		w.WriteSSEHeaders()
-	}
-	return w.writer.sse.EmitStreamChunk(systemFingerprint, chunk)
-}
-
-func (w *providerAnthropicSSEWriter) EmitStreamError(body adapteropenai.ErrorBody) error {
-	if w == nil || w.writer == nil {
-		return fmt.Errorf("provider stream writer missing")
-	}
-	if !w.writer.headersWritten {
-		w.WriteSSEHeaders()
-	}
-	return w.writer.sse.EmitStreamError(body)
-}
-
-func (w *providerAnthropicSSEWriter) WriteStreamDone() error {
-	if w == nil || w.writer == nil {
-		return fmt.Errorf("provider stream writer missing")
-	}
-	return w.writer.sse.WriteStreamDone()
-}
-
-func (w *providerAnthropicSSEWriter) HasCommittedHeaders() bool {
-	return w != nil && w.writer != nil && w.writer.headersWritten
 }

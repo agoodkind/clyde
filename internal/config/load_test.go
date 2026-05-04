@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -206,6 +207,37 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.Adapter.Notices.UsageThresholdsUsedPercentOrDefault()).To(Equal([]float64{75, 95}))
+	})
+
+	It("loads adapter notice usage repeat policy", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		contents := "[adapter.notices.usage.repeat]\nmode = \"time_cooldown\"\ncooldown = \"12h\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(contents), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		policy := cfg.Adapter.Notices.UsageRepeatPolicyOrDefault()
+		Expect(policy.Mode).To(Equal(config.AdapterNoticeRepeatTimeCooldown))
+		Expect(policy.Cooldown).To(Equal("12h"))
+		Expect(policy.CooldownDuration).To(Equal(12 * time.Hour))
+	})
+
+	It("rejects invalid adapter notice usage repeat policy", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		contents := "[adapter.notices.usage.repeat]\nmode = \"turn_cooldown\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(contents), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("adapter.notices.usage.repeat.cooldown_turns"))
 	})
 
 	It("rejects invalid adapter notice usage thresholds", func() {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/finishreason"
@@ -912,10 +913,8 @@ func (p *sseEventParser) recordToolCallName(name string) {
 	if name == "" {
 		return
 	}
-	for _, existing := range p.out.ToolCallNames {
-		if existing == name {
-			return
-		}
+	if slices.Contains(p.out.ToolCallNames, name) {
+		return
 	}
 	p.out.ToolCallNames = append(p.out.ToolCallNames, name)
 }

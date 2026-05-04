@@ -8,21 +8,16 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 )
 
-type UsageWarning struct {
-	Kind     string
-	Text     string
-	ResetsAt time.Time
-}
-
 type usageWarningProbeConfig struct {
-	HTTPClient            *http.Client
-	BaseURL               string
-	Token                 string
-	AccountID             string
-	Now                   func() time.Time
-	ThresholdsUsedPercent []float64
+	HTTPClient *http.Client
+	BaseURL    string
+	Token      string
+	AccountID  string
+	Now        func() time.Time
 }
 
 type whamUsageResponse struct {
@@ -41,9 +36,7 @@ type whamUsageWindow struct {
 	ResetAt            int64   `json:"reset_at"`
 }
 
-var usageWarningThresholds = []float64{75, 95}
-
-func ProbeUsageWarnings(ctx context.Context, cfg usageWarningProbeConfig) ([]UsageWarning, error) {
+func ProbeUsageWarnings(ctx context.Context, cfg usageWarningProbeConfig) ([]adapterruntime.UsageWindowNoticeInput, error) {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
 	}
@@ -70,7 +63,7 @@ func ProbeUsageWarnings(ctx context.Context, cfg usageWarningProbeConfig) ([]Usa
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("codex usage probe: unexpected status %d", resp.StatusCode)
@@ -82,50 +75,36 @@ func ProbeUsageWarnings(ctx context.Context, cfg usageWarningProbeConfig) ([]Usa
 	}
 
 	now := cfg.Now().UTC()
-	warnings := make([]UsageWarning, 0, 2)
-	if warning, ok := warningForUsageWindow("weekly", payload.RateLimit.SecondaryWindow, now, cfg.ThresholdsUsedPercent); ok {
-		warnings = append(warnings, warning)
+	windows := make([]adapterruntime.UsageWindowNoticeInput, 0, 2)
+	if warning, ok := usageWindowNoticeInput("codex", "weekly", payload.RateLimit.SecondaryWindow, now); ok {
+		windows = append(windows, warning)
 	}
-	if warning, ok := warningForUsageWindow("primary", payload.RateLimit.PrimaryWindow, now, cfg.ThresholdsUsedPercent); ok {
-		warnings = append(warnings, warning)
+	if warning, ok := usageWindowNoticeInput("codex", "primary", payload.RateLimit.PrimaryWindow, now); ok {
+		windows = append(windows, warning)
 	}
-	return warnings, nil
+	return windows, nil
 }
 
-func warningForUsageWindow(kindPrefix string, window *whamUsageWindow, now time.Time, thresholdsUsedPercent []float64) (UsageWarning, bool) {
+func usageWindowNoticeInput(
+	provider string,
+	windowKey string,
+	window *whamUsageWindow,
+	now time.Time,
+) (adapterruntime.UsageWindowNoticeInput, bool) {
 	if window == nil {
-		return UsageWarning{}, false
-	}
-	highestThreshold, ok := highestUsageThreshold(window.UsedPercent, thresholdsUsedPercent)
-	if !ok {
-		return UsageWarning{}, false
+		return adapterruntime.UsageWindowNoticeInput{}, false
 	}
 	limitLabel := usageWindowLabel(window.LimitWindowSeconds)
-	remainingPercent := 100 - highestThreshold
-	return UsageWarning{
-		Kind: fmt.Sprintf("codex_%s_remaining_%d", kindPrefix, int(remainingPercent)),
-		Text: fmt.Sprintf(
-			"Heads up, you have less than %.0f%% of your %s limit left. Run /status for a breakdown.",
-			remainingPercent,
-			limitLabel,
-		),
-		ResetsAt: usageWindowResetAt(window, now),
+	if strings.TrimSpace(limitLabel) == "" {
+		return adapterruntime.UsageWindowNoticeInput{}, false
+	}
+	return adapterruntime.UsageWindowNoticeInput{
+		Provider:    provider,
+		WindowKey:   windowKey,
+		LimitLabel:  limitLabel,
+		UsedPercent: window.UsedPercent,
+		ResetsAt:    usageWindowResetAt(window, now),
 	}, true
-}
-
-func highestUsageThreshold(usedPercent float64, thresholdsUsedPercent []float64) (float64, bool) {
-	if len(thresholdsUsedPercent) == 0 {
-		thresholdsUsedPercent = usageWarningThresholds
-	}
-	var highest float64
-	matched := false
-	for _, threshold := range thresholdsUsedPercent {
-		if usedPercent >= threshold {
-			highest = threshold
-			matched = true
-		}
-	}
-	return highest, matched
 }
 
 func usageWindowResetAt(window *whamUsageWindow, now time.Time) time.Time {
@@ -152,10 +131,7 @@ func usageWindowLabel(limitWindowSeconds int64) string {
 	windowMinutes := limitWindowSeconds / secondsPerMinute
 	if windowMinutes <= minutesPerDay+roundingBiasMinutes {
 		adjustedMinutes := windowMinutes + roundingBiasMinutes
-		hours := adjustedMinutes / minutesPerHour
-		if hours < 1 {
-			hours = 1
-		}
+		hours := max(adjustedMinutes/minutesPerHour, 1)
 		return fmt.Sprintf("%dh", hours)
 	}
 	if windowMinutes <= minutesPerWeek+roundingBiasMinutes {

@@ -77,16 +77,16 @@ func TestProviderExecuteAuthErrorSurfaces(t *testing.T) {
 	}
 }
 
-func TestProviderExecuteInjectsUsageWarningBeforeAssistantText(t *testing.T) {
+func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/backend-api/wham/usage":
 			_, _ = w.Write([]byte(`{
 				"rate_limit": {
 					"secondary_window": {
-						"used_percent": 80,
+						"used_percent": 93,
 						"limit_window_seconds": 604800,
-						"reset_at": 1735689600
+						"reset_at": 1735855200
 					}
 				}
 			}`))
@@ -133,16 +133,26 @@ func TestProviderExecuteInjectsUsageWarningBeforeAssistantText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
-	if len(w.events) < 2 {
-		t.Fatalf("events len=%d want at least 2", len(w.events))
+	if len(w.events) != 2 {
+		t.Fatalf("events len=%d want 2", len(w.events))
 	}
-	if got := w.events[0].Text; got != formatUsageWarningNotice("Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.") {
-		t.Fatalf("warning event=%q", got)
-	}
-	if got := w.events[1].Text; got != "answer" {
+	if got := w.events[0].Text; got != "answer" {
 		t.Fatalf("assistant event=%q", got)
 	}
-	if result.ReasoningSummary != "Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown." {
+	if got := w.events[1].Kind; got != adapterrender.EventReasoningFinished {
+		t.Fatalf("final event kind=%q", got)
+	}
+	if len(result.UsageNoticeWindows) != 1 {
+		t.Fatalf("usage notice windows len=%d want 1", len(result.UsageNoticeWindows))
+	}
+	window := result.UsageNoticeWindows[0]
+	if window.Provider != "codex" || window.WindowKey != "weekly" {
+		t.Fatalf("window=%+v", window)
+	}
+	if window.UsedPercent != 93 {
+		t.Fatalf("used percent=%v", window.UsedPercent)
+	}
+	if result.ReasoningSummary != "" {
 		t.Fatalf("reasoning summary=%q", result.ReasoningSummary)
 	}
 }
@@ -218,6 +228,77 @@ func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testin
 	}
 	if result.ReasoningSummary != "" {
 		t.Fatalf("reasoning summary=%q", result.ReasoningSummary)
+	}
+}
+
+func TestProviderExecuteSkipsUsageWarningWhenFinishReasonIsNotStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/wham/usage":
+			_, _ = w.Write([]byte(`{
+				"rate_limit": {
+					"secondary_window": {
+						"used_percent": 93,
+						"limit_window_seconds": 604800,
+						"reset_at": 1735855200
+					}
+				}
+			}`))
+		case "/backend-api/codex/responses":
+			upgrader := websocket.Upgrader{}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Fatalf("upgrade: %v", err)
+			}
+			defer conn.Close()
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Fatalf("read request: %v", err)
+			}
+			if err := conn.WriteMessage(1, []byte(`{"type":"response.output_text.delta","delta":"partial"}`)); err != nil {
+				t.Fatalf("write delta: %v", err)
+			}
+			payload := `{"type":"response.completed","response":{"id":"resp-1","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`
+			if err := conn.WriteMessage(1, []byte(payload)); err != nil {
+				t.Fatalf("write complete: %v", err)
+			}
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	deps := adapterprovider.Deps{
+		Auth:       fakeAuth{token: "token-123"},
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return time.Unix(1735682400, 0).UTC() },
+	}
+	deps.Config.Codex.BaseURL = server.URL + "/backend-api/codex/responses"
+	p := NewProvider(deps, ProviderOptions{AccountID: "acct-123"})
+	w := &capturingWriter{}
+	result, err := p.Execute(context.Background(), adapterresolver.ResolvedRequest{
+		Model:  "gpt-5.4",
+		Effort: adapterresolver.EffortMedium,
+		OpenAI: adapteropenai.ChatRequest{
+			Messages: []adapteropenai.ChatMessage{{
+				Role:    "user",
+				Content: json.RawMessage(`"hello"`),
+			}},
+		},
+	}, w)
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if result.FinishReason != "length" {
+		t.Fatalf("finish reason=%q", result.FinishReason)
+	}
+	if len(w.events) != 2 {
+		t.Fatalf("events len=%d want 2", len(w.events))
+	}
+	if got := w.events[0].Text; got != "partial" {
+		t.Fatalf("assistant event=%q", got)
+	}
+	if got := w.events[1].Kind; got != adapterrender.EventReasoningFinished {
+		t.Fatalf("final event kind=%q", got)
 	}
 }
 

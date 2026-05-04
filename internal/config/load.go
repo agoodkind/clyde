@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -79,10 +80,19 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 	if cfg == nil {
 		return nil
 	}
+	log := slog.Default().With("concern", "process.daemon.config")
 	configDir := filepath.Dir(configPath)
 	for name, model := range cfg.Adapter.Models {
 		contents, err := loadInstructionFile(configDir, model.InstructionsFile)
 		if err != nil {
+			log.Warn("config.load.instructions_file_failed",
+				"component", "config",
+				"subcomponent", "load",
+				"scope", "adapter.models",
+				"name", name,
+				"path", model.InstructionsFile,
+				"err", err,
+			)
 			return fmt.Errorf("adapter.models.%s.instructions_file: %w", name, err)
 		}
 		model.Instructions = contents
@@ -91,6 +101,14 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 	for name, family := range cfg.Adapter.Families {
 		contents, err := loadInstructionFile(configDir, family.InstructionsFile)
 		if err != nil {
+			log.Warn("config.load.instructions_file_failed",
+				"component", "config",
+				"subcomponent", "load",
+				"scope", "adapter.families",
+				"name", name,
+				"path", family.InstructionsFile,
+				"err", err,
+			)
 			return fmt.Errorf("adapter.families.%s.instructions_file: %w", name, err)
 		}
 		family.Instructions = contents
@@ -103,6 +121,14 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 			if aliasPrefix == "" {
 				aliasPrefix = fmt.Sprintf("#%d", i)
 			}
+			log.Warn("config.load.instructions_file_failed",
+				"component", "config",
+				"subcomponent", "load",
+				"scope", "adapter.codex.models",
+				"name", aliasPrefix,
+				"path", model.InstructionsFile,
+				"err", err,
+			)
 			return fmt.Errorf("adapter.codex.models.%s.instructions_file: %w", aliasPrefix, err)
 		}
 		model.Instructions = contents
@@ -122,10 +148,23 @@ func loadInstructionFile(configDir string, configuredPath string) (string, error
 	}
 	contents, err := os.ReadFile(resolvedPath)
 	if err != nil {
-		return "", fmt.Errorf("read %q: %w", resolvedPath, err)
+		slog.Default().With("concern", "process.daemon.config").Warn("config.load.instructions_file_read_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", resolvedPath,
+			"err", err,
+		)
+		return "", err
 	}
 	if len(contents) == 0 {
-		return "", fmt.Errorf("read %q: file is empty", resolvedPath)
+		err := fmt.Errorf("read %q: file is empty", resolvedPath)
+		slog.Default().With("concern", "process.daemon.config").Warn("config.load.instructions_file_empty",
+			"component", "config",
+			"subcomponent", "load",
+			"path", resolvedPath,
+			"err", err,
+		)
+		return "", err
 	}
 	return string(contents), nil
 }
@@ -299,6 +338,11 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 	cfg.Adapter.Notices.Usage.ThresholdsUsedPercent = thresholds
+	policy, err := normalizeNoticeUsageRepeatPolicy(cfg.Adapter.Notices.Usage.Repeat)
+	if err != nil {
+		return err
+	}
+	cfg.Adapter.Notices.Usage.Repeat = policy
 	return nil
 }
 
@@ -365,6 +409,34 @@ func normalizeNoticeUsageThresholds(raw []float64) ([]float64, error) {
 		previous = threshold
 	}
 	return append([]float64(nil), out...), nil
+}
+
+func normalizeNoticeUsageRepeatPolicy(raw AdapterNoticeRepeatPolicy) (AdapterNoticeRepeatPolicy, error) {
+	mode := AdapterNoticeRepeatMode(strings.ToLower(strings.TrimSpace(string(raw.Mode))))
+	if mode == "" {
+		mode = AdapterNoticeRepeatEvery
+	}
+	out := AdapterNoticeRepeatPolicy{Mode: mode}
+	switch mode {
+	case AdapterNoticeRepeatEvery, AdapterNoticeRepeatOncePerThresholdUntilReset:
+		return out, nil
+	case AdapterNoticeRepeatTimeCooldown:
+		cooldown, err := time.ParseDuration(strings.TrimSpace(raw.Cooldown))
+		if err != nil || cooldown <= 0 {
+			return AdapterNoticeRepeatPolicy{}, fmt.Errorf("adapter.notices.usage.repeat.cooldown must be a positive duration when mode is time_cooldown")
+		}
+		out.Cooldown = strings.TrimSpace(raw.Cooldown)
+		out.CooldownDuration = cooldown
+		return out, nil
+	case AdapterNoticeRepeatTurnCooldown:
+		if raw.CooldownTurns <= 0 {
+			return AdapterNoticeRepeatPolicy{}, fmt.Errorf("adapter.notices.usage.repeat.cooldown_turns must be positive when mode is turn_cooldown")
+		}
+		out.CooldownTurns = raw.CooldownTurns
+		return out, nil
+	default:
+		return AdapterNoticeRepeatPolicy{}, fmt.Errorf("adapter.notices.usage.repeat.mode must be one of every|once_per_threshold_until_reset|time_cooldown|turn_cooldown")
+	}
 }
 
 // MergedProfiles helper removed; callers now use LoadGlobalOrDefault and project

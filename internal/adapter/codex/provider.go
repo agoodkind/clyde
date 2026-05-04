@@ -145,13 +145,12 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		ReasoningSummary: p.cfg.ReasoningSummary,
 	}
 
-	warnings, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
-		HTTPClient:            directCfg.HTTPClient,
-		BaseURL:               directCfg.BaseURL,
-		Token:                 directCfg.Token,
-		AccountID:             directCfg.AccountID,
-		Now:                   p.now,
-		ThresholdsUsedPercent: p.notices.UsageThresholdsUsedPercentOrDefault(),
+	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
+		HTTPClient: directCfg.HTTPClient,
+		BaseURL:    directCfg.BaseURL,
+		Token:      directCfg.Token,
+		AccountID:  directCfg.AccountID,
+		Now:        p.now,
 	})
 	if usageWarningErr != nil {
 		p.log.WarnContext(ctx, "adapter.codex.usage_warning_probe_failed",
@@ -163,9 +162,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	}
 
 	model := resolvedModelFromRequest(req)
-	emit := warningInjectingEventWriter(w, firstUsageWarningText(warnings))
-
-	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, model, req.Effort.String(), emit)
+	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, model, req.Effort.String(), w.WriteEvent)
 	if runErr != nil {
 		return adapterprovider.Result{}, runErr
 	}
@@ -177,12 +174,12 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		FinishReason:               runResult.FinishReason,
 		ReasoningSignaled:          runResult.ReasoningSignaled,
 		ReasoningVisible:           runResult.ReasoningVisible,
-		ReasoningSummary:           firstUsageWarningText(warnings),
 		DerivedCacheCreationTokens: runResult.DerivedCacheCreationTokens,
 		UpstreamResponseID:         runResult.ResponseID,
 		ToolCallCount:              runResult.ToolCallCount,
 		ToolCallNames:              runResult.ToolCallNames,
 		HasSubagentToolCall:        runResult.HasSubagentToolCall,
+		UsageNoticeWindows:         warningWindows,
 	}, nil
 }
 

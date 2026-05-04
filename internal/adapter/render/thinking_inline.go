@@ -3,7 +3,7 @@ package render
 import "strings"
 
 func ThinkingInlineOpen() string {
-	return "<!--clyde-thinking-->\n> **💭 Thinking...**\n> \n"
+	return "<!--clyde-thinking-->\n> **Thinking...**\n>\n"
 }
 
 func FormatThinkingInlineDelta(open bool, text string) string {
