@@ -1,10 +1,49 @@
-.PHONY: help build test test-watch coverage clean fmt lint staticcheck staticcheck-extra staticcheck-extra-baseline staticcheck-extra-bin deadcode govulncheck audit \
+.PHONY: help build clean-build notarize-build test-ginkgo test-watch coverage clean staticcheck deadcode audit quality-check lint-golangci-baseline \
         install-build-guard uninstall-build-guard setup-hooks \
-        deploy install-launch-agent uninstall-launch-agent install-systemd-user uninstall-systemd-user install-hook uninstall-hook \
-        release release-snapshot sign notarize dist/clyde
+        deploy install install-system-agent install-launch-agent install-launch-agent-files uninstall-launch-agent \
+        install-systemd-user install-systemd-user-files uninstall-systemd-user install-hook uninstall-hook \
+        release-local release-snapshot sign notarize dist/clyde
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
+
+# ---------------------------------------------------------------------------
+# go-makefile bootstrap (https://github.com/agoodkind/go-makefile)
+#
+# Fetches go.mk at runtime into .make/go.mk (cached at ~/.cache/go-makefile)
+# and -includes it. The included go.mk owns: lint, lint-tools, lint-golangci,
+# lint-format, lint-gocyclo, fmt, vet, govulncheck, staticcheck-extra*,
+# update-go-mk, go-mk-sync. Run `make update-go-mk` to refresh.
+# ---------------------------------------------------------------------------
+
+GO_MK_URL   := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.mk
+GO_MK       := .make/go.mk
+GO_MK_CACHE := $(HOME)/.cache/go-makefile/go.mk
+
+# Route go.mk's golangci target through a baseline-aware wrapper.
+GOLANGCI_LINT := ./scripts/golangci-lint-baseline.sh
+GOLANGCI_LINT_BASELINE ?= .golangci-lint-baseline.txt
+
+# Define CMD so go.mk's default `build:` rule is suppressed (project owns build).
+CMD := ./cmd/clyde
+
+# Enable every bundled staticcheck-extra analyzer (5 core + 11 strict).
+STATICCHECK_EXTRA_FLAGS         = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
+STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
+
+$(GO_MK):
+	@mkdir -p $(dir $@)
+	@if curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$@"; then \
+		mkdir -p "$(dir $(GO_MK_CACHE))" && cp "$@" "$(GO_MK_CACHE)"; \
+	elif [ -f "$(GO_MK_CACHE)" ]; then \
+		echo "warning: go.mk fetch failed, using cached version" >&2; \
+		cp "$(GO_MK_CACHE)" "$@"; \
+	else \
+		echo "error: go.mk fetch failed and no cache available" >&2; \
+		exit 1; \
+	fi
+
+-include $(GO_MK)
 
 # ---------------------------------------------------------------------------
 # Version / build metadata
@@ -31,6 +70,34 @@ LDFLAGS := -X '$(GKLOG_VPKG).Commit=$(COMMIT)' \
 
 GO_SRC := $(shell find . -name '*.go' -not -path './vendor/*')
 
+CODESIGN_TIMESTAMP ?= none
+
+define codesign_binary
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
+			echo "No Developer ID Application signing identity found."; \
+			echo "Set CERT_ID in config.mk or install a Developer ID Application certificate."; \
+			exit 1; \
+		fi; \
+		echo "Signing $(1) with $(CODESIGN_IDENTITY)..."; \
+		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=$(CODESIGN_TIMESTAMP) "$(1)"; \
+		codesign --verify --verbose=2 "$(1)"; \
+	fi
+endef
+
+define reserve_dist_clyde
+	@mkdir -p dist
+	@chmod -R u+w dist/clyde 2>/dev/null; true
+	@rm -rf dist/clyde
+	@mkdir -p dist/clyde
+	@printf '%s\n' \
+		'Do not run binaries from this directory.' \
+		'Use ~/.local/bin/clyde so macOS Full Disk Access has one stable client path.' \
+		'Builds use temporary files and install only to ~/.local/bin/clyde.' \
+		> dist/clyde/README.txt
+	@chmod 0555 dist/clyde
+endef
+
 # ---------------------------------------------------------------------------
 # Daemon install paths
 # ---------------------------------------------------------------------------
@@ -46,10 +113,15 @@ SYSTEMD_USER_TEMPLATE := packaging/systemd/clyde-daemon.service.in
 CLYDE_BIN             := $(HOME)/.local/bin/clyde
 CLYDE_DAEMON_BIN      := $(CLYDE_BIN)
 CLYDE_DEV_RUN         := $(CLYDE_BIN)
+CLYDE_BUILD_DIR       := .make/build
+CLYDE_BUILD_BIN       := $(CLYDE_BUILD_DIR)/clyde
+NOTARIZE_ZIP          := dist/clyde-notarize.zip
 UID                   := $(shell id -u)
 BUNDLE_ID             ?= io.goodkind.clyde
 CODESIGN_IDENTITY     := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 GO                     ?= go
+
+.DEFAULT_GOAL := help
 
 # ---------------------------------------------------------------------------
 # Default
@@ -65,57 +137,44 @@ help: ## Show this help message
 # Build
 # ---------------------------------------------------------------------------
 
-build: check dist/clyde ## Build and signing-check the clyde binary without leaving a repo-local executable
+build: quality-check $(CLYDE_BUILD_BIN) dist/clyde ## Run checks, then build and signing-check the clyde binary
+	@echo "✓ Build and signing check passed"
+
+$(CLYDE_BUILD_BIN): $(GO_SRC) go.mod go.sum
 	@echo "Building clyde..."
+	@mkdir -p "$(CLYDE_BUILD_DIR)"
 	@tmp="$$(mktemp -t clyde-build.XXXXXX)"; \
 	trap 'rm -f "$$tmp"' EXIT; \
 	go build -ldflags "$(LDFLAGS)" -o "$$tmp" ./cmd/clyde; \
-	if [ "$$(uname)" = "Darwin" ]; then \
-		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
-			echo "No Developer ID Application signing identity found."; \
-			echo "Set CERT_ID in config.mk or install a Developer ID Application certificate."; \
-			exit 1; \
-		fi; \
-		echo "Signing temporary clyde build with $(CODESIGN_IDENTITY)..."; \
-		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none "$$tmp"; \
-		codesign --verify --verbose=2 "$$tmp"; \
-	fi
-	@echo "✓ Build and signing check passed"
+	test -s "$$tmp"; \
+	chmod 0755 "$$tmp"; \
+	mv -f "$$tmp" "$(CLYDE_BUILD_BIN)"
+	$(call codesign_binary,$(CLYDE_BUILD_BIN))
 
 dist/clyde:
-	@mkdir -p dist
-	@chmod -R u+w dist/clyde 2>/dev/null; true
-	@rm -rf dist/clyde
-	@mkdir -p dist/clyde
-	@printf '%s\n' \
-		'Do not run binaries from this directory.' \
-		'Use ~/.local/bin/clyde so macOS Full Disk Access has one stable client path.' \
-		'Builds use temporary files and install only to ~/.local/bin/clyde.' \
-		> dist/clyde/README.txt
-	@chmod 0555 dist/clyde
+	$(call reserve_dist_clyde)
 	@echo "✓ Reserved dist/clyde as a non-runtime directory"
+
+clean-build: ## Remove the cached build artifact
+	@rm -rf "$(CLYDE_BUILD_DIR)"
 
 clean: ## Remove build artifacts
 	@echo "Cleaning..."
 	@chmod -R u+w dist 2>/dev/null; true
-	@rm -rf dist/
+	@rm -rf dist/ "$(CLYDE_BUILD_DIR)"
 	@rm -f *.test *.out coverage.txt coverage.html
 	@find . -name "*.test" -delete
-	@mkdir -p dist/clyde
-	@printf '%s\n' \
-		'Do not run binaries from this directory.' \
-		'Use ~/.local/bin/clyde so macOS Full Disk Access has one stable client path.' \
-		'Builds use temporary files and install only to ~/.local/bin/clyde.' \
-		> dist/clyde/README.txt
-	@chmod 0555 dist/clyde
+	$(call reserve_dist_clyde)
 	@echo "✓ Cleaned"
 
 # ---------------------------------------------------------------------------
-# Test
+# Test (go.mk owns `test`; this target preserves the previous Ginkgo runner)
 # ---------------------------------------------------------------------------
 
-test: ## Run tests with Ginkgo
+test-ginkgo: ## Run tests with Ginkgo
 	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --race
+
+ci-test: test-ginkgo ## Run the project CI test suite
 
 test-watch: ## Run tests in watch mode
 	@echo "Starting test watch mode..."
@@ -129,18 +188,52 @@ coverage: ## Generate coverage report
 
 # ---------------------------------------------------------------------------
 # Code quality
+#
+# `lint`, `lint-tools`, `lint-golangci`, `lint-format`, `lint-gocyclo`, `fmt`,
+# `vet`, `govulncheck`, and `staticcheck-extra*` are owned by go.mk. The project
+# layers `staticcheck` (clyde-staticcheck), `deadcode`, and `audit` on top.
 # ---------------------------------------------------------------------------
 
-check: lint staticcheck staticcheck-extra deadcode govulncheck audit
+check: quality-check ## Full quality gate (go.mk checks plus clyde-staticcheck, deadcode, audit)
 
-fmt: ## Format code with gofumpt and goimports
-	@echo "Formatting code..."
-	@go tool golangci-lint fmt ./...
-	@echo "✓ Formatted"
+quality-check: vet lint test govulncheck staticcheck deadcode audit ## Run the complete quality gate without building the Clyde binary
 
-lint: ## Run golangci-lint
-	@echo "Running linter..."
-	@go tool golangci-lint run ./... && echo "✓ Lint passed"
+lint-golangci-baseline: ## Refresh the golangci-lint baseline for existing findings
+	@mkdir -p .make
+	@tmp_raw=.make/golangci-lint-baseline.raw.out; \
+	new_baseline=.make/golangci-lint-baseline.new; \
+	if ! go tool golangci-lint run ./... > "$$tmp_raw" 2>&1; then status=$$?; else status=0; fi; \
+	perl -0pe 's/\n\s+/ /g' "$$tmp_raw" \
+		| grep -E '^[^[:space:]].*\([[:alnum:]_-]+\)$$' \
+		| sed "s|$$(pwd)/||g" \
+		| sort > .make/golangci-lint-baseline.out || true; \
+	now=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
+	tab=$$(printf '\t'); \
+	metadata_prefix="$${tab}# golangci-lint:"; \
+	printf '# golangci-lint: generated_at=%s\n' "$$now" > "$$new_baseline"; \
+	while IFS= read -r finding || [ -n "$$finding" ]; do \
+		first_added=""; \
+		if [ -f "$(GOLANGCI_LINT_BASELINE)" ]; then \
+			while IFS= read -r baseline_line || [ -n "$$baseline_line" ]; do \
+				case "$$baseline_line" in ""|\#*) continue ;; esac; \
+				baseline_finding="$${baseline_line%%$${metadata_prefix}*}"; \
+				[ "$$baseline_finding" = "$$finding" ] || continue; \
+				metadata="$${baseline_line#*$${metadata_prefix}}"; \
+				if [ "$$metadata" != "$$baseline_line" ]; then \
+					for metadata_field in $$metadata; do \
+						case "$$metadata_field" in first_added=*) first_added="$${metadata_field#first_added=}" ;; esac; \
+					done; \
+				fi; \
+				break; \
+			done < "$(GOLANGCI_LINT_BASELINE)"; \
+		fi; \
+		if [ -z "$$first_added" ]; then first_added="$$now"; fi; \
+		printf '%s\t# golangci-lint:first_added=%s last_seen=%s\n' "$$finding" "$$first_added" "$$now" >> "$$new_baseline"; \
+	done < .make/golangci-lint-baseline.out; \
+	mv "$$new_baseline" "$(GOLANGCI_LINT_BASELINE)"; \
+	n=$$(wc -l < .make/golangci-lint-baseline.out); \
+	echo "golangci-lint: baseline $(GOLANGCI_LINT_BASELINE) refreshed ($$n findings)"; \
+	if [ "$$status" -ne 0 ] && [ "$$n" -eq 0 ]; then cat "$$tmp_raw"; exit "$$status"; fi
 
 staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
 	@echo "Running Clyde staticcheck..."
@@ -156,123 +249,7 @@ staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
 		fi; \
 		echo "✓ Staticcheck passed"'
 
-STATICCHECK_EXTRA_BIN           ?=
-STATICCHECK_EXTRA_BUILD_REPO    ?=
-STATICCHECK_EXTRA_BUILD_PKG     ?=
-STATICCHECK_EXTRA_INSTALL       ?= github.com/agoodkind/go-makefile/staticcheck/cmd/staticcheck-extra@latest
-STATICCHECK_EXTRA_FLAGS         ?= \
-	-slog_error_without_err \
-	-banned_direct_output \
-	-hot_loop_info_log \
-	-missing_boundary_log \
-	-no_any_or_empty_interface \
-	-wrapped_error_without_slog \
-	-os_exit_outside_main \
-	-context_todo_in_production \
-	-time_sleep_in_production \
-	-panic_in_production \
-	-time_now_outside_clock \
-	-goroutine_without_recover \
-	-silent_defer_close \
-	-slog_missing_trace_id \
-	-sensitive_field_in_log \
-	-grpc_handler_missing_peer_enrichment
-STATICCHECK_EXTRA_TARGETS       ?= ./...
-STATICCHECK_EXTRA_BASELINE      ?= .staticcheck-extra-baseline.txt
-STATICCHECK_EXTRA_EXCLUDE_PATHS ?= \.pb\.go:|/api/
-
-staticcheck-extra-bin:
-	@bash -eu -c '\
-		bin="$(STATICCHECK_EXTRA_BIN)"; \
-		repo="$(STATICCHECK_EXTRA_BUILD_REPO)"; \
-		pkg="$(STATICCHECK_EXTRA_BUILD_PKG)"; \
-		install="$(STATICCHECK_EXTRA_INSTALL)"; \
-		if [ -n "$$bin" ]; then \
-			[ -x "$$bin" ] || { echo "staticcheck-extra: $$bin not executable"; exit 1; }; \
-			exit 0; \
-		fi; \
-		if [ -n "$$repo" ]; then \
-			if [ ! -d "$$repo" ]; then \
-				echo "staticcheck-extra: build repo $$repo not present; skipping"; exit 0; \
-			fi; \
-			if [ -z "$$pkg" ]; then \
-				echo "staticcheck-extra: STATICCHECK_EXTRA_BUILD_PKG not set"; exit 1; \
-			fi; \
-			mkdir -p .make; \
-			out="$(CURDIR)/.make/staticcheck-extra"; \
-			newest_src=$$(find "$$repo" -name "*.go" -newer "$$out" 2>/dev/null | head -1 || true); \
-			if [ ! -x "$$out" ] || [ -n "$$newest_src" ]; then \
-				cd "$$repo" && $(GO) build -o "$$out" "$$pkg"; \
-			fi; \
-			exit 0; \
-		fi; \
-		if [ -z "$$install" ]; then exit 0; fi; \
-		mkdir -p .make; \
-		out="$(CURDIR)/.make/staticcheck-extra"; \
-		base=$$(basename "$$install" | sed "s/@.*//"); \
-		gobin=$$($(GO) env GOPATH)/bin; \
-		installed="$$gobin/$$base"; \
-		if [ ! -x "$$installed" ]; then \
-			GOBIN="$$gobin" $(GO) install "$$install"; \
-		fi; \
-		ln -sf "$$installed" "$$out"'
-
-staticcheck-extra: staticcheck-extra-bin
-	@bash -eu -o pipefail -c '\
-		bin="$(STATICCHECK_EXTRA_BIN)"; \
-		[ -z "$$bin" ] && [ -x .make/staticcheck-extra ] && bin=".make/staticcheck-extra"; \
-		if [ -z "$$bin" ]; then \
-			echo "staticcheck-extra: not configured (skipped)"; exit 0; \
-		fi; \
-		if [ ! -x "$$bin" ]; then \
-			echo "staticcheck-extra: binary $$bin not executable; skipping"; exit 0; \
-		fi; \
-		mkdir -p .make; \
-		excludes="$(STATICCHECK_EXTRA_EXCLUDE_PATHS)"; \
-		filter() { \
-			if [ -z "$$excludes" ]; then cat; return; fi; \
-			grep -Ev "$$excludes" || true; \
-		}; \
-		"$$bin" $(STATICCHECK_EXTRA_FLAGS) $(STATICCHECK_EXTRA_TARGETS) 2>&1 \
-			| sed "s|$(CURDIR)/||g" | filter | sort > .make/staticcheck-extra.out || true; \
-		if [ ! -f "$(STATICCHECK_EXTRA_BASELINE)" ]; then \
-			touch "$(STATICCHECK_EXTRA_BASELINE)"; \
-		fi; \
-		new=$$(comm -23 .make/staticcheck-extra.out "$(STATICCHECK_EXTRA_BASELINE)" || true); \
-		if [ -n "$$new" ]; then \
-			echo "NEW staticcheck-extra findings (not in baseline):"; \
-			echo "$$new"; \
-			echo ""; \
-			echo "Either fix them, or refresh the baseline:"; \
-			echo "  make staticcheck-extra-baseline"; \
-			exit 1; \
-		fi; \
-		gone=$$(comm -13 .make/staticcheck-extra.out "$(STATICCHECK_EXTRA_BASELINE)" || true); \
-		if [ -n "$$gone" ]; then \
-			echo "RESOLVED staticcheck-extra findings (please refresh baseline):"; \
-			echo "$$gone"; \
-		fi; \
-		n=$$(wc -l < .make/staticcheck-extra.out); \
-		echo "staticcheck-extra: OK ($$n findings, all in baseline)"'
-
-staticcheck-extra-baseline: staticcheck-extra-bin
-	@bash -eu -o pipefail -c '\
-		bin="$(STATICCHECK_EXTRA_BIN)"; \
-		[ -z "$$bin" ] && [ -x .make/staticcheck-extra ] && bin=".make/staticcheck-extra"; \
-		if [ -z "$$bin" ] || [ ! -x "$$bin" ]; then \
-			echo "staticcheck-extra: not configured; cannot refresh baseline"; exit 1; \
-		fi; \
-		excludes="$(STATICCHECK_EXTRA_EXCLUDE_PATHS)"; \
-		filter() { \
-			if [ -z "$$excludes" ]; then cat; return; fi; \
-			grep -Ev "$$excludes" || true; \
-		}; \
-		"$$bin" $(STATICCHECK_EXTRA_FLAGS) $(STATICCHECK_EXTRA_TARGETS) 2>&1 \
-			| sed "s|$(CURDIR)/||g" | filter | sort > "$(STATICCHECK_EXTRA_BASELINE)" || true; \
-		n=$$(wc -l < "$(STATICCHECK_EXTRA_BASELINE)"); \
-		echo "staticcheck-extra: baseline $(STATICCHECK_EXTRA_BASELINE) refreshed ($$n findings)"'
-
-deadcode: build ## Check for unreachable functions
+deadcode: ## Check for unreachable functions
 	@if ! output=$$(go tool deadcode ./...); then \
 		echo "go tool deadcode failed"; \
 		exit 1; \
@@ -290,9 +267,6 @@ deadcode: build ## Check for unreachable functions
 	fi
 	@echo "✓ No dead code found"
 
-govulncheck: ## Run vulnerability check
-	@go tool govulncheck ./...
-
 audit: ## Run complexity and vulnerability checks
 	@echo "=== Cyclomatic complexity (>40) ==="
 	@go tool gocyclo -over 40 .
@@ -300,7 +274,7 @@ audit: ## Run complexity and vulnerability checks
 	@echo "=== Vulnerability check ==="
 	@go tool govulncheck ./...
 
-release: ## Run a full GoReleaser release with 1Password-backed Apple notarization
+release-local: ## Run a full GoReleaser release with 1Password-backed Apple notarization
 	@[ -f notarize.env ] || { echo "notarize.env not found. Copy notarize.env.example and fill in your 1Password op:// paths."; exit 1; }
 	@GOFLAGS= op run --env-file=notarize.env -- goreleaser release --clean
 
@@ -308,38 +282,13 @@ release-snapshot: ## Build release artifacts locally without publishing or notar
 	@GOFLAGS= goreleaser release --snapshot --clean --skip=publish --skip=notarize
 
 install: build ## Install the signed clyde binary to ~/.local/bin/clyde
-	@mkdir -p "$(HOME)/.local/bin"
-	@tmp="$$(mktemp -t clyde-install.XXXXXX)"; \
-	out="$(CLYDE_BIN).new.$$"; \
-	trap 'rm -f "$$tmp" "$$out"' EXIT; \
-	set -e; \
-	go build -ldflags "$(LDFLAGS)" -o "$$tmp" ./cmd/clyde; \
-	test -s "$$tmp"; \
-	chmod 0755 "$$tmp"; \
-	if [ "$$(uname)" = "Darwin" ]; then \
-		if [ -z "$(CODESIGN_IDENTITY)" ]; then \
-			echo "No Developer ID Application signing identity found."; \
-			echo "Set CERT_ID in config.mk or install a Developer ID Application certificate."; \
-			exit 1; \
-		fi; \
-		echo "Signing install build with $(CODESIGN_IDENTITY)..."; \
-		codesign --force --sign "$(CODESIGN_IDENTITY)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp=none "$$tmp"; \
-		codesign --verify --verbose=2 "$$tmp"; \
-	fi; \
-	cp -f "$$tmp" "$$out"; \
+	@mkdir -p "$(dir $(CLYDE_BIN))"
+	@out="$$(mktemp "$(CLYDE_BIN).new.XXXXXX")"; \
+	trap 'rm -f "$$out"' EXIT; \
+	cp -f "$(CLYDE_BUILD_BIN)" "$$out"; \
 	chmod 0755 "$$out"; \
 	test -s "$$out"; \
 	mv -f "$$out" "$(CLYDE_BIN)"
-	@if [ "$$(uname)" = "Darwin" ]; then codesign --verify --verbose=2 "$(CLYDE_BIN)"; fi
-	@chmod -R u+w dist/clyde 2>/dev/null; true
-	@rm -rf dist/clyde
-	@mkdir -p dist/clyde
-	@printf '%s\n' \
-		'Do not run binaries from this directory.' \
-		'Use ~/.local/bin/clyde so macOS Full Disk Access has one stable client path.' \
-		'Builds use temporary files and install only to ~/.local/bin/clyde.' \
-		> dist/clyde/README.txt
-	@chmod 0555 dist/clyde
 	@echo "✓ Installed $(CLYDE_BIN)"
 
 install-build-guard: ## Enforce repo staticcheck on direct go build via GOFLAGS toolexec
@@ -357,54 +306,51 @@ setup-hooks: ## Configure git hooks
 	@chmod +x .githooks/*
 	@echo "✓ Git hooks configured"
 
-deploy: ## Install/start the daemon if needed; otherwise hand it off to the new binary
+deploy: install ## Install binary and reload the daemon, installing the platform agent if needed
+	@"$(CLYDE_BIN)" daemon reload || $(MAKE) install-system-agent
+
+install-system-agent: ## Install/start the platform user agent (LaunchAgent on macOS, systemd user unit on Linux)
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		if [ ! -f "$(LAUNCH_AGENT_PLIST)" ] || ! launchctl list "$(LAUNCH_AGENT_LABEL)" >/dev/null 2>&1; then \
-			$(MAKE) install-launch-agent; \
-		else \
-			$(MAKE) install; \
-			"$(CLYDE_BIN)" daemon reload || $(MAKE) install-launch-agent; \
-		fi; \
+		$(MAKE) install-launch-agent; \
 	elif command -v systemctl >/dev/null 2>&1; then \
-		if [ ! -f "$(SYSTEMD_USER_UNIT)" ] || ! systemctl --user is-active --quiet "$(SYSTEMD_USER_SERVICE)"; then \
-			$(MAKE) install-systemd-user; \
-		else \
-			$(MAKE) install; \
-			"$(CLYDE_BIN)" daemon reload; \
-		fi; \
+		$(MAKE) install-systemd-user; \
 	else \
-		echo "deploy needs launchctl on macOS or systemctl on Linux"; \
+		echo "install-system-agent needs launchctl on macOS or systemctl on Linux"; \
 		exit 1; \
 	fi
 
-install-launch-agent: install ## Render and install the daemon LaunchAgent (runs OAuth refresh + adapter + prune in-process)
+install-launch-agent: install-launch-agent-files ## Install/start the daemon LaunchAgent
+	@launchctl bootout gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true
+	@launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)"
+	@echo "✓ LaunchAgent installed: $(LAUNCH_AGENT_PLIST)"
+	@echo "  Logs: $(DAEMON_LOG)"
+
+install-launch-agent-files: ## Render the daemon LaunchAgent plist
 	@mkdir -p "$(HOME)/Library/LaunchAgents" "$(HOME)/Library/Logs"
 	@touch "$(DAEMON_LOG)"
 	@sed -e 's|@@CLYDE_DAEMON_BIN@@|$(CLYDE_DAEMON_BIN)|g' \
 	     -e 's|@@HOME@@|$(HOME)|g' \
 	     -e 's|@@LOG_PATH@@|$(DAEMON_LOG)|g' \
 	     "$(LAUNCH_AGENT_TEMPLATE)" > "$(LAUNCH_AGENT_PLIST)"
-	@launchctl bootout gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true
-	@launchctl bootstrap gui/$(UID) "$(LAUNCH_AGENT_PLIST)"
-	@echo "✓ LaunchAgent installed: $(LAUNCH_AGENT_PLIST)"
-	@echo "  Logs: $(DAEMON_LOG)"
 
 uninstall-launch-agent: ## Remove the clyde daemon LaunchAgent
 	@launchctl bootout gui/$(UID) "$(LAUNCH_AGENT_PLIST)" 2>/dev/null; true
 	@rm -f "$(LAUNCH_AGENT_PLIST)"
 	@echo "✓ LaunchAgent removed"
 
-install-systemd-user: install ## Render and install the daemon systemd user unit
+install-systemd-user: install-systemd-user-files ## Install/start the daemon systemd user unit
 	@command -v systemctl >/dev/null 2>&1 || { echo "systemctl not found"; exit 1; }
-	@mkdir -p "$(SYSTEMD_USER_DIR)"
-	@sed -e 's|@@CLYDE_DAEMON_BIN@@|$(CLYDE_DAEMON_BIN)|g' \
-	     -e 's|@@HOME@@|$(HOME)|g' \
-	     "$(SYSTEMD_USER_TEMPLATE)" > "$(SYSTEMD_USER_UNIT)"
 	@systemctl --user daemon-reload
 	@systemctl --user enable "$(SYSTEMD_USER_SERVICE)"
 	@systemctl --user restart "$(SYSTEMD_USER_SERVICE)"
 	@echo "✓ systemd user unit installed: $(SYSTEMD_USER_UNIT)"
 	@echo "  Logs: journalctl --user -u $(SYSTEMD_USER_SERVICE) -f"
+
+install-systemd-user-files: ## Render the daemon systemd user unit
+	@mkdir -p "$(SYSTEMD_USER_DIR)"
+	@sed -e 's|@@CLYDE_DAEMON_BIN@@|$(CLYDE_DAEMON_BIN)|g' \
+	     -e 's|@@HOME@@|$(HOME)|g' \
+	     "$(SYSTEMD_USER_TEMPLATE)" > "$(SYSTEMD_USER_UNIT)"
 
 uninstall-systemd-user: ## Remove the clyde daemon systemd user unit
 	@command -v systemctl >/dev/null 2>&1 || { echo "systemctl not found"; exit 1; }
@@ -439,28 +385,18 @@ uninstall-hook: ## Remove the SessionStart hook from ~/.claude/settings.json
 # Distribution (macOS signing)
 # ---------------------------------------------------------------------------
 
-ifdef CERT_ID
 sign: build ## Build and signing-check binary with Developer ID Application certificate
 
-notarize: dist/clyde ## Sign and notarize binary for distribution (requires NOTARY_PROFILE in config.mk)
-	@echo "Building signed notarization artifact..."
-	@tmpdir="$$(mktemp -d -t clyde-notarize.XXXXXX)"; \
-	trap 'rm -rf "$$tmpdir" dist/clyde-notarize.zip' EXIT; \
-	go build -ldflags "$(LDFLAGS)" -o "$$tmpdir/clyde" ./cmd/clyde; \
-	codesign --force --sign "$(CERT_ID)" --identifier "$(BUNDLE_ID)" --options runtime --timestamp "$$tmpdir/clyde"; \
-	codesign --verify --verbose=2 "$$tmpdir/clyde"; \
-	echo "Creating notarization zip..."; \
-	ditto -c -k --keepParent "$$tmpdir/clyde" dist/clyde-notarize.zip; \
-	echo "Submitting for notarization (waiting)..."; \
-	xcrun notarytool submit dist/clyde-notarize.zip \
+notarize: CODESIGN_TIMESTAMP = timestamp
+notarize: notarize-build dist/clyde ## Sign and notarize binary for distribution (requires NOTARY_PROFILE in config.mk)
+	@echo "Creating notarization zip..."
+	@rm -f "$(NOTARIZE_ZIP)"
+	@ditto -c -k --keepParent "$(CLYDE_BUILD_BIN)" "$(NOTARIZE_ZIP)"
+	@echo "Submitting for notarization (waiting)..."
+	@xcrun notarytool submit "$(NOTARIZE_ZIP)" \
 		--keychain-profile "$(NOTARY_PROFILE)" \
 		--wait
-	@echo "✓ Notarized dist/clyde"
-else
-sign: build ## Sign binary (requires CERT_ID in config.mk)
-	@echo "⚠ CERT_ID not set in config.mk. Skipping code signing."
-	@echo "  Copy config.mk.example to config.mk and fill in your Developer ID"
+	@echo "✓ Notarized $(CLYDE_BUILD_BIN)"
 
-notarize: sign ## Sign and notarize binary (requires config.mk)
-	@echo "⚠ CERT_ID not set in config.mk. Skipping notarization."
-endif
+notarize-build: CODESIGN_TIMESTAMP = timestamp
+notarize-build: clean-build $(CLYDE_BUILD_BIN)
