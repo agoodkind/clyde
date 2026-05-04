@@ -173,12 +173,12 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 		}
 
 	case "content_block_stop":
-		// When an Anthropic thinking block ends emit the closing
-		// sentinel comment plus a blank line so the blockquote
-		// terminates cleanly before the visible answer streams.
-		// stripThinkingBlockquote on the return trip matches the
-		// full envelope including the trailing whitespace so the
-		// cached prefix stays byte-stable across turns.
+		// When an Anthropic thinking block ends, emit a reasoning-finished
+		// event so the renderer closes the synthetic envelope. The
+		// adapter mapper calls adapterrender.StripSyntheticContent on
+		// the return trip to remove the full envelope, including the
+		// trailing whitespace, so the cached prefix stays byte-stable
+		// across turns.
 		if t.currentBlockType == "thinking" {
 			t.currentBlockType = ""
 			return []Event{{Kind: EventReasoningFinished}}, false, "", nil, nil

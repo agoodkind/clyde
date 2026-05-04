@@ -56,6 +56,7 @@ const (
 	ConcernAdapterChatPreflight           = "adapter.chat.preflight"
 	ConcernAdapterChatDispatch            = "adapter.chat.dispatch"
 	ConcernAdapterChatRender              = "adapter.chat.render"
+	ConcernAdapterNotice                  = "adapter.notice"
 	ConcernAdapterProviderCodex           = "adapter.providers.codex.request"
 	ConcernAdapterProviderCodexWS         = "adapter.providers.codex.websocket"
 	ConcernAdapterProviderCodexSess       = "adapter.providers.codex.session-reuse"
@@ -138,6 +139,7 @@ var concernPaths = map[string]string{
 	ConcernAdapterChatPreflight:           "adapter/chat/preflight.jsonl",
 	ConcernAdapterChatDispatch:            "adapter/chat/dispatch.jsonl",
 	ConcernAdapterChatRender:              "adapter/chat/render.jsonl",
+	ConcernAdapterNotice:                  "adapter/notice.jsonl",
 	ConcernAdapterProviderCodex:           "adapter/providers/codex/request.jsonl",
 	ConcernAdapterProviderCodexWS:         "adapter/providers/codex/websocket.jsonl",
 	ConcernAdapterProviderCodexSess:       "adapter/providers/codex/session-reuse.jsonl",
@@ -215,7 +217,7 @@ var eventConcernRules = []eventConcernRule{
 	{"adapter.anthropic.sse", ConcernAdapterProviderAnthSSE},
 	{"adapter.anthropic.", ConcernAdapterProviderAnthReq},
 	{"adapter.passthrough_override.", ConcernAdapterProviderPassthroughReq},
-	{"adapter.notice.", ConcernAdapterHTTPErrors},
+	{"adapter.notice.", ConcernAdapterNotice},
 	{"adapter listening", ConcernProcessDaemonListeners},
 
 	{"daemon.rpc.stream_", ConcernDaemonRPCStreams},

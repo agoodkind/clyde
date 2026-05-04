@@ -186,11 +186,12 @@ type toolCallState struct {
 	Input             strings.Builder
 }
 
+// SanitizeForUpstreamCache removes every render-owned synthetic envelope
+// (reasoning, notice, future kinds) from assistant text before Codex reuses
+// the transcript on the next upstream turn. It delegates entirely to the
+// shared fabric so all backends agree on which envelopes count as synthetic.
 func SanitizeForUpstreamCache(text string) string {
-	text = StripNoticeSentinel(text)
-	text = StripActivitySentinel(text)
-	text = StripThinkingSentinel(text)
-	return text
+	return adapterrender.StripSyntheticContent(text)
 }
 
 // ClientMetadataWithTurn extends ClientMetadata with the

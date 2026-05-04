@@ -140,8 +140,9 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	if !strings.Contains(delta.Content, "<!--clyde-thinking-->") {
 		t.Fatalf("missing content thinking marker: %q", delta.Content)
 	}
-	if delta.Content != FormatThinkingInlineDelta(true, "checking constraints") {
-		t.Fatalf("content=%q want %q", delta.Content, FormatThinkingInlineDelta(true, "checking constraints"))
+	want := FormatSyntheticContentDelta(SyntheticReasoning, true, "checking constraints")
+	if delta.Content != want {
+		t.Fatalf("content=%q want %q", delta.Content, want)
 	}
 	if delta.ReasoningContent != "checking constraints" {
 		t.Fatalf("reasoning_content=%q want checking constraints", delta.ReasoningContent)
@@ -155,13 +156,14 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	if got != ThinkingInlineOpen() {
-		t.Fatalf("thinking open=%q want %q", got, ThinkingInlineOpen())
+	wantOpen := SyntheticContentOpen(SyntheticReasoning)
+	if got != wantOpen {
+		t.Fatalf("thinking open=%q want %q", got, wantOpen)
 	}
 	if chunks := r.HandleEvent(Event{Kind: EventReasoningFinished}); len(chunks) != 1 {
 		t.Fatalf("finish chunks=%d want close marker", len(chunks))
-	} else if close := chunks[0].Choices[0].Delta.Content; !strings.Contains(close, "<!--/clyde-thinking-->") {
-		t.Fatalf("missing close marker: %q", close)
+	} else if close := chunks[0].Choices[0].Delta.Content; close != SyntheticContentClose(SyntheticReasoning) {
+		t.Fatalf("missing close marker: %q want %q", close, SyntheticContentClose(SyntheticReasoning))
 	}
 }
 
@@ -172,8 +174,9 @@ func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	if got != ThinkingInlineOpen() {
-		t.Fatalf("thinking open=%q want %q", got, ThinkingInlineOpen())
+	wantOpen := SyntheticContentOpen(SyntheticReasoning)
+	if got != wantOpen {
+		t.Fatalf("thinking open=%q want %q", got, wantOpen)
 	}
 
 	chunks = r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "Evaluating task strategies", ReasoningKind: "summary"})
@@ -186,6 +189,22 @@ func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 	}
 	if !strings.Contains(got, "Evaluating task strategies") {
 		t.Fatalf("missing real reasoning: %q", got)
+	}
+}
+
+func TestEventRendererDoesNotPrefixFirstBoldSummaryAfterReasoningSignal(t *testing.T) {
+	r := NewEventRenderer("req-thinking-heading", "alias", "codex", nil)
+	_ = r.HandleEvent(Event{Kind: EventReasoningSignaled})
+	chunks := r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "**Checking git changes**", ReasoningKind: "summary"})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	got := chunks[0].Choices[0].Delta.Content
+	if strings.HasPrefix(got, "\n\n") {
+		t.Fatalf("first bold summary has leading break: %q", got)
+	}
+	if !strings.Contains(got, "**Checking git changes**") {
+		t.Fatalf("missing bold summary: %q", got)
 	}
 }
 

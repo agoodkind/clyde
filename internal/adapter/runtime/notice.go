@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -10,6 +12,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 type encodeJSON func(any) ([]byte, error)
@@ -24,11 +27,13 @@ type UsageWindowNoticeInput struct {
 }
 
 type UsageNotice struct {
-	Kind      string
-	Text      string
-	ResetsAt  time.Time
-	Threshold float64
-	WindowKey string
+	Kind       string
+	Text       string
+	ResetsAt   time.Time
+	Threshold  float64
+	WindowKey  string
+	Provider   string
+	LimitLabel string
 }
 
 type usageNoticeRecord struct {
@@ -37,13 +42,28 @@ type usageNoticeRecord struct {
 	TurnsSinceEmission int
 }
 
+// UsageNoticeGate decides which usage windows should surface a user-visible
+// notice and at what cadence. The gate owns a structured logger so every
+// evaluate decision (suppressed, due, or skipped) can be traced back to the
+// exact provider, window_key, and limit_label that produced it.
 type UsageNoticeGate struct {
 	mu      sync.Mutex
 	records map[string]usageNoticeRecord
+	log     *slog.Logger
 }
 
-func NewUsageNoticeGate() *UsageNoticeGate {
-	return &UsageNoticeGate{records: make(map[string]usageNoticeRecord)}
+// NewUsageNoticeGateWithLogger constructs a gate with an explicit logger.
+// The logger is wrapped with the adapter notice concern so every event lands
+// in the dedicated notice log.
+func NewUsageNoticeGateWithLogger(log *slog.Logger) *UsageNoticeGate {
+	if log == nil {
+		log = slog.Default()
+	}
+	log = slogger.WithConcern(log, slogger.ConcernAdapterNotice)
+	return &UsageNoticeGate{
+		records: make(map[string]usageNoticeRecord),
+		log:     log,
+	}
 }
 
 func (g *UsageNoticeGate) Evaluate(
@@ -56,6 +76,7 @@ func (g *UsageNoticeGate) Evaluate(
 	}
 	policy := notices.UsageRepeatPolicyOrDefault()
 	thresholds := notices.UsageThresholdsUsedPercentOrDefault()
+	logger := g.logger()
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -67,6 +88,15 @@ func (g *UsageNoticeGate) Evaluate(
 	for _, window := range windows {
 		notice, ok := evaluateUsageWindow(window, thresholds, now)
 		if !ok {
+			logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.skipped",
+				slog.String("component", "adapter"),
+				slog.String("subcomponent", "usage_notice_gate"),
+				slog.String("provider", strings.TrimSpace(window.Provider)),
+				slog.String("window_key", strings.TrimSpace(window.WindowKey)),
+				slog.String("limit_label", strings.TrimSpace(window.LimitLabel)),
+				slog.Float64("used_percent", window.UsedPercent),
+				slog.String("reason", "below_threshold_or_invalid_input"),
+			)
 			continue
 		}
 		key := usageNoticeRepeatKey(window.Provider, notice.WindowKey, notice.Threshold)
@@ -77,13 +107,67 @@ func (g *UsageNoticeGate) Evaluate(
 			record.TurnsSinceEmission = 0
 			g.records[key] = record
 			due = append(due, notice)
+			logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.evaluated",
+				slog.String("component", "adapter"),
+				slog.String("subcomponent", "usage_notice_gate"),
+				slog.String("provider", notice.Provider),
+				slog.String("window_key", notice.WindowKey),
+				slog.String("limit_label", notice.LimitLabel),
+				slog.String("kind", notice.Kind),
+				slog.Float64("threshold", notice.Threshold),
+				slog.Float64("used_percent", window.UsedPercent),
+				slog.Time("resets_at", notice.ResetsAt),
+				slog.String("decision", "due"),
+				slog.String("repeat_mode", string(policy.Mode)),
+			)
 			continue
 		}
 		record.ResetAt = notice.ResetsAt.UTC()
 		record.TurnsSinceEmission++
 		g.records[key] = record
+		logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.suppressed",
+			slog.String("component", "adapter"),
+			slog.String("subcomponent", "usage_notice_gate"),
+			slog.String("provider", notice.Provider),
+			slog.String("window_key", notice.WindowKey),
+			slog.String("limit_label", notice.LimitLabel),
+			slog.String("kind", notice.Kind),
+			slog.Float64("threshold", notice.Threshold),
+			slog.Float64("used_percent", window.UsedPercent),
+			slog.Time("resets_at", notice.ResetsAt),
+			slog.String("decision", "suppressed"),
+			slog.String("repeat_mode", string(policy.Mode)),
+			slog.Int("turns_since_emission", record.TurnsSinceEmission),
+		)
+	}
+	if len(due) > 0 {
+		providers := make([]string, 0, len(due))
+		windowKeys := make([]string, 0, len(due))
+		limitLabels := make([]string, 0, len(due))
+		for _, notice := range due {
+			providers = append(providers, notice.Provider)
+			windowKeys = append(windowKeys, notice.WindowKey)
+			limitLabels = append(limitLabels, notice.LimitLabel)
+		}
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "adapter.notice.evaluate_summary",
+			slog.String("component", "adapter"),
+			slog.String("subcomponent", "usage_notice_gate"),
+			slog.Int("due_count", len(due)),
+			slog.Int("window_count", len(windows)),
+			slog.Any("providers", providers),
+			slog.Any("window_keys", windowKeys),
+			slog.Any("limit_labels", limitLabels),
+			slog.String("repeat_mode", string(policy.Mode)),
+		)
 	}
 	return due
+}
+
+func (g *UsageNoticeGate) logger() *slog.Logger {
+	if g == nil || g.log == nil {
+		return slogger.WithConcern(slog.Default(), slogger.ConcernAdapterNotice)
+	}
+	return g.log
 }
 
 func evaluateUsageWindow(
@@ -111,11 +195,13 @@ func evaluateUsageWindow(
 		)
 	}
 	return UsageNotice{
-		Kind:      kind,
-		Text:      usageNoticeText(usageRemainingPercent(window.UsedPercent), limitLabel, window.ResetsAt, now),
-		ResetsAt:  window.ResetsAt.UTC(),
-		Threshold: highestThreshold,
-		WindowKey: windowKey,
+		Kind:       kind,
+		Text:       usageNoticeText(provider, usageRemainingPercent(window.UsedPercent), limitLabel, window.ResetsAt, now),
+		ResetsAt:   window.ResetsAt.UTC(),
+		Threshold:  highestThreshold,
+		WindowKey:  windowKey,
+		Provider:   provider,
+		LimitLabel: limitLabel,
 	}, true
 }
 
@@ -149,13 +235,39 @@ func formatThresholdForKind(threshold float64) string {
 	return strings.ReplaceAll(formatted, ".", "_")
 }
 
-func usageNoticeText(remainingPercent int, limitLabel string, resetsAt time.Time, now time.Time) string {
+// usageNoticeText renders the user-visible warning. Provider is included
+// inline so users can tell at a glance which upstream provider is constrained
+// (e.g. "Codex" vs "Anthropic"); when provider is missing the prefix is
+// dropped to avoid an empty label colon.
+func usageNoticeText(provider string, remainingPercent int, limitLabel string, resetsAt time.Time, now time.Time) string {
+	prefix := "⚠️"
+	if label := providerDisplayLabel(provider); label != "" {
+		prefix = "⚠️ " + label + ":"
+	}
 	return fmt.Sprintf(
-		"⚠️ You have about %d%% of your %s limit left. The limit resets %s.",
+		"%s You have about %d%% of your %s limit left. The limit resets %s.",
+		prefix,
 		remainingPercent,
 		limitLabel,
 		usageResetPhrase(resetsAt, now),
 	)
+}
+
+// providerDisplayLabel converts a provider id (lowercase, snake/dotted) into
+// a human-friendly label that fits the user-visible notice text.
+func providerDisplayLabel(provider string) string {
+	trimmed := strings.TrimSpace(provider)
+	switch strings.ToLower(trimmed) {
+	case "":
+		return ""
+	case "codex":
+		return "Codex"
+	case "anthropic":
+		return "Anthropic"
+	default:
+		lower := strings.ToLower(trimmed)
+		return strings.ToUpper(lower[:1]) + lower[1:]
+	}
 }
 
 func usageResetPhrase(resetsAt time.Time, now time.Time) string {
@@ -226,12 +338,17 @@ func usageNoticeDue(
 	}
 }
 
+// FormattedNoticeText wraps a notice body in the shared synthetic-notice
+// envelope so Cursor BYOK renders it as a marker-bounded warning blockquote
+// and so backend mappers strip it from the assistant transcript before
+// reusing it on the next upstream turn. The leading blank line keeps the
+// envelope visually separated from preceding answer text.
 func FormattedNoticeText(text string) string {
-	trimmedText := strings.TrimSpace(text)
-	if trimmedText == "" {
+	envelope := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, text)
+	if envelope == "" {
 		return ""
 	}
-	return "\n\n> " + trimmedText
+	return "\n\n" + envelope
 }
 
 func noticeEvent(text string) (adapterrender.Event, bool) {
@@ -253,9 +370,31 @@ func EventsWithInjectedUsageNotices(events []adapterrender.Event, notices []Usag
 		if !ok {
 			continue
 		}
+		LogNoticeEmission(notice, "stream_injected")
 		out = append(out, ev)
 	}
 	return out
+}
+
+// LogNoticeEmission records the moment a usage notice is rendered into a
+// chat surface so we can prove which provider/window/limit triggered any
+// displayed warning. Backends that surface notices through their own paths
+// should call this helper instead of reinventing the field set. Logged at
+// debug per call so loops do not spam info-level events; the gate emits one
+// info-level evaluate summary that bounds these per-emission lines.
+func LogNoticeEmission(notice UsageNotice, surface string) {
+	logger := slogger.WithConcern(slog.Default(), slogger.ConcernAdapterNotice)
+	logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.emitted",
+		slog.String("component", "adapter"),
+		slog.String("subcomponent", "usage_notice_gate"),
+		slog.String("provider", notice.Provider),
+		slog.String("window_key", notice.WindowKey),
+		slog.String("limit_label", notice.LimitLabel),
+		slog.String("kind", notice.Kind),
+		slog.Float64("threshold", notice.Threshold),
+		slog.Time("resets_at", notice.ResetsAt),
+		slog.String("surface", surface),
+	)
 }
 
 func AppendUsageNoticesToResponse(
@@ -276,6 +415,7 @@ func AppendUsageNoticesToResponse(
 		if formattedText == "" {
 			continue
 		}
+		LogNoticeEmission(notice, "response_appended")
 		builder.WriteString(formattedText)
 	}
 	if builder.Len() == 0 {

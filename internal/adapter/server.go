@@ -180,7 +180,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			Timeout: 120 * time.Second,
 		},
 		ctxUsage:        newContextUsageTracker(),
-		usageNoticeGate: adapterruntime.NewUsageNoticeGate(),
+		usageNoticeGate: adapterruntime.NewUsageNoticeGateWithLogger(log),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
 	if cfg.Codex.Enabled {

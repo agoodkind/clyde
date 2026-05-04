@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 var (
@@ -29,8 +29,6 @@ type (
 	OpenAIToolCallFunction   = adapteropenai.ToolCallFunction
 	OpenAIContentPart        = adapteropenai.ContentPart
 )
-
-var noticeSentinelRE = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
 
 // TranslateRequest maps an OpenAI-shaped chat request to Anthropic /v1/messages fields.
 func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (AnthRequest, error) {
@@ -276,24 +274,6 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 	return blocks, nil
 }
 
-func stripNotice(text string, msgIdx, partIdx int) string {
-	if text == "" {
-		return ""
-	}
-	stripped := noticeSentinelRE.ReplaceAllString(text, "")
-	if stripped == text {
-		return text
-	}
-	anthropicBackendLog.Logger().Info("adapter.sentinel.notice.stripped",
-		"subcomponent", "anthropic_mapper",
-		"msg_idx", msgIdx,
-		"part_idx", partIdx,
-		"source_len", len(text),
-		"stripped_len", len(stripped),
-	)
-	return stripped
-}
-
 // flattenToolResultContent normalizes a tool_result content payload to a
 // single string. Cursor sends either a raw string or an array of OpenAI
 // content parts (text-only); both shapes survive the trip.
@@ -328,22 +308,12 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 	for partIdx, p := range parts {
 		switch p.Type {
 		case "text":
-			text := stripNotice(p.Text, msgIdx, partIdx)
-			// Strip the "Thinking" blockquote we injected into the
-			// stream on the previous turn. Our adapter renders
-			// thinking_delta events as markdown blockquote content so
-			// Cursor shows the reasoning during streaming. When
-			// Cursor sends the chat history back on the next turn
-			// that blockquote rides along as part of the assistant
-			// message. If we forwarded it verbatim to Anthropic we
-			// would (a) bust the prompt cache because the prior
-			// assistant bytes no longer match what Anthropic
-			// originally produced, (b) re-bill the thinking as
-			// visible tokens every turn, and (c) confuse the model
-			// by feeding it its own internal reasoning as prior
-			// output. Stripping here restores the clean answer only
-			// and keeps the cached prefix byte-stable across turns.
-			text = stripThinkingBlockquote(text)
+			// Strip render-owned synthetic envelopes (reasoning, notice,
+			// future kinds) so the cached prefix stays byte-stable across
+			// turns and so Clyde-injected UI affordances are never re-billed
+			// as upstream tokens. Notice emission is already logged by the
+			// runtime gate; do not duplicate here.
+			text := adapterrender.StripSyntheticContent(p.Text)
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
@@ -371,7 +341,7 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 			)
 			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
 		case "refusal":
-			refusal := stripNotice(p.Refusal, msgIdx, partIdx)
+			refusal := adapterrender.StripSyntheticContent(p.Refusal)
 			if strings.TrimSpace(refusal) == "" {
 				continue
 			}
@@ -529,27 +499,4 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 		return &AnthToolChoice{Type: "tool", Name: obj.Function.Name}, nil
 	}
 	return nil, nil
-}
-
-// thinkingBlockquoteRE matches the "Thinking" collapsible the
-// adapter injects into assistant content during streaming. The
-// sentinel comment pair (<!--clyde-thinking-->…<!--/clyde-thinking-->)
-// makes the block unambiguously ours so we do not risk stripping a
-// legitimate <details> the user or model embedded in the answer.
-// The (?s) flag lets the inner . match newlines because the wrapper
-// spans multiple lines by construction.
-var thinkingBlockquoteRE = regexp.MustCompile(`(?s)<!--clyde-thinking-->.*?<!--/clyde-thinking-->\s*`)
-
-// stripThinkingBlockquote removes every clyde-thinking sentinel
-// block from text. Matches the envelope anywhere in the assistant
-// message (not just at the start) so multi-block answers with
-// interleaved thinking all get cleaned. Idempotent: returns text
-// unchanged when the sentinel is absent.
-func stripThinkingBlockquote(text string) string {
-	if !strings.Contains(text, "<!--clyde-thinking-->") {
-		// Fast path for the common case (no thinking wrapper in
-		// this turn).
-		return text
-	}
-	return thinkingBlockquoteRE.ReplaceAllString(text, "")
 }

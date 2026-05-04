@@ -251,6 +251,7 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 		if err := p.writeRenderedChunk(adapterruntime.OpenAINoticeChunk(p.reqID, p.modelAlias, adapterruntime.FormattedNoticeText(notice.Text))); err != nil {
 			return err
 		}
+		adapterruntime.LogNoticeEmission(notice, "stream_finalized")
 	}
 	finishReason := normalizedProviderFinishReason(result)
 	if p != nil && p.renderer != nil {

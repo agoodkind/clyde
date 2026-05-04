@@ -1,40 +1,7 @@
 package codex
 
-import (
-	"regexp"
-	"strings"
-)
-
-var (
-	noticeSentinelRE     = regexp.MustCompile(`(?s)<!--clyde-notice-->.*?<!--/clyde-notice-->\s*`)
-	activitySentinelRE   = regexp.MustCompile(`(?s)<!--clyde-activity-->.*?<!--/clyde-activity-->\s*`)
-	thinkingBlockquoteRE = regexp.MustCompile(`(?s)<!--clyde-thinking-->.*?<!--/clyde-thinking-->\s*`)
-)
-
-// StripNoticeSentinel removes the clyde notice envelope.
-func StripNoticeSentinel(text string) string {
-	if text == "" {
-		return ""
-	}
-	return noticeSentinelRE.ReplaceAllString(text, "")
-}
-
-// StripActivitySentinel removes the shared activity envelope.
-func StripActivitySentinel(text string) string {
-	if text == "" {
-		return ""
-	}
-	return activitySentinelRE.ReplaceAllString(text, "")
-}
-
-// StripThinkingSentinel removes the clyde thinking envelope.
-func StripThinkingSentinel(text string) string {
-	return stripThinkingBlockquote(text)
-}
-
-func stripThinkingBlockquote(text string) string {
-	if !strings.Contains(text, "<!--clyde-thinking-->") {
-		return text
-	}
-	return thinkingBlockquoteRE.ReplaceAllString(text, "")
-}
+// This file used to host Codex-local regex strippers for synthetic content
+// envelopes. Codex now delegates synthetic stripping to the render-owned
+// fabric in [internal/adapter/render]. Use [adapterrender.StripSyntheticContent]
+// from any Codex code path that needs to scrub synthetic UI envelopes from
+// assistant content before reusing it on the next upstream request.
