@@ -158,6 +158,12 @@ Store keys and tokens in environment variables or file references only. Referenc
 
 Keep `AGENTS.md` durable and concise.
 
+- Prefer small files with one clear responsibility. When a file grows past roughly 200 lines and carries multiple concerns, split it by responsibility rather than by arbitrary code movement.
+- Keep one entity or logical responsibility per file when practical, and separate bulk operations from single-item CRUD flows when both exist.
+- Name files for the responsibility they own. Avoid `utils.go` and `helpers.go` unless the code is genuinely shared and no narrower name fits.
+- Prefer full domain names in identifiers over abbreviations.
+- Wrap errors with operation context and the relevant identifier or backend.
+- Add package doc comments, exported type comments, and comments for non-obvious exported fields.
 - Do not add long JSON examples, full shell scripts, generated schemas, dated audit tables, local workstation facts, or historical incident notes.
 - Move runbooks to `docs/`, and point to them from this file only when agents need to know they exist.
 - Move task lists and stale audit findings to issues or dedicated planning docs.
