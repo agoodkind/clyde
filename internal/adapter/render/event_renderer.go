@@ -113,6 +113,14 @@ func (r *EventRenderer) CreatedUnix() int64 { return r.createdUnix }
 // ModelAlias returns the model name written to stream chunks.
 func (r *EventRenderer) ModelAlias() string { return r.modelAlias }
 
+// HasEmittedRole reports whether the stream already sent its assistant role.
+func (r *EventRenderer) HasEmittedRole() bool {
+	if r == nil {
+		return false
+	}
+	return r.seenRole
+}
+
 // SetContext replaces the context used for renderer diagnostic logs.
 func (r *EventRenderer) SetContext(ctx context.Context) {
 	if r == nil {
@@ -177,6 +185,9 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 			out = append(out, *chunk)
 		}
 	case EventToolCallDelta:
+		if chunk := r.renderReasoningClose(); chunk != nil {
+			out = append(out, *chunk)
+		}
 		if chunk := r.renderToolCalls(ev.ToolCalls); chunk != nil {
 			out = append(out, *chunk)
 		}

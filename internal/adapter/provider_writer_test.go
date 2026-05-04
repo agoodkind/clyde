@@ -16,6 +16,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/correlation"
 )
 
@@ -461,6 +462,58 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "data: [DONE]") {
 		t.Fatalf("stream did not finish: %s", rec.Body.String())
+	}
+}
+
+func TestProviderStreamWriterFinalizedNoticeDoesNotRepeatAssistantRole(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	rec := httptest.NewRecorder()
+	sse, err := adapteropenai.NewSSEWriter(rec)
+	if err != nil {
+		t.Fatalf("NewSSEWriter: %v", err)
+	}
+	writer := &providerStreamWriter{
+		sse:        sse,
+		renderer:   adapterrender.NewEventRenderer("req-notice-role", "alias-notice-role", "codex", log),
+		reqID:      "req-notice-role",
+		modelAlias: "alias-notice-role",
+		log:        log,
+		ctx:        context.Background(),
+	}
+
+	if err := writer.WriteEvent(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: "answer"}); err != nil {
+		t.Fatalf("WriteEvent: %v", err)
+	}
+	err = writer.finalizeStream(adapterprovider.Result{
+		FinishReason: "stop",
+		UsageNotices: []adapterruntime.UsageNotice{{
+			Provider:   "codex",
+			WindowKey:  "weekly",
+			LimitLabel: "weekly",
+			Text:       "warning text",
+		}},
+	}, false)
+	if err != nil {
+		t.Fatalf("finalizeStream: %v", err)
+	}
+
+	entries := streamChunkFlushLogs(t, buf.String())
+	if len(entries) != 4 {
+		t.Fatalf("log count=%d want 4: %+v", len(entries), entries)
+	}
+	if !entries[0].DeltaRolePresent || !entries[0].DeltaContentPresent {
+		t.Fatalf("answer chunk shape=%+v", entries[0])
+	}
+	notice := entries[1]
+	if notice.DeltaRolePresent || !notice.DeltaContentPresent {
+		t.Fatalf("notice chunk repeated role or omitted content: %+v", notice)
+	}
+	if strings.Count(rec.Body.String(), `"role":"assistant"`) != 1 {
+		t.Fatalf("stream should contain one assistant role: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "clyde-notice") {
+		t.Fatalf("stream missing notice marker: %s", rec.Body.String())
 	}
 }
 

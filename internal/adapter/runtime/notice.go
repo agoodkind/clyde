@@ -433,7 +433,11 @@ func AppendUsageNoticesToResponse(
 	return resp, true
 }
 
-func OpenAINoticeChunk(reqID string, modelAlias string, text string) adapteropenai.StreamChunk {
+func OpenAINoticeChunk(reqID string, modelAlias string, text string, includeRole bool) adapteropenai.StreamChunk {
+	delta := adapteropenai.StreamDelta{Content: text}
+	if includeRole {
+		delta.Role = "assistant"
+	}
 	return adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
@@ -441,10 +445,7 @@ func OpenAINoticeChunk(reqID string, modelAlias string, text string) adapteropen
 		Model:   modelAlias,
 		Choices: []adapteropenai.StreamChoice{{
 			Index: 0,
-			Delta: adapteropenai.StreamDelta{
-				Role:    "assistant",
-				Content: text,
-			},
+			Delta: delta,
 		}},
 	}
 }

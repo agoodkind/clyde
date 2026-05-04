@@ -167,6 +167,33 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 	}
 }
 
+func TestEventRendererClosesSyntheticThinkingBeforeToolCalls(t *testing.T) {
+	r := NewEventRenderer("req-thinking-tool", "alias", "codex", nil)
+	_ = r.HandleEvent(Event{Kind: EventReasoningSignaled})
+
+	chunks := r.HandleEvent(Event{
+		Kind: EventToolCallDelta,
+		ToolCalls: []adapteropenai.ToolCall{{
+			Index: 0,
+			ID:    "call_1",
+			Type:  "function",
+			Function: adapteropenai.ToolCallFunction{
+				Name:      "Read",
+				Arguments: `{"path":"README.md"}`,
+			},
+		}},
+	})
+	if len(chunks) != 2 {
+		t.Fatalf("chunks=%d want close marker plus tool call", len(chunks))
+	}
+	if close := chunks[0].Choices[0].Delta.Content; close != SyntheticContentClose(SyntheticReasoning) {
+		t.Fatalf("first chunk should close thinking: %q", close)
+	}
+	if len(chunks[1].Choices[0].Delta.ToolCalls) != 1 {
+		t.Fatalf("second chunk should carry tool call: %+v", chunks[1])
+	}
+}
+
 func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 	r := NewEventRenderer("req-thinking-placeholder", "alias", "codex", nil)
 	chunks := r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "Thinking...", ReasoningKind: "summary"})

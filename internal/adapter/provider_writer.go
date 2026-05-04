@@ -248,7 +248,8 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 		return err
 	}
 	for _, notice := range result.UsageNotices {
-		if err := p.writeRenderedChunk(adapterruntime.OpenAINoticeChunk(p.reqID, p.modelAlias, adapterruntime.FormattedNoticeText(notice.Text))); err != nil {
+		includeRole := p == nil || p.renderer == nil || !p.renderer.HasEmittedRole()
+		if err := p.writeRenderedChunk(adapterruntime.OpenAINoticeChunk(p.reqID, p.modelAlias, adapterruntime.FormattedNoticeText(notice.Text), includeRole)); err != nil {
 			return err
 		}
 		adapterruntime.LogNoticeEmission(notice, "stream_finalized")
