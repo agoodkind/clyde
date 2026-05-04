@@ -1,4 +1,4 @@
-.PHONY: help build clean-build notarize-build test-ginkgo test-watch coverage clean staticcheck deadcode audit quality-check lint-golangci-baseline \
+.PHONY: help build clean-build notarize-build test-ginkgo test-watch coverage clean staticcheck deadcode audit clyde-check \
         install-build-guard uninstall-build-guard setup-hooks \
         deploy install install-system-agent install-launch-agent install-launch-agent-files uninstall-launch-agent \
         install-systemd-user install-systemd-user-files uninstall-systemd-user install-hook uninstall-hook \
@@ -16,24 +16,40 @@
 # update-go-mk, go-mk-sync. Run `make update-go-mk` to refresh.
 # ---------------------------------------------------------------------------
 
-GO_MK_URL   := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.mk
-GO_MK       := .make/go.mk
-GO_MK_CACHE := $(HOME)/.cache/go-makefile/go.mk
+GO_MK_URL     := https://raw.githubusercontent.com/agoodkind/go-makefile/main/go.mk
+GO_MK_API_URL := https://api.github.com/repos/agoodkind/go-makefile/contents/go.mk?ref=main
+GO_MK         := .make/go.mk
+GO_MK_CACHE   := $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/go-makefile/go.mk
 
-# Route go.mk's golangci target through a baseline-aware wrapper.
-GOLANGCI_LINT := ./scripts/golangci-lint-baseline.sh
+# Use go.mk's built-in golangci-lint baseline gate.
 GOLANGCI_LINT_BASELINE ?= .golangci-lint-baseline.txt
 
 # Define CMD so go.mk's default `build:` rule is suppressed (project owns build).
 CMD := ./cmd/clyde
 
-# Enable every bundled staticcheck-extra analyzer (5 core + 11 strict).
+# Enable every bundled staticcheck-extra analyzer (5 core + 12 strict).
 STATICCHECK_EXTRA_FLAGS         = $(STATICCHECK_EXTRA_CORE_FLAGS) $(STATICCHECK_EXTRA_STRICT_FLAGS)
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
 
+# Attempts to refresh go.mk before every Makefile parse, then falls back to the
+# cached copy when the network or upstream is unavailable.
+GO_MK_BOOTSTRAP := $(shell \
+	mkdir -p "$(dir $(GO_MK))" "$(dir $(GO_MK_CACHE))"; \
+	tmp="$(GO_MK).tmp"; \
+	if curl -fsSL -H "Accept: application/vnd.github.raw" --connect-timeout 5 --max-time 10 "$(GO_MK_API_URL)" -o "$$tmp" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)?v=$$(date +%s)" -o "$$tmp" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$$tmp"; then \
+		mv "$$tmp" "$(GO_MK)"; \
+		cp "$(GO_MK)" "$(GO_MK_CACHE)"; \
+	elif [ -f "$(GO_MK_CACHE)" ]; then \
+		rm -f "$$tmp"; \
+		cp "$(GO_MK_CACHE)" "$(GO_MK)"; \
+	elif [ ! -f "$(GO_MK)" ]; then \
+		rm -f "$$tmp"; \
+		printf '%s\n' "error: go.mk fetch failed and no cache available" >&2; \
+	fi)
+
 $(GO_MK):
 	@mkdir -p $(dir $@)
-	@if curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$@"; then \
+	@if curl -fsSL -H "Accept: application/vnd.github.raw" --connect-timeout 5 --max-time 10 "$(GO_MK_API_URL)" -o "$@" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)?v=$$(date +%s)" -o "$@" || curl -fsSL --connect-timeout 5 --max-time 10 "$(GO_MK_URL)" -o "$@"; then \
 		mkdir -p "$(dir $(GO_MK_CACHE))" && cp "$@" "$(GO_MK_CACHE)"; \
 	elif [ -f "$(GO_MK_CACHE)" ]; then \
 		echo "warning: go.mk fetch failed, using cached version" >&2; \
@@ -137,7 +153,7 @@ help: ## Show this help message
 # Build
 # ---------------------------------------------------------------------------
 
-build: quality-check $(CLYDE_BUILD_BIN) dist/clyde ## Run checks, then build and signing-check the clyde binary
+build: build-check $(CLYDE_BUILD_BIN) dist/clyde ## Run non-test checks, then build and signing-check the clyde binary
 	@echo "✓ Build and signing check passed"
 
 $(CLYDE_BUILD_BIN): $(GO_SRC) go.mod go.sum
@@ -189,51 +205,16 @@ coverage: ## Generate coverage report
 # ---------------------------------------------------------------------------
 # Code quality
 #
-# `lint`, `lint-tools`, `lint-golangci`, `lint-format`, `lint-gocyclo`, `fmt`,
-# `vet`, `govulncheck`, and `staticcheck-extra*` are owned by go.mk. The project
-# layers `staticcheck` (clyde-staticcheck), `deadcode`, and `audit` on top.
+# `lint`, `build-check`, `lint-golangci-baseline`, `staticcheck-extra*`,
+# `fmt`, `vet`, and `govulncheck` are owned by go.mk. The project layers
+# Clyde-specific analyzer targets on top without reimplementing those gates.
 # ---------------------------------------------------------------------------
 
-check: quality-check ## Full quality gate (go.mk checks plus clyde-staticcheck, deadcode, audit)
+check: clyde-check ## Run go.mk's full gate plus Clyde-specific analyzers
 
-quality-check: vet lint test govulncheck staticcheck deadcode audit ## Run the complete quality gate without building the Clyde binary
+build-check: clyde-check ## Run go.mk's non-test gate plus Clyde-specific analyzers
 
-lint-golangci-baseline: ## Refresh the golangci-lint baseline for existing findings
-	@mkdir -p .make
-	@tmp_raw=.make/golangci-lint-baseline.raw.out; \
-	new_baseline=.make/golangci-lint-baseline.new; \
-	if ! go tool golangci-lint run ./... > "$$tmp_raw" 2>&1; then status=$$?; else status=0; fi; \
-	perl -0pe 's/\n\s+/ /g' "$$tmp_raw" \
-		| grep -E '^[^[:space:]].*\([[:alnum:]_-]+\)$$' \
-		| sed "s|$$(pwd)/||g" \
-		| sort > .make/golangci-lint-baseline.out || true; \
-	now=$$(date -u +"%Y-%m-%dT%H:%M:%SZ"); \
-	tab=$$(printf '\t'); \
-	metadata_prefix="$${tab}# golangci-lint:"; \
-	printf '# golangci-lint: generated_at=%s\n' "$$now" > "$$new_baseline"; \
-	while IFS= read -r finding || [ -n "$$finding" ]; do \
-		first_added=""; \
-		if [ -f "$(GOLANGCI_LINT_BASELINE)" ]; then \
-			while IFS= read -r baseline_line || [ -n "$$baseline_line" ]; do \
-				case "$$baseline_line" in ""|\#*) continue ;; esac; \
-				baseline_finding="$${baseline_line%%$${metadata_prefix}*}"; \
-				[ "$$baseline_finding" = "$$finding" ] || continue; \
-				metadata="$${baseline_line#*$${metadata_prefix}}"; \
-				if [ "$$metadata" != "$$baseline_line" ]; then \
-					for metadata_field in $$metadata; do \
-						case "$$metadata_field" in first_added=*) first_added="$${metadata_field#first_added=}" ;; esac; \
-					done; \
-				fi; \
-				break; \
-			done < "$(GOLANGCI_LINT_BASELINE)"; \
-		fi; \
-		if [ -z "$$first_added" ]; then first_added="$$now"; fi; \
-		printf '%s\t# golangci-lint:first_added=%s last_seen=%s\n' "$$finding" "$$first_added" "$$now" >> "$$new_baseline"; \
-	done < .make/golangci-lint-baseline.out; \
-	mv "$$new_baseline" "$(GOLANGCI_LINT_BASELINE)"; \
-	n=$$(wc -l < .make/golangci-lint-baseline.out); \
-	echo "golangci-lint: baseline $(GOLANGCI_LINT_BASELINE) refreshed ($$n findings)"; \
-	if [ "$$status" -ne 0 ] && [ "$$n" -eq 0 ]; then cat "$$tmp_raw"; exit "$$status"; fi
+clyde-check: staticcheck deadcode audit ## Run Clyde-specific analyzer targets
 
 staticcheck: ## Run Clyde's staticcheck bundle and custom architecture analyzers
 	@echo "Running Clyde staticcheck..."
@@ -267,12 +248,7 @@ deadcode: ## Check for unreachable functions
 	fi
 	@echo "✓ No dead code found"
 
-audit: ## Run complexity and vulnerability checks
-	@echo "=== Cyclomatic complexity (>40) ==="
-	@go tool gocyclo -over 40 .
-	@echo ""
-	@echo "=== Vulnerability check ==="
-	@go tool govulncheck ./...
+audit: lint-gocyclo govulncheck ## Run Clyde audit checks via go.mk primitives
 
 release-local: ## Run a full GoReleaser release with 1Password-backed Apple notarization
 	@[ -f notarize.env ] || { echo "notarize.env not found. Copy notarize.env.example and fill in your 1Password op:// paths."; exit 1; }

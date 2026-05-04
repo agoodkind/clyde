@@ -1,0 +1,6 @@
+# staticcheck-extra: generated_at=2026-05-04T05:12:15Z
+cmd/root.go:227:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
+cmd/root.go:342:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
+cmd/root.go:452:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
+cmd/root.go:504:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
+cmd/root.go:554:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
