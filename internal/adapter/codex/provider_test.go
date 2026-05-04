@@ -96,7 +96,7 @@ func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
 			if err != nil {
 				t.Fatalf("upgrade: %v", err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			if _, _, err := conn.ReadMessage(); err != nil {
 				t.Fatalf("read request: %v", err)
 			}
@@ -176,7 +176,7 @@ func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testin
 			if err != nil {
 				t.Fatalf("upgrade: %v", err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			if _, _, err := conn.ReadMessage(); err != nil {
 				t.Fatalf("read request: %v", err)
 			}
@@ -250,7 +250,7 @@ func TestProviderExecuteSkipsUsageWarningWhenFinishReasonIsNotStop(t *testing.T)
 			if err != nil {
 				t.Fatalf("upgrade: %v", err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			if _, _, err := conn.ReadMessage(); err != nil {
 				t.Fatalf("read request: %v", err)
 			}

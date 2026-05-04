@@ -51,7 +51,9 @@ func TestTailerEmitsLinesAppendedAfterStart(t *testing.T) {
 	if _, err := f.WriteString("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n"); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	lines := drainTail(tailer.Lines(), 500*time.Millisecond)
 	if len(lines) != 2 {

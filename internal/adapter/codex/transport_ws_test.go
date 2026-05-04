@@ -131,7 +131,7 @@ func TestStreamWebsocketAsSyntheticSSELogsFrameShapeWithoutPayload(t *testing.T)
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.output_text.delta","delta":"secret-ws-content"}`)); err != nil {
 			t.Errorf("write message: %v", err)
 			return
@@ -358,7 +358,7 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		_, requestBody, err := conn.ReadMessage()
 		if err != nil {
@@ -442,7 +442,7 @@ func TestRunWebsocketTransportEmitsDelayedDeltasBeforeCompletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Fatalf("read request: %v", err)
@@ -516,7 +516,7 @@ func TestRunWebsocketTransportReturnsTopLevelErrorFrame(t *testing.T) {
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Fatalf("read request: %v", err)
 		}
@@ -561,7 +561,7 @@ func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testi
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var requests []map[string]any
 		respIDs := []string{"warmup-1", "resp-1", "resp-2", "resp-3"}
 		// Server expects 4 frames: warmup + 3 real turns. Each
@@ -683,7 +683,7 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnDeltaMismatch(t *testing.
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		frameCount := 2
 		if connNumber == 2 {
@@ -780,7 +780,7 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnModelMismatch(t *testing.
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		var requests []map[string]any
 		for idx := range 2 {
@@ -880,7 +880,7 @@ func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		var requests []map[string]any
 		for idx := range 2 {
@@ -985,7 +985,7 @@ func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		_, requestBody, err := conn.ReadMessage()
 		if err != nil {
@@ -1079,7 +1079,7 @@ func TestRunWebsocketTransportCacheFallsBackUncachedAfterWarmupFailure(t *testin
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		_, requestBody, err := conn.ReadMessage()
 		if err != nil {
@@ -1177,7 +1177,7 @@ func TestRunWebsocketTransportTimesOutHungPrewarmAndRunsGeneratedRequest(t *test
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		_, requestBody, err := conn.ReadMessage()
 		if err != nil {

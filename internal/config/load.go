@@ -224,7 +224,7 @@ func SaveGlobal(cfg *Config) error {
 		return fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, tomlPath); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		log.Warn("config.save.rename_failed",
 			"component", "config",
 			"subcomponent", "save",
