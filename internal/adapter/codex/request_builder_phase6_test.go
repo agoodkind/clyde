@@ -181,8 +181,12 @@ func TestPhase6DropSummaryRoundTripWithEncryptedOnlyEncrypted(t *testing.T) {
 	if r == nil {
 		t.Fatalf("expected reasoning item")
 	}
-	if _, has := r["summary"]; has {
-		t.Fatalf("summary must be absent under drop summary mode")
+	summary, has := r["summary"]
+	if !has {
+		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	}
+	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
+		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
 	}
 	if r["encrypted_content"] != "ENC" {
 		t.Fatalf("encrypted_content = %v", r["encrypted_content"])
@@ -204,8 +208,12 @@ func TestPhase6DropSummaryRoundTripWithoutEncryptedEmitsStubID(t *testing.T) {
 	if r["id"] != "rs_only" {
 		t.Fatalf("id = %v", r["id"])
 	}
-	if _, has := r["summary"]; has {
-		t.Fatalf("summary must be absent")
+	summary, has := r["summary"]
+	if !has {
+		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	}
+	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
+		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
 	}
 	if _, has := r["encrypted_content"]; has {
 		t.Fatalf("encrypted_content must be absent on miss")
@@ -226,8 +234,12 @@ func TestPhase6DropSummaryDropEncryptedEmitsStubIDWhenRefPresent(t *testing.T) {
 	if r["id"] != "rs_id" {
 		t.Fatalf("id = %v", r["id"])
 	}
-	if _, has := r["summary"]; has {
-		t.Fatalf("summary must be absent")
+	summary, has := r["summary"]
+	if !has {
+		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	}
+	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
+		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
 	}
 	if _, has := r["encrypted_content"]; has {
 		t.Fatalf("encrypted_content must be absent under drop mode")
@@ -256,8 +268,12 @@ func TestPhase6PlainTextConcatRoundTripWithEncryptedFoldsBodyAndEmitsEncrypted(t
 	if r["encrypted_content"] != "ENC" {
 		t.Fatalf("encrypted_content = %v", r["encrypted_content"])
 	}
-	if _, has := r["summary"]; has {
-		t.Fatalf("summary must be absent under plain_text_concat")
+	summary, has := r["summary"]
+	if !has {
+		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	}
+	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
+		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
 	}
 	idx, msg := findFirstAssistantMessage(items)
 	if msg == nil {
@@ -343,3 +359,61 @@ func TestPhase6ReasoningPrecedesMessage(t *testing.T) {
 // same one the package uses elsewhere; importing it here keeps the test
 // file's intent visible.
 var _ = adapteropenai.ChatRequest{}
+
+// TestReasoningInputItemAlwaysEmitsSummaryField pins the contract that
+// every emitted Reasoning input item carries a "summary" field, even when
+// the field's value is an empty array. The upstream Codex Responses API
+// rejects requests with [ObjectParam] [input[i].summary]
+// [missing_required_parameter] when this field is absent, regardless of
+// whether the round-trip strategy is drop, plain_text_concat, or
+// native_summary_field. This test exists to ensure the asMap renderer
+// never reverts to omitempty-style behavior on summary.
+func TestReasoningInputItemAlwaysEmitsSummaryField(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		item reasoningInputItem
+	}{
+		{
+			name: "no summary, no encrypted",
+			item: reasoningInputItem{ID: "rs_1", Summary: nil, EncryptedContent: ""},
+		},
+		{
+			name: "no summary, with encrypted",
+			item: reasoningInputItem{ID: "rs_2", Summary: nil, EncryptedContent: "ENC"},
+		},
+		{
+			name: "with summary, no encrypted",
+			item: reasoningInputItem{
+				ID:               "rs_3",
+				Summary:          []reasoningSummaryText{{Text: "thinking"}},
+				EncryptedContent: "",
+			},
+		},
+		{
+			name: "with summary, with encrypted",
+			item: reasoningInputItem{
+				ID:               "rs_4",
+				Summary:          []reasoningSummaryText{{Text: "thinking"}},
+				EncryptedContent: "ENC",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := tc.item.asMap()
+			summary, has := out["summary"]
+			if !has {
+				t.Fatalf("summary field must always be present; out=%v", out)
+			}
+			arr, ok := summary.([]map[string]any)
+			if !ok {
+				t.Fatalf("summary must be a []map[string]any; got %T", summary)
+			}
+			if len(tc.item.Summary) != len(arr) {
+				t.Fatalf("summary length mismatch: in=%d out=%d", len(tc.item.Summary), len(arr))
+			}
+		})
+	}
+}

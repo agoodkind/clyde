@@ -133,23 +133,23 @@ type reasoningSummaryText struct {
 }
 
 // asMap renders the typed Reasoning item into the map[string]any wire shape
-// the input slice uses for opaque-shape Codex items. Only the fields the
-// upstream cares about are emitted; absent optional fields are omitted to
-// match codex-rs's serde(skip_serializing_if = "Option::is_none").
+// the input slice uses for opaque-shape Codex items. The summary field is
+// always emitted, even as an empty array, because Codex Responses rejects
+// the request with [ObjectParam] [input[i].summary] [missing_required_parameter]
+// when summary is absent. encrypted_content stays optional and is dropped
+// when the round-trip strategy did not provide one.
 func (r reasoningInputItem) asMap() map[string]any {
-	out := map[string]any{
-		"type": "reasoning",
-		"id":   r.ID,
+	summary := make([]map[string]any, 0, len(r.Summary))
+	for _, entry := range r.Summary {
+		summary = append(summary, map[string]any{
+			"type": "summary_text",
+			"text": entry.Text,
+		})
 	}
-	if len(r.Summary) > 0 {
-		summary := make([]map[string]any, 0, len(r.Summary))
-		for _, entry := range r.Summary {
-			summary = append(summary, map[string]any{
-				"type": "summary_text",
-				"text": entry.Text,
-			})
-		}
-		out["summary"] = summary
+	out := map[string]any{
+		"type":    "reasoning",
+		"id":      r.ID,
+		"summary": summary,
 	}
 	if r.EncryptedContent != "" {
 		out["encrypted_content"] = r.EncryptedContent
