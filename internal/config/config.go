@@ -57,31 +57,22 @@ type LoggingConfig struct {
 
 // LoggingTranscript controls the per-chat transcript router that tees a
 // curated allowlist of records to chats/<chat_key>.jsonl, one file per chat.
-// The router is feature-off when MaxAgeDays or MaxChats is zero so the
-// retention loop is always paired with a writer.
+// Default: on. The operator turns it off by setting Enabled = false.
 type LoggingTranscript struct {
 	// Enabled toggles the per-chat router. Default true.
 	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
 	// Mode is the body redaction mode. summary strips request body fields;
 	// raw passes them through. Default summary.
 	Mode string `json:"mode,omitempty" toml:"mode,omitempty"`
-	// MaxAgeDays caps per-chat directory age. Zero means unset and the
-	// router is disabled with a startup warning.
-	MaxAgeDays int `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
-	// MaxChats caps the number of per-chat directories retained. Zero
-	// means unset and the router is disabled with a startup warning.
-	MaxChats int `json:"max_chats,omitempty" toml:"max_chats,omitempty"`
 }
 
-// IsEnabled reports whether the transcript router should be wired in. The
-// router requires both retention bounds to be positive; otherwise the
-// feature is treated as off so the cleanup loop can never starve.
+// IsEnabled reports whether the transcript router should be wired in.
+// Defaults to true; operators can flip Enabled = false to disable.
 func (t LoggingTranscript) IsEnabled() bool {
-	enabled := true
-	if t.Enabled != nil {
-		enabled = *t.Enabled
+	if t.Enabled == nil {
+		return true
 	}
-	return enabled && t.MaxAgeDays > 0 && t.MaxChats > 0
+	return *t.Enabled
 }
 
 // LoggingRotation controls file rotation behavior for the unified clyde logger.
