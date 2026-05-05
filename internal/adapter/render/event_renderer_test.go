@@ -140,7 +140,7 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	if !strings.Contains(delta.Content, "<!--clyde-thinking-->") {
 		t.Fatalf("missing content thinking marker: %q", delta.Content)
 	}
-	want := FormatSyntheticContentDelta(SyntheticReasoning, true, "checking constraints")
+	want := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", "checking constraints")
 	if delta.Content != want {
 		t.Fatalf("content=%q want %q", delta.Content, want)
 	}

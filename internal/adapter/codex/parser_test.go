@@ -39,7 +39,7 @@ func TestParseSSERetainsReasoningSignalWithoutVisibleText(t *testing.T) {
 	if !strings.Contains(got, "Answer.") {
 		t.Fatalf("missing streamed answer: %q", got)
 	}
-	if !strings.Contains(got, "<!--clyde-thinking-->") || !strings.Contains(got, "<!--/clyde-thinking-->") {
+	if !strings.Contains(got, "<!--clyde-thinking") || !strings.Contains(got, "<!--/clyde-thinking-->") {
 		t.Fatalf("missing synthetic thinking envelope: %q", got)
 	}
 }
@@ -63,7 +63,7 @@ func TestParseSSEEmitsThinkingWhenReasoningItemStarts(t *testing.T) {
 	if !res.ReasoningSignaled {
 		t.Fatalf("expected reasoning signal")
 	}
-	thinking := strings.Index(got, "<!--clyde-thinking-->")
+	thinking := strings.Index(got, "<!--clyde-thinking")
 	answer := strings.Index(got, "Answer.")
 	if thinking < 0 {
 		t.Fatalf("missing synthetic thinking envelope: %q", got)
@@ -77,8 +77,39 @@ func TestParseSSEEmitsThinkingWhenReasoningItemStarts(t *testing.T) {
 	if thinking > answer {
 		t.Fatalf("thinking marker should precede answer, got %q", got)
 	}
-	if strings.Count(got, "<!--clyde-thinking-->") != 1 {
+	if strings.Count(got, "<!--clyde-thinking") != 1 {
 		t.Fatalf("thinking marker duplicated: %q", got)
+	}
+}
+
+func TestParseSSEEmitsDataRefOnCodexThinkingOpenMarker(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"type":"response.output_item.added","sequence_number":1,"item":{"id":"rs_phase5_42","type":"reasoning","summary":[],"content":null,"encrypted_content":"enc"}}`,
+		"",
+		"event: response.reasoning_summary_part.added",
+		`data: {"type":"response.reasoning_summary_part.added","sequence_number":2,"summary_index":0,"item_id":"rs_phase5_42"}`,
+		"",
+		"event: response.reasoning_summary_text.delta",
+		`data: {"type":"response.reasoning_summary_text.delta","sequence_number":3,"summary_index":0,"delta":"Step one.","item_id":"rs_phase5_42"}`,
+		"",
+		"event: response.output_text.delta",
+		`data: {"type":"response.output_text.delta","sequence_number":4,"delta":"Final."}`,
+		"",
+		"event: response.completed",
+		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":1}}},"sequence_number":5}`,
+		"",
+	}, "\n") + "\n")
+	got, _, err := collectSSE(stream)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	want := `<!--clyde-thinking data-ref="rs_phase5_42"-->`
+	if !strings.Contains(got, want) {
+		t.Fatalf("missing data-ref open marker; got=%q", got)
+	}
+	if strings.Contains(got, "<!--clyde-thinking-->") {
+		t.Fatalf("legacy attribute-less marker leaked alongside the data-ref form: %q", got)
 	}
 }
 
@@ -104,7 +135,7 @@ func TestParseSSEEmitsReasoningSummaryPartAddedAsVisibleThinking(t *testing.T) {
 	if !res.ReasoningSignaled || !res.ReasoningVisible {
 		t.Fatalf("reasoning flags=%+v want signaled and visible", res)
 	}
-	if strings.Count(got, "<!--clyde-thinking-->") != 1 {
+	if strings.Count(got, "<!--clyde-thinking") != 1 {
 		t.Fatalf("thinking marker count mismatch: %q", got)
 	}
 	if strings.Contains(got, "\n> Thinking...") || !strings.Contains(got, "Answer.") {
@@ -142,7 +173,7 @@ func TestParseSSEEmitsReasoningFromDoneItemContent(t *testing.T) {
 	if strings.Contains(got, "\n> Thinking...") {
 		t.Fatalf("thinking block should not include placeholder body: %q", got)
 	}
-	if strings.Count(got, "<!--clyde-thinking-->") != 1 || strings.Count(got, "<!--/clyde-thinking-->") != 1 {
+	if strings.Count(got, "<!--clyde-thinking") != 1 || strings.Count(got, "<!--/clyde-thinking-->") != 1 {
 		t.Fatalf("thinking envelope count mismatch: %q", got)
 	}
 }

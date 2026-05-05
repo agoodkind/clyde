@@ -68,10 +68,18 @@ type EventRenderer struct {
 	reasoningSignaled     bool
 	reasoningVisible      bool
 	reasoningBodyEmitted  bool
-	assistantText         assistantTextAggregate
-	assistantTextLogged   bool
-	toolCallNames         []string
-	hasSubagentToolCall   bool
+	// lastReasoningItemID is the most recent upstream reasoning item id
+	// captured from EventReasoningSignaled or EventReasoningDelta. Used as
+	// the data-ref attribute on the synthetic-thinking open marker so a
+	// later turn can correlate the round-tripped envelope with provider
+	// state (e.g. a stored Codex encrypted_content blob). Empty when the
+	// upstream did not surface an id, in which case the open marker is
+	// emitted attribute-less.
+	lastReasoningItemID string
+	assistantText       assistantTextAggregate
+	assistantTextLogged bool
+	toolCallNames       []string
+	hasSubagentToolCall bool
 }
 
 // NewEventRenderer constructs a renderer with a background context.
@@ -90,12 +98,27 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 	}
 	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
 	return &EventRenderer{
-		createdUnix: renderClock.Now().Unix(),
-		modelAlias:  modelAlias,
-		reqID:       reqID,
-		backend:     backend,
-		ctx:         ctx,
-		log:         log,
+		createdUnix:           renderClock.Now().Unix(),
+		modelAlias:            modelAlias,
+		reqID:                 reqID,
+		backend:               backend,
+		ctx:                   ctx,
+		log:                   log,
+		suppressed:            nil,
+		seenRole:              false,
+		reasoningOpen:         false,
+		lastReasoningKind:     "",
+		lastSummaryIdx:        0,
+		haveSummaryIdx:        false,
+		pendingReasoningBreak: false,
+		reasoningSignaled:     false,
+		reasoningVisible:      false,
+		reasoningBodyEmitted:  false,
+		lastReasoningItemID:   "",
+		assistantText:         assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
+		assistantTextLogged:   false,
+		toolCallNames:         nil,
+		hasSubagentToolCall:   false,
 	}
 }
 
@@ -150,6 +173,7 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 	switch ev.Kind {
 	case EventReasoningSignaled:
 		r.reasoningSignaled = true
+		r.captureReasoningItemID(ev)
 		// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
 		// Later reasoning deltas fill it; otherwise finish closes an empty block.
 		if !r.reasoningVisible && !r.reasoningOpen {

@@ -1,8 +1,9 @@
-// Package slogger holds the canonical chat-key sanitizer used by the
+package slogger
+
+// File sanitize holds the canonical chat-key sanitizer used by the
 // transcript router and the codex reasoningstore. Both surfaces map a
 // chat key onto a per-chat filesystem path. They must apply the exact
 // same allowlist so a key that is safe for one is safe for the other.
-package slogger
 
 import "strings"
 

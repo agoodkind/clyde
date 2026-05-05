@@ -721,6 +721,8 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 		Text:          raw.Delta,
 		ReasoningKind: kind,
 		SummaryIndex:  summaryIdx,
+		ItemID:        strings.TrimSpace(raw.ItemID),
+		ItemType:      "reasoning",
 	})
 	if err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{}, Err: err}

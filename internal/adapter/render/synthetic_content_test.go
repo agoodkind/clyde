@@ -170,14 +170,14 @@ func TestFormatSyntheticContentDeltaWithRefEmbedsAttributeOnOpen(t *testing.T) {
 }
 
 func TestFormatSyntheticContentDeltaContinuesOpenBlockWithoutHeader(t *testing.T) {
-	open := FormatSyntheticContentDelta(SyntheticReasoning, true, "first")
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", "first")
 	if !strings.HasPrefix(open, "<!--clyde-thinking-->") {
 		t.Fatalf("first delta missing open marker: %q", open)
 	}
 	if !strings.HasSuffix(open, "> first") {
 		t.Fatalf("open delta should start fresh blockquote line: %q", open)
 	}
-	cont := FormatSyntheticContentDelta(SyntheticReasoning, false, "\nsecond")
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "", "\nsecond")
 	if strings.Contains(cont, "<!--clyde-thinking-->") {
 		t.Fatalf("continuation delta should not re-emit open marker: %q", cont)
 	}

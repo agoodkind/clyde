@@ -178,26 +178,19 @@ func FormatSyntheticContent(kind SyntheticContentKind, body string) string {
 	return SyntheticContentOpen(kind) + formatSyntheticBody(spec, body, true) + SyntheticContentClose(kind)
 }
 
-// FormatSyntheticContentDelta formats a streaming delta for the given kind.
+// FormatSyntheticContentDeltaWithRef formats a streaming delta for the
+// given kind, optionally annotating the open marker with a data-ref
+// attribute.
 //
-// When open is true the leading marker, header, and a fresh blockquote prefix
-// are included so the very first delta starts a new quoted block. When open
-// is false the renderer is mid-stream inside an already-open block and the
-// body's own newlines drive new quoted lines via "\n" -> "\n> " replacement,
-// matching the existing reasoning streaming layout.
+// When open is true the leading marker, header, and a fresh blockquote
+// prefix are included so the very first delta starts a new quoted block.
+// When open is false the renderer is mid-stream inside an already-open
+// block and the body's own newlines drive new quoted lines via "\n" ->
+// "\n> " replacement, matching the existing reasoning streaming layout.
 //
-// For the data-ref-tagged streaming variant use
-// [FormatSyntheticContentDeltaWithRef].
-func FormatSyntheticContentDelta(kind SyntheticContentKind, open bool, body string) string {
-	return FormatSyntheticContentDeltaWithRef(kind, open, "", body)
-}
-
-// FormatSyntheticContentDeltaWithRef is the streaming variant of
-// [FormatSyntheticContentDelta] that emits an optional data-ref attribute on
-// the open marker. The ref is only honored when open is true; mid-stream
-// deltas never carry the attribute (the marker is already on the wire).
-//
-// Empty ref matches the legacy [FormatSyntheticContentDelta] shape exactly.
+// The ref is only honored when open is true; mid-stream deltas never
+// carry the attribute since the marker is already on the wire. Empty
+// ref produces the legacy attribute-less shape.
 func FormatSyntheticContentDeltaWithRef(kind SyntheticContentKind, open bool, ref, body string) string {
 	spec := specFor(kind)
 	if spec == nil {
@@ -223,7 +216,7 @@ func formatSyntheticBody(spec *syntheticContentSpec, body string, leadingPrefix 
 
 // stripDecoration reverses formatSyntheticBody: it strips the leading header
 // (if any) and the blockquote prefix, returning the raw body text the original
-// caller passed to [FormatSyntheticContent] / [FormatSyntheticContentDelta].
+// caller passed to [FormatSyntheticContent] / [FormatSyntheticContentDeltaWithRef].
 //
 // The decorated input begins immediately after the open marker and ends
 // immediately before the close marker (i.e. the captureRE submatch).

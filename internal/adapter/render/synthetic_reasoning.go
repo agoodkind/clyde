@@ -9,7 +9,7 @@ import (
 // renderReasoning intentionally writes reasoning to two stream surfaces:
 //
 //   - delta.content gets a marker-wrapped synthetic block from the shared
-//     [FormatSyntheticContentDelta] fabric because Cursor's custom OpenAI/BYOK
+//     [FormatSyntheticContentDeltaWithRef] fabric because Cursor's custom OpenAI/BYOK
 //     ingress does not currently honor reasoning_content the way Cursor honors
 //     it for first-party reasoning models. Putting the thinking block in
 //     content gives BYOK users the same visible inline-thinking effect.
@@ -22,6 +22,7 @@ import (
 // mapper calls [ExtractSyntheticParts] and materializes each kind per its
 // upstream contract (Anthropic emits a native thinking block; Codex drops).
 func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
+	r.captureReasoningItemID(ev)
 	text := strings.TrimSpace(ev.Text)
 	if text == "" && ev.Text == "" {
 		return nil
@@ -34,7 +35,7 @@ func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
 	}
 	open := !r.reasoningOpen
 	decorated := r.decorateReasoningDelta(ev)
-	contentOut := FormatSyntheticContentDelta(SyntheticReasoning, open, decorated)
+	contentOut := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, open, r.lastReasoningItemID, decorated)
 	r.reasoningOpen = true
 	r.reasoningBodyEmitted = true
 	delta := adapteropenai.StreamDelta{
@@ -51,13 +52,24 @@ func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
 
 func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
 	r.reasoningOpen = true
-	delta := adapteropenai.StreamDelta{Content: SyntheticContentOpen(SyntheticReasoning)}
+	delta := adapteropenai.StreamDelta{Content: SyntheticContentOpenWithRef(SyntheticReasoning, r.lastReasoningItemID)}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
 	}
 	ch := r.baseChunk(delta)
 	return &ch
+}
+
+// captureReasoningItemID stores the most recent upstream reasoning item id
+// observed on a reasoning event so the open marker can carry it as a
+// data-ref attribute. Codex events populate ItemID with values like
+// "rs_abc123"; Anthropic events leave it empty so the renderer emits the
+// legacy attribute-less marker.
+func (r *EventRenderer) captureReasoningItemID(ev Event) {
+	if id := strings.TrimSpace(ev.ItemID); id != "" {
+		r.lastReasoningItemID = id
+	}
 }
 
 func (r *EventRenderer) decorateReasoningDelta(ev Event) string {
