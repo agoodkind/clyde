@@ -469,12 +469,15 @@ func (p *CompactPanel) buildRequest() CompactRunRequest {
 		SessionName:    p.sessionName,
 		TargetTokens:   p.targetTokens,
 		ReservedTokens: p.reserved,
+		Model:          p.model,
+		ModelExplicit:  false,
 		Thinking:       p.thinking,
 		Images:         p.images,
 		Tools:          p.tools,
 		Chat:           p.chat,
 		Summarize:      p.summary == "on",
 		SummarizeMode:  p.summary,
+		Force:          false,
 	}
 }
 

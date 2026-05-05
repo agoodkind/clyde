@@ -13,12 +13,17 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
+// SummarizeMode controls whether compact injects a generated recap of dropped
+// content.
 type SummarizeMode string
 
 const (
+	// SummarizeModeAuto summarizes only when chat content was truncated.
 	SummarizeModeAuto SummarizeMode = "auto"
-	SummarizeModeOn   SummarizeMode = "on"
-	SummarizeModeOff  SummarizeMode = "off"
+	// SummarizeModeOn summarizes any dropped content.
+	SummarizeModeOn SummarizeMode = "on"
+	// SummarizeModeOff disables summarization.
+	SummarizeModeOff SummarizeMode = "off"
 )
 
 // NormalizeSummarizeMode maps wire/UI/CLI values onto the compact
@@ -37,6 +42,7 @@ func NormalizeSummarizeMode(value string) (SummarizeMode, error) {
 	}
 }
 
+// SummarizeModeFromLegacy maps the old boolean summarize setting onto a mode.
 func SummarizeModeFromLegacy(summarize bool, explicit bool) SummarizeMode {
 	if !explicit {
 		return SummarizeModeAuto
@@ -65,6 +71,7 @@ type SummarizeOptions struct {
 	Timeout time.Duration
 }
 
+// SummarizeRequest is the generic input passed to summarize adapters.
 type SummarizeRequest struct {
 	Session *session.Session
 	Slice   *Slice
@@ -74,6 +81,8 @@ type SummarizeRequest struct {
 	Adapter SummarizeAdapter
 }
 
+// SummarizeDecision records why a compact run did or did not summarize
+// content.
 type SummarizeDecision struct {
 	Mode            SummarizeMode
 	ShouldSummarize bool
@@ -82,14 +91,18 @@ type SummarizeDecision struct {
 	Summary         string
 }
 
+// SummarizeAdapter provides provider-specific dropped-content summarization.
 type SummarizeAdapter interface {
 	SummarizeDropped(ctx context.Context, req SummarizeRequest) (string, error)
 }
 
+// ClaudeSummarizeAdapter summarizes dropped content by calling the Claude CLI.
 type ClaudeSummarizeAdapter struct {
 	Options SummarizeOptions
 }
 
+// SummarizeDropped summarizes the dropped content for a Claude-owned compact
+// run.
 func (a ClaudeSummarizeAdapter) SummarizeDropped(ctx context.Context, req SummarizeRequest) (string, error) {
 	options := a.Options
 	if options.Model == "" {
@@ -98,18 +111,30 @@ func (a ClaudeSummarizeAdapter) SummarizeDropped(ctx context.Context, req Summar
 	return SummarizeDropped(ctx, req.Slice, req.Options, options)
 }
 
+// SummarizeAdapterForSession returns the provider adapter for a session.
 func SummarizeAdapterForSession(sess *session.Session) (SummarizeAdapter, error) {
 	if sess == nil {
 		return nil, fmt.Errorf("summarize adapter: nil session")
 	}
 	switch sess.ProviderID() {
 	case session.ProviderClaude:
-		return ClaudeSummarizeAdapter{}, nil
+		return ClaudeSummarizeAdapter{
+			Options: SummarizeOptions{
+				Binary:        "",
+				Model:         "",
+				MaxInputBytes: 0,
+				Timeout:       0,
+			},
+		}, nil
+	case session.ProviderUnknown, session.ProviderCodex:
+		return nil, fmt.Errorf("summarize adapter: provider %q is not supported", sess.ProviderID())
 	default:
 		return nil, fmt.Errorf("summarize adapter: provider %q is not supported", sess.ProviderID())
 	}
 }
 
+// DoSummarize decides whether to summarize and calls the matching provider
+// adapter.
 func DoSummarize(ctx context.Context, req SummarizeRequest) (SummarizeDecision, error) {
 	mode := req.Mode
 	if mode == "" {
@@ -121,6 +146,7 @@ func DoSummarize(ctx context.Context, req SummarizeRequest) (SummarizeDecision, 
 		ShouldSummarize: shouldSummarize(mode, stats, req.Options),
 		Reason:          summarizeReason(mode, stats, req.Options),
 		Stats:           stats,
+		Summary:         "",
 	}
 	if !decision.ShouldSummarize {
 		return decision, nil
@@ -135,7 +161,7 @@ func DoSummarize(ctx context.Context, req SummarizeRequest) (SummarizeDecision, 
 	}
 	summary, err := adapter.SummarizeDropped(ctx, req)
 	if err != nil {
-		return decision, err
+		return decision, fmt.Errorf("summarize dropped content: %w", err)
 	}
 	decision.Summary = summary
 	return decision, nil
@@ -147,6 +173,8 @@ func shouldSummarize(mode SummarizeMode, stats DroppedStats, opts SynthOptions) 
 		return false
 	case SummarizeModeOn:
 		return hasDroppedContent(stats, opts)
+	case SummarizeModeAuto:
+		return chatWasTruncated(stats, opts)
 	default:
 		return chatWasTruncated(stats, opts)
 	}
@@ -161,6 +189,11 @@ func summarizeReason(mode SummarizeMode, stats DroppedStats, opts SynthOptions) 
 			return "enabled"
 		}
 		return "no dropped content"
+	case SummarizeModeAuto:
+		if chatWasTruncated(stats, opts) {
+			return "chat truncated"
+		}
+		return "no chat truncation"
 	default:
 		if chatWasTruncated(stats, opts) {
 			return "chat truncated"
@@ -263,7 +296,13 @@ func SummarizeDropped(ctx context.Context, slice *Slice, opts SynthOptions, sopt
 // feed to the summarizer.
 func renderDroppedForSummary(slice *Slice, opts SynthOptions) string {
 	var sb strings.Builder
+	renderDroppedChatTurns(&sb, slice, opts)
+	renderDroppedSummaryChunks(&sb, slice, opts)
+	renderDroppedToolCalls(&sb, slice, opts)
+	return sb.String()
+}
 
+func renderDroppedChatTurns(sb *strings.Builder, slice *Slice, opts SynthOptions) {
 	if len(opts.DroppedChatEntries) > 0 {
 		sb.WriteString("# Dropped chat turns\n\n")
 		for ei, e := range slice.PostBoundary {
@@ -273,48 +312,101 @@ func renderDroppedForSummary(slice *Slice, opts SynthOptions) string {
 			if e.Type != "user" && e.Type != "assistant" {
 				continue
 			}
-			text := chatTextFrom(e, SynthOptions{DropThinking: true})
+			text := chatTextFrom(e, droppedChatTextOptions())
 			if text == "" {
 				continue
 			}
-			fmt.Fprintf(&sb, "## %s (%s)\n\n%s\n\n", titleCaseASCII(e.Type), e.Timestamp.UTC().Format(time.RFC3339), text)
+			fmt.Fprintf(
+				sb,
+				"## %s (%s)\n\n%s\n\n",
+				titleCaseASCII(e.Type),
+				e.Timestamp.UTC().Format(time.RFC3339),
+				text,
+			)
 		}
 	}
+}
 
-	if len(opts.DroppedSummaryChunks) > 0 {
-		indexes := make([]int, 0, len(opts.DroppedSummaryChunks))
-		for ei := range opts.DroppedSummaryChunks {
-			indexes = append(indexes, ei)
-		}
-		sort.Ints(indexes)
-		wroteHeader := false
-		for _, ei := range indexes {
-			dropped := opts.DroppedSummaryChunks[ei]
-			if len(dropped) == 0 {
-				continue
-			}
-			if ei < 0 || ei >= len(slice.PostBoundary) {
-				continue
-			}
-			summary, ok := parseSyntheticSummary(slice.PostBoundary[ei])
-			if !ok {
-				continue
-			}
-			text := summary.DroppedText(dropped)
-			if strings.TrimSpace(text) == "" {
-				continue
-			}
-			if !wroteHeader {
-				sb.WriteString("# Dropped prior compact summary chunks\n\n")
-				wroteHeader = true
-			}
-			sb.WriteString(text)
-			sb.WriteString("\n\n")
-		}
+func droppedChatTextOptions() SynthOptions {
+	return SynthOptions{
+		DropThinking:         true,
+		ImagesAsPlaceholder:  false,
+		ToolDefault:          ToolDetailFull,
+		ToolDetailOverride:   nil,
+		DroppedChatEntries:   nil,
+		DroppedSummaryChunks: nil,
+		TruncTokens:          0,
+		Summary:              "",
 	}
+}
 
-	var droppedTools []ContentBlock
-	var droppedToolEntries []Entry
+func renderDroppedSummaryChunks(sb *strings.Builder, slice *Slice, opts SynthOptions) {
+	indexes := droppedSummaryIndexes(opts)
+	wroteHeader := false
+	for _, ei := range indexes {
+		text := droppedSummaryText(slice, opts, ei)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		if !wroteHeader {
+			sb.WriteString("# Dropped prior compact summary chunks\n\n")
+			wroteHeader = true
+		}
+		sb.WriteString(text)
+		sb.WriteString("\n\n")
+	}
+}
+
+func droppedSummaryIndexes(opts SynthOptions) []int {
+	indexes := make([]int, 0, len(opts.DroppedSummaryChunks))
+	for ei := range opts.DroppedSummaryChunks {
+		indexes = append(indexes, ei)
+	}
+	sort.Ints(indexes)
+	return indexes
+}
+
+func droppedSummaryText(slice *Slice, opts SynthOptions, entryIndex int) string {
+	dropped := opts.DroppedSummaryChunks[entryIndex]
+	if len(dropped) == 0 {
+		return ""
+	}
+	if entryIndex < 0 || entryIndex >= len(slice.PostBoundary) {
+		return ""
+	}
+	summary, ok := parseSyntheticSummary(slice.PostBoundary[entryIndex])
+	if !ok {
+		return ""
+	}
+	return summary.DroppedText(dropped)
+}
+
+type droppedToolCall struct {
+	Block ContentBlock
+	Entry Entry
+}
+
+func renderDroppedToolCalls(sb *strings.Builder, slice *Slice, opts SynthOptions) {
+	droppedTools := droppedToolCalls(slice, opts)
+	if len(droppedTools) == 0 {
+		return
+	}
+	sb.WriteString("# Dropped tool calls\n\n")
+	for _, toolCall := range droppedTools {
+		args := summarizeToolArgs(toolCall.Block)
+		fmt.Fprintf(
+			sb,
+			"- %s %s(%s)\n",
+			toolCall.Entry.Timestamp.UTC().Format(time.RFC3339),
+			toolCall.Block.ToolName,
+			args,
+		)
+	}
+	sb.WriteString("\n")
+}
+
+func droppedToolCalls(slice *Slice, opts SynthOptions) []droppedToolCall {
+	var droppedTools []droppedToolCall
 	for _, e := range slice.PostBoundary {
 		if e.Type != "assistant" {
 			continue
@@ -328,26 +420,18 @@ func renderDroppedForSummary(slice *Slice, opts SynthOptions) string {
 				detail = override
 			}
 			if detail == ToolDetailDrop {
-				droppedTools = append(droppedTools, b)
-				droppedToolEntries = append(droppedToolEntries, e)
+				droppedTools = append(droppedTools, droppedToolCall{
+					Block: b,
+					Entry: e,
+				})
 			}
 		}
 	}
-	if len(droppedTools) > 0 {
-		sb.WriteString("# Dropped tool calls\n\n")
-		for i, b := range droppedTools {
-			e := droppedToolEntries[i]
-			args := summarizeToolArgs(b)
-			fmt.Fprintf(&sb, "- %s %s(%s)\n", e.Timestamp.UTC().Format(time.RFC3339), b.ToolName, args)
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
+	return droppedTools
 }
 
 // titleCaseASCII upper-cases the first byte of an ASCII identifier such as
-// "user" or "assistant". It exists to avoid the deprecated strings.Title
+// "user" or "assistant". It exists to avoid the deprecated [strings.Title]
 // (deprecated since Go 1.18 due to Unicode word-boundary issues) for inputs
 // that are guaranteed lowercase ASCII.
 func titleCaseASCII(s string) string {

@@ -245,7 +245,7 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 	if rawMode, _ := cmd.Flags().GetString("summarize-mode"); cmd.Flags().Changed("summarize-mode") || strings.TrimSpace(rawMode) != "auto" {
 		mode, modeErr := compactengine.NormalizeSummarizeMode(rawMode)
 		if modeErr != nil {
-			return compactCommandInput{}, modeErr
+			return compactCommandInput{}, fmt.Errorf("parse summarize mode: %w", modeErr)
 		}
 		summarizeMode = string(mode)
 	}
@@ -541,7 +541,7 @@ func maybeSummarizeCompact(
 ) {
 	mode, err := compactengine.NormalizeSummarizeMode(input.SummarizeMode)
 	if err != nil {
-		cliCompactLog.Logger().Warn("cli.compact.summarize_mode_invalid", "session", input.Name, slog.Any("err", err))
+		cliCompactLog.Logger().Warn("cli.compact.summarize_mode_invalid", "session", input.Name, "err", err)
 		return
 	}
 	decision, err := compactengine.DoSummarize(ctx, compactengine.SummarizeRequest{
@@ -550,9 +550,10 @@ func maybeSummarizeCompact(
 		Options: planRes.Options,
 		Model:   input.Model,
 		Mode:    mode,
+		Adapter: nil,
 	})
 	if err != nil {
-		cliCompactLog.Logger().Warn("cli.compact.summarize_failed_continuing", "session", input.Name, slog.Any("err", err))
+		cliCompactLog.Logger().Warn("cli.compact.summarize_failed_continuing", "session", input.Name, "err", err)
 		_, _ = fmt.Fprintf(out, "summary failed (%v); applying without summary\n", err)
 		return
 	}

@@ -232,6 +232,7 @@ func RunRuntime(
 			Options: planRes.Options,
 			Model:   modelForCount,
 			Mode:    summaryMode,
+			Adapter: nil,
 		})
 		if summaryErr != nil {
 			compactLog.Logger().Warn("compact.runtime.summarize_failed_continuing",
