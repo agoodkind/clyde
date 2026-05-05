@@ -34,6 +34,11 @@ type Provider struct {
 	bodyLog         BodyLogConfig
 	bodyLogProvider BodyLogConfigProvider
 	fileLog         FileLogRotationConfig
+	// reasoningStore receives encrypted_content blobs scraped from
+	// codex Reasoning items at the end of each turn (Phase 4) and
+	// returns them on a hit during Phase 6 round-trip. Optional; when
+	// nil the Phase 4 capture path is a no-op.
+	reasoningStore ReasoningBlobStore
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -46,6 +51,10 @@ type ProviderOptions struct {
 	BodyLogProvider  BodyLogConfigProvider
 	FileLog          FileLogRotationConfig
 	WsSessionIdleTTL time.Duration
+	// ReasoningStore is the file-backed encrypted_content cache (Phase 3).
+	// Optional; when nil the Phase 4 capture path is a no-op and Phase 6
+	// always misses the lookup.
+	ReasoningStore ReasoningBlobStore
 }
 
 const defaultWsSessionIdleTTL = 10 * time.Minute
@@ -82,6 +91,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		bodyLog:         opts.BodyLog,
 		bodyLogProvider: opts.BodyLogProvider,
 		fileLog:         opts.FileLog,
+		reasoningStore:  opts.ReasoningStore,
 	}
 }
 
@@ -146,6 +156,8 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		ReasoningSummary:               p.cfg.ReasoningSummary,
 		InboundThinkingMaterialization: codexSummaryRenderStrategy(p.cfg.Reasoning.ResolvedRoundTripSummary()),
 		WireCaptureMode:                WireCaptureMode(p.cfg.ResolvedCodexWireCaptureMode()),
+		ReasoningStore:                 p.reasoningStore,
+		RoundTripEncrypted:             RoundTripEncrypted(p.cfg.Reasoning.ResolvedRoundTripEncrypted()),
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{

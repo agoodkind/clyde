@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
@@ -50,7 +51,48 @@ type DirectConfig struct {
 	// websocket bodies. Off (default) is safe; the other modes route to
 	// adapter.providers.codex.wire_capture for short-retention diagnostics.
 	WireCaptureMode WireCaptureMode
+	// ReasoningStore receives encrypted_content blobs scraped from
+	// response.output_item.done reasoning items. nil disables capture
+	// (Phase 3 store off, no store dependency, etc.). Phase 4 writes;
+	// Phase 6 reads.
+	ReasoningStore ReasoningBlobStore
+	// RoundTripEncrypted gates the writer. RoundTripEncryptedRoundTrip
+	// (the codex-rs default) persists; RoundTripEncryptedDrop skips.
+	// Empty resolves to RoundTripEncryptedRoundTrip per codex-rs.
+	RoundTripEncrypted RoundTripEncrypted
 }
+
+// ReasoningBlobStore is the narrow Put-only contract DirectConfig needs from
+// the encrypted_content cache. It mirrors the subset of
+// [reasoningstore.Store] that Phase 4 calls so tests can pass a fake without
+// depending on the on-disk implementation.
+type ReasoningBlobStore interface {
+	Put(ctx context.Context, blob ReasoningBlob) error
+}
+
+// ReasoningBlob is the value DirectConfig.ReasoningStore.Put receives. It is
+// shape-compatible with reasoningstore.EncryptedBlob; the codex package owns
+// its own typed surface so RunDirect does not need to import the storage
+// package directly.
+type ReasoningBlob struct {
+	ChatKey   string
+	ItemID    string
+	Encrypted string
+	CreatedAt int64
+}
+
+// RoundTripEncrypted is the closed enum the codex transport honors when the
+// dispatcher passes the encrypted_content round-trip lever. Mirrors
+// config.CodexRoundTripEncrypted value-for-value so the dispatcher does a
+// typed string conversion at the boundary without an import edge.
+type RoundTripEncrypted string
+
+// Codex round-trip encrypted_content modes. RoundTripEncryptedRoundTrip is
+// the documented codex-rs default; empty resolves to it.
+const (
+	RoundTripEncryptedRoundTrip RoundTripEncrypted = "round_trip"
+	RoundTripEncryptedDrop      RoundTripEncrypted = "drop"
+)
 
 // WireCaptureMode is the closed enum the codex transport honors when the
 // dispatcher passes a per-provider wire-capture lever. Mirrors
@@ -123,7 +165,87 @@ func RunDirect(
 		Log:             cfg.Log,
 		WireCaptureMode: cfg.WireCaptureMode,
 	}
-	return RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
+	result, runErr := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
+	captureReasoningBlobs(ctx, cfg, result)
+	return result, runErr
+}
+
+// captureReasoningBlobs walks result.OutputItems for response.output_item.done
+// reasoning items that carry encrypted_content and persists them to
+// cfg.ReasoningStore. Skipped silently when the store is nil, the chat key
+// is empty (no per-chat partition), or the round-trip lever is set to drop.
+//
+// The persistence is best-effort. Any error is logged at WARN and the request
+// completes normally; the upstream turn already succeeded.
+func captureReasoningBlobs(ctx context.Context, cfg DirectConfig, result RunResult) {
+	if cfg.ReasoningStore == nil {
+		return
+	}
+	chatKey := strings.TrimSpace(cfg.Correlation.ChatKey)
+	if chatKey == "" {
+		return
+	}
+	mode := cfg.RoundTripEncrypted
+	if mode == "" {
+		mode = RoundTripEncryptedRoundTrip
+	}
+	if mode != RoundTripEncryptedRoundTrip {
+		return
+	}
+	now := time.Now().UnixNano()
+	for _, item := range result.OutputItems {
+		if !reasoningItemHasEncryptedContent(item) {
+			continue
+		}
+		blob := ReasoningBlob{
+			ChatKey:   chatKey,
+			ItemID:    strings.TrimSpace(stringField(item, "id")),
+			Encrypted: strings.TrimSpace(stringField(item, "encrypted_content")),
+			CreatedAt: now,
+		}
+		if blob.ItemID == "" || blob.Encrypted == "" {
+			continue
+		}
+		if err := cfg.ReasoningStore.Put(ctx, blob); err != nil {
+			cfg.Log.WarnContext(ctx, "adapter.codex.reasoningstore.put_failed",
+				"component", "adapter",
+				"subcomponent", "codex",
+				"chat_key", blob.ChatKey,
+				"item_id", blob.ItemID,
+				"err", err.Error(),
+			)
+		}
+	}
+}
+
+// reasoningItemHasEncryptedContent reports whether the upstream output item
+// is a reasoning item carrying a non-empty encrypted_content field. Other
+// item types (message, function_call, etc.) are ignored.
+func reasoningItemHasEncryptedContent(item map[string]any) bool {
+	if item == nil {
+		return false
+	}
+	if strings.TrimSpace(stringField(item, "type")) != "reasoning" {
+		return false
+	}
+	return strings.TrimSpace(stringField(item, "encrypted_content")) != ""
+}
+
+// stringField pulls a string-typed map value or returns empty when missing
+// or wrong-typed. Used for the opaque-shape OutputItems map walk.
+func stringField(item map[string]any, key string) string {
+	if item == nil {
+		return ""
+	}
+	raw, ok := item[key]
+	if !ok {
+		return ""
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return s
 }
 
 var errCodexWebsocketDisabled = errors.New("codex websocket transport is disabled but no HTTPS fallback exists")

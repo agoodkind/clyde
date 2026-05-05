@@ -190,7 +190,8 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
 		}, adaptercodex.ProviderOptions{
-			BodyLog: adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
+			AccountID: "",
+			BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
 			BodyLogProvider: func() adaptercodex.BodyLogConfig {
 				body := runtimeLogging.Body()
 				return adaptercodex.BodyLogConfig{Mode: body.Mode, MaxKB: body.MaxKB}
@@ -201,6 +202,13 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 				MaxAgeDays: logging.Rotation.MaxAgeDays,
 				Compress:   logging.Rotation.Compress,
 			},
+			WsSessionIdleTTL: 0,
+			// ReasoningStore is wired in a follow-up commit when the
+			// daemon constructs the on-disk reasoningstore.Store from
+			// [adapter.codex.reasoning.store] retention config. Phase
+			// 4 only delivers the codex-side capture; nil here means
+			// the capture is a no-op until storage is constructed.
+			ReasoningStore: nil,
 		})
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
