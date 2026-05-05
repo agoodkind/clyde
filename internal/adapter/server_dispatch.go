@@ -257,6 +257,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if cursorReq.GenerationID != "" {
 		corr = corr.WithCursorGenerationID(cursorReq.GenerationID)
 	}
+	// Backfill the per-chat key from the parsed cursor metadata when the
+	// header path did not resolve one. WithChatKey is a no-op if a key is
+	// already set, so a header-resolved key still wins.
+	corr = corr.WithChatKey(cursorReq.ConversationID)
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
 	req.Model = cursorReq.NormalizedModel

@@ -93,9 +93,16 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 		lockedFile := gklog.NewLockedWriteCloser(path, file)
 		handlers := []slog.Handler{slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: parseJSONMinLevel(level)})}
 		handlers = append(handlers, concernHandlers(concernRoot, parseJSONMinLevel(level), gklog.RotationConfig{})...)
+		router := buildTranscriptRouter(cfg.Transcript, concernRoot)
+		if router != nil {
+			handlers = append(handlers, router)
+		}
 		logger := slog.New(newCorrelationHandler(gklog.NewTeeHandler(handlers...)))
 		slog.SetDefault(logger.With("build", version.String()))
-		return lockedFile, nil
+		if router == nil {
+			return lockedFile, nil
+		}
+		return &transcriptRouterCloser{router: router, inner: lockedFile}, nil
 	}
 	// stdout is reserved for command output (so CLI subcommands like
 	// `clyde compact clone-for-test --print-name` produce machine-
@@ -120,12 +127,36 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 		MaxAgeDays: cfg.Rotation.MaxAgeDays,
 		Compress:   compress,
 	})...)
+	router := buildTranscriptRouter(cfg.Transcript, concernRoot)
+	if router != nil {
+		handlers = append(handlers, router)
+	}
 	logger, closer := gklog.New(gklog.Config{
 		BuildVersion: version.String(),
 		Handlers:     []slog.Handler{newCorrelationHandler(gklog.NewTeeHandler(handlers...))},
 	})
 	slog.SetDefault(logger)
-	return closer, nil
+	if router == nil {
+		return closer, nil
+	}
+	return &transcriptRouterCloser{router: router, inner: closer}, nil
+}
+
+// buildTranscriptRouter returns a configured router, or nil when the feature
+// is off (disabled or missing retention bounds). The router writes under
+// <concernRoot>/chats/.
+func buildTranscriptRouter(cfg config.LoggingTranscript, concernRoot string) *TranscriptRouter {
+	if !cfg.IsEnabled() {
+		return nil
+	}
+	mode := TranscriptMode(cfg.Mode)
+	if mode != TranscriptModeRaw {
+		mode = TranscriptModeSummary
+	}
+	return NewTranscriptRouter(TranscriptRouterConfig{
+		Root: filepath.Join(concernRoot, "chats"),
+		Mode: mode,
+	})
 }
 
 func WithConcern(logger *slog.Logger, concern string) *slog.Logger {
