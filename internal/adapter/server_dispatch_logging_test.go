@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -640,7 +641,7 @@ func newLoggingServer(t *testing.T, logging config.LoggingConfig, opts ...func(*
 	}
 
 	logBuffer := &bytes.Buffer{}
-	srv, err := New(cfg, logging, Deps{
+	srv, err := New(context.Background(), cfg, logging, Deps{
 		ScratchDir: func() string { return t.TempDir() },
 	}, slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{
 		Level: slog.LevelDebug,

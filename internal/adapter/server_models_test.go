@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -14,7 +15,7 @@ import (
 
 func TestHandleModelsIncludesLegacyAndOpenAIContextFields(t *testing.T) {
 	cfg := modelMatrixConfig()
-	srv, err := New(cfg, config.LoggingConfig{
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{
 		Body: config.LoggingBody{Mode: "off"},
 	}, Deps{
 		ScratchDir: func() string { return t.TempDir() },

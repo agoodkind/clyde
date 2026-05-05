@@ -95,6 +95,11 @@ type EventRenderer struct {
 	assistantTextLogged    bool
 	toolCallNames          []string
 	hasSubagentToolCall    bool
+	// upstreamResponseID is the most recent provider-assigned response id,
+	// captured via SetUpstreamResponseID. It is merged onto the
+	// correlation snapshot built from the per-call ctx so summary logs
+	// always carry the most recent upstream identifier.
+	upstreamResponseID string
 }
 
 // NewEventRenderer constructs a renderer with a background context.
@@ -131,6 +136,7 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 		reasoningBodyEmitted:   false,
 		lastReasoningItemID:    "",
 		lastReasoningEncrypted: "",
+		upstreamResponseID:     "",
 		assistantText:          assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
 		assistantTextLogged:    false,
 		toolCallNames:          nil,
@@ -180,7 +186,7 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 	}
 	logEvent := shouldLogEvent(ev)
 	if logEvent {
-		r.flushSuppressedEventSummaries()
+		r.flushSuppressedEventSummaries(r.logContext())
 		r.logNormalized(ev)
 	} else {
 		r.recordSuppressedEvent(ev)

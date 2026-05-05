@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -126,7 +127,7 @@ func TestAppendUsageNoticesToResponsePrependsSyntheticNotice(t *testing.T) {
 		}},
 	}
 
-	updated, ok := AppendUsageNoticesToResponse(response, []UsageNotice{{Text: "⚠️ Notice text."}}, json.Marshal)
+	updated, ok := AppendUsageNoticesToResponse(context.Background(), response, []UsageNotice{{Text: "⚠️ Notice text."}}, json.Marshal)
 	if !ok {
 		t.Fatalf("AppendUsageNoticesToResponse did not update response")
 	}

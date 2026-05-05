@@ -1091,7 +1091,7 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 			AnthropicMessagesURLOverride: mitmOverride,
 		},
 	}
-	if err := ctrl.apply(launchConfigFromGlobal(cfg), true, inherited); err != nil {
+	if err := ctrl.apply(context.Background(), launchConfigFromGlobal(cfg), true, inherited); err != nil {
 		return nil, nil, err
 	}
 
@@ -1166,7 +1166,7 @@ func watchAdapterConfig(log *slog.Logger, ctrl *adapterController) (func(), erro
 				)
 				return
 			}
-			if err := ctrl.apply(launchConfigFromGlobal(cfg), false, nil); err != nil {
+			if err := ctrl.apply(ctx, launchConfigFromGlobal(cfg), false, nil); err != nil {
 				log.Warn("adapter.config_reload_apply_failed",
 					"component", "adapter",
 					"err", err,
@@ -1240,7 +1240,7 @@ func isAdapterConfigEvent(event fsnotify.Event, tomlPath string) bool {
 		event.Has(fsnotify.Chmod)
 }
 
-func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inherited net.Listener) error {
+func (c *adapterController) apply(ctx context.Context, next adapterLaunchConfig, startup bool, inherited net.Listener) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	prev := c.current
@@ -1264,7 +1264,7 @@ func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inheri
 	var srv *adapter.Server
 	var err error
 	if next.Enabled {
-		srv, err = adapter.New(next.Adapter, next.Logging, c.deps, c.log)
+		srv, err = adapter.New(ctx, next.Adapter, next.Logging, c.deps, c.log)
 		if err != nil {
 			c.log.Error("adapter.registry.invalid_config",
 				"component", "adapter",
@@ -1305,7 +1305,7 @@ func (c *adapterController) apply(next adapterLaunchConfig, startup bool, inheri
 			return fmt.Errorf("adapter listen %s: %w", srv.Addr(), err)
 		}
 	}
-	proc := startAdapterProcess(c.log, srv, lis)
+	proc := startAdapterProcess(ctx, c.log, srv, lis)
 	c.runtimeLogging.Set(next.Logging)
 	c.proc = proc
 	c.current = next
@@ -1432,8 +1432,11 @@ func stopAdapterProcess(proc *adapterProcess, timeout time.Duration) {
 	}
 }
 
-func startAdapterProcess(log *slog.Logger, srv *adapter.Server, lis net.Listener) *adapterProcess {
-	ctx, cancel := context.WithCancel(context.Background())
+func startAdapterProcess(parent context.Context, log *slog.Logger, srv *adapter.Server, lis net.Listener) *adapterProcess {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	go func() {
 		defer func() {

@@ -118,7 +118,7 @@ func (s *Server) dispatchCodexProviderStream(
 			Err:        runErr.Error(),
 		})
 		if writer.headersWritten {
-			if err := writer.writeStreamErrorBody(errorBody); err != nil {
+			if err := writer.writeStreamErrorBody(ctx, errorBody); err != nil {
 				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
 					slog.String("backend", "codex"),
 					slog.String("request_id", reqID),
@@ -149,7 +149,7 @@ func (s *Server) dispatchCodexProviderStream(
 		usage.MaxTokens = model.Context
 	}
 	result.Usage = usage
-	if err := writer.finalizeStream(result, req.StreamOptions != nil && req.StreamOptions.IncludeUsage); err != nil {
+	if err := writer.finalizeStream(ctx, result, req.StreamOptions != nil && req.StreamOptions.IncludeUsage); err != nil {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_error",
 			slog.String("backend", "codex"),
 			slog.String("request_id", reqID),
@@ -245,7 +245,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
 	}
-	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(collector.events, notices)
+	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(ctx, collector.events, notices)
 	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, mergedEvents, runResult)
 	usage := result.Usage
 	if model.Context > 0 {
