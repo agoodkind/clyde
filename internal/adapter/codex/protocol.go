@@ -14,7 +14,6 @@ import (
 	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
-	"goodkind.io/clyde/internal/slogger"
 )
 
 type Reasoning struct {
@@ -310,7 +309,6 @@ type sseEventParser struct {
 	nextToolIndex             int
 	aggregate                 sseAggregateCollector
 	upstreamEventSeq          int
-	normalizedEventSeq        int
 }
 
 func newSSEEventParser(ctx context.Context, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) *sseEventParser {
@@ -416,7 +414,7 @@ func (p *sseEventParser) handleEvent(eventName, payload string, raw transportStr
 
 func (p *sseEventParser) handleOutputTextDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
 	if delta := raw.Delta; delta != "" {
-		err := p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta})
+		err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta})
 		if err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
@@ -445,7 +443,7 @@ func (p *sseEventParser) handleOutputItemEvent(eventName string, raw transportSt
 }
 
 func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transportStreamEvent, item transportItem) ssePayloadResult {
-	if err := p.emitReasoningPresence(eventName, raw.Sequence, item.string("id")); err != nil {
+	if err := p.emitReasoningPresence(item.string("id")); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	if eventName != "response.output_item.done" || item == nil {
@@ -457,7 +455,7 @@ func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transpo
 		} else {
 			p.reasoningTextDeltaSeen = true
 		}
-		if err := p.emitNormalized(eventName, raw.Sequence, ev); err != nil {
+		if err := p.emitNormalized(ev); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -476,7 +474,7 @@ func (p *sseEventParser) handleFunctionCallOutputItem(eventName string, raw tran
 		state.NativeName = name
 	}
 	if created {
-		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -519,7 +517,7 @@ func (p *sseEventParser) finishFunctionCallOutputItem(eventName string, raw tran
 		return p.finishShellCommandOutputItem(eventName, raw, itemType, itemID, args, state)
 	}
 	if eventName == "response.output_item.done" && args != "" && !state.ArgumentDeltaSeen {
-		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 		state.ArgumentsEmitted = true
@@ -532,7 +530,7 @@ func (p *sseEventParser) finishShellCommandOutputItem(eventName string, raw tran
 		args = state.Arguments.String()
 	}
 	if converted, ok := ShellArgsFromShellCommandArguments(args); ok && !state.ArgumentsEmitted {
-		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 		state.ArgumentsEmitted = true
@@ -555,7 +553,7 @@ func (p *sseEventParser) handleLocalShellOutputItem(eventName string, raw transp
 	state, created := p.getToolState(itemID, callID, "Shell")
 	p.observeActualToolCallName(state.Name)
 	if created {
-		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -591,7 +589,7 @@ func (p *sseEventParser) handleCustomToolOutputItem(eventName string, raw transp
 		p.observeActualToolCallName(state.Name)
 	}
 	if created {
-		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -618,7 +616,7 @@ func (p *sseEventParser) emitNativeParsedArguments(eventName string, raw transpo
 	if state.ArgumentsEmitted {
 		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
 	}
-	if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	state.ArgumentsEmitted = true
@@ -638,7 +636,7 @@ func (p *sseEventParser) handleFunctionCallArgumentsDelta(eventName string, raw 
 	if state.NativeName == "shell_command" {
 		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
 	}
-	if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
@@ -651,7 +649,7 @@ func (p *sseEventParser) handleCustomToolCallInputDelta(eventName string, raw tr
 	state, created := p.getToolState(itemID, callID, "ApplyPatch")
 	p.observeActualToolCallName(state.Name)
 	if created {
-		if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -661,7 +659,7 @@ func (p *sseEventParser) handleCustomToolCallInputDelta(eventName string, raw tr
 	state.Input.WriteString(delta)
 	state.ArgumentDeltaSeen = true
 	p.out.SetFinishReason("tool_calls")
-	if err := p.emitToolCall(eventName, raw.Sequence, state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	state.ArgumentsEmitted = true
@@ -683,7 +681,7 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 	} else {
 		p.reasoningTextDeltaSeen = true
 	}
-	err := p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{
+	err := p.emitNormalized(adapterrender.Event{
 		Kind:          adapterrender.EventReasoningDelta,
 		Text:          raw.Delta,
 		ReasoningKind: kind,
@@ -696,7 +694,7 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 }
 
 func (p *sseEventParser) handleReasoningSummaryPartAdded(eventName string, raw transportStreamEvent) ssePayloadResult {
-	if err := p.emitReasoningPresence(eventName, raw.Sequence, raw.ItemID); err != nil {
+	if err := p.emitReasoningPresence(raw.ItemID); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
@@ -717,11 +715,11 @@ func (p *sseEventParser) handleResponseCompleted(eventName, payload string, raw 
 		}
 	}
 	if reasoningTokensFromEvent(raw) > 0 && !p.reasoningSignaled {
-		if err := p.emitReasoningPresence(eventName, raw.Sequence, ""); err != nil {
+		if err := p.emitReasoningPresence(""); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	if err := p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
+	if err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	p.out.ReasoningSignaled = p.reasoningSignaled
@@ -744,7 +742,7 @@ func (p *sseEventParser) handleResponseFailed(eventName string, raw transportStr
 	}
 	err := codexResponseFailedError(msg)
 	if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
-		_ = p.emitNormalized(eventName, raw.Sequence, adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
+		_ = p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
 	}
 	p.logAggregate(p.out.ResponseID, "failed", err)
 	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
@@ -761,58 +759,24 @@ func (p *sseEventParser) logAggregate(responseID, status string, err error) {
 	p.aggregate.Log(p.ctx, p.logCtx, responseID, status, errText)
 }
 
-func (p *sseEventParser) emitNormalized(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) error {
-	p.logParserEmit(upstreamEventType, upstreamSequence, ev)
+func (p *sseEventParser) emitNormalized(ev adapterrender.Event) error {
 	return p.emit(ev)
 }
 
-func (p *sseEventParser) logParserEmit(upstreamEventType string, upstreamSequence int, ev adapterrender.Event) {
-	p.normalizedEventSeq++
-	attrs := []slog.Attr{
-		slog.String("component", "adapter"),
-		slog.String("subcomponent", "codex"),
-		slog.String("request_id", p.logCtx.RequestID),
-		slog.String("upstream_event_type", strings.TrimSpace(upstreamEventType)),
-		slog.String("normalized_event_kind", string(ev.Kind)),
-		slog.Int("upstream_event_sequence", p.upstreamEventSeq),
-		slog.Int("normalized_event_sequence", p.normalizedEventSeq),
-	}
-	if upstreamSequence > 0 {
-		attrs = append(attrs, slog.Int("upstream_sequence_number", upstreamSequence))
-	}
-	if ev.ItemID != "" {
-		attrs = append(attrs, slog.String("item_id", ev.ItemID))
-	}
-	if ev.ItemType != "" {
-		attrs = append(attrs, slog.String("item_type", ev.ItemType))
-	}
-	if ev.ReasoningKind != "" {
-		attrs = append(attrs, slog.String("reasoning_kind", ev.ReasoningKind))
-	}
-	if p.logCtx.CursorRequestID != "" {
-		attrs = append(attrs, slog.String("cursor_request_id", p.logCtx.CursorRequestID))
-	}
-	if p.logCtx.ConversationID != "" {
-		attrs = append(attrs, slog.String("conversation_id", p.logCtx.ConversationID))
-	}
-	attrs = append(attrs, p.logCtx.Correlation.Attrs()...)
-	logCodexEventWithConcern(p.ctx, slog.LevelDebug, "adapter.codex.parser.normalized_event_emitted", slogger.ConcernAdapterProviderCodexWS, attrs)
-}
-
-func (p *sseEventParser) emitReasoningPresence(upstreamEventType string, upstreamSequence int, itemID string) error {
+func (p *sseEventParser) emitReasoningPresence(itemID string) error {
 	if p.reasoningSignaled {
 		return nil
 	}
 	p.reasoningSignaled = true
 	p.reasoningVisible = true
-	return p.emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
+	return p.emitNormalized(adapterrender.Event{
 		Kind:     adapterrender.EventReasoningSignaled,
 		ItemID:   strings.TrimSpace(itemID),
 		ItemType: "reasoning",
 	})
 }
 
-func (p *sseEventParser) emitToolCall(upstreamEventType string, upstreamSequence int, state *toolCallState, fn adapteropenai.ToolCallFunction) error {
+func (p *sseEventParser) emitToolCall(state *toolCallState, fn adapteropenai.ToolCallFunction) error {
 	if state == nil {
 		return nil
 	}
@@ -825,7 +789,7 @@ func (p *sseEventParser) emitToolCall(upstreamEventType string, upstreamSequence
 		tc.Type = state.Type
 		state.IdentityEmitted = true
 	}
-	return p.emitNormalized(upstreamEventType, upstreamSequence, adapterrender.Event{
+	return p.emitNormalized(adapterrender.Event{
 		Kind:      adapterrender.EventToolCallDelta,
 		ToolCalls: []adapteropenai.ToolCall{tc},
 	})

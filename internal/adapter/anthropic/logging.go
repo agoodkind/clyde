@@ -94,7 +94,6 @@ type responseEvent struct {
 	RateLimits   []rateLimitAttr
 	RetryAfter   string
 	Body         string
-	BodyB64      string
 	Err          string
 }
 
@@ -122,9 +121,6 @@ func (e responseEvent) toSlogAttrs() []any {
 	}
 	if e.Body != "" {
 		attrs = append(attrs, "body", e.Body)
-	}
-	if e.BodyB64 != "" {
-		attrs = append(attrs, "body_b64", e.BodyB64)
 	}
 	if e.Err != "" {
 		attrs = append(attrs, "err", e.Err)

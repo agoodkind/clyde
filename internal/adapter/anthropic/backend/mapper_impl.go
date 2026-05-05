@@ -111,6 +111,7 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (An
 		choiceType = toolChoice.Type
 		choiceName = toolChoice.Name
 	}
+	toolUseCount, toolResultCount := countToolBlocks(out)
 	anthropicBackendLog.Logger().Info("adapter.anthropic.request.translated",
 		"subcomponent", "anthropic",
 		"model", req.Model,
@@ -120,6 +121,8 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (An
 		"tool_names", toolNames,
 		"tool_choice_type", choiceType,
 		"tool_choice_name", choiceName,
+		"tool_use_count", toolUseCount,
+		"tool_result_count", toolResultCount,
 		"stream", req.Stream,
 	)
 
@@ -253,14 +256,6 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				ToolUseID:     p.ToolUseID,
 				ResultContent: result,
 			})
-			log.Debug("adapter.anthropic.tool_result.translated",
-				"subcomponent", "anthropic",
-				"msg_idx", msgIdx,
-				"part_idx", partIdx,
-				"tool_use_id", p.ToolUseID,
-				"content_bytes", len(result),
-				"carrier", "user_part",
-			)
 		default:
 			log.Warn("adapter.anthropic.user_part.unknown_type",
 				"subcomponent", "anthropic",
@@ -299,6 +294,23 @@ func flattenToolResultContent(raw json.RawMessage) string {
 		return b.String()
 	}
 	return string(raw)
+}
+
+// countToolBlocks tallies tool_use and tool_result blocks across the
+// translated Anthropic message slice. Used as a per-turn aggregate on
+// the lifecycle log line so per-block translator chatter is unnecessary.
+func countToolBlocks(out []AnthMessage) (toolUse, toolResult int) {
+	for _, msg := range out {
+		for _, b := range msg.Content {
+			switch b.Type {
+			case "tool_use":
+				toolUse++
+			case "tool_result":
+				toolResult++
+			}
+		}
+	}
+	return toolUse, toolResult
 }
 
 func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
@@ -357,15 +369,6 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 				Name:  p.Name,
 				Input: input,
 			})
-			log.Debug("adapter.anthropic.tool_use.translated",
-				"subcomponent", "anthropic",
-				"msg_idx", msgIdx,
-				"part_idx", partIdx,
-				"tool_use_id", p.ID,
-				"tool_name", p.Name,
-				"input_bytes", len(input),
-				"carrier", "assistant_part",
-			)
 		case "thinking":
 			continue
 		default:

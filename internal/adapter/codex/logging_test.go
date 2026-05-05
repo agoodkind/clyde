@@ -2,7 +2,6 @@ package codex
 
 import (
 	"context"
-	"encoding/base64"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,62 +37,49 @@ func TestBodyLogConfigResolveDefaults(t *testing.T) {
 }
 
 func TestApplyBodyModeOff(t *testing.T) {
-	body, b64, truncated := applyBodyMode([]byte(`{"hello":"world"}`), BodyLogOff, 1024)
-	if body != "" || b64 != "" || truncated {
-		t.Fatalf("off mode should drop body: body=%q b64=%q truncated=%v", body, b64, truncated)
+	body, truncated := applyBodyMode([]byte(`{"hello":"world"}`), BodyLogOff, 1024)
+	if body != "" || truncated {
+		t.Fatalf("off mode should drop body: body=%q truncated=%v", body, truncated)
 	}
 }
 
 func TestApplyBodyModeSummaryDropsBody(t *testing.T) {
-	body, b64, truncated := applyBodyMode([]byte(`{"hello":"world"}`), BodyLogSummary, 1024)
-	if body != "" || b64 != "" || truncated {
-		t.Fatalf("summary mode should not leak body: body=%q b64=%q truncated=%v", body, b64, truncated)
+	body, truncated := applyBodyMode([]byte(`{"hello":"world"}`), BodyLogSummary, 1024)
+	if body != "" || truncated {
+		t.Fatalf("summary mode should not leak body: body=%q truncated=%v", body, truncated)
 	}
 }
 
 func TestApplyBodyModeWhitelistTruncates(t *testing.T) {
 	raw := []byte(strings.Repeat("a", 5000))
-	body, b64, truncated := applyBodyMode(raw, BodyLogWhitelist, 1024)
+	body, truncated := applyBodyMode(raw, BodyLogWhitelist, 1024)
 	if !truncated {
 		t.Fatalf("whitelist should truncate large body")
 	}
 	if len(body) != 1024 {
 		t.Fatalf("body len=%d want 1024", len(body))
 	}
-	if b64 != "" {
-		t.Fatalf("whitelist should not emit base64; got len=%d", len(b64))
-	}
 }
 
-func TestApplyBodyModeRawIncludesB64(t *testing.T) {
+func TestApplyBodyModeRawIncludesBody(t *testing.T) {
 	raw := []byte(`{"k":"v"}`)
-	body, b64, truncated := applyBodyMode(raw, BodyLogRaw, 1024)
+	body, truncated := applyBodyMode(raw, BodyLogRaw, 1024)
 	if truncated {
 		t.Fatalf("small body should not be truncated")
 	}
 	if body != string(raw) {
 		t.Fatalf("body=%q want %q", body, raw)
 	}
-	if b64 == "" {
-		t.Fatalf("raw mode should emit b64")
-	}
 }
 
-func TestApplyBodyModeRawCapsB64(t *testing.T) {
+func TestApplyBodyModeRawCapsBody(t *testing.T) {
 	raw := []byte(strings.Repeat("a", 2048))
-	body, b64, truncated := applyBodyMode(raw, BodyLogRaw, 1024)
+	body, truncated := applyBodyMode(raw, BodyLogRaw, 1024)
 	if !truncated {
 		t.Fatalf("large raw body should be truncated")
 	}
 	if len(body) != 1024 {
 		t.Fatalf("body len=%d want 1024", len(body))
-	}
-	decoded, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		t.Fatalf("decode body_b64: %v", err)
-	}
-	if len(decoded) != 1024 {
-		t.Fatalf("decoded b64 len=%d want 1024", len(decoded))
 	}
 }
 
@@ -130,7 +116,6 @@ func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 		URL:             "https://example/codex/v1/responses",
 		BodyBytes:       42,
 		Body:            `{"hello":"world"}`,
-		BodyB64:         "eyJoZWxsbyI6IndvcmxkIn0=",
 	}
 	logCodexEvent(context.Background(), slog.LevelDebug, "codex.responses.request", ev.toSlogAttrs())
 
@@ -433,8 +418,11 @@ func TestLogWebsocketFrameUsesRuntimeBodyLogProvider(t *testing.T) {
 		t.Fatalf("read raw sink: %v", err)
 	}
 	text = string(got)
-	if !strings.Contains(text, `"request_id":"req-runtime-raw"`) || !strings.Contains(text, `"body_b64":`) {
-		t.Fatalf("raw event missing body_b64 after provider change: %s", text)
+	if !strings.Contains(text, `"request_id":"req-runtime-raw"`) || !strings.Contains(text, `"body":`) {
+		t.Fatalf("raw event missing body after provider change: %s", text)
+	}
+	if strings.Contains(text, `"body_b64":`) {
+		t.Fatalf("raw event should not include body_b64: %s", text)
 	}
 	if !strings.Contains(text, `"body_truncated":true`) {
 		t.Fatalf("raw event should honor runtime max_kb: %s", text)
