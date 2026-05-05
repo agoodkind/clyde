@@ -34,30 +34,6 @@ func TestFormatSyntheticContentEmptyBodyReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestStripSyntheticContentRemovesAllKindsButKeepsAnswer(t *testing.T) {
-	thinking := FormatSyntheticContent(SyntheticReasoning, "internal scratch")
-	notice := FormatSyntheticContent(SyntheticNotice, "⚠️ Notice text.")
-	mixed := thinking + "\n\nFinal answer.\n\n" + notice + "more answer."
-
-	got := StripSyntheticContent(mixed)
-	if strings.Contains(got, "clyde-thinking") || strings.Contains(got, "clyde-notice") {
-		t.Fatalf("strip left a marker: %q", got)
-	}
-	if !strings.Contains(got, "Final answer.") || !strings.Contains(got, "more answer.") {
-		t.Fatalf("strip removed real text: %q", got)
-	}
-}
-
-func TestStripSyntheticContentIsIdempotentAndSafeWithoutMarkers(t *testing.T) {
-	answer := "Just a regular answer with no markers."
-	if got := StripSyntheticContent(answer); got != answer {
-		t.Fatalf("strip mutated text: %q", got)
-	}
-	if got := StripSyntheticContent(""); got != "" {
-		t.Fatalf("empty strip mutated: %q", got)
-	}
-}
-
 func TestExtractSyntheticPartsSingleThinking(t *testing.T) {
 	in := FormatSyntheticContent(SyntheticReasoning, "internal scratch")
 	parts := ExtractSyntheticParts(in)
@@ -134,24 +110,6 @@ func TestExtractSyntheticPartsIdempotentOnPlainText(t *testing.T) {
 func TestExtractSyntheticPartsEmptyReturnsNil(t *testing.T) {
 	if got := ExtractSyntheticParts(""); got != nil {
 		t.Fatalf("empty input should return nil, got %#v", got)
-	}
-}
-
-func TestStripSyntheticContentMatchesExtractTextJoin(t *testing.T) {
-	thinking := FormatSyntheticContent(SyntheticReasoning, "scratch")
-	notice := FormatSyntheticContent(SyntheticNotice, "notice body")
-	in := thinking + "\n\nFinal answer.\n\n" + notice + "trailing."
-
-	stripped := StripSyntheticContent(in)
-	parts := ExtractSyntheticParts(in)
-	var joined strings.Builder
-	for _, p := range parts {
-		if p.Kind == SyntheticKindText {
-			joined.WriteString(p.Body)
-		}
-	}
-	if joined.String() != stripped {
-		t.Fatalf("strip and extract-text-join disagree:\n strip=%q\n join=%q", stripped, joined.String())
 	}
 }
 

@@ -12,6 +12,21 @@ import (
 	"goodkind.io/clyde/internal/config"
 )
 
+// joinTextParts concatenates the text parts produced by
+// [adapterrender.ExtractSyntheticParts]. The runtime tests use it to assert
+// that synthetic envelopes are removed from a rendered string while the
+// non-envelope text is preserved.
+func joinTextParts(parts []adapterrender.SyntheticPart) string {
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Kind != adapterrender.SyntheticKindText {
+			continue
+		}
+		b.WriteString(p.Body)
+	}
+	return b.String()
+}
+
 func TestUsageNoticeGateFormatsWarningWithLocalResetTime(t *testing.T) {
 	location := time.FixedZone("PDT", -7*60*60)
 	now := time.Date(2026, time.May, 3, 18, 0, 0, 0, location)
@@ -95,8 +110,8 @@ func TestFormattedNoticeTextWrapsNoticeInSyntheticEnvelope(t *testing.T) {
 	if got != "\n\n"+envelope {
 		t.Fatalf("formatted notice=%q want leading blank line plus synthetic envelope %q", got, envelope)
 	}
-	if strings.TrimSpace(adapterrender.StripSyntheticContent(got)) != "" {
-		t.Fatalf("strip should leave only structural whitespace, got %q", adapterrender.StripSyntheticContent(got))
+	if rest := joinTextParts(adapterrender.ExtractSyntheticParts(got)); strings.TrimSpace(rest) != "" {
+		t.Fatalf("text-only join should be empty whitespace, got %q", rest)
 	}
 }
 
@@ -128,8 +143,8 @@ func TestAppendUsageNoticesToResponsePrependsSyntheticNotice(t *testing.T) {
 	if !strings.HasSuffix(strings.TrimRight(got, "\n"), "answer") {
 		t.Fatalf("answer should remain at end: %q", got)
 	}
-	stripped := adapterrender.StripSyntheticContent(got)
+	stripped := joinTextParts(adapterrender.ExtractSyntheticParts(got))
 	if strings.TrimSpace(stripped) != "answer" {
-		t.Fatalf("strip should leave only the answer, got %q", stripped)
+		t.Fatalf("text-only join should leave only the answer, got %q", stripped)
 	}
 }

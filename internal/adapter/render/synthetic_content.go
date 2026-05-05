@@ -8,9 +8,10 @@
 // HTML-comment marker pairs and emit them as ordinary delta.content. Every
 // surface that emits synthetic content uses [FormatSyntheticContent], and
 // every backend that needs to consume these envelopes before reusing the
-// transcript upstream uses [ExtractSyntheticParts] (typed) or
-// [StripSyntheticContent] (text-only convenience). Adding a new synthetic
-// block is a single entry in [syntheticContentSpecs].
+// transcript upstream uses [ExtractSyntheticParts] and decides per kind
+// whether to drop, materialize as a native upstream block, or keep as
+// plain text. Adding a new synthetic block is a single entry in
+// [syntheticContentSpecs].
 package render
 
 import (
@@ -280,31 +281,4 @@ func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
 		return parts
 	}
 	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text})
-}
-
-// StripSyntheticContent removes every recognized synthetic envelope from text
-// in one pass so backend mappers can call it once before reusing assistant
-// content for an upstream request. It is idempotent and falls through cleanly
-// when no markers are present.
-//
-// Implemented as a thin wrapper over [ExtractSyntheticParts] joining only Text
-// parts so the two surfaces stay consistent.
-func StripSyntheticContent(text string) string {
-	if text == "" {
-		return ""
-	}
-	parts := ExtractSyntheticParts(text)
-	if len(parts) == 1 && parts[0].Kind == SyntheticKindText {
-		// Fast path: no envelopes, return the original input unchanged so
-		// idempotency on already-stripped text is byte-identical.
-		return text
-	}
-	var b strings.Builder
-	for _, p := range parts {
-		if p.Kind != SyntheticKindText {
-			continue
-		}
-		b.WriteString(p.Body)
-	}
-	return b.String()
 }

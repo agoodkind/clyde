@@ -19,8 +19,8 @@ import (
 // Do not remove the delta.content emission just because reasoning_content
 // exists. Without the marker-wrapped content path, Cursor BYOK users may see
 // no thinking at all. Before the next upstream request, the per-backend
-// mapper calls [StripSyntheticContent] to remove this synthetic envelope from
-// the cached assistant transcript so the upstream bytes stay byte-stable.
+// mapper calls [ExtractSyntheticParts] and materializes each kind per its
+// upstream contract (Anthropic emits a native thinking block; Codex drops).
 func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
 	text := strings.TrimSpace(ev.Text)
 	if text == "" && ev.Text == "" {
