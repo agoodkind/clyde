@@ -143,6 +143,13 @@ type WebsocketTransportConfig struct {
 	// frames carrying a reasoning item. Full emits the body on every
 	// inbound frame. Routed to adapter.providers.codex.wire_capture.
 	WireCaptureMode WireCaptureMode
+	// RoundTripEncrypted controls whether the SSE parser surfaces the
+	// encrypted_content blob from completed reasoning items on
+	// EventReasoningFinished. RoundTripEncryptedRoundTrip (the
+	// codex-rs default) keeps the blob; RoundTripEncryptedDrop strips
+	// it so the synthetic-thinking close marker stays bare. Empty
+	// resolves to RoundTripEncryptedRoundTrip.
+	RoundTripEncrypted RoundTripEncrypted
 }
 
 // Mirrors the observed Responses websocket envelope from
@@ -313,7 +320,8 @@ func writeAndParseWebsocketRequest(
 		Warmup:             warmup,
 	}
 	synthetic := streamWebsocketAsSyntheticSSE(ctx, conn, logCtx, cfg.WireCaptureMode)
-	result, err := ParseSSEEventsWithLogging(ctx, synthetic, emit, logCtx)
+	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop}
+	result, err := ParseSSEEventsWithOptions(ctx, synthetic, emit, logCtx, parseOpts)
 	if err == nil || strings.TrimSpace(result.ResponseID) != "" || result.UsageTelemetry.UsagePresent {
 		LogUsageTelemetry(ctx, cfg.Log, result.UsageTelemetry, CodexUsageLogContext{
 			RequestID:          cfg.RequestID,

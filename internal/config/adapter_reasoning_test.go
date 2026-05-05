@@ -76,18 +76,11 @@ inbound_thinking = "drop"
 [adapter.codex.reasoning]
 round_trip_summary = "plain_text_concat"
 round_trip_encrypted = "drop"
-
-[adapter.codex.reasoning.store]
-max_age_days = 7
-max_chats = 50
 `)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Adapter.Anthropic.Reasoning.ResolvedInboundThinking()).To(Equal(config.AnthropicInboundThinkingDrop))
 			Expect(cfg.Adapter.Codex.Reasoning.ResolvedRoundTripSummary()).To(Equal(config.CodexRoundTripSummaryPlainText))
 			Expect(cfg.Adapter.Codex.Reasoning.ResolvedRoundTripEncrypted()).To(Equal(config.CodexRoundTripEncryptedDrop))
-			Expect(cfg.Adapter.Codex.Reasoning.Store.MaxAgeDays).To(Equal(7))
-			Expect(cfg.Adapter.Codex.Reasoning.Store.MaxChats).To(Equal(50))
-			Expect(cfg.Adapter.Codex.Reasoning.Store.IsEnabled()).To(BeTrue())
 		})
 
 		It("rejects an unknown anthropic inbound_thinking value", func() {
@@ -115,24 +108,6 @@ round_trip_encrypted = "maybe"
 `)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("adapter.codex.reasoning.round_trip_encrypted"))
-		})
-
-		It("rejects negative store retention", func() {
-			_, err := configWithReasoningTOML(`
-[adapter.codex.reasoning.store]
-max_age_days = -1
-`)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("max_age_days"))
-		})
-
-		It("treats a zero-valued store as feature-off", func() {
-			cfg, err := configWithReasoningTOML(`
-[adapter.codex.reasoning]
-round_trip_summary = "drop"
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Adapter.Codex.Reasoning.Store.IsEnabled()).To(BeFalse())
 		})
 	})
 

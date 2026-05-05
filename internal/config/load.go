@@ -443,12 +443,6 @@ func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 		return fmt.Errorf("adapter.codex.reasoning.round_trip_encrypted must be one of round_trip|drop (got %q)", adapter.Codex.Reasoning.RoundTripEncrypted)
 	}
 
-	if adapter.Codex.Reasoning.Store.MaxAgeDays < 0 {
-		return fmt.Errorf("adapter.codex.reasoning.store.max_age_days must be >= 0")
-	}
-	if adapter.Codex.Reasoning.Store.MaxChats < 0 {
-		return fmt.Errorf("adapter.codex.reasoning.store.max_chats must be >= 0")
-	}
 	return nil
 }
 

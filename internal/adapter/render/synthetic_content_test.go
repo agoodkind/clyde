@@ -156,6 +156,50 @@ func TestExtractSyntheticPartsLegacyMarkerHasEmptyRef(t *testing.T) {
 	if parts[0].Ref != "" {
 		t.Fatalf("legacy marker should yield empty ref, got %q", parts[0].Ref)
 	}
+	if parts[0].Encrypted != "" {
+		t.Fatalf("legacy marker should yield empty encrypted, got %q", parts[0].Encrypted)
+	}
+}
+
+func TestSyntheticContentCloseWithEncryptedEmbedsAttribute(t *testing.T) {
+	close := SyntheticContentCloseWithEncrypted(SyntheticReasoning, "ENCBYTES")
+	if !strings.Contains(close, `<!--/clyde-thinking data-encrypted="ENCBYTES"-->`) {
+		t.Fatalf("close with encrypted should embed attribute: %q", close)
+	}
+}
+
+func TestSyntheticContentCloseWithEmptyEncryptedMatchesLegacyShape(t *testing.T) {
+	withEmpty := SyntheticContentCloseWithEncrypted(SyntheticReasoning, "")
+	legacy := SyntheticContentClose(SyntheticReasoning)
+	if withEmpty != legacy {
+		t.Fatalf("empty encrypted must match legacy close shape:\n with-encrypted: %q\n legacy:        %q", withEmpty, legacy)
+	}
+}
+
+// End-to-end round-trip: a marker emitted with both data-ref on the open
+// AND data-encrypted on the close survives ExtractSyntheticParts unchanged.
+// This is the contract Cursor's transcript relies on to carry the
+// codex-rs encrypted_content blob between turns without an external store.
+func TestExtractSyntheticPartsRoundTripsEncryptedAttribute(t *testing.T) {
+	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_inline") +
+		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "deep thoughts", true) +
+		SyntheticContentCloseWithEncrypted(SyntheticReasoning, "OPAQUE_BASE64_BLOB==")
+	parts := ExtractSyntheticParts(in)
+	if len(parts) != 1 {
+		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
+	}
+	if parts[0].Kind != SyntheticKindThinking {
+		t.Fatalf("kind=%q want %q", parts[0].Kind, SyntheticKindThinking)
+	}
+	if parts[0].Ref != "rs_inline" {
+		t.Fatalf("ref=%q want rs_inline", parts[0].Ref)
+	}
+	if parts[0].Body != "deep thoughts" {
+		t.Fatalf("body=%q want deep thoughts", parts[0].Body)
+	}
+	if parts[0].Encrypted != "OPAQUE_BASE64_BLOB==" {
+		t.Fatalf("encrypted=%q want OPAQUE_BASE64_BLOB==", parts[0].Encrypted)
+	}
 }
 
 func TestFormatSyntheticContentDeltaWithRefEmbedsAttributeOnOpen(t *testing.T) {

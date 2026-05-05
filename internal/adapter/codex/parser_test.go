@@ -173,7 +173,11 @@ func TestParseSSEEmitsReasoningFromDoneItemContent(t *testing.T) {
 	if strings.Contains(got, "\n> Thinking...") {
 		t.Fatalf("thinking block should not include placeholder body: %q", got)
 	}
-	if strings.Count(got, "<!--clyde-thinking") != 1 || strings.Count(got, "<!--/clyde-thinking-->") != 1 {
+	// The close marker may carry an optional `data-encrypted` attribute
+	// when the reasoning item brought an encrypted_content blob; either
+	// the bare or the encrypted-bearing form counts as a close.
+	closeCount := strings.Count(got, "<!--/clyde-thinking-->") + strings.Count(got, "<!--/clyde-thinking data-encrypted=")
+	if strings.Count(got, "<!--clyde-thinking") != 1 || closeCount != 1 {
 		t.Fatalf("thinking envelope count mismatch: %q", got)
 	}
 }
@@ -798,10 +802,10 @@ func TestParseSSEEventsEmitsNormalizedSequence(t *testing.T) {
 		"",
 	}, "\n") + "\n")
 	var events []adapterrender.Event
-	res, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
+	res, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
 		events = append(events, ev)
 		return nil
-	}, sseInstrumentationContext{})
+	}, sseInstrumentationContext{}, SSEParseOptions{DropEncryptedContent: false})
 	if err != nil {
 		t.Fatalf("ParseSSEEvents: %v", err)
 	}
@@ -873,14 +877,14 @@ func TestCanonicalContinuationDoesNotEquateMappedToolNames(t *testing.T) {
 func collectSSE(stream *strings.Reader) (string, RunResult, error) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder
-	res, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
+	res, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
 		for _, ch := range r.HandleEvent(ev) {
 			if len(ch.Choices) > 0 {
 				got.WriteString(ch.Choices[0].Delta.Content)
 			}
 		}
 		return nil
-	}, sseInstrumentationContext{})
+	}, sseInstrumentationContext{}, SSEParseOptions{DropEncryptedContent: false})
 	return got.String(), res, err
 }
 
@@ -891,10 +895,10 @@ func parseSSEChunksForTest(stream *strings.Reader) ([]adapteropenai.StreamChunk,
 func parseSSEChunksForTestWithLog(stream *strings.Reader, logCtx sseInstrumentationContext) ([]adapteropenai.StreamChunk, RunResult, error) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got []adapteropenai.StreamChunk
-	res, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
+	res, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
 		got = append(got, r.HandleEvent(ev)...)
 		return nil
-	}, logCtx)
+	}, logCtx, SSEParseOptions{DropEncryptedContent: false})
 	return got, res, err
 }
 

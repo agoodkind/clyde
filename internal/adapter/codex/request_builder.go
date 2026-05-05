@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -105,22 +104,21 @@ type RequestBuilderConfig struct {
 	RoundTripSummary RoundTripSummary
 	// RoundTripEncrypted picks the inbound shape for the encrypted_content
 	// half of a round-tripped synthetic thinking envelope. Empty resolves
-	// to [RoundTripEncryptedRoundTrip] per codex-rs.
+	// to [RoundTripEncryptedRoundTrip] per codex-rs. The encrypted blob
+	// itself rides inline on the synthetic close marker
+	// (`data-encrypted="..."`) so persistence is owned by Cursor's
+	// transcript; this lever only decides whether to forward what is
+	// already on the marker.
 	RoundTripEncrypted RoundTripEncrypted
-	// ReasoningStoreGet is the read side of the encrypted_content cache.
-	// Optional; nil disables lookup (every part is a miss).
-	ReasoningStoreGet ReasoningStoreGetter
-	// ChatKey is the per-chat partition key for ReasoningStoreGet. Empty
-	// disables lookup.
-	ChatKey string
 }
 
 // reasoningInputItem is the typed wire shape for a Codex Responses
 // `reasoning` input item, mirroring codex-rs's ResponseItem::Reasoning
 // (research/codex/codex-rs/protocol/src/models.rs:740-780). Summary may be
 // empty when the round-trip summary lever is `drop`. EncryptedContent may
-// be empty when the round-trip encrypted lever is `drop` or the store
-// missed.
+// be empty when the round-trip encrypted lever is `drop` or the inbound
+// marker did not carry a `data-encrypted` attribute (legacy spans and
+// Anthropic).
 type reasoningInputItem struct {
 	ID               string
 	Summary          []reasoningSummaryText
@@ -161,18 +159,23 @@ func (r reasoningInputItem) asMap() map[string]any {
 
 // emitReasoningItemsFromAssistantContent extracts synthetic Reasoning
 // envelopes from a single assistant content payload and appends a
-// Codex-native `reasoning` input item per the Phase 6 strategy table to
-// out. Items are appended in turn-relative order so they can be inserted
-// BEFORE the matching assistant Message item by the caller.
+// Codex-native `reasoning` input item per the round-trip strategy table
+// to out. Items are appended in turn-relative order so they can be
+// inserted BEFORE the matching assistant Message item by the caller.
 //
-// Legacy markers without a data-ref are skipped silently when the round-
-// trip mode would emit a stub with no useful payload (matches pre-Phase-1
-// drop behavior). For `plain_text_concat` summary mode the body is left to
-// the existing message-text materializer; only the encrypted_content half
-// (if any) is emitted as a separate Reasoning item to preserve codex-rs
+// The encrypted_content blob is read straight off
+// [adapterrender.SyntheticPart.Encrypted] (the `data-encrypted` attribute
+// on the close marker). There is no out-of-band store lookup: Cursor's
+// transcript carries the blob inline, so this function is pure.
+//
+// Legacy markers without a data-ref AND without an encrypted blob are
+// skipped silently when the round-trip mode would emit a stub with no
+// useful payload (matches pre-rewrite drop behavior). For
+// `plain_text_concat` summary mode the body is left to the existing
+// message-text materializer; only the encrypted_content half (if any)
+// is emitted as a separate Reasoning item to preserve codex-rs
 // continuity.
 func emitReasoningItemsFromAssistantContent(
-	ctx context.Context,
 	out []map[string]any,
 	contentText string,
 	cfg RequestBuilderConfig,
@@ -193,7 +196,7 @@ func emitReasoningItemsFromAssistantContent(
 		if part.Kind != adapterrender.SyntheticReasoning {
 			continue
 		}
-		item, emit := buildReasoningItem(ctx, part, cfg, summaryMode, encryptedMode)
+		item, emit := buildReasoningItem(part, summaryMode, encryptedMode)
 		if !emit {
 			continue
 		}
@@ -202,26 +205,30 @@ func emitReasoningItemsFromAssistantContent(
 	return out
 }
 
-// buildReasoningItem applies the 9-case strategy table for one Reasoning
-// synthetic part. The boolean return reports whether the caller should
-// emit anything at all; legacy markers with no Ref under summary modes
-// that have nothing else to carry produce (zero, false).
+// buildReasoningItem applies the round-trip strategy table for one
+// reasoning synthetic part. The encrypted blob is now an inline property
+// of the part rather than the result of a store lookup, which collapses
+// the legacy 9-case table down to 6 cases (one per (summaryMode,
+// encryptedMode) pair). The boolean return reports whether the caller
+// should emit anything at all; markers with nothing to round-trip under
+// the chosen levers produce (zero, false).
 func buildReasoningItem(
-	ctx context.Context,
 	part adapterrender.SyntheticPart,
-	cfg RequestBuilderConfig,
 	summaryMode RoundTripSummary,
 	encryptedMode RoundTripEncrypted,
 ) (reasoningInputItem, bool) {
 	body := strings.TrimSpace(part.Body)
 	ref := strings.TrimSpace(part.Ref)
-	encrypted := lookupEncryptedBlob(ctx, part, cfg, encryptedMode)
+	encrypted := ""
+	if encryptedMode == RoundTripEncryptedRoundTrip {
+		encrypted = strings.TrimSpace(part.Encrypted)
+	}
 	zero := reasoningInputItem{ID: "", Summary: nil, EncryptedContent: ""}
 	switch summaryMode {
 	case RoundTripSummaryNative:
 		// Empty Ref + no encrypted_content + no body to emit means the
-		// envelope is the legacy attribute-less marker and should be
-		// dropped silently to preserve pre-Phase-1 behavior.
+		// envelope is a legacy attribute-less marker with nothing
+		// useful to round-trip; drop it silently.
 		if ref == "" && encrypted == "" && body == "" {
 			return zero, false
 		}
@@ -236,9 +243,10 @@ func buildReasoningItem(
 		}
 		return reasoningInputItem{ID: ref, Summary: nil, EncryptedContent: encrypted}, true
 	case RoundTripSummaryPlainText:
-		// The summary body is folded into the assistant message body by
-		// MaterializePlainTextConcat; only the encrypted_content half is
-		// emitted as a Reasoning item, and only when the store hit.
+		// The summary body is folded into the assistant message body
+		// by MaterializePlainTextConcat; only the encrypted_content
+		// half is emitted as a Reasoning item, and only when the
+		// marker carried one.
 		if encrypted == "" {
 			return zero, false
 		}
@@ -282,42 +290,12 @@ func assistantRawText(raw any) string {
 	return ""
 }
 
-// lookupEncryptedBlob returns the persisted encrypted_content for this
-// reasoning part, or empty string for any miss / disabled / no-ref
-// condition. Errors from the store are treated as misses; the request
-// build never fails on a Phase 6 lookup.
-func lookupEncryptedBlob(
-	ctx context.Context,
-	part adapterrender.SyntheticPart,
-	cfg RequestBuilderConfig,
-	encryptedMode RoundTripEncrypted,
-) string {
-	if encryptedMode != RoundTripEncryptedRoundTrip {
-		return ""
-	}
-	if cfg.ReasoningStoreGet == nil {
-		return ""
-	}
-	ref := strings.TrimSpace(part.Ref)
-	chatKey := strings.TrimSpace(cfg.ChatKey)
-	if ref == "" || chatKey == "" || ctx == nil {
-		return ""
-	}
-	blob, err := cfg.ReasoningStoreGet.Get(ctx, chatKey, ref)
-	if err != nil || blob == nil {
-		return ""
-	}
-	return strings.TrimSpace(blob.Encrypted)
-}
-
 // BuildRequestWithConfig builds the HTTP transport request from a
-// ChatRequest plus the typed RequestBuilderConfig. The context is only
-// consumed by Phase 6 ReasoningStoreGet lookups; the rest of the build is
-// pure. Callers without a request-scoped context (e.g. tests, ad-hoc
-// callers) may pass [context.Background] and disable the lookup by
-// leaving cfg.ReasoningStoreGet nil.
+// ChatRequest plus the typed RequestBuilderConfig. The build is now pure
+// (no I/O): the encrypted_content blob rides inline on each synthetic
+// thinking close marker, so no store lookup is needed and no context
+// parameter is required.
 func BuildRequestWithConfig(
-	ctx context.Context,
 	req adapteropenai.ChatRequest,
 	model adaptermodel.ResolvedModel,
 	effort string,
@@ -335,7 +313,7 @@ func BuildRequestWithConfig(
 		modelName = model.Alias
 	}
 	workspacePath := cursorReq.WorkspacePath
-	if rawInput, ok := inputFromResponsesInput(ctx, req.Input, workspacePath, &systemSections, strategy, cfg); ok {
+	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy, cfg); ok {
 		input = rawInput
 	} else {
 		for _, msg := range req.Messages {
@@ -357,7 +335,7 @@ func BuildRequestWithConfig(
 				// Reasoning items must precede the assistant Message
 				// they belong to in the input array; codex-rs's
 				// history.rs preserves that order.
-				input = emitReasoningItemsFromAssistantContent(ctx, input, rawText, cfg)
+				input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
 				if content := codexContentFromRaw(msg.Content, "output_text", strategy); len(content) > 0 {
 					input = append(input, MessageContentItems("assistant", content))
 				}
@@ -655,7 +633,6 @@ func functionCallFromResponsesItem(item map[string]any, workspacePath string) ma
 }
 
 func inputFromResponsesInput(
-	ctx context.Context,
 	raw json.RawMessage,
 	workspacePath string,
 	developerSections *[]string,
@@ -687,7 +664,7 @@ func inputFromResponsesInput(
 			// Reasoning items must precede the assistant Message they
 			// belong to in the input array; codex-rs history.rs
 			// preserves that order.
-			input = emitReasoningItemsFromAssistantContent(ctx, input, assistantRawText(item["content"]), cfg)
+			input = emitReasoningItemsFromAssistantContent(input, assistantRawText(item["content"]), cfg)
 			if content := codexContentFromAny(item["content"], "output_text", strategy); len(content) > 0 {
 				input = append(input, MessageContentItems("assistant", content))
 			}

@@ -52,12 +52,21 @@ const (
 // Ref carries the optional data-ref attribute parsed off the open marker.
 // For Codex thinking parts, the renderer emits the upstream item id (e.g.
 // "rs_abc123") as data-ref so the inbound mapper can correlate the round-
-// tripped envelope with a stored encrypted_content blob. Empty for parts
-// produced by markers without a data-ref attribute (the legacy shape).
+// tripped envelope with provider state. Empty for parts produced by
+// markers without a data-ref attribute (the legacy shape).
+//
+// Encrypted carries the optional data-encrypted attribute parsed off the
+// CLOSE marker. For Codex thinking parts, this is the opaque server-signed
+// `encrypted_content` blob the upstream attaches to the matching Reasoning
+// item. The blob rides inline on the close marker so Cursor's transcript
+// owns persistence; on the next turn the inbound mapper attaches it to the
+// round-tripped Reasoning item directly. Empty for parts produced by
+// markers without a data-encrypted attribute (legacy and Anthropic spans).
 type SyntheticPart struct {
-	Kind SyntheticContentKind
-	Body string
-	Ref  string
+	Kind      SyntheticContentKind
+	Body      string
+	Ref       string
+	Encrypted string
 }
 
 // syntheticContentSpec describes the rendering and stripping rules for one
@@ -95,20 +104,39 @@ var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, Synthetic
 // is unnecessary at our use sites (callers pass opaque ids like rs_abc123).
 const dataRefAttrPattern = `(?: data-ref="([^"]*)")?`
 
+// dataEncryptedAttrPattern is the optional `data-encrypted="..."` attribute
+// fragment that may appear on the CLOSE marker. The blob is base64 so
+// `[^"]*` is a safe match. For forward compatibility the open marker
+// regex also accepts (but ignores) a `data-encrypted` attribute.
+const dataEncryptedAttrPattern = `(?: data-encrypted="([^"]*)")?`
+
 func init() {
 	for _, spec := range syntheticContentSpecs {
 		marker := regexp.QuoteMeta(spec.Marker)
 		// stripRE accepts the open marker with or without a data-ref
-		// attribute. The non-capturing group keeps the match anchored so
-		// we still consume the entire envelope on strip.
-		spec.stripRE = regexp.MustCompile(`(?s)<!--` + marker + `(?: data-ref="[^"]*")?-->.*?<!--/` + marker + `-->\s*`)
-		// captureRE matches the envelope and submatches (1) the optional
-		// data-ref attribute value and (2) the inner body. The trailing
-		// `\s*` mirrors stripRE so the strip path (which consumes
-		// whitespace between an envelope close and the next segment)
-		// and the extract path agree on where one part ends and the
-		// next begins.
-		spec.captureRE = regexp.MustCompile(`(?s)<!--` + marker + dataRefAttrPattern + `-->(.*?)<!--/` + marker + `-->\s*`)
+		// attribute and the close marker with or without a
+		// data-encrypted attribute. Non-capturing groups keep the
+		// match anchored so we still consume the entire envelope on
+		// strip.
+		spec.stripRE = regexp.MustCompile(
+			`(?s)<!--` + marker + `(?: data-ref="[^"]*")?(?: data-encrypted="[^"]*")?-->` +
+				`.*?` +
+				`<!--/` + marker + `(?: data-encrypted="[^"]*")?-->\s*`,
+		)
+		// captureRE submatches (1) the optional open data-ref value,
+		// (2) the inner body, and (3) the optional close
+		// data-encrypted value. Forward compat: an encrypted attribute
+		// on the open marker is accepted but ignored (the close is the
+		// authoritative carrier because encrypted_content arrives at
+		// response.output_item.done after the open marker has already
+		// shipped to Cursor). The trailing `\s*` mirrors stripRE so
+		// the two paths agree on where one part ends and the next
+		// begins.
+		spec.captureRE = regexp.MustCompile(
+			`(?s)<!--` + marker + dataRefAttrPattern + `(?: data-encrypted="[^"]*")?-->` +
+				`(.*?)` +
+				`<!--/` + marker + dataEncryptedAttrPattern + `-->\s*`,
+		)
 	}
 }
 
@@ -155,11 +183,30 @@ func SyntheticContentOpenWithRef(kind SyntheticContentKind, ref string) string {
 // synthetic block kind. It always ends with a blank line so subsequent
 // markdown renders cleanly.
 func SyntheticContentClose(kind SyntheticContentKind) string {
+	return SyntheticContentCloseWithEncrypted(kind, "")
+}
+
+// SyntheticContentCloseWithEncrypted returns the trailing marker for the
+// requested synthetic block kind, optionally annotated with a
+// `data-encrypted` attribute carrying an opaque server-signed blob. The
+// attribute is emitted as `<!--/<marker> data-encrypted="<encrypted>"-->`
+// when non-empty so the next-turn inbound mapper can recover the blob
+// without consulting an external store. Empty encrypted matches the
+// legacy [SyntheticContentClose] shape exactly.
+//
+// The encrypted value must not contain a literal double-quote; callers
+// using base64 (alphanumeric plus `+/=`) are safe by construction.
+func SyntheticContentCloseWithEncrypted(kind SyntheticContentKind, encrypted string) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return ""
 	}
-	return "\n<!--/" + spec.Marker + "-->\n\n"
+	closeTag := "<!--/" + spec.Marker
+	if encrypted != "" {
+		closeTag += ` data-encrypted="` + encrypted + `"`
+	}
+	closeTag += "-->"
+	return "\n" + closeTag + "\n\n"
 }
 
 // FormatSyntheticContent wraps body in a complete marker-enclosed block. body
@@ -248,11 +295,12 @@ func stripDecoration(spec *syntheticContentSpec, decorated string) string {
 // string. It carries enough context to splice the raw Body into a typed part
 // without re-parsing.
 type syntheticMatch struct {
-	kind     SyntheticContentKind
-	start    int
-	end      int
-	bodyTrim string
-	ref      string
+	kind      SyntheticContentKind
+	start     int
+	end       int
+	bodyTrim  string
+	ref       string
+	encrypted string
 }
 
 // ExtractSyntheticParts parses text and returns the ordered list of parts.
@@ -281,21 +329,27 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 			outerStart, outerEnd := idx[0], idx[1]
 			refStart, refEnd := idx[2], idx[3]
 			innerStart, innerEnd := idx[4], idx[5]
+			encStart, encEnd := idx[6], idx[7]
 			ref := ""
 			if refStart >= 0 && refEnd >= 0 {
 				ref = text[refStart:refEnd]
 			}
+			encrypted := ""
+			if encStart >= 0 && encEnd >= 0 {
+				encrypted = text[encStart:encEnd]
+			}
 			matches = append(matches, syntheticMatch{
-				kind:     kind,
-				start:    outerStart,
-				end:      outerEnd,
-				bodyTrim: stripDecoration(spec, text[innerStart:innerEnd]),
-				ref:      ref,
+				kind:      kind,
+				start:     outerStart,
+				end:       outerEnd,
+				bodyTrim:  stripDecoration(spec, text[innerStart:innerEnd]),
+				ref:       ref,
+				encrypted: encrypted,
 			})
 		}
 	}
 	if len(matches) == 0 {
-		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: ""}}
+		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: ""}}
 	}
 	// Insertion sort by start offset; tiny N (matches per assistant turn).
 	for i := 1; i < len(matches); i++ {
@@ -317,7 +371,7 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 		if m.start > cursor {
 			parts = appendTextPart(parts, text[cursor:m.start])
 		}
-		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref})
+		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref, Encrypted: m.encrypted})
 		cursor = m.end
 	}
 	if cursor < len(text) {
@@ -336,7 +390,7 @@ func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
 	if strings.TrimSpace(text) == "" {
 		return parts
 	}
-	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: ""})
+	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: ""})
 }
 
 // MaterializationStrategy picks how round-tripped synthetic envelope content

@@ -107,12 +107,19 @@ func isThinkingPlaceholder(text string) bool {
 	}
 }
 
-// renderReasoningClose closes the synthetic Cursor-visible block in delta.content.
+// renderReasoningClose closes the synthetic Cursor-visible block in
+// delta.content. When an encrypted_content blob was captured during the
+// span (codex EventReasoningFinished), the close marker carries it inline
+// as `data-encrypted` so Cursor's transcript persists it across turns.
+// The captured blob is cleared after emission so a subsequent reasoning
+// span starts fresh.
 func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 	if !r.reasoningOpen {
 		return nil
 	}
 	r.reasoningOpen = false
-	ch := r.baseChunk(adapteropenai.StreamDelta{Content: SyntheticContentClose(SyntheticReasoning)})
+	encrypted := r.lastReasoningEncrypted
+	r.lastReasoningEncrypted = ""
+	ch := r.baseChunk(adapteropenai.StreamDelta{Content: SyntheticContentCloseWithEncrypted(SyntheticReasoning, encrypted)})
 	return &ch
 }

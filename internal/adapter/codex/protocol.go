@@ -312,8 +312,25 @@ func EffectiveReasoningWithDefaultSummary(req adapteropenai.ChatRequest, effort,
 	return &out
 }
 
-func ParseSSEEventsWithLogging(ctx context.Context, body io.Reader, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) (RunResult, error) {
+// SSEParseOptions carries the optional knobs the codex SSE parser honors
+// at construction time. Today: whether to strip the encrypted_content
+// blob from emitted reasoning-finished events. Drop mode lives at this
+// boundary so the renderer can stay backend-neutral.
+type SSEParseOptions struct {
+	// DropEncryptedContent skips populating Event.EncryptedContent on
+	// EventReasoningFinished even when the upstream reasoning item
+	// carried a blob. Used when DirectConfig.RoundTripEncrypted is
+	// RoundTripEncryptedDrop so the synthetic-thinking close marker
+	// stays bare.
+	DropEncryptedContent bool
+}
+
+// ParseSSEEventsWithOptions is the option-aware codex SSE parser entry
+// point. Callers that do not need to override defaults pass a zero
+// [SSEParseOptions].
+func ParseSSEEventsWithOptions(ctx context.Context, body io.Reader, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext, opts SSEParseOptions) (RunResult, error) {
 	parser := newSSEEventParser(ctx, emit, logCtx)
+	parser.dropEncryptedContent = opts.DropEncryptedContent
 	return parser.parse(body)
 }
 
@@ -344,15 +361,21 @@ type sseEventParser struct {
 	nextToolIndex             int
 	aggregate                 sseAggregateCollector
 	upstreamEventSeq          int
+	// dropEncryptedContent gates whether the encrypted_content blob
+	// scraped off response.output_item.done reasoning items rides on
+	// the EventReasoningFinished emit. False (default) keeps the
+	// codex-rs round_trip behavior; true honors a config drop.
+	dropEncryptedContent bool
 }
 
 func newSSEEventParser(ctx context.Context, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) *sseEventParser {
 	return &sseEventParser{
-		ctx:               ctx,
-		emit:              emit,
-		logCtx:            logCtx,
-		out:               NewRunResult("stop"),
-		toolCallsByItemID: make(map[string]*toolCallState),
+		ctx:                  ctx,
+		emit:                 emit,
+		logCtx:               logCtx,
+		out:                  NewRunResult("stop"),
+		toolCallsByItemID:    make(map[string]*toolCallState),
+		dropEncryptedContent: false,
 	}
 }
 
@@ -449,7 +472,7 @@ func (p *sseEventParser) handleEvent(eventName, payload string, raw transportStr
 
 func (p *sseEventParser) handleOutputTextDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
 	if delta := raw.Delta; delta != "" {
-		err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta})
+		err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta, EncryptedContent: ""})
 		if err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
@@ -494,7 +517,31 @@ func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transpo
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
+	cloned := item.cloneMap()
+	p.out.OutputItems = append(p.out.OutputItems, cloned)
+	// Surface the encrypted_content blob on a per-item Finished event
+	// when present. The renderer captures it and embeds the bytes on
+	// the synthetic-thinking close marker as `data-encrypted` so
+	// Cursor's transcript carries the blob into the next turn without
+	// any side-channel persistence. Drop mode is honored upstream by
+	// the WebsocketTransportConfig knob: when the resolver picks drop,
+	// the parser config strips the blob before emit.
+	encrypted := mapString(cloned, "encrypted_content")
+	if !p.dropEncryptedContent && encrypted != "" {
+		ev := adapterrender.Event{
+			Kind:             adapterrender.EventReasoningFinished,
+			Text:             "",
+			ReasoningKind:    "",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           mapString(cloned, "id"),
+			ItemType:         "reasoning",
+			EncryptedContent: encrypted,
+		}
+		if err := p.emitNormalized(ev); err != nil {
+			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
+		}
+	}
 	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
 }
 
@@ -717,12 +764,13 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 		p.reasoningTextDeltaSeen = true
 	}
 	err := p.emitNormalized(adapterrender.Event{
-		Kind:          adapterrender.EventReasoningDelta,
-		Text:          raw.Delta,
-		ReasoningKind: kind,
-		SummaryIndex:  summaryIdx,
-		ItemID:        strings.TrimSpace(raw.ItemID),
-		ItemType:      "reasoning",
+		Kind:             adapterrender.EventReasoningDelta,
+		Text:             raw.Delta,
+		ReasoningKind:    kind,
+		SummaryIndex:     summaryIdx,
+		ItemID:           strings.TrimSpace(raw.ItemID),
+		ItemType:         "reasoning",
+		EncryptedContent: "",
 	})
 	if err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{}, Err: err}
@@ -756,7 +804,7 @@ func (p *sseEventParser) handleResponseCompleted(eventName, payload string, raw 
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	if err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); err != nil {
+	if err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished, EncryptedContent: ""}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	p.out.ReasoningSignaled = p.reasoningSignaled
@@ -779,7 +827,7 @@ func (p *sseEventParser) handleResponseFailed(eventName string, raw transportStr
 	}
 	err := codexResponseFailedError(msg)
 	if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
-		_ = p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished})
+		_ = p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished, EncryptedContent: ""})
 	}
 	p.logAggregate(p.out.ResponseID, "failed", err)
 	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
@@ -807,9 +855,10 @@ func (p *sseEventParser) emitReasoningPresence(itemID string) error {
 	p.reasoningSignaled = true
 	p.reasoningVisible = true
 	return p.emitNormalized(adapterrender.Event{
-		Kind:     adapterrender.EventReasoningSignaled,
-		ItemID:   strings.TrimSpace(itemID),
-		ItemType: "reasoning",
+		Kind:             adapterrender.EventReasoningSignaled,
+		ItemID:           strings.TrimSpace(itemID),
+		ItemType:         "reasoning",
+		EncryptedContent: "",
 	})
 }
 
@@ -827,8 +876,9 @@ func (p *sseEventParser) emitToolCall(state *toolCallState, fn adapteropenai.Too
 		state.IdentityEmitted = true
 	}
 	return p.emitNormalized(adapterrender.Event{
-		Kind:      adapterrender.EventToolCallDelta,
-		ToolCalls: []adapteropenai.ToolCall{tc},
+		Kind:             adapterrender.EventToolCallDelta,
+		ToolCalls:        []adapteropenai.ToolCall{tc},
+		EncryptedContent: "",
 	})
 }
 
@@ -1017,12 +1067,13 @@ func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []a
 			}
 			idx := i
 			out = append(out, adapterrender.Event{
-				Kind:          adapterrender.EventReasoningDelta,
-				Text:          part.Text,
-				ReasoningKind: "summary",
-				SummaryIndex:  &idx,
-				ItemID:        itemID,
-				ItemType:      "reasoning",
+				Kind:             adapterrender.EventReasoningDelta,
+				Text:             part.Text,
+				ReasoningKind:    "summary",
+				SummaryIndex:     &idx,
+				ItemID:           itemID,
+				ItemType:         "reasoning",
+				EncryptedContent: "",
 			})
 		}
 	}
@@ -1034,11 +1085,12 @@ func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []a
 					continue
 				}
 				out = append(out, adapterrender.Event{
-					Kind:          adapterrender.EventReasoningDelta,
-					Text:          part.Text,
-					ReasoningKind: "text",
-					ItemID:        itemID,
-					ItemType:      "reasoning",
+					Kind:             adapterrender.EventReasoningDelta,
+					Text:             part.Text,
+					ReasoningKind:    "text",
+					ItemID:           itemID,
+					ItemType:         "reasoning",
+					EncryptedContent: "",
 				})
 			}
 		}

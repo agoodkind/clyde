@@ -566,30 +566,12 @@ const (
 	CodexRoundTripEncryptedDrop CodexRoundTripEncrypted = "drop"
 )
 
-// AdapterCodexReasoningStore is the retention budget for the file-backed
-// encrypted_content cache. Phase 2 declares the struct; Phase 3
-// (CLYDE-247) wires it. A zero value means feature off, mirroring the
-// [logging.transcript] convention.
-type AdapterCodexReasoningStore struct {
-	// MaxAgeDays caps the on-disk age of cached blobs. Zero means
-	// the store is disabled.
-	MaxAgeDays int `json:"maxAgeDays,omitempty" toml:"max_age_days,omitempty"`
-	// MaxChats caps the number of per-chat cache entries. Zero means
-	// the store is disabled.
-	MaxChats int `json:"maxChats,omitempty" toml:"max_chats,omitempty"`
-}
-
-// IsEnabled reports whether the reasoning encrypted_content store should be
-// active. Both retention bounds must be positive; otherwise the feature is
-// off so the cleanup loop can never starve.
-func (s AdapterCodexReasoningStore) IsEnabled() bool {
-	return s.MaxAgeDays > 0 && s.MaxChats > 0
-}
-
 // AdapterCodexReasoning is the per-provider reasoning lever block for the
 // Codex backend. Codex carries two levers because Codex Responses can carry
 // summary text AND the encrypted_content memory blob on the same Reasoning
-// item. Defaults match codex-rs context_manager/history.rs:361-405.
+// item. Defaults match codex-rs context_manager/history.rs:361-405. The
+// encrypted blob is no longer cached on disk; it rides inline on the
+// synthetic-thinking close marker so Cursor's transcript owns persistence.
 type AdapterCodexReasoning struct {
 	// RoundTripSummary selects the strategy for visible summary text.
 	// Empty resolves to native_summary_field.
@@ -597,10 +579,6 @@ type AdapterCodexReasoning struct {
 	// RoundTripEncrypted selects the strategy for the encrypted_content
 	// blob. Empty resolves to round_trip.
 	RoundTripEncrypted CodexRoundTripEncrypted `json:"roundTripEncrypted,omitempty" toml:"round_trip_encrypted,omitempty"`
-	// Store is the retention budget for the file-backed
-	// encrypted_content cache. Phase 2 declares the field; Phase 3
-	// (CLYDE-247) wires it.
-	Store AdapterCodexReasoningStore `json:"store,omitzero" toml:"store,omitempty"`
 }
 
 // ResolvedRoundTripSummary returns the configured strategy with the
