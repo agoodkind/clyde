@@ -3,9 +3,11 @@ package anthropicbackend
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 func TestTranslateRequestSimpleUserText(t *testing.T) {
@@ -368,5 +370,100 @@ func TestTranslateRequestLegacyFunctions(t *testing.T) {
 	}
 	if len(out.Tools) != 1 || out.Tools[0].Name != "legacy" {
 		t.Fatalf("tools: %+v", out.Tools)
+	}
+}
+
+// TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock asserts the
+// Phase B P0 fix: when Cursor replays a prior assistant turn whose text was
+// wrapped by [adapterrender.FormatSyntheticContent] with kind
+// [adapterrender.SyntheticReasoning], the Anthropic mapper materializes the
+// envelope body as a native `{type:"thinking", thinking:"..."}` content
+// block followed by the surrounding `{type:"text", text:"..."}` blocks in
+// order. This is the round-trip path that lets the model retain its own
+// prior reasoning chain across turns.
+func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) {
+	t.Parallel()
+	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "I should answer 42.")
+	assistantText := thinking + "\n\nThe answer is 42."
+	body, err := json.Marshal(assistantText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"What is the answer?"`)},
+			{Role: "assistant", Content: json.RawMessage(body)},
+			{Role: "user", Content: json.RawMessage(`"Now multiply by 2."`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Messages) != 3 {
+		t.Fatalf("messages count=%d, want 3", len(out.Messages))
+	}
+	asst := out.Messages[1]
+	if asst.Role != "assistant" {
+		t.Fatalf("role=%q want assistant", asst.Role)
+	}
+	if len(asst.Content) != 2 {
+		t.Fatalf("assistant blocks=%d, want 2 (thinking + text); got %+v", len(asst.Content), asst.Content)
+	}
+	if asst.Content[0].Type != "thinking" {
+		t.Fatalf("block0 type=%q want thinking", asst.Content[0].Type)
+	}
+	if asst.Content[0].Thinking != "I should answer 42." {
+		t.Fatalf("block0 thinking=%q want %q", asst.Content[0].Thinking, "I should answer 42.")
+	}
+	if asst.Content[0].Text != "" {
+		t.Fatalf("block0 text should be empty on a thinking block, got %q", asst.Content[0].Text)
+	}
+	if asst.Content[1].Type != "text" {
+		t.Fatalf("block1 type=%q want text", asst.Content[1].Type)
+	}
+	if !strings.Contains(asst.Content[1].Text, "The answer is 42.") {
+		t.Fatalf("block1 text=%q should contain real answer", asst.Content[1].Text)
+	}
+	if strings.Contains(asst.Content[1].Text, "clyde-thinking") {
+		t.Fatalf("text block leaked envelope marker: %q", asst.Content[1].Text)
+	}
+}
+
+// TestTranslateRequestAssistantNoticeIsDroppedFromUpstream asserts that
+// notice envelopes (UI-only quota / runtime warnings) are not forwarded to
+// the upstream provider; they would otherwise be re-billed as input tokens.
+func TestTranslateRequestAssistantNoticeIsDroppedFromUpstream(t *testing.T) {
+	t.Parallel()
+	notice := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, "⚠️ 95% used")
+	assistantText := "Real answer.\n\n" + notice
+	body, err := json.Marshal(assistantText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"go"`)},
+			{Role: "assistant", Content: json.RawMessage(body)},
+			{Role: "user", Content: json.RawMessage(`"more"`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asst := out.Messages[1]
+	for _, blk := range asst.Content {
+		if strings.Contains(blk.Text, "clyde-notice") || strings.Contains(blk.Text, "95% used") {
+			t.Fatalf("notice envelope leaked upstream: %+v", blk)
+		}
+		if blk.Type == "thinking" {
+			t.Fatalf("notice should not become a thinking block: %+v", blk)
+		}
+	}
+	if len(asst.Content) != 1 || asst.Content[0].Type != "text" || !strings.Contains(asst.Content[0].Text, "Real answer.") {
+		t.Fatalf("expected single text block with real answer, got %+v", asst.Content)
 	}
 }

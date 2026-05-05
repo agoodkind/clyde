@@ -48,6 +48,26 @@ func TestSanitizeForUpstreamCachePreservesLegitimateDetails(t *testing.T) {
 	}
 }
 
+// TestSanitizeForUpstreamCacheRoundTripDropsThinkingByDefault asserts the
+// Phase B P0 contract for Codex: with default
+// inbound_thinking_materialization=drop, marker-wrapped thinking content
+// replayed from Cursor is removed before forwarding upstream and the
+// surrounding prose survives in order. This is the typed-parts-aware
+// equivalent of the older "thinking marker is stripped" check; its
+// existence keeps the Codex path on the [adapterrender.ExtractSyntheticParts]
+// API so a future flip to plain_text_concat is a one-line change.
+func TestSanitizeForUpstreamCacheRoundTripDropsThinkingByDefault(t *testing.T) {
+	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "private chain of thought")
+	in := "Pre.\n\n" + thinking + "Post."
+	got := SanitizeForUpstreamCache(in)
+	if strings.Contains(got, "clyde-thinking") || strings.Contains(got, "private chain of thought") {
+		t.Fatalf("thinking content leaked upstream: %q", got)
+	}
+	if !strings.Contains(got, "Pre.") || !strings.Contains(got, "Post.") {
+		t.Fatalf("surrounding prose lost: %q", got)
+	}
+}
+
 func TestSanitizeForUpstreamCacheStripsBothReasoningAndNoticeEnvelopes(t *testing.T) {
 	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "internal scratch")
 	notice := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, "⚠️ quota notice")

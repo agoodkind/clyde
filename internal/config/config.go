@@ -208,6 +208,125 @@ type AdapterConfig struct {
 	// same adapter endpoint/port while letting model name choose
 	// backend.
 	Codex AdapterCodex `json:"codex,omitzero" toml:"codex,omitempty"`
+	// SyntheticContent declares per-provider rules for the synthetic
+	// envelope round-trip channel (`<!--clyde-...-->` markers). Each
+	// provider bucket controls whether outbound assistant content
+	// carries the visible envelope back to Cursor (BYOK has no native
+	// thinking UI, so the envelope is the visible affordance) and how
+	// inbound assistant content (envelopes Cursor replays back to us
+	// on the next turn) is materialized into upstream-native shapes.
+	// See [internal/adapter/render/synthetic_content.go] for the marker
+	// format and ExtractSyntheticParts contract.
+	SyntheticContent AdapterSyntheticContent `json:"syntheticContent,omitzero" toml:"synthetic_content,omitempty"`
+}
+
+// AdapterSyntheticContent holds the per-provider synthetic envelope levers.
+// The zero value preserves the documented defaults; provider sub-structs only
+// need to be populated when an operator wants to deviate from them.
+type AdapterSyntheticContent struct {
+	Anthropic           AdapterSyntheticContentProvider `json:"anthropic,omitzero" toml:"anthropic,omitempty"`
+	Codex               AdapterSyntheticContentProvider `json:"codex,omitzero" toml:"codex,omitempty"`
+	PassthroughOverride AdapterSyntheticContentProvider `json:"passthroughOverride,omitzero" toml:"passthrough_override,omitempty"`
+}
+
+// SyntheticInboundMaterialization is the closed enum of inbound thinking
+// envelope materialization strategies. Round-tripped thinking content can be
+// turned into a native upstream thinking content block, concatenated as
+// plain text into the assistant text block, dropped, or passed through
+// unchanged with the marker still in place.
+type SyntheticInboundMaterialization string
+
+const (
+	// SyntheticInboundNativeThinkingBlock materializes round-tripped
+	// thinking content as the upstream-native thinking content block
+	// (e.g. Anthropic's `{type: "thinking", thinking: ...}`). This is the
+	// Anthropic default because Anthropic accepts thinking blocks in the
+	// assistant history and the model uses them for reasoning continuity.
+	SyntheticInboundNativeThinkingBlock SyntheticInboundMaterialization = "native_thinking_block"
+	// SyntheticInboundPlainTextConcat concatenates the envelope body (with
+	// decoration stripped) into the assistant text block as plain prose.
+	// Useful for upstreams that cannot accept native thinking blocks but
+	// where preserving the visible reasoning trace in context still helps.
+	SyntheticInboundPlainTextConcat SyntheticInboundMaterialization = "plain_text_concat"
+	// SyntheticInboundDrop discards thinking envelope bodies before
+	// forwarding upstream. This is the Codex default because Codex
+	// upstream cannot accept Anthropic-shaped thinking blocks and the
+	// reasoning trace bloats context with no model-side gain.
+	SyntheticInboundDrop SyntheticInboundMaterialization = "drop"
+	// SyntheticInboundPassthrough leaves the marker-wrapped envelope in
+	// place when forwarding upstream. Used by the passthrough override
+	// path so the upstream sees exactly what Cursor sent.
+	SyntheticInboundPassthrough SyntheticInboundMaterialization = "passthrough"
+)
+
+// AdapterSyntheticContentProvider holds the per-provider synthetic envelope
+// settings. Pointer-bool for OutboundThinkingEnvelope so we can distinguish
+// "operator set false" from "operator unset, take default".
+type AdapterSyntheticContentProvider struct {
+	// OutboundThinkingEnvelope toggles whether the renderer wraps
+	// reasoning bodies in the visible `<!--clyde-thinking-->` envelope
+	// on the way to Cursor. Defaults: anthropic=true, codex=true,
+	// passthrough_override=false. nil means take the default.
+	OutboundThinkingEnvelope *bool `json:"outboundThinkingEnvelope,omitempty" toml:"outbound_thinking_envelope,omitempty"`
+	// InboundThinkingMaterialization picks the strategy for
+	// round-tripped thinking content on the inbound (request-shaping)
+	// side. Empty string means take the default for the provider.
+	InboundThinkingMaterialization SyntheticInboundMaterialization `json:"inboundThinkingMaterialization,omitempty" toml:"inbound_thinking_materialization,omitempty"`
+}
+
+// AnthropicOutboundThinkingEnvelope returns the resolved per-provider value
+// for [AdapterSyntheticContentProvider.OutboundThinkingEnvelope] for the
+// Anthropic backend, applying the documented default when unset.
+func (s AdapterSyntheticContent) AnthropicOutboundThinkingEnvelope() bool {
+	if s.Anthropic.OutboundThinkingEnvelope != nil {
+		return *s.Anthropic.OutboundThinkingEnvelope
+	}
+	return true
+}
+
+// AnthropicInboundThinkingMaterialization returns the resolved strategy with
+// the documented default when unset.
+func (s AdapterSyntheticContent) AnthropicInboundThinkingMaterialization() SyntheticInboundMaterialization {
+	if s.Anthropic.InboundThinkingMaterialization != "" {
+		return s.Anthropic.InboundThinkingMaterialization
+	}
+	return SyntheticInboundNativeThinkingBlock
+}
+
+// CodexOutboundThinkingEnvelope returns the resolved per-provider value with
+// the documented default when unset.
+func (s AdapterSyntheticContent) CodexOutboundThinkingEnvelope() bool {
+	if s.Codex.OutboundThinkingEnvelope != nil {
+		return *s.Codex.OutboundThinkingEnvelope
+	}
+	return true
+}
+
+// CodexInboundThinkingMaterialization returns the resolved strategy with the
+// documented default when unset.
+func (s AdapterSyntheticContent) CodexInboundThinkingMaterialization() SyntheticInboundMaterialization {
+	if s.Codex.InboundThinkingMaterialization != "" {
+		return s.Codex.InboundThinkingMaterialization
+	}
+	return SyntheticInboundDrop
+}
+
+// PassthroughOverrideOutboundThinkingEnvelope returns the resolved value with
+// the documented default when unset.
+func (s AdapterSyntheticContent) PassthroughOverrideOutboundThinkingEnvelope() bool {
+	if s.PassthroughOverride.OutboundThinkingEnvelope != nil {
+		return *s.PassthroughOverride.OutboundThinkingEnvelope
+	}
+	return false
+}
+
+// PassthroughOverrideInboundThinkingMaterialization returns the resolved
+// strategy with the documented default when unset.
+func (s AdapterSyntheticContent) PassthroughOverrideInboundThinkingMaterialization() SyntheticInboundMaterialization {
+	if s.PassthroughOverride.InboundThinkingMaterialization != "" {
+		return s.PassthroughOverride.InboundThinkingMaterialization
+	}
+	return SyntheticInboundPassthrough
 }
 
 // AdapterCodex configures the direct Codex backend path plus optional
