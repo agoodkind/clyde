@@ -25,9 +25,17 @@ LAUNCHD_LABEL := io.goodkind.clyde.daemon
 SYSTEMD_UNIT  := clyde-daemon.service
 LOG_PATH      := $(HOME)/Library/Logs/clyde-daemon.log
 
-# clyde-staticcheck custom analyzer + deadcode use protobuf generated code in
-# /api/. Exclude those plus _test.go (already excluded by go.mk default).
+# Exclude protobuf-generated code under /api/ from staticcheck-extra.
+# _test.go is already excluded by go.mk default.
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
+
+# Project allowlist for the central lint-deadcode gate. cmd/root.go's
+# NewRootCmd is the cobra entrypoint reached via reflection. The mitm/
+# scenarios are picked up by a runtime registry. testutil/claude exposes
+# fake helpers used only by package-external tests, which deadcode does
+# not load. Kept on one line to avoid Make line-continuation whitespace
+# bleeding into the regex.
+DEADCODE_EXCLUDE_PATHS = cmd/root.go:.*NewRootCmd,internal/mitm/(baseline_paths|capture_session|codegen|codegen_v2|drift_runner|launch_profile|launcher)\.go:,internal/testutil/claude.go:.*CreateFakeClaude,internal/testutil/claude.go:.*ReadClaudeArgs
 
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
@@ -78,7 +86,6 @@ BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
 .PHONY: test-ginkgo test-watch coverage \
-        staticcheck deadcode audit clyde-check \
         install-build-guard uninstall-build-guard setup-hooks \
         install-hook uninstall-hook \
         deploy
@@ -96,48 +103,6 @@ coverage: ## Generate coverage report via ginkgo
 	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --cover --coverprofile=coverage.txt
 	@go tool cover -html=coverage.txt -o coverage.html
 	@echo "coverage report: coverage.html"
-
-# ---------------------------------------------------------------------------
-# Project-local code quality (layered on top of go.mk's gates)
-# ---------------------------------------------------------------------------
-
-clyde-check: staticcheck deadcode audit ## Run all clyde-specific analyzer targets
-
-# Custom clyde-staticcheck analyzer set: registered as a Go tool in go.mod.
-staticcheck: ## Run clyde-staticcheck custom analyzers
-	@bash -c '\
-		out=$$(go tool clyde-staticcheck ./... 2>&1 || true); \
-		filtered=$$(printf "%s\n" "$$out" \
-			| grep -Ev "\\.pb\\.go:|/api/" \
-			| grep -Ev "^go: error obtaining buildID" \
-			|| true); \
-		if [ -n "$$filtered" ]; then \
-			printf "%s\n" "$$filtered"; \
-			exit 1; \
-		fi; \
-		echo "clyde-staticcheck: OK"'
-
-# deadcode with project-specific allowlist for known-unreachable test helpers
-# and command-line entrypoints picked up dynamically.
-deadcode: ## Check for unreachable functions
-	@if ! output=$$(go tool deadcode ./...); then \
-		echo "go tool deadcode failed"; \
-		exit 1; \
-	fi; \
-	filtered=$$(echo "$$output" | grep -v \
-		-e 'cmd/root.go:.*NewRootCmd' \
-		-e 'internal/mitm/\(baseline_paths\|capture_session\|codegen\|codegen_v2\|drift_runner\|launch_profile\|launcher\).go:' \
-		-e 'internal/testutil/claude.go:.*CreateFakeClaude' \
-		-e 'internal/testutil/claude.go:.*ReadClaudeArgs' \
-	|| true); \
-	if [ -n "$$filtered" ]; then \
-		echo "Dead code found:"; \
-		echo "$$filtered"; \
-		exit 1; \
-	fi
-	@echo "deadcode: OK"
-
-audit: lint-gocyclo govulncheck ## Run gocyclo + govulncheck via go.mk primitives
 
 # ---------------------------------------------------------------------------
 # Build-guard: install a GOFLAGS=-toolexec wrapper that enforces clyde's
