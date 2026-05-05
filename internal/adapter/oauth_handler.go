@@ -43,7 +43,7 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		MicrocompactKeepRecent:          s.cfg.ClientIdentity.MicrocompactKeepRecent,
 		PerContextBetas:                 s.cfg.ClientIdentity.PerContextBetas,
 		Identity:                        s.anthropicIdentity(req),
-		InboundThinkingMaterialization:  adapterrender.MaterializationStrategy(s.cfg.SyntheticContent.AnthropicInboundThinkingMaterialization()),
+		InboundThinkingMaterialization:  adapterrender.MaterializationStrategy(s.cfg.Anthropic.Reasoning.ResolvedInboundThinking()),
 		Logger:                          s.log,
 	}, reqID)
 }

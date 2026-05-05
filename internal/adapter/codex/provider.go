@@ -23,7 +23,6 @@ import (
 // normalized event emission together.
 type Provider struct {
 	cfg             config.AdapterCodex
-	syntheticCfg    config.AdapterSyntheticContent
 	notices         config.AdapterNotices
 	auth            adapterprovider.AuthLookup
 	log             *slog.Logger
@@ -72,7 +71,6 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	ConfigureCodexFileLogger(opts.FileLog)
 	return &Provider{
 		cfg:             deps.Config.Codex,
-		syntheticCfg:    deps.Config.SyntheticContent,
 		notices:         deps.Config.Notices,
 		auth:            deps.Auth,
 		log:             log,
@@ -146,7 +144,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		BodyLogProvider:                p.bodyLogProvider,
 		FileLog:                        p.fileLog,
 		ReasoningSummary:               p.cfg.ReasoningSummary,
-		InboundThinkingMaterialization: adapterrender.MaterializationStrategy(p.syntheticCfg.CodexInboundThinkingMaterialization()),
+		InboundThinkingMaterialization: codexSummaryRenderStrategy(p.cfg.Reasoning.ResolvedRoundTripSummary()),
 		WireCaptureMode:                WireCaptureMode(p.cfg.ResolvedCodexWireCaptureMode()),
 	}
 
@@ -209,6 +207,26 @@ func resolvedModelFromRequest(req adapterresolver.ResolvedRequest) adaptermodel.
 		MaxOutputTokens: req.ContextBudget.OutputTokens,
 		FamilySlug:      req.Family,
 		Instructions:    req.Instructions,
+	}
+}
+
+// codexSummaryRenderStrategy translates the typed Codex round-trip summary
+// enum into the render-package materialization strategy that drives the
+// existing inbound materialization site. Codex's native value
+// `native_summary_field` maps onto render's native thinking-block path
+// because that is the existing materialization for native upstream
+// reasoning fields. The encrypted_content lever is consumed in Phase 4
+// separately and is not threaded through this site.
+func codexSummaryRenderStrategy(strategy config.CodexRoundTripSummary) adapterrender.MaterializationStrategy {
+	switch strategy {
+	case config.CodexRoundTripSummaryDrop:
+		return adapterrender.MaterializeDrop
+	case config.CodexRoundTripSummaryPlainText:
+		return adapterrender.MaterializePlainTextConcat
+	case config.CodexRoundTripSummaryNative:
+		return adapterrender.MaterializeNativeThinkingBlock
+	default:
+		return adapterrender.MaterializeNativeThinkingBlock
 	}
 }
 

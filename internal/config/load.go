@@ -374,6 +374,81 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 	cfg.Adapter.Notices.Usage.Repeat = policy
+
+	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+}
+
+// applyAdapterReasoningDefaultsAndValidate validates the per-provider
+// [adapter.anthropic.reasoning] and [adapter.codex.reasoning] blocks and
+// folds the legacy [adapter.synthetic_content] inbound materialization
+// values forward when the new blocks are unset. The legacy path stays
+// readable for one release; each forwarded value emits a single startup
+// WARN so operators see the migration prompt without log spam.
+func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
+	if adapter == nil {
+		return nil
+	}
+	log := slog.Default().With("concern", "adapter.reasoning.config")
+
+	legacyAnthropic := strings.TrimSpace(string(adapter.SyntheticContent.Anthropic.InboundThinkingMaterialization))
+	if adapter.Anthropic.Reasoning.InboundThinking == "" && legacyAnthropic != "" {
+		adapter.Anthropic.Reasoning.InboundThinking = AnthropicInboundThinking(legacyAnthropic)
+		log.Warn("adapter.reasoning.legacy_synthetic_content_forwarded",
+			"component", "config",
+			"subcomponent", "adapter_reasoning",
+			"provider", "anthropic",
+			"legacy_field", "adapter.synthetic_content.anthropic.inbound_thinking_materialization",
+			"new_field", "adapter.anthropic.reasoning.inbound_thinking",
+			"value", legacyAnthropic,
+			"reason", "legacy synthetic_content block is deprecated; copy the value into the new block",
+		)
+	}
+	switch adapter.Anthropic.Reasoning.InboundThinking {
+	case "",
+		AnthropicInboundThinkingNative,
+		AnthropicInboundThinkingDrop,
+		AnthropicInboundThinkingPlainText,
+		AnthropicInboundThinkingPassthrough:
+	default:
+		return fmt.Errorf("adapter.anthropic.reasoning.inbound_thinking must be one of native_thinking_block|drop|plain_text_concat|passthrough (got %q)", adapter.Anthropic.Reasoning.InboundThinking)
+	}
+
+	legacyCodex := strings.TrimSpace(string(adapter.SyntheticContent.Codex.InboundThinkingMaterialization))
+	if adapter.Codex.Reasoning.RoundTripSummary == "" && legacyCodex != "" {
+		adapter.Codex.Reasoning.RoundTripSummary = CodexRoundTripSummary(legacyCodex)
+		log.Warn("adapter.reasoning.legacy_synthetic_content_forwarded",
+			"component", "config",
+			"subcomponent", "adapter_reasoning",
+			"provider", "codex",
+			"legacy_field", "adapter.synthetic_content.codex.inbound_thinking_materialization",
+			"new_field", "adapter.codex.reasoning.round_trip_summary",
+			"value", legacyCodex,
+			"reason", "legacy synthetic_content block is deprecated; copy the value into the new block",
+		)
+	}
+	switch adapter.Codex.Reasoning.RoundTripSummary {
+	case "",
+		CodexRoundTripSummaryNative,
+		CodexRoundTripSummaryDrop,
+		CodexRoundTripSummaryPlainText:
+	default:
+		return fmt.Errorf("adapter.codex.reasoning.round_trip_summary must be one of native_summary_field|drop|plain_text_concat (got %q)", adapter.Codex.Reasoning.RoundTripSummary)
+	}
+
+	switch adapter.Codex.Reasoning.RoundTripEncrypted {
+	case "",
+		CodexRoundTripEncryptedRoundTrip,
+		CodexRoundTripEncryptedDrop:
+	default:
+		return fmt.Errorf("adapter.codex.reasoning.round_trip_encrypted must be one of round_trip|drop (got %q)", adapter.Codex.Reasoning.RoundTripEncrypted)
+	}
+
+	if adapter.Codex.Reasoning.Store.MaxAgeDays < 0 {
+		return fmt.Errorf("adapter.codex.reasoning.store.max_age_days must be >= 0")
+	}
+	if adapter.Codex.Reasoning.Store.MaxChats < 0 {
+		return fmt.Errorf("adapter.codex.reasoning.store.max_chats must be >= 0")
+	}
 	return nil
 }
 
