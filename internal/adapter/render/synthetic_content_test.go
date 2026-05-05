@@ -113,6 +113,62 @@ func TestExtractSyntheticPartsEmptyReturnsNil(t *testing.T) {
 	}
 }
 
+func TestSyntheticContentOpenWithRefEmbedsAttribute(t *testing.T) {
+	open := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_abc123")
+	if !strings.HasPrefix(open, `<!--clyde-thinking data-ref="rs_abc123"-->`) {
+		t.Fatalf("open with ref should prefix marker with data-ref: %q", open)
+	}
+}
+
+func TestSyntheticContentOpenWithEmptyRefMatchesLegacyShape(t *testing.T) {
+	withEmpty := SyntheticContentOpenWithRef(SyntheticReasoning, "")
+	legacy := SyntheticContentOpen(SyntheticReasoning)
+	if withEmpty != legacy {
+		t.Fatalf("empty ref must round-trip to legacy shape:\n with-ref: %q\n legacy:   %q", withEmpty, legacy)
+	}
+}
+
+func TestExtractSyntheticPartsCarriesRefAttribute(t *testing.T) {
+	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_xyz789") +
+		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "with ref", true) +
+		SyntheticContentClose(SyntheticReasoning)
+	parts := ExtractSyntheticParts(in)
+	if len(parts) != 1 {
+		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
+	}
+	if parts[0].Kind != SyntheticKindThinking {
+		t.Fatalf("kind=%q want %q", parts[0].Kind, SyntheticKindThinking)
+	}
+	if parts[0].Body != "with ref" {
+		t.Fatalf("body=%q want %q", parts[0].Body, "with ref")
+	}
+	if parts[0].Ref != "rs_xyz789" {
+		t.Fatalf("ref=%q want %q", parts[0].Ref, "rs_xyz789")
+	}
+}
+
+func TestExtractSyntheticPartsLegacyMarkerHasEmptyRef(t *testing.T) {
+	in := FormatSyntheticContent(SyntheticReasoning, "no ref attribute")
+	parts := ExtractSyntheticParts(in)
+	if len(parts) != 1 {
+		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
+	}
+	if parts[0].Ref != "" {
+		t.Fatalf("legacy marker should yield empty ref, got %q", parts[0].Ref)
+	}
+}
+
+func TestFormatSyntheticContentDeltaWithRefEmbedsAttributeOnOpen(t *testing.T) {
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "rs_delta", "first")
+	if !strings.HasPrefix(open, `<!--clyde-thinking data-ref="rs_delta"-->`) {
+		t.Fatalf("open delta with ref must carry attribute: %q", open)
+	}
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "rs_delta", "\nsecond")
+	if strings.Contains(cont, "data-ref=") {
+		t.Fatalf("continuation delta must not repeat the data-ref attribute: %q", cont)
+	}
+}
+
 func TestFormatSyntheticContentDeltaContinuesOpenBlockWithoutHeader(t *testing.T) {
 	open := FormatSyntheticContentDelta(SyntheticReasoning, true, "first")
 	if !strings.HasPrefix(open, "<!--clyde-thinking-->") {

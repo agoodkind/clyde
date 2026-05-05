@@ -48,9 +48,16 @@ const (
 // SyntheticPart is one ordered segment of an assistant content string after
 // envelope detection. Body carries the raw upstream-ready text with all
 // envelope decoration (markers, header line, blockquote prefixes) stripped.
+//
+// Ref carries the optional data-ref attribute parsed off the open marker.
+// For Codex thinking parts, the renderer emits the upstream item id (e.g.
+// "rs_abc123") as data-ref so the inbound mapper can correlate the round-
+// tripped envelope with a stored encrypted_content blob. Empty for parts
+// produced by markers without a data-ref attribute (the legacy shape).
 type SyntheticPart struct {
 	Kind SyntheticContentKind
 	Body string
+	Ref  string
 }
 
 // syntheticContentSpec describes the rendering and stripping rules for one
@@ -82,15 +89,26 @@ var syntheticContentSpecs = map[SyntheticContentKind]*syntheticContentSpec{
 // is reproducible across runs (Go map iteration is not).
 var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, SyntheticNotice}
 
+// dataRefAttrPattern is the optional `data-ref="..."` attribute fragment that
+// may appear inside an open marker. The attribute name is fixed; the value
+// allows any character except a literal double-quote so simple HTML escaping
+// is unnecessary at our use sites (callers pass opaque ids like rs_abc123).
+const dataRefAttrPattern = `(?: data-ref="([^"]*)")?`
+
 func init() {
 	for _, spec := range syntheticContentSpecs {
-		spec.stripRE = regexp.MustCompile(`(?s)<!--` + regexp.QuoteMeta(spec.Marker) + `-->.*?<!--/` + regexp.QuoteMeta(spec.Marker) + `-->\s*`)
-		// captureRE matches the envelope and submatches the inner body.
-		// The trailing `\s*` mirrors stripRE so the strip path (which
-		// consumes whitespace between an envelope close and the next
-		// segment) and the extract path agree on where one part ends
-		// and the next begins.
-		spec.captureRE = regexp.MustCompile(`(?s)<!--` + regexp.QuoteMeta(spec.Marker) + `-->(.*?)<!--/` + regexp.QuoteMeta(spec.Marker) + `-->\s*`)
+		marker := regexp.QuoteMeta(spec.Marker)
+		// stripRE accepts the open marker with or without a data-ref
+		// attribute. The non-capturing group keeps the match anchored so
+		// we still consume the entire envelope on strip.
+		spec.stripRE = regexp.MustCompile(`(?s)<!--` + marker + `(?: data-ref="[^"]*")?-->.*?<!--/` + marker + `-->\s*`)
+		// captureRE matches the envelope and submatches (1) the optional
+		// data-ref attribute value and (2) the inner body. The trailing
+		// `\s*` mirrors stripRE so the strip path (which consumes
+		// whitespace between an envelope close and the next segment)
+		// and the extract path agree on where one part ends and the
+		// next begins.
+		spec.captureRE = regexp.MustCompile(`(?s)<!--` + marker + dataRefAttrPattern + `-->(.*?)<!--/` + marker + `-->\s*`)
 	}
 }
 
@@ -103,13 +121,34 @@ func specFor(kind SyntheticContentKind) *syntheticContentSpec {
 }
 
 // SyntheticContentOpen returns the leading marker plus the visible header for
-// the requested synthetic block kind.
+// the requested synthetic block kind. The marker carries no attributes; for
+// the data-ref-tagged variant use [SyntheticContentOpenWithRef].
 func SyntheticContentOpen(kind SyntheticContentKind) string {
+	return SyntheticContentOpenWithRef(kind, "")
+}
+
+// SyntheticContentOpenWithRef returns the leading marker plus the visible
+// header for the requested synthetic block kind, optionally annotated with a
+// data-ref attribute. The ref is emitted as `<!--<marker> data-ref="<ref>"-->`
+// when non-empty so the inbound mapper can correlate the round-tripped
+// envelope with provider state (e.g. a stored Codex encrypted_content blob).
+//
+// Empty ref matches the legacy [SyntheticContentOpen] shape exactly so
+// existing parsers and tests stay valid.
+//
+// The ref must not contain a literal double-quote; callers using upstream
+// item ids (alphanumeric plus hyphen and underscore) are safe by construction.
+func SyntheticContentOpenWithRef(kind SyntheticContentKind, ref string) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return ""
 	}
-	return "<!--" + spec.Marker + "-->\n" + spec.Header
+	openTag := "<!--" + spec.Marker
+	if ref != "" {
+		openTag += ` data-ref="` + ref + `"`
+	}
+	openTag += "-->"
+	return openTag + "\n" + spec.Header
 }
 
 // SyntheticContentClose returns the trailing marker for the requested
@@ -146,14 +185,27 @@ func FormatSyntheticContent(kind SyntheticContentKind, body string) string {
 // is false the renderer is mid-stream inside an already-open block and the
 // body's own newlines drive new quoted lines via "\n" -> "\n> " replacement,
 // matching the existing reasoning streaming layout.
+//
+// For the data-ref-tagged streaming variant use
+// [FormatSyntheticContentDeltaWithRef].
 func FormatSyntheticContentDelta(kind SyntheticContentKind, open bool, body string) string {
+	return FormatSyntheticContentDeltaWithRef(kind, open, "", body)
+}
+
+// FormatSyntheticContentDeltaWithRef is the streaming variant of
+// [FormatSyntheticContentDelta] that emits an optional data-ref attribute on
+// the open marker. The ref is only honored when open is true; mid-stream
+// deltas never carry the attribute (the marker is already on the wire).
+//
+// Empty ref matches the legacy [FormatSyntheticContentDelta] shape exactly.
+func FormatSyntheticContentDeltaWithRef(kind SyntheticContentKind, open bool, ref, body string) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return body
 	}
 	decorated := formatSyntheticBody(spec, body, open)
 	if open {
-		return SyntheticContentOpen(kind) + decorated
+		return SyntheticContentOpenWithRef(kind, ref) + decorated
 	}
 	return decorated
 }
@@ -207,6 +259,7 @@ type syntheticMatch struct {
 	start    int
 	end      int
 	bodyTrim string
+	ref      string
 }
 
 // ExtractSyntheticParts parses text and returns the ordered list of parts.
@@ -223,23 +276,33 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 	var matches []syntheticMatch
 	for _, kind := range orderedSyntheticKinds {
 		spec := syntheticContentSpecs[kind]
-		if !strings.Contains(text, "<!--"+spec.Marker+"-->") {
+		// Match the open prefix without committing to a specific tail
+		// (the marker may carry an optional `data-ref="..."` attribute
+		// before the closing `-->`). The captureRE is the authoritative
+		// matcher; this Contains is just a cheap skip for plain text.
+		if !strings.Contains(text, "<!--"+spec.Marker) {
 			continue
 		}
 		idxs := spec.captureRE.FindAllStringSubmatchIndex(text, -1)
 		for _, idx := range idxs {
 			outerStart, outerEnd := idx[0], idx[1]
-			innerStart, innerEnd := idx[2], idx[3]
+			refStart, refEnd := idx[2], idx[3]
+			innerStart, innerEnd := idx[4], idx[5]
+			ref := ""
+			if refStart >= 0 && refEnd >= 0 {
+				ref = text[refStart:refEnd]
+			}
 			matches = append(matches, syntheticMatch{
 				kind:     kind,
 				start:    outerStart,
 				end:      outerEnd,
 				bodyTrim: stripDecoration(spec, text[innerStart:innerEnd]),
+				ref:      ref,
 			})
 		}
 	}
 	if len(matches) == 0 {
-		return []SyntheticPart{{Kind: SyntheticKindText, Body: text}}
+		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: ""}}
 	}
 	// Insertion sort by start offset; tiny N (matches per assistant turn).
 	for i := 1; i < len(matches); i++ {
@@ -261,7 +324,7 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 		if m.start > cursor {
 			parts = appendTextPart(parts, text[cursor:m.start])
 		}
-		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim})
+		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref})
 		cursor = m.end
 	}
 	if cursor < len(text) {
@@ -280,7 +343,7 @@ func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
 	if strings.TrimSpace(text) == "" {
 		return parts
 	}
-	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text})
+	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: ""})
 }
 
 // MaterializationStrategy picks how round-tripped synthetic envelope content
