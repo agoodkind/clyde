@@ -1,45 +1,30 @@
 package codex
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
-// fakeReasoningGetter is a typed test double for [ReasoningStoreGetter].
-// It returns the configured blob (if any) or the configured error; nil
-// blob with nil error models a store miss.
-type fakeReasoningGetter struct {
-	blobs map[string]*ReasoningBlob
-	err   error
-	calls int
-}
-
-func (f *fakeReasoningGetter) Get(_ context.Context, chatKey, itemID string) (*ReasoningBlob, error) {
-	f.calls++
-	if f.err != nil {
-		return nil, f.err
-	}
-	key := chatKey + "/" + itemID
-	blob, ok := f.blobs[key]
-	if !ok {
-		return nil, nil
-	}
-	return blob, nil
+// envelopeWithRefAndEncrypted builds a synthetic-thinking envelope around
+// body with the given data-ref attribute on the open marker AND the given
+// data-encrypted attribute on the close marker. The shape matches what
+// the renderer emits in production so [adapterrender.ExtractSyntheticParts]
+// returns the same (Body, Ref, Encrypted) tuple the inbound mapper sees.
+func envelopeWithRefAndEncrypted(ref, body, encrypted string) string {
+	return adapterrender.FormatSyntheticContentDeltaWithRef(
+		adapterrender.SyntheticReasoning, true, ref, body,
+	) + adapterrender.SyntheticContentCloseWithEncrypted(adapterrender.SyntheticReasoning, encrypted)
 }
 
 // envelopeWithRef builds a synthetic-thinking envelope around body with
-// the given data-ref attribute. The shape matches the renderer's emitted
-// open marker so [adapterrender.ExtractSyntheticParts] returns the same
-// (Body, Ref) the inbound mapper sees in production.
+// the given data-ref attribute and no encrypted blob. Used by tests that
+// model a marker carrying only the ref (no encrypted_content was on the
+// upstream reasoning item).
 func envelopeWithRef(ref, body string) string {
-	return adapterrender.FormatSyntheticContentDeltaWithRef(
-		adapterrender.SyntheticReasoning, true, ref, body,
-	) + adapterrender.SyntheticContentClose(adapterrender.SyntheticReasoning)
+	return envelopeWithRefAndEncrypted(ref, body, "")
 }
 
 // envelopeNoRef builds a legacy attribute-less synthetic-thinking
@@ -65,7 +50,7 @@ func buildPhase6Request(
 		},
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
-	out := BuildRequestWithConfig(context.Background(), req, model, "", cfg)
+	out := BuildRequestWithConfig(req, model, "", cfg)
 	return out.Input
 }
 
@@ -119,19 +104,12 @@ func extractSummaryTexts(item map[string]any) []string {
 	return out
 }
 
-// Case 1: native_summary_field + round_trip + hit.
-func TestPhase6NativeSummaryRoundTripHitEmitsBothFields(t *testing.T) {
+// Case 1: native_summary_field + round_trip + marker carries encrypted.
+func TestPhase6NativeSummaryRoundTripWithEncryptedEmitsBothFields(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{
-		blobs: map[string]*ReasoningBlob{
-			"chat-1/rs_abc": {ChatKey: "chat-1", ItemID: "rs_abc", Encrypted: "ENC123"},
-		},
-	}
-	items := buildPhase6Request(t, envelopeWithRef("rs_abc", "deep thinking"), RequestBuilderConfig{
+	items := buildPhase6Request(t, envelopeWithRefAndEncrypted("rs_abc", "deep thinking", "ENC123"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
 	})
 	r := findFirstReasoningItem(items)
 	if r == nil {
@@ -149,23 +127,20 @@ func TestPhase6NativeSummaryRoundTripHitEmitsBothFields(t *testing.T) {
 	}
 }
 
-// Case 2: native_summary_field + round_trip + miss.
-func TestPhase6NativeSummaryRoundTripMissOmitsEncrypted(t *testing.T) {
+// Case 2: native_summary_field + round_trip + marker carries no encrypted.
+// Equivalent to the pre-rewrite store miss.
+func TestPhase6NativeSummaryRoundTripWithoutEncryptedOmitsField(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{blobs: nil}
-	cfg := RequestBuilderConfig{
+	items := buildPhase6Request(t, envelopeWithRef("rs_miss", "thinking"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
-	}
-	items := buildPhase6Request(t, envelopeWithRef("rs_miss", "thinking"), cfg)
+	})
 	r := findFirstReasoningItem(items)
 	if r == nil {
 		t.Fatalf("expected reasoning item")
 	}
 	if _, has := r["encrypted_content"]; has {
-		t.Fatalf("encrypted_content should be absent on miss, got %#v", r)
+		t.Fatalf("encrypted_content should be absent when marker had none, got %#v", r)
 	}
 	if r["id"] != "rs_miss" {
 		t.Fatalf("id = %v", r["id"])
@@ -175,23 +150,14 @@ func TestPhase6NativeSummaryRoundTripMissOmitsEncrypted(t *testing.T) {
 	}
 }
 
-// Case 3: native_summary_field + drop.
-func TestPhase6NativeSummaryDropEncryptedSkipsLookup(t *testing.T) {
+// Case 3: native_summary_field + drop. Even when the marker carries an
+// encrypted blob, the drop lever forces the round-trip to omit it.
+func TestPhase6NativeSummaryDropEncryptedOmitsField(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{
-		blobs: map[string]*ReasoningBlob{
-			"chat-1/rs_abc": {Encrypted: "ENC"},
-		},
-	}
-	items := buildPhase6Request(t, envelopeWithRef("rs_abc", "thinking"), RequestBuilderConfig{
+	items := buildPhase6Request(t, envelopeWithRefAndEncrypted("rs_abc", "thinking", "ENC"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
 	})
-	if getter.calls != 0 {
-		t.Fatalf("getter must not be called when encrypted=drop, calls=%d", getter.calls)
-	}
 	r := findFirstReasoningItem(items)
 	if r == nil {
 		t.Fatalf("expected reasoning item")
@@ -204,19 +170,12 @@ func TestPhase6NativeSummaryDropEncryptedSkipsLookup(t *testing.T) {
 	}
 }
 
-// Case 4: drop summary + round_trip + hit.
-func TestPhase6DropSummaryRoundTripHitOnlyEncrypted(t *testing.T) {
+// Case 4: drop summary + round_trip + marker carries encrypted.
+func TestPhase6DropSummaryRoundTripWithEncryptedOnlyEncrypted(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{
-		blobs: map[string]*ReasoningBlob{
-			"chat-1/rs_abc": {Encrypted: "ENC"},
-		},
-	}
-	items := buildPhase6Request(t, envelopeWithRef("rs_abc", "thinking"), RequestBuilderConfig{
+	items := buildPhase6Request(t, envelopeWithRefAndEncrypted("rs_abc", "thinking", "ENC"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
 	})
 	r := findFirstReasoningItem(items)
 	if r == nil {
@@ -230,15 +189,13 @@ func TestPhase6DropSummaryRoundTripHitOnlyEncrypted(t *testing.T) {
 	}
 }
 
-// Case 5: drop summary + round_trip + miss.
-func TestPhase6DropSummaryRoundTripMissEmitsStubID(t *testing.T) {
+// Case 5: drop summary + round_trip + marker carries no encrypted.
+// The reasoning stub still emits because the ref is present.
+func TestPhase6DropSummaryRoundTripWithoutEncryptedEmitsStubID(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{}
 	items := buildPhase6Request(t, envelopeWithRef("rs_only", "thinking"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
 	})
 	r := findFirstReasoningItem(items)
 	if r == nil {
@@ -255,19 +212,13 @@ func TestPhase6DropSummaryRoundTripMissEmitsStubID(t *testing.T) {
 	}
 }
 
-// Case 6: drop summary + drop.
+// Case 6: drop summary + drop. Stub by id alone is still emitted.
 func TestPhase6DropSummaryDropEncryptedEmitsStubIDWhenRefPresent(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{}
-	items := buildPhase6Request(t, envelopeWithRef("rs_id", "thinking"), RequestBuilderConfig{
+	items := buildPhase6Request(t, envelopeWithRefAndEncrypted("rs_id", "thinking", "ENC_ignored"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
 	})
-	if getter.calls != 0 {
-		t.Fatalf("getter must not be called under drop+drop, calls=%d", getter.calls)
-	}
 	r := findFirstReasoningItem(items)
 	if r == nil {
 		t.Fatalf("expected reasoning stub")
@@ -278,23 +229,20 @@ func TestPhase6DropSummaryDropEncryptedEmitsStubIDWhenRefPresent(t *testing.T) {
 	if _, has := r["summary"]; has {
 		t.Fatalf("summary must be absent")
 	}
+	if _, has := r["encrypted_content"]; has {
+		t.Fatalf("encrypted_content must be absent under drop mode")
+	}
 }
 
-// Case 7: plain_text_concat + round_trip + hit. The body is folded into
-// the assistant message; the encrypted_content rides in a separate
-// Reasoning item that precedes the message.
-func TestPhase6PlainTextConcatRoundTripHitFoldsBodyAndEmitsEncrypted(t *testing.T) {
+// plain_text_concat + round_trip + marker carries encrypted. The body is
+// folded into the assistant message; the encrypted_content rides in a
+// separate Reasoning item that precedes the message.
+func TestPhase6PlainTextConcatRoundTripWithEncryptedFoldsBodyAndEmitsEncrypted(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{
-		blobs: map[string]*ReasoningBlob{
-			"chat-1/rs_abc": {Encrypted: "ENC"},
-		},
-	}
-	items := buildPhase6Request(t, envelopeWithRef("rs_abc", "deep thinking")+"\nfinal answer", RequestBuilderConfig{
+	envelope := envelopeWithRefAndEncrypted("rs_abc", "deep thinking", "ENC")
+	items := buildPhase6Request(t, envelope+"\nfinal answer", RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryPlainText,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
 		// Plain-text-concat must thread MaterializePlainTextConcat into
 		// the message-text path so the body survives into the message
 		// body. The provider wires this in production via
@@ -321,16 +269,13 @@ func TestPhase6PlainTextConcatRoundTripHitFoldsBodyAndEmitsEncrypted(t *testing.
 	}
 }
 
-// Case 8: plain_text_concat + round_trip + miss. No reasoning item
-// emitted; body still folded into the message.
-func TestPhase6PlainTextConcatRoundTripMissEmitsNoReasoningItem(t *testing.T) {
+// plain_text_concat + round_trip + marker carries no encrypted: no
+// reasoning item emitted; body still folded into the message.
+func TestPhase6PlainTextConcatRoundTripWithoutEncryptedEmitsNoReasoningItem(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{}
 	items := buildPhase6Request(t, envelopeWithRef("rs_miss", "thinking")+"\nanswer", RequestBuilderConfig{
 		RoundTripSummary:               RoundTripSummaryPlainText,
 		RoundTripEncrypted:             RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:              getter,
-		ChatKey:                        "chat-1",
 		InboundThinkingMaterialization: adapterrender.MaterializePlainTextConcat,
 	})
 	if r := findFirstReasoningItem(items); r != nil {
@@ -338,38 +283,28 @@ func TestPhase6PlainTextConcatRoundTripMissEmitsNoReasoningItem(t *testing.T) {
 	}
 }
 
-// Case 9: plain_text_concat + drop. No reasoning item; no lookup.
-func TestPhase6PlainTextConcatDropEncryptedSkipsLookupAndItem(t *testing.T) {
+// plain_text_concat + drop. No reasoning item even when the marker
+// carried an encrypted blob.
+func TestPhase6PlainTextConcatDropEncryptedEmitsNoReasoningItem(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{
-		blobs: map[string]*ReasoningBlob{
-			"chat-1/rs_abc": {Encrypted: "ENC"},
-		},
-	}
-	items := buildPhase6Request(t, envelopeWithRef("rs_abc", "thinking")+"\nanswer", RequestBuilderConfig{
+	items := buildPhase6Request(t, envelopeWithRefAndEncrypted("rs_abc", "thinking", "ENC")+"\nanswer", RequestBuilderConfig{
 		RoundTripSummary:               RoundTripSummaryPlainText,
 		RoundTripEncrypted:             RoundTripEncryptedDrop,
-		ReasoningStoreGet:              getter,
-		ChatKey:                        "chat-1",
 		InboundThinkingMaterialization: adapterrender.MaterializePlainTextConcat,
 	})
-	if getter.calls != 0 {
-		t.Fatalf("getter must not be called, calls=%d", getter.calls)
-	}
 	if r := findFirstReasoningItem(items); r != nil {
 		t.Fatalf("expected no reasoning item, got %#v", r)
 	}
 }
 
 // Legacy attribute-less marker should be dropped silently when summary
-// mode is native_summary_field/drop AND encrypted is drop AND there is
-// no ref (no payload to round-trip).
+// mode is drop AND encrypted is drop AND there is no ref (no payload to
+// round-trip).
 func TestPhase6LegacyNoRefDropsSilentlyUnderDropEncrypted(t *testing.T) {
 	t.Parallel()
 	items := buildPhase6Request(t, envelopeNoRef("legacy thinking"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
-		ChatKey:            "chat-1",
 	})
 	if r := findFirstReasoningItem(items); r != nil {
 		t.Fatalf("expected NO reasoning item for legacy no-ref under drop+drop, got %#v", r)
@@ -380,16 +315,9 @@ func TestPhase6LegacyNoRefDropsSilentlyUnderDropEncrypted(t *testing.T) {
 // when the summary mode keeps the body in the message text.
 func TestPhase6ReasoningPrecedesMessage(t *testing.T) {
 	t.Parallel()
-	getter := &fakeReasoningGetter{
-		blobs: map[string]*ReasoningBlob{
-			"chat-1/rs_abc": {Encrypted: "ENC"},
-		},
-	}
-	items := buildPhase6Request(t, envelopeWithRef("rs_abc", "thinking")+"\nfinal answer", RequestBuilderConfig{
+	items := buildPhase6Request(t, envelopeWithRefAndEncrypted("rs_abc", "thinking", "ENC")+"\nfinal answer", RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
 	})
 	reasoningIdx := -1
 	messageIdx := -1
@@ -408,26 +336,6 @@ func TestPhase6ReasoningPrecedesMessage(t *testing.T) {
 	}
 	if reasoningIdx > messageIdx {
 		t.Fatalf("reasoning item must come BEFORE assistant message (codex-rs ordering); r=%d m=%d", reasoningIdx, messageIdx)
-	}
-}
-
-// Errors from the store are treated as misses; the request build must
-// not surface them.
-func TestPhase6StoreErrorIsTreatedAsMiss(t *testing.T) {
-	t.Parallel()
-	getter := &fakeReasoningGetter{err: errors.New("boom")}
-	items := buildPhase6Request(t, envelopeWithRef("rs_abc", "thinking"), RequestBuilderConfig{
-		RoundTripSummary:   RoundTripSummaryNative,
-		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
-		ReasoningStoreGet:  getter,
-		ChatKey:            "chat-1",
-	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
-		t.Fatalf("expected reasoning item even on store error")
-	}
-	if _, has := r["encrypted_content"]; has {
-		t.Fatalf("encrypted_content must be absent on store error")
 	}
 }
 

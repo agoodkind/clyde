@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
@@ -51,51 +50,16 @@ type DirectConfig struct {
 	// websocket bodies. Off (default) is safe; the other modes route to
 	// adapter.providers.codex.wire_capture for short-retention diagnostics.
 	WireCaptureMode WireCaptureMode
-	// ReasoningStore receives encrypted_content blobs scraped from
-	// response.output_item.done reasoning items. nil disables capture
-	// (Phase 3 store off, no store dependency, etc.). Phase 4 writes;
-	// Phase 6 reads.
-	ReasoningStore ReasoningBlobStore
-	// RoundTripEncrypted gates the writer. RoundTripEncryptedRoundTrip
-	// (the codex-rs default) persists; RoundTripEncryptedDrop skips.
-	// Empty resolves to RoundTripEncryptedRoundTrip per codex-rs.
+	// RoundTripEncrypted controls whether the renderer embeds the
+	// encrypted_content blob on the synthetic-thinking close marker.
+	// RoundTripEncryptedRoundTrip (the codex-rs default) emits the
+	// `data-encrypted` attribute; RoundTripEncryptedDrop omits it. Empty
+	// resolves to RoundTripEncryptedRoundTrip per codex-rs.
 	RoundTripEncrypted RoundTripEncrypted
 	// RoundTripSummary picks the inbound shape for round-tripped
 	// synthetic thinking envelopes on the next outbound request. Empty
 	// resolves to RoundTripSummaryNative per codex-rs.
 	RoundTripSummary RoundTripSummary
-	// ReasoningStoreGet is the read side of the encrypted_content cache.
-	// Phase 6 reads it during the request build to attach previously
-	// persisted blobs to round-tripped Reasoning items. Optional; nil
-	// disables lookup (every part is treated as a miss).
-	ReasoningStoreGet ReasoningStoreGetter
-}
-
-// ReasoningBlobStore is the narrow Put-only contract DirectConfig needs from
-// the encrypted_content cache. It mirrors the subset of
-// [reasoningstore.Store] that Phase 4 calls so tests can pass a fake without
-// depending on the on-disk implementation.
-type ReasoningBlobStore interface {
-	Put(ctx context.Context, blob ReasoningBlob) error
-}
-
-// ReasoningStoreGetter is the narrow Get-only contract the Phase 6 inbound
-// path uses to look up a previously persisted encrypted_content blob keyed
-// by (chatKey, itemID). A nil return with a nil error means the blob is not
-// known; callers must treat that as a miss without surfacing an error.
-type ReasoningStoreGetter interface {
-	Get(ctx context.Context, chatKey, itemID string) (*ReasoningBlob, error)
-}
-
-// ReasoningBlob is the value DirectConfig.ReasoningStore.Put receives. It is
-// shape-compatible with reasoningstore.EncryptedBlob; the codex package owns
-// its own typed surface so RunDirect does not need to import the storage
-// package directly.
-type ReasoningBlob struct {
-	ChatKey   string
-	ItemID    string
-	Encrypted string
-	CreatedAt int64
 }
 
 // RoundTripEncrypted is the closed enum the codex transport honors when the
@@ -156,13 +120,11 @@ func RunDirect(
 	if !cfg.WebsocketEnabled {
 		return NewRunResult("stop"), errCodexWebsocketDisabled
 	}
-	transportPayload := BuildRequestWithConfig(ctx, req, model, effort, RequestBuilderConfig{
+	transportPayload := BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{
 		ReasoningSummary:               cfg.ReasoningSummary,
 		InboundThinkingMaterialization: cfg.InboundThinkingMaterialization,
 		RoundTripSummary:               cfg.RoundTripSummary,
 		RoundTripEncrypted:             cfg.RoundTripEncrypted,
-		ReasoningStoreGet:              cfg.ReasoningStoreGet,
-		ChatKey:                        strings.TrimSpace(cfg.Correlation.ChatKey),
 	})
 	// WARNING: this is the websocket session identity, not the
 	// prompt_cache_key. Codex uses prompt_cache_key for upstream cache
@@ -185,103 +147,24 @@ func RunDirect(
 	}
 	wsReq := ResponseCreateRequestFromHTTP(transportPayload)
 	wsCfg := WebsocketTransportConfig{
-		URL:             cfg.WebsocketURL,
-		Token:           cfg.Token,
-		AccountID:       cfg.AccountID,
-		RequestID:       cfg.RequestID,
-		CursorRequestID: cfg.CursorRequestID,
-		Correlation:     cfg.Correlation,
-		Alias:           model.Alias,
-		ConversationID:  conversationID,
-		TurnState:       NewTurnState(),
-		TurnMetadata:    transportPayload.ClientMetadata[CodexTurnMetadataHeader],
-		BodyLog:         cfg.BodyLog,
-		BodyLogProvider: cfg.BodyLogProvider,
-		SessionCache:    cfg.SessionCache,
-		Log:             cfg.Log,
-		WireCaptureMode: cfg.WireCaptureMode,
+		URL:                cfg.WebsocketURL,
+		Token:              cfg.Token,
+		AccountID:          cfg.AccountID,
+		RequestID:          cfg.RequestID,
+		CursorRequestID:    cfg.CursorRequestID,
+		Correlation:        cfg.Correlation,
+		Alias:              model.Alias,
+		ConversationID:     conversationID,
+		TurnState:          NewTurnState(),
+		TurnMetadata:       transportPayload.ClientMetadata[CodexTurnMetadataHeader],
+		BodyLog:            cfg.BodyLog,
+		BodyLogProvider:    cfg.BodyLogProvider,
+		SessionCache:       cfg.SessionCache,
+		Log:                cfg.Log,
+		WireCaptureMode:    cfg.WireCaptureMode,
+		RoundTripEncrypted: cfg.RoundTripEncrypted,
 	}
-	result, runErr := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
-	captureReasoningBlobs(ctx, cfg, result)
-	return result, runErr
-}
-
-// captureReasoningBlobs walks result.OutputItems for response.output_item.done
-// reasoning items that carry encrypted_content and persists them to
-// cfg.ReasoningStore. Skipped silently when the store is nil, the chat key
-// is empty (no per-chat partition), or the round-trip lever is set to drop.
-//
-// The persistence is best-effort. Any error is logged at WARN and the request
-// completes normally; the upstream turn already succeeded.
-func captureReasoningBlobs(ctx context.Context, cfg DirectConfig, result RunResult) {
-	if cfg.ReasoningStore == nil {
-		return
-	}
-	chatKey := strings.TrimSpace(cfg.Correlation.ChatKey)
-	if chatKey == "" {
-		return
-	}
-	mode := cfg.RoundTripEncrypted
-	if mode == "" {
-		mode = RoundTripEncryptedRoundTrip
-	}
-	if mode != RoundTripEncryptedRoundTrip {
-		return
-	}
-	now := time.Now().UnixNano()
-	for _, item := range result.OutputItems {
-		if !reasoningItemHasEncryptedContent(item) {
-			continue
-		}
-		blob := ReasoningBlob{
-			ChatKey:   chatKey,
-			ItemID:    strings.TrimSpace(stringField(item, "id")),
-			Encrypted: strings.TrimSpace(stringField(item, "encrypted_content")),
-			CreatedAt: now,
-		}
-		if blob.ItemID == "" || blob.Encrypted == "" {
-			continue
-		}
-		if err := cfg.ReasoningStore.Put(ctx, blob); err != nil {
-			cfg.Log.WarnContext(ctx, "adapter.codex.reasoningstore.put_failed",
-				"component", "adapter",
-				"subcomponent", "codex",
-				"chat_key", blob.ChatKey,
-				"item_id", blob.ItemID,
-				"err", err.Error(),
-			)
-		}
-	}
-}
-
-// reasoningItemHasEncryptedContent reports whether the upstream output item
-// is a reasoning item carrying a non-empty encrypted_content field. Other
-// item types (message, function_call, etc.) are ignored.
-func reasoningItemHasEncryptedContent(item map[string]any) bool {
-	if item == nil {
-		return false
-	}
-	if strings.TrimSpace(stringField(item, "type")) != "reasoning" {
-		return false
-	}
-	return strings.TrimSpace(stringField(item, "encrypted_content")) != ""
-}
-
-// stringField pulls a string-typed map value or returns empty when missing
-// or wrong-typed. Used for the opaque-shape OutputItems map walk.
-func stringField(item map[string]any, key string) string {
-	if item == nil {
-		return ""
-	}
-	raw, ok := item[key]
-	if !ok {
-		return ""
-	}
-	s, ok := raw.(string)
-	if !ok {
-		return ""
-	}
-	return s
+	return RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 }
 
 var errCodexWebsocketDisabled = errors.New("codex websocket transport is disabled but no HTTPS fallback exists")

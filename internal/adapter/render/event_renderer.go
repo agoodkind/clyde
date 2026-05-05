@@ -32,14 +32,22 @@ const (
 
 // Event is the provider-neutral render input. It deliberately models only the
 // surfaces that may produce BYOK-visible output or OpenAI-shaped stream fields.
+//
+// EncryptedContent is the opaque server-signed `encrypted_content` blob the
+// codex parser scrapes off `response.output_item.done` reasoning items and
+// surfaces on [EventReasoningFinished]. The renderer embeds it inline on
+// the synthetic-thinking close marker as a `data-encrypted` attribute so
+// Cursor's transcript owns persistence across turns. Empty for providers
+// that do not surface an encrypted_content blob (Anthropic, legacy spans).
 type Event struct {
-	Kind          EventKind
-	Text          string
-	ReasoningKind string
-	SummaryIndex  *int
-	ToolCalls     []adapteropenai.ToolCall
-	ItemID        string
-	ItemType      string
+	Kind             EventKind
+	Text             string
+	ReasoningKind    string
+	SummaryIndex     *int
+	ToolCalls        []adapteropenai.ToolCall
+	ItemID           string
+	ItemType         string
+	EncryptedContent string
 }
 
 // RendererState exposes reasoning state needed by response collectors that need
@@ -76,10 +84,17 @@ type EventRenderer struct {
 	// upstream did not surface an id, in which case the open marker is
 	// emitted attribute-less.
 	lastReasoningItemID string
-	assistantText       assistantTextAggregate
-	assistantTextLogged bool
-	toolCallNames       []string
-	hasSubagentToolCall bool
+	// lastReasoningEncrypted is the most recent encrypted_content blob
+	// captured from a reasoning event (today: codex
+	// EventReasoningFinished). The synthetic-thinking close marker
+	// embeds it as `data-encrypted` so Cursor's transcript carries it
+	// across turns. Cleared after each close so a later span starts
+	// fresh.
+	lastReasoningEncrypted string
+	assistantText          assistantTextAggregate
+	assistantTextLogged    bool
+	toolCallNames          []string
+	hasSubagentToolCall    bool
 }
 
 // NewEventRenderer constructs a renderer with a background context.
@@ -98,27 +113,28 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 	}
 	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
 	return &EventRenderer{
-		createdUnix:           renderClock.Now().Unix(),
-		modelAlias:            modelAlias,
-		reqID:                 reqID,
-		backend:               backend,
-		ctx:                   ctx,
-		log:                   log,
-		suppressed:            nil,
-		seenRole:              false,
-		reasoningOpen:         false,
-		lastReasoningKind:     "",
-		lastSummaryIdx:        0,
-		haveSummaryIdx:        false,
-		pendingReasoningBreak: false,
-		reasoningSignaled:     false,
-		reasoningVisible:      false,
-		reasoningBodyEmitted:  false,
-		lastReasoningItemID:   "",
-		assistantText:         assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
-		assistantTextLogged:   false,
-		toolCallNames:         nil,
-		hasSubagentToolCall:   false,
+		createdUnix:            renderClock.Now().Unix(),
+		modelAlias:             modelAlias,
+		reqID:                  reqID,
+		backend:                backend,
+		ctx:                    ctx,
+		log:                    log,
+		suppressed:             nil,
+		seenRole:               false,
+		reasoningOpen:          false,
+		lastReasoningKind:      "",
+		lastSummaryIdx:         0,
+		haveSummaryIdx:         false,
+		pendingReasoningBreak:  false,
+		reasoningSignaled:      false,
+		reasoningVisible:       false,
+		reasoningBodyEmitted:   false,
+		lastReasoningItemID:    "",
+		lastReasoningEncrypted: "",
+		assistantText:          assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
+		assistantTextLogged:    false,
+		toolCallNames:          nil,
+		hasSubagentToolCall:    false,
 	}
 }
 
@@ -190,6 +206,11 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 			out = append(out, *chunk)
 		}
 	case EventReasoningFinished:
+		// Capture the encrypted_content blob (codex only) so the
+		// close marker can carry it inline as `data-encrypted`.
+		if enc := strings.TrimSpace(ev.EncryptedContent); enc != "" {
+			r.lastReasoningEncrypted = enc
+		}
 		// Close the synthetic content block; reasoning_content has no marker to close.
 		if chunk := r.renderReasoningClose(); chunk != nil {
 			out = append(out, *chunk)

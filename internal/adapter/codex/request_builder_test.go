@@ -32,7 +32,7 @@ type managedPromptPlanForTest struct {
 }
 
 func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string) HTTPTransportRequest {
-	return BuildRequestWithConfig(context.Background(), req, model, effort, RequestBuilderConfig{})
+	return BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{})
 }
 
 const (
@@ -215,7 +215,7 @@ func TestBuildCodexRequestUsesConfiguredDefaultReasoningSummary(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := BuildRequestWithConfig(context.Background(), req, model, "", RequestBuilderConfig{
+	out := BuildRequestWithConfig(req, model, "", RequestBuilderConfig{
 		ReasoningSummary: "detailed",
 	})
 	if out.Reasoning == nil {
@@ -1512,24 +1512,24 @@ func TestCodexRendererOpensThinkingWithoutPlaceholderBody(t *testing.T) {
 func collectCodexSSEForTest(stream *strings.Reader) (string, RunResult, error) {
 	renderer := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got strings.Builder
-	res, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
+	res, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
 		for _, ch := range renderer.HandleEvent(ev) {
 			if len(ch.Choices) > 0 {
 				got.WriteString(ch.Choices[0].Delta.Content)
 			}
 		}
 		return nil
-	}, sseInstrumentationContext{})
+	}, sseInstrumentationContext{}, SSEParseOptions{DropEncryptedContent: false})
 	return got.String(), res, err
 }
 
 func parseCodexSSEChunksForTest(stream *strings.Reader) ([]adapteropenai.StreamChunk, RunResult, error) {
 	renderer := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got []adapteropenai.StreamChunk
-	res, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
+	res, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
 		got = append(got, renderer.HandleEvent(ev)...)
 		return nil
-	}, sseInstrumentationContext{})
+	}, sseInstrumentationContext{}, SSEParseOptions{DropEncryptedContent: false})
 	return got, res, err
 }
 

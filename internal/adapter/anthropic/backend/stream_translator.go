@@ -113,10 +113,11 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 						Arguments: "",
 					},
 				}},
+				EncryptedContent: "",
 			}}, false, "", nil, nil
 		case "thinking":
 			t.currentBlockType = "thinking"
-			return []Event{{Kind: EventReasoningSignaled}}, false, "", nil, nil
+			return []Event{{Kind: EventReasoningSignaled, EncryptedContent: ""}}, false, "", nil, nil
 		default:
 			t.currentBlockType = ev.ContentBlock.Type
 		}
@@ -136,7 +137,7 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 		switch ev.Delta.Type {
 		case "text_delta":
 			t.visibleText.WriteString(ev.Delta.Text)
-			return []Event{{Kind: EventAssistantTextDelta, Text: ev.Delta.Text}}, false, "", nil, nil
+			return []Event{{Kind: EventAssistantTextDelta, Text: ev.Delta.Text, EncryptedContent: ""}}, false, "", nil, nil
 		case "input_json_delta":
 			tcIdx, ok := t.toolCallByBlockIdx[ev.Index]
 			if !ok {
@@ -161,12 +162,14 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 						Arguments: ev.Delta.PartialJSON,
 					},
 				}},
+				EncryptedContent: "",
 			}}, false, "", nil, nil
 		case "thinking_delta":
 			return []Event{{
-				Kind:          EventReasoningDelta,
-				Text:          ev.Delta.Thinking,
-				ReasoningKind: "text",
+				Kind:             EventReasoningDelta,
+				Text:             ev.Delta.Thinking,
+				ReasoningKind:    "text",
+				EncryptedContent: "",
 			}}, false, "", nil, nil
 		default:
 			return nil, false, "", nil, nil
@@ -181,7 +184,7 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 		// default. The cached prefix stays byte-stable across turns.
 		if t.currentBlockType == "thinking" {
 			t.currentBlockType = ""
-			return []Event{{Kind: EventReasoningFinished}}, false, "", nil, nil
+			return []Event{{Kind: EventReasoningFinished, EncryptedContent: ""}}, false, "", nil, nil
 		}
 		t.currentBlockType = ""
 		return nil, false, "", nil, nil
@@ -214,7 +217,7 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 		}
 		var extra []Event
 		if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
-			extra = append(extra, Event{Kind: adapterrender.EventAssistantRefusalDelta, Text: t.visibleText.String()})
+			extra = append(extra, Event{Kind: adapterrender.EventAssistantRefusalDelta, Text: t.visibleText.String(), EncryptedContent: ""})
 		}
 		return extra, true, reason, u, nil
 
