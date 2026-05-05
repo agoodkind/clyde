@@ -123,3 +123,53 @@ func attrMap(attrs []slog.Attr) map[string]string {
 	}
 	return out
 }
+
+func TestChatKeyAttrRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	c := New("req-ck")
+	if c.ChatKey != "" {
+		t.Fatalf("ChatKey should start empty, got %q", c.ChatKey)
+	}
+	c2 := c.WithChatKey("conv-abc")
+	if c2.ChatKey != "conv-abc" {
+		t.Fatalf("WithChatKey did not set value: %q", c2.ChatKey)
+	}
+	c3 := c2.WithChatKey("conv-xyz")
+	if c3.ChatKey != "conv-abc" {
+		t.Fatalf("WithChatKey overwrote existing value: %q", c3.ChatKey)
+	}
+	c4 := c2.WithChatKey("   ")
+	if c4.ChatKey != "conv-abc" {
+		t.Fatalf("WithChatKey corrupted value with whitespace: %q", c4.ChatKey)
+	}
+	got := attrMap(c2.Attrs())
+	if got["chat_key"] != "conv-abc" {
+		t.Fatalf("Attrs() did not carry chat_key: %v", got)
+	}
+}
+
+func TestFromHTTPHeaderResolvesChatKeyHeaderPrecedence(t *testing.T) {
+	t.Parallel()
+
+	header := http.Header{}
+	header.Set(HeaderCursorConversationID, "cursor-conv-1")
+	header.Set(HeaderClaudeCodeSessionID, "claude-sess-1")
+	c := FromHTTPHeader(header, "req-1")
+	if c.ChatKey != "cursor-conv-1" {
+		t.Fatalf("cursor conversation id should win, got %q", c.ChatKey)
+	}
+
+	header2 := http.Header{}
+	header2.Set(HeaderClaudeCodeSessionID, "claude-sess-2")
+	c2 := FromHTTPHeader(header2, "req-2")
+	if c2.ChatKey != "claude-sess-2" {
+		t.Fatalf("claude code session id should resolve when cursor missing, got %q", c2.ChatKey)
+	}
+
+	header3 := http.Header{}
+	c3 := FromHTTPHeader(header3, "req-3")
+	if c3.ChatKey != "" {
+		t.Fatalf("ChatKey should be empty when neither header set, got %q", c3.ChatKey)
+	}
+}

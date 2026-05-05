@@ -24,6 +24,9 @@ const (
 	HeaderUpstreamRequestID    = "x-upstream-request-id"
 	HeaderUpstreamResponseID   = "x-upstream-response-id"
 	HeaderTraceparent          = "traceparent"
+	// HeaderClaudeCodeSessionID is set by claude-cli native ingress and used as
+	// the per-chat key for native Anthropic ingress when present.
+	HeaderClaudeCodeSessionID = "x-claude-code-session-id"
 )
 
 type TraceID string
@@ -40,6 +43,11 @@ type Context struct {
 	CursorGenerationID   string
 	UpstreamRequestID    string
 	UpstreamResponseID   string
+	// ChatKey is the per-chat partition key used by the transcript router.
+	// Resolved at ingress from provider-specific headers (cursor conversation
+	// id, claude-code session id) and back-filled from the request body's
+	// metadata.cursorConversationId. Empty when no key resolves.
+	ChatKey string
 }
 
 type contextKey int
@@ -77,6 +85,14 @@ func FromHTTPHeader(header http.Header, requestID string) Context {
 	corr.CursorGenerationID = strings.TrimSpace(header.Get(HeaderCursorGenerationID))
 	corr.UpstreamRequestID = strings.TrimSpace(header.Get(HeaderUpstreamRequestID))
 	corr.UpstreamResponseID = strings.TrimSpace(header.Get(HeaderUpstreamResponseID))
+	// Resolve ChatKey from header at ingress. The first set value wins; an
+	// already-set value in c (e.g. from a downstream call) is not overwritten
+	// because this constructs a fresh Context.
+	if conv := strings.TrimSpace(header.Get(HeaderCursorConversationID)); conv != "" {
+		corr.ChatKey = conv
+	} else if sess := strings.TrimSpace(header.Get(HeaderClaudeCodeSessionID)); sess != "" {
+		corr.ChatKey = sess
+	}
 	return corr
 }
 
@@ -191,7 +207,25 @@ func (c Context) Attrs() []slog.Attr {
 	if c.UpstreamResponseID != "" {
 		attrs = append(attrs, slog.String("upstream_response_id", c.UpstreamResponseID))
 	}
+	if c.ChatKey != "" {
+		attrs = append(attrs, slog.String("chat_key", c.ChatKey))
+	}
 	return attrs
+}
+
+// WithChatKey returns a copy of c with ChatKey set to the trimmed value, but
+// only if ChatKey is currently empty. A header-resolved key always wins over a
+// later body-resolved key.
+func (c Context) WithChatKey(key string) Context {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return c
+	}
+	if c.ChatKey != "" {
+		return c
+	}
+	c.ChatKey = key
+	return c
 }
 
 func AttrsFromContext(ctx context.Context) []slog.Attr {

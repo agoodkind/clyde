@@ -307,6 +307,37 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		cfg.Logging.Body.Mode = "summary"
 	}
 
+	if cfg.Logging.Transcript.Enabled == nil {
+		v := true
+		cfg.Logging.Transcript.Enabled = &v
+	}
+	tmode := strings.ToLower(strings.TrimSpace(cfg.Logging.Transcript.Mode))
+	if tmode == "" {
+		tmode = "summary"
+	}
+	switch tmode {
+	case "summary", "raw":
+	default:
+		return fmt.Errorf("logging.transcript.mode must be one of summary|raw")
+	}
+	cfg.Logging.Transcript.Mode = tmode
+	if cfg.Logging.Transcript.MaxAgeDays < 0 {
+		return fmt.Errorf("logging.transcript.max_age_days must be >= 0")
+	}
+	if cfg.Logging.Transcript.MaxChats < 0 {
+		return fmt.Errorf("logging.transcript.max_chats must be >= 0")
+	}
+	if cfg.Logging.Transcript.Enabled != nil && *cfg.Logging.Transcript.Enabled {
+		if cfg.Logging.Transcript.MaxAgeDays == 0 || cfg.Logging.Transcript.MaxChats == 0 {
+			slog.Warn("config.logging.transcript.disabled_missing_retention",
+				"component", "config",
+				"max_age_days", cfg.Logging.Transcript.MaxAgeDays,
+				"max_chats", cfg.Logging.Transcript.MaxChats,
+				"reason", "transcript router requires positive max_age_days and max_chats; feature off",
+			)
+		}
+	}
+
 	cfg.MITM.Providers = normalizeMITMProviders(cfg.MITM.Providers)
 	switch cfg.MITM.Providers {
 	case "both", "claude", "codex":
