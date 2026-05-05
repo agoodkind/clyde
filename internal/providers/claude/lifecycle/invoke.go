@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
@@ -26,7 +27,11 @@ var VerboseFunc func() bool = func() bool { return false }
 
 // SessionUsedFunc checks if a Claude Code session was actually used (has a transcript).
 // Can be overridden in tests where the fake claude binary doesn't create transcripts.
-var SessionUsedFunc = DefaultSessionUsed
+var (
+	SessionUsedFunc       = DefaultSessionUsed
+	wrapperExecutablePath = os.Executable
+	execWrapperProcess    = syscall.Exec
+)
 
 const (
 	envEnableSelfReload = "CLYDE_ENABLE_SELF_RELOAD"
@@ -406,7 +411,7 @@ func shouldSelfReloadWrapper(env map[string]string, runErr error, state *monitor
 }
 
 func selfReloadCurrentProcess() error {
-	executablePath, err := os.Executable()
+	executablePath, err := wrapperExecutablePath()
 	if err != nil {
 		claudeLog.Warn("wrapper.self_reload.executable_failed",
 			"component", "wrapper",
@@ -414,11 +419,18 @@ func selfReloadCurrentProcess() error {
 		)
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
+	if err := binaryhandoff.ValidateClydeExecutable(executablePath); err != nil {
+		claudeLifecycleLog.Logger().Warn("wrapper.self_reload.rejected",
+			"component", "wrapper",
+			"path", executablePath,
+			"err", err)
+		return nil
+	}
 	claudeLifecycleLog.Logger().Info("wrapper.self_reload.exec",
 		"component", "wrapper",
 		"path", executablePath,
 		"arg_count", len(os.Args))
-	return syscall.Exec(executablePath, os.Args, os.Environ())
+	return execWrapperProcess(executablePath, os.Args, os.Environ())
 }
 
 // ResumeByName invokes claude with --resume <name>, letting Claude resolve

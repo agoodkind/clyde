@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -328,6 +329,46 @@ func TestReloadDaemonRequiresProcessLock(t *testing.T) {
 	}
 	if resp.GetNewPid() != 4321 {
 		t.Fatalf("new pid=%d want 4321", resp.GetNewPid())
+	}
+}
+
+func TestReloadDaemonRejectsBadReplacementBinaryBeforeStart(t *testing.T) {
+	badBinary := filepath.Join(t.TempDir(), "clyde")
+	script := "#!/usr/bin/env bash\nprintf 'not-clyde\\n'\n"
+	if err := os.WriteFile(badBinary, []byte(script), 0o755); err != nil {
+		t.Fatalf("write bad binary: %v", err)
+	}
+
+	oldExecutablePath := daemonExecutablePath
+	oldReplacementCommand := daemonReplacementCommand
+	t.Cleanup(func() {
+		daemonExecutablePath = oldExecutablePath
+		daemonReplacementCommand = oldReplacementCommand
+	})
+
+	startCalled := false
+	daemonExecutablePath = func() (string, error) {
+		return badBinary, nil
+	}
+	daemonReplacementCommand = func(string, ...string) *exec.Cmd {
+		startCalled = true
+		return exec.Command("false")
+	}
+
+	_, err := reloadDaemonBinary(
+		context.Background(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		nil,
+		&daemonRuntime{},
+		&Server{},
+		nil,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "validate replacement daemon binary") {
+		t.Fatalf("reloadDaemonBinary error=%v, want validation failure", err)
+	}
+	if startCalled {
+		t.Fatalf("replacement command was created for invalid binary")
 	}
 }
 
