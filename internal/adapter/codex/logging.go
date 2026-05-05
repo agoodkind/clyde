@@ -7,7 +7,6 @@ package codex
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"log/slog"
@@ -182,7 +181,6 @@ type requestEvent struct {
 	BodyBytes          int
 	Headers            map[string]string
 	Body               string
-	BodyB64            string
 	BodyTruncated      bool
 	BodySummary        *codexBodySummary
 	PreviousResponseID string
@@ -228,9 +226,6 @@ func (e requestEvent) toSlogAttrs() []slog.Attr {
 	}
 	if e.Body != "" {
 		attrs = append(attrs, slog.String("body", e.Body))
-	}
-	if e.BodyB64 != "" {
-		attrs = append(attrs, slog.String("body_b64", e.BodyB64))
 	}
 	if e.BodyTruncated {
 		attrs = append(attrs, slog.Bool("body_truncated", true))
@@ -542,34 +537,21 @@ func containsAny(haystack string, needles ...string) bool {
 	return false
 }
 
-// applyBodyMode returns (body string, body_b64 string, truncated bool)
-// according to the configured mode. Modes:
+// applyBodyMode returns the body string and a truncation flag according
+// to the configured mode. Modes:
 //
-//	off:       both empty, body_bytes only
-//	summary:   both empty (caller emits BodySummary separately)
-//	whitelist: body string truncated to maxBytes, no b64
-//	raw:       body string and b64 bytes truncated to maxBytes
-func applyBodyMode(raw []byte, mode string, maxBytes int) (body, b64 string, truncated bool) {
+//	off:       empty, body_bytes only
+//	summary:   empty (caller emits BodySummary separately)
+//	whitelist: body string truncated to maxBytes
+//	raw:       body string truncated to maxBytes
+func applyBodyMode(raw []byte, mode string, maxBytes int) (body string, truncated bool) {
 	switch mode {
 	case BodyLogOff, BodyLogSummary:
-		return "", "", false
-	case BodyLogWhitelist:
-		body, truncated = truncateCodexBody(raw, maxBytes)
-		return body, "", truncated
-	case BodyLogRaw:
-		body, truncated = truncateCodexBody(raw, maxBytes)
-		if maxBytes <= 0 {
-			return body, "", truncated
-		}
-		b64Bytes := raw
-		if truncated {
-			b64Bytes = raw[:maxBytes]
-		}
-		b64 = base64.StdEncoding.EncodeToString(b64Bytes)
-		return body, b64, truncated
+		return "", false
+	case BodyLogWhitelist, BodyLogRaw:
+		return truncateCodexBody(raw, maxBytes)
 	default:
-		body, truncated = truncateCodexBody(raw, maxBytes)
-		return body, "", truncated
+		return truncateCodexBody(raw, maxBytes)
 	}
 }
 

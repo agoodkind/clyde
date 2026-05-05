@@ -172,42 +172,9 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func logWebsocketFrameReceived(ctx context.Context, logCtx sseInstrumentationContext, frameSeq, payloadBytes int, started time.Time, message []byte) {
-	var raw websocketEventEnvelope
-	upstreamEventType := ""
-	if err := json.Unmarshal(message, &raw); err == nil {
-		upstreamEventType = strings.TrimSpace(raw.Type)
-	}
-	attrs := []slog.Attr{
-		slog.String("component", "adapter"),
-		slog.String("subcomponent", "codex"),
-		slog.String("transport", "responses_websocket"),
-		slog.String("request_id", logCtx.RequestID),
-		slog.Int("websocket_frame_sequence", frameSeq),
-		slog.Int("payload_bytes", payloadBytes),
-		slog.Time("received_at", codexClock.Now()),
-	}
-	if !started.IsZero() {
-		attrs = append(attrs, slog.Int64("elapsed_ms", codexClock.Now().Sub(started).Milliseconds()))
-	}
-	if logCtx.CursorRequestID != "" {
-		attrs = append(attrs, slog.String("cursor_request_id", logCtx.CursorRequestID))
-	}
-	if logCtx.ConversationID != "" {
-		attrs = append(attrs, slog.String("conversation_id", logCtx.ConversationID))
-	}
-	if upstreamEventType != "" {
-		attrs = append(attrs, slog.String("upstream_event_type", upstreamEventType))
-	}
-	attrs = append(attrs, logCtx.Correlation.Attrs()...)
-	logCodexEventWithConcern(ctx, slog.LevelDebug, "adapter.codex.websocket.frame_received", slogger.ConcernAdapterProviderCodexWS, attrs)
-}
-
-func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, logCtx sseInstrumentationContext) io.Reader {
+func streamWebsocketAsSyntheticSSE(_ context.Context, conn *websocket.Conn, _ sseInstrumentationContext) io.Reader {
 	pr, pw := io.Pipe()
 	go func() {
-		started := codexClock.Now()
-		frameSeq := 0
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				slog.Default().Error("adapter.codex.websocket_reader_panic",
@@ -230,8 +197,6 @@ func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, lo
 			if messageType != websocket.TextMessage {
 				continue
 			}
-			frameSeq++
-			logWebsocketFrameReceived(ctx, logCtx, frameSeq, len(message), started, message)
 			frame, err := websocketMessageToSyntheticSSE(message)
 			if err != nil {
 				_ = pw.CloseWithError(err)
@@ -345,9 +310,8 @@ func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payloa
 		PreviousResponseID: payload.PreviousResponseID,
 		Warmup:             warmup,
 	}
-	body, b64, truncated := applyBodyMode(frame, mode, maxBytes)
+	body, truncated := applyBodyMode(frame, mode, maxBytes)
 	ev.Body = body
-	ev.BodyB64 = b64
 	ev.BodyTruncated = truncated
 	if mode == BodyLogSummary || mode == BodyLogWhitelist {
 		ev.BodySummary = summarizeWsRequest(payload)

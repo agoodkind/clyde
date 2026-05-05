@@ -8,7 +8,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -256,7 +255,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		"body_bytes", len(body),
 		"headers", redactedOutboundHeaders(httpReq.Header),
 		"body", string(body),
-		"body_b64", base64.StdEncoding.EncodeToString(body),
 	)
 
 	postStarted := anthropicClock.Now()
@@ -300,7 +298,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		ev := base
 		ev.RetryAfter = resp.Header.Get("retry-after")
 		ev.Body = string(errBody)
-		ev.BodyB64 = base64.StdEncoding.EncodeToString(errBody)
 		ev.BodyBytes = len(errBody)
 		logResponse(slog.LevelWarn, "anthropic.ratelimit", ev)
 
@@ -342,7 +339,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		errBody := readDecodedBody(resp)
 		ev := base
 		ev.Body = string(errBody)
-		ev.BodyB64 = base64.StdEncoding.EncodeToString(errBody)
 		ev.BodyBytes = len(errBody)
 		logResponse(slog.LevelError, "anthropic.messages.upstream_error", ev)
 		return nil, &UpstreamError{

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -804,46 +803,6 @@ func TestParseSSEEventsEmitsNormalizedSequence(t *testing.T) {
 	}
 }
 
-func TestParseSSEEventsLogsNormalizedEmitShapeWithoutContent(t *testing.T) {
-	var buf bytes.Buffer
-	defer captureDefaultDebugLogs(t, &buf)()
-	t.Setenv("CLYDE_CODEX_LOG_PATH", filepath.Join(t.TempDir(), "codex.jsonl"))
-	resetDedicatedCodexLoggerForTest(t)
-
-	stream := strings.NewReader(strings.Join([]string{
-		"event: response.output_text.delta",
-		`data: {"delta":"secret-normalized-content","sequence_number":7}`,
-		"",
-	}, "\n") + "\n")
-	_, err := ParseSSEEventsWithLogging(context.Background(), stream, func(ev adapterrender.Event) error {
-		return nil
-	}, sseInstrumentationContext{
-		RequestID:       "req-parser-log",
-		CursorRequestID: "cursor-parser-log",
-		ConversationID:  "conv-parser-log",
-	})
-	if err != nil {
-		t.Fatalf("ParseSSEEventsWithLogging: %v", err)
-	}
-	logs := parserEmitLogs(t, buf.Bytes())
-	if len(logs) != 1 {
-		t.Fatalf("parser emit logs len=%d want 1\n%s", len(logs), buf.String())
-	}
-	if strings.Contains(logs[0].Raw, "secret-normalized-content") {
-		t.Fatalf("parser emit log leaked delta content: %s", logs[0].Raw)
-	}
-	got := logs[0]
-	if got.RequestID != "req-parser-log" || got.CursorRequestID != "cursor-parser-log" || got.ConversationID != "conv-parser-log" {
-		t.Fatalf("identity fields=%+v", got)
-	}
-	if got.UpstreamEventType != "response.output_text.delta" || got.NormalizedEventKind != string(adapterrender.EventAssistantTextDelta) {
-		t.Fatalf("event shape=%+v", got)
-	}
-	if got.UpstreamEventSequence != 1 || got.UpstreamSequenceNumber != 7 || got.NormalizedEventSequence != 1 {
-		t.Fatalf("sequence fields=%+v", got)
-	}
-}
-
 func TestCanonicalContinuationPreservesFunctionCallName(t *testing.T) {
 	item := map[string]any{
 		"type":      "function_call",
@@ -928,38 +887,6 @@ type nativeToolParsedLog struct {
 	ItemID    string `json:"item_id"`
 	CallID    string `json:"call_id"`
 	ToolName  string `json:"tool_name"`
-}
-
-type parserEmitLog struct {
-	Message                 string `json:"msg"`
-	RequestID               string `json:"request_id"`
-	CursorRequestID         string `json:"cursor_request_id"`
-	ConversationID          string `json:"conversation_id"`
-	UpstreamEventType       string `json:"upstream_event_type"`
-	NormalizedEventKind     string `json:"normalized_event_kind"`
-	UpstreamEventSequence   int    `json:"upstream_event_sequence"`
-	UpstreamSequenceNumber  int    `json:"upstream_sequence_number"`
-	NormalizedEventSequence int    `json:"normalized_event_sequence"`
-	Raw                     string `json:"-"`
-}
-
-func parserEmitLogs(t *testing.T, data []byte) []parserEmitLog {
-	t.Helper()
-	var out []parserEmitLog
-	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		var record parserEmitLog
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatalf("decode log record: %v\n%s", err, line)
-		}
-		if record.Message == "adapter.codex.parser.normalized_event_emitted" {
-			record.Raw = line
-			out = append(out, record)
-		}
-	}
-	return out
 }
 
 func captureDefaultDebugLogs(t *testing.T, buf *bytes.Buffer) func() {

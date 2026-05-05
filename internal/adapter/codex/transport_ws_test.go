@@ -1,15 +1,11 @@
 package codex
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -45,35 +41,6 @@ func mustMarshalTurnMetadataForTest(t *testing.T, metadata TurnMetadata) string 
 		t.Fatalf("marshal turn metadata: %v", err)
 	}
 	return raw
-}
-
-type websocketFrameLog struct {
-	Message                string `json:"msg"`
-	RequestID              string `json:"request_id"`
-	CursorRequestID        string `json:"cursor_request_id"`
-	ConversationID         string `json:"conversation_id"`
-	UpstreamEventType      string `json:"upstream_event_type"`
-	WebsocketFrameSequence int    `json:"websocket_frame_sequence"`
-	PayloadBytes           int    `json:"payload_bytes"`
-	ReceivedAt             string `json:"received_at"`
-}
-
-func websocketFrameLogs(t *testing.T, data []byte) []websocketFrameLog {
-	t.Helper()
-	dec := json.NewDecoder(bytes.NewReader(data))
-	var out []websocketFrameLog
-	for {
-		var record websocketFrameLog
-		if err := dec.Decode(&record); err != nil {
-			if errors.Is(err, io.EOF) {
-				return out
-			}
-			t.Fatalf("decode log record: %v\n%s", err, string(data))
-		}
-		if record.Message == "adapter.codex.websocket.frame_received" {
-			out = append(out, record)
-		}
-	}
 }
 
 func TestWebsocketMessageToSyntheticSSEMapsContextWindowError(t *testing.T) {
@@ -113,69 +80,6 @@ func TestWebsocketMessageToSyntheticSSEPreservesGenericError(t *testing.T) {
 	}
 	if err.Error() != "codex websocket read failed" {
 		t.Fatalf("generic error = %q", err.Error())
-	}
-}
-
-func TestStreamWebsocketAsSyntheticSSELogsFrameShapeWithoutPayload(t *testing.T) {
-	var buf bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-	t.Setenv("CLYDE_CODEX_LOG_PATH", filepath.Join(t.TempDir(), "codex.jsonl"))
-	resetDedicatedCodexLoggerForTest(t)
-
-	upgrader := websocket.Upgrader{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade: %v", err)
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.output_text.delta","delta":"secret-ws-content"}`)); err != nil {
-			t.Errorf("write message: %v", err)
-			return
-		}
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp-ws-log","status":"completed"}}`)); err != nil {
-			t.Errorf("write message: %v", err)
-			return
-		}
-	}))
-	defer srv.Close()
-
-	conn, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	if resp != nil && resp.Body != nil {
-		defer resp.Body.Close()
-	}
-	defer conn.Close()
-
-	reader := streamWebsocketAsSyntheticSSE(context.Background(), conn, sseInstrumentationContext{
-		RequestID:       "req-ws-log",
-		CursorRequestID: "cursor-ws-log",
-		ConversationID:  "conv-ws-log",
-	})
-	if _, err := io.ReadAll(reader); err != nil {
-		t.Fatalf("read synthetic sse: %v", err)
-	}
-	if strings.Contains(buf.String(), "secret-ws-content") {
-		t.Fatalf("websocket frame log leaked payload content: %s", buf.String())
-	}
-	logs := websocketFrameLogs(t, buf.Bytes())
-	if len(logs) != 2 {
-		t.Fatalf("websocket frame logs len=%d want 2\n%s", len(logs), buf.String())
-	}
-	got := logs[0]
-	if got.RequestID != "req-ws-log" || got.CursorRequestID != "cursor-ws-log" || got.ConversationID != "conv-ws-log" {
-		t.Fatalf("identity fields=%+v", got)
-	}
-	if got.UpstreamEventType != "response.output_text.delta" || got.WebsocketFrameSequence != 1 {
-		t.Fatalf("frame fields=%+v", got)
-	}
-	if got.PayloadBytes == 0 || got.ReceivedAt == "" {
-		t.Fatalf("timing/size fields=%+v", got)
 	}
 }
 
