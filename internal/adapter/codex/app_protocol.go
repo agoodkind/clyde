@@ -1,12 +1,3 @@
-// Package codex contains Codex transport and runtime integration.
-// Clyde uses for its app-fallback path. The canonical definitions live
-// in research/codex/codex-rs/app-server-protocol/src/protocol/{v1,v2}.rs
-// and the generated TypeScript schema under
-// research/codex/codex-rs/app-server-protocol/schema/typescript/v2/.
-//
-// Field names use the same camelCase serialization Rust produces via
-// serde(rename_all = "camelCase"). Optional fields use `,omitempty`
-// so the wire shape matches Rust's `Option<T>` skip-if-none behavior.
 package codex
 
 // ReasoningEffort mirrors codex_protocol::openai_models::ReasoningEffort
@@ -15,13 +6,20 @@ package codex
 type ReasoningEffort string
 
 const (
-	ReasoningEffortUnset   ReasoningEffort = ""
-	ReasoningEffortNone    ReasoningEffort = "none"
+	// ReasoningEffortUnset leaves Codex reasoning effort unspecified.
+	ReasoningEffortUnset ReasoningEffort = ""
+	// ReasoningEffortNone mirrors the upstream Codex none effort.
+	ReasoningEffortNone ReasoningEffort = "none"
+	// ReasoningEffortMinimal mirrors the upstream Codex minimal effort.
 	ReasoningEffortMinimal ReasoningEffort = "minimal"
-	ReasoningEffortLow     ReasoningEffort = "low"
-	ReasoningEffortMedium  ReasoningEffort = "medium"
-	ReasoningEffortHigh    ReasoningEffort = "high"
-	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
+	// ReasoningEffortLow selects low reasoning effort.
+	ReasoningEffortLow ReasoningEffort = "low"
+	// ReasoningEffortMedium selects medium reasoning effort.
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	// ReasoningEffortHigh selects high reasoning effort.
+	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortXHigh selects extra-high reasoning effort.
+	ReasoningEffortXHigh ReasoningEffort = "xhigh"
 )
 
 // ReasoningSummary mirrors codex_protocol::config_types::ReasoningSummary
@@ -29,11 +27,16 @@ const (
 type ReasoningSummary string
 
 const (
-	ReasoningSummaryUnset    ReasoningSummary = ""
-	ReasoningSummaryAuto     ReasoningSummary = "auto"
-	ReasoningSummaryConcise  ReasoningSummary = "concise"
+	// ReasoningSummaryUnset leaves Codex reasoning summary unspecified.
+	ReasoningSummaryUnset ReasoningSummary = ""
+	// ReasoningSummaryAuto lets Codex choose the reasoning summary detail.
+	ReasoningSummaryAuto ReasoningSummary = "auto"
+	// ReasoningSummaryConcise requests a concise reasoning summary.
+	ReasoningSummaryConcise ReasoningSummary = "concise"
+	// ReasoningSummaryDetailed requests a detailed reasoning summary.
 	ReasoningSummaryDetailed ReasoningSummary = "detailed"
-	ReasoningSummaryNone     ReasoningSummary = "none"
+	// ReasoningSummaryNone disables reasoning summaries.
+	ReasoningSummaryNone ReasoningSummary = "none"
 )
 
 // AskForApproval mirrors the v2 enum at
@@ -43,11 +46,16 @@ const (
 type AskForApproval string
 
 const (
-	AskForApprovalUnset         AskForApproval = ""
+	// AskForApprovalUnset leaves Codex approval policy unspecified.
+	AskForApprovalUnset AskForApproval = ""
+	// AskForApprovalUnlessTrusted requests approval for untrusted actions.
 	AskForApprovalUnlessTrusted AskForApproval = "untrusted"
-	AskForApprovalOnFailure     AskForApproval = "on_failure"
-	AskForApprovalOnRequest     AskForApproval = "on_request"
-	AskForApprovalNever         AskForApproval = "never"
+	// AskForApprovalOnFailure requests approval after command failure.
+	AskForApprovalOnFailure AskForApproval = "on_failure"
+	// AskForApprovalOnRequest requests approval when the model asks.
+	AskForApprovalOnRequest AskForApproval = "on_request"
+	// AskForApprovalNever disables approval prompts.
+	AskForApprovalNever AskForApproval = "never"
 )
 
 // RPCClientInfo mirrors v1::ClientInfo at
@@ -87,20 +95,25 @@ type RPCThreadStartParams struct {
 	PersistExtendedHistory bool           `json:"persistExtendedHistory"`
 }
 
+// RPCThreadStartResponse mirrors the v2 thread/start response subset Clyde
+// reads from the Codex app server.
 type RPCThreadStartResponse struct {
 	Thread RPCThread `json:"thread"`
 	Model  string    `json:"model,omitempty"`
 }
 
+// RPCThread mirrors the thread identity object returned by Codex.
 type RPCThread struct {
 	ID string `json:"id"`
 }
 
+// RPCByteRange mirrors Codex byte ranges for text elements.
 type RPCByteRange struct {
 	Start        int `json:"start"`
 	EndExclusive int `json:"endExclusive"`
 }
 
+// RPCTextElement mirrors the text element metadata on user input items.
 type RPCTextElement struct {
 	ByteRange   RPCByteRange `json:"byteRange"`
 	Placeholder *string      `json:"placeholder"`
@@ -125,6 +138,7 @@ type RPCTurnInputItem struct {
 type RPCTurnStartParams struct {
 	ThreadID       string             `json:"threadId"`
 	Input          []RPCTurnInputItem `json:"input"`
+	CWD            string             `json:"cwd,omitempty"`
 	ApprovalPolicy AskForApproval     `json:"approvalPolicy,omitempty"`
 	Model          string             `json:"model,omitempty"`
 	Effort         ReasoningEffort    `json:"effort,omitempty"`
@@ -137,26 +151,32 @@ type RPCThreadArchiveParams struct {
 	ThreadID string `json:"threadId"`
 }
 
+// RPCAgentMessageDeltaNotification mirrors assistant text deltas.
 type RPCAgentMessageDeltaNotification struct {
 	Delta string `json:"delta"`
 }
 
+// RPCTurnPlanStep mirrors one Codex plan step.
 type RPCTurnPlanStep struct {
 	Step   string `json:"step"`
 	Status string `json:"status"`
 }
 
+// RPCTurnPlanUpdatedNotification mirrors Codex plan update notifications.
 type RPCTurnPlanUpdatedNotification struct {
 	Explanation string            `json:"explanation"`
 	Plan        []RPCTurnPlanStep `json:"plan"`
 }
 
+// RPCItemNotification mirrors Codex item notifications scoped to a thread or
+// turn.
 type RPCItemNotification struct {
 	Item     RPCThreadItem `json:"item"`
 	ThreadID string        `json:"threadId,omitempty"`
 	TurnID   string        `json:"turnId,omitempty"`
 }
 
+// RPCThreadItem mirrors the subset of Codex thread items Clyde reads.
 type RPCThreadItem struct {
 	Type    string                `json:"type"`
 	ID      string                `json:"id"`
@@ -167,48 +187,59 @@ type RPCThreadItem struct {
 	Changes []RPCFileUpdateChange `json:"changes,omitempty"`
 }
 
+// RPCFileUpdateChange mirrors file update changes carried by Codex items.
 type RPCFileUpdateChange struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
 	Diff string `json:"diff"`
 }
 
+// RPCOutputDeltaNotification mirrors output text deltas for an item.
 type RPCOutputDeltaNotification struct {
 	Delta  string `json:"delta"`
 	ItemID string `json:"itemId"`
 }
 
+// RPCMcpToolCallProgressNotification mirrors MCP tool progress text.
 type RPCMcpToolCallProgressNotification struct {
 	Message string `json:"message"`
 	ItemID  string `json:"itemId"`
 }
 
+// RPCFileChangePatchUpdatedNotification mirrors Codex patch update
+// notifications.
 type RPCFileChangePatchUpdatedNotification struct {
 	ItemID  string                `json:"itemId"`
 	Changes []RPCFileUpdateChange `json:"changes"`
 }
 
+// RPCReasoningSummaryPartAddedNotification mirrors reasoning summary part
+// notifications.
 type RPCReasoningSummaryPartAddedNotification struct {
 	SummaryIndex int `json:"summaryIndex"`
 }
 
+// RPCReasoningTextDeltaNotification mirrors reasoning text deltas.
 type RPCReasoningTextDeltaNotification struct {
 	Delta        string `json:"delta"`
 	SummaryIndex int    `json:"summaryIndex"`
 }
 
+// RPCThreadTokenUsageUpdatedNotification mirrors Codex token usage updates.
 type RPCThreadTokenUsageUpdatedNotification struct {
 	ThreadID   string              `json:"threadId"`
 	TurnID     string              `json:"turnId"`
 	TokenUsage RPCThreadTokenUsage `json:"tokenUsage"`
 }
 
+// RPCThreadTokenUsage mirrors aggregate and last-turn token usage.
 type RPCThreadTokenUsage struct {
 	Total              RPCTokenUsage `json:"total"`
 	Last               RPCTokenUsage `json:"last"`
 	ModelContextWindow *int          `json:"modelContextWindow"`
 }
 
+// RPCTokenUsage mirrors token counts returned by Codex.
 type RPCTokenUsage struct {
 	TotalTokens           int `json:"totalTokens"`
 	InputTokens           int `json:"inputTokens"`

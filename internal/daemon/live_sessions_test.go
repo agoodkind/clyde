@@ -19,6 +19,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/webapp"
 )
 
 func TestLiveSessionLaunchBasedirRequiresExplicitOrStoredDirectory(t *testing.T) {
@@ -254,6 +255,113 @@ func TestListLiveSessionsIncludesClaudeRemoteWorkers(t *testing.T) {
 	}
 	if !got.GetSupportsSend() || !got.GetSupportsStream() || got.GetSupportsStop() {
 		t.Fatalf("unexpected live capabilities: send=%v stream=%v stop=%v", got.GetSupportsSend(), got.GetSupportsStream(), got.GetSupportsStop())
+	}
+}
+
+func TestCodexLiveStreamFansOutOneRuntimeStream(t *testing.T) {
+	srv := newTestServer(t)
+	runtime := &fakeLiveRuntime{
+		sendTurn: &codex.LiveTurn{
+			ThreadID: "codex-thread",
+			TurnID:   "turn-1",
+			Status:   codex.LiveTurnStatusInProgress,
+		},
+		streamEvents: []codex.LiveEvent{
+			{Kind: codex.LiveEventDelta, ThreadID: "codex-thread", TurnID: "turn-1", Delta: "hello"},
+			{Kind: codex.LiveEventCompleted, ThreadID: "codex-thread", TurnID: "turn-1", Status: codex.LiveTurnStatusCompleted},
+		},
+	}
+	srv.liveSessions["codex-thread"] = &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         "codex-chat",
+		id:           "codex-thread",
+		codexRuntime: runtime,
+	}
+
+	if _, err := srv.SendLiveSession(context.Background(), &clydev1.SendLiveSessionRequest{
+		SessionId: "codex-thread",
+		Text:      "hello",
+	}); err != nil {
+		t.Fatalf("send live session: %v", err)
+	}
+
+	first, err := srv.streamLiveSessionEvents(context.Background(), "codex-thread")
+	if err != nil {
+		t.Fatalf("first stream: %v", err)
+	}
+	second, err := srv.streamLiveSessionEvents(context.Background(), "codex-thread")
+	if err != nil {
+		t.Fatalf("second stream: %v", err)
+	}
+	gotFirst := collectLiveEvents(t, first, 2)
+	gotSecond := collectLiveEvents(t, second, 2)
+	if runtime.streamCalls != 1 {
+		t.Fatalf("stream calls = %d want 1", runtime.streamCalls)
+	}
+	if gotFirst[0].Text != "hello" || gotSecond[0].Text != "hello" {
+		t.Fatalf("fanout delta mismatch: first=%#v second=%#v", gotFirst, gotSecond)
+	}
+}
+
+func TestStartCodexLiveSessionStoresTypedEffort(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	runtime := &fakeLiveRuntime{
+		startSession: &codex.LiveSession{ThreadID: "codex-thread", WorkDir: tmp, Model: "gpt-test"},
+	}
+	oldFactory := newCodexLiveRuntime
+	newCodexLiveRuntime = func(codex.LiveRuntimeOptions) codex.LiveRuntime {
+		return runtime
+	}
+	defer func() { newCodexLiveRuntime = oldFactory }()
+
+	srv := newTestServer(t)
+	resp, err := srv.StartLiveSession(context.Background(), &clydev1.StartLiveSessionRequest{
+		Provider: string(session.ProviderCodex),
+		Basedir:  tmp,
+		Effort:   "xhigh",
+	})
+	if err != nil {
+		t.Fatalf("start live session: %v", err)
+	}
+	record := srv.liveSessions[resp.GetSession().GetSessionId()]
+	if record == nil {
+		t.Fatalf("live session record missing")
+	}
+	state := liveRuntimeState(record.id)
+	if state.effort != codex.ReasoningEffort("xhigh") {
+		t.Fatalf("effort = %q want xhigh", state.effort)
+	}
+}
+
+func TestStartCodexLiveSessionRejectsNonLiveEffort(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	srv := newTestServer(t)
+	_, err := srv.StartLiveSession(context.Background(), &clydev1.StartLiveSessionRequest{
+		Provider: string(session.ProviderCodex),
+		Basedir:  tmp,
+		Effort:   "minimal",
+	})
+	if err == nil {
+		t.Fatalf("start live session returned nil error")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("error code = %v want %v", status.Code(err), codes.InvalidArgument)
+	}
+}
+
+func TestStartClaudeLiveSessionRejectsCodexOnlyEffort(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	srv := newTestServer(t)
+	_, err := srv.StartLiveSession(context.Background(), &clydev1.StartLiveSessionRequest{
+		Provider: string(session.ProviderClaude),
+		Basedir:  tmp,
+		Effort:   "xhigh",
+	})
+	if err == nil {
+		t.Fatalf("start live session returned nil error")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("error code = %v want %v", status.Code(err), codes.InvalidArgument)
 	}
 }
 
@@ -540,10 +648,18 @@ type fakeLiveRuntime struct {
 	closed         bool
 	attachedThread string
 	attachSession  *codex.LiveSession
+	startSession   *codex.LiveSession
+	sendRequests   []codex.LiveSendRequest
+	sendTurn       *codex.LiveTurn
+	streamEvents   []codex.LiveEvent
+	streamCalls    int
 }
 
 func (f *fakeLiveRuntime) Start(context.Context, codex.LiveStartRequest) (*codex.LiveSession, error) {
-	return nil, nil
+	if f.startSession != nil {
+		return f.startSession, nil
+	}
+	return &codex.LiveSession{ThreadID: "codex-thread"}, nil
 }
 
 func (f *fakeLiveRuntime) Attach(_ context.Context, req codex.LiveAttachRequest) (*codex.LiveSession, error) {
@@ -554,12 +670,22 @@ func (f *fakeLiveRuntime) Attach(_ context.Context, req codex.LiveAttachRequest)
 	return &codex.LiveSession{ThreadID: req.ThreadID}, nil
 }
 
-func (f *fakeLiveRuntime) Send(context.Context, codex.LiveSendRequest) (*codex.LiveTurn, error) {
-	return nil, nil
+func (f *fakeLiveRuntime) Send(_ context.Context, req codex.LiveSendRequest) (*codex.LiveTurn, error) {
+	f.sendRequests = append(f.sendRequests, req)
+	if f.sendTurn != nil {
+		return f.sendTurn, nil
+	}
+	return &codex.LiveTurn{ThreadID: req.ThreadID, TurnID: "turn-1", Status: codex.LiveTurnStatusInProgress}, nil
 }
 
 func (f *fakeLiveRuntime) Stream(context.Context, codex.LiveStreamRequest) (<-chan codex.LiveEvent, error) {
-	return nil, nil
+	f.streamCalls++
+	out := make(chan codex.LiveEvent, len(f.streamEvents))
+	for _, event := range f.streamEvents {
+		out <- event
+	}
+	close(out)
+	return out, nil
 }
 
 func (f *fakeLiveRuntime) Stop(context.Context, codex.LiveStopRequest) error {
@@ -569,4 +695,21 @@ func (f *fakeLiveRuntime) Stop(context.Context, codex.LiveStopRequest) error {
 func (f *fakeLiveRuntime) Close() error {
 	f.closed = true
 	return nil
+}
+
+func collectLiveEvents(t *testing.T, ch <-chan webapp.LiveSessionEvent, count int) []webapp.LiveSessionEvent {
+	t.Helper()
+	out := make([]webapp.LiveSessionEvent, 0, count)
+	for len(out) < count {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				t.Fatalf("stream closed after %d events, want %d", len(out), count)
+			}
+			out = append(out, event)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for live event %d", len(out)+1)
+		}
+	}
+	return out
 }

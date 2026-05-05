@@ -1,12 +1,8 @@
-// Package daemon hosts the long-running Clyde background services.
-// transcript.Tailer per active session id regardless of how many
-// gRPC subscribers are connected. Each subscriber gets its own
-// buffered channel; a slow subscriber drops events for itself
-// without affecting the others.
 package daemon
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -36,7 +32,10 @@ type hubEntry struct {
 }
 
 func newTranscriptHub() *transcriptHub {
-	return &transcriptHub{entries: make(map[string]*hubEntry)}
+	return &transcriptHub{
+		mu:      sync.Mutex{},
+		entries: make(map[string]*hubEntry),
+	}
 }
 
 // Subscribe attaches a new subscriber channel to the tailer for the
@@ -44,6 +43,10 @@ func newTranscriptHub() *transcriptHub {
 // tailer to open. The returned cleanup function unsubscribes and
 // stops the tailer when the last subscriber leaves.
 func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-chan *clydev1.TailTranscriptResponse, func(), error) {
+	return h.SubscribeContext(context.Background(), sessionID, path, startOffset)
+}
+
+func (h *transcriptHub) SubscribeContext(ctx context.Context, sessionID, path string, startOffset int64) (<-chan *clydev1.TailTranscriptResponse, func(), error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -51,7 +54,7 @@ func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-
 	if !ok {
 		t, err := transcript.OpenTailer(path, startOffset)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("open transcript tailer: %w", err)
 		}
 		entry = &hubEntry{
 			tailer:         t,
@@ -63,7 +66,7 @@ func (h *transcriptHub) Subscribe(sessionID, path string, startOffset int64) (<-
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.WarnContext(context.Background(), "daemon.transcript_hub.fanout_panicked",
+					slog.WarnContext(ctx, "daemon.transcript_hub.fanout_panicked",
 						"component", "daemon",
 						"session_id", sessionID,
 						"panic", r,

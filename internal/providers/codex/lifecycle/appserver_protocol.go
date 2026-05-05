@@ -3,6 +3,8 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
+
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 )
 
 type codexOutboundMessage interface {
@@ -108,13 +110,7 @@ type codexThreadSetNameParams struct {
 
 func (codexThreadSetNameParams) codexAppServerParams() {}
 
-type codexTurnStartParams struct {
-	ApprovalPolicy string           `json:"approvalPolicy,omitempty"`
-	CWD            string           `json:"cwd,omitempty"`
-	Input          []codexUserInput `json:"input"`
-	Model          string           `json:"model,omitempty"`
-	ThreadID       string           `json:"threadId"`
-}
+type codexTurnStartParams adaptercodex.RPCTurnStartParams
 
 func (codexTurnStartParams) codexAppServerParams() {}
 
@@ -124,22 +120,6 @@ type codexTurnInterruptParams struct {
 }
 
 func (codexTurnInterruptParams) codexAppServerParams() {}
-
-type codexUserInput struct {
-	Type         string             `json:"type"`
-	Text         string             `json:"text"`
-	TextElements []codexTextElement `json:"textElements"`
-}
-
-type codexTextElement struct {
-	ByteRange   codexByteRange `json:"byteRange"`
-	Placeholder *string        `json:"placeholder"`
-}
-
-type codexByteRange struct {
-	Start int `json:"start"`
-	End   int `json:"end"`
-}
 
 type codexInitializeResponse struct {
 	UserAgent      string           `json:"userAgent,omitempty"`

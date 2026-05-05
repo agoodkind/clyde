@@ -112,7 +112,18 @@ func New(cfg config.WebAppConfig, deps Deps, log *slog.Logger) *Server {
 	if v := os.Getenv("CLYDE_WEBAPP_TOKEN"); v != "" {
 		token = v
 	}
-	s := &Server{cfg: cfg, deps: deps, log: log.With("component", "webapp"), token: token}
+	s := &Server{
+		cfg:      cfg,
+		deps:     deps,
+		log:      log.With("component", "webapp"),
+		token:    token,
+		mux:      nil,
+		srv:      nil,
+		mu:       sync.Mutex{},
+		starting: nil,
+		connMu:   sync.Mutex{},
+		conns:    nil,
+	}
 	s.mux = s.routes()
 	return s
 }
@@ -170,7 +181,7 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	}()
 	select {
 	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 		_ = s.Shutdown(shutCtx)
 		return nil
@@ -191,7 +202,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	s.srv.SetKeepAlivesEnabled(false)
 	s.closeTrackedConns(http.StateIdle)
-	return s.srv.Shutdown(ctx)
+	if err := s.srv.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown webapp server: %w", err)
+	}
+	return nil
 }
 
 // Close force-closes all dashboard HTTP connections. Reload uses this
@@ -202,7 +216,10 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.closeTrackedConns(http.StateNew, http.StateActive, http.StateIdle, http.StateHijacked)
-	return s.srv.Close()
+	if err := s.srv.Close(); err != nil {
+		return fmt.Errorf("close webapp server: %w", err)
+	}
+	return nil
 }
 
 func (s *Server) trackConnState(conn net.Conn, state http.ConnState) {
@@ -248,11 +265,11 @@ func (s *Server) routes() *http.ServeMux {
 	return mux
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (*Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+func (*Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -287,16 +304,32 @@ func (s *Server) handleListLiveSessions(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleStartLiveSession(w http.ResponseWriter, r *http.Request) {
 	var body StartLiveSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.start_decode_failed",
+			"component", "webapp",
+			"err", err,
+		)
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if s.deps.StartLiveSession == nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.start_unavailable",
+			"component", "webapp",
+			"err", "live session launch unavailable",
+		)
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "live session launch unavailable"})
 		return
 	}
 	live, err := s.deps.StartLiveSession(r.Context(), body)
 	if err != nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.start_failed",
+			"component", "webapp",
+			"provider", body.Provider,
+			"model", body.Model,
+			"effort", body.Effort,
+			"err", err,
+		)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
 		return
 	}
@@ -331,15 +364,32 @@ func (s *Server) handleSendLiveSession(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	var body SendLiveSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.send_decode_failed",
+			"component", "webapp",
+			"session_id", sessionID,
+			"err", err,
+		)
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if s.deps.SendLiveSession == nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.send_unavailable",
+			"component", "webapp",
+			"session_id", sessionID,
+			"err", "live session send unavailable",
+		)
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "live session send unavailable"})
 		return
 	}
-	if err := s.deps.SendLiveSession(r.Context(), sessionID, body.Text); err != nil {
+	err = s.deps.SendLiveSession(r.Context(), sessionID, body.Text)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.send_failed",
+			"component", "webapp",
+			"session_id", sessionID,
+			"err", err,
+		)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
 		return
 	}
@@ -357,6 +407,11 @@ func (s *Server) handleStreamLiveSession(w http.ResponseWriter, r *http.Request,
 	}
 	events, err := s.deps.StreamLiveSession(r.Context(), sessionID)
 	if err != nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.stream_failed",
+			"component", "webapp",
+			"session_id", sessionID,
+			"err", err,
+		)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
 		return
 	}
@@ -379,7 +434,14 @@ func (s *Server) handleStreamLiveSession(w http.ResponseWriter, r *http.Request,
 			}
 			_, _ = w.Write([]byte("event: live-session\n"))
 			_, _ = w.Write([]byte("data: "))
-			_ = encoder.Encode(ev)
+			if err := encoder.Encode(ev); err != nil {
+				s.log.ErrorContext(r.Context(), "webapp.live_session.stream_encode_failed",
+					"component", "webapp",
+					"session_id", sessionID,
+					"err", err,
+				)
+				return
+			}
 			_, _ = w.Write([]byte("\n"))
 			flusher.Flush()
 		}
@@ -392,10 +454,21 @@ func (s *Server) handleStopLiveSession(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	if s.deps.StopLiveSession == nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.stop_unavailable",
+			"component", "webapp",
+			"session_id", sessionID,
+			"err", "live session stop unavailable",
+		)
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "live session stop unavailable"})
 		return
 	}
-	if err := s.deps.StopLiveSession(r.Context(), sessionID); err != nil {
+	err := s.deps.StopLiveSession(r.Context(), sessionID)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "webapp.live_session.stop_failed",
+			"component", "webapp",
+			"session_id", sessionID,
+			"err", err,
+		)
 		writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
 		return
 	}
@@ -478,7 +551,9 @@ type stopLiveSessionResponse struct {
 func writeJSON[T healthResponse | errorResponse | liveSessionsResponse | startLiveSessionResponse | sendLiveSessionResponse | stopLiveSessionResponse](w http.ResponseWriter, code int, v T) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		return
+	}
 }
 
 // indexHTML is the dashboard's single page. It renders a list of
@@ -519,7 +594,6 @@ button:hover{background:#5fa0ff;}
     <option value="low">low</option>
     <option value="medium">medium</option>
     <option value="high">high</option>
-    <option value="max-thinking">max thinking</option>
   </select>
   <button type="submit">Start</button>
   <div class="note">Starts a daemon-owned live session. Provider, model, and effort are daemon policy inputs, not browser-side behavior switches.</div>

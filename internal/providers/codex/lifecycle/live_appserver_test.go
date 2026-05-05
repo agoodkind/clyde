@@ -8,7 +8,32 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 )
+
+func TestParseReasoningEffortAllowsLiveCodexLevels(t *testing.T) {
+	for _, raw := range []string{"", "low", "medium", "high", "xhigh"} {
+		if _, err := ParseReasoningEffort(raw); err != nil {
+			t.Fatalf("ParseReasoningEffort(%q) returned error: %v", raw, err)
+		}
+	}
+	got, err := ParseReasoningEffort("xhigh")
+	if err != nil {
+		t.Fatalf("ParseReasoningEffort xhigh: %v", err)
+	}
+	if got != adaptercodex.ReasoningEffortXHigh {
+		t.Fatalf("xhigh parsed as %q", got)
+	}
+}
+
+func TestParseReasoningEffortRejectsNonLiveCodexLevels(t *testing.T) {
+	for _, raw := range []string{"none", "minimal", "max", "HIGH"} {
+		if _, err := ParseReasoningEffort(raw); err == nil {
+			t.Fatalf("ParseReasoningEffort(%q) returned nil error", raw)
+		}
+	}
+}
 
 func TestAppServerRuntimeStartSendStream(t *testing.T) {
 	runtime := newFakeAppServerRuntime(t, "stream")

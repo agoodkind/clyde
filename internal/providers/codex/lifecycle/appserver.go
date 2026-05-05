@@ -12,8 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 )
 
+// AppServerRuntimeOptions configures the Codex app-server process.
 type AppServerRuntimeOptions struct {
 	CodexBin       string
 	Command        []string
@@ -26,6 +29,7 @@ type AppServerRuntimeOptions struct {
 	ConfigOverride []string
 }
 
+// AppServerRuntime drives Codex through the app-server stdio protocol.
 type AppServerRuntime struct {
 	opts AppServerRuntimeOptions
 
@@ -44,30 +48,62 @@ type AppServerRuntime struct {
 	closed       bool
 }
 
+// NewAppServerRuntime creates a Codex app-server runtime with defaults.
 func NewAppServerRuntime(opts AppServerRuntimeOptions) *AppServerRuntime {
 	return &AppServerRuntime{
-		opts:   opts.withDefaults(),
-		stderr: newAppServerStderrTail(80),
+		opts:         opts.withDefaults(),
+		processMu:    sync.Mutex{},
+		cmd:          nil,
+		stdin:        nil,
+		stdout:       nil,
+		stderr:       newAppServerStderrTail(80),
+		writeMu:      sync.Mutex{},
+		stateMu:      sync.Mutex{},
+		nextID:       0,
+		initialized:  false,
+		streamActive: false,
+		closed:       false,
 	}
 }
 
+// Start creates a new Codex app-server thread.
 func (r *AppServerRuntime) Start(ctx context.Context, req LiveStartRequest) (*LiveSession, error) {
 	if err := validateLiveStartRequest(req); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.start_invalid",
+			"component", "codex",
+			"work_dir", req.WorkDir,
+			"model", req.Model,
+			"err", err,
+		)
 		return nil, err
 	}
 	if err := r.ensureReady(ctx); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.start_not_ready",
+			"component", "codex",
+			"work_dir", req.WorkDir,
+			"model", req.Model,
+			"err", err,
+		)
 		return nil, err
 	}
 	params := codexThreadStartParams{
 		CWD:                   req.WorkDir,
 		Model:                 req.Model,
 		ModelProvider:         req.ModelProvider,
+		ApprovalPolicy:        "",
 		DeveloperInstructions: req.DeveloperInstructions,
 		BaseInstructions:      req.BaseInstructions,
 		Ephemeral:             req.Ephemeral,
+		SessionStartSource:    "",
 	}
 	resp, err := requestAppServer[codexThreadStartResponse](ctx, r, "thread/start", params)
 	if err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.thread_start_failed",
+			"component", "codex",
+			"work_dir", req.WorkDir,
+			"model", req.Model,
+			"err", err,
+		)
 		return nil, err
 	}
 	if req.SessionName != "" {
@@ -83,15 +119,31 @@ func (r *AppServerRuntime) Start(ctx context.Context, req LiveStartRequest) (*Li
 	}, nil
 }
 
+// Attach resumes an existing Codex app-server thread.
 func (r *AppServerRuntime) Attach(ctx context.Context, req LiveAttachRequest) (*LiveSession, error) {
 	if err := validateLiveAttachRequest(req); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.attach_invalid",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"err", err,
+		)
 		return nil, err
 	}
 	if err := r.ensureReady(ctx); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.attach_not_ready",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"err", err,
+		)
 		return nil, err
 	}
 	resp, err := requestAppServer[codexThreadResumeResponse](ctx, r, "thread/resume", codexThreadResumeParams(req))
 	if err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.thread_resume_failed",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"err", err,
+		)
 		return nil, err
 	}
 	return &LiveSession{
@@ -101,26 +153,51 @@ func (r *AppServerRuntime) Attach(ctx context.Context, req LiveAttachRequest) (*
 	}, nil
 }
 
+// Send starts a user turn on an existing Codex app-server thread.
 func (r *AppServerRuntime) Send(ctx context.Context, req LiveSendRequest) (*LiveTurn, error) {
 	if err := validateLiveSendRequest(req); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.send_invalid",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"model", req.Model,
+			"effort", req.Effort,
+			"err", err,
+		)
 		return nil, err
 	}
 	if err := r.ensureReady(ctx); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.send_not_ready",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"model", req.Model,
+			"effort", req.Effort,
+			"err", err,
+		)
 		return nil, err
 	}
-	resp, err := requestAppServer[codexTurnStartResponse](ctx, r, "turn/start", codexTurnStartParams{
+	resp, err := requestAppServer[codexTurnStartResponse](ctx, r, "turn/start", codexTurnStartParams(adaptercodex.RPCTurnStartParams{
 		ThreadID: req.ThreadID,
-		Input: []codexUserInput{
+		Input: []adaptercodex.RPCTurnInputItem{
 			{
 				Type:         "text",
 				Text:         req.Text,
-				TextElements: []codexTextElement{},
+				TextElements: []adaptercodex.RPCTextElement{},
 			},
 		},
-		CWD:   req.WorkDir,
-		Model: req.Model,
-	})
+		CWD:            req.WorkDir,
+		ApprovalPolicy: "",
+		Model:          req.Model,
+		Effort:         req.Effort,
+		Summary:        "",
+	}))
 	if err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.turn_start_failed",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"model", req.Model,
+			"effort", req.Effort,
+			"err", err,
+		)
 		return nil, err
 	}
 	return &LiveTurn{
@@ -130,14 +207,33 @@ func (r *AppServerRuntime) Send(ctx context.Context, req LiveSendRequest) (*Live
 	}, nil
 }
 
+// Stream subscribes to notifications for a Codex live turn.
 func (r *AppServerRuntime) Stream(ctx context.Context, req LiveStreamRequest) (<-chan LiveEvent, error) {
 	if err := validateLiveStreamRequest(req); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.stream_invalid",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"turn_id", req.TurnID,
+			"err", err,
+		)
 		return nil, err
 	}
 	if err := r.ensureReady(ctx); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.stream_not_ready",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"turn_id", req.TurnID,
+			"err", err,
+		)
 		return nil, err
 	}
 	if err := r.acquireStream(); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.stream_acquire_failed",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"turn_id", req.TurnID,
+			"err", err,
+		)
 		return nil, err
 	}
 	events := make(chan LiveEvent, 32)
@@ -157,7 +253,21 @@ func (r *AppServerRuntime) Stream(ctx context.Context, req LiveStreamRequest) (<
 		for {
 			msg, err := r.readMessage(ctx)
 			if err != nil {
-				events <- LiveEvent{Kind: LiveEventError, ThreadID: req.ThreadID, TurnID: req.TurnID, Err: err}
+				codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.stream_read_failed",
+					"component", "codex",
+					"thread_id", req.ThreadID,
+					"turn_id", req.TurnID,
+					"err", err,
+				)
+				events <- LiveEvent{
+					Kind:     LiveEventError,
+					ThreadID: req.ThreadID,
+					TurnID:   req.TurnID,
+					ItemID:   "",
+					Delta:    "",
+					Status:   "",
+					Err:      err,
+				}
 				return
 			}
 			if msg.Method == "" {
@@ -179,11 +289,24 @@ func (r *AppServerRuntime) Stream(ctx context.Context, req LiveStreamRequest) (<
 	return events, nil
 }
 
+// Stop interrupts a running Codex live turn.
 func (r *AppServerRuntime) Stop(ctx context.Context, req LiveStopRequest) error {
 	if err := validateLiveStopRequest(req); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.stop_invalid",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"turn_id", req.TurnID,
+			"err", err,
+		)
 		return err
 	}
 	if err := r.ensureReady(ctx); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.stop_not_ready",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"turn_id", req.TurnID,
+			"err", err,
+		)
 		return err
 	}
 	if r.hasActiveStream() {
@@ -192,6 +315,7 @@ func (r *AppServerRuntime) Stop(ctx context.Context, req LiveStopRequest) error 
 	return requestAppServerNoResult(ctx, r, "turn/interrupt", codexTurnInterruptParams(req))
 }
 
+// Close stops the Codex app-server process owned by this runtime.
 func (r *AppServerRuntime) Close() error {
 	r.processMu.Lock()
 	defer r.processMu.Unlock()
@@ -278,18 +402,18 @@ func (r *AppServerRuntime) startProcess(ctx context.Context) error {
 	cmd.Env = append(cmd.Env, r.opts.Env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("open codex app-server stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("open codex app-server stdout: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("open codex app-server stderr: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("start codex app-server: %w", err)
 	}
 	r.cmd = cmd
 	r.stdin = stdin
@@ -367,7 +491,7 @@ func (r *AppServerRuntime) writeNotification(ctx context.Context, method string)
 func (r *AppServerRuntime) writeMessage(ctx context.Context, payload codexOutboundMessage) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("write codex app-server message: %w", ctx.Err())
 	default:
 	}
 	r.writeMu.Lock()
@@ -388,7 +512,7 @@ func (r *AppServerRuntime) writeMessage(ctx context.Context, payload codexOutbou
 func (r *AppServerRuntime) readMessage(ctx context.Context) (codexInboundMessage, error) {
 	select {
 	case <-ctx.Done():
-		return codexInboundMessage{}, ctx.Err()
+		return codexInboundMessage{}, fmt.Errorf("read codex app-server message: %w", ctx.Err())
 	default:
 	}
 	if r.stdout == nil {
@@ -433,7 +557,7 @@ func (r *AppServerRuntime) respondToServerRequest(ctx context.Context, msg codex
 	if msg.ID == nil {
 		return
 	}
-	resp := codexServerRequestResponseEnvelope{ID: *msg.ID}
+	resp := codexServerRequestResponseEnvelope{ID: *msg.ID, Result: nil}
 	switch msg.Method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		resp.Result = codexApprovalResult{Decision: "accept"}
@@ -494,10 +618,26 @@ func liveEventFromNotification(method string, raw json.RawMessage, req LiveStrea
 	case "item/agentMessage/delta":
 		var notif codexAgentMessageDeltaNotification
 		if err := json.Unmarshal(raw, &notif); err != nil {
-			return LiveEvent{Kind: LiveEventError, ThreadID: req.ThreadID, TurnID: req.TurnID, Err: err}, true, false
+			return LiveEvent{
+				Kind:     LiveEventError,
+				ThreadID: req.ThreadID,
+				TurnID:   req.TurnID,
+				ItemID:   "",
+				Delta:    "",
+				Status:   "",
+				Err:      err,
+			}, true, false
 		}
 		if notif.ThreadID != req.ThreadID || notif.TurnID != req.TurnID {
-			return LiveEvent{}, false, false
+			return LiveEvent{
+				Kind:     "",
+				ThreadID: "",
+				TurnID:   "",
+				ItemID:   "",
+				Delta:    "",
+				Status:   "",
+				Err:      nil,
+			}, false, false
 		}
 		return LiveEvent{
 			Kind:     LiveEventDelta,
@@ -505,23 +645,52 @@ func liveEventFromNotification(method string, raw json.RawMessage, req LiveStrea
 			TurnID:   notif.TurnID,
 			ItemID:   notif.ItemID,
 			Delta:    notif.Delta,
+			Status:   "",
+			Err:      nil,
 		}, true, false
 	case "turn/completed":
 		var notif codexTurnCompletedNotification
 		if err := json.Unmarshal(raw, &notif); err != nil {
-			return LiveEvent{Kind: LiveEventError, ThreadID: req.ThreadID, TurnID: req.TurnID, Err: err}, true, true
+			return LiveEvent{
+				Kind:     LiveEventError,
+				ThreadID: req.ThreadID,
+				TurnID:   req.TurnID,
+				ItemID:   "",
+				Delta:    "",
+				Status:   "",
+				Err:      err,
+			}, true, true
 		}
 		if notif.ThreadID != req.ThreadID || notif.Turn.ID != req.TurnID {
-			return LiveEvent{}, false, false
+			return LiveEvent{
+				Kind:     "",
+				ThreadID: "",
+				TurnID:   "",
+				ItemID:   "",
+				Delta:    "",
+				Status:   "",
+				Err:      nil,
+			}, false, false
 		}
 		return LiveEvent{
 			Kind:     LiveEventCompleted,
 			ThreadID: notif.ThreadID,
 			TurnID:   notif.Turn.ID,
+			ItemID:   "",
+			Delta:    "",
 			Status:   LiveTurnStatus(notif.Turn.Status),
+			Err:      nil,
 		}, true, true
 	default:
-		return LiveEvent{}, false, false
+		return LiveEvent{
+			Kind:     "",
+			ThreadID: "",
+			TurnID:   "",
+			ItemID:   "",
+			Delta:    "",
+			Status:   "",
+			Err:      nil,
+		}, false, false
 	}
 }
 
@@ -548,7 +717,11 @@ type appServerStderrTail struct {
 }
 
 func newAppServerStderrTail(limit int) *appServerStderrTail {
-	return &appServerStderrTail{limit: limit}
+	return &appServerStderrTail{
+		mu:    sync.Mutex{},
+		limit: limit,
+		lines: nil,
+	}
 }
 
 func (t *appServerStderrTail) drain(r io.Reader) {
