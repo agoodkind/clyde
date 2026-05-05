@@ -338,6 +338,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
+		slog.String("model", model.ClaudeModel),
 		slog.String("backend", model.Backend),
 		slog.Int("message_count", len(req.Messages)),
 		slog.Int("tool_count", len(req.Tools)+len(req.Functions)),
