@@ -410,6 +410,11 @@ type AdapterCodex struct {
 	// WireCapture is the per-provider wire-capture mode block for Codex.
 	// Empty mode treats the lever as Off.
 	WireCapture AdapterCodexWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
+	// Reasoning carries the per-provider reasoning round-trip levers for
+	// the Codex backend. Codex Responses carries TWO independent levers
+	// per codex-rs context_manager/history.rs:361-405: visible summary
+	// text and encrypted_content memory blob.
+	Reasoning AdapterCodexReasoning `json:"reasoning,omitzero" toml:"reasoning,omitempty"`
 }
 
 // AdapterWireCapture holds the shared rotation budget that any per-provider
@@ -425,6 +430,52 @@ type AdapterWireCapture struct {
 // the original AdapterConfig shape stabilized.
 type AdapterAnthropic struct {
 	WireCapture AdapterAnthropicWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
+	// Reasoning carries the per-provider reasoning round-trip levers.
+	// Anthropic has a single lever (the visible thinking block); see
+	// [AdapterAnthropicReasoning]. Empty values resolve to documented
+	// defaults via [AdapterAnthropicReasoning.ResolvedInboundThinking].
+	Reasoning AdapterAnthropicReasoning `json:"reasoning,omitzero" toml:"reasoning,omitempty"`
+}
+
+// AnthropicInboundThinking is the closed enum of strategies for the visible
+// thinking content block round-trip. Mirrors the existing render
+// [MaterializationStrategy] values; keep the legal set in lockstep.
+type AnthropicInboundThinking string
+
+// Anthropic inbound-thinking strategies.
+const (
+	// AnthropicInboundThinkingNative materializes round-tripped thinking
+	// envelopes as the upstream-native `{type:"thinking"}` content block.
+	// This is the documented default.
+	AnthropicInboundThinkingNative AnthropicInboundThinking = "native_thinking_block"
+	// AnthropicInboundThinkingDrop discards thinking bodies before
+	// forwarding upstream.
+	AnthropicInboundThinkingDrop AnthropicInboundThinking = "drop"
+	// AnthropicInboundThinkingPlainText concatenates the envelope body into
+	// the assistant text block as plain prose.
+	AnthropicInboundThinkingPlainText AnthropicInboundThinking = "plain_text_concat"
+	// AnthropicInboundThinkingPassthrough leaves the marker-wrapped envelope
+	// in place so the upstream sees what Cursor sent.
+	AnthropicInboundThinkingPassthrough AnthropicInboundThinking = "passthrough"
+)
+
+// AdapterAnthropicReasoning is the per-provider reasoning lever block for the
+// Anthropic backend. Anthropic carries one lever because Anthropic emits a
+// single thinking content block per turn; the lever picks how a round-tripped
+// thinking envelope is materialized on the inbound (request-shaping) side.
+type AdapterAnthropicReasoning struct {
+	// InboundThinking selects the materialization strategy for round-tripped
+	// thinking content. Empty resolves to native_thinking_block.
+	InboundThinking AnthropicInboundThinking `json:"inboundThinking,omitempty" toml:"inbound_thinking,omitempty"`
+}
+
+// ResolvedInboundThinking returns the configured strategy with the documented
+// default applied when unset.
+func (r AdapterAnthropicReasoning) ResolvedInboundThinking() AnthropicInboundThinking {
+	if r.InboundThinking == "" {
+		return AnthropicInboundThinkingNative
+	}
+	return r.InboundThinking
 }
 
 // AnthropicWireCaptureMode is the closed enum of legal modes for the
@@ -478,6 +529,96 @@ const (
 // Codex. Empty mode is treated as Off.
 type AdapterCodexWireCapture struct {
 	Mode CodexWireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
+}
+
+// CodexRoundTripSummary is the closed enum of strategies for the visible
+// reasoning summary text on Codex Responses. Codex carries the summary on
+// the same Reasoning item that holds the encrypted_content blob; the two
+// levers move independently. Defaults match codex-rs
+// research/codex/codex-rs/core/src/context_manager/history.rs:361-405.
+type CodexRoundTripSummary string
+
+// Codex round-trip summary strategies.
+const (
+	// CodexRoundTripSummaryNative materializes round-tripped summary text
+	// as the upstream-native summary field on the Reasoning item. This is
+	// the documented default.
+	CodexRoundTripSummaryNative CodexRoundTripSummary = "native_summary_field"
+	// CodexRoundTripSummaryDrop discards summary text before forwarding.
+	CodexRoundTripSummaryDrop CodexRoundTripSummary = "drop"
+	// CodexRoundTripSummaryPlainText concatenates the envelope body into
+	// the assistant text block as plain prose.
+	CodexRoundTripSummaryPlainText CodexRoundTripSummary = "plain_text_concat"
+)
+
+// CodexRoundTripEncrypted is the closed enum of strategies for the
+// encrypted_content reasoning blob on Codex Responses. Empty resolves to
+// round_trip per codex-rs.
+type CodexRoundTripEncrypted string
+
+// Codex round-trip encrypted_content strategies.
+const (
+	// CodexRoundTripEncryptedRoundTrip echoes the encrypted_content blob
+	// back to Codex on the next turn so the model retains reasoning
+	// continuity. Documented default.
+	CodexRoundTripEncryptedRoundTrip CodexRoundTripEncrypted = "round_trip"
+	// CodexRoundTripEncryptedDrop discards the blob before forwarding.
+	CodexRoundTripEncryptedDrop CodexRoundTripEncrypted = "drop"
+)
+
+// AdapterCodexReasoningStore is the retention budget for the file-backed
+// encrypted_content cache. Phase 2 declares the struct; Phase 3
+// (CLYDE-247) wires it. A zero value means feature off, mirroring the
+// [logging.transcript] convention.
+type AdapterCodexReasoningStore struct {
+	// MaxAgeDays caps the on-disk age of cached blobs. Zero means
+	// the store is disabled.
+	MaxAgeDays int `json:"maxAgeDays,omitempty" toml:"max_age_days,omitempty"`
+	// MaxChats caps the number of per-chat cache entries. Zero means
+	// the store is disabled.
+	MaxChats int `json:"maxChats,omitempty" toml:"max_chats,omitempty"`
+}
+
+// IsEnabled reports whether the reasoning encrypted_content store should be
+// active. Both retention bounds must be positive; otherwise the feature is
+// off so the cleanup loop can never starve.
+func (s AdapterCodexReasoningStore) IsEnabled() bool {
+	return s.MaxAgeDays > 0 && s.MaxChats > 0
+}
+
+// AdapterCodexReasoning is the per-provider reasoning lever block for the
+// Codex backend. Codex carries two levers because Codex Responses can carry
+// summary text AND the encrypted_content memory blob on the same Reasoning
+// item. Defaults match codex-rs context_manager/history.rs:361-405.
+type AdapterCodexReasoning struct {
+	// RoundTripSummary selects the strategy for visible summary text.
+	// Empty resolves to native_summary_field.
+	RoundTripSummary CodexRoundTripSummary `json:"roundTripSummary,omitempty" toml:"round_trip_summary,omitempty"`
+	// RoundTripEncrypted selects the strategy for the encrypted_content
+	// blob. Empty resolves to round_trip.
+	RoundTripEncrypted CodexRoundTripEncrypted `json:"roundTripEncrypted,omitempty" toml:"round_trip_encrypted,omitempty"`
+	// Store is the retention budget for the file-backed
+	// encrypted_content cache. Phase 2 declares the field; Phase 3
+	// (CLYDE-247) wires it.
+	Store AdapterCodexReasoningStore `json:"store,omitzero" toml:"store,omitempty"`
+}
+
+// ResolvedRoundTripSummary returns the configured strategy with the
+// documented default applied when unset.
+func (r AdapterCodexReasoning) ResolvedRoundTripSummary() CodexRoundTripSummary {
+	if r.RoundTripSummary == "" {
+		return CodexRoundTripSummaryNative
+	}
+	return r.RoundTripSummary
+}
+
+// ResolvedRoundTripEncrypted returns the configured strategy with the
+// documented default applied when unset.
+func (r AdapterCodexReasoning) ResolvedRoundTripEncrypted() CodexRoundTripEncrypted {
+	if r.RoundTripEncrypted == "" {
+		return CodexRoundTripEncryptedRoundTrip
+	}
+	return r.RoundTripEncrypted
 }
 
 // ResolvedAnthropicWireCaptureMode returns the configured mode with the Off

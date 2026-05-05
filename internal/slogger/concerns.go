@@ -70,7 +70,11 @@ const (
 	ConcernAdapterProviderCodexWire       = "adapter.providers.codex.wire_capture"
 	ConcernAdapterProviderPassthroughReq  = "adapter.providers.passthrough_override.request"
 	ConcernAdapterProviderPassthroughCoer = "adapter.providers.passthrough_override.coercion"
-	ConcernAdapterProviderPassthroughErr  = "adapter.providers.passthrough_override.errors"
+	ConcernAdapterProviderPassthroughErr = "adapter.providers.passthrough_override.errors"
+	// ConcernAdapterReasoningConfig is the slog concern for startup
+	// notices emitted when the per-provider reasoning config blocks
+	// fold legacy [adapter.synthetic_content] values forward.
+	ConcernAdapterReasoningConfig = "adapter.reasoning.config"
 
 	ConcernDaemonRPCRequests       = "daemon.rpc.requests"
 	ConcernDaemonRPCStreams        = "daemon.rpc.streams"
@@ -156,6 +160,7 @@ var concernPaths = map[string]string{
 	ConcernAdapterProviderPassthroughReq:  "adapter/providers/passthrough_override/request.jsonl",
 	ConcernAdapterProviderPassthroughCoer: "adapter/providers/passthrough_override/coercion.jsonl",
 	ConcernAdapterProviderPassthroughErr:  "adapter/providers/passthrough_override/errors.jsonl",
+	ConcernAdapterReasoningConfig:         "adapter/reasoning/config.jsonl",
 
 	ConcernDaemonRPCRequests:       "daemon/rpc/requests.jsonl",
 	ConcernDaemonRPCStreams:        "daemon/rpc/streams.jsonl",
