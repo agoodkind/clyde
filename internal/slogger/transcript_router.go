@@ -40,6 +40,7 @@ const (
 // transcriptAllowlist is the set of slog message names that get teed into the
 // per-chat file. Everything else stays in the per-concern file only.
 var transcriptAllowlist = map[string]struct{}{
+	"adapter.chat.raw":            {},
 	"adapter.chat.ingress":        {},
 	"adapter.chat.discovery":      {},
 	"adapter.chat.received":       {},
