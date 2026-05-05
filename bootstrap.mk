@@ -34,5 +34,7 @@ $(shell mkdir -p .make && { $(call _go_mk_fetch,go.mk,$(GO_MK)); } 1>&2)
 $(shell { $(call _go_mk_fetch,golangci.yml,.make/golangci.yml); } 1>&2)
 $(foreach m,$(GO_MK_MODULES),$(shell { $(call _go_mk_fetch,$(m),.make/$(m)); } 1>&2))
 
+# go.mk handles -including the modules at its tail (after all its variables
+# are defined), so the modules see default-build-deps etc. Don't duplicate
+# the include here or every module target gets overriding-commands warnings.
 -include $(GO_MK)
-$(foreach m,$(GO_MK_MODULES),$(eval -include .make/$(m)))
