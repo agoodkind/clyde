@@ -147,6 +147,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		FileLog:                        p.fileLog,
 		ReasoningSummary:               p.cfg.ReasoningSummary,
 		InboundThinkingMaterialization: adapterrender.MaterializationStrategy(p.syntheticCfg.CodexInboundThinkingMaterialization()),
+		WireCaptureMode:                WireCaptureMode(p.cfg.ResolvedCodexWireCaptureMode()),
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
