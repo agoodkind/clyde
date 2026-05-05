@@ -1,6 +1,7 @@
-// Package slogger configures the structured logging surface used across
-// the daemon, TUI, and adapter. This file holds the canonical chat-key
-// sanitizer shared by the transcript router and the codex reasoningstore.
+// Package slogger holds the canonical chat-key sanitizer used by the
+// transcript router and the codex reasoningstore. Both surfaces map a
+// chat key onto a per-chat filesystem path. They must apply the exact
+// same allowlist so a key that is safe for one is safe for the other.
 package slogger
 
 import "strings"
