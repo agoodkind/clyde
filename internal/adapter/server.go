@@ -20,6 +20,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	"goodkind.io/clyde/internal/adapter/codex/reasoningstore"
 	"goodkind.io/clyde/internal/adapter/oauth"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -189,7 +190,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			Auth:       codexAuthLookup{server: s},
 			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
-		}, codexProviderOptions(logging, runtimeLogging))
+		}, codexProviderOptions(cfg, logging, runtimeLogging, log))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderCodex)),
@@ -385,11 +386,12 @@ func writeJSON[T any](w http.ResponseWriter, code int, v T) {
 }
 
 // codexProviderOptions builds the typed [adaptercodex.ProviderOptions]
-// payload from the daemon-side config snapshots. The reasoning store
-// fields are wired in a follow-up commit; calling
-// [adaptercodex.NewReasoningStoreGetter] with nil keeps the call graph
-// stable across that change.
-func codexProviderOptions(logging config.LoggingConfig, runtimeLogging *RuntimeLogging) adaptercodex.ProviderOptions {
+// payload from the daemon-side config snapshots. The reasoning store is
+// constructed when [adapter.codex.reasoning.store] retention bounds are
+// positive; otherwise the cache is disabled and the Phase 4 capture path
+// plus the Phase 6 lookup path are no-ops.
+func codexProviderOptions(cfg config.AdapterConfig, logging config.LoggingConfig, runtimeLogging *RuntimeLogging, log *slog.Logger) adaptercodex.ProviderOptions {
+	store := buildCodexReasoningStore(cfg.Codex.Reasoning.Store, log)
 	return adaptercodex.ProviderOptions{
 		AccountID: "",
 		BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
@@ -404,7 +406,44 @@ func codexProviderOptions(logging config.LoggingConfig, runtimeLogging *RuntimeL
 			Compress:   logging.Rotation.Compress,
 		},
 		WsSessionIdleTTL:  0,
-		ReasoningStore:    nil,
-		ReasoningStoreGet: adaptercodex.NewReasoningStoreGetter(nil),
+		ReasoningStore:    adaptercodex.NewReasoningStoreAdapter(store),
+		ReasoningStoreGet: adaptercodex.NewReasoningStoreGetter(store),
 	}
+}
+
+// codexReasoningStoreRoot returns the on-disk root directory for the
+// codex encrypted_content cache. Lives under XDG state alongside the
+// other clyde state.
+func codexReasoningStoreRoot() string {
+	return filepath.Join(config.DefaultStateDir(), "codex", "reasoning")
+}
+
+// buildCodexReasoningStore constructs the file-backed store when the
+// retention block is enabled. Returns nil when disabled or when the
+// store fails to open; the codex provider treats nil as cache-off.
+//
+// LRU capacity tracks the retention max_chats so the in-memory file pool
+// never exceeds the on-disk pool the cleanup loop maintains.
+func buildCodexReasoningStore(cfg config.AdapterCodexReasoningStore, log *slog.Logger) *reasoningstore.Store {
+	if !cfg.IsEnabled() {
+		return nil
+	}
+	store, err := reasoningstore.NewStore(codexReasoningStoreRoot(), cfg.MaxChats)
+	if err != nil {
+		log.Warn("adapter.codex.reasoningstore.open_failed",
+			"component", "adapter",
+			"subcomponent", "codex",
+			"root", codexReasoningStoreRoot(),
+			"err", err.Error(),
+		)
+		return nil
+	}
+	log.Info("adapter.codex.reasoningstore.opened",
+		"component", "adapter",
+		"subcomponent", "codex",
+		"root", codexReasoningStoreRoot(),
+		"max_age_days", cfg.MaxAgeDays,
+		"max_chats", cfg.MaxChats,
+	)
+	return store
 }

@@ -97,6 +97,7 @@ func RunBasedirLaunch(basedir string) int {
 
 	if err := app.Run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+
 		cmdUILog.Logger().ErrorContext(ctx, "dashboard.basedir.tui_error",
 			"component", "tui",
 			"basedir", canonical,
