@@ -257,10 +257,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if cursorReq.GenerationID != "" {
 		corr = corr.WithCursorGenerationID(cursorReq.GenerationID)
 	}
-	// Backfill the per-chat key from the parsed cursor metadata when the
-	// header path did not resolve one. WithChatKey is a no-op if a key is
-	// already set, so a header-resolved key still wins.
-	corr = corr.WithChatKey(cursorReq.ConversationID)
+	corr = resolveChatKey(corr, cursorReq, req)
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
 	req.Model = cursorReq.NormalizedModel
@@ -604,4 +601,16 @@ func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
 	r.ContentLength = int64(len(body))
 	r.Header.Set("Content-Type", "application/json")
 	s.handleChat(w, r)
+}
+
+// resolveChatKey returns corr with ChatKey populated if a key is available.
+// Header-set keys win because WithChatKey is a no-op when ChatKey is already
+// non-empty. The fallback derivation runs only after both the header path and
+// the parsed cursor metadata path failed to surface a key.
+func resolveChatKey(corr correlation.Context, cursorReq adaptercursor.Request, req ChatRequest) correlation.Context {
+	corr = corr.WithChatKey(cursorReq.ConversationID)
+	if corr.ChatKey != "" {
+		return corr
+	}
+	return corr.WithChatKey(adaptercursor.DeriveChatKey(req))
 }
