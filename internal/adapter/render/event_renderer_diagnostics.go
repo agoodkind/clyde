@@ -22,7 +22,7 @@ type deltaSummary struct {
 	ToolArgChars int
 }
 
-func (r *EventRenderer) SetUpstreamResponseID(responseID string) {
+func (r *EventRenderer) SetUpstreamResponseID(ctx context.Context, responseID string) {
 	if r == nil {
 		return
 	}
@@ -30,16 +30,16 @@ func (r *EventRenderer) SetUpstreamResponseID(responseID string) {
 	if responseID == "" {
 		return
 	}
-	ctx := r.logContext()
+	r.upstreamResponseID = responseID
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(responseID)
 	r.ctx = correlation.WithContext(ctx, corr)
 }
 
-func (r *EventRenderer) Flush() {
-	r.flushSuppressedEventSummaries()
+func (r *EventRenderer) Flush(ctx context.Context) {
+	r.flushSuppressedEventSummaries(ctx)
 }
 
-func (r *EventRenderer) LogAssistantTextSummary(finishReason string, usage *adapteropenai.Usage) {
+func (r *EventRenderer) LogAssistantTextSummary(ctx context.Context, finishReason string, usage *adapteropenai.Usage) {
 	if r == nil || r.assistantTextLogged {
 		return
 	}
@@ -68,7 +68,11 @@ func (r *EventRenderer) LogAssistantTextSummary(finishReason string, usage *adap
 		slog.Any("tool_call_names", r.toolCallNames),
 		slog.Bool("has_subagent_tool_call", r.hasSubagentToolCall),
 	}
-	attrs = correlation.AppendAttrs(attrs, correlation.FromContext(r.logContext()))
+	corr := correlation.FromContext(ctx)
+	if r.upstreamResponseID != "" {
+		corr = corr.WithUpstreamResponseID(r.upstreamResponseID)
+	}
+	attrs = correlation.AppendAttrs(attrs, corr)
 	if usage != nil {
 		attrs = append(attrs,
 			slog.Int("usage_prompt_tokens", usage.PromptTokens),
@@ -80,7 +84,7 @@ func (r *EventRenderer) LogAssistantTextSummary(finishReason string, usage *adap
 			slog.Int("usage_cache_write_tokens", usage.CacheWriteTokens),
 		)
 	}
-	r.log.LogAttrs(r.logContext(), slog.LevelInfo, "adapter.render.assistant_text_summary", attrs...)
+	r.log.LogAttrs(ctx, slog.LevelInfo, "adapter.render.assistant_text_summary", attrs...)
 }
 
 func (r *EventRenderer) recordToolCallNames(toolCalls []adapteropenai.ToolCall) {
@@ -222,7 +226,7 @@ func (r *EventRenderer) recordSuppressedEvent(ev Event) {
 	}
 }
 
-func (r *EventRenderer) flushSuppressedEventSummaries() {
+func (r *EventRenderer) flushSuppressedEventSummaries(ctx context.Context) {
 	if len(r.suppressed) == 0 {
 		return
 	}
@@ -231,7 +235,7 @@ func (r *EventRenderer) flushSuppressedEventSummaries() {
 		if summary == nil || summary.Count == 0 {
 			continue
 		}
-		r.log.LogAttrs(r.logContext(), slog.LevelDebug, "adapter.event.delta_summary",
+		r.log.LogAttrs(ctx, slog.LevelDebug, "adapter.event.delta_summary",
 			slog.String("component", "adapter"),
 			slog.String("subcomponent", "renderer"),
 			slog.String("request_id", r.reqID),

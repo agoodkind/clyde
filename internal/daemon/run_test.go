@@ -56,7 +56,7 @@ func TestAdapterControllerApplyNoopDoesNotStopProcess(t *testing.T) {
 		proc: proc,
 	}
 
-	err := ctrl.apply(adapterLaunchConfig{Enabled: false}, false, nil)
+	err := ctrl.apply(context.Background(), adapterLaunchConfig{Enabled: false}, false, nil)
 	if err != nil {
 		t.Fatalf("apply returned error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestAdapterControllerApplyBodyLoggingChangeDoesNotStopProcess(t *testing.T)
 		proc: proc,
 	}
 
-	err := ctrl.apply(adapterLaunchConfig{
+	err := ctrl.apply(context.Background(), adapterLaunchConfig{
 		Enabled: true,
 		Adapter: config.AdapterConfig{Port: 11434},
 		Logging: config.LoggingConfig{Body: config.LoggingBody{Mode: "raw", MaxKB: 256}},
@@ -123,7 +123,7 @@ func TestAdapterControllerApplyDisableStopsProcess(t *testing.T) {
 		proc: proc,
 	}
 
-	err := ctrl.apply(adapterLaunchConfig{Enabled: false}, false, nil)
+	err := ctrl.apply(context.Background(), adapterLaunchConfig{Enabled: false}, false, nil)
 	if err != nil {
 		t.Fatalf("apply returned error: %v", err)
 	}

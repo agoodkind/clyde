@@ -35,7 +35,7 @@ func TestEventRendererSuppressesArgumentOnlyToolDeltaLogs(t *testing.T) {
 	if strings.TrimSpace(buf.String()) != "" {
 		t.Fatalf("argument-only delta should not log, got %s", buf.String())
 	}
-	r.Flush()
+	r.Flush(context.Background())
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("summary log lines=%d want 1: %s", len(lines), buf.String())
@@ -105,7 +105,7 @@ func TestEventRendererAssistantSummaryIncludesToolDiagnostics(t *testing.T) {
 			},
 		}},
 	})
-	r.LogAssistantTextSummary("tool_calls", nil)
+	r.LogAssistantTextSummary(context.Background(), "tool_calls", nil)
 
 	var summary map[string]any
 	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
@@ -246,7 +246,7 @@ func TestEventRendererLogsAssistantTextRepeatedHalfSummary(t *testing.T) {
 	r.RecordAssistantTextDeltaEmitted(first)
 	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: second})
 	r.RecordAssistantTextDeltaEmitted(second)
-	r.LogAssistantTextSummary("stop", &adapteropenai.Usage{PromptTokens: 10, CompletionTokens: 8, TotalTokens: 18})
+	r.LogAssistantTextSummary(context.Background(), "stop", &adapteropenai.Usage{PromptTokens: 10, CompletionTokens: 8, TotalTokens: 18})
 
 	evt := assistantTextSummaryLog(t, buf.String())
 	if evt.Msg != "adapter.render.assistant_text_summary" {
@@ -285,7 +285,7 @@ func TestEventRendererLogsAssistantTextRepeatedSuffixSummary(t *testing.T) {
 	r.RecordAssistantTextDeltaEmitted(second)
 	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: third})
 	r.RecordAssistantTextDeltaEmitted(third)
-	r.LogAssistantTextSummary("stop", nil)
+	r.LogAssistantTextSummary(context.Background(), "stop", nil)
 
 	evt := assistantTextSummaryLog(t, buf.String())
 	if evt.RepeatedHalf {
@@ -321,8 +321,8 @@ func TestEventRendererLogsAssistantTextSummaryCorrelation(t *testing.T) {
 
 	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: "correlated text"})
 	r.RecordAssistantTextDeltaEmitted("correlated text")
-	r.SetUpstreamResponseID("resp-upstream")
-	r.LogAssistantTextSummary("stop", nil)
+	r.SetUpstreamResponseID(ctx, "resp-upstream")
+	r.LogAssistantTextSummary(ctx, "stop", nil)
 
 	evt := assistantTextSummaryLog(t, buf.String())
 	if evt.TraceID != string(corr.TraceID) {

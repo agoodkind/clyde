@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -131,7 +132,7 @@ func newPassthroughOverrideTestServer(t *testing.T, baseURL string) *Server {
 	cfg.OpenAICompatPassthrough = config.AdapterOpenAICompatPassthrough{
 		BaseURL: baseURL,
 	}
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

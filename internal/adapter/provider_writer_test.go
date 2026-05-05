@@ -124,7 +124,7 @@ func TestProviderStreamWriterWritesMappedErrorEnvelope(t *testing.T) {
 	}
 	writer := &providerStreamWriter{sse: sse}
 
-	err = writer.writeStreamErrorBody(ErrorBody{
+	err = writer.writeStreamErrorBody(context.Background(), ErrorBody{
 		Message: "unsupported model: gpt-5.5",
 		Type:    "invalid_request_error",
 		Code:    "model_not_supported",
@@ -164,7 +164,7 @@ func TestProviderStreamWriterLogsSSEChunkFlushShapeWithoutContent(t *testing.T) 
 		ctx:        context.Background(),
 	}
 	finishReason := "stop"
-	err = writer.writeRenderedChunk(adapteropenai.StreamChunk{
+	err = writer.writeRenderedChunk(context.Background(), adapteropenai.StreamChunk{
 		ID:      "req-flush-log",
 		Object:  "chat.completion.chunk",
 		Created: 1,
@@ -237,7 +237,7 @@ func TestProviderStreamWriterLogsToolCallChunkIDsAndNames(t *testing.T) {
 		ctx:        context.Background(),
 	}
 
-	err = writer.writeRenderedChunk(adapteropenai.StreamChunk{
+	err = writer.writeRenderedChunk(context.Background(), adapteropenai.StreamChunk{
 		ID:      "req-tool-log",
 		Object:  "chat.completion.chunk",
 		Created: 1,
@@ -296,7 +296,7 @@ func TestProviderStreamWriterLogsFinishChunkAndDoneFlush(t *testing.T) {
 		ctx:        context.Background(),
 	}
 
-	err = writer.finalizeStream(adapterprovider.Result{FinishReason: "stop"}, false)
+	err = writer.finalizeStream(context.Background(), adapterprovider.Result{FinishReason: "stop"}, false)
 	if err != nil {
 		t.Fatalf("finalizeStream: %v", err)
 	}
@@ -398,6 +398,7 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 		renderer:   adapterrender.NewEventRendererWithContext(ctx, "req-final", "alias-final", "codex", log),
 		reqID:      "req-final",
 		modelAlias: "alias-final",
+		ctx:        ctx,
 	}
 
 	if err := writer.WriteEvent(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: "finalized text"}); err != nil {
@@ -416,7 +417,7 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteEvent tool call: %v", err)
 	}
-	err = writer.finalizeStream(adapterprovider.Result{
+	err = writer.finalizeStream(ctx, adapterprovider.Result{
 		FinishReason: "stop",
 		Usage: adapteropenai.Usage{
 			PromptTokens:     3,
@@ -485,7 +486,7 @@ func TestProviderStreamWriterFinalizedNoticeDoesNotRepeatAssistantRole(t *testin
 	if err := writer.WriteEvent(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: "answer"}); err != nil {
 		t.Fatalf("WriteEvent: %v", err)
 	}
-	err = writer.finalizeStream(adapterprovider.Result{
+	err = writer.finalizeStream(context.Background(), adapterprovider.Result{
 		FinishReason: "stop",
 		UsageNotices: []adapterruntime.UsageNotice{{
 			Provider:   "codex",

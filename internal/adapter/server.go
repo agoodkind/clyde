@@ -139,7 +139,7 @@ type Server struct {
 // the registry cannot be built (missing families, default model, or
 // required client_identity fields); the daemon refuses to start the
 // listener in that case.
-func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log *slog.Logger) (*Server, error) {
+func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -191,7 +191,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			HTTPClient: s.httpClient,
 		}, codexProviderOptions(logging, runtimeLogging))
 		s.providerRegistry.Register(s.codexProvider)
-		log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
+		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderCodex)),
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
 		)
@@ -206,7 +206,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			// upstreamURL and prepends its own base, so we only need
 			// to match the path the proxy expects (/v1/messages).
 			messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
-			s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.oauth.mitm_routed",
+			s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed",
 				slog.String("messages_url", messagesURL),
 			)
 		}
@@ -231,11 +231,11 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			ExecutePrepared: s.executeAnthropicPreparedRequest,
 		})
 		s.providerRegistry.Register(s.anthropicProvider)
-		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderAnthropic)),
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
 		)
-		s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.oauth.enabled",
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled",
 			slog.Int("max_concurrent", max),
 		)
 	}

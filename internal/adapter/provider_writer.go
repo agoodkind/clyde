@@ -57,7 +57,7 @@ func newProviderStreamWriter(
 	}, nil
 }
 
-func (p *providerStreamWriter) writeRenderedChunk(chunk adapteropenai.StreamChunk) error {
+func (p *providerStreamWriter) writeRenderedChunk(ctx context.Context, chunk adapteropenai.StreamChunk) error {
 	if !p.headersWritten {
 		p.sse.WriteSSEHeaders()
 		p.headersWritten = true
@@ -65,19 +65,19 @@ func (p *providerStreamWriter) writeRenderedChunk(chunk adapteropenai.StreamChun
 	if err := p.sse.EmitStreamChunk(p.systemFingerprint, chunk); err != nil {
 		return err
 	}
-	p.logStreamChunkFlushed(chunk)
+	p.logStreamChunkFlushed(ctx, chunk)
 	return nil
 }
 
-func (p *providerStreamWriter) logStreamChunkFlushed(chunk adapteropenai.StreamChunk) {
+func (p *providerStreamWriter) logStreamChunkFlushed(ctx context.Context, chunk adapteropenai.StreamChunk) {
 	if p == nil {
 		return
 	}
 	p.streamChunkSeq++
-	p.logStreamFrameFlushed(streamFlushLogShapeFromChunk(chunk, p.streamChunkSeq, p.reqID, p.modelAlias))
+	p.logStreamFrameFlushed(ctx, streamFlushLogShapeFromChunk(chunk, p.streamChunkSeq, p.reqID, p.modelAlias))
 }
 
-func (p *providerStreamWriter) writeStreamDone() error {
+func (p *providerStreamWriter) writeStreamDone(ctx context.Context) error {
 	if p == nil || p.sse == nil {
 		return nil
 	}
@@ -85,7 +85,7 @@ func (p *providerStreamWriter) writeStreamDone() error {
 		return err
 	}
 	p.streamChunkSeq++
-	p.logStreamFrameFlushed(streamFlushLogShape{
+	p.logStreamFrameFlushed(ctx, streamFlushLogShape{
 		RequestID:        p.reqID,
 		Model:            p.modelAlias,
 		Sequence:         p.streamChunkSeq,
@@ -182,14 +182,10 @@ func streamFlushLogShapeFromChunk(chunk adapteropenai.StreamChunk, sequence int,
 	return shape
 }
 
-func (p *providerStreamWriter) logStreamFrameFlushed(shape streamFlushLogShape) {
+func (p *providerStreamWriter) logStreamFrameFlushed(ctx context.Context, shape streamFlushLogShape) {
 	log := p.log
 	if log == nil {
 		log = slogger.WithConcern(slog.Default(), slogger.ConcernAdapterHTTPEgress)
-	}
-	ctx := p.ctx
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	log.LogAttrs(ctx, slog.LevelDebug, "adapter.openai.sse.stream_chunk_flushed",
 		slog.String("component", "adapter"),
@@ -223,7 +219,7 @@ func (p *providerStreamWriter) WriteEvent(ev adapterrender.Event) error {
 	}
 	chunks := p.renderer.HandleEvent(ev)
 	for _, chunk := range chunks {
-		if err := p.writeRenderedChunk(chunk); err != nil {
+		if err := p.writeRenderedChunk(p.ctx, chunk); err != nil {
 			return err
 		}
 	}
@@ -234,8 +230,12 @@ func (p *providerStreamWriter) WriteEvent(ev adapterrender.Event) error {
 }
 
 func (p *providerStreamWriter) Flush() error {
+	return p.flush(p.ctx)
+}
+
+func (p *providerStreamWriter) flush(ctx context.Context) error {
 	if p != nil && p.renderer != nil {
-		p.renderer.Flush()
+		p.renderer.Flush(ctx)
 	}
 	if p.flusher != nil {
 		p.flusher.Flush()
@@ -243,22 +243,22 @@ func (p *providerStreamWriter) Flush() error {
 	return nil
 }
 
-func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, includeUsage bool) error {
-	if err := p.Flush(); err != nil {
+func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapterprovider.Result, includeUsage bool) error {
+	if err := p.flush(ctx); err != nil {
 		return err
 	}
 	for _, notice := range result.UsageNotices {
 		includeRole := p == nil || p.renderer == nil || !p.renderer.HasEmittedRole()
-		if err := p.writeRenderedChunk(adapterruntime.OpenAINoticeChunk(p.reqID, p.modelAlias, adapterruntime.FormattedNoticeText(notice.Text), includeRole)); err != nil {
+		if err := p.writeRenderedChunk(ctx, adapterruntime.OpenAINoticeChunk(p.reqID, p.modelAlias, adapterruntime.FormattedNoticeText(notice.Text), includeRole)); err != nil {
 			return err
 		}
-		adapterruntime.LogNoticeEmission(notice, "stream_finalized")
+		adapterruntime.LogNoticeEmission(ctx, notice, "stream_finalized")
 	}
 	finishReason := normalizedProviderFinishReason(result)
 	if p != nil && p.renderer != nil {
-		p.renderer.SetUpstreamResponseID(result.UpstreamResponseID)
+		p.renderer.SetUpstreamResponseID(ctx, result.UpstreamResponseID)
 		usage := result.Usage
-		p.renderer.LogAssistantTextSummary(finishReason, &usage)
+		p.renderer.LogAssistantTextSummary(ctx, finishReason, &usage)
 	}
 	finishChunk := adapteropenai.StreamChunk{
 		ID:      p.reqID,
@@ -275,12 +275,12 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 		usage := result.Usage
 		finishChunk.Usage = &usage
 	}
-	if err := p.writeRenderedChunk(finishChunk); err != nil {
+	if err := p.writeRenderedChunk(ctx, finishChunk); err != nil {
 		return err
 	}
 	if includeUsage {
 		usage := result.Usage
-		if err := p.writeRenderedChunk(adapteropenai.StreamChunk{
+		if err := p.writeRenderedChunk(ctx, adapteropenai.StreamChunk{
 			ID:      p.reqID,
 			Object:  "chat.completion.chunk",
 			Created: p.createdUnix(),
@@ -291,17 +291,17 @@ func (p *providerStreamWriter) finalizeStream(result adapterprovider.Result, inc
 			return err
 		}
 	}
-	return p.writeStreamDone()
+	return p.writeStreamDone(ctx)
 }
 
-func (p *providerStreamWriter) writeStreamErrorBody(body adapteropenai.ErrorBody) error {
+func (p *providerStreamWriter) writeStreamErrorBody(ctx context.Context, body adapteropenai.ErrorBody) error {
 	if p == nil || p.sse == nil {
 		return nil
 	}
 	if err := p.sse.EmitStreamError(body); err != nil {
 		return err
 	}
-	return p.writeStreamDone()
+	return p.writeStreamDone(ctx)
 }
 
 var _ adapterprovider.EventWriter = (*providerStreamWriter)(nil)

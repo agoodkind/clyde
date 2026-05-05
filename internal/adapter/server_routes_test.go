@@ -26,7 +26,7 @@ func TestStartOnListenerServesHealth(t *testing.T) {
 	}
 	cfg := baseConfig()
 	cfg.Enabled = true
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 	}
 	cfg := baseConfig()
 	cfg.Enabled = true
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 	}
 	cfg := baseConfig()
 	cfg.Enabled = true
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 func TestAnthropicMessagesRouteUsesNativeIngress(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Enabled = true
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestAnthropicMessagesRoutePreservesNativeClaudeModelID(t *testing.T) {
 		BaseURL: "http://localhost:1234",
 		Model:   "local-model",
 	}
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestAnthropicMessagesRoutePreservesNativeClaudeModelID(t *testing.T) {
 func TestAnthropicMessagesRoutePreservesSSEFramesWithClaudeBetaQuery(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Enabled = true
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestAnthropicMessagesRoutePreservesSSEFramesWithClaudeBetaQuery(t *testing.
 func TestAnthropicCountTokensRouteReturnsTypedStub(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Enabled = true
-	srv, err := New(cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

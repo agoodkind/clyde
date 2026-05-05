@@ -60,7 +60,7 @@ func (s *Server) dispatchAnthropicProviderCollect(
 	}
 	result.UsageNotices = notices
 	finalResponse := *result.FinalResponse
-	updated, _ := adapterruntime.AppendUsageNoticesToResponse(finalResponse, notices, json.Marshal)
+	updated, _ := adapterruntime.AppendUsageNoticesToResponse(ctx, finalResponse, notices, json.Marshal)
 	if len(notices) > 0 {
 		finalResponse = updated
 	}
@@ -84,7 +84,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 	if runErr != nil {
 		aerr := anthropicProviderAdapterError(runErr)
 		if streamWriter.headersWritten {
-			if err := streamWriter.writeStreamErrorBody(aerr.openAIErrorBody()); err != nil {
+			if err := streamWriter.writeStreamErrorBody(ctx, aerr.openAIErrorBody()); err != nil {
 				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
 					slog.String("backend", "anthropic"),
 					slog.String("request_id", reqID),
@@ -101,7 +101,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	if err := streamWriter.finalizeStream(result, resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage); err != nil {
+	if err := streamWriter.finalizeStream(ctx, result, resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage); err != nil {
 		return adapterErrUpstreamFailed("anthropic", err.Error(), err)
 	}
 	return nil

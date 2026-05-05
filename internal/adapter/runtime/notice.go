@@ -359,7 +359,7 @@ func noticeEvent(text string) (adapterrender.Event, bool) {
 	return adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: formattedText, EncryptedContent: ""}, true
 }
 
-func EventsWithInjectedUsageNotices(events []adapterrender.Event, notices []UsageNotice) []adapterrender.Event {
+func EventsWithInjectedUsageNotices(ctx context.Context, events []adapterrender.Event, notices []UsageNotice) []adapterrender.Event {
 	if len(notices) == 0 {
 		return events
 	}
@@ -370,7 +370,7 @@ func EventsWithInjectedUsageNotices(events []adapterrender.Event, notices []Usag
 		if !ok {
 			continue
 		}
-		LogNoticeEmission(notice, "stream_injected")
+		LogNoticeEmission(ctx, notice, "stream_injected")
 		out = append(out, ev)
 	}
 	return out
@@ -382,9 +382,9 @@ func EventsWithInjectedUsageNotices(events []adapterrender.Event, notices []Usag
 // should call this helper instead of reinventing the field set. Logged at
 // debug per call so loops do not spam info-level events; the gate emits one
 // info-level evaluate summary that bounds these per-emission lines.
-func LogNoticeEmission(notice UsageNotice, surface string) {
+func LogNoticeEmission(ctx context.Context, notice UsageNotice, surface string) {
 	logger := slogger.WithConcern(slog.Default(), slogger.ConcernAdapterNotice)
-	logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.emitted",
+	logger.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.emitted",
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "usage_notice_gate"),
 		slog.String("provider", notice.Provider),
@@ -398,6 +398,7 @@ func LogNoticeEmission(notice UsageNotice, surface string) {
 }
 
 func AppendUsageNoticesToResponse(
+	ctx context.Context,
 	resp ChatResponse,
 	notices []UsageNotice,
 	encode encodeJSON,
@@ -415,7 +416,7 @@ func AppendUsageNoticesToResponse(
 		if formattedText == "" {
 			continue
 		}
-		LogNoticeEmission(notice, "response_appended")
+		LogNoticeEmission(ctx, notice, "response_appended")
 		builder.WriteString(formattedText)
 	}
 	if builder.Len() == 0 {
