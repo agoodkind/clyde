@@ -35,10 +35,12 @@ type Provider struct {
 	bodyLogProvider BodyLogConfigProvider
 	fileLog         FileLogRotationConfig
 	// reasoningStore receives encrypted_content blobs scraped from
-	// codex Reasoning items at the end of each turn (Phase 4) and
-	// returns them on a hit during Phase 6 round-trip. Optional; when
-	// nil the Phase 4 capture path is a no-op.
+	// codex Reasoning items at the end of each turn (Phase 4 write).
+	// Optional; when nil the Phase 4 capture path is a no-op.
 	reasoningStore ReasoningBlobStore
+	// reasoningStoreGet looks up previously persisted blobs during the
+	// Phase 6 round-trip. Optional; when nil every lookup misses.
+	reasoningStoreGet ReasoningStoreGetter
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -51,10 +53,14 @@ type ProviderOptions struct {
 	BodyLogProvider  BodyLogConfigProvider
 	FileLog          FileLogRotationConfig
 	WsSessionIdleTTL time.Duration
-	// ReasoningStore is the file-backed encrypted_content cache (Phase 3).
-	// Optional; when nil the Phase 4 capture path is a no-op and Phase 6
-	// always misses the lookup.
+	// ReasoningStore is the file-backed encrypted_content cache writer
+	// (Phase 3 / Phase 4). Optional; when nil the capture path is a no-op.
 	ReasoningStore ReasoningBlobStore
+	// ReasoningStoreGet is the Phase 6 reader. Optional; when nil every
+	// inbound lookup misses. Typically the same underlying store as
+	// ReasoningStore; both are accepted independently so a daemon can
+	// run capture-only or read-only configurations if needed.
+	ReasoningStoreGet ReasoningStoreGetter
 }
 
 const defaultWsSessionIdleTTL = 10 * time.Minute
@@ -79,19 +85,20 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	}
 	ConfigureCodexFileLogger(opts.FileLog)
 	return &Provider{
-		cfg:             deps.Config.Codex,
-		notices:         deps.Config.Notices,
-		auth:            deps.Auth,
-		log:             log,
-		httpClient:      httpClient,
-		now:             now,
-		sessionCache:    NewWebsocketSessionCache(log, idleTTL),
-		workspaceProbe:  NewWorkspaceProbe(),
-		accountID:       strings.TrimSpace(opts.AccountID),
-		bodyLog:         opts.BodyLog,
-		bodyLogProvider: opts.BodyLogProvider,
-		fileLog:         opts.FileLog,
-		reasoningStore:  opts.ReasoningStore,
+		cfg:               deps.Config.Codex,
+		notices:           deps.Config.Notices,
+		auth:              deps.Auth,
+		log:               log,
+		httpClient:        httpClient,
+		now:               now,
+		sessionCache:      NewWebsocketSessionCache(log, idleTTL),
+		workspaceProbe:    NewWorkspaceProbe(),
+		accountID:         strings.TrimSpace(opts.AccountID),
+		bodyLog:           opts.BodyLog,
+		bodyLogProvider:   opts.BodyLogProvider,
+		fileLog:           opts.FileLog,
+		reasoningStore:    opts.ReasoningStore,
+		reasoningStoreGet: opts.ReasoningStoreGet,
 	}
 }
 
@@ -158,6 +165,8 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		WireCaptureMode:                WireCaptureMode(p.cfg.ResolvedCodexWireCaptureMode()),
 		ReasoningStore:                 p.reasoningStore,
 		RoundTripEncrypted:             RoundTripEncrypted(p.cfg.Reasoning.ResolvedRoundTripEncrypted()),
+		RoundTripSummary:               RoundTripSummary(p.cfg.Reasoning.ResolvedRoundTripSummary()),
+		ReasoningStoreGet:              p.reasoningStoreGet,
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{

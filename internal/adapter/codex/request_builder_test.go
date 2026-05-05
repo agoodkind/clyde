@@ -32,7 +32,7 @@ type managedPromptPlanForTest struct {
 }
 
 func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string) HTTPTransportRequest {
-	return BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{})
+	return BuildRequestWithConfig(context.Background(), req, model, effort, RequestBuilderConfig{})
 }
 
 const (
@@ -215,7 +215,7 @@ func TestBuildCodexRequestUsesConfiguredDefaultReasoningSummary(t *testing.T) {
 	}
 	model := ResolvedModel{Alias: "gpt-5.4"}
 
-	out := BuildRequestWithConfig(req, model, "", RequestBuilderConfig{
+	out := BuildRequestWithConfig(context.Background(), req, model, "", RequestBuilderConfig{
 		ReasoningSummary: "detailed",
 	})
 	if out.Reasoning == nil {
