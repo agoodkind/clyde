@@ -1,12 +1,14 @@
-# deadcode: generated_at=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:103:17: unreachable func: Store.acquire	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:187:17: unreachable func: Store.release	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:195:6: unreachable func: closeHandle	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:212:17: unreachable func: Store.Put	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:266:17: unreachable func: Store.Get	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:342:17: unreachable func: Store.ListChats	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:372:17: unreachable func: Store.EvictChat	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:414:17: unreachable func: Store.Close	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:64:6: unreachable func: NewStore	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/adapter/codex/reasoningstore/store.go:91:17: unreachable func: Store.pathFor	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T06:55:34Z
-internal/slogger/sanitize.go:16:6: unreachable func: SanitizeChatKey	# deadcode:first_added=2026-05-05T06:55:34Z last_seen=2026-05-05T06:55:34Z
+# deadcode: generated_at=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore_adapter.go:22:6: unreachable func: NewReasoningStoreAdapter	# deadcode:first_added=2026-05-05T07:14:43Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore_adapter.go:31:33: unreachable func: reasoningStoreAdapter.Put	# deadcode:first_added=2026-05-05T07:14:43Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:103:17: unreachable func: Store.acquire	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:187:17: unreachable func: Store.release	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:195:6: unreachable func: closeHandle	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:212:17: unreachable func: Store.Put	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:266:17: unreachable func: Store.Get	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:342:17: unreachable func: Store.ListChats	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:372:17: unreachable func: Store.EvictChat	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:414:17: unreachable func: Store.Close	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:64:6: unreachable func: NewStore	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/adapter/codex/reasoningstore/store.go:91:17: unreachable func: Store.pathFor	# deadcode:first_added=2026-05-05T06:21:49Z last_seen=2026-05-05T07:14:43Z
+internal/slogger/sanitize.go:16:6: unreachable func: SanitizeChatKey	# deadcode:first_added=2026-05-05T06:55:34Z last_seen=2026-05-05T07:14:43Z
