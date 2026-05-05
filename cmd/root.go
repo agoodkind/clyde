@@ -569,6 +569,7 @@ func compactRunOptionsFromUI(req ui.CompactRunRequest) daemon.CompactRunOptions 
 		Tools:          req.Tools,
 		Chat:           req.Chat,
 		Summarize:      req.Summarize,
+		SummarizeMode:  req.SummarizeMode,
 		Force:          req.Force,
 	}
 }

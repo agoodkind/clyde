@@ -19,6 +19,7 @@ type compactDaemonRunInput struct {
 	ModelExplicit  bool
 	Strippers      compactengine.Strippers
 	Summarize      bool
+	SummarizeMode  string
 	Force          bool
 	ShowPasses     bool
 	IsTTY          bool
@@ -37,6 +38,7 @@ func runCompactViaDaemon(ctx context.Context, out io.Writer, in compactDaemonRun
 		Tools:          in.Strippers.Tools,
 		Chat:           in.Strippers.Chat,
 		Summarize:      in.Summarize,
+		SummarizeMode:  in.SummarizeMode,
 		Force:          in.Force,
 	}
 

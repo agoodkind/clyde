@@ -935,6 +935,7 @@ type CompactRunOptions struct {
 	Tools          bool
 	Chat           bool
 	Summarize      bool
+	SummarizeMode  string
 	Force          bool
 }
 
@@ -971,8 +972,9 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 			Tools:    in.Tools,
 			Chat:     in.Chat,
 		},
-		Summarize: in.Summarize,
-		Force:     in.Force,
+		Summarize:     in.Summarize,
+		SummarizeMode: in.SummarizeMode,
+		Force:         in.Force,
 	}
 	var stream grpc.ServerStreamingClient[clydev1.CompactEvent]
 	if apply {

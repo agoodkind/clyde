@@ -171,6 +171,128 @@ func TestLoadSlice_BoundaryDiscovery(t *testing.T) {
 	}
 }
 
+type testSummarizeAdapter struct {
+	calls int
+	text  string
+}
+
+func (a *testSummarizeAdapter) SummarizeDropped(_ context.Context, _ SummarizeRequest) (string, error) {
+	a.calls++
+	return a.text, nil
+}
+
+func TestDoSummarizeAutoRunsOnlyAfterChatDrop(t *testing.T) {
+	slice := &Slice{PostBoundary: []Entry{{Type: "user"}}}
+	adapter := &testSummarizeAdapter{text: "chat recap"}
+	decision, err := DoSummarize(context.Background(), SummarizeRequest{
+		Slice: slice,
+		Options: SynthOptions{
+			DroppedChatEntries: map[int]bool{0: true},
+		},
+		Mode:    SummarizeModeAuto,
+		Adapter: adapter,
+	})
+	if err != nil {
+		t.Fatalf("DoSummarize returned error: %v", err)
+	}
+	if !decision.ShouldSummarize || decision.Summary != "chat recap" {
+		t.Fatalf("decision = %#v, want auto chat summary", decision)
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("adapter calls = %d, want 1", adapter.calls)
+	}
+}
+
+func TestDoSummarizeAutoSkipsToolOnlyDrops(t *testing.T) {
+	slice := &Slice{PostBoundary: []Entry{{Type: "assistant", Content: []ContentBlock{{Type: "tool_use", ToolUseID: "tool-1"}}}}}
+	adapter := &testSummarizeAdapter{text: "tool recap"}
+	decision, err := DoSummarize(context.Background(), SummarizeRequest{
+		Slice: slice,
+		Options: SynthOptions{
+			ToolDetailOverride: map[string]ToolDetail{"tool-1": ToolDetailDrop},
+		},
+		Mode:    SummarizeModeAuto,
+		Adapter: adapter,
+	})
+	if err != nil {
+		t.Fatalf("DoSummarize returned error: %v", err)
+	}
+	if decision.ShouldSummarize {
+		t.Fatalf("decision = %#v, want auto skip without chat truncation", decision)
+	}
+	if adapter.calls != 0 {
+		t.Fatalf("adapter calls = %d, want 0", adapter.calls)
+	}
+}
+
+func TestDoSummarizeAutoRunsAfterPriorSummaryChunkDrop(t *testing.T) {
+	slice := &Slice{PostBoundary: []Entry{{Type: "user"}}}
+	adapter := &testSummarizeAdapter{text: "prior recap"}
+	decision, err := DoSummarize(context.Background(), SummarizeRequest{
+		Slice: slice,
+		Options: SynthOptions{
+			DroppedSummaryChunks: map[int]map[string]bool{
+				0: {"summary_of_dropped_content": true},
+			},
+		},
+		Mode:    SummarizeModeAuto,
+		Adapter: adapter,
+	})
+	if err != nil {
+		t.Fatalf("DoSummarize returned error: %v", err)
+	}
+	if !decision.ShouldSummarize || decision.Summary != "prior recap" {
+		t.Fatalf("decision = %#v, want auto prior-summary recap", decision)
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("adapter calls = %d, want 1", adapter.calls)
+	}
+}
+
+func TestDoSummarizeOnRunsForToolOnlyDrops(t *testing.T) {
+	slice := &Slice{PostBoundary: []Entry{{Type: "assistant", Content: []ContentBlock{{Type: "tool_use", ToolUseID: "tool-1"}}}}}
+	adapter := &testSummarizeAdapter{text: "tool recap"}
+	decision, err := DoSummarize(context.Background(), SummarizeRequest{
+		Slice: slice,
+		Options: SynthOptions{
+			ToolDetailOverride: map[string]ToolDetail{"tool-1": ToolDetailDrop},
+		},
+		Mode:    SummarizeModeOn,
+		Adapter: adapter,
+	})
+	if err != nil {
+		t.Fatalf("DoSummarize returned error: %v", err)
+	}
+	if !decision.ShouldSummarize || decision.Summary != "tool recap" {
+		t.Fatalf("decision = %#v, want forced tool summary", decision)
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("adapter calls = %d, want 1", adapter.calls)
+	}
+}
+
+func TestDoSummarizeOffSkipsChatDrops(t *testing.T) {
+	slice := &Slice{PostBoundary: []Entry{{Type: "user"}}}
+	adapter := &testSummarizeAdapter{text: "chat recap"}
+	decision, err := DoSummarize(context.Background(), SummarizeRequest{
+		Slice: slice,
+		Options: SynthOptions{
+			DroppedChatEntries: map[int]bool{0: true},
+		},
+		Mode:    SummarizeModeOff,
+		Adapter: adapter,
+	})
+	if err != nil {
+		t.Fatalf("DoSummarize returned error: %v", err)
+	}
+	if decision.ShouldSummarize {
+		t.Fatalf("decision = %#v, want disabled skip", decision)
+	}
+	if adapter.calls != 0 {
+		t.Fatalf("adapter calls = %d, want 0", adapter.calls)
+	}
+}
+
 func TestApplyAllowsRecentlyModifiedTranscript(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))

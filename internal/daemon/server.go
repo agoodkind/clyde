@@ -2626,6 +2626,13 @@ func (s *Server) runCompact(
 		})
 	}
 
+	summarizeMode, modeErr := compactengine.NormalizeSummarizeMode(req.GetSummarizeMode())
+	if modeErr != nil {
+		return status.Errorf(codes.InvalidArgument, "compact summarize mode: %v", modeErr)
+	}
+	if req.GetSummarizeMode() == "" {
+		summarizeMode = compactengine.SummarizeModeFromLegacy(req.GetSummarize(), req.GetSummarize())
+	}
 	result, runErr := compactengine.RunRuntime(ctx, compactengine.RuntimeRequest{
 		Session:                sess,
 		Store:                  store,
@@ -2635,6 +2642,7 @@ func (s *Server) runCompact(
 		ModelExplicit:          req.GetModelExplicit(),
 		Strippers:              strippers,
 		Summarize:              req.GetSummarize(),
+		SummarizeMode:          summarizeMode,
 		Force:                  req.GetForce(),
 		Mode:                   mode,
 		PreparedUpfront:        &upfront,

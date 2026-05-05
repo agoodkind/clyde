@@ -9,7 +9,43 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/session"
 )
+
+type SummarizeMode string
+
+const (
+	SummarizeModeAuto SummarizeMode = "auto"
+	SummarizeModeOn   SummarizeMode = "on"
+	SummarizeModeOff  SummarizeMode = "off"
+)
+
+// NormalizeSummarizeMode maps wire/UI/CLI values onto the compact
+// summarization policy. Empty values preserve the new default: summarize only
+// when chat turns were truncated.
+func NormalizeSummarizeMode(value string) (SummarizeMode, error) {
+	switch SummarizeMode(strings.ToLower(strings.TrimSpace(value))) {
+	case "", SummarizeModeAuto:
+		return SummarizeModeAuto, nil
+	case SummarizeModeOn:
+		return SummarizeModeOn, nil
+	case SummarizeModeOff:
+		return SummarizeModeOff, nil
+	default:
+		return "", fmt.Errorf("unknown summarize mode %q (expected auto|on|off)", value)
+	}
+}
+
+func SummarizeModeFromLegacy(summarize bool, explicit bool) SummarizeMode {
+	if !explicit {
+		return SummarizeModeAuto
+	}
+	if summarize {
+		return SummarizeModeOn
+	}
+	return SummarizeModeOff
+}
 
 // SummarizeOptions configures a claude -p summarization call.
 type SummarizeOptions struct {
@@ -27,6 +63,118 @@ type SummarizeOptions struct {
 
 	// Timeout caps the subprocess. Default 120s.
 	Timeout time.Duration
+}
+
+type SummarizeRequest struct {
+	Session *session.Session
+	Slice   *Slice
+	Options SynthOptions
+	Model   string
+	Mode    SummarizeMode
+	Adapter SummarizeAdapter
+}
+
+type SummarizeDecision struct {
+	Mode            SummarizeMode
+	ShouldSummarize bool
+	Reason          string
+	Stats           DroppedStats
+	Summary         string
+}
+
+type SummarizeAdapter interface {
+	SummarizeDropped(ctx context.Context, req SummarizeRequest) (string, error)
+}
+
+type ClaudeSummarizeAdapter struct {
+	Options SummarizeOptions
+}
+
+func (a ClaudeSummarizeAdapter) SummarizeDropped(ctx context.Context, req SummarizeRequest) (string, error) {
+	options := a.Options
+	if options.Model == "" {
+		options.Model = req.Model
+	}
+	return SummarizeDropped(ctx, req.Slice, req.Options, options)
+}
+
+func SummarizeAdapterForSession(sess *session.Session) (SummarizeAdapter, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("summarize adapter: nil session")
+	}
+	switch sess.ProviderID() {
+	case session.ProviderClaude:
+		return ClaudeSummarizeAdapter{}, nil
+	default:
+		return nil, fmt.Errorf("summarize adapter: provider %q is not supported", sess.ProviderID())
+	}
+}
+
+func DoSummarize(ctx context.Context, req SummarizeRequest) (SummarizeDecision, error) {
+	mode := req.Mode
+	if mode == "" {
+		mode = SummarizeModeAuto
+	}
+	stats := ComputeDroppedStats(req.Slice, req.Options)
+	decision := SummarizeDecision{
+		Mode:            mode,
+		ShouldSummarize: shouldSummarize(mode, stats, req.Options),
+		Reason:          summarizeReason(mode, stats, req.Options),
+		Stats:           stats,
+	}
+	if !decision.ShouldSummarize {
+		return decision, nil
+	}
+	adapter := req.Adapter
+	if adapter == nil {
+		resolved, err := SummarizeAdapterForSession(req.Session)
+		if err != nil {
+			return decision, err
+		}
+		adapter = resolved
+	}
+	summary, err := adapter.SummarizeDropped(ctx, req)
+	if err != nil {
+		return decision, err
+	}
+	decision.Summary = summary
+	return decision, nil
+}
+
+func shouldSummarize(mode SummarizeMode, stats DroppedStats, opts SynthOptions) bool {
+	switch mode {
+	case SummarizeModeOff:
+		return false
+	case SummarizeModeOn:
+		return hasDroppedContent(stats, opts)
+	default:
+		return chatWasTruncated(stats, opts)
+	}
+}
+
+func summarizeReason(mode SummarizeMode, stats DroppedStats, opts SynthOptions) string {
+	switch mode {
+	case SummarizeModeOff:
+		return "disabled"
+	case SummarizeModeOn:
+		if hasDroppedContent(stats, opts) {
+			return "enabled"
+		}
+		return "no dropped content"
+	default:
+		if chatWasTruncated(stats, opts) {
+			return "chat truncated"
+		}
+		return "no chat truncation"
+	}
+}
+
+func chatWasTruncated(stats DroppedStats, opts SynthOptions) bool {
+	return stats.ChatTurns > 0 || droppedSummaryChunkCount(opts) > 0
+}
+
+func hasDroppedContent(stats DroppedStats, opts SynthOptions) bool {
+	return stats.ThinkingBlocks+stats.Images+stats.ToolsLineOnly+stats.ToolsDropped+stats.ChatTurns+droppedSummaryChunkCount(opts) > 0
 }
 
 // SummarizeDropped renders the portion of the slice that the current

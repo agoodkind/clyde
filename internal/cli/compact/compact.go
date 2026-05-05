@@ -88,7 +88,8 @@ both work.`,
 	cmd.Flags().Bool("force", false, "Bypass the open-session concurrency guard during --apply")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")
 	cmd.Flags().String("target", "", "Compaction target token count (e.g. 200k, 120,000, 1.2m). Overrides the positional [target] arg when both are present.")
-	cmd.Flags().Bool("summarize", true, "On --apply, generate an LLM recap of dropped content via `claude -p` and inject it into the synthetic header. Use --summarize=false to skip.")
+	cmd.Flags().Bool("summarize", false, "Tri-state shortcut: omitted uses auto; --summarize forces on; --summarize=false forces off.")
+	cmd.Flags().String("summarize-mode", "auto", "Summary policy for --apply: auto summarizes only when chat is truncated; on summarizes any dropped content; off skips.")
 	cmd.Flags().Bool("show-passes", false, "Show every compact pass after planning completes")
 
 	return cmd

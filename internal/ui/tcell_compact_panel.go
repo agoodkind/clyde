@@ -19,6 +19,7 @@ type CompactRunRequest struct {
 	Tools          bool
 	Chat           bool
 	Summarize      bool
+	SummarizeMode  string
 	Force          bool
 }
 
@@ -84,6 +85,7 @@ type CompactPanel struct {
 	images   bool
 	tools    bool
 	chat     bool
+	summary  string
 
 	focusGroup   int
 	checkboxIdx  int
@@ -119,6 +121,7 @@ func NewCompactPanel(sessionName string) *CompactPanel {
 		images:       true,
 		tools:        true,
 		chat:         true,
+		summary:      "auto",
 		status:       "adjust controls and run preview",
 	}
 }
@@ -355,10 +358,10 @@ func (p *CompactPanel) handleCheckKeys(e *tcell.EventKey) bool {
 	p.clearApplyConfirmation()
 	switch e.Key() {
 	case tcell.KeyLeft:
-		p.checkboxIdx = (p.checkboxIdx + 3) % 4
+		p.checkboxIdx = (p.checkboxIdx + 4) % 5
 		return true
 	case tcell.KeyRight:
-		p.checkboxIdx = (p.checkboxIdx + 1) % 4
+		p.checkboxIdx = (p.checkboxIdx + 1) % 5
 		return true
 	case tcell.KeyEnter:
 		p.toggleCheckbox(p.checkboxIdx)
@@ -407,6 +410,19 @@ func (p *CompactPanel) toggleCheckbox(idx int) {
 		p.tools = !p.tools
 	case 3:
 		p.chat = !p.chat
+	case 4:
+		p.cycleSummaryMode()
+	}
+}
+
+func (p *CompactPanel) cycleSummaryMode() {
+	switch p.summary {
+	case "auto":
+		p.summary = "on"
+	case "on":
+		p.summary = "off"
+	default:
+		p.summary = "auto"
 	}
 }
 
@@ -457,7 +473,8 @@ func (p *CompactPanel) buildRequest() CompactRunRequest {
 		Images:         p.images,
 		Tools:          p.tools,
 		Chat:           p.chat,
-		Summarize:      true,
+		Summarize:      p.summary == "on",
+		SummarizeMode:  p.summary,
 	}
 }
 
@@ -475,7 +492,16 @@ func (p *CompactPanel) renderChecks() string {
 	return check("thinking", p.thinking, 0) + "  " +
 		check("images", p.images, 1) + "  " +
 		check("tools", p.tools, 2) + "  " +
-		check("chat", p.chat, 3)
+		check("chat", p.chat, 3) + "  " +
+		p.renderSummaryControl()
+}
+
+func (p *CompactPanel) renderSummaryControl() string {
+	text := "summary:" + p.summary
+	if p.focusGroup == 2 && p.checkboxIdx == 4 {
+		return "[" + text + "]"
+	}
+	return " " + text + " "
 }
 
 func (p *CompactPanel) drawActionButtons(scr tcell.Screen, x, y, maxW int) {

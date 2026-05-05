@@ -222,6 +222,40 @@ func RunRuntime(
 	}
 
 	if req.Mode == RuntimeModeApply {
+		summaryMode := req.SummarizeMode
+		if summaryMode == "" {
+			summaryMode = SummarizeModeFromLegacy(req.Summarize, req.Summarize)
+		}
+		decision, summaryErr := DoSummarize(ctx, SummarizeRequest{
+			Session: req.Session,
+			Slice:   slice,
+			Options: planRes.Options,
+			Model:   modelForCount,
+			Mode:    summaryMode,
+		})
+		if summaryErr != nil {
+			compactLog.Logger().Warn("compact.runtime.summarize_failed_continuing",
+				"component", "compact",
+				"subcomponent", "runtime",
+				"session", req.Session.Name,
+				"session_id", req.Session.Metadata.ProviderSessionID(),
+				"mode", summaryMode,
+				"reason", decision.Reason,
+				"err", summaryErr,
+			)
+		} else if decision.Summary != "" {
+			planRes.Options.Summary = decision.Summary
+			planRes.BoundaryTail = Synthesize(slice, planRes.Options)
+			compactLog.Logger().Info("compact.runtime.summarize_injected",
+				"component", "compact",
+				"subcomponent", "runtime",
+				"session", req.Session.Name,
+				"session_id", req.Session.Metadata.ProviderSessionID(),
+				"mode", summaryMode,
+				"reason", decision.Reason,
+				"summary_bytes", len(decision.Summary),
+			)
+		}
 		in := ApplyInput{
 			Slice:         slice,
 			SessionID:     req.Session.Metadata.ProviderSessionID(),

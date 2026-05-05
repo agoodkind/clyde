@@ -20,6 +20,7 @@ type RuntimeRequest struct {
 	ModelExplicit bool
 	Strippers     Strippers
 	Summarize     bool
+	SummarizeMode SummarizeMode
 	Force         bool
 	Mode          RuntimeMode
 

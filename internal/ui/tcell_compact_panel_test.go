@@ -187,6 +187,36 @@ func TestCompactPanelCheckboxEnterToggles(t *testing.T) {
 	}
 }
 
+func TestCompactPanelSummaryControlCyclesModes(t *testing.T) {
+	panel := NewCompactPanel("demo")
+	panel.focusGroup = 2
+	panel.checkboxIdx = 4
+
+	if panel.summary != "auto" {
+		t.Fatalf("summary mode = %q, want auto", panel.summary)
+	}
+	_ = panel.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if panel.summary != "on" {
+		t.Fatalf("summary mode = %q, want on", panel.summary)
+	}
+	req := panel.buildRequest()
+	if req.SummarizeMode != "on" || !req.Summarize {
+		t.Fatalf("request summary = mode:%q bool:%v, want on/true", req.SummarizeMode, req.Summarize)
+	}
+	_ = panel.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if panel.summary != "off" {
+		t.Fatalf("summary mode = %q, want off", panel.summary)
+	}
+	req = panel.buildRequest()
+	if req.SummarizeMode != "off" || req.Summarize {
+		t.Fatalf("request summary = mode:%q bool:%v, want off/false", req.SummarizeMode, req.Summarize)
+	}
+	_ = panel.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+	if panel.summary != "auto" {
+		t.Fatalf("summary mode = %q, want auto", panel.summary)
+	}
+}
+
 func TestPercentLabelUsesCommaGrouping(t *testing.T) {
 	panel := NewCompactPanel("demo")
 	panel.maxTokens = 1000000

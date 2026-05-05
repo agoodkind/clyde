@@ -20,6 +20,7 @@ message CompactRunRequest {
   CompactStrippers strippers = 6;
   bool summarize = 7;
   bool force = 8;
+  string summarize_mode = 9;
 }
 
 message CompactUpfront {

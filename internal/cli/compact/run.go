@@ -97,6 +97,7 @@ type compactCommandInput struct {
 	ModelDisplay  string
 	ModelExplicit bool
 	ShowPasses    bool
+	SummarizeMode string
 }
 
 func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
@@ -171,6 +172,7 @@ func completeCompactCommandInput(cmd *cobra.Command, input compactCommandInput, 
 	input.ModelDisplay = flags.ModelDisplay
 	input.ModelExplicit = flags.ModelExplicit
 	input.ShowPasses = flags.ShowPasses
+	input.SummarizeMode = flags.SummarizeMode
 	return input, nil
 }
 
@@ -231,6 +233,22 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 	modelDisplay := model
 	modelExplicit := cmd.Flags().Changed("model")
 	showPasses, _ := cmd.Flags().GetBool("show-passes")
+	summarizeMode := "auto"
+	if cmd.Flags().Changed("summarize") {
+		summarize, _ := cmd.Flags().GetBool("summarize")
+		if summarize {
+			summarizeMode = "on"
+		} else {
+			summarizeMode = "off"
+		}
+	}
+	if rawMode, _ := cmd.Flags().GetString("summarize-mode"); cmd.Flags().Changed("summarize-mode") || strings.TrimSpace(rawMode) != "auto" {
+		mode, modeErr := compactengine.NormalizeSummarizeMode(rawMode)
+		if modeErr != nil {
+			return compactCommandInput{}, modeErr
+		}
+		summarizeMode = string(mode)
+	}
 	if !modelExplicit {
 		resolvedModel, resolvedDisplayModel, resolvedSource := resolveModelLikeTUI(store, sess, model)
 		model = resolvedModel
@@ -273,6 +291,7 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 		ModelDisplay:  modelDisplay,
 		ModelExplicit: modelExplicit,
 		ShowPasses:    showPasses,
+		SummarizeMode: summarizeMode,
 	}, nil
 }
 
@@ -297,7 +316,6 @@ func runCompactMaintenanceAction(cmd *cobra.Command, out io.Writer, input compac
 func runTargetCompactViaDaemon(cmd *cobra.Command, out io.Writer, input compactCommandInput) error {
 	mode := compactMode(input.Apply)
 	isTTY := isTerminal(out)
-	summarize, _ := cmd.Flags().GetBool("summarize")
 	_, _ = fmt.Fprintf(out, "starting compact %s for %s; gathering startup stats...\n",
 		strings.ToLower(mode.Label()), input.Session.Name)
 	daemonErr := runCompactViaDaemon(cmd.Context(), out, compactDaemonRunInput{
@@ -308,7 +326,8 @@ func runTargetCompactViaDaemon(cmd *cobra.Command, out io.Writer, input compactC
 		Model:          input.Model,
 		ModelExplicit:  input.ModelExplicit,
 		Strippers:      input.Strippers,
-		Summarize:      summarize,
+		Summarize:      input.SummarizeMode == string(compactengine.SummarizeModeOn),
+		SummarizeMode:  input.SummarizeMode,
 		Force:          input.Force,
 		ShowPasses:     input.ShowPasses && !isTTY,
 		IsTTY:          isTTY,
@@ -358,7 +377,7 @@ func runLocalCompact(cmd *cobra.Command, out io.Writer, input compactCommandInpu
 		cliCompactLog.Logger().Info("cli.compact.preview.completed", "session", input.Name, "applied", false)
 		return nil
 	}
-	maybeSummarizeCompact(cmd, ctx, out, input, slice, planResult)
+	maybeSummarizeCompact(ctx, out, input, slice, planResult)
 	if err := runApply(out, input.Session, slice, input.Strippers, input.Target, planResult, input.Force); err != nil {
 		return err
 	}
@@ -514,28 +533,37 @@ func renderCompactResult(
 }
 
 func maybeSummarizeCompact(
-	cmd *cobra.Command,
 	ctx context.Context,
 	out io.Writer,
 	input compactCommandInput,
 	slice *compactengine.Slice,
 	planRes *compactengine.PlanResult,
 ) {
-	if summarize, _ := cmd.Flags().GetBool("summarize"); !summarize {
+	mode, err := compactengine.NormalizeSummarizeMode(input.SummarizeMode)
+	if err != nil {
+		cliCompactLog.Logger().Warn("cli.compact.summarize_mode_invalid", "session", input.Name, slog.Any("err", err))
 		return
 	}
-	_, _ = fmt.Fprintln(out, "summarizing dropped content via claude -p (30-60s)...")
-	summary, err := compactengine.SummarizeDropped(ctx, slice, planRes.Options, compactengine.SummarizeOptions{
-		Model: input.Model,
+	decision, err := compactengine.DoSummarize(ctx, compactengine.SummarizeRequest{
+		Session: input.Session,
+		Slice:   slice,
+		Options: planRes.Options,
+		Model:   input.Model,
+		Mode:    mode,
 	})
 	if err != nil {
 		cliCompactLog.Logger().Warn("cli.compact.summarize_failed_continuing", "session", input.Name, slog.Any("err", err))
 		_, _ = fmt.Fprintf(out, "summary failed (%v); applying without summary\n", err)
 		return
 	}
-	if summary != "" {
-		planRes.Options.Summary = summary
+	if !decision.ShouldSummarize {
+		cliCompactLog.Logger().Info("cli.compact.summarize_skipped", "session", input.Name, "mode", mode, "reason", decision.Reason)
+		return
+	}
+	_, _ = fmt.Fprintln(out, "summarizing dropped content via provider adapter (30-60s)...")
+	if decision.Summary != "" {
+		planRes.Options.Summary = decision.Summary
 		planRes.BoundaryTail = compactengine.Synthesize(slice, planRes.Options)
-		cliCompactLog.Logger().Info("cli.compact.summarize_injected", "session", input.Name, "summary_bytes", len(summary))
+		cliCompactLog.Logger().Info("cli.compact.summarize_injected", "session", input.Name, "summary_bytes", len(decision.Summary))
 	}
 }
