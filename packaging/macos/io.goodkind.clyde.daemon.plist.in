@@ -6,7 +6,7 @@
 	<string>io.goodkind.clyde.daemon</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>@@CLYDE_DAEMON_BIN@@</string>
+		<string>@@BIN_PATH@@</string>
 		<string>daemon</string>
 	</array>
 	<key>EnvironmentVariables</key>
