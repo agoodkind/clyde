@@ -38,6 +38,10 @@ message CompactUpfront {
   int32 chat_turns = 12;
   string strippers_text = 13;
   string calibration_date = 14;
+  int32 messages_tokens = 15;
+  int32 compact_buffer_tokens = 16;
+  int32 free_tokens = 17;
+  int32 context_overhead_tokens = 18;
 }
 
 message CompactIteration {

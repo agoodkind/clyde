@@ -256,23 +256,27 @@ func (x *CompactRunRequest) GetSummarizeMode() string {
 }
 
 type CompactUpfront struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	SessionName     string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	SessionId       string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Model           string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
-	CurrentTotal    int32                  `protobuf:"varint,4,opt,name=current_total,json=currentTotal,proto3" json:"current_total,omitempty"`
-	MaxTokens       int32                  `protobuf:"varint,5,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
-	TargetTokens    int32                  `protobuf:"varint,6,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
-	StaticFloor     int32                  `protobuf:"varint,7,opt,name=static_floor,json=staticFloor,proto3" json:"static_floor,omitempty"`
-	ReservedTokens  int32                  `protobuf:"varint,8,opt,name=reserved_tokens,json=reservedTokens,proto3" json:"reserved_tokens,omitempty"`
-	ThinkingBlocks  int32                  `protobuf:"varint,9,opt,name=thinking_blocks,json=thinkingBlocks,proto3" json:"thinking_blocks,omitempty"`
-	ImageBlocks     int32                  `protobuf:"varint,10,opt,name=image_blocks,json=imageBlocks,proto3" json:"image_blocks,omitempty"`
-	ToolPairs       int32                  `protobuf:"varint,11,opt,name=tool_pairs,json=toolPairs,proto3" json:"tool_pairs,omitempty"`
-	ChatTurns       int32                  `protobuf:"varint,12,opt,name=chat_turns,json=chatTurns,proto3" json:"chat_turns,omitempty"`
-	StrippersText   string                 `protobuf:"bytes,13,opt,name=strippers_text,json=strippersText,proto3" json:"strippers_text,omitempty"`
-	CalibrationDate string                 `protobuf:"bytes,14,opt,name=calibration_date,json=calibrationDate,proto3" json:"calibration_date,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	SessionName           string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId             string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Model                 string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
+	CurrentTotal          int32                  `protobuf:"varint,4,opt,name=current_total,json=currentTotal,proto3" json:"current_total,omitempty"`
+	MaxTokens             int32                  `protobuf:"varint,5,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
+	TargetTokens          int32                  `protobuf:"varint,6,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
+	StaticFloor           int32                  `protobuf:"varint,7,opt,name=static_floor,json=staticFloor,proto3" json:"static_floor,omitempty"`
+	ReservedTokens        int32                  `protobuf:"varint,8,opt,name=reserved_tokens,json=reservedTokens,proto3" json:"reserved_tokens,omitempty"`
+	ThinkingBlocks        int32                  `protobuf:"varint,9,opt,name=thinking_blocks,json=thinkingBlocks,proto3" json:"thinking_blocks,omitempty"`
+	ImageBlocks           int32                  `protobuf:"varint,10,opt,name=image_blocks,json=imageBlocks,proto3" json:"image_blocks,omitempty"`
+	ToolPairs             int32                  `protobuf:"varint,11,opt,name=tool_pairs,json=toolPairs,proto3" json:"tool_pairs,omitempty"`
+	ChatTurns             int32                  `protobuf:"varint,12,opt,name=chat_turns,json=chatTurns,proto3" json:"chat_turns,omitempty"`
+	StrippersText         string                 `protobuf:"bytes,13,opt,name=strippers_text,json=strippersText,proto3" json:"strippers_text,omitempty"`
+	CalibrationDate       string                 `protobuf:"bytes,14,opt,name=calibration_date,json=calibrationDate,proto3" json:"calibration_date,omitempty"`
+	MessagesTokens        int32                  `protobuf:"varint,15,opt,name=messages_tokens,json=messagesTokens,proto3" json:"messages_tokens,omitempty"`
+	CompactBufferTokens   int32                  `protobuf:"varint,16,opt,name=compact_buffer_tokens,json=compactBufferTokens,proto3" json:"compact_buffer_tokens,omitempty"`
+	FreeTokens            int32                  `protobuf:"varint,17,opt,name=free_tokens,json=freeTokens,proto3" json:"free_tokens,omitempty"`
+	ContextOverheadTokens int32                  `protobuf:"varint,18,opt,name=context_overhead_tokens,json=contextOverheadTokens,proto3" json:"context_overhead_tokens,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *CompactUpfront) Reset() {
@@ -401,6 +405,34 @@ func (x *CompactUpfront) GetCalibrationDate() string {
 		return x.CalibrationDate
 	}
 	return ""
+}
+
+func (x *CompactUpfront) GetMessagesTokens() int32 {
+	if x != nil {
+		return x.MessagesTokens
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetCompactBufferTokens() int32 {
+	if x != nil {
+		return x.CompactBufferTokens
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetFreeTokens() int32 {
+	if x != nil {
+		return x.FreeTokens
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetContextOverheadTokens() int32 {
+	if x != nil {
+		return x.ContextOverheadTokens
+	}
+	return 0
 }
 
 type CompactIteration struct {
@@ -990,7 +1022,7 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\tstrippers\x18\x06 \x01(\v2\x1a.clyde.v1.CompactStrippersR\tstrippers\x12\x1c\n" +
 	"\tsummarize\x18\a \x01(\bR\tsummarize\x12\x14\n" +
 	"\x05force\x18\b \x01(\bR\x05force\x12%\n" +
-	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\"\xf9\x03\n" +
+	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\"\xaf\x05\n" +
 	"\x0eCompactUpfront\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
@@ -1010,7 +1042,12 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\n" +
 	"chat_turns\x18\f \x01(\x05R\tchatTurns\x12%\n" +
 	"\x0estrippers_text\x18\r \x01(\tR\rstrippersText\x12)\n" +
-	"\x10calibration_date\x18\x0e \x01(\tR\x0fcalibrationDate\"\xb6\x03\n" +
+	"\x10calibration_date\x18\x0e \x01(\tR\x0fcalibrationDate\x12'\n" +
+	"\x0fmessages_tokens\x18\x0f \x01(\x05R\x0emessagesTokens\x122\n" +
+	"\x15compact_buffer_tokens\x18\x10 \x01(\x05R\x13compactBufferTokens\x12\x1f\n" +
+	"\vfree_tokens\x18\x11 \x01(\x05R\n" +
+	"freeTokens\x126\n" +
+	"\x17context_overhead_tokens\x18\x12 \x01(\x05R\x15contextOverheadTokens\"\xb6\x03\n" +
 	"\x10CompactIteration\x12\x1c\n" +
 	"\titeration\x18\x01 \x01(\x05R\titeration\x12\x12\n" +
 	"\x04step\x18\x02 \x01(\tR\x04step\x12\x1f\n" +

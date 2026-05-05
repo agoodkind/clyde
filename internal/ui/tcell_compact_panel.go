@@ -38,8 +38,16 @@ type CompactUpfront struct {
 	Model          string
 	CurrentTotal   int
 	MaxTokens      int
+	MessagesTokens int
+	BufferTokens   int
+	OverheadTokens int
+	FreeTokens     int
 	TargetTokens   int
 	ReservedTokens int
+	ThinkingBlocks int
+	ImageBlocks    int
+	ToolPairs      int
+	ChatTurns      int
 }
 
 type CompactIteration struct {
@@ -78,14 +86,23 @@ type CompactPanel struct {
 
 	targetTokens int
 	maxTokens    int
+	currentTotal int
+	messagesTok  int
+	bufferTok    int
+	overheadTok  int
+	freeTok      int
 	reserved     int
 	targetText   string
 
-	thinking bool
-	images   bool
-	tools    bool
-	chat     bool
-	summary  string
+	thinking       bool
+	images         bool
+	tools          bool
+	chat           bool
+	summary        string
+	thinkingBlocks int
+	imageBlocks    int
+	toolPairs      int
+	chatTurns      int
 
 	focusGroup   int
 	checkboxIdx  int
@@ -112,17 +129,46 @@ type CompactPanel struct {
 
 func NewCompactPanel(sessionName string) *CompactPanel {
 	return &CompactPanel{
-		sessionName:  sessionName,
-		targetTokens: 200000,
-		maxTokens:    1000000,
-		reserved:     13000,
-		targetText:   "200000",
-		thinking:     true,
-		images:       true,
-		tools:        true,
-		chat:         true,
-		summary:      "auto",
-		status:       "adjust controls and run preview",
+		Rect:             Rect{},
+		sessionName:      sessionName,
+		sessionID:        "",
+		model:            "",
+		targetTokens:     200000,
+		maxTokens:        1000000,
+		currentTotal:     0,
+		messagesTok:      0,
+		bufferTok:        0,
+		overheadTok:      0,
+		freeTok:          0,
+		reserved:         13000,
+		targetText:       "200000",
+		thinking:         true,
+		images:           true,
+		tools:            true,
+		chat:             true,
+		summary:          "auto",
+		thinkingBlocks:   0,
+		imageBlocks:      0,
+		toolPairs:        0,
+		chatTurns:        0,
+		focusGroup:       0,
+		checkboxIdx:      0,
+		actionIdx:        0,
+		confirmApply:     false,
+		busy:             false,
+		busyAction:       "",
+		status:           "adjust controls and run preview",
+		logRect:          Rect{},
+		logScroll:        0,
+		logLines:         nil,
+		iterationHistory: nil,
+		latestIteration:  nil,
+		latestFinal:      nil,
+		latestUndo:       nil,
+		OnPreview:        nil,
+		OnApply:          nil,
+		OnUndo:           nil,
+		OnClose:          nil,
 	}
 }
 
@@ -139,6 +185,15 @@ func (p *CompactPanel) ApplyCompactEvent(ev CompactEvent) {
 			p.sessionName = ev.Upfront.SessionName
 			p.sessionID = ev.Upfront.SessionID
 			p.model = ev.Upfront.Model
+			p.currentTotal = ev.Upfront.CurrentTotal
+			p.messagesTok = ev.Upfront.MessagesTokens
+			p.bufferTok = ev.Upfront.BufferTokens
+			p.overheadTok = ev.Upfront.OverheadTokens
+			p.freeTok = ev.Upfront.FreeTokens
+			p.thinkingBlocks = ev.Upfront.ThinkingBlocks
+			p.imageBlocks = ev.Upfront.ImageBlocks
+			p.toolPairs = ev.Upfront.ToolPairs
+			p.chatTurns = ev.Upfront.ChatTurns
 			if ev.Upfront.MaxTokens > 0 {
 				p.maxTokens = ev.Upfront.MaxTokens
 			}
@@ -196,11 +251,20 @@ func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
 	drawBoxBorder(scr, box, ColorBorder)
 
 	inner := Rect{X: box.X + 2, Y: box.Y + 1, W: box.W - 4, H: box.H - 2}
+	compactLayout := inner.H < 24
 	y := inner.Y
 	drawString(scr, inner.X, y, StyleHeader, "Compact (Interactive)", inner.W)
 	y++
 	drawString(scr, inner.X, y, StyleMuted, fmt.Sprintf("session %s  model %s", p.valueOrDash(p.sessionName), p.valueOrDash(p.model)), inner.W)
-	y += 2
+	if compactLayout {
+		y++
+	} else {
+		y += 2
+	}
+	if !compactLayout {
+		y = p.drawContextSummary(scr, inner, y)
+		y++
+	}
 
 	drawString(scr, inner.X, y, StyleHeader, "Target", inner.W)
 	y++
@@ -209,14 +273,23 @@ func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
 	drawString(scr, inner.X, y, p.focusStyle(1), "target tokens ["+p.targetText+"]", inner.W)
 	y++
 	drawString(scr, inner.X, y, p.focusStyle(2), p.renderChecks(), inner.W)
-	y += 2
-
-	drawString(scr, inner.X, y, StyleHeader, "Live Status", inner.W)
 	y++
-	drawString(scr, inner.X, y, StyleMuted, "status: "+p.status, inner.W)
-	y += 2
+	if !compactLayout {
+		drawString(scr, inner.X, y, StyleMuted, p.summaryHelpText(inner.W), inner.W)
+		y += 2
+	}
 
-	actionsLabelY := max(inner.Y+inner.H-3, y+4)
+	if compactLayout {
+		drawString(scr, inner.X, y, StyleMuted, "status: "+p.status, inner.W)
+		y++
+	} else {
+		drawString(scr, inner.X, y, StyleHeader, "Live Status", inner.W)
+		y++
+		drawString(scr, inner.X, y, StyleMuted, "status: "+p.status, inner.W)
+		y += 2
+	}
+
+	actionsLabelY := inner.Y + inner.H - 3
 	progressH := imax(0, actionsLabelY-y-1)
 	p.drawProgressLog(scr, Rect{X: inner.X, Y: y, W: inner.W, H: progressH})
 
@@ -500,11 +573,116 @@ func (p *CompactPanel) renderChecks() string {
 }
 
 func (p *CompactPanel) renderSummaryControl() string {
-	text := "summary:" + p.summary
+	text := "summary [" + p.summary + "]"
 	if p.focusGroup == 2 && p.checkboxIdx == 4 {
 		return "[" + text + "]"
 	}
 	return " " + text + " "
+}
+
+func (p *CompactPanel) drawContextSummary(scr tcell.Screen, inner Rect, y int) int {
+	drawString(scr, inner.X, y, StyleHeader, "Context (/context)", inner.W)
+	y++
+	if inner.W >= 82 {
+		return p.drawWideContextSummary(scr, inner, y)
+	}
+	return p.drawNarrowContextSummary(scr, inner, y)
+}
+
+func (p *CompactPanel) drawWideContextSummary(scr tcell.Screen, inner Rect, y int) int {
+	leftW := imax(36, inner.W/2-2)
+	rightX := inner.X + leftW + 4
+	rightW := imax(0, inner.W-(rightX-inner.X))
+	leftRows := []string{
+		p.contextCurrentLine(false),
+		p.contextTokenLine("messages", p.messagesTok),
+		p.contextTokenLine("buffer", p.bufferTok),
+		p.contextTokenLine("overhead", p.overheadTok),
+		p.contextTokenLine("free", p.freeTok),
+	}
+	rightRows := []string{
+		p.contextCountLine("chat turns", p.chatTurns),
+		p.contextCountLine("tool pairs", p.toolPairs),
+		p.contextCountLine("images", p.imageBlocks),
+		p.contextCountLine("thinking blocks", p.thinkingBlocks),
+	}
+	for i, row := range leftRows {
+		drawString(scr, inner.X, y+i, StyleDefault, row, leftW)
+		if i < len(rightRows) {
+			drawString(scr, rightX, y+i, StyleDefault, rightRows[i], rightW)
+		}
+	}
+	return y + len(leftRows)
+}
+
+func (p *CompactPanel) drawNarrowContextSummary(scr tcell.Screen, inner Rect, y int) int {
+	rows := []string{
+		p.contextCurrentLine(true),
+		p.contextTokenLine("messages", p.messagesTok),
+		p.contextTokenLine("buffer", p.bufferTok),
+		p.contextTokenLine("overhead", p.overheadTok),
+		p.contextTokenLine("free", p.freeTok),
+		p.contextCountLine("chat turns", p.chatTurns),
+		p.contextCountLine("tool pairs", p.toolPairs),
+		p.contextCountLine("images", p.imageBlocks),
+		p.contextCountLine("thinking blocks", p.thinkingBlocks),
+	}
+	for i, row := range rows {
+		drawString(scr, inner.X, y+i, StyleDefault, row, inner.W)
+	}
+	return y + len(rows)
+}
+
+func (p *CompactPanel) contextCurrentLine(narrow bool) string {
+	if p.currentTotal <= 0 {
+		return "current    -"
+	}
+	value := formatWithCommas(p.currentTotal)
+	if p.maxTokens > 0 {
+		value += " / " + formatWithCommas(p.maxTokens)
+	}
+	if p.contextPercent() > 0 && !narrow {
+		value += fmt.Sprintf("   %d%%", p.contextPercent())
+	}
+	return fmt.Sprintf("%-10s %s", "current", value)
+}
+
+func (p *CompactPanel) contextTokenLine(label string, tokens int) string {
+	if tokens <= 0 {
+		return fmt.Sprintf("%-10s -", label)
+	}
+	return fmt.Sprintf("%-10s %s", label, formatWithCommas(tokens))
+}
+
+func (p *CompactPanel) contextCountLine(label string, count int) string {
+	if count <= 0 {
+		return fmt.Sprintf("%-15s -", label)
+	}
+	return fmt.Sprintf("%-15s %s", label, formatWithCommas(count))
+}
+
+func (p *CompactPanel) contextPercent() int {
+	if p.currentTotal <= 0 || p.maxTokens <= 0 {
+		return 0
+	}
+	return p.currentTotal * 100 / p.maxTokens
+}
+
+func (p *CompactPanel) summaryHelpText(width int) string {
+	switch p.summary {
+	case "on":
+		if width < 72 {
+			return "summary on: recap any dropped content"
+		}
+		return "summary on: recap any dropped content before applying"
+	case "off":
+		return "summary off: apply without generating a recap"
+	default:
+		if width < 72 {
+			return "summary auto: recap when chat/prior summaries drop"
+		}
+		return "summary auto: recap only when chat turns or prior summaries are dropped"
+	}
 }
 
 func (p *CompactPanel) drawActionButtons(scr tcell.Screen, x, y, maxW int) {

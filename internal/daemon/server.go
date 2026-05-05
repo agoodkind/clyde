@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -2508,9 +2509,6 @@ func (s *Server) runCompact(
 	stream compactEventStream,
 	mode compactengine.RuntimeMode,
 ) error {
-	if req.GetSessionName() == "" {
-		return status.Error(codes.InvalidArgument, "session_name is required")
-	}
 	s.log.DebugContext(ctx, "daemon.compact.run.begin",
 		"component", "daemon",
 		"subcomponent", "compact",
@@ -2518,24 +2516,128 @@ func (s *Server) runCompact(
 		"target", req.GetTargetTokens(),
 		"mode", mode,
 	)
+	run, err := s.prepareCompactRun(req, mode)
+	if err != nil {
+		return err
+	}
+	sender := newCompactEventSender(s.log, stream)
+	if err := sender.SendStatus(ctx, "loading transcript and probing context..."); err != nil {
+		return err
+	}
+
+	upfront, staticOverhead, slice, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
+		Session:      run.session,
+		Store:        run.store,
+		TargetTokens: int(req.GetTargetTokens()),
+		Reserved:     int(req.GetReservedTokens()),
+		Model:        run.modelForCount,
+		Strippers:    run.strippers,
+	}, run.modelForRender)
+	if upfrontErr != nil {
+		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
+	}
+	if err := sender.SendStatus(ctx, "planning compaction..."); err != nil {
+		return err
+	}
+	if err := sender.SendUpfront(ctx, upfront); err != nil {
+		return err
+	}
+
+	summarizeMode, modeErr := compactengine.NormalizeSummarizeMode(req.GetSummarizeMode())
+	if modeErr != nil {
+		return status.Errorf(codes.InvalidArgument, "compact summarize mode: %v", modeErr)
+	}
+	if req.GetSummarizeMode() == "" {
+		summarizeMode = compactengine.SummarizeModeFromLegacy(req.GetSummarize(), req.GetSummarize())
+	}
+	result, runErr := compactengine.RunRuntime(ctx, compactengine.RuntimeRequest{
+		Session:                run.session,
+		Store:                  run.store,
+		TargetTokens:           int(req.GetTargetTokens()),
+		Reserved:               int(req.GetReservedTokens()),
+		Model:                  run.modelForCount,
+		ModelExplicit:          req.GetModelExplicit(),
+		Strippers:              run.strippers,
+		Summarize:              req.GetSummarize(),
+		SummarizeMode:          summarizeMode,
+		Force:                  req.GetForce(),
+		Mode:                   mode,
+		PreparedUpfront:        &upfront,
+		PreparedStaticOverhead: staticOverhead,
+		PreparedSlice:          slice,
+	}, sender.IterationCallback(ctx))
+	if runErr != nil {
+		s.log.ErrorContext(ctx, "daemon.compact.run_failed",
+			"component", "daemon",
+			"subcomponent", "compact",
+			"session", req.GetSessionName(),
+			"err", runErr.Error(),
+		)
+		return status.Errorf(codes.Internal, "compact runtime: %v", runErr)
+	}
+
+	if err := sender.SendResult(ctx, result); err != nil {
+		return err
+	}
+	s.log.InfoContext(ctx, "daemon.compact.run_completed",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+		"session_id", run.session.Metadata.ProviderSessionID(),
+		"mode", mode,
+		"hit_target", result.Plan.HitTarget,
+		"final_tail", result.Plan.FinalTail,
+	)
+	return nil
+}
+
+type compactRunSetup struct {
+	store          *session.FileStore
+	session        *session.Session
+	strippers      compactengine.Strippers
+	modelForCount  string
+	modelForRender string
+}
+
+func (s *Server) prepareCompactRun(
+	req *clydev1.CompactRunRequest,
+	mode compactengine.RuntimeMode,
+) (compactRunSetup, error) {
+	if req.GetSessionName() == "" {
+		return compactRunSetup{}, status.Error(codes.InvalidArgument, "session_name is required")
+	}
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		return status.Errorf(codes.Internal, "store init: %v", err)
+		return compactRunSetup{}, status.Errorf(codes.Internal, "store init: %v", err)
 	}
 	sess, err := store.Resolve(req.GetSessionName())
 	if err != nil {
-		return status.Errorf(codes.Internal, "resolve session: %v", err)
+		return compactRunSetup{}, status.Errorf(codes.Internal, "resolve session: %v", err)
 	}
 	if sess == nil {
-		return status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+		return compactRunSetup{}, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
 	if !sess.SessionProviderCapabilities().Compaction {
-		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support compaction", sess.ProviderID())
+		return compactRunSetup{}, status.Errorf(codes.FailedPrecondition, "session provider %q does not support compaction", sess.ProviderID())
 	}
 	if mode == compactengine.RuntimeModeApply && !req.GetForce() && s.sessionIsActive(sess.Name) {
-		return status.Errorf(codes.FailedPrecondition, "session %q is currently open; exit it first or pass --force", sess.Name)
+		return compactRunSetup{}, status.Errorf(codes.FailedPrecondition, "session %q is currently open; exit it first or pass --force", sess.Name)
 	}
+	modelForCount := req.GetModel()
+	modelForRender := req.GetModel()
+	if !req.GetModelExplicit() {
+		modelForCount, modelForRender, _ = compactengine.ResolveModelForCounting(store, sess, req.GetModel())
+	}
+	return compactRunSetup{
+		store:          store,
+		session:        sess,
+		strippers:      compactRunStrippers(req),
+		modelForCount:  modelForCount,
+		modelForRender: modelForRender,
+	}, nil
+}
 
+func compactRunStrippers(req *clydev1.CompactRunRequest) compactengine.Strippers {
 	strippers := compactengine.Strippers{}
 	if req.Strippers != nil {
 		strippers = compactengine.Strippers{
@@ -2548,158 +2650,149 @@ func (s *Server) runCompact(
 	if !strippers.Any() && req.GetTargetTokens() > 0 {
 		strippers.SetAll()
 	}
+	return strippers
+}
 
-	var sequence int32
-	send := func(ev *clydev1.CompactEvent) error {
-		sequence++
-		ev.Sequence = sequence
-		return stream.Send(ev)
-	}
-	if err := send(&clydev1.CompactEvent{
-		Kind:    clydev1.CompactEvent_KIND_STATUS,
-		Message: "loading transcript and probing context...",
-	}); err != nil {
-		return err
-	}
+type compactEventSender struct {
+	log      *slog.Logger
+	sequence int32
+	stream   compactEventStream
+}
 
-	modelForCount := req.GetModel()
-	modelForRender := req.GetModel()
-	if !req.GetModelExplicit() {
-		modelForCount, modelForRender, _ = compactengine.ResolveModelForCounting(store, sess, req.GetModel())
+func newCompactEventSender(log *slog.Logger, stream compactEventStream) *compactEventSender {
+	return &compactEventSender{
+		log:      log,
+		sequence: 0,
+		stream:   stream,
 	}
-	upfront, staticOverhead, slice, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
-		Session:      sess,
-		Store:        store,
-		TargetTokens: int(req.GetTargetTokens()),
-		Reserved:     int(req.GetReservedTokens()),
-		Model:        modelForCount,
-		Strippers:    strippers,
-	}, modelForRender)
-	if upfrontErr != nil {
-		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
-	}
-	if err := send(&clydev1.CompactEvent{
-		Kind:    clydev1.CompactEvent_KIND_STATUS,
-		Message: "planning compaction...",
-	}); err != nil {
-		return err
-	}
-	if err := send(&clydev1.CompactEvent{
-		Kind: clydev1.CompactEvent_KIND_UPFRONT,
-		Upfront: &clydev1.CompactUpfront{
-			SessionName:     upfront.SessionName,
-			SessionId:       upfront.SessionID,
-			Model:           upfront.Model,
-			CurrentTotal:    int32(upfront.CurrentTotal),
-			MaxTokens:       int32(upfront.MaxTokens),
-			TargetTokens:    int32(upfront.Target),
-			StaticFloor:     int32(upfront.StaticFloor),
-			ReservedTokens:  int32(upfront.Reserved),
-			ThinkingBlocks:  int32(upfront.Thinking),
-			ImageBlocks:     int32(upfront.Images),
-			ToolPairs:       int32(upfront.ToolPairs),
-			ChatTurns:       int32(upfront.ChatTurns),
-			StrippersText:   upfront.StrippersText,
-			CalibrationDate: upfront.TargetDate,
-		},
-	}); err != nil {
-		return err
-	}
+}
 
-	onIteration := func(iter compactengine.RuntimeIteration) {
-		_ = send(&clydev1.CompactEvent{
-			Kind: clydev1.CompactEvent_KIND_ITERATION,
-			Iteration: &clydev1.CompactIteration{
-				Iteration:         sequence,
-				Step:              iter.Iteration.Step,
-				TailTokens:        int32(iter.Iteration.TailTokens),
-				CtxTotal:          int32(iter.Iteration.CtxTotal),
-				Delta:             int32(iter.Iteration.Delta),
-				ThinkingDropped:   iter.Iteration.ThinkingDropped,
-				ImagesPlaceholder: iter.Iteration.ImagesPlaceholder,
-				ToolsFull:         int32(iter.Iteration.ToolsFull),
-				ToolsLineOnly:     int32(iter.Iteration.ToolsLineOnly),
-				ToolsDropped:      int32(iter.Iteration.ToolsDropped),
-				ChatTurnsTotal:    int32(iter.Iteration.ChatTurnsTotal),
-				ChatTurnsDropped:  int32(iter.Iteration.ChatTurnsDropped),
-			},
-		})
-	}
-
-	summarizeMode, modeErr := compactengine.NormalizeSummarizeMode(req.GetSummarizeMode())
-	if modeErr != nil {
-		return status.Errorf(codes.InvalidArgument, "compact summarize mode: %v", modeErr)
-	}
-	if req.GetSummarizeMode() == "" {
-		summarizeMode = compactengine.SummarizeModeFromLegacy(req.GetSummarize(), req.GetSummarize())
-	}
-	result, runErr := compactengine.RunRuntime(ctx, compactengine.RuntimeRequest{
-		Session:                sess,
-		Store:                  store,
-		TargetTokens:           int(req.GetTargetTokens()),
-		Reserved:               int(req.GetReservedTokens()),
-		Model:                  modelForCount,
-		ModelExplicit:          req.GetModelExplicit(),
-		Strippers:              strippers,
-		Summarize:              req.GetSummarize(),
-		SummarizeMode:          summarizeMode,
-		Force:                  req.GetForce(),
-		Mode:                   mode,
-		PreparedUpfront:        &upfront,
-		PreparedStaticOverhead: staticOverhead,
-		PreparedSlice:          slice,
-	}, onIteration)
-	if runErr != nil {
-		s.log.ErrorContext(ctx, "daemon.compact.run_failed",
+func (s *compactEventSender) Send(ctx context.Context, ev *clydev1.CompactEvent) error {
+	s.sequence++
+	ev.Sequence = s.sequence
+	if err := s.stream.Send(ev); err != nil {
+		s.log.WarnContext(ctx, "daemon.compact.event_send_failed",
 			"component", "daemon",
 			"subcomponent", "compact",
-			"session", req.GetSessionName(),
-			"err", runErr.Error(),
+			"kind", ev.GetKind(),
+			"sequence", ev.GetSequence(),
+			"err", err,
 		)
-		return status.Errorf(codes.Internal, "compact runtime: %v", runErr)
+		return fmt.Errorf("send compact event: %w", err)
 	}
+	return nil
+}
 
-	final := &clydev1.CompactFinal{
-		BaselineTail:   int32(result.Plan.BaselineTail),
-		FinalTail:      int32(result.Plan.FinalTail),
-		HitTarget:      result.Plan.HitTarget,
-		TargetTokens:   int32(result.Upfront.Target),
-		StaticFloor:    int32(result.Upfront.StaticFloor),
-		ReservedTokens: int32(result.Upfront.Reserved),
-		TranscriptPath: result.TranscriptPath,
+func (s *compactEventSender) SendStatus(ctx context.Context, message string) error {
+	return s.Send(ctx, &clydev1.CompactEvent{
+		Kind:    clydev1.CompactEvent_KIND_STATUS,
+		Message: message,
+	})
+}
+
+func (s *compactEventSender) SendUpfront(ctx context.Context, upfront compactengine.RuntimeUpfront) error {
+	return s.Send(ctx, &clydev1.CompactEvent{
+		Kind:    clydev1.CompactEvent_KIND_UPFRONT,
+		Upfront: compactUpfrontProto(upfront),
+	})
+}
+
+func (s *compactEventSender) IterationCallback(ctx context.Context) func(compactengine.RuntimeIteration) {
+	return func(iter compactengine.RuntimeIteration) {
+		_ = s.Send(ctx, &clydev1.CompactEvent{
+			Kind:      clydev1.CompactEvent_KIND_ITERATION,
+			Iteration: compactIterationProto(s.sequence, iter),
+		})
 	}
-	if err := send(&clydev1.CompactEvent{
+}
+
+func (s *compactEventSender) SendResult(ctx context.Context, result *compactengine.RuntimeResult) error {
+	if err := s.Send(ctx, &clydev1.CompactEvent{
 		Kind:  clydev1.CompactEvent_KIND_FINAL,
-		Final: final,
+		Final: compactFinalProto(result),
 	}); err != nil {
 		return err
 	}
-
-	if result.Apply != nil {
-		if err := send(&clydev1.CompactEvent{
-			Kind: clydev1.CompactEvent_KIND_APPLY_MUTATION,
-			ApplyMutation: &clydev1.CompactApplyMutation{
-				BoundaryUuid:    result.Apply.BoundaryUUID,
-				SyntheticUuid:   result.Apply.SyntheticUUID,
-				PreApplyOffset:  result.Apply.PreApplyOffset,
-				PostApplyOffset: result.Apply.PostApplyOffset,
-				SnapshotPath:    result.Apply.SnapshotPath,
-				LedgerPath:      result.Apply.LedgerPath,
-			},
-		}); err != nil {
-			return err
-		}
+	if result.Apply == nil {
+		return nil
 	}
-	s.log.InfoContext(ctx, "daemon.compact.run_completed",
-		"component", "daemon",
-		"subcomponent", "compact",
-		"session", req.GetSessionName(),
-		"session_id", sess.Metadata.ProviderSessionID(),
-		"mode", mode,
-		"hit_target", result.Plan.HitTarget,
-		"final_tail", result.Plan.FinalTail,
-	)
-	return nil
+	return s.Send(ctx, &clydev1.CompactEvent{
+		Kind:          clydev1.CompactEvent_KIND_APPLY_MUTATION,
+		ApplyMutation: compactApplyMutationProto(result.Apply),
+	})
+}
+
+func compactUpfrontProto(upfront compactengine.RuntimeUpfront) *clydev1.CompactUpfront {
+	return &clydev1.CompactUpfront{
+		SessionName:           upfront.SessionName,
+		SessionId:             upfront.SessionID,
+		Model:                 upfront.Model,
+		CurrentTotal:          compactInt32(upfront.CurrentTotal),
+		MaxTokens:             compactInt32(upfront.MaxTokens),
+		TargetTokens:          compactInt32(upfront.Target),
+		StaticFloor:           compactInt32(upfront.StaticFloor),
+		ReservedTokens:        compactInt32(upfront.Reserved),
+		ThinkingBlocks:        compactInt32(upfront.Thinking),
+		ImageBlocks:           compactInt32(upfront.Images),
+		ToolPairs:             compactInt32(upfront.ToolPairs),
+		ChatTurns:             compactInt32(upfront.ChatTurns),
+		StrippersText:         upfront.StrippersText,
+		CalibrationDate:       upfront.TargetDate,
+		MessagesTokens:        compactInt32(upfront.Messages),
+		CompactBufferTokens:   compactInt32(upfront.CompactBuffer),
+		FreeTokens:            compactInt32(upfront.Free),
+		ContextOverheadTokens: compactInt32(upfront.ContextOverhead),
+	}
+}
+
+func compactIterationProto(sequence int32, iter compactengine.RuntimeIteration) *clydev1.CompactIteration {
+	return &clydev1.CompactIteration{
+		Iteration:         sequence,
+		Step:              iter.Iteration.Step,
+		TailTokens:        compactInt32(iter.Iteration.TailTokens),
+		CtxTotal:          compactInt32(iter.Iteration.CtxTotal),
+		Delta:             compactInt32(iter.Iteration.Delta),
+		ThinkingDropped:   iter.Iteration.ThinkingDropped,
+		ImagesPlaceholder: iter.Iteration.ImagesPlaceholder,
+		ToolsFull:         compactInt32(iter.Iteration.ToolsFull),
+		ToolsLineOnly:     compactInt32(iter.Iteration.ToolsLineOnly),
+		ToolsDropped:      compactInt32(iter.Iteration.ToolsDropped),
+		ChatTurnsTotal:    compactInt32(iter.Iteration.ChatTurnsTotal),
+		ChatTurnsDropped:  compactInt32(iter.Iteration.ChatTurnsDropped),
+	}
+}
+
+func compactFinalProto(result *compactengine.RuntimeResult) *clydev1.CompactFinal {
+	return &clydev1.CompactFinal{
+		BaselineTail:   compactInt32(result.Plan.BaselineTail),
+		FinalTail:      compactInt32(result.Plan.FinalTail),
+		HitTarget:      result.Plan.HitTarget,
+		TargetTokens:   compactInt32(result.Upfront.Target),
+		StaticFloor:    compactInt32(result.Upfront.StaticFloor),
+		ReservedTokens: compactInt32(result.Upfront.Reserved),
+		TranscriptPath: result.TranscriptPath,
+	}
+}
+
+func compactApplyMutationProto(applyResult *compactengine.ApplyResult) *clydev1.CompactApplyMutation {
+	return &clydev1.CompactApplyMutation{
+		BoundaryUuid:    applyResult.BoundaryUUID,
+		SyntheticUuid:   applyResult.SyntheticUUID,
+		PreApplyOffset:  applyResult.PreApplyOffset,
+		PostApplyOffset: applyResult.PostApplyOffset,
+		SnapshotPath:    applyResult.SnapshotPath,
+		LedgerPath:      applyResult.LedgerPath,
+	}
+}
+
+func compactInt32(value int) int32 {
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if value < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(value)
 }
 
 func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoRequest) (*clydev1.CompactUndoResponse, error) {

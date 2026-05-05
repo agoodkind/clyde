@@ -75,16 +75,24 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	}
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 	upfront := RuntimeUpfront{
-		SessionName:   req.Session.Name,
-		SessionID:     req.Session.Metadata.ProviderSessionID(),
-		Model:         modelForRender,
-		Target:        req.TargetTokens,
-		Reserved:      req.Reserved,
-		Thinking:      thinking,
-		Images:        images,
-		ToolPairs:     toolPairs,
-		ChatTurns:     chatTurns,
-		StrippersText: strippersDescribe(req.Strippers),
+		SessionName:     req.Session.Name,
+		SessionID:       req.Session.Metadata.ProviderSessionID(),
+		Model:           modelForRender,
+		CurrentTotal:    0,
+		MaxTokens:       0,
+		Messages:        0,
+		CompactBuffer:   0,
+		Free:            0,
+		ContextOverhead: 0,
+		Target:          req.TargetTokens,
+		StaticFloor:     0,
+		Reserved:        req.Reserved,
+		Thinking:        thinking,
+		Images:          images,
+		ToolPairs:       toolPairs,
+		ChatTurns:       chatTurns,
+		StrippersText:   strippersDescribe(req.Strippers),
+		TargetDate:      "",
 	}
 	usage, usageErr := ProbeContextUsage(ctx, ProbeOptions{
 		SessionID:   req.Session.Metadata.ProviderSessionID(),
@@ -95,6 +103,10 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	if usageErr == nil {
 		upfront.CurrentTotal = usage.TotalTokens
 		upfront.MaxTokens = usage.MaxTokens
+		upfront.Messages = contextCategoryTokens(usage, "Messages")
+		upfront.CompactBuffer = contextCategoryTokens(usage, "Compact buffer")
+		upfront.Free = contextCategoryTokens(usage, "Free space")
+		upfront.ContextOverhead = StaticOverheadFromUsage(usage)
 	}
 	staticOverhead := 0
 	if req.TargetTokens > 0 {
@@ -380,4 +392,14 @@ func strippersDescribe(s Strippers) string {
 		return "(none)"
 	}
 	return strings.Join(parts, ",")
+}
+
+func contextCategoryTokens(usage ContextUsage, name string) int {
+	total := 0
+	for _, category := range usage.Categories {
+		if category.Name == name {
+			total += category.Tokens
+		}
+	}
+	return total
 }

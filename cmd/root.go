@@ -626,8 +626,16 @@ func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {
 			Model:          upfront.GetModel(),
 			CurrentTotal:   int(upfront.GetCurrentTotal()),
 			MaxTokens:      int(upfront.GetMaxTokens()),
+			MessagesTokens: int(upfront.GetMessagesTokens()),
+			BufferTokens:   int(upfront.GetCompactBufferTokens()),
+			FreeTokens:     int(upfront.GetFreeTokens()),
 			TargetTokens:   int(upfront.GetTargetTokens()),
 			ReservedTokens: int(upfront.GetReservedTokens()),
+			OverheadTokens: int(upfront.GetContextOverheadTokens()),
+			ThinkingBlocks: int(upfront.GetThinkingBlocks()),
+			ImageBlocks:    int(upfront.GetImageBlocks()),
+			ToolPairs:      int(upfront.GetToolPairs()),
+			ChatTurns:      int(upfront.GetChatTurns()),
 		}
 	case clydev1.CompactEvent_KIND_ITERATION:
 		it := ev.GetIteration()
