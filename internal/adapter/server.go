@@ -233,6 +233,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			StainlessRuntimeVersion: id.StainlessRuntimeVersion,
 			CCVersion:               id.CCVersion,
 			CCEntrypoint:            id.CCEntrypoint,
+			WireCaptureMode:         anthropic.WireCaptureMode(cfg.Anthropic.ResolvedAnthropicWireCaptureMode()),
 		})
 		s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
 			Config: cfg,
@@ -385,7 +386,11 @@ func newRequestID() string {
 	return "chatcmpl-" + hex.EncodeToString(b[:])
 }
 
-func writeJSON(w http.ResponseWriter, code int, v any) {
+// writeJSON serializes v to the response writer. The type parameter is
+// constrained to any only because encoding/json takes any; call sites must
+// pass a typed concrete value (no untyped composite literals such as
+// map[string]any{...}) so the wire shape stays auditable.
+func writeJSON[T any](w http.ResponseWriter, code int, v T) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)

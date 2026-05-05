@@ -14,6 +14,20 @@ import (
 // API defaults to "model max" which we approximate generously.
 const MaxOutputTokens = 8192
 
+// WireCaptureMode is the closed enum the anthropic client honors when the
+// dispatcher passes a per-provider wire-capture lever. Mirrors
+// config.AnthropicWireCaptureMode value-for-value so the dispatcher does a
+// typed string conversion at the boundary without an import edge.
+type WireCaptureMode string
+
+// Anthropic wire-capture modes. Off is the safe default and matches an empty
+// configured value.
+const (
+	WireCaptureOff         WireCaptureMode = "off"
+	WireCaptureSummaryOnly WireCaptureMode = "summary_only"
+	WireCaptureFull        WireCaptureMode = "full"
+)
+
 // Config carries wire header and body-side values for the messages
 // API. Populated from the user's config; callers validate before New.
 type Config struct {
@@ -27,6 +41,11 @@ type Config struct {
 	StainlessRuntimeVersion string
 	CCVersion               string
 	CCEntrypoint            string
+	// WireCaptureMode controls the optional per-success-path log of the
+	// upstream response shape. WireCaptureOff (default) is safe; the
+	// other modes route to adapter.providers.anthropic.wire_capture for
+	// short-retention diagnostics.
+	WireCaptureMode WireCaptureMode
 }
 
 // Client wraps an http.Client and an oauth.Manager.

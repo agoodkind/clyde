@@ -23,7 +23,7 @@ func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
 		Rotation: config.LoggingRotation{
 			Enabled: new(false),
 		},
-	}, ProcessRoleDaemon)
+	}, ProcessRoleDaemon, nil)
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestSetupRoutesExistingEventNamesWhenConcernIsExplicit(t *testing.T) {
 		Rotation: config.LoggingRotation{
 			Enabled: new(false),
 		},
-	}, ProcessRoleDaemon)
+	}, ProcessRoleDaemon, nil)
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 		Rotation: config.LoggingRotation{
 			Enabled: new(false),
 		},
-	}, ProcessRoleDaemon)
+	}, ProcessRoleDaemon, nil)
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 		Rotation: config.LoggingRotation{
 			Enabled: new(false),
 		},
-	}, ProcessRoleDaemon)
+	}, ProcessRoleDaemon, nil)
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 		Rotation: config.LoggingRotation{
 			Enabled: new(false),
 		},
-	}, ProcessRoleDaemon)
+	}, ProcessRoleDaemon, nil)
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}

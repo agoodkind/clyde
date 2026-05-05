@@ -351,7 +351,164 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if req.OnHeaders != nil {
 		req.OnHeaders(resp.Header.Clone())
 	}
+	c.maybeAttachWireCapture(ctx, resp, base)
 	return resp, nil
+}
+
+// maybeAttachWireCapture is the do() boundary helper that filters Off and
+// delegates to the per-mode emitter; keeps do()'s cognitive complexity
+// budget under the lint threshold.
+func (c *Client) maybeAttachWireCapture(ctx context.Context, resp *http.Response, base responseEvent) {
+	mode := c.cfg.WireCaptureMode
+	if mode == "" || mode == WireCaptureOff {
+		return
+	}
+	attachWireCapture(ctx, mode, resp, base)
+}
+
+// wireCaptureBodyCap bounds how many bytes a Full-mode capture buffers in
+// memory per response. SSE responses can exceed this on long thinking turns;
+// we truncate and surface the truncation flag so the operator knows to flip
+// rotation up if they need full bodies.
+const wireCaptureBodyCap = 2 * 1024 * 1024
+
+// attachWireCapture emits the per-success-path wire-capture event and, for
+// Full mode, swaps resp.Body for a tee reader so the streamed SSE body is
+// buffered (capped) and logged on Close. Summary mode emits a fingerprint
+// immediately and leaves resp.Body untouched. Off is filtered by the caller.
+func attachWireCapture(ctx context.Context, mode WireCaptureMode, resp *http.Response, base responseEvent) {
+	headers := redactedOutboundHeaders(resp.Header)
+	switch mode {
+	case WireCaptureOff:
+		// Caller filters Off before reaching this site; explicit case
+		// keeps the switch exhaustive over the closed enum.
+		return
+	case WireCaptureSummaryOnly:
+		emitWireCaptureSummary(ctx, mode, base, headers)
+	case WireCaptureFull:
+		// Detach from request cancellation so the on-close emission still
+		// fires after the SSE stream completes; preserve correlation
+		// values via context.WithoutCancel.
+		emitCtx := context.WithoutCancel(ctx)
+		resp.Body = newCaptureTee(resp.Body, wireCaptureBodyCap, func(captured []byte, truncated bool, totalRead int) {
+			emitWireCaptureFull(emitCtx, mode, base, headers, captured, truncated, totalRead)
+		})
+	}
+}
+
+func emitWireCaptureSummary(ctx context.Context, mode WireCaptureMode, base responseEvent, headers map[string]string) {
+	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture",
+		slog.String("subcomponent", "anthropic"),
+		slog.String("mode", string(mode)),
+		slog.String("model", base.Model),
+		slog.Int("status", base.Status),
+		slog.String("request_id", base.RequestID),
+		slog.Int("body_bytes_request", base.BodyBytes),
+		slog.Int64("duration_ms", base.DurationMs),
+		slog.Any("response_headers", headers),
+	)
+}
+
+func emitWireCaptureFull(ctx context.Context, mode WireCaptureMode, base responseEvent, headers map[string]string, captured []byte, truncated bool, totalRead int) {
+	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture",
+		slog.String("subcomponent", "anthropic"),
+		slog.String("mode", string(mode)),
+		slog.String("model", base.Model),
+		slog.Int("status", base.Status),
+		slog.String("request_id", base.RequestID),
+		slog.Int("body_bytes_request", base.BodyBytes),
+		slog.Int("body_bytes_response", totalRead),
+		slog.Int("body_bytes_captured", len(captured)),
+		slog.Bool("truncated", truncated),
+		slog.Int64("duration_ms", base.DurationMs),
+		slog.Any("response_headers", headers),
+		slog.String("body", string(captured)),
+	)
+}
+
+// captureTee is the [io.ReadCloser] shim Full-mode wire capture wraps around
+// resp.Body. Reads pass through unchanged; bytes also accumulate in an
+// internal buffer up to cap. On Close, onClose fires once with the captured
+// slice, the truncation flag, and the total read count. Stream parsers
+// downstream see a normal ReadCloser, so the lifecycle is invisible.
+type captureTee struct {
+	inner     io.ReadCloser
+	buf       bytes.Buffer
+	cap       int
+	totalRead int
+	truncated bool
+	onClose   func(captured []byte, truncated bool, totalRead int)
+	closed    bool
+}
+
+func newCaptureTee(inner io.ReadCloser, capBytes int, onClose func(captured []byte, truncated bool, totalRead int)) *captureTee {
+	return &captureTee{
+		inner:     inner,
+		buf:       bytes.Buffer{},
+		cap:       capBytes,
+		totalRead: 0,
+		truncated: false,
+		onClose:   onClose,
+		closed:    false,
+	}
+}
+
+// Read passes through the inner Read; bytes also accumulate (capped) in the
+// internal buffer. Errors are wrapped with %w so [errors.Is] callers still
+// detect [io.EOF]. Non-EOF errors also emit on the wire-capture concern.
+func (t *captureTee) Read(p []byte) (int, error) {
+	n, err := t.inner.Read(p)
+	t.recordCapturedBytes(p, n)
+	if err == nil {
+		return n, nil
+	}
+	if !errors.Is(err, io.EOF) {
+		slog.Warn("anthropic.wire_capture.tee_read_failed",
+			"subcomponent", "anthropic",
+			"err", err.Error(),
+		)
+	}
+	return n, fmt.Errorf("captureTee read: %w", err)
+}
+
+// Close closes the inner body and fires onClose exactly once with the
+// captured slice, truncation flag, and total read count. Inner Close errors
+// are wrapped with context for callers; the on-close emission still fires
+// regardless so the captured body is always logged.
+func (t *captureTee) Close() error {
+	err := t.inner.Close()
+	if !t.closed {
+		t.closed = true
+		if t.onClose != nil {
+			t.onClose(t.buf.Bytes(), t.truncated, t.totalRead)
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	slog.Warn("anthropic.wire_capture.tee_close_failed",
+		"subcomponent", "anthropic",
+		"err", err.Error(),
+	)
+	return fmt.Errorf("captureTee close: %w", err)
+}
+
+func (t *captureTee) recordCapturedBytes(p []byte, n int) {
+	if n <= 0 {
+		return
+	}
+	t.totalRead += n
+	if t.buf.Len() >= t.cap {
+		t.truncated = true
+		return
+	}
+	remain := t.cap - t.buf.Len()
+	if n <= remain {
+		t.buf.Write(p[:n])
+		return
+	}
+	t.buf.Write(p[:remain])
+	t.truncated = true
 }
 
 // probeDropSet returns the lowercased set of header names in CLYDE_PROBE_DROP.

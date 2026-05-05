@@ -66,6 +66,8 @@ const (
 	ConcernAdapterProviderAnthSSE         = "adapter.providers.anthropic.sse"
 	ConcernAdapterProviderAnthOAuth       = "adapter.providers.anthropic.oauth"
 	ConcernAdapterProviderAnthErr         = "adapter.providers.anthropic.errors"
+	ConcernAdapterProviderAnthWire        = "adapter.providers.anthropic.wire_capture"
+	ConcernAdapterProviderCodexWire       = "adapter.providers.codex.wire_capture"
 	ConcernAdapterProviderPassthroughReq  = "adapter.providers.passthrough_override.request"
 	ConcernAdapterProviderPassthroughCoer = "adapter.providers.passthrough_override.coercion"
 	ConcernAdapterProviderPassthroughErr  = "adapter.providers.passthrough_override.errors"
@@ -149,6 +151,8 @@ var concernPaths = map[string]string{
 	ConcernAdapterProviderAnthSSE:         "adapter/providers/anthropic/sse.jsonl",
 	ConcernAdapterProviderAnthOAuth:       "adapter/providers/anthropic/oauth.jsonl",
 	ConcernAdapterProviderAnthErr:         "adapter/providers/anthropic/errors.jsonl",
+	ConcernAdapterProviderAnthWire:        "adapter/providers/anthropic/wire_capture.jsonl",
+	ConcernAdapterProviderCodexWire:       "adapter/providers/codex/wire_capture.jsonl",
 	ConcernAdapterProviderPassthroughReq:  "adapter/providers/passthrough_override/request.jsonl",
 	ConcernAdapterProviderPassthroughCoer: "adapter/providers/passthrough_override/coercion.jsonl",
 	ConcernAdapterProviderPassthroughErr:  "adapter/providers/passthrough_override/errors.jsonl",
@@ -314,12 +318,22 @@ func concernForEvent(message string) string {
 	return ""
 }
 
-func concernHandlers(root string, level slog.Level, rotation gklog.RotationConfig) []slog.Handler {
+// ConcernRotationOverrides maps a concern name to a non-default rotation
+// budget. Concerns absent from the map use the global rotation passed to
+// concernHandlers. Used for wire_capture and other large-body concerns where
+// the operator-set short-retention rotation differs from the global default.
+type ConcernRotationOverrides map[string]gklog.RotationConfig
+
+func concernHandlers(root string, level slog.Level, rotation gklog.RotationConfig, overrides ConcernRotationOverrides) []slog.Handler {
 	handlers := make([]slog.Handler, 0, len(concernPaths))
 	for concern, rel := range concernPaths {
 		path := filepath.Join(root, rel)
 		_ = os.MkdirAll(filepath.Dir(path), 0o755)
-		handlers = append(handlers, newConcernFilterHandler(concern, gklog.FileJSON(path, level, rotation)))
+		rot := rotation
+		if override, ok := overrides[concern]; ok {
+			rot = override
+		}
+		handlers = append(handlers, newConcernFilterHandler(concern, gklog.FileJSON(path, level, rot)))
 	}
 	return handlers
 }

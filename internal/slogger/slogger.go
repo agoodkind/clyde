@@ -49,9 +49,14 @@ const (
 // for CLI callers. Call once at process start before emitting any events;
 // otherwise slog.Default falls back to a stderr text handler.
 //
+// concernRotationOverrides supplies non-default rotation budgets for specific
+// concern paths; callers build it from typed adapter sub-blocks (e.g.
+// [adapter.wire_capture.rotation]) and pass an empty map when no overrides
+// apply.
+//
 // Returns an io.Closer that the caller must Close on shutdown so the
 // rotating file handles flush. closer.Close() is safe to call once.
-func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
+func Setup(cfg config.LoggingConfig, role ProcessRole, concernRotationOverrides ConcernRotationOverrides) (io.Closer, error) {
 	level := strings.ToLower(strings.TrimSpace(cfg.Level))
 	if level == "" {
 		level = "info"
@@ -92,7 +97,7 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 		}
 		lockedFile := gklog.NewLockedWriteCloser(path, file)
 		handlers := []slog.Handler{slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: parseJSONMinLevel(level)})}
-		handlers = append(handlers, concernHandlers(concernRoot, parseJSONMinLevel(level), gklog.RotationConfig{})...)
+		handlers = append(handlers, concernHandlers(concernRoot, parseJSONMinLevel(level), gklog.RotationConfig{}, concernRotationOverrides)...)
 		router := buildTranscriptRouter(cfg.Transcript, concernRoot)
 		if router != nil {
 			handlers = append(handlers, router)
@@ -126,7 +131,7 @@ func Setup(cfg config.LoggingConfig, role ProcessRole) (io.Closer, error) {
 		MaxBackups: cfg.Rotation.MaxBackups,
 		MaxAgeDays: cfg.Rotation.MaxAgeDays,
 		Compress:   compress,
-	})...)
+	}, concernRotationOverrides)...)
 	router := buildTranscriptRouter(cfg.Transcript, concernRoot)
 	if router != nil {
 		handlers = append(handlers, router)

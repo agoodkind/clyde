@@ -35,6 +35,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog"
 )
 
 func main() {
@@ -57,7 +58,7 @@ func run() int {
 		return 1
 	}
 
-	closer, err := slogger.Setup(cfg.Logging, detectSlogRole(os.Args[1:]))
+	closer, err := slogger.Setup(cfg.Logging, detectSlogRole(os.Args[1:]), buildConcernRotationOverrides(cfg))
 	if err != nil {
 		clydeMainLog.Logger().Error("clyde.slogger.setup_failed",
 			"component", "cli",
@@ -127,6 +128,53 @@ func run() int {
 	}
 	clydeMainLog.Logger().Info("cli.execute.completed", "component", "cli")
 	return 0
+}
+
+// buildConcernRotationOverrides translates typed adapter sub-blocks into the
+// per-concern rotation map slogger.Setup consumes. Today only the wire_capture
+// concerns honor an override; the empty map is a no-op so existing callers
+// pre-extension stay unchanged. New concerns that need their own rotation
+// budget add an entry here.
+func buildConcernRotationOverrides(cfg *config.Config) slogger.ConcernRotationOverrides {
+	rot := cfg.Adapter.WireCapture.Rotation
+	if rot.MaxSizeMB == 0 && rot.MaxBackups == 0 && rot.MaxAgeDays == 0 && rot.Enabled == nil && rot.Compress == nil {
+		return slogger.ConcernRotationOverrides{}
+	}
+	compress := rot.Compress
+	if compress == nil {
+		t := true
+		compress = &t
+	}
+	cfgRot := wireCaptureRotation(rot, compress)
+	return slogger.ConcernRotationOverrides{
+		slogger.ConcernAdapterProviderAnthWire:  cfgRot,
+		slogger.ConcernAdapterProviderCodexWire: cfgRot,
+	}
+}
+
+// wireCaptureRotation maps the typed [adapter.wire_capture.rotation] block
+// onto gklog's concrete RotationConfig. Defaults are intentionally small so
+// always-on use stays bounded; operators set explicit values when they need
+// more retention.
+func wireCaptureRotation(rot config.LoggingRotation, compress *bool) gklog.RotationConfig {
+	maxSize := rot.MaxSizeMB
+	if maxSize <= 0 {
+		maxSize = 8
+	}
+	backups := rot.MaxBackups
+	if backups <= 0 {
+		backups = 3
+	}
+	age := rot.MaxAgeDays
+	if age <= 0 {
+		age = 2
+	}
+	return gklog.RotationConfig{
+		MaxSizeMB:  maxSize,
+		MaxBackups: backups,
+		MaxAgeDays: age,
+		Compress:   compress,
+	}
 }
 
 func detectSlogRole(args []string) slogger.ProcessRole {

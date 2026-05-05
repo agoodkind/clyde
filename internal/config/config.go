@@ -238,6 +238,19 @@ type AdapterConfig struct {
 	// same adapter endpoint/port while letting model name choose
 	// backend.
 	Codex AdapterCodex `json:"codex,omitzero" toml:"codex,omitempty"`
+	// Anthropic carries Anthropic-specific sub-blocks introduced after
+	// the original AdapterConfig shape stabilized. Existing Anthropic
+	// settings (OAuth, ClientIdentity, Notices, etc.) stay as siblings
+	// of this struct on AdapterConfig for backward compatibility; new
+	// per-provider sub-blocks live here so callers see one canonical
+	// [adapter.anthropic] root.
+	Anthropic AdapterAnthropic `json:"anthropic,omitzero" toml:"anthropic,omitempty"`
+	// WireCapture holds the shared rotation budget for upstream wire
+	// body logging. Per-provider mode levers live on each provider's
+	// sub-block (AdapterAnthropic.WireCapture, AdapterCodex.WireCapture).
+	// Rotation is shared because it is a filesystem concern, not a
+	// per-provider one; mode is per-provider because legal values differ.
+	WireCapture AdapterWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
 	// SyntheticContent declares per-provider rules for the synthetic
 	// envelope round-trip channel (`<!--clyde-...-->` markers). Each
 	// provider bucket controls whether outbound assistant content
@@ -394,6 +407,95 @@ type AdapterCodex struct {
 	// Models declares the Codex-backed model catalog that Clyde
 	// advertises and resolves for first-party clyde-* aliases.
 	Models []AdapterCodexModel `json:"models,omitempty" toml:"models,omitempty"`
+	// WireCapture is the per-provider wire-capture mode block for Codex.
+	// Empty mode treats the lever as Off.
+	WireCapture AdapterCodexWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
+}
+
+// AdapterWireCapture holds the shared rotation budget that any per-provider
+// wire-capture concern uses. Rotation defaults are deliberately small so
+// always-on use stays bounded; operators set explicit values when they need
+// more retention. The per-provider mode enum lives on each provider's own
+// config block to keep legal modes typed per provider.
+type AdapterWireCapture struct {
+	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
+}
+
+// AdapterAnthropic carries Anthropic-specific sub-blocks introduced after
+// the original AdapterConfig shape stabilized.
+type AdapterAnthropic struct {
+	WireCapture AdapterAnthropicWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
+}
+
+// AnthropicWireCaptureMode is the closed enum of legal modes for the
+// Anthropic wire-capture concern. Anthropic does not have discrete reasoning
+// items the way Codex does, so it omits the `reasoning_only` value.
+type AnthropicWireCaptureMode string
+
+// Anthropic wire-capture modes.
+const (
+	// AnthropicWireCaptureOff disables success-path body capture. Errors
+	// (429, non-200) continue to log their bodies via the existing
+	// anthropic.ratelimit and anthropic.messages.upstream_error events.
+	AnthropicWireCaptureOff AnthropicWireCaptureMode = "off"
+	// AnthropicWireCaptureSummaryOnly emits a per-request fingerprint
+	// (status, request-id, byte counts, headers) without the body.
+	AnthropicWireCaptureSummaryOnly AnthropicWireCaptureMode = "summary_only"
+	// AnthropicWireCaptureFull emits the full upstream response body on
+	// every successful request via a tee-reader. Combined with the small
+	// shared rotation budget, safe to leave on for diagnostic windows.
+	AnthropicWireCaptureFull AnthropicWireCaptureMode = "full"
+)
+
+// AdapterAnthropicWireCapture is the per-provider wire-capture mode block
+// for Anthropic. Empty mode is treated as Off.
+type AdapterAnthropicWireCapture struct {
+	Mode AnthropicWireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
+}
+
+// CodexWireCaptureMode is the closed enum of legal modes for the Codex
+// wire-capture concern. The reasoning_only value is Codex-specific; it
+// matches inbound websocket frames where item.type == "reasoning" and is
+// the cheapest mode for working on the encrypted_content round-trip.
+type CodexWireCaptureMode string
+
+// Codex wire-capture modes.
+const (
+	// CodexWireCaptureOff disables inbound frame body capture.
+	CodexWireCaptureOff CodexWireCaptureMode = "off"
+	// CodexWireCaptureSummaryOnly emits a per-frame fingerprint plus
+	// the upstream_event_type without the body.
+	CodexWireCaptureSummaryOnly CodexWireCaptureMode = "summary_only"
+	// CodexWireCaptureReasoningOnly emits the body only on
+	// response.output_item.done frames carrying a reasoning item.
+	// Cheapest mode for round-trip work.
+	CodexWireCaptureReasoningOnly CodexWireCaptureMode = "reasoning_only"
+	// CodexWireCaptureFull emits the body on every inbound frame.
+	CodexWireCaptureFull CodexWireCaptureMode = "full"
+)
+
+// AdapterCodexWireCapture is the per-provider wire-capture mode block for
+// Codex. Empty mode is treated as Off.
+type AdapterCodexWireCapture struct {
+	Mode CodexWireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
+}
+
+// ResolvedAnthropicWireCaptureMode returns the configured mode with the Off
+// default applied when the operator has not set a value.
+func (c AdapterAnthropic) ResolvedAnthropicWireCaptureMode() AnthropicWireCaptureMode {
+	if c.WireCapture.Mode == "" {
+		return AnthropicWireCaptureOff
+	}
+	return c.WireCapture.Mode
+}
+
+// ResolvedCodexWireCaptureMode returns the configured mode with the Off
+// default applied when the operator has not set a value.
+func (c AdapterCodex) ResolvedCodexWireCaptureMode() CodexWireCaptureMode {
+	if c.WireCapture.Mode == "" {
+		return CodexWireCaptureOff
+	}
+	return c.WireCapture.Mode
 }
 
 type AdapterCodexModel struct {
