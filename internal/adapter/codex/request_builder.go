@@ -12,6 +12,7 @@ import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 // GetwdFn lets tests control workspace path rewriting.
@@ -32,12 +33,12 @@ func MessageContentItems(role string, content []map[string]any) map[string]any {
 	}
 }
 
-func codexContentFromRaw(raw json.RawMessage, textType string) []map[string]any {
+func codexContentFromRaw(raw json.RawMessage, textType string, strategy adapterrender.MaterializationStrategy) []map[string]any {
 	parts, _ := adaptercontent.NormalizeRaw(raw)
-	return codexContentFromParts(parts, textType)
+	return codexContentFromParts(parts, textType, strategy)
 }
 
-func codexContentFromAny(raw any, textType string) []map[string]any {
+func codexContentFromAny(raw any, textType string, strategy adapterrender.MaterializationStrategy) []map[string]any {
 	if raw == nil {
 		return nil
 	}
@@ -45,15 +46,15 @@ func codexContentFromAny(raw any, textType string) []map[string]any {
 	if err != nil {
 		return nil
 	}
-	return codexContentFromRaw(json.RawMessage(b), textType)
+	return codexContentFromRaw(json.RawMessage(b), textType, strategy)
 }
 
-func codexContentFromParts(parts []adaptercontent.Part, textType string) []map[string]any {
+func codexContentFromParts(parts []adaptercontent.Part, textType string, strategy adapterrender.MaterializationStrategy) []map[string]any {
 	content := make([]map[string]any, 0, len(parts))
 	for _, part := range parts {
 		switch part.Kind {
 		case adaptercontent.PartText:
-			text := strings.TrimSpace(SanitizeForUpstreamCache(part.Text))
+			text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(part.Text, strategy))
 			if text == "" {
 				continue
 			}
@@ -76,7 +77,7 @@ func codexContentFromParts(parts []adaptercontent.Part, textType string) []map[s
 			}
 			content = append(content, item)
 		case adaptercontent.PartRefusal:
-			text := strings.TrimSpace(SanitizeForUpstreamCache(part.Refusal))
+			text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(part.Refusal, strategy))
 			if text == "" {
 				continue
 			}
@@ -91,9 +92,19 @@ func codexContentFromParts(parts []adaptercontent.Part, textType string) []map[s
 
 type RequestBuilderConfig struct {
 	ReasoningSummary string
+	// InboundThinkingMaterialization picks how round-tripped synthetic
+	// thinking envelopes on assistant content are shaped before forwarding
+	// upstream. Empty string falls through to [adapterrender.MaterializeDrop]
+	// which is the Codex default (the Codex Responses API has no native
+	// thinking content block).
+	InboundThinkingMaterialization adapterrender.MaterializationStrategy
 }
 
 func BuildRequestWithConfig(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, cfg RequestBuilderConfig) HTTPTransportRequest {
+	strategy := cfg.InboundThinkingMaterialization
+	if strategy == "" {
+		strategy = adapterrender.MaterializeDrop
+	}
 	cursorReq := adaptercursor.TranslateRequest(req)
 	input := make([]map[string]any, 0, len(req.Messages))
 	systemSections := make([]string, 0, 8)
@@ -102,11 +113,11 @@ func BuildRequestWithConfig(req adapteropenai.ChatRequest, model adaptermodel.Re
 		modelName = model.Alias
 	}
 	workspacePath := cursorReq.WorkspacePath
-	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections); ok {
+	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy); ok {
 		input = rawInput
 	} else {
 		for _, msg := range req.Messages {
-			text := strings.TrimSpace(SanitizeForUpstreamCache(adaptercontent.FlattenRaw(msg.Content)))
+			text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(adaptercontent.FlattenRaw(msg.Content), strategy))
 			switch strings.ToLower(msg.Role) {
 			case "system", "developer":
 				if text != "" {
@@ -120,7 +131,7 @@ func BuildRequestWithConfig(req adapteropenai.ChatRequest, model adaptermodel.Re
 					}
 					input = append(input, FunctionCallItem(tc))
 				}
-				if content := codexContentFromRaw(msg.Content, "output_text"); len(content) > 0 {
+				if content := codexContentFromRaw(msg.Content, "output_text", strategy); len(content) > 0 {
 					input = append(input, MessageContentItems("assistant", content))
 				}
 			case "tool", "function":
@@ -130,7 +141,7 @@ func BuildRequestWithConfig(req adapteropenai.ChatRequest, model adaptermodel.Re
 					input = append(input, MessageContent("user", "input_text", "tool: "+text))
 				}
 			default:
-				if content := codexContentFromRaw(msg.Content, "input_text"); len(content) > 0 {
+				if content := codexContentFromRaw(msg.Content, "input_text", strategy); len(content) > 0 {
 					input = append(input, MessageContentItems("user", content))
 				}
 			}
@@ -420,6 +431,7 @@ func inputFromResponsesInput(
 	raw json.RawMessage,
 	workspacePath string,
 	developerSections *[]string,
+	strategy adapterrender.MaterializationStrategy,
 ) ([]map[string]any, bool) {
 	if len(raw) == 0 {
 		return nil, false
@@ -439,11 +451,11 @@ func inputFromResponsesInput(
 				*developerSections = append(*developerSections, text)
 			}
 		case role == "user":
-			if content := codexContentFromAny(item["content"], "input_text"); len(content) > 0 {
+			if content := codexContentFromAny(item["content"], "input_text", strategy); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
 		case role == "assistant":
-			if content := codexContentFromAny(item["content"], "output_text"); len(content) > 0 {
+			if content := codexContentFromAny(item["content"], "output_text", strategy); len(content) > 0 {
 				input = append(input, MessageContentItems("assistant", content))
 			}
 		case itemType == "function_call":

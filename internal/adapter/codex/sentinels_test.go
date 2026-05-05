@@ -68,6 +68,39 @@ func TestSanitizeForUpstreamCacheRoundTripDropsThinkingByDefault(t *testing.T) {
 	}
 }
 
+// TestSanitizeForUpstreamCacheWithStrategyPlainTextConcatPreservesThinking
+// verifies that operators who flip Codex's inbound_thinking_materialization
+// from the default `drop` to `plain_text_concat` actually get the thinking
+// content preserved as plain prose for the model. The lever is documented
+// at config.AdapterSyntheticContent.Codex.InboundThinkingMaterialization.
+func TestSanitizeForUpstreamCacheWithStrategyPlainTextConcatPreservesThinking(t *testing.T) {
+	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "the model considered three options")
+	in := "Pre.\n\n" + thinking + "Post."
+	got := SanitizeForUpstreamCacheWithStrategy(in, adapterrender.MaterializePlainTextConcat)
+	if strings.Contains(got, "clyde-thinking") {
+		t.Fatalf("envelope marker leaked upstream: %q", got)
+	}
+	if !strings.Contains(got, "the model considered three options") {
+		t.Fatalf("thinking content was dropped under plain_text_concat: %q", got)
+	}
+	if !strings.Contains(got, "Pre.") || !strings.Contains(got, "Post.") {
+		t.Fatalf("surrounding prose lost: %q", got)
+	}
+}
+
+// TestSanitizeForUpstreamCacheWithStrategyDropMatchesDefault asserts that the
+// explicit drop strategy reproduces today's default-drop behavior so a
+// rollback (operator flips back to drop) is a no-op contract change.
+func TestSanitizeForUpstreamCacheWithStrategyDropMatchesDefault(t *testing.T) {
+	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "scratchpad")
+	in := "Before.\n\n" + thinking + "After."
+	def := SanitizeForUpstreamCache(in)
+	explicit := SanitizeForUpstreamCacheWithStrategy(in, adapterrender.MaterializeDrop)
+	if def != explicit {
+		t.Fatalf("default and explicit drop disagree:\n default  %q\n explicit %q", def, explicit)
+	}
+}
+
 func TestSanitizeForUpstreamCacheStripsBothReasoningAndNoticeEnvelopes(t *testing.T) {
 	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "internal scratch")
 	notice := adapterrender.FormatSyntheticContent(adapterrender.SyntheticNotice, "⚠️ quota notice")

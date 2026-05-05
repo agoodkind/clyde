@@ -30,8 +30,17 @@ type (
 	OpenAIContentPart        = adapteropenai.ContentPart
 )
 
-// TranslateRequest maps an OpenAI-shaped chat request to Anthropic /v1/messages fields.
-func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (AnthRequest, error) {
+// TranslateRequest maps an OpenAI-shaped chat request to Anthropic
+// /v1/messages fields. The inboundThinkingStrategy parameter controls how
+// round-tripped synthetic thinking envelopes on assistant content are
+// materialized for the upstream Anthropic Messages API. The Anthropic
+// default is [adapterrender.MaterializeNativeThinkingBlock]; callers that
+// pass an empty string get that default for backward compatibility with
+// existing tests.
+func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int, inboundThinkingStrategy adapterrender.MaterializationStrategy) (AnthRequest, error) {
+	if inboundThinkingStrategy == "" {
+		inboundThinkingStrategy = adapterrender.MaterializeNativeThinkingBlock
+	}
 	var systemPieces []string
 	var out []AnthMessage
 
@@ -52,7 +61,7 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int) (An
 			}
 			out = append(out, AnthMessage{Role: "user", Content: blocks})
 		case "assistant":
-			blocks, err := openAIMessageToAssistantBlocks(msgIdx, msg)
+			blocks, err := openAIMessageToAssistantBlocks(msgIdx, msg, inboundThinkingStrategy)
 			if err != nil {
 				return AnthRequest{}, err
 			}
@@ -313,42 +322,38 @@ func countToolBlocks(out []AnthMessage) (toolUse, toolResult int) {
 	return toolUse, toolResult
 }
 
-func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBlock, error) {
+func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinkingStrategy adapterrender.MaterializationStrategy) ([]AnthContentBlock, error) {
 	log := anthropicBackendLog.Logger()
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
 	for partIdx, p := range parts {
 		switch p.Type {
 		case "text":
-			// Parse the assistant text into typed synthetic parts. The
-			// renderer wraps reasoning content in a Cursor-visible
-			// envelope so the BYOK chat surface can show a thinking
-			// affordance; Cursor replays that envelope back to us on
-			// the next turn. We materialize each kind into its
-			// upstream-native shape so the model retains its own prior
-			// reasoning chain across turns. The default
-			// inbound_thinking_materialization is
-			// `native_thinking_block` for Anthropic; see
-			// [config.AdapterSyntheticContent] for the lever.
+			// Parse the assistant text into typed synthetic parts and
+			// route through the generic materializer. The renderer
+			// wraps reasoning content in a Cursor-visible envelope so
+			// the BYOK chat surface can show a thinking affordance;
+			// Cursor replays the envelope back on the next turn. The
+			// strategy decides whether each round-tripped envelope
+			// becomes a native thinking content block (Anthropic
+			// default), gets concatenated as plain text, dropped, or
+			// passed through unchanged. The lever lives at
+			// [config.AdapterSyntheticContent.Anthropic.InboundThinkingMaterialization].
 			parts := adapterrender.ExtractSyntheticParts(p.Text)
-			for _, sp := range parts {
-				switch sp.Kind {
-				case adapterrender.SyntheticKindThinking:
-					body := strings.TrimSpace(sp.Body)
+			materialized := adapterrender.MaterializeSyntheticParts(parts, inboundThinkingStrategy)
+			for _, mp := range materialized {
+				switch mp.Kind {
+				case adapterrender.MaterializedKindNativeThinking:
+					body := strings.TrimSpace(mp.Body)
 					if body == "" {
 						continue
 					}
 					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body})
-				case adapterrender.SyntheticKindNotice:
-					// Notices are user-facing UI annotations only; do
-					// not forward them upstream where they would be
-					// re-billed as input tokens.
-					continue
-				case adapterrender.SyntheticKindText:
-					if strings.TrimSpace(sp.Body) == "" {
+				case adapterrender.MaterializedKindText:
+					if strings.TrimSpace(mp.Body) == "" {
 						continue
 					}
-					blocks = append(blocks, AnthContentBlock{Type: "text", Text: sp.Body})
+					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body})
 				}
 			}
 		case "image_url":
@@ -376,23 +381,22 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 		case "refusal":
 			// Mirror the assistant-text path: a refusal block can also
 			// carry a marker-wrapped thinking envelope from Cursor's
-			// replay. Materialize per the same per-provider rules.
+			// replay. Materialize per the same generic strategy.
 			parts := adapterrender.ExtractSyntheticParts(p.Refusal)
-			for _, sp := range parts {
-				switch sp.Kind {
-				case adapterrender.SyntheticKindThinking:
-					body := strings.TrimSpace(sp.Body)
+			materialized := adapterrender.MaterializeSyntheticParts(parts, inboundThinkingStrategy)
+			for _, mp := range materialized {
+				switch mp.Kind {
+				case adapterrender.MaterializedKindNativeThinking:
+					body := strings.TrimSpace(mp.Body)
 					if body == "" {
 						continue
 					}
 					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body})
-				case adapterrender.SyntheticKindNotice:
-					continue
-				case adapterrender.SyntheticKindText:
-					if strings.TrimSpace(sp.Body) == "" {
+				case adapterrender.MaterializedKindText:
+					if strings.TrimSpace(mp.Body) == "" {
 						continue
 					}
-					blocks = append(blocks, AnthContentBlock{Type: "text", Text: sp.Body})
+					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body})
 				}
 			}
 		case "tool_use":

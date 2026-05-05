@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 var (
@@ -42,6 +43,7 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		MicrocompactKeepRecent:          s.cfg.ClientIdentity.MicrocompactKeepRecent,
 		PerContextBetas:                 s.cfg.ClientIdentity.PerContextBetas,
 		Identity:                        s.anthropicIdentity(req),
+		InboundThinkingMaterialization:  adapterrender.MaterializationStrategy(s.cfg.SyntheticContent.AnthropicInboundThinkingMaterialization()),
 		Logger:                          s.log,
 	}, reqID)
 }

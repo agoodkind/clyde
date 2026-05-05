@@ -8,6 +8,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
 const FineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14"
@@ -30,12 +31,22 @@ type BuildRequestConfig struct {
 	// taken from Cursor's metadata.cursorConversationId via
 	// BuildRequest's req.User parameter.
 	Identity anthropic.Identity
-	Logger   *slog.Logger
+	// InboundThinkingMaterialization controls how the assistant block
+	// builder shapes round-tripped synthetic thinking envelopes that
+	// Cursor replays back to us. Empty string falls through to
+	// [adapterrender.MaterializeNativeThinkingBlock] (the Anthropic
+	// default) so existing call sites stay correct without ceremony.
+	InboundThinkingMaterialization adapterrender.MaterializationStrategy
+	Logger                         *slog.Logger
 }
 
 func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, cfg BuildRequestConfig, reqID string) (anthropic.Request, error) {
 	maxTok := ResolveMaxTokens(req.MaxTokens, model)
-	tr, err := TranslateRequest(req, cfg.SystemPromptPrefix, maxTok)
+	strategy := cfg.InboundThinkingMaterialization
+	if strategy == "" {
+		strategy = adapterrender.MaterializeNativeThinkingBlock
+	}
+	tr, err := TranslateRequest(req, cfg.SystemPromptPrefix, maxTok, strategy)
 	if err != nil {
 		return anthropic.Request{}, err
 	}

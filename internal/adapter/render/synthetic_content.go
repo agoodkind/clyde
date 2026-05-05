@@ -282,3 +282,122 @@ func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
 	}
 	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text})
 }
+
+// MaterializationStrategy picks how round-tripped synthetic envelope content
+// is shaped before forwarding upstream. The exact same string values are
+// declared in [internal/config.SyntheticInboundMaterialization]; provider
+// mappers convert from the config type at the call site so the render
+// package stays free of the config dependency.
+type MaterializationStrategy string
+
+// Materialization strategies. Values are stable enum strings shared with the
+// config package contract.
+const (
+	// MaterializeNativeThinkingBlock asks the provider mapper to emit a
+	// native upstream thinking content block per round-tripped thinking
+	// part. Only Anthropic supports this in current code; Codex callers
+	// must not request it.
+	MaterializeNativeThinkingBlock MaterializationStrategy = "native_thinking_block"
+	// MaterializePlainTextConcat folds round-tripped thinking bodies into
+	// the assistant text block as plain prose (decoration stripped). Use
+	// this when the upstream cannot accept native thinking blocks but the
+	// reasoning trace is still wanted in context.
+	MaterializePlainTextConcat MaterializationStrategy = "plain_text_concat"
+	// MaterializeDrop discards thinking bodies before forwarding upstream.
+	// The Codex default since Codex upstream cannot accept thinking blocks
+	// and the trace bloats context.
+	MaterializeDrop MaterializationStrategy = "drop"
+	// MaterializePassthrough leaves the marker-wrapped envelope intact in
+	// the assistant text block. Used by passthrough overrides where the
+	// upstream is expected to accept Clyde's marker convention as-is.
+	MaterializePassthrough MaterializationStrategy = "passthrough"
+)
+
+// MaterializedKind is the typed instruction the provider mapper consumes per
+// output part of [MaterializeSyntheticParts].
+type MaterializedKind string
+
+// Materialized kinds.
+const (
+	// MaterializedKindText asks the mapper to emit a plain text content
+	// block carrying Body verbatim.
+	MaterializedKindText MaterializedKind = "text"
+	// MaterializedKindNativeThinking asks the mapper to emit an
+	// upstream-native thinking content block carrying Body verbatim.
+	MaterializedKindNativeThinking MaterializedKind = "native_thinking"
+)
+
+// MaterializedPart is one ordered output instruction from
+// [MaterializeSyntheticParts]. The provider mapper renders each part
+// mechanically into its own upstream-native content block type.
+type MaterializedPart struct {
+	Kind MaterializedKind
+	Body string
+}
+
+// MaterializeSyntheticParts applies a [MaterializationStrategy] to a
+// pre-extracted [SyntheticPart] slice and returns the ordered output
+// instructions for the provider mapper. Strategy decides what happens to
+// SyntheticReasoning parts; SyntheticNotice parts are always dropped (notice
+// envelopes are user-facing UI annotations, never forwarded upstream);
+// SyntheticKindText parts are always emitted as MaterializedKindText.
+//
+// Implementation notes per strategy:
+//   - MaterializeNativeThinkingBlock: each Reasoning part becomes a separate
+//     MaterializedKindNativeThinking part. Order with surrounding text is
+//     preserved.
+//   - MaterializePlainTextConcat: Reasoning bodies are appended as plain
+//     text, joined to surrounding text parts so the mapper can emit a single
+//     contiguous text block when convenient. The materializer returns
+//     separate text parts to keep the choice with the mapper.
+//   - MaterializeDrop: Reasoning parts are dropped entirely.
+//   - MaterializePassthrough: Reasoning parts are re-wrapped in their
+//     original envelope and emitted as text, so the upstream sees the
+//     marker convention verbatim.
+//
+// MaterializeSyntheticParts never returns nil for a non-empty input; an
+// input with only dropped parts returns an empty slice.
+func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationStrategy) []MaterializedPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]MaterializedPart, 0, len(parts))
+	for _, p := range parts {
+		switch p.Kind {
+		case SyntheticKindText:
+			if strings.TrimSpace(p.Body) == "" {
+				continue
+			}
+			out = append(out, MaterializedPart{Kind: MaterializedKindText, Body: p.Body})
+		case SyntheticReasoning:
+			out = append(out, materializeReasoningPart(p.Body, strategy)...)
+		case SyntheticNotice:
+			continue
+		}
+	}
+	return out
+}
+
+func materializeReasoningPart(body string, strategy MaterializationStrategy) []MaterializedPart {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return nil
+	}
+	switch strategy {
+	case MaterializeNativeThinkingBlock:
+		return []MaterializedPart{{Kind: MaterializedKindNativeThinking, Body: trimmed}}
+	case MaterializePlainTextConcat:
+		return []MaterializedPart{{Kind: MaterializedKindText, Body: trimmed}}
+	case MaterializePassthrough:
+		envelope := FormatSyntheticContent(SyntheticReasoning, trimmed)
+		if envelope == "" {
+			return nil
+		}
+		return []MaterializedPart{{Kind: MaterializedKindText, Body: envelope}}
+	case MaterializeDrop:
+		return nil
+	}
+	// Unknown strategy: behave like Drop so a future enum value never silently
+	// leaks raw thinking content upstream.
+	return nil
+}

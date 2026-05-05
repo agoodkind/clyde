@@ -41,6 +41,11 @@ type DirectConfig struct {
 	BodyLogProvider  BodyLogConfigProvider
 	FileLog          FileLogRotationConfig
 	ReasoningSummary string
+	// InboundThinkingMaterialization picks how round-tripped synthetic
+	// thinking envelopes on assistant content are shaped before forwarding
+	// upstream. Empty string falls through to the Codex default (drop)
+	// inside [BuildRequestWithConfig] / [SanitizeForUpstreamCacheWithStrategy].
+	InboundThinkingMaterialization adapterrender.MaterializationStrategy
 }
 
 func RunDirect(
@@ -59,7 +64,8 @@ func RunDirect(
 		return NewRunResult("stop"), errCodexWebsocketDisabled
 	}
 	transportPayload := BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{
-		ReasoningSummary: cfg.ReasoningSummary,
+		ReasoningSummary:               cfg.ReasoningSummary,
+		InboundThinkingMaterialization: cfg.InboundThinkingMaterialization,
 	})
 	// WARNING: this is the websocket session identity, not the
 	// prompt_cache_key. Codex uses prompt_cache_key for upstream cache

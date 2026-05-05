@@ -11,6 +11,7 @@ import (
 
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
 )
@@ -22,6 +23,7 @@ import (
 // normalized event emission together.
 type Provider struct {
 	cfg             config.AdapterCodex
+	syntheticCfg    config.AdapterSyntheticContent
 	notices         config.AdapterNotices
 	auth            adapterprovider.AuthLookup
 	log             *slog.Logger
@@ -70,6 +72,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	ConfigureCodexFileLogger(opts.FileLog)
 	return &Provider{
 		cfg:             deps.Config.Codex,
+		syntheticCfg:    deps.Config.SyntheticContent,
 		notices:         deps.Config.Notices,
 		auth:            deps.Auth,
 		log:             log,
@@ -126,23 +129,24 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 	}
 
 	directCfg := DirectConfig{
-		HTTPClient:       p.httpClient,
-		BaseURL:          codexBaseURL(p.cfg.BaseURL),
-		WebsocketEnabled: true,
-		WebsocketURL:     codexWebsocketURL(p.cfg.BaseURL),
-		Token:            token,
-		AccountID:        p.accountID,
-		RequestID:        codexRequestID(req),
-		CursorRequestID:  req.Cursor.RequestID,
-		Correlation:      req.Correlation,
-		WorkspacePath:    req.Cursor.WorkspacePath,
-		WorkspaceProbe:   p.workspaceProbe,
-		SessionCache:     p.sessionCache,
-		Log:              p.log,
-		BodyLog:          p.bodyLog,
-		BodyLogProvider:  p.bodyLogProvider,
-		FileLog:          p.fileLog,
-		ReasoningSummary: p.cfg.ReasoningSummary,
+		HTTPClient:                     p.httpClient,
+		BaseURL:                        codexBaseURL(p.cfg.BaseURL),
+		WebsocketEnabled:               true,
+		WebsocketURL:                   codexWebsocketURL(p.cfg.BaseURL),
+		Token:                          token,
+		AccountID:                      p.accountID,
+		RequestID:                      codexRequestID(req),
+		CursorRequestID:                req.Cursor.RequestID,
+		Correlation:                    req.Correlation,
+		WorkspacePath:                  req.Cursor.WorkspacePath,
+		WorkspaceProbe:                 p.workspaceProbe,
+		SessionCache:                   p.sessionCache,
+		Log:                            p.log,
+		BodyLog:                        p.bodyLog,
+		BodyLogProvider:                p.bodyLogProvider,
+		FileLog:                        p.fileLog,
+		ReasoningSummary:               p.cfg.ReasoningSummary,
+		InboundThinkingMaterialization: adapterrender.MaterializationStrategy(p.syntheticCfg.CodexInboundThinkingMaterialization()),
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
