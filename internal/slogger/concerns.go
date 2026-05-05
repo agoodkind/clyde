@@ -70,7 +70,7 @@ const (
 	ConcernAdapterProviderCodexWire       = "adapter.providers.codex.wire_capture"
 	ConcernAdapterProviderPassthroughReq  = "adapter.providers.passthrough_override.request"
 	ConcernAdapterProviderPassthroughCoer = "adapter.providers.passthrough_override.coercion"
-	ConcernAdapterProviderPassthroughErr = "adapter.providers.passthrough_override.errors"
+	ConcernAdapterProviderPassthroughErr  = "adapter.providers.passthrough_override.errors"
 	// ConcernAdapterReasoningConfig is the slog concern for startup
 	// notices emitted when the per-provider reasoning config blocks
 	// fold legacy [adapter.synthetic_content] values forward.
