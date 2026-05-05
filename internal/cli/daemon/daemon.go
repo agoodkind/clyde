@@ -23,7 +23,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 				"version", f.Build.Version,
 			)
 			log := slog.Default().With("component", "daemon")
-			return daemonsvc.Run(log, pruneLoop(), oauthLoop(), driftLoop(), transcriptCleanupLoop())
+			return daemonsvc.Run(log, pruneLoop(), oauthLoop(), driftLoop())
 		},
 	}
 	cmd.AddCommand(newReloadCmd(f))
