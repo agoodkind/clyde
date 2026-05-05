@@ -60,6 +60,15 @@ type DirectConfig struct {
 	// (the codex-rs default) persists; RoundTripEncryptedDrop skips.
 	// Empty resolves to RoundTripEncryptedRoundTrip per codex-rs.
 	RoundTripEncrypted RoundTripEncrypted
+	// RoundTripSummary picks the inbound shape for round-tripped
+	// synthetic thinking envelopes on the next outbound request. Empty
+	// resolves to RoundTripSummaryNative per codex-rs.
+	RoundTripSummary RoundTripSummary
+	// ReasoningStoreGet is the read side of the encrypted_content cache.
+	// Phase 6 reads it during the request build to attach previously
+	// persisted blobs to round-tripped Reasoning items. Optional; nil
+	// disables lookup (every part is treated as a miss).
+	ReasoningStoreGet ReasoningStoreGetter
 }
 
 // ReasoningBlobStore is the narrow Put-only contract DirectConfig needs from
@@ -68,6 +77,14 @@ type DirectConfig struct {
 // depending on the on-disk implementation.
 type ReasoningBlobStore interface {
 	Put(ctx context.Context, blob ReasoningBlob) error
+}
+
+// ReasoningStoreGetter is the narrow Get-only contract the Phase 6 inbound
+// path uses to look up a previously persisted encrypted_content blob keyed
+// by (chatKey, itemID). A nil return with a nil error means the blob is not
+// known; callers must treat that as a miss without surfacing an error.
+type ReasoningStoreGetter interface {
+	Get(ctx context.Context, chatKey, itemID string) (*ReasoningBlob, error)
 }
 
 // ReasoningBlob is the value DirectConfig.ReasoningStore.Put receives. It is
@@ -92,6 +109,21 @@ type RoundTripEncrypted string
 const (
 	RoundTripEncryptedRoundTrip RoundTripEncrypted = "round_trip"
 	RoundTripEncryptedDrop      RoundTripEncrypted = "drop"
+)
+
+// RoundTripSummary is the closed enum the codex transport honors when the
+// dispatcher passes the summary round-trip lever for synthetic thinking
+// envelopes. Mirrors config.CodexRoundTripSummary value-for-value so the
+// dispatcher does a typed string conversion at the boundary without an
+// import edge.
+type RoundTripSummary string
+
+// Codex round-trip summary modes. RoundTripSummaryNative is the
+// documented codex-rs default; empty resolves to it.
+const (
+	RoundTripSummaryNative    RoundTripSummary = "native_summary_field"
+	RoundTripSummaryDrop      RoundTripSummary = "drop"
+	RoundTripSummaryPlainText RoundTripSummary = "plain_text_concat"
 )
 
 // WireCaptureMode is the closed enum the codex transport honors when the
@@ -124,9 +156,13 @@ func RunDirect(
 	if !cfg.WebsocketEnabled {
 		return NewRunResult("stop"), errCodexWebsocketDisabled
 	}
-	transportPayload := BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{
+	transportPayload := BuildRequestWithConfig(ctx, req, model, effort, RequestBuilderConfig{
 		ReasoningSummary:               cfg.ReasoningSummary,
 		InboundThinkingMaterialization: cfg.InboundThinkingMaterialization,
+		RoundTripSummary:               cfg.RoundTripSummary,
+		RoundTripEncrypted:             cfg.RoundTripEncrypted,
+		ReasoningStoreGet:              cfg.ReasoningStoreGet,
+		ChatKey:                        strings.TrimSpace(cfg.Correlation.ChatKey),
 	})
 	// WARNING: this is the websocket session identity, not the
 	// prompt_cache_key. Codex uses prompt_cache_key for upstream cache

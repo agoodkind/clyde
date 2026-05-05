@@ -189,27 +189,7 @@ func New(cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log 
 			Auth:       codexAuthLookup{server: s},
 			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
-		}, adaptercodex.ProviderOptions{
-			AccountID: "",
-			BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
-			BodyLogProvider: func() adaptercodex.BodyLogConfig {
-				body := runtimeLogging.Body()
-				return adaptercodex.BodyLogConfig{Mode: body.Mode, MaxKB: body.MaxKB}
-			},
-			FileLog: adaptercodex.FileLogRotationConfig{
-				MaxSizeMB:  logging.Rotation.MaxSizeMB,
-				MaxBackups: logging.Rotation.MaxBackups,
-				MaxAgeDays: logging.Rotation.MaxAgeDays,
-				Compress:   logging.Rotation.Compress,
-			},
-			WsSessionIdleTTL: 0,
-			// ReasoningStore is wired in a follow-up commit when the
-			// daemon constructs the on-disk reasoningstore.Store from
-			// [adapter.codex.reasoning.store] retention config. Phase
-			// 4 only delivers the codex-side capture; nil here means
-			// the capture is a no-op until storage is constructed.
-			ReasoningStore: nil,
-		})
+		}, codexProviderOptions(logging, runtimeLogging))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(context.Background(), slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderCodex)),
@@ -402,4 +382,29 @@ func writeJSON[T any](w http.ResponseWriter, code int, v T) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// codexProviderOptions builds the typed [adaptercodex.ProviderOptions]
+// payload from the daemon-side config snapshots. The reasoning store
+// fields are wired in a follow-up commit; calling
+// [adaptercodex.NewReasoningStoreGetter] with nil keeps the call graph
+// stable across that change.
+func codexProviderOptions(logging config.LoggingConfig, runtimeLogging *RuntimeLogging) adaptercodex.ProviderOptions {
+	return adaptercodex.ProviderOptions{
+		AccountID: "",
+		BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
+		BodyLogProvider: func() adaptercodex.BodyLogConfig {
+			body := runtimeLogging.Body()
+			return adaptercodex.BodyLogConfig{Mode: body.Mode, MaxKB: body.MaxKB}
+		},
+		FileLog: adaptercodex.FileLogRotationConfig{
+			MaxSizeMB:  logging.Rotation.MaxSizeMB,
+			MaxBackups: logging.Rotation.MaxBackups,
+			MaxAgeDays: logging.Rotation.MaxAgeDays,
+			Compress:   logging.Rotation.Compress,
+		},
+		WsSessionIdleTTL:  0,
+		ReasoningStore:    nil,
+		ReasoningStoreGet: adaptercodex.NewReasoningStoreGetter(nil),
+	}
 }
