@@ -53,6 +53,7 @@ type CompletedAttrs struct {
 	CacheReadTokens            int
 	CacheCreationTokens        int
 	DerivedCacheCreationTokens int
+	CacheCreationReported      bool
 	DurationMs                 int64
 	Stream                     bool
 	ToolCallCount              int
@@ -99,11 +100,12 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 		slog.String("alias", attrs.Alias),
 		slog.String("model_id", attrs.ModelID),
 		slog.String("finish_reason", attrs.FinishReason),
-		slog.Int("tokens_in", attrs.TokensIn),
-		slog.Int("tokens_out", attrs.TokensOut),
+		slog.Int("prompt_tokens", attrs.TokensIn),
+		slog.Int("completion_tokens", attrs.TokensOut),
 		slog.Int("cache_read_tokens", attrs.CacheReadTokens),
 		slog.Int("cache_creation_tokens", attrs.CacheCreationTokens),
 		slog.Int("derived_cache_creation_tokens", attrs.DerivedCacheCreationTokens),
+		slog.Bool("cache_creation_reported", attrs.CacheCreationReported),
 		slog.String("cache_ttl", attrs.CacheTTL),
 		slog.Float64("cache_hit_ratio", hitRatio),
 		slog.Int64("duration_ms", attrs.DurationMs),

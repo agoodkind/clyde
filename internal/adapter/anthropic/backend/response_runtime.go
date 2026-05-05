@@ -34,7 +34,6 @@ type ExecutionRuntime interface {
 	AnthropicStreamClient() StreamClient
 	TrackAnthropicContextUsage(string, adapteropenai.Usage) TrackedUsage
 	LogTerminal(context.Context, adapterruntime.RequestEvent)
-	LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage)
 	CacheTTL() string
 }
 
@@ -202,32 +201,33 @@ type anthropicExecutionFinalize struct {
 	Stream       bool
 }
 
-// finalizeAnthropicExecution emits the three terminal log events that
-// follow every Anthropic backend turn: adapter.cache.usage with the
-// hit ratio, adapter.request.completed via runtime.LogCompleted, and
-// the runtime RequestEvent terminal record carrying the cost estimate.
-// Both collect and stream paths must call this so the streaming surface
-// (which is what Cursor BYOK uses) does not silently skip cache and
-// completion accounting.
+// finalizeAnthropicExecution emits the two terminal log events that
+// follow every Anthropic backend turn: adapter.request.completed via
+// runtime.LogCompleted and the runtime RequestEvent terminal record
+// carrying the cost estimate. Cache token fields are now carried on
+// adapter.chat.completed directly (Phase A2); the prior dedicated
+// adapter.cache.usage emit is retired. Both collect and stream paths
+// must call this so the streaming surface (which is what Cursor BYOK
+// uses) does not silently skip cache and completion accounting.
 func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args anthropicExecutionFinalize) {
-	rt.LogCacheUsageAnthropic(ctx, "anthropic", args.ReqID, args.Model.Alias, args.AnthUsage)
 	durationMs := time.Since(args.Started).Milliseconds()
 	adapterruntime.LogCompleted(rt.Log(), ctx, adapterruntime.CompletedAttrs{
-		Backend:             "anthropic",
-		Provider:            "anthropic-oauth",
-		Path:                "oauth",
-		SessionID:           args.ReqID,
-		RequestID:           args.ReqID,
-		Alias:               args.Model.Alias,
-		ModelID:             args.Req.Model,
-		FinishReason:        args.FinishReason,
-		TokensIn:            args.Usage.PromptTokens,
-		TokensOut:           args.Usage.CompletionTokens,
-		CacheReadTokens:     args.AnthUsage.CacheReadInputTokens,
-		CacheCreationTokens: args.AnthUsage.CacheCreationInputTokens,
-		CacheTTL:            rt.CacheTTL(),
-		DurationMs:          durationMs,
-		Stream:              args.Stream,
+		Backend:               "anthropic",
+		Provider:              "anthropic-oauth",
+		Path:                  "oauth",
+		SessionID:             args.ReqID,
+		RequestID:             args.ReqID,
+		Alias:                 args.Model.Alias,
+		ModelID:               args.Req.Model,
+		FinishReason:          args.FinishReason,
+		TokensIn:              args.Usage.PromptTokens,
+		TokensOut:             args.Usage.CompletionTokens,
+		CacheReadTokens:       args.AnthUsage.CacheReadInputTokens,
+		CacheCreationTokens:   args.AnthUsage.CacheCreationInputTokens,
+		CacheCreationReported: true,
+		CacheTTL:              rt.CacheTTL(),
+		DurationMs:            durationMs,
+		Stream:                args.Stream,
 	})
 	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
 		ModelID:             args.Req.Model,

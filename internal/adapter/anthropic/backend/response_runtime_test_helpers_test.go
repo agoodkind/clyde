@@ -32,9 +32,6 @@ func (f *fakeResponseDispatcher) TrackAnthropicContextUsage(_ string, usage adap
 func (f *fakeResponseDispatcher) LogTerminal(context.Context, adapterruntime.RequestEvent) {
 }
 
-func (f *fakeResponseDispatcher) LogCacheUsageAnthropic(context.Context, string, string, string, anthropic.Usage) {
-}
-
 func (f *fakeResponseDispatcher) CacheTTL() string {
 	return ""
 }

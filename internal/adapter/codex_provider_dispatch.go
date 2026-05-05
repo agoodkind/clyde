@@ -9,10 +9,41 @@ import (
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/correlation"
 )
+
+// codexCompletedAttrs builds the structured attribute slice for the
+// adapter.chat.completed emit on the Codex dispatch path. Both the
+// streaming and non-streaming finalize sites share this builder so the
+// emit shape stays stable. Codex never reports cache_creation per the
+// upstream contract, so cache_creation_reported is hard-coded to false
+// here. See research/codex/codex-rs/codex-api/src/sse/responses.rs.
+func codexCompletedAttrs(reqID, alias string, usage adapteropenai.Usage, result adapterprovider.Result, finishReason string, durationMs int64, stream bool) []slog.Attr {
+	return []slog.Attr{
+		slog.String("request_id", reqID),
+		slog.String("model", alias),
+		slog.Int("prompt_tokens", usage.PromptTokens),
+		slog.Int("completion_tokens", usage.CompletionTokens),
+		slog.Int("cache_read_tokens", usage.CachedTokens()),
+		slog.Int("cache_creation_tokens", 0),
+		slog.Bool("cache_creation_reported", false),
+		slog.Int("derived_cache_creation_tokens", result.DerivedCacheCreationTokens),
+		slog.Int64("duration_ms", durationMs),
+		slog.Bool("stream", stream),
+		slog.String("backend", "codex"),
+		slog.String("provider_path", "provider"),
+		slog.String("finish_reason", finishReason),
+		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
+		slog.Bool("reasoning_visible", result.ReasoningVisible),
+		slog.Int("tool_call_count", result.ToolCallCount),
+		slog.Any("tool_call_names", result.ToolCallNames),
+		slog.Bool("has_subagent_tool_call", result.HasSubagentToolCall),
+	}
+}
 
 // dispatchCodexProvider routes a Codex-bound request through the new
 // codex.Provider via the Server's provider.Registry. It is invoked
@@ -128,25 +159,7 @@ func (s *Server) dispatchCodexProviderStream(
 		return
 	}
 
-	completedAttrs := []slog.Attr{
-		slog.String("request_id", reqID),
-		slog.String("model", model.Alias),
-		slog.Int("prompt_tokens", usage.PromptTokens),
-		slog.Int("completion_tokens", usage.CompletionTokens),
-		slog.Int("cache_read_tokens", usage.CachedTokens()),
-		slog.Int("cache_creation_tokens", 0),
-		slog.Int("derived_cache_creation_tokens", result.DerivedCacheCreationTokens),
-		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		slog.Bool("stream", true),
-		slog.String("backend", "codex"),
-		slog.String("provider_path", "provider"),
-		slog.String("finish_reason", finishReason),
-		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
-		slog.Bool("reasoning_visible", result.ReasoningVisible),
-		slog.Int("tool_call_count", result.ToolCallCount),
-		slog.Any("tool_call_names", result.ToolCallNames),
-		slog.Bool("has_subagent_tool_call", result.HasSubagentToolCall),
-	}
+	completedAttrs := codexCompletedAttrs(reqID, model.Alias, usage, result, finishReason, time.Since(started).Milliseconds(), true)
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
@@ -242,25 +255,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
 	writeJSON(w, http.StatusOK, merged)
-	completedAttrs := []slog.Attr{
-		slog.String("request_id", reqID),
-		slog.String("model", model.Alias),
-		slog.Int("prompt_tokens", usage.PromptTokens),
-		slog.Int("completion_tokens", usage.CompletionTokens),
-		slog.Int("cache_read_tokens", usage.CachedTokens()),
-		slog.Int("cache_creation_tokens", 0),
-		slog.Int("derived_cache_creation_tokens", result.DerivedCacheCreationTokens),
-		slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		slog.Bool("stream", false),
-		slog.String("backend", "codex"),
-		slog.String("provider_path", "provider"),
-		slog.String("finish_reason", finishReason),
-		slog.Bool("reasoning_signaled", result.ReasoningSignaled),
-		slog.Bool("reasoning_visible", result.ReasoningVisible),
-		slog.Int("tool_call_count", result.ToolCallCount),
-		slog.Any("tool_call_names", result.ToolCallNames),
-		slog.Bool("has_subagent_tool_call", result.HasSubagentToolCall),
-	}
+	completedAttrs := codexCompletedAttrs(reqID, model.Alias, usage, result, finishReason, time.Since(started).Milliseconds(), false)
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{

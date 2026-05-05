@@ -501,10 +501,6 @@ func (d *collectResponseDispatcher) LogTerminal(ctx context.Context, ev adapterr
 	adapterruntime.LogTerminal(d.server.log, ctx, d.server.deps.RequestEvents, ev)
 }
 
-func (d *collectResponseDispatcher) LogCacheUsageAnthropic(ctx context.Context, backend, reqID, alias string, usage anthropic.Usage) {
-	d.server.logCacheUsageAnthropic(ctx, backend, reqID, alias, usage)
-}
-
 func (d *collectResponseDispatcher) CacheTTL() string {
 	return d.server.cfg.ClientIdentity.PromptCacheTTL
 }
@@ -578,10 +574,6 @@ func (d *streamResponseDispatcher) WriteErrorJSON(_ http.ResponseWriter, _ int, 
 
 func (d *streamResponseDispatcher) LogTerminal(ctx context.Context, ev adapterruntime.RequestEvent) {
 	adapterruntime.LogTerminal(d.server.log, ctx, d.server.deps.RequestEvents, ev)
-}
-
-func (d *streamResponseDispatcher) LogCacheUsageAnthropic(ctx context.Context, backend, reqID, alias string, usage anthropic.Usage) {
-	d.server.logCacheUsageAnthropic(ctx, backend, reqID, alias, usage)
 }
 
 func (d *streamResponseDispatcher) CacheTTL() string {
