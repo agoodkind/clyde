@@ -115,6 +115,7 @@ The adapter is a safety boundary. For model aliases, effort tiers, context budge
 - Preserve adapter-side preflight for known context-window overflows. Do not open an upstream provider turn when Clyde can already tell the request exceeds the resolved model budget.
 - For Cursor/OpenAI-compatible ingress, upstream provider non-2xx failures must be returned as canonical OpenAI error envelopes with a legible `error.message`. Prefer Cursor-safe invalid-request shapes for provider limit conditions, following the Codex context-window pattern. Do not leak provider-specific status/type pairs that trigger Cursor fallback UI, such as mapping an Anthropic 429 directly to OpenAI `rate_limit_error`.
 - Do not log raw prompts, request bodies, response bodies, tokens, credentials, cookies, API keys, or personal data unless an explicit local debugging policy enables sanitized or raw body logging.
+- Reasoning round-trip is per-provider, configured under `[adapter.<provider>.reasoning]`. Anthropic carries one lever (`inbound_thinking`) because it emits a single thinking content block per turn. Codex carries two independent levers (`round_trip_summary` and `round_trip_encrypted`) because Codex Responses puts both visible summary text and the `encrypted_content` memory blob on the same Reasoning item. Codex defaults match codex-rs (`research/codex/codex-rs/core/src/context_manager/history.rs` lines 361 to 405): `native_summary_field` plus `round_trip`. The `encrypted_content` cache is persisted under `~/.local/state/clyde/codex/reasoning/` keyed by `chat_key`, and the inbound mapper looks it up by data-ref.
 
 ## Logging and observability
 
@@ -129,6 +130,8 @@ Use structured `log/slog` logging for production diagnostics. Prefer context-awa
 - Do not use `fmt.Print`, `fmt.Println`, `fmt.Printf`, or standard-library `log.Print` for operational logging. `fmt.Fprint*` is acceptable for intentional user-facing command output.
 
 Put detailed logging setup examples, correlation audits, and backlog tables in logging docs or issue trackers rather than this file.
+
+- Wire capture is per-provider, configured under `[adapter.<provider>.wire_capture]`. Modes are typed per provider: Anthropic accepts `off | summary_only | full`, and Codex accepts `off | summary_only | reasoning_only | full`. A shared rotation budget at `[adapter.wire_capture.rotation]` keeps on-disk volume bounded so always-on use stays safe. Reasoning-only mode is the cheapest path for proving `encrypted_content` arrival on the wire.
 
 ## Debugging and logs
 
