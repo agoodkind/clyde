@@ -7,8 +7,9 @@
 // reasoning blocks, transient quota notices) we wrap synthetic UI bodies in
 // HTML-comment marker pairs and emit them as ordinary delta.content. Every
 // surface that emits synthetic content uses [FormatSyntheticContent], and
-// every backend that needs to scrub these envelopes before reusing the
-// transcript upstream uses [StripSyntheticContent]. Adding a new synthetic
+// every backend that needs to consume these envelopes before reusing the
+// transcript upstream uses [ExtractSyntheticParts] (typed) or
+// [StripSyntheticContent] (text-only convenience). Adding a new synthetic
 // block is a single entry in [syntheticContentSpecs].
 package render
 
@@ -21,13 +22,35 @@ import (
 type SyntheticContentKind string
 
 const (
-	// SyntheticReasoning wraps Cursor-visible reasoning bodies emitted to
-	// delta.content alongside delta.reasoning_content.
+	// SyntheticKindText is the kind assigned to the non-envelope segments of a
+	// piece of assistant content. It is never emitted by Format* helpers; it
+	// only appears in [ExtractSyntheticParts] output so consumers can tell
+	// envelope bodies apart from prose without re-parsing.
+	SyntheticKindText SyntheticContentKind = "text"
+	// SyntheticReasoning (alias SyntheticKindThinking) wraps Cursor-visible
+	// reasoning bodies emitted to delta.content alongside
+	// delta.reasoning_content.
 	SyntheticReasoning SyntheticContentKind = "thinking"
-	// SyntheticNotice wraps transient quota and runtime notices emitted to
-	// delta.content so they render as warning blockquotes in Cursor BYOK.
+	// SyntheticKindThinking is the canonical kind name for round-tripped
+	// reasoning content. It is the same value as [SyntheticReasoning] and
+	// exists so consumers can switch on a "kind" enum without referencing
+	// the older alias.
+	SyntheticKindThinking = SyntheticReasoning
+	// SyntheticNotice (alias SyntheticKindNotice) wraps transient quota and
+	// runtime notices emitted to delta.content so they render as warning
+	// blockquotes in Cursor BYOK.
 	SyntheticNotice SyntheticContentKind = "notice"
+	// SyntheticKindNotice is the canonical kind name for notice content.
+	SyntheticKindNotice = SyntheticNotice
 )
+
+// SyntheticPart is one ordered segment of an assistant content string after
+// envelope detection. Body carries the raw upstream-ready text with all
+// envelope decoration (markers, header line, blockquote prefixes) stripped.
+type SyntheticPart struct {
+	Kind SyntheticContentKind
+	Body string
+}
 
 // syntheticContentSpec describes the rendering and stripping rules for one
 // synthetic content kind. Header is the visible block header rendered inside
@@ -38,6 +61,7 @@ type syntheticContentSpec struct {
 	Header      string
 	QuotePrefix bool
 	stripRE     *regexp.Regexp
+	captureRE   *regexp.Regexp
 }
 
 var syntheticContentSpecs = map[SyntheticContentKind]*syntheticContentSpec{
@@ -53,9 +77,19 @@ var syntheticContentSpecs = map[SyntheticContentKind]*syntheticContentSpec{
 	},
 }
 
+// orderedSyntheticKinds lists the kinds in deterministic order so extraction
+// is reproducible across runs (Go map iteration is not).
+var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, SyntheticNotice}
+
 func init() {
 	for _, spec := range syntheticContentSpecs {
 		spec.stripRE = regexp.MustCompile(`(?s)<!--` + regexp.QuoteMeta(spec.Marker) + `-->.*?<!--/` + regexp.QuoteMeta(spec.Marker) + `-->\s*`)
+		// captureRE matches the envelope and submatches the inner body.
+		// The trailing `\s*` mirrors stripRE so the strip path (which
+		// consumes whitespace between an envelope close and the next
+		// segment) and the extract path agree on where one part ends
+		// and the next begins.
+		spec.captureRE = regexp.MustCompile(`(?s)<!--` + regexp.QuoteMeta(spec.Marker) + `-->(.*?)<!--/` + regexp.QuoteMeta(spec.Marker) + `-->\s*`)
 	}
 }
 
@@ -134,19 +168,143 @@ func formatSyntheticBody(spec *syntheticContentSpec, body string, leadingPrefix 
 	return quoted
 }
 
+// stripDecoration reverses formatSyntheticBody: it strips the leading header
+// (if any) and the blockquote prefix, returning the raw body text the original
+// caller passed to [FormatSyntheticContent] / [FormatSyntheticContentDelta].
+//
+// The decorated input begins immediately after the open marker and ends
+// immediately before the close marker (i.e. the captureRE submatch).
+func stripDecoration(spec *syntheticContentSpec, decorated string) string {
+	body := decorated
+	// Capture body sometimes begins with a leading newline because
+	// SyntheticContentOpen ends with "\n" before the header. Drop one
+	// leading newline if present so the header match aligns.
+	body = strings.TrimPrefix(body, "\n")
+	if spec.Header != "" {
+		body = strings.TrimPrefix(body, spec.Header)
+	}
+	if spec.QuotePrefix {
+		// SyntheticContentClose starts with "\n" before the close marker;
+		// drop trailing whitespace so blockquote-line reversal sees clean
+		// terminator.
+		body = strings.TrimRight(body, "\n")
+		// Reverse "\n> " -> "\n" and the leading "> ".
+		body = strings.TrimPrefix(body, "> ")
+		body = strings.ReplaceAll(body, "\n> ", "\n")
+		// A line that was just "> " in the source becomes "" after the
+		// prefix is removed; that is fine because it represents an empty
+		// line in the original body.
+	}
+	return body
+}
+
+// syntheticMatch is one envelope match found inside an assistant content
+// string. It carries enough context to splice the raw Body into a typed part
+// without re-parsing.
+type syntheticMatch struct {
+	kind     SyntheticContentKind
+	start    int
+	end      int
+	bodyTrim string
+}
+
+// ExtractSyntheticParts parses text and returns the ordered list of parts.
+// Envelope segments produce [SyntheticPart] entries with the matching kind and
+// the raw upstream-ready Body (decoration stripped). Non-envelope text
+// segments produce [SyntheticKindText] parts. An empty input returns nil.
+//
+// Consecutive envelope blocks of the same kind produce separate parts;
+// callers that need to merge them can do so explicitly.
+func ExtractSyntheticParts(text string) []SyntheticPart {
+	if text == "" {
+		return nil
+	}
+	var matches []syntheticMatch
+	for _, kind := range orderedSyntheticKinds {
+		spec := syntheticContentSpecs[kind]
+		if !strings.Contains(text, "<!--"+spec.Marker+"-->") {
+			continue
+		}
+		idxs := spec.captureRE.FindAllStringSubmatchIndex(text, -1)
+		for _, idx := range idxs {
+			outerStart, outerEnd := idx[0], idx[1]
+			innerStart, innerEnd := idx[2], idx[3]
+			matches = append(matches, syntheticMatch{
+				kind:     kind,
+				start:    outerStart,
+				end:      outerEnd,
+				bodyTrim: stripDecoration(spec, text[innerStart:innerEnd]),
+			})
+		}
+	}
+	if len(matches) == 0 {
+		return []SyntheticPart{{Kind: SyntheticKindText, Body: text}}
+	}
+	// Insertion sort by start offset; tiny N (matches per assistant turn).
+	for i := 1; i < len(matches); i++ {
+		j := i
+		for j > 0 && matches[j-1].start > matches[j].start {
+			matches[j-1], matches[j] = matches[j], matches[j-1]
+			j--
+		}
+	}
+
+	var parts []SyntheticPart
+	cursor := 0
+	for _, m := range matches {
+		if m.start < cursor {
+			// Overlapping (should not happen with non-greedy regex);
+			// skip to preserve linear order.
+			continue
+		}
+		if m.start > cursor {
+			parts = appendTextPart(parts, text[cursor:m.start])
+		}
+		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim})
+		cursor = m.end
+	}
+	if cursor < len(text) {
+		parts = appendTextPart(parts, text[cursor:])
+	}
+	return parts
+}
+
+func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
+	if text == "" {
+		return parts
+	}
+	// Drop pure-whitespace gap segments introduced by SyntheticContentClose
+	// trailing "\n\n" + the next envelope's leading newline. Preserve
+	// non-whitespace text verbatim so user prose is untouched.
+	if strings.TrimSpace(text) == "" {
+		return parts
+	}
+	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text})
+}
+
 // StripSyntheticContent removes every recognized synthetic envelope from text
 // in one pass so backend mappers can call it once before reusing assistant
 // content for an upstream request. It is idempotent and falls through cleanly
 // when no markers are present.
+//
+// Implemented as a thin wrapper over [ExtractSyntheticParts] joining only Text
+// parts so the two surfaces stay consistent.
 func StripSyntheticContent(text string) string {
 	if text == "" {
 		return ""
 	}
-	for _, spec := range syntheticContentSpecs {
-		if !strings.Contains(text, "<!--"+spec.Marker+"-->") {
+	parts := ExtractSyntheticParts(text)
+	if len(parts) == 1 && parts[0].Kind == SyntheticKindText {
+		// Fast path: no envelopes, return the original input unchanged so
+		// idempotency on already-stripped text is byte-identical.
+		return text
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Kind != SyntheticKindText {
 			continue
 		}
-		text = spec.stripRE.ReplaceAllString(text, "")
+		b.WriteString(p.Body)
 	}
-	return text
+	return b.String()
 }

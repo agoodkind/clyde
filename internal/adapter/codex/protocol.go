@@ -188,10 +188,37 @@ type toolCallState struct {
 
 // SanitizeForUpstreamCache removes every render-owned synthetic envelope
 // (reasoning, notice, future kinds) from assistant text before Codex reuses
-// the transcript on the next upstream turn. It delegates entirely to the
-// shared fabric so all backends agree on which envelopes count as synthetic.
+// the transcript on the next upstream turn.
+//
+// This entry point is the place where Codex applies its
+// inbound_thinking_materialization decision. The default is
+// [config.SyntheticInboundDrop] because the Codex Responses API cannot
+// accept Anthropic-shaped thinking content blocks, and concatenating the
+// reasoning trace as plain text bloats context with no model-side gain on
+// the round-trip path. Operators who want to promote thinking content to
+// plain-text concat can flip
+// [config.AdapterSyntheticContent.Codex.InboundThinkingMaterialization] to
+// `plain_text_concat`; that path is intentionally not wired here yet so the
+// external behavior matches today.
+//
+// Routing the work through [adapterrender.ExtractSyntheticParts] (rather
+// than the older single-pass strip) keeps the Codex path on the same typed
+// parts API as Anthropic so a future config promotion is a one-line change
+// at this site.
 func SanitizeForUpstreamCache(text string) string {
-	return adapterrender.StripSyntheticContent(text)
+	parts := adapterrender.ExtractSyntheticParts(text)
+	if len(parts) == 1 && parts[0].Kind == adapterrender.SyntheticKindText {
+		return parts[0].Body
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Kind != adapterrender.SyntheticKindText {
+			// Drop thinking and notice envelopes; see comment above.
+			continue
+		}
+		b.WriteString(p.Body)
+	}
+	return b.String()
 }
 
 // ClientMetadataWithTurn extends ClientMetadata with the

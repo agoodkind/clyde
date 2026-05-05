@@ -308,16 +308,37 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 	for partIdx, p := range parts {
 		switch p.Type {
 		case "text":
-			// Strip render-owned synthetic envelopes (reasoning, notice,
-			// future kinds) so the cached prefix stays byte-stable across
-			// turns and so Clyde-injected UI affordances are never re-billed
-			// as upstream tokens. Notice emission is already logged by the
-			// runtime gate; do not duplicate here.
-			text := adapterrender.StripSyntheticContent(p.Text)
-			if strings.TrimSpace(text) == "" {
-				continue
+			// Parse the assistant text into typed synthetic parts. The
+			// renderer wraps reasoning content in a Cursor-visible
+			// envelope so the BYOK chat surface can show a thinking
+			// affordance; Cursor replays that envelope back to us on
+			// the next turn. We materialize each kind into its
+			// upstream-native shape so the model retains its own prior
+			// reasoning chain across turns. The default
+			// inbound_thinking_materialization is
+			// `native_thinking_block` for Anthropic; see
+			// [config.AdapterSyntheticContent] for the lever.
+			parts := adapterrender.ExtractSyntheticParts(p.Text)
+			for _, sp := range parts {
+				switch sp.Kind {
+				case adapterrender.SyntheticKindThinking:
+					body := strings.TrimSpace(sp.Body)
+					if body == "" {
+						continue
+					}
+					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body})
+				case adapterrender.SyntheticKindNotice:
+					// Notices are user-facing UI annotations only; do
+					// not forward them upstream where they would be
+					// re-billed as input tokens.
+					continue
+				case adapterrender.SyntheticKindText:
+					if strings.TrimSpace(sp.Body) == "" {
+						continue
+					}
+					blocks = append(blocks, AnthContentBlock{Type: "text", Text: sp.Body})
+				}
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: text})
 		case "image_url":
 			if p.ImageURL == nil {
 				continue
@@ -341,11 +362,27 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage) ([]AnthConten
 			)
 			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
 		case "refusal":
-			refusal := adapterrender.StripSyntheticContent(p.Refusal)
-			if strings.TrimSpace(refusal) == "" {
-				continue
+			// Mirror the assistant-text path: a refusal block can also
+			// carry a marker-wrapped thinking envelope from Cursor's
+			// replay. Materialize per the same per-provider rules.
+			parts := adapterrender.ExtractSyntheticParts(p.Refusal)
+			for _, sp := range parts {
+				switch sp.Kind {
+				case adapterrender.SyntheticKindThinking:
+					body := strings.TrimSpace(sp.Body)
+					if body == "" {
+						continue
+					}
+					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body})
+				case adapterrender.SyntheticKindNotice:
+					continue
+				case adapterrender.SyntheticKindText:
+					if strings.TrimSpace(sp.Body) == "" {
+						continue
+					}
+					blocks = append(blocks, AnthContentBlock{Type: "text", Text: sp.Body})
+				}
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: refusal})
 		case "tool_use":
 			input := p.Input
 			if len(input) == 0 {
