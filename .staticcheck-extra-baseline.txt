@@ -1,6 +1,41 @@
-# staticcheck-extra: generated_at=2026-05-04T05:12:15Z
-cmd/root.go:227:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
-cmd/root.go:342:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
-cmd/root.go:452:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
-cmd/root.go:504:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
-cmd/root.go:554:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-04T05:12:15Z
+# staticcheck-extra: generated_at=2026-05-05T00:47:17Z
+cmd/root.go:227:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-05T00:47:17Z
+cmd/root.go:342:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-05T00:47:17Z
+cmd/root.go:452:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-05T00:47:17Z
+cmd/root.go:504:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-05T00:47:17Z
+cmd/root.go:554:14: nolint comment suppresses linter findings inline; document exceptions in the staticcheck-extra baseline or a golangci-lint issue-exclusion rule instead	# staticcheck-extra:first_added=2026-05-04T04:18:26Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/anthropic/logging.go:100:40: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:129:34: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:149:33: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:159:48: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:213:48: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:231:34: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:26:44: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:260:36: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:268:21: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:38:49: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:91:48: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/canonical_items.go:91:64: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/events.go:27:29: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/logging.go:475:43: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/codex/logging.go:487:38: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/runtime/notice.go:18:22: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/server_dispatch.go:535:41: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/server_passthrough_override.go:178:45: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/adapter/server.go:388:51: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/proxy.go:261:46: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/proxy.go:275:33: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/proxy.go:290:23: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/proxy.go:290:28: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/proxy.go:319:49: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:107:20: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:235:40: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:251:38: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:268:40: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:374:26: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:453:49: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:523:28: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:565:21: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/snapshot_v2.go:583:38: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/mitm/ws_capture.go:213:45: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
+internal/ui/app.go:2531:34: do not use any; define a deeply enumerated named type	# staticcheck-extra:first_added=2026-05-05T00:47:17Z last_seen=2026-05-05T00:47:17Z
