@@ -1,8 +1,9 @@
-// Package slogger transcript_router routes records that carry a chat_key
-// attribute into chats/<chat_key>/<YYYY-MM-DD>/<request_id>.jsonl files
-// alongside the existing concern handlers. Only an explicit allowlist of msg
-// names is teed; everything else is unaffected.
 package slogger
+
+// File transcript_router contains the per-chat slog tee. Records that carry a
+// chat_key attribute are appended to chats/<chat_key>.jsonl alongside their
+// existing concern files. One file per chat; every turn of the chat appends
+// to the same file. Only an explicit allowlist of msg names is teed.
 
 import (
 	"context"
@@ -57,19 +58,21 @@ var transcriptStrippedBodyFields = map[string]struct{}{
 
 // TranscriptRouterConfig configures the per-chat file router.
 type TranscriptRouterConfig struct {
-	// Root is the directory under which chats/<chat_key>/<date>/ files
-	// are written. Typically <state>/clyde/logs/chats.
+	// Root is the directory under which <chat_key>.jsonl files are written.
+	// Typically <state>/clyde/logs/chats.
 	Root string
 	// Mode is summary or raw.
 	Mode TranscriptMode
 	// PoolCap caps simultaneously open file handles. Zero falls back to
 	// transcriptDefaultPoolCap.
 	PoolCap int
-	// Now is injectable for tests. Defaults to time.Now.
+	// Now is injectable for tests. Defaults to time.Now. Retained for
+	// future per-record fields; the file path itself does not depend on a
+	// timestamp.
 	Now func() time.Time
 }
 
-// TranscriptRouter is an slog.Handler that tees allowlisted records into
+// TranscriptRouter is an [slog.Handler] that tees allowlisted records into
 // per-chat JSONL files. Records without a chat_key, with a sanitized chat_key
 // that is empty, or with a msg outside the allowlist are dropped silently.
 //
@@ -94,7 +97,7 @@ type transcriptHandle struct {
 }
 
 // NewTranscriptRouter constructs a router with the given config. The router
-// implements slog.Handler and is safe for concurrent use.
+// implements [slog.Handler] and is safe for concurrent use.
 func NewTranscriptRouter(cfg TranscriptRouterConfig) *TranscriptRouter {
 	if cfg.PoolCap <= 0 {
 		cfg.PoolCap = transcriptDefaultPoolCap
@@ -113,20 +116,24 @@ func NewTranscriptRouter(cfg TranscriptRouterConfig) *TranscriptRouter {
 	}
 }
 
-// Enabled implements slog.Handler. The router is unconditionally enabled at
+// Enabled implements [slog.Handler]. The router is unconditionally enabled at
 // the level the caller produced; the allowlist filters by msg name later.
-func (r *TranscriptRouter) Enabled(_ context.Context, _ slog.Level) bool {
+func (*TranscriptRouter) Enabled(_ context.Context, _ slog.Level) bool {
 	return true
 }
 
-// Handle implements slog.Handler. Non-allowlisted msgs and records without a
+// Handle implements [slog.Handler]. Non-allowlisted msgs and records without a
 // resolvable chat_key are dropped without error. Write failures are returned
 // so the upstream tee handler can surface them.
+//
+// The per-chat file path is <Root>/<sanitized_chat_key>.jsonl. Every turn of
+// the same chat appends to the same file; turn boundaries are visible in the
+// records themselves via request_id and msg fields.
 func (r *TranscriptRouter) Handle(ctx context.Context, record slog.Record) error {
 	if _, ok := transcriptAllowlist[record.Message]; !ok {
 		return nil
 	}
-	chatKey, requestID := r.extractKeys(record)
+	chatKey, _ := r.extractKeys(record)
 	if chatKey == "" {
 		return nil
 	}
@@ -134,13 +141,8 @@ func (r *TranscriptRouter) Handle(ctx context.Context, record slog.Record) error
 	if sanitized == "" {
 		return nil
 	}
-	if requestID == "" {
-		requestID = "no-request-id"
-	}
-	requestID = sanitizeChatKey(requestID)
 
-	date := r.state.cfg.Now().UTC().Format("2006-01-02")
-	relPath := filepath.Join(sanitized, date, requestID+".jsonl")
+	relPath := sanitized + ".jsonl"
 
 	payload, err := r.encodeRecord(record)
 	if err != nil {
@@ -158,7 +160,8 @@ func (r *TranscriptRouter) Handle(ctx context.Context, record slog.Record) error
 	if err != nil {
 		return err
 	}
-	if _, err := handle.file.Write(payload); err != nil {
+	_, err = handle.file.Write(payload)
+	if err != nil {
 		slog.WarnContext(ctx, "transcript.write_failed",
 			"component", "transcript-router",
 			"err", err,
@@ -169,7 +172,7 @@ func (r *TranscriptRouter) Handle(ctx context.Context, record slog.Record) error
 	return nil
 }
 
-// WithAttrs implements slog.Handler. The clone shares the underlying LRU pool
+// WithAttrs implements [slog.Handler]. The clone shares the underlying LRU pool
 // state so all derived loggers route into the same per-chat files.
 func (r *TranscriptRouter) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &TranscriptRouter{
@@ -179,7 +182,7 @@ func (r *TranscriptRouter) WithAttrs(attrs []slog.Attr) slog.Handler {
 	}
 }
 
-// WithGroup implements slog.Handler. Groups are tracked but not used for
+// WithGroup implements [slog.Handler]. Groups are tracked but not used for
 // routing; the router only cares about top-level chat_key/request_id attrs.
 func (r *TranscriptRouter) WithGroup(name string) slog.Handler {
 	return &TranscriptRouter{
@@ -195,7 +198,8 @@ func (r *TranscriptRouter) Close() error {
 	defer r.state.mu.Unlock()
 	var errs []error
 	for _, h := range r.state.cache {
-		if err := h.file.Close(); err != nil {
+		err := h.file.Close()
+		if err != nil {
 			slog.Warn("transcript.close_failed",
 				"component", "transcript-router",
 				"path", h.path,
@@ -234,17 +238,17 @@ func (r *TranscriptRouter) encodeRecord(record slog.Record) ([]byte, error) {
 	out := make(map[string]json.RawMessage, record.NumAttrs()+4)
 	tsBytes, err := json.Marshal(record.Time.UTC().Format(time.RFC3339Nano))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("transcript: marshal time: %w", err)
 	}
 	out["time"] = tsBytes
 	lvlBytes, err := json.Marshal(record.Level.String())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("transcript: marshal level: %w", err)
 	}
 	out["level"] = lvlBytes
 	msgBytes, err := json.Marshal(record.Message)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("transcript: marshal msg: %w", err)
 	}
 	out["msg"] = msgBytes
 
@@ -256,7 +260,12 @@ func (r *TranscriptRouter) encodeRecord(record slog.Record) ([]byte, error) {
 		}
 		raw, err := json.Marshal(attr.Value.Any())
 		if err != nil {
-			return err
+			slog.Warn("transcript.marshal_attr_failed",
+				"component", "transcript-router",
+				"attr_key", attr.Key,
+				"err", err,
+			)
+			return fmt.Errorf("transcript: marshal attr %q: %w", attr.Key, err)
 		}
 		out[attr.Key] = raw
 		return nil
@@ -265,7 +274,8 @@ func (r *TranscriptRouter) encodeRecord(record slog.Record) ([]byte, error) {
 		if attr.Key == "" {
 			continue
 		}
-		if err := addAttr(attr); err != nil {
+		err = addAttr(attr)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -274,7 +284,8 @@ func (r *TranscriptRouter) encodeRecord(record slog.Record) ([]byte, error) {
 		if attr.Key == "" {
 			return true
 		}
-		if err := addAttr(attr); err != nil {
+		err := addAttr(attr)
+		if err != nil {
 			attrErr = err
 			return false
 		}
@@ -285,7 +296,11 @@ func (r *TranscriptRouter) encodeRecord(record slog.Record) ([]byte, error) {
 	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
-		return nil, err
+		slog.Warn("transcript.marshal_record_failed",
+			"component", "transcript-router",
+			"err", err,
+		)
+		return nil, fmt.Errorf("transcript: marshal record: %w", err)
 	}
 	return append(encoded, '\n'), nil
 }
@@ -296,12 +311,14 @@ func (s *transcriptRouterState) acquireLocked(relPath string) (*transcriptHandle
 		return h, nil
 	}
 	if len(s.cache) >= s.cfg.PoolCap {
-		if err := s.evictOldestLocked(); err != nil {
+		err := s.evictOldestLocked()
+		if err != nil {
 			return nil, err
 		}
 	}
 	full := filepath.Join(s.cfg.Root, relPath)
-	if err := os.MkdirAll(filepath.Dir(full), transcriptDirPerm); err != nil {
+	err := os.MkdirAll(filepath.Dir(full), transcriptDirPerm)
+	if err != nil {
 		slog.Warn("transcript.mkdir_failed",
 			"component", "transcript-router",
 			"path", filepath.Dir(full),
@@ -345,7 +362,8 @@ func (s *transcriptRouterState) evictOldestLocked() error {
 		return nil
 	}
 	delete(s.cache, victim)
-	if err := h.file.Close(); err != nil {
+	err := h.file.Close()
+	if err != nil {
 		slog.Warn("transcript.evict_close_failed",
 			"component", "transcript-router",
 			"path", h.path,
@@ -368,24 +386,24 @@ func sanitizeChatKey(s string) string {
 	}
 	var b strings.Builder
 	b.Grow(len(s))
-	any := false
+	hasAccepted := false
 	for _, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
 			b.WriteRune(r)
-			any = true
+			hasAccepted = true
 		default:
 			b.WriteRune('_')
 		}
 	}
-	if !any {
+	if !hasAccepted {
 		return ""
 	}
 	return b.String()
 }
 
 // transcriptRouterCloser bridges the router into the existing tee handler
-// chain so Setup can return a single io.Closer that flushes both the file
+// chain so Setup can return a single [io.Closer] that flushes both the file
 // handlers and the router's open handle pool.
 type transcriptRouterCloser struct {
 	router *TranscriptRouter
@@ -395,7 +413,8 @@ type transcriptRouterCloser struct {
 func (c *transcriptRouterCloser) Close() error {
 	var errs []error
 	if c.inner != nil {
-		if err := c.inner.Close(); err != nil {
+		err := c.inner.Close()
+		if err != nil {
 			slog.Warn("transcript.inner_close_failed",
 				"component", "transcript-router",
 				"err", err,
@@ -404,7 +423,8 @@ func (c *transcriptRouterCloser) Close() error {
 		}
 	}
 	if c.router != nil {
-		if err := c.router.Close(); err != nil {
+		err := c.router.Close()
+		if err != nil {
 			slog.Warn("transcript.router_close_failed",
 				"component", "transcript-router",
 				"err", err,

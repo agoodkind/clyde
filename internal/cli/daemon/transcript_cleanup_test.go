@@ -12,11 +12,10 @@ import (
 
 func writeTranscriptFixture(t *testing.T, root, chat string, mtime time.Time) {
 	t.Helper()
-	dir := filepath.Join(root, chat, mtime.UTC().Format("2006-01-02"))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(dir, "req-1.jsonl")
+	file := filepath.Join(root, chat+".jsonl")
 	if err := os.WriteFile(file, []byte("{\"msg\":\"x\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -38,10 +37,10 @@ func TestTranscriptCleanupEvictsByMaxAge(t *testing.T) {
 
 	runTranscriptCleanup(context.Background(), nullLog(), root, 7*24*time.Hour, 100, func() time.Time { return now })
 
-	if _, err := os.Stat(filepath.Join(root, "young")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "young.jsonl")); err != nil {
 		t.Errorf("young should remain: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "stale")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "stale.jsonl")); !os.IsNotExist(err) {
 		t.Errorf("stale should be removed, stat err: %v", err)
 	}
 }
@@ -59,12 +58,12 @@ func TestTranscriptCleanupEvictsByMaxChats(t *testing.T) {
 	runTranscriptCleanup(context.Background(), nullLog(), root, 7*24*time.Hour, 2, func() time.Time { return now })
 
 	for _, want := range []string{"newer", "newest"} {
-		if _, err := os.Stat(filepath.Join(root, want)); err != nil {
+		if _, err := os.Stat(filepath.Join(root, want+".jsonl")); err != nil {
 			t.Errorf("%s should remain: %v", want, err)
 		}
 	}
 	for _, gone := range []string{"oldest", "older"} {
-		if _, err := os.Stat(filepath.Join(root, gone)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(root, gone+".jsonl")); !os.IsNotExist(err) {
 			t.Errorf("%s should be removed, stat err: %v", gone, err)
 		}
 	}

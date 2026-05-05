@@ -55,8 +55,8 @@ type LoggingConfig struct {
 	Transcript LoggingTranscript `json:"transcript,omitzero" toml:"transcript,omitempty"`
 }
 
-// LoggingTranscript controls the per-chat transcript router that tees a curated
-// allowlist of records to chats/<chat_key>/<YYYY-MM-DD>/<request_id>.jsonl.
+// LoggingTranscript controls the per-chat transcript router that tees a
+// curated allowlist of records to chats/<chat_key>.jsonl, one file per chat.
 // The router is feature-off when MaxAgeDays or MaxChats is zero so the
 // retention loop is always paired with a writer.
 type LoggingTranscript struct {

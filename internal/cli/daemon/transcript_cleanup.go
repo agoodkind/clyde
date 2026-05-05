@@ -14,9 +14,9 @@ import (
 )
 
 // transcriptCleanupLoop returns a daemonsvc.ExtraLoop that hourly walks the
-// per-chat transcript root and evicts directories that exceed the configured
-// max-age and max-chat retention. Disabled when the transcript feature is
-// off.
+// per-chat transcript root and evicts <chat_key>.jsonl files that exceed the
+// configured max-age and max-chat retention. Disabled when the transcript
+// feature is off.
 func transcriptCleanupLoop() daemonsvc.ExtraLoop {
 	return func(log *slog.Logger) func() {
 		cfg, err := config.LoadGlobalOrDefault()
@@ -85,6 +85,14 @@ func transcriptRoot(cfg *config.Config) string {
 	return filepath.Join(filepath.Dir(base), "logs", "chats")
 }
 
+// transcriptChatFile is a single per-chat transcript file under the root with
+// its modification time, used as the unit of cleanup-loop bookkeeping.
+type transcriptChatFile struct {
+	name string
+	path string
+	mod  time.Time
+}
+
 // runTranscriptCleanup executes one cleanup pass. Exposed package-private for
 // tests with an injected now func.
 func runTranscriptCleanup(
@@ -107,52 +115,9 @@ func runTranscriptCleanup(
 		)
 		return
 	}
-	type chatDir struct {
-		name      string
-		path      string
-		newestMod time.Time
-	}
-	chats := make([]chatDir, 0, len(entries))
 	cutoff := now().Add(-maxAge)
-	evictedAge := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		dirPath := filepath.Join(root, entry.Name())
-		newest := newestFileMtime(dirPath)
-		if !newest.IsZero() && newest.Before(cutoff) {
-			if err := os.RemoveAll(dirPath); err != nil {
-				log.LogAttrs(ctx, slog.LevelWarn, "transcript.cleanup.remove_failed",
-					slog.String("component", "transcript-cleanup"),
-					slog.String("path", dirPath),
-					slog.Any("err", err),
-				)
-				continue
-			}
-			evictedAge++
-			continue
-		}
-		chats = append(chats, chatDir{name: entry.Name(), path: dirPath, newestMod: newest})
-	}
-	evictedCount := 0
-	if len(chats) > maxChats {
-		sort.Slice(chats, func(i, j int) bool {
-			return chats[i].newestMod.Before(chats[j].newestMod)
-		})
-		excess := len(chats) - maxChats
-		for i := 0; i < excess; i++ {
-			if err := os.RemoveAll(chats[i].path); err != nil {
-				log.LogAttrs(ctx, slog.LevelWarn, "transcript.cleanup.remove_failed",
-					slog.String("component", "transcript-cleanup"),
-					slog.String("path", chats[i].path),
-					slog.Any("err", err),
-				)
-				continue
-			}
-			evictedCount++
-		}
-	}
+	chats, evictedAge := evictAgedTranscriptFiles(ctx, log, root, entries, cutoff)
+	evictedCount := evictExcessTranscriptFiles(ctx, log, chats, maxChats)
 	log.LogAttrs(ctx, slog.LevelInfo, "transcript.cleanup.tick_completed",
 		slog.String("component", "transcript-cleanup"),
 		slog.Int("evicted_age", evictedAge),
@@ -161,23 +126,77 @@ func runTranscriptCleanup(
 	)
 }
 
-func newestFileMtime(dir string) time.Time {
-	var newest time.Time
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+// evictAgedTranscriptFiles removes per-chat files whose mtime is older than
+// cutoff and returns the surviving files plus the eviction count. Directories
+// (stale per-turn layout from earlier versions) are skipped silently.
+func evictAgedTranscriptFiles(
+	ctx context.Context,
+	log *slog.Logger,
+	root string,
+	entries []os.DirEntry,
+	cutoff time.Time,
+) ([]transcriptChatFile, int) {
+	chats := make([]transcriptChatFile, 0, len(entries))
+	evictedAge := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		filePath := filepath.Join(root, entry.Name())
+		info, err := entry.Info()
 		if err != nil {
-			return nil
+			continue
 		}
-		if d.IsDir() {
-			return nil
+		mod := info.ModTime()
+		if !mod.IsZero() && mod.Before(cutoff) {
+			err = os.Remove(filePath)
+			if err != nil {
+				log.LogAttrs(ctx, slog.LevelWarn, "transcript.cleanup.remove_failed",
+					slog.String("component", "transcript-cleanup"),
+					slog.String("path", filePath),
+					slog.Any("err", err),
+				)
+				continue
+			}
+			evictedAge++
+			continue
 		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-		return nil
+		chats = append(chats, transcriptChatFile{name: entry.Name(), path: filePath, mod: mod})
+	}
+	return chats, evictedAge
+}
+
+// evictExcessTranscriptFiles enforces the max-chats cap by mtime LRU and
+// returns the eviction count. The chats slice is sorted in place when
+// eviction is needed.
+func evictExcessTranscriptFiles(
+	ctx context.Context,
+	log *slog.Logger,
+	chats []transcriptChatFile,
+	maxChats int,
+) int {
+	if len(chats) <= maxChats {
+		return 0
+	}
+	sort.Slice(chats, func(i, j int) bool {
+		return chats[i].mod.Before(chats[j].mod)
 	})
-	return newest
+	excess := len(chats) - maxChats
+	evicted := 0
+	for i := range excess {
+		err := os.Remove(chats[i].path)
+		if err != nil {
+			log.LogAttrs(ctx, slog.LevelWarn, "transcript.cleanup.remove_failed",
+				slog.String("component", "transcript-cleanup"),
+				slog.String("path", chats[i].path),
+				slog.Any("err", err),
+			)
+			continue
+		}
+		evicted++
+	}
+	return evicted
 }

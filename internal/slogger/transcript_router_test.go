@@ -70,10 +70,10 @@ func TestTranscriptRouterSanitizesPathTraversal(t *testing.T) {
 		slog.String("chat_key", "../../etc/passwd"),
 		slog.String("request_id", "req-1"),
 	)
-	// All non-safe runes become _, so the directory name lives entirely under root.
-	chatDir := filepath.Join(root, "______etc_passwd")
-	if _, err := os.Stat(chatDir); err != nil {
-		t.Fatalf("expected sanitized chat dir, stat err: %v", err)
+	// All non-safe runes become _, so the file name lives directly under root.
+	chatFile := filepath.Join(root, "______etc_passwd.jsonl")
+	if _, err := os.Stat(chatFile); err != nil {
+		t.Fatalf("expected sanitized chat file, stat err: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "..", "etc", "passwd")); err == nil {
 		t.Fatalf("traversal escaped root")
@@ -90,7 +90,7 @@ func TestTranscriptRouterSummaryStripsBodyFields(t *testing.T) {
 		slog.String("body_b64", "c2VjcmV0"),
 		slog.String("model", "opus"),
 	)
-	data, err := os.ReadFile(filepath.Join(root, "k1", "2026-05-04", "req-1.jsonl"))
+	data, err := os.ReadFile(filepath.Join(root, "k1.jsonl"))
 	if err != nil {
 		t.Fatalf("read transcript: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestTranscriptRouterRawKeepsBody(t *testing.T) {
 		slog.String("request_id", "req-1"),
 		slog.String("body", "raw-body"),
 	)
-	data, err := os.ReadFile(filepath.Join(root, "k1", "2026-05-04", "req-1.jsonl"))
+	data, err := os.ReadFile(filepath.Join(root, "k1.jsonl"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -146,9 +146,8 @@ func TestTranscriptRouterLRUEviction(t *testing.T) {
 	}
 	// All three files exist on disk; eviction only closes the LRU handle.
 	for _, key := range []string{"a", "b", "c"} {
-		matches, _ := filepath.Glob(filepath.Join(root, key, "2026-05-04", "*.jsonl"))
-		if len(matches) != 1 {
-			t.Fatalf("chat %s: want 1 file, got %d", key, len(matches))
+		if _, err := os.Stat(filepath.Join(root, key+".jsonl")); err != nil {
+			t.Fatalf("chat %s: missing transcript file: %v", key, err)
 		}
 	}
 }
@@ -174,7 +173,7 @@ func TestTranscriptRouterConcurrentWriters(t *testing.T) {
 		}(w)
 	}
 	wg.Wait()
-	data, err := os.ReadFile(filepath.Join(root, "shared", "2026-05-04", "req-shared.jsonl"))
+	data, err := os.ReadFile(filepath.Join(root, "shared.jsonl"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
