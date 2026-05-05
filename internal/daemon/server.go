@@ -67,9 +67,8 @@ type Server struct {
 
 	// subscribers receive registry events as they happen. The mutex
 	// guards the map so subscribe and broadcast can run concurrently.
-	subMu        sync.Mutex
-	subscribers  map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState
-	binaryUpdate *clydev1.SubscribeRegistryResponse
+	subMu       sync.Mutex
+	subscribers map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState
 
 	// settingsLocks serialises writes per session name so two callers
 	// updating the same session do not stomp on each other. The lock
@@ -212,23 +211,7 @@ func New(log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("failed to create settings watcher: %w", err)
 	}
 
-	s := &Server{
-		log:               log,
-		sessions:          make(map[string]*wrapperSession),
-		watcher:           watcher,
-		bridgeWatcher:     nil,
-		scanWake:          make(chan discoveryScanSignal, 4),
-		subscribers:       make(map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState),
-		settingsLocks:     make(map[string]*sync.Mutex),
-		bridges:           make(map[string]*clydev1.Bridge),
-		transcripts:       newTranscriptHub(),
-		providerStats:     newProviderStatsHub(log),
-		remoteWorkers:     make(map[string]*remoteWorker),
-		liveSessions:      make(map[string]*liveRuntimeSession),
-		liveLeases:        make(map[string]*foregroundLease),
-		contextStates:     make(map[string]sessionContextState),
-		contextRefreshSem: make(chan contextRefreshPermit, 2),
-	}
+	s := newServerState(log, watcher)
 
 	globalPath := globalSettingsPath()
 	if err := s.loadGlobalSettings(context.Background()); err != nil {
@@ -305,6 +288,37 @@ func New(log *slog.Logger) (*Server, error) {
 	}
 
 	return s, nil
+}
+
+func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
+	return &Server{
+		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
+		log:                             log,
+		mu:                              sync.RWMutex{},
+		sessions:                        make(map[string]*wrapperSession),
+		watcher:                         watcher,
+		bridgeWatcher:                   nil,
+		globalSettings:                  nil,
+		scanWake:                        make(chan discoveryScanSignal, 4),
+		subMu:                           sync.Mutex{},
+		subscribers:                     make(map[chan *clydev1.SubscribeRegistryResponse]registrySubscriberState),
+		settingsLocksMu:                 sync.Mutex{},
+		settingsLocks:                   make(map[string]*sync.Mutex),
+		bridgeMu:                        sync.RWMutex{},
+		bridges:                         make(map[string]*clydev1.Bridge),
+		transcripts:                     newTranscriptHub(),
+		providerStats:                   newProviderStatsHub(log),
+		remoteMu:                        sync.Mutex{},
+		remoteWorkers:                   make(map[string]*remoteWorker),
+		liveSessions:                    make(map[string]*liveRuntimeSession),
+		liveLeases:                      make(map[string]*foregroundLease),
+		contextMu:                       sync.Mutex{},
+		contextStates:                   make(map[string]sessionContextState),
+		contextRefreshSem:               make(chan contextRefreshPermit, 2),
+		reloadMu:                        sync.Mutex{},
+		reloadFn:                        nil,
+		skipRuntimeCleanup:              atomic.Bool{},
+	}
 }
 
 // runBridgeWatcher consumes bridge events from the watcher and
@@ -434,17 +448,7 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 
 	s.subMu.Lock()
 	s.subscribers[ch] = true
-	var binaryUpdate *clydev1.SubscribeRegistryResponse
-	if s.binaryUpdate != nil {
-		binaryUpdate = proto.Clone(s.binaryUpdate).(*clydev1.SubscribeRegistryResponse)
-	}
 	s.subMu.Unlock()
-	if binaryUpdate != nil {
-		select {
-		case ch <- binaryUpdate:
-		default:
-		}
-	}
 
 	defer func() {
 		s.subMu.Lock()
@@ -658,19 +662,6 @@ func (s *Server) publishGlobalSettingsEvent(globalRemoteControl bool) {
 		Kind:                clydev1.SubscribeRegistryResponse_KIND_GLOBAL_SETTINGS_UPDATED,
 		GlobalRemoteControl: globalRemoteControl,
 	})
-}
-
-func (s *Server) publishBinaryUpdate(path, reason, hash string) {
-	ev := &clydev1.SubscribeRegistryResponse{
-		Kind:         clydev1.SubscribeRegistryResponse_KIND_CLYDE_BINARY_UPDATED,
-		BinaryPath:   path,
-		BinaryReason: reason,
-		BinaryHash:   hash,
-	}
-	s.subMu.Lock()
-	s.binaryUpdate = ev
-	s.subMu.Unlock()
-	s.publishEvent(ev)
 }
 
 // Close shuts down the watcher and cleans up all active session runtime dirs.

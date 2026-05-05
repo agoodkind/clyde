@@ -27,12 +27,19 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/adapter"
+	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/webapp"
+)
+
+var (
+	daemonExecutablePath     = os.Executable
+	daemonReplacementCommand = exec.Command
+	errDaemonAlreadyRunning  = errors.New("daemon already running")
 )
 
 // ExtraLoop is an optional background goroutine the daemon owner can
@@ -126,53 +133,101 @@ type daemonRuntime struct {
 	reloadLock sync.Mutex
 }
 
-// Run starts the daemon gRPC server on the XDG runtime Unix socket
-// and, when the user enables it, the OpenAI compatible HTTP adapter
-// on a local port. A single launchd entry boots both layers so the
-// monolith stays one process. Additional opt-in background loops
-// (prune, oauth refresh) are passed in by the caller.
-func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
-	log = slogger.WithConcern(log, slogger.ConcernProcessDaemonLifecycle)
-	if err := config.EnsureRuntimeDir(); err != nil {
-		return err
-	}
+type exclusiveSubsystems struct {
+	log         *slog.Logger
+	reloadChild bool
+	extraLoops  []ExtraLoop
 
+	mu       sync.Mutex
+	cancels  []func()
+	stopped  bool
+	stopOnce sync.Once
+}
+
+type processLockState struct {
+	lockHeld     atomic.Bool
+	lockAcquired chan struct{}
+	release      func(string)
+}
+
+func (s *exclusiveSubsystems) addCancel(cancel func()) {
+	if cancel == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancels = append(s.cancels, cancel)
+}
+
+func (s *exclusiveSubsystems) stop(reason string) {
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		s.stopped = true
+		cancels := append([]func(){}, s.cancels...)
+		s.cancels = nil
+		s.mu.Unlock()
+		for _, cancel := range slices.Backward(cancels) {
+			cancel()
+		}
+		s.log.Info("daemon.exclusive_subsystems.stopped",
+			"component", "daemon",
+			"reason", reason,
+		)
+	})
+}
+
+func (s *exclusiveSubsystems) start() {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	for _, loop := range s.extraLoops {
+		if loop == nil {
+			continue
+		}
+		if cancel := loop(s.log); cancel != nil {
+			s.cancels = append(s.cancels, cancel)
+		}
+	}
+	s.mu.Unlock()
+	s.log.Info("daemon.exclusive_subsystems.started",
+		"component", "daemon",
+		"reload_child", s.reloadChild,
+	)
+}
+
+func startExclusiveSubsystemsAfterLock(log *slog.Logger, lockAcquired <-chan struct{}, subsystems *exclusiveSubsystems) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("daemon.exclusive_subsystems.start_panicked",
+					"component", "daemon",
+					"panic", r,
+				)
+			}
+		}()
+		<-lockAcquired
+		subsystems.start()
+	}()
+}
+
+func acquireDaemonProcessLock(log *slog.Logger, reloadChild bool) (*processLockState, error) {
 	lockPath := filepath.Join(config.RuntimeDir(), "daemon.process.lock")
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return fmt.Errorf("open daemon process lock: %w", err)
+		return nil, fmt.Errorf("open daemon process lock: %w", err)
 	}
-	reloadChild := os.Getenv(envDaemonReloadChild) == "1"
-	var lockHeld atomic.Bool
+
+	state := &processLockState{
+		lockHeld:     atomic.Bool{},
+		lockAcquired: make(chan struct{}),
+		release:      nil,
+	}
 	var lockReleaseOnce sync.Once
-	lockAcquired := make(chan struct{})
-	if reloadChild {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Warn("daemon.reload_child.lock_goroutine_panicked",
-						"component", "daemon",
-						"lock_path", lockPath,
-						"panic", r,
-					)
-				}
-			}()
-			acquireReloadChildProcessLock(log, lockFile, lockPath, &lockHeld, lockAcquired)
-		}()
-	} else {
-		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			_ = lockFile.Close()
-			log.Info("daemon.already_running",
-				"component", "daemon",
-				"lock_path", lockPath)
-			return nil
-		}
-		lockHeld.Store(true)
-		close(lockAcquired)
-	}
-	releaseProcessLock := func(reason string) {
+	state.release = func(reason string) {
 		lockReleaseOnce.Do(func() {
-			if lockHeld.Swap(false) {
+			if state.lockHeld.Swap(false) {
 				if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN); err != nil {
 					log.Warn("daemon.process_lock.release_failed",
 						"component", "daemon",
@@ -191,7 +246,54 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 			_ = lockFile.Close()
 		})
 	}
-	defer releaseProcessLock("exit")
+
+	if reloadChild {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Warn("daemon.reload_child.lock_goroutine_panicked",
+						"component", "daemon",
+						"lock_path", lockPath,
+						"panic", r,
+					)
+				}
+			}()
+			acquireReloadChildProcessLock(log, lockFile, lockPath, &state.lockHeld, state.lockAcquired)
+		}()
+		return state, nil
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		log.Info("daemon.already_running",
+			"component", "daemon",
+			"lock_path", lockPath)
+		return nil, errDaemonAlreadyRunning
+	}
+	state.lockHeld.Store(true)
+	close(state.lockAcquired)
+	return state, nil
+}
+
+// Run starts the daemon gRPC server on the XDG runtime Unix socket
+// and, when the user enables it, the OpenAI compatible HTTP adapter
+// on a local port. A single launchd entry boots both layers so the
+// monolith stays one process. Additional opt-in background loops
+// (prune, oauth refresh) are passed in by the caller.
+func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
+	log = slogger.WithConcern(log, slogger.ConcernProcessDaemonLifecycle)
+	if err := config.EnsureRuntimeDir(); err != nil {
+		return err
+	}
+
+	reloadChild := os.Getenv(envDaemonReloadChild) == "1"
+	processLock, err := acquireDaemonProcessLock(log, reloadChild)
+	if err != nil {
+		if errors.Is(err, errDaemonAlreadyRunning) {
+			return nil
+		}
+		return err
+	}
+	defer processLock.release("exit")
 
 	socketPath := config.DaemonSocketPath()
 
@@ -216,13 +318,10 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	)
 	clydev1.RegisterClydeServiceServer(grpcServer, srv)
 
-	rt := &daemonRuntime{listener: listener}
-
 	adapterCtrl, adapterCancel, err := startAdapter(log, srv, inherited.listeners[listenerNameAdapter])
 	if err != nil {
 		return fmt.Errorf("adapter startup: %w", err)
 	}
-	rt.adapter = adapterCtrl
 	webProc, err := startWebApp(log, srv, inherited.listeners[listenerNameWebApp])
 	if err != nil {
 		if adapterCancel != nil {
@@ -230,82 +329,13 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 		}
 		return fmt.Errorf("webapp startup: %w", err)
 	}
-	rt.webapp = webProc
+	rt := &daemonRuntime{listener: listener, adapter: adapterCtrl, webapp: webProc, reloadLock: sync.Mutex{}}
 
-	var exclusiveMu sync.Mutex
-	var exclusiveCancels []func()
-	var exclusiveStopped bool
-	var exclusiveStopOnce sync.Once
-	stopExclusiveLoops := func(reason string) {
-		exclusiveStopOnce.Do(func() {
-			exclusiveMu.Lock()
-			exclusiveStopped = true
-			cancels := append([]func(){}, exclusiveCancels...)
-			exclusiveCancels = nil
-			exclusiveMu.Unlock()
-			for _, cancel := range slices.Backward(cancels) {
-				cancel()
-			}
-			log.Info("daemon.exclusive_subsystems.stopped",
-				"component", "daemon",
-				"reason", reason,
-			)
-		})
-	}
-	defer stopExclusiveLoops("exit")
-	if adapterCancel != nil {
-		exclusiveMu.Lock()
-		exclusiveCancels = append(exclusiveCancels, adapterCancel)
-		exclusiveMu.Unlock()
-	}
-	if webProc != nil && webProc.cancel != nil {
-		exclusiveMu.Lock()
-		exclusiveCancels = append(exclusiveCancels, webProc.cancel)
-		exclusiveMu.Unlock()
-	}
+	exclusive := configureExclusiveSubsystems(log, reloadChild, extraLoops, adapterCancel, webProc, processLock.lockAcquired)
+	defer exclusive.stop("exit")
 
-	startExclusiveLoops := func() {
-		exclusiveMu.Lock()
-		if exclusiveStopped {
-			exclusiveMu.Unlock()
-			return
-		}
-		if cancel := srv.startBinaryUpdateWatcher(2 * time.Second); cancel != nil {
-			exclusiveCancels = append(exclusiveCancels, cancel)
-		}
-		for _, loop := range extraLoops {
-			if loop == nil {
-				continue
-			}
-			if cancel := loop(log); cancel != nil {
-				exclusiveCancels = append(exclusiveCancels, cancel)
-			}
-		}
-		exclusiveMu.Unlock()
-		log.Info("daemon.exclusive_subsystems.started",
-			"component", "daemon",
-			"reload_child", reloadChild,
-		)
-	}
-	if reloadChild {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Warn("daemon.exclusive_subsystems.start_panicked",
-						"component", "daemon",
-						"panic", r,
-					)
-				}
-			}()
-			<-lockAcquired
-			startExclusiveLoops()
-		}()
-	} else {
-		startExclusiveLoops()
-	}
-
-	setReloadFuncWhenProcessOwner(srv, &lockHeld, func(ctx context.Context) (reloadReport, error) {
-		return reloadDaemonBinary(ctx, log, grpcServer, rt, srv, stopExclusiveLoops, releaseProcessLock)
+	setReloadFuncWhenProcessOwner(srv, &processLock.lockHeld, func(ctx context.Context) (reloadReport, error) {
+		return reloadDaemonBinary(ctx, log, grpcServer, rt, srv, exclusive.stop, processLock.release)
 	})
 
 	log.Info("daemon.listening",
@@ -331,6 +361,28 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 		return <-errCh
 	}
 	return grpcServer.Serve(listener)
+}
+
+func configureExclusiveSubsystems(log *slog.Logger, reloadChild bool, extraLoops []ExtraLoop, adapterCancel func(), webProc *webAppProcess, lockAcquired <-chan struct{}) *exclusiveSubsystems {
+	exclusive := &exclusiveSubsystems{
+		log:         log,
+		reloadChild: reloadChild,
+		extraLoops:  extraLoops,
+		mu:          sync.Mutex{},
+		cancels:     nil,
+		stopped:     false,
+		stopOnce:    sync.Once{},
+	}
+	exclusive.addCancel(adapterCancel)
+	if webProc != nil && webProc.cancel != nil {
+		exclusive.addCancel(webProc.cancel)
+	}
+	if reloadChild {
+		startExclusiveSubsystemsAfterLock(log, lockAcquired, exclusive)
+	} else {
+		exclusive.start()
+	}
+	return exclusive
 }
 
 func setReloadFuncWhenProcessOwner(srv *Server, lockHeld *atomic.Bool, fn func(context.Context) (reloadReport, error)) {
@@ -449,18 +501,9 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, rt *daemonRuntime, srv *Server, stopExclusive func(string), releaseProcessLock func(string)) (reloadReport, error) {
 	rt.reloadLock.Lock()
 	defer rt.reloadLock.Unlock()
-	executablePath, err := os.Executable()
+	executablePath, err := validatedReplacementDaemonPath(ctx, log)
 	if err != nil {
-		return reloadReport{}, fmt.Errorf("resolve executable: %w", err)
-	}
-	executablePath, err = filepath.Abs(executablePath)
-	if err != nil {
-		return reloadReport{}, fmt.Errorf("resolve executable path: %w", err)
-	}
-	if info, err := os.Stat(executablePath); err != nil {
-		return reloadReport{}, fmt.Errorf("stat executable: %w", err)
-	} else if info.IsDir() {
-		return reloadReport{}, fmt.Errorf("executable path is a directory: %s", executablePath)
+		return reloadReport{}, err
 	}
 
 	files, specs, cleanup, err := inheritedListenerFiles(rt)
@@ -476,23 +519,9 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	defer func() { _ = readyWrite.Close() }()
 	readyFD := 3 + len(files)
 
-	cmd := exec.Command(executablePath, "daemon")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	files = append(files, readyWrite)
-	cmd.ExtraFiles = files
-	specJSON, err := json.Marshal(specs)
+	cmd, err := startReplacementDaemon(log, executablePath, files, specs, readyWrite, readyFD)
 	if err != nil {
-		return reloadReport{}, fmt.Errorf("encode inherited listeners: %w", err)
-	}
-	cmd.Env = append(os.Environ(),
-		envDaemonReloadChild+"=1",
-		envDaemonInheritedListeners+"="+string(specJSON),
-		envDaemonReadyFD+"="+strconv.Itoa(readyFD),
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		return reloadReport{}, fmt.Errorf("start replacement daemon: %w", err)
+		return reloadReport{}, err
 	}
 	_ = readyWrite.Close()
 	go func() {
@@ -569,6 +598,55 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 		releaseProcessLock("reload_handoff")
 	}
 	return reloadReport{BinaryReloaded: true, NewPID: cmd.Process.Pid}, nil
+}
+
+func validatedReplacementDaemonPath(ctx context.Context, log *slog.Logger) (string, error) {
+	executablePath, err := daemonExecutablePath()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+	executablePath, err = filepath.Abs(executablePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+	if err := binaryhandoff.ValidateClydeExecutable(executablePath); err != nil {
+		log.WarnContext(ctx, "daemon.reload.replacement_rejected",
+			"component", "daemon",
+			"path", executablePath,
+			"err", err)
+		return "", fmt.Errorf("validate replacement daemon binary: %w", err)
+	}
+	return executablePath, nil
+}
+
+func startReplacementDaemon(log *slog.Logger, executablePath string, files []*os.File, specs []inheritedListenerSpec, readyWrite *os.File, readyFD int) (*exec.Cmd, error) {
+	cmd := daemonReplacementCommand(executablePath, "daemon")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	files = append(files, readyWrite)
+	cmd.ExtraFiles = files
+	specJSON, err := json.Marshal(specs)
+	if err != nil {
+		log.Warn("daemon.reload.inherited_listeners_encode_failed",
+			"component", "daemon",
+			"path", executablePath,
+			"err", err)
+		return nil, fmt.Errorf("encode inherited listeners: %w", err)
+	}
+	cmd.Env = append(os.Environ(),
+		envDaemonReloadChild+"=1",
+		envDaemonInheritedListeners+"="+string(specJSON),
+		envDaemonReadyFD+"="+strconv.Itoa(readyFD),
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		log.Warn("daemon.reload.replacement_start_failed",
+			"component", "daemon",
+			"path", executablePath,
+			"err", err)
+		return nil, fmt.Errorf("start replacement daemon: %w", err)
+	}
+	return cmd, nil
 }
 
 func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {

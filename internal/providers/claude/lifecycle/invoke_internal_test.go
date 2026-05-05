@@ -314,3 +314,34 @@ func TestLifecycleResumeInstructions(t *testing.T) {
 		t.Fatalf("ResumeInstructions returned %v, want [claude --resume session-123]", lines)
 	}
 }
+
+func TestSelfReloadCurrentProcessRejectsBadBinaryBeforeExec(t *testing.T) {
+	badBinary := filepath.Join(t.TempDir(), "clyde")
+	script := "#!/usr/bin/env bash\nprintf 'not-clyde\\n'\n"
+	if err := os.WriteFile(badBinary, []byte(script), 0o755); err != nil {
+		t.Fatalf("write bad binary: %v", err)
+	}
+
+	oldExecutablePath := wrapperExecutablePath
+	oldExecWrapperProcess := execWrapperProcess
+	t.Cleanup(func() {
+		wrapperExecutablePath = oldExecutablePath
+		execWrapperProcess = oldExecWrapperProcess
+	})
+
+	execCalled := false
+	wrapperExecutablePath = func() (string, error) {
+		return badBinary, nil
+	}
+	execWrapperProcess = func(string, []string, []string) error {
+		execCalled = true
+		return nil
+	}
+
+	if err := selfReloadCurrentProcess(); err != nil {
+		t.Fatalf("selfReloadCurrentProcess returned error: %v", err)
+	}
+	if execCalled {
+		t.Fatalf("exec was called for invalid binary")
+	}
+}

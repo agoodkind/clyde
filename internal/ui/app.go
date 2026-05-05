@@ -32,6 +32,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/util"
 	gklogversion "goodkind.io/gklog/version"
@@ -1365,46 +1366,14 @@ func validateExecutableCandidate(path string, info os.FileInfo) error {
 	return nil
 }
 
-const selfReloadProbeOK = "clyde-self-reload-probe:ok"
-
 func validateSelfReloadCandidate(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if err := validateExecutableCandidate(path, info); err != nil {
-		return err
-	}
-	return probeSelfReloadCandidate(path)
-}
-
-var probeSelfReloadCandidate = func(path string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, path, "__clyde_self_reload_probe__")
-	cmd.Env = append(os.Environ(), "CLYDE_SELF_RELOAD_PROBE=1")
-	out, err := cmd.CombinedOutput()
-	output := strings.TrimSpace(string(out))
-	if ctx.Err() != nil {
-		return fmt.Errorf("self-reload probe timed out: %w", ctx.Err())
-	}
-	if err != nil {
-		return fmt.Errorf("self-reload probe failed: %w", err)
-	}
-	if output != selfReloadProbeOK {
-		return fmt.Errorf("self-reload probe returned unexpected output %q", trimmedSelfReloadProbeOutput(output))
+	if err := binaryhandoff.ValidateClydeExecutableWithProbe(path, probeSelfReloadCandidate); err != nil {
+		return fmt.Errorf("validate self-reload candidate: %w", err)
 	}
 	return nil
 }
 
-func trimmedSelfReloadProbeOutput(output string) string {
-	const maxProbeOutput = 200
-	if len(output) <= maxProbeOutput {
-		return output
-	}
-	return output[:maxProbeOutput] + "...(truncated)"
-}
+var probeSelfReloadCandidate = binaryhandoff.ProbeClydeExecutable
 
 var execCurrentProcess = func(path string) error {
 	tuiLog.Logger().Info("tui.self_reload.exec",
