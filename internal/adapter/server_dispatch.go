@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,10 +45,11 @@ func CountNormalizedTools(req ChatRequest, raw []byte) int {
 	return count
 }
 
-func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	corr := correlationForRequest(r)
+func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
+	w := hctx.Writer
+	r := hctx.Request
+	corr := hctx.Correlation
 	corr.SetHTTPHeaders(w.Header())
-	ctx := correlation.WithContext(r.Context(), corr)
 	entries := s.registry.List()
 	fingerprint := modelCatalogFingerprint(entries)
 	resp := ModelsResponse{Object: "list"}
@@ -71,6 +73,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	attrs = append(attrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCatalog).LogAttrs(ctx, slog.LevelInfo, "adapter.models.listed", attrs...)
+	return nil
 }
 
 func modelEntryFromResolved(m ResolvedModel) ModelEntry {
@@ -97,20 +100,18 @@ func modelEntryFromResolved(m ResolvedModel) ModelEntry {
 	}
 }
 
-func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
+	w := hctx.Writer
+	r := hctx.Request
 	if r.Method != http.MethodPost {
-		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
-		return
+		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
-	corr := correlationForRequest(r)
+	corr := hctx.Correlation
 	reqID := corr.RequestID
 	corr.SetHTTPHeaders(w.Header())
-	ctx := correlation.WithContext(r.Context(), corr)
-	r = r.WithContext(ctx)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 	if err != nil {
-		s.respondAdapterError(w, r, adapterErrInvalidRequest("failed to read body", err))
-		return
+		return adapterErrInvalidRequest("failed to read body", err)
 	}
 
 	bodyBytes := len(body)
@@ -192,22 +193,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
 	}
 	if bodyLogging.Mode != "off" {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPRaw).LogAttrs(r.Context(), slog.LevelDebug, "adapter.chat.raw", rawAttrs.asAttrs()...)
+		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPRaw).LogAttrs(ctx, slog.LevelDebug, "adapter.chat.raw", rawAttrs.asAttrs()...)
 	}
 
 	if parseErr != nil {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.parse_failed",
+		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.chat.parse_failed",
 			correlation.AppendAttrs([]slog.Attr{
 				slog.String("request_id", reqID),
 				slog.String("err", parseErr.Error()),
 				slog.Int("body_bytes", bodyBytes),
 			}, corr)...,
 		)
-		s.respondAdapterError(w, r, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr))
-		return
+		return adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
 	}
 	if n := CountNormalizedTools(req, body); n > 0 {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(r.Context(), slog.LevelInfo, "adapter.tools.normalized",
+		slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(ctx, slog.LevelInfo, "adapter.tools.normalized",
 			correlation.AppendAttrs([]slog.Attr{
 				slog.String("request_id", reqID),
 				slog.String("from_shape", "anthropic_native"),
@@ -218,18 +218,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if len(req.Messages) == 0 && len(req.Input) > 0 {
 		count, nerr := parseMessagesFromInput(&req)
 		if nerr != nil {
-			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(r.Context(), slog.LevelWarn, "adapter.messages.normalize_failed",
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.messages.normalize_failed",
 				correlation.AppendAttrs([]slog.Attr{
 					slog.String("request_id", reqID),
 					slog.String("model", req.Model),
 					slog.String("err", nerr.Error()),
 				}, corr)...,
 			)
-			s.respondAdapterError(w, r, adapterErrInvalidRequest(nerr.Error(), nerr))
-			return
+			return adapterErrInvalidRequest(nerr.Error(), nerr)
 		}
 		if count > 0 {
-			slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(r.Context(), slog.LevelInfo, "adapter.messages.normalized",
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(ctx, slog.LevelInfo, "adapter.messages.normalized",
 				correlation.AppendAttrs([]slog.Attr{
 					slog.String("request_id", reqID),
 					slog.String("from_shape", "responses_input"),
@@ -239,15 +238,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(req.Messages) == 0 {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(r.Context(), slog.LevelWarn, "adapter.chat.validation_failed",
+		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.chat.validation_failed",
 			correlation.AppendAttrs([]slog.Attr{
 				slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.String("reason", "messages_required"),
 			}, corr)...,
 		)
-		s.respondAdapterError(w, r, adapterErrInvalidRequest("messages is required", nil))
-		return
+		return adapterErrInvalidRequest("messages is required", nil)
 	}
 	if req.ReasoningEffort == "" && req.Reasoning != nil {
 		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
@@ -271,9 +269,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
 		attrs = append(attrs, corr.Attrs()...)
-		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(r.Context(), slog.LevelWarn, "adapter.model.resolve_failed", attrs...)
-		s.respondAdapterError(w, r, adapterErrModelNotFound(err.Error()))
-		return
+		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelWarn, "adapter.model.resolve_failed", attrs...)
+		return adapterErrModelNotFound(err.Error())
 	}
 	resolveAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
@@ -286,7 +283,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	resolveAttrs = append(resolveAttrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
 	resolveAttrs = append(resolveAttrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(r.Context(), slog.LevelInfo, "adapter.model.resolved", resolveAttrs...)
+	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelInfo, "adapter.model.resolved", resolveAttrs...)
 
 	// Step D: build the typed resolver.ResolvedRequest alongside the
 	// legacy resolution. Backends still use model.ResolvedModel for now;
@@ -295,7 +292,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// consistent before flipping the dispatcher to use it.
 	resolvedReq, resolverErr := adapterresolver.Resolve(cursorReq, adapterresolver.NewModelRegistryAdapter(s.registry))
 	if resolverErr != nil {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(r.Context(), slog.LevelDebug, "adapter.resolver.unresolved",
+		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelDebug, "adapter.resolver.unresolved",
 			slog.String("request_id", reqID),
 			slog.String("alias", req.Model),
 			slog.String("err", resolverErr.Error()),
@@ -321,10 +318,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		resolverAttrs = append(resolverAttrs, corr.Attrs()...)
 		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelInfo, "adapter.resolver.resolved", resolverAttrs...)
 	}
-	var ok bool
-	model, ok = s.applyBackendOverride(w, r, req, model, reqID)
-	if !ok {
-		return
+	model, err = s.applyBackendOverride(r, req, model, reqID)
+	if err != nil {
+		return err
 	}
 
 	toolNames := make([]string, 0, len(req.Tools)+len(req.Functions))
@@ -353,7 +349,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, toolNames)...)
 	attrs = append(attrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(r.Context(), slog.LevelInfo, "adapter.chat.received",
+	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.received",
 		attrs...,
 	)
 	if cursorReq.PathKind == adaptercursor.RequestPathSubagent && cursorReq.GenerationID == "" {
@@ -366,15 +362,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			slog.Any("header_names", HeaderNames(r.Header)),
 		}
 		missingAttrs = append(missingAttrs, corr.Attrs()...)
-		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCursor).LogAttrs(r.Context(), slog.LevelInfo, "adapter.cursor.generation_id_missing", missingAttrs...)
+		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCursor).LogAttrs(ctx, slog.LevelInfo, "adapter.cursor.generation_id_missing", missingAttrs...)
 	}
 
-	if perr := s.preflightChat(r.Context(), &req, model, reqID); perr != nil {
-		s.respondAdapterError(w, r, adapterErrFromOpenAI(perr.code, perr.body))
-		return
+	if perr := s.preflightChat(ctx, &req, model, reqID); perr != nil {
+		return adapterErrFromOpenAI(perr.code, perr.body)
 	}
 
 	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, cursorReq, resolvedReq, resolverErr)
+	return nil
 }
 
 func truncateBody(body []byte, maxBytes int) (string, bool) {
@@ -573,10 +569,10 @@ func parseInputParts(parts []map[string]any) (json.RawMessage, error) {
 	return buf, nil
 }
 
-func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
+	r := hctx.Request
 	if r.Method != http.MethodPost {
-		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
-		return
+		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
 	var legacy struct {
 		Model           string `json:"model"`
@@ -585,8 +581,7 @@ func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
 		ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&legacy); err != nil {
-		s.respondAdapterError(w, r, adapterErrInvalidJSON(err.Error(), err))
-		return
+		return adapterErrInvalidJSON(err.Error(), err)
 	}
 	synthetic := ChatRequest{
 		Model:           legacy.Model,
@@ -601,7 +596,8 @@ func (s *Server) handleLegacy(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(strings.NewReader(string(body)))
 	r.ContentLength = int64(len(body))
 	r.Header.Set("Content-Type", "application/json")
-	s.handleChat(w, r)
+	hctx.Request = r
+	return s.handleChat(ctx, hctx)
 }
 
 // resolveChatKey returns corr with ChatKey populated if a key is available.

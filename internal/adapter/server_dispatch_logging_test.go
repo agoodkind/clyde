@@ -240,7 +240,7 @@ func TestAdapterErrorBoundaryRecoversPanicWithShapedError(t *testing.T) {
 		},
 	})
 
-	handler := srv.withAdapterErrorBoundary(func(w http.ResponseWriter, r *http.Request) {
+	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		panic("boom")
 	})
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)

@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,53 +15,45 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
-	"goodkind.io/clyde/internal/correlation"
 )
 
 const maxAnthropicMessagesBodyBytes = 8 << 20
 
-func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) error {
+	w := hctx.Writer
+	r := hctx.Request
 	if r.Method != http.MethodPost {
-		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
-		return
+		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
 	if s.anthropicProvider == nil {
 		err := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic backend is not enabled in [adapter]")
 		err.Provider = "anthropic"
-		s.respondAdapterError(w, r, err)
-		return
+		return err
 	}
 
-	corr := correlationForRequest(r)
+	corr := hctx.Correlation
 	reqID := corr.RequestID
 	corr.SetHTTPHeaders(w.Header())
-	ctx := correlation.WithContext(r.Context(), corr)
-	r = r.WithContext(ctx)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAnthropicMessagesBodyBytes))
 	if err != nil {
-		s.respondAdapterError(w, r, adapterErrInvalidRequest("failed to read body", err))
-		return
+		return adapterErrInvalidRequest("failed to read body", err)
 	}
 
 	var req anthropic.Request
 	if err := json.Unmarshal(body, &req); err != nil {
-		s.respondAdapterError(w, r, adapterErrInvalidJSON("invalid JSON: "+err.Error(), err))
-		return
+		return adapterErrInvalidJSON("invalid JSON: "+err.Error(), err)
 	}
 	if len(req.Messages) == 0 {
-		s.respondAdapterError(w, r, adapterErrInvalidRequest("messages is required", nil))
-		return
+		return adapterErrInvalidRequest("messages is required", nil)
 	}
 
 	model, _, err := s.registry.Resolve(req.Model, "")
 	if err != nil {
-		s.respondAdapterError(w, r, adapterErrModelNotFound(err.Error()))
-		return
+		return adapterErrModelNotFound(err.Error())
 	}
 	nativeClaudeModel := isNativeClaudeModelID(req.Model)
 	if !nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
-		s.respondAdapterError(w, r, adapterErrInvalidRequest("model does not resolve to the anthropic backend", nil))
-		return
+		return adapterErrInvalidRequest("model does not resolve to the anthropic backend", nil)
 	}
 	if nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
 		model = ResolvedModel{
@@ -88,36 +81,35 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		Stream:        req.Stream,
 		NativeIngress: true,
 	}
-	ctx = anthropic.WithRequestID(ctx, reqID)
+	execCtx := anthropic.WithRequestID(ctx, reqID)
 	if req.Stream {
 		streamWriter, streamErr := newNativeAnthropicStreamWriter(w)
 		if streamErr != nil {
-			s.respondAdapterError(w, r, adapterErrInternal(streamErr.Error(), streamErr))
-			return
+			return adapterErrInternal(streamErr.Error(), streamErr)
 		}
-		if _, err := s.anthropicProvider.ExecutePrepared(ctx, prepared, streamWriter); err != nil {
+		if _, err := s.anthropicProvider.ExecutePrepared(execCtx, prepared, streamWriter); err != nil {
 			s.writeAnthropicIngressProviderError(w, r, err)
 		}
-		return
+		return nil
 	}
 
 	collector := newNativeAnthropicJSONWriter()
-	if _, err := s.anthropicProvider.ExecutePrepared(ctx, prepared, collector); err != nil {
+	if _, err := s.anthropicProvider.ExecutePrepared(execCtx, prepared, collector); err != nil {
 		s.writeAnthropicIngressProviderError(w, r, err)
-		return
+		return nil
 	}
 	collector.writeTo(w)
+	return nil
 }
 
-func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.respondAdapterError(w, r, newAdapterError(adapterErrorMethodNotAllowed, "POST required"))
-		return
+func (s *Server) handleAnthropicCountTokens(_ context.Context, hctx *handlerCtx) error {
+	if hctx.Request.Method != http.MethodPost {
+		return newAdapterError(adapterErrorMethodNotAllowed, "POST required")
 	}
 	err := newAdapterError(adapterErrorModelNotSupported, "/v1/messages/count_tokens is not implemented yet on the adapter Anthropic ingress")
 	err.HTTPStatus = http.StatusNotImplemented
 	err.AnthropicType = "not_supported_error"
-	s.respondAdapterError(w, r, err)
+	return err
 }
 
 func isNativeClaudeModelID(model string) bool {

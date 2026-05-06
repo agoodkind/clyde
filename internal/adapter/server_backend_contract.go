@@ -12,11 +12,13 @@ import (
 
 // applyBackendOverride keeps backend selection in the root adapter so request
 // decode, model resolution, and final backend choice stay readable in one
-// place before control passes to a backend package.
-func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, req ChatRequest, model ResolvedModel, reqID string) (ResolvedModel, bool) {
+// place before control passes to a backend package. Returns an *adapterError
+// for unsupported overrides; callers should route the error through the
+// adapter boundary (return it from an adapterHandler).
+func (s *Server) applyBackendOverride(r *http.Request, req ChatRequest, model ResolvedModel, reqID string) (ResolvedModel, error) {
 	override := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Clyde-Backend")))
 	if override == "" {
-		return model, true
+		return model, nil
 	}
 
 	original := model.Backend
@@ -24,9 +26,8 @@ func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, re
 	case BackendAnthropic, BackendPassthroughOverride, BackendCodex:
 		model.Backend = override
 	default:
-		s.respondAdapterError(w, r, newAdapterError(adapterErrorUnsupportedBackend,
-			"X-Clyde-Backend must be one of: anthropic, passthrough_override, codex"))
-		return model, false
+		return model, newAdapterError(adapterErrorUnsupportedBackend,
+			"X-Clyde-Backend must be one of: anthropic, passthrough_override, codex")
 	}
 
 	attrs := []slog.Attr{
@@ -37,7 +38,7 @@ func (s *Server) applyBackendOverride(w http.ResponseWriter, r *http.Request, re
 	}
 	attrs = append(attrs, correlation.AttrsFromContext(r.Context())...)
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "adapter.backend.overridden", attrs...)
-	return model, true
+	return model, nil
 }
 
 // dispatchResolvedChat is the root-owned backend contract boundary. By the time

@@ -12,26 +12,10 @@ import (
 	"goodkind.io/clyde/internal/slogger"
 )
 
-func (s *Server) withRequestDebug(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		corr := correlation.FromContext(r.Context())
-		if corr.RequestID == "" {
-			reqID := r.Header.Get(correlation.HeaderRequestID)
-			if reqID == "" {
-				reqID = newRequestID()
-			}
-			corr = correlation.FromHTTPHeader(r.Header, reqID)
-		}
-		ctx := correlation.WithContext(r.Context(), corr)
-		r = r.WithContext(ctx)
-
-		if s.bodyLogging().Mode != "off" {
-			s.logHTTPRequestDebug(ctx, r)
-		}
-		next(w, r)
-	}
-}
-
+// logHTTPRequestDebug captures inbound request shape (headers, body, body
+// metadata) at debug level when adapter body logging is enabled. The adapter
+// boundary in handle.go calls this before invoking the handler so every
+// route picks up the same diagnostic without per-handler plumbing.
 func (s *Server) logHTTPRequestDebug(ctx context.Context, r *http.Request) {
 	body, readErr := readAndRestoreBody(r)
 	bodyLogging := s.bodyLogging()

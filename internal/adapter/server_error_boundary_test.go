@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,12 +22,14 @@ func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
 
 	tests := []struct {
 		name     string
+		family   adapterRouteFamily
 		path     string
 		assertFn func(*testing.T, *httptest.ResponseRecorder)
 	}{
 		{
-			name: "openai",
-			path: "/v1/chat/completions",
+			name:   "openai",
+			family: adapterRouteOpenAI,
+			path:   "/v1/chat/completions",
 			assertFn: func(t *testing.T, resp *httptest.ResponseRecorder) {
 				t.Helper()
 				var out ErrorResponse
@@ -39,8 +42,9 @@ func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
 			},
 		},
 		{
-			name: "anthropic",
-			path: "/v1/messages",
+			name:   "anthropic",
+			family: adapterRouteAnthropic,
+			path:   "/v1/messages",
 			assertFn: func(t *testing.T, resp *httptest.ResponseRecorder) {
 				t.Helper()
 				var out anthropic.ErrorEnvelope
@@ -57,7 +61,7 @@ func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			handler := srv.withAdapterErrorBoundary(func(http.ResponseWriter, *http.Request) {
+			handler := srv.handle(tc.family, func(context.Context, *handlerCtx) error {
 				panic("boundary probe")
 			})
 			req := httptest.NewRequest(http.MethodPost, tc.path, nil)
@@ -78,7 +82,7 @@ func TestAdapterErrorBoundaryLogsCorrelationFields(t *testing.T) {
 		Body: config.LoggingBody{Mode: "off"},
 	})
 
-	handler := srv.withAdapterErrorBoundary(func(http.ResponseWriter, *http.Request) {
+	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		panic("correlated boundary probe")
 	})
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
