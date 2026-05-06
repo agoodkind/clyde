@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
@@ -280,28 +281,66 @@ func (s *Server) dispatchCodexProviderCollect(
 	})
 }
 
-func codexProviderErrorResponse(err error) (int, ErrorBody) {
+// codexProviderAdapterError maps a codex provider error to the
+// Cursor-safe adapterError shape. Codex must never surface
+// HTTP 5xx + server_error to Cursor; all non-2xx returns flow through
+// mapUpstreamForFamily. Schema violations are detected by message
+// pattern (missing_required_parameter / [ObjectParam] / unknown
+// parameter) so the operator sees a meaningful diagnostic instead of
+// the generic upstream_failed.
+func codexProviderAdapterError(err error) *adapterError {
 	var contextErr *adaptercodex.ContextWindowError
 	if errors.As(err, &contextErr) {
-		return http.StatusBadRequest, ErrorBody{
+		return adapterErrFromOpenAI(http.StatusBadRequest, ErrorBody{
 			Message: "This model's maximum context length was exceeded. Please reduce the length of the messages.",
 			Type:    "invalid_request_error",
 			Code:    "context_length_exceeded",
 			Param:   "messages",
-		}
+		})
 	}
 	var unsupportedModelErr *adaptercodex.UnsupportedModelError
 	if errors.As(err, &unsupportedModelErr) {
-		return http.StatusBadRequest, ErrorBody{
+		return adapterErrFromOpenAI(http.StatusBadRequest, ErrorBody{
 			Message: unsupportedModelErr.Error(),
 			Type:    "invalid_request_error",
 			Code:    "model_not_supported",
 			Param:   "model",
-		}
+		})
 	}
-	return http.StatusBadGateway, ErrorBody{
-		Message: err.Error(),
-		Type:    "server_error",
-		Code:    "upstream_failed",
+	message := err.Error()
+	codeClass := codexClassifyError(message)
+	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", 0, codeClass, "", message)
+	aerr.Cause = err
+	return aerr
+}
+
+// codexClassifyError detects schema violations and other recognizable
+// classes from the upstream message pattern. Codex emits messages
+// like "[ObjectParam] [input[5].summary] [missing_required_parameter]"
+// when the adapter forwards a malformed Reasoning item; classifying
+// these explicitly so the chat transcript shows
+// upstream_malformed_request instead of the generic upstream_failed.
+func codexClassifyError(message string) upstreamCodeClass {
+	lowered := strings.ToLower(message)
+	if strings.Contains(lowered, "missing_required_parameter") ||
+		strings.Contains(lowered, "[objectparam]") ||
+		strings.Contains(lowered, "unknown parameter") {
+		return upstreamClassSchemaViolation
+	}
+	return upstreamClassServerError
+}
+
+// codexProviderErrorResponse is retained as a thin shim for log
+// shaping. New call sites should use codexProviderAdapterError to
+// avoid a double conversion through ErrorBody. The shim emits the
+// fields needed by the existing adapter.codex.provider_error_mapped
+// log line.
+func codexProviderErrorResponse(err error) (int, ErrorBody) {
+	aerr := codexProviderAdapterError(err)
+	return aerr.HTTPStatus, ErrorBody{
+		Message: aerr.Message,
+		Type:    aerr.OpenAIType,
+		Code:    aerr.OpenAICode,
+		Param:   aerr.OpenAIParam,
 	}
 }

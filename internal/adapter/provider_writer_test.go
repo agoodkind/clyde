@@ -17,6 +17,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
 )
 
@@ -90,13 +91,18 @@ func TestCodexProviderErrorResponseMapsGenericProviderError(t *testing.T) {
 
 	status, body := codexProviderErrorResponse(errors.New("codex websocket read failed"))
 
-	if status != http.StatusBadGateway {
-		t.Fatalf("status=%d want %d", status, http.StatusBadGateway)
+	// Cursor BYOK never sees HTTP 5xx + server_error; the boundary
+	// flips generic codex provider failures into a Cursor-safe
+	// invalid_request_error envelope so the upstream message lands
+	// in the chat transcript rather than triggering Cursor's BYOK
+	// fallback chrome.
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
 	}
-	if body.Type != "server_error" || body.Code != "upstream_failed" || body.Param != "" {
+	if body.Type != "invalid_request_error" || body.Code != "upstream_failed" || body.Param != "" {
 		t.Fatalf("body=%+v", body)
 	}
-	if body.Message != "codex websocket read failed" {
+	if !strings.Contains(body.Message, "codex websocket read failed") {
 		t.Fatalf("message=%q", body.Message)
 	}
 }
@@ -117,12 +123,13 @@ func TestAdapterErrUpstreamFailedUsesOpenAICompatibleServerError(t *testing.T) {
 func TestProviderStreamWriterWritesMappedErrorEnvelope(t *testing.T) {
 	t.Parallel()
 
+	srv, _ := newLoggingServer(t, config.LoggingConfig{Body: config.LoggingBody{Mode: "off"}})
 	rec := httptest.NewRecorder()
 	sse, err := adapteropenai.NewSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("NewSSEWriter: %v", err)
 	}
-	writer := &providerStreamWriter{sse: sse}
+	writer := &providerStreamWriter{sse: sse, server: srv, log: srv.log}
 
 	err = writer.writeStreamErrorBody(context.Background(), ErrorBody{
 		Message: "unsupported model: gpt-5.5",

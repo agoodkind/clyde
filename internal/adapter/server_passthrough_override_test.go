@@ -85,8 +85,12 @@ func TestPassthroughOverrideWrapsMalformedUpstreamError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	// Cursor BYOK never sees HTTP 5xx + server_error from a provider
+	// failure; the boundary flips upstream non-2xx into a parseable
+	// invalid_request_error so the upstream message renders in the
+	// chat transcript instead of triggering Cursor's BYOK fallback.
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Fatalf("content-type = %q", got)
@@ -95,8 +99,8 @@ func TestPassthroughOverrideWrapsMalformedUpstreamError(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal response: %v; body=%s", err, rec.Body.String())
 	}
-	if out.Error.Type != "server_error" || out.Error.Code != "upstream_failed" {
-		t.Fatalf("error = %+v", out.Error)
+	if out.Error.Type != "invalid_request_error" {
+		t.Fatalf("error type = %+v", out.Error)
 	}
 	if !strings.Contains(out.Error.Message, "local backend failed") {
 		t.Fatalf("message = %q, want upstream body included", out.Error.Message)
@@ -117,11 +121,22 @@ func TestPassthroughOverridePreservesOpenAIErrorEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusTooManyRequests)
+	// Boundary flips upstream 429 into a Cursor-safe
+	// invalid_request_error envelope so the upstream rate limit
+	// message text renders in the chat transcript rather than the
+	// generic Cursor rate-limit chrome.
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got := strings.TrimSpace(rec.Body.String()); got != upstreamBody {
-		t.Fatalf("body = %s, want passthrough %s", got, upstreamBody)
+	var out ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal response: %v; body=%s", err, rec.Body.String())
+	}
+	if out.Error.Type != "invalid_request_error" || out.Error.Code != "upstream_rate_limited" {
+		t.Fatalf("error = %+v", out.Error)
+	}
+	if !strings.Contains(out.Error.Message, "rate limit from upstream") {
+		t.Fatalf("message = %q, want upstream body text preserved", out.Error.Message)
 	}
 }
 

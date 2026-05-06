@@ -117,6 +117,67 @@ The adapter is a safety boundary. For model aliases, effort tiers, context budge
 - Do not log raw prompts, request bodies, response bodies, tokens, credentials, cookies, API keys, or personal data unless an explicit local debugging policy enables sanitized or raw body logging.
 - Reasoning round-trip is per-provider, configured under `[adapter.<provider>.reasoning]`. Anthropic carries one lever (`inbound_thinking`) because it emits a single thinking content block per turn. Codex carries two independent levers (`round_trip_summary` and `round_trip_encrypted`) because Codex Responses puts both visible summary text and the `encrypted_content` memory blob on the same Reasoning item. Codex defaults match codex-rs (`research/codex/codex-rs/core/src/context_manager/history.rs` lines 361 to 405): `native_summary_field` plus `round_trip`. The `encrypted_content` blob rides inline on the synthetic-thinking close marker as a `data-encrypted` attribute so Cursor's transcript owns persistence; the inbound mapper reads it straight off the marker with no side-channel store.
 
+## Layer separation
+
+Clyde is built as a stack of layers, and each layer must stay on its own side of the boundary.
+
+- Each layer declares what it needs through an interface or a primitive contract.
+- The next layer down provides what the layer above declared, and nothing more.
+- No layer reaches into another layer's semantics, internal types, or presentation choices.
+- Provider-specific shape knowledge, including envelopes, headers, wire types, and vendor UX quirks, lives in the provider package. It does not leak into the generic adapter package.
+- The generic adapter never imports a provider's envelope type, never constructs a provider envelope literal, and never describes a provider-specific UX behavior in its comments.
+- New cross-cutting concerns follow this pattern. Define a contract in a small package with no upstream dependencies. Implementations register themselves at startup. The boundary dispatches by family or by registered key, not by hard-coded provider name.
+
+The error boundary below is the canonical worked example.
+
+## Error boundary
+
+Every adapter HTTP response with a non-2xx status MUST go through the
+adapter error boundary so OpenAI-family and native Anthropic clients
+always receive a parsable, family-correct envelope with the message
+we chose preserved in error.message. The boundary applies strict
+dependency inversion: the generic adapter declares interfaces, and
+each provider package implements them. The boundary never imports a
+provider envelope type and never constructs a provider envelope
+literal.
+
+- Handlers return *adapterError from
+  internal/adapter/adapter_error.go. The boundary picks the route
+  family from the request path and looks up the registered
+  errcontract.ErrorRenderer for that family. Renderers live in
+  provider packages (internal/adapter/openai/error_envelope.go and
+  internal/adapter/anthropic/error_envelope.go) and own their family's
+  envelope shape entirely.
+- Pre-headers errors call s.writeShapedError. Mid-stream errors call
+  s.respondAdapterStreamError. Both live in adapter_error.go and
+  speak only primitives (errcontract.ErrorInfo: Type, Code, Message,
+  Param) when handing the response off to the renderer.
+- Upstream failures classify into errcontract.UpstreamCodeClass and
+  flow through mapUpstreamForFamily, which delegates to the
+  registered errcontract.UpstreamErrorMapper for that family. The
+  OpenAI mapper translates every non-2xx upstream into HTTP 400 +
+  invalid_request_error + a typed upstream_* code; Cursor BYOK is
+  the canonical empirical reason this rule exists (Cursor's HTTP 5xx
+  and HTTP 429 fallbacks render generic chrome instead of our
+  message), but the rule must be true regardless of which
+  OpenAI-family client connects (Cursor, Continue, Aider, raw curl).
+  The Anthropic mapper preserves the spec-correct envelope so
+  claude-cli parses it.
+- Prohibited in adapter handlers and providers: http.Error, writeJSON
+  with a non-2xx status, json.Encode of an error directly into the
+  response, calling EmitStreamError without going through
+  respondAdapterStreamError, calling
+  internal/adapter/internal/erroring.WriteJSONStatus from outside a
+  registered provider renderer. The AST self-test in
+  internal/adapter/error_boundary_lints_test.go enforces these
+  prohibitions through make test.
+- The catch-all default for any error reaching the boundary with no
+  registered family mapper is HTTP 400 + invalid_request_error +
+  upstream_failed with all known fields (provider, upstream status,
+  upstream code, upstream text) folded into error.message. This
+  catch-all is the safety net; specific cases layer on top only when
+  an empirical client-side probe shows a different shape is required.
+
 ## Logging and observability
 
 Use structured `log/slog` logging for production diagnostics. Prefer context-aware logging when a `context.Context` exists.
