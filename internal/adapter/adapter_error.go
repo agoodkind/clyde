@@ -339,8 +339,7 @@ func (s *Server) lookupErrorRenderer(family adapterRouteFamily) (errcontract.Err
 			return r, true
 		}
 	}
-	r, ok := defaultErrorRenderers[family]
-	return r, ok
+	return defaultBoundaryRegistry.errorRenderer(family)
 }
 
 // writeFallbackErrorResponse handles the unregistered-family path so

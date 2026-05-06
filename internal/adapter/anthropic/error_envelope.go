@@ -67,6 +67,15 @@ type UpstreamErrorMapper struct{}
 // NewUpstreamErrorMapper returns the canonical Anthropic mapper.
 func NewUpstreamErrorMapper() UpstreamErrorMapper { return UpstreamErrorMapper{} }
 
+// RegisterErrorBoundary plugs the Anthropic family renderer and
+// mapper into the adapter's error boundary through the inversion seam
+// in errcontract. The boundary file holds no provider import; callers
+// invoke this from the composition root so wiring is explicit and the
+// family-to-implementation map is owned outside the boundary.
+func RegisterErrorBoundary(reg errcontract.BoundaryRegistrar) {
+	reg.Register(errcontract.RouteFamilyAnthropic, NewUpstreamErrorMapper(), NewErrorRenderer())
+}
+
 // Map classifies an upstream failure into the Anthropic family safe
 // shape. Returns primitives so the boundary never imports an
 // Anthropic envelope type.

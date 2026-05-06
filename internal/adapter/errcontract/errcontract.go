@@ -82,3 +82,24 @@ type UpstreamMapping struct {
 type UpstreamErrorMapper interface {
 	Map(provider string, status int, class UpstreamCodeClass, code, message string) UpstreamMapping
 }
+
+// RouteFamily names a route family at the boundary registration
+// surface. The string values match the adapter package's
+// adapterRouteFamily values so provider packages can register against
+// the boundary without importing the adapter package.
+type RouteFamily string
+
+// RouteFamilyOpenAI is the OpenAI-compatible ingress family.
+const RouteFamilyOpenAI RouteFamily = "openai"
+
+// RouteFamilyAnthropic is the native Anthropic ingress family.
+const RouteFamilyAnthropic RouteFamily = "anthropic"
+
+// BoundaryRegistrar is the inversion seam the adapter error boundary
+// exposes to provider packages. Each provider package's
+// RegisterErrorBoundary function calls Register with its family's
+// renderer and mapper at startup. The boundary holds these by family
+// and dispatches to them when a non-2xx response must be rendered.
+type BoundaryRegistrar interface {
+	Register(family RouteFamily, mapper UpstreamErrorMapper, renderer ErrorRenderer)
+}

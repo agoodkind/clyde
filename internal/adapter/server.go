@@ -133,7 +133,6 @@ type Server struct {
 	codexProvider     *adaptercodex.Provider
 	anthropicProvider *anthropic.Provider
 	errorRenderers    map[adapterRouteFamily]errcontract.ErrorRenderer
-	upstreamMappers   map[adapterRouteFamily]errcontract.UpstreamErrorMapper
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -184,8 +183,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		},
 		ctxUsage:        newContextUsageTracker(),
 		usageNoticeGate: adapterruntime.NewUsageNoticeGateWithLogger(log),
-		errorRenderers:  defaultErrorRendererRegistry(),
-		upstreamMappers: defaultUpstreamMapperRegistry(),
+		errorRenderers:  defaultBoundaryRegistry.snapshotRenderers(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
 	if cfg.Codex.Enabled {
