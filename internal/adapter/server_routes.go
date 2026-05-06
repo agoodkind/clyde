@@ -178,53 +178,59 @@ func (s *Server) closeTrackedConns(states ...http.ConnState) {
 
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", s.withAdapterErrorBoundary(s.withRequestDebug(s.handleHealth)))
-	mux.HandleFunc("/v1/models", s.withAdapterErrorBoundary(s.withRequestDebug(s.auth(s.handleModels))))
-	mux.HandleFunc("/v1/chat/completions", s.withAdapterErrorBoundary(s.withRequestDebug(s.auth(s.handleChat))))
-	mux.HandleFunc("/v1/completions", s.withAdapterErrorBoundary(s.withRequestDebug(s.auth(s.handleLegacy))))
-	mux.HandleFunc("/v1/messages", s.withAdapterErrorBoundary(s.withRequestDebug(s.authAnthropic(s.handleAnthropicMessages))))
-	mux.HandleFunc("/v1/messages/count_tokens", s.withAdapterErrorBoundary(s.withRequestDebug(s.authAnthropic(s.handleAnthropicCountTokens))))
-	mux.HandleFunc("/", s.withAdapterErrorBoundary(s.withRequestDebug(s.handleRoot)))
+	mux.HandleFunc("/healthz", s.handle(adapterRouteHealth, s.handleHealth))
+	mux.HandleFunc("/v1/models", s.handle(adapterRouteOpenAI, s.auth(s.handleModels)))
+	mux.HandleFunc("/v1/chat/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleChat)))
+	mux.HandleFunc("/v1/completions", s.handle(adapterRouteOpenAI, s.auth(s.handleLegacy)))
+	mux.HandleFunc("/v1/messages", s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicMessages)))
+	mux.HandleFunc("/v1/messages/count_tokens", s.handle(adapterRouteAnthropic, s.authAnthropic(s.handleAnthropicCountTokens)))
+	mux.HandleFunc("/", s.handle(adapterRouteHealth, s.handleRoot))
 	return mux
 }
 
-func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+func (s *Server) handleRoot(_ context.Context, hctx *handlerCtx) error {
+	writeJSON(hctx.Writer, http.StatusOK, map[string]any{
 		"service": "clyde-adapter",
 		"paths":   []string{"/v1/models", "/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/messages/count_tokens", "/healthz"},
 	})
+	return nil
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) handleHealth(_ context.Context, hctx *handlerCtx) error {
+	writeJSON(hctx.Writer, http.StatusOK, map[string]string{"status": "ok"})
+	return nil
 }
 
-func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// auth wraps an adapterHandler with bearer-token authentication for
+// OpenAI-compat routes. When s.token is empty the wrapper is a passthrough.
+// When the inbound Authorization header does not match, it returns an
+// adapterErrorAuthFailed which the boundary shapes into the OpenAI error
+// envelope.
+func (s *Server) auth(next adapterHandler) adapterHandler {
+	return func(ctx context.Context, hctx *handlerCtx) error {
 		if s.token == "" {
-			next(w, r)
-			return
+			return next(ctx, hctx)
 		}
 		want := "Bearer " + s.token
-		if r.Header.Get("Authorization") != want {
-			s.respondAdapterError(w, r, newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token"))
-			return
+		if hctx.Request.Header.Get("Authorization") != want {
+			return newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token")
 		}
-		next(w, r)
+		return next(ctx, hctx)
 	}
 }
 
-func (s *Server) authAnthropic(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// authAnthropic wraps an adapterHandler with bearer-token authentication for
+// Anthropic native routes. Same behavior as auth; kept distinct so future
+// Anthropic-specific auth (for example x-api-key) can land without churn.
+func (s *Server) authAnthropic(next adapterHandler) adapterHandler {
+	return func(ctx context.Context, hctx *handlerCtx) error {
 		if s.token == "" {
-			next(w, r)
-			return
+			return next(ctx, hctx)
 		}
 		want := "Bearer " + s.token
-		if r.Header.Get("Authorization") != want {
-			s.respondAdapterError(w, r, newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token"))
-			return
+		if hctx.Request.Header.Get("Authorization") != want {
+			return newAdapterError(adapterErrorAuthFailed, "missing or invalid bearer token")
 		}
-		next(w, r)
+		return next(ctx, hctx)
 	}
 }

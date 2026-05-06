@@ -1,0 +1,132 @@
+package adapter
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"runtime/debug"
+	"strings"
+
+	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/slogger"
+)
+
+// adapterHandler is the canonical handler signature for adapter HTTP routes.
+// Every route registers through Server.handle so the boundary owns
+// correlation, panic recovery, and the body-not-written backstop. Returning
+// an error routes through respondAdapterError; returning nil without writing
+// anything triggers a synthesized catch-all error envelope.
+type adapterHandler func(ctx context.Context, hctx *handlerCtx) error
+
+// handlerCtx is the per-request value passed to adapterHandler. The Writer
+// and Request fields hold the same plumbing the wrapper sees so handlers do
+// not need to thread [http.ResponseWriter] and [*http.Request] separately.
+type handlerCtx struct {
+	Writer      http.ResponseWriter
+	Request     *http.Request
+	Family      adapterRouteFamily
+	RequestID   string
+	Correlation correlation.Context
+}
+
+// handle wraps an adapterHandler with the global adapter error boundary.
+// The wrapper owns:
+//   - request id assignment and correlation context propagation,
+//   - structured request-debug logging when body logging is enabled,
+//   - panic recovery (subsumes the legacy withAdapterErrorBoundary),
+//   - body-not-written backstop: if fn returns nil but never wrote bytes,
+//     a synthesized 502 catch-all envelope is emitted so a future code path
+//     cannot silently exit without sending a response,
+//   - dispatch of returned errors through respondAdapterError so error
+//     envelope shape is unchanged on this branch.
+//
+// The returned [http.HandlerFunc] is what gets registered on the mux.
+func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reqID := strings.TrimSpace(r.Header.Get(correlation.HeaderRequestID))
+		if reqID == "" {
+			reqID = newRequestID()
+		}
+		corr := correlation.FromHTTPHeader(r.Header, reqID)
+		corr.SetHTTPHeaders(r.Header)
+		corr.SetHTTPHeaders(w.Header())
+		ctx := correlation.WithContext(r.Context(), corr)
+		r = r.WithContext(ctx)
+
+		if s.bodyLogging().Mode != "off" {
+			s.logHTTPRequestDebug(ctx, r)
+		}
+
+		rw := &adapterRecoveryWriter{ResponseWriter: w, wroteHeader: false}
+		hctx := &handlerCtx{
+			Writer:      rw,
+			Request:     r,
+			Family:      family,
+			RequestID:   reqID,
+			Correlation: corr,
+		}
+
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			attrs := []slog.Attr{
+				slog.Any("err", recovered),
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.String("route_family", string(family)),
+				slog.String("remote_addr", r.RemoteAddr),
+				slog.String("user_agent", r.UserAgent()),
+				slog.String("stack", string(debug.Stack())),
+				slog.Bool("response_started", rw.wroteHeader),
+			}
+			attrs = append(attrs, corr.Attrs()...)
+			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.panic", attrs...)
+			if rw.wroteHeader {
+				return
+			}
+			s.respondAdapterError(w, r, adapterErrInternal("adapter panic while handling request", fmt.Errorf("panic: %v", recovered)))
+		}()
+
+		err := fn(ctx, hctx)
+		if err != nil {
+			if rw.wroteHeader {
+				// Headers were already committed (typical mid-stream
+				// error path). The handler is responsible for any
+				// in-band error frame. Log so a regression where the
+				// handler swallows the error mid-stream is visible.
+				attrs := []slog.Attr{
+					slog.String("method", r.Method),
+					slog.String("path", r.URL.Path),
+					slog.String("route_family", string(family)),
+					slog.String("err", err.Error()),
+					slog.Bool("response_started", true),
+				}
+				attrs = append(attrs, corr.Attrs()...)
+				slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.request.error_after_headers", attrs...)
+				return
+			}
+			s.respondAdapterError(w, r, err)
+			return
+		}
+
+		// Body-not-written backstop. If the handler returns nil but
+		// never wrote bytes the client would otherwise see an empty
+		// 200. Synthesize a catch-all 502 envelope so the response
+		// shape is always parsable.
+		if !rw.wroteHeader {
+			synth := newAdapterError(adapterErrorUpstreamFailed, "adapter handler returned without writing a response")
+			synth.HTTPStatus = http.StatusBadGateway
+			attrs := []slog.Attr{
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.String("route_family", string(family)),
+			}
+			attrs = append(attrs, corr.Attrs()...)
+			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.body_not_written", attrs...)
+			s.respondAdapterError(w, r, synth)
+		}
+	}
+}

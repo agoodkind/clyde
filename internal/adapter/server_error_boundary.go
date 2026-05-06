@@ -1,52 +1,17 @@
 package adapter
 
 import (
-	"fmt"
-	"log/slog"
 	"net/http"
-	"runtime/debug"
 	"strings"
 
 	"goodkind.io/clyde/internal/correlation"
-	"goodkind.io/clyde/internal/slogger"
 )
 
-func (s *Server) withAdapterErrorBoundary(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		reqID := strings.TrimSpace(r.Header.Get(correlation.HeaderRequestID))
-		if reqID == "" {
-			reqID = newRequestID()
-		}
-		corr := correlation.FromHTTPHeader(r.Header, reqID)
-		corr.SetHTTPHeaders(r.Header)
-		corr.SetHTTPHeaders(w.Header())
-		ctx := correlation.WithContext(r.Context(), corr)
-		r = r.WithContext(ctx)
-
-		rw := &adapterRecoveryWriter{ResponseWriter: w}
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				attrs := []slog.Attr{
-					slog.Any("err", recovered),
-					slog.String("method", r.Method),
-					slog.String("path", r.URL.Path),
-					slog.String("remote_addr", r.RemoteAddr),
-					slog.String("user_agent", r.UserAgent()),
-					slog.String("stack", string(debug.Stack())),
-					slog.Bool("response_started", rw.wroteHeader),
-				}
-				attrs = append(attrs, corr.Attrs()...)
-				slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.panic", attrs...)
-				if rw.wroteHeader {
-					return
-				}
-				s.respondAdapterError(w, r, adapterErrInternal("adapter panic while handling request", fmt.Errorf("panic: %v", recovered)))
-			}
-		}()
-		next(rw, r)
-	}
-}
-
+// adapterRecoveryWriter wraps [http.ResponseWriter] so the adapter boundary
+// (Server.handle in handle.go) can detect whether a handler ever committed
+// status bytes. The body-not-written backstop relies on wroteHeader, and
+// panic recovery uses it to decide whether to write a synthesized error
+// envelope or just log.
 type adapterRecoveryWriter struct {
 	http.ResponseWriter
 	wroteHeader bool
