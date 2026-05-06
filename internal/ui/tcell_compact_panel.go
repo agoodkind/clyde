@@ -84,15 +84,16 @@ type CompactPanel struct {
 	sessionID   string
 	model       string
 
-	targetTokens int
-	maxTokens    int
-	currentTotal int
-	messagesTok  int
-	bufferTok    int
-	overheadTok  int
-	freeTok      int
-	reserved     int
-	targetText   string
+	targetTokens  int
+	maxTokens     int
+	currentTotal  int
+	messagesTok   int
+	bufferTok     int
+	overheadTok   int
+	freeTok       int
+	contextStatus string
+	reserved      int
+	targetText    string
 
 	thinking       bool
 	images         bool
@@ -103,6 +104,7 @@ type CompactPanel struct {
 	imageBlocks    int
 	toolPairs      int
 	chatTurns      int
+	countsStatus   string
 
 	focusGroup   int
 	checkboxIdx  int
@@ -140,6 +142,7 @@ func NewCompactPanel(sessionName string) *CompactPanel {
 		bufferTok:        0,
 		overheadTok:      0,
 		freeTok:          0,
+		contextStatus:    "",
 		reserved:         13000,
 		targetText:       "200000",
 		thinking:         true,
@@ -151,6 +154,7 @@ func NewCompactPanel(sessionName string) *CompactPanel {
 		imageBlocks:      0,
 		toolPairs:        0,
 		chatTurns:        0,
+		countsStatus:     "preview required",
 		focusGroup:       0,
 		checkboxIdx:      0,
 		actionIdx:        0,
@@ -190,10 +194,12 @@ func (p *CompactPanel) ApplyCompactEvent(ev CompactEvent) {
 			p.bufferTok = ev.Upfront.BufferTokens
 			p.overheadTok = ev.Upfront.OverheadTokens
 			p.freeTok = ev.Upfront.FreeTokens
+			p.contextStatus = ""
 			p.thinkingBlocks = ev.Upfront.ThinkingBlocks
 			p.imageBlocks = ev.Upfront.ImageBlocks
 			p.toolPairs = ev.Upfront.ToolPairs
 			p.chatTurns = ev.Upfront.ChatTurns
+			p.countsStatus = ""
 			if ev.Upfront.MaxTokens > 0 {
 				p.maxTokens = ev.Upfront.MaxTokens
 			}
@@ -219,6 +225,28 @@ func (p *CompactPanel) ApplyCompactEvent(ev CompactEvent) {
 		if ev.Message != "" {
 			p.status = ev.Message
 		}
+	}
+}
+
+func (p *CompactPanel) setInitialContextUsage(usage SessionContextUsage, loaded bool, status string) {
+	if usage.Model != "" {
+		p.model = usage.Model
+	}
+	if usage.MaxTokens > 0 {
+		p.maxTokens = usage.MaxTokens
+	}
+	if usage.TotalTokens > 0 {
+		p.currentTotal = usage.TotalTokens
+	}
+	if usage.MessagesTokens > 0 {
+		p.messagesTok = usage.MessagesTokens
+	}
+	if loaded {
+		p.contextStatus = ""
+		return
+	}
+	if status != "" {
+		p.contextStatus = status
 	}
 }
 
@@ -289,11 +317,11 @@ func (p *CompactPanel) Draw(scr tcell.Screen, r Rect) {
 		y += 2
 	}
 
-	actionsLabelY := inner.Y + inner.H - 3
-	progressH := imax(0, actionsLabelY-y-1)
+	availableProgressH := imax(0, inner.Y+inner.H-y-4)
+	progressH := imin(availableProgressH, 9)
 	p.drawProgressLog(scr, Rect{X: inner.X, Y: y, W: inner.W, H: progressH})
 
-	y = actionsLabelY
+	y += progressH + 1
 	drawString(scr, inner.X, y, StyleHeader, "Actions", inner.W)
 	y++
 	p.drawActionButtons(scr, inner.X, y, inner.W)
@@ -635,7 +663,7 @@ func (p *CompactPanel) drawNarrowContextSummary(scr tcell.Screen, inner Rect, y 
 
 func (p *CompactPanel) contextCurrentLine(narrow bool) string {
 	if p.currentTotal <= 0 {
-		return "current    -"
+		return fmt.Sprintf("%-10s %s", "current", p.placeholder(p.contextStatus))
 	}
 	value := formatWithCommas(p.currentTotal)
 	if p.maxTokens > 0 {
@@ -649,16 +677,23 @@ func (p *CompactPanel) contextCurrentLine(narrow bool) string {
 
 func (p *CompactPanel) contextTokenLine(label string, tokens int) string {
 	if tokens <= 0 {
-		return fmt.Sprintf("%-10s -", label)
+		return fmt.Sprintf("%-10s %s", label, p.placeholder(p.contextStatus))
 	}
 	return fmt.Sprintf("%-10s %s", label, formatWithCommas(tokens))
 }
 
 func (p *CompactPanel) contextCountLine(label string, count int) string {
 	if count <= 0 {
-		return fmt.Sprintf("%-15s -", label)
+		return fmt.Sprintf("%-15s %s", label, p.placeholder(p.countsStatus))
 	}
 	return fmt.Sprintf("%-15s %s", label, formatWithCommas(count))
+}
+
+func (p *CompactPanel) placeholder(status string) string {
+	if status == "" {
+		return "-"
+	}
+	return status
 }
 
 func (p *CompactPanel) contextPercent() int {
@@ -731,25 +766,35 @@ func (p *CompactPanel) drawProgressLog(scr tcell.Screen, r Rect) {
 		return
 	}
 	lines := p.logLines
-	p.logScroll = clamp(p.logScroll, 0, imax(0, len(lines)-content.H))
+	busyLineCount := 0
+	if p.busy {
+		busyLineCount = 1
+	}
+	scrollLineCount := len(lines) + busyLineCount
+	p.logScroll = clamp(p.logScroll, 0, imax(0, scrollLineCount-content.H))
 	if len(lines) == 0 {
 		if p.busy {
-			ClockLoadingSpinner("waiting for progress...").Draw(scr, content.X, content.Y, content.W)
+			ClockLoadingSpinner(p.busyAction+" in progress...").Draw(scr, content.X, content.Y, content.W)
 			return
 		}
 		drawString(scr, content.X, content.Y, StyleMuted, "No run yet. Press Preview to inspect or Apply to mutate.", content.W)
 		return
 	}
-	start := imax(0, len(lines)-content.H-p.logScroll)
-	end := imin(len(lines), start+content.H)
+	start := imax(0, scrollLineCount-content.H-p.logScroll)
+	end := imin(scrollLineCount, start+content.H)
 	contentW := content.W
-	if len(lines) > content.H {
+	if scrollLineCount > content.H {
 		contentW = imax(0, content.W-1)
-		drawScrollbar(scr, content.X+content.W-1, content.Y, content.H, content.H, len(lines), start)
+		drawScrollbar(scr, content.X+content.W-1, content.Y, content.H, content.H, scrollLineCount, start)
 	}
 	y := content.Y
-	for _, line := range lines[start:end] {
-		drawString(scr, content.X, y, StyleDefault, line, contentW)
+	for i := start; i < end; i++ {
+		if i < len(lines) {
+			drawString(scr, content.X, y, StyleDefault, lines[i], contentW)
+			y++
+			continue
+		}
+		ClockLoadingSpinner(p.busyAction+" in progress...").Draw(scr, content.X, y, contentW)
 		y++
 	}
 }
