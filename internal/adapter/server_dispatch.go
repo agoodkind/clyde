@@ -175,7 +175,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	}
 
 	if perr := s.preflightChat(ctx, &req, model, reqID); perr != nil {
-		return adapterErrFromOpenAI(perr.code, perr.body)
+		return perr
 	}
 
 	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, cursorReq, resolvedReq, resolverErr)
