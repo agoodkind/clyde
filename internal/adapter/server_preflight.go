@@ -10,11 +10,6 @@ import (
 	"goodkind.io/clyde/internal/slogger"
 )
 
-type preflightError struct {
-	code int
-	body ErrorBody
-}
-
 func toolChoiceRequestsTools(raw json.RawMessage) bool {
 	if len(raw) == 0 || string(raw) == "null" {
 		return false
@@ -26,68 +21,67 @@ func toolChoiceRequestsTools(raw json.RawMessage) bool {
 	return true
 }
 
-func errAudioUnsupported() *preflightError {
-	return &preflightError{
-		code: http.StatusBadRequest,
-		body: ErrorBody{
-			Message: "audio content parts are not supported by this adapter",
-			Type:    "invalid_request_error",
-			Code:    "audio_unsupported",
-		},
-	}
+func newPreflightError(status int, class adapterErrorClass, message, code string) *adapterError {
+	err := newAdapterError(class, message)
+	err.HTTPStatus = status
+	err.OpenAIType = "invalid_request_error"
+	err.OpenAICode = code
+	err.OpenAIParam = ""
+	return err
 }
 
-func errVisionAnthropicUnsupported(modelAlias string) *preflightError {
-	return &preflightError{
-		code: http.StatusBadRequest,
-		body: ErrorBody{
-			Message: fmt.Sprintf("model %q does not support vision input", modelAlias),
-			Type:    "invalid_request_error",
-			Code:    "unsupported_content",
-		},
-	}
+func errAudioUnsupported() *adapterError {
+	return newPreflightError(
+		http.StatusBadRequest,
+		adapterErrorUnsupportedContent,
+		"audio content parts are not supported by this adapter",
+		"audio_unsupported",
+	)
 }
 
-func errToolNameEmpty(kind string, index int) *preflightError {
+func errVisionAnthropicUnsupported(modelAlias string) *adapterError {
+	return newPreflightError(
+		http.StatusBadRequest,
+		adapterErrorUnsupportedContent,
+		fmt.Sprintf("model %q does not support vision input", modelAlias),
+		"unsupported_content",
+	)
+}
+
+func errToolNameEmpty(kind string, index int) *adapterError {
 	var msg string
 	if kind == "tools" {
 		msg = fmt.Sprintf("tools[%d].function.name is required and must be non-empty", index)
 	} else {
 		msg = fmt.Sprintf("functions[%d].name is required and must be non-empty", index)
 	}
-	return &preflightError{
-		code: http.StatusBadRequest,
-		body: ErrorBody{
-			Message: msg,
-			Type:    "invalid_request_error",
-			Code:    "invalid_tool_name",
-		},
-	}
+	return newPreflightError(
+		http.StatusBadRequest,
+		adapterErrorInvalidRequest,
+		msg,
+		"invalid_tool_name",
+	)
 }
 
-func errToolsNotEnabledForAlias() *preflightError {
-	return &preflightError{
-		code: http.StatusBadRequest,
-		body: ErrorBody{
-			Message: "tools are not enabled for this model alias",
-			Type:    "invalid_request_error",
-			Code:    "unsupported_content",
-		},
-	}
+func errToolsNotEnabledForAlias() *adapterError {
+	return newPreflightError(
+		http.StatusBadRequest,
+		adapterErrorUnsupportedContent,
+		"tools are not enabled for this model alias",
+		"unsupported_content",
+	)
 }
 
-func errLogprobsUnsupported() *preflightError {
-	return &preflightError{
-		code: http.StatusBadRequest,
-		body: ErrorBody{
-			Message: "logprobs are not supported for this backend",
-			Type:    "invalid_request_error",
-			Code:    "unsupported_param",
-		},
-	}
+func errLogprobsUnsupported() *adapterError {
+	return newPreflightError(
+		http.StatusBadRequest,
+		adapterErrorInvalidRequest,
+		"logprobs are not supported for this backend",
+		"unsupported_param",
+	)
 }
 
-func (s *Server) validateAudio(ctx context.Context, req *ChatRequest, reqID string) *preflightError {
+func (s *Server) validateAudio(ctx context.Context, req *ChatRequest, reqID string) *adapterError {
 	for msgIdx := range req.Messages {
 		parts, _ := NormalizeContent(req.Messages[msgIdx].Content)
 		for _, p := range parts {
@@ -117,7 +111,7 @@ func requestHasImageContent(req *ChatRequest) bool {
 	return false
 }
 
-func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *preflightError {
+func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
 	if model.Backend == BackendPassthroughOverride {
 		return nil
 	}
@@ -134,7 +128,7 @@ func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model Res
 	return nil
 }
 
-func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID string) *preflightError {
+func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID string) *adapterError {
 	for tIdx, t := range req.Tools {
 		if t.Function.Name == "" {
 			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name",
@@ -160,7 +154,7 @@ func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID stri
 	return nil
 }
 
-func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *preflightError {
+func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
 	if model.Backend != BackendAnthropic {
 		return nil
 	}
@@ -175,7 +169,7 @@ func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, model
 	return nil
 }
 
-func (s *Server) validateLogprobs(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *preflightError {
+func (s *Server) validateLogprobs(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
 	wantsLogprobs := (req.Logprobs != nil && *req.Logprobs) || req.TopLogprobs != nil
 	if !wantsLogprobs {
 		return nil
@@ -200,7 +194,7 @@ func (s *Server) validateLogprobs(ctx context.Context, req *ChatRequest, model R
 
 // preflightChat enforces adapter capability gates after alias resolution.
 // It may mutate req when logprobs policy is "drop".
-func (s *Server) preflightChat(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *preflightError {
+func (s *Server) preflightChat(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
 	if err := s.validateAudio(ctx, req, reqID); err != nil {
 		return err
 	}
