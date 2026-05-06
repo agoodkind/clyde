@@ -352,6 +352,9 @@ func TestCompactPanelBusyProgressShowsSpinnerAfterIterationLines(t *testing.T) {
 	if !strings.Contains(text, "iter 1") {
 		t.Fatalf("busy compact panel should keep prior iteration output:\n%s", text)
 	}
+	if !strings.Contains(text, "projected 900,000") {
+		t.Fatalf("busy compact panel should label iteration totals as projected:\n%s", text)
+	}
 	if !strings.Contains(text, "apply in progress") {
 		t.Fatalf("busy compact panel should keep animating after progress exists:\n%s", text)
 	}
@@ -452,7 +455,7 @@ func TestCompactPanelProgressLogStaysAboveActions(t *testing.T) {
 		t.Fatalf("expected progress log box title in render:\n%s", text)
 	}
 	afterActions := text[actionIdx:]
-	if strings.Contains(afterActions, "final total") || strings.Contains(afterActions, "step-") {
+	if strings.Contains(afterActions, "final projected") || strings.Contains(afterActions, "step-") {
 		t.Fatalf("progress log leaked into action rows:\n%s", afterActions)
 	}
 }

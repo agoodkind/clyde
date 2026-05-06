@@ -124,6 +124,8 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		if ok {
 			staticOverhead = cal.StaticOverhead
 			upfront.TargetDate = cal.CapturedAt.UTC().Format("2006-01-02")
+		} else if upfront.ContextOverhead > 0 {
+			staticOverhead = upfront.ContextOverhead
 		}
 	}
 	upfront.StaticFloor = staticOverhead

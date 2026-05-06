@@ -801,7 +801,7 @@ func (p *CompactPanel) drawProgressLog(scr tcell.Screen, r Rect) {
 
 func (p *CompactPanel) renderIterationLine(iter CompactIteration) string {
 	return fmt.Sprintf(
-		"iter %d  %s  total %s  %s",
+		"iter %d  %s  projected %s  %s",
 		iter.Iteration,
 		iter.Step,
 		formatWithCommas(iter.CtxTotal),
@@ -812,7 +812,7 @@ func (p *CompactPanel) renderIterationLine(iter CompactIteration) string {
 func (p *CompactPanel) renderFinalLine(final CompactFinal) string {
 	total := final.StaticFloor + final.ReservedTokens + final.FinalTail
 	return fmt.Sprintf(
-		"final total %s  target %s",
+		"final projected %s  target %s",
 		formatWithCommas(total),
 		formatWithCommas(final.TargetTokens),
 	)
