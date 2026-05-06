@@ -54,53 +54,12 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 		apiKey = os.Getenv(apiKeyEnv)
 	}
 
-	// Mutate the request body if we need to. Two reasons:
-	//   1. passthrough override Model overrides the alias the caller sent.
-	//   2. response_format json_schema does not work on most local
-	//      backends (LM Studio, Ollama, etc.) so we strip it and
-	//      prepend a system message that tells the model to emit
-	//      raw JSON. The clyde adapter then post-validates and
-	//      retries once if the reply does not parse.
-	var rawReq map[string]any
-	jsonSpec := JSONResponseSpec{}
-	if err := json.Unmarshal(body, &rawReq); err == nil {
-		if v, ok := rawReq["stream"].(bool); ok {
-			streamRequested = v
-		}
-		if modelOverride != "" {
-			rawReq["model"] = modelOverride
-		}
-		if rf, ok := rawReq["response_format"]; ok {
-			rfBytes, _ := json.Marshal(rf)
-			jsonSpec = ParseResponseFormat(rfBytes)
-		}
-		if jsonSpec.Mode != "" {
-			injectJSONSystemMessage(rawReq, jsonSpec.SystemPrompt(false))
-			delete(rawReq, "response_format")
-		}
-		body, _ = json.Marshal(rawReq)
-	}
+	rawReq, jsonSpec, body, streamRequested := mutatePassthroughOverrideRequestBody(body, modelOverride, streamRequested)
 	s.emitRequestStarted(ctx, model, "", reqID, model.Alias, streamRequested)
 
 	respBody, status, hdr, err := passthroughOverrideCall(ctx, baseURL, apiKey, body)
 	if err != nil {
-		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-			Stage:      adapterruntime.RequestStageFailed,
-			Provider:   providerName(model, ""),
-			Backend:    model.Backend,
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    model.Alias,
-			Stream:     streamRequested,
-			DurationMs: time.Since(started).Milliseconds(),
-			Err:        err.Error(),
-		})
-		aerr := newAdapterError(adapterErrorUpstreamUnavailable, err.Error())
-		aerr.Provider = providerName(model, "")
-		aerr.Backend = model.Backend
-		aerr.ModelAlias = model.Alias
-		aerr.Cause = err
-		s.respondAdapterError(w, r, aerr)
+		s.respondPassthroughOverrideTransportError(w, r, ctx, model, reqID, started, streamRequested, err)
 		return
 	}
 	contentType := strings.ToLower(strings.TrimSpace(hdr.Get("Content-Type")))
@@ -109,33 +68,89 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	}
 
 	if jsonSpec.Mode != "" && status == http.StatusOK {
-		coerced, ok := coercePassthroughOverrideJSON(respBody)
-		if !ok {
-			attrs := []slog.Attr{
-				slog.String("model", model.Alias),
-				slog.String("upstream", upstreamLabel),
-				slog.Int("first_attempt_bytes", len(respBody)),
-			}
-			attrs = append(attrs, corr.Attrs()...)
-			s.log.LogAttrs(ctx, slog.LevelWarn, structuredOutputPassthroughOverrideParseFailedEvent, attrs...)
-			injectJSONSystemMessage(rawReq, jsonSpec.SystemPrompt(true))
-			body2, _ := json.Marshal(rawReq)
-			rb2, st2, h2, err2 := passthroughOverrideCall(r.Context(), baseURL, apiKey, body2)
-			if err2 == nil && st2 == http.StatusOK {
-				if c2, ok2 := coercePassthroughOverrideJSON(rb2); ok2 {
-					respBody, status, hdr = c2, st2, h2
-				} else {
-					respBody, status, hdr = rb2, st2, h2
-				}
-			}
-		} else {
-			respBody = coerced
-		}
+		respBody, status, hdr = s.coerceOrRetryPassthroughOverrideJSON(
+			ctx, corr, model, upstreamLabel, baseURL, apiKey, rawReq, jsonSpec, respBody, status, hdr,
+		)
 	}
 	if status >= http.StatusBadRequest {
-		respBody, hdr = normalizePassthroughOverrideErrorResponse(status, respBody, hdr)
+		s.respondPassthroughOverrideError(w, r, ctx, model, reqID, status, respBody, streamRequested, contentType, started)
+		return
 	}
 
+	writePassthroughOverrideResponse(w, status, respBody, hdr)
+
+	usage := passthroughOverrideUsageFromBody(respBody)
+	s.logPassthroughOverrideTerminal(ctx, model, reqID, started, streamRequested, contentType, usage)
+}
+
+// mutatePassthroughOverrideRequestBody applies the alias rewrite and
+// json-spec extraction in one place so forwardPassthroughOverride
+// stays under the funlen budget. Returns the parsed map (or nil),
+// the parsed json spec, the (possibly rewritten) request bytes, and
+// whether the request asked for a streaming response.
+func mutatePassthroughOverrideRequestBody(body []byte, modelOverride string, streamRequested bool) (map[string]any, JSONResponseSpec, []byte, bool) {
+	rawReq := map[string]any{}
+	jsonSpec := JSONResponseSpec{}
+	if err := json.Unmarshal(body, &rawReq); err != nil {
+		return nil, jsonSpec, body, streamRequested
+	}
+	if v, ok := rawReq["stream"].(bool); ok {
+		streamRequested = v
+	}
+	if modelOverride != "" {
+		rawReq["model"] = modelOverride
+	}
+	if rf, ok := rawReq["response_format"]; ok {
+		rfBytes, _ := json.Marshal(rf)
+		jsonSpec = ParseResponseFormat(rfBytes)
+	}
+	if jsonSpec.Mode != "" {
+		injectJSONSystemMessage(rawReq, jsonSpec.SystemPrompt(false))
+		delete(rawReq, "response_format")
+	}
+	rewritten, _ := json.Marshal(rawReq)
+	return rawReq, jsonSpec, rewritten, streamRequested
+}
+
+// respondPassthroughOverrideTransportError handles the transport-level
+// failure case where the upstream call never produced a status. The
+// envelope is shaped through the boundary so Cursor BYOK still
+// renders the upstream connection error rather than a fallback
+// message.
+func (s *Server) respondPassthroughOverrideTransportError(
+	w http.ResponseWriter,
+	r *http.Request,
+	ctx context.Context,
+	model ResolvedModel,
+	reqID string,
+	started time.Time,
+	streamRequested bool,
+	err error,
+) {
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
+		Stage:      adapterruntime.RequestStageFailed,
+		Provider:   providerName(model, ""),
+		Backend:    model.Backend,
+		RequestID:  reqID,
+		Alias:      model.Alias,
+		ModelID:    model.Alias,
+		Stream:     streamRequested,
+		DurationMs: time.Since(started).Milliseconds(),
+		Err:        err.Error(),
+	})
+	aerr := newAdapterError(adapterErrorUpstreamUnavailable, err.Error())
+	aerr.Provider = providerName(model, "")
+	aerr.Backend = model.Backend
+	aerr.ModelAlias = model.Alias
+	aerr.Cause = err
+	s.respondAdapterError(w, r, aerr)
+}
+
+// writePassthroughOverrideResponse forwards a 2xx upstream body to the
+// caller verbatim. The caller flow has already early-returned on
+// non-2xx so this writer only ever sees a status that is already in
+// the OpenAI compat success window.
+func writePassthroughOverrideResponse(w http.ResponseWriter, status int, respBody []byte, hdr http.Header) {
 	for k, v := range hdr {
 		// Drop any upstream-set Content-Length; we may have rewritten
 		// the body and a stale length triggers the http2 framework to
@@ -148,16 +163,23 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Length", strconv.Itoa(len(respBody)))
 	w.WriteHeader(status)
 	_, _ = w.Write(respBody)
+}
 
-	usage := passthroughOverrideUsageFromBody(respBody)
-	stage := adapterruntime.RequestStageCompleted
-	terminalErr := ""
-	if status >= 400 {
-		stage = adapterruntime.RequestStageFailed
-		terminalErr = "upstream returned status " + strconv.Itoa(status)
-	}
+// logPassthroughOverrideTerminal emits the success-side terminal log
+// event for the passthrough override path. The match between the
+// baseline exhaustruct entry and this call site is preserved by
+// keeping the field set identical to the previous tail block.
+func (s *Server) logPassthroughOverrideTerminal(
+	ctx context.Context,
+	model ResolvedModel,
+	reqID string,
+	started time.Time,
+	streamRequested bool,
+	contentType string,
+	usage Usage,
+) {
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-		Stage:               stage,
+		Stage:               adapterruntime.RequestStageCompleted,
 		Provider:            providerName(model, ""),
 		Backend:             model.Backend,
 		RequestID:           reqID,
@@ -169,7 +191,83 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 		CacheReadTokens:     usage.CachedTokens(),
 		CacheCreationTokens: 0,
 		DurationMs:          time.Since(started).Milliseconds(),
-		Err:                 terminalErr,
+		Err:                 "",
+	})
+}
+
+// coerceOrRetryPassthroughOverrideJSON folds the JSON-spec coercion
+// and one-shot retry path into a helper so forwardPassthroughOverride
+// stays under the funlen budget. Returns the (possibly rewritten)
+// body, status, and headers.
+func (s *Server) coerceOrRetryPassthroughOverrideJSON(
+	ctx context.Context,
+	corr correlation.Context,
+	model ResolvedModel,
+	upstreamLabel string,
+	baseURL string,
+	apiKey string,
+	rawReq map[string]any,
+	jsonSpec JSONResponseSpec,
+	respBody []byte,
+	status int,
+	hdr http.Header,
+) ([]byte, int, http.Header) {
+	coerced, ok := coercePassthroughOverrideJSON(respBody)
+	if ok {
+		return coerced, status, hdr
+	}
+	attrs := []slog.Attr{
+		slog.String("model", model.Alias),
+		slog.String("upstream", upstreamLabel),
+		slog.Int("first_attempt_bytes", len(respBody)),
+	}
+	attrs = append(attrs, corr.Attrs()...)
+	s.log.LogAttrs(ctx, slog.LevelWarn, structuredOutputPassthroughOverrideParseFailedEvent, attrs...)
+	injectJSONSystemMessage(rawReq, jsonSpec.SystemPrompt(true))
+	body2, _ := json.Marshal(rawReq)
+	rb2, st2, h2, err2 := passthroughOverrideCall(ctx, baseURL, apiKey, body2)
+	if err2 != nil || st2 != http.StatusOK {
+		return respBody, status, hdr
+	}
+	if c2, ok2 := coercePassthroughOverrideJSON(rb2); ok2 {
+		return c2, st2, h2
+	}
+	return rb2, st2, h2
+}
+
+// respondPassthroughOverrideError writes a Cursor-safe envelope for a
+// passthrough override upstream that returned a 4xx or 5xx, and emits
+// the matching terminal log event. Extracted from
+// forwardPassthroughOverride so the parent function stays under the
+// funlen budget while keeping the error path explicit.
+func (s *Server) respondPassthroughOverrideError(
+	w http.ResponseWriter,
+	r *http.Request,
+	ctx context.Context,
+	model ResolvedModel,
+	reqID string,
+	status int,
+	respBody []byte,
+	streamRequested bool,
+	contentType string,
+	started time.Time,
+) {
+	message := passthroughOverrideUpstreamErrorMessage(status, respBody)
+	codeClass := anthropicCodeClassForStatus(status)
+	aerr := mapUpstreamForFamily(adapterRouteOpenAI, providerName(model, ""), status, codeClass, "", message)
+	aerr.Backend = model.Backend
+	aerr.ModelAlias = model.Alias
+	s.writeShapedError(w, r, aerr)
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
+		Stage:      adapterruntime.RequestStageFailed,
+		Provider:   providerName(model, ""),
+		Backend:    model.Backend,
+		RequestID:  reqID,
+		Alias:      model.Alias,
+		ModelID:    model.Alias,
+		Stream:     streamRequested || strings.Contains(contentType, "text/event-stream"),
+		DurationMs: time.Since(started).Milliseconds(),
+		Err:        "upstream returned status " + strconv.Itoa(status),
 	})
 }
 
@@ -222,35 +320,6 @@ func passthroughOverrideCall(ctx context.Context, baseURL, apiKey string, body [
 		return nil, resp.StatusCode, resp.Header, err
 	}
 	return rb, resp.StatusCode, resp.Header, nil
-}
-
-func normalizePassthroughOverrideErrorResponse(status int, body []byte, hdr http.Header) ([]byte, http.Header) {
-	if validOpenAIErrorEnvelope(body) {
-		return body, hdr
-	}
-	envelope := ErrorResponse{Error: ErrorBody{
-		Message: passthroughOverrideUpstreamErrorMessage(status, body),
-		Type:    "server_error",
-		Code:    "upstream_failed",
-	}}
-	out, err := json.Marshal(envelope)
-	if err != nil {
-		return body, hdr
-	}
-	next := hdr.Clone()
-	if next == nil {
-		next = http.Header{}
-	}
-	next.Set("Content-Type", "application/json")
-	return out, next
-}
-
-func validOpenAIErrorEnvelope(body []byte) bool {
-	var envelope ErrorResponse
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return false
-	}
-	return strings.TrimSpace(envelope.Error.Message) != "" && strings.TrimSpace(envelope.Error.Type) != ""
 }
 
 func passthroughOverrideUpstreamErrorMessage(status int, body []byte) string {

@@ -20,6 +20,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	"goodkind.io/clyde/internal/adapter/errcontract"
 	"goodkind.io/clyde/internal/adapter/oauth"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -131,6 +132,8 @@ type Server struct {
 	providerRegistry  *adapterprovider.Registry
 	codexProvider     *adaptercodex.Provider
 	anthropicProvider *anthropic.Provider
+	errorRenderers    map[adapterRouteFamily]errcontract.ErrorRenderer
+	upstreamMappers   map[adapterRouteFamily]errcontract.UpstreamErrorMapper
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -181,6 +184,8 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		},
 		ctxUsage:        newContextUsageTracker(),
 		usageNoticeGate: adapterruntime.NewUsageNoticeGateWithLogger(log),
+		errorRenderers:  defaultErrorRendererRegistry(),
+		upstreamMappers: defaultUpstreamMapperRegistry(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
 	if cfg.Codex.Enabled {

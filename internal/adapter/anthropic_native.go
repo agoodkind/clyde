@@ -106,6 +106,12 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		s.writeAnthropicIngressProviderError(w, r, err)
 		return
 	}
+	if collector.empty() {
+		aerr := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic native collect path produced no response")
+		aerr.Provider = "anthropic"
+		s.writeShapedError(w, r, aerr)
+		return
+	}
 	collector.writeTo(w)
 }
 
@@ -142,37 +148,14 @@ func anthropicIngressResolvedModel(model ResolvedModel) adaptermodel.ResolvedMod
 	}
 }
 
-func writeAnthropicError(w http.ResponseWriter, code int, errType, message string) {
-	writeAnthropicErrorBody(w, code, errType, message)
-}
-
-func writeAnthropicErrorBody(w http.ResponseWriter, code int, errType, message string) {
-	payload, err := json.Marshal(anthropic.ErrorEnvelope{
-		Type: "error",
-		Error: anthropic.ErrorDetail{
-			Type:    errType,
-			Message: message,
-		},
-	})
-	if err != nil {
-		http.Error(w, `{"type":"error","error":{"type":"api_error","message":"failed to encode error"}}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_, _ = w.Write(payload)
-}
-
 func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *http.Request, err error) {
 	var execErr *anthropic.ExecuteError
 	if errors.As(err, &execErr) {
-		aerr := adapterErrFromOpenAI(execErr.Status, ErrorBody{
-			Message: execErr.Message,
-			Type:    execErr.Code,
-			Code:    execErr.Code,
-		})
+		// Native Anthropic ingress preserves the spec-correct
+		// Anthropic envelope so claude-cli parses it natively.
+		codeClass := anthropicCodeClassForStatus(execErr.Status)
+		aerr := mapUpstreamForFamily(adapterRouteAnthropic, "anthropic", execErr.Status, codeClass, execErr.Code, execErr.Message)
 		aerr.AnthropicType = anthropicErrorType(execErr.Status, execErr.Code)
-		aerr.Provider = "anthropic"
 		aerr.Cause = err
 		s.respondAdapterError(w, r, aerr)
 		return
@@ -182,13 +165,35 @@ func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *ht
 		if status == 0 {
 			status = http.StatusBadGateway
 		}
-		aerr := anthropicProviderAdapterError(err)
-		aerr.HTTPStatus = status
-		aerr.AnthropicType = anthropicErrorType(status, "")
+		message := upstreamErr.Message
+		if message == "" {
+			message = upstreamErr.Error()
+		}
+		codeClass := anthropicCodeClassForStatus(status)
+		aerr := mapUpstreamForFamily(adapterRouteAnthropic, "anthropic", status, codeClass, "", message)
+		aerr.Cause = err
 		s.respondAdapterError(w, r, aerr)
 		return
 	}
 	s.respondAdapterError(w, r, adapterErrUpstreamFailed("anthropic", err.Error(), err))
+}
+
+// anthropicCodeClassForStatus picks the upstreamCodeClass for a known
+// upstream HTTP status, defaulting to upstreamClassUnknown so the
+// catch-all default applies.
+func anthropicCodeClassForStatus(status int) upstreamCodeClass {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return upstreamClassRateLimit
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return upstreamClassAuth
+	case status >= 500:
+		return upstreamClassServerError
+	case status >= 400:
+		return upstreamClassInvalidRequest
+	default:
+		return upstreamClassUnknown
+	}
 }
 
 func anthropicErrorType(status int, code string) string {
@@ -242,9 +247,16 @@ func (w *nativeAnthropicJSONWriter) capture(status int, header http.Header, body
 	return nil
 }
 
+// empty reports whether the collector captured a response body. The
+// caller routes the empty case through the boundary (writeShapedError)
+// instead of this writer because rendering the error envelope is the
+// boundary's responsibility, not the collector's.
+func (w *nativeAnthropicJSONWriter) empty() bool {
+	return w == nil || len(w.body) == 0
+}
+
 func (w *nativeAnthropicJSONWriter) writeTo(dst http.ResponseWriter) {
 	if w == nil {
-		writeAnthropicError(dst, http.StatusBadGateway, "api_error", "anthropic native collect path produced no response")
 		return
 	}
 	for key, values := range w.header {

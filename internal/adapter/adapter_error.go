@@ -1,11 +1,15 @@
 package adapter
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"goodkind.io/clyde/internal/adapter/errcontract"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -20,22 +24,25 @@ const (
 type adapterErrorClass string
 
 const (
-	adapterErrorAuthFailed            adapterErrorClass = "auth_failed"
-	adapterErrorMethodNotAllowed      adapterErrorClass = "method_not_allowed"
-	adapterErrorInvalidJSON           adapterErrorClass = "invalid_json"
-	adapterErrorInvalidRequest        adapterErrorClass = "invalid_request"
-	adapterErrorModelNotFound         adapterErrorClass = "model_not_found"
-	adapterErrorModelNotSupported     adapterErrorClass = "model_not_supported"
-	adapterErrorUnsupportedBackend    adapterErrorClass = "unsupported_backend"
-	adapterErrorUnsupportedContent    adapterErrorClass = "unsupported_content"
-	adapterErrorContextLengthExceeded adapterErrorClass = "context_length_exceeded"
-	adapterErrorRateLimited           adapterErrorClass = "rate_limited"
-	adapterErrorUpstreamAuthFailed    adapterErrorClass = "upstream_auth_failed"
-	adapterErrorUpstreamUnavailable   adapterErrorClass = "upstream_unavailable"
-	adapterErrorUpstreamFailed        adapterErrorClass = "upstream_failed"
-	adapterErrorTimeout               adapterErrorClass = "timeout"
-	adapterErrorCanceled              adapterErrorClass = "canceled"
-	adapterErrorInternal              adapterErrorClass = "internal"
+	adapterErrorAuthFailed              adapterErrorClass = "auth_failed"
+	adapterErrorMethodNotAllowed        adapterErrorClass = "method_not_allowed"
+	adapterErrorInvalidJSON             adapterErrorClass = "invalid_json"
+	adapterErrorInvalidRequest          adapterErrorClass = "invalid_request"
+	adapterErrorModelNotFound           adapterErrorClass = "model_not_found"
+	adapterErrorModelNotSupported       adapterErrorClass = "model_not_supported"
+	adapterErrorUnsupportedBackend      adapterErrorClass = "unsupported_backend"
+	adapterErrorUnsupportedContent      adapterErrorClass = "unsupported_content"
+	adapterErrorContextLengthExceeded   adapterErrorClass = "context_length_exceeded"
+	adapterErrorRateLimited             adapterErrorClass = "rate_limited"
+	adapterErrorUpstreamAuthFailed      adapterErrorClass = "upstream_auth_failed"
+	adapterErrorUpstreamUnavailable     adapterErrorClass = "upstream_unavailable"
+	adapterErrorUpstreamFailed          adapterErrorClass = "upstream_failed"
+	adapterErrorUpstreamRateLimited     adapterErrorClass = "upstream_rate_limited"
+	adapterErrorUpstreamSchemaViolation adapterErrorClass = "upstream_schema_violation"
+	adapterErrorUpstreamNetworkError    adapterErrorClass = "upstream_network_error"
+	adapterErrorTimeout                 adapterErrorClass = "timeout"
+	adapterErrorCanceled                adapterErrorClass = "canceled"
+	adapterErrorInternal                adapterErrorClass = "internal"
 )
 
 type adapterError struct {
@@ -148,6 +155,40 @@ func adapterErrFromOpenAI(status int, body ErrorBody) *adapterError {
 	return e
 }
 
+// adapterErrorDefaults holds the default envelope fields for a single
+// adapterErrorClass. The applyDefaults table below is the single
+// source of truth for class-to-envelope mapping; new classes plug in
+// by adding a row instead of growing the switch.
+type adapterErrorDefaults struct {
+	HTTPStatus    int
+	OpenAIType    string
+	OpenAICode    string
+	OpenAIParam   string
+	AnthropicType string
+}
+
+var adapterErrorDefaultsByClass = map[adapterErrorClass]adapterErrorDefaults{
+	adapterErrorAuthFailed:              {http.StatusUnauthorized, "authentication_error", "unauthorized", "", "authentication_error"},
+	adapterErrorMethodNotAllowed:        {http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "", "invalid_request_error"},
+	adapterErrorInvalidJSON:             {http.StatusBadRequest, "invalid_request_error", "invalid_json", "", "invalid_request_error"},
+	adapterErrorInvalidRequest:          {http.StatusBadRequest, "invalid_request_error", "invalid_request", "", "invalid_request_error"},
+	adapterErrorModelNotFound:           {http.StatusBadRequest, "invalid_request_error", "model_not_found", "model", "invalid_request_error"},
+	adapterErrorModelNotSupported:       {http.StatusBadRequest, "invalid_request_error", "model_not_supported", "model", "invalid_request_error"},
+	adapterErrorUnsupportedBackend:      {http.StatusBadRequest, "invalid_request_error", "unsupported_backend", "", "invalid_request_error"},
+	adapterErrorUnsupportedContent:      {http.StatusBadRequest, "invalid_request_error", "unsupported_content", "", "invalid_request_error"},
+	adapterErrorContextLengthExceeded:   {http.StatusBadRequest, "invalid_request_error", "context_length_exceeded", "messages", "invalid_request_error"},
+	adapterErrorRateLimited:             {http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded", "", "rate_limit_error"},
+	adapterErrorUpstreamAuthFailed:      {http.StatusBadRequest, "invalid_request_error", "upstream_auth_failed", "", "authentication_error"},
+	adapterErrorUpstreamRateLimited:     {http.StatusBadRequest, "invalid_request_error", "upstream_rate_limited", "", "rate_limit_error"},
+	adapterErrorUpstreamSchemaViolation: {http.StatusBadRequest, "invalid_request_error", "upstream_malformed_request", "", "invalid_request_error"},
+	adapterErrorUpstreamNetworkError:    {http.StatusBadRequest, "invalid_request_error", "upstream_network_error", "", "api_error"},
+	adapterErrorUpstreamUnavailable:     {http.StatusBadGateway, "server_error", "upstream_unavailable", "", "api_error"},
+	adapterErrorUpstreamFailed:          {http.StatusBadGateway, "server_error", "upstream_failed", "", "api_error"},
+	adapterErrorTimeout:                 {http.StatusGatewayTimeout, "server_error", "timeout", "", "api_error"},
+	adapterErrorCanceled:                {499, "server_error", "canceled", "", "api_error"},
+	adapterErrorInternal:                {http.StatusInternalServerError, "internal_error", "internal_error", "", "api_error"},
+}
+
 func (e *adapterError) applyDefaults() {
 	explicitStatus := e.HTTPStatus
 	explicitOpenAIType := e.OpenAIType
@@ -157,90 +198,12 @@ func (e *adapterError) applyDefaults() {
 	if e.HTTPStatus == 0 {
 		e.HTTPStatus = http.StatusInternalServerError
 	}
-	switch e.Class {
-	case adapterErrorAuthFailed:
-		e.HTTPStatus = http.StatusUnauthorized
-		e.OpenAIType = "authentication_error"
-		e.OpenAICode = "unauthorized"
-		e.AnthropicType = "authentication_error"
-	case adapterErrorMethodNotAllowed:
-		e.HTTPStatus = http.StatusMethodNotAllowed
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "method_not_allowed"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorInvalidJSON:
-		e.HTTPStatus = http.StatusBadRequest
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "invalid_json"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorInvalidRequest:
-		e.HTTPStatus = http.StatusBadRequest
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "invalid_request"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorModelNotFound:
-		e.HTTPStatus = http.StatusBadRequest
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "model_not_found"
-		e.OpenAIParam = "model"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorModelNotSupported:
-		e.HTTPStatus = http.StatusBadRequest
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "model_not_supported"
-		e.OpenAIParam = "model"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorUnsupportedBackend:
-		e.HTTPStatus = http.StatusBadRequest
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "unsupported_backend"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorUnsupportedContent:
-		e.HTTPStatus = http.StatusBadRequest
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "unsupported_content"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorContextLengthExceeded:
-		e.HTTPStatus = http.StatusBadRequest
-		e.OpenAIType = "invalid_request_error"
-		e.OpenAICode = "context_length_exceeded"
-		e.OpenAIParam = "messages"
-		e.AnthropicType = "invalid_request_error"
-	case adapterErrorRateLimited:
-		e.HTTPStatus = http.StatusTooManyRequests
-		e.OpenAIType = "rate_limit_error"
-		e.OpenAICode = "rate_limit_exceeded"
-		e.AnthropicType = "rate_limit_error"
-	case adapterErrorUpstreamAuthFailed:
-		e.HTTPStatus = http.StatusUnauthorized
-		e.OpenAIType = "authentication_error"
-		e.OpenAICode = "upstream_auth_failed"
-		e.AnthropicType = "authentication_error"
-	case adapterErrorUpstreamUnavailable:
-		e.HTTPStatus = http.StatusBadGateway
-		e.OpenAIType = "server_error"
-		e.OpenAICode = "upstream_unavailable"
-		e.AnthropicType = "api_error"
-	case adapterErrorUpstreamFailed:
-		e.HTTPStatus = http.StatusBadGateway
-		e.OpenAIType = "server_error"
-		e.OpenAICode = "upstream_failed"
-		e.AnthropicType = "api_error"
-	case adapterErrorTimeout:
-		e.HTTPStatus = http.StatusGatewayTimeout
-		e.OpenAIType = "server_error"
-		e.OpenAICode = "timeout"
-		e.AnthropicType = "api_error"
-	case adapterErrorCanceled:
-		e.HTTPStatus = 499
-		e.OpenAIType = "server_error"
-		e.OpenAICode = "canceled"
-		e.AnthropicType = "api_error"
-	case adapterErrorInternal:
-		e.HTTPStatus = http.StatusInternalServerError
-		e.OpenAIType = "internal_error"
-		e.OpenAICode = "internal_error"
-		e.AnthropicType = "api_error"
+	if defaults, ok := adapterErrorDefaultsByClass[e.Class]; ok {
+		e.HTTPStatus = defaults.HTTPStatus
+		e.OpenAIType = defaults.OpenAIType
+		e.OpenAICode = defaults.OpenAICode
+		e.OpenAIParam = defaults.OpenAIParam
+		e.AnthropicType = defaults.AnthropicType
 	}
 	if e.Message == "" {
 		e.Message = string(e.Class)
@@ -285,11 +248,27 @@ func adapterErrorFrom(err error) *adapterError {
 	return adapterErrUpstreamFailed("", err.Error(), err)
 }
 
+// respondAdapterError is a deprecated alias for writeShapedError. New
+// callers should use writeShapedError; this wrapper exists so the
+// PR1 boundary helpers can land without rewriting every existing call
+// site in one sweep.
 func (s *Server) respondAdapterError(w http.ResponseWriter, r *http.Request, err error) {
+	s.writeShapedError(w, r, err)
+}
+
+// writeShapedError renders a non-2xx response by looking up the
+// route family's registered ErrorRenderer and handing it the
+// primitive ErrorInfo derived from the adapterError. The boundary
+// never imports a provider envelope type and never constructs an
+// envelope literal; provider packages own those shapes through the
+// errcontract.ErrorRenderer interface.
+func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err error) {
 	aerr := adapterErrorFrom(err)
 	if aerr == nil {
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
+	family := adapterRouteFamilyForPath(r.URL.Path)
+	aerr = applyFamilyShape(family, aerr)
 	corr := correlationForRequest(r)
 	message := aerr.Message
 	if !aerr.SafeForClient {
@@ -298,7 +277,6 @@ func (s *Server) respondAdapterError(w http.ResponseWriter, r *http.Request, err
 			message += "; see Clyde logs with request_id " + corr.RequestID
 		}
 	}
-	family := adapterRouteFamilyForPath(r.URL.Path)
 	attrs := []slog.Attr{
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
@@ -318,24 +296,100 @@ func (s *Server) respondAdapterError(w http.ResponseWriter, r *http.Request, err
 	}
 	attrs = append(attrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", attrs...)
-	switch family {
-	case adapterRouteAnthropic:
-		writeAnthropicErrorBody(w, aerr.HTTPStatus, aerr.AnthropicType, message)
-	default:
-		writeOpenAIErrorBody(w, aerr.HTTPStatus, ErrorBody{
-			Message: message,
-			Type:    aerr.OpenAIType,
-			Code:    aerr.OpenAICode,
-			Param:   aerr.OpenAIParam,
-		})
+	info := errcontract.ErrorInfo{
+		Type:    rendererTypeForFamily(family, aerr),
+		Code:    aerr.OpenAICode,
+		Message: message,
+		Param:   aerr.OpenAIParam,
+	}
+	renderer, ok := s.lookupErrorRenderer(family)
+	if !ok {
+		s.writeFallbackErrorResponse(r.Context(), w, family, aerr.HTTPStatus, info)
+		return
+	}
+	if writeErr := renderer.Render(w, aerr.HTTPStatus, info); writeErr != nil {
+		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.error_boundary.render_failed",
+			slog.String("route_family", string(family)),
+			slog.Any("err", writeErr),
+		)
 	}
 }
 
-func writeOpenAIErrorBody(w http.ResponseWriter, code int, body ErrorBody) {
-	if body.Code == "" {
-		body.Code = body.Type
+// rendererTypeForFamily picks the envelope Type primitive the
+// renderer should use. The Anthropic family wants the spec-correct
+// envelope type that lives on AnthropicType; the OpenAI family wants
+// the OpenAIType stored on the adapterError.
+func rendererTypeForFamily(family adapterRouteFamily, aerr *adapterError) string {
+	if family == adapterRouteAnthropic {
+		if aerr.AnthropicType != "" {
+			return aerr.AnthropicType
+		}
+		return "api_error"
 	}
-	writeJSON(w, code, ErrorResponse{Error: body})
+	return aerr.OpenAIType
+}
+
+// lookupErrorRenderer returns the registered renderer for a family,
+// preferring the per-Server registry when populated and falling back
+// to the package defaults so non-Server call paths and tests still
+// resolve the canonical provider renderer.
+func (s *Server) lookupErrorRenderer(family adapterRouteFamily) (errcontract.ErrorRenderer, bool) {
+	if s != nil && s.errorRenderers != nil {
+		if r, ok := s.errorRenderers[family]; ok {
+			return r, true
+		}
+	}
+	r, ok := defaultErrorRenderers[family]
+	return r, ok
+}
+
+// writeFallbackErrorResponse handles the unregistered-family path so
+// the boundary is still guaranteed to emit a parseable JSON body
+// instead of a bare WriteHeader. The chosen shape is a
+// minimal-on-purpose JSON string body; callers add the warning log so
+// regressions in registration get noticed.
+func (s *Server) writeFallbackErrorResponse(ctx context.Context, w http.ResponseWriter, family adapterRouteFamily, status int, info errcontract.ErrorInfo) {
+	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.error_boundary.no_renderer_for_family",
+		slog.String("route_family", string(family)),
+		slog.Int("status", status),
+		slog.String("error_type", info.Type),
+		slog.String("error_code", info.Code),
+	)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	const fallback = `{"error":{"message":"no error renderer registered for route family","type":"internal_error","code":"internal_error"}}`
+	_, _ = fmt.Fprint(w, fallback)
+}
+
+// respondAdapterStreamError emits one Cursor-safe SSE error frame
+// followed by the [DONE] terminator. Mid-stream errors must use this
+// helper because the response headers have already been committed and
+// switching to a JSON envelope would corrupt the SSE channel.
+func (s *Server) respondAdapterStreamError(ctx context.Context, sse *adapteropenai.SSEWriter, err error) error {
+	if sse == nil {
+		return nil
+	}
+	aerr := adapterErrorFrom(err)
+	if aerr == nil {
+		aerr = adapterErrInternal("adapter internal error", nil)
+	}
+	aerr = applyFamilyShape(adapterRouteOpenAI, aerr)
+	body := aerr.openAIErrorBody()
+	if !aerr.SafeForClient {
+		body.Message = "adapter internal error"
+	}
+	if writeErr := sse.EmitStreamError(body); writeErr != nil {
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
+			slog.String("openai_type", body.Type),
+			slog.String("openai_code", body.Code),
+			slog.Any("err", writeErr),
+		)
+		return fmt.Errorf("emit stream error frame: %w", writeErr)
+	}
+	if err := sse.WriteStreamDone(); err != nil {
+		return fmt.Errorf("write stream done terminator: %w", err)
+	}
+	return nil
 }
 
 func (e *adapterError) openAIErrorBody() ErrorBody {

@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -29,6 +30,7 @@ type providerStreamWriter struct {
 	modelAlias        string
 	ctx               context.Context
 	log               *slog.Logger
+	server            *Server
 	streamChunkSeq    int
 }
 
@@ -54,6 +56,7 @@ func newProviderStreamWriter(
 		modelAlias:        modelAlias,
 		ctx:               ctx,
 		log:               slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPEgress),
+		server:            s,
 	}, nil
 }
 
@@ -295,13 +298,26 @@ func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapte
 }
 
 func (p *providerStreamWriter) writeStreamErrorBody(ctx context.Context, body adapteropenai.ErrorBody) error {
-	if p == nil || p.sse == nil {
+	if p == nil || p.sse == nil || p.server == nil {
 		return nil
 	}
-	if err := p.sse.EmitStreamError(body); err != nil {
-		return err
+	// Route through the boundary helper so every mid-stream error
+	// emits exactly one Cursor-safe SSE error frame followed by the
+	// [DONE] terminator. The boundary lockdown forbids direct
+	// EmitStreamError calls outside adapter_error.go.
+	aerr := newAdapterError(adapterErrorUpstreamFailed, body.Message)
+	aerr.OpenAIType = body.Type
+	aerr.OpenAICode = body.Code
+	aerr.OpenAIParam = body.Param
+	if err := p.server.respondAdapterStreamError(ctx, p.sse, aerr); err != nil {
+		p.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_responder_failed",
+			slog.String("request_id", p.reqID),
+			slog.String("model", p.modelAlias),
+			slog.Any("err", err),
+		)
+		return fmt.Errorf("respond stream error: %w", err)
 	}
-	return p.writeStreamDone(ctx)
+	return nil
 }
 
 var _ adapterprovider.EventWriter = (*providerStreamWriter)(nil)

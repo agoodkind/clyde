@@ -96,10 +96,13 @@ func TestAnthropicProviderErrorResponseMapsWrappedTransportFailure(t *testing.T)
 	aerr := anthropicProviderAdapterError(errors.Join(errors.New("collect failed"), upstreamErr))
 	status, body := aerr.HTTPStatus, aerr.openAIErrorBody()
 
-	if status != http.StatusBadGateway {
-		t.Fatalf("status=%d want %d", status, http.StatusBadGateway)
+	// Cursor BYOK never sees HTTP 5xx + server_error; the boundary
+	// flips wrapped transport failures into a Cursor-safe
+	// invalid_request_error envelope.
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
 	}
-	if body.Type != "server_error" || body.Code != "upstream_unavailable" {
+	if body.Type != "invalid_request_error" {
 		t.Fatalf("body=%+v", body)
 	}
 	if body.Message == "" {

@@ -322,40 +322,31 @@ func anthropicProviderAdapterError(err error) *adapterError {
 		return aerr
 	}
 	if upstreamErr, ok := anthropic.AsUpstreamError(err); ok {
-		status := upstreamErr.Status
-		if status == 0 {
-			status = http.StatusBadGateway
-		}
-		var aerr *adapterError
 		message := upstreamErr.Message
 		if message == "" {
 			message = upstreamErr.Error()
 		}
+		// Generalize the previous inline 429 workaround through the
+		// shared mapping helper. Every non-2xx upstream from the
+		// Anthropic provider flows through mapUpstreamForFamily so
+		// Cursor BYOK gets a parseable invalid_request envelope with
+		// the upstream message preserved verbatim.
+		codeClass := upstreamClassUnknown
 		switch {
-		case upstreamErr.Class() == anthropic.ResponseClassRetryableError && upstreamErr.Status == http.StatusTooManyRequests:
-			// Cursor does not reliably surface the upstream message when a
-			// custom OpenAI-compatible provider returns HTTP 429 with
-			// rate_limit_error/rate_limit_exceeded. In that shape Cursor routes
-			// to its BYOK rate-limit fallback UI ("User Provided API Key Rate
-			// Limit Exceeded") and hides Clyde's actual Anthropic reset text.
-			//
-			// Keep the true upstream status in logs via UpstreamStatus below, but
-			// present the client-facing envelope like the Codex context-window
-			// path: HTTP 400 + invalid_request_error + a specific code + the
-			// legible upstream message in error.message.
-			aerr = newAdapterError(adapterErrorInvalidRequest, message)
-			aerr.OpenAICode = "upstream_rate_limited"
+		case upstreamErr.Status == http.StatusTooManyRequests:
+			codeClass = upstreamClassRateLimit
+		case upstreamErr.Status == http.StatusUnauthorized || upstreamErr.Status == http.StatusForbidden:
+			codeClass = upstreamClassAuth
 		case upstreamErr.Class() == anthropic.ResponseClassRetryableError:
-			aerr = newAdapterError(adapterErrorUpstreamUnavailable, message)
-		default:
-			aerr = newAdapterError(adapterErrorUpstreamFailed, message)
+			codeClass = upstreamClassServerError
+		case upstreamErr.Status >= 500:
+			codeClass = upstreamClassServerError
+		case upstreamErr.Status >= 400:
+			codeClass = upstreamClassInvalidRequest
 		}
-		if upstreamErr.Status != http.StatusTooManyRequests {
-			aerr.HTTPStatus = status
-		}
-		aerr.Provider = "anthropic"
-		aerr.UpstreamStatus = upstreamErr.Status
+		aerr := mapUpstreamForFamily(adapterRouteOpenAI, "anthropic", upstreamErr.Status, codeClass, "", message)
 		aerr.Cause = err
+		aerr.UpstreamStatus = upstreamErr.Status
 		return aerr
 	}
 	return adapterErrUpstreamFailed("anthropic", err.Error(), err)
