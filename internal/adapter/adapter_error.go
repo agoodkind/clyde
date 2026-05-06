@@ -122,39 +122,6 @@ func adapterErrUpstreamFailed(provider, message string, cause error) *adapterErr
 	return e
 }
 
-func adapterErrFromOpenAI(status int, body ErrorBody) *adapterError {
-	class := adapterErrorInvalidRequest
-	switch strings.TrimSpace(body.Code) {
-	case "context_length_exceeded":
-		class = adapterErrorContextLengthExceeded
-	case "model_not_supported":
-		class = adapterErrorModelNotSupported
-	case "model_not_found":
-		class = adapterErrorModelNotFound
-	case "unsupported_backend":
-		class = adapterErrorUnsupportedBackend
-	case "unsupported_content", "audio_unsupported":
-		class = adapterErrorUnsupportedContent
-	case "rate_limit_exceeded":
-		class = adapterErrorRateLimited
-	case "upstream_unavailable":
-		class = adapterErrorUpstreamUnavailable
-	case "upstream_failed":
-		class = adapterErrorUpstreamFailed
-	case "internal_error":
-		class = adapterErrorInternal
-	}
-	e := newAdapterError(class, body.Message)
-	e.OpenAIType = body.Type
-	e.OpenAICode = body.Code
-	e.OpenAIParam = body.Param
-	e.applyDefaults()
-	if status > 0 {
-		e.HTTPStatus = status
-	}
-	return e
-}
-
 // adapterErrorDefaults holds the default envelope fields for a single
 // adapterErrorClass. The applyDefaults table below is the single
 // source of truth for class-to-envelope mapping; new classes plug in
@@ -296,15 +263,10 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 	}
 	attrs = append(attrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", attrs...)
-	info := errcontract.ErrorInfo{
-		Type:    rendererTypeForFamily(family, aerr),
-		Code:    aerr.OpenAICode,
-		Message: message,
-		Param:   aerr.OpenAIParam,
-	}
+	info := adapterErrorInfoForFamily(family, aerr, message)
 	renderer, ok := s.lookupErrorRenderer(family)
 	if !ok {
-		s.writeFallbackErrorResponse(r.Context(), w, family, aerr.HTTPStatus, info)
+		s.writeFallbackError(r.Context(), w, family, aerr.HTTPStatus, info)
 		return
 	}
 	if writeErr := renderer.Render(w, aerr.HTTPStatus, info); writeErr != nil {
@@ -329,6 +291,27 @@ func rendererTypeForFamily(family adapterRouteFamily, aerr *adapterError) string
 	return aerr.OpenAIType
 }
 
+func adapterErrorInfoForFamily(family adapterRouteFamily, aerr *adapterError, message string) errcontract.ErrorInfo {
+	if aerr == nil {
+		return errcontract.ErrorInfo{
+			Type:    "internal_error",
+			Code:    "internal_error",
+			Message: "adapter internal error",
+			Param:   "",
+		}
+	}
+	aerr.applyDefaults()
+	if message == "" {
+		message = aerr.Message
+	}
+	return errcontract.ErrorInfo{
+		Type:    rendererTypeForFamily(family, aerr),
+		Code:    aerr.OpenAICode,
+		Message: message,
+		Param:   aerr.OpenAIParam,
+	}
+}
+
 // lookupErrorRenderer returns the registered renderer for a family,
 // preferring the per-Server registry when populated and falling back
 // to the package defaults so non-Server call paths and tests still
@@ -342,12 +325,12 @@ func (s *Server) lookupErrorRenderer(family adapterRouteFamily) (errcontract.Err
 	return defaultBoundaryRegistry.errorRenderer(family)
 }
 
-// writeFallbackErrorResponse handles the unregistered-family path so
+// writeFallbackError handles the unregistered-family path so
 // the boundary is still guaranteed to emit a parseable JSON body
 // instead of a bare WriteHeader. The chosen shape is a
 // minimal-on-purpose JSON string body; callers add the warning log so
 // regressions in registration get noticed.
-func (s *Server) writeFallbackErrorResponse(ctx context.Context, w http.ResponseWriter, family adapterRouteFamily, status int, info errcontract.ErrorInfo) {
+func (s *Server) writeFallbackError(ctx context.Context, w http.ResponseWriter, family adapterRouteFamily, status int, info errcontract.ErrorInfo) {
 	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.error_boundary.no_renderer_for_family",
 		slog.String("route_family", string(family)),
 		slog.Int("status", status),
@@ -373,14 +356,15 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse *adapteropen
 		aerr = adapterErrInternal("adapter internal error", nil)
 	}
 	aerr = applyFamilyShape(adapterRouteOpenAI, aerr)
-	body := aerr.openAIErrorBody()
+	message := aerr.Message
 	if !aerr.SafeForClient {
-		body.Message = "adapter internal error"
+		message = "adapter internal error"
 	}
-	if writeErr := sse.EmitStreamError(body); writeErr != nil {
+	info := adapterErrorInfoForFamily(adapterRouteOpenAI, aerr, message)
+	if writeErr := sse.EmitStreamError(info); writeErr != nil {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
-			slog.String("openai_type", body.Type),
-			slog.String("openai_code", body.Code),
+			slog.String("openai_type", info.Type),
+			slog.String("openai_code", info.Code),
 			slog.Any("err", writeErr),
 		)
 		return fmt.Errorf("emit stream error frame: %w", writeErr)
@@ -389,21 +373,4 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse *adapteropen
 		return fmt.Errorf("write stream done terminator: %w", err)
 	}
 	return nil
-}
-
-func (e *adapterError) openAIErrorBody() ErrorBody {
-	if e == nil {
-		return ErrorBody{
-			Message: "adapter internal error",
-			Type:    "internal_error",
-			Code:    "internal_error",
-		}
-	}
-	e.applyDefaults()
-	return ErrorBody{
-		Message: e.Message,
-		Type:    e.OpenAIType,
-		Code:    e.OpenAICode,
-		Param:   e.OpenAIParam,
-	}
 }

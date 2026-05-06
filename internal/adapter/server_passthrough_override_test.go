@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -95,7 +96,7 @@ func TestPassthroughOverrideWrapsMalformedUpstreamError(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Fatalf("content-type = %q", got)
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal response: %v; body=%s", err, rec.Body.String())
 	}
@@ -128,7 +129,7 @@ func TestPassthroughOverridePreservesOpenAIErrorEnvelope(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal response: %v; body=%s", err, rec.Body.String())
 	}

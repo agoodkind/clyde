@@ -485,9 +485,6 @@ func (d *collectResponseDispatcher) TrackAnthropicContextUsage(key string, raw a
 func (d *collectResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, _ adapteropenai.ChatResponse) {
 }
 
-func (d *collectResponseDispatcher) WriteErrorJSON(http.ResponseWriter, int, adapteropenai.ErrorResponse) {
-}
-
 func (d *collectResponseDispatcher) LogTerminal(ctx context.Context, ev adapterruntime.RequestEvent) {
 	adapterruntime.LogTerminal(d.server.log, ctx, d.server.deps.RequestEvents, ev)
 }
@@ -558,9 +555,6 @@ func (d *streamResponseDispatcher) TrackAnthropicContextUsage(key string, raw ad
 }
 
 func (d *streamResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, _ adapteropenai.ChatResponse) {
-}
-
-func (d *streamResponseDispatcher) WriteErrorJSON(_ http.ResponseWriter, _ int, _ adapteropenai.ErrorResponse) {
 }
 
 func (d *streamResponseDispatcher) LogTerminal(ctx context.Context, ev adapterruntime.RequestEvent) {

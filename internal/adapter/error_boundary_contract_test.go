@@ -220,7 +220,7 @@ func TestErrorBoundaryWriteShapedErrorOpenAIInvalidJSON(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d", resp.Code)
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}

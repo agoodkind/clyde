@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
@@ -32,7 +33,7 @@ func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
 			path:   "/v1/chat/completions",
 			assertFn: func(t *testing.T, resp *httptest.ResponseRecorder) {
 				t.Helper()
-				var out ErrorResponse
+				var out adapteropenai.ErrorResponse
 				if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 					t.Fatalf("unmarshal OpenAI error: %v body=%s", err, resp.Body.String())
 				}
@@ -136,7 +137,7 @@ func TestAdapterAuthErrorEnvelopeFollowsRouteFamily(t *testing.T) {
 	if openAIResp.Code != http.StatusUnauthorized {
 		t.Fatalf("OpenAI status=%d body=%s", openAIResp.Code, openAIResp.Body.String())
 	}
-	var openAIOut ErrorResponse
+	var openAIOut adapteropenai.ErrorResponse
 	if err := json.Unmarshal(openAIResp.Body.Bytes(), &openAIOut); err != nil {
 		t.Fatalf("unmarshal OpenAI auth error: %v body=%s", err, openAIResp.Body.String())
 	}
@@ -172,7 +173,7 @@ func TestAdapterInvalidJSONEnvelopeFollowsRouteFamily(t *testing.T) {
 	if openAIResp.Code != http.StatusBadRequest {
 		t.Fatalf("OpenAI status=%d body=%s", openAIResp.Code, openAIResp.Body.String())
 	}
-	var openAIOut ErrorResponse
+	var openAIOut adapteropenai.ErrorResponse
 	if err := json.Unmarshal(openAIResp.Body.Bytes(), &openAIOut); err != nil {
 		t.Fatalf("unmarshal OpenAI invalid JSON error: %v body=%s", err, openAIResp.Body.String())
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -251,7 +252,7 @@ func TestAdapterErrorBoundaryRecoversPanicWithShapedError(t *testing.T) {
 	if resp.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
 	}
@@ -456,7 +457,7 @@ func TestHandleChatRejectsUnsupportedBackendWithoutLegacyRunner(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
 	}
@@ -594,7 +595,7 @@ func TestHandleChatModelResolutionErrorUsesCursorNativeShape(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
 	}

@@ -29,8 +29,6 @@ type (
 	PromptTokensDetails = adapteropenai.PromptTokensDetails
 	ModelsResponse      = adapteropenai.ModelsResponse
 	ModelEntry          = adapteropenai.ModelEntry
-	ErrorResponse       = adapteropenai.ErrorResponse
-	ErrorBody           = adapteropenai.ErrorBody
 	ContentKind         = adapteropenai.ContentKind
 	BodySummary         = adapteropenai.BodySummary
 	MsgSummary          = adapteropenai.MsgSummary

@@ -113,6 +113,51 @@ func TestErrorBoundaryNoUnshapedErrorWrites(t *testing.T) {
 	}
 }
 
+func TestTopLevelAdapterProductionDoesNotOwnOpenAIErrorBodies(t *testing.T) {
+	t.Parallel()
+	prohibited := map[string]bool{
+		"ErrorBody":                   true,
+		"ErrorResponse":               true,
+		"adapteropenai.ErrorBody":     true,
+		"adapteropenai.ErrorResponse": true,
+	}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read adapter directory: %v", err)
+	}
+	fset := token.NewFileSet()
+	violations := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(".", name)
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", path, parseErr)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			for _, candidate := range identifierCandidatesFromNode(node) {
+				if !prohibited[candidate] {
+					continue
+				}
+				pos := fset.Position(node.Pos())
+				t.Errorf("%s:%d: OpenAI error envelope symbol %q must stay in provider packages", pos.Filename, pos.Line, candidate)
+				violations++
+			}
+			return true
+		})
+	}
+	if violations > 0 {
+		t.Fatalf("OpenAI error body ownership self-test found %d violations", violations)
+	}
+}
+
 // identifierCandidatesFromNode returns every textual form by which a
 // node could reference a prohibited symbol. SelectorExpr nodes
 // produce both the qualified form (http.Error) and the bare method

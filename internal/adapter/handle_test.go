@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -31,7 +32,7 @@ func TestAdapterHandleAdapterErrorEnvelope(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
@@ -65,7 +66,7 @@ func TestAdapterHandlePlainErrorWrapped(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
@@ -101,7 +102,7 @@ func TestAdapterHandleBodyNotWrittenBackstop(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
@@ -135,7 +136,7 @@ func TestAdapterHandleRecoversPanic(t *testing.T) {
 	if resp.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	var out ErrorResponse
+	var out adapteropenai.ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
 	}
