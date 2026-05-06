@@ -1,13 +1,13 @@
 package adapter
 
 import (
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
-	"goodkind.io/clyde/internal/adapter/anthropic"
 	"goodkind.io/clyde/internal/adapter/errcontract"
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
 // upstreamCodeClass aliases the contract type so existing in-package
@@ -27,38 +27,77 @@ const (
 	upstreamClassUnknown         = errcontract.UpstreamClassUnknown
 )
 
-// defaultUpstreamMappers is the package-default registry of
-// UpstreamErrorMapper implementations keyed by route family. Each
-// mapper lives in its own provider package; the boundary holds only
-// references through the errcontract interface so it never imports
-// a provider envelope type. Server.New copies these into per-Server
-// state; tests and any non-Server path use the defaults directly.
-var defaultUpstreamMappers = defaultUpstreamMapperRegistry()
+// boundaryRegistry holds the typed, per-family registries the boundary
+// dispatches against. The zero value is usable; reads and writes are
+// guarded by mu so init-time RegisterErrorBoundary calls are safe even
+// if a future generation runs them concurrently. Provider packages
+// populate this registry exactly once at process startup through their
+// RegisterErrorBoundary hooks; the boundary file owns no provider
+// import and constructs no provider envelope.
+type boundaryRegistry struct {
+	mu        sync.RWMutex
+	mappers   map[adapterRouteFamily]errcontract.UpstreamErrorMapper
+	renderers map[adapterRouteFamily]errcontract.ErrorRenderer
+}
 
-// defaultErrorRenderers is the package-default registry of
-// ErrorRenderer implementations keyed by route family. Symmetric to
-// defaultUpstreamMappers above.
-var defaultErrorRenderers = defaultErrorRendererRegistry()
-
-// defaultUpstreamMapperRegistry constructs a fresh map of the
-// canonical per-family UpstreamErrorMapper implementations. The
-// helper exists so Server.New stays under the funlen budget.
-func defaultUpstreamMapperRegistry() map[adapterRouteFamily]errcontract.UpstreamErrorMapper {
-	return map[adapterRouteFamily]errcontract.UpstreamErrorMapper{
-		adapterRouteOpenAI:    adapteropenai.NewUpstreamErrorMapper(),
-		adapterRouteAnthropic: anthropic.NewUpstreamErrorMapper(),
+func newBoundaryRegistry() *boundaryRegistry {
+	return &boundaryRegistry{
+		mu:        sync.RWMutex{},
+		mappers:   map[adapterRouteFamily]errcontract.UpstreamErrorMapper{},
+		renderers: map[adapterRouteFamily]errcontract.ErrorRenderer{},
 	}
 }
 
-// defaultErrorRendererRegistry constructs a fresh map of the
-// canonical per-family ErrorRenderer implementations. Symmetric to
-// defaultUpstreamMapperRegistry above.
-func defaultErrorRendererRegistry() map[adapterRouteFamily]errcontract.ErrorRenderer {
-	return map[adapterRouteFamily]errcontract.ErrorRenderer{
-		adapterRouteOpenAI:    adapteropenai.NewErrorRenderer(),
-		adapterRouteAnthropic: anthropic.NewErrorRenderer(),
+// Register stores the mapper and renderer for a family. Implements
+// errcontract.BoundaryRegistrar so provider packages can call
+// Register without importing the adapter package's family enum.
+func (r *boundaryRegistry) Register(family errcontract.RouteFamily, mapper errcontract.UpstreamErrorMapper, renderer errcontract.ErrorRenderer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := adapterRouteFamily(family)
+	if mapper != nil {
+		r.mappers[key] = mapper
+	}
+	if renderer != nil {
+		r.renderers[key] = renderer
 	}
 }
+
+// upstreamMapper returns the registered mapper for a family.
+func (r *boundaryRegistry) upstreamMapper(family adapterRouteFamily) (errcontract.UpstreamErrorMapper, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	m, ok := r.mappers[family]
+	return m, ok
+}
+
+// errorRenderer returns the registered renderer for a family.
+func (r *boundaryRegistry) errorRenderer(family adapterRouteFamily) (errcontract.ErrorRenderer, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rd, ok := r.renderers[family]
+	return rd, ok
+}
+
+// snapshotRenderers returns a copy of the renderer map so a Server can
+// own a per-instance registry that is decoupled from later mutations.
+func (r *boundaryRegistry) snapshotRenderers() map[adapterRouteFamily]errcontract.ErrorRenderer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[adapterRouteFamily]errcontract.ErrorRenderer, len(r.renderers))
+	maps.Copy(out, r.renderers)
+	return out
+}
+
+// defaultBoundaryRegistry is the package-level registry every
+// non-Server caller (tests, free functions like
+// codexProviderAdapterError) reads from. Provider packages register
+// into it from internal/adapter/error_boundary_registration.go at
+// init() time. The boundary file (this file) holds no provider
+// import; the registration file is the only place under
+// internal/adapter/*.go (depth 1) that imports a provider package
+// for boundary wiring.
+var defaultBoundaryRegistry = newBoundaryRegistry()
 
 // mapUpstreamForFamily classifies an upstream failure into the
 // route-family-correct adapterError. It looks up the registered
@@ -82,7 +121,7 @@ func mapUpstreamForFamily(
 	provider = strings.TrimSpace(provider)
 	upstreamCode = strings.TrimSpace(upstreamCode)
 	upstreamMessage = strings.TrimSpace(upstreamMessage)
-	mapper, ok := defaultUpstreamMappers[family]
+	mapper, ok := defaultBoundaryRegistry.upstreamMapper(family)
 	if !ok {
 		return upstreamCatchAllAdapterError(provider, upstreamStatus, upstreamCode, upstreamMessage)
 	}
@@ -93,8 +132,8 @@ func mapUpstreamForFamily(
 // adapterErrorFromMapping folds a primitive UpstreamMapping returned
 // by a provider mapper into the generic *adapterError. The boundary
 // uses HTTPStatus and ErrorInfo verbatim, derives a coarse class for
-// logs/metrics, and stitches in the AnthropicType only when the
-// family is native Anthropic.
+// logs/metrics, and stitches in a family-correct envelope type so
+// applyDefaults still picks up the right shape.
 func adapterErrorFromMapping(family adapterRouteFamily, provider string, upstreamStatus int, mapping errcontract.UpstreamMapping) *adapterError {
 	return &adapterError{
 		Class:          classForMappedCode(mapping.Info.Code),
@@ -103,7 +142,7 @@ func adapterErrorFromMapping(family adapterRouteFamily, provider string, upstrea
 		OpenAIType:     mapping.Info.Type,
 		OpenAICode:     mapping.Info.Code,
 		OpenAIParam:    mapping.Info.Param,
-		AnthropicType:  anthropicEnvelopeTypeFromMapping(family, mapping.Info.Type),
+		AnthropicType:  envelopeTypeForFamily(family, mapping.Info.Type),
 		Provider:       provider,
 		Backend:        "",
 		ModelAlias:     "",
@@ -163,13 +202,14 @@ func classForMappedCode(code string) adapterErrorClass {
 	return adapterErrorUpstreamFailed
 }
 
-// anthropicEnvelopeTypeFromMapping returns the AnthropicType field on
-// adapterError when the mapping came from the Anthropic family. The
-// generic boundary only ever uses AnthropicType for native ingress
-// rendering; the OpenAI family path leaves the field empty so
-// applyDefaults still picks up its row.
-func anthropicEnvelopeTypeFromMapping(family adapterRouteFamily, infoType string) string {
-	if family != adapterRouteAnthropic {
+// envelopeTypeForFamily picks the adapterError.AnthropicType field
+// the boundary needs when the mapping came from a non-OpenAI family.
+// The OpenAI family path leaves the field empty so applyDefaults still
+// picks up its row; non-OpenAI families pass the mapper's Info.Type
+// through verbatim because their mapper already chose the spec-correct
+// envelope type for that family.
+func envelopeTypeForFamily(family adapterRouteFamily, infoType string) string {
+	if family == adapterRouteOpenAI {
 		return ""
 	}
 	return infoType

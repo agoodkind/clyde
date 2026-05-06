@@ -79,6 +79,15 @@ type UpstreamErrorMapper struct{}
 // NewUpstreamErrorMapper returns the canonical OpenAI mapper.
 func NewUpstreamErrorMapper() UpstreamErrorMapper { return UpstreamErrorMapper{} }
 
+// RegisterErrorBoundary plugs the OpenAI family renderer and mapper
+// into the adapter's error boundary through the inversion seam in
+// errcontract. The boundary file holds no provider import; callers
+// invoke this from the composition root so wiring is explicit and
+// the family-to-implementation map is owned outside the boundary.
+func RegisterErrorBoundary(reg errcontract.BoundaryRegistrar) {
+	reg.Register(errcontract.RouteFamilyOpenAI, NewUpstreamErrorMapper(), NewErrorRenderer())
+}
+
 // Map classifies an upstream failure into the OpenAI family safe
 // shape. Return value is primitive (HTTPStatus + ErrorInfo) so the
 // boundary never imports an OpenAI envelope type.
