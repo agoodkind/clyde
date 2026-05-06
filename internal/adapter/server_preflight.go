@@ -21,9 +21,9 @@ func toolChoiceRequestsTools(raw json.RawMessage) bool {
 	return true
 }
 
-func newPreflightError(status int, class adapterErrorClass, message, code string) *adapterError {
+func newPreflightError(class adapterErrorClass, message, code string) *adapterError {
 	err := newAdapterError(class, message)
-	err.HTTPStatus = status
+	err.HTTPStatus = http.StatusBadRequest
 	err.OpenAIType = "invalid_request_error"
 	err.OpenAICode = code
 	err.OpenAIParam = ""
@@ -32,7 +32,6 @@ func newPreflightError(status int, class adapterErrorClass, message, code string
 
 func errAudioUnsupported() *adapterError {
 	return newPreflightError(
-		http.StatusBadRequest,
 		adapterErrorUnsupportedContent,
 		"audio content parts are not supported by this adapter",
 		"audio_unsupported",
@@ -41,7 +40,6 @@ func errAudioUnsupported() *adapterError {
 
 func errVisionAnthropicUnsupported(modelAlias string) *adapterError {
 	return newPreflightError(
-		http.StatusBadRequest,
 		adapterErrorUnsupportedContent,
 		fmt.Sprintf("model %q does not support vision input", modelAlias),
 		"unsupported_content",
@@ -56,7 +54,6 @@ func errToolNameEmpty(kind string, index int) *adapterError {
 		msg = fmt.Sprintf("functions[%d].name is required and must be non-empty", index)
 	}
 	return newPreflightError(
-		http.StatusBadRequest,
 		adapterErrorInvalidRequest,
 		msg,
 		"invalid_tool_name",
@@ -65,7 +62,6 @@ func errToolNameEmpty(kind string, index int) *adapterError {
 
 func errToolsNotEnabledForAlias() *adapterError {
 	return newPreflightError(
-		http.StatusBadRequest,
 		adapterErrorUnsupportedContent,
 		"tools are not enabled for this model alias",
 		"unsupported_content",
@@ -74,7 +70,6 @@ func errToolsNotEnabledForAlias() *adapterError {
 
 func errLogprobsUnsupported() *adapterError {
 	return newPreflightError(
-		http.StatusBadRequest,
 		adapterErrorInvalidRequest,
 		"logprobs are not supported for this backend",
 		"unsupported_param",

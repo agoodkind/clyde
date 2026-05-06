@@ -97,42 +97,7 @@ func (s *Server) dispatchCodexProviderStream(
 
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, writer)
 	if runErr != nil {
-		aerr := codexProviderAdapterError(runErr)
-		aerr.Backend = model.Backend
-		aerr.ModelAlias = model.Alias
-		aerr.ResolvedModel = model.ClaudeModel
-		aerr.Cause = runErr
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.Int("status", aerr.HTTPStatus),
-			slog.String("error_type", aerr.OpenAIType),
-			slog.String("error_code", aerr.OpenAICode),
-			slog.String("error_param", aerr.OpenAIParam),
-			slog.Bool("stream_headers_written", writer.headersWritten),
-		)
-		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-			Stage:      adapterruntime.RequestStageFailed,
-			Provider:   "codex_direct",
-			Backend:    model.Backend,
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    model.Alias,
-			Stream:     true,
-			DurationMs: time.Since(started).Milliseconds(),
-			Err:        runErr.Error(),
-		})
-		if writer.headersWritten {
-			if err := writer.writeStreamError(ctx, aerr); err != nil {
-				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
-					slog.String("backend", "codex"),
-					slog.String("request_id", reqID),
-					slog.Any("err", err),
-				)
-			}
-			return
-		}
-		s.respondAdapterError(w, r, aerr)
+		s.handleCodexProviderStreamError(ctx, w, r, writer, runErr, model, reqID, started)
 		return
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
@@ -183,6 +148,36 @@ func (s *Server) dispatchCodexProviderStream(
 	})
 }
 
+func (s *Server) handleCodexProviderStreamError(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	writer *providerStreamWriter,
+	runErr error,
+	model ResolvedModel,
+	reqID string,
+	started time.Time,
+) {
+	aerr := codexProviderAdapterError(runErr)
+	aerr.Backend = model.Backend
+	aerr.ModelAlias = model.Alias
+	aerr.ResolvedModel = model.ClaudeModel
+	aerr.Cause = runErr
+	s.logCodexProviderError(ctx, reqID, model.Alias, aerr, writer.headersWritten)
+	s.logCodexProviderTerminalFailure(ctx, model, reqID, started, runErr, true)
+	if writer.headersWritten {
+		if err := writer.writeStreamError(ctx, aerr); err != nil {
+			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
+				slog.String("backend", "codex"),
+				slog.String("request_id", reqID),
+				slog.Any("err", err),
+			)
+		}
+		return
+	}
+	s.respondAdapterError(w, r, aerr)
+}
+
 func (s *Server) dispatchCodexProviderCollect(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -201,26 +196,8 @@ func (s *Server) dispatchCodexProviderCollect(
 		aerr.ModelAlias = model.Alias
 		aerr.ResolvedModel = model.ClaudeModel
 		aerr.Cause = runErr
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
-			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
-			slog.Int("status", aerr.HTTPStatus),
-			slog.String("error_type", aerr.OpenAIType),
-			slog.String("error_code", aerr.OpenAICode),
-			slog.String("error_param", aerr.OpenAIParam),
-			slog.Bool("stream_headers_written", false),
-		)
-		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
-			Stage:      adapterruntime.RequestStageFailed,
-			Provider:   "codex_direct",
-			Backend:    model.Backend,
-			RequestID:  reqID,
-			Alias:      model.Alias,
-			ModelID:    model.Alias,
-			Stream:     false,
-			DurationMs: time.Since(started).Milliseconds(),
-			Err:        runErr.Error(),
-		})
+		s.logCodexProviderError(ctx, reqID, model.Alias, aerr, false)
+		s.logCodexProviderTerminalFailure(ctx, model, reqID, started, runErr, false)
 		s.respondAdapterError(w, r, aerr)
 		return
 	}
@@ -274,6 +251,39 @@ func (s *Server) dispatchCodexProviderCollect(
 		HasSubagentToolCall:        result.HasSubagentToolCall,
 		DurationMs:                 time.Since(started).Milliseconds(),
 		Correlation:                corr,
+	})
+}
+
+func (s *Server) logCodexProviderError(ctx context.Context, reqID, alias string, aerr *adapterError, streamHeadersWritten bool) {
+	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
+		slog.String("request_id", reqID),
+		slog.String("alias", alias),
+		slog.Int("status", aerr.HTTPStatus),
+		slog.String("error_type", aerr.OpenAIType),
+		slog.String("error_code", aerr.OpenAICode),
+		slog.String("error_param", aerr.OpenAIParam),
+		slog.Bool("stream_headers_written", streamHeadersWritten),
+	)
+}
+
+func (s *Server) logCodexProviderTerminalFailure(
+	ctx context.Context,
+	model ResolvedModel,
+	reqID string,
+	started time.Time,
+	runErr error,
+	stream bool,
+) {
+	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
+		Stage:      adapterruntime.RequestStageFailed,
+		Provider:   "codex_direct",
+		Backend:    model.Backend,
+		RequestID:  reqID,
+		Alias:      model.Alias,
+		ModelID:    model.Alias,
+		Stream:     stream,
+		DurationMs: time.Since(started).Milliseconds(),
+		Err:        runErr.Error(),
 	})
 }
 
