@@ -102,7 +102,7 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 		aerr := newAdapterError(adapterErrorUpstreamUnavailable, "anthropic native collect path produced no response")
 		aerr.Provider = "anthropic"
 		s.writeShapedError(w, r, aerr)
-		return
+		return nil
 	}
 	collector.writeTo(w)
 	return nil
