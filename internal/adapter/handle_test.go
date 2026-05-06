@@ -59,12 +59,18 @@ func TestAdapterHandlePlainErrorWrapped(t *testing.T) {
 	resp := httptest.NewRecorder()
 	handler(resp, req)
 
-	if resp.Code != http.StatusBadGateway {
+	// Boundary remaps OpenAI-family non-2xx upstream into HTTP 400 +
+	// invalid_request_error so Cursor BYOK does not fall back to its
+	// generic rate-limit chrome. See AGENTS.md "Error boundary".
+	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	var out ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
+	}
+	if out.Error.Type != "invalid_request_error" {
+		t.Fatalf("error.type=%q", out.Error.Type)
 	}
 	if out.Error.Code != "upstream_failed" {
 		t.Fatalf("error=%+v", out.Error)
@@ -90,12 +96,17 @@ func TestAdapterHandleBodyNotWrittenBackstop(t *testing.T) {
 	resp := httptest.NewRecorder()
 	handler(resp, req)
 
-	if resp.Code != http.StatusBadGateway {
+	// Boundary remaps the synthesized backstop error into HTTP 400 +
+	// invalid_request_error for OpenAI-family clients.
+	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	var out ErrorResponse
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, resp.Body.String())
+	}
+	if out.Error.Type != "invalid_request_error" {
+		t.Fatalf("error.type=%q", out.Error.Type)
 	}
 	if out.Error.Code != "upstream_failed" {
 		t.Fatalf("error=%+v", out.Error)
