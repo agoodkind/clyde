@@ -84,7 +84,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 	if runErr != nil {
 		aerr := anthropicProviderAdapterError(runErr)
 		if streamWriter.headersWritten {
-			if err := streamWriter.writeStreamErrorBody(ctx, aerr.openAIErrorBody()); err != nil {
+			if err := streamWriter.writeStreamError(ctx, aerr); err != nil {
 				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
 					slog.String("backend", "anthropic"),
 					slog.String("request_id", reqID),

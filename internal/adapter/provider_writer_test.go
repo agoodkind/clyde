@@ -33,90 +33,91 @@ func TestNormalizedProviderFinishReasonPreservesToolCallTerminalState(t *testing
 	}
 }
 
-func TestCodexProviderErrorResponseMapsContextWindowError(t *testing.T) {
+func TestCodexProviderAdapterErrorMapsContextWindowError(t *testing.T) {
 	t.Parallel()
 
-	status, body := codexProviderErrorResponse(&adaptercodex.ContextWindowError{
+	aerr := codexProviderAdapterError(&adaptercodex.ContextWindowError{
 		Message: "Your input exceeds the context window of this model. Please adjust your input and try again.",
 	})
 
-	if status != http.StatusBadRequest {
-		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
+	if aerr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if body.Type != "invalid_request_error" || body.Code != "context_length_exceeded" || body.Param != "messages" {
-		t.Fatalf("body=%+v", body)
+	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "context_length_exceeded" || aerr.OpenAIParam != "messages" {
+		t.Fatalf("adapter error=%+v", aerr)
 	}
-	if body.Message != "This model's maximum context length was exceeded. Please reduce the length of the messages." {
-		t.Fatalf("message=%q", body.Message)
+	if aerr.Message != "This model's maximum context length was exceeded. Please reduce the length of the messages." {
+		t.Fatalf("message=%q", aerr.Message)
 	}
 }
 
-func TestCodexProviderErrorResponseMapsWrappedContextWindowError(t *testing.T) {
+func TestCodexProviderAdapterErrorMapsWrappedContextWindowError(t *testing.T) {
 	t.Parallel()
 
 	wrapped := errors.Join(errors.New("transport failed"), &adaptercodex.ContextWindowError{
 		Message: "context_length_exceeded",
 	})
-	status, body := codexProviderErrorResponse(wrapped)
+	aerr := codexProviderAdapterError(wrapped)
 
-	if status != http.StatusBadRequest {
-		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
+	if aerr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if body.Code != "context_length_exceeded" {
-		t.Fatalf("code=%q want context_length_exceeded", body.Code)
+	if aerr.OpenAICode != "context_length_exceeded" {
+		t.Fatalf("code=%q want context_length_exceeded", aerr.OpenAICode)
 	}
 }
 
-func TestCodexProviderErrorResponseMapsWrappedUnsupportedModelError(t *testing.T) {
+func TestCodexProviderAdapterErrorMapsWrappedUnsupportedModelError(t *testing.T) {
 	t.Parallel()
 
 	wrapped := errors.Join(errors.New("codex websocket warmup failed"), &adaptercodex.UnsupportedModelError{
 		Message: "The '5.5' model is not supported when using Codex with a ChatGPT account.",
 	})
-	status, body := codexProviderErrorResponse(wrapped)
+	aerr := codexProviderAdapterError(wrapped)
 
-	if status != http.StatusBadRequest {
-		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
+	if aerr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if body.Type != "invalid_request_error" || body.Code != "model_not_supported" || body.Param != "model" {
-		t.Fatalf("body=%+v", body)
+	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "model_not_supported" || aerr.OpenAIParam != "model" {
+		t.Fatalf("adapter error=%+v", aerr)
 	}
-	if body.Message != "The '5.5' model is not supported when using Codex with a ChatGPT account." {
-		t.Fatalf("message=%q", body.Message)
+	if aerr.Message != "The '5.5' model is not supported when using Codex with a ChatGPT account." {
+		t.Fatalf("message=%q", aerr.Message)
 	}
 }
 
-func TestCodexProviderErrorResponseMapsGenericProviderError(t *testing.T) {
+func TestCodexProviderAdapterErrorMapsGenericProviderError(t *testing.T) {
 	t.Parallel()
 
-	status, body := codexProviderErrorResponse(errors.New("codex websocket read failed"))
+	aerr := codexProviderAdapterError(errors.New("codex websocket read failed"))
 
 	// Cursor BYOK never sees HTTP 5xx + server_error; the boundary
 	// flips generic codex provider failures into a Cursor-safe
 	// invalid_request_error envelope so the upstream message lands
 	// in the chat transcript rather than triggering Cursor's BYOK
 	// fallback chrome.
-	if status != http.StatusBadRequest {
-		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
+	if aerr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if body.Type != "invalid_request_error" || body.Code != "upstream_failed" || body.Param != "" {
-		t.Fatalf("body=%+v", body)
+	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "upstream_failed" || aerr.OpenAIParam != "" {
+		t.Fatalf("adapter error=%+v", aerr)
 	}
-	if !strings.Contains(body.Message, "codex websocket read failed") {
-		t.Fatalf("message=%q", body.Message)
+	if !strings.Contains(aerr.Message, "codex websocket read failed") {
+		t.Fatalf("message=%q", aerr.Message)
 	}
 }
 
 func TestAdapterErrUpstreamFailedUsesOpenAICompatibleServerError(t *testing.T) {
 	t.Parallel()
 
-	body := adapterErrUpstreamFailed("codex", "codex websocket read failed", errors.New("boom")).openAIErrorBody()
+	aerr := adapterErrUpstreamFailed("codex", "codex websocket read failed", errors.New("boom"))
+	aerr.applyDefaults()
 
-	if body.Type != "server_error" || body.Code != "upstream_failed" || body.Param != "" {
-		t.Fatalf("body=%+v", body)
+	if aerr.OpenAIType != "server_error" || aerr.OpenAICode != "upstream_failed" || aerr.OpenAIParam != "" {
+		t.Fatalf("adapter error=%+v", aerr)
 	}
-	if body.Message != "codex websocket read failed" {
-		t.Fatalf("message=%q", body.Message)
+	if aerr.Message != "codex websocket read failed" {
+		t.Fatalf("message=%q", aerr.Message)
 	}
 }
 
@@ -131,14 +132,10 @@ func TestProviderStreamWriterWritesMappedErrorEnvelope(t *testing.T) {
 	}
 	writer := &providerStreamWriter{sse: sse, server: srv, log: srv.log}
 
-	err = writer.writeStreamErrorBody(context.Background(), ErrorBody{
-		Message: "unsupported model: gpt-5.5",
-		Type:    "invalid_request_error",
-		Code:    "model_not_supported",
-		Param:   "model",
-	})
+	aerr := newAdapterError(adapterErrorModelNotSupported, "unsupported model: gpt-5.5")
+	err = writer.writeStreamError(context.Background(), aerr)
 	if err != nil {
-		t.Fatalf("writeStreamErrorBody: %v", err)
+		t.Fatalf("writeStreamError: %v", err)
 	}
 
 	body := rec.Body.String()

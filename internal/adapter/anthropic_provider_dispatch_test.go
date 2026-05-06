@@ -63,7 +63,6 @@ func TestAnthropicProviderErrorResponseMapsUpstreamRateLimitToCursorSafeInvalidR
 		Message:        "rate limit reached",
 	}
 	aerr := anthropicProviderAdapterError(upstreamErr)
-	status, body := aerr.HTTPStatus, aerr.openAIErrorBody()
 
 	// This intentionally does not preserve HTTP 429 or OpenAI
 	// rate_limit_error on the Cursor/OpenAI surface. Cursor treats that
@@ -72,14 +71,14 @@ func TestAnthropicProviderErrorResponseMapsUpstreamRateLimitToCursorSafeInvalidR
 	// Codex context-limit style: invalid_request_error with the actual
 	// message in error.message, while the original 429 remains available
 	// to logs and diagnostics through UpstreamStatus.
-	if status != http.StatusBadRequest {
-		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
+	if aerr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if body.Type != "invalid_request_error" || body.Code != "upstream_rate_limited" {
-		t.Fatalf("body=%+v", body)
+	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "upstream_rate_limited" {
+		t.Fatalf("adapter error=%+v", aerr)
 	}
-	if body.Message != "rate limit reached" {
-		t.Fatalf("message=%q", body.Message)
+	if aerr.Message != "rate limit reached" {
+		t.Fatalf("message=%q", aerr.Message)
 	}
 	if aerr.UpstreamStatus != http.StatusTooManyRequests {
 		t.Fatalf("upstream status=%d want %d", aerr.UpstreamStatus, http.StatusTooManyRequests)
@@ -94,18 +93,17 @@ func TestAnthropicProviderErrorResponseMapsWrappedTransportFailure(t *testing.T)
 		Cause:          errors.New("connection reset"),
 	}
 	aerr := anthropicProviderAdapterError(errors.Join(errors.New("collect failed"), upstreamErr))
-	status, body := aerr.HTTPStatus, aerr.openAIErrorBody()
 
 	// Cursor BYOK never sees HTTP 5xx + server_error; the boundary
 	// flips wrapped transport failures into a Cursor-safe
 	// invalid_request_error envelope.
-	if status != http.StatusBadRequest {
-		t.Fatalf("status=%d want %d", status, http.StatusBadRequest)
+	if aerr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if body.Type != "invalid_request_error" {
-		t.Fatalf("body=%+v", body)
+	if aerr.OpenAIType != "invalid_request_error" {
+		t.Fatalf("adapter error=%+v", aerr)
 	}
-	if body.Message == "" {
+	if aerr.Message == "" {
 		t.Fatalf("message must not be empty")
 	}
 }
