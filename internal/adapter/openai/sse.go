@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"goodkind.io/clyde/internal/adapter/errcontract"
 )
 
 var ErrSSENoFlusher = errors.New("streaming not supported by this transport")
@@ -68,8 +70,14 @@ func (sw *SSEWriter) WriteStreamDone() error {
 // Use this for upstream failures that should surface as a native
 // error to the OpenAI client (Cursor, OpenAI SDK consumers) rather
 // than as an assistant-shaped chat message.
-func (sw *SSEWriter) EmitStreamError(body ErrorBody) error {
+func (sw *SSEWriter) EmitStreamError(info errcontract.ErrorInfo) error {
 	sw.WriteSSEHeaders()
+	body := ErrorBody{
+		Message: info.Message,
+		Type:    info.Type,
+		Code:    info.Code,
+		Param:   info.Param,
+	}
 	envelope := ErrorResponse{Error: body}
 	b, err := json.Marshal(envelope)
 	if err != nil {

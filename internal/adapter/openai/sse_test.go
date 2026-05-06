@@ -1,10 +1,13 @@
 package openai
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"goodkind.io/clyde/internal/adapter/errcontract"
 )
 
 type countingResponseRecorder struct {
@@ -30,10 +33,11 @@ func TestEmitStreamErrorWritesNativeEnvelope(t *testing.T) {
 		t.Fatalf("NewSSEWriter: %v", err)
 	}
 
-	if err := sw.EmitStreamError(ErrorBody{
+	if err := sw.EmitStreamError(errcontract.ErrorInfo{
 		Message: "anthropic 429: limit exceeded",
 		Type:    "rate_limit_error",
 		Code:    "rate_limit_exceeded",
+		Param:   "messages",
 	}); err != nil {
 		t.Fatalf("EmitStreamError: %v", err)
 	}
@@ -45,11 +49,26 @@ func TestEmitStreamErrorWritesNativeEnvelope(t *testing.T) {
 	if !strings.Contains(body, `"error":{`) {
 		t.Fatalf("envelope must contain native OpenAI error key, got %q", body)
 	}
-	if !strings.Contains(body, `"type":"rate_limit_error"`) {
-		t.Fatalf("envelope must preserve type, got %q", body)
+	if strings.Contains(body, "[DONE]") {
+		t.Fatalf("EmitStreamError must not write DONE terminator, got %q", body)
 	}
-	if !strings.Contains(body, `"code":"rate_limit_exceeded"`) {
-		t.Fatalf("envelope must preserve code, got %q", body)
+
+	data := strings.TrimSuffix(strings.TrimPrefix(body, "data: "), "\n\n")
+	var envelope ErrorResponse
+	if err := json.Unmarshal([]byte(data), &envelope); err != nil {
+		t.Fatalf("unmarshal emitted envelope: %v", err)
+	}
+	if envelope.Error.Message != "anthropic 429: limit exceeded" {
+		t.Fatalf("envelope must preserve message, got %q", envelope.Error.Message)
+	}
+	if envelope.Error.Type != "rate_limit_error" {
+		t.Fatalf("envelope must preserve type, got %q", envelope.Error.Type)
+	}
+	if envelope.Error.Code != "rate_limit_exceeded" {
+		t.Fatalf("envelope must preserve code, got %q", envelope.Error.Code)
+	}
+	if envelope.Error.Param != "messages" {
+		t.Fatalf("envelope must preserve param, got %q", envelope.Error.Param)
 	}
 	if !strings.HasSuffix(body, "\n\n") {
 		t.Fatalf("envelope must end with double newline, got %q", body)
