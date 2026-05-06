@@ -321,8 +321,98 @@ func TestCompactPanelBusyProgressShowsWaitingSpinner(t *testing.T) {
 	scr.Show()
 
 	text := compactPanelScreenText(scr)
-	if !strings.Contains(text, "waiting for progress") {
+	if !strings.Contains(text, "preview in progress") {
 		t.Fatalf("busy compact panel should show waiting spinner:\n%s", text)
+	}
+}
+
+func TestCompactPanelBusyProgressShowsSpinnerAfterIterationLines(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(90, 24)
+
+	panel := NewCompactPanel("demo")
+	panel.ApplyCompactEvent(CompactEvent{
+		Kind: "iteration",
+		Iteration: &CompactIteration{
+			Iteration: 1,
+			Step:      "baseline",
+			CtxTotal:  900000,
+			Delta:     700000,
+		},
+	})
+	panel.SetBusy("apply", true)
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 90, H: 24})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if !strings.Contains(text, "iter 1") {
+		t.Fatalf("busy compact panel should keep prior iteration output:\n%s", text)
+	}
+	if !strings.Contains(text, "apply in progress") {
+		t.Fatalf("busy compact panel should keep animating after progress exists:\n%s", text)
+	}
+}
+
+func TestCompactPanelInitialContextUsageShowsLoadingStatus(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(100, 28)
+
+	panel := NewCompactPanel("demo")
+	panel.setInitialContextUsage(SessionContextUsage{
+		Model:          "",
+		TotalTokens:    0,
+		MaxTokens:      0,
+		Percentage:     0,
+		MessagesTokens: 0,
+	}, false, "loading...")
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 100, H: 28})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if !strings.Contains(text, "current    loading...") {
+		t.Fatalf("initial compact panel should show context loading status:\n%s", text)
+	}
+	if !strings.Contains(text, "images          preview required") {
+		t.Fatalf("initial compact panel should explain count details need preview:\n%s", text)
+	}
+}
+
+func TestCompactPanelInitialContextUsageShowsCachedContext(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(100, 28)
+
+	panel := NewCompactPanel("demo")
+	panel.setInitialContextUsage(SessionContextUsage{
+		Model:          "opus",
+		TotalTokens:    123456,
+		MaxTokens:      1000000,
+		Percentage:     12,
+		MessagesTokens: 98765,
+	}, true, "")
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 100, H: 28})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if !strings.Contains(text, "session demo  model opus") {
+		t.Fatalf("initial compact panel should use cached context model:\n%s", text)
+	}
+	if !strings.Contains(text, "current    123,456 / 1,000,000") {
+		t.Fatalf("initial compact panel should show cached current context:\n%s", text)
+	}
+	if !strings.Contains(text, "messages   98,765") {
+		t.Fatalf("initial compact panel should show cached message context:\n%s", text)
 	}
 }
 

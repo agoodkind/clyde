@@ -799,6 +799,16 @@ func (a *App) ensureReturnPrompt(sess *session.Session, source string) {
 		tuiLog.Logger().Warn("returnprompt.ensure skipped", "source", source, "reason", "nil_session")
 		return
 	}
+	if a.overlay != nil {
+		if modal, ok := a.overlay.(*OptionsModal); !ok || modal.Context != OptionsModalContextReturn {
+			a.trackReturnPathState(returnPathStateReturnPromptPending, "ensureReturnPrompt.deferred", sess)
+			tuiLog.Logger().Info("returnprompt.ensure_deferred",
+				"source", source,
+				"session", sess.Name,
+				"overlay", fmt.Sprintf("%T", a.overlay))
+			return
+		}
+	}
 	if modal, ok := a.overlay.(*OptionsModal); ok {
 		if modal.Context == OptionsModalContextReturn {
 			if a.isCurrentReturnPathSession(sess) {
@@ -2214,6 +2224,9 @@ func (a *App) isSessionsLoading() bool {
 
 func (a *App) hasPendingVisualActivity() bool {
 	if a.isSessionsLoading() || a.configLoading {
+		return true
+	}
+	if panel, ok := a.overlay.(*CompactPanel); ok && panel.busy {
 		return true
 	}
 	a.statsMu.Lock()
@@ -4898,6 +4911,17 @@ func (a *App) openRichCompactForm(sess *session.Session) {
 	if cachedModel, ok := a.modelCache[sess.Name]; ok && cachedModel != "" {
 		panel.model = cachedModel
 	}
+	if contextState, ok := a.contextStateCache[sess.Name]; ok {
+		panel.setInitialContextUsage(contextState.Usage, contextState.Loaded, contextState.Status)
+	} else if sessionCapabilities(sess).ContextUsageInspect {
+		panel.setInitialContextUsage(SessionContextUsage{
+			Model:          "",
+			TotalTokens:    0,
+			MaxTokens:      0,
+			Percentage:     0,
+			MessagesTokens: 0,
+		}, false, "loading...")
+	}
 	panel.OnClose = a.closeOverlay
 	panel.OnPreview = func(req CompactRunRequest) {
 		a.startCompactRun(req, false, panel)
@@ -6153,6 +6177,10 @@ func (a *App) doFork() {
 
 func (a *App) closeOverlay() {
 	oldOverlay := fmt.Sprintf("%T", a.overlay)
+	oldReturnPrompt := false
+	if modal, ok := a.overlay.(*OptionsModal); ok && modal.Context == OptionsModalContextReturn {
+		oldReturnPrompt = true
+	}
 	if a.compactCancel != nil {
 		a.compactCancel()
 		a.compactCancel = nil
@@ -6180,6 +6208,9 @@ func (a *App) closeOverlay() {
 		"selected", a.selectedSessionName(),
 		"active_tab", a.activeTab,
 		"mode", int(a.mode))
+	if !oldReturnPrompt {
+		a.ensureReturnPromptForEvent("overlay.close")
+	}
 	if a.pendingReloadPath != "" {
 		if err := validateSelfReloadCandidate(a.pendingReloadPath); err != nil {
 			tuiLog.Logger().Warn("tui.self_reload.deferred_rejected",

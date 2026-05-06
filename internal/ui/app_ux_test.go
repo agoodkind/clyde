@@ -990,6 +990,55 @@ func TestUX_FocusTransitionsKeepReturnPromptDuringResume(t *testing.T) {
 	}
 }
 
+func TestUX_ReturnPromptDefersBehindCompactOverlay(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	sess := a.sessions[a.visibleIdx[0]]
+	a.selected = sess
+	a.openRichCompactForm(sess)
+	if _, ok := a.overlay.(*CompactPanel); !ok {
+		t.Fatalf("overlay = %T, want compact panel before focus event", a.overlay)
+	}
+
+	a.returnPathSession = sess
+	a.trackReturnPathState(returnPathStateReturnPromptPending, "test.pending", sess)
+	a.handleEvent(&tcell.EventFocus{Focused: true})
+	if _, ok := a.overlay.(*CompactPanel); !ok {
+		t.Fatalf("overlay = %T, want compact panel to survive return prompt reopen", a.overlay)
+	}
+	if a.returnPathState != returnPathStateReturnPromptPending {
+		t.Fatalf("return path state = %s, want pending while compact is open", a.returnPathState)
+	}
+
+	a.closeOverlay()
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok || modal.Context != OptionsModalContextReturn {
+		t.Fatalf("overlay = %T, want deferred return prompt after compact closes", a.overlay)
+	}
+}
+
+func TestUX_CompactBusyCountsAsPendingVisualActivity(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	sess := a.sessions[a.visibleIdx[0]]
+	a.selected = sess
+	a.openRichCompactForm(sess)
+	panel, ok := a.overlay.(*CompactPanel)
+	if !ok {
+		t.Fatalf("overlay = %T, want compact panel", a.overlay)
+	}
+	if a.hasPendingVisualActivity() {
+		t.Fatalf("idle compact panel should not force spinner redraws")
+	}
+
+	panel.SetBusy("apply", true)
+	if !a.hasPendingVisualActivity() {
+		t.Fatalf("busy compact panel should keep spinner redraws active")
+	}
+}
+
 // TestUX_SearchSlashWorksOnFreshLaunch catches the bug the PTY
 // suite just uncovered: pressing `/` on a freshly-launched dashboard
 // silently did nothing because openSearchForm bailed when
