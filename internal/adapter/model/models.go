@@ -135,54 +135,12 @@ type Registry struct {
 // empty. Callers should refuse to start the listener and surface the
 // error so the user sees what is missing.
 func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
-	if cfg.DefaultModel == "" {
-		return nil, fmt.Errorf("adapter: default_model must be set in [adapter]")
+	if err := validateAdapterCoreConfig(cfg); err != nil {
+		return nil, err
 	}
-	// beta_header and user_agent are optional. When empty, the
-	// adapter falls through to the captured WireFlavor in
-	// internal/adapter/anthropic/wire_flavors_gen.go (CLYDE-124).
-	// Setting either is an explicit operator override.
-	if cfg.ClientIdentity.SystemPromptPrefix == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].system_prompt_prefix must be set")
-	}
-	if cfg.ClientIdentity.StainlessPackageVersion == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].stainless_package_version must be set")
-	}
-	if cfg.ClientIdentity.StainlessRuntime == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime must be set")
-	}
-	if cfg.ClientIdentity.StainlessRuntimeVersion == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime_version must be set")
-	}
-	if cfg.ClientIdentity.CCVersion == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].cc_version must be set")
-	}
-	if cfg.ClientIdentity.CCEntrypoint == "" {
-		return nil, fmt.Errorf("adapter: [adapter.client_identity].cc_entrypoint must be set")
-	}
-	if cfg.DirectOAuth {
-		if err := cfg.OAuth.ValidateOAuthFields(); err != nil {
-			return nil, err
-		}
-	}
-	toolsCapable := 0
-	visionCapable := 0
-	for slug, family := range cfg.Families {
-		if family.SupportsTools == nil {
-			return nil, fmt.Errorf(
-				"adapter: family %q missing supports_tools (must be explicit true/false)",
-				slug,
-			)
-		}
-		if family.SupportsVision == nil {
-			return nil, fmt.Errorf("adapter: family %q missing supports_vision", slug)
-		}
-		if *family.SupportsTools {
-			toolsCapable++
-		}
-		if *family.SupportsVision {
-			visionCapable++
-		}
+	toolsCapable, visionCapable, err := countFamilyCapabilities(cfg.Families)
+	if err != nil {
+		return nil, err
 	}
 	if err := validateAdapterLogprobs(cfg.Logprobs); err != nil {
 		return nil, err
@@ -190,98 +148,30 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	if len(cfg.Families) == 0 {
 		return nil, fmt.Errorf("adapter: no model families declared in [adapter.families]")
 	}
-	models := map[string]ResolvedModel{}
-	for slug, family := range cfg.Families {
-		if family.Model == "" {
-			return nil, fmt.Errorf("adapter: family %q missing model id", slug)
-		}
-		if len(family.Contexts) == 0 {
-			return nil, fmt.Errorf("adapter: family %q missing contexts", slug)
-		}
-		switch family.ThinkingWireMode {
-		case "", ThinkingEnabled, ThinkingAdaptive:
-		default:
-			return nil, fmt.Errorf("adapter: family %q has invalid thinking_wire_mode %q (allowed: %q, %q)", slug, family.ThinkingWireMode, ThinkingEnabled, ThinkingAdaptive)
-		}
-		// Resolve the implicit per-family fallback for thinking_wire_mode.
-		// The result is what generateFamilyAliases will stamp onto every
-		// thinking-enabled alias. EffectiveThinkingMode does not patch
-		// this at request time; the family's choice is the wire choice.
-		family = withResolvedThinkingWireMode(slog.Default(), slug, family)
-		generateFamilyAliases(models, slug, family)
+	models, err := buildFamilyAliases(cfg.Families)
+	if err != nil {
+		return nil, err
 	}
 
-	r := &Registry{
-		models:                         models,
-		passthroughOverrides:           map[string]config.AdapterPassthroughOverride{},
-		def:                            cfg.DefaultModel,
-		openAICompat:                   cfg.OpenAICompatPassthrough,
-		codexEnabled:                   cfg.Codex.Enabled,
-		codexPrefix:                    append([]string(nil), cfg.Codex.ModelPrefixes...),
-		codexNativeRouting:             strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
-		codexNativePassthroughOverride: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelPassthroughOverride)),
-		codexModels:                    map[string]ResolvedModel{},
-		nativeCodexModels:              map[string]ResolvedModel{},
-		nativeAdvertised:               map[string]bool{},
-	}
-	if r.codexNativeRouting == "" {
-		if r.codexEnabled {
-			r.codexNativeRouting = "codex"
-		} else {
-			r.codexNativeRouting = "off"
-		}
-	}
-	switch r.codexNativeRouting {
-	case "off", "codex", BackendPassthroughOverride:
-	default:
-		return nil, fmt.Errorf("adapter: [adapter.codex].native_model_routing must be one of: off, codex, passthrough_override")
-	}
-	if r.codexNativeRouting == BackendPassthroughOverride {
-		if r.codexNativePassthroughOverride == "" {
-			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_passthrough_override is required when native_model_routing = \"passthrough_override\"")
-		}
-		if _, ok := cfg.PassthroughOverrides[r.codexNativePassthroughOverride]; !ok {
-			return nil, fmt.Errorf("adapter: [adapter.codex].native_model_passthrough_override %q not found in [adapter.passthrough_overrides]", r.codexNativePassthroughOverride)
-		}
+	r := newEmptyRegistry(cfg, models)
+	if err := finalizeCodexNativeRouting(r, cfg); err != nil {
+		return nil, err
 	}
 	if len(r.codexPrefix) == 0 {
 		r.codexPrefix = []string{"gpt-", "o"}
 	}
 
-	for name, m := range cfg.Models {
-		if strings.EqualFold(strings.TrimSpace(m.Backend), "fallback") {
-			return nil, fmt.Errorf("adapter: [adapter.models.%s].backend = %q is no longer supported", name, m.Backend)
-		}
-		r.models[strings.ToLower(name)] = resolveFromConfig(name, m)
+	if err := loadConfigModels(r, cfg.Models); err != nil {
+		return nil, err
 	}
 	for name, s := range cfg.PassthroughOverrides {
 		r.passthroughOverrides[strings.ToLower(name)] = s
 	}
-	for _, model := range cfg.Codex.Models {
-		if err := addCodexModelAliases(r.codexModels, model); err != nil {
-			return nil, err
-		}
-		if err := addNativeCodexModelAliases(r.nativeCodexModels, r.nativeAdvertised, model); err != nil {
-			return nil, err
-		}
+	if err := loadCodexModels(r, cfg.Codex.Models); err != nil {
+		return nil, err
 	}
 
-	rewritten := 0
-	for alias, rm := range r.models {
-		rm.Alias = alias
-		if cfg.DirectOAuth && rm.Backend == BackendClaude {
-			rm.Backend = BackendAnthropic
-			rewritten++
-		}
-		r.models[alias] = rm
-	}
-	if cfg.DirectOAuth {
-		modelCatalogLog.Logger().Info("adapter.registry.oauth_rewrite",
-			"subcomponent", "adapter",
-			"models_rewritten", rewritten,
-			"models_total", len(r.models),
-		)
-	}
+	applyDirectOAuthRewrite(r, cfg)
 
 	if _, ok := r.models[strings.ToLower(r.def)]; !ok {
 		// The default model must resolve after expansion. Permit a
@@ -303,6 +193,182 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	)
 
 	return r, nil
+}
+
+// validateAdapterCoreConfig enforces the always-required adapter fields.
+func validateAdapterCoreConfig(cfg config.AdapterConfig) error {
+	if cfg.DefaultModel == "" {
+		return fmt.Errorf("adapter: default_model must be set in [adapter]")
+	}
+	// beta_header and user_agent are optional. When empty, the
+	// adapter falls through to the captured WireFlavor in
+	// internal/adapter/anthropic/wire_flavors_gen.go (CLYDE-124).
+	// Setting either is an explicit operator override.
+	if cfg.ClientIdentity.SystemPromptPrefix == "" {
+		return fmt.Errorf("adapter: [adapter.client_identity].system_prompt_prefix must be set")
+	}
+	if cfg.ClientIdentity.StainlessPackageVersion == "" {
+		return fmt.Errorf("adapter: [adapter.client_identity].stainless_package_version must be set")
+	}
+	if cfg.ClientIdentity.StainlessRuntime == "" {
+		return fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime must be set")
+	}
+	if cfg.ClientIdentity.StainlessRuntimeVersion == "" {
+		return fmt.Errorf("adapter: [adapter.client_identity].stainless_runtime_version must be set")
+	}
+	if cfg.ClientIdentity.CCVersion == "" {
+		return fmt.Errorf("adapter: [adapter.client_identity].cc_version must be set")
+	}
+	if cfg.ClientIdentity.CCEntrypoint == "" {
+		return fmt.Errorf("adapter: [adapter.client_identity].cc_entrypoint must be set")
+	}
+	if cfg.DirectOAuth {
+		if err := cfg.OAuth.ValidateOAuthFields(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// countFamilyCapabilities validates each family's required capability flags
+// and returns aggregate tool/vision counts for the load-time log line.
+func countFamilyCapabilities(families map[string]config.AdapterFamily) (int, int, error) {
+	toolsCapable := 0
+	visionCapable := 0
+	for slug, family := range families {
+		if family.SupportsTools == nil {
+			return 0, 0, fmt.Errorf(
+				"adapter: family %q missing supports_tools (must be explicit true/false)",
+				slug,
+			)
+		}
+		if family.SupportsVision == nil {
+			return 0, 0, fmt.Errorf("adapter: family %q missing supports_vision", slug)
+		}
+		if *family.SupportsTools {
+			toolsCapable++
+		}
+		if *family.SupportsVision {
+			visionCapable++
+		}
+	}
+	return toolsCapable, visionCapable, nil
+}
+
+// buildFamilyAliases validates each family and expands the alias cross-product.
+func buildFamilyAliases(families map[string]config.AdapterFamily) (map[string]ResolvedModel, error) {
+	models := map[string]ResolvedModel{}
+	for slug, family := range families {
+		if family.Model == "" {
+			return nil, fmt.Errorf("adapter: family %q missing model id", slug)
+		}
+		if len(family.Contexts) == 0 {
+			return nil, fmt.Errorf("adapter: family %q missing contexts", slug)
+		}
+		switch family.ThinkingWireMode {
+		case "", ThinkingEnabled, ThinkingAdaptive:
+		default:
+			return nil, fmt.Errorf("adapter: family %q has invalid thinking_wire_mode %q (allowed: %q, %q)", slug, family.ThinkingWireMode, ThinkingEnabled, ThinkingAdaptive)
+		}
+		// Resolve the implicit per-family fallback for thinking_wire_mode.
+		// The result is what generateFamilyAliases will stamp onto every
+		// thinking-enabled alias. EffectiveThinkingMode does not patch
+		// this at request time; the family's choice is the wire choice.
+		family = withResolvedThinkingWireMode(slog.Default(), slug, family)
+		generateFamilyAliases(models, slug, family)
+	}
+	return models, nil
+}
+
+// newEmptyRegistry constructs a Registry seeded with the family-expanded
+// alias map and the codex-related config knobs in their pre-validated form.
+func newEmptyRegistry(cfg config.AdapterConfig, models map[string]ResolvedModel) *Registry {
+	return &Registry{
+		models:                         models,
+		passthroughOverrides:           map[string]config.AdapterPassthroughOverride{},
+		def:                            cfg.DefaultModel,
+		openAICompat:                   cfg.OpenAICompatPassthrough,
+		codexEnabled:                   cfg.Codex.Enabled,
+		codexPrefix:                    append([]string(nil), cfg.Codex.ModelPrefixes...),
+		codexNativeRouting:             strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
+		codexNativePassthroughOverride: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelPassthroughOverride)),
+		codexModels:                    map[string]ResolvedModel{},
+		nativeCodexModels:              map[string]ResolvedModel{},
+		nativeAdvertised:               map[string]bool{},
+	}
+}
+
+// finalizeCodexNativeRouting validates codex native routing settings and
+// applies the implicit default when the operator left the field blank.
+func finalizeCodexNativeRouting(r *Registry, cfg config.AdapterConfig) error {
+	if r.codexNativeRouting == "" {
+		if r.codexEnabled {
+			r.codexNativeRouting = "codex"
+		} else {
+			r.codexNativeRouting = "off"
+		}
+	}
+	switch r.codexNativeRouting {
+	case "off", "codex", BackendPassthroughOverride:
+	default:
+		return fmt.Errorf("adapter: [adapter.codex].native_model_routing must be one of: off, codex, passthrough_override")
+	}
+	if r.codexNativeRouting == BackendPassthroughOverride {
+		if r.codexNativePassthroughOverride == "" {
+			return fmt.Errorf("adapter: [adapter.codex].native_model_passthrough_override is required when native_model_routing = \"passthrough_override\"")
+		}
+		if _, ok := cfg.PassthroughOverrides[r.codexNativePassthroughOverride]; !ok {
+			return fmt.Errorf("adapter: [adapter.codex].native_model_passthrough_override %q not found in [adapter.passthrough_overrides]", r.codexNativePassthroughOverride)
+		}
+	}
+	return nil
+}
+
+// loadConfigModels copies user-supplied [adapter.models.*] entries into the
+// registry, rejecting the legacy "fallback" backend.
+func loadConfigModels(r *Registry, models map[string]config.AdapterModel) error {
+	for name, m := range models {
+		if strings.EqualFold(strings.TrimSpace(m.Backend), "fallback") {
+			return fmt.Errorf("adapter: [adapter.models.%s].backend = %q is no longer supported", name, m.Backend)
+		}
+		r.models[strings.ToLower(name)] = resolveFromConfig(name, m)
+	}
+	return nil
+}
+
+// loadCodexModels expands every [adapter.codex.models] entry into both the
+// effort-keyed alias table and the native-alias table.
+func loadCodexModels(r *Registry, models []config.AdapterCodexModel) error {
+	for _, model := range models {
+		if err := addCodexModelAliases(r.codexModels, model); err != nil {
+			return err
+		}
+		if err := addNativeCodexModelAliases(r.nativeCodexModels, r.nativeAdvertised, model); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyDirectOAuthRewrite stamps the alias onto every resolved model, and
+// when DirectOAuth is on rewrites BackendClaude entries to BackendAnthropic.
+func applyDirectOAuthRewrite(r *Registry, cfg config.AdapterConfig) {
+	rewritten := 0
+	for alias, rm := range r.models {
+		rm.Alias = alias
+		if cfg.DirectOAuth && rm.Backend == BackendClaude {
+			rm.Backend = BackendAnthropic
+			rewritten++
+		}
+		r.models[alias] = rm
+	}
+	if cfg.DirectOAuth {
+		modelCatalogLog.Logger().Info("adapter.registry.oauth_rewrite",
+			"subcomponent", "adapter",
+			"models_rewritten", rewritten,
+			"models_total", len(r.models),
+		)
+	}
 }
 
 // validateAdapterLogprobs enforces the live Anthropic logprobs policy.
