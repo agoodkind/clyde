@@ -297,7 +297,7 @@ func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapte
 	return p.writeStreamDone(ctx)
 }
 
-func (p *providerStreamWriter) writeStreamErrorBody(ctx context.Context, body adapteropenai.ErrorBody) error {
+func (p *providerStreamWriter) writeStreamError(ctx context.Context, err error) error {
 	if p == nil || p.sse == nil || p.server == nil {
 		return nil
 	}
@@ -305,11 +305,7 @@ func (p *providerStreamWriter) writeStreamErrorBody(ctx context.Context, body ad
 	// emits exactly one Cursor-safe SSE error frame followed by the
 	// [DONE] terminator. The boundary lockdown forbids direct
 	// EmitStreamError calls outside adapter_error.go.
-	aerr := newAdapterError(adapterErrorUpstreamFailed, body.Message)
-	aerr.OpenAIType = body.Type
-	aerr.OpenAICode = body.Code
-	aerr.OpenAIParam = body.Param
-	if err := p.server.respondAdapterStreamError(ctx, p.sse, aerr); err != nil {
+	if err := p.server.respondAdapterStreamError(ctx, p.sse, err); err != nil {
 		p.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_responder_failed",
 			slog.String("request_id", p.reqID),
 			slog.String("model", p.modelAlias),

@@ -97,14 +97,18 @@ func (s *Server) dispatchCodexProviderStream(
 
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, writer)
 	if runErr != nil {
-		status, errorBody := codexProviderErrorResponse(runErr)
+		aerr := codexProviderAdapterError(runErr)
+		aerr.Backend = model.Backend
+		aerr.ModelAlias = model.Alias
+		aerr.ResolvedModel = model.ClaudeModel
+		aerr.Cause = runErr
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
 			slog.String("request_id", reqID),
 			slog.String("alias", model.Alias),
-			slog.Int("status", status),
-			slog.String("error_type", errorBody.Type),
-			slog.String("error_code", errorBody.Code),
-			slog.String("error_param", errorBody.Param),
+			slog.Int("status", aerr.HTTPStatus),
+			slog.String("error_type", aerr.OpenAIType),
+			slog.String("error_code", aerr.OpenAICode),
+			slog.String("error_param", aerr.OpenAIParam),
 			slog.Bool("stream_headers_written", writer.headersWritten),
 		)
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
@@ -119,7 +123,7 @@ func (s *Server) dispatchCodexProviderStream(
 			Err:        runErr.Error(),
 		})
 		if writer.headersWritten {
-			if err := writer.writeStreamErrorBody(ctx, errorBody); err != nil {
+			if err := writer.writeStreamError(ctx, aerr); err != nil {
 				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
 					slog.String("backend", "codex"),
 					slog.String("request_id", reqID),
@@ -128,13 +132,7 @@ func (s *Server) dispatchCodexProviderStream(
 			}
 			return
 		}
-		mapped := adapterErrFromOpenAI(status, errorBody)
-		mapped.Provider = "codex"
-		mapped.Backend = model.Backend
-		mapped.ModelAlias = model.Alias
-		mapped.ResolvedModel = model.ClaudeModel
-		mapped.Cause = runErr
-		s.respondAdapterError(w, r, mapped)
+		s.respondAdapterError(w, r, aerr)
 		return
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
@@ -198,14 +196,18 @@ func (s *Server) dispatchCodexProviderCollect(
 	collector := newProviderCollectorWriter()
 	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, collector)
 	if runErr != nil {
-		status, errorBody := codexProviderErrorResponse(runErr)
+		aerr := codexProviderAdapterError(runErr)
+		aerr.Backend = model.Backend
+		aerr.ModelAlias = model.Alias
+		aerr.ResolvedModel = model.ClaudeModel
+		aerr.Cause = runErr
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
 			slog.String("request_id", reqID),
 			slog.String("alias", model.Alias),
-			slog.Int("status", status),
-			slog.String("error_type", errorBody.Type),
-			slog.String("error_code", errorBody.Code),
-			slog.String("error_param", errorBody.Param),
+			slog.Int("status", aerr.HTTPStatus),
+			slog.String("error_type", aerr.OpenAIType),
+			slog.String("error_code", aerr.OpenAICode),
+			slog.String("error_param", aerr.OpenAIParam),
 			slog.Bool("stream_headers_written", false),
 		)
 		adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
@@ -219,13 +221,7 @@ func (s *Server) dispatchCodexProviderCollect(
 			DurationMs: time.Since(started).Milliseconds(),
 			Err:        runErr.Error(),
 		})
-		mapped := adapterErrFromOpenAI(status, errorBody)
-		mapped.Provider = "codex"
-		mapped.Backend = model.Backend
-		mapped.ModelAlias = model.Alias
-		mapped.ResolvedModel = model.ClaudeModel
-		mapped.Cause = runErr
-		s.respondAdapterError(w, r, mapped)
+		s.respondAdapterError(w, r, aerr)
 		return
 	}
 	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
@@ -291,21 +287,17 @@ func (s *Server) dispatchCodexProviderCollect(
 func codexProviderAdapterError(err error) *adapterError {
 	var contextErr *adaptercodex.ContextWindowError
 	if errors.As(err, &contextErr) {
-		return adapterErrFromOpenAI(http.StatusBadRequest, ErrorBody{
-			Message: "This model's maximum context length was exceeded. Please reduce the length of the messages.",
-			Type:    "invalid_request_error",
-			Code:    "context_length_exceeded",
-			Param:   "messages",
-		})
+		aerr := newAdapterError(adapterErrorContextLengthExceeded, "This model's maximum context length was exceeded. Please reduce the length of the messages.")
+		aerr.Provider = "codex"
+		aerr.Cause = err
+		return aerr
 	}
 	var unsupportedModelErr *adaptercodex.UnsupportedModelError
 	if errors.As(err, &unsupportedModelErr) {
-		return adapterErrFromOpenAI(http.StatusBadRequest, ErrorBody{
-			Message: unsupportedModelErr.Error(),
-			Type:    "invalid_request_error",
-			Code:    "model_not_supported",
-			Param:   "model",
-		})
+		aerr := newAdapterError(adapterErrorModelNotSupported, unsupportedModelErr.Error())
+		aerr.Provider = "codex"
+		aerr.Cause = err
+		return aerr
 	}
 	message := err.Error()
 	codeClass := codexClassifyError(message)
@@ -328,19 +320,4 @@ func codexClassifyError(message string) upstreamCodeClass {
 		return upstreamClassSchemaViolation
 	}
 	return upstreamClassServerError
-}
-
-// codexProviderErrorResponse is retained as a thin shim for log
-// shaping. New call sites should use codexProviderAdapterError to
-// avoid a double conversion through ErrorBody. The shim emits the
-// fields needed by the existing adapter.codex.provider_error_mapped
-// log line.
-func codexProviderErrorResponse(err error) (int, ErrorBody) {
-	aerr := codexProviderAdapterError(err)
-	return aerr.HTTPStatus, ErrorBody{
-		Message: aerr.Message,
-		Type:    aerr.OpenAIType,
-		Code:    aerr.OpenAICode,
-		Param:   aerr.OpenAIParam,
-	}
 }
