@@ -100,6 +100,18 @@ func (t *TableWidget) visibleRows() int {
 	return imax(0, t.Rect.H-1) // reserve one line for header
 }
 
+// tableDrawCtx bundles the per-Draw layout numbers and the shifted-paint
+// helper so each draw stage can be extracted into its own method without
+// dragging a long parameter list around.
+type tableDrawCtx struct {
+	r        Rect
+	contentW int
+	vis      int
+	widths   []int
+	totalW   int
+	needsBar bool
+}
+
 // Draw renders the table into r. Two scrollbars appear when needed: a
 // vertical bar on the right edge for row overflow, and a horizontal
 // indicator through the column layout when the total content width
@@ -108,6 +120,19 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 	t.Rect = r
 	clearRect(scr, r)
 
+	ctx := t.prepareDrawCtx(r)
+	t.LastContentWidth = ctx.totalW
+	t.clampHOffset(ctx.totalW, ctx.contentW)
+
+	t.drawHeaderRow(scr, ctx)
+	t.drawDataRows(scr, ctx)
+	t.drawOverflowArrows(scr, ctx)
+	t.drawVerticalScrollbar(scr, ctx)
+}
+
+// prepareDrawCtx computes the per-frame layout numbers shared by every
+// draw stage.
+func (t *TableWidget) prepareDrawCtx(r Rect) tableDrawCtx {
 	vis := imax(0, r.H-1)
 	needsBar := len(t.Rows) > vis && r.W > 2
 	contentW := r.W
@@ -116,9 +141,6 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 	}
 
 	widths := t.ColumnWidths()
-
-	// Sum total virtual width so we know when to enable horizontal scroll
-	// and how far HOffset may go.
 	totalW := 0
 	for i, w := range widths {
 		if i > 0 {
@@ -126,7 +148,19 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 		}
 		totalW += w
 	}
-	t.LastContentWidth = totalW
+	return tableDrawCtx{
+		r:        r,
+		contentW: contentW,
+		vis:      vis,
+		widths:   widths,
+		totalW:   totalW,
+		needsBar: needsBar,
+	}
+}
+
+// clampHOffset bounds the horizontal scroll offset to the valid range
+// for the current content and viewport widths.
+func (t *TableWidget) clampHOffset(totalW, contentW int) {
 	maxHOff := imax(0, totalW-contentW)
 	if t.HOffset > maxHOff {
 		t.HOffset = maxHOff
@@ -134,123 +168,138 @@ func (t *TableWidget) Draw(scr tcell.Screen, r Rect) {
 	if t.HOffset < 0 {
 		t.HOffset = 0
 	}
+}
 
-	// drawShifted paints text at virtual column position vx in display cells so
-	// the cell at vx == HOffset appears at the left edge. Wide runes use tcell
-	// SetContent so each grapheme lands on the right number of cells.
-	drawShifted := func(vx, y int, style tcell.Style, text string) {
-		dpos := 0
-		gr := uniseg.NewGraphemes(text)
-		for gr.Next() {
-			cl := gr.Str()
-			w := runewidth.StringWidth(cl)
-			if w < 1 {
-				rns := []rune(cl)
-				if len(rns) == 0 {
-					continue
-				}
-				w = runewidth.RuneWidth(rns[0])
-			}
-			if w < 1 {
-				continue
-			}
-			col0 := vx + dpos - t.HOffset
-			if col0 >= contentW {
-				break
-			}
-			if col0+w <= 0 {
-				dpos += w
-				continue
-			}
+// drawShiftedText paints text at virtual column position vx so the cell at
+// vx == HOffset appears at the left edge. Wide runes use tcell SetContent
+// so each grapheme lands on the right number of cells.
+func (t *TableWidget) drawShiftedText(scr tcell.Screen, ctx tableDrawCtx, vx, y int, style tcell.Style, text string) {
+	dpos := 0
+	gr := uniseg.NewGraphemes(text)
+	for gr.Next() {
+		cl := gr.Str()
+		w := runewidth.StringWidth(cl)
+		if w < 1 {
 			rns := []rune(cl)
 			if len(rns) == 0 {
-				dpos += w
 				continue
 			}
-			cx := r.X + imax(0, col0)
-			scr.SetContent(cx, y, rns[0], rns[1:], style)
-			dpos += w
+			w = runewidth.RuneWidth(rns[0])
 		}
+		if w < 1 {
+			continue
+		}
+		col0 := vx + dpos - t.HOffset
+		if col0 >= ctx.contentW {
+			break
+		}
+		if col0+w <= 0 {
+			dpos += w
+			continue
+		}
+		rns := []rune(cl)
+		if len(rns) == 0 {
+			dpos += w
+			continue
+		}
+		cx := ctx.r.X + imax(0, col0)
+		scr.SetContent(cx, y, rns[0], rns[1:], style)
+		dpos += w
 	}
+}
 
-	// Header row
+// headerLabel produces the visible header text for column i, applying
+// the sort indicator suffix when the column is the active sort key.
+func (t *TableWidget) headerLabel(i int) string {
+	label := t.Headers[i]
+	if i != t.SortCol {
+		return label
+	}
+	if t.SortAsc {
+		return label + " ^"
+	}
+	return label + " v"
+}
+
+// padCellText right-pads non-final columns and left-pads the final one,
+// matching the original column-aligned layout.
+func padCellText(text string, width int, isLast bool) string {
+	if isLast {
+		return runewidth.FillLeft(text, width)
+	}
+	return runewidth.FillRight(text, width)
+}
+
+func (t *TableWidget) drawHeaderRow(scr tcell.Screen, ctx tableDrawCtx) {
 	vx := 0
-	for i, h := range t.Headers {
+	last := len(t.Headers) - 1
+	for i := range t.Headers {
 		if i > 0 {
 			vx += t.ColGaps
 		}
-		label := h
-		if i == t.SortCol {
-			if t.SortAsc {
-				label += " ^"
-			} else {
-				label += " v"
-			}
-		}
-		var text string
-		if i == len(t.Headers)-1 {
-			text = runewidth.FillLeft(label, widths[i])
-		} else {
-			text = runewidth.FillRight(label, widths[i])
-		}
-		drawShifted(vx, r.Y, StyleHeader, text)
-		vx += widths[i]
+		text := padCellText(t.headerLabel(i), ctx.widths[i], i == last)
+		t.drawShiftedText(scr, ctx, vx, ctx.r.Y, StyleHeader, text)
+		vx += ctx.widths[i]
 	}
+}
 
-	// Data rows
-	for vi := range vis {
+func (t *TableWidget) drawDataRows(scr tcell.Screen, ctx tableDrawCtx) {
+	for vi := range ctx.vis {
 		di := t.Offset + vi
 		if di >= len(t.Rows) {
-			break
+			return
 		}
-		row := t.Rows[di]
-		y := r.Y + 1 + vi
-		isSel := t.Active && di == t.SelectedRow
+		t.drawDataRow(scr, ctx, di, ctx.r.Y+1+vi)
+	}
+}
 
+func (t *TableWidget) drawDataRow(scr tcell.Screen, ctx tableDrawCtx, di, y int) {
+	row := t.Rows[di]
+	isSel := t.Active && di == t.SelectedRow
+	if isSel {
+		fillRow(scr, ctx.r.X, y, ctx.contentW, StyleSelected)
+	}
+
+	vx := 0
+	last := len(t.Headers) - 1
+	for i := range t.Headers {
+		if i > 0 {
+			vx += t.ColGaps
+		}
+		var cell TableCell
+		if i < len(row) {
+			cell = row[i]
+		}
+		style := cell.Style
 		if isSel {
-			fillRow(scr, r.X, y, contentW, StyleSelected)
+			style = StyleSelected
 		}
-
-		vx := 0
-		for i := range len(t.Headers) {
-			if i > 0 {
-				vx += t.ColGaps
-			}
-			var cell TableCell
-			if i < len(row) {
-				cell = row[i]
-			}
-			style := cell.Style
-			if isSel {
-				style = StyleSelected
-			}
-			var text string
-			if i == len(t.Headers)-1 {
-				text = runewidth.FillLeft(cell.Text, widths[i])
-			} else {
-				text = runewidth.FillRight(cell.Text, widths[i])
-			}
-			drawShifted(vx, y, style, text)
-			vx += widths[i]
-		}
+		text := padCellText(cell.Text, ctx.widths[i], i == last)
+		t.drawShiftedText(scr, ctx, vx, y, style, text)
+		vx += ctx.widths[i]
 	}
+}
 
-	// Left and right overflow hint arrows render on the header row so
-	// the user can tell more columns exist off screen.
+// drawOverflowArrows renders the left and right overflow hint arrows on
+// the header row so the user can tell more columns exist off screen.
+func (t *TableWidget) drawOverflowArrows(scr tcell.Screen, ctx tableDrawCtx) {
+	arrowStyle := StyleDefault.Foreground(ColorAccent).Bold(true)
 	if t.HOffset > 0 {
-		scr.SetContent(r.X, r.Y, '◂', nil, StyleDefault.Foreground(ColorAccent).Bold(true))
+		scr.SetContent(ctx.r.X, ctx.r.Y, '◂', nil, arrowStyle)
 	}
-	if totalW-t.HOffset > contentW {
-		scr.SetContent(r.X+contentW-1, r.Y, '▸', nil, StyleDefault.Foreground(ColorAccent).Bold(true))
+	if ctx.totalW-t.HOffset > ctx.contentW {
+		scr.SetContent(ctx.r.X+ctx.contentW-1, ctx.r.Y, '▸', nil, arrowStyle)
 	}
+}
 
-	if needsBar {
-		t.ScrollbarRect = Rect{X: r.X + r.W - 1, Y: r.Y + 1, W: 1, H: vis}
-		drawScrollbar(scr, t.ScrollbarRect.X, t.ScrollbarRect.Y,
-			t.ScrollbarRect.H, vis, len(t.Rows), t.Offset)
-	} else {
+func (t *TableWidget) drawVerticalScrollbar(scr tcell.Screen, ctx tableDrawCtx) {
+	if !ctx.needsBar {
 		t.ScrollbarRect = Rect{}
+		return
 	}
+	t.ScrollbarRect = Rect{X: ctx.r.X + ctx.r.W - 1, Y: ctx.r.Y + 1, W: 1, H: ctx.vis}
+	drawScrollbar(scr, t.ScrollbarRect.X, t.ScrollbarRect.Y,
+		t.ScrollbarRect.H, ctx.vis, len(t.Rows), t.Offset)
 }
 
 // JumpToScrollbarY maps an absolute screen Y inside the scrollbar track to a
