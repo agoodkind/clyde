@@ -53,6 +53,15 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 	return nil
 }
 
+func (sw *SSEWriter) WriteStreamEvent(payload []byte) error {
+	sw.WriteSSEHeaders()
+	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", payload); err != nil {
+		return err
+	}
+	sw.f.Flush()
+	return nil
+}
+
 func (sw *SSEWriter) WriteStreamDone() error {
 	if _, err := io.WriteString(sw.w, "data: [DONE]\n\n"); err != nil {
 		return err
@@ -71,7 +80,32 @@ func (sw *SSEWriter) WriteStreamDone() error {
 // error to the OpenAI client (Cursor, OpenAI SDK consumers) rather
 // than as an assistant-shaped chat message.
 func (sw *SSEWriter) EmitStreamError(info errcontract.ErrorInfo) error {
-	sw.WriteSSEHeaders()
+	renderer := NewStreamErrorRenderer()
+	return renderer.emitErrorEvent(sw, info)
+}
+
+// StreamErrorRenderer renders OpenAI-family native error events on an
+// already-open SSE stream. It owns only the error envelope; normal
+// success stream chunks stay on SSEWriter.EmitStreamChunk.
+type StreamErrorRenderer struct{}
+
+// NewStreamErrorRenderer returns the canonical OpenAI stream error
+// renderer.
+func NewStreamErrorRenderer() StreamErrorRenderer { return StreamErrorRenderer{} }
+
+// RenderStreamError emits one native OpenAI error event followed by
+// the stream terminator.
+func (r StreamErrorRenderer) RenderStreamError(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
+	if err := r.emitErrorEvent(w, info); err != nil {
+		return err
+	}
+	if err := w.WriteStreamDone(); err != nil {
+		return fmt.Errorf("write stream done terminator: %w", err)
+	}
+	return nil
+}
+
+func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
 	body := ErrorBody{
 		Message: info.Message,
 		Type:    info.Type,
@@ -83,11 +117,7 @@ func (sw *SSEWriter) EmitStreamError(info errcontract.ErrorInfo) error {
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", b); err != nil {
-		return err
-	}
-	sw.f.Flush()
-	return nil
+	return w.WriteStreamEvent(b)
 }
 
 func (sw *SSEWriter) HasCommittedHeaders() bool {

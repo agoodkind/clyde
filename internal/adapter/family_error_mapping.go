@@ -35,16 +35,18 @@ const (
 // RegisterErrorBoundary hooks; the boundary file owns no provider
 // import and constructs no provider envelope.
 type boundaryRegistry struct {
-	mu        sync.RWMutex
-	mappers   map[adapterRouteFamily]errcontract.UpstreamErrorMapper
-	renderers map[adapterRouteFamily]errcontract.ErrorRenderer
+	mu                   sync.RWMutex
+	mappers              map[adapterRouteFamily]errcontract.UpstreamErrorMapper
+	renderers            map[adapterRouteFamily]errcontract.ErrorRenderer
+	streamErrorRenderers map[adapterRouteFamily]errcontract.StreamErrorRenderer
 }
 
 func newBoundaryRegistry() *boundaryRegistry {
 	return &boundaryRegistry{
-		mu:        sync.RWMutex{},
-		mappers:   map[adapterRouteFamily]errcontract.UpstreamErrorMapper{},
-		renderers: map[adapterRouteFamily]errcontract.ErrorRenderer{},
+		mu:                   sync.RWMutex{},
+		mappers:              map[adapterRouteFamily]errcontract.UpstreamErrorMapper{},
+		renderers:            map[adapterRouteFamily]errcontract.ErrorRenderer{},
+		streamErrorRenderers: map[adapterRouteFamily]errcontract.StreamErrorRenderer{},
 	}
 }
 
@@ -60,6 +62,17 @@ func (r *boundaryRegistry) Register(family errcontract.RouteFamily, mapper errco
 	}
 	if renderer != nil {
 		r.renderers[key] = renderer
+	}
+}
+
+// RegisterStreamErrorRenderer stores the native stream error renderer
+// for a family. It intentionally covers error events only; normal
+// success stream chunks stay on their existing renderer path.
+func (r *boundaryRegistry) RegisterStreamErrorRenderer(family errcontract.RouteFamily, renderer errcontract.StreamErrorRenderer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if renderer != nil {
+		r.streamErrorRenderers[adapterRouteFamily(family)] = renderer
 	}
 }
 
@@ -79,6 +92,15 @@ func (r *boundaryRegistry) errorRenderer(family adapterRouteFamily) (errcontract
 	return rd, ok
 }
 
+// streamErrorRenderer returns the registered stream error renderer
+// for a family.
+func (r *boundaryRegistry) streamErrorRenderer(family adapterRouteFamily) (errcontract.StreamErrorRenderer, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rd, ok := r.streamErrorRenderers[family]
+	return rd, ok
+}
+
 // snapshotRenderers returns a copy of the renderer map so a Server can
 // own a per-instance registry that is decoupled from later mutations.
 func (r *boundaryRegistry) snapshotRenderers() map[adapterRouteFamily]errcontract.ErrorRenderer {
@@ -86,6 +108,16 @@ func (r *boundaryRegistry) snapshotRenderers() map[adapterRouteFamily]errcontrac
 	defer r.mu.RUnlock()
 	out := make(map[adapterRouteFamily]errcontract.ErrorRenderer, len(r.renderers))
 	maps.Copy(out, r.renderers)
+	return out
+}
+
+// snapshotStreamErrorRenderers returns a copy of the stream error
+// renderer map so a Server can own per-instance boundary wiring.
+func (r *boundaryRegistry) snapshotStreamErrorRenderers() map[adapterRouteFamily]errcontract.StreamErrorRenderer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[adapterRouteFamily]errcontract.StreamErrorRenderer, len(r.streamErrorRenderers))
+	maps.Copy(out, r.streamErrorRenderers)
 	return out
 }
 

@@ -325,6 +325,15 @@ func (s *Server) lookupErrorRenderer(family adapterRouteFamily) (errcontract.Err
 	return defaultBoundaryRegistry.errorRenderer(family)
 }
 
+func (s *Server) lookupStreamErrorRenderer(family adapterRouteFamily) (errcontract.StreamErrorRenderer, bool) {
+	if s != nil && s.streamErrorRenderers != nil {
+		if r, ok := s.streamErrorRenderers[family]; ok {
+			return r, true
+		}
+	}
+	return defaultBoundaryRegistry.streamErrorRenderer(family)
+}
+
 // writeFallbackError handles the unregistered-family path so
 // the boundary is still guaranteed to emit a parseable JSON body
 // instead of a bare WriteHeader. The chosen shape is a
@@ -361,16 +370,17 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse *adapteropen
 		message = "adapter internal error"
 	}
 	info := adapterErrorInfoForFamily(adapterRouteOpenAI, aerr, message)
-	if writeErr := sse.EmitStreamError(info); writeErr != nil {
+	renderer, ok := s.lookupStreamErrorRenderer(adapterRouteOpenAI)
+	if !ok {
+		return fmt.Errorf("no stream error renderer registered for route family %q", adapterRouteOpenAI)
+	}
+	if writeErr := renderer.RenderStreamError(sse, info); writeErr != nil {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
 			slog.String("openai_type", info.Type),
 			slog.String("openai_code", info.Code),
 			slog.Any("err", writeErr),
 		)
-		return fmt.Errorf("emit stream error frame: %w", writeErr)
-	}
-	if err := sse.WriteStreamDone(); err != nil {
-		return fmt.Errorf("write stream done terminator: %w", err)
+		return fmt.Errorf("render stream error: %w", writeErr)
 	}
 	return nil
 }

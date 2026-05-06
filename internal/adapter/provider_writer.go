@@ -303,8 +303,8 @@ func (p *providerStreamWriter) writeStreamError(ctx context.Context, err error) 
 	}
 	// Route through the boundary helper so every mid-stream error
 	// emits exactly one Cursor-safe SSE error frame followed by the
-	// [DONE] terminator. The boundary lockdown forbids direct
-	// EmitStreamError calls outside adapter_error.go.
+	// [DONE] terminator. The boundary helper delegates native error
+	// event shape to a registered provider renderer.
 	if err := p.server.respondAdapterStreamError(ctx, p.sse, err); err != nil {
 		p.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_responder_failed",
 			slog.String("request_id", p.reqID),
