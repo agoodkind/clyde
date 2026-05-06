@@ -26,6 +26,35 @@ parsing, and provider-specific lifecycle.
 | `internal/adapter/render/`    | Normalized event model to OpenAI chunks                       |
 | `internal/adapter/runtime/`   | Lifecycle logging and notice surfacing                        |
 
+## OpenAI Success Response Audit
+
+The success response shapes in `internal/adapter/openai/types.go` are
+intentional OpenAI-compatible wire types. `ChatResponse`, `StreamChunk`,
+`StreamChoice`, `StreamDelta`, `Usage`, and `PromptTokensDetails` are part of
+the `/v1/chat/completions` response contract even when Anthropic or Codex owns
+the upstream transport.
+
+Intentional response-boundary uses:
+
+- `internal/adapter/` uses facade aliases from `openai_aliases.go` for root
+  dispatch, passthrough usage extraction, context tracking, and legacy SSE
+  helpers.
+- `internal/adapter/provider/` returns `adapteropenai.Usage` and optional
+  `adapteropenai.ChatResponse` so provider execution can hand the root adapter
+  a final OpenAI-compatible result.
+- `internal/adapter/render/` returns `adapteropenai.StreamChunk` values because
+  normalized provider events are rendered into client-visible OpenAI SSE
+  chunks.
+- `internal/adapter/anthropic/backend/` and `internal/adapter/codex/` build
+  `adapteropenai.ChatResponse`, `adapteropenai.StreamChunk`, and
+  `adapteropenai.Usage` values at the provider-owned translation edge.
+
+Avoidable alias follow-up: `internal/adapter/runtime/wire.go` appears wider
+than current use. Repository search showed no external `adapterruntime.*`
+references for its OpenAI success aliases, and the runtime package itself only
+uses `ChatResponse` unqualified today. Narrowing that file can be a small
+follow-up, but do not remove the canonical `openai` success types.
+
 ## Completed Memory
 
 See [`adapter-refactor-history.md`](./adapter-refactor-history.md) for the
