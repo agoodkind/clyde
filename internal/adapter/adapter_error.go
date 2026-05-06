@@ -136,25 +136,25 @@ type adapterErrorDefaults struct {
 }
 
 var adapterErrorDefaultsByClass = map[adapterErrorClass]adapterErrorDefaults{
-	adapterErrorAuthFailed:              {http.StatusUnauthorized, "authentication_error", "unauthorized", "", "authentication_error"},
-	adapterErrorMethodNotAllowed:        {http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "", "invalid_request_error"},
-	adapterErrorInvalidJSON:             {http.StatusBadRequest, "invalid_request_error", "invalid_json", "", "invalid_request_error"},
-	adapterErrorInvalidRequest:          {http.StatusBadRequest, "invalid_request_error", "invalid_request", "", "invalid_request_error"},
-	adapterErrorModelNotFound:           {http.StatusBadRequest, "invalid_request_error", "model_not_found", "model", "invalid_request_error"},
-	adapterErrorModelNotSupported:       {http.StatusBadRequest, "invalid_request_error", "model_not_supported", "model", "invalid_request_error"},
-	adapterErrorUnsupportedBackend:      {http.StatusBadRequest, "invalid_request_error", "unsupported_backend", "", "invalid_request_error"},
-	adapterErrorUnsupportedContent:      {http.StatusBadRequest, "invalid_request_error", "unsupported_content", "", "invalid_request_error"},
-	adapterErrorContextLengthExceeded:   {http.StatusBadRequest, "invalid_request_error", "context_length_exceeded", "messages", "invalid_request_error"},
-	adapterErrorRateLimited:             {http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded", "", "rate_limit_error"},
-	adapterErrorUpstreamAuthFailed:      {http.StatusBadRequest, "invalid_request_error", "upstream_auth_failed", "", "authentication_error"},
-	adapterErrorUpstreamRateLimited:     {http.StatusBadRequest, "invalid_request_error", "upstream_rate_limited", "", "rate_limit_error"},
-	adapterErrorUpstreamSchemaViolation: {http.StatusBadRequest, "invalid_request_error", "upstream_malformed_request", "", "invalid_request_error"},
-	adapterErrorUpstreamNetworkError:    {http.StatusBadRequest, "invalid_request_error", "upstream_network_error", "", "api_error"},
-	adapterErrorUpstreamUnavailable:     {http.StatusBadGateway, "server_error", "upstream_unavailable", "", "api_error"},
-	adapterErrorUpstreamFailed:          {http.StatusBadGateway, "server_error", "upstream_failed", "", "api_error"},
-	adapterErrorTimeout:                 {http.StatusGatewayTimeout, "server_error", "timeout", "", "api_error"},
-	adapterErrorCanceled:                {499, "server_error", "canceled", "", "api_error"},
-	adapterErrorInternal:                {http.StatusInternalServerError, "internal_error", "internal_error", "", "api_error"},
+	adapterErrorAuthFailed:              {HTTPStatus: http.StatusUnauthorized, OpenAIType: "authentication_error", OpenAICode: "unauthorized", OpenAIParam: "", AnthropicType: "authentication_error"},
+	adapterErrorMethodNotAllowed:        {HTTPStatus: http.StatusMethodNotAllowed, OpenAIType: "invalid_request_error", OpenAICode: "method_not_allowed", OpenAIParam: "", AnthropicType: "invalid_request_error"},
+	adapterErrorInvalidJSON:             {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "invalid_json", OpenAIParam: "", AnthropicType: "invalid_request_error"},
+	adapterErrorInvalidRequest:          {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "invalid_request", OpenAIParam: "", AnthropicType: "invalid_request_error"},
+	adapterErrorModelNotFound:           {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "model_not_found", OpenAIParam: "model", AnthropicType: "invalid_request_error"},
+	adapterErrorModelNotSupported:       {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "model_not_supported", OpenAIParam: "model", AnthropicType: "invalid_request_error"},
+	adapterErrorUnsupportedBackend:      {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "unsupported_backend", OpenAIParam: "", AnthropicType: "invalid_request_error"},
+	adapterErrorUnsupportedContent:      {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "unsupported_content", OpenAIParam: "", AnthropicType: "invalid_request_error"},
+	adapterErrorContextLengthExceeded:   {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "context_length_exceeded", OpenAIParam: "messages", AnthropicType: "invalid_request_error"},
+	adapterErrorRateLimited:             {HTTPStatus: http.StatusTooManyRequests, OpenAIType: "rate_limit_error", OpenAICode: "rate_limit_exceeded", OpenAIParam: "", AnthropicType: "rate_limit_error"},
+	adapterErrorUpstreamAuthFailed:      {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_auth_failed", OpenAIParam: "", AnthropicType: "authentication_error"},
+	adapterErrorUpstreamRateLimited:     {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_rate_limited", OpenAIParam: "", AnthropicType: "rate_limit_error"},
+	adapterErrorUpstreamSchemaViolation: {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_malformed_request", OpenAIParam: "", AnthropicType: "invalid_request_error"},
+	adapterErrorUpstreamNetworkError:    {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_network_error", OpenAIParam: "", AnthropicType: "api_error"},
+	adapterErrorUpstreamUnavailable:     {HTTPStatus: http.StatusBadGateway, OpenAIType: "server_error", OpenAICode: "upstream_unavailable", OpenAIParam: "", AnthropicType: "api_error"},
+	adapterErrorUpstreamFailed:          {HTTPStatus: http.StatusBadGateway, OpenAIType: "server_error", OpenAICode: "upstream_failed", OpenAIParam: "", AnthropicType: "api_error"},
+	adapterErrorTimeout:                 {HTTPStatus: http.StatusGatewayTimeout, OpenAIType: "server_error", OpenAICode: "timeout", OpenAIParam: "", AnthropicType: "api_error"},
+	adapterErrorCanceled:                {HTTPStatus: 499, OpenAIType: "server_error", OpenAICode: "canceled", OpenAIParam: "", AnthropicType: "api_error"},
+	adapterErrorInternal:                {HTTPStatus: http.StatusInternalServerError, OpenAIType: "internal_error", OpenAICode: "internal_error", OpenAIParam: "", AnthropicType: "api_error"},
 }
 
 func (e *adapterError) applyDefaults() {
@@ -296,10 +296,11 @@ func rendererTypeForFamily(family adapterRouteFamily, aerr *adapterError) string
 func adapterErrorInfoForFamily(family adapterRouteFamily, aerr *adapterError, message string) errcontract.ErrorInfo {
 	if aerr == nil {
 		return errcontract.ErrorInfo{
-			Type:    "internal_error",
-			Code:    "internal_error",
-			Message: "adapter internal error",
-			Param:   "",
+			Type:        "internal_error",
+			Code:        "internal_error",
+			Message:     "adapter internal error",
+			Param:       "",
+			Diagnostics: nil,
 		}
 	}
 	aerr.applyDefaults()
@@ -307,10 +308,11 @@ func adapterErrorInfoForFamily(family adapterRouteFamily, aerr *adapterError, me
 		message = aerr.Message
 	}
 	return errcontract.ErrorInfo{
-		Type:    rendererTypeForFamily(family, aerr),
-		Code:    aerr.OpenAICode,
-		Message: message,
-		Param:   aerr.OpenAIParam,
+		Type:        rendererTypeForFamily(family, aerr),
+		Code:        aerr.OpenAICode,
+		Message:     message,
+		Param:       aerr.OpenAIParam,
+		Diagnostics: nil,
 	}
 }
 

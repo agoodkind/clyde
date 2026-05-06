@@ -59,9 +59,19 @@ const correlationContextKey contextKey = 1
 
 func New(requestID string) Context {
 	return Context{
-		TraceID:   NewTraceID(),
-		SpanID:    NewSpanID(),
-		RequestID: strings.TrimSpace(requestID),
+		TraceID:              NewTraceID(),
+		SpanID:               NewSpanID(),
+		ParentSpanID:         "",
+		RequestID:            strings.TrimSpace(requestID),
+		CursorRequestID:      "",
+		CursorConversationID: "",
+		CursorGenerationID:   "",
+		UpstreamRequestID:    "",
+		UpstreamResponseID:   "",
+		ChatKey:              "",
+		ChatKeySource:        "",
+		ChatRootKey:          "",
+		ChatBranchKey:        "",
 	}
 }
 
@@ -101,12 +111,30 @@ func FromHTTPHeader(header http.Header, requestID string) Context {
 
 func FromContext(ctx context.Context) Context {
 	if ctx == nil {
-		return Context{}
+		return emptyContext()
 	}
 	if corr, ok := ctx.Value(correlationContextKey).(Context); ok {
 		return corr
 	}
-	return Context{}
+	return emptyContext()
+}
+
+func emptyContext() Context {
+	return Context{
+		TraceID:              "",
+		SpanID:               "",
+		ParentSpanID:         "",
+		RequestID:            "",
+		CursorRequestID:      "",
+		CursorConversationID: "",
+		CursorGenerationID:   "",
+		UpstreamRequestID:    "",
+		UpstreamResponseID:   "",
+		ChatKey:              "",
+		ChatKeySource:        "",
+		ChatRootKey:          "",
+		ChatBranchKey:        "",
+	}
 }
 
 func WithContext(ctx context.Context, corr Context) context.Context {

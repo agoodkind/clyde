@@ -100,10 +100,11 @@ func (UpstreamErrorMapper) Map(
 	return errcontract.UpstreamMapping{
 		HTTPStatus: httpStatus,
 		Info: errcontract.ErrorInfo{
-			Type:    envelopeType,
-			Code:    trimmedCode,
-			Message: resolvedMessage,
-			Param:   "",
+			Type:        envelopeType,
+			Code:        trimmedCode,
+			Message:     resolvedMessage,
+			Param:       "",
+			Diagnostics: nil,
 		},
 	}
 }

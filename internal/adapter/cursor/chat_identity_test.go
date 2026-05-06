@@ -27,8 +27,8 @@ func TestChatIdentityResolverSplitsForkedLineage(t *testing.T) {
 		},
 	}
 
-	first := resolver.Resolve(correlation.Context{}, TranslateRequest(branchA), branchA)
-	second := resolver.Resolve(correlation.Context{}, TranslateRequest(branchB), branchB)
+	first := resolver.Resolve(correlation.New(""), TranslateRequest(branchA), branchA)
+	second := resolver.Resolve(correlation.New(""), TranslateRequest(branchB), branchB)
 
 	if first.ChatRootKey == "" || second.ChatRootKey == "" {
 		t.Fatalf("root keys should be populated: first=%+v second=%+v", first, second)
@@ -76,8 +76,8 @@ func TestChatIdentityResolverKeepsExtendedBranch(t *testing.T) {
 		},
 	}
 
-	first := resolver.Resolve(correlation.Context{}, TranslateRequest(turnOne), turnOne)
-	second := resolver.Resolve(correlation.Context{}, TranslateRequest(turnTwo), turnTwo)
+	first := resolver.Resolve(correlation.New(""), TranslateRequest(turnOne), turnOne)
+	second := resolver.Resolve(correlation.New(""), TranslateRequest(turnTwo), turnTwo)
 
 	if first.ChatKey == "" {
 		t.Fatalf("first key empty")
@@ -100,7 +100,7 @@ func TestChatIdentityResolverKeepsNativeKey(t *testing.T) {
 			{Role: "user", Content: mustMarshalString(t, "same root")},
 		},
 	}
-	corr := correlation.Context{}.WithChatIdentity("native-conv", "native", "native-conv", "")
+	corr := correlation.New("").WithChatIdentity("native-conv", "native", "native-conv", "")
 	identity := resolver.Resolve(corr, TranslateRequest(req), req)
 
 	if identity.ChatKey != "native-conv" {

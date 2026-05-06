@@ -12,9 +12,19 @@ import (
 
 func TestDaemonDetachedCorrelationContextCreatesChildSpan(t *testing.T) {
 	parentCorr := correlation.Context{
-		TraceID:   correlation.TraceID("11111111111111111111111111111111"),
-		SpanID:    correlation.SpanID("2222222222222222"),
-		RequestID: "request-1",
+		TraceID:              correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:               correlation.SpanID("2222222222222222"),
+		ParentSpanID:         "",
+		RequestID:            "request-1",
+		CursorRequestID:      "",
+		CursorConversationID: "",
+		CursorGenerationID:   "",
+		UpstreamRequestID:    "",
+		UpstreamResponseID:   "",
+		ChatKey:              "",
+		ChatKeySource:        "",
+		ChatRootKey:          "",
+		ChatBranchKey:        "",
 	}
 	parent := correlation.WithContext(context.Background(), parentCorr)
 
@@ -40,11 +50,19 @@ func TestLogDaemonRPCCompletedIncludesCorrelationAttrs(t *testing.T) {
 	handler := &daemonTestLogHandler{records: &records}
 	log := slog.New(handler)
 	corr := correlation.Context{
-		TraceID:         correlation.TraceID("33333333333333333333333333333333"),
-		SpanID:          correlation.SpanID("4444444444444444"),
-		ParentSpanID:    correlation.SpanID("5555555555555555"),
-		RequestID:       "request-2",
-		CursorRequestID: "cursor-1",
+		TraceID:              correlation.TraceID("33333333333333333333333333333333"),
+		SpanID:               correlation.SpanID("4444444444444444"),
+		ParentSpanID:         correlation.SpanID("5555555555555555"),
+		RequestID:            "request-2",
+		CursorRequestID:      "cursor-1",
+		CursorConversationID: "",
+		CursorGenerationID:   "",
+		UpstreamRequestID:    "",
+		UpstreamResponseID:   "",
+		ChatKey:              "",
+		ChatKeySource:        "",
+		ChatRootKey:          "",
+		ChatBranchKey:        "",
 	}
 	ctx := gklog.WithLogger(correlation.WithContext(context.Background(), corr), log)
 
@@ -63,9 +81,19 @@ func TestLogDaemonRPCCompletedIncludesCorrelationAttrs(t *testing.T) {
 
 func TestDaemonDiscoveryScanContextCreatesChildSpan(t *testing.T) {
 	parentCorr := correlation.Context{
-		TraceID:   correlation.TraceID("66666666666666666666666666666666"),
-		SpanID:    correlation.SpanID("7777777777777777"),
-		RequestID: "request-3",
+		TraceID:              correlation.TraceID("66666666666666666666666666666666"),
+		SpanID:               correlation.SpanID("7777777777777777"),
+		ParentSpanID:         "",
+		RequestID:            "request-3",
+		CursorRequestID:      "",
+		CursorConversationID: "",
+		CursorGenerationID:   "",
+		UpstreamRequestID:    "",
+		UpstreamResponseID:   "",
+		ChatKey:              "",
+		ChatKeySource:        "",
+		ChatRootKey:          "",
+		ChatBranchKey:        "",
 	}
 
 	ctx := daemonDiscoveryScanContext(discoveryScanSignal{

@@ -183,8 +183,13 @@ func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.Reque
 			RequestID:            rec.RequestID,
 			CursorRequestID:      rec.CursorRequestID,
 			CursorConversationID: rec.CursorConversationID,
+			CursorGenerationID:   "",
 			UpstreamRequestID:    rec.UpstreamRequestID,
 			UpstreamResponseID:   rec.UpstreamResponseID,
+			ChatKey:              "",
+			ChatKeySource:        "",
+			ChatRootKey:          "",
+			ChatBranchKey:        "",
 		},
 	}
 	if ev.Err == "" {

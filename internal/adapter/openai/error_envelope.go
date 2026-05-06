@@ -36,8 +36,8 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 		Type:    info.Type,
 		Code:    info.Code,
 		Param:   info.Param,
+		Clyde:   info.Diagnostics,
 	}
-	body.Clyde = info.Diagnostics
 	if body.Code == "" {
 		body.Code = body.Type
 	}
@@ -135,10 +135,11 @@ func openAIInvalidRequestMapping(code, message string) errcontract.UpstreamMappi
 	return errcontract.UpstreamMapping{
 		HTTPStatus: http.StatusBadRequest,
 		Info: errcontract.ErrorInfo{
-			Type:    "invalid_request_error",
-			Code:    code,
-			Message: message,
-			Param:   "",
+			Type:        "invalid_request_error",
+			Code:        code,
+			Message:     message,
+			Param:       "",
+			Diagnostics: nil,
 		},
 	}
 }

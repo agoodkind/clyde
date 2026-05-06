@@ -117,8 +117,8 @@ func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info 
 		Type:    info.Type,
 		Code:    info.Code,
 		Param:   info.Param,
+		Clyde:   info.Diagnostics,
 	}
-	body.Clyde = info.Diagnostics
 	envelope := ErrorResponse{Error: body}
 	b, err := json.Marshal(envelope)
 	if err != nil {

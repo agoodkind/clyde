@@ -15,7 +15,11 @@ import (
 )
 
 const (
-	ChatKeySourceNative  = "native"
+	// ChatKeySourceNative means the chat key came from client-supplied
+	// conversation metadata.
+	ChatKeySourceNative = "native"
+	// ChatKeySourceDerived means Clyde derived the chat key from sanitized
+	// request lineage because Cursor did not send native chat metadata.
 	ChatKeySourceDerived = "derived"
 )
 
@@ -56,12 +60,16 @@ type ChatIdentityResolver struct {
 	roots map[string]*chatRoot
 }
 
+// NewChatIdentityResolver returns an empty per-daemon Cursor chat identity
+// resolver.
 func NewChatIdentityResolver() *ChatIdentityResolver {
 	return &ChatIdentityResolver{
+		mu:    sync.Mutex{},
 		roots: make(map[string]*chatRoot),
 	}
 }
 
+// Resolve returns the effective chat identity for a Cursor request.
 func (r *ChatIdentityResolver) Resolve(corr correlation.Context, cursorReq Request, req adapteropenai.ChatRequest) ChatIdentity {
 	if strings.TrimSpace(corr.ChatKey) != "" {
 		return nativeChatIdentity(corr.ChatKey)
@@ -72,17 +80,19 @@ func (r *ChatIdentityResolver) Resolve(corr correlation.Context, cursorReq Reque
 
 	rootKey := DeriveChatKey(req)
 	if rootKey == "" {
-		return ChatIdentity{}
+		return emptyChatIdentity()
 	}
 	lineage := DeriveLineage(req)
 	if len(lineage) == 0 {
 		return ChatIdentity{
-			ChatKey:       rootKey + ".b01",
-			ChatKeySource: ChatKeySourceDerived,
-			ChatRootKey:   rootKey,
-			ChatBranchKey: "b01",
-			MessageCount:  len(req.Messages),
-			ToolCount:     len(req.Tools) + len(req.Functions),
+			ChatKey:        rootKey + ".b01",
+			ChatKeySource:  ChatKeySourceDerived,
+			ChatRootKey:    rootKey,
+			ChatBranchKey:  "b01",
+			Fork:           emptyChatFork(),
+			MessageCount:   len(req.Messages),
+			ToolCount:      len(req.Tools) + len(req.Functions),
+			LineageEntries: nil,
 		}
 	}
 
@@ -90,12 +100,15 @@ func (r *ChatIdentityResolver) Resolve(corr correlation.Context, cursorReq Reque
 	defer r.mu.Unlock()
 
 	if existingRootKey, branchKey, ok := r.matchCompactedRoot(rootKey, lineage); ok {
-		return derivedChatIdentity(existingRootKey, branchKey, req, lineage, ChatFork{})
+		return derivedChatIdentity(existingRootKey, branchKey, req, lineage, emptyChatFork())
 	}
 
 	root := r.roots[rootKey]
 	if root == nil {
-		root = &chatRoot{}
+		root = &chatRoot{
+			branches:      nil,
+			forkAnnounced: false,
+		}
 		r.roots[rootKey] = root
 	}
 
@@ -105,7 +118,7 @@ func (r *ChatIdentityResolver) Resolve(corr correlation.Context, cursorReq Reque
 		if !compacted && len(lineage) > len(branch.lineage) {
 			root.branches[branchIndex].lineage = cloneStrings(lineage)
 		}
-		return derivedChatIdentity(rootKey, branch.key, req, lineage, ChatFork{})
+		return derivedChatIdentity(rootKey, branch.key, req, lineage, emptyChatFork())
 	}
 
 	priorBranch, commonPrefixLen := closestBranch(root.branches, lineage)
@@ -115,7 +128,7 @@ func (r *ChatIdentityResolver) Resolve(corr correlation.Context, cursorReq Reque
 		lineage: cloneStrings(lineage),
 	})
 
-	fork := ChatFork{}
+	fork := emptyChatFork()
 	if len(root.branches) == 2 && !root.forkAnnounced {
 		root.forkAnnounced = true
 		fork = ChatFork{
@@ -150,9 +163,35 @@ func (r *ChatIdentityResolver) matchCompactedRoot(rootKey string, lineage []stri
 func nativeChatIdentity(key string) ChatIdentity {
 	trimmed := strings.TrimSpace(key)
 	return ChatIdentity{
-		ChatKey:       trimmed,
-		ChatKeySource: ChatKeySourceNative,
-		ChatRootKey:   trimmed,
+		ChatKey:        trimmed,
+		ChatKeySource:  ChatKeySourceNative,
+		ChatRootKey:    trimmed,
+		ChatBranchKey:  "",
+		Fork:           emptyChatFork(),
+		MessageCount:   0,
+		ToolCount:      0,
+		LineageEntries: nil,
+	}
+}
+
+func emptyChatIdentity() ChatIdentity {
+	return ChatIdentity{
+		ChatKey:        "",
+		ChatKeySource:  "",
+		ChatRootKey:    "",
+		ChatBranchKey:  "",
+		Fork:           emptyChatFork(),
+		MessageCount:   0,
+		ToolCount:      0,
+		LineageEntries: nil,
+	}
+}
+
+func emptyChatFork() ChatFork {
+	return ChatFork{
+		Detected:        false,
+		PriorBranchKey:  "",
+		CommonPrefixLen: 0,
 	}
 }
 
@@ -196,11 +235,8 @@ func closestBranch(branches []chatBranch, lineage []string) (string, int) {
 }
 
 func commonPrefix(left []string, right []string) int {
-	limit := len(left)
-	if len(right) < limit {
-		limit = len(right)
-	}
-	for i := 0; i < limit; i++ {
+	limit := min(len(left), len(right))
+	for i := range limit {
 		if left[i] != right[i] {
 			return i
 		}

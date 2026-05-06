@@ -17,6 +17,7 @@ func TestErrorRendererIncludesClydeDiagnostics(t *testing.T) {
 		Type:    "invalid_request_error",
 		Code:    "upstream_failed",
 		Message: "upstream failed",
+		Param:   "",
 		Diagnostics: &errcontract.ErrorDiagnostics{
 			RequestID:          "chatcmpl-test",
 			TraceID:            "11111111111111111111111111111111",
@@ -68,9 +69,11 @@ func TestErrorRendererOmitsEmptyClydeDiagnostics(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	info := errcontract.ErrorInfo{
-		Type:    "invalid_request_error",
-		Code:    "invalid_request",
-		Message: "bad request",
+		Type:        "invalid_request_error",
+		Code:        "invalid_request",
+		Message:     "bad request",
+		Param:       "",
+		Diagnostics: nil,
 	}
 
 	if err := NewErrorRenderer().Render(rec, http.StatusBadRequest, info); err != nil {

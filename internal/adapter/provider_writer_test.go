@@ -395,6 +395,13 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 		RequestID:            "req-final",
 		CursorRequestID:      "cursor-final",
 		CursorConversationID: "conversation-final",
+		CursorGenerationID:   "",
+		UpstreamRequestID:    "",
+		UpstreamResponseID:   "",
+		ChatKey:              "",
+		ChatKeySource:        "",
+		ChatRootKey:          "",
+		ChatBranchKey:        "",
 	}
 	ctx := correlation.WithContext(context.Background(), corr)
 	writer := &providerStreamWriter{

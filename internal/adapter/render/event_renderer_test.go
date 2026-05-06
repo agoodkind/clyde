@@ -315,6 +315,13 @@ func TestEventRendererLogsAssistantTextSummaryCorrelation(t *testing.T) {
 		RequestID:            "req-corr",
 		CursorRequestID:      "cursor-req",
 		CursorConversationID: "cursor-conv",
+		CursorGenerationID:   "",
+		UpstreamRequestID:    "",
+		UpstreamResponseID:   "",
+		ChatKey:              "",
+		ChatKeySource:        "",
+		ChatRootKey:          "",
+		ChatBranchKey:        "",
 	}
 	ctx := correlation.WithContext(context.Background(), corr)
 	r := NewEventRendererWithContext(ctx, "req-corr", "alias", "codex", log)

@@ -34,10 +34,11 @@ func TestEmitStreamErrorWritesNativeEnvelope(t *testing.T) {
 	}
 
 	if err := sw.EmitStreamError(errcontract.ErrorInfo{
-		Message: "anthropic 429: limit exceeded",
-		Type:    "rate_limit_error",
-		Code:    "rate_limit_exceeded",
-		Param:   "messages",
+		Message:     "anthropic 429: limit exceeded",
+		Type:        "rate_limit_error",
+		Code:        "rate_limit_exceeded",
+		Param:       "messages",
+		Diagnostics: nil,
 	}); err != nil {
 		t.Fatalf("EmitStreamError: %v", err)
 	}
