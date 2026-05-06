@@ -327,6 +327,31 @@ func TestPhase6LegacyNoRefDropsSilentlyUnderDropEncrypted(t *testing.T) {
 	}
 }
 
+// Codex rejects Reasoning input items with an empty id (ApiIdParam,
+// invalid_id). A marker with no data-ref must NOT produce a Reasoning
+// item even when the body is non-empty under any summary mode, otherwise
+// the upstream rejects the whole request.
+func TestPhase6EmptyRefNeverEmitsReasoningItem(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []RoundTripSummary{
+		RoundTripSummaryNative,
+		RoundTripSummaryDrop,
+		RoundTripSummaryPlainText,
+	} {
+		mode := mode
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			items := buildPhase6Request(t, envelopeNoRef("body without ref"), RequestBuilderConfig{
+				RoundTripSummary:   mode,
+				RoundTripEncrypted: RoundTripEncryptedRoundTrip,
+			})
+			if r := findFirstReasoningItem(items); r != nil {
+				t.Fatalf("summary=%s: expected NO reasoning item when ref is empty, got %#v", mode, r)
+			}
+		})
+	}
+}
+
 // Reasoning item must precede its assistant message in input order, even
 // when the summary mode keeps the body in the message text.
 func TestPhase6ReasoningPrecedesMessage(t *testing.T) {

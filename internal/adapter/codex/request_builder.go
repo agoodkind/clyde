@@ -224,23 +224,22 @@ func buildReasoningItem(
 		encrypted = strings.TrimSpace(part.Encrypted)
 	}
 	zero := reasoningInputItem{ID: "", Summary: nil, EncryptedContent: ""}
+	// Codex rejects Reasoning input items with an empty id
+	// (ApiIdParam.invalid_id). The id is the upstream rs_* identifier
+	// captured on data-ref. A marker without ref cannot round-trip
+	// continuity (codex-rs always carries the original id), so drop
+	// the entire item rather than emit an empty id.
+	if ref == "" {
+		return zero, false
+	}
 	switch summaryMode {
 	case RoundTripSummaryNative:
-		// Empty Ref + no encrypted_content + no body to emit means the
-		// envelope is a legacy attribute-less marker with nothing
-		// useful to round-trip; drop it silently.
-		if ref == "" && encrypted == "" && body == "" {
-			return zero, false
-		}
 		summary := []reasoningSummaryText(nil)
 		if body != "" {
 			summary = []reasoningSummaryText{{Text: body}}
 		}
 		return reasoningInputItem{ID: ref, Summary: summary, EncryptedContent: encrypted}, true
 	case RoundTripSummaryDrop:
-		if ref == "" && encrypted == "" {
-			return zero, false
-		}
 		return reasoningInputItem{ID: ref, Summary: nil, EncryptedContent: encrypted}, true
 	case RoundTripSummaryPlainText:
 		// The summary body is folded into the assistant message body
