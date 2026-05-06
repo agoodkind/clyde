@@ -21,14 +21,6 @@ type TrackedUsage struct {
 	RolledFrom int
 }
 
-type ResponseSSEWriter interface {
-	WriteSSEHeaders()
-	EmitStreamChunk(string, adapteropenai.StreamChunk) error
-	EmitStreamError(adapteropenai.ErrorBody) error
-	WriteStreamDone() error
-	HasCommittedHeaders() bool
-}
-
 type ExecutionRuntime interface {
 	Log() *slog.Logger
 	AnthropicStreamClient() StreamClient
