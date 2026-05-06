@@ -193,7 +193,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 			Message: "anthropic collect provider requires a collector event writer",
 		}
 	}
-	runtime := &collectResponseDispatcher{server: s, eventWriter: writer}
+	runtime := &collectResponseDispatcher{server: s}
 	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
 	started := adapterClock.Now()
 	result, err := anthropicbackend.RunCollectExecution(
@@ -245,7 +245,7 @@ func (s *Server) executeAnthropicPreparedStream(
 		}
 		return s.executeAnthropicPreparedStreamNative(ctx, prepared, nativeWriter)
 	}
-	runtime := &streamResponseDispatcher{server: s, eventWriter: writer}
+	runtime := &streamResponseDispatcher{server: s}
 	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
 	started := adapterClock.Now()
 	result, err := anthropicbackend.RunStreamExecution(
@@ -419,57 +419,15 @@ func anthropicRequestWithUsageWindowCapture(req anthropic.Request) (anthropic.Re
 }
 
 type collectResponseDispatcher struct {
-	server      *Server
-	eventWriter adapterprovider.EventWriter
+	server *Server
 }
 
 func (d *collectResponseDispatcher) Log() *slog.Logger {
 	return d.server.log
 }
 
-func (d *collectResponseDispatcher) EmitRequestStarted(ctx context.Context, model adaptermodel.ResolvedModel, _ string, reqID, modelID string, stream bool) {
-	d.server.emitRequestStarted(ctx, model, "oauth", reqID, modelID, stream)
-}
-
-func (d *collectResponseDispatcher) EmitRequestStreamOpened(context.Context, adaptermodel.ResolvedModel, string, string, string, bool) {
-}
-
-func (d *collectResponseDispatcher) NewAnthropicSSEWriter(http.ResponseWriter) (anthropicbackend.ResponseSSEWriter, error) {
-	return nil, fmt.Errorf("anthropic collect dispatcher does not support SSE writers")
-}
-
 func (d *collectResponseDispatcher) AnthropicStreamClient() anthropicbackend.StreamClient {
 	return d.server.anthr
-}
-
-func (d *collectResponseDispatcher) SystemFingerprint() string {
-	return systemFingerprint
-}
-
-func (d *collectResponseDispatcher) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) bool {
-	return streamChunkHasVisibleContent(chunk)
-}
-
-func (d *collectResponseDispatcher) WriteEvent(ev adapterrender.Event) error {
-	if d == nil || d.eventWriter == nil {
-		return nil
-	}
-	return d.eventWriter.WriteEvent(ev)
-}
-
-func (d *collectResponseDispatcher) FlushEventWriter() error {
-	if d == nil || d.eventWriter == nil {
-		return nil
-	}
-	return d.eventWriter.Flush()
-}
-
-func (d *collectResponseDispatcher) CollectedEvents() []adapterrender.Event {
-	collector, ok := d.eventWriter.(*providerCollectorWriter)
-	if !ok || collector == nil {
-		return nil
-	}
-	return collector.events
 }
 
 func (d *collectResponseDispatcher) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage) anthropicbackend.TrackedUsage {
@@ -482,9 +440,6 @@ func (d *collectResponseDispatcher) TrackAnthropicContextUsage(key string, raw a
 	}
 }
 
-func (d *collectResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, _ adapteropenai.ChatResponse) {
-}
-
 func (d *collectResponseDispatcher) LogTerminal(ctx context.Context, ev adapterruntime.RequestEvent) {
 	adapterruntime.LogTerminal(d.server.log, ctx, d.server.deps.RequestEvents, ev)
 }
@@ -494,54 +449,15 @@ func (d *collectResponseDispatcher) CacheTTL() string {
 }
 
 type streamResponseDispatcher struct {
-	server      *Server
-	eventWriter adapterprovider.EventWriter
+	server *Server
 }
 
 func (d *streamResponseDispatcher) Log() *slog.Logger {
 	return d.server.log
 }
 
-func (d *streamResponseDispatcher) EmitRequestStarted(ctx context.Context, model adaptermodel.ResolvedModel, _ string, reqID, modelID string, stream bool) {
-	d.server.emitRequestStarted(ctx, model, "oauth", reqID, modelID, stream)
-}
-
-func (d *streamResponseDispatcher) EmitRequestStreamOpened(ctx context.Context, model adaptermodel.ResolvedModel, _ string, reqID, modelID string, stream bool) {
-	d.server.emitRequestStreamOpened(ctx, model, "oauth", reqID, modelID, stream)
-}
-
-func (d *streamResponseDispatcher) NewAnthropicSSEWriter(http.ResponseWriter) (anthropicbackend.ResponseSSEWriter, error) {
-	return nil, fmt.Errorf("anthropic stream provider dispatch does not expose a backend SSE writer")
-}
-
 func (d *streamResponseDispatcher) AnthropicStreamClient() anthropicbackend.StreamClient {
 	return d.server.anthr
-}
-
-func (d *streamResponseDispatcher) SystemFingerprint() string {
-	return systemFingerprint
-}
-
-func (d *streamResponseDispatcher) StreamChunkHasVisibleContent(chunk adapteropenai.StreamChunk) bool {
-	return streamChunkHasVisibleContent(chunk)
-}
-
-func (d *streamResponseDispatcher) WriteEvent(ev adapterrender.Event) error {
-	if d == nil || d.eventWriter == nil {
-		return nil
-	}
-	return d.eventWriter.WriteEvent(ev)
-}
-
-func (d *streamResponseDispatcher) FlushEventWriter() error {
-	if d == nil || d.eventWriter == nil {
-		return nil
-	}
-	return d.eventWriter.Flush()
-}
-
-func (d *streamResponseDispatcher) CollectedEvents() []adapterrender.Event {
-	return nil
 }
 
 func (d *streamResponseDispatcher) TrackAnthropicContextUsage(key string, raw adapteropenai.Usage) anthropicbackend.TrackedUsage {
@@ -552,9 +468,6 @@ func (d *streamResponseDispatcher) TrackAnthropicContextUsage(key string, raw ad
 		RawTotal:   tracked.rawTotal,
 		RolledFrom: tracked.rolledFrom,
 	}
-}
-
-func (d *streamResponseDispatcher) WriteJSON(_ http.ResponseWriter, _ int, _ adapteropenai.ChatResponse) {
 }
 
 func (d *streamResponseDispatcher) LogTerminal(ctx context.Context, ev adapterruntime.RequestEvent) {
