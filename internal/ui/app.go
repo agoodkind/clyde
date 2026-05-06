@@ -34,6 +34,7 @@ import (
 
 	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/terminalcontrol"
 	"goodkind.io/clyde/internal/util"
 	gklogversion "goodkind.io/gklog/version"
 )
@@ -408,6 +409,7 @@ type App struct {
 	reloadExecPath      string // set when the on-disk executable changed and Run should exec after teardown
 	pendingReloadPath   string // deferred self-reload while an overlay is open
 	pendingReloadReason string
+	terminalRestorer    *terminalcontrol.ProcessRestorer
 
 	// Overlays (one at a time)
 	overlay Widget
@@ -1634,23 +1636,9 @@ type executableSnapshot struct {
 	info os.FileInfo
 }
 
-const suspendTerminalPrepSequence = "\x1b[0m\x1b[2J\x1b[H"
+const suspendTerminalPrepSequence = terminalcontrol.SuspendPrepSequence
 
-const terminalModeResetSequence = "" +
-	"\x1b[?2004l" + // disable bracketed paste
-	"\x1b[?1004l" + // disable focus reporting
-	"\x1b[?1000l" + // disable X10 mouse
-	"\x1b[?1002l" + // disable cell-motion mouse
-	"\x1b[?1003l" + // disable any-motion mouse
-	"\x1b[?1006l" + // disable SGR mouse
-	"\x1b[?1007l" + // disable alternate-scroll wheel translation
-	"\x1b[?1049l" + // exit alt screen
-	"\x1b[?25h" + //  show cursor
-	"\x1b[?7h" + //   re-enable autowrap
-	"\x1b[r" + //     reset scroll region to full screen
-	"\x1b[0m" + //    reset SGR attributes
-	"\x1b>" + //      keypad normal (DECKPNM)
-	"\x1b[!p" //      DECSTR soft reset (clears DECCKM, DECOM, DECAWM, etc)
+const terminalModeResetSequence = terminalcontrol.ModeResetSequence
 
 const (
 	EnvTUIReturnSessionID   = "CLYDE_TUI_RETURN_SESSION_ID"
@@ -2464,6 +2452,8 @@ func (a *App) syncTableSelectionWithOffset() {
 func (a *App) teardownScreen() {
 	a.screenMu.Lock()
 	scr := a.screen
+	restorer := a.terminalRestorer
+	a.terminalRestorer = nil
 	if scr != nil {
 		tuiLog.Logger().Debug("tui.teardownScreen.start", "screen", fmt.Sprintf("%p", scr))
 		a.pendingResizeDisplaySync = false
@@ -2478,23 +2468,32 @@ func (a *App) teardownScreen() {
 	}
 	a.screenMu.Unlock()
 
-	// Reset escape sequences, emitted in a single write so a
-	// ctrl-c mid-sequence cannot leave the terminal half-reset.
-	fmt.Fprint(os.Stdout, terminalModeResetSequence)
+	if restorer != nil {
+		restorer.Restore()
+		return
+	}
+	terminalcontrol.WriteResetToTerminal()
 }
 
 // initScreen allocates a tcell screen and enables mouse + focus.
 func (a *App) initScreen() error {
 	applyTUITheme(detectTerminalTheme())
 	tuiLog.Logger().Info("tui.initScreen.start", "current_screen", fmt.Sprintf("%p", a.screen))
+	restorer := terminalcontrol.CaptureProcessRestorer(tuiLog.Logger())
 	scr, err := tcell.NewScreen()
 	if err != nil {
+		if restorer != nil {
+			restorer.Restore()
+		}
 		slog.Error("tui.initScreen.new_screen_failed",
 			"component", "tui",
 			"err", err)
 		return fmt.Errorf("tcell NewScreen: %w", err)
 	}
 	if err := scr.Init(); err != nil {
+		if restorer != nil {
+			restorer.Restore()
+		}
 		slog.Error("tui.initScreen.init_failed",
 			"component", "tui",
 			"err", err)
@@ -2505,6 +2504,7 @@ func (a *App) initScreen() error {
 	scr.Clear()
 	a.screenMu.Lock()
 	a.screen = scr
+	a.terminalRestorer = restorer
 	a.screenMu.Unlock()
 	tuiLog.Logger().Info("tui.initScreen.success", "screen", fmt.Sprintf("%p", a.screen))
 	return nil
@@ -6382,7 +6382,7 @@ func (a *App) suspendAndRun(fn func()) {
 	a.teardownScreen()
 	teardownDuration := time.Since(teardownStartedAt)
 	tuiLog.Logger().Info("tui.suspend teardown complete", "screen", fmt.Sprintf("%p", a.screen))
-	writeSuspendTerminalPrep(os.Stdout)
+	terminalcontrol.WriteSuspendPrepToTerminal()
 	tuiLog.Logger().Debug("tui.suspend.terminal_prepared", "component", "tui")
 	callbackStartedAt := a.now()
 	callbackDone := make(chan struct{})
