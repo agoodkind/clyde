@@ -356,6 +356,10 @@ func (p *CompactPanel) HandleEvent(ev tcell.Event) bool {
 		return p.Rect.Contains(x, y)
 	case *tcell.EventKey:
 		if e.Key() == tcell.KeyEscape || (e.Key() == tcell.KeyRune && (e.Rune() == 'q' || e.Rune() == 'Q')) {
+			if p.busy {
+				p.status = p.busyAction + " in progress; close is disabled until it finishes"
+				return true
+			}
 			if p.OnClose != nil {
 				p.OnClose()
 			}

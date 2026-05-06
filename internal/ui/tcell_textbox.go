@@ -43,6 +43,11 @@ type TextBox struct {
 
 	// Focused controls whether keyboard events move the scroll.
 	Focused bool
+
+	contentVersion      int
+	wrappedCacheVersion int
+	wrappedCacheWidth   int
+	wrappedCache        [][]TextSegment
 }
 
 // TextSegment is a styled run of text.
@@ -56,6 +61,7 @@ func (tb *TextBox) SetLines(lines []string) {
 	tb.Lines = lines
 	tb.Segments = nil
 	tb.Offset = 0
+	tb.invalidateWrappedCache()
 }
 
 // SetSegments replaces content (styled).
@@ -63,12 +69,25 @@ func (tb *TextBox) SetSegments(segs [][]TextSegment) {
 	tb.Segments = segs
 	tb.Lines = nil
 	tb.Offset = 0
+	tb.invalidateWrappedCache()
+}
+
+func (tb *TextBox) invalidateWrappedCache() {
+	tb.contentVersion++
+	tb.wrappedCache = nil
+	tb.wrappedCacheWidth = 0
+	tb.wrappedCacheVersion = 0
 }
 
 // wrappedLines expands Lines/Segments into display lines fitting width w.
 func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 	if w <= 0 {
 		return nil
+	}
+	if tb.wrappedCache != nil &&
+		tb.wrappedCacheVersion == tb.contentVersion &&
+		tb.wrappedCacheWidth == w {
+		return tb.wrappedCache
 	}
 	var src [][]TextSegment
 	if tb.Segments != nil {
@@ -80,6 +99,9 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 		}
 	}
 	if !tb.Wrap {
+		tb.wrappedCache = src
+		tb.wrappedCacheWidth = w
+		tb.wrappedCacheVersion = tb.contentVersion
 		return src
 	}
 	// Simple greedy word wrap per logical line.
@@ -114,6 +136,9 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 			out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
 		}
 	}
+	tb.wrappedCache = out
+	tb.wrappedCacheWidth = w
+	tb.wrappedCacheVersion = tb.contentVersion
 	return out
 }
 

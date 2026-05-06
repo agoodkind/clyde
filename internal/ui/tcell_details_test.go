@@ -148,6 +148,68 @@ func TestDetailsView_ConversationShowsLoadingSpinner(t *testing.T) {
 	}
 }
 
+func TestDetailsView_SetPreservesScrollOffsetsForSameSession(t *testing.T) {
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "demo",
+		Metadata: session.Metadata{
+			Name:          "demo",
+			SessionID:     "1234",
+			WorkspaceRoot: "/Users/test/Sites/demo",
+			Created:       time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC),
+			LastAccessed:  time.Date(2026, 4, 24, 9, 5, 0, 0, time.UTC),
+		},
+	}
+	view.Set(sess, SessionDetail{Model: "opus", ConversationLoading: true})
+	view.Left.Offset = 7
+	view.Right.Offset = 13
+
+	view.Set(sess, SessionDetail{
+		Model: "opus",
+		AllMessages: []DetailMessage{{
+			Role: "assistant",
+			Text: "loaded",
+		}},
+	})
+
+	if view.Left.Offset != 7 {
+		t.Fatalf("left offset reset to %d", view.Left.Offset)
+	}
+	if view.Right.Offset != 13 {
+		t.Fatalf("right offset reset to %d", view.Right.Offset)
+	}
+}
+
+func TestDetailsView_SetResetsScrollOffsetsForDifferentSession(t *testing.T) {
+	view := NewDetailsView()
+	first := &session.Session{
+		Name: "first",
+		Metadata: session.Metadata{
+			Name:      "first",
+			SessionID: "1234",
+		},
+	}
+	second := &session.Session{
+		Name: "second",
+		Metadata: session.Metadata{
+			Name:      "second",
+			SessionID: "5678",
+		},
+	}
+	view.Set(first, SessionDetail{Model: "opus", ConversationLoading: true})
+	view.Left.Offset = 7
+	view.Right.Offset = 13
+
+	view.Set(second, SessionDetail{Model: "opus", ConversationLoading: true})
+
+	if view.Left.Offset != 0 {
+		t.Fatalf("left offset = %d, want reset", view.Left.Offset)
+	}
+	if view.Right.Offset != 0 {
+		t.Fatalf("right offset = %d, want reset", view.Right.Offset)
+	}
+}
+
 func TestFormatCompactTokens(t *testing.T) {
 	cases := map[int]string{
 		44:      "44",

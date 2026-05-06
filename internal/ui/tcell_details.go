@@ -37,6 +37,8 @@ type DetailsView struct {
 	// Claude currently sources that URL from its bridge backend; the
 	// details pane keeps the display provider-neutral.
 	LookupLiveURL func(sess *session.Session) (LiveURL, bool)
+
+	sessionKey string
 }
 
 // formatLiveURL renders the live URL row in the details left column.
@@ -61,12 +63,27 @@ func NewDetailsView() *DetailsView {
 
 // Set populates both columns from a session and detail payload.
 func (d *DetailsView) Set(sess *session.Session, detail SessionDetail) {
+	key := detailsSessionKey(sess)
+	sameSession := key != "" && key == d.sessionKey
+	leftOffset := d.Left.Offset
+	rightOffset := d.Right.Offset
+
 	d.Left.Title = " STATS "
 	d.Right.Title = " MESSAGES "
 	d.Left.SetSegments(d.buildLeft(sess, detail))
 	d.Right.SetSegments(d.buildRight(sess, detail))
-	d.Left.Offset = 0
-	d.Right.Offset = 0
+	if sameSession {
+		d.Left.Offset = leftOffset
+		d.Right.Offset = rightOffset
+	}
+	d.sessionKey = key
+}
+
+func detailsSessionKey(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	return sess.Name + "\x00" + sess.Metadata.ProviderSessionID()
 }
 
 // SetFocus moves keyboard focus between Left, Right, or None.
