@@ -83,6 +83,23 @@ func TestUX_TerminalModeResetSequenceDisablesAlternateScroll(t *testing.T) {
 	}
 }
 
+func TestUX_TerminalModeResetSequenceRestoresOutputColumn(t *testing.T) {
+	if !strings.HasSuffix(terminalModeResetSequence, "\r") {
+		t.Fatalf("terminal mode reset should reset output column, got %q", terminalModeResetSequence)
+	}
+	softReset := strings.LastIndex(terminalModeResetSequence, "\x1b[!p")
+	autowrap := strings.LastIndex(terminalModeResetSequence, "\x1b[?7h")
+	if softReset < 0 {
+		t.Fatalf("terminalModeResetSequence missing soft reset")
+	}
+	if autowrap < 0 {
+		t.Fatalf("terminalModeResetSequence missing autowrap enable")
+	}
+	if autowrap < softReset {
+		t.Fatalf("autowrap enable must follow soft reset")
+	}
+}
+
 func TestUX_NewSessionUsesConfigDefaultWithoutLiveURLPrompt(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
