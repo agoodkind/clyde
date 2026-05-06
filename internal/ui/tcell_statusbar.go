@@ -220,70 +220,45 @@ func legendSegmentsFromActions(actions []LegendAction) []TextSegment {
 	return segs
 }
 
+// legendHintTable maps each LegendAction to its static key and label.
+// Keeping the catalog as data instead of a long switch keeps the
+// dispatch helper trivial for cyclomatic-complexity gates.
+var legendHintTable = map[LegendAction]legendHint{
+	LegendMove:          {key: "j/k", label: "move"},
+	LegendTopBottom:     {key: "g/G", label: "top/bot"},
+	LegendSelectOption:  {key: "enter/O", label: "select option"},
+	LegendSelectDetail:  {key: "space", label: "select detail"},
+	LegendFilter:        {key: "/", label: "filter"},
+	LegendNew:           {key: "N", label: "new"},
+	LegendRefresh:       {key: "R", label: "refresh"},
+	LegendRestartDaemon: {key: "R", label: "restart daemon"},
+	LegendHelp:          {key: "?", label: "help"},
+	LegendQuit:          {key: "q", label: "quit"},
+	LegendSearch:        {key: "/", label: "search"},
+	LegendView:          {key: "v", label: "view"},
+	LegendCompact:       {key: "c", label: "compact"},
+	LegendFork:          {key: "f", label: "fork"},
+	LegendDelete:        {key: "d", label: "delete"},
+	LegendEditBasedir:   {key: "B", label: "edit basedir"},
+	LegendClose:         {key: "esc", label: "close"},
+	LegendTypeFilter:    {key: "type", label: "filter"},
+	LegendConfirm:       {key: "enter", label: "confirm"},
+	LegendClear:         {key: "esc", label: "clear"},
+	LegendNext:          {key: "tab", label: "next"},
+	LegendFocus:         {key: "↑↓", label: "focus"},
+	LegendAdjust:        {key: "←→", label: "adjust"},
+	LegendSelect:        {key: "enter/spc", label: "select"},
+	LegendScroll:        {key: "↑↓", label: "scroll"},
+	LegendYesConfirm:    {key: "y", label: "confirm"},
+	LegendNoCancel:      {key: "n/esc", label: "cancel"},
+	LegendPreview:       {key: "p", label: "preview"},
+	LegendApply:         {key: "a", label: "apply"},
+	LegendUndo:          {key: "u", label: "undo"},
+}
+
 func legendHintForAction(action LegendAction) (legendHint, bool) {
-	switch action {
-	case LegendMove:
-		return legendHint{key: "j/k", label: "move"}, true
-	case LegendTopBottom:
-		return legendHint{key: "g/G", label: "top/bot"}, true
-	case LegendSelectOption:
-		return legendHint{key: "enter/O", label: "select option"}, true
-	case LegendSelectDetail:
-		return legendHint{key: "space", label: "select detail"}, true
-	case LegendFilter:
-		return legendHint{key: "/", label: "filter"}, true
-	case LegendNew:
-		return legendHint{key: "N", label: "new"}, true
-	case LegendRefresh:
-		return legendHint{key: "R", label: "refresh"}, true
-	case LegendRestartDaemon:
-		return legendHint{key: "R", label: "restart daemon"}, true
-	case LegendHelp:
-		return legendHint{key: "?", label: "help"}, true
-	case LegendQuit:
-		return legendHint{key: "q", label: "quit"}, true
-	case LegendSearch:
-		return legendHint{key: "/", label: "search"}, true
-	case LegendView:
-		return legendHint{key: "v", label: "view"}, true
-	case LegendCompact:
-		return legendHint{key: "c", label: "compact"}, true
-	case LegendFork:
-		return legendHint{key: "f", label: "fork"}, true
-	case LegendDelete:
-		return legendHint{key: "d", label: "delete"}, true
-	case LegendEditBasedir:
-		return legendHint{key: "B", label: "edit basedir"}, true
-	case LegendClose:
-		return legendHint{key: "esc", label: "close"}, true
-	case LegendTypeFilter:
-		return legendHint{key: "type", label: "filter"}, true
-	case LegendConfirm:
-		return legendHint{key: "enter", label: "confirm"}, true
-	case LegendClear:
-		return legendHint{key: "esc", label: "clear"}, true
-	case LegendNext:
-		return legendHint{key: "tab", label: "next"}, true
-	case LegendFocus:
-		return legendHint{key: "↑↓", label: "focus"}, true
-	case LegendAdjust:
-		return legendHint{key: "←→", label: "adjust"}, true
-	case LegendSelect:
-		return legendHint{key: "enter/spc", label: "select"}, true
-	case LegendScroll:
-		return legendHint{key: "↑↓", label: "scroll"}, true
-	case LegendYesConfirm:
-		return legendHint{key: "y", label: "confirm"}, true
-	case LegendNoCancel:
-		return legendHint{key: "n/esc", label: "cancel"}, true
-	case LegendPreview:
-		return legendHint{key: "p", label: "preview"}, true
-	case LegendApply:
-		return legendHint{key: "a", label: "apply"}, true
-	case LegendUndo:
-		return legendHint{key: "u", label: "undo"}, true
-	}
-	return legendHint{}, false
+	hint, ok := legendHintTable[action]
+	return hint, ok
 }
 
 // Draw renders the status bar into r (r.H should be 1).
