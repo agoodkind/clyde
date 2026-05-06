@@ -72,11 +72,11 @@ type StreamErrorWriter interface {
 	WriteStreamDone() error
 }
 
-// StreamErrorRenderer renders a single route family's native error
+// StreamErrorRenderer writes a single route family's native error
 // event on an already-open stream. Implementations live in provider
 // packages and decide the JSON envelope shape for error events only.
 type StreamErrorRenderer interface {
-	RenderStreamError(w StreamErrorWriter, info ErrorInfo) error
+	WriteStreamError(w StreamErrorWriter, info ErrorInfo) error
 }
 
 // UpstreamMapping carries the typed result of classifying an upstream

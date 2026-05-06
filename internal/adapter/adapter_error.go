@@ -374,7 +374,7 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse *adapteropen
 	if !ok {
 		return fmt.Errorf("no stream error renderer registered for route family %q", adapterRouteOpenAI)
 	}
-	if writeErr := renderer.RenderStreamError(sse, info); writeErr != nil {
+	if writeErr := renderer.WriteStreamError(sse, info); writeErr != nil {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
 			slog.String("openai_type", info.Type),
 			slog.String("openai_code", info.Code),

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"goodkind.io/clyde/internal/adapter/errcontract"
@@ -53,6 +54,7 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 	return nil
 }
 
+// WriteStreamEvent writes one SSE data frame and flushes it.
 func (sw *SSEWriter) WriteStreamEvent(payload []byte) error {
 	sw.WriteSSEHeaders()
 	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", payload); err != nil {
@@ -93,13 +95,17 @@ type StreamErrorRenderer struct{}
 // renderer.
 func NewStreamErrorRenderer() StreamErrorRenderer { return StreamErrorRenderer{} }
 
-// RenderStreamError emits one native OpenAI error event followed by
+// WriteStreamError emits one native OpenAI error event followed by
 // the stream terminator.
-func (r StreamErrorRenderer) RenderStreamError(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
+func (r StreamErrorRenderer) WriteStreamError(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
 	if err := r.emitErrorEvent(w, info); err != nil {
 		return err
 	}
 	if err := w.WriteStreamDone(); err != nil {
+		slog.Warn("adapter.openai_stream_error_write_failed",
+			"event", "write_done_failed",
+			"err", err.Error(),
+		)
 		return fmt.Errorf("write stream done terminator: %w", err)
 	}
 	return nil
@@ -117,7 +123,14 @@ func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info 
 	if err != nil {
 		return err
 	}
-	return w.WriteStreamEvent(b)
+	if err := w.WriteStreamEvent(b); err != nil {
+		slog.Warn("adapter.openai_stream_error_write_failed",
+			"event", "write_event_failed",
+			"err", err.Error(),
+		)
+		return fmt.Errorf("write stream error event: %w", err)
+	}
+	return nil
 }
 
 func (sw *SSEWriter) HasCommittedHeaders() bool {
