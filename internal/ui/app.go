@@ -5790,6 +5790,9 @@ func (a *App) refreshOpenOptionsModalStats(name string) {
 		return
 	}
 	sess := a.findSessionByName(name)
+	if sess == nil && a.returnPathSession != nil && a.returnPathSession.Name == name {
+		sess = a.resolveSession(a.returnPathSession)
+	}
 	if sess == nil {
 		return
 	}

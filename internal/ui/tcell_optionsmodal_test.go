@@ -59,6 +59,34 @@ func TestOptionsModalIncludesGapBetweenTopAndSharedRows(t *testing.T) {
 	}
 }
 
+func TestOptionsModalOutsideClickDoesNotCancel(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(80, 24)
+
+	cancelled := 0
+	modal := NewOptionsModal("session", []OptionsModalEntry{
+		{Label: "Resume", Action: func() {}},
+	})
+	modal.OnCancel = func() {
+		cancelled++
+	}
+	modal.Draw(scr, Rect{X: 0, Y: 0, W: 80, H: 24})
+
+	if modal.rect.Contains(0, 0) {
+		t.Fatalf("test click unexpectedly inside modal rect %#v", modal.rect)
+	}
+	if !modal.HandleEvent(tcell.NewEventMouse(0, 0, tcell.Button1, tcell.ModNone)) {
+		t.Fatalf("outside click was not handled")
+	}
+	if cancelled != 0 {
+		t.Fatalf("outside click cancelled modal %d times, want 0", cancelled)
+	}
+}
+
 func TestOptionsModalMouseWheelScrollsStatsPane(t *testing.T) {
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {

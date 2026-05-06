@@ -58,8 +58,8 @@ type OptionsModal struct {
 	statsBox           *TextBox
 	grab               optionsModalGrab
 
-	// OnCancel fires when the user dismisses with Esc, q, or a click
-	// outside the modal. The dialog removes itself on activation already.
+	// OnCancel fires when the user dismisses with Esc or q. The dialog removes
+	// itself on activation already.
 	OnCancel func()
 	// OnQuit is optional. When set, q triggers OnQuit instead of OnCancel.
 	OnQuit func()
@@ -168,79 +168,119 @@ func (m *OptionsModal) Draw(scr tcell.Screen, r Rect) {
 	drawString(scr, inner.X, box.Y+box.H-1, StyleMuted, hint, inner.W)
 }
 
+// HandleEvent applies keyboard and mouse input to the modal.
 func (m *OptionsModal) HandleEvent(ev tcell.Event) bool {
 	switch e := ev.(type) {
 	case *tcell.EventKey:
 		return m.handleKey(e)
 	case *tcell.EventMouse:
-		x, y := e.Position()
-		btns := e.Buttons()
-		if btns == 0 {
-			m.grab = optionsModalGrabNone
-		}
-		if !m.rect.Contains(x, y) {
-			if btns != 0 && m.OnCancel != nil {
-				m.OnCancel()
-			}
-			return true
-		}
-		if m.grab != optionsModalGrabNone && btns&tcell.Button1 != 0 {
-			switch m.grab {
-			case optionsModalGrabStats:
-				if m.statsBox != nil {
-					m.statsBox.JumpToScrollbarY(y)
-				}
-			case optionsModalGrabOptions:
-				m.jumpToOptionsScrollbarY(y)
-			}
-			return true
-		}
-		if btns&tcell.Button1 != 0 && m.statsBox != nil && m.statsBox.ScrollbarRect.Contains(x, y) {
-			m.grab = optionsModalGrabStats
+		return m.handleMouse(e)
+	}
+	return false
+}
+
+func (m *OptionsModal) handleMouse(e *tcell.EventMouse) bool {
+	x, y := e.Position()
+	btns := e.Buttons()
+	if btns == 0 {
+		m.grab = optionsModalGrabNone
+	}
+	if !m.rect.Contains(x, y) {
+		m.grab = optionsModalGrabNone
+		return true
+	}
+	if m.handleMouseGrab(y, btns) {
+		return true
+	}
+	if m.handleMouseScrollbarStart(x, y, btns) {
+		return true
+	}
+	if m.handleStatsPaneMouse(x, y, btns) {
+		return true
+	}
+	if m.handleOptionsPaneMouse(x, y, btns) {
+		return true
+	}
+	if btns&tcell.ButtonPrimary != 0 {
+		m.activateMouseEntry(x, y)
+	}
+	return true
+}
+
+func (m *OptionsModal) handleMouseGrab(y int, btns tcell.ButtonMask) bool {
+	if m.grab == optionsModalGrabNone || btns&tcell.Button1 == 0 {
+		return false
+	}
+	switch m.grab {
+	case optionsModalGrabStats:
+		if m.statsBox != nil {
 			m.statsBox.JumpToScrollbarY(y)
-			return true
 		}
-		if btns&tcell.Button1 != 0 && m.optionsScrollbarRect.Contains(x, y) {
-			m.grab = optionsModalGrabOptions
-			m.jumpToOptionsScrollbarY(y)
-			return true
-		}
-		if m.statsRect.Contains(x, y) {
-			if btns&tcell.WheelUp != 0 && m.statsBox != nil {
-				m.statsBox.Offset = imax(0, m.statsBox.Offset-3)
-				return true
-			}
-			if btns&tcell.WheelDown != 0 && m.statsBox != nil {
-				m.statsBox.Offset += 3
-				return true
-			}
-			if btns&tcell.Button1 != 0 {
-				return true
-			}
-		}
-		if m.optionsRect.Contains(x, y) {
-			if btns&tcell.WheelUp != 0 {
-				m.optionsOffset = imax(0, m.optionsOffset-3)
-				return true
-			}
-			if btns&tcell.WheelDown != 0 {
-				maxOff := imax(0, m.optionsTotalRows-m.optionsVisibleRows)
-				m.optionsOffset = clamp(m.optionsOffset+3, 0, maxOff)
-				return true
-			}
-		}
-		if btns&tcell.ButtonPrimary != 0 {
-			for i, rowRect := range m.entryRects {
-				if rowRect.Contains(x, y) {
-					m.cursor = i
-					m.activate()
-					break
-				}
-			}
-		}
+	case optionsModalGrabOptions:
+		m.jumpToOptionsScrollbarY(y)
+	}
+	return true
+}
+
+func (m *OptionsModal) handleMouseScrollbarStart(x, y int, btns tcell.ButtonMask) bool {
+	if btns&tcell.Button1 == 0 {
+		return false
+	}
+	if m.statsBox != nil && m.statsBox.ScrollbarRect.Contains(x, y) {
+		m.grab = optionsModalGrabStats
+		m.statsBox.JumpToScrollbarY(y)
+		return true
+	}
+	if m.optionsScrollbarRect.Contains(x, y) {
+		m.grab = optionsModalGrabOptions
+		m.jumpToOptionsScrollbarY(y)
 		return true
 	}
 	return false
+}
+
+func (m *OptionsModal) handleStatsPaneMouse(x, y int, btns tcell.ButtonMask) bool {
+	if !m.statsRect.Contains(x, y) {
+		return false
+	}
+	if btns&tcell.WheelUp != 0 && m.statsBox != nil {
+		m.statsBox.Offset = imax(0, m.statsBox.Offset-3)
+		return true
+	}
+	if btns&tcell.WheelDown != 0 && m.statsBox != nil {
+		m.statsBox.Offset += 3
+		return true
+	}
+	if btns&tcell.Button1 != 0 {
+		return true
+	}
+	return false
+}
+
+func (m *OptionsModal) handleOptionsPaneMouse(x, y int, btns tcell.ButtonMask) bool {
+	if !m.optionsRect.Contains(x, y) {
+		return false
+	}
+	if btns&tcell.WheelUp != 0 {
+		m.optionsOffset = imax(0, m.optionsOffset-3)
+		return true
+	}
+	if btns&tcell.WheelDown != 0 {
+		maxOff := imax(0, m.optionsTotalRows-m.optionsVisibleRows)
+		m.optionsOffset = clamp(m.optionsOffset+3, 0, maxOff)
+		return true
+	}
+	return false
+}
+
+func (m *OptionsModal) activateMouseEntry(x, y int) {
+	for i, rowRect := range m.entryRects {
+		if rowRect.Contains(x, y) {
+			m.cursor = i
+			m.activate()
+			return
+		}
+	}
 }
 
 // handleKey routes navigation keys. Cursor movement stays local so

@@ -328,6 +328,57 @@ func TestUX_OpenOptionsModalStatsRefreshAfterDetailLoad(t *testing.T) {
 	}
 }
 
+func TestUX_ReturnPromptStatsRefreshAfterSessionListChanges(t *testing.T) {
+	a, scr, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+
+	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+		return SessionDetail{
+			Model:                 "opus",
+			TranscriptStatsLoaded: true,
+			TotalMessages:         42,
+			ContextUsageLoaded:    true,
+			ContextUsage: SessionContextUsage{
+				TotalTokens: 1200,
+				MaxTokens:   200000,
+				Percentage:  1,
+			},
+		}, nil
+	}
+
+	sess := a.sessions[a.visibleIdx[0]]
+	a.returnPathSession = sess
+	a.openReturnPrompt(sess)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	if !modal.StatsLoading {
+		t.Fatalf("modal stats should start loading")
+	}
+
+	a.sessions = nil
+	a.visibleIdx = nil
+	ev := scr.PollEvent()
+	interrupt, ok := ev.(*tcell.EventInterrupt)
+	if !ok {
+		t.Fatalf("event = %T, want *tcell.EventInterrupt", ev)
+	}
+	a.handleEvent(interrupt)
+
+	modal, ok = a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay after detail load = %T, want *OptionsModal", a.overlay)
+	}
+	if modal.StatsLoading {
+		t.Fatalf("modal stats still loading after detail load")
+	}
+	lines := flattenSegments(modal.StatsSegments)
+	if !strings.Contains(strings.Join(lines, "\n"), "42") {
+		t.Fatalf("modal stats did not refresh from loaded detail:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
 func TestUX_CloseCompactRestoresOptionsOverlay(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
