@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/terminalcontrol"
 )
 
 // BinaryPathFunc returns the codex executable path. Tests may replace it.
@@ -106,5 +107,13 @@ func invokeInteractive(ctx context.Context, args []string, workDir, sessionName 
 		"work_dir", workDir,
 		"session", sessionName,
 	)
-	return cmd.Run()
+	terminalRestorer := terminalcontrol.CaptureProcessRestorer(codexLifecycleLog.Logger())
+	terminalcontrol.WriteResetToTerminal()
+	err := cmd.Run()
+	if terminalRestorer != nil {
+		terminalRestorer.Restore()
+	} else {
+		terminalcontrol.WriteResetToTerminal()
+	}
+	return err
 }

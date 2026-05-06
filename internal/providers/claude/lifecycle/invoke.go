@@ -18,6 +18,7 @@ import (
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	claudeartifacts "goodkind.io/clyde/internal/providers/claude/lifecycle/artifacts"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/terminalcontrol"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -366,6 +367,8 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	// Start a background goroutine that monitors the daemon connection.
 	// If the daemon restarts (e.g. after `make install`), this re-registers
 	// the session with the new daemon so global settings sync continues.
+	terminalRestorer := terminalcontrol.CaptureProcessRestorer(claudeLifecycleLog.Logger())
+	terminalcontrol.WriteResetToTerminal()
 	done := make(chan struct{})
 	monitorStopped := make(chan struct{})
 	monitor := &monitorState{}
@@ -384,6 +387,11 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	}()
 
 	runErr := cmd.Run()
+	if terminalRestorer != nil {
+		terminalRestorer.Restore()
+	} else {
+		terminalcontrol.WriteResetToTerminal()
+	}
 
 	// Signal the monitor to stop and release the session.
 	close(done)
