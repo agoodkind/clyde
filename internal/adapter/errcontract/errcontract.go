@@ -18,10 +18,43 @@ import (
 // imports a provider envelope type. An empty Code means omit the
 // field from the rendered envelope.
 type ErrorInfo struct {
-	Type    string
-	Code    string
-	Message string
-	Param   string
+	Type        string
+	Code        string
+	Message     string
+	Param       string
+	Diagnostics *ErrorDiagnostics
+}
+
+// ErrorDiagnostics carries primitive, client-visible breadcrumbs that let an
+// operator or follow-up LLM jump from a displayed provider error back to the
+// exact Clyde log record. Header values must already be redacted before they
+// reach this struct.
+type ErrorDiagnostics struct {
+	RequestID            string            `json:"request_id,omitempty"`
+	TraceID              string            `json:"trace_id,omitempty"`
+	SpanID               string            `json:"span_id,omitempty"`
+	ParentSpanID         string            `json:"parent_span_id,omitempty"`
+	ChatKey              string            `json:"chat_key,omitempty"`
+	ChatKeySource        string            `json:"chat_key_source,omitempty"`
+	ChatRootKey          string            `json:"chat_root_key,omitempty"`
+	ChatBranchKey        string            `json:"chat_branch_key,omitempty"`
+	CursorRequestID      string            `json:"cursor_request_id,omitempty"`
+	CursorConversationID string            `json:"cursor_conversation_id,omitempty"`
+	CursorGenerationID   string            `json:"cursor_generation_id,omitempty"`
+	UpstreamRequestID    string            `json:"upstream_request_id,omitempty"`
+	UpstreamResponseID   string            `json:"upstream_response_id,omitempty"`
+	Provider             string            `json:"provider,omitempty"`
+	Backend              string            `json:"backend,omitempty"`
+	ModelAlias           string            `json:"model_alias,omitempty"`
+	ResolvedModel        string            `json:"resolved_model,omitempty"`
+	ErrorClass           string            `json:"error_class,omitempty"`
+	RouteFamily          string            `json:"route_family,omitempty"`
+	Method               string            `json:"method,omitempty"`
+	Path                 string            `json:"path,omitempty"`
+	UserAgent            string            `json:"user_agent,omitempty"`
+	HeaderNames          []string          `json:"header_names,omitempty"`
+	Headers              map[string]string `json:"headers,omitempty"`
+	LogHint              string            `json:"log_hint,omitempty"`
 }
 
 // UpstreamCodeClass classifies an upstream failure across providers

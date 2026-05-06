@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"goodkind.io/clyde/internal/adapter/errcontract"
 )
 
 type ChatRequest struct {
@@ -293,10 +295,11 @@ type ErrorResponse struct {
 }
 
 type ErrorBody struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Code    string `json:"code,omitempty"`
-	Param   string `json:"param,omitempty"`
+	Message string                        `json:"message"`
+	Type    string                        `json:"type"`
+	Code    string                        `json:"code,omitempty"`
+	Param   string                        `json:"param,omitempty"`
+	Clyde   *errcontract.ErrorDiagnostics `json:"clyde,omitempty"`
 }
 
 type ContentKind int

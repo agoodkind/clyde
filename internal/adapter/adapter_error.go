@@ -10,6 +10,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/errcontract"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -244,6 +245,7 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 			message += "; see Clyde logs with request_id " + corr.RequestID
 		}
 	}
+	message = maybeAppendClydeRequestID(family, aerr, message, corr.RequestID)
 	attrs := []slog.Attr{
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
@@ -263,7 +265,7 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 	}
 	attrs = append(attrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", attrs...)
-	info := adapterErrorInfoForFamily(family, aerr, message)
+	info := adapterErrorInfoForRequest(family, aerr, message, corr, r)
 	renderer, ok := s.lookupErrorRenderer(family)
 	if !ok {
 		s.writeFallbackError(r.Context(), w, family, aerr.HTTPStatus, info)
@@ -310,6 +312,92 @@ func adapterErrorInfoForFamily(family adapterRouteFamily, aerr *adapterError, me
 		Message: message,
 		Param:   aerr.OpenAIParam,
 	}
+}
+
+func adapterErrorInfoForRequest(
+	family adapterRouteFamily,
+	aerr *adapterError,
+	message string,
+	corr correlation.Context,
+	r *http.Request,
+) errcontract.ErrorInfo {
+	info := adapterErrorInfoForFamily(family, aerr, message)
+	info.Diagnostics = errorDiagnosticsForRequest(family, aerr, corr, r)
+	return info
+}
+
+func maybeAppendClydeRequestID(family adapterRouteFamily, aerr *adapterError, message string, requestID string) string {
+	if family != adapterRouteOpenAI || aerr == nil || strings.TrimSpace(requestID) == "" {
+		return message
+	}
+	if !strings.HasPrefix(string(aerr.Class), "upstream_") {
+		return message
+	}
+	needle := "Clyde request_id="
+	if strings.Contains(message, needle) {
+		return message
+	}
+	return strings.TrimSpace(message) + " (" + needle + requestID + ")"
+}
+
+func errorDiagnosticsForRequest(
+	family adapterRouteFamily,
+	aerr *adapterError,
+	corr correlation.Context,
+	r *http.Request,
+) *errcontract.ErrorDiagnostics {
+	if aerr == nil {
+		aerr = adapterErrInternal("adapter internal error", nil)
+	}
+	headers := map[string]string(nil)
+	headerNames := []string(nil)
+	method := ""
+	path := ""
+	userAgent := ""
+	if r != nil {
+		headers = redactedHeaders(r.Header)
+		headerNames = HeaderNames(r.Header)
+		method = r.Method
+		if r.URL != nil {
+			path = r.URL.Path
+		}
+		userAgent = r.UserAgent()
+	}
+	return &errcontract.ErrorDiagnostics{
+		RequestID:            corr.RequestID,
+		TraceID:              string(corr.TraceID),
+		SpanID:               string(corr.SpanID),
+		ParentSpanID:         string(corr.ParentSpanID),
+		ChatKey:              corr.ChatKey,
+		ChatKeySource:        corr.ChatKeySource,
+		ChatRootKey:          corr.ChatRootKey,
+		ChatBranchKey:        corr.ChatBranchKey,
+		CursorRequestID:      corr.CursorRequestID,
+		CursorConversationID: corr.CursorConversationID,
+		CursorGenerationID:   corr.CursorGenerationID,
+		UpstreamRequestID:    corr.UpstreamRequestID,
+		UpstreamResponseID:   corr.UpstreamResponseID,
+		Provider:             aerr.Provider,
+		Backend:              aerr.Backend,
+		ModelAlias:           aerr.ModelAlias,
+		ResolvedModel:        aerr.ResolvedModel,
+		ErrorClass:           string(aerr.Class),
+		RouteFamily:          string(family),
+		Method:               method,
+		Path:                 path,
+		UserAgent:            userAgent,
+		HeaderNames:          headerNames,
+		Headers:              headers,
+		LogHint:              errorLogHint(corr.RequestID),
+	}
+}
+
+func errorLogHint(requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return "adapter/http/errors.jsonl"
+	}
+	return "adapter/http/errors.jsonl request_id=" + requestID
 }
 
 // lookupErrorRenderer returns the registered renderer for a family,
@@ -369,7 +457,10 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse *adapteropen
 	if !aerr.SafeForClient {
 		message = "adapter internal error"
 	}
+	corr := correlation.FromContext(ctx)
+	message = maybeAppendClydeRequestID(adapterRouteOpenAI, aerr, message, corr.RequestID)
 	info := adapterErrorInfoForFamily(adapterRouteOpenAI, aerr, message)
+	info.Diagnostics = errorDiagnosticsForRequest(adapterRouteOpenAI, aerr, corr, nil)
 	renderer, ok := s.lookupStreamErrorRenderer(adapterRouteOpenAI)
 	if !ok {
 		return fmt.Errorf("no stream error renderer registered for route family %q", adapterRouteOpenAI)

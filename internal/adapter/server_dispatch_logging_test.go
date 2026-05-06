@@ -386,6 +386,64 @@ func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 	if received["cursor_generation_id"] != "cursor-meta-gen" {
 		t.Fatalf("received cursor_generation_id=%v", received["cursor_generation_id"])
 	}
+	if received["chat_key_source"] != "native" {
+		t.Fatalf("received chat_key_source=%v", received["chat_key_source"])
+	}
+	if received["chat_root_key"] != "cursor-header-conv" {
+		t.Fatalf("received chat_root_key=%v", received["chat_root_key"])
+	}
+}
+
+func TestHandleChatLogsForkDetectedForDerivedBranch(t *testing.T) {
+	t.Parallel()
+	srv, buf := newLoggingServer(t, config.LoggingConfig{
+		Body: config.LoggingBody{
+			Mode: "off",
+		},
+	}, func(cfg *config.AdapterConfig) {
+		cfg.Codex.Enabled = true
+		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+	})
+
+	postChatToServer(t, srv, map[string]any{
+		"model": "gpt-5.4",
+		"messages": []map[string]string{
+			{"role": "user", "content": "same first prompt"},
+			{"role": "assistant", "content": "assistant one"},
+			{"role": "user", "content": "continue left"},
+		},
+	})
+	postChatToServer(t, srv, map[string]any{
+		"model": "gpt-5.4",
+		"messages": []map[string]string{
+			{"role": "user", "content": "same first prompt"},
+			{"role": "assistant", "content": "assistant one"},
+			{"role": "user", "content": "continue right"},
+		},
+	})
+
+	fork := findLogEvent(t, buf, "adapter.chat.fork_detected")
+	if fork == nil {
+		t.Fatalf("expected adapter.chat.fork_detected event")
+	}
+	if fork["chat_key_source"] != "derived" {
+		t.Fatalf("fork chat_key_source=%v", fork["chat_key_source"])
+	}
+	if fork["chat_branch_key"] != "b02" {
+		t.Fatalf("fork chat_branch_key=%v", fork["chat_branch_key"])
+	}
+	if fork["prior_branch_key"] != "b01" {
+		t.Fatalf("fork prior_branch_key=%v", fork["prior_branch_key"])
+	}
+	if fork["message_count"] != float64(3) {
+		t.Fatalf("fork message_count=%v", fork["message_count"])
+	}
+	if fork["tool_count"] != float64(0) {
+		t.Fatalf("fork tool_count=%v", fork["tool_count"])
+	}
+	if fork["common_prefix_len"] != float64(2) {
+		t.Fatalf("fork common_prefix_len=%v", fork["common_prefix_len"])
+	}
 }
 
 func assertCorrelationEvent(t *testing.T, evt map[string]any, requestID, traceID, parentSpanID string) {

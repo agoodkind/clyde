@@ -37,6 +37,7 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 		Code:    info.Code,
 		Param:   info.Param,
 	}
+	body.Clyde = info.Diagnostics
 	if body.Code == "" {
 		body.Code = body.Type
 	}

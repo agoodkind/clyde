@@ -55,6 +55,10 @@ func TestAttrsIncludesCorrelationFields(t *testing.T) {
 		CursorGenerationID:   "cursor-gen",
 		UpstreamRequestID:    "upstream-req",
 		UpstreamResponseID:   "upstream-resp",
+		ChatKey:              "chat-root.b01",
+		ChatKeySource:        "derived",
+		ChatRootKey:          "chat-root",
+		ChatBranchKey:        "b01",
 	}
 	got := attrMap(corr.Attrs())
 	for _, key := range []string{
@@ -67,6 +71,10 @@ func TestAttrsIncludesCorrelationFields(t *testing.T) {
 		"cursor_generation_id",
 		"upstream_request_id",
 		"upstream_response_id",
+		"chat_key",
+		"chat_key_source",
+		"chat_root_key",
+		"chat_branch_key",
 	} {
 		if got[key] == "" {
 			t.Fatalf("missing attr %q in %#v", key, got)
@@ -147,6 +155,12 @@ func TestChatKeyAttrRoundTrip(t *testing.T) {
 	if got["chat_key"] != "conv-abc" {
 		t.Fatalf("Attrs() did not carry chat_key: %v", got)
 	}
+
+	c5 := c.WithChatIdentity("root.b01", "derived", "root", "b01")
+	got = attrMap(c5.Attrs())
+	if got["chat_key"] != "root.b01" || got["chat_key_source"] != "derived" || got["chat_root_key"] != "root" || got["chat_branch_key"] != "b01" {
+		t.Fatalf("Attrs() did not carry chat identity: %v", got)
+	}
 }
 
 func TestFromHTTPHeaderResolvesChatKeyHeaderPrecedence(t *testing.T) {
@@ -158,6 +172,9 @@ func TestFromHTTPHeaderResolvesChatKeyHeaderPrecedence(t *testing.T) {
 	c := FromHTTPHeader(header, "req-1")
 	if c.ChatKey != "cursor-conv-1" {
 		t.Fatalf("cursor conversation id should win, got %q", c.ChatKey)
+	}
+	if c.ChatKeySource != "native" {
+		t.Fatalf("cursor conversation id source = %q, want native", c.ChatKeySource)
 	}
 
 	header2 := http.Header{}

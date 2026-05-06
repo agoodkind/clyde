@@ -47,7 +47,10 @@ type Context struct {
 	// Resolved at ingress from provider-specific headers (cursor conversation
 	// id, claude-code session id) and back-filled from the request body's
 	// metadata.cursorConversationId. Empty when no key resolves.
-	ChatKey string
+	ChatKey       string
+	ChatKeySource string
+	ChatRootKey   string
+	ChatBranchKey string
 }
 
 type contextKey int
@@ -89,9 +92,9 @@ func FromHTTPHeader(header http.Header, requestID string) Context {
 	// already-set value in c (e.g. from a downstream call) is not overwritten
 	// because this constructs a fresh Context.
 	if conv := strings.TrimSpace(header.Get(HeaderCursorConversationID)); conv != "" {
-		corr.ChatKey = conv
+		corr = corr.WithChatIdentity(conv, "native", conv, "")
 	} else if sess := strings.TrimSpace(header.Get(HeaderClaudeCodeSessionID)); sess != "" {
-		corr.ChatKey = sess
+		corr = corr.WithChatIdentity(sess, "native", sess, "")
 	}
 	return corr
 }
@@ -210,6 +213,15 @@ func (c Context) Attrs() []slog.Attr {
 	if c.ChatKey != "" {
 		attrs = append(attrs, slog.String("chat_key", c.ChatKey))
 	}
+	if c.ChatKeySource != "" {
+		attrs = append(attrs, slog.String("chat_key_source", c.ChatKeySource))
+	}
+	if c.ChatRootKey != "" {
+		attrs = append(attrs, slog.String("chat_root_key", c.ChatRootKey))
+	}
+	if c.ChatBranchKey != "" {
+		attrs = append(attrs, slog.String("chat_branch_key", c.ChatBranchKey))
+	}
 	return attrs
 }
 
@@ -225,6 +237,17 @@ func (c Context) WithChatKey(key string) Context {
 		return c
 	}
 	c.ChatKey = key
+	return c
+}
+
+// WithChatIdentity returns a copy of c carrying the resolved chat partition
+// identity. It intentionally overwrites derived fields as a single unit after
+// ingress resolution has chosen the native or derived path.
+func (c Context) WithChatIdentity(key, source, rootKey, branchKey string) Context {
+	c.ChatKey = strings.TrimSpace(key)
+	c.ChatKeySource = strings.TrimSpace(source)
+	c.ChatRootKey = strings.TrimSpace(rootKey)
+	c.ChatBranchKey = strings.TrimSpace(branchKey)
 	return c
 }
 

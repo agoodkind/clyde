@@ -143,10 +143,12 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	if cursorReq.GenerationID != "" {
 		corr = corr.WithCursorGenerationID(cursorReq.GenerationID)
 	}
-	corr = resolveChatKey(corr, cursorReq, req)
+	identity := s.resolveChatIdentity(corr, cursorReq, req)
+	corr = corr.WithChatIdentity(identity.ChatKey, identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
 	req.Model = cursorReq.NormalizedModel
+	s.logChatForkDetected(ctx, corr, identity)
 
 	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
 	if err != nil {
@@ -676,14 +678,27 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	return s.handleChat(ctx, hctx)
 }
 
-// resolveChatKey returns corr with ChatKey populated if a key is available.
-// Header-set keys win because WithChatKey is a no-op when ChatKey is already
-// non-empty. The fallback derivation runs only after both the header path and
-// the parsed cursor metadata path failed to surface a key.
-func resolveChatKey(corr correlation.Context, cursorReq adaptercursor.Request, req ChatRequest) correlation.Context {
-	corr = corr.WithChatKey(cursorReq.ConversationID)
-	if corr.ChatKey != "" {
-		return corr
+func (s *Server) resolveChatIdentity(corr correlation.Context, cursorReq adaptercursor.Request, req ChatRequest) adaptercursor.ChatIdentity {
+	resolver := s.chatIdentityResolver
+	if resolver == nil {
+		resolver = adaptercursor.NewChatIdentityResolver()
+		s.chatIdentityResolver = resolver
 	}
-	return corr.WithChatKey(adaptercursor.DeriveChatKey(req))
+	return resolver.Resolve(corr, cursorReq, req)
+}
+
+func (s *Server) logChatForkDetected(ctx context.Context, corr correlation.Context, identity adaptercursor.ChatIdentity) {
+	if !identity.Fork.Detected {
+		return
+	}
+	attrs := []slog.Attr{
+		slog.String("chat_root_key", identity.ChatRootKey),
+		slog.String("chat_branch_key", identity.ChatBranchKey),
+		slog.String("prior_branch_key", identity.Fork.PriorBranchKey),
+		slog.Int("message_count", identity.MessageCount),
+		slog.Int("tool_count", identity.ToolCount),
+		slog.Int("common_prefix_len", identity.Fork.CommonPrefixLen),
+	}
+	attrs = append(attrs, corr.Attrs()...)
+	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.fork_detected", attrs...)
 }
