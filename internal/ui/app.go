@@ -16,7 +16,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"hash/fnv"
-	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -603,37 +602,24 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	}
 	clock := defaultUIClock
 	now := clock.Now()
-	a := &App{
-		cb:                 cb,
-		clock:              clock,
-		ctx:                opt.Context,
-		sessions:           sessions,
-		mode:               StatusBrowse,
-		modelCache:         make(map[string]string),
-		messageCountCache:  make(map[string]int),
-		contextStateCache:  make(map[string]SessionContextState),
-		liveURLs:           make(map[string]LiveURL),
-		detailCache:        make(map[string]SessionDetail),
-		detailLoading:      make(map[string]bool),
-		exportStatsCache:   make(map[string]SessionExportStats),
-		exportStatsLoading: make(map[string]bool),
-		summaryRefreshing:  make(map[string]bool),
-		lastUsedTickerSeen: make(map[string]time.Time),
-		recentlyUpdatedAt:  make(map[string]time.Time),
-		sortCol:            SortColUsed,
-		sortAsc:            false,
-		returnPathState:    returnPathStateDashboardActive,
-		daemonOnline:       false,
-		startupLoading:     len(sessions) == 0,
-		configLoading:      cb.LoadConfigControls != nil,
-		appFocused:         true,
-		lastNonInterruptAt: now,
-		heartbeatStartedAt: now,
-		lastHeartbeatAt:    now,
-		buildHash:          shortStableHash(gklogversion.String()),
-		executableHash:     currentExecutableHash(),
-		runHash:            shortStableHash(fmt.Sprintf("%d:%d", os.Getpid(), now.UnixNano())),
-	}
+	a := new(App)
+	a.cb = cb
+	a.clock = clock
+	a.ctx = opt.Context
+	a.sessions = sessions
+	a.mode = StatusBrowse
+	a.initCaches()
+	a.sortCol = SortColUsed
+	a.sortAsc = false
+	a.returnPathState = returnPathStateDashboardActive
+	a.daemonOnline = false
+	a.startupLoading = len(sessions) == 0
+	a.configLoading = cb.LoadConfigControls != nil
+	a.appFocused = true
+	a.lastNonInterruptAt = now
+	a.heartbeatStartedAt = now
+	a.lastHeartbeatAt = now
+	a.initRuntimeIdentity(now)
 	if a.ctx == nil {
 		a.ctx = context.Background()
 	}
@@ -683,6 +669,26 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 		a.openReturnPrompt(opt.ReturnTo)
 	}
 	return a
+}
+
+func (a *App) initCaches() {
+	a.modelCache = make(map[string]string)
+	a.messageCountCache = make(map[string]int)
+	a.contextStateCache = make(map[string]SessionContextState)
+	a.liveURLs = make(map[string]LiveURL)
+	a.detailCache = make(map[string]SessionDetail)
+	a.detailLoading = make(map[string]bool)
+	a.exportStatsCache = make(map[string]SessionExportStats)
+	a.exportStatsLoading = make(map[string]bool)
+	a.summaryRefreshing = make(map[string]bool)
+	a.lastUsedTickerSeen = make(map[string]time.Time)
+	a.recentlyUpdatedAt = make(map[string]time.Time)
+}
+
+func (a *App) initRuntimeIdentity(now time.Time) {
+	a.buildHash = shortStableHash(gklogversion.String())
+	a.executableHash = currentExecutableHash()
+	a.runHash = shortStableHash(fmt.Sprintf("%d:%d", os.Getpid(), now.UnixNano()))
 }
 
 func (a *App) isCurrentReturnPathSession(sess *session.Session) bool {
@@ -1636,21 +1642,12 @@ type executableSnapshot struct {
 	info os.FileInfo
 }
 
-const suspendTerminalPrepSequence = terminalcontrol.SuspendPrepSequence
-
 const terminalModeResetSequence = terminalcontrol.ModeResetSequence
 
 const (
 	EnvTUIReturnSessionID   = "CLYDE_TUI_RETURN_SESSION_ID"
 	EnvTUIReturnSessionName = "CLYDE_TUI_RETURN_SESSION_NAME"
 )
-
-func writeSuspendTerminalPrep(w io.Writer) {
-	if w == nil {
-		return
-	}
-	_, _ = fmt.Fprint(w, suspendTerminalPrepSequence)
-}
 
 func enableAppMouse(scr tcell.Screen) {
 	if scr == nil {

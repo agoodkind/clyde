@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/terminalcontrol"
 )
 
 func stubSelfReloadProbe(t *testing.T, err error) {
@@ -60,10 +60,12 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 }
 
 func TestUX_WriteSuspendTerminalPrepSequence(t *testing.T) {
-	var out bytes.Buffer
-	writeSuspendTerminalPrep(&out)
-	if got := out.String(); got != suspendTerminalPrepSequence {
-		t.Fatalf("terminal prep sequence mismatch: got %q want %q", got, suspendTerminalPrepSequence)
+	got := terminalcontrol.SuspendPrepSequence
+	if !strings.HasSuffix(got, "\r") {
+		t.Fatalf("terminal prep sequence should reset output column, got %q", got)
+	}
+	if !strings.Contains(got, "\x1b[2J\x1b[H") {
+		t.Fatalf("terminal prep sequence should clear and home, got %q", got)
 	}
 }
 
