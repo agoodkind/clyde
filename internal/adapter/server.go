@@ -111,28 +111,29 @@ var systemFingerprint = "fp_clyde_" + adapterClock.Now().UTC().Format("20060102"
 // either calls Start in a goroutine (production) or hands the
 // handler to httptest.Server (tests).
 type Server struct {
-	cfg               config.AdapterConfig
-	logprobs          config.AdapterLogprobs
-	deps              Deps
-	log               *slog.Logger
-	logging           config.LoggingConfig
-	runtimeLogging    *RuntimeLogging
-	registry          *Registry
-	sem               chan struct{}
-	token             string
-	mux               *http.ServeMux
-	httpSrv           *http.Server
-	connMu            sync.Mutex
-	conns             map[net.Conn]http.ConnState
-	oauthMgr          *oauth.Manager
-	anthr             *anthropic.Client
-	httpClient        *http.Client
-	ctxUsage          *contextUsageTracker
-	usageNoticeGate   *adapterruntime.UsageNoticeGate
-	providerRegistry  *adapterprovider.Registry
-	codexProvider     *adaptercodex.Provider
-	anthropicProvider *anthropic.Provider
-	errorRenderers    map[adapterRouteFamily]errcontract.ErrorRenderer
+	cfg                  config.AdapterConfig
+	logprobs             config.AdapterLogprobs
+	deps                 Deps
+	log                  *slog.Logger
+	logging              config.LoggingConfig
+	runtimeLogging       *RuntimeLogging
+	registry             *Registry
+	sem                  chan struct{}
+	token                string
+	mux                  *http.ServeMux
+	httpSrv              *http.Server
+	connMu               sync.Mutex
+	conns                map[net.Conn]http.ConnState
+	oauthMgr             *oauth.Manager
+	anthr                *anthropic.Client
+	httpClient           *http.Client
+	ctxUsage             *contextUsageTracker
+	usageNoticeGate      *adapterruntime.UsageNoticeGate
+	providerRegistry     *adapterprovider.Registry
+	codexProvider        *adaptercodex.Provider
+	anthropicProvider    *anthropic.Provider
+	errorRenderers       map[adapterRouteFamily]errcontract.ErrorRenderer
+	streamErrorRenderers map[adapterRouteFamily]errcontract.StreamErrorRenderer
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -181,9 +182,10 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
-		ctxUsage:        newContextUsageTracker(),
-		usageNoticeGate: adapterruntime.NewUsageNoticeGateWithLogger(log),
-		errorRenderers:  defaultBoundaryRegistry.snapshotRenderers(),
+		ctxUsage:             newContextUsageTracker(),
+		usageNoticeGate:      adapterruntime.NewUsageNoticeGateWithLogger(log),
+		errorRenderers:       defaultBoundaryRegistry.snapshotRenderers(),
+		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
 	if cfg.Codex.Enabled {

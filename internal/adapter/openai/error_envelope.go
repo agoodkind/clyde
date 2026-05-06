@@ -86,6 +86,7 @@ func NewUpstreamErrorMapper() UpstreamErrorMapper { return UpstreamErrorMapper{}
 // the family-to-implementation map is owned outside the boundary.
 func RegisterErrorBoundary(reg errcontract.BoundaryRegistrar) {
 	reg.Register(errcontract.RouteFamilyOpenAI, NewUpstreamErrorMapper(), NewErrorRenderer())
+	reg.RegisterStreamErrorRenderer(errcontract.RouteFamilyOpenAI, NewStreamErrorRenderer())
 }
 
 // Map classifies an upstream failure into the OpenAI family safe

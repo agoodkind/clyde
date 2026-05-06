@@ -64,6 +64,21 @@ type ErrorRenderer interface {
 	Render(w http.ResponseWriter, code int, info ErrorInfo) error
 }
 
+// StreamErrorWriter is the primitive SSE surface a stream error
+// renderer needs after HTTP headers have already been committed.
+// Implementations own framing and flushing, but not envelope shape.
+type StreamErrorWriter interface {
+	WriteStreamEvent(payload []byte) error
+	WriteStreamDone() error
+}
+
+// StreamErrorRenderer renders a single route family's native error
+// event on an already-open stream. Implementations live in provider
+// packages and decide the JSON envelope shape for error events only.
+type StreamErrorRenderer interface {
+	RenderStreamError(w StreamErrorWriter, info ErrorInfo) error
+}
+
 // UpstreamMapping carries the typed result of classifying an upstream
 // failure. The generic boundary uses HTTPStatus and ErrorInfo to
 // drive the renderer and to populate the adapterError fields it
@@ -102,4 +117,5 @@ const RouteFamilyAnthropic RouteFamily = "anthropic"
 // and dispatches to them when a non-2xx response must be rendered.
 type BoundaryRegistrar interface {
 	Register(family RouteFamily, mapper UpstreamErrorMapper, renderer ErrorRenderer)
+	RegisterStreamErrorRenderer(family RouteFamily, renderer StreamErrorRenderer)
 }
