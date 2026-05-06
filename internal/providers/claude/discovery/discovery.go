@@ -79,6 +79,9 @@ func ProjectsRoot(homeDir string) string {
 	return filepath.Join(homeDir, ".claude", "projects")
 }
 
+// ReadTranscriptHeader reads a Claude transcript JSONL file and folds its
+// header records into a DiscoveryResult. Returns false when the file lacks
+// an identifying session id.
 func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -86,14 +89,7 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 	}
 	defer func() { _ = file.Close() }()
 
-	discoveryResult := session.DiscoveryResult{
-		Provider:            session.ProviderClaude,
-		PrimaryArtifact:     path,
-		PrimaryArtifactKind: primaryArtifactKindTranscript,
-	}
-	if strings.Contains(path, string(os.PathSeparator)+"subagents"+string(os.PathSeparator)) {
-		discoveryResult.IsSubagent = true
-	}
+	discoveryResult := newDiscoveryResultForPath(path)
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -106,44 +102,7 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 		if err := json.Unmarshal(line, &header); err != nil {
 			continue
 		}
-		if header.Type == "queue-operation" {
-			if !discoveryResult.IsAutoName && looksLikeAutoNamePrompt(header.Content) {
-				discoveryResult.IsAutoName = true
-			}
-			continue
-		}
-		if header.Type == "custom-title" {
-			if header.CustomTitle != "" {
-				discoveryResult.CustomTitle = header.CustomTitle
-			}
-			if header.SessionID != "" && discoveryResult.ProviderIdentity().IsZero() {
-				discoveryResult.Identity = session.ProviderSessionID{Provider: session.ProviderClaude, ID: header.SessionID}
-			}
-			if header.ForkedFrom.SessionID != "" && discoveryResult.ForkParent.IsZero() {
-				discoveryResult.ForkParent = session.ProviderSessionID{Provider: session.ProviderClaude, ID: header.ForkedFrom.SessionID}
-				discoveryResult.IsForked = true
-			}
-			continue
-		}
-		if header.SessionID != "" && discoveryResult.ProviderIdentity().IsZero() {
-			discoveryResult.Identity = session.ProviderSessionID{Provider: session.ProviderClaude, ID: header.SessionID}
-		}
-		if header.ForkedFrom.SessionID != "" && discoveryResult.ForkParent.IsZero() {
-			discoveryResult.ForkParent = session.ProviderSessionID{Provider: session.ProviderClaude, ID: header.ForkedFrom.SessionID}
-			discoveryResult.IsForked = true
-		}
-		if header.CWD != "" && discoveryResult.WorkspaceRoot == "" {
-			discoveryResult.WorkspaceRoot = header.CWD
-		}
-		if header.Entrypoint != "" && discoveryResult.Entrypoint == "" {
-			discoveryResult.Entrypoint = header.Entrypoint
-		}
-		if header.Timestamp != "" && discoveryResult.FirstEntryTime.IsZero() {
-			if parsedTime, parseErr := time.Parse(time.RFC3339, header.Timestamp); parseErr == nil {
-				discoveryResult.FirstEntryTime = parsedTime
-			}
-		}
-		if !discoveryResult.ProviderIdentity().IsZero() && discoveryResult.WorkspaceRoot != "" && discoveryResult.Entrypoint != "" && !discoveryResult.FirstEntryTime.IsZero() {
+		if applyTranscriptHeader(&discoveryResult, header) {
 			break
 		}
 	}
@@ -154,6 +113,78 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 		discoveryResult.IsAutoName = true
 	}
 	return discoveryResult, true
+}
+
+// newDiscoveryResultForPath seeds the discovery result with the artifact
+// path and the subagent flag derived from the directory layout.
+func newDiscoveryResultForPath(path string) session.DiscoveryResult {
+	discoveryResult := session.DiscoveryResult{
+		Provider:            session.ProviderClaude,
+		PrimaryArtifact:     path,
+		PrimaryArtifactKind: primaryArtifactKindTranscript,
+	}
+	if strings.Contains(path, string(os.PathSeparator)+"subagents"+string(os.PathSeparator)) {
+		discoveryResult.IsSubagent = true
+	}
+	return discoveryResult
+}
+
+// applyTranscriptHeader folds one parsed JSONL record into the discovery
+// result and returns true once every header field of interest is filled.
+func applyTranscriptHeader(out *session.DiscoveryResult, header transcriptHeader) bool {
+	switch header.Type {
+	case "queue-operation":
+		if !out.IsAutoName && looksLikeAutoNamePrompt(header.Content) {
+			out.IsAutoName = true
+		}
+		return false
+	case "custom-title":
+		applyCustomTitleHeader(out, header)
+		return false
+	}
+	applyIdentityHeader(out, header)
+	applyMetadataHeader(out, header)
+	return !out.ProviderIdentity().IsZero() &&
+		out.WorkspaceRoot != "" &&
+		out.Entrypoint != "" &&
+		!out.FirstEntryTime.IsZero()
+}
+
+// applyCustomTitleHeader copies the custom title plus any newly observed
+// identity or fork pointer from a custom-title record.
+func applyCustomTitleHeader(out *session.DiscoveryResult, header transcriptHeader) {
+	if header.CustomTitle != "" {
+		out.CustomTitle = header.CustomTitle
+	}
+	applyIdentityHeader(out, header)
+}
+
+// applyIdentityHeader records the session identity and fork-parent pointer
+// the first time they appear in the transcript.
+func applyIdentityHeader(out *session.DiscoveryResult, header transcriptHeader) {
+	if header.SessionID != "" && out.ProviderIdentity().IsZero() {
+		out.Identity = session.ProviderSessionID{Provider: session.ProviderClaude, ID: header.SessionID}
+	}
+	if header.ForkedFrom.SessionID != "" && out.ForkParent.IsZero() {
+		out.ForkParent = session.ProviderSessionID{Provider: session.ProviderClaude, ID: header.ForkedFrom.SessionID}
+		out.IsForked = true
+	}
+}
+
+// applyMetadataHeader fills cwd, entrypoint, and first-entry timestamp the
+// first time each value appears.
+func applyMetadataHeader(out *session.DiscoveryResult, header transcriptHeader) {
+	if header.CWD != "" && out.WorkspaceRoot == "" {
+		out.WorkspaceRoot = header.CWD
+	}
+	if header.Entrypoint != "" && out.Entrypoint == "" {
+		out.Entrypoint = header.Entrypoint
+	}
+	if header.Timestamp != "" && out.FirstEntryTime.IsZero() {
+		if parsedTime, parseErr := time.Parse(time.RFC3339, header.Timestamp); parseErr == nil {
+			out.FirstEntryTime = parsedTime
+		}
+	}
 }
 
 func looksLikeAutoNamePrompt(content string) bool {
