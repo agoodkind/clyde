@@ -316,41 +316,7 @@ func BuildRequestWithConfig(
 	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy, cfg); ok {
 		input = rawInput
 	} else {
-		for _, msg := range req.Messages {
-			rawText := adaptercontent.FlattenRaw(msg.Content)
-			text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(rawText, strategy))
-			switch strings.ToLower(msg.Role) {
-			case "system", "developer":
-				if text != "" {
-					systemSections = append(systemSections, text)
-				}
-				continue
-			case "assistant":
-				for _, tc := range msg.ToolCalls {
-					if strings.TrimSpace(tc.Function.Name) == "" {
-						continue
-					}
-					input = append(input, FunctionCallItem(tc))
-				}
-				// Reasoning items must precede the assistant Message
-				// they belong to in the input array; codex-rs's
-				// history.rs preserves that order.
-				input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
-				if content := codexContentFromRaw(msg.Content, "output_text", strategy); len(content) > 0 {
-					input = append(input, MessageContentItems("assistant", content))
-				}
-			case "tool", "function":
-				if text != "" && strings.TrimSpace(msg.ToolCallID) != "" {
-					input = append(input, FunctionCallOutputItem(msg.ToolCallID, text))
-				} else if text != "" {
-					input = append(input, MessageContent("user", "input_text", "tool: "+text))
-				}
-			default:
-				if content := codexContentFromRaw(msg.Content, "input_text", strategy); len(content) > 0 {
-					input = append(input, MessageContentItems("user", content))
-				}
-			}
-		}
+		input, systemSections = appendChatMessageInputs(input, systemSections, req.Messages, strategy, cfg)
 	}
 	instructions := strings.TrimSpace(strings.Join(systemSections, "\n\n"))
 	if base := strings.TrimSpace(model.Instructions); base != "" {
@@ -402,6 +368,78 @@ func BuildRequestWithConfig(
 		ToolChoice:           "auto",
 		ParallelToolCalls:    parallelToolCalls(req),
 	}
+}
+
+// appendChatMessageInputs walks the Chat-shaped messages once and folds
+// each into the Codex Responses input slice and system fragment list.
+// The returned slices replace the originals so the caller can keep this
+// call pure.
+func appendChatMessageInputs(
+	input []map[string]any,
+	systemSections []string,
+	messages []adapteropenai.ChatMessage,
+	strategy adapterrender.MaterializationStrategy,
+	cfg RequestBuilderConfig,
+) ([]map[string]any, []string) {
+	for _, msg := range messages {
+		rawText := adaptercontent.FlattenRaw(msg.Content)
+		text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(rawText, strategy))
+		switch strings.ToLower(msg.Role) {
+		case "system", "developer":
+			if text != "" {
+				systemSections = append(systemSections, text)
+			}
+		case "assistant":
+			input = appendAssistantInput(input, msg, rawText, strategy, cfg)
+		case "tool", "function":
+			input = appendToolResultInput(input, msg, text)
+		default:
+			if content := codexContentFromRaw(msg.Content, "input_text", strategy); len(content) > 0 {
+				input = append(input, MessageContentItems("user", content))
+			}
+		}
+	}
+	return input, systemSections
+}
+
+// appendAssistantInput emits one assistant message's tool calls,
+// reasoning items, and visible content into the input slice. Reasoning
+// items must precede the matching Message item per codex-rs history.rs.
+func appendAssistantInput(
+	input []map[string]any,
+	msg adapteropenai.ChatMessage,
+	rawText string,
+	strategy adapterrender.MaterializationStrategy,
+	cfg RequestBuilderConfig,
+) []map[string]any {
+	for _, tc := range msg.ToolCalls {
+		if strings.TrimSpace(tc.Function.Name) == "" {
+			continue
+		}
+		input = append(input, FunctionCallItem(tc))
+	}
+	input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
+	if content := codexContentFromRaw(msg.Content, "output_text", strategy); len(content) > 0 {
+		input = append(input, MessageContentItems("assistant", content))
+	}
+	return input
+}
+
+// appendToolResultInput emits one tool/function role message either as a
+// FunctionCallOutput item (when it has a tool_call_id) or as a tagged
+// user input fallback.
+func appendToolResultInput(
+	input []map[string]any,
+	msg adapteropenai.ChatMessage,
+	text string,
+) []map[string]any {
+	if text == "" {
+		return input
+	}
+	if strings.TrimSpace(msg.ToolCallID) != "" {
+		return append(input, FunctionCallOutputItem(msg.ToolCallID, text))
+	}
+	return append(input, MessageContent("user", "input_text", "tool: "+text))
 }
 
 func parallelToolCalls(req adapteropenai.ChatRequest) bool {

@@ -211,6 +211,31 @@ type toolsInspect struct {
 // object instead of `parameters`. MCP tools come through as `function` type
 // with names matching the Cursor MCP convention (`CallMcpTool`,
 // `FetchMcpResource`).
+// toolInspectAccumulator collects the running set state inspectTools
+// builds while walking a Tools array. It exists to keep inspectTools
+// flat and shareable with the per-element folder.
+type toolInspectAccumulator struct {
+	kinds            map[string]bool
+	functionTopKeys  map[string]bool
+	customTopKeys    map[string]bool
+	customFormatKeys map[string]bool
+	functionNames    map[string]bool
+	customNames      map[string]bool
+	mcpNames         map[string]bool
+}
+
+func newToolInspectAccumulator() toolInspectAccumulator {
+	return toolInspectAccumulator{
+		kinds:            map[string]bool{},
+		functionTopKeys:  map[string]bool{},
+		customTopKeys:    map[string]bool{},
+		customFormatKeys: map[string]bool{},
+		functionNames:    map[string]bool{},
+		customNames:      map[string]bool{},
+		mcpNames:         map[string]bool{},
+	}
+}
+
 func inspectTools(raw json.RawMessage) toolsInspect {
 	out := toolsInspect{}
 	var arr []json.RawMessage
@@ -218,63 +243,78 @@ func inspectTools(raw json.RawMessage) toolsInspect {
 		return out
 	}
 	out.count = len(arr)
-	kindSet := map[string]bool{}
-	functionTopKeySet := map[string]bool{}
-	customTopKeySet := map[string]bool{}
-	customFormatKeySet := map[string]bool{}
-	functionNameSet := map[string]bool{}
-	customNameSet := map[string]bool{}
-	mcpNameSet := map[string]bool{}
+	acc := newToolInspectAccumulator()
 	for _, elem := range arr {
-		var top map[string]json.RawMessage
-		if err := json.Unmarshal(elem, &top); err != nil {
-			continue
-		}
-		var probe struct {
-			Type   string          `json:"type"`
-			Name   string          `json:"name"`
-			Format json.RawMessage `json:"format"`
-		}
-		_ = json.Unmarshal(elem, &probe)
-		if probe.Type != "" {
-			kindSet[probe.Type] = true
-		}
-		switch probe.Type {
-		case "function":
-			for k := range top {
-				functionTopKeySet[k] = true
-			}
-			if probe.Name != "" {
-				functionNameSet[probe.Name] = true
-				if isMCPLikeToolName(probe.Name) {
-					mcpNameSet[probe.Name] = true
-				}
-			}
-		case "custom":
-			for k := range top {
-				customTopKeySet[k] = true
-			}
-			if probe.Name != "" {
-				customNameSet[probe.Name] = true
-			}
-			if len(probe.Format) > 0 && string(probe.Format) != "null" {
-				var fmtObj map[string]json.RawMessage
-				if err := json.Unmarshal(probe.Format, &fmtObj); err == nil {
-					for k := range fmtObj {
-						customFormatKeySet[k] = true
-					}
-				}
-			}
-		}
+		acc.foldElement(elem)
 	}
-	out.kinds = sortedSet(kindSet)
-	out.functionTopKeys = sortedSet(functionTopKeySet)
-	out.customTopKeys = sortedSet(customTopKeySet)
-	out.customFormatKeys = sortedSet(customFormatKeySet)
-	out.functionNames = sortedSet(functionNameSet)
-	out.customNames = sortedSet(customNameSet)
-	out.mcpNames = sortedSet(mcpNameSet)
+	out.kinds = sortedSet(acc.kinds)
+	out.functionTopKeys = sortedSet(acc.functionTopKeys)
+	out.customTopKeys = sortedSet(acc.customTopKeys)
+	out.customFormatKeys = sortedSet(acc.customFormatKeys)
+	out.functionNames = sortedSet(acc.functionNames)
+	out.customNames = sortedSet(acc.customNames)
+	out.mcpNames = sortedSet(acc.mcpNames)
 	return out
+}
+
+// foldElement folds one Tools-array element into the accumulator,
+// dispatching on the element's "type" discriminator.
+func (a *toolInspectAccumulator) foldElement(elem json.RawMessage) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(elem, &top); err != nil {
+		return
+	}
+	var probe struct {
+		Type   string          `json:"type"`
+		Name   string          `json:"name"`
+		Format json.RawMessage `json:"format"`
+	}
+	_ = json.Unmarshal(elem, &probe)
+	if probe.Type != "" {
+		a.kinds[probe.Type] = true
+	}
+	switch probe.Type {
+	case "function":
+		a.foldFunctionTool(top, probe.Name)
+	case "custom":
+		a.foldCustomTool(top, probe.Name, probe.Format)
+	}
+}
+
+// foldFunctionTool records the top-level keys and name of one
+// `type:"function"` tool entry, marking MCP-like names.
+func (a *toolInspectAccumulator) foldFunctionTool(top map[string]json.RawMessage, name string) {
+	for k := range top {
+		a.functionTopKeys[k] = true
+	}
+	if name == "" {
+		return
+	}
+	a.functionNames[name] = true
+	if isMCPLikeToolName(name) {
+		a.mcpNames[name] = true
+	}
+}
+
+// foldCustomTool records the top-level keys, name, and format-object
+// keys of one `type:"custom"` tool entry.
+func (a *toolInspectAccumulator) foldCustomTool(top map[string]json.RawMessage, name string, format json.RawMessage) {
+	for k := range top {
+		a.customTopKeys[k] = true
+	}
+	if name != "" {
+		a.customNames[name] = true
+	}
+	if len(format) == 0 || string(format) == "null" {
+		return
+	}
+	var fmtObj map[string]json.RawMessage
+	if err := json.Unmarshal(format, &fmtObj); err != nil {
+		return
+	}
+	for k := range fmtObj {
+		a.customFormatKeys[k] = true
+	}
 }
 
 func isMCPLikeToolName(name string) bool {
