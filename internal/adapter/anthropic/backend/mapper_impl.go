@@ -41,50 +41,9 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int, inb
 	if inboundThinkingStrategy == "" {
 		inboundThinkingStrategy = adapterrender.MaterializeNativeThinkingBlock
 	}
-	var systemPieces []string
-	var out []AnthMessage
-
-	for msgIdx, msg := range req.Messages {
-		switch msg.Role {
-		case "system", "developer":
-			t := flattenContent(msg.Content)
-			if strings.TrimSpace(t) != "" {
-				systemPieces = append(systemPieces, t)
-			}
-		case "user":
-			blocks, err := openAIMessageToUserBlocks(msgIdx, msg)
-			if err != nil {
-				return AnthRequest{}, err
-			}
-			if len(blocks) == 0 {
-				continue
-			}
-			out = append(out, AnthMessage{Role: "user", Content: blocks})
-		case "assistant":
-			blocks, err := openAIMessageToAssistantBlocks(msgIdx, msg, inboundThinkingStrategy)
-			if err != nil {
-				return AnthRequest{}, err
-			}
-			if len(blocks) == 0 && len(msg.ToolCalls) == 0 {
-				continue
-			}
-			out = append(out, AnthMessage{Role: "assistant", Content: blocks})
-		case "tool", "function":
-			result := flattenContent(msg.Content)
-			if result == "" {
-				result = " "
-			}
-			out = append(out, AnthMessage{
-				Role: "user",
-				Content: []AnthContentBlock{{
-					Type:          "tool_result",
-					ToolUseID:     msg.ToolCallID,
-					ResultContent: result,
-				}},
-			})
-		default:
-			return AnthRequest{}, fmt.Errorf("unsupported message role %q", msg.Role)
-		}
+	systemPieces, out, err := translateMessages(req.Messages, inboundThinkingStrategy)
+	if err != nil {
+		return AnthRequest{}, err
 	}
 
 	out = mergeConsecutiveSameRole(out)
@@ -98,18 +57,123 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int, inb
 		return AnthRequest{}, err
 	}
 
-	toolChoice, err := translateToolChoice(req.ToolChoice)
+	toolChoice, err := resolveToolChoice(req)
 	if err != nil {
 		return AnthRequest{}, err
 	}
 
+	logRequestTranslated(req, systemStr, out, tools, toolChoice)
+
+	return AnthRequest{
+		Model:      req.Model,
+		System:     systemStr,
+		Messages:   out,
+		MaxTokens:  maxTokens,
+		Tools:      tools,
+		ToolChoice: toolChoice,
+		Stream:     req.Stream,
+	}, nil
+}
+
+// translateMessages walks the OpenAI-shaped messages once and returns the
+// system fragments plus the accumulated Anthropic message list.
+func translateMessages(
+	messages []OpenAIMessage,
+	inboundThinkingStrategy adapterrender.MaterializationStrategy,
+) ([]string, []AnthMessage, error) {
+	var systemPieces []string
+	var out []AnthMessage
+	for msgIdx, msg := range messages {
+		piece, anthMsg, err := translateMessage(msgIdx, msg, inboundThinkingStrategy)
+		if err != nil {
+			return nil, nil, err
+		}
+		if piece != "" {
+			systemPieces = append(systemPieces, piece)
+		}
+		if anthMsg != nil {
+			out = append(out, *anthMsg)
+		}
+	}
+	return systemPieces, out, nil
+}
+
+// translateMessage maps one OpenAI message into either a system fragment
+// (returned via piece) or an Anthropic message (returned via a non-nil
+// anthMsg pointer). When neither is produced both outputs are empty/nil.
+func translateMessage(
+	msgIdx int,
+	msg OpenAIMessage,
+	inboundThinkingStrategy adapterrender.MaterializationStrategy,
+) (string, *AnthMessage, error) {
+	switch msg.Role {
+	case "system", "developer":
+		t := flattenContent(msg.Content)
+		if strings.TrimSpace(t) == "" {
+			return "", nil, nil
+		}
+		return t, nil, nil
+	case "user":
+		blocks, err := openAIMessageToUserBlocks(msgIdx, msg)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(blocks) == 0 {
+			return "", nil, nil
+		}
+		return "", &AnthMessage{Role: "user", Content: blocks}, nil
+	case "assistant":
+		blocks, err := openAIMessageToAssistantBlocks(msgIdx, msg, inboundThinkingStrategy)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(blocks) == 0 && len(msg.ToolCalls) == 0 {
+			return "", nil, nil
+		}
+		return "", &AnthMessage{Role: "assistant", Content: blocks}, nil
+	case "tool", "function":
+		result := flattenContent(msg.Content)
+		if result == "" {
+			result = " "
+		}
+		return "", &AnthMessage{
+			Role: "user",
+			Content: []AnthContentBlock{{
+				Type:          "tool_result",
+				ToolUseID:     msg.ToolCallID,
+				ResultContent: result,
+			}},
+		}, nil
+	default:
+		return "", nil, fmt.Errorf("unsupported message role %q", msg.Role)
+	}
+}
+
+// resolveToolChoice translates the OpenAI tool_choice and applies the
+// parallel_tools=false override consistently.
+func resolveToolChoice(req OpenAIRequest) (*AnthToolChoice, error) {
+	toolChoice, err := translateToolChoice(req.ToolChoice)
+	if err != nil {
+		return nil, err
+	}
 	if req.ParallelTools != nil && !*req.ParallelTools {
 		if toolChoice == nil {
 			toolChoice = &AnthToolChoice{Type: "auto"}
 		}
 		toolChoice.DisableParallelToolUse = true
 	}
+	return toolChoice, nil
+}
 
+// logRequestTranslated emits the structured debug/info log describing the
+// shape of the translated Anthropic request.
+func logRequestTranslated(
+	req OpenAIRequest,
+	systemStr string,
+	out []AnthMessage,
+	tools []AnthTool,
+	toolChoice *AnthToolChoice,
+) {
 	toolNames := make([]string, 0, len(tools))
 	for _, t := range tools {
 		toolNames = append(toolNames, t.Name)
@@ -134,16 +198,6 @@ func TranslateRequest(req OpenAIRequest, systemPrefix string, maxTokens int, inb
 		"tool_result_count", toolResultCount,
 		"stream", req.Stream,
 	)
-
-	return AnthRequest{
-		Model:      req.Model,
-		System:     systemStr,
-		Messages:   out,
-		MaxTokens:  maxTokens,
-		Tools:      tools,
-		ToolChoice: toolChoice,
-		Stream:     req.Stream,
-	}, nil
 }
 
 func joinSystem(prefix, collected string) string {

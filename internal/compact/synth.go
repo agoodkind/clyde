@@ -282,18 +282,36 @@ func droppedSummaryChunkSet(opts SynthOptions, entryIdx int) map[string]bool {
 	return opts.DroppedSummaryChunks[entryIdx]
 }
 
+// toolPairRender is a single tool_use plus rendering metadata used while
+// emitting the trailing tool activity summary.
+type toolPairRender struct {
+	ei     int
+	bi     int
+	useID  string
+	entry  Entry
+	block  ContentBlock
+	detail ToolDetail
+}
+
 // renderToolActivity emits one trailing section summarising tool
 // invocations in the order they appeared.
 func renderToolActivity(slice *Slice, opts SynthOptions) []OutputBlock {
-	type pairRender struct {
-		ei     int
-		bi     int
-		useID  string
-		entry  Entry
-		block  ContentBlock
-		detail ToolDetail
+	pairs := collectToolPairs(slice, opts)
+	if len(pairs) == 0 {
+		return nil
 	}
-	var pairs []pairRender
+	var sb strings.Builder
+	sb.WriteString("## Tool activity\n\n")
+	for _, p := range pairs {
+		writeToolPair(&sb, slice, p, opts)
+	}
+	return []OutputBlock{textBlock(sb.String())}
+}
+
+// collectToolPairs walks the post-boundary slice and gathers every
+// non-dropped tool_use into the order it appeared.
+func collectToolPairs(slice *Slice, opts SynthOptions) []toolPairRender {
+	var pairs []toolPairRender
 	for ei, e := range slice.PostBoundary {
 		if e.Type != "assistant" {
 			continue
@@ -309,44 +327,50 @@ func renderToolActivity(slice *Slice, opts SynthOptions) []OutputBlock {
 			if detail == ToolDetailDrop {
 				continue
 			}
-			pairs = append(pairs, pairRender{
+			pairs = append(pairs, toolPairRender{
 				ei: ei, bi: bi, useID: b.ToolUseID, entry: e, block: b, detail: detail,
 			})
 		}
 	}
-	if len(pairs) == 0 {
+	return pairs
+}
+
+// writeToolPair appends one tool pair's markdown summary line and, when
+// detail is full, its truncated result body.
+func writeToolPair(sb *strings.Builder, slice *Slice, p toolPairRender, opts SynthOptions) {
+	argSummary := summarizeToolArgs(p.block)
+	resultBlock := lookupToolResultBlock(slice, p.useID)
+	resultText, lines, tokens := flattenToolResult(resultBlock)
+	fmt.Fprintf(sb, "- %s(%s) -> %d lines (~%d tok)", p.block.ToolName, argSummary, lines, tokens)
+	if resultBlock != nil && resultBlock.ToolIsError {
+		sb.WriteString(" [error]")
+	}
+	sb.WriteString("\n")
+	if p.detail == ToolDetailFull && resultText != "" {
+		truncated := truncHeadTail(resultText, opts.TruncTokens*4)
+		sb.WriteString("```text\n")
+		sb.WriteString(truncated)
+		if !strings.HasSuffix(truncated, "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("```\n")
+	}
+	sb.WriteString("\n")
+}
+
+// lookupToolResultBlock returns a copy of the tool_result block paired
+// with the given tool_use id, or nil when the slice has no paired result.
+func lookupToolResultBlock(slice *Slice, useID string) *ContentBlock {
+	pair, ok := slice.PairIndex[useID]
+	if !ok || pair.ResultEntryIdx < 0 {
 		return nil
 	}
-	var sb strings.Builder
-	sb.WriteString("## Tool activity\n\n")
-	for _, p := range pairs {
-		argSummary := summarizeToolArgs(p.block)
-		var resultBlock *ContentBlock
-		if pair, ok := slice.PairIndex[p.useID]; ok && pair.ResultEntryIdx >= 0 {
-			rEntry := slice.PostBoundary[pair.ResultEntryIdx]
-			if pair.ResultBlockIdx < len(rEntry.Content) {
-				rb := rEntry.Content[pair.ResultBlockIdx]
-				resultBlock = &rb
-			}
-		}
-		resultText, lines, tokens := flattenToolResult(resultBlock)
-		fmt.Fprintf(&sb, "- %s(%s) -> %d lines (~%d tok)", p.block.ToolName, argSummary, lines, tokens)
-		if resultBlock != nil && resultBlock.ToolIsError {
-			sb.WriteString(" [error]")
-		}
-		sb.WriteString("\n")
-		if p.detail == ToolDetailFull && resultText != "" {
-			truncated := truncHeadTail(resultText, opts.TruncTokens*4)
-			sb.WriteString("```text\n")
-			sb.WriteString(truncated)
-			if !strings.HasSuffix(truncated, "\n") {
-				sb.WriteString("\n")
-			}
-			sb.WriteString("```\n")
-		}
-		sb.WriteString("\n")
+	rEntry := slice.PostBoundary[pair.ResultEntryIdx]
+	if pair.ResultBlockIdx >= len(rEntry.Content) {
+		return nil
 	}
-	return []OutputBlock{textBlock(sb.String())}
+	rb := rEntry.Content[pair.ResultBlockIdx]
+	return &rb
 }
 
 // chatTextFrom concatenates text blocks from one entry, optionally

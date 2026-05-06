@@ -184,69 +184,122 @@ func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
 	if ev.Kind == EventToolCallDelta {
 		r.recordToolCallNames(ev.ToolCalls)
 	}
+	logEvent := r.handleEventDiagnostics(ev)
+	out := r.dispatchEvent(ev)
+	if logEvent {
+		for _, ch := range out {
+			r.logRender(ev, ch)
+		}
+	}
+	return out
+}
+
+// handleEventDiagnostics flushes any suppressed-event summaries and logs the
+// normalized event when it is loggable, or records it as suppressed otherwise.
+// Returns true when the event itself was logged (and therefore each rendered
+// chunk should also be logged).
+func (r *EventRenderer) handleEventDiagnostics(ev Event) bool {
 	logEvent := shouldLogEvent(ev)
 	if logEvent {
 		r.flushSuppressedEventSummaries(r.logContext())
 		r.logNormalized(ev)
-	} else {
-		r.recordSuppressedEvent(ev)
+		return true
 	}
-	var out []adapteropenai.StreamChunk
+	r.recordSuppressedEvent(ev)
+	return false
+}
+
+// dispatchEvent routes a normalized event to its kind-specific renderer and
+// returns the resulting stream chunks in order.
+func (r *EventRenderer) dispatchEvent(ev Event) []adapteropenai.StreamChunk {
 	switch ev.Kind {
 	case EventReasoningSignaled:
-		r.reasoningSignaled = true
-		r.captureReasoningItemID(ev)
-		// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
-		// Later reasoning deltas fill it; otherwise finish closes an empty block.
-		if !r.reasoningVisible && !r.reasoningOpen {
-			if chunk := r.renderReasoningOpen(); chunk != nil {
-				r.reasoningVisible = true
-				out = append(out, *chunk)
-			}
-		}
+		return r.handleReasoningSignaled(ev)
 	case EventReasoningDelta:
-		r.reasoningSignaled = true
-		r.reasoningVisible = true
-		// Fill the synthetic content block and also populate reasoning_content.
-		if chunk := r.renderReasoning(ev); chunk != nil {
-			out = append(out, *chunk)
-		}
+		return r.handleReasoningDelta(ev)
 	case EventReasoningFinished:
-		// Capture the encrypted_content blob (codex only) so the
-		// close marker can carry it inline as `data-encrypted`.
-		if enc := strings.TrimSpace(ev.EncryptedContent); enc != "" {
-			r.lastReasoningEncrypted = enc
-		}
-		// Close the synthetic content block; reasoning_content has no marker to close.
-		if chunk := r.renderReasoningClose(); chunk != nil {
-			out = append(out, *chunk)
-		}
+		return r.handleReasoningFinished(ev)
 	case EventAssistantTextDelta:
-		if chunk := r.renderReasoningClose(); chunk != nil {
-			out = append(out, *chunk)
-		}
-		if chunk := r.renderText(ev.Text); chunk != nil {
-			out = append(out, *chunk)
-		}
+		return r.handleAssistantTextDelta(ev)
 	case EventAssistantRefusalDelta:
-		if chunk := r.renderReasoningClose(); chunk != nil {
-			out = append(out, *chunk)
-		}
-		if chunk := r.renderRefusal(ev.Text); chunk != nil {
-			out = append(out, *chunk)
-		}
+		return r.handleAssistantRefusalDelta(ev)
 	case EventToolCallDelta:
-		if chunk := r.renderReasoningClose(); chunk != nil {
-			out = append(out, *chunk)
-		}
-		if chunk := r.renderToolCalls(ev.ToolCalls); chunk != nil {
-			out = append(out, *chunk)
-		}
+		return r.handleToolCallDelta(ev)
 	}
-	for _, ch := range out {
-		if logEvent {
-			r.logRender(ev, ch)
-		}
+	return nil
+}
+
+// handleReasoningSignaled marks reasoning as observed and, when nothing has
+// opened the synthetic content block yet, emits the open marker.
+func (r *EventRenderer) handleReasoningSignaled(ev Event) []adapteropenai.StreamChunk {
+	r.reasoningSignaled = true
+	r.captureReasoningItemID(ev)
+	// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
+	// Later reasoning deltas fill it; otherwise finish closes an empty block.
+	if r.reasoningVisible || r.reasoningOpen {
+		return nil
+	}
+	chunk := r.renderReasoningOpen()
+	if chunk == nil {
+		return nil
+	}
+	r.reasoningVisible = true
+	return []adapteropenai.StreamChunk{*chunk}
+}
+
+// handleReasoningDelta fills the synthetic content block and also populates
+// reasoning_content for clients that consume it directly.
+func (r *EventRenderer) handleReasoningDelta(ev Event) []adapteropenai.StreamChunk {
+	r.reasoningSignaled = true
+	r.reasoningVisible = true
+	chunk := r.renderReasoning(ev)
+	if chunk == nil {
+		return nil
+	}
+	return []adapteropenai.StreamChunk{*chunk}
+}
+
+// handleReasoningFinished closes the synthetic content block and captures any
+// codex encrypted_content blob so the close marker can carry it inline.
+func (r *EventRenderer) handleReasoningFinished(ev Event) []adapteropenai.StreamChunk {
+	if enc := strings.TrimSpace(ev.EncryptedContent); enc != "" {
+		r.lastReasoningEncrypted = enc
+	}
+	chunk := r.renderReasoningClose()
+	if chunk == nil {
+		return nil
+	}
+	return []adapteropenai.StreamChunk{*chunk}
+}
+
+// handleAssistantTextDelta closes any open reasoning block and emits the
+// assistant text chunk.
+func (r *EventRenderer) handleAssistantTextDelta(ev Event) []adapteropenai.StreamChunk {
+	return r.appendReasoningCloseAnd(r.renderText(ev.Text))
+}
+
+// handleAssistantRefusalDelta closes any open reasoning block and emits the
+// refusal chunk.
+func (r *EventRenderer) handleAssistantRefusalDelta(ev Event) []adapteropenai.StreamChunk {
+	return r.appendReasoningCloseAnd(r.renderRefusal(ev.Text))
+}
+
+// handleToolCallDelta closes any open reasoning block and emits the tool call
+// chunk.
+func (r *EventRenderer) handleToolCallDelta(ev Event) []adapteropenai.StreamChunk {
+	return r.appendReasoningCloseAnd(r.renderToolCalls(ev.ToolCalls))
+}
+
+// appendReasoningCloseAnd prepends a reasoning-close chunk (when one is
+// emitted) ahead of the supplied chunk, returning the ordered slice. Either
+// chunk may be nil.
+func (r *EventRenderer) appendReasoningCloseAnd(chunk *adapteropenai.StreamChunk) []adapteropenai.StreamChunk {
+	var out []adapteropenai.StreamChunk
+	if closeChunk := r.renderReasoningClose(); closeChunk != nil {
+		out = append(out, *closeChunk)
+	}
+	if chunk != nil {
+		out = append(out, *chunk)
 	}
 	return out
 }
