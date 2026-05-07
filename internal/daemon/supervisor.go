@@ -185,7 +185,9 @@ func supervisorWorkerCommand(executablePath string, readyWrite *os.File, readyFD
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.ExtraFiles = []*os.File{readyWrite}
-	cmd.Env = append(os.Environ(),
+	cmd.Env = daemonEnvWithOverrides(os.Environ(),
+		envDaemonReloadChild+"=",
+		envDaemonInheritedListeners+"=",
 		envDaemonReadyFD+"="+strconv.Itoa(readyFD),
 		envDaemonSupervisorSocket+"="+supervisorSocketPath,
 	)
@@ -283,6 +285,7 @@ func supervisorWorkerExitError(err error) error {
 }
 
 func serveSupervisorReloadControl(log *slog.Logger, listener *net.UnixListener, replacementCh chan<- supervisorWorkerHandle, errCh chan<- error) {
+	supervisorSocketPath := listener.Addr().String()
 	for {
 		conn, err := listener.AcceptUnix()
 		if err != nil {
@@ -298,12 +301,12 @@ func serveSupervisorReloadControl(log *slog.Logger, listener *net.UnixListener, 
 					logSupervisorPanic(log, "daemon.supervisor.reload_request", fmt.Sprint(recovered))
 				}
 			}()
-			handleSupervisorReloadControl(log, conn, replacementCh)
+			handleSupervisorReloadControl(log, conn, replacementCh, supervisorSocketPath)
 		}()
 	}
 }
 
-func handleSupervisorReloadControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- supervisorWorkerHandle) {
+func handleSupervisorReloadControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- supervisorWorkerHandle, supervisorSocketPath string) {
 	defer func() { _ = conn.Close() }()
 	req, files, err := readSupervisorReloadRequest(conn)
 	if err != nil {
@@ -319,11 +322,16 @@ func handleSupervisorReloadControl(log *slog.Logger, conn *net.UnixConn, replace
 		writeSupervisorReloadError(conn, fmt.Errorf("supervisor reload request missing arguments"))
 		return
 	}
+	env, err := supervisorReloadWorkerEnvironment(req, supervisorSocketPath)
+	if err != nil {
+		writeSupervisorReloadError(conn, err)
+		return
+	}
 	cmd := daemonSupervisorCommand(req.ExecutablePath, req.Arguments[1:]...)
 	cmd.Args = append([]string{}, req.Arguments...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	cmd.Env = append([]string{}, req.Environment...)
+	cmd.Env = env
 	cmd.ExtraFiles = append([]*os.File{}, files...)
 	handle, err := startSupervisorWorker(cmd)
 	if err != nil {
@@ -346,6 +354,20 @@ func handleSupervisorReloadControl(log *slog.Logger, conn *net.UnixConn, replace
 			"err", err,
 		)
 	}
+}
+
+func supervisorReloadWorkerEnvironment(req supervisorReloadRequest, supervisorSocketPath string) ([]string, error) {
+	specJSON, err := json.Marshal(req.Listeners)
+	if err != nil {
+		slog.Warn("daemon.supervisor.reload_request.encode_listeners_failed", "err", err)
+		return nil, fmt.Errorf("encode supervisor reload listener specs: %w", err)
+	}
+	return daemonEnvWithOverrides(req.Environment,
+		envDaemonReloadChild+"=1",
+		envDaemonInheritedListeners+"="+string(specJSON),
+		envDaemonReadyFD+"="+strconv.Itoa(req.ReadyFD),
+		envDaemonSupervisorSocket+"="+supervisorSocketPath,
+	), nil
 }
 
 func readSupervisorReloadRequest(conn *net.UnixConn) (supervisorReloadRequest, []*os.File, error) {

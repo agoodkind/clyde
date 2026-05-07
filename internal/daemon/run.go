@@ -677,8 +677,12 @@ func replacementDaemonStarterForCurrentPlatform() replacementDaemonStarter {
 }
 
 func replacementDaemonStarterForPlatform(goos string, supervisorSocket string) replacementDaemonStarter {
-	if goos == "darwin" && strings.TrimSpace(supervisorSocket) != "" {
-		return supervisorReplacementDaemonStarter{socketPath: supervisorSocket}
+	if goos == "darwin" {
+		socketPath := strings.TrimSpace(supervisorSocket)
+		if socketPath == "" {
+			socketPath = supervisorSocketPath()
+		}
+		return supervisorReplacementDaemonStarter{socketPath: socketPath}
 	}
 	return directReplacementDaemonStarter{}
 }
@@ -698,7 +702,7 @@ func (directReplacementDaemonStarter) startReplacementDaemon(_ context.Context, 
 			"err", err)
 		return nil, fmt.Errorf("encode inherited listeners: %w", err)
 	}
-	cmd.Env = append(os.Environ(),
+	cmd.Env = daemonEnvWithOverrides(os.Environ(),
 		envDaemonReloadChild+"=1",
 		envDaemonInheritedListeners+"="+string(specJSON),
 		envDaemonReadyFD+"="+strconv.Itoa(req.readyFD),

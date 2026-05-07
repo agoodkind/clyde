@@ -80,7 +80,7 @@ func supervisorReplacementRequest(req replacementDaemonRequest) (supervisorReloa
 		Operation:      supervisorReloadOperation,
 		ExecutablePath: req.executablePath,
 		Arguments:      []string{req.executablePath, "daemon", "worker"},
-		Environment: append(os.Environ(),
+		Environment: daemonEnvWithOverrides(os.Environ(),
 			envDaemonReloadChild+"=1",
 			envDaemonInheritedListeners+"="+string(specJSON),
 			envDaemonReadyFD+"="+strconv.Itoa(req.readyFD),
@@ -149,4 +149,37 @@ func fileDescriptors(files []*os.File) []int {
 		fds = append(fds, int(fd))
 	}
 	return fds
+}
+
+func daemonEnvWithOverrides(base []string, overrides ...string) []string {
+	remove := make(map[string]bool, len(overrides))
+	for _, override := range overrides {
+		key, ok := envKey(override)
+		if !ok {
+			continue
+		}
+		remove[key] = true
+	}
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, ok := envKey(entry)
+		if !ok {
+			out = append(out, entry)
+			continue
+		}
+		if remove[key] {
+			continue
+		}
+		out = append(out, entry)
+	}
+	out = append(out, overrides...)
+	return out
+}
+
+func envKey(entry string) (string, bool) {
+	index := strings.IndexByte(entry, '=')
+	if index <= 0 {
+		return "", false
+	}
+	return entry[:index], true
 }

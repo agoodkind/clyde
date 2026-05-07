@@ -12,6 +12,9 @@ import (
 )
 
 func TestSupervisorWorkerCommandUsesHiddenWorkerRoleAndReadyFD(t *testing.T) {
+	t.Setenv(envDaemonReloadChild, "1")
+	t.Setenv(envDaemonInheritedListeners, "stale-listeners")
+
 	readyFilePath := filepath.Join(t.TempDir(), "ready")
 	readyFile, err := os.Create(readyFilePath)
 	if err != nil {
@@ -32,6 +35,12 @@ func TestSupervisorWorkerCommandUsesHiddenWorkerRoleAndReadyFD(t *testing.T) {
 	}
 	if !slices.Contains(cmd.Env, envDaemonSupervisorSocket+"=/tmp/clyde-supervisor.sock") {
 		t.Fatalf("env does not include %s", envDaemonSupervisorSocket)
+	}
+	if slices.Contains(cmd.Env, envDaemonReloadChild+"=1") {
+		t.Fatalf("env still includes stale reload child marker")
+	}
+	if slices.Contains(cmd.Env, envDaemonInheritedListeners+"=stale-listeners") {
+		t.Fatalf("env still includes stale inherited listeners")
 	}
 }
 
@@ -172,5 +181,43 @@ func TestReadSupervisorReloadRequestReceivesUnixRights(t *testing.T) {
 	}
 	if count := <-serverFileCount; count != 2 {
 		t.Fatalf("received file count = %d, want 2", count)
+	}
+}
+
+func TestSupervisorReloadWorkerEnvironmentOverridesFDHandoff(t *testing.T) {
+	req := supervisorReloadRequest{
+		Environment: []string{
+			"KEEP=value",
+			envDaemonReadyFD + "=3",
+			envDaemonInheritedListeners + "=stale",
+			envDaemonSupervisorSocket + "=/tmp/old.sock",
+		},
+		Listeners: []inheritedListenerSpec{
+			{Name: listenerNameDaemon, Network: "unix", Addr: "/tmp/clyde.sock", FD: 3},
+		},
+		ReadyFD: 4,
+	}
+
+	env, err := supervisorReloadWorkerEnvironment(req, "/tmp/new.sock")
+	if err != nil {
+		t.Fatalf("supervisor reload worker environment: %v", err)
+	}
+	if !envContains(env, "KEEP=value") {
+		t.Fatalf("environment dropped unrelated variable")
+	}
+	if !envContains(env, envDaemonReadyFD+"=4") {
+		t.Fatalf("environment does not include new ready fd")
+	}
+	if !envContains(env, envDaemonSupervisorSocket+"=/tmp/new.sock") {
+		t.Fatalf("environment does not include new supervisor socket")
+	}
+	if envContains(env, envDaemonReadyFD+"=3") {
+		t.Fatalf("environment still includes stale ready fd")
+	}
+	if envContains(env, envDaemonInheritedListeners+"=stale") {
+		t.Fatalf("environment still includes stale listener specs")
+	}
+	if envContains(env, envDaemonSupervisorSocket+"=/tmp/old.sock") {
+		t.Fatalf("environment still includes stale supervisor socket")
 	}
 }

@@ -19,14 +19,24 @@ func TestReplacementDaemonStarterForPlatformUsesSupervisorOnDarwinWithSocket(t *
 	}
 }
 
-func TestReplacementDaemonStarterForPlatformFallsBackToDirectWithoutSocket(t *testing.T) {
+func TestReplacementDaemonStarterForPlatformUsesRuntimeSupervisorSocketOnDarwinWithoutEnv(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
 	starter := replacementDaemonStarterForPlatform("darwin", "")
-	if _, ok := starter.(directReplacementDaemonStarter); !ok {
-		t.Fatalf("starter type = %T, want directReplacementDaemonStarter", starter)
+	got, ok := starter.(supervisorReplacementDaemonStarter)
+	if !ok {
+		t.Fatalf("starter type = %T, want supervisorReplacementDaemonStarter", starter)
+	}
+	if got.socketPath != supervisorSocketPath() {
+		t.Fatalf("socket path = %q, want %q", got.socketPath, supervisorSocketPath())
 	}
 }
 
 func TestSupervisorReplacementRequestPreservesReloadEnvironment(t *testing.T) {
+	t.Setenv(envDaemonReadyFD, "3")
+	t.Setenv(envDaemonInheritedListeners, "stale-listeners")
+	t.Setenv(envDaemonSupervisorSocket, "/tmp/old-supervisor.sock")
+
 	req, err := supervisorReplacementRequest(replacementDaemonRequest{
 		executablePath: "/bin/clyde",
 		specs: []inheritedListenerSpec{
@@ -54,6 +64,12 @@ func TestSupervisorReplacementRequestPreservesReloadEnvironment(t *testing.T) {
 	}
 	if !envContains(req.Environment, envDaemonReadyFD+"=4") {
 		t.Fatalf("environment does not include ready fd")
+	}
+	if envContains(req.Environment, envDaemonReadyFD+"=3") {
+		t.Fatalf("environment still includes stale ready fd")
+	}
+	if envContains(req.Environment, envDaemonInheritedListeners+"=stale-listeners") {
+		t.Fatalf("environment still includes stale listener specs")
 	}
 }
 
