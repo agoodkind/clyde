@@ -367,7 +367,7 @@ func findDaemonPID() (int, error) {
 	log := daemonClientLog(bg)
 	out, err := clientCommandRunner.Output("launchctl", "list", "io.goodkind.clyde.daemon")
 	if err != nil {
-		log.DebugContext(bg, "daemon.client.find_pid.launchctl_failed", "err", err)
+		log.WarnContext(bg, "daemon.client.find_pid.launchctl_failed", "err", err)
 		return 0, fmt.Errorf("list launch agent pid: %w", err)
 	}
 	for _, line := range splitLines(string(out)) {
@@ -638,8 +638,9 @@ func ensureConnectedDaemonOwnedByLaunchd(ctx context.Context) error {
 	}
 	uid := strconv.Itoa(os.Getuid())
 	target := "gui/" + uid + "/" + launchAgentLabel
+	log := daemonClientLog(ctx)
 	if err := clientCommandRunner.Run("launchctl", "print", target); err != nil {
-		daemonClientLog(ctx).DebugContext(ctx, "daemon.client.launchd_owner_check_failed",
+		log.WarnContext(ctx, "daemon.client.launchd_owner_check_failed",
 			"target", target,
 			"err", err)
 		return fmt.Errorf("daemon is reachable but launchd does not own %s; run `make service-install` or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/%s.plist`: %w",
@@ -1271,7 +1272,7 @@ func startDaemon(ctx context.Context) error {
 func startDarwinLaunchdDaemon(ctx context.Context, log *slog.Logger) error {
 	plistPath, err := ensureDarwinLaunchAgent()
 	if err != nil {
-		log.DebugContext(ctx, "daemon.client.start_daemon.ensure_launch_agent_failed", "err", err)
+		log.WarnContext(ctx, "daemon.client.start_daemon.ensure_launch_agent_failed", "err", err)
 		return fmt.Errorf("ensure launch agent %s: %w", launchAgentLabel, err)
 	}
 	uid := strconv.Itoa(os.Getuid())
@@ -1284,7 +1285,7 @@ func startDarwinLaunchdDaemon(ctx context.Context, log *slog.Logger) error {
 
 	out, err := clientCommandRunner.CombinedOutput("launchctl", "bootstrap", domain, plistPath)
 	if err != nil {
-		log.DebugContext(ctx, "daemon.client.start_daemon.bootstrap_failed",
+		log.WarnContext(ctx, "daemon.client.start_daemon.bootstrap_failed",
 			"plist_path", plistPath,
 			"err", err,
 			"output", string(out))
@@ -1292,7 +1293,7 @@ func startDarwinLaunchdDaemon(ctx context.Context, log *slog.Logger) error {
 	}
 	log.DebugContext(ctx, "daemon.client.start_daemon.bootstrap_ok", "target", target, "plist_path", plistPath)
 	if err := clientCommandRunner.Run("launchctl", "kickstart", "-k", target); err != nil {
-		log.DebugContext(ctx, "daemon.client.start_daemon.kickstart_after_bootstrap_failed",
+		log.WarnContext(ctx, "daemon.client.start_daemon.kickstart_after_bootstrap_failed",
 			"target", target,
 			"err", err)
 		return fmt.Errorf("kickstart launch agent %s after bootstrap: %w", target, err)

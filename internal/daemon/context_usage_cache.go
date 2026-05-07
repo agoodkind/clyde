@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -78,6 +79,7 @@ func (c *contextUsageStateCache) Refresh(ctx context.Context, sess *session.Sess
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
+			slog.WarnContext(ctx, "daemon.context_usage_cache.wait_cancelled", "err", ctx.Err())
 			return emptySessionContextState(), fmt.Errorf("wait context usage refresh: %w", ctx.Err())
 		case <-running.Done:
 			return running.State, running.Err

@@ -544,6 +544,7 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	defer cleanup()
 	readyRead, readyWrite, err := os.Pipe()
 	if err != nil {
+		log.WarnContext(ctx, "daemon.reload.ready_pipe_failed", "component", "daemon", "err", err)
 		return reloadReport{}, fmt.Errorf("create reload readiness pipe: %w", err)
 	}
 	defer func() { _ = readyRead.Close() }()

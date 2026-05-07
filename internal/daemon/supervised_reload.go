@@ -73,6 +73,7 @@ func (s supervisorReplacementDaemonStarter) startReplacementDaemon(ctx context.C
 func supervisorReplacementRequest(req replacementDaemonRequest) (supervisorReloadRequest, error) {
 	specJSON, err := json.Marshal(req.specs)
 	if err != nil {
+		slog.Warn("daemon.supervisor.reload_request.encode_listeners_failed", "err", err)
 		return supervisorReloadRequest{}, fmt.Errorf("encode inherited listeners: %w", err)
 	}
 	return supervisorReloadRequest{
@@ -96,6 +97,7 @@ func requestSupervisorReplacement(ctx context.Context, socketPath string, req su
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(deadlineCtx, "unix", socketPath)
 	if err != nil {
+		slog.WarnContext(ctx, "daemon.supervisor.reload.connect_failed", "socket_path", socketPath, "err", err)
 		return supervisorReloadResponse{}, fmt.Errorf("connect supervisor: %w", err)
 	}
 	defer conn.Close()
@@ -109,16 +111,19 @@ func requestSupervisorReplacement(ctx context.Context, socketPath string, req su
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
+		slog.WarnContext(ctx, "daemon.supervisor.reload.encode_request_failed", "err", err)
 		return supervisorReloadResponse{}, fmt.Errorf("encode supervisor reload request: %w", err)
 	}
 	payload = append(payload, '\n')
 	rights := syscall.UnixRights(fileDescriptors(files)...)
 	if _, _, err := unixConn.WriteMsgUnix(payload, rights, nil); err != nil {
+		slog.WarnContext(ctx, "daemon.supervisor.reload.send_request_failed", "err", err)
 		return supervisorReloadResponse{}, fmt.Errorf("send supervisor reload request: %w", err)
 	}
 
 	var resp supervisorReloadResponse
 	if err := json.NewDecoder(bufio.NewReader(unixConn)).Decode(&resp); err != nil {
+		slog.WarnContext(ctx, "daemon.supervisor.reload.decode_response_failed", "err", err)
 		return supervisorReloadResponse{}, fmt.Errorf("decode supervisor reload response: %w", err)
 	}
 	if resp.Error != "" {

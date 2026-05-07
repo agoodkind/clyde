@@ -1398,6 +1398,8 @@ func (s *Server) refreshContextUsageState(ctx context.Context, sess *session.Ses
 }
 
 func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Session) (sessionContextState, error) {
+	_, _ = peer.FromContext(ctx)
+	_, _ = metadata.FromIncomingContext(ctx)
 	release, err := s.acquireContextRefreshPermit(ctx)
 	if err != nil {
 		return emptySessionContextState(), err
@@ -1410,6 +1412,7 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 		ForkSession: true,
 	})
 	if err != nil {
+		s.log.WarnContext(ctx, "daemon.context_usage.probe_failed", "component", "daemon", "err", err)
 		return emptySessionContextState(), fmt.Errorf("probe context usage: %w", err)
 	}
 	return sessionContextState{
@@ -1433,6 +1436,7 @@ func (s *Server) acquireContextRefreshPermit(ctx context.Context) (func(), error
 	case s.contextRefreshSem <- contextRefreshPermit{Acquired: true}:
 		return func() { <-s.contextRefreshSem }, nil
 	case <-ctx.Done():
+		s.log.WarnContext(ctx, "daemon.context_usage.refresh_permit_cancelled", "component", "daemon", "err", ctx.Err())
 		return nil, fmt.Errorf("acquire context refresh permit: %w", ctx.Err())
 	}
 }
