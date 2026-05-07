@@ -116,5 +116,7 @@ evidence shows a regression.
 
 - [`adapter-refactor-research.md`](./adapter-refactor-research.md): compact
   product and protocol facts still useful for implementation.
+- [`cursor-error-shape-research.md`](./cursor-error-shape-research.md):
+  repeatable Cursor error-shape probe matrix and evidence table.
 - [`snapshot-v2-design.md`](./snapshot-v2-design.md): compact Snapshot v2
   status for `CLYDE-150`.
