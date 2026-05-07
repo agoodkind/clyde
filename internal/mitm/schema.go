@@ -33,6 +33,9 @@ type CaptureRecord struct {
 	// files can mix multiple providers, so baseline refresh must be
 	// able to filter by this field.
 	Provider string `json:"provider,omitempty"`
+	// Concern names the routed capture bucket for Cursor MITM events.
+	// Older root transcripts omit it, and snapshot readers ignore it.
+	Concern string `json:"concern,omitempty"`
 
 	TraceID              string `json:"trace_id,omitempty"`
 	SpanID               string `json:"span_id,omitempty"`

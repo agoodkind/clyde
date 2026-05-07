@@ -294,6 +294,9 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if err := applyAdapterNoticeDefaultsAndValidate(&cfg.Adapter.Notices); err != nil {
 		return err
 	}
+	if err := applyAdapterRetryDefaultsAndValidate(&cfg.Adapter.Retry); err != nil {
+		return err
+	}
 
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
 }
@@ -487,6 +490,100 @@ func normalizeLoggingOptionalValue(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+const codexOverloadedRetryPolicyName = "codex.responses.overloaded"
+
+func applyAdapterRetryDefaultsAndValidate(retry *AdapterRetry) error {
+	if retry == nil {
+		return nil
+	}
+	retry.Policies = appendBuiltinAdapterRetryPolicies(retry.Policies)
+	for i := range retry.Policies {
+		if err := normalizeAdapterRetryPolicy(&retry.Policies[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendBuiltinAdapterRetryPolicies(policies []AdapterRetryPolicy) []AdapterRetryPolicy {
+	for _, policy := range policies {
+		if strings.TrimSpace(policy.Name) == codexOverloadedRetryPolicyName {
+			return policies
+		}
+	}
+	return append(policies, builtinCodexOverloadedRetryPolicy())
+}
+
+func builtinCodexOverloadedRetryPolicy() AdapterRetryPolicy {
+	enabled := true
+	return AdapterRetryPolicy{
+		Name:                     codexOverloadedRetryPolicyName,
+		Enabled:                  &enabled,
+		MaxAttempts:              3,
+		InitialDelay:             AdapterRetryDuration(250 * time.Millisecond),
+		MaxDelay:                 AdapterRetryDuration(2 * time.Second),
+		Multiplier:               2,
+		JitterFraction:           0.2,
+		RetryWhenResponseStarted: false,
+		Match: AdapterRetryMatchers{
+			Backends:          []string{"codex"},
+			Operations:        []string{"codex.responses.websocket.generate"},
+			ErrorClasses:      []string{"scanner_error", "websocket_error", "response_failed"},
+			MessageSubstrings: []string{"Our servers are currently overloaded. Please try again later."},
+		},
+	}
+}
+
+func normalizeAdapterRetryPolicy(policy *AdapterRetryPolicy) error {
+	policy.Name = strings.TrimSpace(policy.Name)
+	if policy.Name == "" {
+		return fmt.Errorf("adapter.retry.policies contains a policy without name")
+	}
+	if policy.Enabled == nil {
+		enabled := true
+		policy.Enabled = &enabled
+	}
+	if policy.MaxAttempts < 1 {
+		return fmt.Errorf("adapter.retry.policies.%s.max_attempts must be at least 1", policy.Name)
+	}
+	if policy.InitialDelay.Duration() < 0 {
+		return fmt.Errorf("adapter.retry.policies.%s.initial_delay must be non-negative", policy.Name)
+	}
+	if policy.MaxDelay.Duration() < 0 {
+		return fmt.Errorf("adapter.retry.policies.%s.max_delay must be non-negative", policy.Name)
+	}
+	if policy.MaxDelay.Duration() > 0 && policy.InitialDelay.Duration() > policy.MaxDelay.Duration() {
+		return fmt.Errorf("adapter.retry.policies.%s.initial_delay must be less than or equal to max_delay", policy.Name)
+	}
+	if policy.Multiplier < 0 {
+		return fmt.Errorf("adapter.retry.policies.%s.multiplier must be non-negative", policy.Name)
+	}
+	if policy.JitterFraction < 0 || policy.JitterFraction > 1 {
+		return fmt.Errorf("adapter.retry.policies.%s.jitter_fraction must be between 0 and 1", policy.Name)
+	}
+	normalizeStringSlice(&policy.Match.Backends)
+	normalizeStringSlice(&policy.Match.Operations)
+	normalizeStringSlice(&policy.Match.ErrorClasses)
+	normalizeStringSlice(&policy.Match.ErrorCodes)
+	normalizeStringSlice(&policy.Match.MessageSubstrings)
+	return nil
+}
+
+func normalizeStringSlice(values *[]string) {
+	if values == nil {
+		return
+	}
+	out := make([]string, 0, len(*values))
+	for _, value := range *values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	*values = out
+}
+
 func applyAdapterNoticeDefaultsAndValidate(notices *AdapterNotices) error {
 	if notices == nil {
 		return nil
@@ -528,7 +625,85 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 	if err := validateLoggingRotation("mitm.capture.rotation", mitm.Capture.Rotation); err != nil {
 		return err
 	}
+	captureRules, err := normalizeMITMCaptureRouteRules(mitm.CaptureRules)
+	if err != nil {
+		return err
+	}
+	mitm.CaptureRules = captureRules
 	return nil
+}
+
+func DefaultMITMCaptureRouteRules() []MITMCaptureRouteRule {
+	return []MITMCaptureRouteRule{
+		{
+			Concern:   "cursor.bidi",
+			Provider:  "cursor",
+			Method:    "POST",
+			PathExact: "/aiserver.v1.AiService/BidiAppend",
+		},
+		{
+			Concern:      "cursor.agent",
+			Provider:     "cursor",
+			PathContains: "AiService",
+		},
+		{
+			Concern:      "cursor.catalog",
+			Provider:     "cursor",
+			PathContains: "Model",
+		},
+		{
+			Concern:      "cursor.account",
+			Provider:     "cursor",
+			PathContains: "User",
+		},
+		{
+			Concern:      "cursor.telemetry",
+			Provider:     "cursor",
+			Host:         "telemetry.cursor.com",
+			PathContains: "telemetry",
+		},
+		{
+			Concern:      "cursor.filesync",
+			Provider:     "cursor",
+			PathContains: "FileSync",
+		},
+		{
+			Concern: "unknown",
+		},
+	}
+}
+
+func normalizeMITMCaptureRouteRules(rules []MITMCaptureRouteRule) ([]MITMCaptureRouteRule, error) {
+	if len(rules) == 0 {
+		return DefaultMITMCaptureRouteRules(), nil
+	}
+	normalizedRules := make([]MITMCaptureRouteRule, 0, len(rules))
+	for i, rule := range rules {
+		normalizedRule, err := normalizeMITMCaptureRouteRule(rule)
+		if err != nil {
+			return nil, fmt.Errorf("mitm.capture_rules[%d]: %w", i, err)
+		}
+		normalizedRules = append(normalizedRules, normalizedRule)
+	}
+	return normalizedRules, nil
+}
+
+func normalizeMITMCaptureRouteRule(rule MITMCaptureRouteRule) (MITMCaptureRouteRule, error) {
+	rule.Concern = strings.TrimSpace(rule.Concern)
+	if rule.Concern == "" {
+		return MITMCaptureRouteRule{}, fmt.Errorf("concern is required")
+	}
+	rule.Provider = normalizeMITMProviderName(rule.Provider)
+	if rule.Provider != "" && !isValidMITMProviderName(rule.Provider) {
+		return MITMCaptureRouteRule{}, fmt.Errorf("provider %q is invalid", rule.Provider)
+	}
+	rule.Host = strings.Trim(strings.ToLower(strings.TrimSpace(rule.Host)), ".")
+	rule.Method = strings.ToUpper(strings.TrimSpace(rule.Method))
+	rule.PathExact = strings.TrimSpace(rule.PathExact)
+	rule.PathPrefix = strings.TrimSpace(rule.PathPrefix)
+	rule.PathContains = strings.TrimSpace(rule.PathContains)
+	rule.ContentTypeContains = strings.ToLower(strings.TrimSpace(rule.ContentTypeContains))
+	return rule, nil
 }
 
 // applyAdapterReasoningDefaultsAndValidate validates the per-provider

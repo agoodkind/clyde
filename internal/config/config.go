@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -307,6 +308,65 @@ type AdapterConfig struct {
 	// See [internal/adapter/render/synthetic_content.go] for the marker
 	// format and ExtractSyntheticParts contract.
 	SyntheticContent AdapterSyntheticContent `json:"syntheticContent,omitzero" toml:"synthetic_content,omitempty"`
+	// Retry declares adapter-owned retry policies. The default set only
+	// includes the narrow Codex overload policy; there is no catch-all retry.
+	Retry AdapterRetry `json:"retry,omitzero" toml:"retry,omitempty"`
+}
+
+// AdapterRetry is the top-level retry config for adapter operations.
+type AdapterRetry struct {
+	Policies []AdapterRetryPolicy `json:"policies,omitempty" toml:"policies,omitempty"`
+}
+
+// AdapterRetryPolicy is one named retry rule. MaxAttempts is total attempts,
+// including the original attempt.
+type AdapterRetryPolicy struct {
+	Name                     string               `json:"name,omitempty" toml:"name,omitempty"`
+	Enabled                  *bool                `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	MaxAttempts              int                  `json:"maxAttempts,omitempty" toml:"max_attempts,omitempty"`
+	InitialDelay             AdapterRetryDuration `json:"initialDelay,omitempty" toml:"initial_delay,omitempty"`
+	MaxDelay                 AdapterRetryDuration `json:"maxDelay,omitempty" toml:"max_delay,omitempty"`
+	Multiplier               float64              `json:"multiplier,omitempty" toml:"multiplier,omitempty"`
+	JitterFraction           float64              `json:"jitterFraction,omitempty" toml:"jitter_fraction,omitempty"`
+	RetryWhenResponseStarted bool                 `json:"retryWhenResponseStarted,omitempty" toml:"retry_when_response_started,omitempty"`
+	Match                    AdapterRetryMatchers `json:"match,omitzero" toml:"match,omitempty"`
+}
+
+// AdapterRetryDuration accepts quoted Go duration strings in TOML while still
+// preserving duration typing inside the config model.
+type AdapterRetryDuration time.Duration
+
+func (d *AdapterRetryDuration) UnmarshalText(text []byte) error {
+	value := strings.TrimSpace(string(text))
+	if value == "" {
+		*d = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err == nil {
+		*d = AdapterRetryDuration(parsed)
+		return nil
+	}
+	numeric, numericErr := strconv.ParseInt(value, 10, 64)
+	if numericErr == nil {
+		*d = AdapterRetryDuration(time.Duration(numeric))
+		return nil
+	}
+	return err
+}
+
+func (d AdapterRetryDuration) Duration() time.Duration {
+	return time.Duration(d)
+}
+
+// AdapterRetryMatchers constrains when a retry policy applies.
+type AdapterRetryMatchers struct {
+	Backends          []string `json:"backends,omitempty" toml:"backends,omitempty"`
+	Operations        []string `json:"operations,omitempty" toml:"operations,omitempty"`
+	Statuses          []int    `json:"statuses,omitempty" toml:"statuses,omitempty"`
+	ErrorClasses      []string `json:"errorClasses,omitempty" toml:"error_classes,omitempty"`
+	ErrorCodes        []string `json:"errorCodes,omitempty" toml:"error_codes,omitempty"`
+	MessageSubstrings []string `json:"messageSubstrings,omitempty" toml:"message_substrings,omitempty"`
 }
 
 // AdapterSyntheticContent holds the per-provider synthetic envelope levers.
@@ -1093,12 +1153,13 @@ type Defaults struct {
 
 // MITMConfig configures the local capture proxy and its persistence.
 type MITMConfig struct {
-	EnabledDefault bool            `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
-	Providers      MITMProviderSet `json:"providers,omitempty" toml:"providers,omitempty"`
-	BodyMode       string          `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
-	CaptureDir     string          `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
-	Capture        MITMCapture     `json:"capture,omitzero" toml:"capture,omitempty"`
-	Drift          MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
+	EnabledDefault bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
+	Providers      MITMProviderSet        `json:"providers,omitempty" toml:"providers,omitempty"`
+	BodyMode       string                 `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
+	CaptureDir     string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
+	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
+	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
 }
 
 // MITMCapture configures MITM capture index file policy. Raw request and
@@ -1111,6 +1172,19 @@ type MITMCapture struct {
 // MITMProviderSet is the configured set of provider families routed through
 // the capture proxy. The special value "all" enables every provider family.
 type MITMProviderSet []string
+
+// MITMCaptureRouteRule classifies one captured MITM request into a concern.
+// Rules are evaluated in order, and every non-empty predicate must match.
+type MITMCaptureRouteRule struct {
+	Concern             string `json:"concern" toml:"concern"`
+	Provider            string `json:"provider,omitempty" toml:"provider,omitempty"`
+	Host                string `json:"host,omitempty" toml:"host,omitempty"`
+	Method              string `json:"method,omitempty" toml:"method,omitempty"`
+	PathExact           string `json:"pathExact,omitempty" toml:"path_exact,omitempty"`
+	PathPrefix          string `json:"pathPrefix,omitempty" toml:"path_prefix,omitempty"`
+	PathContains        string `json:"pathContains,omitempty" toml:"path_contains,omitempty"`
+	ContentTypeContains string `json:"contentTypeContains,omitempty" toml:"content_type_contains,omitempty"`
+}
 
 // MITMDriftConfig configures daemon-owned baseline refresh and drift
 // reporting. When Enabled, the daemon periodically reads the current

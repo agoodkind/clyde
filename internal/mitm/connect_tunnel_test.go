@@ -232,6 +232,9 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 		t.Fatalf("records = %d want 1: %#v", len(records), records)
 	}
 	record := records[0]
+	if record["concern"] != "cursor.bidi" {
+		t.Fatalf("concern = %q want cursor.bidi: %#v", record["concern"], record)
+	}
 	if record["request_id"] != requestID || record["original_request_id"] != "orig-123" || record["session_id"] != "sess-123" {
 		t.Fatalf("metadata ids not captured: %#v", record)
 	}
@@ -243,6 +246,10 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	}
 	requestRawPath := record["request_raw_path"].(string)
 	responseRawPath := record["response_raw_path"].(string)
+	wantRawPrefix := filepath.Join(captureDir, "concerns", "cursor.bidi", "raw", cursorHost)
+	if !strings.HasPrefix(requestRawPath, wantRawPrefix) || !strings.HasPrefix(responseRawPath, wantRawPrefix) {
+		t.Fatalf("raw paths = %q %q, want prefix %q", requestRawPath, responseRawPath, wantRawPrefix)
+	}
 	assertFileMode(t, requestRawPath, rawCaptureFileMode)
 	assertFileMode(t, responseRawPath, rawCaptureFileMode)
 	rawRequest := readFile(t, requestRawPath)
