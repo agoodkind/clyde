@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ import (
 var (
 	daemonExecutablePath     = os.Executable
 	daemonReplacementCommand = exec.Command
+	osNewFile                = os.NewFile
 	errDaemonAlreadyRunning  = errors.New("daemon already running")
 )
 
@@ -68,6 +70,7 @@ const (
 	envDaemonReloadChild        = "CLYDE_DAEMON_RELOAD_CHILD"
 	envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"
 	envDaemonReadyFD            = "CLYDE_DAEMON_READY_FD"
+	envDaemonSupervisorSocket   = "CLYDE_DAEMON_SUPERVISOR_SOCKET"
 )
 
 const (
@@ -77,6 +80,26 @@ const (
 )
 
 var errReloadBeforeProcessLock = errors.New("daemon reload is unavailable until this daemon owns the process lock")
+
+type replacementDaemonStarter interface {
+	startReplacementDaemon(context.Context, *slog.Logger, replacementDaemonRequest) (*replacementDaemonProcess, error)
+}
+
+type replacementDaemonRequest struct {
+	executablePath string
+	files          []*os.File
+	specs          []inheritedListenerSpec
+	readyWrite     *os.File
+	readyFD        int
+}
+
+type replacementDaemonProcess struct {
+	pid  int
+	wait func() error
+	kill func() error
+}
+
+type directReplacementDaemonStarter struct{}
 
 type adapterLaunchConfig struct {
 	Enabled bool
@@ -444,9 +467,32 @@ func daemonListener(socketPath string, inherited net.Listener) (net.Listener, er
 func loadInheritedRuntime() (inheritedRuntime, error) {
 	out := inheritedRuntime{listeners: make(map[string]net.Listener)}
 	raw := os.Getenv(envDaemonInheritedListeners)
-	if raw == "" {
-		return out, nil
+	if raw != "" {
+		var err error
+		out, err = loadInheritedListeners(raw, out)
+		if err != nil {
+			return out, err
+		}
 	}
+	if rawFD := os.Getenv(envDaemonReadyFD); rawFD != "" {
+		fd, err := strconv.Atoi(rawFD)
+		if err != nil {
+			slog.WarnContext(context.Background(), "daemon.reload.ready_fd_parse_failed",
+				"component", "daemon",
+				"ready_fd", rawFD,
+				"err", err,
+			)
+			return out, fmt.Errorf("parse ready fd: %w", err)
+		}
+		out.ready = osNewFile(uintptr(fd), "daemon-ready")
+		if out.ready == nil {
+			return out, fmt.Errorf("ready fd %d unavailable", fd)
+		}
+	}
+	return out, nil
+}
+
+func loadInheritedListeners(raw string, out inheritedRuntime) (inheritedRuntime, error) {
 	var specs []inheritedListenerSpec
 	if err := json.Unmarshal([]byte(raw), &specs); err != nil {
 		slog.WarnContext(context.Background(), "daemon.reload.inherited_specs_decode_failed",
@@ -456,7 +502,7 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 		return out, fmt.Errorf("decode listener specs: %w", err)
 	}
 	for _, spec := range specs {
-		file := os.NewFile(uintptr(spec.FD), spec.Name)
+		file := osNewFile(uintptr(spec.FD), spec.Name)
 		if file == nil {
 			return out, fmt.Errorf("listener %s fd %d unavailable", spec.Name, spec.FD)
 		}
@@ -479,21 +525,6 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 			unixListener.SetUnlinkOnClose(false)
 		}
 		out.listeners[spec.Name] = lis
-	}
-	if rawFD := os.Getenv(envDaemonReadyFD); rawFD != "" {
-		fd, err := strconv.Atoi(rawFD)
-		if err != nil {
-			slog.WarnContext(context.Background(), "daemon.reload.ready_fd_parse_failed",
-				"component", "daemon",
-				"ready_fd", rawFD,
-				"err", err,
-			)
-			return out, fmt.Errorf("parse ready fd: %w", err)
-		}
-		out.ready = os.NewFile(uintptr(fd), "daemon-reload-ready")
-		if out.ready == nil {
-			return out, fmt.Errorf("ready fd %d unavailable", fd)
-		}
 	}
 	return out, nil
 }
@@ -519,26 +550,22 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	defer func() { _ = readyWrite.Close() }()
 	readyFD := 3 + len(files)
 
-	cmd, err := startReplacementDaemon(log, executablePath, files, specs, readyWrite, readyFD)
+	starter := replacementDaemonStarterForCurrentPlatform()
+	proc, err := starter.startReplacementDaemon(ctx, log, replacementDaemonRequest{
+		executablePath: executablePath,
+		files:          files,
+		specs:          specs,
+		readyWrite:     readyWrite,
+		readyFD:        readyFD,
+	})
 	if err != nil {
 		return reloadReport{}, err
 	}
 	_ = readyWrite.Close()
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.WarnContext(ctx, "daemon.reload.replacement_wait_panicked",
-					"component", "daemon",
-					"new_pid", cmd.Process.Pid,
-					"panic", r,
-				)
-			}
-		}()
-		_ = cmd.Wait()
-	}()
+	watchReplacementDaemon(ctx, log, proc)
 
 	if err := waitForReplacementDaemon(ctx, readyRead); err != nil {
-		_ = cmd.Process.Kill()
+		_ = proc.kill()
 		return reloadReport{}, err
 	}
 	srv.preserveRuntimeDirsOnClose()
@@ -546,58 +573,83 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	if stopExclusive != nil {
 		stopExclusive("reload_handoff")
 	}
+	grpcDrainStarted := startReloadGRPCDrain(ctx, log, grpcServer, proc)
+	<-grpcDrainStarted
+	if releaseProcessLock != nil {
+		releaseProcessLock("reload_handoff")
+	}
+	return reloadReport{BinaryReloaded: true, NewPID: proc.pid}, nil
+}
+
+func watchReplacementDaemon(ctx context.Context, log *slog.Logger, proc *replacementDaemonProcess) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.reload.replacement_wait_panicked",
+					"component", "daemon",
+					"new_pid", proc.pid,
+					"panic", r,
+				)
+			}
+		}()
+		_ = proc.wait()
+	}()
+}
+
+func startReloadGRPCDrain(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, proc *replacementDaemonProcess) <-chan struct{} {
 	grpcDrainStarted := make(chan struct{})
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.WarnContext(ctx, "daemon.reload.grpc_drain_panicked",
 					"component", "daemon",
-					"new_pid", cmd.Process.Pid,
+					"new_pid", proc.pid,
 					"panic", r,
 				)
 			}
 		}()
 		log.InfoContext(ctx, "daemon.reload.draining_old_process",
 			"component", "daemon",
-			"new_pid", cmd.Process.Pid,
+			"new_pid", proc.pid,
 			"timeout", reloadGRPCDrainWait.String(),
 		)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			defer func() {
-				if r := recover(); r != nil {
-					log.WarnContext(ctx, "daemon.reload.grpc_graceful_stop_panicked",
-						"component", "daemon",
-						"new_pid", cmd.Process.Pid,
-						"panic", r,
-					)
-				}
-			}()
-			close(grpcDrainStarted)
-			grpcServer.GracefulStop()
-		}()
+		done := startGracefulGRPCStop(ctx, log, grpcServer, proc, grpcDrainStarted)
 		select {
 		case <-done:
 			log.InfoContext(ctx, "daemon.reload.old_process_grpc_drain_complete",
 				"component", "daemon",
-				"new_pid", cmd.Process.Pid,
+				"new_pid", proc.pid,
 			)
 		case <-time.After(reloadGRPCDrainWait):
 			log.WarnContext(ctx, "daemon.reload.old_process_grpc_drain_timeout",
 				"component", "daemon",
-				"new_pid", cmd.Process.Pid,
+				"new_pid", proc.pid,
 				"timeout", reloadGRPCDrainWait.String(),
 			)
 			grpcServer.Stop()
 			<-done
 		}
 	}()
-	<-grpcDrainStarted
-	if releaseProcessLock != nil {
-		releaseProcessLock("reload_handoff")
-	}
-	return reloadReport{BinaryReloaded: true, NewPID: cmd.Process.Pid}, nil
+	return grpcDrainStarted
+}
+
+func startGracefulGRPCStop(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, proc *replacementDaemonProcess, grpcDrainStarted chan<- struct{}) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.reload.grpc_graceful_stop_panicked",
+					"component", "daemon",
+					"new_pid", proc.pid,
+					"panic", r,
+				)
+			}
+		}()
+		close(grpcDrainStarted)
+		grpcServer.GracefulStop()
+	}()
+	return done
 }
 
 func validatedReplacementDaemonPath(ctx context.Context, log *slog.Logger) (string, error) {
@@ -619,34 +671,50 @@ func validatedReplacementDaemonPath(ctx context.Context, log *slog.Logger) (stri
 	return executablePath, nil
 }
 
-func startReplacementDaemon(log *slog.Logger, executablePath string, files []*os.File, specs []inheritedListenerSpec, readyWrite *os.File, readyFD int) (*exec.Cmd, error) {
-	cmd := daemonReplacementCommand(executablePath, "daemon")
+func replacementDaemonStarterForCurrentPlatform() replacementDaemonStarter {
+	return replacementDaemonStarterForPlatform(runtime.GOOS, os.Getenv(envDaemonSupervisorSocket))
+}
+
+func replacementDaemonStarterForPlatform(goos string, supervisorSocket string) replacementDaemonStarter {
+	if goos == "darwin" && strings.TrimSpace(supervisorSocket) != "" {
+		return supervisorReplacementDaemonStarter{socketPath: supervisorSocket}
+	}
+	return directReplacementDaemonStarter{}
+}
+
+func (directReplacementDaemonStarter) startReplacementDaemon(_ context.Context, log *slog.Logger, req replacementDaemonRequest) (*replacementDaemonProcess, error) {
+	cmd := daemonReplacementCommand(req.executablePath, "daemon")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	files = append(files, readyWrite)
-	cmd.ExtraFiles = files
-	specJSON, err := json.Marshal(specs)
+	extraFiles := append([]*os.File{}, req.files...)
+	extraFiles = append(extraFiles, req.readyWrite)
+	cmd.ExtraFiles = extraFiles
+	specJSON, err := json.Marshal(req.specs)
 	if err != nil {
 		log.Warn("daemon.reload.inherited_listeners_encode_failed",
 			"component", "daemon",
-			"path", executablePath,
+			"path", req.executablePath,
 			"err", err)
 		return nil, fmt.Errorf("encode inherited listeners: %w", err)
 	}
 	cmd.Env = append(os.Environ(),
 		envDaemonReloadChild+"=1",
 		envDaemonInheritedListeners+"="+string(specJSON),
-		envDaemonReadyFD+"="+strconv.Itoa(readyFD),
+		envDaemonReadyFD+"="+strconv.Itoa(req.readyFD),
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		log.Warn("daemon.reload.replacement_start_failed",
 			"component", "daemon",
-			"path", executablePath,
+			"path", req.executablePath,
 			"err", err)
 		return nil, fmt.Errorf("start replacement daemon: %w", err)
 	}
-	return cmd, nil
+	return &replacementDaemonProcess{
+		pid:  cmd.Process.Pid,
+		wait: cmd.Wait,
+		kill: cmd.Process.Kill,
+	}, nil
 }
 
 func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {

@@ -365,10 +365,10 @@ func lockDaemonReload(ctx context.Context) (func(), error) {
 func findDaemonPID() (int, error) {
 	bg := context.Background()
 	log := daemonClientLog(bg)
-	out, err := exec.Command("launchctl", "list", "io.goodkind.clyde.daemon").Output()
+	out, err := clientCommandRunner.Output("launchctl", "list", "io.goodkind.clyde.daemon")
 	if err != nil {
 		log.DebugContext(bg, "daemon.client.find_pid.launchctl_failed", "err", err)
-		return 0, err
+		return 0, fmt.Errorf("list launch agent pid: %w", err)
 	}
 	for _, line := range splitLines(string(out)) {
 		line = trimSpace(line)
@@ -550,6 +550,11 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 	}
 	// Fast path: daemon is already running.
 	if client, err := connect(ctx); err == nil {
+		if err := ensureConnectedDaemonOwnedByLaunchd(ctx); err != nil {
+			_ = client.Close()
+			log.WarnContext(ctx, "daemon.client.connect_or_start.unowned_daemon", "err", err)
+			return nil, err
+		}
 		log.DebugContext(ctx, "daemon.client.connect_or_start.fast_path")
 		return client, nil
 	}
@@ -585,14 +590,19 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 
 	// Double-check: another process may have started the daemon while we waited.
 	if client, err := connect(ctx); err == nil {
+		if err := ensureConnectedDaemonOwnedByLaunchd(ctx); err != nil {
+			_ = client.Close()
+			log.WarnContext(ctx, "daemon.client.connect_or_start.unowned_daemon_after_lock", "err", err)
+			return nil, err
+		}
 		log.DebugContext(ctx, "daemon.client.connect_or_start.ready_after_lock_wait")
 		return client, nil
 	}
 
 	log.DebugContext(ctx, "daemon.client.connect_or_start.starting_daemon")
 	// We hold the lock and daemon is not running. Start it.
-	// Prefer launchctl on macOS (if the agent is registered), fall back to direct spawn.
-	if err := startDaemon(); err != nil {
+	// Darwin startup must stay under launchd ownership; other platforms direct-spawn.
+	if err := startDaemon(ctx); err != nil {
 		log.WarnContext(ctx, "daemon.client.connect_or_start.start_daemon_failed", "err", err)
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
@@ -607,6 +617,11 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 		case <-time.After(delay):
 		}
 		if client, err := connect(ctx); err == nil {
+			if err := ensureConnectedDaemonOwnedByLaunchd(ctx); err != nil {
+				_ = client.Close()
+				log.WarnContext(ctx, "daemon.client.connect_or_start.unowned_daemon_after_start", "err", err)
+				return nil, err
+			}
 			log.DebugContext(ctx, "daemon.client.connect_or_start.ready_after_start", "attempt", attempt)
 			return client, nil
 		}
@@ -615,6 +630,22 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 
 	log.DebugContext(ctx, "daemon.client.connect_or_start.not_ready_after_retries")
 	return nil, fmt.Errorf("daemon did not become ready after start")
+}
+
+func ensureConnectedDaemonOwnedByLaunchd(ctx context.Context) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	uid := strconv.Itoa(os.Getuid())
+	target := "gui/" + uid + "/" + launchAgentLabel
+	if err := clientCommandRunner.Run("launchctl", "print", target); err != nil {
+		daemonClientLog(ctx).DebugContext(ctx, "daemon.client.launchd_owner_check_failed",
+			"target", target,
+			"err", err)
+		return fmt.Errorf("daemon is reachable but launchd does not own %s; run `make service-install` or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/%s.plist`: %w",
+			target, launchAgentLabel, err)
+	}
+	return nil
 }
 
 func (c *Client) Connection() *grpc.ClientConn {
@@ -1166,6 +1197,31 @@ func ExportSessionViaDaemon(ctx context.Context, req *clydev1.ExportSessionReque
 
 const launchAgentLabel = "io.goodkind.clyde.daemon"
 
+type daemonCommandRunner interface {
+	Run(name string, args ...string) error
+	Output(name string, args ...string) ([]byte, error)
+	CombinedOutput(name string, args ...string) ([]byte, error)
+}
+
+type osDaemonCommandRunner struct{}
+
+func (osDaemonCommandRunner) Run(name string, args ...string) error {
+	return exec.Command(name, args...).Run()
+}
+
+func (osDaemonCommandRunner) Output(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+func (osDaemonCommandRunner) CombinedOutput(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+var (
+	clientCommandRunner          daemonCommandRunner = osDaemonCommandRunner{}
+	spawnDaemonDirectForPlatform                     = spawnDaemonDirect
+)
+
 // RestartManagedDaemon rewrites the local LaunchAgent target when needed and
 // restarts the daemon under launchd on macOS. Other platforms fall back to a
 // best-effort direct spawn.
@@ -1173,7 +1229,7 @@ func RestartManagedDaemon(ctx context.Context) error {
 	log := daemonClientLog(ctx)
 	if runtime.GOOS != "darwin" {
 		log.DebugContext(ctx, "daemon.client.restart.non_darwin_spawn_direct")
-		return spawnDaemonDirect()
+		return spawnDaemonDirectForPlatform()
 	}
 	plistPath, err := ensureDarwinLaunchAgent()
 	if err != nil {
@@ -1182,60 +1238,67 @@ func RestartManagedDaemon(ctx context.Context) error {
 	}
 	uid := strconv.Itoa(os.Getuid())
 	target := "gui/" + uid + "/" + launchAgentLabel
-	_ = exec.Command("launchctl", "bootout", target).Run()
-	if out, err := exec.Command("launchctl", "bootstrap", "gui/"+uid, plistPath).CombinedOutput(); err != nil {
+	_ = clientCommandRunner.Run("launchctl", "bootout", target)
+	if out, err := clientCommandRunner.CombinedOutput("launchctl", "bootstrap", "gui/"+uid, plistPath); err != nil {
 		log.WarnContext(ctx, "daemon.client.restart.bootstrap_failed",
 			"plist_path", plistPath,
 			"err", err,
 			"output", string(out))
-		return fmt.Errorf("bootstrap launch agent: %w", err)
+		return fmt.Errorf("bootstrap launch agent %s from %s: %w: %s", target, plistPath, err, strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+	if out, err := clientCommandRunner.CombinedOutput("launchctl", "kickstart", "-k", target); err != nil {
 		log.WarnContext(ctx, "daemon.client.restart.kickstart_failed",
 			"target", target,
 			"err", err,
 			"output", string(out))
-		return fmt.Errorf("kickstart launch agent: %w", err)
+		return fmt.Errorf("kickstart launch agent %s: %w: %s", target, err, strings.TrimSpace(string(out)))
 	}
 	log.DebugContext(ctx, "daemon.client.restart.ok", "target", target, "plist_path", plistPath)
 	return nil
 }
 
-// startDaemon starts the daemon process. On macOS, tries launchctl kickstart
-// first (if the LaunchAgent is registered), falling back to direct spawn.
-func startDaemon() error {
-	bg := context.Background()
-	log := daemonClientLog(bg)
+// startDaemon starts the daemon process. On macOS, launchd ownership is
+// mandatory; other platforms retain the direct-spawn fallback.
+func startDaemon(ctx context.Context) error {
+	log := daemonClientLog(ctx)
 	if runtime.GOOS == "darwin" {
-		plistPath, err := ensureDarwinLaunchAgent()
-		if err != nil {
-			log.DebugContext(bg, "daemon.client.start_daemon.ensure_launch_agent_failed", "err", err)
-		}
-		uid := strconv.Itoa(os.Getuid())
-		target := "gui/" + uid + "/" + launchAgentLabel
-		if err := exec.Command("launchctl", "kickstart", "-k", target).Run(); err == nil {
-			log.DebugContext(bg, "daemon.client.start_daemon.kickstart_ok", "target", target)
-			return nil
-		}
-		if plistPath != "" {
-			if out, err := exec.Command("launchctl", "bootstrap", "gui/"+uid, plistPath).CombinedOutput(); err == nil {
-				log.DebugContext(bg, "daemon.client.start_daemon.bootstrap_ok", "target", target, "plist_path", plistPath)
-				if err := exec.Command("launchctl", "kickstart", "-k", target).Run(); err == nil {
-					log.DebugContext(bg, "daemon.client.start_daemon.kickstart_after_bootstrap_ok", "target", target)
-					return nil
-				}
-			} else {
-				log.DebugContext(bg, "daemon.client.start_daemon.bootstrap_failed",
-					"plist_path", plistPath,
-					"err", err,
-					"output", string(out))
-			}
-		}
-		log.DebugContext(bg, "daemon.client.start_daemon.kickstart_failed_try_direct", "target", target)
-		// launchctl failed (agent not registered)  --  fall through to direct spawn
+		return startDarwinLaunchdDaemon(ctx, log)
 	}
 
-	return spawnDaemonDirect()
+	return spawnDaemonDirectForPlatform()
+}
+
+func startDarwinLaunchdDaemon(ctx context.Context, log *slog.Logger) error {
+	plistPath, err := ensureDarwinLaunchAgent()
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.start_daemon.ensure_launch_agent_failed", "err", err)
+		return fmt.Errorf("ensure launch agent %s: %w", launchAgentLabel, err)
+	}
+	uid := strconv.Itoa(os.Getuid())
+	domain := "gui/" + uid
+	target := domain + "/" + launchAgentLabel
+	if err := clientCommandRunner.Run("launchctl", "kickstart", "-k", target); err == nil {
+		log.DebugContext(ctx, "daemon.client.start_daemon.kickstart_ok", "target", target)
+		return nil
+	}
+
+	out, err := clientCommandRunner.CombinedOutput("launchctl", "bootstrap", domain, plistPath)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.start_daemon.bootstrap_failed",
+			"plist_path", plistPath,
+			"err", err,
+			"output", string(out))
+		return fmt.Errorf("bootstrap launch agent %s from %s: %w: %s", target, plistPath, err, strings.TrimSpace(string(out)))
+	}
+	log.DebugContext(ctx, "daemon.client.start_daemon.bootstrap_ok", "target", target, "plist_path", plistPath)
+	if err := clientCommandRunner.Run("launchctl", "kickstart", "-k", target); err != nil {
+		log.DebugContext(ctx, "daemon.client.start_daemon.kickstart_after_bootstrap_failed",
+			"target", target,
+			"err", err)
+		return fmt.Errorf("kickstart launch agent %s after bootstrap: %w", target, err)
+	}
+	log.DebugContext(ctx, "daemon.client.start_daemon.kickstart_after_bootstrap_ok", "target", target)
+	return nil
 }
 
 // spawnDaemonDirect starts the daemon as a detached child process.

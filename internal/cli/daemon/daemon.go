@@ -23,12 +23,28 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 				"version", f.Build.Version,
 			)
 			log := slog.Default().With("component", "daemon")
-			return daemonsvc.Run(log, pruneLoop(), oauthLoop(), driftLoop())
+			return daemonsvc.RunCommand(log, pruneLoop(), oauthLoop(), driftLoop())
 		},
 	}
+	cmd.AddCommand(newWorkerCmd(f))
 	cmd.AddCommand(newReloadCmd(f))
 	cmd.AddCommand(newLaunchRemoteWorkerCmd(f))
 	return cmd
+}
+
+func newWorkerCmd(_ *cli.Factory) *cobra.Command {
+	return &cobra.Command{
+		Use:    "worker",
+		Short:  "Run the daemon worker service",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slog.Info("cli.daemon.worker.invoked",
+				"component", "cli",
+			)
+			log := slog.Default().With("component", "daemon")
+			return daemonsvc.Run(log, pruneLoop(), oauthLoop(), driftLoop())
+		},
+	}
 }
 
 func newReloadCmd(f *cli.Factory) *cobra.Command {

@@ -371,9 +371,10 @@ func codexRenderEventStartsClientResponse(event adapterrender.Event) bool {
 		adapterrender.EventAssistantRefusalDelta,
 		adapterrender.EventReasoningSignaled,
 		adapterrender.EventReasoningDelta,
-		adapterrender.EventReasoningFinished,
 		adapterrender.EventToolCallDelta:
 		return true
+	case adapterrender.EventReasoningFinished:
+		return false
 	default:
 		return false
 	}

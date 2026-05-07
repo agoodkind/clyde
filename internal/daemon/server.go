@@ -94,6 +94,8 @@ type Server struct {
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
 	contextRefreshSem chan contextRefreshPermit
+	contextUsageCache *contextUsageStateCache
+	contextUsageProbe contextUsageProbeFunc
 
 	reloadMu sync.Mutex
 	reloadFn func(context.Context) (reloadReport, error)
@@ -315,6 +317,8 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		contextMu:                       sync.Mutex{},
 		contextStates:                   make(map[string]sessionContextState),
 		contextRefreshSem:               make(chan contextRefreshPermit, 2),
+		contextUsageCache:               newContextUsageStateCache(30 * time.Second),
+		contextUsageProbe:               nil,
 		reloadMu:                        sync.Mutex{},
 		reloadFn:                        nil,
 		skipRuntimeCleanup:              atomic.Bool{},
@@ -1358,55 +1362,79 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 }
 
 func (s *Server) contextStateForSession(ctx context.Context, sess *session.Session) sessionContextState {
+	_ = ctx
 	if sess == nil || !sess.SessionProviderCapabilities().ContextUsageInspect || sess.Name == "" || sess.Metadata.ProviderSessionID() == "" || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return sessionContextState{}
 	}
 
-	s.contextMu.Lock()
-	state := s.contextStates[sess.Name]
-	needsRefresh := false
-	switch {
-	case state.Refreshing:
-	case !state.RetryAfter.IsZero() && daemonNow().Before(state.RetryAfter):
-	case !state.Loaded:
-		needsRefresh = true
-	case transcriptNewerThan(sess.Metadata.ProviderTranscriptPath(), state.Usage.CapturedAt):
-		needsRefresh = true
+	state, ok := s.contextUsageStateCache().Get(sess, daemonNow())
+	if !ok {
+		return sessionContextState{}
 	}
-	if needsRefresh {
-		state.Refreshing = true
-		if !state.Loaded {
-			state.Status = "loading..."
-		}
-		s.contextStates[sess.Name] = state
-		refreshCtx := daemonDetachedCorrelationContext(ctx, s.log)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					s.log.WarnContext(refreshCtx, "daemon.context_usage.refresh_panicked",
-						"component", "daemon",
-						"session", sess.Name,
-						"panic", r,
-					)
-				}
-			}()
-			s.refreshContextUsage(refreshCtx, sess)
-		}()
-	}
-	state = s.contextStates[sess.Name]
-	s.contextMu.Unlock()
 	return state
 }
 
-func transcriptNewerThan(path string, capturedAt time.Time) bool {
-	if strings.TrimSpace(path) == "" || capturedAt.IsZero() {
-		return true
+func (s *Server) contextUsageStateCache() *contextUsageStateCache {
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+	if s.contextUsageCache == nil {
+		s.contextUsageCache = newContextUsageStateCache(30 * time.Second)
 	}
-	info, err := os.Stat(path)
+	return s.contextUsageCache
+}
+
+func (s *Server) contextUsageProbeFn() contextUsageProbeFunc {
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+	if s.contextUsageProbe != nil {
+		return s.contextUsageProbe
+	}
+	return s.probeContextUsageState
+}
+
+func (s *Server) refreshContextUsageState(ctx context.Context, sess *session.Session) (sessionContextState, error) {
+	probe := s.contextUsageProbeFn()
+	return s.contextUsageStateCache().Refresh(ctx, sess, daemonNow(), probe)
+}
+
+func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Session) (sessionContextState, error) {
+	release, err := s.acquireContextRefreshPermit(ctx)
 	if err != nil {
-		return false
+		return emptySessionContextState(), err
 	}
-	return info.ModTime().After(capturedAt)
+	defer release()
+	usage, err := compactengine.ProbeContextUsage(ctx, compactengine.ProbeOptions{
+		SessionID:   sess.Metadata.ProviderSessionID(),
+		WorkDir:     s.contextProbeWorkDir(sess),
+		Timeout:     60 * time.Second,
+		ForkSession: true,
+	})
+	if err != nil {
+		return emptySessionContextState(), fmt.Errorf("probe context usage: %w", err)
+	}
+	return sessionContextState{
+		Usage: contextusage.Usage{
+			ContextUsage: usage,
+			CapturedAt:   daemonNow().UTC(),
+			Source:       contextusage.SourceProbe,
+		},
+		Loaded:     true,
+		Status:     "",
+		Refreshing: false,
+		RetryAfter: time.Time{},
+	}, nil
+}
+
+func (s *Server) acquireContextRefreshPermit(ctx context.Context) (func(), error) {
+	if s.contextRefreshSem == nil {
+		return func() {}, nil
+	}
+	select {
+	case s.contextRefreshSem <- contextRefreshPermit{Acquired: true}:
+		return func() { <-s.contextRefreshSem }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("acquire context refresh permit: %w", ctx.Err())
+	}
 }
 
 func (s *Server) contextProbeWorkDir(sess *session.Session) string {
@@ -1428,72 +1456,6 @@ func (s *Server) contextProbeWorkDir(sess *session.Session) string {
 	return ""
 }
 
-func (s *Server) refreshContextUsage(parent context.Context, sess *session.Session) {
-	if sess == nil {
-		return
-	}
-	s.contextRefreshSem <- contextRefreshPermit{Acquired: true}
-	defer func() { <-s.contextRefreshSem }()
-
-	workSess := *sess
-	workSess.Metadata = sess.Metadata
-	workSess.Metadata.WorkDir = s.contextProbeWorkDir(sess)
-
-	ctx, cancel := context.WithTimeout(parent, 75*time.Second)
-	defer cancel()
-
-	usage, err := contextusage.NewDefault(&workSess, "", "").Usage(ctx, contextusage.UsageOptions{})
-
-	s.contextMu.Lock()
-	state := s.contextStates[sess.Name]
-	state.Refreshing = false
-	if err != nil {
-		if !state.Loaded {
-			state.Status = "failed; retrying"
-		}
-		state.RetryAfter = daemonNow().Add(30 * time.Second)
-		s.contextStates[sess.Name] = state
-		s.contextMu.Unlock()
-		s.log.WarnContext(ctx, "daemon.context_usage.refresh.failed",
-			"component", "daemon",
-			"subcomponent", "context_usage",
-			"session", sess.Name,
-			"session_id", sess.Metadata.ProviderSessionID(),
-			"work_dir", workSess.Metadata.WorkDir,
-			"err", err)
-	} else {
-		state.Usage = usage
-		state.Loaded = true
-		state.Status = ""
-		state.RetryAfter = time.Time{}
-		s.contextStates[sess.Name] = state
-		s.contextMu.Unlock()
-		s.log.InfoContext(ctx, "daemon.context_usage.refresh.completed",
-			"component", "daemon",
-			"subcomponent", "context_usage",
-			"session", sess.Name,
-			"session_id", sess.Metadata.ProviderSessionID(),
-			"source", usage.Source,
-			"context_total", usage.TotalTokens,
-			"context_limit", usage.MaxTokens)
-	}
-
-	store, storeErr := session.NewGlobalFileStore()
-	if storeErr != nil {
-		s.log.WarnContext(ctx, "daemon.context_usage.publish.store_failed",
-			"component", "daemon",
-			"subcomponent", "context_usage",
-			"session", sess.Name,
-			"err", storeErr)
-		return
-	}
-	latest, getErr := store.Get(sess.Name)
-	if getErr != nil || latest == nil {
-		return
-	}
-	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_UPDATED, store, latest, "")
-}
-
 func (s *Server) renameContextState(oldName, newName string) {
 	if oldName == "" || newName == "" || oldName == newName {
 		return
@@ -1504,6 +1466,9 @@ func (s *Server) renameContextState(oldName, newName string) {
 		delete(s.contextStates, oldName)
 	}
 	s.contextMu.Unlock()
+	if s.contextUsageCache != nil {
+		s.contextUsageCache.RenameSession(oldName, newName)
+	}
 }
 
 func (s *Server) deleteContextState(name string) {
@@ -1513,6 +1478,9 @@ func (s *Server) deleteContextState(name string) {
 	s.contextMu.Lock()
 	delete(s.contextStates, name)
 	s.contextMu.Unlock()
+	if s.contextUsageCache != nil {
+		s.contextUsageCache.DeleteSession(name)
+	}
 }
 
 func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, sess *session.Session) *clydev1.SessionSummary {
@@ -2421,12 +2389,7 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	usage, err := compactengine.ProbeContextUsage(ctx, compactengine.ProbeOptions{
-		SessionID:   sess.Metadata.ProviderSessionID(),
-		WorkDir:     s.contextProbeWorkDir(sess),
-		Timeout:     60 * time.Second,
-		ForkSession: true,
-	})
+	state, err := s.refreshContextUsageState(ctx, sess)
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.context_usage.probe.failed",
 			"component", "daemon",
@@ -2437,6 +2400,7 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 			"err", err)
 		return nil, status.Errorf(codes.Internal, "probe context usage: %v", err)
 	}
+	usage := state.Usage
 	resp := &clydev1.ProbeContextUsageResponse{
 		SessionName: sess.Name,
 		SessionId:   sess.Metadata.ProviderSessionID(),

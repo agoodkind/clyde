@@ -82,13 +82,24 @@ setup-hooks: ## Configure git hooks
 	@echo "git hooks configured"
 
 # ---------------------------------------------------------------------------
-# Deploy: install canonical binary and reload daemon.
-# Override of canonical install -> service-restart pattern: clyde supports
-# `clyde daemon reload` for a hot reload in addition to service restart.
+# Deploy: install canonical binary, ensure supervisor ownership, reload daemon.
+# Clyde keeps `clyde daemon reload` as the binary-handoff path, but launchd or
+# systemd must own normal deployed daemon startup before the reload RPC runs.
 # ---------------------------------------------------------------------------
 
-deploy: install ## Install binary and reload the daemon (or install agent if not loaded)
-	@"$(INSTALL_BIN)" daemon reload 2>/dev/null || $(MAKE) service-install
+deploy: install ## Install binary, ensure supervisor ownership, reload daemon, and print service status
+	@$(MAKE) service-install
+	@for attempt in 1 2 3 4 5; do \
+		if "$(INSTALL_BIN)" daemon reload; then \
+			break; \
+		fi; \
+		if [ "$$attempt" = "5" ]; then \
+			echo "deploy: daemon reload failed after supervisor start" >&2; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+	done
+	@$(MAKE) service-status
 
 # ---------------------------------------------------------------------------
 # Claude Code SessionStart hook (jq-based ~/.claude/settings.json edit).
