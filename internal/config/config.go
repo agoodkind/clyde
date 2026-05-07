@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -253,6 +254,65 @@ type AdapterConfig struct {
 	// See [internal/adapter/render/synthetic_content.go] for the marker
 	// format and ExtractSyntheticParts contract.
 	SyntheticContent AdapterSyntheticContent `json:"syntheticContent,omitzero" toml:"synthetic_content,omitempty"`
+	// Retry declares adapter-owned retry policies. The default set only
+	// includes the narrow Codex overload policy; there is no catch-all retry.
+	Retry AdapterRetry `json:"retry,omitzero" toml:"retry,omitempty"`
+}
+
+// AdapterRetry is the top-level retry config for adapter operations.
+type AdapterRetry struct {
+	Policies []AdapterRetryPolicy `json:"policies,omitempty" toml:"policies,omitempty"`
+}
+
+// AdapterRetryPolicy is one named retry rule. MaxAttempts is total attempts,
+// including the original attempt.
+type AdapterRetryPolicy struct {
+	Name                     string               `json:"name,omitempty" toml:"name,omitempty"`
+	Enabled                  *bool                `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	MaxAttempts              int                  `json:"maxAttempts,omitempty" toml:"max_attempts,omitempty"`
+	InitialDelay             AdapterRetryDuration `json:"initialDelay,omitempty" toml:"initial_delay,omitempty"`
+	MaxDelay                 AdapterRetryDuration `json:"maxDelay,omitempty" toml:"max_delay,omitempty"`
+	Multiplier               float64              `json:"multiplier,omitempty" toml:"multiplier,omitempty"`
+	JitterFraction           float64              `json:"jitterFraction,omitempty" toml:"jitter_fraction,omitempty"`
+	RetryWhenResponseStarted bool                 `json:"retryWhenResponseStarted,omitempty" toml:"retry_when_response_started,omitempty"`
+	Match                    AdapterRetryMatchers `json:"match,omitzero" toml:"match,omitempty"`
+}
+
+// AdapterRetryDuration accepts quoted Go duration strings in TOML while still
+// preserving duration typing inside the config model.
+type AdapterRetryDuration time.Duration
+
+func (d *AdapterRetryDuration) UnmarshalText(text []byte) error {
+	value := strings.TrimSpace(string(text))
+	if value == "" {
+		*d = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err == nil {
+		*d = AdapterRetryDuration(parsed)
+		return nil
+	}
+	numeric, numericErr := strconv.ParseInt(value, 10, 64)
+	if numericErr == nil {
+		*d = AdapterRetryDuration(time.Duration(numeric))
+		return nil
+	}
+	return err
+}
+
+func (d AdapterRetryDuration) Duration() time.Duration {
+	return time.Duration(d)
+}
+
+// AdapterRetryMatchers constrains when a retry policy applies.
+type AdapterRetryMatchers struct {
+	Backends          []string `json:"backends,omitempty" toml:"backends,omitempty"`
+	Operations        []string `json:"operations,omitempty" toml:"operations,omitempty"`
+	Statuses          []int    `json:"statuses,omitempty" toml:"statuses,omitempty"`
+	ErrorClasses      []string `json:"errorClasses,omitempty" toml:"error_classes,omitempty"`
+	ErrorCodes        []string `json:"errorCodes,omitempty" toml:"error_codes,omitempty"`
+	MessageSubstrings []string `json:"messageSubstrings,omitempty" toml:"message_substrings,omitempty"`
 }
 
 // AdapterSyntheticContent holds the per-provider synthetic envelope levers.

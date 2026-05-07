@@ -13,6 +13,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -34,6 +35,7 @@ type Provider struct {
 	bodyLog         BodyLogConfig
 	bodyLogProvider BodyLogConfigProvider
 	fileLog         FileLogRotationConfig
+	retryPolicies   []adapterretry.Policy
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -82,6 +84,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		bodyLog:         opts.BodyLog,
 		bodyLogProvider: opts.BodyLogProvider,
 		fileLog:         opts.FileLog,
+		retryPolicies:   adapterretry.FromConfig(deps.Config.Retry),
 	}
 }
 
@@ -148,6 +151,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		WireCaptureMode:                WireCaptureMode(p.cfg.ResolvedCodexWireCaptureMode()),
 		RoundTripEncrypted:             RoundTripEncrypted(p.cfg.Reasoning.ResolvedRoundTripEncrypted()),
 		RoundTripSummary:               RoundTripSummary(p.cfg.Reasoning.ResolvedRoundTripSummary()),
+		RetryPolicies:                  p.retryPolicies,
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{

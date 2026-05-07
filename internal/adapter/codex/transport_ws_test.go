@@ -15,7 +15,10 @@ import (
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 )
+
+const overloadedMessageForRetryTest = "Our servers are currently overloaded. Please try again later."
 
 func runWebsocketTransportForTest(
 	ctx context.Context,
@@ -450,6 +453,216 @@ func TestRunWebsocketTransportReturnsTopLevelErrorFrame(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "Unsupported parameter: prompt_cache_retention") {
 		t.Fatalf("err=%v want upstream websocket error", err)
+	}
+}
+
+func TestRunWebsocketTransportRetriesOverloadedThenSucceeds(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		if attempt == 1 {
+			writeWebsocketEventForTest(t, conn, map[string]any{
+				"type":  "response.failed",
+				"error": map[string]any{"message": overloadedMessageForRetryTest},
+			})
+			return
+		}
+		writeWebsocketEventForTest(t, conn, map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-retry"}})
+		writeWebsocketEventForTest(t, conn, map[string]any{"type": "response.output_text.delta", "delta": "ok"})
+		writeWebsocketEventForTest(t, conn, map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp-retry", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}}})
+	}))
+	defer server.Close()
+
+	var text strings.Builder
+	result, err := runWebsocketTransportEventsWithRetry(context.Background(), WebsocketTransportConfig{
+		URL:           "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:         "test-token",
+		RequestID:     "req-retry-success",
+		Alias:         "gpt-5.4",
+		RetryPolicies: codexOverloadedRetryPolicyForTest(),
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
+		if event.Kind == adapterrender.EventAssistantTextDelta {
+			text.WriteString(event.Text)
+		}
+		return nil
+	}, func(context.Context, time.Duration) error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("RunWebsocketTransportEvents: %v", err)
+	}
+	if result.ResponseID != "resp-retry" {
+		t.Fatalf("response_id=%q want resp-retry", result.ResponseID)
+	}
+	if text.String() != "ok" {
+		t.Fatalf("text=%q want ok", text.String())
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts=%d want 2", attempts.Load())
+	}
+}
+
+func TestRunWebsocketTransportExhaustsOverloadedRetries(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		writeWebsocketEventForTest(t, conn, map[string]any{
+			"type":  "response.failed",
+			"error": map[string]any{"message": overloadedMessageForRetryTest},
+		})
+	}))
+	defer server.Close()
+
+	_, err := runWebsocketTransportEventsWithRetry(context.Background(), WebsocketTransportConfig{
+		URL:           "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:         "test-token",
+		RequestID:     "req-retry-exhausted",
+		Alias:         "gpt-5.4",
+		RetryPolicies: codexOverloadedRetryPolicyForTest(),
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(adapterrender.Event) error {
+		return nil
+	}, func(context.Context, time.Duration) error { return nil }, nil)
+	if err == nil || !strings.Contains(err.Error(), overloadedMessageForRetryTest) {
+		t.Fatalf("err=%v want overloaded error", err)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("attempts=%d want 3", attempts.Load())
+	}
+}
+
+func TestRunWebsocketTransportDoesNotRetryNonRetryableFailure(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		writeWebsocketEventForTest(t, conn, map[string]any{
+			"type":  "response.failed",
+			"error": map[string]any{"message": "Your input exceeds the context window of this model. Please adjust your input and try again."},
+		})
+	}))
+	defer server.Close()
+
+	_, err := runWebsocketTransportEventsWithRetry(context.Background(), WebsocketTransportConfig{
+		URL:           "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:         "test-token",
+		RequestID:     "req-retry-nonretryable",
+		Alias:         "gpt-5.4",
+		RetryPolicies: codexOverloadedRetryPolicyForTest(),
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(adapterrender.Event) error {
+		return nil
+	}, func(context.Context, time.Duration) error { return nil }, nil)
+	if err == nil {
+		t.Fatalf("err=nil want context window error")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts=%d want 1", attempts.Load())
+	}
+}
+
+func TestRunWebsocketTransportDoesNotRetryAfterClientVisibleOutput(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		writeWebsocketEventForTest(t, conn, map[string]any{"type": "response.output_text.delta", "delta": "partial"})
+		writeWebsocketEventForTest(t, conn, map[string]any{
+			"type":  "response.failed",
+			"error": map[string]any{"message": overloadedMessageForRetryTest},
+		})
+	}))
+	defer server.Close()
+
+	var text strings.Builder
+	_, err := runWebsocketTransportEventsWithRetry(context.Background(), WebsocketTransportConfig{
+		URL:           "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:         "test-token",
+		RequestID:     "req-retry-started",
+		Alias:         "gpt-5.4",
+		RetryPolicies: codexOverloadedRetryPolicyForTest(),
+	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
+		if event.Kind == adapterrender.EventAssistantTextDelta {
+			text.WriteString(event.Text)
+		}
+		return nil
+	}, func(context.Context, time.Duration) error { return nil }, nil)
+	if err == nil || !strings.Contains(err.Error(), overloadedMessageForRetryTest) {
+		t.Fatalf("err=%v want overloaded error", err)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts=%d want 1", attempts.Load())
+	}
+	if text.String() != "partial" {
+		t.Fatalf("text=%q want partial", text.String())
+	}
+}
+
+func codexOverloadedRetryPolicyForTest() []adapterretry.Policy {
+	return []adapterretry.Policy{{
+		Name:                     "codex.responses.overloaded",
+		Enabled:                  true,
+		MaxAttempts:              3,
+		InitialDelay:             0,
+		MaxDelay:                 0,
+		Multiplier:               1,
+		JitterFraction:           0,
+		RetryWhenResponseStarted: false,
+		Match: adapterretry.Matchers{
+			Backends:          []string{"codex"},
+			Operations:        []string{"codex.responses.websocket.generate"},
+			ErrorClasses:      []string{"response_failed", "websocket_error", "scanner_error"},
+			MessageSubstrings: []string{overloadedMessageForRetryTest},
+		},
+	}}
+}
+
+func writeWebsocketEventForTest(t *testing.T, conn *websocket.Conn, event map[string]any) {
+	t.Helper()
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		t.Fatalf("write event: %v", err)
 	}
 }
 

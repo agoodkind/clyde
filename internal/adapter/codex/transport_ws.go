@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
 )
@@ -150,6 +151,8 @@ type WebsocketTransportConfig struct {
 	// it so the synthetic-thinking close marker stays bare. Empty
 	// resolves to RoundTripEncryptedRoundTrip.
 	RoundTripEncrypted RoundTripEncrypted
+	// RetryPolicies are generic adapter retry rules compiled at daemon startup.
+	RetryPolicies []adapterretry.Policy
 }
 
 // Mirrors the observed Responses websocket envelope from
@@ -297,14 +300,14 @@ func writeAndParseWebsocketRequest(
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
 	warmup bool,
-) (RunResult, error) {
+) (RunResult, bool, error) {
 	raw, err := MarshalResponseCreateWsRequest(payload)
 	if err != nil {
-		return NewRunResult("stop"), err
+		return NewRunResult("stop"), false, err
 	}
 	logWebsocketFrame(ctx, cfg, payload, raw, warmup)
 	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
-		return NewRunResult("stop"), err
+		return NewRunResult("stop"), false, err
 	}
 	logCtx := sseInstrumentationContext{
 		RequestID:          cfg.RequestID,
@@ -321,7 +324,13 @@ func writeAndParseWebsocketRequest(
 	}
 	synthetic := streamWebsocketAsSyntheticSSE(ctx, conn, logCtx, cfg.WireCaptureMode)
 	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop}
-	result, err := ParseSSEEventsWithOptions(ctx, synthetic, emit, logCtx, parseOpts)
+	responseStarted := false
+	result, err := ParseSSEEventsWithOptions(ctx, synthetic, func(event adapterrender.Event) error {
+		if codexRenderEventStartsClientResponse(event) {
+			responseStarted = true
+		}
+		return emit(event)
+	}, logCtx, parseOpts)
 	if err == nil || strings.TrimSpace(result.ResponseID) != "" || result.UsageTelemetry.UsagePresent {
 		LogUsageTelemetry(ctx, cfg.Log, result.UsageTelemetry, CodexUsageLogContext{
 			RequestID:          cfg.RequestID,
@@ -351,9 +360,22 @@ func writeAndParseWebsocketRequest(
 		logCodexEvent(ctx, slog.LevelInfo, "adapter.codex.response.received", attrs)
 	}
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-		return result, nil
+		return result, responseStarted, nil
 	}
-	return result, err
+	return result, responseStarted, err
+}
+
+func codexRenderEventStartsClientResponse(event adapterrender.Event) bool {
+	switch event.Kind {
+	case adapterrender.EventAssistantTextDelta,
+		adapterrender.EventAssistantRefusalDelta,
+		adapterrender.EventReasoningSignaled,
+		adapterrender.EventReasoningDelta,
+		adapterrender.EventToolCallDelta:
+		return true
+	default:
+		return false
+	}
 }
 
 // logWebsocketFrame emits codex.responses.request for every websocket
@@ -449,10 +471,96 @@ func RunWebsocketTransportEvents(
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
+	return runWebsocketTransportEventsWithRetry(ctx, cfg, payload, emit, adapterretry.Sleep, nil)
+}
+
+func runWebsocketTransportEventsWithRetry(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+	sleep adapterretry.Sleeper,
+	random adapterretry.RandFloat,
+) (RunResult, error) {
+	if sleep == nil {
+		sleep = adapterretry.Sleep
+	}
+	operation := "codex.responses.websocket.generate"
+	attempt := 1
+	lastPolicyName := ""
+	lastMaxAttempts := 0
+	for {
+		result, responseStarted, err := runWebsocketTransportEventsOnce(ctx, cfg, payload, emit)
+		if err == nil {
+			logCodexRetryTerminal(ctx, cfg, attempt, lastPolicyName, "success", lastMaxAttempts)
+			return result, nil
+		}
+		signal := adapterretry.Signal{
+			Backend:         "codex",
+			Operation:       operation,
+			ErrorClass:      codexRetryErrorClass(err),
+			Message:         err.Error(),
+			ResponseStarted: responseStarted,
+		}
+		decision := adapterretry.Decide(cfg.RetryPolicies, signal, attempt, random)
+		if !decision.Retry {
+			maxAttempts := adapterretry.MaxAttempts(cfg.RetryPolicies, decision.PolicyName)
+			logCodexRetryDecision(ctx, cfg, decision, attempt, maxAttempts, "failed")
+			return result, err
+		}
+		maxAttempts := adapterretry.MaxAttempts(cfg.RetryPolicies, decision.PolicyName)
+		logCodexRetryDecision(ctx, cfg, decision, attempt, maxAttempts, "retrying")
+		lastPolicyName = decision.PolicyName
+		lastMaxAttempts = maxAttempts
+		if err := sleep(ctx, decision.Delay); err != nil {
+			return result, err
+		}
+		attempt++
+	}
+}
+
+func runWebsocketTransportEventsOnce(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+) (RunResult, bool, error) {
 	if cfg.SessionCache != nil && strings.TrimSpace(cfg.ConversationID) != "" {
 		return runWebsocketWithCache(ctx, cfg, payload, emit)
 	}
 	return runWebsocketFreshDial(ctx, cfg, payload, emit)
+}
+
+func codexRetryErrorClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return "websocket_close"
+	}
+	if strings.Contains(err.Error(), "codex websocket") {
+		return "websocket_error"
+	}
+	return "response_failed"
+}
+
+func logCodexRetryDecision(ctx context.Context, cfg WebsocketTransportConfig, decision adapterretry.Decision, attempt int, maxAttempts int, finalOutcome string) {
+	adapterretry.LogDecision(ctx, cfg.Log, decision, attempt, maxAttempts, adapterretry.AttemptLogContext{
+		RequestID: cfg.RequestID,
+		TraceID:   string(cfg.Correlation.TraceID),
+		ChatKey:   cfg.Correlation.ChatKey,
+		Operation: "codex.responses.websocket.generate",
+	}, finalOutcome)
+}
+
+func logCodexRetryTerminal(ctx context.Context, cfg WebsocketTransportConfig, attempt int, policyName string, finalOutcome string, maxAttempts int) {
+	if attempt <= 1 {
+		return
+	}
+	logCodexRetryDecision(ctx, cfg, adapterretry.Decision{
+		PolicyName: policyName,
+		Reason:     "operation_succeeded",
+	}, attempt, maxAttempts, finalOutcome)
 }
 
 // runWebsocketFreshDial is the legacy path. Dial a fresh websocket,
@@ -464,14 +572,14 @@ func runWebsocketFreshDial(
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
-) (RunResult, error) {
+) (RunResult, bool, error) {
 	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
 	if statusCode == http.StatusUpgradeRequired {
 		logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{FallbackToHTTP: true})
-		return NewRunResult("stop"), ErrWebsocketFallbackToHTTP
+		return NewRunResult("stop"), false, ErrWebsocketFallbackToHTTP
 	}
 	if err != nil {
-		return NewRunResult("stop"), err
+		return NewRunResult("stop"), false, err
 	}
 	defer func(c *websocket.Conn) { _ = c.Close() }(conn)
 
@@ -487,7 +595,7 @@ func runWebsocketFreshDial(
 			prewarmTimeout = defaultWebsocketPrewarmTimeout
 		}
 		_ = conn.SetReadDeadline(codexClock.Now().Add(prewarmTimeout))
-		warmupResult, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
+		warmupResult, _, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
 			return nil
 		}, true)
 		_ = conn.SetReadDeadline(time.Time{})
@@ -504,10 +612,10 @@ func runWebsocketFreshDial(
 					FallbackToHTTP:         true,
 					WebsocketPrewarmFailed: prewarmFailed,
 				})
-				return NewRunResult("stop"), ErrWebsocketFallbackToHTTP
+				return NewRunResult("stop"), false, ErrWebsocketFallbackToHTTP
 			}
 			if err != nil {
-				return NewRunResult("stop"), err
+				return NewRunResult("stop"), false, err
 			}
 			defer func(c *websocket.Conn) { _ = c.Close() }(conn)
 		}
@@ -534,7 +642,7 @@ func runWebsocketWithCache(
 	cfg WebsocketTransportConfig,
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
-) (RunResult, error) {
+) (RunResult, bool, error) {
 	log := cfg.Log
 	if log == nil {
 		log = slog.Default()
@@ -611,10 +719,10 @@ func runWebsocketWithCache(
 		"is_warmup", false,
 	)
 
-	result, err := writeAndParseWebsocketRequest(ctx, session.Conn, cfg, payload, emit, false)
+	result, responseStarted, err := writeAndParseWebsocketRequest(ctx, session.Conn, cfg, payload, emit, false)
 	if err != nil {
 		cfg.SessionCache.Invalidate(conv, "ws_io_error")
-		return result, err
+		return result, responseStarted, err
 	}
 
 	session.LastResponseID = strings.TrimSpace(result.ResponseID)
@@ -622,7 +730,7 @@ func runWebsocketWithCache(
 		// Server completed without an id. Drop the connection rather
 		// than re-cache without a chain anchor.
 		cfg.SessionCache.Invalidate(conv, "missing_response_id")
-		return result, nil
+		return result, responseStarted, nil
 	}
 	session.Model = payload.Model
 	session.PromptCacheKey = payload.PromptCacheKey
@@ -636,7 +744,7 @@ func runWebsocketWithCache(
 		"last_response_id", session.LastResponseID,
 		"frame_count", session.FrameCount,
 	)
-	return result, nil
+	return result, responseStarted, nil
 }
 
 // openSessionAndWarmup dials a fresh websocket, sends the warmup
@@ -668,7 +776,7 @@ func openSessionAndWarmup(
 		prewarmTimeout = defaultWebsocketPrewarmTimeout
 	}
 	_ = conn.SetReadDeadline(codexClock.Now().Add(prewarmTimeout))
-	warmupResult, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
+	warmupResult, _, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
 		return nil
 	}, true)
 	_ = conn.SetReadDeadline(time.Time{})

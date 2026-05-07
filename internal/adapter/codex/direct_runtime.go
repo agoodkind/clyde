@@ -10,6 +10,7 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/clyde/internal/correlation"
 )
 
@@ -60,6 +61,7 @@ type DirectConfig struct {
 	// synthetic thinking envelopes on the next outbound request. Empty
 	// resolves to RoundTripSummaryNative per codex-rs.
 	RoundTripSummary RoundTripSummary
+	RetryPolicies    []adapterretry.Policy
 }
 
 // RoundTripEncrypted is the closed enum the codex transport honors when the
@@ -163,6 +165,7 @@ func RunDirect(
 		Log:                cfg.Log,
 		WireCaptureMode:    cfg.WireCaptureMode,
 		RoundTripEncrypted: cfg.RoundTripEncrypted,
+		RetryPolicies:      cfg.RetryPolicies,
 	}
 	return RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 }

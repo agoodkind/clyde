@@ -240,6 +240,7 @@ func SaveGlobal(cfg *Config) error {
 func NewConfigWithDefaults() *Config {
 	cfg := NewConfig()
 	_ = applyLoggingDefaultsAndValidate(cfg)
+	_ = applyAdapterRetryDefaultsAndValidate(&cfg.Adapter.Retry)
 	return cfg
 }
 
@@ -336,8 +337,105 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if err := applyAdapterNoticeDefaultsAndValidate(&cfg.Adapter.Notices); err != nil {
 		return err
 	}
+	if err := applyAdapterRetryDefaultsAndValidate(&cfg.Adapter.Retry); err != nil {
+		return err
+	}
 
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+}
+
+const codexOverloadedRetryPolicyName = "codex.responses.overloaded"
+
+func applyAdapterRetryDefaultsAndValidate(retry *AdapterRetry) error {
+	if retry == nil {
+		return nil
+	}
+	retry.Policies = appendBuiltinAdapterRetryPolicies(retry.Policies)
+	for i := range retry.Policies {
+		if err := normalizeAdapterRetryPolicy(&retry.Policies[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendBuiltinAdapterRetryPolicies(policies []AdapterRetryPolicy) []AdapterRetryPolicy {
+	for _, policy := range policies {
+		if strings.TrimSpace(policy.Name) == codexOverloadedRetryPolicyName {
+			return policies
+		}
+	}
+	return append(policies, builtinCodexOverloadedRetryPolicy())
+}
+
+func builtinCodexOverloadedRetryPolicy() AdapterRetryPolicy {
+	enabled := true
+	return AdapterRetryPolicy{
+		Name:                     codexOverloadedRetryPolicyName,
+		Enabled:                  &enabled,
+		MaxAttempts:              3,
+		InitialDelay:             AdapterRetryDuration(250 * time.Millisecond),
+		MaxDelay:                 AdapterRetryDuration(2 * time.Second),
+		Multiplier:               2,
+		JitterFraction:           0.2,
+		RetryWhenResponseStarted: false,
+		Match: AdapterRetryMatchers{
+			Backends:          []string{"codex"},
+			Operations:        []string{"codex.responses.websocket.generate"},
+			ErrorClasses:      []string{"scanner_error", "websocket_error", "response_failed"},
+			MessageSubstrings: []string{"Our servers are currently overloaded. Please try again later."},
+		},
+	}
+}
+
+func normalizeAdapterRetryPolicy(policy *AdapterRetryPolicy) error {
+	policy.Name = strings.TrimSpace(policy.Name)
+	if policy.Name == "" {
+		return fmt.Errorf("adapter.retry.policies contains a policy without name")
+	}
+	if policy.Enabled == nil {
+		enabled := true
+		policy.Enabled = &enabled
+	}
+	if policy.MaxAttempts < 1 {
+		return fmt.Errorf("adapter.retry.policies.%s.max_attempts must be at least 1", policy.Name)
+	}
+	if policy.InitialDelay.Duration() < 0 {
+		return fmt.Errorf("adapter.retry.policies.%s.initial_delay must be non-negative", policy.Name)
+	}
+	if policy.MaxDelay.Duration() < 0 {
+		return fmt.Errorf("adapter.retry.policies.%s.max_delay must be non-negative", policy.Name)
+	}
+	if policy.MaxDelay.Duration() > 0 && policy.InitialDelay.Duration() > policy.MaxDelay.Duration() {
+		return fmt.Errorf("adapter.retry.policies.%s.initial_delay must be less than or equal to max_delay", policy.Name)
+	}
+	if policy.Multiplier < 0 {
+		return fmt.Errorf("adapter.retry.policies.%s.multiplier must be non-negative", policy.Name)
+	}
+	if policy.JitterFraction < 0 || policy.JitterFraction > 1 {
+		return fmt.Errorf("adapter.retry.policies.%s.jitter_fraction must be between 0 and 1", policy.Name)
+	}
+	normalizeStringSlice(&policy.Match.Backends)
+	normalizeStringSlice(&policy.Match.Operations)
+	normalizeStringSlice(&policy.Match.ErrorClasses)
+	normalizeStringSlice(&policy.Match.ErrorCodes)
+	normalizeStringSlice(&policy.Match.MessageSubstrings)
+	return nil
+}
+
+func normalizeStringSlice(values *[]string) {
+	if values == nil {
+		return
+	}
+	out := make([]string, 0, len(*values))
+	for _, value := range *values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	*values = out
 }
 
 func applyAdapterNoticeDefaultsAndValidate(notices *AdapterNotices) error {
