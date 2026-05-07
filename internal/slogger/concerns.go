@@ -184,6 +184,13 @@ var concernPaths = map[string]string{
 	ConcernCompactCalib:            "compact/calibration.jsonl",
 }
 
+// IsKnownConcern reports whether concern is registered by the concern file
+// router.
+func IsKnownConcern(concern string) bool {
+	_, ok := concernPaths[strings.TrimSpace(concern)]
+	return ok
+}
+
 // eventConcernRules is kept as a migration reference for older event names.
 // The production concern router no longer depends on it; records must carry
 // the explicit concern attr from slogger.For/WithConcern or a narrow
@@ -323,22 +330,34 @@ func concernForEvent(message string) string {
 	return ""
 }
 
-// ConcernRotationOverrides maps a concern name to a non-default rotation
-// budget. Concerns absent from the map use the global rotation passed to
-// concernHandlers. Used for wire_capture and other large-body concerns where
-// the operator-set short-retention rotation differs from the global default.
-type ConcernRotationOverrides map[string]gklog.RotationConfig
-
-func concernHandlers(root string, level slog.Level, rotation gklog.RotationConfig, overrides ConcernRotationOverrides) []slog.Handler {
+func concernHandlers(root string, level slog.Level, rotation RotationPolicy, policies map[string]ConcernPolicy) []slog.Handler {
 	handlers := make([]slog.Handler, 0, len(concernPaths))
 	for concern, rel := range concernPaths {
+		handlerLevel := level
+		rot := gklog.RotationConfig{}
+		if rotation.Enabled {
+			rot = rotationConfig(rotation)
+		}
+		policy, ok := policies[concern]
+		if ok && policy.Enabled != nil && !*policy.Enabled {
+			continue
+		}
+		if ok && policy.Level != nil {
+			handlerLevel = *policy.Level
+		}
+		if ok && policy.Rotation != nil {
+			rot = rotationConfigForConcern(*policy.Rotation)
+		}
 		path := filepath.Join(root, rel)
 		_ = os.MkdirAll(filepath.Dir(path), 0o755)
-		rot := rotation
-		if override, ok := overrides[concern]; ok {
-			rot = override
-		}
-		handlers = append(handlers, newConcernFilterHandler(concern, gklog.FileJSON(path, level, rot)))
+		handlers = append(handlers, newConcernFilterHandler(concern, gklog.FileJSON(path, handlerLevel, rot)))
 	}
 	return handlers
+}
+
+func rotationConfigForConcern(policy RotationPolicy) gklog.RotationConfig {
+	if !policy.Enabled {
+		return gklog.RotationConfig{}
+	}
+	return rotationConfig(policy)
 }

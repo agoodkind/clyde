@@ -39,6 +39,7 @@ func isWebsocketUpgrade(r *http.Request) bool {
 // with the error message in the close field.
 func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider string, upstream string) {
 	cfg := p.config()
+	capturePolicy := captureFilePolicyFromConfig(cfg)
 
 	// Build the upstream URL in ws scheme.
 	upstreamURL := upstream + r.URL.RequestURI()
@@ -107,7 +108,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		"response_headers": redactHeaders(upstreamResp.Header),
 	}
 	addCaptureCorrelation(startEvent, corr)
-	if err := appendCapture(cfg.CaptureDir, startEvent); err != nil {
+	if err := WriteCaptureEvent(cfg.CaptureDir, startEvent, capturePolicy); err != nil {
 		p.log.Warn("mitm.ws.capture_start_failed", "err", err)
 	}
 
@@ -155,7 +156,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 				"seq":         count,
 			}
 			addCaptureCorrelation(ev, corr)
-			if err := appendCapture(captureDir, ev); err != nil {
+			if err := WriteCaptureEvent(captureDir, ev, capturePolicy); err != nil {
 				p.log.Warn("mitm.ws.capture_msg_failed", "err", err)
 			}
 			if err := dst.WriteMessage(messageType, payload); err != nil {
@@ -203,7 +204,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	if closeErr != nil {
 		endEvent["err"] = closeErr.Error()
 	}
-	if err := appendCapture(captureDir, endEvent); err != nil {
+	if err := WriteCaptureEvent(captureDir, endEvent, capturePolicy); err != nil {
 		p.log.Warn("mitm.ws.capture_end_failed", "err", err)
 	}
 	queueBaselineRefresh(cfg, provider, p.log)

@@ -4,7 +4,7 @@
 // package). Request scoped loggers on context use goodkind.io/gklog
 // (WithLogger, LoggerFromContext). Every call site uses Go's
 // standard log/slog package directly; this package only handles initialization
-// (Setup).
+// (SetupWithPolicy).
 //
 // The standard is non-negotiable: every operation in the codebase MUST
 // emit at least one slog event. Free-form fmt.Println / log.Printf are
@@ -42,50 +42,52 @@ const (
 	ProcessRoleDaemon ProcessRole = "daemon"
 )
 
-// Setup initializes the global slog logger via gklog. It writes
-// JSONL to a process-specific path under $XDG_STATE_HOME/clyde
-// (or [logging.paths] when configured). Stdout logging is disabled
-// so command output remains machine-friendly
-// for CLI callers. Call once at process start before emitting any events;
-// otherwise slog.Default falls back to a stderr text handler.
-//
-// concernRotationOverrides supplies non-default rotation budgets for specific
-// concern paths; callers build it from typed adapter sub-blocks (e.g.
-// [adapter.wire_capture.rotation]) and pass an empty map when no overrides
-// apply.
-//
-// Returns an io.Closer that the caller must Close on shutdown so the
-// rotating file handles flush. closer.Close() is safe to call once.
-func Setup(cfg config.LoggingConfig, role ProcessRole, concernRotationOverrides ConcernRotationOverrides) (io.Closer, error) {
-	level := strings.ToLower(strings.TrimSpace(cfg.Level))
-	if level == "" {
-		level = "info"
-	}
-	switch level {
-	case "debug", "info", "warn", "error":
-	default:
-		slog.Warn("slogger.setup.invalid_level",
-			"component", "slogger",
-			"level", level,
-		)
-		return nopCloser{}, fmt.Errorf("slogger: logging.level required, must be one of debug|info|warn|error, got %q", level)
-	}
+// DefaultProcessPath resolves the process-aware JSONL path used by policy setup.
+func DefaultProcessPath(cfg config.LoggingConfig, role ProcessRole) string {
+	return defaultPath(cfg, role)
+}
 
-	path := defaultPath(cfg, role)
+// DefaultConcernRoot resolves the concern log root used by policy setup.
+func DefaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {
+	return defaultConcernRoot(cfg, role)
+}
+
+// SetupWithPolicy initializes slog from a resolved typed policy. This is the
+// policy-driven path for config/logpolicy resolvers.
+func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
+	if err := validateConcernPolicyNames(policy.ConcernPolicies); err != nil {
+		return nopCloser{Closed: false}, err
+	}
+	if !policy.ProcessSink.Enabled {
+		handlers := concernHandlers(policy.ConcernRoot, policy.Level, policy.ProcessSink.Rotation, policy.ConcernPolicies)
+		router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot)
+		if router != nil {
+			handlers = append(handlers, router)
+		}
+		if len(handlers) == 0 {
+			handlers = append(handlers, slog.DiscardHandler)
+		}
+		logger := slog.New(newCorrelationHandler(gklog.NewTeeHandler(handlers...)))
+		slog.SetDefault(logger.With("build", version.String()))
+		if router == nil {
+			return nopCloser{Closed: false}, nil
+		}
+		return &transcriptRouterCloser{router: router, inner: nopCloser{Closed: false}}, nil
+	}
+	path := policy.ProcessSink.Path
+	if strings.TrimSpace(path) == "" {
+		slog.Warn("slogger.setup.empty_process_path", "component", "slogger")
+		return nopCloser{Closed: false}, fmt.Errorf("slogger: process log path is required")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		slog.Warn("slogger.setup.mkdir_failed",
 			"component", "slogger",
 			"path", filepath.Dir(path),
 			"err", err,
 		)
-		return nopCloser{}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
+		return nopCloser{Closed: false}, fmt.Errorf("slogger: mkdir %s: %w", filepath.Dir(path), err)
 	}
-	concernRoot := defaultConcernRoot(cfg, role)
-	rotationEnabled := true
-	if cfg.Rotation.Enabled != nil {
-		rotationEnabled = *cfg.Rotation.Enabled
-	}
-	if !rotationEnabled {
+	if !policy.ProcessSink.Rotation.Enabled {
 		file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			slog.Warn("slogger.setup.open_json_log_failed",
@@ -93,12 +95,19 @@ func Setup(cfg config.LoggingConfig, role ProcessRole, concernRotationOverrides 
 				"path", path,
 				"err", err,
 			)
-			return nopCloser{}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
+			return nopCloser{Closed: false}, fmt.Errorf("slogger: open json log file %s: %w", path, err)
 		}
 		lockedFile := gklog.NewLockedWriteCloser(path, file)
-		handlers := []slog.Handler{slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: parseJSONMinLevel(level)})}
-		handlers = append(handlers, concernHandlers(concernRoot, parseJSONMinLevel(level), gklog.RotationConfig{}, concernRotationOverrides)...)
-		router := buildTranscriptRouter(cfg.Transcript, concernRoot)
+		handlers := []slog.Handler{slog.NewJSONHandler(lockedFile, &slog.HandlerOptions{Level: policy.Level})}
+		disabledRotation := RotationPolicy{
+			Enabled:    false,
+			MaxSizeMB:  0,
+			MaxBackups: 0,
+			MaxAgeDays: 0,
+			Compress:   nil,
+		}
+		handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, disabledRotation, policy.ConcernPolicies)...)
+		router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot)
 		if router != nil {
 			handlers = append(handlers, router)
 		}
@@ -114,25 +123,11 @@ func Setup(cfg config.LoggingConfig, role ProcessRole, concernRotationOverrides 
 	// parseable single-line output). slog goes to the rotated JSONL
 	// file at the resolved process path; tail that file for
 	// live diagnostics.
-	compress := cfg.Rotation.Compress
-	if compress == nil {
-		compress = new(true)
-	}
 	handlers := []slog.Handler{
-		gklog.FileJSON(path, parseJSONMinLevel(level), gklog.RotationConfig{
-			MaxSizeMB:  cfg.Rotation.MaxSizeMB,
-			MaxBackups: cfg.Rotation.MaxBackups,
-			MaxAgeDays: cfg.Rotation.MaxAgeDays,
-			Compress:   compress,
-		}),
+		gklog.FileJSON(path, policy.Level, rotationConfig(policy.ProcessSink.Rotation)),
 	}
-	handlers = append(handlers, concernHandlers(concernRoot, parseJSONMinLevel(level), gklog.RotationConfig{
-		MaxSizeMB:  cfg.Rotation.MaxSizeMB,
-		MaxBackups: cfg.Rotation.MaxBackups,
-		MaxAgeDays: cfg.Rotation.MaxAgeDays,
-		Compress:   compress,
-	}, concernRotationOverrides)...)
-	router := buildTranscriptRouter(cfg.Transcript, concernRoot)
+	handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, policy.ProcessSink.Rotation, policy.ConcernPolicies)...)
+	router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot)
 	if router != nil {
 		handlers = append(handlers, router)
 	}
@@ -150,17 +145,13 @@ func Setup(cfg config.LoggingConfig, role ProcessRole, concernRotationOverrides 
 // buildTranscriptRouter returns a configured router, or nil when the feature
 // is off (disabled or missing retention bounds). The router writes under
 // <concernRoot>/chats/.
-func buildTranscriptRouter(cfg config.LoggingTranscript, concernRoot string) *TranscriptRouter {
-	if !cfg.IsEnabled() {
+func buildTranscriptRouter(policy TranscriptPolicy, concernRoot string) *TranscriptRouter {
+	if !policy.Enabled {
 		return nil
-	}
-	mode := TranscriptMode(cfg.Mode)
-	if mode != TranscriptModeRaw {
-		mode = TranscriptModeSummary
 	}
 	return NewTranscriptRouter(TranscriptRouterConfig{
 		Root: filepath.Join(concernRoot, "chats"),
-		Mode: mode,
+		Mode: policy.Mode,
 	})
 }
 
@@ -192,19 +183,6 @@ func Concern(concern string) ConcernLogger {
 
 func (l ConcernLogger) Logger() *slog.Logger {
 	return For(string(l))
-}
-
-func parseJSONMinLevel(level string) slog.Level {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "info":
-		return slog.LevelInfo
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelDebug
-	}
 }
 
 // defaultPath resolves the process-aware JSONL path. Honors the env

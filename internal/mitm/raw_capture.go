@@ -126,7 +126,7 @@ func safePathPart(value string) string {
 	return out
 }
 
-func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata) error {
+func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata, policy CaptureFilePolicy) error {
 	now := currentTime()
 	event := cursorCaptureEvent{
 		Kind:                "cursor_tls_http",
@@ -149,29 +149,17 @@ func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata) error {
 		ResponseContentType: meta.ResponseContentType,
 		Diagnostic:          meta.Diagnostic,
 	}
-	return appendCursorCaptureEvent(dir, event)
+	return appendCursorCaptureEvent(dir, event, policy)
 }
 
-func appendCursorCaptureEvent(dir string, event cursorCaptureEvent) error {
-	dir = expandHome(dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("mitm.cursor.capture.mkdir_failed", "capture_dir", dir, "err", err)
-		return fmt.Errorf("create cursor capture dir: %w", err)
-	}
-	path := filepath.Join(dir, "capture.jsonl")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		slog.Warn("mitm.cursor.capture.open_failed", "path", path, "err", err)
-		return fmt.Errorf("open cursor capture metadata: %w", err)
-	}
-	defer func() { _ = f.Close() }()
+func appendCursorCaptureEvent(dir string, event cursorCaptureEvent, policy CaptureFilePolicy) error {
 	raw, err := json.Marshal(event)
 	if err != nil {
 		slog.Warn("mitm.cursor.capture.encode_failed", "capture_dir", dir, "err", err)
 		return fmt.Errorf("encode cursor capture metadata: %w", err)
 	}
-	if _, err := f.Write(append(raw, '\n')); err != nil {
-		slog.Warn("mitm.cursor.capture.write_failed", "path", path, "err", err)
+	if err := WriteCaptureLine(dir, raw, policy); err != nil {
+		slog.Warn("mitm.cursor.capture.write_failed", "capture_dir", dir, "err", err)
 		return fmt.Errorf("write cursor capture metadata: %w", err)
 	}
 	return nil

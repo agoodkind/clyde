@@ -250,77 +250,35 @@ const (
 	defaultLoggingBodyMaxKB          = 32
 )
 
+var knownLoggingSinkNames = map[string]bool{
+	LoggingSinkDaemon:       true,
+	LoggingSinkTUI:          true,
+	LoggingSinkCodexSidecar: true,
+	LoggingSinkConcerns:     true,
+	LoggingSinkTranscripts:  true,
+	LoggingSinkMITMCapture:  true,
+	LoggingSinkMITMRaw:      true,
+}
+
 func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg == nil {
 		return nil
 	}
-	logLevel := strings.ToLower(strings.TrimSpace(cfg.Logging.Level))
-	if logLevel == "" {
-		logLevel = "info"
+	if err := applyLoggingCoreDefaults(&cfg.Logging); err != nil {
+		return err
 	}
-	cfg.Logging.Level = logLevel
-	cfg.Logging.Paths.TUI = strings.TrimSpace(cfg.Logging.Paths.TUI)
-	cfg.Logging.Paths.Daemon = strings.TrimSpace(cfg.Logging.Paths.Daemon)
-
-	if cfg.Logging.Rotation.MaxSizeMB <= 0 {
-		cfg.Logging.Rotation.MaxSizeMB = defaultLoggingRotationMaxSizeMB
+	if err := applyLoggingBodyDefaults(&cfg.Logging.Body); err != nil {
+		return err
 	}
-	if cfg.Logging.Rotation.Enabled == nil {
-		v := true
-		cfg.Logging.Rotation.Enabled = &v
+	if err := applyLoggingTranscriptDefaults(&cfg.Logging.Transcript); err != nil {
+		return err
 	}
-	if cfg.Logging.Rotation.MaxBackups < 0 {
-		return fmt.Errorf("logging.rotation.max_backups must be >= 0")
+	if err := normalizeLoggingSinkOverrides(cfg.Logging.Sinks); err != nil {
+		return err
 	}
-	if cfg.Logging.Rotation.MaxBackups == 0 {
-		cfg.Logging.Rotation.MaxBackups = defaultLoggingRotationMaxBackups
+	if err := normalizeLoggingConcernOverrides(cfg.Logging.Concerns); err != nil {
+		return err
 	}
-	if cfg.Logging.Rotation.MaxAgeDays < 0 {
-		return fmt.Errorf("logging.rotation.max_age_days must be >= 0")
-	}
-	if cfg.Logging.Rotation.MaxAgeDays == 0 {
-		cfg.Logging.Rotation.MaxAgeDays = defaultLoggingRotationMaxAgeDays
-	}
-	if cfg.Logging.Rotation.Compress == nil {
-		v := true
-		cfg.Logging.Rotation.Compress = &v
-	}
-
-	mode := strings.ToLower(strings.TrimSpace(cfg.Logging.Body.Mode))
-	if mode == "" {
-		mode = "summary"
-	}
-	cfg.Logging.Body.Mode = mode
-
-	if cfg.Logging.Body.MaxKB <= 0 {
-		cfg.Logging.Body.MaxKB = defaultLoggingBodyMaxKB
-	}
-	if cfg.Logging.Body.MaxKB > 256 {
-		return fmt.Errorf("logging.body.max_kb must be between 1 and 256")
-	}
-	switch cfg.Logging.Body.Mode {
-	case "", "summary", "whitelist", "raw", "off":
-	default:
-		return fmt.Errorf("logging.body.mode must be one of summary|whitelist|raw|off")
-	}
-	if cfg.Logging.Body.Mode == "" {
-		cfg.Logging.Body.Mode = "summary"
-	}
-
-	if cfg.Logging.Transcript.Enabled == nil {
-		v := true
-		cfg.Logging.Transcript.Enabled = &v
-	}
-	tmode := strings.ToLower(strings.TrimSpace(cfg.Logging.Transcript.Mode))
-	if tmode == "" {
-		tmode = "summary"
-	}
-	switch tmode {
-	case "summary", "raw":
-	default:
-		return fmt.Errorf("logging.transcript.mode must be one of summary|raw")
-	}
-	cfg.Logging.Transcript.Mode = tmode
 
 	if err := applyMITMDefaultsAndValidate(&cfg.MITM); err != nil {
 		return err
@@ -338,6 +296,195 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	}
 
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+}
+
+func applyLoggingCoreDefaults(logging *LoggingConfig) error {
+	logLevel := strings.ToLower(strings.TrimSpace(logging.Level))
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	logging.Level = logLevel
+	logging.Paths.TUI = strings.TrimSpace(logging.Paths.TUI)
+	logging.Paths.Daemon = strings.TrimSpace(logging.Paths.Daemon)
+	if err := validateLoggingLevel("logging.level", logging.Level); err != nil {
+		return err
+	}
+	if err := validateLoggingRotation("logging.rotation", logging.Rotation); err != nil {
+		return err
+	}
+	if logging.Rotation.MaxSizeMB == 0 {
+		logging.Rotation.MaxSizeMB = defaultLoggingRotationMaxSizeMB
+	}
+	if logging.Rotation.Enabled == nil {
+		v := true
+		logging.Rotation.Enabled = &v
+	}
+	if logging.Rotation.MaxBackups == 0 {
+		logging.Rotation.MaxBackups = defaultLoggingRotationMaxBackups
+	}
+	if logging.Rotation.MaxAgeDays == 0 {
+		logging.Rotation.MaxAgeDays = defaultLoggingRotationMaxAgeDays
+	}
+	if logging.Rotation.Compress == nil {
+		v := true
+		logging.Rotation.Compress = &v
+	}
+	return normalizeLoggingRetention("logging.retention", &logging.Retention)
+}
+
+func applyLoggingBodyDefaults(body *LoggingBody) error {
+	mode := strings.ToLower(strings.TrimSpace(body.Mode))
+	if mode == "" {
+		mode = "summary"
+	}
+	body.Mode = mode
+	if body.MaxKB <= 0 {
+		body.MaxKB = defaultLoggingBodyMaxKB
+	}
+	if body.MaxKB > 256 {
+		return fmt.Errorf("logging.body.max_kb must be between 1 and 256")
+	}
+	switch body.Mode {
+	case "", "summary", "whitelist", "raw", "off":
+		if body.Mode == "" {
+			body.Mode = "summary"
+		}
+		return nil
+	default:
+		return fmt.Errorf("logging.body.mode must be one of summary|whitelist|raw|off")
+	}
+}
+
+func applyLoggingTranscriptDefaults(transcript *LoggingTranscript) error {
+	if transcript.Enabled == nil {
+		v := true
+		transcript.Enabled = &v
+	}
+	tmode := strings.ToLower(strings.TrimSpace(transcript.Mode))
+	if tmode == "" {
+		tmode = "summary"
+	}
+	switch tmode {
+	case "summary", "raw":
+	default:
+		return fmt.Errorf("logging.transcript.mode must be one of summary|raw")
+	}
+	transcript.Mode = tmode
+	return nil
+}
+
+func normalizeLoggingSinkOverrides(sinks LoggingSinks) error {
+	for sinkName, sink := range sinks {
+		normalizedName := strings.ToLower(strings.TrimSpace(sinkName))
+		if !knownLoggingSinkNames[normalizedName] {
+			return fmt.Errorf("logging.sinks.%s is not a known sink", sinkName)
+		}
+		if err := normalizeLoggingControl("logging.sinks."+sinkName, sink.Level, sink.Detail); err != nil {
+			return err
+		}
+		if err := validateLoggingRotation("logging.sinks."+sinkName+".rotation", sink.Rotation); err != nil {
+			return err
+		}
+		if err := normalizeLoggingRetention("logging.sinks."+sinkName+".retention", &sink.Retention); err != nil {
+			return err
+		}
+		sink.Level = normalizeLoggingOptionalValue(sink.Level)
+		sink.Detail = normalizeLoggingOptionalValue(sink.Detail)
+		sinks[sinkName] = sink
+	}
+	return nil
+}
+
+func normalizeLoggingConcernOverrides(concerns LoggingConcerns) error {
+	for concernName, concern := range concerns {
+		trimmedName := strings.TrimSpace(concernName)
+		if trimmedName == "" {
+			return fmt.Errorf("logging.concerns contains an empty concern name")
+		}
+		if err := normalizeLoggingControl("logging.concerns."+concernName, concern.Level, concern.Detail); err != nil {
+			return err
+		}
+		if err := validateLoggingRotation("logging.concerns."+concernName+".rotation", concern.Rotation); err != nil {
+			return err
+		}
+		if err := normalizeLoggingRetention("logging.concerns."+concernName+".retention", &concern.Retention); err != nil {
+			return err
+		}
+		if sinkName := strings.ToLower(strings.TrimSpace(concern.Sink)); sinkName != "" {
+			if !knownLoggingSinkNames[sinkName] {
+				return fmt.Errorf("logging.concerns.%s.sink is not a known sink", concernName)
+			}
+			concern.Sink = sinkName
+		}
+		concern.Level = normalizeLoggingOptionalValue(concern.Level)
+		concern.Detail = normalizeLoggingOptionalValue(concern.Detail)
+		concerns[concernName] = concern
+	}
+	return nil
+}
+
+func normalizeLoggingControl(path string, level string, detail string) error {
+	if err := validateLoggingLevel(path+".level", normalizeLoggingOptionalValue(level)); err != nil {
+		return err
+	}
+	switch normalizeLoggingOptionalValue(detail) {
+	case "", "summary", "verbose", "raw", "off":
+		return nil
+	default:
+		return fmt.Errorf("%s.detail must be one of summary|verbose|raw|off", path)
+	}
+}
+
+func validateLoggingLevel(path string, level string) error {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "", "debug", "info", "warn", "error":
+		return nil
+	default:
+		return fmt.Errorf("%s must be one of debug|info|warn|error", path)
+	}
+}
+
+func validateLoggingRotation(path string, rotation LoggingRotation) error {
+	if rotation.MaxSizeMB < 0 {
+		return fmt.Errorf("%s.max_size_mb must be >= 0", path)
+	}
+	if rotation.MaxBackups < 0 {
+		return fmt.Errorf("%s.max_backups must be >= 0", path)
+	}
+	if rotation.MaxAgeDays < 0 {
+		return fmt.Errorf("%s.max_age_days must be >= 0", path)
+	}
+	return nil
+}
+
+func normalizeLoggingRetention(path string, retention *LoggingRetention) error {
+	if retention == nil {
+		return nil
+	}
+	if retention.MaxAgeDays != nil && *retention.MaxAgeDays < 0 {
+		return fmt.Errorf("%s.max_age_days must be >= 0", path)
+	}
+	if retention.MaxBackups != nil && *retention.MaxBackups < 0 {
+		return fmt.Errorf("%s.max_backups must be >= 0", path)
+	}
+	if retention.MaxTotalMB != nil && *retention.MaxTotalMB < 0 {
+		return fmt.Errorf("%s.max_total_mb must be >= 0", path)
+	}
+	mode := normalizeLoggingOptionalValue(retention.CleanupMode)
+	switch mode {
+	case "", "off", "audit_only", "delete":
+		if mode == "" {
+			mode = "off"
+		}
+		retention.CleanupMode = mode
+		return nil
+	default:
+		return fmt.Errorf("%s.cleanup_mode must be one of off|audit_only|delete", path)
+	}
+}
+
+func normalizeLoggingOptionalValue(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func applyAdapterNoticeDefaultsAndValidate(notices *AdapterNotices) error {
@@ -377,6 +524,9 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 	mitm.CaptureDir = strings.TrimSpace(mitm.CaptureDir)
 	if mitm.CaptureDir == "" {
 		mitm.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
+	}
+	if err := validateLoggingRotation("mitm.capture.rotation", mitm.Capture.Rotation); err != nil {
+		return err
 	}
 	return nil
 }

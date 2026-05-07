@@ -122,6 +122,7 @@ func (p *Proxy) ClaudeBaseURL() string { return p.base }
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	started := currentTime()
 	cfg := p.config()
+	capturePolicy := captureFilePolicyFromConfig(cfg)
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return
@@ -160,20 +161,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Forward upstream response headers, but drop hop-by-hop and
-	// length-related headers that the http.Server will recompute.
-	// Content-Length is unsafe for streaming responses (SSE), and
-	// Go's http.Transport already strips Content-Encoding when it
-	// auto-decompresses gzip/deflate, so anything left is honest.
-	for key, values := range resp.Header {
-		switch strings.ToLower(key) {
-		case "content-length", "transfer-encoding", "connection":
-			continue
-		}
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
+	forwardResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	capture := &limitedBuffer{limit: 16 * 1024}
 	flusher, _ := w.(http.Flusher)
@@ -193,54 +181,89 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	upstreamURLForRecord := upstream + r.URL.RequestURI()
-	requestEvent := map[string]any{
-		"kind":            string(RecordHTTPRequest),
-		"t":               currentTime().Unix(),
-		"ts":              currentTime().UTC().Format(time.RFC3339Nano),
-		"provider":        provider,
-		"method":          r.Method,
-		"url":             upstreamURLForRecord,
-		"path":            r.URL.Path,
-		"query":           r.URL.RawQuery,
-		"headers":         redactHeaders(r.Header),
-		"body_len":        len(body),
-		"body":            summarizeBody(cfg.BodyMode, body),
-		"request_headers": redactHeaders(r.Header),
-		"request_body":    summarizeBody(cfg.BodyMode, body),
-	}
-	if err := appendCapture(cfg.CaptureDir, requestEvent); err != nil {
-		p.log.Warn("mitm.capture.append_failed", "capture_dir", cfg.CaptureDir, "err", err)
-	}
-	event := map[string]any{
-		"kind":             string(RecordHTTPResponse),
-		"t":                currentTime().Unix(),
-		"ts":               currentTime().UTC().Format(time.RFC3339Nano),
-		"provider":         provider,
-		"method":           r.Method,
-		"url":              upstreamURLForRecord,
-		"path":             r.URL.Path,
-		"query":            r.URL.RawQuery,
-		"status":           resp.StatusCode,
-		"duration_ms":      duration.Milliseconds(),
-		"headers":          redactHeaders(resp.Header),
-		"body_len":         len(captureBody),
-		"body":             summarizeBody(cfg.BodyMode, captureBody),
-		"request_headers":  redactHeaders(r.Header),
-		"response_headers": redactHeaders(resp.Header),
-		"request_body":     summarizeBody(cfg.BodyMode, body),
-		"response_body":    summarizeBody(cfg.BodyMode, captureBody),
-	}
 	p.log.Info("mitm.capture.completed",
 		"provider", provider,
 		"path", r.URL.Path,
 		"status", resp.StatusCode,
 		"duration_ms", duration.Milliseconds(),
 	)
-	if err := appendCapture(cfg.CaptureDir, event); err != nil {
-		p.log.Warn("mitm.capture.append_failed", "capture_dir", cfg.CaptureDir, "err", err)
-	}
+	p.recordHTTPCapture(r, resp, httpCaptureRecordInput{
+		config:         cfg,
+		policy:         capturePolicy,
+		provider:       provider,
+		upstreamURL:    upstream + r.URL.RequestURI(),
+		requestBody:    body,
+		responseBody:   captureBody,
+		duration:       duration,
+		responseStatus: resp.StatusCode,
+	})
 	queueBaselineRefresh(cfg, provider, p.log)
+}
+
+func forwardResponseHeaders(dst http.Header, src http.Header) {
+	for key, values := range src {
+		switch strings.ToLower(key) {
+		case "content-length", "transfer-encoding", "connection":
+			continue
+		}
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+type httpCaptureRecordInput struct {
+	config         config.MITMConfig
+	policy         CaptureFilePolicy
+	provider       string
+	upstreamURL    string
+	requestBody    []byte
+	responseBody   []byte
+	duration       time.Duration
+	responseStatus int
+}
+
+func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input httpCaptureRecordInput) {
+	requestEvent := map[string]any{
+		"kind":            string(RecordHTTPRequest),
+		"t":               currentTime().Unix(),
+		"ts":              currentTime().UTC().Format(time.RFC3339Nano),
+		"provider":        input.provider,
+		"method":          r.Method,
+		"url":             input.upstreamURL,
+		"path":            r.URL.Path,
+		"query":           r.URL.RawQuery,
+		"headers":         redactHeaders(r.Header),
+		"body_len":        len(input.requestBody),
+		"body":            summarizeBody(input.config.BodyMode, input.requestBody),
+		"request_headers": redactHeaders(r.Header),
+		"request_body":    summarizeBody(input.config.BodyMode, input.requestBody),
+	}
+	if err := WriteCaptureEvent(input.config.CaptureDir, requestEvent, input.policy); err != nil {
+		p.log.Warn("mitm.capture.append_failed", "capture_dir", input.config.CaptureDir, "err", err)
+	}
+	event := map[string]any{
+		"kind":             string(RecordHTTPResponse),
+		"t":                currentTime().Unix(),
+		"ts":               currentTime().UTC().Format(time.RFC3339Nano),
+		"provider":         input.provider,
+		"method":           r.Method,
+		"url":              input.upstreamURL,
+		"path":             r.URL.Path,
+		"query":            r.URL.RawQuery,
+		"status":           input.responseStatus,
+		"duration_ms":      input.duration.Milliseconds(),
+		"headers":          redactHeaders(resp.Header),
+		"body_len":         len(input.responseBody),
+		"body":             summarizeBody(input.config.BodyMode, input.responseBody),
+		"request_headers":  redactHeaders(r.Header),
+		"response_headers": redactHeaders(resp.Header),
+		"request_body":     summarizeBody(input.config.BodyMode, input.requestBody),
+		"response_body":    summarizeBody(input.config.BodyMode, input.responseBody),
+	}
+	if err := WriteCaptureEvent(input.config.CaptureDir, event, input.policy); err != nil {
+		p.log.Warn("mitm.capture.append_failed", "capture_dir", input.config.CaptureDir, "err", err)
+	}
 }
 
 func classifyRoute(path string) (provider string, upstream string) {
@@ -355,25 +378,14 @@ func summarizeValue(v any) any {
 	}
 }
 
-func appendCapture(dir string, event map[string]any) error {
-	dir = expandHome(dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, "capture.jsonl")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
+// WriteCaptureEvent encodes and appends one MITM capture event.
+func WriteCaptureEvent(dir string, event map[string]any, policy CaptureFilePolicy) error {
 	raw, err := json.Marshal(event)
 	if err != nil {
-		return err
+		slog.Warn("mitm.capture.encode_failed", "capture_dir", dir, "err", err)
+		return fmt.Errorf("encode capture event: %w", err)
 	}
-	if _, err := f.Write(append(raw, '\n')); err != nil {
-		return err
-	}
-	return nil
+	return WriteCaptureLine(dir, raw, policy)
 }
 
 type limitedBuffer struct {

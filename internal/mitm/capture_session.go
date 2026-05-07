@@ -76,11 +76,7 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 		return CaptureSessionResult{}, fmt.Errorf("create capture dir: %w", err)
 	}
 
-	// Configure the proxy with the per-session capture dir.
-	cfg := config.MITMConfig{
-		CaptureDir: captureDir,
-		BodyMode:   "raw",
-	}
+	cfg := rawCaptureSessionConfig(captureDir)
 
 	proxy, err := startCaptureProxy(opts.ProxyHost, cfg, log)
 	if err != nil {
@@ -93,28 +89,8 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 	}
 	defer func() { proxy.Shutdown() }()
 	proxyURL := proxy.URL()
-
-	// Compose env vars per profile. We deliberately do NOT set
-	// SSL_CERT_FILE / NODE_EXTRA_CA_CERTS even when CACertPath is
-	// non-empty: our Go proxy never intercepts TLS. Direct-routed
-	// upstreams (claude-cli via ANTHROPIC_BASE_URL) talk plain HTTP
-	// to the proxy, and tunneled upstreams (codex-cli via CONNECT)
-	// run TLS end-to-end with the upstream's real certificate. Setting
-	// SSL_CERT_FILE to a CA that does not include the public roots
-	// would break verification of those real certs. The CACertPath
-	// option remains in the API for future TLS-intercept modes.
 	_ = opts.CACertPath
-	envOverrides := map[string]string{
-		"HTTPS_PROXY": proxyURL,
-		"HTTP_PROXY":  proxyURL,
-		"ALL_PROXY":   proxyURL,
-		"NO_PROXY":    "",
-	}
-	env := opts.Profile.ComposeEnv(os.Environ(), envOverrides)
-
-	args := append([]string{}, opts.Profile.BaseArgs...)
-	args = append(args, opts.Profile.ChromiumFlags(proxyURL)...)
-	args = append(args, opts.ExtraArgs...)
+	launch := buildCaptureLaunch(opts.Profile, proxyURL, opts.ExtraArgs)
 
 	startedAt := currentTime()
 	log.InfoContext(ctx, "mitm.capture.session_starting",
@@ -123,20 +99,13 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 		"capture_dir", captureDir,
 		"proxy_url", proxyURL,
 		"is_electron", opts.Profile.IsElectron,
-		"args", args,
+		"args", launch.args,
 	)
-
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = env
+	cmd := exec.CommandContext(ctx, binary, launch.args...)
+	cmd.Env = launch.env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-
-	// Forward Ctrl-C through to the upstream so the user can stop a
-	// capture cleanly.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer func() { signal.Stop(sigCh) }()
 
 	if err := cmd.Start(); err != nil {
 		log.WarnContext(ctx, "mitm.capture.upstream_start_failed",
@@ -146,13 +115,56 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 		)
 		return CaptureSessionResult{}, fmt.Errorf("start %s: %w", opts.Profile.Name, err)
 	}
+	waitForCaptureCommand(ctx, cmd, opts.Profile.Name, log)
+
+	endedAt := currentTime()
+	transcript := filepath.Join(captureDir, "capture.jsonl")
+	log.InfoContext(ctx, "mitm.capture.session_ended",
+		"upstream", opts.Profile.Name,
+		"transcript", transcript,
+		"duration_ms", endedAt.Sub(startedAt).Milliseconds(),
+	)
+
+	return CaptureSessionResult{
+		TranscriptPath: transcript,
+		UpstreamBinary: binary,
+		StartedAt:      startedAt,
+		EndedAt:        endedAt,
+	}, nil
+}
+
+type captureLaunch struct {
+	args []string
+	env  []string
+}
+
+func buildCaptureLaunch(profile LaunchProfile, proxyURL string, extraArgs []string) captureLaunch {
+	envOverrides := map[string]string{
+		"HTTPS_PROXY": proxyURL,
+		"HTTP_PROXY":  proxyURL,
+		"ALL_PROXY":   proxyURL,
+		"NO_PROXY":    "",
+	}
+	args := append([]string{}, profile.BaseArgs...)
+	args = append(args, profile.ChromiumFlags(proxyURL)...)
+	args = append(args, extraArgs...)
+	return captureLaunch{
+		args: args,
+		env:  profile.ComposeEnv(os.Environ(), envOverrides),
+	}
+}
+
+func waitForCaptureCommand(ctx context.Context, cmd *exec.Cmd, upstreamName string, log *slog.Logger) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer func() { signal.Stop(sigCh) }()
 
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				log.ErrorContext(ctx, "mitm.capture.wait_panic",
-					"upstream", opts.Profile.Name,
+					"upstream", upstreamName,
 					"err", fmt.Errorf("panic: %v", recovered),
 				)
 			}
@@ -172,21 +184,32 @@ func RunCaptureSession(ctx context.Context, opts CaptureSessionOptions) (Capture
 			log.WarnContext(ctx, "mitm.capture.upstream_exited_with_error", "err", err)
 		}
 	}
+}
 
-	endedAt := currentTime()
-	transcript := filepath.Join(captureDir, "capture.jsonl")
-	log.InfoContext(ctx, "mitm.capture.session_ended",
-		"upstream", opts.Profile.Name,
-		"transcript", transcript,
-		"duration_ms", endedAt.Sub(startedAt).Milliseconds(),
-	)
-
-	return CaptureSessionResult{
-		TranscriptPath: transcript,
-		UpstreamBinary: binary,
-		StartedAt:      startedAt,
-		EndedAt:        endedAt,
-	}, nil
+func rawCaptureSessionConfig(captureDir string) config.MITMConfig {
+	return config.MITMConfig{
+		EnabledDefault: false,
+		Providers:      nil,
+		BodyMode:       "raw",
+		CaptureDir:     captureDir,
+		Capture: config.MITMCapture{
+			Rotation: config.LoggingRotation{
+				Enabled:    nil,
+				MaxSizeMB:  0,
+				MaxBackups: 0,
+				MaxAgeDays: 0,
+				Compress:   nil,
+			},
+		},
+		Drift: config.MITMDriftConfig{
+			Enabled:     false,
+			Interval:    0,
+			DriftLogDir: "",
+			CaptureRoot: "",
+			CACertPath:  "",
+			Upstreams:   nil,
+		},
+	}
 }
 
 // isExpectedExit recognizes user-driven shutdown errors from

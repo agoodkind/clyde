@@ -226,6 +226,7 @@ func (p *Proxy) serveCursorInterceptedHTTP(client *tls.Conn, target string, host
 func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.Request, target string, host string) error {
 	started := currentTime()
 	cfg := p.config()
+	capturePolicy := captureFilePolicyFromConfig(cfg)
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return fmt.Errorf("read cursor request body: %w", err)
@@ -303,7 +304,7 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		RequestContentType:  req.Header.Get("Content-Type"),
 		ResponseContentType: resp.Header.Get("Content-Type"),
 		Diagnostic:          diag,
-	}); err != nil {
+	}, capturePolicy); err != nil {
 		p.log.Warn("mitm.cursor.capture.append_failed", "capture_dir", cfg.CaptureDir, "err", err)
 	}
 	p.log.Info("mitm.cursor.capture.completed",

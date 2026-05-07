@@ -51,9 +51,54 @@ type Config struct {
 type LoggingConfig struct {
 	Level      string            `json:"level,omitempty" toml:"level,omitempty"`
 	Rotation   LoggingRotation   `json:"rotation,omitzero" toml:"rotation,omitempty"`
+	Retention  LoggingRetention  `json:"retention,omitzero" toml:"retention,omitempty"`
 	Body       LoggingBody       `json:"body,omitzero" toml:"body,omitempty"`
 	Paths      LoggingPaths      `json:"paths,omitzero" toml:"paths,omitempty"`
 	Transcript LoggingTranscript `json:"transcript,omitzero" toml:"transcript,omitempty"`
+	Sinks      LoggingSinks      `json:"sinks,omitempty" toml:"sinks,omitempty"`
+	Concerns   LoggingConcerns   `json:"concerns,omitempty" toml:"concerns,omitempty"`
+}
+
+// LoggingSinks maps stable sink names to per-sink overrides.
+type LoggingSinks map[string]LoggingSink
+
+// LoggingConcerns maps registered concern names to per-concern overrides.
+type LoggingConcerns map[string]LoggingConcern
+
+const (
+	// LoggingSinkDaemon names the daemon process log sink.
+	LoggingSinkDaemon = "daemon"
+	// LoggingSinkTUI names the TUI process log sink.
+	LoggingSinkTUI = "tui"
+	// LoggingSinkCodexSidecar names the Codex sidecar log sink.
+	LoggingSinkCodexSidecar = "codex_sidecar"
+	// LoggingSinkConcerns names the structured concern log sink.
+	LoggingSinkConcerns = "concerns"
+	// LoggingSinkTranscripts names the per-chat transcript sink.
+	LoggingSinkTranscripts = "transcripts"
+	// LoggingSinkMITMCapture names the MITM capture index sink.
+	LoggingSinkMITMCapture = "mitm_capture"
+	// LoggingSinkMITMRaw names the MITM raw payload sink.
+	LoggingSinkMITMRaw = "mitm_raw"
+)
+
+// LoggingSink carries config-layer controls for a named log sink.
+type LoggingSink struct {
+	Enabled   *bool            `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Level     string           `json:"level,omitempty" toml:"level,omitempty"`
+	Detail    string           `json:"detail,omitempty" toml:"detail,omitempty"`
+	Rotation  LoggingRotation  `json:"rotation,omitzero" toml:"rotation,omitempty"`
+	Retention LoggingRetention `json:"retention,omitzero" toml:"retention,omitempty"`
+}
+
+// LoggingConcern carries config-layer controls for a registered concern.
+type LoggingConcern struct {
+	Enabled   *bool            `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Level     string           `json:"level,omitempty" toml:"level,omitempty"`
+	Detail    string           `json:"detail,omitempty" toml:"detail,omitempty"`
+	Sink      string           `json:"sink,omitempty" toml:"sink,omitempty"`
+	Rotation  LoggingRotation  `json:"rotation,omitzero" toml:"rotation,omitempty"`
+	Retention LoggingRetention `json:"retention,omitzero" toml:"retention,omitempty"`
 }
 
 // LoggingTranscript controls the per-chat transcript router that tees a
@@ -83,6 +128,15 @@ type LoggingRotation struct {
 	MaxBackups int   `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
 	MaxAgeDays int   `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
 	Compress   *bool `json:"compress,omitempty" toml:"compress,omitempty"`
+}
+
+// LoggingRetention controls cleanup policy separately from file rotation.
+type LoggingRetention struct {
+	MaxAgeDays  *int   `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
+	MaxBackups  *int   `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
+	MaxTotalMB  *int   `json:"max_total_mb,omitempty" toml:"max_total_mb,omitempty"`
+	Compress    *bool  `json:"compress,omitempty" toml:"compress,omitempty"`
+	CleanupMode string `json:"cleanup_mode,omitempty" toml:"cleanup_mode,omitempty"`
 }
 
 // LoggingBody controls how adapter.chat.raw emits request bodies.
@@ -1043,7 +1097,15 @@ type MITMConfig struct {
 	Providers      MITMProviderSet `json:"providers,omitempty" toml:"providers,omitempty"`
 	BodyMode       string          `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
 	CaptureDir     string          `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+	Capture        MITMCapture     `json:"capture,omitzero" toml:"capture,omitempty"`
 	Drift          MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
+}
+
+// MITMCapture configures MITM capture index file policy. Raw request and
+// response body captures are separate files under CaptureDir/raw and are kept
+// out of this rotation policy.
+type MITMCapture struct {
+	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
 }
 
 // MITMProviderSet is the configured set of provider families routed through

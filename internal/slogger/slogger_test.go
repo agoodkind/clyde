@@ -9,23 +9,17 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
 )
 
 func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
 	root := t.TempDir()
 	unified := filepath.Join(root, "clyde-daemon.jsonl")
-	t.Setenv(envOverride, unified)
-
-	closer, err := Setup(config.LoggingConfig{
-		Level: "debug",
-		Rotation: config.LoggingRotation{
-			Enabled: new(false),
-		},
-	}, ProcessRoleDaemon, nil)
+	policy := testSetupPolicy(root)
+	policy.Level = slog.LevelDebug
+	closer, err := SetupWithPolicy(policy)
 	if err != nil {
-		t.Fatalf("Setup: %v", err)
+		t.Fatalf("SetupWithPolicy: %v", err)
 	}
 	t.Cleanup(func() { _ = closer.Close() })
 
@@ -56,17 +50,11 @@ func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
 
 func TestSetupRoutesExistingEventNamesWhenConcernIsExplicit(t *testing.T) {
 	root := t.TempDir()
-	unified := filepath.Join(root, "clyde-daemon.jsonl")
-	t.Setenv(envOverride, unified)
-
-	closer, err := Setup(config.LoggingConfig{
-		Level: "debug",
-		Rotation: config.LoggingRotation{
-			Enabled: new(false),
-		},
-	}, ProcessRoleDaemon, nil)
+	policy := testSetupPolicy(root)
+	policy.Level = slog.LevelDebug
+	closer, err := SetupWithPolicy(policy)
 	if err != nil {
-		t.Fatalf("Setup: %v", err)
+		t.Fatalf("SetupWithPolicy: %v", err)
 	}
 	t.Cleanup(func() { _ = closer.Close() })
 
@@ -83,18 +71,13 @@ func TestSetupRoutesExistingEventNamesWhenConcernIsExplicit(t *testing.T) {
 func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 	root := t.TempDir()
 	unified := filepath.Join(root, "clyde-daemon.jsonl")
-	t.Setenv(envOverride, unified)
-
 	early := Concern(ConcernSessionDomainResolve)
 
-	closer, err := Setup(config.LoggingConfig{
-		Level: "debug",
-		Rotation: config.LoggingRotation{
-			Enabled: new(false),
-		},
-	}, ProcessRoleDaemon, nil)
+	policy := testSetupPolicy(root)
+	policy.Level = slog.LevelDebug
+	closer, err := SetupWithPolicy(policy)
 	if err != nil {
-		t.Fatalf("Setup: %v", err)
+		t.Fatalf("SetupWithPolicy: %v", err)
 	}
 	t.Cleanup(func() { _ = closer.Close() })
 
@@ -117,16 +100,11 @@ func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 	root := t.TempDir()
 	unified := filepath.Join(root, "clyde-daemon.jsonl")
-	t.Setenv(envOverride, unified)
-
-	closer, err := Setup(config.LoggingConfig{
-		Level: "debug",
-		Rotation: config.LoggingRotation{
-			Enabled: new(false),
-		},
-	}, ProcessRoleDaemon, nil)
+	policy := testSetupPolicy(root)
+	policy.Level = slog.LevelDebug
+	closer, err := SetupWithPolicy(policy)
 	if err != nil {
-		t.Fatalf("Setup: %v", err)
+		t.Fatalf("SetupWithPolicy: %v", err)
 	}
 	t.Cleanup(func() { _ = closer.Close() })
 
@@ -168,17 +146,11 @@ func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 
 func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAttrs(t *testing.T) {
 	root := t.TempDir()
-	unified := filepath.Join(root, "clyde-daemon.jsonl")
-	t.Setenv(envOverride, unified)
-
-	closer, err := Setup(config.LoggingConfig{
-		Level: "debug",
-		Rotation: config.LoggingRotation{
-			Enabled: new(false),
-		},
-	}, ProcessRoleDaemon, nil)
+	policy := testSetupPolicy(root)
+	policy.Level = slog.LevelDebug
+	closer, err := SetupWithPolicy(policy)
 	if err != nil {
-		t.Fatalf("Setup: %v", err)
+		t.Fatalf("SetupWithPolicy: %v", err)
 	}
 	t.Cleanup(func() { _ = closer.Close() })
 
@@ -226,6 +198,162 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	}
 }
 
+func TestSetupWithPolicyAppliesPerConcernLevel(t *testing.T) {
+	root := t.TempDir()
+	policy := testSetupPolicy(root)
+	debugLevel := slog.LevelDebug
+	policy.ConcernPolicies = map[string]ConcernPolicy{
+		ConcernAdapterModelsCatalog: {
+			Enabled:  nil,
+			Level:    &debugLevel,
+			Rotation: nil,
+		},
+	}
+
+	closer, err := SetupWithPolicy(policy)
+	if err != nil {
+		t.Fatalf("SetupWithPolicy: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	For(ConcernAdapterModelsCatalog).Debug("adapter.models.debug_event")
+	For(ConcernDaemonRPCRequests).Debug("daemon.rpc.debug_event")
+	_ = closer.Close()
+
+	assertLogContains(t, filepath.Join(root, "logs", "adapter", "models", "catalog.jsonl"), "adapter.models.debug_event")
+	assertLogMissing(t, filepath.Join(root, "logs", "daemon", "rpc", "requests.jsonl"), "daemon.rpc.debug_event")
+	assertLogMissing(t, filepath.Join(root, "clyde-daemon.jsonl"), "adapter.models.debug_event")
+}
+
+func TestSetupWithPolicyAppliesPerConcernRotationOverride(t *testing.T) {
+	root := t.TempDir()
+	policy := testSetupPolicy(root)
+	policy.ProcessSink.Rotation = RotationPolicy{
+		Enabled:    true,
+		MaxSizeMB:  64,
+		MaxBackups: 1,
+		MaxAgeDays: 1,
+		Compress:   new(false),
+	}
+	policy.ConcernPolicies = map[string]ConcernPolicy{
+		ConcernAdapterModelsCatalog: {
+			Enabled: nil,
+			Level:   nil,
+			Rotation: &RotationPolicy{
+				Enabled:    true,
+				MaxSizeMB:  1,
+				MaxBackups: 2,
+				MaxAgeDays: 1,
+				Compress:   new(false),
+			},
+		},
+	}
+
+	closer, err := SetupWithPolicy(policy)
+	if err != nil {
+		t.Fatalf("SetupWithPolicy: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	payload := strings.Repeat("x", 8192)
+	for i := range 300 {
+		For(ConcernAdapterModelsCatalog).Info("adapter.models.large_event", "index", i, "payload", payload)
+	}
+	_ = closer.Close()
+
+	concernLogs, err := filepath.Glob(filepath.Join(root, "logs", "adapter", "models", "catalog*.jsonl*"))
+	if err != nil {
+		t.Fatalf("glob concern logs: %v", err)
+	}
+	if len(concernLogs) < 2 {
+		t.Fatalf("concern rotation did not create backups: %v", concernLogs)
+	}
+	processLogs, err := filepath.Glob(filepath.Join(root, "clyde-daemon*.jsonl*"))
+	if err != nil {
+		t.Fatalf("glob process logs: %v", err)
+	}
+	processLogs = filterLockFiles(processLogs)
+	if len(processLogs) != 1 {
+		t.Fatalf("process sink should keep global rotation budget, got logs: %v", processLogs)
+	}
+}
+
+func TestSetupWithPolicyDisablesPerConcernRotation(t *testing.T) {
+	root := t.TempDir()
+	policy := testSetupPolicy(root)
+	policy.ConcernPolicies = map[string]ConcernPolicy{
+		ConcernAdapterModelsCatalog: {
+			Enabled: nil,
+			Level:   nil,
+			Rotation: &RotationPolicy{
+				Enabled:    false,
+				MaxSizeMB:  1,
+				MaxBackups: 2,
+				MaxAgeDays: 1,
+				Compress:   new(false),
+			},
+		},
+	}
+
+	closer, err := SetupWithPolicy(policy)
+	if err != nil {
+		t.Fatalf("SetupWithPolicy: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	payload := strings.Repeat("x", 8192)
+	for i := range 300 {
+		For(ConcernAdapterModelsCatalog).Info("adapter.models.large_event", "index", i, "payload", payload)
+	}
+	_ = closer.Close()
+
+	concernLogs, err := filepath.Glob(filepath.Join(root, "logs", "adapter", "models", "catalog*.jsonl*"))
+	if err != nil {
+		t.Fatalf("glob concern logs: %v", err)
+	}
+	concernLogs = filterLockFiles(concernLogs)
+	if len(concernLogs) != 1 {
+		t.Fatalf("concern rotation should be disabled, got logs: %v", concernLogs)
+	}
+}
+
+func TestValidateConcernNamesRejectsUnknownConcern(t *testing.T) {
+	err := ValidateConcernNames([]string{
+		ConcernAdapterModelsCatalog,
+		"adapter.models.",
+	})
+	if err == nil {
+		t.Fatal("ValidateConcernNames accepted unknown concern")
+	}
+	if !strings.Contains(err.Error(), `unknown concern "adapter.models."`) {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestSetupWithPolicyPreservesDefaultLevelAndTranscriptSummary(t *testing.T) {
+	root := t.TempDir()
+	unified := filepath.Join(root, "clyde-daemon.jsonl")
+	policy := testSetupPolicy(root)
+	policy.TranscriptPolicy.Enabled = true
+	policy.TranscriptPolicy.Mode = TranscriptModeSummary
+	closer, err := SetupWithPolicy(policy)
+	if err != nil {
+		t.Fatalf("SetupWithPolicy: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	slog.Debug("daemon.debug_default_filtered")
+	slog.Info("daemon.info_default_kept")
+	slog.Info("adapter.chat.raw", "chat_key", "chat-defaults", "body", "secret-body")
+	_ = closer.Close()
+
+	assertLogContains(t, unified, "daemon.info_default_kept")
+	assertLogMissing(t, unified, "daemon.debug_default_filtered")
+	transcriptPath := filepath.Join(root, "logs", "chats", "chat-defaults.jsonl")
+	assertLogContains(t, transcriptPath, "adapter.chat.raw")
+	assertLogMissing(t, transcriptPath, "secret-body")
+}
+
 func TestConcernForEventCoversPrimaryTree(t *testing.T) {
 	cases := map[string]string{
 		"adapter.codex.transport.prepared": ConcernAdapterProviderCodexWS,
@@ -253,6 +381,54 @@ func assertLogContains(t *testing.T, path string, needle string) {
 	if !strings.Contains(string(content), needle) {
 		t.Fatalf("log %s missing %q: %s", path, needle, content)
 	}
+}
+
+func assertLogMissing(t *testing.T, path string, needle string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		t.Fatalf("read log %s: %v", path, err)
+	}
+	if strings.Contains(string(content), needle) {
+		t.Fatalf("log %s should not contain %q: %s", path, needle, content)
+	}
+}
+
+func testSetupPolicy(root string) SetupPolicy {
+	return SetupPolicy{
+		Level: slog.LevelInfo,
+		ProcessSink: FileSinkPolicy{
+			Enabled: true,
+			Path:    filepath.Join(root, "clyde-daemon.jsonl"),
+			Rotation: RotationPolicy{
+				Enabled:    false,
+				MaxSizeMB:  0,
+				MaxBackups: 0,
+				MaxAgeDays: 0,
+				Compress:   nil,
+			},
+		},
+		ConcernRoot:     filepath.Join(root, "logs"),
+		ConcernPolicies: nil,
+		TranscriptPolicy: TranscriptPolicy{
+			Enabled: false,
+			Mode:    "",
+		},
+	}
+}
+
+func filterLockFiles(paths []string) []string {
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.HasSuffix(path, ".lock") {
+			continue
+		}
+		filtered = append(filtered, path)
+	}
+	return filtered
 }
 
 type logEvent struct {

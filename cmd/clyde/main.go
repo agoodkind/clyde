@@ -31,12 +31,13 @@ import (
 	"goodkind.io/clyde/internal/cli/compact"
 	"goodkind.io/clyde/internal/cli/daemon"
 	hook "goodkind.io/clyde/internal/cli/hook"
+	"goodkind.io/clyde/internal/cli/logs"
 	"goodkind.io/clyde/internal/cli/mcp"
 	cliMITM "goodkind.io/clyde/internal/cli/mitm"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/slogger"
-	"goodkind.io/gklog"
 )
 
 func main() {
@@ -46,11 +47,17 @@ func main() {
 	}
 
 	exitCode := run()
-	clydeMainLog.Logger().Info("cli.main.exit", "component", "cli", "exit_code", exitCode)
+	if !isReadOnlyLogsInventoryCommand(os.Args[1:]) {
+		clydeMainLog.Logger().Info("cli.main.exit", "component", "cli", "exit_code", exitCode)
+	}
 	os.Exit(exitCode)
 }
 
 func run() int {
+	if isReadOnlyLogsInventoryCommand(os.Args[1:]) {
+		return runReadOnlyLogsCommand(os.Args[1:])
+	}
+
 	registry.RegisterDefaultDiscoveryScanners()
 
 	cfg, err := config.LoadGlobalOrDefault()
@@ -59,7 +66,17 @@ func run() int {
 		return 1
 	}
 
-	closer, err := slogger.Setup(cfg.Logging, detectSlogRole(os.Args[1:]), buildConcernRotationOverrides(cfg))
+	role := detectSlogRole(os.Args[1:])
+	setupPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, role)
+	if err != nil {
+		clydeMainLog.Logger().Error("clyde.logpolicy.resolve_failed",
+			"component", "cli",
+			"err", err,
+		)
+		_, _ = fmt.Fprintln(os.Stderr, "logging policy failed:", err)
+		return 1
+	}
+	closer, err := slogger.SetupWithPolicy(setupPolicy)
 	if err != nil {
 		clydeMainLog.Logger().Error("clyde.slogger.setup_failed",
 			"component", "cli",
@@ -112,6 +129,7 @@ func run() int {
 	root.AddCommand(compact.NewCmd(f))
 	root.AddCommand(daemon.NewCmd(f))
 	root.AddCommand(hook.NewCmd(f))
+	root.AddCommand(logs.NewCmd(f))
 	root.AddCommand(cliMITM.NewCmd(f))
 	root.AddCommand(mcp.NewCmd(f))
 	root.AddCommand(cmd.NewResumeCmd())
@@ -132,51 +150,49 @@ func run() int {
 	return 0
 }
 
-// buildConcernRotationOverrides translates typed adapter sub-blocks into the
-// per-concern rotation map slogger.Setup consumes. Today only the wire_capture
-// concerns honor an override; the empty map is a no-op so existing callers
-// pre-extension stay unchanged. New concerns that need their own rotation
-// budget add an entry here.
-func buildConcernRotationOverrides(cfg *config.Config) slogger.ConcernRotationOverrides {
-	rot := cfg.Adapter.WireCapture.Rotation
-	if rot.MaxSizeMB == 0 && rot.MaxBackups == 0 && rot.MaxAgeDays == 0 && rot.Enabled == nil && rot.Compress == nil {
-		return slogger.ConcernRotationOverrides{}
+func isReadOnlyLogsInventoryCommand(args []string) bool {
+	nonFlagArgs := make([]string, 0, 2)
+	skipNext := false
+	for _, arg := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if arg == "--config" || arg == "--state-root" || arg == "--largest" {
+			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--config=") ||
+			strings.HasPrefix(arg, "--state-root=") ||
+			strings.HasPrefix(arg, "--largest=") ||
+			strings.HasPrefix(arg, "-") {
+			continue
+		}
+		nonFlagArgs = append(nonFlagArgs, arg)
+		if len(nonFlagArgs) == 2 {
+			break
+		}
 	}
-	compress := rot.Compress
-	if compress == nil {
-		t := true
-		compress = &t
-	}
-	cfgRot := wireCaptureRotation(rot, compress)
-	return slogger.ConcernRotationOverrides{
-		slogger.ConcernAdapterProviderAnthWire:  cfgRot,
-		slogger.ConcernAdapterProviderCodexWire: cfgRot,
-	}
+	return len(nonFlagArgs) == 2 && nonFlagArgs[0] == "logs" && nonFlagArgs[1] == "inventory"
 }
 
-// wireCaptureRotation maps the typed [adapter.wire_capture.rotation] block
-// onto gklog's concrete RotationConfig. Defaults are intentionally small so
-// always-on use stays bounded; operators set explicit values when they need
-// more retention.
-func wireCaptureRotation(rot config.LoggingRotation, compress *bool) gklog.RotationConfig {
-	maxSize := rot.MaxSizeMB
-	if maxSize <= 0 {
-		maxSize = 8
+func runReadOnlyLogsCommand(args []string) int {
+	root := &cobra.Command{
+		Use:           "clyde",
+		SilenceErrors: true,
 	}
-	backups := rot.MaxBackups
-	if backups <= 0 {
-		backups = 3
+	cli.RegisterGlobalFlags(root)
+	f := cli.NewSystemFactory(cli.BuildInfo{Version: "DEVELOPMENT"})
+	root.SetIn(f.IOStreams.In)
+	root.SetOut(f.IOStreams.Out)
+	root.SetErr(f.IOStreams.Err)
+	root.AddCommand(logs.NewCmd(f))
+	root.SetArgs(args)
+	if err := root.Execute(); err != nil {
+		_, _ = fmt.Fprintln(f.IOStreams.Err, "Error:", err)
+		return 1
 	}
-	age := rot.MaxAgeDays
-	if age <= 0 {
-		age = 2
-	}
-	return gklog.RotationConfig{
-		MaxSizeMB:  maxSize,
-		MaxBackups: backups,
-		MaxAgeDays: age,
-		Compress:   compress,
-	}
+	return 0
 }
 
 func detectSlogRole(args []string) slogger.ProcessRole {
