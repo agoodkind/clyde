@@ -13,12 +13,15 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 const rawCaptureFileMode os.FileMode = 0o600
 
 type cursorCaptureMetadata struct {
 	Provider            string
+	Concern             string
 	Host                string
 	Path                string
 	Method              string
@@ -41,6 +44,7 @@ type cursorCaptureEvent struct {
 	T                   int64                       `json:"t"`
 	TS                  string                      `json:"ts"`
 	Provider            string                      `json:"provider"`
+	Concern             string                      `json:"concern"`
 	Host                string                      `json:"host"`
 	Method              string                      `json:"method"`
 	Path                string                      `json:"path"`
@@ -58,8 +62,65 @@ type cursorCaptureEvent struct {
 	Diagnostic          *cursorBidiAppendDiagnostic `json:"bidi_append,omitempty"`
 }
 
-func (p *Proxy) nextRawCapturePaths(captureDir string, host string, path string) (string, string, error) {
-	dir := filepath.Join(expandHome(captureDir), "raw", safePathPart(host))
+type captureConcernInput struct {
+	Provider            string
+	Host                string
+	Method              string
+	Path                string
+	RequestContentType  string
+	ResponseContentType string
+}
+
+func resolveCaptureConcern(rules []config.MITMCaptureRouteRule, input captureConcernInput) string {
+	if len(rules) == 0 {
+		rules = config.DefaultMITMCaptureRouteRules()
+	}
+	for _, rule := range rules {
+		if captureRuleMatches(rule, input) {
+			return rule.Concern
+		}
+	}
+	return "unknown"
+}
+
+func captureRuleMatches(rule config.MITMCaptureRouteRule, input captureConcernInput) bool {
+	if rule.Provider != "" && !strings.EqualFold(rule.Provider, strings.TrimSpace(input.Provider)) {
+		return false
+	}
+	if rule.Host != "" && normalizeCaptureHost(rule.Host) != normalizeCaptureHost(input.Host) {
+		return false
+	}
+	if rule.Method != "" && !strings.EqualFold(rule.Method, strings.TrimSpace(input.Method)) {
+		return false
+	}
+	if rule.PathExact != "" && rule.PathExact != input.Path {
+		return false
+	}
+	if rule.PathPrefix != "" && !strings.HasPrefix(input.Path, rule.PathPrefix) {
+		return false
+	}
+	if rule.PathContains != "" && !strings.Contains(input.Path, rule.PathContains) {
+		return false
+	}
+	if rule.ContentTypeContains != "" && !captureContentTypeMatches(rule.ContentTypeContains, input) {
+		return false
+	}
+	return rule.Concern != ""
+}
+
+func normalizeCaptureHost(host string) string {
+	return strings.Trim(strings.ToLower(strings.TrimSpace(host)), ".")
+}
+
+func captureContentTypeMatches(needle string, input captureConcernInput) bool {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	requestContentType := strings.ToLower(input.RequestContentType)
+	responseContentType := strings.ToLower(input.ResponseContentType)
+	return strings.Contains(requestContentType, needle) || strings.Contains(responseContentType, needle)
+}
+
+func (p *Proxy) nextRawCapturePaths(captureDir string, concern string, host string, path string) (string, string, error) {
+	dir := filepath.Join(expandHome(captureDir), "concerns", safePathPart(concern), "raw", safePathPart(host))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		slog.Warn("mitm.cursor.raw_capture.mkdir_failed", "dir", dir, "err", err)
 		return "", "", fmt.Errorf("create raw capture dir: %w", err)
@@ -116,7 +177,11 @@ func safePathPart(value string) string {
 			b.WriteByte('-')
 		}
 	}
-	out := strings.Trim(b.String(), "-")
+	out := b.String()
+	for strings.Contains(out, "..") {
+		out = strings.ReplaceAll(out, "..", ".")
+	}
+	out = strings.Trim(out, "-.")
 	if out == "" {
 		return "capture"
 	}
@@ -128,11 +193,16 @@ func safePathPart(value string) string {
 
 func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata) error {
 	now := currentTime()
+	concern := strings.TrimSpace(meta.Concern)
+	if concern == "" {
+		concern = "unknown"
+	}
 	event := cursorCaptureEvent{
 		Kind:                "cursor_tls_http",
 		T:                   now.Unix(),
 		TS:                  now.UTC().Format(time.RFC3339Nano),
 		Provider:            meta.Provider,
+		Concern:             concern,
 		Host:                meta.Host,
 		Method:              meta.Method,
 		Path:                meta.Path,
@@ -154,6 +224,17 @@ func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata) error {
 
 func appendCursorCaptureEvent(dir string, event cursorCaptureEvent) error {
 	dir = expandHome(dir)
+	if strings.TrimSpace(event.Concern) == "" {
+		event.Concern = "unknown"
+	}
+	if err := appendCursorCaptureEventAtDir(dir, event); err != nil {
+		return err
+	}
+	concern := safePathPart(event.Concern)
+	return appendCursorCaptureEventAtDir(filepath.Join(dir, "concerns", concern), event)
+}
+
+func appendCursorCaptureEventAtDir(dir string, event cursorCaptureEvent) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		slog.Warn("mitm.cursor.capture.mkdir_failed", "capture_dir", dir, "err", err)
 		return fmt.Errorf("create cursor capture dir: %w", err)

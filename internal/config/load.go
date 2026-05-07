@@ -378,7 +378,85 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 	if mitm.CaptureDir == "" {
 		mitm.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
 	}
+	captureRules, err := normalizeMITMCaptureRouteRules(mitm.CaptureRules)
+	if err != nil {
+		return err
+	}
+	mitm.CaptureRules = captureRules
 	return nil
+}
+
+func DefaultMITMCaptureRouteRules() []MITMCaptureRouteRule {
+	return []MITMCaptureRouteRule{
+		{
+			Concern:   "cursor.bidi",
+			Provider:  "cursor",
+			Method:    "POST",
+			PathExact: "/aiserver.v1.AiService/BidiAppend",
+		},
+		{
+			Concern:      "cursor.agent",
+			Provider:     "cursor",
+			PathContains: "AiService",
+		},
+		{
+			Concern:      "cursor.catalog",
+			Provider:     "cursor",
+			PathContains: "Model",
+		},
+		{
+			Concern:      "cursor.account",
+			Provider:     "cursor",
+			PathContains: "User",
+		},
+		{
+			Concern:      "cursor.telemetry",
+			Provider:     "cursor",
+			Host:         "telemetry.cursor.com",
+			PathContains: "telemetry",
+		},
+		{
+			Concern:      "cursor.filesync",
+			Provider:     "cursor",
+			PathContains: "FileSync",
+		},
+		{
+			Concern: "unknown",
+		},
+	}
+}
+
+func normalizeMITMCaptureRouteRules(rules []MITMCaptureRouteRule) ([]MITMCaptureRouteRule, error) {
+	if len(rules) == 0 {
+		return DefaultMITMCaptureRouteRules(), nil
+	}
+	normalizedRules := make([]MITMCaptureRouteRule, 0, len(rules))
+	for i, rule := range rules {
+		normalizedRule, err := normalizeMITMCaptureRouteRule(rule)
+		if err != nil {
+			return nil, fmt.Errorf("mitm.capture_rules[%d]: %w", i, err)
+		}
+		normalizedRules = append(normalizedRules, normalizedRule)
+	}
+	return normalizedRules, nil
+}
+
+func normalizeMITMCaptureRouteRule(rule MITMCaptureRouteRule) (MITMCaptureRouteRule, error) {
+	rule.Concern = strings.TrimSpace(rule.Concern)
+	if rule.Concern == "" {
+		return MITMCaptureRouteRule{}, fmt.Errorf("concern is required")
+	}
+	rule.Provider = normalizeMITMProviderName(rule.Provider)
+	if rule.Provider != "" && !isValidMITMProviderName(rule.Provider) {
+		return MITMCaptureRouteRule{}, fmt.Errorf("provider %q is invalid", rule.Provider)
+	}
+	rule.Host = strings.Trim(strings.ToLower(strings.TrimSpace(rule.Host)), ".")
+	rule.Method = strings.ToUpper(strings.TrimSpace(rule.Method))
+	rule.PathExact = strings.TrimSpace(rule.PathExact)
+	rule.PathPrefix = strings.TrimSpace(rule.PathPrefix)
+	rule.PathContains = strings.TrimSpace(rule.PathContains)
+	rule.ContentTypeContains = strings.ToLower(strings.TrimSpace(rule.ContentTypeContains))
+	return rule, nil
 }
 
 // applyAdapterReasoningDefaultsAndValidate validates the per-provider

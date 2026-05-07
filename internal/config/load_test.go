@@ -99,6 +99,52 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.MITM.EnabledFor("codex")).To(BeTrue())
 	})
 
+	It("loads default MITM capture route rules", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[mitm]\nproviders = [\"cursor\"]\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.MITM.CaptureRules).NotTo(BeEmpty())
+		Expect(cfg.MITM.CaptureRules[0].Concern).To(Equal("cursor.bidi"))
+		Expect(cfg.MITM.CaptureRules[len(cfg.MITM.CaptureRules)-1].Concern).To(Equal("unknown"))
+	})
+
+	It("loads custom MITM capture route rules", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		toml := `[mitm]
+providers = ["cursor"]
+
+[[mitm.capture_rules]]
+concern = "cursor.custom"
+provider = "cursor"
+host = "API2.Cursor.SH."
+method = "post"
+path_prefix = "/custom"
+content_type_contains = "PROTOBUF"
+
+[[mitm.capture_rules]]
+concern = "unknown"
+`
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(toml), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.MITM.CaptureRules).To(HaveLen(2))
+		Expect(cfg.MITM.CaptureRules[0].Concern).To(Equal("cursor.custom"))
+		Expect(cfg.MITM.CaptureRules[0].Host).To(Equal("api2.cursor.sh"))
+		Expect(cfg.MITM.CaptureRules[0].Method).To(Equal("POST"))
+		Expect(cfg.MITM.CaptureRules[0].ContentTypeContains).To(Equal("protobuf"))
+	})
+
 	It("loads openai_compat_passthrough upstream", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

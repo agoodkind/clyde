@@ -1039,16 +1039,30 @@ type Defaults struct {
 
 // MITMConfig configures the local capture proxy and its persistence.
 type MITMConfig struct {
-	EnabledDefault bool            `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
-	Providers      MITMProviderSet `json:"providers,omitempty" toml:"providers,omitempty"`
-	BodyMode       string          `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
-	CaptureDir     string          `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
-	Drift          MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
+	EnabledDefault bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
+	Providers      MITMProviderSet        `json:"providers,omitempty" toml:"providers,omitempty"`
+	BodyMode       string                 `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
+	CaptureDir     string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
+	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
 }
 
 // MITMProviderSet is the configured set of provider families routed through
 // the capture proxy. The special value "all" enables every provider family.
 type MITMProviderSet []string
+
+// MITMCaptureRouteRule classifies one captured MITM request into a concern.
+// Rules are evaluated in order, and every non-empty predicate must match.
+type MITMCaptureRouteRule struct {
+	Concern             string `json:"concern" toml:"concern"`
+	Provider            string `json:"provider,omitempty" toml:"provider,omitempty"`
+	Host                string `json:"host,omitempty" toml:"host,omitempty"`
+	Method              string `json:"method,omitempty" toml:"method,omitempty"`
+	PathExact           string `json:"pathExact,omitempty" toml:"path_exact,omitempty"`
+	PathPrefix          string `json:"pathPrefix,omitempty" toml:"path_prefix,omitempty"`
+	PathContains        string `json:"pathContains,omitempty" toml:"path_contains,omitempty"`
+	ContentTypeContains string `json:"contentTypeContains,omitempty" toml:"content_type_contains,omitempty"`
+}
 
 // MITMDriftConfig configures daemon-owned baseline refresh and drift
 // reporting. When Enabled, the daemon periodically reads the current

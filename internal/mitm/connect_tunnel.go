@@ -236,7 +236,14 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	req.URL.Scheme = "https"
 	req.URL.Host = target
 
-	requestRawPath, responseRawPath, err := p.nextRawCapturePaths(cfg.CaptureDir, host, req.URL.Path)
+	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{
+		Provider:           "cursor",
+		Host:               host,
+		Method:             req.Method,
+		Path:               req.URL.Path,
+		RequestContentType: req.Header.Get("Content-Type"),
+	})
+	requestRawPath, responseRawPath, err := p.nextRawCapturePaths(cfg.CaptureDir, concern, host, req.URL.Path)
 	if err != nil {
 		return fmt.Errorf("prepare raw capture paths: %w", err)
 	}
@@ -288,6 +295,7 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	}
 	if err := appendCursorCaptureMetadata(cfg.CaptureDir, cursorCaptureMetadata{
 		Provider:            "cursor",
+		Concern:             concern,
 		Host:                host,
 		Path:                req.URL.Path,
 		Method:              req.Method,
@@ -308,6 +316,7 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	}
 	p.log.Info("mitm.cursor.capture.completed",
 		"host", host,
+		"concern", concern,
 		"path", req.URL.Path,
 		"status", resp.StatusCode,
 		"duration_ms", time.Since(started).Milliseconds(),
