@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+type cursorServiceHost string
+
+const (
+	cursorAPI2Host cursorServiceHost = "api2.cursor.sh"
+	cursorAPI3Host cursorServiceHost = "api3.cursor.sh"
+)
+
 func shouldInterceptCursorConnect(target string) (string, bool) {
 	host := strings.TrimSpace(target)
 	if parsedHost, _, err := net.SplitHostPort(target); err == nil {
@@ -16,8 +23,8 @@ func shouldInterceptCursorConnect(target string) (string, bool) {
 
 func isCursorServiceHost(host string) bool {
 	host = strings.Trim(strings.ToLower(host), ".")
-	switch host {
-	case "api2.cursor.sh", "api3.cursor.sh":
+	switch cursorServiceHost(host) {
+	case cursorAPI2Host, cursorAPI3Host:
 		return true
 	}
 	return strings.HasSuffix(host, ".cursor.sh") ||

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -25,7 +25,7 @@ func cursorBidiAppendDiagnosticForRequest(req *httpRequestCapture, sentinel []by
 	if !looksLikeCursorBidiAppend(req.Path, req.Headers) {
 		return nil, false
 	}
-	decoded, decodedOK := decodeForCapture(req.Body, req.Headers.Get("content-encoding"))
+	decoded, decodedOK := decodeForCapture(req.Body, req.Headers.Get("Content-Encoding"))
 	if !decodedOK {
 		decoded = req.Body
 	}
@@ -46,14 +46,20 @@ func looksLikeCursorBidiAppend(path string, headers http.Header) bool {
 	if strings.Contains(strings.ToLower(path), "bidi_append") {
 		return true
 	}
-	method := strings.ToLower(headers.Get("x-grpc-web"))
+	method := strings.ToLower(headers.Get("X-Grpc-Web"))
 	return strings.Contains(method, "bidiappend")
 }
 
 func decodeCursorBidiAppendDiagnostic(decoded []byte, sentinel []byte) cursorBidiAppendDiagnostic {
 	diag := cursorBidiAppendDiagnostic{
-		DecodedBytes:  len(decoded),
-		DecodedSHA256: sha256Hex(decoded),
+		RequestID:         "",
+		AppendSeqno:       0,
+		DecodedBytes:      len(decoded),
+		DecodedSHA256:     sha256Hex(decoded),
+		PayloadBytes:      0,
+		PayloadSHA256:     "",
+		SentinelFound:     false,
+		SentinelRequested: false,
 	}
 	if len(sentinel) > 0 {
 		diag.SentinelRequested = true
@@ -80,8 +86,8 @@ func decodeCursorBidiAppendDiagnostic(decoded []byte, sentinel []byte) cursorBid
 }
 
 type scannedProtoValue struct {
-	Number   int
-	WireType int
+	Number   uint64
+	WireType uint64
 	Varint   uint64
 	Bytes    []byte
 }
@@ -92,41 +98,41 @@ func scanProtoValues(raw []byte, depth int) []scannedProtoValue {
 	}
 	var out []scannedProtoValue
 	for i := 0; i < len(raw); {
-		key, n := binary.Uvarint(raw[i:])
-		if n <= 0 {
+		fieldNumber, wireType, next, ok := readProtoKey(raw, i)
+		if !ok {
 			break
 		}
-		i += n
-		fieldNumber := int(key >> 3)
-		wireType := int(key & 0x7)
-		if fieldNumber <= 0 {
-			break
-		}
+		i = next
 		switch wireType {
 		case 0:
-			value, vn := binary.Uvarint(raw[i:])
-			if vn <= 0 {
+			value, next, ok := readProtoVarint(raw, i)
+			if !ok {
 				return out
 			}
-			i += vn
-			out = append(out, scannedProtoValue{Number: fieldNumber, WireType: wireType, Varint: value})
+			i = next
+			out = append(out, scannedProtoValue{
+				Number:   fieldNumber,
+				WireType: wireType,
+				Varint:   value,
+				Bytes:    nil,
+			})
 		case 1:
 			if i+8 > len(raw) {
 				return out
 			}
 			i += 8
 		case 2:
-			length, ln := binary.Uvarint(raw[i:])
-			if ln <= 0 {
+			value, next, ok := readProtoBytes(raw, i)
+			if !ok {
 				return out
 			}
-			i += ln
-			if length > uint64(len(raw)-i) {
-				return out
-			}
-			value := raw[i : i+int(length)]
-			i += int(length)
-			out = append(out, scannedProtoValue{Number: fieldNumber, WireType: wireType, Bytes: value})
+			i = next
+			out = append(out, scannedProtoValue{
+				Number:   fieldNumber,
+				WireType: wireType,
+				Varint:   0,
+				Bytes:    value,
+			})
 			if utf8.Valid(value) || json.Valid(value) {
 				continue
 			}
@@ -143,6 +149,43 @@ func scanProtoValues(raw []byte, depth int) []scannedProtoValue {
 	return out
 }
 
+func readProtoKey(raw []byte, offset int) (fieldNumber uint64, wireType uint64, next int, ok bool) {
+	key, n := binary.Uvarint(raw[offset:])
+	if n <= 0 {
+		return 0, 0, offset, false
+	}
+	fieldNumber = key >> 3
+	if fieldNumber <= 0 {
+		return 0, 0, offset, false
+	}
+	return fieldNumber, key & 0x7, offset + n, true
+}
+
+func readProtoVarint(raw []byte, offset int) (uint64, int, bool) {
+	value, n := binary.Uvarint(raw[offset:])
+	if n <= 0 {
+		return 0, offset, false
+	}
+	return value, offset + n, true
+}
+
+func readProtoBytes(raw []byte, offset int) ([]byte, int, bool) {
+	length, n := binary.Uvarint(raw[offset:])
+	if n <= 0 {
+		return nil, offset, false
+	}
+	offset += n
+	maxInt := uint64(1)<<(strconv.IntSize-1) - 1
+	if length > maxInt {
+		return nil, offset, false
+	}
+	valueLength := int(length)
+	if valueLength > len(raw)-offset {
+		return nil, offset, false
+	}
+	return raw[offset : offset+valueLength], offset + valueLength, true
+}
+
 func likelyRequestID(raw []byte) bool {
 	if len(raw) < 4 || len(raw) > 128 || !utf8.Valid(raw) {
 		return false
@@ -156,33 +199,4 @@ func likelyRequestID(raw []byte) bool {
 		return true
 	}
 	return strings.Count(text, "-") >= 4
-}
-
-func appendProtoString(dst []byte, fieldNumber int, value string) []byte {
-	dst = appendProtoKey(dst, fieldNumber, 2)
-	dst = binary.AppendUvarint(dst, uint64(len(value)))
-	return append(dst, value...)
-}
-
-func appendProtoBytes(dst []byte, fieldNumber int, value []byte) []byte {
-	dst = appendProtoKey(dst, fieldNumber, 2)
-	dst = binary.AppendUvarint(dst, uint64(len(value)))
-	return append(dst, value...)
-}
-
-func appendProtoVarint(dst []byte, fieldNumber int, value uint64) []byte {
-	dst = appendProtoKey(dst, fieldNumber, 0)
-	return binary.AppendUvarint(dst, value)
-}
-
-func appendProtoKey(dst []byte, fieldNumber int, wireType int) []byte {
-	return binary.AppendUvarint(dst, uint64(fieldNumber<<3|wireType))
-}
-
-func mustCursorDiagnosticJSON(diag cursorBidiAppendDiagnostic) []byte {
-	raw, err := json.Marshal(diag)
-	if err != nil {
-		panic(fmt.Sprintf("marshal cursor diagnostic: %v", err))
-	}
-	return raw
 }

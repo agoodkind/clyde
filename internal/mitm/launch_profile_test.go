@@ -103,7 +103,7 @@ func TestCursorLaunchProfileUsesCursorBundleAndDomains(t *testing.T) {
 }
 
 func TestCursorLaunchArgsDefaultNormalProfile(t *testing.T) {
-	args, err := CursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{})
+	args, err := cursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{})
 	if err != nil {
 		t.Fatalf("CursorLaunchArgs: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestCursorLaunchArgsDefaultNormalProfile(t *testing.T) {
 }
 
 func TestCursorLaunchArgsIsolatedProfile(t *testing.T) {
-	args, err := CursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{
+	args, err := cursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{
 		Isolated:           true,
 		IsolatedProfileDir: "tmp/cursor-mitm",
 	})
@@ -129,7 +129,7 @@ func TestCursorLaunchArgsIsolatedProfile(t *testing.T) {
 }
 
 func TestCursorLaunchArgsIsolatedRequiresProfileDir(t *testing.T) {
-	_, err := CursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{Isolated: true})
+	_, err := cursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{Isolated: true})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -139,14 +139,14 @@ func TestCursorLaunchArgsIsolatedRequiresProfileDir(t *testing.T) {
 }
 
 func TestCursorProbeSettingsCarryRequiredProbeConfig(t *testing.T) {
-	settings := NewCursorProbeSettings(" http://[::1]:8888 ")
-	values := settings.ConfigurationValues()
-	assertCursorBoolSetting(t, values, CursorSettingDisableHTTP2, true)
-	assertCursorBoolSetting(t, values, CursorSettingDisableHTTP1SSE, false)
-	assertCursorStringSetting(t, values, CursorSettingProxy, "http://[::1]:8888")
-	assertCursorBoolSetting(t, values, CursorSettingProxyStrictSSL, false)
-	assertCursorStringSetting(t, values, CursorSettingProxySupport, "override")
-	assertCursorBoolSetting(t, values, CursorSettingUseLocalProxyConfiguration, true)
+	settings := newCursorProbeSettings(" http://[::1]:8888 ")
+	values := settings.configurationValues()
+	assertCursorBoolSetting(t, values, cursorSettingDisableHTTP2, true)
+	assertCursorBoolSetting(t, values, cursorSettingDisableHTTP1SSE, false)
+	assertCursorStringSetting(t, values, cursorSettingProxy, "http://[::1]:8888")
+	assertCursorBoolSetting(t, values, cursorSettingProxyStrictSSL, false)
+	assertCursorStringSetting(t, values, cursorSettingProxySupport, "override")
+	assertCursorBoolSetting(t, values, cursorSettingUseLocalProxyConfiguration, true)
 }
 
 func TestWriteCursorProbeSettingsMergesExistingSettings(t *testing.T) {
@@ -157,7 +157,7 @@ func TestWriteCursorProbeSettingsMergesExistingSettings(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte("{\"editor.fontSize\":14}\n"), 0o600); err != nil {
 		t.Fatalf("write seed settings: %v", err)
 	}
-	if err := writeCursorProbeSettings(settingsPath, NewCursorProbeSettings("http://localhost:8899")); err != nil {
+	if err := writeCursorProbeSettings(settingsPath, newCursorProbeSettings("http://localhost:8899")); err != nil {
 		t.Fatalf("writeCursorProbeSettings: %v", err)
 	}
 	raw, err := os.ReadFile(settingsPath)
@@ -169,10 +169,10 @@ func TestWriteCursorProbeSettingsMergesExistingSettings(t *testing.T) {
 		t.Fatalf("unmarshal settings: %v", err)
 	}
 	assertRawJSON(t, got, "editor.fontSize", "14")
-	assertRawJSON(t, got, CursorSettingDisableHTTP2, "true")
-	assertRawJSON(t, got, CursorSettingDisableHTTP1SSE, "false")
-	assertRawJSON(t, got, CursorSettingProxy, `"http://localhost:8899"`)
-	assertRawJSON(t, got, CursorSettingProxySupport, `"override"`)
+	assertRawJSON(t, got, cursorSettingDisableHTTP2, "true")
+	assertRawJSON(t, got, cursorSettingDisableHTTP1SSE, "false")
+	assertRawJSON(t, got, cursorSettingProxy, `"http://localhost:8899"`)
+	assertRawJSON(t, got, cursorSettingProxySupport, `"override"`)
 }
 
 func TestCursorSettingsPathUsesIsolatedProfile(t *testing.T) {
@@ -194,7 +194,7 @@ func TestValidateCursorLaunchRejectsRunningNormalProfile(t *testing.T) {
 		return []byte("123 /Applications/Cursor.app/Contents/MacOS/Cursor\n"), nil
 	}
 
-	err := ValidateCursorLaunch(LaunchProfileOptions{})
+	err := validateCursorLaunch(LaunchProfileOptions{})
 	if err == nil {
 		t.Fatalf("expected running normal-profile error")
 	}
@@ -211,10 +211,10 @@ func TestValidateCursorLaunchAllowsForceAndIsolated(t *testing.T) {
 		return nil, nil
 	}
 
-	if err := ValidateCursorLaunch(LaunchProfileOptions{Force: true}); err != nil {
+	if err := validateCursorLaunch(LaunchProfileOptions{Force: true}); err != nil {
 		t.Fatalf("force ValidateCursorLaunch: %v", err)
 	}
-	if err := ValidateCursorLaunch(LaunchProfileOptions{Isolated: true}); err != nil {
+	if err := validateCursorLaunch(LaunchProfileOptions{Isolated: true}); err != nil {
 		t.Fatalf("isolated ValidateCursorLaunch: %v", err)
 	}
 }
@@ -235,13 +235,13 @@ func containsPrefix(values []string, prefix string) bool {
 	return false
 }
 
-func assertCursorBoolSetting(t *testing.T, values []CursorConfigurationValue, key string, want bool) {
+func assertCursorBoolSetting(t *testing.T, values []cursorConfigurationValue, key string, want bool) {
 	t.Helper()
 	for _, value := range values {
 		if value.Key != key {
 			continue
 		}
-		if value.Kind != CursorConfigurationBool || value.BoolValue != want {
+		if value.Kind != cursorConfigurationBool || value.BoolValue != want {
 			t.Fatalf("%s=%+v, want bool %v", key, value, want)
 		}
 		return
@@ -249,13 +249,13 @@ func assertCursorBoolSetting(t *testing.T, values []CursorConfigurationValue, ke
 	t.Fatalf("missing setting %s", key)
 }
 
-func assertCursorStringSetting(t *testing.T, values []CursorConfigurationValue, key string, want string) {
+func assertCursorStringSetting(t *testing.T, values []cursorConfigurationValue, key string, want string) {
 	t.Helper()
 	for _, value := range values {
 		if value.Key != key {
 			continue
 		}
-		if value.Kind != CursorConfigurationString || value.StringValue != want {
+		if value.Kind != cursorConfigurationString || value.StringValue != want {
 			t.Fatalf("%s=%+v, want string %q", key, value, want)
 		}
 		return

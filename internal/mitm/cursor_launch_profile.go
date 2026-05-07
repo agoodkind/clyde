@@ -2,9 +2,11 @@ package mitm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,12 +17,12 @@ const (
 	cursorLaunchProfileName = "cursor"
 	cursorDefaultBinaryPath = "/Applications/Cursor.app/Contents/MacOS/Cursor"
 
-	CursorSettingDisableHTTP2               = "cursor.general.disableHttp2"
-	CursorSettingDisableHTTP1SSE            = "cursor.general.disableHttp1SSE"
-	CursorSettingProxy                      = "http.proxy"
-	CursorSettingProxyStrictSSL             = "http.proxyStrictSSL"
-	CursorSettingProxySupport               = "http.proxySupport"
-	CursorSettingUseLocalProxyConfiguration = "http.useLocalProxyConfiguration"
+	cursorSettingDisableHTTP2               = "cursor.general.disableHttp2"
+	cursorSettingDisableHTTP1SSE            = "cursor.general.disableHttp1SSE"
+	cursorSettingProxy                      = "http.proxy"
+	cursorSettingProxyStrictSSL             = "http.proxyStrictSSL"
+	cursorSettingProxySupport               = "http.proxySupport"
+	cursorSettingUseLocalProxyConfiguration = "http.useLocalProxyConfiguration"
 )
 
 var cursorProcessList = defaultCursorProcessList
@@ -33,20 +35,17 @@ func NewCursorLaunchProfile() LaunchProfile {
 	return LaunchProfile{
 		Name:            cursorLaunchProfileName,
 		BinaryFinder:    findApp(cursorDefaultBinaryPath),
+		BaseArgs:        []string{},
 		EnvKeys:         []string{"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"},
 		IsElectron:      true,
 		UpstreamDomains: []string{"cursor.com", "api2.cursor.sh", "api3.cursor.sh", "api4.cursor.sh", "chatgpt.com", "openai.com", "api.anthropic.com", "anthropic.com"},
-		ArgBuilder:      CursorLaunchArgs,
-		Configurator:    ConfigureCursorLaunch,
-		Preflight:       ValidateCursorLaunch,
+		ArgBuilder:      cursorLaunchArgs,
+		Configurator:    configureCursorLaunch,
+		Preflight:       validateCursorLaunch,
 	}
 }
 
-// CursorLaunchArgs returns the Cursor process arguments needed for
-// MITM probing. Cursor-specific HTTP/2 and SSE settings are exposed
-// separately by NewCursorProbeSettings because they belong in the
-// selected Cursor profile's settings.json.
-func CursorLaunchArgs(proxyURL string, opts LaunchProfileOptions) ([]string, error) {
+func cursorLaunchArgs(proxyURL string, opts LaunchProfileOptions) ([]string, error) {
 	args := []string{
 		"--proxy-server=" + strings.TrimSpace(proxyURL),
 		"--ignore-certificate-errors",
@@ -59,6 +58,7 @@ func CursorLaunchArgs(proxyURL string, opts LaunchProfileOptions) ([]string, err
 		}
 		absProfileDir, err := filepath.Abs(profileDir)
 		if err != nil {
+			slog.Warn("mitm.cursor.launch.resolve_isolated_profile_failed", "profile_dir", profileDir, "err", err)
 			return nil, fmt.Errorf("resolve cursor isolated profile dir: %w", err)
 		}
 		args = append(args, "--user-data-dir="+absProfileDir)
@@ -66,24 +66,21 @@ func CursorLaunchArgs(proxyURL string, opts LaunchProfileOptions) ([]string, err
 	return args, nil
 }
 
-type CursorConfigurationValueKind string
+type cursorConfigurationValueKind string
 
 const (
-	CursorConfigurationBool   CursorConfigurationValueKind = "bool"
-	CursorConfigurationString CursorConfigurationValueKind = "string"
+	cursorConfigurationBool   cursorConfigurationValueKind = "bool"
+	cursorConfigurationString cursorConfigurationValueKind = "string"
 )
 
-// CursorConfigurationValue is a typed VS Code/Cursor settings value.
-// Future CLI or daemon surfaces can serialize these values into the
-// selected profile's settings.json without open-ended payloads here.
-type CursorConfigurationValue struct {
+type cursorConfigurationValue struct {
 	Key         string
-	Kind        CursorConfigurationValueKind
+	Kind        cursorConfigurationValueKind
 	BoolValue   bool
 	StringValue string
 }
 
-type CursorProbeSettings struct {
+type cursorProbeSettings struct {
 	DisableHTTP2               bool
 	DisableHTTP1SSE            bool
 	Proxy                      string
@@ -92,10 +89,8 @@ type CursorProbeSettings struct {
 	UseLocalProxyConfiguration bool
 }
 
-// NewCursorProbeSettings returns the settings future CLI or daemon
-// surfaces should merge into the selected Cursor profile before launch.
-func NewCursorProbeSettings(proxyURL string) CursorProbeSettings {
-	return CursorProbeSettings{
+func newCursorProbeSettings(proxyURL string) cursorProbeSettings {
+	return cursorProbeSettings{
 		DisableHTTP2:               true,
 		DisableHTTP1SSE:            false,
 		Proxy:                      strings.TrimSpace(proxyURL),
@@ -105,26 +100,23 @@ func NewCursorProbeSettings(proxyURL string) CursorProbeSettings {
 	}
 }
 
-func (s CursorProbeSettings) ConfigurationValues() []CursorConfigurationValue {
-	return []CursorConfigurationValue{
-		{Key: CursorSettingDisableHTTP2, Kind: CursorConfigurationBool, BoolValue: s.DisableHTTP2},
-		{Key: CursorSettingDisableHTTP1SSE, Kind: CursorConfigurationBool, BoolValue: s.DisableHTTP1SSE},
-		{Key: CursorSettingProxy, Kind: CursorConfigurationString, StringValue: s.Proxy},
-		{Key: CursorSettingProxyStrictSSL, Kind: CursorConfigurationBool, BoolValue: s.ProxyStrictSSL},
-		{Key: CursorSettingProxySupport, Kind: CursorConfigurationString, StringValue: s.ProxySupport},
-		{Key: CursorSettingUseLocalProxyConfiguration, Kind: CursorConfigurationBool, BoolValue: s.UseLocalProxyConfiguration},
+func (s cursorProbeSettings) configurationValues() []cursorConfigurationValue {
+	return []cursorConfigurationValue{
+		{Key: cursorSettingDisableHTTP2, Kind: cursorConfigurationBool, BoolValue: s.DisableHTTP2, StringValue: ""},
+		{Key: cursorSettingDisableHTTP1SSE, Kind: cursorConfigurationBool, BoolValue: s.DisableHTTP1SSE, StringValue: ""},
+		{Key: cursorSettingProxy, Kind: cursorConfigurationString, BoolValue: false, StringValue: s.Proxy},
+		{Key: cursorSettingProxyStrictSSL, Kind: cursorConfigurationBool, BoolValue: s.ProxyStrictSSL, StringValue: ""},
+		{Key: cursorSettingProxySupport, Kind: cursorConfigurationString, BoolValue: false, StringValue: s.ProxySupport},
+		{Key: cursorSettingUseLocalProxyConfiguration, Kind: cursorConfigurationBool, BoolValue: s.UseLocalProxyConfiguration, StringValue: ""},
 	}
 }
 
-// ConfigureCursorLaunch writes the proxy settings Cursor's extension host
-// reads from the active profile. Chromium flags alone do not reliably affect
-// extension-host network calls.
-func ConfigureCursorLaunch(proxyURL string, opts LaunchProfileOptions) error {
+func configureCursorLaunch(proxyURL string, opts LaunchProfileOptions) error {
 	settingsPath, err := cursorSettingsPath(opts)
 	if err != nil {
 		return err
 	}
-	return writeCursorProbeSettings(settingsPath, NewCursorProbeSettings(proxyURL))
+	return writeCursorProbeSettings(settingsPath, newCursorProbeSettings(proxyURL))
 }
 
 func cursorSettingsPath(opts LaunchProfileOptions) (string, error) {
@@ -135,18 +127,20 @@ func cursorSettingsPath(opts LaunchProfileOptions) (string, error) {
 		}
 		absProfileDir, err := filepath.Abs(profileDir)
 		if err != nil {
+			slog.Warn("mitm.cursor.settings.resolve_isolated_profile_failed", "profile_dir", profileDir, "err", err)
 			return "", fmt.Errorf("resolve cursor isolated profile dir: %w", err)
 		}
 		return filepath.Join(absProfileDir, "User", "settings.json"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		slog.Warn("mitm.cursor.settings.home_failed", "err", err)
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
 	return filepath.Join(home, "Library", "Application Support", "Cursor", "User", "settings.json"), nil
 }
 
-func writeCursorProbeSettings(path string, settings CursorProbeSettings) error {
+func writeCursorProbeSettings(path string, settings cursorProbeSettings) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return errors.New("cursor settings path is empty")
@@ -154,12 +148,14 @@ func writeCursorProbeSettings(path string, settings CursorProbeSettings) error {
 	existing := map[string]json.RawMessage{}
 	if raw, err := os.ReadFile(path); err == nil && len(bytes.TrimSpace(raw)) > 0 {
 		if err := json.Unmarshal(raw, &existing); err != nil {
+			slog.Warn("mitm.cursor.settings.parse_failed", "path", path, "err", err)
 			return fmt.Errorf("parse cursor settings: %w", err)
 		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("mitm.cursor.settings.read_failed", "path", path, "err", err)
 		return fmt.Errorf("read cursor settings: %w", err)
 	}
-	for _, value := range settings.ConfigurationValues() {
+	for _, value := range settings.configurationValues() {
 		raw, err := marshalCursorConfigurationValue(value)
 		if err != nil {
 			return err
@@ -168,28 +164,33 @@ func writeCursorProbeSettings(path string, settings CursorProbeSettings) error {
 	}
 	encoded, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
+		slog.Warn("mitm.cursor.settings.encode_failed", "path", path, "err", err)
 		return fmt.Errorf("encode cursor settings: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		slog.Warn("mitm.cursor.settings.mkdir_failed", "path", path, "err", err)
 		return fmt.Errorf("create cursor settings dir: %w", err)
 	}
 	if err := os.WriteFile(path, append(encoded, '\n'), 0o600); err != nil {
+		slog.Warn("mitm.cursor.settings.write_failed", "path", path, "err", err)
 		return fmt.Errorf("write cursor settings: %w", err)
 	}
 	return nil
 }
 
-func marshalCursorConfigurationValue(value CursorConfigurationValue) (json.RawMessage, error) {
+func marshalCursorConfigurationValue(value cursorConfigurationValue) (json.RawMessage, error) {
 	switch value.Kind {
-	case CursorConfigurationBool:
+	case cursorConfigurationBool:
 		raw, err := json.Marshal(value.BoolValue)
 		if err != nil {
+			slog.Warn("mitm.cursor.settings.marshal_bool_failed", "key", value.Key, "err", err)
 			return nil, fmt.Errorf("marshal cursor bool setting %s: %w", value.Key, err)
 		}
 		return raw, nil
-	case CursorConfigurationString:
+	case cursorConfigurationString:
 		raw, err := json.Marshal(value.StringValue)
 		if err != nil {
+			slog.Warn("mitm.cursor.settings.marshal_string_failed", "key", value.Key, "err", err)
 			return nil, fmt.Errorf("marshal cursor string setting %s: %w", value.Key, err)
 		}
 		return raw, nil
@@ -198,26 +199,23 @@ func marshalCursorConfigurationValue(value CursorConfigurationValue) (json.RawMe
 	}
 }
 
-// ValidateCursorLaunch rejects launching a second normal-profile
-// Cursor because Electron will usually hand off to the already-running
-// instance, leaving the MITM flags unused. Isolated launches are
-// allowed because they use a separate user-data-dir.
-func ValidateCursorLaunch(opts LaunchProfileOptions) error {
+func validateCursorLaunch(opts LaunchProfileOptions) error {
 	if opts.Isolated || opts.Force {
 		return nil
 	}
 	output, err := cursorProcessList()
 	if err != nil {
+		slog.Warn("mitm.cursor.launch.process_list_failed", "err", err)
 		return fmt.Errorf("inspect running Cursor processes: %w", err)
 	}
 	if cursorNormalProfileRunning(output) {
-		return errors.New("Cursor appears to already be running with the normal profile; close Cursor first, request an isolated profile, or allow force")
+		return errors.New("cursor appears to already be running with the normal profile; close Cursor first, request an isolated profile, or allow force")
 	}
 	return nil
 }
 
 func defaultCursorProcessList() ([]byte, error) {
-	cmd := exec.Command("pgrep", "-afil", "Cursor.app/Contents/MacOS/Cursor")
+	cmd := exec.CommandContext(context.Background(), "pgrep", "-afil", "Cursor.app/Contents/MacOS/Cursor")
 	output, err := cmd.Output()
 	if err == nil {
 		return output, nil
@@ -226,12 +224,13 @@ func defaultCursorProcessList() ([]byte, error) {
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 		return nil, nil
 	}
-	return nil, err
+	slog.Warn("mitm.cursor.launch.pgrep_failed", "err", err)
+	return nil, fmt.Errorf("pgrep Cursor processes: %w", err)
 }
 
 func cursorNormalProfileRunning(output []byte) bool {
-	for _, rawLine := range bytes.Split(output, []byte{'\n'}) {
-		line := strings.TrimSpace(string(rawLine))
+	for rawLine := range strings.SplitSeq(string(output), "\n") {
+		line := strings.TrimSpace(rawLine)
 		if line == "" {
 			continue
 		}

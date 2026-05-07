@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,9 +148,17 @@ func TestIsWebsocketUpgradeRejectsPlainHTTP(t *testing.T) {
 func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 	t.Helper()
 	return &Proxy{
-		client: http.DefaultClient,
-		cfg:    cfg,
-		log:    discardLogger(),
+		log:                   discardLogger(),
+		client:                http.DefaultClient,
+		dialContext:           nil,
+		certMu:                sync.Mutex{},
+		ca:                    nil,
+		cursorTLSClientConfig: nil,
+		rawCaptureSeq:         atomic.Uint64{},
+		mu:                    sync.RWMutex{},
+		cfg:                   cfg,
+		base:                  "",
+		server:                nil,
 	}
 }
 

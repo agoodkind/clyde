@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -224,11 +226,17 @@ func startCaptureProxy(addr string, cfg config.MITMConfig, log *slog.Logger) (*c
 		return nil, err
 	}
 	proxy := &Proxy{
-		log:         log.With("component", "mitm-capture"),
-		client:      http.DefaultClient,
-		dialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		cfg:         cfg,
-		base:        "http://" + ln.Addr().String(),
+		log:                   log.With("component", "mitm-capture"),
+		client:                http.DefaultClient,
+		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		certMu:                sync.Mutex{},
+		ca:                    nil,
+		cursorTLSClientConfig: nil,
+		rawCaptureSeq:         atomic.Uint64{},
+		mu:                    sync.RWMutex{},
+		cfg:                   cfg,
+		base:                  "http://" + ln.Addr().String(),
+		server:                nil,
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(proxy.handle)}
 	proxy.server = srv

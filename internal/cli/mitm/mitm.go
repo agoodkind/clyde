@@ -4,6 +4,7 @@ package mitm
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -67,7 +68,8 @@ func newLaunchCursorCmd(f *cli.Factory) *cobra.Command {
 				Args:        append([]string{}, args...),
 			})
 			if err != nil {
-				return err
+				slog.WarnContext(ctx, "cli.mitm.launch_cursor_failed", "err", err)
+				return fmt.Errorf("launch MITM upstream: %w", err)
 			}
 			_, _ = fmt.Fprintf(f.IOStreams.Out, "launched %s via MITM (%s profile), capture_dir=%s\n",
 				resp.GetUpstream(),

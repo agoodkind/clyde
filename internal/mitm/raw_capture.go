@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -34,10 +36,33 @@ type cursorCaptureMetadata struct {
 	Diagnostic          *cursorBidiAppendDiagnostic
 }
 
+type cursorCaptureEvent struct {
+	Kind                string                      `json:"kind"`
+	T                   int64                       `json:"t"`
+	TS                  string                      `json:"ts"`
+	Provider            string                      `json:"provider"`
+	Host                string                      `json:"host"`
+	Method              string                      `json:"method"`
+	Path                string                      `json:"path"`
+	Status              int                         `json:"status"`
+	RequestBytes        int64                       `json:"request_bytes"`
+	ResponseBytes       int64                       `json:"response_bytes"`
+	RequestRawPath      string                      `json:"request_raw_path"`
+	ResponseRawPath     string                      `json:"response_raw_path"`
+	RequestID           string                      `json:"request_id"`
+	OriginalRequestID   string                      `json:"original_request_id"`
+	SessionID           string                      `json:"session_id"`
+	Traceparent         string                      `json:"traceparent"`
+	RequestContentType  string                      `json:"request_content_type"`
+	ResponseContentType string                      `json:"response_content_type"`
+	Diagnostic          *cursorBidiAppendDiagnostic `json:"bidi_append,omitempty"`
+}
+
 func (p *Proxy) nextRawCapturePaths(captureDir string, host string, path string) (string, string, error) {
 	dir := filepath.Join(expandHome(captureDir), "raw", safePathPart(host))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
+		slog.Warn("mitm.cursor.raw_capture.mkdir_failed", "dir", dir, "err", err)
+		return "", "", fmt.Errorf("create raw capture dir: %w", err)
 	}
 	seq := p.rawCaptureSeq.Add(1)
 	stamp := currentTime().UTC().Format("20060102T150405.000000000Z")
@@ -48,10 +73,11 @@ func (p *Proxy) nextRawCapturePaths(captureDir string, host string, path string)
 func writeRawCaptureFile(path string, write func(io.Writer) error) (int64, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 	if err != nil {
-		return 0, err
+		slog.Warn("mitm.cursor.raw_capture.open_failed", "path", path, "err", err)
+		return 0, fmt.Errorf("open raw capture file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	counter := &countingWriter{writer: f}
+	counter := &countingWriter{writer: f, count: 0}
 	if err := write(counter); err != nil {
 		return counter.count, err
 	}
@@ -66,7 +92,10 @@ type countingWriter struct {
 func (w *countingWriter) Write(p []byte) (int, error) {
 	n, err := w.writer.Write(p)
 	w.count += int64(n)
-	return n, err
+	if err != nil {
+		return n, fmt.Errorf("write counted bytes: %w", err)
+	}
+	return n, nil
 }
 
 func safePathPart(value string) string {
@@ -98,30 +127,54 @@ func safePathPart(value string) string {
 }
 
 func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata) error {
-	event := map[string]any{
-		"kind":                  "cursor_tls_http",
-		"t":                     currentTime().Unix(),
-		"ts":                    currentTime().UTC().Format(time.RFC3339Nano),
-		"provider":              meta.Provider,
-		"host":                  meta.Host,
-		"method":                meta.Method,
-		"path":                  meta.Path,
-		"status":                meta.Status,
-		"request_bytes":         meta.RequestBytes,
-		"response_bytes":        meta.ResponseBytes,
-		"request_raw_path":      meta.RequestRawPath,
-		"response_raw_path":     meta.ResponseRawPath,
-		"request_id":            meta.RequestID,
-		"original_request_id":   meta.OriginalRequestID,
-		"session_id":            meta.SessionID,
-		"traceparent":           meta.Traceparent,
-		"request_content_type":  meta.RequestContentType,
-		"response_content_type": meta.ResponseContentType,
+	now := currentTime()
+	event := cursorCaptureEvent{
+		Kind:                "cursor_tls_http",
+		T:                   now.Unix(),
+		TS:                  now.UTC().Format(time.RFC3339Nano),
+		Provider:            meta.Provider,
+		Host:                meta.Host,
+		Method:              meta.Method,
+		Path:                meta.Path,
+		Status:              meta.Status,
+		RequestBytes:        meta.RequestBytes,
+		ResponseBytes:       meta.ResponseBytes,
+		RequestRawPath:      meta.RequestRawPath,
+		ResponseRawPath:     meta.ResponseRawPath,
+		RequestID:           meta.RequestID,
+		OriginalRequestID:   meta.OriginalRequestID,
+		SessionID:           meta.SessionID,
+		Traceparent:         meta.Traceparent,
+		RequestContentType:  meta.RequestContentType,
+		ResponseContentType: meta.ResponseContentType,
+		Diagnostic:          meta.Diagnostic,
 	}
-	if meta.Diagnostic != nil {
-		event["bidi_append"] = meta.Diagnostic
+	return appendCursorCaptureEvent(dir, event)
+}
+
+func appendCursorCaptureEvent(dir string, event cursorCaptureEvent) error {
+	dir = expandHome(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("mitm.cursor.capture.mkdir_failed", "capture_dir", dir, "err", err)
+		return fmt.Errorf("create cursor capture dir: %w", err)
 	}
-	return appendCapture(dir, event)
+	path := filepath.Join(dir, "capture.jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		slog.Warn("mitm.cursor.capture.open_failed", "path", path, "err", err)
+		return fmt.Errorf("open cursor capture metadata: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := json.Marshal(event)
+	if err != nil {
+		slog.Warn("mitm.cursor.capture.encode_failed", "capture_dir", dir, "err", err)
+		return fmt.Errorf("encode cursor capture metadata: %w", err)
+	}
+	if _, err := f.Write(append(raw, '\n')); err != nil {
+		slog.Warn("mitm.cursor.capture.write_failed", "path", path, "err", err)
+		return fmt.Errorf("write cursor capture metadata: %w", err)
+	}
+	return nil
 }
 
 func extractCursorCaptureHeaders(h http.Header) (requestID string, originalRequestID string, sessionID string, traceparent string) {

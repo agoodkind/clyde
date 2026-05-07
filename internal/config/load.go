@@ -322,22 +322,8 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	}
 	cfg.Logging.Transcript.Mode = tmode
 
-	providers, err := parseMITMProviders(cfg.MITM.Providers)
-	if err != nil {
+	if err := applyMITMDefaultsAndValidate(&cfg.MITM); err != nil {
 		return err
-	}
-	cfg.MITM.Providers = providers
-
-	cfg.MITM.BodyMode = normalizeMITMBodyMode(cfg.MITM.BodyMode)
-	switch cfg.MITM.BodyMode {
-	case "summary", "raw", "off":
-	default:
-		return fmt.Errorf("mitm.body_mode must be one of summary|raw|off")
-	}
-
-	cfg.MITM.CaptureDir = strings.TrimSpace(cfg.MITM.CaptureDir)
-	if cfg.MITM.CaptureDir == "" {
-		cfg.MITM.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
 	}
 
 	cfg.Adapter.Codex.ReasoningSummary = normalizeCodexReasoningSummary(cfg.Adapter.Codex.ReasoningSummary)
@@ -347,18 +333,52 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return fmt.Errorf("adapter.codex.reasoning_summary must be one of auto|concise|detailed|none")
 	}
 
-	thresholds, err := normalizeNoticeUsageThresholds(cfg.Adapter.Notices.Usage.ThresholdsUsedPercent)
-	if err != nil {
+	if err := applyAdapterNoticeDefaultsAndValidate(&cfg.Adapter.Notices); err != nil {
 		return err
 	}
-	cfg.Adapter.Notices.Usage.ThresholdsUsedPercent = thresholds
-	policy, err := normalizeNoticeUsageRepeatPolicy(cfg.Adapter.Notices.Usage.Repeat)
-	if err != nil {
-		return err
-	}
-	cfg.Adapter.Notices.Usage.Repeat = policy
 
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+}
+
+func applyAdapterNoticeDefaultsAndValidate(notices *AdapterNotices) error {
+	if notices == nil {
+		return nil
+	}
+	thresholds, err := normalizeNoticeUsageThresholds(notices.Usage.ThresholdsUsedPercent)
+	if err != nil {
+		return err
+	}
+	notices.Usage.ThresholdsUsedPercent = thresholds
+	policy, err := normalizeNoticeUsageRepeatPolicy(notices.Usage.Repeat)
+	if err != nil {
+		return err
+	}
+	notices.Usage.Repeat = policy
+	return nil
+}
+
+func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
+	if mitm == nil {
+		return nil
+	}
+	providers, err := parseMITMProviders(mitm.Providers)
+	if err != nil {
+		return err
+	}
+	mitm.Providers = providers
+
+	mitm.BodyMode = normalizeMITMBodyMode(mitm.BodyMode)
+	switch mitm.BodyMode {
+	case "summary", "raw", "off":
+	default:
+		return fmt.Errorf("mitm.body_mode must be one of summary|raw|off")
+	}
+
+	mitm.CaptureDir = strings.TrimSpace(mitm.CaptureDir)
+	if mitm.CaptureDir == "" {
+		mitm.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
+	}
+	return nil
 }
 
 // applyAdapterReasoningDefaultsAndValidate validates the per-provider

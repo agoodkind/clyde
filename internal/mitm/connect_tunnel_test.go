@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -317,11 +318,17 @@ func startTestProxy(t *testing.T) *testProxy {
 		t.Fatalf("listen: %v", err)
 	}
 	p := &Proxy{
-		log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		client:      http.DefaultClient,
-		dialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		cfg:         config.MITMConfig{CaptureDir: t.TempDir(), BodyMode: "summary"},
-		base:        "http://" + listener.Addr().String(),
+		log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:                http.DefaultClient,
+		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		certMu:                sync.Mutex{},
+		ca:                    nil,
+		cursorTLSClientConfig: nil,
+		rawCaptureSeq:         atomic.Uint64{},
+		mu:                    sync.RWMutex{},
+		cfg:                   config.MITMConfig{CaptureDir: t.TempDir(), BodyMode: "summary"},
+		base:                  "http://" + listener.Addr().String(),
+		server:                nil,
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
@@ -344,10 +351,14 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		client:                http.DefaultClient,
 		dialContext:           mappedDialContext(cursorHost+":443", upstreamAddr),
-		cursorTLSClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
+		certMu:                sync.Mutex{},
 		ca:                    ca,
+		cursorTLSClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
+		rawCaptureSeq:         atomic.Uint64{},
+		mu:                    sync.RWMutex{},
 		cfg:                   config.MITMConfig{CaptureDir: captureDir, BodyMode: "summary"},
 		base:                  "http://" + listener.Addr().String(),
+		server:                nil,
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server

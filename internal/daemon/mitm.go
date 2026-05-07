@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
@@ -37,10 +38,18 @@ func (s *Server) LaunchMITMUpstream(ctx context.Context, req *clydev1.LaunchMITM
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
+	peerAddr := ""
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		peerAddr = p.Addr.String()
+	}
 	captureDir := strings.TrimSpace(req.GetCaptureDir())
 	effectiveCaptureDir := effectiveMITMCaptureDir(captureDir)
 	extraArgs := append([]string{}, req.GetArgs()...)
-	profileOptions := mitm.LaunchProfileOptions{Force: req.GetForce()}
+	profileOptions := mitm.LaunchProfileOptions{
+		Isolated:           false,
+		IsolatedProfileDir: "",
+		Force:              req.GetForce(),
+	}
 	if profileMode == mitmProfileModeIsolated {
 		profileOptions.Isolated = true
 		profileOptions.IsolatedProfileDir = isolatedMITMProfileDir(effectiveCaptureDir, upstream)
@@ -50,12 +59,15 @@ func (s *Server) LaunchMITMUpstream(ctx context.Context, req *clydev1.LaunchMITM
 		"upstream", upstream,
 		"profile_mode", profileMode,
 		"capture_dir", effectiveCaptureDir,
+		"peer_addr", peerAddr,
 		"force", req.GetForce(),
 		"extra_arg_count", len(req.GetArgs()),
 	)
 	if err := mitm.LaunchUpstream(ctx, mitm.LaunchUpstreamOptions{
 		Profile:        profile,
 		ProfileOptions: profileOptions,
+		CACertPath:     "",
+		ProxyHost:      "",
 		CaptureDir:     captureDir,
 		Force:          req.GetForce(),
 		Log:            s.log,

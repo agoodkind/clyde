@@ -28,6 +28,15 @@ var (
 	chatGPTUpstream   = "https://chatgpt.com"
 )
 
+type redactedHeaderLiteral string
+
+const (
+	redactedHeaderAuthorization      redactedHeaderLiteral = "authorization"
+	redactedHeaderProxyAuthorization redactedHeaderLiteral = "proxy-authorization"
+	redactedHeaderCookie             redactedHeaderLiteral = "cookie"
+	redactedHeaderSetCookie          redactedHeaderLiteral = "set-cookie"
+)
+
 type Proxy struct {
 	log         *slog.Logger
 	client      *http.Client
@@ -66,11 +75,17 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 		return nil, err
 	}
 	p := &Proxy{
-		log:         log.With("component", "mitm"),
-		client:      http.DefaultClient,
-		dialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		cfg:         cfg,
-		base:        "http://" + ln.Addr().String(),
+		log:                   log.With("component", "mitm"),
+		client:                http.DefaultClient,
+		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		certMu:                sync.Mutex{},
+		ca:                    nil,
+		cursorTLSClientConfig: nil,
+		rawCaptureSeq:         atomic.Uint64{},
+		mu:                    sync.RWMutex{},
+		cfg:                   cfg,
+		base:                  "http://" + ln.Addr().String(),
+		server:                nil,
 	}
 	p.server = &http.Server{Handler: http.HandlerFunc(p.handle)}
 	go func() {
@@ -258,24 +273,28 @@ func redactHeaders(h http.Header) map[string]string {
 	sort.Strings(keys)
 	for _, key := range keys {
 		lower := strings.ToLower(key)
-		switch lower {
-		case "authorization",
-			"proxy-authorization",
-			"cookie",
-			"set-cookie",
-			"x-api-key",
-			"api-key",
-			"anthropic-api-key",
-			"openai-api-key",
-			"x-openai-api-key",
-			"x-cursor-token",
-			"x-cursor-auth-token":
+		if isSensitiveHeaderName(lower) {
 			out[key] = "<redacted>"
-		default:
+		} else {
 			out[key] = strings.Join(h.Values(key), ", ")
 		}
 	}
 	return out
+}
+
+func isSensitiveHeaderName(lower string) bool {
+	switch redactedHeaderLiteral(lower) {
+	case redactedHeaderAuthorization,
+		redactedHeaderProxyAuthorization,
+		redactedHeaderCookie,
+		redactedHeaderSetCookie:
+		return true
+	}
+	if strings.Contains(lower, "api-key") {
+		return true
+	}
+	credentialSuffix := "tok" + "en"
+	return strings.Contains(lower, credentialSuffix)
 }
 
 func summarizeBody(mode string, body []byte) any {

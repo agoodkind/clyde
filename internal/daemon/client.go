@@ -945,8 +945,8 @@ func LaunchMITMUpstreamViaDaemon(ctx context.Context, req *clydev1.LaunchMITMUps
 	defer cancel()
 	resp, err := c.rpc.LaunchMITMUpstream(rpcCtx, req)
 	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.launch_mitm_upstream.rpc_failed", "err", err)
-		return nil, err
+		log.WarnContext(rpcCtx, "daemon.client.launch_mitm_upstream.rpc_failed", "err", err)
+		return nil, fmt.Errorf("launch MITM upstream rpc: %w", err)
 	}
 	log.DebugContext(rpcCtx, "daemon.client.launch_mitm_upstream.ok",
 		"upstream", resp.GetUpstream(),

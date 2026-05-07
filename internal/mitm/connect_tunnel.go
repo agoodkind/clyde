@@ -3,13 +3,16 @@ package mitm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +53,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cursorHost, ok := shouldInterceptCursorConnect(target); ok {
-		p.handleCursorTLSConnect(w, r, target, cursorHost, started)
+		p.handleCursorTLSConnect(r.Context(), w, target, cursorHost, started)
 		return
 	}
 
@@ -149,7 +152,7 @@ func spliceConnections(client, upstream net.Conn) (bytesUp, bytesDown int64) {
 	return upN, downN
 }
 
-func (p *Proxy) handleCursorTLSConnect(w http.ResponseWriter, r *http.Request, target string, host string, started time.Time) {
+func (p *Proxy) handleCursorTLSConnect(ctx context.Context, w http.ResponseWriter, target string, host string, started time.Time) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -157,28 +160,28 @@ func (p *Proxy) handleCursorTLSConnect(w http.ResponseWriter, r *http.Request, t
 	}
 	clientConn, bufrw, err := hijacker.Hijack()
 	if err != nil {
-		p.log.Warn("mitm.cursor.connect.hijack_failed", "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.cursor.connect.hijack_failed", "target", target, "err", err)
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
 
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		p.log.Warn("mitm.cursor.connect.write_established_failed", "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.cursor.connect.write_established_failed", "target", target, "err", err)
 		return
 	}
 	if err := bufrw.Flush(); err != nil {
-		p.log.Warn("mitm.cursor.connect.flush_failed", "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.cursor.connect.flush_failed", "target", target, "err", err)
 		return
 	}
 
 	ca, err := p.cursorCA()
 	if err != nil {
-		p.log.Warn("mitm.cursor.connect.ca_failed", "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.cursor.connect.ca_failed", "target", target, "err", err)
 		return
 	}
 	leaf, err := ca.leafForHost(host)
 	if err != nil {
-		p.log.Warn("mitm.cursor.connect.leaf_failed", "target", target, "host", host, "err", err)
+		p.log.WarnContext(ctx, "mitm.cursor.connect.leaf_failed", "target", target, "host", host, "err", err)
 		return
 	}
 	tlsConn := tls.Server(clientConn, &tls.Config{
@@ -186,13 +189,13 @@ func (p *Proxy) handleCursorTLSConnect(w http.ResponseWriter, r *http.Request, t
 		NextProtos:   []string{"http/1.1"},
 		MinVersion:   tls.VersionTLS12,
 	})
-	if err := tlsConn.Handshake(); err != nil {
-		p.log.Warn("mitm.cursor.connect.client_tls_failed", "target", target, "host", host, "err", err)
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		p.log.WarnContext(ctx, "mitm.cursor.connect.client_tls_failed", "target", target, "host", host, "err", err)
 		return
 	}
-	p.log.Info("mitm.cursor.connect.intercept_open", "target", target, "host", host)
+	p.log.InfoContext(ctx, "mitm.cursor.connect.intercept_open", "target", target, "host", host)
 	p.serveCursorInterceptedHTTP(tlsConn, target, host)
-	p.log.Info("mitm.cursor.connect.intercept_closed",
+	p.log.InfoContext(ctx, "mitm.cursor.connect.intercept_closed",
 		"target", target,
 		"host", host,
 		"duration_ms", time.Since(started).Milliseconds(),
@@ -205,7 +208,7 @@ func (p *Proxy) serveCursorInterceptedHTTP(client *tls.Conn, target string, host
 	for {
 		req, err := http.ReadRequest(reader)
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				p.log.Debug("mitm.cursor.http.read_request_failed", "host", host, "err", err)
 			}
 			return
@@ -297,8 +300,8 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		OriginalRequestID:   originalRequestID,
 		SessionID:           sessionID,
 		Traceparent:         traceparent,
-		RequestContentType:  req.Header.Get("content-type"),
-		ResponseContentType: resp.Header.Get("content-type"),
+		RequestContentType:  req.Header.Get("Content-Type"),
+		ResponseContentType: resp.Header.Get("Content-Type"),
 		Diagnostic:          diag,
 	}); err != nil {
 		p.log.Warn("mitm.cursor.capture.append_failed", "capture_dir", cfg.CaptureDir, "err", err)
@@ -317,82 +320,118 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 func (p *Proxy) forwardAndCaptureCursorResponse(client *bufio.Writer, resp *http.Response, responseRawPath string) (int64, error) {
 	responseFile, err := os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 	if err != nil {
+		p.log.Warn("mitm.cursor.response.open_capture_failed", "path", responseRawPath, "err", err)
 		return 0, fmt.Errorf("open raw cursor response: %w", err)
 	}
 	defer func() { _ = responseFile.Close() }()
 
-	headers := resp.Header.Clone()
 	chunked := resp.ContentLength < 0
-	if chunked {
-		headers.Del("Content-Length")
-		headers.Set("Transfer-Encoding", "chunked")
-	} else {
-		headers.Set("Content-Length", fmt.Sprintf("%d", resp.ContentLength))
-		headers.Del("Transfer-Encoding")
+	header := cursorResponseHeader(resp, chunked)
+	responseBytes, err := writeCursorResponseBytes(client, responseFile, header, "header")
+	if err != nil {
+		return 0, err
 	}
-	header := headerBlock(resp.Proto+" "+resp.Status+"\r\n", headers)
-	if _, err := client.Write(header); err != nil {
-		return 0, fmt.Errorf("write cursor response header: %w", err)
-	}
-	if _, err := responseFile.Write(header); err != nil {
-		return 0, fmt.Errorf("capture cursor response header: %w", err)
-	}
-	if err := client.Flush(); err != nil {
-		return 0, fmt.Errorf("flush cursor response header: %w", err)
-	}
-	responseBytes := int64(len(header))
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			chunk := buf[:n]
-			if chunked {
-				chunkHeader := []byte(fmt.Sprintf("%x\r\n", n))
-				if _, err := client.Write(chunkHeader); err != nil {
-					return responseBytes, fmt.Errorf("write cursor response chunk header: %w", err)
-				}
-				if _, err := responseFile.Write(chunkHeader); err != nil {
-					return responseBytes, fmt.Errorf("capture cursor response chunk header: %w", err)
-				}
-				responseBytes += int64(len(chunkHeader))
-			}
-			if _, err := client.Write(chunk); err != nil {
-				return responseBytes, fmt.Errorf("write cursor response body: %w", err)
-			}
-			if _, err := responseFile.Write(chunk); err != nil {
-				return responseBytes, fmt.Errorf("capture cursor response body: %w", err)
-			}
-			responseBytes += int64(n)
-			if chunked {
-				if _, err := client.Write([]byte("\r\n")); err != nil {
-					return responseBytes, fmt.Errorf("write cursor response chunk terminator: %w", err)
-				}
-				if _, err := responseFile.Write([]byte("\r\n")); err != nil {
-					return responseBytes, fmt.Errorf("capture cursor response chunk terminator: %w", err)
-				}
-				responseBytes += 2
-			}
-			if err := client.Flush(); err != nil {
-				return responseBytes, fmt.Errorf("flush cursor response body: %w", err)
+			written, err := writeCursorResponseBodyChunk(client, responseFile, buf[:n], chunked)
+			responseBytes += written
+			if err != nil {
+				return responseBytes, err
 			}
 		}
-		if readErr == io.EOF {
-			if chunked {
-				if _, err := client.Write([]byte("0\r\n\r\n")); err != nil {
-					return responseBytes, fmt.Errorf("write cursor response chunk EOF: %w", err)
-				}
-				if _, err := responseFile.Write([]byte("0\r\n\r\n")); err != nil {
-					return responseBytes, fmt.Errorf("capture cursor response chunk EOF: %w", err)
-				}
-				responseBytes += 5
-				if err := client.Flush(); err != nil {
-					return responseBytes, fmt.Errorf("flush cursor response chunk EOF: %w", err)
-				}
+		if errors.Is(readErr, io.EOF) {
+			written, err := writeCursorResponseEOF(client, responseFile, chunked)
+			responseBytes += written
+			if err != nil {
+				return responseBytes, err
 			}
 			return responseBytes, nil
 		}
 		if readErr != nil {
+			p.log.Warn("mitm.cursor.response.read_body_failed", "err", readErr)
 			return responseBytes, fmt.Errorf("read cursor response body: %w", readErr)
 		}
 	}
+}
+
+func cursorResponseHeader(resp *http.Response, chunked bool) []byte {
+	headers := resp.Header.Clone()
+	headers.Del("Transfer-Encoding")
+	if chunked {
+		headers.Del("Content-Length")
+		header := headerBlock(resp.Proto+" "+resp.Status+"\r\n", headers)
+		return append(header[:len(header)-2], []byte("Transfer-Encoding: chunked\r\n\r\n")...)
+	}
+	headers.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+	return headerBlock(resp.Proto+" "+resp.Status+"\r\n", headers)
+}
+
+func writeCursorResponseBodyChunk(client *bufio.Writer, responseFile *os.File, chunk []byte, chunked bool) (int64, error) {
+	var written int64
+	if chunked {
+		chunkHeader := fmt.Appendf(nil, "%x\r\n", len(chunk))
+		count, err := writeCursorResponseBytes(client, responseFile, chunkHeader, "chunk header")
+		written += count
+		if err != nil {
+			return written, err
+		}
+	}
+	count, err := writeCursorResponseBytes(client, responseFile, chunk, "body")
+	written += count
+	if err != nil {
+		return written, err
+	}
+	if chunked {
+		count, err = writeCursorResponseString(client, responseFile, "\r\n", "chunk terminator")
+		written += count
+		if err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+func writeCursorResponseEOF(client *bufio.Writer, responseFile *os.File, chunked bool) (int64, error) {
+	if !chunked {
+		if err := client.Flush(); err != nil {
+			slog.Warn("mitm.cursor.response.flush_body_failed", "err", err)
+			return 0, fmt.Errorf("flush cursor response body: %w", err)
+		}
+		return 0, nil
+	}
+	return writeCursorResponseString(client, responseFile, "0\r\n\r\n", "chunk EOF")
+}
+
+func writeCursorResponseBytes(client *bufio.Writer, responseFile *os.File, chunk []byte, label string) (int64, error) {
+	if _, err := client.Write(chunk); err != nil {
+		slog.Warn("mitm.cursor.response.write_client_failed", "label", label, "err", err)
+		return 0, fmt.Errorf("write cursor response %s: %w", label, err)
+	}
+	if _, err := responseFile.Write(chunk); err != nil {
+		slog.Warn("mitm.cursor.response.capture_write_failed", "label", label, "err", err)
+		return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
+	}
+	if err := client.Flush(); err != nil {
+		slog.Warn("mitm.cursor.response.flush_failed", "label", label, "err", err)
+		return 0, fmt.Errorf("flush cursor response %s: %w", label, err)
+	}
+	return int64(len(chunk)), nil
+}
+
+func writeCursorResponseString(client *bufio.Writer, responseFile *os.File, text string, label string) (int64, error) {
+	if _, err := client.WriteString(text); err != nil {
+		slog.Warn("mitm.cursor.response.write_client_failed", "label", label, "err", err)
+		return 0, fmt.Errorf("write cursor response %s: %w", label, err)
+	}
+	if _, err := responseFile.WriteString(text); err != nil {
+		slog.Warn("mitm.cursor.response.capture_write_failed", "label", label, "err", err)
+		return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
+	}
+	if err := client.Flush(); err != nil {
+		slog.Warn("mitm.cursor.response.flush_failed", "label", label, "err", err)
+		return 0, fmt.Errorf("flush cursor response %s: %w", label, err)
+	}
+	return int64(len(text)), nil
 }
