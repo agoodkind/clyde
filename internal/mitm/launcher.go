@@ -19,11 +19,14 @@ import (
 // dock-launched wrapper .app: click icon -> clyde returns -> the
 // real client runs.
 type LaunchUpstreamOptions struct {
-	Profile    LaunchProfile
-	CACertPath string
-	ProxyHost  string
-	Log        *slog.Logger
-	ExtraArgs  []string
+	Profile        LaunchProfile
+	ProfileOptions LaunchProfileOptions
+	CACertPath     string
+	ProxyHost      string
+	CaptureDir     string
+	Force          bool
+	Log            *slog.Logger
+	ExtraArgs      []string
 }
 
 // LaunchUpstream starts the upstream client through the local MITM
@@ -47,7 +50,10 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	// to route through MITM, even if the global default is off.
 	if !cfg.MITM.EnabledDefault {
 		cfg.MITM.EnabledDefault = true
-		cfg.MITM.Providers = "both"
+		cfg.MITM.Providers = config.MITMProviderSet{"all"}
+	}
+	if captureDir := strings.TrimSpace(opts.CaptureDir); captureDir != "" {
+		cfg.MITM.CaptureDir = captureDir
 	}
 	proxy, err := EnsureStarted(cfg.MITM, log.With("subcomponent", "mitm-launch"))
 	if err != nil {
@@ -57,6 +63,13 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	proxyURL := proxy.base
 	if opts.Profile.BinaryFinder == nil {
 		return fmt.Errorf("upstream %s has no BinaryFinder", opts.Profile.Name)
+	}
+	profileOptions := opts.ProfileOptions
+	if opts.Force {
+		profileOptions.Force = true
+	}
+	if err := opts.Profile.ValidateLaunch(profileOptions); err != nil {
+		return err
 	}
 	binary, err := opts.Profile.BinaryFinder()
 	if err != nil {
@@ -82,15 +95,22 @@ func LaunchUpstream(ctx context.Context, opts LaunchUpstreamOptions) error {
 	}
 	env := opts.Profile.ComposeEnv(os.Environ(), envOverrides)
 
-	args := append([]string{}, opts.Profile.BaseArgs...)
-	args = append(args, opts.Profile.ChromiumFlags(proxyURL)...)
+	args, err := opts.Profile.LaunchArgs(proxyURL, profileOptions)
+	if err != nil {
+		return fmt.Errorf("build %s launch args: %w", opts.Profile.Name, err)
+	}
 	args = append(args, opts.ExtraArgs...)
+	if err := opts.Profile.ConfigureLaunch(proxyURL, profileOptions); err != nil {
+		return fmt.Errorf("configure %s launch: %w", opts.Profile.Name, err)
+	}
 
 	log.InfoContext(ctx, "mitm.launch.starting",
 		"upstream", opts.Profile.Name,
 		"binary", binary,
 		"proxy_url", proxyURL,
 		"is_electron", opts.Profile.IsElectron,
+		"capture_dir", cfg.MITM.CaptureDir,
+		"force", opts.Force,
 	)
 
 	cmd := exec.Command(binary, args...)

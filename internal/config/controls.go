@@ -61,14 +61,15 @@ func ListControlDescriptors(cfg *Config) []ControlDescriptor {
 			Key:          "mitm.providers",
 			Section:      "MITM Capture",
 			Label:        "MITM providers",
-			Description:  "Which subprocess families should route through the local capture proxy.",
-			Type:         ControlTypeEnum,
-			Value:        normalizeMITMProviders(cfg.MITM.Providers),
-			DefaultValue: "both",
+			Description:  "Comma-separated provider families that should route through the local capture proxy, or all.",
+			Type:         ControlTypeString,
+			Value:        formatMITMProviders(cfg.MITM.Providers),
+			DefaultValue: "all",
 			Options: []ControlOption{
-				{Value: "both", Label: "Both", Description: "Capture Claude and Codex traffic."},
-				{Value: "claude", Label: "Claude", Description: "Capture Claude CLI traffic only."},
-				{Value: "codex", Label: "Codex", Description: "Capture Codex CLI and app-server traffic only."},
+				{Value: "all", Label: "All", Description: "Capture every configured provider family."},
+				{Value: "claude", Label: "Claude", Description: "Capture Claude CLI traffic."},
+				{Value: "codex", Label: "Codex", Description: "Capture Codex CLI and app-server traffic."},
+				{Value: "cursor", Label: "Cursor", Description: "Capture Cursor traffic."},
 			},
 		},
 		{
@@ -115,7 +116,11 @@ func UpdateControlValue(cfg *Config, key, value string) error {
 		}
 		cfg.MITM.EnabledDefault = v
 	case "mitm.providers":
-		cfg.MITM.Providers = normalizeMITMProviders(value)
+		providers, err := parseMITMProviderControlValue(value)
+		if err != nil {
+			return err
+		}
+		cfg.MITM.Providers = providers
 	case "mitm.body_mode":
 		cfg.MITM.BodyMode = normalizeMITMBodyMode(value)
 	case "mitm.capture_dir":

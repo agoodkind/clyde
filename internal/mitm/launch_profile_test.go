@@ -1,13 +1,16 @@
 package mitm
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestLaunchProfilesCoverSupportedUpstreams(t *testing.T) {
 	profiles := LaunchProfiles()
-	for _, name := range []string{"codex-cli", "codex-desktop", "claude-code", "claude-desktop", "vscode"} {
+	for _, name := range []string{"codex-cli", "codex-desktop", "claude-code", "claude-desktop", "cursor", "vscode"} {
 		if _, ok := profiles[name]; !ok {
 			t.Errorf("missing profile %q", name)
 		}
@@ -80,5 +83,193 @@ func TestChromiumFlagsOnlyForElectron(t *testing.T) {
 	}
 	if !hasIgnoreCert {
 		t.Errorf("missing --ignore-certificate-errors, got %v", flags)
+	}
+}
+
+func TestCursorLaunchProfileUsesCursorBundleAndDomains(t *testing.T) {
+	profile := NewCursorLaunchProfile()
+	if profile.Name != "cursor" {
+		t.Fatalf("name=%q", profile.Name)
+	}
+	if profile.BinaryFinder == nil {
+		t.Fatalf("cursor profile missing binary finder")
+	}
+	if !profile.IsElectron {
+		t.Fatalf("cursor profile must be electron")
+	}
+	if !containsString(profile.UpstreamDomains, "api2.cursor.sh") {
+		t.Fatalf("cursor profile missing api2.cursor.sh domain: %v", profile.UpstreamDomains)
+	}
+}
+
+func TestCursorLaunchArgsDefaultNormalProfile(t *testing.T) {
+	args, err := CursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{})
+	if err != nil {
+		t.Fatalf("CursorLaunchArgs: %v", err)
+	}
+	if !containsString(args, "--proxy-server=http://[::1]:8888") {
+		t.Fatalf("missing proxy arg: %v", args)
+	}
+	if containsPrefix(args, "--user-data-dir=") {
+		t.Fatalf("normal profile must not set user-data-dir: %v", args)
+	}
+}
+
+func TestCursorLaunchArgsIsolatedProfile(t *testing.T) {
+	args, err := CursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{
+		Isolated:           true,
+		IsolatedProfileDir: "tmp/cursor-mitm",
+	})
+	if err != nil {
+		t.Fatalf("CursorLaunchArgs: %v", err)
+	}
+	if !containsPrefix(args, "--user-data-dir=") {
+		t.Fatalf("isolated profile missing user-data-dir: %v", args)
+	}
+}
+
+func TestCursorLaunchArgsIsolatedRequiresProfileDir(t *testing.T) {
+	_, err := CursorLaunchArgs("http://[::1]:8888", LaunchProfileOptions{Isolated: true})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "IsolatedProfileDir") {
+		t.Fatalf("error should mention IsolatedProfileDir, got %q", err.Error())
+	}
+}
+
+func TestCursorProbeSettingsCarryRequiredProbeConfig(t *testing.T) {
+	settings := NewCursorProbeSettings(" http://[::1]:8888 ")
+	values := settings.ConfigurationValues()
+	assertCursorBoolSetting(t, values, CursorSettingDisableHTTP2, true)
+	assertCursorBoolSetting(t, values, CursorSettingDisableHTTP1SSE, false)
+	assertCursorStringSetting(t, values, CursorSettingProxy, "http://[::1]:8888")
+	assertCursorBoolSetting(t, values, CursorSettingProxyStrictSSL, false)
+	assertCursorStringSetting(t, values, CursorSettingProxySupport, "override")
+	assertCursorBoolSetting(t, values, CursorSettingUseLocalProxyConfiguration, true)
+}
+
+func TestWriteCursorProbeSettingsMergesExistingSettings(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "User", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte("{\"editor.fontSize\":14}\n"), 0o600); err != nil {
+		t.Fatalf("write seed settings: %v", err)
+	}
+	if err := writeCursorProbeSettings(settingsPath, NewCursorProbeSettings("http://localhost:8899")); err != nil {
+		t.Fatalf("writeCursorProbeSettings: %v", err)
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	got := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	assertRawJSON(t, got, "editor.fontSize", "14")
+	assertRawJSON(t, got, CursorSettingDisableHTTP2, "true")
+	assertRawJSON(t, got, CursorSettingDisableHTTP1SSE, "false")
+	assertRawJSON(t, got, CursorSettingProxy, `"http://localhost:8899"`)
+	assertRawJSON(t, got, CursorSettingProxySupport, `"override"`)
+}
+
+func TestCursorSettingsPathUsesIsolatedProfile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cursor-profile")
+	got, err := cursorSettingsPath(LaunchProfileOptions{Isolated: true, IsolatedProfileDir: dir})
+	if err != nil {
+		t.Fatalf("cursorSettingsPath: %v", err)
+	}
+	want := filepath.Join(dir, "User", "settings.json")
+	if got != want {
+		t.Fatalf("settings path=%q want %q", got, want)
+	}
+}
+
+func TestValidateCursorLaunchRejectsRunningNormalProfile(t *testing.T) {
+	restoreCursorProcessList := cursorProcessList
+	t.Cleanup(func() { cursorProcessList = restoreCursorProcessList })
+	cursorProcessList = func() ([]byte, error) {
+		return []byte("123 /Applications/Cursor.app/Contents/MacOS/Cursor\n"), nil
+	}
+
+	err := ValidateCursorLaunch(LaunchProfileOptions{})
+	if err == nil {
+		t.Fatalf("expected running normal-profile error")
+	}
+	if !strings.Contains(err.Error(), "already be running") {
+		t.Fatalf("error should explain running Cursor, got %q", err.Error())
+	}
+}
+
+func TestValidateCursorLaunchAllowsForceAndIsolated(t *testing.T) {
+	restoreCursorProcessList := cursorProcessList
+	t.Cleanup(func() { cursorProcessList = restoreCursorProcessList })
+	cursorProcessList = func() ([]byte, error) {
+		t.Fatalf("force or isolated launch should not inspect process list")
+		return nil, nil
+	}
+
+	if err := ValidateCursorLaunch(LaunchProfileOptions{Force: true}); err != nil {
+		t.Fatalf("force ValidateCursorLaunch: %v", err)
+	}
+	if err := ValidateCursorLaunch(LaunchProfileOptions{Isolated: true}); err != nil {
+		t.Fatalf("isolated ValidateCursorLaunch: %v", err)
+	}
+}
+
+func TestCursorNormalProfileRunningIgnoresIsolatedProfile(t *testing.T) {
+	output := []byte("123 /Applications/Cursor.app/Contents/MacOS/Cursor --user-data-dir=/tmp/cursor-mitm\n")
+	if cursorNormalProfileRunning(output) {
+		t.Fatalf("isolated user-data-dir launch should not count as normal profile")
+	}
+}
+
+func containsPrefix(values []string, prefix string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func assertCursorBoolSetting(t *testing.T, values []CursorConfigurationValue, key string, want bool) {
+	t.Helper()
+	for _, value := range values {
+		if value.Key != key {
+			continue
+		}
+		if value.Kind != CursorConfigurationBool || value.BoolValue != want {
+			t.Fatalf("%s=%+v, want bool %v", key, value, want)
+		}
+		return
+	}
+	t.Fatalf("missing setting %s", key)
+}
+
+func assertCursorStringSetting(t *testing.T, values []CursorConfigurationValue, key string, want string) {
+	t.Helper()
+	for _, value := range values {
+		if value.Key != key {
+			continue
+		}
+		if value.Kind != CursorConfigurationString || value.StringValue != want {
+			t.Fatalf("%s=%+v, want string %q", key, value, want)
+		}
+		return
+	}
+	t.Fatalf("missing setting %s", key)
+}
+
+func assertRawJSON(t *testing.T, values map[string]json.RawMessage, key string, want string) {
+	t.Helper()
+	got, ok := values[key]
+	if !ok {
+		t.Fatalf("missing setting %s", key)
+	}
+	if string(got) != want {
+		t.Fatalf("%s=%s want %s", key, got, want)
 	}
 }

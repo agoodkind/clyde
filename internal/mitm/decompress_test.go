@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
+	"encoding/json"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -136,5 +137,32 @@ func TestDecodeForCaptureMalformedFallsBackToRaw(t *testing.T) {
 	}
 	if !bytes.Equal(got, raw) {
 		t.Errorf("got %q want %q", got, raw)
+	}
+}
+
+func TestDecodeCursorBidiAppendDiagnosticFindsSentinelWithoutTextLeak(t *testing.T) {
+	const requestID = "req_cursor_bidi_append"
+	const sentinel = "CURSOR_PROMPT_SENTINEL"
+	payload := cursorBidiAppendPayload(requestID, 42, []byte("before "+sentinel+" after"))
+	diag := decodeCursorBidiAppendDiagnostic(payload, []byte(sentinel))
+	if diag.RequestID != requestID {
+		t.Fatalf("request_id = %q want %q", diag.RequestID, requestID)
+	}
+	if diag.AppendSeqno != 42 {
+		t.Fatalf("append_seqno = %d want 42", diag.AppendSeqno)
+	}
+	if !diag.SentinelFound {
+		t.Fatal("expected sentinel_found=true")
+	}
+	raw := mustCursorDiagnosticJSON(diag)
+	if bytes.Contains(raw, []byte(sentinel)) {
+		t.Fatalf("diagnostic JSON leaked sentinel: %s", raw)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("diagnostic JSON: %v", err)
+	}
+	if decoded["decoded_sha256"] == "" || decoded["payload_sha256"] == "" {
+		t.Fatalf("diagnostic missing hashes: %s", raw)
 	}
 }

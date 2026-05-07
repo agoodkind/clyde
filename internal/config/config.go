@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -41,7 +42,7 @@ type Config struct {
 	// is the wiring point for the eventual rewrite against the
 	// in-process adapter. Disabled by default until then.
 	Labeler LabelerConfig `json:"labeler" toml:"labeler"`
-	// MITM configures the local capture proxy used for Claude/Codex
+	// MITM configures the local capture proxy used for provider
 	// subprocesses and for adapter-side request observability.
 	MITM MITMConfig `json:"mitm" toml:"mitm"`
 }
@@ -1039,11 +1040,15 @@ type Defaults struct {
 // MITMConfig configures the local capture proxy and its persistence.
 type MITMConfig struct {
 	EnabledDefault bool            `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
-	Providers      string          `json:"providers,omitempty" toml:"providers,omitempty"`
+	Providers      MITMProviderSet `json:"providers,omitempty" toml:"providers,omitempty"`
 	BodyMode       string          `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
 	CaptureDir     string          `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
 	Drift          MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
 }
+
+// MITMProviderSet is the configured set of provider families routed through
+// the capture proxy. The special value "all" enables every provider family.
+type MITMProviderSet []string
 
 // MITMDriftConfig configures daemon-owned baseline refresh and drift
 // reporting. When Enabled, the daemon periodically reads the current
@@ -1072,14 +1077,18 @@ type MITMDriftUpstreamCfg struct {
 }
 
 func (m MITMConfig) EnabledFor(provider string) bool {
-	switch normalizeMITMProviders(m.Providers) {
-	case "claude":
-		return provider == "claude"
-	case "codex":
-		return provider == "codex"
-	default:
-		return provider == "claude" || provider == "codex"
+	normalizedProvider := normalizeMITMProviderName(provider)
+	if !isValidMITMProviderName(normalizedProvider) {
+		return false
 	}
+	providers, err := parseMITMProviders(m.Providers)
+	if err != nil {
+		return false
+	}
+	if len(providers) == 1 && providers[0] == mitmProviderAll {
+		return true
+	}
+	return slices.Contains(providers, normalizedProvider)
 }
 
 // Profile represents a named preset of session settings.

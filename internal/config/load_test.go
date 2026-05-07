@@ -67,6 +67,38 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Profiles["quick"].Model).To(Equal("haiku"))
 	})
 
+	It("loads MITM provider sets with cursor", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[mitm]\nproviders = [\"cursor\", \"codex\"]\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.MITM.Providers).To(Equal(config.MITMProviderSet{"codex", "cursor"}))
+		Expect(cfg.MITM.EnabledFor("cursor")).To(BeTrue())
+		Expect(cfg.MITM.EnabledFor("codex")).To(BeTrue())
+		Expect(cfg.MITM.EnabledFor("claude")).To(BeFalse())
+	})
+
+	It("loads the MITM all provider shorthand", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[mitm]\nproviders = [\"all\"]\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.MITM.Providers).To(Equal(config.MITMProviderSet{"all"}))
+		Expect(cfg.MITM.EnabledFor("cursor")).To(BeTrue())
+		Expect(cfg.MITM.EnabledFor("claude")).To(BeTrue())
+		Expect(cfg.MITM.EnabledFor("codex")).To(BeTrue())
+	})
+
 	It("loads openai_compat_passthrough upstream", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

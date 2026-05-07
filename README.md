@@ -144,12 +144,12 @@ MITM configuration lives in the global Clyde config under `[mitm]`:
 ```toml
 [mitm]
 enabled_default = true
-providers = "both"
+providers = ["claude", "codex", "cursor"]
 body_mode = "summary"
 capture_dir = "~/.local/state/clyde/mitm"
 ```
 
-The supported `providers` values are `both`, `claude`, and `codex`. The supported `body_mode` values are `summary`, `raw`, and `off`.
+`providers` is a provider set. Use explicit provider names such as `claude`, `codex`, and `cursor`, or use `["all"]` to capture every supported family. The supported `body_mode` values are `summary`, `raw`, and `off`.
 
 When MITM is enabled for Claude, Clyde's Claude passthrough path injects `ANTHROPIC_BASE_URL` so forwarded Claude traffic uses the local proxy. The daemon also starts a daemon-owned MITM listener when `[mitm].enabled_default` is true.
 

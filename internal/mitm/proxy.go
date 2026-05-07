@@ -3,6 +3,7 @@ package mitm
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goodkind.io/clyde/internal/config"
@@ -27,8 +29,15 @@ var (
 )
 
 type Proxy struct {
-	log    *slog.Logger
-	client *http.Client
+	log         *slog.Logger
+	client      *http.Client
+	dialContext func(context.Context, string, string) (net.Conn, error)
+
+	certMu sync.Mutex
+	ca     *cursorCertAuthority
+
+	cursorTLSClientConfig *tls.Config
+	rawCaptureSeq         atomic.Uint64
 
 	mu     sync.RWMutex
 	cfg    config.MITMConfig
@@ -57,10 +66,11 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 		return nil, err
 	}
 	p := &Proxy{
-		log:    log.With("component", "mitm"),
-		client: http.DefaultClient,
-		cfg:    cfg,
-		base:   "http://" + ln.Addr().String(),
+		log:         log.With("component", "mitm"),
+		client:      http.DefaultClient,
+		dialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		cfg:         cfg,
+		base:        "http://" + ln.Addr().String(),
 	}
 	p.server = &http.Server{Handler: http.HandlerFunc(p.handle)}
 	go func() {
@@ -249,7 +259,17 @@ func redactHeaders(h http.Header) map[string]string {
 	for _, key := range keys {
 		lower := strings.ToLower(key)
 		switch lower {
-		case "authorization", "cookie", "set-cookie", "x-api-key", "anthropic-api-key":
+		case "authorization",
+			"proxy-authorization",
+			"cookie",
+			"set-cookie",
+			"x-api-key",
+			"api-key",
+			"anthropic-api-key",
+			"openai-api-key",
+			"x-openai-api-key",
+			"x-cursor-token",
+			"x-cursor-auth-token":
 			out[key] = "<redacted>"
 		default:
 			out[key] = strings.Join(h.Values(key), ", ")

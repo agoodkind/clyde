@@ -322,12 +322,11 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	}
 	cfg.Logging.Transcript.Mode = tmode
 
-	cfg.MITM.Providers = normalizeMITMProviders(cfg.MITM.Providers)
-	switch cfg.MITM.Providers {
-	case "both", "claude", "codex":
-	default:
-		return fmt.Errorf("mitm.providers must be one of both|claude|codex")
+	providers, err := parseMITMProviders(cfg.MITM.Providers)
+	if err != nil {
+		return err
 	}
+	cfg.MITM.Providers = providers
 
 	cfg.MITM.BodyMode = normalizeMITMBodyMode(cfg.MITM.BodyMode)
 	switch cfg.MITM.BodyMode {
@@ -430,17 +429,88 @@ func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 	return nil
 }
 
-func normalizeMITMProviders(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "", "both", "all":
-		return "both"
-	case "claude":
-		return "claude"
-	case "codex":
-		return "codex"
-	default:
-		return strings.ToLower(strings.TrimSpace(v))
+const mitmProviderAll = "all"
+
+func parseMITMProviders(providers MITMProviderSet) (MITMProviderSet, error) {
+	if len(providers) == 0 {
+		return MITMProviderSet{mitmProviderAll}, nil
 	}
+	seenProviders := make(map[string]bool, len(providers))
+	normalizedProviders := make(MITMProviderSet, 0, len(providers))
+	hasAll := false
+	for _, providerList := range providers {
+		for _, provider := range splitMITMProviderList(providerList) {
+			normalizedProvider := normalizeMITMProviderName(provider)
+			if normalizedProvider == mitmProviderAll {
+				hasAll = true
+				continue
+			}
+			if !isValidMITMProviderName(normalizedProvider) {
+				return nil, fmt.Errorf("mitm.providers contains invalid provider %q", provider)
+			}
+			if seenProviders[normalizedProvider] {
+				continue
+			}
+			seenProviders[normalizedProvider] = true
+			normalizedProviders = append(normalizedProviders, normalizedProvider)
+		}
+	}
+	if hasAll {
+		if len(normalizedProviders) > 0 {
+			return nil, fmt.Errorf("mitm.providers cannot combine \"all\" with explicit providers")
+		}
+		return MITMProviderSet{mitmProviderAll}, nil
+	}
+	if len(normalizedProviders) == 0 {
+		return MITMProviderSet{mitmProviderAll}, nil
+	}
+	slices.Sort(normalizedProviders)
+	return normalizedProviders, nil
+}
+
+func normalizeMITMProviders(providers MITMProviderSet) MITMProviderSet {
+	normalizedProviders, err := parseMITMProviders(providers)
+	if err != nil {
+		return providers
+	}
+	return normalizedProviders
+}
+
+func parseMITMProviderControlValue(value string) (MITMProviderSet, error) {
+	return parseMITMProviders(MITMProviderSet{value})
+}
+
+func formatMITMProviders(providers MITMProviderSet) string {
+	return strings.Join(normalizeMITMProviders(providers), ",")
+}
+
+func splitMITMProviderList(providerList string) []string {
+	return strings.FieldsFunc(providerList, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+}
+
+func normalizeMITMProviderName(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func isValidMITMProviderName(provider string) bool {
+	if provider == "" || provider == mitmProviderAll {
+		return false
+	}
+	for _, r := range provider {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func normalizeMITMBodyMode(v string) string {

@@ -23,6 +23,18 @@ type LaunchProfile struct {
 	EnvKeys         []string
 	IsElectron      bool
 	UpstreamDomains []string
+	ArgBuilder      func(proxyURL string, opts LaunchProfileOptions) ([]string, error)
+	Configurator    func(proxyURL string, opts LaunchProfileOptions) error
+	Preflight       func(opts LaunchProfileOptions) error
+}
+
+// LaunchProfileOptions carries launch-mode knobs for future CLI and
+// daemon surfaces. The zero value launches the normal application
+// profile; IsolatedProfileDir is used only when Isolated is true.
+type LaunchProfileOptions struct {
+	Isolated           bool
+	IsolatedProfileDir string
+	Force              bool
 }
 
 // LaunchProfiles is the registry of supported upstreams. Keys
@@ -69,6 +81,7 @@ func LaunchProfiles() map[string]LaunchProfile {
 			IsElectron:      true,
 			UpstreamDomains: []string{"api.anthropic.com", "claude.ai", "chatgpt.com", "openai.com", "api.githubcopilot.com"},
 		},
+		"cursor": NewCursorLaunchProfile(),
 	}
 }
 
@@ -118,6 +131,41 @@ func (p LaunchProfile) ComposeEnv(parent []string, overrides map[string]string) 
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// LaunchArgs returns profile-specific process arguments for a proxy
+// launch. Generic Electron profiles receive Chromium proxy flags;
+// profiles with an ArgBuilder own their complete launch argument set.
+func (p LaunchProfile) LaunchArgs(proxyURL string, opts LaunchProfileOptions) ([]string, error) {
+	args := append([]string{}, p.BaseArgs...)
+	if p.ArgBuilder != nil {
+		profileArgs, err := p.ArgBuilder(proxyURL, opts)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, profileArgs...)
+		return args, nil
+	}
+	args = append(args, p.ChromiumFlags(proxyURL)...)
+	return args, nil
+}
+
+// ValidateLaunch runs profile-specific launch guards. Generic profiles
+// have no guard.
+func (p LaunchProfile) ValidateLaunch(opts LaunchProfileOptions) error {
+	if p.Preflight == nil {
+		return nil
+	}
+	return p.Preflight(opts)
+}
+
+// ConfigureLaunch applies profile-specific persistent launch settings.
+// Generic profiles do not need any profile mutation.
+func (p LaunchProfile) ConfigureLaunch(proxyURL string, opts LaunchProfileOptions) error {
+	if p.Configurator == nil {
+		return nil
+	}
+	return p.Configurator(proxyURL, opts)
 }
 
 // ChromiumFlags returns the Chromium command-line flags Electron

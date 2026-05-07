@@ -32,6 +32,7 @@ import (
 	"goodkind.io/clyde/internal/cli/daemon"
 	hook "goodkind.io/clyde/internal/cli/hook"
 	"goodkind.io/clyde/internal/cli/mcp"
+	cliMITM "goodkind.io/clyde/internal/cli/mitm"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/slogger"
@@ -111,6 +112,7 @@ func run() int {
 	root.AddCommand(compact.NewCmd(f))
 	root.AddCommand(daemon.NewCmd(f))
 	root.AddCommand(hook.NewCmd(f))
+	root.AddCommand(cliMITM.NewCmd(f))
 	root.AddCommand(mcp.NewCmd(f))
 	root.AddCommand(cmd.NewResumeCmd())
 

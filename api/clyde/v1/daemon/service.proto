@@ -41,6 +41,7 @@ service ClydeService {
   rpc StopLiveSession(StopLiveSessionRequest) returns (StopLiveSessionResponse);
   rpc AcquireForegroundSession(AcquireForegroundSessionRequest) returns (AcquireForegroundSessionResponse);
   rpc ReleaseForegroundSession(ReleaseForegroundSessionRequest) returns (ReleaseForegroundSessionResponse);
+  rpc LaunchMITMUpstream(LaunchMITMUpstreamRequest) returns (LaunchMITMUpstreamResponse);
   rpc ListBridges(ListBridgesRequest) returns (ListBridgesResponse);
   rpc TailTranscript(TailTranscriptRequest) returns (stream TailTranscriptResponse);
   rpc SendToSession(SendToSessionRequest) returns (SendToSessionResponse);

@@ -224,10 +224,11 @@ func startCaptureProxy(addr string, cfg config.MITMConfig, log *slog.Logger) (*c
 		return nil, err
 	}
 	proxy := &Proxy{
-		log:    log.With("component", "mitm-capture"),
-		client: http.DefaultClient,
-		cfg:    cfg,
-		base:   "http://" + ln.Addr().String(),
+		log:         log.With("component", "mitm-capture"),
+		client:      http.DefaultClient,
+		dialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		cfg:         cfg,
+		base:        "http://" + ln.Addr().String(),
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(proxy.handle)}
 	proxy.server = srv

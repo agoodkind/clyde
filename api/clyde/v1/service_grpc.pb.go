@@ -47,6 +47,7 @@ const (
 	ClydeService_StopLiveSession_FullMethodName          = "/clyde.v1.ClydeService/StopLiveSession"
 	ClydeService_AcquireForegroundSession_FullMethodName = "/clyde.v1.ClydeService/AcquireForegroundSession"
 	ClydeService_ReleaseForegroundSession_FullMethodName = "/clyde.v1.ClydeService/ReleaseForegroundSession"
+	ClydeService_LaunchMITMUpstream_FullMethodName       = "/clyde.v1.ClydeService/LaunchMITMUpstream"
 	ClydeService_ListBridges_FullMethodName              = "/clyde.v1.ClydeService/ListBridges"
 	ClydeService_TailTranscript_FullMethodName           = "/clyde.v1.ClydeService/TailTranscript"
 	ClydeService_SendToSession_FullMethodName            = "/clyde.v1.ClydeService/SendToSession"
@@ -88,6 +89,7 @@ type ClydeServiceClient interface {
 	StopLiveSession(ctx context.Context, in *StopLiveSessionRequest, opts ...grpc.CallOption) (*StopLiveSessionResponse, error)
 	AcquireForegroundSession(ctx context.Context, in *AcquireForegroundSessionRequest, opts ...grpc.CallOption) (*AcquireForegroundSessionResponse, error)
 	ReleaseForegroundSession(ctx context.Context, in *ReleaseForegroundSessionRequest, opts ...grpc.CallOption) (*ReleaseForegroundSessionResponse, error)
+	LaunchMITMUpstream(ctx context.Context, in *LaunchMITMUpstreamRequest, opts ...grpc.CallOption) (*LaunchMITMUpstreamResponse, error)
 	ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error)
 	TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailTranscriptResponse], error)
 	SendToSession(ctx context.Context, in *SendToSessionRequest, opts ...grpc.CallOption) (*SendToSessionResponse, error)
@@ -412,6 +414,16 @@ func (c *clydeServiceClient) ReleaseForegroundSession(ctx context.Context, in *R
 	return out, nil
 }
 
+func (c *clydeServiceClient) LaunchMITMUpstream(ctx context.Context, in *LaunchMITMUpstreamRequest, opts ...grpc.CallOption) (*LaunchMITMUpstreamResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LaunchMITMUpstreamResponse)
+	err := c.cc.Invoke(ctx, ClydeService_LaunchMITMUpstream_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clydeServiceClient) ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListBridgesResponse)
@@ -541,6 +553,7 @@ type ClydeServiceServer interface {
 	StopLiveSession(context.Context, *StopLiveSessionRequest) (*StopLiveSessionResponse, error)
 	AcquireForegroundSession(context.Context, *AcquireForegroundSessionRequest) (*AcquireForegroundSessionResponse, error)
 	ReleaseForegroundSession(context.Context, *ReleaseForegroundSessionRequest) (*ReleaseForegroundSessionResponse, error)
+	LaunchMITMUpstream(context.Context, *LaunchMITMUpstreamRequest) (*LaunchMITMUpstreamResponse, error)
 	ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error)
 	TailTranscript(*TailTranscriptRequest, grpc.ServerStreamingServer[TailTranscriptResponse]) error
 	SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error)
@@ -640,6 +653,9 @@ func (UnimplementedClydeServiceServer) AcquireForegroundSession(context.Context,
 }
 func (UnimplementedClydeServiceServer) ReleaseForegroundSession(context.Context, *ReleaseForegroundSessionRequest) (*ReleaseForegroundSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleaseForegroundSession not implemented")
+}
+func (UnimplementedClydeServiceServer) LaunchMITMUpstream(context.Context, *LaunchMITMUpstreamRequest) (*LaunchMITMUpstreamResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LaunchMITMUpstream not implemented")
 }
 func (UnimplementedClydeServiceServer) ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBridges not implemented")
@@ -1165,6 +1181,24 @@ func _ClydeService_ReleaseForegroundSession_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_LaunchMITMUpstream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LaunchMITMUpstreamRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).LaunchMITMUpstream(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_LaunchMITMUpstream_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).LaunchMITMUpstream(ctx, req.(*LaunchMITMUpstreamRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_ListBridges_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListBridgesRequest)
 	if err := dec(in); err != nil {
@@ -1376,6 +1410,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReleaseForegroundSession",
 			Handler:    _ClydeService_ReleaseForegroundSession_Handler,
+		},
+		{
+			MethodName: "LaunchMITMUpstream",
+			Handler:    _ClydeService_LaunchMITMUpstream_Handler,
 		},
 		{
 			MethodName: "ListBridges",

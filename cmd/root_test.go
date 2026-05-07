@@ -68,7 +68,7 @@ func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
-	cfg := []byte("[mitm]\nenabled_default = true\nproviders = \"claude\"\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n")
+	cfg := []byte("[mitm]\nenabled_default = true\nproviders = [\"claude\"]\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n")
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

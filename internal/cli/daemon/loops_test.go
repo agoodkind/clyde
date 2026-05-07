@@ -44,7 +44,7 @@ func TestDriftLoopStartsDaemonOwnedMITMListenerWhenDefaultEnabled(t *testing.T) 
 		t.Fatalf("mkdir global config: %v", err)
 	}
 	configPath := filepath.Join(globalDir, "config.toml")
-	if err := os.WriteFile(configPath, []byte("[mitm]\nenabled_default = true\nproviders = \"claude\"\nbody_mode = \"summary\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte("[mitm]\nenabled_default = true\nproviders = [\"claude\"]\nbody_mode = \"summary\"\n"), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

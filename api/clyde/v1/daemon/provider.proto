@@ -163,3 +163,18 @@ message ReleaseForegroundSessionResponse {
   bool restored = 1;
   LiveSession live_session = 2;
 }
+
+message LaunchMITMUpstreamRequest {
+  string upstream = 1;
+  string profile_mode = 2;
+  string capture_dir = 3;
+  bool force = 4;
+  repeated string args = 5;
+}
+
+message LaunchMITMUpstreamResponse {
+  string upstream = 1;
+  string profile_mode = 2;
+  string capture_dir = 3;
+  bool launched = 4;
+}

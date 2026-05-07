@@ -285,7 +285,7 @@ func startDaemonMITMListener(log *slog.Logger, cfg config.MITMConfig) {
 		slog.String("component", "mitm"),
 		slog.String("proxy_base", proxy.ClaudeBaseURL()),
 		slog.String("capture_dir", cfg.CaptureDir),
-		slog.String("providers", cfg.Providers),
+		slog.String("providers", strings.Join(cfg.Providers, ",")),
 		slog.String("body_mode", cfg.BodyMode),
 	)
 }

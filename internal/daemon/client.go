@@ -924,6 +924,39 @@ func ReleaseForegroundSessionViaDaemon(ctx context.Context, leaseToken, exitStat
 	return resp, nil
 }
 
+// LaunchMITMUpstreamViaDaemon asks the daemon to launch an upstream client
+// through Clyde's daemon-owned MITM proxy.
+func LaunchMITMUpstreamViaDaemon(ctx context.Context, req *clydev1.LaunchMITMUpstreamRequest) (*clydev1.LaunchMITMUpstreamResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.launch_mitm_upstream.begin",
+		"upstream", req.GetUpstream(),
+		"profile_mode", req.GetProfileMode(),
+		"capture_dir", req.GetCaptureDir(),
+		"force", req.GetForce(),
+		"arg_count", len(req.GetArgs()),
+	)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.launch_mitm_upstream.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rpc.LaunchMITMUpstream(rpcCtx, req)
+	if err != nil {
+		log.DebugContext(rpcCtx, "daemon.client.launch_mitm_upstream.rpc_failed", "err", err)
+		return nil, err
+	}
+	log.DebugContext(rpcCtx, "daemon.client.launch_mitm_upstream.ok",
+		"upstream", resp.GetUpstream(),
+		"profile_mode", resp.GetProfileMode(),
+		"capture_dir", resp.GetCaptureDir(),
+		"launched", resp.GetLaunched(),
+	)
+	return resp, nil
+}
+
 type CompactRunOptions struct {
 	SessionName    string
 	TargetTokens   int

@@ -37,7 +37,7 @@ func TestUpdateControlValueAppliesAndValidates(t *testing.T) {
 	if err := UpdateControlValue(cfg, "mitm.providers", "claude"); err != nil {
 		t.Fatalf("providers: %v", err)
 	}
-	if cfg.MITM.Providers != "claude" {
+	if len(cfg.MITM.Providers) != 1 || cfg.MITM.Providers[0] != "claude" {
 		t.Fatalf("Providers=%q want claude", cfg.MITM.Providers)
 	}
 	if err := UpdateControlValue(cfg, "mitm.capture_dir", " /tmp/captures "); err != nil {
@@ -48,5 +48,21 @@ func TestUpdateControlValueAppliesAndValidates(t *testing.T) {
 	}
 	if err := UpdateControlValue(cfg, "mitm.body_mode", "bogus"); err == nil {
 		t.Fatalf("expected invalid body_mode error")
+	}
+}
+
+func TestMITMProviderControlAcceptsCursorSet(t *testing.T) {
+	cfg := NewConfigWithDefaults()
+	if err := UpdateControlValue(cfg, "mitm.providers", "cursor,codex"); err != nil {
+		t.Fatalf("providers: %v", err)
+	}
+	if !cfg.MITM.EnabledFor("cursor") {
+		t.Fatalf("cursor provider disabled")
+	}
+	if !cfg.MITM.EnabledFor("codex") {
+		t.Fatalf("codex provider disabled")
+	}
+	if cfg.MITM.EnabledFor("claude") {
+		t.Fatalf("claude provider enabled")
 	}
 }
