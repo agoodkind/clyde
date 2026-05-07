@@ -1,3 +1,5 @@
+// Package main runs a local OpenAI-compatible probe server for Cursor error
+// envelope experiments.
 package main
 
 import (
@@ -15,6 +17,7 @@ import (
 const (
 	defaultAddress = "localhost:48761"
 	defaultShape   = "json-current-upstream-failed"
+	serverTimeout  = 30 * time.Second
 )
 
 type errorShape struct {
@@ -105,7 +108,15 @@ func main() {
 		"address", *address,
 		"shape", server.currentShape().name,
 	)
-	if err := http.ListenAndServe(*address, mux); err != nil {
+	httpServer := &http.Server{
+		Addr:              *address,
+		Handler:           mux,
+		ReadHeaderTimeout: serverTimeout,
+		ReadTimeout:       serverTimeout,
+		WriteTimeout:      serverTimeout,
+		IdleTimeout:       serverTimeout,
+	}
+	if err := httpServer.ListenAndServe(); err != nil {
 		slog.Error("cursor error-shape probe server failed", "err", err)
 		os.Exit(1)
 	}
@@ -217,10 +228,14 @@ func writeStreamShape(w http.ResponseWriter, shape errorShape) {
 	}
 
 	switch shape.streamMode {
+	case streamModeNone,
+		streamModeErrorDone,
+		streamModeErrorOnly,
+		streamModeDeltaErrorDone,
+		streamModeChunkErrorDone:
+		writeSSE(w, buildErrorResponse(shape))
 	case streamModeEventErrorDone:
 		writeNamedSSE(w, "error", buildErrorResponse(shape))
-	default:
-		writeSSE(w, buildErrorResponse(shape))
 	}
 	if shape.streamMode != streamModeErrorOnly {
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
@@ -230,7 +245,7 @@ func writeStreamShape(w http.ResponseWriter, shape errorShape) {
 func buildErrorResponse(shape errorShape) errorResponse {
 	return errorResponse{
 		Error: errorBody{
-			Message: fmt.Sprintf("clyde cursor error-shape probe: %s", shape.name),
+			Message: "clyde cursor error-shape probe: " + shape.name,
 			Type:    shape.errorType,
 			Code:    shape.errorCode,
 		},

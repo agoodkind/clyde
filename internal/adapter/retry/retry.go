@@ -1,10 +1,13 @@
+// Package retry evaluates adapter retry policies and applies bounded backoff.
 package retry
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,10 +112,20 @@ func Decide(policies []Policy, signal Signal, attempt int, random RandFloat) Dec
 			continue
 		}
 		if signal.ResponseStarted && !policy.RetryWhenResponseStarted {
-			return Decision{PolicyName: policy.Name, Reason: "response_started"}
+			return Decision{
+				Retry:      false,
+				PolicyName: policy.Name,
+				Delay:      0,
+				Reason:     "response_started",
+			}
 		}
 		if attempt >= policy.MaxAttempts {
-			return Decision{PolicyName: policy.Name, Reason: "max_attempts_exhausted"}
+			return Decision{
+				Retry:      false,
+				PolicyName: policy.Name,
+				Delay:      0,
+				Reason:     "max_attempts_exhausted",
+			}
 		}
 		return Decision{
 			Retry:      true,
@@ -121,7 +134,12 @@ func Decide(policies []Policy, signal Signal, attempt int, random RandFloat) Dec
 			Reason:     "matched",
 		}
 	}
-	return Decision{Reason: "no_policy_matched"}
+	return Decision{
+		Retry:      false,
+		PolicyName: "",
+		Delay:      0,
+		Reason:     "no_policy_matched",
+	}
 }
 
 // Matches reports whether a policy applies to a failed operation.
@@ -147,9 +165,7 @@ func (p Policy) Matches(signal Signal) bool {
 // DelayForAttempt returns the bounded backoff for the attempt that just failed.
 func (p Policy) DelayForAttempt(attempt int, random RandFloat) time.Duration {
 	delay := p.InitialDelay
-	if delay < 0 {
-		delay = 0
-	}
+	delay = max(delay, 0)
 	multiplier := p.Multiplier
 	if multiplier == 0 {
 		multiplier = 1
@@ -188,7 +204,13 @@ func Sleep(ctx context.Context, delay time.Duration) error {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		slog.WarnContext(ctx, "adapter.retry.sleep_cancelled",
+			"component", "adapter",
+			"subcomponent", "retry",
+			"delay_ms", delay.Milliseconds(),
+			"err", ctx.Err(),
+		)
+		return fmt.Errorf("sleep retry delay: %w", ctx.Err())
 	case <-timer.C:
 		return nil
 	}
@@ -215,6 +237,7 @@ func LogDecision(ctx context.Context, log *slog.Logger, decision Decision, attem
 	)
 }
 
+// MaxAttempts returns the configured maximum attempt count for a policy.
 func MaxAttempts(policies []Policy, policyName string) int {
 	for _, policy := range policies {
 		if policy.Name == policyName {
@@ -241,12 +264,7 @@ func matchIntSet(values []int, got int) bool {
 	if len(values) == 0 {
 		return true
 	}
-	for _, value := range values {
-		if value == got {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, got)
 }
 
 func matchMessageSubstrings(values []string, got string) bool {

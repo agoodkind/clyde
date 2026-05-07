@@ -238,11 +238,12 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	req.URL.Host = target
 
 	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{
-		Provider:           "cursor",
-		Host:               host,
-		Method:             req.Method,
-		Path:               req.URL.Path,
-		RequestContentType: req.Header.Get("Content-Type"),
+		Provider:            "cursor",
+		Host:                host,
+		Method:              req.Method,
+		Path:                req.URL.Path,
+		RequestContentType:  req.Header.Get("Content-Type"),
+		ResponseContentType: "",
 	})
 	requestRawPath, responseRawPath, err := p.nextRawCapturePaths(cfg.CaptureDir, concern, host, req.URL.Path)
 	if err != nil {
@@ -266,16 +267,7 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		TLSHandshakeTimeout: 30 * time.Second,
 	}
 	defer transport.CloseIdleConnections()
-	upstreamReq := req.Clone(req.Context())
-	upstreamReq.Body = io.NopCloser(bytes.NewReader(body))
-	upstreamReq.ContentLength = int64(len(body))
-	upstreamReq.Host = host
-	upstreamReq.URL.Scheme = "https"
-	upstreamReq.URL.Host = target
-	upstreamReq.RequestURI = ""
-	upstreamReq.Header = req.Header.Clone()
-
-	resp, err := transport.RoundTrip(upstreamReq)
+	resp, err := transport.RoundTrip(cursorUpstreamRequest(req, body, target, host))
 	if err != nil {
 		return fmt.Errorf("cursor upstream round trip: %w", err)
 	}
@@ -325,6 +317,18 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		"response_bytes", responseBytes,
 	)
 	return nil
+}
+
+func cursorUpstreamRequest(req *http.Request, body []byte, target string, host string) *http.Request {
+	upstreamReq := req.Clone(req.Context())
+	upstreamReq.Body = io.NopCloser(bytes.NewReader(body))
+	upstreamReq.ContentLength = int64(len(body))
+	upstreamReq.Host = host
+	upstreamReq.URL.Scheme = "https"
+	upstreamReq.URL.Host = target
+	upstreamReq.RequestURI = ""
+	upstreamReq.Header = req.Header.Clone()
+	return upstreamReq
 }
 
 func (p *Proxy) forwardAndCaptureCursorResponse(client *bufio.Writer, resp *http.Response, responseRawPath string) (int64, error) {

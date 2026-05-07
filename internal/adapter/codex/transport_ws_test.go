@@ -496,7 +496,7 @@ func TestRunWebsocketTransportRetriesOverloadedThenSucceeds(t *testing.T) {
 			text.WriteString(event.Text)
 		}
 		return nil
-	}, func(context.Context, time.Duration) error { return nil }, nil)
+	}, func(context.Context, time.Duration) error { return nil })
 	if err != nil {
 		t.Fatalf("RunWebsocketTransportEvents: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestRunWebsocketTransportExhaustsOverloadedRetries(t *testing.T) {
 		RetryPolicies: codexOverloadedRetryPolicyForTest(),
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(adapterrender.Event) error {
 		return nil
-	}, func(context.Context, time.Duration) error { return nil }, nil)
+	}, func(context.Context, time.Duration) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), overloadedMessageForRetryTest) {
 		t.Fatalf("err=%v want overloaded error", err)
 	}
@@ -580,7 +580,7 @@ func TestRunWebsocketTransportDoesNotRetryNonRetryableFailure(t *testing.T) {
 		RetryPolicies: codexOverloadedRetryPolicyForTest(),
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(adapterrender.Event) error {
 		return nil
-	}, func(context.Context, time.Duration) error { return nil }, nil)
+	}, func(context.Context, time.Duration) error { return nil })
 	if err == nil {
 		t.Fatalf("err=nil want context window error")
 	}
@@ -624,7 +624,7 @@ func TestRunWebsocketTransportDoesNotRetryAfterClientVisibleOutput(t *testing.T)
 			text.WriteString(event.Text)
 		}
 		return nil
-	}, func(context.Context, time.Duration) error { return nil }, nil)
+	}, func(context.Context, time.Duration) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), overloadedMessageForRetryTest) {
 		t.Fatalf("err=%v want overloaded error", err)
 	}

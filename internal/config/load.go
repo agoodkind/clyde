@@ -528,7 +528,9 @@ func builtinCodexOverloadedRetryPolicy() AdapterRetryPolicy {
 		Match: AdapterRetryMatchers{
 			Backends:          []string{"codex"},
 			Operations:        []string{"codex.responses.websocket.generate"},
+			Statuses:          nil,
 			ErrorClasses:      []string{"scanner_error", "websocket_error", "response_failed"},
+			ErrorCodes:        nil,
 			MessageSubstrings: []string{"Our servers are currently overloaded. Please try again later."},
 		},
 	}
@@ -633,42 +635,78 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 	return nil
 }
 
+// DefaultMITMCaptureRouteRules returns Clyde's built-in MITM concern routing.
 func DefaultMITMCaptureRouteRules() []MITMCaptureRouteRule {
 	return []MITMCaptureRouteRule{
 		{
-			Concern:   "cursor.bidi",
-			Provider:  "cursor",
-			Method:    "POST",
-			PathExact: "/aiserver.v1.AiService/BidiAppend",
+			Concern:             "cursor.bidi",
+			Provider:            "cursor",
+			Host:                "",
+			Method:              "POST",
+			PathExact:           "/aiserver.v1.AiService/BidiAppend",
+			PathPrefix:          "",
+			PathContains:        "",
+			ContentTypeContains: "",
 		},
 		{
-			Concern:      "cursor.agent",
-			Provider:     "cursor",
-			PathContains: "AiService",
+			Concern:             "cursor.agent",
+			Provider:            "cursor",
+			Host:                "",
+			Method:              "",
+			PathExact:           "",
+			PathPrefix:          "",
+			PathContains:        "AiService",
+			ContentTypeContains: "",
 		},
 		{
-			Concern:      "cursor.catalog",
-			Provider:     "cursor",
-			PathContains: "Model",
+			Concern:             "cursor.catalog",
+			Provider:            "cursor",
+			Host:                "",
+			Method:              "",
+			PathExact:           "",
+			PathPrefix:          "",
+			PathContains:        "Model",
+			ContentTypeContains: "",
 		},
 		{
-			Concern:      "cursor.account",
-			Provider:     "cursor",
-			PathContains: "User",
+			Concern:             "cursor.account",
+			Provider:            "cursor",
+			Host:                "",
+			Method:              "",
+			PathExact:           "",
+			PathPrefix:          "",
+			PathContains:        "User",
+			ContentTypeContains: "",
 		},
 		{
-			Concern:      "cursor.telemetry",
-			Provider:     "cursor",
-			Host:         "telemetry.cursor.com",
-			PathContains: "telemetry",
+			Concern:             "cursor.telemetry",
+			Provider:            "cursor",
+			Host:                "telemetry.cursor.com",
+			Method:              "",
+			PathExact:           "",
+			PathPrefix:          "",
+			PathContains:        "telemetry",
+			ContentTypeContains: "",
 		},
 		{
-			Concern:      "cursor.filesync",
-			Provider:     "cursor",
-			PathContains: "FileSync",
+			Concern:             "cursor.filesync",
+			Provider:            "cursor",
+			Host:                "",
+			Method:              "",
+			PathExact:           "",
+			PathPrefix:          "",
+			PathContains:        "FileSync",
+			ContentTypeContains: "",
 		},
 		{
-			Concern: "unknown",
+			Concern:             "unknown",
+			Provider:            "",
+			Host:                "",
+			Method:              "",
+			PathExact:           "",
+			PathPrefix:          "",
+			PathContains:        "",
+			ContentTypeContains: "",
 		},
 	}
 }
@@ -681,6 +719,13 @@ func normalizeMITMCaptureRouteRules(rules []MITMCaptureRouteRule) ([]MITMCapture
 	for i, rule := range rules {
 		normalizedRule, err := normalizeMITMCaptureRouteRule(rule)
 		if err != nil {
+			slog.Warn("config.mitm.capture_rule_invalid",
+				"concern", "process.daemon.config",
+				"component", "config",
+				"subcomponent", "mitm",
+				"index", i,
+				"err", err,
+			)
 			return nil, fmt.Errorf("mitm.capture_rules[%d]: %w", i, err)
 		}
 		normalizedRules = append(normalizedRules, normalizedRule)

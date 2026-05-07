@@ -192,6 +192,7 @@ func rawCaptureSessionConfig(captureDir string) config.MITMConfig {
 		Providers:      nil,
 		BodyMode:       "raw",
 		CaptureDir:     captureDir,
+		CaptureRules:   nil,
 		Capture: config.MITMCapture{
 			Rotation: config.LoggingRotation{
 				Enabled:    nil,

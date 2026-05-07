@@ -336,27 +336,29 @@ type AdapterRetryPolicy struct {
 // preserving duration typing inside the config model.
 type AdapterRetryDuration time.Duration
 
-func (d *AdapterRetryDuration) UnmarshalText(text []byte) error {
+// UnmarshalText parses a quoted Go duration or an integer nanosecond count.
+func (duration *AdapterRetryDuration) UnmarshalText(text []byte) error {
 	value := strings.TrimSpace(string(text))
 	if value == "" {
-		*d = 0
+		*duration = 0
 		return nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err == nil {
-		*d = AdapterRetryDuration(parsed)
+		*duration = AdapterRetryDuration(parsed)
 		return nil
 	}
 	numeric, numericErr := strconv.ParseInt(value, 10, 64)
 	if numericErr == nil {
-		*d = AdapterRetryDuration(time.Duration(numeric))
+		*duration = AdapterRetryDuration(time.Duration(numeric))
 		return nil
 	}
-	return err
+	return fmt.Errorf("parse adapter retry duration %q: %w", value, err)
 }
 
-func (d AdapterRetryDuration) Duration() time.Duration {
-	return time.Duration(d)
+// Duration returns the standard library duration value.
+func (duration *AdapterRetryDuration) Duration() time.Duration {
+	return time.Duration(*duration)
 }
 
 // AdapterRetryMatchers constrains when a retry policy applies.
@@ -1212,6 +1214,7 @@ type MITMDriftUpstreamCfg struct {
 	ForbidBodyKeys  []string `json:"forbidBodyKeys,omitempty" toml:"forbid_body_keys,omitempty"`
 }
 
+// EnabledFor reports whether the configured MITM provider set includes provider.
 func (m MITMConfig) EnabledFor(provider string) bool {
 	normalizedProvider := normalizeMITMProviderName(provider)
 	if !isValidMITMProviderName(normalizedProvider) {

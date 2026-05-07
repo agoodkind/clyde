@@ -371,6 +371,7 @@ func codexRenderEventStartsClientResponse(event adapterrender.Event) bool {
 		adapterrender.EventAssistantRefusalDelta,
 		adapterrender.EventReasoningSignaled,
 		adapterrender.EventReasoningDelta,
+		adapterrender.EventReasoningFinished,
 		adapterrender.EventToolCallDelta:
 		return true
 	default:
@@ -471,7 +472,7 @@ func RunWebsocketTransportEvents(
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
-	return runWebsocketTransportEventsWithRetry(ctx, cfg, payload, emit, adapterretry.Sleep, nil)
+	return runWebsocketTransportEventsWithRetry(ctx, cfg, payload, emit, adapterretry.Sleep)
 }
 
 func runWebsocketTransportEventsWithRetry(
@@ -480,7 +481,6 @@ func runWebsocketTransportEventsWithRetry(
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
 	sleep adapterretry.Sleeper,
-	random adapterretry.RandFloat,
 ) (RunResult, error) {
 	if sleep == nil {
 		sleep = adapterretry.Sleep
@@ -498,11 +498,13 @@ func runWebsocketTransportEventsWithRetry(
 		signal := adapterretry.Signal{
 			Backend:         "codex",
 			Operation:       operation,
+			Status:          0,
 			ErrorClass:      codexRetryErrorClass(err),
+			ErrorCode:       "",
 			Message:         err.Error(),
 			ResponseStarted: responseStarted,
 		}
-		decision := adapterretry.Decide(cfg.RetryPolicies, signal, attempt, random)
+		decision := adapterretry.Decide(cfg.RetryPolicies, signal, attempt, nil)
 		if !decision.Retry {
 			maxAttempts := adapterretry.MaxAttempts(cfg.RetryPolicies, decision.PolicyName)
 			logCodexRetryDecision(ctx, cfg, decision, attempt, maxAttempts, "failed")
@@ -558,7 +560,9 @@ func logCodexRetryTerminal(ctx context.Context, cfg WebsocketTransportConfig, at
 		return
 	}
 	logCodexRetryDecision(ctx, cfg, adapterretry.Decision{
+		Retry:      false,
 		PolicyName: policyName,
+		Delay:      0,
 		Reason:     "operation_succeeded",
 	}, attempt, maxAttempts, finalOutcome)
 }
