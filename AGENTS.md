@@ -199,6 +199,7 @@ Put detailed logging setup examples, correlation audits, and backlog tables in l
 
 Start debugging by checking Clyde's structured logs before guessing from symptoms. Default log paths are under `$XDG_STATE_HOME/clyde`; when `XDG_STATE_HOME` is unset, use `~/.local/state/clyde`.
 
+- Cursor BYOK setup against the daemon MITM requires `http.proxy` and related settings in Cursor's user `settings.json`. See `docs/cursor-mitm-setup.md`.
 - Main daemon log: `$XDG_STATE_HOME/clyde/clyde-daemon.jsonl`.
 - Main TUI log: `$XDG_STATE_HOME/clyde/clyde-tui.jsonl`.
 - Concern logs: `$XDG_STATE_HOME/clyde/logs/<concern-path>.jsonl`, where concern names from `internal/slogger/concerns.go` map dots to nested paths.
