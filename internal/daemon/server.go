@@ -37,6 +37,7 @@ import (
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/outputstyle"
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
@@ -100,7 +101,36 @@ type Server struct {
 	reloadMu sync.Mutex
 	reloadFn func(context.Context) (reloadReport, error)
 
+	mitmAccess mitmAccessor
+
 	skipRuntimeCleanup atomic.Bool
+}
+
+// mitmAccessor stores the daemon's optional accessor for the
+// daemon-owned MITM proxy. Wrapping the lock and func into a single
+// field keeps Server's exhaustruct surface small while still letting
+// callers swap the accessor at runtime.
+type mitmAccessor struct {
+	mu sync.RWMutex
+	fn func() *mitm.Proxy
+}
+
+// SetMITMProxyAccessor wires a getter the Server uses when callers
+// need the daemon-owned MITM proxy. The accessor returns nil when the
+// proxy is not running.
+func (s *Server) SetMITMProxyAccessor(fn func() *mitm.Proxy) {
+	s.mitmAccess.mu.Lock()
+	defer s.mitmAccess.mu.Unlock()
+	s.mitmAccess.fn = fn
+}
+
+func (s *Server) mitmProxy() *mitm.Proxy {
+	s.mitmAccess.mu.RLock()
+	defer s.mitmAccess.mu.RUnlock()
+	if s.mitmAccess.fn == nil {
+		return nil
+	}
+	return s.mitmAccess.fn()
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -321,6 +351,7 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		contextUsageProbe:               nil,
 		reloadMu:                        sync.Mutex{},
 		reloadFn:                        nil,
+		mitmAccess:                      mitmAccessor{mu: sync.RWMutex{}, fn: nil},
 		skipRuntimeCleanup:              atomic.Bool{},
 	}
 }

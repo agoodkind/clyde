@@ -51,32 +51,25 @@ type Proxy struct {
 	cursorTLSClientConfig *tls.Config
 	rawCaptureSeq         atomic.Uint64
 
-	mu     sync.RWMutex
-	cfg    config.MITMConfig
-	base   string
-	server *http.Server
+	mu       sync.RWMutex
+	cfg      config.MITMConfig
+	base     string
+	listener net.Listener
+	server   *http.Server
 }
 
-var defaultProxy struct {
-	mu   sync.Mutex
-	inst *Proxy
-}
-
-func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
-	defaultProxy.mu.Lock()
-	defer defaultProxy.mu.Unlock()
-	if defaultProxy.inst != nil {
-		defaultProxy.inst.setConfig(cfg)
-		return defaultProxy.inst, nil
+// NewProxy constructs a Proxy bound to the supplied listener. The
+// caller (the daemon) owns listener lifecycle; the proxy serves on
+// it until Shutdown returns. Callers must invoke Serve to start
+// accepting requests.
+func NewProxy(cfg config.MITMConfig, log *slog.Logger, listener net.Listener) (*Proxy, error) {
+	if listener == nil {
+		return nil, fmt.Errorf("mitm: listener is required")
 	}
 	if log == nil {
 		log = slog.Default()
 	}
 	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
-	ln, err := net.Listen("tcp", "[::1]:0") // TODO: make this configurable
-	if err != nil {
-		return nil, err
-	}
 	p := &Proxy{
 		log:                   log.With("component", "mitm"),
 		client:                http.DefaultClient,
@@ -87,25 +80,52 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 		rawCaptureSeq:         atomic.Uint64{},
 		mu:                    sync.RWMutex{},
 		cfg:                   cfg,
-		base:                  "http://" + ln.Addr().String(),
+		base:                  "http://" + listener.Addr().String(),
+		listener:              listener,
 		server:                nil,
 	}
 	p.server = &http.Server{Handler: http.HandlerFunc(p.handle)}
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				p.log.Error("mitm.proxy.serve_panic",
-					"err", fmt.Errorf("panic: %v", recovered),
-				)
-			}
-		}()
-		if err := p.server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			p.log.Error("mitm.proxy.serve_failed", "err", err)
-		}
-	}()
-	p.log.Info("mitm.proxy.started", "base_url", p.base, "capture_dir", cfg.CaptureDir, "providers", cfg.Providers, "body_mode", cfg.BodyMode)
-	defaultProxy.inst = p
 	return p, nil
+}
+
+// Serve runs the proxy's HTTP server on its bound listener. It blocks
+// until Shutdown is called or the listener returns an unrecoverable
+// error.
+func (p *Proxy) Serve() error {
+	if p.listener == nil {
+		return fmt.Errorf("mitm: proxy has no listener")
+	}
+	p.log.Info("mitm.proxy.started",
+		"base_url", p.base,
+		"capture_dir", p.cfg.CaptureDir,
+		"providers", p.cfg.Providers,
+		"body_mode", p.cfg.BodyMode,
+	)
+	if err := p.server.Serve(p.listener); err != nil && err != http.ErrServerClosed {
+		p.log.Error("mitm.proxy.serve_failed", "err", err)
+		return fmt.Errorf("mitm serve: %w", err)
+	}
+	return nil
+}
+
+// Shutdown gracefully stops the proxy's HTTP server, draining
+// in-flight requests until ctx is canceled.
+func (p *Proxy) Shutdown(ctx context.Context) error {
+	if p.server == nil {
+		return nil
+	}
+	if err := p.server.Shutdown(ctx); err != nil {
+		p.log.WarnContext(ctx, "mitm.proxy.shutdown_failed", "err", err)
+		return fmt.Errorf("mitm shutdown: %w", err)
+	}
+	return nil
+}
+
+// SetConfig updates the proxy's runtime config. The daemon calls
+// this on config reload so always-on knobs (capture dir, body mode,
+// provider set) react without rebinding the listener.
+func (p *Proxy) SetConfig(cfg config.MITMConfig) {
+	p.setConfig(cfg)
 }
 
 func (p *Proxy) setConfig(cfg config.MITMConfig) {
@@ -681,13 +701,17 @@ func expandHome(path string) string {
 	return path
 }
 
-func ClaudeEnv(ctx context.Context, cfg config.MITMConfig, log *slog.Logger) (map[string]string, error) {
+// ClaudeEnv returns the env overrides Claude CLI needs to route
+// through the daemon-owned MITM proxy. The proxy must already be
+// running; callers pass the daemon-owned instance. If MITM is
+// disabled by config, returns nil so callers can skip env injection
+// entirely.
+func ClaudeEnv(_ context.Context, cfg config.MITMConfig, proxy *Proxy) (map[string]string, error) {
 	if !cfg.EnabledDefault || !cfg.EnabledFor("claude") {
 		return nil, nil
 	}
-	proxy, err := EnsureStarted(cfg, log)
-	if err != nil {
-		return nil, err
+	if proxy == nil {
+		return nil, fmt.Errorf("mitm: proxy is not running")
 	}
 	return map[string]string{"ANTHROPIC_BASE_URL": proxy.ClaudeBaseURL()}, nil
 }
