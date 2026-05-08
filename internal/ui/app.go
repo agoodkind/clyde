@@ -1180,11 +1180,6 @@ func (a *App) shouldDrawAfterRunEvent(profile runEventProfile) bool {
 	}
 	_, compactOverlay := a.overlay.(*CompactPanel)
 	if profile.isSpinnerInterrupt && !a.appFocused && !compactOverlay {
-		tuiLog.Logger().Debug("tui.loop.skip_draw.spinner_unfocused",
-			"component", "tui",
-			"active_tab", a.activeTab,
-			"has_overlay", a.overlay != nil,
-			"overlay_type", fmt.Sprintf("%T", a.overlay))
 		return false
 	}
 	return true
