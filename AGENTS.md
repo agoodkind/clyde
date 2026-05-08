@@ -202,12 +202,12 @@ Start debugging by checking Clyde's structured logs before guessing from symptom
 - Main TUI log: `$XDG_STATE_HOME/clyde/clyde-tui.jsonl`.
 - Concern logs: `$XDG_STATE_HOME/clyde/logs/<concern-path>.jsonl`, where concern names from `internal/slogger/concerns.go` map dots to nested paths.
 - Dedicated Codex sidecar log: `$XDG_STATE_HOME/clyde/codex.jsonl`, unless `CLYDE_CODEX_LOG_PATH` overrides it.
-- MITM captures: `$XDG_STATE_HOME/clyde/mitm/capture.jsonl` by default, or the configured `[mitm].capture_dir`. MITM is only for Clyde-launched Codex CLI and Claude CLI baseline/header capture and drift checks; it is not Cursor ingress and is not part of the OpenAI-compatible adapter request path.
+- MITM captures: Codex CLI, Claude CLI, and Cursor traffic. The always-on baseline writes to `${XDG_STATE_HOME}/clyde/mitm/always-on/`, with raw TLS-decrypted request and response bytes under `raw/<host>/` and a per-event index in `capture.jsonl`. Captured hosts include `api2.cursor.sh`, `api3.cursor.sh`, and other hosts under `*.cursor.sh` and `*.cursor.com`, as well as `chatgpt.com`, `openai.com`, and `api.anthropic.com`.
 - macOS LaunchAgent stderr/stdout fallback: `~/.local/state/clyde/daemon.log`.
 
 Operators may override main process log paths with `[logging.paths].daemon`, `[logging.paths].tui`, or `CLYDE_SLOG_PATH`. Check the active config before assuming the defaults.
 
-For adapter, Cursor, Codex, Anthropic, passthrough, MITM, live-session, and daemon issues, prefer the matching concern log first. Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `session`, `process.daemon`, and `ui`. Do not use MITM logs to prove Cursor ingress behavior; use adapter logs for Cursor ingress and MITM logs only for CLI capture/baseline behavior.
+For adapter, Cursor, Codex, Anthropic, passthrough, MITM, live-session, and daemon issues, prefer the matching concern log first. Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `session`, `process.daemon`, and `ui`. Adapter logs are the primary debugging surface for Cursor ingress. MITM captures provide an independent record of the same exchange; when you suspect adapter pre-processing is at fault, compare the raw TLS-decrypted bytes from MITM against the adapter logs to isolate where behavior diverges.
 
 Use correlation fields to follow one operation across files: `trace_id`, `span_id`, `parent_span_id`, `request_id`, `cursor_request_id`, `cursor_conversation_id`, `upstream_request_id`, and `upstream_response_id`. Avoid raw body logging unless the user explicitly enables a safe local debugging policy, and never paste secrets, prompts, tokens, cookies, or API keys into chat.
 
