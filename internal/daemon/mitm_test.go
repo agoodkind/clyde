@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,7 +110,24 @@ func assertStringSlicesEqual(t *testing.T, got []string, want []string) {
 
 func TestProviderLaunchEnvironmentReturnsClaudeMITMEnvWhenEnabled(t *testing.T) {
 	writeMITMConfig(t, true)
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	caDir := t.TempDir()
+	mitmCfg := config.MITMConfig{
+		CA: config.MITMCAConfig{
+			CertPath: filepath.Join(caDir, "clyde-mitm-ca.crt"),
+			KeyPath:  filepath.Join(caDir, "clyde-mitm-ca.key"),
+		},
+	}
+	proxy, err := mitm.NewProxy(mitmCfg, slog.New(slog.NewTextHandler(io.Discard, nil)), listener)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
 	srv := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	srv.SetMITMProxyAccessor(func() *mitm.Proxy { return proxy })
 
 	resp, err := srv.ProviderLaunchEnvironment(context.Background(), &clydev1.ProviderLaunchEnvironmentRequest{
 		Provider: "claude",
@@ -126,16 +144,7 @@ func TestProviderLaunchEnvironmentReturnsClaudeMITMEnvWhenEnabled(t *testing.T) 
 	}
 }
 
-func TestAdapterMITMOverrideDoesNotStartWhenDefaultDisabled(t *testing.T) {
-	oldEnsure := ensureAdapterMITMStarted
-	t.Cleanup(func() {
-		ensureAdapterMITMStarted = oldEnsure
-	})
-	called := false
-	ensureAdapterMITMStarted = func(config.MITMConfig, *slog.Logger) (*mitm.Proxy, error) {
-		called = true
-		return nil, nil
-	}
+func TestAdapterMITMOverrideReturnsEmptyWhenDefaultDisabled(t *testing.T) {
 	cfg := config.Config{
 		MITM: config.MITMConfig{
 			EnabledDefault: false,
@@ -143,13 +152,10 @@ func TestAdapterMITMOverrideDoesNotStartWhenDefaultDisabled(t *testing.T) {
 		},
 	}
 
-	got := adapterMITMOverride(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got := adapterMITMOverride(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 
 	if got != "" {
 		t.Fatalf("adapterMITMOverride = %q, want empty override", got)
-	}
-	if called {
-		t.Fatalf("adapterMITMOverride started MITM with enabled_default=false")
 	}
 }
 

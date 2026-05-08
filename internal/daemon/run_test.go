@@ -396,6 +396,11 @@ func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
 		t.Fatalf("listen webapp: %v", err)
 	}
 	defer webLis.Close()
+	mitmLis, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("listen mitm: %v", err)
+	}
+	defer mitmLis.Close()
 
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
@@ -411,6 +416,10 @@ func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("split web addr: %v", err)
 	}
+	_, mitmPort, err := net.SplitHostPort(mitmLis.Addr().String())
+	if err != nil {
+		t.Fatalf("split mitm addr: %v", err)
+	}
 	toml := "[adapter]\n" +
 		"enabled = true\n" +
 		"host = \"[::1]\"\n" +
@@ -418,7 +427,10 @@ func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
 		"[web_app]\n" +
 		"enabled = true\n" +
 		"host = \"[::1]\"\n" +
-		"port = " + webPort + "\n"
+		"port = " + webPort + "\n" +
+		"[mitm.listen]\n" +
+		"host = \"[::1]\"\n" +
+		"port = " + mitmPort + "\n"
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(toml), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -427,17 +439,18 @@ func TestInheritedListenerFilesIncludesDaemonAdapterAndWebapp(t *testing.T) {
 		listener: daemonLis,
 		adapter:  &adapterController{proc: &adapterProcess{lis: adapterLis}},
 		webapp:   &webAppProcess{lis: webLis},
+		mitm:     &mitmProcess{lis: mitmLis},
 	}
 	files, specs, cleanup, err := inheritedListenerFiles(rt)
 	if err != nil {
 		t.Fatalf("inherited files: %v", err)
 	}
 	defer cleanup()
-	if len(files) != 3 || len(specs) != 3 {
-		t.Fatalf("got %d files and %d specs, want 3 each", len(files), len(specs))
+	if len(files) != 4 || len(specs) != 4 {
+		t.Fatalf("got %d files and %d specs, want 4 each", len(files), len(specs))
 	}
-	gotNames := []string{specs[0].Name, specs[1].Name, specs[2].Name}
-	if strings.Join(gotNames, ",") != "daemon,adapter,webapp" {
+	gotNames := []string{specs[0].Name, specs[1].Name, specs[2].Name, specs[3].Name}
+	if strings.Join(gotNames, ",") != "daemon,adapter,webapp,mitm" {
 		t.Fatalf("listener names = %v", gotNames)
 	}
 	for i, spec := range specs {

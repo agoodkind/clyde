@@ -189,7 +189,7 @@ func (s *Server) ProviderLaunchEnvironment(ctx context.Context, req *clydev1.Pro
 	var env map[string]string
 	switch provider {
 	case "claude":
-		env, err = mitm.ClaudeEnv(ctx, cfg.MITM, s.log)
+		env, err = mitm.ClaudeEnv(ctx, cfg.MITM, s.mitmProxy())
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported provider %q", provider)
 	}

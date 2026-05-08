@@ -222,7 +222,6 @@ func driftLoop() daemonsvc.ExtraLoop {
 			)
 			return nil
 		}
-		startDaemonMITMListener(log, cfg.MITM)
 		dcfg := cfg.MITM.Drift
 		if !dcfg.Enabled || len(dcfg.Upstreams) == 0 {
 			return nil
@@ -267,27 +266,6 @@ func driftLoop() daemonsvc.ExtraLoop {
 		}()
 		return cancel
 	}
-}
-
-func startDaemonMITMListener(log *slog.Logger, cfg config.MITMConfig) {
-	if !cfg.EnabledDefault {
-		return
-	}
-	proxy, err := mitm.EnsureStarted(cfg, log.With("subcomponent", "mitm"))
-	if err != nil {
-		log.LogAttrs(context.Background(), slog.LevelWarn, "mitm.listener.start_failed",
-			slog.String("component", "mitm"),
-			slog.Any("err", err),
-		)
-		return
-	}
-	log.LogAttrs(context.Background(), slog.LevelInfo, "mitm.listener.daemon_owned",
-		slog.String("component", "mitm"),
-		slog.String("proxy_base", proxy.ClaudeBaseURL()),
-		slog.String("capture_dir", cfg.CaptureDir),
-		slog.String("providers", strings.Join(cfg.Providers, ",")),
-		slog.String("body_mode", cfg.BodyMode),
-	)
 }
 
 // driftTickSummary aggregates one tick's outcomes so the loop can

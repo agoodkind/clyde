@@ -268,6 +268,7 @@ func startCaptureProxy(addr string, cfg config.MITMConfig, log *slog.Logger) (*c
 		mu:                    sync.RWMutex{},
 		cfg:                   cfg,
 		base:                  "http://" + ln.Addr().String(),
+		listener:              ln,
 		server:                nil,
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(proxy.handle)}

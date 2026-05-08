@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 
@@ -53,9 +54,39 @@ type PreparedLaunch struct {
 
 var (
 	loadGlobalConfigForLaunch = config.LoadGlobalOrDefault
-	ensureProxyForLaunch      = EnsureStarted
+	ensureProxyForLaunch      = startEphemeralLaunchProxy
 	parentEnvForLaunch        = os.Environ
 )
+
+// startEphemeralLaunchProxy starts a fresh ephemeral MITM proxy for
+// the legacy CLI launcher. The launcher cannot reach into the
+// daemon-owned proxy, so it binds its own listener on the loopback
+// interface for the lifetime of the spawn. The daemon-owned proxy
+// pinned by config is unrelated and continues running independently
+// when the daemon is up.
+func startEphemeralLaunchProxy(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
+	listenConfig := &net.ListenConfig{}
+	listener, err := listenConfig.Listen(context.Background(), "tcp", "[::1]:0")
+	if err != nil {
+		return nil, fmt.Errorf("listen ephemeral mitm: %w", err)
+	}
+	proxy, err := NewProxy(cfg, log, listener)
+	if err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("ephemeral mitm proxy: %w", err)
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("mitm.launch.ephemeral_serve_panicked", "panic", r)
+			}
+		}()
+		if err := proxy.Serve(); err != nil {
+			log.Warn("mitm.launch.ephemeral_serve_failed", "err", err)
+		}
+	}()
+	return proxy, nil
+}
 
 // PrepareLaunch starts or updates the daemon-owned MITM proxy, applies
 // profile configuration, and returns the process plan a caller may spawn or

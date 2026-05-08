@@ -77,6 +77,7 @@ const (
 	listenerNameDaemon  = "daemon"
 	listenerNameAdapter = "adapter"
 	listenerNameWebApp  = "webapp"
+	listenerNameMITM    = "mitm"
 )
 
 var errReloadBeforeProcessLock = errors.New("daemon reload is unavailable until this daemon owns the process lock")
@@ -149,10 +150,20 @@ type webAppProcess struct {
 	cfg           config.WebAppConfig
 }
 
+type mitmProcess struct {
+	cancel func()
+	drain  func(context.Context) error
+	close  func() error
+	done   chan struct{}
+	lis    net.Listener
+	proxy  *mitm.Proxy
+}
+
 type daemonRuntime struct {
 	listener   net.Listener
 	adapter    *adapterController
 	webapp     *webAppProcess
+	mitm       *mitmProcess
 	reloadLock sync.Mutex
 }
 
@@ -341,20 +352,19 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	)
 	clydev1.RegisterClydeServiceServer(grpcServer, srv)
 
-	adapterCtrl, adapterCancel, err := startAdapter(log, srv, inherited.listeners[listenerNameAdapter])
+	subsystems, err := startDaemonSubsystems(log, srv, inherited)
 	if err != nil {
-		return fmt.Errorf("adapter startup: %w", err)
+		return err
 	}
-	webProc, err := startWebApp(log, srv, inherited.listeners[listenerNameWebApp])
-	if err != nil {
-		if adapterCancel != nil {
-			adapterCancel()
-		}
-		return fmt.Errorf("webapp startup: %w", err)
+	rt := &daemonRuntime{
+		listener:   listener,
+		adapter:    subsystems.adapterCtrl,
+		webapp:     subsystems.webProc,
+		mitm:       subsystems.mitmProc,
+		reloadLock: sync.Mutex{},
 	}
-	rt := &daemonRuntime{listener: listener, adapter: adapterCtrl, webapp: webProc, reloadLock: sync.Mutex{}}
 
-	exclusive := configureExclusiveSubsystems(log, reloadChild, extraLoops, adapterCancel, webProc, processLock.lockAcquired)
+	exclusive := configureExclusiveSubsystems(log, reloadChild, extraLoops, subsystems.adapterCancel, subsystems.webProc, subsystems.mitmProc, processLock.lockAcquired)
 	defer exclusive.stop("exit")
 
 	setReloadFuncWhenProcessOwner(srv, &processLock.lockHeld, func(ctx context.Context) (reloadReport, error) {
@@ -386,7 +396,57 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	return grpcServer.Serve(listener)
 }
 
-func configureExclusiveSubsystems(log *slog.Logger, reloadChild bool, extraLoops []ExtraLoop, adapterCancel func(), webProc *webAppProcess, lockAcquired <-chan struct{}) *exclusiveSubsystems {
+type daemonSubsystems struct {
+	mitmProc      *mitmProcess
+	adapterCtrl   *adapterController
+	adapterCancel func()
+	webProc       *webAppProcess
+}
+
+// startDaemonSubsystems boots the MITM proxy, adapter, and webapp in
+// dependency order so the adapter sees the proxy URL and the webapp
+// can rely on srv being wired. Cancellations roll back partial
+// startup if any later subsystem fails.
+func startDaemonSubsystems(log *slog.Logger, srv *Server, inherited inheritedRuntime) (daemonSubsystems, error) {
+	mitmProc, err := startMITM(log, inherited.listeners[listenerNameMITM])
+	if err != nil {
+		log.Error("daemon.subsystems.mitm_failed", "component", "daemon", "err", err)
+		return daemonSubsystems{}, fmt.Errorf("mitm startup: %w", err)
+	}
+	srv.SetMITMProxyAccessor(func() *mitm.Proxy {
+		if mitmProc == nil {
+			return nil
+		}
+		return mitmProc.proxy
+	})
+	adapterCtrl, adapterCancel, err := startAdapter(log, srv, inherited.listeners[listenerNameAdapter], mitmProc)
+	if err != nil {
+		log.Error("daemon.subsystems.adapter_failed", "component", "daemon", "err", err)
+		if mitmProc != nil && mitmProc.cancel != nil {
+			mitmProc.cancel()
+		}
+		return daemonSubsystems{}, fmt.Errorf("adapter startup: %w", err)
+	}
+	webProc, err := startWebApp(log, srv, inherited.listeners[listenerNameWebApp])
+	if err != nil {
+		log.Error("daemon.subsystems.webapp_failed", "component", "daemon", "err", err)
+		if adapterCancel != nil {
+			adapterCancel()
+		}
+		if mitmProc != nil && mitmProc.cancel != nil {
+			mitmProc.cancel()
+		}
+		return daemonSubsystems{}, fmt.Errorf("webapp startup: %w", err)
+	}
+	return daemonSubsystems{
+		mitmProc:      mitmProc,
+		adapterCtrl:   adapterCtrl,
+		adapterCancel: adapterCancel,
+		webProc:       webProc,
+	}, nil
+}
+
+func configureExclusiveSubsystems(log *slog.Logger, reloadChild bool, extraLoops []ExtraLoop, adapterCancel func(), webProc *webAppProcess, mitmProc *mitmProcess, lockAcquired <-chan struct{}) *exclusiveSubsystems {
 	exclusive := &exclusiveSubsystems{
 		log:         log,
 		reloadChild: reloadChild,
@@ -399,6 +459,9 @@ func configureExclusiveSubsystems(log *slog.Logger, reloadChild bool, extraLoops
 	exclusive.addCancel(adapterCancel)
 	if webProc != nil && webProc.cancel != nil {
 		exclusive.addCancel(webProc.cancel)
+	}
+	if mitmProc != nil && mitmProc.cancel != nil {
+		exclusive.addCancel(mitmProc.cancel)
 	}
 	if reloadChild {
 		startExclusiveSubsystemsAfterLock(log, lockAcquired, exclusive)
@@ -729,6 +792,7 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 	if rt.adapter != nil {
 		rt.adapter.drainReloadedProcess(reloadHTTPDrainWait)
 	}
+	drainReloadedMITM(log, rt)
 	if rt.webapp != nil && rt.webapp.drain != nil {
 		log.Info("daemon.reload.draining_old_webapp",
 			"component", "daemon",
@@ -773,6 +837,45 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 			}
 		}
 	}
+}
+
+func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) {
+	if rt == nil || rt.mitm == nil {
+		return
+	}
+	mitmProc := rt.mitm
+	addr := listenerAddr(mitmProc.lis)
+	log.Info("daemon.reload.draining_old_mitm",
+		"component", "daemon",
+		"addr", addr,
+	)
+	if mitmProc.close != nil {
+		if err := mitmProc.close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Warn("daemon.reload.mitm_listener_close_failed",
+				"component", "daemon",
+				"addr", addr,
+				"err", err,
+			)
+		}
+	}
+	if mitmProc.drain == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
+	err := mitmProc.drain(ctx)
+	cancel()
+	if err != nil {
+		log.Warn("daemon.reload.mitm_drain_timeout",
+			"component", "daemon",
+			"addr", addr,
+			"err", err,
+		)
+		return
+	}
+	log.Info("daemon.reload.mitm_drain_complete",
+		"component", "daemon",
+		"addr", addr,
+	)
 }
 
 func waitForReplacementDaemon(ctx context.Context, ready io.Reader) error {
@@ -831,6 +934,9 @@ func inheritedListenerFiles(rt *daemonRuntime) ([]*os.File, []inheritedListenerS
 	}
 	if rt.webapp != nil && rt.webapp.lis != nil {
 		listeners = append(listeners, namedListener{name: listenerNameWebApp, lis: rt.webapp.lis})
+	}
+	if rt.mitm != nil && rt.mitm.lis != nil {
+		listeners = append(listeners, namedListener{name: listenerNameMITM, lis: rt.mitm.lis})
 	}
 	files := make([]*os.File, 0, len(listeners))
 	specs := make([]inheritedListenerSpec, 0, len(listeners))
@@ -902,6 +1008,12 @@ func validateReloadListenerConfig(rt *daemonRuntime) error {
 			return fmt.Errorf("webapp listen address changed from %s to %s; full daemon restart required", got, want)
 		}
 	}
+	mitmRunning := rt.mitm != nil && rt.mitm.lis != nil
+	if mitmRunning {
+		if got, want := rt.mitm.lis.Addr().String(), mitmListenAddr(cfg.MITM); got != want {
+			return fmt.Errorf("mitm listen address changed from %s to %s; full daemon restart required", got, want)
+		}
+	}
 	return nil
 }
 
@@ -913,6 +1025,22 @@ func adapterListenAddr(cfg config.AdapterConfig) string {
 	port := cfg.Port
 	if port <= 0 {
 		port = adapter.DefaultPort
+	}
+	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
+}
+
+// mitmListenAddr returns the host:port the daemon-owned MITM proxy
+// binds. Defaults match config-side defaults so callers can compute
+// the address before config is applied. Defensive against zero
+// values even though config.Load applies the same defaults upstream.
+func mitmListenAddr(cfg config.MITMConfig) string {
+	host := cfg.Listen.Host
+	if strings.TrimSpace(host) == "" {
+		host = "[::1]"
+	}
+	port := cfg.Listen.Port
+	if port <= 0 {
+		port = 48723
 	}
 	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
 }
@@ -1004,6 +1132,76 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 		done:          done,
 		lis:           lis,
 		cfg:           cfg.WebApp,
+	}, nil
+}
+
+// startMITM boots the daemon-owned MITM capture proxy on the
+// configured stable listen address. The proxy serves callers like the
+// adapter (Claude routing), Claude CLI baseline capture, and drift
+// refresh until daemon shutdown. The listener is config-pinned so
+// reload preserves the bind without dropping in-flight tunnels; the
+// daemon inherits the listener FD across re-exec.
+func startMITM(log *slog.Logger, inherited net.Listener) (*mitmProcess, error) {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		log.Warn("mitm.config_load_failed",
+			"component", "mitm",
+			"err", err,
+		)
+		return nil, fmt.Errorf("load config for mitm: %w", err)
+	}
+	wantAddr := mitmListenAddr(cfg.MITM)
+	lis := inherited
+	if lis != nil {
+		if got := lis.Addr().String(); got != wantAddr {
+			return nil, fmt.Errorf("mitm inherited listener address %s does not match config %s; full daemon restart required", got, wantAddr)
+		}
+	} else {
+		lis, err = net.Listen("tcp", wantAddr)
+		if err != nil {
+			return nil, fmt.Errorf("mitm listen %s: %w", wantAddr, err)
+		}
+	}
+	proxy, err := mitm.NewProxy(cfg.MITM, log, lis)
+	if err != nil {
+		_ = lis.Close()
+		return nil, fmt.Errorf("mitm proxy: %w", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("mitm.run_panicked",
+					"component", "mitm",
+					"panic", r,
+				)
+			}
+		}()
+		defer close(done)
+		if err := proxy.Serve(); err != nil {
+			log.Error("mitm.exited",
+				"component", "mitm",
+				"err", err,
+			)
+		}
+	}()
+	cancel := func() {
+		ctx, cancelTimeout := context.WithTimeout(context.Background(), adapterShutdownWait)
+		defer cancelTimeout()
+		if err := proxy.Shutdown(ctx); err != nil {
+			log.Warn("mitm.shutdown_failed",
+				"component", "mitm",
+				"err", err,
+			)
+		}
+	}
+	return &mitmProcess{
+		cancel: cancel,
+		drain:  proxy.Shutdown,
+		close:  lis.Close,
+		done:   done,
+		lis:    lis,
+		proxy:  proxy,
 	}, nil
 }
 
@@ -1122,7 +1320,7 @@ func (s *Server) liveSessionRecord(ctx context.Context, sessionID string) (*live
 // or required client_identity fields). The daemon then exits non-zero so
 // launchd reports the failure instead of silently running without
 // the OpenAI surface the user asked for.
-func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapterController, func(), error) {
+func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener, mitmProc *mitmProcess) (*adapterController, func(), error) {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		log.Warn("adapter.config_load_failed",
@@ -1132,7 +1330,7 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 		return nil, nil, nil
 	}
 
-	mitmOverride := adapterMITMOverride(*cfg, log)
+	mitmOverride := adapterMITMOverride(*cfg, log, mitmProc)
 
 	ctrl := &adapterController{
 		log:            log,
@@ -1163,32 +1361,29 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 	}, nil
 }
 
-func adapterMITMOverride(cfg config.Config, log *slog.Logger) string {
+func adapterMITMOverride(cfg config.Config, log *slog.Logger, mitmProc *mitmProcess) string {
 	// When [mitm].enabled_default is set and the provider list
 	// includes "claude", route the adapter's outbound /v1/messages
-	// through the local MITM proxy. This lets us capture our own
-	// outbound and diff against the claude-cli reference snapshot
-	// (CLYDE-124 live verification).
+	// through the daemon-owned MITM proxy. This lets us capture our
+	// own outbound and diff against the claude-cli reference snapshot
+	// (CLYDE-124 live verification). The proxy is daemon-owned and
+	// already running by the time the adapter starts.
 	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
 		return ""
 	}
-	proxy, err := ensureAdapterMITMStarted(cfg.MITM, log.With("subcomponent", "mitm"))
-	if err != nil {
-		log.Warn("adapter.mitm.start_failed",
+	if mitmProc == nil || mitmProc.proxy == nil {
+		log.Warn("adapter.mitm.proxy_unavailable",
 			"component", "adapter",
-			"err", err,
 		)
 		return ""
 	}
-	mitmOverride := proxy.ClaudeBaseURL()
+	mitmOverride := mitmProc.proxy.ClaudeBaseURL()
 	log.Info("adapter.mitm.routing_enabled",
 		"component", "adapter",
 		"proxy_base", mitmOverride,
 	)
 	return mitmOverride
 }
-
-var ensureAdapterMITMStarted = mitm.EnsureStarted
 
 func launchConfigFromGlobal(cfg *config.Config) adapterLaunchConfig {
 	if cfg == nil {
