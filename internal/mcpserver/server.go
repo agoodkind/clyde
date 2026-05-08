@@ -23,8 +23,10 @@ import (
 
 	"goodkind.io/clyde/internal/audit"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/search"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/transcript"
 	"goodkind.io/clyde/internal/util"
 )
@@ -85,12 +87,28 @@ var gettingStartedPrompt string
 // handleNotifications and the toolCallWorker pool on separate goroutines,
 // and a few upstream paths write to the session writer without going
 // through the upstream writeMu. CLYDE-57.
+//
+// A livetrack.Registry[MCPMeta] is constructed on entry and used to track
+// every in-flight tool call. Each call is registered before dispatch and
+// released after the response is written. The registry is drained on server
+// exit via Drain so no handler outlives the server context.
 func Serve(ctx context.Context) error {
 	log, cleanup := audit.NewLogger("mcp")
 	defer cleanup()
 	slog.SetDefault(log)
 
+	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
+		Component:     "mcpserver",
+		Concern:       slogger.ConcernMCPServerRequest,
+		Log:           log,
+		PollEvery:     50 * time.Millisecond,
+		CloserGrace:   2 * time.Second,
+		ParallelClose: false,
+		Now:           nil,
+	})
+
 	s := server.NewMCPServer("clyde", "0.13.0-dev")
+	s.Use(toolCallMiddleware(reg, "clyde"))
 
 	// --- Prompts (slash commands) ---
 
@@ -162,15 +180,21 @@ func Serve(ctx context.Context) error {
 		handleAnalyzeResults,
 	)
 
-	return serveStdioLocked(ctx, s, os.Stdin, os.Stdout)
+	return serveStdioLocked(ctx, s, reg, os.Stdin, os.Stdout)
 }
 
 // serveStdioLocked mirrors server.ServeStdio but routes [os.Stdout] through
 // mcpStdoutWriter so every byte written by the upstream transport, by
 // notification frames, and by tool responses is serialized under one mutex.
 // Signal handling matches the upstream ServeStdio path.
-func serveStdioLocked(parent context.Context, mcp *server.MCPServer, stdin io.Reader, stdout io.Writer) error {
-	stdio := server.NewStdioServer(mcp)
+//
+// reg is the livetrack registry for in-flight tool calls. When Listen returns
+// (either cleanly or on error), serveStdioLocked drains the registry under the
+// parent context so every tracked handler gets a chance to finish or is
+// force-closed before the function returns. The CLYDE-57 stdout mutex is
+// unaffected: it still serializes every write to the underlying writer.
+func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, reg *livetrack.Registry[MCPMeta], stdin io.Reader, stdout io.Writer) error {
+	stdio := server.NewStdioServer(mcpSrv)
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -197,9 +221,74 @@ func serveStdioLocked(parent context.Context, mcp *server.MCPServer, stdin io.Re
 	}()
 
 	locked := newMCPStdoutWriter(stdout)
-	if err := stdio.Listen(ctx, stdin, locked); err != nil {
-		return fmt.Errorf("mcp stdio listen: %w", err)
+	listenErr := stdio.Listen(ctx, stdin, locked)
+
+	// Drain the registry under the parent context (not the already-canceled
+	// ctx) so in-flight handlers have a bounded window to finish. The Drain
+	// call logs the outcome; the caller sees only the original Listen error.
+	drainCtx, drainCancel := context.WithTimeout(parent, 5*time.Second)
+	defer drainCancel()
+	result := reg.Drain(drainCtx, "mcp.shutdown")
+	if result.ForceClosed > 0 {
+		slog.WarnContext(parent, "mcp.stdio.handlers_force_closed",
+			"component", "mcpserver",
+			"force_closed", result.ForceClosed,
+			"duration_ms", result.Duration.Milliseconds(),
+		)
 	}
+
+	if listenErr != nil {
+		return fmt.Errorf("mcp stdio listen: %w", listenErr)
+	}
+	return nil
+}
+
+// toolCallMiddleware returns a ToolHandlerMiddleware that registers each
+// in-flight tool call with reg before dispatch and releases it on return.
+// The Closer cancels the handler's derived context so force-close during
+// Drain interrupts a wedged handler. serverName is recorded in MCPMeta
+// for operator snapshots.
+func toolCallMiddleware(reg *livetrack.Registry[MCPMeta], serverName string) server.ToolHandlerMiddleware {
+	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			handlerCtx, handlerCancel := context.WithCancel(ctx)
+			closer := &contextCancelCloser{cancel: handlerCancel}
+			sess, err := reg.Register(handlerCtx, "mcp.tool_call", MCPMeta{
+				ServerName: serverName,
+				Method:     req.Method,
+				RequestID:  "",
+				Tool:       req.Params.Name,
+				Op:         "tool_call",
+			}, closer)
+			if err != nil {
+				// Registry is draining; reject the call so the upstream
+				// returns an MCP error to the client instead of hanging.
+				handlerCancel()
+				slog.WarnContext(ctx, "mcp.tool_call.registry_closed",
+					"component", "mcpserver",
+					"tool", req.Params.Name,
+					"err", err,
+				)
+				return nil, fmt.Errorf("mcp: server draining, tool call rejected: %w", err)
+			}
+			defer reg.Release(ctx, sess, "mcp.tool_call.completed")
+			result, callErr := next(handlerCtx, req)
+			handlerCancel()
+			return result, callErr
+		}
+	}
+}
+
+// contextCancelCloser implements livetrack.Closer by canceling a context.
+// It is used by toolCallMiddleware so force-close during Drain cancels the
+// handler's derived context, interrupting any blocking I/O the handler holds.
+type contextCancelCloser struct {
+	cancel context.CancelFunc
+}
+
+// Close cancels the associated context. It satisfies livetrack.Closer.
+func (c *contextCancelCloser) Close(_ string) error {
+	c.cancel()
 	return nil
 }
 
