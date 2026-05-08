@@ -150,6 +150,21 @@ type IngressFamily string
 // IngressFamilyCursor is the canonical Cursor BYOK ingress family.
 const IngressFamilyCursor IngressFamily = "cursor"
 
+// PathKindForeground names a normal foreground request path.
+const PathKindForeground = "foreground"
+
+// PathKindBackground names a background-task request path.
+const PathKindBackground = "background"
+
+// PathKindResume names a resume-after-background request path.
+const PathKindResume = "resume"
+
+// PathKindSubagent names a subagent request path. The dispatcher
+// compares IngressContext.PathKind against this constant when
+// flagging missing generation_id metadata, so the generic adapter
+// never imports a vendor's typed enum.
+const PathKindSubagent = "subagent"
+
 // IngressRegistrar is the inversion seam the adapter ingress
 // boundary exposes to vendor packages. Each vendor package's
 // RegisterIngress function calls Register with its family identifier

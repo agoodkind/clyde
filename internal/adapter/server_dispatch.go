@@ -17,12 +17,6 @@ import (
 	"goodkind.io/clyde/internal/slogger"
 )
 
-// requestPathSubagent is the local mirror of the cursor-side
-// "subagent" request path label. The dispatcher compares the
-// IngressContext.PathKind primitive against this constant so the
-// generic adapter never imports the cursor package's typed enum.
-const requestPathSubagent = "subagent"
-
 // CountNormalizedTools counts tools that arrived without a `function` key
 // and were likely sent in native alternate shape.
 func CountNormalizedTools(req ChatRequest, raw []byte) int {
@@ -182,7 +176,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 
 	toolNames := chatToolNames(req)
 	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, model, toolNames)
-	if ingressCtx.PathKind == requestPathSubagent && ingressCtx.GenerationID == "" {
+	if ingressCtx.PathKind == ingresscontract.PathKindSubagent && ingressCtx.GenerationID == "" {
 		s.logSubagentMissingGenerationID(ctx, r, corr, reqID, ingressCtx, discovery)
 	}
 
