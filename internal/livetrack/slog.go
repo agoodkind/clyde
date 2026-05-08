@@ -29,8 +29,10 @@ func (r *Registry[M]) emitSessionEvent(ctx context.Context, level slog.Level, me
 // emitForceCloseEvent logs the warn-level force_close event for one
 // session. It replays the session's captured correlation context so
 // the record carries the trace_id of whoever opened the session, not
-// the trace_id of the drain caller.
-func (r *Registry[M]) emitForceCloseEvent(sess *Session[M], reason string) {
+// the trace_id of the drain caller. ctx is the caller-supplied
+// context used only for slog routing; correlation comes from the
+// session itself.
+func (r *Registry[M]) emitForceCloseEvent(ctx context.Context, sess *Session[M], reason string) {
 	if r.log == nil {
 		return
 	}
@@ -42,8 +44,8 @@ func (r *Registry[M]) emitForceCloseEvent(sess *Session[M], reason string) {
 		slog.Int64("opened_ms_ago", openedMsAgo),
 		slog.String("reason", reason),
 	}
-	attrs = appendCorrelationAttrs(attrs, context.Background(), sess.corr)
-	r.log.LogAttrs(context.Background(), slog.LevelWarn, "livetrack.session.force_close", attrs...)
+	attrs = appendCorrelationAttrs(attrs, ctx, sess.corr)
+	r.log.LogAttrs(ctx, slog.LevelWarn, "livetrack.session.force_close", attrs...)
 }
 
 // emitDrainStarted logs the info-level drain.started event.
@@ -56,7 +58,7 @@ func (r *Registry[M]) emitDrainStarted(ctx context.Context, reason string) {
 		slog.String("state", StateDraining.String()),
 		slog.Int("remaining", r.Count()),
 	}
-	attrs = appendCorrelationAttrs(attrs, ctx, correlation.Context{})
+	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
 	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.started", attrs...)
 }
 
@@ -73,7 +75,7 @@ func (r *Registry[M]) emitDrainComplete(ctx context.Context, result DrainResult)
 		slog.Int("force_closed", result.ForceClosed),
 		slog.Int64("duration_ms", result.Duration.Milliseconds()),
 	}
-	attrs = appendCorrelationAttrs(attrs, ctx, correlation.Context{})
+	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
 	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.complete", attrs...)
 }
 
@@ -87,4 +89,12 @@ func appendCorrelationAttrs(attrs []slog.Attr, ctx context.Context, sessCorr cor
 	attrs = correlation.AppendAttrs(attrs, ctxCorr)
 	attrs = correlation.AppendAttrs(attrs, sessCorr)
 	return attrs
+}
+
+// appendCorrelationAttrsCtxOnly appends correlation attributes from
+// the caller context only. Drain-level events have no per-session
+// correlation to back-fill, so this helper avoids constructing an
+// empty correlation.Context literal at the call site.
+func appendCorrelationAttrsCtxOnly(attrs []slog.Attr, ctx context.Context) []slog.Attr {
+	return correlation.AppendAttrs(attrs, correlation.FromContext(ctx))
 }

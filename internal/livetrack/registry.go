@@ -19,15 +19,22 @@ import (
 // Register calls are rejected with ErrRegistryClosed. Forcing is
 // entered when graceful drain hits its deadline with sessions still
 // alive. Closed is the terminal state.
-type State uint8
+type State uint32
 
+// StateOpen, StateDraining, StateForcing, and StateClosed are the
+// four states a Registry walks through during its lifetime. New
+// Registries start in StateOpen; Drain advances them through
+// Draining and (on the deadline path) Forcing before settling on
+// StateClosed.
 const (
-	StateOpen State = iota
-	StateDraining
-	StateForcing
-	StateClosed
+	StateOpen     State = iota // accepts Register calls; Release operates normally.
+	StateDraining              // Drain has begun; Register returns ErrRegistryClosed.
+	StateForcing               // poll deadline elapsed with sessions remaining; force-close in progress.
+	StateClosed                // terminal state; the registry is no longer in use.
 )
 
+// String returns the lower-case name of s. It is used in slog
+// records so operators see a stable label for each lifecycle state.
 func (s State) String() string {
 	switch s {
 	case StateOpen:
@@ -44,9 +51,9 @@ func (s State) String() string {
 }
 
 // ErrRegistryClosed is returned by Register once the registry has
-// transitioned out of StateOpen. The error is stable so callers can
-// match it via errors.Is when deciding whether to retry against a
-// fresh registry or report a reload-in-progress condition.
+// transitioned out of [StateOpen]. The error is stable so callers
+// can match it via [errors.Is] when deciding whether to retry
+// against a fresh registry or report a reload-in-progress condition.
 var ErrRegistryClosed = errors.New("livetrack: registry closed")
 
 const (
@@ -100,7 +107,7 @@ type Session[M Meta] struct {
 
 // sessionState carries the mutable bits of a tracked session. It
 // lives behind a pointer on Session so that Snapshot can return a
-// Session value without copying a sync.Once or atomic.Bool.
+// Session value without copying a [sync.Once] or [atomic.Bool].
 type sessionState struct {
 	once     sync.Once
 	released atomic.Bool
@@ -142,10 +149,9 @@ type Predicate[M Meta] func(Session[M]) bool
 
 // registerCfg captures per-call options applied through RegisterOption
 // closures. It exists to keep the Register signature stable while
-// allowing parent linkage and explicit ID overrides.
+// allowing parent linkage to be added later without breaking callers.
 type registerCfg struct {
 	parentID string
-	id       string
 }
 
 // RegisterOption configures one Register call.
@@ -158,17 +164,6 @@ func WithParent[M Meta](parent *Session[M]) RegisterOption {
 	return func(cfg *registerCfg) {
 		if parent != nil {
 			cfg.parentID = parent.ID
-		}
-	}
-}
-
-// WithSessionID overrides the auto-generated session id. Empty input
-// is ignored so callers can pass through provider-side ids without
-// guarding the call site.
-func WithSessionID(id string) RegisterOption {
-	return func(cfg *registerCfg) {
-		if id != "" {
-			cfg.id = id
 		}
 	}
 }
@@ -249,16 +244,13 @@ func (r *Registry[M]) Register(ctx context.Context, kind string, meta M, closer 
 	if r.State() != StateOpen {
 		return nil, ErrRegistryClosed
 	}
-	cfg := registerCfg{parentID: "", id: ""}
+	cfg := registerCfg{parentID: ""}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
 		}
 	}
-	id := cfg.id
-	if id == "" {
-		id = randomSessionID(r.now)
-	}
+	id := randomSessionID(r.now)
 	sess := &Session[M]{
 		ID:       id,
 		ParentID: cfg.parentID,
@@ -286,8 +278,12 @@ func (r *Registry[M]) Register(ctx context.Context, kind string, meta M, closer 
 // Release marks the session finished and removes it from the
 // registry. It is idempotent: a second Release is a no-op so callers
 // can safely pair it with a defer even when Drain has already
-// force-closed the underlying owner.
-func (r *Registry[M]) Release(s *Session[M], reason string) {
+// force-closed the underlying owner. ctx is used for correlation
+// attribute attachment on the released slog event; passing
+// [context.Background] is acceptable when no caller context is
+// available (e.g. in defers after the request context has been
+// canceled).
+func (r *Registry[M]) Release(ctx context.Context, s *Session[M], reason string) {
 	if s == nil || s.state == nil {
 		return
 	}
@@ -311,7 +307,7 @@ func (r *Registry[M]) Release(s *Session[M], reason string) {
 		}
 	}
 	r.mu.Unlock()
-	r.emitSessionEvent(context.Background(), slog.LevelInfo, "livetrack.session.released", s, reason)
+	r.emitSessionEvent(ctx, slog.LevelInfo, "livetrack.session.released", s, reason)
 }
 
 // Snapshot returns a copy of every currently tracked session. Callers
@@ -368,8 +364,10 @@ func (r *Registry[M]) ForEach(f func(Session[M])) {
 // returns true and removes them from the registry. Returns the
 // number of sessions that went through close. Callers (e.g. parent
 // cascade adopters) drive the predicate; the registry does not
-// auto-cascade parent close to children.
-func (r *Registry[M]) ForceCloseMatching(p Predicate[M], reason string) int {
+// auto-cascade parent close to children. ctx is used for slog
+// routing on the force_close events; correlation back-fills from
+// each session's captured context.
+func (r *Registry[M]) ForceCloseMatching(ctx context.Context, p Predicate[M], reason string) int {
 	if p == nil {
 		return 0
 	}
@@ -401,7 +399,7 @@ func (r *Registry[M]) ForceCloseMatching(p Predicate[M], reason string) int {
 	}
 	r.mu.Unlock()
 	for i, entry := range matched {
-		r.emitForceCloseEvent(matchedSessions[i], reason)
+		r.emitForceCloseEvent(ctx, matchedSessions[i], reason)
 		_ = runCloserBounded(r.closerGrace, entry, reason)
 		if matchedSessions[i].state != nil {
 			matchedSessions[i].state.released.Store(true)
@@ -440,11 +438,11 @@ func toSessionEntry[M Meta](s *Session[M]) sessionEntry {
 	}
 }
 
-// randomSessionID generates a 16-byte hex id from the supplied clock
-// fallback when crypto/rand fails. It uses crypto/rand so ids are
-// unguessable across processes; the now closure is only consulted on
-// the rand.Read error path, which on supported platforms is
-// essentially impossible.
+// randomSessionID generates a 16-byte hex id from the supplied
+// clock fallback when crypto/rand fails. It uses crypto/rand so ids
+// are unguessable across processes; the now closure is only
+// consulted on the [rand.Read] error path, which on supported
+// platforms is essentially impossible.
 func randomSessionID(now func() time.Time) string {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {

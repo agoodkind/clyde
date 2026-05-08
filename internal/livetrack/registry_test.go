@@ -76,7 +76,7 @@ func TestRegisterReleaseRace(t *testing.T) {
 				t.Errorf("register: %v", err)
 				return
 			}
-			r.Release(sess, "test.race")
+			r.Release(context.Background(), sess, "test.race")
 		}()
 	}
 	wg.Wait()
@@ -106,7 +106,7 @@ func TestDrainIdle(t *testing.T) {
 	// Release everything asynchronously so Drain hits the idle path.
 	go func() {
 		for _, sess := range sessions {
-			r.Release(sess, "test.idle")
+			r.Release(context.Background(), sess, "test.idle")
 		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -221,8 +221,8 @@ func TestForceCloseIdempotent(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	pred := func(s Session[testMeta]) bool { return s.Kind == "idem" }
-	first := r.ForceCloseMatching(pred, "test.first")
-	second := r.ForceCloseMatching(pred, "test.second")
+	first := r.ForceCloseMatching(context.Background(), pred, "test.first")
+	second := r.ForceCloseMatching(context.Background(), pred, "test.second")
 	if first != 1 {
 		t.Fatalf("first force-close: got %d, want 1", first)
 	}
@@ -261,7 +261,7 @@ func TestParentTraversal(t *testing.T) {
 	if len(children) != childCount {
 		t.Fatalf("ChildrenOf: got %d, want %d", len(children), childCount)
 	}
-	closed := r.ForceCloseMatching(func(s Session[testMeta]) bool { return s.ID == parent.ID }, "test.parent")
+	closed := r.ForceCloseMatching(context.Background(), func(s Session[testMeta]) bool { return s.ID == parent.ID }, "test.parent")
 	if closed != 1 {
 		t.Fatalf("parent close: got %d, want 1", closed)
 	}
@@ -294,7 +294,7 @@ func TestCorrelationPropagation(t *testing.T) {
 	if sess.corr.TraceID != corr.TraceID {
 		t.Fatalf("trace id captured: got %q, want %q", sess.corr.TraceID, corr.TraceID)
 	}
-	r.ForceCloseMatching(func(s Session[testMeta]) bool { return s.ID == sess.ID }, "test.corr")
+	r.ForceCloseMatching(ctx, func(s Session[testMeta]) bool { return s.ID == sess.ID }, "test.corr")
 	if got := closer.count.Load(); got != 1 {
 		t.Fatalf("closer count: got %d, want 1", got)
 	}

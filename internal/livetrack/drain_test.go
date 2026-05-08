@@ -36,7 +36,7 @@ func TestSlogEventCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	r.Release(sess, "test.release")
+	r.Release(context.Background(), sess, "test.release")
 
 	// Force-close path: register a fresh blocker, drain with a tight
 	// deadline so the force-close event fires.

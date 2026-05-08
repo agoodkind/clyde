@@ -75,26 +75,3 @@ func TestCloserPanicRecovered(t *testing.T) {
 		t.Fatalf("closer count: got %d, want 1", got)
 	}
 }
-
-// CloserFunc adapter check. Exists so the deadcode analyzer sees a
-// reference path; the production code uses CloserFunc when adopters
-// pass a closure instead of a typed Closer.
-func TestCloserFuncAdapter(t *testing.T) {
-	t.Parallel()
-	called := atomic.Bool{}
-	cf := CloserFunc(func(reason string) error {
-		_ = reason
-		called.Store(true)
-		return nil
-	})
-	if err := cf.Close("test"); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	if !called.Load() {
-		t.Fatalf("CloserFunc was not invoked")
-	}
-	var nilCF CloserFunc
-	if err := nilCF.Close("nil"); err != nil {
-		t.Fatalf("nil close: %v", err)
-	}
-}

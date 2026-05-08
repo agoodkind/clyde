@@ -18,17 +18,6 @@ type Closer interface {
 	Close(reason string) error
 }
 
-// CloserFunc adapts a closure into a Closer. The closure receives
-// the same reason string the registry passes to Close.
-type CloserFunc func(reason string) error
-
-func (f CloserFunc) Close(reason string) error {
-	if f == nil {
-		return nil
-	}
-	return f(reason)
-}
-
 // runCloserBounded invokes the closer for one session with a per-session
 // timeout. Panics are recovered and converted into a returned error
 // so sibling closers continue to run. The grace deadline ensures a
@@ -68,13 +57,14 @@ func runCloserBounded(grace time.Duration, sess sessionEntry, reason string) err
 	}
 }
 
-// closerFanOut runs Close on every entry. When parallel is false, it
-// runs sequentially in the supplied snapshot order. When parallel is
-// true, it fans out across min(NumCPU, len(entries)) workers. Errors
-// are joined via errors.Join so callers see exactly the failures
-// produced. ctx is honored: once it expires, the fan-out stops
-// scheduling new closers but already-running ones continue until
-// their grace deadline.
+// closerFanOut runs Close on every entry. When parallel is false,
+// it runs sequentially in the supplied snapshot order. When
+// parallel is true, it fans out across min(NumCPU, len(entries))
+// workers. Errors are returned as a slice so callers (e.g. Drain)
+// can pass them to [errors.Join] when they want a composite error.
+// ctx is honored: once it expires, the fan-out stops scheduling new
+// closers but already-running ones continue until their grace
+// deadline.
 func closerFanOut(ctx context.Context, parallel bool, grace time.Duration, entries []sessionEntry, reason string) []error {
 	if len(entries) == 0 {
 		return nil
@@ -100,13 +90,7 @@ func runCloserSequential(ctx context.Context, grace time.Duration, entries []ses
 }
 
 func runCloserParallel(ctx context.Context, grace time.Duration, entries []sessionEntry, reason string) []error {
-	workerCount := runtime.NumCPU()
-	if workerCount > len(entries) {
-		workerCount = len(entries)
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
+	workerCount := max(1, min(runtime.NumCPU(), len(entries)))
 	jobs := make(chan sessionEntry, len(entries))
 	for _, entry := range entries {
 		jobs <- entry
@@ -115,7 +99,7 @@ func runCloserParallel(ctx context.Context, grace time.Duration, entries []sessi
 	errCh := make(chan error, len(entries))
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
-	for i := 0; i < workerCount; i++ {
+	for range workerCount {
 		go func() {
 			defer wg.Done()
 			defer func() {

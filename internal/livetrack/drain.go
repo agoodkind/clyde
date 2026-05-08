@@ -25,9 +25,6 @@ func (r *Registry[M]) Drain(ctx context.Context, reason string) DrainResult {
 			Duration:    0,
 		}
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	started := r.now()
 	r.emitDrainStarted(ctx, reason)
 
@@ -49,12 +46,14 @@ func (r *Registry[M]) Drain(ctx context.Context, reason string) DrainResult {
 	r.state.Store(uint32(StateForcing))
 	entries, sessions := r.snapshotEntriesForForce()
 	for _, sess := range sessions {
-		r.emitForceCloseEvent(sess, reason)
+		r.emitForceCloseEvent(ctx, sess, reason)
 	}
-	// Force-close fan-out runs against context.Background so an
-	// already-expired drain ctx does not short-circuit the closers.
-	// Each closer is bounded by CloserGrace independently.
-	errs := closerFanOut(context.Background(), r.parallelClose, r.closerGrace, entries, reason)
+	// Force-close fan-out runs against a context derived from the
+	// drain ctx but stripped of its cancellation, so an already-
+	// expired drain ctx does not short-circuit the closers. Each
+	// closer is bounded by CloserGrace independently.
+	forceCtx := context.WithoutCancel(ctx)
+	errs := closerFanOut(forceCtx, r.parallelClose, r.closerGrace, entries, reason)
 	r.markEntriesReleased(sessions)
 	r.state.Store(uint32(StateClosed))
 	duration := r.now().Sub(started)
