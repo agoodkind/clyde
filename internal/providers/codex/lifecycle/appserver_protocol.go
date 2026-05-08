@@ -164,7 +164,8 @@ type codexNoResult struct {
 func (codexNoResult) codexAppServerResponse() {}
 
 type codexThread struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 type codexTurn struct {

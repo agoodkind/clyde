@@ -123,6 +123,7 @@ func TestLifecycleGetSessionNameFallsBackToSessionIndex(t *testing.T) {
 	}
 
 	sess := session.NewSession("codex-thread-1", "thread-1")
+	sess.Metadata.DisplayTitle = "stale title"
 	sess.Metadata.Provider = session.ProviderCodex
 	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
 		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "thread-1"},
@@ -134,6 +135,34 @@ func TestLifecycleGetSessionNameFallsBackToSessionIndex(t *testing.T) {
 	}
 	if got != "My renamed thread" {
 		t.Fatalf("GetSessionName = %q, want %q", got, "My renamed thread")
+	}
+}
+
+func TestLifecycleRenameSessionAppendsCodexThreadName(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CODEX_SQLITE_HOME", codexHome)
+
+	paths, err := codexstore.ResolveStorePathsFromEnv()
+	if err != nil {
+		t.Fatalf("ResolveStorePathsFromEnv: %v", err)
+	}
+	sess := session.NewSession("codex-thread-1", "thread-1")
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "thread-1"},
+	}
+
+	err = NewLifecycle().RenameSession(context.Background(), sess, "  Provider title  ")
+	if err != nil {
+		t.Fatalf("RenameSession returned error: %v", err)
+	}
+	idx, err := codexstore.ReadSessionIndex(paths.SessionIndexPath)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex returned error: %v", err)
+	}
+	if got := idx.ThreadName("thread-1"); got != "Provider title" {
+		t.Fatalf("ThreadName = %q, want Provider title", got)
 	}
 }
 

@@ -39,6 +39,12 @@ type LiveAttachRequest struct {
 	ThreadID string
 }
 
+// LiveSetNameRequest describes a Codex thread title update.
+type LiveSetNameRequest struct {
+	ThreadID string
+	Name     string
+}
+
 // LiveSendRequest describes one user turn sent to a Codex live runtime.
 type LiveSendRequest struct {
 	ThreadID string
@@ -63,6 +69,7 @@ type LiveStopRequest struct {
 // LiveSession is the provider-level Codex live session handle.
 type LiveSession struct {
 	ThreadID string
+	Name     string
 	WorkDir  string
 	Model    string
 }
@@ -139,6 +146,16 @@ func validateLiveStartRequest(req LiveStartRequest) error {
 func validateLiveAttachRequest(req LiveAttachRequest) error {
 	if strings.TrimSpace(req.ThreadID) == "" {
 		return fmt.Errorf("missing codex live thread id")
+	}
+	return nil
+}
+
+func validateLiveSetNameRequest(req LiveSetNameRequest) error {
+	if strings.TrimSpace(req.ThreadID) == "" {
+		return fmt.Errorf("missing codex live thread id")
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return fmt.Errorf("thread name must not be empty")
 	}
 	return nil
 }

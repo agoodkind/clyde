@@ -24,3 +24,33 @@ func TestReadSessionIndexLatestNameWins(t *testing.T) {
 		t.Fatalf("ThreadName = %q, want new", got)
 	}
 }
+
+func TestAppendThreadNameWritesNormalizedLatestEntry(t *testing.T) {
+	codexHome := t.TempDir()
+	paths, err := ResolveStorePaths(codexHome, codexHome)
+	if err != nil {
+		t.Fatalf("ResolveStorePaths: %v", err)
+	}
+	if err := AppendThreadName(paths, " thread-1 ", "  My renamed thread  "); err != nil {
+		t.Fatalf("AppendThreadName returned error: %v", err)
+	}
+
+	idx, err := ReadSessionIndex(paths.SessionIndexPath)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex returned error: %v", err)
+	}
+	if got := idx.ThreadName("thread-1"); got != "My renamed thread" {
+		t.Fatalf("ThreadName = %q, want My renamed thread", got)
+	}
+}
+
+func TestAppendThreadNameRejectsEmptyName(t *testing.T) {
+	codexHome := t.TempDir()
+	paths, err := ResolveStorePaths(codexHome, codexHome)
+	if err != nil {
+		t.Fatalf("ResolveStorePaths: %v", err)
+	}
+	if err := AppendThreadName(paths, "thread-1", "   "); err == nil {
+		t.Fatal("AppendThreadName returned nil error")
+	}
+}

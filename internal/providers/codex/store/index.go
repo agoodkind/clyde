@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // SessionIndexEntry is the typed append-only row Codex writes to
@@ -72,4 +74,39 @@ func (idx SessionIndex) ThreadName(id string) string {
 		}
 	}
 	return ""
+}
+
+// NormalizeThreadName matches Codex's thread/name/set normalization boundary:
+// whitespace-only names are rejected, and otherwise the trimmed title is stored.
+func NormalizeThreadName(name string) (string, bool) {
+	normalized := strings.TrimSpace(name)
+	return normalized, normalized != ""
+}
+
+// AppendThreadName records a Codex thread/name/set-compatible title update in
+// CODEX_HOME/session_index.jsonl. The file is append-only, and latest row wins.
+func AppendThreadName(paths StorePaths, threadID, name string) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return errors.New("missing codex thread id")
+	}
+	normalized, ok := NormalizeThreadName(name)
+	if !ok {
+		return errors.New("thread name must not be empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.SessionIndexPath), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(paths.SessionIndexPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(SessionIndexEntry{
+		ID:         threadID,
+		ThreadName: normalized,
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
+	})
 }

@@ -106,14 +106,15 @@ func (r *AppServerRuntime) Start(ctx context.Context, req LiveStartRequest) (*Li
 		)
 		return nil, err
 	}
-	if req.SessionName != "" {
-		_ = requestAppServerNoResult(ctx, r, "thread/name/set", codexThreadSetNameParams{
-			ThreadID: resp.Thread.ID,
-			Name:     req.SessionName,
-		})
+	sessionName := strings.TrimSpace(req.SessionName)
+	if sessionName != "" {
+		if err := r.SetName(ctx, LiveSetNameRequest{ThreadID: resp.Thread.ID, Name: sessionName}); err != nil {
+			return nil, err
+		}
 	}
 	return &LiveSession{
 		ThreadID: resp.Thread.ID,
+		Name:     firstNonEmpty(sessionName, resp.Thread.Name),
 		WorkDir:  resp.CWD,
 		Model:    resp.Model,
 	}, nil
@@ -148,9 +149,34 @@ func (r *AppServerRuntime) Attach(ctx context.Context, req LiveAttachRequest) (*
 	}
 	return &LiveSession{
 		ThreadID: resp.Thread.ID,
+		Name:     resp.Thread.Name,
 		WorkDir:  resp.CWD,
 		Model:    resp.Model,
 	}, nil
+}
+
+// SetName updates a Codex app-server thread through thread/name/set.
+func (r *AppServerRuntime) SetName(ctx context.Context, req LiveSetNameRequest) error {
+	if err := validateLiveSetNameRequest(req); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.set_name_invalid",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"err", err,
+		)
+		return err
+	}
+	if err := r.ensureReady(ctx); err != nil {
+		codexLifecycleLog.Logger().ErrorContext(ctx, "codex.appserver.set_name_not_ready",
+			"component", "codex",
+			"thread_id", req.ThreadID,
+			"err", err,
+		)
+		return err
+	}
+	return requestAppServerNoResult(ctx, r, "thread/name/set", codexThreadSetNameParams{
+		ThreadID: req.ThreadID,
+		Name:     strings.TrimSpace(req.Name),
+	})
 }
 
 // Send starts a user turn on an existing Codex app-server thread.
@@ -708,6 +734,15 @@ func (opts AppServerRuntimeOptions) withDefaults() AppServerRuntimeOptions {
 		opts.Experimental = true
 	}
 	return opts
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 type appServerStderrTail struct {

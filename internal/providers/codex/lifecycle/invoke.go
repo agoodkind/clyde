@@ -79,9 +79,6 @@ func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (st
 	if sess == nil {
 		return "", fmt.Errorf("nil session")
 	}
-	if strings.TrimSpace(sess.Metadata.DisplayTitle) != "" {
-		return strings.TrimSpace(sess.Metadata.DisplayTitle), nil
-	}
 	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
 	if sessionID != "" {
 		if paths, err := codexstore.ResolveStorePathsFromEnv(); err == nil {
@@ -92,12 +89,39 @@ func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (st
 			}
 		}
 	}
+	if strings.TrimSpace(sess.Metadata.DisplayTitle) != "" {
+		return strings.TrimSpace(sess.Metadata.DisplayTitle), nil
+	}
 	return strings.TrimSpace(sess.Name), nil
 }
 
-// RenameSession is a no-op placeholder until Codex exposes a writable naming
-// primitive through Clyde's provider runtime boundary.
-func (l *Lifecycle) RenameSession(context.Context, *session.Session, string) error {
+// RenameSession persists a Codex title through the provider-owned append-only
+// index that Codex's thread/name/set path also writes.
+func (l *Lifecycle) RenameSession(ctx context.Context, sess *session.Session, newName string) error {
+	if sess == nil {
+		return fmt.Errorf("nil session")
+	}
+	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
+	if sessionID == "" {
+		return fmt.Errorf("missing codex session id")
+	}
+	normalized, ok := codexstore.NormalizeThreadName(newName)
+	if !ok {
+		return fmt.Errorf("thread name must not be empty")
+	}
+	paths, err := codexstore.ResolveStorePathsFromEnv()
+	if err != nil {
+		return err
+	}
+	if err := codexstore.AppendThreadName(paths, sessionID, normalized); err != nil {
+		codexLifecycleLog.Logger().WarnContext(ctx, "codex.session.rename_failed",
+			"component", "codex",
+			"session", sess.Name,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return err
+	}
 	return nil
 }
 

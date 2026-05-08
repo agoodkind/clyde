@@ -53,6 +53,9 @@ func TestAppServerRuntimeStartSendStream(t *testing.T) {
 	if session.ThreadID != "thread-1" {
 		t.Fatalf("ThreadID=%q, want thread-1", session.ThreadID)
 	}
+	if session.Name != "codex-live-test" {
+		t.Fatalf("Name=%q, want codex-live-test", session.Name)
+	}
 
 	turn, err := runtime.Send(ctx, LiveSendRequest{
 		ThreadID: session.ThreadID,
@@ -104,8 +107,24 @@ func TestAppServerRuntimeAttachAndStop(t *testing.T) {
 	if session.ThreadID != "thread-existing" {
 		t.Fatalf("ThreadID=%q, want thread-existing", session.ThreadID)
 	}
+	if session.Name != "existing title" {
+		t.Fatalf("Name=%q, want existing title", session.Name)
+	}
 	if err := runtime.Stop(ctx, LiveStopRequest{ThreadID: session.ThreadID, TurnID: "turn-stop"}); err != nil {
 		t.Fatalf("Stop returned error: %v", err)
+	}
+}
+
+func TestAppServerRuntimeSetNameRejectsEmptyName(t *testing.T) {
+	runtime := newFakeAppServerRuntime(t, "stop")
+	defer func() { _ = runtime.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := runtime.SetName(ctx, LiveSetNameRequest{ThreadID: "thread-existing", Name: "   "})
+	if err == nil {
+		t.Fatal("SetName returned nil error")
 	}
 }
 
@@ -178,7 +197,7 @@ func runFakeCodexAppServer(mode string) error {
 			if err := enc.Encode(fakeJSONRPCResponse{
 				ID: req.ID,
 				Result: fakeThreadResult{
-					Thread: fakeThread{ID: "thread-existing"},
+					Thread: fakeThread{ID: "thread-existing", Name: "existing title"},
 					CWD:    "/tmp",
 					Model:  "gpt-5.1-codex",
 				},
@@ -295,7 +314,8 @@ type fakeStatusResult struct {
 func (fakeStatusResult) fakeResultObject() {}
 
 type fakeThread struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 type fakeTurn struct {
