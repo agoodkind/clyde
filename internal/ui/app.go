@@ -510,7 +510,16 @@ type App struct {
 	// actually advanced. recentlyUpdatedAt records the wall clock
 	// time of the most recent observed change so the table can
 	// briefly highlight that row without a full re-sort.
-	lastUsedMu         sync.Mutex
+	//
+	// tableRowDataMu guards the row-build read scope inside rowFor.
+	// That scope reads modelCache, messageCountCache (via
+	// sessionMessageCount), and recentlyUpdatedAt while assembling a
+	// single table row. The lock is held only across rowFor.
+	// Holding it across the whole row build keeps the read view
+	// consistent even when event-loop writers touch those maps.
+	// The previous name (lastUsedMu) implied a narrower scope than
+	// the function it actually guards.
+	tableRowDataMu     sync.Mutex
 	lastUsedTickerSeen map[string]time.Time
 	recentlyUpdatedAt  map[string]time.Time
 
@@ -1855,7 +1864,7 @@ func (a *App) requestSessionsAsync(reason string) {
 			"reason", reason,
 			"duration_ms", time.Since(started).Milliseconds(),
 			"err", err)
-		a.postInterrupt(sessionsLoaded{snapshot: snapshot, err: err, reason: reason})
+		a.postInterruptIfActive("sessions_load", sessionsLoaded{snapshot: snapshot, err: err, reason: reason})
 	}()
 }
 
@@ -1871,10 +1880,16 @@ func (a *App) refreshConfigControls() {
 			}
 		}()
 		controls, err := a.cb.LoadConfigControls()
-		a.postInterrupt(configControlsLoaded{controls: controls, err: err})
+		a.postInterruptIfActive("config_controls_load", configControlsLoaded{controls: controls, err: err})
 	}()
 }
 
+// applySessionSnapshot is event-loop-only. It reassigns modelCache,
+// messageCountCache, and contextStateCache to fresh maps. Every
+// reader of those maps also runs on the event loop. No concurrent
+// reader observes the swap under that invariant. Background workers
+// must post results back through postInterrupt rather than touching
+// these maps directly.
 func (a *App) applySessionSnapshot(snapshot SessionSnapshot) {
 	selection := a.captureTableSelection()
 
@@ -2604,7 +2619,7 @@ func (a *App) requestExportStatsAsync(sess *session.Session) {
 			}
 		}()
 		stats, err := a.cb.LoadExportStats(sess)
-		a.postInterrupt(exportStatsLoaded{name: name, stats: stats, err: err})
+		a.postInterruptIfActive("export_stats_load", exportStatsLoaded{name: name, stats: stats, err: err})
 	}()
 }
 
@@ -4292,12 +4307,16 @@ func (a *App) globalSessionListSpacerRow() []TableCell {
 }
 
 func (a *App) rowFor(sess *session.Session) []TableCell {
-	a.lastUsedMu.Lock()
-	defer a.lastUsedMu.Unlock()
-	return a.rowForLockedLastUsed(sess)
+	a.tableRowDataMu.Lock()
+	defer a.tableRowDataMu.Unlock()
+	return a.rowForLockedTableRowData(sess)
 }
 
-func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
+// rowForLockedTableRowData builds a table row while the caller holds
+// tableRowDataMu. It reads modelCache, messageCountCache (via
+// sessionMessageCount), and recentlyUpdatedAt. Callers must not
+// invoke it without the lock.
+func (a *App) rowForLockedTableRowData(sess *session.Session) []TableCell {
 	nameStyle := StyleDefault.Foreground(ColorText)
 	if sess.Metadata.IsForkedSession {
 		nameStyle = StyleDefault.Foreground(ColorFork)
@@ -4790,7 +4809,7 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 			}
 		}()
 		detail, err := a.cb.GetSessionDetail(sess)
-		a.postInterrupt(detailsLoaded{name: name, detail: detail, err: err})
+		a.postInterruptIfActive("detail_load", detailsLoaded{name: name, detail: detail, err: err})
 	}()
 }
 
@@ -6996,11 +7015,12 @@ func sessionMessageCount(a *App, sess *session.Session) int {
 	return a.messageCountCache[sess.Name]
 }
 
-// lastUsedTime returns the best available "last activity" timestamp for a
-// session. Transcript file mtime is preferred because it advances on every
-// message Claude appends, which is what the user actually means by "last
-// used". When the transcript is missing or unreadable the metadata's
-// LastAccessed timestamp serves as a fallback.
+// lastUsedTime returns the "last activity" timestamp for a session.
+// The source of truth is sess.Metadata.LastAccessed. The daemon is
+// responsible for advancing LastAccessed when a transcript append
+// or other session-touching event lands. The TUI does not stat the
+// transcript file itself. If LastAccessed lags real activity, the
+// fix belongs upstream in the daemon, not here.
 func lastUsedTime(sess *session.Session) time.Time {
 	if sess == nil {
 		return time.Time{}

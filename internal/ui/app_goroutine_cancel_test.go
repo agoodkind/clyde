@@ -1,0 +1,202 @@
+package ui
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gdamore/tcell/v2"
+
+	"goodkind.io/clyde/internal/session"
+)
+
+// TestRequestSessionsAsync_CtxCancelDropsInterrupt confirms that when
+// a.ctx is canceled while ListSessions is in flight, the goroutine
+// observes the cancel and does not post the result. The stub blocks
+// until ctx.Done fires. The test asserts the callback saw
+// ctx.Err != nil. The test also asserts that no sessionsLoaded
+// interrupt was queued on the screen.
+func TestRequestSessionsAsync_CtxCancelDropsInterrupt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		callbackEnteredAt = make(chan struct{})
+		observedErr       error
+		observedMu        sync.Mutex
+	)
+
+	cb := AppCallbacks{
+		ListSessions: func() (SessionSnapshot, error) {
+			close(callbackEnteredAt)
+			<-ctx.Done()
+			observedMu.Lock()
+			observedErr = ctx.Err()
+			observedMu.Unlock()
+			return SessionSnapshot{}, nil
+		},
+	}
+
+	a := NewApp(nil, cb, AppOptions{Context: ctx})
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer scr.Fini()
+	scr.SetSize(80, 24)
+	a.screen = scr
+
+	a.requestSessionsAsync("test")
+
+	select {
+	case <-callbackEnteredAt:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListSessions callback was never invoked")
+	}
+
+	cancel()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		observedMu.Lock()
+		got := observedErr
+		observedMu.Unlock()
+		if got != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	observedMu.Lock()
+	got := observedErr
+	observedMu.Unlock()
+	if got == nil {
+		t.Fatal("callback did not observe ctx.Err()")
+	}
+
+	// Drain any pending screen events. After cancel, the goroutine
+	// must skip postInterrupt, so no sessionsLoaded event lands.
+	// HasPendingEvent is non-blocking; PollEvent here only runs when
+	// an event is already queued.
+	time.Sleep(50 * time.Millisecond)
+	for scr.HasPendingEvent() {
+		ev := scr.PollEvent()
+		ei, ok := ev.(*tcell.EventInterrupt)
+		if !ok {
+			continue
+		}
+		if _, isLoaded := ei.Data().(sessionsLoaded); isLoaded {
+			t.Fatal("sessionsLoaded interrupt posted after ctx cancel")
+		}
+	}
+}
+
+// TestLoadDetailAsync_CtxCancelDropsInterrupt confirms the same
+// cancel-aware behavior on the detail-load path. The stub blocks until
+// ctx is done so the test can exercise the cancel race deterministically.
+func TestLoadDetailAsync_CtxCancelDropsInterrupt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sess := &session.Session{
+		Name:     "detail-test",
+		Metadata: session.Metadata{Name: "detail-test"},
+	}
+
+	callbackEnteredAt := make(chan struct{})
+	var (
+		observedErr error
+		observedMu  sync.Mutex
+	)
+
+	cb := AppCallbacks{
+		GetSessionDetail: func(*session.Session) (SessionDetail, error) {
+			close(callbackEnteredAt)
+			<-ctx.Done()
+			observedMu.Lock()
+			observedErr = ctx.Err()
+			observedMu.Unlock()
+			return SessionDetail{}, nil
+		},
+	}
+
+	a := NewApp([]*session.Session{sess}, cb, AppOptions{Context: ctx})
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer scr.Fini()
+	scr.SetSize(80, 24)
+	a.screen = scr
+
+	a.loadDetailAsync(sess)
+
+	select {
+	case <-callbackEnteredAt:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetSessionDetail callback was never invoked")
+	}
+
+	cancel()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		observedMu.Lock()
+		got := observedErr
+		observedMu.Unlock()
+		if got != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	observedMu.Lock()
+	got := observedErr
+	observedMu.Unlock()
+	if got == nil {
+		t.Fatal("callback did not observe ctx.Err()")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	for scr.HasPendingEvent() {
+		ev := scr.PollEvent()
+		ei, ok := ev.(*tcell.EventInterrupt)
+		if !ok {
+			continue
+		}
+		if _, isLoaded := ei.Data().(detailsLoaded); isLoaded {
+			t.Fatal("detailsLoaded interrupt posted after ctx cancel")
+		}
+	}
+}
+
+// TestRowFor_ConcurrentAccessNoRace exercises rowFor from multiple
+// goroutines so -race surfaces any unguarded access to the maps
+// rowFor touches. The test is a regression guard: if someone removes
+// or weakens tableRowDataMu, race mode should flag this test.
+func TestRowFor_ConcurrentAccessNoRace(t *testing.T) {
+	sessions := []*session.Session{
+		{Name: "row-test-a", Metadata: session.Metadata{Name: "row-test-a", LastAccessed: time.Now()}},
+		{Name: "row-test-b", Metadata: session.Metadata{Name: "row-test-b", LastAccessed: time.Now()}},
+	}
+	a := NewApp(sessions, AppCallbacks{})
+	a.modelCache["row-test-a"] = "opus"
+	a.modelCache["row-test-b"] = "sonnet"
+	a.messageCountCache["row-test-a"] = 3
+	a.messageCountCache["row-test-b"] = 7
+	a.recentlyUpdatedAt["row-test-a"] = time.Now()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			sess := sessions[idx%len(sessions)]
+			for j := 0; j < 100; j++ {
+				_ = a.rowFor(sess)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
