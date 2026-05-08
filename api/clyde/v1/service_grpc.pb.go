@@ -19,43 +19,44 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ClydeService_AcquireSession_FullMethodName           = "/clyde.v1.ClydeService/AcquireSession"
-	ClydeService_ReleaseSession_FullMethodName           = "/clyde.v1.ClydeService/ReleaseSession"
-	ClydeService_HookEvent_FullMethodName                = "/clyde.v1.ClydeService/HookEvent"
-	ClydeService_ListActiveSessions_FullMethodName       = "/clyde.v1.ClydeService/ListActiveSessions"
-	ClydeService_ListSessions_FullMethodName             = "/clyde.v1.ClydeService/ListSessions"
-	ClydeService_GetSessionDetail_FullMethodName         = "/clyde.v1.ClydeService/GetSessionDetail"
-	ClydeService_GetSessionExportStats_FullMethodName    = "/clyde.v1.ClydeService/GetSessionExportStats"
-	ClydeService_ExportSession_FullMethodName            = "/clyde.v1.ClydeService/ExportSession"
-	ClydeService_TriggerScan_FullMethodName              = "/clyde.v1.ClydeService/TriggerScan"
-	ClydeService_ReloadDaemon_FullMethodName             = "/clyde.v1.ClydeService/ReloadDaemon"
-	ClydeService_SubscribeRegistry_FullMethodName        = "/clyde.v1.ClydeService/SubscribeRegistry"
-	ClydeService_GetProviderStats_FullMethodName         = "/clyde.v1.ClydeService/GetProviderStats"
-	ClydeService_SubscribeProviderStats_FullMethodName   = "/clyde.v1.ClydeService/SubscribeProviderStats"
-	ClydeService_RenameSession_FullMethodName            = "/clyde.v1.ClydeService/RenameSession"
-	ClydeService_DeleteSession_FullMethodName            = "/clyde.v1.ClydeService/DeleteSession"
-	ClydeService_UpdateSessionMetadata_FullMethodName    = "/clyde.v1.ClydeService/UpdateSessionMetadata"
-	ClydeService_UpdateSessionSettings_FullMethodName    = "/clyde.v1.ClydeService/UpdateSessionSettings"
-	ClydeService_UpdateGlobalSettings_FullMethodName     = "/clyde.v1.ClydeService/UpdateGlobalSettings"
-	ClydeService_ListConfigControls_FullMethodName       = "/clyde.v1.ClydeService/ListConfigControls"
-	ClydeService_UpdateConfigControl_FullMethodName      = "/clyde.v1.ClydeService/UpdateConfigControl"
-	ClydeService_StartRemoteSession_FullMethodName       = "/clyde.v1.ClydeService/StartRemoteSession"
-	ClydeService_ListLiveSessions_FullMethodName         = "/clyde.v1.ClydeService/ListLiveSessions"
-	ClydeService_StartLiveSession_FullMethodName         = "/clyde.v1.ClydeService/StartLiveSession"
-	ClydeService_SendLiveSession_FullMethodName          = "/clyde.v1.ClydeService/SendLiveSession"
-	ClydeService_StreamLiveSession_FullMethodName        = "/clyde.v1.ClydeService/StreamLiveSession"
-	ClydeService_StopLiveSession_FullMethodName          = "/clyde.v1.ClydeService/StopLiveSession"
-	ClydeService_AcquireForegroundSession_FullMethodName = "/clyde.v1.ClydeService/AcquireForegroundSession"
-	ClydeService_ReleaseForegroundSession_FullMethodName = "/clyde.v1.ClydeService/ReleaseForegroundSession"
-	ClydeService_LaunchMITMUpstream_FullMethodName       = "/clyde.v1.ClydeService/LaunchMITMUpstream"
-	ClydeService_PrepareMITMLaunch_FullMethodName        = "/clyde.v1.ClydeService/PrepareMITMLaunch"
-	ClydeService_ListBridges_FullMethodName              = "/clyde.v1.ClydeService/ListBridges"
-	ClydeService_TailTranscript_FullMethodName           = "/clyde.v1.ClydeService/TailTranscript"
-	ClydeService_SendToSession_FullMethodName            = "/clyde.v1.ClydeService/SendToSession"
-	ClydeService_CompactPreview_FullMethodName           = "/clyde.v1.ClydeService/CompactPreview"
-	ClydeService_CompactApply_FullMethodName             = "/clyde.v1.ClydeService/CompactApply"
-	ClydeService_CompactUndo_FullMethodName              = "/clyde.v1.ClydeService/CompactUndo"
-	ClydeService_ProbeContextUsage_FullMethodName        = "/clyde.v1.ClydeService/ProbeContextUsage"
+	ClydeService_AcquireSession_FullMethodName            = "/clyde.v1.ClydeService/AcquireSession"
+	ClydeService_ReleaseSession_FullMethodName            = "/clyde.v1.ClydeService/ReleaseSession"
+	ClydeService_HookEvent_FullMethodName                 = "/clyde.v1.ClydeService/HookEvent"
+	ClydeService_ListActiveSessions_FullMethodName        = "/clyde.v1.ClydeService/ListActiveSessions"
+	ClydeService_ListSessions_FullMethodName              = "/clyde.v1.ClydeService/ListSessions"
+	ClydeService_GetSessionDetail_FullMethodName          = "/clyde.v1.ClydeService/GetSessionDetail"
+	ClydeService_GetSessionExportStats_FullMethodName     = "/clyde.v1.ClydeService/GetSessionExportStats"
+	ClydeService_ExportSession_FullMethodName             = "/clyde.v1.ClydeService/ExportSession"
+	ClydeService_TriggerScan_FullMethodName               = "/clyde.v1.ClydeService/TriggerScan"
+	ClydeService_ReloadDaemon_FullMethodName              = "/clyde.v1.ClydeService/ReloadDaemon"
+	ClydeService_SubscribeRegistry_FullMethodName         = "/clyde.v1.ClydeService/SubscribeRegistry"
+	ClydeService_GetProviderStats_FullMethodName          = "/clyde.v1.ClydeService/GetProviderStats"
+	ClydeService_SubscribeProviderStats_FullMethodName    = "/clyde.v1.ClydeService/SubscribeProviderStats"
+	ClydeService_RenameSession_FullMethodName             = "/clyde.v1.ClydeService/RenameSession"
+	ClydeService_DeleteSession_FullMethodName             = "/clyde.v1.ClydeService/DeleteSession"
+	ClydeService_UpdateSessionMetadata_FullMethodName     = "/clyde.v1.ClydeService/UpdateSessionMetadata"
+	ClydeService_UpdateSessionSettings_FullMethodName     = "/clyde.v1.ClydeService/UpdateSessionSettings"
+	ClydeService_UpdateGlobalSettings_FullMethodName      = "/clyde.v1.ClydeService/UpdateGlobalSettings"
+	ClydeService_ListConfigControls_FullMethodName        = "/clyde.v1.ClydeService/ListConfigControls"
+	ClydeService_UpdateConfigControl_FullMethodName       = "/clyde.v1.ClydeService/UpdateConfigControl"
+	ClydeService_StartRemoteSession_FullMethodName        = "/clyde.v1.ClydeService/StartRemoteSession"
+	ClydeService_ListLiveSessions_FullMethodName          = "/clyde.v1.ClydeService/ListLiveSessions"
+	ClydeService_StartLiveSession_FullMethodName          = "/clyde.v1.ClydeService/StartLiveSession"
+	ClydeService_SendLiveSession_FullMethodName           = "/clyde.v1.ClydeService/SendLiveSession"
+	ClydeService_StreamLiveSession_FullMethodName         = "/clyde.v1.ClydeService/StreamLiveSession"
+	ClydeService_StopLiveSession_FullMethodName           = "/clyde.v1.ClydeService/StopLiveSession"
+	ClydeService_AcquireForegroundSession_FullMethodName  = "/clyde.v1.ClydeService/AcquireForegroundSession"
+	ClydeService_ReleaseForegroundSession_FullMethodName  = "/clyde.v1.ClydeService/ReleaseForegroundSession"
+	ClydeService_LaunchMITMUpstream_FullMethodName        = "/clyde.v1.ClydeService/LaunchMITMUpstream"
+	ClydeService_PrepareMITMLaunch_FullMethodName         = "/clyde.v1.ClydeService/PrepareMITMLaunch"
+	ClydeService_ProviderLaunchEnvironment_FullMethodName = "/clyde.v1.ClydeService/ProviderLaunchEnvironment"
+	ClydeService_ListBridges_FullMethodName               = "/clyde.v1.ClydeService/ListBridges"
+	ClydeService_TailTranscript_FullMethodName            = "/clyde.v1.ClydeService/TailTranscript"
+	ClydeService_SendToSession_FullMethodName             = "/clyde.v1.ClydeService/SendToSession"
+	ClydeService_CompactPreview_FullMethodName            = "/clyde.v1.ClydeService/CompactPreview"
+	ClydeService_CompactApply_FullMethodName              = "/clyde.v1.ClydeService/CompactApply"
+	ClydeService_CompactUndo_FullMethodName               = "/clyde.v1.ClydeService/CompactUndo"
+	ClydeService_ProbeContextUsage_FullMethodName         = "/clyde.v1.ClydeService/ProbeContextUsage"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -92,6 +93,7 @@ type ClydeServiceClient interface {
 	ReleaseForegroundSession(ctx context.Context, in *ReleaseForegroundSessionRequest, opts ...grpc.CallOption) (*ReleaseForegroundSessionResponse, error)
 	LaunchMITMUpstream(ctx context.Context, in *LaunchMITMUpstreamRequest, opts ...grpc.CallOption) (*LaunchMITMUpstreamResponse, error)
 	PrepareMITMLaunch(ctx context.Context, in *PrepareMITMLaunchRequest, opts ...grpc.CallOption) (*PrepareMITMLaunchResponse, error)
+	ProviderLaunchEnvironment(ctx context.Context, in *ProviderLaunchEnvironmentRequest, opts ...grpc.CallOption) (*ProviderLaunchEnvironmentResponse, error)
 	ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error)
 	TailTranscript(ctx context.Context, in *TailTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailTranscriptResponse], error)
 	SendToSession(ctx context.Context, in *SendToSessionRequest, opts ...grpc.CallOption) (*SendToSessionResponse, error)
@@ -436,6 +438,16 @@ func (c *clydeServiceClient) PrepareMITMLaunch(ctx context.Context, in *PrepareM
 	return out, nil
 }
 
+func (c *clydeServiceClient) ProviderLaunchEnvironment(ctx context.Context, in *ProviderLaunchEnvironmentRequest, opts ...grpc.CallOption) (*ProviderLaunchEnvironmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProviderLaunchEnvironmentResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ProviderLaunchEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clydeServiceClient) ListBridges(ctx context.Context, in *ListBridgesRequest, opts ...grpc.CallOption) (*ListBridgesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListBridgesResponse)
@@ -567,6 +579,7 @@ type ClydeServiceServer interface {
 	ReleaseForegroundSession(context.Context, *ReleaseForegroundSessionRequest) (*ReleaseForegroundSessionResponse, error)
 	LaunchMITMUpstream(context.Context, *LaunchMITMUpstreamRequest) (*LaunchMITMUpstreamResponse, error)
 	PrepareMITMLaunch(context.Context, *PrepareMITMLaunchRequest) (*PrepareMITMLaunchResponse, error)
+	ProviderLaunchEnvironment(context.Context, *ProviderLaunchEnvironmentRequest) (*ProviderLaunchEnvironmentResponse, error)
 	ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error)
 	TailTranscript(*TailTranscriptRequest, grpc.ServerStreamingServer[TailTranscriptResponse]) error
 	SendToSession(context.Context, *SendToSessionRequest) (*SendToSessionResponse, error)
@@ -672,6 +685,9 @@ func (UnimplementedClydeServiceServer) LaunchMITMUpstream(context.Context, *Laun
 }
 func (UnimplementedClydeServiceServer) PrepareMITMLaunch(context.Context, *PrepareMITMLaunchRequest) (*PrepareMITMLaunchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PrepareMITMLaunch not implemented")
+}
+func (UnimplementedClydeServiceServer) ProviderLaunchEnvironment(context.Context, *ProviderLaunchEnvironmentRequest) (*ProviderLaunchEnvironmentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProviderLaunchEnvironment not implemented")
 }
 func (UnimplementedClydeServiceServer) ListBridges(context.Context, *ListBridgesRequest) (*ListBridgesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBridges not implemented")
@@ -1233,6 +1249,24 @@ func _ClydeService_PrepareMITMLaunch_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_ProviderLaunchEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProviderLaunchEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ProviderLaunchEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ProviderLaunchEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ProviderLaunchEnvironment(ctx, req.(*ProviderLaunchEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_ListBridges_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListBridgesRequest)
 	if err := dec(in); err != nil {
@@ -1452,6 +1486,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PrepareMITMLaunch",
 			Handler:    _ClydeService_PrepareMITMLaunch_Handler,
+		},
+		{
+			MethodName: "ProviderLaunchEnvironment",
+			Handler:    _ClydeService_ProviderLaunchEnvironment_Handler,
 		},
 		{
 			MethodName: "ListBridges",

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"os/exec"
@@ -15,7 +14,7 @@ import (
 
 	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/daemon"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	claudeartifacts "goodkind.io/clyde/internal/providers/claude/lifecycle/artifacts"
 	"goodkind.io/clyde/internal/session"
@@ -463,13 +462,23 @@ func applyMITMEnv(env map[string]string) {
 	if err != nil {
 		return
 	}
-	extra, err := mitm.ClaudeEnv(context.Background(), cfg.MITM, slog.Default())
+	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
+		return
+	}
+	extra, err := providerLaunchEnvironmentViaDaemon(context.Background(), "claude")
 	if err != nil {
 		claudeLog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
 		return
 	}
-	maps.Copy(env, extra)
+	for _, item := range extra {
+		if item.GetKey() == "" {
+			continue
+		}
+		env[item.GetKey()] = item.GetValue()
+	}
 }
+
+var providerLaunchEnvironmentViaDaemon = daemon.ProviderLaunchEnvironmentViaDaemon
 
 // ClaudeBinaryPathFunc is a function that returns the path to the claude binary.
 // This is set by the cmd package to allow overriding for tests.

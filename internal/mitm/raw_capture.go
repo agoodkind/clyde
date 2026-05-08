@@ -131,6 +131,18 @@ func (p *Proxy) nextRawCapturePaths(captureDir string, concern string, host stri
 	return filepath.Join(dir, name+".request.raw"), filepath.Join(dir, name+".response.raw"), nil
 }
 
+func (p *Proxy) nextHTTPCapturePaths(captureDir string, provider string, path string) (string, string, error) {
+	dir := filepath.Join(expandHome(captureDir), "raw", safePathPart(provider))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("mitm.raw_capture.mkdir_failed", "dir", dir, "err", err)
+		return "", "", fmt.Errorf("create raw capture dir: %w", err)
+	}
+	seq := p.rawCaptureSeq.Add(1)
+	stamp := currentTime().UTC().Format("20060102T150405.000000000Z")
+	name := fmt.Sprintf("%s-%06d-%s", stamp, seq, safePathPart(path))
+	return filepath.Join(dir, name+".request.raw"), filepath.Join(dir, name+".response.raw"), nil
+}
+
 func writeRawCaptureFile(path string, write func(io.Writer) error) (int64, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 	if err != nil {

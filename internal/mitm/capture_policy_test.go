@@ -7,12 +7,12 @@ import (
 	"testing"
 
 	"goodkind.io/gklog"
-	"gopkg.in/natefinch/lumberjack.v2"
 
 	"goodkind.io/clyde/internal/config"
 )
 
 func TestAppendCaptureRotatesCaptureIndex(t *testing.T) {
+	clearCaptureWriterCacheForTest(t)
 	dir := t.TempDir()
 	compress := false
 	policy := CaptureFilePolicy{
@@ -89,12 +89,13 @@ func clearCaptureWriterCacheForTest(t *testing.T) {
 	t.Helper()
 	captureWriterCache.mu.Lock()
 	oldWriters := captureWriterCache.writers
-	captureWriterCache.writers = make(map[captureWriterKey]*lumberjack.Logger)
+	captureWriterCache.writers = make(map[captureWriterKey]*captureWriterOwner)
 	captureWriterCache.mu.Unlock()
 	t.Cleanup(func() {
 		captureWriterCache.mu.Lock()
-		for _, writer := range captureWriterCache.writers {
-			_ = writer.Close()
+		for _, owner := range captureWriterCache.writers {
+			_ = owner.writer.Close()
+			unlockCaptureIndex(owner.lock)
 		}
 		captureWriterCache.writers = oldWriters
 		captureWriterCache.mu.Unlock()

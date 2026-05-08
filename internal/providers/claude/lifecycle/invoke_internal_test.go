@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/session"
 )
@@ -102,6 +104,18 @@ func TestApplyMITMEnvAddsAnthropicBaseURLForWrapperLaunch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+	oldLaunchEnvironment := providerLaunchEnvironmentViaDaemon
+	t.Cleanup(func() {
+		providerLaunchEnvironmentViaDaemon = oldLaunchEnvironment
+	})
+	providerLaunchEnvironmentViaDaemon = func(_ context.Context, provider string) ([]*clydev1.EnvironmentVariable, error) {
+		if provider != "claude" {
+			t.Fatalf("provider = %q, want claude", provider)
+		}
+		return []*clydev1.EnvironmentVariable{
+			{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
+		}, nil
+	}
 
 	env := map[string]string{
 		"ANTHROPIC_BASE_URL": "https://old.example",
@@ -113,8 +127,41 @@ func TestApplyMITMEnvAddsAnthropicBaseURLForWrapperLaunch(t *testing.T) {
 		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
 	}
 	baseURL := env["ANTHROPIC_BASE_URL"]
-	if !strings.HasPrefix(baseURL, "http://[::1]:") {
-		t.Fatalf("ANTHROPIC_BASE_URL=%q, want local MITM proxy", baseURL)
+	if baseURL != "http://daemon.example" {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want daemon-provided MITM proxy", baseURL)
+	}
+}
+
+func TestApplyMITMEnvFailsOpenWhenDaemonUnavailable(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfgDir := filepath.Join(configHome, "clyde")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := []byte("[mitm]\nenabled_default = true\nproviders = [\"claude\"]\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n")
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	oldLaunchEnvironment := providerLaunchEnvironmentViaDaemon
+	t.Cleanup(func() {
+		providerLaunchEnvironmentViaDaemon = oldLaunchEnvironment
+	})
+	providerLaunchEnvironmentViaDaemon = func(context.Context, string) ([]*clydev1.EnvironmentVariable, error) {
+		return nil, errors.New("daemon unavailable")
+	}
+
+	env := map[string]string{
+		"ANTHROPIC_BASE_URL": "https://old.example",
+		"KEEP":               "1",
+	}
+	applyMITMEnv(env)
+
+	if env["KEEP"] != "1" {
+		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://old.example" {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want original value after fail open", env["ANTHROPIC_BASE_URL"])
 	}
 }
 

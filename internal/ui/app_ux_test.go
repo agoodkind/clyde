@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,18 @@ import (
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/terminalcontrol"
 )
+
+func captureDefaultSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	handler := slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() {
+		slog.SetDefault(previous)
+	})
+	return &buffer
+}
 
 func stubSelfReloadProbe(t *testing.T, err error) {
 	t.Helper()
@@ -97,6 +111,43 @@ func TestUX_TerminalModeResetSequenceRestoresOutputColumn(t *testing.T) {
 	}
 	if autowrap < softReset {
 		t.Fatalf("autowrap enable must follow soft reset")
+	}
+}
+
+func TestUX_PollEventTerminalCallDoesNotLogIdleDebugPairs(t *testing.T) {
+	logs := captureDefaultSlog(t)
+	a := NewApp(nil, AppCallbacks{})
+
+	a.runTerminalCall("poll_event", func() {})
+
+	output := logs.String()
+	if strings.Contains(output, "tui.terminal_call.begin") {
+		t.Fatalf("poll_event should not emit begin debug logs, got:\n%s", output)
+	}
+	if strings.Contains(output, "tui.terminal_call.done") {
+		t.Fatalf("idle poll_event should not emit done debug logs, got:\n%s", output)
+	}
+}
+
+func TestUX_ZeroButtonMouseMotionDoesNotLogOrRedraw(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+	logs := captureDefaultSlog(t)
+	drawCount := a.drawCount
+	event := tcell.NewEventMouse(20, 10, tcell.ButtonMask(0), tcell.ModNone)
+
+	profile := a.prepareRunEventDispatch(event)
+	profile = a.dispatchRunEvent(event, profile)
+	a.logRunEventTiming(profile, 0)
+
+	if profile.stateChanged {
+		t.Fatalf("zero-button mouse motion should not report visible state changes")
+	}
+	if a.drawCount != drawCount {
+		t.Fatalf("drawCount = %d, want %d after zero-button mouse motion", a.drawCount, drawCount)
+	}
+	if output := logs.String(); output != "" {
+		t.Fatalf("zero-button mouse motion should not log, got:\n%s", output)
 	}
 }
 

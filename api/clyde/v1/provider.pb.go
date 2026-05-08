@@ -1950,6 +1950,146 @@ func (x *PrepareMITMLaunchResponse) GetEnv() []string {
 	return nil
 }
 
+type EnvironmentVariable struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnvironmentVariable) Reset() {
+	*x = EnvironmentVariable{}
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnvironmentVariable) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnvironmentVariable) ProtoMessage() {}
+
+func (x *EnvironmentVariable) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnvironmentVariable.ProtoReflect.Descriptor instead.
+func (*EnvironmentVariable) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *EnvironmentVariable) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *EnvironmentVariable) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+type ProviderLaunchEnvironmentRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderLaunchEnvironmentRequest) Reset() {
+	*x = ProviderLaunchEnvironmentRequest{}
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderLaunchEnvironmentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderLaunchEnvironmentRequest) ProtoMessage() {}
+
+func (x *ProviderLaunchEnvironmentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderLaunchEnvironmentRequest.ProtoReflect.Descriptor instead.
+func (*ProviderLaunchEnvironmentRequest) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ProviderLaunchEnvironmentRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+type ProviderLaunchEnvironmentResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Environment   []*EnvironmentVariable `protobuf:"bytes,1,rep,name=environment,proto3" json:"environment,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProviderLaunchEnvironmentResponse) Reset() {
+	*x = ProviderLaunchEnvironmentResponse{}
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProviderLaunchEnvironmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProviderLaunchEnvironmentResponse) ProtoMessage() {}
+
+func (x *ProviderLaunchEnvironmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProviderLaunchEnvironmentResponse.ProtoReflect.Descriptor instead.
+func (*ProviderLaunchEnvironmentResponse) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ProviderLaunchEnvironmentResponse) GetEnvironment() []*EnvironmentVariable {
+	if x != nil {
+		return x.Environment
+	}
+	return nil
+}
+
 var File_clyde_v1_daemon_provider_proto protoreflect.FileDescriptor
 
 const file_clyde_v1_daemon_provider_proto_rawDesc = "" +
@@ -2109,7 +2249,14 @@ const file_clyde_v1_daemon_provider_proto_rawDesc = "" +
 	"captureDir\x12\x16\n" +
 	"\x06binary\x18\x04 \x01(\tR\x06binary\x12\x12\n" +
 	"\x04args\x18\x05 \x03(\tR\x04args\x12\x10\n" +
-	"\x03env\x18\x06 \x03(\tR\x03envB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
+	"\x03env\x18\x06 \x03(\tR\x03env\"=\n" +
+	"\x13EnvironmentVariable\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\">\n" +
+	" ProviderLaunchEnvironmentRequest\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\"d\n" +
+	"!ProviderLaunchEnvironmentResponse\x12?\n" +
+	"\venvironment\x18\x01 \x03(\v2\x1d.clyde.v1.EnvironmentVariableR\venvironmentB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
 
 var (
 	file_clyde_v1_daemon_provider_proto_rawDescOnce sync.Once
@@ -2124,7 +2271,7 @@ func file_clyde_v1_daemon_provider_proto_rawDescGZIP() []byte {
 }
 
 var file_clyde_v1_daemon_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_clyde_v1_daemon_provider_proto_goTypes = []any{
 	(StartRemoteSessionResponse_LaunchState)(0), // 0: clyde.v1.StartRemoteSessionResponse.LaunchState
 	(*ProviderSessionIdentity)(nil),             // 1: clyde.v1.ProviderSessionIdentity
@@ -2157,6 +2304,9 @@ var file_clyde_v1_daemon_provider_proto_goTypes = []any{
 	(*LaunchMITMUpstreamResponse)(nil),          // 28: clyde.v1.LaunchMITMUpstreamResponse
 	(*PrepareMITMLaunchRequest)(nil),            // 29: clyde.v1.PrepareMITMLaunchRequest
 	(*PrepareMITMLaunchResponse)(nil),           // 30: clyde.v1.PrepareMITMLaunchResponse
+	(*EnvironmentVariable)(nil),                 // 31: clyde.v1.EnvironmentVariable
+	(*ProviderLaunchEnvironmentRequest)(nil),    // 32: clyde.v1.ProviderLaunchEnvironmentRequest
+	(*ProviderLaunchEnvironmentResponse)(nil),   // 33: clyde.v1.ProviderLaunchEnvironmentResponse
 }
 var file_clyde_v1_daemon_provider_proto_depIdxs = []int32{
 	1,  // 0: clyde.v1.SessionHistoryBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
@@ -2170,11 +2320,12 @@ var file_clyde_v1_daemon_provider_proto_depIdxs = []int32{
 	12, // 8: clyde.v1.ListLiveSessionsResponse.sessions:type_name -> clyde.v1.LiveSession
 	12, // 9: clyde.v1.StartLiveSessionResponse.session:type_name -> clyde.v1.LiveSession
 	12, // 10: clyde.v1.ReleaseForegroundSessionResponse.live_session:type_name -> clyde.v1.LiveSession
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	31, // 11: clyde.v1.ProviderLaunchEnvironmentResponse.environment:type_name -> clyde.v1.EnvironmentVariable
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_provider_proto_init() }
@@ -2188,7 +2339,7 @@ func file_clyde_v1_daemon_provider_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_provider_proto_rawDesc), len(file_clyde_v1_daemon_provider_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   30,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

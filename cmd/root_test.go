@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,18 @@ func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
+	oldLaunchEnvironment := claudeLaunchEnvironmentViaDaemon
+	t.Cleanup(func() {
+		claudeLaunchEnvironmentViaDaemon = oldLaunchEnvironment
+	})
+	claudeLaunchEnvironmentViaDaemon = func(_ context.Context, provider string) ([]*clydev1.EnvironmentVariable, error) {
+		if provider != "claude" {
+			t.Fatalf("provider = %q, want claude", provider)
+		}
+		return []*clydev1.EnvironmentVariable{
+			{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
+		}, nil
+	}
 
 	got := applyClaudeMITMEnv(context.Background(), []string{"ANTHROPIC_BASE_URL=https://old.example", "KEEP=1"})
 
@@ -82,8 +95,41 @@ func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 	if !ok {
 		t.Fatalf("ANTHROPIC_BASE_URL missing: %v", got)
 	}
-	if !strings.HasPrefix(baseURL, "http://[::1]:") {
-		t.Fatalf("ANTHROPIC_BASE_URL=%q, want local MITM proxy", baseURL)
+	if baseURL != "http://daemon.example" {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want daemon-provided MITM proxy", baseURL)
+	}
+}
+
+func TestApplyClaudeMITMEnvFailsOpenWhenDaemonUnavailable(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfgDir := filepath.Join(configHome, "clyde")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := []byte("[mitm]\nenabled_default = true\nproviders = [\"claude\"]\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n")
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	oldLaunchEnvironment := claudeLaunchEnvironmentViaDaemon
+	t.Cleanup(func() {
+		claudeLaunchEnvironmentViaDaemon = oldLaunchEnvironment
+	})
+	claudeLaunchEnvironmentViaDaemon = func(context.Context, string) ([]*clydev1.EnvironmentVariable, error) {
+		return nil, errors.New("daemon unavailable")
+	}
+
+	got := applyClaudeMITMEnv(context.Background(), []string{"ANTHROPIC_BASE_URL=https://old.example", "KEEP=1"})
+
+	if !envContains(got, "KEEP", "1") {
+		t.Fatalf("KEEP env missing: %v", got)
+	}
+	baseURL, ok := envValue(got, "ANTHROPIC_BASE_URL")
+	if !ok {
+		t.Fatalf("ANTHROPIC_BASE_URL missing: %v", got)
+	}
+	if baseURL != "https://old.example" {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want original value after fail open", baseURL)
 	}
 }
 

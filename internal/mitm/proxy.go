@@ -3,9 +3,12 @@ package mitm
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"net"
@@ -144,6 +147,16 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
+	requestBodyIndex := newCaptureBodyIndex(summarizeBody(cfg.BodyMode, body))
+	var responseRawWriter *failOpenRawCaptureWriter
+	var responseRawError error
+	if cfg.BodyMode == "raw" {
+		rawSetup := p.prepareRawHTTPCapture(cfg, provider, r.URL.Path, body)
+		requestBodyIndex = rawSetup.requestBodyIndex
+		responseRawWriter = rawSetup.responseRawWriter
+		responseRawError = rawSetup.responseRawError
+	}
+
 	upstreamURL := upstream + r.URL.RequestURI()
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(body))
 	if err != nil {
@@ -164,8 +177,15 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	forwardResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	capture := &limitedBuffer{limit: 16 * 1024}
+	captureWriter := io.Writer(capture)
+	if responseRawWriter != nil {
+		captureWriter = io.MultiWriter(capture, responseRawWriter)
+	}
 	flusher, _ := w.(http.Flusher)
-	copyErr := streamWithFlush(w, capture, resp.Body, flusher)
+	copyErr := streamWithFlush(w, captureWriter, resp.Body, flusher)
+	if responseRawWriter != nil {
+		responseRawWriter.Close()
+	}
 	duration := time.Since(started)
 	if copyErr != nil {
 		p.log.Warn("mitm.proxy.copy_failed", "provider", provider, "path", r.URL.Path, "err", copyErr)
@@ -180,6 +200,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 			"decoded_bytes", len(captureBody),
 		)
 	}
+	responseBodyIndex, responseBodyLen := responseCaptureIndex(cfg.BodyMode, captureBody, responseRawWriter, responseRawError)
 
 	p.log.Info("mitm.capture.completed",
 		"provider", provider,
@@ -194,6 +215,9 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		upstreamURL:    upstream + r.URL.RequestURI(),
 		requestBody:    body,
 		responseBody:   captureBody,
+		requestIndex:   requestBodyIndex,
+		responseIndex:  responseBodyIndex,
+		responseLen:    responseBodyLen,
 		duration:       duration,
 		responseStatus: resp.StatusCode,
 	})
@@ -219,8 +243,82 @@ type httpCaptureRecordInput struct {
 	upstreamURL    string
 	requestBody    []byte
 	responseBody   []byte
+	requestIndex   captureBodyIndex
+	responseIndex  captureBodyIndex
+	responseLen    int64
 	duration       time.Duration
 	responseStatus int
+}
+
+type captureBodyIndex struct {
+	raw json.RawMessage
+}
+
+func newCaptureBodyIndex(value any) captureBodyIndex {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		raw = json.RawMessage(`null`)
+	}
+	return captureBodyIndex{raw: raw}
+}
+
+func (idx captureBodyIndex) MarshalJSON() ([]byte, error) {
+	return idx.raw, nil
+}
+
+type rawHTTPCaptureSetup struct {
+	requestBodyIndex  captureBodyIndex
+	responseRawWriter *failOpenRawCaptureWriter
+	responseRawError  error
+}
+
+func (p *Proxy) prepareRawHTTPCapture(cfg config.MITMConfig, provider string, path string, body []byte) rawHTTPCaptureSetup {
+	rawSetup := rawHTTPCaptureSetup{
+		requestBodyIndex:  newCaptureBodyIndex(rawBodyReferenceFromBytes(body, "", 0, fmt.Errorf("raw request sidecar was not prepared"))),
+		responseRawWriter: nil,
+		responseRawError:  nil,
+	}
+	requestRawPath, responseRawPath, err := p.nextHTTPCapturePaths(cfg.CaptureDir, provider, path)
+	if err != nil {
+		p.log.Warn("mitm.capture.raw_paths_failed", "provider", provider, "path", path, "err", err)
+		rawSetup.responseRawError = err
+		return rawSetup
+	}
+	requestBytes, err := writeRawCaptureFile(requestRawPath, func(dst io.Writer) error {
+		_, writeErr := dst.Write(body)
+		return writeErr
+	})
+	rawSetup.requestBodyIndex = newCaptureBodyIndex(rawBodyReferenceFromBytes(body, requestRawPath, requestBytes, err))
+	if err != nil {
+		p.log.Warn("mitm.capture.raw_request_failed", "provider", provider, "path", path, "err", err)
+	}
+	responseFile, err := os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
+	if err != nil {
+		p.log.Warn("mitm.capture.raw_response_open_failed", "provider", provider, "path", path, "raw_path", responseRawPath, "err", err)
+		rawSetup.responseRawError = err
+		return rawSetup
+	}
+	rawSetup.responseRawWriter = newFailOpenRawCaptureWriter(p.log, responseRawPath, responseFile)
+	return rawSetup
+}
+
+func responseCaptureIndex(
+	bodyMode string,
+	captureBody []byte,
+	responseRawWriter *failOpenRawCaptureWriter,
+	responseRawError error,
+) (captureBodyIndex, int64) {
+	if bodyMode != "raw" {
+		return newCaptureBodyIndex(summarizeBody(bodyMode, captureBody)), int64(len(captureBody))
+	}
+	if responseRawWriter != nil {
+		return newCaptureBodyIndex(responseRawWriter.Reference()), responseRawWriter.Count()
+	}
+	if responseRawError == nil {
+		responseRawError = fmt.Errorf("raw response sidecar was not prepared")
+	}
+	ref := rawBodyReferenceFromBytes(captureBody, "", int64(len(captureBody)), responseRawError)
+	return newCaptureBodyIndex(ref), int64(len(captureBody))
 }
 
 func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input httpCaptureRecordInput) {
@@ -235,9 +333,9 @@ func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input ht
 		"query":           r.URL.RawQuery,
 		"headers":         redactHeaders(r.Header),
 		"body_len":        len(input.requestBody),
-		"body":            summarizeBody(input.config.BodyMode, input.requestBody),
+		"body":            input.requestIndex,
 		"request_headers": redactHeaders(r.Header),
-		"request_body":    summarizeBody(input.config.BodyMode, input.requestBody),
+		"request_body":    input.requestIndex,
 	}
 	if err := WriteCaptureEvent(input.config.CaptureDir, requestEvent, input.policy); err != nil {
 		p.log.Warn("mitm.capture.append_failed", "capture_dir", input.config.CaptureDir, "err", err)
@@ -254,12 +352,12 @@ func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input ht
 		"status":           input.responseStatus,
 		"duration_ms":      input.duration.Milliseconds(),
 		"headers":          redactHeaders(resp.Header),
-		"body_len":         len(input.responseBody),
-		"body":             summarizeBody(input.config.BodyMode, input.responseBody),
+		"body_len":         input.responseLen,
+		"body":             input.responseIndex,
 		"request_headers":  redactHeaders(r.Header),
 		"response_headers": redactHeaders(resp.Header),
-		"request_body":     summarizeBody(input.config.BodyMode, input.requestBody),
-		"response_body":    summarizeBody(input.config.BodyMode, input.responseBody),
+		"request_body":     input.requestIndex,
+		"response_body":    input.responseIndex,
 	}
 	if err := WriteCaptureEvent(input.config.CaptureDir, event, input.policy); err != nil {
 		p.log.Warn("mitm.capture.append_failed", "capture_dir", input.config.CaptureDir, "err", err)
@@ -318,6 +416,126 @@ func isSensitiveHeaderName(lower string) bool {
 	}
 	credentialSuffix := "tok" + "en"
 	return strings.Contains(lower, credentialSuffix)
+}
+
+type rawBodyReference struct {
+	Mode         string   `json:"mode"`
+	RawPath      string   `json:"raw_path,omitempty"`
+	Bytes        int64    `json:"bytes"`
+	SHA256       string   `json:"sha256,omitempty"`
+	BodyType     string   `json:"body_type,omitempty"`
+	Keys         []string `json:"keys,omitempty"`
+	CaptureError string   `json:"capture_error,omitempty"`
+}
+
+func rawBodyReferenceFromBytes(body []byte, rawPath string, byteCount int64, err error) rawBodyReference {
+	ref := rawBodyReference{
+		Mode:         "raw_file",
+		RawPath:      rawPath,
+		Bytes:        byteCount,
+		SHA256:       sha256Hex(body),
+		BodyType:     bodyTypeForCapture(body),
+		Keys:         bodyKeysForCapture(body),
+		CaptureError: "",
+	}
+	if err != nil {
+		ref.CaptureError = err.Error()
+	}
+	return ref
+}
+
+func bodyTypeForCapture(body []byte) string {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return "empty"
+	}
+	var decoded any
+	if err := json.Unmarshal(trimmed, &decoded); err != nil {
+		return "bytes"
+	}
+	switch decoded.(type) {
+	case map[string]any:
+		return "json_object"
+	case []any:
+		return "json_array"
+	default:
+		return "json_scalar"
+	}
+}
+
+func bodyKeysForCapture(body []byte) []string {
+	var decoded map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(body), &decoded); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(decoded))
+	for key := range decoded {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+type failOpenRawCaptureWriter struct {
+	log    *slog.Logger
+	path   string
+	file   *os.File
+	hash   hash.Hash
+	count  int64
+	failed bool
+}
+
+func newFailOpenRawCaptureWriter(log *slog.Logger, path string, file *os.File) *failOpenRawCaptureWriter {
+	return &failOpenRawCaptureWriter{
+		log:    log,
+		path:   path,
+		file:   file,
+		hash:   sha256.New(),
+		count:  0,
+		failed: false,
+	}
+}
+
+func (w *failOpenRawCaptureWriter) Write(chunk []byte) (int, error) {
+	_, _ = w.hash.Write(chunk)
+	if w.failed {
+		return len(chunk), nil
+	}
+	n, err := w.file.Write(chunk)
+	w.count += int64(n)
+	if err != nil {
+		w.failed = true
+		w.log.Warn("mitm.capture.raw_response_write_failed", "raw_path", w.path, "err", err)
+		return len(chunk), nil
+	}
+	return len(chunk), nil
+}
+
+func (w *failOpenRawCaptureWriter) Close() {
+	if err := w.file.Close(); err != nil {
+		w.failed = true
+		w.log.Warn("mitm.capture.raw_response_close_failed", "raw_path", w.path, "err", err)
+	}
+}
+
+func (w *failOpenRawCaptureWriter) Count() int64 {
+	return w.count
+}
+
+func (w *failOpenRawCaptureWriter) Reference() rawBodyReference {
+	ref := rawBodyReference{
+		Mode:         "raw_file",
+		RawPath:      w.path,
+		Bytes:        w.count,
+		SHA256:       hex.EncodeToString(w.hash.Sum(nil)),
+		BodyType:     "",
+		Keys:         nil,
+		CaptureError: "",
+	}
+	if w.failed {
+		ref.CaptureError = "raw response sidecar write failed"
+	}
+	return ref
 }
 
 func summarizeBody(mode string, body []byte) any {

@@ -5,7 +5,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"syscall"
 
 	"goodkind.io/gklog"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -33,10 +35,15 @@ type captureWriterKey struct {
 
 var captureWriterCache = struct {
 	mu      sync.Mutex
-	writers map[captureWriterKey]*lumberjack.Logger
+	writers map[captureWriterKey]*captureWriterOwner
 }{
 	mu:      sync.Mutex{},
-	writers: make(map[captureWriterKey]*lumberjack.Logger),
+	writers: make(map[captureWriterKey]*captureWriterOwner),
+}
+
+type captureWriterOwner struct {
+	writer *lumberjack.Logger
+	lock   *os.File
 }
 
 func captureFilePolicyFromConfig(cfg config.MITMConfig) CaptureFilePolicy {
@@ -78,13 +85,23 @@ func WriteCaptureLine(dir string, line []byte, policy CaptureFilePolicy) error {
 	}
 	path := filepath.Join(dir, captureIndexFilename)
 	if policy.RotationEnabled {
-		writer := captureRotatedWriter(path, policy.Rotation)
-		if _, err := writer.Write(append(line, '\n')); err != nil {
+		owner, err := captureRotatedWriter(path, policy.Rotation)
+		if err != nil {
+			slog.Warn("mitm.capture.lock_failed", "capture_path", path, "err", err)
+			return fmt.Errorf("lock rotated capture index: %w", err)
+		}
+		if _, err := owner.writer.Write(append(line, '\n')); err != nil {
 			slog.Warn("mitm.capture.rotated_write_failed", "capture_path", path, "err", err)
 			return fmt.Errorf("write rotated capture event: %w", err)
 		}
 		return nil
 	}
+	lock, err := lockCaptureIndex(path)
+	if err != nil {
+		slog.Warn("mitm.capture.lock_failed", "capture_path", path, "err", err)
+		return fmt.Errorf("lock capture index: %w", err)
+	}
+	defer unlockCaptureIndex(lock)
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		slog.Warn("mitm.capture.open_failed", "capture_path", path, "err", err)
@@ -98,7 +115,47 @@ func WriteCaptureLine(dir string, line []byte, policy CaptureFilePolicy) error {
 	return nil
 }
 
-func captureRotatedWriter(path string, rotation gklog.RotationConfig) *lumberjack.Logger {
+func lockCaptureIndex(path string) (*os.File, error) {
+	lockPath := path + ".lock"
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		slog.Warn("mitm.capture.lock_open_failed", "lock_path", lockPath, "err", err)
+		return nil, fmt.Errorf("open capture index lock: %w", err)
+	}
+	if err := flockCaptureFile(file, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		slog.Warn("mitm.capture.lock_acquire_failed", "lock_path", lockPath, "err", err)
+		return nil, fmt.Errorf("acquire capture index lock: %w", err)
+	}
+	return file, nil
+}
+
+func unlockCaptureIndex(file *os.File) {
+	if file == nil {
+		return
+	}
+	if err := flockCaptureFile(file, syscall.LOCK_UN); err != nil {
+		slog.Warn("mitm.capture.unlock_failed", "path", file.Name(), "err", err)
+	}
+	if err := file.Close(); err != nil {
+		slog.Warn("mitm.capture.lock_close_failed", "path", file.Name(), "err", err)
+	}
+}
+
+func flockCaptureFile(file *os.File, how int) error {
+	fd, err := strconv.Atoi(strconv.FormatUint(uint64(file.Fd()), 10))
+	if err != nil {
+		slog.Warn("mitm.capture.lock_fd_convert_failed", "path", file.Name(), "err", err)
+		return fmt.Errorf("convert capture lock file descriptor: %w", err)
+	}
+	if err := syscall.Flock(fd, how); err != nil {
+		slog.Warn("mitm.capture.flock_failed", "path", file.Name(), "err", err)
+		return fmt.Errorf("flock capture lock file: %w", err)
+	}
+	return nil
+}
+
+func captureRotatedWriter(path string, rotation gklog.RotationConfig) (*captureWriterOwner, error) {
 	compress := false
 	if rotation.Compress != nil {
 		compress = *rotation.Compress
@@ -112,11 +169,16 @@ func captureRotatedWriter(path string, rotation gklog.RotationConfig) *lumberjac
 	}
 	captureWriterCache.mu.Lock()
 	defer captureWriterCache.mu.Unlock()
-	writer, ok := captureWriterCache.writers[key]
+	owner, ok := captureWriterCache.writers[key]
 	if ok {
-		return writer
+		return owner, nil
 	}
-	writer = gklog.NewLumberjackWriterWithConfig(path, rotation)
-	captureWriterCache.writers[key] = writer
-	return writer
+	lock, err := lockCaptureIndex(path)
+	if err != nil {
+		return nil, err
+	}
+	writer := gklog.NewLumberjackWriterWithConfig(path, rotation)
+	owner = &captureWriterOwner{writer: writer, lock: lock}
+	captureWriterCache.writers[key] = owner
+	return owner, nil
 }

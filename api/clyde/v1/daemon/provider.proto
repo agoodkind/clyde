@@ -195,3 +195,16 @@ message PrepareMITMLaunchResponse {
   repeated string args = 5;
   repeated string env = 6;
 }
+
+message EnvironmentVariable {
+  string key = 1;
+  string value = 2;
+}
+
+message ProviderLaunchEnvironmentRequest {
+  string provider = 1;
+}
+
+message ProviderLaunchEnvironmentResponse {
+  repeated EnvironmentVariable environment = 1;
+}

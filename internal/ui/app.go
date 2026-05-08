@@ -1001,6 +1001,8 @@ type runEventProfile struct {
 	eventType          string
 	isSpinnerInterrupt bool
 	isHealthInterrupt  bool
+	isIdleMouseMotion  bool
+	stateChanged       bool
 	handleDuration     time.Duration
 	drawDuration       time.Duration
 }
@@ -1117,7 +1119,15 @@ func (a *App) reinitAfterNilRunEvent(state *runEventLoopState) bool {
 }
 
 func (a *App) prepareRunEventDispatch(ev tcell.Event) runEventProfile {
-	profile := runEventProfile{eventType: fmt.Sprintf("%T", ev)}
+	profile := runEventProfile{
+		eventType:          fmt.Sprintf("%T", ev),
+		isSpinnerInterrupt: false,
+		isHealthInterrupt:  false,
+		isIdleMouseMotion:  false,
+		stateChanged:       false,
+		handleDuration:     0,
+		drawDuration:       0,
+	}
 	if interrupt, ok := ev.(*tcell.EventInterrupt); ok {
 		switch interrupt.Data().(type) {
 		case spinnerTick:
@@ -1126,13 +1136,14 @@ func (a *App) prepareRunEventDispatch(ev tcell.Event) runEventProfile {
 			profile.isHealthInterrupt = true
 		}
 	}
+	profile.isIdleMouseMotion = a.isIdleMouseMotion(ev)
 	a.lastEventType = profile.eventType
 	a.lastEventAt = a.now()
 	if profile.eventType != "*tcell.EventInterrupt" {
 		a.lastNonInterruptType = profile.eventType
 		a.lastNonInterruptAt = a.lastEventAt
 	}
-	if !profile.isSpinnerInterrupt && !profile.isHealthInterrupt {
+	if !profile.isSpinnerInterrupt && !profile.isHealthInterrupt && !profile.isIdleMouseMotion {
 		tuiLog.Logger().Debug("tui.loop dispatching event", "event", profile.eventType)
 	}
 	return profile
@@ -1140,7 +1151,7 @@ func (a *App) prepareRunEventDispatch(ev tcell.Event) runEventProfile {
 
 func (a *App) dispatchRunEvent(ev tcell.Event, profile runEventProfile) runEventProfile {
 	handleStartedAt := a.now()
-	a.handleEvent(ev)
+	profile.stateChanged = a.handleEvent(ev)
 	profile.handleDuration = time.Since(handleStartedAt)
 	profile.drawDuration = a.drawAfterRunEvent(profile)
 	return profile
@@ -1159,6 +1170,9 @@ func (a *App) drawAfterRunEvent(profile runEventProfile) time.Duration {
 
 func (a *App) shouldDrawAfterRunEvent(profile runEventProfile) bool {
 	if !a.running {
+		return false
+	}
+	if !profile.stateChanged {
 		return false
 	}
 	if profile.isSpinnerInterrupt && !a.hasPendingVisualActivity() {
@@ -1188,6 +1202,9 @@ func (a *App) syncAfterResizeDraw() {
 }
 
 func (a *App) logRunEventTiming(profile runEventProfile, pollDuration time.Duration) {
+	if !profile.stateChanged && profile.handleDuration <= 20*time.Millisecond && profile.drawDuration == 0 {
+		return
+	}
 	if profile.eventType == "*tcell.EventInterrupt" && profile.handleDuration <= 20*time.Millisecond && profile.drawDuration <= 35*time.Millisecond {
 		return
 	}
@@ -2537,6 +2554,19 @@ func (a *App) screenSizeSnapshot() (int, int) {
 
 func (a *App) runTerminalCall(call string, fn func()) {
 	startedAt := a.now()
+	if call == "poll_event" {
+		fn()
+		duration := time.Since(startedAt)
+		if duration <= terminalCallWarnThreshold(call) {
+			return
+		}
+		tuiLog.Logger().WarnContext(a.ctx, "tui.terminal_call.done",
+			"component", "tui",
+			"call", call,
+			"started_at", startedAt.Format(time.RFC3339Nano),
+			"duration_ms", duration.Milliseconds())
+		return
+	}
 	width, height := a.screenSizeSnapshot()
 	overlayType := fmt.Sprintf("%T", a.overlay)
 	tuiLog.Logger().Debug("tui.terminal_call.begin",
@@ -2595,19 +2625,22 @@ func (a *App) PreWarmStats() {
 
 // ---------------- Event dispatch ----------------
 
-func (a *App) handleEvent(ev tcell.Event) {
+func (a *App) handleEvent(ev tcell.Event) bool {
 	switch e := ev.(type) {
 	case *tcell.EventResize:
 		a.handleResizeEvent(e)
+		return true
 	case *tcell.EventFocus:
-		a.handleFocusEvent(e)
+		return a.handleFocusEvent(e)
 	case *tcell.EventInterrupt:
-		a.handleInterruptEvent(e)
+		return a.handleInterruptEvent(e)
 	case *tcell.EventKey:
 		a.handleKey(e)
+		return true
 	case *tcell.EventMouse:
-		a.handleMouse(e)
+		return a.handleMouse(e)
 	}
+	return false
 }
 
 func (a *App) handleResizeEvent(e *tcell.EventResize) {
@@ -2633,7 +2666,8 @@ func (a *App) handleResizeEvent(e *tcell.EventResize) {
 	a.ensureReturnPromptForEvent("event.resize")
 }
 
-func (a *App) handleFocusEvent(e *tcell.EventFocus) {
+func (a *App) handleFocusEvent(e *tcell.EventFocus) bool {
+	wasFocused := a.appFocused
 	tuiLog.Logger().Debug("tui.event.focus",
 		"component", "tui",
 		"focused", e.Focused,
@@ -2641,12 +2675,14 @@ func (a *App) handleFocusEvent(e *tcell.EventFocus) {
 		"return_path_state", string(a.returnPathState))
 	a.appFocused = e.Focused
 	if !e.Focused {
-		return
+		return wasFocused != e.Focused
 	}
 	a.runTerminalCall("sync", func() {
 		a.screen.Sync()
 	})
+	overlayBefore := fmt.Sprintf("%T", a.overlay)
 	a.ensureReturnPromptForEvent("event.focus")
+	return wasFocused != e.Focused || overlayBefore != fmt.Sprintf("%T", a.overlay)
 }
 
 func (a *App) ensureReturnPromptForEvent(reason string) {
@@ -2659,67 +2695,100 @@ func (a *App) ensureReturnPromptForEvent(reason string) {
 	}
 }
 
-func (a *App) handleInterruptEvent(e *tcell.EventInterrupt) {
+func (a *App) handleInterruptEvent(e *tcell.EventInterrupt) bool {
 	a.logInterruptEvent(e)
-	// Interrupts are posted from background goroutines. The Data
-	// payload tells us which cache to refresh.
+	if changed, handled := a.handleRefreshInterruptEvent(e); handled {
+		return changed
+	}
 	switch d := e.Data().(type) {
-	case sessionsLoaded:
-		a.handleSessionsLoaded(d)
-	case configControlsLoaded:
-		a.handleConfigControlsLoaded(d)
-	case detailsLoaded:
-		a.handleDetailsLoaded(d)
-	case exportStatsLoaded:
-		a.handleExportStatsLoaded(d)
-	case spinnerTick:
-		a.handleSpinnerTick()
-	case healthTick:
-		a.lastHeartbeatAt = a.now()
-		a.logHealthTick()
-	case modelsPrewarmed:
-		maps.Copy(a.modelCache, d.models)
-		a.populateTable()
-	case summaryRefreshed:
-		// Table was already repopulated by maybeRefreshSummary. The
-		// interrupt exists to trigger a draw cycle from the event loop.
-		_ = d
-	case idleSummarySweepTick:
-		a.handleIdleSummarySweepTick()
 	case summaryRefreshDone:
 		a.handleSummaryRefreshDone(d)
+		return true
 	case registryEvent:
 		a.applySessionEvent(d.event)
+		return true
 	case providerStatsEvent:
 		a.applyProviderStats(d.stats)
+		return true
 	case selfReloadAvailable:
 		a.requestSelfReload(d.path, d.reason, "local_watcher", "")
+		return true
 	case compactStreamEvent:
 		a.handleCompactStreamEvent(d)
+		return true
 	case compactStreamOpened:
 		a.handleCompactStreamOpened(d)
+		return true
 	case compactStreamDone:
 		a.handleCompactStreamDone(d)
+		return true
 	case compactUndoDone:
 		a.handleCompactUndoDone(d)
+		return true
 	case sidecarTailOpened:
 		a.handleSidecarTailOpened(d)
+		return true
 	case sidecarSendDone:
 		a.handleSidecarSendDone(d)
+		return true
 	case sidecarLaunchDone:
 		a.handleSidecarLaunchDone(d)
+		return true
 	case sidecarStatusUpdate:
 		a.handleSidecarStatusUpdate(d)
+		return true
 	case viewContentLoaded:
 		a.handleViewContentLoaded(d)
+		return true
 	case exportFinished:
 		a.handleExportFinished(d)
+		return true
 	default:
 		// Several call sites post the *App itself as the payload to
 		// request a generic table repaint (see PostEvent calls in
 		// runDiscoveryScanner, the bridge watcher, and the input
 		// handlers). Treat anything we don't recognise as that.
 		a.populateTable()
+		return true
+	}
+}
+
+func (a *App) handleRefreshInterruptEvent(e *tcell.EventInterrupt) (bool, bool) {
+	// Interrupts are posted from background goroutines. The Data
+	// payload tells us which cache to refresh.
+	switch d := e.Data().(type) {
+	case sessionsLoaded:
+		a.handleSessionsLoaded(d)
+		return true, true
+	case configControlsLoaded:
+		a.handleConfigControlsLoaded(d)
+		return true, true
+	case detailsLoaded:
+		a.handleDetailsLoaded(d)
+		return true, true
+	case exportStatsLoaded:
+		a.handleExportStatsLoaded(d)
+		return true, true
+	case spinnerTick:
+		a.handleSpinnerTick()
+		return true, true
+	case healthTick:
+		a.lastHeartbeatAt = a.now()
+		a.logHealthTick()
+		return false, true
+	case modelsPrewarmed:
+		maps.Copy(a.modelCache, d.models)
+		a.populateTable()
+		return true, true
+	case summaryRefreshed:
+		// Table was already repopulated by maybeRefreshSummary. The
+		// interrupt exists to trigger a draw cycle from the event loop.
+		_ = d
+		return true, true
+	case idleSummarySweepTick:
+		return a.handleIdleSummarySweepTick(), true
+	default:
+		return false, false
 	}
 }
 
@@ -2801,11 +2870,13 @@ func (a *App) handleSpinnerTick() {
 	}
 }
 
-func (a *App) handleIdleSummarySweepTick() {
+func (a *App) handleIdleSummarySweepTick() bool {
 	sess := a.pickStaleForSweep()
 	if sess != nil {
 		a.maybeRefreshSummary(sess)
+		return true
 	}
+	return false
 }
 
 func (a *App) handleSummaryRefreshDone(d summaryRefreshDone) {
@@ -3339,7 +3410,10 @@ func (a *App) handleRefreshRuneKey() bool {
 
 // handleMouse dispatches mouse events via direct rect hit tests.
 // Overlays take priority. No InRect chain.
-func (a *App) handleMouse(e *tcell.EventMouse) {
+func (a *App) handleMouse(e *tcell.EventMouse) bool {
+	if a.isIdleMouseMotion(e) {
+		return false
+	}
 	// Only count buttoned events as interaction. Bare motion (no button)
 	// should not block the watcher because macOS delivers a lot of idle
 	// mouse-move events over the terminal window.
@@ -3350,29 +3424,35 @@ func (a *App) handleMouse(e *tcell.EventMouse) {
 	btns := e.Buttons()
 	a.logMouseEvent(x, y, btns)
 	if a.handleOverlayMouse(e) {
-		return
+		return true
 	}
 	if a.handleStatusMouse(x, y, btns) {
-		return
+		return true
 	}
 	// Tab strip click takes priority over the rest of the body.
 	if a.tabs != nil && a.tabs.HandleEvent(e) {
 		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "tabs")
-		return
+		return true
 	}
 	if btns == 0 {
 		a.grab = grabNone
+		return true
 	}
 	if a.handleActiveGrabMouse(y, btns) {
-		return
+		return true
 	}
 	if a.handleTableScrollbarMouse(x, y, btns) {
-		return
+		return true
 	}
 	if a.handleDetailsMouse(x, y, btns) {
-		return
+		return true
 	}
-	a.handleTableMouse(e, x, y, btns)
+	return a.handleTableMouse(e, x, y, btns)
+}
+
+func (a *App) isIdleMouseMotion(ev tcell.Event) bool {
+	e, ok := ev.(*tcell.EventMouse)
+	return ok && e.Buttons() == 0 && a.grab == grabNone
 }
 
 func (a *App) logMouseEvent(x int, y int, btns tcell.ButtonMask) {
@@ -3499,17 +3579,19 @@ func (a *App) handleDetailsPaneMouse(rect Rect, box *TextBox, focus DetailsFocus
 	return false
 }
 
-func (a *App) handleTableMouse(e *tcell.EventMouse, x int, y int, btns tcell.ButtonMask) {
+func (a *App) handleTableMouse(e *tcell.EventMouse, x int, y int, btns tcell.ButtonMask) bool {
 	if !a.tableRect.Contains(x, y) {
-		return
+		return false
 	}
 	tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "table")
 	if a.handleTableWheelMouse(btns) {
-		return
+		return true
 	}
 	if btns&tcell.Button1 != 0 {
 		a.handleTableClickMouse(e, x, y)
+		return true
 	}
+	return false
 }
 
 func (a *App) handleTableWheelMouse(btns tcell.ButtonMask) bool {

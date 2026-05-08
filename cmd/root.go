@@ -29,7 +29,6 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
-	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/ui"
@@ -960,17 +959,25 @@ func applyClaudeMITMEnv(ctx context.Context, env []string) []string {
 	if err != nil {
 		return env
 	}
-	extra, err := mitm.ClaudeEnv(ctx, cfg.MITM, slog.Default())
+	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
+		return env
+	}
+	extra, err := claudeLaunchEnvironmentViaDaemon(ctx, "claude")
 	if err != nil {
 		cmdDispatchLog.Logger().WarnContext(ctx, "forward.mitm.claude_env_failed", "component", "cli", "err", err)
 		return env
 	}
 	out := append([]string(nil), env...)
-	for key, value := range extra {
-		out = withEnvValue(out, key, value)
+	for _, item := range extra {
+		if item.GetKey() == "" {
+			continue
+		}
+		out = withEnvValue(out, item.GetKey(), item.GetValue())
 	}
 	return out
 }
+
+var claudeLaunchEnvironmentViaDaemon = daemon.ProviderLaunchEnvironmentViaDaemon
 
 // claudePassthroughFirstArgSkipsPostSessionTUI lists argv[0] values that
 // usually run a one-shot or long-lived non-dashboard claude subcommand (see

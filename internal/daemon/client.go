@@ -1050,6 +1050,35 @@ func PrepareMITMLaunchViaDaemon(ctx context.Context, req *clydev1.PrepareMITMLau
 	return resp, nil
 }
 
+// ProviderLaunchEnvironmentViaDaemon asks the daemon for provider launch
+// environment while keeping provider-owned setup in the daemon process.
+func ProviderLaunchEnvironmentViaDaemon(ctx context.Context, provider string) ([]*clydev1.EnvironmentVariable, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.provider_launch_environment.begin",
+		"provider", provider,
+	)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.provider_launch_environment.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rpc.ProviderLaunchEnvironment(rpcCtx, &clydev1.ProviderLaunchEnvironmentRequest{
+		Provider: provider,
+	})
+	if err != nil {
+		log.WarnContext(rpcCtx, "daemon.client.provider_launch_environment.rpc_failed", "err", err)
+		return nil, fmt.Errorf("provider launch environment rpc: %w", err)
+	}
+	log.DebugContext(rpcCtx, "daemon.client.provider_launch_environment.ok",
+		"provider", provider,
+		"env_count", len(resp.GetEnvironment()),
+	)
+	return resp.GetEnvironment(), nil
+}
+
 type CompactRunOptions struct {
 	SessionName    string
 	TargetTokens   int

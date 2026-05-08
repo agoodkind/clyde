@@ -1132,27 +1132,7 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 		return nil, nil, nil
 	}
 
-	// When [mitm].enabled_default is set and the provider list
-	// includes "claude", route the adapter's outbound /v1/messages
-	// through the local MITM proxy. This lets us capture our own
-	// outbound and diff against the claude-cli reference snapshot
-	// (CLYDE-124 live verification).
-	mitmOverride := ""
-	if cfg.MITM.EnabledFor("claude") {
-		proxy, err := mitm.EnsureStarted(cfg.MITM, log.With("subcomponent", "mitm"))
-		if err != nil {
-			log.Warn("adapter.mitm.start_failed",
-				"component", "adapter",
-				"err", err,
-			)
-		} else {
-			mitmOverride = proxy.ClaudeBaseURL()
-			log.Info("adapter.mitm.routing_enabled",
-				"component", "adapter",
-				"proxy_base", mitmOverride,
-			)
-		}
-	}
+	mitmOverride := adapterMITMOverride(*cfg, log)
 
 	ctrl := &adapterController{
 		log:            log,
@@ -1182,6 +1162,33 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener) (*adapt
 		ctrl.stop()
 	}, nil
 }
+
+func adapterMITMOverride(cfg config.Config, log *slog.Logger) string {
+	// When [mitm].enabled_default is set and the provider list
+	// includes "claude", route the adapter's outbound /v1/messages
+	// through the local MITM proxy. This lets us capture our own
+	// outbound and diff against the claude-cli reference snapshot
+	// (CLYDE-124 live verification).
+	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
+		return ""
+	}
+	proxy, err := ensureAdapterMITMStarted(cfg.MITM, log.With("subcomponent", "mitm"))
+	if err != nil {
+		log.Warn("adapter.mitm.start_failed",
+			"component", "adapter",
+			"err", err,
+		)
+		return ""
+	}
+	mitmOverride := proxy.ClaudeBaseURL()
+	log.Info("adapter.mitm.routing_enabled",
+		"component", "adapter",
+		"proxy_base", mitmOverride,
+	)
+	return mitmOverride
+}
+
+var ensureAdapterMITMStarted = mitm.EnsureStarted
 
 func launchConfigFromGlobal(cfg *config.Config) adapterLaunchConfig {
 	if cfg == nil {
