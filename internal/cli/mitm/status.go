@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 const statusListenerDialTimeout = 200 * time.Millisecond
 
-// statusDialer matches net.DialTimeout. Tests inject a fake to keep the probe
+// statusDialer matches [net.DialTimeout]. Tests inject a fake to keep the probe
 // hermetic and to simulate a closed listener without leaking sockets.
 type statusDialer func(network, address string, timeout time.Duration) (net.Conn, error)
 
@@ -31,6 +32,7 @@ func newStatusCmdWithDialer(f *cli.Factory, dial statusDialer, loadConfig func()
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
+				slog.WarnContext(cmd.Context(), "cli.mitm.status.load_config_failed", "err", err)
 				return fmt.Errorf("load config: %w", err)
 			}
 			address := mitmListenAddress(cfg.MITM.Listen)
