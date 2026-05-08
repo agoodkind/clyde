@@ -79,6 +79,9 @@ message SessionSummary {
   string context_usage_status = 28;
   string provider = 29;
   ProviderRuntimeBoundary runtime = 30;
+  string auto_name_state      = 31;
+  string auto_name_source     = 32;
+  int64  last_auto_name_nanos = 33;
 }
 
 message ListSessionsResponse {

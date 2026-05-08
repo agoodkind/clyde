@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
@@ -240,5 +241,56 @@ func TestSessionDetailFromProtoCarriesProbingStatus(t *testing.T) {
 	}
 	if got.ContextUsage != (ui.SessionContextUsage{}) {
 		t.Fatalf("ContextUsage=%+v want zero value", got.ContextUsage)
+	}
+}
+
+// TestSessionSummaryFromProto_AutoNameFields round-trips a proto
+// SessionSummary with the auto-rename fields through the mapper and
+// asserts that the resulting Session metadata carries matching values.
+// This guards the wire-to-domain hand-off the TUI consumes.
+func TestSessionSummaryFromProto_AutoNameFields(t *testing.T) {
+	lastAutoName := time.Unix(1700001234, 0).UTC()
+	raw := &clydev1.SessionSummary{
+		Name:              "chat-auto-name",
+		MetadataName:      "chat-auto-name",
+		SessionId:         "uuid-auto-name",
+		AutoNameState:     string(session.AutoNameStateApplied),
+		AutoNameSource:    string(session.AutoNameSourceLLM),
+		LastAutoNameNanos: lastAutoName.UnixNano(),
+	}
+
+	sess, _, _, _, _ := sessionSummaryFromProto(raw)
+
+	if sess.Metadata.AutoNameState != session.AutoNameStateApplied {
+		t.Fatalf("AutoNameState=%q want %q", sess.Metadata.AutoNameState, session.AutoNameStateApplied)
+	}
+	if sess.Metadata.AutoNameSource != session.AutoNameSourceLLM {
+		t.Fatalf("AutoNameSource=%q want %q", sess.Metadata.AutoNameSource, session.AutoNameSourceLLM)
+	}
+	if !sess.Metadata.LastAutoNameAt.Equal(lastAutoName) {
+		t.Fatalf("LastAutoNameAt=%s want %s", sess.Metadata.LastAutoNameAt, lastAutoName)
+	}
+}
+
+// TestSessionSummaryFromProto_AutoNameZeroFields asserts that a proto
+// SessionSummary with no auto-rename fields decodes into the
+// untouched/unspecified zero values rather than spurious data.
+func TestSessionSummaryFromProto_AutoNameZeroFields(t *testing.T) {
+	raw := &clydev1.SessionSummary{
+		Name:         "chat-no-auto-name",
+		MetadataName: "chat-no-auto-name",
+		SessionId:    "uuid-no-auto-name",
+	}
+
+	sess, _, _, _, _ := sessionSummaryFromProto(raw)
+
+	if sess.Metadata.AutoNameState != session.AutoNameStateUntouched {
+		t.Fatalf("AutoNameState=%q want untouched", sess.Metadata.AutoNameState)
+	}
+	if sess.Metadata.AutoNameSource != session.AutoNameSourceUnspecified {
+		t.Fatalf("AutoNameSource=%q want unspecified", sess.Metadata.AutoNameSource)
+	}
+	if !sess.Metadata.LastAutoNameAt.IsZero() {
+		t.Fatalf("LastAutoNameAt=%s want zero", sess.Metadata.LastAutoNameAt)
 	}
 }

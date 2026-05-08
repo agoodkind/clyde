@@ -1626,6 +1626,10 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	}
 	runtime := s.providerRuntimeBoundary(sess, settings, bridge)
 	contextState := s.contextStateForSession(ctx, sess)
+	var lastAutoNameNanos int64
+	if !sess.Metadata.LastAutoNameAt.IsZero() {
+		lastAutoNameNanos = sess.Metadata.LastAutoNameAt.UnixNano()
+	}
 	return &clydev1.SessionSummary{
 		Name:                  sess.Name,
 		MetadataName:          sess.Metadata.Name,
@@ -1657,6 +1661,9 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 		ContextUsageStatus:    contextState.Status,
 		Provider:              string(sess.ProviderID()),
 		Runtime:               protoRuntimeBoundary(runtime),
+		AutoNameState:         string(sess.Metadata.AutoNameState),
+		AutoNameSource:        string(sess.Metadata.AutoNameSource),
+		LastAutoNameNanos:     lastAutoNameNanos,
 	}
 }
 

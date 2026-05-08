@@ -635,6 +635,9 @@ type SessionSummary struct {
 	ContextUsageStatus    string                   `protobuf:"bytes,28,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
 	Provider              string                   `protobuf:"bytes,29,opt,name=provider,proto3" json:"provider,omitempty"`
 	Runtime               *ProviderRuntimeBoundary `protobuf:"bytes,30,opt,name=runtime,proto3" json:"runtime,omitempty"`
+	AutoNameState         string                   `protobuf:"bytes,31,opt,name=auto_name_state,json=autoNameState,proto3" json:"auto_name_state,omitempty"`
+	AutoNameSource        string                   `protobuf:"bytes,32,opt,name=auto_name_source,json=autoNameSource,proto3" json:"auto_name_source,omitempty"`
+	LastAutoNameNanos     int64                    `protobuf:"varint,33,opt,name=last_auto_name_nanos,json=lastAutoNameNanos,proto3" json:"last_auto_name_nanos,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -877,6 +880,27 @@ func (x *SessionSummary) GetRuntime() *ProviderRuntimeBoundary {
 		return x.Runtime
 	}
 	return nil
+}
+
+func (x *SessionSummary) GetAutoNameState() string {
+	if x != nil {
+		return x.AutoNameState
+	}
+	return ""
+}
+
+func (x *SessionSummary) GetAutoNameSource() string {
+	if x != nil {
+		return x.AutoNameSource
+	}
+	return ""
+}
+
+func (x *SessionSummary) GetLastAutoNameNanos() int64 {
+	if x != nil {
+		return x.LastAutoNameNanos
+	}
+	return 0
 }
 
 type ListSessionsResponse struct {
@@ -1897,7 +1921,8 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
 	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x15\n" +
-	"\x13ListSessionsRequest\"\xee\t\n" +
+	"\x13ListSessionsRequest\"\xf1\n" +
+	"\n" +
 	"\x0eSessionSummary\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rmetadata_name\x18\x02 \x01(\tR\fmetadataName\x12\x1d\n" +
@@ -1930,7 +1955,10 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\x14context_usage_loaded\x18\x1b \x01(\bR\x12contextUsageLoaded\x120\n" +
 	"\x14context_usage_status\x18\x1c \x01(\tR\x12contextUsageStatus\x12\x1a\n" +
 	"\bprovider\x18\x1d \x01(\tR\bprovider\x12;\n" +
-	"\aruntime\x18\x1e \x01(\v2!.clyde.v1.ProviderRuntimeBoundaryR\aruntime\"\x80\x01\n" +
+	"\aruntime\x18\x1e \x01(\v2!.clyde.v1.ProviderRuntimeBoundaryR\aruntime\x12&\n" +
+	"\x0fauto_name_state\x18\x1f \x01(\tR\rautoNameState\x12(\n" +
+	"\x10auto_name_source\x18  \x01(\tR\x0eautoNameSource\x12/\n" +
+	"\x14last_auto_name_nanos\x18! \x01(\x03R\x11lastAutoNameNanos\"\x80\x01\n" +
 	"\x14ListSessionsResponse\x124\n" +
 	"\bsessions\x18\x01 \x03(\v2\x18.clyde.v1.SessionSummaryR\bsessions\x122\n" +
 	"\x15global_remote_control\x18\x02 \x01(\bR\x13globalRemoteControl\"`\n" +
