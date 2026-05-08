@@ -790,7 +790,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 			},
 		},
 	}
-	bodyEntries := a.sessionOptionsEntriesWithoutResume(sess, close)
+	bodyEntries := a.sessionOptionsEntries(sess, close, true)
 	statsSegments, statsLoading := a.buildSessionStatsSegments(sess)
 	modal := NewOptionsModal("Session exited: "+sess.Name, bodyEntries)
 	modal.TopEntries = topEntries
@@ -5989,7 +5989,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 		return
 	}
 	close := func() { a.closeOverlay() }
-	modal := NewOptionsModal(sess.Name, a.sessionOptionsEntries(sess, close))
+	modal := NewOptionsModal(sess.Name, a.sessionOptionsEntries(sess, close, false))
 	modal.OnCancel = close
 	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
 	modal.StatsSessionName = sess.Name
@@ -6041,22 +6041,18 @@ func (a *App) applyExportStatsResult(name string, stats SessionExportStats, err 
 	}
 }
 
-// sessionOptionsEntriesWithoutResume returns the standard session
-// action rows minus the leading "Resume" entry. The return prompt uses
-// this so the prompt's top-level "Return back to chat" row stays the
-// only resume affordance and Resume does not appear twice.
-func (a *App) sessionOptionsEntriesWithoutResume(sess *session.Session, close func()) []OptionsModalEntry {
-	entries := a.sessionOptionsEntries(sess, close)
-	if len(entries) > 0 && entries[0].Label == "Resume" {
-		entries = entries[1:]
-	}
-	return entries
-}
-
-func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []OptionsModalEntry {
+// sessionOptionsEntries returns the standard session action rows. When
+// omitResume is true the leading "Resume" entry is not constructed; the
+// return prompt uses that mode so its top-level "Return back to chat"
+// row stays the only resume affordance and Resume does not appear
+// twice. Building the slice without Resume directly avoids fragile
+// post-construction stripping that broke if the Resume label ever
+// changed.
+func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitResume bool) []OptionsModalEntry {
 	caps := sessionCapabilities(sess)
-	entries := []OptionsModalEntry{
-		{
+	entries := []OptionsModalEntry{}
+	if !omitResume {
+		entries = append(entries, OptionsModalEntry{
 			Label: "Resume",
 			Hint:  "load this session",
 			Action: func() {
@@ -6068,7 +6064,9 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 				// drifted from the others when bugs were fixed in resumeRow.
 				a.resumeSession(sess)
 			},
-		},
+		})
+	}
+	entries = append(entries, []OptionsModalEntry{
 		{
 			Label: "View transcript",
 			Hint:  "v",
@@ -6157,7 +6155,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 			},
 			Disabled: a.cb.DeleteSession == nil,
 		},
-	}
+	}...)
 	return entries
 }
 
