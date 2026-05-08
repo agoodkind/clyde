@@ -129,6 +129,24 @@ func TestDaemonReloadRoutesNormally(t *testing.T) {
 	}
 }
 
+func TestDaemonReloadReportsUnconfirmedTimeout(t *testing.T) {
+	command, _ := newTestDaemonCommand(t)
+	reloadDaemon = func(_ context.Context) (*clydev1.ReloadDaemonResponse, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	err := executeDaemonCommand(command, "reload")
+	if err == nil {
+		t.Fatal("daemon reload returned nil, want timeout error")
+	}
+	if !strings.Contains(err.Error(), "no reload confirmation was received") {
+		t.Fatalf("reload timeout error = %q, want confirmation guidance", err.Error())
+	}
+	if !strings.Contains(err.Error(), "clyde daemon status") {
+		t.Fatalf("reload timeout error = %q, want daemon status guidance", err.Error())
+	}
+}
+
 func newTestDaemonCommand(t *testing.T) (*cobra.Command, *bytes.Buffer) {
 	t.Helper()
 	restoreDaemonCommandFunctions(t)

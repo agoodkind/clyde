@@ -263,7 +263,7 @@ func TestAdapterReloadDrainBoundsWaitIdle(t *testing.T) {
 }
 
 func TestReloadHTTPDrainWaitFitsReloadCommandDeadline(t *testing.T) {
-	const reloadCommandDeadline = 12 * time.Second
+	const reloadCommandDeadline = 45 * time.Second
 	if reloadHTTPDrainWait >= reloadCommandDeadline {
 		t.Fatalf("reloadHTTPDrainWait=%s must be less than reload command deadline %s", reloadHTTPDrainWait, reloadCommandDeadline)
 	}

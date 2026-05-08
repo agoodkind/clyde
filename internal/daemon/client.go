@@ -267,7 +267,7 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	}
 	defer unlock()
 
-	retryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	retryCtx, cancel := context.WithTimeout(ctx, reloadClientOverallTimeout)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
 		c, err := ConnectOrStart(retryCtx)
@@ -278,7 +278,7 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			)
 			return nil, err
 		}
-		rpcCtx, rpcCancel := context.WithTimeout(retryCtx, 10*time.Second)
+		rpcCtx, rpcCancel := context.WithTimeout(retryCtx, reloadClientRPCTimeout)
 		resp, err := c.rpc.ReloadDaemon(rpcCtx, &clydev1.ReloadDaemonRequest{})
 		rpcCancel()
 		_ = c.conn.Close()
@@ -305,7 +305,7 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 		select {
 		case <-retryCtx.Done():
 			return nil, retryCtx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(reloadClientRetryDelay):
 		}
 	}
 }
@@ -1311,6 +1311,12 @@ func (osDaemonCommandRunner) CombinedOutput(name string, args ...string) ([]byte
 var (
 	clientCommandRunner          daemonCommandRunner = osDaemonCommandRunner{}
 	spawnDaemonDirectForPlatform                     = spawnDaemonDirect
+)
+
+var (
+	reloadClientOverallTimeout = 30 * time.Second
+	reloadClientRPCTimeout     = 10 * time.Second
+	reloadClientRetryDelay     = 100 * time.Millisecond
 )
 
 // RestartManagedDaemon rewrites the local LaunchAgent target when needed and
