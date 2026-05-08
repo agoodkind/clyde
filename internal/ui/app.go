@@ -4215,7 +4215,7 @@ func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 	msgs := "-"
 	msgStyle := StyleDefault.Foreground(ColorMuted).Dim(true)
 	if msgCount > 0 {
-		msgs = formatWithCommas(msgCount)
+		msgs = formatTokensExact(msgCount)
 		msgStyle = subStyle
 	}
 	// If this session was just touched, paint the LAST ACTIVE cell in

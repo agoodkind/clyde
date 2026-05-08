@@ -210,7 +210,7 @@ func TestDetailsView_SetResetsScrollOffsetsForDifferentSession(t *testing.T) {
 	}
 }
 
-func TestFormatCompactTokens(t *testing.T) {
+func TestFormatTokensCompact(t *testing.T) {
 	cases := map[int]string{
 		44:      "44",
 		1000:    "1k",
@@ -221,8 +221,8 @@ func TestFormatCompactTokens(t *testing.T) {
 		1250000: "1.2M",
 	}
 	for in, want := range cases {
-		if got := formatCompactTokens(in); got != want {
-			t.Fatalf("formatCompactTokens(%d) = %q, want %q", in, got, want)
+		if got := formatTokensCompact(in); got != want {
+			t.Fatalf("formatTokensCompact(%d) = %q, want %q", in, got, want)
 		}
 	}
 }
