@@ -1015,6 +1015,41 @@ func LaunchMITMUpstreamViaDaemon(ctx context.Context, req *clydev1.LaunchMITMUps
 	return resp, nil
 }
 
+// PrepareMITMLaunchViaDaemon asks the daemon to prepare an upstream client
+// launch through Clyde's daemon-owned MITM proxy without starting it.
+func PrepareMITMLaunchViaDaemon(ctx context.Context, req *clydev1.PrepareMITMLaunchRequest) (*clydev1.PrepareMITMLaunchResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.prepare_mitm_launch.begin",
+		"upstream", req.GetUpstream(),
+		"profile_mode", req.GetProfileMode(),
+		"capture_dir", req.GetCaptureDir(),
+		"force", req.GetForce(),
+		"arg_count", len(req.GetArgs()),
+	)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.prepare_mitm_launch.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := c.rpc.PrepareMITMLaunch(rpcCtx, req)
+	if err != nil {
+		log.WarnContext(rpcCtx, "daemon.client.prepare_mitm_launch.rpc_failed", "err", err)
+		return nil, fmt.Errorf("prepare MITM launch rpc: %w", err)
+	}
+	log.DebugContext(rpcCtx, "daemon.client.prepare_mitm_launch.ok",
+		"upstream", resp.GetUpstream(),
+		"profile_mode", resp.GetProfileMode(),
+		"capture_dir", resp.GetCaptureDir(),
+		"binary", resp.GetBinary(),
+		"arg_count", len(resp.GetArgs()),
+		"env_count", len(resp.GetEnv()),
+	)
+	return resp, nil
+}
+
 type CompactRunOptions struct {
 	SessionName    string
 	TargetTokens   int
