@@ -183,7 +183,7 @@ func (s *Server) executeAnthropicPreparedCollect(
 				Message: "anthropic native collect path requires a native response writer",
 			}
 		}
-		return s.executeAnthropicPreparedCollectNative(ctx, prepared, nativeWriter)
+		return adapterprovider.Result{}, s.executeAnthropicPreparedCollectNative(ctx, prepared, nativeWriter)
 	}
 	collector, ok := writer.(*providerCollectorWriter)
 	if !ok || collector == nil {
@@ -193,12 +193,25 @@ func (s *Server) executeAnthropicPreparedCollect(
 			Message: "anthropic collect provider requires a collector event writer",
 		}
 	}
+	// Register this outbound Anthropic call in the egress registry so
+	// the daemon reload deadline can force-close a wedged HTTP
+	// connection. The context cancel from registerEgress propagates
+	// through http.Do so the body read unblocks when force-close fires.
+	egressCtx, _, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindHTTP, EgressMeta{
+		Provider:          "anthropic",
+		UpstreamURL:       s.anthr.MessagesURL(),
+		UpstreamRequestID: "",
+		AttemptNo:         0,
+		ParentRequestID:   prepared.RequestID,
+	})
+	defer releaseEgress("anthropic.collect.done")
+
 	runtime := &collectResponseDispatcher{server: s}
 	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
 	started := adapterClock.Now()
 	result, err := anthropicbackend.RunCollectExecution(
 		runtime,
-		ctx,
+		egressCtx,
 		reqWithWindows,
 		prepared.Model,
 		prepared.RequestID,
@@ -245,12 +258,24 @@ func (s *Server) executeAnthropicPreparedStream(
 		}
 		return s.executeAnthropicPreparedStreamNative(ctx, prepared, nativeWriter)
 	}
+	// Register this outbound Anthropic SSE call in the egress registry.
+	// The context cancel propagates through the SSE scan goroutine so
+	// force-close under the reload deadline unblocks a wedged reader.
+	egressCtx, _, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindHTTP, EgressMeta{
+		Provider:          "anthropic",
+		UpstreamURL:       s.anthr.MessagesURL(),
+		UpstreamRequestID: "",
+		AttemptNo:         0,
+		ParentRequestID:   prepared.RequestID,
+	})
+	defer releaseEgress("anthropic.stream.done")
+
 	runtime := &streamResponseDispatcher{server: s}
 	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
 	started := adapterClock.Now()
 	result, err := anthropicbackend.RunStreamExecution(
 		runtime,
-		ctx,
+		egressCtx,
 		reqWithWindows,
 		prepared.Model,
 		prepared.RequestID,
@@ -277,20 +302,17 @@ func (s *Server) executeAnthropicPreparedCollectNative(
 	ctx context.Context,
 	prepared anthropic.PreparedRequest,
 	writer *nativeAnthropicJSONWriter,
-) (adapterprovider.Result, error) {
+) error {
 	resp, err := s.anthr.Do(ctx, prepared.Request)
 	if err != nil {
-		return adapterprovider.Result{}, err
+		return err
 	}
 	body, readErr := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if readErr != nil {
-		return adapterprovider.Result{}, readErr
+		return readErr
 	}
-	if err := writer.capture(http.StatusOK, resp.Header.Clone(), body); err != nil {
-		return adapterprovider.Result{}, err
-	}
-	return adapterprovider.Result{}, nil
+	return writer.capture(http.StatusOK, resp.Header.Clone(), body)
 }
 
 func (s *Server) executeAnthropicPreparedStreamNative(

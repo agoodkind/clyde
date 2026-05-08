@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -34,6 +35,10 @@ type handlerCtx struct {
 // The wrapper owns:
 //   - request id assignment and correlation context propagation,
 //   - structured request-debug logging when body logging is enabled,
+//   - livetrack ingress session registration so reload drain sees the
+//     in-flight request; the session is released on handler return,
+//   - 503 rejection when the ingress registry is draining (reload in
+//     progress) so new requests are redirected to the replacement daemon,
 //   - panic recovery (subsumes the legacy withAdapterErrorBoundary),
 //   - body-not-written backstop: if fn returns nil but never wrote bytes,
 //     a synthesized 502 catch-all envelope is emitted so a future code path
@@ -58,6 +63,15 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 			s.logHTTPRequestDebug(ctx, r)
 		}
 
+		ingressSess, draining := s.acquireIngressSession(r, family, reqID)
+		if draining {
+			drainingErr := newAdapterError(adapterErrorUpstreamUnavailable, "service draining: reload in progress")
+			drainingErr.HTTPStatus = http.StatusServiceUnavailable
+			s.respondAdapterError(w, r, drainingErr)
+			return
+		}
+		defer s.releaseIngressSession(ctx, ingressSess)
+
 		rw := &adapterRecoveryWriter{ResponseWriter: w, wroteHeader: false}
 		hctx := &handlerCtx{
 			Writer:      rw,
@@ -66,67 +80,113 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 			RequestID:   reqID,
 			Correlation: corr,
 		}
+		s.dispatchHandler(ctx, w, r, rw, hctx, corr, family, fn)
+	}
+}
 
-		defer func() {
-			recovered := recover()
-			if recovered == nil {
-				return
-			}
-			attrs := []slog.Attr{
-				slog.Any("err", recovered),
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.String("route_family", string(family)),
-				slog.String("remote_addr", r.RemoteAddr),
-				slog.String("user_agent", r.UserAgent()),
-				slog.String("stack", string(debug.Stack())),
-				slog.Bool("response_started", rw.wroteHeader),
-			}
-			attrs = append(attrs, corr.Attrs()...)
-			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.panic", attrs...)
-			if rw.wroteHeader {
-				return
-			}
-			s.respondAdapterError(w, r, adapterErrInternal("adapter panic while handling request", fmt.Errorf("panic: %v", recovered)))
-		}()
+// acquireIngressSession builds IngressMeta from the request and registers
+// a new session in the ingress registry. Returns (sess, false) on success,
+// (nil, true) when the registry is draining and the caller should 503.
+func (s *Server) acquireIngressSession(r *http.Request, family adapterRouteFamily, reqID string) (*livetrack.Session[IngressMeta], bool) {
+	if s.requests == nil {
+		return nil, false
+	}
+	meta := IngressMeta{
+		RouteFamily:     string(family),
+		RequestID:       reqID,
+		CursorRequestID: strings.TrimSpace(r.Header.Get("X-Cursor-Request-Id")),
+		Method:          r.Method,
+		Path:            r.URL.Path,
+		Stream:          false,
+	}
+	sess, ok := s.registerIngressSession(r, meta)
+	if !ok {
+		return nil, true
+	}
+	return sess, false
+}
 
-		err := fn(ctx, hctx)
-		if err != nil {
-			if rw.wroteHeader {
-				// Headers were already committed (typical mid-stream
-				// error path). The handler is responsible for any
-				// in-band error frame. Log so a regression where the
-				// handler swallows the error mid-stream is visible.
-				attrs := []slog.Attr{
-					slog.String("method", r.Method),
-					slog.String("path", r.URL.Path),
-					slog.String("route_family", string(family)),
-					slog.String("err", err.Error()),
-					slog.Bool("response_started", true),
-				}
-				attrs = append(attrs, corr.Attrs()...)
-				slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.request.error_after_headers", attrs...)
-				return
-			}
-			s.respondAdapterError(w, r, err)
+// releaseIngressSession releases the session when it is non-nil. Passing ctx
+// from the handler goroutine threads correlation through the release event.
+func (s *Server) releaseIngressSession(ctx context.Context, sess *livetrack.Session[IngressMeta]) {
+	if sess == nil || s.requests == nil {
+		return
+	}
+	s.requests.Release(ctx, sess, "adapter.ingress.completed")
+}
+
+// dispatchHandler executes fn and owns panic recovery, error routing, and
+// the body-not-written backstop. It is extracted from handle to keep each
+// closure under the funlen limit.
+func (s *Server) dispatchHandler(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	rw *adapterRecoveryWriter,
+	hctx *handlerCtx,
+	corr correlation.Context,
+	family adapterRouteFamily,
+	fn adapterHandler,
+) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
 			return
 		}
+		attrs := []slog.Attr{
+			slog.Any("err", recovered),
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.String("route_family", string(family)),
+			slog.String("remote_addr", r.RemoteAddr),
+			slog.String("user_agent", r.UserAgent()),
+			slog.String("stack", string(debug.Stack())),
+			slog.Bool("response_started", rw.wroteHeader),
+		}
+		attrs = append(attrs, corr.Attrs()...)
+		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.panic", attrs...)
+		if rw.wroteHeader {
+			return
+		}
+		s.respondAdapterError(w, r, adapterErrInternal("adapter panic while handling request", fmt.Errorf("panic: %v", recovered)))
+	}()
 
-		// Body-not-written backstop. If the handler returns nil but
-		// never wrote bytes the client would otherwise see an empty
-		// 200. Synthesize a catch-all 502 envelope so the response
-		// shape is always parsable.
-		if !rw.wroteHeader {
-			synth := newAdapterError(adapterErrorUpstreamFailed, "adapter handler returned without writing a response")
-			synth.HTTPStatus = http.StatusBadGateway
+	err := fn(ctx, hctx)
+	if err != nil {
+		if rw.wroteHeader {
+			// Headers were already committed (typical mid-stream
+			// error path). The handler is responsible for any
+			// in-band error frame. Log so a regression where the
+			// handler swallows the error mid-stream is visible.
 			attrs := []slog.Attr{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.String("route_family", string(family)),
+				slog.String("err", err.Error()),
+				slog.Bool("response_started", true),
 			}
 			attrs = append(attrs, corr.Attrs()...)
-			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.body_not_written", attrs...)
-			s.respondAdapterError(w, r, synth)
+			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.request.error_after_headers", attrs...)
+			return
 		}
+		s.respondAdapterError(w, r, err)
+		return
+	}
+
+	// Body-not-written backstop. If the handler returns nil but
+	// never wrote bytes the client would otherwise see an empty
+	// 200. Synthesize a catch-all 502 envelope so the response
+	// shape is always parsable.
+	if !rw.wroteHeader {
+		synth := newAdapterError(adapterErrorUpstreamFailed, "adapter handler returned without writing a response")
+		synth.HTTPStatus = http.StatusBadGateway
+		attrs := []slog.Attr{
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.String("route_family", string(family)),
+		}
+		attrs = append(attrs, corr.Attrs()...)
+		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.body_not_written", attrs...)
+		s.respondAdapterError(w, r, synth)
 	}
 }

@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
@@ -144,12 +146,29 @@ func (s *Server) SendLiveSession(ctx context.Context, req *clydev1.SendLiveSessi
 
 // StreamLiveSession streams live-session events over gRPC.
 func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream clydev1.ClydeService_StreamLiveSessionServer) error {
-	_, _ = peer.FromContext(stream.Context())
 	sessionID := strings.TrimSpace(req.GetSessionId())
 	if sessionID == "" {
 		return fmt.Errorf("%w", status.Error(codes.InvalidArgument, "session_id is required"))
 	}
-	events, err := s.streamLiveSessionEvents(stream.Context(), sessionID)
+
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, regErr := s.RPCs.Register(streamCtx, "daemon.rpc.stream_live_session", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/StreamLiveSession",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if regErr != nil {
+		return fmt.Errorf("%w", status.Errorf(codes.Unavailable, "daemon draining: %v", regErr))
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "stream_live_session.done")
+
+	events, err := s.streamLiveSessionEvents(streamCtx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -162,7 +181,7 @@ func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream
 			if err := stream.Send(protoStreamLiveSessionEvent(event)); err != nil {
 				return fmt.Errorf("send live session event: %w", err)
 			}
-		case <-stream.Context().Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -201,8 +220,12 @@ func (s *Server) StopLiveSession(ctx context.Context, req *clydev1.StopLiveSessi
 		return nil, status.Errorf(codes.Internal, "close live runtime: %v", err)
 	}
 	s.remoteMu.Lock()
+	lsess := live.livetrackSession
 	delete(s.liveSessions, live.id)
 	s.remoteMu.Unlock()
+	if lsess != nil {
+		s.liveWorkers.Release(ctx, lsess, "codex.live.stopped")
+	}
 	deleteLiveRuntimeState(live.id)
 	return &clydev1.StopLiveSessionResponse{Stopped: true}, nil
 }
@@ -458,15 +481,16 @@ func (s *Server) startCodexLiveSession(ctx context.Context, req *clydev1.StartLi
 		name = live.ThreadID
 	}
 	record := &liveRuntimeSession{
-		provider:     session.ProviderCodex,
-		name:         name,
-		id:           live.ThreadID,
-		basedir:      live.WorkDir,
-		model:        live.Model,
-		status:       "idle",
-		startedAt:    daemonNow(),
-		lastTurnID:   "",
-		codexRuntime: runtime,
+		provider:         session.ProviderCodex,
+		name:             name,
+		id:               live.ThreadID,
+		basedir:          live.WorkDir,
+		model:            live.Model,
+		status:           "idle",
+		startedAt:        daemonNow(),
+		lastTurnID:       "",
+		codexRuntime:     runtime,
+		livetrackSession: nil,
 	}
 	if record.basedir == "" {
 		record.basedir = basedir
@@ -481,6 +505,7 @@ func (s *Server) startCodexLiveSession(ctx context.Context, req *clydev1.StartLi
 		effort: effort,
 		stream: nil,
 	})
+	s.registerCodexLiveSession(ctx, record, runtime)
 	s.log.InfoContext(ctx, "daemon.live_session.started",
 		"component", "daemon",
 		"provider", session.ProviderCodex,
@@ -490,6 +515,32 @@ func (s *Server) startCodexLiveSession(ctx context.Context, req *clydev1.StartLi
 		"peer_addr", peerAddr,
 	)
 	return &clydev1.StartLiveSessionResponse{Session: protoLiveSessionFromRecord(record)}, nil
+}
+
+// registerCodexLiveSession registers a Codex live session with the livetrack
+// registry. The session is registered with a Closer that terminates the Codex
+// runtime on force-close. If the registry has been closed (e.g. during a reload
+// drain), the warning is logged and the session proceeds without tracking.
+func (s *Server) registerCodexLiveSession(ctx context.Context, record *liveRuntimeSession, runtime codex.LiveRuntime) {
+	lsess, err := s.liveWorkers.Register(ctx, "codex.live", LiveMeta{
+		Provider:      "codex",
+		LiveSessionID: record.id,
+		WorkerPID:     0,
+		Lease:         "background",
+	}, &codexRuntimeCloser{runtime: runtime})
+	if err == nil {
+		s.remoteMu.Lock()
+		record.livetrackSession = lsess
+		s.remoteMu.Unlock()
+		return
+	}
+	s.log.WarnContext(ctx, "daemon.live_session.codex_livetrack_register_failed",
+		"component", "daemon",
+		"provider", session.ProviderCodex,
+		"session", record.name,
+		"session_id", record.id,
+		"err", err,
+	)
 }
 
 func liveSessionLaunchBasedir(sessionName, requestedBasedir string) (string, error) {
@@ -578,8 +629,10 @@ func (s *Server) suspendCodexLiveForForeground(ctx context.Context, lease *foreg
 	}
 	s.remoteMu.Lock()
 	live := s.liveSessions[lease.sessionID]
+	var lsess *livetrack.Session[LiveMeta]
 	if live != nil {
 		delete(s.liveSessions, lease.sessionID)
+		lsess = live.livetrackSession
 		lease.shouldRestore = true
 		lease.restoreReason = "codex_live_runtime"
 		lease.basedir = firstNonEmpty(live.basedir, lease.basedir)
@@ -589,6 +642,9 @@ func (s *Server) suspendCodexLiveForForeground(ctx context.Context, lease *foreg
 	s.remoteMu.Unlock()
 	if live == nil {
 		return nil
+	}
+	if lsess != nil {
+		s.liveWorkers.Release(ctx, lsess, "codex.live.suspended")
 	}
 	state := liveRuntimeState(live.id)
 	if live.lastTurnID != "" {
@@ -650,15 +706,16 @@ func (s *Server) restoreCodexLiveAfterForeground(ctx context.Context, lease *for
 		return nil, fmt.Errorf("attach codex live runtime: %w", err)
 	}
 	record := &liveRuntimeSession{
-		provider:     session.ProviderCodex,
-		name:         firstNonEmpty(lease.sessionName, attached.ThreadID),
-		id:           attached.ThreadID,
-		basedir:      firstNonEmpty(attached.WorkDir, lease.basedir),
-		model:        firstNonEmpty(attached.Model, lease.model),
-		status:       firstNonEmpty(lease.status, "attached"),
-		startedAt:    daemonNow(),
-		lastTurnID:   "",
-		codexRuntime: runtime,
+		provider:         session.ProviderCodex,
+		name:             firstNonEmpty(lease.sessionName, attached.ThreadID),
+		id:               attached.ThreadID,
+		basedir:          firstNonEmpty(attached.WorkDir, lease.basedir),
+		model:            firstNonEmpty(attached.Model, lease.model),
+		status:           firstNonEmpty(lease.status, "attached"),
+		startedAt:        daemonNow(),
+		lastTurnID:       "",
+		codexRuntime:     runtime,
+		livetrackSession: nil,
 	}
 	s.remoteMu.Lock()
 	s.liveSessions[record.id] = record
@@ -667,6 +724,7 @@ func (s *Server) restoreCodexLiveAfterForeground(ctx context.Context, lease *for
 		effort: liveRuntimeState(lease.sessionID).effort,
 		stream: nil,
 	})
+	s.registerCodexLiveSession(ctx, record, runtime)
 	return protoLiveSessionFromRecord(record), nil
 }
 
@@ -768,15 +826,18 @@ func (s *Server) restoreClaudeRemoteAfterForeground(ctx context.Context, lease *
 	if err != nil {
 		return nil, fmt.Errorf("launch claude remote worker: %w", err)
 	}
+	done := make(chan struct{})
 	worker := &remoteWorker{
-		sessionName: lease.sessionName,
-		sessionID:   lease.sessionID,
-		basedir:     basedir,
-		incognito:   lease.incognito,
-		cmd:         cmd,
-		done:        make(chan struct{}),
-		skipCleanup: atomic.Bool{},
+		sessionName:      lease.sessionName,
+		sessionID:        lease.sessionID,
+		basedir:          basedir,
+		incognito:        lease.incognito,
+		cmd:              cmd,
+		done:             done,
+		skipCleanup:      atomic.Bool{},
+		livetrackSession: nil,
 	}
+	s.registerClaudeRemoteWorker(ctx, worker)
 	s.remoteMu.Lock()
 	s.remoteWorkers[worker.sessionName] = worker
 	s.remoteMu.Unlock()

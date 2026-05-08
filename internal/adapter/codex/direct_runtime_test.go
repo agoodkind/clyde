@@ -56,7 +56,7 @@ func TestRunDirectDoesNotReusePreviousResponseIDForRepeatedFreshPromptWithoutCon
 		WebsocketEnabled: true,
 		WebsocketURL:     "ws" + server.URL[len("http"):],
 		Token:            "test-token",
-		SessionCache:     NewWebsocketSessionCache(nil, 0),
+		SessionCache:     NewWebsocketSessionCache(nil, 0, nil),
 	}
 	req := adapteropenai.ChatRequest{
 		User: "github|user_123",

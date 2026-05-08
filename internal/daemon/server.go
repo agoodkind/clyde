@@ -37,6 +37,7 @@ import (
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/outputstyle"
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
@@ -91,6 +92,11 @@ type Server struct {
 	remoteWorkers map[string]*remoteWorker
 	liveSessions  map[string]*liveRuntimeSession
 	liveLeases    map[string]*foregroundLease
+	// liveWorkers is the universal registry for all daemon-owned live
+	// workers (Claude bridge, Codex tmux/PTY). Each worker is registered
+	// on launch and released on natural exit so the daemon has a single
+	// bounded inventory for drain and force-close on reload or shutdown.
+	liveWorkers *livetrack.Registry[LiveMeta]
 
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
@@ -104,6 +110,13 @@ type Server struct {
 	mitmAccess mitmAccessor
 
 	skipRuntimeCleanup atomic.Bool
+
+	// RPCs tracks every inbound streaming gRPC session so the daemon
+	// can drain or force-close them on reload alongside the MITM and
+	// adapter drain. Each stream handler registers on entry with a
+	// closer that cancels the stream context, and defers Release on
+	// exit. See internal/livetrack for the contract.
+	RPCs *livetrack.Registry[RPCMeta]
 }
 
 // mitmAccessor stores the daemon's optional accessor for the
@@ -149,6 +162,10 @@ type remoteWorker struct {
 	cmd         *exec.Cmd
 	done        chan struct{}
 	skipCleanup atomic.Bool
+	// livetrackSession is the livetrack registry handle for this worker.
+	// It is set on launch and used to release the registration when the
+	// worker exits naturally. May be nil when the registry was closed.
+	livetrackSession *livetrack.Session[LiveMeta]
 }
 
 type remoteWorkerTmuxState struct {
@@ -167,6 +184,11 @@ type liveRuntimeSession struct {
 	startedAt    time.Time
 	lastTurnID   string
 	codexRuntime codex.LiveRuntime
+	// livetrackSession is the livetrack registry handle for this Codex
+	// live session. It is set on start/attach and used to release the
+	// registration when the session is closed or suspended. May be nil
+	// when the registry was closed before the session started.
+	livetrackSession *livetrack.Session[LiveMeta]
 }
 
 type foregroundLease struct {
@@ -353,6 +375,16 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		reloadFn:                        nil,
 		mitmAccess:                      mitmAccessor{mu: sync.RWMutex{}, fn: nil},
 		skipRuntimeCleanup:              atomic.Bool{},
+		RPCs:                            newRPCRegistry(),
+		liveWorkers: livetrack.New[LiveMeta](livetrack.Options[LiveMeta]{
+			Component:     "daemon",
+			Concern:       "daemon.workers.live",
+			Log:           log,
+			PollEvery:     0,
+			CloserGrace:   0,
+			ParallelClose: false,
+			Now:           nil,
+		}),
 	}
 }
 
@@ -479,6 +511,23 @@ func (s *Server) TriggerScan(ctx context.Context, _ *clydev1.TriggerScanRequest)
 // so a slow client cannot block the broadcaster. Events that arrive
 // while a subscriber's buffer is full are dropped for that one client.
 func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream clydev1.ClydeService_SubscribeRegistryServer) error {
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_registry", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/SubscribeRegistry",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_registry.done")
+
 	ch := make(chan *clydev1.SubscribeRegistryResponse, 32)
 
 	s.subMu.Lock()
@@ -492,7 +541,6 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 		close(ch)
 	}()
 
-	ctx := stream.Context()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -502,7 +550,7 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 			if err := stream.Send(ev); err != nil {
 				return err
 			}
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -525,10 +573,26 @@ func (s *Server) GetProviderStats(ctx context.Context, _ *clydev1.GetProviderSta
 }
 
 func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest, stream clydev1.ClydeService_SubscribeProviderStatsServer) error {
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_provider_stats", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/SubscribeProviderStats",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_provider_stats.done")
+
 	ch := s.providerStats.subscribe()
 	defer s.providerStats.unsubscribe(ch)
 
-	ctx := stream.Context()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -538,7 +602,7 @@ func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest
 			if err := stream.Send(ev); err != nil {
 				return err
 			}
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -758,6 +822,16 @@ func (s *Server) Close() {
 	bridge.Close(s.bridgeWatcher)
 	if s.watcher != nil {
 		_ = s.watcher.Close()
+	}
+
+	// Drain the live-worker registry so any remaining workers get an
+	// opportunity to checkpoint before force-close. The drain context is
+	// unbounded because Close is only called from Run's defer path after
+	// the gRPC listener has already been stopped.
+	if s.liveWorkers != nil {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = s.liveWorkers.Drain(drainCtx, "daemon.close")
+		drainCancel()
 	}
 
 	s.mu.Lock()
@@ -2146,14 +2220,18 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		_ = store.Delete(name)
 		return nil, status.Errorf(codes.Internal, "launch remote session: %v", err)
 	}
+	done := make(chan struct{})
 	worker := &remoteWorker{
-		sessionName: name,
-		sessionID:   sessionID,
-		basedir:     basedir,
-		incognito:   req.GetIncognito(),
-		cmd:         cmd,
-		done:        make(chan struct{}),
+		sessionName:      name,
+		sessionID:        sessionID,
+		basedir:          basedir,
+		incognito:        req.GetIncognito(),
+		cmd:              cmd,
+		done:             done,
+		skipCleanup:      atomic.Bool{},
+		livetrackSession: nil,
 	}
+	s.registerClaudeRemoteWorker(ctx, worker)
 	s.remoteMu.Lock()
 	s.remoteWorkers[name] = worker
 	s.remoteMu.Unlock()
@@ -2370,7 +2448,23 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 	}
 	defer cleanup()
 
-	ctx := stream.Context()
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, regErr := s.RPCs.Register(streamCtx, "daemon.rpc.tail_transcript", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/TailTranscript",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if regErr != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", regErr)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "tail_transcript.done")
+
 	for {
 		select {
 		case line, ok := <-ch:
@@ -2385,7 +2479,7 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 			if err := stream.Send(line); err != nil {
 				return err
 			}
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -2533,10 +2627,16 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 		close(worker.done)
 	}
 	s.remoteMu.Lock()
+	lsess := worker.livetrackSession
 	if current := s.remoteWorkers[worker.sessionName]; current == worker {
 		delete(s.remoteWorkers, worker.sessionName)
 	}
 	s.remoteMu.Unlock()
+	// Release the livetrack registration after the process has exited so
+	// the registry's Count reaches zero before any drain loop completes.
+	if lsess != nil {
+		s.liveWorkers.Release(ctx, lsess, "claude.remote.exited")
+	}
 	level := slog.LevelInfo
 	if err != nil {
 		level = slog.LevelWarn
@@ -2559,6 +2659,37 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 			"err", delErr,
 		)
 	}
+}
+
+// registerClaudeRemoteWorker registers a newly-launched Claude remote worker
+// with the livetrack registry. The closer sends SIGINT, waits for the process
+// to exit, then delivers SIGKILL. If the registry has been closed during a
+// reload drain, the warning is logged and the worker runs without tracking.
+func (s *Server) registerClaudeRemoteWorker(ctx context.Context, worker *remoteWorker) {
+	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil {
+		return
+	}
+	lsess, err := s.liveWorkers.Register(ctx, "claude.remote", LiveMeta{
+		Provider:      "claude",
+		LiveSessionID: worker.sessionID,
+		WorkerPID:     worker.cmd.Process.Pid,
+		Lease:         "background",
+	}, &claudeWorkerCloser{
+		proc:           worker.cmd.Process,
+		done:           worker.done,
+		interruptGrace: claudeRemoteSuspendTimeout,
+	})
+	if err == nil {
+		worker.livetrackSession = lsess
+		return
+	}
+	s.log.WarnContext(ctx, "daemon.remote_session.livetrack_register_failed",
+		"component", "daemon",
+		"provider", session.ProviderClaude,
+		"session", worker.sessionName,
+		"session_id", worker.sessionID,
+		"err", err,
+	)
 }
 
 func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContextUsageRequest) (*clydev1.ProbeContextUsageResponse, error) {
@@ -2630,28 +2761,60 @@ func (s *Server) CompactPreview(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactPreviewServer,
 ) error {
-	ctx := stream.Context()
-	s.log.InfoContext(ctx, "daemon.compact.preview.started",
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.compact_preview", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/CompactPreview",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "compact_preview.done")
+
+	s.log.InfoContext(streamCtx, "daemon.compact.preview.started",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
 		"target", req.GetTargetTokens(),
 	)
-	return s.runCompact(ctx, req, stream, compactengine.RuntimeModePreview)
+	return s.runCompact(streamCtx, req, stream, compactengine.RuntimeModePreview)
 }
 
 func (s *Server) CompactApply(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactApplyServer,
 ) error {
-	ctx := stream.Context()
-	s.log.InfoContext(ctx, "daemon.compact.apply.started",
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.compact_apply", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/CompactApply",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "compact_apply.done")
+
+	s.log.InfoContext(streamCtx, "daemon.compact.apply.started",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
 		"target", req.GetTargetTokens(),
 	)
-	return s.runCompact(ctx, req, stream, compactengine.RuntimeModeApply)
+	return s.runCompact(streamCtx, req, stream, compactengine.RuntimeModeApply)
 }
 
 func (s *Server) runCompact(
