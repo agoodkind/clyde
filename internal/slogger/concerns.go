@@ -191,6 +191,14 @@ func IsKnownConcern(concern string) bool {
 	return ok
 }
 
+// ConcernRelPath returns the relative path under the concern root for the
+// named concern. Callers join the result with [DefaultConcernRoot] to obtain
+// the absolute on-disk JSONL path. The returned path is empty when the concern
+// is unknown.
+func ConcernRelPath(concern string) string {
+	return concernPaths[strings.TrimSpace(concern)]
+}
+
 // eventConcernRules is kept as a migration reference for older event names.
 // The production concern router no longer depends on it; records must carry
 // the explicit concern attr from slogger.For/WithConcern or a narrow
