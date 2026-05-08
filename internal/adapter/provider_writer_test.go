@@ -412,11 +412,10 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 		ctx:        ctx,
 	}
 
-	if err := writer.WriteEvent(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: "finalized text"}); err != nil {
+	if err := writer.WriteEvent(adapterrender.TextDelta{Text: "finalized text"}); err != nil {
 		t.Fatalf("WriteEvent: %v", err)
 	}
-	if err := writer.WriteEvent(adapterrender.Event{
-		Kind: adapterrender.EventToolCallDelta,
+	if err := writer.WriteEvent(adapterrender.ToolCallDelta{
 		ToolCalls: []adapteropenai.ToolCall{{
 			ID:   "call_task",
 			Type: "function",
@@ -494,7 +493,7 @@ func TestProviderStreamWriterFinalizedNoticeDoesNotRepeatAssistantRole(t *testin
 		ctx:        context.Background(),
 	}
 
-	if err := writer.WriteEvent(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: "answer"}); err != nil {
+	if err := writer.WriteEvent(adapterrender.TextDelta{Text: "answer"}); err != nil {
 		t.Fatalf("WriteEvent: %v", err)
 	}
 	err = writer.finalizeStream(context.Background(), adapterprovider.Result{

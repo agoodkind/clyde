@@ -366,15 +366,13 @@ func writeAndParseWebsocketRequest(
 }
 
 func codexRenderEventStartsClientResponse(event adapterrender.Event) bool {
-	switch event.Kind {
-	case adapterrender.EventAssistantTextDelta,
-		adapterrender.EventAssistantRefusalDelta,
-		adapterrender.EventReasoningSignaled,
-		adapterrender.EventReasoningDelta,
-		adapterrender.EventToolCallDelta:
+	switch event.(type) {
+	case adapterrender.TextDelta,
+		adapterrender.RefusalDelta,
+		adapterrender.ReasoningSignaled,
+		adapterrender.ReasoningDelta,
+		adapterrender.ToolCallDelta:
 		return true
-	case adapterrender.EventReasoningFinished:
-		return false
 	default:
 		return false
 	}

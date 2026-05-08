@@ -1470,8 +1470,8 @@ func TestCodexRendererSeparatesSummarySections(t *testing.T) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	firstSummaryIndex := 0
 	secondSummaryIndex := 1
-	firstChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "First heading", ReasoningKind: "summary", SummaryIndex: &firstSummaryIndex})
-	secondChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "Second heading", ReasoningKind: "summary", SummaryIndex: &secondSummaryIndex})
+	firstChunks := r.HandleEvent(adapterrender.ReasoningDelta{Text: "First heading", ReasoningKind: "summary", SummaryIndex: &firstSummaryIndex, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	secondChunks := r.HandleEvent(adapterrender.ReasoningDelta{Text: "Second heading", ReasoningKind: "summary", SummaryIndex: &secondSummaryIndex, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
 	first := firstChunks[0].Choices[0].Delta.Content
 	second := secondChunks[0].Choices[0].Delta.Content
 	if !strings.Contains(first, "<!--clyde-thinking-->") {
@@ -1484,8 +1484,8 @@ func TestCodexRendererSeparatesSummarySections(t *testing.T) {
 
 func TestCodexRendererSeparatesBoldSummaryHeadingWithoutIndexChange(t *testing.T) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	_ = r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "First paragraph.", ReasoningKind: "summary"})
-	secondChunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningDelta, Text: "**Second heading**", ReasoningKind: "summary"})
+	_ = r.HandleEvent(adapterrender.ReasoningDelta{Text: "First paragraph.", ReasoningKind: "summary", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	secondChunks := r.HandleEvent(adapterrender.ReasoningDelta{Text: "**Second heading**", ReasoningKind: "summary", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
 	second := secondChunks[0].Choices[0].Delta.Content
 	if !strings.Contains(second, "\n> \n> **Second heading**") {
 		t.Fatalf("expected bold heading separation, got %q", second)
@@ -1494,7 +1494,7 @@ func TestCodexRendererSeparatesBoldSummaryHeadingWithoutIndexChange(t *testing.T
 
 func TestCodexRendererOpensThinkingWithoutPlaceholderBody(t *testing.T) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
-	chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningSignaled})
+	chunks := r.HandleEvent(adapterrender.ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
@@ -1502,7 +1502,7 @@ func TestCodexRendererOpensThinkingWithoutPlaceholderBody(t *testing.T) {
 	if !strings.Contains(got, "<!--clyde-thinking-->") || strings.Contains(got, "\n> Thinking...") {
 		t.Fatalf("unexpected thinking marker: %q", got)
 	}
-	if chunks := r.HandleEvent(adapterrender.Event{Kind: adapterrender.EventReasoningFinished}); len(chunks) != 1 {
+	if chunks := r.HandleEvent(adapterrender.ReasoningFinished{ReasoningKind: "", EncryptedContent: "", Signature: "", ItemID: "", ItemType: ""}); len(chunks) != 1 {
 		t.Fatalf("finish chunks=%d want close marker", len(chunks))
 	} else if close := chunks[0].Choices[0].Delta.Content; !strings.Contains(close, "<!--/clyde-thinking-->") {
 		t.Fatalf("missing close marker: %q", close)

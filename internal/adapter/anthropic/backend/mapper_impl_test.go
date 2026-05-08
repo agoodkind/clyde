@@ -49,14 +49,14 @@ func TestTranslateRequestAssistantRedactedThinkingMaterializesNativeBlock(t *tes
 			t.Fatal(err)
 		}
 		asst := out.Messages[1]
-		var redacted []AnthContentBlock
-		var textBlocks []AnthContentBlock
+		var redacted []RedactedThinkingBlock
+		var textBlocks []TextBlock
 		for _, blk := range asst.Content {
-			switch blk.Type {
-			case "redacted_thinking":
-				redacted = append(redacted, blk)
-			case "text":
-				textBlocks = append(textBlocks, blk)
+			switch v := blk.(type) {
+			case RedactedThinkingBlock:
+				redacted = append(redacted, v)
+			case TextBlock:
+				textBlocks = append(textBlocks, v)
 			}
 		}
 		if len(redacted) != 1 {
@@ -64,9 +64,6 @@ func TestTranslateRequestAssistantRedactedThinkingMaterializesNativeBlock(t *tes
 		}
 		if redacted[0].Data != "REDACTED_BLOB_BASE64==" {
 			t.Fatalf("redacted_thinking.Data=%q want REDACTED_BLOB_BASE64==", redacted[0].Data)
-		}
-		if redacted[0].Thinking != "" {
-			t.Fatalf("redacted_thinking.Thinking=%q want empty", redacted[0].Thinking)
 		}
 		if len(textBlocks) == 0 || !strings.Contains(textBlocks[0].Text, "Final answer.") {
 			t.Fatalf("expected trailing text block with Final answer, got %+v", asst.Content)
@@ -80,10 +77,10 @@ func TestTranslateRequestAssistantRedactedThinkingMaterializesNativeBlock(t *tes
 		}
 		asst := out.Messages[1]
 		for _, blk := range asst.Content {
-			if blk.Type == "redacted_thinking" {
+			if _, ok := blk.(RedactedThinkingBlock); ok {
 				t.Fatalf("drop strategy must not emit redacted_thinking: %+v", asst.Content)
 			}
-			if strings.Contains(blk.Text, "clyde-redacted-thinking") {
+			if tb, ok := blk.(TextBlock); ok && strings.Contains(tb.Text, "clyde-redacted-thinking") {
 				t.Fatalf("drop strategy leaked envelope text: %+v", blk)
 			}
 		}
@@ -104,8 +101,8 @@ func TestToAPIRequestRedactedThinkingEmitsDataField(t *testing.T) {
 			{
 				Role: "assistant",
 				Content: []AnthContentBlock{
-					{Type: "redacted_thinking", Data: "blob"},
-					{Type: "text", Text: "answer"},
+					RedactedThinkingBlock{Data: "blob"},
+					TextBlock{Text: "answer"},
 				},
 			},
 		},

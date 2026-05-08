@@ -472,19 +472,7 @@ func (p *sseEventParser) handleEvent(eventName, payload string, raw transportStr
 
 func (p *sseEventParser) handleOutputTextDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
 	if delta := raw.Delta; delta != "" {
-		err := p.emitNormalized(adapterrender.Event{
-			Kind:             adapterrender.EventAssistantTextDelta,
-			Text:             delta,
-			ReasoningKind:    "",
-			SummaryIndex:     nil,
-			ToolCalls:        nil,
-			ItemID:           "",
-			ItemType:         "",
-			EncryptedContent: "",
-			Signature:        "",
-			RedactedData:     "",
-		})
-		if err != nil {
+		if err := p.emitNormalized(adapterrender.TextDelta{Text: delta}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -539,17 +527,12 @@ func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transpo
 	// the parser config strips the blob before emit.
 	encrypted := mapString(cloned, "encrypted_content")
 	if !p.dropEncryptedContent && encrypted != "" {
-		ev := adapterrender.Event{
-			Kind:             adapterrender.EventReasoningFinished,
-			Text:             "",
+		ev := adapterrender.ReasoningFinished{
 			ReasoningKind:    "",
-			SummaryIndex:     nil,
-			ToolCalls:        nil,
-			ItemID:           mapString(cloned, "id"),
-			ItemType:         "reasoning",
 			EncryptedContent: encrypted,
 			Signature:        "",
-			RedactedData:     "",
+			ItemID:           mapString(cloned, "id"),
+			ItemType:         "reasoning",
 		}
 		if err := p.emitNormalized(ev); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
@@ -776,17 +759,14 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 	} else {
 		p.reasoningTextDeltaSeen = true
 	}
-	err := p.emitNormalized(adapterrender.Event{
-		Kind:             adapterrender.EventReasoningDelta,
-		Text:             raw.Delta,
-		ReasoningKind:    kind,
-		SummaryIndex:     summaryIdx,
-		ToolCalls:        nil,
-		ItemID:           strings.TrimSpace(raw.ItemID),
-		ItemType:         "reasoning",
-		EncryptedContent: "",
-		Signature:        "",
-		RedactedData:     "",
+	err := p.emitNormalized(adapterrender.ReasoningDelta{
+		Text:          raw.Delta,
+		ReasoningKind: kind,
+		SummaryIndex:  summaryIdx,
+		Signature:     "",
+		RedactedData:  "",
+		ItemID:        strings.TrimSpace(raw.ItemID),
+		ItemType:      "reasoning",
 	})
 	if err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{}, Err: err}
@@ -820,17 +800,12 @@ func (p *sseEventParser) handleResponseCompleted(eventName, payload string, raw 
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	if err := p.emitNormalized(adapterrender.Event{
-		Kind:             adapterrender.EventReasoningFinished,
-		Text:             "",
+	if err := p.emitNormalized(adapterrender.ReasoningFinished{
 		ReasoningKind:    "",
-		SummaryIndex:     nil,
-		ToolCalls:        nil,
-		ItemID:           "",
-		ItemType:         "",
 		EncryptedContent: "",
 		Signature:        "",
-		RedactedData:     "",
+		ItemID:           "",
+		ItemType:         "",
 	}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
@@ -854,17 +829,12 @@ func (p *sseEventParser) handleResponseFailed(eventName string, raw transportStr
 	}
 	err := codexResponseFailedError(msg)
 	if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
-		_ = p.emitNormalized(adapterrender.Event{
-			Kind:             adapterrender.EventReasoningFinished,
-			Text:             "",
+		_ = p.emitNormalized(adapterrender.ReasoningFinished{
 			ReasoningKind:    "",
-			SummaryIndex:     nil,
-			ToolCalls:        nil,
-			ItemID:           "",
-			ItemType:         "",
 			EncryptedContent: "",
 			Signature:        "",
-			RedactedData:     "",
+			ItemID:           "",
+			ItemType:         "",
 		})
 	}
 	p.logAggregate(p.out.ResponseID, "failed", err)
@@ -892,17 +862,10 @@ func (p *sseEventParser) emitReasoningPresence(itemID string) error {
 	}
 	p.reasoningSignaled = true
 	p.reasoningVisible = true
-	return p.emitNormalized(adapterrender.Event{
-		Kind:             adapterrender.EventReasoningSignaled,
-		Text:             "",
-		ReasoningKind:    "",
-		SummaryIndex:     nil,
-		ToolCalls:        nil,
-		ItemID:           strings.TrimSpace(itemID),
-		ItemType:         "reasoning",
-		EncryptedContent: "",
-		Signature:        "",
-		RedactedData:     "",
+	return p.emitNormalized(adapterrender.ReasoningSignaled{
+		ReasoningKind: "",
+		ItemID:        strings.TrimSpace(itemID),
+		ItemType:      "reasoning",
 	})
 }
 
@@ -919,17 +882,8 @@ func (p *sseEventParser) emitToolCall(state *toolCallState, fn adapteropenai.Too
 		tc.Type = state.Type
 		state.IdentityEmitted = true
 	}
-	return p.emitNormalized(adapterrender.Event{
-		Kind:             adapterrender.EventToolCallDelta,
-		Text:             "",
-		ReasoningKind:    "",
-		SummaryIndex:     nil,
-		ToolCalls:        []adapteropenai.ToolCall{tc},
-		ItemID:           "",
-		ItemType:         "",
-		EncryptedContent: "",
-		Signature:        "",
-		RedactedData:     "",
+	return p.emitNormalized(adapterrender.ToolCallDelta{
+		ToolCalls: []adapteropenai.ToolCall{tc},
 	})
 }
 
@@ -1097,7 +1051,7 @@ func (item transportItem) cloneMap() map[string]any {
 	return out
 }
 
-func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []adapterrender.Event {
+func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []adapterrender.ReasoningDelta {
 	if item == nil {
 		return nil
 	}
@@ -1110,24 +1064,21 @@ func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []a
 		return nil
 	}
 	itemID := strings.TrimSpace(payload.ID)
-	var out []adapterrender.Event
+	var out []adapterrender.ReasoningDelta
 	if !skipSummary {
 		for i, part := range payload.Summary {
 			if strings.TrimSpace(part.Type) != "summary_text" || part.Text == "" {
 				continue
 			}
 			idx := i
-			out = append(out, adapterrender.Event{
-				Kind:             adapterrender.EventReasoningDelta,
-				Text:             part.Text,
-				ReasoningKind:    "summary",
-				SummaryIndex:     &idx,
-				ToolCalls:        nil,
-				ItemID:           itemID,
-				ItemType:         "reasoning",
-				EncryptedContent: "",
-				Signature:        "",
-				RedactedData:     "",
+			out = append(out, adapterrender.ReasoningDelta{
+				Text:          part.Text,
+				ReasoningKind: "summary",
+				SummaryIndex:  &idx,
+				Signature:     "",
+				RedactedData:  "",
+				ItemID:        itemID,
+				ItemType:      "reasoning",
 			})
 		}
 	}
@@ -1138,17 +1089,14 @@ func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []a
 				if part.Text == "" {
 					continue
 				}
-				out = append(out, adapterrender.Event{
-					Kind:             adapterrender.EventReasoningDelta,
-					Text:             part.Text,
-					ReasoningKind:    "text",
-					SummaryIndex:     nil,
-					ToolCalls:        nil,
-					ItemID:           itemID,
-					ItemType:         "reasoning",
-					EncryptedContent: "",
-					Signature:        "",
-					RedactedData:     "",
+				out = append(out, adapterrender.ReasoningDelta{
+					Text:          part.Text,
+					ReasoningKind: "text",
+					SummaryIndex:  nil,
+					Signature:     "",
+					RedactedData:  "",
+					ItemID:        itemID,
+					ItemType:      "reasoning",
 				})
 			}
 		}

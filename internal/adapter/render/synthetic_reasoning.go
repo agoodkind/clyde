@@ -21,8 +21,8 @@ import (
 // no thinking at all. Before the next upstream request, the per-backend
 // mapper calls [ExtractSyntheticParts] and materializes each kind per its
 // upstream contract (Anthropic emits a native thinking block; Codex drops).
-func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
-	r.captureReasoningItemID(ev)
+func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropenai.StreamChunk {
+	r.captureReasoningItemIDFromString(ev.ItemID)
 	text := strings.TrimSpace(ev.Text)
 	if text == "" && ev.Text == "" {
 		return nil
@@ -34,7 +34,7 @@ func (r *EventRenderer) renderReasoning(ev Event) *adapteropenai.StreamChunk {
 		return nil
 	}
 	open := !r.reasoningOpen
-	decorated := r.decorateReasoningDelta(ev)
+	decorated := r.decorateReasoningFromDelta(ev)
 	kind := r.activeSyntheticReasoningKind()
 	contentOut := FormatSyntheticContentDeltaWithRef(kind, open, r.lastReasoningItemID, decorated)
 	r.reasoningOpen = true
@@ -76,18 +76,17 @@ func (r *EventRenderer) activeSyntheticReasoningKind() SyntheticContentKind {
 	return SyntheticReasoning
 }
 
-// captureReasoningItemID stores the most recent upstream reasoning item id
-// observed on a reasoning event so the open marker can carry it as a
-// data-ref attribute. Codex events populate ItemID with values like
-// "rs_abc123"; Anthropic events leave it empty so the renderer emits the
-// legacy attribute-less marker.
-func (r *EventRenderer) captureReasoningItemID(ev Event) {
-	if id := strings.TrimSpace(ev.ItemID); id != "" {
+// captureReasoningItemIDFromString stores the most recent upstream reasoning
+// item id so the open marker can carry it as a data-ref attribute. Codex
+// events populate itemID with values like "rs_abc123"; Anthropic events pass
+// empty so the renderer emits the legacy attribute-less marker.
+func (r *EventRenderer) captureReasoningItemIDFromString(itemID string) {
+	if id := strings.TrimSpace(itemID); id != "" {
 		r.lastReasoningItemID = id
 	}
 }
 
-func (r *EventRenderer) decorateReasoningDelta(ev Event) string {
+func (r *EventRenderer) decorateReasoningFromDelta(ev ReasoningDelta) string {
 	prefix := ""
 	kind := strings.TrimSpace(ev.ReasoningKind)
 	if kind == "" {

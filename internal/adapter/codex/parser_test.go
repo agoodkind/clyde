@@ -818,23 +818,26 @@ func TestParseSSEEventsEmitsNormalizedSequence(t *testing.T) {
 	if len(events) != 5 {
 		t.Fatalf("events len=%d want 5", len(events))
 	}
-	if events[0].Kind != adapterrender.EventToolCallDelta {
-		t.Fatalf("events[0].kind=%q", events[0].Kind)
+	tc0, ok0 := events[0].(adapterrender.ToolCallDelta)
+	if !ok0 {
+		t.Fatalf("events[0] type=%T want ToolCallDelta", events[0])
 	}
-	if events[0].ToolCalls[0].Function.Name != "read_file" {
-		t.Fatalf("events[0] tool name=%q want read_file", events[0].ToolCalls[0].Function.Name)
+	if tc0.ToolCalls[0].Function.Name != "read_file" {
+		t.Fatalf("events[0] tool name=%q want read_file", tc0.ToolCalls[0].Function.Name)
 	}
-	if events[1].Kind != adapterrender.EventToolCallDelta || events[1].ToolCalls[0].Function.Arguments != `{"path":"out.md"}` {
+	tc1, ok1 := events[1].(adapterrender.ToolCallDelta)
+	if !ok1 || tc1.ToolCalls[0].Function.Arguments != `{"path":"out.md"}` {
 		t.Fatalf("events[1]=%+v", events[1])
 	}
-	if events[2].Kind != adapterrender.EventReasoningDelta {
-		t.Fatalf("events[2].kind=%q", events[2].Kind)
+	if _, ok := events[2].(adapterrender.ReasoningDelta); !ok {
+		t.Fatalf("events[2] type=%T want ReasoningDelta", events[2])
 	}
-	if events[3].Kind != adapterrender.EventAssistantTextDelta || events[3].Text != "done" {
+	td3, ok3 := events[3].(adapterrender.TextDelta)
+	if !ok3 || td3.Text != "done" {
 		t.Fatalf("events[3]=%+v", events[3])
 	}
-	if events[4].Kind != adapterrender.EventReasoningFinished {
-		t.Fatalf("events[4].kind=%q", events[4].Kind)
+	if _, ok := events[4].(adapterrender.ReasoningFinished); !ok {
+		t.Fatalf("events[4] type=%T want ReasoningFinished", events[4])
 	}
 }
 

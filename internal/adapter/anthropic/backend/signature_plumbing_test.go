@@ -27,18 +27,15 @@ func TestStreamTranslatorSignatureDeltaProducesReasoningEventWithSignature(t *te
 	if len(events) != 1 {
 		t.Fatalf("events=%d want 1: %#v", len(events), events)
 	}
-	got := events[0]
-	if got.Kind != adapterrender.EventReasoningDelta {
-		t.Fatalf("kind=%q want %q", got.Kind, adapterrender.EventReasoningDelta)
+	rd, ok := events[0].(adapterrender.ReasoningDelta)
+	if !ok {
+		t.Fatalf("events[0] type=%T want ReasoningDelta", events[0])
 	}
-	if got.Signature != "sig-bytes-xyz" {
-		t.Fatalf("signature=%q want sig-bytes-xyz", got.Signature)
+	if rd.Signature != "sig-bytes-xyz" {
+		t.Fatalf("signature=%q want sig-bytes-xyz", rd.Signature)
 	}
-	if strings.TrimSpace(got.Text) != "" {
-		t.Fatalf("text=%q want empty for signature_delta", got.Text)
-	}
-	if got.EncryptedContent != "" {
-		t.Fatalf("encrypted_content=%q want empty for signature_delta", got.EncryptedContent)
+	if strings.TrimSpace(rd.Text) != "" {
+		t.Fatalf("text=%q want empty for signature_delta", rd.Text)
 	}
 }
 

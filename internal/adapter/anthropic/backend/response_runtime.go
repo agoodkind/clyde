@@ -248,21 +248,26 @@ func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args a
 }
 
 func eventHasVisibleContent(ev adapterrender.Event) bool {
-	switch ev.Kind {
-	case adapterrender.EventAssistantTextDelta, adapterrender.EventAssistantRefusalDelta, adapterrender.EventReasoningDelta:
-		return strings.TrimSpace(ev.Text) != "" || ev.Text != ""
-	case adapterrender.EventToolCallDelta:
-		return len(ev.ToolCalls) > 0
+	switch e := ev.(type) {
+	case adapterrender.TextDelta:
+		return strings.TrimSpace(e.Text) != "" || e.Text != ""
+	case adapterrender.RefusalDelta:
+		return strings.TrimSpace(e.Text) != "" || e.Text != ""
+	case adapterrender.ReasoningDelta:
+		return strings.TrimSpace(e.Text) != "" || e.Text != ""
+	case adapterrender.ToolCallDelta:
+		return len(e.ToolCalls) > 0
 	default:
 		return false
 	}
 }
 
 func toolCallStats(ev adapterrender.Event) (count int, names []string, hasSubagent bool) {
-	if ev.Kind != adapterrender.EventToolCallDelta {
+	td, ok := ev.(adapterrender.ToolCallDelta)
+	if !ok {
 		return 0, nil, false
 	}
-	for _, tc := range ev.ToolCalls {
+	for _, tc := range td.ToolCalls {
 		name := strings.TrimSpace(tc.Function.Name)
 		if strings.TrimSpace(tc.ID) == "" && name == "" {
 			continue

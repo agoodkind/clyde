@@ -56,28 +56,28 @@ func TestStreamTranslatorRedactedThinkingFlowsThroughHandleEvents(t *testing.T) 
 		dataBlob    string
 	)
 	for _, ev := range emitted {
-		switch ev.Kind {
-		case adapterrender.EventReasoningSignaled:
-			if strings.TrimSpace(ev.ReasoningKind) == "redacted" {
+		switch e := ev.(type) {
+		case adapterrender.ReasoningSignaled:
+			if strings.TrimSpace(e.ReasoningKind) == "redacted" {
 				sawSignaled = true
 			}
-		case adapterrender.EventReasoningDelta:
-			if strings.TrimSpace(ev.ReasoningKind) == "redacted" {
+		case adapterrender.ReasoningDelta:
+			if strings.TrimSpace(e.ReasoningKind) == "redacted" {
 				sawDelta = true
-				dataBlob = ev.RedactedData
-				if strings.TrimSpace(ev.Text) != "[redacted]" {
-					t.Fatalf("redacted delta text=%q want [redacted]", ev.Text)
+				dataBlob = e.RedactedData
+				if strings.TrimSpace(e.Text) != "[redacted]" {
+					t.Fatalf("redacted delta text=%q want [redacted]", e.Text)
 				}
 			}
-		case adapterrender.EventReasoningFinished:
-			if strings.TrimSpace(ev.ReasoningKind) == "redacted" {
+		case adapterrender.ReasoningFinished:
+			if strings.TrimSpace(e.ReasoningKind) == "redacted" {
 				sawFinished = true
 			}
-		case adapterrender.EventAssistantTextDelta:
-			if ev.Text == "prefix " {
+		case adapterrender.TextDelta:
+			if e.Text == "prefix " {
 				sawPrefix = true
 			}
-			if ev.Text == "suffix" {
+			if e.Text == "suffix" {
 				sawSuffix = true
 			}
 		}
