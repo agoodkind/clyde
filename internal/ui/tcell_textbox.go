@@ -51,9 +51,24 @@ type TextBox struct {
 }
 
 // TextSegment is a styled run of text.
+//
+// When Spinner is true, the renderer prepends the live spinner glyph
+// plus a single space at draw time. Use this for inline "loading…"
+// cells so the glyph keeps ticking without rebuilding segments on
+// every interrupt.
 type TextSegment struct {
-	Text  string
-	Style tcell.Style
+	Text    string
+	Style   tcell.Style
+	Spinner bool
+}
+
+// renderedText returns the on-screen string for this segment, applying
+// the live spinner glyph when Spinner is true.
+func (s TextSegment) renderedText() string {
+	if !s.Spinner {
+		return s.Text
+	}
+	return LoadingSpinnerGlyph(currentLoadingFrame()) + " " + s.Text
 }
 
 // SetLines replaces content (plain).
@@ -108,9 +123,11 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 	var out [][]TextSegment
 	for _, line := range src {
 		// Flatten to a string plus style per rune for easy splitting.
+		// Spinner segments contribute their glyph-prefixed rendered
+		// text so the wrap calculation reflects on-screen width.
 		var plain strings.Builder
 		for _, seg := range line {
-			plain.WriteString(seg.Text)
+			plain.WriteString(seg.renderedText())
 		}
 		if runeCount(plain.String()) <= w {
 			out = append(out, line)
@@ -201,7 +218,7 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 		x := r.X
 		remaining := contentW
 		for _, seg := range segs {
-			used := drawString(scr, x, contentY+i, seg.Style, seg.Text, remaining)
+			used := drawString(scr, x, contentY+i, seg.Style, seg.renderedText(), remaining)
 			x += used
 			remaining -= used
 			if remaining <= 0 {

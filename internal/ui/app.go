@@ -468,7 +468,13 @@ type App struct {
 	// load is in flight, guarding against duplicate goroutines.
 	detailCache   map[string]SessionDetail
 	detailLoading map[string]bool
-	detailMu      sync.Mutex
+	// detailRepollAfter[name] holds the earliest wall-clock time at
+	// which the session may be re-polled while its cached detail
+	// still has a pending status (probing/cooldown). Throttles the
+	// background poll so a slow daemon probe does not turn into a
+	// 100ms RPC storm.
+	detailRepollAfter map[string]time.Time
+	detailMu          sync.Mutex
 
 	// exportStatsCache stores daemon-derived export aggregates keyed by
 	// session name. Like detail loading, requests are coalesced so the
@@ -681,6 +687,7 @@ func (a *App) initCaches() {
 	a.liveURLs = make(map[string]LiveURL)
 	a.detailCache = make(map[string]SessionDetail)
 	a.detailLoading = make(map[string]bool)
+	a.detailRepollAfter = make(map[string]time.Time)
 	a.exportStatsCache = make(map[string]SessionExportStats)
 	a.exportStatsLoading = make(map[string]bool)
 	a.summaryRefreshing = make(map[string]bool)
@@ -2244,11 +2251,38 @@ func (a *App) hasPendingVisualActivity() bool {
 	}
 	a.detailMu.Lock()
 	detailsLoading := len(a.detailLoading) > 0
+	if !detailsLoading {
+		// Spinner segments inside an open modal must keep ticking
+		// while any cached detail still reports a pending status,
+		// even after the most recent in-flight load completed. The
+		// re-poll loop below will replace the placeholder once the
+		// daemon-side cache warms.
+		for _, cached := range a.detailCache {
+			if detailHasPendingStatus(cached) {
+				detailsLoading = true
+				break
+			}
+		}
+	}
 	a.detailMu.Unlock()
 	if detailsLoading {
 		return true
 	}
 	return len(a.exportStatsLoading) > 0
+}
+
+// detailHasPendingStatus reports whether the cached SessionDetail is
+// still settling (context probe in flight, transcript stats not yet
+// extracted) and therefore should keep an animated placeholder on
+// screen.
+func detailHasPendingStatus(d SessionDetail) bool {
+	if !d.ContextUsageLoaded && !isTerminalLoadingStatus(d.ContextUsageStatus) {
+		return true
+	}
+	if !d.TranscriptStatsLoaded && !isTerminalLoadingStatus(d.TranscriptStatsStatus) {
+		return true
+	}
+	return false
 }
 
 func (a *App) showStartupLoadingState() bool {
@@ -2870,6 +2904,65 @@ func (a *App) handleSpinnerTick() {
 	if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
 		a.populateDetails()
 	}
+	a.maybeRepollPendingDetails()
+}
+
+// detailRepollInterval bounds how often the TUI re-fetches a session's
+// detail while its cached status reports a pending probe. The daemon's
+// cache is single-flight and short-circuits once warm, so the cost of
+// each poll is dominated by an RPC round trip; 1.5s keeps the user-
+// visible delay short without producing a poll storm.
+const detailRepollInterval = 1500 * time.Millisecond
+
+// maybeRepollPendingDetails re-issues GetSessionDetail for any session
+// whose cached detail is still pending. The daemon kicks off a probe on
+// the first cold-cache call, returns immediately with Status="probing",
+// and the TUI must come back later to pick up the warm result. This
+// loop is the "come back later" piece, throttled per session via
+// detailRepollAfter so a slow probe cannot turn into an RPC storm.
+func (a *App) maybeRepollPendingDetails() {
+	if a.cb.GetSessionDetail == nil {
+		return
+	}
+	now := a.now()
+	a.detailMu.Lock()
+	pending := make([]string, 0, len(a.detailCache))
+	for name, cached := range a.detailCache {
+		if !detailHasPendingStatus(cached) {
+			continue
+		}
+		if a.detailLoading[name] {
+			continue
+		}
+		if next, ok := a.detailRepollAfter[name]; ok && now.Before(next) {
+			continue
+		}
+		pending = append(pending, name)
+		a.detailRepollAfter[name] = now.Add(detailRepollInterval)
+	}
+	a.detailMu.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+	for _, name := range pending {
+		sess := a.sessionByName(name)
+		if sess == nil {
+			continue
+		}
+		a.loadDetailAsync(sess)
+	}
+}
+
+// sessionByName returns the in-memory session matching name, or nil.
+// Used by the detail re-poll to translate cache keys back into the
+// pointer the load helpers want.
+func (a *App) sessionByName(name string) *session.Session {
+	for _, sess := range a.sessions {
+		if sess != nil && sess.Name == name {
+			return sess
+		}
+	}
+	return nil
 }
 
 func (a *App) handleIdleSummarySweepTick() bool {

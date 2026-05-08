@@ -119,6 +119,12 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 			{Text: v, Style: StyleDefault},
 		})
 	}
+	kvLoading := func(k, status string) {
+		out = append(out, []TextSegment{
+			{Text: fmt.Sprintf("  %-14s", k), Style: StyleSubtext},
+			loadingSegment(status),
+		})
+	}
 	kvStacked := func(k, v string, note string) {
 		kv(k, v)
 		if strings.TrimSpace(note) == "" {
@@ -135,14 +141,18 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 		kv("Context", formatExactContextUsage(detail.ContextUsage))
 		kv("Messages", formatDetailTokens(detail.ContextUsage.MessagesTokens))
 	} else {
-		kv("Context", loadingValue(detail.ContextUsageStatus))
-		kv("Messages", loadingValue(detail.ContextUsageStatus))
+		kvLoading("Context", detail.ContextUsageStatus)
+		kvLoading("Messages", detail.ContextUsageStatus)
 	}
 	lastActivityAt, lastActivityAgo := formatDetailLastActivity(sess)
 	kvStacked("Last activity", lastActivityAt, lastActivityAgo)
 	out = append(out, []TextSegment{})
 
-	if detail.ContextUsageStatus != "" {
+	// Diagnostics is only worth a section heading when the status
+	// carries information beyond the spinner (a failure, a cooldown
+	// reason, "unsupported"). Generic in-flight sentinels would just
+	// repeat the Overview spinner row, which looks cluttered.
+	if detail.ContextUsageStatus != "" && !isGenericLoadingStatus(detail.ContextUsageStatus) {
 		section("Diagnostics")
 		kv("Context probe", detail.ContextUsageStatus)
 		out = append(out, []TextSegment{})
@@ -183,11 +193,11 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 			kv("Size", fmt.Sprintf("%.2f MB", mb))
 		}
 	} else {
-		v := loadingValue(detail.TranscriptStatsStatus)
-		kv("Visible msgs", v)
-		kv("Last msg est", v)
-		kv("Compactions", v)
-		kv("Size", v)
+		status := detail.TranscriptStatsStatus
+		kvLoading("Visible msgs", status)
+		kvLoading("Last msg est", status)
+		kvLoading("Compactions", status)
+		kvLoading("Size", status)
 	}
 	out = append(out, []TextSegment{})
 
@@ -336,7 +346,10 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 
 	if len(src) == 0 {
 		if detail.ConversationLoading {
-			return [][]TextSegment{{{Text: "  " + loadingValue("loading conversation..."), Style: StyleMuted}}}
+			return [][]TextSegment{{
+				{Text: "  ", Style: StyleMuted},
+				loadingSegment("loading conversation..."),
+			}}
 		}
 		return [][]TextSegment{{{Text: "  (no visible messages)", Style: StyleMuted}}}
 	}
