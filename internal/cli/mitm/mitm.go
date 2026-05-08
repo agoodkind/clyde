@@ -13,5 +13,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 		Short: "Inspect the daemon-owned MITM proxy",
 	}
 	cmd.AddCommand(newStatusCmd(f))
+	cmd.AddCommand(newShowCmd(f))
 	return cmd
 }

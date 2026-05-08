@@ -2,6 +2,9 @@
 #
 # clyde-correlate.sh
 #
+# Note: `clyde mitm show <id>` is the recommended replacement for users with
+# the clyde binary on PATH. This script remains for environments without it.
+#
 # Print log lines and raw-capture file paths that correlate to a single Clyde
 # request identifier. Accepts any of three identifier shapes without requiring
 # the caller to specify which.
