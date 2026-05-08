@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/correlation"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
@@ -144,12 +145,28 @@ func (s *Server) SendLiveSession(ctx context.Context, req *clydev1.SendLiveSessi
 
 // StreamLiveSession streams live-session events over gRPC.
 func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream clydev1.ClydeService_StreamLiveSessionServer) error {
-	_, _ = peer.FromContext(stream.Context())
 	sessionID := strings.TrimSpace(req.GetSessionId())
 	if sessionID == "" {
 		return fmt.Errorf("%w", status.Error(codes.InvalidArgument, "session_id is required"))
 	}
-	events, err := s.streamLiveSessionEvents(stream.Context(), sessionID)
+
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, regErr := s.RPCs.Register(streamCtx, "daemon.rpc.stream_live_session", RPCMeta{
+		Method:    "/clyde.v1.ClydeService/StreamLiveSession",
+		Direction: "inbound",
+		PeerActor: daemonPeerAddr(peerInfo),
+		RequestID: corr.RequestID,
+		TraceID:   string(corr.TraceID),
+	}, rpcCloser{cancel: streamCancel})
+	if regErr != nil {
+		return fmt.Errorf("%w", status.Errorf(codes.Unavailable, "daemon draining: %v", regErr))
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "stream_live_session.done")
+
+	events, err := s.streamLiveSessionEvents(streamCtx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -162,7 +179,7 @@ func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream
 			if err := stream.Send(protoStreamLiveSessionEvent(event)); err != nil {
 				return fmt.Errorf("send live session event: %w", err)
 			}
-		case <-stream.Context().Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
