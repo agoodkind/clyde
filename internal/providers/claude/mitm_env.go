@@ -13,6 +13,7 @@ const (
 	ClydeMITMAnthropicBaseURLEnv = "CLYDE_MITM_ANTHROPIC_BASE_URL"
 )
 
+// SanitizeMITMMap removes stale Clyde-owned MITM environment from a mutable env map.
 func SanitizeMITMMap(env map[string]string) {
 	baseURL := strings.TrimSpace(env[AnthropicBaseURLEnv])
 	marker := strings.TrimSpace(env[ClydeMITMAnthropicBaseURLEnv])
@@ -22,6 +23,7 @@ func SanitizeMITMMap(env map[string]string) {
 	delete(env, ClydeMITMAnthropicBaseURLEnv)
 }
 
+// ApplyMITMMap marks and installs a daemon-provided Anthropic MITM base URL.
 func ApplyMITMMap(env map[string]string, baseURL string) {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
@@ -31,6 +33,7 @@ func ApplyMITMMap(env map[string]string, baseURL string) {
 	env[ClydeMITMAnthropicBaseURLEnv] = "1"
 }
 
+// SanitizeMITMList removes stale Clyde-owned MITM environment from an env list.
 func SanitizeMITMList(env []string) []string {
 	baseURL := envValue(env, AnthropicBaseURLEnv)
 	marker := envValue(env, ClydeMITMAnthropicBaseURLEnv)
