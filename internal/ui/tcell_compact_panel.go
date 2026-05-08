@@ -143,8 +143,8 @@ func NewCompactPanel(sessionName string) *CompactPanel {
 		bufferTok:         0,
 		overheadTok:       0,
 		freeTok:           0,
-		contextPercentage: 0,
 		contextStatus:     "",
+		contextPercentage: 0,
 		reserved:          13000,
 		targetText:        "200000",
 		thinking:          true,
@@ -264,7 +264,7 @@ func (p *CompactPanel) SetBusy(action string, busy bool) {
 
 func (p *CompactPanel) SetUndoResult(res *CompactUndoResult, err error) {
 	if err != nil {
-		p.status = "undo failed: " + polishDaemonError(err)
+		p.status = fmt.Sprintf("undo failed: %v", err)
 		return
 	}
 	p.latestUndo = res
