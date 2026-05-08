@@ -29,7 +29,7 @@ LOG_PATH      := $(HOME)/Library/Logs/clyde-daemon.log
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
 
 # Project allowlist for the central lint-deadcode gate.
-DEADCODE_EXCLUDE_PATHS = cmd/root.go:.*NewRootCmd,internal/mitm/(baseline_paths|codegen|codegen_v2|drift_runner)\.go:,internal/testutil/claude.go:.*CreateFakeClaude,internal/testutil/claude.go:.*ReadClaudeArgs,internal/webapp/livetrack_meta.go:.*IsLivetrackMeta
+DEADCODE_EXCLUDE_PATHS = cmd/root.go:.*NewRootCmd,internal/mitm/(baseline_paths|codegen|codegen_v2|drift_runner)\.go:,internal/testutil/claude.go:.*CreateFakeClaude,internal/testutil/claude.go:.*ReadClaudeArgs
 
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
