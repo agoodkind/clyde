@@ -98,6 +98,9 @@ func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 	if baseURL != "http://daemon.example" {
 		t.Fatalf("ANTHROPIC_BASE_URL=%q, want daemon-provided MITM proxy", baseURL)
 	}
+	if !envContains(got, "CLYDE_MITM_ANTHROPIC_BASE_URL", "1") {
+		t.Fatalf("CLYDE_MITM_ANTHROPIC_BASE_URL marker missing: %v", got)
+	}
 }
 
 func TestApplyClaudeMITMEnvFailsOpenWhenDaemonUnavailable(t *testing.T) {
@@ -130,6 +133,35 @@ func TestApplyClaudeMITMEnvFailsOpenWhenDaemonUnavailable(t *testing.T) {
 	}
 	if baseURL != "https://old.example" {
 		t.Fatalf("ANTHROPIC_BASE_URL=%q, want original value after fail open", baseURL)
+	}
+}
+
+func TestApplyClaudeMITMEnvDropsInheritedLoopbackWhenDaemonUnavailable(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfgDir := filepath.Join(configHome, "clyde")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := []byte("[mitm]\nenabled_default = true\nproviders = [\"claude\"]\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n")
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	oldLaunchEnvironment := claudeLaunchEnvironmentViaDaemon
+	t.Cleanup(func() {
+		claudeLaunchEnvironmentViaDaemon = oldLaunchEnvironment
+	})
+	claudeLaunchEnvironmentViaDaemon = func(context.Context, string) ([]*clydev1.EnvironmentVariable, error) {
+		return nil, errors.New("daemon unavailable")
+	}
+
+	got := applyClaudeMITMEnv(context.Background(), []string{"ANTHROPIC_BASE_URL=http://[::1]:50067", "KEEP=1"})
+
+	if !envContains(got, "KEEP", "1") {
+		t.Fatalf("KEEP env missing: %v", got)
+	}
+	if baseURL, ok := envValue(got, "ANTHROPIC_BASE_URL"); ok {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want stale Clyde proxy removed", baseURL)
 	}
 }
 

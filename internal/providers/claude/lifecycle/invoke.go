@@ -465,6 +465,7 @@ func applyMITMEnv(env map[string]string) {
 	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
 		return
 	}
+	claudeprovider.SanitizeMITMMap(env)
 	extra, err := providerLaunchEnvironmentViaDaemon(context.Background(), "claude")
 	if err != nil {
 		claudeLog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
@@ -472,6 +473,10 @@ func applyMITMEnv(env map[string]string) {
 	}
 	for _, item := range extra {
 		if item.GetKey() == "" {
+			continue
+		}
+		if item.GetKey() == claudeprovider.AnthropicBaseURLEnv {
+			claudeprovider.ApplyMITMMap(env, item.GetValue())
 			continue
 		}
 		env[item.GetKey()] = item.GetValue()
