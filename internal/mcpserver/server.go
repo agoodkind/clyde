@@ -7,11 +7,14 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,6 +79,12 @@ func loadResult(resultID string) (*cachedResult, bool) {
 var gettingStartedPrompt string
 
 // Serve starts the MCP stdio server and blocks until the client disconnects.
+//
+// The stdio writer is wrapped in mcpStdoutWriter so concurrent JSON-RPC
+// frames cannot interleave on os.Stdout. The upstream stdio transport runs
+// handleNotifications and the toolCallWorker pool on separate goroutines,
+// and a few upstream paths write to the session writer without going
+// through the upstream writeMu. CLYDE-57.
 func Serve(ctx context.Context) error {
 	log, cleanup := audit.NewLogger("mcp")
 	defer cleanup()
@@ -153,7 +162,42 @@ func Serve(ctx context.Context) error {
 		handleAnalyzeResults,
 	)
 
-	return server.ServeStdio(s)
+	return serveStdioLocked(ctx, s, os.Stdin, os.Stdout)
+}
+
+// serveStdioLocked mirrors server.ServeStdio but routes os.Stdout through
+// mcpStdoutWriter so every byte written by the upstream transport, by
+// notification frames, and by tool responses is serialized under one mutex.
+// Signal handling matches the upstream ServeStdio path.
+func serveStdioLocked(parent context.Context, mcp *server.MCPServer, stdin io.Reader, stdout io.Writer) error {
+	stdio := server.NewStdioServer(mcp)
+
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.ErrorContext(ctx, "mcp.stdio.signal_watcher_panic",
+					"component", "mcpserver",
+					"err", fmt.Errorf("panic: %v", r),
+				)
+			}
+		}()
+		select {
+		case <-sigChan:
+			cancel()
+		case <-ctx.Done():
+			return
+		}
+	}()
+
+	locked := newMCPStdoutWriter(stdout)
+	return stdio.Listen(ctx, stdin, locked)
 }
 
 func handleListSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
