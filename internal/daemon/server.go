@@ -43,11 +43,11 @@ import (
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
-	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/slogger"
+	itranscript "goodkind.io/clyde/internal/transcript"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -1838,25 +1838,31 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 			resp.LastActivityNanos = info.ModTime().UnixNano()
 		}
 	}
-	if caps.TranscriptExport {
-		for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
-			text := strings.TrimSpace(m.Text)
-			if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
-				continue
-			}
-			resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
-		}
-		for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
-			resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
-		}
-		for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
-			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
-		}
-	}
+	s.populateSessionDetailMessages(sess, resp)
+	return resp
+}
+
+func (s *Server) populateSessionDetailMessages(sess *session.Session, resp *clydev1.GetSessionDetailResponse) {
 	if sess.ProviderID() == session.ProviderCodex {
 		s.applyCodexSessionDetail(sess, resp)
+		return
 	}
-	return resp
+	if !sess.SessionProviderCapabilities().TranscriptExport {
+		return
+	}
+	for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
+		text := strings.TrimSpace(m.Text)
+		if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
+			continue
+		}
+		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
+	}
+	for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
+		resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
+	}
+	for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
+		resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
+	}
 }
 
 func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.GetSessionDetailResponse) {
@@ -1864,7 +1870,7 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 	if path == "" {
 		return
 	}
-	thread, err := codexstore.ReadThreadByRolloutPath(path, true, false)
+	history, err := itranscript.ReadCodexHistory(path)
 	if err != nil {
 		s.log.Warn("daemon.codex.detail_read_failed",
 			"component", "daemon",
@@ -1874,24 +1880,30 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 		)
 		return
 	}
-	if thread.ModelProvider != "" && resp.Model == "-" {
-		resp.Model = thread.ModelProvider
+	if history.ModelProvider != "" && resp.Model == "-" {
+		resp.Model = history.ModelProvider
 	}
-	resp.TotalMessages = int32(len(thread.Messages))
-	for _, msg := range thread.Messages {
-		text := strings.TrimSpace(msg.Text)
-		if text == "" {
+	allTurns := history.ConversationTurns(itranscript.ShapeOptions{
+		IncludeThinking:  false,
+		ConversationOnly: true,
+		ToolOnly:         itranscript.ToolOnlyCompactSummary,
+		MaxTextRunes:     1000,
+	})
+	resp.TotalMessages = int32(len(allTurns))
+	for _, turn := range allTurns {
+		resp.AllMessages = append(resp.AllMessages, detailMessageProto(turn.Role, turn.Text, turn.Timestamp))
+	}
+	for _, turn := range history.RecentConversationTurns(5, itranscript.ShapeOptions{
+		IncludeThinking:  false,
+		ConversationOnly: true,
+		ToolOnly:         itranscript.ToolOnlyCompactSummary,
+		MaxTextRunes:     150,
+	}) {
+		text := strings.TrimSpace(turn.Text)
+		if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
 			continue
 		}
-		resp.AllMessages = append(resp.AllMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
-	}
-	start := max(len(thread.Messages)-5, 0)
-	for _, msg := range thread.Messages[start:] {
-		text := strings.TrimSpace(msg.Text)
-		if text == "" {
-			continue
-		}
-		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
+		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(turn.Role, text, turn.Timestamp))
 	}
 	if info, err := os.Stat(path); err == nil {
 		resp.TranscriptSizeBytes = info.Size()

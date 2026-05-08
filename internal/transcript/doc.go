@@ -1,2 +1,2 @@
-// Package transcript parses and tails Claude transcript files.
+// Package transcript parses and shapes provider transcript and rollout history.
 package transcript
