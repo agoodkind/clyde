@@ -1646,310 +1646,6 @@ func (x *ReleaseForegroundSessionResponse) GetLiveSession() *LiveSession {
 	return nil
 }
 
-type LaunchMITMUpstreamRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Upstream      string                 `protobuf:"bytes,1,opt,name=upstream,proto3" json:"upstream,omitempty"`
-	ProfileMode   string                 `protobuf:"bytes,2,opt,name=profile_mode,json=profileMode,proto3" json:"profile_mode,omitempty"`
-	CaptureDir    string                 `protobuf:"bytes,3,opt,name=capture_dir,json=captureDir,proto3" json:"capture_dir,omitempty"`
-	Force         bool                   `protobuf:"varint,4,opt,name=force,proto3" json:"force,omitempty"`
-	Args          []string               `protobuf:"bytes,5,rep,name=args,proto3" json:"args,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LaunchMITMUpstreamRequest) Reset() {
-	*x = LaunchMITMUpstreamRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LaunchMITMUpstreamRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LaunchMITMUpstreamRequest) ProtoMessage() {}
-
-func (x *LaunchMITMUpstreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LaunchMITMUpstreamRequest.ProtoReflect.Descriptor instead.
-func (*LaunchMITMUpstreamRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{26}
-}
-
-func (x *LaunchMITMUpstreamRequest) GetUpstream() string {
-	if x != nil {
-		return x.Upstream
-	}
-	return ""
-}
-
-func (x *LaunchMITMUpstreamRequest) GetProfileMode() string {
-	if x != nil {
-		return x.ProfileMode
-	}
-	return ""
-}
-
-func (x *LaunchMITMUpstreamRequest) GetCaptureDir() string {
-	if x != nil {
-		return x.CaptureDir
-	}
-	return ""
-}
-
-func (x *LaunchMITMUpstreamRequest) GetForce() bool {
-	if x != nil {
-		return x.Force
-	}
-	return false
-}
-
-func (x *LaunchMITMUpstreamRequest) GetArgs() []string {
-	if x != nil {
-		return x.Args
-	}
-	return nil
-}
-
-type LaunchMITMUpstreamResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Upstream      string                 `protobuf:"bytes,1,opt,name=upstream,proto3" json:"upstream,omitempty"`
-	ProfileMode   string                 `protobuf:"bytes,2,opt,name=profile_mode,json=profileMode,proto3" json:"profile_mode,omitempty"`
-	CaptureDir    string                 `protobuf:"bytes,3,opt,name=capture_dir,json=captureDir,proto3" json:"capture_dir,omitempty"`
-	Launched      bool                   `protobuf:"varint,4,opt,name=launched,proto3" json:"launched,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LaunchMITMUpstreamResponse) Reset() {
-	*x = LaunchMITMUpstreamResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LaunchMITMUpstreamResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LaunchMITMUpstreamResponse) ProtoMessage() {}
-
-func (x *LaunchMITMUpstreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LaunchMITMUpstreamResponse.ProtoReflect.Descriptor instead.
-func (*LaunchMITMUpstreamResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{27}
-}
-
-func (x *LaunchMITMUpstreamResponse) GetUpstream() string {
-	if x != nil {
-		return x.Upstream
-	}
-	return ""
-}
-
-func (x *LaunchMITMUpstreamResponse) GetProfileMode() string {
-	if x != nil {
-		return x.ProfileMode
-	}
-	return ""
-}
-
-func (x *LaunchMITMUpstreamResponse) GetCaptureDir() string {
-	if x != nil {
-		return x.CaptureDir
-	}
-	return ""
-}
-
-func (x *LaunchMITMUpstreamResponse) GetLaunched() bool {
-	if x != nil {
-		return x.Launched
-	}
-	return false
-}
-
-type PrepareMITMLaunchRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Upstream      string                 `protobuf:"bytes,1,opt,name=upstream,proto3" json:"upstream,omitempty"`
-	ProfileMode   string                 `protobuf:"bytes,2,opt,name=profile_mode,json=profileMode,proto3" json:"profile_mode,omitempty"`
-	CaptureDir    string                 `protobuf:"bytes,3,opt,name=capture_dir,json=captureDir,proto3" json:"capture_dir,omitempty"`
-	Force         bool                   `protobuf:"varint,4,opt,name=force,proto3" json:"force,omitempty"`
-	Args          []string               `protobuf:"bytes,5,rep,name=args,proto3" json:"args,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PrepareMITMLaunchRequest) Reset() {
-	*x = PrepareMITMLaunchRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PrepareMITMLaunchRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PrepareMITMLaunchRequest) ProtoMessage() {}
-
-func (x *PrepareMITMLaunchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PrepareMITMLaunchRequest.ProtoReflect.Descriptor instead.
-func (*PrepareMITMLaunchRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{28}
-}
-
-func (x *PrepareMITMLaunchRequest) GetUpstream() string {
-	if x != nil {
-		return x.Upstream
-	}
-	return ""
-}
-
-func (x *PrepareMITMLaunchRequest) GetProfileMode() string {
-	if x != nil {
-		return x.ProfileMode
-	}
-	return ""
-}
-
-func (x *PrepareMITMLaunchRequest) GetCaptureDir() string {
-	if x != nil {
-		return x.CaptureDir
-	}
-	return ""
-}
-
-func (x *PrepareMITMLaunchRequest) GetForce() bool {
-	if x != nil {
-		return x.Force
-	}
-	return false
-}
-
-func (x *PrepareMITMLaunchRequest) GetArgs() []string {
-	if x != nil {
-		return x.Args
-	}
-	return nil
-}
-
-type PrepareMITMLaunchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Upstream      string                 `protobuf:"bytes,1,opt,name=upstream,proto3" json:"upstream,omitempty"`
-	ProfileMode   string                 `protobuf:"bytes,2,opt,name=profile_mode,json=profileMode,proto3" json:"profile_mode,omitempty"`
-	CaptureDir    string                 `protobuf:"bytes,3,opt,name=capture_dir,json=captureDir,proto3" json:"capture_dir,omitempty"`
-	Binary        string                 `protobuf:"bytes,4,opt,name=binary,proto3" json:"binary,omitempty"`
-	Args          []string               `protobuf:"bytes,5,rep,name=args,proto3" json:"args,omitempty"`
-	Env           []string               `protobuf:"bytes,6,rep,name=env,proto3" json:"env,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PrepareMITMLaunchResponse) Reset() {
-	*x = PrepareMITMLaunchResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[29]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PrepareMITMLaunchResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PrepareMITMLaunchResponse) ProtoMessage() {}
-
-func (x *PrepareMITMLaunchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[29]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PrepareMITMLaunchResponse.ProtoReflect.Descriptor instead.
-func (*PrepareMITMLaunchResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{29}
-}
-
-func (x *PrepareMITMLaunchResponse) GetUpstream() string {
-	if x != nil {
-		return x.Upstream
-	}
-	return ""
-}
-
-func (x *PrepareMITMLaunchResponse) GetProfileMode() string {
-	if x != nil {
-		return x.ProfileMode
-	}
-	return ""
-}
-
-func (x *PrepareMITMLaunchResponse) GetCaptureDir() string {
-	if x != nil {
-		return x.CaptureDir
-	}
-	return ""
-}
-
-func (x *PrepareMITMLaunchResponse) GetBinary() string {
-	if x != nil {
-		return x.Binary
-	}
-	return ""
-}
-
-func (x *PrepareMITMLaunchResponse) GetArgs() []string {
-	if x != nil {
-		return x.Args
-	}
-	return nil
-}
-
-func (x *PrepareMITMLaunchResponse) GetEnv() []string {
-	if x != nil {
-		return x.Env
-	}
-	return nil
-}
-
 type EnvironmentVariable struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -1960,7 +1656,7 @@ type EnvironmentVariable struct {
 
 func (x *EnvironmentVariable) Reset() {
 	*x = EnvironmentVariable{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1972,7 +1668,7 @@ func (x *EnvironmentVariable) String() string {
 func (*EnvironmentVariable) ProtoMessage() {}
 
 func (x *EnvironmentVariable) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1985,7 +1681,7 @@ func (x *EnvironmentVariable) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvironmentVariable.ProtoReflect.Descriptor instead.
 func (*EnvironmentVariable) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{30}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *EnvironmentVariable) GetKey() string {
@@ -2011,7 +1707,7 @@ type ProviderLaunchEnvironmentRequest struct {
 
 func (x *ProviderLaunchEnvironmentRequest) Reset() {
 	*x = ProviderLaunchEnvironmentRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[31]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2023,7 +1719,7 @@ func (x *ProviderLaunchEnvironmentRequest) String() string {
 func (*ProviderLaunchEnvironmentRequest) ProtoMessage() {}
 
 func (x *ProviderLaunchEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[31]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2036,7 +1732,7 @@ func (x *ProviderLaunchEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderLaunchEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*ProviderLaunchEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{31}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ProviderLaunchEnvironmentRequest) GetProvider() string {
@@ -2055,7 +1751,7 @@ type ProviderLaunchEnvironmentResponse struct {
 
 func (x *ProviderLaunchEnvironmentResponse) Reset() {
 	*x = ProviderLaunchEnvironmentResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[32]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2067,7 +1763,7 @@ func (x *ProviderLaunchEnvironmentResponse) String() string {
 func (*ProviderLaunchEnvironmentResponse) ProtoMessage() {}
 
 func (x *ProviderLaunchEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[32]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2080,7 +1776,7 @@ func (x *ProviderLaunchEnvironmentResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ProviderLaunchEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*ProviderLaunchEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{32}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ProviderLaunchEnvironmentResponse) GetEnvironment() []*EnvironmentVariable {
@@ -2221,35 +1917,7 @@ const file_clyde_v1_daemon_provider_proto_rawDesc = "" +
 	"exit_state\x18\x02 \x01(\tR\texitState\"x\n" +
 	" ReleaseForegroundSessionResponse\x12\x1a\n" +
 	"\brestored\x18\x01 \x01(\bR\brestored\x128\n" +
-	"\flive_session\x18\x02 \x01(\v2\x15.clyde.v1.LiveSessionR\vliveSession\"\xa5\x01\n" +
-	"\x19LaunchMITMUpstreamRequest\x12\x1a\n" +
-	"\bupstream\x18\x01 \x01(\tR\bupstream\x12!\n" +
-	"\fprofile_mode\x18\x02 \x01(\tR\vprofileMode\x12\x1f\n" +
-	"\vcapture_dir\x18\x03 \x01(\tR\n" +
-	"captureDir\x12\x14\n" +
-	"\x05force\x18\x04 \x01(\bR\x05force\x12\x12\n" +
-	"\x04args\x18\x05 \x03(\tR\x04args\"\x98\x01\n" +
-	"\x1aLaunchMITMUpstreamResponse\x12\x1a\n" +
-	"\bupstream\x18\x01 \x01(\tR\bupstream\x12!\n" +
-	"\fprofile_mode\x18\x02 \x01(\tR\vprofileMode\x12\x1f\n" +
-	"\vcapture_dir\x18\x03 \x01(\tR\n" +
-	"captureDir\x12\x1a\n" +
-	"\blaunched\x18\x04 \x01(\bR\blaunched\"\xa4\x01\n" +
-	"\x18PrepareMITMLaunchRequest\x12\x1a\n" +
-	"\bupstream\x18\x01 \x01(\tR\bupstream\x12!\n" +
-	"\fprofile_mode\x18\x02 \x01(\tR\vprofileMode\x12\x1f\n" +
-	"\vcapture_dir\x18\x03 \x01(\tR\n" +
-	"captureDir\x12\x14\n" +
-	"\x05force\x18\x04 \x01(\bR\x05force\x12\x12\n" +
-	"\x04args\x18\x05 \x03(\tR\x04args\"\xb9\x01\n" +
-	"\x19PrepareMITMLaunchResponse\x12\x1a\n" +
-	"\bupstream\x18\x01 \x01(\tR\bupstream\x12!\n" +
-	"\fprofile_mode\x18\x02 \x01(\tR\vprofileMode\x12\x1f\n" +
-	"\vcapture_dir\x18\x03 \x01(\tR\n" +
-	"captureDir\x12\x16\n" +
-	"\x06binary\x18\x04 \x01(\tR\x06binary\x12\x12\n" +
-	"\x04args\x18\x05 \x03(\tR\x04args\x12\x10\n" +
-	"\x03env\x18\x06 \x03(\tR\x03env\"=\n" +
+	"\flive_session\x18\x02 \x01(\v2\x15.clyde.v1.LiveSessionR\vliveSession\"=\n" +
 	"\x13EnvironmentVariable\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\">\n" +
@@ -2271,7 +1939,7 @@ func file_clyde_v1_daemon_provider_proto_rawDescGZIP() []byte {
 }
 
 var file_clyde_v1_daemon_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_clyde_v1_daemon_provider_proto_goTypes = []any{
 	(StartRemoteSessionResponse_LaunchState)(0), // 0: clyde.v1.StartRemoteSessionResponse.LaunchState
 	(*ProviderSessionIdentity)(nil),             // 1: clyde.v1.ProviderSessionIdentity
@@ -2300,13 +1968,9 @@ var file_clyde_v1_daemon_provider_proto_goTypes = []any{
 	(*AcquireForegroundSessionResponse)(nil),    // 24: clyde.v1.AcquireForegroundSessionResponse
 	(*ReleaseForegroundSessionRequest)(nil),     // 25: clyde.v1.ReleaseForegroundSessionRequest
 	(*ReleaseForegroundSessionResponse)(nil),    // 26: clyde.v1.ReleaseForegroundSessionResponse
-	(*LaunchMITMUpstreamRequest)(nil),           // 27: clyde.v1.LaunchMITMUpstreamRequest
-	(*LaunchMITMUpstreamResponse)(nil),          // 28: clyde.v1.LaunchMITMUpstreamResponse
-	(*PrepareMITMLaunchRequest)(nil),            // 29: clyde.v1.PrepareMITMLaunchRequest
-	(*PrepareMITMLaunchResponse)(nil),           // 30: clyde.v1.PrepareMITMLaunchResponse
-	(*EnvironmentVariable)(nil),                 // 31: clyde.v1.EnvironmentVariable
-	(*ProviderLaunchEnvironmentRequest)(nil),    // 32: clyde.v1.ProviderLaunchEnvironmentRequest
-	(*ProviderLaunchEnvironmentResponse)(nil),   // 33: clyde.v1.ProviderLaunchEnvironmentResponse
+	(*EnvironmentVariable)(nil),                 // 27: clyde.v1.EnvironmentVariable
+	(*ProviderLaunchEnvironmentRequest)(nil),    // 28: clyde.v1.ProviderLaunchEnvironmentRequest
+	(*ProviderLaunchEnvironmentResponse)(nil),   // 29: clyde.v1.ProviderLaunchEnvironmentResponse
 }
 var file_clyde_v1_daemon_provider_proto_depIdxs = []int32{
 	1,  // 0: clyde.v1.SessionHistoryBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
@@ -2320,7 +1984,7 @@ var file_clyde_v1_daemon_provider_proto_depIdxs = []int32{
 	12, // 8: clyde.v1.ListLiveSessionsResponse.sessions:type_name -> clyde.v1.LiveSession
 	12, // 9: clyde.v1.StartLiveSessionResponse.session:type_name -> clyde.v1.LiveSession
 	12, // 10: clyde.v1.ReleaseForegroundSessionResponse.live_session:type_name -> clyde.v1.LiveSession
-	31, // 11: clyde.v1.ProviderLaunchEnvironmentResponse.environment:type_name -> clyde.v1.EnvironmentVariable
+	27, // 11: clyde.v1.ProviderLaunchEnvironmentResponse.environment:type_name -> clyde.v1.EnvironmentVariable
 	12, // [12:12] is the sub-list for method output_type
 	12, // [12:12] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
@@ -2339,7 +2003,7 @@ func file_clyde_v1_daemon_provider_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_provider_proto_rawDesc), len(file_clyde_v1_daemon_provider_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   33,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
