@@ -116,10 +116,17 @@ type EventRenderer struct {
 	// it as `data-signature` so Cursor's transcript carries it across
 	// turns. Cleared after each close so a later span starts fresh.
 	lastReasoningSignature string
-	assistantText          assistantTextAggregate
-	assistantTextLogged    bool
-	toolCallNames          []string
-	hasSubagentToolCall    bool
+	// lastReasoningRedactedData is the most recent opaque base64 payload
+	// captured from a reasoning event whose ReasoningKind is "redacted"
+	// (today: Anthropic redacted_thinking via EventReasoningDelta). The
+	// synthetic-redacted-thinking close marker embeds it as
+	// `data-encrypted` so Cursor's transcript carries it across turns.
+	// Cleared after each close so a later span starts fresh.
+	lastReasoningRedactedData string
+	assistantText             assistantTextAggregate
+	assistantTextLogged       bool
+	toolCallNames             []string
+	hasSubagentToolCall       bool
 	// upstreamResponseID is the most recent provider-assigned response id,
 	// captured via SetUpstreamResponseID. It is merged onto the
 	// correlation snapshot built from the per-call ctx so summary logs
@@ -143,30 +150,31 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 	}
 	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
 	return &EventRenderer{
-		createdUnix:            renderClock.Now().Unix(),
-		modelAlias:             modelAlias,
-		reqID:                  reqID,
-		backend:                backend,
-		ctx:                    ctx,
-		log:                    log,
-		suppressed:             nil,
-		seenRole:               false,
-		reasoningOpen:          false,
-		lastReasoningKind:      "",
-		lastSummaryIdx:         0,
-		haveSummaryIdx:         false,
-		pendingReasoningBreak:  false,
-		reasoningSignaled:      false,
-		reasoningVisible:       false,
-		reasoningBodyEmitted:   false,
-		lastReasoningItemID:    "",
-		lastReasoningEncrypted: "",
-		lastReasoningSignature: "",
-		upstreamResponseID:     "",
-		assistantText:          assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
-		assistantTextLogged:    false,
-		toolCallNames:          nil,
-		hasSubagentToolCall:    false,
+		createdUnix:               renderClock.Now().Unix(),
+		modelAlias:                modelAlias,
+		reqID:                     reqID,
+		backend:                   backend,
+		ctx:                       ctx,
+		log:                       log,
+		suppressed:                nil,
+		seenRole:                  false,
+		reasoningOpen:             false,
+		lastReasoningKind:         "",
+		lastSummaryIdx:            0,
+		haveSummaryIdx:            false,
+		pendingReasoningBreak:     false,
+		reasoningSignaled:         false,
+		reasoningVisible:          false,
+		reasoningBodyEmitted:      false,
+		lastReasoningItemID:       "",
+		lastReasoningEncrypted:    "",
+		lastReasoningSignature:    "",
+		lastReasoningRedactedData: "",
+		upstreamResponseID:        "",
+		assistantText:             assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
+		assistantTextLogged:       false,
+		toolCallNames:             nil,
+		hasSubagentToolCall:       false,
 	}
 }
 
@@ -256,10 +264,17 @@ func (r *EventRenderer) dispatchEvent(ev Event) []adapteropenai.StreamChunk {
 }
 
 // handleReasoningSignaled marks reasoning as observed and, when nothing has
-// opened the synthetic content block yet, emits the open marker.
+// opened the synthetic content block yet, emits the open marker. A non-empty
+// ReasoningKind on the event captures the active reasoning kind so the
+// renderer routes the open and close markers to the matching synthetic kind
+// (today: "redacted" picks SyntheticRedactedThinking; everything else picks
+// SyntheticReasoning).
 func (r *EventRenderer) handleReasoningSignaled(ev Event) []adapteropenai.StreamChunk {
 	r.reasoningSignaled = true
 	r.captureReasoningItemID(ev)
+	if kind := strings.TrimSpace(ev.ReasoningKind); kind != "" {
+		r.lastReasoningKind = kind
+	}
 	// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
 	// Later reasoning deltas fill it; otherwise finish closes an empty block.
 	if r.reasoningVisible || r.reasoningOpen {
@@ -277,12 +292,18 @@ func (r *EventRenderer) handleReasoningSignaled(ev Event) []adapteropenai.Stream
 // reasoning_content for clients that consume it directly. A non-empty
 // Signature on the event captures the most recent Anthropic signature for
 // the active thinking block; renderReasoningClose later embeds it on the
-// close marker as `data-signature`.
+// close marker as `data-signature`. A non-empty RedactedData on the event
+// (Anthropic redacted_thinking; ReasoningKind="redacted") captures the
+// opaque base64 payload that renderReasoningClose later embeds on the
+// redacted-thinking close marker as `data-encrypted`.
 func (r *EventRenderer) handleReasoningDelta(ev Event) []adapteropenai.StreamChunk {
 	r.reasoningSignaled = true
 	r.reasoningVisible = true
 	if sig := strings.TrimSpace(ev.Signature); sig != "" {
 		r.lastReasoningSignature = sig
+	}
+	if data := strings.TrimSpace(ev.RedactedData); data != "" {
+		r.lastReasoningRedactedData = data
 	}
 	chunk := r.renderReasoning(ev)
 	if chunk == nil {
