@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"goodkind.io/gklog"
+	"gopkg.in/natefinch/lumberjack.v2"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 func TestAppendCaptureRotatesCaptureIndex(t *testing.T) {
@@ -41,6 +44,61 @@ func TestAppendCaptureRotatesCaptureIndex(t *testing.T) {
 	if len(rotated) == 0 {
 		t.Fatalf("expected at least one rotated capture index in %s", dir)
 	}
+}
+
+func TestAppendCaptureReusesRotatedWriter(t *testing.T) {
+	dir := t.TempDir()
+	compress := false
+	policy := CaptureFilePolicy{
+		RotationEnabled: true,
+		Rotation: gklog.RotationConfig{
+			MaxSizeMB:  1,
+			MaxBackups: 2,
+			MaxAgeDays: 1,
+			Compress:   &compress,
+		},
+	}
+
+	clearCaptureWriterCacheForTest(t)
+	if err := WriteCaptureLine(dir, []byte(`{"event":"one"}`), policy); err != nil {
+		t.Fatalf("write capture line: %v", err)
+	}
+	if err := WriteCaptureLine(dir, []byte(`{"event":"two"}`), policy); err != nil {
+		t.Fatalf("write second capture line: %v", err)
+	}
+
+	captureWriterCache.mu.Lock()
+	writerCount := len(captureWriterCache.writers)
+	captureWriterCache.mu.Unlock()
+	if writerCount != 1 {
+		t.Fatalf("capture writer count = %d, want 1", writerCount)
+	}
+}
+
+func TestDefaultCapturePolicyDoesNotCompress(t *testing.T) {
+	policy := captureFilePolicyFromConfig(config.MITMConfig{})
+	if policy.Rotation.Compress == nil {
+		t.Fatal("compress pointer is nil")
+	}
+	if *policy.Rotation.Compress {
+		t.Fatal("default capture compression = true, want false")
+	}
+}
+
+func clearCaptureWriterCacheForTest(t *testing.T) {
+	t.Helper()
+	captureWriterCache.mu.Lock()
+	oldWriters := captureWriterCache.writers
+	captureWriterCache.writers = make(map[captureWriterKey]*lumberjack.Logger)
+	captureWriterCache.mu.Unlock()
+	t.Cleanup(func() {
+		captureWriterCache.mu.Lock()
+		for _, writer := range captureWriterCache.writers {
+			_ = writer.Close()
+		}
+		captureWriterCache.writers = oldWriters
+		captureWriterCache.mu.Unlock()
+	})
 }
 
 func findFilesWithPrefix(t *testing.T, dir string, prefix string) []string {

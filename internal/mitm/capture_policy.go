@@ -5,8 +5,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"goodkind.io/gklog"
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	"goodkind.io/clyde/internal/config"
 )
@@ -21,6 +23,22 @@ type CaptureFilePolicy struct {
 	Rotation        gklog.RotationConfig
 }
 
+type captureWriterKey struct {
+	path       string
+	maxSizeMB  int
+	maxBackups int
+	maxAgeDays int
+	compress   bool
+}
+
+var captureWriterCache = struct {
+	mu      sync.Mutex
+	writers map[captureWriterKey]*lumberjack.Logger
+}{
+	mu:      sync.Mutex{},
+	writers: make(map[captureWriterKey]*lumberjack.Logger),
+}
+
 func captureFilePolicyFromConfig(cfg config.MITMConfig) CaptureFilePolicy {
 	rot := cfg.Capture.Rotation
 	enabled := true
@@ -29,7 +47,7 @@ func captureFilePolicyFromConfig(cfg config.MITMConfig) CaptureFilePolicy {
 	}
 	compress := rot.Compress
 	if compress == nil {
-		value := true
+		value := false
 		compress = &value
 	}
 	return CaptureFilePolicy{
@@ -60,8 +78,7 @@ func WriteCaptureLine(dir string, line []byte, policy CaptureFilePolicy) error {
 	}
 	path := filepath.Join(dir, captureIndexFilename)
 	if policy.RotationEnabled {
-		writer := gklog.NewLumberjackWriterWithConfig(path, policy.Rotation)
-		defer func() { _ = writer.Close() }()
+		writer := captureRotatedWriter(path, policy.Rotation)
 		if _, err := writer.Write(append(line, '\n')); err != nil {
 			slog.Warn("mitm.capture.rotated_write_failed", "capture_path", path, "err", err)
 			return fmt.Errorf("write rotated capture event: %w", err)
@@ -79,4 +96,27 @@ func WriteCaptureLine(dir string, line []byte, policy CaptureFilePolicy) error {
 		return fmt.Errorf("write capture event: %w", err)
 	}
 	return nil
+}
+
+func captureRotatedWriter(path string, rotation gklog.RotationConfig) *lumberjack.Logger {
+	compress := false
+	if rotation.Compress != nil {
+		compress = *rotation.Compress
+	}
+	key := captureWriterKey{
+		path:       path,
+		maxSizeMB:  rotation.MaxSizeMB,
+		maxBackups: rotation.MaxBackups,
+		maxAgeDays: rotation.MaxAgeDays,
+		compress:   compress,
+	}
+	captureWriterCache.mu.Lock()
+	defer captureWriterCache.mu.Unlock()
+	writer, ok := captureWriterCache.writers[key]
+	if ok {
+		return writer
+	}
+	writer = gklog.NewLumberjackWriterWithConfig(path, rotation)
+	captureWriterCache.writers[key] = writer
+	return writer
 }
