@@ -179,6 +179,37 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(second.Metadata.DisplayTitle).To(Equal("merry-swan"))
 	})
 
+	It("syncs a provider rename for an already-known session", func() {
+		existing := NewSession("tack-22a95bc5", uuid)
+		Expect(store.Create(existing)).To(Succeed())
+
+		results := []DiscoveryResult{{
+			Provider: ProviderClaude,
+			Identity: ProviderSessionID{
+				Provider: ProviderClaude,
+				ID:       uuid,
+			},
+			WorkspaceRoot:       "/Users/agoodkind/Sites/tack",
+			Entrypoint:          "cli",
+			FirstEntryTime:      time.Date(2026, time.April, 12, 23, 52, 12, 0, time.UTC),
+			NameContract:        tier4TestName{value: "renamed-in-provider"},
+			PrimaryArtifact:     filepath.Join(projDir, uuid+".jsonl"),
+			PrimaryArtifactKind: "transcript",
+		}}
+
+		changes, err := store.SyncDiscoveryResults(results)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(changes).To(HaveLen(1))
+		Expect(changes[0].OldName).To(Equal("tack-22a95bc5"))
+		Expect(changes[0].Session.Name).To(Equal("renamed-in-provider"))
+		Expect(changes[0].Session.Metadata.DisplayTitle).To(Equal("renamed-in-provider"))
+
+		reloaded, err := store.Get("renamed-in-provider")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(reloaded.Metadata.DisplayTitle).To(Equal("renamed-in-provider"))
+		Expect(reloaded.ClydeUUID()).To(Equal(existing.ClydeUUID()))
+	})
+
 	It("skips tier 4 when the store is constructed read-only", func() {
 		writeTranscript(uuid, "merry-swan")
 		readOnly := &FileStore{clydeRoot: clydeRoot, noAdopt: true}

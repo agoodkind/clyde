@@ -73,6 +73,23 @@ func (l *Lifecycle) RecentContextMessages(*session.Session, int, int) []session.
 	return nil
 }
 
+// GetSessionName returns the current Codex session label when one is known.
+func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (string, error) {
+	if sess == nil {
+		return "", fmt.Errorf("nil session")
+	}
+	if strings.TrimSpace(sess.Metadata.DisplayTitle) != "" {
+		return strings.TrimSpace(sess.Metadata.DisplayTitle), nil
+	}
+	return strings.TrimSpace(sess.Name), nil
+}
+
+// RenameSession is a no-op placeholder until Codex exposes a writable naming
+// primitive through Clyde's provider runtime boundary.
+func (l *Lifecycle) RenameSession(context.Context, *session.Session, string) error {
+	return nil
+}
+
 func codexResumeArgs(req session.OpaqueResumeRequest) ([]string, error) {
 	query := strings.TrimSpace(req.Query)
 	if query == "" {

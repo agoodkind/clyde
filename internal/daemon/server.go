@@ -449,22 +449,32 @@ func (s *Server) runDiscoveryOnce(ctx context.Context) {
 		)
 		return
 	}
-	adopted, err := session.AdoptUnknown(store, results)
+	changes, err := store.SyncDiscoveryResults(results)
 	if err != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "discovery adopt failed",
+		s.log.LogAttrs(ctx, slog.LevelWarn, "discovery sync failed",
 			slog.Any("err", err),
 		)
 		return
 	}
-	if len(adopted) > 0 {
-		names := make([]string, 0, len(adopted))
-		for _, a := range adopted {
-			names = append(names, a.Name)
-			sess := &session.Session{Name: a.Name, Metadata: a.Metadata}
-			s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_ADOPTED, store, sess, "")
+	if len(changes) > 0 {
+		names := make([]string, 0, len(changes))
+		for _, change := range changes {
+			if change.Session == nil {
+				continue
+			}
+			names = append(names, change.Session.Name)
+			kind := clydev1.SubscribeRegistryResponse_KIND_SESSION_UPDATED
+			oldName := ""
+			if change.Adopted {
+				kind = clydev1.SubscribeRegistryResponse_KIND_SESSION_ADOPTED
+			} else if change.OldName != "" && change.Session.Name != change.OldName {
+				kind = clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED
+				oldName = change.OldName
+			}
+			s.publishSessionSummaryEvent(ctx, kind, store, change.Session, oldName)
 		}
-		s.log.LogAttrs(ctx, slog.LevelInfo, "discovery adopted sessions",
-			slog.Int("count", len(adopted)),
+		s.log.LogAttrs(ctx, slog.LevelInfo, "discovery synced sessions",
+			slog.Int("count", len(changes)),
 			slog.Any("names", names),
 		)
 	}
@@ -1150,6 +1160,8 @@ func (s *Server) loadGlobalSettings(ctx context.Context) error {
 // stored clyde session, preferring stable provider identity when available and
 // falling back to global settings for any field not set at the session level.
 func (s *Server) resolveSessionSettings(ctx context.Context, sessionName, sessionID string) (*session.Session, string, string) {
+	_, _ = peer.FromContext(ctx)
+	_, _ = metadata.FromIncomingContext(ctx)
 	s.mu.RLock()
 	globalModel := globalSettingString(s.globalSettings, "model")
 	globalEffort := globalSettingString(s.globalSettings, "effortLevel")
@@ -1199,7 +1211,8 @@ func (s *Server) resolveSessionSettings(ctx context.Context, sessionName, sessio
 		return nil, model, effortLevel
 	}
 	sessSettings, err := sessionsettings.Load(store, resolvedSession)
-	if err == nil && sessSettings != nil {
+	switch {
+	case err == nil && sessSettings != nil:
 		if sessSettings.Model != "" {
 			model = adaptercursor.NormalizeSessionSettingsModel(sessSettings.Model)
 		}
@@ -1213,14 +1226,14 @@ func (s *Server) resolveSessionSettings(ctx context.Context, sessionName, sessio
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
-	} else if err != nil {
+	case err != nil:
 		s.log.WarnContext(ctx, "daemon.session_settings.load_failed",
 			"component", "daemon",
 			"session", resolvedSession.Name,
 			"session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID),
 			"err", err,
 		)
-	} else {
+	default:
 		s.log.LogAttrs(ctx, slog.LevelDebug, "no clyde session settings, using global",
 			slog.String("session", resolvedSession.Name),
 			slog.String("session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID)),
@@ -1246,17 +1259,6 @@ func globalSettingString(settings map[string]json.RawMessage, key string) string
 		return ""
 	}
 	return out
-}
-
-// loadClydeSessionSettings loads settings.json from the clyde global
-// store for the given session name. Returns nil if not found.
-func loadClydeSessionSettings(sessionName string) *session.Settings {
-	store := session.NewFileStore(config.GlobalDataDir())
-	settings, err := store.LoadSettings(sessionName)
-	if err != nil {
-		return nil
-	}
-	return settings
 }
 
 func resolveStoredSession(store *session.FileStore, sessionName, sessionID string) (*session.Session, error) {

@@ -86,7 +86,8 @@ func ProjectsRoot(homeDir string) string {
 func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 	file, err := os.Open(path)
 	if err != nil {
-		return session.DiscoveryResult{}, false
+		var zero session.DiscoveryResult
+		return zero, false
 	}
 	defer func() { _ = file.Close() }()
 
@@ -106,7 +107,8 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 		applyTranscriptHeader(&discoveryResult, header)
 	}
 	if discoveryResult.ProviderIdentity().IsZero() {
-		return session.DiscoveryResult{}, false
+		var zero session.DiscoveryResult
+		return zero, false
 	}
 	if discoveryResult.Entrypoint == "sdk-cli" {
 		discoveryResult.IsAutoName = true
@@ -119,6 +121,15 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 func newDiscoveryResultForPath(path string) session.DiscoveryResult {
 	discoveryResult := session.DiscoveryResult{
 		Provider:            session.ProviderClaude,
+		Identity:            session.ProviderSessionID{},
+		WorkspaceRoot:       "",
+		Entrypoint:          "",
+		FirstEntryTime:      time.Time{},
+		NameContract:        nil,
+		ForkParent:          session.ProviderSessionID{},
+		IsAutoName:          false,
+		IsForked:            false,
+		IsSubagent:          false,
 		PrimaryArtifact:     path,
 		PrimaryArtifactKind: primaryArtifactKindTranscript,
 	}

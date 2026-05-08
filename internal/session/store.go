@@ -254,6 +254,7 @@ func (fs *FileStore) Search(query string) ([]*Session, error) {
 	var matches []*Session
 	for _, sess := range sessions {
 		if strings.Contains(strings.ToLower(sess.Name), q) ||
+			strings.Contains(strings.ToLower(sess.Metadata.DisplayTitle), q) ||
 			strings.Contains(strings.ToLower(sess.Metadata.ProviderSessionID()), q) ||
 			strings.Contains(strings.ToLower(sess.Metadata.Context), q) {
 			matches = append(matches, sess)
@@ -645,6 +646,79 @@ func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryRes
 	return candidate.ProviderSessionID() < current.ProviderSessionID()
 }
 
+// DiscoverySyncResult describes the effect of reconciling one discovered
+// provider session against the Clyde registry.
+type DiscoverySyncResult struct {
+	Session *Session
+	OldName string
+	Adopted bool
+	Updated bool
+}
+
+// SyncDiscoveryResults reconciles discovered provider sessions against the
+// registry, adopting unknown rows and updating known rows when provider-owned
+// names drift.
+func (fs *FileStore) SyncDiscoveryResults(results []DiscoveryResult) ([]DiscoverySyncResult, error) {
+	if fs == nil {
+		return nil, nil
+	}
+	bestByProviderKey := make(map[string]DiscoveryResult, len(results))
+	for _, result := range results {
+		if result.IsAutoName || result.IsSubagent || result.ProviderSessionID() == "" || isClydeScratch(result.WorkspaceRoot) {
+			continue
+		}
+		key := result.ProviderSessionKey()
+		current, ok := bestByProviderKey[key]
+		if !ok || shouldPreferDiscoveryResult(result, current) {
+			bestByProviderKey[key] = result
+		}
+	}
+
+	keys := make([]string, 0, len(bestByProviderKey))
+	for key := range bestByProviderKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make([]DiscoverySyncResult, 0, len(keys))
+	for _, key := range keys {
+		result := bestByProviderKey[key]
+		if existing := fs.findByProviderSessionID(result.ProviderIdentity()); existing != nil {
+			beforeName := existing.Name
+			beforeTitle := existing.Metadata.DisplayTitle
+			updated, err := fs.reconcileExisting(existing, &result, result.ProviderSessionID())
+			if err != nil {
+				return nil, err
+			}
+			if updated != nil && (updated.Name != beforeName || updated.Metadata.DisplayTitle != beforeTitle) {
+				out = append(out, DiscoverySyncResult{
+					Session: updated,
+					OldName: beforeName,
+					Adopted: false,
+					Updated: true,
+				})
+			}
+			continue
+		}
+
+		adopted, err := AdoptUnknown(fs, []DiscoveryResult{result})
+		if err != nil {
+			return nil, err
+		}
+		if len(adopted) == 0 {
+			continue
+		}
+		stub := adopted[0]
+		out = append(out, DiscoverySyncResult{
+			Session: &Session{Name: stub.Name, Metadata: stub.Metadata, storageKey: stub.Metadata.ClydeUUID},
+			OldName: "",
+			Adopted: true,
+			Updated: true,
+		})
+	}
+	return out, nil
+}
+
 // Rename renames a session by updating metadata only.
 func (fs *FileStore) Rename(oldName, newName string) error {
 	if err := ValidateName(oldName); err != nil {
@@ -676,6 +750,7 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 
 	sess.Name = newName
 	sess.Metadata.Name = newName
+	sess.Metadata.DisplayTitle = newName
 	if err := fs.Update(sess); err != nil {
 		sessionLog.Warn("session.store.rename_metadata_update_failed",
 			"component", "session",

@@ -4240,7 +4240,7 @@ func (a *App) rebuildVisible() {
 			continue
 		}
 		if f != "" {
-			hay := strings.ToLower(sess.Name + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
+			hay := strings.ToLower(sess.Name + " " + sess.Metadata.DisplayTitle + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
 			if !strings.Contains(hay, f) {
 				continue
 			}

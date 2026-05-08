@@ -1,3 +1,5 @@
+// Package codex adapts Codex-specific naming semantics onto Clyde's
+// provider-neutral session naming boundary.
 package codex
 
 import (
@@ -12,10 +14,13 @@ type ThreadName struct {
 	Name string
 }
 
+// GetName returns the current Codex thread name.
 func (name ThreadName) GetName() string {
 	return strings.TrimSpace(name.Name)
 }
 
+// Rename returns the registry-safe Clyde session name derived from the current
+// Codex thread name, or "" when the name is absent or unusable.
 func (name ThreadName) Rename(_ string, taken map[string]bool) string {
 	sanitized := session.Sanitize(name.GetName())
 	if sanitized == "" {

@@ -232,6 +232,13 @@ type ContextMessageProvider interface {
 	RecentContextMessages(sess *Session, limit, maxLen int) []ContextMessage
 }
 
+// NameProvider lets providers own how session names are observed and
+// mutated while generic callers speak only in terms of logical sessions.
+type NameProvider interface {
+	GetSessionName(ctx context.Context, sess *Session) (string, error)
+	RenameSession(ctx context.Context, sess *Session, newName string) error
+}
+
 // ArtifactCleaner deletes provider-owned files associated with a session row.
 type ArtifactCleaner interface {
 	DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequest) (*DeletedArtifacts, error)

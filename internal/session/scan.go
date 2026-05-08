@@ -162,13 +162,25 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		existingNames[name] = true
 
 		md := Metadata{
-			Name:            name,
-			Provider:        NormalizeProviderID(r.Provider),
-			SessionID:       r.ProviderSessionID(),
-			WorkspaceRoot:   r.WorkspaceRoot,
-			WorkDir:         r.WorkspaceRoot,
-			DisplayTitle:    r.GetName(),
-			IsForkedSession: r.IsForked,
+			Name:                 name,
+			ClydeUUID:            "",
+			Provider:             NormalizeProviderID(r.Provider),
+			SessionID:            r.ProviderSessionID(),
+			TranscriptPath:       "",
+			ProviderState:        nil,
+			WorkDir:              r.WorkspaceRoot,
+			Created:              time.Time{},
+			LastAccessed:         time.Time{},
+			ParentSession:        "",
+			ParentClydeUUID:      "",
+			IsForkedSession:      r.IsForked,
+			IsIncognito:          false,
+			PreviousSessionIDs:   nil,
+			Context:              "",
+			HasCustomOutputStyle: false,
+			WorkspaceRoot:        r.WorkspaceRoot,
+			ContextMessageCount:  0,
+			DisplayTitle:         r.GetName(),
 		}
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {
@@ -193,7 +205,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			md.LastAccessed = md.Created
 		}
 
-		sess := &Session{Name: name, Metadata: md}
+		sess := &Session{Name: name, Metadata: md, storageKey: ""}
 		if err := store.Create(sess); err != nil {
 			createFailed++
 			sessionAdoptLog.Logger().Warn("session.adopt.create_failed",

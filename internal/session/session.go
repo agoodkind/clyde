@@ -92,13 +92,27 @@ func NewSession(name, sessionID string) *Session {
 	sess := &Session{
 		Name: name,
 		Metadata: Metadata{
-			Name:            name,
-			Provider:        ProviderClaude,
-			SessionID:       sessionID,
-			Created:         now,
-			LastAccessed:    now,
-			IsForkedSession: false,
+			Name:                 name,
+			ClydeUUID:            "",
+			Provider:             ProviderClaude,
+			SessionID:            sessionID,
+			TranscriptPath:       "",
+			ProviderState:        nil,
+			WorkDir:              "",
+			Created:              now,
+			LastAccessed:         now,
+			ParentSession:        "",
+			ParentClydeUUID:      "",
+			IsForkedSession:      false,
+			IsIncognito:          false,
+			PreviousSessionIDs:   nil,
+			Context:              "",
+			HasCustomOutputStyle: false,
+			WorkspaceRoot:        "",
+			ContextMessageCount:  0,
+			DisplayTitle:         "",
 		},
+		storageKey: "",
 	}
 	sess.ensureClydeUUID("")
 	sess.Metadata.NormalizeProviderState()

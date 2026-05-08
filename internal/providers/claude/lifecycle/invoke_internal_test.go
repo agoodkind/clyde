@@ -94,6 +94,37 @@ func TestPersistRemoteControlSetting(t *testing.T) {
 	}
 }
 
+func TestLifecycleRenameSessionAppendsClaudeRenameEntries(t *testing.T) {
+	transcriptPath := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"system","sessionId":"uuid-1","timestamp":"2026-04-12T23:52:12Z","entrypoint":"cli","cwd":"/tmp"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	lifecycle := NewLifecycle(nil)
+	sess := &session.Session{
+		Name: "chat-1",
+		Metadata: session.Metadata{
+			SessionID:      "uuid-1",
+			TranscriptPath: transcriptPath,
+		},
+	}
+	if err := lifecycle.RenameSession(context.Background(), sess, "provider-rename"); err != nil {
+		t.Fatalf("RenameSession returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, `"type":"custom-title"`) || !strings.Contains(got, `"customTitle":"provider-rename"`) {
+		t.Fatalf("transcript missing custom-title entry: %s", got)
+	}
+	if !strings.Contains(got, `"type":"agent-name"`) || !strings.Contains(got, `"agentName":"provider-rename"`) {
+		t.Fatalf("transcript missing agent-name entry: %s", got)
+	}
+}
+
 func TestApplyMITMEnvAddsAnthropicBaseURLForWrapperLaunch(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)

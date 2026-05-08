@@ -317,6 +317,12 @@ func (builder appCallbackBuilder) renameSession(sess *session.Session) (string, 
 		return newName, nil
 	}
 	ctx := builder.childContext("dashboard.session.rename")
+	runtime, runtimeErr := registry.ForSession(sess, nil)
+	if runtimeErr == nil {
+		if renameErr := runtime.RenameSession(ctx, sess, newName); renameErr != nil {
+			return newName, fmt.Errorf("provider rename session: %w", renameErr)
+		}
+	}
 	outcome, err := daemon.RenameSessionViaDaemonOutcome(ctx, oldName, newName)
 	if outcome != daemon.LifecycleOutcomeReady {
 		return newName, daemonLifecycleError(ctx, "rename", outcome, err)
@@ -718,12 +724,14 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 		Name: raw.GetName(),
 		Metadata: session.Metadata{
 			Name:                 raw.GetMetadataName(),
+			ClydeUUID:            raw.GetClydeUuid(),
 			SessionID:            raw.GetSessionId(),
 			TranscriptPath:       raw.GetTranscriptPath(),
 			WorkDir:              raw.GetWorkDir(),
 			Created:              timeFromNanos(raw.GetCreatedNanos()),
 			LastAccessed:         timeFromNanos(raw.GetLastActivityNanos()),
 			ParentSession:        raw.GetParentSession(),
+			ParentClydeUUID:      raw.GetParentClydeUuid(),
 			IsForkedSession:      raw.GetIsForkedSession(),
 			IsIncognito:          raw.GetIsIncognito(),
 			PreviousSessionIDs:   append([]string(nil), raw.GetPreviousSessionIds()...),
