@@ -40,6 +40,19 @@ type Metadata struct {
 	// Name never renames post-adoption because that would break
 	// previousSessionIds and parentSession references.
 	DisplayTitle string `json:"displayTitle,omitempty"`
+
+	// AutoNameState records the session's position in the auto-rename
+	// state machine. The zero value is untouched, which matches sessions
+	// written before this field existed.
+	AutoNameState AutoNameState `json:"autoNameState,omitempty"`
+
+	// AutoNameSource records which subsystem produced the current name.
+	// A zero value means the daemon has not yet attributed a source.
+	AutoNameSource AutoNameSource `json:"autoNameSource,omitempty"`
+
+	// LastAutoNameAt records the most recent auto-rename attempt for the
+	// session. The zero value means no auto-rename has run.
+	LastAutoNameAt time.Time `json:"lastAutoNameAt,omitempty"`
 }
 
 // ProviderOwnedMetadata is the provider-neutral persisted identity and artifact

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
@@ -282,6 +283,88 @@ func TestSessionSummaryNormalizesSettingsModelFallback(t *testing.T) {
 	summary := srv.sessionSummary(context.Background(), store, sess)
 	if summary.GetModel() != "clyde-gpt-5.4-1m-medium" {
 		t.Fatalf("summary.Model=%q want %q", summary.GetModel(), "clyde-gpt-5.4-1m-medium")
+	}
+}
+
+// TestSessionSummaryCarriesAutoNameFields asserts that the daemon
+// copies the auto-rename metadata fields into SessionSummary so
+// downstream consumers can read the worker's verdict without a
+// separate RPC.
+func TestSessionSummaryCarriesAutoNameFields(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess := session.NewSession("chat-auto-name", "uuid-auto-name")
+	lastAutoName := time.Unix(1700001234, 0).UTC()
+	sess.Metadata.AutoNameState = session.AutoNameStateUserLocked
+	sess.Metadata.AutoNameSource = session.AutoNameSourceUser
+	sess.Metadata.LastAutoNameAt = lastAutoName
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	srv := &Server{
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		bridges:       make(map[string]*clydev1.Bridge),
+		contextStates: make(map[string]sessionContextState),
+	}
+
+	summary := srv.sessionSummary(context.Background(), store, sess)
+	if summary.GetAutoNameState() != string(session.AutoNameStateUserLocked) {
+		t.Fatalf("AutoNameState=%q want %q", summary.GetAutoNameState(), session.AutoNameStateUserLocked)
+	}
+	if summary.GetAutoNameSource() != string(session.AutoNameSourceUser) {
+		t.Fatalf("AutoNameSource=%q want %q", summary.GetAutoNameSource(), session.AutoNameSourceUser)
+	}
+	if summary.GetLastAutoNameNanos() != lastAutoName.UnixNano() {
+		t.Fatalf("LastAutoNameNanos=%d want %d", summary.GetLastAutoNameNanos(), lastAutoName.UnixNano())
+	}
+}
+
+// TestSessionSummaryOmitsLastAutoNameNanosWhenZero asserts that a
+// session that has not yet been touched by the auto-rename worker
+// reports a zero nanos value rather than the meaningless nanos of
+// time.Time's zero value.
+func TestSessionSummaryOmitsLastAutoNameNanosWhenZero(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess := session.NewSession("chat-auto-name-zero", "uuid-auto-name-zero")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	srv := &Server{
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		bridges:       make(map[string]*clydev1.Bridge),
+		contextStates: make(map[string]sessionContextState),
+	}
+
+	summary := srv.sessionSummary(context.Background(), store, sess)
+	if summary.GetAutoNameState() != "" {
+		t.Fatalf("AutoNameState=%q want empty", summary.GetAutoNameState())
+	}
+	if summary.GetAutoNameSource() != "" {
+		t.Fatalf("AutoNameSource=%q want empty", summary.GetAutoNameSource())
+	}
+	if summary.GetLastAutoNameNanos() != 0 {
+		t.Fatalf("LastAutoNameNanos=%d want 0", summary.GetLastAutoNameNanos())
 	}
 }
 
