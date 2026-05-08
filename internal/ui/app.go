@@ -4081,7 +4081,14 @@ func (a *App) populateTable() {
 	for _, idx := range a.visibleIdx {
 		sess := a.sessions[idx]
 		if a.launchBasedir != "" && !insertedGlobalSeparator && a.launchBasedirRank(sess) > 0 {
+			// Render a three-row separator block: blank, label rule,
+			// blank. Each row is non-selectable (-1) so cursor and
+			// click handlers ignore them.
+			rows = append(rows, a.globalSessionListSpacerRow())
+			a.tableRowIdx = append(a.tableRowIdx, -1)
 			rows = append(rows, a.globalSessionListSeparatorRow())
+			a.tableRowIdx = append(a.tableRowIdx, -1)
+			rows = append(rows, a.globalSessionListSpacerRow())
 			a.tableRowIdx = append(a.tableRowIdx, -1)
 			insertedGlobalSeparator = true
 		}
@@ -4114,17 +4121,49 @@ func (a *App) populateTable() {
 	}
 }
 
+// globalSessionListSeparatorGlyph is the heavy box-drawing rune used to
+// render the separator's full-width rule across non-label columns.
+const globalSessionListSeparatorGlyph = "─"
+
+// globalSessionListSeparatorRuleWidth is the rune count emitted per
+// non-label column. The table renderer truncates to the column width,
+// so a fixed wide value lets every column render a full rule without a
+// dynamic layout dependency.
+const globalSessionListSeparatorRuleWidth = 64
+
+// globalSessionListSeparatorRow returns the prominent label row that
+// sits between the local and global session blocks. Non-label columns
+// render a heavy full-width rule out of U+2500 runes so the separator
+// reads as a strong horizontal break.
 func (a *App) globalSessionListSeparatorRow() []TableCell {
 	style := StyleDefault.Foreground(ColorAccent).Bold(true)
-	fillerStyle := StyleDefault.Foreground(ColorMuted).Dim(true)
+	ruleStyle := StyleDefault.Foreground(ColorMuted).Dim(true)
+	rule := strings.Repeat(globalSessionListSeparatorGlyph, globalSessionListSeparatorRuleWidth)
 	return []TableCell{
 		{Text: "[global session list]", Style: style},
-		{Text: strings.Repeat("-", 10), Style: fillerStyle},
-		{Text: strings.Repeat("-", 8), Style: fillerStyle},
-		{Text: "", Style: fillerStyle},
-		{Text: "", Style: fillerStyle},
-		{Text: "", Style: fillerStyle},
-		{Text: "", Style: fillerStyle},
+		{Text: rule, Style: ruleStyle},
+		{Text: rule, Style: ruleStyle},
+		{Text: rule, Style: ruleStyle},
+		{Text: rule, Style: ruleStyle},
+		{Text: rule, Style: ruleStyle},
+		{Text: rule, Style: ruleStyle},
+	}
+}
+
+// globalSessionListSpacerRow returns a fully blank row with the same
+// column count as globalSessionListSeparatorRow. The blank rows above
+// and below the label give the separator block visible vertical
+// breathing room.
+func (a *App) globalSessionListSpacerRow() []TableCell {
+	blank := StyleDefault
+	return []TableCell{
+		{Text: "", Style: blank},
+		{Text: "", Style: blank},
+		{Text: "", Style: blank},
+		{Text: "", Style: blank},
+		{Text: "", Style: blank},
+		{Text: "", Style: blank},
+		{Text: "", Style: blank},
 	}
 }
 

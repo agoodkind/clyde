@@ -247,15 +247,108 @@ func TestUX_BasedirLaunchRanksMatchingSessionsFirst(t *testing.T) {
 	if got.Name != "test-session-01" {
 		t.Fatalf("top session = %q, want test-session-01", got.Name)
 	}
-	if len(a.table.Rows) != 4 {
-		t.Fatalf("table rows = %d, want 4 including separator", len(a.table.Rows))
+	if len(a.table.Rows) != 6 {
+		t.Fatalf("table rows = %d, want 6 including separator block", len(a.table.Rows))
 	}
-	if got := a.table.Rows[1][0].Text; got != "[global session list]" {
+	if got := a.table.Rows[2][0].Text; got != "[global session list]" {
 		t.Fatalf("separator row = %q, want [global session list]", got)
 	}
-	a.openSessionOptions(1)
+	a.openSessionOptions(2)
 	if a.overlay != nil {
 		t.Fatalf("separator row should not open options, got %T", a.overlay)
+	}
+}
+
+func TestUX_GlobalSessionListSeparatorBlockShape(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	target := session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-1")
+	a.launchBasedir = target
+	a.sortSessions()
+	a.populateTable()
+
+	if len(a.table.Rows) != 6 {
+		t.Fatalf("table rows = %d, want 6 (1 local, 3 separator block, 2 global)", len(a.table.Rows))
+	}
+	// Row 0 is the single local session, rows 1..3 are the separator
+	// block (blank, label rule, blank), rows 4..5 are the global sessions.
+	expectedSyntheticRows := []int{1, 2, 3}
+	for _, row := range expectedSyntheticRows {
+		if a.tableRowIdx[row] != -1 {
+			t.Fatalf("tableRowIdx[%d] = %d, want -1", row, a.tableRowIdx[row])
+		}
+	}
+	if a.tableRowIdx[0] == -1 || a.tableRowIdx[4] == -1 || a.tableRowIdx[5] == -1 {
+		t.Fatalf("session rows misclassified as separator: %v", a.tableRowIdx)
+	}
+
+	// Top blank row: every cell has empty Text.
+	for col, cell := range a.table.Rows[1] {
+		if cell.Text != "" {
+			t.Fatalf("top blank row col %d text = %q, want empty", col, cell.Text)
+		}
+	}
+
+	// Label row: first cell holds the bracketed label, others hold the
+	// heavy U+2500 rule.
+	separator := a.table.Rows[2]
+	if got := separator[0].Text; got != "[global session list]" {
+		t.Fatalf("separator label = %q, want [global session list]", got)
+	}
+	for col := 1; col < len(separator); col++ {
+		if separator[col].Text == "" {
+			t.Fatalf("separator rule col %d is empty, want %s repeated", col, globalSessionListSeparatorGlyph)
+		}
+		if !strings.Contains(separator[col].Text, globalSessionListSeparatorGlyph) {
+			t.Fatalf("separator rule col %d = %q, want runs of %s", col, separator[col].Text, globalSessionListSeparatorGlyph)
+		}
+		if strings.TrimRight(separator[col].Text, globalSessionListSeparatorGlyph) != "" {
+			t.Fatalf("separator rule col %d = %q, want only %s runes", col, separator[col].Text, globalSessionListSeparatorGlyph)
+		}
+	}
+
+	// Bottom blank row: every cell has empty Text.
+	for col, cell := range a.table.Rows[3] {
+		if cell.Text != "" {
+			t.Fatalf("bottom blank row col %d text = %q, want empty", col, cell.Text)
+		}
+	}
+}
+
+func TestUX_GlobalSessionListSeparatorCursorSkipsBlock(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	target := session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-1")
+	a.launchBasedir = target
+	a.sortSessions()
+	a.populateTable()
+
+	a.table.Active = true
+	a.table.SelectedRow = 0
+
+	// Pin keypress count: cursor down from the local session at row 0
+	// to the first global session at row 4 takes four single-step
+	// presses today. A regression that grows the synthetic block
+	// without updating the skip logic would change this number.
+	for i := 0; i < 4; i++ {
+		a.table.MoveDown(1)
+	}
+	if a.table.SelectedRow != 4 {
+		t.Fatalf("after 4 down presses, SelectedRow = %d, want 4", a.table.SelectedRow)
+	}
+	if sess := a.sessionForTableRow(a.table.SelectedRow); sess == nil {
+		t.Fatalf("expected first global session selectable at row 4")
+	}
+
+	// Cursor up is symmetric: four presses returns to the local
+	// session at row 0.
+	for i := 0; i < 4; i++ {
+		a.table.MoveUp(1)
+	}
+	if a.table.SelectedRow != 0 {
+		t.Fatalf("after 4 up presses, SelectedRow = %d, want 0", a.table.SelectedRow)
 	}
 }
 
