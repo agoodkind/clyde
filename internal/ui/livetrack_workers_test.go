@@ -111,7 +111,7 @@ func TestLoadDetailAsync_RegisterReleasePairing(t *testing.T) {
 
 	callbackDone := make(chan struct{})
 	cb := AppCallbacks{
-		GetSessionDetail: func(*session.Session) (SessionDetail, error) {
+		GetSessionDetail: func(_ context.Context, _ *session.Session) (SessionDetail, error) {
 			<-callbackDone
 			return SessionDetail{}, nil
 		},
@@ -211,6 +211,91 @@ func TestDrainWorkers_ForceClosesStuckSession(t *testing.T) {
 
 	if state := a.workers.State(); state != livetrack.StateClosed {
 		t.Errorf("after drainWorkers with force-close, state = %v, want StateClosed", state)
+	}
+}
+
+// TestRequestSessionsAsync_DrainFiresLoadCancel confirms that an in-flight
+// async_load goroutine has its context canceled when drainWorkers force-closes
+// the registered closer. The stub callback blocks until its context is done,
+// so the test can confirm the cancel arrived from the drain path rather than
+// from parent context cancellation.
+func TestRequestSessionsAsync_DrainFiresLoadCancel(t *testing.T) {
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
+
+	callbackEntered := make(chan struct{})
+	cancelObserved := make(chan struct{})
+
+	cb := AppCallbacks{
+		ListSessions: func(cbCtx context.Context) (SessionSnapshot, error) {
+			close(callbackEntered)
+			<-cbCtx.Done()
+			close(cancelObserved)
+			return SessionSnapshot{}, nil
+		},
+	}
+
+	a := NewApp(nil, cb, AppOptions{Context: ctx})
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer scr.Fini()
+	scr.SetSize(80, 24)
+	a.screen = scr
+
+	a.requestSessionsAsync("drain-test")
+
+	select {
+	case <-callbackEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListSessions callback was never invoked")
+	}
+
+	// drainWorkers force-closes all registered workers; this must fire the
+	// workerCloser cancel wired to the in-flight loadCtx.
+	a.drainWorkers()
+
+	select {
+	case <-cancelObserved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("loadCtx was not canceled by drainWorkers force-close")
+	}
+}
+
+// TestRegistrySubscriberWorkerCloser_FiresStreamCancel confirms that the
+// workerCloser registered for an rpc_stream worker fires the stream cancel
+// function when Close is called. This simulates the drain force-close path
+// for a registry subscriber goroutine that is still reading from a live
+// gRPC stream.
+func TestRegistrySubscriberWorkerCloser_FiresStreamCancel(t *testing.T) {
+	// streamCancelFired tracks whether the stream cancel reached by the
+	// workerCloser was actually called.
+	streamCancelFired := make(chan struct{})
+	streamCancel := func() { close(streamCancelFired) }
+
+	a := NewApp(nil, AppCallbacks{})
+
+	// Simulate what runRegistrySupervisor does: register the subscriber
+	// goroutine with a workerCloser wrapping the stream cancel.
+	sess, err := a.workers.Register(a.ctx, "rpc_stream", WorkerMeta{
+		Kind:     "rpc_stream",
+		Source:   "registry_subscriber",
+		Deadline: time.Time{},
+	}, newWorkerCloser(streamCancel))
+	if err != nil {
+		t.Fatalf("Register returned unexpected err: %v", err)
+	}
+	_ = sess
+
+	// drainWorkers force-closes all registered workers; for this
+	// rpc_stream session the closer must invoke streamCancel.
+	a.drainWorkers()
+
+	select {
+	case <-streamCancelFired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream cancel was not fired by drainWorkers force-close")
 	}
 }
 
