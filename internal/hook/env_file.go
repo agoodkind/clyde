@@ -95,6 +95,9 @@ func shellQuoteEnvValue(value string) string {
 }
 
 func writeSessionNameToEnv(sessionName string) error {
+	if err := appendToEnvFile(envSessionName, sessionName); err != nil {
+		return err
+	}
 	return appendToEnvFile(envLegacySessionName, sessionName)
 }
 

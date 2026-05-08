@@ -37,7 +37,7 @@ func newLaunchRemoteWorkerCmd(_ *cli.Factory) *cobra.Command {
 			return claudelifecycle.StartHeadlessRemoteWorker(env, "", basedir, sessionID)
 		},
 	}
-	cmd.Flags().StringVar(&sessionName, "session-name", "", "canonical clyde session name")
+	cmd.Flags().StringVar(&sessionName, "session-name", "", "exact clyde display name")
 	cmd.Flags().StringVar(&sessionID, "session-id", "", "pre-assigned Claude session UUID")
 	cmd.Flags().StringVar(&basedir, "basedir", "", "working directory for the launched session")
 	cmd.Flags().BoolVar(&incognito, "incognito", false, "ephemeral launch")

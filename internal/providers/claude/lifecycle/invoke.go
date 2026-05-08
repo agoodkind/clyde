@@ -422,9 +422,10 @@ func PersistRemoteControlSetting(store SessionSettingsStore, sessionName string)
 // Resume invokes claude CLI to resume an existing session.
 func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 	settingsFile := sessionSettingsFileForSession(clydeRoot, sess)
+	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": sess.Name,
-		"CLYDE_SESSION_ID":   sess.Metadata.ProviderSessionID(),
+		"CLYDE_SESSION_ID":   sessionID,
 	}
 	if opts.EnableSelfReload {
 		env[envEnableSelfReload] = "1"
@@ -435,7 +436,7 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 	defer cleanupSettings()
 
-	args := []string{"--resume", sess.Metadata.ProviderSessionID(), "-n", sess.Name}
+	args := []string{"--resume", sessionID, "-n", sess.Name}
 	args = appendCommonArgs(args, effectiveSettingsFile)
 	args = append(args, resumeAdditionalArgs(sess, opts.CurrentWorkDir)...)
 	args = append(args, opts.AdditionalArgs...)
@@ -445,17 +446,19 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 	}
 
 	if remoteControlEnabled(effectiveSettingsFile) {
-		return invokeInteractivePTY(args, env, sess.Metadata.WorkDir, sess.Metadata.ProviderSessionID())
+		return invokeInteractivePTY(args, env, sess.Metadata.WorkDir, sessionID)
 	}
 	return invokeInteractive(args, env, sess.Metadata.WorkDir)
 }
 
 // StartNewInteractive runs claude without --resume for a new named session.
-// env must set CLYDE_SESSION_NAME so the SessionStart hook can adopt the row.
+// env must set CLYDE_SESSION_NAME as the exact display name so the SessionStart
+// hook can adopt the row.
 // settingsFile may be empty; remote-control and settings injection match Resume.
 // When sessionID is non-empty it is pre-assigned to Claude at launch so the
 // inject socket, metadata, and later resume flows all share one UUID.
 func StartNewInteractive(env map[string]string, settingsFile string, workDir string, forceRemoteControl bool, sessionID string) error {
+	sessionID = launchSessionID(env, sessionID)
 	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 	defer cleanupSettings()
 
@@ -470,6 +473,17 @@ func StartNewInteractive(env map[string]string, settingsFile string, workDir str
 		return invokeInteractivePTY(args, env, workDir, sessionID)
 	}
 	return invokeInteractive(args, env, workDir)
+}
+
+func launchSessionID(env map[string]string, sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		return sessionID
+	}
+	if env == nil {
+		return ""
+	}
+	return strings.TrimSpace(env["CLYDE_SESSION_ID"])
 }
 
 func applyMITMEnv(env map[string]string) {

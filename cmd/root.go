@@ -33,12 +33,13 @@ import (
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/ui"
+	"goodkind.io/clyde/internal/util"
 )
 
 // RunDashboard is the entrypoint for `clyde` with no subcommand. It
 // boots the tcell TUI dashboard for managing existing sessions
-// (resume, delete, rename, view, live sessions). New sessions from the TUI launch `claude` with
-// CLYDE_SESSION_NAME set; the SessionStart hook adopts the row.
+// (resume, delete, rename, view, live sessions). New sessions from the TUI launch `claude`
+// with a stable session id and exact display name; the SessionStart hook adopts the row.
 func RunDashboard(cmd *cobra.Command, args []string) int {
 	// Non-interactive (piped) invocation: forward to real claude.
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
@@ -1060,28 +1061,23 @@ func passthroughSkipsPostSessionTUI(args []string) bool {
 }
 
 // ForwardToClaudeThenDashboard runs claude like ForwardToClaude, but for an
-// interactive terminal it assigns CLYDE_SESSION_NAME when unset so the
-// SessionStart hook adopts the session, then opens the TUI when claude exits.
-// Pipe and print-style invocations behave like ForwardToClaude only.
+// interactive terminal it assigns a stable session id and exact display name
+// for new Claude sessions, then opens the TUI when claude exits. Pipe, resume,
+// and print-style invocations behave like ForwardToClaude only.
 func ForwardToClaudeThenDashboard(args []string) int {
 	if !shouldOpenDashboardAfterPassthrough(args) {
 		return ForwardToClaude(args)
 	}
 	ctx := newCommandContext("forward.claude.dashboard")
 	env := withEnvValue(os.Environ(), "CLYDE_LAUNCH_CWD", currentWorkingDirectory())
-	if os.Getenv("CLYDE_SESSION_NAME") == "" {
-		store, serr := session.NewGlobalFileStore()
-		if serr == nil {
-			name, nerr := nextChatSessionName(store)
-			if nerr == nil {
-				env = append(env, "CLYDE_SESSION_NAME="+name)
-				cmdUILog.Logger().InfoContext(ctx, "forward.passthrough_wrapped",
-					"component", "cli",
-					"session", name,
-				)
-			}
-		}
+	store, serr := session.NewGlobalFileStore()
+	if serr != nil {
+		cmdUILog.Logger().WarnContext(ctx, "forward.passthrough_store_unavailable",
+			"component", "cli",
+			"err", serr,
+		)
 	}
+	args, env = applyPassthroughBootstrapIdentity(ctx, args, env, store)
 	_ = runClaudeWithEnv(ctx, args, applyClaudeMITMEnv(ctx, env))
 	_ = runDashboardTUI()
 	return 0
@@ -1115,6 +1111,94 @@ func withEnvValue(env []string, key, value string) []string {
 		}
 	}
 	return append(out, prefix+value)
+}
+
+func envListValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		item := env[i]
+		if value, ok := strings.CutPrefix(item, prefix); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func applyPassthroughBootstrapIdentity(
+	ctx context.Context,
+	args []string,
+	env []string,
+	store session.Store,
+) ([]string, []string) {
+	if !passthroughStartsNewSession(args) {
+		return args, env
+	}
+
+	sessionName := envListValue(env, "CLYDE_SESSION_NAME")
+	if strings.TrimSpace(sessionName) == "" {
+		if store == nil {
+			return args, env
+		}
+		name, err := nextChatSessionName(store)
+		if err != nil {
+			cmdUILog.Logger().WarnContext(ctx, "forward.passthrough_name_failed",
+				"component", "cli",
+				"err", err,
+			)
+			return args, env
+		}
+		sessionName = name
+		env = withEnvValue(env, "CLYDE_SESSION_NAME", sessionName)
+	}
+
+	sessionID := strings.TrimSpace(envListValue(env, "CLYDE_SESSION_ID"))
+	if sessionID == "" {
+		generatedID, err := util.GenerateUUIDE()
+		if err != nil {
+			cmdUILog.Logger().WarnContext(ctx, "forward.passthrough_session_id_failed",
+				"component", "cli",
+				"session", sessionName,
+				"err", err,
+			)
+			return args, env
+		}
+		sessionID = generatedID
+		env = withEnvValue(env, "CLYDE_SESSION_ID", sessionID)
+	}
+
+	args = appendSessionIDArg(args, sessionID)
+	cmdUILog.Logger().InfoContext(ctx, "forward.passthrough_wrapped",
+		"component", "cli",
+		"session", sessionName,
+		"session_id", sessionID,
+	)
+	return args, env
+}
+
+func passthroughStartsNewSession(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "--resume", "-r", "--continue", "-c", "--session-id":
+			return false
+		}
+		if strings.HasPrefix(arg, "--resume=") ||
+			strings.HasPrefix(arg, "--continue=") ||
+			strings.HasPrefix(arg, "--session-id=") {
+			return false
+		}
+	}
+	return true
+}
+
+func appendSessionIDArg(args []string, sessionID string) []string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	out = append(out, "--session-id", sessionID)
+	out = append(out, args...)
+	return out
 }
 
 // nextChatSessionName returns a new display-safe chat-* name that does not

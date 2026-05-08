@@ -45,8 +45,11 @@ func TestWriteSessionIdentityToEnvWritesNameAndSessionID(t *testing.T) {
 		t.Fatalf("read env file: %v", err)
 	}
 	got := string(content)
+	if !strings.Contains(got, "CLYDE_SESSION_NAME=$'renamed-session'") {
+		t.Fatalf("env file missing exact session display name: %q", got)
+	}
 	if !strings.Contains(got, "CLYDE_SESSION=$'renamed-session'") {
-		t.Fatalf("env file missing session name: %q", got)
+		t.Fatalf("env file missing legacy session name: %q", got)
 	}
 	if !strings.Contains(got, "CLYDE_SESSION_ID=$'stable-uuid'") {
 		t.Fatalf("env file missing session id: %q", got)

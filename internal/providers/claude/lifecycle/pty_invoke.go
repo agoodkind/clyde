@@ -43,12 +43,14 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 // The wrapper still exposes the inject socket so the daemon sidecar can send
 // text to the running Claude session, but local terminal IO is detached.
 func StartHeadlessRemoteWorker(env map[string]string, settingsFile string, workDir, sessionID string) error {
+	sessionID = launchSessionID(env, sessionID)
 	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 	defer cleanupSettings()
 
 	args := []string{}
 	args = appendCommonArgs(args, effectiveSettingsFile)
 	if sessionID != "" {
+		env["CLYDE_SESSION_ID"] = sessionID
 		args = append(args, "--session-id", sessionID)
 	}
 	applyMITMEnv(env)

@@ -98,6 +98,20 @@ func TestPersistRemoteControlSetting(t *testing.T) {
 	}
 }
 
+func TestLaunchSessionIDPrefersExplicitAndFallsBackToEnv(t *testing.T) {
+	env := map[string]string{"CLYDE_SESSION_ID": " env-uuid "}
+
+	if got := launchSessionID(env, " explicit-uuid "); got != "explicit-uuid" {
+		t.Fatalf("launchSessionID explicit = %q, want explicit-uuid", got)
+	}
+	if got := launchSessionID(env, ""); got != "env-uuid" {
+		t.Fatalf("launchSessionID env fallback = %q, want env-uuid", got)
+	}
+	if got := launchSessionID(nil, ""); got != "" {
+		t.Fatalf("launchSessionID nil env = %q, want empty", got)
+	}
+}
+
 func TestLifecycleRenameSessionAppendsClaudeRenameEntries(t *testing.T) {
 	transcriptPath := filepath.Join(t.TempDir(), "session.jsonl")
 	if err := os.WriteFile(transcriptPath, []byte(`{"type":"system","sessionId":"uuid-1","timestamp":"2026-04-12T23:52:12Z","entrypoint":"cli","cwd":"/tmp"}`+"\n"), 0o600); err != nil {
