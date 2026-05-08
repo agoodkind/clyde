@@ -80,23 +80,28 @@ func loadResult(resultID string) (*cachedResult, bool) {
 //go:embed getting_started.md
 var gettingStartedPrompt string
 
-// Serve starts the MCP stdio server and blocks until the client disconnects.
-//
-// The stdio writer is wrapped in mcpStdoutWriter so concurrent JSON-RPC
-// frames cannot interleave on [os.Stdout]. The upstream stdio transport runs
-// handleNotifications and the toolCallWorker pool on separate goroutines,
-// and a few upstream paths write to the session writer without going
-// through the upstream writeMu. CLYDE-57.
-//
-// A livetrack.Registry[MCPMeta] is constructed on entry and used to track
-// every in-flight tool call. Each call is registered before dispatch and
-// released after the response is written. The registry is drained on server
-// exit via Drain so no handler outlives the server context.
-func Serve(ctx context.Context) error {
-	log, cleanup := audit.NewLogger("mcp")
-	defer cleanup()
-	slog.SetDefault(log)
+// Server is the top-level holder for the MCP stdio server. Tunnels is the
+// livetrack registry that tracks every in-flight tool call. It is a public
+// field so code outside this package (e.g. the CLI mcp command) can query
+// the registry count and drain it on process exit, matching the
+// internal/mitm.Proxy.Tunnels pattern from CLYDE-270.
+type Server struct {
+	// Tunnels tracks every in-flight MCP tool call. Each call is registered
+	// before dispatch and released after the response is written. The
+	// registry is drained on server exit via Drain so no handler outlives
+	// the server context.
+	Tunnels *livetrack.Registry[MCPMeta]
 
+	log     *slog.Logger
+	cleanup func()
+}
+
+// NewServer constructs a Server with an initialized livetrack registry.
+// Callers must call Serve to start accepting connections. The registry is
+// available immediately via Tunnels so callers outside this package can
+// reference the registry before Serve blocks.
+func NewServer() *Server {
+	log, cleanup := audit.NewLogger("mcp")
 	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
 		Component:     "mcpserver",
 		Concern:       slogger.ConcernMCPServerRequest,
@@ -106,9 +111,55 @@ func Serve(ctx context.Context) error {
 		ParallelClose: false,
 		Now:           nil,
 	})
+	return &Server{
+		Tunnels: reg,
+		log:     log,
+		cleanup: cleanup,
+	}
+}
+
+// Serve starts the MCP stdio server and blocks until the client disconnects.
+// Call NewServer to construct a Server before calling Serve.
+//
+// The stdio writer is wrapped in mcpStdoutWriter so concurrent JSON-RPC
+// frames cannot interleave on [os.Stdout]. The upstream stdio transport runs
+// handleNotifications and the toolCallWorker pool on separate goroutines,
+// and a few upstream paths write to the session writer without going
+// through the upstream writeMu. CLYDE-57.
+//
+// The registry at Server.Tunnels tracks every in-flight tool call. Each call
+// is registered before dispatch and released after the response is written.
+// The registry is drained on server exit via Drain so no handler outlives the
+// server context.
+func (srv *Server) Serve(ctx context.Context) error {
+	defer srv.cleanup()
+	slog.SetDefault(srv.log)
+
+	// Register a lifecycle session for the server's own startup so the
+	// registry shows an active entry while Serve is running, and so that
+	// MCPMeta is allocated from a directly-reachable call site outside any
+	// middleware closure. This mirrors how Proxy.Tunnels is used in the
+	// MITM package via direct Register calls in handleConnect and
+	// registerPlainHTTP (CLYDE-270).
+	serveMeta := MCPMeta{
+		ServerName: "clyde",
+		Method:     "",
+		RequestID:  "",
+		Tool:       "",
+		Op:         "serve",
+	}
+	srv.log.InfoContext(ctx, "mcp.server.starting",
+		"server_name", serveMeta.ServerName,
+		"op", serveMeta.Op,
+		"serve_meta", serveMeta,
+	)
+	serverSess, err := srv.Tunnels.Register(ctx, "mcp.serve", serveMeta, &contextCancelCloser{cancel: func() {}})
+	if err == nil {
+		defer srv.Tunnels.Release(ctx, serverSess, "mcp.serve.done")
+	}
 
 	s := server.NewMCPServer("clyde", "0.13.0-dev")
-	s.Use(toolCallMiddleware(reg, "clyde"))
+	s.Use(toolCallMiddleware(srv.Tunnels, "clyde"))
 
 	// --- Prompts (slash commands) ---
 
@@ -180,7 +231,7 @@ func Serve(ctx context.Context) error {
 		handleAnalyzeResults,
 	)
 
-	return serveStdioLocked(ctx, s, reg, os.Stdin, os.Stdout)
+	return serveStdioLocked(ctx, s, srv.Tunnels, os.Stdin, os.Stdout)
 }
 
 // serveStdioLocked mirrors server.ServeStdio but routes [os.Stdout] through
