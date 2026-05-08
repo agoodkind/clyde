@@ -29,6 +29,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
+	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/ui"
@@ -962,17 +963,20 @@ func applyClaudeMITMEnv(ctx context.Context, env []string) []string {
 	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
 		return env
 	}
+	out := claudeprovider.SanitizeMITMList(env)
 	extra, err := claudeLaunchEnvironmentViaDaemon(ctx, "claude")
 	if err != nil {
 		cmdDispatchLog.Logger().WarnContext(ctx, "forward.mitm.claude_env_failed", "component", "cli", "err", err)
-		return env
+		return out
 	}
-	out := append([]string(nil), env...)
 	for _, item := range extra {
 		if item.GetKey() == "" {
 			continue
 		}
 		out = withEnvValue(out, item.GetKey(), item.GetValue())
+		if item.GetKey() == claudeprovider.AnthropicBaseURLEnv {
+			out = withEnvValue(out, claudeprovider.ClydeMITMAnthropicBaseURLEnv, "1")
+		}
 	}
 	return out
 }
