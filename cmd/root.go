@@ -207,8 +207,8 @@ func (builder appCallbackBuilder) openStore() (session.Store, error) {
 	return session.NewGlobalFileStore()
 }
 
-func (builder appCallbackBuilder) listSessions() (ui.SessionSnapshot, error) {
-	resp, err := daemon.ListSessionsViaDaemon(builder.childContext("dashboard.list_sessions"))
+func (builder appCallbackBuilder) listSessions(ctx context.Context) (ui.SessionSnapshot, error) {
+	resp, err := daemon.ListSessionsViaDaemon(ctx)
 	if err != nil {
 		return ui.SessionSnapshot{}, err
 	}
@@ -433,11 +433,11 @@ func (builder appCallbackBuilder) exportSession(sess *session.Session, req ui.Se
 	return resp.GetBody(), nil
 }
 
-func (builder appCallbackBuilder) loadExportStats(sess *session.Session) (ui.SessionExportStats, error) {
+func (builder appCallbackBuilder) loadExportStats(ctx context.Context, sess *session.Session) (ui.SessionExportStats, error) {
 	if sess == nil {
 		return ui.SessionExportStats{}, fmt.Errorf("nil session")
 	}
-	resp, err := daemon.GetSessionExportStatsViaDaemon(builder.childContext("dashboard.session.export_stats"), sess.Name)
+	resp, err := daemon.GetSessionExportStatsViaDaemon(ctx, sess.Name)
 	if err != nil {
 		return ui.SessionExportStats{}, err
 	}
@@ -472,8 +472,8 @@ func forwardRegistryEvents(ctx context.Context, raw <-chan *clydev1.SubscribeReg
 	}
 }
 
-func (builder appCallbackBuilder) loadConfigControls() ([]ui.ConfigControl, error) {
-	raw, err := daemon.ListConfigControlsViaDaemon(builder.childContext("dashboard.config_controls.list"))
+func (builder appCallbackBuilder) loadConfigControls(ctx context.Context) ([]ui.ConfigControl, error) {
+	raw, err := daemon.ListConfigControlsViaDaemon(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -625,8 +625,8 @@ func (builder appCallbackBuilder) compactUndo(sessionName string) (*ui.CompactUn
 	}, nil
 }
 
-func (builder appCallbackBuilder) getSessionDetail(sess *session.Session) (ui.SessionDetail, error) {
-	resp, err := daemon.GetSessionDetailViaDaemon(builder.childContext("dashboard.session.detail"), sess.Name)
+func (builder appCallbackBuilder) getSessionDetail(ctx context.Context, sess *session.Session) (ui.SessionDetail, error) {
+	resp, err := daemon.GetSessionDetailViaDaemon(ctx, sess.Name)
 	if err != nil {
 		return ui.SessionDetail{}, err
 	}

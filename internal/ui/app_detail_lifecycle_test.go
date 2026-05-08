@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -67,7 +68,7 @@ func TestDetailLifecycle_RenameDiscardsLateGoroutineCompletion(t *testing.T) {
 	var done sync.WaitGroup
 	done.Add(1)
 
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
 		defer done.Done()
 		<-gate
 		close(released)
