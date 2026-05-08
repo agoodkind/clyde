@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -50,6 +51,15 @@ type Proxy struct {
 
 	cursorTLSClientConfig *tls.Config
 	rawCaptureSeq         atomic.Uint64
+
+	// Tunnels tracks every long-lived MITM connection (CONNECT
+	// tunnels, intercepted Cursor TLS sessions, plain HTTP request
+	// loops) so the daemon can drain or force-close them on reload
+	// instead of relying on http.Server.Shutdown alone. See
+	// internal/livetrack for the contract; the proxy installs each
+	// session's closer to terminate hijacked client and upstream
+	// connections.
+	Tunnels *livetrack.Registry[TunnelMeta]
 
 	mu       sync.RWMutex
 	cfg      config.MITMConfig
@@ -87,11 +97,20 @@ func NewProxy(cfg config.MITMConfig, log *slog.Logger, listener net.Listener) (*
 		ca:                    ca,
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
-		mu:                    sync.RWMutex{},
-		cfg:                   cfg,
-		base:                  "http://" + listener.Addr().String(),
-		listener:              listener,
-		server:                nil,
+		Tunnels: livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
+			Component:     "mitm",
+			Concern:       slogger.ConcernProviderMITMLifecycle,
+			Log:           log,
+			PollEvery:     50 * time.Millisecond,
+			CloserGrace:   2 * time.Second,
+			ParallelClose: false,
+			Now:           nil,
+		}),
+		mu:       sync.RWMutex{},
+		cfg:      cfg,
+		base:     "http://" + listener.Addr().String(),
+		listener: listener,
+		server:   nil,
 	}
 	p.server = &http.Server{Handler: http.HandlerFunc(p.handle)}
 	return p, nil
@@ -117,15 +136,35 @@ func (p *Proxy) Serve() error {
 	return nil
 }
 
-// Shutdown gracefully stops the proxy's HTTP server, draining
-// in-flight requests until ctx is canceled.
+// Shutdown gracefully stops the proxy's HTTP server, drains
+// registered tunnels until ctx is canceled, and releases every
+// cached capture writer flock so the replacement daemon can rebind.
+// The Cloudflare keepalive case (api2.cursor.sh CONNECT tunnels
+// that never close on their own) is the empirical reason this is no
+// longer a bare [http.Server.Shutdown]: the registry's force-close
+// path terminates wedged tunnels under the configured grace, and
+// releaseCaptureWriters unlocks the JSONL flock the writer cache
+// holds. Idempotent: multiple Shutdown calls are safe.
 func (p *Proxy) Shutdown(ctx context.Context) error {
 	if p.server == nil {
 		return nil
 	}
-	if err := p.server.Shutdown(ctx); err != nil {
-		p.log.WarnContext(ctx, "mitm.proxy.shutdown_failed", "err", err)
-		return fmt.Errorf("mitm shutdown: %w", err)
+	httpErr := p.server.Shutdown(ctx)
+	if httpErr != nil {
+		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "err", httpErr)
+	}
+	if p.Tunnels != nil && (httpErr != nil || p.Tunnels.Count() > 0) {
+		result := p.Tunnels.Drain(ctx, "mitm.shutdown")
+		p.log.InfoContext(ctx, "mitm.proxy.tunnels_drained",
+			"final", result.Final.String(),
+			"remaining", result.Remaining,
+			"force_closed", result.ForceClosed,
+			"duration_ms", result.Duration.Milliseconds(),
+		)
+	}
+	releaseCaptureWriters()
+	if httpErr != nil {
+		return fmt.Errorf("mitm shutdown: %w", httpErr)
 	}
 	return nil
 }
@@ -151,6 +190,62 @@ func (p *Proxy) config() config.MITMConfig {
 
 func (p *Proxy) ClaudeBaseURL() string { return p.base }
 
+// prepareCaptureWriters returns the per-request capture state. When
+// BodyMode is raw, it primes a sidecar response writer; otherwise it
+// returns a summary index and nil writer. Splitting this off keeps
+// the main handle function under the funlen limit while preserving
+// the previous behavior 1:1.
+func (p *Proxy) prepareCaptureWriters(cfg config.MITMConfig, provider string, path string, body []byte) (captureBodyIndex, *failOpenRawCaptureWriter, error) {
+	requestBodyIndex := newCaptureBodyIndex(summarizeBody(cfg.BodyMode, body))
+	if cfg.BodyMode != "raw" {
+		return requestBodyIndex, nil, nil
+	}
+	rawSetup := p.prepareRawHTTPCapture(cfg, provider, path, body)
+	return rawSetup.requestBodyIndex, rawSetup.responseRawWriter, rawSetup.responseRawError
+}
+
+// dispatchUpstream constructs and executes the upstream request,
+// returning the response or false (with an error already written to
+// w) when the upstream fetch failed.
+func (p *Proxy) dispatchUpstream(w http.ResponseWriter, r *http.Request, upstream string, body []byte, provider string) (*http.Response, bool) {
+	upstreamURL := upstream + r.URL.RequestURI()
+	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "build upstream request", http.StatusInternalServerError)
+		return nil, false
+	}
+	copyHeaders(upReq.Header, r.Header)
+	upReq.Host = ""
+	resp, err := p.client.Do(upReq)
+	if err != nil {
+		p.log.Warn("mitm.proxy.upstream_failed", "provider", provider, "path", r.URL.Path, "err", err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return nil, false
+	}
+	return resp, true
+}
+
+// registerPlainHTTP records the plain-HTTP exchange in the tunnel
+// registry so reload drain sees in-flight requests. Plain HTTP has
+// no hijacked conn for force-close to terminate, so the closer is a
+// no-op; the registry's value for these sessions is the count and
+// snapshot. Returns false (and writes a 503) when the registry has
+// already begun draining.
+func (p *Proxy) registerPlainHTTP(w http.ResponseWriter, r *http.Request, upstream string) (*livetrack.Session[TunnelMeta], bool) {
+	reqSess, registerErr := p.Tunnels.Register(r.Context(), "mitm.http", TunnelMeta{
+		ConnectHost:   r.Host,
+		UpstreamAddr:  upstream,
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, mitmHTTPCloser{})
+	if registerErr != nil {
+		p.log.WarnContext(r.Context(), "mitm.http.register_rejected", "path", r.URL.Path, "err", registerErr)
+		http.Error(w, "service draining", http.StatusServiceUnavailable)
+		return nil, false
+	}
+	return reqSess, true
+}
+
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	started := currentTime()
 	cfg := p.config()
@@ -168,6 +263,11 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		p.handleWebsocket(w, r, provider, upstream)
 		return
 	}
+	reqSess, ok := p.registerPlainHTTP(w, r, upstream)
+	if !ok {
+		return
+	}
+	defer p.Tunnels.Release(r.Context(), reqSess, "mitm.http.completed")
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -176,29 +276,9 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
-	requestBodyIndex := newCaptureBodyIndex(summarizeBody(cfg.BodyMode, body))
-	var responseRawWriter *failOpenRawCaptureWriter
-	var responseRawError error
-	if cfg.BodyMode == "raw" {
-		rawSetup := p.prepareRawHTTPCapture(cfg, provider, r.URL.Path, body)
-		requestBodyIndex = rawSetup.requestBodyIndex
-		responseRawWriter = rawSetup.responseRawWriter
-		responseRawError = rawSetup.responseRawError
-	}
-
-	upstreamURL := upstream + r.URL.RequestURI()
-	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(body))
-	if err != nil {
-		http.Error(w, "build upstream request", http.StatusInternalServerError)
-		return
-	}
-	copyHeaders(upReq.Header, r.Header)
-	upReq.Host = ""
-
-	resp, err := p.client.Do(upReq)
-	if err != nil {
-		p.log.Warn("mitm.proxy.upstream_failed", "provider", provider, "path", r.URL.Path, "err", err)
-		http.Error(w, err.Error(), http.StatusBadGateway)
+	requestBodyIndex, responseRawWriter, responseRawError := p.prepareCaptureWriters(cfg, provider, r.URL.Path, body)
+	resp, ok := p.dispatchUpstream(w, r, upstream, body, provider)
+	if !ok {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
