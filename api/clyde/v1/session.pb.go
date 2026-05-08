@@ -638,6 +638,7 @@ type SessionSummary struct {
 	AutoNameState         string                   `protobuf:"bytes,31,opt,name=auto_name_state,json=autoNameState,proto3" json:"auto_name_state,omitempty"`
 	AutoNameSource        string                   `protobuf:"bytes,32,opt,name=auto_name_source,json=autoNameSource,proto3" json:"auto_name_source,omitempty"`
 	LastAutoNameNanos     int64                    `protobuf:"varint,33,opt,name=last_auto_name_nanos,json=lastAutoNameNanos,proto3" json:"last_auto_name_nanos,omitempty"`
+	AutoNameSourceHash    string                   `protobuf:"bytes,34,opt,name=auto_name_source_hash,json=autoNameSourceHash,proto3" json:"auto_name_source_hash,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -901,6 +902,13 @@ func (x *SessionSummary) GetLastAutoNameNanos() int64 {
 		return x.LastAutoNameNanos
 	}
 	return 0
+}
+
+func (x *SessionSummary) GetAutoNameSourceHash() string {
+	if x != nil {
+		return x.AutoNameSourceHash
+	}
+	return ""
 }
 
 type ListSessionsResponse struct {
@@ -1921,8 +1929,7 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
 	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x15\n" +
-	"\x13ListSessionsRequest\"\xf1\n" +
-	"\n" +
+	"\x13ListSessionsRequest\"\xa4\v\n" +
 	"\x0eSessionSummary\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rmetadata_name\x18\x02 \x01(\tR\fmetadataName\x12\x1d\n" +
@@ -1958,7 +1965,8 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\aruntime\x18\x1e \x01(\v2!.clyde.v1.ProviderRuntimeBoundaryR\aruntime\x12&\n" +
 	"\x0fauto_name_state\x18\x1f \x01(\tR\rautoNameState\x12(\n" +
 	"\x10auto_name_source\x18  \x01(\tR\x0eautoNameSource\x12/\n" +
-	"\x14last_auto_name_nanos\x18! \x01(\x03R\x11lastAutoNameNanos\"\x80\x01\n" +
+	"\x14last_auto_name_nanos\x18! \x01(\x03R\x11lastAutoNameNanos\x121\n" +
+	"\x15auto_name_source_hash\x18\" \x01(\tR\x12autoNameSourceHash\"\x80\x01\n" +
 	"\x14ListSessionsResponse\x124\n" +
 	"\bsessions\x18\x01 \x03(\v2\x18.clyde.v1.SessionSummaryR\bsessions\x122\n" +
 	"\x15global_remote_control\x18\x02 \x01(\bR\x13globalRemoteControl\"`\n" +

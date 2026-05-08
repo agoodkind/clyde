@@ -735,6 +735,7 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 			AutoNameState:        session.AutoNameState(raw.GetAutoNameState()),
 			AutoNameSource:       session.AutoNameSource(raw.GetAutoNameSource()),
 			LastAutoNameAt:       timeFromNanos(raw.GetLastAutoNameNanos()),
+			AutoNameSourceHash:   raw.GetAutoNameSourceHash(),
 		},
 	}
 	if sess.Metadata.Name == "" {
