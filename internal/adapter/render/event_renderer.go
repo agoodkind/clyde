@@ -58,6 +58,14 @@ type Event struct {
 	ItemType         string
 	EncryptedContent string
 	Signature        string
+	// RedactedData is the opaque base64 payload Anthropic emits inline
+	// on a `redacted_thinking` content block. The translator surfaces
+	// it on EventReasoningDelta with ReasoningKind="redacted" so the
+	// renderer can persist it inline on the synthetic-redacted-thinking
+	// close marker as `data-encrypted` (the existing attribute name is
+	// reused; the kind disambiguates the byte semantics). Empty for
+	// every other reasoning kind.
+	RedactedData string
 }
 
 // RendererState exposes reasoning state needed by response collectors that need

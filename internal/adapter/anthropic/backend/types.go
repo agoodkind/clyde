@@ -27,6 +27,12 @@ type AnthMessage struct {
 // thinking block via the `signature_delta` SSE event. The mapper preserves
 // it on the round trip so a replayed thinking block on a later turn passes
 // Anthropic's signature validation.
+//
+// Data carries the opaque base64 payload Anthropic emits inline on a
+// `redacted_thinking` content block start event. The wire field name on
+// Anthropic is `data`. The mapper preserves it on the round trip so a
+// replayed redacted_thinking block on a later turn passes Anthropic's
+// history validation. Empty for every other block type.
 type AnthContentBlock struct {
 	Type          string           `json:"type"`
 	Text          string           `json:"text,omitempty"`
@@ -38,6 +44,7 @@ type AnthContentBlock struct {
 	Source        *AnthImageSource `json:"source,omitempty"`
 	Thinking      string           `json:"thinking,omitempty"`
 	Signature     string           `json:"signature,omitempty"`
+	Data          string           `json:"data,omitempty"`
 }
 
 // AnthImageSource describes image bytes or a remote URL.
