@@ -375,7 +375,7 @@ func TestUX_SnapshotRefreshKeepsHighlightedRowBySessionID(t *testing.T) {
 		t.Fatalf("highlighted session ID = %q, want %q", got.Metadata.ProviderSessionID(), highlighted.Metadata.ProviderSessionID())
 	}
 	if got.Name != "renamed-highlight" {
-		t.Fatalf("highlighted stored name = %q, want renamed-highlight", got.Name)
+		t.Fatalf("highlighted row name = %q, want renamed-highlight", got.Name)
 	}
 }
 
@@ -668,6 +668,7 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	}
 
 	sess := a.sessions[a.visibleIdx[0]]
+	sess.Metadata.DisplayTitle = "Merry Swan"
 	a.openExportOptions(sess)
 	panel, ok := a.overlay.(*ExportPanel)
 	if !ok {
@@ -679,8 +680,11 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	if a.mode != StatusExport {
 		t.Fatalf("mode = %v want StatusExport", a.mode)
 	}
-	if !strings.HasSuffix(panel.name, "-"+sess.Name+".md") {
-		t.Fatalf("panel filename = %q, want dated stored name", panel.name)
+	if panel.sessionName != sess.Name {
+		t.Fatalf("panel session key = %q, want row name %q", panel.sessionName, sess.Name)
+	}
+	if !strings.HasSuffix(panel.name, "-merry-swan.md") {
+		t.Fatalf("panel filename = %q, want dated visible title", panel.name)
 	}
 	if panel.status != "loading export stats..." {
 		t.Fatalf("panel status = %q want loading export stats...", panel.status)

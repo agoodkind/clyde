@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -248,7 +249,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	out = append(out, []TextSegment{})
 
 	section("Resume")
-	out = append(out, []TextSegment{{Text: "  clyde resume " + sess.Name, Style: StyleMuted}})
+	out = append(out, []TextSegment{{Text: "  clyde resume " + strconv.Quote(session.SessionDisplayName(sess)), Style: StyleMuted}})
 	out = append(out, []TextSegment{{Text: "  claude --resume " + sess.Metadata.ProviderSessionID(), Style: StyleMuted}})
 
 	return out

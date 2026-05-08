@@ -26,6 +26,36 @@ func TestSortSessionsStableTieBreakForLastUsed(t *testing.T) {
 	}
 }
 
+func TestSortSessionsUsesDisplayTitleForNameColumn(t *testing.T) {
+	a := NewApp([]*session.Session{
+		{
+			Name: "z-slug",
+			Metadata: session.Metadata{
+				Name:         "z-slug",
+				DisplayTitle: "Alpha Human",
+			},
+		},
+		{
+			Name: "a-slug",
+			Metadata: session.Metadata{
+				Name:         "a-slug",
+				DisplayTitle: "Zulu Human",
+			},
+		},
+	}, AppCallbacks{})
+	a.sortCol = SortColName
+	a.sortAsc = true
+
+	a.sortSessions()
+
+	if len(a.sessions) != 2 {
+		t.Fatalf("sessions=%d want 2", len(a.sessions))
+	}
+	if a.sessions[0].Name != "z-slug" || a.sessions[1].Name != "a-slug" {
+		t.Fatalf("order = %q, %q; want display-title sort", a.sessions[0].Name, a.sessions[1].Name)
+	}
+}
+
 func TestDedupeSessionListPrefersNonAutoAdoptedNameForSharedSessionID(t *testing.T) {
 	now := time.Date(2026, 4, 24, 19, 0, 0, 0, time.UTC)
 	in := []*session.Session{

@@ -462,10 +462,10 @@ type App struct {
 	daemonLastErr  string
 	daemonLastSeen time.Time
 
-	// detailCache stores the fully-extracted SessionDetail keyed by the stored
-	// name. Populated off the UI goroutine by loadDetailAsync so repeat
-	// selections render instantly. detailLoading tracks sessions whose
-	// load is in flight, guarding against duplicate goroutines.
+	// detailCache stores the fully-extracted SessionDetail keyed by the
+	// persisted row name. Populated off the UI goroutine by loadDetailAsync
+	// so repeat selections render instantly. detailLoading tracks sessions
+	// whose load is in flight, guarding against duplicate goroutines.
 	detailCache   map[string]SessionDetail
 	detailLoading map[string]bool
 	// detailRepollAfter[name] holds the earliest wall-clock time at
@@ -477,7 +477,7 @@ type App struct {
 	detailMu          sync.Mutex
 
 	// exportStatsCache stores daemon-derived export aggregates keyed by the
-	// stored name. Like detail loading, requests are coalesced so the
+	// persisted row name. Like detail loading, requests are coalesced so the
 	// export panel can open immediately and hydrate asynchronously.
 	exportStatsCache   map[string]SessionExportStats
 	exportStatsLoading map[string]bool
@@ -4263,7 +4263,7 @@ func (a *App) sortSessions() {
 		cmp := 0
 		switch a.sortCol {
 		case SortColName:
-			cmp = strings.Compare(strings.ToLower(x.Name), strings.ToLower(y.Name))
+			cmp = strings.Compare(strings.ToLower(sessionDisplayTitle(x)), strings.ToLower(sessionDisplayTitle(y)))
 		case SortColWorkspace:
 			cmp = strings.Compare(x.Metadata.WorkspaceRoot, y.Metadata.WorkspaceRoot)
 		case SortColModel:
@@ -4278,6 +4278,11 @@ func (a *App) sortSessions() {
 			cmp = compareTimes(lastUsedTime(x), lastUsedTime(y))
 		}
 		if cmp == 0 {
+			xTitle := strings.ToLower(sessionDisplayTitle(x))
+			yTitle := strings.ToLower(sessionDisplayTitle(y))
+			if xTitle != yTitle {
+				return xTitle < yTitle
+			}
 			return strings.ToLower(x.Name) < strings.ToLower(y.Name)
 		}
 		if !a.sortAsc {
@@ -5828,11 +5833,11 @@ func (a *App) openHelpModal() {
 	a.overlay = modal
 }
 
-// findSessionByName returns the in-memory session matching the stored name or
-// visible display title, or nil. Used after a refresh to pick up updated
+// findSessionByName returns the in-memory session matching an exact visible
+// title or legacy row name, or nil. Used after a refresh to pick up updated
 // metadata.
 // findVisibleRowByName returns the visible row index for the session
-// with the given stored name or visible display title, or -1 if it is not
+// with the given exact visible title or legacy row name, or -1 if it is not
 // currently in the visible list. The post session prompt uses this to relocate the row after
 // a refresh cycle so repeated Resume clicks keep firing.
 func (a *App) findVisibleRowByName(name string) int {
@@ -5870,14 +5875,7 @@ func (a *App) findSessionByName(name string) *session.Session {
 }
 
 func sessionDisplayTitle(sess *session.Session) string {
-	if sess == nil {
-		return ""
-	}
-	displayTitle := strings.TrimSpace(sess.Metadata.DisplayTitle)
-	if displayTitle != "" {
-		return displayTitle
-	}
-	return sess.Name
+	return session.SessionDisplayName(sess)
 }
 
 func sessionMatchesLookup(sess *session.Session, name, sessionID string) bool {
@@ -6313,7 +6311,7 @@ func (a *App) openBasedirEditor(sess *session.Session) {
 		}
 	}
 	input.OnCancel = a.closeOverlay
-	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sess.Name + " (empty clears)"}
+	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sessionDisplayTitle(sess) + " (empty clears)"}
 	a.mode = StatusFilter
 }
 
@@ -6325,7 +6323,7 @@ func (a *App) openExportOptions(sess *session.Session) {
 		return
 	}
 	stats, loaded := a.cachedExportStatsForSession(sess)
-	panel := NewExportPanel(sess.Name, stats, defaultExportFolder())
+	panel := newExportPanelWithTitle(sess.Name, sessionDisplayTitle(sess), stats, defaultExportFolder())
 	if !loaded && a.cb.LoadExportStats != nil {
 		panel.StartLoadingStats()
 		a.requestExportStatsAsync(sess)

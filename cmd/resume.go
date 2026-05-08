@@ -9,20 +9,20 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-// NewResumeCmd implements `clyde resume <session|uuid>`. It resolves the
-// argument against the clyde session store (by stored name, provider UUID,
-// display title, or fuzzy match) and shells out through the provider runtime
-// with the resolved provider session id. When nothing matches, it forwards the
-// raw query to the default provider runtime so upstream-native sessions resume
-// transparently.
+// NewResumeCmd implements `clyde resume <title|provider-id>`. It resolves the
+// argument against the clyde session store by exact visible title, provider ID,
+// legacy row name, or single substring match, then shells out through the
+// provider runtime with the resolved provider session id. When nothing matches,
+// it forwards the raw query to the default provider runtime so upstream-native
+// sessions resume transparently.
 //
 // `clyde -r <uuid>` and `clyde --resume <uuid>` are rewritten to this
 // verb by ClassifyArgs in dispatch.go, so all three forms share one
 // RunE.
 func NewResumeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:                "resume <session|uuid>",
-		Short:              "Resume a clyde session by title, stored name, or provider id",
+		Use:                "resume <title|provider-id>",
+		Short:              "Resume a clyde session by exact title or provider id",
 		Args:               cobra.ExactArgs(1),
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, args []string) error {
