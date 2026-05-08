@@ -25,10 +25,17 @@ type streamMessageStartEvent struct {
 }
 
 // streamContentBlockSpec is the content_block object on content_block_start.
+//
+// Data carries the opaque base64 blob Anthropic emits inline on a
+// `redacted_thinking` content_block_start event. Anthropic does not stream
+// a delta for redacted_thinking blocks (the entire payload arrives on the
+// start event), so the parser surfaces it directly off this spec without
+// waiting for content_block_delta. Empty for every other block type.
 type streamContentBlockSpec struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Data string `json:"data,omitempty"`
 }
 
 // streamContentBlockStartEvent is the full payload for
@@ -132,6 +139,16 @@ func dispatchSSE(
 				return sink(StreamEvent{
 					Kind:       "thinking",
 					BlockIndex: ev.Index,
+				})
+			case "redacted_thinking":
+				// Anthropic emits the opaque payload on the start event
+				// itself. There is no redacted_thinking_delta; we surface
+				// one event per block carrying the data blob and rely on
+				// content_block_stop for closing.
+				return sink(StreamEvent{
+					Kind:       "redacted_thinking",
+					BlockIndex: ev.Index,
+					Data:       ev.ContentBlock.Data,
 				})
 			}
 		}

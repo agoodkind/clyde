@@ -362,6 +362,9 @@ type Sink func(delta string) error
 //     Text empty on open, populated on subsequent thinking_delta events.
 //   - "thinking_signature"  per-thinking-block signature delta; Text carries
 //     the opaque signature emitted by Anthropic's signature_delta event.
+//   - "redacted_thinking"   redacted_thinking content block; Data carries
+//     the opaque base64 payload Anthropic emits inline on the start event.
+//     There is no separate delta or close-side payload for this kind.
 //   - "tool_use_start"      tool_use content block open; ToolUseID and
 //     ToolUseName carry the call identity.
 //   - "tool_use_arg_delta"  tool_use partial JSON arguments; PartialJSON
@@ -376,6 +379,7 @@ type StreamEvent struct {
 	ToolUseName string
 	PartialJSON string
 	StopReason  string
+	Data        string
 }
 
 // EventSink receives structured stream events.
