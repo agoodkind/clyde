@@ -640,7 +640,7 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	if stopExclusive != nil {
 		stopExclusive("reload_handoff")
 	}
-	grpcDrainStarted := startReloadGRPCDrain(ctx, log, grpcServer, proc)
+	grpcDrainStarted := startReloadGRPCDrain(ctx, log, grpcServer, proc, srv)
 	<-grpcDrainStarted
 	if releaseProcessLock != nil {
 		releaseProcessLock("reload_handoff")
@@ -663,7 +663,7 @@ func watchReplacementDaemon(ctx context.Context, log *slog.Logger, proc *replace
 	}()
 }
 
-func startReloadGRPCDrain(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, proc *replacementDaemonProcess) <-chan struct{} {
+func startReloadGRPCDrain(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, proc *replacementDaemonProcess, srv *Server) <-chan struct{} {
 	grpcDrainStarted := make(chan struct{})
 	go func() {
 		defer func() {
@@ -681,6 +681,23 @@ func startReloadGRPCDrain(ctx context.Context, log *slog.Logger, grpcServer *grp
 			"timeout", reloadGRPCDrainWait.String(),
 		)
 		done := startGracefulGRPCStop(ctx, log, grpcServer, proc, grpcDrainStarted)
+		// Drain the RPC stream registry in parallel with gRPC's own
+		// graceful stop so in-flight streams are accounted for and
+		// force-closed if the deadline hits. The drain context matches
+		// the gRPC drain wait so both paths share the same deadline.
+		drainCtx, drainCancel := context.WithTimeout(ctx, reloadGRPCDrainWait)
+		defer drainCancel()
+		if srv != nil && srv.RPCs != nil {
+			rpcDrainResult := srv.RPCs.Drain(drainCtx, "grpc.reload")
+			log.InfoContext(ctx, "daemon.reload.rpc_registry_drained",
+				"component", "daemon",
+				"new_pid", proc.pid,
+				"final", rpcDrainResult.Final.String(),
+				"remaining", rpcDrainResult.Remaining,
+				"force_closed", rpcDrainResult.ForceClosed,
+				"duration_ms", rpcDrainResult.Duration.Milliseconds(),
+			)
+		}
 		select {
 		case <-done:
 			log.InfoContext(ctx, "daemon.reload.old_process_grpc_drain_complete",
@@ -1822,7 +1839,7 @@ func stopAdapterProcess(proc *adapterProcess, timeout time.Duration) {
 	}
 }
 
-func startAdapterProcess(parent context.Context, log *slog.Logger, srv *adapter.Server, lis net.Listener) *adapterProcess {
+func startAdapterProcess(parent context.Context, log *slog.Logger, adapterSrv *adapter.Server, lis net.Listener) *adapterProcess {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -1838,7 +1855,7 @@ func startAdapterProcess(parent context.Context, log *slog.Logger, srv *adapter.
 			}
 		}()
 		defer close(done)
-		if err := srv.StartOnListener(ctx, lis); err != nil {
+		if err := adapterSrv.StartOnListener(ctx, lis); err != nil {
 			log.Error("adapter.exited",
 				"component", "adapter",
 				"err", err,
@@ -1847,10 +1864,10 @@ func startAdapterProcess(parent context.Context, log *slog.Logger, srv *adapter.
 	}()
 	return &adapterProcess{
 		cancel:        cancel,
-		drain:         srv.Shutdown,
-		waitIdle:      srv.WaitForIdle,
-		activeCount:   srv.ActiveRequestCount,
-		forceClose:    srv.Close,
+		drain:         adapterSrv.Shutdown,
+		waitIdle:      adapterSrv.WaitForIdle,
+		activeCount:   adapterSrv.ActiveRequestCount,
+		forceClose:    adapterSrv.Close,
 		closeListener: lis.Close,
 		done:          done,
 		lis:           lis,

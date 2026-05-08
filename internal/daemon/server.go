@@ -37,6 +37,7 @@ import (
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/outputstyle"
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
@@ -104,6 +105,13 @@ type Server struct {
 	mitmAccess mitmAccessor
 
 	skipRuntimeCleanup atomic.Bool
+
+	// RPCs tracks every inbound streaming gRPC session so the daemon
+	// can drain or force-close them on reload alongside the MITM and
+	// adapter drain. Each stream handler registers on entry with a
+	// closer that cancels the stream context, and defers Release on
+	// exit. See internal/livetrack for the contract.
+	RPCs *livetrack.Registry[RPCMeta]
 }
 
 // mitmAccessor stores the daemon's optional accessor for the
@@ -353,6 +361,7 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		reloadFn:                        nil,
 		mitmAccess:                      mitmAccessor{mu: sync.RWMutex{}, fn: nil},
 		skipRuntimeCleanup:              atomic.Bool{},
+		RPCs:                            newRPCRegistry(),
 	}
 }
 
@@ -479,6 +488,23 @@ func (s *Server) TriggerScan(ctx context.Context, _ *clydev1.TriggerScanRequest)
 // so a slow client cannot block the broadcaster. Events that arrive
 // while a subscriber's buffer is full are dropped for that one client.
 func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream clydev1.ClydeService_SubscribeRegistryServer) error {
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_registry", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/SubscribeRegistry",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_registry.done")
+
 	ch := make(chan *clydev1.SubscribeRegistryResponse, 32)
 
 	s.subMu.Lock()
@@ -492,7 +518,6 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 		close(ch)
 	}()
 
-	ctx := stream.Context()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -502,7 +527,7 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 			if err := stream.Send(ev); err != nil {
 				return err
 			}
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -525,10 +550,26 @@ func (s *Server) GetProviderStats(ctx context.Context, _ *clydev1.GetProviderSta
 }
 
 func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest, stream clydev1.ClydeService_SubscribeProviderStatsServer) error {
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_provider_stats", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/SubscribeProviderStats",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_provider_stats.done")
+
 	ch := s.providerStats.subscribe()
 	defer s.providerStats.unsubscribe(ch)
 
-	ctx := stream.Context()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -538,7 +579,7 @@ func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest
 			if err := stream.Send(ev); err != nil {
 				return err
 			}
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -2315,7 +2356,23 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 	}
 	defer cleanup()
 
-	ctx := stream.Context()
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, regErr := s.RPCs.Register(streamCtx, "daemon.rpc.tail_transcript", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/TailTranscript",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if regErr != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", regErr)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "tail_transcript.done")
+
 	for {
 		select {
 		case line, ok := <-ch:
@@ -2330,7 +2387,7 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 			if err := stream.Send(line); err != nil {
 				return err
 			}
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -2575,28 +2632,60 @@ func (s *Server) CompactPreview(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactPreviewServer,
 ) error {
-	ctx := stream.Context()
-	s.log.InfoContext(ctx, "daemon.compact.preview.started",
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.compact_preview", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/CompactPreview",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "compact_preview.done")
+
+	s.log.InfoContext(streamCtx, "daemon.compact.preview.started",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
 		"target", req.GetTargetTokens(),
 	)
-	return s.runCompact(ctx, req, stream, compactengine.RuntimeModePreview)
+	return s.runCompact(streamCtx, req, stream, compactengine.RuntimeModePreview)
 }
 
 func (s *Server) CompactApply(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactApplyServer,
 ) error {
-	ctx := stream.Context()
-	s.log.InfoContext(ctx, "daemon.compact.apply.started",
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	corr := correlation.FromContext(streamCtx)
+	peerInfo, _ := peer.FromContext(streamCtx)
+	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.compact_apply", RPCMeta{
+		Method:     "/clyde.v1.ClydeService/CompactApply",
+		Direction:  "inbound",
+		PeerActor:  daemonPeerAddr(peerInfo),
+		RequestID:  corr.RequestID,
+		TraceID:    string(corr.TraceID),
+		LeaseToken: "",
+	}, rpcCloser{cancel: streamCancel})
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
+	}
+	defer s.RPCs.Release(streamCtx, rpcSess, "compact_apply.done")
+
+	s.log.InfoContext(streamCtx, "daemon.compact.apply.started",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
 		"target", req.GetTargetTokens(),
 	)
-	return s.runCompact(ctx, req, stream, compactengine.RuntimeModeApply)
+	return s.runCompact(streamCtx, req, stream, compactengine.RuntimeModeApply)
 }
 
 func (s *Server) runCompact(
