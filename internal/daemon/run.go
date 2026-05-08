@@ -346,13 +346,6 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 	}
 	defer func() { srv.Close() }()
 
-	// Wire the auto-rename worker package through a no-op probe so the
-	// production binary keeps internal/sessionrename reachable until
-	// the follow-on PR ships the daemon scheduler that drives it.
-	if cfg, cfgErr := config.LoadGlobalOrDefault(); cfgErr == nil {
-		autoNameProbeReachability(context.Background(), cfg, log)
-	}
-
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(daemonUnaryCorrelationInterceptor(log)),
 		grpc.StreamInterceptor(daemonStreamCorrelationInterceptor(log)),
