@@ -118,7 +118,7 @@ func requestContextTrackerKeyFromIngress(ic ingresscontract.IngressContext, req 
 func ingressContextForRequest(req ChatRequest) ingresscontract.IngressContext {
 	contract, ok := activeIngressContract()
 	if !ok || contract == nil {
-		return ingresscontract.IngressContext{}
+		return ingresscontract.ZeroIngressContext()
 	}
 	return contract.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
 }

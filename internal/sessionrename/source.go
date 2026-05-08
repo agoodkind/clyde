@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -72,7 +74,7 @@ func (s *transcriptHeaderInnerStringList) UnmarshalJSON(data []byte) error {
 	if data[0] == '"' {
 		var raw string
 		if err := json.Unmarshal(data, &raw); err != nil {
-			return err
+			return fmt.Errorf("sessionrename: unmarshal transcript inner string: %w", err)
 		}
 		s.Text = raw
 		return nil
@@ -80,7 +82,7 @@ func (s *transcriptHeaderInnerStringList) UnmarshalJSON(data []byte) error {
 	if data[0] == '[' {
 		var blocks []transcriptHeaderTextBlock
 		if err := json.Unmarshal(data, &blocks); err != nil {
-			return err
+			return fmt.Errorf("sessionrename: unmarshal transcript inner blocks: %w", err)
 		}
 		var b strings.Builder
 		for _, block := range blocks {
@@ -113,7 +115,11 @@ func ExtractFromTranscript(path string) (CandidateSource, error) {
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return CandidateSource{}, err
+		slog.Warn("sessionrename.source.open_failed",
+			"path", path,
+			"err", err,
+		)
+		return CandidateSource{}, fmt.Errorf("sessionrename: open transcript %q: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -151,7 +157,11 @@ func ExtractFromTranscript(path string) (CandidateSource, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return CandidateSource{}, err
+		slog.Warn("sessionrename.source.scan_failed",
+			"path", path,
+			"err", err,
+		)
+		return CandidateSource{}, fmt.Errorf("sessionrename: scan transcript %q: %w", path, err)
 	}
 
 	if firstUser == "" {

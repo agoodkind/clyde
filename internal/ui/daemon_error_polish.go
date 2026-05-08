@@ -31,6 +31,20 @@ func polishDaemonError(err error) string {
 		return "daemon unavailable; check that clyde-daemon is running"
 	case codes.DeadlineExceeded:
 		return "request timed out; try again"
+	case codes.OK,
+		codes.Canceled,
+		codes.Unknown,
+		codes.InvalidArgument,
+		codes.AlreadyExists,
+		codes.PermissionDenied,
+		codes.ResourceExhausted,
+		codes.Aborted,
+		codes.OutOfRange,
+		codes.Unimplemented,
+		codes.Internal,
+		codes.DataLoss,
+		codes.Unauthenticated:
+		return st.Message()
 	default:
 		return st.Message()
 	}

@@ -1172,8 +1172,11 @@ func (duration *AutoNameDuration) UnmarshalText(text []byte) error {
 }
 
 // Duration returns the standard library duration value.
-func (duration AutoNameDuration) Duration() time.Duration {
-	return time.Duration(duration)
+func (duration *AutoNameDuration) Duration() time.Duration {
+	if duration == nil {
+		return 0
+	}
+	return time.Duration(*duration)
 }
 
 // IsEnabled reports whether the auto-rename worker is enabled.
@@ -1349,9 +1352,12 @@ type Permissions struct {
 	DisableBypassPermissionsMode string   `json:"disableBypassPermissionsMode,omitempty" toml:"disable_bypass_permissions_mode,omitempty"`
 }
 
-// NewConfig creates a new Config with sensible defaults.
+// NewConfig creates a new Config with sensible defaults. The function uses
+// a var declaration plus per-field assignment so each sub-block defaults to
+// its zero value without forcing exhaustruct to walk the nested types. The
+// loader fills the sub-blocks when the user supplies them.
 func NewConfig() *Config {
-	return &Config{
-		Profiles: make(map[string]Profile),
-	}
+	cfg := new(Config)
+	cfg.Profiles = make(map[string]Profile)
+	return cfg
 }

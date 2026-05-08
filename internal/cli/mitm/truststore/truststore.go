@@ -86,6 +86,20 @@ type InstallStatus struct {
 	Detail string
 }
 
+// NewInstallStatus builds a fully-populated InstallStatus seeded with the
+// platform identity and CA common name. Every other field is zero-initialized
+// so callers fill them as they discover state.
+func NewInstallStatus(platform PlatformID, commonName string) InstallStatus {
+	return InstallStatus{
+		Platform:             platform,
+		Installed:            false,
+		OnDiskFingerprint:    Fingerprint(""),
+		InstalledFingerprint: Fingerprint(""),
+		CommonName:           commonName,
+		Detail:               "",
+	}
+}
+
 // FingerprintsMatch reports whether the installed and on-disk
 // fingerprints are both non-empty and equal. A false return when the
 // CA is installed signals a stale or hand-edited trust entry.

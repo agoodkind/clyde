@@ -44,7 +44,7 @@ type MetadataStore interface {
 
 // Clock returns the wall-clock time the worker uses for cooldown
 // arithmetic. Tests inject a stable clock; production passes
-// time.Now.
+// [time.Now].
 type Clock func() time.Time
 
 // Worker drives the auto-rename apply pipeline. It is constructed
@@ -96,10 +96,11 @@ func NewWorker(cfg Config, rename Renamer, leases LeaseChecker, stores MetadataS
 	}
 }
 
-// Evaluate runs the trigger gates plus the source-hash dedupe and,
-// when every gate clears, applies the candidate rename. The return
-// values let the daemon attribute each evaluation in slog without
-// re-running the gates.
+// EvaluateResult records the worker's per-session decision. The
+// trigger gates plus the source-hash dedupe run first, and when every
+// gate clears the worker applies the candidate rename. The fields let
+// the daemon attribute each evaluation in slog without re-running the
+// gates.
 type EvaluateResult struct {
 	Applied  bool
 	OldName  string
@@ -108,6 +109,81 @@ type EvaluateResult struct {
 	Hash     string
 	Skipped  bool
 	GateOnly bool
+}
+
+// skippedResult builds an EvaluateResult that records a skip decision
+// with the supplied reason. Every EvaluateResult field is named
+// explicitly so callers route through this helper instead of
+// constructing partial literals.
+func skippedResult(reason string) EvaluateResult {
+	return EvaluateResult{
+		Applied:  false,
+		OldName:  "",
+		NewName:  "",
+		Reason:   reason,
+		Hash:     "",
+		Skipped:  true,
+		GateOnly: false,
+	}
+}
+
+// gateOnlyResult builds an EvaluateResult for the gate-only short
+// circuit: the worker stopped before extracting the candidate source
+// because a trigger gate denied the call.
+func gateOnlyResult(reason string) EvaluateResult {
+	return EvaluateResult{
+		Applied:  false,
+		OldName:  "",
+		NewName:  "",
+		Reason:   reason,
+		Hash:     "",
+		Skipped:  true,
+		GateOnly: true,
+	}
+}
+
+// skippedWithHashResult records a skip caused by an unchanged source
+// hash. The hash field carries the dedupe fingerprint so the daemon
+// can attribute the skip in slog.
+func skippedWithHashResult(reason, hash string) EvaluateResult {
+	return EvaluateResult{
+		Applied:  false,
+		OldName:  "",
+		NewName:  "",
+		Reason:   reason,
+		Hash:     hash,
+		Skipped:  true,
+		GateOnly: false,
+	}
+}
+
+// emptyResult is the zero-value EvaluateResult the worker returns
+// alongside a fatal error so the caller never reads a partial literal.
+func emptyResult() EvaluateResult {
+	return EvaluateResult{
+		Applied:  false,
+		OldName:  "",
+		NewName:  "",
+		Reason:   "",
+		Hash:     "",
+		Skipped:  false,
+		GateOnly: false,
+	}
+}
+
+// appliedResult builds an EvaluateResult for the successful-apply
+// path. Applied is true and the old and new names plus hash carry the
+// rename's attribution.
+func appliedResult(oldName, newName, hash string) EvaluateResult {
+	return EvaluateResult{
+		Applied:  true,
+		OldName:  oldName,
+		NewName:  newName,
+		Reason:   "",
+		Hash:     hash,
+		Skipped:  false,
+		GateOnly: false,
+	}
 }
 
 // errSourceUnchanged signals the candidate-source hash matched what
@@ -123,10 +199,10 @@ var errRateLimited = errors.New("sessionrename: rate limited")
 // adapter; PR5 introduces a separate code path for that.
 func (w *Worker) Evaluate(ctx context.Context, sess *session.Session, transcriptPath string, taken map[string]bool) (EvaluateResult, error) {
 	if !w.cfg.Enabled {
-		return EvaluateResult{Skipped: true, Reason: "disabled"}, nil
+		return skippedResult("disabled"), nil
 	}
 	if sess == nil {
-		return EvaluateResult{Skipped: true, Reason: "nil_session"}, nil
+		return skippedResult("nil_session"), nil
 	}
 
 	now := w.clock()
@@ -138,9 +214,14 @@ func (w *Worker) Evaluate(ctx context.Context, sess *session.Session, transcript
 	src, err := ExtractFromTranscript(transcriptPath)
 	if err != nil {
 		if errors.Is(err, errNoUsableSource) {
-			return EvaluateResult{Skipped: true, Reason: "no_source"}, nil
+			return skippedResult("no_source"), nil
 		}
-		return EvaluateResult{}, fmt.Errorf("extract source: %w", err)
+		w.logger.WarnContext(ctx, "sessionrename.worker.extract_source_failed",
+			"session", sess.Name,
+			"transcript_path", transcriptPath,
+			"err", err,
+		)
+		return emptyResult(), fmt.Errorf("sessionrename: extract source: %w", err)
 	}
 
 	gate := EvaluateGates(sess, src.UserMsgCount, leaseHeld, now, GatesConfig{
@@ -148,28 +229,33 @@ func (w *Worker) Evaluate(ctx context.Context, sess *session.Session, transcript
 		Cooldown:        w.cfg.Cooldown,
 	})
 	if !gate.Allow {
-		return EvaluateResult{Skipped: true, GateOnly: true, Reason: gate.Reason}, nil
+		return gateOnlyResult(gate.Reason), nil
 	}
 
 	if sess.Metadata.AutoNameSourceHash != "" && sess.Metadata.AutoNameSourceHash == src.Hash {
-		return EvaluateResult{Skipped: true, Reason: "source_unchanged", Hash: src.Hash}, errSourceUnchanged
+		return skippedWithHashResult("source_unchanged", src.Hash), errSourceUnchanged
 	}
 
 	if !w.consumeRateLimit(now) {
-		return EvaluateResult{Skipped: true, Reason: "rate_limited"}, errRateLimited
+		return skippedResult("rate_limited"), errRateLimited
 	}
 
 	candidate, err := Propose(src, taken)
 	if err != nil {
 		w.releaseRateLimit()
-		return EvaluateResult{Skipped: true, Reason: candidate.Reason}, err
+		return skippedResult(candidate.Reason), err
 	}
 
 	if w.rename == nil {
-		return EvaluateResult{}, errors.New("sessionrename: renamer not configured")
+		return emptyResult(), errors.New("sessionrename: renamer not configured")
 	}
 	if err := w.rename.Apply(ctx, sess.Name, candidate.Name, session.AutoNameSourceTranscript, src.Hash); err != nil {
-		return EvaluateResult{}, fmt.Errorf("apply rename: %w", err)
+		w.logger.WarnContext(ctx, "sessionrename.worker.apply_rename_failed",
+			"session", sess.Name,
+			"new_name", candidate.Name,
+			"err", err,
+		)
+		return emptyResult(), fmt.Errorf("sessionrename: apply rename: %w", err)
 	}
 
 	if w.stores != nil {
@@ -192,12 +278,7 @@ func (w *Worker) Evaluate(ctx context.Context, sess *session.Session, transcript
 		slog.String("hash", src.Hash),
 	)
 
-	return EvaluateResult{
-		Applied: true,
-		OldName: sess.Name,
-		NewName: candidate.Name,
-		Hash:    src.Hash,
-	}, nil
+	return appliedResult(sess.Name, candidate.Name, src.Hash), nil
 }
 
 // consumeRateLimit applies a sliding-window rate limit using the

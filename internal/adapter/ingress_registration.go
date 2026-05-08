@@ -1,6 +1,9 @@
 package adapter
 
 import (
+	"fmt"
+	"log/slog"
+
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
@@ -28,5 +31,14 @@ func init() {
 // resolver entry-point into this same registration root file.
 func resolveCursorChatRequest(req ChatRequest, registry adapterresolver.ModelRegistry) (adapterresolver.ResolvedRequest, error) {
 	cursorReq := adaptercursor.TranslateRequest(req)
-	return adapterresolver.Resolve(cursorReq, registry)
+	resolved, err := adapterresolver.Resolve(cursorReq, registry)
+	if err != nil {
+		slog.Warn("adapter: resolve cursor chat request failed",
+			slog.String("model", cursorReq.OpenAI.Model),
+			slog.String("normalized_model", cursorReq.NormalizedModel),
+			slog.String("err", err.Error()),
+		)
+		return resolved, fmt.Errorf("adapter: resolve cursor chat request: %w", err)
+	}
+	return resolved, nil
 }

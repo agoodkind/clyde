@@ -78,7 +78,13 @@ func execRun(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = nil
 	cmd.Stdout = nil
-	return cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.WarnContext(ctx, "cli.mitm.truststore.darwin.exec_failed",
+			"binary", name, "argv_count", len(args), "err", err)
+		return output, fmt.Errorf("cli.mitm.truststore.darwin: exec %s: %w", name, err)
+	}
+	return output, nil
 }
 
 func (d darwinRegistry) Platform() PlatformID {
@@ -94,10 +100,7 @@ func (d darwinRegistry) CACommonName() string {
 // function never mutates the keychain, the filesystem, or any
 // environment the platform layer can observe.
 func (d darwinRegistry) Status(certPath string) (InstallStatus, error) {
-	status := InstallStatus{
-		Platform:   PlatformDarwin,
-		CommonName: d.commonName,
-	}
+	status := NewInstallStatus(PlatformDarwin, d.commonName)
 	slog.Debug("cli.mitm.truststore.darwin.status_begin",
 		"cert_path", certPath, "keychain", d.systemKeychain)
 
