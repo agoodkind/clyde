@@ -157,13 +157,26 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		existingNames[name] = true
 
 		md := Metadata{
-			Name:            name,
-			Provider:        NormalizeProviderID(r.Provider),
-			SessionID:       r.ProviderSessionID(),
-			WorkspaceRoot:   r.WorkspaceRoot,
-			WorkDir:         r.WorkspaceRoot,
-			DisplayTitle:    r.CustomTitle,
-			IsForkedSession: r.IsForked,
+			Name:                 name,
+			Provider:             NormalizeProviderID(r.Provider),
+			SessionID:            r.ProviderSessionID(),
+			TranscriptPath:       "",
+			ProviderState:        nil,
+			WorkDir:              r.WorkspaceRoot,
+			Created:              time.Time{},
+			LastAccessed:         time.Time{},
+			ParentSession:        "",
+			IsForkedSession:      r.IsForked,
+			IsIncognito:          false,
+			PreviousSessionIDs:   nil,
+			Context:              "",
+			HasCustomOutputStyle: false,
+			WorkspaceRoot:        r.WorkspaceRoot,
+			ContextMessageCount:  0,
+			DisplayTitle:         r.CustomTitle,
+			AutoNameState:        AutoNameStateUntouched,
+			AutoNameSource:       AutoNameSourceUnspecified,
+			LastAutoNameAt:       time.Time{},
 		}
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {
