@@ -137,13 +137,8 @@ func translateMessage(
 			result = " "
 		}
 		return "", &AnthMessage{
-			Role: "user",
-			Content: []AnthContentBlock{{
-				Type:          "tool_result",
-				ToolUseID:     msg.ToolCallID,
-				ResultContent: result,
-				Signature:     "",
-			}},
+			Role:    "user",
+			Content: []AnthContentBlock{newToolResultBlock(msg.ToolCallID, result)},
 		}, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported message role %q", msg.Role)
@@ -282,7 +277,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			if p.Text == "" {
 				continue
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Text, Signature: ""})
+			blocks = append(blocks, newTextBlock(p.Text))
 		case "image_url":
 			if p.ImageURL == nil {
 				continue
@@ -297,7 +292,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				)
 				return nil, err
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src, Signature: ""})
+			blocks = append(blocks, newImageBlock(src))
 		case "input_audio":
 			log.Warn("adapter.anthropic.user_part.audio_rejected",
 				"subcomponent", "anthropic_mapper",
@@ -309,18 +304,13 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			if p.Refusal == "" {
 				continue
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal, Signature: ""})
+			blocks = append(blocks, newTextBlock(p.Refusal))
 		case "tool_result":
 			result := flattenToolResultContent(p.Content)
 			if result == "" {
 				result = " "
 			}
-			blocks = append(blocks, AnthContentBlock{
-				Type:          "tool_result",
-				ToolUseID:     p.ToolUseID,
-				ResultContent: result,
-				Signature:     "",
-			})
+			blocks = append(blocks, newToolResultBlock(p.ToolUseID, result))
 		default:
 			log.Warn("adapter.anthropic.user_part.unknown_type",
 				"subcomponent", "anthropic",
@@ -328,7 +318,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				"part_idx", partIdx,
 				"part_type", p.Type,
 			)
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: "[" + p.Type + "]", Signature: ""})
+			blocks = append(blocks, newTextBlock("["+p.Type+"]"))
 		}
 	}
 	return blocks, nil
@@ -379,129 +369,141 @@ func countToolBlocks(out []AnthMessage) (toolUse, toolResult int) {
 }
 
 func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinkingStrategy adapterrender.MaterializationStrategy) ([]AnthContentBlock, error) {
-	log := anthropicBackendLog.Logger()
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
 	for partIdx, p := range parts {
-		switch p.Type {
-		case "text":
-			// Parse the assistant text into typed synthetic parts and
-			// route through the generic materializer. The renderer
-			// wraps reasoning content in a Cursor-visible envelope so
-			// the BYOK chat surface can show a thinking affordance;
-			// Cursor replays the envelope back on the next turn. The
-			// strategy decides whether each round-tripped envelope
-			// becomes a native thinking content block (Anthropic
-			// default), gets concatenated as plain text, dropped, or
-			// passed through unchanged. The lever lives at
-			// [config.AdapterSyntheticContent.Anthropic.InboundThinkingMaterialization].
-			parts := adapterrender.ExtractSyntheticParts(p.Text)
-			materialized := adapterrender.MaterializeSyntheticParts(parts, inboundThinkingStrategy)
-			for _, mp := range materialized {
-				switch mp.Kind {
-				case adapterrender.MaterializedKindNativeThinking:
-					body := strings.TrimSpace(mp.Body)
-					if body == "" {
-						continue
-					}
-					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body, Signature: mp.Signature})
-				case adapterrender.MaterializedKindNativeRedactedThinking:
-					body := strings.TrimSpace(mp.Body)
-					if body == "" {
-						continue
-					}
-					blocks = append(blocks, AnthContentBlock{Type: "redacted_thinking", Data: body})
-				case adapterrender.MaterializedKindText:
-					if strings.TrimSpace(mp.Body) == "" {
-						continue
-					}
-					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body, Signature: ""})
-				}
-			}
-		case "image_url":
-			if p.ImageURL == nil {
-				continue
-			}
-			src, err := imageURLToSource(p.ImageURL.URL)
-			if err != nil {
-				log.Warn("adapter.anthropic.assistant_part.image_rejected",
-					"subcomponent", "anthropic_mapper",
-					"msg_idx", msgIdx,
-					"part_idx", partIdx,
-					"err", err.Error(),
-				)
-				return nil, err
-			}
-			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src, Signature: ""})
-		case "input_audio":
-			log.Warn("adapter.anthropic.assistant_part.audio_rejected",
-				"subcomponent", "anthropic_mapper",
-				"msg_idx", msgIdx,
-				"part_idx", partIdx,
-			)
-			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
-		case "refusal":
-			// Mirror the assistant-text path: a refusal block can also
-			// carry a marker-wrapped thinking envelope from Cursor's
-			// replay. Materialize per the same generic strategy.
-			parts := adapterrender.ExtractSyntheticParts(p.Refusal)
-			materialized := adapterrender.MaterializeSyntheticParts(parts, inboundThinkingStrategy)
-			for _, mp := range materialized {
-				switch mp.Kind {
-				case adapterrender.MaterializedKindNativeThinking:
-					body := strings.TrimSpace(mp.Body)
-					if body == "" {
-						continue
-					}
-					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body, Signature: mp.Signature})
-				case adapterrender.MaterializedKindNativeRedactedThinking:
-					body := strings.TrimSpace(mp.Body)
-					if body == "" {
-						continue
-					}
-					blocks = append(blocks, AnthContentBlock{Type: "redacted_thinking", Data: body})
-				case adapterrender.MaterializedKindText:
-					if strings.TrimSpace(mp.Body) == "" {
-						continue
-					}
-					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body, Signature: ""})
-				}
-			}
-		case "tool_use":
-			input := p.Input
-			if len(input) == 0 {
-				input = json.RawMessage("{}")
-			}
-			blocks = append(blocks, AnthContentBlock{
-				Type:      "tool_use",
-				ID:        p.ID,
-				Name:      p.Name,
-				Input:     input,
-				Signature: "",
-			})
-		case "thinking":
-			continue
-		default:
-			log.Warn("adapter.anthropic.assistant_part.unknown_type",
-				"subcomponent", "anthropic",
-				"msg_idx", msgIdx,
-				"part_idx", partIdx,
-				"part_type", p.Type,
-			)
-			continue
+		partBlocks, err := assistantPartToBlocks(msgIdx, partIdx, p, inboundThinkingStrategy)
+		if err != nil {
+			return nil, err
 		}
+		blocks = append(blocks, partBlocks...)
 	}
 	for _, tc := range msg.ToolCalls {
 		raw := toolCallArgumentsJSON(tc.Function.Arguments)
-		blocks = append(blocks, AnthContentBlock{
-			Type:      "tool_use",
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Input:     raw,
-			Signature: "",
-		})
+		blocks = append(blocks, newToolUseBlock(tc.ID, tc.Function.Name, raw))
 	}
 	return blocks, nil
+}
+
+// assistantPartToBlocks maps one OpenAI assistant content part to the
+// matching Anthropic content blocks. Returning a slice keeps the per-variant
+// branches small and lets the caller stay under the cognitive complexity
+// budget.
+func assistantPartToBlocks(
+	msgIdx int,
+	partIdx int,
+	p OpenAIContentPart,
+	inboundThinkingStrategy adapterrender.MaterializationStrategy,
+) ([]AnthContentBlock, error) {
+	log := anthropicBackendLog.Logger()
+	switch p.Type {
+	case "text":
+		return materializeSyntheticAssistantText(p.Text, inboundThinkingStrategy), nil
+	case "image_url":
+		return assistantImagePart(msgIdx, partIdx, p)
+	case "input_audio":
+		log.Warn("adapter.anthropic.assistant_part.audio_rejected",
+			"subcomponent", "anthropic_mapper",
+			"msg_idx", msgIdx,
+			"part_idx", partIdx,
+		)
+		return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
+	case "refusal":
+		// Mirror the assistant-text path: a refusal block can also
+		// carry a marker-wrapped thinking envelope from Cursor's
+		// replay. Materialize per the same generic strategy.
+		return materializeSyntheticAssistantText(p.Refusal, inboundThinkingStrategy), nil
+	case "tool_use":
+		input := p.Input
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
+		}
+		return []AnthContentBlock{newToolUseBlock(p.ID, p.Name, input)}, nil
+	case "thinking":
+		return nil, nil
+	default:
+		log.Warn("adapter.anthropic.assistant_part.unknown_type",
+			"subcomponent", "anthropic",
+			"msg_idx", msgIdx,
+			"part_idx", partIdx,
+			"part_type", p.Type,
+		)
+		return nil, nil
+	}
+}
+
+// materializeSyntheticAssistantText parses an assistant text or refusal
+// payload into typed synthetic parts and routes each one through the
+// configured strategy. The renderer wraps reasoning content in a
+// Cursor-visible envelope so the BYOK chat surface can show a thinking
+// affordance; Cursor replays the envelope back on the next turn. The
+// strategy decides whether each round-tripped envelope becomes a native
+// thinking content block (Anthropic default), gets concatenated as plain
+// text, dropped, or passed through unchanged. The lever lives at
+// [config.AdapterSyntheticContent.Anthropic.InboundThinkingMaterialization].
+func materializeSyntheticAssistantText(
+	text string,
+	inboundThinkingStrategy adapterrender.MaterializationStrategy,
+) []AnthContentBlock {
+	parts := adapterrender.ExtractSyntheticParts(text)
+	materialized := adapterrender.MaterializeSyntheticParts(parts, inboundThinkingStrategy)
+	var blocks []AnthContentBlock
+	for _, mp := range materialized {
+		block, ok := materializedPartToBlock(mp)
+		if !ok {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
+// materializedPartToBlock converts one materialized synthetic part to an
+// Anthropic content block, returning ok=false when the part has no content
+// to emit.
+func materializedPartToBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, bool) {
+	switch mp.Kind {
+	case adapterrender.MaterializedKindNativeThinking:
+		body := strings.TrimSpace(mp.Body)
+		if body == "" {
+			return zeroBlock(), false
+		}
+		return newThinkingBlock(body, mp.Signature), true
+	case adapterrender.MaterializedKindNativeRedactedThinking:
+		body := strings.TrimSpace(mp.Body)
+		if body == "" {
+			return zeroBlock(), false
+		}
+		return newRedactedThinkingBlock(body), true
+	case adapterrender.MaterializedKindText:
+		if strings.TrimSpace(mp.Body) == "" {
+			return zeroBlock(), false
+		}
+		return newTextBlock(mp.Body), true
+	default:
+		return zeroBlock(), false
+	}
+}
+
+// assistantImagePart converts an image_url assistant part to a single image
+// block, logging and returning the upstream parse error when the URL is not
+// usable.
+func assistantImagePart(msgIdx int, partIdx int, p OpenAIContentPart) ([]AnthContentBlock, error) {
+	log := anthropicBackendLog.Logger()
+	if p.ImageURL == nil {
+		return nil, nil
+	}
+	src, err := imageURLToSource(p.ImageURL.URL)
+	if err != nil {
+		log.Warn("adapter.anthropic.assistant_part.image_rejected",
+			"subcomponent", "anthropic_mapper",
+			"msg_idx", msgIdx,
+			"part_idx", partIdx,
+			"err", err.Error(),
+		)
+		return nil, err
+	}
+	return []AnthContentBlock{newImageBlock(src)}, nil
 }
 
 func imageURLToSource(rawURL string) (*AnthImageSource, error) {
