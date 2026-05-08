@@ -468,6 +468,13 @@ type App struct {
 	// load is in flight, guarding against duplicate goroutines.
 	detailCache   map[string]SessionDetail
 	detailLoading map[string]bool
+	// detailGen tracks an incrementing generation counter per session
+	// name. loadDetailAsync bumps the counter and captures the new value
+	// before launching its goroutine. handleDetailsLoaded discards any
+	// result whose captured generation no longer matches, so a rename
+	// or delete that bumps or clears the counter cannot be undone by a
+	// stale completion writing back the old key.
+	detailGen map[string]uint64
 	// detailRepollAfter[name] holds the earliest wall-clock time at
 	// which the session may be re-polled while its cached detail
 	// still has a pending status (probing/cooldown). Throttles the
@@ -725,6 +732,7 @@ func (a *App) initCaches() {
 	a.liveURLs = make(map[string]LiveURL)
 	a.detailCache = make(map[string]SessionDetail)
 	a.detailLoading = make(map[string]bool)
+	a.detailGen = make(map[string]uint64)
 	a.detailRepollAfter = make(map[string]time.Time)
 	a.exportStatsCache = make(map[string]SessionExportStats)
 	a.exportStatsLoading = make(map[string]bool)
@@ -1777,6 +1785,7 @@ type configControlsLoaded struct {
 
 type detailsLoaded struct {
 	name   string
+	gen    uint64
 	detail SessionDetail
 	err    error
 }
@@ -1934,6 +1943,11 @@ func (a *App) applySessionEvent(ev SessionEvent) {
 	switch ev.Kind {
 	case "SESSION_ADOPTED", "SESSION_UPDATED":
 		a.upsertSessionEvent(ev)
+		if ev.Kind == "SESSION_UPDATED" && ev.Session != nil && ev.Session.Name != "" {
+			a.tableRowDataMu.Lock()
+			a.recentlyUpdatedAt[ev.Session.Name] = a.now()
+			a.tableRowDataMu.Unlock()
+		}
 		if ev.Session != nil && a.sidecar != nil && (ev.Session.Name == a.sidecarSessionName || ev.Session.Metadata.ProviderSessionID() == a.sidecarSessionID) {
 			a.maybeOpenSidecarTail()
 		}
@@ -2028,6 +2042,7 @@ func (a *App) renameSessionEvent(ev SessionEvent) {
 		delete(a.modelCache, ev.OldName)
 		delete(a.messageCountCache, ev.OldName)
 		delete(a.contextStateCache, ev.OldName)
+		a.bumpDetailGenForRename(ev.OldName, ev.SessionName)
 	}
 }
 
@@ -2047,7 +2062,42 @@ func (a *App) deleteSessionEvent(ev SessionEvent) {
 		delete(a.modelCache, ev.SessionName)
 		delete(a.messageCountCache, ev.SessionName)
 		delete(a.contextStateCache, ev.SessionName)
+		a.bumpDetailGenForDelete(ev.SessionName)
 	}
+}
+
+// bumpDetailGenForRename invalidates any in-flight detail load for the
+// old name so its completion will be dropped, and clears any cached
+// detail so subsequent reads do not hand back state keyed on a name
+// the session no longer carries. The new name keeps its existing
+// generation so a follow-up loadDetailAsync starts a fresh cycle.
+func (a *App) bumpDetailGenForRename(oldName, newName string) {
+	a.detailMu.Lock()
+	defer a.detailMu.Unlock()
+	if oldName != "" {
+		a.detailGen[oldName]++
+		delete(a.detailCache, oldName)
+		delete(a.detailLoading, oldName)
+		delete(a.detailRepollAfter, oldName)
+	}
+	if newName != "" && newName != oldName {
+		a.detailGen[newName]++
+	}
+}
+
+// bumpDetailGenForDelete invalidates any in-flight detail load for a
+// removed session so a late completion cannot resurrect a stale cache
+// entry. The cache, loading flag, and repoll timer are also cleared.
+func (a *App) bumpDetailGenForDelete(name string) {
+	if name == "" {
+		return
+	}
+	a.detailMu.Lock()
+	defer a.detailMu.Unlock()
+	a.detailGen[name]++
+	delete(a.detailCache, name)
+	delete(a.detailLoading, name)
+	delete(a.detailRepollAfter, name)
 }
 
 func dedupeSessionList(in []*session.Session) []*session.Session {
@@ -3022,14 +3072,18 @@ func (a *App) handleConfigControlsLoaded(d configControlsLoaded) {
 
 func (a *App) handleDetailsLoaded(d detailsLoaded) {
 	a.detailMu.Lock()
+	currentGen, hasGen := a.detailGen[d.name]
+	if !hasGen || currentGen != d.gen {
+		// The session was renamed or deleted, or another loadDetailAsync
+		// superseded this one, after the goroutine launched. Drop the
+		// stale completion so the old cache key cannot be resurrected.
+		delete(a.detailLoading, d.name)
+		a.detailMu.Unlock()
+		return
+	}
+	cached, hadCache := a.detailCache[d.name]
 	if d.err != nil {
-		if cached, ok := a.detailCache[d.name]; ok {
-			d.detail = cached
-		}
-		if d.detail.TranscriptStatsStatus == "" {
-			d.detail.TranscriptStatsStatus = fmt.Sprintf("failed: %v", d.err)
-		}
-		d.detail.TranscriptStatsLoaded = false
+		d.detail = mergeDetailLoadFailure(cached, hadCache, d.detail, d.err)
 	}
 	a.detailCache[d.name] = d.detail
 	delete(a.detailLoading, d.name)
@@ -3038,6 +3092,29 @@ func (a *App) handleDetailsLoaded(d detailsLoaded) {
 	if a.selected != nil && a.selected.Name == d.name {
 		a.populateDetails()
 	}
+}
+
+// mergeDetailLoadFailure produces the SessionDetail to cache when a
+// detail RPC errored. When a prior successful load is in cache the
+// failed call must not blank out TranscriptStatsLoaded; that flicker
+// was finding 4.7 in the smell sweep. When no prior cache exists the
+// failure stamps the cause into the status string and marks
+// TranscriptStatsLoaded false.
+func mergeDetailLoadFailure(cached SessionDetail, hadCache bool, fresh SessionDetail, err error) SessionDetail {
+	if hadCache {
+		priorLoaded := cached.TranscriptStatsLoaded
+		out := cached
+		if out.TranscriptStatsStatus == "" {
+			out.TranscriptStatsStatus = fmt.Sprintf("failed: %v", err)
+		}
+		out.TranscriptStatsLoaded = priorLoaded
+		return out
+	}
+	if fresh.TranscriptStatsStatus == "" {
+		fresh.TranscriptStatsStatus = fmt.Sprintf("failed: %v", err)
+	}
+	fresh.TranscriptStatsLoaded = false
+	return fresh
 }
 
 func (a *App) handleExportStatsLoaded(d exportStatsLoaded) {
@@ -4800,6 +4877,8 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 		return
 	}
 	a.detailLoading[name] = true
+	a.detailGen[name]++
+	gen := a.detailGen[name]
 	a.detailMu.Unlock()
 
 	go func() {
@@ -4809,7 +4888,7 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 			}
 		}()
 		detail, err := a.cb.GetSessionDetail(sess)
-		a.postInterruptIfActive("detail_load", detailsLoaded{name: name, detail: detail, err: err})
+		a.postInterruptIfActive("detail_load", detailsLoaded{name: name, gen: gen, detail: detail, err: err})
 	}()
 }
 
