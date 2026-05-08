@@ -1296,7 +1296,7 @@ func (s *Server) GetSessionDetail(ctx context.Context, req *clydev1.GetSessionDe
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	detail := s.sessionDetail(store, sess)
+	detail := s.sessionDetail(ctx, store, sess)
 	s.log.DebugContext(ctx, "daemon.session_detail.completed",
 		"component", "daemon",
 		"subcomponent", "sessions",
@@ -1398,11 +1398,71 @@ func (s *Server) contextStateForSession(ctx context.Context, sess *session.Sessi
 		return sessionContextState{}
 	}
 
-	state, ok := s.contextUsageStateCache().Get(sess, daemonNow())
+	state, ok := s.contextUsageStateCache().Get(sess)
 	if !ok {
 		return sessionContextState{}
 	}
 	return state
+}
+
+// serverDetailLazyProbeWaitBudgetForTest bounds how long
+// GetSessionDetail blocks waiting for a fresh context-usage probe to
+// finish before returning a placeholder with Status="probing". The
+// probe itself keeps running on a daemon-rooted context so the cache
+// fills regardless of whether the RPC client stays connected. Future
+// detail calls hit the warm cache. Exposed as a var purely so tests
+// can shrink the budget; production code does not mutate it.
+var serverDetailLazyProbeWaitBudgetForTest = 4 * time.Second
+
+// detailLazyProbeMaxDuration bounds how long a single detail-triggered
+// probe is allowed to run on the daemon background context. If the
+// probe exceeds this it is cancelled and recorded as a failure so the
+// per-session cooldown gates further attempts.
+const detailLazyProbeMaxDuration = 90 * time.Second
+
+// lazyContextStateForDetail returns the cached context state for sess,
+// kicking off at most one probe per cache-key when the cache is cold.
+// The probe runs on the daemon background context so it survives RPC
+// client disconnect, but the RPC waits at most detailLazyProbeWaitBudget
+// before returning a placeholder. The S0 hot-loop is prevented by:
+//   - cache.Refresh in-flight dedup (one probe per session at a time)
+//   - the existing contextRefreshSem semaphore (daemon-wide cap)
+//   - per-session cooldown after a failed probe
+//   - size-keyed cache (no probe until the transcript grows)
+//   - bounded probe duration
+//   - probe_started/probe_completed log markers for regression detection
+func (s *Server) lazyContextStateForDetail(ctx context.Context, sess *session.Session) sessionContextState {
+	if sess == nil || !sess.SessionProviderCapabilities().ContextUsageInspect {
+		return sessionContextState{}
+	}
+	if sess.Name == "" || sess.Metadata.ProviderSessionID() == "" || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
+		return sessionContextState{}
+	}
+	if cached, ok := s.contextUsageStateCache().Get(sess); ok {
+		return cached
+	}
+
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), detailLazyProbeMaxDuration)
+	resultCh := make(chan sessionContextState, 1)
+	go func() {
+		defer probeCancel()
+		state, err := s.refreshContextUsageState(probeCtx, sess)
+		if err != nil && state.Status == "" {
+			state.Status = "probe_failed"
+		}
+		resultCh <- state
+	}()
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, serverDetailLazyProbeWaitBudgetForTest)
+	defer waitCancel()
+	select {
+	case state := <-resultCh:
+		return state
+	case <-waitCtx.Done():
+		placeholder := sessionContextState{}
+		placeholder.Status = "probing"
+		return placeholder
+	}
 }
 
 func (s *Server) contextUsageStateCache() *contextUsageStateCache {
@@ -1589,7 +1649,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	}
 }
 
-func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) *clydev1.GetSessionDetailResponse {
+func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, sess *session.Session) *clydev1.GetSessionDetailResponse {
 	caps := sess.SessionProviderCapabilities()
 	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
@@ -1607,6 +1667,7 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 	if caps.TranscriptExport {
 		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
 	}
+	contextState := s.lazyContextStateForDetail(ctx, sess)
 	resp := &clydev1.GetSessionDetailResponse{
 		SessionName:           sess.Name,
 		Model:                 model,
@@ -1617,6 +1678,12 @@ func (s *Server) sessionDetail(store *session.FileStore, sess *session.Session) 
 		LastPreCompactTokens:  int32(stats.LastPreCompactTokens),
 		Provider:              string(sess.ProviderID()),
 		Runtime:               protoRuntimeBoundary(s.providerRuntimeBoundary(sess, settings, nil)),
+		ContextTotalTokens:    int32(contextState.Usage.TotalTokens),
+		ContextMaxTokens:      int32(contextState.Usage.MaxTokens),
+		ContextPercentage:     int32(contextState.Usage.Percentage),
+		ContextMessagesTokens: int32(contextState.Usage.CategoryTokens("Messages")),
+		ContextUsageLoaded:    contextState.Loaded,
+		ContextUsageStatus:    contextState.Status,
 	}
 	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {

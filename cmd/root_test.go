@@ -179,3 +179,66 @@ func envValue(env []string, key string) (string, bool) {
 	}
 	return "", false
 }
+
+// TestSessionDetailFromProtoMapsContextUsage round-trips a proto
+// detail response with the new context usage fields and asserts the
+// UI struct ends up with the matching values. The TUI relies on these
+// fields being populated to escape the persistent "loading..." state
+// in the stats pane.
+func TestSessionDetailFromProtoMapsContextUsage(t *testing.T) {
+	resp := &clydev1.GetSessionDetailResponse{
+		SessionName:           "chat-x",
+		Model:                 "claude-sonnet-4-5",
+		ContextTotalTokens:    42000,
+		ContextMaxTokens:      200000,
+		ContextPercentage:     21,
+		ContextMessagesTokens: 31000,
+		ContextUsageLoaded:    true,
+		ContextUsageStatus:    "",
+	}
+
+	got := sessionDetailFromProto(resp)
+
+	if !got.ContextUsageLoaded {
+		t.Fatalf("ContextUsageLoaded=false want true")
+	}
+	if got.ContextUsage.TotalTokens != 42000 {
+		t.Fatalf("ContextUsage.TotalTokens=%d want 42000", got.ContextUsage.TotalTokens)
+	}
+	if got.ContextUsage.MaxTokens != 200000 {
+		t.Fatalf("ContextUsage.MaxTokens=%d want 200000", got.ContextUsage.MaxTokens)
+	}
+	if got.ContextUsage.Percentage != 21 {
+		t.Fatalf("ContextUsage.Percentage=%d want 21", got.ContextUsage.Percentage)
+	}
+	if got.ContextUsage.MessagesTokens != 31000 {
+		t.Fatalf("ContextUsage.MessagesTokens=%d want 31000", got.ContextUsage.MessagesTokens)
+	}
+	if got.ContextUsageStatus != "" {
+		t.Fatalf("ContextUsageStatus=%q want empty", got.ContextUsageStatus)
+	}
+}
+
+// TestSessionDetailFromProtoCarriesProbingStatus asserts the lazy-cold
+// path: daemon returns ContextUsageLoaded=false with Status="probing"
+// and the mapper preserves it so the TUI can render a non-blocking
+// placeholder rather than the legacy permanent "loading..." string.
+func TestSessionDetailFromProtoCarriesProbingStatus(t *testing.T) {
+	resp := &clydev1.GetSessionDetailResponse{
+		SessionName:        "chat-y",
+		ContextUsageLoaded: false,
+		ContextUsageStatus: "probing",
+	}
+
+	got := sessionDetailFromProto(resp)
+
+	if got.ContextUsageLoaded {
+		t.Fatalf("ContextUsageLoaded=true want false")
+	}
+	if got.ContextUsageStatus != "probing" {
+		t.Fatalf("ContextUsageStatus=%q want %q", got.ContextUsageStatus, "probing")
+	}
+	if got.ContextUsage != (ui.SessionContextUsage{}) {
+		t.Fatalf("ContextUsage=%+v want zero value", got.ContextUsage)
+	}
+}

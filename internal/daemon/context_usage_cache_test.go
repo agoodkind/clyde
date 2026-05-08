@@ -145,6 +145,210 @@ func TestSessionSummariesDoNotFanOutContextProbesForManyStaleSessions(t *testing
 	}
 }
 
+// TestContextUsageCacheStableAcrossModTimeOnlyChange exercises the
+// rule that mod time alone does not invalidate the cache. The
+// transcript file size is unchanged, so the cached entry should
+// continue to satisfy lookups even after a touch.
+func TestContextUsageCacheStableAcrossModTimeOnlyChange(t *testing.T) {
+	_, sess := contextUsageTestStore(t, "chat-mt", "uuid-mt", "one\n")
+	var probeCalls atomic.Int32
+	srv := newContextUsageTestServer(func(_ context.Context, _ *session.Session) (sessionContextState, error) {
+		probeCalls.Add(1)
+		return contextUsageTestState(321), nil
+	})
+
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+
+	transcriptPath := sess.Metadata.ProviderTranscriptPath()
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(transcriptPath, future, future); err != nil {
+		t.Fatalf("touch transcript: %v", err)
+	}
+
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err != nil {
+		t.Fatalf("post-touch refresh: %v", err)
+	}
+	if probeCalls.Load() != 1 {
+		t.Fatalf("probe calls = %d want 1 after mod-time-only change", probeCalls.Load())
+	}
+	state := srv.contextStateForSession(context.Background(), sess)
+	if !state.Loaded || state.Usage.TotalTokens != 321 {
+		t.Fatalf("post-touch state loaded=%v total=%d want loaded total 321", state.Loaded, state.Usage.TotalTokens)
+	}
+}
+
+// TestContextUsageCacheInvalidatesWhenTranscriptGrows asserts that
+// appending bytes to the transcript shifts the cache key and triggers
+// exactly one fresh probe. Append-only JSONL guarantees this signal.
+func TestContextUsageCacheInvalidatesWhenTranscriptGrows(t *testing.T) {
+	_, sess := contextUsageTestStore(t, "chat-grow", "uuid-grow", "one\n")
+	var probeCalls atomic.Int32
+	srv := newContextUsageTestServer(func(_ context.Context, _ *session.Session) (sessionContextState, error) {
+		call := probeCalls.Add(1)
+		return contextUsageTestState(int(call * 100)), nil
+	})
+
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+	transcriptPath := sess.Metadata.ProviderTranscriptPath()
+	if err := os.WriteFile(transcriptPath, []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatalf("grow transcript: %v", err)
+	}
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err != nil {
+		t.Fatalf("post-grow refresh: %v", err)
+	}
+	if probeCalls.Load() != 2 {
+		t.Fatalf("probe calls = %d want 2 after size growth", probeCalls.Load())
+	}
+}
+
+// TestContextUsageCacheCooldownAfterFailedProbe exercises the
+// per-session failure cooldown. A failed probe must not be retried
+// within the cooldown window so a hot loop cannot re-spawn after a
+// transient probe error.
+func TestContextUsageCacheCooldownAfterFailedProbe(t *testing.T) {
+	_, sess := contextUsageTestStore(t, "chat-cool", "uuid-cool", "one\n")
+	var probeCalls atomic.Int32
+	srv := newContextUsageTestServer(func(_ context.Context, _ *session.Session) (sessionContextState, error) {
+		probeCalls.Add(1)
+		return sessionContextState{}, errUnexpectedContextUsageState
+	})
+
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err == nil {
+		t.Fatalf("first refresh: want error, got nil")
+	}
+	state, err := srv.refreshContextUsageState(context.Background(), sess)
+	if !errors.Is(err, errContextUsageCooldown) {
+		t.Fatalf("second refresh err=%v want %v", err, errContextUsageCooldown)
+	}
+	if state.Status != "cooldown" {
+		t.Fatalf("cooldown state status=%q want %q", state.Status, "cooldown")
+	}
+	if probeCalls.Load() != 1 {
+		t.Fatalf("probe calls = %d want 1 (second call gated by cooldown)", probeCalls.Load())
+	}
+}
+
+// TestContextUsageCacheSweepsStaleSameSessionEntries verifies that
+// growing a transcript and re-probing leaves only the newest entry
+// for that session. Append-only transcripts grow monotonically so
+// older size-keyed entries are obsolete and should not accumulate.
+func TestContextUsageCacheSweepsStaleSameSessionEntries(t *testing.T) {
+	_, sess := contextUsageTestStore(t, "chat-sweep", "uuid-sweep", "one\n")
+	var probeCalls atomic.Int32
+	srv := newContextUsageTestServer(func(_ context.Context, _ *session.Session) (sessionContextState, error) {
+		call := probeCalls.Add(1)
+		return contextUsageTestState(int(call * 100)), nil
+	})
+
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	transcriptPath := sess.Metadata.ProviderTranscriptPath()
+	if err := os.WriteFile(transcriptPath, []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatalf("grow transcript: %v", err)
+	}
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+
+	cache := srv.contextUsageStateCache()
+	cache.mu.Lock()
+	count := 0
+	for key := range cache.states {
+		if key.SessionName == sess.Name {
+			count++
+		}
+	}
+	cache.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("entries for session = %d want 1 after sweep", count)
+	}
+}
+
+// TestSessionDetailReturnsCachedContextUsageWhenWarm asserts that the
+// daemon GetSessionDetail RPC carries the four numeric context fields
+// plus ContextUsageLoaded=true once the cache is warm. The TUI relies
+// on these to replace the persistent "loading..." placeholder.
+func TestSessionDetailReturnsCachedContextUsageWhenWarm(t *testing.T) {
+	store, sess := contextUsageTestStore(t, "chat-detail-warm", "uuid-detail-warm", "one\n")
+	srv := newContextUsageTestServer(func(_ context.Context, _ *session.Session) (sessionContextState, error) {
+		return contextUsageTestState(1234), nil
+	})
+
+	if _, err := srv.refreshContextUsageState(context.Background(), sess); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+
+	resp := srv.sessionDetail(context.Background(), store, sess)
+	if !resp.GetContextUsageLoaded() {
+		t.Fatalf("detail.ContextUsageLoaded=false want true after warm cache")
+	}
+	if resp.GetContextTotalTokens() != 1234 {
+		t.Fatalf("detail.ContextTotalTokens=%d want 1234", resp.GetContextTotalTokens())
+	}
+	if resp.GetContextMaxTokens() != 200000 {
+		t.Fatalf("detail.ContextMaxTokens=%d want 200000", resp.GetContextMaxTokens())
+	}
+	if resp.GetContextMessagesTokens() != 1234/2 {
+		t.Fatalf("detail.ContextMessagesTokens=%d want %d", resp.GetContextMessagesTokens(), 1234/2)
+	}
+	if resp.GetContextUsageStatus() != "" {
+		t.Fatalf("detail.ContextUsageStatus=%q want empty", resp.GetContextUsageStatus())
+	}
+}
+
+// TestSessionDetailReturnsProbingPlaceholderWhenColdAndProbeBlocks
+// verifies that a cold-cache detail call returns within the wait
+// budget with Status="probing" rather than blocking on the probe. The
+// probe keeps running in the background; subsequent detail calls hit
+// the warm cache. This is the lazy single-flight behavior that fixes
+// the persistent "loading..." regression without reactivating the S0
+// hot-loop.
+func TestSessionDetailReturnsProbingPlaceholderWhenColdAndProbeBlocks(t *testing.T) {
+	store, sess := contextUsageTestStore(t, "chat-detail-cold", "uuid-detail-cold", "one\n")
+	releaseProbe := make(chan struct{})
+	probeStarted := make(chan struct{}, 1)
+	srv := newContextUsageTestServer(func(ctx context.Context, _ *session.Session) (sessionContextState, error) {
+		select {
+		case probeStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releaseProbe:
+			return contextUsageTestState(987), nil
+		case <-ctx.Done():
+			return sessionContextState{}, ctx.Err()
+		}
+	})
+
+	// Shrink the wait budget for the test so we do not pay the
+	// production budget for a synthetic "always-blocks" probe.
+	origBudget := serverDetailLazyProbeWaitBudgetForTest
+	serverDetailLazyProbeWaitBudgetForTest = 50 * time.Millisecond
+	t.Cleanup(func() { serverDetailLazyProbeWaitBudgetForTest = origBudget })
+
+	resp := srv.sessionDetail(context.Background(), store, sess)
+	if resp.GetContextUsageLoaded() {
+		t.Fatalf("cold detail.ContextUsageLoaded=true want false")
+	}
+	if resp.GetContextUsageStatus() != "probing" {
+		t.Fatalf("cold detail.ContextUsageStatus=%q want %q", resp.GetContextUsageStatus(), "probing")
+	}
+
+	// Confirm the background probe was started exactly once and
+	// release it so the test does not leak the goroutine.
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("background probe did not start within 1s")
+	}
+	close(releaseProbe)
+}
+
 var errUnexpectedContextUsageState = errors.New("unexpected context usage state")
 
 func newContextUsageTestServer(probe contextUsageProbeFunc) *Server {

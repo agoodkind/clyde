@@ -795,6 +795,14 @@ func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDe
 		LastPreCompactTokens:  int(resp.GetLastPreCompactTokens()),
 		TranscriptSizeBytes:   resp.GetTranscriptSizeBytes(),
 		TranscriptStatsLoaded: true,
+		ContextUsage: ui.SessionContextUsage{
+			TotalTokens:    int(resp.GetContextTotalTokens()),
+			MaxTokens:      int(resp.GetContextMaxTokens()),
+			Percentage:     int(resp.GetContextPercentage()),
+			MessagesTokens: int(resp.GetContextMessagesTokens()),
+		},
+		ContextUsageLoaded: resp.GetContextUsageLoaded(),
+		ContextUsageStatus: resp.GetContextUsageStatus(),
 	}
 	for _, m := range resp.GetRecentMessages() {
 		out.Messages = append(out.Messages, ui.DetailMessage{
