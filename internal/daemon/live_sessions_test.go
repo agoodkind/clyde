@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -589,6 +591,220 @@ func TestForegroundLeaseSuspendsAndRestoresClaudeRemoteWorker(t *testing.T) {
 	}
 }
 
+func TestForegroundLeaseStopsActiveCodexTurnBeforeClose(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess := session.NewSession("codex-chat", "codex-thread")
+	setTestProviderIdentity(sess, session.ProviderCodex, "codex-thread")
+	sess.Metadata.WorkDir = filepath.Join(tmp, "work")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	srv := newTestServer(t)
+	startRuntime := &fakeLiveRuntime{}
+	restoreRuntime := &fakeLiveRuntime{}
+	oldFactory := newCodexLiveRuntime
+	newCodexLiveRuntime = func(codex.LiveRuntimeOptions) codex.LiveRuntime {
+		return restoreRuntime
+	}
+	defer func() { newCodexLiveRuntime = oldFactory }()
+	t.Cleanup(func() { deleteLiveRuntimeState("codex-thread") })
+
+	srv.liveSessions["codex-thread"] = &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         "codex-chat",
+		id:           "codex-thread",
+		basedir:      sess.Metadata.WorkDir,
+		model:        "gpt-test",
+		status:       "in_progress",
+		startedAt:    daemonNow(),
+		lastTurnID:   "turn-active",
+		codexRuntime: startRuntime,
+	}
+
+	acquired, err := srv.AcquireForegroundSession(context.Background(), &clydev1.AcquireForegroundSessionRequest{
+		SessionName: "codex-chat",
+		Provider:    string(session.ProviderCodex),
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if !acquired.GetShouldRestore() {
+		t.Fatalf("should_restore = false, want true")
+	}
+	if !startRuntime.closed {
+		t.Fatalf("start runtime was not closed after acquire")
+	}
+	if _, ok := srv.liveSessions["codex-thread"]; ok {
+		t.Fatalf("codex live session still present after acquire")
+	}
+	if got := len(startRuntime.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2 (stop, close); calls=%v", got, startRuntime.calls)
+	}
+	if startRuntime.calls[0].Kind != fakeLiveRuntimeCallStop {
+		t.Fatalf("first call = %q, want %q", startRuntime.calls[0].Kind, fakeLiveRuntimeCallStop)
+	}
+	if startRuntime.calls[0].TurnID != "turn-active" {
+		t.Fatalf("stop turn_id = %q, want turn-active", startRuntime.calls[0].TurnID)
+	}
+	if startRuntime.calls[1].Kind != fakeLiveRuntimeCallClose {
+		t.Fatalf("second call = %q, want %q", startRuntime.calls[1].Kind, fakeLiveRuntimeCallClose)
+	}
+}
+
+func TestForegroundLeaseInterruptsAndKillsClaudeRemoteWorkerOnTimeout(t *testing.T) {
+	tmp := setupDaemonTestHome(t)
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	basedir := filepath.Join(tmp, "work")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatalf("mkdir basedir: %v", err)
+	}
+	sess := session.NewSession("claude-chat", "claude-session")
+	setTestProviderIdentity(sess, session.ProviderClaude, "claude-session")
+	sess.Metadata.WorkDir = basedir
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// Worker installs SIG_IGN for SIGINT, signals readiness through a
+	// marker file, and then sleeps. The daemon's Interrupt path therefore
+	// has no effect, forcing the timeout-and-Kill branch which delivers
+	// SIGKILL through the real OS signal pipeline.
+	readyMarker := filepath.Join(tmp, "trap-worker-ready")
+	script := filepath.Join(tmp, "interrupt-trap-worker.sh")
+	scriptBody := fmt.Sprintf("#!/usr/bin/env python3\n"+
+		"import signal, time, pathlib\n"+
+		"signal.signal(signal.SIGINT, signal.SIG_IGN)\n"+
+		"pathlib.Path(%q).write_text('ready')\n"+
+		"while True:\n"+
+		"    time.sleep(30)\n", readyMarker)
+	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
+		t.Fatalf("write trap worker: %v", err)
+	}
+
+	cmd := exec.Command(script)
+	cmd.Dir = basedir
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start trap worker: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+	})
+
+	// Wait for SIG_IGN to be installed before sending the interrupt;
+	// otherwise SIGINT arrives during Python startup with the default
+	// terminate disposition still active.
+	readyDeadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, statErr := os.Stat(readyMarker); statErr == nil {
+			break
+		}
+		if time.Now().After(readyDeadline) {
+			t.Fatalf("trap worker did not install SIG_IGN before deadline")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	oldTimeout := claudeRemoteSuspendTimeout
+	claudeRemoteSuspendTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { claudeRemoteSuspendTimeout = oldTimeout })
+
+	// Block restoreClaudeRemoteAfterForeground from forking a real
+	// worker after suspend. Restore is not under test here.
+	oldExec := remoteWorkerExecutable
+	remoteWorkerExecutable = func() (string, error) { return "", fmt.Errorf("restore disabled in test") }
+	t.Cleanup(func() { remoteWorkerExecutable = oldExec })
+
+	srv := newTestServer(t)
+	worker := &remoteWorker{
+		sessionName: "claude-chat",
+		sessionID:   "claude-session",
+		basedir:     basedir,
+		incognito:   false,
+		cmd:         cmd,
+		done:        done,
+	}
+	srv.remoteMu.Lock()
+	srv.remoteWorkers["claude-chat"] = worker
+	srv.remoteMu.Unlock()
+
+	startedAt := time.Now()
+	acquired, err := srv.AcquireForegroundSession(context.Background(), &clydev1.AcquireForegroundSessionRequest{
+		SessionName: "claude-chat",
+		Provider:    string(session.ProviderClaude),
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	elapsed := time.Since(startedAt)
+	if !acquired.GetShouldRestore() {
+		t.Fatalf("should_restore = false, want true")
+	}
+	if acquired.GetRestoreReason() != "claude_remote_worker" {
+		t.Fatalf("restore_reason = %q want claude_remote_worker", acquired.GetRestoreReason())
+	}
+	// Acquire must have blocked at least one full timeout interval
+	// because the trapped SIGINT is ignored, forcing the daemon to wait
+	// until claudeRemoteSuspendTimeout before falling through to Kill.
+	if elapsed < claudeRemoteSuspendTimeout {
+		t.Fatalf("acquire elapsed = %v, want >= %v (timeout path required)", elapsed, claudeRemoteSuspendTimeout)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("acquire elapsed = %v, want < 3s (timeout+drain bound)", elapsed)
+	}
+
+	srv.remoteMu.Lock()
+	_, stillPresent := srv.remoteWorkers["claude-chat"]
+	srv.remoteMu.Unlock()
+	if stillPresent {
+		t.Fatalf("remote worker still registered after acquire")
+	}
+
+	// Worker must be reaped because Process.Kill delivered SIGKILL.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("worker process did not exit after kill")
+	}
+	state := cmd.ProcessState
+	if state == nil {
+		t.Fatalf("process state nil after wait")
+	}
+	if state.Success() {
+		t.Fatalf("worker exited successfully, want signal-induced termination")
+	}
+	waitStatus, ok := state.Sys().(syscall.WaitStatus)
+	if !ok {
+		t.Fatalf("wait status type = %T, want syscall.WaitStatus", state.Sys())
+	}
+	if !waitStatus.Signaled() {
+		t.Fatalf("worker exit status = %v, want signaled", waitStatus)
+	}
+	if waitStatus.Signal() != syscall.SIGKILL {
+		t.Fatalf("worker termination signal = %v, want SIGKILL", waitStatus.Signal())
+	}
+}
+
 func TestReleaseForegroundSessionIsIdempotent(t *testing.T) {
 	setupDaemonTestHome(t)
 	srv := newTestServer(t)
@@ -644,6 +860,27 @@ func setTestProviderIdentity(sess *session.Session, provider session.ProviderID,
 	sess.Metadata.NormalizeProviderState()
 }
 
+// fakeLiveRuntimeCallKind enumerates fakeLiveRuntime method invocations for
+// the typed call log used by ordering assertions in tests.
+type fakeLiveRuntimeCallKind string
+
+const (
+	fakeLiveRuntimeCallStart  fakeLiveRuntimeCallKind = "start"
+	fakeLiveRuntimeCallAttach fakeLiveRuntimeCallKind = "attach"
+	fakeLiveRuntimeCallSend   fakeLiveRuntimeCallKind = "send"
+	fakeLiveRuntimeCallStream fakeLiveRuntimeCallKind = "stream"
+	fakeLiveRuntimeCallStop   fakeLiveRuntimeCallKind = "stop"
+	fakeLiveRuntimeCallClose  fakeLiveRuntimeCallKind = "close"
+)
+
+// fakeLiveRuntimeCall records one invocation against fakeLiveRuntime. Stop
+// captures TurnID so ordering tests can assert which turn was interrupted
+// before Close ran.
+type fakeLiveRuntimeCall struct {
+	Kind   fakeLiveRuntimeCallKind
+	TurnID string
+}
+
 type fakeLiveRuntime struct {
 	closed         bool
 	attachedThread string
@@ -653,9 +890,11 @@ type fakeLiveRuntime struct {
 	sendTurn       *codex.LiveTurn
 	streamEvents   []codex.LiveEvent
 	streamCalls    int
+	calls          []fakeLiveRuntimeCall
 }
 
 func (f *fakeLiveRuntime) Start(context.Context, codex.LiveStartRequest) (*codex.LiveSession, error) {
+	f.calls = append(f.calls, fakeLiveRuntimeCall{Kind: fakeLiveRuntimeCallStart})
 	if f.startSession != nil {
 		return f.startSession, nil
 	}
@@ -664,6 +903,7 @@ func (f *fakeLiveRuntime) Start(context.Context, codex.LiveStartRequest) (*codex
 
 func (f *fakeLiveRuntime) Attach(_ context.Context, req codex.LiveAttachRequest) (*codex.LiveSession, error) {
 	f.attachedThread = req.ThreadID
+	f.calls = append(f.calls, fakeLiveRuntimeCall{Kind: fakeLiveRuntimeCallAttach})
 	if f.attachSession != nil {
 		return f.attachSession, nil
 	}
@@ -672,6 +912,7 @@ func (f *fakeLiveRuntime) Attach(_ context.Context, req codex.LiveAttachRequest)
 
 func (f *fakeLiveRuntime) Send(_ context.Context, req codex.LiveSendRequest) (*codex.LiveTurn, error) {
 	f.sendRequests = append(f.sendRequests, req)
+	f.calls = append(f.calls, fakeLiveRuntimeCall{Kind: fakeLiveRuntimeCallSend})
 	if f.sendTurn != nil {
 		return f.sendTurn, nil
 	}
@@ -680,6 +921,7 @@ func (f *fakeLiveRuntime) Send(_ context.Context, req codex.LiveSendRequest) (*c
 
 func (f *fakeLiveRuntime) Stream(context.Context, codex.LiveStreamRequest) (<-chan codex.LiveEvent, error) {
 	f.streamCalls++
+	f.calls = append(f.calls, fakeLiveRuntimeCall{Kind: fakeLiveRuntimeCallStream})
 	out := make(chan codex.LiveEvent, len(f.streamEvents))
 	for _, event := range f.streamEvents {
 		out <- event
@@ -688,12 +930,14 @@ func (f *fakeLiveRuntime) Stream(context.Context, codex.LiveStreamRequest) (<-ch
 	return out, nil
 }
 
-func (f *fakeLiveRuntime) Stop(context.Context, codex.LiveStopRequest) error {
+func (f *fakeLiveRuntime) Stop(_ context.Context, req codex.LiveStopRequest) error {
+	f.calls = append(f.calls, fakeLiveRuntimeCall{Kind: fakeLiveRuntimeCallStop, TurnID: req.TurnID})
 	return nil
 }
 
 func (f *fakeLiveRuntime) Close() error {
 	f.closed = true
+	f.calls = append(f.calls, fakeLiveRuntimeCall{Kind: fakeLiveRuntimeCallClose})
 	return nil
 }
 

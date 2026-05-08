@@ -25,6 +25,11 @@ import (
 
 var newCodexLiveRuntime = codex.NewLiveRuntime
 
+// claudeRemoteSuspendTimeout bounds how long suspendClaudeRemoteForForeground
+// waits for an interrupted Claude remote worker to exit before falling back to
+// Kill. Exposed as a package var so tests can shrink it without sleeping.
+var claudeRemoteSuspendTimeout = 2 * time.Second
+
 type liveRuntimeSessionState struct {
 	effort codex.ReasoningEffort
 	stream *liveStreamFanout
@@ -702,7 +707,7 @@ func (s *Server) suspendClaudeRemoteForForeground(ctx context.Context, lease *fo
 	select {
 	case <-worker.done:
 		return nil
-	case <-time.After(2 * time.Second):
+	case <-time.After(claudeRemoteSuspendTimeout):
 		if err := worker.cmd.Process.Kill(); err != nil {
 			return status.Errorf(codes.Internal, "kill claude remote worker after interrupt timeout: %v", err)
 		}
