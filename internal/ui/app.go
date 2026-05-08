@@ -2901,9 +2901,11 @@ func (a *App) handleExportStatsLoaded(d exportStatsLoaded) {
 
 func (a *App) handleSpinnerTick() {
 	a.spinnerFrame++
-	if a.selected != nil && a.detailsLoadingNow(a.selected.Name) {
-		a.populateDetails()
-	}
+	// Spinner segments substitute the live glyph at draw time, so the
+	// existing details cache animates without rebuilding. populateDetails
+	// only needs to run when the cache mutates or when the selection
+	// changes, which other paths already cover (handleDetailsLoaded,
+	// applySessionSnapshot, applySessionEvent, table movement).
 	a.maybeRepollPendingDetails()
 }
 
@@ -4660,6 +4662,7 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 
 func (a *App) drawSessionsLoadingState(r Rect) {
 	clearRect(a.screen, r)
+	// drawSessionsLoadingState runs every frame and writes directly via drawString, so the baked glyph animates on its own without Spinner segments.
 	lines := []struct {
 		style tcell.Style
 		text  string
@@ -5516,6 +5519,7 @@ func (a *App) drawStatsTab(r Rect) {
 		label := "Loading"
 		value := "provider stats unavailable"
 		if loading || a.cb.LoadStats != nil {
+			// drawStatsTab runs every frame and writes directly via drawString, so the baked glyph animates on its own without Spinner segments.
 			value = NewLoadingSpinner("collecting provider stats...", a.spinnerFrame).Text()
 		}
 		rows = append(rows, row{label: label, value: value, style: StyleSubtext})
@@ -5715,6 +5719,7 @@ func (a *App) drawSettingsTab(r Rect) {
 		{label: "Controls", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
 	}
 	if a.configLoading {
+		// drawSettingsTab runs every frame and writes directly via drawString, so the baked glyph animates on its own without Spinner segments.
 		rows = append(rows, row{label: "Loading", value: NewLoadingSpinner("fetching daemon-backed controls...", a.spinnerFrame).Text(), style: StyleSubtext})
 	}
 	if a.configErr != "" {
