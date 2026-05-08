@@ -765,7 +765,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	if a.isCurrentReturnPathSession(sess) {
 		a.trackReturnPathState(returnPathStateReturnPromptPending, "returnprompt.enter", sess)
 	}
-	entries := []OptionsModalEntry{
+	topEntries := []OptionsModalEntry{
 		{
 			Label: "Quit clyde",
 			Hint:  "q",
@@ -783,9 +783,16 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 			},
 		},
 	}
-	entries = append(entries, a.sessionOptionsEntries(sess, close)...)
+	bodyEntries := a.sessionOptionsEntriesWithoutResume(sess, close)
 	statsSegments, statsLoading := a.buildSessionStatsSegments(sess)
-	modal := NewOptionsModal("Session exited: "+sess.Name, entries)
+	modal := NewOptionsModal("Session exited: "+sess.Name, bodyEntries)
+	modal.TopEntries = topEntries
+	// Re-run resetCursor now that TopEntries is populated. The
+	// constructor walked an empty TopEntries and may have parked the
+	// cursor on the first enabled body entry; without this call the
+	// initial Enter press would activate that body entry instead of
+	// the intended top-row "Quit clyde".
+	modal.resetCursor()
 	modal.Context = OptionsModalContextReturn
 	modal.OnCancel = close
 	modal.OnQuit = func() {
@@ -5900,6 +5907,18 @@ func (a *App) applyExportStatsResult(name string, stats SessionExportStats, err 
 		}
 		applyToPanel(panel)
 	}
+}
+
+// sessionOptionsEntriesWithoutResume returns the standard session
+// action rows minus the leading "Resume" entry. The return prompt uses
+// this so the prompt's top-level "Return back to chat" row stays the
+// only resume affordance and Resume does not appear twice.
+func (a *App) sessionOptionsEntriesWithoutResume(sess *session.Session, close func()) []OptionsModalEntry {
+	entries := a.sessionOptionsEntries(sess, close)
+	if len(entries) > 0 && entries[0].Label == "Resume" {
+		entries = entries[1:]
+	}
+	return entries
 }
 
 func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []OptionsModalEntry {
