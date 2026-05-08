@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 )
 
 // DefaultPort is the loopback port the dashboard listens on when no
@@ -90,6 +91,12 @@ type Server struct {
 	mux   *http.ServeMux
 	srv   *http.Server
 
+	// Channels tracks every long-lived browser channel (SSE streams,
+	// websockets, log tails, live-session subscriptions) so the daemon
+	// reload chain can drain or force-close them under a bounded
+	// deadline instead of relying on [http.Server.Shutdown] alone.
+	Channels *livetrack.Registry[WebMeta]
+
 	mu       sync.Mutex
 	starting []startedSession
 	connMu   sync.Mutex
@@ -113,12 +120,21 @@ func New(cfg config.WebAppConfig, deps Deps, log *slog.Logger) *Server {
 		token = v
 	}
 	s := &Server{
-		cfg:      cfg,
-		deps:     deps,
-		log:      log.With("component", "webapp"),
-		token:    token,
-		mux:      nil,
-		srv:      nil,
+		cfg:   cfg,
+		deps:  deps,
+		log:   log.With("component", "webapp"),
+		token: token,
+		mux:   nil,
+		srv:   nil,
+		Channels: livetrack.New[WebMeta](livetrack.Options[WebMeta]{
+			Component:     "webapp",
+			Concern:       "webapp",
+			Log:           log,
+			PollEvery:     50 * time.Millisecond,
+			CloserGrace:   2 * time.Second,
+			ParallelClose: false,
+			Now:           nil,
+		}),
 		mu:       sync.Mutex{},
 		starting: nil,
 		connMu:   sync.Mutex{},
@@ -194,26 +210,51 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 }
 
 // Shutdown stops accepting new dashboard requests, closes idle
-// keepalive connections, and lets active handlers finish until ctx
-// expires.
+// keepalive connections, drains long-lived browser channels, and lets
+// active handlers finish until ctx expires. It pairs srv.Shutdown
+// with Channels.Drain so the reload chain has a bounded force-close
+// path for SSE streams and other long-lived connections that survive
+// a bare [http.Server.Shutdown].
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.srv == nil {
 		return nil
 	}
 	s.srv.SetKeepAlivesEnabled(false)
 	s.closeTrackedConns(http.StateIdle)
+	if s.Channels != nil && s.Channels.Count() > 0 {
+		result := s.Channels.Drain(ctx, "webapp.shutdown")
+		s.log.InfoContext(ctx, "webapp.channels_drained",
+			"final", result.Final.String(),
+			"remaining", result.Remaining,
+			"force_closed", result.ForceClosed,
+			"duration_ms", result.Duration.Milliseconds(),
+		)
+	}
 	if err := s.srv.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutdown webapp server: %w", err)
 	}
 	return nil
 }
 
-// Close force-closes all dashboard HTTP connections. Reload uses this
-// after a bounded drain so held keepalive connections cannot keep the
-// old daemon generation reachable indefinitely.
+// Close force-closes all dashboard HTTP connections and any remaining
+// tracked browser channels. Reload uses this after a bounded drain so
+// held keepalive connections and open SSE streams cannot keep the old
+// daemon generation reachable indefinitely.
 func (s *Server) Close() error {
 	if s.srv == nil {
 		return nil
+	}
+	if s.Channels != nil {
+		forceCtx, forceCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer forceCancel()
+		result := s.Channels.Drain(forceCtx, "webapp.close")
+		if result.ForceClosed > 0 || result.Remaining > 0 {
+			s.log.Info("webapp.channels_force_closed",
+				"final", result.Final.String(),
+				"force_closed", result.ForceClosed,
+				"remaining", result.Remaining,
+			)
+		}
 	}
 	s.closeTrackedConns(http.StateNew, http.StateActive, http.StateIdle, http.StateHijacked)
 	if err := s.srv.Close(); err != nil {
@@ -405,7 +446,34 @@ func (s *Server) handleStreamLiveSession(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "live session stream unavailable"})
 		return
 	}
-	events, err := s.deps.StreamLiveSession(r.Context(), sessionID)
+	// Derive a cancellable context so the registry's force-close path
+	// can terminate this SSE stream independently of the request
+	// context. The closer cancels streamCtx; the select loop exits
+	// when streamCtx.Done fires.
+	streamCtx, streamCancel := context.WithCancel(r.Context())
+	defer streamCancel()
+	sess, registerErr := s.Channels.Register(
+		r.Context(),
+		"sse",
+		WebMeta{
+			ChannelKind: "sse",
+			ClientID:    sessionID,
+			RemoteAddr:  r.RemoteAddr,
+			Subscribed:  []string{sessionID},
+		},
+		sseCloser{cancel: streamCancel},
+	)
+	if registerErr != nil {
+		s.log.WarnContext(r.Context(), "webapp.live_session.stream_register_rejected",
+			"component", "webapp",
+			"session_id", sessionID,
+			"err", registerErr,
+		)
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "service draining"})
+		return
+	}
+	defer s.Channels.Release(r.Context(), sess, "webapp.sse.closed")
+	events, err := s.deps.StreamLiveSession(streamCtx, sessionID)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "webapp.live_session.stream_failed",
 			"component", "webapp",
@@ -426,7 +494,7 @@ func (s *Server) handleStreamLiveSession(w http.ResponseWriter, r *http.Request,
 	encoder := json.NewEncoder(w)
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-streamCtx.Done():
 			return
 		case ev, ok := <-events:
 			if !ok {
@@ -546,6 +614,19 @@ type sendLiveSessionResponse struct {
 
 type stopLiveSessionResponse struct {
 	Stopped bool `json:"stopped"`
+}
+
+// sseCloser implements livetrack.Closer for an SSE stream. Calling
+// Close cancels the stream's derived context so the select loop in
+// handleStreamLiveSession exits without waiting for the client to
+// disconnect.
+type sseCloser struct {
+	cancel context.CancelFunc
+}
+
+func (c sseCloser) Close(_ string) error {
+	c.cancel()
+	return nil
 }
 
 func writeJSON[T healthResponse | errorResponse | liveSessionsResponse | startLiveSessionResponse | sendLiveSessionResponse | stopLiveSessionResponse](w http.ResponseWriter, code int, v T) {

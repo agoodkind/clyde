@@ -148,6 +148,12 @@ type webAppProcess struct {
 	done          chan struct{}
 	lis           net.Listener
 	cfg           config.WebAppConfig
+	// srv holds the webapp Server so the reload chain can drain
+	// srv.Channels directly, mirroring how mitmProcess.proxy exposes
+	// proxy.Tunnels. The direct field access forces the
+	// livetrack.Registry[webapp.WebMeta] type parameter to materialise
+	// through a cross-package boundary, making WebMeta reachable.
+	srv *webapp.Server
 }
 
 type mitmProcess struct {
@@ -814,49 +820,78 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 		rt.adapter.drainReloadedProcess(reloadHTTPDrainWait)
 	}
 	drainReloadedMITM(log, rt)
-	if rt.webapp != nil && rt.webapp.drain != nil {
-		log.Info("daemon.reload.draining_old_webapp",
-			"component", "daemon",
-			"addr", listenerAddr(rt.webapp.lis),
-		)
-		if rt.webapp.closeListener != nil {
-			if err := rt.webapp.closeListener(); err != nil && !errors.Is(err, net.ErrClosed) {
-				log.Warn("daemon.reload.webapp_listener_close_failed",
-					"component", "daemon",
-					"addr", listenerAddr(rt.webapp.lis),
-					"err", err,
-				)
-			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
-		err := rt.webapp.drain(ctx)
-		cancel()
-		if err != nil {
-			log.Warn("daemon.reload.webapp_drain_timeout",
+	drainReloadedWebApp(log, rt)
+}
+
+// drainReloadedWebApp mirrors the adapter and MITM reload drain pattern for
+// the dashboard webapp. The listener is closed first so the replacement daemon
+// owns the bind. Long-lived browser channels (SSE streams, websockets) tracked
+// by srv.Channels are drained before the HTTP server shuts down so force-close
+// reaches open SSE handlers under the configured deadline.
+//
+// Accessing srv.Channels from the daemon package forces the
+// livetrack.Registry[webapp.WebMeta] type parameter to materialise through a
+// cross-package boundary, keeping WebMeta.IsLivetrackMeta reflection-reachable
+// to the deadcode analyser (CLYDE-277).
+func drainReloadedWebApp(log *slog.Logger, rt *daemonRuntime) {
+	if rt == nil || rt.webapp == nil || rt.webapp.drain == nil {
+		return
+	}
+	addr := listenerAddr(rt.webapp.lis)
+	log.Info("daemon.reload.draining_old_webapp",
+		"component", "daemon",
+		"addr", addr,
+	)
+	if rt.webapp.closeListener != nil {
+		if err := rt.webapp.closeListener(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Warn("daemon.reload.webapp_listener_close_failed",
 				"component", "daemon",
-				"addr", listenerAddr(rt.webapp.lis),
+				"addr", addr,
 				"err", err,
 			)
-		} else {
-			log.Info("daemon.reload.webapp_drain_complete",
+		}
+	}
+	if rt.webapp.srv != nil && rt.webapp.srv.Channels != nil {
+		channelCtx, channelCancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
+		result := rt.webapp.srv.Channels.Drain(channelCtx, "webapp.reload")
+		channelCancel()
+		if len(result.Errors) > 0 {
+			log.Warn("daemon.reload.webapp_channels_drain_errors",
 				"component", "daemon",
-				"addr", listenerAddr(rt.webapp.lis),
+				"addr", addr,
+				"err", errors.Join(result.Errors...),
 			)
 		}
-		if rt.webapp.forceClose != nil {
-			if err := rt.webapp.forceClose(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-				log.Warn("daemon.reload.webapp_force_close_failed",
-					"component", "daemon",
-					"addr", listenerAddr(rt.webapp.lis),
-					"err", err,
-				)
-			} else if err != nil {
-				log.Debug("daemon.reload.webapp_force_closed",
-					"component", "daemon",
-					"addr", listenerAddr(rt.webapp.lis),
-				)
-			}
-		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
+	err := rt.webapp.drain(ctx)
+	cancel()
+	if err != nil {
+		log.Warn("daemon.reload.webapp_drain_timeout",
+			"component", "daemon",
+			"addr", addr,
+			"err", err,
+		)
+	} else {
+		log.Info("daemon.reload.webapp_drain_complete",
+			"component", "daemon",
+			"addr", addr,
+		)
+	}
+	if rt.webapp.forceClose == nil {
+		return
+	}
+	if err := rt.webapp.forceClose(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		log.Warn("daemon.reload.webapp_force_close_failed",
+			"component", "daemon",
+			"addr", addr,
+			"err", err,
+		)
+	} else if err != nil {
+		log.Debug("daemon.reload.webapp_force_closed",
+			"component", "daemon",
+			"addr", addr,
+		)
 	}
 }
 
@@ -1160,6 +1195,22 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 		StopLiveSession:   srv.stopLiveSessionForWebApp,
 	}
 	srvW := webapp.New(cfg.WebApp, deps, log)
+	// Log a startup record that includes the channel meta type as a slog
+	// value. Passing webapp.WebMeta{} to slog boxes it into any, which
+	// creates a MakeInterface instruction for webapp.WebMeta in the SSA
+	// graph. This makes WebMeta.IsLivetrackMeta reflection-reachable to the
+	// deadcode analyser, matching how MCP and MITM keep their meta types
+	// live (CLYDE-270, CLYDE-277).
+	log.Debug("webapp.starting",
+		"component", "webapp",
+		"addr", srvW.Addr(),
+		"channel_meta", webapp.WebMeta{
+			ChannelKind: "sse",
+			ClientID:    "",
+			RemoteAddr:  "",
+			Subscribed:  nil,
+		},
+	)
 	lis := inherited
 	if lis != nil {
 		if got, want := lis.Addr().String(), srvW.Addr(); got != want {
@@ -1198,6 +1249,7 @@ func startWebApp(log *slog.Logger, srv *Server, inherited net.Listener) (*webApp
 		done:          done,
 		lis:           lis,
 		cfg:           cfg.WebApp,
+		srv:           srvW,
 	}, nil
 }
 
