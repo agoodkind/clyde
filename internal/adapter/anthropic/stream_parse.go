@@ -24,6 +24,19 @@ type streamMessageStartEvent struct {
 	Message streamMessage `json:"message"`
 }
 
+// streamContentBlockType is the closed enum of Anthropic content block
+// types the parser dispatches on at content_block_start. Other values
+// fall through to the default arm so a future block type does not crash
+// the parser.
+type streamContentBlockType string
+
+const (
+	streamContentBlockTypeText             streamContentBlockType = "text"
+	streamContentBlockTypeToolUse          streamContentBlockType = "tool_use"
+	streamContentBlockTypeThinking         streamContentBlockType = "thinking"
+	streamContentBlockTypeRedactedThinking streamContentBlockType = "redacted_thinking"
+)
+
 // streamContentBlockSpec is the content_block object on content_block_start.
 //
 // Data carries the opaque base64 blob Anthropic emits inline on a
@@ -127,20 +140,20 @@ func dispatchSSE(
 		if err := json.Unmarshal([]byte(data), &ev); err == nil {
 			t := ev.ContentBlock.Type
 			blockTypes[ev.Index] = t
-			switch t {
-			case "tool_use":
+			switch streamContentBlockType(t) {
+			case streamContentBlockTypeToolUse:
 				return sink(StreamEvent{
 					Kind:        "tool_use_start",
 					BlockIndex:  ev.Index,
 					ToolUseID:   ev.ContentBlock.ID,
 					ToolUseName: ev.ContentBlock.Name,
 				})
-			case "thinking":
+			case streamContentBlockTypeThinking:
 				return sink(StreamEvent{
 					Kind:       "thinking",
 					BlockIndex: ev.Index,
 				})
-			case "redacted_thinking":
+			case streamContentBlockTypeRedactedThinking:
 				// Anthropic emits the opaque payload on the start event
 				// itself. There is no redacted_thinking_delta; we surface
 				// one event per block carrying the data blob and rely on
@@ -150,6 +163,11 @@ func dispatchSSE(
 					BlockIndex: ev.Index,
 					Data:       ev.ContentBlock.Data,
 				})
+			case streamContentBlockTypeText:
+				// Plain text content blocks are observed via the
+				// per-delta path; no synchronous event is needed at
+				// start. Listed here so the enum switch is exhaustive
+				// for the canonical Anthropic block types.
 			}
 		}
 	case "content_block_delta":
