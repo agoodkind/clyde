@@ -1,4 +1,4 @@
-// Package ui token formatters.
+// Token formatters for the ui package.
 //
 // formatTokensExact renders an integer token count with thousands
 // separators, for example 1234567 -> "1,234,567". Use this where the
@@ -12,6 +12,7 @@
 // caller wants a compact glance value. Current callers include the
 // details pane context usage row, the per-message detail estimate,
 // last-pre-compact size, and the export panel estimate row.
+
 package ui
 
 import (

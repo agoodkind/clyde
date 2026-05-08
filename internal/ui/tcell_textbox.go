@@ -110,7 +110,7 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 	} else {
 		src = make([][]TextSegment, len(tb.Lines))
 		for i, ln := range tb.Lines {
-			src[i] = []TextSegment{{Text: stripMarkup(ln), Style: StyleDefault}}
+			src[i] = []TextSegment{{Text: stripMarkup(ln), Style: StyleDefault, Spinner: false}}
 		}
 	}
 	if !tb.Wrap {
@@ -143,14 +143,14 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 			}
 			candidate += word
 			if runeCount(candidate) > w && cur != "" {
-				out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+				out = append(out, []TextSegment{{Text: cur, Style: StyleDefault, Spinner: false}})
 				cur = word
 			} else {
 				cur = candidate
 			}
 		}
 		if cur != "" {
-			out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+			out = append(out, []TextSegment{{Text: cur, Style: StyleDefault, Spinner: false}})
 		}
 	}
 	tb.wrappedCache = out

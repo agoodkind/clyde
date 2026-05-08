@@ -212,10 +212,10 @@ func legendSegmentsFromActions(actions []LegendAction) []TextSegment {
 			continue
 		}
 		if i > 0 {
-			segs = append(segs, TextSegment{Text: "  ", Style: barBg})
+			segs = append(segs, TextSegment{Text: "  ", Style: barBg, Spinner: false})
 		}
-		segs = append(segs, TextSegment{Text: hint.key, Style: keyStyle})
-		segs = append(segs, TextSegment{Text: " " + hint.label, Style: labelStyle})
+		segs = append(segs, TextSegment{Text: hint.key, Style: keyStyle, Spinner: false})
+		segs = append(segs, TextSegment{Text: " " + hint.label, Style: labelStyle, Spinner: false})
 	}
 	return segs
 }
