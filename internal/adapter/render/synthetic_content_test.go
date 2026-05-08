@@ -162,14 +162,14 @@ func TestExtractSyntheticPartsLegacyMarkerHasEmptyRef(t *testing.T) {
 }
 
 func TestSyntheticContentCloseWithEncryptedEmbedsAttribute(t *testing.T) {
-	close := SyntheticContentCloseWithEncrypted(SyntheticReasoning, "ENCBYTES")
+	close := SyntheticContentCloseWithAttrs(SyntheticReasoning, "ENCBYTES", "")
 	if !strings.Contains(close, `<!--/clyde-thinking data-encrypted="ENCBYTES"-->`) {
 		t.Fatalf("close with encrypted should embed attribute: %q", close)
 	}
 }
 
 func TestSyntheticContentCloseWithEmptyEncryptedMatchesLegacyShape(t *testing.T) {
-	withEmpty := SyntheticContentCloseWithEncrypted(SyntheticReasoning, "")
+	withEmpty := SyntheticContentCloseWithAttrs(SyntheticReasoning, "", "")
 	legacy := SyntheticContentClose(SyntheticReasoning)
 	if withEmpty != legacy {
 		t.Fatalf("empty encrypted must match legacy close shape:\n with-encrypted: %q\n legacy:        %q", withEmpty, legacy)
@@ -183,7 +183,7 @@ func TestSyntheticContentCloseWithEmptyEncryptedMatchesLegacyShape(t *testing.T)
 func TestExtractSyntheticPartsRoundTripsEncryptedAttribute(t *testing.T) {
 	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_inline") +
 		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "deep thoughts", true) +
-		SyntheticContentCloseWithEncrypted(SyntheticReasoning, "OPAQUE_BASE64_BLOB==")
+		SyntheticContentCloseWithAttrs(SyntheticReasoning, "OPAQUE_BASE64_BLOB==", "")
 	parts := ExtractSyntheticParts(in)
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
@@ -199,6 +199,74 @@ func TestExtractSyntheticPartsRoundTripsEncryptedAttribute(t *testing.T) {
 	}
 	if parts[0].Encrypted != "OPAQUE_BASE64_BLOB==" {
 		t.Fatalf("encrypted=%q want OPAQUE_BASE64_BLOB==", parts[0].Encrypted)
+	}
+}
+
+// TestSyntheticContentCloseWithAttrsEmbedsSignatureAttribute asserts that
+// a non-empty signature is rendered as the new sibling `data-signature`
+// attribute on the close marker (peer of `data-encrypted`). This is the
+// Anthropic per-thinking-block carrier the inbound mapper reads on the
+// next turn so the round-tripped thinking content block passes signature
+// validation upstream.
+func TestSyntheticContentCloseWithAttrsEmbedsSignatureAttribute(t *testing.T) {
+	close := SyntheticContentCloseWithAttrs(SyntheticReasoning, "", "SIGBYTES")
+	if !strings.Contains(close, `<!--/clyde-thinking data-signature="SIGBYTES"-->`) {
+		t.Fatalf("close with signature should embed attribute: %q", close)
+	}
+}
+
+// TestExtractSyntheticPartsRoundTripsSignatureAttribute is the
+// signature-only twin of the encrypted-only round trip: a thinking
+// envelope with `data-signature` on the close survives through
+// ExtractSyntheticParts as the Signature field on the produced part.
+func TestExtractSyntheticPartsRoundTripsSignatureAttribute(t *testing.T) {
+	in := SyntheticContentOpen(SyntheticReasoning) +
+		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "deliberation", true) +
+		SyntheticContentCloseWithAttrs(SyntheticReasoning, "", "SIG_VALUE_BASE64==")
+	parts := ExtractSyntheticParts(in)
+	if len(parts) != 1 {
+		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
+	}
+	if parts[0].Kind != SyntheticKindThinking {
+		t.Fatalf("kind=%q want %q", parts[0].Kind, SyntheticKindThinking)
+	}
+	if parts[0].Body != "deliberation" {
+		t.Fatalf("body=%q want deliberation", parts[0].Body)
+	}
+	if parts[0].Encrypted != "" {
+		t.Fatalf("encrypted=%q want empty when only signature is set", parts[0].Encrypted)
+	}
+	if parts[0].Signature != "SIG_VALUE_BASE64==" {
+		t.Fatalf("signature=%q want SIG_VALUE_BASE64==", parts[0].Signature)
+	}
+}
+
+// TestExtractSyntheticPartsCoexistsEncryptedAndSignature asserts that a
+// close marker carrying BOTH `data-encrypted` (Codex) and
+// `data-signature` (Anthropic) is parsed without conflict. Both
+// providers write the attribute they own and the other is left empty;
+// the captureRE preserves the fixed order (encrypted first, signature
+// second) that the init() comments document.
+func TestExtractSyntheticPartsCoexistsEncryptedAndSignature(t *testing.T) {
+	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_co") +
+		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "co thinking", true) +
+		SyntheticContentCloseWithAttrs(SyntheticReasoning, "ENC_VALUE_BASE64==", "SIG_VALUE_BASE64==")
+	parts := ExtractSyntheticParts(in)
+	if len(parts) != 1 {
+		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
+	}
+	got := parts[0]
+	if got.Ref != "rs_co" {
+		t.Fatalf("ref=%q want rs_co", got.Ref)
+	}
+	if got.Body != "co thinking" {
+		t.Fatalf("body=%q want co thinking", got.Body)
+	}
+	if got.Encrypted != "ENC_VALUE_BASE64==" {
+		t.Fatalf("encrypted=%q want ENC_VALUE_BASE64==", got.Encrypted)
+	}
+	if got.Signature != "SIG_VALUE_BASE64==" {
+		t.Fatalf("signature=%q want SIG_VALUE_BASE64==", got.Signature)
 	}
 }
 

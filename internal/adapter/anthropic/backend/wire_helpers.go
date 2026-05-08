@@ -39,8 +39,21 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 				Content:   b.ResultContent,
 				Source:    src,
 				Thinking:  b.Thinking,
+				Signature: b.Signature,
 			}
-			if block.Type == "thinking" && strings.TrimSpace(block.Thinking) == "" {
+			// Defense-in-depth: drop a thinking block only when both
+			// the body and the signature are empty. Anthropic's
+			// validator rejects body-only and signature-only thinking
+			// blocks separately; an empty-everything block is the
+			// shape that originally tripped the wire fix and stays
+			// barred. A signed empty body is a legitimate replay
+			// shape (provider may emit a thinking block whose visible
+			// body was empty at generation time but still carries a
+			// signature) and must reach the wire so signature
+			// validation can succeed on that turn.
+			if block.Type == "thinking" &&
+				strings.TrimSpace(block.Thinking) == "" &&
+				strings.TrimSpace(block.Signature) == "" {
 				continue
 			}
 			blocks = append(blocks, block)
@@ -250,6 +263,25 @@ func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, pay
 			return "", nil, false
 		}
 		return "content_block_start", b, true
+	case "thinking_signature":
+		// Round-trip the per-thinking-block signature back as the
+		// upstream-shaped `signature_delta` payload so consumers of
+		// the re-emitted SSE see the same wire shape Anthropic emits
+		// natively.
+		p := struct {
+			Index int `json:"index"`
+			Delta struct {
+				Type      string `json:"type"`
+				Signature string `json:"signature"`
+			} `json:"delta"`
+		}{Index: ev.BlockIndex}
+		p.Delta.Type = "signature_delta"
+		p.Delta.Signature = ev.Text
+		b, err := json.Marshal(p)
+		if err != nil {
+			return "", nil, false
+		}
+		return "content_block_delta", b, true
 	default:
 		return "", nil, false
 	}

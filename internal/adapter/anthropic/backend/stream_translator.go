@@ -134,7 +134,7 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 		return t.openToolUseBlock(ev.Index, ev.ContentBlock), false, "", nil, nil
 	case "thinking":
 		t.currentBlockType = "thinking"
-		return []Event{{Kind: EventReasoningSignaled, EncryptedContent: ""}}, false, "", nil, nil
+		return []Event{{Kind: EventReasoningSignaled, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
 	default:
 		t.currentBlockType = ev.ContentBlock.Type
 		return nil, false, "", nil, nil
@@ -160,6 +160,7 @@ func (t *StreamTranslator) openToolUseBlock(blockIdx int, block *AnthContentBloc
 			},
 		}},
 		EncryptedContent: "",
+		Signature:        "",
 	}}
 }
 
@@ -178,7 +179,7 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 	switch ev.Delta.Type {
 	case "text_delta":
 		t.visibleText.WriteString(ev.Delta.Text)
-		return []Event{{Kind: EventAssistantTextDelta, Text: ev.Delta.Text, EncryptedContent: ""}}, false, "", nil, nil
+		return []Event{{Kind: EventAssistantTextDelta, Text: ev.Delta.Text, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
 	case "input_json_delta":
 		return t.toolArgumentsDelta(ev.Index, ev.Delta.PartialJSON)
 	case "thinking_delta":
@@ -187,6 +188,19 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 			Text:             ev.Delta.Thinking,
 			ReasoningKind:    "text",
 			EncryptedContent: "",
+			Signature:        "",
+		}}, false, "", nil, nil
+	case "signature_delta":
+		return []Event{{
+			Kind:             EventReasoningDelta,
+			Text:             "",
+			ReasoningKind:    "text",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
+			EncryptedContent: "",
+			Signature:        ev.Delta.Signature,
 		}}, false, "", nil, nil
 	default:
 		return nil, false, "", nil, nil
@@ -220,6 +234,7 @@ func (t *StreamTranslator) toolArgumentsDelta(blockIdx int, partialJSON string) 
 			},
 		}},
 		EncryptedContent: "",
+		Signature:        "",
 	}}, false, "", nil, nil
 }
 
@@ -234,7 +249,7 @@ func (t *StreamTranslator) handleContentBlockStop() ([]Event, bool, string, *Ope
 	// default. The cached prefix stays byte-stable across turns.
 	if t.currentBlockType == "thinking" {
 		t.currentBlockType = ""
-		return []Event{{Kind: EventReasoningFinished, EncryptedContent: ""}}, false, "", nil, nil
+		return []Event{{Kind: EventReasoningFinished, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
 	}
 	t.currentBlockType = ""
 	return nil, false, "", nil, nil
@@ -271,7 +286,7 @@ func (t *StreamTranslator) handleMessageStop() ([]Event, bool, string, *OpenAIUs
 	}
 	var extra []Event
 	if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
-		extra = append(extra, Event{Kind: adapterrender.EventAssistantRefusalDelta, Text: t.visibleText.String(), EncryptedContent: ""})
+		extra = append(extra, Event{Kind: adapterrender.EventAssistantRefusalDelta, Text: t.visibleText.String(), EncryptedContent: "", Signature: ""})
 	}
 	return extra, true, reason, u, nil
 }

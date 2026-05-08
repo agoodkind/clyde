@@ -397,3 +397,34 @@ func assistantTextSummaryLog(t *testing.T, logs string) assistantTextSummaryLogE
 	t.Fatalf("assistant text summary log not found: %s", logs)
 	return assistantTextSummaryLogEntry{}
 }
+
+// TestEventRendererCapturesAnthropicSignatureOnReasoningClose asserts the
+// Anthropic-side capture path: a stream of EventReasoningDelta events
+// carrying a Signature followed by EventReasoningFinished must produce a
+// close chunk whose `data-signature` attribute is the most recent
+// signature value. The synthetic-thinking close-marker is the cross-turn
+// carrier the inbound mapper relies on.
+func TestEventRendererCapturesAnthropicSignatureOnReasoningClose(t *testing.T) {
+	r := NewEventRenderer("req-anth-sig", "alias", "anthropic", nil)
+	// First reasoning delta opens the synthetic envelope and ships the
+	// thinking body. Anthropic pairs each thinking_delta with a separate
+	// signature_delta in the same content_block so the signature flows
+	// in via subsequent EventReasoningDelta events with empty Text.
+	_ = r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "interim deliberation", ReasoningKind: "text"})
+	_ = r.HandleEvent(Event{Kind: EventReasoningDelta, ReasoningKind: "text", Signature: "first-sig"})
+	_ = r.HandleEvent(Event{Kind: EventReasoningDelta, ReasoningKind: "text", Signature: "final-sig"})
+	chunks := r.HandleEvent(Event{Kind: EventReasoningFinished})
+	if len(chunks) != 1 {
+		t.Fatalf("close chunks=%d want 1: %+v", len(chunks), chunks)
+	}
+	closeContent := chunks[0].Choices[0].Delta.Content
+	if !strings.Contains(closeContent, `data-signature="final-sig"`) {
+		t.Fatalf("close marker missing latest signature: %q", closeContent)
+	}
+	if strings.Contains(closeContent, "first-sig") {
+		t.Fatalf("close marker should carry only the most recent signature, found stale value: %q", closeContent)
+	}
+	if strings.Contains(closeContent, "data-encrypted=") {
+		t.Fatalf("Anthropic-only span must not emit data-encrypted: %q", closeContent)
+	}
+}

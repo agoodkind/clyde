@@ -440,6 +440,51 @@ func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) 
 	}
 }
 
+// TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature
+// asserts that when Cursor replays an assistant text whose synthetic
+// thinking envelope close marker carries `data-signature="..."`, the
+// Anthropic mapper copies that signature onto the materialized native
+// thinking content block. This is the per-thinking-block opaque value
+// Anthropic's signature_delta SSE event emits; without copying it, a
+// later replay would fail upstream signature validation.
+func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testing.T) {
+	t.Parallel()
+	envelope := adapterrender.SyntheticContentOpen(adapterrender.SyntheticReasoning) +
+		"> deliberation body" +
+		adapterrender.SyntheticContentCloseWithAttrs(
+			adapterrender.SyntheticReasoning,
+			"",
+			"OPAQUE_SIG_BASE64==",
+		)
+	assistantText := envelope + "Final answer."
+	body, err := json.Marshal(assistantText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"q"`)},
+			{Role: "assistant", Content: json.RawMessage(body)},
+			{Role: "user", Content: json.RawMessage(`"continue"`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64, adapterrender.MaterializeNativeThinkingBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asst := out.Messages[1]
+	if len(asst.Content) < 1 || asst.Content[0].Type != "thinking" {
+		t.Fatalf("assistant blocks missing leading thinking block: %+v", asst.Content)
+	}
+	if asst.Content[0].Thinking != "deliberation body" {
+		t.Fatalf("thinking body=%q want %q", asst.Content[0].Thinking, "deliberation body")
+	}
+	if asst.Content[0].Signature != "OPAQUE_SIG_BASE64==" {
+		t.Fatalf("thinking block signature=%q want OPAQUE_SIG_BASE64==", asst.Content[0].Signature)
+	}
+}
+
 // TestTranslateRequestAssistantNoticeIsDroppedFromUpstream asserts that
 // notice envelopes (UI-only quota / runtime warnings) are not forwarded to
 // the upstream provider; they would otherwise be re-billed as input tokens.

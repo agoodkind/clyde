@@ -142,6 +142,7 @@ func translateMessage(
 				Type:          "tool_result",
 				ToolUseID:     msg.ToolCallID,
 				ResultContent: result,
+				Signature:     "",
 			}},
 		}, nil
 	default:
@@ -281,7 +282,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			if p.Text == "" {
 				continue
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Text})
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Text, Signature: ""})
 		case "image_url":
 			if p.ImageURL == nil {
 				continue
@@ -296,7 +297,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				)
 				return nil, err
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src})
+			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src, Signature: ""})
 		case "input_audio":
 			log.Warn("adapter.anthropic.user_part.audio_rejected",
 				"subcomponent", "anthropic_mapper",
@@ -308,7 +309,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			if p.Refusal == "" {
 				continue
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal})
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: p.Refusal, Signature: ""})
 		case "tool_result":
 			result := flattenToolResultContent(p.Content)
 			if result == "" {
@@ -318,6 +319,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				Type:          "tool_result",
 				ToolUseID:     p.ToolUseID,
 				ResultContent: result,
+				Signature:     "",
 			})
 		default:
 			log.Warn("adapter.anthropic.user_part.unknown_type",
@@ -326,7 +328,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				"part_idx", partIdx,
 				"part_type", p.Type,
 			)
-			blocks = append(blocks, AnthContentBlock{Type: "text", Text: "[" + p.Type + "]"})
+			blocks = append(blocks, AnthContentBlock{Type: "text", Text: "[" + p.Type + "]", Signature: ""})
 		}
 	}
 	return blocks, nil
@@ -402,12 +404,12 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 					if body == "" {
 						continue
 					}
-					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body})
+					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body, Signature: mp.Signature})
 				case adapterrender.MaterializedKindText:
 					if strings.TrimSpace(mp.Body) == "" {
 						continue
 					}
-					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body})
+					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body, Signature: ""})
 				}
 			}
 		case "image_url":
@@ -424,7 +426,7 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 				)
 				return nil, err
 			}
-			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src})
+			blocks = append(blocks, AnthContentBlock{Type: "image", Source: src, Signature: ""})
 		case "input_audio":
 			log.Warn("adapter.anthropic.assistant_part.audio_rejected",
 				"subcomponent", "anthropic_mapper",
@@ -445,12 +447,12 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 					if body == "" {
 						continue
 					}
-					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body})
+					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body, Signature: mp.Signature})
 				case adapterrender.MaterializedKindText:
 					if strings.TrimSpace(mp.Body) == "" {
 						continue
 					}
-					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body})
+					blocks = append(blocks, AnthContentBlock{Type: "text", Text: mp.Body, Signature: ""})
 				}
 			}
 		case "tool_use":
@@ -459,10 +461,11 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 				input = json.RawMessage("{}")
 			}
 			blocks = append(blocks, AnthContentBlock{
-				Type:  "tool_use",
-				ID:    p.ID,
-				Name:  p.Name,
-				Input: input,
+				Type:      "tool_use",
+				ID:        p.ID,
+				Name:      p.Name,
+				Input:     input,
+				Signature: "",
 			})
 		case "thinking":
 			continue
@@ -479,10 +482,11 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 	for _, tc := range msg.ToolCalls {
 		raw := toolCallArgumentsJSON(tc.Function.Arguments)
 		blocks = append(blocks, AnthContentBlock{
-			Type:  "tool_use",
-			ID:    tc.ID,
-			Name:  tc.Function.Name,
-			Input: raw,
+			Type:      "tool_use",
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Input:     raw,
+			Signature: "",
 		})
 	}
 	return blocks, nil

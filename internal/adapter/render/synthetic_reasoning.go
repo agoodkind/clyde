@@ -108,18 +108,22 @@ func isThinkingPlaceholder(text string) bool {
 }
 
 // renderReasoningClose closes the synthetic Cursor-visible block in
-// delta.content. When an encrypted_content blob was captured during the
-// span (codex EventReasoningFinished), the close marker carries it inline
-// as `data-encrypted` so Cursor's transcript persists it across turns.
-// The captured blob is cleared after emission so a subsequent reasoning
-// span starts fresh.
+// delta.content. When provider-specific payloads were captured during the
+// span (codex encrypted_content via EventReasoningFinished, Anthropic
+// signature via EventReasoningDelta or EventReasoningFinished), the close
+// marker carries them inline as `data-encrypted` and `data-signature`
+// sibling attributes so Cursor's transcript persists them across turns.
+// Both captures are cleared after emission so a subsequent reasoning span
+// starts fresh.
 func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 	if !r.reasoningOpen {
 		return nil
 	}
 	r.reasoningOpen = false
 	encrypted := r.lastReasoningEncrypted
+	signature := r.lastReasoningSignature
 	r.lastReasoningEncrypted = ""
-	ch := r.baseChunk(adapteropenai.StreamDelta{Content: SyntheticContentCloseWithEncrypted(SyntheticReasoning, encrypted)})
+	r.lastReasoningSignature = ""
+	ch := r.baseChunk(adapteropenai.StreamDelta{Content: SyntheticContentCloseWithAttrs(SyntheticReasoning, encrypted, signature)})
 	return &ch
 }

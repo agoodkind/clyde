@@ -62,11 +62,21 @@ const (
 // owns persistence; on the next turn the inbound mapper attaches it to the
 // round-tripped Reasoning item directly. Empty for parts produced by
 // markers without a data-encrypted attribute (legacy and Anthropic spans).
+//
+// Signature carries the optional data-signature attribute parsed off the
+// CLOSE marker. For Anthropic thinking parts, this is the opaque per-block
+// signature the upstream emits via the `signature_delta` SSE event. The
+// value rides inline on the close marker as a sibling of data-encrypted so
+// Cursor's transcript owns persistence; on the next turn the Anthropic
+// mapper copies it onto the materialized native thinking block so
+// signature validation passes upstream. Empty for parts produced by
+// markers without a data-signature attribute (legacy and Codex spans).
 type SyntheticPart struct {
 	Kind      SyntheticContentKind
 	Body      string
 	Ref       string
 	Encrypted string
+	Signature string
 }
 
 // syntheticContentSpec describes the rendering and stripping rules for one
@@ -110,32 +120,45 @@ const dataRefAttrPattern = `(?: data-ref="([^"]*)")?`
 // regex also accepts (but ignores) a `data-encrypted` attribute.
 const dataEncryptedAttrPattern = `(?: data-encrypted="([^"]*)")?`
 
+// dataSignatureAttrPattern is the optional `data-signature="..."` attribute
+// fragment that may appear on the CLOSE marker (sibling of
+// data-encrypted; carries the Anthropic per-thinking-block signature).
+// The value is base64 so `[^"]*` is a safe match. The two attributes are
+// independently optional but appear in a fixed order: data-encrypted
+// first, data-signature second. That keeps the regex linear and lets each
+// provider mapper read only the attribute it owns without disambiguating
+// by side channel.
+const dataSignatureAttrPattern = `(?: data-signature="([^"]*)")?`
+
 func init() {
 	for _, spec := range syntheticContentSpecs {
 		marker := regexp.QuoteMeta(spec.Marker)
 		// stripRE accepts the open marker with or without a data-ref
-		// attribute and the close marker with or without a
-		// data-encrypted attribute. Non-capturing groups keep the
-		// match anchored so we still consume the entire envelope on
-		// strip.
+		// attribute and the close marker with or without
+		// data-encrypted and/or data-signature attributes. Both close
+		// attributes are independently optional and appear in a
+		// fixed order (encrypted first, signature second) so the
+		// regex stays linear. Non-capturing groups keep the match
+		// anchored so we still consume the entire envelope on strip.
 		spec.stripRE = regexp.MustCompile(
-			`(?s)<!--` + marker + `(?: data-ref="[^"]*")?(?: data-encrypted="[^"]*")?-->` +
+			`(?s)<!--` + marker + `(?: data-ref="[^"]*")?(?: data-encrypted="[^"]*")?(?: data-signature="[^"]*")?-->` +
 				`.*?` +
-				`<!--/` + marker + `(?: data-encrypted="[^"]*")?-->\s*`,
+				`<!--/` + marker + `(?: data-encrypted="[^"]*")?(?: data-signature="[^"]*")?-->\s*`,
 		)
 		// captureRE submatches (1) the optional open data-ref value,
-		// (2) the inner body, and (3) the optional close
-		// data-encrypted value. Forward compat: an encrypted attribute
-		// on the open marker is accepted but ignored (the close is the
-		// authoritative carrier because encrypted_content arrives at
-		// response.output_item.done after the open marker has already
-		// shipped to Cursor). The trailing `\s*` mirrors stripRE so
-		// the two paths agree on where one part ends and the next
-		// begins.
+		// (2) the inner body, (3) the optional close data-encrypted
+		// value, and (4) the optional close data-signature value.
+		// Forward compat: an encrypted or signature attribute on the
+		// open marker is accepted but ignored (the close is the
+		// authoritative carrier because encrypted_content and the
+		// thinking-block signature both arrive after the open marker
+		// has already shipped to Cursor). The trailing `\s*` mirrors
+		// stripRE so the two paths agree on where one part ends and
+		// the next begins.
 		spec.captureRE = regexp.MustCompile(
-			`(?s)<!--` + marker + dataRefAttrPattern + `(?: data-encrypted="[^"]*")?-->` +
+			`(?s)<!--` + marker + dataRefAttrPattern + `(?: data-encrypted="[^"]*")?(?: data-signature="[^"]*")?-->` +
 				`(.*?)` +
-				`<!--/` + marker + dataEncryptedAttrPattern + `-->\s*`,
+				`<!--/` + marker + dataEncryptedAttrPattern + dataSignatureAttrPattern + `-->\s*`,
 		)
 	}
 }
@@ -183,20 +206,21 @@ func SyntheticContentOpenWithRef(kind SyntheticContentKind, ref string) string {
 // synthetic block kind. It always ends with a blank line so subsequent
 // markdown renders cleanly.
 func SyntheticContentClose(kind SyntheticContentKind) string {
-	return SyntheticContentCloseWithEncrypted(kind, "")
+	return SyntheticContentCloseWithAttrs(kind, "", "")
 }
 
-// SyntheticContentCloseWithEncrypted returns the trailing marker for the
-// requested synthetic block kind, optionally annotated with a
-// `data-encrypted` attribute carrying an opaque server-signed blob. The
-// attribute is emitted as `<!--/<marker> data-encrypted="<encrypted>"-->`
-// when non-empty so the next-turn inbound mapper can recover the blob
-// without consulting an external store. Empty encrypted matches the
-// legacy [SyntheticContentClose] shape exactly.
+// SyntheticContentCloseWithAttrs returns the trailing marker for the
+// requested synthetic block kind, optionally annotated with both a
+// `data-encrypted` attribute (codex `encrypted_content` blob) and a
+// `data-signature` attribute (Anthropic per-thinking-block signature).
+// Each attribute is independently optional. The order on the wire is
+// fixed: encrypted first, signature second; this keeps the captureRE
+// linear and lets each provider mapper read only the attribute it owns.
 //
-// The encrypted value must not contain a literal double-quote; callers
-// using base64 (alphanumeric plus `+/=`) are safe by construction.
-func SyntheticContentCloseWithEncrypted(kind SyntheticContentKind, encrypted string) string {
+// Neither value may contain a literal double-quote; callers using base64
+// (alphanumeric plus `+/=`) are safe by construction. Empty values for
+// both arguments match the legacy [SyntheticContentClose] shape exactly.
+func SyntheticContentCloseWithAttrs(kind SyntheticContentKind, encrypted, signature string) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return ""
@@ -204,6 +228,9 @@ func SyntheticContentCloseWithEncrypted(kind SyntheticContentKind, encrypted str
 	closeTag := "<!--/" + spec.Marker
 	if encrypted != "" {
 		closeTag += ` data-encrypted="` + encrypted + `"`
+	}
+	if signature != "" {
+		closeTag += ` data-signature="` + signature + `"`
 	}
 	closeTag += "-->"
 	return "\n" + closeTag + "\n\n"
@@ -301,6 +328,7 @@ type syntheticMatch struct {
 	bodyTrim  string
 	ref       string
 	encrypted string
+	signature string
 }
 
 // ExtractSyntheticParts parses text and returns the ordered list of parts.
@@ -330,6 +358,7 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 			refStart, refEnd := idx[2], idx[3]
 			innerStart, innerEnd := idx[4], idx[5]
 			encStart, encEnd := idx[6], idx[7]
+			sigStart, sigEnd := idx[8], idx[9]
 			ref := ""
 			if refStart >= 0 && refEnd >= 0 {
 				ref = text[refStart:refEnd]
@@ -338,6 +367,10 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 			if encStart >= 0 && encEnd >= 0 {
 				encrypted = text[encStart:encEnd]
 			}
+			signature := ""
+			if sigStart >= 0 && sigEnd >= 0 {
+				signature = text[sigStart:sigEnd]
+			}
 			matches = append(matches, syntheticMatch{
 				kind:      kind,
 				start:     outerStart,
@@ -345,11 +378,12 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 				bodyTrim:  stripDecoration(spec, text[innerStart:innerEnd]),
 				ref:       ref,
 				encrypted: encrypted,
+				signature: signature,
 			})
 		}
 	}
 	if len(matches) == 0 {
-		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: ""}}
+		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: ""}}
 	}
 	// Insertion sort by start offset; tiny N (matches per assistant turn).
 	for i := 1; i < len(matches); i++ {
@@ -371,7 +405,7 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 		if m.start > cursor {
 			parts = appendTextPart(parts, text[cursor:m.start])
 		}
-		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref, Encrypted: m.encrypted})
+		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref, Encrypted: m.encrypted, Signature: m.signature})
 		cursor = m.end
 	}
 	if cursor < len(text) {
@@ -390,7 +424,7 @@ func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
 	if strings.TrimSpace(text) == "" {
 		return parts
 	}
-	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: ""})
+	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: ""})
 }
 
 // MaterializationStrategy picks how round-tripped synthetic envelope content
@@ -440,9 +474,16 @@ const (
 // MaterializedPart is one ordered output instruction from
 // [MaterializeSyntheticParts]. The provider mapper renders each part
 // mechanically into its own upstream-native content block type.
+//
+// Signature carries the Anthropic per-thinking-block signature parsed off
+// the close-marker `data-signature` attribute, propagated through the
+// generic materializer so the Anthropic mapper can copy it onto the
+// emitted native thinking content block. Empty for non-Anthropic parts
+// and for text parts.
 type MaterializedPart struct {
-	Kind MaterializedKind
-	Body string
+	Kind      MaterializedKind
+	Body      string
+	Signature string
 }
 
 // MaterializeSyntheticParts applies a [MaterializationStrategy] to a
@@ -478,9 +519,9 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 			if strings.TrimSpace(p.Body) == "" {
 				continue
 			}
-			out = append(out, MaterializedPart{Kind: MaterializedKindText, Body: p.Body})
+			out = append(out, MaterializedPart{Kind: MaterializedKindText, Body: p.Body, Signature: ""})
 		case SyntheticReasoning:
-			out = append(out, materializeReasoningPart(p.Body, strategy)...)
+			out = append(out, materializeReasoningPart(p.Body, p.Signature, strategy)...)
 		case SyntheticNotice:
 			continue
 		}
@@ -488,22 +529,28 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 	return out
 }
 
-func materializeReasoningPart(body string, strategy MaterializationStrategy) []MaterializedPart {
+// materializeReasoningPart applies the configured strategy to a single
+// reasoning part. The signature, when non-empty, is propagated only to
+// MaterializedKindNativeThinking output so the Anthropic mapper can copy
+// it onto the emitted thinking content block; other strategies drop the
+// signature because the body is no longer rendered as a native thinking
+// block.
+func materializeReasoningPart(body, signature string, strategy MaterializationStrategy) []MaterializedPart {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
 		return nil
 	}
 	switch strategy {
 	case MaterializeNativeThinkingBlock:
-		return []MaterializedPart{{Kind: MaterializedKindNativeThinking, Body: trimmed}}
+		return []MaterializedPart{{Kind: MaterializedKindNativeThinking, Body: trimmed, Signature: signature}}
 	case MaterializePlainTextConcat:
-		return []MaterializedPart{{Kind: MaterializedKindText, Body: trimmed}}
+		return []MaterializedPart{{Kind: MaterializedKindText, Body: trimmed, Signature: ""}}
 	case MaterializePassthrough:
 		envelope := FormatSyntheticContent(SyntheticReasoning, trimmed)
 		if envelope == "" {
 			return nil
 		}
-		return []MaterializedPart{{Kind: MaterializedKindText, Body: envelope}}
+		return []MaterializedPart{{Kind: MaterializedKindText, Body: envelope, Signature: ""}}
 	case MaterializeDrop:
 		return nil
 	}

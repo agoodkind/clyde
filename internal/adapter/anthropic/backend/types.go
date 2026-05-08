@@ -22,6 +22,11 @@ type AnthMessage struct {
 }
 
 // AnthContentBlock is a union of Anthropic content block shapes.
+//
+// Signature carries the opaque server-signed value Anthropic emits per
+// thinking block via the `signature_delta` SSE event. The mapper preserves
+// it on the round trip so a replayed thinking block on a later turn passes
+// Anthropic's signature validation.
 type AnthContentBlock struct {
 	Type          string           `json:"type"`
 	Text          string           `json:"text,omitempty"`
@@ -32,6 +37,7 @@ type AnthContentBlock struct {
 	ResultContent string           `json:"content,omitempty"`
 	Source        *AnthImageSource `json:"source,omitempty"`
 	Thinking      string           `json:"thinking,omitempty"`
+	Signature     string           `json:"signature,omitempty"`
 }
 
 // AnthImageSource describes image bytes or a remote URL.
@@ -76,6 +82,10 @@ type AnthSSEMessageWrap struct {
 }
 
 // AnthSSEDelta is the delta object on content_block_delta and message_delta.
+//
+// Signature is populated when the upstream emits a `signature_delta` event
+// inside a thinking content block. The value is the opaque server-signed
+// signature for that thinking block.
 type AnthSSEDelta struct {
 	Type         string `json:"type"`
 	Text         string `json:"text,omitempty"`
@@ -83,6 +93,7 @@ type AnthSSEDelta struct {
 	PartialJSON  string `json:"partial_json,omitempty"`
 	StopReason   string `json:"stop_reason,omitempty"`
 	StopSequence string `json:"stop_sequence,omitempty"`
+	Signature    string `json:"signature,omitempty"`
 }
 
 // AnthSSEMessage is used on message_delta wrapper when needed.
