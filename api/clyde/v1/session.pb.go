@@ -615,12 +615,14 @@ type SessionSummary struct {
 	state                 protoimpl.MessageState   `protogen:"open.v1"`
 	Name                  string                   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	MetadataName          string                   `protobuf:"bytes,2,opt,name=metadata_name,json=metadataName,proto3" json:"metadata_name,omitempty"`
+	ClydeUuid             string                   `protobuf:"bytes,31,opt,name=clyde_uuid,json=clydeUuid,proto3" json:"clyde_uuid,omitempty"`
 	SessionId             string                   `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	TranscriptPath        string                   `protobuf:"bytes,4,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
 	WorkDir               string                   `protobuf:"bytes,5,opt,name=work_dir,json=workDir,proto3" json:"work_dir,omitempty"`
 	CreatedNanos          int64                    `protobuf:"varint,6,opt,name=created_nanos,json=createdNanos,proto3" json:"created_nanos,omitempty"`
 	LastAccessedNanos     int64                    `protobuf:"varint,7,opt,name=last_accessed_nanos,json=lastAccessedNanos,proto3" json:"last_accessed_nanos,omitempty"`
 	ParentSession         string                   `protobuf:"bytes,8,opt,name=parent_session,json=parentSession,proto3" json:"parent_session,omitempty"`
+	ParentClydeUuid       string                   `protobuf:"bytes,32,opt,name=parent_clyde_uuid,json=parentClydeUuid,proto3" json:"parent_clyde_uuid,omitempty"`
 	IsForkedSession       bool                     `protobuf:"varint,9,opt,name=is_forked_session,json=isForkedSession,proto3" json:"is_forked_session,omitempty"`
 	IsIncognito           bool                     `protobuf:"varint,10,opt,name=is_incognito,json=isIncognito,proto3" json:"is_incognito,omitempty"`
 	PreviousSessionIds    []string                 `protobuf:"bytes,11,rep,name=previous_session_ids,json=previousSessionIds,proto3" json:"previous_session_ids,omitempty"`
@@ -691,6 +693,13 @@ func (x *SessionSummary) GetMetadataName() string {
 	return ""
 }
 
+func (x *SessionSummary) GetClydeUuid() string {
+	if x != nil {
+		return x.ClydeUuid
+	}
+	return ""
+}
+
 func (x *SessionSummary) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
@@ -729,6 +738,13 @@ func (x *SessionSummary) GetLastAccessedNanos() int64 {
 func (x *SessionSummary) GetParentSession() string {
 	if x != nil {
 		return x.ParentSession
+	}
+	return ""
+}
+
+func (x *SessionSummary) GetParentClydeUuid() string {
+	if x != nil {
+		return x.ParentClydeUuid
 	}
 	return ""
 }
@@ -1907,10 +1923,13 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
 	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x15\n" +
-	"\x13ListSessionsRequest\"\xee\t\n" +
+	"\x13ListSessionsRequest\"\xb9\n" +
+	"\n" +
 	"\x0eSessionSummary\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rmetadata_name\x18\x02 \x01(\tR\fmetadataName\x12\x1d\n" +
+	"\n" +
+	"clyde_uuid\x18\x1f \x01(\tR\tclydeUuid\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x03 \x01(\tR\tsessionId\x12'\n" +
 	"\x0ftranscript_path\x18\x04 \x01(\tR\x0etranscriptPath\x12\x19\n" +
@@ -1918,6 +1937,7 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\rcreated_nanos\x18\x06 \x01(\x03R\fcreatedNanos\x12.\n" +
 	"\x13last_accessed_nanos\x18\a \x01(\x03R\x11lastAccessedNanos\x12%\n" +
 	"\x0eparent_session\x18\b \x01(\tR\rparentSession\x12*\n" +
+	"\x11parent_clyde_uuid\x18  \x01(\tR\x0fparentClydeUuid\x12*\n" +
 	"\x11is_forked_session\x18\t \x01(\bR\x0fisForkedSession\x12!\n" +
 	"\fis_incognito\x18\n" +
 	" \x01(\bR\visIncognito\x120\n" +

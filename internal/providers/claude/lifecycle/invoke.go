@@ -225,7 +225,12 @@ func sessionSettingsFile(clydeRoot string, sessionName string) string {
 	if strings.TrimSpace(clydeRoot) == "" || strings.TrimSpace(sessionName) == "" {
 		return ""
 	}
-	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sessionName), "settings.json")
+	store := session.NewFileStore(clydeRoot)
+	sess, err := store.Get(sessionName)
+	if err != nil {
+		return ""
+	}
+	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sess.StorageKey()), "settings.json")
 	if !util.FileExists(settingsPath) {
 		return ""
 	}

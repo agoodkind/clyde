@@ -52,12 +52,14 @@ message ListSessionsRequest {}
 message SessionSummary {
   string name = 1;
   string metadata_name = 2;
+  string clyde_uuid = 31;
   string session_id = 3;
   string transcript_path = 4;
   string work_dir = 5;
   int64 created_nanos = 6;
   int64 last_accessed_nanos = 7;
   string parent_session = 8;
+  string parent_clyde_uuid = 32;
   bool is_forked_session = 9;
   bool is_incognito = 10;
   repeated string previous_session_ids = 11;

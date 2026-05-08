@@ -99,7 +99,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(sess.Metadata.ProviderSessionID()).To(Equal(uuid))
 		Expect(sess.Metadata.DisplayTitle).To(Equal("2026-04-12-merry-swan"))
 
-		metaPath := filepath.Join(clydeRoot, "sessions", "2026-04-12-merry-swan", "metadata.json")
+		metaPath := filepath.Join(clydeRoot, "sessions", sess.StorageKey(), "metadata.json")
 		_, statErr := os.Stat(metaPath)
 		Expect(statErr).ToNot(HaveOccurred(), "metadata.json should be written at %s", metaPath)
 	})

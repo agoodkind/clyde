@@ -25,6 +25,14 @@ func resolveSessionName(hookData SessionStartInput, store session.Store, fullFal
 }
 
 func findSessionByUUID(store session.Store, uuid string) (string, error) {
+	sess, err := findSessionByUUIDSession(store, uuid)
+	if err != nil {
+		return "", err
+	}
+	return sess.Name, nil
+}
+
+func findSessionByUUIDSession(store session.Store, uuid string) (*session.Session, error) {
 	sessions, err := store.List()
 	if err != nil {
 		hookLog.Warn("hook.resolve_session.list_failed",
@@ -32,18 +40,18 @@ func findSessionByUUID(store session.Store, uuid string) (string, error) {
 			"subcomponent", "resolve",
 			"err", err,
 		)
-		return "", fmt.Errorf("failed to list sessions: %w", err)
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
 	}
 
 	for _, sess := range sessions {
 		if sess.Metadata.ProviderSessionID() == uuid {
-			return sess.Name, nil
+			return sess, nil
 		}
 	}
 
 	for _, sess := range sessions {
 		if slices.Contains(sess.Metadata.PreviousProviderSessionIDStrings(), uuid) {
-			return sess.Name, nil
+			return sess, nil
 		}
 	}
 
@@ -52,5 +60,5 @@ func findSessionByUUID(store session.Store, uuid string) (string, error) {
 		"subcomponent", "resolve",
 		"session_id", uuid,
 	)
-	return "", fmt.Errorf("no session found with UUID %s", uuid)
+	return nil, fmt.Errorf("no session found with UUID %s", uuid)
 }

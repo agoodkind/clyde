@@ -38,15 +38,16 @@ func (s *stubSessionSettingsStore) SaveSettings(_ string, settings *session.Sett
 
 func TestSessionSettingsFile(t *testing.T) {
 	clydeRoot := t.TempDir()
-	sessionsDir := config.GetSessionsDir(clydeRoot)
-	if err := os.MkdirAll(filepath.Join(sessionsDir, "chat-1"), 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
+	store := session.NewFileStore(clydeRoot)
+	sess := session.NewSession("chat-1", "uuid-1")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
 	}
 	if got := sessionSettingsFile(clydeRoot, "chat-1"); got != "" {
 		t.Fatalf("sessionSettingsFile without file = %q, want empty", got)
 	}
 
-	settingsPath := filepath.Join(sessionsDir, "chat-1", "settings.json")
+	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sess.StorageKey()), "settings.json")
 	if err := os.WriteFile(settingsPath, []byte(`{"remoteControl":true}`), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}

@@ -31,8 +31,8 @@ type Store interface {
 	// Get retrieves a session by name
 	Get(name string) (*Session, error)
 
-	// Rename renames a session: moves the directory, updates metadata Name field,
-	// and updates any child sessions whose ParentSession matches oldName.
+	// Rename renames a session by updating metadata only. Storage stays keyed by
+	// the durable ClydeUUID rather than the mutable session name.
 	Rename(oldName, newName string) error
 
 	// Search returns sessions matching query against name, provider session id,
@@ -170,33 +170,13 @@ func CanonicalWorkspaceRoot(path string) string {
 
 // List returns all sessions, sorted by lastAccessed (most recent first).
 func (fs *FileStore) List() ([]*Session, error) {
-	sessionsDir := config.GetSessionsDir(fs.clydeRoot)
-
-	entries, err := os.ReadDir(sessionsDir)
+	sessions, err := fs.loadStoredSessions()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []*Session{}, nil
-		}
 		return nil, err
-	}
-
-	var sessions []*Session
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		session, err := fs.Get(entry.Name())
-		if err != nil {
-			// Skip sessions that can't be loaded
-			continue
-		}
-		sessions = append(sessions, session)
 	}
 
 	sessions = dedupeSessionsByIdentity(sessions)
 
-	// Sort by lastAccessed (most recent first)
 	sort.SliceStable(sessions, func(i, j int) bool {
 		if sessions[i].Metadata.LastAccessed.Equal(sessions[j].Metadata.LastAccessed) {
 			return sessions[i].Name < sessions[j].Name
@@ -260,30 +240,7 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
-
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	if !util.DirExists(sessionDir) {
-		return nil, fmt.Errorf("session '%s' not found", name)
-	}
-
-	metadataPath := filepath.Join(sessionDir, metadataFile)
-	var metadata Metadata
-	if err := util.ReadJSON(metadataPath, &metadata); err != nil {
-		sessionLog.Warn("session.store.metadata_read_failed",
-			"component", "session",
-			"subcomponent", "store",
-			"session", name,
-			"path", metadataPath,
-			"err", err,
-		)
-		return nil, fmt.Errorf("failed to read session metadata: %w", err)
-	}
-	metadata.NormalizeProviderState()
-
-	return &Session{
-		Name:     name,
-		Metadata: metadata,
-	}, nil
+	return fs.findSessionByName(name)
 }
 
 // Search returns sessions matching query against name, provider session id,
@@ -356,18 +313,11 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 		"session", adopted.Name,
 		"session_id", adopted.Metadata.ProviderSessionID(),
 		"display_title", adopted.Metadata.DisplayTitle,
+		"clyde_uuid", adopted.Metadata.ClydeUUID,
 	)
-	// Re-run tiers 1-3 once against the now-adopted set. In the common
-	// case tier 1 will hit directly because the adopted Name equals the
-	// query. When the query was a UUID the adopted Name differs; tier 2
-	// picks it up.
 	if sess := fs.resolveFromStore(query); sess != nil {
 		return sess, nil
 	}
-	// Fallback: the adopter's Name may not exact-match the query string
-	// (for example the query was a bare UUID and tier 2 cannot locate
-	// the session because the cached List is now stale). Return the
-	// freshly adopted session directly; its metadata is authoritative.
 	return adopted, nil
 }
 
@@ -376,7 +326,6 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 // entry is surfaced through the same lookup chain the caller would have
 // hit if the session had always been registered.
 func (fs *FileStore) resolveFromStore(query string) *Session {
-	// Tier 1: exact name match
 	if sess, err := fs.Get(query); err == nil {
 		sessionResolveLog.Logger().Debug("session.resolve.tier1_hit",
 			"component", "session",
@@ -387,7 +336,6 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 		return sess
 	}
 
-	// Tier 2: exact direct session-ID match
 	sessions, listErr := fs.List()
 	if listErr == nil {
 		for _, sess := range sessions {
@@ -404,7 +352,6 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 		}
 	}
 
-	// Tier 3: substring search (single match only)
 	matches, err := fs.Search(query)
 	if err != nil || len(matches) == 0 {
 		return nil
@@ -506,9 +453,6 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		return nil, fmt.Errorf("adopt: %w", adoptErr)
 	}
 	if len(adopted) == 0 {
-		// AdoptUnknown skipped the candidate (race with another process
-		// that adopted it just now, or scratch/subagent filter fired).
-		// Try one more read from the store before giving up.
 		sessionResolveLog.Logger().Debug("session.resolve.tier4_adopt_skipped",
 			"component", "session",
 			"subcomponent", "resolve",
@@ -522,7 +466,7 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 	}
 
 	stub := adopted[0]
-	return &Session{Name: stub.Name, Metadata: stub.Metadata}, nil
+	return &Session{Name: stub.Name, Metadata: stub.Metadata, storageKey: stub.Metadata.ClydeUUID}, nil
 }
 
 // adoptDisabledReason labels why tier 4 was skipped, for structured
@@ -588,11 +532,11 @@ func exactSessionIDMatchType(sess *Session, query string) string {
 
 // reconcileExisting updates an already-adopted session to reflect the
 // provider-owned observed name seen on the artifact. If the provider contract
-// offers a valid unique registry rename, the session directory is renamed so
-// tier-1 lookups by that name succeed. DisplayTitle is backfilled
+// offers a valid unique registry rename, the session metadata Name is updated
+// so tier-1 lookups by that name succeed. DisplayTitle is backfilled
 // unconditionally so the TUI shows the upstream title even when a rename is
-// not possible. The function returns the session in its final state
-// (post-rename), or the original when no rename was needed.
+// not possible. The function returns the session in its final state, or the
+// original when no rename was needed.
 func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult, query string) (*Session, error) {
 	observedName := match.GetName()
 
@@ -701,8 +645,7 @@ func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryRes
 	return candidate.ProviderSessionID() < current.ProviderSessionID()
 }
 
-// Rename renames a session: moves the directory, updates metadata Name field,
-// and updates any child sessions whose ParentSession matches oldName.
+// Rename renames a session by updating metadata only.
 func (fs *FileStore) Rename(oldName, newName string) error {
 	if err := ValidateName(oldName); err != nil {
 		sessionLog.Warn("session.store.rename_invalid_old_name",
@@ -722,39 +665,15 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 		)
 		return fmt.Errorf("invalid new name: %w", err)
 	}
-	if !fs.Exists(oldName) {
+
+	sess, err := fs.Get(oldName)
+	if err != nil {
 		return fmt.Errorf("session '%s' not found", oldName)
 	}
 	if fs.Exists(newName) {
 		return fmt.Errorf("session '%s' already exists", newName)
 	}
 
-	oldDir := config.GetSessionDir(fs.clydeRoot, oldName)
-	newDir := config.GetSessionDir(fs.clydeRoot, newName)
-	if err := os.Rename(oldDir, newDir); err != nil {
-		sessionLog.Warn("session.store.rename_dir_failed",
-			"component", "session",
-			"subcomponent", "store",
-			"old_session", oldName,
-			"new_session", newName,
-			"old_dir", oldDir,
-			"new_dir", newDir,
-			"err", err,
-		)
-		return fmt.Errorf("rename session directory: %w", err)
-	}
-
-	// Update metadata Name field in the new location
-	sess, err := fs.Get(newName)
-	if err != nil {
-		sessionLog.Warn("session.store.rename_reload_failed",
-			"component", "session",
-			"subcomponent", "store",
-			"session", newName,
-			"err", err,
-		)
-		return fmt.Errorf("failed to read renamed session: %w", err)
-	}
 	sess.Name = newName
 	sess.Metadata.Name = newName
 	if err := fs.Update(sess); err != nil {
@@ -767,31 +686,27 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 		)
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
-
-	// Update any child sessions that reference oldName as their parent
-	if sessions, listErr := fs.List(); listErr == nil {
-		for _, child := range sessions {
-			if child.Metadata.ParentSession == oldName {
-				child.Metadata.ParentSession = newName
-				_ = fs.Update(child) // best-effort
-			}
-		}
-		return nil
-	}
-	return nil // non-fatal: rename succeeded, parent references not updated
+	return nil
 }
 
 // Create creates a new session folder structure with metadata.
 func (fs *FileStore) Create(session *Session) error {
+	if session == nil {
+		return fmt.Errorf("nil session")
+	}
 	if err := ValidateName(session.Name); err != nil {
 		return err
 	}
-
 	if fs.Exists(session.Name) {
 		return fmt.Errorf("session '%s' already exists", session.Name)
 	}
 
-	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
+	session.Metadata.Name = session.Name
+	dirKey := session.ensureClydeUUID("")
+	sessionDir := config.GetSessionDir(fs.clydeRoot, dirKey)
+	if util.DirExists(sessionDir) {
+		return fmt.Errorf("session storage '%s' already exists", dirKey)
+	}
 	if err := util.EnsureDir(sessionDir); err != nil {
 		sessionLog.Warn("session.store.create_dir_failed",
 			"component", "session",
@@ -815,22 +730,56 @@ func (fs *FileStore) Create(session *Session) error {
 		)
 		return fmt.Errorf("failed to write session metadata: %w", err)
 	}
-
+	session.storageKey = dirKey
 	return nil
 }
 
 // Update updates session metadata.
 func (fs *FileStore) Update(session *Session) error {
+	if session == nil {
+		return fmt.Errorf("nil session")
+	}
 	if err := ValidateName(session.Name); err != nil {
 		return err
 	}
 
-	if !fs.Exists(session.Name) {
-		return fmt.Errorf("session '%s' not found", session.Name)
+	session.Metadata.Name = session.Name
+	currentKey := strings.TrimSpace(session.storageKey)
+	if currentKey == "" {
+		existing, err := fs.findSessionByName(session.Name)
+		if err != nil {
+			return fmt.Errorf("session '%s' not found", session.Name)
+		}
+		currentKey = existing.StorageKey()
+	}
+	targetKey := session.ensureClydeUUID(currentKey)
+	if currentKey == "" {
+		currentKey = targetKey
 	}
 
-	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
-	metadataPath := filepath.Join(sessionDir, metadataFile)
+	currentDir := config.GetSessionDir(fs.clydeRoot, currentKey)
+	targetDir := config.GetSessionDir(fs.clydeRoot, targetKey)
+	if !util.DirExists(currentDir) {
+		return fmt.Errorf("session '%s' not found", session.Name)
+	}
+	if currentKey != targetKey {
+		if util.DirExists(targetDir) {
+			return fmt.Errorf("session storage '%s' already exists", targetKey)
+		}
+		if err := os.Rename(currentDir, targetDir); err != nil {
+			sessionLog.Warn("session.store.migrate_dir_failed",
+				"component", "session",
+				"subcomponent", "store",
+				"session", session.Name,
+				"old_dir", currentDir,
+				"new_dir", targetDir,
+				"err", err,
+			)
+			return fmt.Errorf("migrate session directory: %w", err)
+		}
+	}
+
+	metadataPath := filepath.Join(targetDir, metadataFile)
 	session.Metadata.NormalizeProviderState()
 	if err := util.WriteJSON(metadataPath, session.Metadata); err != nil {
 		sessionLog.Warn("session.store.update_metadata_failed",
@@ -843,6 +792,7 @@ func (fs *FileStore) Update(session *Session) error {
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
 
+	session.storageKey = targetKey
 	return nil
 }
 
@@ -852,18 +802,21 @@ func (fs *FileStore) Delete(name string) error {
 		return err
 	}
 
-	if !fs.Exists(name) {
+	sess, err := fs.findSessionByName(name)
+	if err != nil {
 		return fmt.Errorf("session '%s' not found", name)
 	}
-
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, sess.StorageKey())
 	return util.RemoveAll(sessionDir)
 }
 
 // Exists checks if a session exists.
 func (fs *FileStore) Exists(name string) bool {
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	return util.DirExists(sessionDir)
+	if name == "" {
+		return false
+	}
+	_, err := fs.findSessionByName(name)
+	return err == nil
 }
 
 // LoadSettings loads settings.json for a session (returns nil if not exists).
@@ -872,9 +825,11 @@ func (fs *FileStore) LoadSettings(name string) (*Settings, error) {
 		return nil, err
 	}
 
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	settingsPath := filepath.Join(sessionDir, settingsFile)
-
+	sess, err := fs.findSessionByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("session '%s' not found", name)
+	}
+	settingsPath := filepath.Join(config.GetSessionDir(fs.clydeRoot, sess.StorageKey()), settingsFile)
 	if !util.FileExists(settingsPath) {
 		return nil, nil
 	}
@@ -900,12 +855,108 @@ func (fs *FileStore) SaveSettings(name string, settings *Settings) error {
 		return err
 	}
 
-	if !fs.Exists(name) {
+	sess, err := fs.findSessionByName(name)
+	if err != nil {
 		return fmt.Errorf("session '%s' not found", name)
 	}
-
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	settingsPath := filepath.Join(sessionDir, settingsFile)
-
+	settingsPath := filepath.Join(config.GetSessionDir(fs.clydeRoot, sess.StorageKey()), settingsFile)
 	return util.WriteJSON(settingsPath, settings)
+}
+
+func (fs *FileStore) loadStoredSessions() ([]*Session, error) {
+	sessionsDir := config.GetSessionsDir(fs.clydeRoot)
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []*Session{}, nil
+		}
+		return nil, err
+	}
+
+	sessions := make([]*Session, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sess, err := fs.readSessionFromDir(entry.Name())
+		if err != nil {
+			continue
+		}
+		sessions = append(sessions, sess)
+	}
+	hydrateParentSessionNames(sessions)
+	return sessions, nil
+}
+
+func (fs *FileStore) readSessionFromDir(storageKey string) (*Session, error) {
+	sessionDir := config.GetSessionDir(fs.clydeRoot, storageKey)
+	metadataPath := filepath.Join(sessionDir, metadataFile)
+
+	var metadata Metadata
+	if err := util.ReadJSON(metadataPath, &metadata); err != nil {
+		sessionLog.Warn("session.store.metadata_read_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"storage_key", storageKey,
+			"path", metadataPath,
+			"err", err,
+		)
+		return nil, fmt.Errorf("failed to read session metadata: %w", err)
+	}
+
+	metadata.NormalizeProviderState()
+	name := strings.TrimSpace(metadata.Name)
+	if name == "" {
+		name = storageKey
+	}
+	sess := &Session{
+		Name:       name,
+		Metadata:   metadata,
+		storageKey: storageKey,
+	}
+	if looksLikeUUID(storageKey) && strings.TrimSpace(sess.Metadata.ClydeUUID) == "" {
+		sess.Metadata.ClydeUUID = storageKey
+	}
+	sess.Metadata.Name = sess.Name
+	return sess, nil
+}
+
+func (fs *FileStore) findSessionByName(name string) (*Session, error) {
+	sessions, err := fs.loadStoredSessions()
+	if err != nil {
+		return nil, err
+	}
+	for _, sess := range sessions {
+		if sess.Name == name {
+			return sess, nil
+		}
+	}
+	return nil, fmt.Errorf("session '%s' not found", name)
+}
+
+func hydrateParentSessionNames(sessions []*Session) {
+	if len(sessions) == 0 {
+		return
+	}
+	namesByUUID := make(map[string]string, len(sessions))
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		if uuidValue := strings.TrimSpace(sess.ClydeUUID()); uuidValue != "" {
+			namesByUUID[uuidValue] = sess.Name
+		}
+	}
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		parentUUID := strings.TrimSpace(sess.Metadata.ParentClydeUUID)
+		if parentUUID == "" {
+			continue
+		}
+		if parentName, ok := namesByUUID[parentUUID]; ok {
+			sess.Metadata.ParentSession = parentName
+		}
+	}
 }

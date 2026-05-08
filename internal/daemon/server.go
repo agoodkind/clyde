@@ -1248,6 +1248,17 @@ func globalSettingString(settings map[string]json.RawMessage, key string) string
 	return out
 }
 
+// loadClydeSessionSettings loads settings.json from the clyde global
+// store for the given session name. Returns nil if not found.
+func loadClydeSessionSettings(sessionName string) *session.Settings {
+	store := session.NewFileStore(config.GlobalDataDir())
+	settings, err := store.LoadSettings(sessionName)
+	if err != nil {
+		return nil
+	}
+	return settings
+}
+
 func resolveStoredSession(store *session.FileStore, sessionName, sessionID string) (*session.Session, error) {
 	if store == nil {
 		return nil, nil
@@ -1714,12 +1725,14 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	return &clydev1.SessionSummary{
 		Name:                  sess.Name,
 		MetadataName:          sess.Metadata.Name,
+		ClydeUuid:             sess.ClydeUUID(),
 		SessionId:             sess.Metadata.ProviderSessionID(),
 		TranscriptPath:        sess.Metadata.ProviderTranscriptPath(),
 		WorkDir:               sess.Metadata.WorkDir,
 		CreatedNanos:          sess.Metadata.Created.UnixNano(),
 		LastAccessedNanos:     sess.Metadata.LastAccessed.UnixNano(),
 		ParentSession:         sess.Metadata.ParentSession,
+		ParentClydeUuid:       sess.Metadata.ParentClydeUUID,
 		IsForkedSession:       sess.Metadata.IsForkedSession,
 		IsIncognito:           sess.Metadata.IsIncognito,
 		PreviousSessionIds:    append([]string(nil), sess.Metadata.PreviousProviderSessionIDStrings()...),

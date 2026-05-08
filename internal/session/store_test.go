@@ -333,7 +333,7 @@ var _ = Describe("FileStore", func() {
 			err := store.Create(s)
 			Expect(err).NotTo(HaveOccurred())
 
-			sessionDir := config.GetSessionDir(clydeRoot, "test-session")
+			sessionDir := config.GetSessionDir(clydeRoot, s.StorageKey())
 			settingsPath := filepath.Join(sessionDir, "settings.json")
 
 			Expect(util.FileExists(settingsPath)).To(BeFalse())

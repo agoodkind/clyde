@@ -111,8 +111,9 @@ func autoAdoptSession(
 			sess.Metadata.IsForkedSession = true
 			parentID := header.ForkParent.Normalized().ID
 			if parentID != "" {
-				if parentName, err := findSessionByUUID(store, parentID); err == nil {
-					sess.Metadata.ParentSession = parentName
+				if parentSession, err := findSessionByUUIDSession(store, parentID); err == nil {
+					sess.Metadata.ParentSession = parentSession.Name
+					sess.Metadata.ParentClydeUUID = parentSession.ClydeUUID()
 				}
 			}
 			log.Debug("hook.sessionstart.fork_lineage_captured",

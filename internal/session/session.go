@@ -1,16 +1,24 @@
 package session
 
-import "time"
+import (
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // Session represents a named provider session.
 type Session struct {
 	Name     string
 	Metadata Metadata
+
+	storageKey string
 }
 
 // Metadata represents the session metadata stored in metadata.json.
 type Metadata struct {
 	Name                 string                 `json:"name"`
+	ClydeUUID            string                 `json:"clydeUuid,omitempty"`
 	Provider             ProviderID             `json:"provider,omitempty"`
 	SessionID            string                 `json:"sessionId"`
 	TranscriptPath       string                 `json:"transcriptPath,omitempty"`
@@ -19,6 +27,7 @@ type Metadata struct {
 	Created              time.Time              `json:"created"`
 	LastAccessed         time.Time              `json:"lastAccessed"`
 	ParentSession        string                 `json:"parentSession,omitempty"`
+	ParentClydeUUID      string                 `json:"parentClydeUuid,omitempty"`
 	IsForkedSession      bool                   `json:"isForkedSession"`
 	IsIncognito          bool                   `json:"isIncognito"`
 	PreviousSessionIDs   []string               `json:"previousSessionIds,omitempty"`
@@ -33,11 +42,10 @@ type Metadata struct {
 
 	// DisplayTitle preserves the provider-owned user-facing session title.
 	// It is the human-readable form surfaced in the TUI. The session Name is a
-	// sanitized derivative used as the directory identifier and is what clyde
-	// resume, compact, and other verbs accept. DisplayTitle stays in sync with
-	// the latest provider-observed name seen during scan; the Name only changes
-	// when the reconcile path explicitly applies the provider-owned rename
-	// contract.
+	// sanitized derivative that clyde resume, compact, and other verbs accept.
+	// DisplayTitle stays in sync with the latest provider-observed name seen
+	// during scan, while the stable storage key lives in ClydeUUID so Name can
+	// now be mutable.
 	DisplayTitle string `json:"displayTitle,omitempty"`
 }
 
@@ -92,6 +100,7 @@ func NewSession(name, sessionID string) *Session {
 			IsForkedSession: false,
 		},
 	}
+	sess.ensureClydeUUID("")
 	sess.Metadata.NormalizeProviderState()
 	return sess
 }
@@ -109,6 +118,35 @@ func (s *Session) ProviderID() ProviderID {
 // Identity returns the provider-aware identity for the session.
 func (s *Session) Identity() SessionIdentity {
 	return s.Metadata.Identity(s.Name)
+}
+
+// ClydeUUID returns the durable Clyde-owned identifier for the session when
+// known. Stable storage directories are keyed by this value instead of the
+// mutable session Name.
+func (s *Session) ClydeUUID() string {
+	if s == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(s.Metadata.ClydeUUID); trimmed != "" {
+		return trimmed
+	}
+	if looksLikeUUID(s.storageKey) {
+		return strings.TrimSpace(s.storageKey)
+	}
+	return ""
+}
+
+// StorageKey returns the current directory key for the session's metadata and
+// settings. Legacy sessions may still report their old name-backed directory
+// until they are rewritten into a stable ClydeUUID-backed path.
+func (s *Session) StorageKey() string {
+	if s == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(s.storageKey); trimmed != "" {
+		return trimmed
+	}
+	return s.ClydeUUID()
 }
 
 // SessionProviderCapabilities returns the capabilities for the session provider.
@@ -231,6 +269,38 @@ func (m *Metadata) NormalizeProviderState() {
 		}
 	}
 	m.TranscriptPath = m.ProviderState.Artifacts.TranscriptPath
+}
+
+func (s *Session) ensureClydeUUID(fallbackStorageKey string) string {
+	if s == nil {
+		return ensureMetadataClydeUUID(nil, fallbackStorageKey)
+	}
+	uuidValue := ensureMetadataClydeUUID(&s.Metadata, fallbackStorageKey)
+	if strings.TrimSpace(s.storageKey) == "" && looksLikeUUID(uuidValue) {
+		s.storageKey = uuidValue
+	}
+	return uuidValue
+}
+
+func ensureMetadataClydeUUID(metadata *Metadata, fallbackStorageKey string) string {
+	if metadata == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(metadata.ClydeUUID); trimmed != "" {
+		metadata.ClydeUUID = trimmed
+		return trimmed
+	}
+	if looksLikeUUID(fallbackStorageKey) {
+		metadata.ClydeUUID = strings.TrimSpace(fallbackStorageKey)
+		return metadata.ClydeUUID
+	}
+	metadata.ClydeUUID = uuid.NewString()
+	return metadata.ClydeUUID
+}
+
+func looksLikeUUID(raw string) bool {
+	_, err := uuid.Parse(strings.TrimSpace(raw))
+	return err == nil
 }
 
 // SetProviderTranscriptPath updates the provider-owned primary transcript/log

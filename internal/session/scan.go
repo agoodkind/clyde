@@ -37,6 +37,11 @@ type AdoptedSession struct {
 	Metadata Metadata
 }
 
+type knownSessionIdentity struct {
+	Name      string
+	ClydeUUID string
+}
+
 // scratchDirSuffixes lists workspace-root path fragments produced by
 // clyde-internal subprocess invocations. Discovery skips any
 // transcript whose cwd matches one of these so the user's session
@@ -167,8 +172,9 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		}
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {
-			if parentName, ok := known[r.ParentProviderSessionKey()]; ok {
-				md.ParentSession = parentName
+			if parentIdentity, ok := known[r.ParentProviderSessionKey()]; ok {
+				md.ParentSession = parentIdentity.Name
+				md.ParentClydeUUID = parentIdentity.ClydeUUID
 			}
 		}
 		fi, err := os.Stat(r.PrimaryArtifactPath())
@@ -215,7 +221,10 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			"display_title", r.GetName(),
 		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
-		known[r.ProviderSessionKey()] = name
+		known[r.ProviderSessionKey()] = knownSessionIdentity{
+			Name:      name,
+			ClydeUUID: sess.ClydeUUID(),
+		}
 	}
 	sessionAdoptLog.Logger().Debug("session.adopt.completed",
 		"component", "session",
@@ -271,16 +280,19 @@ func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) 
 	return fallback, "workspace_uuid_fallback"
 }
 
-func buildKnownIdentitySet(store *FileStore) (map[string]string, error) {
+func buildKnownIdentitySet(store *FileStore) (map[string]knownSessionIdentity, error) {
 	all, err := store.List()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string, len(all)*2)
+	out := make(map[string]knownSessionIdentity, len(all)*2)
 	for _, s := range all {
 		for _, id := range HistoricalIdentities(s) {
 			if key := id.Key(); key != "" {
-				out[key] = s.Name
+				out[key] = knownSessionIdentity{
+					Name:      s.Name,
+					ClydeUUID: s.ClydeUUID(),
+				}
 			}
 		}
 	}
