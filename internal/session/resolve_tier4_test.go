@@ -30,12 +30,8 @@ func (name tier4TestName) GetName() string {
 }
 
 func (name tier4TestName) Rename(_ string, taken map[string]bool) string {
-	sanitized := Sanitize(name.value)
-	if sanitized == "" {
-		return ""
-	}
-	candidate := UniqueName(sanitized, taken)
-	if candidate == "" || ValidateName(candidate) != nil {
+	candidate := UniqueDisplayName(name.value, taken)
+	if candidate == "" || ValidateDisplayName(candidate) != nil {
 		return ""
 	}
 	return candidate

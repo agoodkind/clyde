@@ -17,15 +17,16 @@ func (name CustomTitleName) GetName() string {
 	return strings.TrimSpace(name.Title)
 }
 
-// Rename returns the registry-safe Clyde session name derived from the current
-// Claude custom title, or "" when the title is absent or unusable.
+// GetDisplayTitle returns the exact human-visible Claude custom title.
+func (name CustomTitleName) GetDisplayTitle() string {
+	return name.GetName()
+}
+
+// Rename returns the exact Clyde session name derived from the current Claude
+// custom title, or "" when the title is absent or unusable.
 func (name CustomTitleName) Rename(_ string, taken map[string]bool) string {
-	sanitized := session.Sanitize(name.GetName())
-	if sanitized == "" {
-		return ""
-	}
-	candidate := session.UniqueName(sanitized, taken)
-	if candidate == "" || session.ValidateName(candidate) != nil {
+	candidate := session.UniqueDisplayName(name.GetName(), taken)
+	if candidate == "" || session.ValidateDisplayName(candidate) != nil {
 		return ""
 	}
 	return candidate

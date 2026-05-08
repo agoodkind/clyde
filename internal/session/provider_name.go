@@ -2,17 +2,15 @@ package session
 
 import "strings"
 
-// ProviderSessionName lets a provider expose a discovered upstream title.
-// Rename remains for compatibility with providers that still know how to build
-// legacy slug aliases, but session-domain adoption now prefers exact display
-// names plus stable IDs.
+// ProviderSessionName lets a provider expose a discovered upstream title and
+// project it into Clyde's exact human-visible session-name policy.
 type ProviderSessionName interface {
 	GetName() string
 	Rename(currentName string, taken map[string]bool) string
 }
 
 // ProviderSessionDisplayTitle lets a provider expose the exact human-visible
-// title separately from any legacy slug alias.
+// title separately from any boundary-specific fallback alias.
 type ProviderSessionDisplayTitle interface {
 	GetDisplayTitle() string
 }
@@ -37,8 +35,8 @@ func (r DiscoveryResult) DisplayTitle() string {
 	return r.GetName()
 }
 
-// Rename asks the provider-owned naming contract for the legacy registry alias,
-// or "" when no compatibility alias is available.
+// Rename asks the provider-owned naming contract for an exact Clyde session
+// name, or "" when no provider-owned name is available.
 func (r DiscoveryResult) Rename(currentName string, taken map[string]bool) string {
 	if r.NameContract == nil {
 		return ""

@@ -24,15 +24,11 @@ func (name ThreadName) GetDisplayTitle() string {
 	return strings.TrimSpace(name.Name)
 }
 
-// Rename returns the registry-safe Clyde session name derived from the current
-// Codex thread name, or "" when the name is absent or unusable.
+// Rename returns the exact Clyde session name derived from the current Codex
+// thread name, or "" when the name is absent or unusable.
 func (name ThreadName) Rename(_ string, taken map[string]bool) string {
-	sanitized := session.Sanitize(name.GetName())
-	if sanitized == "" {
-		return ""
-	}
-	candidate := session.UniqueName(sanitized, taken)
-	if candidate == "" || session.ValidateName(candidate) != nil {
+	candidate := session.UniqueDisplayName(name.GetName(), taken)
+	if candidate == "" || session.ValidateDisplayName(candidate) != nil {
 		return ""
 	}
 	return candidate
