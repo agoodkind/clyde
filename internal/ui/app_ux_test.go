@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -43,7 +44,7 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 	block := make(chan struct{})
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
 		<-block
 		return SessionDetail{Model: "opus"}, nil
 	}
@@ -540,7 +541,7 @@ func TestUX_OpenOptionsModalStatsRefreshAfterDetailLoad(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
 		return SessionDetail{
 			Model:                 "opus",
 			TranscriptStatsLoaded: true,
@@ -590,7 +591,7 @@ func TestUX_ReturnPromptStatsRefreshAfterSessionListChanges(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
 		return SessionDetail{
 			Model:                 "opus",
 			TranscriptStatsLoaded: true,
@@ -792,7 +793,7 @@ func TestUX_OpenExportOptionsDoesNotBlockOnExportStats(t *testing.T) {
 	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
-	a.cb.LoadExportStats = func(*session.Session) (SessionExportStats, error) {
+	a.cb.LoadExportStats = func(_ context.Context, _ *session.Session) (SessionExportStats, error) {
 		<-block
 		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
 	}
@@ -820,7 +821,7 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
-	a.cb.LoadExportStats = func(*session.Session) (SessionExportStats, error) {
+	a.cb.LoadExportStats = func(_ context.Context, _ *session.Session) (SessionExportStats, error) {
 		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
 	}
 
@@ -953,7 +954,7 @@ func TestUX_RegistrySessionUpdateAppliesWithoutSnapshotReload(t *testing.T) {
 	defer cleanup()
 
 	listCalls := 0
-	a.cb.ListSessions = func() (SessionSnapshot, error) {
+	a.cb.ListSessions = func(_ context.Context) (SessionSnapshot, error) {
 		listCalls++
 		return SessionSnapshot{}, nil
 	}

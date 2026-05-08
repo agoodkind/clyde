@@ -28,11 +28,11 @@ func TestRequestSessionsAsync_CtxCancelDropsInterrupt(t *testing.T) {
 	)
 
 	cb := AppCallbacks{
-		ListSessions: func() (SessionSnapshot, error) {
+		ListSessions: func(cbCtx context.Context) (SessionSnapshot, error) {
 			close(callbackEnteredAt)
-			<-ctx.Done()
+			<-cbCtx.Done()
 			observedMu.Lock()
-			observedErr = ctx.Err()
+			observedErr = cbCtx.Err()
 			observedMu.Unlock()
 			return SessionSnapshot{}, nil
 		},
@@ -111,11 +111,11 @@ func TestLoadDetailAsync_CtxCancelDropsInterrupt(t *testing.T) {
 	)
 
 	cb := AppCallbacks{
-		GetSessionDetail: func(*session.Session) (SessionDetail, error) {
+		GetSessionDetail: func(cbCtx context.Context, _ *session.Session) (SessionDetail, error) {
 			close(callbackEnteredAt)
-			<-ctx.Done()
+			<-cbCtx.Done()
 			observedMu.Lock()
-			observedErr = ctx.Err()
+			observedErr = cbCtx.Err()
 			observedMu.Unlock()
 			return SessionDetail{}, nil
 		},
