@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	// MinNameLength is the minimum allowed session name length
+	// MinNameLength is the minimum allowed legacy slug alias length.
 	MinNameLength = 2
 
-	// MaxNameLength is the maximum allowed session name length
+	// MaxNameLength is the maximum allowed legacy slug alias length.
 	MaxNameLength = 64
 
 	// MinDisplayNameLength is the minimum allowed exact display name length.
@@ -24,22 +24,24 @@ const (
 )
 
 var (
-	// sessionNameRegex validates session name format:
+	// sessionNameRegex validates the legacy slug alias format:
 	// - Must start and end with alphanumeric (lowercase)
 	// - Can contain hyphens in the middle
 	// - No consecutive hyphens
 	sessionNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
-	// ErrInvalidName is returned when session name validation fails
+	// ErrInvalidName is returned when legacy slug alias validation fails.
 	ErrInvalidName = errors.New("invalid session name")
 
 	// ErrInvalidDisplayName is returned when exact display-name validation fails.
 	ErrInvalidDisplayName = errors.New("invalid display name")
 )
 
-// ValidateName checks if a legacy slug session name is valid.
-// Returns an error if the name is invalid, with details about why.
-func ValidateName(name string) error {
+// ValidateLegacySlugName checks whether name matches the pre-ClydeUUID slug
+// alias format. It is a compatibility policy for migration and hook-boundary
+// inputs only; session-domain create, lookup, rename, and parent linkage use
+// exact display names plus stable ClydeUUID/provider identity instead.
+func ValidateLegacySlugName(name string) error {
 	if len(name) < MinNameLength {
 		return fmt.Errorf("%w: name must be at least %d characters", ErrInvalidName, MinNameLength)
 	}
@@ -58,6 +60,14 @@ func ValidateName(name string) error {
 	}
 
 	return nil
+}
+
+// ValidateName checks if a legacy slug alias is valid.
+//
+// Deprecated: use ValidateLegacySlugName for compatibility or migration code.
+// New session-domain code should use ValidateDisplayName.
+func ValidateName(name string) error {
+	return ValidateLegacySlugName(name)
 }
 
 // ValidateDisplayName checks whether name is safe to store as Clyde's exact
@@ -90,14 +100,11 @@ func ValidateDisplayName(name string) error {
 	return nil
 }
 
-// Sanitize converts an arbitrary string into a valid session name or
-// returns "" when the input has no usable alphanumeric content. It
-// lowercases the input, replaces every non [a-z0-9] rune with a hyphen,
-// collapses runs of hyphens, trims edge hyphens, and truncates to
-// MaxNameLength. Callers use this to map a provider-owned user-facing title
-// into a clyde session Name. A return of "" signals that the caller should
-// fall back to another naming strategy.
-func Sanitize(raw string) string {
+// SanitizeLegacySlugName converts an arbitrary string into a legacy slug alias
+// or returns "" when the input has no usable alphanumeric content. This helper
+// exists for compatibility-only boundaries that still need the old
+// lowercase-kebab format; it is not the authoritative session-name policy.
+func SanitizeLegacySlugName(raw string) string {
 	if raw == "" {
 		return ""
 	}
@@ -119,15 +126,23 @@ func Sanitize(raw string) string {
 	if len(out) > MaxNameLength {
 		out = strings.TrimRight(out[:MaxNameLength], "-")
 	}
-	if ValidateName(out) != nil {
+	if ValidateLegacySlugName(out) != nil {
 		return ""
 	}
 	return out
 }
 
+// Sanitize converts an arbitrary string into a legacy slug alias.
+//
+// Deprecated: use SanitizeLegacySlugName for compatibility or migration code.
+// New session-domain code should preserve exact display names instead.
+func Sanitize(raw string) string {
+	return SanitizeLegacySlugName(raw)
+}
+
 // collapseHyphens replaces every run of consecutive hyphens with a
 // single hyphen. Used by Sanitize to meet the no-consecutive-hyphens
-// rule enforced by ValidateName.
+// rule enforced by ValidateLegacySlugName.
 func collapseHyphens(s string) string {
 	if !strings.Contains(s, "--") {
 		return s
@@ -154,13 +169,9 @@ func collapseHyphens(s string) string {
 // number of same-base sessions a user would ever create.
 const NameCollisionMax = 1000
 
-// UniqueName returns base if it is not in taken, otherwise appends a
-// numeric suffix until the result is unique. Returns base unchanged when
-// the collision loop is exhausted; callers should treat that as a
-// fall-through signal. Truncates the base when a suffix would push the
-// combined length over MaxNameLength so the returned name always passes
-// ValidateName.
-func UniqueName(base string, taken map[string]bool) string {
+// UniqueLegacySlugName returns base if it is not in taken, otherwise appends a
+// numeric suffix until the result is unique. It is for legacy slug aliases only.
+func UniqueLegacySlugName(base string, taken map[string]bool) string {
 	if base == "" {
 		return ""
 	}
@@ -179,6 +190,14 @@ func UniqueName(base string, taken map[string]bool) string {
 		}
 	}
 	return base
+}
+
+// UniqueName returns a unique legacy slug alias.
+//
+// Deprecated: use UniqueLegacySlugName for compatibility or migration code.
+// New session-domain code should use UniqueDisplayName.
+func UniqueName(base string, taken map[string]bool) string {
+	return UniqueLegacySlugName(base, taken)
 }
 
 // UniqueDisplayName returns base if it is not taken, otherwise appends a

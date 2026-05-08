@@ -232,7 +232,7 @@ type ContextMessageProvider interface {
 	RecentContextMessages(sess *Session, limit, maxLen int) []ContextMessage
 }
 
-// NameProvider lets providers own how session names are observed and
+// NameProvider lets providers own how exact display names are observed and
 // mutated while generic callers speak only in terms of logical sessions.
 type NameProvider interface {
 	GetSessionName(ctx context.Context, sess *Session) (string, error)

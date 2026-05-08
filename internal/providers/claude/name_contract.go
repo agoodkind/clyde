@@ -22,7 +22,7 @@ func (name CustomTitleName) GetDisplayTitle() string {
 	return name.GetName()
 }
 
-// Rename returns the exact Clyde session name derived from the current Claude
+// Rename returns the exact Clyde display name derived from the current Claude
 // custom title, or "" when the title is absent or unusable.
 func (name CustomTitleName) Rename(_ string, taken map[string]bool) string {
 	candidate := session.UniqueDisplayName(name.GetName(), taken)

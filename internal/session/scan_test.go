@@ -148,11 +148,11 @@ var _ = Describe("AdoptUnknown", func() {
 		parentUUID := "aaaaaaaa-1111-2222-3333-444444444444"
 		childUUID := "bbbbbbbb-1111-2222-3333-444444444444"
 		Expect(store.Create(&session.Session{
-			Name: "parent-session",
+			Name: "Parent Exact Name",
 			Metadata: session.Metadata{
-				Name:         "parent-session",
+				Name:         "Parent Exact Name",
 				SessionID:    parentUUID,
-				DisplayTitle: "Parent Session",
+				DisplayTitle: "Stale Provider Title",
 			},
 		})).To(Succeed())
 		dir := filepath.Join(projectsRoot, "-Users-agoodkind-Sites-foo")
@@ -167,7 +167,7 @@ var _ = Describe("AdoptUnknown", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(adopted).To(HaveLen(1))
 		Expect(adopted[0].Metadata.IsForkedSession).To(BeTrue())
-		Expect(adopted[0].Metadata.ParentSession).To(Equal("Parent Session"))
+		Expect(adopted[0].Metadata.ParentSession).To(Equal("Parent Exact Name"))
 		Expect(adopted[0].Metadata.ParentClydeUUID).ToNot(BeEmpty())
 	})
 

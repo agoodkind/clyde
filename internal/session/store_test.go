@@ -253,6 +253,29 @@ var _ = Describe("FileStore", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(sessions).To(HaveLen(2))
 		})
+
+		It("hydrates parent display names from parent ClydeUUID and exact session name", func() {
+			parent := session.NewSession("Parent Current Name", "parent-provider-id")
+			parent.Metadata.DisplayTitle = "Stale Provider Title"
+			Expect(store.Create(parent)).To(Succeed())
+
+			child := session.NewSession("Child Session", "child-provider-id")
+			child.Metadata.IsForkedSession = true
+			child.Metadata.ParentClydeUUID = parent.ClydeUUID()
+			child.Metadata.ParentSession = "Old Parent Label"
+			Expect(store.Create(child)).To(Succeed())
+
+			sessions, err := store.List()
+			Expect(err).NotTo(HaveOccurred())
+			var reloadedChild *session.Session
+			for _, candidate := range sessions {
+				if candidate.Name == "Child Session" {
+					reloadedChild = candidate
+				}
+			}
+			Expect(reloadedChild).ToNot(BeNil())
+			Expect(reloadedChild.Metadata.ParentSession).To(Equal("Parent Current Name"))
+		})
 	})
 
 	Describe("Resolve", func() {

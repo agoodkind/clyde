@@ -7,7 +7,7 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-var _ = Describe("ValidateName", func() {
+var _ = Describe("ValidateLegacySlugName", func() {
 	Context("valid names", func() {
 		It("should accept simple lowercase names", func() {
 			validNames := []string{
@@ -20,7 +20,7 @@ var _ = Describe("ValidateName", func() {
 			}
 
 			for _, name := range validNames {
-				err := session.ValidateName(name)
+				err := session.ValidateLegacySlugName(name)
 				Expect(err).NotTo(HaveOccurred(), "name %s should be valid", name)
 			}
 		})
@@ -34,7 +34,7 @@ var _ = Describe("ValidateName", func() {
 			}
 
 			for _, name := range validNames {
-				err := session.ValidateName(name)
+				err := session.ValidateLegacySlugName(name)
 				Expect(err).NotTo(HaveOccurred(), "name %s should be valid", name)
 			}
 		})
@@ -42,14 +42,14 @@ var _ = Describe("ValidateName", func() {
 		It("should accept maximum length names", func() {
 			name := "a123456789012345678901234567890123456789012345678901234567890123"
 			Expect(len(name)).To(Equal(64))
-			err := session.ValidateName(name)
+			err := session.ValidateLegacySlugName(name)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 
 	Context("invalid names", func() {
 		It("should reject names that are too short", func() {
-			err := session.ValidateName("a")
+			err := session.ValidateLegacySlugName("a")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("at least 2 characters"))
 		})
@@ -57,7 +57,7 @@ var _ = Describe("ValidateName", func() {
 		It("should reject names that are too long", func() {
 			name := "a1234567890123456789012345678901234567890123456789012345678901234"
 			Expect(len(name)).To(Equal(65))
-			err := session.ValidateName(name)
+			err := session.ValidateLegacySlugName(name)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("at most 64 characters"))
 		})
@@ -70,7 +70,7 @@ var _ = Describe("ValidateName", func() {
 			}
 
 			for _, name := range invalidNames {
-				err := session.ValidateName(name)
+				err := session.ValidateLegacySlugName(name)
 				Expect(err).To(HaveOccurred(), "name %s should be invalid", name)
 			}
 		})
@@ -84,7 +84,7 @@ var _ = Describe("ValidateName", func() {
 			}
 
 			for _, name := range invalidNames {
-				err := session.ValidateName(name)
+				err := session.ValidateLegacySlugName(name)
 				Expect(err).To(HaveOccurred(), "name %s should be invalid", name)
 			}
 		})
@@ -97,7 +97,7 @@ var _ = Describe("ValidateName", func() {
 			}
 
 			for _, name := range invalidNames {
-				err := session.ValidateName(name)
+				err := session.ValidateLegacySlugName(name)
 				Expect(err).To(HaveOccurred(), "name %s should be invalid", name)
 				Expect(err.Error()).To(ContainSubstring("consecutive hyphens"))
 			}
@@ -113,10 +113,14 @@ var _ = Describe("ValidateName", func() {
 			}
 
 			for _, name := range invalidNames {
-				err := session.ValidateName(name)
+				err := session.ValidateLegacySlugName(name)
 				Expect(err).To(HaveOccurred(), "name %s should be invalid", name)
 			}
 		})
+	})
+
+	It("keeps ValidateName as a deprecated compatibility wrapper", func() {
+		Expect(session.ValidateName("legacy-slug")).To(Succeed())
 	})
 })
 

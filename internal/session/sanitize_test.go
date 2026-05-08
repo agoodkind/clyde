@@ -7,13 +7,13 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-var _ = Describe("Sanitize", func() {
-	DescribeTable("produces a valid session name or empty string",
+var _ = Describe("SanitizeLegacySlugName", func() {
+	DescribeTable("produces a valid legacy slug alias or empty string",
 		func(raw string, expected string) {
-			got := session.Sanitize(raw)
+			got := session.SanitizeLegacySlugName(raw)
 			Expect(got).To(Equal(expected))
 			if got != "" {
-				Expect(session.ValidateName(got)).To(Succeed(), "sanitize output %q must pass ValidateName", got)
+				Expect(session.ValidateLegacySlugName(got)).To(Succeed(), "sanitize output %q must pass ValidateLegacySlugName", got)
 			}
 		},
 		Entry("empty input", "", ""),
@@ -29,26 +29,34 @@ var _ = Describe("Sanitize", func() {
 		Entry("long string truncates to 64 chars", "a-very-long-name-that-exceeds-the-sixty-four-character-maximum-by-a-lot", "a-very-long-name-that-exceeds-the-sixty-four-character-maximum-b"),
 		Entry("trailing hyphen after truncation trims", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-------bbb", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbb"),
 	)
+
+	It("keeps Sanitize as a deprecated compatibility wrapper", func() {
+		Expect(session.Sanitize("Merry Swan")).To(Equal("merry-swan"))
+	})
 })
 
-var _ = Describe("UniqueName", func() {
+var _ = Describe("UniqueLegacySlugName", func() {
 	It("returns the base when it is not taken", func() {
 		taken := map[string]bool{"other": true}
-		Expect(session.UniqueName("foo", taken)).To(Equal("foo"))
+		Expect(session.UniqueLegacySlugName("foo", taken)).To(Equal("foo"))
 	})
 
 	It("appends a numeric suffix when the base collides", func() {
 		taken := map[string]bool{"foo": true}
-		Expect(session.UniqueName("foo", taken)).To(Equal("foo-2"))
+		Expect(session.UniqueLegacySlugName("foo", taken)).To(Equal("foo-2"))
 	})
 
 	It("keeps climbing past the first collision", func() {
 		taken := map[string]bool{"foo": true, "foo-2": true, "foo-3": true}
-		Expect(session.UniqueName("foo", taken)).To(Equal("foo-4"))
+		Expect(session.UniqueLegacySlugName("foo", taken)).To(Equal("foo-4"))
 	})
 
 	It("returns empty when the base is empty", func() {
-		Expect(session.UniqueName("", map[string]bool{})).To(Equal(""))
+		Expect(session.UniqueLegacySlugName("", map[string]bool{})).To(Equal(""))
+	})
+
+	It("keeps UniqueName as a deprecated compatibility wrapper", func() {
+		Expect(session.UniqueName("foo", map[string]bool{"foo": true})).To(Equal("foo-2"))
 	})
 })
 

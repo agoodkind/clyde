@@ -38,8 +38,8 @@ type AdoptedSession struct {
 }
 
 type knownSessionIdentity struct {
-	DisplayName string
-	ClydeUUID   string
+	Name      string
+	ClydeUUID string
 }
 
 // scratchDirSuffixes lists workspace-root path fragments produced by
@@ -185,7 +185,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {
 			if parentIdentity, ok := known[r.ParentProviderSessionKey()]; ok {
-				md.ParentSession = parentIdentity.DisplayName
+				md.ParentSession = parentIdentity.Name
 				md.ParentClydeUUID = parentIdentity.ClydeUUID
 			}
 		}
@@ -234,8 +234,8 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
 		known[r.ProviderSessionKey()] = knownSessionIdentity{
-			DisplayName: SessionDisplayName(sess),
-			ClydeUUID:   sess.ClydeUUID(),
+			Name:      sess.Name,
+			ClydeUUID: sess.ClydeUUID(),
 		}
 	}
 	sessionAdoptLog.Logger().Debug("session.adopt.completed",
@@ -252,13 +252,13 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 	return adopted, nil
 }
 
-// pickAdoptedName chooses a session name for an adopted provider session. It
-// prefers the provider-owned exact display title so clyde verbs accept the
-// upstream user-facing title directly. Collisions with existing names are
-// resolved with a human-visible suffix. When the provider does not offer a
-// usable display name, the function falls back to the workspace-plus-UUID
-// compatibility scheme in uniqueAdoptedName. The second return value is a short
-// label of the source used, for structured logs.
+// pickAdoptedName chooses an exact display name for an adopted provider
+// session. It prefers the provider-owned exact display title so clyde verbs
+// accept the upstream user-facing title directly. Collisions with existing
+// names are resolved with a human-visible suffix. When the provider does not
+// offer a usable display name, the function falls back to the
+// workspace-plus-UUID compatibility scheme in uniqueAdoptedName. The second
+// return value is a short label of the source used, for structured logs.
 func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) {
 	observedName := r.DisplayTitle()
 	if candidate := UniqueDisplayName(observedName, taken); candidate != "" {
@@ -302,8 +302,8 @@ func buildKnownIdentitySet(store *FileStore) (map[string]knownSessionIdentity, e
 		for _, id := range HistoricalIdentities(s) {
 			if key := id.Key(); key != "" {
 				out[key] = knownSessionIdentity{
-					DisplayName: SessionDisplayName(s),
-					ClydeUUID:   s.ClydeUUID(),
+					Name:      s.Name,
+					ClydeUUID: s.ClydeUUID(),
 				}
 			}
 		}
@@ -323,14 +323,14 @@ func buildExistingNameSet(store *FileStore) (map[string]bool, error) {
 	return out, nil
 }
 
-// uniqueAdoptedName generates a registry-safe name for an adopted provider
-// artifact. The base is a sanitized basename of the workspace root joined with
-// a short provider session id prefix. Collisions are resolved with the shared
-// UniqueName helper.
+// uniqueAdoptedName generates a compatibility fallback name for an adopted
+// provider artifact when the provider did not expose a usable exact display
+// title. The base is a legacy-safe workspace basename joined with a short
+// provider session id prefix.
 func uniqueAdoptedName(r DiscoveryResult, taken map[string]bool) string {
 	base := workspaceBaseName(r.WorkspaceRoot)
 	short := safeShortProviderSessionID(r.ProviderSessionID())
-	return UniqueName(fmt.Sprintf("%s-%s", base, short), taken)
+	return UniqueLegacySlugName(fmt.Sprintf("%s-%s", base, short), taken)
 }
 
 func workspaceBaseName(root string) string {

@@ -163,9 +163,9 @@ func (s *Session) StorageKey() string {
 	return s.ClydeUUID()
 }
 
-// SessionDisplayName returns the exact human-visible name for sess. It prefers
-// DisplayTitle for legacy rows whose Name is still a slug alias, then falls
-// back to Name for rows already migrated to exact names.
+// SessionDisplayName returns the best user-facing label for compatibility UI
+// surfaces. It is not an identity source: parent linkage and storage use
+// ClydeUUID/provider ids, and current session-domain names use sess.Name.
 func SessionDisplayName(sess *Session) string {
 	if sess == nil {
 		return ""

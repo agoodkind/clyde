@@ -24,7 +24,7 @@ func (name ThreadName) GetDisplayTitle() string {
 	return strings.TrimSpace(name.Name)
 }
 
-// Rename returns the exact Clyde session name derived from the current Codex
+// Rename returns the exact Clyde display name derived from the current Codex
 // thread name, or "" when the name is absent or unusable.
 func (name ThreadName) Rename(_ string, taken map[string]bool) string {
 	candidate := session.UniqueDisplayName(name.GetName(), taken)

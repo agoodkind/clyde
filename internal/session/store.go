@@ -32,7 +32,7 @@ type Store interface {
 	Get(name string) (*Session, error)
 
 	// Rename renames a session by updating metadata only. Storage stays keyed by
-	// the durable ClydeUUID rather than the mutable session name.
+	// the durable ClydeUUID rather than the mutable exact display name.
 	Rename(oldName, newName string) error
 
 	// Search returns sessions matching query against exact display name,
@@ -1070,7 +1070,7 @@ func hydrateParentSessionNames(sessions []*Session) {
 			continue
 		}
 		if uuidValue := strings.TrimSpace(sess.ClydeUUID()); uuidValue != "" {
-			namesByUUID[uuidValue] = SessionDisplayName(sess)
+			namesByUUID[uuidValue] = sess.Name
 		}
 	}
 	for _, sess := range sessions {
