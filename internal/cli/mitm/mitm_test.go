@@ -22,6 +22,13 @@ func TestNewCmdRegistersMitmParent(t *testing.T) {
 	if statusCmd == nil || statusCmd.Name() != "status" {
 		t.Fatalf("status subcommand missing; got %v", statusCmd)
 	}
+	trustCmd, _, err := cmd.Find([]string{"trust"})
+	if err != nil {
+		t.Fatalf("find trust: %v", err)
+	}
+	if trustCmd == nil || trustCmd.Name() != "trust" {
+		t.Fatalf("trust subcommand missing; got %v", trustCmd)
+	}
 }
 
 func testFactory() *cli.Factory {
