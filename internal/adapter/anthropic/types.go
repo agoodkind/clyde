@@ -99,6 +99,12 @@ type SystemBlock struct {
 // emits via the `signature_delta` SSE event. On replay the wire
 // representation must include `"signature":"<value>"` alongside
 // `"thinking":"<body>"` so Anthropic's signature validation passes.
+//
+// Data carries the opaque base64 payload Anthropic emits inline on a
+// `redacted_thinking` content block start event. On replay the wire
+// representation must include `"data":"<value>"` alongside
+// `"type":"redacted_thinking"` so Anthropic's history validation
+// passes.
 type ContentBlock struct {
 	Type           string          `json:"type"`
 	Text           string          `json:"text,omitempty"`
@@ -112,6 +118,7 @@ type ContentBlock struct {
 	CacheControl   *CacheControl   `json:"cache_control,omitempty"`
 	Thinking       string          `json:"thinking,omitempty"`
 	Signature      string          `json:"signature,omitempty"`
+	Data           string          `json:"data,omitempty"`
 }
 
 // ImageSource describes image bytes or a URL for image content blocks.

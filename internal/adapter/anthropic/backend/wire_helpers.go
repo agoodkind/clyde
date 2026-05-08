@@ -40,6 +40,7 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 				Source:    src,
 				Thinking:  b.Thinking,
 				Signature: b.Signature,
+				Data:      b.Data,
 			}
 			// Defense-in-depth: drop a thinking block only when both
 			// the body and the signature are empty. Anthropic's
