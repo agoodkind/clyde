@@ -311,7 +311,7 @@ func TestSessionDetailNormalizesSettingsModelFallback(t *testing.T) {
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	detail := srv.sessionDetail(store, sess)
+	detail := srv.sessionDetail(context.Background(), store, sess)
 	if detail.GetModel() != "clyde-codex-5.5-xhigh" {
 		t.Fatalf("detail.Model=%q want %q", detail.GetModel(), "clyde-codex-5.5-xhigh")
 	}

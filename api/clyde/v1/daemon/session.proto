@@ -116,6 +116,17 @@ message GetSessionDetailResponse {
   int64 last_activity_nanos = 12;
   string provider = 13;
   ProviderRuntimeBoundary runtime = 14;
+  // Context usage fields mirror SessionSummary so the detail RPC carries
+  // a coherent self-contained snapshot. Populated lazily from the
+  // daemon's context-usage cache. Loaded=false with Status="probing"
+  // means a refresh is in flight and the next detail call should hit
+  // a warm cache.
+  int32 context_total_tokens = 15;
+  int32 context_max_tokens = 16;
+  int32 context_percentage = 17;
+  int32 context_messages_tokens = 18;
+  bool context_usage_loaded = 19;
+  string context_usage_status = 20;
 }
 
 message GetSessionExportStatsRequest {
