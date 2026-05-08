@@ -264,7 +264,7 @@ func (p *CompactPanel) SetBusy(action string, busy bool) {
 
 func (p *CompactPanel) SetUndoResult(res *CompactUndoResult, err error) {
 	if err != nil {
-		p.status = fmt.Sprintf("undo failed: %v", err)
+		p.status = "undo failed: " + polishDaemonError(err)
 		return
 	}
 	p.latestUndo = res
