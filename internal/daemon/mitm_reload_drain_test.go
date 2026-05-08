@@ -1,0 +1,236 @@
+package daemon
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// TestDrainReloadedMITMReportsActiveTunnelsOnIdle exercises the
+// idle-exit path: waitIdle returns 0 so the drain skips its
+// timeout, the drain_complete event fires with active_tunnels:0,
+// and no mitm_drain_timeout warning is emitted.
+func TestDrainReloadedMITMReportsActiveTunnelsOnIdle(t *testing.T) {
+	buf, log := captureSlogJSON()
+	listener := newRecordingListener(t)
+	rt := &daemonRuntime{
+		listener: nil,
+		adapter:  nil,
+		webapp:   nil,
+		mitm: &mitmProcess{
+			cancel:        func() {},
+			drain:         func(context.Context) error { return nil },
+			waitIdle:      func(context.Context) int { return 0 },
+			activeCount:   func() int { return 0 },
+			forceClose:    func() error { return nil },
+			closeListener: listener.Close,
+			done:          nil,
+			lis:           listener,
+			proxy:         nil,
+		},
+		reloadLock: sync.Mutex{},
+	}
+	drainReloadedMITM(log, rt)
+	tally := tallyMITMReloadEvents(t, buf.Bytes())
+	if tally["daemon.reload.mitm_drain_complete.active_tunnels:0"] != 1 {
+		t.Fatalf("expected mitm_drain_complete with active_tunnels:0, got tally=%v", tally)
+	}
+	if tally["daemon.reload.mitm_drain_timeout"] != 0 {
+		t.Fatalf("expected no mitm_drain_timeout on idle path, got tally=%v", tally)
+	}
+}
+
+// TestDrainReloadedMITMForceClosesActiveTunnels exercises the
+// deadline path: waitIdle returns N (matching the design's tunnel-
+// active reload variant). drain runs to completion, force_close
+// fires, and the active_tunnels field on the complete event reflects
+// what the registry held when the deadline elapsed.
+func TestDrainReloadedMITMForceClosesActiveTunnels(t *testing.T) {
+	buf, log := captureSlogJSON()
+	listener := newRecordingListener(t)
+	forceCalled := atomicCounter{}
+	rt := &daemonRuntime{
+		listener: nil,
+		adapter:  nil,
+		webapp:   nil,
+		mitm: &mitmProcess{
+			cancel: func() {},
+			drain: func(context.Context) error {
+				return errors.New("simulated drain timeout")
+			},
+			waitIdle:    func(context.Context) int { return 3 },
+			activeCount: func() int { return 3 },
+			forceClose: func() error {
+				forceCalled.add(1)
+				return nil
+			},
+			closeListener: listener.Close,
+			done:          nil,
+			lis:           listener,
+			proxy:         nil,
+		},
+		reloadLock: sync.Mutex{},
+	}
+	drainReloadedMITM(log, rt)
+	if got := forceCalled.load(); got != 1 {
+		t.Fatalf("force_close: got %d invocations, want 1", got)
+	}
+	tally := tallyMITMReloadEvents(t, buf.Bytes())
+	if tally["daemon.reload.mitm_drain_timeout"] == 0 {
+		t.Fatalf("expected mitm_drain_timeout on deadline path, got tally=%v", tally)
+	}
+}
+
+// captureSlogJSON returns a buffer-backed JSON logger so tests can
+// assert on emitted records.
+func captureSlogJSON() (*bytes.Buffer, *slog.Logger) {
+	buf := &bytes.Buffer{}
+	guard := &mitmReloadSyncWriter{w: buf, mu: sync.Mutex{}}
+	handler := slog.NewJSONHandler(guard, &slog.HandlerOptions{
+		Level:       slog.LevelDebug,
+		AddSource:   false,
+		ReplaceAttr: nil,
+	})
+	return buf, slog.New(handler)
+}
+
+// tallyMITMReloadEvents parses each JSON line and bins it by
+// message + relevant attribute combinations the assertions need.
+func tallyMITMReloadEvents(t *testing.T, raw []byte) map[string]int {
+	t.Helper()
+	tally := make(map[string]int)
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var record struct {
+			Msg           string `json:"msg"`
+			ActiveTunnels *int   `json:"active_tunnels,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode slog line %q: %v", line, err)
+		}
+		tally[record.Msg]++
+		if record.ActiveTunnels != nil {
+			tally[record.Msg+".active_tunnels:"+itoa(*record.ActiveTunnels)]++
+		}
+	}
+	return tally
+}
+
+func itoa(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	const digits = "0123456789"
+	negative := value < 0
+	if negative {
+		value = -value
+	}
+	buf := make([]byte, 0, 11)
+	for value > 0 {
+		buf = append(buf, digits[value%10])
+		value /= 10
+	}
+	if negative {
+		buf = append(buf, '-')
+	}
+	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
+		buf[i], buf[j] = buf[j], buf[i]
+	}
+	return string(buf)
+}
+
+type mitmReloadSyncWriter struct {
+	mu sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (s *mitmReloadSyncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+type atomicCounter struct {
+	mu  sync.Mutex
+	val int
+}
+
+func (c *atomicCounter) add(delta int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.val += delta
+}
+
+func (c *atomicCounter) load() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.val
+}
+
+// recordingListener implements net.Listener with a Close that the
+// drain function is expected to invoke. Accept blocks forever; the
+// drain helper never calls Accept on the inherited listener.
+type recordingListener struct {
+	closed *recordingFlag
+	addr   net.Addr
+	done   chan struct{}
+}
+
+type recordingFlag struct {
+	mu sync.Mutex
+	on bool
+}
+
+func (a *recordingFlag) set(b bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.on = b
+}
+
+func newRecordingListener(t *testing.T) *recordingListener {
+	t.Helper()
+	addr, err := net.ResolveTCPAddr("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("resolve addr: %v", err)
+	}
+	return &recordingListener{
+		closed: &recordingFlag{mu: sync.Mutex{}, on: false},
+		addr:   addr,
+		done:   make(chan struct{}),
+	}
+}
+
+func (l *recordingListener) Accept() (net.Conn, error) {
+	<-l.done
+	return nil, errors.New("listener closed")
+}
+
+func (l *recordingListener) Close() error {
+	l.closed.set(true)
+	select {
+	case <-l.done:
+	default:
+		close(l.done)
+	}
+	return nil
+}
+
+func (l *recordingListener) Addr() net.Addr {
+	return l.addr
+}
+
+// Compile-time assertions that ctx aliasing matches expectations.
+var _ context.Context = context.Background()
+
+// Sanity to satisfy time import in tests that do not otherwise use
+// it; remove if a future edit adds a real time-based assertion.
+var _ = time.Second

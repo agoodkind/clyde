@@ -155,6 +155,7 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 		ca:                    nil,
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
+		Tunnels:               newTestTunnelRegistry(),
 		mu:                    sync.RWMutex{},
 		cfg:                   cfg,
 		base:                  "",

@@ -146,6 +146,7 @@ func newHTTPProxyForCaptureTest(t *testing.T, captureDir string, bodyMode string
 		ca:                    nil,
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
+		Tunnels:               newTestTunnelRegistry(),
 		mu:                    sync.RWMutex{},
 		cfg:                   config.MITMConfig{CaptureDir: captureDir, BodyMode: bodyMode},
 		base:                  "http://[::1]",

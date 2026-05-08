@@ -151,12 +151,15 @@ type webAppProcess struct {
 }
 
 type mitmProcess struct {
-	cancel func()
-	drain  func(context.Context) error
-	close  func() error
-	done   chan struct{}
-	lis    net.Listener
-	proxy  *mitm.Proxy
+	cancel        func()
+	drain         func(context.Context) error
+	waitIdle      func(context.Context) int
+	activeCount   func() int
+	forceClose    func() error
+	closeListener func() error
+	done          chan struct{}
+	lis           net.Listener
+	proxy         *mitm.Proxy
 }
 
 type daemonRuntime struct {
@@ -839,6 +842,16 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 	}
 }
 
+// drainReloadedMITM mirrors the adapter reload drain pattern. The
+// listener is closed first (so the replacement daemon owns the
+// bind), then waitIdle polls the tunnel registry. If tunnels are
+// idle when the wait returns, the proxy's Shutdown completes
+// quickly. If they are not (Cloudflare keepalive case), drain runs
+// to its deadline and forceClose runs the registry's force-close
+// fan-out so wedged sockets and capture flocks are released. The
+// active_tunnels field on the complete event lets operators see
+// whether the registry's count was zero on idle exit or N on the
+// deadline path.
 func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) {
 	if rt == nil || rt.mitm == nil {
 		return
@@ -849,8 +862,8 @@ func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) {
 		"component", "daemon",
 		"addr", addr,
 	)
-	if mitmProc.close != nil {
-		if err := mitmProc.close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	if mitmProc.closeListener != nil {
+		if err := mitmProc.closeListener(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Warn("daemon.reload.mitm_listener_close_failed",
 				"component", "daemon",
 				"addr", addr,
@@ -862,20 +875,55 @@ func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
+	finalActive := 0
+	if mitmProc.waitIdle != nil {
+		finalActive = mitmProc.waitIdle(ctx)
+	} else if mitmProc.activeCount != nil {
+		finalActive = mitmProc.activeCount()
+	}
+	if finalActive == 0 {
+		cancel()
+		if mitmProc.forceClose != nil {
+			if err := mitmProc.forceClose(); err != nil {
+				log.Debug("daemon.reload.mitm_idle_force_close_returned_err",
+					"component", "daemon",
+					"addr", addr,
+					"err", err,
+				)
+			}
+		}
+		log.Info("daemon.reload.mitm_drain_complete",
+			"component", "daemon",
+			"addr", addr,
+			"active_tunnels", 0,
+		)
+		return
+	}
 	err := mitmProc.drain(ctx)
 	cancel()
 	if err != nil {
 		log.Warn("daemon.reload.mitm_drain_timeout",
 			"component", "daemon",
 			"addr", addr,
+			"active_tunnels", finalActive,
 			"err", err,
 		)
-		return
+	} else {
+		log.Info("daemon.reload.mitm_drain_complete",
+			"component", "daemon",
+			"addr", addr,
+			"active_tunnels", 0,
+		)
 	}
-	log.Info("daemon.reload.mitm_drain_complete",
-		"component", "daemon",
-		"addr", addr,
-	)
+	if mitmProc.forceClose != nil {
+		if err := mitmProc.forceClose(); err != nil {
+			log.Debug("daemon.reload.mitm_force_close_returned_err",
+				"component", "daemon",
+				"addr", addr,
+				"err", err,
+			)
+		}
+	}
 }
 
 func waitForReplacementDaemon(ctx context.Context, ready io.Reader) error {
@@ -1196,13 +1244,80 @@ func startMITM(log *slog.Logger, inherited net.Listener) (*mitmProcess, error) {
 		}
 	}
 	return &mitmProcess{
-		cancel: cancel,
-		drain:  proxy.Shutdown,
-		close:  lis.Close,
-		done:   done,
-		lis:    lis,
-		proxy:  proxy,
+		cancel:        cancel,
+		drain:         proxy.Shutdown,
+		waitIdle:      mitmTunnelWaitIdle(proxy),
+		activeCount:   mitmTunnelActiveCount(proxy),
+		forceClose:    mitmTunnelForceClose(proxy),
+		closeListener: lis.Close,
+		done:          done,
+		lis:           lis,
+		proxy:         proxy,
 	}, nil
+}
+
+// mitmTunnelActiveCount returns a closure that reports the current
+// tunnel count; it is the MITM analogue of
+// adapter.Server.ActiveRequestCount.
+func mitmTunnelActiveCount(proxy *mitm.Proxy) func() int {
+	return func() int {
+		if proxy == nil || proxy.Tunnels == nil {
+			return 0
+		}
+		return proxy.Tunnels.Count()
+	}
+}
+
+// mitmTunnelWaitIdle polls the tunnel registry's count until it
+// reaches zero or ctx fires. Polling cadence (50ms) matches the
+// adapter Server.WaitForIdle so reload drain timing is symmetric
+// across the two HTTP surfaces. Returns the final count when ctx
+// fires.
+func mitmTunnelWaitIdle(proxy *mitm.Proxy) func(context.Context) int {
+	return func(ctx context.Context) int {
+		if proxy == nil || proxy.Tunnels == nil {
+			return 0
+		}
+		if proxy.Tunnels.Count() == 0 {
+			return 0
+		}
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return proxy.Tunnels.Count()
+			case <-ticker.C:
+				if proxy.Tunnels.Count() == 0 {
+					return 0
+				}
+			}
+		}
+	}
+}
+
+// mitmTunnelForceClose drains the registry against a fresh
+// background-derived context so an already-expired drain ctx does
+// not block force-close. The composite error is logged before being
+// returned so operators see exactly which tunnels failed to close.
+func mitmTunnelForceClose(proxy *mitm.Proxy) func() error {
+	return func() error {
+		if proxy == nil || proxy.Tunnels == nil {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), adapterShutdownWait)
+		defer cancel()
+		result := proxy.Tunnels.Drain(ctx, "mitm.force_close")
+		if len(result.Errors) == 0 {
+			return nil
+		}
+		err := errors.Join(result.Errors...)
+		slog.Warn("daemon.reload.mitm_force_close_errors",
+			"component", "daemon",
+			"err", err,
+		)
+		return err
+	}
 }
 
 func (s *Server) listLiveSessionsForWebApp(context.Context) ([]webapp.LiveSession, error) {

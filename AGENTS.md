@@ -61,6 +61,31 @@ Preserve zero-bind-gap daemon reload semantics when changing `internal/daemon/ru
 
 Keep detailed reload behavior in daemon code comments, tests, or dedicated docs rather than expanding this file.
 
+### Tracked sessions
+
+Any subsystem that owns long-lived state crossing reload, shutdown, or
+force-close boundaries MUST register that state with internal/livetrack.
+This includes HTTP connections, MITM CONNECT tunnels, gRPC streams,
+provider websockets, SSE readers, MCP stdio handlers, browser tabs, file
+watchers, async workers, and capture-file flocks.
+
+Forbidden in subsystems that have adopted livetrack:
+- Bare http.Server.Shutdown without a paired registry.Drain.
+- Bare context cancellation as the sole shutdown mechanism for
+  long-lived goroutines that hold OS resources (sockets, fds, flocks).
+- Goroutine fanout without registry.Register; the registry IS the
+  inventory the daemon reload chain queries.
+- Per-subsystem hand-rolled equivalents of WaitForIdle, ActiveCount,
+  CloseAll. The internal/adapter/server_routes.go HTTP-conn-state map
+  was replaced by livetrack; do not reintroduce it.
+
+Motivating empirical case: Cloudflare keepalive on api2.cursor.sh holds
+CONNECT tunnels open indefinitely. http.Server.Shutdown blocks the full
+deadline and returns timeout, but tunnel goroutines keep running and the
+capture writer flock is never released. livetrack.Registry.Drain plus
+ForceCloseMatching gives bounded reload time with explicit force-close
+under deadline.
+
 ## Type hygiene
 
 This repository is pre-alpha. Prefer strict type safety over loose compatibility.
