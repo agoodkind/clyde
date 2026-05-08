@@ -92,6 +92,11 @@ type Server struct {
 	remoteWorkers map[string]*remoteWorker
 	liveSessions  map[string]*liveRuntimeSession
 	liveLeases    map[string]*foregroundLease
+	// liveWorkers is the universal registry for all daemon-owned live
+	// workers (Claude bridge, Codex tmux/PTY). Each worker is registered
+	// on launch and released on natural exit so the daemon has a single
+	// bounded inventory for drain and force-close on reload or shutdown.
+	liveWorkers *livetrack.Registry[LiveMeta]
 
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
@@ -157,6 +162,10 @@ type remoteWorker struct {
 	cmd         *exec.Cmd
 	done        chan struct{}
 	skipCleanup atomic.Bool
+	// livetrackSession is the livetrack registry handle for this worker.
+	// It is set on launch and used to release the registration when the
+	// worker exits naturally. May be nil when the registry was closed.
+	livetrackSession *livetrack.Session[LiveMeta]
 }
 
 type remoteWorkerTmuxState struct {
@@ -175,6 +184,11 @@ type liveRuntimeSession struct {
 	startedAt    time.Time
 	lastTurnID   string
 	codexRuntime codex.LiveRuntime
+	// livetrackSession is the livetrack registry handle for this Codex
+	// live session. It is set on start/attach and used to release the
+	// registration when the session is closed or suspended. May be nil
+	// when the registry was closed before the session started.
+	livetrackSession *livetrack.Session[LiveMeta]
 }
 
 type foregroundLease struct {
@@ -362,6 +376,15 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		mitmAccess:                      mitmAccessor{mu: sync.RWMutex{}, fn: nil},
 		skipRuntimeCleanup:              atomic.Bool{},
 		RPCs:                            newRPCRegistry(),
+		liveWorkers: livetrack.New[LiveMeta](livetrack.Options[LiveMeta]{
+			Component:     "daemon",
+			Concern:       "daemon.workers.live",
+			Log:           log,
+			PollEvery:     0,
+			CloserGrace:   0,
+			ParallelClose: false,
+			Now:           nil,
+		}),
 	}
 }
 
@@ -799,6 +822,16 @@ func (s *Server) Close() {
 	bridge.Close(s.bridgeWatcher)
 	if s.watcher != nil {
 		_ = s.watcher.Close()
+	}
+
+	// Drain the live-worker registry so any remaining workers get an
+	// opportunity to checkpoint before force-close. The drain context is
+	// unbounded because Close is only called from Run's defer path after
+	// the gRPC listener has already been stopped.
+	if s.liveWorkers != nil {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = s.liveWorkers.Drain(drainCtx, "daemon.close")
+		drainCancel()
 	}
 
 	s.mu.Lock()
@@ -2187,14 +2220,18 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		_ = store.Delete(name)
 		return nil, status.Errorf(codes.Internal, "launch remote session: %v", err)
 	}
+	done := make(chan struct{})
 	worker := &remoteWorker{
-		sessionName: name,
-		sessionID:   sessionID,
-		basedir:     basedir,
-		incognito:   req.GetIncognito(),
-		cmd:         cmd,
-		done:        make(chan struct{}),
+		sessionName:      name,
+		sessionID:        sessionID,
+		basedir:          basedir,
+		incognito:        req.GetIncognito(),
+		cmd:              cmd,
+		done:             done,
+		skipCleanup:      atomic.Bool{},
+		livetrackSession: nil,
 	}
+	s.registerClaudeRemoteWorker(ctx, worker)
 	s.remoteMu.Lock()
 	s.remoteWorkers[name] = worker
 	s.remoteMu.Unlock()
@@ -2590,10 +2627,16 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 		close(worker.done)
 	}
 	s.remoteMu.Lock()
+	lsess := worker.livetrackSession
 	if current := s.remoteWorkers[worker.sessionName]; current == worker {
 		delete(s.remoteWorkers, worker.sessionName)
 	}
 	s.remoteMu.Unlock()
+	// Release the livetrack registration after the process has exited so
+	// the registry's Count reaches zero before any drain loop completes.
+	if lsess != nil {
+		s.liveWorkers.Release(ctx, lsess, "claude.remote.exited")
+	}
 	level := slog.LevelInfo
 	if err != nil {
 		level = slog.LevelWarn
@@ -2616,6 +2659,37 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 			"err", delErr,
 		)
 	}
+}
+
+// registerClaudeRemoteWorker registers a newly-launched Claude remote worker
+// with the livetrack registry. The closer sends SIGINT, waits for the process
+// to exit, then delivers SIGKILL. If the registry has been closed during a
+// reload drain, the warning is logged and the worker runs without tracking.
+func (s *Server) registerClaudeRemoteWorker(ctx context.Context, worker *remoteWorker) {
+	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil {
+		return
+	}
+	lsess, err := s.liveWorkers.Register(ctx, "claude.remote", LiveMeta{
+		Provider:      "claude",
+		LiveSessionID: worker.sessionID,
+		WorkerPID:     worker.cmd.Process.Pid,
+		Lease:         "background",
+	}, &claudeWorkerCloser{
+		proc:           worker.cmd.Process,
+		done:           worker.done,
+		interruptGrace: claudeRemoteSuspendTimeout,
+	})
+	if err == nil {
+		worker.livetrackSession = lsess
+		return
+	}
+	s.log.WarnContext(ctx, "daemon.remote_session.livetrack_register_failed",
+		"component", "daemon",
+		"provider", session.ProviderClaude,
+		"session", worker.sessionName,
+		"session_id", worker.sessionID,
+		"err", err,
+	)
 }
 
 func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContextUsageRequest) (*clydev1.ProbeContextUsageResponse, error) {

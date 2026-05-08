@@ -637,6 +637,7 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	}
 	srv.preserveRuntimeDirsOnClose()
 	drainReloadedPublicHTTP(log, rt)
+	drainReloadedLiveWorkers(ctx, log, srv)
 	if stopExclusive != nil {
 		stopExclusive("reload_handoff")
 	}
@@ -1337,6 +1338,41 @@ func mitmTunnelForceClose(proxy *mitm.Proxy) func() error {
 	}
 }
 
+// drainReloadedLiveWorkers drains the daemon-owned live-worker registry during
+// a binary reload. Workers that exit within the drain window release naturally;
+// workers still alive at the deadline are force-closed so the replacement
+// daemon owns a clean slate. The drain runs against a short-lived context so
+// a wedged worker cannot block the reload indefinitely.
+func drainReloadedLiveWorkers(ctx context.Context, log *slog.Logger, srv *Server) {
+	if srv == nil || srv.liveWorkers == nil {
+		return
+	}
+	remaining := srv.liveWorkers.Count()
+	if remaining == 0 {
+		return
+	}
+	log.InfoContext(ctx, "daemon.reload.draining_live_workers",
+		"component", "daemon",
+		"count", remaining,
+	)
+	drainCtx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
+	result := srv.liveWorkers.Drain(drainCtx, "daemon.reload")
+	cancel()
+	if result.ForceClosed > 0 {
+		log.WarnContext(ctx, "daemon.reload.live_workers_force_closed",
+			"component", "daemon",
+			"force_closed", result.ForceClosed,
+			"duration_ms", result.Duration.Milliseconds(),
+		)
+	} else {
+		log.InfoContext(ctx, "daemon.reload.live_workers_drain_complete",
+			"component", "daemon",
+			"force_closed", result.ForceClosed,
+			"duration_ms", result.Duration.Milliseconds(),
+		)
+	}
+}
+
 func (s *Server) listLiveSessionsForWebApp(context.Context) ([]webapp.LiveSession, error) {
 	resp, err := s.ListLiveSessions(context.Background(), &clydev1.ListLiveSessionsRequest{})
 	if err != nil {
@@ -1429,17 +1465,30 @@ func (s *Server) liveSessionRecord(ctx context.Context, sessionID string) (*live
 		return nil, err
 	}
 	live = &liveRuntimeSession{
-		provider:     session.ProviderCodex,
-		name:         attached.ThreadID,
-		id:           attached.ThreadID,
-		basedir:      attached.WorkDir,
-		model:        attached.Model,
-		status:       "attached",
-		startedAt:    daemonNow(),
-		codexRuntime: runtime,
+		provider:         session.ProviderCodex,
+		name:             attached.ThreadID,
+		id:               attached.ThreadID,
+		basedir:          attached.WorkDir,
+		model:            attached.Model,
+		status:           "attached",
+		startedAt:        daemonNow(),
+		lastTurnID:       "",
+		codexRuntime:     runtime,
+		livetrackSession: nil,
 	}
 	s.liveSessions[live.id] = live
 	s.remoteMu.Unlock()
+	lsess, ltrackErr := s.liveWorkers.Register(ctx, "codex.live", LiveMeta{
+		Provider:      "codex",
+		LiveSessionID: live.id,
+		WorkerPID:     0,
+		Lease:         "background",
+	}, &codexRuntimeCloser{runtime: runtime})
+	if ltrackErr == nil {
+		s.remoteMu.Lock()
+		live.livetrackSession = lsess
+		s.remoteMu.Unlock()
+	}
 	return live, nil
 }
 
