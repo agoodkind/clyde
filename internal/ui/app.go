@@ -668,7 +668,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	if opt.ReturnTo != nil {
 		a.returnPathSession = opt.ReturnTo
 		for vi, idx := range a.visibleIdx {
-			if a.sessions[idx].Name == opt.ReturnTo.Name {
+			if sessionMatchesLookup(a.sessions[idx], opt.ReturnTo.Name, opt.ReturnTo.Metadata.ProviderSessionID()) {
 				a.table.Active = true
 				a.table.SelectedRow = vi
 				a.table.Offset = vi
@@ -4192,7 +4192,7 @@ func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 		}
 	}
 	return []TableCell{
-		{Text: sess.Name, Style: nameStyle},
+		{Text: sessionDisplayTitle(sess), Style: nameStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: lastUsedStyle},
 		{Text: model, Style: modelStyle},
@@ -4240,7 +4240,7 @@ func (a *App) rebuildVisible() {
 			continue
 		}
 		if f != "" {
-			hay := strings.ToLower(sess.Name + " " + sess.Metadata.DisplayTitle + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
+			hay := strings.ToLower(sessionDisplayTitle(sess) + " " + sess.Name + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
 			if !strings.Contains(hay, f) {
 				continue
 			}
@@ -5828,15 +5828,15 @@ func (a *App) openHelpModal() {
 	a.overlay = modal
 }
 
-// findSessionByName returns the in-memory session matching name, or
-// nil. Used after a refresh to pick up updated metadata.
+// findSessionByName returns the in-memory session matching name or visible
+// display title, or nil. Used after a refresh to pick up updated metadata.
 // findVisibleRowByName returns the visible row index for the session
-// with the given name, or -1 if it is not currently in the visible
+// with the given name or visible display title, or -1 if it is not currently in the visible
 // list. The post session prompt uses this to re locate the row after
 // a refresh cycle so repeated Resume clicks keep firing.
 func (a *App) findVisibleRowByName(name string) int {
 	for vi, idx := range a.tableRowIdx {
-		if idx >= 0 && idx < len(a.sessions) && a.sessions[idx].Name == name {
+		if idx >= 0 && idx < len(a.sessions) && sessionMatchesLookup(a.sessions[idx], name, "") {
 			return vi
 		}
 	}
@@ -5852,10 +5852,7 @@ func (a *App) findVisibleSession(name, sessionID string) (*session.Session, int)
 		if sess == nil {
 			continue
 		}
-		if sessionID != "" && sess.Metadata.ProviderSessionID() == sessionID {
-			return sess, vi
-		}
-		if name != "" && sess.Name == name {
+		if sessionMatchesLookup(sess, name, sessionID) {
 			return sess, vi
 		}
 	}
@@ -5864,11 +5861,39 @@ func (a *App) findVisibleSession(name, sessionID string) (*session.Session, int)
 
 func (a *App) findSessionByName(name string) *session.Session {
 	for _, s := range a.sessions {
-		if s != nil && s.Name == name {
+		if s != nil && sessionMatchesLookup(s, name, "") {
 			return s
 		}
 	}
 	return nil
+}
+
+func sessionDisplayTitle(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	displayTitle := strings.TrimSpace(sess.Metadata.DisplayTitle)
+	if displayTitle != "" {
+		return displayTitle
+	}
+	return sess.Name
+}
+
+func sessionMatchesLookup(sess *session.Session, name, sessionID string) bool {
+	if sess == nil {
+		return false
+	}
+	if sessionID != "" && sess.Metadata.ProviderSessionID() == sessionID {
+		return true
+	}
+	lookupName := strings.TrimSpace(name)
+	if lookupName == "" {
+		return false
+	}
+	if sess.Name == lookupName {
+		return true
+	}
+	return strings.EqualFold(sessionDisplayTitle(sess), lookupName)
 }
 
 // liveURLRecordFor returns the cached live URL backing record for sess,

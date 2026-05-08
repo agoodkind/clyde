@@ -57,6 +57,24 @@ var _ = Describe("FileStore", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("already exists"))
 		})
+
+		It("should resolve and search by display title", func() {
+			s := session.NewSession("merry-swan", "uuid-123")
+			s.Metadata.DisplayTitle = "Merry Swan"
+
+			err := store.Create(s)
+			Expect(err).NotTo(HaveOccurred())
+
+			resolved, err := store.Resolve("Merry Swan")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved).ToNot(BeNil())
+			Expect(resolved.Name).To(Equal("merry-swan"))
+
+			matches, err := store.Search("Merry Swan")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matches).To(HaveLen(1))
+			Expect(matches[0].Name).To(Equal("merry-swan"))
+		})
 	})
 
 	Describe("Context field", func() {

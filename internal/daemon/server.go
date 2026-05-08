@@ -622,7 +622,7 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 		)
 	}
 	if sess.Metadata.HasCustomOutputStyle {
-		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
+		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.StorageKey()); err != nil {
 			s.log.WarnContext(ctx, "daemon.session_delete.output_style_failed",
 				"component", "daemon",
 				"subcomponent", "sessions",

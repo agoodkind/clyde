@@ -141,7 +141,7 @@ func deleteTrackedSession(
 	}
 
 	if sess.Metadata.HasCustomOutputStyle {
-		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
+		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.StorageKey()); err != nil {
 			_, _ = fmt.Fprintln(out, ui.Warning(fmt.Sprintf("Failed to delete output style file: %v", err)))
 			log.ErrorContext(ctx, "prune.delete.style_failed", "component", "prune", "session", sess.Name, "err", err)
 		}

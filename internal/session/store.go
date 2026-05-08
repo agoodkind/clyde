@@ -243,20 +243,20 @@ func (fs *FileStore) Get(name string) (*Session, error) {
 	return fs.findSessionByName(name)
 }
 
-// Search returns sessions matching query against name, provider session id,
-// and context (case-insensitive substring match).
+// Search returns sessions matching query against name, display title, provider
+// session id, and context (case-insensitive substring match).
 func (fs *FileStore) Search(query string) ([]*Session, error) {
 	sessions, err := fs.List()
 	if err != nil {
 		return nil, err
 	}
-	q := strings.ToLower(query)
+	q := normalizeSessionLookup(query)
 	var matches []*Session
 	for _, sess := range sessions {
-		if strings.Contains(strings.ToLower(sess.Name), q) ||
-			strings.Contains(strings.ToLower(sess.Metadata.DisplayTitle), q) ||
-			strings.Contains(strings.ToLower(sess.Metadata.ProviderSessionID()), q) ||
-			strings.Contains(strings.ToLower(sess.Metadata.Context), q) {
+		if strings.Contains(normalizeSessionLookup(sess.Name), q) ||
+			strings.Contains(normalizeSessionLookup(sess.Metadata.DisplayTitle), q) ||
+			strings.Contains(normalizeSessionLookup(sess.Metadata.ProviderSessionID()), q) ||
+			strings.Contains(normalizeSessionLookup(sess.Metadata.Context), q) {
 			matches = append(matches, sess)
 		}
 	}
@@ -339,6 +339,16 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 
 	sessions, listErr := fs.List()
 	if listErr == nil {
+		if sess := exactDisplayTitleMatch(sessions, query); sess != nil {
+			sessionResolveLog.Logger().Debug("session.resolve.tier1_display_title_hit",
+				"component", "session",
+				"subcomponent", "resolve",
+				"query", query,
+				"session", sess.Name,
+				"display_title", sess.Metadata.DisplayTitle,
+			)
+			return sess
+		}
 		for _, sess := range sessions {
 			if matchType := exactSessionIDMatchType(sess, query); matchType != "" {
 				sessionResolveLog.Logger().Debug("session.resolve.tier2_hit",
@@ -480,6 +490,39 @@ func adoptDisabledReason(fs *FileStore) string {
 		return "no_discovery_cache"
 	}
 	return "unknown"
+}
+
+func exactDisplayTitleMatch(sessions []*Session, query string) *Session {
+	normalizedQuery := normalizeSessionLookup(query)
+	if normalizedQuery == "" {
+		return nil
+	}
+
+	var match *Session
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		if normalizeSessionLookup(sess.Metadata.DisplayTitle) != normalizedQuery {
+			continue
+		}
+		if match != nil {
+			sessionResolveLog.Logger().Debug("session.resolve.tier1_display_title_ambiguous",
+				"component", "session",
+				"subcomponent", "resolve",
+				"query", query,
+				"first_session", match.Name,
+				"next_session", sess.Name,
+			)
+			return nil
+		}
+		match = sess
+	}
+	return match
+}
+
+func normalizeSessionLookup(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 // findByProviderSessionID returns the first registered session whose current or

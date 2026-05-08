@@ -1619,3 +1619,25 @@ func TestRuntimeStampIncludesExecutableHash(t *testing.T) {
 		t.Fatalf("runtime stamp missing executable hash:\n%s", text)
 	}
 }
+
+func TestUX_FindSessionByDisplayTitleAndRenderDisplayTitle(t *testing.T) {
+	a := NewApp([]*session.Session{{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:         "merry-swan",
+			SessionID:    "shared",
+			DisplayTitle: "Merry Swan",
+			LastAccessed: time.Now(),
+		},
+	}}, AppCallbacks{})
+
+	got := a.findSessionByName("Merry Swan")
+	if got == nil || got.Name != "merry-swan" {
+		t.Fatalf("findSessionByName by display title = %#v", got)
+	}
+
+	row := a.rowForLockedLastUsed(a.sessions[0])
+	if len(row) == 0 || row[0].Text != "Merry Swan" {
+		t.Fatalf("row title = %#v, want display title", row)
+	}
+}
