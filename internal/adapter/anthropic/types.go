@@ -105,6 +105,7 @@ type ContentBlock struct {
 	CacheReference string          `json:"cache_reference,omitempty"`
 	Source         *ImageSource    `json:"source,omitempty"`
 	CacheControl   *CacheControl   `json:"cache_control,omitempty"`
+	Thinking       string          `json:"thinking,omitempty"`
 }
 
 // ImageSource describes image bytes or a URL for image content blocks.
