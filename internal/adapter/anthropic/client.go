@@ -59,6 +59,10 @@ func New(httpClient *http.Client, source *oauth.Manager, cfg Config) *Client {
 // reaching into the Client struct.
 func (c *Client) SystemPromptPrefix() string { return c.cfg.SystemPromptPrefix }
 
+// MessagesURL returns the upstream URL for /v1/messages requests. Used
+// by the adapter dispatch layer to populate egress session metadata.
+func (c *Client) MessagesURL() string { return c.cfg.MessagesURL }
+
 // UserAgent returns the configured User-Agent so callers can derive
 // a semver-like prefix for the billing line without re-parsing config.
 func (c *Client) UserAgent() string { return c.cfg.UserAgent }

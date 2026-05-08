@@ -27,6 +27,7 @@ import (
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -111,13 +112,18 @@ var systemFingerprint = "fp_clyde_" + adapterClock.Now().UTC().Format("20060102"
 // either calls Start in a goroutine (production) or hands the
 // handler to httptest.Server (tests).
 type Server struct {
-	cfg                  config.AdapterConfig
-	logprobs             config.AdapterLogprobs
-	deps                 Deps
-	log                  *slog.Logger
-	logging              config.LoggingConfig
-	runtimeLogging       *RuntimeLogging
-	registry             *Registry
+	cfg            config.AdapterConfig
+	logprobs       config.AdapterLogprobs
+	deps           Deps
+	log            *slog.Logger
+	logging        config.LoggingConfig
+	runtimeLogging *RuntimeLogging
+	registry       *Registry
+	// egressRegistry tracks every in-flight outbound provider call
+	// (Anthropic Messages HTTP, Codex Responses websocket, retry
+	// attempts) so Shutdown can drain or force-close them under the
+	// reload deadline.
+	egressRegistry       *livetrack.Registry[EgressMeta]
 	sem                  chan struct{}
 	token                string
 	mux                  *http.ServeMux
@@ -169,6 +175,8 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	if err != nil {
 		return nil, err
 	}
+	egressReg := newEgressRegistry()
+	wsReg := adaptercodex.NewWsSessionRegistry()
 	s := &Server{
 		cfg:            cfg,
 		logprobs:       cfg.Logprobs,
@@ -177,6 +185,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		logging:        logging,
 		runtimeLogging: runtimeLogging,
 		registry:       registry,
+		egressRegistry: egressReg,
 		sem:            make(chan struct{}, max),
 		token:          token,
 		httpClient: &http.Client{
@@ -194,7 +203,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 			Auth:       codexAuthLookup{server: s},
 			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
-		}, codexProviderOptions(logging, runtimeLogging))
+		}, codexProviderOptionsWithRegistry(logging, runtimeLogging, wsReg))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderCodex)),
@@ -202,56 +211,67 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		)
 	}
 	if cfg.DirectOAuth {
-		s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
-		id := cfg.ClientIdentity
-		messagesURL := cfg.OAuth.MessagesURL
-		if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
-			// Rewrite messages outbound through the MITM proxy. The
-			// proxy's classifyRoute strips api.anthropic.com from
-			// upstreamURL and prepends its own base, so we only need
-			// to match the path the proxy expects (/v1/messages).
-			messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
-			s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed",
-				slog.String("messages_url", messagesURL),
-			)
-		}
-		s.anthr = anthropic.New(nil, s.oauthMgr, anthropic.Config{
-			MessagesURL:             messagesURL,
-			OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
-			BetaHeader:              id.BetaHeader,
-			UserAgent:               id.UserAgent,
-			SystemPromptPrefix:      id.SystemPromptPrefix,
-			StainlessPackageVersion: id.StainlessPackageVersion,
-			StainlessRuntime:        id.StainlessRuntime,
-			StainlessRuntimeVersion: id.StainlessRuntimeVersion,
-			CCVersion:               id.CCVersion,
-			CCEntrypoint:            id.CCEntrypoint,
-			WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
-		})
-		s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
-			Config: cfg,
-			Logger: slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
-		}, anthropic.ProviderOptions{
-			Prepare:         s.prepareAnthropicProviderRequest,
-			ExecutePrepared: s.executeAnthropicPreparedRequest,
-		})
-		s.providerRegistry.Register(s.anthropicProvider)
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
-			slog.String("provider", string(adapterresolver.ProviderAnthropic)),
-			slog.Int("registered_count", len(s.providerRegistry.IDs())),
-		)
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled",
-			slog.Int("max_concurrent", max),
-		)
+		s.initDirectOAuth(ctx, cfg, deps, log, max)
 	}
 	s.mux = s.routes()
 	return s, nil
 }
 
-// codexProviderOptions builds the codex provider's startup options from
-// the daemon's logging config snapshots. Extracted so [New] stays under
-// the funlen budget.
-func codexProviderOptions(logging config.LoggingConfig, runtimeLogging *RuntimeLogging) adaptercodex.ProviderOptions {
+// initDirectOAuth wires up the OAuth manager, Anthropic client, and
+// Anthropic provider when direct OAuth is configured. Extracted from
+// [New] to satisfy the funlen lint budget.
+func (s *Server) initDirectOAuth(ctx context.Context, cfg config.AdapterConfig, deps Deps, log *slog.Logger, maxConcurrent int) {
+	s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
+	id := cfg.ClientIdentity
+	messagesURL := cfg.OAuth.MessagesURL
+	if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
+		// Rewrite messages outbound through the MITM proxy. The
+		// proxy's classifyRoute strips api.anthropic.com from
+		// upstreamURL and prepends its own base, so we only need
+		// to match the path the proxy expects (/v1/messages).
+		messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed",
+			slog.String("messages_url", messagesURL),
+		)
+	}
+	s.anthr = anthropic.New(nil, s.oauthMgr, anthropic.Config{
+		MessagesURL:             messagesURL,
+		OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
+		BetaHeader:              id.BetaHeader,
+		UserAgent:               id.UserAgent,
+		SystemPromptPrefix:      id.SystemPromptPrefix,
+		StainlessPackageVersion: id.StainlessPackageVersion,
+		StainlessRuntime:        id.StainlessRuntime,
+		StainlessRuntimeVersion: id.StainlessRuntimeVersion,
+		CCVersion:               id.CCVersion,
+		CCEntrypoint:            id.CCEntrypoint,
+		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
+	})
+	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
+		Config: cfg,
+		Logger: slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
+	}, anthropic.ProviderOptions{
+		Prepare:         s.prepareAnthropicProviderRequest,
+		ExecutePrepared: s.executeAnthropicPreparedRequest,
+	})
+	s.providerRegistry.Register(s.anthropicProvider)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
+		slog.String("provider", string(adapterresolver.ProviderAnthropic)),
+		slog.Int("registered_count", len(s.providerRegistry.IDs())),
+	)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled",
+		slog.Int("max_concurrent", maxConcurrent),
+	)
+}
+
+// codexProviderOptionsWithRegistry builds the codex provider's startup
+// options from the daemon's logging config snapshots and the per-daemon
+// ws-session registry. Extracted so [New] stays under the funlen budget.
+func codexProviderOptionsWithRegistry(
+	logging config.LoggingConfig,
+	runtimeLogging *RuntimeLogging,
+	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
+) adaptercodex.ProviderOptions {
 	return adaptercodex.ProviderOptions{
 		AccountID: "",
 		BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
@@ -265,7 +285,8 @@ func codexProviderOptions(logging config.LoggingConfig, runtimeLogging *RuntimeL
 			MaxAgeDays: logging.Rotation.MaxAgeDays,
 			Compress:   logging.Rotation.Compress,
 		},
-		WsSessionIdleTTL: 0,
+		WsSessionIdleTTL:  0,
+		WsSessionRegistry: wsReg,
 	}
 }
 

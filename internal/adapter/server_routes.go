@@ -73,20 +73,39 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 
 // Shutdown stops accepting new adapter requests, closes idle keepalive
 // connections, and lets active handlers finish until ctx expires.
-// Cached upstream websocket sessions are closed so connections do not
-// leak across reload boundaries.
+// Cached upstream websocket sessions and in-flight outbound provider
+// calls are drained through their respective livetrack registries so
+// the reload deadline applies to egress traffic as well as ingress.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpSrv == nil {
+		if s.egressRegistry != nil {
+			egressResult := s.egressRegistry.Drain(ctx, "adapter.shutdown")
+			s.log.InfoContext(ctx, "adapter.egress.drained",
+				"final", egressResult.Final.String(),
+				"remaining", egressResult.Remaining,
+				"force_closed", egressResult.ForceClosed,
+				"duration_ms", egressResult.Duration.Milliseconds(),
+			)
+		}
 		if s.codexProvider != nil {
-			s.codexProvider.CloseAllSessions("shutdown")
+			s.codexProvider.DrainSessions(ctx, "adapter.shutdown")
 		}
 		return nil
 	}
 	s.httpSrv.SetKeepAlivesEnabled(false)
 	s.closeTrackedConns(http.StateIdle)
 	err := s.httpSrv.Shutdown(ctx)
+	if s.egressRegistry != nil {
+		egressResult := s.egressRegistry.Drain(ctx, "adapter.shutdown")
+		s.log.InfoContext(ctx, "adapter.egress.drained",
+			"final", egressResult.Final.String(),
+			"remaining", egressResult.Remaining,
+			"force_closed", egressResult.ForceClosed,
+			"duration_ms", egressResult.Duration.Milliseconds(),
+		)
+	}
 	if s.codexProvider != nil {
-		s.codexProvider.CloseAllSessions("shutdown")
+		s.codexProvider.DrainSessions(ctx, "adapter.shutdown")
 	}
 	return err
 }
