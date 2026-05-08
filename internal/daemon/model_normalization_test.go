@@ -155,6 +155,71 @@ func TestUpdateSessionSettingsNormalizesModelBeforePersisting(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionSettingsContextWindowPreservesExistingFields(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess := session.NewSession("chat-context-window", "uuid-context-window")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := store.SaveSettings("chat-context-window", &session.Settings{
+		Model:         "clyde-gpt-5.4-1m-medium",
+		EffortLevel:   "medium",
+		OutputStyle:   "concise",
+		RemoteControl: true,
+	}); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	srv := &Server{
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		settingsLocks: make(map[string]*sync.Mutex),
+	}
+
+	_, err = srv.UpdateSessionSettings(context.Background(), &clydev1.UpdateSessionSettingsRequest{
+		Name: "chat-context-window",
+		Settings: &clydev1.Settings{
+			ContextWindow: "1m",
+		},
+		UpdateMask: []string{"context_window"},
+	})
+	if err != nil {
+		t.Fatalf("update session settings: %v", err)
+	}
+
+	settings, err := store.LoadSettings("chat-context-window")
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings == nil {
+		t.Fatalf("settings missing")
+	}
+	if settings.ContextWindow != "1m" {
+		t.Fatalf("settings.ContextWindow=%q want %q", settings.ContextWindow, "1m")
+	}
+	if settings.Model != "clyde-gpt-5.4-1m-medium" {
+		t.Fatalf("settings.Model=%q want %q", settings.Model, "clyde-gpt-5.4-1m-medium")
+	}
+	if settings.EffortLevel != "medium" {
+		t.Fatalf("settings.EffortLevel=%q want %q", settings.EffortLevel, "medium")
+	}
+	if settings.OutputStyle != "concise" {
+		t.Fatalf("settings.OutputStyle=%q want %q", settings.OutputStyle, "concise")
+	}
+	if !settings.RemoteControl {
+		t.Fatalf("settings.RemoteControl=false want true")
+	}
+}
+
 func TestWriteSettingsJSONPersistsNormalizedModel(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

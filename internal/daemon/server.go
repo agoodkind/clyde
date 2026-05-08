@@ -1763,7 +1763,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 
 	current, _ := sessionsettings.Load(store, sess)
 	if current == nil {
-		current = &session.Settings{}
+		current = defaultSessionSettings(false)
 	}
 	applyMask := func(field string) bool {
 		if len(req.UpdateMask) == 0 {
@@ -1771,19 +1771,21 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 		}
 		return slices.Contains(req.UpdateMask, field)
 	}
-	if req.Settings != nil {
-		if applyMask("model") {
-			current.Model = adaptercursor.NormalizeSessionSettingsModel(req.Settings.Model)
-		}
-		if applyMask("effort_level") {
-			current.EffortLevel = req.Settings.EffortLevel
-		}
-		if applyMask("output_style") {
-			current.OutputStyle = req.Settings.OutputStyle
-		}
-		if applyMask("remote_control") {
-			current.RemoteControl = req.Settings.RemoteControl
-		}
+	settings := req.GetSettings()
+	if settings != nil && applyMask("model") {
+		current.Model = adaptercursor.NormalizeSessionSettingsModel(settings.GetModel())
+	}
+	if settings != nil && applyMask("effort_level") {
+		current.EffortLevel = settings.GetEffortLevel()
+	}
+	if settings != nil && applyMask("output_style") {
+		current.OutputStyle = settings.GetOutputStyle()
+	}
+	if settings != nil && applyMask("remote_control") {
+		current.RemoteControl = settings.GetRemoteControl()
+	}
+	if settings != nil && applyMask("context_window") {
+		current.ContextWindow = settings.GetContextWindow()
 	}
 	if err := sessionsettings.Save(store, sess, current); err != nil {
 		return nil, status.Errorf(codes.Internal, "save settings: %v", err)
@@ -1795,6 +1797,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 		slog.String("model", current.Model),
 		slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(current.Model)),
 		slog.String("effort", current.EffortLevel),
+		slog.String("context_window", current.ContextWindow),
 	)
 	return &clydev1.UpdateSessionSettingsResponse{}, nil
 }
@@ -1961,7 +1964,7 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 	if err := store.Create(sess); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
 	}
-	if err := sessionsettings.Save(store, sess, &session.Settings{RemoteControl: true}); err != nil {
+	if err := sessionsettings.Save(store, sess, defaultSessionSettings(true)); err != nil {
 		_ = store.Delete(name)
 		return nil, status.Errorf(codes.Internal, "save session settings: %v", err)
 	}
@@ -2012,6 +2015,24 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		SessionId:   sessionID,
 		LaunchState: clydev1.StartRemoteSessionResponse_LAUNCH_STATE_LAUNCHING,
 	}, nil
+}
+
+func defaultSessionSettings(remoteControl bool) *session.Settings {
+	return &session.Settings{
+		Model:         "",
+		EffortLevel:   "",
+		OutputStyle:   "",
+		RemoteControl: remoteControl,
+		ContextWindow: "",
+		Permissions: session.Permissions{
+			Allow:                        nil,
+			Ask:                          nil,
+			Deny:                         nil,
+			AdditionalDirectories:        nil,
+			DefaultMode:                  "",
+			DisableBypassPermissionsMode: "",
+		},
+	}
 }
 
 // ListBridges returns the current set of active claude --remote-control

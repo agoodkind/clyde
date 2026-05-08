@@ -40,8 +40,11 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 // The wrapper still exposes the inject socket so the daemon sidecar can send
 // text to the running Claude session, but local terminal IO is detached.
 func StartHeadlessRemoteWorker(env map[string]string, settingsFile string, workDir, sessionID string) error {
+	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
+	defer cleanupSettings()
+
 	args := []string{}
-	args = appendCommonArgs(args, settingsFile)
+	args = appendCommonArgs(args, effectiveSettingsFile)
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
 	}
@@ -58,7 +61,9 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 	sessionName := env["CLYDE_SESSION_NAME"]
 	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName); settingsFile != "" {
-		args = append([]string{"--settings", settingsFile}, args...)
+		effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
+		defer cleanupSettings()
+		args = append([]string{"--settings", effectiveSettingsFile}, args...)
 	}
 
 	if interactive {
@@ -76,10 +81,7 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
-	cmd.Env = os.Environ()
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
+	cmd.Env = commandEnvironment(env)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -93,135 +95,23 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	}
 	defer func() { _ = ptmx.Close() }()
 
-	if interactive {
-		// Forward initial size and propagate window changes so claude's
-		// TUI matches the terminal dimensions.
-		winchCh := make(chan os.Signal, 1)
-		signal.Notify(winchCh, syscall.SIGWINCH)
-		defer func() { signal.Stop(winchCh) }()
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					claudeRemoteLog.Logger().Error("wrapper.pty.resize_panic",
-						"component", "wrapper",
-						"session", sessionName,
-						"session_id", sessionID,
-						"err", fmt.Errorf("panic: %v", recovered),
-					)
-				}
-			}()
-			for range winchCh {
-				_ = pty.InheritSize(os.Stdin, ptmx)
-			}
-		}()
-		winchCh <- syscall.SIGWINCH
-
-		// Switch the terminal into raw mode for the duration of the
-		// session so claude's rendering is not garbled by line discipline.
-		oldState, _ := term.MakeRaw(int(os.Stdin.Fd()))
-		defer func() {
-			if oldState != nil {
-				_ = term.Restore(int(os.Stdin.Fd()), oldState)
-			}
-		}()
-	} else {
-		_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
-	}
+	cleanupTerminal := configurePTYTerminal(ptmx, interactive, sessionName, sessionID)
+	defer cleanupTerminal()
 
 	// Inject socket lifecycle. The daemon dials this socket from
 	// SendToSession to forward text to the running claude process.
-	socketPath := injectSocketPathFor(sessionID)
-	listener, lerr := openInjectListener(socketPath)
-	if lerr == nil {
-		defer func() {
-			_ = listener.Close()
-			_ = os.Remove(socketPath)
-		}()
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					claudeRemoteLog.Logger().Error("wrapper.inject.accept_panic",
-						"component", "wrapper",
-						"session", sessionName,
-						"session_id", sessionID,
-						"socket", socketPath,
-						"err", fmt.Errorf("panic: %v", recovered),
-					)
-				}
-			}()
-			acceptInjectConns(listener, ptmx)
-		}()
-	}
+	cleanupListener := startPTYInjectListener(ptmx, sessionName, sessionID)
+	defer cleanupListener()
 
 	// Copy goroutines for pty <-> terminal.
-	done := make(chan struct{})
-	var copyOnce sync.Once
-	finish := func() { copyOnce.Do(func() { close(done) }) }
-
-	if interactive {
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					claudeRemoteLog.Logger().Error("wrapper.pty.stdin_copy_panic",
-						"component", "wrapper",
-						"session", sessionName,
-						"session_id", sessionID,
-						"err", fmt.Errorf("panic: %v", recovered),
-					)
-				}
-			}()
-			_, _ = io.Copy(ptmx, os.Stdin)
-			finish()
-		}()
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					claudeRemoteLog.Logger().Error("wrapper.pty.stdout_copy_panic",
-						"component", "wrapper",
-						"session", sessionName,
-						"session_id", sessionID,
-						"err", fmt.Errorf("panic: %v", recovered),
-					)
-				}
-			}()
-			_, _ = io.Copy(os.Stdout, ptmx)
-			finish()
-		}()
-	} else {
-		go func() {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					claudeRemoteLog.Logger().Error("wrapper.pty.discard_copy_panic",
-						"component", "wrapper",
-						"session", sessionName,
-						"session_id", sessionID,
-						"err", fmt.Errorf("panic: %v", recovered),
-					)
-				}
-			}()
-			_, _ = io.Copy(io.Discard, ptmx)
-			finish()
-		}()
-	}
+	done, finish := startPTYCopy(ptmx, interactive, sessionName, sessionID)
 
 	// Daemon settings sync runs alongside the pty path too so global
 	// settings changes propagate to this session like any other.
 	monitorDone := make(chan struct{})
 	monitorStopped := make(chan struct{})
 	monitor := &monitorState{}
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				claudeRemoteLog.Logger().Error("wrapper.pty.daemon_monitor_panic",
-					"component", "wrapper",
-					"session", sessionName,
-					"session_id", sessionID,
-					"err", fmt.Errorf("panic: %v", recovered),
-				)
-			}
-		}()
-		monitorDaemon(ctx, wrapperID, sessionName, monitorDone, monitor, monitorStopped)
-	}()
+	startPTYDaemonMonitor(ctx, wrapperID, sessionName, sessionID, monitorDone, monitor, monitorStopped)
 
 	runErr := cmd.Wait()
 	close(monitorDone)
@@ -240,6 +130,120 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 		}
 	}
 	return runErr
+}
+
+func configurePTYTerminal(ptmx *os.File, interactive bool, sessionName, sessionID string) func() {
+	if !interactive {
+		_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
+		return func() {}
+	}
+	winchCh := make(chan os.Signal, 1)
+	signal.Notify(winchCh, syscall.SIGWINCH)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				claudeRemoteLog.Logger().Error("wrapper.pty.resize_panic",
+					"component", "wrapper",
+					"session", sessionName,
+					"session_id", sessionID,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		for range winchCh {
+			_ = pty.InheritSize(os.Stdin, ptmx)
+		}
+	}()
+	winchCh <- syscall.SIGWINCH
+
+	oldState, _ := term.MakeRaw(int(os.Stdin.Fd()))
+	return func() {
+		signal.Stop(winchCh)
+		close(winchCh)
+		if oldState != nil {
+			_ = term.Restore(int(os.Stdin.Fd()), oldState)
+		}
+	}
+}
+
+func startPTYInjectListener(ptmx *os.File, sessionName, sessionID string) func() {
+	socketPath := injectSocketPathFor(sessionID)
+	listener, err := openInjectListener(socketPath)
+	if err != nil {
+		return func() {}
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				claudeRemoteLog.Logger().Error("wrapper.inject.accept_panic",
+					"component", "wrapper",
+					"session", sessionName,
+					"session_id", sessionID,
+					"socket", socketPath,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		acceptInjectConns(listener, ptmx)
+	}()
+	return func() {
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+	}
+}
+
+func startPTYCopy(ptmx *os.File, interactive bool, sessionName, sessionID string) (<-chan struct{}, func()) {
+	done := make(chan struct{})
+	var copyOnce sync.Once
+	finish := func() { copyOnce.Do(func() { close(done) }) }
+	if interactive {
+		startPTYCopyGoroutine("stdin", ptmx, os.Stdin, finish, sessionName, sessionID)
+		startPTYCopyGoroutine("stdout", os.Stdout, ptmx, finish, sessionName, sessionID)
+		return done, finish
+	}
+	startPTYCopyGoroutine("discard", io.Discard, ptmx, finish, sessionName, sessionID)
+	return done, finish
+}
+
+func startPTYCopyGoroutine(name string, dst io.Writer, src io.Reader, finish func(), sessionName, sessionID string) {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				claudeRemoteLog.Logger().Error("wrapper.pty."+name+"_copy_panic",
+					"component", "wrapper",
+					"session", sessionName,
+					"session_id", sessionID,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		_, _ = io.Copy(dst, src)
+		finish()
+	}()
+}
+
+func startPTYDaemonMonitor(
+	ctx context.Context,
+	wrapperID string,
+	sessionName string,
+	sessionID string,
+	monitorDone <-chan struct{},
+	monitor *monitorState,
+	monitorStopped chan<- struct{},
+) {
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				claudeRemoteLog.Logger().Error("wrapper.pty.daemon_monitor_panic",
+					"component", "wrapper",
+					"session", sessionName,
+					"session_id", sessionID,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		monitorDaemon(ctx, wrapperID, sessionName, monitorDone, monitor, monitorStopped)
+	}()
 }
 
 // injectSocketPathFor returns the path of the inject socket the
