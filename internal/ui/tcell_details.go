@@ -38,6 +38,11 @@ type DetailsView struct {
 	// details pane keeps the display provider-neutral.
 	LookupLiveURL func(sess *session.Session) (LiveURL, bool)
 
+	// HomeDir is the user home directory used by shortPath when
+	// rendering basedir and workdir rows. Provided by App so the
+	// details build path does not call os.UserHomeDir per cell.
+	HomeDir string
+
 	sessionKey string
 }
 
@@ -161,9 +166,9 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	section("Identity")
 	kv("Model", detail.Model)
 	kv("Live URL", d.formatLiveURL(sess))
-	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot))
+	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot, d.HomeDir))
 	if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
-		kv("Work dir", shortPath(sess.Metadata.WorkDir))
+		kv("Work dir", shortPath(sess.Metadata.WorkDir, d.HomeDir))
 	}
 	if sess.Metadata.IsForkedSession {
 		kv("Type", "fork of "+sess.Metadata.ParentSession)
