@@ -178,23 +178,23 @@ func CacheableMessageBoundaryBlock(role, blockType string) bool {
 }
 
 func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, payload []byte, ok bool) {
-	switch ev.Kind {
-	case "text":
+	switch e := ev.(type) {
+	case anthropic.StreamTextDelta:
 		p := struct {
 			Index int `json:"index"`
 			Delta struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"delta"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.Delta.Type = "text_delta"
-		p.Delta.Text = ev.Text
+		p.Delta.Text = e.Text
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_delta", b, true
-	case "tool_use_start":
+	case anthropic.StreamToolUseStart:
 		p := struct {
 			Index        int `json:"index"`
 			ContentBlock struct {
@@ -202,69 +202,68 @@ func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, pay
 				ID   string `json:"id"`
 				Name string `json:"name"`
 			} `json:"content_block"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.ContentBlock.Type = "tool_use"
-		p.ContentBlock.ID = ev.ToolUseID
-		p.ContentBlock.Name = ev.ToolUseName
+		p.ContentBlock.ID = e.ToolUseID
+		p.ContentBlock.Name = e.ToolUseName
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_start", b, true
-	case "tool_use_arg_delta":
+	case anthropic.StreamToolUseArgDelta:
 		p := struct {
 			Index int `json:"index"`
 			Delta struct {
 				Type        string `json:"type"`
 				PartialJSON string `json:"partial_json"`
 			} `json:"delta"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.Delta.Type = "input_json_delta"
-		p.Delta.PartialJSON = ev.PartialJSON
+		p.Delta.PartialJSON = e.PartialJSON
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_delta", b, true
-	case "tool_use_stop":
+	case anthropic.StreamToolUseStop:
 		p := struct {
 			Index int `json:"index"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_stop", b, true
-	case "thinking":
-		if ev.Text != "" {
-			p := struct {
-				Index int `json:"index"`
-				Delta struct {
-					Type     string `json:"type"`
-					Thinking string `json:"thinking"`
-				} `json:"delta"`
-			}{Index: ev.BlockIndex}
-			p.Delta.Type = "thinking_delta"
-			p.Delta.Thinking = ev.Text
-			b, err := json.Marshal(p)
-			if err != nil {
-				return "", nil, false
-			}
-			return "content_block_delta", b, true
-		}
+	case anthropic.StreamThinkingStart:
 		p := struct {
 			Index        int `json:"index"`
 			ContentBlock struct {
 				Type string `json:"type"`
 			} `json:"content_block"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.ContentBlock.Type = "thinking"
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_start", b, true
-	case "thinking_signature":
+	case anthropic.StreamThinkingDelta:
+		p := struct {
+			Index int `json:"index"`
+			Delta struct {
+				Type     string `json:"type"`
+				Thinking string `json:"thinking"`
+			} `json:"delta"`
+		}{Index: e.BlockIndex}
+		p.Delta.Type = "thinking_delta"
+		p.Delta.Thinking = e.Text
+		b, err := json.Marshal(p)
+		if err != nil {
+			return "", nil, false
+		}
+		return "content_block_delta", b, true
+	case anthropic.StreamThinkingSignature:
 		// Round-trip the per-thinking-block signature back as the
 		// upstream-shaped `signature_delta` payload so consumers of
 		// the re-emitted SSE see the same wire shape Anthropic emits
@@ -275,9 +274,9 @@ func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, pay
 				Type      string `json:"type"`
 				Signature string `json:"signature"`
 			} `json:"delta"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.Delta.Type = "signature_delta"
-		p.Delta.Signature = ev.Text
+		p.Delta.Signature = e.Signature
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false

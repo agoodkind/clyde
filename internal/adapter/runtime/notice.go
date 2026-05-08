@@ -351,48 +351,34 @@ func FormattedNoticeText(text string) string {
 	return "\n\n" + envelope
 }
 
-// zeroRenderEvent returns a fully-zeroed adapterrender.Event used for the
-// false branch of noticeEvent where the caller never reads the value. Each
-// field is named explicitly so the exhaustruct rule sees a complete literal.
-func zeroRenderEvent() adapterrender.Event {
-	return adapterrender.Event{
-		Kind:             "",
-		Text:             "",
-		ReasoningKind:    "",
-		SummaryIndex:     nil,
-		ToolCalls:        nil,
-		ItemID:           "",
-		ItemType:         "",
-		EncryptedContent: "",
-		Signature:        "",
-		RedactedData:     "",
-	}
-}
-
-// assistantTextDeltaNoticeEvent builds an EventAssistantTextDelta carrying a
-// formatted usage notice. Each field is named explicitly so the exhaustruct
-// rule sees a complete literal.
-func assistantTextDeltaNoticeEvent(text string) adapterrender.Event {
-	return adapterrender.Event{
-		Kind:             adapterrender.EventAssistantTextDelta,
-		Text:             text,
-		ReasoningKind:    "",
-		SummaryIndex:     nil,
-		ToolCalls:        nil,
-		ItemID:           "",
-		ItemType:         "",
-		EncryptedContent: "",
-		Signature:        "",
-		RedactedData:     "",
-	}
-}
-
 func noticeEvent(text string) (adapterrender.Event, bool) {
 	formattedText := FormattedNoticeText(text)
 	if formattedText == "" {
-		return zeroRenderEvent(), false
+		return adapterrender.Event{
+			Kind:             "",
+			Text:             "",
+			ReasoningKind:    "",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
+			EncryptedContent: "",
+			Signature:        "",
+			RedactedData:     "",
+		}, false
 	}
-	return assistantTextDeltaNoticeEvent(formattedText), true
+	return adapterrender.Event{
+		Kind:             adapterrender.EventAssistantTextDelta,
+		Text:             formattedText,
+		ReasoningKind:    "",
+		SummaryIndex:     nil,
+		ToolCalls:        nil,
+		ItemID:           "",
+		ItemType:         "",
+		EncryptedContent: "",
+		Signature:        "",
+		RedactedData:     "",
+	}, true
 }
 
 func EventsWithInjectedUsageNotices(ctx context.Context, events []adapterrender.Event, notices []UsageNotice) []adapterrender.Event {

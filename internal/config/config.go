@@ -1173,9 +1173,6 @@ func (duration *AutoNameDuration) UnmarshalText(text []byte) error {
 
 // Duration returns the standard library duration value.
 func (duration *AutoNameDuration) Duration() time.Duration {
-	if duration == nil {
-		return 0
-	}
 	return time.Duration(*duration)
 }
 

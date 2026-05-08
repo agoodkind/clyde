@@ -142,15 +142,24 @@ func dispatchSSE(
 			blockTypes[ev.Index] = t
 			switch streamContentBlockType(t) {
 			case streamContentBlockTypeToolUse:
-				return sink(newToolUseStartEvent(ev.Index, ev.ContentBlock.ID, ev.ContentBlock.Name))
+				return sink(StreamToolUseStart{
+					BlockIndex:  ev.Index,
+					ToolUseID:   ev.ContentBlock.ID,
+					ToolUseName: ev.ContentBlock.Name,
+				})
 			case streamContentBlockTypeThinking:
-				return sink(newThinkingStartEvent(ev.Index))
+				return sink(StreamThinkingStart{
+					BlockIndex: ev.Index,
+				})
 			case streamContentBlockTypeRedactedThinking:
 				// Anthropic emits the opaque payload on the start event
 				// itself. There is no redacted_thinking_delta; we surface
 				// one event per block carrying the data blob and rely on
 				// content_block_stop for closing.
-				return sink(newRedactedThinkingStartEvent(ev.Index, ev.ContentBlock.Data))
+				return sink(StreamRedactedThinking{
+					BlockIndex: ev.Index,
+					Data:       ev.ContentBlock.Data,
+				})
 			case streamContentBlockTypeText:
 				// Plain text content blocks are observed via the
 				// per-delta path; no synchronous event is needed at
@@ -166,7 +175,10 @@ func dispatchSSE(
 				if ev.Delta.Text == "" {
 					return nil
 				}
-				return sink(newTextDeltaEvent(ev.Index, ev.Delta.Text))
+				return sink(StreamTextDelta{
+					BlockIndex: ev.Index,
+					Text:       ev.Delta.Text,
+				})
 			case "input_json_delta":
 				// Anthropic emits a leading content_block_delta with
 				// an empty partial_json to "open" the tool input
@@ -179,11 +191,20 @@ func dispatchSSE(
 				if ev.Delta.PartialJSON == "" {
 					return nil
 				}
-				return sink(newToolUseArgDeltaEvent(ev.Index, ev.Delta.PartialJSON))
+				return sink(StreamToolUseArgDelta{
+					BlockIndex:  ev.Index,
+					PartialJSON: ev.Delta.PartialJSON,
+				})
 			case "thinking_delta":
-				return sink(newThinkingDeltaEvent(ev.Index, ev.Delta.Thinking))
+				return sink(StreamThinkingDelta{
+					BlockIndex: ev.Index,
+					Text:       ev.Delta.Thinking,
+				})
 			case "signature_delta":
-				return sink(newThinkingSignatureDeltaEvent(ev.Index, ev.Delta.Signature))
+				return sink(StreamThinkingSignature{
+					BlockIndex: ev.Index,
+					Signature:  ev.Delta.Signature,
+				})
 			}
 		}
 	case "content_block_stop":
@@ -191,7 +212,9 @@ func dispatchSSE(
 		if err := json.Unmarshal([]byte(data), &ev); err == nil {
 			if blockTypes[ev.Index] == "tool_use" {
 				delete(blockTypes, ev.Index)
-				return sink(newToolUseStopEvent(ev.Index))
+				return sink(StreamToolUseStop{
+					BlockIndex: ev.Index,
+				})
 			}
 			delete(blockTypes, ev.Index)
 		}
@@ -212,7 +235,9 @@ func dispatchSSE(
 			}
 		}
 	case "message_stop":
-		return sink(newStopEvent(*stop))
+		return sink(StreamStop{
+			StopReason: *stop,
+		})
 	case "error":
 		var ev streamErrorEvent
 		if err := json.Unmarshal([]byte(data), &ev); err == nil {

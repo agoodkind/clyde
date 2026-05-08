@@ -83,29 +83,6 @@ type IngressContext struct {
 	MCPToolNames []string
 }
 
-// ZeroIngressContext returns an IngressContext with every field set to its
-// zero value. The generic adapter uses this when no ingress contract is
-// registered so callers get a fully-populated literal that satisfies
-// exhaustruct without naming each field at the call site.
-func ZeroIngressContext() IngressContext {
-	return IngressContext{
-		User:              "",
-		RequestID:         "",
-		ConversationID:    "",
-		GenerationID:      "",
-		WorkspacePath:     "",
-		NormalizedModel:   "",
-		PathKind:          "",
-		Mode:              "",
-		RawToolNames:      nil,
-		HasSubagentTool:   false,
-		CanSwitchMode:     false,
-		HasCreatePlanTool: false,
-		HasApplyPatchTool: false,
-		MCPToolNames:      nil,
-	}
-}
-
 // ChatIdentityPrimitive is the typed primitive ResolveIdentity returns.
 // Every field is a primitive string or int so the boundary never
 // imports a vendor identity type.

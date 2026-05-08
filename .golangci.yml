@@ -1,4 +1,0 @@
-version: "2"
-
-extends:
-  - https://raw.githubusercontent.com/agoodkind/go-makefile/main/golangci-template.yml

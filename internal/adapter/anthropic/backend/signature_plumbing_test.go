@@ -48,14 +48,9 @@ func TestStreamTranslatorSignatureDeltaProducesReasoningEventWithSignature(t *te
 // with `"type":"signature_delta"` and the original signature value.
 func TestStreamEventToTranslatorSSEReencodesThinkingSignature(t *testing.T) {
 	t.Parallel()
-	name, payload, ok := StreamEventToTranslatorSSE(anthropic.StreamEvent{
-		Kind:        "thinking_signature",
-		Text:        "opaque-sig",
-		BlockIndex:  9,
-		ToolUseID:   "",
-		ToolUseName: "",
-		PartialJSON: "",
-		StopReason:  "",
+	name, payload, ok := StreamEventToTranslatorSSE(anthropic.StreamThinkingSignature{
+		BlockIndex: 9,
+		Signature:  "opaque-sig",
 	})
 	if !ok {
 		t.Fatalf("ok=false; thinking_signature must round-trip")

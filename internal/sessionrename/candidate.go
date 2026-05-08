@@ -3,6 +3,7 @@ package sessionrename
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"goodkind.io/clyde/internal/session"
@@ -77,10 +78,7 @@ func Candidate(ctx context.Context, input CandidateInput) (CandidateResult, erro
 		return llmResult, nil
 	}
 
-	// Fallback to transcript path on LLM failure (network, empty
-	// response, validation reject). The worker logs llmErr at the
-	// call site so the slog event records the underlying cause.
-	_ = llmErr
+	slog.WarnContext(ctx, "sessionrename.candidate.llm_failed_fallback", "err", llmErr)
 	fallbackResult, fallbackErr := transcriptCandidate(input)
 	if fallbackErr != nil {
 		return CandidateResult{}, fallbackErr
