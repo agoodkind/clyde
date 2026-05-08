@@ -2152,14 +2152,18 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		return nil, status.Errorf(codes.InvalidArgument, "basedir %q is not a directory", basedir)
 	}
 
-	name := strings.TrimSpace(req.GetSessionName())
+	requestedName := req.GetSessionName()
+	name := strings.TrimSpace(requestedName)
 	if name == "" {
 		name, err = nextRemoteSessionName(store)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "allocate session name: %v", err)
 		}
-	} else if session.ValidateName(name) != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid session name %q", name)
+	} else {
+		name = requestedName
+		if err := session.ValidateDisplayName(name); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid session name %q", name)
+		}
 	}
 	if store.Exists(name) {
 		return nil, status.Errorf(codes.AlreadyExists, "session %q already exists", name)
@@ -2457,8 +2461,8 @@ func nextRemoteSessionName(store *session.FileStore) (string, error) {
 		taken[sess.Name] = true
 	}
 	base := "chat-" + daemonNow().UTC().Format("20060102-150405")
-	name := session.UniqueName(base, taken)
-	if name == "" {
+	name := session.UniqueDisplayName(base, taken)
+	if name == "" || taken[name] {
 		return "", fmt.Errorf("could not allocate a unique session name")
 	}
 	return name, nil

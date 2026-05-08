@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
@@ -59,6 +60,32 @@ func TestConsumeTUIReturnSessionRestoresAndClearsEnv(t *testing.T) {
 	}
 	if value := os.Getenv(ui.EnvTUIReturnSessionName); value != "" {
 		t.Fatalf("%s still set to %q", ui.EnvTUIReturnSessionName, value)
+	}
+}
+
+func TestNextChatSessionNameUsesDisplayNameCollisionSuffix(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	store := session.NewFileStore(config.GlobalDataDir())
+	oldCurrentTime := currentTime
+	currentTime = func() time.Time {
+		return time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() {
+		currentTime = oldCurrentTime
+	})
+
+	base := "chat-20260508-120000"
+	if err := store.Create(session.NewSession(base, "uuid-1")); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	got, err := nextChatSessionName(store)
+	if err != nil {
+		t.Fatalf("next chat session name: %v", err)
+	}
+	if got != "chat-20260508-120000 (2)" {
+		t.Fatalf("name = %q want display-name suffix", got)
 	}
 }
 

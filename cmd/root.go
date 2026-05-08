@@ -316,7 +316,7 @@ func (builder appCallbackBuilder) renameSession(sess *session.Session) (string, 
 	if oldName == "" || oldName == newName {
 		return newName, nil
 	}
-	if err := session.ValidateName(newName); err != nil {
+	if err := session.ValidateDisplayName(newName); err != nil {
 		return newName, err
 	}
 	ctx := builder.childContext("dashboard.session.rename")
@@ -1117,8 +1117,8 @@ func withEnvValue(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 
-// nextChatSessionName returns a new registry-safe chat-* name that does not
-// collide with existing session directories.
+// nextChatSessionName returns a new display-safe chat-* name that does not
+// collide with existing sessions.
 func nextChatSessionName(store session.Store) (string, error) {
 	list, err := store.List()
 	if err != nil {
@@ -1129,7 +1129,7 @@ func nextChatSessionName(store session.Store) (string, error) {
 		taken[s.Name] = true
 	}
 	base := "chat-" + currentTime().UTC().Format("20060102-150405")
-	name := session.UniqueName(base, taken)
+	name := session.UniqueDisplayName(base, taken)
 	if taken[name] {
 		return "", fmt.Errorf("could not allocate a unique session name")
 	}
