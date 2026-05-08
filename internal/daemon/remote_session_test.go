@@ -83,7 +83,7 @@ func TestStartRemoteSessionCreatesCanonicalSession(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		srv.remoteMu.Lock()
-		_, ok := srv.remoteWorkers[resp.GetSessionName()]
+		_, ok := srv.remoteWorkers[resp.GetSessionId()]
 		srv.remoteMu.Unlock()
 		if ok {
 			return

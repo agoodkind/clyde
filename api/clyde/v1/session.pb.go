@@ -135,6 +135,7 @@ type AcquireSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
 	WrapperId     string                 `protobuf:"bytes,2,opt,name=wrapper_id,json=wrapperId,proto3" json:"wrapper_id,omitempty"`
+	SessionId     string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -179,6 +180,13 @@ func (x *AcquireSessionRequest) GetSessionName() string {
 func (x *AcquireSessionRequest) GetWrapperId() string {
 	if x != nil {
 		return x.WrapperId
+	}
+	return ""
+}
+
+func (x *AcquireSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
 	}
 	return ""
 }
@@ -1868,11 +1876,13 @@ var File_clyde_v1_daemon_session_proto protoreflect.FileDescriptor
 
 const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\n" +
-	"\x1dclyde/v1/daemon/session.proto\x12\bclyde.v1\x1a\x1cclyde/v1/daemon/bridge.proto\x1a\x1eclyde/v1/daemon/provider.proto\"Y\n" +
+	"\x1dclyde/v1/daemon/session.proto\x12\bclyde.v1\x1a\x1cclyde/v1/daemon/bridge.proto\x1a\x1eclyde/v1/daemon/provider.proto\"x\n" +
 	"\x15AcquireSessionRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
-	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x91\x01\n" +
+	"wrapper_id\x18\x02 \x01(\tR\twrapperId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\"\x91\x01\n" +
 	"\x16AcquireSessionResponse\x12\x1b\n" +
 	"\tfake_home\x18\x01 \x01(\tR\bfakeHome\x12\x1f\n" +
 	"\vreal_claude\x18\x02 \x01(\tR\n" +

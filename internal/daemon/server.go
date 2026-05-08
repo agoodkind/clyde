@@ -137,6 +137,7 @@ func (s *Server) mitmProxy() *mitm.Proxy {
 type wrapperSession struct {
 	wrapperID   string
 	sessionName string // empty for bare claude invocations
+	sessionID   string
 	model       string
 	effortLevel string
 }
@@ -181,6 +182,14 @@ type foregroundLease struct {
 	shouldRestore bool
 	restoreReason string
 	acquiredAt    time.Time
+}
+
+func remoteWorkerKey(sessionName, sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		return sessionID
+	}
+	return strings.TrimSpace(sessionName)
 }
 
 var remoteWorkerExecutable = os.Executable
@@ -732,6 +741,8 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 	// resetting to global defaults.
 	existingModel, existingEffort := s.readSessionSettings(req.WrapperId)
 
+	sessionName := strings.TrimSpace(req.GetSessionName())
+	sessionID := strings.TrimSpace(req.GetSessionId())
 	var model, effortLevel string
 	if existingModel != "" || existingEffort != "" {
 		// Re-registering after daemon restart. Preserve what claude has.
@@ -745,7 +756,13 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 		)
 	} else {
 		// Fresh session. Resolve from clyde session settings and global config.
-		model, effortLevel = s.resolveSessionSettings(ctx, req.SessionName)
+		resolvedSession, resolvedModel, resolvedEffort := s.resolveSessionSettings(ctx, sessionName, sessionID)
+		if resolvedSession != nil {
+			sessionName = firstNonEmpty(resolvedSession.Name, sessionName)
+			sessionID = firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID)
+		}
+		model = resolvedModel
+		effortLevel = resolvedEffort
 	}
 
 	settingsFile, err := s.writeSettingsJSON(ctx, req.WrapperId, model, effortLevel)
@@ -755,7 +772,8 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 
 	sess := &wrapperSession{
 		wrapperID:   req.WrapperId,
-		sessionName: req.SessionName,
+		sessionName: sessionName,
+		sessionID:   sessionID,
 		model:       model,
 		effortLevel: effortLevel,
 	}
@@ -771,7 +789,8 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 
 	s.log.LogAttrs(ctx, slog.LevelInfo, "session acquired",
 		slog.String("wrapper_id", req.WrapperId),
-		slog.String("session", req.SessionName),
+		slog.String("session", sessionName),
+		slog.String("session_id", sessionID),
 		slog.String("model", model),
 		slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 		slog.String("settings_file", settingsFile),
@@ -1128,30 +1147,59 @@ func (s *Server) loadGlobalSettings(ctx context.Context) error {
 }
 
 // resolveSessionSettings loads per-session model and effortLevel from the
-// clyde session's settings.json, falling back to global settings for any
-// field not set at the session level.
-func (s *Server) resolveSessionSettings(ctx context.Context, sessionName string) (model, effortLevel string) {
+// stored clyde session, preferring stable provider identity when available and
+// falling back to global settings for any field not set at the session level.
+func (s *Server) resolveSessionSettings(ctx context.Context, sessionName, sessionID string) (*session.Session, string, string) {
 	s.mu.RLock()
 	globalModel := globalSettingString(s.globalSettings, "model")
 	globalEffort := globalSettingString(s.globalSettings, "effortLevel")
 	s.mu.RUnlock()
 
-	model = globalModel
+	model := globalModel
 	model = adaptercursor.NormalizeSessionSettingsModel(model)
-	effortLevel = globalEffort
+	effortLevel := globalEffort
 
-	if sessionName == "" {
+	if strings.TrimSpace(sessionName) == "" && strings.TrimSpace(sessionID) == "" {
 		s.log.LogAttrs(ctx, slog.LevelDebug, "no session name, using global settings",
 			slog.String("model", model),
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
-		return model, effortLevel
+		return nil, model, effortLevel
 	}
 
-	// Load session-specific settings from clyde's global store
-	sessSettings := loadClydeSessionSettings(sessionName)
-	if sessSettings != nil {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		s.log.WarnContext(ctx, "daemon.session_settings.store_init_failed",
+			"component", "daemon",
+			"session", sessionName,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return nil, model, effortLevel
+	}
+	resolvedSession, err := resolveStoredSession(store, sessionName, sessionID)
+	if err != nil {
+		s.log.WarnContext(ctx, "daemon.session_settings.resolve_failed",
+			"component", "daemon",
+			"session", sessionName,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return nil, model, effortLevel
+	}
+	if resolvedSession == nil {
+		s.log.LogAttrs(ctx, slog.LevelDebug, "no clyde session row, using global",
+			slog.String("session", sessionName),
+			slog.String("session_id", sessionID),
+			slog.String("model", model),
+			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
+			slog.String("effort", effortLevel),
+		)
+		return nil, model, effortLevel
+	}
+	sessSettings, err := sessionsettings.Load(store, resolvedSession)
+	if err == nil && sessSettings != nil {
 		if sessSettings.Model != "" {
 			model = adaptercursor.NormalizeSessionSettingsModel(sessSettings.Model)
 		}
@@ -1159,21 +1207,30 @@ func (s *Server) resolveSessionSettings(ctx context.Context, sessionName string)
 			effortLevel = sessSettings.EffortLevel
 		}
 		s.log.LogAttrs(ctx, slog.LevelDebug, "resolved session settings",
-			slog.String("session", sessionName),
+			slog.String("session", firstNonEmpty(resolvedSession.Name, sessionName)),
+			slog.String("session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID)),
 			slog.String("model", model),
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
+	} else if err != nil {
+		s.log.WarnContext(ctx, "daemon.session_settings.load_failed",
+			"component", "daemon",
+			"session", resolvedSession.Name,
+			"session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID),
+			"err", err,
+		)
 	} else {
 		s.log.LogAttrs(ctx, slog.LevelDebug, "no clyde session settings, using global",
-			slog.String("session", sessionName),
+			slog.String("session", resolvedSession.Name),
+			slog.String("session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID)),
 			slog.String("model", model),
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
 	}
 
-	return model, effortLevel
+	return resolvedSession, model, effortLevel
 }
 
 func globalSettingString(settings map[string]json.RawMessage, key string) string {
@@ -1191,22 +1248,33 @@ func globalSettingString(settings map[string]json.RawMessage, key string) string
 	return out
 }
 
-// loadClydeSessionSettings loads settings.json from the clyde global
-// store for the given session name. Returns nil if not found.
-func loadClydeSessionSettings(sessionName string) *session.Settings {
-	sessionDir := config.GetSessionDir(config.GlobalDataDir(), sessionName)
-	settingsPath := filepath.Join(sessionDir, "settings.json")
-
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		return nil
+func resolveStoredSession(store *session.FileStore, sessionName, sessionID string) (*session.Session, error) {
+	if store == nil {
+		return nil, nil
 	}
-
-	var settings session.Settings
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		sess, err := store.Resolve(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if sess != nil {
+			return sess, nil
+		}
 	}
-	return &settings
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return nil, nil
+	}
+	return store.Resolve(sessionName)
+}
+
+func resolvedSessionName(store *session.FileStore, sessionName, sessionID string) string {
+	sess, err := resolveStoredSession(store, sessionName, sessionID)
+	if err == nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
+		return sess.Name
+	}
+	return strings.TrimSpace(sessionName)
 }
 
 func globalSettingsPath() string {
@@ -1221,11 +1289,15 @@ func globalSettingsPath() string {
 func (s *Server) ListActiveSessions(_ context.Context, _ *clydev1.ListActiveSessionsRequest) (*clydev1.ListActiveSessionsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	store, _ := session.NewGlobalFileStore()
 
 	var active []*clydev1.ActiveSession
 	for wid, sess := range s.sessions {
+		if sess == nil {
+			continue
+		}
 		active = append(active, &clydev1.ActiveSession{
-			SessionName: sess.sessionName,
+			SessionName: resolvedSessionName(store, sess.sessionName, sess.sessionID),
 			WrapperId:   wid,
 		})
 	}
@@ -1238,10 +1310,23 @@ func (s *Server) sessionIsActive(sessionName string) bool {
 	if sessionName == "" {
 		return false
 	}
+	targetSessionID := ""
+	store, err := session.NewGlobalFileStore()
+	if err == nil {
+		if sess, resolveErr := resolveStoredSession(store, sessionName, ""); resolveErr == nil && sess != nil {
+			targetSessionID = sess.Metadata.ProviderSessionID()
+		}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, sess := range s.sessions {
-		if sess != nil && sess.sessionName == sessionName {
+		if sess == nil {
+			continue
+		}
+		if targetSessionID != "" && strings.TrimSpace(sess.sessionID) == targetSessionID {
+			return true
+		}
+		if sess.sessionName == sessionName {
 			return true
 		}
 	}
@@ -2093,7 +2178,7 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		done:        make(chan struct{}),
 	}
 	s.remoteMu.Lock()
-	s.remoteWorkers[name] = worker
+	s.remoteWorkers[remoteWorkerKey(name, sessionID)] = worker
 	s.remoteMu.Unlock()
 	workerCtx := daemonDetachedCorrelationContext(ctx, s.log)
 	go func() {
@@ -2223,51 +2308,24 @@ func resolveSessionRuntime(sessionName, provider, sessionID string) (resolvedSes
 	if err != nil {
 		return resolvedSessionRuntime{}, err
 	}
-	sessionName = strings.TrimSpace(sessionName)
 	providerID := session.ProviderID(strings.TrimSpace(provider))
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionName != "" {
-		sess, err := store.Resolve(sessionName)
-		if err != nil {
-			return resolvedSessionRuntime{}, err
-		}
-		runtime := sess.ProviderRuntimeBoundary()
-		return resolvedSessionRuntime{
-			Session:         sess,
-			Provider:        runtime.Live.Provider,
-			SessionID:       runtime.Live.SessionID,
-			HistoryArtifact: runtime.History.PrimaryArtifact,
-		}, nil
-	}
-	if sessionID == "" {
-		return resolvedSessionRuntime{}, nil
-	}
-	all, err := store.List()
+	sess, err := resolveStoredSession(store, sessionName, sessionID)
 	if err != nil {
 		return resolvedSessionRuntime{}, err
 	}
-	for _, sess := range all {
-		if sess == nil {
-			continue
-		}
-		for _, identity := range session.HistoricalIdentities(sess) {
-			normalized := identity.Normalized()
-			if normalized.ID != sessionID {
-				continue
-			}
-			if providerID != session.ProviderUnknown && session.NormalizeProviderID(providerID) != normalized.Provider {
-				continue
-			}
-			runtime := sess.ProviderRuntimeBoundary()
-			return resolvedSessionRuntime{
-				Session:         sess,
-				Provider:        normalized.Provider,
-				SessionID:       normalized.ID,
-				HistoryArtifact: runtime.History.PrimaryArtifact,
-			}, nil
-		}
+	if sess == nil {
+		return resolvedSessionRuntime{}, nil
 	}
-	return resolvedSessionRuntime{}, nil
+	runtime := sess.ProviderRuntimeBoundary()
+	if providerID != session.ProviderUnknown && session.NormalizeProviderID(providerID) != runtime.Live.Provider {
+		return resolvedSessionRuntime{}, nil
+	}
+	return resolvedSessionRuntime{
+		Session:         sess,
+		Provider:        runtime.Live.Provider,
+		SessionID:       runtime.Live.SessionID,
+		HistoryArtifact: runtime.History.PrimaryArtifact,
+	}, nil
 }
 
 // TailTranscript streams provider history lines for a session via the hub.
@@ -2471,8 +2529,8 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 		close(worker.done)
 	}
 	s.remoteMu.Lock()
-	if current := s.remoteWorkers[worker.sessionName]; current == worker {
-		delete(s.remoteWorkers, worker.sessionName)
+	if current := s.remoteWorkers[remoteWorkerKey(worker.sessionName, worker.sessionID)]; current == worker {
+		delete(s.remoteWorkers, remoteWorkerKey(worker.sessionName, worker.sessionID))
 	}
 	s.remoteMu.Unlock()
 	level := slog.LevelInfo
@@ -2489,10 +2547,15 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 	if !worker.incognito || worker.skipCleanup.Load() {
 		return
 	}
-	if _, delErr := s.DeleteSession(ctx, &clydev1.DeleteSessionRequest{Name: worker.sessionName}); delErr != nil {
+	store, storeErr := session.NewGlobalFileStore()
+	deleteName := worker.sessionName
+	if storeErr == nil {
+		deleteName = firstNonEmpty(resolvedSessionName(store, worker.sessionName, worker.sessionID), deleteName)
+	}
+	if _, delErr := s.DeleteSession(ctx, &clydev1.DeleteSessionRequest{Name: deleteName}); delErr != nil {
 		s.log.WarnContext(ctx, "daemon.remote_session.incognito_cleanup_failed",
 			"component", "daemon",
-			"session", worker.sessionName,
+			"session", deleteName,
 			"session_id", worker.sessionID,
 			"err", delErr,
 		)

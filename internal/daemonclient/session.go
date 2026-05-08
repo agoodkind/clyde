@@ -15,7 +15,7 @@ import (
 
 // Client exposes session-isolation RPCs used by provider wrappers.
 type Client interface {
-	AcquireSession(wrapperID, sessionName string) (*clydev1.AcquireSessionResponse, error)
+	AcquireSession(wrapperID, sessionName, sessionID string) (*clydev1.AcquireSessionResponse, error)
 	ReleaseSession(wrapperID string) error
 	Close() error
 }
@@ -34,17 +34,19 @@ func New(conn *grpc.ClientConn) Client {
 	}
 }
 
-func (c *GRPCClient) AcquireSession(wrapperID, sessionName string) (*clydev1.AcquireSessionResponse, error) {
+func (c *GRPCClient) AcquireSession(wrapperID, sessionName, sessionID string) (*clydev1.AcquireSessionResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	log := clientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.acquire_session.begin",
 		"wrapper_id", wrapperID,
 		"session_name", sessionName,
+		"session_id", sessionID,
 	)
 	return c.rpc.AcquireSession(ctx, &clydev1.AcquireSessionRequest{
 		WrapperId:   wrapperID,
 		SessionName: sessionName,
+		SessionId:   sessionID,
 	})
 }
 

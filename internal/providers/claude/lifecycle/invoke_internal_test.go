@@ -372,6 +372,9 @@ func TestLifecycleStartInteractivePersistsRemoteControl(t *testing.T) {
 	if capturedEnv["CLYDE_SESSION_NAME"] != "chat-1" {
 		t.Fatalf("captured session name = %q, want chat-1", capturedEnv["CLYDE_SESSION_NAME"])
 	}
+	if capturedEnv["CLYDE_SESSION_ID"] != capturedSessionID {
+		t.Fatalf("captured session id env = %q, want %q", capturedEnv["CLYDE_SESSION_ID"], capturedSessionID)
+	}
 	if capturedEnv["CLYDE_LAUNCH_CWD"] != "/tmp/workspace" {
 		t.Fatalf("captured launch cwd = %q, want /tmp/workspace", capturedEnv["CLYDE_LAUNCH_CWD"])
 	}

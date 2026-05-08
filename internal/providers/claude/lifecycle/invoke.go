@@ -106,6 +106,7 @@ func (l *Lifecycle) StartInteractive(ctx context.Context, req session.StartReque
 	}
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": req.SessionName,
+		"CLYDE_SESSION_ID":   sessionID,
 	}
 	if strings.TrimSpace(req.Launch.WorkDir) != "" {
 		env["CLYDE_LAUNCH_CWD"] = req.Launch.WorkDir
@@ -411,6 +412,7 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 	settingsFile := sessionSettingsFile(clydeRoot, sess.Name)
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": sess.Name,
+		"CLYDE_SESSION_ID":   sess.Metadata.ProviderSessionID(),
 	}
 	if opts.EnableSelfReload {
 		env[envEnableSelfReload] = "1"
@@ -448,6 +450,7 @@ func StartNewInteractive(env map[string]string, settingsFile string, workDir str
 	args := []string{}
 	args = appendCommonArgs(args, effectiveSettingsFile)
 	if sessionID != "" {
+		env["CLYDE_SESSION_ID"] = sessionID
 		args = append(args, "--session-id", sessionID)
 	}
 	applyMITMEnv(env)
@@ -523,8 +526,9 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	ctx := context.Background()
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 	sessionName := env["CLYDE_SESSION_NAME"]
+	sessionID := env["CLYDE_SESSION_ID"]
 
-	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName); settingsFile != "" {
+	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName, sessionID); settingsFile != "" {
 		effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 		defer cleanupSettings()
 		// Inject per-session settings before other args.
@@ -565,7 +569,7 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 				)
 			}
 		}()
-		monitorDaemon(ctx, wrapperID, sessionName, done, monitor, monitorStopped)
+		monitorDaemon(ctx, wrapperID, sessionName, sessionID, done, monitor, monitorStopped)
 	}()
 
 	runErr := cmd.Run()

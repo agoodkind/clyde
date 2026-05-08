@@ -670,7 +670,7 @@ func (s *Server) suspendClaudeRemoteForForeground(ctx context.Context, lease *fo
 		return nil
 	}
 	s.remoteMu.Lock()
-	worker := s.remoteWorkers[lease.sessionName]
+	worker := s.remoteWorkers[remoteWorkerKey(lease.sessionName, lease.sessionID)]
 	if worker == nil {
 		for _, candidate := range s.remoteWorkers {
 			if candidate != nil && candidate.sessionID == lease.sessionID {
@@ -681,7 +681,7 @@ func (s *Server) suspendClaudeRemoteForForeground(ctx context.Context, lease *fo
 	}
 	if worker != nil {
 		worker.skipCleanup.Store(true)
-		delete(s.remoteWorkers, worker.sessionName)
+		delete(s.remoteWorkers, remoteWorkerKey(worker.sessionName, worker.sessionID))
 		lease.shouldRestore = true
 		lease.restoreReason = "claude_remote_worker"
 		lease.incognito = worker.incognito
@@ -759,12 +759,17 @@ func (s *Server) restoreClaudeRemoteAfterForeground(ctx context.Context, lease *
 	if basedir == "" {
 		return nil, fmt.Errorf("missing basedir for claude remote restore")
 	}
-	cmd, err := s.startRemoteWorkerProcess(ctx, lease.sessionName, lease.sessionID, basedir, lease.incognito)
+	sessionName := strings.TrimSpace(lease.sessionName)
+	if target, resolveErr := resolveSessionRuntime(sessionName, string(session.ProviderClaude), lease.sessionID); resolveErr == nil && target.Session != nil {
+		sessionName = target.Session.Name
+	}
+	sessionName = firstNonEmpty(sessionName, lease.sessionID)
+	cmd, err := s.startRemoteWorkerProcess(ctx, sessionName, lease.sessionID, basedir, lease.incognito)
 	if err != nil {
 		return nil, fmt.Errorf("launch claude remote worker: %w", err)
 	}
 	worker := &remoteWorker{
-		sessionName: lease.sessionName,
+		sessionName: sessionName,
 		sessionID:   lease.sessionID,
 		basedir:     basedir,
 		incognito:   lease.incognito,
@@ -773,7 +778,7 @@ func (s *Server) restoreClaudeRemoteAfterForeground(ctx context.Context, lease *
 		skipCleanup: atomic.Bool{},
 	}
 	s.remoteMu.Lock()
-	s.remoteWorkers[worker.sessionName] = worker
+	s.remoteWorkers[remoteWorkerKey(worker.sessionName, worker.sessionID)] = worker
 	s.remoteMu.Unlock()
 	workerCtx := daemonDetachedCorrelationContext(ctx, s.log)
 	go func() {
@@ -791,7 +796,7 @@ func (s *Server) restoreClaudeRemoteAfterForeground(ctx context.Context, lease *
 	}()
 	return &clydev1.LiveSession{
 		Provider:       string(session.ProviderClaude),
-		SessionName:    lease.sessionName,
+		SessionName:    sessionName,
 		SessionId:      lease.sessionID,
 		Status:         "launching",
 		Basedir:        basedir,

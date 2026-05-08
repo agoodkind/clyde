@@ -234,7 +234,7 @@ func TestListLiveSessionsIncludesClaudeRemoteWorkers(t *testing.T) {
 	tmp := setupDaemonTestHome(t)
 	srv := newTestServer(t)
 	srv.remoteMu.Lock()
-	srv.remoteWorkers["claude-chat"] = &remoteWorker{
+	srv.remoteWorkers["claude-session"] = &remoteWorker{
 		sessionName: "claude-chat",
 		sessionID:   "claude-session",
 		basedir:     filepath.Join(tmp, "work"),
@@ -531,7 +531,7 @@ func TestForegroundLeaseSuspendsAndRestoresClaudeRemoteWorker(t *testing.T) {
 	}
 	srv := newTestServer(t)
 	srv.remoteMu.Lock()
-	srv.remoteWorkers["claude-chat"] = &remoteWorker{
+	srv.remoteWorkers["claude-session"] = &remoteWorker{
 		sessionName: "claude-chat",
 		sessionID:   "claude-session",
 		incognito:   true,
@@ -556,10 +556,13 @@ func TestForegroundLeaseSuspendsAndRestoresClaudeRemoteWorker(t *testing.T) {
 		t.Fatalf("should_restore = false, want true")
 	}
 	srv.remoteMu.Lock()
-	_, stillPresent := srv.remoteWorkers["claude-chat"]
+	_, stillPresent := srv.remoteWorkers["claude-session"]
 	srv.remoteMu.Unlock()
 	if stillPresent {
 		t.Fatalf("remote worker still present after acquire")
+	}
+	if err := store.Rename("claude-chat", "claude-renamed"); err != nil {
+		t.Fatalf("rename session before restore: %v", err)
 	}
 
 	released, err := srv.ReleaseForegroundSession(context.Background(), &clydev1.ReleaseForegroundSessionRequest{
@@ -573,10 +576,16 @@ func TestForegroundLeaseSuspendsAndRestoresClaudeRemoteWorker(t *testing.T) {
 		t.Fatalf("restored = false, want true")
 	}
 	srv.remoteMu.Lock()
-	restored := srv.remoteWorkers["claude-chat"]
+	restored := srv.remoteWorkers["claude-session"]
 	srv.remoteMu.Unlock()
 	if restored == nil || restored.sessionID != "claude-session" {
 		t.Fatalf("remote worker not restored: %#v", restored)
+	}
+	if restored.sessionName != "claude-renamed" {
+		t.Fatalf("restored session name = %q, want claude-renamed", restored.sessionName)
+	}
+	if released.GetLiveSession().GetSessionName() != "claude-renamed" {
+		t.Fatalf("released live session name = %q, want claude-renamed", released.GetLiveSession().GetSessionName())
 	}
 	if !restored.incognito {
 		t.Fatalf("restored incognito = false, want true")

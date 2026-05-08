@@ -25,6 +25,7 @@ func newLaunchRemoteWorkerCmd(_ *cli.Factory) *cobra.Command {
 			}
 			env := map[string]string{
 				"CLYDE_SESSION_NAME": sessionName,
+				"CLYDE_SESSION_ID":   sessionID,
 			}
 			cliDaemonLog.Logger().Info("cli.daemon.launch_remote_worker.invoked",
 				"component", "cli",

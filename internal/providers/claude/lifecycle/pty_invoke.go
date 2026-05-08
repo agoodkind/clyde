@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -62,7 +63,10 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	ctx := context.Background()
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 	sessionName := env["CLYDE_SESSION_NAME"]
-	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName); settingsFile != "" {
+	if envSessionID := env["CLYDE_SESSION_ID"]; strings.TrimSpace(envSessionID) != "" {
+		sessionID = envSessionID
+	}
+	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName, sessionID); settingsFile != "" {
 		effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 		defer cleanupSettings()
 		args = append([]string{"--settings", effectiveSettingsFile}, args...)
@@ -308,7 +312,7 @@ func startPTYDaemonMonitor(
 				)
 			}
 		}()
-		monitorDaemon(ctx, wrapperID, sessionName, monitorDone, monitor, monitorStopped)
+		monitorDaemon(ctx, wrapperID, sessionName, sessionID, monitorDone, monitor, monitorStopped)
 	}()
 }
 
