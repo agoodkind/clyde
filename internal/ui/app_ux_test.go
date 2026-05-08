@@ -91,21 +91,37 @@ func TestUX_NormalSessionPopupKeepsResumeAtTop(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 	sess := a.sessions[a.visibleIdx[0]]
-	entries := a.sessionOptionsEntries(sess, func() {})
+	entries := a.sessionOptionsEntries(sess, func() {}, false)
 	if len(entries) == 0 || entries[0].Label != "Resume" {
 		t.Fatalf("normal popup first entry = %q want %q", labelOrEmpty(entries), "Resume")
+	}
+	resumeCalls := 0
+	a.cb.ResumeSession = func(*session.Session) error {
+		resumeCalls++
+		return nil
+	}
+	entries[0].Action()
+	if resumeCalls != 1 {
+		t.Fatalf("Resume entry should invoke cb.ResumeSession once, got %d", resumeCalls)
 	}
 }
 
 // TestUX_ReturnPromptOmitsResumeFromBody confirms that
-// sessionOptionsEntriesWithoutResume drops the Resume row while
-// preserving every other action row in order.
+// sessionOptionsEntries with omitResume=true drops the Resume row while
+// preserving every other action row in order. It also walks every body
+// entry's Action and asserts none of them invoke cb.ResumeSession, so
+// the only resume affordance is the prompt's top-level Return row.
 func TestUX_ReturnPromptOmitsResumeFromBody(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 	sess := a.sessions[a.visibleIdx[0]]
-	full := a.sessionOptionsEntries(sess, func() {})
-	body := a.sessionOptionsEntriesWithoutResume(sess, func() {})
+	resumeCalls := 0
+	a.cb.ResumeSession = func(*session.Session) error {
+		resumeCalls++
+		return nil
+	}
+	full := a.sessionOptionsEntries(sess, func() {}, false)
+	body := a.sessionOptionsEntries(sess, func() {}, true)
 	if len(body) != len(full)-1 {
 		t.Fatalf("body length = %d want %d", len(body), len(full)-1)
 	}
@@ -113,6 +129,54 @@ func TestUX_ReturnPromptOmitsResumeFromBody(t *testing.T) {
 		if entry.Label != full[i+1].Label {
 			t.Fatalf("body[%d]=%q want %q", i, entry.Label, full[i+1].Label)
 		}
+		if entry.Label == "Resume" {
+			t.Fatalf("body[%d] is Resume; omitResume=true should drop it", i)
+		}
+	}
+	for i, entry := range body {
+		if entry.Action == nil || entry.Disabled {
+			continue
+		}
+		before := resumeCalls
+		entry.Action()
+		if resumeCalls != before {
+			t.Fatalf("body[%d]=%q invoked cb.ResumeSession; only the top-row Return should",
+				i, entry.Label)
+		}
+	}
+}
+
+// TestUX_ReturnPromptBodyOmitsResumeIndependentOfLabel is an explicit
+// regression test for the fragile exact-label strip the previous
+// implementation used. The previous helper inspected entries[0].Label
+// at runtime and dropped the row only when it equalled the literal
+// string "Resume", so renaming the body label (e.g. to "Resume
+// session") would have silently regressed to two resume affordances.
+// The construction-time flag replaces that filter, so the body must
+// contain no resume-invoking action regardless of any label string.
+func TestUX_ReturnPromptBodyOmitsResumeIndependentOfLabel(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[a.visibleIdx[0]]
+	resumeCalls := 0
+	a.cb.ResumeSession = func(*session.Session) error {
+		resumeCalls++
+		return nil
+	}
+	body := a.sessionOptionsEntries(sess, func() {}, true)
+	// Simulate a rename of every body label so any future filter that
+	// looked at entries[i].Label by exact string would silently misfire.
+	for i := range body {
+		body[i].Label = "Renamed " + body[i].Label
+	}
+	for _, entry := range body {
+		if entry.Action == nil || entry.Disabled {
+			continue
+		}
+		entry.Action()
+	}
+	if resumeCalls != 0 {
+		t.Fatalf("body should not invoke cb.ResumeSession even after labels rename; got %d calls", resumeCalls)
 	}
 }
 
