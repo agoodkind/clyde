@@ -429,6 +429,15 @@ func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) 
 	if strings.Contains(asst.Content[1].Text, "clyde-thinking") {
 		t.Fatalf("text block leaked envelope marker: %q", asst.Content[1].Text)
 	}
+	wire, _ := ToAPIRequest(out, "claude-x", false)
+	encoded, err := json.Marshal(wire.Messages[1])
+	if err != nil {
+		t.Fatalf("marshal wire assistant: %v", err)
+	}
+	wireBytes := string(encoded)
+	if !strings.Contains(wireBytes, `"thinking":"I should answer 42."`) {
+		t.Fatalf("wire JSON missing thinking body, got %s", wireBytes)
+	}
 }
 
 // TestTranslateRequestAssistantNoticeIsDroppedFromUpstream asserts that

@@ -29,7 +29,7 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 					URL:       b.Source.URL,
 				}
 			}
-			blocks = append(blocks, anthropic.ContentBlock{
+			block := anthropic.ContentBlock{
 				Type:      b.Type,
 				Text:      b.Text,
 				ID:        b.ID,
@@ -38,7 +38,12 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 				ToolUseID: b.ToolUseID,
 				Content:   b.ResultContent,
 				Source:    src,
-			})
+				Thinking:  b.Thinking,
+			}
+			if block.Type == "thinking" && strings.TrimSpace(block.Thinking) == "" {
+				continue
+			}
+			blocks = append(blocks, block)
 		}
 		msgs = append(msgs, anthropic.Message{Role: m.Role, Content: blocks})
 	}
