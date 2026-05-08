@@ -153,6 +153,14 @@ type WebsocketTransportConfig struct {
 	RoundTripEncrypted RoundTripEncrypted
 	// RetryPolicies are generic adapter retry rules compiled at daemon startup.
 	RetryPolicies []adapterretry.Policy
+	// BeforeAttempt, when non-nil, is called at the start of every
+	// retry attempt (one-based attempt number). It returns a
+	// (possibly derived) context to use for the attempt and a release
+	// function the transport calls when the attempt ends. The caller
+	// (adapter.Server) uses this to register each attempt as a nested
+	// livetrack egress session without importing the adapter package
+	// from here.
+	BeforeAttempt func(ctx context.Context, attemptNo int) (context.Context, func(string))
 }
 
 // Mirrors the observed Responses websocket envelope from
@@ -491,11 +499,24 @@ func runWebsocketTransportEventsWithRetry(
 	lastPolicyName := ""
 	lastMaxAttempts := 0
 	for {
-		result, responseStarted, err := runWebsocketTransportEventsOnce(ctx, cfg, payload, emit)
+		// Register each attempt as a nested egress session when the
+		// caller supplied a BeforeAttempt hook. The hook supplies a
+		// possibly-derived context (e.g. with a cancel tied to livetrack
+		// force-close) and a release function to call when the attempt
+		// ends. When the hook is nil the original ctx and a no-op
+		// release are used so the retry loop is unconditionally safe.
+		attemptCtx := ctx
+		releaseAttempt := func(string) {}
+		if cfg.BeforeAttempt != nil {
+			attemptCtx, releaseAttempt = cfg.BeforeAttempt(ctx, attempt)
+		}
+		result, responseStarted, err := runWebsocketTransportEventsOnce(attemptCtx, cfg, payload, emit)
 		if err == nil {
+			releaseAttempt("codex.attempt.success")
 			logCodexRetryTerminal(ctx, cfg, attempt, lastPolicyName, "success", lastMaxAttempts)
 			return result, nil
 		}
+		releaseAttempt("codex.attempt.failed")
 		signal := adapterretry.Signal{
 			Backend:         "codex",
 			Operation:       operation,
@@ -655,7 +676,7 @@ func runWebsocketWithCache(
 	conv := strings.TrimSpace(cfg.ConversationID)
 	fullInput := payload.Input
 
-	session, hit := cfg.SessionCache.Take(conv)
+	session, hit := cfg.SessionCache.Take(ctx, conv)
 	if hit {
 		log.InfoContext(ctx, "adapter.codex.ws_session.taken",
 			"component", "adapter",
@@ -726,7 +747,7 @@ func runWebsocketWithCache(
 
 	result, responseStarted, err := writeAndParseWebsocketRequest(ctx, session.Conn, cfg, payload, emit, false)
 	if err != nil {
-		cfg.SessionCache.Invalidate(conv, "ws_io_error")
+		cfg.SessionCache.Invalidate(ctx, conv, "ws_io_error")
 		return result, responseStarted, err
 	}
 
@@ -734,14 +755,14 @@ func runWebsocketWithCache(
 	if session.LastResponseID == "" {
 		// Server completed without an id. Drop the connection rather
 		// than re-cache without a chain anchor.
-		cfg.SessionCache.Invalidate(conv, "missing_response_id")
+		cfg.SessionCache.Invalidate(ctx, conv, "missing_response_id")
 		return result, responseStarted, nil
 	}
 	session.Model = payload.Model
 	session.PromptCacheKey = payload.PromptCacheKey
 	session.LastInputItems = cloneInputItems(fullInput)
 	session.FrameCount++
-	cfg.SessionCache.Put(session)
+	cfg.SessionCache.Put(ctx, session)
 	log.InfoContext(ctx, "adapter.codex.ws_session.put",
 		"component", "adapter",
 		"subcomponent", "codex",
