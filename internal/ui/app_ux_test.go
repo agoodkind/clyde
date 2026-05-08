@@ -60,8 +60,19 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	if !ok || modal.Context != OptionsModalContextReturn {
 		t.Fatalf("overlay = %T, want return-context *OptionsModal", a.overlay)
 	}
-	if len(modal.TopEntries) != 0 {
-		t.Fatalf("return modal should use the same single options list as session options, got %d top entries", len(modal.TopEntries))
+	if len(modal.TopEntries) != 2 {
+		t.Fatalf("return modal should have 2 top entries (Quit + Return), got %d", len(modal.TopEntries))
+	}
+	if modal.TopEntries[0].Label != "Quit clyde" {
+		t.Fatalf("return modal TopEntries[0]=%q want %q", modal.TopEntries[0].Label, "Quit clyde")
+	}
+	if modal.TopEntries[1].Label != "Return back to chat" {
+		t.Fatalf("return modal TopEntries[1]=%q want %q", modal.TopEntries[1].Label, "Return back to chat")
+	}
+	for _, entry := range modal.Entries {
+		if entry.Label == "Resume" {
+			t.Fatalf("return modal Entries should not contain Resume; it is duplicated by Return back to chat")
+		}
 	}
 	if findModalAction(modal, "Quit clyde") == nil {
 		t.Fatalf("return modal missing Quit clyde action")
@@ -71,6 +82,45 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	}
 
 	close(block)
+}
+
+// TestUX_NormalSessionPopupKeepsResumeAtTop guards against accidentally
+// stripping Resume from the standard session popup. Only the return
+// prompt omits Resume; everywhere else Resume is the first entry.
+func TestUX_NormalSessionPopupKeepsResumeAtTop(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[a.visibleIdx[0]]
+	entries := a.sessionOptionsEntries(sess, func() {})
+	if len(entries) == 0 || entries[0].Label != "Resume" {
+		t.Fatalf("normal popup first entry = %q want %q", labelOrEmpty(entries), "Resume")
+	}
+}
+
+// TestUX_ReturnPromptOmitsResumeFromBody confirms that
+// sessionOptionsEntriesWithoutResume drops the Resume row while
+// preserving every other action row in order.
+func TestUX_ReturnPromptOmitsResumeFromBody(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[a.visibleIdx[0]]
+	full := a.sessionOptionsEntries(sess, func() {})
+	body := a.sessionOptionsEntriesWithoutResume(sess, func() {})
+	if len(body) != len(full)-1 {
+		t.Fatalf("body length = %d want %d", len(body), len(full)-1)
+	}
+	for i, entry := range body {
+		if entry.Label != full[i+1].Label {
+			t.Fatalf("body[%d]=%q want %q", i, entry.Label, full[i+1].Label)
+		}
+	}
+}
+
+func labelOrEmpty(entries []OptionsModalEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	return entries[0].Label
 }
 
 func TestUX_WriteSuspendTerminalPrepSequence(t *testing.T) {
