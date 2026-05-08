@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/terminalcontrol"
 )
@@ -80,6 +81,16 @@ func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (st
 	}
 	if strings.TrimSpace(sess.Metadata.DisplayTitle) != "" {
 		return strings.TrimSpace(sess.Metadata.DisplayTitle), nil
+	}
+	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
+	if sessionID != "" {
+		if paths, err := codexstore.ResolveStorePathsFromEnv(); err == nil {
+			if index, err := codexstore.ReadSessionIndex(paths.SessionIndexPath); err == nil {
+				if threadName := strings.TrimSpace(index.ThreadName(sessionID)); threadName != "" {
+					return threadName, nil
+				}
+			}
+		}
 	}
 	return strings.TrimSpace(sess.Name), nil
 }

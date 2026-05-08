@@ -19,6 +19,11 @@ func (name ThreadName) GetName() string {
 	return strings.TrimSpace(name.Name)
 }
 
+// GetDisplayTitle returns the exact human-visible Codex thread title.
+func (name ThreadName) GetDisplayTitle() string {
+	return strings.TrimSpace(name.Name)
+}
+
 // Rename returns the registry-safe Clyde session name derived from the current
 // Codex thread name, or "" when the name is absent or unusable.
 func (name ThreadName) Rename(_ string, taken map[string]bool) string {

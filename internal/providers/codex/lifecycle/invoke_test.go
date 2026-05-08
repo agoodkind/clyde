@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -104,6 +105,35 @@ func TestCodexResumeArgsSupportIDNameLastAndAll(t *testing.T) {
 				t.Fatalf("codexResumeArgs = %#v want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestLifecycleGetSessionNameFallsBackToSessionIndex(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CODEX_SQLITE_HOME", codexHome)
+
+	paths, err := codexstore.ResolveStorePathsFromEnv()
+	if err != nil {
+		t.Fatalf("ResolveStorePathsFromEnv: %v", err)
+	}
+	body := `{"id":"thread-1","thread_name":"My renamed thread","updated_at":"2026-05-02T17:02:00Z"}` + "\n"
+	if err := os.WriteFile(paths.SessionIndexPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write session index: %v", err)
+	}
+
+	sess := session.NewSession("codex-thread-1", "thread-1")
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "thread-1"},
+	}
+
+	got, err := NewLifecycle().GetSessionName(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("GetSessionName returned error: %v", err)
+	}
+	if got != "My renamed thread" {
+		t.Fatalf("GetSessionName = %q, want %q", got, "My renamed thread")
 	}
 }
 

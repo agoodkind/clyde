@@ -180,7 +180,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			HasCustomOutputStyle: false,
 			WorkspaceRoot:        r.WorkspaceRoot,
 			ContextMessageCount:  0,
-			DisplayTitle:         r.GetName(),
+			DisplayTitle:         r.DisplayTitle(),
 		}
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {
