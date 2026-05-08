@@ -27,6 +27,7 @@ import (
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -122,8 +123,7 @@ type Server struct {
 	token                string
 	mux                  *http.ServeMux
 	httpSrv              *http.Server
-	connMu               sync.Mutex
-	conns                map[net.Conn]http.ConnState
+	requests             *livetrack.Registry[IngressMeta]
 	oauthMgr             *oauth.Manager
 	anthr                *anthropic.Client
 	httpClient           *http.Client
@@ -169,25 +169,51 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	if err != nil {
 		return nil, err
 	}
+	adapterLog := log.With("subcomponent", "adapter")
 	s := &Server{
 		cfg:            cfg,
 		logprobs:       cfg.Logprobs,
 		deps:           deps,
-		log:            log.With("subcomponent", "adapter"),
+		log:            adapterLog,
 		logging:        logging,
 		runtimeLogging: runtimeLogging,
 		registry:       registry,
 		sem:            make(chan struct{}, max),
 		token:          token,
+		mux:            nil,
+		httpSrv:        nil,
+		requests:       newAdapterIngressRegistry(adapterLog),
+		oauthMgr:       nil,
+		anthr:          nil,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
 		ctxUsage:             newContextUsageTracker(),
 		usageNoticeGate:      adapterruntime.NewUsageNoticeGateWithLogger(log),
+		providerRegistry:     nil,
+		codexProvider:        nil,
+		anthropicProvider:    nil,
 		errorRenderers:       defaultBoundaryRegistry.snapshotRenderers(),
 		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
+	s.registerProviders(ctx, cfg, logging, runtimeLogging, deps, log, max)
+	s.mux = s.routes()
+	return s, nil
+}
+
+// registerProviders wires the optional Codex and Anthropic providers
+// into the server's provider registry. Extracted from [New] so that
+// function stays under the funlen limit.
+func (s *Server) registerProviders(
+	ctx context.Context,
+	cfg config.AdapterConfig,
+	logging config.LoggingConfig,
+	runtimeLogging *RuntimeLogging,
+	deps Deps,
+	log *slog.Logger,
+	maxConcurrent int,
+) {
 	if cfg.Codex.Enabled {
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
 			Config:     cfg,
@@ -202,50 +228,61 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		)
 	}
 	if cfg.DirectOAuth {
-		s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
-		id := cfg.ClientIdentity
-		messagesURL := cfg.OAuth.MessagesURL
-		if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
-			// Rewrite messages outbound through the MITM proxy. The
-			// proxy's classifyRoute strips api.anthropic.com from
-			// upstreamURL and prepends its own base, so we only need
-			// to match the path the proxy expects (/v1/messages).
-			messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
-			s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed",
-				slog.String("messages_url", messagesURL),
-			)
-		}
-		s.anthr = anthropic.New(nil, s.oauthMgr, anthropic.Config{
-			MessagesURL:             messagesURL,
-			OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
-			BetaHeader:              id.BetaHeader,
-			UserAgent:               id.UserAgent,
-			SystemPromptPrefix:      id.SystemPromptPrefix,
-			StainlessPackageVersion: id.StainlessPackageVersion,
-			StainlessRuntime:        id.StainlessRuntime,
-			StainlessRuntimeVersion: id.StainlessRuntimeVersion,
-			CCVersion:               id.CCVersion,
-			CCEntrypoint:            id.CCEntrypoint,
-			WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
-		})
-		s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
-			Config: cfg,
-			Logger: slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
-		}, anthropic.ProviderOptions{
-			Prepare:         s.prepareAnthropicProviderRequest,
-			ExecutePrepared: s.executeAnthropicPreparedRequest,
-		})
-		s.providerRegistry.Register(s.anthropicProvider)
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
-			slog.String("provider", string(adapterresolver.ProviderAnthropic)),
-			slog.Int("registered_count", len(s.providerRegistry.IDs())),
-		)
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled",
-			slog.Int("max_concurrent", max),
+		s.registerAnthropicProvider(ctx, cfg, deps, log, maxConcurrent)
+	}
+}
+
+// registerAnthropicProvider wires the Anthropic OAuth provider into
+// the server's provider registry. Extracted from registerProviders to
+// keep each helper under the funlen limit.
+func (s *Server) registerAnthropicProvider(
+	ctx context.Context,
+	cfg config.AdapterConfig,
+	deps Deps,
+	log *slog.Logger,
+	maxConcurrent int,
+) {
+	s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
+	id := cfg.ClientIdentity
+	messagesURL := cfg.OAuth.MessagesURL
+	if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
+		// Rewrite messages outbound through the MITM proxy. The
+		// proxy's classifyRoute strips api.anthropic.com from
+		// upstreamURL and prepends its own base, so we only need
+		// to match the path the proxy expects (/v1/messages).
+		messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed",
+			slog.String("messages_url", messagesURL),
 		)
 	}
-	s.mux = s.routes()
-	return s, nil
+	s.anthr = anthropic.New(nil, s.oauthMgr, anthropic.Config{
+		MessagesURL:             messagesURL,
+		OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
+		BetaHeader:              id.BetaHeader,
+		UserAgent:               id.UserAgent,
+		SystemPromptPrefix:      id.SystemPromptPrefix,
+		StainlessPackageVersion: id.StainlessPackageVersion,
+		StainlessRuntime:        id.StainlessRuntime,
+		StainlessRuntimeVersion: id.StainlessRuntimeVersion,
+		CCVersion:               id.CCVersion,
+		CCEntrypoint:            id.CCEntrypoint,
+		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
+	})
+	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
+		Config: cfg,
+		Logger: slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
+	}, anthropic.ProviderOptions{
+		Prepare:         s.prepareAnthropicProviderRequest,
+		ExecutePrepared: s.executeAnthropicPreparedRequest,
+	})
+	s.providerRegistry.Register(s.anthropicProvider)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
+		slog.String("provider", string(adapterresolver.ProviderAnthropic)),
+		slog.Int("registered_count", len(s.providerRegistry.IDs())),
+	)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled",
+		slog.Int("max_concurrent", maxConcurrent),
+	)
 }
 
 // codexProviderOptions builds the codex provider's startup options from
