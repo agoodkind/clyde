@@ -110,7 +110,7 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 	} else {
 		src = make([][]TextSegment, len(tb.Lines))
 		for i, ln := range tb.Lines {
-			src[i] = []TextSegment{{Text: stripMarkup(ln), Style: StyleDefault}}
+			src[i] = []TextSegment{seg(stripMarkup(ln), StyleDefault)}
 		}
 	}
 	if !tb.Wrap {
@@ -126,8 +126,8 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 		// Spinner segments contribute their glyph-prefixed rendered
 		// text so the wrap calculation reflects on-screen width.
 		var plain strings.Builder
-		for _, seg := range line {
-			plain.WriteString(seg.renderedText())
+		for _, lineSeg := range line {
+			plain.WriteString(lineSeg.renderedText())
 		}
 		if runeCount(plain.String()) <= w {
 			out = append(out, line)
@@ -143,14 +143,14 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 			}
 			candidate += word
 			if runeCount(candidate) > w && cur != "" {
-				out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+				out = append(out, []TextSegment{seg(cur, StyleDefault)})
 				cur = word
 			} else {
 				cur = candidate
 			}
 		}
 		if cur != "" {
-			out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+			out = append(out, []TextSegment{seg(cur, StyleDefault)})
 		}
 	}
 	tb.wrappedCache = out
@@ -217,8 +217,8 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 		segs := lines[idx]
 		x := r.X
 		remaining := contentW
-		for _, seg := range segs {
-			used := drawString(scr, x, contentY+i, seg.Style, seg.renderedText(), remaining)
+		for _, lineSeg := range segs {
+			used := drawString(scr, x, contentY+i, lineSeg.Style, lineSeg.renderedText(), remaining)
 			x += used
 			remaining -= used
 			if remaining <= 0 {
