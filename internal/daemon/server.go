@@ -548,9 +548,18 @@ func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest
 // so that no other process can simultaneously mutate the registry
 // while the rename is in flight. A SESSION_RENAMED event broadcasts
 // the change to every subscriber.
+//
+// User-driven renames (the only path in PR2) record
+// AutoNameSource = AutoNameSourceUser on the metadata so the auto-name
+// worker excludes the session from any future apply pass.
 func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRequest) (*clydev1.RenameSessionResponse, error) {
+	start := daemonNow()
 	if req.OldName == "" || req.NewName == "" {
 		return nil, status.Error(codes.InvalidArgument, "old_name and new_name are required")
+	}
+	if s.sessionHasLiveLease(req.OldName) {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"session %q is in use; close the wrapper before renaming", req.OldName)
 	}
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
@@ -559,14 +568,59 @@ func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRe
 	if err := store.Rename(req.OldName, req.NewName); err != nil {
 		return nil, status.Errorf(codes.Internal, "rename failed: %v", err)
 	}
+	source := session.AutoNameSourceUser
+	renamed, getErr := store.Get(req.NewName)
+	if getErr == nil && renamed != nil {
+		renamed.Metadata.AutoNameSource = source
+		renamed.Metadata.LastAutoNameAt = daemonNow()
+		if updateErr := store.Update(renamed); updateErr != nil {
+			s.log.LogAttrs(ctx, slog.LevelWarn, "daemon.rename.metadata_update_failed",
+				slog.String("component", "daemon"),
+				slog.String("subcomponent", "session"),
+				slog.String("session", req.NewName),
+				slog.String("err", updateErr.Error()),
+			)
+		}
+	}
 	s.renameContextState(req.OldName, req.NewName)
-	renamed, _ := store.Get(req.NewName)
 	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED, store, renamed, req.OldName)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "session renamed via RPC",
-		slog.String("old", req.OldName),
-		slog.String("new", req.NewName),
+	corrCtx := correlation.FromContext(ctx)
+	providerSessionID := ""
+	if renamed != nil {
+		providerSessionID = renamed.Metadata.SessionID
+	}
+	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon.rename.applied",
+		slog.String("component", "daemon"),
+		slog.String("subcomponent", "session"),
+		slog.String("prior_name", req.OldName),
+		slog.String("new_name", req.NewName),
+		slog.String("source", source.String()),
+		slog.String("session_id", providerSessionID),
+		slog.String("trace_id", string(corrCtx.TraceID)),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
 	return &clydev1.RenameSessionResponse{}, nil
+}
+
+// sessionHasLiveLease reports whether any wrapper currently holds a
+// live-runtime record or foreground lease against the named session.
+// The check matches by display name because RenameSession identifies
+// sessions by name on the wire while the live maps are keyed by
+// provider session id.
+func (s *Server) sessionHasLiveLease(name string) bool {
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	for _, live := range s.liveSessions {
+		if live != nil && live.name == name {
+			return true
+		}
+	}
+	for _, lease := range s.liveLeases {
+		if lease != nil && lease.sessionName == name {
+			return true
+		}
+	}
+	return false
 }
 
 // DeleteSession is the daemon-side delete. It removes registry metadata,
