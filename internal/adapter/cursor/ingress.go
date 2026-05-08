@@ -50,8 +50,10 @@ func (i *Ingress) ResolveIdentity(corr correlation.Context, ic ingresscontract.I
 }
 
 // LogAttrs returns the vendor-specific structured log attributes the
-// adapter emits at boundary log sites. The output shape is the same
-// as BoundaryLogAttrs so on-disk log consumers are unchanged.
+// adapter emits at boundary log sites. The shape (cursor_request_path,
+// cursor_raw_model, cursor_normalized_model, cursor_raw_tool_names,
+// cursor_mode, cursor_can_spawn_agent, cursor_can_switch_mode, plus the
+// optional id attrs) is preserved so on-disk log consumers are unchanged.
 func (i *Ingress) LogAttrs(ic ingresscontract.IngressContext, rawModel string, toolNames []string) []slog.Attr {
 	normalizedModel := ic.NormalizedModel
 	if normalizedModel == "" {

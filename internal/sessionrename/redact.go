@@ -111,13 +111,13 @@ func Redact(message string, policy RedactPolicy) string {
 // messages: the join still happens so the worker can pass the
 // partial output downstream.
 func RedactMessages(messages []string, policy RedactPolicy) string {
-	limit := 3
-	if len(messages) < limit {
-		limit = len(messages)
-	}
+	limit := min(3, len(messages))
 	parts := make([]string, 0, limit)
-	for index := range limit {
-		parts = append(parts, Redact(messages[index], policy))
+	for index, message := range messages {
+		if index >= limit {
+			break
+		}
+		parts = append(parts, Redact(message, policy))
 	}
 	joined := strings.Join(parts, MessageSeparator)
 	if len(joined) > JoinedCharCap {

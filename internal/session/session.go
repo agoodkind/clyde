@@ -127,6 +127,7 @@ func NewSession(name, sessionID string) *Session {
 			AutoNameState:        AutoNameStateUntouched,
 			AutoNameSource:       AutoNameSourceUnspecified,
 			LastAutoNameAt:       time.Time{},
+			AutoNameSourceHash:   "",
 		},
 	}
 	sess.Metadata.NormalizeProviderState()

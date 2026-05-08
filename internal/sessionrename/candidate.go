@@ -69,7 +69,7 @@ func Candidate(ctx context.Context, input CandidateInput) (CandidateResult, erro
 	redacted := RedactMessages(input.FirstUserMessages, input.Redact)
 
 	if input.Provider == ProviderTranscript {
-		return transcriptCandidate(input, redacted)
+		return transcriptCandidate(input)
 	}
 
 	llmResult, llmErr := llmCandidate(ctx, input, redacted)
@@ -81,7 +81,7 @@ func Candidate(ctx context.Context, input CandidateInput) (CandidateResult, erro
 	// response, validation reject). The worker logs llmErr at the
 	// call site so the slog event records the underlying cause.
 	_ = llmErr
-	fallbackResult, fallbackErr := transcriptCandidate(input, redacted)
+	fallbackResult, fallbackErr := transcriptCandidate(input)
 	if fallbackErr != nil {
 		return CandidateResult{}, fallbackErr
 	}
@@ -120,7 +120,7 @@ func llmCandidate(ctx context.Context, input CandidateInput, redacted string) (C
 // derives a kebab-shaped candidate from the first redacted message
 // and validates it. The path matches PR4's transcript-only behavior
 // so the swap from PR4 to PR5 keeps the same fallback semantics.
-func transcriptCandidate(input CandidateInput, redacted string) (CandidateResult, error) {
+func transcriptCandidate(input CandidateInput) (CandidateResult, error) {
 	if len(input.FirstUserMessages) == 0 {
 		return CandidateResult{}, fmt.Errorf("sessionrename: no user messages")
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -15,7 +16,7 @@ import (
 //
 // The marker uses single curly braces on purpose. Single braces
 // avoid collisions with text/template's {{...}} syntax, so callers
-// can substitute through a plain strings.Replace without spinning
+// can substitute through a plain [strings.Replace] without spinning
 // up a template engine.
 const PromptTemplate = `You generate a short kebab-case label for a chat session.
 
@@ -59,7 +60,7 @@ type LLMCaller interface {
 var ErrEmptyResponse = errors.New("sessionrename: llm returned empty response")
 
 // BuildPrompt substitutes the redacted content into the prompt
-// template. The function uses a plain strings.Replace so the
+// template. The function uses a plain [strings.Replace] so the
 // template stays free of text/template syntax. Callers should pass
 // the output of RedactMessages directly.
 func BuildPrompt(redacted string) string {
@@ -79,7 +80,7 @@ func CleanLLMOutput(raw string) string {
 	// The model occasionally returns a multi-line response. Take
 	// the first non-empty line only, since the prompt asks for a
 	// single label.
-	for _, line := range strings.Split(cleaned, "\n") {
+	for line := range strings.SplitSeq(cleaned, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" {
 			return trimmed
@@ -100,7 +101,11 @@ func CandidateFromLLM(ctx context.Context, caller LLMCaller, redacted string) (s
 	prompt := BuildPrompt(redacted)
 	raw, err := caller.Complete(ctx, prompt)
 	if err != nil {
-		return "", err
+		slog.WarnContext(ctx, "sessionrename.llm.complete_failed",
+			"prompt_bytes", len(prompt),
+			"err", err,
+		)
+		return "", fmt.Errorf("sessionrename: llm complete: %w", err)
 	}
 	cleaned := CleanLLMOutput(raw)
 	if cleaned == "" {

@@ -128,8 +128,9 @@ func newTrustStatusCmd(
 				slog.WarnContext(cmd.Context(), "cli.mitm.trust.status.read_failed",
 					"platform", string(reg.Platform()),
 					"err", statusErr)
-				writeTrustStatus(f.IOStreams.Out, status, cfg.MITM.CA.CertPath, statusErr)
-				return statusErr
+				wrapped := fmt.Errorf("cli.mitm.trust: read truststore status: %w", statusErr)
+				writeTrustStatus(f.IOStreams.Out, status, cfg.MITM.CA.CertPath, wrapped)
+				return wrapped
 			}
 			writeTrustStatus(f.IOStreams.Out, status, cfg.MITM.CA.CertPath, nil)
 			return nil

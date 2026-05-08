@@ -23,7 +23,7 @@ func deny(reason string) GateResult { return GateResult{Allow: false, Reason: re
 // EvaluateGates returns Allow=false with a Reason whenever any of
 // the rules below would prevent the worker from proposing a new
 // name. Daemon callers run this before reading the transcript so a
-// session that fails a gate never costs an os.Open.
+// session that fails a gate never costs an [os.Open].
 //
 // The gates close finding-1 through finding-4 from the post-mortem:
 //   - user-owned predicate locks user-typed names.
