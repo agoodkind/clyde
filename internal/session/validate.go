@@ -53,8 +53,8 @@ func ValidateName(name string) error {
 // returns "" when the input has no usable alphanumeric content. It
 // lowercases the input, replaces every non [a-z0-9] rune with a hyphen,
 // collapses runs of hyphens, trims edge hyphens, and truncates to
-// MaxNameLength. Callers use this to map a Claude Code customTitle into
-// a clyde session Name. A return of "" signals that the caller should
+// MaxNameLength. Callers use this to map a provider-owned user-facing title
+// into a clyde session Name. A return of "" signals that the caller should
 // fall back to another naming strategy.
 func Sanitize(raw string) string {
 	if raw == "" {

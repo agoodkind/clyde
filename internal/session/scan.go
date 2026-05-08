@@ -21,7 +21,7 @@ type DiscoveryResult struct {
 	WorkspaceRoot       string
 	Entrypoint          string
 	FirstEntryTime      time.Time
-	CustomTitle         string // user-given chat name from provider metadata
+	NameContract        ProviderSessionName
 	ForkParent          ProviderSessionID
 	IsAutoName          bool // provider invocation that looks like a clyde auto-name call
 	IsForked            bool // provider metadata carries fork lineage
@@ -100,10 +100,10 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		left := ordered[i]
 		right := ordered[j]
 		if left.ProviderSessionKey() == right.ProviderSessionKey() {
-			if left.CustomTitle != "" && right.CustomTitle == "" {
+			if left.GetName() != "" && right.GetName() == "" {
 				return true
 			}
-			if right.CustomTitle != "" && left.CustomTitle == "" {
+			if right.GetName() != "" && left.GetName() == "" {
 				return false
 			}
 			if !left.FirstEntryTime.Equal(right.FirstEntryTime) {
@@ -162,7 +162,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			SessionID:       r.ProviderSessionID(),
 			WorkspaceRoot:   r.WorkspaceRoot,
 			WorkDir:         r.WorkspaceRoot,
-			DisplayTitle:    r.CustomTitle,
+			DisplayTitle:    r.GetName(),
 			IsForkedSession: r.IsForked,
 		}
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
@@ -212,7 +212,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			"transcript", r.PrimaryArtifactPath(),
 			"workspace", r.WorkspaceRoot,
 			"name_source", nameSource,
-			"display_title", r.CustomTitle,
+			"display_title", r.GetName(),
 		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
 		known[r.ProviderSessionKey()] = name
@@ -232,32 +232,31 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 }
 
 // pickAdoptedName chooses a session name for an adopted provider session. It
-// prefers the sanitized provider customTitle so clyde verbs accept the
-// user-given chat name directly. Collisions with existing names are
-// resolved with UniqueName. When customTitle is absent or sanitizes to
-// empty (for example an emoji-only title) the function falls back to
-// the workspace-plus-UUID scheme in uniqueAdoptedName. The second return
-// value is a short label of the source used, for structured logs.
+// prefers the provider-owned observed name so clyde verbs accept the upstream
+// user-facing title directly. Collisions with existing names are resolved with
+// UniqueName. When the provider does not offer a usable name the function falls
+// back to the workspace-plus-UUID scheme in uniqueAdoptedName. The second
+// return value is a short label of the source used, for structured logs.
 func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) {
-	if sanitized := Sanitize(r.CustomTitle); sanitized != "" {
-		candidate := UniqueName(sanitized, taken)
-		if candidate != "" && ValidateName(candidate) == nil {
+	observedName := r.GetName()
+	if candidate := r.Rename("", taken); candidate != "" {
+		if ValidateName(candidate) == nil {
 			sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
 				"component", "session",
 				"subcomponent", "adopt",
 				"session_id", r.ProviderSessionID(),
-				"source", "custom_title",
-				"raw_title", r.CustomTitle,
+				"source", "provider_name",
+				"raw_title", observedName,
 				"name", candidate,
 			)
-			return candidate, "custom_title"
+			return candidate, "provider_name"
 		}
 		sessionAdoptLog.Logger().Debug("session.adopt.name_sanitize_unusable",
 			"component", "session",
 			"subcomponent", "adopt",
 			"session_id", r.ProviderSessionID(),
-			"raw_title", r.CustomTitle,
-			"sanitized", sanitized,
+			"raw_title", observedName,
+			"candidate", candidate,
 		)
 	}
 	fallback := uniqueAdoptedName(r, taken)
@@ -266,7 +265,7 @@ func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) 
 		"subcomponent", "adopt",
 		"session_id", r.ProviderSessionID(),
 		"source", "workspace_uuid_fallback",
-		"raw_title", r.CustomTitle,
+		"raw_title", observedName,
 		"name", fallback,
 	)
 	return fallback, "workspace_uuid_fallback"

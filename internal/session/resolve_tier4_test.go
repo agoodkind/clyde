@@ -13,12 +13,32 @@ type tier4TestScanner struct {
 	results *[]DiscoveryResult
 }
 
+type tier4TestName struct {
+	value string
+}
+
 func (scanner tier4TestScanner) Provider() ProviderID {
 	return ProviderClaude
 }
 
 func (scanner tier4TestScanner) Scan() ([]DiscoveryResult, error) {
 	return append([]DiscoveryResult(nil), (*scanner.results)...), nil
+}
+
+func (name tier4TestName) GetName() string {
+	return name.value
+}
+
+func (name tier4TestName) Rename(_ string, taken map[string]bool) string {
+	sanitized := Sanitize(name.value)
+	if sanitized == "" {
+		return ""
+	}
+	candidate := UniqueName(sanitized, taken)
+	if candidate == "" || ValidateName(candidate) != nil {
+		return ""
+	}
+	return candidate
 }
 
 var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
@@ -63,7 +83,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 			WorkspaceRoot:       "/Users/agoodkind/Sites/tack",
 			Entrypoint:          "cli",
 			FirstEntryTime:      time.Date(2026, time.April, 12, 23, 52, 12, 0, time.UTC),
-			CustomTitle:         customTitle,
+			NameContract:        tier4TestName{value: customTitle},
 			PrimaryArtifact:     path,
 			PrimaryArtifactKind: "transcript",
 		})
@@ -133,6 +153,30 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(second).ToNot(BeNil())
 		Expect(second.Name).To(Equal(first.Name))
 		Expect(second.Metadata.ProviderSessionID()).To(Equal(first.Metadata.ProviderSessionID()))
+	})
+
+	It("reconciles an already-known session idempotently when the provider name appears later", func() {
+		writeTranscript(uuid, "merry-swan")
+		Expect(store.Create(&Session{
+			Name: "tack-22a95bc5",
+			Metadata: Metadata{
+				Name:      "tack-22a95bc5",
+				Provider:  ProviderClaude,
+				SessionID: uuid,
+			},
+		})).To(Succeed())
+
+		first, err := store.Resolve("merry-swan")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first).ToNot(BeNil())
+		Expect(first.Name).To(Equal("merry-swan"))
+		Expect(first.Metadata.DisplayTitle).To(Equal("merry-swan"))
+
+		second, err := store.Resolve("merry-swan")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second).ToNot(BeNil())
+		Expect(second.Name).To(Equal("merry-swan"))
+		Expect(second.Metadata.DisplayTitle).To(Equal("merry-swan"))
 	})
 
 	It("skips tier 4 when the store is constructed read-only", func() {

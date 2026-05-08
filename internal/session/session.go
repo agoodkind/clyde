@@ -31,14 +31,13 @@ type Metadata struct {
 	// and should be regenerated in the background.
 	ContextMessageCount int `json:"contextMessageCount,omitempty"`
 
-	// DisplayTitle preserves the original user-given chat name that
-	// Claude Code stores in transcript "custom-title" entries. It is the
-	// human-readable form surfaced in the TUI. The session Name is a
-	// sanitized derivative used as the directory identifier and is what
-	// clyde resume, compact, and other verbs accept. DisplayTitle stays
-	// in sync with the latest custom-title entry seen during scan; the
-	// Name never renames post-adoption because that would break
-	// previousSessionIds and parentSession references.
+	// DisplayTitle preserves the provider-owned user-facing session title.
+	// It is the human-readable form surfaced in the TUI. The session Name is a
+	// sanitized derivative used as the directory identifier and is what clyde
+	// resume, compact, and other verbs accept. DisplayTitle stays in sync with
+	// the latest provider-observed name seen during scan; the Name only changes
+	// when the reconcile path explicitly applies the provider-owned rename
+	// contract.
 	DisplayTitle string `json:"displayTitle,omitempty"`
 }
 

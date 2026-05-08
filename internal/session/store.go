@@ -53,8 +53,9 @@ type Store interface {
 	// 2. Provider session id match (checks current and historical ids)
 	// 3. Substring search (returns single match only)
 	// 4. Transparent adoption: scans provider-owned artifacts for a session
-	//    whose provider session id or sanitized customTitle matches query, then
-	//    registers a clyde session stub (metadata.json) and returns it.
+	//    whose provider session id or provider-owned observed name matches
+	//    query, then registers a clyde session stub (metadata.json) and returns
+	//    it.
 	//    This tier is skipped on FileStores constructed with
 	//    NewFileStoreReadOnly (for scan paths that must not recurse).
 	// Returns (nil, nil) if no match is found.
@@ -428,7 +429,7 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 
 // adoptFromDiscovery runs the tier-4 scan and adoption loop. It asks
 // the discovery cache for the current transcript list, looks for an
-// entry whose sessionId or sanitized customTitle matches query, runs
+// entry whose sessionId or provider-owned observed name matches query, runs
 // AdoptUnknown to materialize a metadata.json, and invalidates the
 // cache so a subsequent miss does not see the same transcript as
 // unknown. Returns the adopted session, or nil when no transcript
@@ -457,7 +458,7 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 			}
 			continue
 		}
-		if sanitized := Sanitize(r.CustomTitle); sanitized != "" && sanitized == query {
+		if sanitized := Sanitize(r.GetName()); sanitized != "" && sanitized == query {
 			if match == nil || shouldPreferDiscoveryResult(*r, *match) {
 				match = r
 			}
@@ -479,15 +480,15 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		"query", query,
 		"session_id", match.ProviderSessionID(),
 		"transcript", match.PrimaryArtifactPath(),
-		"raw_custom_title", match.CustomTitle,
+		"provider_name", match.GetName(),
 	)
 
 	// If the direct session ID is already registered (for example the daemon's
 	// background scanner adopted it under an auto-generated name before
-	// the user assigned a customTitle), reconcile the existing session
-	// to match the Claude Code title rather than creating a duplicate.
-	// The rename uses the sanitized customTitle so tier 1 finds it on
-	// the retry. DisplayTitle is backfilled unconditionally.
+	// the user assigned a provider-native title), reconcile the existing session
+	// to match the provider-owned name rather than creating a duplicate.
+	// The rename uses the provider naming contract so tier 1 finds it on the
+	// retry. DisplayTitle is backfilled unconditionally.
 	if existing := fs.findByProviderSessionID(match.ProviderIdentity()); existing != nil {
 		return fs.reconcileExisting(existing, match, query)
 	}
@@ -539,7 +540,7 @@ func adoptDisabledReason(fs *FileStore) string {
 // findByProviderSessionID returns the first registered session whose current or
 // historical provider identity matches id, or nil when none match. Used by tier
 // 4 to detect a session that was previously auto-adopted under a name that does
-// not reflect the provider custom title.
+// not reflect the provider-owned observed name.
 func (fs *FileStore) findByProviderSessionID(id ProviderSessionID) *Session {
 	id = id.Normalized()
 	if id.IsZero() {
@@ -586,20 +587,21 @@ func exactSessionIDMatchType(sess *Session, query string) string {
 }
 
 // reconcileExisting updates an already-adopted session to reflect the
-// Claude Code customTitle seen on the transcript. If the sanitized
-// customTitle is a valid unique name, the session directory is renamed
-// so tier-1 lookups by the customTitle succeed. DisplayTitle is
-// backfilled unconditionally so the TUI shows the user-given title
-// even when a rename is not possible. The function returns the session
-// in its final state (post-rename), or the original when no rename was
-// needed.
+// provider-owned observed name seen on the artifact. If the provider contract
+// offers a valid unique registry rename, the session directory is renamed so
+// tier-1 lookups by that name succeed. DisplayTitle is backfilled
+// unconditionally so the TUI shows the upstream title even when a rename is
+// not possible. The function returns the session in its final state
+// (post-rename), or the original when no rename was needed.
 func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult, query string) (*Session, error) {
-	// Backfill DisplayTitle when the scan picked up a customTitle that
+	observedName := match.GetName()
+
+	// Backfill DisplayTitle when the scan picked up a provider-owned name that
 	// the existing metadata lacks. Persist immediately so subsequent
 	// callers see the update regardless of the rename outcome.
 	titleChanged := false
-	if match.CustomTitle != "" && existing.Metadata.DisplayTitle != match.CustomTitle {
-		existing.Metadata.DisplayTitle = match.CustomTitle
+	if observedName != "" && existing.Metadata.DisplayTitle != observedName {
+		existing.Metadata.DisplayTitle = observedName
 		titleChanged = true
 	}
 	if titleChanged {
@@ -617,27 +619,11 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 				"subcomponent", "resolve",
 				"session", existing.Name,
 				"session_id", existing.Metadata.ProviderSessionID(),
-				"display_title", match.CustomTitle,
+				"display_title", observedName,
 			)
 		}
 	}
 
-	sanitized := Sanitize(match.CustomTitle)
-	if sanitized == "" || sanitized == existing.Name {
-		sessionResolveLog.Logger().Debug("session.resolve.reconcile_no_rename",
-			"component", "session",
-			"subcomponent", "resolve",
-			"query", query,
-			"session", existing.Name,
-			"sanitized", sanitized,
-			"reason_empty", sanitized == "",
-		)
-		return existing, nil
-	}
-
-	// Pick a unique target name so a customTitle collision with another
-	// session does not fail the rename. This reuses the same collision
-	// strategy AdoptUnknown uses during fresh adoption.
 	names, err := buildExistingNameSet(fs)
 	if err != nil {
 		sessionLog.Warn("session.resolve.reconcile_name_set_failed",
@@ -648,12 +634,26 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		return existing, nil
 	}
 	delete(names, existing.Name)
-	target := UniqueName(sanitized, names)
+
+	target := match.Rename(existing.Name, names)
 	if target == "" || target == existing.Name {
+		sessionResolveLog.Logger().Debug("session.resolve.reconcile_no_rename",
+			"component", "session",
+			"subcomponent", "resolve",
+			"query", query,
+			"session", existing.Name,
+			"provider_name", observedName,
+			"reason_empty", target == "",
+		)
 		return existing, nil
 	}
 
 	if err := fs.Rename(existing.Name, target); err != nil {
+		if resolved := fs.findByProviderSessionID(match.ProviderIdentity()); resolved != nil {
+			if resolved.Name == target {
+				return resolved, nil
+			}
+		}
 		sessionLog.Warn("session.resolve.reconcile_rename_failed",
 			"component", "session",
 			"subcomponent", "resolve",
@@ -670,7 +670,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		"old_name", existing.Name,
 		"new_name", target,
 		"session_id", existing.Metadata.ProviderSessionID(),
-		"display_title", match.CustomTitle,
+		"display_title", observedName,
 		"query", query,
 	)
 	if renamed, getErr := fs.Get(target); getErr == nil {
@@ -680,10 +680,10 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 }
 
 func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryResult) bool {
-	if candidate.CustomTitle != "" && current.CustomTitle == "" {
+	if candidate.GetName() != "" && current.GetName() == "" {
 		return true
 	}
-	if current.CustomTitle != "" && candidate.CustomTitle == "" {
+	if current.GetName() != "" && candidate.GetName() == "" {
 		return false
 	}
 	if !candidate.FirstEntryTime.Equal(current.FirstEntryTime) {
