@@ -420,6 +420,7 @@ func (m *OptionsModal) drawStatsPane(scr tcell.Screen, r Rect) {
 	m.statsBox.Lines = nil
 	m.statsBox.Draw(scr, r)
 	if m.StatsLoading && r.H >= 2 {
+		// drawStatsPane runs every frame and the spinner draws directly to the screen, so the live glyph animates without Spinner segments.
 		NewLoadingSpinner("loading stats...", currentLoadingFrame()).Draw(scr, r.X+1, r.Y+r.H-1, imax(0, r.W-2))
 	}
 }

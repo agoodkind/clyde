@@ -142,6 +142,47 @@ func TestApp_RepollThrottlesPerSession(t *testing.T) {
 	}
 }
 
+// TestHandleSpinnerTick_DoesNotRebuildDetailsWhenCacheStable confirms
+// that handleSpinnerTick stops rebuilding the details pane on every
+// 100ms tick. Spinner segments substitute the live glyph at draw time,
+// so the cached segment list animates without a rebuild. The rebuild
+// is only required when the detail cache mutates, and other paths
+// (handleDetailsLoaded, applySessionEvent, table navigation) cover
+// that. The TextBox.contentVersion counter tracks SetSegments calls
+// so we can assert the stable-cache path triggers no extra builds.
+func TestHandleSpinnerTick_DoesNotRebuildDetailsWhenCacheStable(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[0]
+
+	// Seed a cached detail with a generic loading status so
+	// detailHasPendingStatus stays true and the tick path is
+	// exercised in the same conditions a real loading session sees.
+	a.detailMu.Lock()
+	a.detailCache[sess.Name] = SessionDetail{
+		ContextUsageStatus:    "probing",
+		TranscriptStatsStatus: "loading...",
+	}
+	a.detailMu.Unlock()
+	a.selected = sess
+
+	// Render once so the details TextBoxes settle on a known version.
+	a.populateDetails()
+	leftStart := a.details.Left.contentVersion
+	rightStart := a.details.Right.contentVersion
+
+	for range 10 {
+		a.handleSpinnerTick()
+	}
+
+	if got := a.details.Left.contentVersion; got != leftStart {
+		t.Fatalf("details.Left.contentVersion advanced %d -> %d across stable ticks; want no rebuild", leftStart, got)
+	}
+	if got := a.details.Right.contentVersion; got != rightStart {
+		t.Fatalf("details.Right.contentVersion advanced %d -> %d across stable ticks; want no rebuild", rightStart, got)
+	}
+}
+
 // TestDetailHasPendingStatus pins the predicate that drives the
 // spinner ticker and the per-session re-poll loop. Cached details that
 // are still settling must keep the ticker awake; loaded or terminal
