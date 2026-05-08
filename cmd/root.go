@@ -1208,7 +1208,7 @@ func resumeSession(ctx context.Context, sess *session.Session, store session.Sto
 	}
 
 	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.ProviderSessionID())
-	_, _ = fmt.Fprintln(os.Stdout, "Dashboard is suspended while Claude runs. Exit Claude to return.")
+	_, _ = fmt.Fprintln(os.Stdout, "Dashboard is suspended while the provider runs. Exit to return.")
 	_, _ = fmt.Fprintln(os.Stdout)
 	cmdUILog.Logger().InfoContext(ctx, "session.resume.started",
 		"component", "cli",

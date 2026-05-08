@@ -4,17 +4,14 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	"goodkind.io/clyde/internal/providers/registry"
-	"goodkind.io/clyde/internal/session"
 )
 
 // NewResumeCmd implements `clyde resume <name|uuid>`. It resolves the
 // argument against the clyde session store (by name, UUID, display
 // name, or fuzzy match) and shells out through the provider runtime with the
-// resolved provider session id. When nothing matches, it forwards the raw
-// query to the default provider runtime so upstream-native sessions resume
-// transparently.
+// resolved provider session id. When nothing matches, it fails with guidance
+// toward the dashboard selector or an explicit provider override rather than
+// silently assuming one provider.
 //
 // `clyde -r <uuid>` and `clyde --resume <uuid>` are rewritten to this
 // verb by ClassifyArgs in dispatch.go, so all three forms share one
@@ -41,19 +38,11 @@ func NewResumeCmd() *cobra.Command {
 				return err
 			}
 			if sess == nil {
-				cmdResumeLog.Logger().InfoContext(ctx, "cli.resume.unknown_session.forwarding_to_provider",
+				cmdResumeLog.Logger().WarnContext(ctx, "cli.resume.unknown_session",
 					"component", "cli",
 					"query", query,
 				)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-					"Session '%s' not in clyde; forwarding to the default provider.\n\n", query)
-				runtime, err := registry.Default(store)
-				if err != nil {
-					return err
-				}
-				return runtime.ResumeOpaqueInteractive(ctx, session.OpaqueResumeRequest{
-					Query: query,
-				})
+				return resumeUnknownSessionError(query)
 			}
 			cmdResumeLog.Logger().InfoContext(ctx, "cli.resume.resolved",
 				"component", "cli",
@@ -64,4 +53,13 @@ func NewResumeCmd() *cobra.Command {
 			return resumeSession(ctx, sess, store, false)
 		},
 	}
+}
+
+func resumeUnknownSessionError(query string) error {
+	return fmt.Errorf(
+		"session %q was not found in clyde; use `clyde --resume` to pick a stored session, `clyde codex resume %s` for an unmanaged Codex thread, or `clyde claude --resume %s` for an unmanaged Claude session",
+		query,
+		query,
+		query,
+	)
 }
