@@ -51,8 +51,10 @@ type Metadata struct {
 	AutoNameSource AutoNameSource `json:"autoNameSource,omitempty"`
 
 	// LastAutoNameAt records the most recent auto-rename attempt for the
-	// session. The zero value means no auto-rename has run.
-	LastAutoNameAt time.Time `json:"lastAutoNameAt,omitempty"`
+	// session. The zero value means no auto-rename has run. Use omitzero
+	// because encoding/json's omitempty has no effect on nested struct
+	// types like time.Time.
+	LastAutoNameAt time.Time `json:"lastAutoNameAt,omitzero"`
 }
 
 // ProviderOwnedMetadata is the provider-neutral persisted identity and artifact
@@ -98,12 +100,26 @@ func NewSession(name, sessionID string) *Session {
 	sess := &Session{
 		Name: name,
 		Metadata: Metadata{
-			Name:            name,
-			Provider:        ProviderClaude,
-			SessionID:       sessionID,
-			Created:         now,
-			LastAccessed:    now,
-			IsForkedSession: false,
+			Name:                 name,
+			Provider:             ProviderClaude,
+			SessionID:            sessionID,
+			TranscriptPath:       "",
+			ProviderState:        nil,
+			WorkDir:              "",
+			Created:              now,
+			LastAccessed:         now,
+			ParentSession:        "",
+			IsForkedSession:      false,
+			IsIncognito:          false,
+			PreviousSessionIDs:   nil,
+			Context:              "",
+			HasCustomOutputStyle: false,
+			WorkspaceRoot:        "",
+			ContextMessageCount:  0,
+			DisplayTitle:         "",
+			AutoNameState:        AutoNameStateUntouched,
+			AutoNameSource:       AutoNameSourceUnspecified,
+			LastAutoNameAt:       time.Time{},
 		},
 	}
 	sess.Metadata.NormalizeProviderState()
