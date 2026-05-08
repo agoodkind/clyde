@@ -162,14 +162,14 @@ func TestExtractSyntheticPartsLegacyMarkerHasEmptyRef(t *testing.T) {
 }
 
 func TestSyntheticContentCloseWithEncryptedEmbedsAttribute(t *testing.T) {
-	close := SyntheticContentCloseWithEncrypted(SyntheticReasoning, "ENCBYTES")
+	close := SyntheticContentCloseWithAttrs(SyntheticReasoning, "ENCBYTES", "")
 	if !strings.Contains(close, `<!--/clyde-thinking data-encrypted="ENCBYTES"-->`) {
 		t.Fatalf("close with encrypted should embed attribute: %q", close)
 	}
 }
 
 func TestSyntheticContentCloseWithEmptyEncryptedMatchesLegacyShape(t *testing.T) {
-	withEmpty := SyntheticContentCloseWithEncrypted(SyntheticReasoning, "")
+	withEmpty := SyntheticContentCloseWithAttrs(SyntheticReasoning, "", "")
 	legacy := SyntheticContentClose(SyntheticReasoning)
 	if withEmpty != legacy {
 		t.Fatalf("empty encrypted must match legacy close shape:\n with-encrypted: %q\n legacy:        %q", withEmpty, legacy)
@@ -183,7 +183,7 @@ func TestSyntheticContentCloseWithEmptyEncryptedMatchesLegacyShape(t *testing.T)
 func TestExtractSyntheticPartsRoundTripsEncryptedAttribute(t *testing.T) {
 	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_inline") +
 		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "deep thoughts", true) +
-		SyntheticContentCloseWithEncrypted(SyntheticReasoning, "OPAQUE_BASE64_BLOB==")
+		SyntheticContentCloseWithAttrs(SyntheticReasoning, "OPAQUE_BASE64_BLOB==", "")
 	parts := ExtractSyntheticParts(in)
 	if len(parts) != 1 {
 		t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)

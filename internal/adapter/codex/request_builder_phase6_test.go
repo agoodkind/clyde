@@ -16,7 +16,7 @@ import (
 func envelopeWithRefAndEncrypted(ref, body, encrypted string) string {
 	return adapterrender.FormatSyntheticContentDeltaWithRef(
 		adapterrender.SyntheticReasoning, true, ref, body,
-	) + adapterrender.SyntheticContentCloseWithEncrypted(adapterrender.SyntheticReasoning, encrypted)
+	) + adapterrender.SyntheticContentCloseWithAttrs(adapterrender.SyntheticReasoning, encrypted, "")
 }
 
 // envelopeWithRef builds a synthetic-thinking envelope around body with

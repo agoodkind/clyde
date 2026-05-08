@@ -472,7 +472,7 @@ func (p *sseEventParser) handleEvent(eventName, payload string, raw transportStr
 
 func (p *sseEventParser) handleOutputTextDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
 	if delta := raw.Delta; delta != "" {
-		err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta, EncryptedContent: ""})
+		err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: delta, EncryptedContent: "", Signature: ""})
 		if err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
@@ -537,6 +537,7 @@ func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transpo
 			ItemID:           mapString(cloned, "id"),
 			ItemType:         "reasoning",
 			EncryptedContent: encrypted,
+			Signature:        "",
 		}
 		if err := p.emitNormalized(ev); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
@@ -771,6 +772,7 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 		ItemID:           strings.TrimSpace(raw.ItemID),
 		ItemType:         "reasoning",
 		EncryptedContent: "",
+		Signature:        "",
 	})
 	if err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{}, Err: err}
@@ -804,7 +806,7 @@ func (p *sseEventParser) handleResponseCompleted(eventName, payload string, raw 
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	if err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished, EncryptedContent: ""}); err != nil {
+	if err := p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished, EncryptedContent: "", Signature: ""}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	p.out.ReasoningSignaled = p.reasoningSignaled
@@ -827,7 +829,7 @@ func (p *sseEventParser) handleResponseFailed(eventName string, raw transportStr
 	}
 	err := codexResponseFailedError(msg)
 	if strings.TrimSpace(msg) != "" && !isContextWindowError(err) {
-		_ = p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished, EncryptedContent: ""})
+		_ = p.emitNormalized(adapterrender.Event{Kind: adapterrender.EventReasoningFinished, EncryptedContent: "", Signature: ""})
 	}
 	p.logAggregate(p.out.ResponseID, "failed", err)
 	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
@@ -859,6 +861,7 @@ func (p *sseEventParser) emitReasoningPresence(itemID string) error {
 		ItemID:           strings.TrimSpace(itemID),
 		ItemType:         "reasoning",
 		EncryptedContent: "",
+		Signature:        "",
 	})
 }
 
@@ -879,6 +882,7 @@ func (p *sseEventParser) emitToolCall(state *toolCallState, fn adapteropenai.Too
 		Kind:             adapterrender.EventToolCallDelta,
 		ToolCalls:        []adapteropenai.ToolCall{tc},
 		EncryptedContent: "",
+		Signature:        "",
 	})
 }
 
@@ -1074,6 +1078,7 @@ func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []a
 				ItemID:           itemID,
 				ItemType:         "reasoning",
 				EncryptedContent: "",
+				Signature:        "",
 			})
 		}
 	}
@@ -1091,6 +1096,7 @@ func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []a
 					ItemID:           itemID,
 					ItemType:         "reasoning",
 					EncryptedContent: "",
+					Signature:        "",
 				})
 			}
 		}

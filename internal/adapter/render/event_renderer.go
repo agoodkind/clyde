@@ -39,6 +39,15 @@ const (
 // the synthetic-thinking close marker as a `data-encrypted` attribute so
 // Cursor's transcript owns persistence across turns. Empty for providers
 // that do not surface an encrypted_content blob (Anthropic, legacy spans).
+//
+// Signature is the opaque per-thinking-block signature Anthropic emits via
+// the `signature_delta` SSE event. The Anthropic translator surfaces it on
+// [EventReasoningDelta] (the running signature value for the active block)
+// and the renderer embeds it inline on the synthetic-thinking close marker
+// as a `data-signature` attribute (a sibling of `data-encrypted`) so the
+// inbound mapper can reattach it to the round-tripped thinking content
+// block on a later turn. Empty for providers that do not surface a
+// signature (Codex, legacy spans).
 type Event struct {
 	Kind             EventKind
 	Text             string
@@ -48,6 +57,7 @@ type Event struct {
 	ItemID           string
 	ItemType         string
 	EncryptedContent string
+	Signature        string
 }
 
 // RendererState exposes reasoning state needed by response collectors that need
@@ -91,6 +101,13 @@ type EventRenderer struct {
 	// across turns. Cleared after each close so a later span starts
 	// fresh.
 	lastReasoningEncrypted string
+	// lastReasoningSignature is the most recent Anthropic signature value
+	// captured from a reasoning event (Anthropic surfaces it on
+	// EventReasoningDelta; the close-time emission picks up whatever the
+	// most recent value is). The synthetic-thinking close marker embeds
+	// it as `data-signature` so Cursor's transcript carries it across
+	// turns. Cleared after each close so a later span starts fresh.
+	lastReasoningSignature string
 	assistantText          assistantTextAggregate
 	assistantTextLogged    bool
 	toolCallNames          []string
@@ -136,6 +153,7 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 		reasoningBodyEmitted:   false,
 		lastReasoningItemID:    "",
 		lastReasoningEncrypted: "",
+		lastReasoningSignature: "",
 		upstreamResponseID:     "",
 		assistantText:          assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
 		assistantTextLogged:    false,
@@ -248,10 +266,16 @@ func (r *EventRenderer) handleReasoningSignaled(ev Event) []adapteropenai.Stream
 }
 
 // handleReasoningDelta fills the synthetic content block and also populates
-// reasoning_content for clients that consume it directly.
+// reasoning_content for clients that consume it directly. A non-empty
+// Signature on the event captures the most recent Anthropic signature for
+// the active thinking block; renderReasoningClose later embeds it on the
+// close marker as `data-signature`.
 func (r *EventRenderer) handleReasoningDelta(ev Event) []adapteropenai.StreamChunk {
 	r.reasoningSignaled = true
 	r.reasoningVisible = true
+	if sig := strings.TrimSpace(ev.Signature); sig != "" {
+		r.lastReasoningSignature = sig
+	}
 	chunk := r.renderReasoning(ev)
 	if chunk == nil {
 		return nil
@@ -260,10 +284,15 @@ func (r *EventRenderer) handleReasoningDelta(ev Event) []adapteropenai.StreamChu
 }
 
 // handleReasoningFinished closes the synthetic content block and captures any
-// codex encrypted_content blob so the close marker can carry it inline.
+// provider-specific close-marker payload: the codex encrypted_content blob
+// and the Anthropic per-block signature. Both are independently optional;
+// each provider populates only the field it owns.
 func (r *EventRenderer) handleReasoningFinished(ev Event) []adapteropenai.StreamChunk {
 	if enc := strings.TrimSpace(ev.EncryptedContent); enc != "" {
 		r.lastReasoningEncrypted = enc
+	}
+	if sig := strings.TrimSpace(ev.Signature); sig != "" {
+		r.lastReasoningSignature = sig
 	}
 	chunk := r.renderReasoningClose()
 	if chunk == nil {

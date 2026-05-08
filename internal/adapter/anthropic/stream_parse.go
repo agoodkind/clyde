@@ -45,12 +45,14 @@ type streamContentBlockStopEvent struct {
 }
 
 // streamContentBlockDeltaPayload is the delta object inside a
-// content_block_delta event.
+// content_block_delta event. Signature populates only on the
+// `signature_delta` variant Anthropic emits per thinking block.
 type streamContentBlockDeltaPayload struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
 	PartialJSON string `json:"partial_json"`
 	Thinking    string `json:"thinking"`
+	Signature   string `json:"signature"`
 }
 
 // streamContentBlockDeltaEvent is the full payload for
@@ -167,6 +169,12 @@ func dispatchSSE(
 				return sink(StreamEvent{
 					Kind:       "thinking",
 					Text:       ev.Delta.Thinking,
+					BlockIndex: ev.Index,
+				})
+			case "signature_delta":
+				return sink(StreamEvent{
+					Kind:       "thinking_signature",
+					Text:       ev.Delta.Signature,
 					BlockIndex: ev.Index,
 				})
 			}

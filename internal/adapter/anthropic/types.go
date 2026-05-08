@@ -94,6 +94,11 @@ type SystemBlock struct {
 
 // ContentBlock is one element in a message content array or a streamed
 // content block start payload subset we reuse for decoding.
+//
+// Signature carries the opaque per-thinking-block signature Anthropic
+// emits via the `signature_delta` SSE event. On replay the wire
+// representation must include `"signature":"<value>"` alongside
+// `"thinking":"<body>"` so Anthropic's signature validation passes.
 type ContentBlock struct {
 	Type           string          `json:"type"`
 	Text           string          `json:"text,omitempty"`
@@ -106,6 +111,7 @@ type ContentBlock struct {
 	Source         *ImageSource    `json:"source,omitempty"`
 	CacheControl   *CacheControl   `json:"cache_control,omitempty"`
 	Thinking       string          `json:"thinking,omitempty"`
+	Signature      string          `json:"signature,omitempty"`
 }
 
 // ImageSource describes image bytes or a URL for image content blocks.
@@ -349,6 +355,19 @@ type Usage struct {
 type Sink func(delta string) error
 
 // StreamEvent is a decoded streaming signal from /v1/messages SSE.
+//
+// Kind enumerates the signals the parser surfaces:
+//   - "text"               assistant visible text delta; Text carries the chunk.
+//   - "thinking"            thinking content block open or text delta;
+//     Text empty on open, populated on subsequent thinking_delta events.
+//   - "thinking_signature"  per-thinking-block signature delta; Text carries
+//     the opaque signature emitted by Anthropic's signature_delta event.
+//   - "tool_use_start"      tool_use content block open; ToolUseID and
+//     ToolUseName carry the call identity.
+//   - "tool_use_arg_delta"  tool_use partial JSON arguments; PartialJSON
+//     carries the chunk.
+//   - "tool_use_stop"       tool_use content block close.
+//   - "stop"                terminal message stop; StopReason is set.
 type StreamEvent struct {
 	Kind        string
 	Text        string
@@ -411,7 +430,7 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return nil, err
 		}
-		return []ContentBlock{{Type: "text", Text: text}}, nil
+		return []ContentBlock{{Type: "text", Text: text, Signature: ""}}, nil
 	}
 	if trimmed[0] == '[' {
 		var blocks []ContentBlock
