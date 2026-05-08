@@ -100,7 +100,7 @@ func ProcessSessionStart(
 		return Result{
 			SkippedDuplicate: true,
 			Source:           hookData.Source,
-			SessionName:      os.Getenv("CLYDE_SESSION_NAME"),
+			SessionName:      resultSessionName(hookData, store),
 		}, nil
 	}
 
@@ -116,7 +116,7 @@ func ProcessSessionStart(
 		return Result{
 			SkippedDuplicate: true,
 			Source:           hookData.Source,
-			SessionName:      os.Getenv("CLYDE_SESSION_NAME"),
+			SessionName:      resultSessionName(hookData, store),
 		}, nil
 	}
 
@@ -131,9 +131,11 @@ func ProcessSessionStart(
 
 	switch hookData.Source {
 	case "startup", "resume":
-		handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut)
+		res.SessionName = handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut)
 	case "compact":
-		if err := handleCompact(ctx, log, hookData, store, out, errOut); err != nil {
+		sessionName, err := handleCompact(ctx, log, hookData, store, out, errOut)
+		res.SessionName = sessionName
+		if err != nil {
 			log.ErrorContext(ctx, "hook.sessionstart.compact_failed",
 				"component", "hook",
 				"subject", "sessionstart",
@@ -142,7 +144,9 @@ func ProcessSessionStart(
 			return res, err
 		}
 	case "clear":
-		if err := handleClear(ctx, log, hookData, store, out, errOut); err != nil {
+		sessionName, err := handleClear(ctx, log, hookData, store, out, errOut)
+		res.SessionName = sessionName
+		if err != nil {
 			log.ErrorContext(ctx, "hook.sessionstart.clear_failed",
 				"component", "hook",
 				"subject", "sessionstart",
@@ -151,10 +155,8 @@ func ProcessSessionStart(
 			return res, err
 		}
 	default:
-		handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut)
+		res.SessionName = handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut)
 	}
-
-	res.SessionName = os.Getenv("CLYDE_SESSION_NAME")
 
 	log.InfoContext(ctx, "hook.sessionstart.completed",
 		"component", "hook",

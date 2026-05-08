@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+const (
+	envSessionName       = "CLYDE_SESSION_NAME"
+	envSessionID         = "CLYDE_SESSION_ID"
+	envLegacySessionName = "CLYDE_SESSION"
+)
+
 func appendToEnvFile(key, value string) error {
 	claudeEnvFile := os.Getenv("CLAUDE_ENV_FILE")
 	if claudeEnvFile == "" {
@@ -89,5 +95,16 @@ func shellQuoteEnvValue(value string) string {
 }
 
 func writeSessionNameToEnv(sessionName string) error {
-	return appendToEnvFile("CLYDE_SESSION", sessionName)
+	return appendToEnvFile(envLegacySessionName, sessionName)
+}
+
+func writeSessionIdentityToEnv(sessionName string, sessionID string) error {
+	if err := writeSessionNameToEnv(sessionName); err != nil {
+		return err
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	return appendToEnvFile(envSessionID, sessionID)
 }

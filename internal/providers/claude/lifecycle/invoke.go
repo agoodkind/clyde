@@ -230,6 +230,13 @@ func sessionSettingsFile(clydeRoot string, sessionName string) string {
 	if err != nil {
 		return ""
 	}
+	return sessionSettingsFileForSession(clydeRoot, sess)
+}
+
+func sessionSettingsFileForSession(clydeRoot string, sess *session.Session) string {
+	if strings.TrimSpace(clydeRoot) == "" || sess == nil || strings.TrimSpace(sess.StorageKey()) == "" {
+		return ""
+	}
 	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sess.StorageKey()), "settings.json")
 	if !util.FileExists(settingsPath) {
 		return ""
@@ -414,7 +421,7 @@ func PersistRemoteControlSetting(store SessionSettingsStore, sessionName string)
 
 // Resume invokes claude CLI to resume an existing session.
 func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
-	settingsFile := sessionSettingsFile(clydeRoot, sess.Name)
+	settingsFile := sessionSettingsFileForSession(clydeRoot, sess)
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": sess.Name,
 		"CLYDE_SESSION_ID":   sess.Metadata.ProviderSessionID(),

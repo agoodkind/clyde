@@ -54,6 +54,10 @@ func TestSessionSettingsFile(t *testing.T) {
 	if got := sessionSettingsFile(clydeRoot, "chat-1"); got != settingsPath {
 		t.Fatalf("sessionSettingsFile with file = %q, want %q", got, settingsPath)
 	}
+	sess.Name = "renamed-chat"
+	if got := sessionSettingsFileForSession(clydeRoot, sess); got != settingsPath {
+		t.Fatalf("sessionSettingsFileForSession after rename = %q, want %q", got, settingsPath)
+	}
 }
 
 func TestResumeAdditionalArgs(t *testing.T) {

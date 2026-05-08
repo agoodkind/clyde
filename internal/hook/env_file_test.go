@@ -31,3 +31,24 @@ func TestAppendToEnvFileRejectsInvalidKeys(t *testing.T) {
 		t.Fatal("appendToEnvFile accepted invalid key")
 	}
 }
+
+func TestWriteSessionIdentityToEnvWritesNameAndSessionID(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "hook-env.sh")
+	t.Setenv("CLAUDE_ENV_FILE", envFile)
+
+	if err := writeSessionIdentityToEnv("renamed-session", "stable-uuid"); err != nil {
+		t.Fatalf("writeSessionIdentityToEnv: %v", err)
+	}
+
+	content, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, "CLYDE_SESSION=$'renamed-session'") {
+		t.Fatalf("env file missing session name: %q", got)
+	}
+	if !strings.Contains(got, "CLYDE_SESSION_ID=$'stable-uuid'") {
+		t.Fatalf("env file missing session id: %q", got)
+	}
+}
