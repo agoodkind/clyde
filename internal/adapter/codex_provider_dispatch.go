@@ -9,7 +9,7 @@ import (
 	"time"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
-	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -62,11 +62,11 @@ func (s *Server) dispatchCodexProvider(
 	req ChatRequest,
 	model ResolvedModel,
 	reqID string,
-	cursorReq adaptercursor.Request,
+	ingressCtx ingresscontract.IngressContext,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
 	started := adapterClock.Now()
-	_ = cursorReq // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
+	_ = ingressCtx // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
 
 	s.emitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, req.Stream)
 
