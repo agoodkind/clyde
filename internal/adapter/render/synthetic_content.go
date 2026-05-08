@@ -43,6 +43,17 @@ const (
 	SyntheticNotice SyntheticContentKind = "notice"
 	// SyntheticKindNotice is the canonical kind name for notice content.
 	SyntheticKindNotice = SyntheticNotice
+	// SyntheticRedactedThinking wraps Anthropic redacted_thinking content
+	// blocks. The upstream emits these for thinking content the API will
+	// not surface in cleartext; the wire payload is an opaque base64 data
+	// blob carried on the close marker as a `data-encrypted` attribute,
+	// not text. The body has no human-readable contents and is rendered
+	// to Cursor as a fixed `[redacted thinking]` placeholder so the user
+	// sees the block exists without exposing model internals. Kept
+	// separate from [SyntheticReasoning] so the typed enum is the source
+	// of truth and the materializer can route the opaque blob to a
+	// dedicated upstream block type without conflating semantics.
+	SyntheticRedactedThinking SyntheticContentKind = "redacted_thinking"
 )
 
 // SyntheticPart is one ordered segment of an assistant content string after
@@ -102,11 +113,16 @@ var syntheticContentSpecs = map[SyntheticContentKind]*syntheticContentSpec{
 		Header:      "",
 		QuotePrefix: true,
 	},
+	SyntheticRedactedThinking: {
+		Marker:      "clyde-redacted-thinking",
+		Header:      "> **[redacted thinking]**\n> \n",
+		QuotePrefix: true,
+	},
 }
 
 // orderedSyntheticKinds lists the kinds in deterministic order so extraction
 // is reproducible across runs (Go map iteration is not).
-var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, SyntheticNotice}
+var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, SyntheticNotice, SyntheticRedactedThinking}
 
 // dataRefAttrPattern is the optional `data-ref="..."` attribute fragment that
 // may appear inside an open marker. The attribute name is fixed; the value
