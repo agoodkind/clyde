@@ -32,6 +32,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"goodkind.io/clyde/internal/binaryhandoff"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/terminalcontrol"
 	"goodkind.io/clyde/internal/util"
@@ -386,6 +387,11 @@ type App struct {
 	clock    uiClock
 	ctx      context.Context
 
+	// workers tracks every long-lived TUI background goroutine so the
+	// TUI shutdown path can drain or force-close them bounded by a
+	// grace deadline. See internal/livetrack for the contract.
+	workers *livetrack.Registry[WorkerMeta]
+
 	// Widgets
 	tabs    *TabBarWidget
 	table   *TableWidget
@@ -659,6 +665,15 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.cb = cb
 	a.clock = clock
 	a.ctx = opt.Context
+	a.workers = livetrack.New[WorkerMeta](livetrack.Options[WorkerMeta]{
+		Component:     "tui",
+		Concern:       "ui",
+		Log:           tuiLog.Logger(),
+		PollEvery:     0,
+		CloserGrace:   0,
+		ParallelClose: false,
+		Now:           nil,
+	})
 	a.sessions = sessions
 	a.mode = StatusBrowse
 	a.initCaches()
@@ -1085,10 +1100,33 @@ func (a *App) finishRun(err *error) {
 			"component", "tui",
 			"recover", fmt.Sprint(r),
 			"err", *err)
+		a.drainWorkers()
 		return
 	}
 	a.teardownScreen()
+	a.drainWorkers()
 	a.execReloadAfterRun()
+}
+
+// drainWorkers gives every registered background worker a short
+// window to finish naturally and then force-closes any that remain.
+// A 3-second total deadline is generous enough for the common case
+// (all workers already exited because the stop channel closed) and
+// bounded enough not to delay a fast exit.
+func (a *App) drainWorkers() {
+	if a.workers == nil {
+		return
+	}
+	const drainTimeout = 3 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+	result := a.workers.Drain(ctx, "tui.shutdown")
+	if result.ForceClosed > 0 {
+		tuiLog.Logger().Warn("tui.workers.drain.force_closed",
+			"component", "tui",
+			"force_closed", result.ForceClosed,
+			"duration_ms", result.Duration.Milliseconds())
+	}
 }
 
 func (a *App) execReloadAfterRun() {
@@ -1112,6 +1150,14 @@ func (a *App) startRunSupervisor(name string, run runSupervisorFunc) chan struct
 				logUIGoroutinePanic(name, fmt.Sprint(r))
 			}
 		}()
+		sess, regErr := a.workers.Register(a.ctx, "watcher", WorkerMeta{
+			Kind:     "watcher",
+			Source:   name,
+			Deadline: time.Time{},
+		}, noopCloser{})
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), sess, "supervisor.exited")
+		}
 		run(stop)
 	}()
 	return stop
@@ -1866,6 +1912,14 @@ func (a *App) requestSessionsAsync(reason string) {
 				logUIGoroutinePanic("sessions_load", fmt.Sprint(r))
 			}
 		}()
+		sess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
+			Kind:     "async_load",
+			Source:   "sessions_load",
+			Deadline: time.Time{},
+		}, noopCloser{})
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), sess, "sessions_load.done")
+		}
 		started := a.now()
 		snapshot, err := a.cb.ListSessions()
 		tuiLog.Logger().Debug("tui.sessions.load.finished",
@@ -1888,6 +1942,14 @@ func (a *App) refreshConfigControls() {
 				logUIGoroutinePanic("config_controls_load", fmt.Sprint(r))
 			}
 		}()
+		sess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
+			Kind:     "async_load",
+			Source:   "config_controls_load",
+			Deadline: time.Time{},
+		}, noopCloser{})
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), sess, "config_controls_load.done")
+		}
 		controls, err := a.cb.LoadConfigControls()
 		a.postInterruptIfActive("config_controls_load", configControlsLoaded{controls: controls, err: err})
 	}()
@@ -2225,6 +2287,14 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 				}
 			}()
 			defer close(done)
+			sess, regErr := a.workers.Register(a.ctx, "rpc_stream", WorkerMeta{
+				Kind:     "rpc_stream",
+				Source:   "registry_subscriber",
+				Deadline: time.Time{},
+			}, noopCloser{})
+			if regErr == nil {
+				defer a.workers.Release(context.Background(), sess, "registry_subscriber.exited")
+			}
 			a.runRegistrySubscriber(events)
 		}()
 
@@ -2293,6 +2363,14 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 				}
 			}()
 			defer close(done)
+			sess, regErr := a.workers.Register(a.ctx, "rpc_stream", WorkerMeta{
+				Kind:     "rpc_stream",
+				Source:   "provider_stats_subscriber",
+				Deadline: time.Time{},
+			}, noopCloser{})
+			if regErr == nil {
+				defer a.workers.Release(context.Background(), sess, "provider_stats_subscriber.exited")
+			}
 			a.runProviderStatsSubscriber(events)
 		}()
 
@@ -2668,6 +2746,14 @@ func (a *App) requestExportStatsAsync(sess *session.Session) {
 				logUIGoroutinePanic("export_stats_load", fmt.Sprint(r))
 			}
 		}()
+		wSess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
+			Kind:     "async_load",
+			Source:   "export_stats_load",
+			Deadline: time.Time{},
+		}, noopCloser{})
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), wSess, "export_stats_load.done")
+		}
 		stats, err := a.cb.LoadExportStats(sess)
 		a.postInterruptIfActive("export_stats_load", exportStatsLoaded{name: name, stats: stats, err: err})
 	}()
@@ -3230,6 +3316,15 @@ func (a *App) handleCompactStreamOpened(d compactStreamOpened) {
 				logUIGoroutinePanic("compact_stream", fmt.Sprint(r))
 			}
 		}()
+		cancel := d.cancel
+		sess, regErr := a.workers.Register(a.ctx, "rpc_stream", WorkerMeta{
+			Kind:     "rpc_stream",
+			Source:   "compact_stream",
+			Deadline: time.Time{},
+		}, newWorkerCloser(cancel))
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), sess, "compact_stream.exited")
+		}
 		a.runCompactStream(d.events, d.done, d.action)
 	}()
 }
@@ -3277,6 +3372,15 @@ func (a *App) handleSidecarTailOpened(d sidecarTailOpened) {
 				logUIGoroutinePanic("sidecar_tail", fmt.Sprint(r))
 			}
 		}()
+		cancel := d.cancel
+		sess, regErr := a.workers.Register(a.ctx, "rpc_stream", WorkerMeta{
+			Kind:     "rpc_stream",
+			Source:   "sidecar_tail",
+			Deadline: time.Time{},
+		}, newWorkerCloser(cancel))
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), sess, "sidecar_tail.exited")
+		}
 		a.runSidecarTail(d.events, a.sidecar)
 	}()
 }
@@ -4887,6 +4991,14 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 				logUIGoroutinePanic("detail_load", fmt.Sprint(r))
 			}
 		}()
+		wSess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
+			Kind:     "async_load",
+			Source:   "detail_load",
+			Deadline: time.Time{},
+		}, noopCloser{})
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), wSess, "detail_load.done")
+		}
 		detail, err := a.cb.GetSessionDetail(sess)
 		a.postInterruptIfActive("detail_load", detailsLoaded{name: name, gen: gen, detail: detail, err: err})
 	}()
@@ -5682,36 +5794,52 @@ func (a *App) openSidecarStream(sessionID string) (<-chan TranscriptEntry, func(
 			}
 		}()
 		defer close(out)
-		for {
+		wSess, regErr := a.workers.Register(a.ctx, "rpc_stream", WorkerMeta{
+			Kind:     "rpc_stream",
+			Source:   "sidecar_stream",
+			Deadline: time.Time{},
+		}, newWorkerCloser(cancelAll))
+		if regErr == nil {
+			defer a.workers.Release(context.Background(), wSess, "sidecar_stream.exited")
+		}
+		relaySidecarStreamEvents(events, done, out)
+	}()
+	return out, cancelAll, nil
+}
+
+// relaySidecarStreamEvents reads LiveSessionEvents from events, converts
+// them to TranscriptEntry values, and writes them to out. It exits when
+// done is closed or events closes. Extracted from openSidecarStream to
+// keep cognitive complexity below the project limit.
+func relaySidecarStreamEvents(events <-chan LiveSessionEvent, done <-chan struct{}, out chan<- TranscriptEntry) {
+	for {
+		select {
+		case <-done:
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			role := ev.Role
+			if role == "" {
+				role = ev.Kind
+			}
+			text := ev.Text
+			if text == "" {
+				text = ev.Kind
+			}
+			entry := TranscriptEntry{
+				Role:      role,
+				Text:      text,
+				Timestamp: ev.Timestamp,
+			}
 			select {
 			case <-done:
 				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				role := ev.Role
-				if role == "" {
-					role = ev.Kind
-				}
-				text := ev.Text
-				if text == "" {
-					text = ev.Kind
-				}
-				entry := TranscriptEntry{
-					Role:      role,
-					Text:      text,
-					Timestamp: ev.Timestamp,
-				}
-				select {
-				case <-done:
-					return
-				case out <- entry:
-				}
+			case out <- entry:
 			}
 		}
-	}()
-	return out, cancelAll, nil
+	}
 }
 
 // drawSettingsTab renders the Settings tab body. It surfaces the active
