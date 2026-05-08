@@ -1,7 +1,6 @@
 // Package cmd holds the TUI dashboard, its daemon-backed callbacks,
 // the `clyde resume` cobra verb, and the argument-routing helpers
-// (ClassifyArgs, ForwardToClaude) used by cmd/clyde/main.go to assemble
-// the cobra root.
+// used by cmd/clyde/main.go to assemble the cobra root.
 //
 // What lives here:
 //
@@ -9,7 +8,7 @@
 //   - TUI callbacks for delete, rename, resume, live sessions,
 //     registry, summary, view, model extract
 //   - NewResumeCmd (the `clyde resume <name|uuid>` verb)
-//   - ClassifyArgs and ForwardToClaude (passthrough routing)
+//   - ClassifyArgs and the default-provider passthrough helpers
 //   - resumeSession / deleteSession helpers shared by the TUI and the
 //     resume verb
 package cmd
@@ -30,19 +29,25 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
+	codexlifecycle "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/ui"
 )
 
+func init() {
+	codexlifecycle.SetProviderLaunchEnvironmentFunc(daemon.ProviderLaunchEnvironmentViaDaemon)
+}
+
 // RunDashboard is the entrypoint for `clyde` with no subcommand. It
 // boots the tcell TUI dashboard for managing existing sessions
-// (resume, delete, rename, view, live sessions). New sessions from the TUI launch `claude` with
+// (resume, delete, rename, view, live sessions). New sessions from the TUI launch the
+// current default provider with
 // CLYDE_SESSION_NAME set; the SessionStart hook adopts the row.
 func RunDashboard(cmd *cobra.Command, args []string) int {
-	// Non-interactive (piped) invocation: forward to real claude.
+	// Non-interactive (piped) invocation: forward to the current default provider.
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
-		return ForwardToClaude(os.Args[1:])
+		return ForwardToDefaultProvider(os.Args[1:])
 	}
 
 	// Non-TTY stdout: show help. Avoids drawing the TUI into a pipe.
@@ -81,7 +86,7 @@ func runDashboardTUI() int {
 // The caller is responsible for only invoking this for an existing directory.
 func RunBasedirLaunch(basedir string) int {
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
-		return ForwardToClaude(os.Args[1:])
+		return ForwardToDefaultProvider(os.Args[1:])
 	}
 	ctx := newCommandContext("dashboard.basedir")
 	daemon.NudgeDiscoveryScan()
@@ -935,12 +940,11 @@ func timeFromNanos(n int64) time.Time {
 	return time.Unix(0, n)
 }
 
-// ForwardToClaude runs the real claude binary (bypassing the shell
-// alias) with the given args, inheriting stdin/stdout/stderr. Returns
-// the exit code. Used by the dispatch path and by RunDashboard's
-// piped-input shortcut.
-func ForwardToClaude(args []string) int {
-	ctx := newCommandContext("forward.claude")
+// ForwardToDefaultProvider runs Clyde's current default provider binary with
+// the given args, inheriting stdin/stdout/stderr. Returns the exit code. Used
+// by the dispatch path and by RunDashboard's piped-input shortcut.
+func ForwardToDefaultProvider(args []string) int {
+	ctx := newCommandContext("forward.default_provider")
 	return runClaudeWithEnv(ctx, args, applyClaudeMITMEnv(ctx, os.Environ()))
 }
 
@@ -1052,15 +1056,16 @@ func passthroughSkipsPostSessionTUI(args []string) bool {
 	return false
 }
 
-// ForwardToClaudeThenDashboard runs claude like ForwardToClaude, but for an
-// interactive terminal it assigns CLYDE_SESSION_NAME when unset so the
-// SessionStart hook adopts the session, then opens the TUI when claude exits.
-// Pipe and print-style invocations behave like ForwardToClaude only.
-func ForwardToClaudeThenDashboard(args []string) int {
+// ForwardToDefaultProviderThenDashboard runs the current default provider like
+// ForwardToDefaultProvider, but for an interactive terminal it assigns
+// CLYDE_SESSION_NAME when unset so the SessionStart hook adopts the session,
+// then opens the TUI when the provider exits. Pipe and print-style invocations
+// behave like ForwardToDefaultProvider only.
+func ForwardToDefaultProviderThenDashboard(args []string) int {
 	if !shouldOpenDashboardAfterPassthrough(args) {
-		return ForwardToClaude(args)
+		return ForwardToDefaultProvider(args)
 	}
-	ctx := newCommandContext("forward.claude.dashboard")
+	ctx := newCommandContext("forward.default_provider.dashboard")
 	env := withEnvValue(os.Environ(), "CLYDE_LAUNCH_CWD", currentWorkingDirectory())
 	if os.Getenv("CLYDE_SESSION_NAME") == "" {
 		store, serr := session.NewGlobalFileStore()
