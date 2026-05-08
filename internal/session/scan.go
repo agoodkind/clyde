@@ -38,8 +38,8 @@ type AdoptedSession struct {
 }
 
 type knownSessionIdentity struct {
-	Name      string
-	ClydeUUID string
+	DisplayName string
+	ClydeUUID   string
 }
 
 // scratchDirSuffixes lists workspace-root path fragments produced by
@@ -185,7 +185,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {
 			if parentIdentity, ok := known[r.ParentProviderSessionKey()]; ok {
-				md.ParentSession = parentIdentity.Name
+				md.ParentSession = parentIdentity.DisplayName
 				md.ParentClydeUUID = parentIdentity.ClydeUUID
 			}
 		}
@@ -234,8 +234,8 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
 		known[r.ProviderSessionKey()] = knownSessionIdentity{
-			Name:      name,
-			ClydeUUID: sess.ClydeUUID(),
+			DisplayName: SessionDisplayName(sess),
+			ClydeUUID:   sess.ClydeUUID(),
 		}
 	}
 	sessionAdoptLog.Logger().Debug("session.adopt.completed",
@@ -253,31 +253,31 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 }
 
 // pickAdoptedName chooses a session name for an adopted provider session. It
-// prefers the provider-owned observed name so clyde verbs accept the upstream
-// user-facing title directly. Collisions with existing names are resolved with
-// UniqueName. When the provider does not offer a usable name the function falls
-// back to the workspace-plus-UUID scheme in uniqueAdoptedName. The second
-// return value is a short label of the source used, for structured logs.
+// prefers the provider-owned exact display title so clyde verbs accept the
+// upstream user-facing title directly. Collisions with existing names are
+// resolved with a human-visible suffix. When the provider does not offer a
+// usable display name, the function falls back to the workspace-plus-UUID
+// compatibility scheme in uniqueAdoptedName. The second return value is a short
+// label of the source used, for structured logs.
 func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) {
-	observedName := r.GetName()
-	if candidate := r.Rename("", taken); candidate != "" {
-		if ValidateName(candidate) == nil {
-			sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
-				"component", "session",
-				"subcomponent", "adopt",
-				"session_id", r.ProviderSessionID(),
-				"source", "provider_name",
-				"raw_title", observedName,
-				"name", candidate,
-			)
-			return candidate, "provider_name"
-		}
-		sessionAdoptLog.Logger().Debug("session.adopt.name_sanitize_unusable",
+	observedName := r.DisplayTitle()
+	if candidate := UniqueDisplayName(observedName, taken); candidate != "" {
+		sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
+			"component", "session",
+			"subcomponent", "adopt",
+			"session_id", r.ProviderSessionID(),
+			"source", "provider_display_name",
+			"raw_title", observedName,
+			"name", candidate,
+		)
+		return candidate, "provider_display_name"
+	}
+	if observedName != "" {
+		sessionAdoptLog.Logger().Debug("session.adopt.display_name_unusable",
 			"component", "session",
 			"subcomponent", "adopt",
 			"session_id", r.ProviderSessionID(),
 			"raw_title", observedName,
-			"candidate", candidate,
 		)
 	}
 	fallback := uniqueAdoptedName(r, taken)
@@ -302,8 +302,8 @@ func buildKnownIdentitySet(store *FileStore) (map[string]knownSessionIdentity, e
 		for _, id := range HistoricalIdentities(s) {
 			if key := id.Key(); key != "" {
 				out[key] = knownSessionIdentity{
-					Name:      s.Name,
-					ClydeUUID: s.ClydeUUID(),
+					DisplayName: SessionDisplayName(s),
+					ClydeUUID:   s.ClydeUUID(),
 				}
 			}
 		}

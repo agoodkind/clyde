@@ -51,3 +51,28 @@ var _ = Describe("UniqueName", func() {
 		Expect(session.UniqueName("", map[string]bool{})).To(Equal(""))
 	})
 })
+
+var _ = Describe("UniqueDisplayName", func() {
+	It("returns the exact base when it is not taken", func() {
+		taken := map[string]bool{"Other": true}
+		Expect(session.UniqueDisplayName("Merry Swan", taken)).To(Equal("Merry Swan"))
+	})
+
+	It("appends a human-visible suffix when the exact base collides", func() {
+		taken := map[string]bool{"Merry Swan": true}
+		Expect(session.UniqueDisplayName("Merry Swan", taken)).To(Equal("Merry Swan (2)"))
+	})
+
+	It("keeps climbing past display-name collisions", func() {
+		taken := map[string]bool{
+			"Merry Swan":     true,
+			"Merry Swan (2)": true,
+			"Merry Swan (3)": true,
+		}
+		Expect(session.UniqueDisplayName("Merry Swan", taken)).To(Equal("Merry Swan (4)"))
+	})
+
+	It("returns empty for invalid display names", func() {
+		Expect(session.UniqueDisplayName("line\nbreak", map[string]bool{})).To(Equal(""))
+	})
+})

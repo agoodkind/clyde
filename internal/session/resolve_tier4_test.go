@@ -89,28 +89,28 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		})
 	}
 
-	It("adopts by sanitized customTitle on tier-1 miss", func() {
-		writeTranscript(uuid, "2026-04-12-merry-swan")
+	It("adopts by exact customTitle on tier-1 miss", func() {
+		writeTranscript(uuid, "2026-04-12 Merry Swan")
 
-		sess, err := store.Resolve("2026-04-12-merry-swan")
+		sess, err := store.Resolve("2026-04-12 Merry Swan")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sess).ToNot(BeNil())
-		Expect(sess.Name).To(Equal("2026-04-12-merry-swan"))
+		Expect(sess.Name).To(Equal("2026-04-12 Merry Swan"))
 		Expect(sess.Metadata.ProviderSessionID()).To(Equal(uuid))
-		Expect(sess.Metadata.DisplayTitle).To(Equal("2026-04-12-merry-swan"))
+		Expect(sess.Metadata.DisplayTitle).To(Equal("2026-04-12 Merry Swan"))
 
 		metaPath := filepath.Join(clydeRoot, "sessions", sess.StorageKey(), "metadata.json")
 		_, statErr := os.Stat(metaPath)
 		Expect(statErr).ToNot(HaveOccurred(), "metadata.json should be written at %s", metaPath)
 	})
 
-	It("adopts by bare UUID and uses the sanitized title as Name", func() {
-		writeTranscript(uuid, "2026-04-12-merry-swan")
+	It("adopts by bare UUID and uses the exact title as Name", func() {
+		writeTranscript(uuid, "2026-04-12 Merry Swan")
 
 		sess, err := store.Resolve(uuid)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sess).ToNot(BeNil())
-		Expect(sess.Name).To(Equal("2026-04-12-merry-swan"))
+		Expect(sess.Name).To(Equal("2026-04-12 Merry Swan"))
 		Expect(sess.Metadata.ProviderSessionID()).To(Equal(uuid))
 	})
 
@@ -125,8 +125,8 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(sess.Metadata.DisplayTitle).To(Equal(""))
 	})
 
-	It("falls back to workspace-plus-UUID when customTitle sanitizes to empty", func() {
-		writeTranscript(uuid, "🙂🎉")
+	It("falls back to workspace-plus-UUID when customTitle violates display-name policy", func() {
+		writeTranscript(uuid, "bad\nname")
 
 		sess, err := store.Resolve(uuid)
 		Expect(err).ToNot(HaveOccurred())
@@ -142,13 +142,13 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 	})
 
 	It("is idempotent: second resolve for the same name hits tier 1", func() {
-		writeTranscript(uuid, "merry-swan")
+		writeTranscript(uuid, "Merry Swan")
 
-		first, err := store.Resolve("merry-swan")
+		first, err := store.Resolve("Merry Swan")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(first).ToNot(BeNil())
 
-		second, err := store.Resolve("merry-swan")
+		second, err := store.Resolve("Merry Swan")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(second).ToNot(BeNil())
 		Expect(second.Name).To(Equal(first.Name))
@@ -156,7 +156,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 	})
 
 	It("reconciles an already-known session idempotently when the provider name appears later", func() {
-		writeTranscript(uuid, "merry-swan")
+		writeTranscript(uuid, "Merry Swan")
 		Expect(store.Create(&Session{
 			Name: "tack-22a95bc5",
 			Metadata: Metadata{
@@ -166,17 +166,17 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 			},
 		})).To(Succeed())
 
-		first, err := store.Resolve("merry-swan")
+		first, err := store.Resolve("Merry Swan")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(first).ToNot(BeNil())
-		Expect(first.Name).To(Equal("merry-swan"))
-		Expect(first.Metadata.DisplayTitle).To(Equal("merry-swan"))
+		Expect(first.Name).To(Equal("Merry Swan"))
+		Expect(first.Metadata.DisplayTitle).To(Equal("Merry Swan"))
 
-		second, err := store.Resolve("merry-swan")
+		second, err := store.Resolve("Merry Swan")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(second).ToNot(BeNil())
-		Expect(second.Name).To(Equal("merry-swan"))
-		Expect(second.Metadata.DisplayTitle).To(Equal("merry-swan"))
+		Expect(second.Name).To(Equal("Merry Swan"))
+		Expect(second.Metadata.DisplayTitle).To(Equal("Merry Swan"))
 	})
 
 	It("syncs a provider rename for an already-known session", func() {
@@ -192,7 +192,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 			WorkspaceRoot:       "/Users/agoodkind/Sites/tack",
 			Entrypoint:          "cli",
 			FirstEntryTime:      time.Date(2026, time.April, 12, 23, 52, 12, 0, time.UTC),
-			NameContract:        tier4TestName{value: "renamed-in-provider"},
+			NameContract:        tier4TestName{value: "Renamed in Provider"},
 			PrimaryArtifact:     filepath.Join(projDir, uuid+".jsonl"),
 			PrimaryArtifactKind: "transcript",
 		}}
@@ -201,20 +201,20 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(changes).To(HaveLen(1))
 		Expect(changes[0].OldName).To(Equal("tack-22a95bc5"))
-		Expect(changes[0].Session.Name).To(Equal("renamed-in-provider"))
-		Expect(changes[0].Session.Metadata.DisplayTitle).To(Equal("renamed-in-provider"))
+		Expect(changes[0].Session.Name).To(Equal("Renamed in Provider"))
+		Expect(changes[0].Session.Metadata.DisplayTitle).To(Equal("Renamed in Provider"))
 
-		reloaded, err := store.Get("renamed-in-provider")
+		reloaded, err := store.Get("Renamed in Provider")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(reloaded.Metadata.DisplayTitle).To(Equal("renamed-in-provider"))
+		Expect(reloaded.Metadata.DisplayTitle).To(Equal("Renamed in Provider"))
 		Expect(reloaded.ClydeUUID()).To(Equal(existing.ClydeUUID()))
 	})
 
 	It("skips tier 4 when the store is constructed read-only", func() {
-		writeTranscript(uuid, "merry-swan")
+		writeTranscript(uuid, "Merry Swan")
 		readOnly := &FileStore{clydeRoot: clydeRoot, noAdopt: true}
 
-		sess, err := readOnly.Resolve("merry-swan")
+		sess, err := readOnly.Resolve("Merry Swan")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sess).To(BeNil(), "read-only store must not adopt even when a matching transcript exists")
 	})

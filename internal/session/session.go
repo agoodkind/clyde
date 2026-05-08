@@ -7,7 +7,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Session represents a named provider session.
+// Session represents a provider session with an exact human-visible name and a
+// stable ClydeUUID-backed storage key.
 type Session struct {
 	Name     string
 	Metadata Metadata
@@ -40,12 +41,11 @@ type Metadata struct {
 	// and should be regenerated in the background.
 	ContextMessageCount int `json:"contextMessageCount,omitempty"`
 
-	// DisplayTitle preserves the provider-owned user-facing session title.
-	// It is the human-readable form surfaced in the TUI. The session Name is a
-	// sanitized derivative that clyde resume, compact, and other verbs accept.
-	// DisplayTitle stays in sync with the latest provider-observed name seen
-	// during scan, while the stable storage key lives in ClydeUUID so Name can
-	// now be mutable.
+	// DisplayTitle preserves the provider-owned user-facing session title for
+	// legacy rows and provider sync. New session-domain code treats Name as the
+	// exact human-visible name, with ClydeUUID as the stable identity and storage
+	// key. DisplayTitle remains as compatibility metadata for rows created while
+	// Name was a slug-derived alias.
 	DisplayTitle string `json:"displayTitle,omitempty"`
 }
 
@@ -161,6 +161,19 @@ func (s *Session) StorageKey() string {
 		return trimmed
 	}
 	return s.ClydeUUID()
+}
+
+// SessionDisplayName returns the exact human-visible name for sess. It prefers
+// DisplayTitle for legacy rows whose Name is still a slug alias, then falls
+// back to Name for rows already migrated to exact names.
+func SessionDisplayName(sess *Session) string {
+	if sess == nil {
+		return ""
+	}
+	if displayTitle := strings.TrimSpace(sess.Metadata.DisplayTitle); displayTitle != "" {
+		return displayTitle
+	}
+	return sess.Name
 }
 
 // SessionProviderCapabilities returns the capabilities for the session provider.

@@ -31,19 +31,19 @@ var _ = Describe("FileStore", func() {
 
 	Describe("Create and Get", func() {
 		It("should create and retrieve a session", func() {
-			s := session.NewSession("test-session", "uuid-123")
+			s := session.NewSession("Test Session", "uuid-123")
 
 			err := store.Create(s)
 			Expect(err).NotTo(HaveOccurred())
 
-			retrieved, err := store.Get("test-session")
+			retrieved, err := store.Get("Test Session")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(retrieved.Name).To(Equal("test-session"))
+			Expect(retrieved.Name).To(Equal("Test Session"))
 			Expect(retrieved.Metadata.ProviderSessionID()).To(Equal("uuid-123"))
 		})
 
-		It("should reject invalid session names", func() {
-			s := session.NewSession("INVALID", "uuid")
+		It("should reject display names that cannot be matched exactly", func() {
+			s := session.NewSession("line\nbreak", "uuid")
 			err := store.Create(s)
 			Expect(err).To(HaveOccurred())
 		})
@@ -59,7 +59,7 @@ var _ = Describe("FileStore", func() {
 		})
 
 		It("should resolve and search by display title", func() {
-			s := session.NewSession("merry-swan", "uuid-123")
+			s := session.NewSession("Merry Swan", "uuid-123")
 			s.Metadata.DisplayTitle = "Merry Swan"
 
 			err := store.Create(s)
@@ -68,12 +68,12 @@ var _ = Describe("FileStore", func() {
 			resolved, err := store.Resolve("Merry Swan")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resolved).ToNot(BeNil())
-			Expect(resolved.Name).To(Equal("merry-swan"))
+			Expect(resolved.Name).To(Equal("Merry Swan"))
 
 			matches, err := store.Search("Merry Swan")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(matches).To(HaveLen(1))
-			Expect(matches[0].Name).To(Equal("merry-swan"))
+			Expect(matches[0].Name).To(Equal("Merry Swan"))
 		})
 	})
 

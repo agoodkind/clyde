@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -13,6 +15,12 @@ const (
 
 	// MaxNameLength is the maximum allowed session name length
 	MaxNameLength = 64
+
+	// MinDisplayNameLength is the minimum allowed exact display name length.
+	MinDisplayNameLength = 1
+
+	// MaxDisplayNameLength is the maximum allowed exact display name length.
+	MaxDisplayNameLength = 200
 )
 
 var (
@@ -24,9 +32,12 @@ var (
 
 	// ErrInvalidName is returned when session name validation fails
 	ErrInvalidName = errors.New("invalid session name")
+
+	// ErrInvalidDisplayName is returned when exact display-name validation fails.
+	ErrInvalidDisplayName = errors.New("invalid display name")
 )
 
-// ValidateName checks if a session name is valid.
+// ValidateName checks if a legacy slug session name is valid.
 // Returns an error if the name is invalid, with details about why.
 func ValidateName(name string) error {
 	if len(name) < MinNameLength {
@@ -44,6 +55,36 @@ func ValidateName(name string) error {
 	// Check for consecutive hyphens
 	if strings.Contains(name, "--") {
 		return fmt.Errorf("%w: name cannot contain consecutive hyphens", ErrInvalidName)
+	}
+
+	return nil
+}
+
+// ValidateDisplayName checks whether name is safe to store as Clyde's exact
+// human-visible session name. The policy intentionally does not slugify or
+// lowercase: stable storage and parent linkage use ClydeUUID, while this value
+// is for display and exact lookup.
+func ValidateDisplayName(name string) error {
+	if name != strings.TrimSpace(name) {
+		return fmt.Errorf("%w: name cannot have leading or trailing whitespace", ErrInvalidDisplayName)
+	}
+
+	if utf8.RuneCountInString(name) < MinDisplayNameLength {
+		return fmt.Errorf("%w: name must be at least %d visible character", ErrInvalidDisplayName, MinDisplayNameLength)
+	}
+
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("%w: name must be valid UTF-8", ErrInvalidDisplayName)
+	}
+
+	if utf8.RuneCountInString(name) > MaxDisplayNameLength {
+		return fmt.Errorf("%w: name must be at most %d characters", ErrInvalidDisplayName, MaxDisplayNameLength)
+	}
+
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%w: name cannot contain control characters", ErrInvalidDisplayName)
+		}
 	}
 
 	return nil
@@ -138,4 +179,47 @@ func UniqueName(base string, taken map[string]bool) string {
 		}
 	}
 	return base
+}
+
+// UniqueDisplayName returns base if it is not taken, otherwise appends a
+// human-visible numeric suffix. Invalid display names return "" so callers can
+// fall back to stable id based naming.
+func UniqueDisplayName(base string, taken map[string]bool) string {
+	base = strings.TrimSpace(base)
+	if ValidateDisplayName(base) != nil {
+		return ""
+	}
+	if !taken[base] {
+		return base
+	}
+	for i := 2; i < NameCollisionMax; i++ {
+		suffix := fmt.Sprintf(" (%d)", i)
+		maxBaseRunes := MaxDisplayNameLength - utf8.RuneCountInString(suffix)
+		candidateBase := truncateDisplayName(base, maxBaseRunes)
+		if candidateBase == "" {
+			return ""
+		}
+		candidate := candidateBase + suffix
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+	return base
+}
+
+func truncateDisplayName(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(value) <= maxRunes {
+		return value
+	}
+	out := make([]rune, 0, maxRunes)
+	for _, r := range value {
+		if len(out) == maxRunes {
+			break
+		}
+		out = append(out, r)
+	}
+	return strings.TrimRightFunc(string(out), unicode.IsSpace)
 }

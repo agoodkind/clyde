@@ -119,3 +119,34 @@ var _ = Describe("ValidateName", func() {
 		})
 	})
 })
+
+var _ = Describe("ValidateDisplayName", func() {
+	It("accepts exact human-visible names without slugifying", func() {
+		validNames := []string{
+			"Merry Swan",
+			"Feature/Auth v2",
+			"café plan",
+			"🙂 pair-debugging",
+		}
+
+		for _, name := range validNames {
+			err := session.ValidateDisplayName(name)
+			Expect(err).NotTo(HaveOccurred(), "display name %q should be valid", name)
+		}
+	})
+
+	It("rejects names that cannot be matched exactly", func() {
+		invalidNames := []string{
+			"",
+			" ",
+			" leading",
+			"trailing ",
+			"line\nbreak",
+		}
+
+		for _, name := range invalidNames {
+			err := session.ValidateDisplayName(name)
+			Expect(err).To(HaveOccurred(), "display name %q should be invalid", name)
+		}
+	})
+})

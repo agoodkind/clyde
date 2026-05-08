@@ -150,8 +150,9 @@ var _ = Describe("AdoptUnknown", func() {
 		Expect(store.Create(&session.Session{
 			Name: "parent-session",
 			Metadata: session.Metadata{
-				Name:      "parent-session",
-				SessionID: parentUUID,
+				Name:         "parent-session",
+				SessionID:    parentUUID,
+				DisplayTitle: "Parent Session",
 			},
 		})).To(Succeed())
 		dir := filepath.Join(projectsRoot, "-Users-agoodkind-Sites-foo")
@@ -166,7 +167,8 @@ var _ = Describe("AdoptUnknown", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(adopted).To(HaveLen(1))
 		Expect(adopted[0].Metadata.IsForkedSession).To(BeTrue())
-		Expect(adopted[0].Metadata.ParentSession).To(Equal("parent-session"))
+		Expect(adopted[0].Metadata.ParentSession).To(Equal("Parent Session"))
+		Expect(adopted[0].Metadata.ParentClydeUUID).ToNot(BeEmpty())
 	})
 
 	It("skips auto-name and subagent transcripts", func() {
