@@ -888,7 +888,7 @@ func (a *App) runResumeLifecycle(sess *session.Session, source string) {
 	a.returnPathSession = sessionForPrompt
 	a.ensureReturnPrompt(sessionForPrompt, source)
 	a.requestSessionsAsync(source + ".after_resume")
-	if row := a.findVisibleRowByName(sessionForPrompt.Name); row >= 0 {
+	if _, row := a.findVisibleSession(sessionForPrompt.Name, ""); row >= 0 {
 		a.table.Active = true
 		a.table.SelectedRow = row
 	}
@@ -2945,24 +2945,12 @@ func (a *App) maybeRepollPendingDetails() {
 		return
 	}
 	for _, name := range pending {
-		sess := a.sessionByName(name)
+		sess := a.findSessionByName(name)
 		if sess == nil {
 			continue
 		}
 		a.loadDetailAsync(sess)
 	}
-}
-
-// sessionByName returns the in-memory session matching name, or nil.
-// Used by the detail re-poll to translate cache keys back into the
-// pointer the load helpers want.
-func (a *App) sessionByName(name string) *session.Session {
-	for _, sess := range a.sessions {
-		if sess != nil && sess.Name == name {
-			return sess
-		}
-	}
-	return nil
 }
 
 func (a *App) handleIdleSummarySweepTick() bool {
@@ -4753,19 +4741,22 @@ func (a *App) defaultLaunchCWD() string {
 	return cwd
 }
 
-// openNewStarterModal offers a fast default (cwd where clyde started) or the file picker.
-func (a *App) openNewStarterModal() {
+// openStarterModal builds the two-entry starter modal that offers a
+// fast "use cwd" default and a "browse" file-picker fallback. The
+// here callback receives the resolved cwd. The browse callback opens
+// the matching file picker.
+func (a *App) openStarterModal(title, hereLabel string, here func(cwd string), browse func()) {
 	cwd := a.defaultLaunchCWD()
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
 	entries := []OptionsModalEntry{
 		{
-			Label: "Start in this directory",
+			Label: hereLabel,
 			Hint:  shortPath(cwd),
 			Action: func() {
 				a.closeOverlay()
-				a.openNewSessionTypeModal(cwd)
+				here(cwd)
 			},
 		},
 		{
@@ -4773,42 +4764,55 @@ func (a *App) openNewStarterModal() {
 			Hint:  "browse",
 			Action: func() {
 				a.closeOverlay()
-				a.openNewSessionPrompt()
+				browse()
 			},
 		},
 	}
-	modal := NewOptionsModal("New chat", entries)
+	modal := NewOptionsModal(title, entries)
 	modal.OnCancel = func() { a.closeOverlay() }
 	a.overlay = modal
 	a.mode = StatusFilter
 }
 
+// openNewStarterModal offers a fast default (cwd where clyde started) or the file picker.
+func (a *App) openNewStarterModal() {
+	a.openStarterModal(
+		"New chat",
+		"Start in this directory",
+		a.openNewSessionTypeModal,
+		a.openNewSessionPrompt,
+	)
+}
+
 func (a *App) openSidecarLaunchStarterModal() {
-	cwd := a.defaultLaunchCWD()
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+	a.openStarterModal(
+		"Launch sidecar session",
+		"Launch remote here",
+		a.openSidecarLaunchTypeModal,
+		a.openSidecarLaunchPrompt,
+	)
+}
+
+// openBasedirFilePicker installs a file picker rooted at the current
+// working directory. Cancel closes the overlay. On select the helper
+// trims whitespace and probes the path with os.Stat. When the path is
+// a directory it calls onExisting. When it is missing or not a
+// directory it calls onMissing so the caller can prompt before
+// creating it.
+func (a *App) openBasedirFilePicker(title string, onExisting, onMissing func(basedir string)) {
+	cwd, _ := os.Getwd()
+	picker := NewFilePickerOverlay(title, cwd)
+	picker.OnCancel = func() { a.closeOverlay() }
+	picker.OnSelect = func(path string) {
+		a.closeOverlay()
+		basedir := strings.TrimSpace(path)
+		if info, err := os.Stat(basedir); err != nil || !info.IsDir() {
+			onMissing(basedir)
+			return
+		}
+		onExisting(basedir)
 	}
-	entries := []OptionsModalEntry{
-		{
-			Label: "Launch remote here",
-			Hint:  shortPath(cwd),
-			Action: func() {
-				a.closeOverlay()
-				a.openSidecarLaunchTypeModal(cwd)
-			},
-		},
-		{
-			Label: "Choose folder",
-			Hint:  "browse",
-			Action: func() {
-				a.closeOverlay()
-				a.openSidecarLaunchPrompt()
-			},
-		},
-	}
-	modal := NewOptionsModal("Launch sidecar session", entries)
-	modal.OnCancel = func() { a.closeOverlay() }
-	a.overlay = modal
+	a.overlay = picker
 	a.mode = StatusFilter
 }
 
@@ -4821,40 +4825,19 @@ func (a *App) openSidecarLaunchStarterModal() {
 // the next overlay offers to create that directory before continuing.
 // The remote-control + temp/persist choice happens after that.
 func (a *App) openNewSessionPrompt() {
-	cwd, _ := os.Getwd()
-	picker := NewFilePickerOverlay("Pick basedir for new session", cwd)
-	picker.OnCancel = func() { a.closeOverlay() }
-	picker.OnSelect = func(path string) {
-		a.closeOverlay()
-		basedir := strings.TrimSpace(path)
-		// Probe whether the path exists. When it doesn't, ask first
-		// before creating it so the user does not accidentally seed
-		// an empty workspace from a typo.
-		if info, err := os.Stat(basedir); err != nil || !info.IsDir() {
-			a.openCreateFolderConfirm(basedir)
-			return
-		}
-		a.openNewSessionTypeModal(basedir)
-	}
-	a.overlay = picker
-	a.mode = StatusFilter
+	a.openBasedirFilePicker(
+		"Pick basedir for new session",
+		a.openNewSessionTypeModal,
+		a.openCreateFolderConfirm,
+	)
 }
 
 func (a *App) openSidecarLaunchPrompt() {
-	cwd, _ := os.Getwd()
-	picker := NewFilePickerOverlay("Pick basedir for sidecar session", cwd)
-	picker.OnCancel = func() { a.closeOverlay() }
-	picker.OnSelect = func(path string) {
-		a.closeOverlay()
-		basedir := strings.TrimSpace(path)
-		if info, err := os.Stat(basedir); err != nil || !info.IsDir() {
-			a.openSidecarCreateFolderConfirm(basedir)
-			return
-		}
-		a.openSidecarLaunchTypeModal(basedir)
-	}
-	a.overlay = picker
-	a.mode = StatusFilter
+	a.openBasedirFilePicker(
+		"Pick basedir for sidecar session",
+		a.openSidecarLaunchTypeModal,
+		a.openSidecarCreateFolderConfirm,
+	)
 }
 
 // openCreateFolderConfirm asks the user to confirm that a missing
@@ -5867,21 +5850,11 @@ func (a *App) openHelpModal() {
 	a.overlay = modal
 }
 
-// findSessionByName returns the in-memory session matching name, or
-// nil. Used after a refresh to pick up updated metadata.
-// findVisibleRowByName returns the visible row index for the session
-// with the given name, or -1 if it is not currently in the visible
-// list. The post session prompt uses this to re locate the row after
-// a refresh cycle so repeated Resume clicks keep firing.
-func (a *App) findVisibleRowByName(name string) int {
-	for vi, idx := range a.tableRowIdx {
-		if idx >= 0 && idx < len(a.sessions) && a.sessions[idx].Name == name {
-			return vi
-		}
-	}
-	return -1
-}
-
+// findVisibleSession returns the visible row index and the session
+// pointer for the row matching name or sessionID. Returns nil and -1
+// when no row matches. Used after a refresh to relocate the row that
+// repeated Resume clicks should target, and to pick up updated
+// metadata.
 func (a *App) findVisibleSession(name, sessionID string) (*session.Session, int) {
 	for vi, idx := range a.tableRowIdx {
 		if idx < 0 || idx >= len(a.sessions) {

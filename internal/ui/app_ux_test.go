@@ -1049,7 +1049,7 @@ func TestUX_RegistryRenamePreservesSelection(t *testing.T) {
 	if a.selected == nil || a.selected.Name != renamed.Name {
 		t.Fatalf("selected session = %#v, want %q", a.selected, renamed.Name)
 	}
-	if row := a.findVisibleRowByName(renamed.Name); row < 0 {
+	if _, row := a.findVisibleSession(renamed.Name, ""); row < 0 {
 		t.Fatalf("renamed session not visible")
 	}
 	if _, ok := a.modelCache["test-session-00"]; ok {
