@@ -48,6 +48,11 @@ type Config struct {
 	// MITM configures the local capture proxy used for provider
 	// subprocesses and for adapter-side request observability.
 	MITM MITMConfig `json:"mitm" toml:"mitm"`
+	// AutoName configures the automatic session-naming worker.
+	// CLYDE-170 PR3 adds the parsed config block. The worker that
+	// consumes this config lands in PR4. Defaults are applied when
+	// the [autoname] block is absent or partial.
+	AutoName AutoNameConfig `json:"autoName" toml:"autoname"`
 }
 
 // LoggingConfig carries global logging settings.
@@ -1110,6 +1115,119 @@ type Defaults struct {
 	Model           string `json:"model,omitempty" toml:"model,omitempty"`
 	EffortLevel     string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
 	AnthropicAPIKey string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
+}
+
+// AutoNameConfig holds the [autoname] block of clyde.toml.
+//
+// Enabled is the global kill switch. The system is on by default.
+// Operators set this to false to disable the auto-rename worker.
+//
+// Provider is the adapter route key the worker uses for the LLM
+// candidate-name call. The empty value means "fall back to whatever
+// the summary subsystem uses today" so day-one behavior matches the
+// model the operator already trusts. The worker resolves the route at
+// call time. Do not hardcode a model name here.
+//
+// MaxCallsPerHour caps the daemon-wide LLM call rate. Default 6.
+//
+// Cooldown is the minimum interval between probe attempts on the
+// same session. Default 30 minutes.
+//
+// MinUserMessages is the trigger threshold. Default 3 user messages
+// before a cold session enters the auto-rename pipeline.
+//
+// Redact controls the redaction pass on transcript content before it
+// reaches the LLM call.
+type AutoNameConfig struct {
+	Enabled         *bool            `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Provider        string           `json:"provider,omitempty" toml:"provider,omitempty"`
+	MaxCallsPerHour int              `json:"maxCallsPerHour,omitempty" toml:"max_calls_per_hour,omitempty"`
+	Cooldown        AutoNameDuration `json:"cooldown,omitempty" toml:"cooldown,omitempty"`
+	MinUserMessages int              `json:"minUserMessages,omitempty" toml:"min_user_messages,omitempty"`
+	Redact          RedactPolicy     `json:"redact,omitzero" toml:"redact,omitempty"`
+}
+
+// AutoNameDuration accepts quoted Go duration strings in TOML while still
+// preserving duration typing inside the config model.
+type AutoNameDuration time.Duration
+
+// UnmarshalText parses a quoted Go duration or an integer nanosecond count.
+func (duration *AutoNameDuration) UnmarshalText(text []byte) error {
+	value := strings.TrimSpace(string(text))
+	if value == "" {
+		*duration = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err == nil {
+		*duration = AutoNameDuration(parsed)
+		return nil
+	}
+	numeric, numericErr := strconv.ParseInt(value, 10, 64)
+	if numericErr == nil {
+		*duration = AutoNameDuration(time.Duration(numeric))
+		return nil
+	}
+	return fmt.Errorf("parse autoname cooldown %q: %w", value, err)
+}
+
+// Duration returns the standard library duration value.
+func (duration AutoNameDuration) Duration() time.Duration {
+	return time.Duration(duration)
+}
+
+// IsEnabled reports whether the auto-rename worker is enabled.
+// Treats a nil Enabled pointer as the default (true).
+func (a AutoNameConfig) IsEnabled() bool {
+	if a.Enabled == nil {
+		return true
+	}
+	return *a.Enabled
+}
+
+// RedactPolicy controls the auto-rename redaction pass.
+//
+// MinDigitRunForRedact is the minimum length of consecutive digits to
+// redact (e.g. 7 to drop phone numbers but keep small ints).
+// Default 7.
+//
+// StripEmails strips email-shaped substrings. Default true.
+// StripPaths strips substrings starting with `/`. Default true.
+// StripKeyPrefixes strips obvious credential prefixes (sk-, ghp_,
+// AKIA, AIza, etc.). Default true.
+//
+// All three Strip* flags use *bool so a partial [autoname.redact]
+// block can opt one off without flipping the others off by zero
+// value.
+type RedactPolicy struct {
+	MinDigitRunForRedact int   `json:"minDigitRunForRedact,omitempty" toml:"min_digit_run_for_redact,omitempty"`
+	StripEmails          *bool `json:"stripEmails,omitempty" toml:"strip_emails,omitempty"`
+	StripPaths           *bool `json:"stripPaths,omitempty" toml:"strip_paths,omitempty"`
+	StripKeyPrefixes     *bool `json:"stripKeyPrefixes,omitempty" toml:"strip_key_prefixes,omitempty"`
+}
+
+// StripEmailsOrDefault returns true when StripEmails is unset.
+func (r RedactPolicy) StripEmailsOrDefault() bool {
+	if r.StripEmails == nil {
+		return true
+	}
+	return *r.StripEmails
+}
+
+// StripPathsOrDefault returns true when StripPaths is unset.
+func (r RedactPolicy) StripPathsOrDefault() bool {
+	if r.StripPaths == nil {
+		return true
+	}
+	return *r.StripPaths
+}
+
+// StripKeyPrefixesOrDefault returns true when StripKeyPrefixes is unset.
+func (r RedactPolicy) StripKeyPrefixesOrDefault() bool {
+	if r.StripKeyPrefixes == nil {
+		return true
+	}
+	return *r.StripKeyPrefixes
 }
 
 // MITMConfig configures the local capture proxy and its persistence.
