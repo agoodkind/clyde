@@ -11,11 +11,17 @@ import (
 	"strings"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
-	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
 )
+
+// requestPathSubagent is the local mirror of the cursor-side
+// "subagent" request path label. The dispatcher compares the
+// IngressContext.PathKind primitive against this constant so the
+// generic adapter never imports the cursor package's typed enum.
+const requestPathSubagent = "subagent"
 
 // CountNormalizedTools counts tools that arrived without a `function` key
 // and were likely sent in native alternate shape.
@@ -138,32 +144,36 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	if req.ReasoningEffort == "" && req.Reasoning != nil {
 		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
 	}
-	cursorReq := adaptercursor.TranslateRequest(req)
-	corr = corr.WithCursor(cursorReq.RequestID, cursorReq.ConversationID)
-	if cursorReq.GenerationID != "" {
-		corr = corr.WithCursorGenerationID(cursorReq.GenerationID)
+	ingress, ok := activeIngressContract()
+	if !ok || ingress == nil {
+		return adapterErrInternal("ingress contract not registered", nil)
 	}
-	identity := s.resolveChatIdentity(corr, cursorReq, req)
+	ingressCtx := ingress.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
+	corr = corr.WithCursor(ingressCtx.RequestID, ingressCtx.ConversationID)
+	if ingressCtx.GenerationID != "" {
+		corr = corr.WithCursorGenerationID(ingressCtx.GenerationID)
+	}
+	identity := ingress.ResolveIdentity(corr, ingressCtx, ingresscontract.ChatRequestPrimitive{Body: req})
 	corr = corr.WithChatIdentity(identity.ChatKey, identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
-	req.Model = cursorReq.NormalizedModel
+	req.Model = ingressCtx.NormalizedModel
 	s.logChatForkDetected(ctx, corr, identity)
 
 	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
 	if err != nil {
-		s.logChatResolveFailed(ctx, corr, reqID, req, cursorReq, err)
+		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, err)
 		return adapterErrModelNotFound(err.Error())
 	}
-	s.logChatResolved(ctx, corr, reqID, req, cursorReq, model, effort)
+	s.logChatResolved(ctx, corr, reqID, req, ingressCtx, ingress, model, effort)
 
 	// Step D: build the typed resolver.ResolvedRequest alongside the
 	// legacy resolution. Backends still use model.ResolvedModel for now;
 	// this call validates the resolver in production traffic and emits a
 	// telemetry event so we can confirm provider+effort+budget mapping is
 	// consistent before flipping the dispatcher to use it.
-	resolvedReq, resolverErr := adapterresolver.Resolve(cursorReq, adapterresolver.NewModelRegistryAdapter(s.registry))
-	s.logResolverOutcome(ctx, corr, reqID, req, cursorReq, &resolvedReq, resolverErr)
+	resolvedReq, resolverErr := resolveCursorChatRequest(req, adapterresolver.NewModelRegistryAdapter(s.registry))
+	s.logResolverOutcome(ctx, corr, reqID, req, ingressCtx, &resolvedReq, resolverErr)
 
 	model, err = s.applyBackendOverride(r, req, model, reqID)
 	if err != nil {
@@ -171,16 +181,16 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	}
 
 	toolNames := chatToolNames(req)
-	s.logChatReceived(ctx, corr, reqID, req, cursorReq, model, toolNames)
-	if cursorReq.PathKind == adaptercursor.RequestPathSubagent && cursorReq.GenerationID == "" {
-		s.logSubagentMissingGenerationID(ctx, r, corr, reqID, cursorReq, discovery)
+	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, model, toolNames)
+	if ingressCtx.PathKind == requestPathSubagent && ingressCtx.GenerationID == "" {
+		s.logSubagentMissingGenerationID(ctx, r, corr, reqID, ingressCtx, discovery)
 	}
 
 	if perr := s.preflightChat(ctx, &req, model, reqID); perr != nil {
 		return perr
 	}
 
-	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, cursorReq, resolvedReq, resolverErr)
+	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, ingressCtx, resolvedReq, resolverErr)
 	return nil
 }
 
@@ -340,20 +350,22 @@ func (s *Server) logMessagesRequired(ctx context.Context, corr correlation.Conte
 	)
 }
 
-// logChatResolveFailed records a model lookup failure with cursor context.
-func (s *Server) logChatResolveFailed(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, cursorReq adaptercursor.Request, err error) {
+// logChatResolveFailed records a model lookup failure with vendor
+// ingress context. Vendor-specific log attrs come back through the
+// registered IngressContract so the dispatcher carries no Cursor type.
+func (s *Server) logChatResolveFailed(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, err error) {
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("model", req.Model),
 		slog.String("err", err.Error()),
 	}
-	attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
+	attrs = append(attrs, ingress.LogAttrs(ingressCtx, req.Model, nil)...)
 	attrs = append(attrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelWarn, "adapter.model.resolve_failed", attrs...)
 }
 
 // logChatResolved records the successful resolution of a chat alias.
-func (s *Server) logChatResolved(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, cursorReq adaptercursor.Request, model ResolvedModel, effort string) {
+func (s *Server) logChatResolved(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, model ResolvedModel, effort string) {
 	resolveAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
@@ -363,14 +375,14 @@ func (s *Server) logChatResolved(ctx context.Context, corr correlation.Context, 
 		slog.Int("context_window", model.Context),
 		slog.Bool("stream", req.Stream),
 	}
-	resolveAttrs = append(resolveAttrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, nil)...)
+	resolveAttrs = append(resolveAttrs, ingress.LogAttrs(ingressCtx, req.Model, nil)...)
 	resolveAttrs = append(resolveAttrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelInfo, "adapter.model.resolved", resolveAttrs...)
 }
 
 // logResolverOutcome emits the typed-resolver shadow event and stamps
 // request id and correlation onto the resolved request when it succeeded.
-func (s *Server) logResolverOutcome(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, cursorReq adaptercursor.Request, resolvedReq *adapterresolver.ResolvedRequest, resolverErr error) {
+func (s *Server) logResolverOutcome(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, resolvedReq *adapterresolver.ResolvedRequest, resolverErr error) {
 	if resolverErr != nil {
 		slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelDebug, "adapter.resolver.unresolved",
 			slog.String("request_id", reqID),
@@ -390,11 +402,11 @@ func (s *Server) logResolverOutcome(ctx context.Context, corr correlation.Contex
 		slog.String("effort", resolvedReq.Effort.String()),
 		slog.Int("input_tokens_budget", resolvedReq.ContextBudget.InputTokens),
 		slog.Int("output_tokens_budget", resolvedReq.ContextBudget.OutputTokens),
-		slog.String("conversation_id", cursorReq.ConversationID),
-		slog.Bool("subagent_tool_available", cursorReq.HasSubagentTool),
-		slog.Bool("has_create_plan_tool", cursorReq.HasCreatePlanTool),
-		slog.Bool("has_apply_patch_tool", cursorReq.HasApplyPatchTool),
-		slog.Int("mcp_tool_count", len(cursorReq.MCPToolNames)),
+		slog.String("conversation_id", ingressCtx.ConversationID),
+		slog.Bool("subagent_tool_available", ingressCtx.HasSubagentTool),
+		slog.Bool("has_create_plan_tool", ingressCtx.HasCreatePlanTool),
+		slog.Bool("has_apply_patch_tool", ingressCtx.HasApplyPatchTool),
+		slog.Int("mcp_tool_count", len(ingressCtx.MCPToolNames)),
 	}
 	resolverAttrs = append(resolverAttrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsResolve).LogAttrs(ctx, slog.LevelInfo, "adapter.resolver.resolved", resolverAttrs...)
@@ -413,8 +425,7 @@ func chatToolNames(req ChatRequest) []string {
 }
 
 // logChatReceived records the dispatch-time view of a chat request.
-func (s *Server) logChatReceived(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, cursorReq adaptercursor.Request, model ResolvedModel, toolNames []string) {
-	cursor := cursorReq.Context()
+func (s *Server) logChatReceived(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, model ResolvedModel, toolNames []string) {
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
 		slog.String("alias", req.Model),
@@ -425,25 +436,25 @@ func (s *Server) logChatReceived(ctx context.Context, corr correlation.Context, 
 		slog.Any("tool_names", toolNames),
 		slog.Bool("stream", req.Stream),
 	}
-	if cursor.ConversationID != "" {
-		attrs = append(attrs, slog.String("cursor_conversation_id", cursor.ConversationID))
+	if ingressCtx.ConversationID != "" {
+		attrs = append(attrs, slog.String("cursor_conversation_id", ingressCtx.ConversationID))
 	}
-	if cursor.RequestID != "" {
-		attrs = append(attrs, slog.String("cursor_request_id", cursor.RequestID))
+	if ingressCtx.RequestID != "" {
+		attrs = append(attrs, slog.String("cursor_request_id", ingressCtx.RequestID))
 	}
-	attrs = append(attrs, adaptercursor.BoundaryLogAttrs(cursorReq, cursorReq.OpenAI.Model, toolNames)...)
+	attrs = append(attrs, ingress.LogAttrs(ingressCtx, req.Model, toolNames)...)
 	attrs = append(attrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.received", attrs...)
 }
 
-// logSubagentMissingGenerationID flags a Cursor subagent request that
+// logSubagentMissingGenerationID flags a vendor subagent request that
 // arrived without the expected generation_id metadata.
-func (s *Server) logSubagentMissingGenerationID(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, cursorReq adaptercursor.Request, discovery RequestDiscovery) {
+func (s *Server) logSubagentMissingGenerationID(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, ingressCtx ingresscontract.IngressContext, discovery RequestDiscovery) {
 	missingAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
-		slog.String("cursor_conversation_id", cursorReq.ConversationID),
-		slog.String("cursor_request_path", string(cursorReq.PathKind)),
-		slog.Bool("subagent_tool_available", cursorReq.HasSubagentTool),
+		slog.String("cursor_conversation_id", ingressCtx.ConversationID),
+		slog.String("cursor_request_path", ingressCtx.PathKind),
+		slog.Bool("subagent_tool_available", ingressCtx.HasSubagentTool),
 		slog.Any("metadata_keys", discovery.MetadataKeys),
 		slog.Any("header_names", HeaderNames(r.Header)),
 	}
@@ -678,16 +689,7 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	return s.handleChat(ctx, hctx)
 }
 
-func (s *Server) resolveChatIdentity(corr correlation.Context, cursorReq adaptercursor.Request, req ChatRequest) adaptercursor.ChatIdentity {
-	resolver := s.chatIdentityResolver
-	if resolver == nil {
-		resolver = adaptercursor.NewChatIdentityResolver()
-		s.chatIdentityResolver = resolver
-	}
-	return resolver.Resolve(corr, cursorReq, req)
-}
-
-func (s *Server) logChatForkDetected(ctx context.Context, corr correlation.Context, identity adaptercursor.ChatIdentity) {
+func (s *Server) logChatForkDetected(ctx context.Context, corr correlation.Context, identity ingresscontract.ChatIdentityPrimitive) {
 	if !identity.Fork.Detected {
 		return
 	}

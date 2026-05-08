@@ -2,6 +2,7 @@ package adapter
 
 import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
 // init wires the canonical vendor implementations of the ingress
@@ -17,4 +18,15 @@ import (
 // register Cursor without speaking Cursor's request-shape conventions.
 func init() {
 	adaptercursor.RegisterIngress(defaultIngressRegistry)
+}
+
+// resolveCursorChatRequest is the registration-root indirection that
+// hides the cursor.Request type from every other depth-1 adapter
+// file. The dispatcher calls this helper to get a typed
+// resolver.ResolvedRequest for an OpenAI-shaped chat request without
+// importing adaptercursor. Future ingress vendors fold their typed
+// resolver entry-point into this same registration root file.
+func resolveCursorChatRequest(req ChatRequest, registry adapterresolver.ModelRegistry) (adapterresolver.ResolvedRequest, error) {
+	cursorReq := adaptercursor.TranslateRequest(req)
+	return adapterresolver.Resolve(cursorReq, registry)
 }
