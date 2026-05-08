@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 )
 
 // Config represents the clyde configuration.
@@ -545,71 +547,31 @@ type AdapterAnthropic struct {
 	Reasoning AdapterAnthropicReasoning `json:"reasoning,omitzero" toml:"reasoning,omitempty"`
 }
 
-// AnthropicInboundThinking is the closed enum of strategies for the visible
-// thinking content block round-trip. Mirrors the existing render
-// [MaterializationStrategy] values; keep the legal set in lockstep.
-type AnthropicInboundThinking string
-
-// Anthropic inbound-thinking strategies.
-const (
-	// AnthropicInboundThinkingNative materializes round-tripped thinking
-	// envelopes as the upstream-native `{type:"thinking"}` content block.
-	// This is the documented default.
-	AnthropicInboundThinkingNative AnthropicInboundThinking = "native_thinking_block"
-	// AnthropicInboundThinkingDrop discards thinking bodies before
-	// forwarding upstream.
-	AnthropicInboundThinkingDrop AnthropicInboundThinking = "drop"
-	// AnthropicInboundThinkingPlainText concatenates the envelope body into
-	// the assistant text block as plain prose.
-	AnthropicInboundThinkingPlainText AnthropicInboundThinking = "plain_text_concat"
-	// AnthropicInboundThinkingPassthrough leaves the marker-wrapped envelope
-	// in place so the upstream sees what Cursor sent.
-	AnthropicInboundThinkingPassthrough AnthropicInboundThinking = "passthrough"
-)
-
 // AdapterAnthropicReasoning is the per-provider reasoning lever block for the
 // Anthropic backend. Anthropic carries one lever because Anthropic emits a
 // single thinking content block per turn; the lever picks how a round-tripped
 // thinking envelope is materialized on the inbound (request-shaping) side.
+// The legal value set lives in the Anthropic provider package as
+// [anthmode.InboundThinking].
 type AdapterAnthropicReasoning struct {
 	// InboundThinking selects the materialization strategy for round-tripped
-	// thinking content. Empty resolves to native_thinking_block.
-	InboundThinking AnthropicInboundThinking `json:"inboundThinking,omitempty" toml:"inbound_thinking,omitempty"`
+	// thinking content. Empty resolves to native_thinking_block via
+	// [anthmode.InboundThinking.Resolved].
+	InboundThinking anthmode.InboundThinking `json:"inboundThinking,omitempty" toml:"inbound_thinking,omitempty"`
 }
 
 // ResolvedInboundThinking returns the configured strategy with the documented
 // default applied when unset.
-func (r AdapterAnthropicReasoning) ResolvedInboundThinking() AnthropicInboundThinking {
-	if r.InboundThinking == "" {
-		return AnthropicInboundThinkingNative
-	}
-	return r.InboundThinking
+func (r AdapterAnthropicReasoning) ResolvedInboundThinking() anthmode.InboundThinking {
+	return r.InboundThinking.Resolved()
 }
 
-// AnthropicWireCaptureMode is the closed enum of legal modes for the
-// Anthropic wire-capture concern. Anthropic does not have discrete reasoning
-// items the way Codex does, so it omits the `reasoning_only` value.
-type AnthropicWireCaptureMode string
-
-// Anthropic wire-capture modes.
-const (
-	// AnthropicWireCaptureOff disables success-path body capture. Errors
-	// (429, non-200) continue to log their bodies via the existing
-	// anthropic.ratelimit and anthropic.messages.upstream_error events.
-	AnthropicWireCaptureOff AnthropicWireCaptureMode = "off"
-	// AnthropicWireCaptureSummaryOnly emits a per-request fingerprint
-	// (status, request-id, byte counts, headers) without the body.
-	AnthropicWireCaptureSummaryOnly AnthropicWireCaptureMode = "summary_only"
-	// AnthropicWireCaptureFull emits the full upstream response body on
-	// every successful request via a tee-reader. Combined with the small
-	// shared rotation budget, safe to leave on for diagnostic windows.
-	AnthropicWireCaptureFull AnthropicWireCaptureMode = "full"
-)
-
 // AdapterAnthropicWireCapture is the per-provider wire-capture mode block
-// for Anthropic. Empty mode is treated as Off.
+// for Anthropic. The legal mode set lives in the Anthropic provider package
+// as [anthmode.WireCaptureMode]; empty mode is treated as
+// [anthmode.WireCaptureOff].
 type AdapterAnthropicWireCapture struct {
-	Mode AnthropicWireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
+	Mode anthmode.WireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
 }
 
 // CodexWireCaptureMode is the closed enum of legal modes for the Codex
@@ -709,11 +671,8 @@ func (r AdapterCodexReasoning) ResolvedRoundTripEncrypted() CodexRoundTripEncryp
 
 // ResolvedAnthropicWireCaptureMode returns the configured mode with the Off
 // default applied when the operator has not set a value.
-func (c AdapterAnthropic) ResolvedAnthropicWireCaptureMode() AnthropicWireCaptureMode {
-	if c.WireCapture.Mode == "" {
-		return AnthropicWireCaptureOff
-	}
-	return c.WireCapture.Mode
+func (c AdapterAnthropic) ResolvedAnthropicWireCaptureMode() anthmode.WireCaptureMode {
+	return c.WireCapture.Mode.Resolved()
 }
 
 // ResolvedCodexWireCaptureMode returns the configured mode with the Off

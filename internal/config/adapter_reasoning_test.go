@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -30,15 +31,15 @@ func configWithReasoningTOML(snippet string) (*config.Config, error) {
 var _ = Describe("Adapter reasoning config", func() {
 	Describe("AdapterAnthropicReasoning.ResolvedInboundThinking", func() {
 		DescribeTable("resolves the configured value with the documented default applied when empty",
-			func(input config.AnthropicInboundThinking, expected config.AnthropicInboundThinking) {
+			func(input anthmode.InboundThinking, expected anthmode.InboundThinking) {
 				r := config.AdapterAnthropicReasoning{InboundThinking: input}
 				Expect(r.ResolvedInboundThinking()).To(Equal(expected))
 			},
-			Entry("empty -> native_thinking_block default", config.AnthropicInboundThinking(""), config.AnthropicInboundThinkingNative),
-			Entry("native_thinking_block passes through", config.AnthropicInboundThinkingNative, config.AnthropicInboundThinkingNative),
-			Entry("drop passes through", config.AnthropicInboundThinkingDrop, config.AnthropicInboundThinkingDrop),
-			Entry("plain_text_concat passes through", config.AnthropicInboundThinkingPlainText, config.AnthropicInboundThinkingPlainText),
-			Entry("passthrough passes through", config.AnthropicInboundThinkingPassthrough, config.AnthropicInboundThinkingPassthrough),
+			Entry("empty -> native_thinking_block default", anthmode.InboundThinking(""), anthmode.InboundThinkingNative),
+			Entry("native_thinking_block passes through", anthmode.InboundThinkingNative, anthmode.InboundThinkingNative),
+			Entry("drop passes through", anthmode.InboundThinkingDrop, anthmode.InboundThinkingDrop),
+			Entry("plain_text_concat passes through", anthmode.InboundThinkingPlainText, anthmode.InboundThinkingPlainText),
+			Entry("passthrough passes through", anthmode.InboundThinkingPassthrough, anthmode.InboundThinkingPassthrough),
 		)
 	})
 
@@ -78,7 +79,7 @@ round_trip_summary = "plain_text_concat"
 round_trip_encrypted = "drop"
 `)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Adapter.Anthropic.Reasoning.ResolvedInboundThinking()).To(Equal(config.AnthropicInboundThinkingDrop))
+			Expect(cfg.Adapter.Anthropic.Reasoning.ResolvedInboundThinking()).To(Equal(anthmode.InboundThinkingDrop))
 			Expect(cfg.Adapter.Codex.Reasoning.ResolvedRoundTripSummary()).To(Equal(config.CodexRoundTripSummaryPlainText))
 			Expect(cfg.Adapter.Codex.Reasoning.ResolvedRoundTripEncrypted()).To(Equal(config.CodexRoundTripEncryptedDrop))
 		})
@@ -130,8 +131,8 @@ round_trip_encrypted = "maybe"
 inbound_thinking_materialization = "plain_text_concat"
 `)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Adapter.Anthropic.Reasoning.InboundThinking).To(Equal(config.AnthropicInboundThinkingPlainText))
-			Expect(cfg.Adapter.Anthropic.Reasoning.ResolvedInboundThinking()).To(Equal(config.AnthropicInboundThinkingPlainText))
+			Expect(cfg.Adapter.Anthropic.Reasoning.InboundThinking).To(Equal(anthmode.InboundThinkingPlainText))
+			Expect(cfg.Adapter.Anthropic.Reasoning.ResolvedInboundThinking()).To(Equal(anthmode.InboundThinkingPlainText))
 
 			logs := buf.String()
 			Expect(logs).To(ContainSubstring("adapter.reasoning.legacy_synthetic_content_forwarded"))
@@ -169,7 +170,7 @@ inbound_thinking_materialization = "plain_text_concat"
 inbound_thinking = "drop"
 `)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Adapter.Anthropic.Reasoning.InboundThinking).To(Equal(config.AnthropicInboundThinkingDrop))
+			Expect(cfg.Adapter.Anthropic.Reasoning.InboundThinking).To(Equal(anthmode.InboundThinkingDrop))
 			Expect(buf.String()).NotTo(ContainSubstring("adapter.reasoning.legacy_synthetic_content_forwarded"))
 		})
 	})

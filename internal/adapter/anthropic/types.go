@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 )
 
 // MaxOutputTokens is the upper bound the adapter requests when the
@@ -15,17 +17,35 @@ import (
 const MaxOutputTokens = 8192
 
 // WireCaptureMode is the closed enum the anthropic client honors when the
-// dispatcher passes a per-provider wire-capture lever. Mirrors
-// config.AnthropicWireCaptureMode value-for-value so the dispatcher does a
-// typed string conversion at the boundary without an import edge.
-type WireCaptureMode string
+// dispatcher passes a per-provider wire-capture lever. Aliased from the
+// leaf [anthmode] package so the parent provider package and the
+// [internal/config] package share a single canonical type without an import
+// cycle.
+type WireCaptureMode = anthmode.WireCaptureMode
 
 // Anthropic wire-capture modes. Off is the safe default and matches an empty
-// configured value.
+// configured value. Aliased from [anthmode] so callers may continue to use
+// the unqualified `anthropic.WireCapture*` names.
 const (
-	WireCaptureOff         WireCaptureMode = "off"
-	WireCaptureSummaryOnly WireCaptureMode = "summary_only"
-	WireCaptureFull        WireCaptureMode = "full"
+	WireCaptureOff         = anthmode.WireCaptureOff
+	WireCaptureSummaryOnly = anthmode.WireCaptureSummaryOnly
+	WireCaptureFull        = anthmode.WireCaptureFull
+)
+
+// InboundThinking is the closed enum of strategies for the visible thinking
+// content block round-trip on the inbound (request-shaping) side. Aliased
+// from the leaf [anthmode] package so the parent provider package and the
+// [internal/config] package share a single canonical type without an import
+// cycle.
+type InboundThinking = anthmode.InboundThinking
+
+// Anthropic inbound-thinking strategies. Aliased from [anthmode] so callers
+// may continue to use the unqualified `anthropic.InboundThinking*` names.
+const (
+	InboundThinkingNative      = anthmode.InboundThinkingNative
+	InboundThinkingDrop        = anthmode.InboundThinkingDrop
+	InboundThinkingPlainText   = anthmode.InboundThinkingPlainText
+	InboundThinkingPassthrough = anthmode.InboundThinkingPassthrough
 )
 
 // Config carries wire header and body-side values for the messages

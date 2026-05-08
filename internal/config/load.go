@@ -11,6 +11,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -816,7 +817,7 @@ func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 
 	legacyAnthropic := strings.TrimSpace(string(adapter.SyntheticContent.Anthropic.InboundThinkingMaterialization))
 	if adapter.Anthropic.Reasoning.InboundThinking == "" && legacyAnthropic != "" {
-		adapter.Anthropic.Reasoning.InboundThinking = AnthropicInboundThinking(legacyAnthropic)
+		adapter.Anthropic.Reasoning.InboundThinking = anthmode.InboundThinking(legacyAnthropic)
 		log.Warn("adapter.reasoning.legacy_synthetic_content_forwarded",
 			"component", "config",
 			"subcomponent", "adapter_reasoning",
@@ -827,13 +828,7 @@ func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 			"reason", "legacy synthetic_content block is deprecated; copy the value into the new block",
 		)
 	}
-	switch adapter.Anthropic.Reasoning.InboundThinking {
-	case "",
-		AnthropicInboundThinkingNative,
-		AnthropicInboundThinkingDrop,
-		AnthropicInboundThinkingPlainText,
-		AnthropicInboundThinkingPassthrough:
-	default:
+	if err := adapter.Anthropic.Reasoning.InboundThinking.Validate(); err != nil {
 		return fmt.Errorf("adapter.anthropic.reasoning.inbound_thinking must be one of native_thinking_block|drop|plain_text_concat|passthrough (got %q)", adapter.Anthropic.Reasoning.InboundThinking)
 	}
 

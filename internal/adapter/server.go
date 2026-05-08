@@ -229,7 +229,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 			StainlessRuntimeVersion: id.StainlessRuntimeVersion,
 			CCVersion:               id.CCVersion,
 			CCEntrypoint:            id.CCEntrypoint,
-			WireCaptureMode:         anthropic.WireCaptureMode(cfg.Anthropic.ResolvedAnthropicWireCaptureMode()),
+			WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
 		})
 		s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
 			Config: cfg,
