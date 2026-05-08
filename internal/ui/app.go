@@ -589,6 +589,34 @@ type App struct {
 	// could desync from the tcell buffer.
 	pendingResizeDisplaySync bool
 	inResizeEvent            bool
+
+	// homeDirOnce guards homeDirVal so the user's home directory is
+	// resolved at most once per process. Many draw paths short paths,
+	// configRowDescription, settings probes consult home; calling
+	// [os.UserHomeDir] on every cell is expensive enough to show up in
+	// flame graphs of the table redraw.
+	homeDirOnce sync.Once
+	homeDirVal  string
+
+	// settingsProbeMu guards the cached settings tab path probes.
+	// drawSettingsTab reads the cache only. A background ticker
+	// refreshes it at low rate so the draw path never calls os.Stat.
+	// settingsProbeFn is the test seam used to inject a counter when
+	// asserting that the draw path performs no extra stat calls.
+	settingsProbeMu     sync.RWMutex
+	settingsProbeRows   []settingsPathProbe
+	settingsProbeLoaded bool
+	settingsProbeFn     func(path string) bool
+}
+
+// settingsPathProbe is one cached file existence probe used by the
+// Settings tab. The cache stores the chosen path for display, the
+// candidate paths the probe considered, and whether any of them exist
+// on disk. Refreshed by runSettingsProbeTicker.
+type settingsPathProbe struct {
+	candidates []string
+	chosen     string
+	exists     bool
 }
 
 // returnPathState captures the resumability lifecycle during pause/return.
@@ -655,6 +683,7 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	}
 	a.details = NewDetailsView()
 	a.details.LookupLiveURL = a.liveURLRecordFor
+	a.details.HomeDir = a.homeDir()
 	a.status = &StatusBarWidget{Mode: StatusBrowse}
 
 	a.populateTable()
@@ -985,6 +1014,12 @@ func (a *App) Run() (err error) {
 	stopSessionRefresh := a.startRunSupervisor("session_refresh_ticker", a.runSessionRefreshTicker)
 	defer close(stopSessionRefresh)
 
+	// Refresh the Settings tab existence probes off the draw path so
+	// drawSettingsTab never calls os.Stat. CLAUDE.md forbids config
+	// probing in render code; this ticker keeps the cache fresh.
+	stopSettingsProbe := a.startRunSupervisor("settings_probe_ticker", a.runSettingsProbeTicker)
+	defer close(stopSettingsProbe)
+
 	// Registry stream supervisor keeps daemon subscriptions healthy even
 	// when the daemon restarts. The dashboard remains usable in offline
 	// mode and the polling watcher above still refreshes snapshots.
@@ -1251,6 +1286,113 @@ func (a *App) runSpinnerTicker(stop <-chan struct{}) {
 			return
 		case <-t.C:
 			a.postInterrupt(spinnerTick{})
+		}
+	}
+}
+
+// homeDir returns the user's home directory, resolved once per process.
+// shortPath, the Settings tab, and a few modal openers all consult home.
+// A single [sync.Once] keeps the [os.UserHomeDir] call out of hot draw paths.
+func (a *App) homeDir() string {
+	a.homeDirOnce.Do(func() {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			a.homeDirVal = ""
+			return
+		}
+		a.homeDirVal = home
+	})
+	return a.homeDirVal
+}
+
+// settingsPathProbeFn returns the probe function the settings cache
+// should use to check existence. Tests inject a counter to assert that
+// the draw path performs no os.Stat calls.
+func (a *App) settingsPathProbeFn() func(string) bool {
+	a.settingsProbeMu.RLock()
+	fn := a.settingsProbeFn
+	a.settingsProbeMu.RUnlock()
+	if fn != nil {
+		return fn
+	}
+	return func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+}
+
+// settingsProbeRowsSnapshot returns the cached probe rows, refreshing
+// once if the cache has never been populated. The draw path uses the
+// snapshot directly.
+func (a *App) settingsProbeRowsSnapshot() []settingsPathProbe {
+	a.settingsProbeMu.RLock()
+	loaded := a.settingsProbeLoaded
+	rows := a.settingsProbeRows
+	a.settingsProbeMu.RUnlock()
+	if !loaded {
+		a.refreshSettingsProbes()
+		a.settingsProbeMu.RLock()
+		rows = a.settingsProbeRows
+		a.settingsProbeMu.RUnlock()
+	}
+	return rows
+}
+
+// settingsProbeCandidatePaths returns the file paths the settings cache
+// inspects. Listed centrally so the ticker, the draw helper, and tests
+// stay in sync.
+func (a *App) settingsProbeCandidatePaths() [][]string {
+	home := a.homeDir()
+	globalToml := filepath.Join(home, ".config", "clyde", "config.toml")
+	globalJSON := filepath.Join(home, ".config", "clyde", "config.json")
+	cwd, _ := os.Getwd()
+	projectJSON := filepath.Join(cwd, ".claude", "clyde", "config.json")
+	return [][]string{
+		{globalToml, globalJSON},
+		{projectJSON},
+	}
+}
+
+// refreshSettingsProbes runs the configured probe function over each
+// candidate set and stores the results. Called on startup and at the
+// settings probe ticker cadence. Never called from a draw path.
+func (a *App) refreshSettingsProbes() {
+	candidates := a.settingsProbeCandidatePaths()
+	probe := a.settingsPathProbeFn()
+	rows := make([]settingsPathProbe, 0, len(candidates))
+	for _, group := range candidates {
+		row := settingsPathProbe{candidates: group, chosen: "", exists: false}
+		for _, p := range group {
+			if probe(p) {
+				row.chosen = p
+				row.exists = true
+				break
+			}
+		}
+		if !row.exists && len(group) > 0 {
+			row.chosen = group[0]
+		}
+		rows = append(rows, row)
+	}
+	a.settingsProbeMu.Lock()
+	a.settingsProbeRows = rows
+	a.settingsProbeLoaded = true
+	a.settingsProbeMu.Unlock()
+}
+
+// runSettingsProbeTicker refreshes the settings tab path probe cache
+// every 5 seconds until stop is closed. The draw path reads the cached
+// rows; this supervisor pattern keeps os.Stat out of frame production.
+func (a *App) runSettingsProbeTicker(stop <-chan struct{}) {
+	a.refreshSettingsProbes()
+	t := time.NewTicker(5 * time.Second)
+	defer func() { t.Stop() }()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			a.refreshSettingsProbes()
 		}
 	}
 }
@@ -2433,14 +2575,6 @@ func (a *App) pickStaleForSweep() *session.Session {
 		}
 	}
 	return nil
-}
-
-// detailsLoadingNow reports whether the named session's details are being
-// fetched in a goroutine. Used to gate spinner repaints.
-func (a *App) detailsLoadingNow(name string) bool {
-	a.detailMu.Lock()
-	defer a.detailMu.Unlock()
-	return a.detailLoading[name]
 }
 
 func (a *App) cachedExportStatsForSession(sess *session.Session) (SessionExportStats, bool) {
@@ -4222,7 +4356,7 @@ func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 	}
 	return []TableCell{
 		{Text: sess.Name, Style: nameStyle},
-		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
+		{Text: shortPath(sess.Metadata.WorkspaceRoot, a.homeDir()), Style: subStyle},
 		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: lastUsedStyle},
 		{Text: model, Style: modelStyle},
 		{Text: msgs, Style: msgStyle},
@@ -4756,7 +4890,7 @@ func (a *App) openStarterModal(title, hereLabel string, here func(cwd string), b
 	entries := []OptionsModalEntry{
 		{
 			Label: hereLabel,
-			Hint:  shortPath(cwd),
+			Hint:  shortPath(cwd, a.homeDir()),
 			Action: func() {
 				a.closeOverlay()
 				here(cwd)
@@ -4870,7 +5004,7 @@ func (a *App) openCreateFolderConfirm(basedir string) {
 			},
 		},
 	}
-	modal := NewOptionsModal("Folder does not exist: "+shortPath(basedir), entries)
+	modal := NewOptionsModal("Folder does not exist: "+shortPath(basedir, a.homeDir()), entries)
 	modal.OnCancel = func() { a.closeOverlay() }
 	a.overlay = modal
 	a.mode = StatusFilter
@@ -4899,7 +5033,7 @@ func (a *App) openSidecarCreateFolderConfirm(basedir string) {
 			},
 		},
 	}
-	modal := NewOptionsModal("Folder does not exist: "+shortPath(basedir), entries)
+	modal := NewOptionsModal("Folder does not exist: "+shortPath(basedir, a.homeDir()), entries)
 	modal.OnCancel = func() { a.closeOverlay() }
 	a.overlay = modal
 	a.mode = StatusFilter
@@ -4929,7 +5063,7 @@ func (a *App) openNewSessionTypeModal(basedir string) {
 			Disabled: a.cb.StartIncognitoWithBasedir == nil,
 		},
 	}
-	modal := NewOptionsModal("Start at "+shortPath(basedir), entries)
+	modal := NewOptionsModal("Start at "+shortPath(basedir, a.homeDir()), entries)
 	modal.OnCancel = func() { a.closeOverlay() }
 	a.overlay = modal
 	a.mode = StatusFilter
@@ -4985,7 +5119,7 @@ func (a *App) openSidecarLaunchTypeModal(basedir string) {
 			},
 		},
 	}
-	modal := NewOptionsModal("Launch sidecar session at "+shortPath(basedir), entries)
+	modal := NewOptionsModal("Launch sidecar session at "+shortPath(basedir, a.homeDir()), entries)
 	modal.OnCancel = func() { a.closeOverlay() }
 	a.overlay = modal
 	a.mode = StatusFilter
@@ -5697,11 +5831,16 @@ func (a *App) drawSettingsTab(r Rect) {
 		return
 	}
 
-	home, _ := os.UserHomeDir()
-	globalCfg := filepath.Join(home, ".config", "clyde", "config.toml")
-	globalCfgJSON := filepath.Join(home, ".config", "clyde", "config.json")
-	cwd, _ := os.Getwd()
-	projectCfg := filepath.Join(cwd, ".claude", "clyde", "config.json")
+	home := a.homeDir()
+	probes := a.settingsProbeRowsSnapshot()
+	globalProbe := settingsPathProbe{candidates: nil, chosen: "", exists: false}
+	projectProbe := settingsPathProbe{candidates: nil, chosen: "", exists: false}
+	if len(probes) > 0 {
+		globalProbe = probes[0]
+	}
+	if len(probes) > 1 {
+		projectProbe = probes[1]
+	}
 
 	type row struct {
 		label string
@@ -5711,8 +5850,8 @@ func (a *App) drawSettingsTab(r Rect) {
 	rows := []row{
 		{label: "Settings", style: StyleDefault.Foreground(ColorAccent).Bold(true)},
 		{},
-		{label: "Global config", value: configRowDescription(globalCfg, globalCfgJSON), style: StyleSubtext},
-		{label: "Project config", value: configRowDescription(projectCfg), style: StyleSubtext},
+		{label: "Global config", value: configRowDescription(globalProbe), style: StyleSubtext},
+		{label: "Project config", value: configRowDescription(projectProbe), style: StyleSubtext},
 		{label: "Daemon log", value: filepath.Join(home, ".local", "state", "clyde", "clyde.jsonl"), style: StyleSubtext},
 		{label: "Sessions root", value: filepath.Join(home, ".local", "share", "clyde", "sessions"), style: StyleSubtext},
 		{},
@@ -5781,19 +5920,18 @@ func (a *App) drawSettingsTab(r Rect) {
 }
 
 // configRowDescription returns a "<path> (status)" string where status
-// is one of "exists" or "missing". Useful for surfacing the active
-// config files in the Settings tab without scattering os.Stat calls
-// across the draw code.
-func configRowDescription(paths ...string) string {
-	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			return p + "  (exists)"
-		}
-	}
-	if len(paths) == 0 {
+// is one of "exists" or "missing". The probe is precomputed by the
+// settings probe ticker so this function does no filesystem I/O and
+// can be called from the draw path without violating the renderer
+// contract in CLAUDE.md.
+func configRowDescription(probe settingsPathProbe) string {
+	if probe.chosen == "" {
 		return ""
 	}
-	return paths[0] + "  (missing)"
+	if probe.exists {
+		return probe.chosen + "  (exists)"
+	}
+	return probe.chosen + "  (missing)"
 }
 
 // openHelpModal shows the full keymap. Triggered by "?" anywhere in
@@ -6090,6 +6228,19 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitRes
 		},
 		a.openLiveURLEntry(sess, close),
 		a.copyLiveURLEntry(sess, close),
+	}...)
+	entries = append(entries, a.sessionLifecycleEntries(sess, close, caps)...)
+	return entries
+}
+
+// sessionLifecycleEntries returns the tail of the session options
+// modal: rename, compact, context window, fork, delete. Extracted from
+// sessionOptionsEntries so that function stays inside the funlen
+// budget. The split is by category, not by purpose: these rows are
+// what changes a session, the entries above are what reads or steers
+// it.
+func (a *App) sessionLifecycleEntries(sess *session.Session, close func(), caps session.ProviderCapabilities) []OptionsModalEntry {
+	return []OptionsModalEntry{
 		{
 			Label: "Rename",
 			Hint:  "edits the registry name",
@@ -6133,8 +6284,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitRes
 			},
 			Disabled: a.cb.DeleteSession == nil,
 		},
-	}...)
-	return entries
+	}
 }
 
 func (a *App) openSessionContextWindowOptions(sess *session.Session, closeParent func()) {
@@ -6858,14 +7008,17 @@ func lastUsedTime(sess *session.Session) time.Time {
 	return sess.Metadata.LastAccessed
 }
 
-// shortPath abbreviates a workspace path for display.
-func shortPath(root string) string {
+// shortPath abbreviates a workspace path for display. The home argument
+// is supplied by the caller, usually App.homeDir(), so the function
+// stays pure and free of [os.UserHomeDir] calls. populateTable invokes
+// rowFor for every visible row; with 100 sessions on screen, calling
+// [os.UserHomeDir] per cell turned into 100 home-dir probes per redraw.
+func shortPath(root, home string) string {
 	if root == "" {
 		return "-"
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Base(root)
+	if home == "" {
+		return root
 	}
 	if root == home {
 		return "~"

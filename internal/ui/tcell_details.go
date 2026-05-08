@@ -38,6 +38,11 @@ type DetailsView struct {
 	// details pane keeps the display provider-neutral.
 	LookupLiveURL func(sess *session.Session) (LiveURL, bool)
 
+	// HomeDir is the user home directory used by shortPath when
+	// rendering basedir and workdir rows. Provided by App so the
+	// details build path does not call os.UserHomeDir per cell.
+	HomeDir string
+
 	sessionKey string
 }
 
@@ -56,8 +61,15 @@ func (d *DetailsView) formatLiveURL(sess *session.Session) string {
 // NewDetailsView constructs a details pane.
 func NewDetailsView() *DetailsView {
 	return &DetailsView{
-		Left:  &TextBox{Wrap: false, TitleStyle: StyleMuted},
-		Right: &TextBox{Wrap: true, TitleStyle: StyleMuted},
+		Left:          &TextBox{Wrap: false, TitleStyle: StyleMuted},
+		Right:         &TextBox{Wrap: true, TitleStyle: StyleMuted},
+		Focus:         DetailsFocusNone,
+		Rect:          Rect{},
+		LeftRect:      Rect{},
+		RightRect:     Rect{},
+		LookupLiveURL: nil,
+		HomeDir:       "",
+		sessionKey:    "",
 	}
 }
 
@@ -99,29 +111,29 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	var out [][]TextSegment
 
 	// Header: name + optional context (no label, just prominent).
-	out = append(out, []TextSegment{{Text: sess.Name, Style: StyleDefault.Bold(true)}})
+	out = append(out, []TextSegment{seg(sess.Name, StyleDefault.Bold(true))})
 	if sess.Metadata.Context != "" {
 		ctx := sess.Metadata.Context
 		if n := runeCount(ctx); n > 120 {
 			ctx = string([]rune(ctx)[:117]) + "..."
 		}
-		out = append(out, []TextSegment{{Text: ctx, Style: StyleMuted}})
+		out = append(out, []TextSegment{seg(ctx, StyleMuted)})
 	}
 	out = append(out, []TextSegment{})
 
 	// section writes a bold heading line.
 	section := func(title string) {
-		out = append(out, []TextSegment{{Text: title, Style: StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true)}})
+		out = append(out, []TextSegment{seg(title, StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true))})
 	}
 	kv := func(k, v string) {
 		out = append(out, []TextSegment{
-			{Text: fmt.Sprintf("  %-14s", k), Style: StyleSubtext},
-			{Text: v, Style: StyleDefault},
+			seg(fmt.Sprintf("  %-14s", k), StyleSubtext),
+			seg(v, StyleDefault),
 		})
 	}
 	kvLoading := func(k, status string) {
 		out = append(out, []TextSegment{
-			{Text: fmt.Sprintf("  %-14s", k), Style: StyleSubtext},
+			seg(fmt.Sprintf("  %-14s", k), StyleSubtext),
 			loadingSegment(status),
 		})
 	}
@@ -131,8 +143,8 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 			return
 		}
 		out = append(out, []TextSegment{
-			{Text: "                ", Style: StyleSubtext},
-			{Text: note, Style: StyleMuted},
+			seg("                ", StyleSubtext),
+			seg(note, StyleMuted),
 		})
 	}
 
@@ -158,12 +170,58 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 		out = append(out, []TextSegment{})
 	}
 
+	d.appendIdentitySection(&out, sess, detail, section, kv)
+	appendTimingSection(&out, sess, section, kv)
+	appendTranscriptSection(&out, detail, section, kv, kvLoading)
+
+	if len(detail.AllMessages) > 0 {
+		section("Conversation")
+		users, assistants, firstTS, lastTS := summarizeConversation(detail.AllMessages)
+		kv("Total msgs", fmt.Sprintf("%d  (%d user, %d assistant)", users+assistants, users, assistants))
+		if firstTS != "" {
+			kv("First message", firstTS)
+		}
+		if lastTS != "" {
+			kv("Last message", lastTS)
+		}
+		out = append(out, []TextSegment{})
+	}
+
+	if len(detail.Tools) > 0 {
+		section("Top tools")
+		for _, t := range detail.Tools {
+			out = append(out, []TextSegment{
+				seg(fmt.Sprintf("  %-14s", t.Name), StyleSubtext),
+				seg(fmt.Sprintf("%d", t.Count), StyleDefault),
+			})
+		}
+		out = append(out, []TextSegment{})
+	}
+
+	section("Identifiers")
+	kv("UUID", sess.Metadata.ProviderSessionID())
+	if len(sess.Metadata.PreviousProviderSessionIDStrings()) > 0 {
+		kv("Previous", fmt.Sprintf("%d prior UUID(s)", len(sess.Metadata.PreviousProviderSessionIDStrings())))
+	}
+	out = append(out, []TextSegment{})
+
+	section("Resume")
+	out = append(out, []TextSegment{seg("  clyde resume "+sess.Name, StyleMuted)})
+	out = append(out, []TextSegment{seg("  claude --resume "+sess.Metadata.ProviderSessionID(), StyleMuted)})
+
+	return out
+}
+
+// appendIdentitySection writes the Identity block (Model, Live URL,
+// Basedir, optional Work dir, optional Type) to out. The receiver is
+// needed for the live-url lookup callback.
+func (d *DetailsView) appendIdentitySection(out *[][]TextSegment, sess *session.Session, detail SessionDetail, section func(string), kv func(string, string)) {
 	section("Identity")
 	kv("Model", detail.Model)
 	kv("Live URL", d.formatLiveURL(sess))
-	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot))
+	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot, d.HomeDir))
 	if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
-		kv("Work dir", shortPath(sess.Metadata.WorkDir))
+		kv("Work dir", shortPath(sess.Metadata.WorkDir, d.HomeDir))
 	}
 	if sess.Metadata.IsForkedSession {
 		kv("Type", "fork of "+sess.Metadata.ParentSession)
@@ -171,16 +229,25 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	if sess.Metadata.IsIncognito {
 		kv("Type", "incognito (auto-delete on exit)")
 	}
-	out = append(out, []TextSegment{})
+	*out = append(*out, []TextSegment{})
+}
 
+// appendTimingSection writes the Timing block (Created, Last used,
+// Used ago, Age) to out.
+func appendTimingSection(out *[][]TextSegment, sess *session.Session, section func(string), kv func(string, string)) {
 	section("Timing")
 	kv("Created", sess.Metadata.Created.Format("2006-01-02 15:04"))
 	kv("Last used", sess.Metadata.LastAccessed.Local().Format("2006-01-02 15:04"))
 	kv("Used ago", util.FormatRelativeTime(sess.Metadata.LastAccessed))
-	age := util.FormatRelativeTime(sess.Metadata.Created)
-	kv("Age", age)
-	out = append(out, []TextSegment{})
+	kv("Age", util.FormatRelativeTime(sess.Metadata.Created))
+	*out = append(*out, []TextSegment{})
+}
 
+// appendTranscriptSection writes the Transcript block to out. Renders
+// concrete values when transcript stats are loaded; otherwise renders
+// a row of spinner placeholders so the user knows the data is in
+// flight.
+func appendTranscriptSection(out *[][]TextSegment, detail SessionDetail, section func(string), kv func(string, string), kvLoading func(string, string)) {
 	section("Transcript")
 	if detail.TranscriptStatsLoaded {
 		kv("Visible msgs", formatDetailMessageCount(detail))
@@ -199,59 +266,29 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 		kvLoading("Compactions", status)
 		kvLoading("Size", status)
 	}
-	out = append(out, []TextSegment{})
+	*out = append(*out, []TextSegment{})
+}
 
-	if len(detail.AllMessages) > 0 {
-		section("Conversation")
-		users, assistants := 0, 0
-		var firstTS, lastTS string
-		for i, m := range detail.AllMessages {
-			switch m.Role {
-			case "user":
-				users++
-			case "assistant":
-				assistants++
-			}
-			if i == 0 && !m.Timestamp.IsZero() {
-				firstTS = m.Timestamp.Local().Format("2006-01-02 15:04")
-			}
-			if i == len(detail.AllMessages)-1 && !m.Timestamp.IsZero() {
-				lastTS = m.Timestamp.Local().Format("2006-01-02 15:04")
-			}
+// summarizeConversation returns the per-role message counts and the
+// first and last localized timestamps for the conversation section.
+// Extracted from buildLeft so the parent function stays under the
+// cognitive complexity budget.
+func summarizeConversation(msgs []DetailMessage) (users, assistants int, firstTS, lastTS string) {
+	for i, m := range msgs {
+		switch m.Role {
+		case "user":
+			users++
+		case "assistant":
+			assistants++
 		}
-		kv("Total msgs", fmt.Sprintf("%d  (%d user, %d assistant)", users+assistants, users, assistants))
-		if firstTS != "" {
-			kv("First message", firstTS)
+		if i == 0 && !m.Timestamp.IsZero() {
+			firstTS = m.Timestamp.Local().Format("2006-01-02 15:04")
 		}
-		if lastTS != "" {
-			kv("Last message", lastTS)
+		if i == len(msgs)-1 && !m.Timestamp.IsZero() {
+			lastTS = m.Timestamp.Local().Format("2006-01-02 15:04")
 		}
-		out = append(out, []TextSegment{})
 	}
-
-	if len(detail.Tools) > 0 {
-		section("Top tools")
-		for _, t := range detail.Tools {
-			out = append(out, []TextSegment{
-				{Text: fmt.Sprintf("  %-14s", t.Name), Style: StyleSubtext},
-				{Text: fmt.Sprintf("%d", t.Count), Style: StyleDefault},
-			})
-		}
-		out = append(out, []TextSegment{})
-	}
-
-	section("Identifiers")
-	kv("UUID", sess.Metadata.ProviderSessionID())
-	if len(sess.Metadata.PreviousProviderSessionIDStrings()) > 0 {
-		kv("Previous", fmt.Sprintf("%d prior UUID(s)", len(sess.Metadata.PreviousProviderSessionIDStrings())))
-	}
-	out = append(out, []TextSegment{})
-
-	section("Resume")
-	out = append(out, []TextSegment{{Text: "  clyde resume " + sess.Name, Style: StyleMuted}})
-	out = append(out, []TextSegment{{Text: "  claude --resume " + sess.Metadata.ProviderSessionID(), Style: StyleMuted}})
-
-	return out
+	return users, assistants, firstTS, lastTS
 }
 
 // formatExactContextUsage renders the daemon-supplied context usage.
@@ -320,11 +357,11 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 	if len(src) == 0 {
 		if detail.ConversationLoading {
 			return [][]TextSegment{{
-				{Text: "  ", Style: StyleMuted},
+				seg("  ", StyleMuted),
 				loadingSegment("loading conversation..."),
 			}}
 		}
-		return [][]TextSegment{{{Text: "  (no visible messages)", Style: StyleMuted}}}
+		return [][]TextSegment{{seg("  (no visible messages)", StyleMuted)}}
 	}
 
 	// Latest message first so the user reads the most recent turn at the
@@ -359,10 +396,10 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 		}
 
 		header := []TextSegment{
-			{Text: fmt.Sprintf("▎%-6s", tag), Style: tagStyle},
+			seg(fmt.Sprintf("▎%-6s", tag), tagStyle),
 		}
 		if ts != "" {
-			header = append(header, TextSegment{Text: " " + ts, Style: tsStyle})
+			header = append(header, seg(" "+ts, tsStyle))
 		}
 		out = append(out, header)
 
@@ -373,7 +410,7 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			out = append(out, []TextSegment{{Text: "  " + line, Style: bodyStyle}})
+			out = append(out, []TextSegment{seg("  "+line, bodyStyle)})
 		}
 		if i != len(msgs)-1 {
 			out = append(out, []TextSegment{})

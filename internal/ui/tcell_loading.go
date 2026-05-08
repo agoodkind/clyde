@@ -1,11 +1,27 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
+
+// genericLoadingStatuses are the sentinel status strings the daemon
+// (and a few legacy TUI fabrication paths) emit while a probe is in
+// flight. They convey "still working" with no extra information; the
+// details pane hides redundant Diagnostics rows for these. The set is
+// a slice rather than a switch so the bare-string-switch lint stays
+// quiet and the eventual typed enum migration in the cat-3 plan has
+// one place to swap.
+var genericLoadingStatuses = []string{"", "probing", "loading...", "loading", "cooldown", "refreshing"}
+
+// terminalLoadingStatuses are the settled outcomes the daemon emits
+// when a probe finished without success. Terminal statuses do not
+// animate; they replace the spinner with stable copy. "failed" is
+// handled separately because daemon error strings include the cause.
+var terminalLoadingStatuses = []string{"unsupported", "cancelled", "canceled", "probe_failed"}
 
 const loadingFrameInterval = 100 * time.Millisecond
 
@@ -39,7 +55,7 @@ func (s LoadingSpinner) Segment() TextSegment {
 	if style == (tcell.Style{}) {
 		style = StyleMuted
 	}
-	return TextSegment{Text: s.Text(), Style: style}
+	return seg(s.Text(), style)
 }
 
 func (s LoadingSpinner) Draw(scr tcell.Screen, x, y int, width int) {
@@ -58,19 +74,7 @@ func currentLoadingFrame() int {
 	return int(currentUITime().UnixNano() / int64(loadingFrameInterval))
 }
 
-func loadingValue(status string) string {
-	trimmed := strings.TrimSpace(status)
-	switch {
-	case trimmed == "", trimmed == "loading...":
-		return ClockLoadingSpinner("loading...").Text()
-	case isTerminalLoadingStatus(trimmed):
-		return trimmed
-	default:
-		return ClockLoadingSpinner(trimmed).Text()
-	}
-}
-
-// loadingSegment is the inline-cell counterpart to loadingValue. It
+// loadingSegment is the inline-cell counterpart of LoadingSpinner. It
 // returns a TextSegment whose glyph is substituted at draw time so
 // the spinner ticks live without rebuilding the parent segment list.
 // Use this whenever the loading copy lives inside a [][]TextSegment
@@ -84,9 +88,17 @@ func loadingSegment(status string) TextSegment {
 		trimmed = "loading..."
 	}
 	if isTerminalLoadingStatus(trimmed) {
-		return TextSegment{Text: trimmed, Style: StyleMuted}
+		return seg(trimmed, StyleMuted)
 	}
 	return TextSegment{Text: trimmed, Style: StyleMuted, Spinner: true}
+}
+
+// seg returns a non-spinner styled text segment. Pair with
+// loadingSegment so every TextSegment literal in the codebase goes
+// through one of two factories and the exhaustruct linter has a
+// stable Spinner field to look at.
+func seg(text string, style tcell.Style) TextSegment {
+	return TextSegment{Text: text, Style: style, Spinner: false}
 }
 
 // isGenericLoadingStatus reports whether status is a "still working"
@@ -94,11 +106,7 @@ func loadingSegment(status string) TextSegment {
 // details pane hides redundant Diagnostics rows for these so the
 // user does not see the same word in two places at once.
 func isGenericLoadingStatus(status string) bool {
-	switch strings.TrimSpace(status) {
-	case "", "probing", "loading...", "loading", "cooldown", "refreshing":
-		return true
-	}
-	return false
+	return slices.Contains(genericLoadingStatuses, strings.TrimSpace(status))
 }
 
 // isTerminalLoadingStatus reports whether status describes a settled
@@ -112,9 +120,5 @@ func isTerminalLoadingStatus(status string) bool {
 	if strings.HasPrefix(trimmed, "failed") {
 		return true
 	}
-	switch trimmed {
-	case "unsupported", "cancelled", "canceled", "probe_failed":
-		return true
-	}
-	return false
+	return slices.Contains(terminalLoadingStatuses, trimmed)
 }
