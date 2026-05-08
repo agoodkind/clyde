@@ -297,3 +297,76 @@ func TestFormatSyntheticContentDeltaContinuesOpenBlockWithoutHeader(t *testing.T
 		t.Fatalf("continuation should turn its own newlines into quoted lines: %q", cont)
 	}
 }
+
+// TestExtractSyntheticPartsRedactedThinkingRoundTrip asserts that the
+// redacted_thinking marker pair survives a Format -> Extract round trip.
+// The opaque base64 blob rides on the close marker as `data-encrypted`
+// (the same attribute carrier as the Codex encrypted_content blob); the
+// kind disambiguates the byte semantics. Two cases are covered: an
+// embedded user-facing placeholder body and an empty body. Both must
+// expose the recovered Encrypted attribute on the produced part.
+func TestExtractSyntheticPartsRedactedThinkingRoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "with_placeholder_body", body: "[redacted]"},
+		{name: "empty_body", body: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			open := SyntheticContentOpen(SyntheticRedactedThinking)
+			decorated := formatSyntheticBody(syntheticContentSpecs[SyntheticRedactedThinking], tc.body, true)
+			closeMarker := SyntheticContentCloseWithAttrs(SyntheticRedactedThinking, "REDACTED_BLOB_BASE64==", "")
+			in := open + decorated + closeMarker
+			parts := ExtractSyntheticParts(in)
+			if len(parts) != 1 {
+				t.Fatalf("want 1 part, got %d: %#v", len(parts), parts)
+			}
+			got := parts[0]
+			if got.Kind != SyntheticRedactedThinking {
+				t.Fatalf("kind=%q want %q", got.Kind, SyntheticRedactedThinking)
+			}
+			if got.Body != tc.body {
+				t.Fatalf("body=%q want %q", got.Body, tc.body)
+			}
+			if got.Encrypted != "REDACTED_BLOB_BASE64==" {
+				t.Fatalf("encrypted=%q want REDACTED_BLOB_BASE64==", got.Encrypted)
+			}
+			if got.Signature != "" {
+				t.Fatalf("signature=%q want empty for redacted_thinking", got.Signature)
+			}
+		})
+	}
+}
+
+// TestMaterializeSyntheticPartsRedactedThinking asserts that a
+// SyntheticRedactedThinking part materializes into a single
+// MaterializedKindNativeRedactedThinking output under
+// MaterializeNativeThinkingBlock and zero outputs under the other
+// strategies (drop, plain text concat, passthrough). The opaque blob
+// rides on the materialized Body so the Anthropic mapper can forward it
+// as `{"type":"redacted_thinking","data":Body}`.
+func TestMaterializeSyntheticPartsRedactedThinking(t *testing.T) {
+	parts := []SyntheticPart{{
+		Kind:      SyntheticRedactedThinking,
+		Body:      "[redacted]",
+		Encrypted: "OPAQUE_BLOB==",
+	}}
+	got := MaterializeSyntheticParts(parts, MaterializeNativeThinkingBlock)
+	if len(got) != 1 {
+		t.Fatalf("want 1 materialized part, got %d: %#v", len(got), got)
+	}
+	if got[0].Kind != MaterializedKindNativeRedactedThinking {
+		t.Fatalf("kind=%q want %q", got[0].Kind, MaterializedKindNativeRedactedThinking)
+	}
+	if got[0].Body != "OPAQUE_BLOB==" {
+		t.Fatalf("body=%q want OPAQUE_BLOB==", got[0].Body)
+	}
+	for _, strategy := range []MaterializationStrategy{MaterializeDrop, MaterializePlainTextConcat, MaterializePassthrough} {
+		out := MaterializeSyntheticParts(parts, strategy)
+		if len(out) != 0 {
+			t.Fatalf("strategy=%q want zero materialized, got %d: %#v", strategy, len(out), out)
+		}
+	}
+}

@@ -405,6 +405,12 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 						continue
 					}
 					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body, Signature: mp.Signature})
+				case adapterrender.MaterializedKindNativeRedactedThinking:
+					body := strings.TrimSpace(mp.Body)
+					if body == "" {
+						continue
+					}
+					blocks = append(blocks, AnthContentBlock{Type: "redacted_thinking", Data: body})
 				case adapterrender.MaterializedKindText:
 					if strings.TrimSpace(mp.Body) == "" {
 						continue
@@ -448,6 +454,12 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 						continue
 					}
 					blocks = append(blocks, AnthContentBlock{Type: "thinking", Thinking: body, Signature: mp.Signature})
+				case adapterrender.MaterializedKindNativeRedactedThinking:
+					body := strings.TrimSpace(mp.Body)
+					if body == "" {
+						continue
+					}
+					blocks = append(blocks, AnthContentBlock{Type: "redacted_thinking", Data: body})
 				case adapterrender.MaterializedKindText:
 					if strings.TrimSpace(mp.Body) == "" {
 						continue

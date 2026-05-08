@@ -119,6 +119,12 @@ type SystemBlock struct {
 // emits via the `signature_delta` SSE event. On replay the wire
 // representation must include `"signature":"<value>"` alongside
 // `"thinking":"<body>"` so Anthropic's signature validation passes.
+//
+// Data carries the opaque base64 payload Anthropic emits inline on a
+// `redacted_thinking` content block start event. On replay the wire
+// representation must include `"data":"<value>"` alongside
+// `"type":"redacted_thinking"` so Anthropic's history validation
+// passes.
 type ContentBlock struct {
 	Type           string          `json:"type"`
 	Text           string          `json:"text,omitempty"`
@@ -132,6 +138,7 @@ type ContentBlock struct {
 	CacheControl   *CacheControl   `json:"cache_control,omitempty"`
 	Thinking       string          `json:"thinking,omitempty"`
 	Signature      string          `json:"signature,omitempty"`
+	Data           string          `json:"data,omitempty"`
 }
 
 // ImageSource describes image bytes or a URL for image content blocks.
@@ -382,6 +389,9 @@ type Sink func(delta string) error
 //     Text empty on open, populated on subsequent thinking_delta events.
 //   - "thinking_signature"  per-thinking-block signature delta; Text carries
 //     the opaque signature emitted by Anthropic's signature_delta event.
+//   - "redacted_thinking"   redacted_thinking content block; Data carries
+//     the opaque base64 payload Anthropic emits inline on the start event.
+//     There is no separate delta or close-side payload for this kind.
 //   - "tool_use_start"      tool_use content block open; ToolUseID and
 //     ToolUseName carry the call identity.
 //   - "tool_use_arg_delta"  tool_use partial JSON arguments; PartialJSON
@@ -396,6 +406,7 @@ type StreamEvent struct {
 	ToolUseName string
 	PartialJSON string
 	StopReason  string
+	Data        string
 }
 
 // EventSink receives structured stream events.

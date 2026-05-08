@@ -43,6 +43,17 @@ const (
 	SyntheticNotice SyntheticContentKind = "notice"
 	// SyntheticKindNotice is the canonical kind name for notice content.
 	SyntheticKindNotice = SyntheticNotice
+	// SyntheticRedactedThinking wraps Anthropic redacted_thinking content
+	// blocks. The upstream emits these for thinking content the API will
+	// not surface in cleartext; the wire payload is an opaque base64 data
+	// blob carried on the close marker as a `data-encrypted` attribute,
+	// not text. The body has no human-readable contents and is rendered
+	// to Cursor as a fixed `[redacted thinking]` placeholder so the user
+	// sees the block exists without exposing model internals. Kept
+	// separate from [SyntheticReasoning] so the typed enum is the source
+	// of truth and the materializer can route the opaque blob to a
+	// dedicated upstream block type without conflating semantics.
+	SyntheticRedactedThinking SyntheticContentKind = "redacted_thinking"
 )
 
 // SyntheticPart is one ordered segment of an assistant content string after
@@ -102,11 +113,16 @@ var syntheticContentSpecs = map[SyntheticContentKind]*syntheticContentSpec{
 		Header:      "",
 		QuotePrefix: true,
 	},
+	SyntheticRedactedThinking: {
+		Marker:      "clyde-redacted-thinking",
+		Header:      "> **[redacted thinking]**\n> \n",
+		QuotePrefix: true,
+	},
 }
 
 // orderedSyntheticKinds lists the kinds in deterministic order so extraction
 // is reproducible across runs (Go map iteration is not).
-var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, SyntheticNotice}
+var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, SyntheticNotice, SyntheticRedactedThinking}
 
 // dataRefAttrPattern is the optional `data-ref="..."` attribute fragment that
 // may appear inside an open marker. The attribute name is fixed; the value
@@ -469,6 +485,12 @@ const (
 	// MaterializedKindNativeThinking asks the mapper to emit an
 	// upstream-native thinking content block carrying Body verbatim.
 	MaterializedKindNativeThinking MaterializedKind = "native_thinking"
+	// MaterializedKindNativeRedactedThinking asks the mapper to emit an
+	// upstream-native redacted_thinking content block carrying the
+	// opaque encrypted blob in Body. Body is not human readable; only
+	// Anthropic supports this in current code, and the mapper is
+	// expected to forward it as `{"type":"redacted_thinking","data":Body}`.
+	MaterializedKindNativeRedactedThinking MaterializedKind = "native_redacted_thinking"
 )
 
 // MaterializedPart is one ordered output instruction from
@@ -522,6 +544,8 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 			out = append(out, MaterializedPart{Kind: MaterializedKindText, Body: p.Body, Signature: ""})
 		case SyntheticReasoning:
 			out = append(out, materializeReasoningPart(p.Body, p.Signature, strategy)...)
+		case SyntheticRedactedThinking:
+			out = append(out, materializeRedactedThinkingPart(p.Encrypted, strategy)...)
 		case SyntheticNotice:
 			continue
 		}
@@ -556,5 +580,28 @@ func materializeReasoningPart(body, signature string, strategy MaterializationSt
 	}
 	// Unknown strategy: behave like Drop so a future enum value never silently
 	// leaks raw thinking content upstream.
+	return nil
+}
+
+// materializeRedactedThinkingPart applies the configured strategy to a single
+// redacted-thinking part. The opaque encrypted blob (parsed off the close
+// marker's `data-encrypted` attribute) rides as the materialized Body so the
+// Anthropic mapper can forward it as `{"type":"redacted_thinking","data":Body}`.
+//
+// MaterializeNativeThinkingBlock emits a single
+// MaterializedKindNativeRedactedThinking output. MaterializeDrop discards the
+// part. MaterializePlainTextConcat is intentionally a drop: the blob is not
+// human readable, and folding it into prose would corrupt the assistant text
+// while leaking opaque internal content into the visible context. Passthrough
+// is also a drop because the redacted envelope is not a stable text shape an
+// arbitrary upstream can replay.
+func materializeRedactedThinkingPart(encrypted string, strategy MaterializationStrategy) []MaterializedPart {
+	trimmed := strings.TrimSpace(encrypted)
+	if trimmed == "" {
+		return nil
+	}
+	if strategy == MaterializeNativeThinkingBlock {
+		return []MaterializedPart{{Kind: MaterializedKindNativeRedactedThinking, Body: trimmed, Signature: ""}}
+	}
 	return nil
 }

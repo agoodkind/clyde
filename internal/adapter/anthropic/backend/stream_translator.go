@@ -135,6 +135,25 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 	case "thinking":
 		t.currentBlockType = "thinking"
 		return []Event{{Kind: EventReasoningSignaled, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+	case "redacted_thinking":
+		// Anthropic emits the entire opaque payload on the start event
+		// (no redacted_thinking_delta exists). Surface a signaled +
+		// delta pair so the renderer opens a synthetic envelope and
+		// fills it with the user-facing placeholder, plus carries the
+		// data blob on the event. The translator emits
+		// EventReasoningFinished on content_block_stop below.
+		t.currentBlockType = "redacted_thinking"
+		return []Event{
+			{Kind: EventReasoningSignaled, ReasoningKind: "redacted", EncryptedContent: "", Signature: ""},
+			{
+				Kind:             EventReasoningDelta,
+				Text:             "[redacted]",
+				ReasoningKind:    "redacted",
+				EncryptedContent: "",
+				Signature:        "",
+				RedactedData:     ev.ContentBlock.Data,
+			},
+		}, false, "", nil, nil
 	default:
 		t.currentBlockType = ev.ContentBlock.Type
 		return nil, false, "", nil, nil
@@ -250,6 +269,14 @@ func (t *StreamTranslator) handleContentBlockStop() ([]Event, bool, string, *Ope
 	if t.currentBlockType == "thinking" {
 		t.currentBlockType = ""
 		return []Event{{Kind: EventReasoningFinished, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+	}
+	if t.currentBlockType == "redacted_thinking" {
+		t.currentBlockType = ""
+		// The data blob was already captured on the delta event in
+		// handleContentBlockStart and will be embedded on the close
+		// marker as `data-encrypted`. The finished event closes the
+		// synthetic envelope.
+		return []Event{{Kind: EventReasoningFinished, ReasoningKind: "redacted", EncryptedContent: "", Signature: ""}}, false, "", nil, nil
 	}
 	t.currentBlockType = ""
 	return nil, false, "", nil, nil
