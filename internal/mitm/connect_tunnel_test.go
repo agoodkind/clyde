@@ -350,9 +350,14 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		t.Fatalf("listen: %v", err)
 	}
 	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
-	ca, err := newCursorCertAuthority()
+	caDir := t.TempDir()
+	ca, err := loadOrCreateCertAuthority(
+		filepath.Join(caDir, "ca.crt"),
+		filepath.Join(caDir, "ca.key"),
+		time.Now,
+	)
 	if err != nil {
-		t.Fatalf("new ca: %v", err)
+		t.Fatalf("load ca: %v", err)
 	}
 	p := &Proxy{
 		log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
