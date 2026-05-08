@@ -8,20 +8,33 @@ func logUIGoroutinePanic(name string, recoveredValue string) {
 		"err", "panic")
 }
 
+// asyncLoadEvent is the sealed marker interface implemented by the
+// loaded-event payloads that postInterruptIfActive forwards. The
+// interface enumerates the payload union so the screen post path stays
+// off the open `any` channel.
+type asyncLoadEvent interface {
+	isAsyncLoadEvent()
+}
+
+func (sessionsLoaded) isAsyncLoadEvent()       {}
+func (configControlsLoaded) isAsyncLoadEvent() {}
+func (exportStatsLoaded) isAsyncLoadEvent()    {}
+func (detailsLoaded) isAsyncLoadEvent()        {}
+
 // postInterruptIfActive forwards data to the screen via postInterrupt
 // only when the App context has not been canceled. Async TUI workers
 // that block on daemon RPCs must check this before posting. A slow
 // callback that returns after Run exits would otherwise race against
-// teardown. Returns true when the interrupt was queued. Returns false
-// when the context was already canceled.
+// teardown.
 //
-// The data parameter mirrors postInterrupt's existing signature for
-// the loaded-event payload union. Tightening that union to a typed
-// sum is a follow-up beyond this change.
-func (a *App) postInterruptIfActive(name string, data any) bool {
+// The data parameter is restricted to asyncLoadEvent, the sealed
+// marker interface implemented by the four loaded-event payload
+// structs. New async load callbacks must add their payload to the
+// asyncLoadEvent union before calling this helper.
+func (a *App) postInterruptIfActive(name string, data asyncLoadEvent) {
 	if a == nil || a.ctx == nil {
 		a.postInterrupt(data)
-		return true
+		return
 	}
 	select {
 	case <-a.ctx.Done():
@@ -29,9 +42,8 @@ func (a *App) postInterruptIfActive(name string, data any) bool {
 			"component", "tui",
 			"goroutine", name,
 			"err", a.ctx.Err())
-		return false
+		return
 	default:
 	}
 	a.postInterrupt(data)
-	return true
 }
