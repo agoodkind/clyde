@@ -10,6 +10,7 @@ import (
 
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/terminalcontrol"
+	itranscript "goodkind.io/clyde/internal/transcript"
 )
 
 // BinaryPathFunc returns the codex executable path. Tests may replace it.
@@ -69,8 +70,28 @@ func (l *Lifecycle) ResumeInstructions(sess *session.Session) []string {
 	return []string{fmt.Sprintf("codex resume %s", sessionID)}
 }
 
-func (l *Lifecycle) RecentContextMessages(*session.Session, int, int) []session.ContextMessage {
-	return nil
+func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen int) []session.ContextMessage {
+	if sess == nil || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
+		return nil
+	}
+	history, err := itranscript.ReadCodexHistory(sess.Metadata.ProviderTranscriptPath())
+	if err != nil {
+		return nil
+	}
+	turns := history.RecentConversationTurns(limit, itranscript.ShapeOptions{
+		IncludeThinking:  false,
+		ConversationOnly: false,
+		ToolOnly:         itranscript.ToolOnlyCompactSummary,
+		MaxTextRunes:     maxLen,
+	})
+	out := make([]session.ContextMessage, 0, len(turns))
+	for _, turn := range turns {
+		out = append(out, session.ContextMessage{
+			Role: turn.Role,
+			Text: turn.Text,
+		})
+	}
+	return out
 }
 
 func codexResumeArgs(req session.OpaqueResumeRequest) ([]string, error) {
