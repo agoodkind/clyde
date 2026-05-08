@@ -68,7 +68,7 @@ func NudgeDiscoveryScan() {
 		return
 	}
 	log.DebugContext(bg, "daemon.client.nudge.connect_failed_try_sigusr1", "err", err)
-	pid, pidErr := findDaemonPID()
+	pid, pidErr := findDaemonPID(bg)
 	if pidErr != nil || pid <= 0 {
 		log.DebugContext(bg, "daemon.client.nudge.pid_lookup_skipped",
 			"pid", pid,
@@ -362,12 +362,11 @@ func lockDaemonReload(ctx context.Context) (func(), error) {
 
 // findDaemonPID locates the running daemon's pid via launchctl. Returns
 // 0 with no error when the daemon is not registered.
-func findDaemonPID() (int, error) {
-	bg := context.Background()
-	log := daemonClientLog(bg)
+func findDaemonPID(ctx context.Context) (int, error) {
+	log := daemonClientLog(ctx)
 	out, err := clientCommandRunner.Output("launchctl", "list", "io.goodkind.clyde.daemon")
 	if err != nil {
-		log.WarnContext(bg, "daemon.client.find_pid.launchctl_failed", "err", err)
+		log.WarnContext(ctx, "daemon.client.find_pid.launchctl_failed", "err", err)
 		return 0, fmt.Errorf("list launch agent pid: %w", err)
 	}
 	for _, line := range splitLines(string(out)) {
@@ -380,13 +379,13 @@ func findDaemonPID() (int, error) {
 		raw = trimSpace(raw)
 		n, convErr := strconv.Atoi(raw)
 		if convErr != nil {
-			log.DebugContext(bg, "daemon.client.find_pid.pid_parse_failed", "err", convErr)
+			log.DebugContext(ctx, "daemon.client.find_pid.pid_parse_failed", "err", convErr)
 			return 0, convErr
 		}
-		log.DebugContext(bg, "daemon.client.find_pid.ok", "pid", n)
+		log.DebugContext(ctx, "daemon.client.find_pid.ok", "pid", n)
 		return n, nil
 	}
-	log.DebugContext(bg, "daemon.client.find_pid.no_pid_field")
+	log.DebugContext(ctx, "daemon.client.find_pid.no_pid_field")
 	return 0, nil
 }
 
