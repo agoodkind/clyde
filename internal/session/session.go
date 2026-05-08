@@ -55,6 +55,13 @@ type Metadata struct {
 	// because encoding/json's omitempty has no effect on nested struct
 	// types like time.Time.
 	LastAutoNameAt time.Time `json:"lastAutoNameAt,omitzero"`
+
+	// AutoNameSourceHash is the fingerprint of the redacted source text
+	// the auto-rename worker last evaluated for this session. The worker
+	// short-circuits when the hash matches what is on disk so a session
+	// whose first three user messages have not changed never re-enters
+	// the rename queue. Empty means no auto-rename has produced a hash.
+	AutoNameSourceHash string `json:"autoNameSourceHash,omitempty"`
 }
 
 // ProviderOwnedMetadata is the provider-neutral persisted identity and artifact

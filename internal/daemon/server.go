@@ -1664,6 +1664,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 		AutoNameState:         string(sess.Metadata.AutoNameState),
 		AutoNameSource:        string(sess.Metadata.AutoNameSource),
 		LastAutoNameNanos:     lastAutoNameNanos,
+		AutoNameSourceHash:    sess.Metadata.AutoNameSourceHash,
 	}
 }
 
