@@ -134,7 +134,18 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 		return t.openToolUseBlock(ev.Index, ev.ContentBlock), false, "", nil, nil
 	case "thinking":
 		t.currentBlockType = "thinking"
-		return []Event{{Kind: EventReasoningSignaled, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+		return []Event{{
+			Kind:             EventReasoningSignaled,
+			Text:             "",
+			ReasoningKind:    "",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
+			EncryptedContent: "",
+			Signature:        "",
+			RedactedData:     "",
+		}}, false, "", nil, nil
 	case "redacted_thinking":
 		// Anthropic emits the entire opaque payload on the start event
 		// (no redacted_thinking_delta exists). Surface a signaled +
@@ -144,11 +155,26 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 		// EventReasoningFinished on content_block_stop below.
 		t.currentBlockType = "redacted_thinking"
 		return []Event{
-			{Kind: EventReasoningSignaled, ReasoningKind: "redacted", EncryptedContent: "", Signature: ""},
+			{
+				Kind:             EventReasoningSignaled,
+				Text:             "",
+				ReasoningKind:    "redacted",
+				SummaryIndex:     nil,
+				ToolCalls:        nil,
+				ItemID:           "",
+				ItemType:         "",
+				EncryptedContent: "",
+				Signature:        "",
+				RedactedData:     "",
+			},
 			{
 				Kind:             EventReasoningDelta,
 				Text:             "[redacted]",
 				ReasoningKind:    "redacted",
+				SummaryIndex:     nil,
+				ToolCalls:        nil,
+				ItemID:           "",
+				ItemType:         "",
 				EncryptedContent: "",
 				Signature:        "",
 				RedactedData:     ev.ContentBlock.Data,
@@ -168,7 +194,10 @@ func (t *StreamTranslator) openToolUseBlock(blockIdx int, block *AnthContentBloc
 	t.toolCallIndex++
 	t.toolCallByBlockIdx[blockIdx] = idx
 	return []Event{{
-		Kind: EventToolCallDelta,
+		Kind:          EventToolCallDelta,
+		Text:          "",
+		ReasoningKind: "",
+		SummaryIndex:  nil,
 		ToolCalls: []OpenAIToolCall{{
 			Index: idx,
 			ID:    block.ID,
@@ -178,8 +207,11 @@ func (t *StreamTranslator) openToolUseBlock(blockIdx int, block *AnthContentBloc
 				Arguments: "",
 			},
 		}},
+		ItemID:           "",
+		ItemType:         "",
 		EncryptedContent: "",
 		Signature:        "",
+		RedactedData:     "",
 	}}
 }
 
@@ -198,7 +230,18 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 	switch ev.Delta.Type {
 	case "text_delta":
 		t.visibleText.WriteString(ev.Delta.Text)
-		return []Event{{Kind: EventAssistantTextDelta, Text: ev.Delta.Text, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+		return []Event{{
+			Kind:             EventAssistantTextDelta,
+			Text:             ev.Delta.Text,
+			ReasoningKind:    "",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
+			EncryptedContent: "",
+			Signature:        "",
+			RedactedData:     "",
+		}}, false, "", nil, nil
 	case "input_json_delta":
 		return t.toolArgumentsDelta(ev.Index, ev.Delta.PartialJSON)
 	case "thinking_delta":
@@ -206,8 +249,13 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 			Kind:             EventReasoningDelta,
 			Text:             ev.Delta.Thinking,
 			ReasoningKind:    "text",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
 			EncryptedContent: "",
 			Signature:        "",
+			RedactedData:     "",
 		}}, false, "", nil, nil
 	case "signature_delta":
 		return []Event{{
@@ -220,6 +268,7 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 			ItemType:         "",
 			EncryptedContent: "",
 			Signature:        ev.Delta.Signature,
+			RedactedData:     "",
 		}}, false, "", nil, nil
 	default:
 		return nil, false, "", nil, nil
@@ -244,7 +293,10 @@ func (t *StreamTranslator) toolArgumentsDelta(blockIdx int, partialJSON string) 
 		return nil, false, "", nil, nil
 	}
 	return []Event{{
-		Kind: EventToolCallDelta,
+		Kind:          EventToolCallDelta,
+		Text:          "",
+		ReasoningKind: "",
+		SummaryIndex:  nil,
 		ToolCalls: []OpenAIToolCall{{
 			Index: tcIdx,
 			Type:  "function",
@@ -252,8 +304,11 @@ func (t *StreamTranslator) toolArgumentsDelta(blockIdx int, partialJSON string) 
 				Arguments: partialJSON,
 			},
 		}},
+		ItemID:           "",
+		ItemType:         "",
 		EncryptedContent: "",
 		Signature:        "",
+		RedactedData:     "",
 	}}, false, "", nil, nil
 }
 
@@ -268,7 +323,18 @@ func (t *StreamTranslator) handleContentBlockStop() ([]Event, bool, string, *Ope
 	// default. The cached prefix stays byte-stable across turns.
 	if t.currentBlockType == "thinking" {
 		t.currentBlockType = ""
-		return []Event{{Kind: EventReasoningFinished, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+		return []Event{{
+			Kind:             EventReasoningFinished,
+			Text:             "",
+			ReasoningKind:    "",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
+			EncryptedContent: "",
+			Signature:        "",
+			RedactedData:     "",
+		}}, false, "", nil, nil
 	}
 	if t.currentBlockType == "redacted_thinking" {
 		t.currentBlockType = ""
@@ -276,7 +342,18 @@ func (t *StreamTranslator) handleContentBlockStop() ([]Event, bool, string, *Ope
 		// handleContentBlockStart and will be embedded on the close
 		// marker as `data-encrypted`. The finished event closes the
 		// synthetic envelope.
-		return []Event{{Kind: EventReasoningFinished, ReasoningKind: "redacted", EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+		return []Event{{
+			Kind:             EventReasoningFinished,
+			Text:             "",
+			ReasoningKind:    "redacted",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
+			EncryptedContent: "",
+			Signature:        "",
+			RedactedData:     "",
+		}}, false, "", nil, nil
 	}
 	t.currentBlockType = ""
 	return nil, false, "", nil, nil
@@ -313,7 +390,18 @@ func (t *StreamTranslator) handleMessageStop() ([]Event, bool, string, *OpenAIUs
 	}
 	var extra []Event
 	if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
-		extra = append(extra, Event{Kind: adapterrender.EventAssistantRefusalDelta, Text: t.visibleText.String(), EncryptedContent: "", Signature: ""})
+		extra = append(extra, Event{
+			Kind:             adapterrender.EventAssistantRefusalDelta,
+			Text:             t.visibleText.String(),
+			ReasoningKind:    "",
+			SummaryIndex:     nil,
+			ToolCalls:        nil,
+			ItemID:           "",
+			ItemType:         "",
+			EncryptedContent: "",
+			Signature:        "",
+			RedactedData:     "",
+		})
 	}
 	return extra, true, reason, u, nil
 }

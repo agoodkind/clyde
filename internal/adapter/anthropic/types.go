@@ -461,7 +461,21 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return nil, err
 		}
-		return []ContentBlock{{Type: "text", Text: text, Signature: ""}}, nil
+		return []ContentBlock{{
+			Type:           "text",
+			Text:           text,
+			ID:             "",
+			Name:           "",
+			Input:          nil,
+			ToolUseID:      "",
+			Content:        "",
+			CacheReference: "",
+			Source:         nil,
+			CacheControl:   nil,
+			Thinking:       "",
+			Signature:      "",
+			Data:           "",
+		}}, nil
 	}
 	if trimmed[0] == '[' {
 		var blocks []ContentBlock

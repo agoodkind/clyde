@@ -81,7 +81,7 @@ var gettingStartedPrompt string
 // Serve starts the MCP stdio server and blocks until the client disconnects.
 //
 // The stdio writer is wrapped in mcpStdoutWriter so concurrent JSON-RPC
-// frames cannot interleave on os.Stdout. The upstream stdio transport runs
+// frames cannot interleave on [os.Stdout]. The upstream stdio transport runs
 // handleNotifications and the toolCallWorker pool on separate goroutines,
 // and a few upstream paths write to the session writer without going
 // through the upstream writeMu. CLYDE-57.
@@ -165,7 +165,7 @@ func Serve(ctx context.Context) error {
 	return serveStdioLocked(ctx, s, os.Stdin, os.Stdout)
 }
 
-// serveStdioLocked mirrors server.ServeStdio but routes os.Stdout through
+// serveStdioLocked mirrors server.ServeStdio but routes [os.Stdout] through
 // mcpStdoutWriter so every byte written by the upstream transport, by
 // notification frames, and by tool responses is serialized under one mutex.
 // Signal handling matches the upstream ServeStdio path.
@@ -197,7 +197,10 @@ func serveStdioLocked(parent context.Context, mcp *server.MCPServer, stdin io.Re
 	}()
 
 	locked := newMCPStdoutWriter(stdout)
-	return stdio.Listen(ctx, stdin, locked)
+	if err := stdio.Listen(ctx, stdin, locked); err != nil {
+		return fmt.Errorf("mcp stdio listen: %w", err)
+	}
+	return nil
 }
 
 func handleListSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

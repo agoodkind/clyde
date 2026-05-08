@@ -118,7 +118,22 @@ func requestContextTrackerKeyFromIngress(ic ingresscontract.IngressContext, req 
 func ingressContextForRequest(req ChatRequest) ingresscontract.IngressContext {
 	contract, ok := activeIngressContract()
 	if !ok || contract == nil {
-		return ingresscontract.IngressContext{}
+		return ingresscontract.IngressContext{
+			User:              "",
+			RequestID:         "",
+			ConversationID:    "",
+			GenerationID:      "",
+			WorkspacePath:     "",
+			NormalizedModel:   "",
+			PathKind:          "",
+			Mode:              "",
+			RawToolNames:      nil,
+			HasSubagentTool:   false,
+			CanSwitchMode:     false,
+			HasCreatePlanTool: false,
+			HasApplyPatchTool: false,
+			MCPToolNames:      nil,
+		}
 	}
 	return contract.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
 }
