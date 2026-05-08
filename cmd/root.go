@@ -795,6 +795,11 @@ func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDe
 		LastPreCompactTokens:  int(resp.GetLastPreCompactTokens()),
 		TranscriptSizeBytes:   resp.GetTranscriptSizeBytes(),
 		TranscriptStatsLoaded: true,
+		TranscriptStatsStatus: "",
+		Messages:              nil,
+		AllMessages:           nil,
+		Tools:                 nil,
+		ConversationLoading:   false,
 		ContextUsage: ui.SessionContextUsage{
 			TotalTokens:    int(resp.GetContextTotalTokens()),
 			MaxTokens:      int(resp.GetContextMaxTokens()),

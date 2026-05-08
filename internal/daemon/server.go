@@ -1445,6 +1445,17 @@ func (s *Server) lazyContextStateForDetail(ctx context.Context, sess *session.Se
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), detailLazyProbeMaxDuration)
 	resultCh := make(chan sessionContextState, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.ErrorContext(probeCtx, "daemon.session_detail.context_probe.panic",
+					"session", sess,
+					"err", fmt.Errorf("panic: %v", r),
+				)
+				failed := emptySessionContextState()
+				failed.Status = "probe_failed"
+				resultCh <- failed
+			}
+		}()
 		defer probeCancel()
 		state, err := s.refreshContextUsageState(probeCtx, sess)
 		if err != nil && state.Status == "" {
