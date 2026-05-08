@@ -632,6 +632,57 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 		return err
 	}
 	mitm.CaptureRules = captureRules
+	if err := applyMITMListenDefaultsAndValidate(&mitm.Listen); err != nil {
+		return err
+	}
+	if err := applyMITMCADefaultsAndValidate(&mitm.CA); err != nil {
+		return err
+	}
+	return nil
+}
+
+const (
+	defaultMITMListenHost = "[::1]"
+	defaultMITMListenPort = 48723
+)
+
+func applyMITMListenDefaultsAndValidate(listen *MITMListenConfig) error {
+	listen.Host = strings.TrimSpace(listen.Host)
+	if listen.Host == "" {
+		listen.Host = defaultMITMListenHost
+	}
+	if listen.Port == 0 {
+		listen.Port = defaultMITMListenPort
+		return nil
+	}
+	if listen.Port < 0 || listen.Port > 65535 {
+		return fmt.Errorf("mitm.listen.port %d is outside the valid TCP port range 1-65535", listen.Port)
+	}
+	return nil
+}
+
+func applyMITMCADefaultsAndValidate(ca *MITMCAConfig) error {
+	caDir := filepath.Join(DefaultStateDir(), "mitm", "ca")
+
+	ca.CertPath = strings.TrimSpace(ca.CertPath)
+	if ca.CertPath == "" {
+		ca.CertPath = filepath.Join(caDir, "clyde-mitm-ca.crt")
+	} else {
+		ca.CertPath = expandHome(ca.CertPath)
+	}
+	if !filepath.IsAbs(ca.CertPath) {
+		return fmt.Errorf("mitm.ca.cert_path %q must be an absolute path after expansion", ca.CertPath)
+	}
+
+	ca.KeyPath = strings.TrimSpace(ca.KeyPath)
+	if ca.KeyPath == "" {
+		ca.KeyPath = filepath.Join(caDir, "clyde-mitm-ca.key")
+	} else {
+		ca.KeyPath = expandHome(ca.KeyPath)
+	}
+	if !filepath.IsAbs(ca.KeyPath) {
+		return fmt.Errorf("mitm.ca.key_path %q must be an absolute path after expansion", ca.KeyPath)
+	}
 	return nil
 }
 

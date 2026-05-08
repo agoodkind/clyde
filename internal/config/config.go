@@ -1162,6 +1162,25 @@ type MITMConfig struct {
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
 	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
+	Listen         MITMListenConfig       `json:"listen,omitzero" toml:"listen,omitempty"`
+	CA             MITMCAConfig           `json:"ca,omitzero" toml:"ca,omitempty"`
+}
+
+// MITMListenConfig configures the stable listen address of the in-process
+// MITM proxy. Host and Port are config-driven so reloads keep the URL stable
+// across daemon restarts; clients pin this address and would break if the
+// daemon picked an ephemeral port on every reload.
+type MITMListenConfig struct {
+	Host string `json:"host,omitempty" toml:"host,omitempty"`
+	Port int    `json:"port,omitempty" toml:"port,omitempty"`
+}
+
+// MITMCAConfig configures on-disk persistence of the MITM CA. The certificate
+// and key are written to these absolute paths so the CA survives daemon
+// restarts and clients can install the cert once and trust it across reloads.
+type MITMCAConfig struct {
+	CertPath string `json:"certPath,omitempty" toml:"cert_path,omitempty"`
+	KeyPath  string `json:"keyPath,omitempty"  toml:"key_path,omitempty"`
 }
 
 // MITMCapture configures MITM capture index file policy. Raw request and
