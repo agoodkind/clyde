@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -13,6 +14,8 @@ import (
 	"goodkind.io/clyde/internal/cli"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
 )
+
+const reloadCommandTimeout = 45 * time.Second
 
 var (
 	runCommand          = daemonsvc.RunCommand
@@ -65,11 +68,11 @@ func newReloadCmd(f *cli.Factory) *cobra.Command {
 		Short: "Reload the running daemon without restarting it",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), 12*time.Second)
+			ctx, cancel := context.WithTimeout(cmd.Context(), reloadCommandTimeout)
 			defer cancel()
 			resp, err := reloadDaemon(ctx)
 			if err != nil {
-				return err
+				return reloadCommandError(err)
 			}
 			status := "unchanged"
 			if resp.GetBinaryReloaded() {
@@ -79,6 +82,13 @@ func newReloadCmd(f *cli.Factory) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func reloadCommandError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("daemon reload did not complete within " + reloadCommandTimeout.String() + " and no reload confirmation was received; check `clyde daemon status` and the daemon log, then rerun `clyde daemon reload`: " + err.Error())
+	}
+	return err
 }
 
 func newStatusCmd(f *cli.Factory) *cobra.Command {

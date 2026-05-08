@@ -89,16 +89,7 @@ setup-hooks: ## Configure git hooks
 
 deploy: install ## Install binary, ensure supervisor ownership, reload daemon, and print service status
 	@$(MAKE) service-install
-	@for attempt in 1 2 3 4 5; do \
-		if "$(INSTALL_BIN)" daemon reload; then \
-			break; \
-		fi; \
-		if [ "$$attempt" = "5" ]; then \
-			echo "deploy: daemon reload failed after supervisor start" >&2; \
-			exit 1; \
-		fi; \
-		sleep 1; \
-	done
+	@"$(INSTALL_BIN)" daemon reload
 	@$(MAKE) service-status
 
 # ---------------------------------------------------------------------------
