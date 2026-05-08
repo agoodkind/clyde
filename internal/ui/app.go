@@ -89,14 +89,14 @@ type AppCallbacks struct {
 	SetBasedir func(sess *session.Session, newPath string) error
 	// LoadConfigControls returns daemon-owned config controls rendered by
 	// the Settings tab.
-	LoadConfigControls func() ([]ConfigControl, error)
+	LoadConfigControls func(ctx context.Context) ([]ConfigControl, error)
 	// UpdateConfigControl persists one config control change via the daemon.
 	UpdateConfigControl func(key, value string) error
 	// UpdateSessionContextWindow persists one Claude Code context-window
 	// choice for one session. Empty means provider default behavior.
 	UpdateSessionContextWindow func(sess *session.Session, contextWindow string) error
 	// ListSessions returns the daemon-owned dashboard snapshot.
-	ListSessions func() (SessionSnapshot, error)
+	ListSessions func(ctx context.Context) (SessionSnapshot, error)
 	// LoadStats returns asynchronously rendered dashboard-wide cache stats.
 	LoadStats func() (DashboardStats, error)
 	// SubscribeProviderStats streams provider-level stats updates from the daemon.
@@ -109,10 +109,10 @@ type AppCallbacks struct {
 	// fires once the updated metadata is persisted; the TUI uses it to
 	// redraw the affected row.
 	RefreshSummary   func(sess *session.Session, onDone func(*session.Session)) error
-	GetSessionDetail func(sess *session.Session) (SessionDetail, error)
+	GetSessionDetail func(ctx context.Context, sess *session.Session) (SessionDetail, error)
 	ViewContent      func(sess *session.Session) string
 	ExportSession    func(sess *session.Session, req SessionExportRequest) ([]byte, error)
-	LoadExportStats  func(sess *session.Session) (SessionExportStats, error)
+	LoadExportStats  func(ctx context.Context, sess *session.Session) (SessionExportStats, error)
 	// SubscribeRegistry, when set, opens a long-lived subscription to
 	// the daemon's registry-event stream. Each event nudges the TUI to
 	// reload sessions from disk so adoptions land immediately instead
@@ -1150,6 +1150,9 @@ func (a *App) startRunSupervisor(name string, run runSupervisorFunc) chan struct
 				logUIGoroutinePanic(name, fmt.Sprint(r))
 			}
 		}()
+		// noopCloser is correct here: supervisor goroutines carry no OS resources
+		// and exit immediately when the stop channel (closed by a defer in Run) is
+		// closed before drain begins.
 		sess, regErr := a.workers.Register(a.ctx, "watcher", WorkerMeta{
 			Kind:     "watcher",
 			Source:   name,
@@ -1912,16 +1915,18 @@ func (a *App) requestSessionsAsync(reason string) {
 				logUIGoroutinePanic("sessions_load", fmt.Sprint(r))
 			}
 		}()
+		loadCtx, loadCancel := context.WithCancel(a.ctx)
+		defer loadCancel()
 		sess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
 			Kind:     "async_load",
 			Source:   "sessions_load",
 			Deadline: time.Time{},
-		}, noopCloser{})
+		}, newWorkerCloser(loadCancel))
 		if regErr == nil {
 			defer a.workers.Release(context.Background(), sess, "sessions_load.done")
 		}
 		started := a.now()
-		snapshot, err := a.cb.ListSessions()
+		snapshot, err := a.cb.ListSessions(loadCtx)
 		tuiLog.Logger().Debug("tui.sessions.load.finished",
 			"component", "tui",
 			"reason", reason,
@@ -1942,15 +1947,17 @@ func (a *App) refreshConfigControls() {
 				logUIGoroutinePanic("config_controls_load", fmt.Sprint(r))
 			}
 		}()
+		loadCtx, loadCancel := context.WithCancel(a.ctx)
+		defer loadCancel()
 		sess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
 			Kind:     "async_load",
 			Source:   "config_controls_load",
 			Deadline: time.Time{},
-		}, noopCloser{})
+		}, newWorkerCloser(loadCancel))
 		if regErr == nil {
 			defer a.workers.Release(context.Background(), sess, "config_controls_load.done")
 		}
-		controls, err := a.cb.LoadConfigControls()
+		controls, err := a.cb.LoadConfigControls(loadCtx)
 		a.postInterruptIfActive("config_controls_load", configControlsLoaded{controls: controls, err: err})
 	}()
 }
@@ -2280,6 +2287,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 		retryDelay = 250 * time.Millisecond
 
 		done := make(chan struct{})
+		streamCancel := cancel
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -2291,7 +2299,7 @@ func (a *App) runRegistrySupervisor(stop <-chan struct{}) {
 				Kind:     "rpc_stream",
 				Source:   "registry_subscriber",
 				Deadline: time.Time{},
-			}, noopCloser{})
+			}, newWorkerCloser(streamCancel))
 			if regErr == nil {
 				defer a.workers.Release(context.Background(), sess, "registry_subscriber.exited")
 			}
@@ -2356,6 +2364,7 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 		retryDelay = 250 * time.Millisecond
 
 		done := make(chan struct{})
+		streamCancel := cancel
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -2367,7 +2376,7 @@ func (a *App) runProviderStatsSupervisor(stop <-chan struct{}) {
 				Kind:     "rpc_stream",
 				Source:   "provider_stats_subscriber",
 				Deadline: time.Time{},
-			}, noopCloser{})
+			}, newWorkerCloser(streamCancel))
 			if regErr == nil {
 				defer a.workers.Release(context.Background(), sess, "provider_stats_subscriber.exited")
 			}
@@ -2746,15 +2755,17 @@ func (a *App) requestExportStatsAsync(sess *session.Session) {
 				logUIGoroutinePanic("export_stats_load", fmt.Sprint(r))
 			}
 		}()
+		loadCtx, loadCancel := context.WithCancel(a.ctx)
+		defer loadCancel()
 		wSess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
 			Kind:     "async_load",
 			Source:   "export_stats_load",
 			Deadline: time.Time{},
-		}, noopCloser{})
+		}, newWorkerCloser(loadCancel))
 		if regErr == nil {
 			defer a.workers.Release(context.Background(), wSess, "export_stats_load.done")
 		}
-		stats, err := a.cb.LoadExportStats(sess)
+		stats, err := a.cb.LoadExportStats(loadCtx, sess)
 		a.postInterruptIfActive("export_stats_load", exportStatsLoaded{name: name, stats: stats, err: err})
 	}()
 }
@@ -4991,15 +5002,17 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 				logUIGoroutinePanic("detail_load", fmt.Sprint(r))
 			}
 		}()
+		loadCtx, loadCancel := context.WithCancel(a.ctx)
+		defer loadCancel()
 		wSess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
 			Kind:     "async_load",
 			Source:   "detail_load",
 			Deadline: time.Time{},
-		}, noopCloser{})
+		}, newWorkerCloser(loadCancel))
 		if regErr == nil {
 			defer a.workers.Release(context.Background(), wSess, "detail_load.done")
 		}
-		detail, err := a.cb.GetSessionDetail(sess)
+		detail, err := a.cb.GetSessionDetail(loadCtx, sess)
 		a.postInterruptIfActive("detail_load", detailsLoaded{name: name, gen: gen, detail: detail, err: err})
 	}()
 }
