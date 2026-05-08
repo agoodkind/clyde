@@ -63,9 +63,58 @@ func loadingValue(status string) string {
 	switch {
 	case trimmed == "", trimmed == "loading...":
 		return ClockLoadingSpinner("loading...").Text()
-	case strings.HasPrefix(trimmed, "failed"):
+	case isTerminalLoadingStatus(trimmed):
 		return trimmed
 	default:
 		return ClockLoadingSpinner(trimmed).Text()
 	}
+}
+
+// loadingSegment is the inline-cell counterpart to loadingValue. It
+// returns a TextSegment whose glyph is substituted at draw time so
+// the spinner ticks live without rebuilding the parent segment list.
+// Use this whenever the loading copy lives inside a [][]TextSegment
+// column (stats panes, kv rows) where a baked-in glyph would freeze.
+//
+// Terminal statuses (failed:, unsupported, cancelled, probe_failed)
+// return a non-spinning segment so the user sees a stable label.
+func loadingSegment(status string) TextSegment {
+	trimmed := strings.TrimSpace(status)
+	if trimmed == "" {
+		trimmed = "loading..."
+	}
+	if isTerminalLoadingStatus(trimmed) {
+		return TextSegment{Text: trimmed, Style: StyleMuted}
+	}
+	return TextSegment{Text: trimmed, Style: StyleMuted, Spinner: true}
+}
+
+// isGenericLoadingStatus reports whether status is a "still working"
+// sentinel that adds no information beyond the spinner itself. The
+// details pane hides redundant Diagnostics rows for these so the
+// user does not see the same word in two places at once.
+func isGenericLoadingStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "", "probing", "loading...", "loading", "cooldown", "refreshing":
+		return true
+	}
+	return false
+}
+
+// isTerminalLoadingStatus reports whether status describes a settled
+// outcome (failure, unsupported, cancelled). Terminal statuses do not
+// animate; they replace the spinner entirely with stable copy.
+func isTerminalLoadingStatus(status string) bool {
+	trimmed := strings.TrimSpace(status)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "failed") {
+		return true
+	}
+	switch trimmed {
+	case "unsupported", "cancelled", "canceled", "probe_failed":
+		return true
+	}
+	return false
 }
