@@ -316,6 +316,9 @@ func (builder appCallbackBuilder) renameSession(sess *session.Session) (string, 
 	if oldName == "" || oldName == newName {
 		return newName, nil
 	}
+	if err := session.ValidateName(newName); err != nil {
+		return newName, err
+	}
 	ctx := builder.childContext("dashboard.session.rename")
 	runtime, runtimeErr := registry.ForSession(sess, nil)
 	if runtimeErr == nil {
