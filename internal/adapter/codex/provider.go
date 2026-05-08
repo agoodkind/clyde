@@ -15,6 +15,7 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 )
 
 // Provider implements adapterprovider.Provider for the Codex
@@ -30,6 +31,7 @@ type Provider struct {
 	httpClient      *http.Client
 	now             func() time.Time
 	sessionCache    *WebsocketSessionCache
+	wsRegistry      *livetrack.Registry[WsSessionMeta]
 	workspaceProbe  *WorkspaceProbe
 	accountID       string
 	bodyLog         BodyLogConfig
@@ -39,15 +41,18 @@ type Provider struct {
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
-// settings the dispatcher knows at construction time. Today: the
-// account id (lifted from auth.json by daemon startup) and the
-// websocket-session idle timeout.
+// settings the dispatcher knows at construction time.
 type ProviderOptions struct {
 	AccountID        string
 	BodyLog          BodyLogConfig
 	BodyLogProvider  BodyLogConfigProvider
 	FileLog          FileLogRotationConfig
 	WsSessionIdleTTL time.Duration
+	// WsSessionRegistry is the per-daemon livetrack registry for
+	// tracking live Codex websocket connections so daemon reload can
+	// drain or force-close them. When nil, CloseAll is the only
+	// shutdown mechanism.
+	WsSessionRegistry *livetrack.Registry[WsSessionMeta]
 }
 
 const defaultWsSessionIdleTTL = 10 * time.Minute
@@ -71,6 +76,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		idleTTL = defaultWsSessionIdleTTL
 	}
 	ConfigureCodexFileLogger(opts.FileLog)
+	wsReg := opts.WsSessionRegistry
 	return &Provider{
 		cfg:             deps.Config.Codex,
 		notices:         deps.Config.Notices,
@@ -78,7 +84,8 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		log:             log,
 		httpClient:      httpClient,
 		now:             now,
-		sessionCache:    NewWebsocketSessionCache(log, idleTTL),
+		sessionCache:    NewWebsocketSessionCache(log, idleTTL, wsReg),
+		wsRegistry:      wsReg,
 		workspaceProbe:  NewWorkspaceProbe(),
 		accountID:       strings.TrimSpace(opts.AccountID),
 		bodyLog:         opts.BodyLog,
@@ -88,13 +95,42 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	}
 }
 
-// CloseAllSessions is invoked on daemon shutdown so any cached
-// websocket connections are closed before the daemon exits.
-func (p *Provider) CloseAllSessions(reason string) {
+// CloseAllSessions closes every cached websocket connection. ctx is
+// passed to livetrack release events. When a WsSessionRegistry was
+// supplied at construction time, it delegates to ForceCloseMatching
+// via the registry so force-close is bounded. When nil, it falls back
+// to the legacy CloseAll path.
+func (p *Provider) CloseAllSessions(ctx context.Context, reason string) {
 	if p == nil || p.sessionCache == nil {
 		return
 	}
-	p.sessionCache.CloseAll(reason)
+	p.sessionCache.CloseAll(ctx, reason)
+}
+
+// DrainSessions blocks until all cached websocket sessions complete or
+// ctx expires. When the registry was not supplied, it falls back to the
+// legacy CloseAllSessions. Callers (adapter.Server.Shutdown) should
+// prefer this so the reload deadline participates in livetrack drain
+// accounting.
+func (p *Provider) DrainSessions(ctx context.Context, reason string) {
+	if p == nil {
+		return
+	}
+	if p.wsRegistry != nil {
+		result := p.wsRegistry.Drain(ctx, reason)
+		if p.log != nil {
+			p.log.InfoContext(ctx, "adapter.codex.ws_sessions.drained",
+				"component", "adapter",
+				"subcomponent", "codex",
+				"final", result.Final.String(),
+				"remaining", result.Remaining,
+				"force_closed", result.ForceClosed,
+				"duration_ms", result.Duration.Milliseconds(),
+			)
+		}
+		return
+	}
+	p.CloseAllSessions(ctx, reason)
 }
 
 // ID satisfies adapterprovider.Provider.
@@ -104,6 +140,29 @@ func (p *Provider) ID() adapterresolver.ProviderID { return adapterresolver.Prov
 // constructed without the dependencies it needs to make a wire call.
 // Today that means missing AuthLookup or empty BaseURL/WebsocketURL.
 var ErrCodexProviderNotConfigured = errors.New("codex provider: not configured")
+
+// beforeAttemptContextKey is the context key used by the adapter
+// dispatch layer to pass a BeforeAttempt hook into Execute without
+// modifying the adapterprovider.Provider interface.
+type beforeAttemptContextKey struct{}
+
+// WithBeforeAttempt stores a BeforeAttempt hook in ctx so Execute can
+// forward it to the websocket transport's retry loop. The hook is called
+// once per retry attempt so the caller can register each attempt as a
+// nested livetrack egress session.
+func WithBeforeAttempt(ctx context.Context, hook func(ctx context.Context, attemptNo int) (context.Context, func(string))) context.Context {
+	if hook == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, beforeAttemptContextKey{}, hook)
+}
+
+// beforeAttemptFromContext extracts the BeforeAttempt hook from ctx.
+// Returns nil when the context carries no hook.
+func beforeAttemptFromContext(ctx context.Context) func(context.Context, int) (context.Context, func(string)) {
+	v, _ := ctx.Value(beforeAttemptContextKey{}).(func(context.Context, int) (context.Context, func(string)))
+	return v
+}
 
 // Execute satisfies adapterprovider.Provider.Execute. It builds a
 // DirectConfig from the provider's deps, runs the websocket transport
@@ -152,6 +211,10 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		RoundTripEncrypted:             RoundTripEncrypted(p.cfg.Reasoning.ResolvedRoundTripEncrypted()),
 		RoundTripSummary:               RoundTripSummary(p.cfg.Reasoning.ResolvedRoundTripSummary()),
 		RetryPolicies:                  p.retryPolicies,
+		// BeforeAttempt is injected by the adapter dispatch layer via
+		// context so the server can register each retry attempt as a
+		// nested livetrack egress session without changing this interface.
+		BeforeAttempt: beforeAttemptFromContext(ctx),
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
@@ -257,4 +320,13 @@ func codexWebsocketURL(raw string) string {
 		return "ws://" + strings.TrimPrefix(base, "http://")
 	}
 	return base
+}
+
+// WebsocketURL returns the resolved Codex websocket URL for use in
+// egress session metadata labels. The adapter dispatch layer calls this
+// when constructing EgressMeta; the per-provider config URL is only
+// available inside the Provider, so this export returns the
+// config-driven default as a best-effort URL label.
+func WebsocketURL(raw string) string {
+	return codexWebsocketURL(raw)
 }

@@ -112,13 +112,18 @@ var systemFingerprint = "fp_clyde_" + adapterClock.Now().UTC().Format("20060102"
 // either calls Start in a goroutine (production) or hands the
 // handler to httptest.Server (tests).
 type Server struct {
-	cfg                  config.AdapterConfig
-	logprobs             config.AdapterLogprobs
-	deps                 Deps
-	log                  *slog.Logger
-	logging              config.LoggingConfig
-	runtimeLogging       *RuntimeLogging
-	registry             *Registry
+	cfg            config.AdapterConfig
+	logprobs       config.AdapterLogprobs
+	deps           Deps
+	log            *slog.Logger
+	logging        config.LoggingConfig
+	runtimeLogging *RuntimeLogging
+	registry       *Registry
+	// egressRegistry tracks every in-flight outbound provider call
+	// (Anthropic Messages HTTP, Codex Responses websocket, retry
+	// attempts) so Shutdown can drain or force-close them under the
+	// reload deadline.
+	egressRegistry       *livetrack.Registry[EgressMeta]
 	sem                  chan struct{}
 	token                string
 	mux                  *http.ServeMux
@@ -170,6 +175,8 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		return nil, err
 	}
 	adapterLog := log.With("subcomponent", "adapter")
+	egressReg := newEgressRegistry()
+	wsReg := adaptercodex.NewWsSessionRegistry()
 	s := &Server{
 		cfg:            cfg,
 		logprobs:       cfg.Logprobs,
@@ -178,6 +185,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		logging:        logging,
 		runtimeLogging: runtimeLogging,
 		registry:       registry,
+		egressRegistry: egressReg,
 		sem:            make(chan struct{}, max),
 		token:          token,
 		mux:            nil,
@@ -197,7 +205,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
-	s.registerProviders(ctx, cfg, logging, runtimeLogging, deps, log, max)
+	s.registerProviders(ctx, cfg, logging, runtimeLogging, deps, log, max, wsReg)
 	s.mux = s.routes()
 	return s, nil
 }
@@ -213,6 +221,7 @@ func (s *Server) registerProviders(
 	deps Deps,
 	log *slog.Logger,
 	maxConcurrent int,
+	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
 ) {
 	if cfg.Codex.Enabled {
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
@@ -220,7 +229,7 @@ func (s *Server) registerProviders(
 			Auth:       codexAuthLookup{server: s},
 			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
-		}, codexProviderOptions(logging, runtimeLogging))
+		}, codexProviderOptionsWithRegistry(logging, runtimeLogging, wsReg))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderCodex)),
@@ -285,10 +294,14 @@ func (s *Server) registerAnthropicProvider(
 	)
 }
 
-// codexProviderOptions builds the codex provider's startup options from
-// the daemon's logging config snapshots. Extracted so [New] stays under
-// the funlen budget.
-func codexProviderOptions(logging config.LoggingConfig, runtimeLogging *RuntimeLogging) adaptercodex.ProviderOptions {
+// codexProviderOptionsWithRegistry builds the codex provider's startup
+// options from the daemon's logging config snapshots and the per-daemon
+// ws-session registry. Extracted so [New] stays under the funlen budget.
+func codexProviderOptionsWithRegistry(
+	logging config.LoggingConfig,
+	runtimeLogging *RuntimeLogging,
+	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
+) adaptercodex.ProviderOptions {
 	return adaptercodex.ProviderOptions{
 		AccountID: "",
 		BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
@@ -302,7 +315,8 @@ func codexProviderOptions(logging config.LoggingConfig, runtimeLogging *RuntimeL
 			MaxAgeDays: logging.Rotation.MaxAgeDays,
 			Compress:   logging.Rotation.Compress,
 		},
-		WsSessionIdleTTL: 0,
+		WsSessionIdleTTL:  0,
+		WsSessionRegistry: wsReg,
 	}
 }
 
