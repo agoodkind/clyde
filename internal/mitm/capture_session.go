@@ -210,6 +210,14 @@ func rawCaptureSessionConfig(captureDir string) config.MITMConfig {
 			CACertPath:  "",
 			Upstreams:   nil,
 		},
+		Listen: config.MITMListenConfig{
+			Host: "",
+			Port: 0,
+		},
+		CA: config.MITMCAConfig{
+			CertPath: "",
+			KeyPath:  "",
+		},
 	}
 }
 
