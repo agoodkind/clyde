@@ -254,52 +254,25 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	return out
 }
 
-func formatDetailTokens(tokens int) string {
-	if tokens <= 0 {
-		return "-"
-	}
-	return "~" + formatCompactTokens(tokens) + " tok"
-}
-
+// formatExactContextUsage renders the daemon-supplied context usage.
+// The TUI no longer recomputes the percentage. When usage.Percentage is
+// zero (the daemon has not supplied a figure), the percent suffix is
+// hidden so the row stays legible. The raw token totals still render
+// when available.
 func formatExactContextUsage(usage SessionContextUsage) string {
 	if usage.TotalTokens <= 0 {
 		return "-"
 	}
 	if usage.MaxTokens > 0 {
-		percent := usage.Percentage
-		if percent <= 0 {
-			percent = usage.TotalTokens * 100 / usage.MaxTokens
+		base := fmt.Sprintf("%s/%s tok",
+			formatTokensCompact(usage.TotalTokens),
+			formatTokensCompact(usage.MaxTokens))
+		if usage.Percentage > 0 {
+			return fmt.Sprintf("%s  %d%%", base, usage.Percentage)
 		}
-		return fmt.Sprintf("%s/%s tok  %d%%",
-			formatCompactTokens(usage.TotalTokens),
-			formatCompactTokens(usage.MaxTokens),
-			percent)
+		return base
 	}
-	return formatCompactTokens(usage.TotalTokens) + " tok"
-}
-
-func formatCompactTokens(tokens int) string {
-	if tokens < 0 {
-		return "0"
-	}
-	switch {
-	case tokens >= 1_000_000:
-		value := float64(tokens) / 1_000_000
-		if tokens%1_000_000 == 0 {
-			return fmt.Sprintf("%.0fM", value)
-		}
-		return fmt.Sprintf("%.1fM", value)
-	case tokens >= 100_000:
-		return fmt.Sprintf("%dk", tokens/1000)
-	case tokens >= 1_000:
-		value := float64(tokens) / 1_000
-		if tokens%1_000 == 0 {
-			return fmt.Sprintf("%.0fk", value)
-		}
-		return fmt.Sprintf("%.1fk", value)
-	default:
-		return formatWithCommas(tokens)
-	}
+	return formatTokensCompact(usage.TotalTokens) + " tok"
 }
 
 func formatDetailMessageCount(detail SessionDetail) string {
@@ -311,9 +284,9 @@ func formatDetailMessageCount(detail SessionDetail) string {
 		return "-"
 	}
 	if detail.CompactionCount > 0 {
-		return fmt.Sprintf("%s incl. compacted history", formatWithCommas(total))
+		return fmt.Sprintf("%s incl. compacted history", formatTokensExact(total))
 	}
-	return formatWithCommas(total)
+	return formatTokensExact(total)
 }
 
 func formatDetailLastActivity(sess *session.Session) (string, string) {
@@ -328,7 +301,7 @@ func formatDetailLastActivity(sess *session.Session) (string, string) {
 }
 
 func formatDetailCompactions(detail SessionDetail) string {
-	value := formatWithCommas(detail.CompactionCount)
+	value := formatTokensExact(detail.CompactionCount)
 	if detail.LastPreCompactTokens > 0 {
 		value += "  last pre " + formatDetailTokens(detail.LastPreCompactTokens)
 	}
