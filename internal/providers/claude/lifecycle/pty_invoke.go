@@ -24,6 +24,8 @@ import (
 
 	"github.com/creack/pty"
 	"golang.org/x/term"
+
+	"goodkind.io/clyde/internal/terminalcontrol"
 )
 
 // invokeInteractivePTY runs claude inside a pty. The terminal is put
@@ -113,7 +115,7 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	monitor := &monitorState{}
 	startPTYDaemonMonitor(ctx, wrapperID, sessionName, sessionID, monitorDone, monitor, monitorStopped)
 
-	runErr := cmd.Wait()
+	runErr := waitForPTYCommand(cmd, cleanupTerminal, cleanupListener, sessionName, sessionID)
 	close(monitorDone)
 	<-monitorStopped
 	finish()
@@ -137,6 +139,7 @@ func configurePTYTerminal(ptmx *os.File, interactive bool, sessionName, sessionI
 		_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 40, Cols: 120})
 		return func() {}
 	}
+	terminalRestorer := terminalcontrol.CaptureProcessRestorer(claudeRemoteLog.Logger())
 	winchCh := make(chan os.Signal, 1)
 	signal.Notify(winchCh, syscall.SIGWINCH)
 	go func() {
@@ -157,11 +160,74 @@ func configurePTYTerminal(ptmx *os.File, interactive bool, sessionName, sessionI
 	winchCh <- syscall.SIGWINCH
 
 	oldState, _ := term.MakeRaw(int(os.Stdin.Fd()))
+	var cleanupOnce sync.Once
 	return func() {
-		signal.Stop(winchCh)
-		close(winchCh)
-		if oldState != nil {
-			_ = term.Restore(int(os.Stdin.Fd()), oldState)
+		cleanupOnce.Do(func() {
+			signal.Stop(winchCh)
+			close(winchCh)
+			if terminalRestorer != nil {
+				terminalRestorer.Restore()
+				return
+			}
+			if oldState != nil {
+				_ = term.Restore(int(os.Stdin.Fd()), oldState)
+			}
+			terminalcontrol.WriteResetToTerminal()
+		})
+	}
+}
+
+func waitForPTYCommand(
+	cmd *exec.Cmd,
+	cleanupTerminal func(),
+	cleanupListener func(),
+	sessionName string,
+	sessionID string,
+) error {
+	waitCh := make(chan error, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				claudeRemoteLog.Logger().Error("wrapper.pty.wait_panic",
+					"component", "wrapper",
+					"session", sessionName,
+					"session_id", sessionID,
+					"err", fmt.Errorf("panic: %v", recovered),
+				)
+			}
+		}()
+		waitCh <- cmd.Wait()
+	}()
+
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(signalCh)
+
+	select {
+	case err := <-waitCh:
+		return err
+	case sig := <-signalCh:
+		cleanupTerminal()
+		cleanupListener()
+		if cmd.Process != nil {
+			if signalErr := cmd.Process.Signal(sig); signalErr != nil {
+				claudeRemoteLog.Logger().Warn("wrapper.pty.signal_child_failed",
+					"component", "wrapper",
+					"session", sessionName,
+					"session_id", sessionID,
+					"signal", sig.String(),
+					"err", signalErr,
+				)
+			}
+		}
+		select {
+		case err := <-waitCh:
+			return err
+		case <-time.After(2 * time.Second):
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			return fmt.Errorf("terminated by %s", sig)
 		}
 	}
 }
