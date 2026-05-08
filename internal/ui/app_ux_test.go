@@ -375,7 +375,7 @@ func TestUX_SnapshotRefreshKeepsHighlightedRowBySessionID(t *testing.T) {
 		t.Fatalf("highlighted session ID = %q, want %q", got.Metadata.ProviderSessionID(), highlighted.Metadata.ProviderSessionID())
 	}
 	if got.Name != "renamed-highlight" {
-		t.Fatalf("highlighted session name = %q, want renamed-highlight", got.Name)
+		t.Fatalf("highlighted stored name = %q, want renamed-highlight", got.Name)
 	}
 }
 
@@ -512,7 +512,7 @@ func TestUX_CloseCompactRestoresOptionsOverlay(t *testing.T) {
 	}
 }
 
-func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
+func TestUX_SidecarRemoteLaunchPinsTrackedSession(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 
@@ -548,7 +548,7 @@ func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
 		t.Fatalf("sidecar not created")
 	}
 	if a.sidecar.SessionName != "chat-remote" {
-		t.Fatalf("sidecar session name = %q", a.sidecar.SessionName)
+		t.Fatalf("sidecar session title = %q", a.sidecar.SessionName)
 	}
 	if a.sidecar.SessionID != "uuid-remote" {
 		t.Fatalf("sidecar session id = %q", a.sidecar.SessionID)
@@ -680,7 +680,7 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 		t.Fatalf("mode = %v want StatusExport", a.mode)
 	}
 	if !strings.HasSuffix(panel.name, "-"+sess.Name+".md") {
-		t.Fatalf("panel filename = %q, want dated session name", panel.name)
+		t.Fatalf("panel filename = %q, want dated stored name", panel.name)
 	}
 	if panel.status != "loading export stats..." {
 		t.Fatalf("panel status = %q want loading export stats...", panel.status)
@@ -1639,5 +1639,18 @@ func TestUX_FindSessionByDisplayTitleAndRenderDisplayTitle(t *testing.T) {
 	row := a.rowForLockedLastUsed(a.sessions[0])
 	if len(row) == 0 || row[0].Text != "Merry Swan" {
 		t.Fatalf("row title = %#v, want display title", row)
+	}
+
+	a.cb.StreamLiveSession = func(string) (<-chan LiveSessionEvent, func(), error) {
+		ch := make(chan LiveSessionEvent)
+		close(ch)
+		return ch, func() {}, nil
+	}
+	a.cb.SendLiveSession = func(string, string) error {
+		return nil
+	}
+	a.pinSidecar(a.sessions[0])
+	if a.sidecar == nil || a.sidecar.SessionName != "Merry Swan" {
+		t.Fatalf("sidecar title = %#v, want display title", a.sidecar)
 	}
 }

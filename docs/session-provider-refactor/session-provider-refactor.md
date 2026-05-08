@@ -105,8 +105,8 @@ The refactor should enforce these rules:
 
 ### Clyde Core Owns
 
-- Stable Clyde session name
-- Display title surfaced to UI
+- Stable Clyde session identity fields
+- Exact display title surfaced to UI
 - Workspace root and working directory
 - Created / last accessed timestamps
 - Parent session linkage at the Clyde layer

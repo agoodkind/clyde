@@ -108,7 +108,7 @@ func TestQA_AllWidgets(t *testing.T) {
 				{Label: "Drive in sidecar", Hint: "live stream", Disabled: true},
 				{Label: "Open live URL", Hint: "browser", Disabled: true},
 				{Label: "Copy live URL", Hint: "clipboard", Disabled: true},
-				{Label: "Rename", Hint: "edits the registry name"},
+				{Label: "Rename", Hint: "edits the visible name"},
 				{Label: "Compact", Hint: "c"},
 				{Label: "Fork", Hint: "f"},
 				{Label: "Delete", Hint: "d"},

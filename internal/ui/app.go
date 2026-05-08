@@ -462,7 +462,7 @@ type App struct {
 	daemonLastErr  string
 	daemonLastSeen time.Time
 
-	// detailCache stores the fully-extracted SessionDetail keyed by session
+	// detailCache stores the fully-extracted SessionDetail keyed by the stored
 	// name. Populated off the UI goroutine by loadDetailAsync so repeat
 	// selections render instantly. detailLoading tracks sessions whose
 	// load is in flight, guarding against duplicate goroutines.
@@ -476,8 +476,8 @@ type App struct {
 	detailRepollAfter map[string]time.Time
 	detailMu          sync.Mutex
 
-	// exportStatsCache stores daemon-derived export aggregates keyed by
-	// session name. Like detail loading, requests are coalesced so the
+	// exportStatsCache stores daemon-derived export aggregates keyed by the
+	// stored name. Like detail loading, requests are coalesced so the
 	// export panel can open immediately and hydrate asynchronously.
 	exportStatsCache   map[string]SessionExportStats
 	exportStatsLoading map[string]bool
@@ -501,7 +501,7 @@ type App struct {
 	heartbeatStartedAt   time.Time
 	lastHeartbeatAt      time.Time
 
-	// summaryRefreshing tracks session names whose summary refresh is
+	// summaryRefreshing tracks stored-name keys whose summary refresh is
 	// in flight, so repeated highlights do not spawn duplicate requests.
 	summaryRefreshing map[string]bool
 
@@ -792,7 +792,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	}
 	bodyEntries := a.sessionOptionsEntriesWithoutResume(sess, close)
 	statsSegments, statsLoading := a.buildSessionStatsSegments(sess)
-	modal := NewOptionsModal("Session exited: "+sess.Name, bodyEntries)
+	modal := NewOptionsModal("Session exited: "+sessionDisplayTitle(sess), bodyEntries)
 	modal.TopEntries = topEntries
 	// Re-run resetCursor now that TopEntries is populated. The
 	// constructor walked an empty TopEntries and may have parked the
@@ -5019,7 +5019,7 @@ func (a *App) openDeleteConfirm() {
 	sess := a.selected
 	m := &Modal{
 		Title: "Delete Session",
-		Body:  fmt.Sprintf("Delete session %q?", sess.Name),
+		Body:  fmt.Sprintf("Delete session %q?", sessionDisplayTitle(sess)),
 		Details: []string{
 			"Session folder and metadata will be removed.",
 			"Claude transcript will be deleted.",
@@ -5059,7 +5059,7 @@ func (a *App) openSearchForm() {
 	if sess == nil {
 		return
 	}
-	input := NewTextInput("Search " + sess.Name + ": ")
+	input := NewTextInput("Search " + sessionDisplayTitle(sess) + ": ")
 	input.OnCancel = a.closeOverlay
 	input.OnSubmit = func(q string) {
 		a.closeOverlay()
@@ -5292,7 +5292,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 	if b, ok := a.liveURLRecordFor(sess); ok {
 		bridgeURL = b.URL
 	}
-	panel := NewSidecarPanel(sess.Name, sess.Metadata.ProviderSessionID(), bridgeURL)
+	panel := NewSidecarPanel(sessionDisplayTitle(sess), sess.Metadata.ProviderSessionID(), bridgeURL)
 	panel.OnSend = func(text string) error {
 		send := a.sidecarSendFunc()
 		if send == nil {
@@ -5828,11 +5828,12 @@ func (a *App) openHelpModal() {
 	a.overlay = modal
 }
 
-// findSessionByName returns the in-memory session matching name or visible
-// display title, or nil. Used after a refresh to pick up updated metadata.
+// findSessionByName returns the in-memory session matching the stored name or
+// visible display title, or nil. Used after a refresh to pick up updated
+// metadata.
 // findVisibleRowByName returns the visible row index for the session
-// with the given name or visible display title, or -1 if it is not currently in the visible
-// list. The post session prompt uses this to re locate the row after
+// with the given stored name or visible display title, or -1 if it is not
+// currently in the visible list. The post session prompt uses this to relocate the row after
 // a refresh cycle so repeated Resume clicks keep firing.
 func (a *App) findVisibleRowByName(name string) int {
 	for vi, idx := range a.tableRowIdx {
@@ -5975,7 +5976,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 		return
 	}
 	close := func() { a.closeOverlay() }
-	modal := NewOptionsModal(sess.Name, a.sessionOptionsEntries(sess, close))
+	modal := NewOptionsModal(sessionDisplayTitle(sess), a.sessionOptionsEntries(sess, close))
 	modal.OnCancel = close
 	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
 	modal.StatsSessionName = sess.Name
@@ -6102,7 +6103,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func()) []Optio
 		a.copyLiveURLEntry(sess, close),
 		{
 			Label: "Rename",
-			Hint:  "edits the registry name",
+			Hint:  "edits the visible name",
 			Action: func() {
 				close()
 				a.openRenamePrompt(sess)
@@ -6182,7 +6183,7 @@ func (a *App) openSessionContextWindowOptions(sess *session.Session, closeParent
 			Action: apply("1m"),
 		},
 	}
-	modal := NewOptionsModal("Claude context for "+sess.Name, entries)
+	modal := NewOptionsModal("Claude context for "+sessionDisplayTitle(sess), entries)
 	modal.OnCancel = func() {
 		a.closeOverlay()
 		a.mode = StatusFilter
@@ -6240,7 +6241,7 @@ func openExternalURL(url string) error {
 	return cmd.Start()
 }
 
-// openRenamePrompt asks for the new session name via an inline input
+// openRenamePrompt asks for the new visible title via an inline input
 // and routes the rename through the daemon when the callback is set.
 // The wired callback hides whether the actual rename happened locally
 // or via gRPC; either way the dashboard refreshes from the store on
@@ -6249,7 +6250,7 @@ func (a *App) openRenamePrompt(sess *session.Session) {
 	if sess == nil {
 		return
 	}
-	input := NewTextInput("New name: ")
+	input := NewTextInput("New visible name: ")
 	input.Text = sess.Name
 	input.CursorX = runeCount(sess.Name)
 	input.OnSubmit = func(s string) {

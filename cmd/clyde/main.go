@@ -13,7 +13,7 @@
 //	clyde daemon                -> long-lived daemon (adapter, oauth, mcp, prune)
 //	clyde hook sessionstart     -> Claude Code SessionStart hook
 //	clyde mcp                   -> MCP stdio server (in-chat search/list/context)
-//	clyde resume <name|uuid>    -> resolve clyde name then claude --resume <uuid>
+//	clyde resume <session|uuid> -> resolve a Clyde session reference then resume it
 //	clyde -r / --resume         -> TUI (same as no args; bare flag opens dashboard)
 //	clyde -r / --resume <x>     -> rewritten to `clyde resume <x>` by ClassifyArgs
 //	anything else               -> unknown -> ForwardToClaudeThenDashboard (see cmd/root.go)
@@ -110,7 +110,7 @@ func run() int {
 	root := &cobra.Command{
 		Use:     "clyde",
 		Short:   "Named sessions and append-only compaction for Claude Code",
-		Long:    `Clyde wraps Claude Code with human-friendly session names and append-only compaction. Run with no args for the TUI dashboard.`,
+		Long:    `Clyde wraps Claude Code with human-visible session titles and append-only compaction. Run with no args for the TUI dashboard.`,
 		Version: "DEVELOPMENT",
 		Run: func(c *cobra.Command, args []string) {
 			dashboardExitCode = cmd.RunDashboard(c, args)

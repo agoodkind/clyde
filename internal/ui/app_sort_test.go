@@ -26,7 +26,7 @@ func TestSortSessionsStableTieBreakForLastUsed(t *testing.T) {
 	}
 }
 
-func TestDedupeSessionListPrefersHumanNameForSharedSessionID(t *testing.T) {
+func TestDedupeSessionListPrefersNonAutoAdoptedNameForSharedSessionID(t *testing.T) {
 	now := time.Date(2026, 4, 24, 19, 0, 0, 0, time.UTC)
 	in := []*session.Session{
 		{Name: "clyde-dev-1a4837fd", Metadata: session.Metadata{
