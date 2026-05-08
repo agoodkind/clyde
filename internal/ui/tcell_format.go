@@ -1,18 +1,18 @@
-// Package ui token formatters.
+package ui
+
+// Token formatters live in this file. formatTokensExact renders an
+// integer token count with thousands separators, for example 1234567
+// becomes "1,234,567". Use this where the caller wants the precise
+// value visible. Current callers include the compact panel context
+// summary, target and max labels, iteration logs, counts of messages,
+// tools and prompts in the export panel summary, and the transcript
+// total in the details pane.
 //
-// formatTokensExact renders an integer token count with thousands
-// separators, for example 1234567 -> "1,234,567". Use this where the
-// caller wants the precise value visible. Current callers include the
-// compact panel context summary, target/max labels, iteration logs,
-// counts of messages, tools and prompts in the export panel summary,
-// and the transcript total in the details pane.
-//
-// formatTokensCompact renders an integer token count in short
-// "k/M" notation, for example 1234567 -> "1.2M". Use this where the
+// formatTokensCompact renders an integer token count in short "k/M"
+// notation, for example 1234567 becomes "1.2M". Use this where the
 // caller wants a compact glance value. Current callers include the
 // details pane context usage row, the per-message detail estimate,
-// last-pre-compact size, and the export panel estimate row.
-package ui
+// the last-pre-compact size, and the export panel estimate row.
 
 import (
 	"fmt"
