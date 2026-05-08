@@ -77,12 +77,17 @@ func EnsureStarted(cfg config.MITMConfig, log *slog.Logger) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
+	ca, err := loadOrCreateCertAuthority(cfg.CA.CertPath, cfg.CA.KeyPath, time.Now)
+	if err != nil {
+		_ = ln.Close()
+		return nil, fmt.Errorf("load cursor mitm ca: %w", err)
+	}
 	p := &Proxy{
 		log:                   log.With("component", "mitm"),
 		client:                http.DefaultClient,
 		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 		certMu:                sync.Mutex{},
-		ca:                    nil,
+		ca:                    ca,
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
 		mu:                    sync.RWMutex{},
