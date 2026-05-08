@@ -19,8 +19,7 @@ func TestEventRendererSuppressesArgumentOnlyToolDeltaLogs(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	r := NewEventRenderer("req", "alias", "codex", log)
 
-	chunks := r.HandleEvent(Event{
-		Kind: EventToolCallDelta,
+	chunks := r.HandleEvent(ToolCallDelta{
 		ToolCalls: []adapteropenai.ToolCall{{
 			Index: 0,
 			Type:  "function",
@@ -60,8 +59,7 @@ func TestEventRendererLogsToolCallIdentitySummary(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	r := NewEventRenderer("req", "alias", "codex", log)
 
-	_ = r.HandleEvent(Event{
-		Kind: EventToolCallDelta,
+	_ = r.HandleEvent(ToolCallDelta{
 		ToolCalls: []adapteropenai.ToolCall{{
 			Index: 0,
 			ID:    "call_1",
@@ -94,8 +92,7 @@ func TestEventRendererAssistantSummaryIncludesToolDiagnostics(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	r := NewEventRenderer("req", "alias", "codex", log)
 
-	_ = r.HandleEvent(Event{
-		Kind: EventToolCallDelta,
+	_ = r.HandleEvent(ToolCallDelta{
 		ToolCalls: []adapteropenai.ToolCall{{
 			Index: 0,
 			ID:    "call_1",
@@ -132,7 +129,7 @@ func TestEventRendererAssistantSummaryIncludesToolDiagnostics(t *testing.T) {
 
 func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	r := NewEventRenderer("req-thinking", "alias", "codex", nil)
-	chunks := r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "checking constraints"})
+	chunks := r.HandleEvent(ReasoningDelta{Text: "checking constraints", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
@@ -151,7 +148,7 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 
 func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T) {
 	r := NewEventRenderer("req-thinking-signal", "alias", "codex", nil)
-	chunks := r.HandleEvent(Event{Kind: EventReasoningSignaled})
+	chunks := r.HandleEvent(ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
@@ -160,7 +157,7 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 	if got != wantOpen {
 		t.Fatalf("thinking open=%q want %q", got, wantOpen)
 	}
-	if chunks := r.HandleEvent(Event{Kind: EventReasoningFinished}); len(chunks) != 1 {
+	if chunks := r.HandleEvent(ReasoningFinished{ReasoningKind: "", EncryptedContent: "", Signature: "", ItemID: "", ItemType: ""}); len(chunks) != 1 {
 		t.Fatalf("finish chunks=%d want close marker", len(chunks))
 	} else if close := chunks[0].Choices[0].Delta.Content; close != SyntheticContentClose(SyntheticReasoning) {
 		t.Fatalf("missing close marker: %q want %q", close, SyntheticContentClose(SyntheticReasoning))
@@ -169,10 +166,9 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 
 func TestEventRendererClosesSyntheticThinkingBeforeToolCalls(t *testing.T) {
 	r := NewEventRenderer("req-thinking-tool", "alias", "codex", nil)
-	_ = r.HandleEvent(Event{Kind: EventReasoningSignaled})
+	_ = r.HandleEvent(ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""})
 
-	chunks := r.HandleEvent(Event{
-		Kind: EventToolCallDelta,
+	chunks := r.HandleEvent(ToolCallDelta{
 		ToolCalls: []adapteropenai.ToolCall{{
 			Index: 0,
 			ID:    "call_1",
@@ -196,7 +192,7 @@ func TestEventRendererClosesSyntheticThinkingBeforeToolCalls(t *testing.T) {
 
 func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 	r := NewEventRenderer("req-thinking-placeholder", "alias", "codex", nil)
-	chunks := r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "Thinking...", ReasoningKind: "summary"})
+	chunks := r.HandleEvent(ReasoningDelta{Text: "Thinking...", ReasoningKind: "summary", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
@@ -206,7 +202,7 @@ func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 		t.Fatalf("thinking open=%q want %q", got, wantOpen)
 	}
 
-	chunks = r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "Evaluating task strategies", ReasoningKind: "summary"})
+	chunks = r.HandleEvent(ReasoningDelta{Text: "Evaluating task strategies", ReasoningKind: "summary", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
@@ -221,8 +217,8 @@ func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 
 func TestEventRendererDoesNotPrefixFirstBoldSummaryAfterReasoningSignal(t *testing.T) {
 	r := NewEventRenderer("req-thinking-heading", "alias", "codex", nil)
-	_ = r.HandleEvent(Event{Kind: EventReasoningSignaled})
-	chunks := r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "**Checking git changes**", ReasoningKind: "summary"})
+	_ = r.HandleEvent(ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""})
+	chunks := r.HandleEvent(ReasoningDelta{Text: "**Checking git changes**", ReasoningKind: "summary", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
 	if len(chunks) != 1 {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
@@ -242,9 +238,9 @@ func TestEventRendererLogsAssistantTextRepeatedHalfSummary(t *testing.T) {
 
 	first := "first answer with enough tokens for duplicate detection"
 	second := "\n\nfirst answer with enough tokens for duplicate detection"
-	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: first})
+	_ = r.HandleEvent(TextDelta{Text: first})
 	r.RecordAssistantTextDeltaEmitted(first)
-	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: second})
+	_ = r.HandleEvent(TextDelta{Text: second})
 	r.RecordAssistantTextDeltaEmitted(second)
 	r.LogAssistantTextSummary(context.Background(), "stop", &adapteropenai.Usage{PromptTokens: 10, CompletionTokens: 8, TotalTokens: 18})
 
@@ -279,11 +275,11 @@ func TestEventRendererLogsAssistantTextRepeatedSuffixSummary(t *testing.T) {
 	first := "intro text before the loop. "
 	second := "this suffix has enough words and enough characters "
 	third := "this suffix has enough words and enough characters"
-	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: first})
+	_ = r.HandleEvent(TextDelta{Text: first})
 	r.RecordAssistantTextDeltaEmitted(first)
-	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: second})
+	_ = r.HandleEvent(TextDelta{Text: second})
 	r.RecordAssistantTextDeltaEmitted(second)
-	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: third})
+	_ = r.HandleEvent(TextDelta{Text: third})
 	r.RecordAssistantTextDeltaEmitted(third)
 	r.LogAssistantTextSummary(context.Background(), "stop", nil)
 
@@ -326,7 +322,7 @@ func TestEventRendererLogsAssistantTextSummaryCorrelation(t *testing.T) {
 	ctx := correlation.WithContext(context.Background(), corr)
 	r := NewEventRendererWithContext(ctx, "req-corr", "alias", "codex", log)
 
-	_ = r.HandleEvent(Event{Kind: EventAssistantTextDelta, Text: "correlated text"})
+	_ = r.HandleEvent(TextDelta{Text: "correlated text"})
 	r.RecordAssistantTextDeltaEmitted("correlated text")
 	r.SetUpstreamResponseID(ctx, "resp-upstream")
 	r.LogAssistantTextSummary(ctx, "stop", nil)
@@ -399,8 +395,8 @@ func assistantTextSummaryLog(t *testing.T, logs string) assistantTextSummaryLogE
 }
 
 // TestEventRendererCapturesAnthropicSignatureOnReasoningClose asserts the
-// Anthropic-side capture path: a stream of EventReasoningDelta events
-// carrying a Signature followed by EventReasoningFinished must produce a
+// Anthropic-side capture path: a stream of ReasoningDelta events
+// carrying a Signature followed by ReasoningFinished must produce a
 // close chunk whose `data-signature` attribute is the most recent
 // signature value. The synthetic-thinking close-marker is the cross-turn
 // carrier the inbound mapper relies on.
@@ -409,11 +405,11 @@ func TestEventRendererCapturesAnthropicSignatureOnReasoningClose(t *testing.T) {
 	// First reasoning delta opens the synthetic envelope and ships the
 	// thinking body. Anthropic pairs each thinking_delta with a separate
 	// signature_delta in the same content_block so the signature flows
-	// in via subsequent EventReasoningDelta events with empty Text.
-	_ = r.HandleEvent(Event{Kind: EventReasoningDelta, Text: "interim deliberation", ReasoningKind: "text"})
-	_ = r.HandleEvent(Event{Kind: EventReasoningDelta, ReasoningKind: "text", Signature: "first-sig"})
-	_ = r.HandleEvent(Event{Kind: EventReasoningDelta, ReasoningKind: "text", Signature: "final-sig"})
-	chunks := r.HandleEvent(Event{Kind: EventReasoningFinished})
+	// in via subsequent ReasoningDelta events with empty Text.
+	_ = r.HandleEvent(ReasoningDelta{Text: "interim deliberation", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	_ = r.HandleEvent(ReasoningDelta{Text: "", ReasoningKind: "text", SummaryIndex: nil, Signature: "first-sig", RedactedData: "", ItemID: "", ItemType: ""})
+	_ = r.HandleEvent(ReasoningDelta{Text: "", ReasoningKind: "text", SummaryIndex: nil, Signature: "final-sig", RedactedData: "", ItemID: "", ItemType: ""})
+	chunks := r.HandleEvent(ReasoningFinished{ReasoningKind: "", EncryptedContent: "", Signature: "", ItemID: "", ItemType: ""})
 	if len(chunks) != 1 {
 		t.Fatalf("close chunks=%d want 1: %+v", len(chunks), chunks)
 	}

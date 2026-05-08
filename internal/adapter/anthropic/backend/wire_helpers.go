@@ -20,44 +20,11 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 	for _, m := range tr.Messages {
 		blocks := make([]anthropic.ContentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
-			var src *anthropic.ImageSource
-			if b.Source != nil {
-				src = &anthropic.ImageSource{
-					Type:      b.Source.Type,
-					MediaType: b.Source.MediaType,
-					Data:      b.Source.Data,
-					URL:       b.Source.URL,
-				}
-			}
-			block := anthropic.ContentBlock{
-				Type:      b.Type,
-				Text:      b.Text,
-				ID:        b.ID,
-				Name:      b.Name,
-				Input:     b.Input,
-				ToolUseID: b.ToolUseID,
-				Content:   b.ResultContent,
-				Source:    src,
-				Thinking:  b.Thinking,
-				Signature: b.Signature,
-				Data:      b.Data,
-			}
-			// Defense-in-depth: drop a thinking block only when both
-			// the body and the signature are empty. Anthropic's
-			// validator rejects body-only and signature-only thinking
-			// blocks separately; an empty-everything block is the
-			// shape that originally tripped the wire fix and stays
-			// barred. A signed empty body is a legitimate replay
-			// shape (provider may emit a thinking block whose visible
-			// body was empty at generation time but still carries a
-			// signature) and must reach the wire so signature
-			// validation can succeed on that turn.
-			if block.Type == "thinking" &&
-				strings.TrimSpace(block.Thinking) == "" &&
-				strings.TrimSpace(block.Signature) == "" {
+			block := anthContentBlockToWire(b)
+			if block == nil {
 				continue
 			}
-			blocks = append(blocks, block)
+			blocks = append(blocks, *block)
 		}
 		msgs = append(msgs, anthropic.Message{Role: m.Role, Content: blocks})
 	}
@@ -87,6 +54,151 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 		Tools:      tools,
 		ToolChoice: tc,
 	}, stats
+}
+
+// anthContentBlockToWire converts one typed AnthContentBlock variant to the
+// anthropic.ContentBlock wire shape. Returns nil to signal that this block
+// should be omitted (e.g. an empty unsigned thinking block).
+func anthContentBlockToWire(b AnthContentBlock) *anthropic.ContentBlock {
+	switch v := b.(type) {
+	case TextBlock:
+		return textBlockToWire(v)
+	case ImageBlock:
+		return imageBlockToWire(v)
+	case ToolUseBlock:
+		return toolUseBlockToWire(v)
+	case ToolResultBlock:
+		return toolResultBlockToWire(v)
+	case ThinkingBlock:
+		return thinkingBlockToWire(v)
+	case RedactedThinkingBlock:
+		return redactedThinkingBlockToWire(v)
+	default:
+		return nil
+	}
+}
+
+func textBlockToWire(v TextBlock) *anthropic.ContentBlock {
+	return &anthropic.ContentBlock{
+		Type:           "text",
+		Text:           v.Text,
+		ID:             "",
+		Name:           "",
+		Input:          nil,
+		ToolUseID:      "",
+		Content:        "",
+		CacheReference: "",
+		Source:         nil,
+		CacheControl:   nil,
+		Thinking:       "",
+		Signature:      "",
+		Data:           "",
+	}
+}
+
+func imageBlockToWire(v ImageBlock) *anthropic.ContentBlock {
+	var src *anthropic.ImageSource
+	if v.Source != nil {
+		src = &anthropic.ImageSource{
+			Type:      v.Source.Type,
+			MediaType: v.Source.MediaType,
+			Data:      v.Source.Data,
+			URL:       v.Source.URL,
+		}
+	}
+	return &anthropic.ContentBlock{
+		Type:           "image",
+		Text:           "",
+		ID:             "",
+		Name:           "",
+		Input:          nil,
+		ToolUseID:      "",
+		Content:        "",
+		CacheReference: "",
+		Source:         src,
+		CacheControl:   nil,
+		Thinking:       "",
+		Signature:      "",
+		Data:           "",
+	}
+}
+
+func toolUseBlockToWire(v ToolUseBlock) *anthropic.ContentBlock {
+	return &anthropic.ContentBlock{
+		Type:           "tool_use",
+		Text:           "",
+		ID:             v.ID,
+		Name:           v.Name,
+		Input:          v.Input,
+		ToolUseID:      "",
+		Content:        "",
+		CacheReference: "",
+		Source:         nil,
+		CacheControl:   nil,
+		Thinking:       "",
+		Signature:      "",
+		Data:           "",
+	}
+}
+
+func toolResultBlockToWire(v ToolResultBlock) *anthropic.ContentBlock {
+	return &anthropic.ContentBlock{
+		Type:           "tool_result",
+		Text:           "",
+		ID:             "",
+		Name:           "",
+		Input:          nil,
+		ToolUseID:      v.ToolUseID,
+		Content:        v.ResultContent,
+		CacheReference: "",
+		Source:         nil,
+		CacheControl:   nil,
+		Thinking:       "",
+		Signature:      "",
+		Data:           "",
+	}
+}
+
+func thinkingBlockToWire(v ThinkingBlock) *anthropic.ContentBlock {
+	// Defense-in-depth: drop a thinking block only when both body and
+	// signature are empty. A signed empty body is a legitimate replay
+	// shape and must reach the wire so signature validation succeeds.
+	if strings.TrimSpace(v.Thinking) == "" && strings.TrimSpace(v.Signature) == "" {
+		return nil
+	}
+	return &anthropic.ContentBlock{
+		Type:           "thinking",
+		Text:           "",
+		ID:             "",
+		Name:           "",
+		Input:          nil,
+		ToolUseID:      "",
+		Content:        "",
+		CacheReference: "",
+		Source:         nil,
+		CacheControl:   nil,
+		Thinking:       v.Thinking,
+		Signature:      v.Signature,
+		Data:           "",
+	}
+}
+
+func redactedThinkingBlockToWire(v RedactedThinkingBlock) *anthropic.ContentBlock {
+	return &anthropic.ContentBlock{
+		Type:           "redacted_thinking",
+		Text:           "",
+		ID:             "",
+		Name:           "",
+		Input:          nil,
+		ToolUseID:      "",
+		Content:        "",
+		CacheReference: "",
+		Source:         nil,
+		CacheControl:   nil,
+		Thinking:       "",
+		Signature:      "",
+		Data:           v.Data,
+	}
 }
 
 func BuildSystemBlocks(billing, prefix, callerSystem, ttl, scope string, cachingEnabled bool) []anthropic.SystemBlock {
@@ -178,23 +290,23 @@ func CacheableMessageBoundaryBlock(role, blockType string) bool {
 }
 
 func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, payload []byte, ok bool) {
-	switch ev.Kind {
-	case "text":
+	switch e := ev.(type) {
+	case anthropic.StreamTextDelta:
 		p := struct {
 			Index int `json:"index"`
 			Delta struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"delta"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.Delta.Type = "text_delta"
-		p.Delta.Text = ev.Text
+		p.Delta.Text = e.Text
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_delta", b, true
-	case "tool_use_start":
+	case anthropic.StreamToolUseStart:
 		p := struct {
 			Index        int `json:"index"`
 			ContentBlock struct {
@@ -202,69 +314,68 @@ func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, pay
 				ID   string `json:"id"`
 				Name string `json:"name"`
 			} `json:"content_block"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.ContentBlock.Type = "tool_use"
-		p.ContentBlock.ID = ev.ToolUseID
-		p.ContentBlock.Name = ev.ToolUseName
+		p.ContentBlock.ID = e.ToolUseID
+		p.ContentBlock.Name = e.ToolUseName
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_start", b, true
-	case "tool_use_arg_delta":
+	case anthropic.StreamToolUseArgDelta:
 		p := struct {
 			Index int `json:"index"`
 			Delta struct {
 				Type        string `json:"type"`
 				PartialJSON string `json:"partial_json"`
 			} `json:"delta"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.Delta.Type = "input_json_delta"
-		p.Delta.PartialJSON = ev.PartialJSON
+		p.Delta.PartialJSON = e.PartialJSON
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_delta", b, true
-	case "tool_use_stop":
+	case anthropic.StreamToolUseStop:
 		p := struct {
 			Index int `json:"index"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_stop", b, true
-	case "thinking":
-		if ev.Text != "" {
-			p := struct {
-				Index int `json:"index"`
-				Delta struct {
-					Type     string `json:"type"`
-					Thinking string `json:"thinking"`
-				} `json:"delta"`
-			}{Index: ev.BlockIndex}
-			p.Delta.Type = "thinking_delta"
-			p.Delta.Thinking = ev.Text
-			b, err := json.Marshal(p)
-			if err != nil {
-				return "", nil, false
-			}
-			return "content_block_delta", b, true
-		}
+	case anthropic.StreamThinkingStart:
 		p := struct {
 			Index        int `json:"index"`
 			ContentBlock struct {
 				Type string `json:"type"`
 			} `json:"content_block"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.ContentBlock.Type = "thinking"
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false
 		}
 		return "content_block_start", b, true
-	case "thinking_signature":
+	case anthropic.StreamThinkingDelta:
+		p := struct {
+			Index int `json:"index"`
+			Delta struct {
+				Type     string `json:"type"`
+				Thinking string `json:"thinking"`
+			} `json:"delta"`
+		}{Index: e.BlockIndex}
+		p.Delta.Type = "thinking_delta"
+		p.Delta.Thinking = e.Text
+		b, err := json.Marshal(p)
+		if err != nil {
+			return "", nil, false
+		}
+		return "content_block_delta", b, true
+	case anthropic.StreamThinkingSignature:
 		// Round-trip the per-thinking-block signature back as the
 		// upstream-shaped `signature_delta` payload so consumers of
 		// the re-emitted SSE see the same wire shape Anthropic emits
@@ -275,9 +386,9 @@ func StreamEventToTranslatorSSE(ev anthropic.StreamEvent) (eventName string, pay
 				Type      string `json:"type"`
 				Signature string `json:"signature"`
 			} `json:"delta"`
-		}{Index: ev.BlockIndex}
+		}{Index: e.BlockIndex}
 		p.Delta.Type = "signature_delta"
-		p.Delta.Signature = ev.Text
+		p.Delta.Signature = e.Signature
 		b, err := json.Marshal(p)
 		if err != nil {
 			return "", nil, false

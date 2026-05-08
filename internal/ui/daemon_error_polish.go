@@ -18,6 +18,11 @@ func polishDaemonError(err error) string {
 	if !ok {
 		return err.Error()
 	}
+	// The exhaustive linter requires every codes.Code constant to be
+	// listed explicitly. The four cases above carry the polished
+	// user-facing strings; every remaining code falls through to
+	// st.Message() unchanged. The default arm preserves that behavior
+	// for any future codes.Code value that is added upstream.
 	switch st.Code() {
 	case codes.FailedPrecondition:
 		message := st.Message()

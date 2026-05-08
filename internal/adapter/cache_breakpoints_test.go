@@ -129,9 +129,9 @@ func TestToAnthropicAPIRequestSerializesCacheControl(t *testing.T) {
 	tr := anthropicbackend.AnthRequest{
 		System: "sys",
 		Messages: []anthropicbackend.AnthMessage{
-			{Role: "user", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "a"}}},
-			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "b"}}},
-			{Role: "user", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "c"}}},
+			{Role: "user", Content: []anthropicbackend.AnthContentBlock{anthropicbackend.TextBlock{Text: "a"}}},
+			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{anthropicbackend.TextBlock{Text: "b"}}},
+			{Role: "user", Content: []anthropicbackend.AnthContentBlock{anthropicbackend.TextBlock{Text: "c"}}},
 		},
 		Tools: []anthropicbackend.AnthTool{
 			{Name: "t1", InputSchema: json.RawMessage(`{}`)},
@@ -158,10 +158,10 @@ func TestToAnthropicAPIRequestOmitsCacheReferenceOnPriorToolResultByDefault(t *t
 		System: "sys",
 		Messages: []anthropicbackend.AnthMessage{
 			{Role: "user", Content: []anthropicbackend.AnthContentBlock{
-				{Type: "tool_result", ToolUseID: "toolu_1", ResultContent: "result"},
-				{Type: "text", Text: "follow-up"},
+				anthropicbackend.ToolResultBlock{ToolUseID: "toolu_1", ResultContent: "result"},
+				anthropicbackend.TextBlock{Text: "follow-up"},
 			}},
-			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "answer"}}},
+			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{anthropicbackend.TextBlock{Text: "answer"}}},
 		},
 		MaxTokens: 64,
 	}
@@ -181,10 +181,10 @@ func TestToAnthropicAPIRequestCanSerializeCacheReferenceOnPriorToolResult(t *tes
 		System: "sys",
 		Messages: []anthropicbackend.AnthMessage{
 			{Role: "user", Content: []anthropicbackend.AnthContentBlock{
-				{Type: "tool_result", ToolUseID: "toolu_1", ResultContent: "result"},
-				{Type: "text", Text: "follow-up"},
+				anthropicbackend.ToolResultBlock{ToolUseID: "toolu_1", ResultContent: "result"},
+				anthropicbackend.TextBlock{Text: "follow-up"},
 			}},
-			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{{Type: "text", Text: "answer"}}},
+			{Role: "assistant", Content: []anthropicbackend.AnthContentBlock{anthropicbackend.TextBlock{Text: "answer"}}},
 		},
 		MaxTokens: 64,
 	}

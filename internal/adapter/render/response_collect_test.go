@@ -8,13 +8,12 @@ import (
 
 func TestCollectMessageAssemblesAssistantFields(t *testing.T) {
 	events := []Event{
-		{Kind: EventReasoningDelta, Text: "Summary", ReasoningKind: "summary"},
-		{Kind: EventReasoningDelta, Text: "details", ReasoningKind: "text"},
-		{Kind: EventAssistantTextDelta, Text: "final "},
-		{Kind: EventAssistantTextDelta, Text: "answer"},
-		{Kind: EventAssistantRefusalDelta, Text: "declined"},
-		{
-			Kind: EventToolCallDelta,
+		ReasoningDelta{Text: "Summary", ReasoningKind: "summary", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""},
+		ReasoningDelta{Text: "details", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""},
+		TextDelta{Text: "final "},
+		TextDelta{Text: "answer"},
+		RefusalDelta{Text: "declined"},
+		ToolCallDelta{
 			ToolCalls: []adapteropenai.ToolCall{{
 				Index: 0,
 				ID:    "call_1",
@@ -24,8 +23,7 @@ func TestCollectMessageAssemblesAssistantFields(t *testing.T) {
 				},
 			}},
 		},
-		{
-			Kind: EventToolCallDelta,
+		ToolCallDelta{
 			ToolCalls: []adapteropenai.ToolCall{{
 				Index: 0,
 				Function: adapteropenai.ToolCallFunction{

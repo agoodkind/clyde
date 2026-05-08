@@ -23,14 +23,9 @@ func TestDispatchSSESignatureDeltaEmitsThinkingSignature(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("events=%d want 1: %#v", len(got), got)
 	}
-	want := StreamEvent{
-		Kind:        "thinking_signature",
-		Text:        "opaque-sig-bytes",
-		BlockIndex:  7,
-		ToolUseID:   "",
-		ToolUseName: "",
-		PartialJSON: "",
-		StopReason:  "",
+	want := StreamThinkingSignature{
+		BlockIndex: 7,
+		Signature:  "opaque-sig-bytes",
 	}
 	if got[0] != want {
 		t.Fatalf("event=%#v want %#v", got[0], want)

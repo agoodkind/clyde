@@ -226,8 +226,8 @@ func (p *providerStreamWriter) WriteEvent(ev adapterrender.Event) error {
 			return err
 		}
 	}
-	if ev.Kind == adapterrender.EventAssistantTextDelta && len(chunks) > 0 {
-		p.renderer.RecordAssistantTextDeltaEmitted(ev.Text)
+	if td, ok := ev.(adapterrender.TextDelta); ok && len(chunks) > 0 {
+		p.renderer.RecordAssistantTextDeltaEmitted(td.Text)
 	}
 	return nil
 }

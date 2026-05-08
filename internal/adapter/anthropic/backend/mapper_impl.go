@@ -138,7 +138,7 @@ func translateMessage(
 		}
 		return "", &AnthMessage{
 			Role:    "user",
-			Content: []AnthContentBlock{newToolResultBlock(msg.ToolCallID, result)},
+			Content: []AnthContentBlock{ToolResultBlock{ToolUseID: msg.ToolCallID, ResultContent: result}},
 		}, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported message role %q", msg.Role)
@@ -248,7 +248,9 @@ func dropTrailingAssistantPrefill(in []AnthMessage) []AnthMessage {
 
 	textBytes := 0
 	for _, block := range last.Content {
-		textBytes += len(block.Text)
+		if tb, ok := block.(TextBlock); ok {
+			textBytes += len(tb.Text)
+		}
 	}
 	anthropicBackendLog.Logger().Info("adapter.anthropic.trailing_assistant_prefill.dropped",
 		"subcomponent", "anthropic_mapper",
@@ -260,7 +262,7 @@ func dropTrailingAssistantPrefill(in []AnthMessage) []AnthMessage {
 
 func assistantHasToolUse(msg AnthMessage) bool {
 	for _, block := range msg.Content {
-		if block.Type == "tool_use" {
+		if _, ok := block.(ToolUseBlock); ok {
 			return true
 		}
 	}
@@ -277,7 +279,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			if p.Text == "" {
 				continue
 			}
-			blocks = append(blocks, newTextBlock(p.Text))
+			blocks = append(blocks, TextBlock{Text: p.Text})
 		case "image_url":
 			if p.ImageURL == nil {
 				continue
@@ -292,7 +294,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				)
 				return nil, err
 			}
-			blocks = append(blocks, newImageBlock(src))
+			blocks = append(blocks, ImageBlock{Source: src})
 		case "input_audio":
 			log.Warn("adapter.anthropic.user_part.audio_rejected",
 				"subcomponent", "anthropic_mapper",
@@ -304,13 +306,13 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 			if p.Refusal == "" {
 				continue
 			}
-			blocks = append(blocks, newTextBlock(p.Refusal))
+			blocks = append(blocks, TextBlock{Text: p.Refusal})
 		case "tool_result":
 			result := flattenToolResultContent(p.Content)
 			if result == "" {
 				result = " "
 			}
-			blocks = append(blocks, newToolResultBlock(p.ToolUseID, result))
+			blocks = append(blocks, ToolResultBlock{ToolUseID: p.ToolUseID, ResultContent: result})
 		default:
 			log.Warn("adapter.anthropic.user_part.unknown_type",
 				"subcomponent", "anthropic",
@@ -318,7 +320,7 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				"part_idx", partIdx,
 				"part_type", p.Type,
 			)
-			blocks = append(blocks, newTextBlock("["+p.Type+"]"))
+			blocks = append(blocks, TextBlock{Text: "[" + p.Type + "]"})
 		}
 	}
 	return blocks, nil
@@ -357,10 +359,10 @@ func flattenToolResultContent(raw json.RawMessage) string {
 func countToolBlocks(out []AnthMessage) (toolUse, toolResult int) {
 	for _, msg := range out {
 		for _, b := range msg.Content {
-			switch b.Type {
-			case "tool_use":
+			switch b.(type) {
+			case ToolUseBlock:
 				toolUse++
-			case "tool_result":
+			case ToolResultBlock:
 				toolResult++
 			}
 		}
@@ -380,7 +382,7 @@ func openAIMessageToAssistantBlocks(msgIdx int, msg OpenAIMessage, inboundThinki
 	}
 	for _, tc := range msg.ToolCalls {
 		raw := toolCallArgumentsJSON(tc.Function.Arguments)
-		blocks = append(blocks, newToolUseBlock(tc.ID, tc.Function.Name, raw))
+		blocks = append(blocks, ToolUseBlock{ID: tc.ID, Name: tc.Function.Name, Input: raw})
 	}
 	return blocks, nil
 }
@@ -418,7 +420,7 @@ func assistantPartToBlocks(
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		}
-		return []AnthContentBlock{newToolUseBlock(p.ID, p.Name, input)}, nil
+		return []AnthContentBlock{ToolUseBlock{ID: p.ID, Name: p.Name, Input: input}}, nil
 	case "thinking":
 		return nil, nil
 	default:
@@ -466,22 +468,22 @@ func materializedPartToBlock(mp adapterrender.MaterializedPart) (AnthContentBloc
 	case adapterrender.MaterializedKindNativeThinking:
 		body := strings.TrimSpace(mp.Body)
 		if body == "" {
-			return zeroBlock(), false
+			return nil, false
 		}
-		return newThinkingBlock(body, mp.Signature), true
+		return ThinkingBlock{Thinking: body, Signature: mp.Signature}, true
 	case adapterrender.MaterializedKindNativeRedactedThinking:
 		body := strings.TrimSpace(mp.Body)
 		if body == "" {
-			return zeroBlock(), false
+			return nil, false
 		}
-		return newRedactedThinkingBlock(body), true
+		return RedactedThinkingBlock{Data: body}, true
 	case adapterrender.MaterializedKindText:
 		if strings.TrimSpace(mp.Body) == "" {
-			return zeroBlock(), false
+			return nil, false
 		}
-		return newTextBlock(mp.Body), true
+		return TextBlock{Text: mp.Body}, true
 	default:
-		return zeroBlock(), false
+		return nil, false
 	}
 }
 
@@ -503,7 +505,7 @@ func assistantImagePart(msgIdx int, partIdx int, p OpenAIContentPart) ([]AnthCon
 		)
 		return nil, err
 	}
-	return []AnthContentBlock{newImageBlock(src)}, nil
+	return []AnthContentBlock{ImageBlock{Source: src}}, nil
 }
 
 func imageURLToSource(rawURL string) (*AnthImageSource, error) {

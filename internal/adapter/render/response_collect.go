@@ -36,15 +36,15 @@ func CollectMessage(events []Event) CollectedMessage {
 	reasoningState := collectedReasoningState{}
 
 	for _, ev := range events {
-		switch ev.Kind {
-		case EventAssistantTextDelta:
-			text.WriteString(ev.Text)
-		case EventAssistantRefusalDelta:
-			out.Refusal += ev.Text
-		case EventReasoningDelta:
-			appendCollectedReasoning(&reasoning, ev, &reasoningState)
-		case EventToolCallDelta:
-			accumulateCollectedToolCalls(toolCalls, ev.ToolCalls)
+		switch e := ev.(type) {
+		case TextDelta:
+			text.WriteString(e.Text)
+		case RefusalDelta:
+			out.Refusal += e.Text
+		case ReasoningDelta:
+			appendCollectedReasoning(&reasoning, e, &reasoningState)
+		case ToolCallDelta:
+			accumulateCollectedToolCalls(toolCalls, e.ToolCalls)
 		}
 	}
 
@@ -54,7 +54,7 @@ func CollectMessage(events []Event) CollectedMessage {
 	return out
 }
 
-func appendCollectedReasoning(dst *strings.Builder, ev Event, state *collectedReasoningState) {
+func appendCollectedReasoning(dst *strings.Builder, ev ReasoningDelta, state *collectedReasoningState) {
 	if dst == nil || state == nil {
 		return
 	}

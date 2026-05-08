@@ -395,9 +395,9 @@ func TestRunWebsocketTransportEmitsDelayedDeltasBeforeCompletion(t *testing.T) {
 		RequestID: "req-delayed-stream",
 		Alias:     "gpt-5.4",
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
-		if event.Kind == adapterrender.EventAssistantTextDelta {
-			content.WriteString(event.Text)
-			if event.Text == "first " {
+		if td, ok := event.(adapterrender.TextDelta); ok {
+			content.WriteString(td.Text)
+			if td.Text == "first " {
 				close(firstDeltaEmitted)
 			}
 		}
@@ -492,8 +492,8 @@ func TestRunWebsocketTransportRetriesOverloadedThenSucceeds(t *testing.T) {
 		Alias:         "gpt-5.4",
 		RetryPolicies: codexOverloadedRetryPolicyForTest(),
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
-		if event.Kind == adapterrender.EventAssistantTextDelta {
-			text.WriteString(event.Text)
+		if td, ok := event.(adapterrender.TextDelta); ok {
+			text.WriteString(td.Text)
 		}
 		return nil
 	}, func(context.Context, time.Duration) error { return nil })
@@ -620,8 +620,8 @@ func TestRunWebsocketTransportDoesNotRetryAfterClientVisibleOutput(t *testing.T)
 		Alias:         "gpt-5.4",
 		RetryPolicies: codexOverloadedRetryPolicyForTest(),
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
-		if event.Kind == adapterrender.EventAssistantTextDelta {
-			text.WriteString(event.Text)
+		if td, ok := event.(adapterrender.TextDelta); ok {
+			text.WriteString(td.Text)
 		}
 		return nil
 	}, func(context.Context, time.Duration) error { return nil })

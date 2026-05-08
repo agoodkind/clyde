@@ -115,6 +115,12 @@ func isSubagentToolCallName(name string) bool {
 }
 
 func (r *EventRenderer) logNormalized(ev Event) {
+	kind := ev.eventKind()
+	itemType, itemID, deltaLen := eventDiagnosticFields(ev)
+	var toolCalls []adapteropenai.ToolCall
+	if td, ok := ev.(ToolCallDelta); ok {
+		toolCalls = td.ToolCalls
+	}
 	attrs := []slog.Attr{
 		slog.String("component", "adapter"),
 		slog.String("subcomponent", "renderer"),
@@ -122,18 +128,40 @@ func (r *EventRenderer) logNormalized(ev Event) {
 		slog.String("backend", r.backend),
 		slog.String("model", r.modelAlias),
 		slog.String("alias", r.modelAlias),
-		slog.String("event_kind", string(ev.Kind)),
-		slog.String("item_type", ev.ItemType),
-		slog.String("item_id", ev.ItemID),
-		slog.Bool("reasoning_signaled", r.reasoningSignaled || ev.Kind == EventReasoningSignaled || ev.Kind == EventReasoningDelta),
-		slog.Bool("reasoning_visible", r.reasoningVisible || ev.Kind == EventReasoningDelta),
-		slog.Int("delta_len", len(ev.Text)),
+		slog.String("event_kind", string(kind)),
+		slog.String("item_type", itemType),
+		slog.String("item_id", itemID),
+		slog.Bool("reasoning_signaled", r.reasoningSignaled || kind == EventReasoningSignaled || kind == EventReasoningDelta),
+		slog.Bool("reasoning_visible", r.reasoningVisible || kind == EventReasoningDelta),
+		slog.Int("delta_len", deltaLen),
 	}
-	attrs = append(attrs, toolCallLogAttrs(ev.ToolCalls)...)
+	attrs = append(attrs, toolCallLogAttrs(toolCalls)...)
 	r.log.LogAttrs(r.logContext(), slog.LevelDebug, "adapter.event.normalized", attrs...)
 }
 
+// eventDiagnosticFields extracts the itemType, itemID, and delta length for
+// the given event for use in diagnostic log attributes.
+func eventDiagnosticFields(ev Event) (itemType, itemID string, deltaLen int) {
+	switch e := ev.(type) {
+	case TextDelta:
+		return "", "", len(e.Text)
+	case RefusalDelta:
+		return "", "", len(e.Text)
+	case ReasoningSignaled:
+		return e.ItemType, e.ItemID, 0
+	case ReasoningDelta:
+		return e.ItemType, e.ItemID, len(e.Text)
+	case ReasoningFinished:
+		return e.ItemType, e.ItemID, 0
+	case ToolCallDelta:
+		return "", "", 0
+	default:
+		return "", "", 0
+	}
+}
+
 func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
+	kind := ev.eventKind()
 	delta := adapteropenai.StreamDelta{}
 	if len(ch.Choices) > 0 {
 		delta = ch.Choices[0].Delta
@@ -145,8 +173,8 @@ func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
 		slog.String("backend", r.backend),
 		slog.String("model", r.modelAlias),
 		slog.String("alias", r.modelAlias),
-		slog.String("event_kind", string(ev.Kind)),
-		slog.String("render_policy", renderPolicyForEvent(ev.Kind)),
+		slog.String("event_kind", string(kind)),
+		slog.String("render_policy", renderPolicyForEvent(kind)),
 		slog.Int("delta_len", len(delta.Content)+len(delta.Reasoning)+len(delta.ReasoningContent)),
 	}
 	attrs = append(attrs, toolCallLogAttrs(delta.ToolCalls)...)
@@ -154,11 +182,11 @@ func (r *EventRenderer) logRender(ev Event, ch adapteropenai.StreamChunk) {
 }
 
 func shouldLogEvent(ev Event) bool {
-	switch ev.Kind {
-	case EventAssistantTextDelta, EventReasoningDelta:
+	switch e := ev.(type) {
+	case TextDelta, ReasoningDelta:
 		return false
-	case EventToolCallDelta:
-		return toolCallDeltaHasIdentity(ev.ToolCalls)
+	case ToolCallDelta:
+		return toolCallDeltaHasIdentity(e.ToolCalls)
 	default:
 		return true
 	}
@@ -208,21 +236,39 @@ func (r *EventRenderer) recordSuppressedEvent(ev Event) {
 	if r.suppressed == nil {
 		r.suppressed = make(map[EventKind]*deltaSummary)
 	}
-	summary := r.suppressed[ev.Kind]
+	kind := ev.eventKind()
+	summary := r.suppressed[kind]
 	if summary == nil {
 		summary = &deltaSummary{}
-		r.suppressed[ev.Kind] = summary
+		r.suppressed[kind] = summary
 	}
 	summary.Count++
-	chars := len(ev.Text)
-	for _, tc := range ev.ToolCalls {
-		summary.ToolCalls++
-		chars += len(tc.Function.Arguments)
-		summary.ToolArgChars += len(tc.Function.Arguments)
+	chars := eventTextLen(ev)
+	if td, ok := ev.(ToolCallDelta); ok {
+		for _, tc := range td.ToolCalls {
+			summary.ToolCalls++
+			chars += len(tc.Function.Arguments)
+			summary.ToolArgChars += len(tc.Function.Arguments)
+		}
 	}
 	summary.Chars += chars
 	if chars > summary.MaxChars {
 		summary.MaxChars = chars
+	}
+}
+
+// eventTextLen returns the text byte length of an event for suppression
+// accounting.
+func eventTextLen(ev Event) int {
+	switch e := ev.(type) {
+	case TextDelta:
+		return len(e.Text)
+	case RefusalDelta:
+		return len(e.Text)
+	case ReasoningDelta:
+		return len(e.Text)
+	default:
+		return 0
 	}
 }
 

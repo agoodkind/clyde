@@ -381,33 +381,111 @@ type Usage struct {
 // chunks are skipped.
 type Sink func(delta string) error
 
-// StreamEvent is a decoded streaming signal from /v1/messages SSE.
+// StreamEvent is a decoded streaming signal from /v1/messages SSE,
+// modelled as a sealed sum type. Each variant struct carries only the
+// fields its kind needs, so consumers type-switch on the value rather
+// than reading a discriminator string and inspecting union fields. The
+// sealed marker method ensures only this package can introduce new
+// variants, keeping the union closed at the package boundary.
 //
-// Kind enumerates the signals the parser surfaces:
-//   - "text"               assistant visible text delta; Text carries the chunk.
-//   - "thinking"            thinking content block open or text delta;
-//     Text empty on open, populated on subsequent thinking_delta events.
-//   - "thinking_signature"  per-thinking-block signature delta; Text carries
-//     the opaque signature emitted by Anthropic's signature_delta event.
-//   - "redacted_thinking"   redacted_thinking content block; Data carries
-//     the opaque base64 payload Anthropic emits inline on the start event.
-//     There is no separate delta or close-side payload for this kind.
-//   - "tool_use_start"      tool_use content block open; ToolUseID and
-//     ToolUseName carry the call identity.
-//   - "tool_use_arg_delta"  tool_use partial JSON arguments; PartialJSON
-//     carries the chunk.
-//   - "tool_use_stop"       tool_use content block close.
-//   - "stop"                terminal message stop; StopReason is set.
-type StreamEvent struct {
-	Kind        string
-	Text        string
+// Variants:
+//   - [StreamTextDelta]            assistant visible text delta.
+//   - [StreamThinkingStart]        thinking content block open.
+//   - [StreamThinkingDelta]        thinking content text delta.
+//   - [StreamThinkingSignature]    per-thinking-block signature delta.
+//   - [StreamRedactedThinking]     redacted_thinking content block; Data
+//     carries the opaque base64 payload Anthropic emits inline on the
+//     start event. There is no separate delta or close-side payload.
+//   - [StreamToolUseStart]         tool_use content block open.
+//   - [StreamToolUseArgDelta]      tool_use partial JSON arguments.
+//   - [StreamToolUseStop]          tool_use content block close.
+//   - [StreamStop]                 terminal message stop with stop reason.
+type StreamEvent interface {
+	isStreamEvent()
+}
+
+// StreamTextDelta is an assistant visible text delta carrying one chunk
+// of streaming output for the text content block at BlockIndex.
+type StreamTextDelta struct {
+	BlockIndex int
+	Text       string
+}
+
+func (StreamTextDelta) isStreamEvent() {}
+
+// StreamThinkingStart marks the open of a thinking content block.
+// No text accompanies the open event; subsequent [StreamThinkingDelta]
+// events carry the body.
+type StreamThinkingStart struct {
+	BlockIndex int
+}
+
+func (StreamThinkingStart) isStreamEvent() {}
+
+// StreamThinkingDelta carries one chunk of streaming thinking content
+// for the thinking content block at BlockIndex.
+type StreamThinkingDelta struct {
+	BlockIndex int
+	Text       string
+}
+
+func (StreamThinkingDelta) isStreamEvent() {}
+
+// StreamThinkingSignature carries the opaque per-thinking-block
+// signature value emitted by Anthropic's signature_delta event.
+type StreamThinkingSignature struct {
+	BlockIndex int
+	Signature  string
+}
+
+func (StreamThinkingSignature) isStreamEvent() {}
+
+// StreamRedactedThinking carries a complete redacted_thinking content
+// block. Anthropic emits the opaque payload inline on the start event,
+// so the parser surfaces one event per block. Data is the opaque base64
+// payload; the close event arrives separately as a content_block_stop.
+type StreamRedactedThinking struct {
+	BlockIndex int
+	Data       string
+}
+
+func (StreamRedactedThinking) isStreamEvent() {}
+
+// StreamToolUseStart marks the open of a tool_use content block. The
+// caller pairs ToolUseID and ToolUseName with later argument deltas
+// keyed by BlockIndex.
+type StreamToolUseStart struct {
 	BlockIndex  int
 	ToolUseID   string
 	ToolUseName string
-	PartialJSON string
-	StopReason  string
-	Data        string
 }
+
+func (StreamToolUseStart) isStreamEvent() {}
+
+// StreamToolUseArgDelta carries one chunk of partial JSON for the
+// tool_use content block at BlockIndex.
+type StreamToolUseArgDelta struct {
+	BlockIndex  int
+	PartialJSON string
+}
+
+func (StreamToolUseArgDelta) isStreamEvent() {}
+
+// StreamToolUseStop marks the close of the tool_use content block at
+// BlockIndex.
+type StreamToolUseStop struct {
+	BlockIndex int
+}
+
+func (StreamToolUseStop) isStreamEvent() {}
+
+// StreamStop is the terminal message stop event. StopReason carries the
+// upstream's reported reason (for example "end_turn", "tool_use").
+type StreamStop struct {
+	StopReason string
+}
+
+func (StreamStop) isStreamEvent() {}
 
 // EventSink receives structured stream events.
 type EventSink func(StreamEvent) error
@@ -461,7 +539,21 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return nil, err
 		}
-		return []ContentBlock{newTextContentBlock(text)}, nil
+		return []ContentBlock{{
+			Type:           "text",
+			Text:           text,
+			ID:             "",
+			Name:           "",
+			Input:          nil,
+			ToolUseID:      "",
+			Content:        "",
+			CacheReference: "",
+			Source:         nil,
+			CacheControl:   nil,
+			Thinking:       "",
+			Signature:      "",
+			Data:           "",
+		}}, nil
 	}
 	if trimmed[0] == '[' {
 		var blocks []ContentBlock
