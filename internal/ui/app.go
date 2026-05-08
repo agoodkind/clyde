@@ -3219,7 +3219,7 @@ func (a *App) handleCompactStreamOpened(d compactStreamOpened) {
 		panel.SetBusy(d.action, false)
 		panel.ApplyCompactEvent(CompactEvent{
 			Kind:    "status",
-			Message: fmt.Sprintf("%s start failed: %v", d.action, d.err),
+			Message: fmt.Sprintf("%s start failed: %s", d.action, polishDaemonError(d.err)),
 		})
 		return
 	}
@@ -3244,7 +3244,7 @@ func (a *App) handleCompactStreamDone(d compactStreamDone) {
 	if d.err != nil {
 		panel.ApplyCompactEvent(CompactEvent{
 			Kind:    "status",
-			Message: fmt.Sprintf("%s failed: %v", d.action, d.err),
+			Message: fmt.Sprintf("%s failed: %s", d.action, polishDaemonError(d.err)),
 		})
 		return
 	}
