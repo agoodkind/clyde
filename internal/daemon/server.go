@@ -44,6 +44,7 @@ import (
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
+	"goodkind.io/clyde/internal/providers/sessionname"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/slogger"
@@ -680,6 +681,13 @@ func (s *Server) renameSessionInternal(ctx context.Context, oldName, newName str
 	if err != nil {
 		return status.Errorf(codes.Internal, "store init: %v", err)
 	}
+	existing, err := store.Get(oldName)
+	if err != nil {
+		return status.Errorf(codes.Internal, "load session before rename: %v", err)
+	}
+	if err := s.writeProviderSessionName(ctx, existing, newName); err != nil {
+		return err
+	}
 	if err := store.Rename(oldName, newName); err != nil {
 		return status.Errorf(codes.Internal, "rename failed: %v", err)
 	}
@@ -714,6 +722,16 @@ func (s *Server) renameSessionInternal(ctx context.Context, oldName, newName str
 		slog.String("source", attribution.source.String()),
 		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
+	return nil
+}
+
+func (s *Server) writeProviderSessionName(ctx context.Context, sess *session.Session, newName string) error {
+	if sess == nil {
+		return status.Errorf(codes.NotFound, "session not found")
+	}
+	if err := sessionname.Rename(ctx, sess, newName); err != nil {
+		return status.Errorf(codes.Internal, "provider rename failed: %v", err)
+	}
 	return nil
 }
 

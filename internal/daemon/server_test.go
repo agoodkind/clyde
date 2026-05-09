@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,6 +44,23 @@ func createTestSession(t *testing.T, name, providerSessionID string) *session.Se
 	}
 	sess := session.NewSession(name, providerSessionID)
 	setTestProviderIdentity(sess, session.ProviderClaude, providerSessionID)
+	transcriptPath := filepath.Join(t.TempDir(), "session.jsonl")
+	transcriptFile, err := os.Create(transcriptPath)
+	if err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	encoder := json.NewEncoder(transcriptFile)
+	if err := encoder.Encode(map[string]string{
+		"type":      "summary",
+		"summary":   name,
+		"sessionId": providerSessionID,
+	}); err != nil {
+		t.Fatalf("encode transcript: %v", err)
+	}
+	if err := transcriptFile.Close(); err != nil {
+		t.Fatalf("close transcript: %v", err)
+	}
+	sess.Metadata.SetProviderTranscriptPath(transcriptPath)
 	if err := store.Create(sess); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -129,6 +149,28 @@ func TestRenameSessionRecordsUserAttributionAndCooldown(t *testing.T) {
 	}
 	if renamed.Metadata.LastAutoNameAt.Before(before.Add(-time.Second)) {
 		t.Fatalf("LastAutoNameAt = %v, want >= %v", renamed.Metadata.LastAutoNameAt, before)
+	}
+	transcriptFile, err := os.Open(renamed.Metadata.ProviderTranscriptPath())
+	if err != nil {
+		t.Fatalf("open transcript: %v", err)
+	}
+	defer transcriptFile.Close()
+	var foundProviderTitle bool
+	decoder := json.NewDecoder(transcriptFile)
+	for {
+		var row map[string]string
+		if err := decoder.Decode(&row); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatalf("decode transcript: %v", err)
+		}
+		if row["customTitle"] == "team-discussion" {
+			foundProviderTitle = true
+		}
+	}
+	if !foundProviderTitle {
+		t.Fatalf("transcript missing provider rename entry")
 	}
 }
 

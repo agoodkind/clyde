@@ -81,8 +81,6 @@ func appendClaudeSessionRename(transcriptPath, sessionID, title string) error {
 		)
 		return fmt.Errorf("open claude transcript for rename: %w", err)
 	}
-	defer func() { _ = file.Close() }()
-
 	encoder := json.NewEncoder(file)
 	if err := encoder.Encode(claudeCustomTitleEntry{
 		Type:        "custom-title",
@@ -109,6 +107,15 @@ func appendClaudeSessionRename(transcriptPath, sessionID, title string) error {
 			"err", err,
 		)
 		return fmt.Errorf("append claude agent name rename: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		claudeLog.Warn("claude.session.rename_transcript_close_failed",
+			"component", "claude",
+			"session_id", sessionID,
+			"transcript_path", transcriptPath,
+			"err", err,
+		)
+		return fmt.Errorf("close claude transcript after rename: %w", err)
 	}
 	return nil
 }

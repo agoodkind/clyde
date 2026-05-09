@@ -121,8 +121,6 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 		)
 		return fmt.Errorf("open codex session index for append: %w", err)
 	}
-	defer func() { _ = file.Close() }()
-
 	encoder := json.NewEncoder(file)
 	if err := encoder.Encode(SessionIndexEntry{
 		ID:         threadID,
@@ -137,6 +135,16 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 			"err", err,
 		)
 		return fmt.Errorf("append codex session index entry: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		slog.Warn("codex.store.session_index.close_failed",
+			"component", "codex",
+			"subcomponent", "store",
+			"concern", slogger.ConcernProviderCodexLifecycle,
+			"path", paths.SessionIndexPath,
+			"err", err,
+		)
+		return fmt.Errorf("close codex session index after append: %w", err)
 	}
 	return nil
 }
