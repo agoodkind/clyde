@@ -148,6 +148,66 @@ func TestDetailsView_ConversationShowsLoadingSpinner(t *testing.T) {
 	}
 }
 
+func TestDetailsView_ResumeSectionUsesProviderHints(t *testing.T) {
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "demo",
+		Metadata: session.Metadata{
+			Name:          "demo",
+			SessionID:     "codex-123",
+			WorkspaceRoot: "/Users/test/Sites/demo",
+			Created:       time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC),
+			LastAccessed:  time.Date(2026, 4, 24, 9, 5, 0, 0, time.UTC),
+		},
+	}
+	sess.Metadata.Provider = session.ProviderCodex
+	detail := SessionDetail{
+		Provider:           "codex",
+		ResumeInstructions: []string{"codex resume codex-123"},
+	}
+
+	lines := flattenSegments(view.buildLeft(sess, detail))
+	joined := strings.Join(lines, "\n")
+
+	if !strings.Contains(joined, "clyde resume demo") {
+		t.Fatalf("details pane missing generic resume hint:\n%s", joined)
+	}
+	if !strings.Contains(joined, "codex resume codex-123") {
+		t.Fatalf("details pane missing codex resume hint:\n%s", joined)
+	}
+	if strings.Contains(joined, "claude --resume") {
+		t.Fatalf("details pane should not render Claude-specific resume text:\n%s", joined)
+	}
+}
+
+func TestDetailsView_ConversationUsesProviderLabelForAssistant(t *testing.T) {
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "demo",
+		Metadata: session.Metadata{
+			Name:      "demo",
+			SessionID: "codex-123",
+		},
+	}
+	sess.Metadata.Provider = session.ProviderCodex
+
+	lines := flattenSegments(view.buildRight(sess, SessionDetail{
+		Provider: "codex",
+		AllMessages: []DetailMessage{
+			{Role: "assistant", Text: "Done."},
+			{Role: "user", Text: "show me the diff"},
+		},
+	}))
+	joined := strings.Join(lines, "\n")
+
+	if !strings.Contains(joined, "▎Codex") {
+		t.Fatalf("conversation pane missing Codex label:\n%s", joined)
+	}
+	if strings.Contains(joined, "▎Claude") {
+		t.Fatalf("conversation pane should not render Claude label for Codex:\n%s", joined)
+	}
+}
+
 func TestDetailsView_SetPreservesScrollOffsetsForSameSession(t *testing.T) {
 	view := NewDetailsView()
 	sess := &session.Session{

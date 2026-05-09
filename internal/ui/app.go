@@ -285,6 +285,7 @@ type LiveSessionEvent struct {
 // Tools ranks the top assistant tool uses for the stats pane.
 type SessionDetail struct {
 	Model                 string
+	Provider              string
 	Messages              []DetailMessage // last N for quick peek (kept for backwards compat)
 	AllMessages           []DetailMessage // full transcript, ordered oldest -> newest
 	Tools                 []ToolUse       // descending by Count
@@ -300,6 +301,7 @@ type SessionDetail struct {
 	ContextUsageStatus    string
 	TranscriptStatsLoaded bool
 	TranscriptStatsStatus string
+	ResumeInstructions    []string
 }
 
 type ProviderStats struct {
@@ -964,13 +966,30 @@ func (a *App) resumeSession(sess *session.Session) {
 
 func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool) {
 	if sess == nil {
-		return SessionDetail{}, false
+		var empty SessionDetail
+		return empty, false
 	}
 	if !sessionHistoryReadable(sess) {
+		var emptyContextUsage SessionContextUsage
 		return SessionDetail{
 			Model:                 valueOr(a.modelCache[sess.Name], "-"),
+			Provider:              string(sess.ProviderID()),
+			Messages:              nil,
+			AllMessages:           nil,
+			Tools:                 nil,
+			TotalMessages:         0,
+			VisibleTokensEstimate: 0,
+			LastMessageTokens:     0,
+			CompactionCount:       0,
+			LastPreCompactTokens:  0,
+			TranscriptSizeBytes:   0,
+			ConversationLoading:   false,
+			ContextUsage:          emptyContextUsage,
+			ContextUsageLoaded:    false,
 			ContextUsageStatus:    "unsupported",
+			TranscriptStatsLoaded: false,
 			TranscriptStatsStatus: "unsupported",
+			ResumeInstructions:    nil,
 		}, false
 	}
 	a.detailMu.Lock()
@@ -985,8 +1004,23 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 	a.loadDetailAsync(sess)
 	return SessionDetail{
 		Model:                 valueOr(a.modelCache[sess.Name], "-"),
+		Provider:              string(sess.ProviderID()),
+		Messages:              nil,
+		AllMessages:           nil,
+		Tools:                 nil,
+		TotalMessages:         0,
+		VisibleTokensEstimate: 0,
+		LastMessageTokens:     0,
+		CompactionCount:       0,
+		LastPreCompactTokens:  0,
+		TranscriptSizeBytes:   0,
+		ConversationLoading:   false,
+		ContextUsage:          emptyContextUsage,
+		ContextUsageLoaded:    false,
 		ContextUsageStatus:    "loading...",
+		TranscriptStatsLoaded: false,
 		TranscriptStatsStatus: "loading...",
+		ResumeInstructions:    nil,
 	}, true
 }
 
@@ -4954,12 +4988,23 @@ func (a *App) populateDetails() {
 	// Paint a fast placeholder so the UI is never blocked on disk I/O.
 	placeholder := SessionDetail{
 		Model:                 a.modelCache[name],
+		Provider:              string(a.selected.ProviderID()),
+		Messages:              nil,
+		AllMessages:           nil,
+		Tools:                 nil,
+		TotalMessages:         0,
+		VisibleTokensEstimate: 0,
+		LastMessageTokens:     0,
+		CompactionCount:       0,
+		LastPreCompactTokens:  0,
+		TranscriptSizeBytes:   0,
 		ConversationLoading:   true,
 		ContextUsage:          contextState.Usage,
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
 		TranscriptStatsLoaded: false,
 		TranscriptStatsStatus: "loading...",
+		ResumeInstructions:    nil,
 	}
 	a.details.Set(a.selected, placeholder)
 

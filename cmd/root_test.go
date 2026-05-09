@@ -190,12 +190,14 @@ func TestSessionDetailFromProtoMapsContextUsage(t *testing.T) {
 	resp := &clydev1.GetSessionDetailResponse{
 		SessionName:           "chat-x",
 		Model:                 "claude-sonnet-4-5",
+		Provider:              "codex",
 		ContextTotalTokens:    42000,
 		ContextMaxTokens:      200000,
 		ContextPercentage:     21,
 		ContextMessagesTokens: 31000,
 		ContextUsageLoaded:    true,
 		ContextUsageStatus:    "",
+		ResumeInstructions:    []string{"codex resume codex-123"},
 	}
 
 	got := sessionDetailFromProto(resp)
@@ -217,6 +219,12 @@ func TestSessionDetailFromProtoMapsContextUsage(t *testing.T) {
 	}
 	if got.ContextUsageStatus != "" {
 		t.Fatalf("ContextUsageStatus=%q want empty", got.ContextUsageStatus)
+	}
+	if got.Provider != "codex" {
+		t.Fatalf("Provider=%q want codex", got.Provider)
+	}
+	if len(got.ResumeInstructions) != 1 || got.ResumeInstructions[0] != "codex resume codex-123" {
+		t.Fatalf("ResumeInstructions=%v want [codex resume codex-123]", got.ResumeInstructions)
 	}
 }
 

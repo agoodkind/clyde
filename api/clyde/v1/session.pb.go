@@ -1140,12 +1140,13 @@ type GetSessionDetailResponse struct {
 	// daemon's context-usage cache. Loaded=false with Status="probing"
 	// means a refresh is in flight and the next detail call should hit
 	// a warm cache.
-	ContextTotalTokens    int32  `protobuf:"varint,15,opt,name=context_total_tokens,json=contextTotalTokens,proto3" json:"context_total_tokens,omitempty"`
-	ContextMaxTokens      int32  `protobuf:"varint,16,opt,name=context_max_tokens,json=contextMaxTokens,proto3" json:"context_max_tokens,omitempty"`
-	ContextPercentage     int32  `protobuf:"varint,17,opt,name=context_percentage,json=contextPercentage,proto3" json:"context_percentage,omitempty"`
-	ContextMessagesTokens int32  `protobuf:"varint,18,opt,name=context_messages_tokens,json=contextMessagesTokens,proto3" json:"context_messages_tokens,omitempty"`
-	ContextUsageLoaded    bool   `protobuf:"varint,19,opt,name=context_usage_loaded,json=contextUsageLoaded,proto3" json:"context_usage_loaded,omitempty"`
-	ContextUsageStatus    string `protobuf:"bytes,20,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
+	ContextTotalTokens    int32    `protobuf:"varint,15,opt,name=context_total_tokens,json=contextTotalTokens,proto3" json:"context_total_tokens,omitempty"`
+	ContextMaxTokens      int32    `protobuf:"varint,16,opt,name=context_max_tokens,json=contextMaxTokens,proto3" json:"context_max_tokens,omitempty"`
+	ContextPercentage     int32    `protobuf:"varint,17,opt,name=context_percentage,json=contextPercentage,proto3" json:"context_percentage,omitempty"`
+	ContextMessagesTokens int32    `protobuf:"varint,18,opt,name=context_messages_tokens,json=contextMessagesTokens,proto3" json:"context_messages_tokens,omitempty"`
+	ContextUsageLoaded    bool     `protobuf:"varint,19,opt,name=context_usage_loaded,json=contextUsageLoaded,proto3" json:"context_usage_loaded,omitempty"`
+	ContextUsageStatus    string   `protobuf:"bytes,20,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
+	ResumeInstructions    []string `protobuf:"bytes,21,rep,name=resume_instructions,json=resumeInstructions,proto3" json:"resume_instructions,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -1318,6 +1319,13 @@ func (x *GetSessionDetailResponse) GetContextUsageStatus() string {
 		return x.ContextUsageStatus
 	}
 	return ""
+}
+
+func (x *GetSessionDetailResponse) GetResumeInstructions() []string {
+	if x != nil {
+		return x.ResumeInstructions
+	}
+	return nil
 }
 
 type GetSessionExportStatsRequest struct {
@@ -1978,7 +1986,7 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\"<\n" +
 	"\x17GetSessionDetailRequest\x12!\n" +
-	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xd3\a\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\x84\b\n" +
 	"\x18GetSessionDetailResponse\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12@\n" +
@@ -2000,7 +2008,8 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\x12context_percentage\x18\x11 \x01(\x05R\x11contextPercentage\x126\n" +
 	"\x17context_messages_tokens\x18\x12 \x01(\x05R\x15contextMessagesTokens\x120\n" +
 	"\x14context_usage_loaded\x18\x13 \x01(\bR\x12contextUsageLoaded\x120\n" +
-	"\x14context_usage_status\x18\x14 \x01(\tR\x12contextUsageStatus\"A\n" +
+	"\x14context_usage_status\x18\x14 \x01(\tR\x12contextUsageStatus\x12/\n" +
+	"\x13resume_instructions\x18\x15 \x03(\tR\x12resumeInstructions\"A\n" +
 	"\x1cGetSessionExportStatsRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xc7\x03\n" +
 	"\x1dGetSessionExportStatsResponse\x12!\n" +
