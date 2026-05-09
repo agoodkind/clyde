@@ -302,3 +302,29 @@ func TestSessionSummaryFromProto_AutoNameZeroFields(t *testing.T) {
 		t.Fatalf("LastAutoNameAt=%s want zero", sess.Metadata.LastAutoNameAt)
 	}
 }
+
+func TestSessionSummaryFromProto_RestoresProviderForResumeRouting(t *testing.T) {
+	raw := &clydev1.SessionSummary{
+		Name:         "codex-chat",
+		MetadataName: "codex-chat",
+		SessionId:    "codex-thread",
+		Provider:     string(session.ProviderCodex),
+		Runtime: &clydev1.ProviderRuntimeBoundary{
+			History: &clydev1.SessionHistoryBoundary{
+				Current: &clydev1.ProviderSessionIdentity{
+					Provider:  string(session.ProviderCodex),
+					SessionId: "codex-thread",
+				},
+			},
+		},
+	}
+
+	sess, _, _, _, _ := sessionSummaryFromProto(raw)
+
+	if sess.ProviderID() != session.ProviderCodex {
+		t.Fatalf("provider=%q want %q", sess.ProviderID(), session.ProviderCodex)
+	}
+	if sess.Metadata.ProviderSessionID() != "codex-thread" {
+		t.Fatalf("provider session id=%q want codex-thread", sess.Metadata.ProviderSessionID())
+	}
+}

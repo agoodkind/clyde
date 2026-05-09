@@ -970,7 +970,12 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 		return empty, false
 	}
 	if !sessionHistoryReadable(sess) {
+<<<<<<< HEAD
 		var emptyContextUsage SessionContextUsage
+||||||| 93de669
+	if !sessionCapabilities(sess).TranscriptExport {
+=======
+>>>>>>> ag/clyde-296c-tui-actions-live
 		return SessionDetail{
 			Model:                 valueOr(a.modelCache[sess.Name], "-"),
 			Provider:              string(sess.ProviderID()),
@@ -2766,7 +2771,7 @@ func (a *App) requestExportStatsAsync(sess *session.Session) {
 	if sess == nil || a.cb.LoadExportStats == nil {
 		return
 	}
-	if !sessionCapabilities(sess).TranscriptExport {
+	if !sessionHistoryExportable(sess) {
 		return
 	}
 	name := sess.Name
@@ -5411,10 +5416,13 @@ func (a *App) launchNewIncognitoSession(basedir string) {
 }
 
 func (a *App) viewSelected() {
-	if a.selected == nil || a.cb.ViewContent == nil {
+	a.viewSession(a.selected)
+}
+
+func (a *App) viewSession(sess *session.Session) {
+	if sess == nil || a.cb.ViewContent == nil {
 		return
 	}
-	sess := a.selected
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -5791,14 +5799,14 @@ func (a *App) sidecarCanDrive(sess *session.Session) bool {
 	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
 		return false
 	}
-	return a.sidecarCanStream(sess) && a.sidecarSendFunc() != nil
+	return sessionLiveInputWritable(sess) && a.sidecarCanStream(sess) && a.sidecarSendFunc() != nil
 }
 
 func (a *App) sidecarCanStream(sess *session.Session) bool {
 	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
 		return false
 	}
-	return a.cb.StreamLiveSession != nil
+	return sessionLiveTailReadable(sess) && a.cb.StreamLiveSession != nil
 }
 
 func (a *App) sidecarHasStreamCallback() bool {
@@ -6333,11 +6341,28 @@ func sessionCapabilities(sess *session.Session) session.ProviderCapabilities {
 	return sess.SessionProviderCapabilities()
 }
 
-func sessionHistoryReadable(sess *session.Session) bool {
+func sessionRuntimeBoundary(sess *session.Session) session.ProviderRuntimeBoundary {
 	if sess == nil {
-		return false
+		var boundary session.ProviderRuntimeBoundary
+		return boundary
 	}
-	return sess.ProviderRuntimeBoundary().History.Readable
+	return sess.ProviderRuntimeBoundary()
+}
+
+func sessionHistoryReadable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).History.Readable
+}
+
+func sessionHistoryExportable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).History.Exportable
+}
+
+func sessionLiveTailReadable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).Live.TailReadable
+}
+
+func sessionLiveInputWritable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).Live.InputWritable
 }
 
 // rowSession returns the session under the table cursor regardless of
@@ -6466,7 +6491,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitRes
 			Hint:  "v",
 			Action: func() {
 				close()
-				a.viewSelected()
+				a.viewSession(sess)
 			},
 			Disabled: a.cb.ViewContent == nil || !sessionHistoryReadable(sess),
 		},
@@ -6477,7 +6502,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitRes
 				close()
 				a.openExportOptions(sess)
 			},
-			Disabled: a.cb.ExportSession == nil || !caps.TranscriptExport,
+			Disabled: a.cb.ExportSession == nil || !sessionHistoryExportable(sess),
 		},
 		{
 			Label: "Edit basedir",
@@ -6738,7 +6763,7 @@ func (a *App) openExportOptions(sess *session.Session) {
 	if sess == nil || a.cb.ExportSession == nil {
 		return
 	}
-	if !sessionCapabilities(sess).TranscriptExport {
+	if !sessionHistoryExportable(sess) {
 		return
 	}
 	stats, loaded := a.cachedExportStatsForSession(sess)

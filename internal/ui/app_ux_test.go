@@ -481,6 +481,7 @@ func TestUX_CodexSessionOptionsUseHistoryReadableAffordances(t *testing.T) {
 	if !ok {
 		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
 	}
+<<<<<<< HEAD
 	view := findModalEntry(modal, "View transcript")
 	if view == nil {
 		t.Fatalf("missing %q entry", "View transcript")
@@ -489,6 +490,37 @@ func TestUX_CodexSessionOptionsUseHistoryReadableAffordances(t *testing.T) {
 		t.Fatalf("%q disabled = true, want false for codex history-readable session", view.Label)
 	}
 	for _, label := range []string{"Export transcript", "Compact", "Fork"} {
+||||||| 93de669
+	for _, label := range []string{
+		"View transcript",
+		"Export transcript",
+		"Drive in sidecar",
+		"Open live URL",
+		"Copy live URL",
+		"Compact",
+		"Fork",
+	} {
+=======
+	for _, label := range []string{
+		"View transcript",
+		"Export transcript",
+	} {
+		entry := findModalEntry(modal, label)
+		if entry == nil {
+			t.Fatalf("missing %q entry", label)
+		}
+		if entry.Disabled {
+			t.Fatalf("%q disabled = true, want false for codex history actions", label)
+		}
+	}
+	for _, label := range []string{
+		"Drive in sidecar",
+		"Open live URL",
+		"Copy live URL",
+		"Compact",
+		"Fork",
+	} {
+>>>>>>> ag/clyde-296c-tui-actions-live
 		entry := findModalEntry(modal, label)
 		if entry == nil {
 			t.Fatalf("missing %q entry", label)
@@ -527,6 +559,41 @@ func TestUX_CodexDetailsLoadForHistoryReadableSessions(t *testing.T) {
 	case <-callbackEntered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("GetSessionDetail callback was never invoked for codex session")
+	}
+}
+
+func TestUX_SessionOptionsViewTranscriptUsesPopupSession(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	selected := a.sessions[a.visibleIdx[0]]
+	target := a.sessions[a.visibleIdx[1]]
+	a.selected = selected
+
+	viewed := make(chan string, 1)
+	a.cb.ViewContent = func(sess *session.Session) string {
+		viewed <- sess.Name
+		return ""
+	}
+
+	a.openSessionOptionsFor(target)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	action := findModalAction(modal, "View transcript")
+	if action == nil {
+		t.Fatal("missing View transcript action")
+	}
+	action()
+
+	select {
+	case got := <-viewed:
+		if got != target.Name {
+			t.Fatalf("viewed session=%q want %q", got, target.Name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for view callback")
 	}
 }
 
