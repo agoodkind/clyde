@@ -10,13 +10,14 @@
 //
 //	clyde                       -> TUI dashboard (cmd.RunDashboard)
 //	clyde compact ...           -> append-only compaction
+//	clyde codex ...             -> explicit Codex CLI override
 //	clyde daemon                -> long-lived daemon (adapter, oauth, mcp, prune)
 //	clyde hook sessionstart     -> Claude Code SessionStart hook
 //	clyde mcp                   -> MCP stdio server (in-chat search/list/context)
-//	clyde resume <name|uuid>    -> resolve clyde name then claude --resume <uuid>
+//	clyde resume <name|uuid>    -> resolve clyde name then hand off to the owning provider
 //	clyde -r / --resume         -> TUI (same as no args; bare flag opens dashboard)
 //	clyde -r / --resume <x>     -> rewritten to `clyde resume <x>` by ClassifyArgs
-//	anything else               -> unknown -> ForwardToClaudeThenDashboard (see cmd/root.go)
+//	anything else               -> unknown -> ForwardToDefaultProviderThenDashboard (see cmd/root.go)
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 
 	"goodkind.io/clyde/cmd"
 	"goodkind.io/clyde/internal/cli"
+	codexcmd "goodkind.io/clyde/internal/cli/codex"
 	"goodkind.io/clyde/internal/cli/compact"
 	"goodkind.io/clyde/internal/cli/daemon"
 	hook "goodkind.io/clyde/internal/cli/hook"
@@ -91,7 +93,7 @@ func run() int {
 		mode, rewritten := cmd.ClassifyArgs(os.Args[1:])
 		switch mode {
 		case cmd.ModePassthrough:
-			return cmd.ForwardToClaudeThenDashboard(os.Args[1:])
+			return cmd.ForwardToDefaultProviderThenDashboard(os.Args[1:])
 		case cmd.ModeBasedirLaunch:
 			if len(rewritten) == 0 {
 				return 1
@@ -109,8 +111,8 @@ func run() int {
 	dashboardExitCode := 0
 	root := &cobra.Command{
 		Use:     "clyde",
-		Short:   "Named sessions and append-only compaction for Claude Code",
-		Long:    `Clyde wraps Claude Code with human-friendly session names and append-only compaction. Run with no args for the TUI dashboard.`,
+		Short:   "Named sessions and provider-aware tooling for local coding CLIs",
+		Long:    `Clyde owns the local session dashboard and provider-aware tooling. Run with no args for the TUI dashboard; use clyde codex for the explicit Codex override.`,
 		Version: "DEVELOPMENT",
 		Run: func(c *cobra.Command, args []string) {
 			dashboardExitCode = cmd.RunDashboard(c, args)
@@ -127,6 +129,7 @@ func run() int {
 	root.SetErr(f.IOStreams.Err)
 
 	root.AddCommand(compact.NewCmd(f))
+	root.AddCommand(codexcmd.NewCmd(f))
 	root.AddCommand(daemon.NewCmd(f))
 	root.AddCommand(hook.NewCmd(f))
 	root.AddCommand(logs.NewCmd(f))
@@ -138,7 +141,7 @@ func run() int {
 
 	if err := root.Execute(); err != nil {
 		if strings.HasPrefix(err.Error(), "unknown command") {
-			return cmd.ForwardToClaudeThenDashboard(os.Args[1:])
+			return cmd.ForwardToDefaultProviderThenDashboard(os.Args[1:])
 		}
 		_, _ = fmt.Fprintln(f.IOStreams.Err, "Error:", err)
 		return 1

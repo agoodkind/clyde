@@ -285,6 +285,7 @@ type LiveSessionEvent struct {
 // Tools ranks the top assistant tool uses for the stats pane.
 type SessionDetail struct {
 	Model                 string
+	Provider              string
 	Messages              []DetailMessage // last N for quick peek (kept for backwards compat)
 	AllMessages           []DetailMessage // full transcript, ordered oldest -> newest
 	Tools                 []ToolUse       // descending by Count
@@ -300,6 +301,7 @@ type SessionDetail struct {
 	ContextUsageStatus    string
 	TranscriptStatsLoaded bool
 	TranscriptStatsStatus string
+	ResumeInstructions    []string
 }
 
 type ProviderStats struct {
@@ -964,13 +966,30 @@ func (a *App) resumeSession(sess *session.Session) {
 
 func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool) {
 	if sess == nil {
-		return SessionDetail{}, false
+		var empty SessionDetail
+		return empty, false
 	}
-	if !sessionCapabilities(sess).TranscriptExport {
+	var emptyContextUsage SessionContextUsage
+	if !sessionHistoryReadable(sess) {
 		return SessionDetail{
 			Model:                 valueOr(a.modelCache[sess.Name], "-"),
+			Provider:              string(sess.ProviderID()),
+			Messages:              nil,
+			AllMessages:           nil,
+			Tools:                 nil,
+			TotalMessages:         0,
+			VisibleTokensEstimate: 0,
+			LastMessageTokens:     0,
+			CompactionCount:       0,
+			LastPreCompactTokens:  0,
+			TranscriptSizeBytes:   0,
+			ConversationLoading:   false,
+			ContextUsage:          emptyContextUsage,
+			ContextUsageLoaded:    false,
 			ContextUsageStatus:    "unsupported",
+			TranscriptStatsLoaded: false,
 			TranscriptStatsStatus: "unsupported",
+			ResumeInstructions:    nil,
 		}, false
 	}
 	a.detailMu.Lock()
@@ -985,8 +1004,23 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 	a.loadDetailAsync(sess)
 	return SessionDetail{
 		Model:                 valueOr(a.modelCache[sess.Name], "-"),
+		Provider:              string(sess.ProviderID()),
+		Messages:              nil,
+		AllMessages:           nil,
+		Tools:                 nil,
+		TotalMessages:         0,
+		VisibleTokensEstimate: 0,
+		LastMessageTokens:     0,
+		CompactionCount:       0,
+		LastPreCompactTokens:  0,
+		TranscriptSizeBytes:   0,
+		ConversationLoading:   false,
+		ContextUsage:          emptyContextUsage,
+		ContextUsageLoaded:    false,
 		ContextUsageStatus:    "loading...",
+		TranscriptStatsLoaded: false,
 		TranscriptStatsStatus: "loading...",
+		ResumeInstructions:    nil,
 	}, true
 }
 
@@ -2741,7 +2775,7 @@ func (a *App) requestExportStatsAsync(sess *session.Session) {
 	if sess == nil || a.cb.LoadExportStats == nil {
 		return
 	}
-	if !sessionCapabilities(sess).TranscriptExport {
+	if !sessionHistoryExportable(sess) {
 		return
 	}
 	name := sess.Name
@@ -4965,12 +4999,23 @@ func (a *App) populateDetails() {
 	// Paint a fast placeholder so the UI is never blocked on disk I/O.
 	placeholder := SessionDetail{
 		Model:                 a.modelCache[name],
+		Provider:              string(a.selected.ProviderID()),
+		Messages:              nil,
+		AllMessages:           nil,
+		Tools:                 nil,
+		TotalMessages:         0,
+		VisibleTokensEstimate: 0,
+		LastMessageTokens:     0,
+		CompactionCount:       0,
+		LastPreCompactTokens:  0,
+		TranscriptSizeBytes:   0,
 		ConversationLoading:   true,
 		ContextUsage:          contextState.Usage,
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
 		TranscriptStatsLoaded: false,
 		TranscriptStatsStatus: "loading...",
+		ResumeInstructions:    nil,
 	}
 	a.details.Set(a.selected, placeholder)
 
@@ -5379,10 +5424,13 @@ func (a *App) launchNewIncognitoSession(basedir string) {
 }
 
 func (a *App) viewSelected() {
-	if a.selected == nil || a.cb.ViewContent == nil {
+	a.viewSession(a.selected)
+}
+
+func (a *App) viewSession(sess *session.Session) {
+	if sess == nil || a.cb.ViewContent == nil {
 		return
 	}
-	sess := a.selected
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -5759,14 +5807,14 @@ func (a *App) sidecarCanDrive(sess *session.Session) bool {
 	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
 		return false
 	}
-	return a.sidecarCanStream(sess) && a.sidecarSendFunc() != nil
+	return sessionLiveInputWritable(sess) && a.sidecarCanStream(sess) && a.sidecarSendFunc() != nil
 }
 
 func (a *App) sidecarCanStream(sess *session.Session) bool {
 	if sess == nil || sess.Metadata.ProviderSessionID() == "" {
 		return false
 	}
-	return a.cb.StreamLiveSession != nil
+	return sessionLiveTailReadable(sess) && a.cb.StreamLiveSession != nil
 }
 
 func (a *App) sidecarHasStreamCallback() bool {
@@ -6301,6 +6349,30 @@ func sessionCapabilities(sess *session.Session) session.ProviderCapabilities {
 	return sess.SessionProviderCapabilities()
 }
 
+func sessionRuntimeBoundary(sess *session.Session) session.ProviderRuntimeBoundary {
+	if sess == nil {
+		var boundary session.ProviderRuntimeBoundary
+		return boundary
+	}
+	return sess.ProviderRuntimeBoundary()
+}
+
+func sessionHistoryReadable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).History.Readable
+}
+
+func sessionHistoryExportable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).History.Exportable
+}
+
+func sessionLiveTailReadable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).Live.TailReadable
+}
+
+func sessionLiveInputWritable(sess *session.Session) bool {
+	return sessionRuntimeBoundary(sess).Live.InputWritable
+}
+
 // rowSession returns the session under the table cursor regardless of
 // whether the details pane is currently showing it. Returns nil when no
 // row is highlighted.
@@ -6427,9 +6499,9 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitRes
 			Hint:  "v",
 			Action: func() {
 				close()
-				a.viewSelected()
+				a.viewSession(sess)
 			},
-			Disabled: a.cb.ViewContent == nil || !caps.TranscriptExport,
+			Disabled: a.cb.ViewContent == nil || !sessionHistoryReadable(sess),
 		},
 		{
 			Label: "Export transcript",
@@ -6438,7 +6510,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitRes
 				close()
 				a.openExportOptions(sess)
 			},
-			Disabled: a.cb.ExportSession == nil || !caps.TranscriptExport,
+			Disabled: a.cb.ExportSession == nil || !sessionHistoryExportable(sess),
 		},
 		{
 			Label: "Edit basedir",
@@ -6699,7 +6771,7 @@ func (a *App) openExportOptions(sess *session.Session) {
 	if sess == nil || a.cb.ExportSession == nil {
 		return
 	}
-	if !sessionCapabilities(sess).TranscriptExport {
+	if !sessionHistoryExportable(sess) {
 		return
 	}
 	stats, loaded := a.cachedExportStatsForSession(sess)

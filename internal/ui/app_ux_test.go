@@ -465,7 +465,7 @@ func TestUX_BasedirLaunchKeepsDefaultNewSessionFlow(t *testing.T) {
 	}
 }
 
-func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
+func TestUX_CodexSessionOptionsUseHistoryReadableAffordances(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 	sess := a.sessions[0]
@@ -485,6 +485,16 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 	for _, label := range []string{
 		"View transcript",
 		"Export transcript",
+	} {
+		entry := findModalEntry(modal, label)
+		if entry == nil {
+			t.Fatalf("missing %q entry", label)
+		}
+		if entry.Disabled {
+			t.Fatalf("%q disabled = true, want false for codex history actions", label)
+		}
+	}
+	for _, label := range []string{
 		"Drive in sidecar",
 		"Open live URL",
 		"Copy live URL",
@@ -498,6 +508,72 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 		if !entry.Disabled {
 			t.Fatalf("%q disabled = false, want true for codex provider", label)
 		}
+	}
+}
+
+func TestUX_CodexDetailsLoadForHistoryReadableSessions(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[0]
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "codex-123"},
+		Artifacts: session.ProviderArtifacts{
+			TranscriptPath: "/tmp/codex-history.jsonl",
+		},
+	}
+	callbackEntered := make(chan struct{}, 1)
+	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+		callbackEntered <- struct{}{}
+		return SessionDetail{Model: "openai"}, nil
+	}
+
+	detail, loading := a.cachedDetailForSession(sess)
+	if !loading {
+		t.Fatalf("loading = false, want true while codex detail is fetched")
+	}
+	if detail.TranscriptStatsStatus == "unsupported" {
+		t.Fatalf("transcript stats status = %q, want async load instead", detail.TranscriptStatsStatus)
+	}
+	select {
+	case <-callbackEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetSessionDetail callback was never invoked for codex session")
+	}
+}
+
+func TestUX_SessionOptionsViewTranscriptUsesPopupSession(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	selected := a.sessions[a.visibleIdx[0]]
+	target := a.sessions[a.visibleIdx[1]]
+	a.selected = selected
+
+	viewed := make(chan string, 1)
+	a.cb.ViewContent = func(sess *session.Session) string {
+		viewed <- sess.Name
+		return ""
+	}
+
+	a.openSessionOptionsFor(target)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	action := findModalAction(modal, "View transcript")
+	if action == nil {
+		t.Fatal("missing View transcript action")
+	}
+	action()
+
+	select {
+	case got := <-viewed:
+		if got != target.Name {
+			t.Fatalf("viewed session=%q want %q", got, target.Name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for view callback")
 	}
 }
 

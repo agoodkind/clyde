@@ -23,6 +23,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
+	codexprovider "goodkind.io/clyde/internal/providers/codex"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -188,7 +189,11 @@ func (p *Proxy) config() config.MITMConfig {
 	return p.cfg
 }
 
-func (p *Proxy) ClaudeBaseURL() string { return p.base }
+// BaseURL returns the loopback HTTP URL clients should use to reach the
+// daemon-owned MITM proxy.
+func (p *Proxy) BaseURL() string { return p.base }
+
+func (p *Proxy) ClaudeBaseURL() string { return p.BaseURL() }
 
 // prepareCaptureWriters returns the per-request capture state. When
 // BodyMode is raw, it primes a sidecar response writer; otherwise it
@@ -803,6 +808,35 @@ func ClaudeEnv(_ context.Context, cfg config.MITMConfig, proxy *Proxy) (map[stri
 		return nil, fmt.Errorf("mitm: proxy is not running")
 	}
 	return map[string]string{"ANTHROPIC_BASE_URL": proxy.ClaudeBaseURL()}, nil
+}
+
+// CodexEnv returns the env overrides Codex CLI needs to route through the
+// daemon-owned MITM proxy. Codex talks to HTTPS and CONNECT targets, so the
+// daemon advertises a standard loopback proxy URL rather than a provider-
+// specific base URL override.
+func CodexEnv(_ context.Context, cfg config.MITMConfig, proxy *Proxy) (map[string]string, error) {
+	if !cfg.EnabledDefault || !cfg.EnabledFor("codex") {
+		return nil, nil
+	}
+	if proxy == nil {
+		return nil, fmt.Errorf("mitm: proxy is not running")
+	}
+	env := make(map[string]string, len(codexProxyEnvKeys()))
+	for _, key := range codexProxyEnvKeys() {
+		env[key] = proxy.BaseURL()
+	}
+	return env, nil
+}
+
+func codexProxyEnvKeys() []string {
+	return []string{
+		codexprovider.HTTPProxyEnv,
+		codexprovider.HTTPSProxyEnv,
+		codexprovider.AllProxyEnv,
+		"http_proxy",
+		"https_proxy",
+		"all_proxy",
+	}
 }
 
 type CodexOverlay struct {

@@ -131,6 +131,7 @@ message GetSessionDetailResponse {
   int32 context_messages_tokens = 18;
   bool context_usage_loaded = 19;
   string context_usage_status = 20;
+  repeated string resume_instructions = 21;
 }
 
 message GetSessionExportStatsRequest {

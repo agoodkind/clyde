@@ -43,11 +43,11 @@ import (
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
-	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/slogger"
+	itranscript "goodkind.io/clyde/internal/transcript"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -110,6 +110,11 @@ type Server struct {
 	mitmAccess mitmAccessor
 
 	skipRuntimeCleanup atomic.Bool
+
+	// autoNameMu guards the optional auto-name worker handle. The daemon wires
+	// it after construction from live config, and reload can replace it.
+	autoNameMu sync.RWMutex
+	autoName   *autoNameWorker
 
 	// RPCs tracks every inbound streaming gRPC session so the daemon
 	// can drain or force-close them on reload alongside the MITM and
@@ -375,6 +380,8 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		reloadFn:                        nil,
 		mitmAccess:                      mitmAccessor{mu: sync.RWMutex{}, fn: nil},
 		skipRuntimeCleanup:              atomic.Bool{},
+		autoNameMu:                      sync.RWMutex{},
+		autoName:                        nil,
 		RPCs:                            newRPCRegistry(),
 		liveWorkers: livetrack.New[LiveMeta](livetrack.Options[LiveMeta]{
 			Component:     "daemon",
@@ -491,6 +498,7 @@ func (s *Server) runDiscoveryOnce(ctx context.Context) {
 			slog.Any("names", names),
 		)
 	}
+	s.runAutoRenamePass(ctx)
 }
 
 // TriggerScan implements the RPC. The daemon's scanner runs whenever
@@ -612,66 +620,36 @@ func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest
 // so that no other process can simultaneously mutate the registry
 // while the rename is in flight. A SESSION_RENAMED event broadcasts
 // the change to every subscriber.
-//
-// User-driven renames (the only path in PR2) record
-// AutoNameSource = AutoNameSourceUser on the metadata so the auto-name
-// worker excludes the session from any future apply pass.
 func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRequest) (*clydev1.RenameSessionResponse, error) {
-	start := daemonNow()
 	if req.OldName == "" || req.NewName == "" {
 		return nil, status.Error(codes.InvalidArgument, "old_name and new_name are required")
 	}
-	if s.sessionHasLiveLease(req.OldName) {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"session %q is in use; close the wrapper before renaming", req.OldName)
+	if err := s.renameSessionInternal(ctx, req.OldName, req.NewName, renameAttribution{
+		state:      session.AutoNameStateUserLocked,
+		source:     session.AutoNameSourceUser,
+		sourceHash: "",
+	}); err != nil {
+		return nil, err
 	}
-	store, err := session.NewGlobalFileStore()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "store init: %v", err)
-	}
-	if err := store.Rename(req.OldName, req.NewName); err != nil {
-		return nil, status.Errorf(codes.Internal, "rename failed: %v", err)
-	}
-	source := session.AutoNameSourceUser
-	renamed, getErr := store.Get(req.NewName)
-	if getErr == nil && renamed != nil {
-		renamed.Metadata.AutoNameSource = source
-		renamed.Metadata.LastAutoNameAt = daemonNow()
-		if updateErr := store.Update(renamed); updateErr != nil {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "daemon.rename.metadata_update_failed",
-				slog.String("component", "daemon"),
-				slog.String("subcomponent", "session"),
-				slog.String("session", req.NewName),
-				slog.String("err", updateErr.Error()),
-			)
-		}
-	}
-	s.renameContextState(req.OldName, req.NewName)
-	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED, store, renamed, req.OldName)
-	corrCtx := correlation.FromContext(ctx)
-	providerSessionID := ""
-	if renamed != nil {
-		providerSessionID = renamed.Metadata.SessionID
-	}
-	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon.rename.applied",
-		slog.String("component", "daemon"),
-		slog.String("subcomponent", "session"),
-		slog.String("prior_name", req.OldName),
-		slog.String("new_name", req.NewName),
-		slog.String("source", source.String()),
-		slog.String("session_id", providerSessionID),
-		slog.String("trace_id", string(corrCtx.TraceID)),
-		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
-	)
 	return &clydev1.RenameSessionResponse{}, nil
 }
 
-// sessionHasLiveLease reports whether any wrapper currently holds a
-// live-runtime record or foreground lease against the named session.
-// The check matches by display name because RenameSession identifies
-// sessions by name on the wire while the live maps are keyed by
-// provider session id.
-func (s *Server) sessionHasLiveLease(name string) bool {
+// ApplyAutoRename is the daemon entry point the auto-name worker uses. The
+// worker is transcript-only today, so the applied source is always transcript.
+func (s *Server) ApplyAutoRename(ctx context.Context, oldName, newName, sourceHash string) error {
+	if oldName == "" || newName == "" {
+		return status.Error(codes.InvalidArgument, "old_name and new_name are required")
+	}
+	return s.renameSessionInternal(ctx, oldName, newName, renameAttribution{
+		state:      session.AutoNameStateApplied,
+		source:     session.AutoNameSourceTranscript,
+		sourceHash: sourceHash,
+	})
+}
+
+// HasLiveLease reports whether any wrapper currently holds a live-runtime
+// record or foreground lease against the named session.
+func (s *Server) HasLiveLease(name string) bool {
 	s.remoteMu.Lock()
 	defer s.remoteMu.Unlock()
 	for _, live := range s.liveSessions {
@@ -685,6 +663,67 @@ func (s *Server) sessionHasLiveLease(name string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) sessionHasLiveLease(name string) bool {
+	return s.HasLiveLease(name)
+}
+
+type renameAttribution struct {
+	state      session.AutoNameState
+	source     session.AutoNameSource
+	sourceHash string
+}
+
+func (s *Server) renameSessionInternal(ctx context.Context, oldName, newName string, attribution renameAttribution) error {
+	start := daemonNow()
+	if s.sessionHasLiveLease(oldName) {
+		return status.Errorf(codes.FailedPrecondition,
+			"session %q is in use; close the wrapper before renaming", oldName)
+	}
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	if err := store.Rename(oldName, newName); err != nil {
+		return status.Errorf(codes.Internal, "rename failed: %v", err)
+	}
+
+	s.renameContextState(oldName, newName)
+	renamed, getErr := store.Get(newName)
+	if getErr == nil && renamed != nil {
+		renamed.Metadata.AutoNameState = attribution.state
+		renamed.Metadata.AutoNameSource = attribution.source
+		renamed.Metadata.LastAutoNameAt = daemonNow()
+		renamed.Metadata.AutoNameSourceHash = attribution.sourceHash
+		if updateErr := store.Update(renamed); updateErr != nil {
+			s.log.LogAttrs(ctx, slog.LevelWarn, "daemon.rename.metadata_update_failed",
+				slog.String("component", "daemon"),
+				slog.String("subcomponent", "session"),
+				slog.String("session", newName),
+				slog.String("err", updateErr.Error()),
+			)
+		}
+	}
+
+	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED, store, renamed, oldName)
+	corrCtx := correlation.FromContext(ctx)
+	providerSessionID := ""
+	if renamed != nil {
+		providerSessionID = renamed.Metadata.SessionID
+	}
+	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon.rename.applied",
+		slog.String("component", "daemon"),
+		slog.String("subcomponent", "session"),
+		slog.String("prior_name", oldName),
+		slog.String("new_name", newName),
+		slog.String("source", attribution.source.String()),
+		slog.String("session_id", providerSessionID),
+		slog.String("trace_id", string(corrCtx.TraceID)),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+	)
+	return nil
 }
 
 // DeleteSession is the daemon-side delete. It removes registry metadata,
@@ -1454,10 +1493,10 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	if !sess.SessionProviderCapabilities().TranscriptExport {
-		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
+	if !sess.ProviderRuntimeBoundary().History.Exportable {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support history export", sess.ProviderID())
 	}
-	stats := inspectExportStatsFor(sess.Metadata.ProviderTranscriptPath())
+	stats := inspectExportStatsForSession(sess)
 	resp := &clydev1.GetSessionExportStatsResponse{
 		SessionName:           sess.Name,
 		VisibleTokensEstimate: int32(stats.VisibleTokensEstimate),
@@ -1500,8 +1539,8 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	if !sess.SessionProviderCapabilities().TranscriptExport {
-		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
+	if !sess.ProviderRuntimeBoundary().History.Exportable {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support history export", sess.ProviderID())
 	}
 	body, err := buildSessionExport(sess, req)
 	if err != nil {
@@ -1798,6 +1837,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 
 func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, sess *session.Session) *clydev1.GetSessionDetailResponse {
 	caps := sess.SessionProviderCapabilities()
+	runtime := sess.ProviderRuntimeBoundary()
 	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
 	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
@@ -1811,8 +1851,8 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		}
 	}
 	stats := inspectStats{}
-	if caps.TranscriptExport {
-		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+	if runtime.History.Readable {
+		stats = inspectStatsForSession(sess)
 	}
 	contextState := s.lazyContextStateForDetail(ctx, sess)
 	resp := &clydev1.GetSessionDetailResponse{
@@ -1831,32 +1871,39 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		ContextMessagesTokens: int32(contextState.Usage.CategoryTokens("Messages")),
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
+		ResumeInstructions:    session.ResumeInstructions(sess),
 	}
-	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
+	if p := sess.Metadata.ProviderTranscriptPath(); runtime.History.Readable && p != "" {
 		if info, err := os.Stat(p); err == nil {
 			resp.TranscriptSizeBytes = info.Size()
 			resp.LastActivityNanos = info.ModTime().UnixNano()
 		}
 	}
-	if caps.TranscriptExport {
-		for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
-			text := strings.TrimSpace(m.Text)
-			if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
-				continue
-			}
-			resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
-		}
-		for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
-			resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
-		}
-		for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
-			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
-		}
-	}
+	s.populateSessionDetailMessages(sess, resp)
+	return resp
+}
+
+func (s *Server) populateSessionDetailMessages(sess *session.Session, resp *clydev1.GetSessionDetailResponse) {
 	if sess.ProviderID() == session.ProviderCodex {
 		s.applyCodexSessionDetail(sess, resp)
+		return
 	}
-	return resp
+	if !sess.SessionProviderCapabilities().TranscriptExport {
+		return
+	}
+	for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
+		text := strings.TrimSpace(m.Text)
+		if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
+			continue
+		}
+		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
+	}
+	for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
+		resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
+	}
+	for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
+		resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
+	}
 }
 
 func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.GetSessionDetailResponse) {
@@ -1864,7 +1911,7 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 	if path == "" {
 		return
 	}
-	thread, err := codexstore.ReadThreadByRolloutPath(path, true, false)
+	history, err := itranscript.ReadCodexHistory(path)
 	if err != nil {
 		s.log.Warn("daemon.codex.detail_read_failed",
 			"component", "daemon",
@@ -1874,24 +1921,30 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 		)
 		return
 	}
-	if thread.ModelProvider != "" && resp.Model == "-" {
-		resp.Model = thread.ModelProvider
+	if history.ModelProvider != "" && resp.Model == "-" {
+		resp.Model = history.ModelProvider
 	}
-	resp.TotalMessages = int32(len(thread.Messages))
-	for _, msg := range thread.Messages {
-		text := strings.TrimSpace(msg.Text)
-		if text == "" {
+	allTurns := history.ConversationTurns(itranscript.ShapeOptions{
+		IncludeThinking:  false,
+		ConversationOnly: true,
+		ToolOnly:         itranscript.ToolOnlyCompactSummary,
+		MaxTextRunes:     1000,
+	})
+	resp.TotalMessages = int32(len(allTurns))
+	for _, turn := range allTurns {
+		resp.AllMessages = append(resp.AllMessages, detailMessageProto(turn.Role, turn.Text, turn.Timestamp))
+	}
+	for _, turn := range history.RecentConversationTurns(5, itranscript.ShapeOptions{
+		IncludeThinking:  false,
+		ConversationOnly: true,
+		ToolOnly:         itranscript.ToolOnlyCompactSummary,
+		MaxTextRunes:     150,
+	}) {
+		text := strings.TrimSpace(turn.Text)
+		if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
 			continue
 		}
-		resp.AllMessages = append(resp.AllMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
-	}
-	start := max(len(thread.Messages)-5, 0)
-	for _, msg := range thread.Messages[start:] {
-		text := strings.TrimSpace(msg.Text)
-		if text == "" {
-			continue
-		}
-		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
+		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(turn.Role, text, turn.Timestamp))
 	}
 	if info, err := os.Stat(path); err == nil {
 		resp.TranscriptSizeBytes = info.Size()

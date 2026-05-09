@@ -190,12 +190,14 @@ func TestSessionDetailFromProtoMapsContextUsage(t *testing.T) {
 	resp := &clydev1.GetSessionDetailResponse{
 		SessionName:           "chat-x",
 		Model:                 "claude-sonnet-4-5",
+		Provider:              "codex",
 		ContextTotalTokens:    42000,
 		ContextMaxTokens:      200000,
 		ContextPercentage:     21,
 		ContextMessagesTokens: 31000,
 		ContextUsageLoaded:    true,
 		ContextUsageStatus:    "",
+		ResumeInstructions:    []string{"codex resume codex-123"},
 	}
 
 	got := sessionDetailFromProto(resp)
@@ -217,6 +219,12 @@ func TestSessionDetailFromProtoMapsContextUsage(t *testing.T) {
 	}
 	if got.ContextUsageStatus != "" {
 		t.Fatalf("ContextUsageStatus=%q want empty", got.ContextUsageStatus)
+	}
+	if got.Provider != "codex" {
+		t.Fatalf("Provider=%q want codex", got.Provider)
+	}
+	if len(got.ResumeInstructions) != 1 || got.ResumeInstructions[0] != "codex resume codex-123" {
+		t.Fatalf("ResumeInstructions=%v want [codex resume codex-123]", got.ResumeInstructions)
 	}
 }
 
@@ -292,5 +300,31 @@ func TestSessionSummaryFromProto_AutoNameZeroFields(t *testing.T) {
 	}
 	if !sess.Metadata.LastAutoNameAt.IsZero() {
 		t.Fatalf("LastAutoNameAt=%s want zero", sess.Metadata.LastAutoNameAt)
+	}
+}
+
+func TestSessionSummaryFromProto_RestoresProviderForResumeRouting(t *testing.T) {
+	raw := &clydev1.SessionSummary{
+		Name:         "codex-chat",
+		MetadataName: "codex-chat",
+		SessionId:    "codex-thread",
+		Provider:     string(session.ProviderCodex),
+		Runtime: &clydev1.ProviderRuntimeBoundary{
+			History: &clydev1.SessionHistoryBoundary{
+				Current: &clydev1.ProviderSessionIdentity{
+					Provider:  string(session.ProviderCodex),
+					SessionId: "codex-thread",
+				},
+			},
+		},
+	}
+
+	sess, _, _, _, _ := sessionSummaryFromProto(raw)
+
+	if sess.ProviderID() != session.ProviderCodex {
+		t.Fatalf("provider=%q want %q", sess.ProviderID(), session.ProviderCodex)
+	}
+	if sess.Metadata.ProviderSessionID() != "codex-thread" {
+		t.Fatalf("provider session id=%q want codex-thread", sess.Metadata.ProviderSessionID())
 	}
 }
