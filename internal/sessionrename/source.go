@@ -2,6 +2,7 @@ package sessionrename
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -97,7 +98,7 @@ func (s *transcriptHeaderInnerStringList) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func extractFromSession(sess *session.Session) (candidateSource, error) {
+func extractFromSession(ctx context.Context, sess *session.Session) (candidateSource, error) {
 	if sess == nil {
 		return candidateSource{}, errNoUsableSource
 	}
@@ -106,18 +107,18 @@ func extractFromSession(sess *session.Session) (candidateSource, error) {
 		return candidateSource{}, errNoUsableSource
 	}
 	if sess.ProviderID() == session.ProviderCodex {
-		return extractFromCodexTranscript(path)
+		return extractFromCodexTranscript(ctx, path)
 	}
-	return extractFromClaudeTranscript(path)
+	return extractFromClaudeTranscript(ctx, path)
 }
 
-func extractFromClaudeTranscript(path string) (candidateSource, error) {
+func extractFromClaudeTranscript(ctx context.Context, path string) (candidateSource, error) {
 	if strings.TrimSpace(path) == "" {
 		return candidateSource{}, errNoUsableSource
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		slog.Warn("sessionrename.claude_source_open_failed",
+		slog.WarnContext(ctx, "sessionrename.claude_source_open_failed",
 			"component", "daemon",
 			"subcomponent", "autoname",
 			"concern", slogger.ConcernDaemonWorkersPrune,
@@ -167,7 +168,7 @@ func extractFromClaudeTranscript(path string) (candidateSource, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		slog.Warn("sessionrename.claude_source_scan_failed",
+		slog.WarnContext(ctx, "sessionrename.claude_source_scan_failed",
 			"component", "daemon",
 			"subcomponent", "autoname",
 			"concern", slogger.ConcernDaemonWorkersPrune,
@@ -180,10 +181,10 @@ func extractFromClaudeTranscript(path string) (candidateSource, error) {
 	return candidateFromParts(customTitle, firstUser, userCount, firstUserTime)
 }
 
-func extractFromCodexTranscript(path string) (candidateSource, error) {
+func extractFromCodexTranscript(ctx context.Context, path string) (candidateSource, error) {
 	history, err := itranscript.ReadCodexHistory(path)
 	if err != nil {
-		slog.Warn("sessionrename.codex_source_read_failed",
+		slog.WarnContext(ctx, "sessionrename.codex_source_read_failed",
 			"component", "daemon",
 			"subcomponent", "autoname",
 			"concern", slogger.ConcernDaemonWorkersPrune,

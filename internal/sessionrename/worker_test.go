@@ -153,7 +153,7 @@ func TestWorkerSkipsWhenSourceHashUnchanged(t *testing.T) {
 		`{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}`,
 	)
 	sess := newDefaultShapedSession(t, session.ProviderClaude, "myrepo-12345678", transcript)
-	src, err := extractFromSession(sess)
+	src, err := extractFromSession(context.Background(), sess)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}

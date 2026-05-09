@@ -91,7 +91,7 @@ func (w *Worker) Evaluate(ctx context.Context, sess *session.Session) decision {
 	if out, stop := w.preflightDecision(sess); stop {
 		return out
 	}
-	src, out, ok := w.sourceDecision(sess)
+	src, out, ok := w.sourceDecision(ctx, sess)
 	if !ok {
 		return out
 	}
@@ -153,8 +153,8 @@ func (w *Worker) preflightDecision(sess *session.Session) (decision, bool) {
 	return newDecision(), false
 }
 
-func (w *Worker) sourceDecision(sess *session.Session) (candidateSource, decision, bool) {
-	src, err := extractFromSession(sess)
+func (w *Worker) sourceDecision(ctx context.Context, sess *session.Session) (candidateSource, decision, bool) {
+	src, err := extractFromSession(ctx, sess)
 	if err != nil {
 		out := newDecision()
 		out.Code = decisionNoSource
@@ -188,7 +188,7 @@ func (w *Worker) sourceDecision(sess *session.Session) (candidateSource, decisio
 }
 
 func (w *Worker) candidateDecision(ctx context.Context, sess *session.Session, src candidateSource) (candidateName, decision, bool) {
-	taken, takenErr := w.takenNames(sess.Name)
+	taken, takenErr := w.takenNames(ctx, sess.Name)
 	if takenErr != nil {
 		w.log.WarnContext(ctx, "daemon.autoname.taken_lookup_failed",
 			"component", "daemon",
@@ -268,13 +268,13 @@ func (w *Worker) applyDecision(ctx context.Context, sess *session.Session, src c
 	return out
 }
 
-func (w *Worker) takenNames(self string) (map[string]bool, error) {
+func (w *Worker) takenNames(ctx context.Context, self string) (map[string]bool, error) {
 	if w.store == nil {
 		return map[string]bool{}, nil
 	}
 	all, err := w.store.List()
 	if err != nil {
-		slog.Warn("sessionrename.taken_names_list_failed",
+		w.log.WarnContext(ctx, "sessionrename.taken_names_list_failed",
 			"component", "daemon",
 			"subcomponent", "autoname",
 			"concern", slogger.ConcernDaemonWorkersPrune,

@@ -1,6 +1,7 @@
 package sessionrename
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,7 @@ func TestExtractFromTranscriptPrefersCustomTitle(t *testing.T) {
 		`{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"first message"}}`,
 		`{"type":"custom-title","customTitle":"Refactor rename funnel"}`,
 	)
-	src, err := extractFromClaudeTranscript(path)
+	src, err := extractFromClaudeTranscript(context.Background(), path)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -44,7 +45,7 @@ func TestExtractFromTranscriptFallsBackToFirstUserMessage(t *testing.T) {
 		`{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"add retry to the bridge handler"}}`,
 		`{"type":"user","timestamp":"2025-01-01T00:01:00Z","message":{"role":"user","content":"second message"}}`,
 	)
-	src, err := extractFromClaudeTranscript(path)
+	src, err := extractFromClaudeTranscript(context.Background(), path)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -61,7 +62,7 @@ func TestExtractFromTranscriptFallsBackToFirstUserMessage(t *testing.T) {
 
 func TestExtractFromTranscriptEmptyReturnsErr(t *testing.T) {
 	path := writeTranscript(t)
-	if _, err := extractFromClaudeTranscript(path); err == nil {
+	if _, err := extractFromClaudeTranscript(context.Background(), path); err == nil {
 		t.Fatalf("expected err")
 	}
 }
@@ -70,7 +71,7 @@ func TestExtractFromTranscriptHandlesContentBlocks(t *testing.T) {
 	path := writeTranscript(t,
 		`{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"hello world"}]}}`,
 	)
-	src, err := extractFromClaudeTranscript(path)
+	src, err := extractFromClaudeTranscript(context.Background(), path)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -84,11 +85,11 @@ func TestExtractFromTranscriptHashIsStable(t *testing.T) {
 		`{"type":"custom-title","customTitle":"Rename funnel"}`,
 		`{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}`,
 	)
-	a, err := extractFromClaudeTranscript(path)
+	a, err := extractFromClaudeTranscript(context.Background(), path)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
-	b, err := extractFromClaudeTranscript(path)
+	b, err := extractFromClaudeTranscript(context.Background(), path)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -117,7 +118,7 @@ func TestExtractFromSessionUsesCodexHistory(t *testing.T) {
 	}
 	sess.Metadata.SetProviderTranscriptPath(path)
 
-	src, err := extractFromSession(sess)
+	src, err := extractFromSession(context.Background(), sess)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
