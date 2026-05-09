@@ -43,16 +43,16 @@ func TestSessionSettingsFile(t *testing.T) {
 	if err := store.Create(sess); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if got := sessionSettingsFile(clydeRoot, "chat-1"); got != "" {
-		t.Fatalf("sessionSettingsFile without file = %q, want empty", got)
+	if got := sessionSettingsFileForSession(clydeRoot, sess); got != "" {
+		t.Fatalf("sessionSettingsFileForSession without file = %q, want empty", got)
 	}
 
 	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sess.StorageKey()), "settings.json")
 	if err := os.WriteFile(settingsPath, []byte(`{"remoteControl":true}`), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
-	if got := sessionSettingsFile(clydeRoot, "chat-1"); got != settingsPath {
-		t.Fatalf("sessionSettingsFile with file = %q, want %q", got, settingsPath)
+	if got := sessionSettingsFileForSession(clydeRoot, sess); got != settingsPath {
+		t.Fatalf("sessionSettingsFileForSession with file = %q, want %q", got, settingsPath)
 	}
 	sess.Name = "renamed-chat"
 	if got := sessionSettingsFileForSession(clydeRoot, sess); got != settingsPath {

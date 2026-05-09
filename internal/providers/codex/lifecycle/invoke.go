@@ -80,14 +80,8 @@ func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (st
 		return "", fmt.Errorf("nil session")
 	}
 	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
-	if sessionID != "" {
-		if paths, err := codexstore.ResolveStorePathsFromEnv(); err == nil {
-			if index, err := codexstore.ReadSessionIndex(paths.SessionIndexPath); err == nil {
-				if threadName := strings.TrimSpace(index.ThreadName(sessionID)); threadName != "" {
-					return threadName, nil
-				}
-			}
-		}
+	if threadName := codexSessionIndexThreadName(sessionID); threadName != "" {
+		return threadName, nil
 	}
 	if strings.TrimSpace(sess.Metadata.DisplayTitle) != "" {
 		return strings.TrimSpace(sess.Metadata.DisplayTitle), nil
@@ -101,6 +95,7 @@ func (l *Lifecycle) RenameSession(ctx context.Context, sess *session.Session, ne
 	if sess == nil {
 		return fmt.Errorf("nil session")
 	}
+	log := codexLifecycleLog.Logger()
 	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
 	if sessionID == "" {
 		return fmt.Errorf("missing codex session id")
@@ -111,18 +106,39 @@ func (l *Lifecycle) RenameSession(ctx context.Context, sess *session.Session, ne
 	}
 	paths, err := codexstore.ResolveStorePathsFromEnv()
 	if err != nil {
-		return err
-	}
-	if err := codexstore.AppendThreadName(paths, sessionID, normalized); err != nil {
-		codexLifecycleLog.Logger().WarnContext(ctx, "codex.session.rename_failed",
+		log.WarnContext(ctx, "codex.session.rename_store_paths_failed",
 			"component", "codex",
 			"session", sess.Name,
 			"session_id", sessionID,
 			"err", err,
 		)
-		return err
+		return fmt.Errorf("resolve codex store paths: %w", err)
+	}
+	if err := codexstore.AppendThreadName(paths, sessionID, normalized); err != nil {
+		log.WarnContext(ctx, "codex.session.rename_failed",
+			"component", "codex",
+			"session", sess.Name,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return fmt.Errorf("append codex thread name: %w", err)
 	}
 	return nil
+}
+
+func codexSessionIndexThreadName(sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	paths, err := codexstore.ResolveStorePathsFromEnv()
+	if err != nil {
+		return ""
+	}
+	index, err := codexstore.ReadSessionIndex(paths.SessionIndexPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(index.ThreadName(sessionID))
 }
 
 func codexResumeArgs(req session.OpaqueResumeRequest) ([]string, error) {

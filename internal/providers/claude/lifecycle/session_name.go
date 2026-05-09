@@ -73,7 +73,13 @@ func (l *Lifecycle) RenameSession(ctx context.Context, sess *session.Session, ne
 func appendClaudeSessionRename(transcriptPath, sessionID, title string) error {
 	file, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
-		return err
+		claudeLog.Warn("claude.session.rename_transcript_open_failed",
+			"component", "claude",
+			"session_id", sessionID,
+			"transcript_path", transcriptPath,
+			"err", err,
+		)
+		return fmt.Errorf("open claude transcript for rename: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
@@ -83,14 +89,26 @@ func appendClaudeSessionRename(transcriptPath, sessionID, title string) error {
 		CustomTitle: title,
 		SessionID:   sessionID,
 	}); err != nil {
-		return err
+		claudeLog.Warn("claude.session.rename_custom_title_append_failed",
+			"component", "claude",
+			"session_id", sessionID,
+			"transcript_path", transcriptPath,
+			"err", err,
+		)
+		return fmt.Errorf("append claude custom title rename: %w", err)
 	}
 	if err := encoder.Encode(claudeAgentNameEntry{
 		Type:      "agent-name",
 		AgentName: title,
 		SessionID: sessionID,
 	}); err != nil {
-		return err
+		claudeLog.Warn("claude.session.rename_agent_name_append_failed",
+			"component", "claude",
+			"session_id", sessionID,
+			"transcript_path", transcriptPath,
+			"err", err,
+		)
+		return fmt.Errorf("append claude agent name rename: %w", err)
 	}
 	return nil
 }

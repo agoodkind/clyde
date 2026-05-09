@@ -221,18 +221,6 @@ func remoteControlEnabled(settingsFile string) bool {
 	return err == nil && cfg.Defaults.RemoteControl
 }
 
-func sessionSettingsFile(clydeRoot string, sessionName string) string {
-	if strings.TrimSpace(clydeRoot) == "" || strings.TrimSpace(sessionName) == "" {
-		return ""
-	}
-	store := session.NewFileStore(clydeRoot)
-	sess, err := store.Get(sessionName)
-	if err != nil {
-		return ""
-	}
-	return sessionSettingsFileForSession(clydeRoot, sess)
-}
-
 func sessionSettingsFileForSession(clydeRoot string, sess *session.Session) string {
 	if strings.TrimSpace(clydeRoot) == "" || sess == nil || strings.TrimSpace(sess.StorageKey()) == "" {
 		return ""
