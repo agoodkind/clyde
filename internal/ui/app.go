@@ -969,8 +969,8 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 		var empty SessionDetail
 		return empty, false
 	}
+	var emptyContextUsage SessionContextUsage
 	if !sessionHistoryReadable(sess) {
-		var emptyContextUsage SessionContextUsage
 		return SessionDetail{
 			Model:                 valueOr(a.modelCache[sess.Name], "-"),
 			Provider:              string(sess.ProviderID()),
