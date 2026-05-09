@@ -1,6 +1,7 @@
 // Package cmd holds the TUI dashboard, its daemon-backed callbacks,
 // the `clyde resume` cobra verb, and the argument-routing helpers
-// used by cmd/clyde/main.go to assemble the cobra root.
+// (ClassifyArgs, ForwardToClaude) used by cmd/clyde/main.go to assemble
+// the cobra root.
 //
 // What lives here:
 //
@@ -8,7 +9,7 @@
 //   - TUI callbacks for delete, rename, resume, live sessions,
 //     registry, summary, view, model extract
 //   - NewResumeCmd (the `clyde resume <name|uuid>` verb)
-//   - ClassifyArgs and the default-provider passthrough helpers
+//   - ClassifyArgs and ForwardToClaude (passthrough routing)
 //   - resumeSession / deleteSession helpers shared by the TUI and the
 //     resume verb
 package cmd
@@ -29,25 +30,20 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
-	codexlifecycle "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/ui"
+	"goodkind.io/clyde/internal/util"
 )
-
-func init() {
-	codexlifecycle.SetProviderLaunchEnvironmentFunc(daemon.ProviderLaunchEnvironmentViaDaemon)
-}
 
 // RunDashboard is the entrypoint for `clyde` with no subcommand. It
 // boots the tcell TUI dashboard for managing existing sessions
-// (resume, delete, rename, view, live sessions). New sessions from the TUI launch the
-// current default provider with
-// CLYDE_SESSION_NAME set; the SessionStart hook adopts the row.
+// (resume, delete, rename, view, live sessions). New sessions from the TUI launch `claude`
+// with a stable session id and exact display name; the SessionStart hook adopts the row.
 func RunDashboard(cmd *cobra.Command, args []string) int {
-	// Non-interactive (piped) invocation: forward to the current default provider.
+	// Non-interactive (piped) invocation: forward to real claude.
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
-		return ForwardToDefaultProvider(os.Args[1:])
+		return ForwardToClaude(os.Args[1:])
 	}
 
 	// Non-TTY stdout: show help. Avoids drawing the TUI into a pipe.
@@ -86,7 +82,7 @@ func runDashboardTUI() int {
 // The caller is responsible for only invoking this for an existing directory.
 func RunBasedirLaunch(basedir string) int {
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
-		return ForwardToDefaultProvider(os.Args[1:])
+		return ForwardToClaude(os.Args[1:])
 	}
 	ctx := newCommandContext("dashboard.basedir")
 	daemon.NudgeDiscoveryScan()
@@ -212,8 +208,8 @@ func (builder appCallbackBuilder) openStore() (session.Store, error) {
 	return session.NewGlobalFileStore()
 }
 
-func (builder appCallbackBuilder) listSessions(ctx context.Context) (ui.SessionSnapshot, error) {
-	resp, err := daemon.ListSessionsViaDaemon(ctx)
+func (builder appCallbackBuilder) listSessions() (ui.SessionSnapshot, error) {
+	resp, err := daemon.ListSessionsViaDaemon(builder.childContext("dashboard.list_sessions"))
 	if err != nil {
 		return ui.SessionSnapshot{}, err
 	}
@@ -322,6 +318,27 @@ func (builder appCallbackBuilder) renameSession(sess *session.Session) (string, 
 		return newName, nil
 	}
 	ctx := builder.childContext("dashboard.session.rename")
+	if err := session.ValidateDisplayName(newName); err != nil {
+		slog.WarnContext(ctx, "dashboard.session.rename_invalid_name",
+			"component", "cli",
+			"session", oldName,
+			"new_name", newName,
+			"err", err,
+		)
+		return newName, fmt.Errorf("validate display name: %w", err)
+	}
+	runtime, runtimeErr := registry.ForSession(sess, nil)
+	if runtimeErr == nil {
+		if renameErr := runtime.RenameSession(ctx, sess, newName); renameErr != nil {
+			slog.WarnContext(ctx, "dashboard.session.provider_rename_failed",
+				"component", "cli",
+				"session", oldName,
+				"new_name", newName,
+				"err", renameErr,
+			)
+			return newName, fmt.Errorf("provider rename session: %w", renameErr)
+		}
+	}
 	outcome, err := daemon.RenameSessionViaDaemonOutcome(ctx, oldName, newName)
 	if outcome != daemon.LifecycleOutcomeReady {
 		return newName, daemonLifecycleError(ctx, "rename", outcome, err)
@@ -438,11 +455,11 @@ func (builder appCallbackBuilder) exportSession(sess *session.Session, req ui.Se
 	return resp.GetBody(), nil
 }
 
-func (builder appCallbackBuilder) loadExportStats(ctx context.Context, sess *session.Session) (ui.SessionExportStats, error) {
+func (builder appCallbackBuilder) loadExportStats(sess *session.Session) (ui.SessionExportStats, error) {
 	if sess == nil {
 		return ui.SessionExportStats{}, fmt.Errorf("nil session")
 	}
-	resp, err := daemon.GetSessionExportStatsViaDaemon(ctx, sess.Name)
+	resp, err := daemon.GetSessionExportStatsViaDaemon(builder.childContext("dashboard.session.export_stats"), sess.Name)
 	if err != nil {
 		return ui.SessionExportStats{}, err
 	}
@@ -477,8 +494,8 @@ func forwardRegistryEvents(ctx context.Context, raw <-chan *clydev1.SubscribeReg
 	}
 }
 
-func (builder appCallbackBuilder) loadConfigControls(ctx context.Context) ([]ui.ConfigControl, error) {
-	raw, err := daemon.ListConfigControlsViaDaemon(ctx)
+func (builder appCallbackBuilder) loadConfigControls() ([]ui.ConfigControl, error) {
+	raw, err := daemon.ListConfigControlsViaDaemon(builder.childContext("dashboard.config_controls.list"))
 	if err != nil {
 		return nil, err
 	}
@@ -630,8 +647,8 @@ func (builder appCallbackBuilder) compactUndo(sessionName string) (*ui.CompactUn
 	}, nil
 }
 
-func (builder appCallbackBuilder) getSessionDetail(ctx context.Context, sess *session.Session) (ui.SessionDetail, error) {
-	resp, err := daemon.GetSessionDetailViaDaemon(ctx, sess.Name)
+func (builder appCallbackBuilder) getSessionDetail(sess *session.Session) (ui.SessionDetail, error) {
+	resp, err := daemon.GetSessionDetailViaDaemon(builder.childContext("dashboard.session.detail"), sess.Name)
 	if err != nil {
 		return ui.SessionDetail{}, err
 	}
@@ -719,25 +736,20 @@ func sessionSnapshotFromProto(resp *clydev1.ListSessionsResponse) ui.SessionSnap
 }
 
 func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, string, int, ui.SessionContextState, *ui.LiveURL) {
-	provider := strings.TrimSpace(raw.GetProvider())
-	if provider == "" {
-		provider = strings.TrimSpace(raw.GetRuntime().GetHistory().GetCurrent().GetProvider())
-	}
-	if provider == "" {
-		provider = strings.TrimSpace(raw.GetRuntime().GetLive().GetCurrent().GetProvider())
-	}
 	sess := &session.Session{
 		Name: raw.GetName(),
 		Metadata: session.Metadata{
 			Name:                 raw.GetMetadataName(),
-			Provider:             session.ProviderID(provider),
-			ProviderState:        nil,
+			ClydeUUID:            raw.GetClydeUuid(),
+			Provider:             session.NormalizeProviderID(session.ProviderID(raw.GetProvider())),
 			SessionID:            raw.GetSessionId(),
 			TranscriptPath:       raw.GetTranscriptPath(),
+			ProviderState:        nil,
 			WorkDir:              raw.GetWorkDir(),
 			Created:              timeFromNanos(raw.GetCreatedNanos()),
 			LastAccessed:         timeFromNanos(raw.GetLastActivityNanos()),
 			ParentSession:        raw.GetParentSession(),
+			ParentClydeUUID:      raw.GetParentClydeUuid(),
 			IsForkedSession:      raw.GetIsForkedSession(),
 			IsIncognito:          raw.GetIsIncognito(),
 			PreviousSessionIDs:   append([]string(nil), raw.GetPreviousSessionIds()...),
@@ -755,7 +767,6 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 	if sess.Metadata.Name == "" {
 		sess.Metadata.Name = sess.Name
 	}
-	sess.Metadata.NormalizeProviderState()
 	contextState := ui.SessionContextState{
 		Usage: ui.SessionContextUsage{
 			TotalTokens:    int(raw.GetContextTotalTokens()),
@@ -806,8 +817,8 @@ func sessionEventFromProto(ev *clydev1.SubscribeRegistryResponse) ui.SessionEven
 
 func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDetail {
 	out := ui.SessionDetail{
-		Model:                 resp.GetModel(),
 		Provider:              resp.GetProvider(),
+		Model:                 resp.GetModel(),
 		TotalMessages:         int(resp.GetTotalMessages()),
 		VisibleTokensEstimate: int(resp.GetVisibleTokensEstimate()),
 		LastMessageTokens:     int(resp.GetLastMessageTokens()),
@@ -952,11 +963,12 @@ func timeFromNanos(n int64) time.Time {
 	return time.Unix(0, n)
 }
 
-// ForwardToDefaultProvider runs Clyde's current default provider binary with
-// the given args, inheriting stdin/stdout/stderr. Returns the exit code. Used
-// by the dispatch path and by RunDashboard's piped-input shortcut.
-func ForwardToDefaultProvider(args []string) int {
-	ctx := newCommandContext("forward.default_provider")
+// ForwardToClaude runs the real claude binary (bypassing the shell
+// alias) with the given args, inheriting stdin/stdout/stderr. Returns
+// the exit code. Used by the dispatch path and by RunDashboard's
+// piped-input shortcut.
+func ForwardToClaude(args []string) int {
+	ctx := newCommandContext("forward.claude")
 	return runClaudeWithEnv(ctx, args, applyClaudeMITMEnv(ctx, os.Environ()))
 }
 
@@ -1068,30 +1080,24 @@ func passthroughSkipsPostSessionTUI(args []string) bool {
 	return false
 }
 
-// ForwardToDefaultProviderThenDashboard runs the current default provider like
-// ForwardToDefaultProvider, but for an interactive terminal it assigns
-// CLYDE_SESSION_NAME when unset so the SessionStart hook adopts the session,
-// then opens the TUI when the provider exits. Pipe and print-style invocations
-// behave like ForwardToDefaultProvider only.
-func ForwardToDefaultProviderThenDashboard(args []string) int {
+// ForwardToClaudeThenDashboard runs claude like ForwardToClaude, but for an
+// interactive terminal it assigns a stable session id and exact display name
+// for new Claude sessions, then opens the TUI when claude exits. Pipe, resume,
+// and print-style invocations behave like ForwardToClaude only.
+func ForwardToClaudeThenDashboard(args []string) int {
 	if !shouldOpenDashboardAfterPassthrough(args) {
-		return ForwardToDefaultProvider(args)
+		return ForwardToClaude(args)
 	}
-	ctx := newCommandContext("forward.default_provider.dashboard")
+	ctx := newCommandContext("forward.claude.dashboard")
 	env := withEnvValue(os.Environ(), "CLYDE_LAUNCH_CWD", currentWorkingDirectory())
-	if os.Getenv("CLYDE_SESSION_NAME") == "" {
-		store, serr := session.NewGlobalFileStore()
-		if serr == nil {
-			name, nerr := nextChatSessionName(store)
-			if nerr == nil {
-				env = append(env, "CLYDE_SESSION_NAME="+name)
-				cmdUILog.Logger().InfoContext(ctx, "forward.passthrough_wrapped",
-					"component", "cli",
-					"session", name,
-				)
-			}
-		}
+	store, serr := session.NewGlobalFileStore()
+	if serr != nil {
+		cmdUILog.Logger().WarnContext(ctx, "forward.passthrough_store_unavailable",
+			"component", "cli",
+			"err", serr,
+		)
 	}
+	args, env = applyPassthroughBootstrapIdentity(ctx, args, env, store)
 	_ = runClaudeWithEnv(ctx, args, applyClaudeMITMEnv(ctx, env))
 	_ = runDashboardTUI()
 	return 0
@@ -1127,8 +1133,110 @@ func withEnvValue(env []string, key, value string) []string {
 	return append(out, prefix+value)
 }
 
-// nextChatSessionName returns a new registry-safe chat-* name that does not
-// collide with existing session directories.
+func envListValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		item := env[i]
+		if value, ok := strings.CutPrefix(item, prefix); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func applyPassthroughBootstrapIdentity(
+	ctx context.Context,
+	args []string,
+	env []string,
+	store session.Store,
+) ([]string, []string) {
+	if !passthroughStartsNewSession(args) {
+		return args, env
+	}
+
+	sessionName := envListValue(env, "CLYDE_SESSION_NAME")
+	if strings.TrimSpace(sessionName) == "" {
+		if store == nil {
+			return args, env
+		}
+		name, err := nextChatSessionName(store)
+		if err != nil {
+			cmdUILog.Logger().WarnContext(ctx, "forward.passthrough_name_failed",
+				"component", "cli",
+				"err", err,
+			)
+			return args, env
+		}
+		sessionName = name
+		env = withEnvValue(env, "CLYDE_SESSION_NAME", sessionName)
+	}
+
+	sessionID := strings.TrimSpace(envListValue(env, "CLYDE_SESSION_ID"))
+	if sessionID == "" {
+		generatedID, err := util.GenerateUUIDE()
+		if err != nil {
+			cmdUILog.Logger().WarnContext(ctx, "forward.passthrough_session_id_failed",
+				"component", "cli",
+				"session", sessionName,
+				"err", err,
+			)
+			return args, env
+		}
+		sessionID = generatedID
+		env = withEnvValue(env, "CLYDE_SESSION_ID", sessionID)
+	}
+
+	args = appendSessionIDArg(args, sessionID)
+	cmdUILog.Logger().InfoContext(ctx, "forward.passthrough_wrapped",
+		"component", "cli",
+		"session", sessionName,
+		"session_id", sessionID,
+	)
+	return args, env
+}
+
+type passthroughControlArg string
+
+const (
+	passthroughControlArgResumeLong    passthroughControlArg = "--resume"
+	passthroughControlArgResumeShort   passthroughControlArg = "-r"
+	passthroughControlArgContinueLong  passthroughControlArg = "--continue"
+	passthroughControlArgContinueShort passthroughControlArg = "-c"
+	passthroughControlArgSessionID     passthroughControlArg = "--session-id"
+)
+
+func passthroughStartsNewSession(args []string) bool {
+	for _, arg := range args {
+		switch passthroughControlArg(arg) {
+		case passthroughControlArgResumeLong,
+			passthroughControlArgResumeShort,
+			passthroughControlArgContinueLong,
+			passthroughControlArgContinueShort,
+			passthroughControlArgSessionID:
+			return false
+		}
+		if strings.HasPrefix(arg, "--resume=") ||
+			strings.HasPrefix(arg, "--continue=") ||
+			strings.HasPrefix(arg, "--session-id=") {
+			return false
+		}
+	}
+	return true
+}
+
+func appendSessionIDArg(args []string, sessionID string) []string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	out = append(out, "--session-id", sessionID)
+	out = append(out, args...)
+	return out
+}
+
+// nextChatSessionName returns a new display-safe chat-* name that does not
+// collide with existing sessions.
 func nextChatSessionName(store session.Store) (string, error) {
 	list, err := store.List()
 	if err != nil {
@@ -1139,7 +1247,7 @@ func nextChatSessionName(store session.Store) (string, error) {
 		taken[s.Name] = true
 	}
 	base := "chat-" + currentTime().UTC().Format("20060102-150405")
-	name := session.UniqueName(base, taken)
+	name := session.UniqueDisplayName(base, taken)
 	if taken[name] {
 		return "", fmt.Errorf("could not allocate a unique session name")
 	}
@@ -1220,7 +1328,7 @@ func resumeSession(ctx context.Context, sess *session.Session, store session.Sto
 	}
 
 	_, _ = fmt.Fprintf(os.Stdout, "Resuming session '%s' (%s)\n\n", sess.Name, sess.Metadata.ProviderSessionID())
-	_, _ = fmt.Fprintln(os.Stdout, "Dashboard is suspended while the provider runs. Exit to return.")
+	_, _ = fmt.Fprintln(os.Stdout, "Dashboard is suspended while Claude runs. Exit Claude to return.")
 	_, _ = fmt.Fprintln(os.Stdout)
 	cmdUILog.Logger().InfoContext(ctx, "session.resume.started",
 		"component", "cli",

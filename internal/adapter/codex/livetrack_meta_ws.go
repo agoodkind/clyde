@@ -1,6 +1,12 @@
 package codex
 
-import "goodkind.io/clyde/internal/livetrack"
+import (
+	"fmt"
+	"io"
+	"log/slog"
+
+	"goodkind.io/clyde/internal/livetrack"
+)
 
 // WsSessionMeta is the per-session metadata stored in the livetrack
 // egress registry for each live Codex websocket connection. It mirrors
@@ -43,19 +49,33 @@ func NewWsSessionRegistry() *livetrack.Registry[WsSessionMeta] {
 }
 
 // wsConnCloser implements [livetrack.Closer] for a gorilla websocket
-// connection. Close sends a normal-closure control frame then closes
-// the underlying connection. The connection may already be closed;
-// errors from the underlying Close call are ignored because the
-// important semantics are "the socket will not block reads any longer."
+// connection. Close terminates the underlying connection so blocked
+// websocket reads can exit during registry force-close.
 type wsConnCloser struct {
 	session *WebsocketSession
+	conn    io.Closer
 }
 
-func (c *wsConnCloser) Close(_ string) error {
-	if c.session == nil || c.session.Conn == nil {
+func (c *wsConnCloser) Close(reason string) error {
+	conn := c.conn
+	if conn == nil && c.session != nil && c.session.Conn != nil {
+		conn = c.session.Conn
+	}
+	if conn == nil {
 		return nil
 	}
-	_ = c.session.Conn.Close()
-	c.session.Closed = true
+	if err := conn.Close(); err != nil {
+		wrapped := fmt.Errorf("close codex websocket session (%s): %w", reason, err)
+		slog.Warn("adapter.codex.ws_session.close_failed",
+			"component", "adapter",
+			"subcomponent", "codex",
+			"reason", reason,
+			"err", wrapped,
+		)
+		return wrapped
+	}
+	if c.session != nil {
+		c.session.Closed = true
+	}
 	return nil
 }

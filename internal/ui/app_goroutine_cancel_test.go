@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"sync"
 	"testing"
 	"time"
@@ -11,34 +10,18 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-// TestRequestSessionsAsync_CtxCancelDropsInterrupt confirms that when
-// a.ctx is canceled while ListSessions is in flight, the goroutine
-// observes the cancel and does not post the result. The stub blocks
-// until ctx.Done fires. The test asserts the callback saw
-// ctx.Err != nil. The test also asserts that no sessionsLoaded
-// interrupt was queued on the screen.
-func TestRequestSessionsAsync_CtxCancelDropsInterrupt(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var (
-		callbackEnteredAt = make(chan struct{})
-		observedErr       error
-		observedMu        sync.Mutex
-	)
-
+// TestRequestSessionsAsync_PostsInterrupt confirms that the async sessions
+// loader invokes the callback and posts a sessionsLoaded interrupt.
+func TestRequestSessionsAsync_PostsInterrupt(t *testing.T) {
+	callbackEnteredAt := make(chan struct{})
 	cb := AppCallbacks{
-		ListSessions: func(cbCtx context.Context) (SessionSnapshot, error) {
+		ListSessions: func() (SessionSnapshot, error) {
 			close(callbackEnteredAt)
-			<-cbCtx.Done()
-			observedMu.Lock()
-			observedErr = cbCtx.Err()
-			observedMu.Unlock()
 			return SessionSnapshot{}, nil
 		},
 	}
 
-	a := NewApp(nil, cb, AppOptions{Context: ctx})
+	a := NewApp(nil, cb)
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {
 		t.Fatal(err)
@@ -54,31 +37,6 @@ func TestRequestSessionsAsync_CtxCancelDropsInterrupt(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("ListSessions callback was never invoked")
 	}
-
-	cancel()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		observedMu.Lock()
-		got := observedErr
-		observedMu.Unlock()
-		if got != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	observedMu.Lock()
-	got := observedErr
-	observedMu.Unlock()
-	if got == nil {
-		t.Fatal("callback did not observe ctx.Err()")
-	}
-
-	// Drain any pending screen events. After cancel, the goroutine
-	// must skip postInterrupt, so no sessionsLoaded event lands.
-	// HasPendingEvent is non-blocking; PollEvent here only runs when
-	// an event is already queued.
 	time.Sleep(50 * time.Millisecond)
 	for scr.HasPendingEvent() {
 		ev := scr.PollEvent()
@@ -87,41 +45,29 @@ func TestRequestSessionsAsync_CtxCancelDropsInterrupt(t *testing.T) {
 			continue
 		}
 		if _, isLoaded := ei.Data().(sessionsLoaded); isLoaded {
-			t.Fatal("sessionsLoaded interrupt posted after ctx cancel")
+			return
 		}
 	}
+	t.Fatal("sessionsLoaded interrupt was never posted")
 }
 
-// TestLoadDetailAsync_CtxCancelDropsInterrupt confirms the same
-// cancel-aware behavior on the detail-load path. The stub blocks until
-// ctx is done so the test can exercise the cancel race deterministically.
-func TestLoadDetailAsync_CtxCancelDropsInterrupt(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+// TestLoadDetailAsync_PostsInterrupt confirms the detail-load async path posts
+// a detailsLoaded interrupt with the current callback contract.
+func TestLoadDetailAsync_PostsInterrupt(t *testing.T) {
 	sess := &session.Session{
 		Name:     "detail-test",
 		Metadata: session.Metadata{Name: "detail-test"},
 	}
 
 	callbackEnteredAt := make(chan struct{})
-	var (
-		observedErr error
-		observedMu  sync.Mutex
-	)
-
 	cb := AppCallbacks{
-		GetSessionDetail: func(cbCtx context.Context, _ *session.Session) (SessionDetail, error) {
+		GetSessionDetail: func(_ *session.Session) (SessionDetail, error) {
 			close(callbackEnteredAt)
-			<-cbCtx.Done()
-			observedMu.Lock()
-			observedErr = cbCtx.Err()
-			observedMu.Unlock()
 			return SessionDetail{}, nil
 		},
 	}
 
-	a := NewApp([]*session.Session{sess}, cb, AppOptions{Context: ctx})
+	a := NewApp([]*session.Session{sess}, cb)
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {
 		t.Fatal(err)
@@ -137,27 +83,6 @@ func TestLoadDetailAsync_CtxCancelDropsInterrupt(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("GetSessionDetail callback was never invoked")
 	}
-
-	cancel()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		observedMu.Lock()
-		got := observedErr
-		observedMu.Unlock()
-		if got != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	observedMu.Lock()
-	got := observedErr
-	observedMu.Unlock()
-	if got == nil {
-		t.Fatal("callback did not observe ctx.Err()")
-	}
-
 	time.Sleep(50 * time.Millisecond)
 	for scr.HasPendingEvent() {
 		ev := scr.PollEvent()
@@ -166,9 +91,10 @@ func TestLoadDetailAsync_CtxCancelDropsInterrupt(t *testing.T) {
 			continue
 		}
 		if _, isLoaded := ei.Data().(detailsLoaded); isLoaded {
-			t.Fatal("detailsLoaded interrupt posted after ctx cancel")
+			return
 		}
 	}
+	t.Fatal("detailsLoaded interrupt was never posted")
 }
 
 // TestRowFor_ConcurrentAccessNoRace exercises rowFor from multiple

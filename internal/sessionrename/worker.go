@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 type decision struct {
@@ -273,7 +274,12 @@ func (w *Worker) takenNames(self string) (map[string]bool, error) {
 	}
 	all, err := w.store.List()
 	if err != nil {
-		slog.Warn("sessionrename.taken_names_list_failed", "err", err)
+		slog.Warn("sessionrename.taken_names_list_failed",
+			"component", "daemon",
+			"subcomponent", "autoname",
+			"concern", slogger.ConcernDaemonWorkersPrune,
+			"err", err,
+		)
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 	taken := make(map[string]bool, len(all))

@@ -23,24 +23,25 @@ func handleStartupOrResume(
 	store session.Store,
 	out io.Writer,
 	errOut io.Writer,
-) {
-	sessionName := os.Getenv("CLYDE_SESSION_NAME")
+) string {
+	sessionName := resultSessionName(hookData, store)
+	envSessionNameValue := strings.TrimSpace(os.Getenv(envSessionName))
 
 	if sessionName != "" {
-		if !store.Exists(sessionName) && hookData.SessionID != "" {
-			if session.ValidateName(sessionName) == nil {
-				autoAdoptSession(log, deps, store, sessionName, hookData, errOut)
+		if envSessionNameValue != "" && sessionName == envSessionNameValue && !store.Exists(sessionName) && hookData.SessionID != "" {
+			if session.ValidateLegacySlugName(envSessionNameValue) == nil {
+				autoAdoptSession(log, deps, store, envSessionNameValue, hookData, errOut)
 			}
 		}
 
-		if err := writeSessionNameToEnv(sessionName); err != nil {
+		if err := writeSessionIdentityToEnv(sessionName, hookData.SessionID); err != nil {
 			log.WarnContext(ctx, "hook.sessionstart.env_write_failed",
 				"component", "hook",
 				"subject", "sessionstart",
-				"key", "CLYDE_SESSION",
+				"key", envLegacySessionName,
 				"err", err,
 			)
-			_, _ = fmt.Fprintf(errOut, "Warning: failed to write session name to env: %v\n", err)
+			_, _ = fmt.Fprintf(errOut, "Warning: failed to write session identity to env: %v\n", err)
 		}
 
 		if hookData.TranscriptPath != "" {
@@ -64,6 +65,7 @@ func handleStartupOrResume(
 	}
 
 	outputContexts(log, store, sessionName, out)
+	return sessionName
 }
 
 func autoAdoptSession(
@@ -93,26 +95,27 @@ func autoAdoptSession(
 		sess.Metadata.WorkspaceRoot = root
 	}
 
-	// Populate DisplayTitle from the Claude Code custom-title entry in
-	// the transcript so the TUI surfaces the user-given chat name. The
-	// hook handles the pre-named path (CLYDE_SESSION_NAME set), so Name
-	// stays authoritative; DisplayTitle is purely decorative.
+	// Populate DisplayTitle from the provider-owned observed name so the TUI
+	// surfaces the upstream user-given chat name. The hook handles the pre-named
+	// path (CLYDE_SESSION_NAME set), so Name stays authoritative; DisplayTitle is
+	// purely decorative.
 	if headerOK {
-		if header.CustomTitle != "" {
-			sess.Metadata.DisplayTitle = header.CustomTitle
+		if observedName := header.GetName(); observedName != "" {
+			sess.Metadata.DisplayTitle = observedName
 			log.Debug("hook.sessionstart.display_title_captured",
 				"component", "hook",
 				"subject", "sessionstart",
 				"session", name,
-				"display_title", header.CustomTitle,
+				"display_title", observedName,
 			)
 		}
 		if header.IsForked {
 			sess.Metadata.IsForkedSession = true
 			parentID := header.ForkParent.Normalized().ID
 			if parentID != "" {
-				if parentName, err := findSessionByUUID(store, parentID); err == nil {
-					sess.Metadata.ParentSession = parentName
+				if parentSession, err := findSessionByUUIDSession(store, parentID); err == nil {
+					sess.Metadata.ParentSession = parentSession.Name
+					sess.Metadata.ParentClydeUUID = parentSession.ClydeUUID()
 				}
 			}
 			log.Debug("hook.sessionstart.fork_lineage_captured",
@@ -162,7 +165,7 @@ func handleCompact(
 	store session.Store,
 	out io.Writer,
 	errOut io.Writer,
-) error {
+) (string, error) {
 	sessionName, err := resolveSessionName(hookData, store, true)
 	if err != nil {
 		log.WarnContext(ctx, "hook.sessionstart.resolve_name_failed",
@@ -172,11 +175,11 @@ func handleCompact(
 			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: unable to resolve session name for compact: %v\n", err)
-		return nil
+		return "", nil
 	}
 
 	if sessionName == "" {
-		return nil
+		return "", nil
 	}
 
 	sess, err := store.Get(sessionName)
@@ -189,7 +192,7 @@ func handleCompact(
 			"err", err,
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: session '%s' not found: %v\n", sessionName, err)
-		return nil
+		return "", nil
 	}
 
 	sess.AddPreviousSessionID(hookData.SessionID)
@@ -206,15 +209,15 @@ func handleCompact(
 		_, _ = fmt.Fprintf(errOut, "Warning: failed to update session metadata: %v\n", err)
 	}
 
-	if err := writeSessionNameToEnv(sessionName); err != nil {
+	if err := writeSessionIdentityToEnv(sessionName, hookData.SessionID); err != nil {
 		log.WarnContext(ctx, "hook.sessionstart.env_write_failed",
 			"component", "hook",
 			"subject", "sessionstart",
-			"key", "CLYDE_SESSION",
+			"key", envLegacySessionName,
 			"session", sessionName,
 			"err", err,
 		)
-		_, _ = fmt.Fprintf(errOut, "Warning: failed to write session name to env: %v\n", err)
+		_, _ = fmt.Fprintf(errOut, "Warning: failed to write session identity to env: %v\n", err)
 	}
 
 	log.InfoContext(ctx, "hook.sessionstart.compact_handled",
@@ -225,7 +228,7 @@ func handleCompact(
 	)
 
 	outputContexts(log, store, sessionName, out)
-	return nil
+	return sessionName, nil
 }
 
 func handleClear(
@@ -235,7 +238,7 @@ func handleClear(
 	store session.Store,
 	out io.Writer,
 	errOut io.Writer,
-) error {
+) (string, error) {
 	return handleCompact(ctx, log, hookData, store, out, errOut)
 }
 

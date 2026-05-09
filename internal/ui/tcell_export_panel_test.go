@@ -30,7 +30,7 @@ func TestMarkedSliderRendersHistoryStates(t *testing.T) {
 }
 
 func TestExportPanelDefaultsToLatestCompactionPlusVisible(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{Compactions: 3, VisibleMessages: 10, VisibleTokensEstimate: 4000}, "/tmp")
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{Compactions: 3, VisibleMessages: 10, VisibleTokensEstimate: 4000}, "/tmp")
 	if panel.historyStart != 2 {
 		t.Fatalf("historyStart = %d want 2", panel.historyStart)
 	}
@@ -40,7 +40,7 @@ func TestExportPanelDefaultsToLatestCompactionPlusVisible(t *testing.T) {
 }
 
 func TestExportPanelDefaultsToVisibleOnlyWithoutCompactions(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{}, "/tmp")
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{}, "/tmp")
 	if panel.historyStart != 0 {
 		t.Fatalf("historyStart = %d want 0", panel.historyStart)
 	}
@@ -50,7 +50,7 @@ func TestExportPanelDefaultsToVisibleOnlyWithoutCompactions(t *testing.T) {
 }
 
 func TestExportPanelHistorySliderKeepsSelectedMarkVisibleWhenDense(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{Compactions: 14}, "/tmp")
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{Compactions: 14}, "/tmp")
 	got := panel.historySliderForWidth(54)
 	if runeCount(got) > 54 {
 		t.Fatalf("compact slider width = %d, want <= 54: %q", runeCount(got), got)
@@ -63,7 +63,7 @@ func TestExportPanelHistorySliderKeepsSelectedMarkVisibleWhenDense(t *testing.T)
 }
 
 func TestExportPanelEstimateDoesNotDuplicateTokenUnit(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{
 		Compactions:           1,
 		VisibleMessages:       10,
 		VisibleTokensEstimate: 1200,
@@ -84,7 +84,7 @@ func TestExportPanelEstimateDoesNotDuplicateTokenUnit(t *testing.T) {
 }
 
 func TestExportPanelBuildsRequestFromState(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{Compactions: 2}, "/tmp/out")
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{Compactions: 2}, "/tmp/out")
 	panel.historyStart = 0
 	panel.includeSystemPrompts = true
 	panel.includeToolOutputs = true
@@ -124,7 +124,7 @@ func TestDefaultExportFilenameAutoDatesAndSanitizes(t *testing.T) {
 }
 
 func TestExportPanelFolderActionOpensPicker(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{}, "/tmp")
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{}, "/tmp")
 	called := false
 	panel.OnChooseFolder = func(*ExportPanel) { called = true }
 	panel.focusGroup = 5
@@ -138,7 +138,7 @@ func TestExportPanelFolderActionOpensPicker(t *testing.T) {
 }
 
 func TestExportPanelDrawsStatsAndSlider(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{
 		VisibleTokensEstimate: 1200,
 		VisibleMessages:       12,
 		UserMessages:          6,
@@ -166,7 +166,7 @@ func TestExportPanelDrawsStatsAndSlider(t *testing.T) {
 }
 
 func TestExportPanelSmallViewportScrollsWithoutOverlappingActions(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{
 		VisibleTokensEstimate: 402000,
 		VisibleMessages:       756,
 		UserMessages:          206,
@@ -229,7 +229,7 @@ func TestExportWhitespaceDescriptionsUseFullCopy(t *testing.T) {
 }
 
 func TestExportPanelCyclesWhitespaceCompression(t *testing.T) {
-	panel := NewExportPanel("demo", SessionExportStats{}, "/tmp")
+	panel := newExportPanelWithTitle("demo", "demo", SessionExportStats{}, "/tmp")
 	panel.focusGroup = 3
 	if panel.whitespace != SessionExportWhitespaceTidy {
 		t.Fatalf("default whitespace = %q want tidy", panel.whitespace)

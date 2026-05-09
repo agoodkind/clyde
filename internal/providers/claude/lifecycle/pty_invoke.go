@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -42,12 +43,14 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 // The wrapper still exposes the inject socket so the daemon sidecar can send
 // text to the running Claude session, but local terminal IO is detached.
 func StartHeadlessRemoteWorker(env map[string]string, settingsFile string, workDir, sessionID string) error {
+	sessionID = launchSessionID(env, sessionID)
 	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 	defer cleanupSettings()
 
 	args := []string{}
 	args = appendCommonArgs(args, effectiveSettingsFile)
 	if sessionID != "" {
+		env["CLYDE_SESSION_ID"] = sessionID
 		args = append(args, "--session-id", sessionID)
 	}
 	applyMITMEnv(env)
@@ -62,7 +65,10 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 	ctx := context.Background()
 	wrapperID := fmt.Sprintf("%d", os.Getpid())
 	sessionName := env["CLYDE_SESSION_NAME"]
-	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName); settingsFile != "" {
+	if envSessionID := env["CLYDE_SESSION_ID"]; strings.TrimSpace(envSessionID) != "" {
+		sessionID = envSessionID
+	}
+	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName, sessionID); settingsFile != "" {
 		effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 		defer cleanupSettings()
 		args = append([]string{"--settings", effectiveSettingsFile}, args...)
@@ -308,7 +314,7 @@ func startPTYDaemonMonitor(
 				)
 			}
 		}()
-		monitorDaemon(ctx, wrapperID, sessionName, monitorDone, monitor, monitorStopped)
+		monitorDaemon(ctx, wrapperID, sessionName, sessionID, monitorDone, monitor, monitorStopped)
 	}()
 }
 

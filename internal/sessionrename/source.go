@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/slogger"
 	itranscript "goodkind.io/clyde/internal/transcript"
 )
 
@@ -116,7 +117,13 @@ func extractFromClaudeTranscript(path string) (candidateSource, error) {
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		slog.Warn("sessionrename.claude_source_open_failed", "path", path, "err", err)
+		slog.Warn("sessionrename.claude_source_open_failed",
+			"component", "daemon",
+			"subcomponent", "autoname",
+			"concern", slogger.ConcernDaemonWorkersPrune,
+			"path", path,
+			"err", err,
+		)
 		return candidateSource{}, fmt.Errorf("open transcript: %w", err)
 	}
 	defer func() { _ = f.Close() }()
@@ -160,7 +167,13 @@ func extractFromClaudeTranscript(path string) (candidateSource, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		slog.Warn("sessionrename.claude_source_scan_failed", "path", path, "err", err)
+		slog.Warn("sessionrename.claude_source_scan_failed",
+			"component", "daemon",
+			"subcomponent", "autoname",
+			"concern", slogger.ConcernDaemonWorkersPrune,
+			"path", path,
+			"err", err,
+		)
 		return candidateSource{}, fmt.Errorf("scan transcript: %w", err)
 	}
 
@@ -170,7 +183,13 @@ func extractFromClaudeTranscript(path string) (candidateSource, error) {
 func extractFromCodexTranscript(path string) (candidateSource, error) {
 	history, err := itranscript.ReadCodexHistory(path)
 	if err != nil {
-		slog.Warn("sessionrename.codex_source_read_failed", "path", path, "err", err)
+		slog.Warn("sessionrename.codex_source_read_failed",
+			"component", "daemon",
+			"subcomponent", "autoname",
+			"concern", slogger.ConcernDaemonWorkersPrune,
+			"path", path,
+			"err", err,
+		)
 		return candidateSource{}, fmt.Errorf("read codex transcript: %w", err)
 	}
 	turns := history.ConversationTurns(itranscript.ShapeOptions{

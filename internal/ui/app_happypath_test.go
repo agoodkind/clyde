@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -275,7 +274,7 @@ func mkAppWithSessions(t *testing.T, n int) (*App, tcell.SimulationScreen, func(
 		// Default ResumeSession: no-op success. Tests override per
 		// case to count invocations.
 		ResumeSession: func(*session.Session) error { return nil },
-		ListSessions: func(_ context.Context) (SessionSnapshot, error) {
+		ListSessions: func() (SessionSnapshot, error) {
 			models := make(map[string]string, len(sessions))
 			for _, sess := range sessions {
 				models[sess.Name] = "opus"
@@ -284,7 +283,7 @@ func mkAppWithSessions(t *testing.T, n int) (*App, tcell.SimulationScreen, func(
 		},
 		// GetSessionDetail returns an empty detail so populateDetails
 		// doesn't crash on lookup.
-		GetSessionDetail: func(_ context.Context, _ *session.Session) (SessionDetail, error) {
+		GetSessionDetail: func(_ *session.Session) (SessionDetail, error) {
 			return SessionDetail{}, nil
 		},
 	}

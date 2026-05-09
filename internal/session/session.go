@@ -1,16 +1,25 @@
 package session
 
-import "time"
+import (
+	"strings"
+	"time"
 
-// Session represents a named provider session.
+	"github.com/google/uuid"
+)
+
+// Session represents a provider session with an exact human-visible name and a
+// stable ClydeUUID-backed storage key.
 type Session struct {
 	Name     string
 	Metadata Metadata
+
+	storageKey string
 }
 
 // Metadata represents the session metadata stored in metadata.json.
 type Metadata struct {
 	Name                 string                 `json:"name"`
+	ClydeUUID            string                 `json:"clydeUuid,omitempty"`
 	Provider             ProviderID             `json:"provider,omitempty"`
 	SessionID            string                 `json:"sessionId"`
 	TranscriptPath       string                 `json:"transcriptPath,omitempty"`
@@ -19,6 +28,7 @@ type Metadata struct {
 	Created              time.Time              `json:"created"`
 	LastAccessed         time.Time              `json:"lastAccessed"`
 	ParentSession        string                 `json:"parentSession,omitempty"`
+	ParentClydeUUID      string                 `json:"parentClydeUuid,omitempty"`
 	IsForkedSession      bool                   `json:"isForkedSession"`
 	IsIncognito          bool                   `json:"isIncognito"`
 	PreviousSessionIDs   []string               `json:"previousSessionIds,omitempty"`
@@ -31,36 +41,25 @@ type Metadata struct {
 	// and should be regenerated in the background.
 	ContextMessageCount int `json:"contextMessageCount,omitempty"`
 
-	// DisplayTitle preserves the original user-given chat name that
-	// Claude Code stores in transcript "custom-title" entries. It is the
-	// human-readable form surfaced in the TUI. The session Name is a
-	// sanitized derivative used as the directory identifier and is what
-	// clyde resume, compact, and other verbs accept. DisplayTitle stays
-	// in sync with the latest custom-title entry seen during scan; the
-	// Name never renames post-adoption because that would break
-	// previousSessionIds and parentSession references.
+	// DisplayTitle preserves the provider-owned user-facing session title for
+	// legacy rows and provider sync. New session-domain code treats Name as the
+	// exact human-visible name, with ClydeUUID as the stable identity and storage
+	// key. DisplayTitle remains as compatibility metadata for rows created while
+	// Name was a slug-derived alias.
 	DisplayTitle string `json:"displayTitle,omitempty"`
 
 	// AutoNameState records the session's position in the auto-rename
-	// state machine. The zero value is untouched, which matches sessions
-	// written before this field existed.
+	// state machine. Retained for compatibility with the daemon auto-name worker.
 	AutoNameState AutoNameState `json:"autoNameState,omitempty"`
 
 	// AutoNameSource records which subsystem produced the current name.
-	// A zero value means the daemon has not yet attributed a source.
 	AutoNameSource AutoNameSource `json:"autoNameSource,omitempty"`
 
-	// LastAutoNameAt records the most recent auto-rename attempt for the
-	// session. The zero value means no auto-rename has run. Use omitzero
-	// because encoding/json's omitempty has no effect on nested struct
-	// types like time.Time.
+	// LastAutoNameAt records the most recent auto-rename attempt.
 	LastAutoNameAt time.Time `json:"lastAutoNameAt,omitzero"`
 
-	// AutoNameSourceHash is the fingerprint of the redacted source text
-	// the auto-rename worker last evaluated for this session. The worker
-	// short-circuits when the hash matches what is on disk so a session
-	// whose first three user messages have not changed never re-enters
-	// the rename queue. Empty means no auto-rename has produced a hash.
+	// AutoNameSourceHash is the fingerprint of the source text last evaluated
+	// by the auto-name worker.
 	AutoNameSourceHash string `json:"autoNameSourceHash,omitempty"`
 }
 
@@ -108,6 +107,7 @@ func NewSession(name, sessionID string) *Session {
 		Name: name,
 		Metadata: Metadata{
 			Name:                 name,
+			ClydeUUID:            "",
 			Provider:             ProviderClaude,
 			SessionID:            sessionID,
 			TranscriptPath:       "",
@@ -116,6 +116,7 @@ func NewSession(name, sessionID string) *Session {
 			Created:              now,
 			LastAccessed:         now,
 			ParentSession:        "",
+			ParentClydeUUID:      "",
 			IsForkedSession:      false,
 			IsIncognito:          false,
 			PreviousSessionIDs:   nil,
@@ -129,7 +130,9 @@ func NewSession(name, sessionID string) *Session {
 			LastAutoNameAt:       time.Time{},
 			AutoNameSourceHash:   "",
 		},
+		storageKey: "",
 	}
+	sess.ensureClydeUUID("")
 	sess.Metadata.NormalizeProviderState()
 	return sess
 }
@@ -148,6 +151,52 @@ func (s *Session) ProviderID() ProviderID {
 func (s *Session) Identity() SessionIdentity {
 	return s.Metadata.Identity(s.Name)
 }
+
+// ClydeUUID returns the durable Clyde-owned identifier for the session when
+// known. Stable storage directories are keyed by this value instead of the
+// mutable session Name.
+func (s *Session) ClydeUUID() string {
+	if s == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(s.Metadata.ClydeUUID); trimmed != "" {
+		return trimmed
+	}
+	if looksLikeUUID(s.storageKey) {
+		return strings.TrimSpace(s.storageKey)
+	}
+	return ""
+}
+
+// StorageKey returns the current directory key for the session's metadata and
+// settings. Legacy sessions may still report their old name-backed directory
+// until they are rewritten into a stable ClydeUUID-backed path.
+func (s *Session) StorageKey() string {
+	if s == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(s.storageKey); trimmed != "" {
+		return trimmed
+	}
+	return s.ClydeUUID()
+}
+
+// DisplayName returns the best user-facing label for compatibility UI surfaces.
+// It is not an identity source: parent linkage and storage use ClydeUUID/provider
+// ids, and current session-domain names use sess.Name.
+func DisplayName(sess *Session) string {
+	if sess == nil {
+		return ""
+	}
+	if displayTitle := strings.TrimSpace(sess.Metadata.DisplayTitle); displayTitle != "" {
+		return displayTitle
+	}
+	return sess.Name
+}
+
+// SessionDisplayName preserves the old package-level helper name for existing
+// callers while new code uses DisplayName to avoid package-name stutter.
+var SessionDisplayName = DisplayName
 
 // SessionProviderCapabilities returns the capabilities for the session provider.
 func (s *Session) SessionProviderCapabilities() ProviderCapabilities {
@@ -269,6 +318,38 @@ func (m *Metadata) NormalizeProviderState() {
 		}
 	}
 	m.TranscriptPath = m.ProviderState.Artifacts.TranscriptPath
+}
+
+func (s *Session) ensureClydeUUID(fallbackStorageKey string) string {
+	if s == nil {
+		return ensureMetadataClydeUUID(nil, fallbackStorageKey)
+	}
+	uuidValue := ensureMetadataClydeUUID(&s.Metadata, fallbackStorageKey)
+	if strings.TrimSpace(s.storageKey) == "" && looksLikeUUID(uuidValue) {
+		s.storageKey = uuidValue
+	}
+	return uuidValue
+}
+
+func ensureMetadataClydeUUID(metadata *Metadata, fallbackStorageKey string) string {
+	if metadata == nil {
+		return ""
+	}
+	if trimmed := strings.TrimSpace(metadata.ClydeUUID); trimmed != "" {
+		metadata.ClydeUUID = trimmed
+		return trimmed
+	}
+	if looksLikeUUID(fallbackStorageKey) {
+		metadata.ClydeUUID = strings.TrimSpace(fallbackStorageKey)
+		return metadata.ClydeUUID
+	}
+	metadata.ClydeUUID = uuid.NewString()
+	return metadata.ClydeUUID
+}
+
+func looksLikeUUID(raw string) bool {
+	_, err := uuid.Parse(strings.TrimSpace(raw))
+	return err == nil
 }
 
 // SetProviderTranscriptPath updates the provider-owned primary transcript/log

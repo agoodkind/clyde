@@ -2,7 +2,6 @@ package ui
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -44,7 +43,7 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 	block := make(chan struct{})
-	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		<-block
 		return SessionDetail{Model: "opus"}, nil
 	}
@@ -92,7 +91,7 @@ func TestUX_NormalSessionPopupKeepsResumeAtTop(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 	sess := a.sessions[a.visibleIdx[0]]
-	entries := a.sessionOptionsEntries(sess, func() {}, false)
+	entries := a.sessionOptionsEntries(sess, func() {})
 	if len(entries) == 0 || entries[0].Label != "Resume" {
 		t.Fatalf("normal popup first entry = %q want %q", labelOrEmpty(entries), "Resume")
 	}
@@ -121,8 +120,8 @@ func TestUX_ReturnPromptOmitsResumeFromBody(t *testing.T) {
 		resumeCalls++
 		return nil
 	}
-	full := a.sessionOptionsEntries(sess, func() {}, false)
-	body := a.sessionOptionsEntries(sess, func() {}, true)
+	full := a.sessionOptionsEntries(sess, func() {})
+	body := a.sessionOptionsEntriesWithoutResume(sess, func() {})
 	if len(body) != len(full)-1 {
 		t.Fatalf("body length = %d want %d", len(body), len(full)-1)
 	}
@@ -164,7 +163,7 @@ func TestUX_ReturnPromptBodyOmitsResumeIndependentOfLabel(t *testing.T) {
 		resumeCalls++
 		return nil
 	}
-	body := a.sessionOptionsEntries(sess, func() {}, true)
+	body := a.sessionOptionsEntriesWithoutResume(sess, func() {})
 	// Simulate a rename of every body label so any future filter that
 	// looked at entries[i].Label by exact string would silently misfire.
 	for i := range body {
@@ -363,13 +362,13 @@ func TestUX_GlobalSessionListSeparatorBlockShape(t *testing.T) {
 	}
 	for col := 1; col < len(separator); col++ {
 		if separator[col].Text == "" {
-			t.Fatalf("separator rule col %d is empty, want %s repeated", col, globalSessionListSeparatorGlyph)
+			t.Fatalf("separator rule col %d is empty, want '-' repeated", col)
 		}
-		if !strings.Contains(separator[col].Text, globalSessionListSeparatorGlyph) {
-			t.Fatalf("separator rule col %d = %q, want runs of %s", col, separator[col].Text, globalSessionListSeparatorGlyph)
+		if !strings.Contains(separator[col].Text, "-") {
+			t.Fatalf("separator rule col %d = %q, want runs of '-'", col, separator[col].Text)
 		}
-		if strings.TrimRight(separator[col].Text, globalSessionListSeparatorGlyph) != "" {
-			t.Fatalf("separator rule col %d = %q, want only %s runes", col, separator[col].Text, globalSessionListSeparatorGlyph)
+		if strings.TrimRight(separator[col].Text, "-") != "" {
+			t.Fatalf("separator rule col %d = %q, want only '-' runes", col, separator[col].Text)
 		}
 	}
 
@@ -523,7 +522,7 @@ func TestUX_CodexDetailsLoadForHistoryReadableSessions(t *testing.T) {
 		},
 	}
 	callbackEntered := make(chan struct{}, 1)
-	a.cb.GetSessionDetail = func(context.Context, *session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
 		callbackEntered <- struct{}{}
 		return SessionDetail{Model: "openai"}, nil
 	}
@@ -609,7 +608,7 @@ func TestUX_SnapshotRefreshKeepsHighlightedRowBySessionID(t *testing.T) {
 		t.Fatalf("highlighted session ID = %q, want %q", got.Metadata.ProviderSessionID(), highlighted.Metadata.ProviderSessionID())
 	}
 	if got.Name != "renamed-highlight" {
-		t.Fatalf("highlighted session name = %q, want renamed-highlight", got.Name)
+		t.Fatalf("highlighted row name = %q, want renamed-highlight", got.Name)
 	}
 }
 
@@ -617,7 +616,7 @@ func TestUX_OpenOptionsModalStatsRefreshAfterDetailLoad(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 
-	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		return SessionDetail{
 			Model:                 "opus",
 			TranscriptStatsLoaded: true,
@@ -667,7 +666,7 @@ func TestUX_ReturnPromptStatsRefreshAfterSessionListChanges(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 
-	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		return SessionDetail{
 			Model:                 "opus",
 			TranscriptStatsLoaded: true,
@@ -746,7 +745,7 @@ func TestUX_CloseCompactRestoresOptionsOverlay(t *testing.T) {
 	}
 }
 
-func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
+func TestUX_SidecarRemoteLaunchPinsTrackedSession(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 
@@ -782,7 +781,7 @@ func TestUX_SidecarRemoteLaunchPinsCanonicalSession(t *testing.T) {
 		t.Fatalf("sidecar not created")
 	}
 	if a.sidecar.SessionName != "chat-remote" {
-		t.Fatalf("sidecar session name = %q", a.sidecar.SessionName)
+		t.Fatalf("sidecar session title = %q", a.sidecar.SessionName)
 	}
 	if a.sidecar.SessionID != "uuid-remote" {
 		t.Fatalf("sidecar session id = %q", a.sidecar.SessionID)
@@ -869,7 +868,7 @@ func TestUX_OpenExportOptionsDoesNotBlockOnExportStats(t *testing.T) {
 	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
-	a.cb.LoadExportStats = func(_ context.Context, _ *session.Session) (SessionExportStats, error) {
+	a.cb.LoadExportStats = func(_ *session.Session) (SessionExportStats, error) {
 		<-block
 		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
 	}
@@ -897,11 +896,12 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
-	a.cb.LoadExportStats = func(_ context.Context, _ *session.Session) (SessionExportStats, error) {
+	a.cb.LoadExportStats = func(_ *session.Session) (SessionExportStats, error) {
 		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
 	}
 
 	sess := a.sessions[a.visibleIdx[0]]
+	sess.Metadata.DisplayTitle = "Merry Swan"
 	a.openExportOptions(sess)
 	panel, ok := a.overlay.(*ExportPanel)
 	if !ok {
@@ -913,8 +913,11 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	if a.mode != StatusExport {
 		t.Fatalf("mode = %v want StatusExport", a.mode)
 	}
-	if !strings.HasSuffix(panel.name, "-"+sess.Name+".md") {
-		t.Fatalf("panel filename = %q, want dated session name", panel.name)
+	if panel.sessionName != sess.Name {
+		t.Fatalf("panel session key = %q, want row name %q", panel.sessionName, sess.Name)
+	}
+	if !strings.HasSuffix(panel.name, "-merry-swan.md") {
+		t.Fatalf("panel filename = %q, want dated visible title", panel.name)
 	}
 	if panel.status != "loading export stats..." {
 		t.Fatalf("panel status = %q want loading export stats...", panel.status)
@@ -1030,7 +1033,7 @@ func TestUX_RegistrySessionUpdateAppliesWithoutSnapshotReload(t *testing.T) {
 	defer cleanup()
 
 	listCalls := 0
-	a.cb.ListSessions = func(_ context.Context) (SessionSnapshot, error) {
+	a.cb.ListSessions = func() (SessionSnapshot, error) {
 		listCalls++
 		return SessionSnapshot{}, nil
 	}
@@ -1851,5 +1854,43 @@ func TestRuntimeStampIncludesExecutableHash(t *testing.T) {
 	text := compactPanelScreenText(scr)
 	if !strings.Contains(text, "b:build1 x:exec22 r:run333") {
 		t.Fatalf("runtime stamp missing executable hash:\n%s", text)
+	}
+}
+
+func TestUX_FindSessionByDisplayTitleAndRenderDisplayTitle(t *testing.T) {
+	a := NewApp([]*session.Session{{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:         "merry-swan",
+			SessionID:    "shared",
+			DisplayTitle: "Merry Swan",
+			LastAccessed: time.Now(),
+		},
+	}}, AppCallbacks{})
+
+	got := a.findSessionByName("Merry Swan")
+	if got == nil || got.Name != "merry-swan" {
+		t.Fatalf("findSessionByName by display title = %#v", got)
+	}
+	if got := a.findSessionByName("merry swan"); got != nil {
+		t.Fatalf("findSessionByName should require exact display-title case, got %#v", got)
+	}
+
+	row := a.rowForLockedLastUsed(a.sessions[0])
+	if len(row) == 0 || row[0].Text != "Merry Swan" {
+		t.Fatalf("row title = %#v, want display title", row)
+	}
+
+	a.cb.StreamLiveSession = func(string) (<-chan LiveSessionEvent, func(), error) {
+		ch := make(chan LiveSessionEvent)
+		close(ch)
+		return ch, func() {}, nil
+	}
+	a.cb.SendLiveSession = func(string, string) error {
+		return nil
+	}
+	a.pinSidecar(a.sessions[0])
+	if a.sidecar == nil || a.sidecar.SessionName != "Merry Swan" {
+		t.Fatalf("sidecar title = %#v, want display title", a.sidecar)
 	}
 }

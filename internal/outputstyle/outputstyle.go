@@ -1,6 +1,7 @@
 package outputstyle
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,14 +24,22 @@ type OutputStyle struct {
 	Content string // Only for custom styles (file content)
 }
 
-// GetCustomStylePath returns the path to a custom output style file
-func GetCustomStylePath(clydeRoot, sessionName string) string {
-	return filepath.Join(clydeRoot, "..", "output-styles", "clyde", sessionName+".md")
+// GetCustomStylePath returns the path to a custom output style file.
+func GetCustomStylePath(clydeRoot, styleIdentifier string) string {
+	return filepath.Join(clydeRoot, "..", "output-styles", "clyde", customStyleFileName(styleIdentifier))
 }
 
-// DeleteCustomStyleFile deletes a custom output style file
-func DeleteCustomStyleFile(clydeRoot, sessionName string) error {
-	stylePath := GetCustomStylePath(clydeRoot, sessionName)
+func customStyleFileName(styleIdentifier string) string {
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(styleIdentifier))
+	if encoded == "" {
+		encoded = "_"
+	}
+	return encoded + ".md"
+}
+
+// DeleteCustomStyleFile deletes a custom output style file.
+func DeleteCustomStyleFile(clydeRoot, styleIdentifier string) error {
+	stylePath := GetCustomStylePath(clydeRoot, styleIdentifier)
 
 	// Check if file exists
 	if _, err := os.Stat(stylePath); os.IsNotExist(err) {

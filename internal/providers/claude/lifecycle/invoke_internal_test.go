@@ -38,20 +38,25 @@ func (s *stubSessionSettingsStore) SaveSettings(_ string, settings *session.Sett
 
 func TestSessionSettingsFile(t *testing.T) {
 	clydeRoot := t.TempDir()
-	sessionsDir := config.GetSessionsDir(clydeRoot)
-	if err := os.MkdirAll(filepath.Join(sessionsDir, "chat-1"), 0o755); err != nil {
-		t.Fatalf("mkdir session dir: %v", err)
+	store := session.NewFileStore(clydeRoot)
+	sess := session.NewSession("chat-1", "uuid-1")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
 	}
-	if got := sessionSettingsFile(clydeRoot, "chat-1"); got != "" {
-		t.Fatalf("sessionSettingsFile without file = %q, want empty", got)
+	if got := sessionSettingsFileForSession(clydeRoot, sess); got != "" {
+		t.Fatalf("sessionSettingsFileForSession without file = %q, want empty", got)
 	}
 
-	settingsPath := filepath.Join(sessionsDir, "chat-1", "settings.json")
+	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sess.StorageKey()), "settings.json")
 	if err := os.WriteFile(settingsPath, []byte(`{"remoteControl":true}`), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
 	}
-	if got := sessionSettingsFile(clydeRoot, "chat-1"); got != settingsPath {
-		t.Fatalf("sessionSettingsFile with file = %q, want %q", got, settingsPath)
+	if got := sessionSettingsFileForSession(clydeRoot, sess); got != settingsPath {
+		t.Fatalf("sessionSettingsFileForSession with file = %q, want %q", got, settingsPath)
+	}
+	sess.Name = "renamed-chat"
+	if got := sessionSettingsFileForSession(clydeRoot, sess); got != settingsPath {
+		t.Fatalf("sessionSettingsFileForSession after rename = %q, want %q", got, settingsPath)
 	}
 }
 
@@ -90,6 +95,51 @@ func TestPersistRemoteControlSetting(t *testing.T) {
 	}
 	if store.saved == nil || !store.saved.RemoteControl || store.saved.Model != "sonnet" {
 		t.Fatalf("PersistRemoteControlSetting preserved settings = %#v", store.saved)
+	}
+}
+
+func TestLaunchSessionIDPrefersExplicitAndFallsBackToEnv(t *testing.T) {
+	env := map[string]string{"CLYDE_SESSION_ID": " env-uuid "}
+
+	if got := launchSessionID(env, " explicit-uuid "); got != "explicit-uuid" {
+		t.Fatalf("launchSessionID explicit = %q, want explicit-uuid", got)
+	}
+	if got := launchSessionID(env, ""); got != "env-uuid" {
+		t.Fatalf("launchSessionID env fallback = %q, want env-uuid", got)
+	}
+	if got := launchSessionID(nil, ""); got != "" {
+		t.Fatalf("launchSessionID nil env = %q, want empty", got)
+	}
+}
+
+func TestLifecycleRenameSessionAppendsClaudeRenameEntries(t *testing.T) {
+	transcriptPath := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"system","sessionId":"uuid-1","timestamp":"2026-04-12T23:52:12Z","entrypoint":"cli","cwd":"/tmp"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	lifecycle := NewLifecycle(nil)
+	sess := &session.Session{
+		Name: "chat-1",
+		Metadata: session.Metadata{
+			SessionID:      "uuid-1",
+			TranscriptPath: transcriptPath,
+		},
+	}
+	if err := lifecycle.RenameSession(context.Background(), sess, "provider-rename"); err != nil {
+		t.Fatalf("RenameSession returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	got := string(content)
+	if !strings.Contains(got, `"type":"custom-title"`) || !strings.Contains(got, `"customTitle":"provider-rename"`) {
+		t.Fatalf("transcript missing custom-title entry: %s", got)
+	}
+	if !strings.Contains(got, `"type":"agent-name"`) || !strings.Contains(got, `"agentName":"provider-rename"`) {
+		t.Fatalf("transcript missing agent-name entry: %s", got)
 	}
 }
 
@@ -371,6 +421,9 @@ func TestLifecycleStartInteractivePersistsRemoteControl(t *testing.T) {
 	}
 	if capturedEnv["CLYDE_SESSION_NAME"] != "chat-1" {
 		t.Fatalf("captured session name = %q, want chat-1", capturedEnv["CLYDE_SESSION_NAME"])
+	}
+	if capturedEnv["CLYDE_SESSION_ID"] != capturedSessionID {
+		t.Fatalf("captured session id env = %q, want %q", capturedEnv["CLYDE_SESSION_ID"], capturedSessionID)
 	}
 	if capturedEnv["CLYDE_LAUNCH_CWD"] != "/tmp/workspace" {
 		t.Fatalf("captured launch cwd = %q, want /tmp/workspace", capturedEnv["CLYDE_LAUNCH_CWD"])

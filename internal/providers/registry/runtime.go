@@ -16,6 +16,7 @@ type Runtime interface {
 	session.OpaqueSessionResumer
 	session.ResumeInstructionProvider
 	session.ContextMessageProvider
+	session.NameProvider
 	session.ArtifactCleaner
 }
 

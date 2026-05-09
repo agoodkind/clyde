@@ -28,15 +28,15 @@ type Store interface {
 	// sorted by lastAccessed (most recent first).
 	ListForWorkspace(workspaceRoot string) ([]*Session, error)
 
-	// Get retrieves a session by name
+	// Get retrieves a session by exact display name.
 	Get(name string) (*Session, error)
 
-	// Rename renames a session: moves the directory, updates metadata Name field,
-	// and updates any child sessions whose ParentSession matches oldName.
+	// Rename renames a session by updating metadata only. Storage stays keyed by
+	// the durable ClydeUUID rather than the mutable exact display name.
 	Rename(oldName, newName string) error
 
-	// Search returns sessions matching query against name, provider session id,
-	// and context (case-insensitive substring match).
+	// Search returns sessions matching query against exact display name,
+	// provider session id, and context (case-insensitive substring match).
 	Search(query string) ([]*Session, error)
 
 	// Create creates a new session folder structure with metadata
@@ -49,12 +49,13 @@ type Store interface {
 	Delete(name string) error
 
 	// Resolve finds a session using a multi-tier lookup:
-	// 1. Exact name match
+	// 1. Exact display-name match
 	// 2. Provider session id match (checks current and historical ids)
 	// 3. Substring search (returns single match only)
 	// 4. Transparent adoption: scans provider-owned artifacts for a session
-	//    whose provider session id or sanitized customTitle matches query, then
-	//    registers a clyde session stub (metadata.json) and returns it.
+	//    whose provider session id or provider-owned exact display name matches
+	//    query, then registers a clyde session stub (metadata.json) and returns
+	//    it.
 	//    This tier is skipped on FileStores constructed with
 	//    NewFileStoreReadOnly (for scan paths that must not recurse).
 	// Returns (nil, nil) if no match is found.
@@ -169,33 +170,13 @@ func CanonicalWorkspaceRoot(path string) string {
 
 // List returns all sessions, sorted by lastAccessed (most recent first).
 func (fs *FileStore) List() ([]*Session, error) {
-	sessionsDir := config.GetSessionsDir(fs.clydeRoot)
-
-	entries, err := os.ReadDir(sessionsDir)
+	sessions, err := fs.loadStoredSessions()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []*Session{}, nil
-		}
 		return nil, err
-	}
-
-	var sessions []*Session
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		session, err := fs.Get(entry.Name())
-		if err != nil {
-			// Skip sessions that can't be loaded
-			continue
-		}
-		sessions = append(sessions, session)
 	}
 
 	sessions = dedupeSessionsByIdentity(sessions)
 
-	// Sort by lastAccessed (most recent first)
 	sort.SliceStable(sessions, func(i, j int) bool {
 		if sessions[i].Metadata.LastAccessed.Equal(sessions[j].Metadata.LastAccessed) {
 			return sessions[i].Name < sessions[j].Name
@@ -254,50 +235,28 @@ func (fs *FileStore) ListForWorkspace(workspaceRoot string) ([]*Session, error) 
 	return result, nil
 }
 
-// Get retrieves a session by name.
+// Get retrieves a session by exact display name.
 func (fs *FileStore) Get(name string) (*Session, error) {
-	if err := ValidateName(name); err != nil {
+	if err := ValidateDisplayName(name); err != nil {
 		return nil, err
 	}
-
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	if !util.DirExists(sessionDir) {
-		return nil, fmt.Errorf("session '%s' not found", name)
-	}
-
-	metadataPath := filepath.Join(sessionDir, metadataFile)
-	var metadata Metadata
-	if err := util.ReadJSON(metadataPath, &metadata); err != nil {
-		sessionLog.Warn("session.store.metadata_read_failed",
-			"component", "session",
-			"subcomponent", "store",
-			"session", name,
-			"path", metadataPath,
-			"err", err,
-		)
-		return nil, fmt.Errorf("failed to read session metadata: %w", err)
-	}
-	metadata.NormalizeProviderState()
-
-	return &Session{
-		Name:     name,
-		Metadata: metadata,
-	}, nil
+	return fs.findSessionByName(name)
 }
 
-// Search returns sessions matching query against name, provider session id,
-// and context (case-insensitive substring match).
+// Search returns sessions matching query against name, display title, provider
+// session id, and context (case-insensitive substring match).
 func (fs *FileStore) Search(query string) ([]*Session, error) {
 	sessions, err := fs.List()
 	if err != nil {
 		return nil, err
 	}
-	q := strings.ToLower(query)
+	q := normalizeSessionLookup(query)
 	var matches []*Session
 	for _, sess := range sessions {
-		if strings.Contains(strings.ToLower(sess.Name), q) ||
-			strings.Contains(strings.ToLower(sess.Metadata.ProviderSessionID()), q) ||
-			strings.Contains(strings.ToLower(sess.Metadata.Context), q) {
+		if strings.Contains(normalizeSessionLookup(sess.Name), q) ||
+			strings.Contains(normalizeSessionLookup(sess.Metadata.DisplayTitle), q) ||
+			strings.Contains(normalizeSessionLookup(sess.Metadata.ProviderSessionID()), q) ||
+			strings.Contains(normalizeSessionLookup(sess.Metadata.Context), q) {
 			matches = append(matches, sess)
 		}
 	}
@@ -355,18 +314,11 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 		"session", adopted.Name,
 		"session_id", adopted.Metadata.ProviderSessionID(),
 		"display_title", adopted.Metadata.DisplayTitle,
+		"clyde_uuid", adopted.Metadata.ClydeUUID,
 	)
-	// Re-run tiers 1-3 once against the now-adopted set. In the common
-	// case tier 1 will hit directly because the adopted Name equals the
-	// query. When the query was a UUID the adopted Name differs; tier 2
-	// picks it up.
 	if sess := fs.resolveFromStore(query); sess != nil {
 		return sess, nil
 	}
-	// Fallback: the adopter's Name may not exact-match the query string
-	// (for example the query was a bare UUID and tier 2 cannot locate
-	// the session because the cached List is now stale). Return the
-	// freshly adopted session directly; its metadata is authoritative.
 	return adopted, nil
 }
 
@@ -375,7 +327,6 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 // entry is surfaced through the same lookup chain the caller would have
 // hit if the session had always been registered.
 func (fs *FileStore) resolveFromStore(query string) *Session {
-	// Tier 1: exact name match
 	if sess, err := fs.Get(query); err == nil {
 		sessionResolveLog.Logger().Debug("session.resolve.tier1_hit",
 			"component", "session",
@@ -386,9 +337,18 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 		return sess
 	}
 
-	// Tier 2: exact direct session-ID match
 	sessions, listErr := fs.List()
 	if listErr == nil {
+		if sess := exactDisplayTitleMatch(sessions, query); sess != nil {
+			sessionResolveLog.Logger().Debug("session.resolve.tier1_display_title_hit",
+				"component", "session",
+				"subcomponent", "resolve",
+				"query", query,
+				"session", sess.Name,
+				"display_title", sess.Metadata.DisplayTitle,
+			)
+			return sess
+		}
 		for _, sess := range sessions {
 			if matchType := exactSessionIDMatchType(sess, query); matchType != "" {
 				sessionResolveLog.Logger().Debug("session.resolve.tier2_hit",
@@ -403,7 +363,6 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 		}
 	}
 
-	// Tier 3: substring search (single match only)
 	matches, err := fs.Search(query)
 	if err != nil || len(matches) == 0 {
 		return nil
@@ -428,7 +387,7 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 
 // adoptFromDiscovery runs the tier-4 scan and adoption loop. It asks
 // the discovery cache for the current transcript list, looks for an
-// entry whose sessionId or sanitized customTitle matches query, runs
+// entry whose sessionId or provider-owned exact display name matches query, runs
 // AdoptUnknown to materialize a metadata.json, and invalidates the
 // cache so a subsequent miss does not see the same transcript as
 // unknown. Returns the adopted session, or nil when no transcript
@@ -457,7 +416,7 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 			}
 			continue
 		}
-		if sanitized := Sanitize(r.CustomTitle); sanitized != "" && sanitized == query {
+		if exactDiscoveryDisplayNameMatch(*r, query) {
 			if match == nil || shouldPreferDiscoveryResult(*r, *match) {
 				match = r
 			}
@@ -479,15 +438,15 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		"query", query,
 		"session_id", match.ProviderSessionID(),
 		"transcript", match.PrimaryArtifactPath(),
-		"raw_custom_title", match.CustomTitle,
+		"provider_name", match.GetName(),
 	)
 
 	// If the direct session ID is already registered (for example the daemon's
 	// background scanner adopted it under an auto-generated name before
-	// the user assigned a customTitle), reconcile the existing session
-	// to match the Claude Code title rather than creating a duplicate.
-	// The rename uses the sanitized customTitle so tier 1 finds it on
-	// the retry. DisplayTitle is backfilled unconditionally.
+	// the user assigned a provider-native title), reconcile the existing session
+	// to match the provider-owned name rather than creating a duplicate.
+	// The rename uses the exact display-name policy so tier 1 finds it on the
+	// retry. DisplayTitle is backfilled unconditionally for legacy rows.
 	if existing := fs.findByProviderSessionID(match.ProviderIdentity()); existing != nil {
 		return fs.reconcileExisting(existing, match, query)
 	}
@@ -505,9 +464,6 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		return nil, fmt.Errorf("adopt: %w", adoptErr)
 	}
 	if len(adopted) == 0 {
-		// AdoptUnknown skipped the candidate (race with another process
-		// that adopted it just now, or scratch/subagent filter fired).
-		// Try one more read from the store before giving up.
 		sessionResolveLog.Logger().Debug("session.resolve.tier4_adopt_skipped",
 			"component", "session",
 			"subcomponent", "resolve",
@@ -521,7 +477,7 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 	}
 
 	stub := adopted[0]
-	return &Session{Name: stub.Name, Metadata: stub.Metadata}, nil
+	return &Session{Name: stub.Name, Metadata: stub.Metadata, storageKey: stub.Metadata.ClydeUUID}, nil
 }
 
 // adoptDisabledReason labels why tier 4 was skipped, for structured
@@ -536,10 +492,51 @@ func adoptDisabledReason(fs *FileStore) string {
 	return "unknown"
 }
 
+func exactDisplayTitleMatch(sessions []*Session, query string) *Session {
+	trimmedQuery := strings.TrimSpace(query)
+	if trimmedQuery == "" {
+		return nil
+	}
+
+	var match *Session
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		if strings.TrimSpace(sess.Metadata.DisplayTitle) != trimmedQuery {
+			continue
+		}
+		if match != nil {
+			sessionResolveLog.Logger().Debug("session.resolve.tier1_display_title_ambiguous",
+				"component", "session",
+				"subcomponent", "resolve",
+				"query", query,
+				"first_session", match.Name,
+				"next_session", sess.Name,
+			)
+			return nil
+		}
+		match = sess
+	}
+	return match
+}
+
+func exactDiscoveryDisplayNameMatch(result DiscoveryResult, query string) bool {
+	displayName := strings.TrimSpace(result.DisplayTitle())
+	if displayName == "" {
+		return false
+	}
+	return displayName == strings.TrimSpace(query)
+}
+
+func normalizeSessionLookup(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
 // findByProviderSessionID returns the first registered session whose current or
 // historical provider identity matches id, or nil when none match. Used by tier
 // 4 to detect a session that was previously auto-adopted under a name that does
-// not reflect the provider custom title.
+// not reflect the provider-owned observed name.
 func (fs *FileStore) findByProviderSessionID(id ProviderSessionID) *Session {
 	id = id.Normalized()
 	if id.IsZero() {
@@ -586,20 +583,21 @@ func exactSessionIDMatchType(sess *Session, query string) string {
 }
 
 // reconcileExisting updates an already-adopted session to reflect the
-// Claude Code customTitle seen on the transcript. If the sanitized
-// customTitle is a valid unique name, the session directory is renamed
-// so tier-1 lookups by the customTitle succeed. DisplayTitle is
-// backfilled unconditionally so the TUI shows the user-given title
-// even when a rename is not possible. The function returns the session
-// in its final state (post-rename), or the original when no rename was
-// needed.
+// provider-owned exact display name seen on the artifact. If the title is valid
+// and unique, the session metadata Name is updated so tier-1 lookups by that
+// exact display name succeed. DisplayTitle is backfilled unconditionally so
+// legacy rows continue to show the upstream title even when a rename is not
+// possible. The function returns the session in its final state, or the original
+// when no rename was needed.
 func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult, query string) (*Session, error) {
-	// Backfill DisplayTitle when the scan picked up a customTitle that
+	observedName := match.DisplayTitle()
+
+	// Backfill DisplayTitle when the scan picked up a provider-owned name that
 	// the existing metadata lacks. Persist immediately so subsequent
 	// callers see the update regardless of the rename outcome.
 	titleChanged := false
-	if match.CustomTitle != "" && existing.Metadata.DisplayTitle != match.CustomTitle {
-		existing.Metadata.DisplayTitle = match.CustomTitle
+	if observedName != "" && existing.Metadata.DisplayTitle != observedName {
+		existing.Metadata.DisplayTitle = observedName
 		titleChanged = true
 	}
 	if titleChanged {
@@ -617,27 +615,11 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 				"subcomponent", "resolve",
 				"session", existing.Name,
 				"session_id", existing.Metadata.ProviderSessionID(),
-				"display_title", match.CustomTitle,
+				"display_title", observedName,
 			)
 		}
 	}
 
-	sanitized := Sanitize(match.CustomTitle)
-	if sanitized == "" || sanitized == existing.Name {
-		sessionResolveLog.Logger().Debug("session.resolve.reconcile_no_rename",
-			"component", "session",
-			"subcomponent", "resolve",
-			"query", query,
-			"session", existing.Name,
-			"sanitized", sanitized,
-			"reason_empty", sanitized == "",
-		)
-		return existing, nil
-	}
-
-	// Pick a unique target name so a customTitle collision with another
-	// session does not fail the rename. This reuses the same collision
-	// strategy AdoptUnknown uses during fresh adoption.
 	names, err := buildExistingNameSet(fs)
 	if err != nil {
 		sessionLog.Warn("session.resolve.reconcile_name_set_failed",
@@ -648,12 +630,26 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		return existing, nil
 	}
 	delete(names, existing.Name)
-	target := UniqueName(sanitized, names)
+
+	target := UniqueDisplayName(observedName, names)
 	if target == "" || target == existing.Name {
+		sessionResolveLog.Logger().Debug("session.resolve.reconcile_no_rename",
+			"component", "session",
+			"subcomponent", "resolve",
+			"query", query,
+			"session", existing.Name,
+			"provider_name", observedName,
+			"reason_empty", target == "",
+		)
 		return existing, nil
 	}
 
 	if err := fs.Rename(existing.Name, target); err != nil {
+		if resolved := fs.findByProviderSessionID(match.ProviderIdentity()); resolved != nil {
+			if resolved.Name == target {
+				return resolved, nil
+			}
+		}
 		sessionLog.Warn("session.resolve.reconcile_rename_failed",
 			"component", "session",
 			"subcomponent", "resolve",
@@ -670,7 +666,7 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		"old_name", existing.Name,
 		"new_name", target,
 		"session_id", existing.Metadata.ProviderSessionID(),
-		"display_title", match.CustomTitle,
+		"display_title", observedName,
 		"query", query,
 	)
 	if renamed, getErr := fs.Get(target); getErr == nil {
@@ -680,10 +676,10 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 }
 
 func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryResult) bool {
-	if candidate.CustomTitle != "" && current.CustomTitle == "" {
+	if candidate.GetName() != "" && current.GetName() == "" {
 		return true
 	}
-	if current.CustomTitle != "" && candidate.CustomTitle == "" {
+	if current.GetName() != "" && candidate.GetName() == "" {
 		return false
 	}
 	if !candidate.FirstEntryTime.Equal(current.FirstEntryTime) {
@@ -701,10 +697,82 @@ func shouldPreferDiscoveryResult(candidate DiscoveryResult, current DiscoveryRes
 	return candidate.ProviderSessionID() < current.ProviderSessionID()
 }
 
-// Rename renames a session: moves the directory, updates metadata Name field,
-// and updates any child sessions whose ParentSession matches oldName.
+// DiscoverySyncResult describes the effect of reconciling one discovered
+// provider session against the Clyde registry.
+type DiscoverySyncResult struct {
+	Session *Session
+	OldName string
+	Adopted bool
+	Updated bool
+}
+
+// SyncDiscoveryResults reconciles discovered provider sessions against the
+// registry, adopting unknown rows and updating known rows when provider-owned
+// names drift.
+func (fs *FileStore) SyncDiscoveryResults(results []DiscoveryResult) ([]DiscoverySyncResult, error) {
+	if fs == nil {
+		return nil, nil
+	}
+	bestByProviderKey := make(map[string]DiscoveryResult, len(results))
+	for _, result := range results {
+		if result.IsAutoName || result.IsSubagent || result.ProviderSessionID() == "" || isClydeScratch(result.WorkspaceRoot) {
+			continue
+		}
+		key := result.ProviderSessionKey()
+		current, ok := bestByProviderKey[key]
+		if !ok || shouldPreferDiscoveryResult(result, current) {
+			bestByProviderKey[key] = result
+		}
+	}
+
+	keys := make([]string, 0, len(bestByProviderKey))
+	for key := range bestByProviderKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make([]DiscoverySyncResult, 0, len(keys))
+	for _, key := range keys {
+		result := bestByProviderKey[key]
+		if existing := fs.findByProviderSessionID(result.ProviderIdentity()); existing != nil {
+			beforeName := existing.Name
+			beforeTitle := existing.Metadata.DisplayTitle
+			updated, err := fs.reconcileExisting(existing, &result, result.ProviderSessionID())
+			if err != nil {
+				return nil, err
+			}
+			if updated != nil && (updated.Name != beforeName || updated.Metadata.DisplayTitle != beforeTitle) {
+				out = append(out, DiscoverySyncResult{
+					Session: updated,
+					OldName: beforeName,
+					Adopted: false,
+					Updated: true,
+				})
+			}
+			continue
+		}
+
+		adopted, err := AdoptUnknown(fs, []DiscoveryResult{result})
+		if err != nil {
+			return nil, err
+		}
+		if len(adopted) == 0 {
+			continue
+		}
+		stub := adopted[0]
+		out = append(out, DiscoverySyncResult{
+			Session: &Session{Name: stub.Name, Metadata: stub.Metadata, storageKey: stub.Metadata.ClydeUUID},
+			OldName: "",
+			Adopted: true,
+			Updated: true,
+		})
+	}
+	return out, nil
+}
+
+// Rename renames a session by updating exact display-name metadata only.
 func (fs *FileStore) Rename(oldName, newName string) error {
-	if err := ValidateName(oldName); err != nil {
+	if err := ValidateDisplayName(oldName); err != nil {
 		sessionLog.Warn("session.store.rename_invalid_old_name",
 			"component", "session",
 			"subcomponent", "store",
@@ -713,7 +781,7 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 		)
 		return fmt.Errorf("invalid old name: %w", err)
 	}
-	if err := ValidateName(newName); err != nil {
+	if err := ValidateDisplayName(newName); err != nil {
 		sessionLog.Warn("session.store.rename_invalid_new_name",
 			"component", "session",
 			"subcomponent", "store",
@@ -722,41 +790,18 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 		)
 		return fmt.Errorf("invalid new name: %w", err)
 	}
-	if !fs.Exists(oldName) {
+
+	sess, err := fs.Get(oldName)
+	if err != nil {
 		return fmt.Errorf("session '%s' not found", oldName)
 	}
 	if fs.Exists(newName) {
 		return fmt.Errorf("session '%s' already exists", newName)
 	}
 
-	oldDir := config.GetSessionDir(fs.clydeRoot, oldName)
-	newDir := config.GetSessionDir(fs.clydeRoot, newName)
-	if err := os.Rename(oldDir, newDir); err != nil {
-		sessionLog.Warn("session.store.rename_dir_failed",
-			"component", "session",
-			"subcomponent", "store",
-			"old_session", oldName,
-			"new_session", newName,
-			"old_dir", oldDir,
-			"new_dir", newDir,
-			"err", err,
-		)
-		return fmt.Errorf("rename session directory: %w", err)
-	}
-
-	// Update metadata Name field in the new location
-	sess, err := fs.Get(newName)
-	if err != nil {
-		sessionLog.Warn("session.store.rename_reload_failed",
-			"component", "session",
-			"subcomponent", "store",
-			"session", newName,
-			"err", err,
-		)
-		return fmt.Errorf("failed to read renamed session: %w", err)
-	}
 	sess.Name = newName
 	sess.Metadata.Name = newName
+	sess.Metadata.DisplayTitle = newName
 	if err := fs.Update(sess); err != nil {
 		sessionLog.Warn("session.store.rename_metadata_update_failed",
 			"component", "session",
@@ -767,31 +812,27 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 		)
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
-
-	// Update any child sessions that reference oldName as their parent
-	if sessions, listErr := fs.List(); listErr == nil {
-		for _, child := range sessions {
-			if child.Metadata.ParentSession == oldName {
-				child.Metadata.ParentSession = newName
-				_ = fs.Update(child) // best-effort
-			}
-		}
-		return nil
-	}
-	return nil // non-fatal: rename succeeded, parent references not updated
+	return nil
 }
 
 // Create creates a new session folder structure with metadata.
 func (fs *FileStore) Create(session *Session) error {
-	if err := ValidateName(session.Name); err != nil {
+	if session == nil {
+		return fmt.Errorf("nil session")
+	}
+	if err := ValidateDisplayName(session.Name); err != nil {
 		return err
 	}
-
 	if fs.Exists(session.Name) {
 		return fmt.Errorf("session '%s' already exists", session.Name)
 	}
 
-	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
+	session.Metadata.Name = session.Name
+	dirKey := session.ensureClydeUUID("")
+	sessionDir := config.GetSessionDir(fs.clydeRoot, dirKey)
+	if util.DirExists(sessionDir) {
+		return fmt.Errorf("session storage '%s' already exists", dirKey)
+	}
 	if err := util.EnsureDir(sessionDir); err != nil {
 		sessionLog.Warn("session.store.create_dir_failed",
 			"component", "session",
@@ -815,22 +856,56 @@ func (fs *FileStore) Create(session *Session) error {
 		)
 		return fmt.Errorf("failed to write session metadata: %w", err)
 	}
-
+	session.storageKey = dirKey
 	return nil
 }
 
 // Update updates session metadata.
 func (fs *FileStore) Update(session *Session) error {
-	if err := ValidateName(session.Name); err != nil {
+	if session == nil {
+		return fmt.Errorf("nil session")
+	}
+	if err := ValidateDisplayName(session.Name); err != nil {
 		return err
 	}
 
-	if !fs.Exists(session.Name) {
-		return fmt.Errorf("session '%s' not found", session.Name)
+	session.Metadata.Name = session.Name
+	currentKey := strings.TrimSpace(session.storageKey)
+	if currentKey == "" {
+		existing, err := fs.findSessionByName(session.Name)
+		if err != nil {
+			return fmt.Errorf("session '%s' not found", session.Name)
+		}
+		currentKey = existing.StorageKey()
+	}
+	targetKey := session.ensureClydeUUID(currentKey)
+	if currentKey == "" {
+		currentKey = targetKey
 	}
 
-	sessionDir := config.GetSessionDir(fs.clydeRoot, session.Name)
-	metadataPath := filepath.Join(sessionDir, metadataFile)
+	currentDir := config.GetSessionDir(fs.clydeRoot, currentKey)
+	targetDir := config.GetSessionDir(fs.clydeRoot, targetKey)
+	if !util.DirExists(currentDir) {
+		return fmt.Errorf("session '%s' not found", session.Name)
+	}
+	if currentKey != targetKey {
+		if util.DirExists(targetDir) {
+			return fmt.Errorf("session storage '%s' already exists", targetKey)
+		}
+		if err := os.Rename(currentDir, targetDir); err != nil {
+			sessionLog.Warn("session.store.migrate_dir_failed",
+				"component", "session",
+				"subcomponent", "store",
+				"session", session.Name,
+				"old_dir", currentDir,
+				"new_dir", targetDir,
+				"err", err,
+			)
+			return fmt.Errorf("migrate session directory: %w", err)
+		}
+	}
+
+	metadataPath := filepath.Join(targetDir, metadataFile)
 	session.Metadata.NormalizeProviderState()
 	if err := util.WriteJSON(metadataPath, session.Metadata); err != nil {
 		sessionLog.Warn("session.store.update_metadata_failed",
@@ -843,38 +918,44 @@ func (fs *FileStore) Update(session *Session) error {
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
 
+	session.storageKey = targetKey
 	return nil
 }
 
 // Delete removes a session folder and all its contents.
 func (fs *FileStore) Delete(name string) error {
-	if err := ValidateName(name); err != nil {
+	if err := ValidateDisplayName(name); err != nil {
 		return err
 	}
 
-	if !fs.Exists(name) {
+	sess, err := fs.findSessionByName(name)
+	if err != nil {
 		return fmt.Errorf("session '%s' not found", name)
 	}
-
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
+	sessionDir := config.GetSessionDir(fs.clydeRoot, sess.StorageKey())
 	return util.RemoveAll(sessionDir)
 }
 
 // Exists checks if a session exists.
 func (fs *FileStore) Exists(name string) bool {
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	return util.DirExists(sessionDir)
+	if name == "" {
+		return false
+	}
+	_, err := fs.findSessionByName(name)
+	return err == nil
 }
 
 // LoadSettings loads settings.json for a session (returns nil if not exists).
 func (fs *FileStore) LoadSettings(name string) (*Settings, error) {
-	if err := ValidateName(name); err != nil {
+	if err := ValidateDisplayName(name); err != nil {
 		return nil, err
 	}
 
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	settingsPath := filepath.Join(sessionDir, settingsFile)
-
+	sess, err := fs.findSessionByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("session '%s' not found", name)
+	}
+	settingsPath := filepath.Join(config.GetSessionDir(fs.clydeRoot, sess.StorageKey()), settingsFile)
 	if !util.FileExists(settingsPath) {
 		return nil, nil
 	}
@@ -896,16 +977,112 @@ func (fs *FileStore) LoadSettings(name string) (*Settings, error) {
 
 // SaveSettings saves settings.json for a session.
 func (fs *FileStore) SaveSettings(name string, settings *Settings) error {
-	if err := ValidateName(name); err != nil {
+	if err := ValidateDisplayName(name); err != nil {
 		return err
 	}
 
-	if !fs.Exists(name) {
+	sess, err := fs.findSessionByName(name)
+	if err != nil {
 		return fmt.Errorf("session '%s' not found", name)
 	}
-
-	sessionDir := config.GetSessionDir(fs.clydeRoot, name)
-	settingsPath := filepath.Join(sessionDir, settingsFile)
-
+	settingsPath := filepath.Join(config.GetSessionDir(fs.clydeRoot, sess.StorageKey()), settingsFile)
 	return util.WriteJSON(settingsPath, settings)
+}
+
+func (fs *FileStore) loadStoredSessions() ([]*Session, error) {
+	sessionsDir := config.GetSessionsDir(fs.clydeRoot)
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []*Session{}, nil
+		}
+		return nil, err
+	}
+
+	sessions := make([]*Session, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sess, err := fs.readSessionFromDir(entry.Name())
+		if err != nil {
+			continue
+		}
+		sessions = append(sessions, sess)
+	}
+	hydrateParentSessionNames(sessions)
+	return sessions, nil
+}
+
+func (fs *FileStore) readSessionFromDir(storageKey string) (*Session, error) {
+	sessionDir := config.GetSessionDir(fs.clydeRoot, storageKey)
+	metadataPath := filepath.Join(sessionDir, metadataFile)
+
+	var metadata Metadata
+	if err := util.ReadJSON(metadataPath, &metadata); err != nil {
+		sessionLog.Warn("session.store.metadata_read_failed",
+			"component", "session",
+			"subcomponent", "store",
+			"storage_key", storageKey,
+			"path", metadataPath,
+			"err", err,
+		)
+		return nil, fmt.Errorf("failed to read session metadata: %w", err)
+	}
+
+	metadata.NormalizeProviderState()
+	name := strings.TrimSpace(metadata.Name)
+	if name == "" {
+		name = storageKey
+	}
+	sess := &Session{
+		Name:       name,
+		Metadata:   metadata,
+		storageKey: storageKey,
+	}
+	if looksLikeUUID(storageKey) && strings.TrimSpace(sess.Metadata.ClydeUUID) == "" {
+		sess.Metadata.ClydeUUID = storageKey
+	}
+	sess.Metadata.Name = sess.Name
+	return sess, nil
+}
+
+func (fs *FileStore) findSessionByName(name string) (*Session, error) {
+	sessions, err := fs.loadStoredSessions()
+	if err != nil {
+		return nil, err
+	}
+	for _, sess := range sessions {
+		if sess.Name == name {
+			return sess, nil
+		}
+	}
+	return nil, fmt.Errorf("session '%s' not found", name)
+}
+
+func hydrateParentSessionNames(sessions []*Session) {
+	if len(sessions) == 0 {
+		return
+	}
+	namesByUUID := make(map[string]string, len(sessions))
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		if uuidValue := strings.TrimSpace(sess.ClydeUUID()); uuidValue != "" {
+			namesByUUID[uuidValue] = sess.Name
+		}
+	}
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		parentUUID := strings.TrimSpace(sess.Metadata.ParentClydeUUID)
+		if parentUUID == "" {
+			continue
+		}
+		if parentName, ok := namesByUUID[parentUUID]; ok {
+			sess.Metadata.ParentSession = parentName
+		}
+	}
 }

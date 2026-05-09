@@ -10,6 +10,7 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	codexprovider "goodkind.io/clyde/internal/providers/codex"
+	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/terminalcontrol"
 	itranscript "goodkind.io/clyde/internal/transcript"
@@ -87,6 +88,73 @@ func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen i
 		})
 	}
 	return out
+}
+
+// GetSessionName returns the current Codex session label when one is known.
+func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (string, error) {
+	if sess == nil {
+		return "", fmt.Errorf("nil session")
+	}
+	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
+	if threadName := codexSessionIndexThreadName(sessionID); threadName != "" {
+		return threadName, nil
+	}
+	if strings.TrimSpace(sess.Metadata.DisplayTitle) != "" {
+		return strings.TrimSpace(sess.Metadata.DisplayTitle), nil
+	}
+	return strings.TrimSpace(sess.Name), nil
+}
+
+// RenameSession persists a Codex title through the provider-owned append-only
+// index that Codex's thread/name/set path also writes.
+func (l *Lifecycle) RenameSession(ctx context.Context, sess *session.Session, newName string) error {
+	if sess == nil {
+		return fmt.Errorf("nil session")
+	}
+	log := codexLifecycleLog.Logger()
+	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
+	if sessionID == "" {
+		return fmt.Errorf("missing codex session id")
+	}
+	normalized, ok := codexstore.NormalizeThreadName(newName)
+	if !ok {
+		return fmt.Errorf("thread name must not be empty")
+	}
+	paths, err := codexstore.ResolveStorePathsFromEnv()
+	if err != nil {
+		log.WarnContext(ctx, "codex.session.rename_store_paths_failed",
+			"component", "codex",
+			"session", sess.Name,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return fmt.Errorf("resolve codex store paths: %w", err)
+	}
+	if err := codexstore.AppendThreadName(paths, sessionID, normalized); err != nil {
+		log.WarnContext(ctx, "codex.session.rename_failed",
+			"component", "codex",
+			"session", sess.Name,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return fmt.Errorf("append codex thread name: %w", err)
+	}
+	return nil
+}
+
+func codexSessionIndexThreadName(sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	paths, err := codexstore.ResolveStorePathsFromEnv()
+	if err != nil {
+		return ""
+	}
+	index, err := codexstore.ReadSessionIndex(paths.SessionIndexPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(index.ThreadName(sessionID))
 }
 
 func codexResumeArgs(req session.OpaqueResumeRequest) ([]string, error) {
@@ -167,12 +235,6 @@ func applyMITMEnv(ctx context.Context, env []string) []string {
 		}
 	}
 	return codexprovider.ApplyLaunchList(out, baseURL, proxyURL, caCertPath)
-}
-
-// SetProviderLaunchEnvironmentFunc wires the daemon-owned launch-env lookup
-// without making the lifecycle package import the daemon package directly.
-func SetProviderLaunchEnvironmentFunc(fn func(context.Context, string) ([]*clydev1.EnvironmentVariable, error)) {
-	providerLaunchEnvironmentViaDaemon = fn
 }
 
 var providerLaunchEnvironmentViaDaemon func(context.Context, string) ([]*clydev1.EnvironmentVariable, error)

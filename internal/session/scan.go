@@ -21,7 +21,7 @@ type DiscoveryResult struct {
 	WorkspaceRoot       string
 	Entrypoint          string
 	FirstEntryTime      time.Time
-	CustomTitle         string // user-given chat name from provider metadata
+	NameContract        ProviderSessionName
 	ForkParent          ProviderSessionID
 	IsAutoName          bool // provider invocation that looks like a clyde auto-name call
 	IsForked            bool // provider metadata carries fork lineage
@@ -35,6 +35,11 @@ type DiscoveryResult struct {
 type AdoptedSession struct {
 	Name     string
 	Metadata Metadata
+}
+
+type knownSessionIdentity struct {
+	Name      string
+	ClydeUUID string
 }
 
 // scratchDirSuffixes lists workspace-root path fragments produced by
@@ -100,10 +105,10 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		left := ordered[i]
 		right := ordered[j]
 		if left.ProviderSessionKey() == right.ProviderSessionKey() {
-			if left.CustomTitle != "" && right.CustomTitle == "" {
+			if left.GetName() != "" && right.GetName() == "" {
 				return true
 			}
-			if right.CustomTitle != "" && left.CustomTitle == "" {
+			if right.GetName() != "" && left.GetName() == "" {
 				return false
 			}
 			if !left.FirstEntryTime.Equal(right.FirstEntryTime) {
@@ -158,6 +163,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 
 		md := Metadata{
 			Name:                 name,
+			ClydeUUID:            "",
 			Provider:             NormalizeProviderID(r.Provider),
 			SessionID:            r.ProviderSessionID(),
 			TranscriptPath:       "",
@@ -166,6 +172,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			Created:              time.Time{},
 			LastAccessed:         time.Time{},
 			ParentSession:        "",
+			ParentClydeUUID:      "",
 			IsForkedSession:      r.IsForked,
 			IsIncognito:          false,
 			PreviousSessionIDs:   nil,
@@ -173,7 +180,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			HasCustomOutputStyle: false,
 			WorkspaceRoot:        r.WorkspaceRoot,
 			ContextMessageCount:  0,
-			DisplayTitle:         r.CustomTitle,
+			DisplayTitle:         r.DisplayTitle(),
 			AutoNameState:        AutoNameStateUntouched,
 			AutoNameSource:       AutoNameSourceUnspecified,
 			LastAutoNameAt:       time.Time{},
@@ -181,8 +188,9 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 		}
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {
-			if parentName, ok := known[r.ParentProviderSessionKey()]; ok {
-				md.ParentSession = parentName
+			if parentIdentity, ok := known[r.ParentProviderSessionKey()]; ok {
+				md.ParentSession = parentIdentity.Name
+				md.ParentClydeUUID = parentIdentity.ClydeUUID
 			}
 		}
 		fi, err := os.Stat(r.PrimaryArtifactPath())
@@ -201,7 +209,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			md.LastAccessed = md.Created
 		}
 
-		sess := &Session{Name: name, Metadata: md}
+		sess := &Session{Name: name, Metadata: md, storageKey: ""}
 		if err := store.Create(sess); err != nil {
 			createFailed++
 			sessionAdoptLog.Logger().Warn("session.adopt.create_failed",
@@ -226,10 +234,13 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			"transcript", r.PrimaryArtifactPath(),
 			"workspace", r.WorkspaceRoot,
 			"name_source", nameSource,
-			"display_title", r.CustomTitle,
+			"display_title", r.GetName(),
 		)
 		adopted = append(adopted, AdoptedSession{Name: name, Metadata: md})
-		known[r.ProviderSessionKey()] = name
+		known[r.ProviderSessionKey()] = knownSessionIdentity{
+			Name:      sess.Name,
+			ClydeUUID: sess.ClydeUUID(),
+		}
 	}
 	sessionAdoptLog.Logger().Debug("session.adopt.completed",
 		"component", "session",
@@ -245,33 +256,32 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 	return adopted, nil
 }
 
-// pickAdoptedName chooses a session name for an adopted provider session. It
-// prefers the sanitized provider customTitle so clyde verbs accept the
-// user-given chat name directly. Collisions with existing names are
-// resolved with UniqueName. When customTitle is absent or sanitizes to
-// empty (for example an emoji-only title) the function falls back to
-// the workspace-plus-UUID scheme in uniqueAdoptedName. The second return
-// value is a short label of the source used, for structured logs.
+// pickAdoptedName chooses an exact display name for an adopted provider
+// session. It prefers the provider-owned exact display title so clyde verbs
+// accept the upstream user-facing title directly. Collisions with existing
+// names are resolved with a human-visible suffix. When the provider does not
+// offer a usable display name, the function falls back to the
+// workspace-plus-UUID compatibility scheme in uniqueAdoptedName. The second
+// return value is a short label of the source used, for structured logs.
 func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) {
-	if sanitized := Sanitize(r.CustomTitle); sanitized != "" {
-		candidate := UniqueName(sanitized, taken)
-		if candidate != "" && ValidateName(candidate) == nil {
-			sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
-				"component", "session",
-				"subcomponent", "adopt",
-				"session_id", r.ProviderSessionID(),
-				"source", "custom_title",
-				"raw_title", r.CustomTitle,
-				"name", candidate,
-			)
-			return candidate, "custom_title"
-		}
-		sessionAdoptLog.Logger().Debug("session.adopt.name_sanitize_unusable",
+	observedName := r.DisplayTitle()
+	if candidate := UniqueDisplayName(observedName, taken); candidate != "" {
+		sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
 			"component", "session",
 			"subcomponent", "adopt",
 			"session_id", r.ProviderSessionID(),
-			"raw_title", r.CustomTitle,
-			"sanitized", sanitized,
+			"source", "provider_display_name",
+			"raw_title", observedName,
+			"name", candidate,
+		)
+		return candidate, "provider_display_name"
+	}
+	if observedName != "" {
+		sessionAdoptLog.Logger().Debug("session.adopt.display_name_unusable",
+			"component", "session",
+			"subcomponent", "adopt",
+			"session_id", r.ProviderSessionID(),
+			"raw_title", observedName,
 		)
 	}
 	fallback := uniqueAdoptedName(r, taken)
@@ -280,22 +290,25 @@ func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) 
 		"subcomponent", "adopt",
 		"session_id", r.ProviderSessionID(),
 		"source", "workspace_uuid_fallback",
-		"raw_title", r.CustomTitle,
+		"raw_title", observedName,
 		"name", fallback,
 	)
 	return fallback, "workspace_uuid_fallback"
 }
 
-func buildKnownIdentitySet(store *FileStore) (map[string]string, error) {
+func buildKnownIdentitySet(store *FileStore) (map[string]knownSessionIdentity, error) {
 	all, err := store.List()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string, len(all)*2)
+	out := make(map[string]knownSessionIdentity, len(all)*2)
 	for _, s := range all {
 		for _, id := range HistoricalIdentities(s) {
 			if key := id.Key(); key != "" {
-				out[key] = s.Name
+				out[key] = knownSessionIdentity{
+					Name:      s.Name,
+					ClydeUUID: s.ClydeUUID(),
+				}
 			}
 		}
 	}
@@ -314,14 +327,14 @@ func buildExistingNameSet(store *FileStore) (map[string]bool, error) {
 	return out, nil
 }
 
-// uniqueAdoptedName generates a registry-safe name for an adopted provider
-// artifact. The base is a sanitized basename of the workspace root joined with
-// a short provider session id prefix. Collisions are resolved with the shared
-// UniqueName helper.
+// uniqueAdoptedName generates a compatibility fallback name for an adopted
+// provider artifact when the provider did not expose a usable exact display
+// title. The base is a legacy-safe workspace basename joined with a short
+// provider session id prefix.
 func uniqueAdoptedName(r DiscoveryResult, taken map[string]bool) string {
 	base := workspaceBaseName(r.WorkspaceRoot)
 	short := safeShortProviderSessionID(r.ProviderSessionID())
-	return UniqueName(fmt.Sprintf("%s-%s", base, short), taken)
+	return UniqueLegacySlugName(fmt.Sprintf("%s-%s", base, short), taken)
 }
 
 func workspaceBaseName(root string) string {

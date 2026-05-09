@@ -217,7 +217,7 @@ func (c *WebsocketSessionCache) registerEntry(ctx context.Context, s *WebsocketS
 			Model:          s.Model,
 			FrameCount:     s.FrameCount,
 		},
-		&wsConnCloser{session: s},
+		&wsConnCloser{session: s, conn: s.Conn},
 	)
 	if err != nil {
 		// Registry is draining; log and continue without registration.

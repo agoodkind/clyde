@@ -8,7 +8,7 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-func FuzzValidateName(f *testing.F) {
+func FuzzValidateLegacySlugName(f *testing.F) {
 	// Seed corpus with valid and invalid names
 	seeds := []string{
 		"ab", "test", "my-session", "bug-123",
@@ -22,7 +22,7 @@ func FuzzValidateName(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, name string) {
-		err := session.ValidateName(name)
+		err := session.ValidateLegacySlugName(name)
 
 		if err == nil {
 			// Valid names must satisfy all invariants

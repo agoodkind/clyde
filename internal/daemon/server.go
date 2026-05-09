@@ -44,6 +44,7 @@ import (
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
+	"goodkind.io/clyde/internal/providers/sessionname"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/slogger"
@@ -92,11 +93,7 @@ type Server struct {
 	remoteWorkers map[string]*remoteWorker
 	liveSessions  map[string]*liveRuntimeSession
 	liveLeases    map[string]*foregroundLease
-	// liveWorkers is the universal registry for all daemon-owned live
-	// workers (Claude bridge, Codex tmux/PTY). Each worker is registered
-	// on launch and released on natural exit so the daemon has a single
-	// bounded inventory for drain and force-close on reload or shutdown.
-	liveWorkers *livetrack.Registry[LiveMeta]
+	liveWorkers   *livetrack.Registry[LiveMeta]
 
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
@@ -111,16 +108,9 @@ type Server struct {
 
 	skipRuntimeCleanup atomic.Bool
 
-	// autoNameMu guards the optional auto-name worker handle. The daemon wires
-	// it after construction from live config, and reload can replace it.
 	autoNameMu sync.RWMutex
 	autoName   *autoNameWorker
 
-	// RPCs tracks every inbound streaming gRPC session so the daemon
-	// can drain or force-close them on reload alongside the MITM and
-	// adapter drain. Each stream handler registers on entry with a
-	// closer that cancels the stream context, and defers Release on
-	// exit. See internal/livetrack for the contract.
 	RPCs *livetrack.Registry[RPCMeta]
 }
 
@@ -155,21 +145,19 @@ func (s *Server) mitmProxy() *mitm.Proxy {
 type wrapperSession struct {
 	wrapperID   string
 	sessionName string // empty for bare claude invocations
+	sessionID   string
 	model       string
 	effortLevel string
 }
 
 type remoteWorker struct {
-	sessionName string
-	sessionID   string
-	basedir     string
-	incognito   bool
-	cmd         *exec.Cmd
-	done        chan struct{}
-	skipCleanup atomic.Bool
-	// livetrackSession is the livetrack registry handle for this worker.
-	// It is set on launch and used to release the registration when the
-	// worker exits naturally. May be nil when the registry was closed.
+	sessionName      string
+	sessionID        string
+	basedir          string
+	incognito        bool
+	cmd              *exec.Cmd
+	done             chan struct{}
+	skipCleanup      atomic.Bool
 	livetrackSession *livetrack.Session[LiveMeta]
 }
 
@@ -180,19 +168,15 @@ type remoteWorkerTmuxState struct {
 }
 
 type liveRuntimeSession struct {
-	provider     session.ProviderID
-	name         string
-	id           string
-	basedir      string
-	model        string
-	status       string
-	startedAt    time.Time
-	lastTurnID   string
-	codexRuntime codex.LiveRuntime
-	// livetrackSession is the livetrack registry handle for this Codex
-	// live session. It is set on start/attach and used to release the
-	// registration when the session is closed or suspended. May be nil
-	// when the registry was closed before the session started.
+	provider         session.ProviderID
+	name             string
+	id               string
+	basedir          string
+	model            string
+	status           string
+	startedAt        time.Time
+	lastTurnID       string
+	codexRuntime     codex.LiveRuntime
 	livetrackSession *livetrack.Session[LiveMeta]
 }
 
@@ -208,6 +192,25 @@ type foregroundLease struct {
 	shouldRestore bool
 	restoreReason string
 	acquiredAt    time.Time
+}
+
+func remoteWorkerKey(sessionName, sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		return sessionID
+	}
+	return strings.TrimSpace(sessionName)
+}
+
+func removeRemoteWorkerLocked(workers map[string]*remoteWorker, worker *remoteWorker) {
+	if worker == nil {
+		return
+	}
+	for key, candidate := range workers {
+		if candidate == worker {
+			delete(workers, key)
+		}
+	}
 }
 
 var remoteWorkerExecutable = os.Executable
@@ -371,27 +374,27 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		remoteWorkers:                   make(map[string]*remoteWorker),
 		liveSessions:                    make(map[string]*liveRuntimeSession),
 		liveLeases:                      make(map[string]*foregroundLease),
-		contextMu:                       sync.Mutex{},
-		contextStates:                   make(map[string]sessionContextState),
-		contextRefreshSem:               make(chan contextRefreshPermit, 2),
-		contextUsageCache:               newContextUsageStateCache(30 * time.Second),
-		contextUsageProbe:               nil,
-		reloadMu:                        sync.Mutex{},
-		reloadFn:                        nil,
-		mitmAccess:                      mitmAccessor{mu: sync.RWMutex{}, fn: nil},
-		skipRuntimeCleanup:              atomic.Bool{},
-		autoNameMu:                      sync.RWMutex{},
-		autoName:                        nil,
-		RPCs:                            newRPCRegistry(),
 		liveWorkers: livetrack.New[LiveMeta](livetrack.Options[LiveMeta]{
 			Component:     "daemon",
-			Concern:       "daemon.workers.live",
+			Concern:       "daemon",
 			Log:           log,
 			PollEvery:     0,
 			CloserGrace:   0,
 			ParallelClose: false,
 			Now:           nil,
 		}),
+		contextMu:          sync.Mutex{},
+		contextStates:      make(map[string]sessionContextState),
+		contextRefreshSem:  make(chan contextRefreshPermit, 2),
+		contextUsageCache:  newContextUsageStateCache(30 * time.Second),
+		contextUsageProbe:  nil,
+		reloadMu:           sync.Mutex{},
+		reloadFn:           nil,
+		mitmAccess:         mitmAccessor{mu: sync.RWMutex{}, fn: nil},
+		skipRuntimeCleanup: atomic.Bool{},
+		autoNameMu:         sync.RWMutex{},
+		autoName:           nil,
+		RPCs:               newRPCRegistry(),
 	}
 }
 
@@ -437,6 +440,7 @@ func (s *Server) runDiscoveryScanner() {
 
 	for {
 		s.runDiscoveryOnce(scanCtx)
+		s.runAutoRenamePass(scanCtx)
 		scanCtx = context.Background()
 		select {
 		case <-time.After(interval):
@@ -479,26 +483,35 @@ func (s *Server) runDiscoveryOnce(ctx context.Context) {
 		)
 		return
 	}
-	adopted, err := session.AdoptUnknown(store, results)
+	changes, err := store.SyncDiscoveryResults(results)
 	if err != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "discovery adopt failed",
+		s.log.LogAttrs(ctx, slog.LevelWarn, "discovery sync failed",
 			slog.Any("err", err),
 		)
 		return
 	}
-	if len(adopted) > 0 {
-		names := make([]string, 0, len(adopted))
-		for _, a := range adopted {
-			names = append(names, a.Name)
-			sess := &session.Session{Name: a.Name, Metadata: a.Metadata}
-			s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_ADOPTED, store, sess, "")
+	if len(changes) > 0 {
+		names := make([]string, 0, len(changes))
+		for _, change := range changes {
+			if change.Session == nil {
+				continue
+			}
+			names = append(names, change.Session.Name)
+			kind := clydev1.SubscribeRegistryResponse_KIND_SESSION_UPDATED
+			oldName := ""
+			if change.Adopted {
+				kind = clydev1.SubscribeRegistryResponse_KIND_SESSION_ADOPTED
+			} else if change.OldName != "" && change.Session.Name != change.OldName {
+				kind = clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED
+				oldName = change.OldName
+			}
+			s.publishSessionSummaryEvent(ctx, kind, store, change.Session, oldName)
 		}
-		s.log.LogAttrs(ctx, slog.LevelInfo, "discovery adopted sessions",
-			slog.Int("count", len(adopted)),
+		s.log.LogAttrs(ctx, slog.LevelInfo, "discovery synced sessions",
+			slog.Int("count", len(changes)),
 			slog.Any("names", names),
 		)
 	}
-	s.runAutoRenamePass(ctx)
 }
 
 // TriggerScan implements the RPC. The daemon's scanner runs whenever
@@ -519,24 +532,24 @@ func (s *Server) TriggerScan(ctx context.Context, _ *clydev1.TriggerScanRequest)
 // so a slow client cannot block the broadcaster. Events that arrive
 // while a subscriber's buffer is full are dropped for that one client.
 func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream clydev1.ClydeService_SubscribeRegistryServer) error {
-	streamCtx, streamCancel := context.WithCancel(stream.Context())
-	defer streamCancel()
-	corr := correlation.FromContext(streamCtx)
-	peerInfo, _ := peer.FromContext(streamCtx)
-	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_registry", RPCMeta{
-		Method:     "/clyde.v1.ClydeService/SubscribeRegistry",
-		Direction:  "inbound",
-		PeerActor:  daemonPeerAddr(peerInfo),
-		RequestID:  corr.RequestID,
-		TraceID:    string(corr.TraceID),
-		LeaseToken: "",
-	}, rpcCloser{cancel: streamCancel})
-	if err != nil {
-		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
-	}
-	defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_registry.done")
-
 	ch := make(chan *clydev1.SubscribeRegistryResponse, 32)
+	streamCtx := stream.Context()
+	if s.RPCs != nil {
+		rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_registry", RPCMeta{
+			Direction: "inbound",
+			Method:    "SubscribeRegistry",
+			PeerActor: func() string {
+				peerInfo, _ := peer.FromContext(streamCtx)
+				return daemonPeerAddr(peerInfo)
+			}(),
+			RequestID:  "",
+			TraceID:    "",
+			LeaseToken: "",
+		}, rpcCloser{cancel: func() {}})
+		if err == nil {
+			defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_registry.done")
+		}
+	}
 
 	s.subMu.Lock()
 	s.subscribers[ch] = true
@@ -581,26 +594,10 @@ func (s *Server) GetProviderStats(ctx context.Context, _ *clydev1.GetProviderSta
 }
 
 func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest, stream clydev1.ClydeService_SubscribeProviderStatsServer) error {
-	streamCtx, streamCancel := context.WithCancel(stream.Context())
-	defer streamCancel()
-	corr := correlation.FromContext(streamCtx)
-	peerInfo, _ := peer.FromContext(streamCtx)
-	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_provider_stats", RPCMeta{
-		Method:     "/clyde.v1.ClydeService/SubscribeProviderStats",
-		Direction:  "inbound",
-		PeerActor:  daemonPeerAddr(peerInfo),
-		RequestID:  corr.RequestID,
-		TraceID:    string(corr.TraceID),
-		LeaseToken: "",
-	}, rpcCloser{cancel: streamCancel})
-	if err != nil {
-		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
-	}
-	defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_provider_stats.done")
-
 	ch := s.providerStats.subscribe()
 	defer s.providerStats.unsubscribe(ch)
 
+	ctx := stream.Context()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -610,7 +607,7 @@ func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest
 			if err := stream.Send(ev); err != nil {
 				return err
 			}
-		case <-streamCtx.Done():
+		case <-ctx.Done():
 			return nil
 		}
 	}
@@ -634,8 +631,7 @@ func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRe
 	return &clydev1.RenameSessionResponse{}, nil
 }
 
-// ApplyAutoRename is the daemon entry point the auto-name worker uses. The
-// worker is transcript-only today, so the applied source is always transcript.
+// ApplyAutoRename is the daemon entry point the auto-name worker uses.
 func (s *Server) ApplyAutoRename(ctx context.Context, oldName, newName, sourceHash string) error {
 	if oldName == "" || newName == "" {
 		return status.Error(codes.InvalidArgument, "old_name and new_name are required")
@@ -678,51 +674,64 @@ type renameAttribution struct {
 func (s *Server) renameSessionInternal(ctx context.Context, oldName, newName string, attribution renameAttribution) error {
 	start := daemonNow()
 	if s.sessionHasLiveLease(oldName) {
-		return status.Errorf(codes.FailedPrecondition,
-			"session %q is in use; close the wrapper before renaming", oldName)
+		return status.Errorf(codes.FailedPrecondition, "session %q is in use; close the wrapper before renaming", oldName)
 	}
 
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return status.Errorf(codes.Internal, "store init: %v", err)
 	}
+	existing, err := store.Get(oldName)
+	if err != nil {
+		return status.Errorf(codes.Internal, "load session before rename: %v", err)
+	}
+	if err := s.writeProviderSessionName(ctx, existing, newName); err != nil {
+		return err
+	}
 	if err := store.Rename(oldName, newName); err != nil {
 		return status.Errorf(codes.Internal, "rename failed: %v", err)
 	}
-
-	s.renameContextState(oldName, newName)
 	renamed, getErr := store.Get(newName)
 	if getErr == nil && renamed != nil {
 		renamed.Metadata.AutoNameState = attribution.state
 		renamed.Metadata.AutoNameSource = attribution.source
-		renamed.Metadata.LastAutoNameAt = daemonNow()
 		renamed.Metadata.AutoNameSourceHash = attribution.sourceHash
+		renamed.Metadata.LastAutoNameAt = daemonNow()
 		if updateErr := store.Update(renamed); updateErr != nil {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "daemon.rename.metadata_update_failed",
-				slog.String("component", "daemon"),
-				slog.String("subcomponent", "session"),
-				slog.String("session", newName),
-				slog.String("err", updateErr.Error()),
+			s.log.WarnContext(ctx, "daemon.rename.metadata_update_failed",
+				"component", "daemon",
+				"subcomponent", "session",
+				"session", newName,
+				"err", updateErr,
 			)
 		}
 	}
-
+	s.renameContextState(oldName, newName)
 	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED, store, renamed, oldName)
-	corrCtx := correlation.FromContext(ctx)
-	providerSessionID := ""
+	sessionID := ""
 	if renamed != nil {
-		providerSessionID = renamed.Metadata.SessionID
+		sessionID = renamed.Metadata.ProviderSessionID()
 	}
 	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon.rename.applied",
 		slog.String("component", "daemon"),
 		slog.String("subcomponent", "session"),
 		slog.String("prior_name", oldName),
 		slog.String("new_name", newName),
+		slog.String("session_id", sessionID),
+		slog.String("trace_id", string(correlation.FromContext(ctx).TraceID)),
 		slog.String("source", attribution.source.String()),
-		slog.String("session_id", providerSessionID),
-		slog.String("trace_id", string(corrCtx.TraceID)),
 		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
+	return nil
+}
+
+func (s *Server) writeProviderSessionName(ctx context.Context, sess *session.Session, newName string) error {
+	if sess == nil {
+		return status.Errorf(codes.NotFound, "session not found")
+	}
+	if err := sessionname.Rename(ctx, sess, newName); err != nil {
+		return status.Errorf(codes.Internal, "provider rename failed: %v", err)
+	}
 	return nil
 }
 
@@ -760,7 +769,7 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 		)
 	}
 	if sess.Metadata.HasCustomOutputStyle {
-		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.Name); err != nil {
+		if err := outputstyle.DeleteCustomStyleFile(config.GlobalOutputStyleRoot(), sess.StorageKey()); err != nil {
 			s.log.WarnContext(ctx, "daemon.session_delete.output_style_failed",
 				"component", "daemon",
 				"subcomponent", "sessions",
@@ -863,16 +872,6 @@ func (s *Server) Close() {
 		_ = s.watcher.Close()
 	}
 
-	// Drain the live-worker registry so any remaining workers get an
-	// opportunity to checkpoint before force-close. The drain context is
-	// unbounded because Close is only called from Run's defer path after
-	// the gRPC listener has already been stopped.
-	if s.liveWorkers != nil {
-		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = s.liveWorkers.Drain(drainCtx, "daemon.close")
-		drainCancel()
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -899,6 +898,8 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 	// resetting to global defaults.
 	existingModel, existingEffort := s.readSessionSettings(req.WrapperId)
 
+	sessionName := strings.TrimSpace(req.GetSessionName())
+	sessionID := strings.TrimSpace(req.GetSessionId())
 	var model, effortLevel string
 	if existingModel != "" || existingEffort != "" {
 		// Re-registering after daemon restart. Preserve what claude has.
@@ -912,7 +913,13 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 		)
 	} else {
 		// Fresh session. Resolve from clyde session settings and global config.
-		model, effortLevel = s.resolveSessionSettings(ctx, req.SessionName)
+		resolvedSession, resolvedModel, resolvedEffort := s.resolveSessionSettings(ctx, sessionName, sessionID)
+		if resolvedSession != nil {
+			sessionName = firstNonEmpty(resolvedSession.Name, sessionName)
+			sessionID = firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID)
+		}
+		model = resolvedModel
+		effortLevel = resolvedEffort
 	}
 
 	settingsFile, err := s.writeSettingsJSON(ctx, req.WrapperId, model, effortLevel)
@@ -922,7 +929,8 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 
 	sess := &wrapperSession{
 		wrapperID:   req.WrapperId,
-		sessionName: req.SessionName,
+		sessionName: sessionName,
+		sessionID:   sessionID,
 		model:       model,
 		effortLevel: effortLevel,
 	}
@@ -938,7 +946,8 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 
 	s.log.LogAttrs(ctx, slog.LevelInfo, "session acquired",
 		slog.String("wrapper_id", req.WrapperId),
-		slog.String("session", req.SessionName),
+		slog.String("session", sessionName),
+		slog.String("session_id", sessionID),
 		slog.String("model", model),
 		slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 		slog.String("settings_file", settingsFile),
@@ -1295,30 +1304,62 @@ func (s *Server) loadGlobalSettings(ctx context.Context) error {
 }
 
 // resolveSessionSettings loads per-session model and effortLevel from the
-// clyde session's settings.json, falling back to global settings for any
-// field not set at the session level.
-func (s *Server) resolveSessionSettings(ctx context.Context, sessionName string) (model, effortLevel string) {
+// stored clyde session, preferring stable provider identity when available and
+// falling back to global settings for any field not set at the session level.
+func (s *Server) resolveSessionSettings(ctx context.Context, sessionName, sessionID string) (*session.Session, string, string) {
+	_, _ = peer.FromContext(ctx)
+	_, _ = metadata.FromIncomingContext(ctx)
 	s.mu.RLock()
 	globalModel := globalSettingString(s.globalSettings, "model")
 	globalEffort := globalSettingString(s.globalSettings, "effortLevel")
 	s.mu.RUnlock()
 
-	model = globalModel
+	model := globalModel
 	model = adaptercursor.NormalizeSessionSettingsModel(model)
-	effortLevel = globalEffort
+	effortLevel := globalEffort
 
-	if sessionName == "" {
+	if strings.TrimSpace(sessionName) == "" && strings.TrimSpace(sessionID) == "" {
 		s.log.LogAttrs(ctx, slog.LevelDebug, "no session name, using global settings",
 			slog.String("model", model),
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
-		return model, effortLevel
+		return nil, model, effortLevel
 	}
 
-	// Load session-specific settings from clyde's global store
-	sessSettings := loadClydeSessionSettings(sessionName)
-	if sessSettings != nil {
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		s.log.WarnContext(ctx, "daemon.session_settings.store_init_failed",
+			"component", "daemon",
+			"session", sessionName,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return nil, model, effortLevel
+	}
+	resolvedSession, err := resolveStoredSession(store, sessionName, sessionID)
+	if err != nil {
+		s.log.WarnContext(ctx, "daemon.session_settings.resolve_failed",
+			"component", "daemon",
+			"session", sessionName,
+			"session_id", sessionID,
+			"err", err,
+		)
+		return nil, model, effortLevel
+	}
+	if resolvedSession == nil {
+		s.log.LogAttrs(ctx, slog.LevelDebug, "no clyde session row, using global",
+			slog.String("session", sessionName),
+			slog.String("session_id", sessionID),
+			slog.String("model", model),
+			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
+			slog.String("effort", effortLevel),
+		)
+		return nil, model, effortLevel
+	}
+	sessSettings, err := sessionsettings.Load(store, resolvedSession)
+	switch {
+	case err == nil && sessSettings != nil:
 		if sessSettings.Model != "" {
 			model = adaptercursor.NormalizeSessionSettingsModel(sessSettings.Model)
 		}
@@ -1326,21 +1367,30 @@ func (s *Server) resolveSessionSettings(ctx context.Context, sessionName string)
 			effortLevel = sessSettings.EffortLevel
 		}
 		s.log.LogAttrs(ctx, slog.LevelDebug, "resolved session settings",
-			slog.String("session", sessionName),
+			slog.String("session", firstNonEmpty(resolvedSession.Name, sessionName)),
+			slog.String("session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID)),
 			slog.String("model", model),
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
-	} else {
+	case err != nil:
+		s.log.WarnContext(ctx, "daemon.session_settings.load_failed",
+			"component", "daemon",
+			"session", resolvedSession.Name,
+			"session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID),
+			"err", err,
+		)
+	default:
 		s.log.LogAttrs(ctx, slog.LevelDebug, "no clyde session settings, using global",
-			slog.String("session", sessionName),
+			slog.String("session", resolvedSession.Name),
+			slog.String("session_id", firstNonEmpty(resolvedSession.Metadata.ProviderSessionID(), sessionID)),
 			slog.String("model", model),
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
 		)
 	}
 
-	return model, effortLevel
+	return resolvedSession, model, effortLevel
 }
 
 func globalSettingString(settings map[string]json.RawMessage, key string) string {
@@ -1358,22 +1408,33 @@ func globalSettingString(settings map[string]json.RawMessage, key string) string
 	return out
 }
 
-// loadClydeSessionSettings loads settings.json from the clyde global
-// store for the given session name. Returns nil if not found.
-func loadClydeSessionSettings(sessionName string) *session.Settings {
-	sessionDir := config.GetSessionDir(config.GlobalDataDir(), sessionName)
-	settingsPath := filepath.Join(sessionDir, "settings.json")
-
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		return nil
+func resolveStoredSession(store *session.FileStore, sessionName, sessionID string) (*session.Session, error) {
+	if store == nil {
+		return nil, nil
 	}
-
-	var settings session.Settings
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" {
+		sess, err := store.Resolve(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if sess != nil {
+			return sess, nil
+		}
 	}
-	return &settings
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return nil, nil
+	}
+	return store.Resolve(sessionName)
+}
+
+func resolvedSessionName(store *session.FileStore, sessionName, sessionID string) string {
+	sess, err := resolveStoredSession(store, sessionName, sessionID)
+	if err == nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
+		return sess.Name
+	}
+	return strings.TrimSpace(sessionName)
 }
 
 func globalSettingsPath() string {
@@ -1388,11 +1449,15 @@ func globalSettingsPath() string {
 func (s *Server) ListActiveSessions(_ context.Context, _ *clydev1.ListActiveSessionsRequest) (*clydev1.ListActiveSessionsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	store, _ := session.NewGlobalFileStore()
 
 	var active []*clydev1.ActiveSession
 	for wid, sess := range s.sessions {
+		if sess == nil {
+			continue
+		}
 		active = append(active, &clydev1.ActiveSession{
-			SessionName: sess.sessionName,
+			SessionName: resolvedSessionName(store, sess.sessionName, sess.sessionID),
 			WrapperId:   wid,
 		})
 	}
@@ -1405,10 +1470,23 @@ func (s *Server) sessionIsActive(sessionName string) bool {
 	if sessionName == "" {
 		return false
 	}
+	targetSessionID := ""
+	store, err := session.NewGlobalFileStore()
+	if err == nil {
+		if sess, resolveErr := resolveStoredSession(store, sessionName, ""); resolveErr == nil && sess != nil {
+			targetSessionID = sess.Metadata.ProviderSessionID()
+		}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, sess := range s.sessions {
-		if sess != nil && sess.sessionName == sessionName {
+		if sess == nil {
+			continue
+		}
+		if targetSessionID != "" && strings.TrimSpace(sess.sessionID) == targetSessionID {
+			return true
+		}
+		if sess.sessionName == sessionName {
 			return true
 		}
 	}
@@ -1493,8 +1571,8 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	if !sess.ProviderRuntimeBoundary().History.Exportable {
-		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support history export", sess.ProviderID())
+	if !sess.SessionProviderCapabilities().TranscriptExport {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
 	}
 	stats := inspectExportStatsForSession(sess)
 	resp := &clydev1.GetSessionExportStatsResponse{
@@ -1539,8 +1617,8 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	if !sess.ProviderRuntimeBoundary().History.Exportable {
-		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support history export", sess.ProviderID())
+	if !sess.SessionProviderCapabilities().TranscriptExport {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
 	}
 	body, err := buildSessionExport(sess, req)
 	if err != nil {
@@ -1770,7 +1848,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	}
 	stats := inspectStats{}
 	if caps.TranscriptExport {
-		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+		stats = inspectStatsForSession(sess)
 	}
 	size := int64(0)
 	lastActivity := sess.Metadata.LastAccessed
@@ -1793,19 +1871,21 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	}
 	runtime := s.providerRuntimeBoundary(sess, settings, bridge)
 	contextState := s.contextStateForSession(ctx, sess)
-	var lastAutoNameNanos int64
+	lastAutoNameNanos := int64(0)
 	if !sess.Metadata.LastAutoNameAt.IsZero() {
 		lastAutoNameNanos = sess.Metadata.LastAutoNameAt.UnixNano()
 	}
 	return &clydev1.SessionSummary{
 		Name:                  sess.Name,
 		MetadataName:          sess.Metadata.Name,
+		ClydeUuid:             sess.ClydeUUID(),
 		SessionId:             sess.Metadata.ProviderSessionID(),
 		TranscriptPath:        sess.Metadata.ProviderTranscriptPath(),
 		WorkDir:               sess.Metadata.WorkDir,
 		CreatedNanos:          sess.Metadata.Created.UnixNano(),
 		LastAccessedNanos:     sess.Metadata.LastAccessed.UnixNano(),
 		ParentSession:         sess.Metadata.ParentSession,
+		ParentClydeUuid:       sess.Metadata.ParentClydeUUID,
 		IsForkedSession:       sess.Metadata.IsForkedSession,
 		IsIncognito:           sess.Metadata.IsIncognito,
 		PreviousSessionIds:    append([]string(nil), sess.Metadata.PreviousProviderSessionIDStrings()...),
@@ -1828,8 +1908,8 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 		ContextUsageStatus:    contextState.Status,
 		Provider:              string(sess.ProviderID()),
 		Runtime:               protoRuntimeBoundary(runtime),
-		AutoNameState:         string(sess.Metadata.AutoNameState),
-		AutoNameSource:        string(sess.Metadata.AutoNameSource),
+		AutoNameState:         sess.Metadata.AutoNameState.String(),
+		AutoNameSource:        sess.Metadata.AutoNameSource.String(),
 		LastAutoNameNanos:     lastAutoNameNanos,
 		AutoNameSourceHash:    sess.Metadata.AutoNameSourceHash,
 	}
@@ -1837,7 +1917,6 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 
 func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, sess *session.Session) *clydev1.GetSessionDetailResponse {
 	caps := sess.SessionProviderCapabilities()
-	runtime := sess.ProviderRuntimeBoundary()
 	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
 	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
@@ -1851,7 +1930,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		}
 	}
 	stats := inspectStats{}
-	if runtime.History.Readable {
+	if caps.TranscriptExport {
 		stats = inspectStatsForSession(sess)
 	}
 	contextState := s.lazyContextStateForDetail(ctx, sess)
@@ -1873,37 +1952,31 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		ContextUsageStatus:    contextState.Status,
 		ResumeInstructions:    session.ResumeInstructions(sess),
 	}
-	if p := sess.Metadata.ProviderTranscriptPath(); runtime.History.Readable && p != "" {
+	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {
 			resp.TranscriptSizeBytes = info.Size()
 			resp.LastActivityNanos = info.ModTime().UnixNano()
 		}
 	}
-	s.populateSessionDetailMessages(sess, resp)
-	return resp
-}
-
-func (s *Server) populateSessionDetailMessages(sess *session.Session, resp *clydev1.GetSessionDetailResponse) {
+	if caps.TranscriptExport {
+		for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
+			text := strings.TrimSpace(m.Text)
+			if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
+				continue
+			}
+			resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
+		}
+		for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
+			resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
+		}
+		for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
+			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
+		}
+	}
 	if sess.ProviderID() == session.ProviderCodex {
 		s.applyCodexSessionDetail(sess, resp)
-		return
 	}
-	if !sess.SessionProviderCapabilities().TranscriptExport {
-		return
-	}
-	for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
-		text := strings.TrimSpace(m.Text)
-		if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
-			continue
-		}
-		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
-	}
-	for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
-		resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
-	}
-	for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
-		resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
-	}
+	return resp
 }
 
 func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.GetSessionDetailResponse) {
@@ -1924,27 +1997,29 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 	if history.ModelProvider != "" && resp.Model == "-" {
 		resp.Model = history.ModelProvider
 	}
-	allTurns := history.ConversationTurns(itranscript.ShapeOptions{
-		IncludeThinking:  false,
+	turns := history.ConversationTurns(itranscript.ShapeOptions{
 		ConversationOnly: true,
-		ToolOnly:         itranscript.ToolOnlyCompactSummary,
-		MaxTextRunes:     1000,
+		IncludeThinking:  false,
+		MaxTextRunes:     0,
+		ToolOnly:         itranscript.ToolOnlyOmit,
 	})
-	resp.TotalMessages = int32(len(allTurns))
-	for _, turn := range allTurns {
-		resp.AllMessages = append(resp.AllMessages, detailMessageProto(turn.Role, turn.Text, turn.Timestamp))
-	}
-	for _, turn := range history.RecentConversationTurns(5, itranscript.ShapeOptions{
-		IncludeThinking:  false,
-		ConversationOnly: true,
-		ToolOnly:         itranscript.ToolOnlyCompactSummary,
-		MaxTextRunes:     150,
-	}) {
-		text := strings.TrimSpace(turn.Text)
-		if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
+	resp.TotalMessages = int32(len(turns))
+	resp.AllMessages = nil
+	resp.RecentMessages = nil
+	for _, msg := range turns {
+		text := strings.TrimSpace(msg.Text)
+		if text == "" {
 			continue
 		}
-		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(turn.Role, text, turn.Timestamp))
+		resp.AllMessages = append(resp.AllMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
+	}
+	start := max(len(turns)-5, 0)
+	for _, msg := range turns[start:] {
+		text := strings.TrimSpace(msg.Text)
+		if text == "" {
+			continue
+		}
+		resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
 	}
 	if info, err := os.Stat(path); err == nil {
 		resp.TranscriptSizeBytes = info.Size()
@@ -2241,14 +2316,18 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		return nil, status.Errorf(codes.InvalidArgument, "basedir %q is not a directory", basedir)
 	}
 
-	name := strings.TrimSpace(req.GetSessionName())
+	requestedName := req.GetSessionName()
+	name := strings.TrimSpace(requestedName)
 	if name == "" {
 		name, err = nextRemoteSessionName(store)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "allocate session name: %v", err)
 		}
-	} else if session.ValidateName(name) != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid session name %q", name)
+	} else {
+		name = requestedName
+		if err := session.ValidateDisplayName(name); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid session name %q", name)
+		}
 	}
 	if store.Exists(name) {
 		return nil, status.Errorf(codes.AlreadyExists, "session %q already exists", name)
@@ -2273,21 +2352,20 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		_ = store.Delete(name)
 		return nil, status.Errorf(codes.Internal, "launch remote session: %v", err)
 	}
-	done := make(chan struct{})
 	worker := &remoteWorker{
 		sessionName:      name,
 		sessionID:        sessionID,
 		basedir:          basedir,
 		incognito:        req.GetIncognito(),
 		cmd:              cmd,
-		done:             done,
+		done:             make(chan struct{}),
 		skipCleanup:      atomic.Bool{},
 		livetrackSession: nil,
 	}
-	s.registerClaudeRemoteWorker(ctx, worker)
 	s.remoteMu.Lock()
-	s.remoteWorkers[name] = worker
+	s.remoteWorkers[remoteWorkerKey(name, sessionID)] = worker
 	s.remoteMu.Unlock()
+	s.registerClaudeRemoteWorker(ctx, worker)
 	workerCtx := daemonDetachedCorrelationContext(ctx, s.log)
 	go func() {
 		defer func() {
@@ -2317,6 +2395,35 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		SessionId:   sessionID,
 		LaunchState: clydev1.StartRemoteSessionResponse_LAUNCH_STATE_LAUNCHING,
 	}, nil
+}
+
+// registerClaudeRemoteWorker registers a newly-launched Claude remote worker
+// with the livetrack registry.
+func (s *Server) registerClaudeRemoteWorker(ctx context.Context, worker *remoteWorker) {
+	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil || s.liveWorkers == nil {
+		return
+	}
+	lsess, err := s.liveWorkers.Register(ctx, "claude.remote", LiveMeta{
+		Provider:      "claude",
+		LiveSessionID: worker.sessionID,
+		WorkerPID:     worker.cmd.Process.Pid,
+		Lease:         "background",
+	}, &claudeWorkerCloser{
+		proc:           worker.cmd.Process,
+		done:           worker.done,
+		interruptGrace: claudeRemoteSuspendTimeout,
+	})
+	if err == nil {
+		worker.livetrackSession = lsess
+		return
+	}
+	s.log.WarnContext(ctx, "daemon.remote_session.livetrack_register_failed",
+		"component", "daemon",
+		"provider", session.ProviderClaude,
+		"session", worker.sessionName,
+		"session_id", worker.sessionID,
+		"err", err,
+	)
 }
 
 func defaultSessionSettings(remoteControl bool) *session.Settings {
@@ -2416,51 +2523,24 @@ func resolveSessionRuntime(sessionName, provider, sessionID string) (resolvedSes
 	if err != nil {
 		return resolvedSessionRuntime{}, err
 	}
-	sessionName = strings.TrimSpace(sessionName)
 	providerID := session.ProviderID(strings.TrimSpace(provider))
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionName != "" {
-		sess, err := store.Resolve(sessionName)
-		if err != nil {
-			return resolvedSessionRuntime{}, err
-		}
-		runtime := sess.ProviderRuntimeBoundary()
-		return resolvedSessionRuntime{
-			Session:         sess,
-			Provider:        runtime.Live.Provider,
-			SessionID:       runtime.Live.SessionID,
-			HistoryArtifact: runtime.History.PrimaryArtifact,
-		}, nil
-	}
-	if sessionID == "" {
-		return resolvedSessionRuntime{}, nil
-	}
-	all, err := store.List()
+	sess, err := resolveStoredSession(store, sessionName, sessionID)
 	if err != nil {
 		return resolvedSessionRuntime{}, err
 	}
-	for _, sess := range all {
-		if sess == nil {
-			continue
-		}
-		for _, identity := range session.HistoricalIdentities(sess) {
-			normalized := identity.Normalized()
-			if normalized.ID != sessionID {
-				continue
-			}
-			if providerID != session.ProviderUnknown && session.NormalizeProviderID(providerID) != normalized.Provider {
-				continue
-			}
-			runtime := sess.ProviderRuntimeBoundary()
-			return resolvedSessionRuntime{
-				Session:         sess,
-				Provider:        normalized.Provider,
-				SessionID:       normalized.ID,
-				HistoryArtifact: runtime.History.PrimaryArtifact,
-			}, nil
-		}
+	if sess == nil {
+		return resolvedSessionRuntime{}, nil
 	}
-	return resolvedSessionRuntime{}, nil
+	runtime := sess.ProviderRuntimeBoundary()
+	if providerID != session.ProviderUnknown && session.NormalizeProviderID(providerID) != runtime.Live.Provider {
+		return resolvedSessionRuntime{}, nil
+	}
+	return resolvedSessionRuntime{
+		Session:         sess,
+		Provider:        runtime.Live.Provider,
+		SessionID:       runtime.Live.SessionID,
+		HistoryArtifact: runtime.History.PrimaryArtifact,
+	}, nil
 }
 
 // TailTranscript streams provider history lines for a session via the hub.
@@ -2501,23 +2581,7 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 	}
 	defer cleanup()
 
-	streamCtx, streamCancel := context.WithCancel(stream.Context())
-	defer streamCancel()
-	corr := correlation.FromContext(streamCtx)
-	peerInfo, _ := peer.FromContext(streamCtx)
-	rpcSess, regErr := s.RPCs.Register(streamCtx, "daemon.rpc.tail_transcript", RPCMeta{
-		Method:     "/clyde.v1.ClydeService/TailTranscript",
-		Direction:  "inbound",
-		PeerActor:  daemonPeerAddr(peerInfo),
-		RequestID:  corr.RequestID,
-		TraceID:    string(corr.TraceID),
-		LeaseToken: "",
-	}, rpcCloser{cancel: streamCancel})
-	if regErr != nil {
-		return status.Errorf(codes.Unavailable, "daemon draining: %v", regErr)
-	}
-	defer s.RPCs.Release(streamCtx, rpcSess, "tail_transcript.done")
-
+	ctx := stream.Context()
 	for {
 		select {
 		case line, ok := <-ch:
@@ -2532,7 +2596,7 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 			if err := stream.Send(line); err != nil {
 				return err
 			}
-		case <-streamCtx.Done():
+		case <-ctx.Done():
 			return nil
 		}
 	}
@@ -2593,8 +2657,8 @@ func nextRemoteSessionName(store *session.FileStore) (string, error) {
 		taken[sess.Name] = true
 	}
 	base := "chat-" + daemonNow().UTC().Format("20060102-150405")
-	name := session.UniqueName(base, taken)
-	if name == "" {
+	name := session.UniqueDisplayName(base, taken)
+	if name == "" || taken[name] {
 		return "", fmt.Errorf("could not allocate a unique session name")
 	}
 	return name, nil
@@ -2680,16 +2744,8 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 		close(worker.done)
 	}
 	s.remoteMu.Lock()
-	lsess := worker.livetrackSession
-	if current := s.remoteWorkers[worker.sessionName]; current == worker {
-		delete(s.remoteWorkers, worker.sessionName)
-	}
+	removeRemoteWorkerLocked(s.remoteWorkers, worker)
 	s.remoteMu.Unlock()
-	// Release the livetrack registration after the process has exited so
-	// the registry's Count reaches zero before any drain loop completes.
-	if lsess != nil {
-		s.liveWorkers.Release(ctx, lsess, "claude.remote.exited")
-	}
 	level := slog.LevelInfo
 	if err != nil {
 		level = slog.LevelWarn
@@ -2704,45 +2760,19 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 	if !worker.incognito || worker.skipCleanup.Load() {
 		return
 	}
-	if _, delErr := s.DeleteSession(ctx, &clydev1.DeleteSessionRequest{Name: worker.sessionName}); delErr != nil {
+	store, storeErr := session.NewGlobalFileStore()
+	deleteName := worker.sessionName
+	if storeErr == nil {
+		deleteName = firstNonEmpty(resolvedSessionName(store, worker.sessionName, worker.sessionID), deleteName)
+	}
+	if _, delErr := s.DeleteSession(ctx, &clydev1.DeleteSessionRequest{Name: deleteName}); delErr != nil {
 		s.log.WarnContext(ctx, "daemon.remote_session.incognito_cleanup_failed",
 			"component", "daemon",
-			"session", worker.sessionName,
+			"session", deleteName,
 			"session_id", worker.sessionID,
 			"err", delErr,
 		)
 	}
-}
-
-// registerClaudeRemoteWorker registers a newly-launched Claude remote worker
-// with the livetrack registry. The closer sends SIGINT, waits for the process
-// to exit, then delivers SIGKILL. If the registry has been closed during a
-// reload drain, the warning is logged and the worker runs without tracking.
-func (s *Server) registerClaudeRemoteWorker(ctx context.Context, worker *remoteWorker) {
-	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil {
-		return
-	}
-	lsess, err := s.liveWorkers.Register(ctx, "claude.remote", LiveMeta{
-		Provider:      "claude",
-		LiveSessionID: worker.sessionID,
-		WorkerPID:     worker.cmd.Process.Pid,
-		Lease:         "background",
-	}, &claudeWorkerCloser{
-		proc:           worker.cmd.Process,
-		done:           worker.done,
-		interruptGrace: claudeRemoteSuspendTimeout,
-	})
-	if err == nil {
-		worker.livetrackSession = lsess
-		return
-	}
-	s.log.WarnContext(ctx, "daemon.remote_session.livetrack_register_failed",
-		"component", "daemon",
-		"provider", session.ProviderClaude,
-		"session", worker.sessionName,
-		"session_id", worker.sessionID,
-		"err", err,
-	)
 }
 
 func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContextUsageRequest) (*clydev1.ProbeContextUsageResponse, error) {
@@ -2814,60 +2844,28 @@ func (s *Server) CompactPreview(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactPreviewServer,
 ) error {
-	streamCtx, streamCancel := context.WithCancel(stream.Context())
-	defer streamCancel()
-	corr := correlation.FromContext(streamCtx)
-	peerInfo, _ := peer.FromContext(streamCtx)
-	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.compact_preview", RPCMeta{
-		Method:     "/clyde.v1.ClydeService/CompactPreview",
-		Direction:  "inbound",
-		PeerActor:  daemonPeerAddr(peerInfo),
-		RequestID:  corr.RequestID,
-		TraceID:    string(corr.TraceID),
-		LeaseToken: "",
-	}, rpcCloser{cancel: streamCancel})
-	if err != nil {
-		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
-	}
-	defer s.RPCs.Release(streamCtx, rpcSess, "compact_preview.done")
-
-	s.log.InfoContext(streamCtx, "daemon.compact.preview.started",
+	ctx := stream.Context()
+	s.log.InfoContext(ctx, "daemon.compact.preview.started",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
 		"target", req.GetTargetTokens(),
 	)
-	return s.runCompact(streamCtx, req, stream, compactengine.RuntimeModePreview)
+	return s.runCompact(ctx, req, stream, compactengine.RuntimeModePreview)
 }
 
 func (s *Server) CompactApply(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactApplyServer,
 ) error {
-	streamCtx, streamCancel := context.WithCancel(stream.Context())
-	defer streamCancel()
-	corr := correlation.FromContext(streamCtx)
-	peerInfo, _ := peer.FromContext(streamCtx)
-	rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.compact_apply", RPCMeta{
-		Method:     "/clyde.v1.ClydeService/CompactApply",
-		Direction:  "inbound",
-		PeerActor:  daemonPeerAddr(peerInfo),
-		RequestID:  corr.RequestID,
-		TraceID:    string(corr.TraceID),
-		LeaseToken: "",
-	}, rpcCloser{cancel: streamCancel})
-	if err != nil {
-		return status.Errorf(codes.Unavailable, "daemon draining: %v", err)
-	}
-	defer s.RPCs.Release(streamCtx, rpcSess, "compact_apply.done")
-
-	s.log.InfoContext(streamCtx, "daemon.compact.apply.started",
+	ctx := stream.Context()
+	s.log.InfoContext(ctx, "daemon.compact.apply.started",
 		"component", "daemon",
 		"subcomponent", "compact",
 		"session", req.GetSessionName(),
 		"target", req.GetTargetTokens(),
 	)
-	return s.runCompact(streamCtx, req, stream, compactengine.RuntimeModeApply)
+	return s.runCompact(ctx, req, stream, compactengine.RuntimeModeApply)
 }
 
 func (s *Server) runCompact(

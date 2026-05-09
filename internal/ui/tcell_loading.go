@@ -1,29 +1,28 @@
 package ui
 
 import (
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 )
 
-// genericLoadingStatuses are the sentinel status strings the daemon
-// (and a few legacy TUI fabrication paths) emit while a probe is in
-// flight. They convey "still working" with no extra information; the
-// details pane hides redundant Diagnostics rows for these. The set is
-// a slice rather than a switch so the bare-string-switch lint stays
-// quiet and the eventual typed enum migration in the cat-3 plan has
-// one place to swap.
-var genericLoadingStatuses = []string{"", "probing", "loading...", "loading", "cooldown", "refreshing"}
-
-// terminalLoadingStatuses are the settled outcomes the daemon emits
-// when a probe finished without success. Terminal statuses do not
-// animate; they replace the spinner with stable copy. "failed" is
-// handled separately because daemon error strings include the cause.
-var terminalLoadingStatuses = []string{"unsupported", "cancelled", "canceled", "probe_failed"}
-
 const loadingFrameInterval = 100 * time.Millisecond
+
+type loadingStatus string
+
+const (
+	loadingStatusEmpty       loadingStatus = ""
+	loadingStatusProbing     loadingStatus = "probing"
+	loadingStatusLoadingDots loadingStatus = "loading..."
+	loadingStatusLoading     loadingStatus = "loading"
+	loadingStatusCooldown    loadingStatus = "cooldown"
+	loadingStatusRefreshing  loadingStatus = "refreshing"
+	loadingStatusUnsupported loadingStatus = "unsupported"
+	loadingStatusCancelled   loadingStatus = "cancelled"
+	loadingStatusCanceled    loadingStatus = "canceled"
+	loadingStatusProbeFailed loadingStatus = "probe_failed"
+)
 
 // LoadingSpinner is the shared TUI loading affordance. Keep loading copy
 // routed through this type so panes, overlays, and the status bar animate
@@ -55,7 +54,7 @@ func (s LoadingSpinner) Segment() TextSegment {
 	if style == (tcell.Style{}) {
 		style = StyleMuted
 	}
-	return seg(s.Text(), style)
+	return newTextSegment(s.Text(), style)
 }
 
 func (s LoadingSpinner) Draw(scr tcell.Screen, x, y int, width int) {
@@ -74,9 +73,8 @@ func currentLoadingFrame() int {
 	return int(currentUITime().UnixNano() / int64(loadingFrameInterval))
 }
 
-// loadingSegment is the inline-cell counterpart of LoadingSpinner. It
-// returns a TextSegment whose glyph is substituted at draw time so
-// the spinner ticks live without rebuilding the parent segment list.
+// loadingSegment returns a TextSegment whose glyph is substituted at draw
+// time so the spinner ticks live without rebuilding the parent segment list.
 // Use this whenever the loading copy lives inside a [][]TextSegment
 // column (stats panes, kv rows) where a baked-in glyph would freeze.
 //
@@ -88,17 +86,9 @@ func loadingSegment(status string) TextSegment {
 		trimmed = "loading..."
 	}
 	if isTerminalLoadingStatus(trimmed) {
-		return seg(trimmed, StyleMuted)
+		return newTextSegment(trimmed, StyleMuted)
 	}
 	return TextSegment{Text: trimmed, Style: StyleMuted, Spinner: true}
-}
-
-// seg returns a non-spinner styled text segment. Pair with
-// loadingSegment so every TextSegment literal in the codebase goes
-// through one of two factories and the exhaustruct linter has a
-// stable Spinner field to look at.
-func seg(text string, style tcell.Style) TextSegment {
-	return TextSegment{Text: text, Style: style, Spinner: false}
 }
 
 // isGenericLoadingStatus reports whether status is a "still working"
@@ -106,7 +96,21 @@ func seg(text string, style tcell.Style) TextSegment {
 // details pane hides redundant Diagnostics rows for these so the
 // user does not see the same word in two places at once.
 func isGenericLoadingStatus(status string) bool {
-	return slices.Contains(genericLoadingStatuses, strings.TrimSpace(status))
+	switch loadingStatus(strings.TrimSpace(status)) {
+	case loadingStatusEmpty,
+		loadingStatusProbing,
+		loadingStatusLoadingDots,
+		loadingStatusLoading,
+		loadingStatusCooldown,
+		loadingStatusRefreshing:
+		return true
+	case loadingStatusUnsupported,
+		loadingStatusCancelled,
+		loadingStatusCanceled,
+		loadingStatusProbeFailed:
+		return false
+	}
+	return false
 }
 
 // isTerminalLoadingStatus reports whether status describes a settled
@@ -120,5 +124,19 @@ func isTerminalLoadingStatus(status string) bool {
 	if strings.HasPrefix(trimmed, "failed") {
 		return true
 	}
-	return slices.Contains(terminalLoadingStatuses, trimmed)
+	switch loadingStatus(trimmed) {
+	case loadingStatusUnsupported,
+		loadingStatusCancelled,
+		loadingStatusCanceled,
+		loadingStatusProbeFailed:
+		return true
+	case loadingStatusEmpty,
+		loadingStatusProbing,
+		loadingStatusLoadingDots,
+		loadingStatusLoading,
+		loadingStatusCooldown,
+		loadingStatusRefreshing:
+		return false
+	}
+	return false
 }

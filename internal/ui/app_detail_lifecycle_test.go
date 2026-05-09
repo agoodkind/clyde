@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -68,7 +67,7 @@ func TestDetailLifecycle_RenameDiscardsLateGoroutineCompletion(t *testing.T) {
 	var done sync.WaitGroup
 	done.Add(1)
 
-	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		defer done.Done()
 		<-gate
 		close(released)
@@ -105,12 +104,10 @@ func TestDetailLifecycle_RenameDiscardsLateGoroutineCompletion(t *testing.T) {
 	done.Wait()
 
 	// Simulate the event-loop dispatch: build the detailsLoaded payload
-	// the goroutine would post. The captured generation matches the gen
-	// the loadDetailAsync stamped on the OLD name BEFORE the rename
-	// bumped it, so handleDetailsLoaded must drop the result.
+	// the goroutine would post against the OLD name. The rename should
+	// keep the stale completion from resurrecting old cached details.
 	stale := detailsLoaded{
 		name:   oldName,
-		gen:    1,
 		detail: SessionDetail{TranscriptStatsLoaded: true, TranscriptStatsStatus: "done"},
 	}
 	a.handleDetailsLoaded(stale)
@@ -134,29 +131,14 @@ func TestDetailLifecycle_ErrorPreservesPriorTranscriptStatsLoaded(t *testing.T) 
 
 	name := a.sessions[0].Name
 
-	// Seed a successful prior load through the public path so detailGen
-	// is incremented in step.
 	prior := SessionDetail{TranscriptStatsLoaded: true, TranscriptStatsStatus: "ok"}
 	a.detailMu.Lock()
-	a.detailGen[name]++
-	priorGen := a.detailGen[name]
 	a.detailCache[name] = prior
-	a.detailMu.Unlock()
-
-	// A follow-up async load bumps gen and fails.
-	a.detailMu.Lock()
-	a.detailGen[name]++
-	failGen := a.detailGen[name]
 	a.detailLoading[name] = true
 	a.detailMu.Unlock()
 
-	if failGen == priorGen {
-		t.Fatalf("expected new gen to differ from prior; both = %d", failGen)
-	}
-
 	a.handleDetailsLoaded(detailsLoaded{
 		name:   name,
-		gen:    failGen,
 		detail: SessionDetail{},
 		err:    errors.New("boom"),
 	})

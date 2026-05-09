@@ -23,9 +23,10 @@ func GetSessionsDir(clydeRoot string) string {
 	return filepath.Join(clydeRoot, SessionsDir)
 }
 
-// GetSessionDir returns the path to a specific session directory.
-func GetSessionDir(clydeRoot, sessionName string) string {
-	return filepath.Join(GetSessionsDir(clydeRoot), sessionName)
+// GetSessionDir returns the path to a specific session storage directory.
+// Callers should pass the stable storage key, not the mutable session name.
+func GetSessionDir(clydeRoot, sessionStorageKey string) string {
+	return filepath.Join(GetSessionsDir(clydeRoot), sessionStorageKey)
 }
 
 // GlobalConfigPath returns the path to the global config file.

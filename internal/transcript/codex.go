@@ -6,6 +6,7 @@ import (
 	"time"
 
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 // CodexHistory is the shared, provider-owned IR for a Codex rollout thread.
@@ -27,6 +28,9 @@ func ReadCodexHistory(path string) (CodexHistory, error) {
 	thread, err := codexstore.ReadThreadByRolloutPath(path, true, false)
 	if err != nil {
 		slog.Warn("transcript.codex.read_failed",
+			"component", "codex",
+			"subcomponent", "transcript",
+			"concern", slogger.ConcernProviderCodexLifecycle,
 			"path", path,
 			"err", err,
 		)

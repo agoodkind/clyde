@@ -4,6 +4,7 @@ package discovery
 import (
 	"path/filepath"
 
+	codexprovider "goodkind.io/clyde/internal/providers/codex"
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/session"
 )
@@ -56,7 +57,7 @@ func discoveryResult(result codexstore.DiscoveryResult) session.DiscoveryResult 
 		WorkspaceRoot:  workspace,
 		Entrypoint:     result.Entrypoint,
 		FirstEntryTime: result.CreatedAt,
-		CustomTitle:    result.ThreadName,
+		NameContract:   codexprovider.ThreadName{Name: result.ThreadName},
 		ForkParent: session.ProviderSessionID{
 			Provider: session.ProviderCodex,
 			ID:       result.ForkParentID,

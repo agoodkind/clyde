@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -36,7 +37,7 @@ func printResumeInstructions(ctx context.Context, sess *session.Session) {
 	}
 	_, _ = fmt.Fprintln(os.Stdout)
 	_, _ = fmt.Fprintln(os.Stdout, "Resume this session with:")
-	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", sess.Name)
+	_, _ = fmt.Fprintf(os.Stdout, "  clyde resume %s\n", strconv.Quote(session.SessionDisplayName(sess)))
 	runtime, err := registry.ForSession(sess, nil)
 	if err != nil {
 		cmdDispatchLog.Logger().WarnContext(ctx, "cmd.session.resume_instructions_provider_failed",
@@ -96,9 +97,9 @@ func autoUpdateContext(parentCtx context.Context, _ *session.FileStore, sess *se
 // ambiguous matches. Returns nil session (no error) if nothing found; the
 // caller can then fall back to the default provider runtime.
 func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query string) (*session.Session, error) {
-	// Unified 4-tier resolution: exact name, UUID, display name, single
-	// substring match. Anything more ambiguous than a single match is
-	// listed and rejected so the user picks unambiguously themselves.
+	// Unified resolution accepts exact visible titles, provider IDs, legacy
+	// row names, and single substring matches. Anything more ambiguous than
+	// a single match is listed and rejected so the user picks unambiguously.
 	// The TUI dashboard exists for interactive multi-match selection;
 	// this CLI verb stays scriptable.
 	if sess, err := store.Resolve(query); err != nil {
@@ -113,9 +114,9 @@ func resolveSessionForResume(cmd *cobra.Command, store *session.FileStore, query
 	if len(matches) <= 1 {
 		return nil, nil
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match '%s':\n", query)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Multiple sessions match %q:\n", query)
 	for _, s := range matches {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", s.Name, s.Metadata.ProviderSessionID())
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", session.SessionDisplayName(s), s.Metadata.ProviderSessionID())
 	}
-	return nil, fmt.Errorf("ambiguous session name '%s'; specify the full name", query)
+	return nil, fmt.Errorf("ambiguous session reference %q; specify the exact visible title or provider session id", query)
 }

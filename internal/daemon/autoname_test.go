@@ -2,11 +2,13 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
+	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -19,6 +21,23 @@ func TestApplyAutoRenameMarksTranscriptStateAndHash(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 	sess := session.NewSession("repo-12345678", "uuid")
+	transcriptPath := filepath.Join(t.TempDir(), "session.jsonl")
+	transcriptFile, err := os.Create(transcriptPath)
+	if err != nil {
+		t.Fatalf("create transcript: %v", err)
+	}
+	encoder := json.NewEncoder(transcriptFile)
+	if err := encoder.Encode(map[string]string{
+		"type":      "summary",
+		"summary":   "repo-12345678",
+		"sessionId": "uuid",
+	}); err != nil {
+		t.Fatalf("encode transcript: %v", err)
+	}
+	if err := transcriptFile.Close(); err != nil {
+		t.Fatalf("close transcript: %v", err)
+	}
+	sess.Metadata.SetProviderTranscriptPath(transcriptPath)
 	if err := store.Create(sess); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -120,5 +139,16 @@ func TestRunAutoRenamePassAppliesToCodexSession(t *testing.T) {
 	}
 	if renamed.Metadata.AutoNameSourceHash == "" {
 		t.Fatalf("hash empty")
+	}
+	paths, err := codexstore.ResolveStorePathsFromEnv()
+	if err != nil {
+		t.Fatalf("resolve codex paths: %v", err)
+	}
+	index, err := codexstore.ReadSessionIndex(paths.SessionIndexPath)
+	if err != nil {
+		t.Fatalf("read codex index: %v", err)
+	}
+	if got := index.ThreadName("codex-thread"); got != "promote-codex-thread-title" {
+		t.Fatalf("codex thread name=%q", got)
 	}
 }

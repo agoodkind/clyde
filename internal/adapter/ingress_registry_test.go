@@ -222,8 +222,8 @@ func TestIngressRegistryForceCloseOnDeadline(t *testing.T) {
 		t.Errorf("pre-force-close count = %d, want 1", count)
 	}
 
-	// ForceCloseAll drains the registry; noopIngressCloser is used in
-	// httptest scenarios but the session is still removed from the
+	// ForceCloseAll drains the registry; httptest scenarios use a
+	// context-cancel closer and still remove the session from the
 	// registry so the count drops to 0.
 	srv.ForceCloseAll()
 	close(release)
@@ -313,22 +313,19 @@ func TestIngressMetaIsLivetrackMeta(t *testing.T) {
 	var _ livetrack.Meta = IngressMeta{}
 }
 
-// TestIngressNoopCloserClose verifies that noopIngressCloser.Close
-// always returns nil regardless of the reason argument.
-func TestIngressNoopCloserClose(t *testing.T) {
+// TestIngressContextCancelCloserClose verifies that the httptest fallback
+// closer cancels its context.
+func TestIngressContextCancelCloserClose(t *testing.T) {
 	t.Parallel()
-	c := noopIngressCloser{}
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &contextCancelCloser{cancel: cancel}
 	if err := c.Close("test"); err != nil {
-		t.Fatalf("noopIngressCloser.Close returned error: %v", err)
+		t.Fatalf("contextCancelCloser.Close returned error: %v", err)
 	}
-}
-
-// TestIngressConnCloserCloseNilConn verifies that ingressConnCloser.Close
-// returns nil when the underlying conn field is nil (defensive path).
-func TestIngressConnCloserCloseNilConn(t *testing.T) {
-	t.Parallel()
-	c := ingressConnCloser{conn: nil}
-	if err := c.Close("test"); err != nil {
-		t.Fatalf("ingressConnCloser.Close(nil conn) returned error: %v", err)
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("contextCancelCloser.Close did not cancel context")
 	}
+	cancel()
 }

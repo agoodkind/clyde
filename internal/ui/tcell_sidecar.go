@@ -1,7 +1,7 @@
 // Package ui implements the Clyde terminal user interface.
 //
 // The panel renders three regions stacked top to bottom: a header
-// strip with the session name and optional live URL, a scrolling
+// strip with the visible session title and optional live URL, a scrolling
 // message buffer fed by a daemon live-session stream, and a single
 // line input that posts user messages back via the daemon. Bottom
 // stick scroll keeps the latest message visible while the user is at

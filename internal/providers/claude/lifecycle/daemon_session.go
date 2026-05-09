@@ -12,7 +12,7 @@ import (
 )
 
 type daemonSessionClient interface {
-	AcquireSession(wrapperID, sessionName string) (*clydev1.AcquireSessionResponse, error)
+	AcquireSession(wrapperID, sessionName, sessionID string) (*clydev1.AcquireSessionResponse, error)
 	ReleaseSession(wrapperID string) error
 	Close() error
 }
@@ -27,7 +27,7 @@ var connectDaemonSession daemonSessionConnector = func(ctx context.Context) (dae
 	return daemonclient.New(client.Connection()), nil
 }
 
-func acquireDaemonSession(ctx context.Context, wrapperID, sessionName string) string {
+func acquireDaemonSession(ctx context.Context, wrapperID, sessionName, sessionID string) string {
 	client, err := connectDaemonSession(ctx)
 	if err != nil {
 		if VerboseFunc() {
@@ -37,7 +37,7 @@ func acquireDaemonSession(ctx context.Context, wrapperID, sessionName string) st
 	}
 	defer func() { _ = client.Close() }()
 
-	resp, acqErr := client.AcquireSession(wrapperID, sessionName)
+	resp, acqErr := client.AcquireSession(wrapperID, sessionName, sessionID)
 	if acqErr != nil {
 		if VerboseFunc() {
 			fmt.Fprintf(os.Stderr, "[DEBUG] daemon acquire failed: %v\n", acqErr)
@@ -53,7 +53,7 @@ func acquireDaemonSession(ctx context.Context, wrapperID, sessionName string) st
 // On done signal, releases the session from whichever daemon is current.
 func monitorDaemon(
 	ctx context.Context,
-	wrapperID, sessionName string,
+	wrapperID, sessionName, sessionID string,
 	done <-chan struct{},
 	state *monitorState,
 	stopped chan<- struct{},
@@ -86,7 +86,7 @@ func monitorDaemon(
 				}
 				continue
 			}
-			_, acqErr := c.AcquireSession(wrapperID, sessionName)
+			_, acqErr := c.AcquireSession(wrapperID, sessionName, sessionID)
 			_ = c.Close()
 			if acqErr != nil {
 				state.sawConnectionError = true
@@ -100,6 +100,7 @@ func monitorDaemon(
 				claudeLifecycleLog.Logger().Debug("wrapper.self_reload.requested",
 					"component", "wrapper",
 					"session", sessionName,
+					"session_id", sessionID,
 					"wrapper_id", wrapperID,
 					"reason", "daemon_reconnected")
 			}

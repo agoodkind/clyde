@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -85,7 +86,8 @@ func ProjectsRoot(homeDir string) string {
 func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 	file, err := os.Open(path)
 	if err != nil {
-		return session.DiscoveryResult{}, false
+		var zero session.DiscoveryResult
+		return zero, false
 	}
 	defer func() { _ = file.Close() }()
 
@@ -102,12 +104,11 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 		if err := json.Unmarshal(line, &header); err != nil {
 			continue
 		}
-		if applyTranscriptHeader(&discoveryResult, header) {
-			break
-		}
+		applyTranscriptHeader(&discoveryResult, header)
 	}
 	if discoveryResult.ProviderIdentity().IsZero() {
-		return session.DiscoveryResult{}, false
+		var zero session.DiscoveryResult
+		return zero, false
 	}
 	if discoveryResult.Entrypoint == "sdk-cli" {
 		discoveryResult.IsAutoName = true
@@ -120,6 +121,15 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 func newDiscoveryResultForPath(path string) session.DiscoveryResult {
 	discoveryResult := session.DiscoveryResult{
 		Provider:            session.ProviderClaude,
+		Identity:            session.ProviderSessionID{Provider: session.ProviderClaude, ID: ""},
+		WorkspaceRoot:       "",
+		Entrypoint:          "",
+		FirstEntryTime:      time.Time{},
+		NameContract:        nil,
+		ForkParent:          session.ProviderSessionID{Provider: session.ProviderClaude, ID: ""},
+		IsAutoName:          false,
+		IsForked:            false,
+		IsSubagent:          false,
 		PrimaryArtifact:     path,
 		PrimaryArtifactKind: primaryArtifactKindTranscript,
 	}
@@ -130,31 +140,28 @@ func newDiscoveryResultForPath(path string) session.DiscoveryResult {
 }
 
 // applyTranscriptHeader folds one parsed JSONL record into the discovery
-// result and returns true once every header field of interest is filled.
-func applyTranscriptHeader(out *session.DiscoveryResult, header transcriptHeader) bool {
+// result. The scanner reads through EOF so the most recent custom-title wins
+// even when a later `/rename` lands after the first session header.
+func applyTranscriptHeader(out *session.DiscoveryResult, header transcriptHeader) {
 	switch header.Type {
 	case "queue-operation":
 		if !out.IsAutoName && looksLikeAutoNamePrompt(header.Content) {
 			out.IsAutoName = true
 		}
-		return false
+		return
 	case "custom-title":
 		applyCustomTitleHeader(out, header)
-		return false
+		return
 	}
 	applyIdentityHeader(out, header)
 	applyMetadataHeader(out, header)
-	return !out.ProviderIdentity().IsZero() &&
-		out.WorkspaceRoot != "" &&
-		out.Entrypoint != "" &&
-		!out.FirstEntryTime.IsZero()
 }
 
-// applyCustomTitleHeader copies the custom title plus any newly observed
-// identity or fork pointer from a custom-title record.
+// applyCustomTitleHeader copies the last observed Claude custom title plus any
+// newly observed identity or fork pointer from a custom-title record.
 func applyCustomTitleHeader(out *session.DiscoveryResult, header transcriptHeader) {
 	if header.CustomTitle != "" {
-		out.CustomTitle = header.CustomTitle
+		out.NameContract = claudeprovider.CustomTitleName{Title: header.CustomTitle}
 	}
 	applyIdentityHeader(out, header)
 }

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -98,7 +97,7 @@ func TestApp_RepollThrottlesPerSession(t *testing.T) {
 	sess := a.sessions[0]
 	var probeCalls int32
 	releaseLoad := make(chan struct{})
-	a.cb.GetSessionDetail = func(_ context.Context, _ *session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		atomic.AddInt32(&probeCalls, 1)
 		<-releaseLoad
 		return SessionDetail{ContextUsageStatus: "probing"}, nil

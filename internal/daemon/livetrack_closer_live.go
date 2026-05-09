@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"time"
@@ -11,7 +12,7 @@ import (
 // Close delegates to the underlying runtime so the app-server subprocess
 // receives an orderly shutdown signal.
 type codexRuntimeCloser struct {
-	runtime interface{ Close() error }
+	runtime io.Closer
 }
 
 // Close terminates the Codex live runtime. The reason argument is included

@@ -42,18 +42,18 @@ func propose(src candidateSource, taken map[string]bool) (candidateName, error) 
 	if src.Text == "" {
 		return newCandidateName("", "empty_source"), rejected("empty_source")
 	}
-	sanitized := session.Sanitize(condense(src))
+	sanitized := session.SanitizeLegacySlugName(condense(src))
 	if sanitized == "" {
 		return newCandidateName("", "sanitize_empty"), rejected("sanitize_empty")
 	}
 	if uuidLikeRegex.MatchString(sanitized) {
 		return newCandidateName("", "uuid_like"), rejected("uuid_like")
 	}
-	candidate := session.UniqueName(sanitized, taken)
+	candidate := session.UniqueLegacySlugName(sanitized, taken)
 	if candidate == sanitized && taken[sanitized] {
 		return newCandidateName("", "collision"), rejected("collision")
 	}
-	if err := session.ValidateName(candidate); err != nil {
+	if err := session.ValidateLegacySlugName(candidate); err != nil {
 		return newCandidateName("", "validate_failed"), rejected("validate_failed")
 	}
 	return newCandidateName(candidate, ""), nil

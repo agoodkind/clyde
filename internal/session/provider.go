@@ -235,6 +235,13 @@ type ContextMessageProvider interface {
 	RecentContextMessages(sess *Session, limit, maxLen int) []ContextMessage
 }
 
+// NameProvider lets providers own how exact display names are observed and
+// mutated while generic callers speak only in terms of logical sessions.
+type NameProvider interface {
+	GetSessionName(ctx context.Context, sess *Session) (string, error)
+	RenameSession(ctx context.Context, sess *Session, newName string) error
+}
+
 // ArtifactCleaner deletes provider-owned files associated with a session row.
 type ArtifactCleaner interface {
 	DeleteArtifacts(ctx context.Context, req DeleteArtifactsRequest) (*DeletedArtifacts, error)
@@ -264,24 +271,6 @@ func ProviderInfo(provider ProviderID) ProviderInfoRecord {
 		DisplayName:  "",
 		Capabilities: emptyCapabilities,
 	}
-}
-
-// ProviderDisplayName returns the human-facing provider label for UI surfaces.
-func ProviderDisplayName(provider ProviderID) string {
-	info := ProviderInfo(provider)
-	if strings.TrimSpace(info.DisplayName) != "" {
-		return info.DisplayName
-	}
-	if info.ID == ProviderUnknown {
-		return ""
-	}
-	trimmed := strings.TrimSpace(string(info.ID))
-	if trimmed == "" {
-		return ""
-	}
-	runes := []rune(trimmed)
-	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
-	return string(runes)
 }
 
 // ResumeInstructions returns provider-native resume hints for a concrete

@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/session"
 )
@@ -83,7 +86,7 @@ func TestStartRemoteSessionCreatesCanonicalSession(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		srv.remoteMu.Lock()
-		_, ok := srv.remoteWorkers[resp.GetSessionName()]
+		_, ok := srv.remoteWorkers[resp.GetSessionId()]
 		srv.remoteMu.Unlock()
 		if ok {
 			return
@@ -200,7 +203,7 @@ func TestStartRemoteSessionLaunchesWorkerWithSessionAndBasedir(t *testing.T) {
 		t.Fatalf("mkdir basedir: %v", err)
 	}
 	resp, err := srv.StartRemoteSession(context.Background(), &clydev1.StartRemoteSessionRequest{
-		SessionName: "chat-worker",
+		SessionName: "Merry Swan",
 		Basedir:     basedir,
 		Incognito:   true,
 	})
@@ -226,7 +229,7 @@ func TestStartRemoteSessionLaunchesWorkerWithSessionAndBasedir(t *testing.T) {
 		"daemon",
 		"launch-remote-worker",
 		"--session-name",
-		"chat-worker",
+		"Merry Swan",
 		"--session-id",
 		resp.GetSessionId(),
 		"--basedir",
@@ -242,6 +245,30 @@ func TestStartRemoteSessionLaunchesWorkerWithSessionAndBasedir(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(pwdBytes)); got != basedir {
 		t.Fatalf("worker pwd = %q want %q", got, basedir)
+	}
+}
+
+func TestStartRemoteSessionRejectsInvalidDisplayName(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+
+	srv, err := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Close()
+
+	basedir := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatalf("mkdir basedir: %v", err)
+	}
+	_, err = srv.StartRemoteSession(context.Background(), &clydev1.StartRemoteSessionRequest{
+		SessionName: " Merry Swan",
+		Basedir:     basedir,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("error code = %v want %v", status.Code(err), codes.InvalidArgument)
 	}
 }
 

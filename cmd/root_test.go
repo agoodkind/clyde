@@ -63,6 +63,103 @@ func TestConsumeTUIReturnSessionRestoresAndClearsEnv(t *testing.T) {
 	}
 }
 
+func TestNextChatSessionNameUsesDisplayNameCollisionSuffix(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	store := session.NewFileStore(config.GlobalDataDir())
+	oldCurrentTime := currentTime
+	currentTime = func() time.Time {
+		return time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() {
+		currentTime = oldCurrentTime
+	})
+
+	base := "chat-20260508-120000"
+	if err := store.Create(session.NewSession(base, "uuid-1")); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	got, err := nextChatSessionName(store)
+	if err != nil {
+		t.Fatalf("next chat session name: %v", err)
+	}
+	if got != "chat-20260508-120000 (2)" {
+		t.Fatalf("name = %q want display-name suffix", got)
+	}
+}
+
+func TestApplyPassthroughBootstrapIdentityAssignsNameAndSessionID(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	oldCurrentTime := currentTime
+	currentTime = func() time.Time {
+		return time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	}
+	t.Cleanup(func() {
+		currentTime = oldCurrentTime
+	})
+
+	args, env := applyPassthroughBootstrapIdentity(
+		context.Background(),
+		[]string{"--model", "sonnet"},
+		[]string{"KEEP=1"},
+		store,
+	)
+
+	if !envContains(env, "CLYDE_SESSION_NAME", "chat-20260508-120000") {
+		t.Fatalf("env missing generated display name: %v", env)
+	}
+	sessionID, ok := envValue(env, "CLYDE_SESSION_ID")
+	if !ok || strings.TrimSpace(sessionID) == "" {
+		t.Fatalf("env missing generated session id: %v", env)
+	}
+	if len(args) < 4 || args[0] != "--session-id" || args[1] != sessionID {
+		t.Fatalf("args = %v, want leading --session-id %q", args, sessionID)
+	}
+	if args[2] != "--model" || args[3] != "sonnet" {
+		t.Fatalf("args = %v, want original args after session id", args)
+	}
+}
+
+func TestApplyPassthroughBootstrapIdentityUsesExistingExactNameAndID(t *testing.T) {
+	args, env := applyPassthroughBootstrapIdentity(
+		context.Background(),
+		[]string{"--model", "sonnet"},
+		[]string{"CLYDE_SESSION_NAME=Merry Swan", "CLYDE_SESSION_ID=stable-uuid"},
+		nil,
+	)
+
+	if !envContains(env, "CLYDE_SESSION_NAME", "Merry Swan") {
+		t.Fatalf("env changed display name: %v", env)
+	}
+	if !envContains(env, "CLYDE_SESSION_ID", "stable-uuid") {
+		t.Fatalf("env changed session id: %v", env)
+	}
+	if len(args) < 2 || args[0] != "--session-id" || args[1] != "stable-uuid" {
+		t.Fatalf("args = %v, want leading --session-id stable-uuid", args)
+	}
+}
+
+func TestApplyPassthroughBootstrapIdentitySkipsResumeLaunches(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	args, env := applyPassthroughBootstrapIdentity(
+		context.Background(),
+		[]string{"--resume", "existing-uuid"},
+		[]string{"KEEP=1"},
+		store,
+	)
+
+	if len(args) != 2 || args[0] != "--resume" || args[1] != "existing-uuid" {
+		t.Fatalf("args = %v, want unchanged resume args", args)
+	}
+	if _, ok := envValue(env, "CLYDE_SESSION_NAME"); ok {
+		t.Fatalf("env unexpectedly got display name: %v", env)
+	}
+	if _, ok := envValue(env, "CLYDE_SESSION_ID"); ok {
+		t.Fatalf("env unexpectedly got session id: %v", env)
+	}
+}
+
 func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)

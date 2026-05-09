@@ -62,6 +62,10 @@ type TextSegment struct {
 	Spinner bool
 }
 
+func newTextSegment(text string, style tcell.Style) TextSegment {
+	return TextSegment{Text: text, Style: style, Spinner: false}
+}
+
 // renderedText returns the on-screen string for this segment, applying
 // the live spinner glyph when Spinner is true.
 func (s TextSegment) renderedText() string {
@@ -110,7 +114,7 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 	} else {
 		src = make([][]TextSegment, len(tb.Lines))
 		for i, ln := range tb.Lines {
-			src[i] = []TextSegment{seg(stripMarkup(ln), StyleDefault)}
+			src[i] = []TextSegment{newTextSegment(stripMarkup(ln), StyleDefault)}
 		}
 	}
 	if !tb.Wrap {
@@ -126,8 +130,8 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 		// Spinner segments contribute their glyph-prefixed rendered
 		// text so the wrap calculation reflects on-screen width.
 		var plain strings.Builder
-		for _, lineSeg := range line {
-			plain.WriteString(lineSeg.renderedText())
+		for _, seg := range line {
+			plain.WriteString(seg.renderedText())
 		}
 		if runeCount(plain.String()) <= w {
 			out = append(out, line)
@@ -143,14 +147,14 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 			}
 			candidate += word
 			if runeCount(candidate) > w && cur != "" {
-				out = append(out, []TextSegment{seg(cur, StyleDefault)})
+				out = append(out, []TextSegment{newTextSegment(cur, StyleDefault)})
 				cur = word
 			} else {
 				cur = candidate
 			}
 		}
 		if cur != "" {
-			out = append(out, []TextSegment{seg(cur, StyleDefault)})
+			out = append(out, []TextSegment{newTextSegment(cur, StyleDefault)})
 		}
 	}
 	tb.wrappedCache = out
@@ -217,8 +221,8 @@ func (tb *TextBox) Draw(scr tcell.Screen, r Rect) {
 		segs := lines[idx]
 		x := r.X
 		remaining := contentW
-		for _, lineSeg := range segs {
-			used := drawString(scr, x, contentY+i, lineSeg.Style, lineSeg.renderedText(), remaining)
+		for _, seg := range segs {
+			used := drawString(scr, x, contentY+i, seg.Style, seg.renderedText(), remaining)
 			x += used
 			remaining -= used
 			if remaining <= 0 {

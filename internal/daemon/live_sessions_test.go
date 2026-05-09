@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -67,13 +68,6 @@ func TestLiveSessionLaunchBasedirRequiresExplicitOrStoredDirectory(t *testing.T)
 
 func TestForegroundLeaseReturnsInternalWhenUUIDAllocationFails(t *testing.T) {
 	tmp := setupDaemonTestHome(t)
-	uuid.DisableRandPool()
-	uuid.SetRand(strings.NewReader(""))
-	t.Cleanup(func() {
-		uuid.SetRand(nil)
-		uuid.DisableRandPool()
-	})
-
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		t.Fatalf("new store: %v", err)
@@ -85,6 +79,12 @@ func TestForegroundLeaseReturnsInternalWhenUUIDAllocationFails(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	srv := newTestServer(t)
+	uuid.DisableRandPool()
+	uuid.SetRand(strings.NewReader(""))
+	t.Cleanup(func() {
+		uuid.SetRand(nil)
+		uuid.DisableRandPool()
+	})
 
 	_, err = srv.AcquireForegroundSession(context.Background(), &clydev1.AcquireForegroundSessionRequest{
 		SessionName: "codex-chat",
@@ -236,7 +236,7 @@ func TestListLiveSessionsIncludesClaudeRemoteWorkers(t *testing.T) {
 	tmp := setupDaemonTestHome(t)
 	srv := newTestServer(t)
 	srv.remoteMu.Lock()
-	srv.remoteWorkers["claude-chat"] = &remoteWorker{
+	srv.remoteWorkers["claude-session"] = &remoteWorker{
 		sessionName: "claude-chat",
 		sessionID:   "claude-session",
 		basedir:     filepath.Join(tmp, "work"),
@@ -302,6 +302,73 @@ func TestCodexLiveStreamFansOutOneRuntimeStream(t *testing.T) {
 	}
 	if gotFirst[0].Text != "hello" || gotSecond[0].Text != "hello" {
 		t.Fatalf("fanout delta mismatch: first=%#v second=%#v", gotFirst, gotSecond)
+	}
+}
+
+func TestStreamLiveSessionRegistersAndReleasesRPC(t *testing.T) {
+	srv := newTestServer(t)
+	fanout := newLiveStreamFanout()
+	t.Cleanup(func() { deleteLiveRuntimeState("codex-thread") })
+	srv.liveSessions["codex-thread"] = &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         "codex-chat",
+		id:           "codex-thread",
+		codexRuntime: &fakeLiveRuntime{},
+		lastTurnID:   "turn-1",
+	}
+	setLiveRuntimeState("codex-thread", &liveRuntimeSessionState{
+		effort: "",
+		stream: fanout,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &fakeStreamLiveSessionServer{
+		ctx:   ctx,
+		sends: make(chan *clydev1.StreamLiveSessionResponse, 1),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.StreamLiveSession(&clydev1.StreamLiveSessionRequest{SessionId: "codex-thread"}, stream)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.RPCs.Count() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := srv.RPCs.Count(); got != 1 {
+		t.Fatalf("RPC count while streaming = %d, want 1", got)
+	}
+
+	fanout.publish(webapp.LiveSessionEvent{
+		SessionID: "codex-thread",
+		Kind:      "completed",
+		Text:      "completed",
+		Timestamp: time.Now(),
+	})
+	select {
+	case got := <-stream.sends:
+		if got.GetSessionId() != "codex-thread" {
+			t.Fatalf("stream session_id = %q, want codex-thread", got.GetSessionId())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamLiveSession did not send event")
+	}
+	fanout.close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("StreamLiveSession returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamLiveSession did not return after fanout close")
+	}
+	if got := srv.RPCs.Count(); got != 0 {
+		t.Fatalf("RPC count after stream exit = %d, want 0", got)
 	}
 }
 
@@ -533,7 +600,7 @@ func TestForegroundLeaseSuspendsAndRestoresClaudeRemoteWorker(t *testing.T) {
 	}
 	srv := newTestServer(t)
 	srv.remoteMu.Lock()
-	srv.remoteWorkers["claude-chat"] = &remoteWorker{
+	srv.remoteWorkers["claude-session"] = &remoteWorker{
 		sessionName: "claude-chat",
 		sessionID:   "claude-session",
 		incognito:   true,
@@ -558,10 +625,13 @@ func TestForegroundLeaseSuspendsAndRestoresClaudeRemoteWorker(t *testing.T) {
 		t.Fatalf("should_restore = false, want true")
 	}
 	srv.remoteMu.Lock()
-	_, stillPresent := srv.remoteWorkers["claude-chat"]
+	_, stillPresent := srv.remoteWorkers["claude-session"]
 	srv.remoteMu.Unlock()
 	if stillPresent {
 		t.Fatalf("remote worker still present after acquire")
+	}
+	if err := store.Rename("claude-chat", "claude-renamed"); err != nil {
+		t.Fatalf("rename session before restore: %v", err)
 	}
 
 	released, err := srv.ReleaseForegroundSession(context.Background(), &clydev1.ReleaseForegroundSessionRequest{
@@ -575,10 +645,16 @@ func TestForegroundLeaseSuspendsAndRestoresClaudeRemoteWorker(t *testing.T) {
 		t.Fatalf("restored = false, want true")
 	}
 	srv.remoteMu.Lock()
-	restored := srv.remoteWorkers["claude-chat"]
+	restored := srv.remoteWorkers["claude-session"]
 	srv.remoteMu.Unlock()
 	if restored == nil || restored.sessionID != "claude-session" {
 		t.Fatalf("remote worker not restored: %#v", restored)
+	}
+	if restored.sessionName != "claude-renamed" {
+		t.Fatalf("restored session name = %q, want claude-renamed", restored.sessionName)
+	}
+	if released.GetLiveSession().GetSessionName() != "claude-renamed" {
+		t.Fatalf("released live session name = %q, want claude-renamed", released.GetLiveSession().GetSessionName())
 	}
 	if !restored.incognito {
 		t.Fatalf("restored incognito = false, want true")
@@ -891,6 +967,21 @@ type fakeLiveRuntime struct {
 	streamEvents   []codex.LiveEvent
 	streamCalls    int
 	calls          []fakeLiveRuntimeCall
+}
+
+type fakeStreamLiveSessionServer struct {
+	grpc.ServerStream
+	ctx   context.Context
+	sends chan *clydev1.StreamLiveSessionResponse
+}
+
+func (s *fakeStreamLiveSessionServer) Context() context.Context {
+	return s.ctx
+}
+
+func (s *fakeStreamLiveSessionServer) Send(resp *clydev1.StreamLiveSessionResponse) error {
+	s.sends <- resp
+	return nil
 }
 
 func (f *fakeLiveRuntime) Start(context.Context, codex.LiveStartRequest) (*codex.LiveSession, error) {

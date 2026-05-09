@@ -25,19 +25,8 @@ func ProcessSessionStart(
 	if log == nil {
 		log = slog.Default()
 	}
-	// Hard kill switch for nested invocations. The daemon sets this on
-	// its internal `claude -p` summarizer call so the spawned claude's
-	// SessionStart hook can't recurse into the daemon and fan out a
-	// hook chain (see internal/daemon/server.go contextSummary path).
-	// Drain stdin first so claude doesn't block on the pipe.
-	if os.Getenv("CLYDE_SUPPRESS_HOOKS") != "" {
-		_, _ = io.Copy(io.Discard, eventJSON)
-		log.InfoContext(ctx, "hook.sessionstart.suppressed",
-			"component", "hook",
-			"subject", "sessionstart",
-			"reason", "CLYDE_SUPPRESS_HOOKS",
-		)
-		return Result{SkippedDuplicate: true}, nil
+	if skipped, err := handleSuppressedSessionStart(ctx, log, eventJSON); skipped || err != nil {
+		return Result{SkippedDuplicate: true}, err
 	}
 	if store == nil {
 		log.ErrorContext(ctx, "hook.sessionstart.invalid_store",
@@ -47,7 +36,66 @@ func ProcessSessionStart(
 		)
 		return Result{}, fmt.Errorf("hook: store is nil")
 	}
+	deps := defaultDeps(cfg)
+	hookData, rawJSON, err := decodeSessionStartInput(ctx, log, eventJSON)
+	if err != nil {
+		return Result{}, err
+	}
+	logRawSessionStartEvent(ctx, log, deps, hookData, rawJSON, errOut)
 
+	// Process-tree loop-breaker. If an ancestor process is already a
+	// `clyde hook sessionstart`, we are inside the daemon's recursive
+	// claude -p chain (or some other unintended fanout) and must
+	// exit fast to avoid a per-spawn process explosion.
+	if skipped, result := skipDuplicateSessionStart(ctx, log, hookData, store); skipped {
+		return result, nil
+	}
+
+	res := Result{Source: hookData.Source}
+	sessionName, err := dispatchSessionStartSource(ctx, log, deps, hookData, store, out, errOut)
+	res.SessionName = sessionName
+	if err != nil {
+		return res, err
+	}
+
+	log.InfoContext(ctx, "hook.sessionstart.completed",
+		"component", "hook",
+		"subject", "sessionstart",
+		"session_id", hookData.SessionID,
+		"source", hookData.Source,
+		"session", res.SessionName,
+	)
+
+	return res, nil
+}
+
+func handleSuppressedSessionStart(ctx context.Context, log *slog.Logger, eventJSON io.Reader) (bool, error) {
+	// Hard kill switch for nested invocations. The daemon sets this on
+	// its internal `claude -p` summarizer call so the spawned claude's
+	// SessionStart hook can't recurse into the daemon and fan out a
+	// hook chain (see internal/daemon/server.go contextSummary path).
+	// Drain stdin first so claude doesn't block on the pipe.
+	if os.Getenv("CLYDE_SUPPRESS_HOOKS") == "" {
+		return false, nil
+	}
+	_, err := io.Copy(io.Discard, eventJSON)
+	if err != nil {
+		log.WarnContext(ctx, "hook.sessionstart.suppressed_drain_failed",
+			"component", "hook",
+			"subject", "sessionstart",
+			"err", err,
+		)
+		return true, fmt.Errorf("drain suppressed sessionstart input: %w", err)
+	}
+	log.InfoContext(ctx, "hook.sessionstart.suppressed",
+		"component", "hook",
+		"subject", "sessionstart",
+		"reason", "CLYDE_SUPPRESS_HOOKS",
+	)
+	return true, nil
+}
+
+func decodeSessionStartInput(ctx context.Context, log *slog.Logger, eventJSON io.Reader) (SessionStartInput, []byte, error) {
 	raw, err := io.ReadAll(eventJSON)
 	if err != nil {
 		log.ErrorContext(ctx, "hook.sessionstart.read_failed",
@@ -55,7 +103,7 @@ func ProcessSessionStart(
 			"subject", "sessionstart",
 			"err", err,
 		)
-		return Result{}, fmt.Errorf("failed to read hook input: %w", err)
+		return SessionStartInput{}, nil, fmt.Errorf("failed to read hook input: %w", err)
 	}
 
 	var hookData SessionStartInput
@@ -65,7 +113,7 @@ func ProcessSessionStart(
 			"subject", "sessionstart",
 			"err", err,
 		)
-		return Result{}, fmt.Errorf("failed to parse hook input: %w", err)
+		return SessionStartInput{}, nil, fmt.Errorf("failed to parse hook input: %w", err)
 	}
 
 	log.InfoContext(ctx, "hook.sessionstart.received",
@@ -74,9 +122,11 @@ func ProcessSessionStart(
 		"session_id", hookData.SessionID,
 		"source", hookData.Source,
 	)
+	return hookData, append([]byte(nil), raw...), nil
+}
 
-	deps := defaultDeps(cfg)
-	if err := deps.logRawEvent(raw, hookData.SessionID); err != nil {
+func logRawSessionStartEvent(ctx context.Context, log *slog.Logger, deps sessionStartDeps, hookData SessionStartInput, rawJSON []byte, errOut io.Writer) {
+	if err := deps.logRawEvent(rawJSON, hookData.SessionID); err != nil {
 		log.WarnContext(ctx, "hook.sessionstart.raw_log_failed",
 			"component", "hook",
 			"subject", "sessionstart",
@@ -85,11 +135,9 @@ func ProcessSessionStart(
 		)
 		_, _ = fmt.Fprintf(errOut, "Warning: failed to log event: %v\n", err)
 	}
+}
 
-	// Process-tree loop-breaker. If an ancestor process is already a
-	// `clyde hook sessionstart`, we are inside the daemon's recursive
-	// claude -p chain (or some other unintended fanout) and must
-	// exit fast to avoid a per-spawn process explosion.
+func skipDuplicateSessionStart(ctx context.Context, log *slog.Logger, hookData SessionStartInput, store session.Store) (bool, Result) {
 	if hasAncestorHook() {
 		log.WarnContext(ctx, "hook.sessionstart.ancestor_loop_detected",
 			"component", "hook",
@@ -97,11 +145,11 @@ func ProcessSessionStart(
 			"session_id", hookData.SessionID,
 			"source", hookData.Source,
 		)
-		return Result{
+		return true, Result{
 			SkippedDuplicate: true,
 			Source:           hookData.Source,
-			SessionName:      os.Getenv("CLYDE_SESSION_NAME"),
-		}, nil
+			SessionName:      resultSessionName(hookData, store),
+		}
 	}
 
 	marker := hookData.SessionID + ":" + hookData.Source
@@ -113,11 +161,11 @@ func ProcessSessionStart(
 			"source", hookData.Source,
 			"marker", marker,
 		)
-		return Result{
+		return true, Result{
 			SkippedDuplicate: true,
 			Source:           hookData.Source,
-			SessionName:      os.Getenv("CLYDE_SESSION_NAME"),
-		}, nil
+			SessionName:      resultSessionName(hookData, store),
+		}
 	}
 
 	markHookExecuted(marker)
@@ -126,43 +174,46 @@ func ProcessSessionStart(
 		"subject", "sessionstart",
 		"marker", marker,
 	)
+	return false, Result{
+		SkippedDuplicate: false,
+		Source:           "",
+		SessionName:      "",
+	}
+}
 
-	res := Result{Source: hookData.Source}
-
+func dispatchSessionStartSource(
+	ctx context.Context,
+	log *slog.Logger,
+	deps sessionStartDeps,
+	hookData SessionStartInput,
+	store session.Store,
+	out io.Writer,
+	errOut io.Writer,
+) (string, error) {
 	switch hookData.Source {
 	case "startup", "resume":
-		handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut)
+		return handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut), nil
 	case "compact":
-		if err := handleCompact(ctx, log, hookData, store, out, errOut); err != nil {
+		sessionName, err := handleCompact(ctx, log, hookData, store, out, errOut)
+		if err != nil {
 			log.ErrorContext(ctx, "hook.sessionstart.compact_failed",
 				"component", "hook",
 				"subject", "sessionstart",
 				"err", err,
 			)
-			return res, err
 		}
+		return sessionName, err
 	case "clear":
-		if err := handleClear(ctx, log, hookData, store, out, errOut); err != nil {
+		sessionName, err := handleClear(ctx, log, hookData, store, out, errOut)
+		if err != nil {
 			log.ErrorContext(ctx, "hook.sessionstart.clear_failed",
 				"component", "hook",
 				"subject", "sessionstart",
 				"err", err,
 			)
-			return res, err
 		}
+		return sessionName, err
 	default:
-		handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut)
+		return handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut), nil
 	}
-
-	res.SessionName = os.Getenv("CLYDE_SESSION_NAME")
-
-	log.InfoContext(ctx, "hook.sessionstart.completed",
-		"component", "hook",
-		"subject", "sessionstart",
-		"session_id", hookData.SessionID,
-		"source", hookData.Source,
-		"session", res.SessionName,
-	)
-
-	return res, nil
 }

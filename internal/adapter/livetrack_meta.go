@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/slogger"
 )
+
+type ingressCancelKey struct{}
 
 // IngressMeta is the per-request metadata carried by every session
 // registered in the adapter ingress registry. RouteFamily is the
@@ -34,7 +37,7 @@ func (IngressMeta) IsLivetrackMeta() {}
 // call ensures force-close terminates wedged SSE streams, tool-call
 // bridges, and synthetic-content marker round-trips.
 type ingressConnCloser struct {
-	conn interface{ Close() error }
+	conn net.Conn
 }
 
 // Close satisfies [livetrack.Closer]. The reason is logged by the
@@ -55,14 +58,6 @@ func (c ingressConnCloser) Close(reason string) error {
 	}
 	return nil
 }
-
-// noopIngressCloser is used for handlers called via
-// [httptest.NewRecorder] where no underlying [net.Conn] is available
-// and force-close is a no-op.
-type noopIngressCloser struct{}
-
-// Close satisfies [livetrack.Closer].
-func (noopIngressCloser) Close(_ string) error { return nil }
 
 // newAdapterIngressRegistry constructs the per-Server [livetrack.Registry]
 // for ingress request sessions. Component and Concern match the

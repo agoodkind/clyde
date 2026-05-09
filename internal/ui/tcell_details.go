@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -38,11 +39,6 @@ type DetailsView struct {
 	// details pane keeps the display provider-neutral.
 	LookupLiveURL func(sess *session.Session) (LiveURL, bool)
 
-	// HomeDir is the user home directory used by shortPath when
-	// rendering basedir and workdir rows. Provided by App so the
-	// details build path does not call os.UserHomeDir per cell.
-	HomeDir string
-
 	sessionKey string
 }
 
@@ -61,15 +57,8 @@ func (d *DetailsView) formatLiveURL(sess *session.Session) string {
 // NewDetailsView constructs a details pane.
 func NewDetailsView() *DetailsView {
 	return &DetailsView{
-		Left:          &TextBox{Wrap: false, TitleStyle: StyleMuted},
-		Right:         &TextBox{Wrap: true, TitleStyle: StyleMuted},
-		Focus:         DetailsFocusNone,
-		Rect:          Rect{},
-		LeftRect:      Rect{},
-		RightRect:     Rect{},
-		LookupLiveURL: nil,
-		HomeDir:       "",
-		sessionKey:    "",
+		Left:  &TextBox{Wrap: false, TitleStyle: StyleMuted},
+		Right: &TextBox{Wrap: true, TitleStyle: StyleMuted},
 	}
 }
 
@@ -108,207 +97,257 @@ func (d *DetailsView) SetFocus(f DetailsFocus) {
 // buildLeft composes the stats column as a slice of styled logical lines.
 // The parent TextBox handles wrapping and scrolling.
 func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][]TextSegment {
-	var out [][]TextSegment
+	builder := &detailLineBuilder{lines: nil}
+	builder.addDetailsHeader(sess)
+	builder.addOverviewSection(detail, sess)
+	builder.addDiagnosticsSection(detail)
+	d.addIdentitySection(builder, sess, detail)
+	builder.addTimingSection(sess)
+	builder.addTranscriptSection(detail)
+	builder.addConversationSection(detail)
+	builder.addToolsSection(detail)
+	builder.addIdentifiersSection(sess)
+	builder.addResumeSection(sess, detail)
+	return builder.lines
+}
 
-	// Header: name + optional context (no label, just prominent).
-	out = append(out, []TextSegment{seg(sess.Name, StyleDefault.Bold(true))})
+type detailLineBuilder struct {
+	lines [][]TextSegment
+}
+
+func (b *detailLineBuilder) appendLine(segments ...TextSegment) {
+	b.lines = append(b.lines, segments)
+}
+
+func (b *detailLineBuilder) blank() {
+	b.appendLine()
+}
+
+func (b *detailLineBuilder) section(title string) {
+	style := StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true)
+	b.appendLine(newTextSegment(title, style))
+}
+
+func (b *detailLineBuilder) kv(key string, value string) {
+	b.appendLine(
+		newTextSegment(fmt.Sprintf("  %-14s", key), StyleSubtext),
+		newTextSegment(value, StyleDefault),
+	)
+}
+
+func (b *detailLineBuilder) kvLoading(key string, status string) {
+	b.appendLine(
+		newTextSegment(fmt.Sprintf("  %-14s", key), StyleSubtext),
+		loadingSegment(status),
+	)
+}
+
+func (b *detailLineBuilder) kvStacked(key string, value string, note string) {
+	b.kv(key, value)
+	if strings.TrimSpace(note) == "" {
+		return
+	}
+	b.appendLine(
+		newTextSegment("                ", StyleSubtext),
+		newTextSegment(note, StyleMuted),
+	)
+}
+
+func (b *detailLineBuilder) addDetailsHeader(sess *session.Session) {
+	b.appendLine(newTextSegment(sess.Name, StyleDefault.Bold(true)))
 	if sess.Metadata.Context != "" {
 		ctx := sess.Metadata.Context
 		if n := runeCount(ctx); n > 120 {
 			ctx = string([]rune(ctx)[:117]) + "..."
 		}
-		out = append(out, []TextSegment{seg(ctx, StyleMuted)})
+		b.appendLine(newTextSegment(ctx, StyleMuted))
 	}
-	out = append(out, []TextSegment{})
+	b.blank()
+}
 
-	// section writes a bold heading line.
-	section := func(title string) {
-		out = append(out, []TextSegment{seg(title, StyleDefault.Foreground(ColorMuted).Bold(true).Underline(true))})
-	}
-	kv := func(k, v string) {
-		out = append(out, []TextSegment{
-			seg(fmt.Sprintf("  %-14s", k), StyleSubtext),
-			seg(v, StyleDefault),
-		})
-	}
-	kvLoading := func(k, status string) {
-		out = append(out, []TextSegment{
-			seg(fmt.Sprintf("  %-14s", k), StyleSubtext),
-			loadingSegment(status),
-		})
-	}
-	kvStacked := func(k, v string, note string) {
-		kv(k, v)
-		if strings.TrimSpace(note) == "" {
-			return
-		}
-		out = append(out, []TextSegment{
-			seg("                ", StyleSubtext),
-			seg(note, StyleMuted),
-		})
-	}
-
-	section("Overview")
+func (b *detailLineBuilder) addOverviewSection(
+	detail SessionDetail,
+	sess *session.Session,
+) {
+	b.section("Overview")
 	if detail.ContextUsageLoaded {
-		kv("Context", formatExactContextUsage(detail.ContextUsage))
-		kv("Messages", formatDetailTokens(detail.ContextUsage.MessagesTokens))
+		b.kv("Context", formatExactContextUsage(detail.ContextUsage))
+		b.kv("Messages", formatDetailTokens(detail.ContextUsage.MessagesTokens))
 	} else {
-		kvLoading("Context", detail.ContextUsageStatus)
-		kvLoading("Messages", detail.ContextUsageStatus)
+		b.kvLoading("Context", detail.ContextUsageStatus)
+		b.kvLoading("Messages", detail.ContextUsageStatus)
 	}
 	lastActivityAt, lastActivityAgo := formatDetailLastActivity(sess)
-	kvStacked("Last activity", lastActivityAt, lastActivityAgo)
-	out = append(out, []TextSegment{})
-
-	// Diagnostics is only worth a section heading when the status
-	// carries information beyond the spinner (a failure, a cooldown
-	// reason, "unsupported"). Generic in-flight sentinels would just
-	// repeat the Overview spinner row, which looks cluttered.
-	if detail.ContextUsageStatus != "" && !isGenericLoadingStatus(detail.ContextUsageStatus) {
-		section("Diagnostics")
-		kv("Context probe", detail.ContextUsageStatus)
-		out = append(out, []TextSegment{})
-	}
-
-	d.appendIdentitySection(&out, sess, detail, section, kv)
-	appendTimingSection(&out, sess, section, kv)
-	appendTranscriptSection(&out, detail, section, kv, kvLoading)
-
-	if len(detail.AllMessages) > 0 {
-		section("Conversation")
-		users, assistants, firstTS, lastTS := summarizeConversation(detail.AllMessages)
-		kv("Total msgs", fmt.Sprintf("%d  (%d user, %d assistant)", users+assistants, users, assistants))
-		if firstTS != "" {
-			kv("First message", firstTS)
-		}
-		if lastTS != "" {
-			kv("Last message", lastTS)
-		}
-		out = append(out, []TextSegment{})
-	}
-
-	if len(detail.Tools) > 0 {
-		section("Top tools")
-		for _, t := range detail.Tools {
-			out = append(out, []TextSegment{
-				seg(fmt.Sprintf("  %-14s", t.Name), StyleSubtext),
-				seg(fmt.Sprintf("%d", t.Count), StyleDefault),
-			})
-		}
-		out = append(out, []TextSegment{})
-	}
-
-	section("Identifiers")
-	kv("UUID", sess.Metadata.ProviderSessionID())
-	if len(sess.Metadata.PreviousProviderSessionIDStrings()) > 0 {
-		kv("Previous", fmt.Sprintf("%d prior UUID(s)", len(sess.Metadata.PreviousProviderSessionIDStrings())))
-	}
-	out = append(out, []TextSegment{})
-
-	section("Resume")
-	for _, line := range resumeInstructionLines(sess, detail) {
-		out = append(out, []TextSegment{seg("  "+line, StyleMuted)})
-	}
-
-	return out
+	b.kvStacked("Last activity", lastActivityAt, lastActivityAgo)
+	b.blank()
 }
 
-// appendIdentitySection writes the Identity block (Model, Live URL,
-// Basedir, optional Work dir, optional Type) to out. The receiver is
-// needed for the live-url lookup callback.
-func (d *DetailsView) appendIdentitySection(out *[][]TextSegment, sess *session.Session, detail SessionDetail, section func(string), kv func(string, string)) {
-	section("Identity")
-	kv("Model", detail.Model)
-	kv("Live URL", d.formatLiveURL(sess))
-	kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot, d.HomeDir))
+func (b *detailLineBuilder) addDiagnosticsSection(detail SessionDetail) {
+	// Generic in-flight sentinels would repeat the Overview spinner row.
+	if detail.ContextUsageStatus == "" || isGenericLoadingStatus(detail.ContextUsageStatus) {
+		return
+	}
+	b.section("Diagnostics")
+	b.kv("Context probe", detail.ContextUsageStatus)
+	b.blank()
+}
+
+func (d *DetailsView) addIdentitySection(
+	b *detailLineBuilder,
+	sess *session.Session,
+	detail SessionDetail,
+) {
+	b.section("Identity")
+	b.kv("Model", detail.Model)
+	b.kv("Live URL", d.formatLiveURL(sess))
+	b.kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot))
 	if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
-		kv("Work dir", shortPath(sess.Metadata.WorkDir, d.HomeDir))
+		b.kv("Work dir", shortPath(sess.Metadata.WorkDir))
 	}
 	if sess.Metadata.IsForkedSession {
-		kv("Type", "fork of "+sess.Metadata.ParentSession)
+		b.kv("Type", "fork of "+sess.Metadata.ParentSession)
 	}
 	if sess.Metadata.IsIncognito {
-		kv("Type", "incognito (auto-delete on exit)")
+		b.kv("Type", "incognito (auto-delete on exit)")
 	}
-	*out = append(*out, []TextSegment{})
+	b.blank()
 }
 
-// appendTimingSection writes the Timing block (Created, Last used,
-// Used ago, Age) to out.
-func appendTimingSection(out *[][]TextSegment, sess *session.Session, section func(string), kv func(string, string)) {
-	section("Timing")
-	kv("Created", sess.Metadata.Created.Format("2006-01-02 15:04"))
-	kv("Last used", sess.Metadata.LastAccessed.Local().Format("2006-01-02 15:04"))
-	kv("Used ago", util.FormatRelativeTime(sess.Metadata.LastAccessed))
-	kv("Age", util.FormatRelativeTime(sess.Metadata.Created))
-	*out = append(*out, []TextSegment{})
+func (b *detailLineBuilder) addTimingSection(sess *session.Session) {
+	b.section("Timing")
+	b.kv("Created", sess.Metadata.Created.Format("2006-01-02 15:04"))
+	b.kv("Last used", sess.Metadata.LastAccessed.Local().Format("2006-01-02 15:04"))
+	b.kv("Used ago", util.FormatRelativeTime(sess.Metadata.LastAccessed))
+	b.kv("Age", util.FormatRelativeTime(sess.Metadata.Created))
+	b.blank()
 }
 
-// appendTranscriptSection writes the Transcript block to out. Renders
-// concrete values when transcript stats are loaded; otherwise renders
-// a row of spinner placeholders so the user knows the data is in
-// flight.
-func appendTranscriptSection(out *[][]TextSegment, detail SessionDetail, section func(string), kv func(string, string), kvLoading func(string, string)) {
-	section("Transcript")
+func (b *detailLineBuilder) addTranscriptSection(detail SessionDetail) {
+	b.section("Transcript")
 	if detail.TranscriptStatsLoaded {
-		kv("Visible msgs", formatDetailMessageCount(detail))
-		kv("Last msg est", formatDetailTokens(detail.LastMessageTokens))
-		if detail.CompactionCount > 0 {
-			kv("Compactions", formatDetailCompactions(detail))
-		}
-		if detail.TranscriptSizeBytes > 0 {
-			mb := float64(detail.TranscriptSizeBytes) / (1024 * 1024)
-			kv("Size", fmt.Sprintf("%.2f MB", mb))
-		}
+		b.addLoadedTranscriptRows(detail)
 	} else {
-		status := detail.TranscriptStatsStatus
-		kvLoading("Visible msgs", status)
-		kvLoading("Last msg est", status)
-		kvLoading("Compactions", status)
-		kvLoading("Size", status)
+		b.addLoadingTranscriptRows(detail.TranscriptStatsStatus)
 	}
-	*out = append(*out, []TextSegment{})
+	b.blank()
 }
 
-// summarizeConversation returns the per-role message counts and the
-// first and last localized timestamps for the conversation section.
-// Extracted from buildLeft so the parent function stays under the
-// cognitive complexity budget.
-func summarizeConversation(msgs []DetailMessage) (users, assistants int, firstTS, lastTS string) {
-	for i, m := range msgs {
-		switch m.Role {
+func (b *detailLineBuilder) addLoadedTranscriptRows(detail SessionDetail) {
+	b.kv("Visible msgs", formatDetailMessageCount(detail))
+	b.kv("Last msg est", formatDetailTokens(detail.LastMessageTokens))
+	if detail.CompactionCount > 0 {
+		b.kv("Compactions", formatDetailCompactions(detail))
+	}
+	if detail.TranscriptSizeBytes > 0 {
+		mb := float64(detail.TranscriptSizeBytes) / (1024 * 1024)
+		b.kv("Size", fmt.Sprintf("%.2f MB", mb))
+	}
+}
+
+func (b *detailLineBuilder) addLoadingTranscriptRows(status string) {
+	b.kvLoading("Visible msgs", status)
+	b.kvLoading("Last msg est", status)
+	b.kvLoading("Compactions", status)
+	b.kvLoading("Size", status)
+}
+
+func (b *detailLineBuilder) addConversationSection(detail SessionDetail) {
+	if len(detail.AllMessages) == 0 {
+		return
+	}
+	users, assistants, firstTS, lastTS := detailConversationStats(detail.AllMessages)
+
+	b.section("Conversation")
+	b.kv("Total msgs", fmt.Sprintf("%d  (%d user, %d assistant)", users+assistants, users, assistants))
+	if firstTS != "" {
+		b.kv("First message", firstTS)
+	}
+	if lastTS != "" {
+		b.kv("Last message", lastTS)
+	}
+	b.blank()
+}
+
+func detailConversationStats(messages []DetailMessage) (int, int, string, string) {
+	users := 0
+	assistants := 0
+	var firstTS string
+	var lastTS string
+	for i, message := range messages {
+		switch message.Role {
 		case "user":
 			users++
 		case "assistant":
 			assistants++
 		}
-		if i == 0 && !m.Timestamp.IsZero() {
-			firstTS = m.Timestamp.Local().Format("2006-01-02 15:04")
+		if i == 0 && !message.Timestamp.IsZero() {
+			firstTS = message.Timestamp.Local().Format("2006-01-02 15:04")
 		}
-		if i == len(msgs)-1 && !m.Timestamp.IsZero() {
-			lastTS = m.Timestamp.Local().Format("2006-01-02 15:04")
+		if i == len(messages)-1 && !message.Timestamp.IsZero() {
+			lastTS = message.Timestamp.Local().Format("2006-01-02 15:04")
 		}
 	}
 	return users, assistants, firstTS, lastTS
 }
 
-// formatExactContextUsage renders the daemon-supplied context usage.
-// The TUI no longer recomputes the percentage. When usage.Percentage is
-// zero (the daemon has not supplied a figure), the percent suffix is
-// hidden so the row stays legible. The raw token totals still render
-// when available.
+func (b *detailLineBuilder) addToolsSection(detail SessionDetail) {
+	if len(detail.Tools) == 0 {
+		return
+	}
+	b.section("Top tools")
+	for _, tool := range detail.Tools {
+		b.appendLine(
+			newTextSegment(fmt.Sprintf("  %-14s", tool.Name), StyleSubtext),
+			newTextSegment(fmt.Sprintf("%d", tool.Count), StyleDefault),
+		)
+	}
+	b.blank()
+}
+
+func (b *detailLineBuilder) addIdentifiersSection(sess *session.Session) {
+	b.section("Identifiers")
+	b.kv("UUID", sess.Metadata.ProviderSessionID())
+	previousIDs := sess.Metadata.PreviousProviderSessionIDStrings()
+	if len(previousIDs) > 0 {
+		b.kv("Previous", fmt.Sprintf("%d prior UUID(s)", len(previousIDs)))
+	}
+	b.blank()
+}
+
+func (b *detailLineBuilder) addResumeSection(sess *session.Session, detail SessionDetail) {
+	b.section("Resume")
+	b.appendLine(newTextSegment("  clyde resume "+quoteResumeArgument(session.SessionDisplayName(sess)), StyleMuted))
+	instructions := detail.ResumeInstructions
+	if len(instructions) == 0 {
+		instructions = session.ResumeInstructions(sess)
+	}
+	for _, instruction := range instructions {
+		b.appendLine(newTextSegment("  "+instruction, StyleMuted))
+	}
+}
+
+func quoteResumeArgument(value string) string {
+	if value == "" {
+		return strconv.Quote(value)
+	}
+	if strings.ContainsAny(value, " \t\n\r\"'\\") {
+		return strconv.Quote(value)
+	}
+	return value
+}
+
 func formatExactContextUsage(usage SessionContextUsage) string {
 	if usage.TotalTokens <= 0 {
 		return "-"
 	}
 	if usage.MaxTokens > 0 {
-		base := fmt.Sprintf("%s/%s tok",
+		value := fmt.Sprintf("%s/%s tok",
 			formatTokensCompact(usage.TotalTokens),
 			formatTokensCompact(usage.MaxTokens))
-		if usage.Percentage > 0 {
-			return fmt.Sprintf("%s  %d%%", base, usage.Percentage)
+		if usage.Percentage <= 0 {
+			return value
 		}
-		return base
+		return fmt.Sprintf("%s  %d%%", value, usage.Percentage)
 	}
 	return formatTokensCompact(usage.TotalTokens) + " tok"
 }
@@ -346,25 +385,6 @@ func formatDetailCompactions(detail SessionDetail) string {
 	return value
 }
 
-func resumeInstructionLines(sess *session.Session, detail SessionDetail) []string {
-	if sess == nil {
-		return nil
-	}
-	lines := []string{fmt.Sprintf("clyde resume %s", sess.Name)}
-	seen := map[string]bool{
-		lines[0]: true,
-	}
-	for _, instruction := range detail.ResumeInstructions {
-		trimmed := strings.TrimSpace(instruction)
-		if trimmed == "" || seen[trimmed] {
-			continue
-		}
-		lines = append(lines, trimmed)
-		seen[trimmed] = true
-	}
-	return lines
-}
-
 // buildRight renders the full conversation. Each message gets a role tag
 // and a timestamp. Long bodies are wrapped by the parent TextBox because
 // its Wrap flag is on.
@@ -377,11 +397,11 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 	if len(src) == 0 {
 		if detail.ConversationLoading {
 			return [][]TextSegment{{
-				seg("  ", StyleMuted),
+				newTextSegment("  ", StyleMuted),
 				loadingSegment("loading conversation..."),
 			}}
 		}
-		return [][]TextSegment{{seg("  (no visible messages)", StyleMuted)}}
+		return [][]TextSegment{{newTextSegment("  (no visible messages)", StyleMuted)}}
 	}
 
 	// Latest message first so the user reads the most recent turn at the
@@ -399,18 +419,15 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 	assistantTag := StyleDefault.Foreground(ColorAccent).Bold(true)
 	assistantBody := StyleDefault.Foreground(ColorSubtext)
 	tsStyle := StyleDefault.Foreground(ColorMuted)
-	assistantLabel := detailAssistantLabel(sess, detail)
 
 	for i, m := range msgs {
 		tag := "You"
 		tagStyle := userTag
 		bodyStyle := userBody
 		if m.Role == "assistant" {
-			tag = assistantLabel
+			tag = assistantDisplayName(sess, detail)
 			tagStyle = assistantTag
 			bodyStyle = assistantBody
-		} else if strings.TrimSpace(m.Role) != "" && m.Role != "user" {
-			tag = detailRoleLabel(m.Role)
 		}
 
 		ts := ""
@@ -419,10 +436,10 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 		}
 
 		header := []TextSegment{
-			seg(fmt.Sprintf("▎%-6s", tag), tagStyle),
+			newTextSegment(fmt.Sprintf("▎%-6s", tag), tagStyle),
 		}
 		if ts != "" {
-			header = append(header, seg(" "+ts, tsStyle))
+			header = append(header, newTextSegment(" "+ts, tsStyle))
 		}
 		out = append(out, header)
 
@@ -433,7 +450,7 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			out = append(out, []TextSegment{seg("  "+line, bodyStyle)})
+			out = append(out, []TextSegment{newTextSegment("  "+line, bodyStyle)})
 		}
 		if i != len(msgs)-1 {
 			out = append(out, []TextSegment{})
@@ -442,25 +459,17 @@ func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) []
 	return out
 }
 
-func detailAssistantLabel(sess *session.Session, detail SessionDetail) string {
-	provider := strings.TrimSpace(detail.Provider)
-	if provider == "" && sess != nil {
-		provider = strings.TrimSpace(string(sess.ProviderID()))
+func assistantDisplayName(sess *session.Session, detail SessionDetail) string {
+	provider := session.ProviderID(strings.TrimSpace(detail.Provider))
+	if provider == session.ProviderUnknown && sess != nil {
+		provider = sess.ProviderID()
 	}
-	if label := session.ProviderDisplayName(session.ProviderID(provider)); label != "" {
-		return label
+	provider = session.NormalizeProviderID(provider)
+	info := session.ProviderInfo(provider)
+	if info.DisplayName != "" {
+		return info.DisplayName
 	}
 	return "Assistant"
-}
-
-func detailRoleLabel(role string) string {
-	trimmed := strings.TrimSpace(role)
-	if trimmed == "" {
-		return "Message"
-	}
-	runes := []rune(trimmed)
-	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
-	return string(runes)
 }
 
 // Draw splits r into a left and right column and renders each TextBox.

@@ -31,19 +31,19 @@ var _ = Describe("FileStore", func() {
 
 	Describe("Create and Get", func() {
 		It("should create and retrieve a session", func() {
-			s := session.NewSession("test-session", "uuid-123")
+			s := session.NewSession("Test Session", "uuid-123")
 
 			err := store.Create(s)
 			Expect(err).NotTo(HaveOccurred())
 
-			retrieved, err := store.Get("test-session")
+			retrieved, err := store.Get("Test Session")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(retrieved.Name).To(Equal("test-session"))
+			Expect(retrieved.Name).To(Equal("Test Session"))
 			Expect(retrieved.Metadata.ProviderSessionID()).To(Equal("uuid-123"))
 		})
 
-		It("should reject invalid session names", func() {
-			s := session.NewSession("INVALID", "uuid")
+		It("should reject display names that cannot be matched exactly", func() {
+			s := session.NewSession("line\nbreak", "uuid")
 			err := store.Create(s)
 			Expect(err).To(HaveOccurred())
 		})
@@ -56,6 +56,24 @@ var _ = Describe("FileStore", func() {
 			err = store.Create(s)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("already exists"))
+		})
+
+		It("should resolve and search by display title", func() {
+			s := session.NewSession("Merry Swan", "uuid-123")
+			s.Metadata.DisplayTitle = "Merry Swan"
+
+			err := store.Create(s)
+			Expect(err).NotTo(HaveOccurred())
+
+			resolved, err := store.Resolve("Merry Swan")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resolved).ToNot(BeNil())
+			Expect(resolved.Name).To(Equal("Merry Swan"))
+
+			matches, err := store.Search("Merry Swan")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matches).To(HaveLen(1))
+			Expect(matches[0].Name).To(Equal("Merry Swan"))
 		})
 	})
 
@@ -235,6 +253,29 @@ var _ = Describe("FileStore", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(sessions).To(HaveLen(2))
 		})
+
+		It("hydrates parent display names from parent ClydeUUID and exact session name", func() {
+			parent := session.NewSession("Parent Current Name", "parent-provider-id")
+			parent.Metadata.DisplayTitle = "Stale Provider Title"
+			Expect(store.Create(parent)).To(Succeed())
+
+			child := session.NewSession("Child Session", "child-provider-id")
+			child.Metadata.IsForkedSession = true
+			child.Metadata.ParentClydeUUID = parent.ClydeUUID()
+			child.Metadata.ParentSession = "Old Parent Label"
+			Expect(store.Create(child)).To(Succeed())
+
+			sessions, err := store.List()
+			Expect(err).NotTo(HaveOccurred())
+			var reloadedChild *session.Session
+			for _, candidate := range sessions {
+				if candidate.Name == "Child Session" {
+					reloadedChild = candidate
+				}
+			}
+			Expect(reloadedChild).ToNot(BeNil())
+			Expect(reloadedChild.Metadata.ParentSession).To(Equal("Parent Current Name"))
+		})
 	})
 
 	Describe("Resolve", func() {
@@ -333,7 +374,7 @@ var _ = Describe("FileStore", func() {
 			err := store.Create(s)
 			Expect(err).NotTo(HaveOccurred())
 
-			sessionDir := config.GetSessionDir(clydeRoot, "test-session")
+			sessionDir := config.GetSessionDir(clydeRoot, s.StorageKey())
 			settingsPath := filepath.Join(sessionDir, "settings.json")
 
 			Expect(util.FileExists(settingsPath)).To(BeFalse())

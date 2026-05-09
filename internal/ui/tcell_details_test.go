@@ -429,6 +429,28 @@ func TestDetailsView_ActionableStatusKeepsDiagnosticsSection(t *testing.T) {
 	}
 }
 
+func TestDetailsView_ResumeCommandUsesVisibleTitle(t *testing.T) {
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:         "merry-swan",
+			SessionID:    "uuid-1",
+			DisplayTitle: "Merry Swan",
+		},
+	}
+
+	rows := view.buildLeft(sess, SessionDetail{Model: "opus"})
+	joined := strings.Join(flattenSegments(rows), "\n")
+
+	if !strings.Contains(joined, `clyde resume "Merry Swan"`) {
+		t.Fatalf("details resume command missing visible title:\n%s", joined)
+	}
+	if strings.Contains(joined, "clyde resume merry-swan") {
+		t.Fatalf("details resume command used legacy row name:\n%s", joined)
+	}
+}
+
 // findKVRow returns the row whose first segment label trims to key, or
 // nil. The label segment uses fmt.Sprintf("  %-14s", k) so we trim
 // leading and trailing whitespace before comparing.

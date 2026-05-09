@@ -44,7 +44,7 @@ func TestResolveSessionSettingsNormalizesStoredModel(t *testing.T) {
 		globalSettings: map[string]json.RawMessage{},
 	}
 
-	model, effort := srv.resolveSessionSettings(context.Background(), "chat-1")
+	_, model, effort := srv.resolveSessionSettings(context.Background(), "chat-1", "")
 	if model != "clyde-gpt-5.4-1m-medium" {
 		t.Fatalf("model=%q want %q", model, "clyde-gpt-5.4-1m-medium")
 	}
@@ -89,9 +89,25 @@ func TestReadSessionSettingsNormalizesRuntimeModel(t *testing.T) {
 }
 
 func TestSessionIsActiveChecksOpenWrapperSessions(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess := session.NewSession("open-chat", "open-session-id")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
 	srv := &Server{
 		sessions: map[string]*wrapperSession{
-			"wrapper-1": {wrapperID: "wrapper-1", sessionName: "open-chat"},
+			"wrapper-1": {wrapperID: "wrapper-1", sessionName: "open-chat", sessionID: "open-session-id"},
 			"wrapper-2": {wrapperID: "wrapper-2", sessionName: ""},
 		},
 	}
@@ -101,6 +117,12 @@ func TestSessionIsActiveChecksOpenWrapperSessions(t *testing.T) {
 	}
 	if srv.sessionIsActive("closed-chat") {
 		t.Fatalf("expected unknown session to be inactive")
+	}
+	if err := store.Rename("open-chat", "renamed-chat"); err != nil {
+		t.Fatalf("rename session: %v", err)
+	}
+	if !srv.sessionIsActive("renamed-chat") {
+		t.Fatalf("expected renamed session to stay active by session id")
 	}
 	if srv.sessionIsActive("") {
 		t.Fatalf("expected empty session name to be inactive")

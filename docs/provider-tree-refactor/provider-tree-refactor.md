@@ -220,7 +220,7 @@ Done last so the doc reflects post refactor reality. Full pass:
   sessions via `clyde <directory>` (basedir picker, see
   `cmd/root.go:RunBasedirLaunch`), or via the dashboard launch action
   in bare `clyde`. Existing sessions are resumed via
-  `clyde resume <name|uuid>` or the dashboard. Sessions are launched
+  `clyde resume <title|provider-id>` or the dashboard. Sessions are launched
   through Clyde, not through `claude` passthrough.
 * Update the Architecture and Session Hooks sections to assume Claude
   is one provider; reference `internal/providers/claude/` for the
