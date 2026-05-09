@@ -201,8 +201,8 @@ func (s *Server) ForceCloseAll() {
 // registerIngressSession registers a new ingress request session in the
 // livetrack registry. The closer is an ingressConnCloser backed by the
 // [net.Conn] injected into the request context by ConnContext; when no
-// conn is present ([httptest.NewRecorder] scenarios) a noopIngressCloser
-// is used so test code compiles and runs correctly.
+// conn is present ([httptest.NewRecorder] scenarios) the closer cancels
+// the handler context created by handle.
 //
 // Returns nil, false when the registry has already begun draining
 // (reload in progress): callers should write a 503 and return.
@@ -213,8 +213,12 @@ func (s *Server) registerIngressSession(r *http.Request, meta IngressMeta) (*liv
 	var closer livetrack.Closer
 	if conn, ok := r.Context().Value(ingressConnKey{}).(net.Conn); ok && conn != nil {
 		closer = ingressConnCloser{conn: conn}
+	} else if cancel, ok := r.Context().Value(ingressCancelKey{}).(context.CancelFunc); ok && cancel != nil {
+		closer = &contextCancelCloser{cancel: cancel}
 	} else {
-		closer = noopIngressCloser{}
+		childCtx, cancel := context.WithCancel(r.Context())
+		r = r.WithContext(childCtx)
+		closer = &contextCancelCloser{cancel: cancel}
 	}
 	sess, err := s.requests.Register(r.Context(), "adapter.ingress", meta, closer)
 	if err != nil {

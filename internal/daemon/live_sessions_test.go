@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -301,6 +302,73 @@ func TestCodexLiveStreamFansOutOneRuntimeStream(t *testing.T) {
 	}
 	if gotFirst[0].Text != "hello" || gotSecond[0].Text != "hello" {
 		t.Fatalf("fanout delta mismatch: first=%#v second=%#v", gotFirst, gotSecond)
+	}
+}
+
+func TestStreamLiveSessionRegistersAndReleasesRPC(t *testing.T) {
+	srv := newTestServer(t)
+	fanout := newLiveStreamFanout()
+	t.Cleanup(func() { deleteLiveRuntimeState("codex-thread") })
+	srv.liveSessions["codex-thread"] = &liveRuntimeSession{
+		provider:     session.ProviderCodex,
+		name:         "codex-chat",
+		id:           "codex-thread",
+		codexRuntime: &fakeLiveRuntime{},
+		lastTurnID:   "turn-1",
+	}
+	setLiveRuntimeState("codex-thread", &liveRuntimeSessionState{
+		effort: "",
+		stream: fanout,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &fakeStreamLiveSessionServer{
+		ctx:   ctx,
+		sends: make(chan *clydev1.StreamLiveSessionResponse, 1),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.StreamLiveSession(&clydev1.StreamLiveSessionRequest{SessionId: "codex-thread"}, stream)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.RPCs.Count() == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := srv.RPCs.Count(); got != 1 {
+		t.Fatalf("RPC count while streaming = %d, want 1", got)
+	}
+
+	fanout.publish(webapp.LiveSessionEvent{
+		SessionID: "codex-thread",
+		Kind:      "completed",
+		Text:      "completed",
+		Timestamp: time.Now(),
+	})
+	select {
+	case got := <-stream.sends:
+		if got.GetSessionId() != "codex-thread" {
+			t.Fatalf("stream session_id = %q, want codex-thread", got.GetSessionId())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamLiveSession did not send event")
+	}
+	fanout.close()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("StreamLiveSession returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamLiveSession did not return after fanout close")
+	}
+	if got := srv.RPCs.Count(); got != 0 {
+		t.Fatalf("RPC count after stream exit = %d, want 0", got)
 	}
 }
 
@@ -899,6 +967,21 @@ type fakeLiveRuntime struct {
 	streamEvents   []codex.LiveEvent
 	streamCalls    int
 	calls          []fakeLiveRuntimeCall
+}
+
+type fakeStreamLiveSessionServer struct {
+	grpc.ServerStream
+	ctx   context.Context
+	sends chan *clydev1.StreamLiveSessionResponse
+}
+
+func (s *fakeStreamLiveSessionServer) Context() context.Context {
+	return s.ctx
+}
+
+func (s *fakeStreamLiveSessionServer) Send(resp *clydev1.StreamLiveSessionResponse) error {
+	s.sends <- resp
+	return nil
 }
 
 func (f *fakeLiveRuntime) Start(context.Context, codex.LiveStartRequest) (*codex.LiveSession, error) {

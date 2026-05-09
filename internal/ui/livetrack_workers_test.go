@@ -38,15 +38,21 @@ func TestWorkerCloser_CloseIdempotent(t *testing.T) {
 	}
 }
 
-// TestNoopCloser_Close confirms that noopCloser.Close returns nil and
-// does not panic when called multiple times.
-func TestNoopCloser_Close(t *testing.T) {
-	c := noopCloser{}
+// TestSupervisorCloser_Close confirms that supervisorCloser stops the
+// supervisor once and is safe to call multiple times.
+func TestSupervisorCloser_Close(t *testing.T) {
+	stopper := newSupervisorStopper()
+	c := newSupervisorCloser(stopper)
 	if err := c.Close("any"); err != nil {
-		t.Fatalf("noopCloser.Close returned unexpected err: %v", err)
+		t.Fatalf("supervisorCloser.Close returned unexpected err: %v", err)
 	}
 	if err := c.Close("any"); err != nil {
-		t.Fatalf("noopCloser.Close second call returned unexpected err: %v", err)
+		t.Fatalf("supervisorCloser.Close second call returned unexpected err: %v", err)
+	}
+	select {
+	case <-stopper.done():
+	case <-time.After(time.Second):
+		t.Fatal("supervisorCloser.Close did not stop supervisor")
 	}
 }
 
@@ -76,7 +82,7 @@ func TestStartRunSupervisor_RegisterReleasePairing(t *testing.T) {
 		t.Errorf("workers.Count() = %d, want 1 after supervisor started", count)
 	}
 
-	close(stop)
+	stop.stop()
 
 	select {
 	case <-exited:

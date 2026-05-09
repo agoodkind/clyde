@@ -107,7 +107,7 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	builder.addConversationSection(detail)
 	builder.addToolsSection(detail)
 	builder.addIdentifiersSection(sess)
-	builder.addResumeSection(sess)
+	builder.addResumeSection(sess, detail)
 	return builder.lines
 }
 
@@ -314,10 +314,26 @@ func (b *detailLineBuilder) addIdentifiersSection(sess *session.Session) {
 	b.blank()
 }
 
-func (b *detailLineBuilder) addResumeSection(sess *session.Session) {
+func (b *detailLineBuilder) addResumeSection(sess *session.Session, detail SessionDetail) {
 	b.section("Resume")
-	b.appendLine(newTextSegment("  clyde resume "+strconv.Quote(session.SessionDisplayName(sess)), StyleMuted))
-	b.appendLine(newTextSegment("  claude --resume "+sess.Metadata.ProviderSessionID(), StyleMuted))
+	b.appendLine(newTextSegment("  clyde resume "+quoteResumeArgument(session.SessionDisplayName(sess)), StyleMuted))
+	instructions := detail.ResumeInstructions
+	if len(instructions) == 0 {
+		instructions = session.ResumeInstructions(sess)
+	}
+	for _, instruction := range instructions {
+		b.appendLine(newTextSegment("  "+instruction, StyleMuted))
+	}
+}
+
+func quoteResumeArgument(value string) string {
+	if value == "" {
+		return strconv.Quote(value)
+	}
+	if strings.ContainsAny(value, " \t\n\r\"'\\") {
+		return strconv.Quote(value)
+	}
+	return value
 }
 
 func formatExactContextUsage(usage SessionContextUsage) string {
@@ -325,14 +341,13 @@ func formatExactContextUsage(usage SessionContextUsage) string {
 		return "-"
 	}
 	if usage.MaxTokens > 0 {
-		percent := usage.Percentage
-		if percent <= 0 {
-			percent = usage.TotalTokens * 100 / usage.MaxTokens
-		}
-		return fmt.Sprintf("%s/%s tok  %d%%",
+		value := fmt.Sprintf("%s/%s tok",
 			formatTokensCompact(usage.TotalTokens),
-			formatTokensCompact(usage.MaxTokens),
-			percent)
+			formatTokensCompact(usage.MaxTokens))
+		if usage.Percentage <= 0 {
+			return value
+		}
+		return fmt.Sprintf("%s  %d%%", value, usage.Percentage)
 	}
 	return formatTokensCompact(usage.TotalTokens) + " tok"
 }
@@ -373,7 +388,7 @@ func formatDetailCompactions(detail SessionDetail) string {
 // buildRight renders the full conversation. Each message gets a role tag
 // and a timestamp. Long bodies are wrapped by the parent TextBox because
 // its Wrap flag is on.
-func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]TextSegment {
+func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) [][]TextSegment {
 	src := detail.AllMessages
 	if len(src) == 0 && len(detail.Messages) > 0 {
 		src = detail.Messages
@@ -410,7 +425,7 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 		tagStyle := userTag
 		bodyStyle := userBody
 		if m.Role == "assistant" {
-			tag = "Claude"
+			tag = assistantDisplayName(sess, detail)
 			tagStyle = assistantTag
 			bodyStyle = assistantBody
 		}
@@ -442,6 +457,19 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 		}
 	}
 	return out
+}
+
+func assistantDisplayName(sess *session.Session, detail SessionDetail) string {
+	provider := session.ProviderID(strings.TrimSpace(detail.Provider))
+	if provider == session.ProviderUnknown && sess != nil {
+		provider = sess.ProviderID()
+	}
+	provider = session.NormalizeProviderID(provider)
+	info := session.ProviderInfo(provider)
+	if info.DisplayName != "" {
+		return info.DisplayName
+	}
+	return "Assistant"
 }
 
 // Draw splits r into a left and right column and renders each TextBox.

@@ -121,7 +121,7 @@ func TestUX_ReturnPromptOmitsResumeFromBody(t *testing.T) {
 		return nil
 	}
 	full := a.sessionOptionsEntries(sess, func() {})
-	body := a.sessionOptionsEntries(sess, func() {})
+	body := a.sessionOptionsEntriesWithoutResume(sess, func() {})
 	if len(body) != len(full)-1 {
 		t.Fatalf("body length = %d want %d", len(body), len(full)-1)
 	}
@@ -163,7 +163,7 @@ func TestUX_ReturnPromptBodyOmitsResumeIndependentOfLabel(t *testing.T) {
 		resumeCalls++
 		return nil
 	}
-	body := a.sessionOptionsEntries(sess, func() {})
+	body := a.sessionOptionsEntriesWithoutResume(sess, func() {})
 	// Simulate a rename of every body label so any future filter that
 	// looked at entries[i].Label by exact string would silently misfire.
 	for i := range body {
@@ -1871,6 +1871,9 @@ func TestUX_FindSessionByDisplayTitleAndRenderDisplayTitle(t *testing.T) {
 	got := a.findSessionByName("Merry Swan")
 	if got == nil || got.Name != "merry-swan" {
 		t.Fatalf("findSessionByName by display title = %#v", got)
+	}
+	if got := a.findSessionByName("merry swan"); got != nil {
+		t.Fatalf("findSessionByName should require exact display-title case, got %#v", got)
 	}
 
 	row := a.rowForLockedLastUsed(a.sessions[0])

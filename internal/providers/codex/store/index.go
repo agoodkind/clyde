@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/slogger"
 )
 
 var currentTime = time.Now
@@ -100,6 +102,9 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(paths.SessionIndexPath), 0o755); err != nil {
 		slog.Warn("codex.store.session_index.mkdir_failed",
+			"component", "codex",
+			"subcomponent", "store",
+			"concern", slogger.ConcernProviderCodexLifecycle,
 			"path", paths.SessionIndexPath,
 			"err", err,
 		)
@@ -108,6 +113,9 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 	file, err := os.OpenFile(paths.SessionIndexPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		slog.Warn("codex.store.session_index.open_failed",
+			"component", "codex",
+			"subcomponent", "store",
+			"concern", slogger.ConcernProviderCodexLifecycle,
 			"path", paths.SessionIndexPath,
 			"err", err,
 		)
@@ -122,6 +130,9 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 		UpdatedAt:  currentTime().UTC().Format(time.RFC3339),
 	}); err != nil {
 		slog.Warn("codex.store.session_index.encode_failed",
+			"component", "codex",
+			"subcomponent", "store",
+			"concern", slogger.ConcernProviderCodexLifecycle,
 			"path", paths.SessionIndexPath,
 			"err", err,
 		)

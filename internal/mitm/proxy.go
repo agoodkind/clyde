@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -150,6 +151,13 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 	if p.server == nil {
 		return nil
 	}
+	if p.Tunnels == nil || p.Tunnels.Count() == 0 {
+		if err := p.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			return fmt.Errorf("close mitm listener: %w", err)
+		}
+		releaseCaptureWriters()
+		return nil
+	}
 	httpErr := p.server.Shutdown(ctx)
 	if httpErr != nil {
 		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "err", httpErr)
@@ -232,23 +240,29 @@ func (p *Proxy) dispatchUpstream(w http.ResponseWriter, r *http.Request, upstrea
 
 // registerPlainHTTP records the plain-HTTP exchange in the tunnel
 // registry so reload drain sees in-flight requests. Plain HTTP has
-// no hijacked conn for force-close to terminate, so the closer is a
-// no-op; the registry's value for these sessions is the count and
-// snapshot. Returns false (and writes a 503) when the registry has
-// already begun draining.
-func (p *Proxy) registerPlainHTTP(w http.ResponseWriter, r *http.Request, upstream string) (*livetrack.Session[TunnelMeta], bool) {
-	reqSess, registerErr := p.Tunnels.Register(r.Context(), "mitm.http", TunnelMeta{
+// no hijacked conn for force-close to terminate, so the closer cancels
+// a derived request context. Returns false (and writes a 503) when the
+// registry has already begun draining.
+func (p *Proxy) registerPlainHTTP(w http.ResponseWriter, r *http.Request, upstream string) (*livetrack.Session[TunnelMeta], func(string), bool) {
+	ctx, cancel := context.WithCancel(r.Context())
+	*r = *r.WithContext(ctx)
+	reqSess, registerErr := p.Tunnels.Register(ctx, "mitm.http", TunnelMeta{
 		ConnectHost:   r.Host,
 		UpstreamAddr:  upstream,
 		CaptureFile:   "",
 		KeepaliveSeen: false,
-	}, mitmHTTPCloser{})
+	}, &mitmHTTPCloser{cancel: cancel})
 	if registerErr != nil {
+		cancel()
 		p.log.WarnContext(r.Context(), "mitm.http.register_rejected", "path", r.URL.Path, "err", registerErr)
 		http.Error(w, "service draining", http.StatusServiceUnavailable)
-		return nil, false
+		return nil, nil, false
 	}
-	return reqSess, true
+	release := func(reason string) {
+		p.Tunnels.Release(ctx, reqSess, reason)
+		cancel()
+	}
+	return reqSess, release, true
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
@@ -268,11 +282,11 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		p.handleWebsocket(w, r, provider, upstream)
 		return
 	}
-	reqSess, ok := p.registerPlainHTTP(w, r, upstream)
+	_, releasePlainHTTP, ok := p.registerPlainHTTP(w, r, upstream)
 	if !ok {
 		return
 	}
-	defer p.Tunnels.Release(r.Context(), reqSess, "mitm.http.completed")
+	defer releasePlainHTTP("mitm.http.completed")
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

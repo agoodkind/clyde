@@ -43,11 +43,11 @@ import (
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
-	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/slogger"
+	itranscript "goodkind.io/clyde/internal/transcript"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -199,6 +199,17 @@ func remoteWorkerKey(sessionName, sessionID string) string {
 		return sessionID
 	}
 	return strings.TrimSpace(sessionName)
+}
+
+func removeRemoteWorkerLocked(workers map[string]*remoteWorker, worker *remoteWorker) {
+	if worker == nil {
+		return
+	}
+	for key, candidate := range workers {
+		if candidate == worker {
+			delete(workers, key)
+		}
+	}
 }
 
 var remoteWorkerExecutable = os.Executable
@@ -689,11 +700,17 @@ func (s *Server) renameSessionInternal(ctx context.Context, oldName, newName str
 	}
 	s.renameContextState(oldName, newName)
 	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED, store, renamed, oldName)
+	sessionID := ""
+	if renamed != nil {
+		sessionID = renamed.Metadata.ProviderSessionID()
+	}
 	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon.rename.applied",
 		slog.String("component", "daemon"),
 		slog.String("subcomponent", "session"),
 		slog.String("prior_name", oldName),
 		slog.String("new_name", newName),
+		slog.String("session_id", sessionID),
+		slog.String("trace_id", string(correlation.FromContext(ctx).TraceID)),
 		slog.String("source", attribution.source.String()),
 		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
@@ -1836,6 +1853,10 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	}
 	runtime := s.providerRuntimeBoundary(sess, settings, bridge)
 	contextState := s.contextStateForSession(ctx, sess)
+	lastAutoNameNanos := int64(0)
+	if !sess.Metadata.LastAutoNameAt.IsZero() {
+		lastAutoNameNanos = sess.Metadata.LastAutoNameAt.UnixNano()
+	}
 	return &clydev1.SessionSummary{
 		Name:                  sess.Name,
 		MetadataName:          sess.Metadata.Name,
@@ -1869,6 +1890,10 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 		ContextUsageStatus:    contextState.Status,
 		Provider:              string(sess.ProviderID()),
 		Runtime:               protoRuntimeBoundary(runtime),
+		AutoNameState:         sess.Metadata.AutoNameState.String(),
+		AutoNameSource:        sess.Metadata.AutoNameSource.String(),
+		LastAutoNameNanos:     lastAutoNameNanos,
+		AutoNameSourceHash:    sess.Metadata.AutoNameSourceHash,
 	}
 }
 
@@ -1907,6 +1932,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		ContextMessagesTokens: int32(contextState.Usage.CategoryTokens("Messages")),
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
+		ResumeInstructions:    session.ResumeInstructions(sess),
 	}
 	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {
@@ -1940,7 +1966,7 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 	if path == "" {
 		return
 	}
-	thread, err := codexstore.ReadThreadByRolloutPath(path, true, false)
+	history, err := itranscript.ReadCodexHistory(path)
 	if err != nil {
 		s.log.Warn("daemon.codex.detail_read_failed",
 			"component", "daemon",
@@ -1950,19 +1976,27 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 		)
 		return
 	}
-	if thread.ModelProvider != "" && resp.Model == "-" {
-		resp.Model = thread.ModelProvider
+	if history.ModelProvider != "" && resp.Model == "-" {
+		resp.Model = history.ModelProvider
 	}
-	resp.TotalMessages = int32(len(thread.Messages))
-	for _, msg := range thread.Messages {
+	turns := history.ConversationTurns(itranscript.ShapeOptions{
+		ConversationOnly: true,
+		IncludeThinking:  false,
+		MaxTextRunes:     0,
+		ToolOnly:         itranscript.ToolOnlyOmit,
+	})
+	resp.TotalMessages = int32(len(turns))
+	resp.AllMessages = nil
+	resp.RecentMessages = nil
+	for _, msg := range turns {
 		text := strings.TrimSpace(msg.Text)
 		if text == "" {
 			continue
 		}
 		resp.AllMessages = append(resp.AllMessages, detailMessageProto(msg.Role, text, msg.Timestamp))
 	}
-	start := max(len(thread.Messages)-5, 0)
-	for _, msg := range thread.Messages[start:] {
+	start := max(len(turns)-5, 0)
+	for _, msg := range turns[start:] {
 		text := strings.TrimSpace(msg.Text)
 		if text == "" {
 			continue
@@ -2692,9 +2726,7 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 		close(worker.done)
 	}
 	s.remoteMu.Lock()
-	if current := s.remoteWorkers[remoteWorkerKey(worker.sessionName, worker.sessionID)]; current == worker {
-		delete(s.remoteWorkers, remoteWorkerKey(worker.sessionName, worker.sessionID))
-	}
+	removeRemoteWorkerLocked(s.remoteWorkers, worker)
 	s.remoteMu.Unlock()
 	level := slog.LevelInfo
 	if err != nil {

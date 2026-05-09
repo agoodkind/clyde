@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,15 +58,19 @@ func (c *tunnelCloser) Close(reason string) error {
 	return nil
 }
 
-// mitmHTTPCloser is the no-op livetrack.Closer the plain HTTP path
-// installs. Plain HTTP exchanges have no hijacked socket to
-// terminate; the registry's value for these sessions is the count
-// and snapshot, so force-close has nothing to do here. The deadline
-// path still logs the warn-level force_close event so operators see
-// that an HTTP exchange was abandoned by the reload deadline.
-type mitmHTTPCloser struct{}
+// mitmHTTPCloser cancels the plain HTTP request context on force-close.
+// Plain HTTP exchanges have no hijacked socket to terminate, so canceling
+// the request context is the available shutdown mechanism.
+type mitmHTTPCloser struct {
+	cancel context.CancelFunc
+}
 
-func (mitmHTTPCloser) Close(string) error { return nil }
+func (c *mitmHTTPCloser) Close(string) error {
+	if c.cancel != nil {
+		c.cancel()
+	}
+	return nil
+}
 
 // connCloser wraps a [net.Conn] so the tunnelCloser can hold the
 // concrete connection and the proxy can install a single Closer

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
@@ -87,6 +90,20 @@ func (s *Server) registerCodexLiveSession(ctx context.Context, record *liveRunti
 		"session_id", record.id,
 		"err", err,
 	)
+}
+
+func (s *Server) releaseCodexLiveSession(ctx context.Context, record *liveRuntimeSession, reason string) {
+	if s == nil || s.liveWorkers == nil || record == nil {
+		return
+	}
+	s.remoteMu.Lock()
+	livetrackSession := record.livetrackSession
+	record.livetrackSession = nil
+	s.remoteMu.Unlock()
+	if livetrackSession == nil {
+		return
+	}
+	s.liveWorkers.Release(ctx, livetrackSession, reason)
 }
 
 func deleteLiveRuntimeState(sessionID string) {
@@ -170,12 +187,32 @@ func (s *Server) SendLiveSession(ctx context.Context, req *clydev1.SendLiveSessi
 
 // StreamLiveSession streams live-session events over gRPC.
 func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream clydev1.ClydeService_StreamLiveSessionServer) error {
-	_, _ = peer.FromContext(stream.Context())
+	streamCtx, streamCancel := context.WithCancel(stream.Context())
+	defer streamCancel()
+	if s.RPCs != nil {
+		peerInfo, _ := peer.FromContext(streamCtx)
+		corr := correlation.FromContext(streamCtx)
+		rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.stream_live_session", RPCMeta{
+			Method:     "/clyde.v1.ClydeService/StreamLiveSession",
+			Direction:  "inbound",
+			PeerActor:  daemonPeerAddr(peerInfo),
+			RequestID:  corr.RequestID,
+			TraceID:    string(corr.TraceID),
+			LeaseToken: "",
+		}, rpcCloser{cancel: streamCancel})
+		if err != nil {
+			if errors.Is(err, livetrack.ErrRegistryClosed) {
+				return status.Error(codes.Unavailable, "daemon streaming RPC registry is draining")
+			}
+			return status.Errorf(codes.Internal, "register live session stream RPC: %v", err)
+		}
+		defer s.RPCs.Release(streamCtx, rpcSess, "stream_live_session.done")
+	}
 	sessionID := strings.TrimSpace(req.GetSessionId())
 	if sessionID == "" {
 		return fmt.Errorf("%w", status.Error(codes.InvalidArgument, "session_id is required"))
 	}
-	events, err := s.streamLiveSessionEvents(stream.Context(), sessionID)
+	events, err := s.streamLiveSessionEvents(streamCtx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -188,7 +225,7 @@ func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream
 			if err := stream.Send(protoStreamLiveSessionEvent(event)); err != nil {
 				return fmt.Errorf("send live session event: %w", err)
 			}
-		case <-stream.Context().Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -226,6 +263,7 @@ func (s *Server) StopLiveSession(ctx context.Context, req *clydev1.StopLiveSessi
 	if err := live.codexRuntime.Close(); err != nil {
 		return nil, status.Errorf(codes.Internal, "close live runtime: %v", err)
 	}
+	s.releaseCodexLiveSession(ctx, live, "codex.live.stopped")
 	s.remoteMu.Lock()
 	delete(s.liveSessions, live.id)
 	s.remoteMu.Unlock()
@@ -633,6 +671,7 @@ func (s *Server) suspendCodexLiveForForeground(ctx context.Context, lease *foreg
 		state.stream.close()
 	}
 	if err := live.codexRuntime.Close(); err != nil {
+		s.releaseCodexLiveSession(ctx, live, "codex.live.foreground_suspend_failed")
 		s.log.ErrorContext(ctx, "daemon.foreground_session.codex_close_failed",
 			"component", "daemon",
 			"provider", session.ProviderCodex,
@@ -642,6 +681,7 @@ func (s *Server) suspendCodexLiveForForeground(ctx context.Context, lease *foreg
 		)
 		return status.Errorf(codes.Internal, "close codex live runtime: %v", err)
 	}
+	s.releaseCodexLiveSession(ctx, live, "codex.live.foreground_suspended")
 	return nil
 }
 
@@ -716,7 +756,7 @@ func (s *Server) suspendClaudeRemoteForForeground(ctx context.Context, lease *fo
 	}
 	if worker != nil {
 		worker.skipCleanup.Store(true)
-		delete(s.remoteWorkers, remoteWorkerKey(worker.sessionName, worker.sessionID))
+		removeRemoteWorkerLocked(s.remoteWorkers, worker)
 		lease.shouldRestore = true
 		lease.restoreReason = "claude_remote_worker"
 		lease.incognito = worker.incognito

@@ -53,13 +53,43 @@ func (c *workerCloser) Close(string) error {
 	return nil
 }
 
-// noopCloser is a livetrack.Closer for goroutines that are already
-// stopped by the time the drain force-close path runs (e.g. supervisor
-// goroutines whose stop channel has already been closed by a defer in
-// App.Run). The inventory value of registration remains: Drain waits
-// for Release before returning, and slog events record the lifecycle.
-type noopCloser struct{}
+type supervisorStopper struct {
+	closed atomic.Bool
+	ch     chan struct{}
+}
 
-// Close is a no-op; the goroutine will exit on its own after the stop
-// signal that precedes the drain.
-func (noopCloser) Close(string) error { return nil }
+func newSupervisorStopper() *supervisorStopper {
+	return &supervisorStopper{closed: atomic.Bool{}, ch: make(chan struct{})}
+}
+
+func (s *supervisorStopper) stop() {
+	if s != nil && s.closed.CompareAndSwap(false, true) {
+		close(s.ch)
+	}
+}
+
+func (s *supervisorStopper) done() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.ch
+}
+
+// supervisorCloser stops a supervisor goroutine by closing the stop channel
+// shared with App.Run. The closer and normal Run cleanup share the same
+// idempotent stopper, so force-close and normal shutdown cannot double-close.
+type supervisorCloser struct {
+	stopper *supervisorStopper
+}
+
+func newSupervisorCloser(stopper *supervisorStopper) *supervisorCloser {
+	return &supervisorCloser{stopper: stopper}
+}
+
+// Close stops the supervisor goroutine.
+func (c *supervisorCloser) Close(string) error {
+	if c.stopper != nil {
+		c.stopper.stop()
+	}
+	return nil
+}

@@ -9,16 +9,31 @@ func TestCustomTitleNameGetNameTrimsWhitespace(t *testing.T) {
 	}
 }
 
-func TestCustomTitleNameRenameSanitizesAndDedupes(t *testing.T) {
+func TestCustomTitleNameRenamePreservesExactDisplayName(t *testing.T) {
 	name := CustomTitleName{Title: "Merry Swan"}
-	got := name.Rename("", map[string]bool{"merry-swan": true})
-	if got != "merry-swan-2" {
-		t.Fatalf("Rename() = %q, want %q", got, "merry-swan-2")
+	got := name.Rename("", map[string]bool{})
+	if got != "Merry Swan" {
+		t.Fatalf("Rename() = %q, want %q", got, "Merry Swan")
+	}
+}
+
+func TestCustomTitleNameRenameDedupesExactDisplayName(t *testing.T) {
+	name := CustomTitleName{Title: "Merry Swan"}
+	got := name.Rename("", map[string]bool{"Merry Swan": true})
+	if got != "Merry Swan (2)" {
+		t.Fatalf("Rename() = %q, want %q", got, "Merry Swan (2)")
 	}
 }
 
 func TestCustomTitleNameRenameRejectsEmptyTitles(t *testing.T) {
-	name := CustomTitleName{Title: "🙂🎉"}
+	name := CustomTitleName{Title: "   "}
+	if got := name.Rename("", map[string]bool{}); got != "" {
+		t.Fatalf("Rename() = %q, want empty string", got)
+	}
+}
+
+func TestCustomTitleNameRenameRejectsInvalidDisplayNames(t *testing.T) {
+	name := CustomTitleName{Title: "bad\nname"}
 	if got := name.Rename("", map[string]bool{}); got != "" {
 		t.Fatalf("Rename() = %q, want empty string", got)
 	}

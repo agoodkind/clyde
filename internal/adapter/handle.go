@@ -56,7 +56,9 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 		corr := correlation.FromHTTPHeader(r.Header, reqID)
 		corr.SetHTTPHeaders(r.Header)
 		corr.SetHTTPHeaders(w.Header())
-		ctx := correlation.WithContext(r.Context(), corr)
+		ctx, ingressCancel := context.WithCancel(correlation.WithContext(r.Context(), corr))
+		defer ingressCancel()
+		ctx = context.WithValue(ctx, ingressCancelKey{}, ingressCancel)
 		r = r.WithContext(ctx)
 
 		if s.bodyLogging().Mode != "off" {
