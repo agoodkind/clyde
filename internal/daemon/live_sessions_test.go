@@ -67,13 +67,6 @@ func TestLiveSessionLaunchBasedirRequiresExplicitOrStoredDirectory(t *testing.T)
 
 func TestForegroundLeaseReturnsInternalWhenUUIDAllocationFails(t *testing.T) {
 	tmp := setupDaemonTestHome(t)
-	uuid.DisableRandPool()
-	uuid.SetRand(strings.NewReader(""))
-	t.Cleanup(func() {
-		uuid.SetRand(nil)
-		uuid.DisableRandPool()
-	})
-
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		t.Fatalf("new store: %v", err)
@@ -85,6 +78,12 @@ func TestForegroundLeaseReturnsInternalWhenUUIDAllocationFails(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	srv := newTestServer(t)
+	uuid.DisableRandPool()
+	uuid.SetRand(strings.NewReader(""))
+	t.Cleanup(func() {
+		uuid.SetRand(nil)
+		uuid.DisableRandPool()
+	})
 
 	_, err = srv.AcquireForegroundSession(context.Background(), &clydev1.AcquireForegroundSessionRequest{
 		SessionName: "codex-chat",
