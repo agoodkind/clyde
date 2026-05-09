@@ -317,13 +317,25 @@ func (builder appCallbackBuilder) renameSession(sess *session.Session) (string, 
 	if oldName == "" || oldName == newName {
 		return newName, nil
 	}
-	if err := session.ValidateDisplayName(newName); err != nil {
-		return newName, err
-	}
 	ctx := builder.childContext("dashboard.session.rename")
+	if err := session.ValidateDisplayName(newName); err != nil {
+		slog.WarnContext(ctx, "dashboard.session.rename_invalid_name",
+			"component", "cli",
+			"session", oldName,
+			"new_name", newName,
+			"err", err,
+		)
+		return newName, fmt.Errorf("validate display name: %w", err)
+	}
 	runtime, runtimeErr := registry.ForSession(sess, nil)
 	if runtimeErr == nil {
 		if renameErr := runtime.RenameSession(ctx, sess, newName); renameErr != nil {
+			slog.WarnContext(ctx, "dashboard.session.provider_rename_failed",
+				"component", "cli",
+				"session", oldName,
+				"new_name", newName,
+				"err", renameErr,
+			)
 			return newName, fmt.Errorf("provider rename session: %w", renameErr)
 		}
 	}
@@ -1175,10 +1187,24 @@ func applyPassthroughBootstrapIdentity(
 	return args, env
 }
 
+type passthroughControlArg string
+
+const (
+	passthroughControlArgResumeLong    passthroughControlArg = "--resume"
+	passthroughControlArgResumeShort   passthroughControlArg = "-r"
+	passthroughControlArgContinueLong  passthroughControlArg = "--continue"
+	passthroughControlArgContinueShort passthroughControlArg = "-c"
+	passthroughControlArgSessionID     passthroughControlArg = "--session-id"
+)
+
 func passthroughStartsNewSession(args []string) bool {
 	for _, arg := range args {
-		switch arg {
-		case "--resume", "-r", "--continue", "-c", "--session-id":
+		switch passthroughControlArg(arg) {
+		case passthroughControlArgResumeLong,
+			passthroughControlArgResumeShort,
+			passthroughControlArgContinueLong,
+			passthroughControlArgContinueShort,
+			passthroughControlArgSessionID:
 			return false
 		}
 		if strings.HasPrefix(arg, "--resume=") ||

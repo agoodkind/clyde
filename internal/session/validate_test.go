@@ -118,10 +118,6 @@ var _ = Describe("ValidateLegacySlugName", func() {
 			}
 		})
 	})
-
-	It("keeps ValidateName as a deprecated compatibility wrapper", func() {
-		Expect(session.ValidateName("legacy-slug")).To(Succeed())
-	})
 })
 
 var _ = Describe("ValidateDisplayName", func() {

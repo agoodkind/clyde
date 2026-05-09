@@ -29,7 +29,7 @@ func handleStartupOrResume(
 
 	if sessionName != "" {
 		if envSessionNameValue != "" && sessionName == envSessionNameValue && !store.Exists(sessionName) && hookData.SessionID != "" {
-			if session.ValidateName(envSessionNameValue) == nil {
+			if session.ValidateLegacySlugName(envSessionNameValue) == nil {
 				autoAdoptSession(log, deps, store, envSessionNameValue, hookData, errOut)
 			}
 		}

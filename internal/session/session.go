@@ -163,10 +163,10 @@ func (s *Session) StorageKey() string {
 	return s.ClydeUUID()
 }
 
-// SessionDisplayName returns the best user-facing label for compatibility UI
-// surfaces. It is not an identity source: parent linkage and storage use
-// ClydeUUID/provider ids, and current session-domain names use sess.Name.
-func SessionDisplayName(sess *Session) string {
+// DisplayName returns the best user-facing label for compatibility UI surfaces.
+// It is not an identity source: parent linkage and storage use ClydeUUID/provider
+// ids, and current session-domain names use sess.Name.
+func DisplayName(sess *Session) string {
 	if sess == nil {
 		return ""
 	}
@@ -175,6 +175,10 @@ func SessionDisplayName(sess *Session) string {
 	}
 	return sess.Name
 }
+
+// SessionDisplayName preserves the old package-level helper name for existing
+// callers while new code uses DisplayName to avoid package-name stutter.
+var SessionDisplayName = DisplayName
 
 // SessionProviderCapabilities returns the capabilities for the session provider.
 func (s *Session) SessionProviderCapabilities() ProviderCapabilities {

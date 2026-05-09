@@ -121,12 +121,12 @@ func ReadTranscriptHeader(path string) (session.DiscoveryResult, bool) {
 func newDiscoveryResultForPath(path string) session.DiscoveryResult {
 	discoveryResult := session.DiscoveryResult{
 		Provider:            session.ProviderClaude,
-		Identity:            session.ProviderSessionID{},
+		Identity:            session.ProviderSessionID{Provider: session.ProviderClaude, ID: ""},
 		WorkspaceRoot:       "",
 		Entrypoint:          "",
 		FirstEntryTime:      time.Time{},
 		NameContract:        nil,
-		ForkParent:          session.ProviderSessionID{},
+		ForkParent:          session.ProviderSessionID{Provider: session.ProviderClaude, ID: ""},
 		IsAutoName:          false,
 		IsForked:            false,
 		IsSubagent:          false,

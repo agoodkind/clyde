@@ -37,37 +37,55 @@ var (
 	ErrInvalidDisplayName = errors.New("invalid display name")
 )
 
+type validationError struct {
+	kind    error
+	message string
+}
+
+func (err validationError) Error() string {
+	return err.message
+}
+
+func (err validationError) Is(target error) bool {
+	return target == err.kind
+}
+
+func invalidSessionNameError(reason string) error {
+	return validationError{
+		kind:    ErrInvalidName,
+		message: ErrInvalidName.Error() + ": " + reason,
+	}
+}
+
+func invalidDisplayNameError(reason string) error {
+	return validationError{
+		kind:    ErrInvalidDisplayName,
+		message: ErrInvalidDisplayName.Error() + ": " + reason,
+	}
+}
+
 // ValidateLegacySlugName checks whether name matches the pre-ClydeUUID slug
 // alias format. It is a compatibility policy for migration and hook-boundary
 // inputs only; session-domain create, lookup, rename, and parent linkage use
 // exact display names plus stable ClydeUUID/provider identity instead.
 func ValidateLegacySlugName(name string) error {
 	if len(name) < MinNameLength {
-		return fmt.Errorf("%w: name must be at least %d characters", ErrInvalidName, MinNameLength)
+		return invalidSessionNameError(fmt.Sprintf("name must be at least %d characters", MinNameLength))
 	}
 
 	if len(name) > MaxNameLength {
-		return fmt.Errorf("%w: name must be at most %d characters", ErrInvalidName, MaxNameLength)
+		return invalidSessionNameError(fmt.Sprintf("name must be at most %d characters", MaxNameLength))
 	}
 
 	if !sessionNameRegex.MatchString(name) {
-		return fmt.Errorf("%w: name must be lowercase alphanumeric with hyphens, starting and ending with alphanumeric", ErrInvalidName)
+		return invalidSessionNameError("name must be lowercase alphanumeric with hyphens, starting and ending with alphanumeric")
 	}
 
-	// Check for consecutive hyphens
 	if strings.Contains(name, "--") {
-		return fmt.Errorf("%w: name cannot contain consecutive hyphens", ErrInvalidName)
+		return invalidSessionNameError("name cannot contain consecutive hyphens")
 	}
 
 	return nil
-}
-
-// ValidateName checks if a legacy slug alias is valid.
-//
-// Deprecated: use ValidateLegacySlugName for compatibility or migration code.
-// New session-domain code should use ValidateDisplayName.
-func ValidateName(name string) error {
-	return ValidateLegacySlugName(name)
 }
 
 // ValidateDisplayName checks whether name is safe to store as Clyde's exact
@@ -76,97 +94,33 @@ func ValidateName(name string) error {
 // is for display and exact lookup.
 func ValidateDisplayName(name string) error {
 	if name != strings.TrimSpace(name) {
-		return fmt.Errorf("%w: name cannot have leading or trailing whitespace", ErrInvalidDisplayName)
+		return invalidDisplayNameError("name cannot have leading or trailing whitespace")
 	}
 
 	if utf8.RuneCountInString(name) < MinDisplayNameLength {
-		return fmt.Errorf("%w: name must be at least %d visible character", ErrInvalidDisplayName, MinDisplayNameLength)
+		return invalidDisplayNameError(fmt.Sprintf("name must be at least %d visible character", MinDisplayNameLength))
 	}
 
 	if !utf8.ValidString(name) {
-		return fmt.Errorf("%w: name must be valid UTF-8", ErrInvalidDisplayName)
+		return invalidDisplayNameError("name must be valid UTF-8")
 	}
 
 	if utf8.RuneCountInString(name) > MaxDisplayNameLength {
-		return fmt.Errorf("%w: name must be at most %d characters", ErrInvalidDisplayName, MaxDisplayNameLength)
+		return invalidDisplayNameError(fmt.Sprintf("name must be at most %d characters", MaxDisplayNameLength))
 	}
 
 	for _, r := range name {
 		if unicode.IsControl(r) {
-			return fmt.Errorf("%w: name cannot contain control characters", ErrInvalidDisplayName)
+			return invalidDisplayNameError("name cannot contain control characters")
 		}
 	}
 
 	return nil
 }
 
-// SanitizeLegacySlugName converts an arbitrary string into a legacy slug alias
-// or returns "" when the input has no usable alphanumeric content. This helper
-// exists for compatibility-only boundaries that still need the old
-// lowercase-kebab format; it is not the authoritative session-name policy.
-func SanitizeLegacySlugName(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	raw = strings.ToLower(raw)
-	var b strings.Builder
-	b.Grow(len(raw))
-	for _, r := range raw {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	out := collapseHyphens(b.String())
-	out = strings.Trim(out, "-")
-	if len(out) > MaxNameLength {
-		out = strings.TrimRight(out[:MaxNameLength], "-")
-	}
-	if ValidateLegacySlugName(out) != nil {
-		return ""
-	}
-	return out
-}
-
-// Sanitize converts an arbitrary string into a legacy slug alias.
-//
-// Deprecated: use SanitizeLegacySlugName for compatibility or migration code.
-// New session-domain code should preserve exact display names instead.
-func Sanitize(raw string) string {
-	return SanitizeLegacySlugName(raw)
-}
-
-// collapseHyphens replaces every run of consecutive hyphens with a
-// single hyphen. Used by Sanitize to meet the no-consecutive-hyphens
-// rule enforced by ValidateLegacySlugName.
-func collapseHyphens(s string) string {
-	if !strings.Contains(s, "--") {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	prevHyphen := false
-	for _, r := range s {
-		if r == '-' {
-			if prevHyphen {
-				continue
-			}
-			prevHyphen = true
-		} else {
-			prevHyphen = false
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// NameCollisionMax bounds the counter suffix loop used by UniqueName so
-// an adversarial taken set cannot spin forever. Well above any realistic
-// number of same-base sessions a user would ever create.
+// NameCollisionMax bounds the counter suffix loop so an adversarial taken set
+// cannot spin forever. Well above any realistic number of same-base sessions a
+// user would ever create.
 const NameCollisionMax = 1000
 
 // UniqueLegacySlugName returns base if it is not in taken, otherwise appends a
@@ -190,14 +144,6 @@ func UniqueLegacySlugName(base string, taken map[string]bool) string {
 		}
 	}
 	return base
-}
-
-// UniqueName returns a unique legacy slug alias.
-//
-// Deprecated: use UniqueLegacySlugName for compatibility or migration code.
-// New session-domain code should use UniqueDisplayName.
-func UniqueName(base string, taken map[string]bool) string {
-	return UniqueLegacySlugName(base, taken)
 }
 
 // UniqueDisplayName returns base if it is not taken, otherwise appends a
