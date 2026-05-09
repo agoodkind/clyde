@@ -481,26 +481,6 @@ func TestUX_CodexSessionOptionsUseHistoryReadableAffordances(t *testing.T) {
 	if !ok {
 		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
 	}
-<<<<<<< HEAD
-	view := findModalEntry(modal, "View transcript")
-	if view == nil {
-		t.Fatalf("missing %q entry", "View transcript")
-	}
-	if view.Disabled {
-		t.Fatalf("%q disabled = true, want false for codex history-readable session", view.Label)
-	}
-	for _, label := range []string{"Export transcript", "Compact", "Fork"} {
-||||||| 93de669
-	for _, label := range []string{
-		"View transcript",
-		"Export transcript",
-		"Drive in sidecar",
-		"Open live URL",
-		"Copy live URL",
-		"Compact",
-		"Fork",
-	} {
-=======
 	for _, label := range []string{
 		"View transcript",
 		"Export transcript",
@@ -520,7 +500,6 @@ func TestUX_CodexSessionOptionsUseHistoryReadableAffordances(t *testing.T) {
 		"Compact",
 		"Fork",
 	} {
->>>>>>> ag/clyde-296c-tui-actions-live
 		entry := findModalEntry(modal, label)
 		if entry == nil {
 			t.Fatalf("missing %q entry", label)

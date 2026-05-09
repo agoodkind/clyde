@@ -970,12 +970,7 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 		return empty, false
 	}
 	if !sessionHistoryReadable(sess) {
-<<<<<<< HEAD
 		var emptyContextUsage SessionContextUsage
-||||||| 93de669
-	if !sessionCapabilities(sess).TranscriptExport {
-=======
->>>>>>> ag/clyde-296c-tui-actions-live
 		return SessionDetail{
 			Model:                 valueOr(a.modelCache[sess.Name], "-"),
 			Provider:              string(sess.ProviderID()),
