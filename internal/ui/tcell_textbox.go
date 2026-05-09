@@ -62,6 +62,10 @@ type TextSegment struct {
 	Spinner bool
 }
 
+func newTextSegment(text string, style tcell.Style) TextSegment {
+	return TextSegment{Text: text, Style: style, Spinner: false}
+}
+
 // renderedText returns the on-screen string for this segment, applying
 // the live spinner glyph when Spinner is true.
 func (s TextSegment) renderedText() string {
@@ -110,7 +114,7 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 	} else {
 		src = make([][]TextSegment, len(tb.Lines))
 		for i, ln := range tb.Lines {
-			src[i] = []TextSegment{{Text: stripMarkup(ln), Style: StyleDefault}}
+			src[i] = []TextSegment{newTextSegment(stripMarkup(ln), StyleDefault)}
 		}
 	}
 	if !tb.Wrap {
@@ -143,14 +147,14 @@ func (tb *TextBox) wrappedLines(w int) [][]TextSegment {
 			}
 			candidate += word
 			if runeCount(candidate) > w && cur != "" {
-				out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+				out = append(out, []TextSegment{newTextSegment(cur, StyleDefault)})
 				cur = word
 			} else {
 				cur = candidate
 			}
 		}
 		if cur != "" {
-			out = append(out, []TextSegment{{Text: cur, Style: StyleDefault}})
+			out = append(out, []TextSegment{newTextSegment(cur, StyleDefault)})
 		}
 	}
 	tb.wrappedCache = out

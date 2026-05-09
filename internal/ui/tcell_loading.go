@@ -9,6 +9,21 @@ import (
 
 const loadingFrameInterval = 100 * time.Millisecond
 
+type loadingStatus string
+
+const (
+	loadingStatusEmpty       loadingStatus = ""
+	loadingStatusProbing     loadingStatus = "probing"
+	loadingStatusLoadingDots loadingStatus = "loading..."
+	loadingStatusLoading     loadingStatus = "loading"
+	loadingStatusCooldown    loadingStatus = "cooldown"
+	loadingStatusRefreshing  loadingStatus = "refreshing"
+	loadingStatusUnsupported loadingStatus = "unsupported"
+	loadingStatusCancelled   loadingStatus = "cancelled"
+	loadingStatusCanceled    loadingStatus = "canceled"
+	loadingStatusProbeFailed loadingStatus = "probe_failed"
+)
+
 // LoadingSpinner is the shared TUI loading affordance. Keep loading copy
 // routed through this type so panes, overlays, and the status bar animate
 // consistently.
@@ -39,7 +54,7 @@ func (s LoadingSpinner) Segment() TextSegment {
 	if style == (tcell.Style{}) {
 		style = StyleMuted
 	}
-	return TextSegment{Text: s.Text(), Style: style}
+	return newTextSegment(s.Text(), style)
 }
 
 func (s LoadingSpinner) Draw(scr tcell.Screen, x, y int, width int) {
@@ -58,21 +73,8 @@ func currentLoadingFrame() int {
 	return int(currentUITime().UnixNano() / int64(loadingFrameInterval))
 }
 
-func loadingValue(status string) string {
-	trimmed := strings.TrimSpace(status)
-	switch {
-	case trimmed == "", trimmed == "loading...":
-		return ClockLoadingSpinner("loading...").Text()
-	case isTerminalLoadingStatus(trimmed):
-		return trimmed
-	default:
-		return ClockLoadingSpinner(trimmed).Text()
-	}
-}
-
-// loadingSegment is the inline-cell counterpart to loadingValue. It
-// returns a TextSegment whose glyph is substituted at draw time so
-// the spinner ticks live without rebuilding the parent segment list.
+// loadingSegment returns a TextSegment whose glyph is substituted at draw
+// time so the spinner ticks live without rebuilding the parent segment list.
 // Use this whenever the loading copy lives inside a [][]TextSegment
 // column (stats panes, kv rows) where a baked-in glyph would freeze.
 //
@@ -84,7 +86,7 @@ func loadingSegment(status string) TextSegment {
 		trimmed = "loading..."
 	}
 	if isTerminalLoadingStatus(trimmed) {
-		return TextSegment{Text: trimmed, Style: StyleMuted}
+		return newTextSegment(trimmed, StyleMuted)
 	}
 	return TextSegment{Text: trimmed, Style: StyleMuted, Spinner: true}
 }
@@ -94,9 +96,19 @@ func loadingSegment(status string) TextSegment {
 // details pane hides redundant Diagnostics rows for these so the
 // user does not see the same word in two places at once.
 func isGenericLoadingStatus(status string) bool {
-	switch strings.TrimSpace(status) {
-	case "", "probing", "loading...", "loading", "cooldown", "refreshing":
+	switch loadingStatus(strings.TrimSpace(status)) {
+	case loadingStatusEmpty,
+		loadingStatusProbing,
+		loadingStatusLoadingDots,
+		loadingStatusLoading,
+		loadingStatusCooldown,
+		loadingStatusRefreshing:
 		return true
+	case loadingStatusUnsupported,
+		loadingStatusCancelled,
+		loadingStatusCanceled,
+		loadingStatusProbeFailed:
+		return false
 	}
 	return false
 }
@@ -112,9 +124,19 @@ func isTerminalLoadingStatus(status string) bool {
 	if strings.HasPrefix(trimmed, "failed") {
 		return true
 	}
-	switch trimmed {
-	case "unsupported", "cancelled", "canceled", "probe_failed":
+	switch loadingStatus(trimmed) {
+	case loadingStatusUnsupported,
+		loadingStatusCancelled,
+		loadingStatusCanceled,
+		loadingStatusProbeFailed:
 		return true
+	case loadingStatusEmpty,
+		loadingStatusProbing,
+		loadingStatusLoadingDots,
+		loadingStatusLoading,
+		loadingStatusCooldown,
+		loadingStatusRefreshing:
+		return false
 	}
 	return false
 }
