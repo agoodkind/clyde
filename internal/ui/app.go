@@ -484,6 +484,12 @@ type App struct {
 	daemonOnline   bool
 	daemonLastErr  string
 	daemonLastSeen time.Time
+	// daemonOfflineSince records when the daemon last transitioned from
+	// online to offline. The status bar uses this with daemonOfflineDebounce
+	// so a brief stream-close-and-reconnect (the registry supervisor's
+	// retry loop) does not flicker DAEMON OFFLINE on screen. Zero means
+	// the daemon is online or has not yet gone offline.
+	daemonOfflineSince time.Time
 
 	// detailCache stores the fully-extracted SessionDetail keyed by the
 	// persisted row name. Populated off the UI goroutine by loadDetailAsync
@@ -2351,6 +2357,7 @@ func (a *App) setDaemonOnline(source string) {
 	a.daemonOnline = true
 	a.daemonLastErr = ""
 	a.daemonLastSeen = a.now()
+	a.daemonOfflineSince = time.Time{}
 	a.daemonMu.Unlock()
 
 	if !wasOnline {
@@ -2373,6 +2380,9 @@ func (a *App) setDaemonOffline(source string, err error) {
 	errorChanged := a.daemonLastErr != errorMessage
 	a.daemonOnline = false
 	a.daemonLastErr = errorMessage
+	if a.daemonOfflineSince.IsZero() {
+		a.daemonOfflineSince = a.now()
+	}
 	a.daemonMu.Unlock()
 
 	if wasOnline || errorChanged {
@@ -2411,6 +2421,62 @@ func (a *App) isDaemonOnline() bool {
 	a.daemonMu.RLock()
 	defer a.daemonMu.RUnlock()
 	return a.daemonOnline
+}
+
+// populateStatusBarFields refreshes every status bar field from the
+// current App state so the draw routine stays small enough for the
+// gocognit ceiling. The daemon fields are split off into a helper
+// because they own the debounce logic for the offline badge.
+func (a *App) populateStatusBarFields() {
+	a.status.Mode = a.mode
+	a.status.Position = a.positionTextFor()
+	a.status.Clock = a.now().Format("15:04:05")
+	a.status.LegendOverride = nil
+	if provider, ok := a.overlay.(LegendProvider); ok {
+		a.status.LegendOverride = provider.StatusLegendActions()
+	}
+	a.liveURLMu.RLock()
+	a.status.LiveURLCount = len(a.liveURLs)
+	a.liveURLMu.RUnlock()
+	a.applyDaemonStatusBarFields()
+}
+
+// applyDaemonStatusBarFields populates the status bar widget's
+// daemon-related fields using the debounced offline state. Hiding
+// daemonLastErr while the badge is hidden keeps the bottom bar
+// quiet during a transient registry stream reconnect.
+func (a *App) applyDaemonStatusBarFields() {
+	displayOffline := a.shouldDisplayDaemonOffline()
+	a.status.DaemonOnline = !displayOffline
+	a.status.DaemonConnecting = a.showStartupLoadingState() && displayOffline
+	a.status.DaemonSpinner = LoadingSpinnerGlyph(a.spinnerFrame)
+	if !displayOffline {
+		a.status.DaemonStatus = ""
+		return
+	}
+	a.daemonMu.RLock()
+	a.status.DaemonStatus = shortDaemonStatus(a.daemonLastErr)
+	a.daemonMu.RUnlock()
+}
+
+// shouldDisplayDaemonOffline reports whether the status bar should
+// render the offline badge. It returns true only after the daemon
+// has been continuously offline for daemonOfflineDebounce, so a
+// brief registry stream close-and-reopen (which the registry
+// supervisor recovers from on its own) does not cause the badge to
+// flash on and off across consecutive draw frames.
+func (a *App) shouldDisplayDaemonOffline() bool {
+	a.daemonMu.RLock()
+	online := a.daemonOnline
+	offlineSince := a.daemonOfflineSince
+	a.daemonMu.RUnlock()
+	if online {
+		return false
+	}
+	if offlineSince.IsZero() {
+		return true
+	}
+	return a.now().Sub(offlineSince) >= daemonOfflineDebounce
 }
 
 func (a *App) isSessionsLoading() bool {
@@ -3101,6 +3167,14 @@ func (a *App) handleSpinnerTick() {
 // each poll is dominated by an RPC round trip; 1.5s keeps the user-
 // visible delay short without producing a poll storm.
 const detailRepollInterval = 1500 * time.Millisecond
+
+// daemonOfflineDebounce is the minimum time the daemon must stay
+// continuously offline before the status bar surfaces DAEMON OFFLINE.
+// The registry supervisor reconnects after a short backoff, so a
+// transient stream close that resolves under this window must not
+// flicker the badge on screen. The window is small enough that a
+// real outage still surfaces within half a second.
+const daemonOfflineDebounce = 500 * time.Millisecond
 
 // maybeRepollPendingDetails re-issues GetSessionDetail for any session
 // whose cached detail is still pending. The daemon kicks off a probe on
@@ -4034,44 +4108,7 @@ func (a *App) draw() {
 	// Tab strip (purple). Always visible across tabs so the user can
 	// click between Sessions and Settings. Runtime diagnostics and
 	// dashboard summary render right-aligned on the same row.
-	a.tabs.Active = a.activeTab
-	a.tabs.Draw(a.screen, Rect{X: 0, Y: 0, W: w, H: 1})
-
-	right := "clyde"
-	if !a.startupLoading {
-		right += fmt.Sprintf("  %d sessions", len(a.visibleIdx))
-		if a.hiddenCount > 0 {
-			right += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
-		} else if a.showEphemeral {
-			right += "  (showing test/tmp)"
-		}
-		if a.filter != "" {
-			right += fmt.Sprintf("  (filter: %q)", a.filter)
-		}
-	}
-	// Header runtime stamp keeps build/process identity and health age.
-	lastHeartbeatText := "--"
-	if !a.lastHeartbeatAt.IsZero() {
-		lastHeartbeatText = formatHeartbeatAge(time.Since(a.lastHeartbeatAt))
-	}
-	runtimeStamp := fmt.Sprintf("b:%s x:%s r:%s lh:%s",
-		a.buildHash,
-		a.executableHash,
-		a.runHash,
-		lastHeartbeatText,
-	)
-	rightX := w
-	rightText := " " + right + " "
-	rx := rightX - runeCount(rightText)
-	if rx >= 0 {
-		drawString(a.screen, rx, 0, StyleTabBar.Bold(true), rightText, rightX-rx)
-		rightX = rx
-	}
-	stampText := " " + runtimeStamp + " "
-	sx := rightX - runeCount(stampText)
-	if sx > 0 {
-		drawString(a.screen, sx, 0, StyleTabBar, stampText, rightX-sx)
-	}
+	a.drawTabStripHeader(w)
 
 	_, compactOverlay := a.overlay.(*CompactPanel)
 	if !compactOverlay {
@@ -4100,22 +4137,7 @@ func (a *App) draw() {
 	bodyDuration := time.Since(clearStartedAt) - clearDuration
 
 	// Status bar
-	a.status.Mode = a.mode
-	a.status.Position = a.positionTextFor()
-	a.status.Clock = a.now().Format("15:04:05")
-	a.status.LegendOverride = nil
-	if provider, ok := a.overlay.(LegendProvider); ok {
-		a.status.LegendOverride = provider.StatusLegendActions()
-	}
-	a.liveURLMu.RLock()
-	a.status.LiveURLCount = len(a.liveURLs)
-	a.liveURLMu.RUnlock()
-	a.status.DaemonOnline = a.isDaemonOnline()
-	a.status.DaemonConnecting = a.showStartupLoadingState() && !a.isDaemonOnline()
-	a.status.DaemonSpinner = LoadingSpinnerGlyph(a.spinnerFrame)
-	a.daemonMu.RLock()
-	a.status.DaemonStatus = shortDaemonStatus(a.daemonLastErr)
-	a.daemonMu.RUnlock()
+	a.populateStatusBarFields()
 	a.status.Draw(a.screen, a.statusRect)
 	statusDuration := time.Since(clearStartedAt) - clearDuration - bodyDuration
 
@@ -4135,37 +4157,109 @@ func (a *App) draw() {
 	a.runTerminalCall("show", func() {
 		a.screen.Show()
 	})
-	showDuration := time.Since(showStartedAt)
-	totalDuration := time.Since(drawStartedAt)
+	a.recordDrawTiming(drawTimingSummary{
+		drawStartedAt:  drawStartedAt,
+		showStartedAt:  showStartedAt,
+		layoutDuration: layoutDuration,
+		clearDuration:  clearDuration,
+		bodyDuration:   bodyDuration,
+		statusDuration: statusDuration,
+		width:          w,
+		height:         h,
+	})
+}
+
+// drawTabStripHeader paints the top tab bar plus the right-aligned
+// dashboard summary and runtime identity stamp. Extracted from draw
+// to keep that function under the configured statement budget.
+func (a *App) drawTabStripHeader(w int) {
+	a.tabs.Active = a.activeTab
+	a.tabs.Draw(a.screen, Rect{X: 0, Y: 0, W: w, H: 1})
+
+	right := "clyde"
+	if !a.startupLoading {
+		right += fmt.Sprintf("  %d sessions", len(a.visibleIdx))
+		if a.hiddenCount > 0 {
+			right += fmt.Sprintf("  (%d hidden, H to show)", a.hiddenCount)
+		} else if a.showEphemeral {
+			right += "  (showing test/tmp)"
+		}
+		if a.filter != "" {
+			right += fmt.Sprintf("  (filter: %q)", a.filter)
+		}
+	}
+	lastHeartbeatText := "--"
+	if !a.lastHeartbeatAt.IsZero() {
+		lastHeartbeatText = formatHeartbeatAge(time.Since(a.lastHeartbeatAt))
+	}
+	runtimeStamp := fmt.Sprintf("b:%s x:%s r:%s lh:%s",
+		a.buildHash,
+		a.executableHash,
+		a.runHash,
+		lastHeartbeatText,
+	)
+	rightX := w
+	rightText := " " + right + " "
+	rx := rightX - runeCount(rightText)
+	if rx >= 0 {
+		drawString(a.screen, rx, 0, StyleTabBar.Bold(true), rightText, rightX-rx)
+		rightX = rx
+	}
+	stampText := " " + runtimeStamp + " "
+	sx := rightX - runeCount(stampText)
+	if sx > 0 {
+		drawString(a.screen, sx, 0, StyleTabBar, stampText, rightX-sx)
+	}
+}
+
+// drawTimingSummary captures the per-stage durations and viewport
+// dimensions a single draw frame measured. Bundling them in a struct
+// keeps recordDrawTiming small and lets the draw function stay under
+// the configured statement budget.
+type drawTimingSummary struct {
+	drawStartedAt  time.Time
+	showStartedAt  time.Time
+	layoutDuration time.Duration
+	clearDuration  time.Duration
+	bodyDuration   time.Duration
+	statusDuration time.Duration
+	width          int
+	height         int
+}
+
+func (a *App) recordDrawTiming(s drawTimingSummary) {
+	showDuration := time.Since(s.showStartedAt)
+	totalDuration := time.Since(s.drawStartedAt)
 	a.drawCount++
 	a.lastDrawAt = a.now()
 	a.lastDrawSpinner = a.spinnerFrame
 	overlayDuration := time.Duration(0)
 	if a.overlay != nil {
-		overlayDuration = max(totalDuration-layoutDuration-clearDuration-bodyDuration-statusDuration-showDuration, 0)
+		overlayDuration = max(totalDuration-s.layoutDuration-s.clearDuration-s.bodyDuration-s.statusDuration-showDuration, 0)
 	}
-	if totalDuration > 20*time.Millisecond {
-		logLevel := slog.LevelDebug
-		if totalDuration > 75*time.Millisecond || clearDuration > 50*time.Millisecond || showDuration > 30*time.Millisecond {
-			logLevel = slog.LevelWarn
-		}
-		tuiLog.Logger().Log(a.ctx, logLevel, "tui.draw.timing",
-			"component", "tui",
-			"total_ms", totalDuration.Milliseconds(),
-			"layout_ms", layoutDuration.Milliseconds(),
-			"clear_ms", clearDuration.Milliseconds(),
-			"body_ms", bodyDuration.Milliseconds(),
-			"status_ms", statusDuration.Milliseconds(),
-			"overlay_ms", overlayDuration.Milliseconds(),
-			"show_ms", showDuration.Milliseconds(),
-			"width", w,
-			"height", h,
-			"active_tab", a.activeTab,
-			"selected", a.selectedSessionName(),
-			"has_overlay", a.overlay != nil,
-			"overlay_type", fmt.Sprintf("%T", a.overlay),
-			"mode", int(a.mode))
+	if totalDuration <= 20*time.Millisecond {
+		return
 	}
+	logLevel := slog.LevelDebug
+	if totalDuration > 75*time.Millisecond || s.clearDuration > 50*time.Millisecond || showDuration > 30*time.Millisecond {
+		logLevel = slog.LevelWarn
+	}
+	tuiLog.Logger().Log(a.ctx, logLevel, "tui.draw.timing",
+		"component", "tui",
+		"total_ms", totalDuration.Milliseconds(),
+		"layout_ms", s.layoutDuration.Milliseconds(),
+		"clear_ms", s.clearDuration.Milliseconds(),
+		"body_ms", s.bodyDuration.Milliseconds(),
+		"status_ms", s.statusDuration.Milliseconds(),
+		"overlay_ms", overlayDuration.Milliseconds(),
+		"show_ms", showDuration.Milliseconds(),
+		"width", s.width,
+		"height", s.height,
+		"active_tab", a.activeTab,
+		"selected", a.selectedSessionName(),
+		"has_overlay", a.overlay != nil,
+		"overlay_type", fmt.Sprintf("%T", a.overlay),
+		"mode", int(a.mode))
 }
 
 func (a *App) layout() {
