@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goodkind.io/clyde/internal/livetrack"
 )
 
 // handleConnect implements RFC 7230 section 4.3.6 HTTP CONNECT
@@ -92,6 +94,19 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		p.log.Warn("mitm.connect.flush_failed", "err", err)
 		return
 	}
+
+	closer := newTunnelCloser(&connCloser{conn: clientConn}, &connCloser{conn: upstream})
+	sess, err := p.Tunnels.Register(r.Context(), "mitm.connect", TunnelMeta{
+		ConnectHost:   host,
+		UpstreamAddr:  target,
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, closer)
+	if err != nil {
+		p.log.WarnContext(r.Context(), "mitm.connect.register_rejected", "target", target, "err", err)
+		return
+	}
+	defer p.Tunnels.Release(r.Context(), sess, "mitm.connect.tunnel_closed")
 
 	p.log.Info("mitm.connect.tunnel_open",
 		"target", target,
@@ -193,8 +208,20 @@ func (p *Proxy) handleCursorTLSConnect(ctx context.Context, w http.ResponseWrite
 		p.log.WarnContext(ctx, "mitm.cursor.connect.client_tls_failed", "target", target, "host", host, "err", err)
 		return
 	}
+	closer := newTunnelCloser(&connCloser{conn: tlsConn}, &connCloser{conn: clientConn})
+	sess, err := p.Tunnels.Register(ctx, "mitm.cursor.tls", TunnelMeta{
+		ConnectHost:   host,
+		UpstreamAddr:  target,
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, closer)
+	if err != nil {
+		p.log.WarnContext(ctx, "mitm.cursor.connect.register_rejected", "target", target, "err", err)
+		return
+	}
+	defer p.Tunnels.Release(ctx, sess, "mitm.cursor.tls.closed")
 	p.log.InfoContext(ctx, "mitm.cursor.connect.intercept_open", "target", target, "host", host)
-	p.serveCursorInterceptedHTTP(tlsConn, target, host)
+	p.serveCursorInterceptedHTTP(ctx, tlsConn, target, host, sess)
 	p.log.InfoContext(ctx, "mitm.cursor.connect.intercept_closed",
 		"target", target,
 		"host", host,
@@ -202,21 +229,40 @@ func (p *Proxy) handleCursorTLSConnect(ctx context.Context, w http.ResponseWrite
 	)
 }
 
-func (p *Proxy) serveCursorInterceptedHTTP(client *tls.Conn, target string, host string) {
+func (p *Proxy) serveCursorInterceptedHTTP(ctx context.Context, client *tls.Conn, target string, host string, parent *livetrack.Session[TunnelMeta]) {
 	reader := bufio.NewReader(client)
 	writer := bufio.NewWriter(client)
 	for {
 		req, err := http.ReadRequest(reader)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				p.log.Debug("mitm.cursor.http.read_request_failed", "host", host, "err", err)
+				p.log.DebugContext(ctx, "mitm.cursor.http.read_request_failed", "host", host, "err", err)
 			}
 			return
 		}
-		if err := p.handleCursorInterceptedRequest(writer, req, target, host); err != nil {
-			p.log.Warn("mitm.cursor.http.request_failed", "host", host, "path", req.URL.Path, "err", err)
+		// Register per-request session so the daemon's reload drain
+		// sees in-flight cursor exchanges, not just the parent TLS
+		// session. The closer terminates the underlying TLS conn so
+		// force-close interrupts a hung intercepted request. The
+		// parent linkage records the TLS session id so operators can
+		// correlate request bursts back to their CONNECT tunnel.
+		closer := newTunnelCloser(&connCloser{conn: client}, nil)
+		reqSess, registerErr := p.Tunnels.Register(ctx, "mitm.cursor.http", TunnelMeta{
+			ConnectHost:   host,
+			UpstreamAddr:  target,
+			CaptureFile:   "",
+			KeepaliveSeen: false,
+		}, closer, livetrack.WithParent(parent))
+		if registerErr != nil {
+			p.log.WarnContext(ctx, "mitm.cursor.http.register_rejected", "host", host, "err", registerErr)
 			return
 		}
+		if err := p.handleCursorInterceptedRequest(writer, req, target, host); err != nil {
+			p.log.WarnContext(ctx, "mitm.cursor.http.request_failed", "host", host, "path", req.URL.Path, "err", err)
+			p.Tunnels.Release(ctx, reqSess, "mitm.cursor.http.failed")
+			return
+		}
+		p.Tunnels.Release(ctx, reqSess, "mitm.cursor.http.completed")
 		if req.Close {
 			return
 		}

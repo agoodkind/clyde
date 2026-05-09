@@ -10,6 +10,71 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
+// mustTextBlock asserts that content[idx] is a TextBlock and returns it.
+func mustTextBlock(t *testing.T, content []AnthContentBlock, idx int) TextBlock {
+	t.Helper()
+	if idx >= len(content) {
+		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
+	}
+	tb, ok := content[idx].(TextBlock)
+	if !ok {
+		t.Fatalf("content[%d] = %T, want TextBlock", idx, content[idx])
+	}
+	return tb
+}
+
+// mustToolUseBlock asserts that content[idx] is a ToolUseBlock and returns it.
+func mustToolUseBlock(t *testing.T, content []AnthContentBlock, idx int) ToolUseBlock {
+	t.Helper()
+	if idx >= len(content) {
+		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
+	}
+	tub, ok := content[idx].(ToolUseBlock)
+	if !ok {
+		t.Fatalf("content[%d] = %T, want ToolUseBlock", idx, content[idx])
+	}
+	return tub
+}
+
+// mustToolResultBlock asserts that content[idx] is a ToolResultBlock and returns it.
+func mustToolResultBlock(t *testing.T, content []AnthContentBlock, idx int) ToolResultBlock {
+	t.Helper()
+	if idx >= len(content) {
+		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
+	}
+	trb, ok := content[idx].(ToolResultBlock)
+	if !ok {
+		t.Fatalf("content[%d] = %T, want ToolResultBlock", idx, content[idx])
+	}
+	return trb
+}
+
+// mustThinkingBlock asserts that content[idx] is a ThinkingBlock and returns it.
+func mustThinkingBlock(t *testing.T, content []AnthContentBlock, idx int) ThinkingBlock {
+	t.Helper()
+	if idx >= len(content) {
+		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
+	}
+	tb, ok := content[idx].(ThinkingBlock)
+	if !ok {
+		t.Fatalf("content[%d] = %T, want ThinkingBlock", idx, content[idx])
+	}
+	return tb
+}
+
+// mustImageBlock asserts that content[idx] is an ImageBlock and returns it.
+func mustImageBlock(t *testing.T, content []AnthContentBlock, idx int) ImageBlock {
+	t.Helper()
+	if idx >= len(content) {
+		t.Fatalf("content index %d out of range (len=%d)", idx, len(content))
+	}
+	ib, ok := content[idx].(ImageBlock)
+	if !ok {
+		t.Fatalf("content[%d] = %T, want ImageBlock", idx, content[idx])
+	}
+	return ib
+}
+
 func TestTranslateRequestSimpleUserText(t *testing.T) {
 	t.Parallel()
 	req := adapteropenai.ChatRequest{Model: "x", Messages: []adapteropenai.ChatMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}}}
@@ -20,8 +85,12 @@ func TestTranslateRequestSimpleUserText(t *testing.T) {
 	if len(out.Messages) != 1 || out.Messages[0].Role != "user" {
 		t.Fatalf("unexpected messages: %+v", out.Messages)
 	}
-	if len(out.Messages[0].Content) != 1 || out.Messages[0].Content[0].Text != "hello" {
+	if len(out.Messages[0].Content) != 1 {
 		t.Fatalf("unexpected content: %+v", out.Messages[0].Content)
+	}
+	tb := mustTextBlock(t, out.Messages[0].Content, 0)
+	if tb.Text != "hello" {
+		t.Fatalf("text=%q want hello", tb.Text)
 	}
 }
 
@@ -32,8 +101,12 @@ func TestTranslateRequestContentPartsTextOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Messages[0].Content) != 1 || out.Messages[0].Content[0].Text != "hi" {
+	if len(out.Messages[0].Content) != 1 {
 		t.Fatalf("got %+v", out.Messages[0].Content)
+	}
+	tb := mustTextBlock(t, out.Messages[0].Content, 0)
+	if tb.Text != "hi" {
+		t.Fatalf("text=%q want hi", tb.Text)
 	}
 }
 
@@ -44,7 +117,8 @@ func TestTranslateRequestImageDataURI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := out.Messages[0].Content[0].Source
+	ib := mustImageBlock(t, out.Messages[0].Content, 0)
+	src := ib.Source
 	if src == nil || src.Type != "base64" || src.MediaType != "image/png" || src.Data != "iVBOR" {
 		t.Fatalf("unexpected source: %+v", src)
 	}
@@ -57,7 +131,8 @@ func TestTranslateRequestImageHTTPSURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := out.Messages[0].Content[0].Source
+	ib := mustImageBlock(t, out.Messages[0].Content, 0)
+	src := ib.Source
 	if src == nil || src.Type != "url" || src.URL != "https://x/y.png" {
 		t.Fatalf("unexpected source: %+v", src)
 	}
@@ -183,8 +258,8 @@ func TestTranslateRequestAssistantWithToolCalls(t *testing.T) {
 	if msg.Role != "assistant" || len(msg.Content) != 2 {
 		t.Fatalf("unexpected assistant: %+v", msg)
 	}
-	tu := msg.Content[1]
-	if tu.Type != "tool_use" || tu.Name != "get_weather" || string(tu.Input) != `{"loc":"NY"}` {
+	tu := mustToolUseBlock(t, msg.Content, 1)
+	if tu.Name != "get_weather" || string(tu.Input) != `{"loc":"NY"}` {
 		t.Fatalf("unexpected tool block: %+v", tu)
 	}
 }
@@ -224,14 +299,17 @@ func TestTranslateRequestAssistantWithMultipleToolCallsPreservesOrder(t *testing
 	if len(msg.Content) != 3 {
 		t.Fatalf("content len = %d want 3 (%+v)", len(msg.Content), msg.Content)
 	}
-	if msg.Content[0].Type != "text" || msg.Content[0].Text != "working" {
-		t.Fatalf("first block = %+v", msg.Content[0])
+	tb0 := mustTextBlock(t, msg.Content, 0)
+	if tb0.Text != "working" {
+		t.Fatalf("first block text=%q want working", tb0.Text)
 	}
-	if msg.Content[1].Type != "tool_use" || msg.Content[1].Name != "get_weather" || string(msg.Content[1].Input) != `{"loc":"NY"}` {
-		t.Fatalf("second block = %+v", msg.Content[1])
+	tu1 := mustToolUseBlock(t, msg.Content, 1)
+	if tu1.Name != "get_weather" || string(tu1.Input) != `{"loc":"NY"}` {
+		t.Fatalf("second block = %+v", tu1)
 	}
-	if msg.Content[2].Type != "tool_use" || msg.Content[2].Name != "write_file" || string(msg.Content[2].Input) != `{"path":"out.md"}` {
-		t.Fatalf("third block = %+v", msg.Content[2])
+	tu2 := mustToolUseBlock(t, msg.Content, 2)
+	if tu2.Name != "write_file" || string(tu2.Input) != `{"path":"out.md"}` {
+		t.Fatalf("third block = %+v", tu2)
 	}
 }
 
@@ -249,8 +327,8 @@ func TestTranslateRequestToolRoleMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := out.Messages[0].Content[0]
-	if b.Type != "tool_result" || b.ToolUseID != "toolu_1" || b.ResultContent != "result" {
+	b := mustToolResultBlock(t, out.Messages[0].Content, 0)
+	if b.ToolUseID != "toolu_1" || b.ResultContent != "result" {
 		t.Fatalf("unexpected block: %+v", b)
 	}
 }
@@ -411,23 +489,16 @@ func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) 
 	if len(asst.Content) != 2 {
 		t.Fatalf("assistant blocks=%d, want 2 (thinking + text); got %+v", len(asst.Content), asst.Content)
 	}
-	if asst.Content[0].Type != "thinking" {
-		t.Fatalf("block0 type=%q want thinking", asst.Content[0].Type)
+	tb0 := mustThinkingBlock(t, asst.Content, 0)
+	if tb0.Thinking != "I should answer 42." {
+		t.Fatalf("block0 thinking=%q want %q", tb0.Thinking, "I should answer 42.")
 	}
-	if asst.Content[0].Thinking != "I should answer 42." {
-		t.Fatalf("block0 thinking=%q want %q", asst.Content[0].Thinking, "I should answer 42.")
+	tb1 := mustTextBlock(t, asst.Content, 1)
+	if !strings.Contains(tb1.Text, "The answer is 42.") {
+		t.Fatalf("block1 text=%q should contain real answer", tb1.Text)
 	}
-	if asst.Content[0].Text != "" {
-		t.Fatalf("block0 text should be empty on a thinking block, got %q", asst.Content[0].Text)
-	}
-	if asst.Content[1].Type != "text" {
-		t.Fatalf("block1 type=%q want text", asst.Content[1].Type)
-	}
-	if !strings.Contains(asst.Content[1].Text, "The answer is 42.") {
-		t.Fatalf("block1 text=%q should contain real answer", asst.Content[1].Text)
-	}
-	if strings.Contains(asst.Content[1].Text, "clyde-thinking") {
-		t.Fatalf("text block leaked envelope marker: %q", asst.Content[1].Text)
+	if strings.Contains(tb1.Text, "clyde-thinking") {
+		t.Fatalf("text block leaked envelope marker: %q", tb1.Text)
 	}
 	wire, _ := ToAPIRequest(out, "claude-x", false)
 	encoded, err := json.Marshal(wire.Messages[1])
@@ -474,14 +545,15 @@ func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testin
 		t.Fatal(err)
 	}
 	asst := out.Messages[1]
-	if len(asst.Content) < 1 || asst.Content[0].Type != "thinking" {
-		t.Fatalf("assistant blocks missing leading thinking block: %+v", asst.Content)
+	if len(asst.Content) < 1 {
+		t.Fatalf("assistant blocks empty")
 	}
-	if asst.Content[0].Thinking != "deliberation body" {
-		t.Fatalf("thinking body=%q want %q", asst.Content[0].Thinking, "deliberation body")
+	tb0 := mustThinkingBlock(t, asst.Content, 0)
+	if tb0.Thinking != "deliberation body" {
+		t.Fatalf("thinking body=%q want %q", tb0.Thinking, "deliberation body")
 	}
-	if asst.Content[0].Signature != "OPAQUE_SIG_BASE64==" {
-		t.Fatalf("thinking block signature=%q want OPAQUE_SIG_BASE64==", asst.Content[0].Signature)
+	if tb0.Signature != "OPAQUE_SIG_BASE64==" {
+		t.Fatalf("thinking block signature=%q want OPAQUE_SIG_BASE64==", tb0.Signature)
 	}
 }
 
@@ -510,15 +582,21 @@ func TestTranslateRequestAssistantNoticeIsDroppedFromUpstream(t *testing.T) {
 	}
 	asst := out.Messages[1]
 	for _, blk := range asst.Content {
-		if strings.Contains(blk.Text, "clyde-notice") || strings.Contains(blk.Text, "95% used") {
-			t.Fatalf("notice envelope leaked upstream: %+v", blk)
+		if tb, ok := blk.(TextBlock); ok {
+			if strings.Contains(tb.Text, "clyde-notice") || strings.Contains(tb.Text, "95% used") {
+				t.Fatalf("notice envelope leaked upstream: %+v", blk)
+			}
 		}
-		if blk.Type == "thinking" {
+		if _, ok := blk.(ThinkingBlock); ok {
 			t.Fatalf("notice should not become a thinking block: %+v", blk)
 		}
 	}
-	if len(asst.Content) != 1 || asst.Content[0].Type != "text" || !strings.Contains(asst.Content[0].Text, "Real answer.") {
+	if len(asst.Content) != 1 {
 		t.Fatalf("expected single text block with real answer, got %+v", asst.Content)
+	}
+	tb := mustTextBlock(t, asst.Content, 0)
+	if !strings.Contains(tb.Text, "Real answer.") {
+		t.Fatalf("text=%q want Real answer.", tb.Text)
 	}
 }
 
@@ -549,15 +627,21 @@ func TestTranslateRequestAssistantThinkingDropStrategyOptsOut(t *testing.T) {
 	}
 	asst := out.Messages[1]
 	for _, blk := range asst.Content {
-		if blk.Type == "thinking" {
+		if _, ok := blk.(ThinkingBlock); ok {
 			t.Fatalf("drop strategy should not produce thinking blocks: %+v", blk)
 		}
-		if strings.Contains(blk.Text, "clyde-thinking") || strings.Contains(blk.Text, "I should answer 42.") {
-			t.Fatalf("thinking content leaked under drop strategy: %+v", blk)
+		if tb, ok := blk.(TextBlock); ok {
+			if strings.Contains(tb.Text, "clyde-thinking") || strings.Contains(tb.Text, "I should answer 42.") {
+				t.Fatalf("thinking content leaked under drop strategy: %+v", blk)
+			}
 		}
 	}
-	if len(asst.Content) != 1 || !strings.Contains(asst.Content[0].Text, "The answer is 42.") {
+	if len(asst.Content) != 1 {
 		t.Fatalf("expected single text block with answer, got %+v", asst.Content)
+	}
+	tb := mustTextBlock(t, asst.Content, 0)
+	if !strings.Contains(tb.Text, "The answer is 42.") {
+		t.Fatalf("text=%q want The answer is 42.", tb.Text)
 	}
 }
 
@@ -586,13 +670,15 @@ func TestTranslateRequestAssistantThinkingPlainTextConcatPreservesBody(t *testin
 	}
 	asst := out.Messages[1]
 	for _, blk := range asst.Content {
-		if blk.Type == "thinking" {
+		if _, ok := blk.(ThinkingBlock); ok {
 			t.Fatalf("plain_text_concat must not emit native thinking blocks: %+v", blk)
 		}
 	}
 	joined := ""
 	for _, blk := range asst.Content {
-		joined += blk.Text
+		if tb, ok := blk.(TextBlock); ok {
+			joined += tb.Text
+		}
 	}
 	if !strings.Contains(joined, "deliberation body") {
 		t.Fatalf("plain_text_concat should preserve thinking content: %q", joined)

@@ -21,11 +21,24 @@ type (
 )
 
 const (
+	// EventAssistantTextDelta aliases the render package constant for use within
+	// the anthropic backend package.
 	EventAssistantTextDelta = adapterrender.EventAssistantTextDelta
-	EventReasoningSignaled  = adapterrender.EventReasoningSignaled
-	EventReasoningDelta     = adapterrender.EventReasoningDelta
-	EventReasoningFinished  = adapterrender.EventReasoningFinished
-	EventToolCallDelta      = adapterrender.EventToolCallDelta
+	// EventAssistantRefusalDelta aliases the render package constant for use within
+	// the anthropic backend package.
+	EventAssistantRefusalDelta = adapterrender.EventAssistantRefusalDelta
+	// EventReasoningSignaled aliases the render package constant for use within
+	// the anthropic backend package.
+	EventReasoningSignaled = adapterrender.EventReasoningSignaled
+	// EventReasoningDelta aliases the render package constant for use within
+	// the anthropic backend package.
+	EventReasoningDelta = adapterrender.EventReasoningDelta
+	// EventReasoningFinished aliases the render package constant for use within
+	// the anthropic backend package.
+	EventReasoningFinished = adapterrender.EventReasoningFinished
+	// EventToolCallDelta aliases the render package constant for use within
+	// the anthropic backend package.
+	EventToolCallDelta = adapterrender.EventToolCallDelta
 )
 
 var NewEventRenderer = adapterrender.NewEventRenderer
@@ -117,51 +130,65 @@ func (t *StreamTranslator) handleMessageStart(dataJSON []byte) ([]Event, bool, s
 // handleContentBlockStart dispatches to the per-block-type opener.
 func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bool, string, *OpenAIUsage, error) {
 	var ev struct {
-		Index        int               `json:"index"`
-		ContentBlock *AnthContentBlock `json:"content_block"`
+		Index        int             `json:"index"`
+		ContentBlock json.RawMessage `json:"content_block"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
 		return nil, false, "", nil, err
 	}
-	if ev.ContentBlock == nil {
+	if len(ev.ContentBlock) == 0 {
 		return nil, false, "", nil, nil
 	}
-	switch ev.ContentBlock.Type {
-	case "text":
+	block, ok, err := UnmarshalContentBlock(ev.ContentBlock)
+	if err != nil {
+		return nil, false, "", nil, err
+	}
+	if !ok {
+		return nil, false, "", nil, nil
+	}
+	switch b := block.(type) {
+	case TextBlock:
 		t.currentBlockType = "text"
 		return nil, false, "", nil, nil
-	case "tool_use":
-		return t.openToolUseBlock(ev.Index, ev.ContentBlock), false, "", nil, nil
-	case "thinking":
+	case ToolUseBlock:
+		return t.openToolUseBlock(ev.Index, b), false, "", nil, nil
+	case ThinkingBlock:
 		t.currentBlockType = "thinking"
-		return []Event{{Kind: EventReasoningSignaled, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+		return []Event{reasoningSignaledEvent("")}, false, "", nil, nil
+	case RedactedThinkingBlock:
+		// Anthropic emits the entire opaque payload on the start event
+		// (no redacted_thinking_delta exists). Surface a signaled +
+		// delta pair so the renderer opens a synthetic envelope and
+		// fills it with the user-facing placeholder, plus carries the
+		// data blob on the event. The translator emits
+		// EventReasoningFinished on content_block_stop below.
+		t.currentBlockType = "redacted_thinking"
+		return []Event{
+			reasoningSignaledEvent("redacted"),
+			redactedThinkingDeltaEvent("[redacted]", b.Data),
+		}, false, "", nil, nil
 	default:
-		t.currentBlockType = ev.ContentBlock.Type
+		t.currentBlockType = block.blockType()
 		return nil, false, "", nil, nil
 	}
 }
 
 // openToolUseBlock allocates a tool_call index, records the block mapping,
 // and emits the initial tool_call delta carrying the function name.
-func (t *StreamTranslator) openToolUseBlock(blockIdx int, block *AnthContentBlock) []Event {
+func (t *StreamTranslator) openToolUseBlock(blockIdx int, block ToolUseBlock) []Event {
 	t.currentBlockType = "tool_use"
 	idx := t.toolCallIndex
 	t.toolCallIndex++
 	t.toolCallByBlockIdx[blockIdx] = idx
-	return []Event{{
-		Kind: EventToolCallDelta,
-		ToolCalls: []OpenAIToolCall{{
-			Index: idx,
-			ID:    block.ID,
-			Type:  "function",
-			Function: OpenAIToolCallFunction{
-				Name:      block.Name,
-				Arguments: "",
-			},
-		}},
-		EncryptedContent: "",
-		Signature:        "",
-	}}
+	return []Event{toolCallDeltaEvent([]OpenAIToolCall{{
+		Index: idx,
+		ID:    block.ID,
+		Type:  "function",
+		Function: OpenAIToolCallFunction{
+			Name:      block.Name,
+			Arguments: "",
+		},
+	}})}
 }
 
 // handleContentBlockDelta dispatches the per-delta-type translation.
@@ -179,29 +206,13 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 	switch ev.Delta.Type {
 	case "text_delta":
 		t.visibleText.WriteString(ev.Delta.Text)
-		return []Event{{Kind: EventAssistantTextDelta, Text: ev.Delta.Text, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+		return []Event{assistantTextDeltaEvent(ev.Delta.Text)}, false, "", nil, nil
 	case "input_json_delta":
 		return t.toolArgumentsDelta(ev.Index, ev.Delta.PartialJSON)
 	case "thinking_delta":
-		return []Event{{
-			Kind:             EventReasoningDelta,
-			Text:             ev.Delta.Thinking,
-			ReasoningKind:    "text",
-			EncryptedContent: "",
-			Signature:        "",
-		}}, false, "", nil, nil
+		return []Event{reasoningTextDeltaEvent(ev.Delta.Thinking)}, false, "", nil, nil
 	case "signature_delta":
-		return []Event{{
-			Kind:             EventReasoningDelta,
-			Text:             "",
-			ReasoningKind:    "text",
-			SummaryIndex:     nil,
-			ToolCalls:        nil,
-			ItemID:           "",
-			ItemType:         "",
-			EncryptedContent: "",
-			Signature:        ev.Delta.Signature,
-		}}, false, "", nil, nil
+		return []Event{reasoningSignatureDeltaEvent(ev.Delta.Signature)}, false, "", nil, nil
 	default:
 		return nil, false, "", nil, nil
 	}
@@ -224,18 +235,13 @@ func (t *StreamTranslator) toolArgumentsDelta(blockIdx int, partialJSON string) 
 	if partialJSON == "" {
 		return nil, false, "", nil, nil
 	}
-	return []Event{{
-		Kind: EventToolCallDelta,
-		ToolCalls: []OpenAIToolCall{{
-			Index: tcIdx,
-			Type:  "function",
-			Function: OpenAIToolCallFunction{
-				Arguments: partialJSON,
-			},
-		}},
-		EncryptedContent: "",
-		Signature:        "",
-	}}, false, "", nil, nil
+	return []Event{toolCallDeltaEvent([]OpenAIToolCall{{
+		Index: tcIdx,
+		Type:  "function",
+		Function: OpenAIToolCallFunction{
+			Arguments: partialJSON,
+		},
+	}})}, false, "", nil, nil
 }
 
 // handleContentBlockStop closes the active block and, for thinking blocks,
@@ -249,7 +255,15 @@ func (t *StreamTranslator) handleContentBlockStop() ([]Event, bool, string, *Ope
 	// default. The cached prefix stays byte-stable across turns.
 	if t.currentBlockType == "thinking" {
 		t.currentBlockType = ""
-		return []Event{{Kind: EventReasoningFinished, EncryptedContent: "", Signature: ""}}, false, "", nil, nil
+		return []Event{reasoningFinishedEvent("")}, false, "", nil, nil
+	}
+	if t.currentBlockType == "redacted_thinking" {
+		t.currentBlockType = ""
+		// The data blob was already captured on the delta event in
+		// handleContentBlockStart and will be embedded on the close
+		// marker as `data-encrypted`. The finished event closes the
+		// synthetic envelope.
+		return []Event{reasoningFinishedEvent("redacted")}, false, "", nil, nil
 	}
 	t.currentBlockType = ""
 	return nil, false, "", nil, nil
@@ -286,7 +300,7 @@ func (t *StreamTranslator) handleMessageStop() ([]Event, bool, string, *OpenAIUs
 	}
 	var extra []Event
 	if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
-		extra = append(extra, Event{Kind: adapterrender.EventAssistantRefusalDelta, Text: t.visibleText.String(), EncryptedContent: "", Signature: ""})
+		extra = append(extra, assistantRefusalDeltaEvent(t.visibleText.String()))
 	}
 	return extra, true, reason, u, nil
 }
@@ -306,4 +320,79 @@ func (t *StreamTranslator) handleStreamError(dataJSON []byte) ([]Event, bool, st
 		msg = "anthropic stream error"
 	}
 	return nil, false, "", nil, fmt.Errorf("%s", msg)
+}
+
+// assistantTextDeltaEvent builds a TextDelta render.Event.
+func assistantTextDeltaEvent(text string) Event {
+	return adapterrender.TextDelta{Text: text}
+}
+
+// assistantRefusalDeltaEvent builds a RefusalDelta render.Event.
+func assistantRefusalDeltaEvent(text string) Event {
+	return adapterrender.RefusalDelta{Text: text}
+}
+
+// reasoningSignaledEvent builds a ReasoningSignaled render.Event.
+func reasoningSignaledEvent(reasoningKind string) Event {
+	return adapterrender.ReasoningSignaled{
+		ReasoningKind: reasoningKind,
+		ItemID:        "",
+		ItemType:      "",
+	}
+}
+
+// reasoningTextDeltaEvent builds a ReasoningDelta for a thinking-text delta.
+func reasoningTextDeltaEvent(text string) Event {
+	return adapterrender.ReasoningDelta{
+		Text:          text,
+		ReasoningKind: "text",
+		SummaryIndex:  nil,
+		Signature:     "",
+		RedactedData:  "",
+		ItemID:        "",
+		ItemType:      "",
+	}
+}
+
+// reasoningSignatureDeltaEvent builds a ReasoningDelta carrying the
+// signature_delta value.
+func reasoningSignatureDeltaEvent(signature string) Event {
+	return adapterrender.ReasoningDelta{
+		Text:          "",
+		ReasoningKind: "text",
+		SummaryIndex:  nil,
+		Signature:     signature,
+		RedactedData:  "",
+		ItemID:        "",
+		ItemType:      "",
+	}
+}
+
+// redactedThinkingDeltaEvent builds a ReasoningDelta for a redacted_thinking block.
+func redactedThinkingDeltaEvent(text, redactedData string) Event {
+	return adapterrender.ReasoningDelta{
+		Text:          text,
+		ReasoningKind: "redacted",
+		SummaryIndex:  nil,
+		Signature:     "",
+		RedactedData:  redactedData,
+		ItemID:        "",
+		ItemType:      "",
+	}
+}
+
+// reasoningFinishedEvent builds a ReasoningFinished render.Event.
+func reasoningFinishedEvent(reasoningKind string) Event {
+	return adapterrender.ReasoningFinished{
+		ReasoningKind:    reasoningKind,
+		EncryptedContent: "",
+		Signature:        "",
+		ItemID:           "",
+		ItemType:         "",
+	}
+}
+
+// toolCallDeltaEvent builds a ToolCallDelta render.Event.
+func toolCallDeltaEvent(toolCalls []adapteropenai.ToolCall) Event {
+	return adapterrender.ToolCallDelta{ToolCalls: toolCalls}
 }

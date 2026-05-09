@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 )
 
 // TestHandleConnectTunnelsBytesBothWays stands up a fake upstream
@@ -318,6 +319,18 @@ func (t *testProxy) shutdown() {
 	_ = t.server.Shutdown(ctx)
 }
 
+func newTestTunnelRegistry() *livetrack.Registry[TunnelMeta] {
+	return livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
+		Component:     "mitm",
+		Concern:       "providers.mitm.lifecycle",
+		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:     5 * time.Millisecond,
+		CloserGrace:   200 * time.Millisecond,
+		ParallelClose: false,
+		Now:           nil,
+	})
+}
+
 func startTestProxy(t *testing.T) *testProxy {
 	t.Helper()
 	listener, err := net.Listen("tcp", "[::1]:0")
@@ -332,6 +345,7 @@ func startTestProxy(t *testing.T) *testProxy {
 		ca:                    nil,
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
+		Tunnels:               newTestTunnelRegistry(),
 		mu:                    sync.RWMutex{},
 		cfg:                   config.MITMConfig{CaptureDir: t.TempDir(), BodyMode: "summary"},
 		base:                  "http://" + listener.Addr().String(),
@@ -367,6 +381,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		ca:                    ca,
 		cursorTLSClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
 		rawCaptureSeq:         atomic.Uint64{},
+		Tunnels:               newTestTunnelRegistry(),
 		mu:                    sync.RWMutex{},
 		cfg:                   config.MITMConfig{CaptureDir: captureDir, BodyMode: "summary"},
 		base:                  "http://" + listener.Addr().String(),

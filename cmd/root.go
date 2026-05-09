@@ -741,8 +741,10 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 		Metadata: session.Metadata{
 			Name:                 raw.GetMetadataName(),
 			ClydeUUID:            raw.GetClydeUuid(),
+			Provider:             session.NormalizeProviderID(session.ProviderID(raw.GetProvider())),
 			SessionID:            raw.GetSessionId(),
 			TranscriptPath:       raw.GetTranscriptPath(),
+			ProviderState:        nil,
 			WorkDir:              raw.GetWorkDir(),
 			Created:              timeFromNanos(raw.GetCreatedNanos()),
 			LastAccessed:         timeFromNanos(raw.GetLastActivityNanos()),
@@ -756,6 +758,10 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 			WorkspaceRoot:        raw.GetWorkspaceRoot(),
 			ContextMessageCount:  int(raw.GetContextMessageCount()),
 			DisplayTitle:         raw.GetDisplayTitle(),
+			AutoNameState:        session.AutoNameState(raw.GetAutoNameState()),
+			AutoNameSource:       session.AutoNameSource(raw.GetAutoNameSource()),
+			LastAutoNameAt:       timeFromNanos(raw.GetLastAutoNameNanos()),
+			AutoNameSourceHash:   raw.GetAutoNameSourceHash(),
 		},
 	}
 	if sess.Metadata.Name == "" {
@@ -811,6 +817,7 @@ func sessionEventFromProto(ev *clydev1.SubscribeRegistryResponse) ui.SessionEven
 
 func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDetail {
 	out := ui.SessionDetail{
+		Provider:              resp.GetProvider(),
 		Model:                 resp.GetModel(),
 		TotalMessages:         int(resp.GetTotalMessages()),
 		VisibleTokensEstimate: int(resp.GetVisibleTokensEstimate()),
@@ -832,6 +839,7 @@ func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDe
 		},
 		ContextUsageLoaded: resp.GetContextUsageLoaded(),
 		ContextUsageStatus: resp.GetContextUsageStatus(),
+		ResumeInstructions: append([]string(nil), resp.GetResumeInstructions()...),
 	}
 	for _, m := range resp.GetRecentMessages() {
 		out.Messages = append(out.Messages, ui.DetailMessage{

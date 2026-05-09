@@ -68,6 +68,12 @@ func TestClassifyArgs(t *testing.T) {
 			wantRewritten: []string{"compact", "x"},
 		},
 		{
+			name:          "codex_subcommand",
+			args:          []string{"codex", "--help"},
+			wantMode:      ModeClyde,
+			wantRewritten: []string{"codex", "--help"},
+		},
+		{
 			name:          "passthrough_exec",
 			args:          []string{"exec"},
 			wantMode:      ModePassthrough,

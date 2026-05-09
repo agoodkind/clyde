@@ -28,6 +28,7 @@ import (
 
 	"goodkind.io/clyde/cmd"
 	"goodkind.io/clyde/internal/cli"
+	codexcmd "goodkind.io/clyde/internal/cli/codex"
 	"goodkind.io/clyde/internal/cli/compact"
 	"goodkind.io/clyde/internal/cli/daemon"
 	hook "goodkind.io/clyde/internal/cli/hook"
@@ -127,6 +128,7 @@ func run() int {
 	root.SetErr(f.IOStreams.Err)
 
 	root.AddCommand(compact.NewCmd(f))
+	root.AddCommand(codexcmd.NewCmd(f))
 	root.AddCommand(daemon.NewCmd(f))
 	root.AddCommand(hook.NewCmd(f))
 	root.AddCommand(logs.NewCmd(f))

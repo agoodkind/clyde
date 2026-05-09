@@ -84,16 +84,17 @@ type CompactPanel struct {
 	sessionID   string
 	model       string
 
-	targetTokens  int
-	maxTokens     int
-	currentTotal  int
-	messagesTok   int
-	bufferTok     int
-	overheadTok   int
-	freeTok       int
-	contextStatus string
-	reserved      int
-	targetText    string
+	targetTokens      int
+	maxTokens         int
+	currentTotal      int
+	contextPercentage int
+	messagesTok       int
+	bufferTok         int
+	overheadTok       int
+	freeTok           int
+	contextStatus     string
+	reserved          int
+	targetText        string
 
 	thinking       bool
 	images         bool
@@ -131,48 +132,49 @@ type CompactPanel struct {
 
 func NewCompactPanel(sessionName string) *CompactPanel {
 	return &CompactPanel{
-		Rect:             Rect{},
-		sessionName:      sessionName,
-		sessionID:        "",
-		model:            "",
-		targetTokens:     200000,
-		maxTokens:        1000000,
-		currentTotal:     0,
-		messagesTok:      0,
-		bufferTok:        0,
-		overheadTok:      0,
-		freeTok:          0,
-		contextStatus:    "",
-		reserved:         13000,
-		targetText:       "200000",
-		thinking:         true,
-		images:           true,
-		tools:            true,
-		chat:             true,
-		summary:          "auto",
-		thinkingBlocks:   0,
-		imageBlocks:      0,
-		toolPairs:        0,
-		chatTurns:        0,
-		countsStatus:     "preview required",
-		focusGroup:       0,
-		checkboxIdx:      0,
-		actionIdx:        0,
-		confirmApply:     false,
-		busy:             false,
-		busyAction:       "",
-		status:           "adjust controls and run preview",
-		logRect:          Rect{},
-		logScroll:        0,
-		logLines:         nil,
-		iterationHistory: nil,
-		latestIteration:  nil,
-		latestFinal:      nil,
-		latestUndo:       nil,
-		OnPreview:        nil,
-		OnApply:          nil,
-		OnUndo:           nil,
-		OnClose:          nil,
+		Rect:              Rect{},
+		sessionName:       sessionName,
+		sessionID:         "",
+		model:             "",
+		targetTokens:      200000,
+		maxTokens:         1000000,
+		currentTotal:      0,
+		messagesTok:       0,
+		bufferTok:         0,
+		overheadTok:       0,
+		freeTok:           0,
+		contextStatus:     "",
+		contextPercentage: 0,
+		reserved:          13000,
+		targetText:        "200000",
+		thinking:          true,
+		images:            true,
+		tools:             true,
+		chat:              true,
+		summary:           "auto",
+		thinkingBlocks:    0,
+		imageBlocks:       0,
+		toolPairs:         0,
+		chatTurns:         0,
+		countsStatus:      "preview required",
+		focusGroup:        0,
+		checkboxIdx:       0,
+		actionIdx:         0,
+		confirmApply:      false,
+		busy:              false,
+		busyAction:        "",
+		status:            "adjust controls and run preview",
+		logRect:           Rect{},
+		logScroll:         0,
+		logLines:          nil,
+		iterationHistory:  nil,
+		latestIteration:   nil,
+		latestFinal:       nil,
+		latestUndo:        nil,
+		OnPreview:         nil,
+		OnApply:           nil,
+		OnUndo:            nil,
+		OnClose:           nil,
 	}
 }
 
@@ -241,6 +243,8 @@ func (p *CompactPanel) setInitialContextUsage(usage SessionContextUsage, loaded 
 	if usage.MessagesTokens > 0 {
 		p.messagesTok = usage.MessagesTokens
 	}
+	// Trust the daemon-supplied percentage. The TUI no longer recomputes.
+	p.contextPercentage = usage.Percentage
 	if loaded {
 		p.contextStatus = ""
 		return
@@ -669,9 +673,9 @@ func (p *CompactPanel) contextCurrentLine(narrow bool) string {
 	if p.currentTotal <= 0 {
 		return fmt.Sprintf("%-10s %s", "current", p.placeholder(p.contextStatus))
 	}
-	value := formatWithCommas(p.currentTotal)
+	value := formatTokensExact(p.currentTotal)
 	if p.maxTokens > 0 {
-		value += " / " + formatWithCommas(p.maxTokens)
+		value += " / " + formatTokensExact(p.maxTokens)
 	}
 	if p.contextPercent() > 0 && !narrow {
 		value += fmt.Sprintf("   %d%%", p.contextPercent())
@@ -683,14 +687,14 @@ func (p *CompactPanel) contextTokenLine(label string, tokens int) string {
 	if tokens <= 0 {
 		return fmt.Sprintf("%-10s %s", label, p.placeholder(p.contextStatus))
 	}
-	return fmt.Sprintf("%-10s %s", label, formatWithCommas(tokens))
+	return fmt.Sprintf("%-10s %s", label, formatTokensExact(tokens))
 }
 
 func (p *CompactPanel) contextCountLine(label string, count int) string {
 	if count <= 0 {
 		return fmt.Sprintf("%-15s %s", label, p.placeholder(p.countsStatus))
 	}
-	return fmt.Sprintf("%-15s %s", label, formatWithCommas(count))
+	return fmt.Sprintf("%-15s %s", label, formatTokensExact(count))
 }
 
 func (p *CompactPanel) placeholder(status string) string {
@@ -700,11 +704,11 @@ func (p *CompactPanel) placeholder(status string) string {
 	return status
 }
 
+// contextPercent returns the daemon-supplied percentage. A zero value
+// means the daemon has not supplied a figure, which the caller renders
+// by hiding the percent suffix.
 func (p *CompactPanel) contextPercent() int {
-	if p.currentTotal <= 0 || p.maxTokens <= 0 {
-		return 0
-	}
-	return p.currentTotal * 100 / p.maxTokens
+	return p.contextPercentage
 }
 
 func (p *CompactPanel) summaryHelpText(width int) string {
@@ -808,7 +812,7 @@ func (p *CompactPanel) renderIterationLine(iter CompactIteration) string {
 		"iter %d  %s  projected %s  %s",
 		iter.Iteration,
 		iter.Step,
-		formatWithCommas(iter.CtxTotal),
+		formatTokensExact(iter.CtxTotal),
 		formatSignedWithCommas(iter.Delta),
 	)
 }
@@ -817,8 +821,8 @@ func (p *CompactPanel) renderFinalLine(final CompactFinal) string {
 	total := final.StaticFloor + final.ReservedTokens + final.FinalTail
 	return fmt.Sprintf(
 		"final projected %s  target %s",
-		formatWithCommas(total),
-		formatWithCommas(final.TargetTokens),
+		formatTokensExact(total),
+		formatTokensExact(final.TargetTokens),
 	)
 }
 
@@ -863,8 +867,8 @@ func (p *CompactPanel) percentLabel() string {
 	return fmt.Sprintf(
 		"%d%% (%s/%s)",
 		p.percent(),
-		formatWithCommas(p.targetTokens),
-		formatWithCommas(p.maxTokens),
+		formatTokensExact(p.targetTokens),
+		formatTokensExact(p.maxTokens),
 	)
 }
 
@@ -900,31 +904,9 @@ func (p *CompactPanel) valueOrDash(value string) string {
 	return value
 }
 
-func formatWithCommas(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	isNegative := value < 0
-	if isNegative {
-		value = -value
-	}
-	digits := strconv.Itoa(value)
-	var formatted strings.Builder
-	for i := range len(digits) {
-		if i > 0 && (len(digits)-i)%3 == 0 {
-			formatted.WriteString(",")
-		}
-		formatted.WriteString(string(digits[i]))
-	}
-	if isNegative {
-		return "-" + formatted.String()
-	}
-	return formatted.String()
-}
-
 func formatSignedWithCommas(value int) string {
 	if value > 0 {
-		return "+" + formatWithCommas(value)
+		return "+" + formatTokensExact(value)
 	}
-	return formatWithCommas(value)
+	return formatTokensExact(value)
 }

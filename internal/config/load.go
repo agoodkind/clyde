@@ -11,6 +11,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -298,7 +299,62 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
+	applyAutoNameDefaults(&cfg.AutoName)
+
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+}
+
+const (
+	defaultAutoNameMaxCallsPerHour      = 6
+	defaultAutoNameCooldown             = 30 * time.Minute
+	defaultAutoNameMinUserMessages      = 3
+	defaultAutoNameMinDigitRunForRedact = 7
+)
+
+// applyAutoNameDefaults fills in absent or zero AutoName fields with
+// the canonical defaults documented on the AutoNameConfig type. The
+// pointer-bool fields preserve the distinction between "operator
+// explicitly set false" and "absent" so a partial [autoname] block
+// merges defaults for the missing fields only.
+func applyAutoNameDefaults(autoname *AutoNameConfig) {
+	if autoname == nil {
+		return
+	}
+	if autoname.Enabled == nil {
+		enabled := true
+		autoname.Enabled = &enabled
+	}
+	if autoname.MaxCallsPerHour == 0 {
+		autoname.MaxCallsPerHour = defaultAutoNameMaxCallsPerHour
+	}
+	if autoname.Cooldown == 0 {
+		autoname.Cooldown = AutoNameDuration(defaultAutoNameCooldown)
+	}
+	if autoname.MinUserMessages == 0 {
+		autoname.MinUserMessages = defaultAutoNameMinUserMessages
+	}
+	applyAutoNameRedactDefaults(&autoname.Redact)
+}
+
+func applyAutoNameRedactDefaults(redact *RedactPolicy) {
+	if redact == nil {
+		return
+	}
+	if redact.MinDigitRunForRedact == 0 {
+		redact.MinDigitRunForRedact = defaultAutoNameMinDigitRunForRedact
+	}
+	if redact.StripEmails == nil {
+		strip := true
+		redact.StripEmails = &strip
+	}
+	if redact.StripPaths == nil {
+		strip := true
+		redact.StripPaths = &strip
+	}
+	if redact.StripKeyPrefixes == nil {
+		strip := true
+		redact.StripKeyPrefixes = &strip
+	}
 }
 
 func applyLoggingCoreDefaults(logging *LoggingConfig) error {
@@ -816,7 +872,7 @@ func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 
 	legacyAnthropic := strings.TrimSpace(string(adapter.SyntheticContent.Anthropic.InboundThinkingMaterialization))
 	if adapter.Anthropic.Reasoning.InboundThinking == "" && legacyAnthropic != "" {
-		adapter.Anthropic.Reasoning.InboundThinking = AnthropicInboundThinking(legacyAnthropic)
+		adapter.Anthropic.Reasoning.InboundThinking = anthmode.InboundThinking(legacyAnthropic)
 		log.Warn("adapter.reasoning.legacy_synthetic_content_forwarded",
 			"component", "config",
 			"subcomponent", "adapter_reasoning",
@@ -827,13 +883,7 @@ func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 			"reason", "legacy synthetic_content block is deprecated; copy the value into the new block",
 		)
 	}
-	switch adapter.Anthropic.Reasoning.InboundThinking {
-	case "",
-		AnthropicInboundThinkingNative,
-		AnthropicInboundThinkingDrop,
-		AnthropicInboundThinkingPlainText,
-		AnthropicInboundThinkingPassthrough:
-	default:
+	if err := adapter.Anthropic.Reasoning.InboundThinking.Validate(); err != nil {
 		return fmt.Errorf("adapter.anthropic.reasoning.inbound_thinking must be one of native_thinking_block|drop|plain_text_concat|passthrough (got %q)", adapter.Anthropic.Reasoning.InboundThinking)
 	}
 

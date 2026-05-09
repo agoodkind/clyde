@@ -149,14 +149,7 @@ func (l *Lifecycle) ResumeOpaqueInteractive(_ context.Context, req session.Opaqu
 }
 
 func (l *Lifecycle) ResumeInstructions(sess *session.Session) []string {
-	if sess == nil {
-		return nil
-	}
-	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
-	if sessionID == "" {
-		return nil
-	}
-	return []string{fmt.Sprintf("claude --resume %s", sessionID)}
+	return session.ResumeInstructions(sess)
 }
 
 func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen int) []session.ContextMessage {

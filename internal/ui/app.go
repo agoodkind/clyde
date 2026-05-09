@@ -32,6 +32,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"goodkind.io/clyde/internal/binaryhandoff"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/terminalcontrol"
 	"goodkind.io/clyde/internal/util"
@@ -283,6 +284,7 @@ type LiveSessionEvent struct {
 // AllMessages carries the full transcript for the scrollable right pane.
 // Tools ranks the top assistant tool uses for the stats pane.
 type SessionDetail struct {
+	Provider              string
 	Model                 string
 	Messages              []DetailMessage // last N for quick peek (kept for backwards compat)
 	AllMessages           []DetailMessage // full transcript, ordered oldest -> newest
@@ -297,6 +299,7 @@ type SessionDetail struct {
 	ContextUsage          SessionContextUsage
 	ContextUsageLoaded    bool
 	ContextUsageStatus    string
+	ResumeInstructions    []string
 	TranscriptStatsLoaded bool
 	TranscriptStatsStatus string
 }
@@ -385,6 +388,7 @@ type App struct {
 	cb       AppCallbacks
 	clock    uiClock
 	ctx      context.Context
+	workers  *livetrack.Registry[WorkerMeta]
 
 	// Widgets
 	tabs    *TabBarWidget
@@ -528,6 +532,9 @@ type App struct {
 	sessionsLoading   bool
 	startupLoading    bool
 
+	// tableRowDataMu guards row-building reads of cached per-row data.
+	tableRowDataMu sync.Mutex
+
 	// statsLoading gates the async Stats-tab snapshot so the render path never
 	// blocks on log or transcript scans.
 	statsMu      sync.Mutex
@@ -615,6 +622,15 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.cb = cb
 	a.clock = clock
 	a.ctx = opt.Context
+	a.workers = livetrack.New[WorkerMeta](livetrack.Options[WorkerMeta]{
+		Component:     "tui",
+		Concern:       "ui",
+		Log:           tuiLog.Logger(),
+		PollEvery:     0,
+		CloserGrace:   0,
+		ParallelClose: false,
+		Now:           nil,
+	})
 	a.sessions = sessions
 	a.mode = StatusBrowse
 	a.initCaches()
@@ -903,12 +919,58 @@ func (a *App) resumeSession(sess *session.Session) {
 
 func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool) {
 	if sess == nil {
-		return SessionDetail{}, false
+		return SessionDetail{
+			Provider:              "",
+			Model:                 "",
+			Messages:              nil,
+			AllMessages:           nil,
+			Tools:                 nil,
+			TotalMessages:         0,
+			VisibleTokensEstimate: 0,
+			LastMessageTokens:     0,
+			CompactionCount:       0,
+			LastPreCompactTokens:  0,
+			TranscriptSizeBytes:   0,
+			ConversationLoading:   false,
+			ContextUsage: SessionContextUsage{
+				Model:          "",
+				TotalTokens:    0,
+				MaxTokens:      0,
+				Percentage:     0,
+				MessagesTokens: 0,
+			},
+			ContextUsageLoaded:    false,
+			ContextUsageStatus:    "",
+			ResumeInstructions:    nil,
+			TranscriptStatsLoaded: false,
+			TranscriptStatsStatus: "",
+		}, false
 	}
 	if !sessionCapabilities(sess).TranscriptExport {
 		return SessionDetail{
+			Provider:              "",
 			Model:                 valueOr(a.modelCache[sess.Name], "-"),
+			Messages:              nil,
+			AllMessages:           nil,
+			Tools:                 nil,
+			TotalMessages:         0,
+			VisibleTokensEstimate: 0,
+			LastMessageTokens:     0,
+			CompactionCount:       0,
+			LastPreCompactTokens:  0,
+			TranscriptSizeBytes:   0,
+			ConversationLoading:   false,
+			ContextUsage: SessionContextUsage{
+				Model:          "",
+				TotalTokens:    0,
+				MaxTokens:      0,
+				Percentage:     0,
+				MessagesTokens: 0,
+			},
+			ContextUsageLoaded:    false,
 			ContextUsageStatus:    "unsupported",
+			ResumeInstructions:    nil,
+			TranscriptStatsLoaded: false,
 			TranscriptStatsStatus: "unsupported",
 		}, false
 	}
@@ -923,8 +985,29 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 	// cache is warm.
 	a.loadDetailAsync(sess)
 	return SessionDetail{
+		Provider:              "",
 		Model:                 valueOr(a.modelCache[sess.Name], "-"),
+		Messages:              nil,
+		AllMessages:           nil,
+		Tools:                 nil,
+		TotalMessages:         0,
+		VisibleTokensEstimate: 0,
+		LastMessageTokens:     0,
+		CompactionCount:       0,
+		LastPreCompactTokens:  0,
+		TranscriptSizeBytes:   0,
+		ConversationLoading:   false,
+		ContextUsage: SessionContextUsage{
+			Model:          "",
+			TotalTokens:    0,
+			MaxTokens:      0,
+			Percentage:     0,
+			MessagesTokens: 0,
+		},
+		ContextUsageLoaded:    false,
 		ContextUsageStatus:    "loading...",
+		ResumeInstructions:    nil,
+		TranscriptStatsLoaded: false,
 		TranscriptStatsStatus: "loading...",
 	}, true
 }
@@ -1004,6 +1087,16 @@ func (a *App) Run() (err error) {
 	return nil
 }
 
+func (a *App) drainWorkers() {
+	if a.workers == nil {
+		return
+	}
+	const drainTimeout = 3 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+	_ = a.workers.Drain(ctx, "tui.shutdown")
+}
+
 type runSupervisorFunc func(<-chan struct{})
 
 type runEventLoopState struct {
@@ -1033,9 +1126,11 @@ func (a *App) finishRun(err *error) {
 			"component", "tui",
 			"recover", fmt.Sprint(r),
 			"err", *err)
+		a.drainWorkers()
 		return
 	}
 	a.teardownScreen()
+	a.drainWorkers()
 	a.execReloadAfterRun()
 }
 
@@ -1060,6 +1155,16 @@ func (a *App) startRunSupervisor(name string, run runSupervisorFunc) chan struct
 				logUIGoroutinePanic(name, fmt.Sprint(r))
 			}
 		}()
+		if a.workers != nil {
+			sess, regErr := a.workers.Register(a.ctx, "watcher", WorkerMeta{
+				Kind:     "watcher",
+				Source:   name,
+				Deadline: time.Time{},
+			}, noopCloser{})
+			if regErr == nil {
+				defer a.workers.Release(context.Background(), sess, "supervisor.exited")
+			}
+		}
 		run(stop)
 	}()
 	return stop
@@ -1706,6 +1811,18 @@ func (a *App) requestSessionsAsync(reason string) {
 				logUIGoroutinePanic("sessions_load", fmt.Sprint(r))
 			}
 		}()
+		if a.workers != nil {
+			_, loadCancel := context.WithCancel(a.ctx)
+			defer loadCancel()
+			sess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
+				Kind:     "async_load",
+				Source:   "sessions_load",
+				Deadline: time.Time{},
+			}, newWorkerCloser(loadCancel))
+			if regErr == nil {
+				defer a.workers.Release(context.Background(), sess, "sessions_load.done")
+			}
+		}
 		started := a.now()
 		snapshot, err := a.cb.ListSessions()
 		tuiLog.Logger().Debug("tui.sessions.load.finished",
@@ -1713,7 +1830,7 @@ func (a *App) requestSessionsAsync(reason string) {
 			"reason", reason,
 			"duration_ms", time.Since(started).Milliseconds(),
 			"err", err)
-		a.postInterrupt(sessionsLoaded{snapshot: snapshot, err: err, reason: reason})
+		a.postInterruptIfActive("sessions_load", sessionsLoaded{snapshot: snapshot, err: err, reason: reason})
 	}()
 }
 
@@ -1728,8 +1845,20 @@ func (a *App) refreshConfigControls() {
 				logUIGoroutinePanic("config_controls_load", fmt.Sprint(r))
 			}
 		}()
+		if a.workers != nil {
+			_, loadCancel := context.WithCancel(a.ctx)
+			defer loadCancel()
+			sess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
+				Kind:     "async_load",
+				Source:   "config_controls_load",
+				Deadline: time.Time{},
+			}, newWorkerCloser(loadCancel))
+			if regErr == nil {
+				defer a.workers.Release(context.Background(), sess, "config_controls_load.done")
+			}
+		}
 		controls, err := a.cb.LoadConfigControls()
-		a.postInterrupt(configControlsLoaded{controls: controls, err: err})
+		a.postInterruptIfActive("config_controls_load", configControlsLoaded{controls: controls, err: err})
 	}()
 }
 
@@ -3050,7 +3179,7 @@ func (a *App) handleSidecarTailOpened(d sidecarTailOpened) {
 		return
 	}
 	if d.err != nil {
-		a.sidecar.status = "tail failed: " + d.err.Error()
+		a.sidecar.status = "tail failed: " + polishDaemonError(d.err)
 		return
 	}
 	a.sidecarTailPending = false
@@ -3070,7 +3199,7 @@ func (a *App) handleSidecarSendDone(d sidecarSendDone) {
 		return
 	}
 	if d.err != nil {
-		a.sidecar.status = "error: " + d.err.Error()
+		a.sidecar.status = "error: " + polishDaemonError(d.err)
 		return
 	}
 	a.sidecar.status = "sent"
@@ -3079,7 +3208,7 @@ func (a *App) handleSidecarSendDone(d sidecarSendDone) {
 func (a *App) handleSidecarLaunchDone(d sidecarLaunchDone) {
 	if d.err != nil {
 		if a.sidecar != nil {
-			a.sidecar.status = "launch failed: " + d.err.Error()
+			a.sidecar.status = "launch failed: " + polishDaemonError(d.err)
 		}
 		return
 	}
@@ -4176,7 +4305,7 @@ func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 	msgs := "-"
 	msgStyle := StyleDefault.Foreground(ColorMuted).Dim(true)
 	if msgCount > 0 {
-		msgs = formatWithCommas(msgCount)
+		msgs = formatTokensExact(msgCount)
 		msgStyle = subStyle
 	}
 	// If this session was just touched, paint the LAST ACTIVE cell in
@@ -4595,11 +4724,22 @@ func (a *App) populateDetails() {
 
 	// Paint a fast placeholder so the UI is never blocked on disk I/O.
 	placeholder := SessionDetail{
+		Provider:              "",
 		Model:                 a.modelCache[name],
+		Messages:              nil,
+		AllMessages:           nil,
+		Tools:                 nil,
+		TotalMessages:         0,
+		VisibleTokensEstimate: 0,
+		LastMessageTokens:     0,
+		CompactionCount:       0,
+		LastPreCompactTokens:  0,
+		TranscriptSizeBytes:   0,
 		ConversationLoading:   true,
 		ContextUsage:          contextState.Usage,
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
+		ResumeInstructions:    nil,
 		TranscriptStatsLoaded: false,
 		TranscriptStatsStatus: "loading...",
 	}
@@ -4631,8 +4771,20 @@ func (a *App) loadDetailAsync(sess *session.Session) {
 				logUIGoroutinePanic("detail_load", fmt.Sprint(r))
 			}
 		}()
+		if a.workers != nil {
+			_, loadCancel := context.WithCancel(a.ctx)
+			defer loadCancel()
+			wSess, regErr := a.workers.Register(a.ctx, "async_load", WorkerMeta{
+				Kind:     "async_load",
+				Source:   "detail_load",
+				Deadline: time.Time{},
+			}, newWorkerCloser(loadCancel))
+			if regErr == nil {
+				defer a.workers.Release(context.Background(), wSess, "detail_load.done")
+			}
+		}
 		detail, err := a.cb.GetSessionDetail(sess)
-		a.postInterrupt(detailsLoaded{name: name, detail: detail, err: err})
+		a.postInterruptIfActive("detail_load", detailsLoaded{name: name, detail: detail, err: err})
 	}()
 }
 

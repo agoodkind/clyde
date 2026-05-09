@@ -406,10 +406,10 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	}
 
 	want := []StreamEvent{
-		{Kind: "tool_use_start", BlockIndex: 0, ToolUseID: "t1", ToolUseName: "foo"},
-		{Kind: "tool_use_arg_delta", BlockIndex: 0, PartialJSON: `{"a":1}`},
-		{Kind: "tool_use_stop", BlockIndex: 0},
-		{Kind: "stop", StopReason: "tool_use"},
+		StreamToolUseStart{BlockIndex: 0, ToolUseID: "t1", ToolUseName: "foo"},
+		StreamToolUseArgDelta{BlockIndex: 0, PartialJSON: `{"a":1}`},
+		StreamToolUseStop{BlockIndex: 0},
+		StreamStop{StopReason: "tool_use"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("len got %d want %d: %#v", len(got), len(want), got)

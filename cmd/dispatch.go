@@ -15,7 +15,8 @@ const (
 	ModeClyde InvocationMode = iota
 
 	// ModePassthrough: args belong to the real claude binary (internal mechanism,
-	// non-interactive pipe, or explicit print/api call)  --  forward transparently.
+	// non-interactive pipe, or explicit print/api call)  --  forward transparently
+	// through Clyde's current default provider path.
 	ModePassthrough
 
 	// ModeResumeFlag: user called --resume / -r (claude's native flag form).
@@ -27,16 +28,19 @@ const (
 	ModeResumeNoArgDashboard
 
 	// ModeBasedirLaunch: user called `clyde <existing-directory>`.
-	// main.go opens a basedir-scoped dashboard instead of forwarding to claude.
+	// main.go opens a basedir-scoped dashboard instead of forwarding to the
+	// default provider.
 	ModeBasedirLaunch
 )
 
 // clydeSubcommands is the set of subcommand names that clyde owns.
 // Anything not in this set is either a flag to be rewritten or a
 // passthrough. Current surface: TUI (no-arg), compact, daemon, hook,
-// mcp, resume. help and --help / -h are handled by cobra.
+// mcp, resume, and the explicit codex override. help and --help / -h are
+// handled by cobra.
 var clydeSubcommands = map[string]bool{
 	"compact": true,
+	"codex":   true,
 	"daemon":  true,
 	"hook":    true,
 	"mcp":     true,
@@ -62,11 +66,12 @@ var passthroughSubcommands = map[string]bool{
 //	<claude-internal subcommand>         → ModePassthrough (forward verbatim)
 //	--print / -p                         → ModePassthrough (non-interactive query)
 //	<single existing directory>          → ModeBasedirLaunch (basedir picker / new session)
-//	anything else (unknown flags/cmds)   → ModeClyde       (cobra; unknown → ForwardToClaudeThenDashboard)
+//	anything else (unknown flags/cmds)   → ModeClyde       (cobra; unknown → ForwardToDefaultProviderThenDashboard)
 //
 // TTY versus pipe for forwarded invocations is not decided here; see
-// ForwardToClaudeThenDashboard in root.go (interactive TTY may open the TUI
-// after claude exits; api, print, and many one-shot first-arg subcommands skip it).
+// ForwardToDefaultProviderThenDashboard in root.go (interactive TTY may open
+// the TUI after the default provider exits; api, print, and many one-shot
+// first-arg subcommands skip it).
 //
 // Claude argv surface (authoritative for parity checks): claude-code
 // entrypoints/cli.tsx (fast paths before main.js) plus src/main.tsx (Commander).

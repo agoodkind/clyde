@@ -615,14 +615,14 @@ type SessionSummary struct {
 	state                 protoimpl.MessageState   `protogen:"open.v1"`
 	Name                  string                   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	MetadataName          string                   `protobuf:"bytes,2,opt,name=metadata_name,json=metadataName,proto3" json:"metadata_name,omitempty"`
-	ClydeUuid             string                   `protobuf:"bytes,31,opt,name=clyde_uuid,json=clydeUuid,proto3" json:"clyde_uuid,omitempty"`
+	ClydeUuid             string                   `protobuf:"bytes,35,opt,name=clyde_uuid,json=clydeUuid,proto3" json:"clyde_uuid,omitempty"`
 	SessionId             string                   `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	TranscriptPath        string                   `protobuf:"bytes,4,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
 	WorkDir               string                   `protobuf:"bytes,5,opt,name=work_dir,json=workDir,proto3" json:"work_dir,omitempty"`
 	CreatedNanos          int64                    `protobuf:"varint,6,opt,name=created_nanos,json=createdNanos,proto3" json:"created_nanos,omitempty"`
 	LastAccessedNanos     int64                    `protobuf:"varint,7,opt,name=last_accessed_nanos,json=lastAccessedNanos,proto3" json:"last_accessed_nanos,omitempty"`
 	ParentSession         string                   `protobuf:"bytes,8,opt,name=parent_session,json=parentSession,proto3" json:"parent_session,omitempty"`
-	ParentClydeUuid       string                   `protobuf:"bytes,32,opt,name=parent_clyde_uuid,json=parentClydeUuid,proto3" json:"parent_clyde_uuid,omitempty"`
+	ParentClydeUuid       string                   `protobuf:"bytes,36,opt,name=parent_clyde_uuid,json=parentClydeUuid,proto3" json:"parent_clyde_uuid,omitempty"`
 	IsForkedSession       bool                     `protobuf:"varint,9,opt,name=is_forked_session,json=isForkedSession,proto3" json:"is_forked_session,omitempty"`
 	IsIncognito           bool                     `protobuf:"varint,10,opt,name=is_incognito,json=isIncognito,proto3" json:"is_incognito,omitempty"`
 	PreviousSessionIds    []string                 `protobuf:"bytes,11,rep,name=previous_session_ids,json=previousSessionIds,proto3" json:"previous_session_ids,omitempty"`
@@ -645,6 +645,10 @@ type SessionSummary struct {
 	ContextUsageStatus    string                   `protobuf:"bytes,28,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
 	Provider              string                   `protobuf:"bytes,29,opt,name=provider,proto3" json:"provider,omitempty"`
 	Runtime               *ProviderRuntimeBoundary `protobuf:"bytes,30,opt,name=runtime,proto3" json:"runtime,omitempty"`
+	AutoNameState         string                   `protobuf:"bytes,31,opt,name=auto_name_state,json=autoNameState,proto3" json:"auto_name_state,omitempty"`
+	AutoNameSource        string                   `protobuf:"bytes,32,opt,name=auto_name_source,json=autoNameSource,proto3" json:"auto_name_source,omitempty"`
+	LastAutoNameNanos     int64                    `protobuf:"varint,33,opt,name=last_auto_name_nanos,json=lastAutoNameNanos,proto3" json:"last_auto_name_nanos,omitempty"`
+	AutoNameSourceHash    string                   `protobuf:"bytes,34,opt,name=auto_name_source_hash,json=autoNameSourceHash,proto3" json:"auto_name_source_hash,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -903,6 +907,34 @@ func (x *SessionSummary) GetRuntime() *ProviderRuntimeBoundary {
 	return nil
 }
 
+func (x *SessionSummary) GetAutoNameState() string {
+	if x != nil {
+		return x.AutoNameState
+	}
+	return ""
+}
+
+func (x *SessionSummary) GetAutoNameSource() string {
+	if x != nil {
+		return x.AutoNameSource
+	}
+	return ""
+}
+
+func (x *SessionSummary) GetLastAutoNameNanos() int64 {
+	if x != nil {
+		return x.LastAutoNameNanos
+	}
+	return 0
+}
+
+func (x *SessionSummary) GetAutoNameSourceHash() string {
+	if x != nil {
+		return x.AutoNameSourceHash
+	}
+	return ""
+}
+
 type ListSessionsResponse struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Sessions            []*SessionSummary      `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
@@ -1132,12 +1164,13 @@ type GetSessionDetailResponse struct {
 	// daemon's context-usage cache. Loaded=false with Status="probing"
 	// means a refresh is in flight and the next detail call should hit
 	// a warm cache.
-	ContextTotalTokens    int32  `protobuf:"varint,15,opt,name=context_total_tokens,json=contextTotalTokens,proto3" json:"context_total_tokens,omitempty"`
-	ContextMaxTokens      int32  `protobuf:"varint,16,opt,name=context_max_tokens,json=contextMaxTokens,proto3" json:"context_max_tokens,omitempty"`
-	ContextPercentage     int32  `protobuf:"varint,17,opt,name=context_percentage,json=contextPercentage,proto3" json:"context_percentage,omitempty"`
-	ContextMessagesTokens int32  `protobuf:"varint,18,opt,name=context_messages_tokens,json=contextMessagesTokens,proto3" json:"context_messages_tokens,omitempty"`
-	ContextUsageLoaded    bool   `protobuf:"varint,19,opt,name=context_usage_loaded,json=contextUsageLoaded,proto3" json:"context_usage_loaded,omitempty"`
-	ContextUsageStatus    string `protobuf:"bytes,20,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
+	ContextTotalTokens    int32    `protobuf:"varint,15,opt,name=context_total_tokens,json=contextTotalTokens,proto3" json:"context_total_tokens,omitempty"`
+	ContextMaxTokens      int32    `protobuf:"varint,16,opt,name=context_max_tokens,json=contextMaxTokens,proto3" json:"context_max_tokens,omitempty"`
+	ContextPercentage     int32    `protobuf:"varint,17,opt,name=context_percentage,json=contextPercentage,proto3" json:"context_percentage,omitempty"`
+	ContextMessagesTokens int32    `protobuf:"varint,18,opt,name=context_messages_tokens,json=contextMessagesTokens,proto3" json:"context_messages_tokens,omitempty"`
+	ContextUsageLoaded    bool     `protobuf:"varint,19,opt,name=context_usage_loaded,json=contextUsageLoaded,proto3" json:"context_usage_loaded,omitempty"`
+	ContextUsageStatus    string   `protobuf:"bytes,20,opt,name=context_usage_status,json=contextUsageStatus,proto3" json:"context_usage_status,omitempty"`
+	ResumeInstructions    []string `protobuf:"bytes,21,rep,name=resume_instructions,json=resumeInstructions,proto3" json:"resume_instructions,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -1310,6 +1343,13 @@ func (x *GetSessionDetailResponse) GetContextUsageStatus() string {
 		return x.ContextUsageStatus
 	}
 	return ""
+}
+
+func (x *GetSessionDetailResponse) GetResumeInstructions() []string {
+	if x != nil {
+		return x.ResumeInstructions
+	}
+	return nil
 }
 
 type GetSessionExportStatsRequest struct {
@@ -1923,13 +1963,12 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
 	"wrapper_id\x18\x02 \x01(\tR\twrapperId\"\x15\n" +
-	"\x13ListSessionsRequest\"\xb9\n" +
-	"\n" +
+	"\x13ListSessionsRequest\"\xef\v\n" +
 	"\x0eSessionSummary\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rmetadata_name\x18\x02 \x01(\tR\fmetadataName\x12\x1d\n" +
 	"\n" +
-	"clyde_uuid\x18\x1f \x01(\tR\tclydeUuid\x12\x1d\n" +
+	"clyde_uuid\x18# \x01(\tR\tclydeUuid\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x03 \x01(\tR\tsessionId\x12'\n" +
 	"\x0ftranscript_path\x18\x04 \x01(\tR\x0etranscriptPath\x12\x19\n" +
@@ -1937,7 +1976,7 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\rcreated_nanos\x18\x06 \x01(\x03R\fcreatedNanos\x12.\n" +
 	"\x13last_accessed_nanos\x18\a \x01(\x03R\x11lastAccessedNanos\x12%\n" +
 	"\x0eparent_session\x18\b \x01(\tR\rparentSession\x12*\n" +
-	"\x11parent_clyde_uuid\x18  \x01(\tR\x0fparentClydeUuid\x12*\n" +
+	"\x11parent_clyde_uuid\x18$ \x01(\tR\x0fparentClydeUuid\x12*\n" +
 	"\x11is_forked_session\x18\t \x01(\bR\x0fisForkedSession\x12!\n" +
 	"\fis_incognito\x18\n" +
 	" \x01(\bR\visIncognito\x120\n" +
@@ -1960,7 +1999,11 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\x14context_usage_loaded\x18\x1b \x01(\bR\x12contextUsageLoaded\x120\n" +
 	"\x14context_usage_status\x18\x1c \x01(\tR\x12contextUsageStatus\x12\x1a\n" +
 	"\bprovider\x18\x1d \x01(\tR\bprovider\x12;\n" +
-	"\aruntime\x18\x1e \x01(\v2!.clyde.v1.ProviderRuntimeBoundaryR\aruntime\"\x80\x01\n" +
+	"\aruntime\x18\x1e \x01(\v2!.clyde.v1.ProviderRuntimeBoundaryR\aruntime\x12&\n" +
+	"\x0fauto_name_state\x18\x1f \x01(\tR\rautoNameState\x12(\n" +
+	"\x10auto_name_source\x18  \x01(\tR\x0eautoNameSource\x12/\n" +
+	"\x14last_auto_name_nanos\x18! \x01(\x03R\x11lastAutoNameNanos\x121\n" +
+	"\x15auto_name_source_hash\x18\" \x01(\tR\x12autoNameSourceHash\"\x80\x01\n" +
 	"\x14ListSessionsResponse\x124\n" +
 	"\bsessions\x18\x01 \x03(\v2\x18.clyde.v1.SessionSummaryR\bsessions\x122\n" +
 	"\x15global_remote_control\x18\x02 \x01(\bR\x13globalRemoteControl\"`\n" +
@@ -1972,7 +2015,7 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\"<\n" +
 	"\x17GetSessionDetailRequest\x12!\n" +
-	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xd3\a\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\x84\b\n" +
 	"\x18GetSessionDetailResponse\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12@\n" +
@@ -1994,7 +2037,8 @@ const file_clyde_v1_daemon_session_proto_rawDesc = "" +
 	"\x12context_percentage\x18\x11 \x01(\x05R\x11contextPercentage\x126\n" +
 	"\x17context_messages_tokens\x18\x12 \x01(\x05R\x15contextMessagesTokens\x120\n" +
 	"\x14context_usage_loaded\x18\x13 \x01(\bR\x12contextUsageLoaded\x120\n" +
-	"\x14context_usage_status\x18\x14 \x01(\tR\x12contextUsageStatus\"A\n" +
+	"\x14context_usage_status\x18\x14 \x01(\tR\x12contextUsageStatus\x12/\n" +
+	"\x13resume_instructions\x18\x15 \x03(\tR\x12resumeInstructions\"A\n" +
 	"\x1cGetSessionExportStatsRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xc7\x03\n" +
 	"\x1dGetSessionExportStatsResponse\x12!\n" +

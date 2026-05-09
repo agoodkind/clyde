@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/correlation"
 )
@@ -52,7 +52,7 @@ func (s *Server) dispatchResolvedChat(
 	effort string,
 	reqID string,
 	body []byte,
-	cursorReq adaptercursor.Request,
+	ingressCtx ingresscontract.IngressContext,
 	resolvedReq adapterresolver.ResolvedRequest,
 	resolverErr error,
 ) {
@@ -106,7 +106,7 @@ func (s *Server) dispatchResolvedChat(
 			s.respondAdapterError(w, r, err)
 			return
 		}
-		s.dispatchCodexProvider(w, r, req, model, reqID, cursorReq, resolvedReq)
+		s.dispatchCodexProvider(w, r, req, model, reqID, ingressCtx, resolvedReq)
 		return
 	default:
 		err := newAdapterError(adapterErrorUnsupportedBackend,

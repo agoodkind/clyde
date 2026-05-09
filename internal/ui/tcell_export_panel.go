@@ -191,16 +191,16 @@ func (p *ExportPanel) renderLines(width int) []exportPanelLine {
 	add(StyleHeader, "Summary")
 	add(StyleDefault, fmt.Sprintf("visible tokens %s   visible messages %s   file size %s",
 		formatDetailTokens(p.stats.VisibleTokensEstimate),
-		formatWithCommas(p.stats.VisibleMessages),
+		formatTokensExact(p.stats.VisibleMessages),
 		formatBytes(p.stats.TranscriptSizeBytes)))
 	add(StyleDefault, fmt.Sprintf("user msgs %s   assistant msgs %s   tool results %s",
-		formatWithCommas(p.stats.UserMessages),
-		formatWithCommas(p.stats.AssistantMessages),
-		formatWithCommas(p.stats.ToolResultMessages)))
+		formatTokensExact(p.stats.UserMessages),
+		formatTokensExact(p.stats.AssistantMessages),
+		formatTokensExact(p.stats.ToolResultMessages)))
 	add(StyleDefault, fmt.Sprintf("tool calls %s   system prompts %s   compactions %s",
-		formatWithCommas(p.stats.ToolCalls),
-		formatWithCommas(p.stats.SystemPrompts),
-		formatWithCommas(p.stats.Compactions)))
+		formatTokensExact(p.stats.ToolCalls),
+		formatTokensExact(p.stats.SystemPrompts),
+		formatTokensExact(p.stats.Compactions)))
 	blank()
 
 	historyLabel := "include from   "
@@ -622,8 +622,8 @@ func (p *ExportPanel) estimateLabel() string {
 	msgs := p.stats.VisibleMessages + p.selectedCompactions()*98
 	return fmt.Sprintf("%s   %s messages   %s compaction snapshot(s)",
 		formatDetailTokens(tokens),
-		formatWithCommas(msgs),
-		formatWithCommas(p.selectedCompactions()))
+		formatTokensExact(msgs),
+		formatTokensExact(p.selectedCompactions()))
 }
 
 func (p *ExportPanel) estimatedTokens() int {

@@ -47,6 +47,20 @@ type Metadata struct {
 	// key. DisplayTitle remains as compatibility metadata for rows created while
 	// Name was a slug-derived alias.
 	DisplayTitle string `json:"displayTitle,omitempty"`
+
+	// AutoNameState records the session's position in the auto-rename
+	// state machine. Retained for compatibility with the daemon auto-name worker.
+	AutoNameState AutoNameState `json:"autoNameState,omitempty"`
+
+	// AutoNameSource records which subsystem produced the current name.
+	AutoNameSource AutoNameSource `json:"autoNameSource,omitempty"`
+
+	// LastAutoNameAt records the most recent auto-rename attempt.
+	LastAutoNameAt time.Time `json:"lastAutoNameAt,omitzero"`
+
+	// AutoNameSourceHash is the fingerprint of the source text last evaluated
+	// by the auto-name worker.
+	AutoNameSourceHash string `json:"autoNameSourceHash,omitempty"`
 }
 
 // ProviderOwnedMetadata is the provider-neutral persisted identity and artifact
@@ -111,6 +125,10 @@ func NewSession(name, sessionID string) *Session {
 			WorkspaceRoot:        "",
 			ContextMessageCount:  0,
 			DisplayTitle:         "",
+			AutoNameState:        AutoNameStateUntouched,
+			AutoNameSource:       AutoNameSourceUnspecified,
+			LastAutoNameAt:       time.Time{},
+			AutoNameSourceHash:   "",
 		},
 		storageKey: "",
 	}

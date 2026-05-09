@@ -9,13 +9,58 @@ import (
 	"time"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
-	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 )
+
+// codexEgressContext builds a derived context for a Codex provider
+// Execute call. It:
+//
+//  1. Registers a parent egress session so the reload drain tracks
+//     the overall websocket transport lifetime.
+//  2. Injects a BeforeAttempt hook via codex.WithBeforeAttempt so
+//     each retry attempt is registered as a nested child session.
+//
+// The caller must invoke the returned release func when Execute returns.
+func (s *Server) codexEgressContext(
+	ctx context.Context,
+	requestID string,
+	wsURL string,
+) (context.Context, func(string)) {
+	egressCtx, parentSess, releaseEgress := registerEgress(ctx, s.egressRegistry, egressSessionKindWebsocket, EgressMeta{
+		Provider:          "codex",
+		UpstreamURL:       wsURL,
+		UpstreamRequestID: "",
+		AttemptNo:         0,
+		ParentRequestID:   requestID,
+	})
+	// BeforeAttempt hook: called by the transport's retry loop for each
+	// attempt (1-based). Registers the attempt as a nested child of the
+	// parent egress session so operators can correlate attempt spans.
+	hook := func(attemptCtx context.Context, attemptNo int) (context.Context, func(string)) {
+		childCtx, _, releaseAttempt := registerEgress(
+			attemptCtx,
+			s.egressRegistry,
+			egressSessionKindAttempt,
+			EgressMeta{
+				Provider:          "codex",
+				UpstreamURL:       wsURL,
+				UpstreamRequestID: "",
+				AttemptNo:         attemptNo,
+				ParentRequestID:   requestID,
+			},
+			livetrack.WithParent(parentSess),
+		)
+		return childCtx, releaseAttempt
+	}
+	egressCtx = adaptercodex.WithBeforeAttempt(egressCtx, hook)
+	return egressCtx, releaseEgress
+}
 
 // codexCompletedAttrs builds the structured attribute slice for the
 // adapter.chat.completed emit on the Codex dispatch path. Both the
@@ -62,11 +107,11 @@ func (s *Server) dispatchCodexProvider(
 	req ChatRequest,
 	model ResolvedModel,
 	reqID string,
-	cursorReq adaptercursor.Request,
+	ingressCtx ingresscontract.IngressContext,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
 	started := adapterClock.Now()
-	_ = cursorReq // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
+	_ = ingressCtx // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
 
 	s.emitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, req.Stream)
 
@@ -95,7 +140,12 @@ func (s *Server) dispatchCodexProviderStream(
 
 	s.emitRequestStreamOpened(r.Context(), model, "direct", reqID, model.Alias, true)
 
-	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, writer)
+	// Register the overall Codex egress call and inject the per-attempt
+	// hook before dispatching to the provider.
+	egressCtx, releaseEgress := s.codexEgressContext(ctx, reqID, adaptercodex.WebsocketURL(""))
+	defer releaseEgress("codex.stream.done")
+
+	result, runErr := s.codexProvider.Execute(egressCtx, resolvedReq, writer)
 	if runErr != nil {
 		s.handleCodexProviderStreamError(ctx, w, r, writer, runErr, model, reqID, started)
 		return
@@ -189,7 +239,12 @@ func (s *Server) dispatchCodexProviderCollect(
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
 	collector := newProviderCollectorWriter()
-	result, runErr := s.codexProvider.Execute(ctx, resolvedReq, collector)
+	// Register the overall Codex egress call and inject the per-attempt
+	// hook before dispatching to the provider.
+	egressCtx, releaseEgress := s.codexEgressContext(ctx, reqID, adaptercodex.WebsocketURL(""))
+	defer releaseEgress("codex.collect.done")
+
+	result, runErr := s.codexProvider.Execute(egressCtx, resolvedReq, collector)
 	if runErr != nil {
 		aerr := codexProviderAdapterError(runErr)
 		aerr.Backend = model.Backend

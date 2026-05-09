@@ -37,37 +37,37 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 			return sink(ev)
 		}
 
-		if err := emit(anthropic.StreamEvent{Kind: "thinking", BlockIndex: 0}); err != nil {
+		if err := emit(anthropic.StreamThinkingStart{BlockIndex: 0}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamEvent{Kind: "thinking", BlockIndex: 0, Text: "considering the request"}); err != nil {
-			return anthropic.Usage{}, "", err
-		}
-
-		if err := emit(anthropic.StreamEvent{Kind: "text", BlockIndex: 1, Text: "Reading the file."}); err != nil {
+		if err := emit(anthropic.StreamThinkingDelta{BlockIndex: 0, Text: "considering the request"}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
 
-		if err := emit(anthropic.StreamEvent{Kind: "tool_use_start", BlockIndex: 2, ToolUseID: "tu_1", ToolUseName: "Read"}); err != nil {
+		if err := emit(anthropic.StreamTextDelta{BlockIndex: 1, Text: "Reading the file."}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+
+		if err := emit(anthropic.StreamToolUseStart{BlockIndex: 2, ToolUseID: "tu_1", ToolUseName: "Read"}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
 		// Anthropic's first input_json_delta for a tool_use block is
 		// often empty. Forward this to exercise the wire shape Cursor
 		// sees in production. The forward fix in stream_parse.go must
 		// drop the empty delta before it reaches the renderer.
-		if err := emit(anthropic.StreamEvent{Kind: "tool_use_arg_delta", BlockIndex: 2, PartialJSON: ""}); err != nil {
+		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 2, PartialJSON: ""}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamEvent{Kind: "tool_use_arg_delta", BlockIndex: 2, PartialJSON: `{"path":"`}); err != nil {
+		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 2, PartialJSON: `{"path":"`}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamEvent{Kind: "tool_use_arg_delta", BlockIndex: 2, PartialJSON: `/tmp/file.txt"}`}); err != nil {
+		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 2, PartialJSON: `/tmp/file.txt"}`}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamEvent{Kind: "tool_use_stop", BlockIndex: 2}); err != nil {
+		if err := emit(anthropic.StreamToolUseStop{BlockIndex: 2}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
-		if err := emit(anthropic.StreamEvent{Kind: "stop", StopReason: "tool_use"}); err != nil {
+		if err := emit(anthropic.StreamStop{StopReason: "tool_use"}); err != nil {
 			return anthropic.Usage{}, "", err
 		}
 		return anthropic.Usage{InputTokens: 100, OutputTokens: 20}, "tool_use", nil

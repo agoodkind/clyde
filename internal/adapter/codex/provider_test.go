@@ -136,11 +136,11 @@ func TestProbeUsageWarningsReturnsNormalizedWindows(t *testing.T) {
 	if len(w.events) != 2 {
 		t.Fatalf("events len=%d want 2", len(w.events))
 	}
-	if got := w.events[0].Text; got != "answer" {
-		t.Fatalf("assistant event=%q", got)
+	if td, ok := w.events[0].(adapterrender.TextDelta); !ok || td.Text != "answer" {
+		t.Fatalf("assistant event=%+v", w.events[0])
 	}
-	if got := w.events[1].Kind; got != adapterrender.EventReasoningFinished {
-		t.Fatalf("final event kind=%q", got)
+	if _, ok := w.events[1].(adapterrender.ReasoningFinished); !ok {
+		t.Fatalf("final event type=%T want ReasoningFinished", w.events[1])
 	}
 	if len(result.UsageNoticeWindows) != 1 {
 		t.Fatalf("usage notice windows len=%d want 1", len(result.UsageNoticeWindows))
@@ -217,14 +217,11 @@ func TestProviderExecuteSkipsUsageWarningWhenConfiguredThresholdNotMet(t *testin
 	if len(w.events) != 2 {
 		t.Fatalf("events len=%d want 2", len(w.events))
 	}
-	if got := w.events[0].Text; got != "answer" {
-		t.Fatalf("assistant event=%q", got)
+	if td, ok := w.events[0].(adapterrender.TextDelta); !ok || td.Text != "answer" {
+		t.Fatalf("assistant event=%+v", w.events[0])
 	}
-	if got := w.events[1].Kind; got != adapterrender.EventReasoningFinished {
-		t.Fatalf("final event kind=%q", got)
-	}
-	if got := w.events[1].Text; got != "" {
-		t.Fatalf("final event text=%q", got)
+	if _, ok := w.events[1].(adapterrender.ReasoningFinished); !ok {
+		t.Fatalf("final event type=%T want ReasoningFinished", w.events[1])
 	}
 	if result.ReasoningSummary != "" {
 		t.Fatalf("reasoning summary=%q", result.ReasoningSummary)
@@ -294,11 +291,11 @@ func TestProviderExecuteSkipsUsageWarningWhenFinishReasonIsNotStop(t *testing.T)
 	if len(w.events) != 2 {
 		t.Fatalf("events len=%d want 2", len(w.events))
 	}
-	if got := w.events[0].Text; got != "partial" {
-		t.Fatalf("assistant event=%q", got)
+	if td, ok := w.events[0].(adapterrender.TextDelta); !ok || td.Text != "partial" {
+		t.Fatalf("assistant event=%+v", w.events[0])
 	}
-	if got := w.events[1].Kind; got != adapterrender.EventReasoningFinished {
-		t.Fatalf("final event kind=%q", got)
+	if _, ok := w.events[1].(adapterrender.ReasoningFinished); !ok {
+		t.Fatalf("final event type=%T want ReasoningFinished", w.events[1])
 	}
 }
 

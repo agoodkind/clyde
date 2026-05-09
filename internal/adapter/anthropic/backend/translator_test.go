@@ -189,14 +189,15 @@ func TestStreamTranslatorEventPathEmitsToolCallEvents(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("events len=%d want 1", len(events))
 	}
-	if events[0].Kind != adapterrender.EventToolCallDelta {
-		t.Fatalf("kind=%q want %q", events[0].Kind, adapterrender.EventToolCallDelta)
+	tc0, ok := events[0].(adapterrender.ToolCallDelta)
+	if !ok {
+		t.Fatalf("events[0] type=%T want ToolCallDelta", events[0])
 	}
-	if len(events[0].ToolCalls) != 1 {
-		t.Fatalf("tool_calls len=%d want 1", len(events[0].ToolCalls))
+	if len(tc0.ToolCalls) != 1 {
+		t.Fatalf("tool_calls len=%d want 1", len(tc0.ToolCalls))
 	}
-	if events[0].ToolCalls[0].Function.Name != "get_weather" {
-		t.Fatalf("tool name=%q", events[0].ToolCalls[0].Function.Name)
+	if tc0.ToolCalls[0].Function.Name != "get_weather" {
+		t.Fatalf("tool name=%q", tc0.ToolCalls[0].Function.Name)
 	}
 }
 
@@ -229,10 +230,11 @@ func TestStreamTranslatorEventPathEmitsRefusalEvent(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("events len=%d want 1", len(events))
 	}
-	if events[0].Kind != adapterrender.EventAssistantRefusalDelta {
-		t.Fatalf("kind=%q want %q", events[0].Kind, adapterrender.EventAssistantRefusalDelta)
+	rd, ok := events[0].(adapterrender.RefusalDelta)
+	if !ok {
+		t.Fatalf("events[0] type=%T want RefusalDelta", events[0])
 	}
-	if events[0].Text != "declined" {
-		t.Fatalf("refusal=%q want declined", events[0].Text)
+	if rd.Text != "declined" {
+		t.Fatalf("refusal=%q want declined", rd.Text)
 	}
 }

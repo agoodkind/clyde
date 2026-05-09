@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 )
 
 // Config represents the clyde configuration.
@@ -46,6 +48,11 @@ type Config struct {
 	// MITM configures the local capture proxy used for provider
 	// subprocesses and for adapter-side request observability.
 	MITM MITMConfig `json:"mitm" toml:"mitm"`
+	// AutoName configures the automatic session-naming worker.
+	// CLYDE-170 PR3 adds the parsed config block. The worker that
+	// consumes this config lands in PR4. Defaults are applied when
+	// the [autoname] block is absent or partial.
+	AutoName AutoNameConfig `json:"autoName" toml:"autoname"`
 }
 
 // LoggingConfig carries global logging settings.
@@ -545,71 +552,31 @@ type AdapterAnthropic struct {
 	Reasoning AdapterAnthropicReasoning `json:"reasoning,omitzero" toml:"reasoning,omitempty"`
 }
 
-// AnthropicInboundThinking is the closed enum of strategies for the visible
-// thinking content block round-trip. Mirrors the existing render
-// [MaterializationStrategy] values; keep the legal set in lockstep.
-type AnthropicInboundThinking string
-
-// Anthropic inbound-thinking strategies.
-const (
-	// AnthropicInboundThinkingNative materializes round-tripped thinking
-	// envelopes as the upstream-native `{type:"thinking"}` content block.
-	// This is the documented default.
-	AnthropicInboundThinkingNative AnthropicInboundThinking = "native_thinking_block"
-	// AnthropicInboundThinkingDrop discards thinking bodies before
-	// forwarding upstream.
-	AnthropicInboundThinkingDrop AnthropicInboundThinking = "drop"
-	// AnthropicInboundThinkingPlainText concatenates the envelope body into
-	// the assistant text block as plain prose.
-	AnthropicInboundThinkingPlainText AnthropicInboundThinking = "plain_text_concat"
-	// AnthropicInboundThinkingPassthrough leaves the marker-wrapped envelope
-	// in place so the upstream sees what Cursor sent.
-	AnthropicInboundThinkingPassthrough AnthropicInboundThinking = "passthrough"
-)
-
 // AdapterAnthropicReasoning is the per-provider reasoning lever block for the
 // Anthropic backend. Anthropic carries one lever because Anthropic emits a
 // single thinking content block per turn; the lever picks how a round-tripped
 // thinking envelope is materialized on the inbound (request-shaping) side.
+// The legal value set lives in the Anthropic provider package as
+// [anthmode.InboundThinking].
 type AdapterAnthropicReasoning struct {
 	// InboundThinking selects the materialization strategy for round-tripped
-	// thinking content. Empty resolves to native_thinking_block.
-	InboundThinking AnthropicInboundThinking `json:"inboundThinking,omitempty" toml:"inbound_thinking,omitempty"`
+	// thinking content. Empty resolves to native_thinking_block via
+	// [anthmode.InboundThinking.Resolved].
+	InboundThinking anthmode.InboundThinking `json:"inboundThinking,omitempty" toml:"inbound_thinking,omitempty"`
 }
 
 // ResolvedInboundThinking returns the configured strategy with the documented
 // default applied when unset.
-func (r AdapterAnthropicReasoning) ResolvedInboundThinking() AnthropicInboundThinking {
-	if r.InboundThinking == "" {
-		return AnthropicInboundThinkingNative
-	}
-	return r.InboundThinking
+func (r AdapterAnthropicReasoning) ResolvedInboundThinking() anthmode.InboundThinking {
+	return r.InboundThinking.Resolved()
 }
 
-// AnthropicWireCaptureMode is the closed enum of legal modes for the
-// Anthropic wire-capture concern. Anthropic does not have discrete reasoning
-// items the way Codex does, so it omits the `reasoning_only` value.
-type AnthropicWireCaptureMode string
-
-// Anthropic wire-capture modes.
-const (
-	// AnthropicWireCaptureOff disables success-path body capture. Errors
-	// (429, non-200) continue to log their bodies via the existing
-	// anthropic.ratelimit and anthropic.messages.upstream_error events.
-	AnthropicWireCaptureOff AnthropicWireCaptureMode = "off"
-	// AnthropicWireCaptureSummaryOnly emits a per-request fingerprint
-	// (status, request-id, byte counts, headers) without the body.
-	AnthropicWireCaptureSummaryOnly AnthropicWireCaptureMode = "summary_only"
-	// AnthropicWireCaptureFull emits the full upstream response body on
-	// every successful request via a tee-reader. Combined with the small
-	// shared rotation budget, safe to leave on for diagnostic windows.
-	AnthropicWireCaptureFull AnthropicWireCaptureMode = "full"
-)
-
 // AdapterAnthropicWireCapture is the per-provider wire-capture mode block
-// for Anthropic. Empty mode is treated as Off.
+// for Anthropic. The legal mode set lives in the Anthropic provider package
+// as [anthmode.WireCaptureMode]; empty mode is treated as
+// [anthmode.WireCaptureOff].
 type AdapterAnthropicWireCapture struct {
-	Mode AnthropicWireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
+	Mode anthmode.WireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
 }
 
 // CodexWireCaptureMode is the closed enum of legal modes for the Codex
@@ -709,11 +676,8 @@ func (r AdapterCodexReasoning) ResolvedRoundTripEncrypted() CodexRoundTripEncryp
 
 // ResolvedAnthropicWireCaptureMode returns the configured mode with the Off
 // default applied when the operator has not set a value.
-func (c AdapterAnthropic) ResolvedAnthropicWireCaptureMode() AnthropicWireCaptureMode {
-	if c.WireCapture.Mode == "" {
-		return AnthropicWireCaptureOff
-	}
-	return c.WireCapture.Mode
+func (c AdapterAnthropic) ResolvedAnthropicWireCaptureMode() anthmode.WireCaptureMode {
+	return c.WireCapture.Mode.Resolved()
 }
 
 // ResolvedCodexWireCaptureMode returns the configured mode with the Off
@@ -1153,6 +1117,119 @@ type Defaults struct {
 	AnthropicAPIKey string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
 }
 
+// AutoNameConfig holds the [autoname] block of clyde.toml.
+//
+// Enabled is the global kill switch. The system is on by default.
+// Operators set this to false to disable the auto-rename worker.
+//
+// Provider is the adapter route key the worker uses for the LLM
+// candidate-name call. The empty value means "fall back to whatever
+// the summary subsystem uses today" so day-one behavior matches the
+// model the operator already trusts. The worker resolves the route at
+// call time. Do not hardcode a model name here.
+//
+// MaxCallsPerHour caps the daemon-wide LLM call rate. Default 6.
+//
+// Cooldown is the minimum interval between probe attempts on the
+// same session. Default 30 minutes.
+//
+// MinUserMessages is the trigger threshold. Default 3 user messages
+// before a cold session enters the auto-rename pipeline.
+//
+// Redact controls the redaction pass on transcript content before it
+// reaches the LLM call.
+type AutoNameConfig struct {
+	Enabled         *bool            `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Provider        string           `json:"provider,omitempty" toml:"provider,omitempty"`
+	MaxCallsPerHour int              `json:"maxCallsPerHour,omitempty" toml:"max_calls_per_hour,omitempty"`
+	Cooldown        AutoNameDuration `json:"cooldown,omitempty" toml:"cooldown,omitempty"`
+	MinUserMessages int              `json:"minUserMessages,omitempty" toml:"min_user_messages,omitempty"`
+	Redact          RedactPolicy     `json:"redact,omitzero" toml:"redact,omitempty"`
+}
+
+// AutoNameDuration accepts quoted Go duration strings in TOML while still
+// preserving duration typing inside the config model.
+type AutoNameDuration time.Duration
+
+// UnmarshalText parses a quoted Go duration or an integer nanosecond count.
+func (duration *AutoNameDuration) UnmarshalText(text []byte) error {
+	value := strings.TrimSpace(string(text))
+	if value == "" {
+		*duration = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err == nil {
+		*duration = AutoNameDuration(parsed)
+		return nil
+	}
+	numeric, numericErr := strconv.ParseInt(value, 10, 64)
+	if numericErr == nil {
+		*duration = AutoNameDuration(time.Duration(numeric))
+		return nil
+	}
+	return fmt.Errorf("parse autoname cooldown %q: %w", value, err)
+}
+
+// Duration returns the standard library duration value.
+func (duration *AutoNameDuration) Duration() time.Duration {
+	return time.Duration(*duration)
+}
+
+// IsEnabled reports whether the auto-rename worker is enabled.
+// Treats a nil Enabled pointer as the default (true).
+func (a AutoNameConfig) IsEnabled() bool {
+	if a.Enabled == nil {
+		return true
+	}
+	return *a.Enabled
+}
+
+// RedactPolicy controls the auto-rename redaction pass.
+//
+// MinDigitRunForRedact is the minimum length of consecutive digits to
+// redact (e.g. 7 to drop phone numbers but keep small ints).
+// Default 7.
+//
+// StripEmails strips email-shaped substrings. Default true.
+// StripPaths strips substrings starting with `/`. Default true.
+// StripKeyPrefixes strips obvious credential prefixes (sk-, ghp_,
+// AKIA, AIza, etc.). Default true.
+//
+// All three Strip* flags use *bool so a partial [autoname.redact]
+// block can opt one off without flipping the others off by zero
+// value.
+type RedactPolicy struct {
+	MinDigitRunForRedact int   `json:"minDigitRunForRedact,omitempty" toml:"min_digit_run_for_redact,omitempty"`
+	StripEmails          *bool `json:"stripEmails,omitempty" toml:"strip_emails,omitempty"`
+	StripPaths           *bool `json:"stripPaths,omitempty" toml:"strip_paths,omitempty"`
+	StripKeyPrefixes     *bool `json:"stripKeyPrefixes,omitempty" toml:"strip_key_prefixes,omitempty"`
+}
+
+// StripEmailsOrDefault returns true when StripEmails is unset.
+func (r RedactPolicy) StripEmailsOrDefault() bool {
+	if r.StripEmails == nil {
+		return true
+	}
+	return *r.StripEmails
+}
+
+// StripPathsOrDefault returns true when StripPaths is unset.
+func (r RedactPolicy) StripPathsOrDefault() bool {
+	if r.StripPaths == nil {
+		return true
+	}
+	return *r.StripPaths
+}
+
+// StripKeyPrefixesOrDefault returns true when StripKeyPrefixes is unset.
+func (r RedactPolicy) StripKeyPrefixesOrDefault() bool {
+	if r.StripKeyPrefixes == nil {
+		return true
+	}
+	return *r.StripKeyPrefixes
+}
+
 // MITMConfig configures the local capture proxy and its persistence.
 type MITMConfig struct {
 	EnabledDefault bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
@@ -1272,9 +1349,12 @@ type Permissions struct {
 	DisableBypassPermissionsMode string   `json:"disableBypassPermissionsMode,omitempty" toml:"disable_bypass_permissions_mode,omitempty"`
 }
 
-// NewConfig creates a new Config with sensible defaults.
+// NewConfig creates a new Config with sensible defaults. The function uses
+// a var declaration plus per-field assignment so each sub-block defaults to
+// its zero value without forcing exhaustruct to walk the nested types. The
+// loader fills the sub-blocks when the user supplies them.
 func NewConfig() *Config {
-	return &Config{
-		Profiles: make(map[string]Profile),
-	}
+	cfg := new(Config)
+	cfg.Profiles = make(map[string]Profile)
+	return cfg
 }

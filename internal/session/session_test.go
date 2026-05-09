@@ -1,6 +1,8 @@
 package session_test
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -196,6 +198,69 @@ var _ = Describe("Session", func() {
 				Provider: session.ProviderCodex,
 				ID:       "codex-current",
 			}}))
+		})
+	})
+
+	Describe("Auto-name metadata fields", func() {
+		It("omits the auto-name string fields when they hold zero values", func() {
+			md := session.Metadata{
+				Name:      "zero-fields",
+				SessionID: "uuid-zero",
+				Created:   time.Unix(1700000000, 0).UTC(),
+			}
+
+			raw, err := json.Marshal(md)
+			Expect(err).NotTo(HaveOccurred())
+
+			// The two enum-string fields use omitempty so a zero value
+			// keeps the legacy on-disk shape of metadata.json.
+			Expect(strings.Contains(string(raw), "autoNameState")).To(BeFalse())
+			Expect(strings.Contains(string(raw), "autoNameSource")).To(BeFalse())
+		})
+
+		It("round-trips populated auto-name state, source, and timestamp", func() {
+			cases := []struct {
+				state  session.AutoNameState
+				source session.AutoNameSource
+			}{
+				{session.AutoNameStateApplied, session.AutoNameSourceTranscript},
+				{session.AutoNameStateApplied, session.AutoNameSourceLLM},
+				{session.AutoNameStateApplied, session.AutoNameSourceDefault},
+				{session.AutoNameStateUserLocked, session.AutoNameSourceUser},
+			}
+			for _, tc := range cases {
+				original := session.Metadata{
+					Name:           "round-trip",
+					SessionID:      "uuid-rt",
+					Created:        time.Unix(1700000000, 0).UTC(),
+					AutoNameState:  tc.state,
+					AutoNameSource: tc.source,
+					LastAutoNameAt: time.Unix(1700001234, 0).UTC(),
+				}
+
+				raw, err := json.Marshal(original)
+				Expect(err).NotTo(HaveOccurred())
+
+				var decoded session.Metadata
+				Expect(json.Unmarshal(raw, &decoded)).To(Succeed())
+				Expect(decoded.AutoNameState).To(Equal(tc.state))
+				Expect(decoded.AutoNameSource).To(Equal(tc.source))
+				Expect(decoded.LastAutoNameAt.Equal(original.LastAutoNameAt)).To(BeTrue())
+
+				rawAgain, err := json.Marshal(decoded)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(rawAgain).To(Equal(raw))
+			}
+		})
+
+		It("decodes legacy metadata that omits the auto-name fields", func() {
+			legacy := []byte(`{"name":"legacy","sessionId":"uuid-legacy","created":"2023-01-01T00:00:00Z","lastAccessed":"2023-01-01T00:00:00Z","isForkedSession":false,"isIncognito":false}`)
+
+			var md session.Metadata
+			Expect(json.Unmarshal(legacy, &md)).To(Succeed())
+			Expect(md.AutoNameState).To(Equal(session.AutoNameStateUntouched))
+			Expect(md.AutoNameSource).To(Equal(session.AutoNameSourceUnspecified))
+			Expect(md.LastAutoNameAt.IsZero()).To(BeTrue())
 		})
 	})
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/adapter/ingresscontract"
 )
 
 type trackedUsage struct {
@@ -80,21 +80,22 @@ func shouldResetTrackedContext(prev contextUsageState, raw Usage) bool {
 }
 
 func requestContextTrackerKey(req ChatRequest, modelAlias string) string {
-	return requestContextTrackerKeyFromCursor(adaptercursor.TranslateRequest(req), modelAlias)
+	ic := ingressContextForRequest(req)
+	return requestContextTrackerKeyFromIngress(ic, req, modelAlias)
 }
 
-func requestContextTrackerKeyFromCursor(req adaptercursor.Request, modelAlias string) string {
-	if cursor := req.Context(); cursor.StrongConversationKey() != "" {
-		return cursor.StrongConversationKey()
+func requestContextTrackerKeyFromIngress(ic ingresscontract.IngressContext, req ChatRequest, modelAlias string) string {
+	if conversation := strings.TrimSpace(ic.ConversationID); conversation != "" {
+		return "cursor:" + conversation
 	}
-	if v := strings.TrimSpace(req.User); v != "" {
+	if v := strings.TrimSpace(ic.User); v != "" {
 		return "user:" + v
 	}
-	if v := metadataString(req.OpenAI.Metadata, "conversation_id", "conversationId", "composerId", "composer_id", "thread_id", "threadId", "chat_id", "chatId"); v != "" {
+	if v := metadataString(req.Metadata, "conversation_id", "conversationId", "composerId", "composer_id", "thread_id", "threadId", "chat_id", "chatId"); v != "" {
 		return "meta:" + v
 	}
 	firstUser := ""
-	for _, msg := range req.OpenAI.Messages {
+	for _, msg := range req.Messages {
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
 			firstUser = strings.TrimSpace(FlattenContent(msg.Content))
 			if firstUser != "" {
@@ -107,6 +108,34 @@ func requestContextTrackerKeyFromCursor(req adaptercursor.Request, modelAlias st
 	}
 	sum := sha256.Sum256([]byte(modelAlias + "\n" + firstUser))
 	return "fingerprint:" + hex.EncodeToString(sum[:16])
+}
+
+// ingressContextForRequest is the boundary-safe entry point free
+// functions use to translate a ChatRequest through the registered
+// ingress contract. When no ingress is registered the function
+// returns a zero IngressContext so the caller's primitive code path
+// degrades gracefully (the production path always has Cursor wired).
+func ingressContextForRequest(req ChatRequest) ingresscontract.IngressContext {
+	contract, ok := activeIngressContract()
+	if !ok || contract == nil {
+		return ingresscontract.IngressContext{
+			User:              "",
+			RequestID:         "",
+			ConversationID:    "",
+			GenerationID:      "",
+			WorkspacePath:     "",
+			NormalizedModel:   "",
+			PathKind:          "",
+			Mode:              "",
+			RawToolNames:      nil,
+			HasSubagentTool:   false,
+			CanSwitchMode:     false,
+			HasCreatePlanTool: false,
+			HasApplyPatchTool: false,
+			MCPToolNames:      nil,
+		}
+	}
+	return contract.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
 }
 
 func metadataString(raw json.RawMessage, keys ...string) string {

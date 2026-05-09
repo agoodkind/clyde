@@ -36,6 +36,7 @@ type ProviderCapabilities struct {
 // ProviderInfoRecord is a typed provider descriptor used by session metadata.
 type ProviderInfoRecord struct {
 	ID           ProviderID
+	DisplayName  string
 	Capabilities ProviderCapabilities
 }
 
@@ -98,7 +99,8 @@ func (s *Session) ProviderRuntimeBoundary() ProviderRuntimeBoundary {
 }
 
 var defaultProviderInfo = ProviderInfoRecord{
-	ID: ProviderClaude,
+	ID:          ProviderClaude,
+	DisplayName: "Claude",
 	Capabilities: ProviderCapabilities{
 		ResumeByID:          true,
 		ForkByID:            true,
@@ -119,7 +121,8 @@ var defaultProviderInfo = ProviderInfoRecord{
 }
 
 var codexProviderInfo = ProviderInfoRecord{
-	ID: ProviderCodex,
+	ID:          ProviderCodex,
+	DisplayName: "Codex",
 	Capabilities: ProviderCapabilities{
 		ResumeByID:    true,
 		HistoryRead:   true,
@@ -262,5 +265,32 @@ func ProviderInfo(provider ProviderID) ProviderInfoRecord {
 	if normalized == codexProviderInfo.ID {
 		return codexProviderInfo
 	}
-	return ProviderInfoRecord{ID: normalized}
+	var emptyCapabilities ProviderCapabilities
+	return ProviderInfoRecord{
+		ID:           normalized,
+		DisplayName:  "",
+		Capabilities: emptyCapabilities,
+	}
+}
+
+// ResumeInstructions returns provider-native resume hints for a concrete
+// session without making generic callers know the upstream CLI shape.
+func ResumeInstructions(sess *Session) []string {
+	if sess == nil {
+		return nil
+	}
+	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
+	if sessionID == "" {
+		return nil
+	}
+	switch NormalizeProviderID(sess.ProviderID()) {
+	case ProviderUnknown:
+		return nil
+	case ProviderCodex:
+		return []string{"codex resume " + sessionID}
+	case ProviderClaude:
+		return []string{"claude --resume " + sessionID}
+	default:
+		return nil
+	}
 }

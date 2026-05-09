@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"goodkind.io/clyde/internal/livetrack"
 )
 
 // Start binds the TCP listener and serves until ctx is done.
@@ -25,18 +27,23 @@ func (s *Server) Start(ctx context.Context) error {
 	return s.StartOnListener(ctx, lis)
 }
 
+// ingressConnKey is the context key used to pass the accepted [net.Conn]
+// into handler goroutines via [http.Server.ConnContext]. This lets the
+// per-request ingress session register a closer that terminates the
+// underlying TCP connection on force-close.
+type ingressConnKey struct{}
+
 // StartOnListener serves the adapter on an already-bound listener.
 // Daemon reload uses this to inherit the existing adapter socket
 // without creating a bind gap.
 func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
-	s.connMu.Lock()
-	s.conns = make(map[net.Conn]http.ConnState)
-	s.connMu.Unlock()
 	s.httpSrv = &http.Server{
 		Addr:              lis.Addr().String(),
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
-		ConnState:         s.trackConnState,
+		ConnContext: func(connCtx context.Context, c net.Conn) context.Context {
+			return context.WithValue(connCtx, ingressConnKey{}, c)
+		},
 	}
 	s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter listening",
 		slog.String("addr", lis.Addr().String()),
@@ -71,22 +78,53 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	}
 }
 
-// Shutdown stops accepting new adapter requests, closes idle keepalive
-// connections, and lets active handlers finish until ctx expires.
-// Cached upstream websocket sessions are closed so connections do not
-// leak across reload boundaries.
+// Shutdown stops accepting new adapter requests, drains in-flight
+// ingress sessions and outbound provider calls until ctx expires, and
+// closes the HTTP server. The paired registry.Drain call satisfies
+// the livetrack adopter lint: any subsystem that calls
+// [http.Server.Shutdown] must also call registry.Drain so the daemon
+// reload chain has bounded shutdown. Cached upstream websocket
+// sessions are also drained through their livetrack registry so the
+// reload deadline applies to egress traffic as well as ingress.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpSrv == nil {
+		if s.egressRegistry != nil {
+			egressResult := s.egressRegistry.Drain(ctx, "adapter.shutdown")
+			s.log.InfoContext(ctx, "adapter.egress.drained",
+				"final", egressResult.Final.String(),
+				"remaining", egressResult.Remaining,
+				"force_closed", egressResult.ForceClosed,
+				"duration_ms", egressResult.Duration.Milliseconds(),
+			)
+		}
 		if s.codexProvider != nil {
-			s.codexProvider.CloseAllSessions("shutdown")
+			s.codexProvider.DrainSessions(ctx, "adapter.shutdown")
 		}
 		return nil
 	}
 	s.httpSrv.SetKeepAlivesEnabled(false)
-	s.closeTrackedConns(http.StateIdle)
+	if s.requests != nil {
+		result := s.requests.Drain(ctx, "adapter.shutdown")
+		if len(result.Errors) > 0 {
+			s.log.WarnContext(ctx, "adapter.ingress.drain_errors",
+				"subcomponent", "adapter",
+				"force_closed", result.ForceClosed,
+				"errors", len(result.Errors),
+			)
+		}
+	}
 	err := s.httpSrv.Shutdown(ctx)
+	if s.egressRegistry != nil {
+		egressResult := s.egressRegistry.Drain(ctx, "adapter.shutdown")
+		s.log.InfoContext(ctx, "adapter.egress.drained",
+			"final", egressResult.Final.String(),
+			"remaining", egressResult.Remaining,
+			"force_closed", egressResult.ForceClosed,
+			"duration_ms", egressResult.Duration.Milliseconds(),
+		)
+	}
 	if s.codexProvider != nil {
-		s.codexProvider.CloseAllSessions("shutdown")
+		s.codexProvider.DrainSessions(ctx, "adapter.shutdown")
 	}
 	return err
 }
@@ -94,86 +132,95 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // Close force-closes all adapter HTTP connections. It is used after a
 // bounded reload drain so stale keepalive or active Cloudflare
 // connections cannot pin traffic to the old binary indefinitely.
+// ForceCloseAll terminates every in-flight request session tracked in
+// the ingress registry, then calls [http.Server.Close].
 func (s *Server) Close() error {
 	if s.httpSrv == nil {
 		return nil
 	}
-	s.closeTrackedConns(http.StateNew, http.StateActive, http.StateIdle, http.StateHijacked)
+	s.ForceCloseAll()
 	return s.httpSrv.Close()
 }
 
-func (s *Server) trackConnState(conn net.Conn, state http.ConnState) {
-	s.connMu.Lock()
-	defer s.connMu.Unlock()
-	if s.conns == nil {
-		s.conns = make(map[net.Conn]http.ConnState)
-	}
-	if state == http.StateClosed {
-		delete(s.conns, conn)
-		return
-	}
-	s.conns[conn] = state
-}
-
-// ActiveRequestCount returns the number of HTTP connections currently
-// serving a request (http.StateActive). Cloudflare-style keep-alive
-// connections sit in StateIdle and are excluded so reload drain logic
-// can distinguish "stream still streaming" from "tunnel is alive but
-// nothing in flight". Concurrent-safe.
+// ActiveRequestCount returns the number of in-flight requests currently
+// tracked in the ingress registry. Cloudflare-style keep-alive
+// connections that are idle between requests are not counted because
+// the registry only holds sessions while a handler is executing.
+// Concurrent-safe.
 func (s *Server) ActiveRequestCount() int {
-	s.connMu.Lock()
-	defer s.connMu.Unlock()
-	n := 0
-	for _, state := range s.conns {
-		if state == http.StateActive {
-			n++
-		}
+	if s.requests == nil {
+		return 0
 	}
-	return n
+	return s.requests.Count()
 }
 
 // WaitForIdle polls ActiveRequestCount until it drops to zero or the
-// supplied context is canceled. The polling cadence is fixed at 50ms
-// which is well under the wall-time of any meaningful upstream call
-// while keeping the busy loop bounded. Returns the final count when
-// the context fires.
+// supplied context is canceled. The polling cadence is 50ms, matching
+// the MITM registry poll so reload drain timing is symmetric across
+// HTTP surfaces. Returns the final count when the context fires.
 func (s *Server) WaitForIdle(ctx context.Context) int {
-	if s.ActiveRequestCount() == 0 {
+	if s.requests == nil || s.requests.Count() == 0 {
 		return 0
 	}
 	t := time.NewTicker(50 * time.Millisecond)
-	defer func() { t.Stop() }()
+	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return s.ActiveRequestCount()
 		case <-t.C:
-			if s.ActiveRequestCount() == 0 {
+			if s.requests.Count() == 0 {
 				return 0
 			}
 		}
 	}
 }
 
-func (s *Server) closeTrackedConns(states ...http.ConnState) {
-	if len(states) == 0 {
+// ForceCloseAll closes every in-flight request session tracked in the
+// ingress registry. The registry's force-close fan-out terminates each
+// session's underlying TCP connection so wedged SSE streams, tool-call
+// bridges, and synthetic-content marker round-trips do not outlive the
+// drain deadline. Callers (daemon reload chain) invoke this after
+// WaitForIdle returns non-zero.
+func (s *Server) ForceCloseAll() {
+	if s.requests == nil {
 		return
 	}
-	wanted := make(map[http.ConnState]bool, len(states))
-	for _, state := range states {
-		wanted[state] = true
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	result := s.requests.Drain(ctx, "adapter.force_close_all")
+	if len(result.Errors) > 0 {
+		s.log.WarnContext(ctx, "adapter.ingress.force_close_errors",
+			"subcomponent", "adapter",
+			"force_closed", result.ForceClosed,
+			"errors", len(result.Errors),
+		)
 	}
-	var toClose []net.Conn
-	s.connMu.Lock()
-	for conn, state := range s.conns {
-		if wanted[state] {
-			toClose = append(toClose, conn)
-		}
+}
+
+// registerIngressSession registers a new ingress request session in the
+// livetrack registry. The closer is an ingressConnCloser backed by the
+// [net.Conn] injected into the request context by ConnContext; when no
+// conn is present ([httptest.NewRecorder] scenarios) a noopIngressCloser
+// is used so test code compiles and runs correctly.
+//
+// Returns nil, false when the registry has already begun draining
+// (reload in progress): callers should write a 503 and return.
+func (s *Server) registerIngressSession(r *http.Request, meta IngressMeta) (*livetrack.Session[IngressMeta], bool) {
+	if s.requests == nil {
+		return nil, true
 	}
-	s.connMu.Unlock()
-	for _, conn := range toClose {
-		_ = conn.Close()
+	var closer livetrack.Closer
+	if conn, ok := r.Context().Value(ingressConnKey{}).(net.Conn); ok && conn != nil {
+		closer = ingressConnCloser{conn: conn}
+	} else {
+		closer = noopIngressCloser{}
 	}
+	sess, err := s.requests.Register(r.Context(), "adapter.ingress", meta, closer)
+	if err != nil {
+		return nil, false
+	}
+	return sess, true
 }
 
 func (s *Server) routes() *http.ServeMux {

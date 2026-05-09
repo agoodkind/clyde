@@ -43,7 +43,7 @@ func TestUX_OpenReturnPromptDoesNotBlockOnDetailExtraction(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 2)
 	defer cleanup()
 	block := make(chan struct{})
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		<-block
 		return SessionDetail{Model: "opus"}, nil
 	}
@@ -95,17 +95,33 @@ func TestUX_NormalSessionPopupKeepsResumeAtTop(t *testing.T) {
 	if len(entries) == 0 || entries[0].Label != "Resume" {
 		t.Fatalf("normal popup first entry = %q want %q", labelOrEmpty(entries), "Resume")
 	}
+	resumeCalls := 0
+	a.cb.ResumeSession = func(*session.Session) error {
+		resumeCalls++
+		return nil
+	}
+	entries[0].Action()
+	if resumeCalls != 1 {
+		t.Fatalf("Resume entry should invoke cb.ResumeSession once, got %d", resumeCalls)
+	}
 }
 
 // TestUX_ReturnPromptOmitsResumeFromBody confirms that
-// sessionOptionsEntriesWithoutResume drops the Resume row while
-// preserving every other action row in order.
+// sessionOptionsEntries with omitResume=true drops the Resume row while
+// preserving every other action row in order. It also walks every body
+// entry's Action and asserts none of them invoke cb.ResumeSession, so
+// the only resume affordance is the prompt's top-level Return row.
 func TestUX_ReturnPromptOmitsResumeFromBody(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 	sess := a.sessions[a.visibleIdx[0]]
+	resumeCalls := 0
+	a.cb.ResumeSession = func(*session.Session) error {
+		resumeCalls++
+		return nil
+	}
 	full := a.sessionOptionsEntries(sess, func() {})
-	body := a.sessionOptionsEntriesWithoutResume(sess, func() {})
+	body := a.sessionOptionsEntries(sess, func() {})
 	if len(body) != len(full)-1 {
 		t.Fatalf("body length = %d want %d", len(body), len(full)-1)
 	}
@@ -113,6 +129,54 @@ func TestUX_ReturnPromptOmitsResumeFromBody(t *testing.T) {
 		if entry.Label != full[i+1].Label {
 			t.Fatalf("body[%d]=%q want %q", i, entry.Label, full[i+1].Label)
 		}
+		if entry.Label == "Resume" {
+			t.Fatalf("body[%d] is Resume; omitResume=true should drop it", i)
+		}
+	}
+	for i, entry := range body {
+		if entry.Action == nil || entry.Disabled {
+			continue
+		}
+		before := resumeCalls
+		entry.Action()
+		if resumeCalls != before {
+			t.Fatalf("body[%d]=%q invoked cb.ResumeSession; only the top-row Return should",
+				i, entry.Label)
+		}
+	}
+}
+
+// TestUX_ReturnPromptBodyOmitsResumeIndependentOfLabel is an explicit
+// regression test for the fragile exact-label strip the previous
+// implementation used. The previous helper inspected entries[0].Label
+// at runtime and dropped the row only when it equalled the literal
+// string "Resume", so renaming the body label (e.g. to "Resume
+// session") would have silently regressed to two resume affordances.
+// The construction-time flag replaces that filter, so the body must
+// contain no resume-invoking action regardless of any label string.
+func TestUX_ReturnPromptBodyOmitsResumeIndependentOfLabel(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[a.visibleIdx[0]]
+	resumeCalls := 0
+	a.cb.ResumeSession = func(*session.Session) error {
+		resumeCalls++
+		return nil
+	}
+	body := a.sessionOptionsEntries(sess, func() {})
+	// Simulate a rename of every body label so any future filter that
+	// looked at entries[i].Label by exact string would silently misfire.
+	for i := range body {
+		body[i].Label = "Renamed " + body[i].Label
+	}
+	for _, entry := range body {
+		if entry.Action == nil || entry.Disabled {
+			continue
+		}
+		entry.Action()
+	}
+	if resumeCalls != 0 {
+		t.Fatalf("body should not invoke cb.ResumeSession even after labels rename; got %d calls", resumeCalls)
 	}
 }
 
@@ -247,15 +311,108 @@ func TestUX_BasedirLaunchRanksMatchingSessionsFirst(t *testing.T) {
 	if got.Name != "test-session-01" {
 		t.Fatalf("top session = %q, want test-session-01", got.Name)
 	}
-	if len(a.table.Rows) != 4 {
-		t.Fatalf("table rows = %d, want 4 including separator", len(a.table.Rows))
+	if len(a.table.Rows) != 6 {
+		t.Fatalf("table rows = %d, want 6 including separator block", len(a.table.Rows))
 	}
-	if got := a.table.Rows[1][0].Text; got != "[global session list]" {
+	if got := a.table.Rows[2][0].Text; got != "[global session list]" {
 		t.Fatalf("separator row = %q, want [global session list]", got)
 	}
-	a.openSessionOptions(1)
+	a.openSessionOptions(2)
 	if a.overlay != nil {
 		t.Fatalf("separator row should not open options, got %T", a.overlay)
+	}
+}
+
+func TestUX_GlobalSessionListSeparatorBlockShape(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	target := session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-1")
+	a.launchBasedir = target
+	a.sortSessions()
+	a.populateTable()
+
+	if len(a.table.Rows) != 6 {
+		t.Fatalf("table rows = %d, want 6 (1 local, 3 separator block, 2 global)", len(a.table.Rows))
+	}
+	// Row 0 is the single local session, rows 1..3 are the separator
+	// block (blank, label rule, blank), rows 4..5 are the global sessions.
+	expectedSyntheticRows := []int{1, 2, 3}
+	for _, row := range expectedSyntheticRows {
+		if a.tableRowIdx[row] != -1 {
+			t.Fatalf("tableRowIdx[%d] = %d, want -1", row, a.tableRowIdx[row])
+		}
+	}
+	if a.tableRowIdx[0] == -1 || a.tableRowIdx[4] == -1 || a.tableRowIdx[5] == -1 {
+		t.Fatalf("session rows misclassified as separator: %v", a.tableRowIdx)
+	}
+
+	// Top blank row: every cell has empty Text.
+	for col, cell := range a.table.Rows[1] {
+		if cell.Text != "" {
+			t.Fatalf("top blank row col %d text = %q, want empty", col, cell.Text)
+		}
+	}
+
+	// Label row: first cell holds the bracketed label, others hold the
+	// heavy U+2500 rule.
+	separator := a.table.Rows[2]
+	if got := separator[0].Text; got != "[global session list]" {
+		t.Fatalf("separator label = %q, want [global session list]", got)
+	}
+	for col := 1; col < len(separator); col++ {
+		if separator[col].Text == "" {
+			t.Fatalf("separator rule col %d is empty, want '-' repeated", col)
+		}
+		if !strings.Contains(separator[col].Text, "-") {
+			t.Fatalf("separator rule col %d = %q, want runs of '-'", col, separator[col].Text)
+		}
+		if strings.TrimRight(separator[col].Text, "-") != "" {
+			t.Fatalf("separator rule col %d = %q, want only '-' runes", col, separator[col].Text)
+		}
+	}
+
+	// Bottom blank row: every cell has empty Text.
+	for col, cell := range a.table.Rows[3] {
+		if cell.Text != "" {
+			t.Fatalf("bottom blank row col %d text = %q, want empty", col, cell.Text)
+		}
+	}
+}
+
+func TestUX_GlobalSessionListSeparatorCursorSkipsBlock(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 3)
+	defer cleanup()
+
+	target := session.CanonicalWorkspaceRoot("/Users/test/Sites/ws-1")
+	a.launchBasedir = target
+	a.sortSessions()
+	a.populateTable()
+
+	a.table.Active = true
+	a.table.SelectedRow = 0
+
+	// Pin keypress count: cursor down from the local session at row 0
+	// to the first global session at row 4 takes four single-step
+	// presses today. A regression that grows the synthetic block
+	// without updating the skip logic would change this number.
+	for i := 0; i < 4; i++ {
+		a.table.MoveDown(1)
+	}
+	if a.table.SelectedRow != 4 {
+		t.Fatalf("after 4 down presses, SelectedRow = %d, want 4", a.table.SelectedRow)
+	}
+	if sess := a.sessionForTableRow(a.table.SelectedRow); sess == nil {
+		t.Fatalf("expected first global session selectable at row 4")
+	}
+
+	// Cursor up is symmetric: four presses returns to the local
+	// session at row 0.
+	for i := 0; i < 4; i++ {
+		a.table.MoveUp(1)
+	}
+	if a.table.SelectedRow != 0 {
+		t.Fatalf("after 4 up presses, SelectedRow = %d, want 0", a.table.SelectedRow)
 	}
 }
 
@@ -307,7 +464,7 @@ func TestUX_BasedirLaunchKeepsDefaultNewSessionFlow(t *testing.T) {
 	}
 }
 
-func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
+func TestUX_CodexSessionOptionsUseHistoryReadableAffordances(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 	sess := a.sessions[0]
@@ -327,6 +484,16 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 	for _, label := range []string{
 		"View transcript",
 		"Export transcript",
+	} {
+		entry := findModalEntry(modal, label)
+		if entry == nil {
+			t.Fatalf("missing %q entry", label)
+		}
+		if entry.Disabled {
+			t.Fatalf("%q disabled = true, want false for codex history actions", label)
+		}
+	}
+	for _, label := range []string{
 		"Drive in sidecar",
 		"Open live URL",
 		"Copy live URL",
@@ -340,6 +507,72 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 		if !entry.Disabled {
 			t.Fatalf("%q disabled = false, want true for codex provider", label)
 		}
+	}
+}
+
+func TestUX_CodexDetailsLoadForHistoryReadableSessions(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[0]
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "codex-123"},
+		Artifacts: session.ProviderArtifacts{
+			TranscriptPath: "/tmp/codex-history.jsonl",
+		},
+	}
+	callbackEntered := make(chan struct{}, 1)
+	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+		callbackEntered <- struct{}{}
+		return SessionDetail{Model: "openai"}, nil
+	}
+
+	detail, loading := a.cachedDetailForSession(sess)
+	if !loading {
+		t.Fatalf("loading = false, want true while codex detail is fetched")
+	}
+	if detail.TranscriptStatsStatus == "unsupported" {
+		t.Fatalf("transcript stats status = %q, want async load instead", detail.TranscriptStatsStatus)
+	}
+	select {
+	case <-callbackEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetSessionDetail callback was never invoked for codex session")
+	}
+}
+
+func TestUX_SessionOptionsViewTranscriptUsesPopupSession(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 2)
+	defer cleanup()
+
+	selected := a.sessions[a.visibleIdx[0]]
+	target := a.sessions[a.visibleIdx[1]]
+	a.selected = selected
+
+	viewed := make(chan string, 1)
+	a.cb.ViewContent = func(sess *session.Session) string {
+		viewed <- sess.Name
+		return ""
+	}
+
+	a.openSessionOptionsFor(target)
+	modal, ok := a.overlay.(*OptionsModal)
+	if !ok {
+		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
+	}
+	action := findModalAction(modal, "View transcript")
+	if action == nil {
+		t.Fatal("missing View transcript action")
+	}
+	action()
+
+	select {
+	case got := <-viewed:
+		if got != target.Name {
+			t.Fatalf("viewed session=%q want %q", got, target.Name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for view callback")
 	}
 }
 
@@ -383,7 +616,7 @@ func TestUX_OpenOptionsModalStatsRefreshAfterDetailLoad(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		return SessionDetail{
 			Model:                 "opus",
 			TranscriptStatsLoaded: true,
@@ -433,7 +666,7 @@ func TestUX_ReturnPromptStatsRefreshAfterSessionListChanges(t *testing.T) {
 	a, scr, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(_ *session.Session) (SessionDetail, error) {
 		return SessionDetail{
 			Model:                 "opus",
 			TranscriptStatsLoaded: true,
@@ -635,7 +868,7 @@ func TestUX_OpenExportOptionsDoesNotBlockOnExportStats(t *testing.T) {
 	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
-	a.cb.LoadExportStats = func(*session.Session) (SessionExportStats, error) {
+	a.cb.LoadExportStats = func(_ *session.Session) (SessionExportStats, error) {
 		<-block
 		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
 	}
@@ -663,7 +896,7 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	a.cb.ExportSession = func(*session.Session, SessionExportRequest) ([]byte, error) {
 		return []byte("demo"), nil
 	}
-	a.cb.LoadExportStats = func(*session.Session) (SessionExportStats, error) {
+	a.cb.LoadExportStats = func(_ *session.Session) (SessionExportStats, error) {
 		return SessionExportStats{Compactions: 2, VisibleMessages: 12, VisibleTokensEstimate: 1200}, nil
 	}
 
@@ -896,7 +1129,7 @@ func TestUX_RegistryRenamePreservesSelection(t *testing.T) {
 	if a.selected == nil || a.selected.Name != renamed.Name {
 		t.Fatalf("selected session = %#v, want %q", a.selected, renamed.Name)
 	}
-	if row := a.findVisibleRowByName(renamed.Name); row < 0 {
+	if _, row := a.findVisibleSession(renamed.Name, ""); row < 0 {
 		t.Fatalf("renamed session not visible")
 	}
 	if _, ok := a.modelCache["test-session-00"]; ok {

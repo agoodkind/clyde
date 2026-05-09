@@ -62,6 +62,11 @@ type DirectConfig struct {
 	// resolves to RoundTripSummaryNative per codex-rs.
 	RoundTripSummary RoundTripSummary
 	RetryPolicies    []adapterretry.Policy
+	// BeforeAttempt, when non-nil, is forwarded to
+	// WebsocketTransportConfig so the outer caller (adapter.Server)
+	// can register each retry attempt as a nested livetrack session
+	// without the codex package importing adapter internals.
+	BeforeAttempt func(ctx context.Context, attemptNo int) (context.Context, func(string))
 }
 
 // RoundTripEncrypted is the closed enum the codex transport honors when the
@@ -166,6 +171,7 @@ func RunDirect(
 		WireCaptureMode:    cfg.WireCaptureMode,
 		RoundTripEncrypted: cfg.RoundTripEncrypted,
 		RetryPolicies:      cfg.RetryPolicies,
+		BeforeAttempt:      cfg.BeforeAttempt,
 	}
 	return RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 }

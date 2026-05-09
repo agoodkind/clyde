@@ -1,5 +1,3 @@
-// Package codex adapts Codex-specific naming semantics onto Clyde's
-// provider-neutral session naming boundary.
 package codex
 
 import (

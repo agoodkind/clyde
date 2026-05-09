@@ -1,23 +1,24 @@
 package codex
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 )
 
 func TestCacheTakeReturnsFalseOnColdCache(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, time.Minute)
-	if _, ok := c.Take("conv-1"); ok {
+	c := NewWebsocketSessionCache(nil, time.Minute, nil)
+	if _, ok := c.Take(context.Background(), "conv-1"); ok {
 		t.Errorf("expected cold cache Take to return false")
 	}
 }
 
 func TestCachePutThenTakeReturnsSameSession(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, time.Minute)
+	c := NewWebsocketSessionCache(nil, time.Minute, nil)
 	s := &WebsocketSession{ConversationID: "conv-1", LastResponseID: "resp-a", OpenedAt: time.Now(), LastUsed: time.Now()}
-	c.Put(s)
-	got, ok := c.Take("conv-1")
+	c.Put(context.Background(), s)
+	got, ok := c.Take(context.Background(), "conv-1")
 	if !ok {
 		t.Fatalf("expected hit after Put")
 	}
@@ -30,23 +31,23 @@ func TestCachePutThenTakeReturnsSameSession(t *testing.T) {
 }
 
 func TestCacheTakeTwiceWithoutPutReturnsFalseOnSecond(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, time.Minute)
-	c.Put(&WebsocketSession{ConversationID: "conv-1", OpenedAt: time.Now(), LastUsed: time.Now()})
-	if _, ok := c.Take("conv-1"); !ok {
+	c := NewWebsocketSessionCache(nil, time.Minute, nil)
+	c.Put(context.Background(), &WebsocketSession{ConversationID: "conv-1", OpenedAt: time.Now(), LastUsed: time.Now()})
+	if _, ok := c.Take(context.Background(), "conv-1"); !ok {
 		t.Fatalf("first Take should succeed")
 	}
-	if _, ok := c.Take("conv-1"); ok {
+	if _, ok := c.Take(context.Background(), "conv-1"); ok {
 		t.Errorf("second Take without Put should return false (lock-out)")
 	}
 }
 
 func TestCacheIdleExpirationDropsEntry(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, 50*time.Millisecond)
+	c := NewWebsocketSessionCache(nil, 50*time.Millisecond, nil)
 	now := time.Now()
 	c.now = func() time.Time { return now }
-	c.Put(&WebsocketSession{ConversationID: "conv-1", OpenedAt: now, LastUsed: now})
+	c.Put(context.Background(), &WebsocketSession{ConversationID: "conv-1", OpenedAt: now, LastUsed: now})
 	c.now = func() time.Time { return now.Add(time.Second) }
-	if _, ok := c.Take("conv-1"); ok {
+	if _, ok := c.Take(context.Background(), "conv-1"); ok {
 		t.Errorf("expired entry should not be returned")
 	}
 	if c.Size() != 0 {
@@ -55,11 +56,11 @@ func TestCacheIdleExpirationDropsEntry(t *testing.T) {
 }
 
 func TestCacheInvalidateClosesEntry(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, time.Minute)
+	c := NewWebsocketSessionCache(nil, time.Minute, nil)
 	s := &WebsocketSession{ConversationID: "conv-1", OpenedAt: time.Now(), LastUsed: time.Now()}
-	c.Put(s)
-	c.Invalidate("conv-1", "ws_read_error")
-	if _, ok := c.Take("conv-1"); ok {
+	c.Put(context.Background(), s)
+	c.Invalidate(context.Background(), "conv-1", "ws_read_error")
+	if _, ok := c.Take(context.Background(), "conv-1"); ok {
 		t.Errorf("invalidated entry should not be takeable")
 	}
 	if !s.Closed {
@@ -71,12 +72,12 @@ func TestCacheInvalidateClosesEntry(t *testing.T) {
 }
 
 func TestCacheCloseAllClosesEverything(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, time.Minute)
+	c := NewWebsocketSessionCache(nil, time.Minute, nil)
 	a := &WebsocketSession{ConversationID: "conv-a", OpenedAt: time.Now(), LastUsed: time.Now()}
 	b := &WebsocketSession{ConversationID: "conv-b", OpenedAt: time.Now(), LastUsed: time.Now()}
-	c.Put(a)
-	c.Put(b)
-	c.CloseAll("shutdown")
+	c.Put(context.Background(), a)
+	c.Put(context.Background(), b)
+	c.CloseAll(context.Background(), "shutdown")
 	if c.Size() != 0 {
 		t.Errorf("expected empty after CloseAll, got %d", c.Size())
 	}
@@ -89,9 +90,9 @@ func TestCacheCloseAllClosesEverything(t *testing.T) {
 }
 
 func TestCachePutOnClosedSessionInvalidates(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, time.Minute)
+	c := NewWebsocketSessionCache(nil, time.Minute, nil)
 	s := &WebsocketSession{ConversationID: "conv-1", Closed: true, OpenedAt: time.Now(), LastUsed: time.Now()}
-	c.Put(s)
+	c.Put(context.Background(), s)
 	if c.Size() != 0 {
 		t.Errorf("closed entry should not be cached")
 	}
@@ -101,17 +102,18 @@ func TestCachePutOnClosedSessionInvalidates(t *testing.T) {
 }
 
 func TestCacheConcurrentTakePutInvalidateRaceFree(t *testing.T) {
-	c := NewWebsocketSessionCache(nil, time.Minute)
-	c.Put(&WebsocketSession{ConversationID: "conv-1", OpenedAt: time.Now(), LastUsed: time.Now()})
+	ctx := context.Background()
+	c := NewWebsocketSessionCache(nil, time.Minute, nil)
+	c.Put(ctx, &WebsocketSession{ConversationID: "conv-1", OpenedAt: time.Now(), LastUsed: time.Now()})
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
 			for range 50 {
-				if s, ok := c.Take("conv-1"); ok {
-					c.Put(s)
+				if s, ok := c.Take(ctx, "conv-1"); ok {
+					c.Put(ctx, s)
 				}
 				_ = c.Size()
-				c.Invalidate("conv-other", "noop")
+				c.Invalidate(ctx, "conv-other", "noop")
 			}
 		})
 	}

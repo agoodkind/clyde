@@ -37,6 +37,7 @@ import (
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/outputstyle"
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
@@ -91,6 +92,7 @@ type Server struct {
 	remoteWorkers map[string]*remoteWorker
 	liveSessions  map[string]*liveRuntimeSession
 	liveLeases    map[string]*foregroundLease
+	liveWorkers   *livetrack.Registry[LiveMeta]
 
 	contextMu         sync.Mutex
 	contextStates     map[string]sessionContextState
@@ -104,6 +106,11 @@ type Server struct {
 	mitmAccess mitmAccessor
 
 	skipRuntimeCleanup atomic.Bool
+
+	autoNameMu sync.RWMutex
+	autoName   *autoNameWorker
+
+	RPCs *livetrack.Registry[RPCMeta]
 }
 
 // mitmAccessor stores the daemon's optional accessor for the
@@ -143,13 +150,14 @@ type wrapperSession struct {
 }
 
 type remoteWorker struct {
-	sessionName string
-	sessionID   string
-	basedir     string
-	incognito   bool
-	cmd         *exec.Cmd
-	done        chan struct{}
-	skipCleanup atomic.Bool
+	sessionName      string
+	sessionID        string
+	basedir          string
+	incognito        bool
+	cmd              *exec.Cmd
+	done             chan struct{}
+	skipCleanup      atomic.Bool
+	livetrackSession *livetrack.Session[LiveMeta]
 }
 
 type remoteWorkerTmuxState struct {
@@ -159,15 +167,16 @@ type remoteWorkerTmuxState struct {
 }
 
 type liveRuntimeSession struct {
-	provider     session.ProviderID
-	name         string
-	id           string
-	basedir      string
-	model        string
-	status       string
-	startedAt    time.Time
-	lastTurnID   string
-	codexRuntime codex.LiveRuntime
+	provider         session.ProviderID
+	name             string
+	id               string
+	basedir          string
+	model            string
+	status           string
+	startedAt        time.Time
+	lastTurnID       string
+	codexRuntime     codex.LiveRuntime
+	livetrackSession *livetrack.Session[LiveMeta]
 }
 
 type foregroundLease struct {
@@ -353,15 +362,27 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 		remoteWorkers:                   make(map[string]*remoteWorker),
 		liveSessions:                    make(map[string]*liveRuntimeSession),
 		liveLeases:                      make(map[string]*foregroundLease),
-		contextMu:                       sync.Mutex{},
-		contextStates:                   make(map[string]sessionContextState),
-		contextRefreshSem:               make(chan contextRefreshPermit, 2),
-		contextUsageCache:               newContextUsageStateCache(30 * time.Second),
-		contextUsageProbe:               nil,
-		reloadMu:                        sync.Mutex{},
-		reloadFn:                        nil,
-		mitmAccess:                      mitmAccessor{mu: sync.RWMutex{}, fn: nil},
-		skipRuntimeCleanup:              atomic.Bool{},
+		liveWorkers: livetrack.New[LiveMeta](livetrack.Options[LiveMeta]{
+			Component:     "daemon",
+			Concern:       "daemon",
+			Log:           log,
+			PollEvery:     0,
+			CloserGrace:   0,
+			ParallelClose: false,
+			Now:           nil,
+		}),
+		contextMu:          sync.Mutex{},
+		contextStates:      make(map[string]sessionContextState),
+		contextRefreshSem:  make(chan contextRefreshPermit, 2),
+		contextUsageCache:  newContextUsageStateCache(30 * time.Second),
+		contextUsageProbe:  nil,
+		reloadMu:           sync.Mutex{},
+		reloadFn:           nil,
+		mitmAccess:         mitmAccessor{mu: sync.RWMutex{}, fn: nil},
+		skipRuntimeCleanup: atomic.Bool{},
+		autoNameMu:         sync.RWMutex{},
+		autoName:           nil,
+		RPCs:               newRPCRegistry(),
 	}
 }
 
@@ -407,6 +428,7 @@ func (s *Server) runDiscoveryScanner() {
 
 	for {
 		s.runDiscoveryOnce(scanCtx)
+		s.runAutoRenamePass(scanCtx)
 		scanCtx = context.Background()
 		select {
 		case <-time.After(interval):
@@ -499,6 +521,23 @@ func (s *Server) TriggerScan(ctx context.Context, _ *clydev1.TriggerScanRequest)
 // while a subscriber's buffer is full are dropped for that one client.
 func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream clydev1.ClydeService_SubscribeRegistryServer) error {
 	ch := make(chan *clydev1.SubscribeRegistryResponse, 32)
+	streamCtx := stream.Context()
+	if s.RPCs != nil {
+		rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_registry", RPCMeta{
+			Direction: "inbound",
+			Method:    "SubscribeRegistry",
+			PeerActor: func() string {
+				peerInfo, _ := peer.FromContext(streamCtx)
+				return daemonPeerAddr(peerInfo)
+			}(),
+			RequestID:  "",
+			TraceID:    "",
+			LeaseToken: "",
+		}, rpcCloser{cancel: func() {}})
+		if err == nil {
+			defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_registry.done")
+		}
+	}
 
 	s.subMu.Lock()
 	s.subscribers[ch] = true
@@ -511,7 +550,6 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 		close(ch)
 	}()
 
-	ctx := stream.Context()
 	for {
 		select {
 		case ev, ok := <-ch:
@@ -521,7 +559,7 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 			if err := stream.Send(ev); err != nil {
 				return err
 			}
-		case <-ctx.Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
@@ -571,21 +609,95 @@ func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRe
 	if req.OldName == "" || req.NewName == "" {
 		return nil, status.Error(codes.InvalidArgument, "old_name and new_name are required")
 	}
+	if err := s.renameSessionInternal(ctx, req.OldName, req.NewName, renameAttribution{
+		state:      session.AutoNameStateUserLocked,
+		source:     session.AutoNameSourceUser,
+		sourceHash: "",
+	}); err != nil {
+		return nil, err
+	}
+	return &clydev1.RenameSessionResponse{}, nil
+}
+
+// ApplyAutoRename is the daemon entry point the auto-name worker uses.
+func (s *Server) ApplyAutoRename(ctx context.Context, oldName, newName, sourceHash string) error {
+	if oldName == "" || newName == "" {
+		return status.Error(codes.InvalidArgument, "old_name and new_name are required")
+	}
+	return s.renameSessionInternal(ctx, oldName, newName, renameAttribution{
+		state:      session.AutoNameStateApplied,
+		source:     session.AutoNameSourceTranscript,
+		sourceHash: sourceHash,
+	})
+}
+
+// HasLiveLease reports whether any wrapper currently holds a live-runtime
+// record or foreground lease against the named session.
+func (s *Server) HasLiveLease(name string) bool {
+	s.remoteMu.Lock()
+	defer s.remoteMu.Unlock()
+	for _, live := range s.liveSessions {
+		if live != nil && live.name == name {
+			return true
+		}
+	}
+	for _, lease := range s.liveLeases {
+		if lease != nil && lease.sessionName == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) sessionHasLiveLease(name string) bool {
+	return s.HasLiveLease(name)
+}
+
+type renameAttribution struct {
+	state      session.AutoNameState
+	source     session.AutoNameSource
+	sourceHash string
+}
+
+func (s *Server) renameSessionInternal(ctx context.Context, oldName, newName string, attribution renameAttribution) error {
+	start := daemonNow()
+	if s.sessionHasLiveLease(oldName) {
+		return status.Errorf(codes.FailedPrecondition, "session %q is in use; close the wrapper before renaming", oldName)
+	}
+
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+		return status.Errorf(codes.Internal, "store init: %v", err)
 	}
-	if err := store.Rename(req.OldName, req.NewName); err != nil {
-		return nil, status.Errorf(codes.Internal, "rename failed: %v", err)
+	if err := store.Rename(oldName, newName); err != nil {
+		return status.Errorf(codes.Internal, "rename failed: %v", err)
 	}
-	s.renameContextState(req.OldName, req.NewName)
-	renamed, _ := store.Get(req.NewName)
-	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED, store, renamed, req.OldName)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "session renamed via RPC",
-		slog.String("old", req.OldName),
-		slog.String("new", req.NewName),
+	renamed, getErr := store.Get(newName)
+	if getErr == nil && renamed != nil {
+		renamed.Metadata.AutoNameState = attribution.state
+		renamed.Metadata.AutoNameSource = attribution.source
+		renamed.Metadata.AutoNameSourceHash = attribution.sourceHash
+		renamed.Metadata.LastAutoNameAt = daemonNow()
+		if updateErr := store.Update(renamed); updateErr != nil {
+			s.log.WarnContext(ctx, "daemon.rename.metadata_update_failed",
+				"component", "daemon",
+				"subcomponent", "session",
+				"session", newName,
+				"err", updateErr,
+			)
+		}
+	}
+	s.renameContextState(oldName, newName)
+	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_RENAMED, store, renamed, oldName)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon.rename.applied",
+		slog.String("component", "daemon"),
+		slog.String("subcomponent", "session"),
+		slog.String("prior_name", oldName),
+		slog.String("new_name", newName),
+		slog.String("source", attribution.source.String()),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
-	return &clydev1.RenameSessionResponse{}, nil
+	return nil
 }
 
 // DeleteSession is the daemon-side delete. It removes registry metadata,
@@ -1427,7 +1539,7 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	if !sess.SessionProviderCapabilities().TranscriptExport {
 		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
 	}
-	stats := inspectExportStatsFor(sess.Metadata.ProviderTranscriptPath())
+	stats := inspectExportStatsForSession(sess)
 	resp := &clydev1.GetSessionExportStatsResponse{
 		SessionName:           sess.Name,
 		VisibleTokensEstimate: int32(stats.VisibleTokensEstimate),
@@ -1701,7 +1813,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	}
 	stats := inspectStats{}
 	if caps.TranscriptExport {
-		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+		stats = inspectStatsForSession(sess)
 	}
 	size := int64(0)
 	lastActivity := sess.Metadata.LastAccessed
@@ -1776,7 +1888,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 	}
 	stats := inspectStats{}
 	if caps.TranscriptExport {
-		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+		stats = inspectStatsForSession(sess)
 	}
 	contextState := s.lazyContextStateForDetail(ctx, sess)
 	resp := &clydev1.GetSessionDetailResponse{
@@ -2189,16 +2301,19 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		return nil, status.Errorf(codes.Internal, "launch remote session: %v", err)
 	}
 	worker := &remoteWorker{
-		sessionName: name,
-		sessionID:   sessionID,
-		basedir:     basedir,
-		incognito:   req.GetIncognito(),
-		cmd:         cmd,
-		done:        make(chan struct{}),
+		sessionName:      name,
+		sessionID:        sessionID,
+		basedir:          basedir,
+		incognito:        req.GetIncognito(),
+		cmd:              cmd,
+		done:             make(chan struct{}),
+		skipCleanup:      atomic.Bool{},
+		livetrackSession: nil,
 	}
 	s.remoteMu.Lock()
 	s.remoteWorkers[remoteWorkerKey(name, sessionID)] = worker
 	s.remoteMu.Unlock()
+	s.registerClaudeRemoteWorker(ctx, worker)
 	workerCtx := daemonDetachedCorrelationContext(ctx, s.log)
 	go func() {
 		defer func() {
@@ -2228,6 +2343,35 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		SessionId:   sessionID,
 		LaunchState: clydev1.StartRemoteSessionResponse_LAUNCH_STATE_LAUNCHING,
 	}, nil
+}
+
+// registerClaudeRemoteWorker registers a newly-launched Claude remote worker
+// with the livetrack registry.
+func (s *Server) registerClaudeRemoteWorker(ctx context.Context, worker *remoteWorker) {
+	if worker == nil || worker.cmd == nil || worker.cmd.Process == nil || s.liveWorkers == nil {
+		return
+	}
+	lsess, err := s.liveWorkers.Register(ctx, "claude.remote", LiveMeta{
+		Provider:      "claude",
+		LiveSessionID: worker.sessionID,
+		WorkerPID:     worker.cmd.Process.Pid,
+		Lease:         "background",
+	}, &claudeWorkerCloser{
+		proc:           worker.cmd.Process,
+		done:           worker.done,
+		interruptGrace: claudeRemoteSuspendTimeout,
+	})
+	if err == nil {
+		worker.livetrackSession = lsess
+		return
+	}
+	s.log.WarnContext(ctx, "daemon.remote_session.livetrack_register_failed",
+		"component", "daemon",
+		"provider", session.ProviderClaude,
+		"session", worker.sessionName,
+		"session_id", worker.sessionID,
+		"err", err,
+	)
 }
 
 func defaultSessionSettings(remoteControl bool) *session.Settings {

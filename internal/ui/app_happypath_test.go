@@ -283,7 +283,7 @@ func mkAppWithSessions(t *testing.T, n int) (*App, tcell.SimulationScreen, func(
 		},
 		// GetSessionDetail returns an empty detail so populateDetails
 		// doesn't crash on lookup.
-		GetSessionDetail: func(*session.Session) (SessionDetail, error) {
+		GetSessionDetail: func(_ *session.Session) (SessionDetail, error) {
 			return SessionDetail{}, nil
 		},
 	}

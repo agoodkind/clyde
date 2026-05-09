@@ -287,12 +287,14 @@ func TestSessionDetailFromProtoMapsContextUsage(t *testing.T) {
 	resp := &clydev1.GetSessionDetailResponse{
 		SessionName:           "chat-x",
 		Model:                 "claude-sonnet-4-5",
+		Provider:              "codex",
 		ContextTotalTokens:    42000,
 		ContextMaxTokens:      200000,
 		ContextPercentage:     21,
 		ContextMessagesTokens: 31000,
 		ContextUsageLoaded:    true,
 		ContextUsageStatus:    "",
+		ResumeInstructions:    []string{"codex resume codex-123"},
 	}
 
 	got := sessionDetailFromProto(resp)
@@ -314,6 +316,12 @@ func TestSessionDetailFromProtoMapsContextUsage(t *testing.T) {
 	}
 	if got.ContextUsageStatus != "" {
 		t.Fatalf("ContextUsageStatus=%q want empty", got.ContextUsageStatus)
+	}
+	if got.Provider != "codex" {
+		t.Fatalf("Provider=%q want codex", got.Provider)
+	}
+	if len(got.ResumeInstructions) != 1 || got.ResumeInstructions[0] != "codex resume codex-123" {
+		t.Fatalf("ResumeInstructions=%v want [codex resume codex-123]", got.ResumeInstructions)
 	}
 }
 
@@ -338,5 +346,82 @@ func TestSessionDetailFromProtoCarriesProbingStatus(t *testing.T) {
 	}
 	if got.ContextUsage != (ui.SessionContextUsage{}) {
 		t.Fatalf("ContextUsage=%+v want zero value", got.ContextUsage)
+	}
+}
+
+// TestSessionSummaryFromProto_AutoNameFields round-trips a proto
+// SessionSummary with the auto-rename fields through the mapper and
+// asserts that the resulting Session metadata carries matching values.
+// This guards the wire-to-domain hand-off the TUI consumes.
+func TestSessionSummaryFromProto_AutoNameFields(t *testing.T) {
+	lastAutoName := time.Unix(1700001234, 0).UTC()
+	raw := &clydev1.SessionSummary{
+		Name:              "chat-auto-name",
+		MetadataName:      "chat-auto-name",
+		SessionId:         "uuid-auto-name",
+		AutoNameState:     string(session.AutoNameStateApplied),
+		AutoNameSource:    string(session.AutoNameSourceLLM),
+		LastAutoNameNanos: lastAutoName.UnixNano(),
+	}
+
+	sess, _, _, _, _ := sessionSummaryFromProto(raw)
+
+	if sess.Metadata.AutoNameState != session.AutoNameStateApplied {
+		t.Fatalf("AutoNameState=%q want %q", sess.Metadata.AutoNameState, session.AutoNameStateApplied)
+	}
+	if sess.Metadata.AutoNameSource != session.AutoNameSourceLLM {
+		t.Fatalf("AutoNameSource=%q want %q", sess.Metadata.AutoNameSource, session.AutoNameSourceLLM)
+	}
+	if !sess.Metadata.LastAutoNameAt.Equal(lastAutoName) {
+		t.Fatalf("LastAutoNameAt=%s want %s", sess.Metadata.LastAutoNameAt, lastAutoName)
+	}
+}
+
+// TestSessionSummaryFromProto_AutoNameZeroFields asserts that a proto
+// SessionSummary with no auto-rename fields decodes into the
+// untouched/unspecified zero values rather than spurious data.
+func TestSessionSummaryFromProto_AutoNameZeroFields(t *testing.T) {
+	raw := &clydev1.SessionSummary{
+		Name:         "chat-no-auto-name",
+		MetadataName: "chat-no-auto-name",
+		SessionId:    "uuid-no-auto-name",
+	}
+
+	sess, _, _, _, _ := sessionSummaryFromProto(raw)
+
+	if sess.Metadata.AutoNameState != session.AutoNameStateUntouched {
+		t.Fatalf("AutoNameState=%q want untouched", sess.Metadata.AutoNameState)
+	}
+	if sess.Metadata.AutoNameSource != session.AutoNameSourceUnspecified {
+		t.Fatalf("AutoNameSource=%q want unspecified", sess.Metadata.AutoNameSource)
+	}
+	if !sess.Metadata.LastAutoNameAt.IsZero() {
+		t.Fatalf("LastAutoNameAt=%s want zero", sess.Metadata.LastAutoNameAt)
+	}
+}
+
+func TestSessionSummaryFromProto_RestoresProviderForResumeRouting(t *testing.T) {
+	raw := &clydev1.SessionSummary{
+		Name:         "codex-chat",
+		MetadataName: "codex-chat",
+		SessionId:    "codex-thread",
+		Provider:     string(session.ProviderCodex),
+		Runtime: &clydev1.ProviderRuntimeBoundary{
+			History: &clydev1.SessionHistoryBoundary{
+				Current: &clydev1.ProviderSessionIdentity{
+					Provider:  string(session.ProviderCodex),
+					SessionId: "codex-thread",
+				},
+			},
+		},
+	}
+
+	sess, _, _, _, _ := sessionSummaryFromProto(raw)
+
+	if sess.ProviderID() != session.ProviderCodex {
+		t.Fatalf("provider=%q want %q", sess.ProviderID(), session.ProviderCodex)
+	}
+	if sess.Metadata.ProviderSessionID() != "codex-thread" {
+		t.Fatalf("provider session id=%q want codex-thread", sess.Metadata.ProviderSessionID())
 	}
 }

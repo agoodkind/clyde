@@ -155,6 +155,33 @@ func flockCaptureFile(file *os.File, how int) error {
 	return nil
 }
 
+// releaseCaptureWriters closes every cached lumberjack rotated
+// writer and unlocks every flock the proxy held. It exists so reload
+// can release capture-file locks before the replacement daemon
+// rebinds; without this, a stale flock on capture.jsonl on the old
+// process pins the new generation out of its own writer cache. The
+// function is idempotent: a second call against an already-empty
+// cache is a no-op.
+func releaseCaptureWriters() {
+	captureWriterCache.mu.Lock()
+	owners := captureWriterCache.writers
+	captureWriterCache.writers = make(map[captureWriterKey]*captureWriterOwner)
+	captureWriterCache.mu.Unlock()
+	for key, owner := range owners {
+		if owner == nil {
+			continue
+		}
+		if owner.writer != nil {
+			if err := owner.writer.Close(); err != nil {
+				slog.Warn("mitm.capture.release_writer_failed", "capture_path", key.path, "err", err)
+			}
+		}
+		if owner.lock != nil {
+			unlockCaptureIndex(owner.lock)
+		}
+	}
+}
+
 func captureRotatedWriter(path string, rotation gklog.RotationConfig) (*captureWriterOwner, error) {
 	compress := false
 	if rotation.Compress != nil {

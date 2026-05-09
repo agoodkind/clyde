@@ -354,9 +354,9 @@ func FormattedNoticeText(text string) string {
 func noticeEvent(text string) (adapterrender.Event, bool) {
 	formattedText := FormattedNoticeText(text)
 	if formattedText == "" {
-		return adapterrender.Event{EncryptedContent: "", Signature: ""}, false
+		return nil, false
 	}
-	return adapterrender.Event{Kind: adapterrender.EventAssistantTextDelta, Text: formattedText, EncryptedContent: "", Signature: ""}, true
+	return adapterrender.TextDelta{Text: formattedText}, true
 }
 
 func EventsWithInjectedUsageNotices(ctx context.Context, events []adapterrender.Event, notices []UsageNotice) []adapterrender.Event {

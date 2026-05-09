@@ -17,8 +17,8 @@ func TestToAPIRequestCopiesThinkingBody(t *testing.T) {
 		Messages: []AnthMessage{{
 			Role: "assistant",
 			Content: []AnthContentBlock{
-				{Type: "thinking", Thinking: "deliberation body"},
-				{Type: "text", Text: "final"},
+				ThinkingBlock{Thinking: "deliberation body"},
+				TextBlock{Text: "final"},
 			},
 		}},
 		MaxTokens: 64,
@@ -56,9 +56,9 @@ func TestToAPIRequestDropsEmptyThinkingBlock(t *testing.T) {
 		Messages: []AnthMessage{{
 			Role: "assistant",
 			Content: []AnthContentBlock{
-				{Type: "thinking", Thinking: ""},
-				{Type: "thinking", Thinking: "   "},
-				{Type: "text", Text: "answer"},
+				ThinkingBlock{Thinking: ""},
+				ThinkingBlock{Thinking: "   "},
+				TextBlock{Text: "answer"},
 			},
 		}},
 		MaxTokens: 64,
@@ -87,7 +87,7 @@ func TestToAPIRequestCopiesThinkingSignature(t *testing.T) {
 		Messages: []AnthMessage{{
 			Role: "assistant",
 			Content: []AnthContentBlock{
-				{Type: "thinking", Thinking: "deliberation body", Signature: "SIG_BLOB=="},
+				ThinkingBlock{Thinking: "deliberation body", Signature: "SIG_BLOB=="},
 			},
 		}},
 		MaxTokens: 64,
@@ -122,8 +122,8 @@ func TestToAPIRequestPreservesSignedEmptyBodyThinkingBlock(t *testing.T) {
 		Messages: []AnthMessage{{
 			Role: "assistant",
 			Content: []AnthContentBlock{
-				{Type: "thinking", Thinking: "", Signature: "SIGNED_EMPTY_BODY=="},
-				{Type: "text", Text: "final"},
+				ThinkingBlock{Thinking: "", Signature: "SIGNED_EMPTY_BODY=="},
+				TextBlock{Text: "final"},
 			},
 		}},
 		MaxTokens: 64,

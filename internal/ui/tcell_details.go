@@ -320,13 +320,6 @@ func (b *detailLineBuilder) addResumeSection(sess *session.Session) {
 	b.appendLine(newTextSegment("  claude --resume "+sess.Metadata.ProviderSessionID(), StyleMuted))
 }
 
-func formatDetailTokens(tokens int) string {
-	if tokens <= 0 {
-		return "-"
-	}
-	return "~" + formatCompactTokens(tokens) + " tok"
-}
-
 func formatExactContextUsage(usage SessionContextUsage) string {
 	if usage.TotalTokens <= 0 {
 		return "-"
@@ -337,35 +330,11 @@ func formatExactContextUsage(usage SessionContextUsage) string {
 			percent = usage.TotalTokens * 100 / usage.MaxTokens
 		}
 		return fmt.Sprintf("%s/%s tok  %d%%",
-			formatCompactTokens(usage.TotalTokens),
-			formatCompactTokens(usage.MaxTokens),
+			formatTokensCompact(usage.TotalTokens),
+			formatTokensCompact(usage.MaxTokens),
 			percent)
 	}
-	return formatCompactTokens(usage.TotalTokens) + " tok"
-}
-
-func formatCompactTokens(tokens int) string {
-	if tokens < 0 {
-		return "0"
-	}
-	switch {
-	case tokens >= 1_000_000:
-		value := float64(tokens) / 1_000_000
-		if tokens%1_000_000 == 0 {
-			return fmt.Sprintf("%.0fM", value)
-		}
-		return fmt.Sprintf("%.1fM", value)
-	case tokens >= 100_000:
-		return fmt.Sprintf("%dk", tokens/1000)
-	case tokens >= 1_000:
-		value := float64(tokens) / 1_000
-		if tokens%1_000 == 0 {
-			return fmt.Sprintf("%.0fk", value)
-		}
-		return fmt.Sprintf("%.1fk", value)
-	default:
-		return formatWithCommas(tokens)
-	}
+	return formatTokensCompact(usage.TotalTokens) + " tok"
 }
 
 func formatDetailMessageCount(detail SessionDetail) string {
@@ -377,9 +346,9 @@ func formatDetailMessageCount(detail SessionDetail) string {
 		return "-"
 	}
 	if detail.CompactionCount > 0 {
-		return fmt.Sprintf("%s incl. compacted history", formatWithCommas(total))
+		return fmt.Sprintf("%s incl. compacted history", formatTokensExact(total))
 	}
-	return formatWithCommas(total)
+	return formatTokensExact(total)
 }
 
 func formatDetailLastActivity(sess *session.Session) (string, string) {
@@ -394,7 +363,7 @@ func formatDetailLastActivity(sess *session.Session) (string, string) {
 }
 
 func formatDetailCompactions(detail SessionDetail) string {
-	value := formatWithCommas(detail.CompactionCount)
+	value := formatTokensExact(detail.CompactionCount)
 	if detail.LastPreCompactTokens > 0 {
 		value += "  last pre " + formatDetailTokens(detail.LastPreCompactTokens)
 	}

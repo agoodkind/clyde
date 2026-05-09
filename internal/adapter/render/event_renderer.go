@@ -30,35 +30,119 @@ const (
 	EventToolCallDelta EventKind = "tool_call_delta"
 )
 
-// Event is the provider-neutral render input. It deliberately models only the
-// surfaces that may produce BYOK-visible output or OpenAI-shaped stream fields.
+// Event is the sealed marker interface for normalized adapter stream events.
+// The six concrete variants are TextDelta, RefusalDelta, ReasoningSignaled,
+// ReasoningDelta, ReasoningFinished, and ToolCallDelta. Consumers type-switch
+// on the concrete type.
+type Event interface {
+	isEvent()
+	// eventKind returns the EventKind discriminator for logging and routing.
+	eventKind() EventKind
+}
+
+// TextDelta carries a user-visible assistant answer text fragment.
+type TextDelta struct {
+	// Text is the assistant text fragment.
+	Text string
+}
+
+func (TextDelta) isEvent()             {}
+func (TextDelta) eventKind() EventKind { return EventAssistantTextDelta }
+
+// RefusalDelta carries an OpenAI-shaped refusal text fragment.
+type RefusalDelta struct {
+	// Text is the refusal text fragment.
+	Text string
+}
+
+func (RefusalDelta) isEvent()             {}
+func (RefusalDelta) eventKind() EventKind { return EventAssistantRefusalDelta }
+
+// ReasoningSignaled means the upstream response reported reasoning even if it
+// did not stream a reasoning body.
 //
-// EncryptedContent is the opaque server-signed `encrypted_content` blob the
-// codex parser scrapes off `response.output_item.done` reasoning items and
-// surfaces on [EventReasoningFinished]. The renderer embeds it inline on
-// the synthetic-thinking close marker as a `data-encrypted` attribute so
-// Cursor's transcript owns persistence across turns. Empty for providers
-// that do not surface an encrypted_content blob (Anthropic, legacy spans).
+// ReasoningKind qualifies the reasoning kind when known (e.g. "redacted" for
+// Anthropic redacted_thinking blocks). Empty means the default thinking kind.
 //
-// Signature is the opaque per-thinking-block signature Anthropic emits via
-// the `signature_delta` SSE event. The Anthropic translator surfaces it on
-// [EventReasoningDelta] (the running signature value for the active block)
-// and the renderer embeds it inline on the synthetic-thinking close marker
-// as a `data-signature` attribute (a sibling of `data-encrypted`) so the
-// inbound mapper can reattach it to the round-tripped thinking content
-// block on a later turn. Empty for providers that do not surface a
-// signature (Codex, legacy spans).
-type Event struct {
-	Kind             EventKind
-	Text             string
+// ItemID is the provider-assigned id for the reasoning item (Codex). Empty for
+// Anthropic and legacy spans.
+//
+// ItemType is the provider-assigned item type (Codex: "reasoning"). Empty for
+// Anthropic.
+type ReasoningSignaled struct {
+	ReasoningKind string
+	ItemID        string
+	ItemType      string
+}
+
+func (ReasoningSignaled) isEvent()             {}
+func (ReasoningSignaled) eventKind() EventKind { return EventReasoningSignaled }
+
+// ReasoningDelta is reasoning text that must be rendered through the synthetic
+// Cursor-visible path and the reasoning_content field.
+//
+// ReasoningKind qualifies the delta kind. "text" for native thinking text.
+// "summary" for Codex summary deltas. "redacted" for Anthropic redacted blocks.
+// Empty defaults to "text".
+//
+// SummaryIndex is the Codex reasoning summary part index. Nil for Anthropic.
+//
+// Signature is the opaque per-thinking-block signature Anthropic emits via the
+// signature_delta SSE event. The renderer embeds it on the close marker as
+// data-signature. Empty for Codex.
+//
+// RedactedData is the opaque base64 payload Anthropic emits on a
+// redacted_thinking block. The renderer embeds it on the close marker as
+// data-encrypted. Empty for every other reasoning kind.
+//
+// ItemID is the provider-assigned id for the reasoning item (Codex). Empty for
+// Anthropic.
+//
+// ItemType is the provider-assigned item type (Codex: "reasoning"). Empty for
+// Anthropic.
+type ReasoningDelta struct {
+	Text          string
+	ReasoningKind string
+	SummaryIndex  *int
+	Signature     string
+	RedactedData  string
+	ItemID        string
+	ItemType      string
+}
+
+func (ReasoningDelta) isEvent()             {}
+func (ReasoningDelta) eventKind() EventKind { return EventReasoningDelta }
+
+// ReasoningFinished closes any synthetic Cursor-visible reasoning block.
+//
+// ReasoningKind qualifies the kind that is closing. "redacted" picks
+// SyntheticRedactedThinking; empty picks SyntheticReasoning.
+//
+// EncryptedContent is the opaque encrypted_content blob Codex emits. The
+// renderer embeds it on the close marker as data-encrypted.
+//
+// Signature is the Anthropic per-block signature for the block being closed.
+// Empty for Codex.
+//
+// ItemID and ItemType identify the upstream reasoning item (Codex).
+type ReasoningFinished struct {
 	ReasoningKind    string
-	SummaryIndex     *int
-	ToolCalls        []adapteropenai.ToolCall
-	ItemID           string
-	ItemType         string
 	EncryptedContent string
 	Signature        string
+	ItemID           string
+	ItemType         string
 }
+
+func (ReasoningFinished) isEvent()             {}
+func (ReasoningFinished) eventKind() EventKind { return EventReasoningFinished }
+
+// ToolCallDelta carries an OpenAI-compatible tool call delta.
+type ToolCallDelta struct {
+	ToolCalls []adapteropenai.ToolCall
+}
+
+func (ToolCallDelta) isEvent()             {}
+func (ToolCallDelta) eventKind() EventKind { return EventToolCallDelta }
 
 // RendererState exposes reasoning state needed by response collectors that need
 // to know whether synthetic reasoning was opened during a stream.
@@ -87,7 +171,7 @@ type EventRenderer struct {
 	reasoningVisible      bool
 	reasoningBodyEmitted  bool
 	// lastReasoningItemID is the most recent upstream reasoning item id
-	// captured from EventReasoningSignaled or EventReasoningDelta. Used as
+	// captured from ReasoningSignaled or ReasoningDelta. Used as
 	// the data-ref attribute on the synthetic-thinking open marker so a
 	// later turn can correlate the round-tripped envelope with provider
 	// state (e.g. a stored Codex encrypted_content blob). Empty when the
@@ -96,22 +180,29 @@ type EventRenderer struct {
 	lastReasoningItemID string
 	// lastReasoningEncrypted is the most recent encrypted_content blob
 	// captured from a reasoning event (today: codex
-	// EventReasoningFinished). The synthetic-thinking close marker
+	// ReasoningFinished). The synthetic-thinking close marker
 	// embeds it as `data-encrypted` so Cursor's transcript carries it
 	// across turns. Cleared after each close so a later span starts
 	// fresh.
 	lastReasoningEncrypted string
 	// lastReasoningSignature is the most recent Anthropic signature value
 	// captured from a reasoning event (Anthropic surfaces it on
-	// EventReasoningDelta; the close-time emission picks up whatever the
+	// ReasoningDelta; the close-time emission picks up whatever the
 	// most recent value is). The synthetic-thinking close marker embeds
 	// it as `data-signature` so Cursor's transcript carries it across
 	// turns. Cleared after each close so a later span starts fresh.
 	lastReasoningSignature string
-	assistantText          assistantTextAggregate
-	assistantTextLogged    bool
-	toolCallNames          []string
-	hasSubagentToolCall    bool
+	// lastReasoningRedactedData is the most recent opaque base64 payload
+	// captured from a reasoning event whose ReasoningKind is "redacted"
+	// (today: Anthropic redacted_thinking via ReasoningDelta). The
+	// synthetic-redacted-thinking close marker embeds it as
+	// `data-encrypted` so Cursor's transcript carries it across turns.
+	// Cleared after each close so a later span starts fresh.
+	lastReasoningRedactedData string
+	assistantText             assistantTextAggregate
+	assistantTextLogged       bool
+	toolCallNames             []string
+	hasSubagentToolCall       bool
 	// upstreamResponseID is the most recent provider-assigned response id,
 	// captured via SetUpstreamResponseID. It is merged onto the
 	// correlation snapshot built from the per-call ctx so summary logs
@@ -135,30 +226,31 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 	}
 	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
 	return &EventRenderer{
-		createdUnix:            renderClock.Now().Unix(),
-		modelAlias:             modelAlias,
-		reqID:                  reqID,
-		backend:                backend,
-		ctx:                    ctx,
-		log:                    log,
-		suppressed:             nil,
-		seenRole:               false,
-		reasoningOpen:          false,
-		lastReasoningKind:      "",
-		lastSummaryIdx:         0,
-		haveSummaryIdx:         false,
-		pendingReasoningBreak:  false,
-		reasoningSignaled:      false,
-		reasoningVisible:       false,
-		reasoningBodyEmitted:   false,
-		lastReasoningItemID:    "",
-		lastReasoningEncrypted: "",
-		lastReasoningSignature: "",
-		upstreamResponseID:     "",
-		assistantText:          assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
-		assistantTextLogged:    false,
-		toolCallNames:          nil,
-		hasSubagentToolCall:    false,
+		createdUnix:               renderClock.Now().Unix(),
+		modelAlias:                modelAlias,
+		reqID:                     reqID,
+		backend:                   backend,
+		ctx:                       ctx,
+		log:                       log,
+		suppressed:                nil,
+		seenRole:                  false,
+		reasoningOpen:             false,
+		lastReasoningKind:         "",
+		lastSummaryIdx:            0,
+		haveSummaryIdx:            false,
+		pendingReasoningBreak:     false,
+		reasoningSignaled:         false,
+		reasoningVisible:          false,
+		reasoningBodyEmitted:      false,
+		lastReasoningItemID:       "",
+		lastReasoningEncrypted:    "",
+		lastReasoningSignature:    "",
+		lastReasoningRedactedData: "",
+		upstreamResponseID:        "",
+		assistantText:             assistantTextAggregate{deltaCount: 0, chars: 0, text: strings.Builder{}},
+		assistantTextLogged:       false,
+		toolCallNames:             nil,
+		hasSubagentToolCall:       false,
 	}
 }
 
@@ -199,8 +291,8 @@ func (r *EventRenderer) SetContext(ctx context.Context) {
 // Only assistant text, refusal text, synthetic reasoning, and tool calls produce
 // output; all other work in this path is diagnostic bookkeeping.
 func (r *EventRenderer) HandleEvent(ev Event) []adapteropenai.StreamChunk {
-	if ev.Kind == EventToolCallDelta {
-		r.recordToolCallNames(ev.ToolCalls)
+	if td, ok := ev.(ToolCallDelta); ok {
+		r.recordToolCallNames(td.ToolCalls)
 	}
 	logEvent := r.handleEventDiagnostics(ev)
 	out := r.dispatchEvent(ev)
@@ -230,28 +322,35 @@ func (r *EventRenderer) handleEventDiagnostics(ev Event) bool {
 // dispatchEvent routes a normalized event to its kind-specific renderer and
 // returns the resulting stream chunks in order.
 func (r *EventRenderer) dispatchEvent(ev Event) []adapteropenai.StreamChunk {
-	switch ev.Kind {
-	case EventReasoningSignaled:
-		return r.handleReasoningSignaled(ev)
-	case EventReasoningDelta:
-		return r.handleReasoningDelta(ev)
-	case EventReasoningFinished:
-		return r.handleReasoningFinished(ev)
-	case EventAssistantTextDelta:
-		return r.handleAssistantTextDelta(ev)
-	case EventAssistantRefusalDelta:
-		return r.handleAssistantRefusalDelta(ev)
-	case EventToolCallDelta:
-		return r.handleToolCallDelta(ev)
+	switch e := ev.(type) {
+	case ReasoningSignaled:
+		return r.handleReasoningSignaled(e)
+	case ReasoningDelta:
+		return r.handleReasoningDelta(e)
+	case ReasoningFinished:
+		return r.handleReasoningFinished(e)
+	case TextDelta:
+		return r.handleAssistantTextDelta(e)
+	case RefusalDelta:
+		return r.handleAssistantRefusalDelta(e)
+	case ToolCallDelta:
+		return r.handleToolCallDelta(e)
 	}
 	return nil
 }
 
 // handleReasoningSignaled marks reasoning as observed and, when nothing has
-// opened the synthetic content block yet, emits the open marker.
-func (r *EventRenderer) handleReasoningSignaled(ev Event) []adapteropenai.StreamChunk {
+// opened the synthetic content block yet, emits the open marker. A non-empty
+// ReasoningKind on the event captures the active reasoning kind so the
+// renderer routes the open and close markers to the matching synthetic kind
+// (today: "redacted" picks SyntheticRedactedThinking; everything else picks
+// SyntheticReasoning).
+func (r *EventRenderer) handleReasoningSignaled(ev ReasoningSignaled) []adapteropenai.StreamChunk {
 	r.reasoningSignaled = true
-	r.captureReasoningItemID(ev)
+	r.captureReasoningItemIDFromString(ev.ItemID)
+	if kind := strings.TrimSpace(ev.ReasoningKind); kind != "" {
+		r.lastReasoningKind = kind
+	}
 	// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
 	// Later reasoning deltas fill it; otherwise finish closes an empty block.
 	if r.reasoningVisible || r.reasoningOpen {
@@ -269,14 +368,20 @@ func (r *EventRenderer) handleReasoningSignaled(ev Event) []adapteropenai.Stream
 // reasoning_content for clients that consume it directly. A non-empty
 // Signature on the event captures the most recent Anthropic signature for
 // the active thinking block; renderReasoningClose later embeds it on the
-// close marker as `data-signature`.
-func (r *EventRenderer) handleReasoningDelta(ev Event) []adapteropenai.StreamChunk {
+// close marker as `data-signature`. A non-empty RedactedData on the event
+// (Anthropic redacted_thinking; ReasoningKind="redacted") captures the
+// opaque base64 payload that renderReasoningClose later embeds on the
+// redacted-thinking close marker as `data-encrypted`.
+func (r *EventRenderer) handleReasoningDelta(ev ReasoningDelta) []adapteropenai.StreamChunk {
 	r.reasoningSignaled = true
 	r.reasoningVisible = true
 	if sig := strings.TrimSpace(ev.Signature); sig != "" {
 		r.lastReasoningSignature = sig
 	}
-	chunk := r.renderReasoning(ev)
+	if data := strings.TrimSpace(ev.RedactedData); data != "" {
+		r.lastReasoningRedactedData = data
+	}
+	chunk := r.renderReasoningFromDelta(ev)
 	if chunk == nil {
 		return nil
 	}
@@ -287,7 +392,7 @@ func (r *EventRenderer) handleReasoningDelta(ev Event) []adapteropenai.StreamChu
 // provider-specific close-marker payload: the codex encrypted_content blob
 // and the Anthropic per-block signature. Both are independently optional;
 // each provider populates only the field it owns.
-func (r *EventRenderer) handleReasoningFinished(ev Event) []adapteropenai.StreamChunk {
+func (r *EventRenderer) handleReasoningFinished(ev ReasoningFinished) []adapteropenai.StreamChunk {
 	if enc := strings.TrimSpace(ev.EncryptedContent); enc != "" {
 		r.lastReasoningEncrypted = enc
 	}
@@ -303,19 +408,19 @@ func (r *EventRenderer) handleReasoningFinished(ev Event) []adapteropenai.Stream
 
 // handleAssistantTextDelta closes any open reasoning block and emits the
 // assistant text chunk.
-func (r *EventRenderer) handleAssistantTextDelta(ev Event) []adapteropenai.StreamChunk {
+func (r *EventRenderer) handleAssistantTextDelta(ev TextDelta) []adapteropenai.StreamChunk {
 	return r.appendReasoningCloseAnd(r.renderText(ev.Text))
 }
 
 // handleAssistantRefusalDelta closes any open reasoning block and emits the
 // refusal chunk.
-func (r *EventRenderer) handleAssistantRefusalDelta(ev Event) []adapteropenai.StreamChunk {
+func (r *EventRenderer) handleAssistantRefusalDelta(ev RefusalDelta) []adapteropenai.StreamChunk {
 	return r.appendReasoningCloseAnd(r.renderRefusal(ev.Text))
 }
 
 // handleToolCallDelta closes any open reasoning block and emits the tool call
 // chunk.
-func (r *EventRenderer) handleToolCallDelta(ev Event) []adapteropenai.StreamChunk {
+func (r *EventRenderer) handleToolCallDelta(ev ToolCallDelta) []adapteropenai.StreamChunk {
 	return r.appendReasoningCloseAnd(r.renderToolCalls(ev.ToolCalls))
 }
 

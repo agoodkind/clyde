@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 )
 
 // MaxOutputTokens is the upper bound the adapter requests when the
@@ -15,17 +17,35 @@ import (
 const MaxOutputTokens = 8192
 
 // WireCaptureMode is the closed enum the anthropic client honors when the
-// dispatcher passes a per-provider wire-capture lever. Mirrors
-// config.AnthropicWireCaptureMode value-for-value so the dispatcher does a
-// typed string conversion at the boundary without an import edge.
-type WireCaptureMode string
+// dispatcher passes a per-provider wire-capture lever. Aliased from the
+// leaf [anthmode] package so the parent provider package and the
+// [internal/config] package share a single canonical type without an import
+// cycle.
+type WireCaptureMode = anthmode.WireCaptureMode
 
 // Anthropic wire-capture modes. Off is the safe default and matches an empty
-// configured value.
+// configured value. Aliased from [anthmode] so callers may continue to use
+// the unqualified `anthropic.WireCapture*` names.
 const (
-	WireCaptureOff         WireCaptureMode = "off"
-	WireCaptureSummaryOnly WireCaptureMode = "summary_only"
-	WireCaptureFull        WireCaptureMode = "full"
+	WireCaptureOff         = anthmode.WireCaptureOff
+	WireCaptureSummaryOnly = anthmode.WireCaptureSummaryOnly
+	WireCaptureFull        = anthmode.WireCaptureFull
+)
+
+// InboundThinking is the closed enum of strategies for the visible thinking
+// content block round-trip on the inbound (request-shaping) side. Aliased
+// from the leaf [anthmode] package so the parent provider package and the
+// [internal/config] package share a single canonical type without an import
+// cycle.
+type InboundThinking = anthmode.InboundThinking
+
+// Anthropic inbound-thinking strategies. Aliased from [anthmode] so callers
+// may continue to use the unqualified `anthropic.InboundThinking*` names.
+const (
+	InboundThinkingNative      = anthmode.InboundThinkingNative
+	InboundThinkingDrop        = anthmode.InboundThinkingDrop
+	InboundThinkingPlainText   = anthmode.InboundThinkingPlainText
+	InboundThinkingPassthrough = anthmode.InboundThinkingPassthrough
 )
 
 // Config carries wire header and body-side values for the messages
@@ -99,6 +119,12 @@ type SystemBlock struct {
 // emits via the `signature_delta` SSE event. On replay the wire
 // representation must include `"signature":"<value>"` alongside
 // `"thinking":"<body>"` so Anthropic's signature validation passes.
+//
+// Data carries the opaque base64 payload Anthropic emits inline on a
+// `redacted_thinking` content block start event. On replay the wire
+// representation must include `"data":"<value>"` alongside
+// `"type":"redacted_thinking"` so Anthropic's history validation
+// passes.
 type ContentBlock struct {
 	Type           string          `json:"type"`
 	Text           string          `json:"text,omitempty"`
@@ -112,6 +138,7 @@ type ContentBlock struct {
 	CacheControl   *CacheControl   `json:"cache_control,omitempty"`
 	Thinking       string          `json:"thinking,omitempty"`
 	Signature      string          `json:"signature,omitempty"`
+	Data           string          `json:"data,omitempty"`
 }
 
 // ImageSource describes image bytes or a URL for image content blocks.
@@ -354,29 +381,111 @@ type Usage struct {
 // chunks are skipped.
 type Sink func(delta string) error
 
-// StreamEvent is a decoded streaming signal from /v1/messages SSE.
+// StreamEvent is a decoded streaming signal from /v1/messages SSE,
+// modelled as a sealed sum type. Each variant struct carries only the
+// fields its kind needs, so consumers type-switch on the value rather
+// than reading a discriminator string and inspecting union fields. The
+// sealed marker method ensures only this package can introduce new
+// variants, keeping the union closed at the package boundary.
 //
-// Kind enumerates the signals the parser surfaces:
-//   - "text"               assistant visible text delta; Text carries the chunk.
-//   - "thinking"            thinking content block open or text delta;
-//     Text empty on open, populated on subsequent thinking_delta events.
-//   - "thinking_signature"  per-thinking-block signature delta; Text carries
-//     the opaque signature emitted by Anthropic's signature_delta event.
-//   - "tool_use_start"      tool_use content block open; ToolUseID and
-//     ToolUseName carry the call identity.
-//   - "tool_use_arg_delta"  tool_use partial JSON arguments; PartialJSON
-//     carries the chunk.
-//   - "tool_use_stop"       tool_use content block close.
-//   - "stop"                terminal message stop; StopReason is set.
-type StreamEvent struct {
-	Kind        string
-	Text        string
+// Variants:
+//   - [StreamTextDelta]            assistant visible text delta.
+//   - [StreamThinkingStart]        thinking content block open.
+//   - [StreamThinkingDelta]        thinking content text delta.
+//   - [StreamThinkingSignature]    per-thinking-block signature delta.
+//   - [StreamRedactedThinking]     redacted_thinking content block; Data
+//     carries the opaque base64 payload Anthropic emits inline on the
+//     start event. There is no separate delta or close-side payload.
+//   - [StreamToolUseStart]         tool_use content block open.
+//   - [StreamToolUseArgDelta]      tool_use partial JSON arguments.
+//   - [StreamToolUseStop]          tool_use content block close.
+//   - [StreamStop]                 terminal message stop with stop reason.
+type StreamEvent interface {
+	isStreamEvent()
+}
+
+// StreamTextDelta is an assistant visible text delta carrying one chunk
+// of streaming output for the text content block at BlockIndex.
+type StreamTextDelta struct {
+	BlockIndex int
+	Text       string
+}
+
+func (StreamTextDelta) isStreamEvent() {}
+
+// StreamThinkingStart marks the open of a thinking content block.
+// No text accompanies the open event; subsequent [StreamThinkingDelta]
+// events carry the body.
+type StreamThinkingStart struct {
+	BlockIndex int
+}
+
+func (StreamThinkingStart) isStreamEvent() {}
+
+// StreamThinkingDelta carries one chunk of streaming thinking content
+// for the thinking content block at BlockIndex.
+type StreamThinkingDelta struct {
+	BlockIndex int
+	Text       string
+}
+
+func (StreamThinkingDelta) isStreamEvent() {}
+
+// StreamThinkingSignature carries the opaque per-thinking-block
+// signature value emitted by Anthropic's signature_delta event.
+type StreamThinkingSignature struct {
+	BlockIndex int
+	Signature  string
+}
+
+func (StreamThinkingSignature) isStreamEvent() {}
+
+// StreamRedactedThinking carries a complete redacted_thinking content
+// block. Anthropic emits the opaque payload inline on the start event,
+// so the parser surfaces one event per block. Data is the opaque base64
+// payload; the close event arrives separately as a content_block_stop.
+type StreamRedactedThinking struct {
+	BlockIndex int
+	Data       string
+}
+
+func (StreamRedactedThinking) isStreamEvent() {}
+
+// StreamToolUseStart marks the open of a tool_use content block. The
+// caller pairs ToolUseID and ToolUseName with later argument deltas
+// keyed by BlockIndex.
+type StreamToolUseStart struct {
 	BlockIndex  int
 	ToolUseID   string
 	ToolUseName string
-	PartialJSON string
-	StopReason  string
 }
+
+func (StreamToolUseStart) isStreamEvent() {}
+
+// StreamToolUseArgDelta carries one chunk of partial JSON for the
+// tool_use content block at BlockIndex.
+type StreamToolUseArgDelta struct {
+	BlockIndex  int
+	PartialJSON string
+}
+
+func (StreamToolUseArgDelta) isStreamEvent() {}
+
+// StreamToolUseStop marks the close of the tool_use content block at
+// BlockIndex.
+type StreamToolUseStop struct {
+	BlockIndex int
+}
+
+func (StreamToolUseStop) isStreamEvent() {}
+
+// StreamStop is the terminal message stop event. StopReason carries the
+// upstream's reported reason (for example "end_turn", "tool_use").
+type StreamStop struct {
+	StopReason string
+}
+
+func (StreamStop) isStreamEvent() {}
 
 // EventSink receives structured stream events.
 type EventSink func(StreamEvent) error
@@ -430,7 +539,21 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return nil, err
 		}
-		return []ContentBlock{{Type: "text", Text: text, Signature: ""}}, nil
+		return []ContentBlock{{
+			Type:           "text",
+			Text:           text,
+			ID:             "",
+			Name:           "",
+			Input:          nil,
+			ToolUseID:      "",
+			Content:        "",
+			CacheReference: "",
+			Source:         nil,
+			CacheControl:   nil,
+			Thinking:       "",
+			Signature:      "",
+			Data:           "",
+		}}, nil
 	}
 	if trimmed[0] == '[' {
 		var blocks []ContentBlock

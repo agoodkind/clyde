@@ -395,9 +395,9 @@ func TestRunWebsocketTransportEmitsDelayedDeltasBeforeCompletion(t *testing.T) {
 		RequestID: "req-delayed-stream",
 		Alias:     "gpt-5.4",
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
-		if event.Kind == adapterrender.EventAssistantTextDelta {
-			content.WriteString(event.Text)
-			if event.Text == "first " {
+		if td, ok := event.(adapterrender.TextDelta); ok {
+			content.WriteString(td.Text)
+			if td.Text == "first " {
 				close(firstDeltaEmitted)
 			}
 		}
@@ -492,8 +492,8 @@ func TestRunWebsocketTransportRetriesOverloadedThenSucceeds(t *testing.T) {
 		Alias:         "gpt-5.4",
 		RetryPolicies: codexOverloadedRetryPolicyForTest(),
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
-		if event.Kind == adapterrender.EventAssistantTextDelta {
-			text.WriteString(event.Text)
+		if td, ok := event.(adapterrender.TextDelta); ok {
+			text.WriteString(td.Text)
 		}
 		return nil
 	}, func(context.Context, time.Duration) error { return nil })
@@ -620,8 +620,8 @@ func TestRunWebsocketTransportDoesNotRetryAfterClientVisibleOutput(t *testing.T)
 		Alias:         "gpt-5.4",
 		RetryPolicies: codexOverloadedRetryPolicyForTest(),
 	}, ResponseCreateWsRequest{Type: "response.create"}, func(event adapterrender.Event) error {
-		if event.Kind == adapterrender.EventAssistantTextDelta {
-			text.WriteString(event.Text)
+		if td, ok := event.(adapterrender.TextDelta); ok {
+			text.WriteString(td.Text)
 		}
 		return nil
 	}, func(context.Context, time.Duration) error { return nil })
@@ -713,7 +713,7 @@ func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testi
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	cache := NewWebsocketSessionCache(nil, time.Minute)
+	cache := NewWebsocketSessionCache(nil, time.Minute, nil)
 	cfg := WebsocketTransportConfig{
 		URL:            wsURL,
 		Token:          "test-token",
@@ -844,7 +844,7 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnDeltaMismatch(t *testing.
 	}))
 	defer server.Close()
 
-	cache := NewWebsocketSessionCache(nil, time.Minute)
+	cache := NewWebsocketSessionCache(nil, time.Minute, nil)
 	cfg := WebsocketTransportConfig{
 		URL:            "ws" + strings.TrimPrefix(server.URL, "http"),
 		Token:          "test-token",
@@ -937,7 +937,7 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnModelMismatch(t *testing.
 	}))
 	defer server.Close()
 
-	cache := NewWebsocketSessionCache(nil, time.Minute)
+	cache := NewWebsocketSessionCache(nil, time.Minute, nil)
 	cfg := WebsocketTransportConfig{
 		URL:            "ws" + strings.TrimPrefix(server.URL, "http"),
 		Token:          "test-token",
@@ -1237,7 +1237,7 @@ func TestRunWebsocketTransportCacheFallsBackUncachedAfterWarmupFailure(t *testin
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	cache := NewWebsocketSessionCache(nil, time.Minute)
+	cache := NewWebsocketSessionCache(nil, time.Minute, nil)
 	var chunks []adapteropenai.StreamChunk
 	result, err := runWebsocketTransportForTest(context.Background(), WebsocketTransportConfig{
 		URL:            wsURL,
@@ -1277,7 +1277,7 @@ func TestRunWebsocketTransportCacheFallsBackUncachedAfterWarmupFailure(t *testin
 	if got := content.String(); got != "recovered" {
 		t.Fatalf("content=%q want recovered", got)
 	}
-	if _, ok := cache.Take("cursor:conv-cache-warmup-fallback"); ok {
+	if _, ok := cache.Take(context.Background(), "cursor:conv-cache-warmup-fallback"); ok {
 		t.Fatalf("fallback request should not populate cache")
 	}
 }

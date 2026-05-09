@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"goodkind.io/clyde/internal/session"
 	itranscript "goodkind.io/clyde/internal/transcript"
 )
 
@@ -247,6 +248,16 @@ func inspectStatsFor(transcriptPath string) inspectStats {
 	return out
 }
 
+func inspectStatsForSession(sess *session.Session) inspectStats {
+	if sess == nil {
+		return inspectStats{}
+	}
+	if sess.ProviderID() == session.ProviderCodex {
+		return inspectCodexStats(sess.Metadata.ProviderTranscriptPath())
+	}
+	return inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+}
+
 func inspectExportStatsFor(transcriptPath string) inspectExportStats {
 	if strings.TrimSpace(transcriptPath) == "" {
 		return inspectExportStats{}
@@ -333,6 +344,16 @@ func inspectExportStatsFor(transcriptPath string) inspectExportStats {
 	return stats
 }
 
+func inspectExportStatsForSession(sess *session.Session) inspectExportStats {
+	if sess == nil {
+		return inspectExportStats{}
+	}
+	if sess.ProviderID() == session.ProviderCodex {
+		return inspectCodexExportStats(sess.Metadata.ProviderTranscriptPath())
+	}
+	return inspectExportStatsFor(sess.Metadata.ProviderTranscriptPath())
+}
+
 func inspectToolUseStats(transcriptPath string, topN int) []inspectToolUse {
 	f, err := os.Open(transcriptPath)
 	if err != nil {
@@ -394,6 +415,65 @@ func inspectRoughTokens(text string) int {
 		return 1
 	}
 	return n
+}
+
+func inspectCodexStats(transcriptPath string) inspectStats {
+	if strings.TrimSpace(transcriptPath) == "" {
+		return inspectStats{}
+	}
+	history, err := itranscript.ReadCodexHistory(transcriptPath)
+	if err != nil {
+		return inspectStats{}
+	}
+	turns := history.ConversationTurns(itranscript.ShapeOptions{
+		ConversationOnly: true,
+		ToolOnly:         itranscript.ToolOnlyOmit,
+	})
+	var out inspectStats
+	for _, turn := range turns {
+		text := strings.TrimSpace(turn.Text)
+		if text == "" {
+			continue
+		}
+		tokens := inspectRoughTokens(text)
+		out.VisibleMessages++
+		out.VisibleTokensEstimate += tokens
+		out.LastMessageTokens = tokens
+	}
+	return out
+}
+
+func inspectCodexExportStats(transcriptPath string) inspectExportStats {
+	stats := inspectExportStats{}
+	if strings.TrimSpace(transcriptPath) == "" {
+		return stats
+	}
+	if info, err := os.Stat(transcriptPath); err == nil {
+		stats.TranscriptSizeBytes = info.Size()
+	}
+	history, err := itranscript.ReadCodexHistory(transcriptPath)
+	if err != nil {
+		return stats
+	}
+	turns := history.ConversationTurns(itranscript.ShapeOptions{
+		ConversationOnly: true,
+		ToolOnly:         itranscript.ToolOnlyOmit,
+	})
+	for _, turn := range turns {
+		text := strings.TrimSpace(turn.Text)
+		if text == "" {
+			continue
+		}
+		stats.VisibleMessages++
+		stats.VisibleTokensEstimate += inspectRoughTokens(text)
+		switch turn.Role {
+		case "user":
+			stats.UserMessages++
+		case "assistant":
+			stats.AssistantMessages++
+		}
+	}
+	return stats
 }
 
 type inspectExportStatsLine struct {

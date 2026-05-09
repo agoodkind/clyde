@@ -52,14 +52,14 @@ message ListSessionsRequest {}
 message SessionSummary {
   string name = 1;
   string metadata_name = 2;
-  string clyde_uuid = 31;
+  string clyde_uuid = 35;
   string session_id = 3;
   string transcript_path = 4;
   string work_dir = 5;
   int64 created_nanos = 6;
   int64 last_accessed_nanos = 7;
   string parent_session = 8;
-  string parent_clyde_uuid = 32;
+  string parent_clyde_uuid = 36;
   bool is_forked_session = 9;
   bool is_incognito = 10;
   repeated string previous_session_ids = 11;
@@ -82,6 +82,10 @@ message SessionSummary {
   string context_usage_status = 28;
   string provider = 29;
   ProviderRuntimeBoundary runtime = 30;
+  string auto_name_state       = 31;
+  string auto_name_source      = 32;
+  int64  last_auto_name_nanos  = 33;
+  string auto_name_source_hash = 34;
 }
 
 message ListSessionsResponse {
@@ -130,6 +134,7 @@ message GetSessionDetailResponse {
   int32 context_messages_tokens = 18;
   bool context_usage_loaded = 19;
   string context_usage_status = 20;
+  repeated string resume_instructions = 21;
 }
 
 message GetSessionExportStatsRequest {

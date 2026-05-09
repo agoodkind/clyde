@@ -181,6 +181,10 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			WorkspaceRoot:        r.WorkspaceRoot,
 			ContextMessageCount:  0,
 			DisplayTitle:         r.DisplayTitle(),
+			AutoNameState:        AutoNameStateUntouched,
+			AutoNameSource:       AutoNameSourceUnspecified,
+			LastAutoNameAt:       time.Time{},
+			AutoNameSourceHash:   "",
 		}
 		md.SetProviderTranscriptPath(r.PrimaryArtifactPath())
 		if r.IsForked {

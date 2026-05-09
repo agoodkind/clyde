@@ -45,8 +45,8 @@ func RunTranslatorEvents(
 
 	var streamStopReason string
 	anthUsage, _, err := client.StreamEvents(ctx, anthReq, func(ev anthropic.StreamEvent) error {
-		if ev.Kind == "stop" {
-			streamStopReason = ev.StopReason
+		if stopEv, ok := ev.(anthropic.StreamStop); ok {
+			streamStopReason = stopEv.StopReason
 			return nil
 		}
 		evName, payload, ok := StreamEventToTranslatorSSE(ev)
