@@ -1,6 +1,7 @@
 package sessionname
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,7 +12,7 @@ import (
 	"goodkind.io/clyde/internal/slogger"
 )
 
-func renameClaude(sess *session.Session, title string) error {
+func renameClaude(ctx context.Context, sess *session.Session, title string) error {
 	transcriptPath := strings.TrimSpace(sess.Metadata.ProviderTranscriptPath())
 	if transcriptPath == "" {
 		return fmt.Errorf("missing transcript path")
@@ -20,13 +21,13 @@ func renameClaude(sess *session.Session, title string) error {
 	if sessionID == "" {
 		return fmt.Errorf("missing provider session id")
 	}
-	return appendClaudeRename(transcriptPath, sessionID, title)
+	return appendClaudeRename(ctx, transcriptPath, sessionID, title)
 }
 
-func appendClaudeRename(transcriptPath, sessionID, title string) error {
+func appendClaudeRename(ctx context.Context, transcriptPath, sessionID, title string) error {
 	file, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
-		slog.Warn("sessionname.claude.open_failed",
+		slog.WarnContext(ctx, "sessionname.claude.open_failed",
 			"component", "claude",
 			"subcomponent", "sessionname",
 			"concern", slogger.ConcernProviderClaudeLifecycle,
@@ -43,7 +44,7 @@ func appendClaudeRename(transcriptPath, sessionID, title string) error {
 		"sessionId":   sessionID,
 	}); err != nil {
 		_ = file.Close()
-		slog.Warn("sessionname.claude.custom_title_failed",
+		slog.WarnContext(ctx, "sessionname.claude.custom_title_failed",
 			"component", "claude",
 			"subcomponent", "sessionname",
 			"concern", slogger.ConcernProviderClaudeLifecycle,
@@ -59,7 +60,7 @@ func appendClaudeRename(transcriptPath, sessionID, title string) error {
 		"sessionId": sessionID,
 	}); err != nil {
 		_ = file.Close()
-		slog.Warn("sessionname.claude.agent_name_failed",
+		slog.WarnContext(ctx, "sessionname.claude.agent_name_failed",
 			"component", "claude",
 			"subcomponent", "sessionname",
 			"concern", slogger.ConcernProviderClaudeLifecycle,
@@ -70,7 +71,7 @@ func appendClaudeRename(transcriptPath, sessionID, title string) error {
 		return fmt.Errorf("append claude agent name rename: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		slog.Warn("sessionname.claude.close_failed",
+		slog.WarnContext(ctx, "sessionname.claude.close_failed",
 			"component", "claude",
 			"subcomponent", "sessionname",
 			"concern", slogger.ConcernProviderClaudeLifecycle,

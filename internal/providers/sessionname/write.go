@@ -32,15 +32,15 @@ func Rename(ctx context.Context, sess *session.Session, newName string) error {
 	case session.ProviderUnknown:
 		return fmt.Errorf("unsupported session provider %q", sess.ProviderID())
 	case session.ProviderClaude:
-		return renameClaude(sess, title)
+		return renameClaude(ctx, sess, title)
 	case session.ProviderCodex:
-		return renameCodex(sess, title)
+		return renameCodex(ctx, sess, title)
 	default:
 		return fmt.Errorf("unsupported session provider %q", sess.ProviderID())
 	}
 }
 
-func renameCodex(sess *session.Session, title string) error {
+func renameCodex(ctx context.Context, sess *session.Session, title string) error {
 	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
 	if sessionID == "" {
 		return fmt.Errorf("missing codex session id")
@@ -51,7 +51,7 @@ func renameCodex(sess *session.Session, title string) error {
 	}
 	paths, err := codexstore.ResolveStorePathsFromEnv()
 	if err != nil {
-		slog.Warn("sessionname.codex.paths_failed",
+		slog.WarnContext(ctx, "sessionname.codex.paths_failed",
 			"component", "codex",
 			"subcomponent", "sessionname",
 			"concern", slogger.ConcernProviderCodexLifecycle,
@@ -62,7 +62,7 @@ func renameCodex(sess *session.Session, title string) error {
 		return fmt.Errorf("resolve codex store paths: %w", err)
 	}
 	if err := codexstore.AppendThreadName(paths, sessionID, normalized); err != nil {
-		slog.Warn("sessionname.codex.rename_failed",
+		slog.WarnContext(ctx, "sessionname.codex.rename_failed",
 			"component", "codex",
 			"subcomponent", "sessionname",
 			"concern", slogger.ConcernProviderCodexLifecycle,
