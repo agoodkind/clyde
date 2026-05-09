@@ -2,6 +2,8 @@ package mitm
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,7 +89,12 @@ func TestAppendCursorCaptureEventWritesRootAndConcernIndexes(t *testing.T) {
 		RequestRawPath:  filepath.Join(dir, "concerns", "cursor.account", "raw", "api2.cursor.sh", "request.raw"),
 		ResponseRawPath: filepath.Join(dir, "concerns", "cursor.account", "raw", "api2.cursor.sh", "response.raw"),
 	}
-	if err := appendCursorCaptureEvent(dir, event, CaptureFilePolicy{}); err != nil {
+	proxy := &Proxy{
+		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		captureWriters: newCaptureWriterCache(slog.New(slog.NewTextHandler(io.Discard, nil))),
+	}
+	defer proxy.closeCaptureWriters()
+	if err := proxy.appendCursorCaptureEvent(dir, event, CaptureFilePolicy{}); err != nil {
 		t.Fatalf("append event: %v", err)
 	}
 

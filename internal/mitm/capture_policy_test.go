@@ -2,6 +2,8 @@ package mitm
 
 import (
 	"bytes"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +14,8 @@ import (
 )
 
 func TestAppendCaptureRotatesCaptureIndex(t *testing.T) {
-	clearCaptureWriterCacheForTest(t)
+	cache := newCaptureWriterCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer cache.close()
 	dir := t.TempDir()
 	compress := false
 	policy := CaptureFilePolicy{
@@ -26,7 +29,7 @@ func TestAppendCaptureRotatesCaptureIndex(t *testing.T) {
 	}
 	line := bytes.Repeat([]byte("x"), 600*1024)
 	for i := 0; i < 3; i++ {
-		if err := WriteCaptureLine(dir, line, policy); err != nil {
+		if err := cache.writeLine(dir, line, policy); err != nil {
 			t.Fatalf("append capture line %d: %v", i, err)
 		}
 	}
@@ -59,17 +62,18 @@ func TestAppendCaptureReusesRotatedWriter(t *testing.T) {
 		},
 	}
 
-	clearCaptureWriterCacheForTest(t)
-	if err := WriteCaptureLine(dir, []byte(`{"event":"one"}`), policy); err != nil {
+	cache := newCaptureWriterCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer cache.close()
+	if err := cache.writeLine(dir, []byte(`{"event":"one"}`), policy); err != nil {
 		t.Fatalf("write capture line: %v", err)
 	}
-	if err := WriteCaptureLine(dir, []byte(`{"event":"two"}`), policy); err != nil {
+	if err := cache.writeLine(dir, []byte(`{"event":"two"}`), policy); err != nil {
 		t.Fatalf("write second capture line: %v", err)
 	}
 
-	captureWriterCache.mu.Lock()
-	writerCount := len(captureWriterCache.writers)
-	captureWriterCache.mu.Unlock()
+	cache.mu.Lock()
+	writerCount := len(cache.writers)
+	cache.mu.Unlock()
 	if writerCount != 1 {
 		t.Fatalf("capture writer count = %d, want 1", writerCount)
 	}
@@ -83,23 +87,6 @@ func TestDefaultCapturePolicyDoesNotCompress(t *testing.T) {
 	if *policy.Rotation.Compress {
 		t.Fatal("default capture compression = true, want false")
 	}
-}
-
-func clearCaptureWriterCacheForTest(t *testing.T) {
-	t.Helper()
-	captureWriterCache.mu.Lock()
-	oldWriters := captureWriterCache.writers
-	captureWriterCache.writers = make(map[captureWriterKey]*captureWriterOwner)
-	captureWriterCache.mu.Unlock()
-	t.Cleanup(func() {
-		captureWriterCache.mu.Lock()
-		for _, owner := range captureWriterCache.writers {
-			_ = owner.writer.Close()
-			unlockCaptureIndex(owner.lock)
-		}
-		captureWriterCache.writers = oldWriters
-		captureWriterCache.mu.Unlock()
-	})
 }
 
 func findFilesWithPrefix(t *testing.T, dir string, prefix string) []string {

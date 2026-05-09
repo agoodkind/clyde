@@ -138,8 +138,9 @@ func newHTTPProxyForCaptureTest(t *testing.T, captureDir string, bodyMode string
 	t.Cleanup(func() {
 		openAIUpstream = oldOpenAIUpstream
 	})
-	return &Proxy{
-		log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proxy := &Proxy{
+		log:                   logger,
 		client:                upstream.Client(),
 		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 		certMu:                sync.Mutex{},
@@ -147,11 +148,14 @@ func newHTTPProxyForCaptureTest(t *testing.T, captureDir string, bodyMode string
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
 		Tunnels:               newTestTunnelRegistry(),
+		captureWriters:        newCaptureWriterCache(logger),
 		mu:                    sync.RWMutex{},
 		cfg:                   config.MITMConfig{CaptureDir: captureDir, BodyMode: bodyMode},
 		base:                  "http://[::1]",
 		server:                nil,
 	}
+	t.Cleanup(proxy.closeCaptureWriters)
+	return proxy
 }
 
 func rawBodyRefFromRecord(t *testing.T, record map[string]any, field string) map[string]any {

@@ -337,8 +337,9 @@ func startTestProxy(t *testing.T) *testProxy {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := &Proxy{
-		log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log:                   logger,
 		client:                http.DefaultClient,
 		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 		certMu:                sync.Mutex{},
@@ -346,11 +347,13 @@ func startTestProxy(t *testing.T) *testProxy {
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
 		Tunnels:               newTestTunnelRegistry(),
+		captureWriters:        newCaptureWriterCache(logger),
 		mu:                    sync.RWMutex{},
 		cfg:                   config.MITMConfig{CaptureDir: t.TempDir(), BodyMode: "summary"},
 		base:                  "http://" + listener.Addr().String(),
 		server:                nil,
 	}
+	t.Cleanup(p.closeCaptureWriters)
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(listener) }()
@@ -373,8 +376,9 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	if err != nil {
 		t.Fatalf("load ca: %v", err)
 	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := &Proxy{
-		log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log:                   logger,
 		client:                http.DefaultClient,
 		dialContext:           mappedDialContext(cursorHost+":443", upstreamAddr),
 		certMu:                sync.Mutex{},
@@ -382,11 +386,13 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		cursorTLSClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
 		rawCaptureSeq:         atomic.Uint64{},
 		Tunnels:               newTestTunnelRegistry(),
+		captureWriters:        newCaptureWriterCache(logger),
 		mu:                    sync.RWMutex{},
 		cfg:                   config.MITMConfig{CaptureDir: captureDir, BodyMode: "summary"},
 		base:                  "http://" + listener.Addr().String(),
 		server:                nil,
 	}
+	t.Cleanup(p.closeCaptureWriters)
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(listener) }()

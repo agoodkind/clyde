@@ -22,7 +22,7 @@ var defaultBaselineRefresher = &baselineRefresher{
 	timers: map[string]*time.Timer{},
 }
 
-func queueBaselineRefresh(cfg config.MITMConfig, provider string, log *slog.Logger) {
+func queueBaselineRefresh(ctx context.Context, cfg config.MITMConfig, provider string, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -53,11 +53,11 @@ func queueBaselineRefresh(cfg config.MITMConfig, provider string, log *slog.Logg
 			ForbidBodyKeys:  entry.ForbidBodyKeys,
 			Log:             log.With("upstream", upstream, "provider", provider),
 		}
-		defaultBaselineRefresher.schedule(opts)
+		defaultBaselineRefresher.schedule(ctx, opts)
 	}
 }
 
-func (r *baselineRefresher) schedule(opts BaselineRefreshOptions) {
+func (r *baselineRefresher) schedule(ctx context.Context, opts BaselineRefreshOptions) {
 	if r == nil {
 		return
 	}
@@ -70,16 +70,20 @@ func (r *baselineRefresher) schedule(opts BaselineRefreshOptions) {
 	if existing := r.timers[key]; existing != nil {
 		existing.Stop()
 	}
+	// Detach the context for the scheduled work so the timer survives
+	// the originating request. context.WithoutCancel preserves values
+	// (correlation IDs, slog handlers) without inheriting deadlines.
+	scheduledCtx := context.WithoutCancel(ctx)
 	r.timers[key] = time.AfterFunc(baselineRefreshDebounce, func() {
-		outcome, err := RefreshBaseline(context.Background(), opts)
+		outcome, err := RefreshBaseline(scheduledCtx, opts)
 		if err != nil {
-			opts.Log.Warn("mitm.baseline.refresh_failed", "err", err)
+			opts.Log.WarnContext(scheduledCtx, "mitm.baseline.refresh_failed", "err", err)
 		} else if outcome.Updated {
 			level := slog.LevelInfo
 			if outcome.Diverged {
 				level = slog.LevelWarn
 			}
-			opts.Log.LogAttrs(context.Background(), level, "mitm.baseline.refreshed",
+			opts.Log.LogAttrs(scheduledCtx, level, "mitm.baseline.refreshed",
 				slog.String("schema_version", outcome.SchemaVersion),
 				slog.String("baseline_path", outcome.BaselinePath),
 				slog.Bool("created", outcome.Created),

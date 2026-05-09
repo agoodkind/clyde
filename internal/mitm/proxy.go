@@ -63,6 +63,13 @@ type Proxy struct {
 	// connections.
 	Tunnels *livetrack.Registry[TunnelMeta]
 
+	// captureWriters owns this proxy's lumberjack rotated-writer pool
+	// plus its flock files. Per-proxy ownership means daemon reload
+	// closes the old proxy's writers and flocks deterministically; a
+	// late tunnel goroutine that races shutdown will see the closed
+	// cache and abort instead of re-creating the writer (CLYDE-299).
+	captureWriters *captureWriterCache
+
 	mu       sync.RWMutex
 	cfg      config.MITMConfig
 	base     string
@@ -108,11 +115,12 @@ func NewProxy(cfg config.MITMConfig, log *slog.Logger, listener net.Listener) (*
 			ParallelClose: false,
 			Now:           nil,
 		}),
-		mu:       sync.RWMutex{},
-		cfg:      cfg,
-		base:     "http://" + listener.Addr().String(),
-		listener: listener,
-		server:   nil,
+		captureWriters: newCaptureWriterCache(log),
+		mu:             sync.RWMutex{},
+		cfg:            cfg,
+		base:           "http://" + listener.Addr().String(),
+		listener:       listener,
+		server:         nil,
 	}
 	p.server = &http.Server{Handler: http.HandlerFunc(p.handle)}
 	return p, nil
@@ -139,14 +147,15 @@ func (p *Proxy) Serve() error {
 }
 
 // Shutdown gracefully stops the proxy's HTTP server, drains
-// registered tunnels until ctx is canceled, and releases every
-// cached capture writer flock so the replacement daemon can rebind.
-// The Cloudflare keepalive case (api2.cursor.sh CONNECT tunnels
-// that never close on their own) is the empirical reason this is no
-// longer a bare [http.Server.Shutdown]: the registry's force-close
-// path terminates wedged tunnels under the configured grace, and
-// releaseCaptureWriters unlocks the JSONL flock the writer cache
-// holds. Idempotent: multiple Shutdown calls are safe.
+// registered tunnels until ctx is canceled, and closes the per-proxy
+// capture writer cache so the replacement daemon can rebind. The
+// Cloudflare keepalive case (api2.cursor.sh CONNECT tunnels that
+// never close on their own) is the empirical reason this is no longer
+// a bare [http.Server.Shutdown]: the registry's force-close path
+// terminates wedged tunnels under the configured grace, and the
+// writer-cache close releases the JSONL flock and locks out late
+// tunnel goroutines from re-creating a fresh writer on the same path
+// (CLYDE-299). Idempotent: multiple Shutdown calls are safe.
 func (p *Proxy) Shutdown(ctx context.Context) error {
 	if p.server == nil {
 		return nil
@@ -155,7 +164,7 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 		if err := p.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			return fmt.Errorf("close mitm listener: %w", err)
 		}
-		releaseCaptureWriters()
+		p.closeCaptureWriters()
 		return nil
 	}
 	httpErr := p.server.Shutdown(ctx)
@@ -171,11 +180,21 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 			"duration_ms", result.Duration.Milliseconds(),
 		)
 	}
-	releaseCaptureWriters()
+	p.closeCaptureWriters()
 	if httpErr != nil {
 		return fmt.Errorf("mitm shutdown: %w", httpErr)
 	}
 	return nil
+}
+
+// closeCaptureWriters drains and closes the per-proxy capture writer
+// cache. Safe on a nil cache so test fixtures that build a *Proxy by
+// hand without going through NewProxy do not crash on Shutdown.
+func (p *Proxy) closeCaptureWriters() {
+	if p.captureWriters == nil {
+		return
+	}
+	p.captureWriters.close()
 }
 
 // SetConfig updates the proxy's runtime config. The daemon calls
@@ -349,7 +368,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		duration:       duration,
 		responseStatus: resp.StatusCode,
 	})
-	queueBaselineRefresh(cfg, provider, p.log)
+	queueBaselineRefresh(r.Context(), cfg, provider, p.log)
 }
 
 func forwardResponseHeaders(dst http.Header, src http.Header) {
@@ -465,8 +484,21 @@ func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input ht
 		"request_headers": redactHeaders(r.Header),
 		"request_body":    input.requestIndex,
 	}
-	if err := WriteCaptureEvent(input.config.CaptureDir, requestEvent, input.policy); err != nil {
-		p.log.Warn("mitm.capture.append_failed", "capture_dir", input.config.CaptureDir, "err", err)
+	if err := p.writeCaptureEvent(input.config.CaptureDir, requestEvent, input.policy); err != nil {
+		if errors.Is(err, ErrCaptureSinkClosed) {
+			p.log.Debug("mitm.capture.append_skipped_closed",
+				"component", "mitm",
+				"concern", "providers.mitm.wire",
+				"capture_dir", input.config.CaptureDir,
+			)
+			return
+		}
+		p.log.Warn("mitm.capture.append_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"capture_dir", input.config.CaptureDir,
+			"err", err,
+		)
 	}
 	event := map[string]any{
 		"kind":             string(RecordHTTPResponse),
@@ -487,8 +519,21 @@ func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input ht
 		"request_body":     input.requestIndex,
 		"response_body":    input.responseIndex,
 	}
-	if err := WriteCaptureEvent(input.config.CaptureDir, event, input.policy); err != nil {
-		p.log.Warn("mitm.capture.append_failed", "capture_dir", input.config.CaptureDir, "err", err)
+	if err := p.writeCaptureEvent(input.config.CaptureDir, event, input.policy); err != nil {
+		if errors.Is(err, ErrCaptureSinkClosed) {
+			p.log.Debug("mitm.capture.append_skipped_closed",
+				"component", "mitm",
+				"concern", "providers.mitm.wire",
+				"capture_dir", input.config.CaptureDir,
+			)
+			return
+		}
+		p.log.Warn("mitm.capture.append_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"capture_dir", input.config.CaptureDir,
+			"err", err,
+		)
 	}
 }
 
@@ -724,14 +769,32 @@ func summarizeValue(v any) any {
 	}
 }
 
-// WriteCaptureEvent encodes and appends one MITM capture event.
-func WriteCaptureEvent(dir string, event map[string]any, policy CaptureFilePolicy) error {
+// writeCaptureEvent encodes one MITM capture event and writes it
+// through this proxy's writer cache. After Shutdown, returns
+// ErrCaptureSinkClosed for rotated policies; callers must propagate
+// the error rather than retry.
+func (p *Proxy) writeCaptureEvent(dir string, event map[string]any, policy CaptureFilePolicy) error {
 	raw, err := json.Marshal(event)
 	if err != nil {
-		slog.Warn("mitm.capture.encode_failed", "capture_dir", dir, "err", err)
+		p.log.Warn("mitm.capture.encode_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"capture_dir", dir,
+			"err", err,
+		)
 		return fmt.Errorf("encode capture event: %w", err)
 	}
-	return WriteCaptureLine(dir, raw, policy)
+	return p.writeCaptureLine(dir, raw, policy)
+}
+
+// writeCaptureLine appends one JSONL capture record through this
+// proxy's writer cache. After Shutdown, rotated writes return
+// ErrCaptureSinkClosed (CLYDE-299).
+func (p *Proxy) writeCaptureLine(dir string, line []byte, policy CaptureFilePolicy) error {
+	if p.captureWriters == nil {
+		return fmt.Errorf("mitm: proxy has no capture writer cache")
+	}
+	return p.captureWriters.writeLine(dir, line, policy)
 }
 
 type limitedBuffer struct {

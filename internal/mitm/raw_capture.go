@@ -203,7 +203,7 @@ func safePathPart(value string) string {
 	return out
 }
 
-func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata, policy CaptureFilePolicy) error {
+func (p *Proxy) appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata, policy CaptureFilePolicy) error {
 	now := currentTime()
 	concern := strings.TrimSpace(meta.Concern)
 	if concern == "" {
@@ -231,29 +231,39 @@ func appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata, policy 
 		ResponseContentType: meta.ResponseContentType,
 		Diagnostic:          meta.Diagnostic,
 	}
-	return appendCursorCaptureEvent(dir, event, policy)
+	return p.appendCursorCaptureEvent(dir, event, policy)
 }
 
-func appendCursorCaptureEvent(dir string, event cursorCaptureEvent, policy CaptureFilePolicy) error {
+func (p *Proxy) appendCursorCaptureEvent(dir string, event cursorCaptureEvent, policy CaptureFilePolicy) error {
 	dir = expandHome(dir)
 	if strings.TrimSpace(event.Concern) == "" {
 		event.Concern = "unknown"
 	}
-	if err := appendCursorCaptureEventAtDir(dir, event, policy); err != nil {
+	if err := p.appendCursorCaptureEventAtDir(dir, event, policy); err != nil {
 		return err
 	}
 	concern := safePathPart(event.Concern)
-	return appendCursorCaptureEventAtDir(filepath.Join(dir, "concerns", concern), event, policy)
+	return p.appendCursorCaptureEventAtDir(filepath.Join(dir, "concerns", concern), event, policy)
 }
 
-func appendCursorCaptureEventAtDir(dir string, event cursorCaptureEvent, policy CaptureFilePolicy) error {
+func (p *Proxy) appendCursorCaptureEventAtDir(dir string, event cursorCaptureEvent, policy CaptureFilePolicy) error {
 	raw, err := json.Marshal(event)
 	if err != nil {
-		slog.Warn("mitm.cursor.capture.encode_failed", "capture_dir", dir, "err", err)
+		slog.Warn("mitm.cursor.capture.encode_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"capture_dir", dir,
+			"err", err,
+		)
 		return fmt.Errorf("encode cursor capture metadata: %w", err)
 	}
-	if err := WriteCaptureLine(dir, raw, policy); err != nil {
-		slog.Warn("mitm.cursor.capture.write_failed", "capture_dir", dir, "err", err)
+	if err := p.writeCaptureLine(dir, raw, policy); err != nil {
+		slog.Warn("mitm.cursor.capture.write_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"capture_dir", dir,
+			"err", err,
+		)
 		return fmt.Errorf("write cursor capture metadata: %w", err)
 	}
 	return nil

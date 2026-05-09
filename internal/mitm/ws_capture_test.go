@@ -147,8 +147,9 @@ func TestIsWebsocketUpgradeRejectsPlainHTTP(t *testing.T) {
 
 func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 	t.Helper()
-	return &Proxy{
-		log:                   discardLogger(),
+	logger := discardLogger()
+	proxy := &Proxy{
+		log:                   logger,
 		client:                http.DefaultClient,
 		dialContext:           nil,
 		certMu:                sync.Mutex{},
@@ -156,11 +157,14 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
 		Tunnels:               newTestTunnelRegistry(),
+		captureWriters:        newCaptureWriterCache(logger),
 		mu:                    sync.RWMutex{},
 		cfg:                   cfg,
 		base:                  "",
 		server:                nil,
 	}
+	t.Cleanup(proxy.closeCaptureWriters)
+	return proxy
 }
 
 func hasKind(lines []string, kind string) bool {

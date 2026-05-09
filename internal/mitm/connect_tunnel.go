@@ -304,18 +304,9 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	}
 	req.Body = io.NopCloser(bytes.NewReader(body))
 
-	transport := &http.Transport{
-		Proxy:               nil,
-		ForceAttemptHTTP2:   false,
-		DisableCompression:  true,
-		TLSClientConfig:     p.cursorTLSClientConfig,
-		DialContext:         p.dialContext,
-		TLSHandshakeTimeout: 30 * time.Second,
-	}
-	defer transport.CloseIdleConnections()
-	resp, err := transport.RoundTrip(cursorUpstreamRequest(req, body, target, host))
+	resp, err := p.cursorUpstreamRoundTrip(req, body, target, host)
 	if err != nil {
-		return fmt.Errorf("cursor upstream round trip: %w", err)
+		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -332,7 +323,7 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	if !hasDiag {
 		diag = nil
 	}
-	if err := appendCursorCaptureMetadata(cfg.CaptureDir, cursorCaptureMetadata{
+	if appendErr := p.appendCursorCaptureMetadata(cfg.CaptureDir, cursorCaptureMetadata{
 		Provider:            "cursor",
 		Concern:             concern,
 		Host:                host,
@@ -350,8 +341,21 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		RequestContentType:  req.Header.Get("Content-Type"),
 		ResponseContentType: resp.Header.Get("Content-Type"),
 		Diagnostic:          diag,
-	}, capturePolicy); err != nil {
-		p.log.Warn("mitm.cursor.capture.append_failed", "capture_dir", cfg.CaptureDir, "err", err)
+	}, capturePolicy); appendErr != nil {
+		if errors.Is(appendErr, ErrCaptureSinkClosed) {
+			p.log.Debug("mitm.cursor.capture.append_skipped_closed",
+				"component", "mitm",
+				"concern", "providers.mitm.wire",
+				"capture_dir", cfg.CaptureDir,
+			)
+		} else {
+			p.log.Warn("mitm.cursor.capture.append_failed",
+				"component", "mitm",
+				"concern", "providers.mitm.wire",
+				"capture_dir", cfg.CaptureDir,
+				"err", appendErr,
+			)
+		}
 	}
 	p.log.Info("mitm.cursor.capture.completed",
 		"host", host,
@@ -363,6 +367,36 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		"response_bytes", responseBytes,
 	)
 	return nil
+}
+
+// cursorUpstreamRoundTrip dials the upstream over the proxy's TLS
+// client config and returns the response. Extracted from
+// handleCursorInterceptedRequest to keep that function below the
+// funlen threshold; the transport is constructed per-request and its
+// idle connections are closed on return so this helper owns the
+// transport's lifetime end-to-end.
+func (p *Proxy) cursorUpstreamRoundTrip(req *http.Request, body []byte, target string, host string) (*http.Response, error) {
+	transport := &http.Transport{
+		Proxy:               nil,
+		ForceAttemptHTTP2:   false,
+		DisableCompression:  true,
+		TLSClientConfig:     p.cursorTLSClientConfig,
+		DialContext:         p.dialContext,
+		TLSHandshakeTimeout: 30 * time.Second,
+	}
+	defer transport.CloseIdleConnections()
+	resp, err := transport.RoundTrip(cursorUpstreamRequest(req, body, target, host))
+	if err != nil {
+		p.log.Warn("mitm.cursor.upstream_round_trip_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"host", host,
+			"path", req.URL.Path,
+			"err", err,
+		)
+		return nil, fmt.Errorf("cursor upstream round trip: %w", err)
+	}
+	return resp, nil
 }
 
 func cursorUpstreamRequest(req *http.Request, body []byte, target string, host string) *http.Request {
