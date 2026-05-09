@@ -797,6 +797,7 @@ func sessionEventFromProto(ev *clydev1.SubscribeRegistryResponse) ui.SessionEven
 func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDetail {
 	out := ui.SessionDetail{
 		Model:                 resp.GetModel(),
+		Provider:              resp.GetProvider(),
 		TotalMessages:         int(resp.GetTotalMessages()),
 		VisibleTokensEstimate: int(resp.GetVisibleTokensEstimate()),
 		LastMessageTokens:     int(resp.GetLastMessageTokens()),
@@ -817,6 +818,7 @@ func sessionDetailFromProto(resp *clydev1.GetSessionDetailResponse) ui.SessionDe
 		},
 		ContextUsageLoaded: resp.GetContextUsageLoaded(),
 		ContextUsageStatus: resp.GetContextUsageStatus(),
+		ResumeInstructions: append([]string(nil), resp.GetResumeInstructions()...),
 	}
 	for _, m := range resp.GetRecentMessages() {
 		out.Messages = append(out.Messages, ui.DetailMessage{

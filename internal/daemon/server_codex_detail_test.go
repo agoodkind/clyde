@@ -64,4 +64,10 @@ func TestSessionDetailUsesCodexHistoryIR(t *testing.T) {
 	if detail.GetRecentMessages()[2].GetText() != "Done." {
 		t.Fatalf("recent_messages[2].Text = %q, want %q", detail.GetRecentMessages()[2].GetText(), "Done.")
 	}
+	if detail.GetProvider() != "codex" {
+		t.Fatalf("detail.Provider = %q, want codex", detail.GetProvider())
+	}
+	if got := detail.GetResumeInstructions(); len(got) != 1 || got[0] != "codex resume codex-thread" {
+		t.Fatalf("detail.ResumeInstructions = %v, want [codex resume codex-thread]", got)
+	}
 }

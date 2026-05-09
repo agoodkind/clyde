@@ -1831,6 +1831,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		ContextMessagesTokens: int32(contextState.Usage.CategoryTokens("Messages")),
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
+		ResumeInstructions:    session.ResumeInstructions(sess),
 	}
 	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {

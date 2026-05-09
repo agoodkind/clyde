@@ -206,8 +206,9 @@ func (d *DetailsView) buildLeft(sess *session.Session, detail SessionDetail) [][
 	out = append(out, []TextSegment{})
 
 	section("Resume")
-	out = append(out, []TextSegment{seg("  clyde resume "+sess.Name, StyleMuted)})
-	out = append(out, []TextSegment{seg("  claude --resume "+sess.Metadata.ProviderSessionID(), StyleMuted)})
+	for _, line := range resumeInstructionLines(sess, detail) {
+		out = append(out, []TextSegment{seg("  "+line, StyleMuted)})
+	}
 
 	return out
 }
@@ -345,10 +346,29 @@ func formatDetailCompactions(detail SessionDetail) string {
 	return value
 }
 
+func resumeInstructionLines(sess *session.Session, detail SessionDetail) []string {
+	if sess == nil {
+		return nil
+	}
+	lines := []string{fmt.Sprintf("clyde resume %s", sess.Name)}
+	seen := map[string]bool{
+		lines[0]: true,
+	}
+	for _, instruction := range detail.ResumeInstructions {
+		trimmed := strings.TrimSpace(instruction)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		lines = append(lines, trimmed)
+		seen[trimmed] = true
+	}
+	return lines
+}
+
 // buildRight renders the full conversation. Each message gets a role tag
 // and a timestamp. Long bodies are wrapped by the parent TextBox because
 // its Wrap flag is on.
-func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]TextSegment {
+func (d *DetailsView) buildRight(sess *session.Session, detail SessionDetail) [][]TextSegment {
 	src := detail.AllMessages
 	if len(src) == 0 && len(detail.Messages) > 0 {
 		src = detail.Messages
@@ -379,15 +399,18 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 	assistantTag := StyleDefault.Foreground(ColorAccent).Bold(true)
 	assistantBody := StyleDefault.Foreground(ColorSubtext)
 	tsStyle := StyleDefault.Foreground(ColorMuted)
+	assistantLabel := detailAssistantLabel(sess, detail)
 
 	for i, m := range msgs {
 		tag := "You"
 		tagStyle := userTag
 		bodyStyle := userBody
 		if m.Role == "assistant" {
-			tag = "Claude"
+			tag = assistantLabel
 			tagStyle = assistantTag
 			bodyStyle = assistantBody
+		} else if strings.TrimSpace(m.Role) != "" && m.Role != "user" {
+			tag = detailRoleLabel(m.Role)
 		}
 
 		ts := ""
@@ -417,6 +440,27 @@ func (d *DetailsView) buildRight(_ *session.Session, detail SessionDetail) [][]T
 		}
 	}
 	return out
+}
+
+func detailAssistantLabel(sess *session.Session, detail SessionDetail) string {
+	provider := strings.TrimSpace(detail.Provider)
+	if provider == "" && sess != nil {
+		provider = strings.TrimSpace(string(sess.ProviderID()))
+	}
+	if label := session.ProviderDisplayName(session.ProviderID(provider)); label != "" {
+		return label
+	}
+	return "Assistant"
+}
+
+func detailRoleLabel(role string) string {
+	trimmed := strings.TrimSpace(role)
+	if trimmed == "" {
+		return "Message"
+	}
+	runes := []rune(trimmed)
+	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+	return string(runes)
 }
 
 // Draw splits r into a left and right column and renders each TextBox.
