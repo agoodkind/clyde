@@ -464,7 +464,7 @@ func TestUX_BasedirLaunchKeepsDefaultNewSessionFlow(t *testing.T) {
 	}
 }
 
-func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
+func TestUX_CodexSessionOptionsUseHistoryReadableAffordances(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()
 	sess := a.sessions[0]
@@ -481,15 +481,14 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 	if !ok {
 		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
 	}
-	for _, label := range []string{
-		"View transcript",
-		"Export transcript",
-		"Drive in sidecar",
-		"Open live URL",
-		"Copy live URL",
-		"Compact",
-		"Fork",
-	} {
+	view := findModalEntry(modal, "View transcript")
+	if view == nil {
+		t.Fatalf("missing %q entry", "View transcript")
+	}
+	if view.Disabled {
+		t.Fatalf("%q disabled = true, want false for codex history-readable session", view.Label)
+	}
+	for _, label := range []string{"Export transcript", "Compact", "Fork"} {
 		entry := findModalEntry(modal, label)
 		if entry == nil {
 			t.Fatalf("missing %q entry", label)
@@ -497,6 +496,37 @@ func TestUX_SessionOptionsRespectProviderCapabilities(t *testing.T) {
 		if !entry.Disabled {
 			t.Fatalf("%q disabled = false, want true for codex provider", label)
 		}
+	}
+}
+
+func TestUX_CodexDetailsLoadForHistoryReadableSessions(t *testing.T) {
+	a, _, cleanup := mkAppWithSessions(t, 1)
+	defer cleanup()
+	sess := a.sessions[0]
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "codex-123"},
+		Artifacts: session.ProviderArtifacts{
+			TranscriptPath: "/tmp/codex-history.jsonl",
+		},
+	}
+	callbackEntered := make(chan struct{}, 1)
+	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+		callbackEntered <- struct{}{}
+		return SessionDetail{Model: "openai"}, nil
+	}
+
+	detail, loading := a.cachedDetailForSession(sess)
+	if !loading {
+		t.Fatalf("loading = false, want true while codex detail is fetched")
+	}
+	if detail.TranscriptStatsStatus == "unsupported" {
+		t.Fatalf("transcript stats status = %q, want async load instead", detail.TranscriptStatsStatus)
+	}
+	select {
+	case <-callbackEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetSessionDetail callback was never invoked for codex session")
 	}
 }
 

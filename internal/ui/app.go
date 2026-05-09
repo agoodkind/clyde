@@ -966,7 +966,7 @@ func (a *App) cachedDetailForSession(sess *session.Session) (SessionDetail, bool
 	if sess == nil {
 		return SessionDetail{}, false
 	}
-	if !sessionCapabilities(sess).TranscriptExport {
+	if !sessionHistoryReadable(sess) {
 		return SessionDetail{
 			Model:                 valueOr(a.modelCache[sess.Name], "-"),
 			ContextUsageStatus:    "unsupported",
@@ -6288,6 +6288,13 @@ func sessionCapabilities(sess *session.Session) session.ProviderCapabilities {
 	return sess.SessionProviderCapabilities()
 }
 
+func sessionHistoryReadable(sess *session.Session) bool {
+	if sess == nil {
+		return false
+	}
+	return sess.ProviderRuntimeBoundary().History.Readable
+}
+
 // rowSession returns the session under the table cursor regardless of
 // whether the details pane is currently showing it. Returns nil when no
 // row is highlighted.
@@ -6416,7 +6423,7 @@ func (a *App) sessionOptionsEntries(sess *session.Session, close func(), omitRes
 				close()
 				a.viewSelected()
 			},
-			Disabled: a.cb.ViewContent == nil || !caps.TranscriptExport,
+			Disabled: a.cb.ViewContent == nil || !sessionHistoryReadable(sess),
 		},
 		{
 			Label: "Export transcript",
