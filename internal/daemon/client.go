@@ -270,7 +270,7 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	retryCtx, cancel := context.WithTimeout(ctx, reloadClientOverallTimeout)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
-		c, err := ConnectOrStart(retryCtx)
+		c, err := connectOrStart(retryCtx, connectOptions{skipCompatibilityProbe: true})
 		if err != nil {
 			log.DebugContext(retryCtx, "daemon.client.reload.connect_failed",
 				"attempt", attempt,
@@ -360,6 +360,10 @@ func lockDaemonReload(ctx context.Context) (func(), error) {
 	}, nil
 }
 
+type connectOptions struct {
+	skipCompatibilityProbe bool
+}
+
 // findDaemonPID locates the running daemon's pid via launchctl. Returns
 // 0 with no error when the daemon is not registered.
 func findDaemonPID(ctx context.Context) (int, error) {
@@ -431,6 +435,10 @@ func startsWith(s, prefix string) bool {
 
 // connect opens a connection to a running daemon and verifies it responds.
 func connect(ctx context.Context) (*Client, error) {
+	return connectWithOptions(ctx, connectOptions{skipCompatibilityProbe: false})
+}
+
+func connectWithOptions(ctx context.Context, options connectOptions) (*Client, error) {
 	log := daemonClientLog(ctx)
 	socketPath := config.DaemonSocketPath()
 	target := "unix://" + socketPath
@@ -466,6 +474,12 @@ func connect(ctx context.Context) (*Client, error) {
 			return nil, fmt.Errorf("daemon not responding: %w", err)
 		}
 		log.DebugContext(dialCtx, "daemon.client.connect.probe_alive", "err", err)
+	}
+
+	if options.skipCompatibilityProbe {
+		log.DebugContext(ctx, "daemon.client.connect.compatibility_probe_skipped")
+		log.DebugContext(ctx, "daemon.client.connect.ok")
+		return client, nil
 	}
 
 	// Verify the daemon speaks the current dashboard RPC surface. Older
@@ -537,6 +551,10 @@ func searchString(s, sub string) bool {
 // Uses flock to prevent multiple processes from spawning the daemon
 // simultaneously.
 func ConnectOrStart(ctx context.Context) (*Client, error) {
+	return connectOrStart(ctx, connectOptions{skipCompatibilityProbe: false})
+}
+
+func connectOrStart(ctx context.Context, options connectOptions) (*Client, error) {
 	log := daemonClientLog(ctx)
 	// Tests and CI can disable the daemon entirely by setting
 	// CLYDE_DISABLE_DAEMON=1. The wrapper then behaves as if the
@@ -548,7 +566,7 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 		return nil, fmt.Errorf("daemon disabled by CLYDE_DISABLE_DAEMON")
 	}
 	// Fast path: daemon is already running.
-	if client, err := connect(ctx); err == nil {
+	if client, err := connectWithOptions(ctx, options); err == nil {
 		if err := ensureConnectedDaemonOwnedByLaunchd(ctx); err != nil {
 			_ = client.Close()
 			log.WarnContext(ctx, "daemon.client.connect_or_start.unowned_daemon", "err", err)
@@ -588,7 +606,7 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 	}()
 
 	// Double-check: another process may have started the daemon while we waited.
-	if client, err := connect(ctx); err == nil {
+	if client, err := connectWithOptions(ctx, options); err == nil {
 		if err := ensureConnectedDaemonOwnedByLaunchd(ctx); err != nil {
 			_ = client.Close()
 			log.WarnContext(ctx, "daemon.client.connect_or_start.unowned_daemon_after_lock", "err", err)
@@ -615,7 +633,7 @@ func ConnectOrStart(ctx context.Context) (*Client, error) {
 			return nil, ctx.Err()
 		case <-time.After(delay):
 		}
-		if client, err := connect(ctx); err == nil {
+		if client, err := connectWithOptions(ctx, options); err == nil {
 			if err := ensureConnectedDaemonOwnedByLaunchd(ctx); err != nil {
 				_ = client.Close()
 				log.WarnContext(ctx, "daemon.client.connect_or_start.unowned_daemon_after_start", "err", err)

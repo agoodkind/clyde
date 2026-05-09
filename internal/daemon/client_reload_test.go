@@ -18,14 +18,18 @@ import (
 
 type fakeReloadClydeServer struct {
 	clydev1.UnimplementedClydeServiceServer
-	reload func(context.Context) (*clydev1.ReloadDaemonResponse, error)
+	listSessions func(context.Context) (*clydev1.ListSessionsResponse, error)
+	reload       func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 }
 
 func (s *fakeReloadClydeServer) AcquireSession(context.Context, *clydev1.AcquireSessionRequest) (*clydev1.AcquireSessionResponse, error) {
 	return nil, status.Error(codes.InvalidArgument, "probe rejected")
 }
 
-func (s *fakeReloadClydeServer) ListSessions(context.Context, *clydev1.ListSessionsRequest) (*clydev1.ListSessionsResponse, error) {
+func (s *fakeReloadClydeServer) ListSessions(ctx context.Context, _ *clydev1.ListSessionsRequest) (*clydev1.ListSessionsResponse, error) {
+	if s.listSessions != nil {
+		return s.listSessions(ctx)
+	}
 	return &clydev1.ListSessionsResponse{}, nil
 }
 
@@ -83,6 +87,34 @@ func TestReloadDaemonRetriesUntilProcessLockOwnerConfirms(t *testing.T) {
 	}
 	if resp.GetNewPid() != 8642 {
 		t.Fatalf("new pid = %d, want 8642", resp.GetNewPid())
+	}
+}
+
+func TestReloadDaemonSkipsListSessionsCompatibilityProbe(t *testing.T) {
+	var listSessionsCalls atomic.Int32
+	startFakeReloadDaemon(t, &fakeReloadClydeServer{
+		listSessions: func(context.Context) (*clydev1.ListSessionsResponse, error) {
+			listSessionsCalls.Add(1)
+			return &clydev1.ListSessionsResponse{}, nil
+		},
+		reload: func(context.Context) (*clydev1.ReloadDaemonResponse, error) {
+			return &clydev1.ReloadDaemonResponse{
+				BinaryReloaded: true,
+				NewPid:         1357,
+			}, nil
+		},
+	})
+	withFakeReloadClientTiming(t, 500*time.Millisecond, 250*time.Millisecond, time.Millisecond)
+
+	resp, err := ReloadDaemon(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadDaemon returned error: %v", err)
+	}
+	if resp.GetNewPid() != 1357 {
+		t.Fatalf("new pid = %d, want 1357", resp.GetNewPid())
+	}
+	if got := listSessionsCalls.Load(); got != 0 {
+		t.Fatalf("ListSessions calls = %d, want 0", got)
 	}
 }
 
