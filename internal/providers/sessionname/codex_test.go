@@ -48,7 +48,7 @@ func TestRenameCodexRejectsMissingSessionID(t *testing.T) {
 			Provider: session.ProviderCodex,
 		},
 	}
-	if err := renameCodex(sess, "Renamed Codex"); err == nil {
+	if err := renameCodex(context.Background(), sess, "Renamed Codex"); err == nil {
 		t.Fatal("renameCodex(missing session id) returned nil error")
 	}
 }
@@ -65,7 +65,7 @@ func TestRenameCodexAppendsNormalizedThreadName(t *testing.T) {
 			SessionID: "thread-42",
 		},
 	}
-	if err := renameCodex(sess, "  Renamed Codex  "); err != nil {
+	if err := renameCodex(context.Background(), sess, "  Renamed Codex  "); err != nil {
 		t.Fatalf("renameCodex returned error: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestRenameCodexRejectsEmptyNormalizedName(t *testing.T) {
 			SessionID: "thread-42",
 		},
 	}
-	if err := renameCodex(sess, "   "); err == nil {
+	if err := renameCodex(context.Background(), sess, "   "); err == nil {
 		t.Fatal("renameCodex(whitespace) returned nil error")
 	}
 }

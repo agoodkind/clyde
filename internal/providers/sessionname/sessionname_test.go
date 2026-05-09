@@ -203,7 +203,7 @@ func TestRenameClaudeRejectsMissingTranscriptPath(t *testing.T) {
 			SessionID: "session-1",
 		},
 	}
-	if err := renameClaude(sess, "Renamed"); err == nil {
+	if err := renameClaude(context.Background(), sess, "Renamed"); err == nil {
 		t.Fatal("renameClaude(missing transcript) returned nil error")
 	}
 }
@@ -217,7 +217,7 @@ func TestRenameClaudeRejectsMissingSessionID(t *testing.T) {
 			TranscriptPath: transcript,
 		},
 	}
-	if err := renameClaude(sess, "Renamed"); err == nil {
+	if err := renameClaude(context.Background(), sess, "Renamed"); err == nil {
 		t.Fatal("renameClaude(missing session id) returned nil error")
 	}
 }
@@ -227,7 +227,7 @@ func TestRenameClaudeReturnsErrorForMissingTranscriptFile(t *testing.T) {
 		filepath.Join(t.TempDir(), "does-not-exist.jsonl"),
 		"session-baseline",
 	)
-	err := renameClaude(sess, "Renamed")
+	err := renameClaude(context.Background(), sess, "Renamed")
 	if err == nil {
 		t.Fatal("renameClaude(missing file) returned nil error")
 	}
@@ -253,7 +253,7 @@ func TestRenameClaudeWrapsReadOnlyTranscriptError(t *testing.T) {
 	})
 
 	sess := newClaudeSessionWithTranscript(t, transcript, "session-ro")
-	err := renameClaude(sess, "Renamed")
+	err := renameClaude(context.Background(), sess, "Renamed")
 	if err == nil {
 		t.Fatal("renameClaude(read-only) returned nil error")
 	}
@@ -269,7 +269,7 @@ func TestRenameClaudeAppendsToTranscript(t *testing.T) {
 	transcript := copyFixtureToTempFile(t, "claude_transcript_baseline.jsonl")
 	sess := newClaudeSessionWithTranscript(t, transcript, "session-baseline")
 
-	if err := renameClaude(sess, "Renamed Direct"); err != nil {
+	if err := renameClaude(context.Background(), sess, "Renamed Direct"); err != nil {
 		t.Fatalf("renameClaude returned error: %v", err)
 	}
 
@@ -302,7 +302,7 @@ func TestRenameClaudeConcurrentAppendsKeepValidJSONL(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			defer waitGroup.Done()
-			errs <- renameClaude(sess, "Concurrent Title")
+			errs <- renameClaude(context.Background(), sess, "Concurrent Title")
 		}()
 	}
 	waitGroup.Wait()
