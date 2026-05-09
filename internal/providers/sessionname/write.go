@@ -13,13 +13,20 @@ import (
 
 // Rename persists a provider-owned exact session title for the given session.
 func Rename(ctx context.Context, sess *session.Session, newName string) error {
-	_ = ctx
 	if sess == nil {
 		return fmt.Errorf("nil session")
 	}
 	title := strings.TrimSpace(newName)
 	if title == "" {
 		return fmt.Errorf("missing session name")
+	}
+	if err := session.ValidateDisplayName(title); err != nil {
+		slog.WarnContext(ctx, "sessionname.invalid_display_name",
+			"component", "sessionname",
+			"session", sess.Name,
+			"err", err,
+		)
+		return fmt.Errorf("invalid session name: %w", err)
 	}
 	switch session.NormalizeProviderID(sess.ProviderID()) {
 	case session.ProviderUnknown:
