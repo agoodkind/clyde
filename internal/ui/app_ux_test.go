@@ -523,7 +523,7 @@ func TestUX_CodexDetailsLoadForHistoryReadableSessions(t *testing.T) {
 		},
 	}
 	callbackEntered := make(chan struct{}, 1)
-	a.cb.GetSessionDetail = func(*session.Session) (SessionDetail, error) {
+	a.cb.GetSessionDetail = func(context.Context, *session.Session) (SessionDetail, error) {
 		callbackEntered <- struct{}{}
 		return SessionDetail{Model: "openai"}, nil
 	}
