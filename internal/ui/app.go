@@ -137,6 +137,17 @@ const (
 	SessionExportJSON      SessionExportFormat = "json"
 )
 
+// Per-column hard caps for the session list table. Without these, a
+// single 120-character session name or workspace path will dominate
+// the layout and push later columns off screen on a 60- or 80-column
+// terminal. The remaining columns (LAST ACTIVE, MODEL, MSGS, CREATED)
+// have bounded content already, so they do not need an explicit cap.
+const (
+	sessionNameColumnMaxWidth    = 40
+	sessionBasedirColumnMaxWidth = 32
+	sessionSummaryColumnMaxWidth = 40
+)
+
 type SessionExportWhitespaceCompression string
 
 const (
@@ -672,6 +683,20 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	a.tabs = NewTabBar([]string{"Sessions", "Stats", "Settings", "Sidecar"})
 	a.tabs.OnActivate = func(idx int) { a.activeTab = idx }
 	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "LAST ACTIVE", "MODEL", "MSGS", "SUMMARY", "CREATED"})
+	// Cap columns so a single very long session name or workspace path
+	// cannot push later columns off screen. SUMMARY is already
+	// truncated at row build time, but the cap keeps a stale long
+	// summary from blowing out the layout. Columns without an entry
+	// (LAST ACTIVE, MODEL, MSGS, CREATED) stay sized to content.
+	a.table.MaxColumnWidths = []int{
+		sessionNameColumnMaxWidth,
+		sessionBasedirColumnMaxWidth,
+		0,
+		0,
+		0,
+		sessionSummaryColumnMaxWidth,
+		0,
+	}
 	a.table.SortCol = int(a.sortCol)
 	a.table.SortAsc = a.sortAsc
 	a.table.OnActivate = func(row int) { a.openSessionOptions(row) }

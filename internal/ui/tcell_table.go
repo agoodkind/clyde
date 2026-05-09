@@ -20,6 +20,14 @@ type TableWidget struct {
 	ColGaps int           // spaces between columns (default 2)
 	Rect    Rect          // last drawn rect, used for hit testing
 
+	// MaxColumnWidths optionally caps the display width of each column.
+	// Zero or unset entries mean the column grows to fit its widest
+	// cell. When a cell exceeds its cap, it is truncated with a single
+	// horizontal ellipsis so a single very long value (e.g. a session
+	// name) does not push the rest of the table off screen on a
+	// narrow terminal. Length must be either zero or len(Headers).
+	MaxColumnWidths []int
+
 	// Selection and scroll
 	Active      bool // true after first user interaction (shows highlight)
 	SelectedRow int  // 0 based data row index
@@ -49,13 +57,29 @@ type TableWidget struct {
 // NewTableWidget constructs with sensible defaults.
 func NewTableWidget(headers []string) *TableWidget {
 	return &TableWidget{
-		Headers: headers,
-		ColGaps: 2,
-		SortCol: -1,
+		Headers:          headers,
+		Rows:             nil,
+		ColGaps:          2,
+		Rect:             Rect{},
+		MaxColumnWidths:  nil,
+		Active:           false,
+		SelectedRow:      0,
+		Offset:           0,
+		HOffset:          0,
+		ScrollbarRect:    Rect{},
+		LastContentWidth: 0,
+		SortCol:          -1,
+		SortAsc:          false,
+		OnActivate:       nil,
+		OnSelect:         nil,
+		OnHeader:         nil,
 	}
 }
 
-// ColumnWidths returns the max display width of each column across headers and rows.
+// ColumnWidths returns the display width of each column across headers
+// and rows, clamped to the per-column MaxColumnWidths cap when one is
+// configured. The cap protects narrow terminals from a single long
+// value (commonly a session name) blowing out the table layout.
 func (t *TableWidget) ColumnWidths() []int {
 	widths := make([]int, len(t.Headers))
 	for i, h := range t.Headers {
@@ -79,7 +103,41 @@ func (t *TableWidget) ColumnWidths() []int {
 			}
 		}
 	}
+	for i, max := range t.MaxColumnWidths {
+		if i >= len(widths) {
+			break
+		}
+		if max > 0 && widths[i] > max {
+			widths[i] = max
+		}
+	}
 	return widths
+}
+
+// truncateToWidth returns s clipped so its terminal-cell width is at
+// most maxWidth, ending in a single-cell ellipsis when truncation
+// happens. A maxWidth of zero or less leaves the input untouched.
+func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 || cellCount(s) <= maxWidth {
+		return s
+	}
+	if maxWidth == 1 {
+		return "…"
+	}
+	// Reserve one cell for the ellipsis, then accumulate runes until
+	// the next one would exceed the budget.
+	budget := maxWidth - 1
+	used := 0
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		w := runewidth.RuneWidth(r)
+		if used+w > budget {
+			break
+		}
+		out = append(out, r)
+		used += w
+	}
+	return string(out) + "…"
 }
 
 // ContentWidth returns total drawing width: columns plus gaps.
@@ -237,7 +295,8 @@ func (t *TableWidget) drawHeaderRow(scr tcell.Screen, ctx tableDrawCtx) {
 		if i > 0 {
 			vx += t.ColGaps
 		}
-		text := padCellText(t.headerLabel(i), ctx.widths[i], i == last)
+		label := truncateToWidth(t.headerLabel(i), ctx.widths[i])
+		text := padCellText(label, ctx.widths[i], i == last)
 		t.drawShiftedText(scr, ctx, vx, ctx.r.Y, StyleHeader, text)
 		vx += ctx.widths[i]
 	}
@@ -274,7 +333,8 @@ func (t *TableWidget) drawDataRow(scr tcell.Screen, ctx tableDrawCtx, di, y int)
 		if isSel {
 			style = StyleSelected
 		}
-		text := padCellText(cell.Text, ctx.widths[i], i == last)
+		clipped := truncateToWidth(cell.Text, ctx.widths[i])
+		text := padCellText(clipped, ctx.widths[i], i == last)
 		t.drawShiftedText(scr, ctx, vx, y, style, text)
 		vx += ctx.widths[i]
 	}
