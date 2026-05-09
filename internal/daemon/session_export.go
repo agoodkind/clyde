@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ func buildSessionExport(sess *session.Session, req *clydev1.ExportSessionRequest
 	if strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return nil, fmt.Errorf("session has no transcript path")
 	}
-	messages, err := loadExportMessagesFromPath(sess.Metadata.ProviderTranscriptPath(), req.GetIncludeSystemPrompts(), req.GetIncludeToolOutputs())
+	messages, err := loadSessionExportMessages(sess, req.GetIncludeSystemPrompts(), req.GetIncludeToolOutputs())
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +120,54 @@ func loadExportHistoryMessages(sess *session.Session, req *clydev1.ExportSession
 	}
 	defer func() { _ = gz.Close() }()
 	return loadExportMessages(gz, req.GetIncludeSystemPrompts(), req.GetIncludeToolOutputs())
+}
+
+func loadSessionExportMessages(sess *session.Session, includeSystemPrompts bool, includeToolOutputs bool) ([]transcript.Message, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("nil session")
+	}
+	path := strings.TrimSpace(sess.Metadata.ProviderTranscriptPath())
+	if path == "" {
+		return nil, fmt.Errorf("session has no transcript path")
+	}
+	if sess.ProviderID() == session.ProviderCodex {
+		return loadCodexExportMessages(path)
+	}
+	return loadExportMessagesFromPath(path, includeSystemPrompts, includeToolOutputs)
+}
+
+func loadCodexExportMessages(path string) ([]transcript.Message, error) {
+	history, err := transcript.ReadCodexHistory(path)
+	if err != nil {
+		slog.Warn("daemon.session_export.codex_read_failed",
+			"path", path,
+			"err", err,
+		)
+		return nil, fmt.Errorf("read codex export history: %w", err)
+	}
+	turns := history.ConversationTurns(transcript.ShapeOptions{
+		IncludeThinking:  false,
+		ConversationOnly: true,
+		ToolOnly:         transcript.ToolOnlyOmit,
+		MaxTextRunes:     0,
+	})
+	out := make([]transcript.Message, 0, len(turns))
+	for _, turn := range turns {
+		text := strings.TrimSpace(turn.Text)
+		if text == "" {
+			continue
+		}
+		out = append(out, transcript.Message{
+			UUID:      "",
+			Role:      turn.Role,
+			Timestamp: turn.Timestamp,
+			Text:      text,
+			Thinking:  "",
+			HasTools:  false,
+			Tools:     nil,
+		})
+	}
+	return out, nil
 }
 
 func clearExportMetadata(messages []transcript.Message) {

@@ -1454,10 +1454,10 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	if !sess.SessionProviderCapabilities().TranscriptExport {
-		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
+	if !sess.ProviderRuntimeBoundary().History.Exportable {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support history export", sess.ProviderID())
 	}
-	stats := inspectExportStatsFor(sess.Metadata.ProviderTranscriptPath())
+	stats := inspectExportStatsForSession(sess)
 	resp := &clydev1.GetSessionExportStatsResponse{
 		SessionName:           sess.Name,
 		VisibleTokensEstimate: int32(stats.VisibleTokensEstimate),
@@ -1500,8 +1500,8 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	if !sess.SessionProviderCapabilities().TranscriptExport {
-		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript export", sess.ProviderID())
+	if !sess.ProviderRuntimeBoundary().History.Exportable {
+		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support history export", sess.ProviderID())
 	}
 	body, err := buildSessionExport(sess, req)
 	if err != nil {
@@ -1798,6 +1798,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 
 func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, sess *session.Session) *clydev1.GetSessionDetailResponse {
 	caps := sess.SessionProviderCapabilities()
+	runtime := sess.ProviderRuntimeBoundary()
 	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
 	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
@@ -1811,8 +1812,8 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		}
 	}
 	stats := inspectStats{}
-	if caps.TranscriptExport {
-		stats = inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+	if runtime.History.Readable {
+		stats = inspectStatsForSession(sess)
 	}
 	contextState := s.lazyContextStateForDetail(ctx, sess)
 	resp := &clydev1.GetSessionDetailResponse{
@@ -1832,7 +1833,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
 	}
-	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
+	if p := sess.Metadata.ProviderTranscriptPath(); runtime.History.Readable && p != "" {
 		if info, err := os.Stat(p); err == nil {
 			resp.TranscriptSizeBytes = info.Size()
 			resp.LastActivityNanos = info.ModTime().UnixNano()

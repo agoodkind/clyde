@@ -719,10 +719,19 @@ func sessionSnapshotFromProto(resp *clydev1.ListSessionsResponse) ui.SessionSnap
 }
 
 func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, string, int, ui.SessionContextState, *ui.LiveURL) {
+	provider := strings.TrimSpace(raw.GetProvider())
+	if provider == "" {
+		provider = strings.TrimSpace(raw.GetRuntime().GetHistory().GetCurrent().GetProvider())
+	}
+	if provider == "" {
+		provider = strings.TrimSpace(raw.GetRuntime().GetLive().GetCurrent().GetProvider())
+	}
 	sess := &session.Session{
 		Name: raw.GetName(),
 		Metadata: session.Metadata{
 			Name:                 raw.GetMetadataName(),
+			Provider:             session.ProviderID(provider),
+			ProviderState:        nil,
 			SessionID:            raw.GetSessionId(),
 			TranscriptPath:       raw.GetTranscriptPath(),
 			WorkDir:              raw.GetWorkDir(),
@@ -746,6 +755,7 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 	if sess.Metadata.Name == "" {
 		sess.Metadata.Name = sess.Name
 	}
+	sess.Metadata.NormalizeProviderState()
 	contextState := ui.SessionContextState{
 		Usage: ui.SessionContextUsage{
 			TotalTokens:    int(raw.GetContextTotalTokens()),

@@ -118,3 +118,76 @@ func TestBuildSessionExportCanIncludeSystemPrompts(t *testing.T) {
 		t.Fatalf("export missing system prompt with IncludeSystemPrompts=true:\n%s", string(with))
 	}
 }
+
+func TestBuildSessionExportUsesCodexHistoryIR(t *testing.T) {
+	transcriptPath := filepath.Join(t.TempDir(), "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
+	body := strings.Join([]string{
+		`{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}`,
+		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"show me the real diff"}]}}`,
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Looking.","phase":"commentary"}}`,
+		`{"timestamp":"2026-05-02T17:09:07.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}],"phase":"final"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	sess := session.NewSession("codex-chat", "codex-thread")
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "codex-thread"},
+		Artifacts: session.ProviderArtifacts{
+			TranscriptPath: transcriptPath,
+		},
+	}
+	sess.Metadata.NormalizeProviderState()
+
+	exported, err := buildSessionExport(sess, &clydev1.ExportSessionRequest{
+		SessionName:     "codex-chat",
+		Format:          clydev1.SessionExportFormat_SESSION_EXPORT_FORMAT_MARKDOWN,
+		HistoryStart:    1 << 30,
+		IncludeChat:     true,
+		IncludeThinking: false,
+	})
+	if err != nil {
+		t.Fatalf("build codex export: %v", err)
+	}
+	text := string(exported)
+	for _, want := range []string{"show me the real diff", "Done."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("codex export missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestInspectExportStatsForSessionUsesCodexHistoryIR(t *testing.T) {
+	transcriptPath := filepath.Join(t.TempDir(), "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
+	body := strings.Join([]string{
+		`{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}`,
+		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"show me the real diff"}]}}`,
+		`{"timestamp":"2026-05-02T17:09:07.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}],"phase":"final"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	sess := session.NewSession("codex-chat", "codex-thread")
+	sess.Metadata.Provider = session.ProviderCodex
+	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
+		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "codex-thread"},
+		Artifacts: session.ProviderArtifacts{
+			TranscriptPath: transcriptPath,
+		},
+	}
+	sess.Metadata.NormalizeProviderState()
+
+	stats := inspectExportStatsForSession(sess)
+	if stats.VisibleMessages != 2 {
+		t.Fatalf("visible messages=%d want 2", stats.VisibleMessages)
+	}
+	if stats.UserMessages != 1 || stats.AssistantMessages != 1 {
+		t.Fatalf("user/assistant=%d/%d want 1/1", stats.UserMessages, stats.AssistantMessages)
+	}
+	if stats.TranscriptSizeBytes == 0 {
+		t.Fatal("transcript size bytes = 0, want non-zero")
+	}
+}
