@@ -52,10 +52,6 @@ type ExportPanel struct {
 	OnClose        func()
 }
 
-func NewExportPanel(sessionName string, stats SessionExportStats, folder string) *ExportPanel {
-	return newExportPanelWithTitle(sessionName, sessionName, stats, folder)
-}
-
 func newExportPanelWithTitle(sessionName, displayTitle string, stats SessionExportStats, folder string) *ExportPanel {
 	if folder == "" {
 		folder = "."
