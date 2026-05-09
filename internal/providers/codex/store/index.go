@@ -101,6 +101,7 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 		return errors.New("thread name must not be empty")
 	}
 	if err := os.MkdirAll(filepath.Dir(paths.SessionIndexPath), 0o755); err != nil {
+		// TODO: thread ctx for correlation
 		slog.Warn("codex.store.session_index.mkdir_failed",
 			"component", "codex",
 			"subcomponent", "store",
@@ -112,6 +113,7 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 	}
 	file, err := os.OpenFile(paths.SessionIndexPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		// TODO: thread ctx for correlation
 		slog.Warn("codex.store.session_index.open_failed",
 			"component", "codex",
 			"subcomponent", "store",
@@ -127,6 +129,7 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 		ThreadName: normalized,
 		UpdatedAt:  currentTime().UTC().Format(time.RFC3339),
 	}); err != nil {
+		// TODO: thread ctx for correlation
 		slog.Warn("codex.store.session_index.encode_failed",
 			"component", "codex",
 			"subcomponent", "store",
@@ -137,6 +140,7 @@ func AppendThreadName(paths StorePaths, threadID, name string) error {
 		return fmt.Errorf("append codex session index entry: %w", err)
 	}
 	if err := file.Close(); err != nil {
+		// TODO: thread ctx for correlation
 		slog.Warn("codex.store.session_index.close_failed",
 			"component", "codex",
 			"subcomponent", "store",

@@ -64,6 +64,7 @@ func resolveCodexHome(value string) (string, error) {
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
+			// TODO: thread ctx for correlation
 			slog.Error("codex.store.home_resolve_failed", "err", err)
 			return "", fmt.Errorf("resolve codex home: %w", err)
 		}
@@ -72,6 +73,7 @@ func resolveCodexHome(value string) (string, error) {
 	if strings.HasPrefix(home, "~") {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
+			// TODO: thread ctx for correlation
 			slog.Error("codex.store.home_expand_failed", "err", err)
 			return "", fmt.Errorf("expand codex home: %w", err)
 		}
