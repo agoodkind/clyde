@@ -447,12 +447,26 @@ func startDaemonSubsystems(log *slog.Logger, srv *Server, inherited inheritedRun
 		}
 		return daemonSubsystems{}, fmt.Errorf("webapp startup: %w", err)
 	}
+	configureAutoNameWorker(log, srv)
 	return daemonSubsystems{
 		mitmProc:      mitmProc,
 		adapterCtrl:   adapterCtrl,
 		adapterCancel: adapterCancel,
 		webProc:       webProc,
 	}, nil
+}
+
+func configureAutoNameWorker(log *slog.Logger, srv *Server) {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		log.Warn("daemon.autoname.config_load_failed",
+			"component", "daemon",
+			"subcomponent", "autoname",
+			"err", err,
+		)
+		return
+	}
+	srv.configureAutoName(cfg.AutoName)
 }
 
 func configureExclusiveSubsystems(log *slog.Logger, reloadChild bool, extraLoops []ExtraLoop, adapterCancel func(), webProc *webAppProcess, mitmProc *mitmProcess, lockAcquired <-chan struct{}) *exclusiveSubsystems {

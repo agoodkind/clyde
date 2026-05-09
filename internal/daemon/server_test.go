@@ -117,6 +117,13 @@ func TestRenameSessionRecordsUserAttributionAndCooldown(t *testing.T) {
 		t.Fatalf("AutoNameSource = %q, want %q",
 			renamed.Metadata.AutoNameSource, session.AutoNameSourceUser)
 	}
+	if renamed.Metadata.AutoNameState != session.AutoNameStateUserLocked {
+		t.Fatalf("AutoNameState = %q, want %q",
+			renamed.Metadata.AutoNameState, session.AutoNameStateUserLocked)
+	}
+	if renamed.Metadata.AutoNameSourceHash != "" {
+		t.Fatalf("AutoNameSourceHash = %q, want empty", renamed.Metadata.AutoNameSourceHash)
+	}
 	if renamed.Metadata.LastAutoNameAt.IsZero() {
 		t.Fatalf("LastAutoNameAt is zero, want a timestamp >= test start")
 	}
