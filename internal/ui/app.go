@@ -3125,8 +3125,18 @@ func (a *App) handleDetailsLoaded(d detailsLoaded) {
 		if cached, ok := a.detailCache[d.name]; ok {
 			d.detail = cached
 		}
+		failedStatus := fmt.Sprintf("failed: %v", d.err)
 		if d.detail.TranscriptStatsStatus == "" {
-			d.detail.TranscriptStatsStatus = fmt.Sprintf("failed: %v", d.err)
+			d.detail.TranscriptStatsStatus = failedStatus
+		}
+		// Without an upstream-loaded context probe, a missing
+		// ContextUsageStatus also keeps detailHasPendingStatus
+		// returning true forever, which makes the spinner row in
+		// the details pane animate indefinitely and drives a
+		// detail-repoll storm. Mark the probe terminal too so the
+		// loader resolves to a stable error state.
+		if !d.detail.ContextUsageLoaded && d.detail.ContextUsageStatus == "" {
+			d.detail.ContextUsageStatus = failedStatus
 		}
 		if !hadCachedDetail {
 			d.detail.TranscriptStatsLoaded = false
@@ -4884,9 +4894,20 @@ func (a *App) populateDetails() {
 	a.detailMu.Unlock()
 
 	if ok {
-		cached.ContextUsage = contextState.Usage
-		cached.ContextUsageLoaded = contextState.Loaded
-		cached.ContextUsageStatus = contextState.Status
+		// Prefer the live registry contextState when it has resolved,
+		// otherwise keep the cached SessionDetail's own ContextUsage.
+		// The cached detail came from GetSessionDetail and is already
+		// authoritative; overwriting it with an unloaded contextState
+		// flips the row back to a spinner even though the data is in
+		// hand. This is the regression behind the "loads indefinitely"
+		// report when a session was just opened.
+		if contextState.Loaded {
+			cached.ContextUsage = contextState.Usage
+			cached.ContextUsageLoaded = true
+			cached.ContextUsageStatus = contextState.Status
+		} else if !cached.ContextUsageLoaded && contextState.Status != "" {
+			cached.ContextUsageStatus = contextState.Status
+		}
 		a.details.Set(a.selected, cached)
 		return
 	}
