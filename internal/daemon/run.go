@@ -73,6 +73,20 @@ const (
 	envDaemonSupervisorSocket   = "CLYDE_DAEMON_SUPERVISOR_SOCKET"
 )
 
+// mitmReloadDrainCap is the outer wall-clock bound on the old worker's
+// MITM in-flight tunnel drain after a reload handoff. The replacement
+// daemon already owns the listener FD and is serving new connections,
+// so the old worker can keep forwarding bytes for any tunnel that was
+// in progress when reload fired without holding up the reload RPC. The
+// cap is large enough to outlast the longest plausible HTTPS response
+// (multi-minute thinking-model streams, Cursor BYOK SSE, Codex
+// streaming) while still preventing a permanently wedged Cloudflare-
+// keepalive tunnel from pinning the old worker forever (CLYDE-270).
+// Force-close fires only after this cap elapses with tunnels still
+// alive; under normal operation in-flight tunnels finish via TCP FIN
+// or HTTP response completion long before the cap.
+const mitmReloadDrainCap = 1 * time.Hour
+
 const (
 	listenerNameDaemon  = "daemon"
 	listenerNameAdapter = "adapter"
@@ -174,6 +188,47 @@ type daemonRuntime struct {
 	webapp     *webAppProcess
 	mitm       *mitmProcess
 	reloadLock sync.Mutex
+	// mitmDrainDone is set when reload kicks off the async MITM
+	// in-flight tunnel drain. The Run loop waits on it before
+	// returning so the old worker process stays alive long enough
+	// for streaming HTTPS responses to finish naturally rather than
+	// getting truncated mid-stream by process exit (CLYDE-324).
+	mitmDrainMu   sync.Mutex
+	mitmDrainDone <-chan struct{}
+}
+
+func (rt *daemonRuntime) setMITMDrainDone(done <-chan struct{}) {
+	if rt == nil {
+		return
+	}
+	rt.mitmDrainMu.Lock()
+	defer rt.mitmDrainMu.Unlock()
+	rt.mitmDrainDone = done
+}
+
+func (rt *daemonRuntime) waitMITMDrain(log *slog.Logger, drainCap time.Duration) {
+	if rt == nil {
+		return
+	}
+	rt.mitmDrainMu.Lock()
+	done := rt.mitmDrainDone
+	rt.mitmDrainMu.Unlock()
+	if done == nil {
+		return
+	}
+	log.Info("daemon.exit.waiting_mitm_drain",
+		"component", "daemon",
+		"cap", drainCap.String(),
+	)
+	select {
+	case <-done:
+		log.Info("daemon.exit.mitm_drain_complete", "component", "daemon")
+	case <-time.After(drainCap):
+		log.Warn("daemon.exit.mitm_drain_cap_elapsed",
+			"component", "daemon",
+			"cap", drainCap.String(),
+		)
+	}
 }
 
 type exclusiveSubsystems struct {
@@ -366,14 +421,25 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 		return err
 	}
 	rt := &daemonRuntime{
-		listener:   listener,
-		adapter:    subsystems.adapterCtrl,
-		webapp:     subsystems.webProc,
-		mitm:       subsystems.mitmProc,
-		reloadLock: sync.Mutex{},
+		listener:      listener,
+		adapter:       subsystems.adapterCtrl,
+		webapp:        subsystems.webProc,
+		mitm:          subsystems.mitmProc,
+		reloadLock:    sync.Mutex{},
+		mitmDrainMu:   sync.Mutex{},
+		mitmDrainDone: nil,
 	}
 
 	exclusive := configureExclusiveSubsystems(log, reloadChild, extraLoops, subsystems.adapterCancel, subsystems.webProc, subsystems.mitmProc, processLock.lockAcquired)
+	// rt.waitMITMDrain blocks process exit until the async MITM
+	// in-flight tunnel drain completes (or its outer cap elapses).
+	// It is registered before exclusive.stop so its defer runs
+	// AFTER exclusive.stop on return: stop signals the drain (via
+	// proxy.Shutdown idempotency), then wait observes natural
+	// completion. CLYDE-324: without this wait, gRPC GracefulStop
+	// returns within seconds and process exit kills the drain
+	// goroutine, truncating any HTTPS response in flight.
+	defer rt.waitMITMDrain(log, mitmReloadDrainCap)
 	defer exclusive.stop("exit")
 
 	setReloadFuncWhenProcessOwner(srv, &processLock.lockHeld, func(ctx context.Context) (reloadReport, error) {
@@ -833,7 +899,18 @@ func drainReloadedPublicHTTP(log *slog.Logger, rt *daemonRuntime) {
 	if rt.adapter != nil {
 		rt.adapter.drainReloadedProcess(reloadHTTPDrainWait)
 	}
-	drainReloadedMITM(log, rt)
+	// MITM drain is fired-and-forgotten so the old worker can keep
+	// forwarding bytes for in-flight HTTPS tunnels until they finish
+	// naturally. The replacement daemon already inherits the MITM
+	// listener FD, so new connections land on it; only the old
+	// worker's existing tunnel goroutines must outlive this call.
+	// CLYDE-324: blocking the reload RPC on a 4s force-close was
+	// truncating gzip-encoded responses mid-stream and producing
+	// ZlibError on the client. The done-channel is stored on the
+	// runtime so the old worker's Run loop waits for the drain
+	// before exiting; without that wait, process exit kills the
+	// drain goroutine and the bug returns.
+	rt.setMITMDrainDone(drainReloadedMITM(log, rt))
 	drainReloadedWebApp(log, rt)
 }
 
@@ -909,25 +986,34 @@ func drainReloadedWebApp(log *slog.Logger, rt *daemonRuntime) {
 	}
 }
 
-// drainReloadedMITM mirrors the adapter reload drain pattern. The
-// listener is closed first (so the replacement daemon owns the
-// bind), then waitIdle polls the tunnel registry. If tunnels are
-// idle when the wait returns, the proxy's Shutdown completes
-// quickly. If they are not (Cloudflare keepalive case), drain runs
-// to its deadline and forceClose runs the registry's force-close
-// fan-out so wedged sockets and capture flocks are released. The
-// active_tunnels field on the complete event lets operators see
-// whether the registry's count was zero on idle exit or N on the
-// deadline path.
-func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) {
+// drainReloadedMITM closes the old worker's MITM listener
+// synchronously so the replacement daemon owns the accept loop, then
+// hands the in-flight tunnel drain off to a goroutine bounded by
+// mitmReloadDrainCap. The returned channel is closed when the drain
+// goroutine exits; the reload RPC ignores it so handoff returns
+// promptly while the old worker keeps forwarding bytes for any
+// HTTPS tunnel that was mid-stream when reload fired (CLYDE-324).
+//
+// On the idle path (no active tunnels) the function still completes
+// synchronously so reload accounting in the common case is unchanged.
+// On the active path the drain goroutine waits up to mitmReloadDrainCap
+// for tunnels to finish naturally; only after the cap elapses does it
+// invoke forceClose to release wedged sockets and capture flocks
+// (CLYDE-270 keepalive case). The active_tunnels field on the
+// complete event lets operators see whether the registry's count was
+// zero on idle exit or N on the cap path.
+func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) <-chan struct{} {
+	done := make(chan struct{})
 	if rt == nil || rt.mitm == nil {
-		return
+		close(done)
+		return done
 	}
 	mitmProc := rt.mitm
 	addr := listenerAddr(mitmProc.lis)
 	log.Info("daemon.reload.draining_old_mitm",
 		"component", "daemon",
 		"addr", addr,
+		"cap", mitmReloadDrainCap.String(),
 	)
 	if mitmProc.closeListener != nil {
 		if err := mitmProc.closeListener(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -939,17 +1025,14 @@ func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) {
 		}
 	}
 	if mitmProc.drain == nil {
-		return
+		close(done)
+		return done
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), reloadHTTPDrainWait)
-	finalActive := 0
-	if mitmProc.waitIdle != nil {
-		finalActive = mitmProc.waitIdle(ctx)
-	} else if mitmProc.activeCount != nil {
-		finalActive = mitmProc.activeCount()
+	initialActive := 0
+	if mitmProc.activeCount != nil {
+		initialActive = mitmProc.activeCount()
 	}
-	if finalActive == 0 {
-		cancel()
+	if initialActive == 0 {
 		if mitmProc.forceClose != nil {
 			if err := mitmProc.forceClose(); err != nil {
 				log.Debug("daemon.reload.mitm_idle_force_close_returned_err",
@@ -964,22 +1047,59 @@ func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) {
 			"addr", addr,
 			"active_tunnels", 0,
 		)
-		return
+		close(done)
+		return done
 	}
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warn("daemon.reload.mitm_drain_panicked",
+					"component", "daemon",
+					"addr", addr,
+					"panic", r,
+				)
+			}
+		}()
+		runReloadedMITMDrain(log, mitmProc, addr, initialActive)
+	}()
+	return done
+}
+
+// runReloadedMITMDrain owns the old worker's MITM proxy after the
+// listener has been closed. It blocks for up to mitmReloadDrainCap
+// waiting for in-flight tunnels to finish. Force-close fires only on
+// the cap path so a long but well-behaved HTTPS response is never
+// truncated mid-stream. Panic recovery and done-channel close are
+// owned by the calling goroutine wrapper so this body stays focused
+// on the drain sequence.
+func runReloadedMITMDrain(log *slog.Logger, mitmProc *mitmProcess, addr string, initialActive int) {
+	log.Info("daemon.reload.mitm_drain_active",
+		"component", "daemon",
+		"addr", addr,
+		"active_tunnels", initialActive,
+		"cap", mitmReloadDrainCap.String(),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), mitmReloadDrainCap)
+	defer cancel()
 	err := mitmProc.drain(ctx)
-	cancel()
+	finalActive := 0
+	if mitmProc.activeCount != nil {
+		finalActive = mitmProc.activeCount()
+	}
 	if err != nil {
 		log.Warn("daemon.reload.mitm_drain_timeout",
 			"component", "daemon",
 			"addr", addr,
 			"active_tunnels", finalActive,
+			"cap", mitmReloadDrainCap.String(),
 			"err", err,
 		)
 	} else {
 		log.Info("daemon.reload.mitm_drain_complete",
 			"component", "daemon",
 			"addr", addr,
-			"active_tunnels", 0,
+			"active_tunnels", finalActive,
 		)
 	}
 	if mitmProc.forceClose != nil {

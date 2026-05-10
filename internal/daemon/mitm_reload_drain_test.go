@@ -14,9 +14,10 @@ import (
 )
 
 // TestDrainReloadedMITMReportsActiveTunnelsOnIdle exercises the
-// idle-exit path: waitIdle returns 0 so the drain skips its
-// timeout, the drain_complete event fires with active_tunnels:0,
-// and no mitm_drain_timeout warning is emitted.
+// idle-exit path: activeCount returns 0 so the drain skips its
+// goroutine entirely, the drain_complete event fires synchronously
+// with active_tunnels:0, and no mitm_drain_timeout warning is
+// emitted.
 func TestDrainReloadedMITMReportsActiveTunnelsOnIdle(t *testing.T) {
 	buf, log := captureSlogJSON()
 	listener := newRecordingListener(t)
@@ -35,9 +36,12 @@ func TestDrainReloadedMITMReportsActiveTunnelsOnIdle(t *testing.T) {
 			lis:           listener,
 			proxy:         nil,
 		},
-		reloadLock: sync.Mutex{},
+		reloadLock:    sync.Mutex{},
+		mitmDrainMu:   sync.Mutex{},
+		mitmDrainDone: nil,
 	}
-	drainReloadedMITM(log, rt)
+	done := drainReloadedMITM(log, rt)
+	waitDoneOrFail(t, done, 2*time.Second)
 	tally := tallyMITMReloadEvents(t, buf.Bytes())
 	if tally["daemon.reload.mitm_drain_complete.active_tunnels:0"] != 1 {
 		t.Fatalf("expected mitm_drain_complete with active_tunnels:0, got tally=%v", tally)
@@ -47,12 +51,17 @@ func TestDrainReloadedMITMReportsActiveTunnelsOnIdle(t *testing.T) {
 	}
 }
 
-// TestDrainReloadedMITMForceClosesActiveTunnels exercises the
-// deadline path: waitIdle returns N (matching the design's tunnel-
-// active reload variant). drain runs to completion, force_close
-// fires, and the active_tunnels field on the complete event reflects
-// what the registry held when the deadline elapsed.
-func TestDrainReloadedMITMForceClosesActiveTunnels(t *testing.T) {
+// TestDrainReloadedMITMForceClosesActiveTunnelsAtCap exercises the
+// outer-cap path: activeCount reports tunnels in flight at handoff,
+// the drain goroutine kicks off, and the simulated drain returns an
+// error to mimic the cap elapsing. force_close fires once the
+// goroutine completes, and the cap event records active_tunnels.
+// CLYDE-324: the prior implementation force-closed after a 4s
+// deadline on the synchronous path, truncating in-flight HTTPS
+// responses; this test pins the new contract that force-close fires
+// only on the cap path and that the function returns immediately so
+// the reload RPC is not blocked.
+func TestDrainReloadedMITMForceClosesActiveTunnelsAtCap(t *testing.T) {
 	buf, log := captureSlogJSON()
 	listener := newRecordingListener(t)
 	forceCalled := atomicCounter{}
@@ -63,7 +72,7 @@ func TestDrainReloadedMITMForceClosesActiveTunnels(t *testing.T) {
 		mitm: &mitmProcess{
 			cancel: func() {},
 			drain: func(context.Context) error {
-				return errors.New("simulated drain timeout")
+				return errors.New("simulated cap elapsed")
 			},
 			waitIdle:    func(context.Context) int { return 3 },
 			activeCount: func() int { return 3 },
@@ -76,15 +85,37 @@ func TestDrainReloadedMITMForceClosesActiveTunnels(t *testing.T) {
 			lis:           listener,
 			proxy:         nil,
 		},
-		reloadLock: sync.Mutex{},
+		reloadLock:    sync.Mutex{},
+		mitmDrainMu:   sync.Mutex{},
+		mitmDrainDone: nil,
 	}
-	drainReloadedMITM(log, rt)
+	caller := time.Now()
+	done := drainReloadedMITM(log, rt)
+	if elapsed := time.Since(caller); elapsed > 200*time.Millisecond {
+		t.Fatalf("drainReloadedMITM blocked caller for %s; reload RPC must not wait on in-flight tunnels", elapsed)
+	}
+	waitDoneOrFail(t, done, 2*time.Second)
 	if got := forceCalled.load(); got != 1 {
 		t.Fatalf("force_close: got %d invocations, want 1", got)
 	}
 	tally := tallyMITMReloadEvents(t, buf.Bytes())
 	if tally["daemon.reload.mitm_drain_timeout"] == 0 {
-		t.Fatalf("expected mitm_drain_timeout on deadline path, got tally=%v", tally)
+		t.Fatalf("expected mitm_drain_timeout on cap path, got tally=%v", tally)
+	}
+	if tally["daemon.reload.mitm_drain_active"] == 0 {
+		t.Fatalf("expected mitm_drain_active on cap path, got tally=%v", tally)
+	}
+}
+
+// waitDoneOrFail blocks until done is closed or the deadline elapses,
+// failing the test with a clear message in the latter case so a hung
+// goroutine cannot wedge the test binary.
+func waitDoneOrFail(t *testing.T, done <-chan struct{}, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatalf("drainReloadedMITM goroutine did not complete within %s", timeout)
 	}
 }
 
