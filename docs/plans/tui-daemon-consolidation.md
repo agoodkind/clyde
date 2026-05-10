@@ -1,5 +1,25 @@
 # TUI Daemon Consolidation Plan
 
+## Status
+
+As of commit `cb9fc7d` on local main, none of the proposed changes in this document have started in code. The plan is fully designed and tracked, but execution has not begun.
+
+This plan is tracked in Tack as one parent ticket and five child tickets. Use this document as the design rationale and the Tack tickets as the execution tracker. Do not treat this document as a task list; treat it as the authoritative record of intent and reasoning behind the work each ticket owns.
+
+**CLYDE-279** - "Cat-3 daemon consolidation: lift TUI domain decisions into daemon" (parent ticket, owns overall coordination across all findings)
+
+**CLYDE-280** - "Cat-3 finding 3.1: daemon-owned ModelFamily classifier" - owns Section 3.1 of this document, which specifies the proposed `internal/session/modelfamily/family.go` package that replaces TUI-side string-substring matches on model names with a daemon-resolved `ModelFamily` enum.
+
+**CLYDE-281** - "Cat-3 finding 3.2: daemon-owned SessionLifecycle (ephemeral) predicate" - owns Section 3.2 of this document, which specifies the proposed `internal/session/lifecycle/ephemeral.go` package that replaces the duplicated ephemeral-prefix detection currently split between `internal/ui/app.go` and `internal/prune/ephemeral.go`.
+
+**CLYDE-282** - "Cat-3 finding 3.3: drop TUI context-percent recompute, daemon owns Percentage" - owns the Section 5 percent-recompute concern, which specifies removing the TUI fallback that recomputes context usage percentage when the daemon already computes and emits a valid value.
+
+**CLYDE-283** - "Cat-3 finding 3.4: daemon-owned SessionSummaryState classifier" - owns Section 3.4 of this document, which specifies the proposed `internal/sessionsummary/` package and the daemon-side classification of summary staleness, replacing the six-word rule currently evaluated in the TUI.
+
+**CLYDE-284** - "Cat-3 finding 3.5: typed ContextUsageStatus enum (kill TUI fabrication)" - owns the typed `ContextUsageStatus` enum proposed in Section 2, which replaces the TUI-fabricated `"unsupported"` and `"loading..."` string literals with a daemon-resolved proto enum.
+
+---
+
 ## Section 1. Summary
 
 The goal is to lift five domain decisions out of `internal/ui/` and into the daemon. The user's framing is "properly genericized and consolidated and moved to daemon safely." Today the TUI inspects model strings, classifies workspace paths, recomputes context percent, decides when a session summary is stale, and fabricates `ContextUsageStatus` sentinels. None of these belong in a renderer. The fix is one additive proto change that consolidates the four classification fields into a `SessionClassification` message attached to `SessionSummary` and `GetSessionDetailResponse`, plus a typed `ContextUsageStatus` enum that retires the bare string. The TUI then reads the daemon-resolved values and styles them.
