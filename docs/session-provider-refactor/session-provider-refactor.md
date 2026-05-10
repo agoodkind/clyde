@@ -493,7 +493,4 @@ Completed latest slice:
 
 - Existing Codex session MVP plan:
   `/Users/agoodkind/.cursor/plans/codex_session_plan_17b2ca73.plan.md`
-- Adapter refactor execution plan:
-  [`adapter-refactor.md`](../adapter-refactor/adapter-refactor.md)
-- Adapter refactor completed-task memory:
-  [`adapter-refactor-history.md`](../adapter-refactor/adapter-refactor-history.md)
+- Adapter refactor: closed; outstanding items live as Tack tickets only.

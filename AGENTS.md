@@ -1,4 +1,4 @@
-# [AGENTS.md](http://AGENTS.md)
+# AGENTS.md
 
 This file contains durable instructions for coding agents working in this repository.
 Keep it short, current, and focused on rules that should affect day-to-day code changes.
@@ -25,8 +25,9 @@ Prefer code and tests over this file for exact behavior.
 - Use `internal/session/`, `internal/providers/claude/`, and related tests for session metadata, hooks, transcript paths, and delete behavior.
 - Use `internal/config/` for supported config file formats and fields.
 - Use `internal/daemon/` for daemon reload, listener handoff, and live-session ownership.
-- Use `internal/adapter/` and `docs/adapter-refactor/` for adapter, Cursor, Codex, Anthropic, model routing, and request-shape details.
-- Use `docs/SLOG.md` and `internal/slogger/` for detailed logging and correlation contracts when those files exist and are current.
+- Use `internal/adapter/` for adapter, Cursor, Codex, Anthropic, model routing, and request-shape details.
+- Use `docs/SLOG.md` and `internal/slogger/` for detailed logging and correlation contracts.
+- Use `docs/cursor.md` for the empirical reasons behind Cursor-specific rules.
 
 Do not add stale snapshots of command tables, schemas, request payloads, local machine setup, or dated audits to this file. Add links or brief pointers instead.
 
@@ -50,11 +51,11 @@ Provider-specific harnesses, including Claude bridge behavior, Claude pty inject
 
 ### Daemon reload
 
-Preserve zero-bind-gap daemon reload semantics when changing `internal/daemon/run.go`, `internal/adapter/`, or `internal/webapp/`.
+Preserve zero-bind-gap daemon reload semantics when changing `internal/daemon/`, `internal/adapter/`, or `internal/webapp/`.
 
 - Reload must re-exec the current daemon binary and inherit daemon-owned listener file descriptors.
 - Reload must reject listener address changes that require a full restart.
-- A reload child must not initiate another reload until it owns `daemon.process.lock`.
+- A reload child must not initiate another reload until it owns the daemon process lock.
 - After child readiness, the old generation must stop accepting public traffic and drain or close existing traffic according to the daemon implementation.
 - Existing gRPC streams may stay on the old process until graceful drain completes.
 - Active session runtime dirs must survive reload drain so wrappers and remote-control sockets can reacquire against the child.
@@ -63,28 +64,16 @@ Keep detailed reload behavior in daemon code comments, tests, or dedicated docs 
 
 ### Tracked sessions
 
-Any subsystem that owns long-lived state crossing reload, shutdown, or
-force-close boundaries MUST register that state with internal/livetrack.
-This includes HTTP connections, MITM CONNECT tunnels, gRPC streams,
-provider websockets, SSE readers, MCP stdio handlers, browser tabs, file
-watchers, async workers, and capture-file flocks.
+Any subsystem that owns long-lived state crossing reload, shutdown, or force-close boundaries MUST register that state with `internal/livetrack`. This includes HTTP connections, MITM CONNECT tunnels, gRPC streams, provider websockets, SSE readers, MCP stdio handlers, browser tabs, file watchers, async workers, and capture-file flocks.
 
 Forbidden in subsystems that have adopted livetrack:
-- Bare http.Server.Shutdown without a paired registry.Drain.
-- Bare context cancellation as the sole shutdown mechanism for
-  long-lived goroutines that hold OS resources (sockets, fds, flocks).
-- Goroutine fanout without registry.Register; the registry IS the
-  inventory the daemon reload chain queries.
-- Per-subsystem hand-rolled equivalents of WaitForIdle, ActiveCount,
-  CloseAll. The internal/adapter/server_routes.go HTTP-conn-state map
-  was replaced by livetrack; do not reintroduce it.
 
-Motivating empirical case: Cloudflare keepalive on api2.cursor.sh holds
-CONNECT tunnels open indefinitely. http.Server.Shutdown blocks the full
-deadline and returns timeout, but tunnel goroutines keep running and the
-capture writer flock is never released. livetrack.Registry.Drain plus
-ForceCloseMatching gives bounded reload time with explicit force-close
-under deadline.
+- Bare `http.Server.Shutdown` without a paired registry drain.
+- Bare context cancellation as the sole shutdown mechanism for long-lived goroutines that hold OS resources (sockets, fds, flocks).
+- Goroutine fanout without registry registration; the registry IS the inventory the daemon reload chain queries.
+- Per-subsystem hand-rolled equivalents of `WaitForIdle`, `ActiveCount`, `CloseAll`. The HTTP-conn-state map pattern that livetrack replaced must not be reintroduced.
+
+The motivating empirical case (Cloudflare keepalive on Cursor backends holding tunnels open indefinitely) is documented in `docs/cursor.md`.
 
 ## Type hygiene
 
@@ -95,7 +84,6 @@ This repository is pre-alpha. Prefer strict type safety over loose compatibility
 - Wire, config, RPC, logging, and domain payloads must use named structs, typed fields, typed slices, typed maps, and explicit enum-like string types where applicable.
 - If upstream data is a union, model supported variants explicitly and reject or ignore unsupported variants intentionally at the boundary.
 - If JSON must remain partially opaque for an external contract, isolate that opacity at the smallest edge with a named type and a comment citing the contract.
-- For Codex protocol surfaces, prefer researched or generated source-of-truth schemas under `research/codex/` when available.
 - Tests should assert concrete typed shapes and should not build fixtures with loose maps when production code has or should have concrete types.
 
 Existing loose types are technical debt, not precedent. When touching a loose surface, either replace it with enumerated types in the same change or leave a narrow follow-up note if the refactor is larger than the active task.
@@ -129,19 +117,34 @@ If any step of a `make` target fails, fix the underlying code, test, configurati
 
 For changes that affect the OpenAI-compatible adapter, Cursor BYOK ingress, SSE rendering, thinking blocks, tool calls, file reads, or provider request builders, unit tests are necessary but may not be sufficient.
 
-Use the real Cursor client for final verification when the rendered chat output or actual SSE bytes matter. Keep prompts read-only and include a unique probe id. Build, install, and reload the daemon before the probe. Keep machine-specific Hammerspoon scripts and screen names in a separate runbook, not in this file.
+Use the real Cursor client for final verification when the rendered chat output or actual SSE bytes matter. Keep prompts read-only and include a unique probe id. Build, install, and reload the daemon before the probe. Operator-specific automation belongs in a separate runbook, not in this file.
 
 ## Adapter and model routing
 
 The adapter is a safety boundary. For model aliases, effort tiers, context budgets, request shaping, and provider-specific behavior, prefer config-driven and typed resolver paths over hard-coded facts.
 
+### Adapter surfaces
+
+The adapter HTTP listener serves three route families. They share the listener, the auth pipeline, and the error boundary, but each carries its own envelope shape and its own production status. **STRICT RULE: do not conflate route families. Rules, fixes, and rationale on one route family do not transfer to another.**
+
+| Route family | Paths | Status |
+|---|---|---|
+| OpenAI-compatible | `/v1/chat/completions`, `/v1/models`, `/v1/completions` | Production. Cursor BYOK and any OpenAI-SDK-compatible client. |
+| Native Anthropic | `/v1/messages`, `/v1/messages/count_tokens` | Code shipped, untested in production. Proposed for cross-provider use. |
+| Health | `/healthz`, `/` | Ops only. |
+
+The MITM proxy is a **separate surface, not an adapter route**. It runs on its own listener under `internal/mitm/`, acts as a forward proxy for arbitrary HTTPS targets, and is not subject to the adapter error boundary. Forward-proxy traffic that traverses MITM (e.g. claude CLI talking to `api.anthropic.com` through the MITM port) is governed by MITM rules, not adapter route-family rules. Do not conflate the two.
+
+### Routing rules (apply across all adapter route families)
+
 - Do not add new hard-coded model facts unless the task explicitly requires it and the follow-up toward config-driven behavior is documented.
-- Keep Cursor/Codex observations in `docs/adapter-refactor/` or tests, not in this file.
 - Preserve adapter-side preflight for known context-window overflows. Do not open an upstream provider turn when Clyde can already tell the request exceeds the resolved model budget.
-- For Cursor/OpenAI-compatible ingress, upstream provider non-2xx failures must be returned as canonical OpenAI error envelopes with a legible `error.message`. Prefer Cursor-safe invalid-request shapes for provider limit conditions, following the Codex context-window pattern. Do not leak provider-specific status/type pairs that trigger Cursor fallback UI, such as mapping an Anthropic 429 directly to OpenAI `rate_limit_error`.
 - Do not log raw prompts, request bodies, response bodies, tokens, credentials, cookies, API keys, or personal data unless an explicit local debugging policy enables sanitized or raw body logging.
-- Reasoning round-trip is per-provider, configured under `[adapter.<provider>.reasoning]`. Anthropic carries one lever (`inbound_thinking`) because it emits a single thinking content block per turn. Codex carries two independent levers (`round_trip_summary` and `round_trip_encrypted`) because Codex Responses puts both visible summary text and the `encrypted_content` memory blob on the same Reasoning item. Codex defaults match codex-rs (`research/codex/codex-rs/core/src/context_manager/history.rs` lines 361 to 405): `native_summary_field` plus `round_trip`. The `encrypted_content` blob rides inline on the synthetic-thinking close marker as a `data-encrypted` attribute so Cursor's transcript owns persistence; the inbound mapper reads it straight off the marker with no side-channel store.
-- MITM listener and CA are config-driven under `[mitm.listen]` and `[mitm.ca]`. Clyde binds the listener in-process at the configured host and port; daemon reload inherits the listener file descriptor the same way it inherits the daemon, adapter, and webapp listeners, and `validateReloadListenerConfig` rejects address changes. The CA certificate is generated on first start and persisted at the configured cert and key paths; subsequent starts load it from disk. Clyde does not launch GUI clients or wrappers; Cursor's MITM integration is owned by Cursor settings or by a user-owned wrapper outside this repository.
+- Reasoning round-trip is per-provider, configured under `[adapter.<provider>.reasoning]`. Provider-specific levers and defaults live in code and tests.
+
+### MITM listener and CA
+
+MITM listener and CA are config-driven under `[mitm.listen]` and `[mitm.ca]`. Clyde binds the listener in-process at the configured host and port; daemon reload inherits the listener file descriptor the same way it inherits the daemon, adapter, and webapp listeners. Reload validation rejects address changes. The CA certificate is generated on first start and persisted at the configured cert and key paths; subsequent starts load it from disk. Clyde does not launch GUI clients or wrappers; Cursor's MITM integration is owned by Cursor settings or by a user-owned wrapper outside this repository.
 
 ## Layer separation
 
@@ -158,51 +161,41 @@ The error boundary below is the canonical worked example.
 
 ## Error boundary
 
-Every adapter HTTP response with a non-2xx status MUST go through the
-adapter error boundary so OpenAI-family and native Anthropic clients
-always receive a parsable, family-correct envelope with the message
-we chose preserved in error.message. The boundary applies strict
-dependency inversion: the generic adapter declares interfaces, and
-each provider package implements them. The boundary never imports a
-provider envelope type and never constructs a provider envelope
-literal.
+Every adapter HTTP response with a non-2xx status MUST go through the adapter error boundary so the calling client receives a parsable, route-correct envelope with the message we chose preserved in `error.message`. The boundary applies strict dependency inversion: the generic adapter declares interfaces, and each provider package implements them. The boundary never imports a provider envelope type and never constructs a provider envelope literal.
 
-- Handlers return *adapterError from
-  internal/adapter/adapter_error.go. The boundary picks the route
-  family from the request path and looks up the registered
-  errcontract.ErrorRenderer for that family. Renderers live in
-  provider packages (internal/adapter/openai/error_envelope.go and
-  internal/adapter/anthropic/error_envelope.go) and own their family's
-  envelope shape entirely.
-- Pre-headers errors call s.writeShapedError. Mid-stream errors call
-  s.respondAdapterStreamError. Both live in adapter_error.go and
-  speak only primitives (errcontract.ErrorInfo: Type, Code, Message,
-  Param) when handing the response off to the renderer.
-- Upstream failures classify into errcontract.UpstreamCodeClass and
-  flow through mapUpstreamForFamily, which delegates to the
-  registered errcontract.UpstreamErrorMapper for that family. The
-  OpenAI mapper translates every non-2xx upstream into HTTP 400 +
-  invalid_request_error + a typed upstream_* code; Cursor BYOK is
-  the canonical empirical reason this rule exists (Cursor's HTTP 5xx
-  and HTTP 429 fallbacks render generic chrome instead of our
-  message), but the rule must be true regardless of which
-  OpenAI-family client connects (Cursor, Continue, Aider, raw curl).
-  The Anthropic mapper preserves the spec-correct envelope so
-  claude-cli parses it.
-- Prohibited in adapter handlers and providers: http.Error, writeJSON
-  with a non-2xx status, json.Encode of an error directly into the
-  response, calling EmitStreamError without going through
-  respondAdapterStreamError, calling
-  internal/adapter/internal/erroring.WriteJSONStatus from outside a
-  registered provider renderer. The AST self-test in
-  internal/adapter/error_boundary_lints_test.go enforces these
-  prohibitions through make test.
-- The catch-all default for any error reaching the boundary with no
-  registered family mapper is HTTP 400 + invalid_request_error +
-  upstream_failed with all known fields (provider, upstream status,
-  upstream code, upstream text) folded into error.message. This
-  catch-all is the safety net; specific cases layer on top only when
-  an empirical client-side probe shows a different shape is required.
+The boundary applies to **adapter HTTP responses only**. The MITM proxy is a separate surface and is governed by MITM rules, not by this boundary; do not extrapolate boundary rules onto MITM forward-proxy traffic.
+
+- Handlers return a typed adapter error from the generic adapter. The boundary picks the route family from the request path and looks up the registered error renderer for that route family. Renderers live in provider packages and own their route family's envelope shape entirely.
+- Pre-headers errors and mid-stream errors both go through the boundary's typed entry points. The handoff to the renderer speaks only primitives (type, code, message, param).
+- Upstream failures classify into a typed upstream-code class and flow through the route-family-specific upstream-error mapper.
+
+Each route family has its own rule. **STRICT RULE: route family rules are scoped to that route family. Do not share rules, fixes, or rationale across route families, and do not extrapolate to MITM.**
+
+### OpenAI-compatible route family rule
+
+Production rule. Applies to `/v1/chat/completions`, `/v1/models`, and `/v1/completions`.
+
+- Every non-2xx upstream MUST be returned as HTTP 400 + `invalid_request_error` + a typed `upstream_*` code.
+- Do not preserve upstream 5xx or 429 status codes on the response.
+- Do not map upstream rate-limits to OpenAI `rate_limit_error`.
+- The empirical reason this rule exists (Cursor BYOK swaps in generic vendor fallback chrome on 5xx/429 and erases the chosen `error.message`) is in `docs/cursor.md`. The rule is enforced regardless of which OpenAI-SDK-compatible client connects.
+
+### Native Anthropic route family rule
+
+This route family exists in code (`/v1/messages`, `/v1/messages/count_tokens`) but is currently unused and untested in production. The proposed use case is cross-provider plumbing.
+
+- Treat as separate from the OpenAI-compatible route family. Do not share rules, fixes, or rationale across the two.
+- The renderer should preserve the spec-correct Anthropic error envelope so an Anthropic-SDK client could parse it.
+- The rule is provisional until live verification on the route happens. Any production use of this route family requires its own end-to-end tests; do not assume the OpenAI-compatible route family's empirical work covers it.
+
+### Health route family
+
+Health checks (`/healthz`, `/`). No error renderer is registered. Any non-2xx through these paths falls through to the boundary's catch-all.
+
+### Boundary prohibitions and catch-all
+
+- Prohibited in adapter handlers and providers: `http.Error`, `writeJSON` with a non-2xx status, `json.Encode` of an error directly into the response, calling stream-error helpers without going through the boundary's typed entry points, or invoking the internal erroring helper from outside a registered provider renderer. An AST self-test in the adapter package enforces these prohibitions through `make test`.
+- The catch-all default for any error reaching the boundary with no registered route renderer is HTTP 400 + `invalid_request_error` + `upstream_failed` with all known fields (provider, upstream status, upstream code, upstream text) folded into `error.message`. The catch-all is the safety net; specific cases layer on top only when an empirical client-side probe shows a different shape is required.
 
 ## Logging and observability
 
@@ -211,32 +204,30 @@ Use structured `log/slog` logging for production diagnostics. Prefer context-awa
 - Log meaningful lifecycle boundaries, external calls, state mutations, retries, fallbacks, completions, and failures.
 - Include fields that make events queryable, such as `component`, `subcomponent`, `request_id`, `trace_id`, `span_id`, `parent_span_id`, `session`, `session_id`, `model`, `duration_ms`, `attempt`, `count`, `path`, `status`, and `err`.
 - Use explicit concern loggers from `internal/slogger` at subsystem boundaries when possible.
-- Propagate `internal/correlation.Context` through HTTP, gRPC, daemon jobs, provider requests, MCP handlers, and CLI command contexts.
+- Propagate the correlation context through HTTP, gRPC, daemon jobs, provider requests, MCP handlers, and CLI command contexts.
 - Do not invent unrelated trace ids in lower-level helpers when a caller context exists. Thread the context down instead.
 - Keep hot-path detail at `Debug`, and keep healthy steady-state requests to a small number of `Info` events.
 - Do not use `fmt.Print`, `fmt.Println`, `fmt.Printf`, or standard-library `log.Print` for operational logging. `fmt.Fprint*` is acceptable for intentional user-facing command output.
 
-Put detailed logging setup examples, correlation audits, and backlog tables in logging docs or issue trackers rather than this file.
-
-- Wire capture is per-provider, configured under `[adapter.<provider>.wire_capture]`. Modes are typed per provider: Anthropic accepts `off | summary_only | full`, and Codex accepts `off | summary_only | reasoning_only | full`. A shared rotation budget at `[adapter.wire_capture.rotation]` keeps on-disk volume bounded so always-on use stays safe. Reasoning-only mode is the cheapest path for proving `encrypted_content` arrival on the wire.
+Wire capture is per-provider, configured under `[adapter.<provider>.wire_capture]`. Provider-specific modes and the shared rotation budget live in code and config.
 
 ## Debugging and logs
 
 Start debugging by checking Clyde's structured logs before guessing from symptoms. Default log paths are under `$XDG_STATE_HOME/clyde`; when `XDG_STATE_HOME` is unset, use `~/.local/state/clyde`.
 
 - Cursor BYOK setup against the daemon MITM requires `http.proxy` and related settings in Cursor's user `settings.json`. See `docs/cursor-mitm-setup.md`.
-- Main daemon log: `$XDG_STATE_HOME/clyde/clyde-daemon.jsonl`.
-- Main TUI log: `$XDG_STATE_HOME/clyde/clyde-tui.jsonl`.
-- Concern logs: `$XDG_STATE_HOME/clyde/logs/<concern-path>.jsonl`, where concern names from `internal/slogger/concerns.go` map dots to nested paths.
-- Dedicated Codex sidecar log: `$XDG_STATE_HOME/clyde/codex.jsonl`, unless `CLYDE_CODEX_LOG_PATH` overrides it.
-- MITM captures: Codex CLI, Claude CLI, and Cursor traffic. The always-on baseline writes to `${XDG_STATE_HOME}/clyde/mitm/always-on/`, with raw TLS-decrypted request and response bytes under `raw/<host>/` and a per-event index in `capture.jsonl`. Captured hosts include `api2.cursor.sh`, `api3.cursor.sh`, and other hosts under `*.cursor.sh` and `*.cursor.com`, as well as `chatgpt.com`, `openai.com`, and `api.anthropic.com`.
-- macOS LaunchAgent stderr/stdout fallback: `~/.local/state/clyde/daemon.log`.
+- Main daemon log: `clyde-daemon.jsonl` under the state dir.
+- Main TUI log: `clyde-tui.jsonl` under the state dir.
+- Concern logs: `logs/<concern-path>.jsonl` under the state dir, where concern names from `internal/slogger/` map dots to nested paths.
+- Dedicated Codex sidecar log: `codex.jsonl` under the state dir, unless `CLYDE_CODEX_LOG_PATH` overrides it.
+- MITM captures: Codex CLI, Claude CLI, and Cursor traffic. The always-on baseline writes to `mitm/always-on/` under the state dir, with raw TLS-decrypted request and response bytes under `raw/<host>/` and a per-event index in `capture.jsonl`. Captured hosts include `api2.cursor.sh`, `api3.cursor.sh`, and other hosts under `*.cursor.sh` and `*.cursor.com`, as well as `chatgpt.com`, `openai.com`, and `api.anthropic.com`.
+- macOS LaunchAgent stderr/stdout fallback: `daemon.log` under `~/.local/state/clyde/`.
 
-Operators may override main process log paths with `[logging.paths].daemon`, `[logging.paths].tui`, or `CLYDE_SLOG_PATH`. Check the active config before assuming the defaults.
+Operators may override main process log paths via the logging config block or the `CLYDE_SLOG_PATH` env var. Check the active config before assuming the defaults.
 
-For adapter, Cursor, Codex, Anthropic, passthrough, MITM, live-session, and daemon issues, prefer the matching concern log first. Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `session`, `process.daemon`, and `ui`. Adapter logs are the primary debugging surface for Cursor ingress. MITM captures provide an independent record of the same exchange; when you suspect adapter pre-processing is at fault, compare the raw TLS-decrypted bytes from MITM against the adapter logs to isolate where behavior diverges.
+For adapter, Cursor, Codex, Anthropic, passthrough, MITM, live-session, and daemon issues, prefer the matching concern log first. Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.models`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `session.lifecycle`, `session.discovery`, `session.domain`, `process.daemon`, `compact.apply`, `compact.preview`, `mcp.server`, `ui.tui`, and `ui.sidecar`. Adapter logs are the primary debugging surface for Cursor ingress. MITM captures provide an independent record of the same exchange; when you suspect adapter pre-processing is at fault, compare the raw TLS-decrypted bytes from MITM against the adapter logs to isolate where behavior diverges.
 
-Use correlation fields to follow one operation across files: `trace_id`, `span_id`, `parent_span_id`, `request_id`, `cursor_request_id`, `cursor_conversation_id`, `upstream_request_id`, and `upstream_response_id`. Avoid raw body logging unless the user explicitly enables a safe local debugging policy, and never paste secrets, prompts, tokens, cookies, or API keys into chat.
+Use correlation fields to follow one operation across files: `trace_id`, `span_id`, `parent_span_id`, `request_id`, `cursor_request_id`, `cursor_conversation_id`, `cursor_generation_id`, `upstream_request_id`, and `upstream_response_id`. Avoid raw body logging unless the user explicitly enables a safe local debugging policy, and never paste secrets, prompts, tokens, cookies, or API keys into chat.
 
 ## Networking and security
 
