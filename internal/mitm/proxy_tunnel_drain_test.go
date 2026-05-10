@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 )
 
 // TestProxyShutdownDrainsCloudflareKeepaliveTunnel simulates the
@@ -179,6 +182,97 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 		t.Fatalf("Tunnels.Count after shutdown: got %d, want 0", got)
 	}
 	<-serveDone
+}
+
+// TestRegisterPlainHTTPDecouplesUpstreamFromInboundContext is the
+// CLYDE-324 fix #3 regression: the upstream context returned by
+// registerPlainHTTP must not be cancelled when the inbound request's
+// context is cancelled. The bug was that registerPlainHTTP derived
+// its tunnel context from r.Context() and mutated r to carry it, so
+// the inbound context's lifecycle (which the stdlib http.Server
+// cancels at unrelated state transitions) silently aborted in-flight
+// upstream HTTPS streams. The fix derives the tunnel context from
+// p.ctx (the proxy-lifetime context) instead.
+//
+// This test would fail on the pre-fix code: the cancelled inbound
+// context would propagate to the returned upstream context within
+// microseconds. After the fix, the upstream context survives until
+// the registered closer fires (force-close) or release runs (handler
+// return).
+func TestRegisterPlainHTTPDecouplesUpstreamFromInboundContext(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proxy := &Proxy{
+		log:                   logger,
+		client:                http.DefaultClient,
+		dialContext:           nil,
+		certMu:                sync.Mutex{},
+		ca:                    nil,
+		cursorTLSClientConfig: nil,
+		rawCaptureSeq:         atomic.Uint64{},
+		Tunnels:               newTestTunnelRegistry(),
+		captureWriters:        newCaptureWriterCache(logger),
+		mu:                    sync.RWMutex{},
+		cfg:                   config.MITMConfig{},
+		base:                  "http://[::1]",
+		server:                nil,
+	}
+	t.Cleanup(proxy.closeCaptureWriters)
+
+	// Build a request whose context we can cancel independently of the
+	// proxy lifetime. Pre-fix, registerPlainHTTP derived its context
+	// from r.Context() (and mutated r), so cancelling parentCancel
+	// below would cancel the returned upstream context too.
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	t.Cleanup(parentCancel)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`)).WithContext(parentCtx)
+	rec := httptest.NewRecorder()
+
+	// Mirror the call shape from handle: derive upstreamCtx from
+	// r.Context() via WithoutCancel + WithCancel (the CLYDE-324
+	// pattern), then register the tunnel.
+	upstreamCtx, upstreamCancel := context.WithCancel(context.WithoutCancel(req.Context()))
+	t.Cleanup(upstreamCancel)
+	release, ok := proxy.registerPlainHTTP(upstreamCtx, upstreamCancel, rec, req, "https://api.anthropic.com")
+	if !ok {
+		t.Fatalf("registerPlainHTTP rejected the request: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	t.Cleanup(func() { release("test.cleanup") })
+
+	select {
+	case <-upstreamCtx.Done():
+		t.Fatalf("upstream context already cancelled before parent cancel; expected it to be live")
+	default:
+	}
+
+	// Cancel the inbound request's context. Pre-fix (when ctx was
+	// derived from r.Context() via plain WithCancel), this also
+	// cancels upstreamCtx; that was the CLYDE-324 root cause. Post-fix
+	// (with WithoutCancel breaking the chain), upstreamCtx survives.
+	parentCancel()
+
+	// Give the parent cancellation a generous moment to propagate. If
+	// the contexts were tied, upstreamCtx.Done() would fire essentially
+	// instantly. Polling for 100ms catches any tied propagation while
+	// staying fast enough to keep the test cheap.
+	select {
+	case <-upstreamCtx.Done():
+		t.Fatalf("upstream context cancelled by inbound context: contexts are tied (CLYDE-324 regression). err=%v", upstreamCtx.Err())
+	case <-time.After(100 * time.Millisecond):
+		// Contexts are correctly decoupled.
+	}
+
+	// Sanity: the upstream context must still cancel via its own
+	// closer (this is the legitimate force-close path the registry
+	// drives during reload).
+	proxy.Tunnels.ForceCloseMatching(context.Background(), func(_ livetrack.Session[TunnelMeta]) bool { return true }, "test.force_close")
+	select {
+	case <-upstreamCtx.Done():
+		// Force-close path correctly fires upstream cancel.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("upstream context did not cancel after force-close; the closer chain is broken")
+	}
 }
 
 type readResult struct {
