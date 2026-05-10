@@ -180,6 +180,12 @@ type mitmProcess struct {
 	done          chan struct{}
 	lis           net.Listener
 	proxy         *mitm.Proxy
+	// reloadDraining is set when drainReloadedMITM kicks off the
+	// async drain (1h cap) so the synchronous cancel function (4s
+	// cap, suitable for full daemon exit) does not race and
+	// force-close in-flight HTTPS tunnels the async drain is letting
+	// finish naturally. CLYDE-324.
+	reloadDraining atomic.Bool
 }
 
 type daemonRuntime struct {
@@ -1009,6 +1015,11 @@ func drainReloadedMITM(log *slog.Logger, rt *daemonRuntime) <-chan struct{} {
 		return done
 	}
 	mitmProc := rt.mitm
+	// CLYDE-324: signal mitmProc.cancel to skip its 4s shutdown so
+	// the async drain below (with mitmReloadDrainCap) is the sole
+	// path. Set before any other action because exclusive.stop fires
+	// the cancels concurrently with the rest of the reload chain.
+	mitmProc.reloadDraining.Store(true)
 	addr := listenerAddr(mitmProc.lis)
 	log.Info("daemon.reload.draining_old_mitm",
 		"component", "daemon",
@@ -1437,7 +1448,34 @@ func startMITM(log *slog.Logger, inherited net.Listener) (*mitmProcess, error) {
 			)
 		}
 	}()
-	cancel := func() {
+	proc := &mitmProcess{
+		cancel:         nil,
+		drain:          proxy.Shutdown,
+		waitIdle:       mitmTunnelWaitIdle(proxy),
+		activeCount:    mitmTunnelActiveCount(proxy),
+		forceClose:     mitmTunnelForceClose(proxy),
+		closeListener:  lis.Close,
+		done:           done,
+		lis:            lis,
+		proxy:          proxy,
+		reloadDraining: atomic.Bool{},
+	}
+	// CLYDE-324: cancel is called by exclusive.stop on full daemon
+	// exit (Ctrl+C, SIGTERM) AND on reload handoff. The reload path
+	// already kicks off an async drain with the long cap; if cancel
+	// also calls Shutdown with the short adapterShutdownWait it races
+	// the async drain and force-closes in-flight HTTPS tunnels. The
+	// reloadDraining flag flips to true at the top of
+	// drainReloadedMITM, so the reload-time cancel becomes a no-op
+	// while the full-exit cancel keeps its short, deterministic
+	// shutdown.
+	proc.cancel = func() {
+		if proc.reloadDraining.Load() {
+			log.Debug("mitm.cancel.skipped_reload_drain",
+				"component", "mitm",
+			)
+			return
+		}
 		ctx, cancelTimeout := context.WithTimeout(context.Background(), adapterShutdownWait)
 		defer cancelTimeout()
 		if err := proxy.Shutdown(ctx); err != nil {
@@ -1447,17 +1485,7 @@ func startMITM(log *slog.Logger, inherited net.Listener) (*mitmProcess, error) {
 			)
 		}
 	}
-	return &mitmProcess{
-		cancel:        cancel,
-		drain:         proxy.Shutdown,
-		waitIdle:      mitmTunnelWaitIdle(proxy),
-		activeCount:   mitmTunnelActiveCount(proxy),
-		forceClose:    mitmTunnelForceClose(proxy),
-		closeListener: lis.Close,
-		done:          done,
-		lis:           lis,
-		proxy:         proxy,
-	}, nil
+	return proc, nil
 }
 
 // mitmTunnelActiveCount returns a closure that reports the current

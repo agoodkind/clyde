@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -26,15 +27,16 @@ func TestDrainReloadedMITMReportsActiveTunnelsOnIdle(t *testing.T) {
 		adapter:  nil,
 		webapp:   nil,
 		mitm: &mitmProcess{
-			cancel:        func() {},
-			drain:         func(context.Context) error { return nil },
-			waitIdle:      func(context.Context) int { return 0 },
-			activeCount:   func() int { return 0 },
-			forceClose:    func() error { return nil },
-			closeListener: listener.Close,
-			done:          nil,
-			lis:           listener,
-			proxy:         nil,
+			cancel:         func() {},
+			drain:          func(context.Context) error { return nil },
+			waitIdle:       func(context.Context) int { return 0 },
+			activeCount:    func() int { return 0 },
+			forceClose:     func() error { return nil },
+			closeListener:  listener.Close,
+			done:           nil,
+			lis:            listener,
+			proxy:          nil,
+			reloadDraining: atomic.Bool{},
 		},
 		reloadLock:    sync.Mutex{},
 		mitmDrainMu:   sync.Mutex{},
@@ -80,10 +82,11 @@ func TestDrainReloadedMITMForceClosesActiveTunnelsAtCap(t *testing.T) {
 				forceCalled.add(1)
 				return nil
 			},
-			closeListener: listener.Close,
-			done:          nil,
-			lis:           listener,
-			proxy:         nil,
+			closeListener:  listener.Close,
+			done:           nil,
+			lis:            listener,
+			proxy:          nil,
+			reloadDraining: atomic.Bool{},
 		},
 		reloadLock:    sync.Mutex{},
 		mitmDrainMu:   sync.Mutex{},
@@ -104,6 +107,95 @@ func TestDrainReloadedMITMForceClosesActiveTunnelsAtCap(t *testing.T) {
 	}
 	if tally["daemon.reload.mitm_drain_active"] == 0 {
 		t.Fatalf("expected mitm_drain_active on cap path, got tally=%v", tally)
+	}
+}
+
+// TestDrainReloadedMITMSetsReloadDrainingBeforeAsync covers the
+// CLYDE-324 follow-up race: the synchronous mitmProc.cancel (used by
+// exclusive.stop on full daemon exit) must NOT fire its 4s
+// proxy.Shutdown when the reload chain has already kicked off the
+// async drain with mitmReloadDrainCap. The flag must be set before
+// the async goroutine is scheduled so cancel callers see it
+// immediately on a concurrent stopExclusive("reload_handoff").
+func TestDrainReloadedMITMSetsReloadDrainingBeforeAsync(t *testing.T) {
+	_, log := captureSlogJSON()
+	listener := newRecordingListener(t)
+	mitmProc := &mitmProcess{
+		cancel: func() {
+			t.Fatal("cancel ran during reload; reloadDraining flag did not gate it")
+		},
+		drain: func(context.Context) error {
+			return errors.New("simulated cap elapsed")
+		},
+		waitIdle:    func(context.Context) int { return 1 },
+		activeCount: func() int { return 1 },
+		forceClose: func() error {
+			return nil
+		},
+		closeListener:  listener.Close,
+		done:           nil,
+		lis:            listener,
+		proxy:          nil,
+		reloadDraining: atomic.Bool{},
+	}
+	rt := &daemonRuntime{
+		listener:      nil,
+		adapter:       nil,
+		webapp:        nil,
+		mitm:          mitmProc,
+		reloadLock:    sync.Mutex{},
+		mitmDrainMu:   sync.Mutex{},
+		mitmDrainDone: nil,
+	}
+	if mitmProc.reloadDraining.Load() {
+		t.Fatal("reloadDraining was true before drainReloadedMITM ran")
+	}
+	done := drainReloadedMITM(log, rt)
+	if !mitmProc.reloadDraining.Load() {
+		t.Fatal("reloadDraining was not set by drainReloadedMITM")
+	}
+	waitDoneOrFail(t, done, 2*time.Second)
+}
+
+// TestStartMITMCancelSkipsShutdownWhenReloadDraining pins the cancel
+// closure's gate behavior in isolation: once reloadDraining is true,
+// invoking cancel must be a no-op and must not call proxy.Shutdown.
+// Built without spinning up a real proxy by wiring a fake Shutdown
+// observer through the same closure shape startMITM uses.
+func TestStartMITMCancelSkipsShutdownWhenReloadDraining(t *testing.T) {
+	_, log := captureSlogJSON()
+	shutdownCalls := atomicCounter{}
+	proc := &mitmProcess{
+		cancel: nil,
+		drain: func(context.Context) error {
+			return nil
+		},
+		waitIdle:       func(context.Context) int { return 0 },
+		activeCount:    func() int { return 0 },
+		forceClose:     func() error { return nil },
+		closeListener:  func() error { return nil },
+		done:           nil,
+		lis:            nil,
+		proxy:          nil,
+		reloadDraining: atomic.Bool{},
+	}
+	proc.cancel = func() {
+		if proc.reloadDraining.Load() {
+			log.Debug("mitm.cancel.skipped_reload_drain")
+			return
+		}
+		shutdownCalls.add(1)
+	}
+
+	proc.cancel()
+	if got := shutdownCalls.load(); got != 1 {
+		t.Fatalf("baseline cancel: shutdownCalls=%d, want 1", got)
+	}
+
+	proc.reloadDraining.Store(true)
+	proc.cancel()
+	if got := shutdownCalls.load(); got != 1 {
+		t.Fatalf("reload-time cancel: shutdownCalls=%d, want 1 (cancel must be no-op)", got)
 	}
 }
 
