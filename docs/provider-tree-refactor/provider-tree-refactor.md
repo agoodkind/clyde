@@ -1,5 +1,18 @@
 # Plan: clean Clotilde inheritance and make Claude one adapter
 
+## Status (as of main `bb091a1`)
+
+A code verification mapped each step of this plan against the current tree. Most steps landed; three sub-steps remain.
+
+**Done in code**: Step 1 (delete `tools.go`), Step 3a/3b/3c/3i/3j (move `internal/claude/` and `internal/codex/` into `internal/providers/...`), Step 3e (no Claude-specific constants remain in `internal/outputstyle/`), Step 3f (lift session lifecycle and artifacts into `internal/providers/registry/`), Step 3g (rename `sessionctx` to `internal/providers/claude/contextusage/`), Step 4 (`AGENTS.md` rewrite).
+
+**Not done in code, tracked in Tack**:
+
+- Step 3d (move `SearchClaude` out of generic `internal/config/config.go:1004,1107-1108` into a Claude-specific package; used by `internal/search/client.go:135`): tracked by `CLYDE-321`.
+- Step 3h (replace custom `internal/util/uuid.go` with `github.com/google/uuid` already in `go.mod`; 6 callers in `cmd/root.go:1176`, `cmd/correlation.go:14`, `internal/providers/claude/lifecycle/invoke.go:98`, `internal/daemon/server.go:2336`, `internal/daemon/live_sessions.go:287`, `internal/mcpserver/server.go:510`; stale wrapcheck baseline entry at `.golangci-lint-baseline.txt:1465` pinned to one of these calls): tracked by `CLYDE-322`.
+
+Use this doc for the architectural rationale; use the two tickets above for the remaining execution.
+
 ## Context
 
 Clyde was forked from `fgrehm/clotilde` (MIT, Fabio Rehm 2025) and the

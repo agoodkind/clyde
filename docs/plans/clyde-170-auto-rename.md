@@ -1,5 +1,19 @@
 # CLYDE-170: Reintroduce Auto-Rename Safely
 
+## Status (as of main `bb091a1`)
+
+This plan is the design source. Execution is tracked in Tack:
+
+- Parent epic `CLYDE-24` (auto-rename revival) groups the PR series.
+- **PR1** (data model and proto fields 31-33 on the session message): **landed on main**. `internal/session/auto_name.go` carries `AutoNameState` and `AutoNameSource` enums; the proto carries fields 31-33.
+- **PR1 follow-up** `CLYDE-320`: **filed**. Proto field 34 `auto_name_source_hash` exists in the wire today but this plan never mentions it. Decide whether to document it here or remove it from the proto.
+- **PR2** (auto-name worker scaffolding) tracked by `CLYDE-285`: status Todo.
+- **PR3** (auto-name source plumbing for the LLM-backed source) tracked by `CLYDE-286`: status Todo.
+- **PR4** (apply engine plus delete legacy `internal/prune/autoname.go`) tracked by `CLYDE-287`: **partially landed**. `internal/sessionrename/` (worker, namer, redactor, source extractor, rate limiter) is on main; `internal/prune/autoname.go` deletion is still part of `CLYDE-287` scope.
+- **PR5** (UI surfacing of auto-name source) tracked by `CLYDE-288`: status Todo.
+
+Use this doc for design rationale (why the worker is daemon-owned, why redaction matters, why the cooldown is 30 minutes). Use the tickets above for execution status.
+
 ## 1. Summary
 
 CLYDE-170 reintroduces automatic session naming. The previous attempt was deleted because it conflated three distinct ideas. Those ideas were a human-readable label, a directory identifier, and a provider session id. This plan separates them. It restores LLM-driven naming as a daemon-owned, observable, automatic-apply path that funnels every rename through the existing `RenameSession` RPC mutation point.

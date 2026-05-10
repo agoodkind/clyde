@@ -137,6 +137,12 @@ If `cmd/` needs to branch on one of those things, the boundary is still wrong.
 
 ## Current Leak Inventory
 
+> **Banner (verified as of main `bb091a1`)**: this inventory was written before `CLYDE-136`, `CLYDE-137`, `CLYDE-139`, `CLYDE-142`, `CLYDE-172`, and `CLYDE-173` landed (these tickets are recorded as Done elsewhere in this doc). A code verification confirmed which entries are still real.
+>
+> **Still real leaks** (in `internal/session/session.go` `Metadata`): `SessionID`, `TranscriptPath`, `PreviousSessionIDs`, and the `Settings` struct. Tracked by `CLYDE-323` (remove legacy Claude-shaped fields).
+>
+> **Resolved leaks** (no longer present in code): leaks in `internal/session/store.go`, `internal/session/scan.go`, `internal/providers/claude/lifecycle/invoke.go`, and `cmd/root.go`. The text below describes the historical state; verify against current code before treating any specific entry as actionable.
+
 These are the main concrete leaks to remove.
 
 ### `internal/session/session.go`
