@@ -1,6 +1,20 @@
 package compact
 
-import "goodkind.io/clyde/internal/session"
+import (
+	"time"
+
+	"goodkind.io/clyde/internal/session"
+)
+
+// RuntimeUsageCategory mirrors a single /context category row for the
+// metrics dashboard. The runtime layer owns this provider-neutral
+// shape so the daemon can transport per-row data on the upfront
+// snapshot without the dashboard re-running the probe.
+type RuntimeUsageCategory struct {
+	Name       string
+	Tokens     int
+	IsDeferred bool
+}
 
 const DefaultCountModel = "claude-sonnet-4-5"
 
@@ -51,6 +65,24 @@ type RuntimeUpfront struct {
 	PostBoundaryEntries int
 	Calibrated          bool
 	CalibrationOverhead int
+
+	// Metrics-dashboard supplemental fields. Populated by
+	// BuildRuntimeUpfront so the daemon can serve the metrics-only
+	// dashboard without the CLI re-reading the transcript or
+	// re-probing /context.
+	TranscriptPath  string
+	FileSizeBytes   int64
+	FileLineCount   int
+	HasBoundary     bool
+	BoundaryLine    int
+	BoundaryUUID    string
+	BoundaryTime    time.Time
+	UsagePercentage int
+	UsageAvailable  bool
+	UsageSource     string
+	UsageCapturedAt time.Time
+	UsageError      string
+	UsageCategories []RuntimeUsageCategory
 }
 
 type RuntimeIteration struct {
