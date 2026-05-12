@@ -24,6 +24,35 @@ type ApplyInput struct {
 	Target        int
 	BoundaryTail  []OutputBlock
 	PreCompactTok int
+
+	// FinalProjection is the planner's converged projected /context
+	// total (static overhead + final tail + reserved). Apply uses it
+	// to gate the mutation against Target so a planner that could not
+	// converge does not silently mutate the transcript. Zero disables
+	// the gate; non-zero with Target > 0 is the production path.
+	FinalProjection int
+
+	// ForceOverTarget opts out of the FinalProjection > Target gate.
+	// When true and the projection exceeds the target, Apply still
+	// proceeds but emits a structured warning log so the override is
+	// auditable. See CLYDE-356.
+	ForceOverTarget bool
+}
+
+// ApplyOverTargetError is returned by Apply when the planner's final
+// projection exceeds the requested Target and the caller has not set
+// ForceOverTarget. It carries the typed numbers so the CLI and TUI
+// can render a precise refusal message without re-parsing strings.
+type ApplyOverTargetError struct {
+	Target    int
+	Projected int
+	Delta     int
+}
+
+// Error renders the refusal message in the shape the CLI and the
+// dashboard panel show verbatim.
+func (e *ApplyOverTargetError) Error() string {
+	return fmt.Sprintf("apply refused: projection %d over target %d (+%d)", e.Projected, e.Target, e.Delta)
 }
 
 // ApplyResult summarises what apply did. Returned for preview and
@@ -51,6 +80,9 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	if in.SessionID == "" {
 		return nil, fmt.Errorf("apply: empty session id")
+	}
+	if err := guardOverTarget(in); err != nil {
+		return nil, err
 	}
 	path := in.Slice.Path
 
@@ -139,6 +171,47 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	res.LedgerPath = ledgerPath
 	return res, nil
+}
+
+// guardOverTarget implements the CLYDE-356 over-target gate. When
+// the planner's final projection exceeds the requested target, Apply
+// must not mutate the transcript unless the caller explicitly opts in
+// with ForceOverTarget. The gate emits a structured info log on every
+// fire so audits can find every refusal even when overridden, and a
+// warn log on the override path so the bypass is visible.
+func guardOverTarget(in ApplyInput) error {
+	if in.Target <= 0 || in.FinalProjection <= 0 {
+		return nil
+	}
+	if in.FinalProjection <= in.Target {
+		return nil
+	}
+	delta := in.FinalProjection - in.Target
+	slog.Info("compact.apply.refused_over_target",
+		"component", "compact",
+		"subcomponent", "apply",
+		"session_id", in.SessionID,
+		"target", in.Target,
+		"projection", in.FinalProjection,
+		"delta", delta,
+		"forced", in.ForceOverTarget,
+	)
+	if !in.ForceOverTarget {
+		return &ApplyOverTargetError{
+			Target:    in.Target,
+			Projected: in.FinalProjection,
+			Delta:     delta,
+		}
+	}
+	slog.Warn("compact.apply.over_target_forced",
+		"component", "compact",
+		"subcomponent", "apply",
+		"session_id", in.SessionID,
+		"target", in.Target,
+		"projection", in.FinalProjection,
+		"delta", delta,
+	)
+	return nil
 }
 
 // appendBoundaryAndSynthetic opens the transcript for append and

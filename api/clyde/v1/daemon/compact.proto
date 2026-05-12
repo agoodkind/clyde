@@ -22,6 +22,10 @@ message CompactRunRequest {
   bool force = 8;
   string summarize_mode = 9;
   bool refresh = 10;
+  // force_over_target opts out of the Apply over-target refusal gate.
+  // When false (default) Apply refuses to mutate the transcript if the
+  // planner's final projection exceeds target_tokens. See CLYDE-356.
+  bool force_over_target = 11;
 }
 
 message CompactUpfront {

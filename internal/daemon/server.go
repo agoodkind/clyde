@@ -3019,13 +3019,14 @@ func (s *Server) runCompact(
 	}
 
 	upfront, staticOverhead, slice, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
-		Session:      run.session,
-		Store:        run.store,
-		TargetTokens: int(req.GetTargetTokens()),
-		Reserved:     int(req.GetReservedTokens()),
-		Model:        run.modelForCount,
-		Strippers:    run.strippers,
-		Refresh:      req.GetRefresh(),
+		Session:         run.session,
+		Store:           run.store,
+		TargetTokens:    int(req.GetTargetTokens()),
+		Reserved:        int(req.GetReservedTokens()),
+		Model:           run.modelForCount,
+		Strippers:       run.strippers,
+		Refresh:         req.GetRefresh(),
+		ForceOverTarget: false,
 	}, run.modelForRender)
 	if upfrontErr != nil {
 		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
@@ -3055,6 +3056,7 @@ func (s *Server) runCompact(
 		Summarize:              req.GetSummarize(),
 		SummarizeMode:          summarizeMode,
 		Force:                  req.GetForce(),
+		ForceOverTarget:        req.GetForceOverTarget(),
 		Mode:                   mode,
 		Refresh:                req.GetRefresh(),
 		PreparedUpfront:        &upfront,
@@ -3068,6 +3070,19 @@ func (s *Server) runCompact(
 			"session", req.GetSessionName(),
 			"err", runErr.Error(),
 		)
+		var overTarget *compactengine.ApplyOverTargetError
+		if errors.As(runErr, &overTarget) {
+			// Surface the refusal verbatim so the CLI and the
+			// dashboard panel render the typed message rather than
+			// the generic "compact runtime:" wrapper. Send it as a
+			// status event first so panels that already consumed the
+			// stream show the precise refusal in the status row, then
+			// close the stream with FailedPrecondition.
+			if statusErr := sender.SendStatus(ctx, overTarget.Error()); statusErr != nil {
+				return statusErr
+			}
+			return status.Error(codes.FailedPrecondition, overTarget.Error())
+		}
 		return status.Errorf(codes.Internal, "compact runtime: %v", runErr)
 	}
 

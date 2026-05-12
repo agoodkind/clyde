@@ -67,20 +67,21 @@ func resolveModelLikeTUI(
 }
 
 type compactCommandInput struct {
-	Name          string
-	Session       *session.Session
-	Store         session.Store
-	Transcript    string
-	Target        int
-	Strippers     compactengine.Strippers
-	Apply         bool
-	Force         bool
-	Reserved      int
-	Model         string
-	ModelDisplay  string
-	ModelExplicit bool
-	ShowPasses    bool
-	SummarizeMode string
+	Name            string
+	Session         *session.Session
+	Store           session.Store
+	Transcript      string
+	Target          int
+	Strippers       compactengine.Strippers
+	Apply           bool
+	Force           bool
+	ForceOverTarget bool
+	Reserved        int
+	Model           string
+	ModelDisplay    string
+	ModelExplicit   bool
+	ShowPasses      bool
+	SummarizeMode   string
 }
 
 func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
@@ -127,10 +128,11 @@ func prepareCompactCommandInput(f *cli.Factory, name string) (compactCommandInpu
 		return compactCommandInput{}, err
 	}
 	return compactCommandInput{
-		Name:       name,
-		Session:    sess,
-		Store:      store,
-		Transcript: path,
+		Name:            name,
+		Session:         sess,
+		Store:           store,
+		Transcript:      path,
+		ForceOverTarget: false,
 	}, nil
 }
 
@@ -147,6 +149,7 @@ func completeCompactCommandInput(cmd *cobra.Command, input compactCommandInput, 
 	input.Strippers = flags.Strippers
 	input.Apply = flags.Apply
 	input.Force = flags.Force
+	input.ForceOverTarget = flags.ForceOverTarget
 	input.Reserved = flags.Reserved
 	input.Model = flags.Model
 	input.ModelDisplay = flags.ModelDisplay
@@ -208,6 +211,7 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 	flagTypes, _ := cmd.Flags().GetString("type")
 	apply, _ := cmd.Flags().GetBool("apply")
 	force, _ := cmd.Flags().GetBool("force")
+	forceOverTarget, _ := cmd.Flags().GetBool("force-over-target")
 	reserved, _ := cmd.Flags().GetInt("reserved")
 	model, _ := cmd.Flags().GetString("model")
 	modelDisplay := model
@@ -263,15 +267,16 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 	}
 
 	return compactCommandInput{
-		Strippers:     strippers,
-		Apply:         apply,
-		Force:         force,
-		Reserved:      reserved,
-		Model:         model,
-		ModelDisplay:  modelDisplay,
-		ModelExplicit: modelExplicit,
-		ShowPasses:    showPasses,
-		SummarizeMode: summarizeMode,
+		Strippers:       strippers,
+		Apply:           apply,
+		Force:           force,
+		ForceOverTarget: forceOverTarget,
+		Reserved:        reserved,
+		Model:           model,
+		ModelDisplay:    modelDisplay,
+		ModelExplicit:   modelExplicit,
+		ShowPasses:      showPasses,
+		SummarizeMode:   summarizeMode,
 	}, nil
 }
 
@@ -327,21 +332,22 @@ func runCompactRouted(cmd *cobra.Command, out io.Writer, input compactCommandInp
 	}
 
 	daemonErr := runCompactViaDaemon(cmd.Context(), out, compactDaemonRunInput{
-		SessionName:    input.Session.Name,
-		Mode:           mode,
-		Target:         input.Target,
-		Reserved:       input.Reserved,
-		Model:          input.Model,
-		ModelExplicit:  input.ModelExplicit,
-		Strippers:      input.Strippers,
-		Summarize:      input.SummarizeMode == string(compactengine.SummarizeModeOn),
-		SummarizeMode:  input.SummarizeMode,
-		Force:          input.Force,
-		ShowPasses:     input.ShowPasses && !isTTY,
-		IsTTY:          isTTY && !jsonMode,
-		TranscriptPath: input.Transcript,
-		JSONMode:       jsonMode,
-		CompactRunID:   uuid.NewString(),
+		SessionName:     input.Session.Name,
+		Mode:            mode,
+		Target:          input.Target,
+		Reserved:        input.Reserved,
+		Model:           input.Model,
+		ModelExplicit:   input.ModelExplicit,
+		Strippers:       input.Strippers,
+		Summarize:       input.SummarizeMode == string(compactengine.SummarizeModeOn),
+		SummarizeMode:   input.SummarizeMode,
+		Force:           input.Force,
+		ForceOverTarget: input.ForceOverTarget,
+		ShowPasses:      input.ShowPasses && !isTTY,
+		IsTTY:           isTTY && !jsonMode,
+		TranscriptPath:  input.Transcript,
+		JSONMode:        jsonMode,
+		CompactRunID:    uuid.NewString(),
 	})
 	if daemonErr == nil {
 		cliCompactLog.Logger().Info("cli.compact.completed_via_daemon", "session", input.Name, "mode", mode.Label())

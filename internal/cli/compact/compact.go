@@ -86,6 +86,7 @@ both work.`,
 	cmd.Flags().Int("reserved", DefaultReservedBuffer, "Reserved buffer included in /context total (default matches autocompact)")
 	cmd.Flags().String("model", DefaultModel, "Model name passed to count_tokens; must match the live session's model")
 	cmd.Flags().Bool("force", false, "Bypass the open-session concurrency guard during --apply")
+	cmd.Flags().Bool("force-over-target", false, "Apply even when the planner's final projection exceeds the requested target (CLYDE-356; emits compact.apply.over_target_forced)")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")
 	cmd.Flags().String("target", "", "Compaction target token count (e.g. 200k, 120,000, 1.2m). Overrides the positional [target] arg when both are present.")
 	cmd.Flags().Bool("summarize", false, "Tri-state shortcut: omitted uses auto; --summarize forces on; --summarize=false forces off.")

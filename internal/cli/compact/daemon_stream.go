@@ -12,21 +12,22 @@ import (
 )
 
 type compactDaemonRunInput struct {
-	SessionName    string
-	Mode           Mode
-	Target         int
-	Reserved       int
-	Model          string
-	ModelExplicit  bool
-	Strippers      compactengine.Strippers
-	Summarize      bool
-	SummarizeMode  string
-	Force          bool
-	ShowPasses     bool
-	IsTTY          bool
-	TranscriptPath string
-	JSONMode       bool
-	CompactRunID   string
+	SessionName     string
+	Mode            Mode
+	Target          int
+	Reserved        int
+	Model           string
+	ModelExplicit   bool
+	Strippers       compactengine.Strippers
+	Summarize       bool
+	SummarizeMode   string
+	Force           bool
+	ForceOverTarget bool
+	ShowPasses      bool
+	IsTTY           bool
+	TranscriptPath  string
+	JSONMode        bool
+	CompactRunID    string
 }
 
 // compactDaemonStreamState holds the running state accumulated while
@@ -114,19 +115,20 @@ func openCompactDaemonStream(
 	in compactDaemonRunInput,
 ) (<-chan *clydev1.CompactEvent, <-chan error, context.CancelFunc, error) {
 	streamInput := daemon.CompactRunOptions{
-		SessionName:    in.SessionName,
-		TargetTokens:   in.Target,
-		ReservedTokens: in.Reserved,
-		Model:          in.Model,
-		ModelExplicit:  in.ModelExplicit,
-		Thinking:       in.Strippers.Thinking,
-		Images:         in.Strippers.Images,
-		Tools:          in.Strippers.Tools,
-		Chat:           in.Strippers.Chat,
-		Summarize:      in.Summarize,
-		SummarizeMode:  in.SummarizeMode,
-		Force:          in.Force,
-		Refresh:        false,
+		SessionName:     in.SessionName,
+		TargetTokens:    in.Target,
+		ReservedTokens:  in.Reserved,
+		Model:           in.Model,
+		ModelExplicit:   in.ModelExplicit,
+		Thinking:        in.Strippers.Thinking,
+		Images:          in.Strippers.Images,
+		Tools:           in.Strippers.Tools,
+		Chat:            in.Strippers.Chat,
+		Summarize:       in.Summarize,
+		SummarizeMode:   in.SummarizeMode,
+		Force:           in.Force,
+		ForceOverTarget: in.ForceOverTarget,
+		Refresh:         false,
 	}
 	var events <-chan *clydev1.CompactEvent
 	var done <-chan error

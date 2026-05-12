@@ -604,19 +604,20 @@ func (builder appCallbackBuilder) streamCompactEvents(ctx context.Context, req u
 
 func compactRunOptionsFromUI(req ui.CompactRunRequest) daemon.CompactRunOptions {
 	return daemon.CompactRunOptions{
-		SessionName:    req.SessionName,
-		TargetTokens:   req.TargetTokens,
-		ReservedTokens: req.ReservedTokens,
-		Model:          req.Model,
-		ModelExplicit:  req.ModelExplicit,
-		Thinking:       req.Thinking,
-		Images:         req.Images,
-		Tools:          req.Tools,
-		Chat:           req.Chat,
-		Summarize:      req.Summarize,
-		SummarizeMode:  req.SummarizeMode,
-		Force:          req.Force,
-		Refresh:        false,
+		SessionName:     req.SessionName,
+		TargetTokens:    req.TargetTokens,
+		ReservedTokens:  req.ReservedTokens,
+		Model:           req.Model,
+		ModelExplicit:   req.ModelExplicit,
+		Thinking:        req.Thinking,
+		Images:          req.Images,
+		Tools:           req.Tools,
+		Chat:            req.Chat,
+		Summarize:       req.Summarize,
+		SummarizeMode:   req.SummarizeMode,
+		Force:           req.Force,
+		ForceOverTarget: req.ForceOverTarget,
+		Refresh:         false,
 	}
 }
 

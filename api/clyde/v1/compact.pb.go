@@ -159,8 +159,12 @@ type CompactRunRequest struct {
 	Force          bool                   `protobuf:"varint,8,opt,name=force,proto3" json:"force,omitempty"`
 	SummarizeMode  string                 `protobuf:"bytes,9,opt,name=summarize_mode,json=summarizeMode,proto3" json:"summarize_mode,omitempty"`
 	Refresh        bool                   `protobuf:"varint,10,opt,name=refresh,proto3" json:"refresh,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// force_over_target opts out of the Apply over-target refusal gate.
+	// When false (default) Apply refuses to mutate the transcript if the
+	// planner's final projection exceeds target_tokens. See CLYDE-356.
+	ForceOverTarget bool `protobuf:"varint,11,opt,name=force_over_target,json=forceOverTarget,proto3" json:"force_over_target,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CompactRunRequest) Reset() {
@@ -259,6 +263,13 @@ func (x *CompactRunRequest) GetSummarizeMode() string {
 func (x *CompactRunRequest) GetRefresh() bool {
 	if x != nil {
 		return x.Refresh
+	}
+	return false
+}
+
+func (x *CompactRunRequest) GetForceOverTarget() bool {
+	if x != nil {
+		return x.ForceOverTarget
 	}
 	return false
 }
@@ -1220,7 +1231,7 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\bthinking\x18\x01 \x01(\bR\bthinking\x12\x16\n" +
 	"\x06images\x18\x02 \x01(\bR\x06images\x12\x14\n" +
 	"\x05tools\x18\x03 \x01(\bR\x05tools\x12\x12\n" +
-	"\x04chat\x18\x04 \x01(\bR\x04chat\"\xf0\x02\n" +
+	"\x04chat\x18\x04 \x01(\bR\x04chat\"\x9c\x03\n" +
 	"\x11CompactRunRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12#\n" +
 	"\rtarget_tokens\x18\x02 \x01(\x05R\ftargetTokens\x12'\n" +
@@ -1232,7 +1243,8 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\x05force\x18\b \x01(\bR\x05force\x12%\n" +
 	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\x12\x18\n" +
 	"\arefresh\x18\n" +
-	" \x01(\bR\arefresh\"\xd0\n" +
+	" \x01(\bR\arefresh\x12*\n" +
+	"\x11force_over_target\x18\v \x01(\bR\x0fforceOverTarget\"\xd0\n" +
 	"\n" +
 	"\x0eCompactUpfront\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +

@@ -9,18 +9,19 @@ import (
 )
 
 type CompactRunRequest struct {
-	SessionName    string
-	TargetTokens   int
-	ReservedTokens int
-	Model          string
-	ModelExplicit  bool
-	Thinking       bool
-	Images         bool
-	Tools          bool
-	Chat           bool
-	Summarize      bool
-	SummarizeMode  string
-	Force          bool
+	SessionName     string
+	TargetTokens    int
+	ReservedTokens  int
+	Model           string
+	ModelExplicit   bool
+	Thinking        bool
+	Images          bool
+	Tools           bool
+	Chat            bool
+	Summarize       bool
+	SummarizeMode   string
+	Force           bool
+	ForceOverTarget bool
 }
 
 type CompactEvent struct {
@@ -575,18 +576,19 @@ func (p *CompactPanel) clearApplyConfirmation() {
 
 func (p *CompactPanel) buildRequest() CompactRunRequest {
 	return CompactRunRequest{
-		SessionName:    p.sessionName,
-		TargetTokens:   p.targetTokens,
-		ReservedTokens: p.reserved,
-		Model:          p.model,
-		ModelExplicit:  false,
-		Thinking:       p.thinking,
-		Images:         p.images,
-		Tools:          p.tools,
-		Chat:           p.chat,
-		Summarize:      p.summary == "on",
-		SummarizeMode:  p.summary,
-		Force:          false,
+		SessionName:     p.sessionName,
+		TargetTokens:    p.targetTokens,
+		ReservedTokens:  p.reserved,
+		Model:           p.model,
+		ModelExplicit:   false,
+		Thinking:        p.thinking,
+		Images:          p.images,
+		Tools:           p.tools,
+		Chat:            p.chat,
+		Summarize:       p.summary == "on",
+		SummarizeMode:   p.summary,
+		Force:           false,
+		ForceOverTarget: false,
 	}
 }
 

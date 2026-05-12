@@ -325,14 +325,16 @@ func RunRuntime(
 			)
 		}
 		in := ApplyInput{
-			Slice:         slice,
-			SessionID:     req.Session.Metadata.ProviderSessionID(),
-			Cwd:           req.Session.Metadata.WorkspaceRoot,
-			Version:       "clyde",
-			Strippers:     req.Strippers,
-			Target:        req.TargetTokens,
-			BoundaryTail:  planRes.BoundaryTail,
-			PreCompactTok: planRes.BaselineTail,
+			Slice:           slice,
+			SessionID:       req.Session.Metadata.ProviderSessionID(),
+			Cwd:             req.Session.Metadata.WorkspaceRoot,
+			Version:         "clyde",
+			Strippers:       req.Strippers,
+			Target:          req.TargetTokens,
+			BoundaryTail:    planRes.BoundaryTail,
+			PreCompactTok:   planRes.BaselineTail,
+			FinalProjection: finalProjection(planRes, staticOverhead, req.Reserved),
+			ForceOverTarget: req.ForceOverTarget,
 		}
 		applyRes, applyErr := Apply(in)
 		if applyErr != nil {
@@ -394,6 +396,25 @@ func buildProberCounter(req RuntimeRequest, modelForCount string) (Counter, erro
 		}
 	}
 	return newProberCounter(cfg), nil
+}
+
+// finalProjection returns the planner's converged /context total
+// projection. When the planner recorded at least one iteration, the
+// last record's CtxTotal is the authoritative number; otherwise the
+// projection is reconstructed from FinalTail plus the same static
+// overhead and reserved buffer the planner used. Returns 0 when there
+// is no plan input to gate on (target == 0 path).
+func finalProjection(plan *PlanResult, staticOverhead, reserved int) int {
+	if plan == nil {
+		return 0
+	}
+	if len(plan.Iterations) > 0 {
+		return plan.Iterations[len(plan.Iterations)-1].CtxTotal
+	}
+	if plan.FinalTail <= 0 {
+		return 0
+	}
+	return staticOverhead + plan.FinalTail + reserved
 }
 
 var runtimeModelFamilyRegex = regexp.MustCompile(`claude-(?:\d+-)*(\w+)-\d+`)

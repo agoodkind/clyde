@@ -36,7 +36,10 @@ type RuntimeRequest struct {
 	Summarize     bool
 	SummarizeMode SummarizeMode
 	Force         bool
-	Mode          RuntimeMode
+	// ForceOverTarget opts out of the Apply over-target refusal gate.
+	// See CLYDE-356 and compact.ApplyOverTargetError.
+	ForceOverTarget bool
+	Mode            RuntimeMode
 
 	// Refresh asks the upfront builder to bypass any cached
 	// context-usage snapshot and force a fresh provider-native probe.
