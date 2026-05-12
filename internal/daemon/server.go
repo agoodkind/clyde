@@ -1762,7 +1762,7 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID())
+	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{RefreshHint: false})
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.context_usage.probe_failed", "component", "daemon", "err", err)
 		return emptySessionContextState(), fmt.Errorf("probe context usage: %w", err)
@@ -2858,7 +2858,7 @@ func (s *Server) CalibrateSession(ctx context.Context, req *clydev1.CalibrateSes
 	if !ok {
 		return nil, status.Errorf(codes.FailedPrecondition, "no context-usage prober registered for provider %q", sess.ProviderID())
 	}
-	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID())
+	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{RefreshHint: false})
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.calibrate.probe_failed",
 			"component", "daemon",
@@ -3017,6 +3017,7 @@ func (s *Server) runCompact(
 		Reserved:     int(req.GetReservedTokens()),
 		Model:        run.modelForCount,
 		Strippers:    run.strippers,
+		Refresh:      req.GetRefresh(),
 	}, run.modelForRender)
 	if upfrontErr != nil {
 		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
@@ -3047,6 +3048,7 @@ func (s *Server) runCompact(
 		SummarizeMode:          summarizeMode,
 		Force:                  req.GetForce(),
 		Mode:                   mode,
+		Refresh:                req.GetRefresh(),
 		PreparedUpfront:        &upfront,
 		PreparedStaticOverhead: staticOverhead,
 		PreparedSlice:          slice,

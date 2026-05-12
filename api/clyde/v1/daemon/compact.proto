@@ -21,6 +21,7 @@ message CompactRunRequest {
   bool summarize = 7;
   bool force = 8;
   string summarize_mode = 9;
+  bool refresh = 10;
 }
 
 message CompactUpfront {

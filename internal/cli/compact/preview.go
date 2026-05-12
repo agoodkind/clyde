@@ -25,7 +25,6 @@ import (
 // and renders it.
 func runMetricsDashboard(cmd *cobra.Command, out io.Writer, sess *session.Session, path string, refresh bool) error {
 	ctx := cmd.Context()
-	_ = refresh
 	cliCompactLog.Logger().Info("cli.compact.preview.metrics.started",
 		"session", sess.Name,
 		"session_id", sess.Metadata.ProviderSessionID(),
@@ -46,6 +45,7 @@ func runMetricsDashboard(cmd *cobra.Command, out io.Writer, sess *session.Sessio
 		Summarize:      false,
 		SummarizeMode:  "",
 		Force:          false,
+		Refresh:        refresh,
 	})
 	if err != nil {
 		cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",

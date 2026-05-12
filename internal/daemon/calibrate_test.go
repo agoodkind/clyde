@@ -20,7 +20,7 @@ type stubProber struct {
 	err      error
 }
 
-func (s *stubProber) Probe(_ context.Context, _ string) (contextusage.Snapshot, error) {
+func (s *stubProber) Probe(_ context.Context, _ string, _ contextusage.ProbeOptions) (contextusage.Snapshot, error) {
 	return s.snapshot, s.err
 }
 

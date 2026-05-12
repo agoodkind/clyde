@@ -20,6 +20,18 @@ const (
 	SourceCacheDisk Source = "cache_disk"
 )
 
+// ProbeOptions carries generic, provider-neutral hints for a single
+// Probe call. The struct is intentionally small: provider-specific
+// knobs stay inside the provider implementation. Adding a new field
+// here means every Prober implementation can opt into honoring it
+// without widening the interface signature again.
+type ProbeOptions struct {
+	// RefreshHint asks the implementation to bypass any cached
+	// snapshot and force a fresh provider-native probe. Implementations
+	// that do not cache treat it as a no-op.
+	RefreshHint bool
+}
+
 // Prober is the generic contract the compact engine and any other
 // provider-neutral consumer relies on to obtain a Snapshot for a
 // given provider-native session id. Implementations live in provider
@@ -27,5 +39,5 @@ const (
 // sessionRef argument is the provider's own session identifier; the
 // generic caller passes it opaquely.
 type Prober interface {
-	Probe(ctx context.Context, sessionRef string) (Snapshot, error)
+	Probe(ctx context.Context, sessionRef string, opts ProbeOptions) (Snapshot, error)
 }

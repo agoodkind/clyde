@@ -38,6 +38,12 @@ type RuntimeRequest struct {
 	Force         bool
 	Mode          RuntimeMode
 
+	// Refresh asks the upfront builder to bypass any cached
+	// context-usage snapshot and force a fresh provider-native probe.
+	// Wired from `clyde compact --refresh` through the CompactPreview
+	// RPC; defaults to false for every other caller.
+	Refresh bool
+
 	PreparedUpfront        *RuntimeUpfront
 	PreparedStaticOverhead int
 	PreparedSlice          *Slice

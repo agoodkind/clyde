@@ -67,7 +67,7 @@ func run(cmd *cobra.Command, f *cli.Factory, name string) error {
 		)
 		return fmt.Errorf("no context-usage prober registered for provider %q", providerID)
 	}
-	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID())
+	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{RefreshHint: false})
 	if err != nil {
 		slog.WarnContext(ctx, "cli.probe.failed",
 			"component", "cli",
