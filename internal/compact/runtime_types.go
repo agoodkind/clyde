@@ -30,24 +30,27 @@ type RuntimeRequest struct {
 }
 
 type RuntimeUpfront struct {
-	SessionName     string
-	SessionID       string
-	Model           string
-	CurrentTotal    int
-	MaxTokens       int
-	Messages        int
-	CompactBuffer   int
-	Free            int
-	ContextOverhead int
-	Target          int
-	StaticFloor     int
-	Reserved        int
-	Thinking        int
-	Images          int
-	ToolPairs       int
-	ChatTurns       int
-	StrippersText   string
-	TargetDate      string
+	SessionName         string
+	SessionID           string
+	Model               string
+	CurrentTotal        int
+	MaxTokens           int
+	Messages            int
+	CompactBuffer       int
+	Free                int
+	ContextOverhead     int
+	Target              int
+	StaticFloor         int
+	Reserved            int
+	Thinking            int
+	Images              int
+	ToolPairs           int
+	ChatTurns           int
+	StrippersText       string
+	TargetDate          string
+	PostBoundaryEntries int
+	Calibrated          bool
+	CalibrationOverhead int
 }
 
 type RuntimeIteration struct {
