@@ -158,6 +158,7 @@ type CompactRunRequest struct {
 	Summarize      bool                   `protobuf:"varint,7,opt,name=summarize,proto3" json:"summarize,omitempty"`
 	Force          bool                   `protobuf:"varint,8,opt,name=force,proto3" json:"force,omitempty"`
 	SummarizeMode  string                 `protobuf:"bytes,9,opt,name=summarize_mode,json=summarizeMode,proto3" json:"summarize_mode,omitempty"`
+	Refresh        bool                   `protobuf:"varint,10,opt,name=refresh,proto3" json:"refresh,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -253,6 +254,13 @@ func (x *CompactRunRequest) GetSummarizeMode() string {
 		return x.SummarizeMode
 	}
 	return ""
+}
+
+func (x *CompactRunRequest) GetRefresh() bool {
+	if x != nil {
+		return x.Refresh
+	}
+	return false
 }
 
 type CompactUpfront struct {
@@ -1212,7 +1220,7 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\bthinking\x18\x01 \x01(\bR\bthinking\x12\x16\n" +
 	"\x06images\x18\x02 \x01(\bR\x06images\x12\x14\n" +
 	"\x05tools\x18\x03 \x01(\bR\x05tools\x12\x12\n" +
-	"\x04chat\x18\x04 \x01(\bR\x04chat\"\xd6\x02\n" +
+	"\x04chat\x18\x04 \x01(\bR\x04chat\"\xf0\x02\n" +
 	"\x11CompactRunRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12#\n" +
 	"\rtarget_tokens\x18\x02 \x01(\x05R\ftargetTokens\x12'\n" +
@@ -1222,7 +1230,9 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\tstrippers\x18\x06 \x01(\v2\x1a.clyde.v1.CompactStrippersR\tstrippers\x12\x1c\n" +
 	"\tsummarize\x18\a \x01(\bR\tsummarize\x12\x14\n" +
 	"\x05force\x18\b \x01(\bR\x05force\x12%\n" +
-	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\"\xd0\n" +
+	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\x12\x18\n" +
+	"\arefresh\x18\n" +
+	" \x01(\bR\arefresh\"\xd0\n" +
 	"\n" +
 	"\x0eCompactUpfront\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +

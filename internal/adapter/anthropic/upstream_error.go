@@ -17,7 +17,7 @@
 //
 // UpstreamError implements error and unwraps to the underlying
 // transport error when one was the root cause, so existing
-// errors.Is(err, context.Canceled) checks keep working.
+// errors.Is(err, [context.Canceled]) checks keep working.
 package anthropic
 
 import (

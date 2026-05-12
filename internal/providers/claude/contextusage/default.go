@@ -26,7 +26,14 @@ type claudeProber struct{}
 // to the empty string here because the generic caller does not own
 // per-session workspace state. Callers that need workspace-aware
 // probing continue to construct a defaultLayer directly.
-func (claudeProber) Probe(ctx context.Context, sessionRef string) (contextusage.Snapshot, error) {
+//
+// The generic RefreshHint is accepted for protocol completeness. The
+// claude prober spawns a fresh /context probe on every call (it does
+// not consult the in-memory or on-disk cache tiers), so the hint is
+// effectively a no-op today; the field exists so the daemon can wire
+// `clyde compact --refresh` through without a follow-up interface
+// change once a caching prober path is added.
+func (claudeProber) Probe(ctx context.Context, sessionRef string, _ contextusage.ProbeOptions) (contextusage.Snapshot, error) {
 	return ProbeContextUsage(ctx, ProbeOptions{
 		SessionID:   sessionRef,
 		WorkDir:     "",

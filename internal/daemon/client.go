@@ -1042,6 +1042,7 @@ type CompactRunOptions struct {
 	Summarize      bool
 	SummarizeMode  string
 	Force          bool
+	Refresh        bool
 }
 
 func CompactPreviewViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, <-chan error, context.CancelFunc, error) {
@@ -1080,6 +1081,7 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 		Summarize:     in.Summarize,
 		SummarizeMode: in.SummarizeMode,
 		Force:         in.Force,
+		Refresh:       in.Refresh,
 	}
 	var stream grpc.ServerStreamingClient[clydev1.CompactEvent]
 	if apply {

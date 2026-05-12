@@ -126,6 +126,7 @@ func openCompactDaemonStream(
 		Summarize:      in.Summarize,
 		SummarizeMode:  in.SummarizeMode,
 		Force:          in.Force,
+		Refresh:        false,
 	}
 	var events <-chan *clydev1.CompactEvent
 	var done <-chan error

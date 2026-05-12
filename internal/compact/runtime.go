@@ -117,7 +117,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		UsageError:          "",
 		UsageCategories:     nil,
 	}
-	usage, usageErr := probeSessionSnapshot(ctx, req.Session)
+	usage, usageErr := probeSessionSnapshot(ctx, req.Session, req.Refresh)
 	if usageErr == nil {
 		upfront.CurrentTotal = usage.TotalTokens
 		upfront.MaxTokens = usage.MaxTokens
@@ -453,7 +453,7 @@ func contextCategoryTokens(usage contextusage.Snapshot, name string) int {
 // keeps the compact engine provider-neutral: it does not import any
 // provider's spawn machinery and instead relies on the package-level
 // registry the provider populated at init.
-func probeSessionSnapshot(ctx context.Context, sess *session.Session) (contextusage.Snapshot, error) {
+func probeSessionSnapshot(ctx context.Context, sess *session.Session, refresh bool) (contextusage.Snapshot, error) {
 	prober, ok := contextusage.Get(string(sess.ProviderID()))
 	if !ok {
 		slog.WarnContext(ctx, "compact.runtime.probe_no_prober",
@@ -466,7 +466,7 @@ func probeSessionSnapshot(ctx context.Context, sess *session.Session) (contextus
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID())
+	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{RefreshHint: refresh})
 	if err != nil {
 		slog.WarnContext(ctx, "compact.runtime.probe_failed",
 			"component", "compact",
