@@ -78,6 +78,12 @@ func TestCalibrateSessionReturnsCalibrationFromProberSnapshot(t *testing.T) {
 	if cal.GetCapturedAt() == nil || cal.GetCapturedAt().AsTime().IsZero() {
 		t.Fatalf("captured_at unset")
 	}
+	if resp.GetTotalTokens() != 12000 {
+		t.Fatalf("total_tokens = %d want 12000", resp.GetTotalTokens())
+	}
+	if resp.GetCategoriesCount() != 3 {
+		t.Fatalf("categories_count = %d want 3", resp.GetCategoriesCount())
+	}
 }
 
 func TestCalibrateSessionFailsWhenProberMissing(t *testing.T) {

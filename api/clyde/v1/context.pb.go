@@ -335,12 +335,14 @@ func (x *CalibrateSessionRequest) GetSessionName() string {
 }
 
 type CalibrateSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
-	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Calibration   *CalibrationRecord     `protobuf:"bytes,3,opt,name=calibration,proto3" json:"calibration,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SessionName     string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId       string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Calibration     *CalibrationRecord     `protobuf:"bytes,3,opt,name=calibration,proto3" json:"calibration,omitempty"`
+	TotalTokens     int32                  `protobuf:"varint,4,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
+	CategoriesCount int32                  `protobuf:"varint,5,opt,name=categories_count,json=categoriesCount,proto3" json:"categories_count,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CalibrateSessionResponse) Reset() {
@@ -392,6 +394,20 @@ func (x *CalibrateSessionResponse) GetCalibration() *CalibrationRecord {
 		return x.Calibration
 	}
 	return nil
+}
+
+func (x *CalibrateSessionResponse) GetTotalTokens() int32 {
+	if x != nil {
+		return x.TotalTokens
+	}
+	return 0
+}
+
+func (x *CalibrateSessionResponse) GetCategoriesCount() int32 {
+	if x != nil {
+		return x.CategoriesCount
+	}
+	return 0
 }
 
 type SetCalibrationRequest struct {
@@ -539,12 +555,14 @@ const file_clyde_v1_daemon_context_proto_rawDesc = "" +
 	"capturedAt\x12\x14\n" +
 	"\x05model\x18\x03 \x01(\tR\x05model\"<\n" +
 	"\x17CalibrateSessionRequest\x12!\n" +
-	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\x9b\x01\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\xe9\x01\n" +
 	"\x18CalibrateSessionResponse\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12=\n" +
-	"\vcalibration\x18\x03 \x01(\v2\x1b.clyde.v1.CalibrationRecordR\vcalibration\"c\n" +
+	"\vcalibration\x18\x03 \x01(\v2\x1b.clyde.v1.CalibrationRecordR\vcalibration\x12!\n" +
+	"\ftotal_tokens\x18\x04 \x01(\x05R\vtotalTokens\x12)\n" +
+	"\x10categories_count\x18\x05 \x01(\x05R\x0fcategoriesCount\"c\n" +
 	"\x15SetCalibrationRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12'\n" +
 	"\x0fstatic_overhead\x18\x02 \x01(\x03R\x0estaticOverhead\"\x99\x01\n" +

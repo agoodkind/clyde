@@ -45,6 +45,8 @@ message CalibrateSessionResponse {
   string session_name = 1;
   string session_id = 2;
   CalibrationRecord calibration = 3;
+  int32 total_tokens = 4;
+  int32 categories_count = 5;
 }
 
 message SetCalibrationRequest {
