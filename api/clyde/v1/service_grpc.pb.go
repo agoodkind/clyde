@@ -55,6 +55,8 @@ const (
 	ClydeService_CompactApply_FullMethodName              = "/clyde.v1.ClydeService/CompactApply"
 	ClydeService_CompactUndo_FullMethodName               = "/clyde.v1.ClydeService/CompactUndo"
 	ClydeService_ProbeContextUsage_FullMethodName         = "/clyde.v1.ClydeService/ProbeContextUsage"
+	ClydeService_CalibrateSession_FullMethodName          = "/clyde.v1.ClydeService/CalibrateSession"
+	ClydeService_SetCalibration_FullMethodName            = "/clyde.v1.ClydeService/SetCalibration"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -97,6 +99,8 @@ type ClydeServiceClient interface {
 	CompactApply(ctx context.Context, in *CompactRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CompactEvent], error)
 	CompactUndo(ctx context.Context, in *CompactUndoRequest, opts ...grpc.CallOption) (*CompactUndoResponse, error)
 	ProbeContextUsage(ctx context.Context, in *ProbeContextUsageRequest, opts ...grpc.CallOption) (*ProbeContextUsageResponse, error)
+	CalibrateSession(ctx context.Context, in *CalibrateSessionRequest, opts ...grpc.CallOption) (*CalibrateSessionResponse, error)
+	SetCalibration(ctx context.Context, in *SetCalibrationRequest, opts ...grpc.CallOption) (*SetCalibrationResponse, error)
 }
 
 type clydeServiceClient struct {
@@ -521,6 +525,26 @@ func (c *clydeServiceClient) ProbeContextUsage(ctx context.Context, in *ProbeCon
 	return out, nil
 }
 
+func (c *clydeServiceClient) CalibrateSession(ctx context.Context, in *CalibrateSessionRequest, opts ...grpc.CallOption) (*CalibrateSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CalibrateSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_CalibrateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) SetCalibration(ctx context.Context, in *SetCalibrationRequest, opts ...grpc.CallOption) (*SetCalibrationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetCalibrationResponse)
+	err := c.cc.Invoke(ctx, ClydeService_SetCalibration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClydeServiceServer is the server API for ClydeService service.
 // All implementations should embed UnimplementedClydeServiceServer
 // for forward compatibility.
@@ -561,6 +585,8 @@ type ClydeServiceServer interface {
 	CompactApply(*CompactRunRequest, grpc.ServerStreamingServer[CompactEvent]) error
 	CompactUndo(context.Context, *CompactUndoRequest) (*CompactUndoResponse, error)
 	ProbeContextUsage(context.Context, *ProbeContextUsageRequest) (*ProbeContextUsageResponse, error)
+	CalibrateSession(context.Context, *CalibrateSessionRequest) (*CalibrateSessionResponse, error)
+	SetCalibration(context.Context, *SetCalibrationRequest) (*SetCalibrationResponse, error)
 }
 
 // UnimplementedClydeServiceServer should be embedded to have
@@ -677,6 +703,12 @@ func (UnimplementedClydeServiceServer) CompactUndo(context.Context, *CompactUndo
 }
 func (UnimplementedClydeServiceServer) ProbeContextUsage(context.Context, *ProbeContextUsageRequest) (*ProbeContextUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProbeContextUsage not implemented")
+}
+func (UnimplementedClydeServiceServer) CalibrateSession(context.Context, *CalibrateSessionRequest) (*CalibrateSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CalibrateSession not implemented")
+}
+func (UnimplementedClydeServiceServer) SetCalibration(context.Context, *SetCalibrationRequest) (*SetCalibrationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetCalibration not implemented")
 }
 func (UnimplementedClydeServiceServer) testEmbeddedByValue() {}
 
@@ -1304,6 +1336,42 @@ func _ClydeService_ProbeContextUsage_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_CalibrateSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CalibrateSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).CalibrateSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_CalibrateSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).CalibrateSession(ctx, req.(*CalibrateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_SetCalibration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetCalibrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).SetCalibration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_SetCalibration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).SetCalibration(ctx, req.(*SetCalibrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClydeService_ServiceDesc is the grpc.ServiceDesc for ClydeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1430,6 +1498,14 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProbeContextUsage",
 			Handler:    _ClydeService_ProbeContextUsage_Handler,
+		},
+		{
+			MethodName: "CalibrateSession",
+			Handler:    _ClydeService_CalibrateSession_Handler,
+		},
+		{
+			MethodName: "SetCalibration",
+			Handler:    _ClydeService_SetCalibration_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

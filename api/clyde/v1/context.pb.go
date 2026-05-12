@@ -9,6 +9,7 @@ package clydev1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -225,11 +226,291 @@ func (x *ProbeContextUsageResponse) GetCategories() []*ContextUsageCategory {
 	return nil
 }
 
+// CalibrationRecord mirrors the per-session calibration file written
+// by compactengine.SaveCalibration. Fields match
+// compact.Calibration exactly so the RPC envelope and the on-disk
+// record stay in lock step.
+type CalibrationRecord struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	StaticOverhead int64                  `protobuf:"varint,1,opt,name=static_overhead,json=staticOverhead,proto3" json:"static_overhead,omitempty"`
+	CapturedAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=captured_at,json=capturedAt,proto3" json:"captured_at,omitempty"`
+	Model          string                 `protobuf:"bytes,3,opt,name=model,proto3" json:"model,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CalibrationRecord) Reset() {
+	*x = CalibrationRecord{}
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CalibrationRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CalibrationRecord) ProtoMessage() {}
+
+func (x *CalibrationRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CalibrationRecord.ProtoReflect.Descriptor instead.
+func (*CalibrationRecord) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_context_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CalibrationRecord) GetStaticOverhead() int64 {
+	if x != nil {
+		return x.StaticOverhead
+	}
+	return 0
+}
+
+func (x *CalibrationRecord) GetCapturedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CapturedAt
+	}
+	return nil
+}
+
+func (x *CalibrationRecord) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+type CalibrateSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CalibrateSessionRequest) Reset() {
+	*x = CalibrateSessionRequest{}
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CalibrateSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CalibrateSessionRequest) ProtoMessage() {}
+
+func (x *CalibrateSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CalibrateSessionRequest.ProtoReflect.Descriptor instead.
+func (*CalibrateSessionRequest) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_context_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CalibrateSessionRequest) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+type CalibrateSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Calibration   *CalibrationRecord     `protobuf:"bytes,3,opt,name=calibration,proto3" json:"calibration,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CalibrateSessionResponse) Reset() {
+	*x = CalibrateSessionResponse{}
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CalibrateSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CalibrateSessionResponse) ProtoMessage() {}
+
+func (x *CalibrateSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CalibrateSessionResponse.ProtoReflect.Descriptor instead.
+func (*CalibrateSessionResponse) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_context_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CalibrateSessionResponse) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *CalibrateSessionResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *CalibrateSessionResponse) GetCalibration() *CalibrationRecord {
+	if x != nil {
+		return x.Calibration
+	}
+	return nil
+}
+
+type SetCalibrationRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SessionName    string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	StaticOverhead int64                  `protobuf:"varint,2,opt,name=static_overhead,json=staticOverhead,proto3" json:"static_overhead,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SetCalibrationRequest) Reset() {
+	*x = SetCalibrationRequest{}
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetCalibrationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetCalibrationRequest) ProtoMessage() {}
+
+func (x *SetCalibrationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetCalibrationRequest.ProtoReflect.Descriptor instead.
+func (*SetCalibrationRequest) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_context_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *SetCalibrationRequest) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *SetCalibrationRequest) GetStaticOverhead() int64 {
+	if x != nil {
+		return x.StaticOverhead
+	}
+	return 0
+}
+
+type SetCalibrationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Calibration   *CalibrationRecord     `protobuf:"bytes,3,opt,name=calibration,proto3" json:"calibration,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetCalibrationResponse) Reset() {
+	*x = SetCalibrationResponse{}
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetCalibrationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetCalibrationResponse) ProtoMessage() {}
+
+func (x *SetCalibrationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_context_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetCalibrationResponse.ProtoReflect.Descriptor instead.
+func (*SetCalibrationResponse) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_context_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SetCalibrationResponse) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *SetCalibrationResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SetCalibrationResponse) GetCalibration() *CalibrationRecord {
+	if x != nil {
+		return x.Calibration
+	}
+	return nil
+}
+
 var File_clyde_v1_daemon_context_proto protoreflect.FileDescriptor
 
 const file_clyde_v1_daemon_context_proto_rawDesc = "" +
 	"\n" +
-	"\x1dclyde/v1/daemon/context.proto\x12\bclyde.v1\"=\n" +
+	"\x1dclyde/v1/daemon/context.proto\x12\bclyde.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"=\n" +
 	"\x18ProbeContextUsageRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"y\n" +
 	"\x14ContextUsageCategory\x12\x12\n" +
@@ -251,7 +532,27 @@ const file_clyde_v1_daemon_context_proto_rawDesc = "" +
 	"percentage\x12>\n" +
 	"\n" +
 	"categories\x18\a \x03(\v2\x1e.clyde.v1.ContextUsageCategoryR\n" +
-	"categoriesB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
+	"categories\"\x8f\x01\n" +
+	"\x11CalibrationRecord\x12'\n" +
+	"\x0fstatic_overhead\x18\x01 \x01(\x03R\x0estaticOverhead\x12;\n" +
+	"\vcaptured_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"capturedAt\x12\x14\n" +
+	"\x05model\x18\x03 \x01(\tR\x05model\"<\n" +
+	"\x17CalibrateSessionRequest\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"\x9b\x01\n" +
+	"\x18CalibrateSessionResponse\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12=\n" +
+	"\vcalibration\x18\x03 \x01(\v2\x1b.clyde.v1.CalibrationRecordR\vcalibration\"c\n" +
+	"\x15SetCalibrationRequest\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12'\n" +
+	"\x0fstatic_overhead\x18\x02 \x01(\x03R\x0estaticOverhead\"\x99\x01\n" +
+	"\x16SetCalibrationResponse\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12=\n" +
+	"\vcalibration\x18\x03 \x01(\v2\x1b.clyde.v1.CalibrationRecordR\vcalibrationB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
 
 var (
 	file_clyde_v1_daemon_context_proto_rawDescOnce sync.Once
@@ -265,19 +566,28 @@ func file_clyde_v1_daemon_context_proto_rawDescGZIP() []byte {
 	return file_clyde_v1_daemon_context_proto_rawDescData
 }
 
-var file_clyde_v1_daemon_context_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_clyde_v1_daemon_context_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_clyde_v1_daemon_context_proto_goTypes = []any{
 	(*ProbeContextUsageRequest)(nil),  // 0: clyde.v1.ProbeContextUsageRequest
 	(*ContextUsageCategory)(nil),      // 1: clyde.v1.ContextUsageCategory
 	(*ProbeContextUsageResponse)(nil), // 2: clyde.v1.ProbeContextUsageResponse
+	(*CalibrationRecord)(nil),         // 3: clyde.v1.CalibrationRecord
+	(*CalibrateSessionRequest)(nil),   // 4: clyde.v1.CalibrateSessionRequest
+	(*CalibrateSessionResponse)(nil),  // 5: clyde.v1.CalibrateSessionResponse
+	(*SetCalibrationRequest)(nil),     // 6: clyde.v1.SetCalibrationRequest
+	(*SetCalibrationResponse)(nil),    // 7: clyde.v1.SetCalibrationResponse
+	(*timestamppb.Timestamp)(nil),     // 8: google.protobuf.Timestamp
 }
 var file_clyde_v1_daemon_context_proto_depIdxs = []int32{
 	1, // 0: clyde.v1.ProbeContextUsageResponse.categories:type_name -> clyde.v1.ContextUsageCategory
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	8, // 1: clyde.v1.CalibrationRecord.captured_at:type_name -> google.protobuf.Timestamp
+	3, // 2: clyde.v1.CalibrateSessionResponse.calibration:type_name -> clyde.v1.CalibrationRecord
+	3, // 3: clyde.v1.SetCalibrationResponse.calibration:type_name -> clyde.v1.CalibrationRecord
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_context_proto_init() }
@@ -291,7 +601,7 @@ func file_clyde_v1_daemon_context_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_context_proto_rawDesc), len(file_clyde_v1_daemon_context_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

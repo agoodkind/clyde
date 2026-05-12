@@ -1478,6 +1478,59 @@ func xmlEscape(s string) string {
 	return s
 }
 
+// CalibrateSessionViaDaemon asks the daemon to probe the live
+// session, derive static_overhead, persist the calibration, and
+// return the stored record.
+func CalibrateSessionViaDaemon(ctx context.Context, sessionName string) (*clydev1.CalibrateSessionResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.calibrate_session.begin", "session", sessionName)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.calibrate_session.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.CalibrateSession(rpcCtx, &clydev1.CalibrateSessionRequest{SessionName: sessionName})
+	if rpcErr != nil {
+		log.WarnContext(rpcCtx, "daemon.client.calibrate_session.rpc_failed", "session", sessionName, "err", rpcErr)
+		return nil, fmt.Errorf("calibrate session %q: %w", sessionName, rpcErr)
+	}
+	log.DebugContext(rpcCtx, "daemon.client.calibrate_session.ok",
+		"session", sessionName,
+		"static_overhead", resp.GetCalibration().GetStaticOverhead())
+	return resp, nil
+}
+
+// SetCalibrationViaDaemon asks the daemon to persist an
+// operator-supplied static_overhead value for the session and return
+// the stored record.
+func SetCalibrationViaDaemon(ctx context.Context, sessionName string, staticOverhead int64) (*clydev1.SetCalibrationResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.set_calibration.begin", "session", sessionName, "static_overhead", staticOverhead)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.set_calibration.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.SetCalibration(rpcCtx, &clydev1.SetCalibrationRequest{
+		SessionName:    sessionName,
+		StaticOverhead: staticOverhead,
+	})
+	if rpcErr != nil {
+		log.WarnContext(rpcCtx, "daemon.client.set_calibration.rpc_failed", "session", sessionName, "err", rpcErr)
+		return nil, fmt.Errorf("set calibration %q: %w", sessionName, rpcErr)
+	}
+	log.DebugContext(rpcCtx, "daemon.client.set_calibration.ok",
+		"session", sessionName,
+		"static_overhead", resp.GetCalibration().GetStaticOverhead())
+	return resp, nil
+}
+
 func replaceAll(s, old, new string) string {
 	if old == "" || s == "" {
 		return s

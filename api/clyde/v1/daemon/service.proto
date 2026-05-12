@@ -49,4 +49,6 @@ service ClydeService {
   rpc CompactApply(CompactRunRequest) returns (stream CompactEvent);
   rpc CompactUndo(CompactUndoRequest) returns (CompactUndoResponse);
   rpc ProbeContextUsage(ProbeContextUsageRequest) returns (ProbeContextUsageResponse);
+  rpc CalibrateSession(CalibrateSessionRequest) returns (CalibrateSessionResponse);
+  rpc SetCalibration(SetCalibrationRequest) returns (SetCalibrationResponse);
 }

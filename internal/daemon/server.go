@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
@@ -2823,6 +2824,140 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 		"context_limit", usage.MaxTokens,
 		"percentage", usage.Percentage)
 	return resp, nil
+}
+
+// CalibrateSession probes the session's live /context view through
+// the registered provider Prober, derives static_overhead from the
+// resulting Snapshot, persists the calibration via
+// compactengine.SaveCalibration, and returns the stored record.
+func (s *Server) CalibrateSession(ctx context.Context, req *clydev1.CalibrateSessionRequest) (*clydev1.CalibrateSessionResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
+	if req.GetSessionName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_name is required")
+	}
+	started := daemonNow()
+	s.log.InfoContext(ctx, "daemon.calibrate.started",
+		"component", "daemon",
+		"subcomponent", "calibrate",
+		"session", req.GetSessionName(),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD))
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Resolve(req.GetSessionName())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session: %v", err)
+	}
+	if sess == nil {
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+	}
+	prober, ok := genericcontextusage.Get(string(sess.ProviderID()))
+	if !ok {
+		return nil, status.Errorf(codes.FailedPrecondition, "no context-usage prober registered for provider %q", sess.ProviderID())
+	}
+	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID())
+	if err != nil {
+		s.log.WarnContext(ctx, "daemon.calibrate.probe_failed",
+			"component", "daemon",
+			"subcomponent", "calibrate",
+			"session", sess.Name,
+			"session_id", sess.Metadata.ProviderSessionID(),
+			"duration_ms", time.Since(started).Milliseconds(),
+			"err", err)
+		return nil, status.Errorf(codes.Internal, "probe context usage: %v", err)
+	}
+	overhead := snapshot.StaticOverhead()
+	if overhead <= 0 {
+		return nil, status.Errorf(codes.FailedPrecondition, "derived static_overhead was zero (total=%d); refusing to save", snapshot.TotalTokens)
+	}
+	cal := compactengine.Calibration{
+		StaticOverhead: overhead,
+		CapturedAt:     daemonNow().UTC(),
+		Model:          snapshot.Model,
+	}
+	if err := compactengine.SaveCalibration(sess.Metadata.ProviderSessionID(), cal); err != nil {
+		return nil, status.Errorf(codes.Internal, "save calibration: %v", err)
+	}
+	s.log.InfoContext(ctx, "daemon.calibrate.completed",
+		"component", "daemon",
+		"subcomponent", "calibrate",
+		"session", sess.Name,
+		"session_id", sess.Metadata.ProviderSessionID(),
+		"static_overhead", overhead,
+		"model", cal.Model,
+		"duration_ms", time.Since(started).Milliseconds())
+	return &clydev1.CalibrateSessionResponse{
+		SessionName: sess.Name,
+		SessionId:   sess.Metadata.ProviderSessionID(),
+		Calibration: calibrationRecordToProto(cal),
+	}, nil
+}
+
+// SetCalibration persists an operator-supplied static_overhead value
+// for the session via compactengine.SaveCalibration and returns the
+// stored record. It does not probe the live session.
+func (s *Server) SetCalibration(ctx context.Context, req *clydev1.SetCalibrationRequest) (*clydev1.SetCalibrationResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	incomingMD, _ := metadata.FromIncomingContext(ctx)
+	if req.GetSessionName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_name is required")
+	}
+	if req.GetStaticOverhead() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "static_overhead must be >= 0")
+	}
+	started := daemonNow()
+	s.log.InfoContext(ctx, "daemon.set_calibration.started",
+		"component", "daemon",
+		"subcomponent", "calibrate",
+		"session", req.GetSessionName(),
+		"static_overhead", req.GetStaticOverhead(),
+		"peer_addr", daemonPeerAddr(peerInfo),
+		"metadata_keys", daemonMetadataKeys(incomingMD))
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	sess, err := store.Resolve(req.GetSessionName())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "resolve session: %v", err)
+	}
+	if sess == nil {
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+	}
+	cal := compactengine.Calibration{
+		StaticOverhead: int(req.GetStaticOverhead()),
+		CapturedAt:     daemonNow().UTC(),
+		Model:          "",
+	}
+	if err := compactengine.SaveCalibration(sess.Metadata.ProviderSessionID(), cal); err != nil {
+		return nil, status.Errorf(codes.Internal, "save calibration: %v", err)
+	}
+	s.log.InfoContext(ctx, "daemon.set_calibration.completed",
+		"component", "daemon",
+		"subcomponent", "calibrate",
+		"session", sess.Name,
+		"session_id", sess.Metadata.ProviderSessionID(),
+		"static_overhead", cal.StaticOverhead,
+		"duration_ms", time.Since(started).Milliseconds())
+	return &clydev1.SetCalibrationResponse{
+		SessionName: sess.Name,
+		SessionId:   sess.Metadata.ProviderSessionID(),
+		Calibration: calibrationRecordToProto(cal),
+	}, nil
+}
+
+// calibrationRecordToProto converts a compact.Calibration to its
+// wire envelope shape. Centralizing the conversion keeps the daemon
+// handlers and any future caller in lock step with the proto fields.
+func calibrationRecordToProto(cal compactengine.Calibration) *clydev1.CalibrationRecord {
+	return &clydev1.CalibrationRecord{
+		StaticOverhead: int64(cal.StaticOverhead),
+		CapturedAt:     timestamppb.New(cal.CapturedAt),
+		Model:          cal.Model,
+	}
 }
 
 func (s *Server) CompactPreview(
