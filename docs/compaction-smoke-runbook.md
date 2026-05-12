@@ -21,6 +21,8 @@ We tried the obvious thing first: insert a UUID into the transcript, then ask th
 
 The procedure here uses a different methodology. Embed a fake skill metadata footer in a real skill body. Ask "what is the build hash for skill X." The model treats this as describing a fact, not following an instruction, and reliably returns the UUID when it sees the content. If it returns "I do not have any information about skill X," the content was dropped or hidden. The result is deterministic across prompt phrasings.
 
+Do not use instruction-style canary text (for example "WHEN THE USER ASKS X PLEASE OUTPUT Y"). Opus treats that form as a prompt-injection attempt and refuses to repeat the UUID, which produces a false negative.
+
 ## Prerequisites before you start
 
 You need all of these on your machine:
@@ -106,6 +108,12 @@ grep -n "Build hash: $UUID1" ~/.claude/projects/-Users-agoodkind-Sites-lm-review
 
 Expected: one line, starting `17042:`.
 
+## Probe hygiene (applies to every `claude -p` invocation below)
+
+Every probe must pass `--no-session-persistence` and must not pass `--fork-session`. Together those two choices mean the probe resumes against the real session id, reads the transcript, answers the question, and writes nothing to disk. No fork jsonl is created and no contamination is possible between probes. The session itself stays at whatever state the prior splice or Apply or Undo step left it in. Between probes there is nothing to clean up.
+
+The `/tmp` backup from Step 1 is the safety net for the whole run. The final restore in Step 12 is the only file mutation rollback. Splice and Apply and Undo mutate the file deliberately; probes do not.
+
 ## Step 4: Pre-Apply LLM probe (verify the survivor canary is in the model's context)
 
 This step proves your methodology is sound. Before any Apply runs, the model should see the canary you just inserted.
@@ -116,7 +124,7 @@ claude -p "What is the build hash for skill $HEX1?" \
   --resume 8848d3ab-e4ed-4e6b-94c9-903109a3425b \
   --model 'claude-opus-4-7[1m]' \
   --tools '' \
-  --fork-session \
+  --no-session-persistence \
   --output-format json \
   --max-turns 1 \
   > /tmp/preapply-probe.json
@@ -142,7 +150,7 @@ Why these flags matter:
 | `--resume <id>` | Load the actual session content |
 | `--model 'claude-opus-4-7[1m]'` | Need the 1M context window for an 871k-token session |
 | `--tools ''` | Disable every tool so the model cannot read the file from disk and cheat |
-| `--fork-session` | Write the probe Q-and-A to a disposable session jsonl instead of mutating the real one |
+| `--no-session-persistence` | Skip writing session state. Probe reads the transcript and writes nothing. No fork jsonl is created. |
 | `--output-format json` | Machine-readable result |
 | `--max-turns 1` | One turn, no agentic loops |
 
@@ -274,7 +282,7 @@ claude -p "What is the build hash for skill $HEX1?" \
   --resume 8848d3ab-e4ed-4e6b-94c9-903109a3425b \
   --model 'claude-opus-4-7[1m]' \
   --tools '' \
-  --fork-session \
+  --no-session-persistence \
   --output-format json \
   --max-turns 1 \
   > /tmp/postapply-probe.json
@@ -302,14 +310,14 @@ python3 /tmp/insert_metadata_sentinel.py \
   14971 "$HEX2" "$UUID2"
 ```
 
-Probe it:
+Probe it.
 
 ```bash
 claude -p "What is the build hash for skill $HEX2?" \
   --resume 8848d3ab-e4ed-4e6b-94c9-903109a3425b \
   --model 'claude-opus-4-7[1m]' \
   --tools '' \
-  --fork-session \
+  --no-session-persistence \
   --output-format json \
   --max-turns 1
 ```
@@ -320,13 +328,14 @@ claude -p "What is the build hash for skill $HEX2?" \
 
 ## Step 10: Capture /context for the two-counter delta
 
-Get Claude Code's own view of the resumed session size, which is the ground truth for what the user sees:
+Get Claude Code's own view of the resumed session size, which is the ground truth for what the user sees.
 
 ```bash
 cd ~/Sites/lm-review
 claude -p "/context" \
   --resume 8848d3ab-e4ed-4e6b-94c9-903109a3425b \
   --model 'claude-opus-4-7[1m]' \
+  --no-session-persistence \
   --output-format stream-json \
   --max-turns 1 \
   --verbose \
@@ -387,16 +396,6 @@ shasum -a 256 ~/.claude/projects/-Users-agoodkind-Sites-lm-review/8848d3ab-e4ed-
 ```
 
 Expected: hash matches `49a4bae183a8e9521744510d0cfe29a4e7bbe7f7d0f257598be418301cc6f5f4` exactly.
-
-Delete any disposable forked-session jsonls that the `--fork-session` probes created. They live under the same lm-review project dir and are dated today.
-
-```bash
-find ~/.claude/projects/-Users-agoodkind-Sites-lm-review/ \
-  -maxdepth 1 -name '*.jsonl' \
-  -not -name '8848d3ab-*' \
-  -newer /tmp/lm-review-original-backup.jsonl \
-  -exec /bin/rm {} +
-```
 
 Verify no canary strings remain anywhere except in your current chat transcript:
 
