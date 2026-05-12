@@ -40,9 +40,11 @@ type ApplyResult struct {
 }
 
 // Apply appends one compact_boundary system entry and one synthetic
-// user entry to the JSONL transcript. Pre-apply byte offset and a
-// gzip snapshot are recorded in the ledger so --undo can either
-// truncate (fast path) or restore from snapshot (safety path).
+// user entry to the JSONL transcript. A gzipped snapshot of the
+// pre-Apply transcript and its sha256 are recorded in the ledger so
+// --undo can restore the transcript byte-for-byte. The pre-Apply
+// byte offset stays in the ledger entry for diagnostic value but is
+// no longer used as a restore source (see CLYDE-375).
 func Apply(in ApplyInput) (*ApplyResult, error) {
 	if in.Slice == nil {
 		return nil, fmt.Errorf("apply: nil slice")
@@ -59,7 +61,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	preOffset := stat.Size()
 
-	snapPath, err := snapshotGzip(path, in.SessionID)
+	snap, err := snapshotGzip(path, in.SessionID)
 	if err != nil {
 		slog.Error("compact.apply.snapshot_failed", "component", "compact", "path", path, "session_id", in.SessionID, "err", err)
 		return nil, fmt.Errorf("snapshot: %w", err)
@@ -97,23 +99,8 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		return nil, fmt.Errorf("build synthetic user: %w", err)
 	}
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		slog.Error("compact.apply.open_failed", "component", "compact", "path", path, "err", err)
-		return nil, fmt.Errorf("open transcript for append: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.Write(append(boundaryLine, '\n')); err != nil {
-		slog.Error("compact.apply.append_boundary_failed", "component", "compact", "path", path, "err", err)
-		return nil, fmt.Errorf("append boundary: %w", err)
-	}
-	if _, err := f.Write(append(syntheticLine, '\n')); err != nil {
-		slog.Error("compact.apply.append_synthetic_failed", "component", "compact", "path", path, "err", err)
-		return nil, fmt.Errorf("append synthetic user: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		slog.Error("compact.apply.fsync_failed", "component", "compact", "path", path, "err", err)
-		return nil, fmt.Errorf("fsync: %w", err)
+	if err := appendBoundaryAndSynthetic(path, boundaryLine, syntheticLine); err != nil {
+		return nil, err
 	}
 
 	postStat, err := os.Stat(path)
@@ -133,7 +120,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		SyntheticLine:   len(in.Slice.AllEntries) + 1,
 		PreApplyOffset:  preOffset,
 		PostApplyOffset: postStat.Size(),
-		SnapshotPath:    snapPath,
+		SnapshotPath:    snap.Path,
 	}
 	ledgerPath, err := appendLedger(in.SessionID, LedgerEntry{
 		Timestamp:      now,
@@ -141,7 +128,8 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		Target:         in.Target,
 		Strips:         strippersList(in.Strippers),
 		PreApplyOffset: preOffset,
-		SnapshotPath:   snapPath,
+		PreApplySHA256: snap.SHA256Hex,
+		SnapshotPath:   snap.Path,
 		BoundaryUUID:   boundaryUUID,
 		SyntheticUUID:  syntheticUUID,
 	})
@@ -151,6 +139,31 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	res.LedgerPath = ledgerPath
 	return res, nil
+}
+
+// appendBoundaryAndSynthetic opens the transcript for append and
+// writes the two compact entries followed by fsync. Extracted from
+// Apply to keep the orchestrator function under the funlen ceiling.
+func appendBoundaryAndSynthetic(path string, boundaryLine, syntheticLine []byte) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		slog.Error("compact.apply.open_failed", "component", "compact", "path", path, "err", err)
+		return fmt.Errorf("open transcript for append: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Write(append(boundaryLine, '\n')); err != nil {
+		slog.Error("compact.apply.append_boundary_failed", "component", "compact", "path", path, "err", err)
+		return fmt.Errorf("append boundary: %w", err)
+	}
+	if _, err := f.Write(append(syntheticLine, '\n')); err != nil {
+		slog.Error("compact.apply.append_synthetic_failed", "component", "compact", "path", path, "err", err)
+		return fmt.Errorf("append synthetic user: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		slog.Error("compact.apply.fsync_failed", "component", "compact", "path", path, "err", err)
+		return fmt.Errorf("fsync: %w", err)
+	}
+	return nil
 }
 
 func validateAppendedJSONL(path string, preOffset int64) error {
