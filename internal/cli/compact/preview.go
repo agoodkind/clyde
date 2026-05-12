@@ -4,62 +4,80 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/cli/output"
 	compactengine "goodkind.io/clyde/internal/compact"
-	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
+	"goodkind.io/clyde/internal/contextusage"
+	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/util"
 )
 
+// runMetricsDashboard renders the read-only metrics dashboard by
+// issuing a CompactPreview RPC with target=0 and empty strippers.
+// The daemon owns the transcript load, calibration lookup, and
+// /context probe; the CLI only consumes the streamed upfront event
+// and renders it.
 func runMetricsDashboard(cmd *cobra.Command, out io.Writer, sess *session.Session, path string, refresh bool) error {
 	ctx := cmd.Context()
+	_ = refresh
 	cliCompactLog.Logger().Info("cli.compact.preview.metrics.started",
 		"session", sess.Name,
 		"session_id", sess.Metadata.ProviderSessionID(),
 		"transcript", path,
 		"refresh", refresh,
 	)
-	slice, err := compactengine.LoadSlice(path)
-	if err != nil {
-		cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",
-			"session", sess.Name,
-			"transcript", path,
-			"err", err,
-		)
-		return err
-	}
-	stat, err := os.Stat(path)
-	if err != nil {
-		cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",
-			"session", sess.Name,
-			"transcript", path,
-			"err", err,
-		)
-		return err
-	}
 
-	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
-	cal, calibrated, _ := compactengine.LoadCalibration(sess.Metadata.ProviderSessionID())
-	layer := contextusage.NewDefault(sess, "", "")
-	usage, usageErr := layer.Usage(ctx, contextusage.UsageOptions{
-		Refresh: refresh,
-		MaxAge:  5 * time.Minute,
+	events, done, cancel, err := daemon.CompactPreviewViaDaemon(ctx, daemon.CompactRunOptions{
+		SessionName:    sess.Name,
+		TargetTokens:   0,
+		ReservedTokens: DefaultReservedBuffer,
+		Model:          "",
+		ModelExplicit:  false,
+		Thinking:       false,
+		Images:         false,
+		Tools:          false,
+		Chat:           false,
+		Summarize:      false,
+		SummarizeMode:  "",
+		Force:          false,
 	})
-	if usageErr != nil {
-		cliCompactLog.Logger().Warn("cli.compact.preview.metrics.usage_failed",
+	if err != nil {
+		cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",
 			"session", sess.Name,
-			"session_id", sess.Metadata.ProviderSessionID(),
-			slog.Any("err", usageErr),
+			"transcript", path,
+			"err", err,
 		)
+		return fmt.Errorf("compact preview via daemon: %w", err)
+	}
+	defer cancel()
+
+	var upfront *clydev1.CompactUpfront
+	for ev := range events {
+		if ev.GetKind() == clydev1.CompactEvent_KIND_UPFRONT {
+			upfront = ev.GetUpfront()
+		}
+	}
+	if done != nil {
+		if streamErr := <-done; streamErr != nil {
+			cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",
+				"session", sess.Name,
+				"transcript", path,
+				"err", streamErr,
+			)
+			return fmt.Errorf("compact preview stream: %w", streamErr)
+		}
+	}
+	if upfront == nil {
+		return fmt.Errorf("compact preview stream ended without upfront event")
 	}
 
-	payload := buildMetricsDashboardPayload(sess, path, slice, stat.Size(), cal, calibrated, usage, usageErr, thinking, images, toolPairs, chatTurns)
+	payload := buildMetricsDashboardPayload(upfront)
 
 	enc, err := output.From(cmd, out)
 	if err != nil {
@@ -72,7 +90,7 @@ func runMetricsDashboard(cmd *cobra.Command, out io.Writer, sess *session.Sessio
 		return fmt.Errorf("resolve output encoder: %w", err)
 	}
 	emitErr := enc.Emit(payload, func(w io.Writer) error {
-		return writeMetricsDashboardText(w, sess, path, slice, stat.Size(), cal, calibrated, usage, usageErr, thinking, images, toolPairs, chatTurns)
+		return writeMetricsDashboardText(w, upfront)
 	})
 	if emitErr != nil {
 		slog.WarnContext(ctx, "cli.compact.preview.metrics.emit_failed",
@@ -88,124 +106,125 @@ func runMetricsDashboard(cmd *cobra.Command, out io.Writer, sess *session.Sessio
 		"session", sess.Name,
 		"session_id", sess.Metadata.ProviderSessionID(),
 		"transcript", path,
-		"usage_available", usageErr == nil,
+		"usage_available", upfront.GetUsageAvailable(),
 	)
 	return nil
 }
 
-func buildMetricsDashboardPayload(
-	sess *session.Session,
-	path string,
-	slice *compactengine.Slice,
-	fileSize int64,
-	cal compactengine.Calibration,
-	calibrated bool,
-	usage contextusage.Usage,
-	usageErr error,
-	thinking, images, toolPairs, chatTurns int,
-) MetricsDashboardJSON {
+// buildMetricsDashboardPayload converts a daemon CompactUpfront event
+// into the typed JSON payload the dashboard emits in JSON mode.
+func buildMetricsDashboardPayload(upfront *clydev1.CompactUpfront) MetricsDashboardJSON {
 	payload := MetricsDashboardJSON{
-		Session:               sess.Name,
-		SessionID:             sess.Metadata.ProviderSessionID(),
-		Transcript:            path,
-		FileSizeBytes:         fileSize,
-		Calibrated:            calibrated,
+		Session:               upfront.GetSessionName(),
+		SessionID:             upfront.GetSessionId(),
+		Transcript:            upfront.GetTranscriptPath(),
+		FileSizeBytes:         upfront.GetFileSizeBytes(),
+		Calibrated:            upfront.GetCalibrated(),
 		CalibrationOverhead:   0,
 		CalibrationCapturedAt: nil,
-		Reserved:              DefaultReservedBuffer,
-		BoundaryLine:          slice.BoundaryLine,
+		Reserved:              int(upfront.GetReservedTokens()),
+		BoundaryLine:          -1,
 		BoundaryUUID:          "",
 		BoundaryTime:          nil,
-		PostBoundaryEntries:   len(slice.PostBoundary),
-		ThinkingBlocks:        thinking,
-		ImageBlocks:           images,
-		ToolPairs:             toolPairs,
-		ChatTurns:             chatTurns,
+		PostBoundaryEntries:   int(upfront.GetPostBoundaryEntries()),
+		ThinkingBlocks:        int(upfront.GetThinkingBlocks()),
+		ImageBlocks:           int(upfront.GetImageBlocks()),
+		ToolPairs:             int(upfront.GetToolPairs()),
+		ChatTurns:             int(upfront.GetChatTurns()),
 		Usage:                 nil,
 		UsageError:            "",
 	}
-	if calibrated {
-		payload.CalibrationOverhead = cal.StaticOverhead
-		captured := cal.CapturedAt.UTC()
-		payload.CalibrationCapturedAt = &captured
+	if upfront.GetCalibrated() {
+		payload.CalibrationOverhead = int(upfront.GetCalibrationOverhead())
+		if captured, parseErr := time.Parse("2006-01-02", upfront.GetCalibrationDate()); parseErr == nil {
+			capturedUTC := captured.UTC()
+			payload.CalibrationCapturedAt = &capturedUTC
+		}
 	}
-	if slice.BoundaryLine >= 0 {
-		payload.BoundaryUUID = slice.BoundaryUUID
-		boundary := slice.BoundaryTime.UTC()
-		payload.BoundaryTime = &boundary
+	if upfront.GetHasBoundary() {
+		payload.BoundaryLine = int(upfront.GetBoundaryLine())
+		payload.BoundaryUUID = upfront.GetBoundaryUuid()
+		if boundary, parseErr := time.Parse(time.RFC3339, upfront.GetBoundaryTime()); parseErr == nil {
+			boundaryUTC := boundary.UTC()
+			payload.BoundaryTime = &boundaryUTC
+		}
 	}
-	if usageErr != nil {
-		payload.UsageError = usageErr.Error()
-	} else {
-		snapshot := usage.Snapshot
+	if upfront.GetUsageAvailable() {
+		snapshot := contextusage.Snapshot{
+			Model:       upfront.GetModel(),
+			TotalTokens: int(upfront.GetCurrentTotal()),
+			MaxTokens:   int(upfront.GetMaxTokens()),
+			Percentage:  int(upfront.GetUsagePercentage()),
+			Categories:  nil,
+		}
+		for _, cat := range upfront.GetUsageCategories() {
+			snapshot.Categories = append(snapshot.Categories, contextusage.Category{
+				Name:       cat.GetName(),
+				Tokens:     int(cat.GetTokens()),
+				Color:      "",
+				IsDeferred: cat.GetIsDeferred(),
+			})
+		}
 		payload.Usage = &snapshot
+	} else {
+		payload.UsageError = upfront.GetUsageError()
 	}
 	return payload
 }
 
-// writeMetricsDashboardText emits the human-readable dashboard. The
-// individual [fmt.Fprint] calls are intentionally fire-and-forget
-// because a partial-write error on stdout has no meaningful recovery
-// path here.
-func writeMetricsDashboardText(
-	out io.Writer,
-	sess *session.Session,
-	path string,
-	slice *compactengine.Slice,
-	fileSize int64,
-	cal compactengine.Calibration,
-	calibrated bool,
-	usage contextusage.Usage,
-	usageErr error,
-	thinking, images, toolPairs, chatTurns int,
-) error {
-	_, _ = fmt.Fprintln(out, "session     "+sess.Name)
-	_, _ = fmt.Fprintln(out, "uuid        "+sess.Metadata.ProviderSessionID())
-	_, _ = fmt.Fprintf(out, "file        %s   (%d lines, %s)\n", path, len(slice.AllEntries), util.FormatSize(fileSize))
+// writeMetricsDashboardText emits the human-readable dashboard from
+// the daemon's upfront event. The individual [fmt.Fprint] calls are
+// intentionally fire-and-forget because a partial-write error on
+// stdout has no meaningful recovery path here.
+func writeMetricsDashboardText(out io.Writer, upfront *clydev1.CompactUpfront) error {
+	_, _ = fmt.Fprintln(out, "session     "+upfront.GetSessionName())
+	_, _ = fmt.Fprintln(out, "uuid        "+upfront.GetSessionId())
+	_, _ = fmt.Fprintf(out, "file        %s   (%d lines, %s)\n",
+		upfront.GetTranscriptPath(), int(upfront.GetFileLineCount()), util.FormatSize(upfront.GetFileSizeBytes()))
 
-	if calibrated {
+	if upfront.GetCalibrated() {
 		_, _ = fmt.Fprintf(out, "calibration static_overhead = %s  (captured %s)\n",
-			humanInt(cal.StaticOverhead), cal.CapturedAt.UTC().Format("2006-01-02"))
+			humanInt(int(upfront.GetCalibrationOverhead())), upfront.GetCalibrationDate())
 	} else {
-		_, _ = fmt.Fprintf(out, "calibration NOT CALIBRATED  (run: clyde compact %s --auto-calibrate)\n", sess.Name)
+		_, _ = fmt.Fprintf(out, "calibration NOT CALIBRATED  (run: clyde compact %s --auto-calibrate)\n", upfront.GetSessionName())
 	}
-	_, _ = fmt.Fprintf(out, "reserved    %s   (default, assumes autocompact on)\n", humanInt(DefaultReservedBuffer))
+	_, _ = fmt.Fprintf(out, "reserved    %s   (default, assumes autocompact on)\n", humanInt(int(upfront.GetReservedTokens())))
 	_, _ = fmt.Fprintln(out)
 
-	if slice.BoundaryLine >= 0 {
+	if upfront.GetHasBoundary() {
 		_, _ = fmt.Fprintf(out, "boundary    line %d  (uuid %s, %s)\n",
-			slice.BoundaryLine+1, shortUUID(slice.BoundaryUUID), slice.BoundaryTime.UTC().Format(time.RFC3339))
+			int(upfront.GetBoundaryLine())+1, shortUUID(upfront.GetBoundaryUuid()), upfront.GetBoundaryTime())
 	} else {
 		_, _ = fmt.Fprintln(out, "boundary    none")
 	}
-	_, _ = fmt.Fprintf(out, "            %d entries since boundary\n", len(slice.PostBoundary))
+	_, _ = fmt.Fprintf(out, "            %d entries since boundary\n", int(upfront.GetPostBoundaryEntries()))
 
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "tail blocks")
-	_, _ = fmt.Fprintf(out, "  thinking blocks   %d\n", thinking)
-	_, _ = fmt.Fprintf(out, "  image blocks      %d\n", images)
-	_, _ = fmt.Fprintf(out, "  tool_use/result   %d pairs\n", toolPairs)
-	_, _ = fmt.Fprintf(out, "  chat turns        %d\n", chatTurns)
+	_, _ = fmt.Fprintf(out, "  thinking blocks   %d\n", int(upfront.GetThinkingBlocks()))
+	_, _ = fmt.Fprintf(out, "  image blocks      %d\n", int(upfront.GetImageBlocks()))
+	_, _ = fmt.Fprintf(out, "  tool_use/result   %d pairs\n", int(upfront.GetToolPairs()))
+	_, _ = fmt.Fprintf(out, "  chat turns        %d\n", int(upfront.GetChatTurns()))
 
 	_, _ = fmt.Fprintln(out)
-	if usageErr != nil {
-		_, _ = fmt.Fprintf(out, "context     unavailable (%v)\n", usageErr)
+	if !upfront.GetUsageAvailable() {
+		_, _ = fmt.Fprintf(out, "context     unavailable (%s)\n", upfront.GetUsageError())
 		_, _ = fmt.Fprintf(out, "            rerun with --refresh to probe claude /context\n")
 		return nil
 	}
 	_, _ = fmt.Fprintf(out, "context (from claude /context, source=%s, captured=%s)\n",
-		usage.Source, usage.CapturedAt.UTC().Format(time.RFC3339))
-	for _, cat := range usage.Categories {
-		name := cat.Name
-		if cat.IsDeferred && !strings.Contains(name, "(deferred)") {
+		upfront.GetUsageSource(), upfront.GetUsageCapturedAt())
+	for _, cat := range upfront.GetUsageCategories() {
+		name := cat.GetName()
+		if cat.GetIsDeferred() && !strings.Contains(name, "(deferred)") {
 			name += " (deferred)"
 		}
-		_, _ = fmt.Fprintf(out, "  %-24s %s tok\n", name, humanInt(cat.Tokens))
+		_, _ = fmt.Fprintf(out, "  %-24s %s tok\n", name, humanInt(int(cat.GetTokens())))
 	}
 	_, _ = fmt.Fprintf(out, "  %-24s %s / %s  (%d%%)\n",
-		"total", humanInt(usage.TotalTokens), humanInt(usage.MaxTokens), usage.Percentage)
+		"total", humanInt(int(upfront.GetCurrentTotal())), humanInt(int(upfront.GetMaxTokens())), int(upfront.GetUsagePercentage()))
 	_, _ = fmt.Fprintf(out, "  %-24s %s tok   (derived: everything except Messages, Compact buffer, Free space)\n",
-		"static overhead", humanInt(usage.StaticOverhead()))
+		"static overhead", humanInt(int(upfront.GetContextOverheadTokens())))
 	return nil
 }
 

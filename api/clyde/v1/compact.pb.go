@@ -76,7 +76,7 @@ func (x CompactEvent_Kind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CompactEvent_Kind.Descriptor instead.
 func (CompactEvent_Kind) EnumDescriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{6, 0}
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{7, 0}
 }
 
 type CompactStrippers struct {
@@ -278,8 +278,25 @@ type CompactUpfront struct {
 	PostBoundaryEntries   int32                  `protobuf:"varint,19,opt,name=post_boundary_entries,json=postBoundaryEntries,proto3" json:"post_boundary_entries,omitempty"`
 	Calibrated            bool                   `protobuf:"varint,20,opt,name=calibrated,proto3" json:"calibrated,omitempty"`
 	CalibrationOverhead   int32                  `protobuf:"varint,21,opt,name=calibration_overhead,json=calibrationOverhead,proto3" json:"calibration_overhead,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Metrics-dashboard supplemental fields. These are populated for the
+	// metrics-only path so the CLI can render the dashboard without
+	// re-reading the transcript or re-probing /context. Fields are
+	// empty/zero on non-metrics invocations.
+	TranscriptPath  string                  `protobuf:"bytes,22,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
+	FileSizeBytes   int64                   `protobuf:"varint,23,opt,name=file_size_bytes,json=fileSizeBytes,proto3" json:"file_size_bytes,omitempty"`
+	FileLineCount   int32                   `protobuf:"varint,24,opt,name=file_line_count,json=fileLineCount,proto3" json:"file_line_count,omitempty"`
+	HasBoundary     bool                    `protobuf:"varint,25,opt,name=has_boundary,json=hasBoundary,proto3" json:"has_boundary,omitempty"`
+	BoundaryLine    int32                   `protobuf:"varint,26,opt,name=boundary_line,json=boundaryLine,proto3" json:"boundary_line,omitempty"`
+	BoundaryUuid    string                  `protobuf:"bytes,27,opt,name=boundary_uuid,json=boundaryUuid,proto3" json:"boundary_uuid,omitempty"`
+	BoundaryTime    string                  `protobuf:"bytes,28,opt,name=boundary_time,json=boundaryTime,proto3" json:"boundary_time,omitempty"`
+	UsagePercentage int32                   `protobuf:"varint,29,opt,name=usage_percentage,json=usagePercentage,proto3" json:"usage_percentage,omitempty"`
+	UsageAvailable  bool                    `protobuf:"varint,30,opt,name=usage_available,json=usageAvailable,proto3" json:"usage_available,omitempty"`
+	UsageSource     string                  `protobuf:"bytes,31,opt,name=usage_source,json=usageSource,proto3" json:"usage_source,omitempty"`
+	UsageCapturedAt string                  `protobuf:"bytes,32,opt,name=usage_captured_at,json=usageCapturedAt,proto3" json:"usage_captured_at,omitempty"`
+	UsageError      string                  `protobuf:"bytes,33,opt,name=usage_error,json=usageError,proto3" json:"usage_error,omitempty"`
+	UsageCategories []*CompactUsageCategory `protobuf:"bytes,34,rep,name=usage_categories,json=usageCategories,proto3" json:"usage_categories,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CompactUpfront) Reset() {
@@ -459,6 +476,157 @@ func (x *CompactUpfront) GetCalibrationOverhead() int32 {
 	return 0
 }
 
+func (x *CompactUpfront) GetTranscriptPath() string {
+	if x != nil {
+		return x.TranscriptPath
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetFileSizeBytes() int64 {
+	if x != nil {
+		return x.FileSizeBytes
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetFileLineCount() int32 {
+	if x != nil {
+		return x.FileLineCount
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetHasBoundary() bool {
+	if x != nil {
+		return x.HasBoundary
+	}
+	return false
+}
+
+func (x *CompactUpfront) GetBoundaryLine() int32 {
+	if x != nil {
+		return x.BoundaryLine
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetBoundaryUuid() string {
+	if x != nil {
+		return x.BoundaryUuid
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetBoundaryTime() string {
+	if x != nil {
+		return x.BoundaryTime
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetUsagePercentage() int32 {
+	if x != nil {
+		return x.UsagePercentage
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetUsageAvailable() bool {
+	if x != nil {
+		return x.UsageAvailable
+	}
+	return false
+}
+
+func (x *CompactUpfront) GetUsageSource() string {
+	if x != nil {
+		return x.UsageSource
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetUsageCapturedAt() string {
+	if x != nil {
+		return x.UsageCapturedAt
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetUsageError() string {
+	if x != nil {
+		return x.UsageError
+	}
+	return ""
+}
+
+func (x *CompactUpfront) GetUsageCategories() []*CompactUsageCategory {
+	if x != nil {
+		return x.UsageCategories
+	}
+	return nil
+}
+
+type CompactUsageCategory struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Tokens        int32                  `protobuf:"varint,2,opt,name=tokens,proto3" json:"tokens,omitempty"`
+	IsDeferred    bool                   `protobuf:"varint,3,opt,name=is_deferred,json=isDeferred,proto3" json:"is_deferred,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompactUsageCategory) Reset() {
+	*x = CompactUsageCategory{}
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompactUsageCategory) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompactUsageCategory) ProtoMessage() {}
+
+func (x *CompactUsageCategory) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompactUsageCategory.ProtoReflect.Descriptor instead.
+func (*CompactUsageCategory) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CompactUsageCategory) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *CompactUsageCategory) GetTokens() int32 {
+	if x != nil {
+		return x.Tokens
+	}
+	return 0
+}
+
+func (x *CompactUsageCategory) GetIsDeferred() bool {
+	if x != nil {
+		return x.IsDeferred
+	}
+	return false
+}
+
 type CompactIteration struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Iteration         int32                  `protobuf:"varint,1,opt,name=iteration,proto3" json:"iteration,omitempty"`
@@ -479,7 +647,7 @@ type CompactIteration struct {
 
 func (x *CompactIteration) Reset() {
 	*x = CompactIteration{}
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[3]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -491,7 +659,7 @@ func (x *CompactIteration) String() string {
 func (*CompactIteration) ProtoMessage() {}
 
 func (x *CompactIteration) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[3]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -504,7 +672,7 @@ func (x *CompactIteration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactIteration.ProtoReflect.Descriptor instead.
 func (*CompactIteration) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{3}
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CompactIteration) GetIteration() int32 {
@@ -605,7 +773,7 @@ type CompactApplyMutation struct {
 
 func (x *CompactApplyMutation) Reset() {
 	*x = CompactApplyMutation{}
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[4]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -617,7 +785,7 @@ func (x *CompactApplyMutation) String() string {
 func (*CompactApplyMutation) ProtoMessage() {}
 
 func (x *CompactApplyMutation) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[4]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -630,7 +798,7 @@ func (x *CompactApplyMutation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactApplyMutation.ProtoReflect.Descriptor instead.
 func (*CompactApplyMutation) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{4}
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CompactApplyMutation) GetBoundaryUuid() string {
@@ -690,7 +858,7 @@ type CompactFinal struct {
 
 func (x *CompactFinal) Reset() {
 	*x = CompactFinal{}
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[5]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -702,7 +870,7 @@ func (x *CompactFinal) String() string {
 func (*CompactFinal) ProtoMessage() {}
 
 func (x *CompactFinal) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[5]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -715,7 +883,7 @@ func (x *CompactFinal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactFinal.ProtoReflect.Descriptor instead.
 func (*CompactFinal) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{5}
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CompactFinal) GetBaselineTail() int32 {
@@ -782,7 +950,7 @@ type CompactEvent struct {
 
 func (x *CompactEvent) Reset() {
 	*x = CompactEvent{}
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[6]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -794,7 +962,7 @@ func (x *CompactEvent) String() string {
 func (*CompactEvent) ProtoMessage() {}
 
 func (x *CompactEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[6]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -807,7 +975,7 @@ func (x *CompactEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactEvent.ProtoReflect.Descriptor instead.
 func (*CompactEvent) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{6}
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CompactEvent) GetSequence() int32 {
@@ -868,7 +1036,7 @@ type CompactUndoRequest struct {
 
 func (x *CompactUndoRequest) Reset() {
 	*x = CompactUndoRequest{}
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[7]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -880,7 +1048,7 @@ func (x *CompactUndoRequest) String() string {
 func (*CompactUndoRequest) ProtoMessage() {}
 
 func (x *CompactUndoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[7]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -893,7 +1061,7 @@ func (x *CompactUndoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactUndoRequest.ProtoReflect.Descriptor instead.
 func (*CompactUndoRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{7}
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CompactUndoRequest) GetSessionName() string {
@@ -922,7 +1090,7 @@ type CompactUndoResponse struct {
 
 func (x *CompactUndoResponse) Reset() {
 	*x = CompactUndoResponse{}
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[8]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -934,7 +1102,7 @@ func (x *CompactUndoResponse) String() string {
 func (*CompactUndoResponse) ProtoMessage() {}
 
 func (x *CompactUndoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[8]
+	mi := &file_clyde_v1_daemon_compact_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -947,7 +1115,7 @@ func (x *CompactUndoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactUndoResponse.ProtoReflect.Descriptor instead.
 func (*CompactUndoResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{8}
+	return file_clyde_v1_daemon_compact_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CompactUndoResponse) GetSessionName() string {
@@ -1046,7 +1214,8 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\tstrippers\x18\x06 \x01(\v2\x1a.clyde.v1.CompactStrippersR\tstrippers\x12\x1c\n" +
 	"\tsummarize\x18\a \x01(\bR\tsummarize\x12\x14\n" +
 	"\x05force\x18\b \x01(\bR\x05force\x12%\n" +
-	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\"\xb6\x06\n" +
+	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\"\xd0\n" +
+	"\n" +
 	"\x0eCompactUpfront\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
@@ -1076,7 +1245,26 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\n" +
 	"calibrated\x18\x14 \x01(\bR\n" +
 	"calibrated\x121\n" +
-	"\x14calibration_overhead\x18\x15 \x01(\x05R\x13calibrationOverhead\"\xb6\x03\n" +
+	"\x14calibration_overhead\x18\x15 \x01(\x05R\x13calibrationOverhead\x12'\n" +
+	"\x0ftranscript_path\x18\x16 \x01(\tR\x0etranscriptPath\x12&\n" +
+	"\x0ffile_size_bytes\x18\x17 \x01(\x03R\rfileSizeBytes\x12&\n" +
+	"\x0ffile_line_count\x18\x18 \x01(\x05R\rfileLineCount\x12!\n" +
+	"\fhas_boundary\x18\x19 \x01(\bR\vhasBoundary\x12#\n" +
+	"\rboundary_line\x18\x1a \x01(\x05R\fboundaryLine\x12#\n" +
+	"\rboundary_uuid\x18\x1b \x01(\tR\fboundaryUuid\x12#\n" +
+	"\rboundary_time\x18\x1c \x01(\tR\fboundaryTime\x12)\n" +
+	"\x10usage_percentage\x18\x1d \x01(\x05R\x0fusagePercentage\x12'\n" +
+	"\x0fusage_available\x18\x1e \x01(\bR\x0eusageAvailable\x12!\n" +
+	"\fusage_source\x18\x1f \x01(\tR\vusageSource\x12*\n" +
+	"\x11usage_captured_at\x18  \x01(\tR\x0fusageCapturedAt\x12\x1f\n" +
+	"\vusage_error\x18! \x01(\tR\n" +
+	"usageError\x12I\n" +
+	"\x10usage_categories\x18\" \x03(\v2\x1e.clyde.v1.CompactUsageCategoryR\x0fusageCategories\"c\n" +
+	"\x14CompactUsageCategory\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06tokens\x18\x02 \x01(\x05R\x06tokens\x12\x1f\n" +
+	"\vis_deferred\x18\x03 \x01(\bR\n" +
+	"isDeferred\"\xb6\x03\n" +
 	"\x10CompactIteration\x12\x1c\n" +
 	"\titeration\x18\x01 \x01(\x05R\titeration\x12\x12\n" +
 	"\x04step\x18\x02 \x01(\tR\x04step\x12\x1f\n" +
@@ -1159,31 +1347,33 @@ func file_clyde_v1_daemon_compact_proto_rawDescGZIP() []byte {
 }
 
 var file_clyde_v1_daemon_compact_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_clyde_v1_daemon_compact_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_clyde_v1_daemon_compact_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_clyde_v1_daemon_compact_proto_goTypes = []any{
 	(CompactEvent_Kind)(0),       // 0: clyde.v1.CompactEvent.Kind
 	(*CompactStrippers)(nil),     // 1: clyde.v1.CompactStrippers
 	(*CompactRunRequest)(nil),    // 2: clyde.v1.CompactRunRequest
 	(*CompactUpfront)(nil),       // 3: clyde.v1.CompactUpfront
-	(*CompactIteration)(nil),     // 4: clyde.v1.CompactIteration
-	(*CompactApplyMutation)(nil), // 5: clyde.v1.CompactApplyMutation
-	(*CompactFinal)(nil),         // 6: clyde.v1.CompactFinal
-	(*CompactEvent)(nil),         // 7: clyde.v1.CompactEvent
-	(*CompactUndoRequest)(nil),   // 8: clyde.v1.CompactUndoRequest
-	(*CompactUndoResponse)(nil),  // 9: clyde.v1.CompactUndoResponse
+	(*CompactUsageCategory)(nil), // 4: clyde.v1.CompactUsageCategory
+	(*CompactIteration)(nil),     // 5: clyde.v1.CompactIteration
+	(*CompactApplyMutation)(nil), // 6: clyde.v1.CompactApplyMutation
+	(*CompactFinal)(nil),         // 7: clyde.v1.CompactFinal
+	(*CompactEvent)(nil),         // 8: clyde.v1.CompactEvent
+	(*CompactUndoRequest)(nil),   // 9: clyde.v1.CompactUndoRequest
+	(*CompactUndoResponse)(nil),  // 10: clyde.v1.CompactUndoResponse
 }
 var file_clyde_v1_daemon_compact_proto_depIdxs = []int32{
 	1, // 0: clyde.v1.CompactRunRequest.strippers:type_name -> clyde.v1.CompactStrippers
-	0, // 1: clyde.v1.CompactEvent.kind:type_name -> clyde.v1.CompactEvent.Kind
-	3, // 2: clyde.v1.CompactEvent.upfront:type_name -> clyde.v1.CompactUpfront
-	4, // 3: clyde.v1.CompactEvent.iteration:type_name -> clyde.v1.CompactIteration
-	6, // 4: clyde.v1.CompactEvent.final:type_name -> clyde.v1.CompactFinal
-	5, // 5: clyde.v1.CompactEvent.apply_mutation:type_name -> clyde.v1.CompactApplyMutation
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	4, // 1: clyde.v1.CompactUpfront.usage_categories:type_name -> clyde.v1.CompactUsageCategory
+	0, // 2: clyde.v1.CompactEvent.kind:type_name -> clyde.v1.CompactEvent.Kind
+	3, // 3: clyde.v1.CompactEvent.upfront:type_name -> clyde.v1.CompactUpfront
+	5, // 4: clyde.v1.CompactEvent.iteration:type_name -> clyde.v1.CompactIteration
+	7, // 5: clyde.v1.CompactEvent.final:type_name -> clyde.v1.CompactFinal
+	6, // 6: clyde.v1.CompactEvent.apply_mutation:type_name -> clyde.v1.CompactApplyMutation
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_compact_proto_init() }
@@ -1197,7 +1387,7 @@ func file_clyde_v1_daemon_compact_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_compact_proto_rawDesc), len(file_clyde_v1_daemon_compact_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

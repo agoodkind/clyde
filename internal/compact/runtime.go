@@ -76,6 +76,11 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		return RuntimeUpfront{}, 0, nil, err
 	}
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
+	transcriptPath := req.Session.Metadata.ProviderTranscriptPath()
+	var fileSize int64
+	if stat, statErr := os.Stat(transcriptPath); statErr == nil {
+		fileSize = stat.Size()
+	}
 	upfront := RuntimeUpfront{
 		SessionName:         req.Session.Name,
 		SessionID:           req.Session.Metadata.ProviderSessionID(),
@@ -98,6 +103,19 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		PostBoundaryEntries: len(slice.PostBoundary),
 		Calibrated:          false,
 		CalibrationOverhead: 0,
+		TranscriptPath:      transcriptPath,
+		FileSizeBytes:       fileSize,
+		FileLineCount:       len(slice.AllEntries),
+		HasBoundary:         slice.BoundaryLine >= 0,
+		BoundaryLine:        slice.BoundaryLine,
+		BoundaryUUID:        slice.BoundaryUUID,
+		BoundaryTime:        slice.BoundaryTime.UTC(),
+		UsagePercentage:     0,
+		UsageAvailable:      false,
+		UsageSource:         "",
+		UsageCapturedAt:     time.Time{},
+		UsageError:          "",
+		UsageCategories:     nil,
 	}
 	usage, usageErr := probeSessionSnapshot(ctx, req.Session)
 	if usageErr == nil {
@@ -107,6 +125,21 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		upfront.CompactBuffer = contextCategoryTokens(usage, "Compact buffer")
 		upfront.Free = contextCategoryTokens(usage, "Free space")
 		upfront.ContextOverhead = usage.StaticOverhead()
+		upfront.UsageAvailable = true
+		upfront.UsagePercentage = usage.Percentage
+		upfront.UsageSource = "probe"
+		upfront.UsageCapturedAt = compactClock.Now().UTC()
+		categories := make([]RuntimeUsageCategory, 0, len(usage.Categories))
+		for _, cat := range usage.Categories {
+			categories = append(categories, RuntimeUsageCategory{
+				Name:       cat.Name,
+				Tokens:     cat.Tokens,
+				IsDeferred: cat.IsDeferred,
+			})
+		}
+		upfront.UsageCategories = categories
+	} else {
+		upfront.UsageError = usageErr.Error()
 	}
 	cal, calOK, calErr := LoadCalibration(req.Session.Metadata.ProviderSessionID())
 	if calErr != nil {

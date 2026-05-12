@@ -3208,6 +3208,22 @@ func (s *compactEventSender) SendResult(ctx context.Context, result *compactengi
 }
 
 func compactUpfrontProto(upfront compactengine.RuntimeUpfront) *clydev1.CompactUpfront {
+	categories := make([]*clydev1.CompactUsageCategory, 0, len(upfront.UsageCategories))
+	for _, cat := range upfront.UsageCategories {
+		categories = append(categories, &clydev1.CompactUsageCategory{
+			Name:       cat.Name,
+			Tokens:     compactInt32(cat.Tokens),
+			IsDeferred: cat.IsDeferred,
+		})
+	}
+	boundaryTime := ""
+	if upfront.HasBoundary {
+		boundaryTime = upfront.BoundaryTime.UTC().Format(time.RFC3339)
+	}
+	usageCapturedAt := ""
+	if upfront.UsageAvailable {
+		usageCapturedAt = upfront.UsageCapturedAt.UTC().Format(time.RFC3339)
+	}
 	return &clydev1.CompactUpfront{
 		SessionName:           upfront.SessionName,
 		SessionId:             upfront.SessionID,
@@ -3230,6 +3246,19 @@ func compactUpfrontProto(upfront compactengine.RuntimeUpfront) *clydev1.CompactU
 		PostBoundaryEntries:   compactInt32(upfront.PostBoundaryEntries),
 		Calibrated:            upfront.Calibrated,
 		CalibrationOverhead:   compactInt32(upfront.CalibrationOverhead),
+		TranscriptPath:        upfront.TranscriptPath,
+		FileSizeBytes:         upfront.FileSizeBytes,
+		FileLineCount:         compactInt32(upfront.FileLineCount),
+		HasBoundary:           upfront.HasBoundary,
+		BoundaryLine:          compactInt32(upfront.BoundaryLine),
+		BoundaryUuid:          upfront.BoundaryUUID,
+		BoundaryTime:          boundaryTime,
+		UsagePercentage:       compactInt32(upfront.UsagePercentage),
+		UsageAvailable:        upfront.UsageAvailable,
+		UsageSource:           upfront.UsageSource,
+		UsageCapturedAt:       usageCapturedAt,
+		UsageError:            upfront.UsageError,
+		UsageCategories:       categories,
 	}
 }
 
