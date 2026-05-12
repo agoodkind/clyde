@@ -2,12 +2,14 @@ package logs
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -41,7 +43,13 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 				slog.WarnContext(cmd.Context(), "cli.logs.inventory.failed", "component", "cli", "state_root", root, "err", err)
 				return fmt.Errorf("build log inventory: %w", err)
 			}
-			return writeInventoryTable(f.IOStreams.Out, currentInventory)
+			enc, err := output.From(cmd, f.IOStreams.Out)
+			if err != nil {
+				return fmt.Errorf("resolve output encoder: %w", err)
+			}
+			return enc.Emit(currentInventory, func(w io.Writer) error {
+				return writeInventoryTable(w, currentInventory)
+			})
 		},
 	}
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "Override the Clyde state root to inventory")

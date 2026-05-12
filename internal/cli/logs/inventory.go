@@ -47,25 +47,34 @@ type inventoryOptions struct {
 	Now              time.Time
 }
 
+// inventory is the typed output payload for `clyde logs inventory`.
+// It carries the categorised log-file metadata that both the text
+// table renderer and the JSON encoder consume, and implements the
+// output.Payload marker so it can be passed through output.Encoder.
 type inventory struct {
-	StateRoot  string
-	Generated  time.Time
-	Categories []categorySummary
+	StateRoot  string            `json:"state_root"`
+	Generated  time.Time         `json:"generated"`
+	Categories []categorySummary `json:"categories"`
 }
 
+// IsOutputPayload marks inventory as a valid output.Encoder payload
+// variant. The method is intentionally empty; it exists so the closed
+// output.Payload interface is satisfied without widening the marker.
+func (inventory) IsOutputPayload() {}
+
 type categorySummary struct {
-	Category           category
-	Count              int
-	TotalBytes         int64
-	LatestModified     time.Time
-	RepresentativePath string
-	LargestFiles       []fileSummary
+	Category           category      `json:"category"`
+	Count              int           `json:"count"`
+	TotalBytes         int64         `json:"total_bytes"`
+	LatestModified     time.Time     `json:"latest_modified"`
+	RepresentativePath string        `json:"representative_path"`
+	LargestFiles       []fileSummary `json:"largest_files"`
 }
 
 type fileSummary struct {
-	RelativePath string
-	SizeBytes    int64
-	Modified     time.Time
+	RelativePath string    `json:"relative_path"`
+	SizeBytes    int64     `json:"size_bytes"`
+	Modified     time.Time `json:"modified"`
 }
 
 func buildInventory(options inventoryOptions) (inventory, error) {

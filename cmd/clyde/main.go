@@ -35,6 +35,7 @@ import (
 	"goodkind.io/clyde/internal/cli/logs"
 	"goodkind.io/clyde/internal/cli/mcp"
 	cliMITM "goodkind.io/clyde/internal/cli/mitm"
+	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/providers/registry"
@@ -120,6 +121,7 @@ func run() int {
 	root.CompletionOptions.DisableDefaultCmd = true
 
 	cli.RegisterGlobalFlags(root)
+	output.PersistentFlag(root)
 
 	f := cli.NewSystemFactory(cli.BuildInfo{Version: "DEVELOPMENT"})
 
@@ -127,14 +129,7 @@ func run() int {
 	root.SetOut(f.IOStreams.Out)
 	root.SetErr(f.IOStreams.Err)
 
-	root.AddCommand(compact.NewCmd(f))
-	root.AddCommand(codexcmd.NewCmd(f))
-	root.AddCommand(daemon.NewCmd(f))
-	root.AddCommand(hook.NewCmd(f))
-	root.AddCommand(logs.NewCmd(f))
-	root.AddCommand(cliMITM.NewCmd(f))
-	root.AddCommand(mcp.NewCmd(f))
-	root.AddCommand(cmd.NewResumeCmd())
+	attachSubcommands(root, f)
 
 	root.SilenceErrors = true
 
@@ -150,6 +145,21 @@ func run() int {
 	}
 	clydeMainLog.Logger().Info("cli.execute.completed", "component", "cli")
 	return 0
+}
+
+// attachSubcommands registers every first-party subcommand on the
+// supplied cobra root. Extracted from run so the entry point stays
+// under the funlen budget; the order here is the order subcommands
+// appear in `clyde --help`.
+func attachSubcommands(root *cobra.Command, f *cli.Factory) {
+	root.AddCommand(compact.NewCmd(f))
+	root.AddCommand(codexcmd.NewCmd(f))
+	root.AddCommand(daemon.NewCmd(f))
+	root.AddCommand(hook.NewCmd(f))
+	root.AddCommand(logs.NewCmd(f))
+	root.AddCommand(cliMITM.NewCmd(f))
+	root.AddCommand(mcp.NewCmd(f))
+	root.AddCommand(cmd.NewResumeCmd())
 }
 
 func isReadOnlyLogsInventoryCommand(args []string) bool {
@@ -184,6 +194,7 @@ func runReadOnlyLogsCommand(args []string) int {
 		SilenceErrors: true,
 	}
 	cli.RegisterGlobalFlags(root)
+	output.PersistentFlag(root)
 	f := cli.NewSystemFactory(cli.BuildInfo{Version: "DEVELOPMENT"})
 	root.SetIn(f.IOStreams.In)
 	root.SetOut(f.IOStreams.Out)
