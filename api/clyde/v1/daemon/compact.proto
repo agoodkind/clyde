@@ -42,6 +42,9 @@ message CompactUpfront {
   int32 compact_buffer_tokens = 16;
   int32 free_tokens = 17;
   int32 context_overhead_tokens = 18;
+  int32 post_boundary_entries = 19;
+  bool calibrated = 20;
+  int32 calibration_overhead = 21;
 }
 
 message CompactIteration {

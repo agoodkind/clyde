@@ -77,24 +77,27 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	}
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 	upfront := RuntimeUpfront{
-		SessionName:     req.Session.Name,
-		SessionID:       req.Session.Metadata.ProviderSessionID(),
-		Model:           modelForRender,
-		CurrentTotal:    0,
-		MaxTokens:       0,
-		Messages:        0,
-		CompactBuffer:   0,
-		Free:            0,
-		ContextOverhead: 0,
-		Target:          req.TargetTokens,
-		StaticFloor:     0,
-		Reserved:        req.Reserved,
-		Thinking:        thinking,
-		Images:          images,
-		ToolPairs:       toolPairs,
-		ChatTurns:       chatTurns,
-		StrippersText:   strippersDescribe(req.Strippers),
-		TargetDate:      "",
+		SessionName:         req.Session.Name,
+		SessionID:           req.Session.Metadata.ProviderSessionID(),
+		Model:               modelForRender,
+		CurrentTotal:        0,
+		MaxTokens:           0,
+		Messages:            0,
+		CompactBuffer:       0,
+		Free:                0,
+		ContextOverhead:     0,
+		Target:              req.TargetTokens,
+		StaticFloor:         0,
+		Reserved:            req.Reserved,
+		Thinking:            thinking,
+		Images:              images,
+		ToolPairs:           toolPairs,
+		ChatTurns:           chatTurns,
+		StrippersText:       strippersDescribe(req.Strippers),
+		TargetDate:          "",
+		PostBoundaryEntries: len(slice.PostBoundary),
+		Calibrated:          false,
+		CalibrationOverhead: 0,
 	}
 	usage, usageErr := probeSessionSnapshot(ctx, req.Session)
 	if usageErr == nil {
@@ -105,22 +108,26 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		upfront.Free = contextCategoryTokens(usage, "Free space")
 		upfront.ContextOverhead = usage.StaticOverhead()
 	}
+	cal, calOK, calErr := LoadCalibration(req.Session.Metadata.ProviderSessionID())
+	if calErr != nil {
+		compactLog.Logger().Error("compact.runtime.upfront.calibration_load_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"err", calErr.Error(),
+		)
+		return RuntimeUpfront{}, 0, nil, calErr
+	}
+	if calOK {
+		upfront.Calibrated = true
+		upfront.CalibrationOverhead = cal.StaticOverhead
+		upfront.TargetDate = cal.CapturedAt.UTC().Format("2006-01-02")
+	}
 	staticOverhead := 0
 	if req.TargetTokens > 0 {
-		cal, ok, calErr := LoadCalibration(req.Session.Metadata.ProviderSessionID())
-		if calErr != nil {
-			compactLog.Logger().Error("compact.runtime.upfront.calibration_load_failed",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.ProviderSessionID(),
-				"err", calErr.Error(),
-			)
-			return RuntimeUpfront{}, 0, nil, calErr
-		}
-		if ok {
+		if calOK {
 			staticOverhead = cal.StaticOverhead
-			upfront.TargetDate = cal.CapturedAt.UTC().Format("2006-01-02")
 		} else if upfront.ContextOverhead > 0 {
 			staticOverhead = upfront.ContextOverhead
 		}

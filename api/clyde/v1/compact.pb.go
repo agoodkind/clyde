@@ -275,6 +275,9 @@ type CompactUpfront struct {
 	CompactBufferTokens   int32                  `protobuf:"varint,16,opt,name=compact_buffer_tokens,json=compactBufferTokens,proto3" json:"compact_buffer_tokens,omitempty"`
 	FreeTokens            int32                  `protobuf:"varint,17,opt,name=free_tokens,json=freeTokens,proto3" json:"free_tokens,omitempty"`
 	ContextOverheadTokens int32                  `protobuf:"varint,18,opt,name=context_overhead_tokens,json=contextOverheadTokens,proto3" json:"context_overhead_tokens,omitempty"`
+	PostBoundaryEntries   int32                  `protobuf:"varint,19,opt,name=post_boundary_entries,json=postBoundaryEntries,proto3" json:"post_boundary_entries,omitempty"`
+	Calibrated            bool                   `protobuf:"varint,20,opt,name=calibrated,proto3" json:"calibrated,omitempty"`
+	CalibrationOverhead   int32                  `protobuf:"varint,21,opt,name=calibration_overhead,json=calibrationOverhead,proto3" json:"calibration_overhead,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -431,6 +434,27 @@ func (x *CompactUpfront) GetFreeTokens() int32 {
 func (x *CompactUpfront) GetContextOverheadTokens() int32 {
 	if x != nil {
 		return x.ContextOverheadTokens
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetPostBoundaryEntries() int32 {
+	if x != nil {
+		return x.PostBoundaryEntries
+	}
+	return 0
+}
+
+func (x *CompactUpfront) GetCalibrated() bool {
+	if x != nil {
+		return x.Calibrated
+	}
+	return false
+}
+
+func (x *CompactUpfront) GetCalibrationOverhead() int32 {
+	if x != nil {
+		return x.CalibrationOverhead
 	}
 	return 0
 }
@@ -1022,7 +1046,7 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\tstrippers\x18\x06 \x01(\v2\x1a.clyde.v1.CompactStrippersR\tstrippers\x12\x1c\n" +
 	"\tsummarize\x18\a \x01(\bR\tsummarize\x12\x14\n" +
 	"\x05force\x18\b \x01(\bR\x05force\x12%\n" +
-	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\"\xaf\x05\n" +
+	"\x0esummarize_mode\x18\t \x01(\tR\rsummarizeMode\"\xb6\x06\n" +
 	"\x0eCompactUpfront\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
 	"\n" +
@@ -1047,7 +1071,12 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\x15compact_buffer_tokens\x18\x10 \x01(\x05R\x13compactBufferTokens\x12\x1f\n" +
 	"\vfree_tokens\x18\x11 \x01(\x05R\n" +
 	"freeTokens\x126\n" +
-	"\x17context_overhead_tokens\x18\x12 \x01(\x05R\x15contextOverheadTokens\"\xb6\x03\n" +
+	"\x17context_overhead_tokens\x18\x12 \x01(\x05R\x15contextOverheadTokens\x122\n" +
+	"\x15post_boundary_entries\x18\x13 \x01(\x05R\x13postBoundaryEntries\x12\x1e\n" +
+	"\n" +
+	"calibrated\x18\x14 \x01(\bR\n" +
+	"calibrated\x121\n" +
+	"\x14calibration_overhead\x18\x15 \x01(\x05R\x13calibrationOverhead\"\xb6\x03\n" +
 	"\x10CompactIteration\x12\x1c\n" +
 	"\titeration\x18\x01 \x01(\x05R\titeration\x12\x12\n" +
 	"\x04step\x18\x02 \x01(\tR\x04step\x12\x1f\n" +

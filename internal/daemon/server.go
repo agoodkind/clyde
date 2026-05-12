@@ -3227,6 +3227,9 @@ func compactUpfrontProto(upfront compactengine.RuntimeUpfront) *clydev1.CompactU
 		CompactBufferTokens:   compactInt32(upfront.CompactBuffer),
 		FreeTokens:            compactInt32(upfront.Free),
 		ContextOverheadTokens: compactInt32(upfront.ContextOverhead),
+		PostBoundaryEntries:   compactInt32(upfront.PostBoundaryEntries),
+		Calibrated:            upfront.Calibrated,
+		CalibrationOverhead:   compactInt32(upfront.CalibrationOverhead),
 	}
 }
 
