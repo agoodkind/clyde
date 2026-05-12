@@ -15,9 +15,40 @@ import (
 
 const auditFile = "audit.jsonl"
 
+// RotationConfig controls rotation for the audit.jsonl sink. Mirrors
+// the logpolicy.RotationPolicy shape so callers can resolve rotation
+// from the SinkAudit policy without importing logpolicy here.
+type RotationConfig struct {
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+	Compress   bool
+}
+
+const (
+	defaultAuditRotationMaxSizeMB  = 64
+	defaultAuditRotationMaxBackups = 192
+	defaultAuditRotationMaxAgeDays = 14
+)
+
+func (c RotationConfig) normalized() RotationConfig {
+	if c.MaxSizeMB <= 0 {
+		c.MaxSizeMB = defaultAuditRotationMaxSizeMB
+	}
+	if c.MaxBackups <= 0 {
+		c.MaxBackups = defaultAuditRotationMaxBackups
+	}
+	if c.MaxAgeDays <= 0 {
+		c.MaxAgeDays = defaultAuditRotationMaxAgeDays
+	}
+	return c
+}
+
 // NewLogger creates an slog.Logger that writes JSON to stderr and the audit
-// log file with rotation. Returns the logger and a cleanup function.
-func NewLogger(component string) (*slog.Logger, func()) {
+// log file with rotation. The rotation policy is supplied by the caller so
+// the logpolicy boundary owns the budget. Returns the logger and a cleanup
+// function.
+func NewLogger(component string, rotation RotationConfig) (*slog.Logger, func()) {
 	stateDir := config.DefaultStateDir()
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return stderrFallback(component), func() {}
@@ -26,10 +57,13 @@ func NewLogger(component string) (*slog.Logger, func()) {
 	logPath := filepath.Join(stateDir, auditFile)
 	jsonOpts := &slog.HandlerOptions{Level: slog.LevelDebug}
 
+	rotation = rotation.normalized()
+	compressCopy := rotation.Compress
 	lj := gklog.NewLumberjackWriterWithConfig(logPath, gklog.RotationConfig{
-		MaxSizeMB:  5,
-		MaxBackups: 0,
-		MaxAgeDays: 0,
+		MaxSizeMB:  rotation.MaxSizeMB,
+		MaxBackups: rotation.MaxBackups,
+		MaxAgeDays: rotation.MaxAgeDays,
+		Compress:   &compressCopy,
 	})
 	stderrH := slog.NewJSONHandler(os.Stderr, jsonOpts)
 	fileH := slog.NewJSONHandler(lj, jsonOpts)

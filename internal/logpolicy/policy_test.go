@@ -96,6 +96,91 @@ func TestResolveAppliesSinkAndConcernPrecedence(t *testing.T) {
 	}
 }
 
+func TestResolveAuditAndAnthropicSidecarInheritGlobalRotation(t *testing.T) {
+	cfg := config.NewConfigWithDefaults()
+	cfg.Logging.Rotation = config.LoggingRotation{
+		MaxSizeMB:  11,
+		MaxBackups: 22,
+		MaxAgeDays: 33,
+	}
+
+	policies, err := logpolicy.Resolve(*cfg)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	for _, sinkName := range []logpolicy.SinkName{
+		logpolicy.SinkAudit,
+		logpolicy.SinkAnthropicSidecar,
+	} {
+		sinkPolicy := policies.Sinks[sinkName]
+		if !sinkPolicy.Enabled {
+			t.Fatalf("%s sink should default to enabled", sinkName)
+		}
+		if sinkPolicy.Rotation.MaxSizeMB != 11 {
+			t.Fatalf("%s rotation max size = %d, want 11", sinkName, sinkPolicy.Rotation.MaxSizeMB)
+		}
+		if sinkPolicy.Rotation.MaxBackups != 22 {
+			t.Fatalf("%s rotation max backups = %d, want 22", sinkName, sinkPolicy.Rotation.MaxBackups)
+		}
+		if sinkPolicy.Rotation.MaxAgeDays != 33 {
+			t.Fatalf("%s rotation max age days = %d, want 33", sinkName, sinkPolicy.Rotation.MaxAgeDays)
+		}
+	}
+}
+
+func TestResolveAuditAndAnthropicSidecarPerSinkOverrides(t *testing.T) {
+	cfg := config.NewConfigWithDefaults()
+	cfg.Logging.Rotation = config.LoggingRotation{
+		MaxSizeMB:  100,
+		MaxBackups: 100,
+		MaxAgeDays: 100,
+	}
+	cfg.Logging.Sinks = config.LoggingSinks{
+		config.LoggingSinkAudit: {
+			Rotation: config.LoggingRotation{
+				MaxSizeMB:  16,
+				MaxBackups: 6,
+				MaxAgeDays: 3,
+			},
+		},
+		config.LoggingSinkAnthropicSidecar: {
+			Rotation: config.LoggingRotation{
+				MaxSizeMB:  32,
+				MaxBackups: 12,
+				MaxAgeDays: 3,
+			},
+		},
+	}
+
+	policies, err := logpolicy.Resolve(*cfg)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+
+	auditPolicy := policies.Sinks[logpolicy.SinkAudit]
+	if auditPolicy.Rotation.MaxAgeDays != 3 {
+		t.Fatalf("audit rotation max age days = %d, want 3", auditPolicy.Rotation.MaxAgeDays)
+	}
+	if auditPolicy.Rotation.MaxSizeMB != 16 {
+		t.Fatalf("audit rotation max size = %d, want 16", auditPolicy.Rotation.MaxSizeMB)
+	}
+	if auditPolicy.Rotation.MaxBackups != 6 {
+		t.Fatalf("audit rotation max backups = %d, want 6", auditPolicy.Rotation.MaxBackups)
+	}
+
+	anthropicPolicy := policies.Sinks[logpolicy.SinkAnthropicSidecar]
+	if anthropicPolicy.Rotation.MaxAgeDays != 3 {
+		t.Fatalf("anthropic sidecar max age days = %d, want 3", anthropicPolicy.Rotation.MaxAgeDays)
+	}
+	if anthropicPolicy.Rotation.MaxSizeMB != 32 {
+		t.Fatalf("anthropic sidecar max size = %d, want 32", anthropicPolicy.Rotation.MaxSizeMB)
+	}
+	if anthropicPolicy.Rotation.MaxBackups != 12 {
+		t.Fatalf("anthropic sidecar max backups = %d, want 12", anthropicPolicy.Rotation.MaxBackups)
+	}
+}
+
 func TestResolveAppliesAdapterWireCaptureRotationDefaults(t *testing.T) {
 	cfg := config.NewConfigWithDefaults()
 	cfg.Adapter.WireCapture.Rotation = config.LoggingRotation{

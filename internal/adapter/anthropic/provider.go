@@ -79,6 +79,11 @@ type Provider struct {
 type ProviderOptions struct {
 	Prepare         func(context.Context, adapterresolver.ResolvedRequest, string) (PreparedRequest, error)
 	ExecutePrepared func(context.Context, PreparedRequest, adapterprovider.EventWriter) (adapterprovider.Result, error)
+	// FileLog controls rotation for the dedicated anthropic.jsonl
+	// sidecar sink. Mirrors the Codex provider's FileLog wiring so the
+	// resolved logpolicy SinkAnthropicSidecar rotation flows through one
+	// public entry point.
+	FileLog FileLogRotationConfig
 }
 
 func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
@@ -86,6 +91,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	if log == nil {
 		log = slog.Default()
 	}
+	ConfigureAnthropicFileLogger(opts.FileLog)
 	return &Provider{
 		log:             log.With("component", "adapter", "subcomponent", "anthropic_provider"),
 		prepare:         opts.Prepare,
