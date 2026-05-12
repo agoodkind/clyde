@@ -4,6 +4,13 @@ package registry
 import (
 	"fmt"
 
+	// Blank-import the Claude contextusage provider package so its
+	// init() registers the Prober and CandidateProber with the
+	// generic contextusage registry. Generic consumers (compact
+	// engine, daemon) reach the spawn through contextusage.Get(id)
+	// and never import the Claude package directly.
+	_ "goodkind.io/clyde/internal/providers/claude/contextusage"
+
 	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 	codexlifecycle "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"

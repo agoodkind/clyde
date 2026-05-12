@@ -37,12 +37,11 @@ import (
 	"goodkind.io/clyde/internal/bridge"
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
-	genericcontextusage "goodkind.io/clyde/internal/contextusage"
+	"goodkind.io/clyde/internal/contextusage"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/outputstyle"
-	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
@@ -1754,7 +1753,7 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 		return emptySessionContextState(), err
 	}
 	defer release()
-	prober, ok := genericcontextusage.Get(string(sess.ProviderID()))
+	prober, ok := contextusage.Get(string(sess.ProviderID()))
 	if !ok {
 		err := fmt.Errorf("no context-usage prober registered for provider %q", sess.ProviderID())
 		s.log.WarnContext(ctx, "daemon.context_usage.probe_unregistered", "component", "daemon", "provider", string(sess.ProviderID()))
@@ -1762,7 +1761,7 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{
+	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
 		RefreshHint: false,
 		WorkDir:     sess.Metadata.WorkspaceRoot,
 	})
@@ -2857,11 +2856,11 @@ func (s *Server) CalibrateSession(ctx context.Context, req *clydev1.CalibrateSes
 	if sess == nil {
 		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
-	prober, ok := genericcontextusage.Get(string(sess.ProviderID()))
+	prober, ok := contextusage.Get(string(sess.ProviderID()))
 	if !ok {
 		return nil, status.Errorf(codes.FailedPrecondition, "no context-usage prober registered for provider %q", sess.ProviderID())
 	}
-	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{
+	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
 		RefreshHint: false,
 		WorkDir:     sess.Metadata.WorkspaceRoot,
 	})
