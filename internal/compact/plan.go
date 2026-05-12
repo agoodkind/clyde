@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sort"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Strippers selects which categories the user wants to act on. The
@@ -54,6 +56,12 @@ type PlanInput struct {
 	BatchSize      int                   // tool demotion batch size; default 8
 	ChatBatchSize  int                   // chat-drop batch size; default 4
 	StopTimeout    time.Duration         // max wall time for whole loop; 0 = no limit
+	// CompactRunID is the correlation id stamped on every
+	// compact.plan.iteration slog event the planner emits. RunPlan
+	// generates one with uuid.NewString when this is empty so every
+	// run, including direct callers that did not set the field, gets
+	// a unique id without further wiring.
+	CompactRunID string
 }
 
 // PlanResult holds the final synthesis options plus the iteration log
@@ -103,6 +111,9 @@ type IterationRecord struct {
 func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	if err := normalizePlanInput(&in); err != nil {
 		return nil, err
+	}
+	if in.CompactRunID == "" {
+		in.CompactRunID = uuid.NewString()
 	}
 
 	opts := newSynthOptions()
@@ -280,6 +291,17 @@ func (r *planRunner) accept(record IterationRecord) {
 	r.tail = record.TailTokens
 	r.ctxTotal = record.CtxTotal
 	r.log = append(r.log, record)
+	slog.InfoContext(r.ctx, "compact.plan.iteration",
+		"component", "compact",
+		"subcomponent", "plan",
+		"compact_run_id", r.in.CompactRunID,
+		"iter_num", len(r.log),
+		"step", record.Step,
+		"tail_tokens", record.TailTokens,
+		"ctx_total", record.CtxTotal,
+		"projected", record.CtxTotal,
+		"delta", record.Delta,
+	)
 	r.emitRecord(record)
 }
 

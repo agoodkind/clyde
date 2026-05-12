@@ -63,17 +63,23 @@ func runMetricsDashboard(cmd *cobra.Command, out io.Writer, sess *session.Sessio
 
 	enc, err := output.From(cmd, out)
 	if err != nil {
+		slog.WarnContext(ctx, "cli.compact.preview.metrics.encoder_failed",
+			"component", "cli",
+			"subcomponent", "compact",
+			"session", sess.Name,
+			"err", err.Error(),
+		)
 		return fmt.Errorf("resolve output encoder: %w", err)
 	}
 	emitErr := enc.Emit(payload, func(w io.Writer) error {
 		return writeMetricsDashboardText(w, sess, path, slice, stat.Size(), cal, calibrated, usage, usageErr, thinking, images, toolPairs, chatTurns)
 	})
 	if emitErr != nil {
-		slog.Warn("cli.compact.preview.metrics.emit_failed",
+		slog.WarnContext(ctx, "cli.compact.preview.metrics.emit_failed",
 			"component", "cli",
 			"subcomponent", "compact",
 			"session", sess.Name,
-			"err", emitErr,
+			"err", emitErr.Error(),
 		)
 		return fmt.Errorf("emit metrics dashboard: %w", emitErr)
 	}

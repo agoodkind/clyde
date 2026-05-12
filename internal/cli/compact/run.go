@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
@@ -371,17 +372,18 @@ func runLocalCompact(cmd *cobra.Command, out io.Writer, input compactCommandInpu
 
 	enc, encErr := output.From(cmd, out)
 	if encErr != nil {
-		slog.Warn("cli.compact.run.encoder_failed",
+		slog.WarnContext(ctx, "cli.compact.run.encoder_failed",
 			"component", "cli",
 			"subcomponent", "compact",
 			"session", input.Name,
-			"err", encErr,
+			"err", encErr.Error(),
 		)
 		return fmt.Errorf("resolve output encoder: %w", encErr)
 	}
 	jsonMode := enc.Format == output.FormatJSON
 
-	planResult, isTTY, progress, err := runCompactPlan(ctx, out, input, slice, mode, staticOverhead, counter, upfrontStats, jsonMode)
+	runID := uuid.NewString()
+	planResult, isTTY, progress, err := runCompactPlan(ctx, out, input, slice, mode, staticOverhead, counter, upfrontStats, jsonMode, runID)
 	if err != nil {
 		return err
 	}
@@ -392,7 +394,7 @@ func runLocalCompact(cmd *cobra.Command, out io.Writer, input compactCommandInpu
 			BaselineTail: planResult.BaselineTail,
 			FinalTail:    planResult.FinalTail,
 			Target:       input.Target,
-			CompactRunID: "",
+			CompactRunID: runID,
 		})
 		if emitErr != nil {
 			return emitErr
@@ -507,6 +509,7 @@ func runCompactPlan(
 	counter compactengine.Counter,
 	upfrontStats UpfrontStats,
 	jsonMode bool,
+	runID string,
 ) (*compactengine.PlanResult, bool, *progressView, error) {
 	cliCompactLog.Logger().Info("cli.compact.preview.run_plan.started", "session", input.Name, "target", input.Target, "mode", mode.Label())
 	isTTY := isTerminal(out)
@@ -524,7 +527,7 @@ func runCompactPlan(
 				CtxTotal:     rec.CtxTotal,
 				Projected:    rec.CtxTotal,
 				Delta:        rec.Delta,
-				CompactRunID: "",
+				CompactRunID: runID,
 			})
 		}
 	} else if input.Target > 0 {
@@ -538,7 +541,12 @@ func runCompactPlan(
 		StaticOverhead: staticOverhead,
 		Reserved:       input.Reserved,
 		Counter:        counter,
+		Out:            out,
 		OnIteration:    onIter,
+		BatchSize:      0,
+		ChatBatchSize:  0,
+		StopTimeout:    0,
+		CompactRunID:   runID,
 	})
 	if progress != nil {
 		progress.Finish()
