@@ -284,7 +284,7 @@ func runCompactMaintenanceAction(cmd *cobra.Command, out io.Writer, input compac
 	}
 	if calibrationTarget, _ := cmd.Flags().GetInt("calibrate"); calibrationTarget > 0 {
 		model, _ := cmd.Flags().GetString("model")
-		return true, runCalibrate(out, input.Session, calibrationTarget, model)
+		return true, runCalibrate(cmd.Context(), out, input.Session, calibrationTarget, model)
 	}
 	if autoCalibrate, _ := cmd.Flags().GetBool("auto-calibrate"); autoCalibrate {
 		model, _ := cmd.Flags().GetString("model")

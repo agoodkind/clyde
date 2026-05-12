@@ -2890,9 +2890,11 @@ func (s *Server) CalibrateSession(ctx context.Context, req *clydev1.CalibrateSes
 		"model", cal.Model,
 		"duration_ms", time.Since(started).Milliseconds())
 	return &clydev1.CalibrateSessionResponse{
-		SessionName: sess.Name,
-		SessionId:   sess.Metadata.ProviderSessionID(),
-		Calibration: calibrationRecordToProto(cal),
+		SessionName:     sess.Name,
+		SessionId:       sess.Metadata.ProviderSessionID(),
+		Calibration:     calibrationRecordToProto(cal),
+		TotalTokens:     int32(snapshot.TotalTokens),
+		CategoriesCount: int32(len(snapshot.Categories)),
 	}, nil
 }
 
