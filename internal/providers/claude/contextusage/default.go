@@ -6,8 +6,39 @@ import (
 
 	"goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/contextusage"
 	"goodkind.io/clyde/internal/session"
 )
+
+// claudeProberID names this provider in the generic contextusage
+// registry. The constant lives here rather than in the Claude
+// provider's identity package because that package is currently
+// unaware of generic context-usage routing.
+const claudeProberID = "claude"
+
+// claudeProber adapts the Claude-specific ProbeContextUsage spawn
+// machinery to the provider-neutral Prober contract. Callers in
+// generic code reach the spawn through Get(claudeProberID).
+type claudeProber struct{}
+
+// Probe satisfies the generic contextusage.Prober interface. The
+// sessionRef argument is the Claude session UUID; WorkDir defaults
+// to the empty string here because the generic caller does not own
+// per-session workspace state. Callers that need workspace-aware
+// probing continue to construct a defaultLayer directly.
+func (claudeProber) Probe(ctx context.Context, sessionRef string) (contextusage.Snapshot, error) {
+	return ProbeContextUsage(ctx, ProbeOptions{
+		SessionID:   sessionRef,
+		WorkDir:     "",
+		Binary:      "",
+		Timeout:     0,
+		ForkSession: true,
+	})
+}
+
+func init() {
+	contextusage.Register(claudeProberID, claudeProber{})
+}
 
 // defaultLayer composes the in-memory cache, the on-disk cache, and
 // the probe backend for Usage, and wraps the count backend for Count.
@@ -78,9 +109,9 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 				"age_ms", time.Since(hit.CapturedAt).Milliseconds(),
 			)
 			return Usage{
-				ContextUsage: hit.Usage,
-				CapturedAt:   hit.CapturedAt,
-				Source:       SourceCacheMem,
+				Snapshot:   hit.Usage,
+				CapturedAt: hit.CapturedAt,
+				Source:     SourceCacheMem,
 			}, nil
 		}
 
@@ -103,9 +134,9 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 			// process do not re-read disk.
 			l.memCache.put(hit)
 			return Usage{
-				ContextUsage: hit.Usage,
-				CapturedAt:   hit.CapturedAt,
-				Source:       SourceCacheDisk,
+				Snapshot:   hit.Usage,
+				CapturedAt: hit.CapturedAt,
+				Source:     SourceCacheDisk,
 			}, nil
 		}
 	}
@@ -132,9 +163,9 @@ func (l *defaultLayer) Usage(ctx context.Context, opts UsageOptions) (Usage, err
 	l.memCache.put(payload)
 	l.diskCache.write(payload)
 	return Usage{
-		ContextUsage: raw,
-		CapturedAt:   captured,
-		Source:       SourceProbe,
+		Snapshot:   raw,
+		CapturedAt: captured,
+		Source:     SourceProbe,
 	}, nil
 }
 

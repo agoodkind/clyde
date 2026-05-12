@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"goodkind.io/clyde/internal/compact"
+	"goodkind.io/clyde/internal/contextusage"
 )
 
 // defaultProbeTimeout bounds a cold probe. Claude plus MCP servers
@@ -22,7 +22,7 @@ type probeBackend struct {
 
 	// probe is injected so tests can substitute a deterministic
 	// response without spawning a claude binary.
-	probe func(ctx context.Context, opts compact.ProbeOptions) (compact.ContextUsage, error)
+	probe func(ctx context.Context, opts ProbeOptions) (contextusage.Snapshot, error)
 }
 
 // newProbeBackend builds a backend bound to one session. Tests call
@@ -32,14 +32,14 @@ func newProbeBackend(sessionID, workDir string) *probeBackend {
 		sessionID: sessionID,
 		workDir:   workDir,
 		timeout:   defaultProbeTimeout,
-		probe:     compact.ProbeContextUsage,
+		probe:     ProbeContextUsage,
 	}
 }
 
-// Fetch runs the probe and returns the raw ContextUsage. The layer
+// Fetch runs the probe and returns the raw Snapshot. The layer
 // wraps this with CapturedAt and Source=SourceProbe before returning
 // to callers and before writing to cache.
-func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) {
+func (p *probeBackend) Fetch(ctx context.Context) (contextusage.Snapshot, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -51,9 +51,10 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 		"work_dir", p.workDir,
 		"timeout_s", int(p.timeout.Seconds()),
 	)
-	usage, err := p.probe(ctx, compact.ProbeOptions{
+	usage, err := p.probe(ctx, ProbeOptions{
 		SessionID:   p.sessionID,
 		WorkDir:     p.workDir,
+		Binary:      "",
 		Timeout:     p.timeout,
 		ForkSession: true,
 	})
@@ -66,7 +67,7 @@ func (p *probeBackend) Fetch(ctx context.Context) (compact.ContextUsage, error) 
 			"duration_ms", duration.Milliseconds(),
 			"err", err,
 		)
-		return compact.ContextUsage{}, err
+		return contextusage.Snapshot{}, err
 	}
 	sessionContextLog.Logger().InfoContext(ctx, "session.context.probe.completed",
 		"component", "contextusage",

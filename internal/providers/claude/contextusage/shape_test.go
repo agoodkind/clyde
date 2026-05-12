@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"goodkind.io/clyde/internal/compact"
+	genericcontextusage "goodkind.io/clyde/internal/contextusage"
 	"goodkind.io/clyde/internal/providers/claude/contextusage"
 )
 
@@ -39,9 +39,9 @@ func TestUsageShape_FromRealProbe(t *testing.T) {
 		t.Fatalf("read fixture: %v", err)
 	}
 
-	var raw compact.ContextUsage
+	var raw genericcontextusage.Snapshot
 	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal ContextUsage: %v", err)
+		t.Fatalf("unmarshal Snapshot: %v", err)
 	}
 
 	if raw.TotalTokens <= 0 {
@@ -63,7 +63,7 @@ func TestUsageShape_FromRealProbe(t *testing.T) {
 		}
 	}
 
-	usage := contextusage.Usage{ContextUsage: raw}
+	usage := contextusage.Usage{Snapshot: raw}
 	if usage.StaticOverhead() < 0 {
 		t.Fatalf("StaticOverhead should never be negative, got %d", usage.StaticOverhead())
 	}
@@ -79,10 +79,10 @@ func TestUsageShape_FromRealProbe(t *testing.T) {
 // floor is derived from totalTokens, with Messages, Compact buffer,
 // and Free space removed as dynamic buckets.
 func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
-	raw := compact.ContextUsage{
+	raw := genericcontextusage.Snapshot{
 		TotalTokens: 890,
 		MaxTokens:   1000,
-		Categories: []compact.ContextCategory{
+		Categories: []genericcontextusage.Category{
 			{Name: "System prompt", Tokens: 100},
 			{Name: "System tools", Tokens: 200},
 			{Name: "Memory files", Tokens: 50},
@@ -92,7 +92,7 @@ func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
 			{Name: "Free space", Tokens: 5},
 		},
 	}
-	usage := contextusage.Usage{ContextUsage: raw}
+	usage := contextusage.Usage{Snapshot: raw}
 	want := 890 - 500 - 10 - 5
 	if got := usage.StaticOverhead(); got != want {
 		t.Fatalf("StaticOverhead = %d, want %d", got, want)
@@ -106,15 +106,15 @@ func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
 }
 
 func TestStaticOverhead_FallsBackWhenTotalMissing(t *testing.T) {
-	raw := compact.ContextUsage{
-		Categories: []compact.ContextCategory{
+	raw := genericcontextusage.Snapshot{
+		Categories: []genericcontextusage.Category{
 			{Name: "System prompt", Tokens: 100},
 			{Name: "System tools", Tokens: 200},
 			{Name: "Messages", Tokens: 500},
 			{Name: "Compact buffer", Tokens: 10},
 		},
 	}
-	usage := contextusage.Usage{ContextUsage: raw}
+	usage := contextusage.Usage{Snapshot: raw}
 	if got, want := usage.StaticOverhead(), 300; got != want {
 		t.Fatalf("StaticOverhead fallback = %d, want %d", got, want)
 	}

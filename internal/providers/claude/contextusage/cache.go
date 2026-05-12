@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"goodkind.io/clyde/internal/compact"
+	"goodkind.io/clyde/internal/contextusage"
 )
 
 // Cache TTL constants. These are upper bounds; callers that want a
@@ -27,11 +27,11 @@ const (
 // gates upgrades so a clyde binary reading an older file rejects
 // rather than silently misinterpreting fields.
 type cachedUsage struct {
-	SchemaVersion   int                  `json:"schema_version"`
-	Usage           compact.ContextUsage `json:"usage"`
-	CapturedAt      time.Time            `json:"captured_at"`
-	TranscriptMTime int64                `json:"transcript_mtime_ns"`
-	TranscriptPath  string               `json:"transcript_path"`
+	SchemaVersion   int                   `json:"schema_version"`
+	Usage           contextusage.Snapshot `json:"usage"`
+	CapturedAt      time.Time             `json:"captured_at"`
+	TranscriptMTime int64                 `json:"transcript_mtime_ns"`
+	TranscriptPath  string                `json:"transcript_path"`
 }
 
 // memoryCache is a single-session, single-process sync.Map wrapper.

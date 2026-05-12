@@ -1,4 +1,4 @@
-package compact
+package contextusage
 
 import (
 	"strings"
@@ -19,7 +19,7 @@ func TestBuildProbeArgsForksByDefault(t *testing.T) {
 		"-n clyde-probe-",
 		"--no-session-persistence",
 	} {
-		if !contains(joined, want) {
+		if !strings.Contains(joined, want) {
 			t.Fatalf("args missing %q: %s", want, joined)
 		}
 	}
@@ -31,7 +31,7 @@ func TestBuildProbeArgsCanSkipForking(t *testing.T) {
 		ForkSession: false,
 	})
 	joined := joinArgs(args)
-	if contains(joined, "--fork-session") {
+	if strings.Contains(joined, "--fork-session") {
 		t.Fatalf("args unexpectedly enabled forking: %s", joined)
 	}
 }
@@ -45,8 +45,4 @@ func joinArgs(args []string) string {
 		out.WriteString(arg)
 	}
 	return out.String()
-}
-
-func contains(s, sub string) bool {
-	return strings.Contains(s, sub)
 }

@@ -36,6 +36,7 @@ import (
 	"goodkind.io/clyde/internal/bridge"
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
+	genericcontextusage "goodkind.io/clyde/internal/contextusage"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
@@ -1752,21 +1753,24 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 		return emptySessionContextState(), err
 	}
 	defer release()
-	usage, err := compactengine.ProbeContextUsage(ctx, compactengine.ProbeOptions{
-		SessionID:   sess.Metadata.ProviderSessionID(),
-		WorkDir:     s.contextProbeWorkDir(sess),
-		Timeout:     60 * time.Second,
-		ForkSession: true,
-	})
+	prober, ok := genericcontextusage.Get(string(sess.ProviderID()))
+	if !ok {
+		err := fmt.Errorf("no context-usage prober registered for provider %q", sess.ProviderID())
+		s.log.WarnContext(ctx, "daemon.context_usage.probe_unregistered", "component", "daemon", "provider", string(sess.ProviderID()))
+		return emptySessionContextState(), err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID())
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.context_usage.probe_failed", "component", "daemon", "err", err)
 		return emptySessionContextState(), fmt.Errorf("probe context usage: %w", err)
 	}
 	return sessionContextState{
 		Usage: contextusage.Usage{
-			ContextUsage: usage,
-			CapturedAt:   daemonNow().UTC(),
-			Source:       contextusage.SourceProbe,
+			Snapshot:   usage,
+			CapturedAt: daemonNow().UTC(),
+			Source:     contextusage.SourceProbe,
 		},
 		Loaded:     true,
 		Status:     "",
@@ -1786,25 +1790,6 @@ func (s *Server) acquireContextRefreshPermit(ctx context.Context) (func(), error
 		s.log.WarnContext(ctx, "daemon.context_usage.refresh_permit_cancelled", "component", "daemon", "err", ctx.Err())
 		return nil, fmt.Errorf("acquire context refresh permit: %w", ctx.Err())
 	}
-}
-
-func (s *Server) contextProbeWorkDir(sess *session.Session) string {
-	candidates := []string{
-		strings.TrimSpace(sess.Metadata.WorkDir),
-		strings.TrimSpace(sess.Metadata.WorkspaceRoot),
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, home)
-	}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-	}
-	return ""
 }
 
 func (s *Server) renameContextState(oldName, newName string) {

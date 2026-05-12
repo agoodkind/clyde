@@ -5,46 +5,43 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/compact"
+	"goodkind.io/clyde/internal/contextusage"
 )
 
-// Source tags where a Usage value came from so consumers (loggers,
-// tests) can tell a fresh probe result apart from a cache hit.
-type Source string
+// Source re-exports the generic provider-neutral Source so existing
+// callers in this package can keep referencing a Source value without
+// importing the generic package directly.
+type Source = contextusage.Source
 
-// Source constants cover the three places Usage can originate. A
-// caller that wants to force freshness passes UsageOptions.Refresh to
-// suppress both cache tiers.
+// Source constants alias the generic ones so call sites that pass
+// SourceProbe/SourceCacheMem/SourceCacheDisk keep compiling.
 const (
-	// SourceProbe is a fresh spawn of claude with get_context_usage.
-	SourceProbe Source = "probe"
-	// SourceCacheMem is a hit in the in-process sync.Map cache.
-	SourceCacheMem Source = "cache_mem"
-	// SourceCacheDisk is a hit in the on-disk context.json cache.
-	SourceCacheDisk Source = "cache_disk"
+	SourceProbe     = contextusage.SourceProbe
+	SourceCacheMem  = contextusage.SourceCacheMem
+	SourceCacheDisk = contextusage.SourceCacheDisk
 )
 
-// Category mirrors Claude Code's /context row. We reuse the type from
-// compact so the ContextUsage payload decodes into the shape without
-// translation.
-type Category = compact.ContextCategory
+// Category mirrors Claude Code's /context row. The alias points at
+// the generic contextusage.Category so the provider-neutral package
+// owns the shape and the Claude package adapts to it.
+type Category = contextusage.Category
 
 // Usage is the authoritative answer to "what does /context show for
-// this session right now." The embedded ContextUsage carries the
-// shape Claude emits. CapturedAt and Source are layer metadata so
-// loggers can tell a 30s-old cache hit from a just-spawned probe.
+// this session right now." The embedded Snapshot carries the
+// provider-neutral shape; CapturedAt and Source are layer metadata
+// so loggers can tell a 30s-old cache hit from a just-spawned probe.
 type Usage struct {
-	compact.ContextUsage
+	contextusage.Snapshot
 
 	CapturedAt time.Time `json:"captured_at"`
 	Source     Source    `json:"source"`
 }
 
 // StaticOverhead returns the non-trimmable /context floor for the
-// session. It is derived from Claude's reported total by subtracting
-// the dynamic buckets Clyde can reason about: Messages, Compact
-// buffer, and Free space.
+// session. It delegates to the embedded Snapshot so the formula
+// lives in one place in the generic package.
 func (u Usage) StaticOverhead() int {
-	return compact.StaticOverheadFromUsage(u.ContextUsage)
+	return u.Snapshot.StaticOverhead()
 }
 
 // TailTokens returns the tokens attributable to post-boundary

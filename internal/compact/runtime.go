@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/contextusage"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
@@ -94,19 +96,14 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		StrippersText:   strippersDescribe(req.Strippers),
 		TargetDate:      "",
 	}
-	usage, usageErr := ProbeContextUsage(ctx, ProbeOptions{
-		SessionID:   req.Session.Metadata.ProviderSessionID(),
-		WorkDir:     req.Session.Metadata.WorkDir,
-		Timeout:     30 * time.Second,
-		ForkSession: true,
-	})
+	usage, usageErr := probeSessionSnapshot(ctx, req.Session)
 	if usageErr == nil {
 		upfront.CurrentTotal = usage.TotalTokens
 		upfront.MaxTokens = usage.MaxTokens
 		upfront.Messages = contextCategoryTokens(usage, "Messages")
 		upfront.CompactBuffer = contextCategoryTokens(usage, "Compact buffer")
 		upfront.Free = contextCategoryTokens(usage, "Free space")
-		upfront.ContextOverhead = StaticOverheadFromUsage(usage)
+		upfront.ContextOverhead = usage.StaticOverhead()
 	}
 	staticOverhead := 0
 	if req.TargetTokens > 0 {
@@ -396,7 +393,7 @@ func strippersDescribe(s Strippers) string {
 	return strings.Join(parts, ",")
 }
 
-func contextCategoryTokens(usage ContextUsage, name string) int {
+func contextCategoryTokens(usage contextusage.Snapshot, name string) int {
 	total := 0
 	for _, category := range usage.Categories {
 		if category.Name == name {
@@ -404,4 +401,36 @@ func contextCategoryTokens(usage ContextUsage, name string) int {
 		}
 	}
 	return total
+}
+
+// probeSessionSnapshot resolves the registered Prober for the
+// session's provider id and asks it for a Snapshot. The function
+// keeps the compact engine provider-neutral: it does not import any
+// provider's spawn machinery and instead relies on the package-level
+// registry the provider populated at init.
+func probeSessionSnapshot(ctx context.Context, sess *session.Session) (contextusage.Snapshot, error) {
+	prober, ok := contextusage.Get(string(sess.ProviderID()))
+	if !ok {
+		slog.WarnContext(ctx, "compact.runtime.probe_no_prober",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"provider", string(sess.ProviderID()),
+			"session_id", sess.Metadata.ProviderSessionID(),
+		)
+		return contextusage.Snapshot{}, fmt.Errorf("contextusage: no prober registered for provider %q", sess.ProviderID())
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID())
+	if err != nil {
+		slog.WarnContext(ctx, "compact.runtime.probe_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session_id", sess.Metadata.ProviderSessionID(),
+			"provider", string(sess.ProviderID()),
+			"err", err.Error(),
+		)
+		return contextusage.Snapshot{}, fmt.Errorf("contextusage: probe %s: %w", sess.ProviderID(), err)
+	}
+	return snapshot, nil
 }

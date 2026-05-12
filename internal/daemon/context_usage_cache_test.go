@@ -13,8 +13,8 @@ import (
 	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/compact"
-	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
+	"goodkind.io/clyde/internal/contextusage"
+	claudecontextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -410,13 +410,13 @@ func contextUsageManyTestSessions(t *testing.T, count int) (*session.FileStore, 
 
 func contextUsageTestState(totalTokens int) sessionContextState {
 	return sessionContextState{
-		Usage: contextusage.Usage{
-			ContextUsage: compact.ContextUsage{
+		Usage: claudecontextusage.Usage{
+			Snapshot: contextusage.Snapshot{
 				Model:       "claude-sonnet-4-5",
 				TotalTokens: totalTokens,
 				MaxTokens:   200000,
 				Percentage:  12,
-				Categories: []compact.ContextCategory{
+				Categories: []contextusage.Category{
 					{Name: "Messages", Tokens: totalTokens / 2},
 				},
 			},
