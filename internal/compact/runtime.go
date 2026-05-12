@@ -205,12 +205,17 @@ func RunRuntime(
 		StaticOverhead: staticOverhead,
 		Reserved:       req.Reserved,
 		Counter:        counter,
+		Out:            nil,
 		OnIteration: func(r IterationRecord) {
 			iterCount++
 			if onIteration != nil {
 				onIteration(RuntimeIteration{Iteration: r, Accepted: true})
 			}
 		},
+		BatchSize:     0,
+		ChatBatchSize: 0,
+		StopTimeout:   0,
+		CompactRunID:  "",
 	})
 	if err != nil {
 		compactLog.Logger().Error("compact.runtime.plan_failed",
