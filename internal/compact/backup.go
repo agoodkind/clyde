@@ -233,6 +233,9 @@ func ReadLedger(sessionID string) ([]LedgerEntry, error) {
 //     untouched.
 //  4. Atomically rename the temp file over the transcript.
 //  5. Rewrite the ledger without the popped entry.
+//  6. Unlink the snapshot file (best-effort) now that the restore and
+//     ledger pop both succeeded. Failures here are logged but do not
+//     fail Undo, since the user-visible transcript is already restored.
 //
 // PreApplyOffset stays in the ledger entry for diagnostic value (size
 // matching, audit). It is intentionally no longer used as a restore
@@ -272,6 +275,22 @@ func Undo(sessionID, transcriptPath string) (LedgerEntry, error) {
 		slog.Error("compact.undo.rewrite_ledger_failed", "component", "compact", "session_id", sessionID, "err", err)
 		return LedgerEntry{}, fmt.Errorf("rewrite ledger: %w", err)
 	}
+
+	// Restore and ledger rewrite both succeeded. The snapshot has
+	// fulfilled its purpose, so unlink it to prevent unbounded growth
+	// of the per-session backups dir (CLYDE-374). Best-effort: failures
+	// here do not roll back the user-visible restore, they just leave
+	// an orphan that operator tooling can sweep later.
+	var snapshotSize int64
+	if info, statErr := os.Stat(last.SnapshotPath); statErr == nil {
+		snapshotSize = info.Size()
+	}
+	if err := os.Remove(last.SnapshotPath); err != nil {
+		slog.Warn("compact.undo.snapshot_unlink_failed", "component", "compact", "session_id", sessionID, "snapshot", last.SnapshotPath, "err", err)
+	} else {
+		slog.Info("compact.undo.snapshot_removed", "component", "compact", "session_id", sessionID, "snapshot", last.SnapshotPath, "size_bytes", snapshotSize)
+	}
+
 	return last, nil
 }
 

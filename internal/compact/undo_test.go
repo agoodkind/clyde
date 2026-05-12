@@ -124,6 +124,61 @@ func TestUndoRestoresFromSnapshotAfterMidFileMutation(t *testing.T) {
 	}
 }
 
+// TestUndoRemovesSnapshotFileAfterSuccessfulRestore is the regression
+// test for CLYDE-374. Before the fix, --undo popped the ledger entry
+// but left the gzipped snapshot file on disk, so per-session backups
+// dirs grew without bound. The fix unlinks the snapshot only after
+// restore + ledger rewrite both succeed.
+func TestUndoRemovesSnapshotFileAfterSuccessfulRestore(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	path := writeTranscript(t, []string{
+		userText("u1", "", "line one", t0),
+		userText("u2", "u1", "line two", t0.Add(time.Second)),
+	})
+
+	slice, err := LoadSlice(path)
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+	sessionID := "session-undo-cleanup"
+	res, err := Apply(ApplyInput{
+		Slice:         slice,
+		SessionID:     sessionID,
+		Cwd:           tmp,
+		Version:       "test",
+		Target:        100,
+		BoundaryTail:  []OutputBlock{{Text: "tail"}},
+		PreCompactTok: 1000,
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.SnapshotPath == "" {
+		t.Fatalf("Apply returned empty SnapshotPath")
+	}
+	if _, err := os.Stat(res.SnapshotPath); err != nil {
+		t.Fatalf("snapshot missing after Apply: %v", err)
+	}
+
+	if _, err := Undo(sessionID, path); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+
+	entries, err := ReadLedger(sessionID)
+	if err != nil {
+		t.Fatalf("ReadLedger: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ledger entries after Undo = %d, want 0", len(entries))
+	}
+
+	if _, err := os.Stat(res.SnapshotPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("snapshot file still on disk after Undo: stat err = %v, want os.ErrNotExist", err)
+	}
+}
+
 // TestUndoRefusesWhenSnapshotMissing verifies Undo returns a typed
 // UndoSnapshotMissingError when the recorded snapshot is gone, rather
 // than silently falling back to byte-offset truncation.
