@@ -36,6 +36,7 @@ import (
 	"goodkind.io/clyde/internal/cli/mcp"
 	cliMITM "goodkind.io/clyde/internal/cli/mitm"
 	"goodkind.io/clyde/internal/cli/output"
+	"goodkind.io/clyde/internal/cli/probe"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/providers/registry"
@@ -159,6 +160,7 @@ func attachSubcommands(root *cobra.Command, f *cli.Factory) {
 	root.AddCommand(logs.NewCmd(f))
 	root.AddCommand(cliMITM.NewCmd(f))
 	root.AddCommand(mcp.NewCmd(f))
+	root.AddCommand(probe.NewCmd(f))
 	root.AddCommand(cmd.NewResumeCmd())
 }
 
