@@ -3281,13 +3281,14 @@ func compactIterationProto(sequence int32, iter compactengine.RuntimeIteration) 
 
 func compactFinalProto(result *compactengine.RuntimeResult) *clydev1.CompactFinal {
 	return &clydev1.CompactFinal{
-		BaselineTail:   compactInt32(result.Plan.BaselineTail),
-		FinalTail:      compactInt32(result.Plan.FinalTail),
-		HitTarget:      result.Plan.HitTarget,
-		TargetTokens:   compactInt32(result.Upfront.Target),
-		StaticFloor:    compactInt32(result.Upfront.StaticFloor),
-		ReservedTokens: compactInt32(result.Upfront.Reserved),
-		TranscriptPath: result.TranscriptPath,
+		BaselineTail:       compactInt32(result.Plan.BaselineTail),
+		FinalTail:          compactInt32(result.Plan.FinalTail),
+		HitTarget:          result.Plan.HitTarget,
+		TargetTokens:       compactInt32(result.Upfront.Target),
+		StaticFloor:        compactInt32(result.Upfront.StaticFloor),
+		ReservedTokens:     compactInt32(result.Upfront.Reserved),
+		TranscriptPath:     result.TranscriptPath,
+		BoundaryTailBlocks: compactInt32(len(result.Plan.BoundaryTail)),
 	}
 }
 

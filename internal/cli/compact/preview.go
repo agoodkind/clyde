@@ -228,24 +228,6 @@ func writeMetricsDashboardText(out io.Writer, upfront *clydev1.CompactUpfront) e
 	return nil
 }
 
-func categoryCounts(slice *compactengine.Slice) (thinking, images, toolPairs, chatTurns int) {
-	for _, e := range slice.PostBoundary {
-		for _, b := range e.Content {
-			switch b.Type {
-			case "thinking", "redacted_thinking":
-				thinking++
-			case "image":
-				images++
-			}
-		}
-		if e.Type == "user" || e.Type == "assistant" {
-			chatTurns++
-		}
-	}
-	toolPairs = len(slice.PairIndex)
-	return
-}
-
 func strippersDescribe(s compactengine.Strippers) string {
 	var parts []string
 	if s.Thinking {
