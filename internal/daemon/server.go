@@ -1762,7 +1762,10 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{RefreshHint: false})
+	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{
+		RefreshHint: false,
+		WorkDir:     sess.Metadata.WorkspaceRoot,
+	})
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.context_usage.probe_failed", "component", "daemon", "err", err)
 		return emptySessionContextState(), fmt.Errorf("probe context usage: %w", err)
@@ -2858,7 +2861,10 @@ func (s *Server) CalibrateSession(ctx context.Context, req *clydev1.CalibrateSes
 	if !ok {
 		return nil, status.Errorf(codes.FailedPrecondition, "no context-usage prober registered for provider %q", sess.ProviderID())
 	}
-	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{RefreshHint: false})
+	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), genericcontextusage.ProbeOptions{
+		RefreshHint: false,
+		WorkDir:     sess.Metadata.WorkspaceRoot,
+	})
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.calibrate.probe_failed",
 			"component", "daemon",

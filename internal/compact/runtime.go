@@ -118,6 +118,17 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		UsageCategories:     nil,
 	}
 	usage, usageErr := probeSessionSnapshot(ctx, req.Session, req.Refresh)
+	if usageErr != nil && req.TargetTokens > 0 {
+		slog.ErrorContext(ctx, "compact.runtime.upfront.probe_required",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"target", req.TargetTokens,
+			"err", usageErr.Error(),
+		)
+		return RuntimeUpfront{}, 0, nil, fmt.Errorf("compact: upfront /context probe is required for targeted run (target=%d): %w", req.TargetTokens, usageErr)
+	}
 	if usageErr == nil {
 		upfront.CurrentTotal = usage.TotalTokens
 		upfront.MaxTokens = usage.MaxTokens
@@ -466,7 +477,10 @@ func probeSessionSnapshot(ctx context.Context, sess *session.Session, refresh bo
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{RefreshHint: refresh})
+	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
+		RefreshHint: refresh,
+		WorkDir:     sess.Metadata.WorkspaceRoot,
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "compact.runtime.probe_failed",
 			"component", "compact",

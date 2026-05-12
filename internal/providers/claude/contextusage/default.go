@@ -18,19 +18,20 @@ const claudeProberID = "claude"
 type claudeProber struct{}
 
 // Probe satisfies the generic contextusage.Prober interface. The
-// sessionRef argument is the Claude session UUID; WorkDir defaults
-// to the empty string here because the generic caller does not own
-// per-session workspace state.
+// sessionRef argument is the Claude session UUID and WorkDir is the
+// session's workspace root: the caller passes it through so the
+// spawn anchors at the project directory, which is required for
+// claude --resume to locate MCP servers, hooks, and settings.
 //
 // The generic RefreshHint is accepted for protocol completeness. The
 // claude prober spawns a fresh /context probe on every call, so the
 // hint is effectively a no-op today; the field exists so the daemon
 // can wire `clyde compact --refresh` through without a follow-up
 // interface change once a caching prober path is added.
-func (claudeProber) Probe(ctx context.Context, sessionRef string, _ contextusage.ProbeOptions) (contextusage.Snapshot, error) {
+func (claudeProber) Probe(ctx context.Context, sessionRef string, opts contextusage.ProbeOptions) (contextusage.Snapshot, error) {
 	return ProbeContextUsage(ctx, ProbeOptions{
 		SessionID:   sessionRef,
-		WorkDir:     "",
+		WorkDir:     opts.WorkDir,
 		Binary:      "",
 		Timeout:     0,
 		ForkSession: true,

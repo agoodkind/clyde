@@ -30,6 +30,15 @@ type ProbeOptions struct {
 	// snapshot and force a fresh provider-native probe. Implementations
 	// that do not cache treat it as a no-op.
 	RefreshHint bool
+
+	// WorkDir is the filesystem anchor for the spawn. Provider
+	// implementations that run a sidecar process (claude --resume,
+	// codex resume, etc.) set the spawn's cwd to this value so the
+	// sidecar can find the project's MCP servers, hooks, and settings.
+	// Callers pass the session's workspace root. An empty string lets
+	// the implementation inherit its parent process cwd, which is
+	// usually wrong for daemon-spawned probes.
+	WorkDir string
 }
 
 // Prober is the generic contract the compact engine and any other
