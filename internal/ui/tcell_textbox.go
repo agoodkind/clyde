@@ -256,8 +256,27 @@ func (tb *TextBox) JumpToScrollbarY(y int) {
 	tb.Offset = clamp(newOff, 0, maxOff)
 }
 
-// HandleEvent handles scroll keys when focused.
+// HandleEvent handles scroll keys when focused and mouse wheel over
+// the box rect. Mouse wheel is accepted regardless of focus so any
+// overlay that wraps a TextBox (full-screen viewer, side pane) gets
+// wheel scroll for free without re-implementing the wheel routing.
 func (tb *TextBox) HandleEvent(ev tcell.Event) bool {
+	if em, ok := ev.(*tcell.EventMouse); ok {
+		x, y := em.Position()
+		if !tb.Rect.Contains(x, y) {
+			return false
+		}
+		btns := em.Buttons()
+		if btns&tcell.WheelUp != 0 {
+			tb.Offset = imax(0, tb.Offset-3)
+			return true
+		}
+		if btns&tcell.WheelDown != 0 {
+			tb.Offset += 3
+			return true
+		}
+		return false
+	}
 	if !tb.Focused {
 		return false
 	}
