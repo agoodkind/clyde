@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/cli/output"
 	compactengine "goodkind.io/clyde/internal/compact"
 	contextusage "goodkind.io/clyde/internal/providers/claude/contextusage"
 	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
@@ -124,7 +125,7 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	}
 	if !input.Strippers.Any() && input.Target == 0 {
 		refresh, _ := cmd.Flags().GetBool("refresh")
-		return runMetricsDashboard(cmd.Context(), out, input.Session, input.Transcript, refresh)
+		return runMetricsDashboard(cmd, out, input.Session, input.Transcript, refresh)
 	}
 	if input.Target > 0 {
 		return runTargetCompactViaDaemon(cmd, out, input)
@@ -297,7 +298,7 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 
 func runCompactMaintenanceAction(cmd *cobra.Command, out io.Writer, input compactCommandInput) (bool, error) {
 	if listBackups, _ := cmd.Flags().GetBool("list-backups"); listBackups {
-		return true, runListBackups(out, input.Session)
+		return true, runListBackups(cmd, out, input.Session)
 	}
 	if undo, _ := cmd.Flags().GetBool("undo"); undo {
 		return true, runUndo(out, input.Session, input.Transcript)
@@ -368,11 +369,37 @@ func runLocalCompact(cmd *cobra.Command, out io.Writer, input compactCommandInpu
 		return err
 	}
 
-	planResult, isTTY, progress, err := runCompactPlan(ctx, out, input, slice, mode, staticOverhead, counter, upfrontStats)
+	enc, encErr := output.From(cmd, out)
+	if encErr != nil {
+		slog.Warn("cli.compact.run.encoder_failed",
+			"component", "cli",
+			"subcomponent", "compact",
+			"session", input.Name,
+			"err", encErr,
+		)
+		return fmt.Errorf("resolve output encoder: %w", encErr)
+	}
+	jsonMode := enc.Format == output.FormatJSON
+
+	planResult, isTTY, progress, err := runCompactPlan(ctx, out, input, slice, mode, staticOverhead, counter, upfrontStats, jsonMode)
 	if err != nil {
 		return err
 	}
-	renderCompactResult(out, input, slice, planResult, progress, staticOverhead, isTTY)
+	if jsonMode {
+		emitErr := emitStreamEvent(out, ResultEvent{
+			Event:        "result",
+			HitTarget:    planResult.HitTarget,
+			BaselineTail: planResult.BaselineTail,
+			FinalTail:    planResult.FinalTail,
+			Target:       input.Target,
+			CompactRunID: "",
+		})
+		if emitErr != nil {
+			return emitErr
+		}
+	} else {
+		renderCompactResult(out, input, slice, planResult, progress, staticOverhead, isTTY)
+	}
 	if !input.Apply {
 		cliCompactLog.Logger().Info("cli.compact.preview.completed", "session", input.Name, "applied", false)
 		return nil
@@ -479,12 +506,28 @@ func runCompactPlan(
 	staticOverhead int,
 	counter compactengine.Counter,
 	upfrontStats UpfrontStats,
+	jsonMode bool,
 ) (*compactengine.PlanResult, bool, *progressView, error) {
 	cliCompactLog.Logger().Info("cli.compact.preview.run_plan.started", "session", input.Name, "target", input.Target, "mode", mode.Label())
 	isTTY := isTerminal(out)
 	var progress *progressView
 	var onIter func(compactengine.IterationRecord)
-	if input.Target > 0 {
+	if jsonMode && input.Target > 0 {
+		iterNum := 0
+		onIter = func(rec compactengine.IterationRecord) {
+			iterNum++
+			_ = emitStreamEvent(out, IterationEvent{
+				Event:        "iteration",
+				IterNum:      iterNum,
+				Step:         rec.Step,
+				TailTokens:   rec.TailTokens,
+				CtxTotal:     rec.CtxTotal,
+				Projected:    rec.CtxTotal,
+				Delta:        rec.Delta,
+				CompactRunID: "",
+			})
+		}
+	} else if input.Target > 0 {
 		progress = newProgressView(out, input.Target, mode, isTTY, upfrontStats)
 		onIter = progress.Update
 	}
