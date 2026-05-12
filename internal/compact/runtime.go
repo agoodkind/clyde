@@ -234,18 +234,18 @@ func RunRuntime(
 	)
 	var counter Counter
 	if req.TargetTokens > 0 {
-		key, keyErr := AnthropicAPIKey()
-		if keyErr != nil {
-			compactLog.Logger().Error("compact.runtime.api_key_missing",
+		built, counterErr := buildProberCounter(req, modelForCount)
+		if counterErr != nil {
+			compactLog.Logger().Error("compact.runtime.counter_init_failed",
 				"component", "compact",
 				"subcomponent", "runtime",
 				"session", req.Session.Name,
 				"session_id", req.Session.Metadata.ProviderSessionID(),
-				"err", keyErr.Error(),
+				"err", counterErr.Error(),
 			)
-			return nil, keyErr
+			return nil, counterErr
 		}
-		counter = &runtimeLayerCounter{counter: NewTokenCounter(key, modelForCount)}
+		counter = built
 	}
 
 	var iterCount int
@@ -361,12 +361,39 @@ func RunRuntime(
 	return result, nil
 }
 
-type runtimeLayerCounter struct {
-	counter *TokenCounter
-}
-
-func (c *runtimeLayerCounter) CountSyntheticUser(ctx context.Context, contentArray []OutputBlock) (int, error) {
-	return c.counter.CountSyntheticUser(ctx, contentArray)
+// buildProberCounter wires the planner to the registered
+// CandidateProber for the session's provider. The optional debug
+// cross-check against Anthropic count_tokens is enabled only when the
+// CLYDE_COMPACT_DEBUG_COUNT_TOKENS env var is set and an API key is
+// available; the debug counter is never authoritative.
+func buildProberCounter(req RuntimeRequest, modelForCount string) (Counter, error) {
+	providerID := string(req.Session.ProviderID())
+	prober, ok := contextusage.GetCandidate(providerID)
+	if !ok {
+		return nil, fmt.Errorf("compact: no candidate prober registered for provider %q", providerID)
+	}
+	cfg := proberCounterConfig{
+		Prober:         prober,
+		SessionID:      req.Session.Metadata.ProviderSessionID(),
+		TranscriptPath: req.Session.Metadata.ProviderTranscriptPath(),
+		WorkDir:        req.Session.Metadata.WorkspaceRoot,
+		Cwd:            req.Session.Metadata.WorkspaceRoot,
+		Version:        "clyde",
+		Debug:          nil,
+	}
+	if os.Getenv("CLYDE_COMPACT_DEBUG_COUNT_TOKENS") == "1" {
+		if key, keyErr := AnthropicAPIKey(); keyErr == nil && strings.TrimSpace(modelForCount) != "" {
+			cfg.Debug = NewTokenCounter(key, modelForCount)
+		} else if keyErr != nil {
+			compactLog.Logger().Debug("compact.runtime.debug_counter_disabled",
+				"component", "compact",
+				"subcomponent", "runtime",
+				"reason", "api_key_unavailable",
+				"err", keyErr.Error(),
+			)
+		}
+	}
+	return newProberCounter(cfg), nil
 }
 
 var runtimeModelFamilyRegex = regexp.MustCompile(`claude-(?:\d+-)*(\w+)-\d+`)
