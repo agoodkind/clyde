@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package clyde.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "goodkind.io/clyde/api/clyde/v1;clydev1";
 
 message ProbeContextUsageRequest {
@@ -23,4 +25,35 @@ message ProbeContextUsageResponse {
   int32 max_tokens = 5;
   int32 percentage = 6;
   repeated ContextUsageCategory categories = 7;
+}
+
+// CalibrationRecord mirrors the per-session calibration file written
+// by compactengine.SaveCalibration. Fields match
+// compact.Calibration exactly so the RPC envelope and the on-disk
+// record stay in lock step.
+message CalibrationRecord {
+  int64 static_overhead = 1;
+  google.protobuf.Timestamp captured_at = 2;
+  string model = 3;
+}
+
+message CalibrateSessionRequest {
+  string session_name = 1;
+}
+
+message CalibrateSessionResponse {
+  string session_name = 1;
+  string session_id = 2;
+  CalibrationRecord calibration = 3;
+}
+
+message SetCalibrationRequest {
+  string session_name = 1;
+  int64 static_overhead = 2;
+}
+
+message SetCalibrationResponse {
+  string session_name = 1;
+  string session_id = 2;
+  CalibrationRecord calibration = 3;
 }
