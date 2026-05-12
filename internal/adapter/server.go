@@ -28,8 +28,16 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/slogger"
 )
+
+// boolPointer returns a heap-allocated copy of value so callers can
+// hand off a *bool without exposing addresses of stack locals.
+func boolPointer(value bool) *bool {
+	copied := value
+	return &copied
+}
 
 // DefaultPort is the loopback port the adapter listens on when
 // AdapterConfig.Port is zero. The value matches the Ollama default
@@ -205,7 +213,15 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
-	s.registerProviders(ctx, cfg, logging, runtimeLogging, deps, log, max, wsReg)
+	probeCfg := config.NewConfigWithDefaults()
+	probeCfg.Logging = logging
+	probeCfg.Adapter.WireCapture = cfg.WireCapture
+	policies, err := logpolicy.Resolve(*probeCfg)
+	if err != nil {
+		log.LogAttrs(ctx, slog.LevelError, "adapter.logpolicy.resolve_failed", slog.String("err", err.Error()))
+		return nil, fmt.Errorf("adapter: resolve logging policy: %w", err)
+	}
+	s.registerProviders(ctx, cfg, logging, runtimeLogging, deps, log, max, wsReg, policies)
 	s.mux = s.routes()
 	return s, nil
 }
@@ -222,6 +238,7 @@ func (s *Server) registerProviders(
 	log *slog.Logger,
 	maxConcurrent int,
 	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
+	policies logpolicy.PolicySet,
 ) {
 	if cfg.Codex.Enabled {
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
@@ -229,7 +246,7 @@ func (s *Server) registerProviders(
 			Auth:       codexAuthLookup{server: s},
 			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
-		}, codexProviderOptionsWithRegistry(logging, runtimeLogging, wsReg))
+		}, codexProviderOptionsWithRegistry(logging, runtimeLogging, wsReg, policies))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderCodex)),
@@ -237,7 +254,7 @@ func (s *Server) registerProviders(
 		)
 	}
 	if cfg.DirectOAuth {
-		s.registerAnthropicProvider(ctx, cfg, deps, log, maxConcurrent)
+		s.registerAnthropicProvider(ctx, cfg, deps, log, maxConcurrent, policies)
 	}
 }
 
@@ -250,6 +267,7 @@ func (s *Server) registerAnthropicProvider(
 	deps Deps,
 	log *slog.Logger,
 	maxConcurrent int,
+	policies logpolicy.PolicySet,
 ) {
 	s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
 	id := cfg.ClientIdentity
@@ -277,12 +295,19 @@ func (s *Server) registerAnthropicProvider(
 		CCEntrypoint:            id.CCEntrypoint,
 		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
 	})
+	anthropicSidecarRotation := policies.Sinks[logpolicy.SinkAnthropicSidecar].Rotation
 	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
 		Config: cfg,
 		Logger: slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
 	}, anthropic.ProviderOptions{
 		Prepare:         s.prepareAnthropicProviderRequest,
 		ExecutePrepared: s.executeAnthropicPreparedRequest,
+		FileLog: anthropic.FileLogRotationConfig{
+			MaxSizeMB:  anthropicSidecarRotation.MaxSizeMB,
+			MaxBackups: anthropicSidecarRotation.MaxBackups,
+			MaxAgeDays: anthropicSidecarRotation.MaxAgeDays,
+			Compress:   boolPointer(anthropicSidecarRotation.Compress),
+		},
 	})
 	s.providerRegistry.Register(s.anthropicProvider)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
@@ -301,7 +326,9 @@ func codexProviderOptionsWithRegistry(
 	logging config.LoggingConfig,
 	runtimeLogging *RuntimeLogging,
 	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
+	policies logpolicy.PolicySet,
 ) adaptercodex.ProviderOptions {
+	codexSidecarRotation := policies.Sinks[logpolicy.SinkCodexSidecar].Rotation
 	return adaptercodex.ProviderOptions{
 		AccountID: "",
 		BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
@@ -310,10 +337,10 @@ func codexProviderOptionsWithRegistry(
 			return adaptercodex.BodyLogConfig{Mode: body.Mode, MaxKB: body.MaxKB}
 		},
 		FileLog: adaptercodex.FileLogRotationConfig{
-			MaxSizeMB:  logging.Rotation.MaxSizeMB,
-			MaxBackups: logging.Rotation.MaxBackups,
-			MaxAgeDays: logging.Rotation.MaxAgeDays,
-			Compress:   logging.Rotation.Compress,
+			MaxSizeMB:  codexSidecarRotation.MaxSizeMB,
+			MaxBackups: codexSidecarRotation.MaxBackups,
+			MaxAgeDays: codexSidecarRotation.MaxAgeDays,
+			Compress:   boolPointer(codexSidecarRotation.Compress),
 		},
 		WsSessionIdleTTL:  0,
 		WsSessionRegistry: wsReg,

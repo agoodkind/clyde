@@ -3,13 +3,58 @@ package anthropic
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"goodkind.io/gklog"
 )
+
+// FileLogRotationConfig controls the dedicated Anthropic JSONL sidecar sink.
+// It mirrors internal/config.LoggingRotation without importing config into
+// the provider package, matching the Codex sidecar pattern.
+type FileLogRotationConfig struct {
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+	Compress   *bool
+}
+
+const (
+	defaultAnthropicLogRotationMaxSizeMB  = 64
+	defaultAnthropicLogRotationMaxBackups = 192
+	defaultAnthropicLogRotationMaxAgeDays = 14
+)
+
+func normalizeAnthropicLogRotation(rotation FileLogRotationConfig) FileLogRotationConfig {
+	if rotation.MaxSizeMB <= 0 {
+		rotation.MaxSizeMB = defaultAnthropicLogRotationMaxSizeMB
+	}
+	if rotation.MaxBackups <= 0 {
+		rotation.MaxBackups = defaultAnthropicLogRotationMaxBackups
+	}
+	if rotation.MaxAgeDays <= 0 {
+		rotation.MaxAgeDays = defaultAnthropicLogRotationMaxAgeDays
+	}
+	if rotation.Compress == nil {
+		rotation.Compress = new(true)
+	}
+	return rotation
+}
+
+func (c FileLogRotationConfig) toGKLog() gklog.RotationConfig {
+	c = normalizeAnthropicLogRotation(c)
+	return gklog.RotationConfig{
+		MaxSizeMB:  c.MaxSizeMB,
+		MaxBackups: c.MaxBackups,
+		MaxAgeDays: c.MaxAgeDays,
+		Compress:   c.Compress,
+	}
+}
 
 // rateLimitAttr is one anthropic-ratelimit-* response header captured
 // alongside a /v1/messages response. Kept as a typed pair so the
@@ -37,9 +82,30 @@ func rateLimitAttrs(h http.Header) []rateLimitAttr {
 }
 
 var (
-	fileLoggerOnce sync.Once
-	fileLogger     *slog.Logger
+	fileLoggerMu       sync.Mutex
+	fileLoggerOnce     sync.Once
+	fileLogger         *slog.Logger
+	fileLoggerCloser   io.Closer
+	fileLoggerRotation = FileLogRotationConfig{
+		MaxSizeMB:  defaultAnthropicLogRotationMaxSizeMB,
+		MaxBackups: defaultAnthropicLogRotationMaxBackups,
+		MaxAgeDays: defaultAnthropicLogRotationMaxAgeDays,
+		Compress:   new(true),
+	}
 )
+
+// ConfigureAnthropicFileLogger installs rotation settings for anthropic.jsonl
+// before the first Anthropic event is emitted. Later calls are ignored
+// because slog handlers bind their writer path and lumberjack settings at
+// construction.
+func ConfigureAnthropicFileLogger(rotation FileLogRotationConfig) {
+	fileLoggerMu.Lock()
+	defer fileLoggerMu.Unlock()
+	if fileLogger != nil {
+		return
+	}
+	fileLoggerRotation = normalizeAnthropicLogRotation(rotation)
+}
 
 // AnthropicLogPath returns the JSONL file the anthropic package
 // double-writes its events to. Honors $CLYDE_ANTHROPIC_LOG_PATH for
@@ -61,16 +127,18 @@ func AnthropicLogPath() string {
 }
 
 func dedicatedLogger() *slog.Logger {
+	fileLoggerMu.Lock()
+	defer fileLoggerMu.Unlock()
 	fileLoggerOnce.Do(func() {
 		path := AnthropicLogPath()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return
 		}
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return
+		handler := gklog.FileJSON(path, slog.LevelDebug, fileLoggerRotation.toGKLog())
+		if closer, ok := handler.(io.Closer); ok {
+			fileLoggerCloser = closer
 		}
-		fileLogger = slog.New(slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		fileLogger = slog.New(handler)
 	})
 	return fileLogger
 }

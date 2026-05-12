@@ -99,9 +99,10 @@ type Server struct {
 // NewServer constructs a Server with an initialized livetrack registry.
 // Callers must call Serve to start accepting connections. The registry is
 // available immediately via Tunnels so callers outside this package can
-// reference the registry before Serve blocks.
-func NewServer() *Server {
-	log, cleanup := audit.NewLogger("mcp")
+// reference the registry before Serve blocks. The audit rotation budget
+// is owned by the logpolicy boundary and supplied by the caller.
+func NewServer(auditRotation audit.RotationConfig) *Server {
+	log, cleanup := audit.NewLogger("mcp", auditRotation)
 	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
 		Component:     "mcpserver",
 		Concern:       slogger.ConcernMCPServerRequest,

@@ -24,6 +24,26 @@ max_backups = 192
 max_age_days = 14
 compress = true
 
+# Per-sink rotation overrides. Each sink inherits the global
+# [logging.rotation] block above unless its own [logging.sinks.<name>.rotation]
+# table overrides a field. Use these to tighten retention for noisy sinks
+# (for example three-day retention on the audit log) without affecting
+# unrelated sinks.
+#
+# [logging.sinks.audit.rotation]
+# enabled = true
+# max_size_mb = 16
+# max_backups = 6
+# max_age_days = 3
+# compress = true
+#
+# [logging.sinks.anthropic_sidecar.rotation]
+# enabled = true
+# max_size_mb = 32
+# max_backups = 12
+# max_age_days = 3
+# compress = true
+
 # Optional per-process log file overrides.
 # Defaults:
 #   TUI and CLI commands -> $XDG_STATE_HOME/clyde/clyde-tui.jsonl

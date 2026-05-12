@@ -80,6 +80,10 @@ const (
 	LoggingSinkTUI = "tui"
 	// LoggingSinkCodexSidecar names the Codex sidecar log sink.
 	LoggingSinkCodexSidecar = "codex_sidecar"
+	// LoggingSinkAnthropicSidecar names the Anthropic sidecar log sink.
+	LoggingSinkAnthropicSidecar = "anthropic_sidecar"
+	// LoggingSinkAudit names the cross-process audit log sink.
+	LoggingSinkAudit = "audit"
 	// LoggingSinkConcerns names the structured concern log sink.
 	LoggingSinkConcerns = "concerns"
 	// LoggingSinkTranscripts names the per-chat transcript sink.

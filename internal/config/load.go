@@ -252,13 +252,15 @@ const (
 )
 
 var knownLoggingSinkNames = map[string]bool{
-	LoggingSinkDaemon:       true,
-	LoggingSinkTUI:          true,
-	LoggingSinkCodexSidecar: true,
-	LoggingSinkConcerns:     true,
-	LoggingSinkTranscripts:  true,
-	LoggingSinkMITMCapture:  true,
-	LoggingSinkMITMRaw:      true,
+	LoggingSinkDaemon:           true,
+	LoggingSinkTUI:              true,
+	LoggingSinkCodexSidecar:     true,
+	LoggingSinkAnthropicSidecar: true,
+	LoggingSinkAudit:            true,
+	LoggingSinkConcerns:         true,
+	LoggingSinkTranscripts:      true,
+	LoggingSinkMITMCapture:      true,
+	LoggingSinkMITMRaw:          true,
 }
 
 func applyLoggingDefaultsAndValidate(cfg *Config) error {

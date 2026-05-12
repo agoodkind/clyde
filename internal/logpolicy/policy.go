@@ -20,6 +20,10 @@ const (
 	SinkTUI SinkName = config.LoggingSinkTUI
 	// SinkCodexSidecar identifies the Codex sidecar log sink.
 	SinkCodexSidecar SinkName = config.LoggingSinkCodexSidecar
+	// SinkAnthropicSidecar identifies the Anthropic sidecar log sink.
+	SinkAnthropicSidecar SinkName = config.LoggingSinkAnthropicSidecar
+	// SinkAudit identifies the cross-process audit log sink.
+	SinkAudit SinkName = config.LoggingSinkAudit
 	// SinkConcerns identifies the structured concern log sink.
 	SinkConcerns SinkName = config.LoggingSinkConcerns
 	// SinkTranscripts identifies the per-chat transcript log sink.
@@ -397,6 +401,8 @@ func allSinkNames() []SinkName {
 		SinkDaemon,
 		SinkTUI,
 		SinkCodexSidecar,
+		SinkAnthropicSidecar,
+		SinkAudit,
 		SinkConcerns,
 		SinkTranscripts,
 		SinkMITMCapture,
