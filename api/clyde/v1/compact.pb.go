@@ -844,16 +844,17 @@ func (x *CompactApplyMutation) GetLedgerPath() string {
 }
 
 type CompactFinal struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	BaselineTail   int32                  `protobuf:"varint,1,opt,name=baseline_tail,json=baselineTail,proto3" json:"baseline_tail,omitempty"`
-	FinalTail      int32                  `protobuf:"varint,2,opt,name=final_tail,json=finalTail,proto3" json:"final_tail,omitempty"`
-	HitTarget      bool                   `protobuf:"varint,3,opt,name=hit_target,json=hitTarget,proto3" json:"hit_target,omitempty"`
-	TargetTokens   int32                  `protobuf:"varint,4,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
-	StaticFloor    int32                  `protobuf:"varint,5,opt,name=static_floor,json=staticFloor,proto3" json:"static_floor,omitempty"`
-	ReservedTokens int32                  `protobuf:"varint,6,opt,name=reserved_tokens,json=reservedTokens,proto3" json:"reserved_tokens,omitempty"`
-	TranscriptPath string                 `protobuf:"bytes,7,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	BaselineTail       int32                  `protobuf:"varint,1,opt,name=baseline_tail,json=baselineTail,proto3" json:"baseline_tail,omitempty"`
+	FinalTail          int32                  `protobuf:"varint,2,opt,name=final_tail,json=finalTail,proto3" json:"final_tail,omitempty"`
+	HitTarget          bool                   `protobuf:"varint,3,opt,name=hit_target,json=hitTarget,proto3" json:"hit_target,omitempty"`
+	TargetTokens       int32                  `protobuf:"varint,4,opt,name=target_tokens,json=targetTokens,proto3" json:"target_tokens,omitempty"`
+	StaticFloor        int32                  `protobuf:"varint,5,opt,name=static_floor,json=staticFloor,proto3" json:"static_floor,omitempty"`
+	ReservedTokens     int32                  `protobuf:"varint,6,opt,name=reserved_tokens,json=reservedTokens,proto3" json:"reserved_tokens,omitempty"`
+	TranscriptPath     string                 `protobuf:"bytes,7,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
+	BoundaryTailBlocks int32                  `protobuf:"varint,8,opt,name=boundary_tail_blocks,json=boundaryTailBlocks,proto3" json:"boundary_tail_blocks,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *CompactFinal) Reset() {
@@ -933,6 +934,13 @@ func (x *CompactFinal) GetTranscriptPath() string {
 		return x.TranscriptPath
 	}
 	return ""
+}
+
+func (x *CompactFinal) GetBoundaryTailBlocks() int32 {
+	if x != nil {
+		return x.BoundaryTailBlocks
+	}
+	return 0
 }
 
 type CompactEvent struct {
@@ -1288,7 +1296,7 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\x11post_apply_offset\x18\x04 \x01(\x03R\x0fpostApplyOffset\x12#\n" +
 	"\rsnapshot_path\x18\x05 \x01(\tR\fsnapshotPath\x12\x1f\n" +
 	"\vledger_path\x18\x06 \x01(\tR\n" +
-	"ledgerPath\"\x8b\x02\n" +
+	"ledgerPath\"\xbd\x02\n" +
 	"\fCompactFinal\x12#\n" +
 	"\rbaseline_tail\x18\x01 \x01(\x05R\fbaselineTail\x12\x1d\n" +
 	"\n" +
@@ -1298,7 +1306,8 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\rtarget_tokens\x18\x04 \x01(\x05R\ftargetTokens\x12!\n" +
 	"\fstatic_floor\x18\x05 \x01(\x05R\vstaticFloor\x12'\n" +
 	"\x0freserved_tokens\x18\x06 \x01(\x05R\x0ereservedTokens\x12'\n" +
-	"\x0ftranscript_path\x18\a \x01(\tR\x0etranscriptPath\"\xd6\x03\n" +
+	"\x0ftranscript_path\x18\a \x01(\tR\x0etranscriptPath\x120\n" +
+	"\x14boundary_tail_blocks\x18\b \x01(\x05R\x12boundaryTailBlocks\"\xd6\x03\n" +
 	"\fCompactEvent\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x05R\bsequence\x12/\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1b.clyde.v1.CompactEvent.KindR\x04kind\x12\x18\n" +

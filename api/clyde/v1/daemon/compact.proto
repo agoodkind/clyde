@@ -102,6 +102,7 @@ message CompactFinal {
   int32 static_floor = 5;
   int32 reserved_tokens = 6;
   string transcript_path = 7;
+  int32 boundary_tail_blocks = 8;
 }
 
 message CompactEvent {
