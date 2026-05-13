@@ -76,6 +76,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		)
 		return RuntimeUpfront{}, 0, nil, err
 	}
+	slice = Rehydrate(slice, 8)
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 	transcriptPath := req.Session.Metadata.ProviderTranscriptPath()
 	var fileSize int64
