@@ -162,6 +162,7 @@ func attachSubcommands(root *cobra.Command, f *cli.Factory) {
 	root.AddCommand(cliMITM.NewCmd(f))
 	root.AddCommand(mcp.NewCmd(f))
 	root.AddCommand(probe.NewCmd(f))
+	root.AddCommand(newRenameCmd(f))
 	root.AddCommand(sessioncmd.NewCmd(f))
 	root.AddCommand(cmd.NewResumeCmd())
 }

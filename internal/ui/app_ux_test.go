@@ -1924,3 +1924,40 @@ func TestUX_RowShowsProviderTitleWhenItDiffers(t *testing.T) {
 		t.Fatalf("provider title = %q, want Provider Swan", row[1].Text)
 	}
 }
+
+func TestUX_RenamePromptUpdatesTitleOnly(t *testing.T) {
+	called := make(chan *session.Session, 1)
+	a := NewApp([]*session.Session{{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:         "merry-swan",
+			SessionID:    "shared",
+			Title:        "Old Clyde Title",
+			LastAccessed: time.Now(),
+		},
+	}}, AppCallbacks{
+		RenameSession: func(sess *session.Session) (string, error) {
+			called <- sess
+			return sess.Metadata.Title, nil
+		},
+	})
+
+	a.openRenamePrompt(a.sessions[0])
+	overlay, ok := a.overlay.(*InputOverlay)
+	if !ok {
+		t.Fatalf("overlay = %T, want *InputOverlay", a.overlay)
+	}
+	overlay.Input.OnSubmit("New Clyde Title")
+
+	select {
+	case sess := <-called:
+		if sess.Name != "merry-swan" {
+			t.Fatalf("Name = %q, want merry-swan", sess.Name)
+		}
+		if sess.Metadata.Title != "New Clyde Title" {
+			t.Fatalf("Title = %q, want New Clyde Title", sess.Metadata.Title)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("RenameSession callback was not called")
+	}
+}

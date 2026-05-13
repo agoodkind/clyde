@@ -3683,6 +3683,12 @@ func (a *App) handleActionRuneKey(r rune) bool {
 	// App-level shortcuts. We avoid binding lowercase letters that
 	// the table uses for nvim-style movement (h/j/k/l/g/G) so the
 	// movement keys fall through to the table widget below.
+	if a.handleRenameRuneKey(r) {
+		return true
+	}
+	if a.handleSettingsEditRuneKey(r) {
+		return true
+	}
 	switch r {
 	case 'N':
 		if a.activeTab == tabSidecar {
@@ -3707,24 +3713,6 @@ func (a *App) handleActionRuneKey(r rune) bool {
 		if sess := a.rowSession(); sess != nil {
 			a.openSessionOptionsFor(sess)
 		}
-		return true
-	case 'e':
-		if a.activeTab != tabSettings {
-			return false
-		}
-		a.editConfigFile(false)
-		return true
-	case 'E':
-		if a.activeTab != tabSettings {
-			return false
-		}
-		a.editConfigFile(true)
-		return true
-	case 'G':
-		if a.activeTab != tabSettings {
-			return false
-		}
-		a.activateSelectedConfigControl()
 		return true
 	case 'v':
 		if a.selected != nil {
@@ -3758,6 +3746,32 @@ func (a *App) handleActionRuneKey(r rune) bool {
 		return true
 	}
 	return false
+}
+
+func (a *App) handleSettingsEditRuneKey(r rune) bool {
+	if a.activeTab != tabSettings {
+		return false
+	}
+	switch r {
+	case 'e':
+		a.editConfigFile(false)
+		return true
+	case 'E':
+		a.editConfigFile(true)
+		return true
+	case 'G':
+		a.activateSelectedConfigControl()
+		return true
+	}
+	return false
+}
+
+func (a *App) handleRenameRuneKey(r rune) bool {
+	if r != 'r' {
+		return false
+	}
+	a.openSelectedRenamePrompt()
+	return true
 }
 
 func (a *App) handleRefreshRuneKey() bool {
@@ -4050,26 +4064,8 @@ func (a *App) invokeLegendAction(action LegendAction) {
 			return
 		}
 		a.running = false
-	case LegendSearch:
-		if a.selected != nil {
-			a.openSearchForm()
-		}
-	case LegendView:
-		if a.selected != nil {
-			a.viewSelected()
-		}
-	case LegendCompact:
-		if a.selected != nil {
-			a.openCompactForm()
-		}
-	case LegendFork:
-		if a.selected != nil {
-			a.doFork()
-		}
-	case LegendDelete:
-		if a.selected != nil {
-			a.openDeleteConfirm()
-		}
+	case LegendSearch, LegendView, LegendRename, LegendCompact, LegendFork, LegendDelete:
+		a.invokeSelectedLegendAction(action)
 	case LegendEditBasedir:
 		if sess := a.rowSession(); sess != nil {
 			a.openBasedirEditor(sess)
@@ -4090,6 +4086,35 @@ func (a *App) invokeLegendAction(action LegendAction) {
 		if sess := a.currentSession(); sess != nil {
 			a.openDetails(sess)
 		}
+	}
+}
+
+func (a *App) invokeSelectedLegendAction(action LegendAction) {
+	if a.selected == nil {
+		return
+	}
+	if action == LegendSearch {
+		a.openSearchForm()
+		return
+	}
+	if action == LegendView {
+		a.viewSelected()
+		return
+	}
+	if action == LegendRename {
+		a.openSelectedRenamePrompt()
+		return
+	}
+	if action == LegendCompact {
+		a.openCompactForm()
+		return
+	}
+	if action == LegendFork {
+		a.doFork()
+		return
+	}
+	if action == LegendDelete {
+		a.openDeleteConfirm()
 	}
 }
 
@@ -6495,7 +6520,7 @@ func (a *App) sessionOptionsEntriesFor(sess *session.Session, close func(), incl
 		a.copyLiveURLEntry(sess, close),
 		{
 			Label: "Rename",
-			Hint:  "edits the visible name",
+			Hint:  "r",
 			Action: func() {
 				close()
 				a.openRenamePrompt(sess)
@@ -6633,29 +6658,27 @@ func openExternalURL(url string) error {
 	return cmd.Start()
 }
 
-// openRenamePrompt asks for the new visible title via an inline input
-// and routes the rename through the daemon when the callback is set.
-// The wired callback hides whether the actual rename happened locally
-// or via gRPC; either way the dashboard refreshes from the store on
-// completion.
+// openRenamePrompt asks for the new Clyde-owned title via an inline input and
+// persists only session metadata when the callback is set.
 func (a *App) openRenamePrompt(sess *session.Session) {
 	if sess == nil {
 		return
 	}
-	input := NewTextInput("New visible name: ")
-	input.Text = sess.Name
-	input.CursorX = runeCount(sess.Name)
+	currentTitle := strings.TrimSpace(sess.Metadata.Title)
+	if currentTitle == "" {
+		currentTitle = sessionTitle(sess)
+	}
+	input := NewTextInput("New Clyde title: ")
+	input.Text = currentTitle
+	input.CursorX = runeCount(currentTitle)
 	input.OnSubmit = func(s string) {
 		a.closeOverlay()
-		newName := strings.TrimSpace(s)
-		if newName == "" || newName == sess.Name {
+		newTitle := strings.TrimSpace(s)
+		if newTitle == "" || newTitle == strings.TrimSpace(sess.Metadata.Title) {
 			return
 		}
-		// Mutate the session's Name field so the callback wired in
-		// cmd/root.go can read both old and new values from the
-		// session struct without us widening the callback signature.
-		oldName := sess.Name
-		sess.Name = newName
+		oldTitle := sess.Metadata.Title
+		sess.Metadata.Title = newTitle
 		if a.cb.RenameSession != nil {
 			go func() {
 				defer func() {
@@ -6664,7 +6687,7 @@ func (a *App) openRenamePrompt(sess *session.Session) {
 					}
 				}()
 				if _, err := a.cb.RenameSession(sess); err != nil {
-					sess.Name = oldName
+					sess.Metadata.Title = oldTitle
 				}
 				a.requestSessionsAsync("rename")
 			}()
@@ -6673,6 +6696,12 @@ func (a *App) openRenamePrompt(sess *session.Session) {
 	input.OnCancel = a.closeOverlay
 	a.overlay = &InputOverlay{Input: input, Title: "Rename session"}
 	a.mode = StatusFilter
+}
+
+func (a *App) openSelectedRenamePrompt() {
+	if sess := a.rowSession(); sess != nil && a.cb.RenameSession != nil {
+		a.openRenamePrompt(sess)
+	}
 }
 
 // openBasedirEditor pops up an inline single-line input pre-filled with

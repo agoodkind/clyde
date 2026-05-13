@@ -312,38 +312,52 @@ func (builder appCallbackBuilder) deleteSession(sess *session.Session) error {
 }
 
 func (builder appCallbackBuilder) renameSession(sess *session.Session) (string, error) {
-	newName := sess.Name
-	oldName := sess.Metadata.Name
-	if oldName == "" || oldName == newName {
-		return newName, nil
-	}
 	ctx := builder.childContext("dashboard.session.rename")
-	if err := session.ValidateDisplayName(newName); err != nil {
+	if sess == nil {
+		return "", fmt.Errorf("nil session")
+	}
+	title := strings.TrimSpace(sess.Metadata.Title)
+	if err := session.ValidateDisplayName(title); err != nil {
 		slog.WarnContext(ctx, "dashboard.session.rename_invalid_name",
 			"component", "cli",
-			"session", oldName,
-			"new_name", newName,
+			"session", sess.Name,
+			"title", title,
 			"err", err,
 		)
-		return newName, fmt.Errorf("validate display name: %w", err)
+		return title, fmt.Errorf("validate display name: %w", err)
 	}
-	runtime, runtimeErr := registry.ForSession(sess, nil)
-	if runtimeErr == nil {
-		if renameErr := runtime.RenameSession(ctx, sess, newName); renameErr != nil {
-			slog.WarnContext(ctx, "dashboard.session.provider_rename_failed",
-				"component", "cli",
-				"session", oldName,
-				"new_name", newName,
-				"err", renameErr,
-			)
-			return newName, fmt.Errorf("provider rename session: %w", renameErr)
-		}
+	store, err := builder.openStore()
+	if err != nil {
+		slog.WarnContext(ctx, "dashboard.session.rename_store_failed",
+			"component", "cli",
+			"session", sess.Name,
+			"err", err,
+		)
+		return title, fmt.Errorf("open session store: %w", err)
 	}
-	outcome, err := daemon.RenameSessionViaDaemonOutcome(ctx, oldName, newName)
-	if outcome != daemon.LifecycleOutcomeReady {
-		return newName, daemonLifecycleError(ctx, "rename", outcome, err)
+	current, err := store.Resolve(sess.Name)
+	if err != nil {
+		slog.WarnContext(ctx, "dashboard.session.rename_resolve_failed",
+			"component", "cli",
+			"session", sess.Name,
+			"err", err,
+		)
+		return title, fmt.Errorf("resolve session: %w", err)
 	}
-	return newName, nil
+	if current == nil {
+		return title, fmt.Errorf("session %q not found", sess.Name)
+	}
+	current.Metadata.Title = title
+	if err := store.Update(current); err != nil {
+		slog.WarnContext(ctx, "dashboard.session.rename_update_failed",
+			"component", "cli",
+			"session", sess.Name,
+			"title", title,
+			"err", err,
+		)
+		return title, fmt.Errorf("update session title: %w", err)
+	}
+	return title, nil
 }
 
 func (builder appCallbackBuilder) setBasedir(sess *session.Session, newPath string) error {
