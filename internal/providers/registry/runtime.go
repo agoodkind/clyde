@@ -16,6 +16,10 @@ import (
 	// the generic compact summarize adapter registry.
 	_ "goodkind.io/clyde/internal/providers/claude/compactsummary"
 
+	// Blank-import the Claude contextcount counters so provider-owned
+	// counter implementations register with the generic contextcount registry.
+	_ "goodkind.io/clyde/internal/providers/claude/contextcount"
+
 	// Blank-import the per-provider mitmcontrib subpackages so each
 	// provider's MITM launch-environment Contributor registers with
 	// the generic mitmcontrib registry. Generic consumers in
