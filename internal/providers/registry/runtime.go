@@ -29,6 +29,11 @@ import (
 	_ "goodkind.io/clyde/internal/providers/claude/discovery"
 	_ "goodkind.io/clyde/internal/providers/codex/discovery"
 
+	// Blank-import the provider-neutral live-runtime contract package so
+	// provider registry builds include the livetrack metadata constraint before
+	// concrete provider runtime registrations move behind it.
+	_ "goodkind.io/clyde/internal/providers/liveruntime"
+
 	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 	codexlifecycle "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
