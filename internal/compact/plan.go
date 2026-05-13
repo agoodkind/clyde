@@ -132,8 +132,43 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		defer cancel()
 	}
 
-	runner := newPlanRunner(ctx, in, opts)
-	return runner.runTarget()
+	const maxUnpackLayers = 8
+	for layer := 0; ; layer++ {
+		runnerOpts := newSynthOptions()
+		runner := newPlanRunner(ctx, in, runnerOpts)
+		result, err := runner.runTarget()
+		if err != nil {
+			return nil, err
+		}
+		if result.HitTarget {
+			return result, nil
+		}
+		if layer >= maxUnpackLayers {
+			return result, nil
+		}
+		if !hasUnpackableSynthetic(in.Slice) {
+			return result, nil
+		}
+		in.Slice = Rehydrate(in.Slice, 1)
+		compactLog.Logger().Debug("compact.plan.unpacked_layer",
+			"component", "compact",
+			"subcomponent", "plan",
+			"layer", layer+1,
+			"compact_run_id", in.CompactRunID,
+		)
+	}
+}
+
+func hasUnpackableSynthetic(slice *Slice) bool {
+	if slice == nil {
+		return false
+	}
+	for _, entry := range slice.PostBoundary {
+		if entry.IsSummary && entry.RehydratedFrom < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePlanInput(in *PlanInput) error {
