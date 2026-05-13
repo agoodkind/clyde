@@ -97,7 +97,7 @@ func boxFor(m Mode) lipgloss.Style {
 }
 
 // UpfrontStats captures everything the planner can show instantly,
-// before any count_tokens call. All fields are filled from the slice,
+// before any Prober call. All fields are filled from the slice,
 // the calibration file, and (when cached) the session context probe.
 type UpfrontStats struct {
 	SessionName   string
@@ -188,7 +188,7 @@ func RenderUpfrontPanel(w io.Writer, s UpfrontStats) {
 
 // progressView renders a rolling one liner during the target loop.
 // Spinner frames animate on a time ticker so the UI stays smooth even
-// when a single count_tokens call takes 500ms to 2s. Numbers update
+// when a single Prober call takes 500ms to 2s. Numbers update
 // on each iteration. Mode stays visible on every frame so destructive
 // runs are always marked.
 type progressView struct {
@@ -790,7 +790,7 @@ func RenderUndoResult(
 }
 
 // RenderNoTarget prints a compact summary for the strippers-only path
-// that does not iterate against count_tokens.
+// that does not iterate against the Prober.
 func RenderNoTarget(w io.Writer, mode Mode, sessName string, s compactengine.Strippers, res *compactengine.PlanResult, boundaryBlocks, postBoundary int) {
 	rows := []string{
 		styleTitle.Render("plan") + "   " + ribbon(mode) + "   " + styleMuted.Render("(no target; max fidelity drops)"),

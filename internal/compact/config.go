@@ -20,18 +20,14 @@ import (
 // clyde config at ~/.config/clyde/config.toml under
 // [defaults] anthropic_api_key.
 //
-// IMPORTANT: This key is NOT used to authenticate claude -p invocations.
-// Claude Code authenticates via OAuth tokens (cached under ~/.claude/)
-// against the user's Claude Max subscription buckets, not via direct
-// Anthropic API key billing. This key is used solely for the free
-// /v1/messages/count_tokens endpoint, which the local token-count
-// helpers and the transcript verifier hit to get an authoritative
-// figure that matches what `/context` reports inside Claude Code.
-// Removing it disables exact token counts and falls back to local
-// tiktoken estimates; it does NOT break adapter or session spawning.
+// The key is consumed only by the optional DebugTokenCounter, which
+// runs as a passive cross-check against the authoritative /context
+// CandidateProber when CLYDE_COMPACT_DEBUG_COUNT_TOKENS=1. The planner
+// itself never depends on this key, so the key may safely be absent
+// and the compact engine still works end to end.
 //
-// The value is never logged or returned
-// in error messages so accidental tracing cannot leak it.
+// The value is never logged or returned in error messages so
+// accidental tracing cannot leak it.
 //
 // Returns ErrNoAPIKey when the config exists but the key is empty so
 // callers can distinguish "user must configure" from "transient IO

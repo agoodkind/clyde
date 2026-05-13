@@ -308,8 +308,8 @@ func compactMode(apply bool) Mode {
 // runCompactRouted forwards every preview or apply that has a target,
 // strippers, or both through the daemon CompactPreview / CompactApply
 // stream. The local in-process planner used to live here; the daemon
-// now owns the transcript load, the planner loop, count_tokens calls,
-// summarization, and (in apply mode) the on-disk mutation.
+// now owns the transcript load, the planner loop, the /context Prober
+// projections, summarization, and (in apply mode) the on-disk mutation.
 func runCompactRouted(cmd *cobra.Command, out io.Writer, input compactCommandInput) error {
 	mode := compactMode(input.Apply)
 	isTTY := isTerminal(out)

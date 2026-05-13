@@ -35,10 +35,9 @@ func (s *Strippers) SetAll() {
 }
 
 // Counter is the narrow interface the target loop needs. It is
-// satisfied by the concrete *TokenCounter in this package, and by any
-// sessionctx.Layer-backed adapter so callers can route every token
-// question through the unified context layer without the planner
-// needing to know about it.
+// satisfied by the proberCounter in this package, which routes every
+// projection through the registered contextusage.CandidateProber. The
+// /context Prober is the planner's source of truth.
 type Counter interface {
 	CountSyntheticUser(ctx context.Context, contentArray []OutputBlock) (int, error)
 }
@@ -80,7 +79,7 @@ type PlanResult struct {
 // has been stripped as the loop progresses.
 type IterationRecord struct {
 	Step       string // human-readable description
-	TailTokens int    // count_tokens result after this step
+	TailTokens int    // Prober projection after this step
 	CtxTotal   int    // static + tail + reserved
 	Delta      int    // ctx - target (negative = OK)
 
@@ -111,7 +110,7 @@ type IterationRecord struct {
 
 // RunPlan drives the target loop. When Target == 0 it just synthesizes
 // once with the requested strippers and returns. When Target > 0 it
-// iterates, calling count_tokens after each demotion batch, and stops
+// iterates, asking the /context Prober for a projection after each demotion batch, and stops
 // when it reaches target exactly or cannot reduce further without
 // crossing below target.
 func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
@@ -248,7 +247,7 @@ func (r *planRunner) measure(label string) (IterationRecord, error) {
 	tail, err := r.in.Counter.CountSyntheticUser(r.ctx, array)
 	if err != nil {
 		slog.ErrorContext(r.ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
-		return IterationRecord{}, fmt.Errorf("count_tokens after %q: %w", label, err)
+		return IterationRecord{}, fmt.Errorf("prober count after %q: %w", label, err)
 	}
 	ctxTotal := r.in.StaticOverhead + tail + r.in.Reserved
 	toolCounts := r.countToolFidelity()
@@ -590,7 +589,7 @@ func minInt(a, b int) int {
 }
 
 // applyStrippersFully sets opts to the most aggressive variant of each
-// requested stripper without iterating against count_tokens.
+// requested stripper without iterating against the Prober.
 func applyStrippersFully(slice *Slice, s Strippers, opts *SynthOptions) {
 	if s.Thinking {
 		opts.DropThinking = true

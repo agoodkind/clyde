@@ -11,10 +11,9 @@ import (
 // DefaultReservedBuffer matches Claude Code's autocompact buffer.
 const DefaultReservedBuffer = 13_000
 
-// DefaultModel is the model name passed to count_tokens. Override
-// with --model. Anthropic counts depend on tokenizer choice so the
-// model must match the live session's model for the result to mean
-// what /context will show.
+// DefaultModel is the model name used for display and the optional
+// debug counter. Override with --model. The planner itself routes
+// through the /context Prober and does not depend on this value.
 const DefaultModel = "claude-sonnet-4-5"
 
 // NewCmd returns the cobra command for clyde compact.
@@ -84,7 +83,7 @@ both work.`,
 	cmd.Flags().Bool("undo", false, "Roll back the most recent apply for this session")
 	cmd.Flags().Bool("list-backups", false, "Print the per-session backup ledger and exit")
 	cmd.Flags().Int("reserved", DefaultReservedBuffer, "Reserved buffer included in /context total (default matches autocompact)")
-	cmd.Flags().String("model", DefaultModel, "Model name passed to count_tokens; must match the live session's model")
+	cmd.Flags().String("model", DefaultModel, "Model name used for display and the optional debug counter")
 	cmd.Flags().Bool("force", false, "Bypass the open-session concurrency guard during --apply")
 	cmd.Flags().Bool("force-over-target", false, "Apply even when the planner's final projection exceeds the requested target (CLYDE-356; emits compact.apply.over_target_forced)")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")
