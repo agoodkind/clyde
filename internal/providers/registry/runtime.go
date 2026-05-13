@@ -20,6 +20,14 @@ import (
 	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
 
+	// Blank-import the per-provider discovery packages so each
+	// provider's Roots registers with the generic discoveryroots
+	// registry. The daemon's discovery sweep iterates
+	// discoveryroots.All() and never imports provider discovery
+	// packages directly for path acquisition.
+	_ "goodkind.io/clyde/internal/providers/claude/discovery"
+	_ "goodkind.io/clyde/internal/providers/codex/discovery"
+
 	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 	codexlifecycle "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"

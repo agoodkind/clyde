@@ -42,8 +42,8 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/outputstyle"
-	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
+	"goodkind.io/clyde/internal/providers/discoveryroots"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
 	"goodkind.io/clyde/internal/providers/sessionname"
 	"goodkind.io/clyde/internal/session"
@@ -466,15 +466,27 @@ func (s *Server) runDiscoveryOnce(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	projects := claudediscovery.ProjectsRoot(home)
-	if _, err := os.Stat(projects); err != nil {
-		return
+	var results []session.DiscoveryResult
+	for _, roots := range discoveryroots.All() {
+		for _, path := range roots.Paths(home) {
+			if path == "" {
+				continue
+			}
+			if _, statErr := os.Stat(path); statErr != nil {
+				continue
+			}
+			rootResults, scanErr := session.ScanProjects(path)
+			if scanErr != nil {
+				s.log.LogAttrs(ctx, slog.LevelWarn, "discovery scan failed",
+					slog.String("root", path),
+					slog.Any("err", scanErr),
+				)
+				continue
+			}
+			results = append(results, rootResults...)
+		}
 	}
-	results, err := session.ScanProjects(projects)
-	if err != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "discovery scan failed",
-			slog.Any("err", err),
-		)
+	if len(results) == 0 {
 		return
 	}
 	store, err := session.NewGlobalFileStore()
