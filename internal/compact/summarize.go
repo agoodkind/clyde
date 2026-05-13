@@ -1,13 +1,11 @@
 package compact
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"log/slog"
-	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"goodkind.io/clyde/internal/session"
@@ -53,32 +51,15 @@ func SummarizeModeFromLegacy(summarize bool, explicit bool) SummarizeMode {
 	return SummarizeModeOff
 }
 
-// SummarizeOptions configures a claude -p summarization call.
-type SummarizeOptions struct {
-	// Binary is the path to the claude CLI. Defaults to "claude" on
-	// $PATH when empty.
-	Binary string
-
-	// Model passed to claude via --model. Empty leaves claude's default.
-	Model string
-
-	// MaxInputBytes caps how much dropped-portion text is sent to the
-	// summarizer. Trims from the oldest end (so most recent dropped
-	// content survives). Default 200_000 bytes (~50k tokens).
-	MaxInputBytes int
-
-	// Timeout caps the subprocess. Default 120s.
-	Timeout time.Duration
-}
-
 // SummarizeRequest is the generic input passed to summarize adapters.
 type SummarizeRequest struct {
-	Session *session.Session
-	Slice   *Slice
-	Options SynthOptions
-	Model   string
-	Mode    SummarizeMode
-	Adapter SummarizeAdapter
+	Session     *session.Session
+	Slice       *Slice
+	Options     SynthOptions
+	Model       string
+	Mode        SummarizeMode
+	Adapter     SummarizeAdapter
+	DroppedText string
 }
 
 // SummarizeDecision records why a compact run did or did not summarize
@@ -96,41 +77,49 @@ type SummarizeAdapter interface {
 	SummarizeDropped(ctx context.Context, req SummarizeRequest) (string, error)
 }
 
-// ClaudeSummarizeAdapter summarizes dropped content by calling the Claude CLI.
-type ClaudeSummarizeAdapter struct {
-	Options SummarizeOptions
+// SummarizeAdapterFactory constructs a provider-owned summarize adapter.
+type SummarizeAdapterFactory func() SummarizeAdapter
+
+var summarizeAdapters = struct {
+	mu        sync.RWMutex
+	factories map[session.ProviderID]SummarizeAdapterFactory
+}{
+	mu:        sync.RWMutex{},
+	factories: map[session.ProviderID]SummarizeAdapterFactory{},
 }
 
-// SummarizeDropped summarizes the dropped content for a Claude-owned compact
-// run.
-func (a ClaudeSummarizeAdapter) SummarizeDropped(ctx context.Context, req SummarizeRequest) (string, error) {
-	options := a.Options
-	if options.Model == "" {
-		options.Model = req.Model
+// RegisterSummarizeAdapter adds a provider-owned summarize adapter factory.
+func RegisterSummarizeAdapter(provider session.ProviderID, factory SummarizeAdapterFactory) error {
+	normalizedProvider := session.NormalizeProviderID(provider)
+	if factory == nil {
+		return fmt.Errorf("summarize adapter factory is nil: %s", normalizedProvider)
 	}
-	return SummarizeDropped(ctx, req.Slice, req.Options, options)
+	summarizeAdapters.mu.Lock()
+	defer summarizeAdapters.mu.Unlock()
+	if _, exists := summarizeAdapters.factories[normalizedProvider]; exists {
+		return fmt.Errorf("summarize adapter already registered: %s", normalizedProvider)
+	}
+	summarizeAdapters.factories[normalizedProvider] = factory
+	return nil
 }
 
-// SummarizeAdapterForSession returns the provider adapter for a session.
+// SummarizeAdapterForSession returns the registered adapter for a session.
 func SummarizeAdapterForSession(sess *session.Session) (SummarizeAdapter, error) {
 	if sess == nil {
 		return nil, fmt.Errorf("summarize adapter: nil session")
 	}
-	switch sess.ProviderID() {
-	case session.ProviderClaude:
-		return ClaudeSummarizeAdapter{
-			Options: SummarizeOptions{
-				Binary:        "",
-				Model:         "",
-				MaxInputBytes: 0,
-				Timeout:       0,
-			},
-		}, nil
-	case session.ProviderUnknown, session.ProviderCodex:
-		return nil, fmt.Errorf("summarize adapter: provider %q is not supported", sess.ProviderID())
-	default:
+	provider := session.NormalizeProviderID(sess.ProviderID())
+	summarizeAdapters.mu.RLock()
+	factory, ok := summarizeAdapters.factories[provider]
+	summarizeAdapters.mu.RUnlock()
+	if !ok {
 		return nil, fmt.Errorf("summarize adapter: provider %q is not supported", sess.ProviderID())
 	}
+	adapter := factory()
+	if adapter == nil {
+		return nil, fmt.Errorf("summarize adapter: provider %q returned nil adapter", sess.ProviderID())
+	}
+	return adapter, nil
 }
 
 // DoSummarize decides whether to summarize and calls the matching provider
@@ -151,6 +140,7 @@ func DoSummarize(ctx context.Context, req SummarizeRequest) (SummarizeDecision, 
 	if !decision.ShouldSummarize {
 		return decision, nil
 	}
+	req.DroppedText = renderDroppedForSummary(req.Slice, req.Options)
 	adapter := req.Adapter
 	if adapter == nil {
 		resolved, err := SummarizeAdapterForSession(req.Session)
@@ -208,87 +198,6 @@ func chatWasTruncated(stats DroppedStats, opts SynthOptions) bool {
 
 func hasDroppedContent(stats DroppedStats, opts SynthOptions) bool {
 	return stats.ThinkingBlocks+stats.Images+stats.ToolsLineOnly+stats.ToolsDropped+stats.ChatTurns+droppedSummaryChunkCount(opts) > 0
-}
-
-// SummarizeDropped renders the portion of the slice that the current
-// SynthOptions will drop, hands it to `claude -p` for summarization,
-// and returns the summary text. Uses OAuth (no API key required).
-// The summary is intended to be placed into SynthOptions.Summary
-// before the final Synthesize call.
-//
-// Returns an empty string (not an error) when nothing is being
-// dropped; callers can always invoke this unconditionally.
-func SummarizeDropped(ctx context.Context, slice *Slice, opts SynthOptions, sopts SummarizeOptions) (string, error) {
-	droppedText := renderDroppedForSummary(slice, opts)
-	if strings.TrimSpace(droppedText) == "" {
-		return "", nil
-	}
-
-	binary := sopts.Binary
-	if binary == "" {
-		binary = "claude"
-	}
-	maxBytes := sopts.MaxInputBytes
-	if maxBytes <= 0 {
-		maxBytes = 200_000
-	}
-	timeout := sopts.Timeout
-	if timeout <= 0 {
-		timeout = 120 * time.Second
-	}
-
-	if len(droppedText) > maxBytes {
-		// Trim from the head so the most recent dropped content survives.
-		excess := len(droppedText) - maxBytes
-		droppedText = "[...earlier dropped content elided for length...]\n\n" + droppedText[excess:]
-	}
-
-	prompt := "The following is a transcript excerpt that is being removed from a long running agent conversation during context compaction. Write a concise recap (under 400 words) that preserves everything a continuing agent needs to know: user goals, decisions made, files touched, tools invoked, outcomes, and any in flight commitments. Use bullet points grouped by topic. Do not summarize the mechanics of the tools themselves; summarize what was accomplished. Do not greet the user. Output the recap only.\n\n" + droppedText
-
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	args := []string{"-p", "--no-session-persistence"}
-	if sopts.Model != "" {
-		args = append(args, "--model", sopts.Model)
-	}
-	args = append(args, prompt)
-
-	started := compactClock.Now()
-	compactLog.Logger().Info("compact.summarize.spawned",
-		"component", "compact",
-		"subcomponent", "summarize",
-		"binary", binary,
-		"prompt_bytes", len(prompt),
-		"timeout_s", int(timeout.Seconds()),
-	)
-
-	cmd := exec.CommandContext(callCtx, binary, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		tail := stderr.String()
-		if len(tail) > 1024 {
-			tail = tail[len(tail)-1024:]
-		}
-		slog.WarnContext(ctx, "compact.summarize.failed",
-			"component", "compact",
-			"subcomponent", "summarize",
-			"duration_ms", time.Since(started).Milliseconds(),
-			"stderr_tail", tail,
-			"err", err,
-		)
-		return "", fmt.Errorf("summarize: %w", err)
-	}
-	summary := strings.TrimSpace(stdout.String())
-	compactLog.Logger().Info("compact.summarize.completed",
-		"component", "compact",
-		"subcomponent", "summarize",
-		"duration_ms", time.Since(started).Milliseconds(),
-		"summary_bytes", len(summary),
-	)
-	return summary, nil
 }
 
 // renderDroppedForSummary emits a plain text view of just the

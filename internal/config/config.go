@@ -1119,6 +1119,7 @@ type Defaults struct {
 	Model           string `json:"model,omitempty" toml:"model,omitempty"`
 	EffortLevel     string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
 	AnthropicAPIKey string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
+	CompactCounter  string `json:"compactCounter,omitempty" toml:"compact_counter,omitempty"`
 }
 
 // AutoNameConfig holds the [autoname] block of clyde.toml.

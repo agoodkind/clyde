@@ -1,3 +1,4 @@
+// Package compact implements append-only session compaction planning and apply.
 package compact
 
 import (
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,6 +58,22 @@ func (e *ApplyOverTargetError) Error() string {
 	return fmt.Sprintf("apply refused: projection %d over target %d (+%d)", e.Projected, e.Target, e.Delta)
 }
 
+// ApplyRealContextOverTargetError is returned after Apply when the
+// live context probe reports that the resumed session is still over
+// target. It carries the typed actual value so callers do not need to
+// parse the message.
+type ApplyRealContextOverTargetError struct {
+	Target    int
+	Actual    int
+	Overshoot int
+}
+
+// Error renders the post-Apply refusal message used by CLI and TUI
+// status paths.
+func (e *ApplyRealContextOverTargetError) Error() string {
+	return fmt.Sprintf("apply refused: real context %d over target %d (+%d)", e.Actual, e.Target, e.Overshoot)
+}
+
 // ApplyResult summarises what apply did. Returned for preview and
 // recorded in the ledger.
 type ApplyResult struct {
@@ -67,6 +85,7 @@ type ApplyResult struct {
 	PostApplyOffset int64
 	SnapshotPath    string
 	LedgerPath      string
+	NoOp            bool
 }
 
 // Apply appends one compact_boundary system entry and one synthetic
@@ -86,13 +105,22 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		return nil, err
 	}
 	path := in.Slice.Path
-
 	stat, err := os.Stat(path)
 	if err != nil {
 		slog.Error("compact.apply.stat_failed", "component", "compact", "path", path, "err", err)
 		return nil, fmt.Errorf("stat transcript: %w", err)
 	}
 	preOffset := stat.Size()
+
+	if in.Target > 0 && in.FinalProjection > 0 && in.FinalProjection <= in.Target && !hasNetApplyChange(in.Slice, in.Options) {
+		slog.Info("compact.apply.noop",
+			"component", "compact",
+			"subcomponent", "apply",
+			"session_id", in.SessionID,
+			"target", in.Target,
+		)
+		return newNoOpApplyResult(preOffset), nil
+	}
 
 	snap, err := snapshotGzip(path, in.SessionID)
 	if err != nil {
@@ -102,38 +130,13 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 
 	parentUUID := lastChainUUID(in.Slice)
 	now := compactClock.Now().UTC()
-	boundaryUUID := uuid.NewString()
-	syntheticUUID := uuid.NewString()
-
-	boundaryLine, err := buildBoundaryEntry(boundaryEntryArgs{
-		UUID:          boundaryUUID,
-		ParentUUID:    parentUUID,
-		SessionID:     in.SessionID,
-		Cwd:           in.Cwd,
-		Version:       in.Version,
-		Timestamp:     now,
-		PreCompactTok: in.PreCompactTok,
-	})
+	entries, err := buildApplyEntries(in, parentUUID, now)
 	if err != nil {
-		slog.Error("compact.apply.build_boundary_failed", "component", "compact", "session_id", in.SessionID, "err", err)
-		return nil, fmt.Errorf("build boundary: %w", err)
-	}
-	syntheticLine, err := buildSyntheticUserEntry(syntheticEntryArgs{
-		UUID:       syntheticUUID,
-		ParentUUID: boundaryUUID,
-		SessionID:  in.SessionID,
-		Cwd:        in.Cwd,
-		Version:    in.Version,
-		Timestamp:  now.Add(time.Millisecond),
-		Content:    in.BoundaryTail,
-	})
-	if err != nil {
-		slog.Error("compact.apply.build_synthetic_failed", "component", "compact", "session_id", in.SessionID, "err", err)
-		return nil, fmt.Errorf("build synthetic user: %w", err)
+		return nil, err
 	}
 
 	in.Slice = Dehydrate(in.Slice, in.Options)
-	if err := appendBoundaryAndSynthetic(path, boundaryLine, syntheticLine); err != nil {
+	if err := appendBoundaryAndSynthetic(path, entries.BoundaryLine, entries.SyntheticLine); err != nil {
 		return nil, err
 	}
 
@@ -147,15 +150,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		return nil, fmt.Errorf("validate appended jsonl: %w", err)
 	}
 
-	res := &ApplyResult{
-		BoundaryUUID:    boundaryUUID,
-		SyntheticUUID:   syntheticUUID,
-		BoundaryLine:    len(in.Slice.AllEntries),
-		SyntheticLine:   len(in.Slice.AllEntries) + 1,
-		PreApplyOffset:  preOffset,
-		PostApplyOffset: postStat.Size(),
-		SnapshotPath:    snap.Path,
-	}
+	res := newApplyResult(in.Slice, entries, preOffset, postStat.Size(), snap.Path)
 	ledgerPath, err := appendLedger(in.SessionID, LedgerEntry{
 		Timestamp:      now,
 		Op:             "apply",
@@ -164,8 +159,8 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		PreApplyOffset: preOffset,
 		PreApplySHA256: snap.SHA256Hex,
 		SnapshotPath:   snap.Path,
-		BoundaryUUID:   boundaryUUID,
-		SyntheticUUID:  syntheticUUID,
+		BoundaryUUID:   entries.BoundaryUUID,
+		SyntheticUUID:  entries.SyntheticUUID,
 	})
 	if err != nil {
 		slog.Error("compact.apply.ledger_append_failed", "component", "compact", "session_id", in.SessionID, "err", err)
@@ -173,6 +168,84 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	res.LedgerPath = ledgerPath
 	return res, nil
+}
+
+type applyEntries struct {
+	BoundaryUUID  string
+	SyntheticUUID string
+	BoundaryLine  []byte
+	SyntheticLine []byte
+}
+
+func buildApplyEntries(in ApplyInput, parentUUID string, now time.Time) (applyEntries, error) {
+	boundaryUUID := uuid.NewString()
+	boundaryLine, err := buildBoundaryEntry(boundaryEntryArgs{
+		UUID:          boundaryUUID,
+		ParentUUID:    parentUUID,
+		SessionID:     in.SessionID,
+		Cwd:           in.Cwd,
+		Version:       in.Version,
+		Timestamp:     now,
+		PreCompactTok: in.PreCompactTok,
+	})
+	if err != nil {
+		slog.Error("compact.apply.build_boundary_failed", "component", "compact", "session_id", in.SessionID, "err", err)
+		return applyEntries{}, fmt.Errorf("build boundary: %w", err)
+	}
+	syntheticUUID := uuid.NewString()
+	syntheticLine, err := buildSyntheticUserEntry(syntheticEntryArgs{
+		UUID:       syntheticUUID,
+		ParentUUID: boundaryUUID,
+		SessionID:  in.SessionID,
+		Cwd:        in.Cwd,
+		Version:    in.Version,
+		Timestamp:  now.Add(time.Millisecond),
+		Content:    in.BoundaryTail,
+	})
+	if err != nil {
+		slog.Error("compact.apply.build_synthetic_failed", "component", "compact", "session_id", in.SessionID, "err", err)
+		return applyEntries{}, fmt.Errorf("build synthetic user: %w", err)
+	}
+	return applyEntries{
+		BoundaryUUID:  boundaryUUID,
+		SyntheticUUID: syntheticUUID,
+		BoundaryLine:  boundaryLine,
+		SyntheticLine: syntheticLine,
+	}, nil
+}
+
+func newNoOpApplyResult(offset int64) *ApplyResult {
+	return &ApplyResult{
+		BoundaryUUID:    "",
+		SyntheticUUID:   "",
+		BoundaryLine:    0,
+		SyntheticLine:   0,
+		PreApplyOffset:  offset,
+		PostApplyOffset: offset,
+		SnapshotPath:    "",
+		LedgerPath:      "",
+		NoOp:            true,
+	}
+}
+
+func newApplyResult(
+	slice *Slice,
+	entries applyEntries,
+	preOffset int64,
+	postOffset int64,
+	snapshotPath string,
+) *ApplyResult {
+	return &ApplyResult{
+		BoundaryUUID:    entries.BoundaryUUID,
+		SyntheticUUID:   entries.SyntheticUUID,
+		BoundaryLine:    len(slice.AllEntries),
+		SyntheticLine:   len(slice.AllEntries) + 1,
+		PreApplyOffset:  preOffset,
+		PostApplyOffset: postOffset,
+		SnapshotPath:    snapshotPath,
+		LedgerPath:      "",
+		NoOp:            false,
+	}
 }
 
 // guardOverTarget implements the CLYDE-356 over-target gate. When
@@ -214,6 +287,63 @@ func guardOverTarget(in ApplyInput) error {
 		"delta", delta,
 	)
 	return nil
+}
+
+// GuardRealContextOverTarget applies the post-Apply target gate using
+// the live context value observed after the transcript mutation.
+func GuardRealContextOverTarget(sessionID string, target int, actual int, force bool) error {
+	if target <= 0 || actual <= 0 {
+		return nil
+	}
+	if actual <= target {
+		return nil
+	}
+	overshoot := actual - target
+	slog.Info("compact.apply.refused_real_context_over_target",
+		"component", "compact",
+		"subcomponent", "apply",
+		"session_id", sessionID,
+		"target", target,
+		"actual", actual,
+		"overshoot", overshoot,
+		"forced", force,
+	)
+	if !force {
+		return &ApplyRealContextOverTargetError{
+			Target:    target,
+			Actual:    actual,
+			Overshoot: overshoot,
+		}
+	}
+	slog.Warn("compact.apply.real_context_over_target_forced",
+		"component", "compact",
+		"subcomponent", "apply",
+		"session_id", sessionID,
+		"target", target,
+		"actual", actual,
+		"overshoot", overshoot,
+	)
+	return nil
+}
+
+func hasNetApplyChange(slice *Slice, opts SynthOptions) bool {
+	if strings.TrimSpace(opts.Summary) != "" {
+		return true
+	}
+	stats := ComputeDroppedStats(slice, opts)
+	if stats.ThinkingBlocks > 0 ||
+		stats.Images > 0 ||
+		stats.ToolsLineOnly > 0 ||
+		stats.ToolsDropped > 0 ||
+		stats.ChatTurns > 0 {
+		return true
+	}
+	for _, dropped := range opts.DroppedSummaryChunks {
+		if len(dropped) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // appendBoundaryAndSynthetic opens the transcript for append and

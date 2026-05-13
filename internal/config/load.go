@@ -267,6 +267,7 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg == nil {
 		return nil
 	}
+	applySessionDefaults(&cfg.Defaults)
 	if err := applyLoggingCoreDefaults(&cfg.Logging); err != nil {
 		return err
 	}
@@ -304,6 +305,12 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	applyAutoNameDefaults(&cfg.AutoName)
 
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+}
+
+func applySessionDefaults(defaults *Defaults) {
+	if strings.TrimSpace(defaults.CompactCounter) == "" {
+		defaults.CompactCounter = "api"
+	}
 }
 
 const (

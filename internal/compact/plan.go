@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"goodkind.io/clyde/internal/contextcount"
 )
 
 // Strippers selects which categories the user wants to act on. The
@@ -34,22 +36,15 @@ func (s *Strippers) SetAll() {
 	s.Chat = true
 }
 
-// Counter is the narrow interface the target loop needs. It is
-// satisfied by the proberCounter in this package, which routes every
-// projection through the registered contextusage.CandidateProber. The
-// /context Prober is the planner's source of truth.
-type Counter interface {
-	CountSyntheticUser(ctx context.Context, contentArray []OutputBlock) (int, error)
-}
-
 // PlanInput is the orchestrator's input bundle.
 type PlanInput struct {
 	Slice          *Slice
+	Transcript     contextcount.Transcript
 	Strippers      Strippers
 	Target         int                   // /context total ceiling, 0 = no target
 	StaticOverhead int                   // calibrated overhead, ignored when Target == 0
 	Reserved       int                   // reserved buffer (default 13_000)
-	Counter        Counter               // required when Target > 0
+	Counter        contextcount.Counter  // required when Target > 0
 	Out            io.Writer             // fallback streaming sink when OnIteration nil
 	OnIteration    func(IterationRecord) // preferred: called after each measure
 	BatchSize      int                   // tool demotion batch size; default 8
@@ -137,8 +132,43 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 		defer cancel()
 	}
 
-	runner := newPlanRunner(ctx, in, opts)
-	return runner.runTarget()
+	const maxUnpackLayers = 8
+	for layer := 0; ; layer++ {
+		runnerOpts := newSynthOptions()
+		runner := newPlanRunner(ctx, in, runnerOpts)
+		result, err := runner.runTarget()
+		if err != nil {
+			return nil, err
+		}
+		if result.HitTarget {
+			return result, nil
+		}
+		if layer >= maxUnpackLayers {
+			return result, nil
+		}
+		if !hasUnpackableSynthetic(in.Slice) {
+			return result, nil
+		}
+		in.Slice = Rehydrate(in.Slice, 1)
+		compactLog.Logger().Debug("compact.plan.unpacked_layer",
+			"component", "compact",
+			"subcomponent", "plan",
+			"layer", layer+1,
+			"compact_run_id", in.CompactRunID,
+		)
+	}
+}
+
+func hasUnpackableSynthetic(slice *Slice) bool {
+	if slice == nil {
+		return false
+	}
+	for _, entry := range slice.PostBoundary {
+		if entry.IsSummary && entry.RehydratedFrom < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePlanInput(in *PlanInput) error {
@@ -151,7 +181,32 @@ func normalizePlanInput(in *PlanInput) error {
 	if in.Target > 0 && in.Counter == nil {
 		return fmt.Errorf("plan: target set but no token counter")
 	}
+	if in.Target > 0 && len(in.Transcript.Messages) == 0 {
+		transcript, err := buildPlanTranscriptFromSlice(in.Slice)
+		if err != nil {
+			return err
+		}
+		in.Transcript = transcript
+	}
 	return nil
+}
+
+func buildPlanTranscriptFromSlice(slice *Slice) (contextcount.Transcript, error) {
+	messages, err := unmarshalTranscriptMessages(slice.PostBoundary)
+	if err != nil {
+		slog.Warn("compact.plan.transcript_build_failed",
+			"component", "compact",
+			"subcomponent", "plan",
+			"err", err,
+		)
+		return contextcount.Transcript{}, fmt.Errorf("plan: build transcript: %w", err)
+	}
+	return contextcount.Transcript{
+		Model:    DefaultCountModel,
+		System:   nil,
+		Tools:    nil,
+		Messages: messages,
+	}, nil
 }
 
 func newSynthOptions() SynthOptions {
@@ -243,21 +298,21 @@ func (r *planRunner) measureBaseline() error {
 }
 
 func (r *planRunner) measure(label string) (IterationRecord, error) {
-	array := Synthesize(r.in.Slice, r.opts)
-	tail, err := r.in.Counter.CountSyntheticUser(r.ctx, array)
+	transcript := applySynthOptionsToTranscript(r.in.Transcript, r.in.Slice, r.opts)
+	counterTokens, err := r.in.Counter.Count(r.ctx, transcript)
 	if err != nil {
 		slog.ErrorContext(r.ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
-		return IterationRecord{}, fmt.Errorf("prober count after %q: %w", label, err)
+		return IterationRecord{}, fmt.Errorf("counter count after %q: %w", label, err)
 	}
-	ctxTotal := r.in.StaticOverhead + tail + r.in.Reserved
+	ctxTotal := r.in.StaticOverhead + counterTokens + r.in.Reserved
 	toolCounts := r.countToolFidelity()
 	chatDropped := len(r.opts.DroppedChatEntries) + droppedSummaryChunkCount(r.opts)
 
 	record := IterationRecord{
 		Step:              label,
-		TailTokens:        tail,
+		TailTokens:        counterTokens,
 		CtxTotal:          ctxTotal,
-		Delta:             ctxTotal - r.in.Target,
+		Delta:             counterTokens - r.in.Target,
 		ThinkingDropped:   r.opts.DropThinking,
 		ImagesPlaceholder: r.opts.ImagesAsPlaceholder,
 		ToolsFull:         toolCounts.Full,
@@ -529,7 +584,7 @@ func (r *planRunner) runChatDrops() error {
 			toolCounts := r.countToolFidelity()
 			return IterationRecord{
 				Step:              label,
-				TailTokens:        ctxTotal - r.in.StaticOverhead - r.in.Reserved,
+				TailTokens:        ctxTotal,
 				CtxTotal:          ctxTotal,
 				Delta:             ctxTotal - r.in.Target,
 				ThinkingDropped:   r.opts.DropThinking,
