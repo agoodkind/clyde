@@ -41,6 +41,20 @@ You need all of these on your machine:
 
 The current pristine sha256 of the lm-review transcript is `49a4bae183a8e9521744510d0cfe29a4e7bbe7f7d0f257598be418301cc6f5f4` (size 35,184,415 bytes). If your local copy does not match, get a copy from someone who has it before running this procedure.
 
+## Step 0: Dashboard chat and return-menu smoke
+
+Before touching the large compaction target, do a quick dashboard sanity pass against the lightweight `haiku-smoke` session under `~`.
+
+- Use arrow keys plus Enter for this check. Do not rely on single-letter action hotkeys inside the session options or the post-session return prompt.
+- On the initial session-list screen, if the first highlighted row does not behave as active yet, press `Down` once or twice before trying to activate it. This is the current workaround for `CLYDE-418`.
+- Resume the existing `haiku-smoke` session, send one short message, and confirm the assistant replies.
+- Exit that chat and confirm the return prompt opens for the same session.
+- From the return prompt, move down to `Compact` with arrow keys and press Enter. Confirm the interactive compact panel opens for `haiku-smoke`.
+- Launch a new tracked chat from the dashboard, send one short message, exit it, and confirm the return prompt appears for that new chat.
+- From that new chat's return prompt, move down to `Compact` with arrow keys and press Enter. Confirm the interactive compact panel opens there too.
+
+This step is a surface smoke only. Do not run Apply against the large transcript here, and do not mutate the lm-review transcript until Step 1 begins.
+
 ## Step 1: Back the session up
 
 Compaction Apply mutates the file. Even Undo can corrupt it if something else writes between Apply and Undo (this is CLYDE-375). Make a backup that you will restore from at the end.
@@ -108,9 +122,13 @@ grep -n "Build hash: $UUID1" ~/.claude/projects/-Users-agoodkind-Sites-lm-review
 
 Expected: one line, starting `17042:`.
 
-## Probe hygiene (applies to every `claude -p` invocation below)
+## Probe hygiene (applies to every `claude -p` invocation in this runbook and to every non-chat use of `claude` anywhere else)
 
-Every probe must pass `--no-session-persistence` and must not pass `--fork-session`. Together those two choices mean the probe resumes against the real session id, reads the transcript, answers the question, and writes nothing to disk. No fork jsonl is created and no contamination is possible between probes. The session itself stays at whatever state the prior splice or Apply or Undo step left it in. Between probes there is nothing to clean up.
+Every non-chat `claude` invocation in this runbook MUST pass `--no-session-persistence` and MUST NOT pass `--fork-session`. This is a hard rule, not a recommendation. Non-chat means any time `claude` is being used to read a session, ask the model a question about its existing context, capture `/context` output, or otherwise produce telemetry without intending to extend the live conversation. The rule covers every step that is not the user sitting in an interactive `claude` REPL.
+
+Together those two flags mean the probe resumes against the real session id, reads the transcript, answers the question, and writes nothing to disk. No fork jsonl is created. No contamination is possible between probes. The session itself stays at whatever state the prior splice or Apply or Undo step left it in. Between probes there is nothing to clean up.
+
+The same rule applies outside this runbook. Any companion script, debugging session, ad hoc check, or CI smoke that calls `claude -p` against an existing session for any reason other than continuing the live conversation must pass `--no-session-persistence`. The daemon's own Prober already does this internally for its CandidateProber spawns; the rule here is for human-driven or agent-driven invocations that bypass the daemon.
 
 The `/tmp` backup from Step 1 is the safety net for the whole run. The final restore in Step 12 is the only file mutation rollback. Splice and Apply and Undo mutate the file deliberately; probes do not.
 
@@ -328,7 +346,7 @@ claude -p "What is the build hash for skill $HEX2?" \
 
 ## Step 10: Capture /context for the two-counter delta
 
-Get Claude Code's own view of the resumed session size, which is the ground truth for what the user sees.
+Get Claude Code's own view of the resumed session size, which is the ground truth for what the user sees. This step MUST be the direct `claude -p "/context"` call below. The `clyde probe` subcommand is not a substitute. `clyde probe` proxies through the daemon's CandidateProber which spawns its own `claude --resume` and parses the same output, so it is downstream of the same code path the planner uses; for the dual-counter delta you need the upstream raw report from claude-code itself, with no clyde process in the loop.
 
 ```bash
 cd ~/Sites/lm-review
@@ -336,20 +354,25 @@ claude -p "/context" \
   --resume 8848d3ab-e4ed-4e6b-94c9-903109a3425b \
   --model 'claude-opus-4-7[1m]' \
   --no-session-persistence \
-  --output-format stream-json \
+  --output-format json \
   --max-turns 1 \
-  --verbose \
-  > /tmp/context.jsonl
+  > /tmp/context.json
 ```
+
+Either `--output-format json` or `--output-format stream-json` works. The single-blob `json` form is easier to parse for this step. If you need the per-event detail (token-by-token streams, debug traces) use `stream-json` with `--verbose` and write to `/tmp/context.jsonl` instead.
 
 Extract the result and look for the Messages count:
 
 ```bash
 python3 -c "
-import json
-events = [json.loads(l) for l in open('/tmp/context.jsonl') if l.strip()]
-result = next(e for e in events if e.get('type')=='result')
-print(result['result'])
+import json, re
+d = json.load(open('/tmp/context.json'))
+r = d if isinstance(d, dict) else next(e for e in d if e.get('type')=='result')
+text = r.get('result', '')
+m = re.search(r'\| Messages \| ([\d.]+k?) \|', text)
+print('Messages:', m.group(1) if m else 'not found')
+m2 = re.search(r'Tokens:.*?([\d.]+k?) / 200k', text)
+print('Total:', m2.group(1) if m2 else 'not found')
 "
 ```
 
@@ -362,6 +385,32 @@ Compare:
 | Delta | 5 percent or so today; should approach 1 percent after CLYDE-373 fix |
 
 The dual-counter divergence is CLYDE-373. Recording this number every run tracks whether the gap closes after that fix.
+
+## Step 10b: Second Apply to exercise Rehydrate and Dehydrate (CLYDE-415, CLYDE-416, CLYDE-417)
+
+The first Apply puts a synthetic into the transcript but does not exercise the new Rehydrate path, because nothing in the pre-first-Apply PostBoundary was a synthetic. The Rehydrate code only runs when LoadSlice's PostBoundary already contains an `IsSummary=true` entry from a prior compaction. A second Apply on top of the first puts the slice into exactly that shape, so this step is what proves CLYDE-415 and CLYDE-416 actually work.
+
+Pick a second target that is below the current planner ctx_total reported in the first Apply's result box. Use a number that is also above the minimum projection the planner can achieve (the refusal target from the over-target test). For a session whose first-Apply ctx_total was around 22k with a min projection around 20.6k, a second target around 24000 lands cleanly and gives the planner room to write a new synthetic.
+
+```bash
+clyde compact <session> 24000 --chat --apply
+```
+
+Inspect the result box. The `chat <total> kept · 0 dropped of <total>` line should report a chat total **lower** than the first Apply's chat total. That delta is the proof: Rehydrate decomposed the prior synthetic into virtual chat entries and the planner is now counting those instead of the single opaque synthetic line. In the motd run the delta was 79 chat turns on first Apply and 48 virtual chat entries on second Apply.
+
+Probe one more time to confirm the survivor canary still answers correctly after two compaction layers:
+
+```bash
+claude -p "What is the build hash for skill $HEX1?" \
+  --resume <session-id> \
+  --model <model> \
+  --no-session-persistence \
+  --output-format json \
+  --max-turns 1 \
+  > /tmp/postapply2-probe.json
+```
+
+Pass: model still returns UUID1. Fail: model says it cannot find skill HEX1. A fail here means Rehydrate dropped or corrupted recent content, which is the regression CLYDE-415 was filed to prevent.
 
 ## Step 11: Undo and verify
 
@@ -516,6 +565,11 @@ Use this table to record verdicts for each fix-chain milestone. Today's column d
 | Wall clock under 90 seconds | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | pass | pass |
 | Counter calls under 30 | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | pass | pass |
 | ETA appears within 5 seconds | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | pass |
+| Step 10b: Second Apply lands with reduced chat-entry count | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Step 10b: Post-second-Apply probe still returns UUID1 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Double-undo restores byte-identical pre-Apply state | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+
+The three new rows above belong to the CLYDE-415, CLYDE-416, CLYDE-417 column once those fixes land. Until then they are not exercised by the linear fix-chain columns and read `n/a`. After the three Rehydrate or Dehydrate commits land, fill the column for that fix-chain milestone.
 
 ## Appendix C: related tickets
 
