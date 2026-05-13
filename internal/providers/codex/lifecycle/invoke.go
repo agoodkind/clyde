@@ -90,6 +90,11 @@ func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen i
 	return out
 }
 
+// ReadCurrentTitle returns the live Codex title when Codex exposes one.
+func (l *Lifecycle) ReadCurrentTitle(_ string) (string, error) {
+	return "", nil
+}
+
 // GetSessionName returns the current Codex session label when one is known.
 func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (string, error) {
 	if sess == nil {
