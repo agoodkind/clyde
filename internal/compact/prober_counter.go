@@ -4,21 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
-	"time"
 
 	"github.com/google/uuid"
 
 	"goodkind.io/clyde/internal/contextusage"
 )
 
-// proberCounter is the Counter implementation the planner uses in
-// production. It routes every projection through the registered
-// CandidateProber so the planner consults the same /context view the
-// user sees on resume. Anthropic's count_tokens endpoint is no longer
-// the gate; if a Debug counter is supplied it runs as a passive
-// cross-check whose divergence is logged but never overrides the
-// authoritative Prober result.
+// proberCounter routes projections through the registered
+// CandidateProber so the planner consults the same runtime view the
+// user sees on resume.
 type proberCounter struct {
 	prober         contextusage.CandidateProber
 	sessionID      string
@@ -26,7 +20,6 @@ type proberCounter struct {
 	workDir        string
 	cwd            string
 	version        string
-	debug          Counter
 }
 
 // proberCounterConfig is the typed constructor input. Keeping it as a
@@ -39,12 +32,9 @@ type proberCounterConfig struct {
 	WorkDir        string
 	Cwd            string
 	Version        string
-	Debug          Counter
 }
 
-// newProberCounter builds the planner's authoritative counter. The
-// debug field, when non-nil, runs after every successful Prober result
-// purely for divergence logging.
+// newProberCounter builds the planner's prober-backed counter.
 func newProberCounter(cfg proberCounterConfig) *proberCounter {
 	return &proberCounter{
 		prober:         cfg.Prober,
@@ -53,7 +43,6 @@ func newProberCounter(cfg proberCounterConfig) *proberCounter {
 		workDir:        cfg.WorkDir,
 		cwd:            cfg.Cwd,
 		version:        cfg.Version,
-		debug:          cfg.Debug,
 	}
 }
 
@@ -82,9 +71,6 @@ func (c *proberCounter) CountSyntheticUser(ctx context.Context, contentArray []O
 			"err", err,
 		)
 		return 0, fmt.Errorf("prober count: %w", err)
-	}
-	if c.debug != nil {
-		c.logDebugDivergence(ctx, contentArray, tokens)
 	}
 	return tokens, nil
 }
@@ -115,41 +101,4 @@ func (c *proberCounter) serializeCandidate(ctx context.Context, contentArray []O
 		return nil, fmt.Errorf("serialize candidate: %w", err)
 	}
 	return append(line, '\n'), nil
-}
-
-// logDebugDivergence runs the optional cross-check counter and emits a
-// structured slog event when the two counters disagree by more than a
-// trivial floor. Errors from the debug counter are logged but never
-// returned because the Prober is authoritative.
-func (c *proberCounter) logDebugDivergence(ctx context.Context, contentArray []OutputBlock, proberTokens int) {
-	started := compactClock.Now()
-	debugTokens, err := c.debug.CountSyntheticUser(ctx, contentArray)
-	duration := time.Since(started)
-	if err != nil {
-		slog.WarnContext(ctx, "compact.counter.divergence_debug_failed",
-			"component", "compact",
-			"subcomponent", "counter",
-			"prober_tokens", proberTokens,
-			"err", err,
-		)
-		return
-	}
-	delta := proberTokens - debugTokens
-	denom := proberTokens
-	if denom == 0 {
-		denom = debugTokens
-	}
-	if denom == 0 {
-		return
-	}
-	pctDelta := math.Abs(float64(delta)) / math.Abs(float64(denom)) * 100.0
-	slog.InfoContext(ctx, "compact.counter.divergence",
-		"component", "compact",
-		"subcomponent", "counter",
-		"prober_tokens", proberTokens,
-		"debug_tokens", debugTokens,
-		"delta_tokens", delta,
-		"pct_delta", pctDelta,
-		"debug_duration_ms", duration.Milliseconds(),
-	)
 }

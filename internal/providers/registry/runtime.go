@@ -12,6 +12,10 @@ import (
 	// and never import the Claude package directly.
 	_ "goodkind.io/clyde/internal/providers/claude/contextusage"
 
+	// Blank-import the Claude compact summarizer so it registers with
+	// the generic compact summarize adapter registry.
+	_ "goodkind.io/clyde/internal/providers/claude/compactsummary"
+
 	// Blank-import the per-provider mitmcontrib subpackages so each
 	// provider's MITM launch-environment Contributor registers with
 	// the generic mitmcontrib registry. Generic consumers in

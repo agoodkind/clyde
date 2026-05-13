@@ -1,8 +1,8 @@
 # Lint is centralized in go-makefile. Do NOT define project-local lint,
-# deadcode, audit, fmt, vet, or staticcheck targets here. They duplicate
-# the central pipeline and let agents bypass strict rules. Run `make help`
-# for the canonical entry points (build/check/lint/fmt) and per-linter
-# sub-targets (lint-golangci, lint-format, lint-gocyclo, lint-deadcode,
+# audit, fmt, vet, or staticcheck targets here. They duplicate the central
+# pipeline and let agents bypass strict rules. Run `make help` for the
+# canonical entry points (build/check/lint/fmt) and per-linter sub-targets
+# (lint-golangci, lint-format, lint-gocyclo, lint-deadcode,
 # staticcheck-extra). Refresh baselines via the matching *-baseline target.
 #
 # clyde Makefile.
@@ -48,7 +48,7 @@ CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then
 .PHONY: test-ginkgo test-watch coverage \
         install-build-guard uninstall-build-guard setup-hooks \
         install-hook uninstall-hook \
-        deploy
+        deploy deadcode
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
 # runs ginkgo specs registered through RunSpecs. test-ginkgo is for when you
@@ -63,6 +63,8 @@ coverage: ## Generate coverage report via ginkgo
 	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --cover --coverprofile=coverage.txt
 	@go tool cover -html=coverage.txt -o coverage.html
 	@echo "coverage report: coverage.html"
+
+deadcode: lint-deadcode ## Alias for the central deadcode gate
 
 # ---------------------------------------------------------------------------
 # Build-guard: install a GOFLAGS=-toolexec wrapper that enforces clyde's

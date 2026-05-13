@@ -7,5 +7,5 @@ import "context"
 // Counter measures the token count for a fully faithful Transcript.
 type Counter interface {
 	Count(ctx context.Context, t Transcript) (int, error)
-	Source() string
+	Source() CounterSource
 }

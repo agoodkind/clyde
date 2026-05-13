@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateClydeExecutableRejectsMissingFile(t *testing.T) {
@@ -52,7 +53,11 @@ func TestValidateClydeExecutableRejectsBadProbeOutput(t *testing.T) {
 }
 
 func TestValidateClydeExecutableRejectsTimedOutProbe(t *testing.T) {
-	path := writeProbeScript(t, "sleep 3\nprintf 'clyde-self-reload-probe:ok\\n'")
+	previousTimeout := probeTimeout
+	probeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { probeTimeout = previousTimeout })
+
+	path := writeProbeScript(t, "sleep 1\nprintf 'clyde-self-reload-probe:ok\\n'")
 	err := ValidateClydeExecutable(path)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("ValidateClydeExecutable error=%v, want timed out", err)

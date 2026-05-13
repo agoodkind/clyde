@@ -14,8 +14,9 @@ const (
 	probeArgument = "__clyde_self_reload_probe__"
 	probeEnv      = "CLYDE_SELF_RELOAD_PROBE=1"
 	probeOK       = "clyde-self-reload-probe:ok"
-	probeTimeout  = 2 * time.Second
 )
+
+var probeTimeout = 10 * time.Second
 
 // ValidateClydeExecutable verifies that path is a runnable Clyde binary.
 func ValidateClydeExecutable(path string) error {

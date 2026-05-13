@@ -1,3 +1,4 @@
+// Package compact implements append-only session compaction planning and apply.
 package compact
 
 import (

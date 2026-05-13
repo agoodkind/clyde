@@ -1,6 +1,6 @@
 package contextusage
 
-import "goodkind.io/clyde/internal/providers/categorystyle"
+import "goodkind.io/clyde/internal/categorystyle"
 
 // claudeCategoryStyleID names this provider in the categorystyle
 // registry. It matches session.ProviderClaude but is duplicated here

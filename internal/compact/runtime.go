@@ -12,8 +12,8 @@ import (
 	"time"
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/categorystyle"
 	"goodkind.io/clyde/internal/contextusage"
-	"goodkind.io/clyde/internal/providers/categorystyle"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
@@ -300,12 +300,13 @@ func RunRuntime(
 			summaryMode = SummarizeModeFromLegacy(req.Summarize, req.Summarize)
 		}
 		decision, summaryErr := DoSummarize(ctx, SummarizeRequest{
-			Session: req.Session,
-			Slice:   slice,
-			Options: planRes.Options,
-			Model:   modelForCount,
-			Mode:    summaryMode,
-			Adapter: nil,
+			Session:     req.Session,
+			Slice:       slice,
+			Options:     planRes.Options,
+			Model:       modelForCount,
+			Mode:        summaryMode,
+			Adapter:     nil,
+			DroppedText: "",
 		})
 		if summaryErr != nil {
 			compactLog.Logger().Warn("compact.runtime.summarize_failed_continuing",
@@ -370,12 +371,7 @@ func RunRuntime(
 	return result, nil
 }
 
-// buildProberCounter wires the planner to the registered
-// CandidateProber for the session's provider. The optional debug
-// cross-check against Anthropic count_tokens is enabled only when the
-// CLYDE_COMPACT_DEBUG_COUNT_TOKENS env var is set and an API key is
-// available; the debug counter is never authoritative.
-func buildProberCounter(req RuntimeRequest, modelForCount string) (Counter, error) {
+func buildProberCounter(req RuntimeRequest, _ string) (Counter, error) {
 	providerID := string(req.Session.ProviderID())
 	prober, ok := contextusage.GetCandidate(providerID)
 	if !ok {
@@ -388,19 +384,6 @@ func buildProberCounter(req RuntimeRequest, modelForCount string) (Counter, erro
 		WorkDir:        req.Session.Metadata.WorkspaceRoot,
 		Cwd:            req.Session.Metadata.WorkspaceRoot,
 		Version:        "clyde",
-		Debug:          nil,
-	}
-	if os.Getenv("CLYDE_COMPACT_DEBUG_COUNT_TOKENS") == "1" {
-		if key, keyErr := AnthropicAPIKey(); keyErr == nil && strings.TrimSpace(modelForCount) != "" {
-			cfg.Debug = NewDebugTokenCounter(key, modelForCount)
-		} else if keyErr != nil {
-			compactLog.Logger().Debug("compact.runtime.debug_counter_disabled",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"reason", "api_key_unavailable",
-				"err", keyErr.Error(),
-			)
-		}
 	}
 	return newProberCounter(cfg), nil
 }
