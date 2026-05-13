@@ -4,17 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
 	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
-	codexprovider "goodkind.io/clyde/internal/providers/codex"
+	"goodkind.io/clyde/internal/providers/mitmcontrib"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -28,21 +26,14 @@ func (s *Server) ProviderLaunchEnvironment(ctx context.Context, req *clydev1.Pro
 		return nil, status.Error(codes.InvalidArgument, "provider is required")
 	}
 	provider := session.NormalizeProviderID(session.ProviderID(rawProvider))
+	if provider == session.ProviderUnknown {
+		return nil, status.Error(codes.InvalidArgument, "provider is required")
+	}
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load config: %v", err)
 	}
-	var env map[string]string
-	switch provider {
-	case session.ProviderUnknown:
-		return nil, status.Error(codes.InvalidArgument, "provider is required")
-	case session.ProviderClaude:
-		env, err = mitm.ClaudeEnv(ctx, cfg.MITM, s.mitmProxy())
-	case session.ProviderCodex:
-		env, err = codexLaunchEnvironment(ctx, s.log, cfg, s.mitmProxy())
-	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported provider %q", provider)
-	}
+	env, err := providerLaunchEnvironmentFromRegistry(ctx, s.log, provider, cfg, s.mitmProxy())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "provider launch environment: %v", err)
 	}
@@ -56,36 +47,24 @@ func (s *Server) ProviderLaunchEnvironment(ctx context.Context, req *clydev1.Pro
 	return resp, nil
 }
 
-func codexLaunchEnvironment(ctx context.Context, log *slog.Logger, cfg *config.Config, proxy *mitm.Proxy) (map[string]string, error) {
-	if cfg == nil {
-		return nil, nil
-	}
-	port := cfg.Adapter.Port
-	if port == 0 {
-		port = adapter.DefaultPort
-	}
-	env := map[string]string{
-		codexprovider.OpenAIBaseURLEnv: fmt.Sprintf("http://[::1]:%d/v1", port),
-	}
-	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("codex") {
-		return env, nil
-	}
-	proxyEnv, err := mitm.CodexEnv(ctx, cfg.MITM, proxy)
-	if err != nil {
+// providerLaunchEnvironmentFromRegistry resolves the registered
+// Contributor for provider and returns its env. Generic code in
+// internal/daemon does not import provider env constants directly:
+// each provider package registers its Contributor in init.
+func providerLaunchEnvironmentFromRegistry(ctx context.Context, log *slog.Logger, provider session.ProviderID, cfg *config.Config, proxy *mitm.Proxy) (map[string]string, error) {
+	contributor, ok := mitmcontrib.Get(string(provider))
+	if !ok {
 		if log != nil {
-			log.WarnContext(ctx, "daemon.codex.launch_env_failed",
+			log.WarnContext(ctx, "daemon.provider_launch_env.unregistered",
 				"component", "daemon",
-				"provider", session.ProviderCodex,
-				"err", err,
+				"provider", provider,
 			)
 		}
-		return nil, fmt.Errorf("codex mitm environment: %w", err)
+		return nil, nil
 	}
-	maps.Copy(env, proxyEnv)
-	certPath := strings.TrimSpace(cfg.MITM.CA.CertPath)
-	if certPath != "" {
-		env[codexprovider.SSLCertFileEnv] = certPath
-		env[codexprovider.NodeExtraCACertsEnv] = certPath
+	env, err := contributor.Env(ctx, cfg, proxy)
+	if err != nil {
+		return nil, fmt.Errorf("contributor env for %q: %w", provider, err)
 	}
 	return env, nil
 }

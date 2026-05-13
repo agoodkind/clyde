@@ -13,6 +13,12 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/mitm"
+
+	// Blank-import the per-provider mitmcontrib packages so each
+	// provider's Contributor registers with the generic registry the
+	// daemon dispatches against.
+	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
+	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
 )
 
 func TestProviderLaunchEnvironmentReturnsClaudeMITMEnvWhenEnabled(t *testing.T) {

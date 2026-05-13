@@ -11,6 +11,15 @@ import (
 	// and never import the Claude package directly.
 	_ "goodkind.io/clyde/internal/providers/claude/contextusage"
 
+	// Blank-import the per-provider mitmcontrib subpackages so each
+	// provider's MITM launch-environment Contributor registers with
+	// the generic mitmcontrib registry. Generic consumers in
+	// internal/daemon and cmd/ reach env builders through
+	// mitmcontrib.Get(id) / mitmcontrib.Contributors() and never
+	// import the provider env constants directly.
+	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
+	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
+
 	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 	codexlifecycle "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"

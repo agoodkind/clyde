@@ -29,7 +29,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
-	claudeprovider "goodkind.io/clyde/internal/providers/claude"
+	"goodkind.io/clyde/internal/providers/mitmcontrib"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/ui"
@@ -1011,19 +1011,29 @@ func applyClaudeMITMEnv(ctx context.Context, env []string) []string {
 	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
 		return env
 	}
-	out := claudeprovider.SanitizeMITMList(env)
-	extra, err := claudeLaunchEnvironmentViaDaemon(ctx, "claude")
-	if err != nil {
-		cmdDispatchLog.Logger().WarnContext(ctx, "forward.mitm.claude_env_failed", "component", "cli", "err", err)
-		return out
-	}
-	for _, item := range extra {
-		if item.GetKey() == "" {
+	out := env
+	for _, contributor := range mitmcontrib.Contributors() {
+		sanitizer, ok := contributor.(mitmcontrib.Sanitizer)
+		if !ok {
 			continue
 		}
-		out = withEnvValue(out, item.GetKey(), item.GetValue())
-		if item.GetKey() == claudeprovider.AnthropicBaseURLEnv {
-			out = withEnvValue(out, claudeprovider.ClydeMITMAnthropicBaseURLEnv, "1")
+		out = sanitizer.Sanitize(out)
+	}
+	for _, providerID := range mitmcontrib.IDs() {
+		extra, fetchErr := claudeLaunchEnvironmentViaDaemon(ctx, providerID)
+		if fetchErr != nil {
+			cmdDispatchLog.Logger().WarnContext(ctx, "forward.mitm.env_fetch_failed",
+				"component", "cli",
+				"provider", providerID,
+				"err", fetchErr,
+			)
+			continue
+		}
+		for _, item := range extra {
+			if item.GetKey() == "" {
+				continue
+			}
+			out = withEnvValue(out, item.GetKey(), item.GetValue())
 		}
 	}
 	return out

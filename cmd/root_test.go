@@ -176,12 +176,18 @@ func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 		claudeLaunchEnvironmentViaDaemon = oldLaunchEnvironment
 	})
 	claudeLaunchEnvironmentViaDaemon = func(_ context.Context, provider string) ([]*clydev1.EnvironmentVariable, error) {
-		if provider != "claude" {
-			t.Fatalf("provider = %q, want claude", provider)
+		switch provider {
+		case "claude":
+			return []*clydev1.EnvironmentVariable{
+				{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
+				{Key: "CLYDE_MITM_ANTHROPIC_BASE_URL", Value: "1"},
+			}, nil
+		case "codex":
+			return nil, nil
+		default:
+			t.Fatalf("unexpected provider %q", provider)
+			return nil, nil
 		}
-		return []*clydev1.EnvironmentVariable{
-			{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
-		}, nil
 	}
 
 	got := applyClaudeMITMEnv(context.Background(), []string{"ANTHROPIC_BASE_URL=https://old.example", "KEEP=1"})
