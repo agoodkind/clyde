@@ -29,6 +29,19 @@ type Entry struct {
 	Role     string
 	Content  []ContentBlock // [] when message.content is a plain string
 	TextOnly string         // populated when message.content was a string
+
+	// RehydratedFrom is the PostBoundary index of the synthetic entry
+	// this virtual entry was expanded from. -1 for real entries.
+	RehydratedFrom int `json:"-"`
+
+	// RehydratedChunkKey is the syntheticSummary chunk key this virtual
+	// entry represents. Empty for real entries.
+	RehydratedChunkKey string `json:"-"`
+
+	// RehydratedSource is the original synthetic Entry that was expanded.
+	// Set only on the first virtual entry produced per expansion. Nil for
+	// real entries and for non-first virtual entries.
+	RehydratedSource *Entry `json:"-"`
 }
 
 // ContentBlock is one element of an Anthropic-style content array.
@@ -152,7 +165,23 @@ func LoadSlice(path string) (*Slice, error) {
 // fields are left zero and Raw still carries the original bytes so
 // the apply path can pass the line through unchanged if needed.
 func parseEntry(raw []byte, idx int) Entry {
-	entry := Entry{LineIndex: idx, Raw: raw}
+	entry := Entry{
+		LineIndex:          idx,
+		Raw:                raw,
+		UUID:               "",
+		ParentUUID:         "",
+		Type:               "",
+		Subtype:            "",
+		Timestamp:          time.Time{},
+		IsMeta:             false,
+		IsSummary:          false,
+		Role:               "",
+		Content:            nil,
+		TextOnly:           "",
+		RehydratedFrom:     -1,
+		RehydratedChunkKey: "",
+		RehydratedSource:   nil,
+	}
 	var top struct {
 		UUID       string          `json:"uuid"`
 		ParentUUID string          `json:"parentUuid"`

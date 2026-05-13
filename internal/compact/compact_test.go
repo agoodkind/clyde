@@ -178,7 +178,7 @@ func (a *testSummarizeAdapter) SummarizeDropped(_ context.Context, _ SummarizeRe
 }
 
 func TestDoSummarizeAutoRunsOnlyAfterChatDrop(t *testing.T) {
-	slice := &Slice{PostBoundary: []Entry{{Type: "user"}}}
+	slice := &Slice{PostBoundary: []Entry{{Type: "user", RehydratedFrom: -1}}}
 	adapter := &testSummarizeAdapter{text: "chat recap"}
 	decision, err := DoSummarize(context.Background(), SummarizeRequest{
 		Slice: slice,
@@ -200,7 +200,7 @@ func TestDoSummarizeAutoRunsOnlyAfterChatDrop(t *testing.T) {
 }
 
 func TestDoSummarizeAutoSkipsToolOnlyDrops(t *testing.T) {
-	slice := &Slice{PostBoundary: []Entry{{Type: "assistant", Content: []ContentBlock{{Type: "tool_use", ToolUseID: "tool-1"}}}}}
+	slice := &Slice{PostBoundary: []Entry{{Type: "assistant", Content: []ContentBlock{{Type: "tool_use", ToolUseID: "tool-1"}}, RehydratedFrom: -1}}}
 	adapter := &testSummarizeAdapter{text: "tool recap"}
 	decision, err := DoSummarize(context.Background(), SummarizeRequest{
 		Slice: slice,
@@ -222,7 +222,7 @@ func TestDoSummarizeAutoSkipsToolOnlyDrops(t *testing.T) {
 }
 
 func TestDoSummarizeAutoRunsAfterPriorSummaryChunkDrop(t *testing.T) {
-	slice := &Slice{PostBoundary: []Entry{{Type: "user"}}}
+	slice := &Slice{PostBoundary: []Entry{{Type: "user", RehydratedFrom: -1}}}
 	adapter := &testSummarizeAdapter{text: "prior recap"}
 	decision, err := DoSummarize(context.Background(), SummarizeRequest{
 		Slice: slice,
@@ -246,7 +246,7 @@ func TestDoSummarizeAutoRunsAfterPriorSummaryChunkDrop(t *testing.T) {
 }
 
 func TestDoSummarizeOnRunsForToolOnlyDrops(t *testing.T) {
-	slice := &Slice{PostBoundary: []Entry{{Type: "assistant", Content: []ContentBlock{{Type: "tool_use", ToolUseID: "tool-1"}}}}}
+	slice := &Slice{PostBoundary: []Entry{{Type: "assistant", Content: []ContentBlock{{Type: "tool_use", ToolUseID: "tool-1"}}, RehydratedFrom: -1}}}
 	adapter := &testSummarizeAdapter{text: "tool recap"}
 	decision, err := DoSummarize(context.Background(), SummarizeRequest{
 		Slice: slice,
@@ -268,7 +268,7 @@ func TestDoSummarizeOnRunsForToolOnlyDrops(t *testing.T) {
 }
 
 func TestDoSummarizeOffSkipsChatDrops(t *testing.T) {
-	slice := &Slice{PostBoundary: []Entry{{Type: "user"}}}
+	slice := &Slice{PostBoundary: []Entry{{Type: "user", RehydratedFrom: -1}}}
 	adapter := &testSummarizeAdapter{text: "chat recap"}
 	decision, err := DoSummarize(context.Background(), SummarizeRequest{
 		Slice: slice,

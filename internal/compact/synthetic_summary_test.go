@@ -111,6 +111,52 @@ func TestParseSyntheticSummary_LegacyHeader(t *testing.T) {
 	}
 }
 
+func TestRehydrateExpandsSyntheticSummary(t *testing.T) {
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	line := syntheticSummaryLine("s1", "b1", t0, sampleSyntheticSummaryBlocks())
+	slice, err := LoadSlice(writeTranscript(t, []string{boundaryLine("b1", "", t0.Add(-time.Second)), line}))
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	got := Rehydrate(slice, 1)
+
+	if len(got.PostBoundary) != 8 {
+		t.Fatalf("len(PostBoundary) = %d, want 8", len(got.PostBoundary))
+	}
+	wantKeys := []string{
+		summaryChunkContinue,
+		"tool_item:0",
+		"tool_item:1",
+		"surviving_turn:0",
+		"surviving_turn:1",
+		summaryChunkSummary,
+		summaryChunkWhat,
+		summaryChunkContinuity,
+	}
+	if len(got.PostBoundary) != len(wantKeys) {
+		t.Fatalf("virtual entry count = %d, want %d", len(got.PostBoundary), len(wantKeys))
+	}
+	for i, wantKey := range wantKeys {
+		entry := got.PostBoundary[i]
+		if entry.IsSummary {
+			t.Fatalf("PostBoundary[%d].IsSummary = true, want false", i)
+		}
+		if entry.RehydratedFrom != 0 {
+			t.Fatalf("PostBoundary[%d].RehydratedFrom = %d, want 0", i, entry.RehydratedFrom)
+		}
+		if entry.RehydratedChunkKey != wantKey {
+			t.Fatalf("PostBoundary[%d].RehydratedChunkKey = %q, want %q", i, entry.RehydratedChunkKey, wantKey)
+		}
+		if i == 0 && entry.RehydratedSource == nil {
+			t.Fatalf("first virtual entry has nil RehydratedSource")
+		}
+		if i > 0 && entry.RehydratedSource != nil {
+			t.Fatalf("PostBoundary[%d].RehydratedSource is non-nil", i)
+		}
+	}
+}
+
 func TestParseSyntheticSummary_OptionalSections(t *testing.T) {
 	cases := []struct {
 		name           string
