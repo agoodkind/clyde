@@ -1197,10 +1197,10 @@ func TestUX_TableShowsVisibleMessageCounts(t *testing.T) {
 
 	row0 := a.table.Rows[0]
 	row1 := a.table.Rows[1]
-	if got := row0[4].Text; got != "1,027" {
+	if got := row0[5].Text; got != "1,027" {
 		t.Fatalf("row0 msgs = %q, want %q", got, "1,027")
 	}
-	if got := row1[4].Text; got != "44" {
+	if got := row1[5].Text; got != "44" {
 		t.Fatalf("row1 msgs = %q, want %q", got, "44")
 	}
 }
@@ -1892,5 +1892,35 @@ func TestUX_FindSessionByTitleAndRenderTitle(t *testing.T) {
 	a.pinSidecar(a.sessions[0])
 	if a.sidecar == nil || a.sidecar.SessionName != "Merry Swan" {
 		t.Fatalf("sidecar title = %#v, want display title", a.sidecar)
+	}
+}
+
+func TestUX_RowShowsProviderTitleWhenItDiffers(t *testing.T) {
+	t.Cleanup(func() {
+		session.RegisterCurrentTitleResolver(nil)
+	})
+	session.RegisterCurrentTitleResolver(func(session.ProviderID, string) (string, error) {
+		return "Provider Swan", nil
+	})
+	a := NewApp([]*session.Session{{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:           "merry-swan",
+			SessionID:      "shared",
+			TranscriptPath: "/tmp/session.jsonl",
+			Title:          "Clyde Swan",
+			LastAccessed:   time.Now(),
+		},
+	}}, AppCallbacks{})
+
+	row := a.rowForLockedLastUsed(a.sessions[0])
+	if len(row) < 2 {
+		t.Fatalf("row = %#v, want provider title column", row)
+	}
+	if row[0].Text != "Clyde Swan" {
+		t.Fatalf("row title = %q, want Clyde Swan", row[0].Text)
+	}
+	if row[1].Text != "Provider Swan" {
+		t.Fatalf("provider title = %q, want Provider Swan", row[1].Text)
 	}
 }

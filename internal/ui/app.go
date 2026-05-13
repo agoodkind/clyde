@@ -688,13 +688,14 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	// Build widgets
 	a.tabs = NewTabBar([]string{"Sessions", "Stats", "Settings", "Sidecar"})
 	a.tabs.OnActivate = func(idx int) { a.activeTab = idx }
-	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "LAST ACTIVE", "MODEL", "MSGS", "SUMMARY", "CREATED"})
+	a.table = NewTableWidget([]string{"NAME", "PROVIDER TITLE", "BASEDIR", "LAST ACTIVE", "MODEL", "MSGS", "SUMMARY", "CREATED"})
 	// Cap columns so a single very long session name or workspace path
 	// cannot push later columns off screen. SUMMARY is already
 	// truncated at row build time, but the cap keeps a stale long
 	// summary from blowing out the layout. Columns without an entry
 	// (LAST ACTIVE, MODEL, MSGS, CREATED) stay sized to content.
 	a.table.MaxColumnWidths = []int{
+		sessionNameColumnMaxWidth,
 		sessionNameColumnMaxWidth,
 		sessionBasedirColumnMaxWidth,
 		0,
@@ -4012,17 +4013,17 @@ func (a *App) toggleSortColumnAtX(x int) {
 	switch a.table.ColAtX(x) {
 	case 0:
 		a.toggleSort(SortColName)
-	case 1:
-		a.toggleSort(SortColWorkspace)
 	case 2:
-		a.toggleSort(SortColUsed)
+		a.toggleSort(SortColWorkspace)
 	case 3:
-		a.toggleSort(SortColModel)
+		a.toggleSort(SortColUsed)
 	case 4:
-		a.toggleSort(SortColMessages)
+		a.toggleSort(SortColModel)
 	case 5:
-		a.toggleSort(SortColSummary)
+		a.toggleSort(SortColMessages)
 	case 6:
+		a.toggleSort(SortColSummary)
+	case 7:
 		a.toggleSort(SortColCreated)
 	}
 }
@@ -4501,6 +4502,7 @@ func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 	}
 	return []TableCell{
 		{Text: sessionTitle(sess), Style: nameStyle},
+		{Text: sessionProviderTitleCell(sess), Style: subStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: lastUsedStyle},
 		{Text: model, Style: modelStyle},
@@ -4652,17 +4654,17 @@ func sortColTableIndex(c SortColumn) int {
 	case SortColName:
 		return 0
 	case SortColWorkspace:
-		return 1
-	case SortColUsed:
 		return 2
-	case SortColModel:
+	case SortColUsed:
 		return 3
-	case SortColMessages:
+	case SortColModel:
 		return 4
-	case SortColSummary:
+	case SortColMessages:
 		return 5
-	case SortColCreated:
+	case SortColSummary:
 		return 6
+	case SortColCreated:
+		return 7
 	}
 	return -1
 }
@@ -6230,7 +6232,28 @@ func (a *App) findSessionByName(name string) *session.Session {
 }
 
 func sessionTitle(sess *session.Session) string {
-	return session.SessionDisplayName(sess)
+	if sess == nil {
+		return ""
+	}
+	if title := strings.TrimSpace(sess.Metadata.Title); title != "" {
+		return title
+	}
+	if providerTitle := strings.TrimSpace(sess.ProviderTitle()); providerTitle != "" {
+		return providerTitle
+	}
+	return sess.Name
+}
+
+func sessionProviderTitleCell(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	title := strings.TrimSpace(sess.Metadata.Title)
+	providerTitle := strings.TrimSpace(sess.ProviderTitle())
+	if providerTitle == "" || title == "" || providerTitle == title {
+		return ""
+	}
+	return providerTitle
 }
 
 func sessionMatchesLookup(sess *session.Session, name, sessionID string) bool {

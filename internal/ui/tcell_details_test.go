@@ -451,6 +451,32 @@ func TestDetailsView_ResumeCommandUsesVisibleTitle(t *testing.T) {
 	}
 }
 
+func TestDetailsView_IncludesProviderTitle(t *testing.T) {
+	t.Cleanup(func() {
+		session.RegisterCurrentTitleResolver(nil)
+	})
+	session.RegisterCurrentTitleResolver(func(session.ProviderID, string) (string, error) {
+		return "Provider Swan", nil
+	})
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:           "merry-swan",
+			SessionID:      "uuid-1",
+			TranscriptPath: "/tmp/session.jsonl",
+			Title:          "Merry Swan",
+		},
+	}
+
+	rows := view.buildLeft(sess, SessionDetail{Model: "opus"})
+	joined := strings.Join(flattenSegments(rows), "\n")
+
+	if !strings.Contains(joined, "Provider title") || !strings.Contains(joined, "Provider Swan") {
+		t.Fatalf("details missing provider title:\n%s", joined)
+	}
+}
+
 // findKVRow returns the row whose first segment label trims to key, or
 // nil. The label segment uses fmt.Sprintf("  %-14s", k) so we trim
 // leading and trailing whitespace before comparing.
