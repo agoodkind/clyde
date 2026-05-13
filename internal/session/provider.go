@@ -235,6 +235,13 @@ type ContextMessageProvider interface {
 	RecentContextMessages(sess *Session, limit, maxLen int) []ContextMessage
 }
 
+// CurrentTitleProvider lets providers expose their current live title without
+// making generic session code parse provider-owned transcript shapes.
+type CurrentTitleProvider interface {
+	// TODO: Design provider title unification by writing a custom-title event on clyde rename and guarding provider auto-title re-emission.
+	ReadCurrentTitle(transcriptPath string) (string, error)
+}
+
 // NameProvider lets providers own how exact display names are observed and
 // mutated while generic callers speak only in terms of logical sessions.
 type NameProvider interface {

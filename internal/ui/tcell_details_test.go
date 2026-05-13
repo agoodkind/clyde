@@ -434,9 +434,9 @@ func TestDetailsView_ResumeCommandUsesVisibleTitle(t *testing.T) {
 	sess := &session.Session{
 		Name: "merry-swan",
 		Metadata: session.Metadata{
-			Name:         "merry-swan",
-			SessionID:    "uuid-1",
-			DisplayTitle: "Merry Swan",
+			Name:      "merry-swan",
+			SessionID: "uuid-1",
+			Title:     "Merry Swan",
 		},
 	}
 
@@ -448,6 +448,32 @@ func TestDetailsView_ResumeCommandUsesVisibleTitle(t *testing.T) {
 	}
 	if strings.Contains(joined, "clyde resume merry-swan") {
 		t.Fatalf("details resume command used legacy row name:\n%s", joined)
+	}
+}
+
+func TestDetailsView_IncludesProviderTitle(t *testing.T) {
+	t.Cleanup(func() {
+		session.RegisterCurrentTitleResolver(nil)
+	})
+	session.RegisterCurrentTitleResolver(func(session.ProviderID, string) (string, error) {
+		return "Provider Swan", nil
+	})
+	view := NewDetailsView()
+	sess := &session.Session{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:           "merry-swan",
+			SessionID:      "uuid-1",
+			TranscriptPath: "/tmp/session.jsonl",
+			Title:          "Merry Swan",
+		},
+	}
+
+	rows := view.buildLeft(sess, SessionDetail{Model: "opus"})
+	joined := strings.Join(flattenSegments(rows), "\n")
+
+	if !strings.Contains(joined, "Provider title") || !strings.Contains(joined, "Provider Swan") {
+		t.Fatalf("details missing provider title:\n%s", joined)
 	}
 }
 

@@ -41,12 +41,9 @@ type Metadata struct {
 	// and should be regenerated in the background.
 	ContextMessageCount int `json:"contextMessageCount,omitempty"`
 
-	// DisplayTitle preserves the provider-owned user-facing session title for
-	// legacy rows and provider sync. New session-domain code treats Name as the
-	// exact human-visible name, with ClydeUUID as the stable identity and storage
-	// key. DisplayTitle remains as compatibility metadata for rows created while
-	// Name was a slug-derived alias.
-	DisplayTitle string `json:"displayTitle,omitempty"`
+	// Title is the Clyde-owned user-facing session title. It is seeded on
+	// initial adoption and only changed by Clyde rename surfaces.
+	Title string `json:"title,omitempty"`
 
 	// AutoNameState records the session's position in the auto-rename
 	// state machine. Retained for compatibility with the daemon auto-name worker.
@@ -124,7 +121,7 @@ func NewSession(name, sessionID string) *Session {
 			HasCustomOutputStyle: false,
 			WorkspaceRoot:        "",
 			ContextMessageCount:  0,
-			DisplayTitle:         "",
+			Title:                "",
 			AutoNameState:        AutoNameStateUntouched,
 			AutoNameSource:       AutoNameSourceUnspecified,
 			LastAutoNameAt:       time.Time{},
@@ -188,8 +185,8 @@ func DisplayName(sess *Session) string {
 	if sess == nil {
 		return ""
 	}
-	if displayTitle := strings.TrimSpace(sess.Metadata.DisplayTitle); displayTitle != "" {
-		return displayTitle
+	if title := strings.TrimSpace(sess.Metadata.Title); title != "" {
+		return title
 	}
 	return sess.Name
 }

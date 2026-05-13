@@ -143,6 +143,72 @@ func TestLifecycleRenameSessionAppendsClaudeRenameEntries(t *testing.T) {
 	}
 }
 
+func TestLifecycleReadCurrentTitleReturnsEmptyWithoutCustomTitle(t *testing.T) {
+	transcriptPath := writeClaudeTitleTranscript(t, ""+
+		`{"type":"system","sessionId":"uuid-1","timestamp":"2026-04-12T23:52:12Z"}`+"\n"+
+		`{"type":"assistant","sessionId":"uuid-1"}`+"\n")
+
+	got, err := NewLifecycle(nil).ReadCurrentTitle(transcriptPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentTitle returned error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("ReadCurrentTitle = %q, want empty", got)
+	}
+}
+
+func TestLifecycleReadCurrentTitleReturnsSingleCustomTitle(t *testing.T) {
+	transcriptPath := writeClaudeTitleTranscript(t, ""+
+		`{"type":"system","sessionId":"uuid-1","timestamp":"2026-04-12T23:52:12Z"}`+"\n"+
+		`{"type":"custom-title","customTitle":"one title","sessionId":"uuid-1"}`+"\n")
+
+	got, err := NewLifecycle(nil).ReadCurrentTitle(transcriptPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentTitle returned error: %v", err)
+	}
+	if got != "one title" {
+		t.Fatalf("ReadCurrentTitle = %q, want %q", got, "one title")
+	}
+}
+
+func TestLifecycleReadCurrentTitleReturnsLatestCustomTitle(t *testing.T) {
+	transcriptPath := writeClaudeTitleTranscript(t, ""+
+		`{"type":"custom-title","customTitle":"first title","sessionId":"uuid-1"}`+"\n"+
+		`{"type":"assistant","sessionId":"uuid-1"}`+"\n"+
+		`{"type":"custom-title","customTitle":"final title","sessionId":"uuid-1"}`+"\n")
+
+	got, err := NewLifecycle(nil).ReadCurrentTitle(transcriptPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentTitle returned error: %v", err)
+	}
+	if got != "final title" {
+		t.Fatalf("ReadCurrentTitle = %q, want %q", got, "final title")
+	}
+}
+
+func TestLifecycleReadCurrentTitleFallsBackToHeadWindow(t *testing.T) {
+	transcriptPath := writeClaudeTitleTranscript(t, ""+
+		`{"type":"custom-title","customTitle":"head title","sessionId":"uuid-1"}`+"\n"+
+		strings.Repeat(`{"type":"assistant","sessionId":"uuid-1","message":"padding"}`+"\n", 1500))
+
+	got, err := NewLifecycle(nil).ReadCurrentTitle(transcriptPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentTitle returned error: %v", err)
+	}
+	if got != "head title" {
+		t.Fatalf("ReadCurrentTitle = %q, want %q", got, "head title")
+	}
+}
+
+func writeClaudeTitleTranscript(t *testing.T, body string) string {
+	t.Helper()
+	transcriptPath := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	return transcriptPath
+}
+
 func TestApplyMITMEnvAddsAnthropicBaseURLForWrapperLaunch(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)

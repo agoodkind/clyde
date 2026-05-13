@@ -150,9 +150,9 @@ var _ = Describe("AdoptUnknown", func() {
 		Expect(store.Create(&session.Session{
 			Name: "Parent Exact Name",
 			Metadata: session.Metadata{
-				Name:         "Parent Exact Name",
-				SessionID:    parentUUID,
-				DisplayTitle: "Stale Provider Title",
+				Name:      "Parent Exact Name",
+				SessionID: parentUUID,
+				Title:     "Stale Provider Title",
 			},
 		})).To(Succeed())
 		dir := filepath.Join(projectsRoot, "-Users-agoodkind-Sites-foo")

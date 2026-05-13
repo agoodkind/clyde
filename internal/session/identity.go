@@ -141,10 +141,10 @@ func PreferIdentityWinner(candidate, existing *Session) bool {
 	if candidateAuto != existingAuto {
 		return !candidateAuto
 	}
-	if candidate.Metadata.DisplayTitle != "" && existing.Metadata.DisplayTitle == "" {
+	if candidate.Metadata.Title != "" && existing.Metadata.Title == "" {
 		return true
 	}
-	if existing.Metadata.DisplayTitle != "" && candidate.Metadata.DisplayTitle == "" {
+	if existing.Metadata.Title != "" && candidate.Metadata.Title == "" {
 		return false
 	}
 	if candidate.Metadata.LastAccessed.After(existing.Metadata.LastAccessed) {

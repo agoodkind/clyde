@@ -76,6 +76,8 @@ const (
 	LegendQuit
 	LegendSearch
 	LegendView
+	// LegendRename opens the Clyde-owned title editor for the selected session.
+	LegendRename
 	LegendCompact
 	LegendFork
 	LegendDelete
@@ -153,7 +155,7 @@ func legendActionsForStatus(s *StatusBarWidget) []LegendAction {
 	case StatusDetail:
 		return []LegendAction{
 			LegendSearch, LegendView,
-			LegendCompact, LegendFork, LegendDelete,
+			LegendRename, LegendCompact, LegendFork, LegendDelete,
 			LegendEditBasedir, LegendClose,
 		}
 	case StatusFilter:
@@ -236,6 +238,7 @@ var legendHintTable = map[LegendAction]legendHint{
 	LegendQuit:          {key: "q", label: "quit"},
 	LegendSearch:        {key: "/", label: "search"},
 	LegendView:          {key: "v", label: "view"},
+	LegendRename:        {key: "r", label: "rename"},
 	LegendCompact:       {key: "c", label: "compact"},
 	LegendFork:          {key: "f", label: "fork"},
 	LegendDelete:        {key: "d", label: "delete"},

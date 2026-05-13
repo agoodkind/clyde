@@ -688,13 +688,14 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	// Build widgets
 	a.tabs = NewTabBar([]string{"Sessions", "Stats", "Settings", "Sidecar"})
 	a.tabs.OnActivate = func(idx int) { a.activeTab = idx }
-	a.table = NewTableWidget([]string{"NAME", "BASEDIR", "LAST ACTIVE", "MODEL", "MSGS", "SUMMARY", "CREATED"})
+	a.table = NewTableWidget([]string{"NAME", "PROVIDER TITLE", "BASEDIR", "LAST ACTIVE", "MODEL", "MSGS", "SUMMARY", "CREATED"})
 	// Cap columns so a single very long session name or workspace path
 	// cannot push later columns off screen. SUMMARY is already
 	// truncated at row build time, but the cap keeps a stale long
 	// summary from blowing out the layout. Columns without an entry
 	// (LAST ACTIVE, MODEL, MSGS, CREATED) stay sized to content.
 	a.table.MaxColumnWidths = []int{
+		sessionNameColumnMaxWidth,
 		sessionNameColumnMaxWidth,
 		sessionBasedirColumnMaxWidth,
 		0,
@@ -848,7 +849,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	}
 	bodyEntries := a.sessionOptionsEntriesWithoutResume(sess, close)
 	statsSegments, statsLoading := a.buildSessionStatsSegments(sess)
-	modal := NewOptionsModal("Session exited: "+sessionDisplayTitle(sess), bodyEntries)
+	modal := NewOptionsModal("Session exited: "+sessionTitle(sess), bodyEntries)
 	modal.TopEntries = topEntries
 	// Re-run resetCursor now that TopEntries is populated. The
 	// constructor walked an empty TopEntries and may have parked the
@@ -3682,6 +3683,12 @@ func (a *App) handleActionRuneKey(r rune) bool {
 	// App-level shortcuts. We avoid binding lowercase letters that
 	// the table uses for nvim-style movement (h/j/k/l/g/G) so the
 	// movement keys fall through to the table widget below.
+	if a.handleRenameRuneKey(r) {
+		return true
+	}
+	if a.handleSettingsEditRuneKey(r) {
+		return true
+	}
 	switch r {
 	case 'N':
 		if a.activeTab == tabSidecar {
@@ -3706,24 +3713,6 @@ func (a *App) handleActionRuneKey(r rune) bool {
 		if sess := a.rowSession(); sess != nil {
 			a.openSessionOptionsFor(sess)
 		}
-		return true
-	case 'e':
-		if a.activeTab != tabSettings {
-			return false
-		}
-		a.editConfigFile(false)
-		return true
-	case 'E':
-		if a.activeTab != tabSettings {
-			return false
-		}
-		a.editConfigFile(true)
-		return true
-	case 'G':
-		if a.activeTab != tabSettings {
-			return false
-		}
-		a.activateSelectedConfigControl()
 		return true
 	case 'v':
 		if a.selected != nil {
@@ -3757,6 +3746,32 @@ func (a *App) handleActionRuneKey(r rune) bool {
 		return true
 	}
 	return false
+}
+
+func (a *App) handleSettingsEditRuneKey(r rune) bool {
+	if a.activeTab != tabSettings {
+		return false
+	}
+	switch r {
+	case 'e':
+		a.editConfigFile(false)
+		return true
+	case 'E':
+		a.editConfigFile(true)
+		return true
+	case 'G':
+		a.activateSelectedConfigControl()
+		return true
+	}
+	return false
+}
+
+func (a *App) handleRenameRuneKey(r rune) bool {
+	if r != 'r' {
+		return false
+	}
+	a.openSelectedRenamePrompt()
+	return true
 }
 
 func (a *App) handleRefreshRuneKey() bool {
@@ -4012,17 +4027,17 @@ func (a *App) toggleSortColumnAtX(x int) {
 	switch a.table.ColAtX(x) {
 	case 0:
 		a.toggleSort(SortColName)
-	case 1:
-		a.toggleSort(SortColWorkspace)
 	case 2:
-		a.toggleSort(SortColUsed)
+		a.toggleSort(SortColWorkspace)
 	case 3:
-		a.toggleSort(SortColModel)
+		a.toggleSort(SortColUsed)
 	case 4:
-		a.toggleSort(SortColMessages)
+		a.toggleSort(SortColModel)
 	case 5:
-		a.toggleSort(SortColSummary)
+		a.toggleSort(SortColMessages)
 	case 6:
+		a.toggleSort(SortColSummary)
+	case 7:
 		a.toggleSort(SortColCreated)
 	}
 }
@@ -4049,26 +4064,8 @@ func (a *App) invokeLegendAction(action LegendAction) {
 			return
 		}
 		a.running = false
-	case LegendSearch:
-		if a.selected != nil {
-			a.openSearchForm()
-		}
-	case LegendView:
-		if a.selected != nil {
-			a.viewSelected()
-		}
-	case LegendCompact:
-		if a.selected != nil {
-			a.openCompactForm()
-		}
-	case LegendFork:
-		if a.selected != nil {
-			a.doFork()
-		}
-	case LegendDelete:
-		if a.selected != nil {
-			a.openDeleteConfirm()
-		}
+	case LegendSearch, LegendView, LegendRename, LegendCompact, LegendFork, LegendDelete:
+		a.invokeSelectedLegendAction(action)
 	case LegendEditBasedir:
 		if sess := a.rowSession(); sess != nil {
 			a.openBasedirEditor(sess)
@@ -4089,6 +4086,35 @@ func (a *App) invokeLegendAction(action LegendAction) {
 		if sess := a.currentSession(); sess != nil {
 			a.openDetails(sess)
 		}
+	}
+}
+
+func (a *App) invokeSelectedLegendAction(action LegendAction) {
+	if a.selected == nil {
+		return
+	}
+	if action == LegendSearch {
+		a.openSearchForm()
+		return
+	}
+	if action == LegendView {
+		a.viewSelected()
+		return
+	}
+	if action == LegendRename {
+		a.openSelectedRenamePrompt()
+		return
+	}
+	if action == LegendCompact {
+		a.openCompactForm()
+		return
+	}
+	if action == LegendFork {
+		a.doFork()
+		return
+	}
+	if action == LegendDelete {
+		a.openDeleteConfirm()
 	}
 }
 
@@ -4500,7 +4526,8 @@ func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 		}
 	}
 	return []TableCell{
-		{Text: sessionDisplayTitle(sess), Style: nameStyle},
+		{Text: sessionTitle(sess), Style: nameStyle},
+		{Text: sessionProviderTitleCell(sess), Style: subStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: lastUsedStyle},
 		{Text: model, Style: modelStyle},
@@ -4548,7 +4575,7 @@ func (a *App) rebuildVisible() {
 			continue
 		}
 		if f != "" {
-			hay := strings.ToLower(sessionDisplayTitle(sess) + " " + sess.Name + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
+			hay := strings.ToLower(sessionTitle(sess) + " " + sess.Name + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
 			if !strings.Contains(hay, f) {
 				continue
 			}
@@ -4571,7 +4598,7 @@ func (a *App) sortSessions() {
 		cmp := 0
 		switch a.sortCol {
 		case SortColName:
-			cmp = strings.Compare(strings.ToLower(sessionDisplayTitle(x)), strings.ToLower(sessionDisplayTitle(y)))
+			cmp = strings.Compare(strings.ToLower(sessionTitle(x)), strings.ToLower(sessionTitle(y)))
 		case SortColWorkspace:
 			cmp = strings.Compare(x.Metadata.WorkspaceRoot, y.Metadata.WorkspaceRoot)
 		case SortColModel:
@@ -4586,8 +4613,8 @@ func (a *App) sortSessions() {
 			cmp = compareTimes(lastUsedTime(x), lastUsedTime(y))
 		}
 		if cmp == 0 {
-			xTitle := strings.ToLower(sessionDisplayTitle(x))
-			yTitle := strings.ToLower(sessionDisplayTitle(y))
+			xTitle := strings.ToLower(sessionTitle(x))
+			yTitle := strings.ToLower(sessionTitle(y))
 			if xTitle != yTitle {
 				return xTitle < yTitle
 			}
@@ -4652,17 +4679,17 @@ func sortColTableIndex(c SortColumn) int {
 	case SortColName:
 		return 0
 	case SortColWorkspace:
-		return 1
-	case SortColUsed:
 		return 2
-	case SortColModel:
+	case SortColUsed:
 		return 3
-	case SortColMessages:
+	case SortColModel:
 		return 4
-	case SortColSummary:
+	case SortColMessages:
 		return 5
-	case SortColCreated:
+	case SortColSummary:
 		return 6
+	case SortColCreated:
+		return 7
 	}
 	return -1
 }
@@ -5372,7 +5399,7 @@ func (a *App) openDeleteConfirm() {
 	sess := a.selected
 	m := &Modal{
 		Title: "Delete Session",
-		Body:  fmt.Sprintf("Delete session %q?", sessionDisplayTitle(sess)),
+		Body:  fmt.Sprintf("Delete session %q?", sessionTitle(sess)),
 		Details: []string{
 			"Session folder and metadata will be removed.",
 			"Claude transcript will be deleted.",
@@ -5412,7 +5439,7 @@ func (a *App) openSearchForm() {
 	if sess == nil {
 		return
 	}
-	input := NewTextInput("Search " + sessionDisplayTitle(sess) + ": ")
+	input := NewTextInput("Search " + sessionTitle(sess) + ": ")
 	input.OnCancel = a.closeOverlay
 	input.OnSubmit = func(q string) {
 		a.closeOverlay()
@@ -5645,7 +5672,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 	if b, ok := a.liveURLRecordFor(sess); ok {
 		bridgeURL = b.URL
 	}
-	panel := NewSidecarPanel(sessionDisplayTitle(sess), sess.Metadata.ProviderSessionID(), bridgeURL)
+	panel := NewSidecarPanel(sessionTitle(sess), sess.Metadata.ProviderSessionID(), bridgeURL)
 	panel.OnSend = func(text string) error {
 		send := a.sidecarSendFunc()
 		if send == nil {
@@ -6229,8 +6256,29 @@ func (a *App) findSessionByName(name string) *session.Session {
 	return nil
 }
 
-func sessionDisplayTitle(sess *session.Session) string {
-	return session.SessionDisplayName(sess)
+func sessionTitle(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	if title := strings.TrimSpace(sess.Metadata.Title); title != "" {
+		return title
+	}
+	if providerTitle := strings.TrimSpace(sess.ProviderTitle()); providerTitle != "" {
+		return providerTitle
+	}
+	return sess.Name
+}
+
+func sessionProviderTitleCell(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	title := strings.TrimSpace(sess.Metadata.Title)
+	providerTitle := strings.TrimSpace(sess.ProviderTitle())
+	if providerTitle == "" || title == "" || providerTitle == title {
+		return ""
+	}
+	return providerTitle
 }
 
 func sessionMatchesLookup(sess *session.Session, name, sessionID string) bool {
@@ -6247,7 +6295,7 @@ func sessionMatchesLookup(sess *session.Session, name, sessionID string) bool {
 	if sess.Name == lookupName {
 		return true
 	}
-	return sessionDisplayTitle(sess) == lookupName
+	return sessionTitle(sess) == lookupName
 }
 
 func sessionHistoryReadable(sess *session.Session) bool {
@@ -6343,7 +6391,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 		return
 	}
 	close := func() { a.closeOverlay() }
-	modal := NewOptionsModal(sessionDisplayTitle(sess), a.sessionOptionsEntries(sess, close))
+	modal := NewOptionsModal(sessionTitle(sess), a.sessionOptionsEntries(sess, close))
 	modal.OnCancel = close
 	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
 	modal.StatsSessionName = sess.Name
@@ -6472,7 +6520,7 @@ func (a *App) sessionOptionsEntriesFor(sess *session.Session, close func(), incl
 		a.copyLiveURLEntry(sess, close),
 		{
 			Label: "Rename",
-			Hint:  "edits the visible name",
+			Hint:  "r",
 			Action: func() {
 				close()
 				a.openRenamePrompt(sess)
@@ -6552,7 +6600,7 @@ func (a *App) openSessionContextWindowOptions(sess *session.Session, closeParent
 			Action: apply("1m"),
 		},
 	}
-	modal := NewOptionsModal("Claude context for "+sessionDisplayTitle(sess), entries)
+	modal := NewOptionsModal("Claude context for "+sessionTitle(sess), entries)
 	modal.OnCancel = func() {
 		a.closeOverlay()
 		a.mode = StatusFilter
@@ -6610,29 +6658,27 @@ func openExternalURL(url string) error {
 	return cmd.Start()
 }
 
-// openRenamePrompt asks for the new visible title via an inline input
-// and routes the rename through the daemon when the callback is set.
-// The wired callback hides whether the actual rename happened locally
-// or via gRPC; either way the dashboard refreshes from the store on
-// completion.
+// openRenamePrompt asks for the new Clyde-owned title via an inline input and
+// persists only session metadata when the callback is set.
 func (a *App) openRenamePrompt(sess *session.Session) {
 	if sess == nil {
 		return
 	}
-	input := NewTextInput("New visible name: ")
-	input.Text = sess.Name
-	input.CursorX = runeCount(sess.Name)
+	currentTitle := strings.TrimSpace(sess.Metadata.Title)
+	if currentTitle == "" {
+		currentTitle = sessionTitle(sess)
+	}
+	input := NewTextInput("New Clyde title: ")
+	input.Text = currentTitle
+	input.CursorX = runeCount(currentTitle)
 	input.OnSubmit = func(s string) {
 		a.closeOverlay()
-		newName := strings.TrimSpace(s)
-		if newName == "" || newName == sess.Name {
+		newTitle := strings.TrimSpace(s)
+		if newTitle == "" || newTitle == strings.TrimSpace(sess.Metadata.Title) {
 			return
 		}
-		// Mutate the session's Name field so the callback wired in
-		// cmd/root.go can read both old and new values from the
-		// session struct without us widening the callback signature.
-		oldName := sess.Name
-		sess.Name = newName
+		oldTitle := sess.Metadata.Title
+		sess.Metadata.Title = newTitle
 		if a.cb.RenameSession != nil {
 			go func() {
 				defer func() {
@@ -6641,7 +6687,7 @@ func (a *App) openRenamePrompt(sess *session.Session) {
 					}
 				}()
 				if _, err := a.cb.RenameSession(sess); err != nil {
-					sess.Name = oldName
+					sess.Metadata.Title = oldTitle
 				}
 				a.requestSessionsAsync("rename")
 			}()
@@ -6650,6 +6696,12 @@ func (a *App) openRenamePrompt(sess *session.Session) {
 	input.OnCancel = a.closeOverlay
 	a.overlay = &InputOverlay{Input: input, Title: "Rename session"}
 	a.mode = StatusFilter
+}
+
+func (a *App) openSelectedRenamePrompt() {
+	if sess := a.rowSession(); sess != nil && a.cb.RenameSession != nil {
+		a.openRenamePrompt(sess)
+	}
 }
 
 // openBasedirEditor pops up an inline single-line input pre-filled with
@@ -6682,7 +6734,7 @@ func (a *App) openBasedirEditor(sess *session.Session) {
 		}
 	}
 	input.OnCancel = a.closeOverlay
-	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sessionDisplayTitle(sess) + " (empty clears)"}
+	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sessionTitle(sess) + " (empty clears)"}
 	a.mode = StatusFilter
 }
 
@@ -6694,7 +6746,7 @@ func (a *App) openExportOptions(sess *session.Session) {
 		return
 	}
 	stats, loaded := a.cachedExportStatsForSession(sess)
-	panel := newExportPanelWithTitle(sess.Name, sessionDisplayTitle(sess), stats, defaultExportFolder())
+	panel := newExportPanelWithTitle(sess.Name, sessionTitle(sess), stats, defaultExportFolder())
 	if !loaded && a.cb.LoadExportStats != nil {
 		panel.StartLoadingStats()
 		a.requestExportStatsAsync(sess)

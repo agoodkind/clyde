@@ -180,7 +180,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 			HasCustomOutputStyle: false,
 			WorkspaceRoot:        r.WorkspaceRoot,
 			ContextMessageCount:  0,
-			DisplayTitle:         r.DisplayTitle(),
+			Title:                r.Title(),
 			AutoNameState:        AutoNameStateUntouched,
 			AutoNameSource:       AutoNameSourceUnspecified,
 			LastAutoNameAt:       time.Time{},
@@ -264,7 +264,7 @@ func AdoptUnknown(store *FileStore, results []DiscoveryResult) ([]AdoptedSession
 // workspace-plus-UUID compatibility scheme in uniqueAdoptedName. The second
 // return value is a short label of the source used, for structured logs.
 func pickAdoptedName(r DiscoveryResult, taken map[string]bool) (string, string) {
-	observedName := r.DisplayTitle()
+	observedName := r.Title()
 	if candidate := UniqueDisplayName(observedName, taken); candidate != "" {
 		sessionAdoptLog.Logger().Debug("session.adopt.name_picked",
 			"component", "session",

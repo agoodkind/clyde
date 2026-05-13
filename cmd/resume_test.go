@@ -13,9 +13,9 @@ import (
 func TestResolveSessionForResumeAmbiguousMatchesShowVisibleTitles(t *testing.T) {
 	store := session.NewFileStore(t.TempDir())
 	first := session.NewSession("merry-swan", "uuid-1")
-	first.Metadata.DisplayTitle = "Merry Swan"
+	first.Metadata.Title = "Merry Swan"
 	second := session.NewSession("quiet-swan", "uuid-2")
-	second.Metadata.DisplayTitle = "Quiet Swan"
+	second.Metadata.Title = "Quiet Swan"
 	for _, sess := range []*session.Session{first, second} {
 		if err := store.Create(sess); err != nil {
 			t.Fatalf("create session %q: %v", sess.Name, err)

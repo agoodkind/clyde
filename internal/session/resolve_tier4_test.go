@@ -93,7 +93,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(sess).ToNot(BeNil())
 		Expect(sess.Name).To(Equal("2026-04-12 Merry Swan"))
 		Expect(sess.Metadata.ProviderSessionID()).To(Equal(uuid))
-		Expect(sess.Metadata.DisplayTitle).To(Equal("2026-04-12 Merry Swan"))
+		Expect(sess.Metadata.Title).To(Equal("2026-04-12 Merry Swan"))
 
 		metaPath := filepath.Join(clydeRoot, "sessions", sess.StorageKey(), "metadata.json")
 		_, statErr := os.Stat(metaPath)
@@ -118,7 +118,7 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(sess).ToNot(BeNil())
 		Expect(sess.Name).To(ContainSubstring("tack"))
 		Expect(sess.Name).To(ContainSubstring(uuid[:8]))
-		Expect(sess.Metadata.DisplayTitle).To(Equal(""))
+		Expect(sess.Metadata.Title).To(Equal(""))
 	})
 
 	It("falls back to workspace-plus-UUID when customTitle violates display-name policy", func() {
@@ -166,13 +166,13 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(first).ToNot(BeNil())
 		Expect(first.Name).To(Equal("Merry Swan"))
-		Expect(first.Metadata.DisplayTitle).To(Equal("Merry Swan"))
+		Expect(first.Metadata.Title).To(Equal(""))
 
 		second, err := store.Resolve("Merry Swan")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(second).ToNot(BeNil())
 		Expect(second.Name).To(Equal("Merry Swan"))
-		Expect(second.Metadata.DisplayTitle).To(Equal("Merry Swan"))
+		Expect(second.Metadata.Title).To(Equal(""))
 	})
 
 	It("syncs a provider rename for an already-known session", func() {
@@ -198,11 +198,11 @@ var _ = Describe("Resolve tier 4 (transparent adoption)", func() {
 		Expect(changes).To(HaveLen(1))
 		Expect(changes[0].OldName).To(Equal("tack-22a95bc5"))
 		Expect(changes[0].Session.Name).To(Equal("Renamed in Provider"))
-		Expect(changes[0].Session.Metadata.DisplayTitle).To(Equal("Renamed in Provider"))
+		Expect(changes[0].Session.Metadata.Title).To(Equal(""))
 
 		reloaded, err := store.Get("Renamed in Provider")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(reloaded.Metadata.DisplayTitle).To(Equal("Renamed in Provider"))
+		Expect(reloaded.Metadata.Title).To(Equal(""))
 		Expect(reloaded.ClydeUUID()).To(Equal(existing.ClydeUUID()))
 	})
 

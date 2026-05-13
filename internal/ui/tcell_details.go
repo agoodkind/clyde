@@ -200,6 +200,7 @@ func (d *DetailsView) addIdentitySection(
 	b.section("Identity")
 	b.kv("Model", detail.Model)
 	b.kv("Live URL", d.formatLiveURL(sess))
+	b.kv("Provider title", sess.ProviderTitle())
 	b.kv("Basedir", shortPath(sess.Metadata.WorkspaceRoot))
 	if sess.Metadata.WorkDir != "" && sess.Metadata.WorkDir != sess.Metadata.WorkspaceRoot {
 		b.kv("Work dir", shortPath(sess.Metadata.WorkDir))

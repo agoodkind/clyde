@@ -3,6 +3,7 @@ package registry
 
 import (
 	"fmt"
+	"log/slog"
 
 	// Blank-import the Claude contextusage provider package so its
 	// init() registers the Prober and CandidateProber with the
@@ -40,8 +41,31 @@ type Runtime interface {
 	session.OpaqueSessionResumer
 	session.ResumeInstructionProvider
 	session.ContextMessageProvider
+	session.CurrentTitleProvider
 	session.NameProvider
 	session.ArtifactCleaner
+}
+
+func init() {
+	session.RegisterCurrentTitleResolver(readCurrentTitle)
+}
+
+func readCurrentTitle(provider session.ProviderID, transcriptPath string) (string, error) {
+	runtime, err := ForProvider(provider, nil)
+	if err != nil {
+		return "", err
+	}
+	title, err := runtime.ReadCurrentTitle(transcriptPath)
+	if err != nil {
+		slog.Warn("provider.current_title.read_failed",
+			"component", "providers",
+			"provider", provider,
+			"transcript_path", transcriptPath,
+			"err", err,
+		)
+		return "", fmt.Errorf("read current provider title: %w", err)
+	}
+	return title, nil
 }
 
 // Default returns the default provider runtime for session flows that have not

@@ -83,34 +83,6 @@ func NudgeDiscoveryScan() {
 	log.DebugContext(bg, "daemon.client.nudge.sigusr1_sent", "pid", pid)
 }
 
-// RenameSessionViaDaemonOutcome performs the rename and returns the normalized
-// daemon lifecycle outcome.
-func RenameSessionViaDaemonOutcome(ctx context.Context, oldName, newName string) (LifecycleOutcome, error) {
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.rename_session.begin",
-		"old_name", oldName,
-		"new_name", newName,
-	)
-	c, err := ConnectOrStart(ctx)
-	if err != nil {
-		log.DebugContext(ctx, "daemon.client.rename_session.connect_failed", "err", err)
-		return LifecycleOutcomeDegradedOffline, err
-	}
-	defer func() { _ = c.conn.Close() }()
-	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err = c.rpc.RenameSession(rpcCtx, &clydev1.RenameSessionRequest{
-		OldName: oldName,
-		NewName: newName,
-	})
-	if err != nil {
-		log.DebugContext(rpcCtx, "daemon.client.rename_session.rpc_failed", "err", err)
-		return lifecycleOutcomeForError(err), err
-	}
-	log.DebugContext(rpcCtx, "daemon.client.rename_session.ok")
-	return LifecycleOutcomeReady, nil
-}
-
 // DeleteSessionViaDaemon asks the daemon to drop a session from the
 // registry. Transcript and agent log cleanup remain the caller's job
 // because they touch per-project state outside the daemon's view.

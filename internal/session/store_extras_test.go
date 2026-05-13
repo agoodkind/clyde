@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"os"
 	"path/filepath"
 	"time"
 
@@ -107,8 +108,33 @@ var _ = Describe("FileStore additional contracts", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(renamed.Name).To(Equal("Brand New Name"))
 			Expect(renamed.Metadata.Name).To(Equal("Brand New Name"))
-			Expect(renamed.Metadata.DisplayTitle).To(Equal("Brand New Name"))
+			Expect(renamed.Metadata.Title).To(Equal("Brand New Name"))
 			Expect(renamed.Metadata.ProviderSessionID()).To(Equal("uuid-rename-happy"))
+		})
+	})
+
+	Describe("Title metadata migration", func() {
+		It("rewrites legacy displayTitle keys to title", func() {
+			sessionDir := filepath.Join(clydeRoot, config.SessionsDir, "legacy-title")
+			Expect(util.EnsureDir(sessionDir)).To(Succeed())
+			metadataPath := filepath.Join(sessionDir, "metadata.json")
+			body := []byte(`{"name":"Legacy Title","sessionId":"uuid-title","displayTitle":"Provider Title"}`)
+			Expect(os.WriteFile(metadataPath, body, 0o644)).To(Succeed())
+
+			result, err := session.MigrateTitleMetadata(clydeRoot)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.Scanned).To(Equal(1))
+			Expect(result.Migrated).To(Equal(1))
+			Expect(result.Failed).To(Equal(0))
+
+			reloaded, err := session.NewFileStore(clydeRoot).Get("Legacy Title")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(reloaded.Metadata.Title).To(Equal("Provider Title"))
+
+			content, err := os.ReadFile(metadataPath)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(content)).To(ContainSubstring(`"title"`))
+			Expect(string(content)).ToNot(ContainSubstring(`"displayTitle"`))
 		})
 	})
 
@@ -165,23 +191,23 @@ var _ = Describe("FileStore additional contracts", func() {
 	Describe("Resolve tier 1 (display title)", func() {
 		It("resolves by exact display title when display title differs from name", func() {
 			s := session.NewSession("auto-generated-name", "uuid-tier1-display")
-			s.Metadata.DisplayTitle = "Provider Owned Title"
+			s.Metadata.Title = "Provider Owned Title"
 			Expect(store.Create(s)).To(Succeed())
 
 			resolved, err := store.Resolve("Provider Owned Title")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resolved).NotTo(BeNil())
 			Expect(resolved.Name).To(Equal("auto-generated-name"))
-			Expect(resolved.Metadata.DisplayTitle).To(Equal("Provider Owned Title"))
+			Expect(resolved.Metadata.Title).To(Equal("Provider Owned Title"))
 		})
 
 		It("returns nil when the same display title is shared by multiple sessions", func() {
 			s1 := session.NewSession("session-one", "uuid-tier1-amb-1")
-			s1.Metadata.DisplayTitle = "Shared Title"
+			s1.Metadata.Title = "Shared Title"
 			Expect(store.Create(s1)).To(Succeed())
 
 			s2 := session.NewSession("session-two", "uuid-tier1-amb-2")
-			s2.Metadata.DisplayTitle = "Shared Title"
+			s2.Metadata.Title = "Shared Title"
 			Expect(store.Create(s2)).To(Succeed())
 
 			// "Shared Title" is not a valid Name match (Get fails), no session

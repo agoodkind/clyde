@@ -901,7 +901,7 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	}
 
 	sess := a.sessions[a.visibleIdx[0]]
-	sess.Metadata.DisplayTitle = "Merry Swan"
+	sess.Metadata.Title = "Merry Swan"
 	a.openExportOptions(sess)
 	panel, ok := a.overlay.(*ExportPanel)
 	if !ok {
@@ -1197,10 +1197,10 @@ func TestUX_TableShowsVisibleMessageCounts(t *testing.T) {
 
 	row0 := a.table.Rows[0]
 	row1 := a.table.Rows[1]
-	if got := row0[4].Text; got != "1,027" {
+	if got := row0[5].Text; got != "1,027" {
 		t.Fatalf("row0 msgs = %q, want %q", got, "1,027")
 	}
-	if got := row1[4].Text; got != "44" {
+	if got := row1[5].Text; got != "44" {
 		t.Fatalf("row1 msgs = %q, want %q", got, "44")
 	}
 }
@@ -1857,13 +1857,13 @@ func TestRuntimeStampIncludesExecutableHash(t *testing.T) {
 	}
 }
 
-func TestUX_FindSessionByDisplayTitleAndRenderDisplayTitle(t *testing.T) {
+func TestUX_FindSessionByTitleAndRenderTitle(t *testing.T) {
 	a := NewApp([]*session.Session{{
 		Name: "merry-swan",
 		Metadata: session.Metadata{
 			Name:         "merry-swan",
 			SessionID:    "shared",
-			DisplayTitle: "Merry Swan",
+			Title:        "Merry Swan",
 			LastAccessed: time.Now(),
 		},
 	}}, AppCallbacks{})
@@ -1892,5 +1892,72 @@ func TestUX_FindSessionByDisplayTitleAndRenderDisplayTitle(t *testing.T) {
 	a.pinSidecar(a.sessions[0])
 	if a.sidecar == nil || a.sidecar.SessionName != "Merry Swan" {
 		t.Fatalf("sidecar title = %#v, want display title", a.sidecar)
+	}
+}
+
+func TestUX_RowShowsProviderTitleWhenItDiffers(t *testing.T) {
+	t.Cleanup(func() {
+		session.RegisterCurrentTitleResolver(nil)
+	})
+	session.RegisterCurrentTitleResolver(func(session.ProviderID, string) (string, error) {
+		return "Provider Swan", nil
+	})
+	a := NewApp([]*session.Session{{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:           "merry-swan",
+			SessionID:      "shared",
+			TranscriptPath: "/tmp/session.jsonl",
+			Title:          "Clyde Swan",
+			LastAccessed:   time.Now(),
+		},
+	}}, AppCallbacks{})
+
+	row := a.rowForLockedLastUsed(a.sessions[0])
+	if len(row) < 2 {
+		t.Fatalf("row = %#v, want provider title column", row)
+	}
+	if row[0].Text != "Clyde Swan" {
+		t.Fatalf("row title = %q, want Clyde Swan", row[0].Text)
+	}
+	if row[1].Text != "Provider Swan" {
+		t.Fatalf("provider title = %q, want Provider Swan", row[1].Text)
+	}
+}
+
+func TestUX_RenamePromptUpdatesTitleOnly(t *testing.T) {
+	called := make(chan *session.Session, 1)
+	a := NewApp([]*session.Session{{
+		Name: "merry-swan",
+		Metadata: session.Metadata{
+			Name:         "merry-swan",
+			SessionID:    "shared",
+			Title:        "Old Clyde Title",
+			LastAccessed: time.Now(),
+		},
+	}}, AppCallbacks{
+		RenameSession: func(sess *session.Session) (string, error) {
+			called <- sess
+			return sess.Metadata.Title, nil
+		},
+	})
+
+	a.openRenamePrompt(a.sessions[0])
+	overlay, ok := a.overlay.(*InputOverlay)
+	if !ok {
+		t.Fatalf("overlay = %T, want *InputOverlay", a.overlay)
+	}
+	overlay.Input.OnSubmit("New Clyde Title")
+
+	select {
+	case sess := <-called:
+		if sess.Name != "merry-swan" {
+			t.Fatalf("Name = %q, want merry-swan", sess.Name)
+		}
+		if sess.Metadata.Title != "New Clyde Title" {
+			t.Fatalf("Title = %q, want New Clyde Title", sess.Metadata.Title)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("RenameSession callback was not called")
 	}
 }

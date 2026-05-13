@@ -17,8 +17,8 @@ func (name ThreadName) GetName() string {
 	return strings.TrimSpace(name.Name)
 }
 
-// GetDisplayTitle returns the exact human-visible Codex thread title.
-func (name ThreadName) GetDisplayTitle() string {
+// GetTitle returns the exact human-visible Codex thread title.
+func (name ThreadName) GetTitle() string {
 	return strings.TrimSpace(name.Name)
 }
 
