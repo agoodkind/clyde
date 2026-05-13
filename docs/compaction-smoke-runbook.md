@@ -136,6 +136,10 @@ The `/tmp` backup from Step 1 is the safety net for the whole run. The final res
 
 This step proves your methodology is sound. Before any Apply runs, the model should see the canary you just inserted.
 
+Every pre-Apply and post-Apply LLM probe in this runbook MUST capture `/context` alongside the canary question. Run the canary probe first to record cost and answer, then run a separate `claude -p "/context"` call against the same `--resume <id>` (also with `--no-session-persistence`, no tools) and save the result. The captured `/context` Messages and Tokens lines are the upstream-truth dual-counter view that the clyde planner's prober is compared against. Without /context capture, a regression in the prober's `ctx_total` is silent and only surfaces later as an over-target Apply or a refused trim.
+
+Model selection: when the smoke target is `motd-shell-rules-cleanup` (or any small session under roughly 200k tokens), use `--model 'claude-haiku-4-5'` for every probe in this runbook. Opus is unnecessary at this scale and costs roughly 25 times more per probe with no signal benefit. Reserve opus 1M (`claude-opus-4-7[1m]`) for runs against sessions that genuinely require the 1M window (lm-review at 877k, the mwan-handoff sessions at 720k to 977k). The model choice does not affect the canary-survival semantics; it only affects probe cost and latency.
+
 ```bash
 cd ~/Sites/lm-review
 claude -p "What is the build hash for skill $HEX1?" \

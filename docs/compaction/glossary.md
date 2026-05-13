@@ -1,0 +1,22 @@
+# Compaction glossary
+
+This page is the vocabulary the rest of the hub assumes. See [algorithm.md](algorithm.md) for how these concepts fit together and [edge-cases.md](edge-cases.md) for the failure modes that touch each one.
+
+| Concept | Definition |
+| --- | --- |
+| Boundary | Apply writes a `compact_boundary` system entry into the JSONL transcript at the end of every successful compaction. The most-recent boundary is the cut point that defines the post-boundary slice the planner operates on. |
+| Slice | `compact.LoadSlice` reads the transcript and produces a `compact.Slice` value. The slice carries the full entry list, the boundary location, the post-boundary entries, and a pair index that maps each tool_use id to its matching tool_result. |
+| Entry | The parser produces one `compact.Entry` per JSONL line. Each entry carries the structured fields the planner reads and the raw bytes the apply path needs so unchanged lines round-trip byte-for-byte. |
+| Content block | One `compact.ContentBlock` represents one element of an Anthropic-style content array on an entry, and its `Type` field is one of `text`, `thinking`, `image`, `tool_use`, or `tool_result`. The parser preserves unknown block types verbatim in the raw bytes. |
+| Synthetic | A synthetic is a post-boundary entry with `isCompactSummary=true`. A prior Apply wrote it to absorb dropped chat turns, dropped tool calls, and structured continuity notices into a single user message that survives across the new boundary. |
+| Chunk | A synthetic is divided into named subsections that act as independent drop units: `context_continuity_notice`, `summary_of_dropped_content`, `what_was_dropped`, the transcript-turn parts, the tool items, and the `continue_from_here` footer. Rehydrate expands each chunk into its own virtual entry so the planner can drop chunks individually on a later pass. |
+| Layer | The depth of nested synthetics in a transcript counts as layers. Each successful Apply adds one new synthetic above the prior boundary, so a session compacted three times has up to three layers of synthetics inside its post-boundary slice. |
+| Rehydrate | `compact.Rehydrate` walks the post-boundary entries and expands every prior synthetic into virtual entries, one per chunk. The expansion lets the bisect treat older summaries as ordinary drop units rather than indivisible blobs. |
+| Dehydrate | `compact.Dehydrate` runs after the bisect finishes and maps the planner's drop decisions on virtual entries back to chunk keys on the original synthetic. The pass then collapses the virtual run so the post-boundary slice carries one combined synthetic instead of many disconnected virtuals. |
+| Drop unit | A drop unit is one thing the planner can choose to remove on one axis: a chat turn pair, an image block, a thinking block, a tool pair, or a chunk inside a rehydrated synthetic. |
+| Axis | An axis is one dimension of the search space. The planner has four axes in a fixed order: thinking strip, image placeholder, tool demotion, chat drop. Each axis defines an integer upper bound and a probe function that applies a candidate k, measures the projection, and reverts. |
+| Bisect | The planner runs a binary search along each axis to find the minimum-disruption k that brings the projection to or under target. `compact.BisectMin` is the primitive; its contract requires the projection to be monotone-non-increasing in k so binary search is valid. |
+| Projection | A projection is the estimated context total after a candidate set of removals. It equals the synthesized post-boundary token count plus the calibrated static overhead plus the reserved buffer, and the planner compares this number against the target on every probe. |
+| Target | A target is the post-Apply context ceiling the user asks for, expressed as a token count. The planner refuses to apply when no point along the axes brings the projection at or under the target. |
+| Refusal | Apply returns `ApplyOverTargetError` when the planner's final projection still exceeds the target. The error carries the projection, the target, and the delta so the caller can render a precise message; the caller can override the refusal with the `ForceOverTarget` flag, and the audit event fires in either case. |
+| Apply | `compact.Apply` is the terminal step that appends one new compact_boundary entry and one new synthetic summary to the transcript in a single atomic file write. Apply never deletes prior entries, so the boundary makes them invisible to the next session without removing them from disk. |
