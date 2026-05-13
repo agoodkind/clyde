@@ -13,6 +13,11 @@
 # Operator note: [adapter.oauth] and the stainless/* / cc_* fields under
 # [adapter.client_identity] must match the canonical desktop client you
 # use for login (capture from your environment or vendor docs).
+#
+# Secret fields may be inline values, environment variable references where
+# supported, or file paths. Relative secret file paths resolve from this
+# config.toml directory. For example:
+#   require_token = "./secrets/adapter-token"
 
 [logging]
 level = "debug"
@@ -99,6 +104,7 @@ contexts = [
 [adapter.openai_compat_passthrough]
 base_url = "http://[::1]:1234/v1"
 api_key = ""
+# api_key = "./secrets/openai-compat-api-key"
 api_key_env = ""
 model = ""
 
@@ -108,6 +114,7 @@ model = ""
 # [adapter.passthrough_overrides.local]
 # base_url = "http://localhost:1234/v1"
 # api_key = ""
+# api_key = "./secrets/local-api-key"
 # api_key_env = ""
 # model = "local-model"
 #

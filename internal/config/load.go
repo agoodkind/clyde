@@ -22,59 +22,68 @@ import (
 func loadConfig(dir string) (*Config, error) {
 	log := slog.Default().With("concern", "process.daemon.config")
 	tomlPath := filepath.Join(dir, "config.toml")
-	if util.FileExists(tomlPath) {
-		var cfg Config
-		data, err := os.ReadFile(tomlPath)
-		if err != nil {
-			log.Warn("config.load.read_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("failed to read %s: %w", tomlPath, err)
-		}
-		if err := toml.Unmarshal(data, &cfg); err != nil {
-			log.Warn("config.load.parse_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
-		}
-		if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
-			log.Warn("config.load.instructions_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
-		}
-		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
-			log.Warn("config.load.validate_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
-		}
-		log.Debug("config.load.loaded",
+	if !util.FileExists(tomlPath) {
+		return nil, os.ErrNotExist
+	}
+	var cfg Config
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		log.Warn("config.load.read_failed",
 			"component", "config",
 			"subcomponent", "load",
-			"format", "toml",
 			"path", tomlPath,
+			"format", "toml",
+			"err", err,
 		)
-		return &cfg, nil
+		return nil, fmt.Errorf("failed to read %s: %w", tomlPath, err)
 	}
-
-	return nil, os.ErrNotExist
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		log.Warn("config.load.parse_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
+	}
+	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
+		log.Warn("config.load.instructions_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+	}
+	if err := resolveConfigSecrets(&cfg, tomlPath); err != nil {
+		log.Warn("config.load.secrets_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+	}
+	if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
+		log.Warn("config.load.validate_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+	}
+	log.Debug("config.load.loaded",
+		"component", "config",
+		"subcomponent", "load",
+		"format", "toml",
+		"path", tomlPath,
+	)
+	return &cfg, nil
 }
 
 func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {

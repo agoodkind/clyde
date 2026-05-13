@@ -222,12 +222,22 @@ type WebAppConfig struct {
 	// Port defaults to 11435.
 	Port int `json:"port,omitempty" toml:"port,omitempty"`
 	// RequireToken, when set, demands matching bearer auth on every
-	// request. CLYDE_WEBAPP_TOKEN env override applies.
-	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
+	// request. The value may be a file path. CLYDE_WEBAPP_TOKEN env
+	// override applies.
+	RequireToken         string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
+	resolvedRequireToken string
 	// ClydeBinary is the path used to spawn new sessions when the
 	// dashboard's "Start" button is invoked. Empty falls back to the
 	// daemon's resolved executable name.
 	ClydeBinary string `json:"clydeBinary,omitempty" toml:"clyde_binary,omitempty"`
+}
+
+// RequireTokenSecret returns the resolved shared bearer token.
+func (w WebAppConfig) RequireTokenSecret() string {
+	if w.resolvedRequireToken != "" {
+		return w.resolvedRequireToken
+	}
+	return w.RequireToken
 }
 
 // AdapterConfig configures the OpenAI compatible HTTP server folded
@@ -248,8 +258,10 @@ type AdapterConfig struct {
 	// MaxConcurrent caps the number of in flight claude subprocesses.
 	MaxConcurrent int `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
 	// RequireToken, when set, demands a matching bearer token on
-	// every request. The env var CLYDE_ADAPTER_TOKEN overrides.
-	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
+	// every request. The value may be a file path. The env var
+	// CLYDE_ADAPTER_TOKEN overrides.
+	RequireToken         string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
+	resolvedRequireToken string
 	// Models lets users add or override adapter model entries.
 	// Keys are the public (OpenAI style or real Claude) aliases the
 	// client sends. Values name the backend and its tuning knobs.
@@ -322,6 +334,14 @@ type AdapterConfig struct {
 	// Retry declares adapter-owned retry policies. The default set only
 	// includes the narrow Codex overload policy; there is no catch-all retry.
 	Retry AdapterRetry `json:"retry,omitzero" toml:"retry,omitempty"`
+}
+
+// RequireTokenSecret returns the resolved adapter bearer token.
+func (a AdapterConfig) RequireTokenSecret() string {
+	if a.resolvedRequireToken != "" {
+		return a.resolvedRequireToken
+	}
+	return a.RequireToken
 }
 
 // AdapterRetry is the top-level retry config for adapter operations.
@@ -731,13 +751,23 @@ type AdapterLogprobs struct {
 // Model is set.
 type AdapterOpenAICompatPassthrough struct {
 	BaseURL string `json:"baseUrl,omitempty" toml:"base_url,omitempty"`
-	APIKey  string `json:"apiKey,omitempty" toml:"api_key,omitempty"`
+	// APIKey may be an inline secret or a file path.
+	APIKey         string `json:"apiKey,omitempty" toml:"api_key,omitempty"`
+	resolvedAPIKey string
 	// APIKeyEnv lets the user keep the secret out of the config file.
 	// When set the adapter reads os.Getenv(APIKeyEnv) at request time.
 	APIKeyEnv string `json:"apiKeyEnv,omitempty" toml:"api_key_env,omitempty"`
 	// Model overrides the model name forwarded upstream. Empty means pass
 	// the caller's model string through unchanged.
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
+}
+
+// APIKeySecret returns the resolved passthrough API key.
+func (p AdapterOpenAICompatPassthrough) APIKeySecret() string {
+	if p.resolvedAPIKey != "" {
+		return p.resolvedAPIKey
+	}
+	return p.APIKey
 }
 
 // AdapterNotices controls the synthetic notice injection path across
@@ -990,7 +1020,9 @@ type AdapterModel struct {
 // AdapterPassthroughOverride points to an upstream OpenAI-compatible endpoint.
 type AdapterPassthroughOverride struct {
 	BaseURL string `json:"baseUrl,omitempty" toml:"base_url,omitempty"`
-	APIKey  string `json:"apiKey,omitempty" toml:"api_key,omitempty"`
+	// APIKey may be an inline secret or a file path.
+	APIKey         string `json:"apiKey,omitempty" toml:"api_key,omitempty"`
+	resolvedAPIKey string
 	// APIKeyEnv lets the user keep the secret out of the config
 	// file. When set the adapter reads os.Getenv(APIKeyEnv) at
 	// request time.
@@ -998,6 +1030,14 @@ type AdapterPassthroughOverride struct {
 	// Model overrides the model name forwarded upstream. Empty
 	// means pass the caller's model string through unchanged.
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
+}
+
+// APIKeySecret returns the resolved passthrough override API key.
+func (p AdapterPassthroughOverride) APIKeySecret() string {
+	if p.resolvedAPIKey != "" {
+		return p.resolvedAPIKey
+	}
+	return p.APIKey
 }
 
 // SearchConfig configures the LLM backend for conversation search.
@@ -1010,23 +1050,27 @@ type SearchConfig struct {
 
 // SearchLocal configures a local OpenAI-compatible LLM endpoint.
 type SearchLocal struct {
-	URL                string        `json:"url,omitempty" toml:"url,omitempty"`
-	Token              string        `json:"token,omitempty" toml:"token,omitempty"`
-	EmbeddingURL       string        `json:"embeddingUrl,omitempty" toml:"embedding_url,omitempty"`
-	EmbeddingToken     string        `json:"embeddingToken,omitempty" toml:"embedding_token,omitempty"`
-	Model              string        `json:"model,omitempty" toml:"model,omitempty"`
-	RerankModel        string        `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
-	DeepModel          string        `json:"deepModel,omitempty" toml:"deep_model,omitempty"`
-	Pipeline           []SearchLayer `json:"pipeline,omitempty" toml:"pipeline,omitempty"`
-	Temperature        float64       `json:"temperature" toml:"temperature"`
-	TopP               float64       `json:"topP" toml:"top_p"`
-	FrequencyPenalty   float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
-	MaxConcurrent      int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
-	ChunkSize          int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
-	MaxMemoryGB        int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
-	ContextLength      int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
-	EmbeddingThreshold float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
-	EmbeddingModel     string        `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
+	URL string `json:"url,omitempty" toml:"url,omitempty"`
+	// Token may be an inline bearer token or a file path.
+	Token         string `json:"token,omitempty" toml:"token,omitempty"`
+	resolvedToken string
+	EmbeddingURL  string `json:"embeddingUrl,omitempty" toml:"embedding_url,omitempty"`
+	// EmbeddingToken may be an inline bearer token or a file path.
+	EmbeddingToken         string `json:"embeddingToken,omitempty" toml:"embedding_token,omitempty"`
+	resolvedEmbeddingToken string
+	Model                  string        `json:"model,omitempty" toml:"model,omitempty"`
+	RerankModel            string        `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
+	DeepModel              string        `json:"deepModel,omitempty" toml:"deep_model,omitempty"`
+	Pipeline               []SearchLayer `json:"pipeline,omitempty" toml:"pipeline,omitempty"`
+	Temperature            float64       `json:"temperature" toml:"temperature"`
+	TopP                   float64       `json:"topP" toml:"top_p"`
+	FrequencyPenalty       float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
+	MaxConcurrent          int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
+	ChunkSize              int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
+	MaxMemoryGB            int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
+	ContextLength          int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
+	EmbeddingThreshold     float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
+	EmbeddingModel         string        `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
 }
 
 // ResolvedEmbeddingURL returns the base URL for OpenAI-style embedding
@@ -1039,13 +1083,24 @@ func (s SearchLocal) ResolvedEmbeddingURL() string {
 	return strings.TrimSuffix(strings.TrimSpace(s.URL), "/")
 }
 
+// ResolvedToken returns the resolved bearer token for the chat endpoint.
+func (s SearchLocal) ResolvedToken() string {
+	if s.resolvedToken != "" {
+		return s.resolvedToken
+	}
+	return s.Token
+}
+
 // ResolvedEmbeddingToken returns the bearer token for the embedding
 // endpoint. When EmbeddingToken is empty it falls back to Token.
 func (s SearchLocal) ResolvedEmbeddingToken() string {
+	if s.resolvedEmbeddingToken != "" {
+		return s.resolvedEmbeddingToken
+	}
 	if s.EmbeddingToken != "" {
 		return s.EmbeddingToken
 	}
-	return s.Token
+	return s.ResolvedToken()
 }
 
 // SearchLayer defines one stage of the search pipeline.
@@ -1115,10 +1170,20 @@ type SearchClaude struct {
 
 // Defaults are session defaults applied to all sessions.
 type Defaults struct {
-	RemoteControl   bool   `json:"remoteControl,omitempty" toml:"remote_control,omitempty"`
-	Model           string `json:"model,omitempty" toml:"model,omitempty"`
-	EffortLevel     string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
-	AnthropicAPIKey string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
+	RemoteControl bool   `json:"remoteControl,omitempty" toml:"remote_control,omitempty"`
+	Model         string `json:"model,omitempty" toml:"model,omitempty"`
+	EffortLevel   string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
+	// AnthropicAPIKey may be an inline secret or a file path.
+	AnthropicAPIKey         string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
+	resolvedAnthropicAPIKey string
+}
+
+// AnthropicAPIKeySecret returns the resolved Anthropic API key.
+func (d Defaults) AnthropicAPIKeySecret() string {
+	if d.resolvedAnthropicAPIKey != "" {
+		return d.resolvedAnthropicAPIKey
+	}
+	return d.AnthropicAPIKey
 }
 
 // AutoNameConfig holds the [autoname] block of clyde.toml.

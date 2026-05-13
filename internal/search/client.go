@@ -59,8 +59,8 @@ func newLocalClient(cfg config.SearchLocal) *localClient {
 	opts := []option.RequestOption{
 		option.WithBaseURL(url + "/v1"),
 	}
-	if cfg.Token != "" {
-		opts = append(opts, option.WithAPIKey(cfg.Token))
+	if cfg.ResolvedToken() != "" {
+		opts = append(opts, option.WithAPIKey(cfg.ResolvedToken()))
 	} else {
 		opts = append(opts, option.WithAPIKey("not-needed"))
 	}

@@ -80,7 +80,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		if err := lmctl.EnsureLoaded(ctx, sweepLayer.Model,
 			lmctl.WithContextLength(cfg.Local.ContextLength),
 			lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
-			lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
+			lmctl.WithWarmup(cfg.Local.URL, cfg.Local.ResolvedToken()),
 		); err != nil {
 			return nil, fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
 		}
@@ -115,7 +115,7 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 			if err := lmctl.EnsureLoaded(ctx, layer.Model,
 				lmctl.WithContextLength(cfg.Local.ContextLength),
 				lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
-				lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
+				lmctl.WithWarmup(cfg.Local.URL, cfg.Local.ResolvedToken()),
 			); err != nil {
 				log.WarnContext(ctx, "model load failed, skipping layer", "model", layer.Model, "err", err)
 				continue

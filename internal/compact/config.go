@@ -10,10 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/pelletier/go-toml/v2"
+	clydeconfig "goodkind.io/clyde/internal/config"
 )
 
 // AnthropicAPIKey reads the Anthropic API key from the user's global
@@ -37,29 +36,21 @@ import (
 // callers can distinguish "user must configure" from "transient IO
 // error" without parsing strings.
 func AnthropicAPIKey() (string, error) {
-	path, err := globalConfigPath()
-	if err != nil {
-		slog.Error("compact.config.path_failed", "component", "compact", "err", err)
-		return "", fmt.Errorf("resolve global config path: %w", err)
-	}
-	data, err := os.ReadFile(path)
+	path := clydeconfig.GlobalConfigPath()
+	_, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", ErrNoConfig
 		}
-		slog.Error("compact.config.read_failed", "component", "compact", "path", path, "err", err)
-		return "", fmt.Errorf("read global config: %w", err)
+		slog.Error("compact.config.stat_failed", "component", "compact", "path", path, "err", err)
+		return "", fmt.Errorf("stat global config: %w", err)
 	}
-	var cfg struct {
-		Defaults struct {
-			AnthropicAPIKey string `toml:"anthropic_api_key"`
-		} `toml:"defaults"`
+	cfg, err := clydeconfig.LoadGlobalOrDefault()
+	if err != nil {
+		slog.Error("compact.config.load_failed", "component", "compact", "path", path, "err", err)
+		return "", fmt.Errorf("load global config: %w", err)
 	}
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		slog.Error("compact.config.parse_failed", "component", "compact", "path", path, "err", err)
-		return "", fmt.Errorf("parse global config: %w", err)
-	}
-	key := strings.TrimSpace(cfg.Defaults.AnthropicAPIKey)
+	key := strings.TrimSpace(cfg.Defaults.AnthropicAPIKeySecret())
 	if key == "" {
 		return "", ErrNoAPIKey
 	}
@@ -73,17 +64,3 @@ var ErrNoConfig = fmt.Errorf("clyde global config not found")
 // ErrNoAPIKey is returned when the config exists but defaults
 // anthropic_api_key is empty.
 var ErrNoAPIKey = fmt.Errorf("anthropic_api_key not set in clyde global config")
-
-// globalConfigPath returns the absolute path to
-// ~/.config/clyde/config.toml, honoring XDG_CONFIG_HOME.
-func globalConfigPath() (string, error) {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, "clyde", "config.toml"), nil
-}

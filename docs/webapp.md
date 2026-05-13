@@ -17,10 +17,12 @@ Add a stanza to `~/.config/clyde/config.toml`:
 enabled = true
 port = 11435
 host = "[::1]"
-require_token = "your-bearer-here"   # optional auth
+require_token = "./secrets/webapp-token"   # optional auth
 ```
 
-Restart the daemon. Visit `http://localhost:11435/`.
+The token file is plain text, and relative paths resolve from
+`~/.config/clyde/config.toml`. Restart the daemon. Visit
+`http://localhost:11435/`.
 
 ## Endpoints
 

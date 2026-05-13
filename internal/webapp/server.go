@@ -115,7 +115,7 @@ func New(cfg config.WebAppConfig, deps Deps, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	token := cfg.RequireToken
+	token := cfg.RequireTokenSecret()
 	if v := os.Getenv("CLYDE_WEBAPP_TOKEN"); v != "" {
 		token = v
 	}

@@ -174,6 +174,149 @@ concern = "unknown"
 		Expect(cfg.Adapter.PassthroughOverrides["local"].Model).To(Equal("local-model"))
 	})
 
+	It("resolves secret file values without serializing them", func() {
+		tmpDir := GinkgoT().TempDir()
+		homeDir := filepath.Join(tmpDir, "home")
+		GinkgoT().Setenv("HOME", homeDir)
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		secretDir := filepath.Join(globalDir, "secrets")
+		Expect(os.MkdirAll(secretDir, 0o755)).To(Succeed())
+		Expect(os.MkdirAll(homeDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(secretDir, "adapter-token"), []byte("adapter-file-value\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(secretDir, "webapp-token"), []byte("webapp-file-value\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(homeDir, "openai-key"), []byte("openai-file-value\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(secretDir, "override-key"), []byte("override-file-value\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(tmpDir, "search-token"), []byte("search-file-value\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(secretDir, "embedding-token"), []byte("embedding-file-value\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(secretDir, "anthropic-key"), []byte("anthropic-file-value\n"), 0o600)).To(Succeed())
+		toml := `[defaults]
+anthropic_api_key = "secrets/anthropic-key"
+
+[web_app]
+require_token = "./secrets/webapp-token"
+
+[adapter]
+require_token = "./secrets/adapter-token"
+
+[adapter.openai_compat_passthrough]
+api_key = "~/openai-key"
+
+[adapter.passthrough_overrides.local]
+api_key = "secrets/override-key"
+
+[search.local]
+token = "../search-token"
+embedding_token = "secrets/embedding-token"
+`
+		configPath := filepath.Join(globalDir, "config.toml")
+		Expect(os.WriteFile(configPath, []byte(toml), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Defaults.AnthropicAPIKey).To(Equal("secrets/anthropic-key"))
+		Expect(cfg.Defaults.AnthropicAPIKeySecret()).To(Equal("anthropic-file-value"))
+		Expect(cfg.WebApp.RequireToken).To(Equal("./secrets/webapp-token"))
+		Expect(cfg.WebApp.RequireTokenSecret()).To(Equal("webapp-file-value"))
+		Expect(cfg.Adapter.RequireToken).To(Equal("./secrets/adapter-token"))
+		Expect(cfg.Adapter.RequireTokenSecret()).To(Equal("adapter-file-value"))
+		Expect(cfg.Adapter.OpenAICompatPassthrough.APIKey).To(Equal("~/openai-key"))
+		Expect(cfg.Adapter.OpenAICompatPassthrough.APIKeySecret()).To(Equal("openai-file-value"))
+		Expect(cfg.Adapter.PassthroughOverrides["local"].APIKey).To(Equal("secrets/override-key"))
+		Expect(cfg.Adapter.PassthroughOverrides["local"].APIKeySecret()).To(Equal("override-file-value"))
+		Expect(cfg.Search.Local.Token).To(Equal("../search-token"))
+		Expect(cfg.Search.Local.ResolvedToken()).To(Equal("search-file-value"))
+		Expect(cfg.Search.Local.EmbeddingToken).To(Equal("secrets/embedding-token"))
+		Expect(cfg.Search.Local.ResolvedEmbeddingToken()).To(Equal("embedding-file-value"))
+
+		Expect(config.SaveGlobal(cfg)).To(Succeed())
+		saved, err := os.ReadFile(configPath)
+		Expect(err).NotTo(HaveOccurred())
+		savedText := string(saved)
+		Expect(savedText).To(ContainSubstring("./secrets/adapter-token"))
+		Expect(savedText).To(ContainSubstring("~/openai-key"))
+		Expect(savedText).NotTo(ContainSubstring("adapter-file-value"))
+		Expect(savedText).NotTo(ContainSubstring("webapp-file-value"))
+		Expect(savedText).NotTo(ContainSubstring("openai-file-value"))
+		Expect(savedText).NotTo(ContainSubstring("override-file-value"))
+		Expect(savedText).NotTo(ContainSubstring("search-file-value"))
+		Expect(savedText).NotTo(ContainSubstring("embedding-file-value"))
+		Expect(savedText).NotTo(ContainSubstring("anthropic-file-value"))
+	})
+
+	It("leaves inline secret values unchanged", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		toml := `[web_app]
+require_token = "inline-webapp-value"
+
+[adapter]
+require_token = "inline-adapter-value"
+
+[adapter.openai_compat_passthrough]
+api_key = "inline-openai-value"
+
+[search.local]
+token = "inline-search-value"
+`
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(toml), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.WebApp.RequireTokenSecret()).To(Equal("inline-webapp-value"))
+		Expect(cfg.Adapter.RequireTokenSecret()).To(Equal("inline-adapter-value"))
+		Expect(cfg.Adapter.OpenAICompatPassthrough.APIKeySecret()).To(Equal("inline-openai-value"))
+		Expect(cfg.Search.Local.ResolvedToken()).To(Equal("inline-search-value"))
+		Expect(cfg.Search.Local.ResolvedEmbeddingToken()).To(Equal("inline-search-value"))
+	})
+
+	It("rejects missing definite secret files", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[adapter]\nrequire_token = \"./missing-token\"\n"), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("adapter.require_token"))
+		Expect(err.Error()).To(ContainSubstring("missing-token"))
+	})
+
+	It("rejects empty secret files", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "empty-token"), nil, 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[web_app]\nrequire_token = \"./empty-token\"\n"), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("web_app.require_token"))
+		Expect(err.Error()).To(ContainSubstring("empty"))
+	})
+
+	It("rejects secret paths that point to directories", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(filepath.Join(globalDir, "token-dir"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[search.local]\ntoken = \"./token-dir\"\n"), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("search.local.token"))
+		Expect(err.Error()).To(ContainSubstring("directory"))
+	})
+
 	It("loads and normalizes codex reasoning summary", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

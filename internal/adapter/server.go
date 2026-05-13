@@ -174,7 +174,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	if max <= 0 {
 		max = DefaultMaxConcurrent
 	}
-	token := cfg.RequireToken
+	token := cfg.RequireTokenSecret()
 	if v := os.Getenv("CLYDE_ADAPTER_TOKEN"); v != "" {
 		token = v
 	}

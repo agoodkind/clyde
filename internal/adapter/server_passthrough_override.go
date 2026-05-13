@@ -29,7 +29,7 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	r = r.WithContext(ctx)
 	streamRequested := false
 	baseURL := strings.TrimSpace(model.OpenAICompatPassthrough.BaseURL)
-	apiKey := model.OpenAICompatPassthrough.APIKey
+	apiKey := model.OpenAICompatPassthrough.APIKeySecret()
 	apiKeyEnv := model.OpenAICompatPassthrough.APIKeyEnv
 	modelOverride := model.OpenAICompatPassthrough.Model
 	upstreamLabel := "openai_compat_passthrough"
@@ -45,7 +45,7 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		baseURL = override.BaseURL
-		apiKey = override.APIKey
+		apiKey = override.APIKeySecret()
 		apiKeyEnv = override.APIKeyEnv
 		modelOverride = override.Model
 		upstreamLabel = "passthrough_override:" + model.PassthroughOverride
