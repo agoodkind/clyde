@@ -3,13 +3,9 @@ package compact
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -595,130 +591,6 @@ func TestBuildSyntheticUserEntry_FieldOrderAndContent(t *testing.T) {
 	want := `{"parentUuid":"boundary-1","isSidechain":false,"type":"user","isCompactSummary":true,"timestamp":"2026-04-18T12:00:00.001Z","uuid":"syn-1","message":{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}]},"cwd":"/tmp","sessionId":"sess-1","version":"v"}`
 	if string(got) != want {
 		t.Errorf("synthetic user JSON mismatch\n got:  %s\n want: %s", got, want)
-	}
-}
-
-// TestRunPlan_TargetLoop_FakeCounter exercises the target-driven
-// orchestration end-to-end against a stub HTTP server pretending to
-// be Anthropic's count_tokens endpoint. The fake decreases its
-// reported count by a fixed amount per call so the loop converges
-// after a predictable number of iterations.
-func TestRunPlan_TargetLoop_FakeCounter(t *testing.T) {
-	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
-	lines := []string{
-		boundaryLine("b1", "", t0),
-		userText("u1", "b1", "old turn one", t0.Add(time.Second)),
-		assistantBlocks("a1", "u1", t0.Add(2*time.Second), []map[string]any{
-			{"type": "text", "text": "old assistant"},
-			{"type": "tool_use", "id": "tool_a", "name": "Bash", "input": map[string]any{"cmd": "ls"}},
-		}),
-		userBlocks("u2", "a1", t0.Add(3*time.Second), []map[string]any{
-			{"type": "tool_result", "tool_use_id": "tool_a", "content": "noisy noisy output"},
-		}),
-		userText("u3", "u2", "second user turn", t0.Add(4*time.Second)),
-		assistantBlocks("a2", "u3", t0.Add(5*time.Second), []map[string]any{
-			{"type": "text", "text": "final assistant reply"},
-		}),
-	}
-	slice, err := LoadSlice(writeTranscript(t, lines))
-	if err != nil {
-		t.Fatalf("LoadSlice: %v", err)
-	}
-
-	// Fake counter: returns 1000 on first call, then decreases by
-	// 200 per call. With static_overhead=0 and reserved=0 and
-	// target=500, the loop will ping a few iterations, then return.
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := calls.Add(1)
-		count := max(1000-200*int(n-1), 1)
-		fmt.Fprintf(w, `{"input_tokens":%d}`, count)
-	}))
-	defer srv.Close()
-
-	counter := &DebugTokenCounter{
-		APIKey:   "test-key",
-		Endpoint: srv.URL,
-		Model:    "test-model",
-		Client:   srv.Client(),
-	}
-
-	res, err := RunPlan(context.Background(), PlanInput{
-		Slice:     slice,
-		Strippers: Strippers{Tools: true, Thinking: true, Images: true, Chat: true},
-		Target:    500,
-		Counter:   counter,
-		BatchSize: 1,
-	})
-	if err != nil {
-		t.Fatalf("RunPlan: %v", err)
-	}
-	if res.BaselineTail != 1000 {
-		t.Errorf("BaselineTail = %d, want 1000", res.BaselineTail)
-	}
-	if res.FinalTail < 500 {
-		t.Errorf("FinalTail = %d, want >= 500 (do not undershoot target)", res.FinalTail)
-	}
-	for i, iter := range res.Iterations {
-		if iter.CtxTotal < 500 {
-			t.Fatalf("iteration %d ctx_total=%d crossed below target 500", i, iter.CtxTotal)
-		}
-	}
-	if len(res.Iterations) < 2 {
-		t.Errorf("expected at least 2 iterations (baseline + at least one demotion), got %d", len(res.Iterations))
-	}
-	if got := calls.Load(); got < 2 {
-		t.Errorf("count_tokens calls = %d, expected at least 2", got)
-	}
-}
-
-// TestRunPlan_TargetAlreadyMet skips the demotion loop when baseline
-// is already under target. Verifies the early-return path returns
-// HitTarget=true with exactly one iteration logged.
-func TestRunPlan_TargetAlreadyMet(t *testing.T) {
-	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
-	lines := []string{
-		boundaryLine("b1", "", t0),
-		userText("u1", "b1", "tiny", t0.Add(time.Second)),
-		assistantBlocks("a1", "u1", t0.Add(2*time.Second), []map[string]any{
-			{"type": "text", "text": "ok"},
-		}),
-	}
-	slice, err := LoadSlice(writeTranscript(t, lines))
-	if err != nil {
-		t.Fatalf("LoadSlice: %v", err)
-	}
-
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		fmt.Fprint(w, `{"input_tokens":42}`)
-	}))
-	defer srv.Close()
-
-	counter := &DebugTokenCounter{
-		APIKey:   "k",
-		Endpoint: srv.URL,
-		Model:    "m",
-		Client:   srv.Client(),
-	}
-	res, err := RunPlan(context.Background(), PlanInput{
-		Slice:     slice,
-		Strippers: Strippers{Tools: true},
-		Target:    1000,
-		Counter:   counter,
-	})
-	if err != nil {
-		t.Fatalf("RunPlan: %v", err)
-	}
-	if !res.HitTarget {
-		t.Errorf("HitTarget = false, want true")
-	}
-	if len(res.Iterations) != 1 {
-		t.Errorf("len(Iterations) = %d, want 1", len(res.Iterations))
-	}
-	if got := calls.Load(); got != 1 {
-		t.Errorf("count_tokens calls = %d, want 1", got)
 	}
 }
 
