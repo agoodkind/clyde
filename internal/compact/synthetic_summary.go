@@ -318,81 +318,6 @@ func (s *syntheticSummary) DropOrder() []string {
 	return order
 }
 
-func (s *syntheticSummary) Render(dropped map[string]bool) []OutputBlock {
-	header := s.renderHeader(dropped)
-	out := make([]OutputBlock, 0, 2+len(s.TranscriptTurns))
-	if header != "" {
-		out = append(out, textBlock(header))
-	}
-	for i, turn := range s.TranscriptTurns {
-		if dropped[fmt.Sprintf("surviving_turn:%d", i)] {
-			continue
-		}
-		rendered := renderSyntheticTranscriptTurn(i, turn, dropped)
-		if strings.TrimSpace(rendered) == "" {
-			continue
-		}
-		out = append(out, textBlock(rendered))
-	}
-	toolBlock := s.renderToolActivity(dropped)
-	if toolBlock != "" {
-		out = append(out, textBlock(toolBlock))
-	}
-	if s.HasContinue && !dropped[summaryChunkContinue] {
-		out = append(out, textBlock("## Continue from here.\n"))
-	}
-	return out
-}
-
-func (s *syntheticSummary) renderHeader(dropped map[string]bool) string {
-	var sb strings.Builder
-	if !dropped[summaryChunkContinuity] {
-		sb.WriteString("## Context continuity notice\n\n")
-		sb.WriteString(strings.TrimSpace(s.Continuity))
-		sb.WriteString("\n\n")
-	}
-	if s.WhatDropped != "" && !dropped[summaryChunkWhat] {
-		sb.WriteString("### What was dropped\n\n")
-		sb.WriteString(strings.TrimSpace(s.WhatDropped))
-		sb.WriteString("\n\n")
-	}
-	if s.DroppedSummary != "" && !dropped[summaryChunkSummary] {
-		sb.WriteString("### Summary of dropped content\n\n")
-		sb.WriteString(strings.TrimSpace(s.DroppedSummary))
-		sb.WriteString("\n\n")
-	}
-	if s.hasTranscriptTurnsRemaining(dropped) {
-		sb.WriteString("## Surviving transcript\n\n")
-	}
-	return sb.String()
-}
-
-func (s *syntheticSummary) renderToolActivity(dropped map[string]bool) string {
-	items := make([]string, 0, len(s.ToolItems))
-	for i, item := range s.ToolItems {
-		if dropped[fmt.Sprintf("tool_item:%d", i)] {
-			continue
-		}
-		items = append(items, strings.TrimSpace(item))
-	}
-	if len(items) == 0 {
-		return ""
-	}
-	return "## Tool activity\n\n" + strings.Join(items, "\n\n") + "\n\n"
-}
-
-func (s *syntheticSummary) hasTranscriptTurnsRemaining(dropped map[string]bool) bool {
-	for i, turn := range s.TranscriptTurns {
-		if !dropped[fmt.Sprintf("surviving_turn:%d", i)] {
-			rendered := renderSyntheticTranscriptTurn(i, turn, dropped)
-			if strings.TrimSpace(rendered) != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (s *syntheticSummary) DroppedText(dropped map[string]bool) string {
 	if len(dropped) == 0 {
 		return ""
@@ -444,24 +369,6 @@ func summarizeBlock(block string) string {
 		return block[:61] + "..."
 	}
 	return block
-}
-
-func renderSyntheticTranscriptTurn(turnIdx int, turn string, dropped map[string]bool) string {
-	prefix, parts := splitSyntheticTranscriptTurn(turn)
-	if len(parts) <= 1 {
-		return turn
-	}
-	var kept []string
-	for partIdx, part := range parts {
-		if dropped[fmt.Sprintf("surviving_turn:%d%s%d", turnIdx, syntheticTurnPartPrefix, partIdx)] {
-			continue
-		}
-		kept = append(kept, part)
-	}
-	if len(kept) == 0 {
-		return ""
-	}
-	return prefix + strings.Join(kept, "")
 }
 
 func splitSyntheticTranscriptTurn(turn string) (string, []string) {

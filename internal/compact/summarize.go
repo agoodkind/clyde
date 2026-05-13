@@ -374,11 +374,7 @@ func droppedSummaryText(slice *Slice, opts SynthOptions, entryIndex int) string 
 	if entryIndex < 0 || entryIndex >= len(slice.PostBoundary) {
 		return ""
 	}
-	summary, ok := parseSyntheticSummary(slice.PostBoundary[entryIndex])
-	if !ok {
-		return ""
-	}
-	return summary.DroppedText(dropped)
+	return droppedSyntheticSummaryText(slice.PostBoundary[entryIndex], dropped)
 }
 
 type droppedToolCall struct {

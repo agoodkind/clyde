@@ -244,11 +244,6 @@ func renderChat(slice *Slice, opts SynthOptions) []OutputBlock {
 				// Tool results render in the tool activity section.
 				continue
 			}
-			if summary, ok := parseSyntheticSummary(e); ok {
-				dropped := droppedSummaryChunkSet(opts, ei)
-				out = append(out, summary.Render(dropped)...)
-				continue
-			}
 			text := chatTextFrom(e, opts)
 			if text == "" && !hasRenderableImage(e, opts) {
 				continue
@@ -273,13 +268,6 @@ func renderChat(slice *Slice, opts SynthOptions) []OutputBlock {
 		}
 	}
 	return out
-}
-
-func droppedSummaryChunkSet(opts SynthOptions, entryIdx int) map[string]bool {
-	if opts.DroppedSummaryChunks == nil {
-		return nil
-	}
-	return opts.DroppedSummaryChunks[entryIdx]
 }
 
 // toolPairRender is a single tool_use plus rendering metadata used while

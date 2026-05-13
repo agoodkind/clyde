@@ -652,9 +652,7 @@ func orderedToolUseIDs(slice *Slice) []string {
 // turn AND its immediate preceding user turn are excluded so the
 // model always sees the latest exchange verbatim.
 type chatDropStep struct {
-	EntryIdx  int
-	ChunkKey  string
-	IsSummary bool
+	EntryIdx int
 }
 
 func chatDropOrder(slice *Slice) []chatDropStep {
@@ -662,27 +660,7 @@ func chatDropOrder(slice *Slice) []chatDropStep {
 	lastAssistant := -1
 	for ei, e := range slice.PostBoundary {
 		if e.Type == "user" && !isToolResultOnly(e) {
-			if summary, ok := parseSyntheticSummary(e); ok {
-				compactLog.Logger().Debug("compact.plan.synthetic_summary_detected",
-					"component", "compact",
-					"subcomponent", "plan",
-					"entry_index", ei,
-					"drop_units", len(summary.DropOrder())+1,
-				)
-				for _, key := range summary.DropOrder() {
-					chatEntries = append(chatEntries, chatDropStep{
-						EntryIdx:  ei,
-						ChunkKey:  key,
-						IsSummary: true,
-					})
-				}
-				chatEntries = append(chatEntries, chatDropStep{
-					EntryIdx:  ei,
-					IsSummary: true,
-				})
-			} else {
-				chatEntries = append(chatEntries, chatDropStep{EntryIdx: ei})
-			}
+			chatEntries = append(chatEntries, chatDropStep{EntryIdx: ei})
 		}
 		if e.Type == "assistant" {
 			chatEntries = append(chatEntries, chatDropStep{EntryIdx: ei})
@@ -719,58 +697,29 @@ func droppedSummaryChunkCount(opts SynthOptions) int {
 }
 
 func applyChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[string]bool, step chatDropStep) {
-	if step.ChunkKey == "" {
-		compactLog.Logger().Debug("compact.plan.chat_drop_applied",
-			"component", "compact",
-			"subcomponent", "plan",
-			"entry_index", step.EntryIdx,
-			"summary_chunk", false,
-		)
-		droppedEntries[step.EntryIdx] = true
-		if droppedChunks != nil {
-			delete(droppedChunks, step.EntryIdx)
-		}
-		return
-	}
-	if droppedChunks[step.EntryIdx] == nil {
-		droppedChunks[step.EntryIdx] = map[string]bool{}
-	}
-	droppedChunks[step.EntryIdx][step.ChunkKey] = true
 	compactLog.Logger().Debug("compact.plan.chat_drop_applied",
 		"component", "compact",
 		"subcomponent", "plan",
 		"entry_index", step.EntryIdx,
-		"summary_chunk", true,
-		"chunk_key", step.ChunkKey,
+		"summary_chunk", false,
 	)
+	droppedEntries[step.EntryIdx] = true
+	if droppedChunks != nil {
+		delete(droppedChunks, step.EntryIdx)
+	}
 }
 
 func revertChatDropStep(droppedEntries map[int]bool, droppedChunks map[int]map[string]bool, step chatDropStep) {
-	if step.ChunkKey == "" {
-		compactLog.Logger().Debug("compact.plan.chat_drop_reverted",
-			"component", "compact",
-			"subcomponent", "plan",
-			"entry_index", step.EntryIdx,
-			"summary_chunk", false,
-		)
-		delete(droppedEntries, step.EntryIdx)
-		return
-	}
-	chunks := droppedChunks[step.EntryIdx]
-	if chunks == nil {
-		return
-	}
-	delete(chunks, step.ChunkKey)
-	if len(chunks) == 0 {
-		delete(droppedChunks, step.EntryIdx)
-	}
 	compactLog.Logger().Debug("compact.plan.chat_drop_reverted",
 		"component", "compact",
 		"subcomponent", "plan",
 		"entry_index", step.EntryIdx,
-		"summary_chunk", true,
-		"chunk_key", step.ChunkKey,
+		"summary_chunk", false,
 	)
+	delete(droppedEntries, step.EntryIdx)
+	if droppedChunks != nil {
+		delete(droppedChunks, step.EntryIdx)
+	}
 }
 
 func finalize(in PlanInput, opts SynthOptions, baseline, finalTail int, log []IterationRecord, hit bool) *PlanResult {

@@ -114,3 +114,14 @@ func rehydratedSourceForRun(entries []Entry, startIndex int) Entry {
 		RehydratedSource:   nil,
 	}
 }
+
+func droppedSyntheticSummaryText(entry Entry, dropped map[string]bool) string {
+	if len(dropped) == 0 {
+		return ""
+	}
+	summary, ok := parseSyntheticSummary(entry)
+	if !ok {
+		return ""
+	}
+	return summary.DroppedText(dropped)
+}

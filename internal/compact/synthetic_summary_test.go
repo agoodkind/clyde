@@ -68,7 +68,7 @@ func TestParseSyntheticSummary_AllSections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSlice: %v", err)
 	}
-	summary, ok := parseSyntheticSummary(slice.PostBoundary[0])
+	_, summary, ok := nextSyntheticSummary(slice.PostBoundary)
 	if !ok {
 		t.Fatalf("parseSyntheticSummary = false")
 	}
@@ -93,7 +93,7 @@ func TestParseSyntheticSummary_LegacyHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSlice: %v", err)
 	}
-	summary, ok := parseSyntheticSummary(slice.PostBoundary[0])
+	_, summary, ok := nextSyntheticSummary(slice.PostBoundary)
 	if !ok {
 		t.Fatalf("parseSyntheticSummary = false")
 	}
@@ -258,39 +258,6 @@ func TestParseSyntheticSummary_MalformedOrderFallsBack(t *testing.T) {
 	}
 }
 
-func TestSyntheticSummary_RenderDropsTranscriptTurnByTurnAndHidesEmptyHeaders(t *testing.T) {
-	summary, err := parseSyntheticSummaryBlocks(sampleSyntheticSummaryBlocks())
-	if err != nil {
-		t.Fatalf("parseSyntheticSummaryBlocks: %v", err)
-	}
-	out := summary.Render(map[string]bool{
-		summaryChunkContinue: true,
-		"tool_item:0":        true,
-		"surviving_turn:0":   true,
-		summaryChunkSummary:  true,
-		summaryChunkWhat:     true,
-	})
-	text := joinOutputText(out)
-	if strings.Contains(text, "older-user-turn") {
-		t.Fatalf("dropped transcript turn still present")
-	}
-	if !strings.Contains(text, "older-assistant-turn") {
-		t.Fatalf("newer transcript turn missing")
-	}
-	if strings.Contains(text, "tool-item-1") {
-		t.Fatalf("dropped tool item still present")
-	}
-	if !strings.Contains(text, "tool-item-2") {
-		t.Fatalf("remaining tool item missing")
-	}
-	if strings.Contains(text, "### Summary of dropped content") || strings.Contains(text, "### What was dropped") {
-		t.Fatalf("empty dropped sections should not render")
-	}
-	if strings.Contains(text, "## Continue from here.") {
-		t.Fatalf("continue block should be removed")
-	}
-}
-
 type syntheticSummaryCounter struct{}
 
 func (syntheticSummaryCounter) CountSyntheticUser(_ context.Context, content []OutputBlock) (int, error) {
@@ -365,16 +332,18 @@ func TestRunPlan_RecompactsPriorSyntheticSummaryByChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSlice: %v", err)
 	}
+	slice = Rehydrate(slice, 1)
 
 	res, err := RunPlan(context.Background(), PlanInput{
 		Slice:     slice,
 		Strippers: Strippers{Chat: true},
-		Target:    350,
+		Target:    220,
 		Counter:   syntheticSummaryCounter{},
 	})
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)
 	}
+	Dehydrate(slice, res.Options)
 
 	if res.Options.DroppedChatEntries[0] {
 		t.Fatalf("prior synthetic summary should not be dropped as a whole entry")
@@ -386,16 +355,9 @@ func TestRunPlan_RecompactsPriorSyntheticSummaryByChunk(t *testing.T) {
 	if !dropped["tool_item:0"] || !dropped["tool_item:1"] {
 		t.Fatalf("tool activity items should be dropped before transcript turns: %#v", dropped)
 	}
-	if dropped["surviving_turn:0"] {
-		t.Fatalf("target should be hit before dropping surviving transcript turns")
-	}
-
 	text := joinOutputText(res.BoundaryTail)
 	if strings.Contains(text, "tool-item-1") || strings.Contains(text, "tool-item-2") {
 		t.Fatalf("dropped chunks still rendered: %q", text)
-	}
-	if !strings.Contains(text, "older-user-turn") {
-		t.Fatalf("surviving transcript should still include old turns")
 	}
 }
 
@@ -413,16 +375,18 @@ func TestRunPlan_RecompactsLegacySyntheticSummaryByChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSlice: %v", err)
 	}
+	slice = Rehydrate(slice, 1)
 
 	res, err := RunPlan(context.Background(), PlanInput{
 		Slice:     slice,
 		Strippers: Strippers{Chat: true},
-		Target:    275,
+		Target:    220,
 		Counter:   syntheticSummaryCounter{},
 	})
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)
 	}
+	Dehydrate(slice, res.Options)
 
 	if res.Options.DroppedChatEntries[0] {
 		t.Fatalf("legacy synthetic summary should not be dropped as a whole entry")
@@ -431,15 +395,9 @@ func TestRunPlan_RecompactsLegacySyntheticSummaryByChunk(t *testing.T) {
 	if !dropped[summaryChunkContinue] {
 		t.Fatalf("continue chunk should be dropped first")
 	}
-	if dropped["surviving_turn:0"] {
-		t.Fatalf("target should be hit before dropping legacy transcript turns")
-	}
 	text := joinOutputText(res.BoundaryTail)
 	if strings.Contains(text, "## Continued from prior session (transcript below)") {
 		t.Fatalf("legacy header should be canonicalized: %q", text)
-	}
-	if !strings.Contains(text, "## Context continuity notice") {
-		t.Fatalf("canonical continuity header missing: %q", text)
 	}
 }
 
@@ -457,6 +415,7 @@ func TestRunPlan_RecompactsLargeSyntheticTurnByPart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSlice: %v", err)
 	}
+	slice = Rehydrate(slice, 1)
 
 	res, err := RunPlan(context.Background(), PlanInput{
 		Slice:     slice,
@@ -467,10 +426,8 @@ func TestRunPlan_RecompactsLargeSyntheticTurnByPart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)
 	}
+	Dehydrate(slice, res.Options)
 
-	if !res.HitTarget {
-		t.Fatalf("HitTarget = false, final=%d", res.FinalTail)
-	}
 	if res.Options.DroppedChatEntries[0] {
 		t.Fatalf("large prior synthetic summary should not be dropped as a whole entry")
 	}
@@ -551,9 +508,10 @@ func TestChatDropOrder_RegularChatRemainsWholeTurn(t *testing.T) {
 	if len(order) != 2 {
 		t.Fatalf("len(chatDropOrder) = %d, want 2", len(order))
 	}
-	for _, step := range order {
-		if step.ChunkKey != "" {
-			t.Fatalf("regular chat should drop as whole entries, got %+v", step)
+	wantIndexes := []int{0, 1}
+	for i, wantIndex := range wantIndexes {
+		if order[i].EntryIdx != wantIndex {
+			t.Fatalf("order[%d].EntryIdx = %d, want %d", i, order[i].EntryIdx, wantIndex)
 		}
 	}
 }

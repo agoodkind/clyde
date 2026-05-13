@@ -128,6 +128,10 @@ func rehydratedTextForTurnChunk(summary *syntheticSummary, chunkKey string) (str
 	if turnIndex < 0 || turnIndex >= len(summary.TranscriptTurns) {
 		return "", false
 	}
+	_, parts := splitSyntheticTranscriptTurn(summary.TranscriptTurns[turnIndex])
+	if len(parts) > 1 {
+		return "", false
+	}
 	return summary.TranscriptTurns[turnIndex], true
 }
 
