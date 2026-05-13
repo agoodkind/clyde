@@ -192,6 +192,44 @@ func TestAPICounterFatalOn4xx(t *testing.T) {
 	}
 }
 
+func TestAPICounterEmptyNormalizedTranscriptReturnsZero(t *testing.T) {
+	t.Parallel()
+
+	state := &apiTestServerState{
+		t:             t,
+		statuses:      []int{http.StatusOK},
+		attempts:      0,
+		lastRequest:   apiCountRequest{},
+		lastAPIKey:    "",
+		lastVersion:   "",
+		lastPath:      "",
+		responseToken: 99,
+	}
+	server := httptest.NewServer(http.HandlerFunc(state.handle))
+	defer server.Close()
+	counter := NewAPICounter(staticCredentials{value: "fixture-value"}, APICounterOptions{
+		Endpoint: server.URL,
+		Client:   server.Client(),
+		Sleep:    nil,
+		Clock:    fixedClock{now: time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC)},
+	})
+	tokens, err := counter.Count(context.Background(), generic.Transcript{
+		Model:    "claude-haiku-4-5",
+		System:   nil,
+		Tools:    nil,
+		Messages: nil,
+	})
+	if err != nil {
+		t.Fatalf("Count() error = %v", err)
+	}
+	if tokens != 0 {
+		t.Fatalf("Count() = %d, want 0", tokens)
+	}
+	if state.attempts != 0 {
+		t.Fatalf("attempts = %d, want 0", state.attempts)
+	}
+}
+
 func TestNormalizeMotdShapeHoistsSidechainResult(t *testing.T) {
 	t.Parallel()
 

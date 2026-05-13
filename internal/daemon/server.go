@@ -3074,26 +3074,7 @@ func (s *Server) runCompact(
 		PreparedSlice:          slice,
 	}, sender.IterationCallback(ctx))
 	if runErr != nil {
-		s.log.ErrorContext(ctx, "daemon.compact.run_failed",
-			"component", "daemon",
-			"subcomponent", "compact",
-			"session", req.GetSessionName(),
-			"err", runErr.Error(),
-		)
-		var overTarget *compactengine.ApplyOverTargetError
-		if errors.As(runErr, &overTarget) {
-			// Surface the refusal verbatim so the CLI and the
-			// dashboard panel render the typed message rather than
-			// the generic "compact runtime:" wrapper. Send it as a
-			// status event first so panels that already consumed the
-			// stream show the precise refusal in the status row, then
-			// close the stream with FailedPrecondition.
-			if statusErr := sender.SendStatus(ctx, overTarget.Error()); statusErr != nil {
-				return statusErr
-			}
-			return status.Error(codes.FailedPrecondition, overTarget.Error())
-		}
-		return status.Errorf(codes.Internal, "compact runtime: %v", runErr)
+		return s.compactRunError(ctx, req, sender, runErr)
 	}
 
 	if err := sender.SendResult(ctx, result); err != nil {
@@ -3109,6 +3090,53 @@ func (s *Server) runCompact(
 		"final_tail", result.Plan.FinalTail,
 	)
 	return nil
+}
+
+func (s *Server) compactRunError(
+	ctx context.Context,
+	req *clydev1.CompactRunRequest,
+	sender *compactEventSender,
+	runErr error,
+) error {
+	s.log.ErrorContext(ctx, "daemon.compact.run_failed",
+		"component", "daemon",
+		"subcomponent", "compact",
+		"session", req.GetSessionName(),
+		"err", runErr.Error(),
+	)
+	if err := sendCompactOverTargetError(ctx, sender, runErr); err != nil {
+		return err
+	}
+	return status.Errorf(codes.Internal, "compact runtime: %v", runErr)
+}
+
+func sendCompactOverTargetError(
+	ctx context.Context,
+	sender *compactEventSender,
+	runErr error,
+) error {
+	var overTarget *compactengine.ApplyOverTargetError
+	if errors.As(runErr, &overTarget) {
+		return sendCompactFailedPrecondition(ctx, sender, overTarget.Error())
+	}
+	var realOverTarget *compactengine.ApplyRealContextOverTargetError
+	if errors.As(runErr, &realOverTarget) {
+		return sendCompactFailedPrecondition(ctx, sender, realOverTarget.Error())
+	}
+	return nil
+}
+
+func sendCompactFailedPrecondition(
+	ctx context.Context,
+	sender *compactEventSender,
+	message string,
+) error {
+	// Surface the refusal verbatim so the CLI and the dashboard panel
+	// render the typed message rather than the generic runtime wrapper.
+	if statusErr := sender.SendStatus(ctx, message); statusErr != nil {
+		return statusErr
+	}
+	return status.Error(codes.FailedPrecondition, message)
 }
 
 type compactRunSetup struct {

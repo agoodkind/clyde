@@ -44,14 +44,11 @@ type Axis struct {
 	BuildRecord func(label string, k int, ctxTotal int) IterationRecord
 }
 
-// BisectMin returns the minimum-disruption k in [0, N] for the
-// conservative policy "stop just before undershooting Target." The
-// returned k satisfies Probe(k) >= Target whenever any such k <= N
-// exists; otherwise k=N. The caller applies the first k steps of the
-// underlying drop list. This matches the prior linear-scan policy of
-// preferring to leave ctx slightly over target rather than cross
-// under, which keeps the planner from dropping more content than is
-// strictly necessary to approach the target.
+// BisectMin returns the minimum-disruption k in [0, N] where Probe(k)
+// is less than or equal to Target. The caller applies the first k
+// steps of the underlying drop list. If even k=N remains over target,
+// BisectMin returns N so the caller can apply every available drop and
+// let the final over-target gate refuse the run.
 //
 // The caller must guarantee Probe(0) > Target before calling; if
 // baseline already satisfies the target there is no work to do and
@@ -78,23 +75,21 @@ func BisectMin(ctx context.Context, axis Axis) (int, error) {
 		axis.Emit(axis.BuildRecord(label, k, total))
 	}
 
-	// Boundary probe at k=N. If the floor is still at or above
-	// target, applying every drop still does not undershoot, so the
-	// answer is N. Surface that and let the caller decide whether to
-	// accept N or refuse the run.
+	// Boundary probe at k=N. If the floor is still over target,
+	// applying every drop cannot satisfy the run, so return N and let
+	// the caller's final gate refuse it.
 	totalAtN, err := axis.Probe(ctx, axis.N)
 	if err != nil {
 		return 0, err
 	}
 	emit(axis.N, totalAtN)
-	if totalAtN >= axis.Target {
+	if totalAtN > axis.Target {
 		return axis.N, nil
 	}
 
-	// Invariant from here: Probe(lo) >= target, Probe(hi) < target.
-	// lo=0 by precondition (caller guarantees baseline over-target,
-	// strictly). hi=N from the boundary probe (strictly under target).
-	// Bisect for the largest k where Probe(k) >= target.
+	// Invariant from here: Probe(lo) > target, Probe(hi) <= target.
+	// lo=0 by precondition. hi=N from the boundary probe. Bisect for
+	// the smallest k that satisfies the target.
 	lo, hi := 0, axis.N
 	for hi-lo > 1 {
 		mid := lo + (hi-lo)/2
@@ -103,11 +98,11 @@ func BisectMin(ctx context.Context, axis Axis) (int, error) {
 			return 0, err
 		}
 		emit(mid, total)
-		if total >= axis.Target {
-			lo = mid
-		} else {
+		if total <= axis.Target {
 			hi = mid
+		} else {
+			lo = mid
 		}
 	}
-	return lo, nil
+	return hi, nil
 }

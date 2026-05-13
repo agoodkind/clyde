@@ -76,11 +76,19 @@ func (c *APICounter) Count(ctx context.Context, transcript generic.Transcript) (
 		)
 		return 0, err
 	}
+	normalized := normalizeTranscript(transcript)
+	if len(normalized.Messages) == 0 {
+		slog.InfoContext(ctx, "providers.claude.contextcount.api.empty_transcript",
+			"component", "providers.claude.contextcount",
+			"subcomponent", "api",
+			"model", transcript.Model,
+		)
+		return 0, nil
+	}
 	secret, err := c.readSecret(ctx)
 	if err != nil {
 		return 0, err
 	}
-	normalized := normalizeTranscript(transcript)
 	body, err := apiRequestFromTranscript(normalized)
 	if err != nil {
 		slog.ErrorContext(ctx, "providers.claude.contextcount.api.request_shape_failed",

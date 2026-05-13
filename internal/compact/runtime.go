@@ -311,67 +311,13 @@ func RunRuntime(
 	}
 
 	if req.Mode == RuntimeModeApply {
-		summaryMode := req.SummarizeMode
-		if summaryMode == "" {
-			summaryMode = SummarizeModeFromLegacy(req.Summarize, req.Summarize)
-		}
-		decision, summaryErr := DoSummarize(ctx, SummarizeRequest{
-			Session:     req.Session,
-			Slice:       slice,
-			Options:     planRes.Options,
-			Model:       modelForCount,
-			Mode:        summaryMode,
-			Adapter:     nil,
-			DroppedText: "",
-		})
-		if summaryErr != nil {
-			compactLog.Logger().Warn("compact.runtime.summarize_failed_continuing",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.ProviderSessionID(),
-				"mode", summaryMode,
-				"reason", decision.Reason,
-				"err", summaryErr,
-			)
-		} else if decision.Summary != "" {
-			planRes.Options.Summary = decision.Summary
-			planRes.BoundaryTail = Synthesize(slice, planRes.Options)
-			compactLog.Logger().Info("compact.runtime.summarize_injected",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.ProviderSessionID(),
-				"mode", summaryMode,
-				"reason", decision.Reason,
-				"summary_bytes", len(decision.Summary),
-			)
-		}
-		in := ApplyInput{
-			Slice:           slice,
-			SessionID:       req.Session.Metadata.ProviderSessionID(),
-			Cwd:             req.Session.Metadata.WorkspaceRoot,
-			Version:         "clyde",
-			Strippers:       req.Strippers,
-			Target:          req.TargetTokens,
-			BoundaryTail:    planRes.BoundaryTail,
-			PreCompactTok:   planRes.BaselineTail,
-			Options:         planRes.Options,
-			FinalProjection: finalProjection(planRes, staticOverhead, req.Reserved),
-			ForceOverTarget: req.ForceOverTarget,
-		}
-		applyRes, applyErr := Apply(in)
+		applyRes, applyErr := runRuntimeApply(ctx, req, slice, planRes, modelForCount, staticOverhead)
 		if applyErr != nil {
-			compactLog.Logger().Error("compact.runtime.apply_failed",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.ProviderSessionID(),
-				"err", applyErr.Error(),
-			)
 			return nil, applyErr
 		}
-		result.Apply = applyRes
+		if applyRes != nil {
+			result.Apply = applyRes
+		}
 	}
 	compactLog.Logger().Info("compact.runtime.run_completed",
 		"component", "compact",
@@ -385,6 +331,142 @@ func RunRuntime(
 	)
 
 	return result, nil
+}
+
+func runRuntimeApply(
+	ctx context.Context,
+	req RuntimeRequest,
+	slice *Slice,
+	planRes *PlanResult,
+	modelForCount string,
+	staticOverhead int,
+) (*ApplyResult, error) {
+	injectRuntimeSummary(ctx, req, slice, planRes, modelForCount)
+	applyRes, applyErr := Apply(ApplyInput{
+		Slice:           slice,
+		SessionID:       req.Session.Metadata.ProviderSessionID(),
+		Cwd:             req.Session.Metadata.WorkspaceRoot,
+		Version:         "clyde",
+		Strippers:       req.Strippers,
+		Target:          req.TargetTokens,
+		BoundaryTail:    planRes.BoundaryTail,
+		PreCompactTok:   planRes.BaselineTail,
+		Options:         planRes.Options,
+		FinalProjection: finalProjection(planRes, staticOverhead, req.Reserved),
+		ForceOverTarget: req.ForceOverTarget,
+	})
+	if applyErr != nil {
+		compactLog.Logger().Error("compact.runtime.apply_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"err", applyErr.Error(),
+		)
+		return nil, applyErr
+	}
+	if applyRes == nil || applyRes.NoOp {
+		logRuntimeApplyNoOp(req)
+		return nil, nil
+	}
+	if err := verifyPostApplyContext(ctx, req); err != nil {
+		return nil, err
+	}
+	return applyRes, nil
+}
+
+func injectRuntimeSummary(
+	ctx context.Context,
+	req RuntimeRequest,
+	slice *Slice,
+	planRes *PlanResult,
+	modelForCount string,
+) {
+	summaryMode := req.SummarizeMode
+	if summaryMode == "" {
+		summaryMode = SummarizeModeFromLegacy(req.Summarize, req.Summarize)
+	}
+	decision, summaryErr := DoSummarize(ctx, SummarizeRequest{
+		Session:     req.Session,
+		Slice:       slice,
+		Options:     planRes.Options,
+		Model:       modelForCount,
+		Mode:        summaryMode,
+		Adapter:     nil,
+		DroppedText: "",
+	})
+	if summaryErr != nil {
+		compactLog.Logger().Warn("compact.runtime.summarize_failed_continuing",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"mode", summaryMode,
+			"reason", decision.Reason,
+			"err", summaryErr,
+		)
+		return
+	}
+	if decision.Summary == "" {
+		return
+	}
+	planRes.Options.Summary = decision.Summary
+	planRes.BoundaryTail = Synthesize(slice, planRes.Options)
+	compactLog.Logger().Info("compact.runtime.summarize_injected",
+		"component", "compact",
+		"subcomponent", "runtime",
+		"session", req.Session.Name,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
+		"mode", summaryMode,
+		"reason", decision.Reason,
+		"summary_bytes", len(decision.Summary),
+	)
+}
+
+func logRuntimeApplyNoOp(req RuntimeRequest) {
+	compactLog.Logger().Info("compact.runtime.apply_noop",
+		"component", "compact",
+		"subcomponent", "runtime",
+		"session", req.Session.Name,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
+		"target", req.TargetTokens,
+	)
+}
+
+func verifyPostApplyContext(ctx context.Context, req RuntimeRequest) error {
+	if req.TargetTokens <= 0 {
+		return nil
+	}
+	postApplyUsage, postApplyErr := probeSessionSnapshot(ctx, req.Session, true)
+	if postApplyErr != nil {
+		slog.ErrorContext(ctx, "compact.runtime.post_apply_probe_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"target", req.TargetTokens,
+			"err", postApplyErr.Error(),
+		)
+		return fmt.Errorf("compact: post-apply context probe failed: %w", postApplyErr)
+	}
+	err := GuardRealContextOverTarget(
+		req.Session.Metadata.ProviderSessionID(),
+		req.TargetTokens,
+		postApplyUsage.TotalTokens,
+		req.ForceOverTarget,
+	)
+	if err != nil {
+		compactLog.Logger().Error("compact.runtime.post_apply_over_target",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"target", req.TargetTokens,
+			"actual", postApplyUsage.TotalTokens,
+			"err", err.Error(),
+		)
+	}
+	return err
 }
 
 func buildContextCounter(req RuntimeRequest) (contextcount.Counter, error) {

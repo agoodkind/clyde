@@ -269,7 +269,7 @@ func (r *planRunner) measure(label string) (IterationRecord, error) {
 		slog.ErrorContext(r.ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
 		return IterationRecord{}, fmt.Errorf("counter count after %q: %w", label, err)
 	}
-	ctxTotal := counterTokens
+	ctxTotal := r.in.StaticOverhead + counterTokens + r.in.Reserved
 	toolCounts := r.countToolFidelity()
 	chatDropped := len(r.opts.DroppedChatEntries) + droppedSummaryChunkCount(r.opts)
 

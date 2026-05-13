@@ -203,3 +203,103 @@ func TestApplyProceedsWithForceOverTarget(t *testing.T) {
 		t.Errorf("compact.apply.over_target_forced not at WARN level; logs:\n%s", logged)
 	}
 }
+
+func TestApplyNoOpDoesNotWriteCompactBoundary(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	path := writeTranscript(t, []string{
+		userText("u1", "", "line one", t0),
+		assistantBlocks("a1", "u1", t0.Add(time.Second), []map[string]any{
+			{"type": "text", "text": "line two"},
+		}),
+	})
+
+	pristine, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read pristine transcript: %v", err)
+	}
+	slice, err := LoadSlice(path)
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	res, err := Apply(ApplyInput{
+		Slice:           slice,
+		SessionID:       "session-zero-net-drop",
+		Cwd:             tmp,
+		Version:         "test",
+		Target:          50_000,
+		BoundaryTail:    []OutputBlock{{Text: "tail"}},
+		PreCompactTok:   1000,
+		Options:         newSynthOptions(),
+		FinalProjection: 45_000,
+	})
+	if err != nil {
+		t.Fatalf("Apply returned error: %v", err)
+	}
+	if res == nil {
+		t.Fatalf("ApplyResult = nil")
+	}
+	if !res.NoOp {
+		t.Fatalf("NoOp = false, want true")
+	}
+	if res.BoundaryUUID != "" {
+		t.Fatalf("BoundaryUUID = %q, want empty", res.BoundaryUUID)
+	}
+	if res.SyntheticUUID != "" {
+		t.Fatalf("SyntheticUUID = %q, want empty", res.SyntheticUUID)
+	}
+	if res.SnapshotPath != "" {
+		t.Fatalf("SnapshotPath = %q, want empty", res.SnapshotPath)
+	}
+	if res.LedgerPath != "" {
+		t.Fatalf("LedgerPath = %q, want empty", res.LedgerPath)
+	}
+
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read post-apply transcript: %v", err)
+	}
+	if !bytes.Equal(current, pristine) {
+		t.Fatalf("zero-net-drop Apply mutated transcript")
+	}
+	if bytes.Contains(current, []byte(`"subtype":"compact_boundary"`)) {
+		t.Fatalf("zero-net-drop Apply wrote compact_boundary marker")
+	}
+}
+
+func TestGuardRealContextOverTargetUsesActualValue(t *testing.T) {
+	const target = 25_000
+	const actual = 38_100
+	const overshoot = actual - target
+
+	err := GuardRealContextOverTarget("session-real-context", target, actual, false)
+	if err == nil {
+		t.Fatalf("GuardRealContextOverTarget returned nil, want error")
+	}
+	var overTarget *ApplyRealContextOverTargetError
+	if !errors.As(err, &overTarget) {
+		t.Fatalf("err = %v, want *ApplyRealContextOverTargetError", err)
+	}
+	if overTarget.Target != target {
+		t.Errorf("Target = %d, want %d", overTarget.Target, target)
+	}
+	if overTarget.Actual != actual {
+		t.Errorf("Actual = %d, want %d", overTarget.Actual, actual)
+	}
+	if overTarget.Overshoot != overshoot {
+		t.Errorf("Overshoot = %d, want %d", overTarget.Overshoot, overshoot)
+	}
+
+	want := "apply refused: real context 38100 over target 25000 (+13100)"
+	if got := overTarget.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+	if err := GuardRealContextOverTarget("session-real-context", target, actual, true); err != nil {
+		t.Fatalf("forced GuardRealContextOverTarget returned error: %v", err)
+	}
+	if err := GuardRealContextOverTarget("session-real-context", target, target, false); err != nil {
+		t.Fatalf("at-target GuardRealContextOverTarget returned error: %v", err)
+	}
+}

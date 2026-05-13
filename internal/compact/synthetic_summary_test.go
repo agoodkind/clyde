@@ -452,7 +452,7 @@ func TestRunPlan_RecompactsLargeSyntheticTurnByPart(t *testing.T) {
 	res, err := RunPlan(context.Background(), PlanInput{
 		Slice:     slice,
 		Strippers: Strippers{Chat: true},
-		Target:    350,
+		Target:    400,
 		Counter:   largeSyntheticSummaryCounter{},
 	})
 	if err != nil {

@@ -25,9 +25,9 @@ func stubAxis(n int, target int, measureAt func(k int) int) (*Axis, *[]int) {
 	return &axis, &probes
 }
 
-func TestBisectMin_StopJustBeforeUndershoot(t *testing.T) {
-	// Measure(k) = 100 - k. Target 50. Largest k where Probe >= 50 is
-	// k=50 (yields exactly 50). Returns 50.
+func TestBisectMin_ReturnsSmallestKAtOrUnderTarget(t *testing.T) {
+	// Measure(k) = 100 - k. Target 50. The smallest k where Probe is
+	// less than or equal to 50 is k=50.
 	axis, probes := stubAxis(100, 50, func(k int) int { return 100 - k })
 	got, err := BisectMin(context.Background(), *axis)
 	if err != nil {
@@ -43,7 +43,7 @@ func TestBisectMin_StopJustBeforeUndershoot(t *testing.T) {
 }
 
 func TestBisectMin_FloorStillOverTarget(t *testing.T) {
-	// Probe(N=100) = 100 > target 50. Cannot reach target; return N.
+	// Probe(N=100) = 100 > target 50. Cannot reach target, so return N.
 	axis, _ := stubAxis(100, 50, func(k int) int { return 200 - k })
 	got, err := BisectMin(context.Background(), *axis)
 	if err != nil {
@@ -65,9 +65,9 @@ func TestBisectMin_ZeroN(t *testing.T) {
 	}
 }
 
-func TestBisectMin_StopsBeforeStepThatUndershoots(t *testing.T) {
+func TestBisectMin_ReturnsFirstStepThatReachesTarget(t *testing.T) {
 	// Step function: Probe drops below target only at k >= 17. The
-	// largest k where Probe >= 10 is k=16. Return 16.
+	// smallest k where Probe <= 10 is k=17.
 	axis, _ := stubAxis(64, 10, func(k int) int {
 		if k >= 17 {
 			return 5
@@ -78,8 +78,8 @@ func TestBisectMin_StopsBeforeStepThatUndershoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != 16 {
-		t.Fatalf("got k=%d want 16 (last k before undershoot)", got)
+	if got != 17 {
+		t.Fatalf("got k=%d want 17 (first k under target)", got)
 	}
 }
 
