@@ -52,6 +52,20 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
 		Expect(cfg.Logging.Body.Mode).To(Equal("summary"))
 		Expect(cfg.Logging.Body.MaxKB).To(Equal(32))
+		Expect(cfg.Defaults.CompactCounter).To(Equal("api"))
+	})
+
+	It("loads compact counter source", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[defaults]\ncompact_counter = \"probe\"\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Defaults.CompactCounter).To(Equal("probe"))
 	})
 
 	It("loads profiles correctly when config.toml is present", func() {

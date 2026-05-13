@@ -6,10 +6,9 @@ import (
 	"log/slog"
 
 	// Blank-import the Claude contextusage provider package so its
-	// init() registers the Prober and CandidateProber with the
-	// generic contextusage registry. Generic consumers (compact
-	// engine, daemon) reach the spawn through contextusage.Get(id)
-	// and never import the Claude package directly.
+	// init() registers the Prober with the generic contextusage
+	// registry. Generic consumers reach the spawn through
+	// contextusage.Get(id) and never import the Claude package directly.
 	_ "goodkind.io/clyde/internal/providers/claude/contextusage"
 
 	// Blank-import the Claude compact summarizer so it registers with

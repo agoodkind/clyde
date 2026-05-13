@@ -13,6 +13,8 @@ import (
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/categorystyle"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/contextcount"
 	"goodkind.io/clyde/internal/contextusage"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
@@ -237,9 +239,22 @@ func RunRuntime(
 		"model", modelForCount,
 		"target", req.TargetTokens,
 	)
-	var counter Counter
+	var counter contextcount.Counter
+	var transcript contextcount.Transcript
 	if req.TargetTokens > 0 {
-		built, counterErr := buildProberCounter(req, modelForCount)
+		transcript, err = BuildTranscript(slice, upfront, nil, nil)
+		if err != nil {
+			compactLog.Logger().Error("compact.runtime.transcript_build_failed",
+				"component", "compact",
+				"subcomponent", "runtime",
+				"session", req.Session.Name,
+				"session_id", req.Session.Metadata.ProviderSessionID(),
+				"err", err.Error(),
+			)
+			return nil, err
+		}
+		transcript.Model = modelForCount
+		built, counterErr := buildContextCounter(req)
 		if counterErr != nil {
 			compactLog.Logger().Error("compact.runtime.counter_init_failed",
 				"component", "compact",
@@ -256,6 +271,7 @@ func RunRuntime(
 	var iterCount int
 	planRes, err := RunPlan(ctx, PlanInput{
 		Slice:          slice,
+		Transcript:     transcript,
 		Strippers:      req.Strippers,
 		Target:         req.TargetTokens,
 		StaticOverhead: staticOverhead,
@@ -371,21 +387,36 @@ func RunRuntime(
 	return result, nil
 }
 
-func buildProberCounter(req RuntimeRequest, _ string) (Counter, error) {
-	providerID := string(req.Session.ProviderID())
-	prober, ok := contextusage.GetCandidate(providerID)
-	if !ok {
-		return nil, fmt.Errorf("compact: no candidate prober registered for provider %q", providerID)
+func buildContextCounter(req RuntimeRequest) (contextcount.Counter, error) {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		slog.Error("compact.runtime.config_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"err", err,
+		)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
-	cfg := proberCounterConfig{
-		Prober:         prober,
-		SessionID:      req.Session.Metadata.ProviderSessionID(),
-		TranscriptPath: req.Session.Metadata.ProviderTranscriptPath(),
-		WorkDir:        req.Session.Metadata.WorkspaceRoot,
-		Cwd:            req.Session.Metadata.WorkspaceRoot,
-		Version:        "clyde",
+	source := contextcount.CounterSource(cfg.Defaults.CompactCounter)
+	counter, err := contextcount.NewCounter(source, contextcount.Deps{
+		Access:      nil,
+		HomeDir:     "",
+		ProjectPath: req.Session.Metadata.WorkspaceRoot,
+		WorkDir:     req.Session.Metadata.WorkspaceRoot,
+		Version:     "clyde",
+		Timeout:     0,
+		Clock:       compactClock,
+	})
+	if err != nil {
+		slog.Error("compact.runtime.counter_init_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"counter_source", source,
+			"err", err,
+		)
+		return nil, fmt.Errorf("context counter: %w", err)
 	}
-	return newProberCounter(cfg), nil
+	return counter, nil
 }
 
 // finalProjection returns the planner's converged /context total

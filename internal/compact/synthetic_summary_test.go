@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/contextcount"
 )
 
 func syntheticSummaryLine(uuid, parent string, ts time.Time, blocks []string) string {
@@ -260,8 +262,8 @@ func TestParseSyntheticSummary_MalformedOrderFallsBack(t *testing.T) {
 
 type syntheticSummaryCounter struct{}
 
-func (syntheticSummaryCounter) CountSyntheticUser(_ context.Context, content []OutputBlock) (int, error) {
-	text := joinOutputText(content)
+func (syntheticSummaryCounter) Count(_ context.Context, transcript contextcount.Transcript) (int, error) {
+	text := joinTranscriptText(transcript)
 	score := 0
 	for _, marker := range []struct {
 		needle string
@@ -285,10 +287,14 @@ func (syntheticSummaryCounter) CountSyntheticUser(_ context.Context, content []O
 	return score, nil
 }
 
+func (syntheticSummaryCounter) Source() contextcount.CounterSource {
+	return contextcount.CounterSource("test")
+}
+
 type largeSyntheticSummaryCounter struct{}
 
-func (largeSyntheticSummaryCounter) CountSyntheticUser(_ context.Context, content []OutputBlock) (int, error) {
-	text := joinOutputText(content)
+func (largeSyntheticSummaryCounter) Count(_ context.Context, transcript contextcount.Transcript) (int, error) {
+	text := joinTranscriptText(transcript)
 	score := 0
 	for _, marker := range []struct {
 		needle string
@@ -306,6 +312,32 @@ func (largeSyntheticSummaryCounter) CountSyntheticUser(_ context.Context, conten
 		}
 	}
 	return score, nil
+}
+
+func (largeSyntheticSummaryCounter) Source() contextcount.CounterSource {
+	return contextcount.CounterSource("test")
+}
+
+func joinTranscriptText(transcript contextcount.Transcript) string {
+	var sb strings.Builder
+	for _, message := range transcript.Messages {
+		for _, block := range message.Content {
+			appendTranscriptBlockText(&sb, block)
+		}
+	}
+	return sb.String()
+}
+
+func appendTranscriptBlockText(sb *strings.Builder, block contextcount.ContentBlock) {
+	if block.Text != "" {
+		sb.WriteString(block.Text)
+	}
+	if block.ToolResultText != "" {
+		sb.WriteString(block.ToolResultText)
+	}
+	for _, nested := range block.ToolResult {
+		appendTranscriptBlockText(sb, nested)
+	}
 }
 
 func joinOutputText(out []OutputBlock) string {
@@ -420,7 +452,7 @@ func TestRunPlan_RecompactsLargeSyntheticTurnByPart(t *testing.T) {
 	res, err := RunPlan(context.Background(), PlanInput{
 		Slice:     slice,
 		Strippers: Strippers{Chat: true},
-		Target:    410,
+		Target:    350,
 		Counter:   largeSyntheticSummaryCounter{},
 	})
 	if err != nil {
@@ -533,7 +565,20 @@ func TestSyntheticSummary_DroppedTextIncludesVirtualChunks(t *testing.T) {
 }
 
 func Example_syntheticSummaryCounter() {
-	n, _ := syntheticSummaryCounter{}.CountSyntheticUser(context.Background(), []OutputBlock{{Text: "## Continue from here.\n"}})
+	transcript := contextcount.Transcript{
+		Model:  "test",
+		System: nil,
+		Tools:  nil,
+		Messages: []contextcount.Message{
+			{
+				Role: "user",
+				Content: []contextcount.ContentBlock{
+					{Type: "text", Text: "## Continue from here.\n"},
+				},
+			},
+		},
+	}
+	n, _ := syntheticSummaryCounter{}.Count(context.Background(), transcript)
 	fmt.Println(n)
 	// Output: 10
 }

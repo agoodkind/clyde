@@ -62,7 +62,7 @@ func BuildTranscript(
 	}
 	transcript.Tools = append(transcript.Tools, tools...)
 
-	messages, err := unmarshalTranscriptMessages(slice.AllEntries)
+	messages, err := unmarshalTranscriptMessages(slice.PostBoundary)
 	if err != nil {
 		return contextcount.Transcript{}, err
 	}

@@ -15,6 +15,7 @@ type transcriptBuilderEntry struct {
 	ParentUUID  string                    `json:"parentUuid,omitempty"`
 	IsSidechain bool                      `json:"isSidechain,omitempty"`
 	Type        string                    `json:"type"`
+	Subtype     string                    `json:"subtype,omitempty"`
 	Timestamp   string                    `json:"timestamp,omitempty"`
 	Message     *transcriptBuilderMessage `json:"message,omitempty"`
 	CWD         string                    `json:"cwd,omitempty"`
@@ -194,6 +195,49 @@ func TestBuildTranscriptPreservesMessagesAndFiltersSidechain(t *testing.T) {
 	}
 	assertRawMessageBytes(t, got.Messages[1].Content[3].ToolInput, `{"path":"README.md","offset":10}`)
 	assertRawMessageBytes(t, got.Messages[1].Content[4].ToolInput, `{"command":"pwd"}`)
+}
+
+func TestBuildTranscriptUsesPostBoundaryMessages(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	slice := loadTranscriptBuilderSlice(t, []transcriptBuilderEntry{
+		{
+			UUID:      "pre-user",
+			Type:      "user",
+			Timestamp: "2026-05-13T12:00:00Z",
+			Message:   messageForRawContent("user", json.RawMessage(`"pre-boundary text"`)),
+		},
+		{
+			UUID:      "boundary",
+			Type:      "system",
+			Subtype:   "compact_boundary",
+			Timestamp: "2026-05-13T12:00:01Z",
+		},
+		{
+			UUID:      "post-user",
+			Type:      "user",
+			Timestamp: "2026-05-13T12:00:02Z",
+			Message:   messageForRawContent("user", json.RawMessage(`"post-boundary text"`)),
+		},
+	})
+
+	got, err := BuildTranscript(slice, RuntimeUpfront{Model: "claude-sonnet-4-5"}, nil, nil)
+	if err != nil {
+		t.Fatalf("BuildTranscript returned error: %v", err)
+	}
+
+	wantMessages := []contextcount.Message{
+		{
+			Role: "user",
+			Content: []contextcount.ContentBlock{
+				{Type: "text", Text: "post-boundary text"},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got.Messages, wantMessages) {
+		t.Fatalf("Messages mismatch\ngot:  %#v\nwant: %#v", got.Messages, wantMessages)
+	}
 }
 
 func TestBuildTranscriptCapturesSystemToolsMemoryAndSkills(t *testing.T) {
