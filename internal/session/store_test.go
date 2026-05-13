@@ -60,7 +60,7 @@ var _ = Describe("FileStore", func() {
 
 		It("should resolve and search by display title", func() {
 			s := session.NewSession("Merry Swan", "uuid-123")
-			s.Metadata.DisplayTitle = "Merry Swan"
+			s.Metadata.Title = "Merry Swan"
 
 			err := store.Create(s)
 			Expect(err).NotTo(HaveOccurred())
@@ -256,7 +256,7 @@ var _ = Describe("FileStore", func() {
 
 		It("hydrates parent display names from parent ClydeUUID and exact session name", func() {
 			parent := session.NewSession("Parent Current Name", "parent-provider-id")
-			parent.Metadata.DisplayTitle = "Stale Provider Title"
+			parent.Metadata.Title = "Stale Provider Title"
 			Expect(store.Create(parent)).To(Succeed())
 
 			child := session.NewSession("Child Session", "child-provider-id")

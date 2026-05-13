@@ -9,10 +9,10 @@ type ProviderSessionName interface {
 	Rename(currentName string, taken map[string]bool) string
 }
 
-// ProviderSessionDisplayTitle lets a provider expose the exact human-visible
+// ProviderSessionTitle lets a provider expose the exact human-visible
 // title separately from any boundary-specific fallback alias.
-type ProviderSessionDisplayTitle interface {
-	GetDisplayTitle() string
+type ProviderSessionTitle interface {
+	GetTitle() string
 }
 
 // GetName returns the provider-observed session title, when one is available.
@@ -23,14 +23,14 @@ func (r DiscoveryResult) GetName() string {
 	return strings.TrimSpace(r.NameContract.GetName())
 }
 
-// DisplayTitle returns the exact provider-observed title when the provider can
+// Title returns the exact provider-observed title when the provider can
 // distinguish that from the legacy alias input.
-func (r DiscoveryResult) DisplayTitle() string {
+func (r DiscoveryResult) Title() string {
 	if r.NameContract == nil {
 		return ""
 	}
-	if display, ok := r.NameContract.(ProviderSessionDisplayTitle); ok {
-		return strings.TrimSpace(display.GetDisplayTitle())
+	if display, ok := r.NameContract.(ProviderSessionTitle); ok {
+		return strings.TrimSpace(display.GetTitle())
 	}
 	return r.GetName()
 }

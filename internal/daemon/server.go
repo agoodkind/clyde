@@ -1893,7 +1893,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 		HasCustomOutputStyle:  sess.Metadata.HasCustomOutputStyle,
 		WorkspaceRoot:         sess.Metadata.WorkspaceRoot,
 		ContextMessageCount:   int32(sess.Metadata.ContextMessageCount),
-		DisplayTitle:          sess.Metadata.DisplayTitle,
+		DisplayTitle:          sess.Metadata.Title,
 		Model:                 model,
 		RemoteControl:         settings != nil && settings.RemoteControl,
 		MessageCount:          int32(stats.VisibleMessages),

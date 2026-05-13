@@ -123,7 +123,7 @@ func TestLifecycleGetSessionNameFallsBackToSessionIndex(t *testing.T) {
 	}
 
 	sess := session.NewSession("codex-thread-1", "thread-1")
-	sess.Metadata.DisplayTitle = "stale title"
+	sess.Metadata.Title = "stale title"
 	sess.Metadata.Provider = session.ProviderCodex
 	sess.Metadata.ProviderState = &session.ProviderOwnedMetadata{
 		Current: session.ProviderSessionID{Provider: session.ProviderCodex, ID: "thread-1"},

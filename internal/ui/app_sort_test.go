@@ -26,20 +26,20 @@ func TestSortSessionsStableTieBreakForLastUsed(t *testing.T) {
 	}
 }
 
-func TestSortSessionsUsesDisplayTitleForNameColumn(t *testing.T) {
+func TestSortSessionsUsesTitleForNameColumn(t *testing.T) {
 	a := NewApp([]*session.Session{
 		{
 			Name: "z-slug",
 			Metadata: session.Metadata{
-				Name:         "z-slug",
-				DisplayTitle: "Alpha Human",
+				Name:  "z-slug",
+				Title: "Alpha Human",
 			},
 		},
 		{
 			Name: "a-slug",
 			Metadata: session.Metadata{
-				Name:         "a-slug",
-				DisplayTitle: "Zulu Human",
+				Name:  "a-slug",
+				Title: "Zulu Human",
 			},
 		},
 	}, AppCallbacks{})

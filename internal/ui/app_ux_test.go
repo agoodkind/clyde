@@ -901,7 +901,7 @@ func TestUX_OpenExportOptionsUsesInteractivePanel(t *testing.T) {
 	}
 
 	sess := a.sessions[a.visibleIdx[0]]
-	sess.Metadata.DisplayTitle = "Merry Swan"
+	sess.Metadata.Title = "Merry Swan"
 	a.openExportOptions(sess)
 	panel, ok := a.overlay.(*ExportPanel)
 	if !ok {
@@ -1857,13 +1857,13 @@ func TestRuntimeStampIncludesExecutableHash(t *testing.T) {
 	}
 }
 
-func TestUX_FindSessionByDisplayTitleAndRenderDisplayTitle(t *testing.T) {
+func TestUX_FindSessionByTitleAndRenderTitle(t *testing.T) {
 	a := NewApp([]*session.Session{{
 		Name: "merry-swan",
 		Metadata: session.Metadata{
 			Name:         "merry-swan",
 			SessionID:    "shared",
-			DisplayTitle: "Merry Swan",
+			Title:        "Merry Swan",
 			LastAccessed: time.Now(),
 		},
 	}}, AppCallbacks{})

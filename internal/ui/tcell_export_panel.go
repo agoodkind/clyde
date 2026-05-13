@@ -11,9 +11,9 @@ import (
 type ExportPanel struct {
 	Rect Rect
 
-	sessionName  string
-	displayTitle string
-	stats        SessionExportStats
+	sessionName string
+	title       string
+	stats       SessionExportStats
 
 	format SessionExportFormat
 	folder string
@@ -52,22 +52,22 @@ type ExportPanel struct {
 	OnClose        func()
 }
 
-func newExportPanelWithTitle(sessionName, displayTitle string, stats SessionExportStats, folder string) *ExportPanel {
+func newExportPanelWithTitle(sessionName, title string, stats SessionExportStats, folder string) *ExportPanel {
 	if folder == "" {
 		folder = "."
 	}
-	title := strings.TrimSpace(displayTitle)
-	if title == "" {
-		title = sessionName
+	trimmedTitle := strings.TrimSpace(title)
+	if trimmedTitle == "" {
+		trimmedTitle = sessionName
 	}
-	name := title
+	name := trimmedTitle
 	if name == "" {
 		name = "session"
 	}
 	name = defaultExportFilename(name, SessionExportMarkdown)
 	p := &ExportPanel{
 		sessionName:      sessionName,
-		displayTitle:     title,
+		title:            trimmedTitle,
 		stats:            stats,
 		format:           SessionExportMarkdown,
 		folder:           folder,
@@ -130,7 +130,7 @@ func (p *ExportPanel) Draw(scr tcell.Screen, r Rect) {
 	inner := Rect{X: box.X + 2, Y: box.Y + 1, W: box.W - 4, H: box.H - 2}
 	y := inner.Y
 	drawString(scr, inner.X, y, StyleHeader, "Export Transcript", inner.W)
-	drawString(scr, inner.X+imax(0, inner.W-runeCount(p.displayTitle)-2), y, StyleMuted, p.displayTitle, inner.W)
+	drawString(scr, inner.X+imax(0, inner.W-runeCount(p.title)-2), y, StyleMuted, p.title, inner.W)
 
 	actionsY := inner.Y + inner.H - 2
 	contentTop := inner.Y + 2
@@ -498,7 +498,7 @@ func (p *ExportPanel) triggerAction() {
 			p.OnExport(p.buildRequest())
 		}
 	case 2:
-		reset := newExportPanelWithTitle(p.sessionName, p.displayTitle, p.stats, p.folder)
+		reset := newExportPanelWithTitle(p.sessionName, p.title, p.stats, p.folder)
 		p.format = reset.format
 		p.name = reset.name
 		p.historyStart = reset.historyStart

@@ -95,13 +95,13 @@ func autoAdoptSession(
 		sess.Metadata.WorkspaceRoot = root
 	}
 
-	// Populate DisplayTitle from the provider-owned observed name so the TUI
+	// Populate Title from the provider-owned observed name so the TUI
 	// surfaces the upstream user-given chat name. The hook handles the pre-named
-	// path (CLYDE_SESSION_NAME set), so Name stays authoritative; DisplayTitle is
+	// path (CLYDE_SESSION_NAME set), so Name stays authoritative; Title is
 	// purely decorative.
 	if headerOK {
 		if observedName := header.GetName(); observedName != "" {
-			sess.Metadata.DisplayTitle = observedName
+			sess.Metadata.Title = observedName
 			log.Debug("hook.sessionstart.display_title_captured",
 				"component", "hook",
 				"subject", "sessionstart",
@@ -144,7 +144,7 @@ func autoAdoptSession(
 		"subject", "sessionstart",
 		"session", name,
 		"session_id", hookData.SessionID,
-		"display_title", sess.Metadata.DisplayTitle,
+		"display_title", sess.Metadata.Title,
 	)
 }
 

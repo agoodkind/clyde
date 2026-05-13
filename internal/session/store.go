@@ -109,6 +109,9 @@ func NewGlobalFileStore() (*FileStore, error) {
 		)
 		return nil, fmt.Errorf("failed to create global sessions directory: %w", err)
 	}
+	if _, err := MigrateTitleMetadata(config.GlobalDataDir()); err != nil {
+		return nil, err
+	}
 	fs := &FileStore{clydeRoot: config.GlobalDataDir()}
 	if home, err := os.UserHomeDir(); err == nil {
 		fs.discoveryCache = defaultDiscoveryCache(home)
@@ -134,6 +137,9 @@ func NewGlobalFileStoreReadOnly() (*FileStore, error) {
 			"err", err,
 		)
 		return nil, fmt.Errorf("failed to create global sessions directory: %w", err)
+	}
+	if _, err := MigrateTitleMetadata(config.GlobalDataDir()); err != nil {
+		return nil, err
 	}
 	return &FileStore{clydeRoot: config.GlobalDataDir(), noAdopt: true}, nil
 }
@@ -254,7 +260,7 @@ func (fs *FileStore) Search(query string) ([]*Session, error) {
 	var matches []*Session
 	for _, sess := range sessions {
 		if strings.Contains(normalizeSessionLookup(sess.Name), q) ||
-			strings.Contains(normalizeSessionLookup(sess.Metadata.DisplayTitle), q) ||
+			strings.Contains(normalizeSessionLookup(sess.Metadata.Title), q) ||
 			strings.Contains(normalizeSessionLookup(sess.Metadata.ProviderSessionID()), q) ||
 			strings.Contains(normalizeSessionLookup(sess.Metadata.Context), q) {
 			matches = append(matches, sess)
@@ -313,7 +319,7 @@ func (fs *FileStore) Resolve(query string) (*Session, error) {
 		"query", query,
 		"session", adopted.Name,
 		"session_id", adopted.Metadata.ProviderSessionID(),
-		"display_title", adopted.Metadata.DisplayTitle,
+		"display_title", adopted.Metadata.Title,
 		"clyde_uuid", adopted.Metadata.ClydeUUID,
 	)
 	if sess := fs.resolveFromStore(query); sess != nil {
@@ -339,13 +345,13 @@ func (fs *FileStore) resolveFromStore(query string) *Session {
 
 	sessions, listErr := fs.List()
 	if listErr == nil {
-		if sess := exactDisplayTitleMatch(sessions, query); sess != nil {
+		if sess := exactTitleMatch(sessions, query); sess != nil {
 			sessionResolveLog.Logger().Debug("session.resolve.tier1_display_title_hit",
 				"component", "session",
 				"subcomponent", "resolve",
 				"query", query,
 				"session", sess.Name,
-				"display_title", sess.Metadata.DisplayTitle,
+				"display_title", sess.Metadata.Title,
 			)
 			return sess
 		}
@@ -441,12 +447,9 @@ func (fs *FileStore) adoptFromDiscovery(query string) (*Session, error) {
 		"provider_name", match.GetName(),
 	)
 
-	// If the direct session ID is already registered (for example the daemon's
-	// background scanner adopted it under an auto-generated name before
-	// the user assigned a provider-native title), reconcile the existing session
-	// to match the provider-owned name rather than creating a duplicate.
-	// The rename uses the exact display-name policy so tier 1 finds it on the
-	// retry. DisplayTitle is backfilled unconditionally for legacy rows.
+	// If the direct session ID is already registered, reconcile only the legacy
+	// exact-name alias so the provider-owned title is not persisted again after
+	// initial adoption.
 	if existing := fs.findByProviderSessionID(match.ProviderIdentity()); existing != nil {
 		return fs.reconcileExisting(existing, match, query)
 	}
@@ -492,7 +495,7 @@ func adoptDisabledReason(fs *FileStore) string {
 	return "unknown"
 }
 
-func exactDisplayTitleMatch(sessions []*Session, query string) *Session {
+func exactTitleMatch(sessions []*Session, query string) *Session {
 	trimmedQuery := strings.TrimSpace(query)
 	if trimmedQuery == "" {
 		return nil
@@ -503,7 +506,7 @@ func exactDisplayTitleMatch(sessions []*Session, query string) *Session {
 		if sess == nil {
 			continue
 		}
-		if strings.TrimSpace(sess.Metadata.DisplayTitle) != trimmedQuery {
+		if strings.TrimSpace(sess.Metadata.Title) != trimmedQuery {
 			continue
 		}
 		if match != nil {
@@ -522,7 +525,7 @@ func exactDisplayTitleMatch(sessions []*Session, query string) *Session {
 }
 
 func exactDiscoveryDisplayNameMatch(result DiscoveryResult, query string) bool {
-	displayName := strings.TrimSpace(result.DisplayTitle())
+	displayName := strings.TrimSpace(result.Title())
 	if displayName == "" {
 		return false
 	}
@@ -582,43 +585,10 @@ func exactSessionIDMatchType(sess *Session, query string) string {
 	return ""
 }
 
-// reconcileExisting updates an already-adopted session to reflect the
-// provider-owned exact display name seen on the artifact. If the title is valid
-// and unique, the session metadata Name is updated so tier-1 lookups by that
-// exact display name succeed. DisplayTitle is backfilled unconditionally so
-// legacy rows continue to show the upstream title even when a rename is not
-// possible. The function returns the session in its final state, or the original
-// when no rename was needed.
+// reconcileExisting updates an already-adopted session's legacy exact-name
+// alias without touching the Clyde-owned persisted title.
 func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult, query string) (*Session, error) {
-	observedName := match.DisplayTitle()
-
-	// Backfill DisplayTitle when the scan picked up a provider-owned name that
-	// the existing metadata lacks. Persist immediately so subsequent
-	// callers see the update regardless of the rename outcome.
-	titleChanged := false
-	if observedName != "" && existing.Metadata.DisplayTitle != observedName {
-		existing.Metadata.DisplayTitle = observedName
-		titleChanged = true
-	}
-	if titleChanged {
-		if err := fs.Update(existing); err != nil {
-			sessionLog.Warn("session.resolve.display_title_backfill_failed",
-				"component", "session",
-				"subcomponent", "resolve",
-				"session", existing.Name,
-				"session_id", existing.Metadata.ProviderSessionID(),
-				"err", err,
-			)
-		} else {
-			sessionResolveLog.Logger().Info("session.resolve.display_title_backfilled",
-				"component", "session",
-				"subcomponent", "resolve",
-				"session", existing.Name,
-				"session_id", existing.Metadata.ProviderSessionID(),
-				"display_title", observedName,
-			)
-		}
-	}
+	observedName := match.Title()
 
 	names, err := buildExistingNameSet(fs)
 	if err != nil {
@@ -644,7 +614,10 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		return existing, nil
 	}
 
-	if err := fs.Rename(existing.Name, target); err != nil {
+	oldName := existing.Name
+	existing.Name = target
+	existing.Metadata.Name = target
+	if err := fs.Update(existing); err != nil {
 		if resolved := fs.findByProviderSessionID(match.ProviderIdentity()); resolved != nil {
 			if resolved.Name == target {
 				return resolved, nil
@@ -653,17 +626,19 @@ func (fs *FileStore) reconcileExisting(existing *Session, match *DiscoveryResult
 		sessionLog.Warn("session.resolve.reconcile_rename_failed",
 			"component", "session",
 			"subcomponent", "resolve",
-			"old_name", existing.Name,
+			"old_name", oldName,
 			"new_name", target,
 			"session_id", existing.Metadata.ProviderSessionID(),
 			"err", err,
 		)
+		existing.Name = oldName
+		existing.Metadata.Name = oldName
 		return existing, nil
 	}
 	sessionResolveLog.Logger().Info("session.resolve.reconcile_renamed",
 		"component", "session",
 		"subcomponent", "resolve",
-		"old_name", existing.Name,
+		"old_name", oldName,
 		"new_name", target,
 		"session_id", existing.Metadata.ProviderSessionID(),
 		"display_title", observedName,
@@ -736,12 +711,11 @@ func (fs *FileStore) SyncDiscoveryResults(results []DiscoveryResult) ([]Discover
 		result := bestByProviderKey[key]
 		if existing := fs.findByProviderSessionID(result.ProviderIdentity()); existing != nil {
 			beforeName := existing.Name
-			beforeTitle := existing.Metadata.DisplayTitle
 			updated, err := fs.reconcileExisting(existing, &result, result.ProviderSessionID())
 			if err != nil {
 				return nil, err
 			}
-			if updated != nil && (updated.Name != beforeName || updated.Metadata.DisplayTitle != beforeTitle) {
+			if updated != nil && updated.Name != beforeName {
 				out = append(out, DiscoverySyncResult{
 					Session: updated,
 					OldName: beforeName,
@@ -801,7 +775,7 @@ func (fs *FileStore) Rename(oldName, newName string) error {
 
 	sess.Name = newName
 	sess.Metadata.Name = newName
-	sess.Metadata.DisplayTitle = newName
+	sess.Metadata.Title = newName
 	if err := fs.Update(sess); err != nil {
 		sessionLog.Warn("session.store.rename_metadata_update_failed",
 			"component", "session",

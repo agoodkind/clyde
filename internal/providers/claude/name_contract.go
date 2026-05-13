@@ -17,8 +17,8 @@ func (name CustomTitleName) GetName() string {
 	return strings.TrimSpace(name.Title)
 }
 
-// GetDisplayTitle returns the exact human-visible Claude custom title.
-func (name CustomTitleName) GetDisplayTitle() string {
+// GetTitle returns the exact human-visible Claude custom title.
+func (name CustomTitleName) GetTitle() string {
 	return name.GetName()
 }
 

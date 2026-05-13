@@ -760,7 +760,7 @@ func sessionSummaryFromProto(raw *clydev1.SessionSummary) (*session.Session, str
 			HasCustomOutputStyle: raw.GetHasCustomOutputStyle(),
 			WorkspaceRoot:        raw.GetWorkspaceRoot(),
 			ContextMessageCount:  int(raw.GetContextMessageCount()),
-			DisplayTitle:         raw.GetDisplayTitle(),
+			Title:                raw.GetDisplayTitle(),
 			AutoNameState:        session.AutoNameState(raw.GetAutoNameState()),
 			AutoNameSource:       session.AutoNameSource(raw.GetAutoNameSource()),
 			LastAutoNameAt:       timeFromNanos(raw.GetLastAutoNameNanos()),

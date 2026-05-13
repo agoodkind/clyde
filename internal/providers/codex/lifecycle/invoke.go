@@ -104,8 +104,8 @@ func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (st
 	if threadName := codexSessionIndexThreadName(sessionID); threadName != "" {
 		return threadName, nil
 	}
-	if strings.TrimSpace(sess.Metadata.DisplayTitle) != "" {
-		return strings.TrimSpace(sess.Metadata.DisplayTitle), nil
+	if strings.TrimSpace(sess.Metadata.Title) != "" {
+		return strings.TrimSpace(sess.Metadata.Title), nil
 	}
 	return strings.TrimSpace(sess.Name), nil
 }

@@ -848,7 +848,7 @@ func (a *App) openReturnPrompt(sess *session.Session) {
 	}
 	bodyEntries := a.sessionOptionsEntriesWithoutResume(sess, close)
 	statsSegments, statsLoading := a.buildSessionStatsSegments(sess)
-	modal := NewOptionsModal("Session exited: "+sessionDisplayTitle(sess), bodyEntries)
+	modal := NewOptionsModal("Session exited: "+sessionTitle(sess), bodyEntries)
 	modal.TopEntries = topEntries
 	// Re-run resetCursor now that TopEntries is populated. The
 	// constructor walked an empty TopEntries and may have parked the
@@ -4500,7 +4500,7 @@ func (a *App) rowForLockedLastUsed(sess *session.Session) []TableCell {
 		}
 	}
 	return []TableCell{
-		{Text: sessionDisplayTitle(sess), Style: nameStyle},
+		{Text: sessionTitle(sess), Style: nameStyle},
 		{Text: shortPath(sess.Metadata.WorkspaceRoot), Style: subStyle},
 		{Text: util.FormatRelativeTime(lastUsedTime(sess)), Style: lastUsedStyle},
 		{Text: model, Style: modelStyle},
@@ -4548,7 +4548,7 @@ func (a *App) rebuildVisible() {
 			continue
 		}
 		if f != "" {
-			hay := strings.ToLower(sessionDisplayTitle(sess) + " " + sess.Name + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
+			hay := strings.ToLower(sessionTitle(sess) + " " + sess.Name + " " + sess.Metadata.WorkspaceRoot + " " + sess.Metadata.Context)
 			if !strings.Contains(hay, f) {
 				continue
 			}
@@ -4571,7 +4571,7 @@ func (a *App) sortSessions() {
 		cmp := 0
 		switch a.sortCol {
 		case SortColName:
-			cmp = strings.Compare(strings.ToLower(sessionDisplayTitle(x)), strings.ToLower(sessionDisplayTitle(y)))
+			cmp = strings.Compare(strings.ToLower(sessionTitle(x)), strings.ToLower(sessionTitle(y)))
 		case SortColWorkspace:
 			cmp = strings.Compare(x.Metadata.WorkspaceRoot, y.Metadata.WorkspaceRoot)
 		case SortColModel:
@@ -4586,8 +4586,8 @@ func (a *App) sortSessions() {
 			cmp = compareTimes(lastUsedTime(x), lastUsedTime(y))
 		}
 		if cmp == 0 {
-			xTitle := strings.ToLower(sessionDisplayTitle(x))
-			yTitle := strings.ToLower(sessionDisplayTitle(y))
+			xTitle := strings.ToLower(sessionTitle(x))
+			yTitle := strings.ToLower(sessionTitle(y))
 			if xTitle != yTitle {
 				return xTitle < yTitle
 			}
@@ -5372,7 +5372,7 @@ func (a *App) openDeleteConfirm() {
 	sess := a.selected
 	m := &Modal{
 		Title: "Delete Session",
-		Body:  fmt.Sprintf("Delete session %q?", sessionDisplayTitle(sess)),
+		Body:  fmt.Sprintf("Delete session %q?", sessionTitle(sess)),
 		Details: []string{
 			"Session folder and metadata will be removed.",
 			"Claude transcript will be deleted.",
@@ -5412,7 +5412,7 @@ func (a *App) openSearchForm() {
 	if sess == nil {
 		return
 	}
-	input := NewTextInput("Search " + sessionDisplayTitle(sess) + ": ")
+	input := NewTextInput("Search " + sessionTitle(sess) + ": ")
 	input.OnCancel = a.closeOverlay
 	input.OnSubmit = func(q string) {
 		a.closeOverlay()
@@ -5645,7 +5645,7 @@ func (a *App) pinSidecar(sess *session.Session) {
 	if b, ok := a.liveURLRecordFor(sess); ok {
 		bridgeURL = b.URL
 	}
-	panel := NewSidecarPanel(sessionDisplayTitle(sess), sess.Metadata.ProviderSessionID(), bridgeURL)
+	panel := NewSidecarPanel(sessionTitle(sess), sess.Metadata.ProviderSessionID(), bridgeURL)
 	panel.OnSend = func(text string) error {
 		send := a.sidecarSendFunc()
 		if send == nil {
@@ -6229,7 +6229,7 @@ func (a *App) findSessionByName(name string) *session.Session {
 	return nil
 }
 
-func sessionDisplayTitle(sess *session.Session) string {
+func sessionTitle(sess *session.Session) string {
 	return session.SessionDisplayName(sess)
 }
 
@@ -6247,7 +6247,7 @@ func sessionMatchesLookup(sess *session.Session, name, sessionID string) bool {
 	if sess.Name == lookupName {
 		return true
 	}
-	return sessionDisplayTitle(sess) == lookupName
+	return sessionTitle(sess) == lookupName
 }
 
 func sessionHistoryReadable(sess *session.Session) bool {
@@ -6343,7 +6343,7 @@ func (a *App) openSessionOptionsFor(sess *session.Session) {
 		return
 	}
 	close := func() { a.closeOverlay() }
-	modal := NewOptionsModal(sessionDisplayTitle(sess), a.sessionOptionsEntries(sess, close))
+	modal := NewOptionsModal(sessionTitle(sess), a.sessionOptionsEntries(sess, close))
 	modal.OnCancel = close
 	modal.StatsSegments, modal.StatsLoading = a.buildSessionStatsSegments(sess)
 	modal.StatsSessionName = sess.Name
@@ -6552,7 +6552,7 @@ func (a *App) openSessionContextWindowOptions(sess *session.Session, closeParent
 			Action: apply("1m"),
 		},
 	}
-	modal := NewOptionsModal("Claude context for "+sessionDisplayTitle(sess), entries)
+	modal := NewOptionsModal("Claude context for "+sessionTitle(sess), entries)
 	modal.OnCancel = func() {
 		a.closeOverlay()
 		a.mode = StatusFilter
@@ -6682,7 +6682,7 @@ func (a *App) openBasedirEditor(sess *session.Session) {
 		}
 	}
 	input.OnCancel = a.closeOverlay
-	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sessionDisplayTitle(sess) + " (empty clears)"}
+	a.overlay = &InputOverlay{Input: input, Title: "Edit basedir for " + sessionTitle(sess) + " (empty clears)"}
 	a.mode = StatusFilter
 }
 
@@ -6694,7 +6694,7 @@ func (a *App) openExportOptions(sess *session.Session) {
 		return
 	}
 	stats, loaded := a.cachedExportStatsForSession(sess)
-	panel := newExportPanelWithTitle(sess.Name, sessionDisplayTitle(sess), stats, defaultExportFolder())
+	panel := newExportPanelWithTitle(sess.Name, sessionTitle(sess), stats, defaultExportFolder())
 	if !loaded && a.cb.LoadExportStats != nil {
 		panel.StartLoadingStats()
 		a.requestExportStatsAsync(sess)

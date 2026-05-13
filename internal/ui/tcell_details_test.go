@@ -434,9 +434,9 @@ func TestDetailsView_ResumeCommandUsesVisibleTitle(t *testing.T) {
 	sess := &session.Session{
 		Name: "merry-swan",
 		Metadata: session.Metadata{
-			Name:         "merry-swan",
-			SessionID:    "uuid-1",
-			DisplayTitle: "Merry Swan",
+			Name:      "merry-swan",
+			SessionID: "uuid-1",
+			Title:     "Merry Swan",
 		},
 	}
 
