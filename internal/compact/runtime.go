@@ -390,7 +390,7 @@ func buildProberCounter(req RuntimeRequest, modelForCount string) (Counter, erro
 	}
 	if os.Getenv("CLYDE_COMPACT_DEBUG_COUNT_TOKENS") == "1" {
 		if key, keyErr := AnthropicAPIKey(); keyErr == nil && strings.TrimSpace(modelForCount) != "" {
-			cfg.Debug = NewTokenCounter(key, modelForCount)
+			cfg.Debug = NewDebugTokenCounter(key, modelForCount)
 		} else if keyErr != nil {
 			compactLog.Logger().Debug("compact.runtime.debug_counter_disabled",
 				"component", "compact",

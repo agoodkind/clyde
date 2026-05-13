@@ -636,7 +636,7 @@ func TestRunPlan_TargetLoop_FakeCounter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	counter := &TokenCounter{
+	counter := &DebugTokenCounter{
 		APIKey:   "test-key",
 		Endpoint: srv.URL,
 		Model:    "test-model",
@@ -696,7 +696,7 @@ func TestRunPlan_TargetAlreadyMet(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	counter := &TokenCounter{
+	counter := &DebugTokenCounter{
 		APIKey:   "k",
 		Endpoint: srv.URL,
 		Model:    "m",
