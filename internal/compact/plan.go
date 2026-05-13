@@ -54,7 +54,6 @@ type PlanInput struct {
 	Out            io.Writer             // fallback streaming sink when OnIteration nil
 	OnIteration    func(IterationRecord) // preferred: called after each measure
 	BatchSize      int                   // tool demotion batch size; default 8
-	ChatBatchSize  int                   // chat-drop batch size; default 4
 	StopTimeout    time.Duration         // max wall time for whole loop; 0 = no limit
 	// CompactRunID is the correlation id stamped on every
 	// compact.plan.iteration slog event the planner emits. RunPlan
@@ -101,6 +100,13 @@ type IterationRecord struct {
 	// turns; Refine may un-drop some at the tail of the run.
 	ChatTurnsTotal   int
 	ChatTurnsDropped int
+
+	// Probe is true when this record represents a mid-bisect
+	// measurement rather than an accepted iteration. Probe rows
+	// inform the dashboard about candidate measurements without
+	// implying the planner committed to them. Accepted rows have
+	// Probe=false.
+	Probe bool
 }
 
 // RunPlan drives the target loop. When Target == 0 it just synthesizes
@@ -142,9 +148,6 @@ func normalizePlanInput(in *PlanInput) error {
 	}
 	if in.BatchSize <= 0 {
 		in.BatchSize = 32
-	}
-	if in.ChatBatchSize <= 0 {
-		in.ChatBatchSize = 4
 	}
 	if in.Target > 0 && in.Counter == nil {
 		return fmt.Errorf("plan: target set but no token counter")
@@ -263,6 +266,7 @@ func (r *planRunner) measure(label string) (IterationRecord, error) {
 		ToolsDropped:      toolCounts.Dropped,
 		ChatTurnsTotal:    r.totalChatTurns,
 		ChatTurnsDropped:  chatDropped,
+		Probe:             false,
 	}
 	return record, nil
 }
@@ -319,8 +323,30 @@ func (r *planRunner) emitRecord(record IterationRecord) {
 	} else if record.Delta < 0 {
 		tag = fmt.Sprintf("-%d under", -record.Delta)
 	}
-	fmt.Fprintf(r.in.Out, "  iter  %-44s tail=%d  ctx=%d  %s\n",
-		record.Step, record.TailTokens, record.CtxTotal, tag)
+	prefix := "  iter  "
+	if record.Probe {
+		prefix = "  probe "
+	}
+	fmt.Fprintf(r.in.Out, "%s%-44s tail=%d  ctx=%d  %s\n",
+		prefix, record.Step, record.TailTokens, record.CtxTotal, tag)
+}
+
+// emitProbe forwards a probe row to the iteration log without
+// mutating planner state. The caller of Bisect uses this so probes
+// reach the dashboard without being recorded as accepted iterations.
+func (r *planRunner) emitProbe(record IterationRecord) {
+	slog.DebugContext(r.ctx, "compact.plan.iteration",
+		"component", "compact",
+		"subcomponent", "plan",
+		"compact_run_id", r.in.CompactRunID,
+		"step", record.Step,
+		"tail_tokens", record.TailTokens,
+		"ctx_total", record.CtxTotal,
+		"projected", record.CtxTotal,
+		"delta", record.Delta,
+		"probe", true,
+	)
+	r.emitRecord(record)
 }
 
 func (r *planRunner) hitTarget() bool {
@@ -471,56 +497,68 @@ func (r *planRunner) revertToolDetail(toolIDs []string, pass toolDemotionPass) {
 	}
 }
 
+// runChatDrops finds the smallest prefix of chatDropOrder whose
+// application brings the projected context total at or below target.
+// The bisect probes ceil(log2(N))+1 times instead of the N times the
+// linear scan used.
 func (r *planRunner) runChatDrops() error {
+	if r.hitTarget() {
+		return nil
+	}
 	dropOrder := chatDropOrder(r.in.Slice)
-	index := 0
-	prevCtx := r.ctxTotal
-	lastDropTurns := 0
-	lastDropAmount := 0
-	nearTargetBrake := maxInt(20_000, r.in.Target/10)
-	for index < len(dropOrder) && !r.hitTarget() {
-		batchSize := adaptiveChatBatchSize(r.in.ChatBatchSize, r.ctxTotal-r.in.Target, nearTargetBrake, lastDropTurns, lastDropAmount)
-		batchEnd := minInt(index+batchSize, len(dropOrder))
-		r.applyChatDropSteps(dropOrder[index:batchEnd])
-		record, err := r.measure(fmt.Sprintf("drop oldest chat turns (%d)", batchEnd-index))
-		if err != nil {
-			return err
-		}
-		if record.CtxTotal < r.in.Target {
-			r.revertChatDropSteps(dropOrder[index:batchEnd])
-			if batchSize > 1 {
-				lastDropTurns = 0
-				lastDropAmount = 0
-				continue
-			}
-			break
-		}
-		r.accept(record)
-		lastDropTurns = batchEnd - index
-		lastDropAmount = maxInt(prevCtx-r.ctxTotal, 0)
-		prevCtx = r.ctxTotal
-		index = batchEnd
+	if len(dropOrder) == 0 {
+		return nil
 	}
-	return nil
-}
 
-func adaptiveChatBatchSize(defaultBatchSize, deltaOver, nearTargetBrake, lastDropTurns, lastDropAmount int) int {
-	batchSize := defaultBatchSize
-	if lastDropTurns == 0 || deltaOver <= nearTargetBrake {
-		return 1
+	probe := func(ctx context.Context, k int) (int, error) {
+		r.applyChatDropSteps(dropOrder[:k])
+		record, err := r.measure(fmt.Sprintf("probe drop %d chat turns", k))
+		r.revertChatDropSteps(dropOrder[:k])
+		if err != nil {
+			return 0, err
+		}
+		return record.CtxTotal, nil
 	}
-	if lastDropAmount <= 0 {
-		return batchSize
+
+	axis := Axis{
+		N:      len(dropOrder),
+		Probe:  probe,
+		Target: r.in.Target,
+		Label:  func(k int) string { return fmt.Sprintf("probe drop %d chat turns", k) },
+		Emit:   func(rec IterationRecord) { r.emitProbe(rec) },
+		BuildRecord: func(label string, k int, ctxTotal int) IterationRecord {
+			toolCounts := r.countToolFidelity()
+			return IterationRecord{
+				Step:              label,
+				TailTokens:        ctxTotal - r.in.StaticOverhead - r.in.Reserved,
+				CtxTotal:          ctxTotal,
+				Delta:             ctxTotal - r.in.Target,
+				ThinkingDropped:   r.opts.DropThinking,
+				ImagesPlaceholder: r.opts.ImagesAsPlaceholder,
+				ToolsFull:         toolCounts.Full,
+				ToolsLineOnly:     toolCounts.LineOnly,
+				ToolsDropped:      toolCounts.Dropped,
+				ChatTurnsTotal:    r.totalChatTurns,
+				ChatTurnsDropped:  k,
+				Probe:             true,
+			}
+		},
 	}
-	tokensPerTurn := lastDropAmount / lastDropTurns
-	if tokensPerTurn <= 0 {
-		return batchSize
+
+	k, err := BisectMin(r.ctx, axis)
+	if err != nil {
+		return err
 	}
-	estimatedNeeded := deltaOver/tokensPerTurn + 1
-	if estimatedNeeded < batchSize {
-		batchSize = maxInt(estimatedNeeded, 1)
+	if k == 0 {
+		return nil
 	}
-	return batchSize
+	r.applyChatDropSteps(dropOrder[:k])
+	record, err := r.measure(fmt.Sprintf("drop oldest chat turns (%d)", k))
+	if err != nil {
+		return err
+	}
+	r.accept(record)
+	return nil
 }
 
 func (r *planRunner) applyChatDropSteps(steps []chatDropStep) {

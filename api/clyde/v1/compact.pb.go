@@ -660,6 +660,7 @@ type CompactIteration struct {
 	ToolsDropped      int32                  `protobuf:"varint,10,opt,name=tools_dropped,json=toolsDropped,proto3" json:"tools_dropped,omitempty"`
 	ChatTurnsTotal    int32                  `protobuf:"varint,11,opt,name=chat_turns_total,json=chatTurnsTotal,proto3" json:"chat_turns_total,omitempty"`
 	ChatTurnsDropped  int32                  `protobuf:"varint,12,opt,name=chat_turns_dropped,json=chatTurnsDropped,proto3" json:"chat_turns_dropped,omitempty"`
+	Probe             bool                   `protobuf:"varint,13,opt,name=probe,proto3" json:"probe,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -776,6 +777,13 @@ func (x *CompactIteration) GetChatTurnsDropped() int32 {
 		return x.ChatTurnsDropped
 	}
 	return 0
+}
+
+func (x *CompactIteration) GetProbe() bool {
+	if x != nil {
+		return x.Probe
+	}
+	return false
 }
 
 type CompactApplyMutation struct {
@@ -1294,7 +1302,7 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06tokens\x18\x02 \x01(\x05R\x06tokens\x12\x1f\n" +
 	"\vis_deferred\x18\x03 \x01(\bR\n" +
-	"isDeferred\"\xb6\x03\n" +
+	"isDeferred\"\xcc\x03\n" +
 	"\x10CompactIteration\x12\x1c\n" +
 	"\titeration\x18\x01 \x01(\x05R\titeration\x12\x12\n" +
 	"\x04step\x18\x02 \x01(\tR\x04step\x12\x1f\n" +
@@ -1310,7 +1318,8 @@ const file_clyde_v1_daemon_compact_proto_rawDesc = "" +
 	"\rtools_dropped\x18\n" +
 	" \x01(\x05R\ftoolsDropped\x12(\n" +
 	"\x10chat_turns_total\x18\v \x01(\x05R\x0echatTurnsTotal\x12,\n" +
-	"\x12chat_turns_dropped\x18\f \x01(\x05R\x10chatTurnsDropped\"\xfe\x01\n" +
+	"\x12chat_turns_dropped\x18\f \x01(\x05R\x10chatTurnsDropped\x12\x14\n" +
+	"\x05probe\x18\r \x01(\bR\x05probe\"\xfe\x01\n" +
 	"\x14CompactApplyMutation\x12#\n" +
 	"\rboundary_uuid\x18\x01 \x01(\tR\fboundaryUuid\x12%\n" +
 	"\x0esynthetic_uuid\x18\x02 \x01(\tR\rsyntheticUuid\x12(\n" +

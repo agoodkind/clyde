@@ -656,7 +656,20 @@ func finalBreakdownRows(final compactengine.IterationRecord) []string {
 // both Render functions can show the same end-state breakdown.
 func finalRecord(res *compactengine.PlanResult) compactengine.IterationRecord {
 	if len(res.Iterations) == 0 {
-		return compactengine.IterationRecord{}
+		return compactengine.IterationRecord{
+			Step:              "",
+			TailTokens:        0,
+			CtxTotal:          0,
+			Delta:             0,
+			ThinkingDropped:   false,
+			ImagesPlaceholder: false,
+			ToolsFull:         0,
+			ToolsLineOnly:     0,
+			ToolsDropped:      0,
+			ChatTurnsTotal:    0,
+			ChatTurnsDropped:  0,
+			Probe:             false,
+		}
 	}
 	return res.Iterations[len(res.Iterations)-1]
 }

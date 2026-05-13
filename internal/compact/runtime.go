@@ -258,15 +258,16 @@ func RunRuntime(
 		Counter:        counter,
 		Out:            nil,
 		OnIteration: func(r IterationRecord) {
-			iterCount++
+			if !r.Probe {
+				iterCount++
+			}
 			if onIteration != nil {
-				onIteration(RuntimeIteration{Iteration: r, Accepted: true})
+				onIteration(RuntimeIteration{Iteration: r, Accepted: !r.Probe})
 			}
 		},
-		BatchSize:     0,
-		ChatBatchSize: 0,
-		StopTimeout:   0,
-		CompactRunID:  "",
+		BatchSize:    0,
+		StopTimeout:  0,
+		CompactRunID: "",
 	})
 	if err != nil {
 		compactLog.Logger().Error("compact.runtime.plan_failed",

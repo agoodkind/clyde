@@ -3300,6 +3300,7 @@ func compactIterationProto(sequence int32, iter compactengine.RuntimeIteration) 
 		ToolsDropped:      compactInt32(iter.Iteration.ToolsDropped),
 		ChatTurnsTotal:    compactInt32(iter.Iteration.ChatTurnsTotal),
 		ChatTurnsDropped:  compactInt32(iter.Iteration.ChatTurnsDropped),
+		Probe:             iter.Iteration.Probe,
 	}
 }
 

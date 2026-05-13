@@ -217,6 +217,7 @@ func handleIterationEvent(out io.Writer, in compactDaemonRunInput, state *compac
 		ToolsDropped:      int(it.GetToolsDropped()),
 		ChatTurnsTotal:    int(it.GetChatTurnsTotal()),
 		ChatTurnsDropped:  int(it.GetChatTurnsDropped()),
+		Probe:             it.GetProbe(),
 	}
 	state.iterations = append(state.iterations, rec)
 	if in.JSONMode && in.Target > 0 {

@@ -88,6 +88,7 @@ message CompactIteration {
   int32 tools_dropped = 10;
   int32 chat_turns_total = 11;
   int32 chat_turns_dropped = 12;
+  bool probe = 13;
 }
 
 message CompactApplyMutation {

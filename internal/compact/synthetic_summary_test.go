@@ -321,11 +321,10 @@ func TestRunPlan_RecompactsPriorSyntheticSummaryByChunk(t *testing.T) {
 	}
 
 	res, err := RunPlan(context.Background(), PlanInput{
-		Slice:         slice,
-		Strippers:     Strippers{Chat: true},
-		Target:        350,
-		Counter:       syntheticSummaryCounter{},
-		ChatBatchSize: 1,
+		Slice:     slice,
+		Strippers: Strippers{Chat: true},
+		Target:    350,
+		Counter:   syntheticSummaryCounter{},
 	})
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)
@@ -370,11 +369,10 @@ func TestRunPlan_RecompactsLegacySyntheticSummaryByChunk(t *testing.T) {
 	}
 
 	res, err := RunPlan(context.Background(), PlanInput{
-		Slice:         slice,
-		Strippers:     Strippers{Chat: true},
-		Target:        275,
-		Counter:       syntheticSummaryCounter{},
-		ChatBatchSize: 1,
+		Slice:     slice,
+		Strippers: Strippers{Chat: true},
+		Target:    275,
+		Counter:   syntheticSummaryCounter{},
 	})
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)
@@ -415,11 +413,10 @@ func TestRunPlan_RecompactsLargeSyntheticTurnByPart(t *testing.T) {
 	}
 
 	res, err := RunPlan(context.Background(), PlanInput{
-		Slice:         slice,
-		Strippers:     Strippers{Chat: true},
-		Target:        410,
-		Counter:       largeSyntheticSummaryCounter{},
-		ChatBatchSize: 1,
+		Slice:     slice,
+		Strippers: Strippers{Chat: true},
+		Target:    410,
+		Counter:   largeSyntheticSummaryCounter{},
 	})
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)
@@ -471,11 +468,10 @@ func TestRunPlan_MalformedSyntheticSummaryFallsBackToWholeTurnDrop(t *testing.T)
 	}
 
 	res, err := RunPlan(context.Background(), PlanInput{
-		Slice:         slice,
-		Strippers:     Strippers{Chat: true},
-		Target:        150,
-		Counter:       syntheticSummaryCounter{},
-		ChatBatchSize: 1,
+		Slice:     slice,
+		Strippers: Strippers{Chat: true},
+		Target:    150,
+		Counter:   syntheticSummaryCounter{},
 	})
 	if err != nil {
 		t.Fatalf("RunPlan: %v", err)

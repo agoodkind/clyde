@@ -691,6 +691,7 @@ func compactEventFromProto(ev *clydev1.CompactEvent) ui.CompactEvent {
 			Step:      it.GetStep(),
 			CtxTotal:  int(it.GetCtxTotal()),
 			Delta:     int(it.GetDelta()),
+			Probe:     it.GetProbe(),
 		}
 	case clydev1.CompactEvent_KIND_FINAL:
 		fin := ev.GetFinal()

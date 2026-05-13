@@ -56,6 +56,7 @@ type CompactIteration struct {
 	Step      string
 	CtxTotal  int
 	Delta     int
+	Probe     bool
 }
 
 type CompactFinal struct {
@@ -810,9 +811,13 @@ func (p *CompactPanel) drawProgressLog(scr tcell.Screen, r Rect) {
 }
 
 func (p *CompactPanel) renderIterationLine(iter CompactIteration) string {
+	prefix := fmt.Sprintf("iter %d", iter.Iteration)
+	if iter.Probe {
+		prefix = "probe   "
+	}
 	return fmt.Sprintf(
-		"iter %d  %s  projected %s  %s",
-		iter.Iteration,
+		"%s  %s  projected %s  %s",
+		prefix,
 		iter.Step,
 		formatTokensExact(iter.CtxTotal),
 		formatSignedWithCommas(iter.Delta),
