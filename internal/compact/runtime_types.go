@@ -14,6 +14,10 @@ type RuntimeUsageCategory struct {
 	Name       string
 	Tokens     int
 	IsDeferred bool
+	// Color is the provider-supplied color hint resolved through the
+	// categorystyle registry at runtime. Empty string means no hint
+	// was registered; consumers fall back to their default palette.
+	Color string
 }
 
 const DefaultCountModel = "claude-sonnet-4-5"

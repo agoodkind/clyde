@@ -13,7 +13,6 @@ message ProbeContextUsageRequest {
 message ContextUsageCategory {
   string name = 1;
   int32 tokens = 2;
-  string color = 3;
   bool is_deferred = 4;
 }
 

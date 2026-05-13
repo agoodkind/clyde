@@ -13,6 +13,7 @@ import (
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/contextusage"
+	"goodkind.io/clyde/internal/providers/categorystyle"
 	"goodkind.io/clyde/internal/session"
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
@@ -140,12 +141,15 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		upfront.UsagePercentage = usage.Percentage
 		upfront.UsageSource = "probe"
 		upfront.UsageCapturedAt = compactClock.Now().UTC()
+		providerID := string(req.Session.ProviderID())
 		categories := make([]RuntimeUsageCategory, 0, len(usage.Categories))
 		for _, cat := range usage.Categories {
+			color, _ := categorystyle.ColorFor(providerID, cat.Name)
 			categories = append(categories, RuntimeUsageCategory{
 				Name:       cat.Name,
 				Tokens:     cat.Tokens,
 				IsDeferred: cat.IsDeferred,
+				Color:      string(color),
 			})
 		}
 		upfront.UsageCategories = categories

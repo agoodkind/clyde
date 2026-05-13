@@ -70,7 +70,6 @@ type ContextUsageCategory struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Tokens        int32                  `protobuf:"varint,2,opt,name=tokens,proto3" json:"tokens,omitempty"`
-	Color         string                 `protobuf:"bytes,3,opt,name=color,proto3" json:"color,omitempty"`
 	IsDeferred    bool                   `protobuf:"varint,4,opt,name=is_deferred,json=isDeferred,proto3" json:"is_deferred,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -118,13 +117,6 @@ func (x *ContextUsageCategory) GetTokens() int32 {
 		return x.Tokens
 	}
 	return 0
-}
-
-func (x *ContextUsageCategory) GetColor() string {
-	if x != nil {
-		return x.Color
-	}
-	return ""
 }
 
 func (x *ContextUsageCategory) GetIsDeferred() bool {
@@ -528,11 +520,10 @@ const file_clyde_v1_daemon_context_proto_rawDesc = "" +
 	"\n" +
 	"\x1dclyde/v1/daemon/context.proto\x12\bclyde.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"=\n" +
 	"\x18ProbeContextUsageRequest\x12!\n" +
-	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"y\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\"c\n" +
 	"\x14ContextUsageCategory\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
-	"\x06tokens\x18\x02 \x01(\x05R\x06tokens\x12\x14\n" +
-	"\x05color\x18\x03 \x01(\tR\x05color\x12\x1f\n" +
+	"\x06tokens\x18\x02 \x01(\x05R\x06tokens\x12\x1f\n" +
 	"\vis_deferred\x18\x04 \x01(\bR\n" +
 	"isDeferred\"\x95\x02\n" +
 	"\x19ProbeContextUsageResponse\x12!\n" +

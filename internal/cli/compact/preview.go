@@ -162,7 +162,6 @@ func buildMetricsDashboardPayload(upfront *clydev1.CompactUpfront) MetricsDashbo
 			snapshot.Categories = append(snapshot.Categories, contextusage.Category{
 				Name:       cat.GetName(),
 				Tokens:     int(cat.GetTokens()),
-				Color:      "",
 				IsDeferred: cat.GetIsDeferred(),
 			})
 		}

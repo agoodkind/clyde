@@ -2824,7 +2824,6 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 		resp.Categories = append(resp.Categories, &clydev1.ContextUsageCategory{
 			Name:       cat.Name,
 			Tokens:     int32(cat.Tokens),
-			Color:      cat.Color,
 			IsDeferred: cat.IsDeferred,
 		})
 	}

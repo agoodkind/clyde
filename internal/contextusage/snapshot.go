@@ -22,7 +22,6 @@ type Snapshot struct {
 type Category struct {
 	Name       string `json:"name"`
 	Tokens     int    `json:"tokens"`
-	Color      string `json:"color"`
 	IsDeferred bool   `json:"isDeferred"`
 }
 
