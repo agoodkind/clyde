@@ -131,6 +131,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		return nil, fmt.Errorf("build synthetic user: %w", err)
 	}
 
+	in.Slice = Dehydrate(in.Slice, newSynthOptions())
 	if err := appendBoundaryAndSynthetic(path, boundaryLine, syntheticLine); err != nil {
 		return nil, err
 	}
