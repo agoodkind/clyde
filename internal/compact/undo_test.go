@@ -67,6 +67,7 @@ func TestUndoRestoresFromSnapshotAfterMidFileMutation(t *testing.T) {
 		Target:        100,
 		BoundaryTail:  []OutputBlock{{Text: "post-apply tail"}},
 		PreCompactTok: 1000,
+		Options:       newSynthOptions(),
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -151,6 +152,7 @@ func TestUndoRemovesSnapshotFileAfterSuccessfulRestore(t *testing.T) {
 		Target:        100,
 		BoundaryTail:  []OutputBlock{{Text: "tail"}},
 		PreCompactTok: 1000,
+		Options:       newSynthOptions(),
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -201,6 +203,7 @@ func TestUndoRefusesWhenSnapshotMissing(t *testing.T) {
 		Target:        100,
 		BoundaryTail:  []OutputBlock{{Text: "tail"}},
 		PreCompactTok: 1000,
+		Options:       newSynthOptions(),
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -245,6 +248,7 @@ func TestUndoRefusesOnHashMismatch(t *testing.T) {
 		Target:        100,
 		BoundaryTail:  []OutputBlock{{Text: "tail"}},
 		PreCompactTok: 1000,
+		Options:       newSynthOptions(),
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

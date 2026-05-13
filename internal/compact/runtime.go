@@ -339,6 +339,7 @@ func RunRuntime(
 			Target:          req.TargetTokens,
 			BoundaryTail:    planRes.BoundaryTail,
 			PreCompactTok:   planRes.BaselineTail,
+			Options:         planRes.Options,
 			FinalProjection: finalProjection(planRes, staticOverhead, req.Reserved),
 			ForceOverTarget: req.ForceOverTarget,
 		}

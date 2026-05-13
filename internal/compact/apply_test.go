@@ -51,6 +51,7 @@ func TestApplyRefusesWhenProjectionOverTarget(t *testing.T) {
 		Target:          target,
 		BoundaryTail:    []OutputBlock{{Text: "tail"}},
 		PreCompactTok:   1000,
+		Options:         newSynthOptions(),
 		FinalProjection: projection,
 		ForceOverTarget: false,
 	})
@@ -132,6 +133,7 @@ func TestApplyProceedsWithForceOverTarget(t *testing.T) {
 		Target:          200_000,
 		BoundaryTail:    []OutputBlock{{Text: "tail"}},
 		PreCompactTok:   1000,
+		Options:         newSynthOptions(),
 		FinalProjection: 215_190,
 		ForceOverTarget: true,
 	})

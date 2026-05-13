@@ -24,6 +24,7 @@ type ApplyInput struct {
 	Target        int
 	BoundaryTail  []OutputBlock
 	PreCompactTok int
+	Options       SynthOptions
 
 	// FinalProjection is the planner's converged projected /context
 	// total (static overhead + final tail + reserved). Apply uses it
@@ -131,7 +132,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		return nil, fmt.Errorf("build synthetic user: %w", err)
 	}
 
-	in.Slice = Dehydrate(in.Slice, newSynthOptions())
+	in.Slice = Dehydrate(in.Slice, in.Options)
 	if err := appendBoundaryAndSynthetic(path, boundaryLine, syntheticLine); err != nil {
 		return nil, err
 	}

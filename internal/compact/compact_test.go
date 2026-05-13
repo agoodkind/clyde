@@ -309,6 +309,7 @@ func TestApplyAllowsRecentlyModifiedTranscript(t *testing.T) {
 		Target:        100,
 		BoundaryTail:  []OutputBlock{{Text: "surviving context"}},
 		PreCompactTok: 1000,
+		Options:       newSynthOptions(),
 	})
 	if err != nil {
 		t.Fatalf("Apply on fresh transcript: %v", err)
