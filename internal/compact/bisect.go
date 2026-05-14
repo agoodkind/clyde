@@ -44,11 +44,13 @@ type Axis struct {
 	BuildRecord func(label string, k int, ctxTotal int) IterationRecord
 }
 
-// BisectMin returns the minimum-disruption k in [0, N] where Probe(k)
-// is less than or equal to Target. The caller applies the first k
-// steps of the underlying drop list. If even k=N remains over target,
-// BisectMin returns N so the caller can apply every available drop and
-// let the final over-target gate refuse the run.
+// BisectMin returns the largest k in [0, N] where Probe(k) is still at
+// or above Target. The caller applies the first k steps of the
+// underlying drop list. The returned k leaves the projection slightly
+// over target rather than crossing under, so the operator gets the
+// least-disruptive Apply that respects the user's stated headroom. If
+// even k=N still leaves Probe at or above Target, BisectMin returns N
+// so the caller applies every available drop.
 //
 // The caller must guarantee Probe(0) > Target before calling; if
 // baseline already satisfies the target there is no work to do and
@@ -75,21 +77,21 @@ func BisectMin(ctx context.Context, axis Axis) (int, error) {
 		axis.Emit(axis.BuildRecord(label, k, total))
 	}
 
-	// Boundary probe at k=N. If the floor is still over target,
-	// applying every drop cannot satisfy the run, so return N and let
-	// the caller's final gate refuse it.
+	// Boundary probe at k=N. If the floor is still at or above target,
+	// applying every drop still does not undershoot, so the answer is
+	// N. The caller applies every available drop in that case.
 	totalAtN, err := axis.Probe(ctx, axis.N)
 	if err != nil {
 		return 0, err
 	}
 	emit(axis.N, totalAtN)
-	if totalAtN > axis.Target {
+	if totalAtN >= axis.Target {
 		return axis.N, nil
 	}
 
-	// Invariant from here: Probe(lo) > target, Probe(hi) <= target.
+	// Invariant from here: Probe(lo) >= target, Probe(hi) < target.
 	// lo=0 by precondition. hi=N from the boundary probe. Bisect for
-	// the smallest k that satisfies the target.
+	// the largest k where Probe(k) >= target.
 	lo, hi := 0, axis.N
 	for hi-lo > 1 {
 		mid := lo + (hi-lo)/2
@@ -98,11 +100,11 @@ func BisectMin(ctx context.Context, axis Axis) (int, error) {
 			return 0, err
 		}
 		emit(mid, total)
-		if total <= axis.Target {
-			hi = mid
-		} else {
+		if total >= axis.Target {
 			lo = mid
+		} else {
+			hi = mid
 		}
 	}
-	return hi, nil
+	return lo, nil
 }

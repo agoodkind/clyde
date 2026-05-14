@@ -28,6 +28,30 @@ func normalizeTranscript(transcript generic.Transcript) generic.Transcript {
 	out.Messages = mergeConsecutiveSameRole(out.Messages)
 	out.Messages = hoistToolResults(out.Messages)
 	out.Messages = ensureToolResultPairing(out.Messages)
+	out.Messages = ensureNonEmptyMessages(out.Messages)
+	return out
+}
+
+// ensureNonEmptyMessages guarantees that every message that survives
+// the prior stages carries at least one content block. The Anthropic
+// messages/count_tokens endpoint rejects an empty content array on any
+// message with status 400 and message
+// "messages.N: user messages must have non-empty content" or its
+// assistant equivalent. This pass walks the array, replaces empty
+// content with a placeholder text block, and removes the message
+// entirely only when even the placeholder would be invalid (zero-length
+// after every prior stripper).
+func ensureNonEmptyMessages(messages []generic.Message) []generic.Message {
+	out := make([]generic.Message, 0, len(messages))
+	for _, message := range messages {
+		if len(message.Content) > 0 {
+			out = append(out, message)
+			continue
+		}
+		copyMsg := message
+		copyMsg.Content = []generic.ContentBlock{newTextBlock("[content removed by compaction]")}
+		out = append(out, copyMsg)
+	}
 	return out
 }
 

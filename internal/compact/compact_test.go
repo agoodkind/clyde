@@ -306,7 +306,7 @@ func TestApplyAllowsRecentlyModifiedTranscript(t *testing.T) {
 		SessionID:     "session-fresh",
 		Cwd:           tmp,
 		Version:       "test",
-		Target:        100,
+		Target:        0,
 		BoundaryTail:  []OutputBlock{{Text: "surviving context"}},
 		PreCompactTok: 1000,
 		Options:       newSynthOptions(),

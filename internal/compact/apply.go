@@ -28,50 +28,10 @@ type ApplyInput struct {
 	PreCompactTok int
 	Options       SynthOptions
 
-	// FinalProjection is the planner's converged projected /context
-	// total (static overhead + final tail + reserved). Apply uses it
-	// to gate the mutation against Target so a planner that could not
-	// converge does not silently mutate the transcript. Zero disables
-	// the gate; non-zero with Target > 0 is the production path.
+	// FinalProjection is the planner's converged projection. Recorded
+	// for telemetry only; Apply does not gate on it. The bisect's
+	// chosen k is the answer Apply commits.
 	FinalProjection int
-
-	// ForceOverTarget opts out of the FinalProjection > Target gate.
-	// When true and the projection exceeds the target, Apply still
-	// proceeds but emits a structured warning log so the override is
-	// auditable. See CLYDE-356.
-	ForceOverTarget bool
-}
-
-// ApplyOverTargetError is returned by Apply when the planner's final
-// projection exceeds the requested Target and the caller has not set
-// ForceOverTarget. It carries the typed numbers so the CLI and TUI
-// can render a precise refusal message without re-parsing strings.
-type ApplyOverTargetError struct {
-	Target    int
-	Projected int
-	Delta     int
-}
-
-// Error renders the refusal message in the shape the CLI and the
-// dashboard panel show verbatim.
-func (e *ApplyOverTargetError) Error() string {
-	return fmt.Sprintf("apply refused: projection %d over target %d (+%d)", e.Projected, e.Target, e.Delta)
-}
-
-// ApplyRealContextOverTargetError is returned after Apply when the
-// live context probe reports that the resumed session is still over
-// target. It carries the typed actual value so callers do not need to
-// parse the message.
-type ApplyRealContextOverTargetError struct {
-	Target    int
-	Actual    int
-	Overshoot int
-}
-
-// Error renders the post-Apply refusal message used by CLI and TUI
-// status paths.
-func (e *ApplyRealContextOverTargetError) Error() string {
-	return fmt.Sprintf("apply refused: real context %d over target %d (+%d)", e.Actual, e.Target, e.Overshoot)
 }
 
 // ApplyResult summarises what apply did. Returned for preview and
@@ -101,8 +61,15 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	if in.SessionID == "" {
 		return nil, fmt.Errorf("apply: empty session id")
 	}
-	if err := guardOverTarget(in); err != nil {
-		return nil, err
+	if in.Target > 0 && in.FinalProjection > 0 {
+		slog.Info("compact.apply.projection",
+			"component", "compact",
+			"subcomponent", "apply",
+			"session_id", in.SessionID,
+			"target", in.Target,
+			"projection", in.FinalProjection,
+			"delta", in.FinalProjection-in.Target,
+		)
 	}
 	path := in.Slice.Path
 	stat, err := os.Stat(path)
@@ -112,7 +79,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	preOffset := stat.Size()
 
-	if in.Target > 0 && in.FinalProjection > 0 && in.FinalProjection <= in.Target && !hasNetApplyChange(in.Slice, in.Options) {
+	if in.Target > 0 && !hasNetApplyChange(in.Slice, in.Options) {
 		slog.Info("compact.apply.noop",
 			"component", "compact",
 			"subcomponent", "apply",
@@ -246,84 +213,6 @@ func newApplyResult(
 		LedgerPath:      "",
 		NoOp:            false,
 	}
-}
-
-// guardOverTarget implements the CLYDE-356 over-target gate. When
-// the planner's final projection exceeds the requested target, Apply
-// must not mutate the transcript unless the caller explicitly opts in
-// with ForceOverTarget. The gate emits a structured info log on every
-// fire so audits can find every refusal even when overridden, and a
-// warn log on the override path so the bypass is visible.
-func guardOverTarget(in ApplyInput) error {
-	if in.Target <= 0 || in.FinalProjection <= 0 {
-		return nil
-	}
-	if in.FinalProjection <= in.Target {
-		return nil
-	}
-	delta := in.FinalProjection - in.Target
-	slog.Info("compact.apply.refused_over_target",
-		"component", "compact",
-		"subcomponent", "apply",
-		"session_id", in.SessionID,
-		"target", in.Target,
-		"projection", in.FinalProjection,
-		"delta", delta,
-		"forced", in.ForceOverTarget,
-	)
-	if !in.ForceOverTarget {
-		return &ApplyOverTargetError{
-			Target:    in.Target,
-			Projected: in.FinalProjection,
-			Delta:     delta,
-		}
-	}
-	slog.Warn("compact.apply.over_target_forced",
-		"component", "compact",
-		"subcomponent", "apply",
-		"session_id", in.SessionID,
-		"target", in.Target,
-		"projection", in.FinalProjection,
-		"delta", delta,
-	)
-	return nil
-}
-
-// GuardRealContextOverTarget applies the post-Apply target gate using
-// the live context value observed after the transcript mutation.
-func GuardRealContextOverTarget(sessionID string, target int, actual int, force bool) error {
-	if target <= 0 || actual <= 0 {
-		return nil
-	}
-	if actual <= target {
-		return nil
-	}
-	overshoot := actual - target
-	slog.Info("compact.apply.refused_real_context_over_target",
-		"component", "compact",
-		"subcomponent", "apply",
-		"session_id", sessionID,
-		"target", target,
-		"actual", actual,
-		"overshoot", overshoot,
-		"forced", force,
-	)
-	if !force {
-		return &ApplyRealContextOverTargetError{
-			Target:    target,
-			Actual:    actual,
-			Overshoot: overshoot,
-		}
-	}
-	slog.Warn("compact.apply.real_context_over_target_forced",
-		"component", "compact",
-		"subcomponent", "apply",
-		"session_id", sessionID,
-		"target", target,
-		"actual", actual,
-		"overshoot", overshoot,
-	)
-	return nil
 }
 
 func hasNetApplyChange(slice *Slice, opts SynthOptions) bool {

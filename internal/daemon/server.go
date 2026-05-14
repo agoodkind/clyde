@@ -3029,14 +3029,13 @@ func (s *Server) runCompact(
 	}
 
 	upfront, staticOverhead, slice, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
-		Session:         run.session,
-		Store:           run.store,
-		TargetTokens:    int(req.GetTargetTokens()),
-		Reserved:        int(req.GetReservedTokens()),
-		Model:           run.modelForCount,
-		Strippers:       run.strippers,
-		Refresh:         req.GetRefresh(),
-		ForceOverTarget: false,
+		Session:      run.session,
+		Store:        run.store,
+		TargetTokens: int(req.GetTargetTokens()),
+		Reserved:     int(req.GetReservedTokens()),
+		Model:        run.modelForCount,
+		Strippers:    run.strippers,
+		Refresh:      req.GetRefresh(),
 	}, run.modelForRender)
 	if upfrontErr != nil {
 		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
@@ -3066,7 +3065,6 @@ func (s *Server) runCompact(
 		Summarize:              req.GetSummarize(),
 		SummarizeMode:          summarizeMode,
 		Force:                  req.GetForce(),
-		ForceOverTarget:        req.GetForceOverTarget(),
 		Mode:                   mode,
 		Refresh:                req.GetRefresh(),
 		PreparedUpfront:        &upfront,
@@ -3074,7 +3072,7 @@ func (s *Server) runCompact(
 		PreparedSlice:          slice,
 	}, sender.IterationCallback(ctx))
 	if runErr != nil {
-		return s.compactRunError(ctx, req, sender, runErr)
+		return s.compactRunError(ctx, req, runErr)
 	}
 
 	if err := sender.SendResult(ctx, result); err != nil {
@@ -3095,7 +3093,6 @@ func (s *Server) runCompact(
 func (s *Server) compactRunError(
 	ctx context.Context,
 	req *clydev1.CompactRunRequest,
-	sender *compactEventSender,
 	runErr error,
 ) error {
 	s.log.ErrorContext(ctx, "daemon.compact.run_failed",
@@ -3104,39 +3101,7 @@ func (s *Server) compactRunError(
 		"session", req.GetSessionName(),
 		"err", runErr.Error(),
 	)
-	if err := sendCompactOverTargetError(ctx, sender, runErr); err != nil {
-		return err
-	}
 	return status.Errorf(codes.Internal, "compact runtime: %v", runErr)
-}
-
-func sendCompactOverTargetError(
-	ctx context.Context,
-	sender *compactEventSender,
-	runErr error,
-) error {
-	var overTarget *compactengine.ApplyOverTargetError
-	if errors.As(runErr, &overTarget) {
-		return sendCompactFailedPrecondition(ctx, sender, overTarget.Error())
-	}
-	var realOverTarget *compactengine.ApplyRealContextOverTargetError
-	if errors.As(runErr, &realOverTarget) {
-		return sendCompactFailedPrecondition(ctx, sender, realOverTarget.Error())
-	}
-	return nil
-}
-
-func sendCompactFailedPrecondition(
-	ctx context.Context,
-	sender *compactEventSender,
-	message string,
-) error {
-	// Surface the refusal verbatim so the CLI and the dashboard panel
-	// render the typed message rather than the generic runtime wrapper.
-	if statusErr := sender.SendStatus(ctx, message); statusErr != nil {
-		return statusErr
-	}
-	return status.Error(codes.FailedPrecondition, message)
 }
 
 type compactRunSetup struct {

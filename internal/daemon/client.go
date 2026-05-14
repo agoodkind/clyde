@@ -1002,20 +1002,19 @@ func ProviderLaunchEnvironmentViaDaemon(ctx context.Context, provider string) ([
 }
 
 type CompactRunOptions struct {
-	SessionName     string
-	TargetTokens    int
-	ReservedTokens  int
-	Model           string
-	ModelExplicit   bool
-	Thinking        bool
-	Images          bool
-	Tools           bool
-	Chat            bool
-	Summarize       bool
-	SummarizeMode   string
-	Force           bool
-	Refresh         bool
-	ForceOverTarget bool
+	SessionName    string
+	TargetTokens   int
+	ReservedTokens int
+	Model          string
+	ModelExplicit  bool
+	Thinking       bool
+	Images         bool
+	Tools          bool
+	Chat           bool
+	Summarize      bool
+	SummarizeMode  string
+	Force          bool
+	Refresh        bool
 }
 
 func CompactPreviewViaDaemon(parent context.Context, in CompactRunOptions) (<-chan *clydev1.CompactEvent, <-chan error, context.CancelFunc, error) {
@@ -1051,11 +1050,10 @@ func openCompactStream(parent context.Context, in CompactRunOptions, apply bool)
 			Tools:    in.Tools,
 			Chat:     in.Chat,
 		},
-		Summarize:       in.Summarize,
-		SummarizeMode:   in.SummarizeMode,
-		Force:           in.Force,
-		Refresh:         in.Refresh,
-		ForceOverTarget: in.ForceOverTarget,
+		Summarize:     in.Summarize,
+		SummarizeMode: in.SummarizeMode,
+		Force:         in.Force,
+		Refresh:       in.Refresh,
 	}
 	var stream grpc.ServerStreamingClient[clydev1.CompactEvent]
 	if apply {

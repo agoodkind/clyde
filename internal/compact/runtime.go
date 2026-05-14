@@ -352,7 +352,6 @@ func runRuntimeApply(
 		PreCompactTok:   planRes.BaselineTail,
 		Options:         planRes.Options,
 		FinalProjection: finalProjection(planRes, staticOverhead, req.Reserved),
-		ForceOverTarget: req.ForceOverTarget,
 	})
 	if applyErr != nil {
 		compactLog.Logger().Error("compact.runtime.apply_failed",
@@ -367,9 +366,6 @@ func runRuntimeApply(
 	if applyRes == nil || applyRes.NoOp {
 		logRuntimeApplyNoOp(req)
 		return nil, nil
-	}
-	if err := verifyPostApplyContext(ctx, req); err != nil {
-		return nil, err
 	}
 	return applyRes, nil
 }
@@ -430,42 +426,6 @@ func logRuntimeApplyNoOp(req RuntimeRequest) {
 		"session_id", req.Session.Metadata.ProviderSessionID(),
 		"target", req.TargetTokens,
 	)
-}
-
-func verifyPostApplyContext(ctx context.Context, req RuntimeRequest) error {
-	if req.TargetTokens <= 0 {
-		return nil
-	}
-	postApplyUsage, postApplyErr := probeSessionSnapshot(ctx, req.Session, true)
-	if postApplyErr != nil {
-		slog.ErrorContext(ctx, "compact.runtime.post_apply_probe_failed",
-			"component", "compact",
-			"subcomponent", "runtime",
-			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.ProviderSessionID(),
-			"target", req.TargetTokens,
-			"err", postApplyErr.Error(),
-		)
-		return fmt.Errorf("compact: post-apply context probe failed: %w", postApplyErr)
-	}
-	err := GuardRealContextOverTarget(
-		req.Session.Metadata.ProviderSessionID(),
-		req.TargetTokens,
-		postApplyUsage.TotalTokens,
-		req.ForceOverTarget,
-	)
-	if err != nil {
-		compactLog.Logger().Error("compact.runtime.post_apply_over_target",
-			"component", "compact",
-			"subcomponent", "runtime",
-			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.ProviderSessionID(),
-			"target", req.TargetTokens,
-			"actual", postApplyUsage.TotalTokens,
-			"err", err.Error(),
-		)
-	}
-	return err
 }
 
 func buildContextCounter(req RuntimeRequest) (contextcount.Counter, error) {

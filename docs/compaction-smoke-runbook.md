@@ -15,6 +15,30 @@ This procedure verifies four claims at once:
 
 It runs against the lm-review session because that session is 871 thousand tokens, mostly chat-and-tool-activity content, with three prior compaction boundaries already on disk. It exercises the realistic worst case.
 
+## Coverage matrix
+
+The procedure runs once per non-empty subset of the four stripper bits, so each of the fifteen combinations below gets its own complete pass through steps 1 through 12. The dashboard sanity step 0 runs once and the boundary-hide and unpack-via-second-apply checks run once on the all-strippers row.
+
+| Row | Strippers bits | clyde compact flags |
+|---|---|---|
+| 1 | chat | `--chat` |
+| 2 | thinking | `--thinking` |
+| 3 | images | `--images` |
+| 4 | tools | `--tools` |
+| 5 | chat thinking | `--chat --thinking` |
+| 6 | chat images | `--chat --images` |
+| 7 | chat tools | `--chat --tools` |
+| 8 | thinking images | `--thinking --images` |
+| 9 | thinking tools | `--thinking --tools` |
+| 10 | images tools | `--images --tools` |
+| 11 | chat thinking images | `--chat --thinking --images` |
+| 12 | chat thinking tools | `--chat --thinking --tools` |
+| 13 | chat images tools | `--chat --images --tools` |
+| 14 | thinking images tools | `--thinking --images --tools` |
+| 15 | chat thinking images tools | `--all` |
+
+Each row is one independent run. Every run starts from the pristine restore in step 1 and ends with the final restore in step 12, so no state leaks between rows. Pick a target for each row that forces the planner to actually do work for that combination: targets above pre-Apply ctx do not exercise the bisect.
+
 ## Why not use the model to find the canary directly
 
 We tried the obvious thing first: insert a UUID into the transcript, then ask the model "find the UUID starting with X." That methodology is unreliable. Same canary, same file, different prompt phrasing produces different results. The model can miss content that is in its context, and it can fabricate content that is not. We cannot trust "not found" as evidence the content was dropped.
@@ -176,7 +200,21 @@ Why these flags matter:
 | `--output-format json` | Machine-readable result |
 | `--max-turns 1` | One turn, no agentic loops |
 
-## Step 5: Drive the dashboard with tmux to set up chat-only Apply
+## Step 5: Run Apply for the current coverage-matrix row via the CLI
+
+Pick the current row from the coverage matrix at the top of this runbook. Run Apply with that row's flags through the clyde CLI rather than the dashboard so all fifteen rows can be driven from a script without keystroke choreography.
+
+```bash
+clyde compact 8848d3ab-e4ed-4e6b-94c9-903109a3425b --target $TARGET --apply <ROW_FLAGS>
+```
+
+Substitute `$TARGET` with a target that exercises drops for this row. A target above the session's pre-Apply ctx will be accepted with zero drops and will not exercise the bisect, so pick a target below pre-Apply ctx by at least a few thousand tokens. Substitute `<ROW_FLAGS>` with the row's clyde compact flags column.
+
+The exit code, stdout result box, and ledger entry are captured the same way regardless of which row ran. Skip directly to step 7 for verification. The dashboard variant below is optional and runs only on row 1 to confirm the TUI compact panel has not regressed.
+
+### Step 5.A: Dashboard variant for row 1 only
+
+This sub-step is the TUI smoke. Run it once on row 1 (chat only) in addition to the CLI Apply. Skip it for rows 2 through 15.
 
 The dashboard takes time to load (CLYDE-381 documents a cold-cache deadline on the first launch after a daemon reload). Do a warmup launch first to absorb the cost, then a real launch.
 

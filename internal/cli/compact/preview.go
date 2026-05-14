@@ -33,20 +33,19 @@ func runMetricsDashboard(cmd *cobra.Command, out io.Writer, sess *session.Sessio
 	)
 
 	events, done, cancel, err := daemon.CompactPreviewViaDaemon(ctx, daemon.CompactRunOptions{
-		SessionName:     sess.Name,
-		TargetTokens:    0,
-		ReservedTokens:  DefaultReservedBuffer,
-		Model:           "",
-		ModelExplicit:   false,
-		Thinking:        false,
-		Images:          false,
-		Tools:           false,
-		Chat:            false,
-		Summarize:       false,
-		SummarizeMode:   "",
-		Force:           false,
-		ForceOverTarget: false,
-		Refresh:         refresh,
+		SessionName:    sess.Name,
+		TargetTokens:   0,
+		ReservedTokens: DefaultReservedBuffer,
+		Model:          "",
+		ModelExplicit:  false,
+		Thinking:       false,
+		Images:         false,
+		Tools:          false,
+		Chat:           false,
+		Summarize:      false,
+		SummarizeMode:  "",
+		Force:          false,
+		Refresh:        refresh,
 	})
 	if err != nil {
 		cliCompactLog.Logger().Error("cli.compact.preview.metrics.failed",
