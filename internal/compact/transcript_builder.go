@@ -365,7 +365,11 @@ func unmarshalTranscriptBlock(raw json.RawMessage) (contextcount.ContentBlock, e
 	case transcriptBlockImage:
 		return unmarshalImageBlock(raw)
 	default:
-		return contextcount.ContentBlock{}, fmt.Errorf("unsupported content block type %q", head.Type)
+		slog.Debug("compact.transcript_builder.unknown_block_passthrough",
+			"component", "compact",
+			"block_type", head.Type,
+		)
+		return newTextContentBlock(fmt.Sprintf("[unsupported block type %q]", head.Type)), nil
 	}
 }
 
@@ -528,7 +532,11 @@ func unmarshalTranscriptBlockParsed(block ContentBlock) (contextcount.ContentBlo
 	case transcriptBlockImage:
 		return newImageContentBlock("base64", block.ImageMediaType, block.ImageDataB64, ""), nil
 	default:
-		return contextcount.ContentBlock{}, fmt.Errorf("unsupported content block type %q", block.Type)
+		slog.Debug("compact.transcript_builder.unknown_parsed_block_passthrough",
+			"component", "compact",
+			"block_type", block.Type,
+		)
+		return newTextContentBlock(fmt.Sprintf("[unsupported block type %q]", block.Type)), nil
 	}
 }
 

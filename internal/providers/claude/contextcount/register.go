@@ -26,7 +26,6 @@ func registerCounters() error {
 		return NewAPICounter(access, APICounterOptions{
 			Endpoint: "",
 			Client:   nil,
-			Sleep:    nil,
 			Clock:    deps.Clock,
 		}), nil
 	}); err != nil {
