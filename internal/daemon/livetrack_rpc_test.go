@@ -142,8 +142,5 @@ func TestRPCCloserNilCancel(t *testing.T) {
 // livetrack.Meta constraint at the type level. If this compiles, the
 // constraint is satisfied; no runtime assertion is needed.
 func TestRPCMetaIsLivetrackMeta(t *testing.T) {
-	var m livetrack.Meta = RPCMeta{}
-	if m == nil {
-		t.Fatal("RPCMeta does not satisfy livetrack.Meta")
-	}
+	var _ livetrack.Meta = RPCMeta{}
 }

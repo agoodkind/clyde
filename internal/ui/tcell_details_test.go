@@ -359,7 +359,7 @@ func TestDetailsView_TerminalStatusDoesNotSpin(t *testing.T) {
 
 	rows := view.buildLeft(sess, detail)
 	contextRow := findKVRow(rows, "Context")
-	if contextRow == nil || len(contextRow) < 2 {
+	if len(contextRow) < 2 {
 		t.Fatalf("missing Context row")
 	}
 	if contextRow[1].Spinner {

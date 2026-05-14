@@ -473,11 +473,9 @@ func startKeepaliveUpstream(t *testing.T) (*http.Server, string, func()) {
 					if done.Load() {
 						return
 					}
-					select {
-					case <-ticker.C:
-						if _, err := c.Write([]byte(".")); err != nil {
-							return
-						}
+					<-ticker.C
+					if _, err := c.Write([]byte(".")); err != nil {
+						return
 					}
 				}
 			}(conn)
