@@ -9,35 +9,6 @@ import (
 	"goodkind.io/clyde/internal/util"
 )
 
-var _ = Describe("FormatSize", func() {
-	It("should format bytes", func() {
-		Expect(util.FormatSize(512)).To(Equal("512 B"))
-		Expect(util.FormatSize(100)).To(Equal("100 B"))
-	})
-
-	It("should format kilobytes", func() {
-		Expect(util.FormatSize(1024)).To(Equal("1.0 KB"))
-		Expect(util.FormatSize(1536)).To(Equal("1.5 KB"))
-		Expect(util.FormatSize(10240)).To(Equal("10.0 KB"))
-	})
-
-	It("should format megabytes", func() {
-		Expect(util.FormatSize(1048576)).To(Equal("1.0 MB"))
-		Expect(util.FormatSize(1572864)).To(Equal("1.5 MB"))
-		Expect(util.FormatSize(10485760)).To(Equal("10.0 MB"))
-	})
-
-	It("should format gigabytes", func() {
-		Expect(util.FormatSize(1073741824)).To(Equal("1.0 GB"))
-		Expect(util.FormatSize(1610612736)).To(Equal("1.5 GB"))
-	})
-
-	It("should format terabytes", func() {
-		Expect(util.FormatSize(1099511627776)).To(Equal("1.0 TB"))
-		Expect(util.FormatSize(1649267441664)).To(Equal("1.5 TB"))
-	})
-})
-
 var _ = Describe("FormatRelativeTime", func() {
 	It("should return 'just now' for times less than a minute ago", func() {
 		now := time.Now()

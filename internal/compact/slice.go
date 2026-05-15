@@ -344,35 +344,30 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 		if err := json.Unmarshal(raw, &v); err == nil {
 			block.ToolUseRefID = v.ToolUseID
 			block.ToolIsError = v.IsError
-			if len(v.Content) > 0 {
-				switch v.Content[0] {
-				case '[':
-					sub, _ := decodeContent(v.Content)
-					block.ToolContent = sub
-				case '"':
-					var s string
-					if json.Unmarshal(v.Content, &s) == nil {
-						block.ToolContent = []ContentBlock{{
-							Type:           string(contentBlockTypeText),
-							Text:           s,
-							Thinking:       "",
-							ImageMediaType: "",
-							ImageDataB64:   "",
-							ImageBytes:     0,
-							ToolUseID:      "",
-							ToolName:       "",
-							ToolInput:      nil,
-							ToolUseRefID:   "",
-							ToolIsError:    false,
-							ToolContent:    nil,
-							Raw:            nil,
-						}}
-					}
-				}
-			}
+			block.ToolContent = decodeToolResultContent(v.Content)
 		}
 	}
 	return block
+}
+
+func decodeToolResultContent(raw json.RawMessage) []ContentBlock {
+	if len(raw) == 0 {
+		return nil
+	}
+	switch raw[0] {
+	case '[':
+		sub, _ := decodeContent(raw)
+		return sub
+	case '"':
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return []ContentBlock{{
+				Type: string(contentBlockTypeText),
+				Text: s,
+			}}
+		}
+	}
+	return nil
 }
 
 // buildPairIndex scans post-boundary entries for tool_use blocks (in

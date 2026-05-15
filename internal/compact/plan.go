@@ -647,27 +647,6 @@ func minInt(a, b int) int {
 	return b
 }
 
-// applyStrippersFully sets opts to the most aggressive variant of each
-// requested stripper without iterating against the Prober.
-func applyStrippersFully(slice *Slice, s Strippers, opts *SynthOptions) {
-	if s.Thinking {
-		opts.DropThinking = true
-	}
-	if s.Images {
-		opts.ImagesAsPlaceholder = true
-	}
-	if s.Tools {
-		for id := range slice.PairIndex {
-			opts.ToolDetailOverride[id] = ToolDetailDrop
-		}
-	}
-	if s.Chat {
-		for _, step := range chatDropOrder(slice) {
-			applyChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
-		}
-	}
-}
-
 // allImpliedByTarget reports whether the orchestrator should treat
 // Images as part of a target-driven sweep even when --images was not
 // passed explicitly. True when --all was effectively set (every flag

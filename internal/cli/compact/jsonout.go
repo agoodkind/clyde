@@ -102,9 +102,6 @@ type MetricsDashboardJSON struct {
 	UsageError            string                 `json:"usage_error,omitempty"`
 }
 
-// IsOutputPayload marks MetricsDashboardJSON as a valid payload.
-func (MetricsDashboardJSON) IsOutputPayload() {}
-
 // LedgerListJSON is the array-shaped payload `--list-backups` emits
 // in JSON mode. The slice is exposed directly so the top-level shape
 // is a JSON array of entries rather than an object with a "ledger"

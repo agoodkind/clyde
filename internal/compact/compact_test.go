@@ -495,7 +495,7 @@ func TestApplyStrippersFully_TableDriven(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := newSynthOptions()
-			applyStrippersFully(slice, tc.strippers, &opts)
+			applyTestStrippersFully(slice, tc.strippers, &opts)
 			res := &PlanResult{
 				Options:      opts,
 				BoundaryTail: Synthesize(slice, opts),
@@ -527,6 +527,25 @@ func TestApplyStrippersFully_TableDriven(t *testing.T) {
 				t.Errorf("first user turn present = %v, want %v", gotFirstUser, tc.wantFirstUser)
 			}
 		})
+	}
+}
+
+func applyTestStrippersFully(slice *Slice, s Strippers, opts *SynthOptions) {
+	if s.Thinking {
+		opts.DropThinking = true
+	}
+	if s.Images {
+		opts.ImagesAsPlaceholder = true
+	}
+	if s.Tools {
+		for id := range slice.PairIndex {
+			opts.ToolDetailOverride[id] = ToolDetailDrop
+		}
+	}
+	if s.Chat {
+		for _, step := range chatDropOrder(slice) {
+			applyChatDropStep(opts.DroppedChatEntries, opts.DroppedSummaryChunks, step)
+		}
 	}
 }
 
