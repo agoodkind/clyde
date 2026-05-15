@@ -188,6 +188,39 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 				family:          errorBoundaryFamilyOpenAI,
 			},
 		},
+		{
+			name: "http_transport_upstream_503",
+			err:  errors.New("codex http transport: upstream status 503: http-503-canary-DEED"),
+			assertion: errorBoundaryAssertion{
+				wantStatus:      http.StatusBadRequest,
+				wantOpenAIType:  "invalid_request_error",
+				wantOpenAICode:  "upstream_failed",
+				wantMsgContains: "http-503-canary-DEED",
+				family:          errorBoundaryFamilyOpenAI,
+			},
+		},
+		{
+			name: "http_transport_upstream_429",
+			err:  errors.New("codex http transport: upstream status 429: http-429-canary-FACE"),
+			assertion: errorBoundaryAssertion{
+				wantStatus:      http.StatusBadRequest,
+				wantOpenAIType:  "invalid_request_error",
+				wantOpenAICode:  "upstream_failed",
+				wantMsgContains: "http-429-canary-FACE",
+				family:          errorBoundaryFamilyOpenAI,
+			},
+		},
+		{
+			name: "websocket_handshake_401",
+			err:  errors.New("websocket handshake failed: status 401: handshake-401-canary-BABE"),
+			assertion: errorBoundaryAssertion{
+				wantStatus:      http.StatusBadRequest,
+				wantOpenAIType:  "invalid_request_error",
+				wantOpenAICode:  "upstream_failed",
+				wantMsgContains: "handshake-401-canary-BABE",
+				family:          errorBoundaryFamilyOpenAI,
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

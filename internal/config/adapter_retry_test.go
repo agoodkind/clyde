@@ -29,19 +29,12 @@ func loadRetryConfigForTest(snippet string) (*config.Config, error) {
 }
 
 var _ = Describe("Adapter retry config", func() {
-	It("installs only the built-in Codex overload policy by default", func() {
+	It("leaves retry policies empty when config supplies none", func() {
 		cfg, err := loadRetryConfigForTest("")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Adapter.Retry.Policies).To(HaveLen(1))
-		policy := cfg.Adapter.Retry.Policies[0]
-		Expect(policy.Name).To(Equal("codex.responses.overloaded"))
-		Expect(policy.Enabled).NotTo(BeNil())
-		Expect(*policy.Enabled).To(BeTrue())
-		Expect(policy.MaxAttempts).To(Equal(3))
-		Expect(policy.RetryWhenResponseStarted).To(BeFalse())
-		Expect(policy.Match.Backends).To(Equal([]string{"codex"}))
-		Expect(policy.Match.Operations).To(Equal([]string{"codex.responses.websocket.generate"}))
-		Expect(policy.Match.MessageSubstrings).To(Equal([]string{"Our servers are currently overloaded. Please try again later."}))
+		// Provider builtins are appended by each provider package at
+		// construction, not injected into the generic config layer.
+		Expect(cfg.Adapter.Retry.Policies).To(BeEmpty())
 	})
 
 	It("parses and normalizes configured policies", func() {
@@ -64,7 +57,7 @@ error_codes = ["overloaded"]
 message_substrings = ["overloaded"]
 `)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Adapter.Retry.Policies).To(HaveLen(2))
+		Expect(cfg.Adapter.Retry.Policies).To(HaveLen(1))
 		policy := cfg.Adapter.Retry.Policies[0]
 		Expect(policy.Name).To(Equal("custom"))
 		Expect(policy.Enabled).NotTo(BeNil())

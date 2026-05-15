@@ -124,9 +124,7 @@ func RunDirect(
 		cfg.HTTPClient = http.DefaultClient
 	}
 	ConfigureCodexFileLogger(cfg.FileLog)
-	if !cfg.WebsocketEnabled {
-		return NewRunResult("stop"), errCodexWebsocketDisabled
-	}
+
 	transportPayload := BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{
 		ReasoningSummary:               cfg.ReasoningSummary,
 		InboundThinkingMaterialization: cfg.InboundThinkingMaterialization,
@@ -139,8 +137,8 @@ func RunDirect(
 	// when keyed by a real Cursor/Codex conversation/thread id. Content or
 	// account-derived cache keys can be shared by unrelated fresh chats.
 	conversationID := strings.TrimSpace(transportPayload.WebsocketSessionKey)
+	installationID, _ := LoadInstallationID()
 	if conversationID != "" {
-		installationID, _ := LoadInstallationID()
 		turnMeta := NewTurnMetadata(conversationID, "")
 		if ws := strings.TrimSpace(cfg.WorkspacePath); ws != "" {
 			entry := TurnMetadataWorkspace{}
@@ -152,6 +150,31 @@ func RunDirect(
 		turnMetaJSON, _ := turnMeta.MarshalCompact()
 		transportPayload.ClientMetadata = ClientMetadataWithTurn(installationID, CodexWindowID(conversationID), turnMetaJSON)
 	}
+
+	httpCfg := HTTPTransportConfig{
+		URL:                cfg.BaseURL,
+		HTTPClient:         cfg.HTTPClient,
+		Token:              cfg.Token,
+		RequestID:          cfg.RequestID,
+		CursorRequestID:    cfg.CursorRequestID,
+		Correlation:        cfg.Correlation,
+		Alias:              model.Alias,
+		ConversationID:     conversationID,
+		InstallationID:     installationID,
+		WindowID:           CodexWindowID(conversationID),
+		TurnMetadata:       transportPayload.ClientMetadata[CodexTurnMetadataHeader],
+		Log:                cfg.Log,
+		RoundTripEncrypted: cfg.RoundTripEncrypted,
+		RetryPolicies:      cfg.RetryPolicies,
+		BeforeAttempt:      cfg.BeforeAttempt,
+	}
+
+	// Websocket transport disabled by config: use the HTTP/SSE transport
+	// directly. This used to be a hard error with no fallback.
+	if !cfg.WebsocketEnabled {
+		return runHTTPTransportEvents(ctx, httpCfg, transportPayload, emit)
+	}
+
 	wsReq := ResponseCreateRequestFromHTTP(transportPayload)
 	wsCfg := WebsocketTransportConfig{
 		URL:                cfg.WebsocketURL,
@@ -173,7 +196,11 @@ func RunDirect(
 		RetryPolicies:      cfg.RetryPolicies,
 		BeforeAttempt:      cfg.BeforeAttempt,
 	}
-	return RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
+	result, err := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
+	if errors.Is(err, ErrWebsocketFallbackToHTTP) {
+		// Upstream returned HTTP 426 on the websocket upgrade. codex-rs
+		// falls back to the HTTP/SSE transport here, so Clyde does too.
+		return runHTTPTransportEvents(ctx, httpCfg, transportPayload, emit)
+	}
+	return result, err
 }
-
-var errCodexWebsocketDisabled = errors.New("codex websocket transport is disabled but no HTTPS fallback exists")

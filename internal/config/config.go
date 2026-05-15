@@ -319,8 +319,9 @@ type AdapterConfig struct {
 	// See [internal/adapter/render/synthetic_content.go] for the marker
 	// format and ExtractSyntheticParts contract.
 	SyntheticContent AdapterSyntheticContent `json:"syntheticContent,omitzero" toml:"synthetic_content,omitempty"`
-	// Retry declares adapter-owned retry policies. The default set only
-	// includes the narrow Codex overload policy; there is no catch-all retry.
+	// Retry declares operator-supplied adapter retry policies. This list
+	// holds only what config provides; provider packages append their
+	// own builtin policies at construction. There is no catch-all retry.
 	Retry AdapterRetry `json:"retry,omitzero" toml:"retry,omitempty"`
 }
 

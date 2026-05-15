@@ -43,6 +43,23 @@ type ResponseCreateWsRequest struct {
 
 var ErrWebsocketFallbackToHTTP = errors.New("codex websocket fallback to http")
 
+// websocketHandshakeError carries the HTTP status from a failed
+// Responses websocket upgrade. gorilla/websocket collapses every
+// non-101 upgrade response into a bare "bad handshake" error and
+// discards the status, so callers could not tell a 401 from a 503.
+// Capturing the status keeps the failure observable in logs and lets
+// the retry classifier reason about it.
+type websocketHandshakeError struct {
+	Status int
+	Err    error
+}
+
+func (e *websocketHandshakeError) Error() string {
+	return fmt.Sprintf("websocket handshake failed: status %d: %v", e.Status, e.Err)
+}
+
+func (e *websocketHandshakeError) Unwrap() error { return e.Err }
+
 const defaultWebsocketPrewarmTimeout = 1500 * time.Millisecond
 
 func ResponseCreateRequestFromHTTP(req HTTPTransportRequest) ResponseCreateWsRequest {
@@ -453,6 +470,9 @@ func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
+	if err != nil && statusCode != 0 {
+		return conn, statusCode, &websocketHandshakeError{Status: statusCode, Err: err}
+	}
 	return conn, statusCode, err
 }
 
@@ -492,7 +512,7 @@ func runWebsocketTransportEventsWithRetry(
 	if sleep == nil {
 		sleep = adapterretry.Sleep
 	}
-	operation := "codex.responses.websocket.generate"
+	operation := codexWebsocketRetryOperation
 	attempt := 1
 	lastPolicyName := ""
 	lastMaxAttempts := 0
@@ -513,6 +533,13 @@ func runWebsocketTransportEventsWithRetry(
 			releaseAttempt("codex.attempt.success")
 			logCodexRetryTerminal(ctx, cfg, attempt, lastPolicyName, "success", lastMaxAttempts)
 			return result, nil
+		}
+		if errors.Is(err, ErrWebsocketFallbackToHTTP) {
+			// The upstream asked for the HTTP transport (HTTP 426). This
+			// is a transport switch, not a retryable failure, so it must
+			// propagate to RunDirect unconsumed by the retry policy.
+			releaseAttempt("codex.attempt.fallback_http")
+			return result, err
 		}
 		releaseAttempt("codex.attempt.failed")
 		signal := adapterretry.Signal{
@@ -557,6 +584,20 @@ func codexRetryErrorClass(err error) string {
 	if err == nil {
 		return ""
 	}
+	var handshakeErr *websocketHandshakeError
+	if errors.As(err, &handshakeErr) {
+		// Every handshake failure (401, 403, 429, 5xx, or a bare bad
+		// handshake) surfaces before any response bytes are emitted, so
+		// it is safe to retry. A transient 401 or 5xx recovers on a
+		// later attempt; a genuinely permanent status simply exhausts
+		// the bounded retry budget and then fails as before.
+		//
+		// TODO: a genuinely expired token will not recover from plain
+		// retry. Refreshing it on 401/403 would need an auth-refresh
+		// hook threaded through WebsocketTransportConfig from the
+		// provider's AuthLookup.
+		return "response_failed"
+	}
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		return "websocket_close"
 	}
@@ -571,7 +612,7 @@ func logCodexRetryDecision(ctx context.Context, cfg WebsocketTransportConfig, de
 		RequestID: cfg.RequestID,
 		TraceID:   string(cfg.Correlation.TraceID),
 		ChatKey:   cfg.Correlation.ChatKey,
-		Operation: "codex.responses.websocket.generate",
+		Operation: codexWebsocketRetryOperation,
 	}, finalOutcome)
 }
 

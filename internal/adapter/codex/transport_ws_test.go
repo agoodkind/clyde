@@ -225,6 +225,59 @@ func TestRunWebsocketTransportReturnsFallbackOnUpgradeRequired(t *testing.T) {
 	}
 }
 
+func TestDialResponsesWebsocketReturnsTypedHandshakeError(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{
+		http.StatusUnauthorized,
+		http.StatusUpgradeRequired,
+		http.StatusServiceUnavailable,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		}))
+		conn, gotStatus, err := dialResponsesWebsocket(context.Background(), WebsocketTransportConfig{
+			URL:       "ws" + strings.TrimPrefix(server.URL, "http"),
+			Token:     "test-token",
+			RequestID: "req-handshake",
+		})
+		server.Close()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if gotStatus != status {
+			t.Fatalf("status=%d want %d", gotStatus, status)
+		}
+		var handshakeErr *websocketHandshakeError
+		if !errors.As(err, &handshakeErr) {
+			t.Fatalf("status=%d err=%v want *websocketHandshakeError", status, err)
+		}
+		if handshakeErr.Status != status {
+			t.Fatalf("handshakeErr.Status=%d want %d", handshakeErr.Status, status)
+		}
+		if !strings.Contains(handshakeErr.Error(), "websocket handshake failed: status") {
+			t.Fatalf("error string %q missing status prefix", handshakeErr.Error())
+		}
+	}
+}
+
+func TestCodexRetryErrorClassMapsHandshakeStatusToResponseFailed(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+	} {
+		err := &websocketHandshakeError{Status: status, Err: websocket.ErrBadHandshake}
+		if class := codexRetryErrorClass(err); class != "response_failed" {
+			t.Fatalf("status=%d class=%q want response_failed", status, class)
+		}
+	}
+}
+
 func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	t.Parallel()
 

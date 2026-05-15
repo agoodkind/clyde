@@ -91,7 +91,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		bodyLog:         opts.BodyLog,
 		bodyLogProvider: opts.BodyLogProvider,
 		fileLog:         opts.FileLog,
-		retryPolicies:   adapterretry.FromConfig(deps.Config.Retry),
+		retryPolicies:   appendBuiltinCodexRetryPolicies(adapterretry.FromConfig(deps.Config.Retry)),
 	}
 }
 

@@ -555,50 +555,21 @@ func normalizeLoggingOptionalValue(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-const codexOverloadedRetryPolicyName = "codex.responses.overloaded"
-
+// applyAdapterRetryDefaultsAndValidate normalizes and validates
+// operator-supplied retry policies. Provider-specific builtin policies
+// are not injected here; each provider package owns and appends its own
+// builtins at construction so provider knowledge stays out of the
+// generic config layer.
 func applyAdapterRetryDefaultsAndValidate(retry *AdapterRetry) error {
 	if retry == nil {
 		return nil
 	}
-	retry.Policies = appendBuiltinAdapterRetryPolicies(retry.Policies)
 	for i := range retry.Policies {
 		if err := normalizeAdapterRetryPolicy(&retry.Policies[i]); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func appendBuiltinAdapterRetryPolicies(policies []AdapterRetryPolicy) []AdapterRetryPolicy {
-	for _, policy := range policies {
-		if strings.TrimSpace(policy.Name) == codexOverloadedRetryPolicyName {
-			return policies
-		}
-	}
-	return append(policies, builtinCodexOverloadedRetryPolicy())
-}
-
-func builtinCodexOverloadedRetryPolicy() AdapterRetryPolicy {
-	enabled := true
-	return AdapterRetryPolicy{
-		Name:                     codexOverloadedRetryPolicyName,
-		Enabled:                  &enabled,
-		MaxAttempts:              3,
-		InitialDelay:             AdapterRetryDuration(250 * time.Millisecond),
-		MaxDelay:                 AdapterRetryDuration(2 * time.Second),
-		Multiplier:               2,
-		JitterFraction:           0.2,
-		RetryWhenResponseStarted: false,
-		Match: AdapterRetryMatchers{
-			Backends:          []string{"codex"},
-			Operations:        []string{"codex.responses.websocket.generate"},
-			Statuses:          nil,
-			ErrorClasses:      []string{"scanner_error", "websocket_error", "response_failed"},
-			ErrorCodes:        nil,
-			MessageSubstrings: []string{"Our servers are currently overloaded. Please try again later."},
-		},
-	}
 }
 
 func normalizeAdapterRetryPolicy(policy *AdapterRetryPolicy) error {
