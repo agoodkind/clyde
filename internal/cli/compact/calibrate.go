@@ -15,16 +15,13 @@ import (
 // record. The CLI no longer reaches into the contextusage layer or the
 // on-disk calibration store directly; the daemon owns both.
 func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session, model string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	cliCompactLog.Logger().Info("cli.compact.auto_calibrate.started",
 		"session", sess.Name,
 		"session_id", sess.Metadata.ProviderSessionID(),
 		"work_dir", sess.Metadata.WorkDir,
 		"model", model,
 	)
-	_, _ = fmt.Fprintf(out, "probing %s via claude /context (may take 30-60 seconds)...\n", sess.Name)
+	_, _ = fmt.Fprintf(out, "probing %s with configured context usage prober (may take 30-60 seconds)...\n", sess.Name)
 
 	resp, err := daemon.CalibrateSessionViaDaemon(ctx, sess.Name)
 	if err != nil {
@@ -56,9 +53,6 @@ func runAutoCalibrate(ctx context.Context, out io.Writer, sess *session.Session,
 // runCalibrate asks the daemon to persist an operator-supplied
 // static_overhead value for the session. The daemon owns the write.
 func runCalibrate(ctx context.Context, out io.Writer, sess *session.Session, n int, model string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	cliCompactLog.Logger().Info("cli.compact.calibrate.started",
 		"session", sess.Name,
 		"session_id", sess.Metadata.ProviderSessionID(),

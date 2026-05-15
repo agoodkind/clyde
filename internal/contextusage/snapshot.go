@@ -1,8 +1,8 @@
 package contextusage
 
 // Snapshot is the provider-neutral payload that mirrors the live
-// /context view a provider can expose for a session. Only the fields
-// the compact engine needs are modeled; provider-specific
+// context-usage view a provider can expose for a session. Only the
+// fields the compact engine needs are modeled; provider-specific
 // extensions are intentionally ignored at this boundary so the
 // generic engine never depends on a provider-shaped field.
 type Snapshot struct {
@@ -13,12 +13,9 @@ type Snapshot struct {
 	Categories  []Category `json:"categories"`
 }
 
-// Category mirrors a single /context row. Name is free-form; the
-// stable values Claude emits today are "System prompt", "System
-// tools", "MCP tools", "Memory files", "Skills", "Custom agents",
-// "Messages", "Compact buffer", "Free space", and their
-// "(deferred)" variants. Other providers map their own taxonomies
-// onto the same shape so generic consumers can stay provider-neutral.
+// Category mirrors a single provider context-usage row. Name is
+// free-form; provider implementations map their own taxonomies onto
+// the same shape so generic consumers can stay provider-neutral.
 type Category struct {
 	Name       string `json:"name"`
 	Tokens     int    `json:"tokens"`
@@ -37,8 +34,8 @@ var categoryNamesExcludedFromOverhead = map[string]bool{
 }
 
 // StaticOverhead derives the non-trimmable floor from the live
-// /context total itself. Claude's category rows are not reliably
-// additive, especially once deferred buckets are present, so summing
+// context total itself. Provider category rows are not guaranteed to
+// be additive, especially once deferred buckets are present, so summing
 // every non-message category can materially overstate the floor.
 // When TotalTokens is present we treat it as the authority and
 // subtract the dynamic buckets (Messages, Compact buffer, Free

@@ -1,9 +1,9 @@
 // Package probe implements `clyde probe <session>`, a thin wrapper
 // over the registered contextusage.Prober that prints the live
-// /context snapshot for a Clyde session in the user's chosen output
-// format. The text mode is a one-line-per-category dump; the JSON
-// mode emits the typed contextusage.Snapshot variant so jq users can
-// consume the same data without parsing prose.
+// context-usage snapshot for a Clyde session in the user's chosen
+// output format. The text mode is a one-line-per-category dump; the
+// JSON mode emits the typed contextusage.Snapshot variant so jq users
+// can consume the same data without parsing prose.
 package probe
 
 import (
@@ -24,7 +24,7 @@ import (
 func NewCmd(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
 		Use:   "probe <session>",
-		Short: "Probe a session's live /context snapshot",
+		Short: "Probe a session's live context-usage snapshot",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd, f, args[0])

@@ -12,7 +12,7 @@ import (
 )
 
 // Calibration captures the static_overhead measurement for one
-// session. static_overhead is everything in the live `/context` total
+// session. static_overhead is everything in the live context total
 // that does NOT come from the transcript tail: system prompt, tools,
 // agents, memory files, and any reactive context blocks the CLI
 // injects. It is treated as constant per session.
@@ -51,12 +51,12 @@ func calibrationPath(sessionID string) (string, error) {
 func LoadCalibration(sessionID string) (Calibration, bool, error) {
 	path, err := calibrationPath(sessionID)
 	if err != nil {
-		return Calibration{}, false, err
+		return Calibration{StaticOverhead: 0, CapturedAt: time.Time{}, Model: ""}, false, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Calibration{}, false, nil
+			return Calibration{StaticOverhead: 0, CapturedAt: time.Time{}, Model: ""}, false, nil
 		}
 		slog.Error("compact.calibration.read_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
 		return Calibration{}, false, fmt.Errorf("read calibration: %w", err)
@@ -64,7 +64,7 @@ func LoadCalibration(sessionID string) (Calibration, bool, error) {
 	var cal Calibration
 	if err := json.Unmarshal(data, &cal); err != nil {
 		slog.Error("compact.calibration.parse_failed", "component", "compact", "session_id", sessionID, "path", path, "err", err)
-		return Calibration{}, false, fmt.Errorf("parse calibration: %w", err)
+		return Calibration{StaticOverhead: 0, CapturedAt: time.Time{}, Model: ""}, false, fmt.Errorf("parse calibration: %w", err)
 	}
 	return cal, true, nil
 }
@@ -88,7 +88,7 @@ func SaveCalibration(sessionID string, cal Calibration) error {
 		return fmt.Errorf("encode calibration: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
+	if err := os.WriteFile(tmp, encoded, 0o600); err != nil {
 		slog.Error("compact.calibration.write_failed", "component", "compact", "session_id", sessionID, "path", tmp, "err", err)
 		return fmt.Errorf("write calibration: %w", err)
 	}

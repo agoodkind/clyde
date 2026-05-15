@@ -12,7 +12,7 @@ type Source string
 // A caller that wants to force freshness suppresses both cache tiers
 // at the provider layer.
 const (
-	// SourceProbe is a fresh provider-native probe of /context.
+	// SourceProbe is a fresh provider-native context usage probe.
 	SourceProbe Source = "probe"
 	// SourceCacheMem is a hit in the in-process cache.
 	SourceCacheMem Source = "cache_mem"
@@ -32,9 +32,9 @@ type ProbeOptions struct {
 	RefreshHint bool
 
 	// WorkDir is the filesystem anchor for the spawn. Provider
-	// implementations that run a sidecar process (claude --resume,
-	// codex resume, etc.) set the spawn's cwd to this value so the
-	// sidecar can find the project's MCP servers, hooks, and settings.
+	// implementations that run a sidecar process set the spawn's cwd to
+	// this value so the sidecar can find the project's MCP servers,
+	// hooks, and settings.
 	// Callers pass the session's workspace root. An empty string lets
 	// the implementation inherit its parent process cwd, which is
 	// usually wrong for daemon-spawned probes.

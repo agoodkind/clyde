@@ -9,6 +9,25 @@ import (
 	"time"
 )
 
+type entryType string
+
+const (
+	entryTypeUser      entryType = "user"
+	entryTypeAssistant entryType = "assistant"
+	entryTypeSystem    entryType = "system"
+)
+
+type contentBlockType string
+
+const (
+	contentBlockTypeText             contentBlockType = "text"
+	contentBlockTypeThinking         contentBlockType = "thinking"
+	contentBlockTypeRedactedThinking contentBlockType = "redacted_thinking"
+	contentBlockTypeImage            contentBlockType = "image"
+	contentBlockTypeToolUse          contentBlockType = "tool_use"
+	contentBlockTypeToolResult       contentBlockType = "tool_result"
+)
+
 // Entry is a parsed JSONL transcript line. We keep both the structured
 // fields we need for synthesis AND the raw bytes so the apply path can
 // re-emit untouched lines verbatim if it ever needs to.
@@ -44,7 +63,7 @@ type Entry struct {
 	RehydratedSource *Entry `json:"-"`
 }
 
-// ContentBlock is one element of an Anthropic-style content array.
+// ContentBlock is one element of a provider content array.
 // Unknown block types are kept verbatim as Raw so we can pass them
 // through if needed.
 type ContentBlock struct {
@@ -131,7 +150,12 @@ func LoadSlice(path string) (*Slice, error) {
 
 	slice := &Slice{
 		Path:         path,
+		AllEntries:   nil,
 		BoundaryLine: -1,
+		BoundaryUUID: "",
+		BoundaryTime: time.Time{},
+		PostBoundary: nil,
+		PairIndex:    nil,
 		FileBytes:    stat.Size(),
 	}
 	idx := 0
@@ -216,8 +240,8 @@ func parseEntry(raw []byte, idx int) Entry {
 	return entry
 }
 
-// decodeContent handles the two shapes message.content takes in
-// Claude transcripts: a plain string OR an array of typed blocks.
+// decodeContent handles the two shapes message.content can take in
+// stored transcripts: a plain string OR an array of typed blocks.
 func decodeContent(raw json.RawMessage) ([]ContentBlock, string) {
 	if len(raw) == 0 {
 		return nil, ""
@@ -246,7 +270,21 @@ func decodeContent(raw json.RawMessage) ([]ContentBlock, string) {
 }
 
 func decodeBlock(raw json.RawMessage) ContentBlock {
-	block := ContentBlock{Raw: raw}
+	block := ContentBlock{
+		Type:           "",
+		Text:           "",
+		Thinking:       "",
+		ImageMediaType: "",
+		ImageDataB64:   "",
+		ImageBytes:     0,
+		ToolUseID:      "",
+		ToolName:       "",
+		ToolInput:      nil,
+		ToolUseRefID:   "",
+		ToolIsError:    false,
+		ToolContent:    nil,
+		Raw:            raw,
+	}
 	var head struct {
 		Type string `json:"type"`
 	}
@@ -254,15 +292,15 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 		return block
 	}
 	block.Type = head.Type
-	switch head.Type {
-	case "text":
+	switch contentBlockType(block.Type) {
+	case contentBlockTypeText:
 		var v struct {
 			Text string `json:"text"`
 		}
 		if err := json.Unmarshal(raw, &v); err == nil {
 			block.Text = v.Text
 		}
-	case "thinking", "redacted_thinking":
+	case contentBlockTypeThinking, contentBlockTypeRedactedThinking:
 		var v struct {
 			Thinking string `json:"thinking"`
 			Data     string `json:"data"`
@@ -273,7 +311,7 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 				block.Thinking = v.Data
 			}
 		}
-	case "image":
+	case contentBlockTypeImage:
 		var v struct {
 			Source struct {
 				MediaType string `json:"media_type"`
@@ -286,7 +324,7 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 			// base64 decoded length is approximately len(data)*3/4.
 			block.ImageBytes = (len(v.Source.Data) * 3) / 4
 		}
-	case "tool_use":
+	case contentBlockTypeToolUse:
 		var v struct {
 			ID    string          `json:"id"`
 			Name  string          `json:"name"`
@@ -297,7 +335,7 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 			block.ToolName = v.Name
 			block.ToolInput = v.Input
 		}
-	case "tool_result":
+	case contentBlockTypeToolResult:
 		var v struct {
 			ToolUseID string          `json:"tool_use_id"`
 			IsError   bool            `json:"is_error"`
@@ -314,7 +352,21 @@ func decodeBlock(raw json.RawMessage) ContentBlock {
 				case '"':
 					var s string
 					if json.Unmarshal(v.Content, &s) == nil {
-						block.ToolContent = []ContentBlock{{Type: "text", Text: s}}
+						block.ToolContent = []ContentBlock{{
+							Type:           string(contentBlockTypeText),
+							Text:           s,
+							Thinking:       "",
+							ImageMediaType: "",
+							ImageDataB64:   "",
+							ImageBytes:     0,
+							ToolUseID:      "",
+							ToolName:       "",
+							ToolInput:      nil,
+							ToolUseRefID:   "",
+							ToolIsError:    false,
+							ToolContent:    nil,
+							Raw:            nil,
+						}}
 					}
 				}
 			}
