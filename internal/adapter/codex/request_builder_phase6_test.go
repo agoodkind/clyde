@@ -10,12 +10,15 @@ import (
 
 // envelopeWithRefAndEncrypted builds a synthetic-thinking envelope around
 // body with the given data-ref attribute on the open marker AND the given
-// data-encrypted attribute on the close marker. The shape matches what
-// the renderer emits in production so [adapterrender.ExtractSyntheticParts]
-// returns the same (Body, Ref, Encrypted) tuple the inbound mapper sees.
+// data-encrypted attribute on the close marker. The open marker is tagged
+// data-origin="codex" so the Codex backend's cross-provider rule treats
+// it as a native Codex-origin envelope (the same shape the renderer emits
+// for Codex streams). The shape matches what the renderer emits in
+// production so [adapterrender.ExtractSyntheticParts] returns the same
+// (Body, Ref, Encrypted, Origin) tuple the inbound mapper sees.
 func envelopeWithRefAndEncrypted(ref, body, encrypted string) string {
 	return adapterrender.FormatSyntheticContentDeltaWithRef(
-		adapterrender.SyntheticReasoning, true, ref, body,
+		adapterrender.SyntheticReasoning, true, ref, adapterrender.OriginCodex, body,
 	) + adapterrender.SyntheticContentCloseWithAttrs(adapterrender.SyntheticReasoning, encrypted, "")
 }
 

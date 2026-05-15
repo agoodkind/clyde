@@ -114,14 +114,14 @@ func TestExtractSyntheticPartsEmptyReturnsNil(t *testing.T) {
 }
 
 func TestSyntheticContentOpenWithRefEmbedsAttribute(t *testing.T) {
-	open := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_abc123")
+	open := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_abc123", OriginUnknown)
 	if !strings.HasPrefix(open, `<!--clyde-thinking data-ref="rs_abc123"-->`) {
 		t.Fatalf("open with ref should prefix marker with data-ref: %q", open)
 	}
 }
 
 func TestSyntheticContentOpenWithEmptyRefMatchesLegacyShape(t *testing.T) {
-	withEmpty := SyntheticContentOpenWithRef(SyntheticReasoning, "")
+	withEmpty := SyntheticContentOpenWithRef(SyntheticReasoning, "", OriginUnknown)
 	legacy := SyntheticContentOpen(SyntheticReasoning)
 	if withEmpty != legacy {
 		t.Fatalf("empty ref must round-trip to legacy shape:\n with-ref: %q\n legacy:   %q", withEmpty, legacy)
@@ -129,7 +129,7 @@ func TestSyntheticContentOpenWithEmptyRefMatchesLegacyShape(t *testing.T) {
 }
 
 func TestExtractSyntheticPartsCarriesRefAttribute(t *testing.T) {
-	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_xyz789") +
+	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_xyz789", OriginUnknown) +
 		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "with ref", true) +
 		SyntheticContentClose(SyntheticReasoning)
 	parts := ExtractSyntheticParts(in)
@@ -181,7 +181,7 @@ func TestSyntheticContentCloseWithEmptyEncryptedMatchesLegacyShape(t *testing.T)
 // This is the contract Cursor's transcript relies on to carry the
 // codex-rs encrypted_content blob between turns without an external store.
 func TestExtractSyntheticPartsRoundTripsEncryptedAttribute(t *testing.T) {
-	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_inline") +
+	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_inline", OriginUnknown) +
 		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "deep thoughts", true) +
 		SyntheticContentCloseWithAttrs(SyntheticReasoning, "OPAQUE_BASE64_BLOB==", "")
 	parts := ExtractSyntheticParts(in)
@@ -248,7 +248,7 @@ func TestExtractSyntheticPartsRoundTripsSignatureAttribute(t *testing.T) {
 // the captureRE preserves the fixed order (encrypted first, signature
 // second) that the init() comments document.
 func TestExtractSyntheticPartsCoexistsEncryptedAndSignature(t *testing.T) {
-	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_co") +
+	in := SyntheticContentOpenWithRef(SyntheticReasoning, "rs_co", OriginUnknown) +
 		formatSyntheticBody(syntheticContentSpecs[SyntheticReasoning], "co thinking", true) +
 		SyntheticContentCloseWithAttrs(SyntheticReasoning, "ENC_VALUE_BASE64==", "SIG_VALUE_BASE64==")
 	parts := ExtractSyntheticParts(in)
@@ -271,25 +271,25 @@ func TestExtractSyntheticPartsCoexistsEncryptedAndSignature(t *testing.T) {
 }
 
 func TestFormatSyntheticContentDeltaWithRefEmbedsAttributeOnOpen(t *testing.T) {
-	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "rs_delta", "first")
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "rs_delta", OriginUnknown, "first")
 	if !strings.HasPrefix(open, `<!--clyde-thinking data-ref="rs_delta"-->`) {
 		t.Fatalf("open delta with ref must carry attribute: %q", open)
 	}
-	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "rs_delta", "\nsecond")
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "rs_delta", OriginUnknown, "\nsecond")
 	if strings.Contains(cont, "data-ref=") {
 		t.Fatalf("continuation delta must not repeat the data-ref attribute: %q", cont)
 	}
 }
 
 func TestFormatSyntheticContentDeltaContinuesOpenBlockWithoutHeader(t *testing.T) {
-	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", "first")
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", OriginUnknown, "first")
 	if !strings.HasPrefix(open, "<!--clyde-thinking-->") {
 		t.Fatalf("first delta missing open marker: %q", open)
 	}
 	if !strings.HasSuffix(open, "> first") {
 		t.Fatalf("open delta should start fresh blockquote line: %q", open)
 	}
-	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "", "\nsecond")
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "", OriginUnknown, "\nsecond")
 	if strings.Contains(cont, "<!--clyde-thinking-->") {
 		t.Fatalf("continuation delta should not re-emit open marker: %q", cont)
 	}

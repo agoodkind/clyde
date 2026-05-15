@@ -36,7 +36,7 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	open := !r.reasoningOpen
 	decorated := r.decorateReasoningFromDelta(ev)
 	kind := r.activeSyntheticReasoningKind()
-	contentOut := FormatSyntheticContentDeltaWithRef(kind, open, r.lastReasoningItemID, decorated)
+	contentOut := FormatSyntheticContentDeltaWithRef(kind, open, r.lastReasoningItemID, r.backendOrigin(), decorated)
 	r.reasoningOpen = true
 	r.reasoningBodyEmitted = true
 	delta := adapteropenai.StreamDelta{
@@ -54,13 +54,27 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
 	r.reasoningOpen = true
 	kind := r.activeSyntheticReasoningKind()
-	delta := adapteropenai.StreamDelta{Content: SyntheticContentOpenWithRef(kind, r.lastReasoningItemID)}
+	delta := adapteropenai.StreamDelta{Content: SyntheticContentOpenWithRef(kind, r.lastReasoningItemID, r.backendOrigin())}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
 	}
 	ch := r.baseChunk(delta)
 	return &ch
+}
+
+// backendOrigin maps the renderer's backend string to the typed origin
+// stamped on the synthetic-thinking open marker. Unknown backends emit
+// OriginUnknown so the open marker stays attribute-less.
+func (r *EventRenderer) backendOrigin() SyntheticOrigin {
+	switch r.backend {
+	case "anthropic":
+		return OriginAnthropic
+	case "codex":
+		return OriginCodex
+	default:
+		return OriginUnknown
+	}
 }
 
 // activeSyntheticReasoningKind returns the synthetic content kind that the

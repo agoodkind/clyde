@@ -22,6 +22,33 @@ import (
 // SyntheticContentKind identifies a marker-wrapped synthetic block kind.
 type SyntheticContentKind string
 
+// SyntheticOrigin identifies which model family produced a synthetic
+// thinking piece. It is parsed off the open marker's `data-origin`
+// attribute on the next turn so the receiving adapter can decide between
+// replaying the piece in its own native form (same-family) or injecting
+// the body as plain text (foreign or unknown family).
+//
+// Empty / absent `data-origin` on the open marker resolves to
+// [OriginUnknown], which routes through the same plain-text injection
+// path the foreign-origin case uses.
+type SyntheticOrigin string
+
+const (
+	// OriginUnknown is the resolved origin when the open marker carries
+	// no `data-origin` attribute. Pre-upgrade transcripts always resolve
+	// here, and the receiving adapter treats them like foreign-origin
+	// pieces (plain-text injection).
+	OriginUnknown SyntheticOrigin = ""
+	// OriginAnthropic tags a thinking piece produced by an Anthropic
+	// stream. The Anthropic adapter replays it natively as a
+	// [ThinkingBlock]; other adapters inject it as plain text.
+	OriginAnthropic SyntheticOrigin = "anthropic"
+	// OriginCodex tags a thinking piece produced by a Codex stream. The
+	// Codex adapter replays it natively as a reasoning input item; other
+	// adapters inject it as plain text.
+	OriginCodex SyntheticOrigin = "codex"
+)
+
 const (
 	// SyntheticKindText is the kind assigned to the non-envelope segments of a
 	// piece of assistant content. It is never emitted by Format* helpers; it
@@ -88,6 +115,12 @@ type SyntheticPart struct {
 	Ref       string
 	Encrypted string
 	Signature string
+	// Origin identifies the model family that produced this thinking
+	// piece, parsed off the open marker's `data-origin` attribute. The
+	// receiving adapter uses it to decide between native replay (same
+	// family) and plain-text injection (foreign or unknown family).
+	// Empty for non-thinking parts and for pre-upgrade transcripts.
+	Origin SyntheticOrigin
 }
 
 // syntheticContentSpec describes the rendering and stripping rules for one
@@ -130,51 +163,57 @@ var orderedSyntheticKinds = []SyntheticContentKind{SyntheticReasoning, Synthetic
 // is unnecessary at our use sites (callers pass opaque ids like rs_abc123).
 const dataRefAttrPattern = `(?: data-ref="([^"]*)")?`
 
+// dataOriginAttrPattern is the optional `data-origin="..."` attribute
+// fragment that may appear inside an open marker. Values are typed strings
+// matching [SyntheticOrigin] members (e.g. "anthropic", "codex"). Empty /
+// absent resolves to [OriginUnknown].
+const dataOriginAttrPattern = `(?: data-origin="([^"]*)")?`
+
 // dataEncryptedAttrPattern is the optional `data-encrypted="..."` attribute
 // fragment that may appear on the CLOSE marker. The blob is base64 so
-// `[^"]*` is a safe match. For forward compatibility the open marker
-// regex also accepts (but ignores) a `data-encrypted` attribute.
+// `[^"]*` is a safe match. Carries the Codex `encrypted_content` blob;
+// also reused for redacted_thinking opaque payloads via the
+// SyntheticRedactedThinking kind. Lives on the close marker because the
+// blob is only known after the reasoning span finishes upstream.
 const dataEncryptedAttrPattern = `(?: data-encrypted="([^"]*)")?`
 
 // dataSignatureAttrPattern is the optional `data-signature="..."` attribute
 // fragment that may appear on the CLOSE marker (sibling of
 // data-encrypted; carries the Anthropic per-thinking-block signature).
-// The value is base64 so `[^"]*` is a safe match. The two attributes are
-// independently optional but appear in a fixed order: data-encrypted
-// first, data-signature second. That keeps the regex linear and lets each
-// provider mapper read only the attribute it owns without disambiguating
-// by side channel.
+// Lives on the close marker because the signature arrives via a late
+// signature_delta SSE event after the open marker has already shipped.
+// Value is base64 so `[^"]*` is a safe match.
 const dataSignatureAttrPattern = `(?: data-signature="([^"]*)")?`
 
 func init() {
 	for _, spec := range syntheticContentSpecs {
 		marker := regexp.QuoteMeta(spec.Marker)
-		// stripRE accepts the open marker with or without a data-ref
-		// attribute and the close marker with or without
-		// data-encrypted and/or data-signature attributes. Both close
-		// attributes are independently optional and appear in a
-		// fixed order (encrypted first, signature second) so the
-		// regex stays linear. Non-capturing groups keep the match
-		// anchored so we still consume the entire envelope on strip.
+		// data-ref and data-origin are known when the open marker is
+		// emitted, so they ride on the open marker. data-encrypted
+		// (codex encrypted_content) and data-signature (anthropic
+		// per-thinking-block signature) arrive late on the wire, so
+		// they ride on the close marker. Attribute order on the wire
+		// is fixed within each marker so the regex stays linear.
 		spec.stripRE = regexp.MustCompile(
-			`(?s)<!--` + marker + `(?: data-ref="[^"]*")?(?: data-encrypted="[^"]*")?(?: data-signature="[^"]*")?-->` +
+			`(?s)<!--` + marker +
+				`(?: data-ref="[^"]*")?` +
+				`(?: data-origin="[^"]*")?-->` +
 				`.*?` +
-				`<!--/` + marker + `(?: data-encrypted="[^"]*")?(?: data-signature="[^"]*")?-->\s*`,
+				`<!--/` + marker +
+				`(?: data-encrypted="[^"]*")?` +
+				`(?: data-signature="[^"]*")?-->\s*`,
 		)
-		// captureRE submatches (1) the optional open data-ref value,
-		// (2) the inner body, (3) the optional close data-encrypted
-		// value, and (4) the optional close data-signature value.
-		// Forward compat: an encrypted or signature attribute on the
-		// open marker is accepted but ignored (the close is the
-		// authoritative carrier because encrypted_content and the
-		// thinking-block signature both arrive after the open marker
-		// has already shipped to Cursor). The trailing `\s*` mirrors
-		// stripRE so the two paths agree on where one part ends and
-		// the next begins.
+		// captureRE submatches (1) data-ref, (2) data-origin on the
+		// open marker, then (3) the inner body, then (4) data-encrypted
+		// and (5) data-signature on the close marker.
 		spec.captureRE = regexp.MustCompile(
-			`(?s)<!--` + marker + dataRefAttrPattern + `(?: data-encrypted="[^"]*")?(?: data-signature="[^"]*")?-->` +
+			`(?s)<!--` + marker +
+				dataRefAttrPattern +
+				dataOriginAttrPattern + `-->` +
 				`(.*?)` +
-				`<!--/` + marker + dataEncryptedAttrPattern + dataSignatureAttrPattern + `-->\s*`,
+				`<!--/` + marker +
+				dataEncryptedAttrPattern +
+				dataSignatureAttrPattern + `-->\s*`,
 		)
 	}
 }
@@ -189,23 +228,27 @@ func specFor(kind SyntheticContentKind) *syntheticContentSpec {
 
 // SyntheticContentOpen returns the leading marker plus the visible header for
 // the requested synthetic block kind. The marker carries no attributes; for
-// the data-ref-tagged variant use [SyntheticContentOpenWithRef].
+// the attribute-tagged variant use [SyntheticContentOpenWithRef].
 func SyntheticContentOpen(kind SyntheticContentKind) string {
-	return SyntheticContentOpenWithRef(kind, "")
+	return SyntheticContentOpenWithRef(kind, "", OriginUnknown)
 }
 
 // SyntheticContentOpenWithRef returns the leading marker plus the visible
-// header for the requested synthetic block kind, optionally annotated with a
-// data-ref attribute. The ref is emitted as `<!--<marker> data-ref="<ref>"-->`
-// when non-empty so the inbound mapper can correlate the round-tripped
-// envelope with provider state (e.g. a stored Codex encrypted_content blob).
+// header for the requested synthetic block kind, annotated with the data-ref
+// and data-origin attributes. Both are independently optional; an empty ref
+// omits data-ref, and an [OriginUnknown] origin omits data-origin. The
+// on-wire order is fixed (ref first, origin second) so the captureRE stays
+// linear.
 //
-// Empty ref matches the legacy [SyntheticContentOpen] shape exactly so
-// existing parsers and tests stay valid.
+// The ref correlates the round-tripped envelope with provider state (e.g. a
+// stored Codex encrypted_content blob); the origin identifies the producing
+// model family so the receiving adapter on the next turn can choose between
+// native replay and plain-text injection.
 //
-// The ref must not contain a literal double-quote; callers using upstream
-// item ids (alphanumeric plus hyphen and underscore) are safe by construction.
-func SyntheticContentOpenWithRef(kind SyntheticContentKind, ref string) string {
+// Neither value may contain a literal double-quote. Callers pass opaque ids
+// (alphanumeric plus hyphen/underscore) and typed enum values, which are safe
+// by construction.
+func SyntheticContentOpenWithRef(kind SyntheticContentKind, ref string, origin SyntheticOrigin) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return ""
@@ -213,6 +256,9 @@ func SyntheticContentOpenWithRef(kind SyntheticContentKind, ref string) string {
 	openTag := "<!--" + spec.Marker
 	if ref != "" {
 		openTag += ` data-ref="` + ref + `"`
+	}
+	if origin != OriginUnknown {
+		openTag += ` data-origin="` + string(origin) + `"`
 	}
 	openTag += "-->"
 	return openTag + "\n" + spec.Header
@@ -232,6 +278,11 @@ func SyntheticContentClose(kind SyntheticContentKind) string {
 // Each attribute is independently optional. The order on the wire is
 // fixed: encrypted first, signature second; this keeps the captureRE
 // linear and lets each provider mapper read only the attribute it owns.
+//
+// Both attributes ride on the CLOSE marker because they arrive late on the
+// upstream wire (encrypted_content on response.output_item.done; signature
+// via a signature_delta SSE event near the end of the thinking block). At
+// the moment the open marker ships to Cursor, neither value is known yet.
 //
 // Neither value may contain a literal double-quote; callers using base64
 // (alphanumeric plus `+/=`) are safe by construction. Empty values for
@@ -268,9 +319,9 @@ func FormatSyntheticContent(kind SyntheticContentKind, body string) string {
 	return SyntheticContentOpen(kind) + formatSyntheticBody(spec, body, true) + SyntheticContentClose(kind)
 }
 
-// FormatSyntheticContentDeltaWithRef formats a streaming delta for the
-// given kind, optionally annotating the open marker with a data-ref
-// attribute.
+// FormatSyntheticContentDeltaWithRef formats a streaming delta for the given
+// kind, annotating the open marker with the data-ref and data-origin
+// attributes.
 //
 // When open is true the leading marker, header, and a fresh blockquote
 // prefix are included so the very first delta starts a new quoted block.
@@ -278,17 +329,17 @@ func FormatSyntheticContent(kind SyntheticContentKind, body string) string {
 // block and the body's own newlines drive new quoted lines via "\n" ->
 // "\n> " replacement, matching the existing reasoning streaming layout.
 //
-// The ref is only honored when open is true; mid-stream deltas never
-// carry the attribute since the marker is already on the wire. Empty
-// ref produces the legacy attribute-less shape.
-func FormatSyntheticContentDeltaWithRef(kind SyntheticContentKind, open bool, ref, body string) string {
+// The ref and origin are only honored when open is true; mid-stream deltas
+// never carry attributes since the open marker is already on the wire.
+// Empty ref and [OriginUnknown] origin produce the attribute-less shape.
+func FormatSyntheticContentDeltaWithRef(kind SyntheticContentKind, open bool, ref string, origin SyntheticOrigin, body string) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return body
 	}
 	decorated := formatSyntheticBody(spec, body, open)
 	if open {
-		return SyntheticContentOpenWithRef(kind, ref) + decorated
+		return SyntheticContentOpenWithRef(kind, ref, origin) + decorated
 	}
 	return decorated
 }
@@ -343,6 +394,7 @@ type syntheticMatch struct {
 	end       int
 	bodyTrim  string
 	ref       string
+	origin    SyntheticOrigin
 	encrypted string
 	signature string
 }
@@ -358,50 +410,63 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 	if text == "" {
 		return nil
 	}
+	matches := collectSyntheticMatches(text)
+	if len(matches) == 0 {
+		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: "", Origin: OriginUnknown}}
+	}
+	sortSyntheticMatches(matches)
+	return spliceSyntheticParts(text, matches)
+}
+
+// collectSyntheticMatches scans text for every registered marker kind and
+// returns one [syntheticMatch] per envelope found. Order is per-kind grouped;
+// the caller sorts before splicing.
+func collectSyntheticMatches(text string) []syntheticMatch {
 	var matches []syntheticMatch
 	for _, kind := range orderedSyntheticKinds {
 		spec := syntheticContentSpecs[kind]
-		// Match the open prefix without committing to a specific tail
-		// (the marker may carry an optional `data-ref="..."` attribute
-		// before the closing `-->`). The captureRE is the authoritative
-		// matcher; this Contains is just a cheap skip for plain text.
 		if !strings.Contains(text, "<!--"+spec.Marker) {
 			continue
 		}
-		idxs := spec.captureRE.FindAllStringSubmatchIndex(text, -1)
-		for _, idx := range idxs {
-			outerStart, outerEnd := idx[0], idx[1]
-			refStart, refEnd := idx[2], idx[3]
-			innerStart, innerEnd := idx[4], idx[5]
-			encStart, encEnd := idx[6], idx[7]
-			sigStart, sigEnd := idx[8], idx[9]
-			ref := ""
-			if refStart >= 0 && refEnd >= 0 {
-				ref = text[refStart:refEnd]
-			}
-			encrypted := ""
-			if encStart >= 0 && encEnd >= 0 {
-				encrypted = text[encStart:encEnd]
-			}
-			signature := ""
-			if sigStart >= 0 && sigEnd >= 0 {
-				signature = text[sigStart:sigEnd]
-			}
-			matches = append(matches, syntheticMatch{
-				kind:      kind,
-				start:     outerStart,
-				end:       outerEnd,
-				bodyTrim:  stripDecoration(spec, text[innerStart:innerEnd]),
-				ref:       ref,
-				encrypted: encrypted,
-				signature: signature,
-			})
+		for _, idx := range spec.captureRE.FindAllStringSubmatchIndex(text, -1) {
+			matches = append(matches, decodeSyntheticMatch(text, kind, spec, idx))
 		}
 	}
-	if len(matches) == 0 {
-		return []SyntheticPart{{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: ""}}
+	return matches
+}
+
+// decodeSyntheticMatch unpacks one captureRE submatch index slice into a
+// [syntheticMatch]. The submatch group order is fixed by the regex:
+// (1) data-ref, (2) data-origin, (3) inner body, (4) data-encrypted,
+// (5) data-signature.
+func decodeSyntheticMatch(text string, kind SyntheticContentKind, spec *syntheticContentSpec, idx []int) syntheticMatch {
+	outerStart, outerEnd := idx[0], idx[1]
+	innerStart, innerEnd := idx[6], idx[7]
+	return syntheticMatch{
+		kind:      kind,
+		start:     outerStart,
+		end:       outerEnd,
+		bodyTrim:  stripDecoration(spec, text[innerStart:innerEnd]),
+		ref:       captureSubstring(text, idx[2], idx[3]),
+		origin:    SyntheticOrigin(captureSubstring(text, idx[4], idx[5])),
+		encrypted: captureSubstring(text, idx[8], idx[9]),
+		signature: captureSubstring(text, idx[10], idx[11]),
 	}
-	// Insertion sort by start offset; tiny N (matches per assistant turn).
+}
+
+// captureSubstring returns text[start:end] when both indices are non-negative
+// (regexp signals an absent optional group with -1). Empty otherwise.
+func captureSubstring(text string, start, end int) string {
+	if start < 0 || end < 0 {
+		return ""
+	}
+	return text[start:end]
+}
+
+// sortSyntheticMatches puts matches in linear text order via an insertion
+// sort. N is tiny (envelopes per assistant turn) so the simpler algorithm
+// wins.
+func sortSyntheticMatches(matches []syntheticMatch) {
 	for i := 1; i < len(matches); i++ {
 		j := i
 		for j > 0 && matches[j-1].start > matches[j].start {
@@ -409,19 +474,21 @@ func ExtractSyntheticParts(text string) []SyntheticPart {
 			j--
 		}
 	}
+}
 
+// spliceSyntheticParts walks the ordered match list and produces the final
+// part slice, interleaving text spans with the envelope parts.
+func spliceSyntheticParts(text string, matches []syntheticMatch) []SyntheticPart {
 	var parts []SyntheticPart
 	cursor := 0
 	for _, m := range matches {
 		if m.start < cursor {
-			// Overlapping (should not happen with non-greedy regex);
-			// skip to preserve linear order.
 			continue
 		}
 		if m.start > cursor {
 			parts = appendTextPart(parts, text[cursor:m.start])
 		}
-		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref, Encrypted: m.encrypted, Signature: m.signature})
+		parts = append(parts, SyntheticPart{Kind: m.kind, Body: m.bodyTrim, Ref: m.ref, Encrypted: m.encrypted, Signature: m.signature, Origin: m.origin})
 		cursor = m.end
 	}
 	if cursor < len(text) {
@@ -440,7 +507,7 @@ func appendTextPart(parts []SyntheticPart, text string) []SyntheticPart {
 	if strings.TrimSpace(text) == "" {
 		return parts
 	}
-	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: ""})
+	return append(parts, SyntheticPart{Kind: SyntheticKindText, Body: text, Ref: "", Encrypted: "", Signature: "", Origin: OriginUnknown})
 }
 
 // MaterializationStrategy picks how round-tripped synthetic envelope content
@@ -502,10 +569,16 @@ const (
 // generic materializer so the Anthropic mapper can copy it onto the
 // emitted native thinking content block. Empty for non-Anthropic parts
 // and for text parts.
+//
+// Origin propagates [SyntheticPart.Origin] (the producing model family)
+// so the provider mapper can decide between native replay (same family)
+// and plain-text injection (foreign or unknown family) without re-parsing
+// the source envelope.
 type MaterializedPart struct {
 	Kind      MaterializedKind
 	Body      string
 	Signature string
+	Origin    SyntheticOrigin
 }
 
 // MaterializeSyntheticParts applies a [MaterializationStrategy] to a
@@ -541,11 +614,11 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 			if strings.TrimSpace(p.Body) == "" {
 				continue
 			}
-			out = append(out, MaterializedPart{Kind: MaterializedKindText, Body: p.Body, Signature: ""})
+			out = append(out, MaterializedPart{Kind: MaterializedKindText, Body: p.Body, Signature: "", Origin: OriginUnknown})
 		case SyntheticReasoning:
-			out = append(out, materializeReasoningPart(p.Body, p.Signature, strategy)...)
+			out = append(out, materializeReasoningPart(p.Body, p.Signature, p.Origin, strategy)...)
 		case SyntheticRedactedThinking:
-			out = append(out, materializeRedactedThinkingPart(p.Encrypted, strategy)...)
+			out = append(out, materializeRedactedThinkingPart(p.Encrypted, p.Origin, strategy)...)
 		case SyntheticNotice:
 			continue
 		}
@@ -559,22 +632,22 @@ func MaterializeSyntheticParts(parts []SyntheticPart, strategy MaterializationSt
 // it onto the emitted thinking content block; other strategies drop the
 // signature because the body is no longer rendered as a native thinking
 // block.
-func materializeReasoningPart(body, signature string, strategy MaterializationStrategy) []MaterializedPart {
+func materializeReasoningPart(body, signature string, origin SyntheticOrigin, strategy MaterializationStrategy) []MaterializedPart {
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
 		return nil
 	}
 	switch strategy {
 	case MaterializeNativeThinkingBlock:
-		return []MaterializedPart{{Kind: MaterializedKindNativeThinking, Body: trimmed, Signature: signature}}
+		return []MaterializedPart{{Kind: MaterializedKindNativeThinking, Body: trimmed, Signature: signature, Origin: origin}}
 	case MaterializePlainTextConcat:
-		return []MaterializedPart{{Kind: MaterializedKindText, Body: trimmed, Signature: ""}}
+		return []MaterializedPart{{Kind: MaterializedKindText, Body: trimmed, Signature: "", Origin: origin}}
 	case MaterializePassthrough:
 		envelope := FormatSyntheticContent(SyntheticReasoning, trimmed)
 		if envelope == "" {
 			return nil
 		}
-		return []MaterializedPart{{Kind: MaterializedKindText, Body: envelope, Signature: ""}}
+		return []MaterializedPart{{Kind: MaterializedKindText, Body: envelope, Signature: "", Origin: origin}}
 	case MaterializeDrop:
 		return nil
 	}
@@ -595,13 +668,13 @@ func materializeReasoningPart(body, signature string, strategy MaterializationSt
 // while leaking opaque internal content into the visible context. Passthrough
 // is also a drop because the redacted envelope is not a stable text shape an
 // arbitrary upstream can replay.
-func materializeRedactedThinkingPart(encrypted string, strategy MaterializationStrategy) []MaterializedPart {
+func materializeRedactedThinkingPart(encrypted string, origin SyntheticOrigin, strategy MaterializationStrategy) []MaterializedPart {
 	trimmed := strings.TrimSpace(encrypted)
 	if trimmed == "" {
 		return nil
 	}
 	if strategy == MaterializeNativeThinkingBlock {
-		return []MaterializedPart{{Kind: MaterializedKindNativeRedactedThinking, Body: trimmed, Signature: ""}}
+		return []MaterializedPart{{Kind: MaterializedKindNativeRedactedThinking, Body: trimmed, Signature: "", Origin: origin}}
 	}
 	return nil
 }

@@ -461,7 +461,9 @@ func TestTranslateRequestLegacyFunctions(t *testing.T) {
 // prior reasoning chain across turns.
 func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) {
 	t.Parallel()
-	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "I should answer 42.")
+	thinking := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginAnthropic) +
+		"> I should answer 42." +
+		adapterrender.SyntheticContentCloseWithAttrs(adapterrender.SyntheticReasoning, "", "OPAQUE_SIG_BASE64==")
 	assistantText := thinking + "\n\nThe answer is 42."
 	body, err := json.Marshal(assistantText)
 	if err != nil {
@@ -520,7 +522,7 @@ func TestTranslateRequestAssistantThinkingRoundTripsAsNativeBlock(t *testing.T) 
 // later replay would fail upstream signature validation.
 func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testing.T) {
 	t.Parallel()
-	envelope := adapterrender.SyntheticContentOpen(adapterrender.SyntheticReasoning) +
+	envelope := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginAnthropic) +
 		"> deliberation body" +
 		adapterrender.SyntheticContentCloseWithAttrs(
 			adapterrender.SyntheticReasoning,
@@ -554,6 +556,154 @@ func TestTranslateRequestAssistantThinkingPropagatesAnthropicSignature(t *testin
 	}
 	if tb0.Signature != "OPAQUE_SIG_BASE64==" {
 		t.Fatalf("thinking block signature=%q want OPAQUE_SIG_BASE64==", tb0.Signature)
+	}
+}
+
+// TestTranslateRequestAssistantCodexThinkingInjectsAsText is the
+// regression test for the cross-provider replay bug. A Cursor chat that
+// started on Codex stores assistant turns whose thinking marker carries
+// `data-origin="codex"`. When the user switches the model to Anthropic
+// mid-conversation, the Anthropic mapper must NOT reproduce a native
+// thinking block (it would lack the Anthropic signature and upstream
+// rejects with `messages.N.content.0.thinking.signature: Field
+// required`). Instead, the foreign-origin thinking body is injected as a
+// plain text block in front of the final answer so the prior reasoning
+// stays in context.
+func TestTranslateRequestAssistantCodexThinkingInjectsAsText(t *testing.T) {
+	t.Parallel()
+	envelope := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "rs_codex_1", adapterrender.OriginCodex) +
+		"> Let me see, 2+2 is 4." +
+		adapterrender.SyntheticContentCloseWithAttrs(
+			adapterrender.SyntheticReasoning,
+			"CODEX_ENCRYPTED_BLOB==",
+			"",
+		)
+	assistantText := envelope + "It is 4."
+	body, err := json.Marshal(assistantText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"q"`)},
+			{Role: "assistant", Content: json.RawMessage(body)},
+			{Role: "user", Content: json.RawMessage(`"continue"`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64, adapterrender.MaterializeNativeThinkingBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asst := out.Messages[1]
+	for i, blk := range asst.Content {
+		if _, ok := blk.(ThinkingBlock); ok {
+			t.Fatalf("block[%d] is a ThinkingBlock; Codex-origin thinking must not produce a native Anthropic thinking block: %+v", i, asst.Content)
+		}
+	}
+	if len(asst.Content) < 1 {
+		t.Fatalf("assistant blocks empty; want at least one text block carrying the injected reasoning")
+	}
+	tb0 := mustTextBlock(t, asst.Content, 0)
+	if !strings.Contains(tb0.Text, "Let me see, 2+2 is 4.") {
+		t.Fatalf("first text block should carry injected codex reasoning, got %q", tb0.Text)
+	}
+	var sawFinal bool
+	for _, blk := range asst.Content {
+		if tb, ok := blk.(TextBlock); ok && strings.Contains(tb.Text, "It is 4.") {
+			sawFinal = true
+			break
+		}
+	}
+	if !sawFinal {
+		t.Fatalf("final answer text missing from translated assistant content: %+v", asst.Content)
+	}
+}
+
+// TestTranslateRequestAssistantUnknownOriginThinkingInjectsAsText covers
+// pre-upgrade transcripts: a saved assistant turn whose synthetic-thinking
+// envelope has no `data-origin` attribute resolves to OriginUnknown. The
+// mapper must treat this the same as a foreign-origin piece and inject
+// the body as plain text rather than emit an unsigned native thinking
+// block.
+func TestTranslateRequestAssistantUnknownOriginThinkingInjectsAsText(t *testing.T) {
+	t.Parallel()
+	envelope := adapterrender.SyntheticContentOpen(adapterrender.SyntheticReasoning) +
+		"> legacy thinking body" +
+		adapterrender.SyntheticContentClose(adapterrender.SyntheticReasoning)
+	assistantText := envelope + "Final."
+	body, err := json.Marshal(assistantText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"q"`)},
+			{Role: "assistant", Content: json.RawMessage(body)},
+			{Role: "user", Content: json.RawMessage(`"continue"`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64, adapterrender.MaterializeNativeThinkingBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asst := out.Messages[1]
+	for i, blk := range asst.Content {
+		if _, ok := blk.(ThinkingBlock); ok {
+			t.Fatalf("block[%d] is a ThinkingBlock; unknown-origin thinking must inject as text: %+v", i, asst.Content)
+		}
+	}
+	tb0 := mustTextBlock(t, asst.Content, 0)
+	if !strings.Contains(tb0.Text, "legacy thinking body") {
+		t.Fatalf("first text block should carry injected legacy reasoning, got %q", tb0.Text)
+	}
+}
+
+// TestTranslateRequestAssistantAnthropicThinkingMissingSignatureDropped
+// asserts the malformed-anthropic case: a piece tagged `data-origin="anthropic"`
+// without a signature is dropped outright. Injecting it as text would
+// leak content the upstream chose to sign rather than show.
+func TestTranslateRequestAssistantAnthropicThinkingMissingSignatureDropped(t *testing.T) {
+	t.Parallel()
+	envelope := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticReasoning, "", adapterrender.OriginAnthropic) +
+		"> deliberation without signature" +
+		adapterrender.SyntheticContentClose(adapterrender.SyntheticReasoning)
+	assistantText := envelope + "Final answer."
+	body, err := json.Marshal(assistantText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"q"`)},
+			{Role: "assistant", Content: json.RawMessage(body)},
+			{Role: "user", Content: json.RawMessage(`"continue"`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64, adapterrender.MaterializeNativeThinkingBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asst := out.Messages[1]
+	for i, blk := range asst.Content {
+		if _, ok := blk.(ThinkingBlock); ok {
+			t.Fatalf("block[%d] is a ThinkingBlock; unsigned anthropic-origin thinking must be dropped: %+v", i, asst.Content)
+		}
+		if tb, ok := blk.(TextBlock); ok && strings.Contains(tb.Text, "deliberation without signature") {
+			t.Fatalf("block[%d] leaked unsigned anthropic body into text: %+v", i, asst.Content)
+		}
+	}
+	var sawFinal bool
+	for _, blk := range asst.Content {
+		if tb, ok := blk.(TextBlock); ok && strings.Contains(tb.Text, "Final answer.") {
+			sawFinal = true
+			break
+		}
+	}
+	if !sawFinal {
+		t.Fatalf("final answer text missing from translated assistant content: %+v", asst.Content)
 	}
 }
 

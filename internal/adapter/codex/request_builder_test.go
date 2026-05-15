@@ -1153,7 +1153,7 @@ func TestParseCodexSSERetainsReasoningSignalWithoutVisibleText(t *testing.T) {
 	if !strings.Contains(got, "Answer.") {
 		t.Fatalf("missing streamed answer: %q", got)
 	}
-	if !strings.Contains(got, "<!--clyde-thinking-->") || !strings.Contains(got, "<!--/clyde-thinking-->") {
+	if !strings.Contains(got, `<!--clyde-thinking data-origin="codex"-->`) || !strings.Contains(got, "<!--/clyde-thinking-->") {
 		t.Fatalf("missing synthetic thinking envelope: %q", got)
 	}
 }
@@ -1474,7 +1474,7 @@ func TestCodexRendererSeparatesSummarySections(t *testing.T) {
 	secondChunks := r.HandleEvent(adapterrender.ReasoningDelta{Text: "Second heading", ReasoningKind: "summary", SummaryIndex: &secondSummaryIndex, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
 	first := firstChunks[0].Choices[0].Delta.Content
 	second := secondChunks[0].Choices[0].Delta.Content
-	if !strings.Contains(first, "<!--clyde-thinking-->") {
+	if !strings.Contains(first, `<!--clyde-thinking data-origin="codex"-->`) {
 		t.Fatalf("missing opening envelope: %q", first)
 	}
 	if !strings.Contains(second, "\n> \n> Second heading") {
@@ -1499,7 +1499,7 @@ func TestCodexRendererOpensThinkingWithoutPlaceholderBody(t *testing.T) {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	if !strings.Contains(got, "<!--clyde-thinking-->") || strings.Contains(got, "\n> Thinking...") {
+	if !strings.Contains(got, `<!--clyde-thinking data-origin="codex"-->`) || strings.Contains(got, "\n> Thinking...") {
 		t.Fatalf("unexpected thinking marker: %q", got)
 	}
 	if chunks := r.HandleEvent(adapterrender.ReasoningFinished{ReasoningKind: "", EncryptedContent: "", Signature: "", ItemID: "", ItemType: ""}); len(chunks) != 1 {

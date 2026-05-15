@@ -104,7 +104,7 @@ func TestParseSSEEmitsDataRefOnCodexThinkingOpenMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
-	want := `<!--clyde-thinking data-ref="rs_phase5_42"-->`
+	want := `<!--clyde-thinking data-ref="rs_phase5_42" data-origin="codex"-->`
 	if !strings.Contains(got, want) {
 		t.Fatalf("missing data-ref open marker; got=%q", got)
 	}

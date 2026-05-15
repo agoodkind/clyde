@@ -101,7 +101,7 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 	emptyToolCallChunks := 0
 	for _, ch := range chunks {
 		for _, choice := range ch.Choices {
-			if strings.Contains(choice.Delta.Content, "<!--clyde-thinking-->") {
+			if strings.Contains(choice.Delta.Content, `<!--clyde-thinking data-origin="anthropic"-->`) {
 				hasThinkingOpen = true
 			}
 			if strings.Contains(choice.Delta.Content, "<!--/clyde-thinking-->") {

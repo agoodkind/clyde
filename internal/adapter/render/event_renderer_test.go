@@ -134,10 +134,10 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	delta := chunks[0].Choices[0].Delta
-	if !strings.Contains(delta.Content, "<!--clyde-thinking-->") {
+	if !strings.Contains(delta.Content, `<!--clyde-thinking data-origin="codex"-->`) {
 		t.Fatalf("missing content thinking marker: %q", delta.Content)
 	}
-	want := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", "checking constraints")
+	want := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", OriginCodex, "checking constraints")
 	if delta.Content != want {
 		t.Fatalf("content=%q want %q", delta.Content, want)
 	}
@@ -153,7 +153,7 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	wantOpen := SyntheticContentOpen(SyntheticReasoning)
+	wantOpen := SyntheticContentOpenWithRef(SyntheticReasoning, "", OriginCodex)
 	if got != wantOpen {
 		t.Fatalf("thinking open=%q want %q", got, wantOpen)
 	}
@@ -197,7 +197,7 @@ func TestEventRendererSuppressesLeadingThinkingPlaceholderBody(t *testing.T) {
 		t.Fatalf("chunks=%d want 1", len(chunks))
 	}
 	got := chunks[0].Choices[0].Delta.Content
-	wantOpen := SyntheticContentOpen(SyntheticReasoning)
+	wantOpen := SyntheticContentOpenWithRef(SyntheticReasoning, "", OriginCodex)
 	if got != wantOpen {
 		t.Fatalf("thinking open=%q want %q", got, wantOpen)
 	}

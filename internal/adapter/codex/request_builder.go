@@ -224,6 +224,15 @@ func buildReasoningItem(
 		encrypted = strings.TrimSpace(part.Encrypted)
 	}
 	zero := reasoningInputItem{ID: "", Summary: nil, EncryptedContent: ""}
+	// Cross-provider rule: a foreign or unknown origin reasoning piece
+	// (Anthropic, pre-upgrade transcript) cannot reproduce a Codex
+	// Reasoning input item. The encrypted blob (when present) is
+	// provider-specific and not interchangeable; the upstream rs_* id
+	// would also be a fabrication. Drop the item; the body is injected
+	// into the message text by sanitizeReasoningPartForCodex instead.
+	if part.Origin != adapterrender.OriginCodex {
+		return zero, false
+	}
 	// Codex rejects Reasoning input items with an empty id
 	// (ApiIdParam.invalid_id). The id is the upstream rs_* identifier
 	// captured on data-ref. A marker without ref cannot round-trip

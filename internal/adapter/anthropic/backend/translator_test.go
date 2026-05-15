@@ -66,7 +66,7 @@ func TestStreamTranslatorThinkingEmitsBlockquoteContent(t *testing.T) {
 			continue
 		}
 		c := ch.Choices[0].Delta.Content
-		if strings.Contains(c, "<!--clyde-thinking-->") {
+		if strings.Contains(c, `<!--clyde-thinking data-origin="anthropic"-->`) {
 			seenOpener = true
 		}
 		if strings.Contains(c, "step one") {

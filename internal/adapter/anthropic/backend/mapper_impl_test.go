@@ -20,7 +20,7 @@ import (
 // inbound contract that pairs with CLYDE-262 step 6 in mapper_impl.go.
 func TestTranslateRequestAssistantRedactedThinkingMaterializesNativeBlock(t *testing.T) {
 	t.Parallel()
-	envelope := adapterrender.SyntheticContentOpen(adapterrender.SyntheticRedactedThinking) +
+	envelope := adapterrender.SyntheticContentOpenWithRef(adapterrender.SyntheticRedactedThinking, "", adapterrender.OriginAnthropic) +
 		"> [redacted]" +
 		adapterrender.SyntheticContentCloseWithAttrs(
 			adapterrender.SyntheticRedactedThinking,

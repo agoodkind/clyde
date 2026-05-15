@@ -463,20 +463,25 @@ func materializeSyntheticAssistantText(
 // materializedPartToBlock converts one materialized synthetic part to an
 // Anthropic content block, returning ok=false when the part has no content
 // to emit.
+//
+// Thinking pieces apply the cross-provider rule: a piece whose origin is
+// Anthropic and carries a signature replays as a native [ThinkingBlock]; a
+// piece with a different origin (Codex, or unknown for pre-upgrade
+// transcripts) cannot reproduce a signed Anthropic thinking block, so the
+// body is injected as a plain [TextBlock] in front of the final answer so
+// the prior reasoning stays in context for the next model. A piece tagged
+// Anthropic with an empty signature is dropped: that combination is a
+// malformed Anthropic piece, and injecting it as text would leak internal
+// scratchpad content the upstream chose to sign rather than show.
+//
+// Redacted thinking has no body to inject, so a non-Anthropic redacted
+// piece is dropped outright.
 func materializedPartToBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, bool) {
 	switch mp.Kind {
 	case adapterrender.MaterializedKindNativeThinking:
-		body := strings.TrimSpace(mp.Body)
-		if body == "" {
-			return nil, false
-		}
-		return ThinkingBlock{Thinking: body, Signature: mp.Signature}, true
+		return nativeThinkingBlock(mp)
 	case adapterrender.MaterializedKindNativeRedactedThinking:
-		body := strings.TrimSpace(mp.Body)
-		if body == "" {
-			return nil, false
-		}
-		return RedactedThinkingBlock{Data: body}, true
+		return nativeRedactedThinkingBlock(mp)
 	case adapterrender.MaterializedKindText:
 		if strings.TrimSpace(mp.Body) == "" {
 			return nil, false
@@ -485,6 +490,47 @@ func materializedPartToBlock(mp adapterrender.MaterializedPart) (AnthContentBloc
 	default:
 		return nil, false
 	}
+}
+
+func nativeThinkingBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, bool) {
+	body := strings.TrimSpace(mp.Body)
+	if body == "" {
+		return nil, false
+	}
+	log := anthropicBackendLog.Logger()
+	if mp.Origin == adapterrender.OriginAnthropic {
+		if strings.TrimSpace(mp.Signature) == "" {
+			log.Debug("adapter.anthropic.thinking.unsigned_dropped",
+				"subcomponent", "anthropic_mapper",
+				"origin", string(mp.Origin),
+				"body_len", len(body),
+			)
+			return nil, false
+		}
+		return ThinkingBlock{Thinking: body, Signature: mp.Signature}, true
+	}
+	log.Debug("adapter.anthropic.thinking.foreign_origin_injected",
+		"subcomponent", "anthropic_mapper",
+		"origin", string(mp.Origin),
+		"body_len", len(body),
+	)
+	return TextBlock{Text: body}, true
+}
+
+func nativeRedactedThinkingBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, bool) {
+	body := strings.TrimSpace(mp.Body)
+	if body == "" {
+		return nil, false
+	}
+	if mp.Origin != adapterrender.OriginAnthropic {
+		anthropicBackendLog.Logger().Debug("adapter.anthropic.redacted_thinking.foreign_origin_dropped",
+			"subcomponent", "anthropic_mapper",
+			"origin", string(mp.Origin),
+			"body_len", len(body),
+		)
+		return nil, false
+	}
+	return RedactedThinkingBlock{Data: body}, true
 }
 
 // assistantImagePart converts an image_url assistant part to a single image
