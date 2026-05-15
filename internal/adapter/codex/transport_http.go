@@ -36,6 +36,11 @@ type HTTPTransportConfig struct {
 	RoundTripEncrypted RoundTripEncrypted
 	RetryPolicies      []adapterretry.Policy
 	BeforeAttempt      func(ctx context.Context, attemptNo int) (context.Context, func(string))
+	// AuthRefresh, when non-nil, is called when the HTTP request
+	// returns 401 or 403. It returns a refreshed access token (or an
+	// error if the refresh itself failed) so the transport can retry
+	// once with the new token before propagating the failure.
+	AuthRefresh func(ctx context.Context) (string, error)
 }
 
 const httpErrorBodySnippetLimit = 512
@@ -102,6 +107,13 @@ func runHTTPTransportEventsWithRetry(
 			releaseAttempt("codex.http.attempt.success")
 			return result, nil
 		}
+		if IsPermanentRefreshFailure(err) {
+			// Auth refresh failed permanently (refresh token expired,
+			// reused, or revoked). Retry cannot recover; bypass the
+			// policy and surface the diagnostic to the user.
+			releaseAttempt("codex.http.attempt.auth_permanent")
+			return result, err
+		}
 		releaseAttempt("codex.http.attempt.failed")
 		signal := adapterretry.Signal{
 			Backend:         "codex",
@@ -160,6 +172,19 @@ func runHTTPTransportEventsOnce(
 		logHTTPTransportError(ctx, cfg, "http_request_failed", wrapped)
 		return NewRunResult("stop"), false, wrapped
 	}
+
+	// On a 401 or 403, refresh the auth token once and retry the
+	// request. This catches the case where the cached access_token
+	// went stale between Token() and the dial. At most one refresh
+	// per HTTP request; the outer retry loop handles anything beyond.
+	if shouldRefreshAuthForStatus(resp.StatusCode, cfg.AuthRefresh) {
+		refreshedResp, refreshedCfg, refreshErr := retryHTTPTransportAfterAuthRefresh(ctx, cfg, body, resp, httpClient)
+		if refreshErr != nil {
+			return NewRunResult("stop"), false, refreshErr
+		}
+		resp = refreshedResp
+		cfg = refreshedCfg
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -196,6 +221,47 @@ func runHTTPTransportEventsOnce(
 		return emit(event)
 	}, logCtx, parseOpts)
 	return result, responseStarted, parseErr
+}
+
+func shouldRefreshAuthForStatus(status int, refresh func(context.Context) (string, error)) bool {
+	if refresh == nil {
+		return false
+	}
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
+}
+
+func retryHTTPTransportAfterAuthRefresh(
+	ctx context.Context,
+	cfg HTTPTransportConfig,
+	body []byte,
+	originalResp *http.Response,
+	httpClient *http.Client,
+) (*http.Response, HTTPTransportConfig, error) {
+	_, _ = io.Copy(io.Discard, originalResp.Body)
+	_ = originalResp.Body.Close()
+	newToken, refreshErr := cfg.AuthRefresh(ctx)
+	if refreshErr != nil {
+		logHTTPTransportError(ctx, cfg, "auth_refresh_failed", refreshErr)
+		return nil, cfg, refreshErr
+	}
+	if strings.TrimSpace(newToken) == "" {
+		return originalResp, cfg, nil
+	}
+	cfg.Token = newToken
+	retryReq, retryErr := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(body))
+	if retryErr != nil {
+		wrapped := fmt.Errorf("codex http transport: build retry request: %w", retryErr)
+		logHTTPTransportError(ctx, cfg, "build_retry_request", wrapped)
+		return nil, cfg, wrapped
+	}
+	retryReq.Header = buildResponsesHTTPHeaders(cfg)
+	retryResp, retryDoErr := httpClient.Do(retryReq)
+	if retryDoErr != nil {
+		wrapped := fmt.Errorf("codex http transport (post-refresh): %w", retryDoErr)
+		logHTTPTransportError(ctx, cfg, "http_retry_failed", wrapped)
+		return nil, cfg, wrapped
+	}
+	return retryResp, cfg, nil
 }
 
 func readHTTPErrorSnippet(r io.Reader) string {

@@ -278,6 +278,59 @@ func TestCodexRetryErrorClassMapsHandshakeStatusToResponseFailed(t *testing.T) {
 	}
 }
 
+func TestDialResponsesWebsocketRefreshesOn401AndRedials(t *testing.T) {
+	t.Parallel()
+
+	upgrader := websocket.Upgrader{}
+	var requestCount atomic.Int32
+	var lastBearer atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastBearer.Store(r.Header.Get("Authorization"))
+		if requestCount.Add(1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	var refreshCalls atomic.Int32
+	cfg := WebsocketTransportConfig{
+		URL:       "ws" + strings.TrimPrefix(server.URL, "http"),
+		Token:     "stale-token",
+		RequestID: "req-401",
+		TurnState: NewTurnState(),
+		AuthRefresh: func(_ context.Context) (string, error) {
+			refreshCalls.Add(1)
+			return "fresh-token", nil
+		},
+	}
+	conn, _, refreshedCfg, err := dialResponsesWebsocketWithAuthRefresh(context.Background(), cfg)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err != nil {
+		t.Fatalf("dial after refresh err=%v", err)
+	}
+	if refreshCalls.Load() != 1 {
+		t.Fatalf("refresh calls=%d want 1", refreshCalls.Load())
+	}
+	if requestCount.Load() != 2 {
+		t.Fatalf("server requests=%d want 2", requestCount.Load())
+	}
+	if refreshedCfg.Token != "fresh-token" {
+		t.Fatalf("refreshed cfg.Token=%q want fresh-token", refreshedCfg.Token)
+	}
+	if bearer, _ := lastBearer.Load().(string); bearer != "Bearer fresh-token" {
+		t.Fatalf("last upgrade bearer=%q want fresh-token", bearer)
+	}
+}
+
 func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 	t.Parallel()
 

@@ -188,6 +188,15 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		return adapterprovider.Result{}, adapterprovider.ErrAuthMissing
 	}
 
+	// AuthRefresh is wired only when the configured AuthLookup also
+	// satisfies AuthRefresher. The transports tolerate a nil hook (they
+	// fall back to retry-without-refresh), so this stays optional and
+	// does not change the AuthLookup contract.
+	var authRefresh func(context.Context) (string, error)
+	if refresher, ok := p.auth.(adapterprovider.AuthRefresher); ok {
+		authRefresh = refresher.ForceRefresh
+	}
+
 	directCfg := DirectConfig{
 		HTTPClient:                     p.httpClient,
 		BaseURL:                        codexBaseURL(p.cfg.BaseURL),
@@ -215,6 +224,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		// context so the server can register each retry attempt as a
 		// nested livetrack egress session without changing this interface.
 		BeforeAttempt: beforeAttemptFromContext(ctx),
+		AuthRefresh:   authRefresh,
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{

@@ -154,3 +154,50 @@ func TestRunHTTPTransportEventsFoldsUpstreamStatusIntoErrorMessage(t *testing.T)
 		}
 	}
 }
+
+func TestRunHTTPTransportEventsRefreshesOn401AndRetriesOnce(t *testing.T) {
+	t.Parallel()
+
+	var requestCount atomic.Int32
+	var lastBearer atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastBearer.Store(r.Header.Get("Authorization"))
+		n := requestCount.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"code":"invalid_token"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(codexHTTPSSEBodyForTest(t)))
+	}))
+	defer server.Close()
+
+	var refreshCalls atomic.Int32
+	_, err := runHTTPTransportEvents(context.Background(), HTTPTransportConfig{
+		URL:        server.URL,
+		HTTPClient: server.Client(),
+		Token:      "stale-token",
+		RequestID:  "req-http-401",
+		AuthRefresh: func(_ context.Context) (string, error) {
+			refreshCalls.Add(1)
+			return "fresh-token", nil
+		},
+	}, HTTPTransportRequest{
+		Model: "gpt-5.4",
+		Input: []map[string]any{{"role": "user", "content": "hi"}},
+	}, func(adapterrender.Event) error { return nil })
+	if err != nil {
+		t.Fatalf("runHTTPTransportEvents err=%v", err)
+	}
+	if refreshCalls.Load() != 1 {
+		t.Fatalf("refresh calls=%d want 1", refreshCalls.Load())
+	}
+	if requestCount.Load() != 2 {
+		t.Fatalf("server requests=%d want 2", requestCount.Load())
+	}
+	if bearer, _ := lastBearer.Load().(string); bearer != "Bearer fresh-token" {
+		t.Fatalf("last request bearer=%q want fresh-token", bearer)
+	}
+}

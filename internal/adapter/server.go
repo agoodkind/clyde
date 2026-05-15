@@ -6,13 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -241,11 +239,19 @@ func (s *Server) registerProviders(
 	policies logpolicy.PolicySet,
 ) {
 	if cfg.Codex.Enabled {
+		codexAuth := adaptercodex.NewAuthManager(cfg.Codex.AuthFile, adaptercodex.AuthManagerOptions{
+			HTTPClient: s.httpClient,
+			Log:        slogger.WithConcern(log.With("subcomponent", "codex_auth"), slogger.ConcernAdapterProviderCodex),
+			Now:        nil,
+			RefreshURL: "",
+		})
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
 			Config:     cfg,
-			Auth:       codexAuthLookup{server: s},
+			Auth:       codexAuth,
 			Logger:     slogger.WithConcern(log.With("subcomponent", "codex_provider"), slogger.ConcernAdapterProviderCodex),
 			HTTPClient: s.httpClient,
+			Telemetry:  nil,
+			Now:        nil,
 		}, codexProviderOptionsWithRegistry(logging, runtimeLogging, wsReg, policies))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
@@ -347,82 +353,8 @@ func codexProviderOptionsWithRegistry(
 	}
 }
 
-func resolveCodexAuthFile(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		path = "~/.codex/auth.json"
-	}
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, path[2:])
-		}
-	}
-	return path
-}
-
 func (s *Server) codexWebsocketEnabled() bool {
 	return s.cfg.Codex.WebsocketEnabled
-}
-
-type codexAuthFile struct {
-	AuthMode string `json:"auth_mode"`
-	Tokens   struct {
-		AccountID   string `json:"account_id"`
-		AccessToken string `json:"access_token"`
-	} `json:"tokens"`
-}
-
-func (s *Server) readCodexAuthFile() (codexAuthFile, error) {
-	log := s.log
-	if log == nil {
-		log = slog.Default()
-	}
-	p := resolveCodexAuthFile(s.cfg.Codex.AuthFile)
-	data, err := os.ReadFile(p)
-	if err != nil {
-		log.Warn("adapter.codex.auth_file.read_failed",
-			"subcomponent", "adapter",
-			"path", p,
-			"err", err.Error(),
-		)
-		return codexAuthFile{}, fmt.Errorf("read codex auth file: %w", err)
-	}
-	var doc codexAuthFile
-	if err := json.Unmarshal(data, &doc); err != nil {
-		log.Warn("adapter.codex.auth_file.parse_failed",
-			"subcomponent", "adapter",
-			"path", p,
-			"body_bytes", len(data),
-			"err", err.Error(),
-		)
-		return codexAuthFile{}, fmt.Errorf("parse codex auth file: %w", err)
-	}
-	return doc, nil
-}
-
-func (s *Server) readCodexAccessToken() (string, error) {
-	doc, err := s.readCodexAuthFile()
-	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(doc.Tokens.AccessToken) == "" {
-		return "", errors.New("codex auth file missing tokens.access_token")
-	}
-	return doc.Tokens.AccessToken, nil
-}
-
-// codexAuthLookup adapts the Server's existing auth-file reader to
-// the provider.AuthLookup interface so the Codex Provider can ask for
-// a fresh token without depending on the daemon's internals.
-type codexAuthLookup struct {
-	server *Server
-}
-
-func (a codexAuthLookup) Token(_ context.Context) (string, error) {
-	if a.server == nil {
-		return "", errors.New("codex auth lookup: nil server")
-	}
-	return a.server.readCodexAccessToken()
 }
 
 // Addr returns the host:port the adapter will bind when Start is

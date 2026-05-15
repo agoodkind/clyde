@@ -17,6 +17,18 @@ type AuthLookup interface {
 	Token(ctx context.Context) (string, error)
 }
 
+// AuthRefresher extends AuthLookup with an explicit refresh entry
+// point for providers that need to force a token rotation when the
+// upstream rejects a still-cached token (HTTP 401 or 403). Returning
+// an error means the refresh itself failed; the caller propagates it
+// to the user. Implementations that cannot refresh should still
+// satisfy AuthLookup and let the provider fall back to retry-without-
+// refresh.
+type AuthRefresher interface {
+	AuthLookup
+	ForceRefresh(ctx context.Context) (string, error)
+}
+
 // TelemetrySink is the typed surface a provider uses to emit
 // per-request lifecycle events that should land in the daemon's
 // structured request log (today: providerStats). The interface is

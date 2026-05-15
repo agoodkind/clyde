@@ -178,6 +178,11 @@ type WebsocketTransportConfig struct {
 	// livetrack egress session without importing the adapter package
 	// from here.
 	BeforeAttempt func(ctx context.Context, attemptNo int) (context.Context, func(string))
+	// AuthRefresh, when non-nil, is invoked when the websocket upgrade
+	// responds with HTTP 401 or 403. It returns a refreshed access
+	// token (or an error if the refresh itself failed) so the dial can
+	// retry once with the new token before propagating the failure.
+	AuthRefresh func(ctx context.Context) (string, error)
 }
 
 // Mirrors the observed Responses websocket envelope from
@@ -541,6 +546,15 @@ func runWebsocketTransportEventsWithRetry(
 			releaseAttempt("codex.attempt.fallback_http")
 			return result, err
 		}
+		if IsPermanentRefreshFailure(err) {
+			// The auth refresh itself failed permanently (refresh token
+			// expired, reused, or revoked). Retry cannot recover, so
+			// bypass the policy and surface the error immediately so the
+			// user sees the diagnostic instead of three identical
+			// attempts.
+			releaseAttempt("codex.attempt.auth_permanent")
+			return result, err
+		}
 		releaseAttempt("codex.attempt.failed")
 		signal := adapterretry.Signal{
 			Backend:         "codex",
@@ -588,14 +602,11 @@ func codexRetryErrorClass(err error) string {
 	if errors.As(err, &handshakeErr) {
 		// Every handshake failure (401, 403, 429, 5xx, or a bare bad
 		// handshake) surfaces before any response bytes are emitted, so
-		// it is safe to retry. A transient 401 or 5xx recovers on a
-		// later attempt; a genuinely permanent status simply exhausts
-		// the bounded retry budget and then fails as before.
-		//
-		// TODO: a genuinely expired token will not recover from plain
-		// retry. Refreshing it on 401/403 would need an auth-refresh
-		// hook threaded through WebsocketTransportConfig from the
-		// provider's AuthLookup.
+		// it is safe to retry. The 401 and 403 cases also trigger one
+		// auth-refresh-and-redial inside the dial wrapper before
+		// reaching the retry policy; a token that is still rejected
+		// after refresh classifies as response_failed here and exhausts
+		// the bounded retry budget.
 		return "response_failed"
 	}
 	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
@@ -605,6 +616,42 @@ func codexRetryErrorClass(err error) string {
 		return "websocket_error"
 	}
 	return "response_failed"
+}
+
+// dialResponsesWebsocketWithAuthRefresh wraps dialResponsesWebsocket so
+// that a 401 or 403 on the upgrade triggers one auth refresh and a
+// re-dial with the refreshed token. The refresh runs at most once per
+// call. A successful refresh that produces an empty token, or a refresh
+// that itself fails, propagates the original handshake error wrapped
+// with the refresh outcome so the retry loop can decide what to do.
+// Returns the (possibly updated) cfg so the caller's later dials see
+// the new token.
+func dialResponsesWebsocketWithAuthRefresh(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, WebsocketTransportConfig, error) {
+	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	if err == nil || cfg.AuthRefresh == nil {
+		return conn, statusCode, cfg, err
+	}
+	var handshakeErr *websocketHandshakeError
+	if !errors.As(err, &handshakeErr) {
+		return conn, statusCode, cfg, err
+	}
+	if handshakeErr.Status != http.StatusUnauthorized && handshakeErr.Status != http.StatusForbidden {
+		return conn, statusCode, cfg, err
+	}
+	newToken, refreshErr := cfg.AuthRefresh(ctx)
+	if refreshErr != nil {
+		return conn, statusCode, cfg, refreshErr
+	}
+	if strings.TrimSpace(newToken) == "" {
+		return conn, statusCode, cfg, err
+	}
+	cfg.Token = newToken
+	return dialResponsesWebsocketAfterRefresh(ctx, cfg)
+}
+
+func dialResponsesWebsocketAfterRefresh(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, WebsocketTransportConfig, error) {
+	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	return conn, statusCode, cfg, err
 }
 
 func logCodexRetryDecision(ctx context.Context, cfg WebsocketTransportConfig, decision adapterretry.Decision, attempt int, maxAttempts int, finalOutcome string) {
@@ -638,7 +685,8 @@ func runWebsocketFreshDial(
 	payload ResponseCreateWsRequest,
 	emit func(adapterrender.Event) error,
 ) (RunResult, bool, error) {
-	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	conn, statusCode, refreshedCfg, err := dialResponsesWebsocketWithAuthRefresh(ctx, cfg)
+	cfg = refreshedCfg
 	if statusCode == http.StatusUpgradeRequired {
 		logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{FallbackToHTTP: true})
 		return NewRunResult("stop"), false, ErrWebsocketFallbackToHTTP
@@ -671,7 +719,9 @@ func runWebsocketFreshDial(
 		} else {
 			prewarmFailed = true
 			_ = conn.Close()
-			conn, statusCode, err = dialResponsesWebsocket(ctx, cfg)
+			var refreshedCfg WebsocketTransportConfig
+			conn, statusCode, refreshedCfg, err = dialResponsesWebsocketWithAuthRefresh(ctx, cfg)
+			cfg = refreshedCfg
 			if statusCode == http.StatusUpgradeRequired {
 				logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
 					FallbackToHTTP:         true,
@@ -824,7 +874,7 @@ func openSessionAndWarmup(
 	log *slog.Logger,
 ) (*WebsocketSession, error) {
 	conv := strings.TrimSpace(cfg.ConversationID)
-	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	conn, statusCode, _, err := dialResponsesWebsocketWithAuthRefresh(ctx, cfg)
 	if statusCode == http.StatusUpgradeRequired {
 		return nil, ErrWebsocketFallbackToHTTP
 	}

@@ -67,6 +67,11 @@ type DirectConfig struct {
 	// can register each retry attempt as a nested livetrack session
 	// without the codex package importing adapter internals.
 	BeforeAttempt func(ctx context.Context, attemptNo int) (context.Context, func(string))
+	// AuthRefresh, when non-nil, is called by the transports when the
+	// upstream rejects the cached token with HTTP 401 or 403. It
+	// returns a fresh access token (or an error if refresh failed) so
+	// the transport can re-dial once before propagating the failure.
+	AuthRefresh func(ctx context.Context) (string, error)
 }
 
 // RoundTripEncrypted is the closed enum the codex transport honors when the
@@ -167,6 +172,7 @@ func RunDirect(
 		RoundTripEncrypted: cfg.RoundTripEncrypted,
 		RetryPolicies:      cfg.RetryPolicies,
 		BeforeAttempt:      cfg.BeforeAttempt,
+		AuthRefresh:        cfg.AuthRefresh,
 	}
 
 	// Websocket transport disabled by config: use the HTTP/SSE transport
@@ -187,6 +193,8 @@ func RunDirect(
 		ConversationID:     conversationID,
 		TurnState:          NewTurnState(),
 		TurnMetadata:       transportPayload.ClientMetadata[CodexTurnMetadataHeader],
+		Prewarm:            false,
+		PrewarmTimeout:     0,
 		BodyLog:            cfg.BodyLog,
 		BodyLogProvider:    cfg.BodyLogProvider,
 		SessionCache:       cfg.SessionCache,
@@ -195,6 +203,7 @@ func RunDirect(
 		RoundTripEncrypted: cfg.RoundTripEncrypted,
 		RetryPolicies:      cfg.RetryPolicies,
 		BeforeAttempt:      cfg.BeforeAttempt,
+		AuthRefresh:        cfg.AuthRefresh,
 	}
 	result, err := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 	if errors.Is(err, ErrWebsocketFallbackToHTTP) {
