@@ -618,7 +618,7 @@ func (p *CompactPanel) renderSummaryControl() string {
 }
 
 func (p *CompactPanel) drawContextSummary(scr tcell.Screen, inner Rect, y int) int {
-	drawString(scr, inner.X, y, StyleHeader, "Context (/context)", inner.W)
+	drawString(scr, inner.X, y, StyleHeader, "Context usage", inner.W)
 	y++
 	if inner.W >= 82 {
 		return p.drawWideContextSummary(scr, inner, y)

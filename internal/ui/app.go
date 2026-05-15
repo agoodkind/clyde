@@ -344,7 +344,7 @@ type DashboardStats struct {
 	StreamErr string
 }
 
-// SessionContextUsage is the exact no-persist /context payload used by the
+// SessionContextUsage is the exact no-persist context-usage payload used by the
 // details pane once the async probe completes.
 type SessionContextUsage struct {
 	Model          string
