@@ -24,7 +24,10 @@ type Strippers struct {
 }
 
 // Any reports whether any stripper bit is set.
-func (s Strippers) Any() bool {
+func (s *Strippers) Any() bool {
+	if s == nil {
+		return false
+	}
 	return s.Thinking || s.Images || s.Tools || s.Chat
 }
 
@@ -41,10 +44,10 @@ type PlanInput struct {
 	Slice          *Slice
 	Transcript     contextcount.Transcript
 	Strippers      Strippers
-	Target         int                   // /context total ceiling, 0 = no target
-	StaticOverhead int                   // calibrated overhead, ignored when Target == 0
+	Target         int                   // required effective (billable) context total floor for the planned result
+	StaticOverhead int                   // calibrated overhead used when projecting context total
 	Reserved       int                   // reserved buffer (default 13_000)
-	Counter        contextcount.Counter  // required when Target > 0
+	Counter        contextcount.Counter  // required for targeted planning
 	Out            io.Writer             // fallback streaming sink when OnIteration nil
 	OnIteration    func(IterationRecord) // preferred: called after each measure
 	BatchSize      int                   // tool demotion batch size; default 8
@@ -103,27 +106,16 @@ type IterationRecord struct {
 	Probe bool
 }
 
-// RunPlan drives the target loop. When Target == 0 it just synthesizes
-// once with the requested strippers and returns. When Target > 0 it
-// iterates, asking the /context Prober for a projection after each demotion batch, and stops
-// when it reaches target exactly or cannot reduce further without
-// crossing below target.
+// RunPlan drives the target loop. Target must be greater than zero.
+// The planner asks the configured counter for a projection after each
+// demotion batch, and stops when it reaches target exactly or cannot
+// reduce further without choosing a result smaller than target.
 func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	if err := normalizePlanInput(&in); err != nil {
 		return nil, err
 	}
 	if in.CompactRunID == "" {
 		in.CompactRunID = uuid.NewString()
-	}
-
-	opts := newSynthOptions()
-	if in.Target == 0 {
-		applyStrippersFully(in.Slice, in.Strippers, &opts)
-		result := &PlanResult{
-			Options:      opts,
-			BoundaryTail: Synthesize(in.Slice, opts),
-		}
-		return result, nil
 	}
 
 	if in.StopTimeout > 0 {
@@ -135,8 +127,8 @@ func RunPlan(ctx context.Context, in PlanInput) (*PlanResult, error) {
 	const maxUnpackLayers = 8
 	for layer := 0; ; layer++ {
 		runnerOpts := newSynthOptions()
-		runner := newPlanRunner(ctx, in, runnerOpts)
-		result, err := runner.runTarget()
+		runner := newPlanRunner(in, runnerOpts)
+		result, err := runner.runTarget(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -178,10 +170,13 @@ func normalizePlanInput(in *PlanInput) error {
 	if in.BatchSize <= 0 {
 		in.BatchSize = 32
 	}
-	if in.Target > 0 && in.Counter == nil {
+	if in.Target <= 0 {
+		return fmt.Errorf("plan: target must be greater than zero")
+	}
+	if in.Counter == nil {
 		return fmt.Errorf("plan: target set but no token counter")
 	}
-	if in.Target > 0 && len(in.Transcript.Messages) == 0 {
+	if len(in.Transcript.Messages) == 0 {
 		transcript, err := buildPlanTranscriptFromSlice(in.Slice)
 		if err != nil {
 			return err
@@ -211,15 +206,18 @@ func buildPlanTranscriptFromSlice(slice *Slice) (contextcount.Transcript, error)
 
 func newSynthOptions() SynthOptions {
 	return SynthOptions{
+		DropThinking:         false,
+		ImagesAsPlaceholder:  false,
 		ToolDefault:          ToolDetailFull,
 		ToolDetailOverride:   map[string]ToolDetail{},
 		DroppedChatEntries:   map[int]bool{},
 		DroppedSummaryChunks: map[int]map[string]bool{},
+		TruncTokens:          0,
+		Summary:              "",
 	}
 }
 
 type planRunner struct {
-	ctx            context.Context
 	in             PlanInput
 	opts           SynthOptions
 	totalToolPairs int
@@ -230,13 +228,16 @@ type planRunner struct {
 	log            []IterationRecord
 }
 
-func newPlanRunner(ctx context.Context, in PlanInput, opts SynthOptions) *planRunner {
+func newPlanRunner(in PlanInput, opts SynthOptions) *planRunner {
 	return &planRunner{
-		ctx:            ctx,
 		in:             in,
 		opts:           opts,
 		totalToolPairs: len(in.Slice.PairIndex),
 		totalChatTurns: countChatTurns(in.Slice),
+		baseline:       0,
+		tail:           0,
+		ctxTotal:       0,
+		log:            nil,
 	}
 }
 
@@ -250,27 +251,27 @@ func countChatTurns(slice *Slice) int {
 	return total
 }
 
-func (r *planRunner) runTarget() (*PlanResult, error) {
-	if err := r.measureBaseline(); err != nil {
+func (r *planRunner) runTarget(ctx context.Context) (*PlanResult, error) {
+	if err := r.measureBaseline(ctx); err != nil {
 		return nil, err
 	}
 	if r.hitTarget() {
 		return r.finalize(true), nil
 	}
-	if err := r.dropThinking(); err != nil {
+	if err := r.dropThinking(ctx); err != nil {
 		return nil, err
 	}
 	if r.hitTarget() {
 		return r.finalize(true), nil
 	}
-	if err := r.replaceImagesWithPlaceholders(); err != nil {
+	if err := r.replaceImagesWithPlaceholders(ctx); err != nil {
 		return nil, err
 	}
 	if r.hitTarget() {
 		return r.finalize(true), nil
 	}
 	if r.in.Strippers.Tools {
-		if err := r.runToolDemotions(); err != nil {
+		if err := r.runToolDemotions(ctx); err != nil {
 			return nil, err
 		}
 		if r.hitTarget() {
@@ -278,30 +279,30 @@ func (r *planRunner) runTarget() (*PlanResult, error) {
 		}
 	}
 	if r.in.Strippers.Chat {
-		if err := r.runChatDrops(); err != nil {
+		if err := r.runChatDrops(ctx); err != nil {
 			return nil, err
 		}
 	}
 	return r.finalize(r.hitTarget()), nil
 }
 
-func (r *planRunner) measureBaseline() error {
-	record, err := r.measure("baseline (no transforms)")
+func (r *planRunner) measureBaseline(ctx context.Context) error {
+	record, err := r.measure(ctx, "baseline (no transforms)")
 	if err != nil {
 		return err
 	}
 	r.tail = record.TailTokens
 	r.ctxTotal = record.CtxTotal
 	r.baseline = record.TailTokens
-	r.accept(record)
+	r.accept(ctx, record)
 	return nil
 }
 
-func (r *planRunner) measure(label string) (IterationRecord, error) {
+func (r *planRunner) measure(ctx context.Context, label string) (IterationRecord, error) {
 	transcript := applySynthOptionsToTranscript(r.in.Transcript, r.in.Slice, r.opts)
-	counterTokens, err := r.in.Counter.Count(r.ctx, transcript)
+	counterTokens, err := r.in.Counter.Count(ctx, transcript)
 	if err != nil {
-		slog.ErrorContext(r.ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
+		slog.ErrorContext(ctx, "compact.plan.count_failed", "component", "compact", "step", label, "err", err)
 		return IterationRecord{}, fmt.Errorf("counter count after %q: %w", label, err)
 	}
 	ctxTotal := r.in.StaticOverhead + counterTokens + r.in.Reserved
@@ -332,9 +333,11 @@ type toolFidelityCounts struct {
 }
 
 func (r *planRunner) countToolFidelity() toolFidelityCounts {
-	counts := toolFidelityCounts{}
+	counts := toolFidelityCounts{Full: 0, LineOnly: 0, Dropped: 0}
 	for _, level := range r.opts.ToolDetailOverride {
 		switch level {
+		case ToolDetailFull:
+			continue
 		case ToolDetailLineOnly:
 			counts.LineOnly++
 		case ToolDetailDrop:
@@ -345,11 +348,11 @@ func (r *planRunner) countToolFidelity() toolFidelityCounts {
 	return counts
 }
 
-func (r *planRunner) accept(record IterationRecord) {
+func (r *planRunner) accept(ctx context.Context, record IterationRecord) {
 	r.tail = record.TailTokens
 	r.ctxTotal = record.CtxTotal
 	r.log = append(r.log, record)
-	slog.InfoContext(r.ctx, "compact.plan.iteration",
+	slog.InfoContext(ctx, "compact.plan.iteration",
 		"component", "compact",
 		"subcomponent", "plan",
 		"compact_run_id", r.in.CompactRunID,
@@ -388,8 +391,8 @@ func (r *planRunner) emitRecord(record IterationRecord) {
 // emitProbe forwards a probe row to the iteration log without
 // mutating planner state. The caller of Bisect uses this so probes
 // reach the dashboard without being recorded as accepted iterations.
-func (r *planRunner) emitProbe(record IterationRecord) {
-	slog.DebugContext(r.ctx, "compact.plan.iteration",
+func (r *planRunner) emitProbe(ctx context.Context, record IterationRecord) {
+	slog.DebugContext(ctx, "compact.plan.iteration",
 		"component", "compact",
 		"subcomponent", "plan",
 		"compact_run_id", r.in.CompactRunID,
@@ -411,12 +414,12 @@ func (r *planRunner) finalize(hit bool) *PlanResult {
 	return finalize(r.in, r.opts, r.baseline, r.tail, r.log, hit)
 }
 
-func (r *planRunner) dropThinking() error {
+func (r *planRunner) dropThinking(ctx context.Context) error {
 	if r.opts.DropThinking {
 		return nil
 	}
 	r.opts.DropThinking = true
-	record, err := r.measure("drop thinking")
+	record, err := r.measure(ctx, "drop thinking")
 	if err != nil {
 		return err
 	}
@@ -424,16 +427,16 @@ func (r *planRunner) dropThinking() error {
 		r.opts.DropThinking = false
 		return nil
 	}
-	r.accept(record)
+	r.accept(ctx, record)
 	return nil
 }
 
-func (r *planRunner) replaceImagesWithPlaceholders() error {
+func (r *planRunner) replaceImagesWithPlaceholders(ctx context.Context) error {
 	if !r.shouldReplaceImagesWithPlaceholders() {
 		return nil
 	}
 	r.opts.ImagesAsPlaceholder = true
-	record, err := r.measure("replace images with placeholders")
+	record, err := r.measure(ctx, "replace images with placeholders")
 	if err != nil {
 		return err
 	}
@@ -441,7 +444,7 @@ func (r *planRunner) replaceImagesWithPlaceholders() error {
 		r.opts.ImagesAsPlaceholder = false
 		return nil
 	}
-	r.accept(record)
+	r.accept(ctx, record)
 	return nil
 }
 
@@ -450,7 +453,7 @@ func (r *planRunner) shouldReplaceImagesWithPlaceholders() bool {
 	return imagesSelected && !r.opts.ImagesAsPlaceholder
 }
 
-func (r *planRunner) runToolDemotions() error {
+func (r *planRunner) runToolDemotions(ctx context.Context) error {
 	toolIDs := orderedToolUseIDs(r.in.Slice)
 	nearTargetBrake := maxInt(20_000, r.in.Target/10)
 	passes := []toolDemotionPass{
@@ -461,13 +464,14 @@ func (r *planRunner) runToolDemotions() error {
 			Label:          "tools full -> line-only",
 		},
 		{
-			Detail:       ToolDetailDrop,
-			RevertDetail: ToolDetailLineOnly,
-			Label:        "tools line-only -> drop",
+			Detail:         ToolDetailDrop,
+			RevertDetail:   ToolDetailLineOnly,
+			DeleteOnRevert: false,
+			Label:          "tools line-only -> drop",
 		},
 	}
 	for _, pass := range passes {
-		if err := r.runToolDemotionPass(toolIDs, nearTargetBrake, pass); err != nil {
+		if err := r.runToolDemotionPass(ctx, toolIDs, nearTargetBrake, pass); err != nil {
 			return err
 		}
 		if r.hitTarget() {
@@ -484,7 +488,7 @@ type toolDemotionPass struct {
 	Label          string
 }
 
-func (r *planRunner) runToolDemotionPass(toolIDs []string, nearTargetBrake int, pass toolDemotionPass) error {
+func (r *planRunner) runToolDemotionPass(ctx context.Context, toolIDs []string, nearTargetBrake int, pass toolDemotionPass) error {
 	index := 0
 	lastStepUnits := 0
 	lastStepAmount := 0
@@ -493,7 +497,7 @@ func (r *planRunner) runToolDemotionPass(toolIDs []string, nearTargetBrake int, 
 		batchEnd := minInt(index+batchSize, len(toolIDs))
 		stepUnits := batchEnd - index
 		r.applyToolDetail(toolIDs[index:batchEnd], pass.Detail)
-		record, err := r.measure(fmt.Sprintf("%s (oldest %d)", pass.Label, stepUnits))
+		record, err := r.measure(ctx, fmt.Sprintf("%s (oldest %d)", pass.Label, stepUnits))
 		if err != nil {
 			return err
 		}
@@ -508,7 +512,7 @@ func (r *planRunner) runToolDemotionPass(toolIDs []string, nearTargetBrake int, 
 		}
 		lastStepUnits = stepUnits
 		lastStepAmount = maxInt(r.ctxTotal-record.CtxTotal, 0)
-		r.accept(record)
+		r.accept(ctx, record)
 		index = batchEnd
 	}
 	return nil
@@ -555,7 +559,7 @@ func (r *planRunner) revertToolDetail(toolIDs []string, pass toolDemotionPass) {
 // application brings the projected context total at or below target.
 // The bisect probes ceil(log2(N))+1 times instead of the N times the
 // linear scan used.
-func (r *planRunner) runChatDrops() error {
+func (r *planRunner) runChatDrops(ctx context.Context) error {
 	if r.hitTarget() {
 		return nil
 	}
@@ -566,7 +570,7 @@ func (r *planRunner) runChatDrops() error {
 
 	probe := func(ctx context.Context, k int) (int, error) {
 		r.applyChatDropSteps(dropOrder[:k])
-		record, err := r.measure(fmt.Sprintf("probe drop %d chat turns", k))
+		record, err := r.measure(ctx, fmt.Sprintf("probe drop %d chat turns", k))
 		r.revertChatDropSteps(dropOrder[:k])
 		if err != nil {
 			return 0, err
@@ -579,7 +583,7 @@ func (r *planRunner) runChatDrops() error {
 		Probe:  probe,
 		Target: r.in.Target,
 		Label:  func(k int) string { return fmt.Sprintf("probe drop %d chat turns", k) },
-		Emit:   func(rec IterationRecord) { r.emitProbe(rec) },
+		Emit:   func(rec IterationRecord) { r.emitProbe(ctx, rec) },
 		BuildRecord: func(label string, k int, ctxTotal int) IterationRecord {
 			toolCounts := r.countToolFidelity()
 			return IterationRecord{
@@ -599,7 +603,7 @@ func (r *planRunner) runChatDrops() error {
 		},
 	}
 
-	k, err := BisectMin(r.ctx, axis)
+	k, err := BisectMin(ctx, axis)
 	if err != nil {
 		return err
 	}
@@ -607,11 +611,11 @@ func (r *planRunner) runChatDrops() error {
 		return nil
 	}
 	r.applyChatDropSteps(dropOrder[:k])
-	record, err := r.measure(fmt.Sprintf("drop oldest chat turns (%d)", k))
+	record, err := r.measure(ctx, fmt.Sprintf("drop oldest chat turns (%d)", k))
 	if err != nil {
 		return err
 	}
-	r.accept(record)
+	r.accept(ctx, record)
 	return nil
 }
 

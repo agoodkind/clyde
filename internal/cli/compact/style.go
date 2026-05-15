@@ -3,6 +3,7 @@ package compact
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,10 +25,13 @@ import (
 type Mode int
 
 const (
+	// ModePreview renders a non-mutating compact run.
 	ModePreview Mode = iota
+	// ModeApply renders a compact run that mutates the transcript.
 	ModeApply
 )
 
+// Label returns the uppercase display label for a compact mode.
 func (m Mode) Label() string {
 	if m == ModeApply {
 		return "APPLY"
@@ -82,6 +86,8 @@ func ribbon(m Mode) string {
 	switch m {
 	case ModeApply:
 		return styleRibbonApply.Render(" " + m.Label() + " · will mutate transcript ")
+	case ModePreview:
+		return styleRibbonPreview.Render(" " + m.Label() + " · no disk writes ")
 	default:
 		return styleRibbonPreview.Render(" " + m.Label() + " · no disk writes ")
 	}
@@ -91,6 +97,8 @@ func boxFor(m Mode) lipgloss.Style {
 	switch m {
 	case ModeApply:
 		return styleApplyBox
+	case ModePreview:
+		return stylePreviewBox
 	default:
 		return stylePreviewBox
 	}
@@ -104,7 +112,7 @@ type UpfrontStats struct {
 	SessionID     string
 	Model         string
 	Mode          Mode
-	CurrentTotal  int // live /context total when available (cached or fresh)
+	CurrentTotal  int // live context total when available (cached or fresh)
 	MaxTokens     int // 1,000,000 or session-specific
 	Target        int
 	StaticFloor   int
@@ -152,7 +160,7 @@ func RenderUpfrontPanel(w io.Writer, s UpfrontStats) {
 	if s.Target > 0 {
 		shrinkNote := ""
 		if shrinkBy > 0 {
-			shrinkNote = styleMuted.Render(fmt.Sprintf("   → must shrink by %s", humanInt(shrinkBy)))
+			shrinkNote = styleMuted.Render("   → must shrink by " + humanInt(shrinkBy))
 		}
 		rows = append(rows, kv("target", humanInt(s.Target)+shrinkNote))
 	}
@@ -238,8 +246,32 @@ func newProgressView(w io.Writer, target int, mode Mode, isTTY bool, upfront Upf
 		isTTY:     isTTY,
 		startedAt: cliCompactClock.Now(),
 		upfront:   upfront,
-		stop:      make(chan progressSignal),
-		done:      make(chan progressSignal),
+		mu:        sync.Mutex{},
+		iterCount: 0,
+		lastRec: compactengine.IterationRecord{
+			Step:              "",
+			TailTokens:        0,
+			CtxTotal:          0,
+			Delta:             0,
+			ThinkingDropped:   false,
+			ImagesPlaceholder: false,
+			ToolsFull:         0,
+			ToolsLineOnly:     0,
+			ToolsDropped:      0,
+			ChatTurnsTotal:    0,
+			ChatTurnsDropped:  0,
+			Probe:             false,
+		},
+		frame:         0,
+		lastLineCount: 0,
+		completed:     false,
+		finalRes:      nil,
+		finalStatic:   0,
+		finalReserved: 0,
+		finalPath:     "",
+		finalApplied:  false,
+		stop:          make(chan progressSignal),
+		done:          make(chan progressSignal),
 	}
 	if isTTY {
 		go func() {
@@ -381,7 +413,7 @@ func (p *progressView) composePanelLines(
 		header,
 		"  " + styleTitle.Render("run"),
 		renderPaneRow("status", styleVal.Render(status)),
-		renderPaneRow("step", styleVal.Render(fmt.Sprintf("%d", iter))),
+		renderPaneRow("step", styleVal.Render(strconv.Itoa(iter))),
 		renderPaneRow("now doing", styleVal.Render(phase)),
 		"  " + styleMuted.Render(strings.Repeat("─", 62)),
 		"  " + styleTitle.Render("target"),
@@ -445,7 +477,7 @@ func deltaTextFriendly(d int) string {
 		return styleBad.Render(fmt.Sprintf("+%s (over target)", humanInt(d)))
 	}
 	if d < 0 {
-		return styleGood.Render(fmt.Sprintf("within target by %s", humanInt(-d)))
+		return styleGood.Render("within target by " + humanInt(-d))
 	}
 	return styleGood.Render("0 (on target)")
 }
@@ -470,6 +502,7 @@ func phaseFromStep(step string) string {
 	return ""
 }
 
+// RenderIterationLog prints the compact iteration rows for non-live output.
 func RenderIterationLog(w io.Writer, iterations []compactengine.IterationRecord) {
 	if len(iterations) == 0 {
 		return
@@ -702,7 +735,7 @@ func RenderFinalPreview(w io.Writer, res *compactengine.PlanResult, target, stat
 		kv("target", fmt.Sprintf("%s   %s",
 			humanInt(target),
 			styleMuted.Render(fmt.Sprintf("(margin %s)", humanInt(target-after))))),
-		kv("iterations", fmt.Sprintf("%d", len(res.Iterations))),
+		kv("iterations", strconv.Itoa(len(res.Iterations))),
 		"",
 		styleTitle.Render("what was stripped"),
 	}
@@ -750,6 +783,7 @@ func RenderFinalApply(w io.Writer, res *compactengine.PlanResult, target, static
 	fmt.Fprintln(w, styleApplyBox.Render(strings.Join(rows, "\n")))
 }
 
+// RenderUndoResult draws the successful undo summary.
 func RenderUndoResult(
 	w io.Writer,
 	sessionName string,
@@ -787,21 +821,6 @@ func RenderUndoResult(
 		kv("bytes delta", humanInt(int(postBytes-preBytes))),
 	}
 	fmt.Fprintln(w, styleUndoBox.Render(strings.Join(rows, "\n")))
-}
-
-// RenderNoTarget prints a compact summary for the strippers-only path
-// that does not iterate against the Prober.
-func RenderNoTarget(w io.Writer, mode Mode, sessName string, s compactengine.Strippers, res *compactengine.PlanResult, boundaryBlocks, postBoundary int) {
-	rows := []string{
-		styleTitle.Render("plan") + "   " + ribbon(mode) + "   " + styleMuted.Render("(no target; max fidelity drops)"),
-		"",
-		kv("session", sessName),
-		kv("strippers", strippersDescribe(s)),
-		kv("synth blocks", fmt.Sprintf("%d", boundaryBlocks)),
-		kv("post-boundary", fmt.Sprintf("%d entries", postBoundary)),
-	}
-	_ = res
-	fmt.Fprintln(w, boxFor(mode).Render(strings.Join(rows, "\n")))
 }
 
 func kv(label, value string) string {

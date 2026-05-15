@@ -18,24 +18,34 @@ import (
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
 
+type stripperTypeToken string
+
+const (
+	stripperTypeTokenAll      stripperTypeToken = "all"
+	stripperTypeTokenTools    stripperTypeToken = "tools"
+	stripperTypeTokenThinking stripperTypeToken = "thinking"
+	stripperTypeTokenImages   stripperTypeToken = "images"
+	stripperTypeTokenChat     stripperTypeToken = "chat"
+)
+
 func mergeTypeFlag(s *compactengine.Strippers, csv string) error {
 	if csv == "" {
 		return nil
 	}
 	for raw := range strings.SplitSeq(csv, ",") {
 		raw = strings.TrimSpace(raw)
-		switch raw {
+		switch stripperTypeToken(raw) {
 		case "":
 			continue
-		case "all":
+		case stripperTypeTokenAll:
 			s.SetAll()
-		case "tools":
+		case stripperTypeTokenTools:
 			s.Tools = true
-		case "thinking":
+		case stripperTypeTokenThinking:
 			s.Thinking = true
-		case "images":
+		case stripperTypeTokenImages:
 			s.Images = true
-		case "chat":
+		case stripperTypeTokenChat:
 			s.Chat = true
 		default:
 			return fmt.Errorf("unknown --type entry %q (expected tools|thinking|images|chat|all)", raw)
@@ -88,8 +98,8 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	cliCompactLog.Logger().Info("cli.compact.invoked", "session", name)
 
 	if _, err := f.Config(); err != nil {
-		cliCompactLog.Logger().Error("cli.compact.config_failed", "session", name, "err", err)
-		return err
+		slog.ErrorContext(cmd.Context(), "cli.compact.config_failed", "session", name, "err", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	input, err := prepareCompactCommandInput(f, name)
@@ -105,18 +115,14 @@ func runCompact(cmd *cobra.Command, f *cli.Factory, args []string) error {
 	if err != nil {
 		return err
 	}
-	if !input.Strippers.Any() && input.Target == 0 {
-		refresh, _ := cmd.Flags().GetBool("refresh")
-		return runMetricsDashboard(cmd, out, input.Session, input.Transcript, refresh)
-	}
 	return runCompactRouted(cmd, out, input)
 }
 
 func prepareCompactCommandInput(f *cli.Factory, name string) (compactCommandInput, error) {
 	store, err := f.Store()
 	if err != nil {
-		cliCompactLog.Logger().Error("cli.compact.store_failed", "session", name, "err", err)
-		return compactCommandInput{}, err
+		slog.Error("cli.compact.store_failed", "session", name, "err", err)
+		return compactCommandInput{}, fmt.Errorf("open session store: %w", err)
 	}
 	sess, err := resolveCompactSession(store, name)
 	if err != nil {
@@ -131,6 +137,21 @@ func prepareCompactCommandInput(f *cli.Factory, name string) (compactCommandInpu
 		Session:    sess,
 		Store:      store,
 		Transcript: path,
+		Target:     0,
+		Strippers: compactengine.Strippers{
+			Thinking: false,
+			Images:   false,
+			Tools:    false,
+			Chat:     false,
+		},
+		Apply:         false,
+		Force:         false,
+		Reserved:      0,
+		Model:         "",
+		ModelDisplay:  "",
+		ModelExplicit: false,
+		ShowPasses:    false,
+		SummarizeMode: "",
 	}, nil
 }
 
@@ -159,8 +180,8 @@ func completeCompactCommandInput(cmd *cobra.Command, input compactCommandInput, 
 func resolveCompactSession(store session.Store, name string) (*session.Session, error) {
 	sess, err := store.Resolve(name)
 	if err != nil {
-		cliCompactLog.Logger().Error("cli.compact.resolve_failed", "session", name, "err", err)
-		return nil, err
+		slog.Error("cli.compact.resolve_failed", "session", name, "err", err)
+		return nil, fmt.Errorf("resolve compact session %q: %w", name, err)
 	}
 	if sess == nil {
 		cliCompactLog.Logger().Warn("cli.compact.session_not_found", "session", name)
@@ -185,18 +206,34 @@ func validateCompactTranscript(name string, sess *session.Session) (string, erro
 func parseCompactTarget(cmd *cobra.Command, name string, args []string) (int, error) {
 	targetFlag, _ := cmd.Flags().GetString("target")
 	targetRaw := strings.TrimSpace(targetFlag)
-	if targetRaw == "" && len(args) == 2 {
-		targetRaw = args[1]
+	if targetRaw == "" {
+		if secondArg, ok := compactSecondArg(args); ok {
+			targetRaw = secondArg
+		}
 	}
 	if targetRaw == "" {
-		return 0, nil
+		slog.WarnContext(cmd.Context(), "cli.compact.missing_target", "session", name)
+		return 0, fmt.Errorf("target token count is required and must be greater than zero")
 	}
 	target, err := ParseTokenCount(targetRaw)
 	if err != nil {
 		slog.WarnContext(cmd.Context(), "cli.compact.invalid_target", "session", name, "target_raw", targetRaw, "err", err)
 		return 0, fmt.Errorf("invalid target %q: %w", targetRaw, err)
 	}
+	if target <= 0 {
+		slog.WarnContext(cmd.Context(), "cli.compact.non_positive_target", "session", name, "target_raw", targetRaw, "target", target)
+		return 0, fmt.Errorf("target token count must be greater than zero")
+	}
 	return target, nil
+}
+
+func compactSecondArg(args []string) (string, bool) {
+	for index, arg := range args {
+		if index == 1 {
+			return arg, true
+		}
+	}
+	return "", false
 }
 
 func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Session, target int) (compactCommandInput, error) {
@@ -225,6 +262,7 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 	if rawMode, _ := cmd.Flags().GetString("summarize-mode"); cmd.Flags().Changed("summarize-mode") || strings.TrimSpace(rawMode) != "auto" {
 		mode, modeErr := compactengine.NormalizeSummarizeMode(rawMode)
 		if modeErr != nil {
+			slog.WarnContext(cmd.Context(), "cli.compact.summarize_mode_invalid", "session", sess.Name, "summarize_mode", rawMode, "err", modeErr)
 			return compactCommandInput{}, fmt.Errorf("parse summarize mode: %w", modeErr)
 		}
 		summarizeMode = string(mode)
@@ -252,7 +290,7 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 	}
 	if err := mergeTypeFlag(&strippers, flagTypes); err != nil {
 		cliCompactLog.Logger().Warn("cli.compact.type_flag_invalid", "session", sess.Name, "err", err)
-		return compactCommandInput{}, err
+		return compactCommandInput{}, fmt.Errorf("parse compact type flag: %w", err)
 	}
 	if target > 0 && !strippers.Any() {
 		strippers.SetAll()
@@ -263,6 +301,11 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 	}
 
 	return compactCommandInput{
+		Name:          "",
+		Session:       nil,
+		Store:         nil,
+		Transcript:    "",
+		Target:        0,
 		Strippers:     strippers,
 		Apply:         apply,
 		Force:         force,
@@ -303,7 +346,7 @@ func compactMode(apply bool) Mode {
 // runCompactRouted forwards every preview or apply that has a target,
 // strippers, or both through the daemon CompactPreview / CompactApply
 // stream. The local in-process planner used to live here; the daemon
-// now owns the transcript load, the planner loop, the /context Prober
+// now owns the transcript load, the planner loop, the context counter
 // projections, summarization, and (in apply mode) the on-disk mutation.
 func runCompactRouted(cmd *cobra.Command, out io.Writer, input compactCommandInput) error {
 	mode := compactMode(input.Apply)
@@ -347,6 +390,6 @@ func runCompactRouted(cmd *cobra.Command, out io.Writer, input compactCommandInp
 		cliCompactLog.Logger().Info("cli.compact.completed_via_daemon", "session", input.Name, "mode", mode.Label())
 		return nil
 	}
-	cliCompactLog.Logger().Error("cli.compact.daemon_path_failed", "session", input.Name, slog.Any("err", daemonErr))
-	return daemonErr
+	cliCompactLog.Logger().Error("cli.compact.daemon_path_failed", "session", input.Name, "err", daemonErr)
+	return fmt.Errorf("run compact via daemon: %w", daemonErr)
 }

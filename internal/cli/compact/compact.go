@@ -8,18 +8,19 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-// DefaultReservedBuffer matches Claude Code's autocompact buffer.
+// DefaultReservedBuffer is the compact planner's default reserved
+// context buffer.
 const DefaultReservedBuffer = 13_000
 
 // DefaultModel is the model name used for display and the optional
 // debug counter. Override with --model. The planner itself routes
-// through the /context Prober and does not depend on this value.
+// through the configured counter and does not depend on this value.
 const DefaultModel = "claude-sonnet-4-5"
 
 // NewCmd returns the cobra command for clyde compact.
 func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "compact <session> [target]",
+		Use:   "compact <session> <target>",
 		Short: "Compact a session via append-only boundary + synthetic summary",
 		Long: `Append a compact_boundary and a deterministically-synthesized user
 message to the session JSONL. The synthetic user message embeds the
@@ -28,21 +29,17 @@ synopses), so the model on the next turn sees the prior context in
 its highest-fidelity surviving form. Original lines stay on disk.
 
 Examples:
-  clyde compact my-session                     # metrics dashboard, no mutation
-  clyde compact my-session --tools             # demote tools all the way to drop
-  clyde compact my-session --tools --thinking  # multiple flags
-  clyde compact my-session --type=tools,thinking
-  clyde compact my-session --all               # most aggressive of every category
   clyde compact my-session 200k                # implies --all, run target loop
   clyde compact my-session 200k --tools        # tools demoted, target loop
   clyde compact my-session 120,000 --images --chat
-  clyde compact my-session --chat 200k         # --chat requires a target
-  clyde compact my-session --apply             # actually mutate (default is preview)
+  clyde compact my-session --chat 200k
+  clyde compact my-session 200k --apply        # actually mutate (default is preview)
   clyde compact my-session --undo              # truncate JSONL to last pre-apply offset
   clyde compact my-session --list-backups      # show ledger
   clyde compact my-session --calibrate=N       # write static_overhead for this session
 
-Target accepts 200k, 200K, 200000, 200,000, 1.2m. Position-independent:
+Target is required for compaction preview and apply, must be greater than zero,
+and accepts 200k, 200K, 200000, 200,000, 1.2m. Position-independent:
   clyde compact my-session --chat 200k
   clyde compact my-session 200k --chat
 both work.`,
@@ -77,12 +74,12 @@ both work.`,
 	cmd.Flags().Bool("chat", false, "Drop oldest chat turns (preserves last assistant + preceding user)")
 	cmd.Flags().Bool("all", false, "Shortcut for --tools --thinking --images --chat at most aggressive")
 	cmd.Flags().String("type", "", "CSV synonym for the boolean flags: tools|thinking|images|chat|all")
-	cmd.Flags().Int("calibrate", 0, "Write static_overhead=N (from a real /context run) for this session and exit")
-	cmd.Flags().Bool("auto-calibrate", false, "Probe the live session via `claude -p /context` over SDK stream-json, compute static_overhead, save calibration, and exit")
+	cmd.Flags().Int("calibrate", 0, "Write static_overhead=N from a measured live context total for this session and exit")
+	cmd.Flags().Bool("auto-calibrate", false, "Probe the live session with the configured context usage prober, compute static_overhead, save calibration, and exit")
 	cmd.Flags().Bool("apply", false, "Actually append the boundary + synthetic user message (default is preview)")
 	cmd.Flags().Bool("undo", false, "Roll back the most recent apply for this session")
 	cmd.Flags().Bool("list-backups", false, "Print the per-session backup ledger and exit")
-	cmd.Flags().Int("reserved", DefaultReservedBuffer, "Reserved buffer included in /context total (default matches autocompact)")
+	cmd.Flags().Int("reserved", DefaultReservedBuffer, "Reserved buffer included in context total")
 	cmd.Flags().String("model", DefaultModel, "Model name used for display and the optional debug counter")
 	cmd.Flags().Bool("force", false, "Bypass the open-session concurrency guard during --apply")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")

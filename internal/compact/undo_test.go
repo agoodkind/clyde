@@ -64,10 +64,10 @@ func TestUndoRestoresFromSnapshotAfterMidFileMutation(t *testing.T) {
 		SessionID:     sessionID,
 		Cwd:           tmp,
 		Version:       "test",
-		Target:        0,
+		Target:        50_000,
 		BoundaryTail:  []OutputBlock{{Text: "post-apply tail"}},
 		PreCompactTok: 1000,
-		Options:       newSynthOptions(),
+		Options:       testApplyOptions("undo restore summary"),
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -149,10 +149,10 @@ func TestUndoRemovesSnapshotFileAfterSuccessfulRestore(t *testing.T) {
 		SessionID:     sessionID,
 		Cwd:           tmp,
 		Version:       "test",
-		Target:        0,
+		Target:        50_000,
 		BoundaryTail:  []OutputBlock{{Text: "tail"}},
 		PreCompactTok: 1000,
-		Options:       newSynthOptions(),
+		Options:       testApplyOptions("undo cleanup summary"),
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -200,10 +200,10 @@ func TestUndoRefusesWhenSnapshotMissing(t *testing.T) {
 		SessionID:     sessionID,
 		Cwd:           tmp,
 		Version:       "test",
-		Target:        0,
+		Target:        50_000,
 		BoundaryTail:  []OutputBlock{{Text: "tail"}},
 		PreCompactTok: 1000,
-		Options:       newSynthOptions(),
+		Options:       testApplyOptions("undo missing summary"),
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -245,10 +245,10 @@ func TestUndoRefusesOnHashMismatch(t *testing.T) {
 		SessionID:     sessionID,
 		Cwd:           tmp,
 		Version:       "test",
-		Target:        0,
+		Target:        50_000,
 		BoundaryTail:  []OutputBlock{{Text: "tail"}},
 		PreCompactTok: 1000,
-		Options:       newSynthOptions(),
+		Options:       testApplyOptions("undo hash summary"),
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

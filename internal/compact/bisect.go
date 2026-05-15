@@ -6,8 +6,8 @@ import (
 )
 
 // Axis describes one dimension along which the planner searches for
-// the smallest amount of removal that brings the projected context
-// total at or below Target. The search space is integers in [0, N].
+// the largest amount of removal that keeps the projected context total
+// greater than or equal to Target. The search space is integers in [0, N].
 // Probe owns its own state: it applies candidate k, measures the
 // resulting context total, restores the prior state, and returns the
 // measurement. The bisect never touches caller state directly.
@@ -28,7 +28,7 @@ type Axis struct {
 	Probe func(ctx context.Context, k int) (ctxTotal int, err error)
 
 	// Target is the threshold the bisect is searching against. The
-	// returned k is the smallest where Probe <= Target.
+	// returned k is the largest candidate where Probe >= Target.
 	Target int
 
 	// Label produces a human-readable description for probe rows.

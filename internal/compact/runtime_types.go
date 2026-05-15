@@ -6,8 +6,8 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-// RuntimeUsageCategory mirrors a single /context category row for the
-// metrics dashboard. The runtime layer owns this provider-neutral
+// RuntimeUsageCategory mirrors a single context-usage category row for
+// the metrics dashboard. The runtime layer owns this provider-neutral
 // shape so the daemon can transport per-row data on the upfront
 // snapshot without the dashboard re-running the probe.
 type RuntimeUsageCategory struct {
@@ -20,15 +20,20 @@ type RuntimeUsageCategory struct {
 	Color string
 }
 
+// DefaultCountModel is the fallback context-count model for compact runtime runs.
 const DefaultCountModel = "claude-sonnet-4-5"
 
+// RuntimeMode selects whether a runtime compact run previews or applies changes.
 type RuntimeMode int
 
 const (
+	// RuntimeModePreview runs compaction planning without mutating the transcript.
 	RuntimeModePreview RuntimeMode = iota
+	// RuntimeModeApply runs compaction planning and applies the transcript mutation.
 	RuntimeModeApply
 )
 
+// RuntimeRequest is the full input bundle for daemon-backed compaction.
 type RuntimeRequest struct {
 	Session       *session.Session
 	Store         session.Store
@@ -53,6 +58,7 @@ type RuntimeRequest struct {
 	PreparedSlice          *Slice
 }
 
+// RuntimeUpfront contains transcript and context metadata gathered before planning.
 type RuntimeUpfront struct {
 	SessionName         string
 	SessionID           string
@@ -76,10 +82,10 @@ type RuntimeUpfront struct {
 	Calibrated          bool
 	CalibrationOverhead int
 
-	// Metrics-dashboard supplemental fields. Populated by
-	// BuildRuntimeUpfront so the daemon can serve the metrics-only
-	// dashboard without the CLI re-reading the transcript or
-	// re-probing /context.
+	// Upfront supplemental fields. Populated by BuildRuntimeUpfront so
+	// clients can display transcript, boundary, and context details
+	// without re-reading the transcript or re-running the context usage
+	// probe.
 	TranscriptPath  string
 	FileSizeBytes   int64
 	FileLineCount   int
@@ -95,11 +101,13 @@ type RuntimeUpfront struct {
 	UsageCategories []RuntimeUsageCategory
 }
 
+// RuntimeIteration reports one planner iteration to runtime stream consumers.
 type RuntimeIteration struct {
 	Iteration IterationRecord
 	Accepted  bool
 }
 
+// RuntimeResult is the complete output from a runtime compact run.
 type RuntimeResult struct {
 	Upfront        RuntimeUpfront
 	ModelForCount  string

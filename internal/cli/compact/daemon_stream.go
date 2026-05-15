@@ -92,10 +92,21 @@ func runCompactViaDaemon(ctx context.Context, out io.Writer, in compactDaemonRun
 	}
 
 	planRes := &compactengine.PlanResult{
+		Options: compactengine.SynthOptions{
+			DropThinking:         false,
+			ImagesAsPlaceholder:  false,
+			ToolDefault:          compactengine.ToolDetailFull,
+			ToolDetailOverride:   nil,
+			DroppedChatEntries:   nil,
+			DroppedSummaryChunks: nil,
+			TruncTokens:          0,
+			Summary:              "",
+		},
 		BaselineTail: int(state.final.GetBaselineTail()),
 		FinalTail:    int(state.final.GetFinalTail()),
-		HitTarget:    state.final.GetHitTarget(),
 		Iterations:   state.iterations,
+		HitTarget:    state.final.GetHitTarget(),
+		BoundaryTail: nil,
 	}
 
 	if in.JSONMode {
@@ -152,6 +163,8 @@ func openCompactDaemonStream(
 
 func consumeCompactEvent(out io.Writer, in compactDaemonRunInput, state *compactDaemonStreamState, ev *clydev1.CompactEvent) {
 	switch ev.GetKind() {
+	case clydev1.CompactEvent_KIND_UNSPECIFIED, clydev1.CompactEvent_KIND_STATUS:
+		return
 	case clydev1.CompactEvent_KIND_UPFRONT:
 		handleUpfrontEvent(out, in, state, ev.GetUpfront())
 	case clydev1.CompactEvent_KIND_ITERATION:
@@ -259,10 +272,6 @@ func renderCompactDaemonResult(
 		state.progress.Complete(planRes, int(final.GetStaticFloor()), int(final.GetReservedTokens()), in.Mode == ModeApply, final.GetTranscriptPath())
 	} else if in.Target > 0 && in.ShowPasses {
 		RenderIterationLog(out, state.iterations)
-	}
-
-	if in.Target == 0 {
-		RenderNoTarget(out, in.Mode, in.SessionName, in.Strippers, planRes, int(final.GetBoundaryTailBlocks()), state.postBoundaryEntries)
 	}
 
 	if in.Mode == ModePreview {

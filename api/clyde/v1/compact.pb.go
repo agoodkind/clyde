@@ -297,10 +297,9 @@ type CompactUpfront struct {
 	PostBoundaryEntries   int32                  `protobuf:"varint,19,opt,name=post_boundary_entries,json=postBoundaryEntries,proto3" json:"post_boundary_entries,omitempty"`
 	Calibrated            bool                   `protobuf:"varint,20,opt,name=calibrated,proto3" json:"calibrated,omitempty"`
 	CalibrationOverhead   int32                  `protobuf:"varint,21,opt,name=calibration_overhead,json=calibrationOverhead,proto3" json:"calibration_overhead,omitempty"`
-	// Metrics-dashboard supplemental fields. These are populated for the
-	// metrics-only path so the CLI can render the dashboard without
-	// re-reading the transcript or re-probing /context. Fields are
-	// empty/zero on non-metrics invocations.
+	// Upfront supplemental fields. These are populated so clients can
+	// display transcript, boundary, and context details without re-reading
+	// the transcript or re-running the context usage probe.
 	TranscriptPath  string                  `protobuf:"bytes,22,opt,name=transcript_path,json=transcriptPath,proto3" json:"transcript_path,omitempty"`
 	FileSizeBytes   int64                   `protobuf:"varint,23,opt,name=file_size_bytes,json=fileSizeBytes,proto3" json:"file_size_bytes,omitempty"`
 	FileLineCount   int32                   `protobuf:"varint,24,opt,name=file_line_count,json=fileLineCount,proto3" json:"file_line_count,omitempty"`

@@ -50,10 +50,9 @@ message CompactUpfront {
   int32 post_boundary_entries = 19;
   bool calibrated = 20;
   int32 calibration_overhead = 21;
-  // Metrics-dashboard supplemental fields. These are populated for the
-  // metrics-only path so the CLI can render the dashboard without
-  // re-reading the transcript or re-probing /context. Fields are
-  // empty/zero on non-metrics invocations.
+  // Upfront supplemental fields. These are populated so clients can
+  // display transcript, boundary, and context details without re-reading
+  // the transcript or re-running the context usage probe.
   string transcript_path = 22;
   int64 file_size_bytes = 23;
   int32 file_line_count = 24;

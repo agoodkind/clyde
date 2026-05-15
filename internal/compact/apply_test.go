@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,5 +71,48 @@ func TestApplyNoOpDoesNotWriteCompactBoundary(t *testing.T) {
 	}
 	if bytes.Contains(current, []byte(`"subtype":"compact_boundary"`)) {
 		t.Fatalf("zero-net-drop Apply wrote compact_boundary marker")
+	}
+}
+
+func TestApplyRejectsZeroTarget(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	path := writeTranscript(t, []string{
+		userText("u1", "", "line one", t0),
+	})
+
+	pristine, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read pristine transcript: %v", err)
+	}
+	slice, err := LoadSlice(path)
+	if err != nil {
+		t.Fatalf("LoadSlice: %v", err)
+	}
+
+	_, err = Apply(ApplyInput{
+		Slice:         slice,
+		SessionID:     "session-zero-target",
+		Cwd:           tmp,
+		Version:       "test",
+		Target:        0,
+		BoundaryTail:  []OutputBlock{{Text: "tail"}},
+		PreCompactTok: 1000,
+		Options:       testApplyOptions("zero target summary"),
+	})
+	if err == nil {
+		t.Fatalf("Apply returned nil error for zero target")
+	}
+	if !strings.Contains(err.Error(), "target must be greater than zero") {
+		t.Fatalf("Apply error = %v, want target validation", err)
+	}
+
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read transcript after failed Apply: %v", err)
+	}
+	if !bytes.Equal(current, pristine) {
+		t.Fatalf("zero-target Apply mutated transcript")
 	}
 }

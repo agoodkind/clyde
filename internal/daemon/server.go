@@ -1,7 +1,3 @@
-// Package daemon implements the clyde daemon gRPC server.
-// It manages per-session settings.json files so that /model changes
-// in one Claude session don't leak to others. The daemon is lazily
-// started on first use and exits after an idle timeout.
 package daemon
 
 import (
@@ -256,6 +252,7 @@ func daemonMetadataKeys(md metadata.MD) []string {
 	return keys
 }
 
+// SetReloadFunc sets the daemon reload implementation used by ReloadDaemon.
 func (s *Server) SetReloadFunc(fn func(context.Context) (reloadReport, error)) {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
@@ -437,21 +434,31 @@ func (s *Server) runDiscoveryScanner() {
 	const interval = 5 * time.Minute
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGUSR1)
-	scanCtx := context.Background()
+	var pendingWake discoveryScanSignal
+	hasPendingWake := false
 
 	for {
-		s.runDiscoveryOnce(scanCtx)
-		s.runAutoRenamePass(scanCtx)
-		scanCtx = context.Background()
+		s.runDiscoveryScannerPass(pendingWake, hasPendingWake)
+		hasPendingWake = false
 		select {
 		case <-time.After(interval):
 		case <-sig:
 			s.log.LogAttrs(context.Background(), slog.LevelDebug, "discovery scan wake from SIGUSR1")
 		case wake := <-s.scanWake:
-			scanCtx = daemonDiscoveryScanContext(wake, s.log)
-			s.log.LogAttrs(scanCtx, slog.LevelDebug, "discovery scan wake from TriggerScan RPC")
+			pendingWake = wake
+			hasPendingWake = true
 		}
 	}
+}
+
+func (s *Server) runDiscoveryScannerPass(wake discoveryScanSignal, hasWake bool) {
+	scanCtx := context.Background()
+	if hasWake {
+		scanCtx = daemonDiscoveryScanContext(wake, s.log)
+		s.log.LogAttrs(scanCtx, slog.LevelDebug, "discovery scan wake from TriggerScan RPC")
+	}
+	s.runDiscoveryOnce(scanCtx)
+	s.runAutoRenamePass(scanCtx)
 }
 
 func daemonDiscoveryScanContext(wake discoveryScanSignal, log *slog.Logger) context.Context {
@@ -582,7 +589,8 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 				return nil
 			}
 			if err := stream.Send(ev); err != nil {
-				return err
+				s.log.WarnContext(streamCtx, "daemon.subscribe_registry.send_failed", "err", err)
+				return fmt.Errorf("send registry event: %w", err)
 			}
 		case <-streamCtx.Done():
 			return nil
@@ -590,6 +598,7 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 	}
 }
 
+// GetProviderStats returns current provider statistics from the daemon cache.
 func (s *Server) GetProviderStats(ctx context.Context, _ *clydev1.GetProviderStatsRequest) (*clydev1.GetProviderStatsResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
@@ -599,13 +608,14 @@ func (s *Server) GetProviderStats(ctx context.Context, _ *clydev1.GetProviderSta
 	}
 	s.log.DebugContext(ctx, "provider_stats.snapshot_served",
 		"component", "daemon",
-		"providers", len(resp.Providers),
+		"providers", len(resp.GetProviders()),
 		"peer_addr", daemonPeerAddr(peerInfo),
 		"metadata_keys", daemonMetadataKeys(incomingMD),
 	)
 	return resp, nil
 }
 
+// SubscribeProviderStats streams provider statistics updates.
 func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest, stream clydev1.ClydeService_SubscribeProviderStatsServer) error {
 	ch := s.providerStats.subscribe()
 	defer s.providerStats.unsubscribe(ch)
@@ -618,7 +628,8 @@ func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest
 				return nil
 			}
 			if err := stream.Send(ev); err != nil {
-				return err
+				s.log.WarnContext(ctx, "daemon.provider_stats.send_failed", "err", err)
+				return fmt.Errorf("send provider stats event: %w", err)
 			}
 		case <-ctx.Done():
 			return nil
@@ -631,10 +642,10 @@ func (s *Server) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest
 // while the rename is in flight. A SESSION_RENAMED event broadcasts
 // the change to every subscriber.
 func (s *Server) RenameSession(ctx context.Context, req *clydev1.RenameSessionRequest) (*clydev1.RenameSessionResponse, error) {
-	if req.OldName == "" || req.NewName == "" {
+	if req.GetOldName() == "" || req.GetNewName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "old_name and new_name are required")
 	}
-	if err := s.renameSessionInternal(ctx, req.OldName, req.NewName, renameAttribution{
+	if err := s.renameSessionInternal(ctx, req.GetOldName(), req.GetNewName(), renameAttribution{
 		state:      session.AutoNameStateUserLocked,
 		source:     session.AutoNameSourceUser,
 		sourceHash: "",
@@ -749,24 +760,24 @@ func (s *Server) writeProviderSessionName(ctx context.Context, sess *session.Ses
 }
 
 // DeleteSession is the daemon-side delete. It removes registry metadata,
-// Claude transcripts, agent logs, and per-session output style artifacts,
+// provider transcripts, agent logs, and per-session output style artifacts,
 // then broadcasts SESSION_DELETED so dashboards prune the row immediately.
 func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRequest) (*clydev1.DeleteSessionResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
-	if req.Name == "" {
+	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
 	}
-	sess, err := store.Resolve(req.Name)
+	sess, err := store.Resolve(req.GetName())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "resolve session: %v", err)
 	}
 	if sess == nil {
-		return nil, status.Errorf(codes.NotFound, "session %q not found", req.Name)
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetName())
 	}
 	if _, err := sessionartifacts.Delete(ctx, session.DeleteArtifactsRequest{
 		Session:   sess,
@@ -791,16 +802,16 @@ func (s *Server) DeleteSession(ctx context.Context, req *clydev1.DeleteSessionRe
 				"err", err)
 		}
 	}
-	if err := store.Delete(req.Name); err != nil {
+	if err := store.Delete(req.GetName()); err != nil {
 		return nil, status.Errorf(codes.Internal, "delete failed: %v", err)
 	}
-	s.deleteContextState(req.Name)
+	s.deleteContextState(req.GetName())
 	s.publishEvent(&clydev1.SubscribeRegistryResponse{
 		Kind:        clydev1.SubscribeRegistryResponse_KIND_SESSION_DELETED,
-		SessionName: req.Name,
+		SessionName: req.GetName(),
 	})
 	s.log.LogAttrs(ctx, slog.LevelInfo, "session deleted via RPC",
-		slog.String("name", req.Name),
+		slog.String("name", req.GetName()),
 		slog.String("peer_addr", daemonPeerAddr(peerInfo)),
 		slog.Any("metadata_keys", daemonMetadataKeys(incomingMD)),
 	)
@@ -902,14 +913,14 @@ func (s *Server) Close() {
 // AcquireSession writes a per-session settings.json (global settings with
 // model overridden) and returns the path along with the real claude binary.
 func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSessionRequest) (*clydev1.AcquireSessionResponse, error) {
-	if req.WrapperId == "" || req.WrapperId == "__probe__" {
+	if req.GetWrapperId() == "" || req.GetWrapperId() == "__probe__" {
 		return nil, status.Error(codes.InvalidArgument, "wrapper_id is required")
 	}
 
 	// Check if this session already has a settings file on disk (re-acquire
 	// after daemon restart). Preserve its current model/effort rather than
 	// resetting to global defaults.
-	existingModel, existingEffort := s.readSessionSettings(req.WrapperId)
+	existingModel, existingEffort := s.readSessionSettings(req.GetWrapperId())
 
 	sessionName := strings.TrimSpace(req.GetSessionName())
 	sessionID := strings.TrimSpace(req.GetSessionId())
@@ -919,7 +930,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 		model = existingModel
 		effortLevel = existingEffort
 		s.log.LogAttrs(ctx, slog.LevelInfo, "re-acquired session with preserved settings",
-			slog.String("wrapper_id", req.WrapperId),
+			slog.String("wrapper_id", req.GetWrapperId()),
 			slog.String("model", model),
 			slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(model)),
 			slog.String("effort", effortLevel),
@@ -935,13 +946,13 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 		effortLevel = resolvedEffort
 	}
 
-	settingsFile, err := s.writeSettingsJSON(ctx, req.WrapperId, model, effortLevel)
+	settingsFile, err := s.writeSettingsJSON(ctx, req.GetWrapperId(), model, effortLevel)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to write settings: %v", err)
 	}
 
 	sess := &wrapperSession{
-		wrapperID:   req.WrapperId,
+		wrapperID:   req.GetWrapperId(),
 		sessionName: sessionName,
 		sessionID:   sessionID,
 		model:       model,
@@ -949,7 +960,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 	}
 
 	s.mu.Lock()
-	s.sessions[req.WrapperId] = sess
+	s.sessions[req.GetWrapperId()] = sess
 	s.mu.Unlock()
 
 	realClaude, err := findRealClaude()
@@ -958,7 +969,7 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 	}
 
 	s.log.LogAttrs(ctx, slog.LevelInfo, "session acquired",
-		slog.String("wrapper_id", req.WrapperId),
+		slog.String("wrapper_id", req.GetWrapperId()),
 		slog.String("session", sessionName),
 		slog.String("session_id", sessionID),
 		slog.String("model", model),
@@ -979,9 +990,9 @@ func (s *Server) AcquireSession(ctx context.Context, req *clydev1.AcquireSession
 // When the last session is released, the idle timer starts.
 func (s *Server) ReleaseSession(ctx context.Context, req *clydev1.ReleaseSessionRequest) (*clydev1.ReleaseSessionResponse, error) {
 	s.mu.Lock()
-	sess, ok := s.sessions[req.WrapperId]
+	sess, ok := s.sessions[req.GetWrapperId()]
 	if ok {
-		delete(s.sessions, req.WrapperId)
+		delete(s.sessions, req.GetWrapperId())
 	}
 	remaining := len(s.sessions)
 	s.mu.Unlock()
@@ -989,14 +1000,14 @@ func (s *Server) ReleaseSession(ctx context.Context, req *clydev1.ReleaseSession
 	if ok {
 		_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
 		s.log.LogAttrs(ctx, slog.LevelInfo, "session released",
-			slog.String("wrapper_id", req.WrapperId),
+			slog.String("wrapper_id", req.GetWrapperId()),
 			slog.String("session", sess.sessionName),
 			slog.String("model", sess.model),
 			slog.Int("active_sessions", remaining),
 		)
 	} else {
 		s.log.LogAttrs(ctx, slog.LevelWarn, "release for unknown session",
-			slog.String("wrapper_id", req.WrapperId),
+			slog.String("wrapper_id", req.GetWrapperId()),
 		)
 	}
 
@@ -1016,7 +1027,7 @@ func (s *Server) HookEvent(ctx context.Context, req *clydev1.HookEventRequest) (
 	_, _ = peer.FromContext(ctx)
 
 	var payload hookEventPayload
-	if err := json.Unmarshal(req.RawJson, &payload); err != nil {
+	if err := json.Unmarshal(req.GetRawJson(), &payload); err != nil {
 		s.log.WarnContext(ctx, "daemon.hook_event.decode_failed",
 			"component", "daemon",
 			"err", err,
@@ -1135,7 +1146,7 @@ func (s *Server) writeSettingsJSON(ctx context.Context, wrapperID, model, effort
 // syncAllSessions rewrites settings.json for all active sessions when the
 // global settings file changes. Each session's current model is preserved
 // so that /model changes in one session don't leak to others.
-func (s *Server) syncAllSessions() {
+func (s *Server) syncAllSessions(ctx context.Context) {
 	s.mu.RLock()
 	sessions := make([]*wrapperSession, 0, len(s.sessions))
 	for _, sess := range s.sessions {
@@ -1151,23 +1162,30 @@ func (s *Server) syncAllSessions() {
 		if currentEffort != "" {
 			sess.effortLevel = currentEffort
 		}
-		s.log.LogAttrs(context.Background(), slog.LevelDebug, "syncing session",
+		s.log.LogAttrs(ctx, slog.LevelDebug, "syncing session",
 			slog.String("wrapper_id", sess.wrapperID),
 			slog.String("session", sess.sessionName),
 			slog.String("preserved_model", sess.model),
 			slog.String("preserved_effort", sess.effortLevel),
 		)
-		if _, err := s.writeSettingsJSON(context.Background(), sess.wrapperID, sess.model, sess.effortLevel); err != nil {
-			s.log.LogAttrs(context.Background(), slog.LevelWarn, "failed to sync settings",
+		if _, err := s.writeSettingsJSON(ctx, sess.wrapperID, sess.model, sess.effortLevel); err != nil {
+			s.log.LogAttrs(ctx, slog.LevelWarn, "failed to sync settings",
 				slog.String("wrapper_id", sess.wrapperID),
 				slog.Any("err", err),
 			)
 		}
 	}
 
-	s.log.LogAttrs(context.Background(), slog.LevelInfo, "global settings synced to all sessions",
+	s.log.LogAttrs(ctx, slog.LevelInfo, "global settings synced to all sessions",
 		slog.Int("active_sessions", len(sessions)),
 	)
+}
+
+// sessionSettingsFile is the on-disk settings.json shape read by
+// readSessionSettings for global-settings sync.
+type sessionSettingsFile struct {
+	Model       string `json:"model"`
+	EffortLevel string `json:"effortLevel"`
 }
 
 // readSessionSettings reads model and effortLevel from a session's current settings.json.
@@ -1178,13 +1196,12 @@ func (s *Server) readSessionSettings(wrapperID string) (model, effortLevel strin
 	if err != nil {
 		return "", ""
 	}
-	var settings map[string]any
+	var settings sessionSettingsFile
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return "", ""
 	}
-	model, _ = settings["model"].(string)
-	model = adaptercursor.NormalizeSessionSettingsModel(model)
-	effortLevel, _ = settings["effortLevel"].(string)
+	model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
+	effortLevel = settings.EffortLevel
 	return model, effortLevel
 }
 
@@ -1224,7 +1241,7 @@ func (s *Server) reloadGlobalSettings(ctx context.Context) error {
 	if err := s.loadGlobalSettings(ctx); err != nil {
 		return err
 	}
-	s.syncAllSessions()
+	s.syncAllSessions(ctx)
 	s.log.LogAttrs(ctx, slog.LevelInfo, "daemon global settings reloaded",
 		slog.Int("active_sessions", s.activeSessionCount()),
 	)
@@ -1265,7 +1282,7 @@ func (s *Server) ReloadDaemon(ctx context.Context, req *clydev1.ReloadDaemonRequ
 		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
 	return &clydev1.ReloadDaemonResponse{
-		ActiveSessions: int32(active),
+		ActiveSessions: compactInt32(active),
 		BinaryReloaded: report.BinaryReloaded,
 		NewPid:         int64(report.NewPID),
 	}, nil
@@ -1429,7 +1446,8 @@ func resolveStoredSession(store *session.FileStore, sessionName, sessionID strin
 	if sessionID != "" {
 		sess, err := store.Resolve(sessionID)
 		if err != nil {
-			return nil, err
+			slog.Warn("daemon.resolve_stored_session.id_failed", "session_id", sessionID, "err", err)
+			return nil, fmt.Errorf("resolve session id %q: %w", sessionID, err)
 		}
 		if sess != nil {
 			return sess, nil
@@ -1439,7 +1457,12 @@ func resolveStoredSession(store *session.FileStore, sessionName, sessionID strin
 	if sessionName == "" {
 		return nil, nil
 	}
-	return store.Resolve(sessionName)
+	sess, err := store.Resolve(sessionName)
+	if err != nil {
+		slog.Warn("daemon.resolve_stored_session.name_failed", "session", sessionName, "err", err)
+		return nil, fmt.Errorf("resolve session name %q: %w", sessionName, err)
+	}
+	return sess, nil
 }
 
 func resolvedSessionName(store *session.FileStore, sessionName, sessionID string) string {
@@ -1506,6 +1529,7 @@ func (s *Server) sessionIsActive(sessionName string) bool {
 	return false
 }
 
+// ListSessions returns all sessions known to the daemon registry.
 func (s *Server) ListSessions(ctx context.Context, _ *clydev1.ListSessionsRequest) (*clydev1.ListSessionsResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
@@ -1536,6 +1560,7 @@ func (s *Server) ListSessions(ctx context.Context, _ *clydev1.ListSessionsReques
 	return &clydev1.ListSessionsResponse{Sessions: out, GlobalRemoteControl: globalRC}, nil
 }
 
+// GetSessionDetail returns detailed metadata and transcript-derived state for one session.
 func (s *Server) GetSessionDetail(ctx context.Context, req *clydev1.GetSessionDetailRequest) (*clydev1.GetSessionDetailResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
@@ -1566,6 +1591,7 @@ func (s *Server) GetSessionDetail(ctx context.Context, req *clydev1.GetSessionDe
 	return detail, nil
 }
 
+// GetSessionExportStats returns transcript export statistics for one session.
 func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSessionExportStatsRequest) (*clydev1.GetSessionExportStatsResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
@@ -1590,14 +1616,14 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	stats := inspectExportStatsForSession(sess)
 	resp := &clydev1.GetSessionExportStatsResponse{
 		SessionName:           sess.Name,
-		VisibleTokensEstimate: int32(stats.VisibleTokensEstimate),
-		VisibleMessages:       int32(stats.VisibleMessages),
-		UserMessages:          int32(stats.UserMessages),
-		AssistantMessages:     int32(stats.AssistantMessages),
-		ToolResultMessages:    int32(stats.ToolResultMessages),
-		ToolCalls:             int32(stats.ToolCalls),
-		SystemPrompts:         int32(stats.SystemPrompts),
-		Compactions:           int32(stats.Compactions),
+		VisibleTokensEstimate: compactInt32(stats.VisibleTokensEstimate),
+		VisibleMessages:       compactInt32(stats.VisibleMessages),
+		UserMessages:          compactInt32(stats.UserMessages),
+		AssistantMessages:     compactInt32(stats.AssistantMessages),
+		ToolResultMessages:    compactInt32(stats.ToolResultMessages),
+		ToolCalls:             compactInt32(stats.ToolCalls),
+		SystemPrompts:         compactInt32(stats.SystemPrompts),
+		Compactions:           compactInt32(stats.Compactions),
 		TranscriptSizeBytes:   stats.TranscriptSizeBytes,
 	}
 	s.log.DebugContext(ctx, "daemon.session_export_stats.completed",
@@ -1612,6 +1638,7 @@ func (s *Server) GetSessionExportStats(ctx context.Context, req *clydev1.GetSess
 	return resp, nil
 }
 
+// ExportSession returns a serialized transcript export for one session.
 func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRequest) (*clydev1.ExportSessionResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
@@ -1653,12 +1680,12 @@ func (s *Server) ExportSession(ctx context.Context, req *clydev1.ExportSessionRe
 func (s *Server) contextStateForSession(ctx context.Context, sess *session.Session) sessionContextState {
 	_ = ctx
 	if sess == nil || !sess.SessionProviderCapabilities().ContextUsageInspect || sess.Name == "" || sess.Metadata.ProviderSessionID() == "" || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
-		return sessionContextState{}
+		return emptySessionContextState()
 	}
 
 	state, ok := s.contextUsageStateCache().Get(sess)
 	if !ok {
-		return sessionContextState{}
+		return emptySessionContextState()
 	}
 	return state
 }
@@ -1691,16 +1718,16 @@ const detailLazyProbeMaxDuration = 90 * time.Second
 //   - probe_started/probe_completed log markers for regression detection
 func (s *Server) lazyContextStateForDetail(ctx context.Context, sess *session.Session) sessionContextState {
 	if sess == nil || !sess.SessionProviderCapabilities().ContextUsageInspect {
-		return sessionContextState{}
+		return emptySessionContextState()
 	}
 	if sess.Name == "" || sess.Metadata.ProviderSessionID() == "" || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
-		return sessionContextState{}
+		return emptySessionContextState()
 	}
 	if cached, ok := s.contextUsageStateCache().Get(sess); ok {
 		return cached
 	}
 
-	probeCtx, probeCancel := context.WithTimeout(context.Background(), detailLazyProbeMaxDuration)
+	probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), detailLazyProbeMaxDuration)
 	resultCh := make(chan sessionContextState, 1)
 	go func() {
 		defer func() {
@@ -1728,7 +1755,7 @@ func (s *Server) lazyContextStateForDetail(ctx context.Context, sess *session.Se
 	case state := <-resultCh:
 		return state
 	case <-waitCtx.Done():
-		placeholder := sessionContextState{}
+		placeholder := emptySessionContextState()
 		placeholder.Status = "probing"
 		return placeholder
 	}
@@ -1834,6 +1861,16 @@ func (s *Server) deleteContextState(name string) {
 	}
 }
 
+func emptyInspectStats() inspectStats {
+	return inspectStats{
+		VisibleMessages:       0,
+		VisibleTokensEstimate: 0,
+		LastMessageTokens:     0,
+		CompactionCount:       0,
+		LastPreCompactTokens:  0,
+	}
+}
+
 func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, sess *session.Session) *clydev1.SessionSummary {
 	caps := sess.SessionProviderCapabilities()
 	settings, _ := sessionsettings.Load(store, sess)
@@ -1846,7 +1883,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	if model == "-" && settings != nil && settings.Model != "" {
 		model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
 	}
-	stats := inspectStats{}
+	stats := emptyInspectStats()
 	if caps.TranscriptExport {
 		stats = inspectStatsForSession(sess)
 	}
@@ -1864,8 +1901,9 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	if caps.RemoteControl && sess.Metadata.ProviderSessionID() != "" {
 		s.bridgeMu.RLock()
 		if b := s.bridges[sess.Metadata.ProviderSessionID()]; b != nil {
-			cp := proto.Clone(b).(*clydev1.Bridge)
-			bridge = cp
+			if cp, ok := proto.Clone(b).(*clydev1.Bridge); ok {
+				bridge = cp
+			}
 		}
 		s.bridgeMu.RUnlock()
 	}
@@ -1892,18 +1930,18 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 		Context:               sess.Metadata.Context,
 		HasCustomOutputStyle:  sess.Metadata.HasCustomOutputStyle,
 		WorkspaceRoot:         sess.Metadata.WorkspaceRoot,
-		ContextMessageCount:   int32(sess.Metadata.ContextMessageCount),
+		ContextMessageCount:   compactInt32(sess.Metadata.ContextMessageCount),
 		DisplayTitle:          sess.Metadata.Title,
 		Model:                 model,
 		RemoteControl:         settings != nil && settings.RemoteControl,
-		MessageCount:          int32(stats.VisibleMessages),
+		MessageCount:          compactInt32(stats.VisibleMessages),
 		TranscriptSizeBytes:   size,
 		LastActivityNanos:     lastActivity.UnixNano(),
 		Bridge:                bridge,
-		ContextTotalTokens:    int32(contextState.Usage.TotalTokens),
-		ContextMaxTokens:      int32(contextState.Usage.MaxTokens),
-		ContextPercentage:     int32(contextState.Usage.Percentage),
-		ContextMessagesTokens: int32(contextState.Usage.CategoryTokens("Messages")),
+		ContextTotalTokens:    compactInt32(contextState.Usage.TotalTokens),
+		ContextMaxTokens:      compactInt32(contextState.Usage.MaxTokens),
+		ContextPercentage:     compactInt32(contextState.Usage.Percentage),
+		ContextMessagesTokens: compactInt32(contextState.Usage.CategoryTokens("Messages")),
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
 		Provider:              string(sess.ProviderID()),
@@ -1929,7 +1967,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 			model = adaptercursor.NormalizeSessionSettingsModel(settings.Model)
 		}
 	}
-	stats := inspectStats{}
+	stats := emptyInspectStats()
 	if caps.TranscriptExport {
 		stats = inspectStatsForSession(sess)
 	}
@@ -1937,17 +1975,17 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 	resp := &clydev1.GetSessionDetailResponse{
 		SessionName:           sess.Name,
 		Model:                 model,
-		TotalMessages:         int32(stats.VisibleMessages),
-		VisibleTokensEstimate: int32(stats.VisibleTokensEstimate),
-		LastMessageTokens:     int32(stats.LastMessageTokens),
-		CompactionCount:       int32(stats.CompactionCount),
-		LastPreCompactTokens:  int32(stats.LastPreCompactTokens),
+		TotalMessages:         compactInt32(stats.VisibleMessages),
+		VisibleTokensEstimate: compactInt32(stats.VisibleTokensEstimate),
+		LastMessageTokens:     compactInt32(stats.LastMessageTokens),
+		CompactionCount:       compactInt32(stats.CompactionCount),
+		LastPreCompactTokens:  compactInt32(stats.LastPreCompactTokens),
 		Provider:              string(sess.ProviderID()),
 		Runtime:               protoRuntimeBoundary(s.providerRuntimeBoundary(sess, settings, nil)),
-		ContextTotalTokens:    int32(contextState.Usage.TotalTokens),
-		ContextMaxTokens:      int32(contextState.Usage.MaxTokens),
-		ContextPercentage:     int32(contextState.Usage.Percentage),
-		ContextMessagesTokens: int32(contextState.Usage.CategoryTokens("Messages")),
+		ContextTotalTokens:    compactInt32(contextState.Usage.TotalTokens),
+		ContextMaxTokens:      compactInt32(contextState.Usage.MaxTokens),
+		ContextPercentage:     compactInt32(contextState.Usage.Percentage),
+		ContextMessagesTokens: compactInt32(contextState.Usage.CategoryTokens("Messages")),
 		ContextUsageLoaded:    contextState.Loaded,
 		ContextUsageStatus:    contextState.Status,
 		ResumeInstructions:    session.ResumeInstructions(sess),
@@ -1970,7 +2008,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 			resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
 		}
 		for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
-			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: int32(t.Count)})
+			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: compactInt32(t.Count)})
 		}
 	}
 	if sess.ProviderID() == session.ProviderCodex {
@@ -1994,7 +2032,7 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 		)
 		return
 	}
-	if history.ModelProvider != "" && resp.Model == "-" {
+	if history.ModelProvider != "" && resp.GetModel() == "-" {
 		resp.Model = history.ModelProvider
 	}
 	turns := history.ConversationTurns(itranscript.ShapeOptions{
@@ -2003,7 +2041,7 @@ func (s *Server) applyCodexSessionDetail(sess *session.Session, resp *clydev1.Ge
 		MaxTextRunes:     0,
 		ToolOnly:         itranscript.ToolOnlyOmit,
 	})
-	resp.TotalMessages = int32(len(turns))
+	resp.TotalMessages = compactInt32(len(turns))
 	resp.AllMessages = nil
 	resp.RecentMessages = nil
 	for _, msg := range turns {
@@ -2112,25 +2150,25 @@ func (s *Server) settingsLockFor(name string) *sync.Mutex {
 // go through here so writes serialise per session and broadcast to
 // every subscriber on completion.
 func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateSessionSettingsRequest) (*clydev1.UpdateSessionSettingsResponse, error) {
-	if req.Name == "" {
+	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "store init: %v", err)
 	}
-	sess, err := store.Get(req.Name)
+	sess, err := store.Get(req.GetName())
 	if err != nil || sess == nil {
-		return nil, status.Errorf(codes.NotFound, "session %q not found", req.Name)
+		return nil, status.Errorf(codes.NotFound, "session %q not found", req.GetName())
 	}
 	caps := sess.SessionProviderCapabilities()
 	if !caps.PerSessionSettings {
 		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support per-session settings", sess.ProviderID())
 	}
-	if req.Settings != nil && maskApplies(req.UpdateMask, "remote_control") && !caps.RemoteControl {
+	if req.GetSettings() != nil && maskApplies(req.GetUpdateMask(), "remote_control") && !caps.RemoteControl {
 		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support remote control", sess.ProviderID())
 	}
-	lock := s.settingsLockFor(req.Name)
+	lock := s.settingsLockFor(req.GetName())
 	lock.Lock()
 	defer lock.Unlock()
 
@@ -2139,10 +2177,10 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 		current = defaultSessionSettings(false)
 	}
 	applyMask := func(field string) bool {
-		if len(req.UpdateMask) == 0 {
+		if len(req.GetUpdateMask()) == 0 {
 			return true
 		}
-		return slices.Contains(req.UpdateMask, field)
+		return slices.Contains(req.GetUpdateMask(), field)
 	}
 	settings := req.GetSettings()
 	if settings != nil && applyMask("model") {
@@ -2165,7 +2203,7 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 	}
 	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_UPDATED, store, sess, "")
 	s.log.LogAttrs(ctx, slog.LevelInfo, "session settings updated via RPC",
-		slog.String("session", req.Name),
+		slog.String("session", req.GetName()),
 		slog.Bool("remote_control", current.RemoteControl),
 		slog.String("model", current.Model),
 		slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(current.Model)),
@@ -2190,13 +2228,13 @@ func (s *Server) UpdateGlobalSettings(ctx context.Context, req *clydev1.UpdateGl
 		return nil, status.Errorf(codes.Internal, "load global: %v", err)
 	}
 	applyMask := func(field string) bool {
-		if len(req.UpdateMask) == 0 {
+		if len(req.GetUpdateMask()) == 0 {
 			return true
 		}
-		return slices.Contains(req.UpdateMask, field)
+		return slices.Contains(req.GetUpdateMask(), field)
 	}
-	if req.Defaults != nil && applyMask("remote_control") {
-		cfg.Defaults.RemoteControl = req.Defaults.RemoteControl
+	if req.GetDefaults() != nil && applyMask("remote_control") {
+		cfg.Defaults.RemoteControl = req.GetDefaults().GetRemoteControl()
 	}
 	if err := config.SaveGlobal(cfg); err != nil {
 		return nil, status.Errorf(codes.Internal, "save global: %v", err)
@@ -2208,6 +2246,7 @@ func (s *Server) UpdateGlobalSettings(ctx context.Context, req *clydev1.UpdateGl
 	return &clydev1.UpdateGlobalSettingsResponse{}, nil
 }
 
+// ListConfigControls returns daemon-editable configuration controls.
 func (s *Server) ListConfigControls(ctx context.Context, _ *clydev1.ListConfigControlsRequest) (*clydev1.ListConfigControlsResponse, error) {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
@@ -2225,6 +2264,7 @@ func (s *Server) ListConfigControls(ctx context.Context, _ *clydev1.ListConfigCo
 	return &clydev1.ListConfigControlsResponse{Controls: out}, nil
 }
 
+// UpdateConfigControl mutates one daemon-editable configuration control.
 func (s *Server) UpdateConfigControl(ctx context.Context, req *clydev1.UpdateConfigControlRequest) (*clydev1.UpdateConfigControlResponse, error) {
 	key := strings.TrimSpace(req.GetKey())
 	if key == "" {
@@ -2458,32 +2498,36 @@ func (s *Server) snapshotBridges() []*clydev1.Bridge {
 	defer s.bridgeMu.RUnlock()
 	out := make([]*clydev1.Bridge, 0, len(s.bridges))
 	for _, b := range s.bridges {
-		out = append(out, proto.Clone(b).(*clydev1.Bridge))
+		cloned, ok := proto.Clone(b).(*clydev1.Bridge)
+		if !ok {
+			continue
+		}
+		out = append(out, cloned)
 	}
 	return out
 }
 
 // setBridge records a bridge entry and broadcasts BRIDGE_OPENED.
 func (s *Server) setBridge(b *clydev1.Bridge) {
-	if b == nil || b.SessionId == "" {
+	if b == nil || b.GetSessionId() == "" {
 		return
 	}
 	s.bridgeMu.Lock()
-	prev, exists := s.bridges[b.SessionId]
-	s.bridges[b.SessionId] = b
+	prev, exists := s.bridges[b.GetSessionId()]
+	s.bridges[b.GetSessionId()] = b
 	s.bridgeMu.Unlock()
-	if exists && prev != nil && prev.BridgeSessionId == b.BridgeSessionId {
+	if exists && prev != nil && prev.GetBridgeSessionId() == b.GetBridgeSessionId() {
 		return
 	}
 	s.publishEvent(&clydev1.SubscribeRegistryResponse{
 		Kind:            clydev1.SubscribeRegistryResponse_KIND_BRIDGE_OPENED,
-		SessionId:       b.SessionId,
-		BridgeSessionId: b.BridgeSessionId,
-		BridgeUrl:       b.Url,
+		SessionId:       b.GetSessionId(),
+		BridgeSessionId: b.GetBridgeSessionId(),
+		BridgeUrl:       b.GetUrl(),
 	})
 	s.log.LogAttrs(context.Background(), slog.LevelInfo, "bridge opened",
-		slog.String("session_id", b.SessionId),
-		slog.String("bridge", b.BridgeSessionId),
+		slog.String("session_id", b.GetSessionId()),
+		slog.String("bridge", b.GetBridgeSessionId()),
 	)
 }
 
@@ -2502,12 +2546,12 @@ func (s *Server) removeBridge(sessionID string) {
 	s.publishEvent(&clydev1.SubscribeRegistryResponse{
 		Kind:            clydev1.SubscribeRegistryResponse_KIND_BRIDGE_CLOSED,
 		SessionId:       sessionID,
-		BridgeSessionId: prev.BridgeSessionId,
-		BridgeUrl:       prev.Url,
+		BridgeSessionId: prev.GetBridgeSessionId(),
+		BridgeUrl:       prev.GetUrl(),
 	})
 	s.log.LogAttrs(context.Background(), slog.LevelInfo, "bridge closed",
 		slog.String("session_id", sessionID),
-		slog.String("bridge", prev.BridgeSessionId),
+		slog.String("bridge", prev.GetBridgeSessionId()),
 	)
 }
 
@@ -2518,22 +2562,33 @@ type resolvedSessionRuntime struct {
 	HistoryArtifact string
 }
 
+func emptyResolvedSessionRuntime() resolvedSessionRuntime {
+	return resolvedSessionRuntime{
+		Session:         nil,
+		Provider:        session.ProviderUnknown,
+		SessionID:       "",
+		HistoryArtifact: "",
+	}
+}
+
 func resolveSessionRuntime(sessionName, provider, sessionID string) (resolvedSessionRuntime, error) {
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		return resolvedSessionRuntime{}, err
+		slog.Warn("daemon.resolve_session_runtime.store_failed", "err", err)
+		return emptyResolvedSessionRuntime(), fmt.Errorf("new global session store: %w", err)
 	}
 	providerID := session.ProviderID(strings.TrimSpace(provider))
 	sess, err := resolveStoredSession(store, sessionName, sessionID)
 	if err != nil {
-		return resolvedSessionRuntime{}, err
+		slog.Warn("daemon.resolve_session_runtime.resolve_failed", "session", sessionName, "session_id", sessionID, "err", err)
+		return emptyResolvedSessionRuntime(), fmt.Errorf("resolve stored session: %w", err)
 	}
 	if sess == nil {
-		return resolvedSessionRuntime{}, nil
+		return emptyResolvedSessionRuntime(), nil
 	}
 	runtime := sess.ProviderRuntimeBoundary()
 	if providerID != session.ProviderUnknown && session.NormalizeProviderID(providerID) != runtime.Live.Provider {
-		return resolvedSessionRuntime{}, nil
+		return emptyResolvedSessionRuntime(), nil
 	}
 	return resolvedSessionRuntime{
 		Session:         sess,
@@ -2548,10 +2603,10 @@ func resolveSessionRuntime(sessionName, provider, sessionID string) (resolvedSes
 // fsnotify watcher per provider history artifact. Legacy callers may still
 // pass session_id only; generic callers can pass session_name and provider.
 func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clydev1.ClydeService_TailTranscriptServer) error {
-	if req.SessionId == "" && req.SessionName == "" {
+	if req.GetSessionId() == "" && req.GetSessionName() == "" {
 		return status.Error(codes.InvalidArgument, "session_id or session_name is required")
 	}
-	target, err := resolveSessionRuntime(req.SessionName, req.Provider, req.SessionId)
+	target, err := resolveSessionRuntime(req.GetSessionName(), req.GetProvider(), req.GetSessionId())
 	if err != nil {
 		return status.Errorf(codes.Internal, "resolve session runtime: %v", err)
 	}
@@ -2559,7 +2614,7 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support live tailing", target.Session.ProviderID())
 	}
 	if target.Session == nil {
-		return status.Errorf(codes.NotFound, "no session runtime for %q", req.SessionId)
+		return status.Errorf(codes.NotFound, "no session runtime for %q", req.GetSessionId())
 	}
 	if !target.Session.SessionProviderCapabilities().TranscriptTail {
 		return status.Errorf(codes.FailedPrecondition, "session provider %q does not support transcript tailing", target.Session.ProviderID())
@@ -2568,7 +2623,7 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 	if path == "" {
 		return status.Errorf(codes.NotFound, "no history artifact for session %q", target.SessionID)
 	}
-	startOffset := req.StartAtOffset
+	startOffset := req.GetStartAtOffset()
 	if startOffset == 0 {
 		// Default to streaming future lines only. Callers that want
 		// the full file pass start_at_offset = 1 (effectively any
@@ -2594,7 +2649,8 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 				line.SessionName = target.Session.Name
 			}
 			if err := stream.Send(line); err != nil {
-				return err
+				s.log.WarnContext(ctx, "daemon.tail_transcript.send_failed", "err", err)
+				return fmt.Errorf("send transcript line: %w", err)
 			}
 		case <-ctx.Done():
 			return nil
@@ -2607,11 +2663,11 @@ func (s *Server) TailTranscript(req *clydev1.TailTranscriptRequest, stream clyde
 // inject socket the wrapper opened on launch. Returns
 // delivered=false when no socket exists, so callers can fall back to
 // telling the user to use the local terminal directly.
-func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequest) (*clydev1.SendToSessionResponse, error) {
-	if req.SessionId == "" && req.SessionName == "" {
+func (s *Server) SendToSession(ctx context.Context, req *clydev1.SendToSessionRequest) (*clydev1.SendToSessionResponse, error) {
+	if req.GetSessionId() == "" && req.GetSessionName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_id or session_name is required")
 	}
-	target, err := resolveSessionRuntime(req.SessionName, req.Provider, req.SessionId)
+	target, err := resolveSessionRuntime(req.GetSessionName(), req.GetProvider(), req.GetSessionId())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "resolve session runtime: %v", err)
 	}
@@ -2619,7 +2675,7 @@ func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequ
 		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support live input", target.Session.ProviderID())
 	}
 	if target.Session == nil {
-		return nil, status.Errorf(codes.NotFound, "no session runtime for %q", req.SessionId)
+		return nil, status.Errorf(codes.NotFound, "no session runtime for %q", req.GetSessionId())
 	}
 	if !target.Session.SessionProviderCapabilities().RemoteControl {
 		return nil, status.Errorf(codes.FailedPrecondition, "session provider %q does not support remote control", target.Session.ProviderID())
@@ -2628,26 +2684,27 @@ func (s *Server) SendToSession(_ context.Context, req *clydev1.SendToSessionRequ
 	if _, err := os.Stat(socketPath); err != nil {
 		return &clydev1.SendToSessionResponse{Delivered: false}, nil
 	}
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return &clydev1.SendToSessionResponse{Delivered: false}, nil
 	}
 	defer func() { _ = conn.Close() }()
-	payload := req.Text
+	payload := req.GetText()
 	if !strings.HasSuffix(payload, "\n") {
 		payload += "\n"
 	}
 	n, werr := conn.Write([]byte(payload))
 	if werr != nil {
-		return &clydev1.SendToSessionResponse{Delivered: false, BytesWritten: int32(n)}, nil
+		return &clydev1.SendToSessionResponse{Delivered: false, BytesWritten: compactInt32(n)}, nil
 	}
-	return &clydev1.SendToSessionResponse{Delivered: true, BytesWritten: int32(n)}, nil
+	return &clydev1.SendToSessionResponse{Delivered: true, BytesWritten: compactInt32(n)}, nil
 }
 
 func nextRemoteSessionName(store *session.FileStore) (string, error) {
 	list, err := store.List()
 	if err != nil {
-		return "", err
+		slog.Warn("daemon.next_remote_session_name.list_failed", "err", err)
+		return "", fmt.Errorf("list sessions: %w", err)
 	}
 	taken := make(map[string]bool, len(list))
 	for _, sess := range list {
@@ -2670,7 +2727,7 @@ func (s *Server) startRemoteWorkerProcess(ctx context.Context, sessionName, sess
 
 	self, err := remoteWorkerExecutable()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve remote worker executable: %w", err)
 	}
 	tmux := detectRemoteWorkerTmuxState()
 	if tmux.Detected {
@@ -2696,16 +2753,16 @@ func (s *Server) startRemoteWorkerProcess(ctx context.Context, sessionName, sess
 	}
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0o666)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open dev null: %w", err)
 	}
-	cmd := exec.Command(self, args...)
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), self, args...)
 	cmd.Dir = basedir
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
 	if err := cmd.Start(); err != nil {
 		_ = devNull.Close()
-		return nil, err
+		return nil, fmt.Errorf("start remote worker: %w", err)
 	}
 	_ = devNull.Close()
 	s.log.InfoContext(ctx, "daemon.remote_session.worker_launched",
@@ -2723,7 +2780,7 @@ func (s *Server) startRemoteWorkerProcess(ctx context.Context, sessionName, sess
 
 func detectRemoteWorkerTmuxState() remoteWorkerTmuxState {
 	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
-		return remoteWorkerTmuxState{Status: "not_detected"}
+		return remoteWorkerTmuxState{Detected: false, Status: "not_detected", Reason: ""}
 	}
 	return remoteWorkerTmuxState{
 		Detected: true,
@@ -2735,9 +2792,6 @@ func detectRemoteWorkerTmuxState() remoteWorkerTmuxState {
 func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 	if worker == nil || worker.cmd == nil {
 		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	err := worker.cmd.Wait()
 	if worker.done != nil {
@@ -2775,6 +2829,7 @@ func (s *Server) waitRemoteWorker(ctx context.Context, worker *remoteWorker) {
 	}
 }
 
+// ProbeContextUsage refreshes and returns live context usage for one session.
 func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContextUsageRequest) (*clydev1.ProbeContextUsageResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
@@ -2815,15 +2870,15 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 		SessionName: sess.Name,
 		SessionId:   sess.Metadata.ProviderSessionID(),
 		Model:       usage.Model,
-		TotalTokens: int32(usage.TotalTokens),
-		MaxTokens:   int32(usage.MaxTokens),
-		Percentage:  int32(usage.Percentage),
+		TotalTokens: compactInt32(usage.TotalTokens),
+		MaxTokens:   compactInt32(usage.MaxTokens),
+		Percentage:  compactInt32(usage.Percentage),
 		Categories:  make([]*clydev1.ContextUsageCategory, 0, len(usage.Categories)),
 	}
 	for _, cat := range usage.Categories {
 		resp.Categories = append(resp.Categories, &clydev1.ContextUsageCategory{
 			Name:       cat.Name,
-			Tokens:     int32(cat.Tokens),
+			Tokens:     compactInt32(cat.Tokens),
 			IsDeferred: cat.IsDeferred,
 		})
 	}
@@ -2839,7 +2894,7 @@ func (s *Server) ProbeContextUsage(ctx context.Context, req *clydev1.ProbeContex
 	return resp, nil
 }
 
-// CalibrateSession probes the session's live /context view through
+// CalibrateSession probes the session's live context-usage view through
 // the registered provider Prober, derives static_overhead from the
 // resulting Snapshot, persists the calibration via
 // compactengine.SaveCalibration, and returns the stored record.
@@ -2909,8 +2964,8 @@ func (s *Server) CalibrateSession(ctx context.Context, req *clydev1.CalibrateSes
 		SessionName:     sess.Name,
 		SessionId:       sess.Metadata.ProviderSessionID(),
 		Calibration:     calibrationRecordToProto(cal),
-		TotalTokens:     int32(snapshot.TotalTokens),
-		CategoriesCount: int32(len(snapshot.Categories)),
+		TotalTokens:     compactInt32(snapshot.TotalTokens),
+		CategoriesCount: compactInt32(len(snapshot.Categories)),
 	}, nil
 }
 
@@ -2978,6 +3033,7 @@ func calibrationRecordToProto(cal compactengine.Calibration) *clydev1.Calibratio
 	}
 }
 
+// CompactPreview streams compact preview planning events for one session.
 func (s *Server) CompactPreview(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactPreviewServer,
@@ -2992,6 +3048,7 @@ func (s *Server) CompactPreview(
 	return s.runCompact(ctx, req, stream, compactengine.RuntimeModePreview)
 }
 
+// CompactApply streams compact planning and apply events for one session.
 func (s *Server) CompactApply(
 	req *clydev1.CompactRunRequest,
 	stream clydev1.ClydeService_CompactApplyServer,
@@ -3029,13 +3086,21 @@ func (s *Server) runCompact(
 	}
 
 	upfront, staticOverhead, slice, upfrontErr := compactengine.BuildRuntimeUpfront(ctx, compactengine.RuntimeRequest{
-		Session:      run.session,
-		Store:        run.store,
-		TargetTokens: int(req.GetTargetTokens()),
-		Reserved:     int(req.GetReservedTokens()),
-		Model:        run.modelForCount,
-		Strippers:    run.strippers,
-		Refresh:      req.GetRefresh(),
+		Session:                run.session,
+		Store:                  run.store,
+		TargetTokens:           int(req.GetTargetTokens()),
+		Reserved:               int(req.GetReservedTokens()),
+		Model:                  run.modelForCount,
+		ModelExplicit:          false,
+		Strippers:              run.strippers,
+		Summarize:              false,
+		SummarizeMode:          "",
+		Force:                  false,
+		Mode:                   compactengine.RuntimeModePreview,
+		Refresh:                req.GetRefresh(),
+		PreparedUpfront:        nil,
+		PreparedStaticOverhead: 0,
+		PreparedSlice:          nil,
 	}, run.modelForRender)
 	if upfrontErr != nil {
 		return status.Errorf(codes.Internal, "build compact upfront: %v", upfrontErr)
@@ -3112,29 +3177,42 @@ type compactRunSetup struct {
 	modelForRender string
 }
 
+func emptyCompactRunSetup() compactRunSetup {
+	return compactRunSetup{
+		store:          nil,
+		session:        nil,
+		strippers:      compactengine.Strippers{Thinking: false, Images: false, Tools: false, Chat: false},
+		modelForCount:  "",
+		modelForRender: "",
+	}
+}
+
 func (s *Server) prepareCompactRun(
 	req *clydev1.CompactRunRequest,
 	mode compactengine.RuntimeMode,
 ) (compactRunSetup, error) {
 	if req.GetSessionName() == "" {
-		return compactRunSetup{}, status.Error(codes.InvalidArgument, "session_name is required")
+		return emptyCompactRunSetup(), status.Error(codes.InvalidArgument, "session_name is required")
+	}
+	if req.GetTargetTokens() <= 0 {
+		return emptyCompactRunSetup(), status.Error(codes.InvalidArgument, "target_tokens must be greater than zero")
 	}
 	store, err := session.NewGlobalFileStore()
 	if err != nil {
-		return compactRunSetup{}, status.Errorf(codes.Internal, "store init: %v", err)
+		return emptyCompactRunSetup(), status.Errorf(codes.Internal, "store init: %v", err)
 	}
 	sess, err := store.Resolve(req.GetSessionName())
 	if err != nil {
-		return compactRunSetup{}, status.Errorf(codes.Internal, "resolve session: %v", err)
+		return emptyCompactRunSetup(), status.Errorf(codes.Internal, "resolve session: %v", err)
 	}
 	if sess == nil {
-		return compactRunSetup{}, status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
+		return emptyCompactRunSetup(), status.Errorf(codes.NotFound, "session %q not found", req.GetSessionName())
 	}
 	if !sess.SessionProviderCapabilities().Compaction {
-		return compactRunSetup{}, status.Errorf(codes.FailedPrecondition, "session provider %q does not support compaction", sess.ProviderID())
+		return emptyCompactRunSetup(), status.Errorf(codes.FailedPrecondition, "session provider %q does not support compaction", sess.ProviderID())
 	}
 	if mode == compactengine.RuntimeModeApply && !req.GetForce() && s.sessionIsActive(sess.Name) {
-		return compactRunSetup{}, status.Errorf(codes.FailedPrecondition, "session %q is currently open; exit it first or pass --force", sess.Name)
+		return emptyCompactRunSetup(), status.Errorf(codes.FailedPrecondition, "session %q is currently open; exit it first or pass --force", sess.Name)
 	}
 	modelForCount := req.GetModel()
 	modelForRender := req.GetModel()
@@ -3151,13 +3229,18 @@ func (s *Server) prepareCompactRun(
 }
 
 func compactRunStrippers(req *clydev1.CompactRunRequest) compactengine.Strippers {
-	strippers := compactengine.Strippers{}
-	if req.Strippers != nil {
+	strippers := compactengine.Strippers{
+		Thinking: false,
+		Images:   false,
+		Tools:    false,
+		Chat:     false,
+	}
+	if req.GetStrippers() != nil {
 		strippers = compactengine.Strippers{
-			Thinking: req.Strippers.Thinking,
-			Images:   req.Strippers.Images,
-			Tools:    req.Strippers.Tools,
-			Chat:     req.Strippers.Chat,
+			Thinking: req.GetStrippers().GetThinking(),
+			Images:   req.GetStrippers().GetImages(),
+			Tools:    req.GetStrippers().GetTools(),
+			Chat:     req.GetStrippers().GetChat(),
 		}
 	}
 	if !strippers.Any() && req.GetTargetTokens() > 0 {
@@ -3342,6 +3425,7 @@ func compactInt32(value int) int32 {
 	return int32(value)
 }
 
+// CompactUndo restores the most recent compact snapshot for one session.
 func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoRequest) (*clydev1.CompactUndoResponse, error) {
 	peerInfo, _ := peer.FromContext(ctx)
 	incomingMD, _ := metadata.FromIncomingContext(ctx)
@@ -3392,7 +3476,7 @@ func (s *Server) CompactUndo(ctx context.Context, req *clydev1.CompactUndoReques
 		TranscriptPath: path,
 		LedgerPath:     ledgerPath,
 		AppliedAt:      entry.Timestamp.UTC().Format(time.RFC3339),
-		TargetTokens:   int32(entry.Target),
+		TargetTokens:   compactInt32(entry.Target),
 		BoundaryUuid:   entry.BoundaryUUID,
 		SyntheticUuid:  entry.SyntheticUUID,
 		SnapshotPath:   entry.SnapshotPath,

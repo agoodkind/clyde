@@ -26,6 +26,12 @@ func writeTranscript(t *testing.T, lines []string) string {
 	return path
 }
 
+func testApplyOptions(summary string) SynthOptions {
+	opts := newSynthOptions()
+	opts.Summary = summary
+	return opts
+}
+
 // userText builds a JSONL line for a user entry whose message.content
 // is a plain string. Sufficient for the boundary-discovery and
 // chat-stripper cases.
@@ -306,10 +312,10 @@ func TestApplyAllowsRecentlyModifiedTranscript(t *testing.T) {
 		SessionID:     "session-fresh",
 		Cwd:           tmp,
 		Version:       "test",
-		Target:        0,
+		Target:        50_000,
 		BoundaryTail:  []OutputBlock{{Text: "surviving context"}},
 		PreCompactTok: 1000,
-		Options:       newSynthOptions(),
+		Options:       testApplyOptions("fresh transcript summary"),
 	})
 	if err != nil {
 		t.Fatalf("Apply on fresh transcript: %v", err)
@@ -356,10 +362,10 @@ func TestLoadSlice_PairIndex(t *testing.T) {
 }
 
 // TestApplyStrippersFully_TableDriven exercises each stripper alone
-// and the --all combination by running the no-target plan path,
-// which routes through applyStrippersFully + Synthesize. The
-// assertions look at the produced []OutputBlock to confirm the
-// stripper's intent showed up in the synthesized array.
+// and the --all combination by applying the direct stripper helper and
+// then synthesizing the output blocks. The assertions look at the
+// produced []OutputBlock to confirm the stripper's intent showed up in
+// the synthesized array.
 func TestApplyStrippersFully_TableDriven(t *testing.T) {
 	t0 := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	imageData := "ZmFrZWltYWdl" // base64 "fakeimage"
@@ -425,7 +431,7 @@ func TestApplyStrippersFully_TableDriven(t *testing.T) {
 		{
 			name:            "no strippers, full fidelity",
 			strippers:       Strippers{},
-			wantThinking:    true, // no-target path leaves DropThinking=false, so thinking renders
+			wantThinking:    true,
 			wantImageBlock:  true,
 			wantPlaceholder: false,
 			wantToolBody:    true,
@@ -488,12 +494,11 @@ func TestApplyStrippersFully_TableDriven(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := RunPlan(context.Background(), PlanInput{
-				Slice:     slice,
-				Strippers: tc.strippers,
-			})
-			if err != nil {
-				t.Fatalf("RunPlan: %v", err)
+			opts := newSynthOptions()
+			applyStrippersFully(slice, tc.strippers, &opts)
+			res := &PlanResult{
+				Options:      opts,
+				BoundaryTail: Synthesize(slice, opts),
 			}
 			text := joinedText(res.BoundaryTail)
 			gotImage := hasImageBlock(res.BoundaryTail)
@@ -522,6 +527,21 @@ func TestApplyStrippersFully_TableDriven(t *testing.T) {
 				t.Errorf("first user turn present = %v, want %v", gotFirstUser, tc.wantFirstUser)
 			}
 		})
+	}
+}
+
+func TestRunPlanRejectsOmittedTarget(t *testing.T) {
+	slice := &Slice{PostBoundary: []Entry{{Type: "user", TextOnly: "hello", RehydratedFrom: -1}}}
+
+	_, err := RunPlan(context.Background(), PlanInput{
+		Slice:     slice,
+		Strippers: Strippers{Thinking: true},
+	})
+	if err == nil {
+		t.Fatalf("RunPlan returned nil error for omitted target")
+	}
+	if !strings.Contains(err.Error(), "target must be greater than zero") {
+		t.Fatalf("RunPlan error = %v, want target validation", err)
 	}
 }
 

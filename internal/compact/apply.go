@@ -61,7 +61,10 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	if in.SessionID == "" {
 		return nil, fmt.Errorf("apply: empty session id")
 	}
-	if in.Target > 0 && in.FinalProjection > 0 {
+	if in.Target <= 0 {
+		return nil, fmt.Errorf("apply: target must be greater than zero")
+	}
+	if in.FinalProjection > 0 {
 		slog.Info("compact.apply.projection",
 			"component", "compact",
 			"subcomponent", "apply",
@@ -79,7 +82,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 	preOffset := stat.Size()
 
-	if in.Target > 0 && !hasNetApplyChange(in.Slice, in.Options) {
+	if !hasNetApplyChange(in.Slice, in.Options) {
 		slog.Info("compact.apply.noop",
 			"component", "compact",
 			"subcomponent", "apply",
@@ -355,8 +358,8 @@ type boundaryEntryArgs struct {
 	PreCompactTok int
 }
 
-// compactMetadata is the inner payload Claude Code's writer attaches
-// to every compact_boundary entry. clyde always emits trigger="manual"
+// compactMetadata is the inner payload attached to every
+// compact_boundary entry. clyde always emits trigger="manual"
 // and surfaces the pre-compact token count for downstream tooling.
 type compactMetadata struct {
 	Trigger              string `json:"trigger"`
@@ -364,17 +367,16 @@ type compactMetadata struct {
 }
 
 // syntheticMessage is the inner `message` object on the synthetic
-// user entry. Content holds the typed Anthropic content array
-// produced by synth.go.
+// user entry. Content holds the typed content array produced by
+// synth.go.
 type syntheticMessage struct {
 	Role    string        `json:"role"`
 	Content []OutputBlock `json:"content"`
 }
 
 // buildBoundaryEntry emits a system compact_boundary line. Field order
-// places "compact_boundary" within the first 256 bytes so Claude
-// Code's large-file boundary scanner (BOUNDARY_SEARCH_BOUND=256 in
-// sessionStoragePortable.ts) detects it.
+// places "compact_boundary" within the first 256 bytes so compatible
+// large-file boundary scanners detect it.
 func buildBoundaryEntry(a boundaryEntryArgs) ([]byte, error) {
 	meta := compactMetadata{Trigger: "manual", PreCompactTokenCount: a.PreCompactTok}
 	fields, err := orderedFields(
@@ -429,7 +431,7 @@ func buildSyntheticUserEntry(a syntheticEntryArgs) ([]byte, error) {
 
 // orderedJSON is a minimal "ordered map" for JSON emission so we can
 // control key order on disk. Each field carries a pre-encoded
-// json.RawMessage, so the ordered emitter never sees raw `any`: the
+// [json.RawMessage], so the ordered emitter never sees raw `any`: the
 // type system enforces that callers serialize their values up front
 // via mustField.
 type orderedJSON []orderedJSONField
@@ -454,13 +456,17 @@ type jsonEncodable interface {
 // string. Used for parentUuid on the very first chain entry.
 type optionalString string
 
-// MarshalJSON makes optionalString satisfy json.Marshaler so it goes
+// MarshalJSON makes optionalString satisfy [json.Marshaler] so it goes
 // through the standard library encoder without an `any` detour.
 func (o optionalString) MarshalJSON() ([]byte, error) {
 	if o == "" {
 		return []byte("null"), nil
 	}
-	return json.Marshal(string(o))
+	encoded, err := json.Marshal(string(o))
+	if err != nil {
+		return nil, fmt.Errorf("optional string: marshal JSON: %w", err)
+	}
+	return encoded, nil
 }
 
 // pendingJSONField holds a typed key/value pair before encoding.
@@ -477,9 +483,9 @@ type pendingJSONField struct {
 func field[T jsonEncodable](key string, value T) pendingJSONField {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return pendingJSONField{Key: key, Err: fmt.Errorf("orderedJSON: marshal %q: %w", key, err)}
+		return pendingJSONField{Key: key, RawValue: nil, Err: fmt.Errorf("orderedJSON: marshal %q: %w", key, err)}
 	}
-	return pendingJSONField{Key: key, RawValue: encoded}
+	return pendingJSONField{Key: key, RawValue: encoded, Err: nil}
 }
 
 func orderedFields(fields ...pendingJSONField) ([]orderedJSONField, error) {

@@ -20,6 +20,7 @@ import (
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
 
+// ResolveModelForCounting resolves the model used for compact context counting.
 func ResolveModelForCounting(store session.Store, sess *session.Session, fallback string) (string, string, string) {
 	if strings.TrimSpace(fallback) == "" {
 		fallback = DefaultCountModel
@@ -59,6 +60,7 @@ func ResolveModelForCounting(store session.Store, sess *session.Session, fallbac
 	return fallback, fallback, "fallback"
 }
 
+// BuildRuntimeUpfront gathers transcript and context metadata before runtime planning.
 func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender string) (RuntimeUpfront, int, *Slice, error) {
 	if req.Session == nil {
 		return RuntimeUpfront{}, 0, nil, fmt.Errorf("nil session")
@@ -78,13 +80,60 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		)
 		return RuntimeUpfront{}, 0, nil, err
 	}
+	upfront := newRuntimeUpfront(req, slice, modelForRender)
+	usage, usageErr := probeSessionSnapshot(ctx, req.Session, req.Refresh)
+	if usageErr != nil && req.TargetTokens > 0 {
+		slog.ErrorContext(ctx, "compact.runtime.upfront.probe_required",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"target", req.TargetTokens,
+			"err", usageErr.Error(),
+		)
+		return RuntimeUpfront{}, 0, nil, fmt.Errorf("compact: upfront context usage probe is required for targeted run (target=%d): %w", req.TargetTokens, usageErr)
+	}
+	if usageErr == nil {
+		applyRuntimeUsageSnapshot(&upfront, req, usage)
+	} else {
+		upfront.UsageError = usageErr.Error()
+	}
+	cal, calOK, calErr := LoadCalibration(req.Session.Metadata.ProviderSessionID())
+	if calErr != nil {
+		compactLog.Logger().Error("compact.runtime.upfront.calibration_load_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"err", calErr.Error(),
+		)
+		return RuntimeUpfront{}, 0, nil, calErr
+	}
+	applyRuntimeCalibration(&upfront, cal, calOK)
+	staticOverhead := runtimeStaticOverhead(req, upfront, cal, calOK)
+	upfront.StaticFloor = staticOverhead
+	compactLog.Logger().Info("compact.runtime.upfront_built",
+		"component", "compact",
+		"subcomponent", "runtime",
+		"session", req.Session.Name,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
+		"model", modelForRender,
+		"target", req.TargetTokens,
+		"current_total", upfront.CurrentTotal,
+		"static_floor", upfront.StaticFloor,
+		"reserved", upfront.Reserved,
+	)
+	return upfront, staticOverhead, slice, nil
+}
+
+func newRuntimeUpfront(req RuntimeRequest, slice *Slice, modelForRender string) RuntimeUpfront {
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
 	transcriptPath := req.Session.Metadata.ProviderTranscriptPath()
 	var fileSize int64
 	if stat, statErr := os.Stat(transcriptPath); statErr == nil {
 		fileSize = stat.Size()
 	}
-	upfront := RuntimeUpfront{
+	return RuntimeUpfront{
 		SessionName:         req.Session.Name,
 		SessionID:           req.Session.Metadata.ProviderSessionID(),
 		Model:               modelForRender,
@@ -120,155 +169,154 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		UsageError:          "",
 		UsageCategories:     nil,
 	}
-	usage, usageErr := probeSessionSnapshot(ctx, req.Session, req.Refresh)
-	if usageErr != nil && req.TargetTokens > 0 {
-		slog.ErrorContext(ctx, "compact.runtime.upfront.probe_required",
-			"component", "compact",
-			"subcomponent", "runtime",
-			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.ProviderSessionID(),
-			"target", req.TargetTokens,
-			"err", usageErr.Error(),
-		)
-		return RuntimeUpfront{}, 0, nil, fmt.Errorf("compact: upfront /context probe is required for targeted run (target=%d): %w", req.TargetTokens, usageErr)
-	}
-	if usageErr == nil {
-		upfront.CurrentTotal = usage.TotalTokens
-		upfront.MaxTokens = usage.MaxTokens
-		upfront.Messages = contextCategoryTokens(usage, "Messages")
-		upfront.CompactBuffer = contextCategoryTokens(usage, "Compact buffer")
-		upfront.Free = contextCategoryTokens(usage, "Free space")
-		upfront.ContextOverhead = usage.StaticOverhead()
-		upfront.UsageAvailable = true
-		upfront.UsagePercentage = usage.Percentage
-		upfront.UsageSource = "probe"
-		upfront.UsageCapturedAt = compactClock.Now().UTC()
-		providerID := string(req.Session.ProviderID())
-		categories := make([]RuntimeUsageCategory, 0, len(usage.Categories))
-		for _, cat := range usage.Categories {
-			color, _ := categorystyle.ColorFor(providerID, cat.Name)
-			categories = append(categories, RuntimeUsageCategory{
-				Name:       cat.Name,
-				Tokens:     cat.Tokens,
-				IsDeferred: cat.IsDeferred,
-				Color:      string(color),
-			})
-		}
-		upfront.UsageCategories = categories
-	} else {
-		upfront.UsageError = usageErr.Error()
-	}
-	cal, calOK, calErr := LoadCalibration(req.Session.Metadata.ProviderSessionID())
-	if calErr != nil {
-		compactLog.Logger().Error("compact.runtime.upfront.calibration_load_failed",
-			"component", "compact",
-			"subcomponent", "runtime",
-			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.ProviderSessionID(),
-			"err", calErr.Error(),
-		)
-		return RuntimeUpfront{}, 0, nil, calErr
-	}
-	if calOK {
-		upfront.Calibrated = true
-		upfront.CalibrationOverhead = cal.StaticOverhead
-		upfront.TargetDate = cal.CapturedAt.UTC().Format("2006-01-02")
-	}
-	staticOverhead := 0
-	if req.TargetTokens > 0 {
-		if calOK {
-			staticOverhead = cal.StaticOverhead
-		} else if upfront.ContextOverhead > 0 {
-			staticOverhead = upfront.ContextOverhead
-		}
-	}
-	upfront.StaticFloor = staticOverhead
-	compactLog.Logger().Info("compact.runtime.upfront_built",
-		"component", "compact",
-		"subcomponent", "runtime",
-		"session", req.Session.Name,
-		"session_id", req.Session.Metadata.ProviderSessionID(),
-		"model", modelForRender,
-		"target", req.TargetTokens,
-		"current_total", upfront.CurrentTotal,
-		"static_floor", upfront.StaticFloor,
-		"reserved", upfront.Reserved,
-	)
-	return upfront, staticOverhead, slice, nil
 }
 
+func applyRuntimeUsageSnapshot(upfront *RuntimeUpfront, req RuntimeRequest, usage contextusage.Snapshot) {
+	upfront.CurrentTotal = usage.TotalTokens
+	upfront.MaxTokens = usage.MaxTokens
+	upfront.Messages = contextCategoryTokens(usage, "Messages")
+	upfront.CompactBuffer = contextCategoryTokens(usage, "Compact buffer")
+	upfront.Free = contextCategoryTokens(usage, "Free space")
+	upfront.ContextOverhead = usage.StaticOverhead()
+	upfront.UsageAvailable = true
+	upfront.UsagePercentage = usage.Percentage
+	upfront.UsageSource = "probe"
+	upfront.UsageCapturedAt = compactClock.Now().UTC()
+	providerID := string(req.Session.ProviderID())
+	categories := make([]RuntimeUsageCategory, 0, len(usage.Categories))
+	for _, cat := range usage.Categories {
+		color, _ := categorystyle.ColorFor(providerID, cat.Name)
+		categories = append(categories, RuntimeUsageCategory{
+			Name:       cat.Name,
+			Tokens:     cat.Tokens,
+			IsDeferred: cat.IsDeferred,
+			Color:      string(color),
+		})
+	}
+	upfront.UsageCategories = categories
+}
+
+func applyRuntimeCalibration(upfront *RuntimeUpfront, cal Calibration, calOK bool) {
+	if !calOK {
+		return
+	}
+	upfront.Calibrated = true
+	upfront.CalibrationOverhead = cal.StaticOverhead
+	upfront.TargetDate = cal.CapturedAt.UTC().Format("2006-01-02")
+}
+
+func runtimeStaticOverhead(req RuntimeRequest, upfront RuntimeUpfront, cal Calibration, calOK bool) int {
+	if req.TargetTokens <= 0 {
+		return 0
+	}
+	if calOK {
+		return cal.StaticOverhead
+	}
+	if upfront.ContextOverhead > 0 {
+		return upfront.ContextOverhead
+	}
+	return 0
+}
+
+// RunRuntime executes daemon-backed compact planning and optional apply.
 func RunRuntime(
 	ctx context.Context,
 	req RuntimeRequest,
 	onIteration func(RuntimeIteration),
 ) (*RuntimeResult, error) {
+	if err := validateRuntimeRequest(&req); err != nil {
+		return nil, err
+	}
+	modelForCount, modelForRender := runtimeModels(req)
+	upfront, staticOverhead, slice, err := prepareRuntimeInputs(ctx, req, modelForRender)
+	if err != nil {
+		return nil, err
+	}
+	logRuntimeRunStarted(req, modelForCount)
+	planRes, err := buildRuntimePlan(ctx, req, upfront, staticOverhead, slice, modelForCount, onIteration)
+	if err != nil {
+		logRuntimePlanFailed(req, err)
+		return nil, err
+	}
+
+	result := newRuntimeResult(req, upfront, modelForCount, modelForRender, slice, planRes)
+	if req.Mode == RuntimeModeApply {
+		applyRes, applyErr := runRuntimeApply(ctx, req, slice, planRes, modelForCount, staticOverhead)
+		if applyErr != nil {
+			return nil, applyErr
+		}
+		if applyRes != nil {
+			result.Apply = applyRes
+		}
+	}
+	logRuntimeRunCompleted(req, result)
+	return result, nil
+}
+
+func validateRuntimeRequest(req *RuntimeRequest) error {
 	if req.Session == nil {
-		return nil, fmt.Errorf("runtime: nil session")
+		return fmt.Errorf("runtime: nil session")
+	}
+	if req.TargetTokens <= 0 {
+		return fmt.Errorf("runtime: target must be greater than zero")
 	}
 	if req.Reserved <= 0 {
 		req.Reserved = 13_000
 	}
+	return nil
+}
 
+func runtimeModels(req RuntimeRequest) (string, string) {
 	modelForCount := req.Model
 	modelForRender := req.Model
 	if !req.ModelExplicit {
 		modelForCount, modelForRender, _ = ResolveModelForCounting(req.Store, req.Session, req.Model)
 	}
+	return modelForCount, modelForRender
+}
 
-	var upfront RuntimeUpfront
-	var staticOverhead int
-	var slice *Slice
-	var err error
+func prepareRuntimeInputs(ctx context.Context, req RuntimeRequest, modelForRender string) (RuntimeUpfront, int, *Slice, error) {
 	if req.PreparedUpfront != nil && req.PreparedSlice != nil {
-		upfront = *req.PreparedUpfront
-		staticOverhead = req.PreparedStaticOverhead
-		slice = req.PreparedSlice
-	} else {
-		upfront, staticOverhead, slice, err = BuildRuntimeUpfront(ctx, req, modelForRender)
-		if err != nil {
-			return nil, err
-		}
+		return *req.PreparedUpfront, req.PreparedStaticOverhead, req.PreparedSlice, nil
 	}
-	compactLog.Logger().Info("compact.runtime.run_started",
-		"component", "compact",
-		"subcomponent", "runtime",
-		"session", req.Session.Name,
-		"session_id", req.Session.Metadata.ProviderSessionID(),
-		"mode", req.Mode,
-		"model", modelForCount,
-		"target", req.TargetTokens,
-	)
-	var counter contextcount.Counter
-	var transcript contextcount.Transcript
-	if req.TargetTokens > 0 {
-		transcript, err = BuildTranscript(slice, upfront, nil, nil)
-		if err != nil {
-			compactLog.Logger().Error("compact.runtime.transcript_build_failed",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.ProviderSessionID(),
-				"err", err.Error(),
-			)
-			return nil, err
-		}
-		transcript.Model = modelForCount
-		built, counterErr := buildContextCounter(req)
-		if counterErr != nil {
-			compactLog.Logger().Error("compact.runtime.counter_init_failed",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"session", req.Session.Name,
-				"session_id", req.Session.Metadata.ProviderSessionID(),
-				"err", counterErr.Error(),
-			)
-			return nil, counterErr
-		}
-		counter = built
+	return BuildRuntimeUpfront(ctx, req, modelForRender)
+}
+
+func buildRuntimePlan(
+	ctx context.Context,
+	req RuntimeRequest,
+	upfront RuntimeUpfront,
+	staticOverhead int,
+	slice *Slice,
+	modelForCount string,
+	onIteration func(RuntimeIteration),
+) (*PlanResult, error) {
+	transcript, err := BuildTranscript(slice, upfront, nil, nil)
+	if err != nil {
+		compactLog.Logger().Error("compact.runtime.transcript_build_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"err", err.Error(),
+		)
+		return nil, err
+	}
+	transcript.Model = modelForCount
+	counter, err := buildContextCounter(req)
+	if err != nil {
+		compactLog.Logger().Error("compact.runtime.counter_init_failed",
+			"component", "compact",
+			"subcomponent", "runtime",
+			"session", req.Session.Name,
+			"session_id", req.Session.Metadata.ProviderSessionID(),
+			"err", err.Error(),
+		)
+		return nil, err
 	}
 
 	var iterCount int
-	planRes, err := RunPlan(ctx, PlanInput{
+	return RunPlan(ctx, PlanInput{
 		Slice:          slice,
 		Transcript:     transcript,
 		Strippers:      req.Strippers,
@@ -289,35 +337,50 @@ func RunRuntime(
 		StopTimeout:  0,
 		CompactRunID: "",
 	})
-	if err != nil {
-		compactLog.Logger().Error("compact.runtime.plan_failed",
-			"component", "compact",
-			"subcomponent", "runtime",
-			"session", req.Session.Name,
-			"session_id", req.Session.Metadata.ProviderSessionID(),
-			"err", err.Error(),
-		)
-		return nil, err
-	}
+}
 
-	result := &RuntimeResult{
+func newRuntimeResult(
+	req RuntimeRequest,
+	upfront RuntimeUpfront,
+	modelForCount string,
+	modelForRender string,
+	slice *Slice,
+	planRes *PlanResult,
+) *RuntimeResult {
+	return &RuntimeResult{
 		Upfront:        upfront,
 		ModelForCount:  modelForCount,
 		ModelForRender: modelForRender,
 		Slice:          slice,
 		Plan:           planRes,
+		Apply:          nil,
 		TranscriptPath: req.Session.Metadata.ProviderTranscriptPath(),
 	}
+}
 
-	if req.Mode == RuntimeModeApply {
-		applyRes, applyErr := runRuntimeApply(ctx, req, slice, planRes, modelForCount, staticOverhead)
-		if applyErr != nil {
-			return nil, applyErr
-		}
-		if applyRes != nil {
-			result.Apply = applyRes
-		}
-	}
+func logRuntimeRunStarted(req RuntimeRequest, modelForCount string) {
+	compactLog.Logger().Info("compact.runtime.run_started",
+		"component", "compact",
+		"subcomponent", "runtime",
+		"session", req.Session.Name,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
+		"mode", req.Mode,
+		"model", modelForCount,
+		"target", req.TargetTokens,
+	)
+}
+
+func logRuntimePlanFailed(req RuntimeRequest, err error) {
+	compactLog.Logger().Error("compact.runtime.plan_failed",
+		"component", "compact",
+		"subcomponent", "runtime",
+		"session", req.Session.Name,
+		"session_id", req.Session.Metadata.ProviderSessionID(),
+		"err", err.Error(),
+	)
+}
+
+func logRuntimeRunCompleted(req RuntimeRequest, result *RuntimeResult) {
 	compactLog.Logger().Info("compact.runtime.run_completed",
 		"component", "compact",
 		"subcomponent", "runtime",
@@ -328,8 +391,6 @@ func RunRuntime(
 		"baseline_tail", result.Plan.BaselineTail,
 		"final_tail", result.Plan.FinalTail,
 	)
-
-	return result, nil
 }
 
 func runRuntimeApply(
@@ -460,7 +521,7 @@ func buildContextCounter(req RuntimeRequest) (contextcount.Counter, error) {
 	return counter, nil
 }
 
-// finalProjection returns the planner's converged /context total
+// finalProjection returns the planner's converged context total
 // projection. When the planner recorded at least one iteration, the
 // last record's CtxTotal is the authoritative number; otherwise the
 // projection is reconstructed from FinalTail plus the same static
@@ -521,13 +582,21 @@ func extractRawModelAndFamily(transcriptPath string) (string, string) {
 	return lastModel, lastModel
 }
 
+type categoryBlockType string
+
+const (
+	categoryBlockTypeThinking         categoryBlockType = "thinking"
+	categoryBlockTypeRedactedThinking categoryBlockType = "redacted_thinking"
+	categoryBlockTypeImage            categoryBlockType = "image"
+)
+
 func categoryCounts(slice *Slice) (thinking, images, toolPairs, chatTurns int) {
 	for _, e := range slice.PostBoundary {
 		for _, b := range e.Content {
-			switch b.Type {
-			case "thinking", "redacted_thinking":
+			switch categoryBlockType(b.Type) {
+			case categoryBlockTypeThinking, categoryBlockTypeRedactedThinking:
 				thinking++
-			case "image":
+			case categoryBlockTypeImage:
 				images++
 			}
 		}
