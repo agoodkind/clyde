@@ -9,12 +9,9 @@ import (
 	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 )
 
-func readCredentialCandidates(ctx context.Context, dir, keychainService string) []oauthcredentials.ReadResult {
-	return oauthcredentials.ReadCandidates(ctx, oauthcredentials.ReadOptions{
-		CredentialsDir:  dir,
-		KeychainService: keychainService,
-		Now:             oauthClock.Now(),
-	})
+func readCredentialCandidates(ctx context.Context, options oauthcredentials.ReadOptions) []oauthcredentials.ReadResult {
+	options.Now = oauthClock.Now()
+	return oauthcredentials.ReadCandidates(ctx, options)
 }
 
 func selectCredentialCandidate(results []oauthcredentials.ReadResult) (*selectedCredential, error) {
@@ -69,21 +66,25 @@ func selectRefreshableCredential(results []oauthcredentials.ReadResult) (*select
 	}, nil
 }
 
-func writeCredentials(ctx context.Context, dir string, tokens *Tokens) error {
-	if err := oauthcredentials.WriteFile(ctx, dir, tokens); err != nil {
-		return err
+func writeCredentials(ctx context.Context, options oauthcredentials.ReadOptions, source oauthcredentials.Source, tokens *Tokens) error {
+	result := oauthcredentials.Write(ctx, options, source, tokens)
+	if result.Err != nil {
+		return result.Err
 	}
-	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.refreshed_file_written",
+	oauthLog.Logger().InfoContext(ctx, "oauth.credentials.refreshed_store_written",
 		"subcomponent", "oauth",
-		"store_kind", oauthcredentials.SourceFile,
+		"store_kind", source,
 		"expires_at_ms", tokens.ExpiresAt,
+		"fingerprint", oauthcredentials.Fingerprint(tokens),
+		"access_token_present", tokens.AccessToken != "",
+		"refresh_token_present", tokens.RefreshToken != "",
 	)
 	return nil
 }
 
 func snapshotForCredential(selected *selectedCredential) credentialSnapshot {
 	if selected == nil {
-		return credentialSnapshot{}
+		return emptyCredentialSnapshot()
 	}
 	return credentialSnapshot{
 		Source:              selected.Source,
@@ -97,12 +98,13 @@ func snapshotForCredential(selected *selectedCredential) credentialSnapshot {
 func summariesAsStrings(summaries []oauthcredentials.Summary) []string {
 	values := make([]string, 0, len(summaries))
 	for _, summary := range summaries {
-		values = append(values, fmt.Sprintf("%s:present=%t:access=%t:refresh=%t:expired=%t:error=%s",
+		values = append(values, fmt.Sprintf("%s:present=%t:access=%t:refresh=%t:expired=%t:fingerprint=%s:error=%s",
 			summary.Source,
 			summary.Present,
 			summary.AccessTokenPresent,
 			summary.RefreshTokenPresent,
 			summary.Expired,
+			summary.Fingerprint,
 			summary.ParseError,
 		))
 	}
@@ -145,11 +147,4 @@ func splitScopes(raw string, fallback []string) []string {
 		return fallback
 	}
 	return strings.Fields(raw)
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }

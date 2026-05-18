@@ -189,6 +189,6 @@ func (m *Manager) autoRelogin(ctx context.Context, originalErr error) error {
 	// Force a re-read on the next Token() call by dropping cache.
 	// Caller should retry refresh once.
 	m.cached = nil
-	m.snapshot = credentialSnapshot{}
+	m.snapshot = emptyCredentialSnapshot()
 	return nil
 }

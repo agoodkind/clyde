@@ -31,6 +31,10 @@ type oauthRefreshResponse struct {
 	Scope        string `json:"scope"`
 }
 
+type oauthErrorResponse struct {
+	Error string `json:"error"`
+}
+
 // refreshLocked performs the disk lock dance, double-checks for a
 // concurrent refresh by another process, then calls the token
 // endpoint and persists the new tokens. Caller must hold m.mu.
@@ -40,6 +44,39 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 		return nil, errors.New("oauth token expired and no refresh_token available; re-run `claude /login`")
 	}
 
+	releaseLock, err := m.acquireRefreshLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseLock()
+
+	if raced, racedErr := m.reselectCredential(ctx); racedErr == nil && raced != nil && !isExpired(raced.Tokens) {
+		oauthLog.Logger().InfoContext(ctx, "oauth.token.refresh_raced",
+			"subcomponent", "oauth",
+			"store_kind", raced.Source,
+			"expires_at_ms", raced.Tokens.ExpiresAt,
+		)
+		return raced.Tokens.Clone(), nil
+	}
+
+	refreshResp, err := m.postRefreshRequest(ctx, current)
+	if err != nil {
+		return nil, err
+	}
+	newTokens := tokensFromRefreshResponse(refreshResp, current.Tokens)
+	if err := writeCredentials(ctx, m.readOptions(), current.Source, newTokens); err != nil {
+		log.ErrorContext(ctx, "oauth.credentials.write_failed",
+			"subcomponent", "oauth",
+			"store_kind", current.Source,
+			"err", err.Error(),
+		)
+		return nil, fmt.Errorf("persist refreshed oauth credentials: %w", err)
+	}
+	return newTokens, nil
+}
+
+func (m *Manager) acquireRefreshLock(ctx context.Context) (func(), error) {
+	log := oauthLog.Logger()
 	if err := os.MkdirAll(m.credentialsDir, 0o700); err != nil {
 		log.WarnContext(ctx, "oauth.store.mkdir_failed",
 			"subcomponent", "oauth",
@@ -52,9 +89,9 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 	lock := flock.New(lockPath)
 
 	lockCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
 	got, err := lock.TryLockContext(lockCtx, 200*time.Millisecond)
 	if err != nil {
+		cancel()
 		log.WarnContext(ctx, "oauth.lock.acquire_failed",
 			"subcomponent", "oauth",
 			"lock_path", lockPath,
@@ -63,23 +100,21 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 		return nil, fmt.Errorf("acquire oauth lock: %w", err)
 	}
 	if !got {
+		cancel()
 		log.WarnContext(ctx, "oauth.lock.acquire_timeout",
 			"subcomponent", "oauth",
 			"lock_path", lockPath,
 		)
 		return nil, errors.New("acquire oauth lock: timed out")
 	}
-	defer func() { _ = lock.Unlock() }()
+	return func() {
+		_ = lock.Unlock()
+		cancel()
+	}, nil
+}
 
-	if raced, racedErr := m.reselectCredential(ctx); racedErr == nil && raced != nil && !isExpired(raced.Tokens) {
-		oauthLog.Logger().InfoContext(ctx, "oauth.token.refresh_raced",
-			"subcomponent", "oauth",
-			"store_kind", raced.Source,
-			"expires_at_ms", raced.Tokens.ExpiresAt,
-		)
-		return raced.Tokens.Clone(), nil
-	}
-
+func (m *Manager) postRefreshRequest(ctx context.Context, current *selectedCredential) (oauthRefreshResponse, error) {
+	log := oauthLog.Logger()
 	requestPayload := oauthRefreshRequest{
 		GrantType:    "refresh_token",
 		RefreshToken: current.Tokens.RefreshToken,
@@ -94,7 +129,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 			"client_id_present", m.oauthCfg.ClientID != "",
 			"err", err.Error(),
 		)
-		return nil, fmt.Errorf("marshal refresh body: %w", err)
+		return oauthRefreshResponse{}, fmt.Errorf("marshal refresh body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.oauthCfg.TokenURL, bytes.NewReader(body))
@@ -105,7 +140,7 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 			"body_bytes", len(body),
 			"err", err.Error(),
 		)
-		return nil, fmt.Errorf("build refresh request: %w", err)
+		return oauthRefreshResponse{}, fmt.Errorf("build refresh request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -117,13 +152,13 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 			"endpoint_url", m.oauthCfg.TokenURL,
 			"err", err.Error(),
 		)
-		return nil, fmt.Errorf("post refresh: %w", err)
+		return oauthRefreshResponse{}, fmt.Errorf("post refresh: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("refresh failed: %s: %s", resp.Status, truncate(string(respBytes), 400))
+		return oauthRefreshResponse{}, refreshStatusError(resp.Status, respBytes)
 	}
 
 	var refreshResp oauthRefreshResponse
@@ -134,26 +169,33 @@ func (m *Manager) refreshLocked(ctx context.Context, current *selectedCredential
 			"body_bytes", len(respBytes),
 			"err", err.Error(),
 		)
-		return nil, fmt.Errorf("decode refresh response: %w", err)
+		return oauthRefreshResponse{}, fmt.Errorf("decode refresh response: %w", err)
 	}
 	if refreshResp.AccessToken == "" {
-		return nil, fmt.Errorf("refresh response missing access_token: %s", truncate(string(respBytes), 400))
+		return oauthRefreshResponse{}, fmt.Errorf("refresh response missing access_token: status=%d body_bytes=%d", resp.StatusCode, len(respBytes))
 	}
+	return refreshResp, nil
+}
 
-	newTokens := &Tokens{
+func tokensFromRefreshResponse(refreshResp oauthRefreshResponse, current *Tokens) *Tokens {
+	return &Tokens{
 		AccessToken:      refreshResp.AccessToken,
-		RefreshToken:     coalesce(refreshResp.RefreshToken, current.Tokens.RefreshToken),
+		RefreshToken:     coalesce(refreshResp.RefreshToken, current.RefreshToken),
 		ExpiresAt:        oauthClock.Now().UnixMilli() + refreshResp.ExpiresIn*1000,
-		Scopes:           splitScopes(refreshResp.Scope, current.Tokens.Scopes),
-		SubscriptionType: current.Tokens.SubscriptionType,
-		RateLimitTier:    current.Tokens.RateLimitTier,
+		Scopes:           splitScopes(refreshResp.Scope, current.Scopes),
+		SubscriptionType: current.SubscriptionType,
+		RateLimitTier:    current.RateLimitTier,
 	}
+}
 
-	if err := writeCredentials(ctx, m.credentialsDir, newTokens); err != nil {
-		oauthLog.Logger().WarnContext(ctx, "oauth.credentials.write_failed",
-			"subcomponent", "oauth",
-			"err", err,
-		)
+func refreshStatusError(status string, respBytes []byte) error {
+	var errorResponse oauthErrorResponse
+	oauthError := ""
+	if err := json.Unmarshal(respBytes, &errorResponse); err == nil {
+		oauthError = errorResponse.Error
 	}
-	return newTokens, nil
+	if oauthError != "" {
+		return fmt.Errorf("refresh failed: %s: oauth_error=%s body_bytes=%d", status, oauthError, len(respBytes))
+	}
+	return fmt.Errorf("refresh failed: %s: body_bytes=%d", status, len(respBytes))
 }

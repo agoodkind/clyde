@@ -90,6 +90,7 @@ type ReadOptions struct {
 	CredentialsDir  string
 	KeychainService string
 	SecurityBinary  string
+	Platform        string
 	Now             time.Time
 }
 
@@ -124,12 +125,14 @@ func ReadCandidates(ctx context.Context, options ReadOptions) []ReadResult {
 	return results
 }
 
-// WriteFile writes claudeAiOauth tokens to ~/.claude/.credentials.json.
-func WriteFile(ctx context.Context, credentialsDir string, tokens *Tokens) error {
-	options := normalizeReadOptions(ReadOptions{CredentialsDir: credentialsDir})
-	store := fileStore{credentialsDir: options.CredentialsDir, now: options.Now}
-	result := store.Write(ctx, tokens)
-	return result.Err
+// Write writes tokens back to the selected authoritative credential source.
+func Write(ctx context.Context, options ReadOptions, source Source, tokens *Tokens) WriteResult {
+	options = normalizeReadOptions(options)
+	store, err := storeForSource(options, source)
+	if err != nil {
+		return WriteResult{Source: source, Err: err}
+	}
+	return store.Write(ctx, tokens)
 }
 
 // Summarize returns log-safe summaries for credential reads.
@@ -208,6 +211,9 @@ func normalizeReadOptionsWithClock(options ReadOptions, nowFunc func() time.Time
 	if options.SecurityBinary == "" {
 		options.SecurityBinary = "security"
 	}
+	if options.Platform == "" {
+		options.Platform = runtime.GOOS
+	}
 	if options.Now.IsZero() {
 		options.Now = nowFunc()
 	}
@@ -215,19 +221,45 @@ func normalizeReadOptionsWithClock(options ReadOptions, nowFunc func() time.Time
 }
 
 func credentialStores(options ReadOptions) []Store {
-	stores := []Store{}
-	if runtime.GOOS == "darwin" && options.KeychainService != "" {
-		stores = append(stores, keychainStore{
+	if options.Platform == "darwin" && options.KeychainService != "" {
+		return []Store{
+			keychainStore{
+				keychainService: options.KeychainService,
+				securityBinary:  options.SecurityBinary,
+				now:             options.Now,
+			},
+		}
+	}
+	return []Store{
+		fileStore{
+			credentialsDir: options.CredentialsDir,
+			now:            options.Now,
+		},
+	}
+}
+
+func storeForSource(options ReadOptions, source Source) (Store, error) {
+	switch source {
+	case SourceKeychain:
+		if options.Platform != "darwin" {
+			return nil, fmt.Errorf("keychain credential store is unavailable on %s", options.Platform)
+		}
+		if options.KeychainService == "" {
+			return nil, fmt.Errorf("keychain credential store requires keychain service")
+		}
+		return keychainStore{
 			keychainService: options.KeychainService,
 			securityBinary:  options.SecurityBinary,
 			now:             options.Now,
-		})
+		}, nil
+	case SourceFile:
+		return fileStore{
+			credentialsDir: options.CredentialsDir,
+			now:            options.Now,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported credential source %q", source)
 	}
-	stores = append(stores, fileStore{
-		credentialsDir: options.CredentialsDir,
-		now:            options.Now,
-	})
-	return stores
 }
 
 func parseBlob(data []byte, now time.Time, fileMtime int64) (*Tokens, Metadata, error) {
