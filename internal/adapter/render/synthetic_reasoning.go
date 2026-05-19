@@ -34,9 +34,15 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 		return nil
 	}
 	open := !r.reasoningOpen
+	// leadingQuote covers two cases the split-chunk path needs: the
+	// in-chunk open path (open=true) AND the first body delta after a
+	// standalone open marker shipped by renderReasoningOpen (open=false
+	// but reasoningBodyEmitted=false). Without this, the body's first
+	// line lands at column 0 and terminates the markdown blockquote.
+	leadingQuote := open || !r.reasoningBodyEmitted
 	decorated := r.decorateReasoningFromDelta(ev)
 	kind := r.activeSyntheticReasoningKind()
-	contentOut := FormatSyntheticContentDeltaWithRef(kind, open, r.lastReasoningItemID, r.backendOrigin(), decorated)
+	contentOut := FormatSyntheticContentDeltaWithRef(kind, open, leadingQuote, r.lastReasoningItemID, r.backendOrigin(), decorated)
 	r.reasoningOpen = true
 	r.reasoningBodyEmitted = true
 	delta := adapteropenai.StreamDelta{

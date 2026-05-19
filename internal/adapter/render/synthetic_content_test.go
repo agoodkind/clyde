@@ -271,30 +271,57 @@ func TestExtractSyntheticPartsCoexistsEncryptedAndSignature(t *testing.T) {
 }
 
 func TestFormatSyntheticContentDeltaWithRefEmbedsAttributeOnOpen(t *testing.T) {
-	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "rs_delta", OriginUnknown, "first")
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, true, "rs_delta", OriginUnknown, "first")
 	if !strings.HasPrefix(open, `<!--clyde-thinking data-ref="rs_delta"-->`) {
 		t.Fatalf("open delta with ref must carry attribute: %q", open)
 	}
-	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "rs_delta", OriginUnknown, "\nsecond")
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, false, "rs_delta", OriginUnknown, "\nsecond")
 	if strings.Contains(cont, "data-ref=") {
 		t.Fatalf("continuation delta must not repeat the data-ref attribute: %q", cont)
 	}
 }
 
 func TestFormatSyntheticContentDeltaContinuesOpenBlockWithoutHeader(t *testing.T) {
-	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", OriginUnknown, "first")
+	open := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, true, "", OriginUnknown, "first")
 	if !strings.HasPrefix(open, "<!--clyde-thinking-->") {
 		t.Fatalf("first delta missing open marker: %q", open)
 	}
 	if !strings.HasSuffix(open, "> first") {
 		t.Fatalf("open delta should start fresh blockquote line: %q", open)
 	}
-	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, "", OriginUnknown, "\nsecond")
+	cont := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, false, "", OriginUnknown, "\nsecond")
 	if strings.Contains(cont, "<!--clyde-thinking-->") {
 		t.Fatalf("continuation delta should not re-emit open marker: %q", cont)
 	}
 	if cont != "\n> second" {
 		t.Fatalf("continuation should turn its own newlines into quoted lines: %q", cont)
+	}
+}
+
+// TestFormatSyntheticContentDeltaPrefixesFirstBodyAfterStandaloneOpen
+// covers the case where the open marker shipped in its own delta
+// (handleReasoningSignaled and the placeholder branch both do this).
+// The body delta that follows carries open=false but leadingQuote=true
+// because no body line has been emitted yet. Without the leading `> `
+// the body lands at column 0 after the header's `> \n` and breaks the
+// markdown blockquote rendered in Cursor BYOK.
+func TestFormatSyntheticContentDeltaPrefixesFirstBodyAfterStandaloneOpen(t *testing.T) {
+	openMarker := SyntheticContentOpenWithRef(SyntheticReasoning, "", OriginCodex)
+	body := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, false, true, "", OriginCodex, "The first body line")
+	if strings.Contains(body, "<!--clyde-thinking") {
+		t.Fatalf("body delta must not re-emit open marker: %q", body)
+	}
+	if !strings.HasPrefix(body, "> ") {
+		t.Fatalf("first body delta after standalone open must start with `> `: %q", body)
+	}
+	concatenated := openMarker + body
+	for idx, line := range strings.Split(concatenated, "\n") {
+		if strings.HasPrefix(line, "<!--") || line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, ">") {
+			t.Fatalf("line %d not blockquote-prefixed in concatenated stream: %q\nfull: %q", idx, line, concatenated)
+		}
 	}
 }
 

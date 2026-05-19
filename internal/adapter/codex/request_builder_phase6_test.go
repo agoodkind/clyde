@@ -18,7 +18,7 @@ import (
 // (Body, Ref, Encrypted, Origin) tuple the inbound mapper sees.
 func envelopeWithRefAndEncrypted(ref, body, encrypted string) string {
 	return adapterrender.FormatSyntheticContentDeltaWithRef(
-		adapterrender.SyntheticReasoning, true, ref, adapterrender.OriginCodex, body,
+		adapterrender.SyntheticReasoning, true, true, ref, adapterrender.OriginCodex, body,
 	) + adapterrender.SyntheticContentCloseWithAttrs(adapterrender.SyntheticReasoning, encrypted, "")
 }
 

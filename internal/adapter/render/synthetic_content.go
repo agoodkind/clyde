@@ -323,21 +323,26 @@ func FormatSyntheticContent(kind SyntheticContentKind, body string) string {
 // kind, annotating the open marker with the data-ref and data-origin
 // attributes.
 //
-// When open is true the leading marker, header, and a fresh blockquote
-// prefix are included so the very first delta starts a new quoted block.
-// When open is false the renderer is mid-stream inside an already-open
-// block and the body's own newlines drive new quoted lines via "\n" ->
-// "\n> " replacement, matching the existing reasoning streaming layout.
+// open controls whether this delta emits the open marker and header. When
+// true the leading marker and header are included; when false the renderer
+// is mid-stream inside an already-open block.
+//
+// leadingQuote controls whether the body's first line is prefixed with a
+// fresh `> `. It must be true whenever this delta carries the first body
+// line of the block, even when open is false (the open marker shipped in a
+// prior chunk via SyntheticContentOpenWithRef). When leadingQuote is false
+// the body's own newlines drive new quoted lines via "\n" -> "\n> "
+// replacement, matching the existing reasoning streaming layout.
 //
 // The ref and origin are only honored when open is true; mid-stream deltas
 // never carry attributes since the open marker is already on the wire.
 // Empty ref and [OriginUnknown] origin produce the attribute-less shape.
-func FormatSyntheticContentDeltaWithRef(kind SyntheticContentKind, open bool, ref string, origin SyntheticOrigin, body string) string {
+func FormatSyntheticContentDeltaWithRef(kind SyntheticContentKind, open, leadingQuote bool, ref string, origin SyntheticOrigin, body string) string {
 	spec := specFor(kind)
 	if spec == nil {
 		return body
 	}
-	decorated := formatSyntheticBody(spec, body, open)
+	decorated := formatSyntheticBody(spec, body, leadingQuote)
 	if open {
 		return SyntheticContentOpenWithRef(kind, ref, origin) + decorated
 	}

@@ -137,7 +137,7 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	if !strings.Contains(delta.Content, `<!--clyde-thinking data-origin="codex"-->`) {
 		t.Fatalf("missing content thinking marker: %q", delta.Content)
 	}
-	want := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, "", OriginCodex, "checking constraints")
+	want := FormatSyntheticContentDeltaWithRef(SyntheticReasoning, true, true, "", OriginCodex, "checking constraints")
 	if delta.Content != want {
 		t.Fatalf("content=%q want %q", delta.Content, want)
 	}
@@ -161,6 +161,53 @@ func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T
 		t.Fatalf("finish chunks=%d want close marker", len(chunks))
 	} else if close := chunks[0].Choices[0].Delta.Content; close != SyntheticContentClose(SyntheticReasoning) {
 		t.Fatalf("missing close marker: %q want %q", close, SyntheticContentClose(SyntheticReasoning))
+	}
+}
+
+// TestEventRendererSignaledThenDeltaKeepsBlockquotePrefix is the
+// regression test for the Cursor-visible thinking block losing its
+// blockquote bar at the first body line. When handleReasoningSignaled
+// ships the open marker in its own chunk and a subsequent reasoning
+// delta brings the body, the concatenated content must keep every body
+// line `> `-prefixed up to the close marker so the markdown renderer
+// keeps the blockquote intact.
+func TestEventRendererSignaledThenDeltaKeepsBlockquotePrefix(t *testing.T) {
+	r := NewEventRenderer("req-thinking-split", "alias", "codex", nil)
+	chunks := r.HandleEvent(ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""})
+	if len(chunks) != 1 {
+		t.Fatalf("signal chunks=%d want 1", len(chunks))
+	}
+	openContent := chunks[0].Choices[0].Delta.Content
+
+	bodyChunks := r.HandleEvent(ReasoningDelta{Text: "The user is right.\nSecond body line.", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	if len(bodyChunks) != 1 {
+		t.Fatalf("body chunks=%d want 1", len(bodyChunks))
+	}
+	bodyContent := bodyChunks[0].Choices[0].Delta.Content
+
+	closeChunks := r.HandleEvent(ReasoningFinished{ReasoningKind: "", EncryptedContent: "", Signature: "", ItemID: "", ItemType: ""})
+	if len(closeChunks) != 1 {
+		t.Fatalf("close chunks=%d want 1", len(closeChunks))
+	}
+	closeContent := closeChunks[0].Choices[0].Delta.Content
+
+	full := openContent + bodyContent + closeContent
+	openIdx := strings.Index(full, "-->")
+	if openIdx < 0 {
+		t.Fatalf("open marker not found: %q", full)
+	}
+	closeIdx := strings.Index(full, "<!--/")
+	if closeIdx < 0 {
+		t.Fatalf("close marker not found: %q", full)
+	}
+	envelope := full[openIdx+len("-->") : closeIdx]
+	for idx, line := range strings.Split(envelope, "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, ">") {
+			t.Fatalf("envelope line %d not blockquote-prefixed: %q\nfull: %q", idx, line, full)
+		}
 	}
 }
 
