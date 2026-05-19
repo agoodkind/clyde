@@ -160,11 +160,17 @@ func toolResultBlockToWire(v ToolResultBlock) *anthropic.ContentBlock {
 }
 
 func thinkingBlockToWire(v ThinkingBlock) *anthropic.ContentBlock {
-	// Defense-in-depth: drop a thinking block only when both body and
-	// signature are empty. A signed empty body is a legitimate replay
-	// shape and must reach the wire so signature validation succeeds.
-	if strings.TrimSpace(v.Thinking) == "" && strings.TrimSpace(v.Signature) == "" {
+	thinking := strings.TrimSpace(v.Thinking)
+	signature := strings.TrimSpace(v.Signature)
+	if signature == "" && thinking == "" {
 		return nil
+	}
+	if signature == "" {
+		anthropicBackendLog.Logger().Debug("adapter.anthropic.thinking.unsigned_wire_injected",
+			"subcomponent", "anthropic_wire",
+			"body_len", len(thinking),
+		)
+		return textBlockToWire(TextBlock{Text: thinking})
 	}
 	return &anthropic.ContentBlock{
 		Type:           "thinking",

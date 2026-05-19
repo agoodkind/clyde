@@ -6,12 +6,11 @@ import (
 	"testing"
 )
 
-// TestToAPIRequestCopiesThinkingBody asserts that ToAPIRequest copies the
-// AnthContentBlock.Thinking body into the wire ContentBlock and that the
-// resulting JSON carries `"thinking":"<body>"`. Without this copy, Anthropic
-// rejects the request with `messages.N.content.M.thinking.thinking: Field
-// required`.
-func TestToAPIRequestCopiesThinkingBody(t *testing.T) {
+// TestToAPIRequestInjectsUnsignedThinkingAsText asserts that ToAPIRequest
+// refuses to emit a native thinking block without a signature. A readable
+// body-only block is preserved as ordinary assistant text so prior thinking
+// remains in context without crossing Anthropic's signature boundary.
+func TestToAPIRequestInjectsUnsignedThinkingAsText(t *testing.T) {
 	t.Parallel()
 	tr := AnthRequest{
 		Messages: []AnthMessage{{
@@ -31,18 +30,22 @@ func TestToAPIRequestCopiesThinkingBody(t *testing.T) {
 	if len(wireBlocks) != 2 {
 		t.Fatalf("wire blocks=%d want 2: %+v", len(wireBlocks), wireBlocks)
 	}
-	if wireBlocks[0].Type != "thinking" {
-		t.Fatalf("block0 type=%q want thinking", wireBlocks[0].Type)
+	if wireBlocks[0].Type != "text" {
+		t.Fatalf("block0 type=%q want text", wireBlocks[0].Type)
 	}
-	if wireBlocks[0].Thinking != "deliberation body" {
-		t.Fatalf("block0 thinking=%q want %q", wireBlocks[0].Thinking, "deliberation body")
+	if wireBlocks[0].Text != "deliberation body" {
+		t.Fatalf("block0 text=%q want %q", wireBlocks[0].Text, "deliberation body")
 	}
 	encoded, err := json.Marshal(wireBlocks[0])
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if !strings.Contains(string(encoded), `"thinking":"deliberation body"`) {
-		t.Fatalf("thinking body missing from wire JSON: %s", encoded)
+	wireJSON := string(encoded)
+	if strings.Contains(wireJSON, `"type":"thinking"`) {
+		t.Fatalf("unsigned thinking leaked as native wire block: %s", wireJSON)
+	}
+	if !strings.Contains(wireJSON, `"text":"deliberation body"`) {
+		t.Fatalf("thinking body missing from text wire JSON: %s", encoded)
 	}
 }
 

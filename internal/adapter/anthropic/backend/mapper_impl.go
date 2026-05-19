@@ -422,7 +422,7 @@ func assistantPartToBlocks(
 		}
 		return []AnthContentBlock{ToolUseBlock{ID: p.ID, Name: p.Name, Input: input}}, nil
 	case "thinking":
-		return nil, nil
+		return assistantThinkingPart(msgIdx, partIdx, p), nil
 	default:
 		log.Warn("adapter.anthropic.assistant_part.unknown_type",
 			"subcomponent", "anthropic",
@@ -432,6 +432,24 @@ func assistantPartToBlocks(
 		)
 		return nil, nil
 	}
+}
+
+func assistantThinkingPart(msgIdx int, partIdx int, p OpenAIContentPart) []AnthContentBlock {
+	body := strings.TrimSpace(p.Thinking)
+	signature := strings.TrimSpace(p.Signature)
+	if signature != "" {
+		return []AnthContentBlock{ThinkingBlock{Thinking: p.Thinking, Signature: p.Signature}}
+	}
+	if body == "" {
+		return nil
+	}
+	anthropicBackendLog.Logger().Debug("adapter.anthropic.thinking.raw_unsigned_injected",
+		"subcomponent", "anthropic_mapper",
+		"msg_idx", msgIdx,
+		"part_idx", partIdx,
+		"body_len", len(body),
+	)
+	return []AnthContentBlock{TextBlock{Text: body}}
 }
 
 // materializeSyntheticAssistantText parses an assistant text or refusal

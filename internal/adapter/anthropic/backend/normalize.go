@@ -21,7 +21,7 @@ func normalizeContent(raw json.RawMessage) ([]OpenAIContentPart, contentKind) {
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return []OpenAIContentPart{{Type: "text", Text: s}}, contentKindString
+		return []OpenAIContentPart{textContentPart(s)}, contentKindString
 	}
 	var parts []OpenAIContentPart
 	if err := json.Unmarshal(raw, &parts); err == nil {
@@ -32,7 +32,24 @@ func normalizeContent(raw json.RawMessage) ([]OpenAIContentPart, contentKind) {
 		}
 		return parts, contentKindParts
 	}
-	return []OpenAIContentPart{{Type: "text", Text: string(raw)}}, contentKindString
+	return []OpenAIContentPart{textContentPart(string(raw))}, contentKindString
+}
+
+func textContentPart(text string) OpenAIContentPart {
+	return OpenAIContentPart{
+		Type:      "text",
+		Text:      text,
+		Thinking:  "",
+		Signature: "",
+		ImageURL:  nil,
+		Audio:     nil,
+		Refusal:   "",
+		ToolUseID: "",
+		Content:   nil,
+		ID:        "",
+		Name:      "",
+		Input:     nil,
+	}
 }
 
 // flattenContent collapses message content to a single string for system collection.

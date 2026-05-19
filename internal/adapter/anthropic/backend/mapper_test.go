@@ -620,6 +620,60 @@ func TestTranslateRequestAssistantCodexThinkingInjectsAsText(t *testing.T) {
 	}
 }
 
+// TestTranslateRequestAssistantRawUnsignedThinkingInjectsAsText covers
+// Cursor replays that arrive as OpenAI-style content parts but already
+// contain an Anthropic-shaped thinking block. Without a signature, Clyde
+// cannot send the block as native Anthropic thinking, so the readable body
+// is injected as ordinary assistant text.
+func TestTranslateRequestAssistantRawUnsignedThinkingInjectsAsText(t *testing.T) {
+	t.Parallel()
+	req := adapteropenai.ChatRequest{
+		Model: "x",
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"q"`)},
+			{
+				Role: "assistant",
+				Content: json.RawMessage(`[
+					{"type":"thinking","thinking":"raw prior thinking"},
+					{"type":"text","text":"Final answer."},
+					{"type":"tool_use","id":"toolu_1","name":"read_file","input":{"path":"README.md"}}
+				]`),
+			},
+			{Role: "user", Content: json.RawMessage(`"continue"`)},
+		},
+	}
+	out, err := TranslateRequest(req, "", 64, adapterrender.MaterializeNativeThinkingBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asst := out.Messages[1]
+	if len(asst.Content) != 3 {
+		t.Fatalf("assistant blocks=%d want 3: %+v", len(asst.Content), asst.Content)
+	}
+	tb0 := mustTextBlock(t, asst.Content, 0)
+	if tb0.Text != "raw prior thinking" {
+		t.Fatalf("block0 text=%q want raw prior thinking", tb0.Text)
+	}
+	tb1 := mustTextBlock(t, asst.Content, 1)
+	if tb1.Text != "Final answer." {
+		t.Fatalf("block1 text=%q want Final answer.", tb1.Text)
+	}
+	mustToolUseBlock(t, asst.Content, 2)
+
+	wire, _ := ToAPIRequest(out, "claude-x", false)
+	encoded, err := json.Marshal(wire.Messages[1])
+	if err != nil {
+		t.Fatalf("marshal wire assistant: %v", err)
+	}
+	wireJSON := string(encoded)
+	if strings.Contains(wireJSON, `"type":"thinking"`) {
+		t.Fatalf("unsigned raw thinking leaked as native wire block: %s", wireJSON)
+	}
+	if !strings.Contains(wireJSON, `"text":"raw prior thinking"`) {
+		t.Fatalf("wire JSON missing injected thinking text: %s", wireJSON)
+	}
+}
+
 // TestTranslateRequestAssistantUnknownOriginThinkingInjectsAsText covers
 // pre-upgrade transcripts: a saved assistant turn whose synthetic-thinking
 // envelope has no `data-origin` attribute resolves to OriginUnknown. The

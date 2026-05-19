@@ -156,6 +156,8 @@ type ToolCallFunction struct {
 type ContentPart struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
 	ImageURL  *ImageURLPart   `json:"image_url,omitempty"`
 	Audio     *AudioInputRef  `json:"input_audio,omitempty"`
 	Refusal   string          `json:"refusal,omitempty"`
@@ -346,7 +348,7 @@ func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return []ContentPart{{Type: "text", Text: s}}, ContentKindString
+		return []ContentPart{textContentPart(s)}, ContentKindString
 	}
 	var parts []ContentPart
 	if err := json.Unmarshal(raw, &parts); err == nil {
@@ -357,5 +359,22 @@ func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 		}
 		return parts, ContentKindParts
 	}
-	return []ContentPart{{Type: "text", Text: string(raw)}}, ContentKindString
+	return []ContentPart{textContentPart(string(raw))}, ContentKindString
+}
+
+func textContentPart(text string) ContentPart {
+	return ContentPart{
+		Type:      "text",
+		Text:      text,
+		Thinking:  "",
+		Signature: "",
+		ImageURL:  nil,
+		Audio:     nil,
+		Refusal:   "",
+		ToolUseID: "",
+		Content:   nil,
+		ID:        "",
+		Name:      "",
+		Input:     nil,
+	}
 }
