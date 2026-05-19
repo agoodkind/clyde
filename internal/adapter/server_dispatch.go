@@ -127,6 +127,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 		s.logChatParseFailed(ctx, corr, reqID, bodyBytes, parseErr)
 		return adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
 	}
+	forceStreamUsageOptIn(&req)
 	s.logToolNormalization(ctx, corr, reqID, req, body)
 	if normErr := s.normalizeRequestMessages(ctx, corr, reqID, &req); normErr != nil {
 		return normErr
@@ -581,4 +582,28 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	r.Header.Set("Content-Type", "application/json")
 	hctx.Request = r
 	return s.handleChat(ctx, hctx)
+}
+
+// forceStreamUsageOptIn applies the generic OpenAI route family
+// policy that every streaming completion emits the trailing usage
+// chunk regardless of what the client requested via
+// `stream_options.include_usage`. Clyde owns the auto-compact signal
+// path for Cursor BYOK and other OpenAI-SDK clients, and Cursor in
+// particular only sets the opt-in for model aliases it recognizes as
+// OpenAI-shaped (`clyde-codex-*`) and not for Anthropic-shaped
+// aliases (`clyde-opus-*`). Honoring the opt-in per client surface
+// leaves Anthropic chats without the usage signal Cursor needs to
+// trigger auto-compact, so they grow until Anthropic per-request-
+// rate-limits the oversized turn. Forcing the opt-in at the generic
+// boundary keeps the dispatchers backend-agnostic and prevents any
+// client from opting out (CLYDE-438).
+func forceStreamUsageOptIn(req *ChatRequest) {
+	if req == nil {
+		return
+	}
+	if req.StreamOptions == nil {
+		req.StreamOptions = &StreamOptions{IncludeUsage: true}
+		return
+	}
+	req.StreamOptions.IncludeUsage = true
 }

@@ -101,34 +101,10 @@ func (s *Server) dispatchAnthropicProviderStream(
 		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	if err := streamWriter.finalizeStream(ctx, result, anthropicShouldEmitUsage(resolvedReq.OpenAI)); err != nil {
+	if err := streamWriter.finalizeStream(ctx, result, resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage); err != nil {
 		return adapterErrUpstreamFailed("anthropic", err.Error(), err)
 	}
 	return nil
-}
-
-// anthropicShouldEmitUsage decides whether the Anthropic streaming
-// dispatcher emits the trailing OpenAI usage chunk. The answer is
-// always true regardless of the client's `stream_options.include_usage`
-// opt-in (CLYDE-438).
-//
-// Cursor BYOK auto-compact reads usage off the trailing chunk to
-// trigger a context-summary turn before the chat overflows. Cursor
-// sets `stream_options.include_usage=true` for model aliases it
-// recognizes as OpenAI-shaped (`clyde-codex-*`) but not for the
-// Anthropic-shaped aliases (`clyde-opus-*`), so honoring the opt-in
-// flag for this backend leaves Anthropic chats without the signal
-// Cursor needs and lets them grow until Anthropic per-request-rate-
-// limits the oversized turn (HTTP 200 with SSE `event:error
-// rate_limit_error` on `/v1/messages`). Emitting the chunk
-// unconditionally is harmless for clients that ignore it, and
-// `provider_writer.finalizeStream` still gates the empty-choices
-// second chunk on the same flag.
-//
-// The unused parameter remains so this stays a documented decision
-// point if a future client emerges that needs the spec-strict gate.
-func anthropicShouldEmitUsage(_ adapteropenai.ChatRequest) bool {
-	return true
 }
 
 func (s *Server) prepareAnthropicProviderRequest(

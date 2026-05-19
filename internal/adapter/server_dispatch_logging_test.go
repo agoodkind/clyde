@@ -746,3 +746,72 @@ func findLogEvent(t *testing.T, logBuffer *bytes.Buffer, message string) map[str
 	}
 	return nil
 }
+
+// TestForceStreamUsageOptInAlwaysSets pins the CLYDE-438 generic
+// adapter policy: every streaming completion that flows through the
+// OpenAI route family emits the trailing usage chunk regardless of
+// the client's `stream_options.include_usage` value. The helper is
+// applied at the chat parse boundary so all backend dispatchers
+// (Codex, Anthropic) inherit the policy uniformly and cannot be
+// silenced by a client that omits or disables the opt-in. Cursor
+// BYOK in particular only sets the opt-in for `clyde-codex-*`
+// aliases, so honoring the client choice starves the auto-compact
+// heuristic on Anthropic chats and lets them grow until Anthropic
+// per-request-rate-limits the oversized turn.
+func TestForceStreamUsageOptInAlwaysSets(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input *ChatRequest
+	}{
+		{
+			name:  "nil_stream_options",
+			input: &ChatRequest{Model: "clyde-opus-4.7-1m-high-thinking", Stream: true},
+		},
+		{
+			name: "stream_options_opt_in_already",
+			input: &ChatRequest{
+				Model:         "clyde-codex-5.4-1m-high",
+				Stream:        true,
+				StreamOptions: &StreamOptions{IncludeUsage: true},
+			},
+		},
+		{
+			name: "stream_options_explicit_opt_out",
+			input: &ChatRequest{
+				Model:         "clyde-opus-4.7-1m-high-thinking",
+				Stream:        true,
+				StreamOptions: &StreamOptions{IncludeUsage: false},
+			},
+		},
+		{
+			name:  "non_streaming_request",
+			input: &ChatRequest{Model: "clyde-opus-4.7-1m-high-thinking", Stream: false},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			forceStreamUsageOptIn(tc.input)
+			if tc.input.StreamOptions == nil {
+				t.Fatalf("StreamOptions is nil after force; want non-nil with IncludeUsage=true")
+			}
+			if !tc.input.StreamOptions.IncludeUsage {
+				t.Fatalf("IncludeUsage=false after force; want true")
+			}
+		})
+	}
+}
+
+// TestForceStreamUsageOptInNilRequestIsNoop ensures the helper is
+// defensive against a nil pointer so a future refactor that calls it
+// before the body parses cannot panic.
+func TestForceStreamUsageOptInNilRequestIsNoop(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("forceStreamUsageOptIn(nil) panicked: %v", r)
+		}
+	}()
+	forceStreamUsageOptIn(nil)
+}
