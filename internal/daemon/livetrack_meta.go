@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"sync/atomic"
 
 	"goodkind.io/clyde/internal/livetrack"
 )
@@ -35,20 +36,39 @@ type RPCMeta struct {
 // livetrack.Meta constraint. The body is intentionally empty.
 func (RPCMeta) IsLivetrackMeta() {}
 
-// rpcCloser cancels the stream context when the registry force-closes a
-// tracked RPC session. The cancel func is the one returned by
-// [context.WithCancel] wrapping the stream's context; calling it causes
-// the stream handler's ctx.Done() to fire, which terminates the
-// blocking select loop in the handler and lets the handler return.
+// rpcCloser is the livetrack Closer for a streaming RPC session. It
+// participates in graceful drain in two stages:
+//
+//  1. The first invocation (registry signalling drain) raises the
+//     draining [atomic.Bool]. The streaming RPC handler checks this
+//     flag between events and returns naturally after the current
+//     event has flushed, so the client sees the stream complete
+//     cleanly instead of cancelled mid-frame.
+//  2. The second invocation (cap-elapsed safety net) cancels the
+//     stream context outright, terminating the handler's blocking
+//     select with [codes.Canceled]. This is the bounded fallback
+//     when the handler cannot otherwise observe the drain flag in
+//     time.
+//
+// CLYDE-437: before this change the Closer cancelled context
+// immediately on first call, recording force_closed:1 with
+// duration_ms:0 in logs and killing in-flight LLM-bearing streams
+// even though the gRPC reload drain waits ten minutes for natural
+// completion. The cooperative shape lets the handler return clean
+// while preserving the cap-elapsed safety net.
 type rpcCloser struct {
-	cancel context.CancelFunc
+	cancel   context.CancelFunc
+	draining *atomic.Bool
 }
 
-// Close cancels the stream context, which terminates the blocking
-// send loop in the streaming RPC handler. The reason argument is
-// provided by the registry caller but is not surfaced here because
-// the handler's error return already carries context-canceled status.
+// Close raises the cooperative draining flag on the first call and
+// cancels the stream context on subsequent calls. The reason argument
+// is provided by the registry caller but is not surfaced here because
+// the handler's error return already carries the relevant status.
 func (c rpcCloser) Close(_ string) error {
+	if c.draining != nil && c.draining.CompareAndSwap(false, true) {
+		return nil
+	}
 	if c.cancel != nil {
 		c.cancel()
 	}

@@ -38,11 +38,11 @@ func TestDrainReloadedMITMReportsActiveTunnelsOnIdle(t *testing.T) {
 			proxy:          nil,
 			reloadDraining: atomic.Bool{},
 		},
-		reloadLock:    sync.Mutex{},
-		mitmDrainMu:   sync.Mutex{},
-		mitmDrainDone: nil,
+		reloadLock:   sync.Mutex{},
+		drainDonesMu: sync.Mutex{},
+		drainDones:   nil,
 	}
-	done := drainReloadedMITM(log, rt)
+	done := drainReloadedMITM(context.Background(), log, rt)
 	waitDoneOrFail(t, done, 2*time.Second)
 	tally := tallyMITMReloadEvents(t, buf.Bytes())
 	if tally["daemon.reload.mitm_drain_complete.active_tunnels:0"] != 1 {
@@ -88,12 +88,12 @@ func TestDrainReloadedMITMForceClosesActiveTunnelsAtCap(t *testing.T) {
 			proxy:          nil,
 			reloadDraining: atomic.Bool{},
 		},
-		reloadLock:    sync.Mutex{},
-		mitmDrainMu:   sync.Mutex{},
-		mitmDrainDone: nil,
+		reloadLock:   sync.Mutex{},
+		drainDonesMu: sync.Mutex{},
+		drainDones:   nil,
 	}
 	caller := time.Now()
-	done := drainReloadedMITM(log, rt)
+	done := drainReloadedMITM(context.Background(), log, rt)
 	if elapsed := time.Since(caller); elapsed > 200*time.Millisecond {
 		t.Fatalf("drainReloadedMITM blocked caller for %s; reload RPC must not wait on in-flight tunnels", elapsed)
 	}
@@ -139,18 +139,18 @@ func TestDrainReloadedMITMSetsReloadDrainingBeforeAsync(t *testing.T) {
 		reloadDraining: atomic.Bool{},
 	}
 	rt := &daemonRuntime{
-		listener:      nil,
-		adapter:       nil,
-		webapp:        nil,
-		mitm:          mitmProc,
-		reloadLock:    sync.Mutex{},
-		mitmDrainMu:   sync.Mutex{},
-		mitmDrainDone: nil,
+		listener:     nil,
+		adapter:      nil,
+		webapp:       nil,
+		mitm:         mitmProc,
+		reloadLock:   sync.Mutex{},
+		drainDonesMu: sync.Mutex{},
+		drainDones:   nil,
 	}
 	if mitmProc.reloadDraining.Load() {
 		t.Fatal("reloadDraining was true before drainReloadedMITM ran")
 	}
-	done := drainReloadedMITM(log, rt)
+	done := drainReloadedMITM(context.Background(), log, rt)
 	if !mitmProc.reloadDraining.Load() {
 		t.Fatal("reloadDraining was not set by drainReloadedMITM")
 	}

@@ -185,10 +185,16 @@ func (s *Server) SendLiveSession(ctx context.Context, req *clydev1.SendLiveSessi
 	return s.sendCodexLiveSession(ctx, live, req.GetText())
 }
 
-// StreamLiveSession streams live-session events over gRPC.
+// StreamLiveSession streams live-session events over gRPC. The
+// handler cooperates with reload drain via a per-stream draining
+// [atomic.Bool] shared with the registered rpcCloser: when the
+// registry signals drain, the Closer raises the flag and the
+// handler returns nil cleanly after flushing the current event
+// rather than being cancelled mid-frame (CLYDE-437).
 func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream clydev1.ClydeService_StreamLiveSessionServer) error {
 	streamCtx, streamCancel := context.WithCancel(stream.Context())
 	defer streamCancel()
+	draining := &atomic.Bool{}
 	if s.RPCs != nil {
 		peerInfo, _ := peer.FromContext(streamCtx)
 		corr := correlation.FromContext(streamCtx)
@@ -199,7 +205,7 @@ func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream
 			RequestID:  corr.RequestID,
 			TraceID:    string(corr.TraceID),
 			LeaseToken: "",
-		}, rpcCloser{cancel: streamCancel})
+		}, rpcCloser{cancel: streamCancel, draining: draining})
 		if err != nil {
 			if errors.Is(err, livetrack.ErrRegistryClosed) {
 				return status.Error(codes.Unavailable, "daemon streaming RPC registry is draining")
@@ -217,6 +223,9 @@ func (s *Server) StreamLiveSession(req *clydev1.StreamLiveSessionRequest, stream
 		return err
 	}
 	for {
+		if draining.Load() {
+			return nil
+		}
 		select {
 		case event, ok := <-events:
 			if !ok {

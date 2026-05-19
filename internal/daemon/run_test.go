@@ -155,6 +155,13 @@ func TestStopAdapterProcessWaitsForDone(t *testing.T) {
 	}
 }
 
+// TestAdapterReloadDrainSkipsShutdownWhenNoActiveRequests covers the
+// idle fast-path. With no active requests at handoff, the shared
+// orchestrator skips the goroutine entirely: drain is never invoked,
+// force-close fires synchronously to release idle keepalive sockets,
+// and the listener is closed so the replacement daemon owns the bind.
+// The returned done channel is already closed by the time
+// drainReloadedProcess returns.
 func TestAdapterReloadDrainSkipsShutdownWhenNoActiveRequests(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	drained := false
@@ -165,9 +172,7 @@ func TestAdapterReloadDrainSkipsShutdownWhenNoActiveRequests(t *testing.T) {
 			drained = true
 			return nil
 		},
-		waitIdle: func(context.Context) int {
-			return 0
-		},
+		activeCount: func() int { return 0 },
 		forceClose: func() error {
 			forceClosed = true
 			return nil
@@ -179,7 +184,8 @@ func TestAdapterReloadDrainSkipsShutdownWhenNoActiveRequests(t *testing.T) {
 	}
 	ctrl := &adapterController{log: log, proc: proc}
 
-	ctrl.drainReloadedProcess(time.Second)
+	done := ctrl.drainReloadedProcess(context.Background(), log)
+	waitDoneOrFail(t, done, 500*time.Millisecond)
 
 	if drained {
 		t.Fatalf("idle reload drain should not wait on http.Server.Shutdown")
@@ -192,6 +198,15 @@ func TestAdapterReloadDrainSkipsShutdownWhenNoActiveRequests(t *testing.T) {
 	}
 }
 
+// TestAdapterReloadDrainUsesShutdownForActiveRequests covers the
+// active-path: with one in-flight request at handoff, the orchestrator
+// returns immediately (so the reload RPC is not blocked) but spawns a
+// goroutine that calls drain. drain completes successfully (natural
+// release in this fake), then force-close fires as the safety net.
+// CLYDE-437: the prior implementation force-closed after a 4s deadline
+// truncating in-flight SSE streams; this test pins the new contract
+// that force-close fires after the goroutine's drain returns and the
+// caller is not blocked.
 func TestAdapterReloadDrainUsesShutdownForActiveRequests(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	drained := false
@@ -201,18 +216,18 @@ func TestAdapterReloadDrainUsesShutdownForActiveRequests(t *testing.T) {
 			drained = true
 			return nil
 		},
-		waitIdle: func(context.Context) int {
-			return 1
-		},
-		forceClose: func() error {
-			forceClosed = true
-			return nil
-		},
+		activeCount:   func() int { return 1 },
+		forceClose:    func() error { forceClosed = true; return nil },
 		closeListener: func() error { return nil },
 	}
 	ctrl := &adapterController{log: log, proc: proc}
 
-	ctrl.drainReloadedProcess(time.Second)
+	caller := time.Now()
+	done := ctrl.drainReloadedProcess(context.Background(), log)
+	if elapsed := time.Since(caller); elapsed > 200*time.Millisecond {
+		t.Fatalf("drainReloadedProcess blocked caller for %s; reload RPC must not wait on in-flight requests", elapsed)
+	}
+	waitDoneOrFail(t, done, 2*time.Second)
 
 	if !drained {
 		t.Fatalf("active reload drain should wait on http.Server.Shutdown")
@@ -222,51 +237,30 @@ func TestAdapterReloadDrainUsesShutdownForActiveRequests(t *testing.T) {
 	}
 }
 
-func TestAdapterReloadDrainBoundsWaitIdle(t *testing.T) {
+// TestAdapterReloadDrainSetsReloadDrainingBeforeAsync mirrors the MITM
+// gate test: the synchronous proc.cancel path (used by exclusive.stop
+// on full daemon exit AND on reload handoff) must observe the
+// reloadDraining flag and become a no-op while the async drain owns
+// the lifecycle. The flag must be set before the async goroutine is
+// scheduled so cancel callers see it immediately.
+func TestAdapterReloadDrainSetsReloadDrainingBeforeAsync(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	const timeout = 20 * time.Millisecond
-	drained := false
-	forceClosed := false
 	proc := &adapterProcess{
-		drain: func(context.Context) error {
-			drained = true
-			return nil
-		},
-		waitIdle: func(ctx context.Context) int {
-			<-ctx.Done()
-			return 1
-		},
-		forceClose: func() error {
-			forceClosed = true
-			return nil
-		},
-		closeListener: func() error { return nil },
+		drain:          func(context.Context) error { return nil },
+		activeCount:    func() int { return 1 },
+		forceClose:     func() error { return nil },
+		closeListener:  func() error { return nil },
+		reloadDraining: atomic.Bool{},
 	}
 	ctrl := &adapterController{log: log, proc: proc}
-	started := time.Now()
-
-	ctrl.drainReloadedProcess(timeout)
-
-	elapsed := time.Since(started)
-	if elapsed < timeout {
-		t.Fatalf("reload drain elapsed=%s, want at least %s", elapsed, timeout)
+	if proc.reloadDraining.Load() {
+		t.Fatal("reloadDraining was true before drainReloadedProcess ran")
 	}
-	if elapsed > 500*time.Millisecond {
-		t.Fatalf("reload drain elapsed=%s, want bounded wait", elapsed)
+	done := ctrl.drainReloadedProcess(context.Background(), log)
+	if !proc.reloadDraining.Load() {
+		t.Fatal("reloadDraining was not set by drainReloadedProcess")
 	}
-	if !drained {
-		t.Fatalf("active reload drain should call shutdown after idle wait times out")
-	}
-	if !forceClosed {
-		t.Fatalf("active reload drain should force close after bounded drain")
-	}
-}
-
-func TestReloadHTTPDrainWaitFitsReloadCommandDeadline(t *testing.T) {
-	const reloadCommandDeadline = 45 * time.Second
-	if reloadHTTPDrainWait >= reloadCommandDeadline {
-		t.Fatalf("reloadHTTPDrainWait=%s must be less than reload command deadline %s", reloadHTTPDrainWait, reloadCommandDeadline)
-	}
+	waitDoneOrFail(t, done, 2*time.Second)
 }
 
 func TestReloadDaemonCallsReloadFunc(t *testing.T) {

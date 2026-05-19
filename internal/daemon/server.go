@@ -554,6 +554,7 @@ func (s *Server) TriggerScan(ctx context.Context, _ *clydev1.TriggerScanRequest)
 func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream clydev1.ClydeService_SubscribeRegistryServer) error {
 	ch := make(chan *clydev1.SubscribeRegistryResponse, 32)
 	streamCtx := stream.Context()
+	draining := &atomic.Bool{}
 	if s.RPCs != nil {
 		rpcSess, err := s.RPCs.Register(streamCtx, "daemon.rpc.subscribe_registry", RPCMeta{
 			Direction: "inbound",
@@ -565,7 +566,7 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 			RequestID:  "",
 			TraceID:    "",
 			LeaseToken: "",
-		}, rpcCloser{cancel: func() {}})
+		}, rpcCloser{cancel: func() {}, draining: draining})
 		if err == nil {
 			defer s.RPCs.Release(streamCtx, rpcSess, "subscribe_registry.done")
 		}
@@ -583,6 +584,9 @@ func (s *Server) SubscribeRegistry(_ *clydev1.SubscribeRegistryRequest, stream c
 	}()
 
 	for {
+		if draining.Load() {
+			return nil
+		}
 		select {
 		case ev, ok := <-ch:
 			if !ok {
