@@ -282,8 +282,10 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		})
 		return nil, &UpstreamError{
 			Classification: Classify(nil, err),
+			Status:         0,
 			Message:        fmt.Sprintf("post /v1/messages: %v", err),
 			Cause:          err,
+			ErrorType:      ErrorKindNone,
 		}
 	}
 
@@ -337,6 +339,8 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 			Classification: class,
 			Status:         resp.StatusCode,
 			Message:        message,
+			Cause:          nil,
+			ErrorType:      ErrorKindNone,
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -349,6 +353,8 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 			Classification: Classify(resp, nil),
 			Status:         resp.StatusCode,
 			Message:        truncate(string(errBody), 600),
+			Cause:          nil,
+			ErrorType:      ErrorKindNone,
 		}
 	}
 	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)

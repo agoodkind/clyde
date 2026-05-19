@@ -353,8 +353,26 @@ func anthropicProviderAdapterError(err error) *adapterError {
 		// Anthropic provider flows through mapUpstreamForFamily so
 		// Cursor BYOK gets a parseable invalid_request envelope with
 		// the upstream message preserved verbatim.
+		//
+		// ErrorType takes precedence over Status because an Anthropic
+		// 200 stream can carry a typed rejection in its first SSE
+		// `event: error` frame (CLYDE-439); the wire HTTP status is
+		// 200 in that case, so a status-only switch would misroute
+		// the failure as upstream_failed. When ErrorType is empty
+		// the call failed at the HTTP layer and Status carries the
+		// signal.
 		codeClass := upstreamClassUnknown
 		switch {
+		case upstreamErr.ErrorType == anthropic.ErrorKindRateLimit:
+			codeClass = upstreamClassRateLimit
+		case upstreamErr.ErrorType == anthropic.ErrorKindOverloaded:
+			codeClass = upstreamClassServerError
+		case upstreamErr.ErrorType == anthropic.ErrorKindAuth:
+			codeClass = upstreamClassAuth
+		case upstreamErr.ErrorType == anthropic.ErrorKindInvalidRequest:
+			codeClass = upstreamClassInvalidRequest
+		case upstreamErr.ErrorType == anthropic.ErrorKindAPI:
+			codeClass = upstreamClassServerError
 		case upstreamErr.Status == http.StatusTooManyRequests:
 			codeClass = upstreamClassRateLimit
 		case upstreamErr.Status == http.StatusUnauthorized || upstreamErr.Status == http.StatusForbidden:

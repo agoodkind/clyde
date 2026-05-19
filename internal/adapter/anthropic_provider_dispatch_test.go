@@ -85,6 +85,49 @@ func TestAnthropicProviderErrorResponseMapsUpstreamRateLimitToCursorSafeInvalidR
 	}
 }
 
+// TestAnthropicProviderErrorResponseMapsSSEErrorEventToTypedClass
+// pins the CLYDE-439 contract that an Anthropic SSE `event: error`
+// frame on a 200 stream surfaces in the OpenAI route family envelope
+// with the typed upstream class derived from the Anthropic envelope
+// `error.type`, not the generic `upstream_failed`. The upstream HTTP
+// status was 200; only the SSE error frame carries the routing
+// signal. Verifies all five documented error.type values.
+func TestAnthropicProviderErrorResponseMapsSSEErrorEventToTypedClass(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		kind     anthropic.ErrorKind
+		wantCode string
+	}{
+		{name: "rate_limit", kind: anthropic.ErrorKindRateLimit, wantCode: "upstream_rate_limited"},
+		{name: "overloaded", kind: anthropic.ErrorKindOverloaded, wantCode: "upstream_failed"},
+		{name: "authentication", kind: anthropic.ErrorKindAuth, wantCode: "upstream_auth_failed"},
+		{name: "invalid_request", kind: anthropic.ErrorKindInvalidRequest, wantCode: "invalid_request"},
+		{name: "api", kind: anthropic.ErrorKindAPI, wantCode: "upstream_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			upstreamErr := &anthropic.UpstreamError{
+				Classification: anthropic.Classification{Class: anthropic.ResponseClassFatalError},
+				Status:         0,
+				Message:        "Rate limited",
+				ErrorType:      tc.kind,
+			}
+			aerr := anthropicProviderAdapterError(upstreamErr)
+			if aerr.HTTPStatus != http.StatusBadRequest {
+				t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
+			}
+			if aerr.OpenAIType != "invalid_request_error" {
+				t.Fatalf("type=%q want invalid_request_error", aerr.OpenAIType)
+			}
+			if aerr.OpenAICode != tc.wantCode {
+				t.Fatalf("code=%q want %q", aerr.OpenAICode, tc.wantCode)
+			}
+		})
+	}
+}
+
 func TestAnthropicProviderErrorResponseMapsWrappedTransportFailure(t *testing.T) {
 	t.Parallel()
 

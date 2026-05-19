@@ -3,7 +3,6 @@ package anthropic
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // streamMessageUsage is the usage object inside a message_start event.
@@ -241,9 +240,9 @@ func dispatchSSE(
 	case "error":
 		var ev streamErrorEvent
 		if err := json.Unmarshal([]byte(data), &ev); err == nil {
-			return fmt.Errorf("anthropic error: %s: %s", ev.Error.Type, ev.Error.Message)
+			return newStreamUpstreamError(ErrorKind(ev.Error.Type), ev.Error.Message)
 		}
-		return fmt.Errorf("anthropic error: %s", truncate(data, 400))
+		return newStreamUpstreamError(ErrorKindNone, "anthropic error: "+truncate(data, 400))
 	}
 	return nil
 }
@@ -253,4 +252,50 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// newStreamUpstreamError builds the typed UpstreamError for an SSE
+// `event: error` frame on a 200 stream. The Anthropic envelope
+// `error.type` ("rate_limit_error", "overloaded_error", etc.)
+// carries the routing signal because the wire HTTP status was 200
+// and Status alone cannot tell the adapter how to classify the
+// failure (CLYDE-439).
+//
+// The synthesized Classification mirrors the routing rule used by
+// HTTP-level failures: rate_limit_error and overloaded_error are
+// retryable; other types fall through to fatal. The class is the
+// source of truth for retry policies and provider notice routing;
+// the upstream-to-adapter mapping in
+// `anthropic_provider_dispatch.anthropicProviderAdapterError`
+// inspects ErrorType to pick the right `upstreamClass*` for the
+// OpenAI route family envelope.
+func newStreamUpstreamError(errorType ErrorKind, message string) *UpstreamError {
+	classification := Classification{
+		Class:              ResponseClassFatalError,
+		Status:             0,
+		TransportError:     nil,
+		Retryable:          false,
+		HasOverageRejected: false,
+		HasOverageActive:   false,
+		SurpassedThreshold: false,
+		AllowedWarning:     false,
+	}
+	switch errorType {
+	case ErrorKindRateLimit, ErrorKindOverloaded:
+		classification.Class = ResponseClassRetryableError
+		classification.Retryable = true
+	case ErrorKindNone, ErrorKindAuth, ErrorKindInvalidRequest, ErrorKindAPI:
+		// Default fatal class is correct for these.
+	}
+	body := message
+	if errorType != ErrorKindNone {
+		body = "anthropic error: " + string(errorType) + ": " + message
+	}
+	return &UpstreamError{
+		Classification: classification,
+		Status:         0,
+		Message:        body,
+		Cause:          nil,
+		ErrorType:      errorType,
+	}
 }
