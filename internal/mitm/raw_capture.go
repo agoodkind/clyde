@@ -37,6 +37,11 @@ type cursorCaptureMetadata struct {
 	RequestContentType  string
 	ResponseContentType string
 	Diagnostic          *cursorBidiAppendDiagnostic
+	// Hook names the [[mitm.hook]] rule that rewrote this exchange,
+	// when non-empty. The field stays unset for plain pass-through
+	// requests so existing tooling that reads capture.jsonl keeps
+	// working unchanged.
+	Hook string
 }
 
 type cursorCaptureEvent struct {
@@ -60,6 +65,7 @@ type cursorCaptureEvent struct {
 	RequestContentType  string                      `json:"request_content_type"`
 	ResponseContentType string                      `json:"response_content_type"`
 	Diagnostic          *cursorBidiAppendDiagnostic `json:"bidi_append,omitempty"`
+	Hook                string                      `json:"hook,omitempty"`
 }
 
 type captureConcernInput struct {
@@ -230,6 +236,7 @@ func (p *Proxy) appendCursorCaptureMetadata(dir string, meta cursorCaptureMetada
 		RequestContentType:  meta.RequestContentType,
 		ResponseContentType: meta.ResponseContentType,
 		Diagnostic:          meta.Diagnostic,
+		Hook:                meta.Hook,
 	}
 	return p.appendCursorCaptureEvent(dir, event, policy)
 }

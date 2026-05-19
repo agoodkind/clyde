@@ -139,7 +139,7 @@ func (w *Worker) preflightDecision(sess *session.Session) (decision, bool) {
 		return out, true
 	}
 
-	cooldown := w.cfg.Cooldown.Duration()
+	cooldown := w.cfg.Cooldown.AsDuration()
 	if cooldown <= 0 {
 		cooldown = 30 * time.Minute
 	}

@@ -62,8 +62,8 @@ message_substrings = ["overloaded"]
 		Expect(policy.Name).To(Equal("custom"))
 		Expect(policy.Enabled).NotTo(BeNil())
 		Expect(*policy.Enabled).To(BeTrue())
-		Expect(policy.InitialDelay.Duration()).To(Equal(10 * time.Millisecond))
-		Expect(policy.MaxDelay.Duration()).To(Equal(50 * time.Millisecond))
+		Expect(policy.InitialDelay.AsDuration()).To(Equal(10 * time.Millisecond))
+		Expect(policy.MaxDelay.AsDuration()).To(Equal(50 * time.Millisecond))
 		Expect(policy.Match.Backends).To(Equal([]string{"codex"}))
 	})
 

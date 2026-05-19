@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 )
 
@@ -275,6 +276,7 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	capturePolicy := captureFilePolicyFromConfig(cfg)
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
+		p.log.WarnContext(req.Context(), "mitm.cursor.request.read_body_failed", "host", host, "err", err)
 		return fmt.Errorf("read cursor request body: %w", err)
 	}
 	_ = req.Body.Close()
@@ -293,6 +295,7 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 	})
 	requestRawPath, responseRawPath, err := p.nextRawCapturePaths(cfg.CaptureDir, concern, host, req.URL.Path)
 	if err != nil {
+		p.log.WarnContext(req.Context(), "mitm.cursor.request.prepare_raw_paths_failed", "host", host, "err", err)
 		return fmt.Errorf("prepare raw capture paths: %w", err)
 	}
 	requestBytes, err := writeRawCaptureFile(requestRawPath, func(dst io.Writer) error {
@@ -300,70 +303,131 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		return req.Write(dst)
 	})
 	if err != nil {
+		p.log.WarnContext(req.Context(), "mitm.cursor.request.write_raw_failed", "host", host, "err", err)
 		return fmt.Errorf("write raw cursor request: %w", err)
 	}
 	req.Body = io.NopCloser(bytes.NewReader(body))
 
-	resp, err := p.cursorUpstreamRoundTrip(req, body, target, host)
+	if rule, ok := matchHookRule(cfg.Hooks, host, req.Method, req.URL.Path); ok {
+		return p.runHookedCursorRequest(req.Context(), hookedCursorParams{
+			writer:          writer,
+			req:             req,
+			body:            body,
+			target:          target,
+			host:            host,
+			rule:            rule,
+			started:         started,
+			concern:         concern,
+			requestBytes:    requestBytes,
+			requestRawPath:  requestRawPath,
+			responseRawPath: responseRawPath,
+			cfg:             cfg,
+			capturePolicy:   capturePolicy,
+		})
+	}
+
+	return p.forwardCursorRequestToUpstream(cursorForwardParams{
+		writer:          writer,
+		req:             req,
+		body:            body,
+		target:          target,
+		host:            host,
+		started:         started,
+		concern:         concern,
+		requestBytes:    requestBytes,
+		requestRawPath:  requestRawPath,
+		responseRawPath: responseRawPath,
+		cfg:             cfg,
+		capturePolicy:   capturePolicy,
+	})
+}
+
+// cursorForwardParams bundles the per-request state computed inside
+// handleCursorInterceptedRequest so the forwarding helper can run the
+// upstream round-trip and capture-metadata write without a wide
+// parameter list.
+type cursorForwardParams struct {
+	writer          *bufio.Writer
+	req             *http.Request
+	body            []byte
+	target          string
+	host            string
+	started         time.Time
+	concern         string
+	requestBytes    int64
+	requestRawPath  string
+	responseRawPath string
+	cfg             config.MITMConfig
+	capturePolicy   CaptureFilePolicy
+}
+
+// forwardCursorRequestToUpstream runs the standard (non-hook)
+// pass-through path: round-trip to upstream, stream the response to
+// the client, and append capture metadata. Split out of
+// handleCursorInterceptedRequest to keep both functions under the
+// funlen ceiling.
+func (p *Proxy) forwardCursorRequestToUpstream(params cursorForwardParams) error {
+	resp, err := p.cursorUpstreamRoundTrip(params.req, params.body, params.target, params.host)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	responseBytes, err := p.forwardAndCaptureCursorResponse(writer, resp, responseRawPath)
+	responseBytes, err := p.forwardAndCaptureCursorResponse(params.writer, resp, params.responseRawPath)
 	if err != nil {
 		return err
 	}
-	requestID, originalRequestID, sessionID, traceparent := extractCursorCaptureHeaders(req.Header)
+	requestID, originalRequestID, sessionID, traceparent := extractCursorCaptureHeaders(params.req.Header)
 	diag, hasDiag := cursorBidiAppendDiagnosticForRequest(&httpRequestCapture{
-		Path:    req.URL.Path,
-		Headers: req.Header,
-		Body:    body,
+		Path:    params.req.URL.Path,
+		Headers: params.req.Header,
+		Body:    params.body,
 	}, nil)
 	if !hasDiag {
 		diag = nil
 	}
-	if appendErr := p.appendCursorCaptureMetadata(cfg.CaptureDir, cursorCaptureMetadata{
+	if appendErr := p.appendCursorCaptureMetadata(params.cfg.CaptureDir, cursorCaptureMetadata{
 		Provider:            "cursor",
-		Concern:             concern,
-		Host:                host,
-		Path:                req.URL.Path,
-		Method:              req.Method,
+		Concern:             params.concern,
+		Host:                params.host,
+		Path:                params.req.URL.Path,
+		Method:              params.req.Method,
 		Status:              resp.StatusCode,
-		RequestBytes:        requestBytes,
+		RequestBytes:        params.requestBytes,
 		ResponseBytes:       responseBytes,
-		RequestRawPath:      requestRawPath,
-		ResponseRawPath:     responseRawPath,
+		RequestRawPath:      params.requestRawPath,
+		ResponseRawPath:     params.responseRawPath,
 		RequestID:           requestID,
 		OriginalRequestID:   originalRequestID,
 		SessionID:           sessionID,
 		Traceparent:         traceparent,
-		RequestContentType:  req.Header.Get("Content-Type"),
+		RequestContentType:  params.req.Header.Get("Content-Type"),
 		ResponseContentType: resp.Header.Get("Content-Type"),
 		Diagnostic:          diag,
-	}, capturePolicy); appendErr != nil {
+		Hook:                "",
+	}, params.capturePolicy); appendErr != nil {
 		if errors.Is(appendErr, ErrCaptureSinkClosed) {
 			p.log.Debug("mitm.cursor.capture.append_skipped_closed",
 				"component", "mitm",
 				"concern", "providers.mitm.wire",
-				"capture_dir", cfg.CaptureDir,
+				"capture_dir", params.cfg.CaptureDir,
 			)
 		} else {
 			p.log.Warn("mitm.cursor.capture.append_failed",
 				"component", "mitm",
 				"concern", "providers.mitm.wire",
-				"capture_dir", cfg.CaptureDir,
+				"capture_dir", params.cfg.CaptureDir,
 				"err", appendErr,
 			)
 		}
 	}
 	p.log.Info("mitm.cursor.capture.completed",
-		"host", host,
-		"concern", concern,
-		"path", req.URL.Path,
+		"host", params.host,
+		"concern", params.concern,
+		"path", params.req.URL.Path,
 		"status", resp.StatusCode,
-		"duration_ms", time.Since(started).Milliseconds(),
-		"request_bytes", requestBytes,
+		"duration_ms", time.Since(params.started).Milliseconds(),
+		"request_bytes", params.requestBytes,
 		"response_bytes", responseBytes,
 	)
 	return nil

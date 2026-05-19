@@ -21,6 +21,22 @@ func DefaultBaselineRoot() string {
 	return filepath.Join(home, ".local", "state", "clyde", "mitm-baselines")
 }
 
+// DefaultHookStagingRoot returns the user-local directory that holds
+// the per-request temp directories the MITM hook dispatcher creates
+// for the JSON envelopes and body files it exchanges with hook
+// subprocesses. The directory is auto-created on first use and each
+// per-request subdirectory is removed after the hook returns.
+func DefaultHookStagingRoot() string {
+	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
+		return filepath.Join(base, "clyde", "mitm-hooks")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "mitm-hooks"
+	}
+	return filepath.Join(home, ".local", "state", "clyde", "mitm-hooks")
+}
+
 func DefaultDriftLogDir() string {
 	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
 		return filepath.Join(base, "clyde", "mitm-drift")

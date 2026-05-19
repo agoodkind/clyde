@@ -336,41 +336,12 @@ type AdapterRetryPolicy struct {
 	Name                     string               `json:"name,omitempty" toml:"name,omitempty"`
 	Enabled                  *bool                `json:"enabled,omitempty" toml:"enabled,omitempty"`
 	MaxAttempts              int                  `json:"maxAttempts,omitempty" toml:"max_attempts,omitempty"`
-	InitialDelay             AdapterRetryDuration `json:"initialDelay,omitempty" toml:"initial_delay,omitempty"`
-	MaxDelay                 AdapterRetryDuration `json:"maxDelay,omitempty" toml:"max_delay,omitempty"`
+	InitialDelay             Duration             `json:"initialDelay,omitempty" toml:"initial_delay,omitempty"`
+	MaxDelay                 Duration             `json:"maxDelay,omitempty" toml:"max_delay,omitempty"`
 	Multiplier               float64              `json:"multiplier,omitempty" toml:"multiplier,omitempty"`
 	JitterFraction           float64              `json:"jitterFraction,omitempty" toml:"jitter_fraction,omitempty"`
 	RetryWhenResponseStarted bool                 `json:"retryWhenResponseStarted,omitempty" toml:"retry_when_response_started,omitempty"`
 	Match                    AdapterRetryMatchers `json:"match,omitzero" toml:"match,omitempty"`
-}
-
-// AdapterRetryDuration accepts quoted Go duration strings in TOML while still
-// preserving duration typing inside the config model.
-type AdapterRetryDuration time.Duration
-
-// UnmarshalText parses a quoted Go duration or an integer nanosecond count.
-func (duration *AdapterRetryDuration) UnmarshalText(text []byte) error {
-	value := strings.TrimSpace(string(text))
-	if value == "" {
-		*duration = 0
-		return nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err == nil {
-		*duration = AdapterRetryDuration(parsed)
-		return nil
-	}
-	numeric, numericErr := strconv.ParseInt(value, 10, 64)
-	if numericErr == nil {
-		*duration = AdapterRetryDuration(time.Duration(numeric))
-		return nil
-	}
-	return fmt.Errorf("parse adapter retry duration %q: %w", value, err)
-}
-
-// Duration returns the standard library duration value.
-func (duration *AdapterRetryDuration) Duration() time.Duration {
-	return time.Duration(*duration)
 }
 
 // AdapterRetryMatchers constrains when a retry policy applies.
@@ -1145,41 +1116,12 @@ type Defaults struct {
 // Redact controls the redaction pass on transcript content before it
 // reaches the LLM call.
 type AutoNameConfig struct {
-	Enabled         *bool            `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	Provider        string           `json:"provider,omitempty" toml:"provider,omitempty"`
-	MaxCallsPerHour int              `json:"maxCallsPerHour,omitempty" toml:"max_calls_per_hour,omitempty"`
-	Cooldown        AutoNameDuration `json:"cooldown,omitempty" toml:"cooldown,omitempty"`
-	MinUserMessages int              `json:"minUserMessages,omitempty" toml:"min_user_messages,omitempty"`
-	Redact          RedactPolicy     `json:"redact,omitzero" toml:"redact,omitempty"`
-}
-
-// AutoNameDuration accepts quoted Go duration strings in TOML while still
-// preserving duration typing inside the config model.
-type AutoNameDuration time.Duration
-
-// UnmarshalText parses a quoted Go duration or an integer nanosecond count.
-func (duration *AutoNameDuration) UnmarshalText(text []byte) error {
-	value := strings.TrimSpace(string(text))
-	if value == "" {
-		*duration = 0
-		return nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err == nil {
-		*duration = AutoNameDuration(parsed)
-		return nil
-	}
-	numeric, numericErr := strconv.ParseInt(value, 10, 64)
-	if numericErr == nil {
-		*duration = AutoNameDuration(time.Duration(numeric))
-		return nil
-	}
-	return fmt.Errorf("parse autoname cooldown %q: %w", value, err)
-}
-
-// Duration returns the standard library duration value.
-func (duration *AutoNameDuration) Duration() time.Duration {
-	return time.Duration(*duration)
+	Enabled         *bool        `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Provider        string       `json:"provider,omitempty" toml:"provider,omitempty"`
+	MaxCallsPerHour int          `json:"maxCallsPerHour,omitempty" toml:"max_calls_per_hour,omitempty"`
+	Cooldown        Duration     `json:"cooldown,omitempty" toml:"cooldown,omitempty"`
+	MinUserMessages int          `json:"minUserMessages,omitempty" toml:"min_user_messages,omitempty"`
+	Redact          RedactPolicy `json:"redact,omitzero" toml:"redact,omitempty"`
 }
 
 // IsEnabled reports whether the auto-rename worker is enabled.
@@ -1244,6 +1186,7 @@ type MITMConfig struct {
 	CaptureDir     string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
+	Hooks          []MITMHookRule         `json:"hooks,omitempty" toml:"hook,omitempty"`
 	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
 	Listen         MITMListenConfig       `json:"listen,omitzero" toml:"listen,omitempty"`
 	CA             MITMCAConfig           `json:"ca,omitzero" toml:"ca,omitempty"`
@@ -1288,6 +1231,108 @@ type MITMCaptureRouteRule struct {
 	PathPrefix          string `json:"pathPrefix,omitempty" toml:"path_prefix,omitempty"`
 	PathContains        string `json:"pathContains,omitempty" toml:"path_contains,omitempty"`
 	ContentTypeContains string `json:"contentTypeContains,omitempty" toml:"content_type_contains,omitempty"`
+}
+
+// MITMHookMode names one of the three supported hook execution modes
+// for [[mitm.hook]] rules. The mode controls whether clyde contacts
+// upstream before or after the hook runs, and which body the hook
+// receives on stdin.
+type MITMHookMode string
+
+const (
+	// MITMHookModeSynthesize skips the upstream call entirely. The hook
+	// produces the response body from the request alone. Use this when
+	// the proxy should fabricate a reply (stub, error injection,
+	// always-no-update response).
+	MITMHookModeSynthesize MITMHookMode = "synthesize"
+	// MITMHookModeTransformRequest invokes the hook before the upstream
+	// call so the hook can rewrite the outbound request body. clyde
+	// then forwards the rewritten request to upstream and streams
+	// upstream's response back unchanged.
+	MITMHookModeTransformRequest MITMHookMode = "transform_request"
+	// MITMHookModeTransformResponse forwards the request to upstream
+	// first, then invokes the hook with upstream's response body so the
+	// hook can rewrite it before clyde streams the result back to the
+	// client. This is the mode the desktop-via-clyde Cursor update
+	// re-patching flow uses.
+	MITMHookModeTransformResponse MITMHookMode = "transform_response"
+)
+
+// IsValid reports whether the mode is one of the three known values.
+func (m MITMHookMode) IsValid() bool {
+	switch m {
+	case MITMHookModeSynthesize, MITMHookModeTransformRequest, MITMHookModeTransformResponse:
+		return true
+	}
+	return false
+}
+
+// MITMHookRule declares an external subprocess that clyde forks for
+// every MITM-decrypted Cursor request whose host and path satisfy the
+// matchers. Hooks let external tools (such as desktop-via-clyde)
+// rewrite or synthesize traffic without coupling clyde to the
+// app-specific logic. The hook receives one JSON envelope on stdin
+// describing temp-file paths for the bodies and writes one JSON
+// envelope on stdout describing the response. See
+// internal/mitm/hook.go for the envelope contract.
+type MITMHookRule struct {
+	// Name is an operator-facing identifier echoed in clyde logs and
+	// in the capture event's hook field. Required.
+	Name string `json:"name" toml:"name"`
+	// MatchHost is a literal hostname matched against the intercepted
+	// request's Host header. A single leading "*." enables suffix
+	// matching ("*.cursor.com"). Empty matches every host.
+	MatchHost string `json:"matchHost,omitempty" toml:"match_host,omitempty"`
+	// MatchPathRegex is a Go regexp evaluated against the intercepted
+	// request's URL path. Empty matches every path.
+	MatchPathRegex string `json:"matchPathRegex,omitempty" toml:"match_path_regex,omitempty"`
+	// MatchMethod restricts the rule to one HTTP method when set.
+	MatchMethod string `json:"matchMethod,omitempty" toml:"match_method,omitempty"`
+	// Mode selects which of the three execution shapes the dispatcher
+	// uses. Defaults to MITMHookModeTransformResponse when empty.
+	Mode MITMHookMode `json:"mode,omitempty" toml:"mode,omitempty"`
+	// Command is the absolute path to the hook binary that clyde
+	// forks. Required.
+	Command string `json:"command" toml:"command"`
+	// Args are extra argv entries passed before the per-request
+	// arguments clyde appends.
+	Args []string `json:"args,omitempty" toml:"args,omitempty"`
+	// Timeout caps how long clyde waits for the hook subprocess to
+	// finish before killing it and returning 502 to the client. Empty
+	// uses the dispatcher's default (5 minutes).
+	Timeout Duration `json:"timeout,omitempty" toml:"timeout,omitempty"`
+}
+
+// Duration is the shared [time.Duration] wrapper for TOML-decoded
+// config fields. The TOML decoder cannot read a bare [time.Duration],
+// so every duration-shaped config field aliases this type and gets
+// `"10m"`-style strings parsed via UnmarshalText.
+type Duration time.Duration
+
+// UnmarshalText parses a quoted Go duration string or an integer
+// nanosecond count.
+func (duration *Duration) UnmarshalText(text []byte) error {
+	value := strings.TrimSpace(string(text))
+	if value == "" {
+		*duration = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err == nil {
+		*duration = Duration(parsed)
+		return nil
+	}
+	numeric, numericErr := strconv.ParseInt(value, 10, 64)
+	if numericErr == nil {
+		*duration = Duration(time.Duration(numeric))
+		return nil
+	}
+	return fmt.Errorf("parse duration %q: %w", value, err)
+}
+
+// AsDuration returns the standard library duration value.
+func (duration *Duration) AsDuration() time.Duration {
+	return time.Duration(*duration)
 }
 
 // MITMDriftConfig configures daemon-owned baseline refresh and drift

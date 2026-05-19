@@ -337,7 +337,7 @@ func applyAutoNameDefaults(autoname *AutoNameConfig) {
 		autoname.MaxCallsPerHour = defaultAutoNameMaxCallsPerHour
 	}
 	if autoname.Cooldown == 0 {
-		autoname.Cooldown = AutoNameDuration(defaultAutoNameCooldown)
+		autoname.Cooldown = Duration(defaultAutoNameCooldown)
 	}
 	if autoname.MinUserMessages == 0 {
 		autoname.MinUserMessages = defaultAutoNameMinUserMessages
@@ -584,13 +584,13 @@ func normalizeAdapterRetryPolicy(policy *AdapterRetryPolicy) error {
 	if policy.MaxAttempts < 1 {
 		return fmt.Errorf("adapter.retry.policies.%s.max_attempts must be at least 1", policy.Name)
 	}
-	if policy.InitialDelay.Duration() < 0 {
+	if policy.InitialDelay.AsDuration() < 0 {
 		return fmt.Errorf("adapter.retry.policies.%s.initial_delay must be non-negative", policy.Name)
 	}
-	if policy.MaxDelay.Duration() < 0 {
+	if policy.MaxDelay.AsDuration() < 0 {
 		return fmt.Errorf("adapter.retry.policies.%s.max_delay must be non-negative", policy.Name)
 	}
-	if policy.MaxDelay.Duration() > 0 && policy.InitialDelay.Duration() > policy.MaxDelay.Duration() {
+	if policy.MaxDelay.AsDuration() > 0 && policy.InitialDelay.AsDuration() > policy.MaxDelay.AsDuration() {
 		return fmt.Errorf("adapter.retry.policies.%s.initial_delay must be less than or equal to max_delay", policy.Name)
 	}
 	if policy.Multiplier < 0 {
