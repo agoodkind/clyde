@@ -108,6 +108,50 @@ func TestAnthropicProviderErrorResponseMapsWrappedTransportFailure(t *testing.T)
 	}
 }
 
+// TestAnthropicShouldEmitUsageAlwaysReturnsTrue pins the CLYDE-438
+// contract: the Anthropic streaming dispatcher always emits the
+// trailing OpenAI usage chunk regardless of whether the client
+// opted in via `stream_options.include_usage`. Cursor BYOK does not
+// set the opt-in for `clyde-opus-*` model aliases, and the auto-
+// compact heuristic depends on the usage data, so emitting it
+// unconditionally is the only way Cursor learns the Anthropic chat
+// is approaching the context window.
+func TestAnthropicShouldEmitUsageAlwaysReturnsTrue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		req  adapteropenai.ChatRequest
+	}{
+		{
+			name: "no_stream_options",
+			req:  adapteropenai.ChatRequest{Model: "clyde-opus-4.7-1m-high-thinking"},
+		},
+		{
+			name: "stream_options_opt_in",
+			req: adapteropenai.ChatRequest{
+				Model:         "clyde-opus-4.7-1m-high-thinking",
+				StreamOptions: &adapteropenai.StreamOptions{IncludeUsage: true},
+			},
+		},
+		{
+			name: "stream_options_opt_out",
+			req: adapteropenai.ChatRequest{
+				Model:         "clyde-opus-4.7-1m-high-thinking",
+				StreamOptions: &adapteropenai.StreamOptions{IncludeUsage: false},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := anthropicShouldEmitUsage(tc.req); !got {
+				t.Fatalf("anthropicShouldEmitUsage(%s) = false, want true", tc.name)
+			}
+		})
+	}
+}
+
 func TestAnthropicIngressProviderErrorPreservesNativeRateLimitShape(t *testing.T) {
 	t.Parallel()
 
