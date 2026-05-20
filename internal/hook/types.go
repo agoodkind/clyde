@@ -9,9 +9,7 @@ type SessionStartInput struct {
 
 // SessionStartConfig optional hooks for tests and embedding. Nil fields use defaults.
 type SessionStartConfig struct {
-	LogRawEvent     func(rawJSON []byte, sessionID string) error
-	Getwd           func() (string, error)
-	FindProjectRoot func() (string, error)
+	LogRawEvent func(rawJSON []byte, sessionID string) error
 }
 
 // Result summarizes what ProcessSessionStart did for the operator and telemetry.
@@ -22,7 +20,5 @@ type Result struct {
 }
 
 type sessionStartDeps struct {
-	logRawEvent     func(rawJSON []byte, sessionID string) error
-	getwd           func() (string, error)
-	findProjectRoot func() (string, error)
+	logRawEvent func(rawJSON []byte, sessionID string) error
 }

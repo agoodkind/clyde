@@ -5,83 +5,78 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
-	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/notify"
-	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
 	"goodkind.io/clyde/internal/session"
 )
 
 func handleStartupOrResume(
 	ctx context.Context,
 	log *slog.Logger,
-	deps sessionStartDeps,
 	hookData SessionStartInput,
 	store session.Store,
 	out io.Writer,
 	errOut io.Writer,
 ) string {
+	// Identity is the provider session UUID. The session record is created by the
+	// daemon before launch, so the hook resolves it by UUID here. A Claude that
+	// inherited a stale CLYDE_SESSION_NAME no longer adopts or attaches by name.
 	sessionName := resultSessionName(hookData, store)
-	envSessionNameValue := strings.TrimSpace(os.Getenv(envSessionName))
-
-	if sessionName != "" {
-		if envSessionNameValue != "" && sessionName == envSessionNameValue && !store.Exists(sessionName) && hookData.SessionID != "" {
-			if session.ValidateLegacySlugName(envSessionNameValue) == nil {
-				autoAdoptSession(log, deps, store, envSessionNameValue, hookData, errOut)
-			}
-		}
-
-		if err := writeSessionIdentityToEnv(sessionName, hookData.SessionID); err != nil {
-			log.WarnContext(ctx, "hook.sessionstart.env_write_failed",
-				"component", "hook",
-				"subject", "sessionstart",
-				"key", envLegacySessionName,
-				"err", err,
-			)
-			_, _ = fmt.Fprintf(errOut, "Warning: failed to write session identity to env: %v\n", err)
-		}
-
-		if hookData.TranscriptPath != "" {
-			switch {
-			case !transcriptWriteAllowed(store, sessionName, hookData.SessionID):
-				// Identity is the provider session UUID. Refuse to overwrite a
-				// record's transcript path from a SessionStart whose UUID does
-				// not match that record, which happens when an unrelated Claude
-				// process inherits a leaked CLYDE_SESSION_NAME and resolves to
-				// this session by name. See handlers.go transcriptWriteAllowed.
-				log.WarnContext(ctx, "hook.sessionstart.transcript_save_skipped_uuid_mismatch",
-					"component", "hook",
-					"subject", "sessionstart",
-					"session", sessionName,
-					"session_id", hookData.SessionID,
-					"transcript", hookData.TranscriptPath,
-				)
-			default:
-				if err := saveTranscriptPath(store, sessionName, hookData.TranscriptPath); err != nil {
-					log.WarnContext(ctx, "hook.sessionstart.transcript_save_failed",
-						"component", "hook",
-						"subject", "sessionstart",
-						"session", sessionName,
-						"err", err,
-					)
-					_, _ = fmt.Fprintf(errOut, "Warning: failed to save transcript path: %v\n", err)
-				} else {
-					log.InfoContext(ctx, "hook.sessionstart.transcript_saved",
-						"component", "hook",
-						"subject", "sessionstart",
-						"session", sessionName,
-						"transcript", hookData.TranscriptPath,
-					)
-				}
-			}
-		}
+	if sessionName == "" {
+		outputContexts(log, store, sessionName, out)
+		return ""
 	}
+
+	if err := writeSessionIdentityToEnv(sessionName, hookData.SessionID); err != nil {
+		log.WarnContext(ctx, "hook.sessionstart.env_write_failed",
+			"component", "hook",
+			"subject", "sessionstart",
+			"key", envLegacySessionName,
+			"err", err,
+		)
+		_, _ = fmt.Fprintf(errOut, "Warning: failed to write session identity to env: %v\n", err)
+	}
+
+	persistTranscriptPath(ctx, log, store, sessionName, hookData, errOut)
 
 	outputContexts(log, store, sessionName, out)
 	return sessionName
+}
+
+// persistTranscriptPath saves the SessionStart transcript path onto the resolved
+// session, but only when the incoming provider UUID matches that record. A
+// mismatch means an unrelated Claude resolved here, so the write is refused.
+func persistTranscriptPath(ctx context.Context, log *slog.Logger, store session.Store, sessionName string, hookData SessionStartInput, errOut io.Writer) {
+	if hookData.TranscriptPath == "" {
+		return
+	}
+	if !transcriptWriteAllowed(store, sessionName, hookData.SessionID) {
+		log.WarnContext(ctx, "hook.sessionstart.transcript_save_skipped_uuid_mismatch",
+			"component", "hook",
+			"subject", "sessionstart",
+			"session", sessionName,
+			"session_id", hookData.SessionID,
+			"transcript", hookData.TranscriptPath,
+		)
+		return
+	}
+	if err := saveTranscriptPath(store, sessionName, hookData.TranscriptPath); err != nil {
+		log.WarnContext(ctx, "hook.sessionstart.transcript_save_failed",
+			"component", "hook",
+			"subject", "sessionstart",
+			"session", sessionName,
+			"err", err,
+		)
+		_, _ = fmt.Fprintf(errOut, "Warning: failed to save transcript path: %v\n", err)
+		return
+	}
+	log.InfoContext(ctx, "hook.sessionstart.transcript_saved",
+		"component", "hook",
+		"subject", "sessionstart",
+		"session", sessionName,
+		"transcript", hookData.TranscriptPath,
+	)
 }
 
 // transcriptWriteAllowed reports whether a SessionStart may persist its
@@ -99,96 +94,6 @@ func transcriptWriteAllowed(store session.Store, sessionName, incomingSessionID 
 		return false
 	}
 	return sess.Metadata.ProviderSessionID() == incomingSessionID
-}
-
-func autoAdoptSession(
-	log *slog.Logger,
-	deps sessionStartDeps,
-	store session.Store,
-	name string,
-	hookData SessionStartInput,
-	errOut io.Writer,
-) {
-	sess := session.NewSession(name, hookData.SessionID)
-	sess.Metadata.SetProviderTranscriptPath(hookData.TranscriptPath)
-
-	var header session.DiscoveryResult
-	var headerOK bool
-	if hookData.TranscriptPath != "" {
-		header, headerOK = claudediscovery.ReadTranscriptHeader(hookData.TranscriptPath)
-	}
-
-	if headerOK && strings.TrimSpace(header.WorkspaceRoot) != "" {
-		sess.Metadata.WorkDir = header.WorkspaceRoot
-		sess.Metadata.WorkspaceRoot = header.WorkspaceRoot
-	} else if wd, err := launchWorkDir(deps); err == nil {
-		sess.Metadata.WorkDir = wd
-		sess.Metadata.WorkspaceRoot = wd
-	} else if root, err := deps.findProjectRoot(); err == nil {
-		sess.Metadata.WorkspaceRoot = root
-	}
-
-	// Populate Title from the provider-owned observed name so the TUI
-	// surfaces the upstream user-given chat name. The hook handles the pre-named
-	// path (CLYDE_SESSION_NAME set), so Name stays authoritative; Title is
-	// purely decorative.
-	if headerOK {
-		if observedName := header.GetName(); observedName != "" {
-			sess.Metadata.Title = observedName
-			log.Debug("hook.sessionstart.display_title_captured",
-				"component", "hook",
-				"subject", "sessionstart",
-				"session", name,
-				"display_title", observedName,
-			)
-		}
-		if header.IsForked {
-			sess.Metadata.IsForkedSession = true
-			parentID := header.ForkParent.Normalized().ID
-			if parentID != "" {
-				if parentSession, err := findSessionByUUIDSession(store, parentID); err == nil {
-					sess.Metadata.ParentSession = parentSession.Name
-					sess.Metadata.ParentClydeUUID = parentSession.ClydeUUID()
-				}
-			}
-			log.Debug("hook.sessionstart.fork_lineage_captured",
-				"component", "hook",
-				"subject", "sessionstart",
-				"session", name,
-				"parent_session", sess.Metadata.ParentSession,
-				"parent_session_id", parentID,
-			)
-		}
-	}
-
-	if err := store.Create(sess); err != nil {
-		log.Warn("hook.sessionstart.auto_adopt_failed",
-			"component", "hook",
-			"subject", "sessionstart",
-			"session", name,
-			"err", err,
-		)
-		_, _ = fmt.Fprintf(errOut, "Warning: auto-adopt failed for '%s': %v\n", name, err)
-		return
-	}
-
-	log.Info("hook.sessionstart.session_adopted",
-		"component", "hook",
-		"subject", "sessionstart",
-		"session", name,
-		"session_id", hookData.SessionID,
-		"display_title", sess.Metadata.Title,
-	)
-}
-
-func launchWorkDir(deps sessionStartDeps) (string, error) {
-	if cwd := strings.TrimSpace(os.Getenv("CLYDE_LAUNCH_CWD")); cwd != "" {
-		if abs, err := filepath.Abs(cwd); err == nil {
-			return abs, nil
-		}
-		return cwd, nil
-	}
-	return deps.getwd()
 }
 
 func handleCompact(
@@ -330,18 +235,10 @@ func outputContexts(log *slog.Logger, store session.Store, sessionName string, o
 
 func defaultDeps(cfg SessionStartConfig) sessionStartDeps {
 	deps := sessionStartDeps{
-		logRawEvent:     cfg.LogRawEvent,
-		getwd:           cfg.Getwd,
-		findProjectRoot: cfg.FindProjectRoot,
+		logRawEvent: cfg.LogRawEvent,
 	}
 	if deps.logRawEvent == nil {
 		deps.logRawEvent = defaultLogRawEvent
-	}
-	if deps.getwd == nil {
-		deps.getwd = os.Getwd
-	}
-	if deps.findProjectRoot == nil {
-		deps.findProjectRoot = config.FindProjectRoot
 	}
 	return deps
 }

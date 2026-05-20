@@ -33,7 +33,7 @@ Handles fork registration, session ID updates, and context injection.`,
 			_, err = hookpkg.ProcessSessionStart(
 				ctx,
 				store,
-				hookpkg.SessionStartConfig{},
+				hookpkg.SessionStartConfig{LogRawEvent: nil},
 				log,
 				f.IOStreams.In,
 				f.IOStreams.Out,

@@ -86,8 +86,23 @@ var (
 	_ session.ArtifactCleaner           = (*Lifecycle)(nil)
 )
 
+func init() {
+	// Register Claude's pre-launch session-id minter with the generic session
+	// registry so the daemon can mint a UUID without importing this package
+	// (the lifecycle imports the daemon, so the reverse would be an import
+	// cycle). Providers whose tool assigns its own id do not register.
+	session.RegisterSessionIDMinter(session.ProviderClaude, util.GenerateUUIDE)
+}
+
 func NewLifecycle(settingsStore SessionSettingsStore) *Lifecycle {
 	return &Lifecycle{settingsStore: settingsStore}
+}
+
+// NewSessionID mints a provider session id for a not-yet-launched Claude
+// session. The id doubles as Claude's --session-id and its transcript filename,
+// so the daemon persists the record under it before launch.
+func (l *Lifecycle) NewSessionID() (string, error) {
+	return util.GenerateUUIDE()
 }
 
 func (l *Lifecycle) StartInteractive(ctx context.Context, req session.StartRequest) error {
@@ -95,14 +110,20 @@ func (l *Lifecycle) StartInteractive(ctx context.Context, req session.StartReque
 		return fmt.Errorf("unsupported launch intent for claude lifecycle: %q", req.Launch.Intent)
 	}
 
-	sessionID, err := util.GenerateUUIDE()
-	if err != nil {
-		claudeLog.WarnContext(ctx, "claude.session.start.uuid_failed",
-			"component", "claude",
-			"session", req.SessionName,
-			"err", err,
-		)
-		return err
+	// Prefer the id the daemon already assigned and persisted; only mint when a
+	// caller launches without pre-creating the record (kept as a safety net).
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		minted, err := l.NewSessionID()
+		if err != nil {
+			claudeLog.WarnContext(ctx, "claude.session.start.uuid_failed",
+				"component", "claude",
+				"session", req.SessionName,
+				"err", err,
+			)
+			return err
+		}
+		sessionID = minted
 	}
 	env := map[string]string{
 		"CLYDE_SESSION_NAME": req.SessionName,

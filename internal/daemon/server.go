@@ -46,7 +46,6 @@ import (
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/slogger"
 	itranscript "goodkind.io/clyde/internal/transcript"
-	"goodkind.io/clyde/internal/util"
 )
 
 // Server implements the Clyde gRPC service.
@@ -2340,6 +2339,96 @@ func protoConfigControlType(kind config.ControlType) clydev1.ConfigControlType {
 	}
 }
 
+// createSessionRecord mints a provider session id (when the provider
+// pre-assigns one via the session minter registry) and persists the canonical
+// session row. It does not launch anything or write launch-specific settings.
+// CreateSession and StartRemoteSession both use it so record creation has a
+// single daemon-owned path. The id-minting rule stays in the provider package;
+// this function only dispatches by provider id.
+func createSessionRecord(ctx context.Context, log *slog.Logger, store *session.FileStore, provider session.ProviderID, name, basedir string, incognito bool) (*session.Session, error) {
+	provider = session.NormalizeProviderID(provider)
+	sessionID, _, err := session.MintSessionID(provider)
+	if err != nil {
+		log.ErrorContext(ctx, "daemon.create_session.mint_failed",
+			"component", "daemon",
+			"subcomponent", "sessions",
+			"provider", string(provider),
+			"err", err,
+		)
+		return nil, fmt.Errorf("mint session id: %w", err)
+	}
+	sess := session.NewSession(name, sessionID)
+	sess.Metadata.Provider = provider
+	sess.Metadata.NormalizeProviderState()
+	sess.Metadata.WorkDir = basedir
+	sess.Metadata.WorkspaceRoot = basedir
+	sess.Metadata.IsIncognito = incognito
+	if err := store.Create(sess); err != nil {
+		log.ErrorContext(ctx, "daemon.create_session.store_failed",
+			"component", "daemon",
+			"subcomponent", "sessions",
+			"session", name,
+			"err", err,
+		)
+		return nil, fmt.Errorf("create session: %w", err)
+	}
+	return sess, nil
+}
+
+// CreateSession is the daemon-owned record-creation entry point. It mints a
+// provider session id, persists the row, and returns it without launching
+// anything. The CLI calls this so the daemon is the sole writer of session
+// records, then launches the tool locally with the returned id.
+func (s *Server) CreateSession(ctx context.Context, req *clydev1.CreateSessionRequest) (*clydev1.CreateSessionResponse, error) {
+	peerInfo, _ := peer.FromContext(ctx)
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "store init: %v", err)
+	}
+	basedir := strings.TrimSpace(req.GetBasedir())
+	if basedir == "" {
+		if basedir, err = os.Getwd(); err != nil {
+			return nil, status.Errorf(codes.Internal, "resolve working directory: %v", err)
+		}
+	}
+	if info, statErr := os.Stat(basedir); statErr != nil || !info.IsDir() {
+		return nil, status.Errorf(codes.InvalidArgument, "basedir %q is not a directory", basedir)
+	}
+	provider := session.ProviderClaude
+	if raw := strings.TrimSpace(req.GetProvider()); raw != "" {
+		provider = session.NormalizeProviderID(session.ProviderID(raw))
+	}
+	name := strings.TrimSpace(req.GetSessionName())
+	if name == "" {
+		name, err = nextRemoteSessionName(store)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "allocate session name: %v", err)
+		}
+	} else if validateErr := session.ValidateDisplayName(name); validateErr != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid session name %q", name)
+	}
+	if store.Exists(name) {
+		return nil, status.Errorf(codes.AlreadyExists, "session %q already exists", name)
+	}
+	sess, err := createSessionRecord(ctx, s.log, store, provider, name, basedir, req.GetIncognito())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "create session: %v", err)
+	}
+	s.publishSessionSummaryEvent(ctx, clydev1.SubscribeRegistryResponse_KIND_SESSION_ADOPTED, store, sess, "")
+	s.log.InfoContext(ctx, "daemon.create_session.created",
+		"component", "daemon",
+		"subcomponent", "sessions",
+		"session", sess.Name,
+		"session_id", sess.Metadata.ProviderSessionID(),
+		"provider", string(provider),
+		"peer_addr", daemonPeerAddr(peerInfo),
+	)
+	return &clydev1.CreateSessionResponse{
+		SessionName: sess.Name,
+		SessionId:   sess.Metadata.ProviderSessionID(),
+	}, nil
+}
+
 // StartRemoteSession creates a canonical clyde session row, persists remote
 // control settings, then launches a daemon-owned headless worker that runs
 // Claude with --remote-control against the pre-assigned session UUID.
@@ -2377,14 +2466,11 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 		return nil, status.Errorf(codes.AlreadyExists, "session %q already exists", name)
 	}
 
-	sessionID := util.GenerateUUID()
-	sess := session.NewSession(name, sessionID)
-	sess.Metadata.WorkDir = basedir
-	sess.Metadata.WorkspaceRoot = basedir
-	sess.Metadata.IsIncognito = req.GetIncognito()
-	if err := store.Create(sess); err != nil {
+	sess, err := createSessionRecord(ctx, s.log, store, session.ProviderClaude, name, basedir, req.GetIncognito())
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
 	}
+	sessionID := sess.Metadata.ProviderSessionID()
 	if err := sessionsettings.Save(store, sess, defaultSessionSettings(true)); err != nil {
 		_ = store.Delete(name)
 		return nil, status.Errorf(codes.Internal, "save session settings: %v", err)

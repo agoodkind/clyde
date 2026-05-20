@@ -39,6 +39,7 @@ const (
 	ClydeService_UpdateGlobalSettings_FullMethodName      = "/clyde.v1.ClydeService/UpdateGlobalSettings"
 	ClydeService_ListConfigControls_FullMethodName        = "/clyde.v1.ClydeService/ListConfigControls"
 	ClydeService_UpdateConfigControl_FullMethodName       = "/clyde.v1.ClydeService/UpdateConfigControl"
+	ClydeService_CreateSession_FullMethodName             = "/clyde.v1.ClydeService/CreateSession"
 	ClydeService_StartRemoteSession_FullMethodName        = "/clyde.v1.ClydeService/StartRemoteSession"
 	ClydeService_ListLiveSessions_FullMethodName          = "/clyde.v1.ClydeService/ListLiveSessions"
 	ClydeService_StartLiveSession_FullMethodName          = "/clyde.v1.ClydeService/StartLiveSession"
@@ -83,6 +84,7 @@ type ClydeServiceClient interface {
 	UpdateGlobalSettings(ctx context.Context, in *UpdateGlobalSettingsRequest, opts ...grpc.CallOption) (*UpdateGlobalSettingsResponse, error)
 	ListConfigControls(ctx context.Context, in *ListConfigControlsRequest, opts ...grpc.CallOption) (*ListConfigControlsResponse, error)
 	UpdateConfigControl(ctx context.Context, in *UpdateConfigControlRequest, opts ...grpc.CallOption) (*UpdateConfigControlResponse, error)
+	CreateSession(ctx context.Context, in *CreateSessionRequest, opts ...grpc.CallOption) (*CreateSessionResponse, error)
 	StartRemoteSession(ctx context.Context, in *StartRemoteSessionRequest, opts ...grpc.CallOption) (*StartRemoteSessionResponse, error)
 	ListLiveSessions(ctx context.Context, in *ListLiveSessionsRequest, opts ...grpc.CallOption) (*ListLiveSessionsResponse, error)
 	StartLiveSession(ctx context.Context, in *StartLiveSessionRequest, opts ...grpc.CallOption) (*StartLiveSessionResponse, error)
@@ -329,6 +331,16 @@ func (c *clydeServiceClient) UpdateConfigControl(ctx context.Context, in *Update
 	return out, nil
 }
 
+func (c *clydeServiceClient) CreateSession(ctx context.Context, in *CreateSessionRequest, opts ...grpc.CallOption) (*CreateSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateSessionResponse)
+	err := c.cc.Invoke(ctx, ClydeService_CreateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clydeServiceClient) StartRemoteSession(ctx context.Context, in *StartRemoteSessionRequest, opts ...grpc.CallOption) (*StartRemoteSessionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StartRemoteSessionResponse)
@@ -569,6 +581,7 @@ type ClydeServiceServer interface {
 	UpdateGlobalSettings(context.Context, *UpdateGlobalSettingsRequest) (*UpdateGlobalSettingsResponse, error)
 	ListConfigControls(context.Context, *ListConfigControlsRequest) (*ListConfigControlsResponse, error)
 	UpdateConfigControl(context.Context, *UpdateConfigControlRequest) (*UpdateConfigControlResponse, error)
+	CreateSession(context.Context, *CreateSessionRequest) (*CreateSessionResponse, error)
 	StartRemoteSession(context.Context, *StartRemoteSessionRequest) (*StartRemoteSessionResponse, error)
 	ListLiveSessions(context.Context, *ListLiveSessionsRequest) (*ListLiveSessionsResponse, error)
 	StartLiveSession(context.Context, *StartLiveSessionRequest) (*StartLiveSessionResponse, error)
@@ -655,6 +668,9 @@ func (UnimplementedClydeServiceServer) ListConfigControls(context.Context, *List
 }
 func (UnimplementedClydeServiceServer) UpdateConfigControl(context.Context, *UpdateConfigControlRequest) (*UpdateConfigControlResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateConfigControl not implemented")
+}
+func (UnimplementedClydeServiceServer) CreateSession(context.Context, *CreateSessionRequest) (*CreateSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateSession not implemented")
 }
 func (UnimplementedClydeServiceServer) StartRemoteSession(context.Context, *StartRemoteSessionRequest) (*StartRemoteSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartRemoteSession not implemented")
@@ -1076,6 +1092,24 @@ func _ClydeService_UpdateConfigControl_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_CreateSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).CreateSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_CreateSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).CreateSession(ctx, req.(*CreateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_StartRemoteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(StartRemoteSessionRequest)
 	if err := dec(in); err != nil {
@@ -1450,6 +1484,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateConfigControl",
 			Handler:    _ClydeService_UpdateConfigControl_Handler,
+		},
+		{
+			MethodName: "CreateSession",
+			Handler:    _ClydeService_CreateSession_Handler,
 		},
 		{
 			MethodName: "StartRemoteSession",

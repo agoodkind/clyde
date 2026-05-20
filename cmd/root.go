@@ -29,6 +29,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/daemonclient"
 	"goodkind.io/clyde/internal/providers/mitmcontrib"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
@@ -1303,7 +1304,14 @@ func startNewSessionInDir(ctx context.Context, basedir string, store session.Sto
 		workDir = wd
 	}
 
-	name, err := nextChatSessionName(store)
+	suggestedName, err := nextChatSessionName(store)
+	if err != nil {
+		return err
+	}
+	// The daemon owns session-record creation. Ask it to mint the provider id
+	// and persist the record, then launch the tool locally with that id, so the
+	// SessionStart hook resolves this chat by UUID rather than by name.
+	name, sessionID, err := createSessionRecordViaDaemon(ctx, suggestedName, workDir)
 	if err != nil {
 		return err
 	}
@@ -1311,6 +1319,7 @@ func startNewSessionInDir(ctx context.Context, basedir string, store session.Sto
 	cmdUILog.Logger().InfoContext(ctx, "session.new.started",
 		"component", "cli",
 		"session", name,
+		"session_id", sessionID,
 		"workdir", workDir,
 		"remote_control", enableRemoteControl,
 	)
@@ -1321,6 +1330,7 @@ func startNewSessionInDir(ctx context.Context, basedir string, store session.Sto
 	}
 	err = runtime.StartInteractive(ctx, session.StartRequest{
 		SessionName: name,
+		SessionID:   sessionID,
 		Launch: session.LaunchOptions{
 			WorkDir:             workDir,
 			Intent:              session.LaunchIntentNewSession,
@@ -1338,6 +1348,25 @@ func startNewSessionInDir(ctx context.Context, basedir string, store session.Sto
 		printResumeInstructions(ctx, sess)
 	}
 	return nil
+}
+
+// createSessionRecordViaDaemon asks the daemon to mint a provider session id and
+// persist the session record, returning the resolved name and id. The daemon is
+// the sole writer of session records; it auto-starts via ConnectOrStart when not
+// already running.
+func createSessionRecordViaDaemon(ctx context.Context, suggestedName, workDir string) (string, string, error) {
+	dc, err := daemon.ConnectOrStart(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "session.new.daemon_connect_failed", "component", "cli", "err", err)
+		return "", "", fmt.Errorf("connect to daemon: %w", err)
+	}
+	defer func() { _ = dc.Close() }()
+	resp, err := daemonclient.New(dc.Connection()).CreateSession(ctx, suggestedName, workDir, string(session.ProviderClaude), false)
+	if err != nil {
+		slog.ErrorContext(ctx, "session.new.create_session_failed", "component", "cli", "session", suggestedName, "err", err)
+		return "", "", fmt.Errorf("create session via daemon: %w", err)
+	}
+	return resp.GetSessionName(), resp.GetSessionId(), nil
 }
 
 // resumeSession resumes an existing clyde session through the provider-owned

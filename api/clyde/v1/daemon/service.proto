@@ -33,6 +33,7 @@ service ClydeService {
   rpc UpdateGlobalSettings(UpdateGlobalSettingsRequest) returns (UpdateGlobalSettingsResponse);
   rpc ListConfigControls(ListConfigControlsRequest) returns (ListConfigControlsResponse);
   rpc UpdateConfigControl(UpdateConfigControlRequest) returns (UpdateConfigControlResponse);
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc StartRemoteSession(StartRemoteSessionRequest) returns (StartRemoteSessionResponse);
   rpc ListLiveSessions(ListLiveSessionsRequest) returns (ListLiveSessionsResponse);
   rpc StartLiveSession(StartLiveSessionRequest) returns (StartLiveSessionResponse);

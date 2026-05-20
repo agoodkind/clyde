@@ -162,7 +162,11 @@ type LaunchOptions struct {
 // StartRequest is the generic start-session request above provider code.
 type StartRequest struct {
 	SessionName string
-	Launch      LaunchOptions
+	// SessionID is an optional provider session id the daemon already minted and
+	// persisted. When set, the provider launches the tool with this id instead of
+	// minting its own. Empty for providers that do not pre-assign ids.
+	SessionID string
+	Launch    LaunchOptions
 }
 
 // ResumeOptions carries provider-neutral resume intent from cmd into the

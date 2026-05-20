@@ -10,22 +10,16 @@ import (
 )
 
 func resolveSessionName(hookData SessionStartInput, store session.Store, fullFallback bool) (string, error) {
+	// Resolve strictly by provider session UUID. The CLYDE_SESSION_NAME name
+	// fallback was removed: a Claude that inherited a stale name must not bind to
+	// a chat by name. The record is created by the daemon keyed by UUID before
+	// launch, so UUID resolution always finds a legitimately-launched session.
 	if sess := resolveSessionFromIdentifiers(hookData, store); sess != nil {
 		return sess.Name, nil
 	}
-
-	if name := strings.TrimSpace(os.Getenv(envSessionName)); name != "" {
-		return name, nil
-	}
-
 	if !fullFallback {
 		return "", nil
 	}
-
-	if name := strings.TrimSpace(readLastEnvFileValue(envLegacySessionName)); name != "" {
-		return name, nil
-	}
-
 	return findSessionByUUID(store, hookData.SessionID)
 }
 
@@ -77,7 +71,7 @@ func resultSessionName(hookData SessionStartInput, store session.Store) string {
 	if sess := resolveSessionFromIdentifiers(hookData, store); sess != nil {
 		return sess.Name
 	}
-	return strings.TrimSpace(os.Getenv(envSessionName))
+	return ""
 }
 
 func findSessionByUUID(store session.Store, uuid string) (string, error) {

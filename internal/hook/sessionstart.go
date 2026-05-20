@@ -52,7 +52,7 @@ func ProcessSessionStart(
 	}
 
 	res := Result{Source: hookData.Source}
-	sessionName, err := dispatchSessionStartSource(ctx, log, deps, hookData, store, out, errOut)
+	sessionName, err := dispatchSessionStartSource(ctx, log, hookData, store, out, errOut)
 	res.SessionName = sessionName
 	if err != nil {
 		return res, err
@@ -188,7 +188,6 @@ func skipDuplicateSessionStart(ctx context.Context, log *slog.Logger, hookData S
 func dispatchSessionStartSource(
 	ctx context.Context,
 	log *slog.Logger,
-	deps sessionStartDeps,
 	hookData SessionStartInput,
 	store session.Store,
 	out io.Writer,
@@ -196,7 +195,7 @@ func dispatchSessionStartSource(
 ) (string, error) {
 	switch hookData.Source {
 	case "startup", "resume":
-		return handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut), nil
+		return handleStartupOrResume(ctx, log, hookData, store, out, errOut), nil
 	case "compact":
 		sessionName, err := handleCompact(ctx, log, hookData, store, out, errOut)
 		if err != nil {
@@ -218,6 +217,6 @@ func dispatchSessionStartSource(
 		}
 		return sessionName, err
 	default:
-		return handleStartupOrResume(ctx, log, deps, hookData, store, out, errOut), nil
+		return handleStartupOrResume(ctx, log, hookData, store, out, errOut), nil
 	}
 }

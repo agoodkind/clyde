@@ -61,6 +61,20 @@ message ProviderStatsEvent {
   int64 emitted_at_unix = 2;
 }
 
+message CreateSessionRequest {
+  // session_name is optional; empty asks the daemon to auto-generate a name.
+  string session_name = 1;
+  string basedir = 2;
+  bool incognito = 3;
+  // provider is optional; empty defaults to the daemon's default provider.
+  string provider = 4;
+}
+
+message CreateSessionResponse {
+  string session_name = 1;
+  string session_id = 2;
+}
+
 message StartRemoteSessionRequest {
   string session_name = 1;
   string basedir = 2;

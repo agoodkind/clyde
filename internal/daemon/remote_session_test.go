@@ -96,6 +96,63 @@ func TestStartRemoteSessionCreatesCanonicalSession(t *testing.T) {
 	t.Fatalf("remote worker was not tracked")
 }
 
+func TestCreateSessionPersistsRecordWithMintedID(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := New(log)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Close()
+
+	basedir := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(basedir, 0o755); err != nil {
+		t.Fatalf("mkdir basedir: %v", err)
+	}
+
+	resp, err := srv.CreateSession(context.Background(), &clydev1.CreateSessionRequest{
+		SessionName: "chat-precreated",
+		Basedir:     basedir,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if resp.GetSessionName() != "chat-precreated" {
+		t.Fatalf("session name = %q want chat-precreated", resp.GetSessionName())
+	}
+	if resp.GetSessionId() == "" {
+		t.Fatalf("session id not minted")
+	}
+
+	store, err := session.NewGlobalFileStore()
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	sess, err := store.Get("chat-precreated")
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if sess.Metadata.ProviderSessionID() != resp.GetSessionId() {
+		t.Fatalf("stored id = %q want %q", sess.Metadata.ProviderSessionID(), resp.GetSessionId())
+	}
+	if sess.Metadata.WorkDir != basedir {
+		t.Fatalf("workdir = %q want %q", sess.Metadata.WorkDir, basedir)
+	}
+	// CreateSession does not launch a worker.
+	srv.remoteMu.Lock()
+	workerCount := len(srv.remoteWorkers)
+	srv.remoteMu.Unlock()
+	if workerCount != 0 {
+		t.Fatalf("CreateSession launched %d workers, want 0", workerCount)
+	}
+}
+
 func TestStartRemoteSessionRejectsExistingName(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

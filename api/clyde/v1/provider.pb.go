@@ -67,7 +67,7 @@ func (x StartRemoteSessionResponse_LaunchState) Number() protoreflect.EnumNumber
 
 // Deprecated: Use StartRemoteSessionResponse_LaunchState.Descriptor instead.
 func (StartRemoteSessionResponse_LaunchState) EnumDescriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{10, 0}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{12, 0}
 }
 
 type ProviderSessionIdentity struct {
@@ -650,6 +650,128 @@ func (x *ProviderStatsEvent) GetEmittedAtUnix() int64 {
 	return 0
 }
 
+type CreateSessionRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// session_name is optional; empty asks the daemon to auto-generate a name.
+	SessionName string `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	Basedir     string `protobuf:"bytes,2,opt,name=basedir,proto3" json:"basedir,omitempty"`
+	Incognito   bool   `protobuf:"varint,3,opt,name=incognito,proto3" json:"incognito,omitempty"`
+	// provider is optional; empty defaults to the daemon's default provider.
+	Provider      string `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateSessionRequest) Reset() {
+	*x = CreateSessionRequest{}
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSessionRequest) ProtoMessage() {}
+
+func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
+func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CreateSessionRequest) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *CreateSessionRequest) GetBasedir() string {
+	if x != nil {
+		return x.Basedir
+	}
+	return ""
+}
+
+func (x *CreateSessionRequest) GetIncognito() bool {
+	if x != nil {
+		return x.Incognito
+	}
+	return false
+}
+
+func (x *CreateSessionRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+type CreateSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateSessionResponse) Reset() {
+	*x = CreateSessionResponse{}
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateSessionResponse) ProtoMessage() {}
+
+func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
+func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CreateSessionResponse) GetSessionName() string {
+	if x != nil {
+		return x.SessionName
+	}
+	return ""
+}
+
+func (x *CreateSessionResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
 type StartRemoteSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionName   string                 `protobuf:"bytes,1,opt,name=session_name,json=sessionName,proto3" json:"session_name,omitempty"`
@@ -661,7 +783,7 @@ type StartRemoteSessionRequest struct {
 
 func (x *StartRemoteSessionRequest) Reset() {
 	*x = StartRemoteSessionRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[9]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -673,7 +795,7 @@ func (x *StartRemoteSessionRequest) String() string {
 func (*StartRemoteSessionRequest) ProtoMessage() {}
 
 func (x *StartRemoteSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[9]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -686,7 +808,7 @@ func (x *StartRemoteSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRemoteSessionRequest.ProtoReflect.Descriptor instead.
 func (*StartRemoteSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{9}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StartRemoteSessionRequest) GetSessionName() string {
@@ -721,7 +843,7 @@ type StartRemoteSessionResponse struct {
 
 func (x *StartRemoteSessionResponse) Reset() {
 	*x = StartRemoteSessionResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[10]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -733,7 +855,7 @@ func (x *StartRemoteSessionResponse) String() string {
 func (*StartRemoteSessionResponse) ProtoMessage() {}
 
 func (x *StartRemoteSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[10]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -746,7 +868,7 @@ func (x *StartRemoteSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRemoteSessionResponse.ProtoReflect.Descriptor instead.
 func (*StartRemoteSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{10}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StartRemoteSessionResponse) GetSessionName() string {
@@ -788,7 +910,7 @@ type LiveSession struct {
 
 func (x *LiveSession) Reset() {
 	*x = LiveSession{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[11]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -800,7 +922,7 @@ func (x *LiveSession) String() string {
 func (*LiveSession) ProtoMessage() {}
 
 func (x *LiveSession) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[11]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -813,7 +935,7 @@ func (x *LiveSession) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LiveSession.ProtoReflect.Descriptor instead.
 func (*LiveSession) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{11}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LiveSession) GetProvider() string {
@@ -894,7 +1016,7 @@ type ListLiveSessionsRequest struct {
 
 func (x *ListLiveSessionsRequest) Reset() {
 	*x = ListLiveSessionsRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[12]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -906,7 +1028,7 @@ func (x *ListLiveSessionsRequest) String() string {
 func (*ListLiveSessionsRequest) ProtoMessage() {}
 
 func (x *ListLiveSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[12]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -919,7 +1041,7 @@ func (x *ListLiveSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLiveSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListLiveSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{12}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{14}
 }
 
 type ListLiveSessionsResponse struct {
@@ -931,7 +1053,7 @@ type ListLiveSessionsResponse struct {
 
 func (x *ListLiveSessionsResponse) Reset() {
 	*x = ListLiveSessionsResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[13]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -943,7 +1065,7 @@ func (x *ListLiveSessionsResponse) String() string {
 func (*ListLiveSessionsResponse) ProtoMessage() {}
 
 func (x *ListLiveSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[13]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -956,7 +1078,7 @@ func (x *ListLiveSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLiveSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListLiveSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{13}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListLiveSessionsResponse) GetSessions() []*LiveSession {
@@ -980,7 +1102,7 @@ type StartLiveSessionRequest struct {
 
 func (x *StartLiveSessionRequest) Reset() {
 	*x = StartLiveSessionRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[14]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -992,7 +1114,7 @@ func (x *StartLiveSessionRequest) String() string {
 func (*StartLiveSessionRequest) ProtoMessage() {}
 
 func (x *StartLiveSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[14]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1005,7 +1127,7 @@ func (x *StartLiveSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartLiveSessionRequest.ProtoReflect.Descriptor instead.
 func (*StartLiveSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{14}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *StartLiveSessionRequest) GetProvider() string {
@@ -1059,7 +1181,7 @@ type StartLiveSessionResponse struct {
 
 func (x *StartLiveSessionResponse) Reset() {
 	*x = StartLiveSessionResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[15]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1071,7 +1193,7 @@ func (x *StartLiveSessionResponse) String() string {
 func (*StartLiveSessionResponse) ProtoMessage() {}
 
 func (x *StartLiveSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[15]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1084,7 +1206,7 @@ func (x *StartLiveSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartLiveSessionResponse.ProtoReflect.Descriptor instead.
 func (*StartLiveSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{15}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *StartLiveSessionResponse) GetSession() *LiveSession {
@@ -1104,7 +1226,7 @@ type SendLiveSessionRequest struct {
 
 func (x *SendLiveSessionRequest) Reset() {
 	*x = SendLiveSessionRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[16]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1116,7 +1238,7 @@ func (x *SendLiveSessionRequest) String() string {
 func (*SendLiveSessionRequest) ProtoMessage() {}
 
 func (x *SendLiveSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[16]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1129,7 +1251,7 @@ func (x *SendLiveSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendLiveSessionRequest.ProtoReflect.Descriptor instead.
 func (*SendLiveSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{16}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SendLiveSessionRequest) GetSessionId() string {
@@ -1155,7 +1277,7 @@ type SendLiveSessionResponse struct {
 
 func (x *SendLiveSessionResponse) Reset() {
 	*x = SendLiveSessionResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[17]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1167,7 +1289,7 @@ func (x *SendLiveSessionResponse) String() string {
 func (*SendLiveSessionResponse) ProtoMessage() {}
 
 func (x *SendLiveSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[17]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1180,7 +1302,7 @@ func (x *SendLiveSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendLiveSessionResponse.ProtoReflect.Descriptor instead.
 func (*SendLiveSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{17}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SendLiveSessionResponse) GetAccepted() bool {
@@ -1199,7 +1321,7 @@ type StreamLiveSessionRequest struct {
 
 func (x *StreamLiveSessionRequest) Reset() {
 	*x = StreamLiveSessionRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[18]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1211,7 +1333,7 @@ func (x *StreamLiveSessionRequest) String() string {
 func (*StreamLiveSessionRequest) ProtoMessage() {}
 
 func (x *StreamLiveSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[18]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1224,7 +1346,7 @@ func (x *StreamLiveSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLiveSessionRequest.ProtoReflect.Descriptor instead.
 func (*StreamLiveSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{18}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *StreamLiveSessionRequest) GetSessionId() string {
@@ -1247,7 +1369,7 @@ type StreamLiveSessionResponse struct {
 
 func (x *StreamLiveSessionResponse) Reset() {
 	*x = StreamLiveSessionResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[19]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1381,7 @@ func (x *StreamLiveSessionResponse) String() string {
 func (*StreamLiveSessionResponse) ProtoMessage() {}
 
 func (x *StreamLiveSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[19]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1394,7 @@ func (x *StreamLiveSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLiveSessionResponse.ProtoReflect.Descriptor instead.
 func (*StreamLiveSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{19}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *StreamLiveSessionResponse) GetSessionId() string {
@@ -1319,7 +1441,7 @@ type StopLiveSessionRequest struct {
 
 func (x *StopLiveSessionRequest) Reset() {
 	*x = StopLiveSessionRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[20]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1331,7 +1453,7 @@ func (x *StopLiveSessionRequest) String() string {
 func (*StopLiveSessionRequest) ProtoMessage() {}
 
 func (x *StopLiveSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[20]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1344,7 +1466,7 @@ func (x *StopLiveSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopLiveSessionRequest.ProtoReflect.Descriptor instead.
 func (*StopLiveSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{20}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *StopLiveSessionRequest) GetSessionId() string {
@@ -1363,7 +1485,7 @@ type StopLiveSessionResponse struct {
 
 func (x *StopLiveSessionResponse) Reset() {
 	*x = StopLiveSessionResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[21]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1375,7 +1497,7 @@ func (x *StopLiveSessionResponse) String() string {
 func (*StopLiveSessionResponse) ProtoMessage() {}
 
 func (x *StopLiveSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[21]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1388,7 +1510,7 @@ func (x *StopLiveSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopLiveSessionResponse.ProtoReflect.Descriptor instead.
 func (*StopLiveSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{21}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *StopLiveSessionResponse) GetStopped() bool {
@@ -1409,7 +1531,7 @@ type AcquireForegroundSessionRequest struct {
 
 func (x *AcquireForegroundSessionRequest) Reset() {
 	*x = AcquireForegroundSessionRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[22]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1421,7 +1543,7 @@ func (x *AcquireForegroundSessionRequest) String() string {
 func (*AcquireForegroundSessionRequest) ProtoMessage() {}
 
 func (x *AcquireForegroundSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[22]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1434,7 +1556,7 @@ func (x *AcquireForegroundSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireForegroundSessionRequest.ProtoReflect.Descriptor instead.
 func (*AcquireForegroundSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{22}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AcquireForegroundSessionRequest) GetSessionName() string {
@@ -1472,7 +1594,7 @@ type AcquireForegroundSessionResponse struct {
 
 func (x *AcquireForegroundSessionResponse) Reset() {
 	*x = AcquireForegroundSessionResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[23]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1484,7 +1606,7 @@ func (x *AcquireForegroundSessionResponse) String() string {
 func (*AcquireForegroundSessionResponse) ProtoMessage() {}
 
 func (x *AcquireForegroundSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[23]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1497,7 +1619,7 @@ func (x *AcquireForegroundSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireForegroundSessionResponse.ProtoReflect.Descriptor instead.
 func (*AcquireForegroundSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{23}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AcquireForegroundSessionResponse) GetLeaseToken() string {
@@ -1552,7 +1674,7 @@ type ReleaseForegroundSessionRequest struct {
 
 func (x *ReleaseForegroundSessionRequest) Reset() {
 	*x = ReleaseForegroundSessionRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[24]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1564,7 +1686,7 @@ func (x *ReleaseForegroundSessionRequest) String() string {
 func (*ReleaseForegroundSessionRequest) ProtoMessage() {}
 
 func (x *ReleaseForegroundSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[24]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1577,7 +1699,7 @@ func (x *ReleaseForegroundSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseForegroundSessionRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseForegroundSessionRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{24}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ReleaseForegroundSessionRequest) GetLeaseToken() string {
@@ -1604,7 +1726,7 @@ type ReleaseForegroundSessionResponse struct {
 
 func (x *ReleaseForegroundSessionResponse) Reset() {
 	*x = ReleaseForegroundSessionResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[25]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1616,7 +1738,7 @@ func (x *ReleaseForegroundSessionResponse) String() string {
 func (*ReleaseForegroundSessionResponse) ProtoMessage() {}
 
 func (x *ReleaseForegroundSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[25]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1629,7 +1751,7 @@ func (x *ReleaseForegroundSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseForegroundSessionResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseForegroundSessionResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{25}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ReleaseForegroundSessionResponse) GetRestored() bool {
@@ -1656,7 +1778,7 @@ type EnvironmentVariable struct {
 
 func (x *EnvironmentVariable) Reset() {
 	*x = EnvironmentVariable{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1668,7 +1790,7 @@ func (x *EnvironmentVariable) String() string {
 func (*EnvironmentVariable) ProtoMessage() {}
 
 func (x *EnvironmentVariable) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[26]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1681,7 +1803,7 @@ func (x *EnvironmentVariable) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvironmentVariable.ProtoReflect.Descriptor instead.
 func (*EnvironmentVariable) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{26}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *EnvironmentVariable) GetKey() string {
@@ -1707,7 +1829,7 @@ type ProviderLaunchEnvironmentRequest struct {
 
 func (x *ProviderLaunchEnvironmentRequest) Reset() {
 	*x = ProviderLaunchEnvironmentRequest{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1719,7 +1841,7 @@ func (x *ProviderLaunchEnvironmentRequest) String() string {
 func (*ProviderLaunchEnvironmentRequest) ProtoMessage() {}
 
 func (x *ProviderLaunchEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[27]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1732,7 +1854,7 @@ func (x *ProviderLaunchEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProviderLaunchEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*ProviderLaunchEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{27}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ProviderLaunchEnvironmentRequest) GetProvider() string {
@@ -1751,7 +1873,7 @@ type ProviderLaunchEnvironmentResponse struct {
 
 func (x *ProviderLaunchEnvironmentResponse) Reset() {
 	*x = ProviderLaunchEnvironmentResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1763,7 +1885,7 @@ func (x *ProviderLaunchEnvironmentResponse) String() string {
 func (*ProviderLaunchEnvironmentResponse) ProtoMessage() {}
 
 func (x *ProviderLaunchEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[28]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1776,7 +1898,7 @@ func (x *ProviderLaunchEnvironmentResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ProviderLaunchEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*ProviderLaunchEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{28}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ProviderLaunchEnvironmentResponse) GetEnvironment() []*EnvironmentVariable {
@@ -1836,7 +1958,16 @@ const file_clyde_v1_daemon_provider_proto_rawDesc = "" +
 	"\x0eloaded_at_unix\x18\x02 \x01(\x03R\floadedAtUnix\"k\n" +
 	"\x12ProviderStatsEvent\x12-\n" +
 	"\x05stats\x18\x01 \x01(\v2\x17.clyde.v1.ProviderStatsR\x05stats\x12&\n" +
-	"\x0femitted_at_unix\x18\x02 \x01(\x03R\remittedAtUnix\"v\n" +
+	"\x0femitted_at_unix\x18\x02 \x01(\x03R\remittedAtUnix\"\x8d\x01\n" +
+	"\x14CreateSessionRequest\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x18\n" +
+	"\abasedir\x18\x02 \x01(\tR\abasedir\x12\x1c\n" +
+	"\tincognito\x18\x03 \x01(\bR\tincognito\x12\x1a\n" +
+	"\bprovider\x18\x04 \x01(\tR\bprovider\"Y\n" +
+	"\x15CreateSessionResponse\x12!\n" +
+	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\"v\n" +
 	"\x19StartRemoteSessionRequest\x12!\n" +
 	"\fsession_name\x18\x01 \x01(\tR\vsessionName\x12\x18\n" +
 	"\abasedir\x18\x02 \x01(\tR\abasedir\x12\x1c\n" +
@@ -1939,7 +2070,7 @@ func file_clyde_v1_daemon_provider_proto_rawDescGZIP() []byte {
 }
 
 var file_clyde_v1_daemon_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_clyde_v1_daemon_provider_proto_goTypes = []any{
 	(StartRemoteSessionResponse_LaunchState)(0), // 0: clyde.v1.StartRemoteSessionResponse.LaunchState
 	(*ProviderSessionIdentity)(nil),             // 1: clyde.v1.ProviderSessionIdentity
@@ -1951,26 +2082,28 @@ var file_clyde_v1_daemon_provider_proto_goTypes = []any{
 	(*ProviderStats)(nil),                       // 7: clyde.v1.ProviderStats
 	(*GetProviderStatsResponse)(nil),            // 8: clyde.v1.GetProviderStatsResponse
 	(*ProviderStatsEvent)(nil),                  // 9: clyde.v1.ProviderStatsEvent
-	(*StartRemoteSessionRequest)(nil),           // 10: clyde.v1.StartRemoteSessionRequest
-	(*StartRemoteSessionResponse)(nil),          // 11: clyde.v1.StartRemoteSessionResponse
-	(*LiveSession)(nil),                         // 12: clyde.v1.LiveSession
-	(*ListLiveSessionsRequest)(nil),             // 13: clyde.v1.ListLiveSessionsRequest
-	(*ListLiveSessionsResponse)(nil),            // 14: clyde.v1.ListLiveSessionsResponse
-	(*StartLiveSessionRequest)(nil),             // 15: clyde.v1.StartLiveSessionRequest
-	(*StartLiveSessionResponse)(nil),            // 16: clyde.v1.StartLiveSessionResponse
-	(*SendLiveSessionRequest)(nil),              // 17: clyde.v1.SendLiveSessionRequest
-	(*SendLiveSessionResponse)(nil),             // 18: clyde.v1.SendLiveSessionResponse
-	(*StreamLiveSessionRequest)(nil),            // 19: clyde.v1.StreamLiveSessionRequest
-	(*StreamLiveSessionResponse)(nil),           // 20: clyde.v1.StreamLiveSessionResponse
-	(*StopLiveSessionRequest)(nil),              // 21: clyde.v1.StopLiveSessionRequest
-	(*StopLiveSessionResponse)(nil),             // 22: clyde.v1.StopLiveSessionResponse
-	(*AcquireForegroundSessionRequest)(nil),     // 23: clyde.v1.AcquireForegroundSessionRequest
-	(*AcquireForegroundSessionResponse)(nil),    // 24: clyde.v1.AcquireForegroundSessionResponse
-	(*ReleaseForegroundSessionRequest)(nil),     // 25: clyde.v1.ReleaseForegroundSessionRequest
-	(*ReleaseForegroundSessionResponse)(nil),    // 26: clyde.v1.ReleaseForegroundSessionResponse
-	(*EnvironmentVariable)(nil),                 // 27: clyde.v1.EnvironmentVariable
-	(*ProviderLaunchEnvironmentRequest)(nil),    // 28: clyde.v1.ProviderLaunchEnvironmentRequest
-	(*ProviderLaunchEnvironmentResponse)(nil),   // 29: clyde.v1.ProviderLaunchEnvironmentResponse
+	(*CreateSessionRequest)(nil),                // 10: clyde.v1.CreateSessionRequest
+	(*CreateSessionResponse)(nil),               // 11: clyde.v1.CreateSessionResponse
+	(*StartRemoteSessionRequest)(nil),           // 12: clyde.v1.StartRemoteSessionRequest
+	(*StartRemoteSessionResponse)(nil),          // 13: clyde.v1.StartRemoteSessionResponse
+	(*LiveSession)(nil),                         // 14: clyde.v1.LiveSession
+	(*ListLiveSessionsRequest)(nil),             // 15: clyde.v1.ListLiveSessionsRequest
+	(*ListLiveSessionsResponse)(nil),            // 16: clyde.v1.ListLiveSessionsResponse
+	(*StartLiveSessionRequest)(nil),             // 17: clyde.v1.StartLiveSessionRequest
+	(*StartLiveSessionResponse)(nil),            // 18: clyde.v1.StartLiveSessionResponse
+	(*SendLiveSessionRequest)(nil),              // 19: clyde.v1.SendLiveSessionRequest
+	(*SendLiveSessionResponse)(nil),             // 20: clyde.v1.SendLiveSessionResponse
+	(*StreamLiveSessionRequest)(nil),            // 21: clyde.v1.StreamLiveSessionRequest
+	(*StreamLiveSessionResponse)(nil),           // 22: clyde.v1.StreamLiveSessionResponse
+	(*StopLiveSessionRequest)(nil),              // 23: clyde.v1.StopLiveSessionRequest
+	(*StopLiveSessionResponse)(nil),             // 24: clyde.v1.StopLiveSessionResponse
+	(*AcquireForegroundSessionRequest)(nil),     // 25: clyde.v1.AcquireForegroundSessionRequest
+	(*AcquireForegroundSessionResponse)(nil),    // 26: clyde.v1.AcquireForegroundSessionResponse
+	(*ReleaseForegroundSessionRequest)(nil),     // 27: clyde.v1.ReleaseForegroundSessionRequest
+	(*ReleaseForegroundSessionResponse)(nil),    // 28: clyde.v1.ReleaseForegroundSessionResponse
+	(*EnvironmentVariable)(nil),                 // 29: clyde.v1.EnvironmentVariable
+	(*ProviderLaunchEnvironmentRequest)(nil),    // 30: clyde.v1.ProviderLaunchEnvironmentRequest
+	(*ProviderLaunchEnvironmentResponse)(nil),   // 31: clyde.v1.ProviderLaunchEnvironmentResponse
 }
 var file_clyde_v1_daemon_provider_proto_depIdxs = []int32{
 	1,  // 0: clyde.v1.SessionHistoryBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
@@ -1981,10 +2114,10 @@ var file_clyde_v1_daemon_provider_proto_depIdxs = []int32{
 	7,  // 5: clyde.v1.GetProviderStatsResponse.providers:type_name -> clyde.v1.ProviderStats
 	7,  // 6: clyde.v1.ProviderStatsEvent.stats:type_name -> clyde.v1.ProviderStats
 	0,  // 7: clyde.v1.StartRemoteSessionResponse.launch_state:type_name -> clyde.v1.StartRemoteSessionResponse.LaunchState
-	12, // 8: clyde.v1.ListLiveSessionsResponse.sessions:type_name -> clyde.v1.LiveSession
-	12, // 9: clyde.v1.StartLiveSessionResponse.session:type_name -> clyde.v1.LiveSession
-	12, // 10: clyde.v1.ReleaseForegroundSessionResponse.live_session:type_name -> clyde.v1.LiveSession
-	27, // 11: clyde.v1.ProviderLaunchEnvironmentResponse.environment:type_name -> clyde.v1.EnvironmentVariable
+	14, // 8: clyde.v1.ListLiveSessionsResponse.sessions:type_name -> clyde.v1.LiveSession
+	14, // 9: clyde.v1.StartLiveSessionResponse.session:type_name -> clyde.v1.LiveSession
+	14, // 10: clyde.v1.ReleaseForegroundSessionResponse.live_session:type_name -> clyde.v1.LiveSession
+	29, // 11: clyde.v1.ProviderLaunchEnvironmentResponse.environment:type_name -> clyde.v1.EnvironmentVariable
 	12, // [12:12] is the sub-list for method output_type
 	12, // [12:12] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
@@ -2003,7 +2136,7 @@ func file_clyde_v1_daemon_provider_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_provider_proto_rawDesc), len(file_clyde_v1_daemon_provider_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   29,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
