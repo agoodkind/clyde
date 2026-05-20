@@ -121,6 +121,10 @@ func decodeSessionStartInput(ctx context.Context, log *slog.Logger, eventJSON io
 		"subject", "sessionstart",
 		"session_id", hookData.SessionID,
 		"source", hookData.Source,
+		// pid is this hook process; ppid is the Claude process that spawned it,
+		// so a stray SessionStart can be traced back to its launching process.
+		"pid", os.Getpid(),
+		"ppid", os.Getppid(),
 	)
 	return hookData, append([]byte(nil), raw...), nil
 }

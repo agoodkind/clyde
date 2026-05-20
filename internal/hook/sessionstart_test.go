@@ -158,6 +158,45 @@ func TestProcessSessionStartResumePrefersHookSessionIDOverStaleEnvSessionID(t *t
 	}
 }
 
+func TestProcessSessionStartStartupDoesNotOverwriteTranscriptOnUUIDMismatch(t *testing.T) {
+	// A second Claude inherits a leaked CLYDE_SESSION_NAME and starts fresh with
+	// its own UUID. It must not overwrite the named session's transcript path,
+	// because that UUID does not belong to that session.
+	t.Setenv("CLYDE_SESSION_NAME", "image-1")
+	t.Setenv("CLYDE_SESSION_ID", "")
+
+	store := session.NewFileStore(t.TempDir())
+	existing := session.NewSession("image-1", "real-uuid")
+	originalTranscript := filepath.Join(t.TempDir(), "real-uuid.jsonl")
+	existing.Metadata.SetProviderTranscriptPath(originalTranscript)
+	if err := store.Create(existing); err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	foreignTranscript := filepath.Join(t.TempDir(), "foreign-uuid.jsonl")
+	input := bytes.NewBufferString(`{"session_id":"foreign-uuid","source":"startup","transcript_path":"` + foreignTranscript + `"}`)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := ProcessSessionStart(context.Background(), store, SessionStartConfig{
+		LogRawEvent: func([]byte, string) error {
+			return nil
+		},
+	}, log, input, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("ProcessSessionStart: %v", err)
+	}
+
+	updated, err := store.Get("image-1")
+	if err != nil {
+		t.Fatalf("Get session: %v", err)
+	}
+	if updated.Metadata.ProviderTranscriptPath() != originalTranscript {
+		t.Fatalf("ProviderTranscriptPath = %q, want unchanged %q", updated.Metadata.ProviderTranscriptPath(), originalTranscript)
+	}
+	if updated.Metadata.ProviderSessionID() != "real-uuid" {
+		t.Fatalf("ProviderSessionID = %q, want unchanged real-uuid", updated.Metadata.ProviderSessionID())
+	}
+}
+
 func TestProcessSessionStartCompactResolvesSessionByEnvSessionIDBeforeName(t *testing.T) {
 	t.Setenv("CLYDE_SESSION_NAME", "stale-name")
 	t.Setenv("CLYDE_SESSION_ID", "stable-uuid")

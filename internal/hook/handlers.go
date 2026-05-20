@@ -45,27 +45,60 @@ func handleStartupOrResume(
 		}
 
 		if hookData.TranscriptPath != "" {
-			if err := saveTranscriptPath(store, sessionName, hookData.TranscriptPath); err != nil {
-				log.WarnContext(ctx, "hook.sessionstart.transcript_save_failed",
+			switch {
+			case !transcriptWriteAllowed(store, sessionName, hookData.SessionID):
+				// Identity is the provider session UUID. Refuse to overwrite a
+				// record's transcript path from a SessionStart whose UUID does
+				// not match that record, which happens when an unrelated Claude
+				// process inherits a leaked CLYDE_SESSION_NAME and resolves to
+				// this session by name. See handlers.go transcriptWriteAllowed.
+				log.WarnContext(ctx, "hook.sessionstart.transcript_save_skipped_uuid_mismatch",
 					"component", "hook",
 					"subject", "sessionstart",
 					"session", sessionName,
-					"err", err,
-				)
-				_, _ = fmt.Fprintf(errOut, "Warning: failed to save transcript path: %v\n", err)
-			} else {
-				log.InfoContext(ctx, "hook.sessionstart.transcript_saved",
-					"component", "hook",
-					"subject", "sessionstart",
-					"session", sessionName,
+					"session_id", hookData.SessionID,
 					"transcript", hookData.TranscriptPath,
 				)
+			default:
+				if err := saveTranscriptPath(store, sessionName, hookData.TranscriptPath); err != nil {
+					log.WarnContext(ctx, "hook.sessionstart.transcript_save_failed",
+						"component", "hook",
+						"subject", "sessionstart",
+						"session", sessionName,
+						"err", err,
+					)
+					_, _ = fmt.Fprintf(errOut, "Warning: failed to save transcript path: %v\n", err)
+				} else {
+					log.InfoContext(ctx, "hook.sessionstart.transcript_saved",
+						"component", "hook",
+						"subject", "sessionstart",
+						"session", sessionName,
+						"transcript", hookData.TranscriptPath,
+					)
+				}
 			}
 		}
 	}
 
 	outputContexts(log, store, sessionName, out)
 	return sessionName
+}
+
+// transcriptWriteAllowed reports whether a SessionStart may persist its
+// transcript path onto the resolved session. The write is allowed only when the
+// incoming provider session UUID matches the resolved record's current provider
+// id, so a Claude process that resolved to this session by an inherited
+// CLYDE_SESSION_NAME (rather than by its own UUID) cannot overwrite the path.
+func transcriptWriteAllowed(store session.Store, sessionName, incomingSessionID string) bool {
+	incomingSessionID = strings.TrimSpace(incomingSessionID)
+	if incomingSessionID == "" {
+		return false
+	}
+	sess, err := store.Get(sessionName)
+	if err != nil || sess == nil {
+		return false
+	}
+	return sess.Metadata.ProviderSessionID() == incomingSessionID
 }
 
 func autoAdoptSession(
