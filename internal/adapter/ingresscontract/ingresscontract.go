@@ -21,9 +21,11 @@ package ingresscontract
 
 import (
 	"log/slog"
+	"net/http"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/logevent"
 )
 
 // ChatRequestPrimitive is the typed wire-shape primitive an ingress
@@ -122,6 +124,11 @@ type ChatForkPrimitive struct {
 // an OpenAI-shaped chat request into typed primitives without leaking
 // vendor types across the boundary.
 type IngressContract interface {
+	// TranslateHeaders derives vendor-specific identity metadata from
+	// request headers and returns the primitive-only IngressContext
+	// fields that can be known before the body is decoded.
+	TranslateHeaders(header http.Header) IngressContext
+
 	// Translate derives vendor-specific metadata from a decoded chat
 	// request and returns the primitive-only IngressContext.
 	Translate(req ChatRequestPrimitive) IngressContext
@@ -138,6 +145,16 @@ type IngressContract interface {
 	// list extracted at request-receive time). When toolNames is nil
 	// the implementation may fall back to ic.RawToolNames.
 	LogAttrs(ic IngressContext, rawModel string, toolNames []string) []slog.Attr
+
+	// CorrelationAttrs returns provider-owned identity attributes that
+	// should travel with the generic correlation context. The generic
+	// adapter stores and forwards these without interpreting their keys.
+	CorrelationAttrs(ic IngressContext) []correlation.IdentityAttribute
+
+	// RequestFacets returns provider-owned facets for shared request-story
+	// events. The generic adapter emits the returned values only through
+	// the logevent.Facet interface.
+	RequestFacets(ic IngressContext) []logevent.Facet
 }
 
 // IngressFamily names a registered ingress family at the adapter

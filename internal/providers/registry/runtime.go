@@ -27,6 +27,7 @@ import (
 	// import the provider env constants directly.
 	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
+	_ "goodkind.io/clyde/internal/providers/cursor/mitmcontrib"
 
 	// Blank-import the per-provider discovery packages so each
 	// provider's Roots registers with the generic discoveryroots

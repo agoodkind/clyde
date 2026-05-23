@@ -225,8 +225,8 @@ func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 		t.Fatalf("expected adapter ingress request leg")
 	}
 	assertCorrelationEvent(t, ingress, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
-	if ingress["cursor_request_id"] != "cursor-header-req" {
-		t.Fatalf("ingress cursor_request_id=%v", ingress["cursor_request_id"])
+	if cursorFacet := facetFromEvent(t, ingress, "cursor"); cursorFacet["request_id"] != "cursor-header-req" {
+		t.Fatalf("ingress cursor.request_id=%v", cursorFacet["request_id"])
 	}
 
 	payloadEvent := findPayloadLogEvent(t, buf)
@@ -240,20 +240,71 @@ func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 		t.Fatalf("expected adapter.chat.received event")
 	}
 	assertCorrelationEvent(t, received, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
-	if received["cursor_request_id"] != "cursor-meta-req" {
-		t.Fatalf("received cursor_request_id=%v", received["cursor_request_id"])
+	cursorFacet := facetFromEvent(t, received, "cursor")
+	if cursorFacet["request_id"] != "cursor-meta-req" {
+		t.Fatalf("received cursor.request_id=%v", cursorFacet["request_id"])
 	}
-	if received["cursor_conversation_id"] != "cursor-meta-conv" {
-		t.Fatalf("received cursor_conversation_id=%v", received["cursor_conversation_id"])
+	if cursorFacet["conversation_id"] != "cursor-meta-conv" {
+		t.Fatalf("received cursor.conversation_id=%v", cursorFacet["conversation_id"])
 	}
-	if received["cursor_generation_id"] != "cursor-meta-gen" {
-		t.Fatalf("received cursor_generation_id=%v", received["cursor_generation_id"])
+	if cursorFacet["generation_id"] != "cursor-meta-gen" {
+		t.Fatalf("received cursor.generation_id=%v", cursorFacet["generation_id"])
 	}
 	if received["chat_key_source"] != "native" {
 		t.Fatalf("received chat_key_source=%v", received["chat_key_source"])
 	}
 	if received["chat_root_key"] != "cursor-header-conv" {
 		t.Fatalf("received chat_root_key=%v", received["chat_root_key"])
+	}
+}
+
+func TestHandleChatAttachesRegisteredBackendFacet(t *testing.T) {
+	t.Parallel()
+	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
+		cfg.Codex.Enabled = true
+		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+	})
+
+	postChatToServer(t, srv, map[string]any{
+		"model":        "gpt-5.4",
+		"service_tier": "priority",
+		"reasoning": map[string]string{
+			"effort":  "high",
+			"summary": "auto",
+		},
+		"tools": []map[string]any{
+			{
+				"type": "function",
+				"function": map[string]any{
+					"name": "Search",
+				},
+			},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "ping"}},
+	})
+
+	sendStarted := findRequestLegLogEvent(t, buf, logevent.LegProviderSendStarted)
+	if sendStarted == nil {
+		t.Fatalf("expected provider_send_started request leg")
+	}
+	codexFacet := facetFromEvent(t, sendStarted, "codex")
+	if codexFacet["model"] != "gpt-5.4" {
+		t.Fatalf("codex.model=%v", codexFacet["model"])
+	}
+	if codexFacet["effort"] != "high" {
+		t.Fatalf("codex.effort=%v", codexFacet["effort"])
+	}
+	if codexFacet["reasoning_summary"] != "auto" {
+		t.Fatalf("codex.reasoning_summary=%v", codexFacet["reasoning_summary"])
+	}
+	if codexFacet["service_tier"] != "priority" {
+		t.Fatalf("codex.service_tier=%v", codexFacet["service_tier"])
+	}
+	if codexFacet["input_count"] != float64(1) {
+		t.Fatalf("codex.input_count=%v", codexFacet["input_count"])
+	}
+	if codexFacet["tool_count"] != float64(1) {
+		t.Fatalf("codex.tool_count=%v", codexFacet["tool_count"])
 	}
 }
 
@@ -547,7 +598,7 @@ func TestAdapterEmitterHonorsConfiguredIncompletePolicy(t *testing.T) {
 	)
 	recorder := emitter.Begin(
 		logevent.Identity{RequestID: "policy-probe"},
-		logevent.Path{Surface: logevent.SurfaceAdapterChat, RouteFamily: logevent.RouteFamilyOpenAICompatible},
+		logevent.Path{Surface: logevent.SurfaceAdapterChat, RouteFamily: logevent.RouteFamilyChatCompatible},
 	)
 	recorder.Emit(context.Background(), logevent.Event{Path: logevent.Path{Leg: logevent.LegAdapterIngress, Phase: logevent.PhaseStarted}})
 	if recorder.Complete(context.Background()) {
@@ -691,6 +742,19 @@ func findLogEvent(t *testing.T, logBuffer *bytes.Buffer, message string) map[str
 		}
 	}
 	return nil
+}
+
+func facetFromEvent(t *testing.T, event map[string]any, key string) map[string]any {
+	t.Helper()
+	raw, ok := event[key]
+	if !ok {
+		t.Fatalf("missing facet %q on event %v", key, event)
+	}
+	facet, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("facet %q has unexpected shape %T", key, raw)
+	}
+	return facet
 }
 
 // TestForceStreamUsageOptInAlwaysSets pins the CLYDE-438 generic

@@ -140,7 +140,10 @@ func buildInventory(options inventoryOptions) (inventory, error) {
 	} else {
 		collectIndexedInventory(stateRoot, builders, options)
 	}
-	snapshot := readInventoryIndexSnapshot(stateRoot)
+	snapshot := inventoryIndexSnapshot{LastEventBySink: make(map[string]inventoryEventSummary), LastCleanup: nil}
+	if mode == inventoryModeIndexed {
+		snapshot = readInventoryIndexSnapshot(stateRoot)
+	}
 	categories := make([]categorySummary, 0, len(categoryOrder))
 	for _, currentCategory := range categoryOrder {
 		categories = append(categories, builders[currentCategory].summary(categorySummarySettings{

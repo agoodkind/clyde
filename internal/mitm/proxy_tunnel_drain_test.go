@@ -202,19 +202,19 @@ func TestRegisterPlainHTTPDecouplesUpstreamFromInboundContext(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	proxy := &Proxy{
-		log:                   logger,
-		client:                http.DefaultClient,
-		dialContext:           nil,
-		certMu:                sync.Mutex{},
-		ca:                    nil,
-		cursorTLSClientConfig: nil,
-		rawCaptureSeq:         atomic.Uint64{},
-		Tunnels:               newTestTunnelRegistry(),
-		captureWriters:        newCaptureWriterCache(logger),
-		mu:                    sync.RWMutex{},
-		cfg:                   config.MITMConfig{},
-		base:                  "http://[::1]",
-		server:                nil,
+		log:             logger,
+		client:          http.DefaultClient,
+		dialContext:     nil,
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: nil,
+		rawCaptureSeq:   atomic.Uint64{},
+		Tunnels:         newTestTunnelRegistry(),
+		captureWriters:  newCaptureWriterCache(logger),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{},
+		base:            "http://[::1]",
+		server:          nil,
 	}
 	t.Cleanup(proxy.closeCaptureWriters)
 

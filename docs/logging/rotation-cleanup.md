@@ -4,9 +4,9 @@ Clyde keeps file rotation and cleanup separate.
 
 Rotation controls active log files. It applies max file size, max backups, max age, and compression policy through `internal/slogger`.
 
-Cleanup controls stale files. It is enabled by `logging.cleanup.enabled` and uses retention settings to remove old rotated files, old sidecars, empty artifacts, and files that exceed total budget rules.
+Cleanup controls stale files. It is enabled by `logging.cleanup.enabled` and uses retention settings to remove aged rotated files, aged sidecars, empty artifacts, and files that exceed total budget rules.
 
-When cleanup is disabled, Clyde may still audit eligible files, but it should not delete them.
+When cleanup is disabled, Clyde may audit eligible files, but it should not delete them.
 
 Cleanup applies across the logging surfaces exposed by inventory:
 
@@ -18,7 +18,7 @@ Cleanup applies across the logging surfaces exposed by inventory:
 - Provider sidecars.
 - LaunchAgent fallback logs.
 
-Use `clyde logs inventory --deep --json` before and after manual cleanup when exact file counts matter.
+Use `clyde logs inventory --deep --json` around manual cleanup when exact file counts matter.
 
 ## Cleanup and inventory wiring
 
@@ -38,4 +38,4 @@ flowchart LR
   deepMode --> walk
 ```
 
-The cleanup pass emits `slogger.cleanup.completed` with `scanned_roots`, `candidates`, `deleted`, `bytes_deleted`, `skipped`, `errors`, and `duration_ms`. The event flows through the inventory sink to `logs/inventory/events.jsonl`, which `clyde logs inventory` reads in indexed mode to surface the most recent cleanup result per sink.
+The cleanup pass emits `slogger.cleanup.completed` with `scanned_roots`, `candidates`, `deleted`, `bytes_deleted`, `skipped`, `errors`, and `duration_ms`. The event flows through the inventory sink to `logs/inventory/events.jsonl`, which `clyde logs inventory` reads in indexed mode to surface the most recent cleanup result per sink. Deep mode stays off that snapshot path and reports only filesystem-derived totals.

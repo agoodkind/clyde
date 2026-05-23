@@ -8,8 +8,8 @@ Every request path uses one stable request story and a required leg sequence.
 flowchart LR
   cursorChat["Cursor chat"] --> adapterIngress["adapter_ingress"]
   adapterIngress --> adapterPayload["adapter_payload"]
-  adapterPayload --> adapterCursorMetadata["adapter_cursor_metadata"]
-  adapterCursorMetadata --> adapterModelResolve["adapter_model_resolve"]
+  adapterPayload --> adapterClientMetadata["adapter_client_metadata"]
+  adapterClientMetadata --> adapterModelResolve["adapter_model_resolve"]
   adapterModelResolve --> providerSendStarted["provider_send_started"]
   providerSendStarted --> providerAccepted["provider_accepted"]
   providerAccepted --> providerResponseStarted["provider_response_started"]
@@ -37,7 +37,7 @@ Adapter chat required legs:
 
 - `adapter_ingress`
 - `adapter_payload`
-- `adapter_cursor_metadata`
+- `adapter_client_metadata`
 - `adapter_model_resolve`
 - `provider_send_started`
 - `provider_accepted`

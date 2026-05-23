@@ -53,6 +53,13 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 			reqID = newRequestID()
 		}
 		corr := correlation.FromHTTPHeader(r.Header, reqID)
+		if ingress, ok := activeIngressContract(); ok && ingress != nil {
+			ingressCtx := ingress.TranslateHeaders(r.Header)
+			if ingressCtx.ConversationID != "" && corr.ChatKey == "" {
+				corr = corr.WithChatIdentity(ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
+			}
+			corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
+		}
 		corr.SetHTTPHeaders(r.Header)
 		corr.SetHTTPHeaders(w.Header())
 		ctx, ingressCancel := context.WithCancel(correlation.WithContext(r.Context(), corr))

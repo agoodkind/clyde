@@ -344,7 +344,7 @@ func execHookCommand(ctx context.Context, command string, extraArgs []string, st
 }
 
 // hookResult is the in-memory response the dispatcher hands back to
-// the cursor request handler. Body is an open file the caller is
+// the provider request handler. Body is an open file the caller is
 // responsible for closing after streaming it to the client.
 type hookResult struct {
 	Status        int
@@ -387,7 +387,7 @@ func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath
 
 	statusLine := "HTTP/1.1 " + strconv.Itoa(result.Status) + " " + http.StatusText(result.Status) + "\r\n"
 	header := headerBlock(statusLine, headers)
-	written, err := writeCursorResponseBytes(client, responseFile, header, "hook header")
+	written, err := writeProviderResponseBytes(client, responseFile, header, "hook header")
 	if err != nil {
 		return 0, err
 	}
@@ -395,7 +395,7 @@ func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath
 	for {
 		n, readErr := result.Body.Read(buf)
 		if n > 0 {
-			count, err := writeCursorResponseBytes(client, responseFile, buf[:n], "hook body")
+			count, err := writeProviderResponseBytes(client, responseFile, buf[:n], "hook body")
 			written += count
 			if err != nil {
 				return written, err
@@ -432,17 +432,18 @@ func nextHookRequestID() string {
 	return strconv.FormatInt(currentTime().UnixNano(), 36) + "-" + strconv.FormatUint(hookRequestIDCounter, 36)
 }
 
-// hookedCursorParams carries the per-request state the standard
-// Cursor request handler already computed (concern, raw capture
+// hookedProviderParams carries the per-request state the standard
+// provider request handler already computed (concern, raw capture
 // paths, request bytes) so the hook variant can reuse them without
 // recomputing. Bundling them in a struct keeps the call site readable
 // and avoids a ten-argument helper.
-type hookedCursorParams struct {
+type hookedProviderParams struct {
 	writer          *bufio.Writer
 	req             *http.Request
 	body            []byte
 	target          string
 	host            string
+	provider        Provider
 	rule            config.MITMHookRule
 	started         time.Time
 	concern         string
@@ -453,12 +454,12 @@ type hookedCursorParams struct {
 	capturePolicy   CaptureFilePolicy
 }
 
-// runHookedCursorRequest runs the Cursor request through the matched
+// runHookedProviderRequest runs the provider request through the matched
 // hook rule and writes the resulting response on the client
 // connection. The function owns the capture-metadata write for the
 // rewritten exchange so the standard handler's capture path stays
 // untouched.
-func (p *Proxy) runHookedCursorRequest(ctx context.Context, params hookedCursorParams) error {
+func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProviderParams) error {
 	stagingRoot := DefaultHookStagingRoot()
 	requestID := nextHookRequestID()
 	staging, err := newHookStaging(p.log, stagingRoot, requestID)
@@ -483,7 +484,26 @@ func (p *Proxy) runHookedCursorRequest(ctx context.Context, params hookedCursorP
 	})
 	if err != nil {
 		p.writeHookErrorResponse(params.writer, err)
-		return err
+		return p.recordProviderFailure(params.req, http.Header{}, buildProviderFailureInput(providerForwardParams{
+			writer:          params.writer,
+			req:             params.req,
+			body:            params.body,
+			target:          params.target,
+			host:            params.host,
+			provider:        params.provider,
+			started:         params.started,
+			concern:         params.concern,
+			requestBytes:    params.requestBytes,
+			requestRawPath:  params.requestRawPath,
+			responseRawPath: params.responseRawPath,
+			cfg:             params.cfg,
+			capturePolicy:   params.capturePolicy,
+		}, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
+			includePayload:      true,
+			includeUpstreamSend: false,
+			errorCode:           "hook_dispatch_failed",
+			errorMessage:        err.Error(),
+		})
 	}
 	defer func() { _ = result.Body.Close() }()
 
@@ -492,7 +512,7 @@ func (p *Proxy) runHookedCursorRequest(ctx context.Context, params hookedCursorP
 		return err
 	}
 	p.recordHookedCaptureMetadata(params, result, responseBytes)
-	p.log.InfoContext(ctx, "mitm.cursor.hook.completed",
+	p.log.InfoContext(ctx, "mitm.provider.hook.completed",
 		"host", params.host,
 		"hook", params.rule.Name,
 		"path", params.req.URL.Path,
@@ -501,12 +521,13 @@ func (p *Proxy) runHookedCursorRequest(ctx context.Context, params hookedCursorP
 		"request_bytes", params.requestBytes,
 		"response_bytes", responseBytes,
 	)
-	p.recordHTTPCapture(params.req, result.Headers, cursorHTTPCaptureRecordInput(cursorForwardParams{
+	p.recordHTTPCapture(params.req, result.Headers, providerHTTPCaptureRecordInput(providerForwardParams{
 		writer:          params.writer,
 		req:             params.req,
 		body:            params.body,
 		target:          params.target,
 		host:            params.host,
+		provider:        params.provider,
 		started:         params.started,
 		concern:         params.concern,
 		requestBytes:    params.requestBytes,
@@ -522,29 +543,31 @@ func (p *Proxy) runHookedCursorRequest(ctx context.Context, params hookedCursorP
 // hook-rewritten request. The Hook field is set so downstream tooling
 // can distinguish hook-mediated rewrites from plain pass-through
 // exchanges.
-func (p *Proxy) recordHookedCaptureMetadata(params hookedCursorParams, result *hookResult, responseBytes int64) {
-	requestID, originalRequestID, sessionID, traceparent := extractCursorCaptureHeaders(params.req.Header)
-	if appendErr := p.appendCursorCaptureMetadata(params.cfg.CaptureDir, cursorCaptureMetadata{
-		Provider:            "cursor",
-		Concern:             params.concern,
-		Host:                params.host,
-		Path:                params.req.URL.Path,
-		Method:              params.req.Method,
-		Status:              result.Status,
+func (p *Proxy) recordHookedCaptureMetadata(params hookedProviderParams, result *hookResult, responseBytes int64) {
+	decodedRequestBody, decoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
+	if !decoded {
+		decodedRequestBody = params.body
+	}
+	if appendErr := p.appendProviderCaptureExtension(params.cfg.CaptureDir, params.provider.BuildCaptureExtension(CaptureExchange{
+		CapturedAt:          currentTime().UTC(),
+		RequestHeader:       params.req.Header,
+		RequestBody:         params.body,
+		DecodedRequestBody:  decodedRequestBody,
+		ResponseHeader:      result.Headers,
+		ResponseStatus:      result.Status,
 		RequestBytes:        params.requestBytes,
 		ResponseBytes:       responseBytes,
+		Method:              params.req.Method,
+		Path:                params.req.URL.Path,
+		Host:                params.host,
+		Concern:             params.concern,
 		RequestRawPath:      params.requestRawPath,
 		ResponseRawPath:     params.responseRawPath,
-		RequestID:           requestID,
-		OriginalRequestID:   originalRequestID,
-		SessionID:           sessionID,
-		Traceparent:         traceparent,
 		RequestContentType:  params.req.Header.Get("Content-Type"),
 		ResponseContentType: result.Headers.Get("Content-Type"),
-		Diagnostic:          nil,
-		Hook:                params.rule.Name,
-	}, params.capturePolicy); appendErr != nil {
-		p.log.Warn("mitm.cursor.hook.capture.append_failed",
+		HookName:            params.rule.Name,
+	}), params.capturePolicy); appendErr != nil {
+		p.log.Warn("mitm.provider.hook.capture.append_failed",
 			"component", "mitm",
 			"concern", "providers.mitm.wire",
 			"hook", params.rule.Name,
@@ -558,19 +581,19 @@ func (p *Proxy) recordHookedCaptureMetadata(params hookedCursorParams, result *h
 // hook mode needs it. For transform_response the caller wants the
 // upstream body to pass to the hook. For synthesize and
 // transform_request modes upstream is skipped and the return is nil.
-func (p *Proxy) maybeFetchUpstreamForHook(params hookedCursorParams) (*hookUpstream, error) {
+func (p *Proxy) maybeFetchUpstreamForHook(params hookedProviderParams) (*hookUpstream, error) {
 	mode := resolveHookMode(params.rule.Mode)
 	if mode != config.MITMHookModeTransformResponse {
 		return nil, nil
 	}
-	resp, err := p.cursorUpstreamRoundTrip(params.req, params.body, params.target, params.host)
+	resp, err := p.providerUpstreamRoundTrip(params.req, params.body, params.target, params.host)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		p.log.Warn("mitm.cursor.hook.upstream_read_failed",
+		p.log.Warn("mitm.provider.hook.upstream_read_failed",
 			"host", params.host,
 			"path", params.req.URL.Path,
 			"err", err,
@@ -597,26 +620,26 @@ func (p *Proxy) writeHookErrorResponse(client *bufio.Writer, hookErr error) {
 	headers.Set("Content-Length", strconv.Itoa(len(body)))
 	statusLine := "HTTP/1.1 " + strconv.Itoa(status) + " " + http.StatusText(status) + "\r\n"
 	if _, err := client.WriteString(statusLine); err != nil {
-		p.log.Warn("mitm.cursor.hook.error_write_status_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_write_status_failed", "err", err)
 		return
 	}
 	for key, values := range headers {
 		for _, value := range values {
 			if _, err := client.WriteString(key + ": " + value + "\r\n"); err != nil {
-				p.log.Warn("mitm.cursor.hook.error_write_header_failed", "err", err)
+				p.log.Warn("mitm.provider.hook.error_write_header_failed", "err", err)
 				return
 			}
 		}
 	}
 	if _, err := client.WriteString("\r\n"); err != nil {
-		p.log.Warn("mitm.cursor.hook.error_write_header_end_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_write_header_end_failed", "err", err)
 		return
 	}
 	if _, err := client.Write(body); err != nil {
-		p.log.Warn("mitm.cursor.hook.error_write_body_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_write_body_failed", "err", err)
 		return
 	}
 	if err := client.Flush(); err != nil {
-		p.log.Warn("mitm.cursor.hook.error_flush_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_flush_failed", "err", err)
 	}
 }

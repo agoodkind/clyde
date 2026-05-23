@@ -10,9 +10,6 @@ Shared identity fields:
 - `span_id`
 - `parent_span_id`
 - `request_id`
-- `cursor_request_id`
-- `cursor_conversation_id`
-- `cursor_generation_id`
 - `upstream_request_id`
 - `upstream_response_id`
 - `chat_key`
@@ -20,6 +17,8 @@ Shared identity fields:
 - `chat_root_key`
 - `chat_branch_key`
 - `session_id`
+
+Provider-owned identity attributes can add safe flat fields such as `cursor_request_id`, `cursor_conversation_id`, and `cursor_generation_id`. Cursor-owned ingress and MITM contracts emit those Cursor fields; `internal/logevent` stores them as provider-owned attributes without interpreting their keys.
 
 Shared path fields:
 
@@ -58,14 +57,15 @@ Provider facet fields:
 
 - `codex`
 - `anthropic`
+- `cursor`
 - `mitm`
 
-The supported surfaces are `adapter_chat` and `mitm_ide_backend`. The supported route families are `openai_compatible`, `native_anthropic`, and `mitm_proxy`.
+The supported surfaces are `adapter_chat` and `mitm_ide_backend`. The supported route families are `chat_compatible`, `provider_native`, and `mitm_proxy`.
 
 The supported phases are `started`, `completed`, and `failed`. The supported status values are `ok` and `error`.
 
-Removed legacy fields and event shapes:
+Unsupported request-log fields and event shapes:
 
 - Normal JSONL logs do not use `body`, `body_b64`, or `body_truncated`.
-- The user-facing `logging.body` and `mitm.body_mode` payload config surfaces are removed.
-- Request traffic does not add compatibility aliases for old event names or field names.
+- The user-facing `logging.body` and `mitm.body_mode` payload config surfaces are unsupported.
+- Request traffic does not add compatibility aliases for alternate event names or field names.

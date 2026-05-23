@@ -24,6 +24,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/logevent"
 )
 
 // TestHandleConnectTunnelsBytesBothWays stands up a fake upstream
@@ -278,19 +279,19 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	proxy := &Proxy{
-		log:                   logger,
-		client:                http.DefaultClient,
-		dialContext:           mappedDialContext(cursorHost+":443", upstreamAddr),
-		certMu:                sync.Mutex{},
-		ca:                    nil,
-		cursorTLSClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
-		rawCaptureSeq:         atomic.Uint64{},
-		Tunnels:               newTestTunnelRegistry(),
-		captureWriters:        newCaptureWriterCache(logger),
-		mu:                    sync.RWMutex{},
-		cfg:                   config.MITMConfig{CaptureDir: captureDir},
-		base:                  "",
-		server:                nil,
+		log:             logger,
+		client:          http.DefaultClient,
+		dialContext:     mappedDialContext(cursorHost+":443", upstreamAddr),
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
+		rawCaptureSeq:   atomic.Uint64{},
+		Tunnels:         newTestTunnelRegistry(),
+		captureWriters:  newCaptureWriterCache(logger),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
+		base:            "",
+		server:          nil,
 	}
 	defer proxy.closeCaptureWriters()
 
@@ -299,7 +300,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	req.Header.Set("content-type", "application/json")
 	var output bytes.Buffer
 	writer := bufio.NewWriter(&output)
-	if err := proxy.handleCursorInterceptedRequest(writer, req, cursorHost+":443", cursorHost); err != nil {
+	if err := proxy.handleProviderInterceptedRequest(writer, req, cursorHost+":443", cursorHost, testCursorProvider{}); err != nil {
 		t.Fatalf("handle cursor request: %v", err)
 	}
 
@@ -391,19 +392,19 @@ func startTestProxy(t *testing.T) *testProxy {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := &Proxy{
-		log:                   logger,
-		client:                http.DefaultClient,
-		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		certMu:                sync.Mutex{},
-		ca:                    nil,
-		cursorTLSClientConfig: nil,
-		rawCaptureSeq:         atomic.Uint64{},
-		Tunnels:               newTestTunnelRegistry(),
-		captureWriters:        newCaptureWriterCache(logger),
-		mu:                    sync.RWMutex{},
-		cfg:                   config.MITMConfig{CaptureDir: t.TempDir()},
-		base:                  "http://" + listener.Addr().String(),
-		server:                nil,
+		log:             logger,
+		client:          http.DefaultClient,
+		dialContext:     (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: nil,
+		rawCaptureSeq:   atomic.Uint64{},
+		Tunnels:         newTestTunnelRegistry(),
+		captureWriters:  newCaptureWriterCache(logger),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: t.TempDir()},
+		base:            "http://" + listener.Addr().String(),
+		server:          nil,
 	}
 	t.Cleanup(p.closeCaptureWriters)
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
@@ -414,6 +415,10 @@ func startTestProxy(t *testing.T) *testProxy {
 
 func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server, rawCaptureEnabled bool) *testProxy {
 	t.Helper()
+	RegisterProviderFirst(testCursorProvider{host: cursorHost})
+	t.Cleanup(func() {
+		UnregisterProvider(ProviderID("cursor"))
+	})
 	listener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -430,25 +435,122 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := &Proxy{
-		log:                   logger,
-		client:                http.DefaultClient,
-		dialContext:           mappedDialContext(cursorHost+":443", upstreamAddr),
-		certMu:                sync.Mutex{},
-		ca:                    ca,
-		cursorTLSClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
-		rawCaptureSeq:         atomic.Uint64{},
-		Tunnels:               newTestTunnelRegistry(),
-		captureWriters:        newCaptureWriterCache(logger),
-		mu:                    sync.RWMutex{},
-		cfg:                   config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
-		base:                  "http://" + listener.Addr().String(),
-		server:                nil,
+		log:             logger,
+		client:          http.DefaultClient,
+		dialContext:     mappedDialContext(cursorHost+":443", upstreamAddr),
+		certMu:          sync.Mutex{},
+		ca:              ca,
+		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
+		rawCaptureSeq:   atomic.Uint64{},
+		Tunnels:         newTestTunnelRegistry(),
+		captureWriters:  newCaptureWriterCache(logger),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
+		base:            "http://" + listener.Addr().String(),
+		server:          nil,
 	}
 	t.Cleanup(p.closeCaptureWriters)
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(listener) }()
 	return &testProxy{server: server, proxy: p, addr: listener.Addr().String()}
+}
+
+type testCursorProvider struct {
+	id   ProviderID
+	host string
+}
+
+func (p testCursorProvider) ID() ProviderID {
+	if p.id != "" {
+		return p.id
+	}
+	return ProviderID("cursor")
+}
+
+func (p testCursorProvider) ClassifyConnect(host string) ConnectClaim {
+	return ConnectClaim{
+		Claimed:    host == p.host || p.host == "",
+		Host:       host,
+		ProviderID: p.ID(),
+	}
+}
+
+func (p testCursorProvider) ClassifyPlain(path string) PlainRouteClaim {
+	return PlainRouteClaim{
+		Claimed:     false,
+		Provider:    "",
+		UpstreamURL: "",
+	}
+}
+
+func (p testCursorProvider) ExtractIdentity(headers http.Header) IdentityContribution {
+	facet := testCursorFacet{
+		RequestID:         headers.Get("x-request-id"),
+		OriginalRequestID: headers.Get("x-original-request-id"),
+		SessionID:         headers.Get("x-session-id"),
+	}
+	return IdentityContribution{
+		PreferredRequestID:         headers.Get("x-request-id"),
+		PreferredUpstreamRequestID: headers.Get("x-original-request-id"),
+		SessionID:                  headers.Get("x-session-id"),
+		Facet:                      facet,
+	}
+}
+
+func (p testCursorProvider) BuildCaptureExtension(exchange CaptureExchange) CaptureExtension {
+	return testCursorCaptureExtension{
+		ConcernName:       exchange.Concern,
+		Path:              exchange.Path,
+		RequestID:         exchange.RequestHeader.Get("x-request-id"),
+		OriginalRequestID: exchange.RequestHeader.Get("x-original-request-id"),
+		SessionID:         exchange.RequestHeader.Get("x-session-id"),
+		RequestRawPath:    exchange.RequestRawPath,
+		ResponseRawPath:   exchange.ResponseRawPath,
+	}
+}
+
+type testCursorCaptureExtension struct {
+	ConcernName       string `json:"concern"`
+	Path              string `json:"path"`
+	RequestID         string `json:"request_id"`
+	OriginalRequestID string `json:"original_request_id"`
+	SessionID         string `json:"session_id"`
+	RequestRawPath    string `json:"request_raw_path"`
+	ResponseRawPath   string `json:"response_raw_path"`
+}
+
+func (e testCursorCaptureExtension) Concern() string {
+	return e.ConcernName
+}
+
+func (e testCursorCaptureExtension) MarshalJSONLine() ([]byte, error) {
+	return json.Marshal(e)
+}
+
+type testCursorFacet struct {
+	RequestID         string
+	OriginalRequestID string
+	SessionID         string
+}
+
+func (f testCursorFacet) FacetKey() string {
+	return "cursor"
+}
+
+func (f testCursorFacet) FacetAttrs() []slog.Attr {
+	return []slog.Attr{
+		slog.String("request_id", f.RequestID),
+		slog.String("original_request_id", f.OriginalRequestID),
+		slog.String("session_id", f.SessionID),
+	}
+}
+
+func (f testCursorFacet) SinkHints() logevent.SinkHints {
+	return logevent.SinkHints{
+		HasRawCapture:        false,
+		NeedsProviderSidecar: false,
+	}
 }
 
 func mappedDialContext(from string, to string) func(context.Context, string, string) (net.Conn, error) {

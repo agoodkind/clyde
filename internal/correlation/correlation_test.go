@@ -46,19 +46,21 @@ func TestAttrsIncludesCorrelationFields(t *testing.T) {
 	t.Parallel()
 
 	corr := Context{
-		TraceID:              "0123456789abcdef0123456789abcdef",
-		SpanID:               "0123456789abcdef",
-		ParentSpanID:         "fedcba9876543210",
-		RequestID:            "req-3",
-		CursorRequestID:      "cursor-req",
-		CursorConversationID: "cursor-conv",
-		CursorGenerationID:   "cursor-gen",
-		UpstreamRequestID:    "upstream-req",
-		UpstreamResponseID:   "upstream-resp",
-		ChatKey:              "chat-root.b01",
-		ChatKeySource:        "derived",
-		ChatRootKey:          "chat-root",
-		ChatBranchKey:        "b01",
+		TraceID:            "0123456789abcdef0123456789abcdef",
+		SpanID:             "0123456789abcdef",
+		ParentSpanID:       "fedcba9876543210",
+		RequestID:          "req-3",
+		UpstreamRequestID:  "upstream-req",
+		UpstreamResponseID: "upstream-resp",
+		ChatKey:            "chat-root.b01",
+		ChatKeySource:      "derived",
+		ChatRootKey:        "chat-root",
+		ChatBranchKey:      "b01",
+		IdentityAttributes: []IdentityAttribute{
+			{Key: "cursor_request_id", Value: "cursor-req"},
+			{Key: "cursor_conversation_id", Value: "cursor-conv"},
+			{Key: "cursor_generation_id", Value: "cursor-gen"},
+		},
 	}
 	got := attrMap(corr.Attrs())
 	for _, key := range []string{
@@ -163,25 +165,17 @@ func TestChatKeyAttrRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFromHTTPHeaderResolvesChatKeyHeaderPrecedence(t *testing.T) {
+func TestFromHTTPHeaderResolvesClaudeChatKeyHeader(t *testing.T) {
 	t.Parallel()
 
 	header := http.Header{}
-	header.Set(HeaderCursorConversationID, "cursor-conv-1")
 	header.Set(HeaderClaudeCodeSessionID, "claude-sess-1")
 	c := FromHTTPHeader(header, "req-1")
-	if c.ChatKey != "cursor-conv-1" {
-		t.Fatalf("cursor conversation id should win, got %q", c.ChatKey)
+	if c.ChatKey != "claude-sess-1" {
+		t.Fatalf("claude code session id should resolve, got %q", c.ChatKey)
 	}
 	if c.ChatKeySource != "native" {
-		t.Fatalf("cursor conversation id source = %q, want native", c.ChatKeySource)
-	}
-
-	header2 := http.Header{}
-	header2.Set(HeaderClaudeCodeSessionID, "claude-sess-2")
-	c2 := FromHTTPHeader(header2, "req-2")
-	if c2.ChatKey != "claude-sess-2" {
-		t.Fatalf("claude code session id should resolve when cursor missing, got %q", c2.ChatKey)
+		t.Fatalf("claude code session id source = %q, want native", c.ChatKeySource)
 	}
 
 	header3 := http.Header{}

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -380,37 +379,4 @@ func sanitizeChatKey(s string) string {
 		return ""
 	}
 	return b.String()
-}
-
-// transcriptRouterCloser bridges the router into the existing tee handler
-// chain so Setup can return a single [io.Closer] that flushes both the file
-// handlers and the router's open handle pool.
-type transcriptRouterCloser struct {
-	router *TranscriptRouter
-	inner  io.Closer
-}
-
-func (c *transcriptRouterCloser) Close() error {
-	var errs []error
-	if c.inner != nil {
-		err := c.inner.Close()
-		if err != nil {
-			slog.Warn("transcript.inner_close_failed",
-				"component", "transcript-router",
-				"err", err,
-			)
-			errs = append(errs, err)
-		}
-	}
-	if c.router != nil {
-		err := c.router.Close()
-		if err != nil {
-			slog.Warn("transcript.router_close_failed",
-				"component", "transcript-router",
-				"err", err,
-			)
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }

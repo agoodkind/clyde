@@ -1,12 +1,12 @@
 # Logging Overview
 
-Clyde request logging uses one typed request-event contract in `internal/logevent`. The contract gives adapter chat traffic and MITM IDE backend traffic the same identity fields, leg fields, outcome fields, payload view, provider facets, and sink names.
+Clyde request logging uses one typed request-event contract in `internal/logevent`. The contract gives adapter chat traffic and MITM IDE backend traffic shared identity fields, leg fields, outcome fields, payload view, provider facet interface, and sink names.
 
 Use `clyde logs inventory --json` as the first discovery step for live log locations. Use `clyde logs inventory --deep --json` when the indexed view needs to be verified against the filesystem.
 
 Normal JSONL logs never inline raw prompts, messages, tool schemas, response bodies, credentials, cookies, or tokens. They carry the fixed filtered payload view described in `payload-policy.md`. Full raw payload sidecar files are controlled only by `logging.raw_capture.enabled`.
 
-The hard cut removes the payload mode ladder, raw-body JSONL fields, and event aliases. Request traffic goes through the central `logevent.Emitter` and is reviewed against the required legs in `request-paths.md`.
+Request traffic goes through the central `logevent.Emitter`. Request traffic is reviewed against the required legs in `request-paths.md`. Normal request logs do not use payload mode ladders, raw-body JSONL fields, or event aliases.
 
 Start here, then use these references:
 

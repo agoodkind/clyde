@@ -18,13 +18,9 @@ The port number must match the daemon's configured `[mitm.listen.port]` (default
 
 Cursor's `http.proxy` setting overrides Chromium's `--proxy-server` command-line flag and the `HTTPS_PROXY` environment variable. If the proxy address drifts from the daemon's actual MITM listener, Cursor silently routes through a dead port. Every BYOK turn fails with a generic `ConnectError: [internal] Failed to establish a socket connection to proxies: PROXY [::1]:<stale>`. There is no visible error in Cursor's logs; the failure appears as a connection refusal at the system level.
 
-## The 2026-05-08 incident
+## The desktop-via-clyde patch role
 
-On 2026-05-08, a user's `settings.json` carried an obsolete proxy value `http://[::1]:55579`, which was an older daemon's ephemeral port. After CLYDE-265 pinned the daemon to `[::1]:48723`, the settings file still pointed at `55579`. Every Cursor turn failed silently for hours. The fix was to rotate the proxy address to the new pinned port. CLYDE-265 locked the daemon's address so that this rotation only needs to happen once per user.
-
-## The wrapper's role
-
-The Cursor application wrapper at `~/Applications/Cursor (via clyde).app` sets the Cursor process environment and launches Cursor with the `--proxy-server` flag. The wrapper does not modify Cursor's `settings.json`. The settings file value is the user's responsibility. The wrapper assumes the `settings.json` value is correct and in sync with the daemon's current listener address.
+`desktop-via-clyde` patches `/Applications/Cursor.app` in place. The patched `Contents/MacOS/Cursor` executable is a Swift shim that checks the Clyde MITM CA file, checks the Clyde MITM proxy socket at `[::1]:48723`, sets proxy arguments and environment variables, and then execs the original Cursor executable at `Contents/MacOS/Cursor.real`. The shim does not modify Cursor's `settings.json`. The settings file value is the user's responsibility.
 
 ## Detect drift manually
 
@@ -39,4 +35,4 @@ The first command prints the currently configured proxy address. The second comm
 
 ## Fix
 
-Open the Cursor user `settings.json` in a text editor. Find the `"http.proxy"` line and change it to `"http://[::1]:48723"`. Save the file. Quit Cursor completely (Cmd+Q) and relaunch it via the Cursor (via clyde) wrapper application. The new proxy address will take effect when Cursor connects to the MITM listener.
+Open the Cursor user `settings.json` in a text editor. Find the `"http.proxy"` line and set it to `"http://[::1]:48723"`. Save the file. Quit Cursor completely with Cmd+Q. Relaunch `/Applications/Cursor.app`, which starts the `desktop-via-clyde` shim when the app is patched. The proxy address takes effect when Cursor connects to the MITM listener.

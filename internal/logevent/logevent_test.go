@@ -40,7 +40,7 @@ func TestRecorderReportsMissingRequiredLegs(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{}))
 	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress, LegAdapterPayload}})
-	recorder := emitter.Begin(Identity{RequestID: "req-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyOpenAICompatible})
+	recorder := emitter.Begin(Identity{RequestID: "req-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
 	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())
@@ -60,7 +60,7 @@ func TestRecorderEmitsTypedPayloadFields(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{}))
 	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress}})
-	recorder := emitter.Begin(Identity{RequestID: "req-2"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyOpenAICompatible})
+	recorder := emitter.Begin(Identity{RequestID: "req-2"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 	payload := PayloadView{
 		Summary: PayloadSummary{BodyType: "json_object", Bytes: 16},
 		Fields:  []PayloadField{{Path: "$.model", Value: json.RawMessage(`"gpt-5"`), Bytes: 7}},
@@ -81,40 +81,76 @@ func TestRecorderEmitsTypedPayloadFields(t *testing.T) {
 	}
 }
 
-func TestProviderFacetsUseContractFieldNames(t *testing.T) {
+// testFacet is an in-package typed Facet stand-in. It exercises the
+// generic Facet contract without importing a provider package (a
+// cycle the generic logevent package must avoid).
+type testFacet struct {
+	Key   string            `json:"-"`
+	Attrs []testFacetAttr   `json:"attrs"`
+	Hints SinkHints         `json:"-"`
+	Extra map[string]string `json:"extra,omitempty"`
+}
+
+type testFacetAttr struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func (f testFacet) FacetKey() string { return f.Key }
+
+func (f testFacet) FacetAttrs() []slog.Attr {
+	attrs := make([]slog.Attr, 0, len(f.Attrs))
+	for _, attr := range f.Attrs {
+		attrs = append(attrs, slog.String(attr.Key, attr.Value))
+	}
+	return attrs
+}
+
+func (f testFacet) SinkHints() SinkHints { return f.Hints }
+
+func TestFacetsBundleEmitsAttrsAndJSON(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{}))
 	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress}})
-	recorder := emitter.Begin(Identity{RequestID: "req-facet"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyOpenAICompatible})
+	recorder := emitter.Begin(Identity{RequestID: "req-facet"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
-	recorder.Emit(context.Background(), Event{
-		Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted},
-		Facets: ProviderFacets{Codex: &CodexFacet{
-			Model:              "gpt-5",
-			Effort:             "high",
-			ReasoningSummary:   "auto",
-			PreviousResponseID: true,
-			StreamEventCount:   3,
-			RetryAttempt:       1,
-		}},
-	})
+	facet := testFacet{
+		Key: "demo",
+		Attrs: []testFacetAttr{
+			{Key: "model", Value: "gpt-5"},
+			{Key: "effort", Value: "high"},
+		},
+		Hints: SinkHints{HasRawCapture: false, NeedsProviderSidecar: true},
+		Extra: nil,
+	}
+	var event Event
+	event.Path = Path{Leg: LegAdapterIngress, Phase: PhaseStarted}
+	event.Facets.Set(facet)
+	recorder.Emit(context.Background(), event)
 
 	logged := output.String()
-	for _, want := range []string{"reasoning_summary", "previous_response_id", "stream_event_count", "retry_attempt"} {
+	for _, want := range []string{`"demo":{"model":"gpt-5","effort":"high"}`} {
 		if !strings.Contains(logged, want) {
-			t.Fatalf("log output missing %s: %s", want, logged)
+			t.Fatalf("log output missing %q: %s", want, logged)
 		}
 	}
 }
 
+// rawFacet is a Facet stand-in that contributes the raw-capture
+// sink hint without naming a provider in the generic test.
+type rawFacet struct{}
+
+func (rawFacet) FacetKey() string        { return "transport" }
+func (rawFacet) FacetAttrs() []slog.Attr { return nil }
+func (rawFacet) SinkHints() SinkHints {
+	return SinkHints{HasRawCapture: true, NeedsProviderSidecar: false}
+}
+
 func TestDefaultSinksForEventSelectsCentralSinkModel(t *testing.T) {
-	event := Event{
-		Identity: Identity{RequestID: "req-3", ChatKey: "chat-1"},
-		Path:     Path{Surface: SurfaceMITMIDE},
-		Facets: ProviderFacets{MITM: &MITMFacet{
-			RawRequestPath: "mitm/raw/request.raw",
-		}},
-	}
+	var event Event
+	event.Identity = Identity{RequestID: "req-3", ChatKey: "chat-1"}
+	event.Path = Path{Surface: SurfaceMITMIDE}
+	event.Facets.Set(rawFacet{})
 
 	sinks := DefaultSinksForEvent(event)
 	want := []SinkName{SinkProcess, SinkConcern, SinkInventory, SinkPerChat, SinkMITMCapture, SinkMITMRaw}
@@ -171,7 +207,7 @@ func TestRecorderIncompletePolicyWarnEmitsWithoutCallingHandler(t *testing.T) {
 		WithIncompletePolicy(IncompletePolicyWarn),
 		WithTestingTB(handler),
 	)
-	recorder := emitter.Begin(Identity{RequestID: "warn-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyOpenAICompatible})
+	recorder := emitter.Begin(Identity{RequestID: "warn-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
 	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())
@@ -204,7 +240,7 @@ func TestRecorderIncompletePolicyFailTestCallsHandler(t *testing.T) {
 		WithIncompletePolicy(IncompletePolicyFailTest),
 		WithTestingTB(handler),
 	)
-	recorder := emitter.Begin(Identity{RequestID: "fail-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyOpenAICompatible})
+	recorder := emitter.Begin(Identity{RequestID: "fail-1"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
 	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())
@@ -239,7 +275,7 @@ func TestRecorderIncompletePolicyFailTestWithoutHandlerOnlyEmits(t *testing.T) {
 		RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress, LegAdapterPayload}},
 		WithIncompletePolicy(IncompletePolicyFailTest),
 	)
-	recorder := emitter.Begin(Identity{RequestID: "fail-2"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyOpenAICompatible})
+	recorder := emitter.Begin(Identity{RequestID: "fail-2"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 
 	recorder.Emit(context.Background(), Event{Path: Path{Leg: LegAdapterIngress, Phase: PhaseStarted}})
 	complete := recorder.Complete(context.Background())

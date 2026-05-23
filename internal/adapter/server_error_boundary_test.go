@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	"goodkind.io/clyde/internal/config"
@@ -86,8 +87,8 @@ func TestAdapterErrorBoundaryLogsCorrelationFields(t *testing.T) {
 	req.Header.Set(correlation.HeaderRequestID, "req-boundary-1")
 	req.Header.Set(correlation.HeaderTraceID, "11111111111111111111111111111111")
 	req.Header.Set(correlation.HeaderSpanID, "2222222222222222")
-	req.Header.Set(correlation.HeaderCursorRequestID, "cursor-req-1")
-	req.Header.Set(correlation.HeaderCursorConversationID, "cursor-conv-1")
+	req.Header.Set(adaptercursor.HeaderRequestID, "cursor-req-1")
+	req.Header.Set(adaptercursor.HeaderConversationID, "cursor-conv-1")
 	req.Header.Set("User-Agent", "Cursor/boundary-fields")
 	resp := httptest.NewRecorder()
 	handler(resp, req)

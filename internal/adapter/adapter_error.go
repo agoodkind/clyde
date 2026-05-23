@@ -366,32 +366,47 @@ func errorDiagnosticsForRequest(
 		userAgent = r.UserAgent()
 	}
 	return &errcontract.ErrorDiagnostics{
-		RequestID:            corr.RequestID,
-		TraceID:              string(corr.TraceID),
-		SpanID:               string(corr.SpanID),
-		ParentSpanID:         string(corr.ParentSpanID),
-		ChatKey:              corr.ChatKey,
-		ChatKeySource:        corr.ChatKeySource,
-		ChatRootKey:          corr.ChatRootKey,
-		ChatBranchKey:        corr.ChatBranchKey,
-		CursorRequestID:      corr.CursorRequestID,
-		CursorConversationID: corr.CursorConversationID,
-		CursorGenerationID:   corr.CursorGenerationID,
-		UpstreamRequestID:    corr.UpstreamRequestID,
-		UpstreamResponseID:   corr.UpstreamResponseID,
-		Provider:             aerr.Provider,
-		Backend:              aerr.Backend,
-		ModelAlias:           aerr.ModelAlias,
-		ResolvedModel:        aerr.ResolvedModel,
-		ErrorClass:           string(aerr.Class),
-		RouteFamily:          string(family),
-		Method:               method,
-		Path:                 path,
-		UserAgent:            userAgent,
-		HeaderNames:          headerNames,
-		Headers:              headers,
-		LogHint:              errorLogHint(corr.RequestID),
+		RequestID:          corr.RequestID,
+		TraceID:            string(corr.TraceID),
+		SpanID:             string(corr.SpanID),
+		ParentSpanID:       string(corr.ParentSpanID),
+		ChatKey:            corr.ChatKey,
+		ChatKeySource:      corr.ChatKeySource,
+		ChatRootKey:        corr.ChatRootKey,
+		ChatBranchKey:      corr.ChatBranchKey,
+		IdentityAttributes: diagnosticIdentityAttributes(corr),
+		UpstreamRequestID:  corr.UpstreamRequestID,
+		UpstreamResponseID: corr.UpstreamResponseID,
+		Provider:           aerr.Provider,
+		Backend:            aerr.Backend,
+		ModelAlias:         aerr.ModelAlias,
+		ResolvedModel:      aerr.ResolvedModel,
+		ErrorClass:         string(aerr.Class),
+		RouteFamily:        string(family),
+		Method:             method,
+		Path:               path,
+		UserAgent:          userAgent,
+		HeaderNames:        headerNames,
+		Headers:            headers,
+		LogHint:            errorLogHint(corr.RequestID),
 	}
+}
+
+func diagnosticIdentityAttributes(corr correlation.Context) []errcontract.DiagnosticField {
+	if len(corr.IdentityAttributes) == 0 {
+		return nil
+	}
+	fields := make([]errcontract.DiagnosticField, 0, len(corr.IdentityAttributes))
+	for _, attr := range corr.IdentityAttributes {
+		if attr.Key == "" || attr.Value == "" {
+			continue
+		}
+		fields = append(fields, errcontract.DiagnosticField{
+			Key:   attr.Key,
+			Value: attr.Value,
+		})
+	}
+	return fields
 }
 
 func errorLogHint(requestID string) string {

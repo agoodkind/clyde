@@ -29,26 +29,20 @@ import (
 	"goodkind.io/clyde/internal/slogger"
 )
 
-var (
-	anthropicUpstream = "https://api.anthropic.com"
-	openAIUpstream    = "https://api.openai.com"
-	chatGPTUpstream   = "https://chatgpt.com"
-)
-
 type Proxy struct {
 	log         *slog.Logger
 	client      *http.Client
 	dialContext func(context.Context, string, string) (net.Conn, error)
 
 	certMu sync.Mutex
-	ca     *cursorCertAuthority
+	ca     *certAuthority
 
-	cursorTLSClientConfig *tls.Config
-	rawCaptureSeq         atomic.Uint64
-	requestLog            *logevent.Emitter
+	tlsClientConfig *tls.Config
+	rawCaptureSeq   atomic.Uint64
+	requestLog      *logevent.Emitter
 
 	// Tunnels tracks every long-lived MITM connection (CONNECT
-	// tunnels, intercepted Cursor TLS sessions, plain HTTP request
+	// tunnels, intercepted provider TLS sessions, plain HTTP request
 	// loops) so the daemon can drain or force-close them on reload
 	// instead of relying on http.Server.Shutdown alone. See
 	// internal/livetrack for the contract; the proxy installs each
@@ -89,21 +83,21 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
 	ca, err := loadOrCreateCertAuthority(cfg.CA.CertPath, cfg.CA.KeyPath, time.Now)
 	if err != nil {
-		log.Warn("mitm.cursor.tls.ca_load_failed",
+		log.Warn("mitm.tls.ca_load_failed",
 			"cert_path", cfg.CA.CertPath,
 			"key_path", cfg.CA.KeyPath,
 			"err", err,
 		)
-		return nil, fmt.Errorf("load cursor mitm ca: %w", err)
+		return nil, fmt.Errorf("load mitm ca: %w", err)
 	}
 	p := &Proxy{
-		log:                   log.With("component", "mitm"),
-		client:                http.DefaultClient,
-		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		certMu:                sync.Mutex{},
-		ca:                    ca,
-		cursorTLSClientConfig: nil,
-		rawCaptureSeq:         atomic.Uint64{},
+		log:             log.With("component", "mitm"),
+		client:          http.DefaultClient,
+		dialContext:     (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		certMu:          sync.Mutex{},
+		ca:              ca,
+		tlsClientConfig: nil,
+		rawCaptureSeq:   atomic.Uint64{},
 		requestLog: logevent.NewEmitter(
 			slogger.WithConcern(log, slogger.ConcernProviderMITMWire),
 			logevent.RequiredLegsFromStrings(logging.RequiredLegs),
@@ -333,6 +327,44 @@ func (p *Proxy) registerPlainHTTP(ctx context.Context, cancel context.CancelFunc
 	return release, true
 }
 
+func (p *Proxy) recordPlainHTTPReadFailure(r *http.Request, cfg config.MITMConfig, capturePolicy CaptureFilePolicy, provider, upstreamURL string, started time.Time, err error) {
+	p.recordHTTPFailure(r, http.Header{}, buildHTTPFailureCaptureInput(
+		cfg,
+		capturePolicy,
+		provider,
+		upstreamURL,
+		nil,
+		emptyCaptureBodyIndex(),
+		emptyCaptureBodyIndex(),
+		time.Since(started),
+		http.StatusBadRequest,
+	), httpFailureRecord{
+		includePayload:      false,
+		includeUpstreamSend: false,
+		errorCode:           "request_read_failed",
+		errorMessage:        err.Error(),
+	})
+}
+
+func (p *Proxy) recordPlainHTTPDispatchFailure(r *http.Request, cfg config.MITMConfig, capturePolicy CaptureFilePolicy, provider, upstreamURL string, body []byte, requestIndex captureBodyIndex, started time.Time) {
+	p.recordHTTPFailure(r, http.Header{}, buildHTTPFailureCaptureInput(
+		cfg,
+		capturePolicy,
+		provider,
+		upstreamURL,
+		body,
+		requestIndex,
+		emptyCaptureBodyIndex(),
+		time.Since(started),
+		http.StatusBadGateway,
+	), httpFailureRecord{
+		includePayload:      true,
+		includeUpstreamSend: true,
+		errorCode:           "upstream_dispatch_failed",
+		errorMessage:        "upstream dispatch failed",
+	})
+}
+
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	started := currentTime()
 	cfg := p.config()
@@ -366,6 +398,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		p.recordPlainHTTPReadFailure(r, cfg, capturePolicy, provider, upstream+r.URL.RequestURI(), started, err)
 		http.Error(w, "read request body", http.StatusBadRequest)
 		return
 	}
@@ -381,6 +414,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		upstream: upstream,
 	})
 	if !ok {
+		p.recordPlainHTTPDispatchFailure(r, cfg, capturePolicy, provider, upstream+r.URL.RequestURI(), body, requestBodyIndex, started)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -431,6 +465,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		responseLen:    responseBodyLen,
 		duration:       duration,
 		responseStatus: resp.StatusCode,
+		clientFacet:    nil,
 	})
 	queueBaselineRefresh(r.Context(), cfg, provider, p.log)
 }
@@ -459,10 +494,19 @@ type httpCaptureRecordInput struct {
 	responseLen    int64
 	duration       time.Duration
 	responseStatus int
+	// clientFacet is the typed provider-owned identity facet
+	// produced by the registered MITM provider that claimed this
+	// request. The MITM emit path attaches the facet to each event
+	// without naming the provider.
+	clientFacet logevent.Facet
 }
 
 type captureBodyIndex struct {
 	raw json.RawMessage
+}
+
+func emptyCaptureBodyIndex() captureBodyIndex {
+	return captureBodyIndex{raw: nil}
 }
 
 type captureBodySummary struct {
@@ -551,7 +595,7 @@ func responseCaptureIndex(
 }
 
 func (p *Proxy) recordHTTPCapture(r *http.Request, responseHeader http.Header, input httpCaptureRecordInput) {
-	recorder := p.beginHTTPLogRecorder(r, input)
+	recorder := p.beginHTTPLogRecorder(r, &input)
 	ctx := r.Context()
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMIngress, logevent.PhaseStarted, input)
 	p.emitHTTPPayloadLeg(ctx, recorder, r, responseHeader, input)
@@ -562,17 +606,15 @@ func (p *Proxy) recordHTTPCapture(r *http.Request, responseHeader http.Header, i
 	p.completeHTTPLogRecorder(ctx, recorder, input)
 }
 
+// classifyRoute dispatches plain-HTTP MITM routing to the registered
+// provider that claims the supplied path. The generic MITM proxy
+// never names a provider; provider packages declare their upstream
+// claims via [RegisterProvider] at init time.
 func classifyRoute(path string) (provider string, upstream string) {
-	switch {
-	case strings.HasPrefix(path, "/v1/messages"), strings.HasPrefix(path, "/v1/models"):
-		return "claude", anthropicUpstream
-	case strings.HasPrefix(path, "/backend-api/"):
-		return "codex", chatGPTUpstream
-	case strings.HasPrefix(path, "/v1/"):
-		return "codex", openAIUpstream
-	default:
-		return "", ""
+	if _, claim, ok := providerForPlain(path); ok {
+		return claim.Provider, claim.UpstreamURL
 	}
+	return "", ""
 }
 
 func copyHeaders(dst, src http.Header) {

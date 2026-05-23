@@ -99,30 +99,29 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	}
 
 	bodyBytes := len(body)
+	ingress, ok := activeIngressContract()
+	if !ok || ingress == nil {
+		return adapterErrInternal("ingress contract not registered", nil)
+	}
+	ctx, r, corr, headerFacets := applyHeaderIngressContext(ctx, r, corr, ingress)
+
 	recorder := s.beginChatLogRecorder(r, corr)
 	defer s.completeChatLogRecorder(ctx, recorder)
-	s.emitChatRequestLeg(ctx, recorder, logevent.LegAdapterIngress, logevent.PhaseStarted, logevent.StatusOK)
+	s.emitChatRequestLeg(ctx, recorder, logevent.LegAdapterIngress, logevent.PhaseStarted, logevent.StatusOK, headerFacets)
 	discovery := DiscoverRequest(body)
 
 	req, err := s.prepareChatRequest(ctx, r, corr, reqID, body, bodyBytes, recorder)
 	if err != nil {
 		return err
 	}
-	ingress, ok := activeIngressContract()
-	if !ok || ingress == nil {
-		recorder.EmitError(ctx, "ingress_contract_missing", "ingress contract not registered")
-		return adapterErrInternal("ingress contract not registered", nil)
-	}
 	ingressCtx := ingress.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
-	corr = corr.WithCursor(ingressCtx.RequestID, ingressCtx.ConversationID)
-	if ingressCtx.GenerationID != "" {
-		corr = corr.WithCursorGenerationID(ingressCtx.GenerationID)
-	}
+	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
 	identity := ingress.ResolveIdentity(corr, ingressCtx, ingresscontract.ChatRequestPrimitive{Body: req})
 	corr = corr.WithChatIdentity(identity.ChatKey, identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
-	s.emitChatCursorMetadataLeg(ctx, recorder, corr)
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
+	bodyFacets := ingress.RequestFacets(ingressCtx)
+	s.emitChatClientMetadataLeg(ctx, recorder, corr, bodyFacets)
 	req.Model = ingressCtx.NormalizedModel
 	s.logChatForkDetected(ctx, corr, identity)
 
@@ -133,7 +132,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 		return adapterErrModelNotFound(err.Error())
 	}
 	s.logChatResolved(ctx, corr, reqID, req, ingressCtx, ingress, model, effort)
-	s.emitChatModelResolveLeg(ctx, recorder, corr, model, effort)
+	s.emitChatModelResolveLeg(ctx, recorder, corr, model, effort, bodyFacets)
 
 	// Step D: build the typed resolver.ResolvedRequest alongside the
 	// legacy resolution. Backends still use model.ResolvedModel for now;
@@ -152,7 +151,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	toolNames := chatToolNames(req)
 	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, model, toolNames)
 	if ingressCtx.PathKind == ingresscontract.PathKindSubagent && ingressCtx.GenerationID == "" {
-		s.logSubagentMissingGenerationID(ctx, r, corr, reqID, ingressCtx, discovery)
+		s.logSubagentMissingGenerationID(ctx, r, corr, reqID, ingressCtx, ingress, discovery)
 	}
 
 	if perr := s.preflightChat(ctx, &req, model, reqID); perr != nil {
@@ -160,10 +159,20 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 		return perr
 	}
 
-	s.emitChatProviderSendStartedLeg(ctx, recorder, corr, req, model, effort)
+	s.emitChatProviderSendStartedLeg(ctx, recorder, corr, req, model, effort, bodyFacets)
 	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, ingressCtx, resolvedReq, resolverErr)
-	s.completeChatDispatchLegs(ctx, recorder, corr, req, model, effort)
+	s.completeChatDispatchLegs(ctx, recorder, corr, req, model, effort, bodyFacets)
 	return nil
+}
+
+func applyHeaderIngressContext(ctx context.Context, r *http.Request, corr correlation.Context, ingress ingresscontract.IngressContract) (context.Context, *http.Request, correlation.Context, []logevent.Facet) {
+	headerIngressCtx := ingress.TranslateHeaders(r.Header)
+	if headerIngressCtx.ConversationID != "" && corr.ChatKey == "" {
+		corr = corr.WithChatIdentity(headerIngressCtx.ConversationID, "native", headerIngressCtx.ConversationID, "")
+	}
+	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(headerIngressCtx)...)
+	ctx = correlation.WithContext(ctx, corr)
+	return ctx, r.WithContext(ctx), corr, ingress.RequestFacets(headerIngressCtx)
 }
 
 func (s *Server) prepareChatRequest(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, body []byte, bodyBytes int, recorder *logevent.Recorder) (ChatRequest, error) {

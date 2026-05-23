@@ -10,12 +10,12 @@ Payload controls:
 
 Cleanup controls:
 
-- `logging.cleanup.enabled` controls whether cleanup deletes eligible old logs.
-- Retention thresholds live in `logging.retention` and per-sink retention overrides.
+- `logging.cleanup.enabled` controls whether cleanup deletes eligible aged logs.
+- Retention thresholds live in `logging.cleanup.max_age_days`, `logging.cleanup.max_backups`, and `logging.cleanup.max_total_mb`.
 
 Sink controls:
 
-- `logging.sinks` maps stable sink names to enablement, level, detail, rotation, and retention overrides.
+- `logging.sinks.enabled` is the allowlist of stable sink names to enable.
 - `logging.concerns` maps registered concern names to concern-specific overrides.
 
 Rotation controls:

@@ -389,19 +389,20 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 		t.Fatalf("NewSSEWriter: %v", err)
 	}
 	corr := correlation.Context{
-		TraceID:              "11111111111111111111111111111111",
-		SpanID:               "2222222222222222",
-		ParentSpanID:         "3333333333333333",
-		RequestID:            "req-final",
-		CursorRequestID:      "cursor-final",
-		CursorConversationID: "conversation-final",
-		CursorGenerationID:   "",
-		UpstreamRequestID:    "",
-		UpstreamResponseID:   "",
-		ChatKey:              "",
-		ChatKeySource:        "",
-		ChatRootKey:          "",
-		ChatBranchKey:        "",
+		TraceID:            "11111111111111111111111111111111",
+		SpanID:             "2222222222222222",
+		ParentSpanID:       "3333333333333333",
+		RequestID:          "req-final",
+		UpstreamRequestID:  "",
+		UpstreamResponseID: "",
+		ChatKey:            "",
+		ChatKeySource:      "",
+		ChatRootKey:        "",
+		ChatBranchKey:      "",
+		IdentityAttributes: []correlation.IdentityAttribute{
+			{Key: "cursor_request_id", Value: "cursor-final"},
+			{Key: "cursor_conversation_id", Value: "conversation-final"},
+		},
 	}
 	ctx := correlation.WithContext(context.Background(), corr)
 	writer := &providerStreamWriter{
@@ -456,7 +457,7 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 	if evt.TraceID != string(corr.TraceID) || evt.SpanID != string(corr.SpanID) || evt.ParentSpanID != string(corr.ParentSpanID) {
 		t.Fatalf("trace fields=%+v", evt)
 	}
-	if evt.CursorRequestID != corr.CursorRequestID || evt.CursorConversationID != corr.CursorConversationID {
+	if evt.CursorRequestID != "cursor-final" || evt.CursorConversationID != "conversation-final" {
 		t.Fatalf("cursor fields=%+v", evt)
 	}
 	if evt.UpstreamResponseID != "resp-final" {

@@ -158,6 +158,123 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 	}
 }
 
+func TestBeginHTTPLogRecorderUsesNativeCursorHeadersWhenClydeHeadersMissing(t *testing.T) {
+	const identityProviderID ProviderID = "test_cursor_identity"
+	RegisterProviderFirst(testCursorProvider{id: identityProviderID})
+	t.Cleanup(func() {
+		UnregisterProvider(identityProviderID)
+	})
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	proxy := &Proxy{
+		log:            logger,
+		requestLog:     logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		captureWriters: newCaptureWriterCache(logger),
+	}
+	t.Cleanup(proxy.closeCaptureWriters)
+
+	req := httptest.NewRequest(http.MethodPost, "http://cursor.test/aiserver.v1.DashboardService/GetTeams", strings.NewReader(`{"probe":"cursor-identity"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-request-id", "cursor-native-req")
+	req.Header.Set("x-original-request-id", "cursor-native-orig")
+	req.Header.Set("x-session-id", "cursor-session-1")
+	req.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+
+	input := httpCaptureRecordInput{
+		config:         config.MITMConfig{CaptureDir: t.TempDir()},
+		policy:         CaptureFilePolicy{},
+		provider:       "cursor",
+		upstreamURL:    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetTeams",
+		requestBody:    []byte(`{"probe":"cursor-identity"}`),
+		responseBody:   []byte(`{"ok":true}`),
+		requestIndex:   newCaptureBodyIndexFromSummary(summarizeBody([]byte(`{"probe":"cursor-identity"}`))),
+		responseIndex:  newCaptureBodyIndexFromSummary(summarizeBody([]byte(`{"ok":true}`))),
+		responseLen:    int64(len(`{"ok":true}`)),
+		duration:       time.Millisecond,
+		responseStatus: http.StatusAccepted,
+	}
+
+	proxy.recordHTTPCapture(req, http.Header{"Content-Type": []string{"application/json"}}, input)
+
+	event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.leg")
+	if event == nil {
+		t.Fatalf("expected logging.request.leg event, got log %s", logBuffer.String())
+	}
+	if event["provider"] != "cursor" {
+		t.Fatalf("provider = %v want cursor", event["provider"])
+	}
+	if event["request_id"] != "cursor-native-req" {
+		t.Fatalf("request_id = %v want cursor-native-req", event["request_id"])
+	}
+	cursorFacet, ok := event["cursor"].(map[string]any)
+	if !ok {
+		t.Fatalf("cursor facet missing: %#v", event)
+	}
+	if cursorFacet["request_id"] != "cursor-native-req" {
+		t.Fatalf("cursor request_id = %v want cursor-native-req", cursorFacet["request_id"])
+	}
+	if event["upstream_request_id"] != "cursor-native-orig" {
+		t.Fatalf("upstream_request_id = %v want cursor-native-orig", event["upstream_request_id"])
+	}
+	if event["session_id"] != "cursor-session-1" {
+		t.Fatalf("session_id = %v want cursor-session-1", event["session_id"])
+	}
+	if event["trace_id"] != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("trace_id = %v want traceparent trace", event["trace_id"])
+	}
+}
+
+func TestProxyHTTPCaptureEarlyFailureEmitsRequestErrorWithoutIncomplete(t *testing.T) {
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	proxy := &Proxy{
+		log:            logger,
+		requestLog:     logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		captureWriters: newCaptureWriterCache(logger),
+	}
+	t.Cleanup(proxy.closeCaptureWriters)
+
+	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/messages", strings.NewReader(`{"model":"claude","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	input := httpCaptureRecordInput{
+		config:         config.MITMConfig{CaptureDir: t.TempDir()},
+		policy:         CaptureFilePolicy{},
+		provider:       "claude",
+		upstreamURL:    "https://api.anthropic.com/v1/messages",
+		requestBody:    []byte(`{"model":"claude","messages":[]}`),
+		responseBody:   nil,
+		requestIndex:   captureBodyIndex{},
+		responseIndex:  captureBodyIndex{},
+		responseLen:    0,
+		duration:       time.Millisecond,
+		responseStatus: http.StatusBadGateway,
+	}
+
+	proxy.recordHTTPFailure(req, http.Header{}, input, httpFailureRecord{
+		includePayload:      true,
+		includeUpstreamSend: true,
+		errorCode:           "upstream_dispatch_failed",
+		errorMessage:        "upstream dispatch failed",
+	})
+
+	events := captureLogEvents(t, logBuffer.String(), "logging.request.leg")
+	foundError := false
+	for _, event := range events {
+		if event["leg"] == string(logevent.LegRequestError) {
+			foundError = true
+			if event["error_code"] != "upstream_dispatch_failed" {
+				t.Fatalf("error_code = %v want upstream_dispatch_failed", event["error_code"])
+			}
+		}
+	}
+	if !foundError {
+		t.Fatalf("expected request_error leg in %v", events)
+	}
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event != nil {
+		t.Fatalf("did not expect incomplete request event: %v", event)
+	}
+}
+
 func TestProxyHTTPCaptureEmitsRequiredRequestLegSequence(t *testing.T) {
 	logBuffer := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -244,27 +361,23 @@ func TestProxyCaptureIndexLockFailureDoesNotFailTraffic(t *testing.T) {
 
 func newHTTPProxyForCaptureTest(t *testing.T, captureDir string, rawCaptureEnabled bool, upstream *httptest.Server) *Proxy {
 	t.Helper()
-	oldOpenAIUpstream := openAIUpstream
-	openAIUpstream = upstream.URL
-	t.Cleanup(func() {
-		openAIUpstream = oldOpenAIUpstream
-	})
+	t.Cleanup(registerTestRoute(t, testRouteOpenAIV1, upstream.URL))
 	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
 	proxy := &Proxy{
-		log:                   logger,
-		client:                upstream.Client(),
-		dialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		certMu:                sync.Mutex{},
-		ca:                    nil,
-		cursorTLSClientConfig: nil,
-		rawCaptureSeq:         atomic.Uint64{},
-		Tunnels:               newTestTunnelRegistry(),
-		captureWriters:        newCaptureWriterCache(logger),
-		requestLog:            logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		mu:                    sync.RWMutex{},
-		cfg:                   config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
-		base:                  "http://[::1]",
-		server:                nil,
+		log:             logger,
+		client:          upstream.Client(),
+		dialContext:     (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: nil,
+		rawCaptureSeq:   atomic.Uint64{},
+		Tunnels:         newTestTunnelRegistry(),
+		captureWriters:  newCaptureWriterCache(logger),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
+		base:            "http://[::1]",
+		server:          nil,
 	}
 	t.Cleanup(proxy.closeCaptureWriters)
 	return proxy

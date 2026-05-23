@@ -18,6 +18,6 @@ File naming rules:
 - JSONL logs use `.jsonl` suffixes.
 - Per-chat files use a sanitized chat key and must stay under the configured chat log root.
 - MITM raw sidecars stay under the configured raw capture root and are referenced from the typed MITM facet.
-- Rotated files remain in the same cleanup class as their active file.
+- Rotated files use the cleanup class of their active file.
 
 Humans and LLMs should start with `clyde logs inventory --json` instead of guessing paths. Use `--deep` when the exact filesystem view matters.

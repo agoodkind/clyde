@@ -352,19 +352,20 @@ func TestEventRendererLogsAssistantTextSummaryCorrelation(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	corr := correlation.Context{
-		TraceID:              "0123456789abcdef0123456789abcdef",
-		SpanID:               "0123456789abcdef",
-		ParentSpanID:         "fedcba9876543210",
-		RequestID:            "req-corr",
-		CursorRequestID:      "cursor-req",
-		CursorConversationID: "cursor-conv",
-		CursorGenerationID:   "",
-		UpstreamRequestID:    "",
-		UpstreamResponseID:   "",
-		ChatKey:              "",
-		ChatKeySource:        "",
-		ChatRootKey:          "",
-		ChatBranchKey:        "",
+		TraceID:            "0123456789abcdef0123456789abcdef",
+		SpanID:             "0123456789abcdef",
+		ParentSpanID:       "fedcba9876543210",
+		RequestID:          "req-corr",
+		UpstreamRequestID:  "",
+		UpstreamResponseID: "",
+		ChatKey:            "",
+		ChatKeySource:      "",
+		ChatRootKey:        "",
+		ChatBranchKey:      "",
+		IdentityAttributes: []correlation.IdentityAttribute{
+			{Key: "cursor_request_id", Value: "cursor-req"},
+			{Key: "cursor_conversation_id", Value: "cursor-conv"},
+		},
 	}
 	ctx := correlation.WithContext(context.Background(), corr)
 	r := NewEventRendererWithContext(ctx, "req-corr", "alias", "codex", log)
@@ -384,11 +385,11 @@ func TestEventRendererLogsAssistantTextSummaryCorrelation(t *testing.T) {
 	if evt.ParentSpanID != string(corr.ParentSpanID) {
 		t.Fatalf("parent_span_id=%q want %q", evt.ParentSpanID, corr.ParentSpanID)
 	}
-	if evt.CursorRequestID != corr.CursorRequestID {
-		t.Fatalf("cursor_request_id=%q want %q", evt.CursorRequestID, corr.CursorRequestID)
+	if evt.CursorRequestID != "cursor-req" {
+		t.Fatalf("cursor_request_id=%q want cursor-req", evt.CursorRequestID)
 	}
-	if evt.CursorConversationID != corr.CursorConversationID {
-		t.Fatalf("cursor_conversation_id=%q want %q", evt.CursorConversationID, corr.CursorConversationID)
+	if evt.CursorConversationID != "cursor-conv" {
+		t.Fatalf("cursor_conversation_id=%q want cursor-conv", evt.CursorConversationID)
 	}
 	if evt.UpstreamResponseID != "resp-upstream" {
 		t.Fatalf("upstream_response_id=%q want resp-upstream", evt.UpstreamResponseID)

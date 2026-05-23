@@ -3,10 +3,12 @@ package slogger
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"goodkind.io/clyde/internal/correlation"
@@ -110,12 +112,14 @@ func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 	t.Cleanup(func() { _ = closer.Close() })
 
 	corr := correlation.Context{
-		TraceID:              "0123456789abcdef0123456789abcdef",
-		SpanID:               "0123456789abcdef",
-		ParentSpanID:         "fedcba9876543210",
-		RequestID:            "req-ctx",
-		CursorRequestID:      "cursor-req",
-		CursorConversationID: "cursor-conv",
+		TraceID:      "0123456789abcdef0123456789abcdef",
+		SpanID:       "0123456789abcdef",
+		ParentSpanID: "fedcba9876543210",
+		RequestID:    "req-ctx",
+		IdentityAttributes: []correlation.IdentityAttribute{
+			{Key: "cursor_request_id", Value: "cursor-req"},
+			{Key: "cursor_conversation_id", Value: "cursor-conv"},
+		},
 	}
 	ctx := correlation.WithContext(context.Background(), corr)
 	slog.InfoContext(ctx, "daemon.rpc.started", "request_id", "explicit-req")
@@ -137,11 +141,11 @@ func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
 	if event.ParentSpanID != string(corr.ParentSpanID) {
 		t.Fatalf("parent_span_id = %q, want %q", event.ParentSpanID, corr.ParentSpanID)
 	}
-	if event.CursorRequestID != corr.CursorRequestID {
-		t.Fatalf("cursor_request_id = %q, want %q", event.CursorRequestID, corr.CursorRequestID)
+	if event.CursorRequestID != "cursor-req" {
+		t.Fatalf("cursor_request_id = %q, want cursor-req", event.CursorRequestID)
 	}
-	if event.CursorConversationID != corr.CursorConversationID {
-		t.Fatalf("cursor_conversation_id = %q, want %q", event.CursorConversationID, corr.CursorConversationID)
+	if event.CursorConversationID != "cursor-conv" {
+		t.Fatalf("cursor_conversation_id = %q, want cursor-conv", event.CursorConversationID)
 	}
 }
 
@@ -160,9 +164,11 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 		SpanID:             "0123456789abcdef",
 		ParentSpanID:       "fedcba9876543210",
 		RequestID:          "req-ctx",
-		CursorGenerationID: "cursor-gen",
 		UpstreamRequestID:  "upstream-req",
 		UpstreamResponseID: "upstream-resp",
+		IdentityAttributes: []correlation.IdentityAttribute{
+			{Key: "cursor_generation_id", Value: "cursor-gen"},
+		},
 	}
 	ctx := correlation.WithContext(context.Background(), corr)
 	For(ConcernDaemonRPCRequests).InfoContext(ctx,
@@ -188,8 +194,8 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	if event.RequestID != corr.RequestID {
 		t.Fatalf("request_id = %q, want %q", event.RequestID, corr.RequestID)
 	}
-	if event.CursorGenerationID != corr.CursorGenerationID {
-		t.Fatalf("cursor_generation_id = %q, want %q", event.CursorGenerationID, corr.CursorGenerationID)
+	if event.CursorGenerationID != "cursor-gen" {
+		t.Fatalf("cursor_generation_id = %q, want cursor-gen", event.CursorGenerationID)
 	}
 	if event.UpstreamRequestID != corr.UpstreamRequestID {
 		t.Fatalf("upstream_request_id = %q, want %q", event.UpstreamRequestID, corr.UpstreamRequestID)
@@ -372,6 +378,91 @@ func TestSetupWithPolicyWritesInventoryIndexSink(t *testing.T) {
 	inventoryPath := filepath.Join(root, "logs", "inventory", "events.jsonl")
 	assertLogContains(t, inventoryPath, "req-inventory")
 	assertLogMissing(t, inventoryPath, "req-skip")
+}
+
+func TestInventoryIndexHandlerWritesValidJSONLUnderConcurrentOverlap(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	policy := InventoryPolicy{
+		Enabled: true,
+		Root:    filepath.Join(root, "logs", "inventory"),
+		Rotation: RotationPolicy{
+			Enabled:    false,
+			MaxSizeMB:  0,
+			MaxBackups: 0,
+			MaxAgeDays: 0,
+			Compress:   nil,
+		},
+	}
+	h1 := buildInventoryIndexHandler(policy, filepath.Join(root, "logs"), slog.LevelInfo)
+	h2 := buildInventoryIndexHandler(policy, filepath.Join(root, "logs"), slog.LevelInfo)
+	logger1 := WithConcern(slog.New(h1).With("component", "daemon"), ConcernProcessDaemonLifecycle)
+	logger1 = WithConcern(logger1, ConcernProviderMITMLifecycle)
+	logger1 = WithConcern(logger1, ConcernProviderMITMWire)
+	logger2 := WithConcern(slog.New(h2).With("component", "daemon"), ConcernProcessDaemonLifecycle)
+	logger2 = WithConcern(logger2, ConcernProviderMITMWire)
+
+	var wg sync.WaitGroup
+	const writers = 8
+	const perWriter = 50
+	for i := 0; i < writers; i++ {
+		wg.Add(2)
+		go func(workerID int) {
+			defer wg.Done()
+			for j := 0; j < perWriter; j++ {
+				logger1.Info(
+					"logging.request.leg",
+					"component", "mitm",
+					"request_id", fmt.Sprintf("req-a-%d-%d", workerID, j),
+					"provider", "cursor",
+					"surface", string(logevent.SurfaceMITMIDE),
+					"leg", string(logevent.LegMITMForward),
+					"sinks", []logevent.SinkName{logevent.SinkProcess, logevent.SinkInventory},
+				)
+			}
+		}(i)
+		go func(workerID int) {
+			defer wg.Done()
+			for j := 0; j < perWriter; j++ {
+				logger2.Info(
+					"logging.request.leg",
+					"component", "mitm",
+					"request_id", fmt.Sprintf("req-b-%d-%d", workerID, j),
+					"provider", "claude",
+					"surface", string(logevent.SurfaceMITMIDE),
+					"leg", string(logevent.LegMITMCaptureIndex),
+					"sinks", []logevent.SinkName{logevent.SinkConcern, logevent.SinkInventory},
+				)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	inventoryPath := filepath.Join(root, "logs", "inventory", "events.jsonl")
+	content, err := os.ReadFile(inventoryPath)
+	if err != nil {
+		t.Fatalf("read inventory index: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	wantLines := writers * perWriter * 2
+	if len(lines) != wantLines {
+		t.Fatalf("inventory line count = %d, want %d", len(lines), wantLines)
+	}
+	for index, line := range lines {
+		if !strings.HasPrefix(line, "{") {
+			t.Fatalf("line %d does not start with '{': %q", index+1, line)
+		}
+		if strings.Count(line, `"concern":`) > 1 {
+			t.Fatalf("line %d has duplicated concern attrs: %s", index+1, line)
+		}
+		if strings.Count(line, `"component":`) > 1 {
+			t.Fatalf("line %d has duplicated component attrs: %s", index+1, line)
+		}
+		var decoded map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatalf("line %d invalid json: %v\n%s", index+1, err, line)
+		}
+	}
 }
 
 func TestConcernForEventCoversPrimaryTree(t *testing.T) {

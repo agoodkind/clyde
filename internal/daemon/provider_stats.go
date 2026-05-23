@@ -177,19 +177,17 @@ func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.Reque
 		DurationMs:                 numberValue(rec.DurationMs),
 		Err:                        rec.Error,
 		Correlation: correlation.Context{
-			TraceID:              correlation.TraceID(rec.TraceID),
-			SpanID:               correlation.SpanID(rec.SpanID),
-			ParentSpanID:         correlation.SpanID(rec.ParentSpanID),
-			RequestID:            rec.RequestID,
-			CursorRequestID:      rec.CursorRequestID,
-			CursorConversationID: rec.CursorConversationID,
-			CursorGenerationID:   "",
-			UpstreamRequestID:    rec.UpstreamRequestID,
-			UpstreamResponseID:   rec.UpstreamResponseID,
-			ChatKey:              "",
-			ChatKeySource:        "",
-			ChatRootKey:          "",
-			ChatBranchKey:        "",
+			TraceID:            correlation.TraceID(rec.TraceID),
+			SpanID:             correlation.SpanID(rec.SpanID),
+			ParentSpanID:       correlation.SpanID(rec.ParentSpanID),
+			RequestID:          rec.RequestID,
+			UpstreamRequestID:  rec.UpstreamRequestID,
+			UpstreamResponseID: rec.UpstreamResponseID,
+			ChatKey:            "",
+			ChatKeySource:      "",
+			ChatRootKey:        "",
+			ChatBranchKey:      "",
+			IdentityAttributes: providerStatsIdentityAttributes(rec),
 		},
 	}
 	if ev.Err == "" {
@@ -199,6 +197,17 @@ func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.Reque
 		return adapterruntime.RequestEvent{}, false
 	}
 	return ev, true
+}
+
+func providerStatsIdentityAttributes(rec providerStatsLogRecord) []correlation.IdentityAttribute {
+	attrs := make([]correlation.IdentityAttribute, 0, 2)
+	if rec.CursorRequestID != "" {
+		attrs = append(attrs, correlation.IdentityAttribute{Key: "cursor_request_id", Value: rec.CursorRequestID})
+	}
+	if rec.CursorConversationID != "" {
+		attrs = append(attrs, correlation.IdentityAttribute{Key: "cursor_conversation_id", Value: rec.CursorConversationID})
+	}
+	return attrs
 }
 
 func numberValue(v json.Number) int64 {

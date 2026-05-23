@@ -28,7 +28,7 @@ func EarlyWarningUsageWindows(h http.Header) []adapterruntime.UsageWindowNoticeI
 		if threshold == "" && !hasUtil && resetsAt.IsZero() {
 			continue
 		}
-		if threshold == "" && !hasUtil && !strings.EqualFold(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-status")), "allowed_warning") {
+		if threshold == "" && !hasUtil && !strings.EqualFold(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Status")), "allowed_warning") {
 			continue
 		}
 		if !hasUtil {

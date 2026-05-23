@@ -179,7 +179,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 
 	// Auth + protocol.
 	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("anthropic-version", c.cfg.OAuthAnthropicVersion)
+	httpReq.Header.Set("Anthropic-Version", c.cfg.OAuthAnthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 	if req.Stream {
@@ -293,7 +293,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		Subcomponent: "anthropic",
 		Model:        req.Model,
 		Status:       resp.StatusCode,
-		RequestID:    resp.Header.Get("request-id"),
+		RequestID:    resp.Header.Get("Request-Id"),
 		BodyBytes:    len(body),
 		DurationMs:   time.Since(postStarted).Milliseconds(),
 		RateLimits:   rateLimitAttrs(resp.Header),
@@ -302,7 +302,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		errBody := readDecodedBody(resp)
 		ev := base
-		ev.RetryAfter = resp.Header.Get("retry-after")
+		ev.RetryAfter = resp.Header.Get("Retry-After")
 		ev.Body = string(errBody)
 		ev.BodyBytes = len(errBody)
 		logResponse(slog.LevelWarn, "anthropic.ratelimit", ev)
@@ -317,7 +317,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 				slog.String("subcomponent", "anthropic"),
 				slog.String("phase", "ratelimit_429"),
 				slog.String("model", req.Model),
-				slog.String("request_id", resp.Header.Get("request-id")),
+				slog.String("request_id", resp.Header.Get("Request-Id")),
 			)
 			req.OnHeaders(resp.Header.Clone())
 		}

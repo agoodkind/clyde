@@ -186,8 +186,8 @@ func ClassifyHeaders(h http.Header, status int) Classification {
 }
 
 func populateWarningFlags(out *Classification, h http.Header) {
-	status := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-status")))
-	overage := strings.ToLower(strings.TrimSpace(h.Get("anthropic-ratelimit-unified-overage-status")))
+	status := strings.ToLower(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Status")))
+	overage := strings.ToLower(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Overage-Status")))
 
 	out.AllowedWarning = status == "allowed_warning"
 	switch overage {

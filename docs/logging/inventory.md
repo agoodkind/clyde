@@ -31,6 +31,8 @@ Each category includes:
 
 `last_event_timestamp` and `last_event_request_id` reflect the most recent event the sink received, as recorded by the lightweight `inventory_index` sink at `logs/inventory/events.jsonl`. `last_cleanup_result` is the typed `slogger.cleanup.completed` payload (scanned roots, candidate count, deleted count, bytes deleted, skipped paths, errors, duration) for the most recent cleanup pass, repeated on every cleanup-eligible category and omitted on lock files and uncategorized entries.
 
-Use the default indexed mode for routine diagnostics. Indexed mode stats configured active log locations and parses the lightweight `inventory_index` sink instead of recursively walking the full state tree. Use `--deep` when exact filesystem totals matter, such as before deleting old logs or when verifying a suspected stale index.
+Use the default indexed mode for routine diagnostics. Indexed mode stats configured active log locations and parses the lightweight `inventory_index` sink instead of recursively walking the full state tree.
 
-Inventory categories should cover process logs, concern logs, per-chat logs, inventory indexes, MITM capture indexes, MITM raw sidecars, provider sidecars, and LaunchAgent fallback logs. Add new categories only when a new stable sink or external fallback location appears.
+Deep mode is a pure filesystem walk. `clyde logs inventory --deep` does not read `logs/inventory/events.jsonl`, so fields derived from the inventory index (`last_event_timestamp`, `last_event_request_id`, `last_cleanup_result`) remain empty in deep mode even when the index file exists. Use `--deep` when exact file counts matter, such as manual deletion of aged logs or verification of a suspected stale index.
+
+Inventory categories should cover process logs, concern logs, per-chat logs, inventory indexes, MITM capture indexes, MITM raw sidecars, provider sidecars, and LaunchAgent fallback logs. Add a category only when a stable sink or external fallback location appears.

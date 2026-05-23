@@ -208,6 +208,39 @@ func TestBuildInventoryIndexedModeMissingIndexFileLeavesSnapshotEmpty(t *testing
 	}
 }
 
+func TestBuildInventoryDeepModeIgnoresIndexSnapshotMetadata(t *testing.T) {
+	root := t.TempDir()
+	writeSizedFile(t, root, "mitm/capture.jsonl", 64)
+	writeSizedFile(t, root, "logs/inventory/events.jsonl", 0)
+	indexPath := filepath.Join(root, "logs/inventory/events.jsonl")
+	cleanupTime := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	contents := strings.Join([]string{
+		`{"time":"` + cleanupTime.Format(time.RFC3339Nano) + `","msg":"slogger.cleanup.completed","sinks":["inventory_index"],"root":"` + root + `","scanned_roots":["` + root + `"],"candidates":3,"deleted":2,"bytes_deleted":42,"skipped":["/skip/a"],"errors":["boom"],"duration_ms":7}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(indexPath, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write inventory index: %v", err)
+	}
+
+	currentInventory, err := buildInventory(inventoryOptions{StateRoot: root, Mode: inventoryModeDeep})
+	if err != nil {
+		t.Fatalf("buildInventory returned error: %v", err)
+	}
+	if currentInventory.Mode != inventoryModeDeep {
+		t.Fatalf("mode=%q want deep", currentInventory.Mode)
+	}
+	captureSummary := findCategorySummary(t, currentInventory, categoryMITMCaptureIndexes)
+	if !captureSummary.LastEventTimestamp.IsZero() {
+		t.Fatalf("deep mode should ignore snapshot last_event_timestamp, got %v", captureSummary.LastEventTimestamp)
+	}
+	if captureSummary.LastEventRequestID != "" {
+		t.Fatalf("deep mode should ignore snapshot last_event_request_id, got %q", captureSummary.LastEventRequestID)
+	}
+	if captureSummary.LastCleanupResult != nil {
+		t.Fatalf("deep mode should ignore snapshot last_cleanup_result, got %+v", captureSummary.LastCleanupResult)
+	}
+}
+
 func findCategorySummary(t *testing.T, currentInventory inventory, currentCategory category) categorySummary {
 	t.Helper()
 	for _, summary := range currentInventory.Categories {

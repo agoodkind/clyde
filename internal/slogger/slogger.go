@@ -61,7 +61,7 @@ func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
 	if err := validateConcernPolicyNames(policy.ConcernPolicies); err != nil {
 		return nopCloser{Closed: false}, err
 	}
-	appendSharedHandlers := func(handlers []slog.Handler, rotation RotationPolicy) ([]slog.Handler, *TranscriptRouter) {
+	appendSharedHandlers := func(handlers []slog.Handler, rotation RotationPolicy) []slog.Handler {
 		handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, rotation, policy.ConcernPolicies)...)
 		if captureHandler := buildMITMCaptureIndexHandler(policy.MITMCapturePolicy, policy.Level); captureHandler != nil {
 			handlers = append(handlers, captureHandler)
@@ -69,23 +69,28 @@ func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
 		if inventoryHandler := buildInventoryIndexHandler(policy.InventoryPolicy, policy.ConcernRoot, policy.Level); inventoryHandler != nil {
 			handlers = append(handlers, inventoryHandler)
 		}
-		router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot)
-		if router != nil {
+		if router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot); router != nil {
 			handlers = append(handlers, router)
 		}
-		return handlers, router
+		return handlers
 	}
-	if !policy.ProcessSink.Enabled {
-		handlers, router := appendSharedHandlers(nil, policy.ProcessSink.Rotation)
+	buildAsyncLogger := func(handlers []slog.Handler) (io.Closer, error) {
 		if len(handlers) == 0 {
 			handlers = append(handlers, slog.DiscardHandler)
 		}
-		logger := slog.New(newCorrelationHandler(gklog.NewTeeHandler(handlers...)))
-		slog.SetDefault(logger.With("build", version.String()))
-		if router == nil {
+		handlerCloser := handlersCloser(handlers)
+		rootHandler := newCorrelationHandler(newAsyncHandler(gklog.NewTeeHandler(handlers...), handlerCloser))
+		logger := slog.New(rootHandler).With("build", version.String())
+		slog.SetDefault(logger)
+		closer, ok := rootHandler.(io.Closer)
+		if !ok {
 			return nopCloser{Closed: false}, nil
 		}
-		return &transcriptRouterCloser{router: router, inner: nopCloser{Closed: false}}, nil
+		return closer, nil
+	}
+	if !policy.ProcessSink.Enabled {
+		handlers := appendSharedHandlers(nil, policy.ProcessSink.Rotation)
+		return buildAsyncLogger(handlers)
 	}
 	path := policy.ProcessSink.Path
 	if strings.TrimSpace(path) == "" {
@@ -119,32 +124,19 @@ func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
 			MaxAgeDays: 0,
 			Compress:   nil,
 		}
-		handlers, router := appendSharedHandlers(handlers, disabledRotation)
-		logger := slog.New(newCorrelationHandler(gklog.NewTeeHandler(handlers...)))
-		slog.SetDefault(logger.With("build", version.String()))
-		if router == nil {
-			return lockedFile, nil
+		handlers = appendSharedHandlers(handlers, disabledRotation)
+		closer, err := buildAsyncLogger(handlers)
+		if err != nil {
+			_ = lockedFile.Close()
+			return nopCloser{Closed: false}, err
 		}
-		return &transcriptRouterCloser{router: router, inner: lockedFile}, nil
+		return newMultiCloser(closer, lockedFile), nil
 	}
-	// stdout is reserved for command output (so CLI subcommands like
-	// `clyde compact clone-for-test --print-name` produce machine-
-	// parseable single-line output). slog goes to the rotated JSONL
-	// file at the resolved process path; tail that file for
-	// live diagnostics.
 	handlers := []slog.Handler{
 		gklog.FileJSON(path, policy.Level, rotationConfig(policy.ProcessSink.Rotation)),
 	}
-	handlers, router := appendSharedHandlers(handlers, policy.ProcessSink.Rotation)
-	logger, closer := gklog.New(gklog.Config{
-		BuildVersion: version.String(),
-		Handlers:     []slog.Handler{newCorrelationHandler(gklog.NewTeeHandler(handlers...))},
-	})
-	slog.SetDefault(logger)
-	if router == nil {
-		return closer, nil
-	}
-	return &transcriptRouterCloser{router: router, inner: closer}, nil
+	handlers = appendSharedHandlers(handlers, policy.ProcessSink.Rotation)
+	return buildAsyncLogger(handlers)
 }
 
 // buildTranscriptRouter returns a configured router, or nil when the feature

@@ -4,20 +4,24 @@ import (
 	"net/http"
 	"testing"
 
+	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/correlation"
 )
 
 // TestChatKeyHeaderWinsOverBodyBackfill exercises the resolution chain that
-// server_dispatch.go runs at ingress: FromHTTPHeader populates ChatKey from
-// either x-cursor-conversation-id or x-claude-code-session-id, and a
-// subsequent WithChatKey call (the post-TranslateRequest body backfill) is a
-// no-op when the header path already resolved a key.
+// server_dispatch.go runs at ingress: the registered Cursor ingress contract
+// extracts x-cursor-conversation-id, and a subsequent WithChatKey call (the
+// post-TranslateRequest body backfill) is a no-op when the header path already
+// resolved a key.
 func TestChatKeyHeaderWinsOverBodyBackfill(t *testing.T) {
 	t.Parallel()
 
 	header := http.Header{}
-	header.Set(correlation.HeaderCursorConversationID, "header-conv")
+	header.Set(adaptercursor.HeaderConversationID, "header-conv")
 	corr := correlation.FromHTTPHeader(header, "req-1")
+	ingress := adaptercursor.NewIngress()
+	ingressCtx := ingress.TranslateHeaders(header)
+	corr = corr.WithChatIdentity(ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
 	if corr.ChatKey != "header-conv" {
 		t.Fatalf("header should resolve ChatKey, got %q", corr.ChatKey)
 	}

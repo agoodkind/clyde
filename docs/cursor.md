@@ -23,8 +23,8 @@ different rules. Do not conflate them.
   does not terminate or shape the response. The Cloudflare keepalive
   rule documented in this file lives on this surface.
 
-Symptoms can appear on either surface. When debugging, identify which
-surface is involved before applying any rule from this file. Use
+Symptoms can appear on either surface. When debugging, identify the
+surface involved, then apply the rule for that surface. Use
 `docs/logging/request-paths.md` for the shared request-leg model.
 
 ## OpenAI-compatible adapter route family: error envelope rule
@@ -60,11 +60,11 @@ The mapping defeats Cursor's fallback chrome: the status flips from
 5xx/429 to 400, Cursor renders the envelope as a parsable client-side
 error, and the chosen `error.message` survives into the chat view.
 
-The same mapping is correct for non-Cursor clients on the same route
+This mapping is correct for non-Cursor clients on this route
 family (Continue, Aider, raw curl, etc.) because the canonical OpenAI
 wire format makes `invalid_request_error` a parsable shape across all
 OpenAI-SDK clients. The rule is not Cursor-specific by design; Cursor
-was the empirical forcing function for this route family.
+BYOK behavior provides the empirical evidence for this route family.
 
 ## Cloudflare keepalive on Cursor backends (MITM surface)
 

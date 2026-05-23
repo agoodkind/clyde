@@ -42,7 +42,12 @@ config.mk
 
 # Claude Code
 .claude/settings.local.json
+.claude
+.codex
+.cursor
 CLAUDE.local.md
+CODEX.local.md
+CURSOR.local.md
 
 
 # Reverse-engineering and decompile artifacts (large, regenerable)

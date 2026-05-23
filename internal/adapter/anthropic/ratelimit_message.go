@@ -18,15 +18,15 @@ import (
 // rate-limit signal is present (in which case callers should fall back to
 // the raw upstream body).
 func FormatRateLimitMessage(h http.Header) string {
-	claim := strings.ToLower(h.Get("anthropic-ratelimit-unified-representative-claim"))
-	overage := strings.ToLower(h.Get("anthropic-ratelimit-unified-overage-status"))
+	claim := strings.ToLower(h.Get("Anthropic-Ratelimit-Unified-Representative-Claim"))
+	overage := strings.ToLower(h.Get("Anthropic-Ratelimit-Unified-Overage-Status"))
 	if claim == "" && overage == "" {
 		return ""
 	}
 
-	resetAt := parseUnix(h.Get("anthropic-ratelimit-unified-reset"))
-	overageResetAt := parseUnix(h.Get("anthropic-ratelimit-unified-overage-reset"))
-	overageDisabled := strings.ToLower(h.Get("anthropic-ratelimit-unified-overage-disabled-reason"))
+	resetAt := parseUnix(h.Get("Anthropic-Ratelimit-Unified-Reset"))
+	overageResetAt := parseUnix(h.Get("Anthropic-Ratelimit-Unified-Overage-Reset"))
+	overageDisabled := strings.ToLower(h.Get("Anthropic-Ratelimit-Unified-Overage-Disabled-Reason"))
 
 	resetMsg := ""
 	if !resetAt.IsZero() {

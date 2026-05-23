@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,61 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"goodkind.io/clyde/internal/config"
 )
 
 const rawCaptureFileMode os.FileMode = 0o600
-
-type cursorCaptureMetadata struct {
-	Provider            string
-	Concern             string
-	Host                string
-	Path                string
-	Method              string
-	Status              int
-	RequestBytes        int64
-	ResponseBytes       int64
-	RequestRawPath      string
-	ResponseRawPath     string
-	RequestID           string
-	OriginalRequestID   string
-	SessionID           string
-	Traceparent         string
-	RequestContentType  string
-	ResponseContentType string
-	Diagnostic          *cursorBidiAppendDiagnostic
-	// Hook names the [[mitm.hook]] rule that rewrote this exchange,
-	// when non-empty. The field stays unset for plain pass-through
-	// requests so existing tooling that reads capture.jsonl keeps
-	// working unchanged.
-	Hook string
-}
-
-type cursorCaptureEvent struct {
-	Kind                string                      `json:"kind"`
-	T                   int64                       `json:"t"`
-	TS                  string                      `json:"ts"`
-	Provider            string                      `json:"provider"`
-	Concern             string                      `json:"concern"`
-	Host                string                      `json:"host"`
-	Method              string                      `json:"method"`
-	Path                string                      `json:"path"`
-	Status              int                         `json:"status"`
-	RequestBytes        int64                       `json:"request_bytes"`
-	ResponseBytes       int64                       `json:"response_bytes"`
-	RequestRawPath      string                      `json:"request_raw_path"`
-	ResponseRawPath     string                      `json:"response_raw_path"`
-	RequestID           string                      `json:"request_id"`
-	OriginalRequestID   string                      `json:"original_request_id"`
-	SessionID           string                      `json:"session_id"`
-	Traceparent         string                      `json:"traceparent"`
-	RequestContentType  string                      `json:"request_content_type"`
-	ResponseContentType string                      `json:"response_content_type"`
-	Diagnostic          *cursorBidiAppendDiagnostic `json:"bidi_append,omitempty"`
-	Hook                string                      `json:"hook,omitempty"`
-}
 
 type captureConcernInput struct {
 	Provider            string
@@ -128,7 +77,7 @@ func captureContentTypeMatches(needle string, input captureConcernInput) bool {
 func (p *Proxy) nextRawCapturePaths(captureDir string, concern string, host string, path string) (string, string, error) {
 	dir := filepath.Join(expandHome(captureDir), "concerns", safePathPart(concern), "raw", safePathPart(host))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("mitm.cursor.raw_capture.mkdir_failed", "dir", dir, "err", err)
+		slog.Warn("mitm.raw_capture.mkdir_failed", "dir", dir, "err", err)
 		return "", "", fmt.Errorf("create raw capture dir: %w", err)
 	}
 	seq := p.rawCaptureSeq.Add(1)
@@ -152,7 +101,7 @@ func (p *Proxy) nextHTTPCapturePaths(captureDir string, provider string, path st
 func writeRawCaptureFile(path string, write func(io.Writer) error) (int64, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 	if err != nil {
-		slog.Warn("mitm.cursor.raw_capture.open_failed", "path", path, "err", err)
+		slog.Warn("mitm.raw_capture.open_failed", "path", path, "err", err)
 		return 0, fmt.Errorf("open raw capture file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
@@ -209,88 +158,42 @@ func safePathPart(value string) string {
 	return out
 }
 
-func (p *Proxy) appendCursorCaptureMetadata(dir string, meta cursorCaptureMetadata, policy CaptureFilePolicy) error {
-	now := currentTime()
-	concern := strings.TrimSpace(meta.Concern)
+func (p *Proxy) appendProviderCaptureExtension(dir string, extension CaptureExtension, policy CaptureFilePolicy) error {
+	if extension == nil {
+		return nil
+	}
+	dir = expandHome(dir)
+	concern := strings.TrimSpace(extension.Concern())
 	if concern == "" {
 		concern = "unknown"
 	}
-	event := cursorCaptureEvent{
-		Kind:                "cursor_tls_http",
-		T:                   now.Unix(),
-		TS:                  now.UTC().Format(time.RFC3339Nano),
-		Provider:            meta.Provider,
-		Concern:             concern,
-		Host:                meta.Host,
-		Method:              meta.Method,
-		Path:                meta.Path,
-		Status:              meta.Status,
-		RequestBytes:        meta.RequestBytes,
-		ResponseBytes:       meta.ResponseBytes,
-		RequestRawPath:      meta.RequestRawPath,
-		ResponseRawPath:     meta.ResponseRawPath,
-		RequestID:           meta.RequestID,
-		OriginalRequestID:   meta.OriginalRequestID,
-		SessionID:           meta.SessionID,
-		Traceparent:         meta.Traceparent,
-		RequestContentType:  meta.RequestContentType,
-		ResponseContentType: meta.ResponseContentType,
-		Diagnostic:          meta.Diagnostic,
-		Hook:                meta.Hook,
+	raw, err := extension.MarshalJSONLine()
+	if err != nil {
+		slog.Warn("mitm.provider.capture.encode_failed",
+			"component", "mitm",
+			"concern", "providers.mitm.wire",
+			"capture_dir", dir,
+			"err", err,
+		)
+		return fmt.Errorf("encode provider capture metadata: %w", err)
 	}
-	return p.appendCursorCaptureEvent(dir, event, policy)
-}
-
-func (p *Proxy) appendCursorCaptureEvent(dir string, event cursorCaptureEvent, policy CaptureFilePolicy) error {
-	dir = expandHome(dir)
-	if strings.TrimSpace(event.Concern) == "" {
-		event.Concern = "unknown"
-	}
-	if err := p.appendCursorCaptureEventAtDir(dir, event, policy); err != nil {
+	if err := p.appendProviderCaptureLineAtDir(dir, raw, policy); err != nil {
 		return err
 	}
-	concern := safePathPart(event.Concern)
-	return p.appendCursorCaptureEventAtDir(filepath.Join(dir, "concerns", concern), event, policy)
+	return p.appendProviderCaptureLineAtDir(filepath.Join(dir, "concerns", safePathPart(concern)), raw, policy)
 }
 
-func (p *Proxy) appendCursorCaptureEventAtDir(dir string, event cursorCaptureEvent, policy CaptureFilePolicy) error {
-	raw, err := json.Marshal(event)
-	if err != nil {
-		slog.Warn("mitm.cursor.capture.encode_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"capture_dir", dir,
-			"err", err,
-		)
-		return fmt.Errorf("encode cursor capture metadata: %w", err)
-	}
+func (p *Proxy) appendProviderCaptureLineAtDir(dir string, raw []byte, policy CaptureFilePolicy) error {
 	if err := p.writeCaptureLine(dir, raw, policy); err != nil {
-		slog.Warn("mitm.cursor.capture.write_failed",
+		slog.Warn("mitm.provider.capture.write_failed",
 			"component", "mitm",
 			"concern", "providers.mitm.wire",
 			"capture_dir", dir,
 			"err", err,
 		)
-		return fmt.Errorf("write cursor capture metadata: %w", err)
+		return fmt.Errorf("write provider capture metadata: %w", err)
 	}
 	return nil
-}
-
-func extractCursorCaptureHeaders(h http.Header) (requestID string, originalRequestID string, sessionID string, traceparent string) {
-	requestID = firstHeader(h, "x-request-id", "x-cursor-request-id", "request-id")
-	originalRequestID = firstHeader(h, "x-original-request-id", "x-cursor-original-request-id", "original-request-id")
-	sessionID = firstHeader(h, "x-session-id", "x-cursor-session-id", "cursor-session-id")
-	traceparent = firstHeader(h, "traceparent")
-	return requestID, originalRequestID, sessionID, traceparent
-}
-
-func firstHeader(h http.Header, keys ...string) string {
-	for _, key := range keys {
-		if value := strings.TrimSpace(h.Get(key)); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func headerBlock(statusLine string, h http.Header) []byte {

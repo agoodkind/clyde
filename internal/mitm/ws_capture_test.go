@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -55,7 +56,11 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	defer overrideChatGPTUpstream(t, upstream.URL)()
 
 	// Start the proxy on a random port.
-	srv := httptest.NewServer(http.HandlerFunc(p.handle))
+	requestDone := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(requestDone)
+		p.handle(w, r)
+	}))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/backend-api/codex/responses"
@@ -82,6 +87,7 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 		t.Fatalf("expected echo, got %s", string(raw))
 	}
 	_ = conn.Close()
+	waitForWebsocketHandler(t, requestDone)
 
 	// Drain capture file.
 	deadline := time.Now().Add(2 * time.Second)
@@ -97,6 +103,10 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 		lines = lines[:0]
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			f.Close()
+			t.Fatalf("scan capture file: %v", err)
 		}
 		f.Close()
 		if hasWSEvents(lines) {
@@ -140,6 +150,201 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	}
 }
 
+func waitForWebsocketHandler(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("websocket handler did not finish after client close")
+	}
+}
+
+func TestProxyWebsocketCaptureUsesNativeCursorHeadersAndRequiredLegs(t *testing.T) {
+	const identityProviderID ProviderID = "test_cursor_ws_identity"
+	RegisterProviderFirst(testCursorProvider{id: identityProviderID})
+	t.Cleanup(func() {
+		UnregisterProvider(identityProviderID)
+	})
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upstream upgrade: %v", err)
+		}
+		defer conn.Close()
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := conn.WriteMessage(messageType, payload); err != nil {
+				return
+			}
+		}
+	}))
+	defer upstream.Close()
+
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	proxy := newWebsocketRequestLogProxy(t, t.TempDir(), logger)
+	defer overrideChatGPTUpstream(t, upstream.URL)()
+
+	srv := httptest.NewServer(http.HandlerFunc(proxy.handle))
+	defer srv.Close()
+
+	requestHeaders := http.Header{}
+	requestHeaders.Set("x-request-id", "cursor-native-req")
+	requestHeaders.Set("x-original-request-id", "cursor-native-orig")
+	requestHeaders.Set("x-session-id", "cursor-session-1")
+	requestHeaders.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/backend-api/codex/responses"
+	parsed, err := url.Parse(wsURL)
+	if err != nil {
+		t.Fatalf("parse ws url: %v", err)
+	}
+	conn, resp, err := websocket.DefaultDialer.DialContext(context.Background(), parsed.String(), requestHeaders)
+	if err != nil {
+		t.Fatalf("client dial: %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create"}`)); err != nil {
+		t.Fatalf("write client frame: %v", err)
+	}
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	_ = conn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var events []map[string]any
+	for time.Now().Before(deadline) {
+		events = captureLogEvents(t, logBuffer.String(), "logging.request.leg")
+		seen := make(map[string]bool)
+		for _, event := range events {
+			if event["surface"] != string(logevent.SurfaceMITMIDE) {
+				continue
+			}
+			if leg, ok := event["leg"].(string); ok {
+				seen[leg] = true
+			}
+		}
+		complete := true
+		for _, leg := range logevent.DefaultRequiredLegs()[logevent.SurfaceMITMIDE] {
+			if !seen[string(leg)] {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	seen := make(map[string]bool)
+	var ingressEvent map[string]any
+	for _, event := range events {
+		if event["surface"] != string(logevent.SurfaceMITMIDE) {
+			continue
+		}
+		if leg, ok := event["leg"].(string); ok {
+			seen[leg] = true
+			if leg == string(logevent.LegMITMIngress) && ingressEvent == nil {
+				ingressEvent = event
+			}
+		}
+	}
+	for _, leg := range logevent.DefaultRequiredLegs()[logevent.SurfaceMITMIDE] {
+		if !seen[string(leg)] {
+			t.Fatalf("missing required leg %s in events %v", leg, seen)
+		}
+	}
+	if ingressEvent == nil {
+		t.Fatalf("missing mitm_ingress event in %v", events)
+	}
+	if ingressEvent["request_id"] != "cursor-native-req" {
+		t.Fatalf("request_id = %v want cursor-native-req", ingressEvent["request_id"])
+	}
+	cursorFacet, ok := ingressEvent["cursor"].(map[string]any)
+	if !ok {
+		t.Fatalf("cursor facet missing: %#v", ingressEvent)
+	}
+	if cursorFacet["request_id"] != "cursor-native-req" {
+		t.Fatalf("cursor request_id = %v want cursor-native-req", cursorFacet["request_id"])
+	}
+	if ingressEvent["upstream_request_id"] != "cursor-native-orig" {
+		t.Fatalf("upstream_request_id = %v want cursor-native-orig", ingressEvent["upstream_request_id"])
+	}
+	if ingressEvent["session_id"] != "cursor-session-1" {
+		t.Fatalf("session_id = %v want cursor-session-1", ingressEvent["session_id"])
+	}
+	if ingressEvent["trace_id"] != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("trace_id = %v want traceparent trace", ingressEvent["trace_id"])
+	}
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event != nil {
+		t.Fatalf("did not expect incomplete request event: %v", event)
+	}
+}
+
+func TestProxyWebsocketCaptureEarlyDialFailureEmitsRequestErrorWithoutIncomplete(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not a websocket", http.StatusNotFound)
+	}))
+	defer upstream.Close()
+
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	proxy := newWebsocketRequestLogProxy(t, t.TempDir(), logger)
+	defer overrideChatGPTUpstream(t, upstream.URL)()
+
+	srv := httptest.NewServer(http.HandlerFunc(proxy.handle))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/backend-api/codex/responses"
+	parsed, err := url.Parse(wsURL)
+	if err != nil {
+		t.Fatalf("parse ws url: %v", err)
+	}
+	if _, _, err := websocket.DefaultDialer.DialContext(context.Background(), parsed.String(), nil); err == nil {
+		t.Fatalf("expected websocket dial to fail")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var events []map[string]any
+	for time.Now().Before(deadline) {
+		events = captureLogEvents(t, logBuffer.String(), "logging.request.leg")
+		for _, event := range events {
+			if event["leg"] == string(logevent.LegRequestError) {
+				deadline = time.Now()
+				break
+			}
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	foundError := false
+	for _, event := range events {
+		if event["leg"] == string(logevent.LegRequestError) {
+			foundError = true
+			if event["error_code"] != "ws_upstream_dial_failed" {
+				t.Fatalf("error_code = %v want ws_upstream_dial_failed", event["error_code"])
+			}
+		}
+	}
+	if !foundError {
+		t.Fatalf("expected request_error leg in %v", events)
+	}
+	if event := firstCaptureLogEvent(t, logBuffer.String(), "logging.request.incomplete"); event != nil {
+		t.Fatalf("did not expect incomplete request event: %v", event)
+	}
+}
+
 func TestIsWebsocketUpgradeMatchesCaseInsensitive(t *testing.T) {
 	r := &http.Request{Header: http.Header{}}
 	r.Header.Set("Upgrade", "WebSocket")
@@ -160,20 +365,42 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 	t.Helper()
 	logger := slog.New(newMITMCaptureTestHandler(t, cfg.CaptureDir))
 	proxy := &Proxy{
-		log:                   logger,
-		client:                http.DefaultClient,
-		dialContext:           nil,
-		certMu:                sync.Mutex{},
-		ca:                    nil,
-		cursorTLSClientConfig: nil,
-		rawCaptureSeq:         atomic.Uint64{},
-		Tunnels:               newTestTunnelRegistry(),
-		captureWriters:        newCaptureWriterCache(logger),
-		requestLog:            logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		mu:                    sync.RWMutex{},
-		cfg:                   cfg,
-		base:                  "",
-		server:                nil,
+		log:             logger,
+		client:          http.DefaultClient,
+		dialContext:     nil,
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: nil,
+		rawCaptureSeq:   atomic.Uint64{},
+		Tunnels:         newTestTunnelRegistry(),
+		captureWriters:  newCaptureWriterCache(logger),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             cfg,
+		base:            "",
+		server:          nil,
+	}
+	t.Cleanup(proxy.closeCaptureWriters)
+	return proxy
+}
+
+func newWebsocketRequestLogProxy(t *testing.T, captureDir string, logger *slog.Logger) *Proxy {
+	t.Helper()
+	proxy := &Proxy{
+		log:             logger,
+		client:          http.DefaultClient,
+		dialContext:     nil,
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: nil,
+		rawCaptureSeq:   atomic.Uint64{},
+		Tunnels:         newTestTunnelRegistry(),
+		captureWriters:  newCaptureWriterCache(logger),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
+		base:            "",
+		server:          nil,
 	}
 	t.Cleanup(proxy.closeCaptureWriters)
 	return proxy
@@ -204,12 +431,10 @@ func hasWSEvents(lines []string) bool {
 	return foundStart && foundClientMessage && foundUpstreamMessage && foundCompleted
 }
 
-// overrideChatGPTUpstream temporarily reroutes the chatGPTUpstream
-// constant to the given URL for the duration of the test. Returns
-// a cleanup that restores the original.
+// overrideChatGPTUpstream temporarily registers a typed test-only
+// [Provider] that claims the legacy ChatGPT backend-api path prefix
+// and routes it to the supplied URL.
 func overrideChatGPTUpstream(t *testing.T, target string) func() {
 	t.Helper()
-	original := chatGPTUpstream
-	chatGPTUpstream = target
-	return func() { chatGPTUpstream = original }
+	return registerTestRoute(t, testRouteOpenAIBackend, target)
 }

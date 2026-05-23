@@ -4,23 +4,26 @@ import (
 	"fmt"
 	"log/slog"
 
+	adapteranthropic "goodkind.io/clyde/internal/adapter/anthropic"
+	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
-// init wires the canonical vendor implementations of the ingress
-// boundary contract into the package-level registry. This file is
-// the composition root for ingress registration: it is the only file
-// under internal/adapter at depth 1 that imports a vendor ingress
-// package. The boundary file (family_ingress_mapping.go) and the
-// dispatcher hold no vendor ingress import and construct no vendor
-// ingress type.
+// init wires canonical vendor implementations into package-level
+// registries. This file is the adapter composition root: it is the
+// only file under internal/adapter at depth 1 that imports vendor
+// packages for ingress and backend-facet registration. The dispatcher
+// and request logger hold no vendor facet import and construct no
+// vendor facet type.
 //
 // Vendor packages expose
 // RegisterIngress(ingresscontract.IngressRegistrar) so this file can
 // register Cursor without speaking Cursor's request-shape conventions.
 func init() {
 	adaptercursor.RegisterIngress(defaultIngressRegistry)
+	adaptercodex.RegisterBackendFacet(defaultBackendFacetRegistry)
+	adapteranthropic.RegisterBackendFacet(defaultBackendFacetRegistry)
 }
 
 // resolveCursorChatRequest is the registration-root indirection that

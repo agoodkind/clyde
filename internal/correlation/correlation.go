@@ -14,16 +14,13 @@ import (
 )
 
 const (
-	HeaderRequestID            = "x-clyde-request-id"
-	HeaderTraceID              = "x-clyde-trace-id"
-	HeaderSpanID               = "x-clyde-span-id"
-	HeaderParentSpanID         = "x-clyde-parent-span-id"
-	HeaderCursorRequestID      = "x-cursor-request-id"
-	HeaderCursorConversationID = "x-cursor-conversation-id"
-	HeaderCursorGenerationID   = "x-cursor-generation-id"
-	HeaderUpstreamRequestID    = "x-upstream-request-id"
-	HeaderUpstreamResponseID   = "x-upstream-response-id"
-	HeaderTraceparent          = "traceparent"
+	HeaderRequestID          = "x-clyde-request-id"
+	HeaderTraceID            = "x-clyde-trace-id"
+	HeaderSpanID             = "x-clyde-span-id"
+	HeaderParentSpanID       = "x-clyde-parent-span-id"
+	HeaderUpstreamRequestID  = "x-upstream-request-id"
+	HeaderUpstreamResponseID = "x-upstream-response-id"
+	HeaderTraceparent        = "traceparent"
 	// HeaderClaudeCodeSessionID is set by claude-cli native ingress and used as
 	// the per-chat key for native Anthropic ingress when present.
 	HeaderClaudeCodeSessionID = "x-claude-code-session-id"
@@ -33,24 +30,30 @@ type TraceID string
 
 type SpanID string
 
+// IdentityAttribute is a provider-owned string field attached to a
+// correlation context. The correlation package stores and forwards
+// these fields without interpreting their keys.
+type IdentityAttribute struct {
+	Key   string
+	Value string
+}
+
 type Context struct {
-	TraceID              TraceID
-	SpanID               SpanID
-	ParentSpanID         SpanID
-	RequestID            string
-	CursorRequestID      string
-	CursorConversationID string
-	CursorGenerationID   string
-	UpstreamRequestID    string
-	UpstreamResponseID   string
+	TraceID            TraceID
+	SpanID             SpanID
+	ParentSpanID       SpanID
+	RequestID          string
+	UpstreamRequestID  string
+	UpstreamResponseID string
 	// ChatKey is the per-chat partition key used by the transcript router.
-	// Resolved at ingress from provider-specific headers (cursor conversation
-	// id, claude-code session id) and back-filled from the request body's
-	// metadata.cursorConversationId. Empty when no key resolves.
-	ChatKey       string
-	ChatKeySource string
-	ChatRootKey   string
-	ChatBranchKey string
+	// Resolved at ingress from provider-owned request identity and
+	// back-filled from request bodies when an ingress provider supports that.
+	// Empty when no key resolves.
+	ChatKey            string
+	ChatKeySource      string
+	ChatRootKey        string
+	ChatBranchKey      string
+	IdentityAttributes []IdentityAttribute
 }
 
 type contextKey int
@@ -59,19 +62,17 @@ const correlationContextKey contextKey = 1
 
 func New(requestID string) Context {
 	return Context{
-		TraceID:              NewTraceID(),
-		SpanID:               NewSpanID(),
-		ParentSpanID:         "",
-		RequestID:            strings.TrimSpace(requestID),
-		CursorRequestID:      "",
-		CursorConversationID: "",
-		CursorGenerationID:   "",
-		UpstreamRequestID:    "",
-		UpstreamResponseID:   "",
-		ChatKey:              "",
-		ChatKeySource:        "",
-		ChatRootKey:          "",
-		ChatBranchKey:        "",
+		TraceID:            NewTraceID(),
+		SpanID:             NewSpanID(),
+		ParentSpanID:       "",
+		RequestID:          strings.TrimSpace(requestID),
+		UpstreamRequestID:  "",
+		UpstreamResponseID: "",
+		ChatKey:            "",
+		ChatKeySource:      "",
+		ChatRootKey:        "",
+		ChatBranchKey:      "",
+		IdentityAttributes: nil,
 	}
 }
 
@@ -93,17 +94,12 @@ func FromHTTPHeader(header http.Header, requestID string) Context {
 	if parentSpanID := strings.TrimSpace(header.Get(HeaderParentSpanID)); validSpanID(parentSpanID) {
 		corr.ParentSpanID = SpanID(parentSpanID)
 	}
-	corr.CursorRequestID = strings.TrimSpace(header.Get(HeaderCursorRequestID))
-	corr.CursorConversationID = strings.TrimSpace(header.Get(HeaderCursorConversationID))
-	corr.CursorGenerationID = strings.TrimSpace(header.Get(HeaderCursorGenerationID))
 	corr.UpstreamRequestID = strings.TrimSpace(header.Get(HeaderUpstreamRequestID))
 	corr.UpstreamResponseID = strings.TrimSpace(header.Get(HeaderUpstreamResponseID))
 	// Resolve ChatKey from header at ingress. The first set value wins; an
 	// already-set value in c (e.g. from a downstream call) is not overwritten
 	// because this constructs a fresh Context.
-	if conv := strings.TrimSpace(header.Get(HeaderCursorConversationID)); conv != "" {
-		corr = corr.WithChatIdentity(conv, "native", conv, "")
-	} else if sess := strings.TrimSpace(header.Get(HeaderClaudeCodeSessionID)); sess != "" {
+	if sess := strings.TrimSpace(header.Get(HeaderClaudeCodeSessionID)); sess != "" {
 		corr = corr.WithChatIdentity(sess, "native", sess, "")
 	}
 	return corr
@@ -121,19 +117,17 @@ func FromContext(ctx context.Context) Context {
 
 func emptyContext() Context {
 	return Context{
-		TraceID:              "",
-		SpanID:               "",
-		ParentSpanID:         "",
-		RequestID:            "",
-		CursorRequestID:      "",
-		CursorConversationID: "",
-		CursorGenerationID:   "",
-		UpstreamRequestID:    "",
-		UpstreamResponseID:   "",
-		ChatKey:              "",
-		ChatKeySource:        "",
-		ChatRootKey:          "",
-		ChatBranchKey:        "",
+		TraceID:            "",
+		SpanID:             "",
+		ParentSpanID:       "",
+		RequestID:          "",
+		UpstreamRequestID:  "",
+		UpstreamResponseID: "",
+		ChatKey:            "",
+		ChatKeySource:      "",
+		ChatRootKey:        "",
+		ChatBranchKey:      "",
+		IdentityAttributes: nil,
 	}
 }
 
@@ -157,23 +151,6 @@ func Ensure(ctx context.Context, requestID string) (context.Context, Context) {
 
 func (c Context) WithRequestID(requestID string) Context {
 	c.RequestID = strings.TrimSpace(requestID)
-	return c
-}
-
-func (c Context) WithCursor(requestID, conversationID string) Context {
-	if requestID = strings.TrimSpace(requestID); requestID != "" {
-		c.CursorRequestID = requestID
-	}
-	if conversationID = strings.TrimSpace(conversationID); conversationID != "" {
-		c.CursorConversationID = conversationID
-	}
-	return c
-}
-
-func (c Context) WithCursorGenerationID(generationID string) Context {
-	if generationID = strings.TrimSpace(generationID); generationID != "" {
-		c.CursorGenerationID = generationID
-	}
 	return c
 }
 
@@ -223,15 +200,6 @@ func (c Context) Attrs() []slog.Attr {
 	if c.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", c.RequestID))
 	}
-	if c.CursorRequestID != "" {
-		attrs = append(attrs, slog.String("cursor_request_id", c.CursorRequestID))
-	}
-	if c.CursorConversationID != "" {
-		attrs = append(attrs, slog.String("cursor_conversation_id", c.CursorConversationID))
-	}
-	if c.CursorGenerationID != "" {
-		attrs = append(attrs, slog.String("cursor_generation_id", c.CursorGenerationID))
-	}
 	if c.UpstreamRequestID != "" {
 		attrs = append(attrs, slog.String("upstream_request_id", c.UpstreamRequestID))
 	}
@@ -250,7 +218,7 @@ func (c Context) Attrs() []slog.Attr {
 	if c.ChatBranchKey != "" {
 		attrs = append(attrs, slog.String("chat_branch_key", c.ChatBranchKey))
 	}
-	return attrs
+	return appendIdentityAttributes(attrs, c.IdentityAttributes)
 }
 
 // WithChatKey returns a copy of c with ChatKey set to the trimmed value, but
@@ -277,6 +245,75 @@ func (c Context) WithChatIdentity(key, source, rootKey, branchKey string) Contex
 	c.ChatRootKey = strings.TrimSpace(rootKey)
 	c.ChatBranchKey = strings.TrimSpace(branchKey)
 	return c
+}
+
+// WithIdentityAttributes returns a copy of c carrying provider-owned
+// identity fields. Later fields with the same key replace earlier
+// fields so a body-derived identity can supersede header-derived
+// metadata without duplicating log attributes.
+func (c Context) WithIdentityAttributes(attrs ...IdentityAttribute) Context {
+	for _, attr := range attrs {
+		normalized, ok := attr.normalize()
+		if !ok {
+			continue
+		}
+		replaced := false
+		for i, existing := range c.IdentityAttributes {
+			if existing.Key == normalized.Key {
+				c.IdentityAttributes[i] = normalized
+				replaced = true
+				break
+			}
+		}
+		if replaced {
+			continue
+		}
+		c.IdentityAttributes = append(c.IdentityAttributes, normalized)
+	}
+	return c
+}
+
+// IdentityAttributeValue returns the current provider-owned identity
+// value for key, or an empty string when the key is absent.
+func (c Context) IdentityAttributeValue(key string) string {
+	key = strings.TrimSpace(key)
+	for _, attr := range c.IdentityAttributes {
+		if attr.Key == key {
+			return attr.Value
+		}
+	}
+	return ""
+}
+
+func (a IdentityAttribute) normalize() (IdentityAttribute, bool) {
+	key := strings.TrimSpace(a.Key)
+	value := strings.TrimSpace(a.Value)
+	if key == "" || value == "" {
+		return IdentityAttribute{Key: "", Value: ""}, false
+	}
+	return IdentityAttribute{Key: key, Value: value}, true
+}
+
+func appendIdentityAttributes(attrs []slog.Attr, identityAttrs []IdentityAttribute) []slog.Attr {
+	if len(identityAttrs) == 0 {
+		return attrs
+	}
+	seen := make(map[string]bool, len(attrs)+len(identityAttrs))
+	for _, attr := range attrs {
+		seen[attr.Key] = true
+	}
+	for _, identityAttr := range identityAttrs {
+		normalized, ok := identityAttr.normalize()
+		if !ok {
+			continue
+		}
+		if seen[normalized.Key] {
+			continue
+		}
+		attrs = append(attrs, slog.String(normalized.Key, normalized.Value))
+		seen[normalized.Key] = true
+	}
+	return attrs
 }
 
 func AttrsFromContext(ctx context.Context) []slog.Attr {
@@ -325,15 +362,6 @@ func (c Context) SetHTTPHeaders(header http.Header) {
 func (c Context) HTTPHeaders() http.Header {
 	header := http.Header{}
 	c.SetHTTPHeaders(header)
-	if c.CursorRequestID != "" {
-		header.Set(HeaderCursorRequestID, c.CursorRequestID)
-	}
-	if c.CursorConversationID != "" {
-		header.Set(HeaderCursorConversationID, c.CursorConversationID)
-	}
-	if c.CursorGenerationID != "" {
-		header.Set(HeaderCursorGenerationID, c.CursorGenerationID)
-	}
 	if c.UpstreamRequestID != "" {
 		header.Set(HeaderUpstreamRequestID, c.UpstreamRequestID)
 	}
@@ -365,9 +393,6 @@ func (c Context) Metadata() metadata.MD {
 	setMetadata(values, HeaderTraceID, string(c.TraceID))
 	setMetadata(values, HeaderSpanID, string(c.SpanID))
 	setMetadata(values, HeaderParentSpanID, string(c.ParentSpanID))
-	setMetadata(values, HeaderCursorRequestID, c.CursorRequestID)
-	setMetadata(values, HeaderCursorConversationID, c.CursorConversationID)
-	setMetadata(values, HeaderCursorGenerationID, c.CursorGenerationID)
 	setMetadata(values, HeaderUpstreamRequestID, c.UpstreamRequestID)
 	setMetadata(values, HeaderUpstreamResponseID, c.UpstreamResponseID)
 	if traceparent := c.Traceparent(); traceparent != "" {
@@ -424,9 +449,6 @@ func fromMetadata(md metadata.MD) Context {
 	if parentSpanID := firstMetadata(md, HeaderParentSpanID); validSpanID(parentSpanID) {
 		corr.ParentSpanID = SpanID(parentSpanID)
 	}
-	corr.CursorRequestID = firstMetadata(md, HeaderCursorRequestID)
-	corr.CursorConversationID = firstMetadata(md, HeaderCursorConversationID)
-	corr.CursorGenerationID = firstMetadata(md, HeaderCursorGenerationID)
 	corr.UpstreamRequestID = firstMetadata(md, HeaderUpstreamRequestID)
 	corr.UpstreamResponseID = firstMetadata(md, HeaderUpstreamResponseID)
 	return corr

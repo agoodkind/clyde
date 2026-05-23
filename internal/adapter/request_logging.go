@@ -2,28 +2,31 @@ package adapter
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
+	"goodkind.io/clyde/internal/adapter/backendfacet"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/logevent"
 )
 
+// logEventIdentityFromCorrelation builds the generic typed
+// [logevent.Identity] from a correlation context. Provider-specific
+// identity fields are attached separately via provider-owned
+// [logevent.Facet] values returned by the ingress contract.
 func logEventIdentityFromCorrelation(corr correlation.Context) logevent.Identity {
 	return logevent.Identity{
-		TraceID:              string(corr.TraceID),
-		SpanID:               string(corr.SpanID),
-		ParentSpanID:         string(corr.ParentSpanID),
-		RequestID:            corr.RequestID,
-		CursorRequestID:      corr.CursorRequestID,
-		CursorConversationID: corr.CursorConversationID,
-		CursorGenerationID:   corr.CursorGenerationID,
-		UpstreamRequestID:    corr.UpstreamRequestID,
-		UpstreamResponseID:   corr.UpstreamResponseID,
-		ChatKey:              corr.ChatKey,
-		ChatKeySource:        corr.ChatKeySource,
-		ChatRootKey:          corr.ChatRootKey,
-		ChatBranchKey:        corr.ChatBranchKey,
-		SessionID:            "",
+		TraceID:            string(corr.TraceID),
+		SpanID:             string(corr.SpanID),
+		ParentSpanID:       string(corr.ParentSpanID),
+		RequestID:          corr.RequestID,
+		UpstreamRequestID:  corr.UpstreamRequestID,
+		UpstreamResponseID: corr.UpstreamResponseID,
+		ChatKey:            corr.ChatKey,
+		ChatKeySource:      corr.ChatKeySource,
+		ChatRootKey:        corr.ChatRootKey,
+		ChatBranchKey:      corr.ChatBranchKey,
+		SessionID:          "",
 	}
 }
 
@@ -34,14 +37,14 @@ func (s *Server) beginChatLogRecorder(r *http.Request, corr correlation.Context)
 	}
 	var path logevent.Path
 	path.Surface = logevent.SurfaceAdapterChat
-	path.RouteFamily = logevent.RouteFamilyOpenAICompatible
+	path.RouteFamily = logevent.RouteFamilyChatCompatible
 	path.Path = r.URL.Path
 	path.Method = r.Method
 	path.Host = r.Host
 	return emitter.Begin(logEventIdentityFromCorrelation(corr), path)
 }
 
-func (s *Server) emitChatRequestLeg(ctx context.Context, recorder *logevent.Recorder, leg logevent.Leg, phase logevent.Phase, status logevent.Status) {
+func (s *Server) emitChatRequestLeg(ctx context.Context, recorder *logevent.Recorder, leg logevent.Leg, phase logevent.Phase, status logevent.Status, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
@@ -50,6 +53,7 @@ func (s *Server) emitChatRequestLeg(ctx context.Context, recorder *logevent.Reco
 	event.Path.Phase = phase
 	event.Outcome.Status = status
 	event.Outcome.Duration = recorder.Duration()
+	attachFacets(&event, facets)
 	recorder.Emit(ctx, event)
 }
 
@@ -75,36 +79,25 @@ func (s *Server) emitChatPayloadLeg(ctx context.Context, recorder *logevent.Reco
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatCursorMetadataLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context) {
+func (s *Server) emitChatClientMetadataLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
 	recorder.UpdateIdentity(logEventIdentityFromCorrelation(corr))
 	var event logevent.Event
-	event.Path.Leg = logevent.LegAdapterCursorMetadata
+	event.Path.Leg = logevent.LegAdapterClientMetadata
 	event.Path.Phase = logevent.PhaseCompleted
 	event.Outcome.Status = logevent.StatusOK
 	event.Outcome.Duration = recorder.Duration()
+	attachFacets(&event, facets)
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatModelResolveLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, model ResolvedModel, effort string) {
+func (s *Server) emitChatModelResolveLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, model ResolvedModel, effort string, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
 	recorder.UpdateIdentity(logEventIdentityFromCorrelation(corr))
-	var providerFacet logevent.ProviderFacets
-	if model.Backend == BackendCodex {
-		var codexFacet logevent.CodexFacet
-		codexFacet.Model = model.ClaudeModel
-		codexFacet.Effort = effort
-		providerFacet.Codex = &codexFacet
-	}
-	if model.Backend == BackendAnthropic {
-		var anthropicFacet logevent.AnthropicFacet
-		anthropicFacet.Model = model.ClaudeModel
-		providerFacet.Anthropic = &anthropicFacet
-	}
 	var event logevent.Event
 	event.Path.Leg = logevent.LegAdapterModelResolve
 	event.Path.Phase = logevent.PhaseCompleted
@@ -112,11 +105,12 @@ func (s *Server) emitChatModelResolveLeg(ctx context.Context, recorder *logevent
 	event.Path.Provider = model.Backend
 	event.Outcome.Status = logevent.StatusOK
 	event.Outcome.Duration = recorder.Duration()
-	event.Facets = providerFacet
+	attachBackendFacet(&event, model, effort, nil)
+	attachFacets(&event, facets)
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatProviderSendStartedLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, req ChatRequest, model ResolvedModel, effort string) {
+func (s *Server) emitChatProviderSendStartedLeg(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, req ChatRequest, model ResolvedModel, effort string, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
@@ -128,16 +122,16 @@ func (s *Server) emitChatProviderSendStartedLeg(ctx context.Context, recorder *l
 	event.Path.Provider = model.Backend
 	event.Outcome.Status = logevent.StatusOK
 	event.Outcome.Duration = recorder.Duration()
-	event.Facets = providerFacetsForChat(model, effort, req)
+	attachBackendFacet(&event, model, effort, &req)
+	attachFacets(&event, facets)
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) completeChatDispatchLegs(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, req ChatRequest, model ResolvedModel, effort string) {
+func (s *Server) completeChatDispatchLegs(ctx context.Context, recorder *logevent.Recorder, corr correlation.Context, req ChatRequest, model ResolvedModel, effort string, facets []logevent.Facet) {
 	if recorder == nil {
 		return
 	}
 	recorder.UpdateIdentity(logEventIdentityFromCorrelation(corr))
-	providerFacet := providerFacetsForChat(model, effort, req)
 	legs := []logevent.Leg{
 		logevent.LegProviderAccepted,
 		logevent.LegProviderResponseStarted,
@@ -153,32 +147,76 @@ func (s *Server) completeChatDispatchLegs(ctx context.Context, recorder *logeven
 		event.Path.Provider = model.Backend
 		event.Outcome.Status = logevent.StatusOK
 		event.Outcome.Duration = recorder.Duration()
-		event.Facets = providerFacet
+		attachBackendFacet(&event, model, effort, &req)
+		attachFacets(&event, facets)
 		recorder.Emit(ctx, event)
 	}
 }
 
-func providerFacetsForChat(model ResolvedModel, effort string, req ChatRequest) logevent.ProviderFacets {
-	var providerFacet logevent.ProviderFacets
-	if model.Backend == BackendCodex {
-		var codexFacet logevent.CodexFacet
-		codexFacet.Model = model.ClaudeModel
-		codexFacet.Effort = effort
-		if req.Reasoning != nil {
-			codexFacet.ReasoningSummary = req.Reasoning.Summary
+func attachFacets(event *logevent.Event, facets []logevent.Facet) {
+	if event == nil {
+		return
+	}
+	for _, facet := range facets {
+		event.Facets.Set(facet)
+	}
+}
+
+func appendFacetSlogAttrs(attrs []slog.Attr, facets []logevent.Facet) []slog.Attr {
+	for _, facet := range facets {
+		if facet == nil {
+			continue
 		}
-		codexFacet.InputCount = len(req.Messages)
-		codexFacet.ToolCount = len(req.Tools) + len(req.Functions)
-		codexFacet.ServiceTier = req.ServiceTier
-		providerFacet.Codex = &codexFacet
+		facetAttrs := facet.FacetAttrs()
+		if len(facetAttrs) == 0 {
+			continue
+		}
+		attrs = append(attrs, slog.Attr{
+			Key:   facet.FacetKey(),
+			Value: slog.GroupValue(facetAttrs...),
+		})
 	}
-	if model.Backend == BackendAnthropic {
-		var anthropicFacet logevent.AnthropicFacet
-		anthropicFacet.Model = model.ClaudeModel
-		anthropicFacet.ThinkingEnabled = req.Reasoning != nil
-		providerFacet.Anthropic = &anthropicFacet
+	return attrs
+}
+
+// attachBackendFacet asks the registered backend factory for the
+// provider-owned facet and attaches it through the logevent.Facet
+// interface.
+func attachBackendFacet(event *logevent.Event, model ResolvedModel, effort string, req *ChatRequest) {
+	if event == nil {
+		return
 	}
-	return providerFacet
+	input := backendFacetInput(model, effort, req)
+	facet := defaultBackendFacetRegistry.requestFacet(model.Backend, input)
+	if facet != nil {
+		event.Facets.Set(facet)
+	}
+}
+
+func backendFacetInput(model ResolvedModel, effort string, req *ChatRequest) backendfacet.Input {
+	input := backendfacet.Input{
+		Backend:          model.Backend,
+		Model:            model.ClaudeModel,
+		Effort:           effort,
+		ServiceTier:      "",
+		ReasoningSummary: "",
+		ThinkingEnabled:  false,
+		InputCount:       0,
+		ToolCount:        0,
+		StreamEventCount: 0,
+		RetryAttempt:     0,
+	}
+	if req == nil {
+		return input
+	}
+	input.ServiceTier = req.ServiceTier
+	input.ThinkingEnabled = req.Reasoning != nil
+	input.InputCount = len(req.Messages)
+	input.ToolCount = len(req.Tools) + len(req.Functions)
+	if req.Reasoning != nil {
+		input.ReasoningSummary = req.Reasoning.Summary
+	}
+	return input
 }
 
 func (s *Server) completeChatLogRecorder(ctx context.Context, recorder *logevent.Recorder) {

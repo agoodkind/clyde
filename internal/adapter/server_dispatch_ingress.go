@@ -92,28 +92,22 @@ func (s *Server) logChatReceived(ctx context.Context, corr correlation.Context, 
 		slog.Any("tool_names", toolNames),
 		slog.Bool("stream", req.Stream),
 	}
-	if ingressCtx.ConversationID != "" {
-		attrs = append(attrs, slog.String("cursor_conversation_id", ingressCtx.ConversationID))
-	}
-	if ingressCtx.RequestID != "" {
-		attrs = append(attrs, slog.String("cursor_request_id", ingressCtx.RequestID))
-	}
 	attrs = append(attrs, ingress.LogAttrs(ingressCtx, req.Model, toolNames)...)
+	attrs = appendFacetSlogAttrs(attrs, ingress.RequestFacets(ingressCtx))
 	attrs = append(attrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDispatch).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.received", attrs...)
 }
 
 // logSubagentMissingGenerationID flags a vendor subagent request that
 // arrived without the expected generation_id metadata.
-func (s *Server) logSubagentMissingGenerationID(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, ingressCtx ingresscontract.IngressContext, discovery RequestDiscovery) {
+func (s *Server) logSubagentMissingGenerationID(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, ingressCtx ingresscontract.IngressContext, ingress ingresscontract.IngressContract, discovery RequestDiscovery) {
 	missingAttrs := []slog.Attr{
 		slog.String("request_id", reqID),
-		slog.String("cursor_conversation_id", ingressCtx.ConversationID),
-		slog.String("cursor_request_path", ingressCtx.PathKind),
 		slog.Bool("subagent_tool_available", ingressCtx.HasSubagentTool),
 		slog.Any("metadata_keys", discovery.MetadataKeys),
 		slog.Any("header_names", HeaderNames(r.Header)),
 	}
+	missingAttrs = append(missingAttrs, ingress.LogAttrs(ingressCtx, "", ingressCtx.RawToolNames)...)
 	missingAttrs = append(missingAttrs, corr.Attrs()...)
 	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCursor).LogAttrs(ctx, slog.LevelInfo, "adapter.cursor.generation_id_missing", missingAttrs...)
 }

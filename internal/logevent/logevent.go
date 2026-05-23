@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -19,7 +20,7 @@ import (
 type Surface string
 
 const (
-	// SurfaceAdapterChat identifies the OpenAI-compatible adapter chat surface.
+	// SurfaceAdapterChat identifies the adapter chat ingress surface.
 	SurfaceAdapterChat Surface = "adapter_chat"
 	// SurfaceMITMIDE identifies the MITM IDE backend surface.
 	SurfaceMITMIDE Surface = "mitm_ide_backend"
@@ -29,10 +30,12 @@ const (
 type RouteFamily string
 
 const (
-	// RouteFamilyOpenAICompatible identifies OpenAI-compatible adapter routes.
-	RouteFamilyOpenAICompatible RouteFamily = "openai_compatible"
-	// RouteFamilyNativeAnthropic identifies native Anthropic adapter routes.
-	RouteFamilyNativeAnthropic RouteFamily = "native_anthropic"
+	// RouteFamilyChatCompatible identifies the adapter's SDK-shaped
+	// chat routes.
+	RouteFamilyChatCompatible RouteFamily = "chat_compatible"
+	// RouteFamilyProviderNative identifies provider-native adapter
+	// routes that expose a vendor wire contract directly.
+	RouteFamilyProviderNative RouteFamily = "provider_native"
 	// RouteFamilyMITMProxy identifies MITM proxy traffic.
 	RouteFamilyMITMProxy RouteFamily = "mitm_proxy"
 )
@@ -45,8 +48,12 @@ const (
 	LegAdapterIngress Leg = "adapter_ingress"
 	// LegAdapterPayload records adapter inline payload handling.
 	LegAdapterPayload Leg = "adapter_payload"
-	// LegAdapterCursorMetadata records Cursor metadata extraction.
-	LegAdapterCursorMetadata Leg = "adapter_cursor_metadata"
+	// LegAdapterClientMetadata records adapter ingress client-identity
+	// metadata extraction. The leg is provider-neutral; provider
+	// packages attach typed facet contributions to fold their
+	// specific identity headers onto the event without naming a
+	// provider in the generic leg constant.
+	LegAdapterClientMetadata Leg = "adapter_client_metadata"
 	// LegAdapterModelResolve records adapter model resolution.
 	LegAdapterModelResolve Leg = "adapter_model_resolve"
 	// LegProviderSendStarted records provider request dispatch start.
@@ -124,22 +131,21 @@ const (
 	SinkInventory SinkName = "inventory_index"
 )
 
-// Identity carries request identity fields shared across all events.
+// Identity carries provider-neutral request identity fields shared
+// across all events. Provider-owned identity attaches via typed
+// [Facet] contributions registered by the owning package.
 type Identity struct {
-	TraceID              string
-	SpanID               string
-	ParentSpanID         string
-	RequestID            string
-	CursorRequestID      string
-	CursorConversationID string
-	CursorGenerationID   string
-	UpstreamRequestID    string
-	UpstreamResponseID   string
-	ChatKey              string
-	ChatKeySource        string
-	ChatRootKey          string
-	ChatBranchKey        string
-	SessionID            string
+	TraceID            string
+	SpanID             string
+	ParentSpanID       string
+	RequestID          string
+	UpstreamRequestID  string
+	UpstreamResponseID string
+	ChatKey            string
+	ChatKeySource      string
+	ChatRootKey        string
+	ChatBranchKey      string
+	SessionID          string
 }
 
 // Path carries path and routing fields shared across all events.
@@ -199,49 +205,143 @@ type PayloadRemoved struct {
 	Items  int    `json:"items,omitempty"`
 }
 
-// ProviderFacets preserves typed provider-specific metadata on shared events.
-type ProviderFacets struct {
-	Codex     *CodexFacet     `json:"codex,omitempty"`
-	Anthropic *AnthropicFacet `json:"anthropic,omitempty"`
-	MITM      *MITMFacet      `json:"mitm,omitempty"`
+// Facet is the typed provider-neutral contribution a provider,
+// transport, or surface package attaches to an [Event]. The generic
+// emitter only calls these methods on a Facet; provider packages
+// own the concrete Go type, the JSON wire shape, and the
+// slog-attribute names under their facet key.
+//
+// Implementations should be value types or pointers to small structs.
+// Two facets that share a [FacetKey] collide; the last one
+// registered through [Facets.Set] wins.
+type Facet interface {
+	// FacetKey returns the stable, lower-case wire key under which
+	// this facet appears in the emitted JSON object and slog group.
+	// The generic layer never branches on the value of this key.
+	FacetKey() string
+	// FacetAttrs returns the slog attributes this facet emits on the
+	// event. The generic emitter wraps the returned attrs in a
+	// [slog.Group] keyed by [FacetKey].
+	FacetAttrs() []slog.Attr
+	// SinkHints returns the typed sink-routing hints this facet
+	// contributes. The generic sink selector reads only the
+	// aggregated [SinkHints]; it does not branch on FacetKey.
+	SinkHints() SinkHints
 }
 
-// CodexFacet carries Codex-specific request metadata that is safe to log.
-type CodexFacet struct {
-	Model                 string `json:"model,omitempty"`
-	Effort                string `json:"effort,omitempty"`
-	ReasoningSummary      string `json:"reasoning_summary,omitempty"`
-	Transport             string `json:"transport,omitempty"`
-	ServiceTier           string `json:"service_tier,omitempty"`
-	PreviousResponseID    bool   `json:"previous_response_id,omitempty"`
-	PromptCacheKeyPresent bool   `json:"prompt_cache_key_present,omitempty"`
-	InputCount            int    `json:"input_count,omitempty"`
-	ToolCount             int    `json:"tool_count,omitempty"`
-	StreamEventCount      int    `json:"stream_event_count,omitempty"`
-	RetryAttempt          int    `json:"retry_attempt,omitempty"`
+// SinkHints carries the typed routing hints a [Facet] contributes to
+// an event. The generic sink selector ORs the hints across all
+// facets on the event; no field in this struct names a provider.
+type SinkHints struct {
+	// HasRawCapture indicates the event references raw request and
+	// response sidecar paths that must mirror to [SinkMITMRaw].
+	HasRawCapture bool
+	// NeedsProviderSidecar indicates the event should mirror to
+	// [SinkProviderSidecar]. Provider packages set this hint on
+	// facets whose payloads carry provider-specific telemetry the
+	// dedicated sidecar log must preserve.
+	NeedsProviderSidecar bool
 }
 
-// AnthropicFacet carries Anthropic-specific request metadata that is safe to log.
-type AnthropicFacet struct {
-	Model            string `json:"model,omitempty"`
-	ThinkingEnabled  bool   `json:"thinking_enabled,omitempty"`
-	StopReason       string `json:"stop_reason,omitempty"`
-	StreamEventCount int    `json:"stream_event_count,omitempty"`
-	RetryAttempt     int    `json:"retry_attempt,omitempty"`
+// Merge combines two SinkHints. Either field set to true on either
+// argument results in true on the returned value.
+func (s SinkHints) Merge(other SinkHints) SinkHints {
+	return SinkHints{
+		HasRawCapture:        s.HasRawCapture || other.HasRawCapture,
+		NeedsProviderSidecar: s.NeedsProviderSidecar || other.NeedsProviderSidecar,
+	}
 }
 
-// MITMFacet carries MITM-specific request metadata that is safe to log.
-type MITMFacet struct {
-	Concern             string `json:"concern,omitempty"`
-	Transport           string `json:"transport,omitempty"`
-	Direction           string `json:"direction,omitempty"`
-	Sequence            int    `json:"sequence,omitempty"`
-	CloseReason         string `json:"close_reason,omitempty"`
-	RequestContentType  string `json:"request_content_type,omitempty"`
-	ResponseContentType string `json:"response_content_type,omitempty"`
-	CapturePath         string `json:"capture_path,omitempty"`
-	RawRequestPath      string `json:"raw_request_path,omitempty"`
-	RawResponsePath     string `json:"raw_response_path,omitempty"`
+// Facets is the typed bundle of [Facet] contributions on an [Event].
+// The bundle preserves registration order so JSON output is stable
+// for a given event.
+type Facets struct {
+	items []Facet
+}
+
+// Set installs facet, replacing any prior facet whose [FacetKey]
+// matches. A nil facet or a facet with an empty FacetKey is ignored.
+func (f *Facets) Set(facet Facet) {
+	if facet == nil {
+		return
+	}
+	key := facet.FacetKey()
+	if key == "" {
+		return
+	}
+	for i, existing := range f.items {
+		if existing.FacetKey() == key {
+			f.items[i] = facet
+			return
+		}
+	}
+	f.items = append(f.items, facet)
+}
+
+// Get returns the registered facet for the supplied key.
+func (f *Facets) Get(key string) (Facet, bool) {
+	for _, existing := range f.items {
+		if existing.FacetKey() == key {
+			return existing, true
+		}
+	}
+	return nil, false
+}
+
+// Len returns the number of facets currently registered on the
+// bundle.
+func (f *Facets) Len() int { return len(f.items) }
+
+// Items returns the registered facets in insertion order. The
+// returned slice is a shared view; callers must not mutate it.
+func (f *Facets) Items() []Facet {
+	if len(f.items) == 0 {
+		return nil
+	}
+	out := make([]Facet, len(f.items))
+	copy(out, f.items)
+	return out
+}
+
+// MarshalJSON encodes the facet bundle as a JSON object keyed by
+// each facet's [FacetKey], with values rendered by the facet's own
+// JSON form. Provider packages own the wire shape under their key;
+// the generic encoder does not interpret the values.
+func (f *Facets) MarshalJSON() ([]byte, error) {
+	if len(f.items) == 0 {
+		return []byte("null"), nil
+	}
+	var buf []byte
+	buf = append(buf, '{')
+	for index, facet := range f.items {
+		if index > 0 {
+			buf = append(buf, ',')
+		}
+		keyBytes, err := json.Marshal(facet.FacetKey())
+		if err != nil {
+			return nil, fmt.Errorf("logevent: marshal facet key %q: %w", facet.FacetKey(), err)
+		}
+		buf = append(buf, keyBytes...)
+		buf = append(buf, ':')
+		valueBytes, err := json.Marshal(facet)
+		if err != nil {
+			return nil, fmt.Errorf("logevent: marshal facet value for %q: %w", facet.FacetKey(), err)
+		}
+		buf = append(buf, valueBytes...)
+	}
+	buf = append(buf, '}')
+	return buf, nil
+}
+
+// AggregateSinkHints returns the union of every registered facet's
+// [SinkHints]. The generic sink selector uses this aggregate without
+// naming any facet.
+func (f *Facets) AggregateSinkHints() SinkHints {
+	var hints SinkHints
+	for _, facet := range f.items {
+		hints = hints.Merge(facet.SinkHints())
+	}
+	return hints
 }
 
 // Event is the central typed event shape for request traffic.
@@ -252,7 +352,7 @@ type Event struct {
 	Path     Path
 	Outcome  Outcome
 	Payload  *PayloadView
-	Facets   ProviderFacets
+	Facets   Facets
 	Sinks    []SinkName
 }
 
@@ -284,15 +384,6 @@ func appendIdentityAttrs(attrs []slog.Attr, identity Identity) []slog.Attr {
 	}
 	if identity.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", identity.RequestID))
-	}
-	if identity.CursorRequestID != "" {
-		attrs = append(attrs, slog.String("cursor_request_id", identity.CursorRequestID))
-	}
-	if identity.CursorConversationID != "" {
-		attrs = append(attrs, slog.String("cursor_conversation_id", identity.CursorConversationID))
-	}
-	if identity.CursorGenerationID != "" {
-		attrs = append(attrs, slog.String("cursor_generation_id", identity.CursorGenerationID))
 	}
 	if identity.UpstreamRequestID != "" {
 		attrs = append(attrs, slog.String("upstream_request_id", identity.UpstreamRequestID))
@@ -396,15 +487,13 @@ func appendPayloadAttrs(attrs []slog.Attr, payload PayloadView) []slog.Attr {
 	return attrs
 }
 
-func appendFacetAttrs(attrs []slog.Attr, facets ProviderFacets) []slog.Attr {
-	if facets.Codex != nil {
-		attrs = append(attrs, slog.Any("codex", *facets.Codex))
-	}
-	if facets.Anthropic != nil {
-		attrs = append(attrs, slog.Any("anthropic", *facets.Anthropic))
-	}
-	if facets.MITM != nil {
-		attrs = append(attrs, slog.Any("mitm", *facets.MITM))
+func appendFacetAttrs(attrs []slog.Attr, facets Facets) []slog.Attr {
+	for _, facet := range facets.items {
+		facetAttrs := facet.FacetAttrs()
+		if len(facetAttrs) == 0 {
+			continue
+		}
+		attrs = append(attrs, slog.Attr{Key: facet.FacetKey(), Value: slog.GroupValue(facetAttrs...)})
 	}
 	return attrs
 }
@@ -662,7 +751,7 @@ func DefaultRequiredLegs() RequiredLegs {
 		SurfaceAdapterChat: {
 			LegAdapterIngress,
 			LegAdapterPayload,
-			LegAdapterCursorMetadata,
+			LegAdapterClientMetadata,
 			LegAdapterModelResolve,
 			LegProviderSendStarted,
 			LegProviderAccepted,
@@ -728,7 +817,7 @@ func ParseLeg(value string) (Leg, bool) {
 	switch leg {
 	case LegAdapterIngress,
 		LegAdapterPayload,
-		LegAdapterCursorMetadata,
+		LegAdapterClientMetadata,
 		LegAdapterModelResolve,
 		LegProviderSendStarted,
 		LegProviderAccepted,
@@ -1018,7 +1107,10 @@ func (r *Recorder) Complete(ctx context.Context) bool {
 	return false
 }
 
-// DefaultSinksForEvent selects sinks for a request event in one place.
+// DefaultSinksForEvent selects sinks for a request event in one
+// place. The selector reads only typed generic fields plus the
+// aggregated [SinkHints] contributed by registered facets, so the
+// generic emit path never names a provider when choosing sinks.
 func DefaultSinksForEvent(event Event) []SinkName {
 	sinks := []SinkName{SinkProcess, SinkConcern, SinkInventory}
 	if event.Identity.ChatKey != "" {
@@ -1027,10 +1119,11 @@ func DefaultSinksForEvent(event Event) []SinkName {
 	if event.Path.Surface == SurfaceMITMIDE {
 		sinks = append(sinks, SinkMITMCapture)
 	}
-	if event.Facets.MITM != nil && (event.Facets.MITM.RawRequestPath != "" || event.Facets.MITM.RawResponsePath != "") {
+	hints := event.Facets.AggregateSinkHints()
+	if hints.HasRawCapture {
 		sinks = append(sinks, SinkMITMRaw)
 	}
-	if event.Facets.Codex != nil || event.Facets.Anthropic != nil {
+	if hints.NeedsProviderSidecar {
 		sinks = append(sinks, SinkProviderSidecar)
 	}
 	return sinks

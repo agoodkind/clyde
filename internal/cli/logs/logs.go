@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -49,6 +50,8 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 			mode := inventoryModeIndexed
 			if deep {
 				mode = inventoryModeDeep
+			} else if configuredMode := strings.TrimSpace(loadedConfig.Logging.Inventory.Mode); configuredMode != "" {
+				mode = inventoryMode(configuredMode)
 			}
 			currentInventory, err := buildInventory(inventoryOptions{
 				StateRoot:        root,
