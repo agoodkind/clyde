@@ -50,23 +50,34 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 }
 
 func modelEntryFromResolved(m ResolvedModel) ModelEntry {
+	// Prefer the empirically-observed context window over the nominal
+	// advertised value for capability reports. This matches what the
+	// Codex capability overlay already does for that backend and gives
+	// other OpenAI-SDK clients a truthful picture of what the upstream
+	// will actually accept. Cursor does not consult these fields for
+	// its in-chat indicator (proven empirically), so the practical
+	// impact is on non-Cursor consumers and Clyde's internal accounting.
+	advertised := m.Context
+	if m.ObservedContext > 0 {
+		advertised = m.ObservedContext
+	}
 	return ModelEntry{
 		ID:                               m.Alias,
 		Object:                           "model",
 		OwnedBy:                          "clyde",
-		Context:                          m.Context,
-		ContextWindow:                    m.Context,
-		ContextLength:                    m.Context,
-		MaxContextLength:                 m.Context,
-		MaxContextTokens:                 m.Context,
-		MaxModelLen:                      m.Context,
-		MaxTokens:                        m.Context,
-		InputTokenLimit:                  m.Context,
-		MaxInputTokens:                   m.Context,
-		ContextTokenLimit:                m.Context,
-		ContextTokenLimitCamel:           m.Context,
-		ContextTokenLimitForMaxMode:      m.Context,
-		ContextTokenLimitForMaxModeCamel: m.Context,
+		Context:                          advertised,
+		ContextWindow:                    advertised,
+		ContextLength:                    advertised,
+		MaxContextLength:                 advertised,
+		MaxContextTokens:                 advertised,
+		MaxModelLen:                      advertised,
+		MaxTokens:                        advertised,
+		InputTokenLimit:                  advertised,
+		MaxInputTokens:                   advertised,
+		ContextTokenLimit:                advertised,
+		ContextTokenLimitCamel:           advertised,
+		ContextTokenLimitForMaxMode:      advertised,
+		ContextTokenLimitForMaxModeCamel: advertised,
 		Efforts:                          m.Efforts,
 		Backend:                          m.Backend,
 		ClaudeModel:                      m.ClaudeModel,

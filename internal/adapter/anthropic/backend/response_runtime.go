@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
+	"goodkind.io/clyde/internal/adapter/finishreason"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
@@ -121,7 +122,7 @@ func RunStreamExecution(
 		hasSubagentToolCall = hasSubagentToolCall || hasSubagent
 		return emit(ev)
 	}
-	anthUsage, _, finishReason, err := RunTranslatorEvents(
+	anthUsage, anthStopReason, finishReason, err := RunTranslatorEvents(
 		rt.AnthropicStreamClient(),
 		ctx,
 		req,
@@ -129,6 +130,17 @@ func RunStreamExecution(
 		reqID,
 		emitTracked,
 	)
+	// Late or interrupted streams may surface as a non-nil err after some
+	// content has already streamed. We still want the finalize sequence
+	// to receive the accumulated usage and a best-effort finish_reason.
+	// Mirror the official Claude Code SSE consumer fallback behavior:
+	// if message_stop never arrived but stop_reason was recorded via
+	// message_delta or StreamStop, derive the OpenAI finish_reason from
+	// that. See research/claude-code-source-code-full/src/services/api/claude.ts
+	// around lines 2341-2350 and 2818-2869.
+	if finishReason == "" {
+		finishReason = finishreason.FromAnthropicStream(anthStopReason)
+	}
 	finalUsage := trackAndLogAnthropicContextUsage(rt, ctx, anthUsage, model, reqID, trackerKey)
 	finalizeAnthropicExecution(rt, ctx, anthropicExecutionFinalize{
 		Req:          req,

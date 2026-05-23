@@ -20,6 +20,27 @@ func TestFromAnthropicStreamKnown(t *testing.T) {
 	}
 }
 
+// TestFromAnthropicStreamTable covers every Anthropic stop_reason value
+// the wire emits, plus the empty and unknown fallbacks. These mappings
+// drive the OpenAI finish_reason on the streaming finalize chunk Cursor
+// reads.
+func TestFromAnthropicStreamTable(t *testing.T) {
+	tests := map[string]string{
+		"end_turn":      "stop",
+		"stop_sequence": "stop",
+		"tool_use":      "tool_calls",
+		"max_tokens":    "length",
+		"refusal":       "content_filter",
+		"":              "stop",
+		"unknown_value": "stop",
+	}
+	for in, want := range tests {
+		if got := FromAnthropicStream(in); got != want {
+			t.Fatalf("FromAnthropicStream(%q) = %q want %q", in, got, want)
+		}
+	}
+}
+
 func TestFromCodexKnown(t *testing.T) {
 	tests := map[string]string{
 		"":                  "stop",

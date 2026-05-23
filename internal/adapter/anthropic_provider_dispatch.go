@@ -81,18 +81,65 @@ func (s *Server) dispatchAnthropicProviderStream(
 	}
 	s.emitRequestStreamOpened(ctx, model, "oauth", reqID, resolvedReq.Model, true)
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
+	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
+	// Anthropic streams sometimes end with a non-nil runErr after the
+	// answer text has fully streamed (a late SSE error frame, a
+	// scanner error, or a non-clean upstream close). When that
+	// happens the OpenAI finalize sequence is still required so
+	// Cursor and other OpenAI-SDK clients receive a finish chunk, a
+	// usage chunk, and the [DONE] terminator. Codex's dispatcher
+	// always finalizes when content was written; the Anthropic path
+	// now mirrors that. The Claude Code reference SSE consumer
+	// applies the same fallback by deriving stop_reason and using
+	// the cumulative usage when message_stop never arrives.
 	if runErr != nil {
-		aerr := anthropicProviderAdapterError(runErr)
-		if streamWriter.headersWritten {
-			if err := streamWriter.writeStreamError(ctx, aerr); err != nil {
-				s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
-					slog.String("backend", "anthropic"),
-					slog.String("request_id", reqID),
-					slog.Any("err", err),
-				)
-			}
-			return nil
-		}
+		return s.handleAnthropicStreamRunErr(ctx, streamWriter, model, reqID, runErr, result, includeUsage)
+	}
+	finishReason := normalizedProviderFinishReason(result)
+	var notices []adapterruntime.UsageNotice
+	if finishReason == defaultProviderFinishReason {
+		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+	}
+	result.UsageNotices = notices
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized",
+		slog.String("backend", "anthropic"),
+		slog.String("request_id", reqID),
+		slog.String("model", model.Alias),
+		slog.Bool("include_usage", includeUsage),
+		slog.String("finish_reason", finishReason),
+		slog.Int("usage_total_tokens", result.Usage.TotalTokens),
+	)
+	if err := streamWriter.finalizeStream(ctx, result, includeUsage); err != nil {
+		return adapterErrUpstreamFailed("anthropic", err.Error(), err)
+	}
+	return nil
+}
+
+// handleAnthropicStreamRunErr decides between the pre-content error
+// path and the post-content finalize-with-partial-result path when the
+// Anthropic provider's Execute returns a non-nil error from a streaming
+// turn. The streamWriter.headersWritten flag is the boundary: when no
+// content has reached the wire we surface a Cursor-safe error envelope,
+// and when content has streamed we still emit the OpenAI finalize
+// sequence with the partial usage and recovered finish_reason.
+func (s *Server) handleAnthropicStreamRunErr(
+	ctx context.Context,
+	streamWriter *providerStreamWriter,
+	model adaptermodel.ResolvedModel,
+	reqID string,
+	runErr error,
+	result adapterprovider.Result,
+	includeUsage bool,
+) error {
+	aerr := anthropicProviderAdapterError(runErr)
+	if !streamWriter.headersWritten {
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_pre_content_error",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.String("model", model.Alias),
+			slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
+			slog.Bool("include_usage", includeUsage),
+		)
 		return aerr
 	}
 	finishReason := normalizedProviderFinishReason(result)
@@ -101,10 +148,40 @@ func (s *Server) dispatchAnthropicProviderStream(
 		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	if err := streamWriter.finalizeStream(ctx, result, resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage); err != nil {
-		return adapterErrUpstreamFailed("anthropic", err.Error(), err)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized_after_runerr",
+		slog.String("backend", "anthropic"),
+		slog.String("request_id", reqID),
+		slog.String("model", model.Alias),
+		slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
+		slog.Bool("include_usage", includeUsage),
+		slog.Bool("headers_written", streamWriter.headersWritten),
+		slog.String("finish_reason", finishReason),
+		slog.Int("usage_total_tokens", result.Usage.TotalTokens),
+	)
+	if err := streamWriter.finalizeStream(ctx, result, includeUsage); err != nil {
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_after_runerr_failed",
+			slog.String("backend", "anthropic"),
+			slog.String("request_id", reqID),
+			slog.Any("err", err),
+		)
 	}
 	return nil
+}
+
+// sanitizeAnthropicRunErr renders a provider error to a short string
+// without leaking response bodies, prompts, tokens, or other sensitive
+// data. Only the error type and a fixed-width prefix of the message are
+// retained so the log line is queryable but bounded.
+func sanitizeAnthropicRunErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	const limit = 200
+	if len(msg) > limit {
+		msg = msg[:limit] + "..."
+	}
+	return fmt.Sprintf("%T: %s", err, msg)
 }
 
 func (s *Server) prepareAnthropicProviderRequest(
@@ -283,9 +360,6 @@ func (s *Server) executeAnthropicPreparedStream(
 		prepared.TrackerKey,
 		writer.WriteEvent,
 	)
-	if err != nil {
-		return adapterprovider.Result{}, err
-	}
 	providerResult := adapterprovider.Result{
 		Usage:               result.Usage,
 		FinishReason:        result.FinishReason,
@@ -294,6 +368,9 @@ func (s *Server) executeAnthropicPreparedStream(
 		ToolCallNames:       result.ToolCallNames,
 		HasSubagentToolCall: result.HasSubagentToolCall,
 		UsageNoticeWindows:  usageWindows(),
+	}
+	if err != nil {
+		return providerResult, err
 	}
 	return providerResult, nil
 }

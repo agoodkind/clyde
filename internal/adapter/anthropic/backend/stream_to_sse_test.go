@@ -3,6 +3,7 @@ package anthropicbackend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -154,5 +155,108 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 			b, _ := json.Marshal(ch)
 			t.Logf("chunk %d: %s", i, string(b))
 		}
+	}
+}
+
+// TestRunStreamExecutionRecoversFinishReasonAfterLateError exercises the
+// late-stream-error fallback path. The fake upstream emits a complete
+// text block, signals a stop reason via StreamStop, and then returns a
+// non-nil error to RunStreamExecution. The result returned to the
+// dispatcher must still carry the OpenAI-normalized finish_reason
+// derived from stop_reason and the cumulative usage so the dispatcher
+// can still send a well-formed finalize sequence (finish chunk + usage
+// chunk + [DONE]) to Cursor. See research/claude-code-source-code-full/
+// src/services/api/claude.ts around lines 2341-2350 and 2818-2869.
+func TestRunStreamExecutionRecoversFinishReasonAfterLateError(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := &fakeResponseDispatcher{}
+	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
+		emit := func(ev anthropic.StreamEvent) error {
+			return sink(ev)
+		}
+		if err := emit(anthropic.StreamTextDelta{BlockIndex: 0, Text: "The capital of France is Paris."}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		if err := emit(anthropic.StreamStop{StopReason: "end_turn"}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		// Late error after the answer has fully streamed. Caller code
+		// must still be able to finalize the OpenAI SSE turn.
+		return anthropic.Usage{InputTokens: 10, OutputTokens: 7}, "end_turn", errors.New("simulated late stream termination")
+	}
+	dispatcher.sseWriter = &fakeResponseSSEWriter{}
+
+	req := anthropic.Request{Model: "claude-opus-4-7"}
+	model := adaptermodel.ResolvedModel{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000}
+
+	emit := func(ev adapterrender.Event) error {
+		return dispatcher.WriteEvent(ev)
+	}
+	result, err := RunStreamExecution(dispatcher, context.Background(), req, model, "req-late-err", time.Now(), "tracker", emit)
+	if err == nil {
+		t.Fatalf("expected late error to propagate, got nil")
+	}
+	if result.FinishReason != "stop" {
+		t.Fatalf("finish_reason = %q, want \"stop\" (recovered from stop_reason=end_turn)", result.FinishReason)
+	}
+	if result.Usage.PromptTokens != 10 {
+		t.Fatalf("prompt_tokens = %d, want 10", result.Usage.PromptTokens)
+	}
+	if result.Usage.CompletionTokens != 7 {
+		t.Fatalf("completion_tokens = %d, want 7", result.Usage.CompletionTokens)
+	}
+	if result.Usage.TotalTokens != 17 {
+		t.Fatalf("total_tokens = %d, want 17", result.Usage.TotalTokens)
+	}
+}
+
+// TestRunStreamExecutionRecoversFinishReasonFromToolUseStopReason verifies
+// the stop_reason -> finish_reason mapping for tool_use surfaces through
+// the late-error fallback path. A turn that ended in a tool call but
+// whose transport surfaced a non-nil error must still report
+// finish_reason="tool_calls".
+func TestRunStreamExecutionRecoversFinishReasonFromToolUseStopReason(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := &fakeResponseDispatcher{}
+	dispatcher.streamEvents = func(_ context.Context, _ anthropic.Request, sink anthropic.EventSink) (anthropic.Usage, string, error) {
+		emit := func(ev anthropic.StreamEvent) error {
+			return sink(ev)
+		}
+		if err := emit(anthropic.StreamTextDelta{BlockIndex: 0, Text: "Calling the tool now."}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		if err := emit(anthropic.StreamToolUseStart{BlockIndex: 1, ToolUseID: "tu_late", ToolUseName: "Read"}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		if err := emit(anthropic.StreamToolUseArgDelta{BlockIndex: 1, PartialJSON: `{"path":"/etc/hosts"}`}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		if err := emit(anthropic.StreamToolUseStop{BlockIndex: 1}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		if err := emit(anthropic.StreamStop{StopReason: "tool_use"}); err != nil {
+			return anthropic.Usage{}, "", err
+		}
+		return anthropic.Usage{InputTokens: 50, OutputTokens: 12}, "tool_use", errors.New("late scanner failure")
+	}
+	dispatcher.sseWriter = &fakeResponseSSEWriter{}
+
+	req := anthropic.Request{Model: "claude-opus-4-7"}
+	model := adaptermodel.ResolvedModel{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000}
+
+	emit := func(ev adapterrender.Event) error {
+		return dispatcher.WriteEvent(ev)
+	}
+	result, err := RunStreamExecution(dispatcher, context.Background(), req, model, "req-late-tool", time.Now(), "tracker", emit)
+	if err == nil {
+		t.Fatalf("expected late error to propagate, got nil")
+	}
+	if result.FinishReason != "tool_calls" {
+		t.Fatalf("finish_reason = %q, want \"tool_calls\"", result.FinishReason)
+	}
+	if result.ToolCallCount < 1 {
+		t.Fatalf("tool_call_count = %d, want >= 1", result.ToolCallCount)
 	}
 }

@@ -148,6 +148,9 @@ anthropic = "reject"
 # opus-4-6: adaptive/default/enabled/disabled thinking, low/medium/high/max
 # effort, 200k context plus 1M beta. Claude Code upstream names this exact
 # family "claude-opus-4-6". Verified against bundled upstream docs 2026-04-24.
+# observed_tokens is a safe-window cap (~90% of nominal) Clyde surfaces to
+# OpenAI-SDK clients via /v1/models so other consumers see a truthful
+# capacity. Cursor does not consult these for its in-chat indicator.
 [adapter.families.opus-4-6]
 model = "claude-opus-4-6"
 supports_tools = true
@@ -156,8 +159,8 @@ efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
 max_output_tokens = 128000
 contexts = [
-  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
-  { tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]" },
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
 ]
 
 # opus-4-7: low/medium/high/max effort, all four thinking modes,
@@ -174,8 +177,8 @@ efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
 max_output_tokens = 32000
 contexts = [
-  { tokens = 200000, alias_suffix = "", wire_suffix = "" },
-  { tokens = 1000000, alias_suffix = "1m", wire_suffix = "[1m]" },
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
 ]
 
 # sonnet-4-6: same effort + thinking matrix as opus-4-7, single
@@ -187,7 +190,7 @@ supports_vision = true
 efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
 max_output_tokens = 64000
-contexts = [{ tokens = 200000, alias_suffix = "", wire_suffix = "" }]
+contexts = [{ tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" }]
 
 # haiku-4-5: server rejects effort
 # (`400 This model does not support the effort parameter`) and
@@ -200,4 +203,4 @@ supports_vision = true
 efforts = []
 thinking_modes = ["default", "enabled", "disabled"]
 max_output_tokens = 16000
-contexts = [{ tokens = 200000, alias_suffix = "", wire_suffix = "" }]
+contexts = [{ tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" }]

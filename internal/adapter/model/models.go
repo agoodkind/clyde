@@ -438,18 +438,22 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 	for _, ctx := range f.Contexts {
 		for _, eff := range f.Efforts {
 			base := ResolvedModel{
-				Backend:         BackendClaude,
-				ClaudeModel:     f.Model + ctx.WireSuffix,
-				Instructions:    f.Instructions,
-				Context:         ctx.Tokens,
-				Efforts:         []string{eff},
-				Effort:          eff,
-				ThinkingModes:   f.ThinkingModes,
-				Thinking:        ThinkingDisabled,
-				MaxOutputTokens: f.MaxOutputTokens,
-				SupportsTools:   *f.SupportsTools,
-				SupportsVision:  *f.SupportsVision,
-				FamilySlug:      slug,
+				Alias:                   "",
+				Backend:                 BackendClaude,
+				ClaudeModel:             f.Model + ctx.WireSuffix,
+				Instructions:            f.Instructions,
+				Context:                 ctx.Tokens,
+				ObservedContext:         ctx.ObservedTokens,
+				Efforts:                 []string{eff},
+				Effort:                  eff,
+				ThinkingModes:           f.ThinkingModes,
+				Thinking:                ThinkingDisabled,
+				MaxOutputTokens:         f.MaxOutputTokens,
+				SupportsTools:           *f.SupportsTools,
+				SupportsVision:          *f.SupportsVision,
+				PassthroughOverride:     "",
+				OpenAICompatPassthrough: config.AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
+				FamilySlug:              slug,
 			}
 			out[buildAlias(family, ctx.AliasSuffix, eff, false)] = base
 			if emitThinking {
@@ -459,17 +463,22 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 			}
 		}
 		out[buildAlias(family, ctx.AliasSuffix, "", false)] = ResolvedModel{
-			Backend:         BackendClaude,
-			ClaudeModel:     f.Model + ctx.WireSuffix,
-			Instructions:    f.Instructions,
-			Context:         ctx.Tokens,
-			Efforts:         f.Efforts,
-			ThinkingModes:   f.ThinkingModes,
-			Thinking:        ThinkingDisabled,
-			MaxOutputTokens: f.MaxOutputTokens,
-			SupportsTools:   *f.SupportsTools,
-			SupportsVision:  *f.SupportsVision,
-			FamilySlug:      slug,
+			Alias:                   "",
+			Backend:                 BackendClaude,
+			ClaudeModel:             f.Model + ctx.WireSuffix,
+			Instructions:            f.Instructions,
+			Context:                 ctx.Tokens,
+			ObservedContext:         ctx.ObservedTokens,
+			Efforts:                 f.Efforts,
+			Effort:                  "",
+			ThinkingModes:           f.ThinkingModes,
+			Thinking:                ThinkingDisabled,
+			MaxOutputTokens:         f.MaxOutputTokens,
+			SupportsTools:           *f.SupportsTools,
+			SupportsVision:          *f.SupportsVision,
+			PassthroughOverride:     "",
+			OpenAICompatPassthrough: config.AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
+			FamilySlug:              slug,
 		}
 	}
 }

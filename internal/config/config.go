@@ -928,9 +928,15 @@ type AdapterFamily struct {
 // is appended to the model id sent to /v1/messages (e.g. "[1m]" for
 // the 1M-context Opus snapshot).
 type AdapterModelContext struct {
-	Tokens      int    `json:"tokens,omitempty" toml:"tokens,omitempty"`
-	AliasSuffix string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
-	WireSuffix  string `json:"wireSuffix,omitempty" toml:"wire_suffix,omitempty"`
+	Tokens int `json:"tokens,omitempty" toml:"tokens,omitempty"`
+	// ObservedTokens is the context window Clyde should surface for
+	// capability reports when it differs from the nominal Tokens
+	// value. Mirrors the Codex family `observed_tokens` semantics so
+	// other OpenAI-SDK clients see a truthful capacity. Zero falls
+	// back to Tokens.
+	ObservedTokens int    `json:"observedTokens,omitempty" toml:"observed_tokens,omitempty"`
+	AliasSuffix    string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
+	WireSuffix     string `json:"wireSuffix,omitempty" toml:"wire_suffix,omitempty"`
 }
 
 // AdapterModel describes one backend the adapter can route to.
