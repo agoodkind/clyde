@@ -419,7 +419,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		"status", resp.StatusCode,
 		"duration_ms", duration.Milliseconds(),
 	)
-	p.recordHTTPCapture(r, resp, httpCaptureRecordInput{
+	p.recordHTTPCapture(r, resp.Header, httpCaptureRecordInput{
 		config:         cfg,
 		policy:         capturePolicy,
 		provider:       provider,
@@ -550,11 +550,11 @@ func responseCaptureIndex(
 	return newCaptureBodyIndexFromReference(ref), int64(len(captureBody))
 }
 
-func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input httpCaptureRecordInput) {
+func (p *Proxy) recordHTTPCapture(r *http.Request, responseHeader http.Header, input httpCaptureRecordInput) {
 	recorder := p.beginHTTPLogRecorder(r, input)
 	ctx := r.Context()
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMIngress, logevent.PhaseStarted, input)
-	p.emitHTTPPayloadLeg(ctx, recorder, r, resp, input)
+	p.emitHTTPPayloadLeg(ctx, recorder, r, responseHeader, input)
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMUpstreamSend, logevent.PhaseStarted, input)
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMUpstreamStart, logevent.PhaseCompleted, input)
 	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMForward, logevent.PhaseCompleted, input)

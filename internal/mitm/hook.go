@@ -501,6 +501,20 @@ func (p *Proxy) runHookedCursorRequest(ctx context.Context, params hookedCursorP
 		"request_bytes", params.requestBytes,
 		"response_bytes", responseBytes,
 	)
+	p.recordHTTPCapture(params.req, result.Headers, cursorHTTPCaptureRecordInput(cursorForwardParams{
+		writer:          params.writer,
+		req:             params.req,
+		body:            params.body,
+		target:          params.target,
+		host:            params.host,
+		started:         params.started,
+		concern:         params.concern,
+		requestBytes:    params.requestBytes,
+		requestRawPath:  params.requestRawPath,
+		responseRawPath: params.responseRawPath,
+		cfg:             params.cfg,
+		capturePolicy:   params.capturePolicy,
+	}, result.Status, responseBytes))
 	return nil
 }
 

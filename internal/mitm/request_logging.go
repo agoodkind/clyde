@@ -66,7 +66,7 @@ func (p *Proxy) emitHTTPLogLeg(ctx context.Context, recorder *logevent.Recorder,
 	recorder.Emit(ctx, event)
 }
 
-func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recorder, r *http.Request, resp *http.Response, input httpCaptureRecordInput) {
+func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recorder, r *http.Request, responseHeader http.Header, input httpCaptureRecordInput) {
 	if recorder == nil {
 		return
 	}
@@ -75,7 +75,7 @@ func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recor
 	facet.Concern = "providers.mitm.wire"
 	facet.Transport = "http"
 	facet.RequestContentType = r.Header.Get("Content-Type")
-	facet.ResponseContentType = resp.Header.Get("Content-Type")
+	facet.ResponseContentType = responseHeader.Get("Content-Type")
 	facet.CapturePath = filepath.Join(expandHome(input.config.CaptureDir), "capture.jsonl")
 	facet.RawRequestPath = rawPathFromCaptureBodyIndex(input.requestIndex)
 	facet.RawResponsePath = rawPathFromCaptureBodyIndex(input.responseIndex)

@@ -185,7 +185,7 @@ func TestProxyHTTPCaptureEmitsRequiredRequestLegSequence(t *testing.T) {
 		responseStatus: http.StatusAccepted,
 	}
 
-	proxy.recordHTTPCapture(req, resp, input)
+	proxy.recordHTTPCapture(req, resp.Header, input)
 
 	seen := make(map[string]bool)
 	for _, event := range captureLogEvents(t, logBuffer.String(), "logging.request.leg") {

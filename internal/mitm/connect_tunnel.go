@@ -435,7 +435,49 @@ func (p *Proxy) forwardCursorRequestToUpstream(params cursorForwardParams) error
 		"request_bytes", params.requestBytes,
 		"response_bytes", responseBytes,
 	)
+	p.recordHTTPCapture(params.req, resp.Header, cursorHTTPCaptureRecordInput(params, resp.StatusCode, responseBytes))
 	return nil
+}
+
+// cursorHTTPCaptureRecordInput packages the cursor request and the
+// upstream response shape into the shared httpCaptureRecordInput used
+// by recordHTTPCapture. Cursor traffic does not summarize bodies in
+// the same way the plain HTTP path does; the captureBodyIndex entries
+// carry the raw file paths (and byte counts) so the leg events can
+// surface raw_request_path / raw_response_path via MITMFacet without
+// reintroducing summary captures.
+func cursorHTTPCaptureRecordInput(params cursorForwardParams, statusCode int, responseBytes int64) httpCaptureRecordInput {
+	requestRef := rawBodyReference{
+		Mode:         "raw_file",
+		RawPath:      params.requestRawPath,
+		Bytes:        params.requestBytes,
+		SHA256:       "",
+		BodyType:     "",
+		Keys:         nil,
+		CaptureError: "",
+	}
+	responseRef := rawBodyReference{
+		Mode:         "raw_file",
+		RawPath:      params.responseRawPath,
+		Bytes:        responseBytes,
+		SHA256:       "",
+		BodyType:     "",
+		Keys:         nil,
+		CaptureError: "",
+	}
+	return httpCaptureRecordInput{
+		config:         params.cfg,
+		policy:         params.capturePolicy,
+		provider:       "cursor",
+		upstreamURL:    "https://" + params.host + params.req.URL.RequestURI(),
+		requestBody:    params.body,
+		responseBody:   nil,
+		requestIndex:   newCaptureBodyIndexFromReference(requestRef),
+		responseIndex:  newCaptureBodyIndexFromReference(responseRef),
+		responseLen:    responseBytes,
+		duration:       time.Since(params.started),
+		responseStatus: statusCode,
+	}
 }
 
 // cursorUpstreamRoundTrip dials the upstream over the proxy's TLS
