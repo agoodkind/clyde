@@ -15,9 +15,7 @@ import (
 
 func TestHandleModelsIncludesLegacyAndOpenAIContextFields(t *testing.T) {
 	cfg := modelMatrixConfig()
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	}, Deps{
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
 		ScratchDir: func() string { return t.TempDir() },
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {

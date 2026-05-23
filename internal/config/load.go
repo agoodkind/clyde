@@ -22,59 +22,127 @@ import (
 func loadConfig(dir string) (*Config, error) {
 	log := slog.Default().With("concern", "process.daemon.config")
 	tomlPath := filepath.Join(dir, "config.toml")
-	if util.FileExists(tomlPath) {
-		var cfg Config
-		data, err := os.ReadFile(tomlPath)
-		if err != nil {
-			log.Warn("config.load.read_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("failed to read %s: %w", tomlPath, err)
-		}
-		if err := toml.Unmarshal(data, &cfg); err != nil {
-			log.Warn("config.load.parse_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
-		}
-		if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
-			log.Warn("config.load.instructions_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
-		}
-		if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
-			log.Warn("config.load.validate_failed",
-				"component", "config",
-				"subcomponent", "load",
-				"path", tomlPath,
-				"format", "toml",
-				"err", err,
-			)
-			return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
-		}
-		log.Debug("config.load.loaded",
+	if !util.FileExists(tomlPath) {
+		return nil, os.ErrNotExist
+	}
+
+	var cfg Config
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		log.Warn("config.load.read_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("failed to read %s: %w", tomlPath, err)
+	}
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		log.Warn("config.load.parse_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
+	}
+	if err := rejectRemovedLoggingConfig(data); err != nil {
+		log.Warn("config.load.removed_logging_config",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+	}
+	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
+		log.Warn("config.load.instructions_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+	}
+	if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
+		log.Warn("config.load.validate_failed",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"err", err,
+		)
+		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
+	}
+	log.Debug("config.load.loaded",
+		"component", "config",
+		"subcomponent", "load",
+		"format", "toml",
+		"path", tomlPath,
+	)
+	return &cfg, nil
+}
+
+type removedLoggingConfig struct {
+	Logging removedLoggingSection `toml:"logging"`
+	MITM    removedMITMSection    `toml:"mitm"`
+}
+
+type removedLoggingSection struct {
+	Body    *removedLoggingBody   `toml:"body"`
+	Cleanup removedLoggingCleanup `toml:"cleanup"`
+}
+
+type removedLoggingBody struct {
+	Mode  *string `toml:"mode"`
+	MaxKB *int    `toml:"max_kb"`
+}
+
+type removedLoggingCleanup struct {
+	AuditOnly   *bool   `toml:"audit_only"`
+	CleanupMode *string `toml:"cleanup_mode"`
+}
+
+type removedMITMSection struct {
+	BodyMode *string `toml:"body_mode"`
+}
+
+func rejectRemovedLoggingConfig(data []byte) error {
+	removedConfig, err := unmarshalRemovedLoggingConfig(data)
+	if err != nil {
+		return err
+	}
+	if removedConfig.Logging.Body != nil {
+		return fmt.Errorf("logging.body has been removed")
+	}
+	if removedConfig.MITM.BodyMode != nil {
+		return fmt.Errorf("mitm.body_mode has been removed")
+	}
+	if removedConfig.Logging.Cleanup.AuditOnly != nil {
+		return fmt.Errorf("logging.cleanup.audit_only has been removed")
+	}
+	if removedConfig.Logging.Cleanup.CleanupMode != nil {
+		return fmt.Errorf("logging.cleanup.cleanup_mode has been removed")
+	}
+	return nil
+}
+
+func unmarshalRemovedLoggingConfig(data []byte) (removedLoggingConfig, error) {
+	var removedConfig removedLoggingConfig
+	if err := toml.Unmarshal(data, &removedConfig); err != nil {
+		slog.Warn("config.load.removed_logging_config_scan_failed",
 			"component", "config",
 			"subcomponent", "load",
 			"format", "toml",
-			"path", tomlPath,
+			"err", err,
 		)
-		return &cfg, nil
+		return removedLoggingConfig{}, fmt.Errorf("scan removed logging config: %w", err)
 	}
-
-	return nil, os.ErrNotExist
+	return removedConfig, nil
 }
 
 func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
@@ -248,7 +316,6 @@ const (
 	defaultLoggingRotationMaxSizeMB  = 64
 	defaultLoggingRotationMaxBackups = 192
 	defaultLoggingRotationMaxAgeDays = 14
-	defaultLoggingBodyMaxKB          = 32
 )
 
 var knownLoggingSinkNames = map[string]bool{
@@ -261,6 +328,7 @@ var knownLoggingSinkNames = map[string]bool{
 	LoggingSinkTranscripts:      true,
 	LoggingSinkMITMCapture:      true,
 	LoggingSinkMITMRaw:          true,
+	LoggingSinkInventory:        true,
 }
 
 func applyLoggingDefaultsAndValidate(cfg *Config) error {
@@ -271,18 +339,27 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if err := applyLoggingCoreDefaults(&cfg.Logging); err != nil {
 		return err
 	}
-	if err := applyLoggingBodyDefaults(&cfg.Logging.Body); err != nil {
-		return err
-	}
 	if err := applyLoggingTranscriptDefaults(&cfg.Logging.Transcript); err != nil {
 		return err
 	}
-	if err := normalizeLoggingSinkOverrides(cfg.Logging.Sinks); err != nil {
+	if err := normalizeLoggingSinks(&cfg.Logging.Sinks); err != nil {
+		return err
+	}
+	if err := normalizeLoggingRequest(&cfg.Logging.Request); err != nil {
+		return err
+	}
+	if err := normalizeLoggingInventory(&cfg.Logging.Inventory); err != nil {
 		return err
 	}
 	if err := normalizeLoggingConcernOverrides(cfg.Logging.Concerns); err != nil {
 		return err
 	}
+
+	rawCaptureEnabled := false
+	if cfg.Logging.RawCapture.Enabled != nil {
+		rawCaptureEnabled = *cfg.Logging.RawCapture.Enabled
+	}
+	cfg.MITM.RawCaptureEnabled = rawCaptureEnabled
 
 	if err := applyMITMDefaultsAndValidate(&cfg.MITM); err != nil {
 		return err
@@ -397,30 +474,28 @@ func applyLoggingCoreDefaults(logging *LoggingConfig) error {
 		v := true
 		logging.Rotation.Compress = &v
 	}
-	return normalizeLoggingRetention("logging.retention", &logging.Retention)
+	if logging.Cleanup.Enabled == nil {
+		v := true
+		logging.Cleanup.Enabled = &v
+	}
+	if logging.RawCapture.Enabled == nil {
+		v := false
+		logging.RawCapture.Enabled = &v
+	}
+	return validateLoggingCleanup("logging.cleanup", logging.Cleanup)
 }
 
-func applyLoggingBodyDefaults(body *LoggingBody) error {
-	mode := strings.ToLower(strings.TrimSpace(body.Mode))
-	if mode == "" {
-		mode = "summary"
+func validateLoggingCleanup(path string, cleanup LoggingCleanup) error {
+	if cleanup.MaxAgeDays != nil && *cleanup.MaxAgeDays < 0 {
+		return fmt.Errorf("%s.max_age_days must be >= 0", path)
 	}
-	body.Mode = mode
-	if body.MaxKB <= 0 {
-		body.MaxKB = defaultLoggingBodyMaxKB
+	if cleanup.MaxBackups != nil && *cleanup.MaxBackups < 0 {
+		return fmt.Errorf("%s.max_backups must be >= 0", path)
 	}
-	if body.MaxKB > 256 {
-		return fmt.Errorf("logging.body.max_kb must be between 1 and 256")
+	if cleanup.MaxTotalMB != nil && *cleanup.MaxTotalMB < 0 {
+		return fmt.Errorf("%s.max_total_mb must be >= 0", path)
 	}
-	switch body.Mode {
-	case "", "summary", "whitelist", "raw", "off":
-		if body.Mode == "" {
-			body.Mode = "summary"
-		}
-		return nil
-	default:
-		return fmt.Errorf("logging.body.mode must be one of summary|whitelist|raw|off")
-	}
+	return nil
 }
 
 func applyLoggingTranscriptDefaults(transcript *LoggingTranscript) error {
@@ -428,39 +503,76 @@ func applyLoggingTranscriptDefaults(transcript *LoggingTranscript) error {
 		v := true
 		transcript.Enabled = &v
 	}
-	tmode := strings.ToLower(strings.TrimSpace(transcript.Mode))
-	if tmode == "" {
-		tmode = "summary"
-	}
-	switch tmode {
-	case "summary", "raw":
-	default:
-		return fmt.Errorf("logging.transcript.mode must be one of summary|raw")
-	}
-	transcript.Mode = tmode
 	return nil
 }
 
-func normalizeLoggingSinkOverrides(sinks LoggingSinks) error {
-	for sinkName, sink := range sinks {
+func normalizeLoggingSinks(sinks *LoggingSinks) error {
+	if sinks == nil {
+		return nil
+	}
+	normalizedEnabled := make([]string, 0, len(sinks.Enabled))
+	seen := make(map[string]bool, len(sinks.Enabled))
+	for _, sinkName := range sinks.Enabled {
 		normalizedName := strings.ToLower(strings.TrimSpace(sinkName))
+		if normalizedName == "" {
+			return fmt.Errorf("logging.sinks.enabled contains an empty sink name")
+		}
 		if !knownLoggingSinkNames[normalizedName] {
-			return fmt.Errorf("logging.sinks.%s is not a known sink", sinkName)
+			return fmt.Errorf("logging.sinks.enabled contains unknown sink %q", sinkName)
 		}
-		if err := normalizeLoggingControl("logging.sinks."+sinkName, sink.Level, sink.Detail); err != nil {
-			return err
+		if seen[normalizedName] {
+			continue
 		}
-		if err := validateLoggingRotation("logging.sinks."+sinkName+".rotation", sink.Rotation); err != nil {
-			return err
+		seen[normalizedName] = true
+		normalizedEnabled = append(normalizedEnabled, normalizedName)
+	}
+	sinks.Enabled = normalizedEnabled
+	return nil
+}
+
+func normalizeLoggingRequest(request *LoggingRequest) error {
+	if request == nil {
+		return nil
+	}
+	policy := strings.ToLower(strings.TrimSpace(request.IncompletePolicy))
+	if policy == "" {
+		policy = "warn"
+	}
+	switch policy {
+	case "warn", "fail_test":
+		request.IncompletePolicy = policy
+	default:
+		return fmt.Errorf("logging.request.incomplete_policy must be one of warn|fail_test")
+	}
+	for surface, legs := range request.RequiredLegs {
+		trimmedSurface := strings.TrimSpace(surface)
+		if trimmedSurface == "" {
+			return fmt.Errorf("logging.request.required_legs contains an empty surface")
 		}
-		if err := normalizeLoggingRetention("logging.sinks."+sinkName+".retention", &sink.Retention); err != nil {
-			return err
+		for _, leg := range legs {
+			if strings.TrimSpace(leg) == "" {
+				return fmt.Errorf("logging.request.required_legs.%s contains an empty leg", surface)
+			}
 		}
-		sink.Level = normalizeLoggingOptionalValue(sink.Level)
-		sink.Detail = normalizeLoggingOptionalValue(sink.Detail)
-		sinks[sinkName] = sink
 	}
 	return nil
+}
+
+func normalizeLoggingInventory(inventory *LoggingInventory) error {
+	if inventory == nil {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(inventory.Mode))
+	if mode == "" {
+		mode = "indexed"
+	}
+	switch mode {
+	case "indexed", "deep":
+		inventory.Mode = mode
+		return nil
+	default:
+		return fmt.Errorf("logging.inventory.mode must be one of indexed|deep")
+	}
 }
 
 func normalizeLoggingConcernOverrides(concerns LoggingConcerns) error {
@@ -473,9 +585,6 @@ func normalizeLoggingConcernOverrides(concerns LoggingConcerns) error {
 			return err
 		}
 		if err := validateLoggingRotation("logging.concerns."+concernName+".rotation", concern.Rotation); err != nil {
-			return err
-		}
-		if err := normalizeLoggingRetention("logging.concerns."+concernName+".retention", &concern.Retention); err != nil {
 			return err
 		}
 		if sinkName := strings.ToLower(strings.TrimSpace(concern.Sink)); sinkName != "" {
@@ -496,10 +605,10 @@ func normalizeLoggingControl(path string, level string, detail string) error {
 		return err
 	}
 	switch normalizeLoggingOptionalValue(detail) {
-	case "", "summary", "verbose", "raw", "off":
+	case "", "summary", "verbose":
 		return nil
 	default:
-		return fmt.Errorf("%s.detail must be one of summary|verbose|raw|off", path)
+		return fmt.Errorf("%s.detail must be one of summary|verbose", path)
 	}
 }
 
@@ -523,32 +632,6 @@ func validateLoggingRotation(path string, rotation LoggingRotation) error {
 		return fmt.Errorf("%s.max_age_days must be >= 0", path)
 	}
 	return nil
-}
-
-func normalizeLoggingRetention(path string, retention *LoggingRetention) error {
-	if retention == nil {
-		return nil
-	}
-	if retention.MaxAgeDays != nil && *retention.MaxAgeDays < 0 {
-		return fmt.Errorf("%s.max_age_days must be >= 0", path)
-	}
-	if retention.MaxBackups != nil && *retention.MaxBackups < 0 {
-		return fmt.Errorf("%s.max_backups must be >= 0", path)
-	}
-	if retention.MaxTotalMB != nil && *retention.MaxTotalMB < 0 {
-		return fmt.Errorf("%s.max_total_mb must be >= 0", path)
-	}
-	mode := normalizeLoggingOptionalValue(retention.CleanupMode)
-	switch mode {
-	case "", "off", "audit_only", "delete":
-		if mode == "" {
-			mode = "off"
-		}
-		retention.CleanupMode = mode
-		return nil
-	default:
-		return fmt.Errorf("%s.cleanup_mode must be one of off|audit_only|delete", path)
-	}
 }
 
 func normalizeLoggingOptionalValue(value string) string {
@@ -649,14 +732,7 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 	}
 	mitm.Providers = providers
 
-	mitm.BodyMode = normalizeMITMBodyMode(mitm.BodyMode)
-	switch mitm.BodyMode {
-	case "summary", "raw", "off":
-	default:
-		return fmt.Errorf("mitm.body_mode must be one of summary|raw|off")
-	}
-
-	mitm.CaptureDir = strings.TrimSpace(mitm.CaptureDir)
+	mitm.CaptureDir = normalizeMITMCaptureDir(strings.TrimSpace(mitm.CaptureDir))
 	if mitm.CaptureDir == "" {
 		mitm.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
 	}
@@ -675,6 +751,17 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 		return err
 	}
 	return nil
+}
+
+func normalizeMITMCaptureDir(captureDir string) string {
+	if captureDir == "" {
+		return ""
+	}
+	cleanCaptureDir := filepath.Clean(captureDir)
+	if filepath.Base(cleanCaptureDir) == "always-on" {
+		return filepath.Dir(cleanCaptureDir)
+	}
+	return captureDir
 }
 
 const (
@@ -982,19 +1069,6 @@ func isValidMITMProviderName(provider string) bool {
 		return false
 	}
 	return true
-}
-
-func normalizeMITMBodyMode(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "", "summary":
-		return "summary"
-	case "raw":
-		return "raw"
-	case "off":
-		return "off"
-	default:
-		return strings.ToLower(strings.TrimSpace(v))
-	}
 }
 
 func normalizeCodexReasoningSummary(v string) string {

@@ -17,9 +17,7 @@ import (
 
 func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
 	tests := []struct {
 		name     string
@@ -79,9 +77,7 @@ func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
 
 func TestAdapterErrorBoundaryLogsCorrelationFields(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		panic("correlated boundary probe")
@@ -125,9 +121,7 @@ func TestAdapterErrorBoundaryLogsCorrelationFields(t *testing.T) {
 
 func TestAdapterAuthErrorEnvelopeFollowsRouteFamily(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	}, func(cfg *config.AdapterConfig) {
+	srv, _ := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.RequireToken = "secret-token"
 	})
 
@@ -162,9 +156,7 @@ func TestAdapterAuthErrorEnvelopeFollowsRouteFamily(t *testing.T) {
 
 func TestAdapterInvalidJSONEnvelopeFollowsRouteFamily(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 	srv.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{}, anthropic.ProviderOptions{})
 
 	openAIReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
@@ -198,9 +190,7 @@ func TestAdapterInvalidJSONEnvelopeFollowsRouteFamily(t *testing.T) {
 
 func TestAnthropicMessagesModelErrorUsesNativeEnvelope(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	}, func(cfg *config.AdapterConfig) {
+	srv, _ := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Models = map[string]config.AdapterModel{
 			"local-codex": {
 				Backend: BackendCodex,

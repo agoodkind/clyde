@@ -46,8 +46,23 @@ func TestUpdateControlValueAppliesAndValidates(t *testing.T) {
 	if cfg.MITM.CaptureDir != "/tmp/captures" {
 		t.Fatalf("CaptureDir=%q want /tmp/captures", cfg.MITM.CaptureDir)
 	}
-	if err := UpdateControlValue(cfg, "mitm.body_mode", "bogus"); err == nil {
-		t.Fatalf("expected invalid body_mode error")
+	if err := UpdateControlValue(cfg, "logging.raw_capture.enabled", "true"); err != nil {
+		t.Fatalf("raw_capture: %v", err)
+	}
+	if cfg.Logging.RawCapture.Enabled == nil || !*cfg.Logging.RawCapture.Enabled {
+		t.Fatalf("RawCapture.Enabled=false want true")
+	}
+	if cfg.MITM.RawCaptureEnabled != true {
+		t.Fatalf("RawCaptureEnabled=false want true")
+	}
+	if err := UpdateControlValue(cfg, "logging.cleanup.enabled", "false"); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if cfg.Logging.Cleanup.Enabled == nil || *cfg.Logging.Cleanup.Enabled {
+		t.Fatalf("Cleanup.Enabled=true want false")
+	}
+	if err := UpdateControlValue(cfg, "logging.raw_capture.enabled", "bogus"); err == nil {
+		t.Fatalf("expected invalid raw_capture error")
 	}
 }
 

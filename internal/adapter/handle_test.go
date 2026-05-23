@@ -18,9 +18,7 @@ import (
 // envelope (OpenAI family for adapterRouteOpenAI here).
 func TestAdapterHandleAdapterErrorEnvelope(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
 	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		return adapterErrInvalidRequest("missing field foo", nil)
@@ -49,9 +47,7 @@ func TestAdapterHandleAdapterErrorEnvelope(t *testing.T) {
 // upstream_failed shape, so the response is always parsable.
 func TestAdapterHandlePlainErrorWrapped(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
 	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		return errors.New("plain error from handler")
@@ -86,9 +82,7 @@ func TestAdapterHandlePlainErrorWrapped(t *testing.T) {
 // catch-all envelope rather than letting the client see an empty 200.
 func TestAdapterHandleBodyNotWrittenBackstop(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		return nil
@@ -122,9 +116,7 @@ func TestAdapterHandleBodyNotWrittenBackstop(t *testing.T) {
 // logged with stack and correlation fields.
 func TestAdapterHandleRecoversPanic(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		panic("synthetic panic")
@@ -161,9 +153,7 @@ func TestAdapterHandleRecoversPanic(t *testing.T) {
 // late error rather than double-writing an envelope on top.
 func TestAdapterHandlePartialResponseThenError(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	handler := srv.handle(adapterRouteOpenAI, func(_ context.Context, hctx *handlerCtx) error {
 		hctx.Writer.Header().Set("Content-Type", "application/json")

@@ -24,28 +24,24 @@ import (
 // stitches the websocket transport, the continuation ledger, and the
 // normalized event emission together.
 type Provider struct {
-	cfg             config.AdapterCodex
-	notices         config.AdapterNotices
-	auth            adapterprovider.AuthLookup
-	log             *slog.Logger
-	httpClient      *http.Client
-	now             func() time.Time
-	sessionCache    *WebsocketSessionCache
-	wsRegistry      *livetrack.Registry[WsSessionMeta]
-	workspaceProbe  *WorkspaceProbe
-	accountID       string
-	bodyLog         BodyLogConfig
-	bodyLogProvider BodyLogConfigProvider
-	fileLog         FileLogRotationConfig
-	retryPolicies   []adapterretry.Policy
+	cfg            config.AdapterCodex
+	notices        config.AdapterNotices
+	auth           adapterprovider.AuthLookup
+	log            *slog.Logger
+	httpClient     *http.Client
+	now            func() time.Time
+	sessionCache   *WebsocketSessionCache
+	wsRegistry     *livetrack.Registry[WsSessionMeta]
+	workspaceProbe *WorkspaceProbe
+	accountID      string
+	fileLog        FileLogRotationConfig
+	retryPolicies  []adapterretry.Policy
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
 // settings the dispatcher knows at construction time.
 type ProviderOptions struct {
 	AccountID        string
-	BodyLog          BodyLogConfig
-	BodyLogProvider  BodyLogConfigProvider
 	FileLog          FileLogRotationConfig
 	WsSessionIdleTTL time.Duration
 	// WsSessionRegistry is the per-daemon livetrack registry for
@@ -78,20 +74,18 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	ConfigureCodexFileLogger(opts.FileLog)
 	wsReg := opts.WsSessionRegistry
 	return &Provider{
-		cfg:             deps.Config.Codex,
-		notices:         deps.Config.Notices,
-		auth:            deps.Auth,
-		log:             log,
-		httpClient:      httpClient,
-		now:             now,
-		sessionCache:    NewWebsocketSessionCache(log, idleTTL, wsReg),
-		wsRegistry:      wsReg,
-		workspaceProbe:  NewWorkspaceProbe(),
-		accountID:       strings.TrimSpace(opts.AccountID),
-		bodyLog:         opts.BodyLog,
-		bodyLogProvider: opts.BodyLogProvider,
-		fileLog:         opts.FileLog,
-		retryPolicies:   appendBuiltinCodexRetryPolicies(adapterretry.FromConfig(deps.Config.Retry)),
+		cfg:            deps.Config.Codex,
+		notices:        deps.Config.Notices,
+		auth:           deps.Auth,
+		log:            log,
+		httpClient:     httpClient,
+		now:            now,
+		sessionCache:   NewWebsocketSessionCache(log, idleTTL, wsReg),
+		wsRegistry:     wsReg,
+		workspaceProbe: NewWorkspaceProbe(),
+		accountID:      strings.TrimSpace(opts.AccountID),
+		fileLog:        opts.FileLog,
+		retryPolicies:  appendBuiltinCodexRetryPolicies(adapterretry.FromConfig(deps.Config.Retry)),
 	}
 }
 
@@ -211,8 +205,6 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		WorkspaceProbe:                 p.workspaceProbe,
 		SessionCache:                   p.sessionCache,
 		Log:                            p.log,
-		BodyLog:                        p.bodyLog,
-		BodyLogProvider:                p.bodyLogProvider,
 		FileLog:                        p.fileLog,
 		ReasoningSummary:               p.cfg.ReasoningSummary,
 		InboundThinkingMaterialization: codexSummaryRenderStrategy(p.cfg.Reasoning.ResolvedRoundTripSummary()),

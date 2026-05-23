@@ -16,8 +16,10 @@ func TestLogsInventoryCommandDetectedThroughFlags(t *testing.T) {
 
 func TestReadOnlyLogsInventorySkipsLoggingSetupStateWrites(t *testing.T) {
 	stateHome := t.TempDir()
+	configHome := t.TempDir()
 	inventoryRoot := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
 	logPath := filepath.Join(inventoryRoot, "clyde-daemon.jsonl")
 	if err := os.WriteFile(logPath, []byte("{}\n"), 0o644); err != nil {
 		t.Fatalf("write inventory fixture: %v", err)

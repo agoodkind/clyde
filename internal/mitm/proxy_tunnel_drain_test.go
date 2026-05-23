@@ -46,9 +46,8 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 			KeyPath:  filepath.Join(caDir, "ca.key"),
 		},
 		CaptureDir: t.TempDir(),
-		BodyMode:   "summary",
 	}
-	proxy, err := NewProxy(mitmCfg, nil, listener)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, listener)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
@@ -113,9 +112,8 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 			KeyPath:  filepath.Join(caDir, "ca.key"),
 		},
 		CaptureDir: t.TempDir(),
-		BodyMode:   "summary",
 	}
-	proxy, err := NewProxy(mitmCfg, nil, listener)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, listener)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}

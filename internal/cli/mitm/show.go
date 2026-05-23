@@ -202,14 +202,13 @@ func resolveSources(cfg *config.Config) sourceSet {
 	concernRoot := slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleDaemon)
 	daemonLog := slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon)
 	captureDir := expandHomeLocal(strings.TrimSpace(cfg.MITM.CaptureDir))
-	alwaysOn := filepath.Join(captureDir, "always-on")
 	return sourceSet{
 		adapterAnthropicReq: filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernAdapterProviderAnthReq)),
 		adapterHTTPErrors:   filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernAdapterHTTPErrors)),
 		adapterChatDir:      filepath.Join(concernRoot, "adapter", "chat"),
 		daemonLog:           daemonLog,
-		mitmCaptureIndex:    filepath.Join(alwaysOn, "capture.jsonl"),
-		mitmRawDir:          filepath.Join(alwaysOn, "raw"),
+		mitmCaptureIndex:    filepath.Join(captureDir, "capture.jsonl"),
+		mitmRawDir:          filepath.Join(captureDir, "raw"),
 	}
 }
 
@@ -239,7 +238,7 @@ func runOnePass(sources sourceSet, id string) LookupPass {
 		"clyde daemon log", sources.daemonLog, id, sourceKindAdapter, &pass.Found,
 	))
 	pass.Sections = append(pass.Sections, searchFile(
-		"mitm always-on capture index", sources.mitmCaptureIndex, id, sourceKindCapture, &pass.Found,
+		"mitm capture index", sources.mitmCaptureIndex, id, sourceKindCapture, &pass.Found,
 	))
 	pass.Raw = searchRawDir(sources.mitmRawDir, id)
 	return pass
@@ -303,7 +302,7 @@ func searchChatDir(dir, id string, found *Correlation) Section {
 
 // searchRawDir lists raw-byte capture files whose name encodes the id and any
 // sibling .metadata.jsonl file that references the id. The directory layout
-// is ${CaptureDir}/always-on/raw/<host>/. The walk is rooted with [os.Root] so
+// is ${CaptureDir}/raw/<host>/. The walk is rooted with [os.Root] so
 // any symlink that escapes the capture dir cannot redirect a metadata read.
 func searchRawDir(dir, id string) RawSection {
 	raw := RawSection{Source: "mitm raw capture files", Path: dir, Files: []string{}}

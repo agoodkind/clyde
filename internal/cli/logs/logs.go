@@ -26,6 +26,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 func newInventoryCmd(f *cli.Factory) *cobra.Command {
 	var stateRoot string
 	var largestFileLimit int
+	var deep bool
 	cmd := &cobra.Command{
 		Use:   "inventory",
 		Short: "Inventory Clyde log files by metadata",
@@ -34,10 +35,28 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 			if root == "" {
 				root = config.DefaultStateDir()
 			}
+			loadedConfig := config.NewConfigWithDefaults()
+			if f != nil && f.Config != nil {
+				loaded, err := f.Config()
+				if err != nil {
+					slog.WarnContext(cmd.Context(), "cli.logs.inventory.config_failed", "component", "cli", "err", err)
+					return fmt.Errorf("load config for log inventory: %w", err)
+				}
+				if loaded != nil {
+					loadedConfig = loaded
+				}
+			}
+			mode := inventoryModeIndexed
+			if deep {
+				mode = inventoryModeDeep
+			}
 			currentInventory, err := buildInventory(inventoryOptions{
 				StateRoot:        root,
 				LargestFileLimit: largestFileLimit,
 				Now:              time.Time{},
+				Mode:             mode,
+				Logging:          loadedConfig.Logging,
+				MITM:             loadedConfig.MITM,
 			})
 			if err != nil {
 				slog.WarnContext(cmd.Context(), "cli.logs.inventory.failed", "component", "cli", "state_root", root, "err", err)
@@ -54,5 +73,6 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "Override the Clyde state root to inventory")
 	cmd.Flags().IntVar(&largestFileLimit, "largest", defaultLargestFileLimit, "Largest file count to show per category")
+	cmd.Flags().BoolVar(&deep, "deep", false, "Perform an exact filesystem scan instead of the indexed inventory view")
 	return cmd
 }

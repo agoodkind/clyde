@@ -39,17 +39,35 @@ type ConcernPolicy struct {
 // smaller than config.LoggingConfig so a separate resolver can own schema
 // loading, defaulting, and validation.
 type SetupPolicy struct {
-	Level            slog.Level
-	ProcessSink      FileSinkPolicy
-	ConcernRoot      string
-	ConcernPolicies  map[string]ConcernPolicy
-	TranscriptPolicy TranscriptPolicy
+	Level             slog.Level
+	ProcessSink       FileSinkPolicy
+	ConcernRoot       string
+	ConcernPolicies   map[string]ConcernPolicy
+	TranscriptPolicy  TranscriptPolicy
+	InventoryPolicy   InventoryPolicy
+	MITMCapturePolicy MITMCapturePolicy
+	CleanupPolicy     CleanupPolicy
+}
+
+// InventoryPolicy describes the lightweight inventory index sink.
+type InventoryPolicy struct {
+	Enabled  bool
+	Root     string
+	Rotation RotationPolicy
+}
+
+// CleanupPolicy describes startup cleanup for rotated log surfaces.
+type CleanupPolicy struct {
+	Enabled    bool
+	Root       string
+	MaxAgeDays int
+	MaxBackups int
+	MaxTotalMB int
 }
 
 // TranscriptPolicy describes the transcript router inputs that slogger needs.
 type TranscriptPolicy struct {
 	Enabled bool
-	Mode    TranscriptMode
 }
 
 // KnownConcern reports whether name is a registered concern key.

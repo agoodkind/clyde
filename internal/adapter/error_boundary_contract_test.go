@@ -244,9 +244,7 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 
 func TestErrorBoundaryWriteShapedErrorOpenAIInvalidJSON(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
 	resp := httptest.NewRecorder()
 	srv.writeShapedError(resp, req, adapterErrInvalidJSON("invalid JSON: contract-canary-AABBCC", nil))
@@ -267,9 +265,7 @@ func TestErrorBoundaryWriteShapedErrorOpenAIInvalidJSON(t *testing.T) {
 
 func TestErrorBoundaryStreamErrorEmitsSingleFrameThenDone(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 	rec := newFakeFlushingRecorder()
 	sse, err := adapteropenai.NewSSEWriter(rec)
 	if err != nil {

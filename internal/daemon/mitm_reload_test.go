@@ -42,7 +42,7 @@ func TestMITMListenerSurvivesInheritanceHandoff(t *testing.T) {
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	parentProxy, err := mitm.NewProxy(mitmCfg, log, parentLis)
+	parentProxy, err := mitm.NewProxy(mitmCfg, config.LoggingRequest{}, log, parentLis)
 	if err != nil {
 		t.Fatalf("NewProxy parent: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestMITMListenerSurvivesInheritanceHandoff(t *testing.T) {
 	// Boot the child proxy on the inherited listener and verify it
 	// answers a fresh request on the same address. The child reads the
 	// CA the parent persisted, exercising the full reload contract.
-	childProxy, err := mitm.NewProxy(mitmCfg, log, childLis)
+	childProxy, err := mitm.NewProxy(mitmCfg, config.LoggingRequest{}, log, childLis)
 	if err != nil {
 		t.Fatalf("NewProxy child: %v", err)
 	}

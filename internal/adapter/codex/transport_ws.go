@@ -16,7 +16,6 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/clyde/internal/correlation"
-	"goodkind.io/clyde/internal/slogger"
 )
 
 type ResponseCreateClientMetadata map[string]string
@@ -142,8 +141,6 @@ type WebsocketTransportConfig struct {
 	TurnMetadata    string
 	Prewarm         bool
 	PrewarmTimeout  time.Duration
-	BodyLog         BodyLogConfig
-	BodyLogProvider BodyLogConfigProvider
 
 	// SessionCache enables persistent ws session reuse when set. The
 	// transport takes the cached session for ConversationID, sends a
@@ -335,7 +332,6 @@ func writeAndParseWebsocketRequest(
 	if err != nil {
 		return NewRunResult("stop"), false, err
 	}
-	logWebsocketFrame(ctx, cfg, payload, raw, warmup)
 	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 		return NewRunResult("stop"), false, err
 	}
@@ -406,43 +402,6 @@ func codexRenderEventStartsClientResponse(event adapterrender.Event) bool {
 	default:
 		return false
 	}
-}
-
-// logWebsocketFrame emits codex.responses.request for every websocket
-// frame Clyde writes (warmup and primary). The frame bytes are exactly
-// what the wire receives, so corruption between BuildRequest and the
-// websocket write is observable in the JSONL feed.
-func logWebsocketFrame(ctx context.Context, cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, frame []byte, warmup bool) {
-	if !warmup {
-		summary := summarizeFinalResponseCreateFrame(cfg, payload, frame)
-		logCodexEventWithConcern(ctx, slog.LevelInfo, "adapter.codex.response_create_frame.summary", slogger.ConcernAdapterProviderCodexWS, summary.toSlogAttrs())
-	}
-	mode, maxBytes := resolveBodyLogConfig(cfg.BodyLog, cfg.BodyLogProvider).Resolve()
-	if mode == BodyLogOff {
-		return
-	}
-	ev := requestEvent{
-		Subcomponent:       "codex",
-		Transport:          "responses_websocket",
-		RequestID:          cfg.RequestID,
-		CursorRequestID:    cfg.CursorRequestID,
-		Correlation:        cfg.Correlation,
-		Alias:              cfg.Alias,
-		Model:              payload.Model,
-		URL:                cfg.URL,
-		BodyBytes:          len(frame),
-		InputCount:         len(payload.Input),
-		ToolCount:          len(payload.Tools),
-		PreviousResponseID: payload.PreviousResponseID,
-		Warmup:             warmup,
-	}
-	body, truncated := applyBodyMode(frame, mode, maxBytes)
-	ev.Body = body
-	ev.BodyTruncated = truncated
-	if mode == BodyLogSummary || mode == BodyLogWhitelist {
-		ev.BodySummary = summarizeWsRequest(payload)
-	}
-	logCodexEvent(ctx, slog.LevelDebug, "codex.responses.request", ev.toSlogAttrs())
 }
 
 func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, error) {

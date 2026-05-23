@@ -152,9 +152,8 @@ func TestProxyShutdownLockoutRace(t *testing.T) {
 			KeyPath:  filepath.Join(caDir, "ca.key"),
 		},
 		CaptureDir: captureDir,
-		BodyMode:   "summary",
 	}
-	proxy, err := NewProxy(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), listener)
+	proxy, err := NewProxy(cfg, config.LoggingRequest{}, slog.New(slog.NewTextHandler(io.Discard, nil)), listener)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
@@ -290,7 +289,6 @@ func TestProxyReloadSequenceLeavesNoAppendFailed(t *testing.T) {
 			KeyPath:  filepath.Join(caDir, "ca.key"),
 		},
 		CaptureDir: captureDir,
-		BodyMode:   "summary",
 	}
 	policy := CaptureFilePolicy{
 		RotationEnabled: true,
@@ -306,7 +304,7 @@ func TestProxyReloadSequenceLeavesNoAppendFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen old: %v", err)
 	}
-	oldProxy, err := NewProxy(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), oldListener)
+	oldProxy, err := NewProxy(cfg, config.LoggingRequest{}, slog.New(slog.NewTextHandler(io.Discard, nil)), oldListener)
 	if err != nil {
 		t.Fatalf("new old proxy: %v", err)
 	}
@@ -326,7 +324,7 @@ func TestProxyReloadSequenceLeavesNoAppendFailed(t *testing.T) {
 		t.Fatalf("listen new: %v", err)
 	}
 	defer func() { _ = newListener.Close() }()
-	newProxy, err := NewProxy(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), newListener)
+	newProxy, err := NewProxy(cfg, config.LoggingRequest{}, slog.New(slog.NewTextHandler(io.Discard, nil)), newListener)
 	if err != nil {
 		t.Fatalf("new new proxy: %v", err)
 	}

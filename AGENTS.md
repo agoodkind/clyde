@@ -26,7 +26,7 @@ Prefer code and tests over this file for exact behavior.
 - Use `internal/config/` for supported config file formats and fields.
 - Use `internal/daemon/` for daemon reload, listener handoff, and live-session ownership.
 - Use `internal/adapter/` for adapter, Cursor, Codex, Anthropic, model routing, and request-shape details.
-- Use `docs/SLOG.md` and `internal/slogger/` for detailed logging and correlation contracts.
+- Use `docs/SLOG.md`, `docs/logging/`, and `internal/slogger/` for detailed logging, sink, inventory, and correlation contracts.
 - Use `docs/cursor.md` for the empirical reasons behind Cursor-specific rules.
 
 Do not add stale snapshots of command tables, schemas, request payloads, local machine setup, or dated audits to this file. Add links or brief pointers instead.
@@ -128,7 +128,7 @@ The adapter is a safety boundary. For model aliases, effort tiers, context budge
 The adapter HTTP listener serves three route families. They share the listener, the auth pipeline, and the error boundary, but each carries its own envelope shape and its own production status. **STRICT RULE: do not conflate route families. Rules, fixes, and rationale on one route family do not transfer to another.**
 
 | Route family | Paths | Status |
-|---|---|---|
+| --- | --- | --- |
 | OpenAI-compatible | `/v1/chat/completions`, `/v1/models`, `/v1/completions` | Production. Cursor BYOK and any OpenAI-SDK-compatible client. |
 | Native Anthropic | `/v1/messages`, `/v1/messages/count_tokens` | Code shipped, untested in production. Proposed for cross-provider use. |
 | Health | `/healthz`, `/` | Ops only. |
@@ -212,6 +212,8 @@ Use structured `log/slog` logging for production diagnostics. Prefer context-awa
 
 Wire capture is per-provider, configured under `[adapter.<provider>.wire_capture]`. Provider-specific modes and the shared rotation budget live in code and config.
 
+Unified request logging uses the typed contract in `internal/logevent`. The source of truth for request legs, payload policy, sinks, inventory, rotation, cleanup, and operations is `docs/logging/`.
+
 ## Debugging and logs
 
 Start debugging by checking Clyde's structured logs before guessing from symptoms. Default log paths are under `$XDG_STATE_HOME/clyde`; when `XDG_STATE_HOME` is unset, use `~/.local/state/clyde`.
@@ -221,7 +223,7 @@ Start debugging by checking Clyde's structured logs before guessing from symptom
 - Main TUI log: `clyde-tui.jsonl` under the state dir.
 - Concern logs: `logs/<concern-path>.jsonl` under the state dir, where concern names from `internal/slogger/` map dots to nested paths.
 - Dedicated Codex sidecar log: `codex.jsonl` under the state dir, unless `CLYDE_CODEX_LOG_PATH` overrides it.
-- MITM captures: Codex CLI, Claude CLI, and Cursor traffic. The always-on baseline writes to `mitm/always-on/` under the state dir, with raw TLS-decrypted request and response bytes under `raw/<host>/` and a per-event index in `capture.jsonl`. Captured hosts include `api2.cursor.sh`, `api3.cursor.sh`, and other hosts under `*.cursor.sh` and `*.cursor.com`, as well as `chatgpt.com`, `openai.com`, and `api.anthropic.com`.
+- MITM captures: Codex CLI, Claude CLI, and Cursor traffic. The capture index writes to `mitm/capture.jsonl` under the state dir, and raw TLS-decrypted request and response bytes write under `mitm/raw/<host>/` only when `logging.raw_capture.enabled` is true. Captured hosts include `api2.cursor.sh`, `api3.cursor.sh`, and other hosts under `*.cursor.sh` and `*.cursor.com`, as well as `chatgpt.com`, `openai.com`, and `api.anthropic.com`.
 - macOS LaunchAgent stderr/stdout fallback: `daemon.log` under `~/.local/state/clyde/`.
 
 Operators may override main process log paths via the logging config block or the `CLYDE_SLOG_PATH` env var. Check the active config before assuming the defaults.

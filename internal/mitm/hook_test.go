@@ -1,6 +1,13 @@
 package mitm
 
 import (
+	"bufio"
+	"bytes"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
@@ -101,4 +108,64 @@ func TestResolveHookModeDefaults(t *testing.T) {
 	if resolveHookMode(config.MITMHookModeSynthesize) != config.MITMHookModeSynthesize {
 		t.Fatalf("expected synthesize to round-trip")
 	}
+}
+
+func TestWriteHookResponseSkipsRawSidecarWhenPathEmpty(t *testing.T) {
+	body := []byte("hook-body")
+	result := &hookResult{
+		Status:        http.StatusAccepted,
+		Headers:       http.Header{"Content-Type": []string{"text/plain"}},
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+	var output bytes.Buffer
+	writer := bufio.NewWriter(&output)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	written, err := writeHookResponse(writer, result, "", logger)
+	if err != nil {
+		t.Fatalf("write hook response: %v", err)
+	}
+	if written <= int64(len(body)) {
+		t.Fatalf("written = %d want header plus body", written)
+	}
+	if !bytes.Contains(output.Bytes(), []byte("HTTP/1.1 202 Accepted")) {
+		t.Fatalf("response missing status line: %q", output.String())
+	}
+	if !bytes.Contains(output.Bytes(), body) {
+		t.Fatalf("response missing body: %q", output.String())
+	}
+}
+
+func TestWriteHookResponseWritesRawSidecarWhenPathSet(t *testing.T) {
+	body := []byte("hook-body")
+	result := &hookResult{
+		Status:        http.StatusAccepted,
+		Headers:       http.Header{"Content-Type": []string{"text/plain"}},
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+	rawPath := filepath.Join(t.TempDir(), "hook.response.raw")
+	var output bytes.Buffer
+	writer := bufio.NewWriter(&output)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	written, err := writeHookResponse(writer, result, rawPath, logger)
+	if err != nil {
+		t.Fatalf("write hook response: %v", err)
+	}
+	if written <= int64(len(body)) {
+		t.Fatalf("written = %d want header plus body", written)
+	}
+	rawBytes, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatalf("read raw sidecar: %v", err)
+	}
+	if !bytes.Contains(rawBytes, []byte("HTTP/1.1 202 Accepted")) {
+		t.Fatalf("raw sidecar missing status line: %q", string(rawBytes))
+	}
+	if !bytes.Contains(rawBytes, body) {
+		t.Fatalf("raw sidecar missing body: %q", string(rawBytes))
+	}
+	assertFileMode(t, rawPath, rawCaptureFileMode)
 }

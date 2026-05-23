@@ -55,15 +55,28 @@ func DefaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {
 // SetupWithPolicy initializes slog from a resolved typed policy. This is the
 // policy-driven path for config/logpolicy resolvers.
 func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
+	if err := applyCleanupPolicy(policy.CleanupPolicy); err != nil {
+		return nopCloser{Closed: false}, err
+	}
 	if err := validateConcernPolicyNames(policy.ConcernPolicies); err != nil {
 		return nopCloser{Closed: false}, err
 	}
-	if !policy.ProcessSink.Enabled {
-		handlers := concernHandlers(policy.ConcernRoot, policy.Level, policy.ProcessSink.Rotation, policy.ConcernPolicies)
+	appendSharedHandlers := func(handlers []slog.Handler, rotation RotationPolicy) ([]slog.Handler, *TranscriptRouter) {
+		handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, rotation, policy.ConcernPolicies)...)
+		if captureHandler := buildMITMCaptureIndexHandler(policy.MITMCapturePolicy, policy.Level); captureHandler != nil {
+			handlers = append(handlers, captureHandler)
+		}
+		if inventoryHandler := buildInventoryIndexHandler(policy.InventoryPolicy, policy.ConcernRoot, policy.Level); inventoryHandler != nil {
+			handlers = append(handlers, inventoryHandler)
+		}
 		router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot)
 		if router != nil {
 			handlers = append(handlers, router)
 		}
+		return handlers, router
+	}
+	if !policy.ProcessSink.Enabled {
+		handlers, router := appendSharedHandlers(nil, policy.ProcessSink.Rotation)
 		if len(handlers) == 0 {
 			handlers = append(handlers, slog.DiscardHandler)
 		}
@@ -106,11 +119,7 @@ func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
 			MaxAgeDays: 0,
 			Compress:   nil,
 		}
-		handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, disabledRotation, policy.ConcernPolicies)...)
-		router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot)
-		if router != nil {
-			handlers = append(handlers, router)
-		}
+		handlers, router := appendSharedHandlers(handlers, disabledRotation)
 		logger := slog.New(newCorrelationHandler(gklog.NewTeeHandler(handlers...)))
 		slog.SetDefault(logger.With("build", version.String()))
 		if router == nil {
@@ -126,11 +135,7 @@ func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
 	handlers := []slog.Handler{
 		gklog.FileJSON(path, policy.Level, rotationConfig(policy.ProcessSink.Rotation)),
 	}
-	handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, policy.ProcessSink.Rotation, policy.ConcernPolicies)...)
-	router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot)
-	if router != nil {
-		handlers = append(handlers, router)
-	}
+	handlers, router := appendSharedHandlers(handlers, policy.ProcessSink.Rotation)
 	logger, closer := gklog.New(gklog.Config{
 		BuildVersion: version.String(),
 		Handlers:     []slog.Handler{newCorrelationHandler(gklog.NewTeeHandler(handlers...))},
@@ -151,7 +156,6 @@ func buildTranscriptRouter(policy TranscriptPolicy, concernRoot string) *Transcr
 	}
 	return NewTranscriptRouter(TranscriptRouterConfig{
 		Root: filepath.Join(concernRoot, "chats"),
-		Mode: policy.Mode,
 	})
 }
 

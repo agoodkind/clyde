@@ -59,16 +59,20 @@ type Config struct {
 type LoggingConfig struct {
 	Level      string            `json:"level,omitempty" toml:"level,omitempty"`
 	Rotation   LoggingRotation   `json:"rotation,omitzero" toml:"rotation,omitempty"`
-	Retention  LoggingRetention  `json:"retention,omitzero" toml:"retention,omitempty"`
-	Body       LoggingBody       `json:"body,omitzero" toml:"body,omitempty"`
+	RawCapture LoggingToggle     `json:"raw_capture,omitzero" toml:"raw_capture,omitempty"`
+	Cleanup    LoggingCleanup    `json:"cleanup,omitzero" toml:"cleanup,omitempty"`
+	Request    LoggingRequest    `json:"request,omitzero" toml:"request,omitempty"`
+	Inventory  LoggingInventory  `json:"inventory,omitzero" toml:"inventory,omitempty"`
 	Paths      LoggingPaths      `json:"paths,omitzero" toml:"paths,omitempty"`
 	Transcript LoggingTranscript `json:"transcript,omitzero" toml:"transcript,omitempty"`
-	Sinks      LoggingSinks      `json:"sinks,omitempty" toml:"sinks,omitempty"`
+	Sinks      LoggingSinks      `json:"sinks,omitzero" toml:"sinks,omitempty"`
 	Concerns   LoggingConcerns   `json:"concerns,omitempty" toml:"concerns,omitempty"`
 }
 
-// LoggingSinks maps stable sink names to per-sink overrides.
-type LoggingSinks map[string]LoggingSink
+// LoggingSinks carries the enabled central sink names.
+type LoggingSinks struct {
+	Enabled []string `json:"enabled,omitempty" toml:"enabled,omitempty"`
+}
 
 // LoggingConcerns maps registered concern names to per-concern overrides.
 type LoggingConcerns map[string]LoggingConcern
@@ -92,25 +96,17 @@ const (
 	LoggingSinkMITMCapture = "mitm_capture"
 	// LoggingSinkMITMRaw names the MITM raw payload sink.
 	LoggingSinkMITMRaw = "mitm_raw"
+	// LoggingSinkInventory names the inventory index sink.
+	LoggingSinkInventory = "inventory_index"
 )
-
-// LoggingSink carries config-layer controls for a named log sink.
-type LoggingSink struct {
-	Enabled   *bool            `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	Level     string           `json:"level,omitempty" toml:"level,omitempty"`
-	Detail    string           `json:"detail,omitempty" toml:"detail,omitempty"`
-	Rotation  LoggingRotation  `json:"rotation,omitzero" toml:"rotation,omitempty"`
-	Retention LoggingRetention `json:"retention,omitzero" toml:"retention,omitempty"`
-}
 
 // LoggingConcern carries config-layer controls for a registered concern.
 type LoggingConcern struct {
-	Enabled   *bool            `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	Level     string           `json:"level,omitempty" toml:"level,omitempty"`
-	Detail    string           `json:"detail,omitempty" toml:"detail,omitempty"`
-	Sink      string           `json:"sink,omitempty" toml:"sink,omitempty"`
-	Rotation  LoggingRotation  `json:"rotation,omitzero" toml:"rotation,omitempty"`
-	Retention LoggingRetention `json:"retention,omitzero" toml:"retention,omitempty"`
+	Enabled  *bool           `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Level    string          `json:"level,omitempty" toml:"level,omitempty"`
+	Detail   string          `json:"detail,omitempty" toml:"detail,omitempty"`
+	Sink     string          `json:"sink,omitempty" toml:"sink,omitempty"`
+	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
 }
 
 // LoggingTranscript controls the per-chat transcript router that tees a
@@ -119,9 +115,6 @@ type LoggingConcern struct {
 type LoggingTranscript struct {
 	// Enabled toggles the per-chat router. Default true.
 	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// Mode is the body redaction mode. summary strips request body fields;
-	// raw passes them through. Default summary.
-	Mode string `json:"mode,omitempty" toml:"mode,omitempty"`
 }
 
 // IsEnabled reports whether the transcript router should be wired in.
@@ -142,19 +135,28 @@ type LoggingRotation struct {
 	Compress   *bool `json:"compress,omitempty" toml:"compress,omitempty"`
 }
 
-// LoggingRetention controls cleanup policy separately from file rotation.
-type LoggingRetention struct {
-	MaxAgeDays  *int   `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
-	MaxBackups  *int   `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
-	MaxTotalMB  *int   `json:"max_total_mb,omitempty" toml:"max_total_mb,omitempty"`
-	Compress    *bool  `json:"compress,omitempty" toml:"compress,omitempty"`
-	CleanupMode string `json:"cleanup_mode,omitempty" toml:"cleanup_mode,omitempty"`
+// LoggingCleanup controls deletion of old log files separately from file rotation.
+type LoggingCleanup struct {
+	Enabled    *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	MaxAgeDays *int  `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
+	MaxBackups *int  `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
+	MaxTotalMB *int  `json:"max_total_mb,omitempty" toml:"max_total_mb,omitempty"`
 }
 
-// LoggingBody controls how adapter.chat.raw emits request bodies.
-type LoggingBody struct {
-	Mode  string `json:"mode,omitempty" toml:"mode,omitempty"`
-	MaxKB int    `json:"max_kb,omitempty" toml:"max_kb,omitempty"`
+// LoggingToggle is a named on/off logging control.
+type LoggingToggle struct {
+	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+}
+
+// LoggingRequest controls request-story contract checks.
+type LoggingRequest struct {
+	RequiredLegs     map[string][]string `json:"required_legs,omitempty" toml:"required_legs,omitempty"`
+	IncompletePolicy string              `json:"incomplete_policy,omitempty" toml:"incomplete_policy,omitempty"`
+}
+
+// LoggingInventory controls how clyde logs inventory discovers log locations.
+type LoggingInventory struct {
+	Mode string `json:"mode,omitempty" toml:"mode,omitempty"`
 }
 
 // LoggingPaths controls per-process JSONL destinations. When a path is empty,
@@ -1179,17 +1181,19 @@ func (r RedactPolicy) StripKeyPrefixesOrDefault() bool {
 }
 
 // MITMConfig configures the local capture proxy and its persistence.
+// RawCaptureEnabled is derived from logging.raw_capture.enabled during config load
+// and is not a user-facing MITM config key.
 type MITMConfig struct {
-	EnabledDefault bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
-	Providers      MITMProviderSet        `json:"providers,omitempty" toml:"providers,omitempty"`
-	BodyMode       string                 `json:"bodyMode,omitempty" toml:"body_mode,omitempty"`
-	CaptureDir     string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
-	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
-	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
-	Hooks          []MITMHookRule         `json:"hooks,omitempty" toml:"hook,omitempty"`
-	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
-	Listen         MITMListenConfig       `json:"listen,omitzero" toml:"listen,omitempty"`
-	CA             MITMCAConfig           `json:"ca,omitzero" toml:"ca,omitempty"`
+	EnabledDefault    bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
+	Providers         MITMProviderSet        `json:"providers,omitempty" toml:"providers,omitempty"`
+	RawCaptureEnabled bool                   `json:"-" toml:"-"`
+	CaptureDir        string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+	Capture           MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
+	CaptureRules      []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
+	Hooks             []MITMHookRule         `json:"hooks,omitempty" toml:"hook,omitempty"`
+	Drift             MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
+	Listen            MITMListenConfig       `json:"listen,omitzero" toml:"listen,omitempty"`
+	CA                MITMCAConfig           `json:"ca,omitzero" toml:"ca,omitempty"`
 }
 
 // MITMListenConfig configures the stable listen address of the in-process

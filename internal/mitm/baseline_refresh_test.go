@@ -7,13 +7,9 @@ import (
 	"testing"
 )
 
-func TestResolveTranscriptPathPrefersAlwaysOnCapture(t *testing.T) {
+func TestResolveTranscriptPathPrefersRootCapture(t *testing.T) {
 	root := t.TempDir()
-	alwaysOn := filepath.Join(root, "always-on")
-	if err := os.MkdirAll(alwaysOn, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	path := filepath.Join(alwaysOn, "capture.jsonl")
+	path := filepath.Join(root, "capture.jsonl")
 	mustWriteLines(t, path, []map[string]any{{"provider": "claude", "kind": "http_request", "t": 1700000000}})
 
 	got, err := ResolveTranscriptPath(root, "claude-code")
@@ -27,7 +23,7 @@ func TestResolveTranscriptPathPrefersAlwaysOnCapture(t *testing.T) {
 
 func TestRefreshBaselineInitializesLocalV2Baseline(t *testing.T) {
 	root := t.TempDir()
-	captureRoot := filepath.Join(root, "always-on")
+	captureRoot := root
 	if err := os.MkdirAll(captureRoot, 0o755); err != nil {
 		t.Fatalf("mkdir capture root: %v", err)
 	}

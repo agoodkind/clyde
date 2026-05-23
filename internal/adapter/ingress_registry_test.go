@@ -19,9 +19,7 @@ import (
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	cfg := baseConfig()
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "off"},
-	}, Deps{
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
 		ScratchDir: func() string { return t.TempDir() },
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {

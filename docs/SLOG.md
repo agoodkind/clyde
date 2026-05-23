@@ -1,29 +1,41 @@
 # SLOG contract
 
-Canonical structured-logging field set for Clyde adapter events. Update this
-file when fields change so AGENTS.md "Debugging and logs" stays accurate.
+Clyde request logging uses one typed event contract in `internal/logevent`. Normal JSONL logs always carry a filtered inline payload view, and raw bodies are only written to raw-capture sidecar files when `logging.raw_capture.enabled = true`.
+
+## Request Events
+
+Request-path events use `logging.request.leg` with these shared fields:
+
+- `trace_id`, `span_id`, `parent_span_id`, `request_id`, Cursor request identifiers, upstream identifiers, and chat partition identifiers when they are known.
+- `surface`, `route_family`, `path`, `method`, `host`, `backend`, `provider`, `leg`, and `phase`.
+- `status`, `status_code`, `error_code`, `error_message`, `duration_ms`, `bytes_in`, and `bytes_out` when available.
+- `payload_summary`, `payload_fields`, and `payload_removed` for the fixed filtered inline payload view.
+- Provider facets such as `codex`, `anthropic`, and `mitm` for safe provider-specific metadata.
+- `sinks` to show the selected sink family for the event.
+
+The required adapter chat legs are `adapter_ingress`, `adapter_payload`, `adapter_cursor_metadata`, `adapter_model_resolve`, `provider_send_started`, `provider_accepted`, `provider_response_started`, `provider_response_done`, `adapter_render`, and `adapter_client_egress`.
+
+The required MITM IDE backend legs are `mitm_ingress`, `mitm_payload`, `mitm_upstream_send`, `mitm_upstream_start`, `mitm_forward`, `mitm_capture_index`, and `mitm_complete`.
+
+A recorder emits `logging.request.incomplete` at warning level when a request story completes without every required leg.
+
+## Payload Policy
+
+The inline payload policy is fixed. It keeps metadata and non-context JSON fields, and it removes context-bearing fields such as messages, input, tools, functions, instructions, prompts, conversation, context, and system content. Removed fields are represented by path, reason, byte count, and item count.
+
+`logging.raw_capture.enabled` controls whether raw request and response bodies can be written to local sidecar files. Normal process logs, concern logs, request logs, and capture indexes do not inline raw payload bodies.
+
+`logging.cleanup.enabled` controls whether retention cleanup may delete rotated logs. When disabled, cleanup policy resolves to `off`.
 
 ## adapter.chat.completed
 
-Emitted once per OpenAI-compatible turn at the end of dispatch. Phase A2
-unified the token shape across providers. The canonical token fields are:
+`adapter.chat.completed` remains the provider usage summary event emitted at the end of dispatch. The canonical token fields are:
 
-- `prompt_tokens` (int): upstream-reported input tokens.
-- `completion_tokens` (int): upstream-reported output tokens.
-- `cache_read_tokens` (int): tokens served from prompt cache.
-- `cache_creation_tokens` (int): tokens that wrote new prompt-cache
-  entries. Anthropic-only on the wire; Codex always reports `0` here.
-- `cache_creation_reported` (bool): whether the upstream contract
-  exposes a cache-creation count. `true` for Anthropic, `false` for
-  Codex per `research/codex/codex-rs/codex-api/src/sse/responses.rs`.
-  Consumers that compute cache-write rates must filter on this flag to
-  avoid treating Codex `0` as a real zero.
-- `derived_cache_creation_tokens` (int): adapter-derived estimate when
-  the upstream did not report a count.
+- `prompt_tokens`: upstream-reported input tokens.
+- `completion_tokens`: upstream-reported output tokens.
+- `cache_read_tokens`: tokens served from prompt cache.
+- `cache_creation_tokens`: tokens that wrote new prompt-cache entries.
+- `cache_creation_reported`: whether the upstream contract exposes a cache-creation count.
+- `derived_cache_creation_tokens`: adapter-derived estimate when the upstream did not report a count.
 
-The legacy `tokens_in` and `tokens_out` field names emitted by earlier
-versions of `adapter.chat.completed` were removed in Phase A2. Operators
-consuming these records must read the canonical names listed above.
-
-The dedicated `adapter.cache.usage` event was retired in the same phase.
-Cache token fields are now carried directly on `adapter.chat.completed`.
+The legacy `tokens_in` and `tokens_out` field names and the dedicated `adapter.cache.usage` event remain retired.

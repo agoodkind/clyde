@@ -124,7 +124,7 @@ func TestAdapterErrUpstreamFailedUsesOpenAICompatibleServerError(t *testing.T) {
 func TestProviderStreamWriterWritesMappedErrorEnvelope(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := newLoggingServer(t, config.LoggingConfig{Body: config.LoggingBody{Mode: "off"}})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 	rec := httptest.NewRecorder()
 	sse, err := adapteropenai.NewSSEWriter(rec)
 	if err != nil {

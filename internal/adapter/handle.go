@@ -34,7 +34,6 @@ type handlerCtx struct {
 // handle wraps an adapterHandler with the global adapter error boundary.
 // The wrapper owns:
 //   - request id assignment and correlation context propagation,
-//   - structured request-debug logging when body logging is enabled,
 //   - livetrack ingress session registration so reload drain sees the
 //     in-flight request; the session is released on handler return,
 //   - 503 rejection when the ingress registry is draining (reload in
@@ -60,10 +59,6 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 		defer ingressCancel()
 		ctx = context.WithValue(ctx, ingressCancelKey{}, ingressCancel)
 		r = r.WithContext(ctx)
-
-		if s.bodyLogging().Mode != "off" {
-			s.logHTTPRequestDebug(ctx, r)
-		}
 
 		ingressSess, draining := s.acquireIngressSession(r, family, reqID)
 		if draining {

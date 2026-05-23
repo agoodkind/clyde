@@ -293,20 +293,25 @@ func (p *Proxy) handleCursorInterceptedRequest(writer *bufio.Writer, req *http.R
 		RequestContentType:  req.Header.Get("Content-Type"),
 		ResponseContentType: "",
 	})
-	requestRawPath, responseRawPath, err := p.nextRawCapturePaths(cfg.CaptureDir, concern, host, req.URL.Path)
-	if err != nil {
-		p.log.WarnContext(req.Context(), "mitm.cursor.request.prepare_raw_paths_failed", "host", host, "err", err)
-		return fmt.Errorf("prepare raw capture paths: %w", err)
-	}
-	requestBytes, err := writeRawCaptureFile(requestRawPath, func(dst io.Writer) error {
+	var requestRawPath string
+	var responseRawPath string
+	requestBytes := int64(len(body))
+	if cfg.RawCaptureEnabled {
+		requestRawPath, responseRawPath, err = p.nextRawCapturePaths(cfg.CaptureDir, concern, host, req.URL.Path)
+		if err != nil {
+			p.log.WarnContext(req.Context(), "mitm.cursor.request.prepare_raw_paths_failed", "host", host, "err", err)
+			return fmt.Errorf("prepare raw capture paths: %w", err)
+		}
+		requestBytes, err = writeRawCaptureFile(requestRawPath, func(dst io.Writer) error {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			return req.Write(dst)
+		})
+		if err != nil {
+			p.log.WarnContext(req.Context(), "mitm.cursor.request.write_raw_failed", "host", host, "err", err)
+			return fmt.Errorf("write raw cursor request: %w", err)
+		}
 		req.Body = io.NopCloser(bytes.NewReader(body))
-		return req.Write(dst)
-	})
-	if err != nil {
-		p.log.WarnContext(req.Context(), "mitm.cursor.request.write_raw_failed", "host", host, "err", err)
-		return fmt.Errorf("write raw cursor request: %w", err)
 	}
-	req.Body = io.NopCloser(bytes.NewReader(body))
 
 	if rule, ok := matchHookRule(cfg.Hooks, host, req.Method, req.URL.Path); ok {
 		return p.runHookedCursorRequest(req.Context(), hookedCursorParams{
@@ -476,12 +481,16 @@ func cursorUpstreamRequest(req *http.Request, body []byte, target string, host s
 }
 
 func (p *Proxy) forwardAndCaptureCursorResponse(client *bufio.Writer, resp *http.Response, responseRawPath string) (int64, error) {
-	responseFile, err := os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
-	if err != nil {
-		p.log.Warn("mitm.cursor.response.open_capture_failed", "path", responseRawPath, "err", err)
-		return 0, fmt.Errorf("open raw cursor response: %w", err)
+	var responseFile *os.File
+	if responseRawPath != "" {
+		var err error
+		responseFile, err = os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
+		if err != nil {
+			p.log.Warn("mitm.cursor.response.open_capture_failed", "path", responseRawPath, "err", err)
+			return 0, fmt.Errorf("open raw cursor response: %w", err)
+		}
+		defer func() { _ = responseFile.Close() }()
 	}
-	defer func() { _ = responseFile.Close() }()
 
 	chunked := resp.ContentLength < 0
 	header := cursorResponseHeader(resp, chunked)
@@ -567,9 +576,11 @@ func writeCursorResponseBytes(client *bufio.Writer, responseFile *os.File, chunk
 		slog.Warn("mitm.cursor.response.write_client_failed", "label", label, "err", err)
 		return 0, fmt.Errorf("write cursor response %s: %w", label, err)
 	}
-	if _, err := responseFile.Write(chunk); err != nil {
-		slog.Warn("mitm.cursor.response.capture_write_failed", "label", label, "err", err)
-		return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
+	if responseFile != nil {
+		if _, err := responseFile.Write(chunk); err != nil {
+			slog.Warn("mitm.cursor.response.capture_write_failed", "label", label, "err", err)
+			return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
+		}
 	}
 	if err := client.Flush(); err != nil {
 		slog.Warn("mitm.cursor.response.flush_failed", "label", label, "err", err)
@@ -583,9 +594,11 @@ func writeCursorResponseString(client *bufio.Writer, responseFile *os.File, text
 		slog.Warn("mitm.cursor.response.write_client_failed", "label", label, "err", err)
 		return 0, fmt.Errorf("write cursor response %s: %w", label, err)
 	}
-	if _, err := responseFile.WriteString(text); err != nil {
-		slog.Warn("mitm.cursor.response.capture_write_failed", "label", label, "err", err)
-		return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
+	if responseFile != nil {
+		if _, err := responseFile.WriteString(text); err != nil {
+			slog.Warn("mitm.cursor.response.capture_write_failed", "label", label, "err", err)
+			return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
+		}
 	}
 	if err := client.Flush(); err != nil {
 		slog.Warn("mitm.cursor.response.flush_failed", "label", label, "err", err)

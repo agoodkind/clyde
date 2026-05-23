@@ -51,11 +51,6 @@ compress = true
 [logging.paths]
 tui = ""
 daemon = ""
-
-[logging.body]
-mode = "summary"
-max_kb = 32
-
 [adapter]
 enabled = true
 direct_oauth = true

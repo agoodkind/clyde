@@ -53,7 +53,7 @@ func fixtureConfig(t *testing.T, tmp string) *config.Config {
 	if err := os.MkdirAll(filepath.Join(logsRoot, "adapter", "chat"), 0o755); err != nil {
 		t.Fatalf("mkdir adapter/chat: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmp, "mitm", "always-on", "raw", "api.anthropic.com"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(tmp, "mitm", "raw", "api.anthropic.com"), 0o755); err != nil {
 		t.Fatalf("mkdir mitm raw: %v", err)
 	}
 	daemonLog := filepath.Join(tmp, "clyde-daemon.jsonl")

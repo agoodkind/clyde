@@ -15,6 +15,10 @@ func writeInventoryTable(writer io.Writer, currentInventory inventory) error {
 	for _, summary := range currentInventory.Categories {
 		rows = append(rows, []string{
 			string(summary.Category),
+			summary.Sink,
+			string(summary.Source),
+			formatBool(summary.RawCaptureEnabled),
+			formatBool(summary.CleanupEnabled),
 			strconv.Itoa(summary.Count),
 			formatBytes(summary.TotalBytes),
 			formatTime(summary.LatestModified),
@@ -22,10 +26,19 @@ func writeInventoryTable(writer io.Writer, currentInventory inventory) error {
 			formatLargestFiles(summary.LargestFiles),
 		})
 	}
-	headers := []string{"Category", "Count", "Total", "Latest modified", "Representative path", "Largest files"}
+	headers := []string{"Category", "Sink", "Source", "Raw", "Cleanup", "Count", "Total", "Latest modified", "Representative path", "Largest files"}
 	widths := columnWidths(headers, rows)
 	if _, err := fmt.Fprintf(writer, "State root: %s\n", currentInventory.StateRoot); err != nil {
 		return writeTableError("write state root line", err)
+	}
+	if _, err := fmt.Fprintf(writer, "Mode: %s\n", currentInventory.Mode); err != nil {
+		return writeTableError("write mode line", err)
+	}
+	if _, err := fmt.Fprintf(writer, "Raw capture: %s\n", formatBool(currentInventory.RawCaptureEnabled)); err != nil {
+		return writeTableError("write raw capture line", err)
+	}
+	if _, err := fmt.Fprintf(writer, "Cleanup: %s\n", formatBool(currentInventory.CleanupEnabled)); err != nil {
+		return writeTableError("write cleanup line", err)
 	}
 	if _, err := io.WriteString(writer, "\n"); err != nil {
 		return writeTableError("write state root spacer", err)
@@ -97,6 +110,13 @@ func writeTableSeparator(writer io.Writer, widths []int) error {
 func writeTableError(operation string, err error) error {
 	slog.Warn("cli.logs.inventory.write_failed", "component", "cli", "operation", operation, "err", err)
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func formatBool(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func formatBytes(size int64) string {

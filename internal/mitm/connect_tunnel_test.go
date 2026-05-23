@@ -154,7 +154,7 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
-	proxy := startCursorMITMTestProxy(t, captureDir, cursorHost, upstream)
+	proxy := startCursorMITMTestProxy(t, captureDir, cursorHost, upstream, true)
 	defer proxy.shutdown()
 
 	caPool := x509.NewCertPool()
@@ -266,6 +266,58 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	}
 }
 
+func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing.T) {
+	const cursorHost = "api2.cursor.sh"
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proxy := &Proxy{
+		log:                   logger,
+		client:                http.DefaultClient,
+		dialContext:           mappedDialContext(cursorHost+":443", upstreamAddr),
+		certMu:                sync.Mutex{},
+		ca:                    nil,
+		cursorTLSClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
+		rawCaptureSeq:         atomic.Uint64{},
+		Tunnels:               newTestTunnelRegistry(),
+		captureWriters:        newCaptureWriterCache(logger),
+		mu:                    sync.RWMutex{},
+		cfg:                   config.MITMConfig{CaptureDir: captureDir},
+		base:                  "",
+		server:                nil,
+	}
+	defer proxy.closeCaptureWriters()
+
+	requestBody := []byte(`{"probe":"summary"}`)
+	req := httptest.NewRequest(http.MethodPost, "https://"+cursorHost+"/aiserver.v1.AnalyticsService/Batch", bytes.NewReader(requestBody))
+	req.Header.Set("content-type", "application/json")
+	var output bytes.Buffer
+	writer := bufio.NewWriter(&output)
+	if err := proxy.handleCursorInterceptedRequest(writer, req, cursorHost+":443", cursorHost); err != nil {
+		t.Fatalf("handle cursor request: %v", err)
+	}
+
+	records := readCaptureJSONL(t, filepath.Join(captureDir, "capture.jsonl"))
+	if len(records) != 1 {
+		t.Fatalf("records = %d want 1: %#v", len(records), records)
+	}
+	if records[0]["request_raw_path"] != "" || records[0]["response_raw_path"] != "" {
+		t.Fatalf("raw paths = %#v %#v, want empty", records[0]["request_raw_path"], records[0]["response_raw_path"])
+	}
+	if _, err := os.Stat(filepath.Join(captureDir, "concerns", "unknown", "raw")); !os.IsNotExist(err) {
+		t.Fatalf("raw dir stat err=%v want not exist", err)
+	}
+	if !strings.Contains(output.String(), "HTTP/1.1 200 OK") {
+		t.Fatalf("response missing status: %q", output.String())
+	}
+}
+
 // echoServer accepts TCP connections, reads a line, and writes back
 // the reversed line. Used as a tunneled upstream in proxy tests.
 type echoServer struct {
@@ -349,7 +401,7 @@ func startTestProxy(t *testing.T) *testProxy {
 		Tunnels:               newTestTunnelRegistry(),
 		captureWriters:        newCaptureWriterCache(logger),
 		mu:                    sync.RWMutex{},
-		cfg:                   config.MITMConfig{CaptureDir: t.TempDir(), BodyMode: "summary"},
+		cfg:                   config.MITMConfig{CaptureDir: t.TempDir()},
 		base:                  "http://" + listener.Addr().String(),
 		server:                nil,
 	}
@@ -360,7 +412,7 @@ func startTestProxy(t *testing.T) *testProxy {
 	return &testProxy{server: server, proxy: p, addr: listener.Addr().String()}
 }
 
-func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server) *testProxy {
+func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server, rawCaptureEnabled bool) *testProxy {
 	t.Helper()
 	listener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
@@ -388,7 +440,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		Tunnels:               newTestTunnelRegistry(),
 		captureWriters:        newCaptureWriterCache(logger),
 		mu:                    sync.RWMutex{},
-		cfg:                   config.MITMConfig{CaptureDir: captureDir, BodyMode: "summary"},
+		cfg:                   config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
 		base:                  "http://" + listener.Addr().String(),
 		server:                nil,
 	}

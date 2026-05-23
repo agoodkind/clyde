@@ -4,12 +4,10 @@ package slogger
 const (
 	ConcernAdapterHTTPIngress             = "adapter.http.ingress"
 	ConcernAdapterHTTPEgress              = "adapter.http.egress"
-	ConcernAdapterHTTPRaw                 = "adapter.http.raw"
 	ConcernAdapterHTTPErrors              = "adapter.http.errors"
 	ConcernAdapterModelsCatalog           = "adapter.models.catalog"
 	ConcernAdapterModelsResolve           = "adapter.models.resolve"
 	ConcernAdapterModelsCursor            = "adapter.models.cursor"
-	ConcernAdapterChatDiscovery           = "adapter.chat.discovery"
 	ConcernAdapterChatPreflight           = "adapter.chat.preflight"
 	ConcernAdapterChatDispatch            = "adapter.chat.dispatch"
 	ConcernAdapterChatRender              = "adapter.chat.render"
@@ -38,12 +36,10 @@ func init() {
 	registerConcernPaths(map[string]string{
 		ConcernAdapterHTTPIngress:             "adapter/http/ingress.jsonl",
 		ConcernAdapterHTTPEgress:              "adapter/http/egress.jsonl",
-		ConcernAdapterHTTPRaw:                 "adapter/http/raw.jsonl",
 		ConcernAdapterHTTPErrors:              "adapter/http/errors.jsonl",
 		ConcernAdapterModelsCatalog:           "adapter/models/catalog.jsonl",
 		ConcernAdapterModelsResolve:           "adapter/models/resolve.jsonl",
 		ConcernAdapterModelsCursor:            "adapter/models/cursor.jsonl",
-		ConcernAdapterChatDiscovery:           "adapter/chat/discovery.jsonl",
 		ConcernAdapterChatPreflight:           "adapter/chat/preflight.jsonl",
 		ConcernAdapterChatDispatch:            "adapter/chat/dispatch.jsonl",
 		ConcernAdapterChatRender:              "adapter/chat/render.jsonl",
@@ -67,18 +63,13 @@ func init() {
 
 	registerEventConcernRules([]eventConcernRule{
 		{"adapter.models.listed", ConcernAdapterModelsCatalog},
-		{"adapter.request.raw", ConcernAdapterHTTPRaw},
-		{"adapter.chat.raw", ConcernAdapterHTTPRaw},
+		{"logging.request.leg", ConcernAdapterChatDispatch},
+		{"logging.request.incomplete", ConcernAdapterChatDispatch},
 		{"adapter.request.panic", ConcernAdapterHTTPErrors},
 		{"adapter.chat.panic", ConcernAdapterHTTPErrors},
 		{"adapter.chat.parse_failed", ConcernAdapterHTTPErrors},
 		{"adapter.chat.validation_failed", ConcernAdapterChatPreflight},
 		{"adapter.preflight.", ConcernAdapterChatPreflight},
-		{"adapter.chat.ingress", ConcernAdapterHTTPIngress},
-		{"adapter.chat.discovery", ConcernAdapterChatDiscovery},
-		{"adapter.tools.normalized", ConcernAdapterChatDiscovery},
-		{"adapter.messages.normalized", ConcernAdapterChatDiscovery},
-		{"adapter.messages.normalize_failed", ConcernAdapterChatPreflight},
 		{"adapter.model.", ConcernAdapterModelsResolve},
 		{"adapter.resolver.", ConcernAdapterModelsResolve},
 		{"adapter.cursor.", ConcernAdapterModelsCursor},

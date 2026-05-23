@@ -15,6 +15,17 @@ const (
 	ControlTypePath   ControlType = "path"
 )
 
+type controlKey string
+
+const (
+	controlKeyDefaultsRemote       controlKey = "defaults.remote_control"
+	controlKeyMITMEnabledDefault   controlKey = "mitm.enabled_default"
+	controlKeyMITMProviders        controlKey = "mitm.providers"
+	controlKeyLoggingRawCapture    controlKey = "logging.raw_capture.enabled"
+	controlKeyLoggingCleanup       controlKey = "logging.cleanup.enabled"
+	controlKeyMITMCaptureDirectory controlKey = "mitm.capture_dir"
+)
+
 type ControlOption struct {
 	Value       string
 	Label       string
@@ -73,18 +84,22 @@ func ListControlDescriptors(cfg *Config) []ControlDescriptor {
 			},
 		},
 		{
-			Key:          "mitm.body_mode",
-			Section:      "MITM Capture",
-			Label:        "MITM body mode",
-			Description:  "How much request/response body content to record in capture logs.",
-			Type:         ControlTypeEnum,
-			Value:        normalizeMITMBodyMode(cfg.MITM.BodyMode),
-			DefaultValue: "summary",
-			Options: []ControlOption{
-				{Value: "summary", Label: "Summary", Description: "Record request/response shape only."},
-				{Value: "raw", Label: "Raw", Description: "Record raw truncated bodies for local debugging."},
-				{Value: "off", Label: "Off", Description: "Disable body capture while still logging metadata."},
-			},
+			Key:          "logging.raw_capture.enabled",
+			Section:      "Logging",
+			Label:        "Raw capture",
+			Description:  "Whether raw request and response bodies should be written to local sidecar files.",
+			Type:         ControlTypeBool,
+			Value:        boolPointerString(cfg.Logging.RawCapture.Enabled, false),
+			DefaultValue: "false",
+		},
+		{
+			Key:          "logging.cleanup.enabled",
+			Section:      "Logging",
+			Label:        "Log cleanup",
+			Description:  "Whether Clyde should delete rotated logs after the configured retention window.",
+			Type:         ControlTypeBool,
+			Value:        boolPointerString(cfg.Logging.Cleanup.Enabled, true),
+			DefaultValue: "true",
 		},
 		{
 			Key:          "mitm.capture_dir",
@@ -102,28 +117,39 @@ func UpdateControlValue(cfg *Config, key, value string) error {
 	if cfg == nil {
 		return fmt.Errorf("nil config")
 	}
-	switch strings.TrimSpace(key) {
-	case "defaults.remote_control":
+	switch controlKey(strings.TrimSpace(key)) {
+	case controlKeyDefaultsRemote:
 		v, err := parseControlBool(value)
 		if err != nil {
 			return err
 		}
 		cfg.Defaults.RemoteControl = v
-	case "mitm.enabled_default":
+	case controlKeyMITMEnabledDefault:
 		v, err := parseControlBool(value)
 		if err != nil {
 			return err
 		}
 		cfg.MITM.EnabledDefault = v
-	case "mitm.providers":
+	case controlKeyMITMProviders:
 		providers, err := parseMITMProviderControlValue(value)
 		if err != nil {
 			return err
 		}
 		cfg.MITM.Providers = providers
-	case "mitm.body_mode":
-		cfg.MITM.BodyMode = normalizeMITMBodyMode(value)
-	case "mitm.capture_dir":
+	case controlKeyLoggingRawCapture:
+		v, err := parseControlBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Logging.RawCapture.Enabled = &v
+		cfg.MITM.RawCaptureEnabled = v
+	case controlKeyLoggingCleanup:
+		v, err := parseControlBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Logging.Cleanup.Enabled = &v
+	case controlKeyMITMCaptureDirectory:
 		cfg.MITM.CaptureDir = strings.TrimSpace(value)
 	default:
 		return fmt.Errorf("unknown config control %q", key)
@@ -136,6 +162,13 @@ func boolString(v bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func boolPointerString(v *bool, fallback bool) string {
+	if v == nil {
+		return boolString(fallback)
+	}
+	return boolString(*v)
 }
 
 func parseControlBool(v string) (bool, error) {

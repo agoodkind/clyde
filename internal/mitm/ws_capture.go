@@ -1,16 +1,19 @@
 package mitm
 
 import (
+	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/logevent"
 )
 
 // isWebsocketUpgrade reports whether the request asks for a
@@ -40,7 +43,6 @@ func isWebsocketUpgrade(r *http.Request) bool {
 // with the error message in the close field.
 func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider string, upstream string) {
 	cfg := p.config()
-	capturePolicy := captureFilePolicyFromConfig(cfg)
 	upstreamURL := wsUpstreamURL(upstream, r.URL.RequestURI())
 	upstreamHeaders := wsUpstreamHeaders(r.Header)
 
@@ -64,9 +66,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	defer func() { _ = clientConn.Close() }()
 	corr := correlation.FromHTTPHeader(r.Header, r.Header.Get(correlation.HeaderRequestID))
 
-	if !p.recordWSStart(cfg.CaptureDir, capturePolicy, provider, upstreamURL, r.Header, upstreamRespHeaders, corr) {
-		return
-	}
+	p.recordWSStart(r.Context(), cfg.CaptureDir, provider, upstreamURL, r.Header, upstreamRespHeaders, corr)
 
 	state := &wsRelayState{
 		mu:           sync.Mutex{},
@@ -76,14 +76,13 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		closeChan:    make(chan struct{}),
 	}
 	closeBoth := wsCloseBoth(state, clientConn, upstreamConn)
-	relay := p.wsMakeRelay(wsRelayParams{
-		state:         state,
-		closeBoth:     closeBoth,
-		provider:      provider,
-		upstreamURL:   upstreamURL,
-		captureDir:    cfg.CaptureDir,
-		capturePolicy: capturePolicy,
-		corr:          corr,
+	relay := p.wsMakeRelay(r.Context(), wsRelayParams{
+		state:       state,
+		closeBoth:   closeBoth,
+		provider:    provider,
+		upstreamURL: upstreamURL,
+		captureDir:  cfg.CaptureDir,
+		corr:        corr,
 	})
 	go func() {
 		defer func() {
@@ -104,7 +103,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 
 	<-state.closeChan
 
-	p.recordWSEnd(cfg.CaptureDir, capturePolicy, provider, upstreamURL, state.messageCount, corr, state.closeErr)
+	p.recordWSEnd(r.Context(), cfg.CaptureDir, provider, upstreamURL, state.messageCount, corr, state.closeErr)
 	queueBaselineRefresh(r.Context(), cfg, provider, p.log)
 	p.log.Info("mitm.ws.closed", "url", upstreamURL, "messages", state.messageCount)
 }
@@ -131,20 +130,19 @@ func wsCloseBoth(state *wsRelayState, clientConn, upstreamConn *websocket.Conn) 
 }
 
 type wsRelayParams struct {
-	state         *wsRelayState
-	closeBoth     func(error)
-	provider      string
-	upstreamURL   string
-	captureDir    string
-	capturePolicy CaptureFilePolicy
-	corr          correlation.Context
+	state       *wsRelayState
+	closeBoth   func(error)
+	provider    string
+	upstreamURL string
+	captureDir  string
+	corr        correlation.Context
 }
 
 // wsMakeRelay returns the per-direction relay loop. It reads frames
 // from src, mirrors them to dst, and records each frame to the JSONL
 // capture stream. On any read, write, or capture failure it triggers
 // the shared closeBoth so the partner direction also exits.
-func (p *Proxy) wsMakeRelay(params wsRelayParams) func(src, dst *websocket.Conn, fromClient bool) {
+func (p *Proxy) wsMakeRelay(ctx context.Context, params wsRelayParams) func(src, dst *websocket.Conn, fromClient bool) {
 	return func(src, dst *websocket.Conn, fromClient bool) {
 		for {
 			messageType, payload, err := src.ReadMessage()
@@ -160,21 +158,16 @@ func (p *Proxy) wsMakeRelay(params wsRelayParams) func(src, dst *websocket.Conn,
 			if messageType == websocket.TextMessage {
 				text = string(payload)
 			}
-			ev := map[string]any{
-				"provider":    params.provider,
-				"kind":        "ws_msg",
-				"t":           currentTime().Unix(),
-				"url":         params.upstreamURL,
-				"from_client": fromClient,
-				"len":         len(payload),
-				"text":        text,
-				"seq":         count,
-			}
-			addCaptureCorrelation(ev, params.corr)
-			if err := p.recordWSMessage(params.captureDir, ev, params.capturePolicy); err != nil {
-				params.closeBoth(err)
-				return
-			}
+			p.recordWSMessage(ctx, wsMessageCaptureInput{
+				CaptureDir:  params.captureDir,
+				Provider:    params.provider,
+				UpstreamURL: params.upstreamURL,
+				Payload:     payload,
+				Text:        text,
+				FromClient:  fromClient,
+				Sequence:    count,
+				Correlation: params.corr,
+			})
 			if err := dst.WriteMessage(messageType, payload); err != nil {
 				params.closeBoth(err)
 				return
@@ -261,113 +254,158 @@ func (p *Proxy) dialWSUpstream(w http.ResponseWriter, r *http.Request, upstreamU
 	return upstreamConn, headersCopy, nil
 }
 
-// recordWSStart writes the ws_start capture event. Returns false if
-// the capture sink is already closed so the caller aborts the
-// websocket session early instead of relaying frames whose captures
-// would all fail.
-func (p *Proxy) recordWSStart(captureDir string, policy CaptureFilePolicy, provider string, upstreamURL string, requestHeaders http.Header, responseHeaders http.Header, corr correlation.Context) bool {
-	startEvent := map[string]any{
-		"provider":         provider,
-		"kind":             "ws_start",
-		"t":                currentTime().Unix(),
-		"url":              upstreamURL,
-		"request_headers":  redactHeaders(requestHeaders),
-		"response_headers": redactHeaders(responseHeaders),
-	}
-	addCaptureCorrelation(startEvent, corr)
-	err := p.writeCaptureEvent(captureDir, startEvent, policy)
-	if err == nil {
-		return true
-	}
-	if errors.Is(err, ErrCaptureSinkClosed) {
-		p.log.Debug("mitm.ws.capture_skipped_closed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-		)
-		return false
-	}
-	p.log.Warn("mitm.ws.capture_start_failed",
-		"component", "mitm",
-		"concern", "providers.mitm.wire",
-		"err", err,
-	)
-	return true
+// recordWSStart writes the ws_start capture event through the unified sink model.
+func (p *Proxy) recordWSStart(ctx context.Context, captureDir string, provider string, upstreamURL string, requestHeaders http.Header, responseHeaders http.Header, corr correlation.Context) {
+	requestContentType := requestHeaders.Get("Content-Type")
+	responseContentType := responseHeaders.Get("Content-Type")
+	var input wsCaptureEventInput
+	input.CaptureDir = captureDir
+	input.Provider = provider
+	input.UpstreamURL = upstreamURL
+	input.Correlation = corr
+	input.Transport = "websocket"
+	input.Phase = logevent.PhaseStarted
+	input.RequestContentType = requestContentType
+	input.ResponseContentType = responseContentType
+	p.emitWSCaptureEvent(ctx, input)
 }
 
-// recordWSMessage writes a single ws_msg capture event. Returns
-// ErrCaptureSinkClosed if the cache is closed so the caller can tear
-// down the relay; other errors are logged and swallowed because a
-// single capture failure must not break the proxied session.
-func (p *Proxy) recordWSMessage(captureDir string, ev map[string]any, policy CaptureFilePolicy) error {
-	err := p.writeCaptureEvent(captureDir, ev, policy)
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, ErrCaptureSinkClosed) {
-		return err
-	}
-	p.log.Warn("mitm.ws.capture_msg_failed",
-		"component", "mitm",
-		"concern", "providers.mitm.wire",
-		"err", err,
-	)
-	return nil
+type wsMessageCaptureInput struct {
+	CaptureDir  string
+	Provider    string
+	UpstreamURL string
+	Payload     []byte
+	Text        string
+	FromClient  bool
+	Sequence    int
+	Correlation correlation.Context
 }
 
-// recordWSEnd writes the terminal ws_end capture event.
-func (p *Proxy) recordWSEnd(captureDir string, policy CaptureFilePolicy, provider string, upstreamURL string, messageCount int, corr correlation.Context, closeErr error) {
-	endEvent := map[string]any{
-		"provider": provider,
-		"kind":     "ws_end",
-		"t":        currentTime().Unix(),
-		"url":      upstreamURL,
-		"messages": messageCount,
+// recordWSMessage writes a single ws_msg capture event through the unified sink model.
+func (p *Proxy) recordWSMessage(ctx context.Context, input wsMessageCaptureInput) {
+	direction := "upstream_to_client"
+	bytesIn := int64(0)
+	bytesOut := int64(len(input.Payload))
+	if input.FromClient {
+		direction = "client_to_upstream"
+		bytesIn = int64(len(input.Payload))
+		bytesOut = 0
 	}
-	addCaptureCorrelation(endEvent, corr)
+	payload := logevent.FilterPayload([]byte(input.Text), "text/plain")
+	var eventInput wsCaptureEventInput
+	eventInput.CaptureDir = input.CaptureDir
+	eventInput.Provider = input.Provider
+	eventInput.UpstreamURL = input.UpstreamURL
+	eventInput.Correlation = input.Correlation
+	eventInput.Transport = "websocket"
+	eventInput.Direction = direction
+	eventInput.Sequence = input.Sequence
+	eventInput.Phase = logevent.PhaseCompleted
+	eventInput.BytesIn = bytesIn
+	eventInput.BytesOut = bytesOut
+	eventInput.Payload = &payload
+	p.emitWSCaptureEvent(ctx, eventInput)
+}
+
+// recordWSEnd writes the terminal ws_end capture event through the unified sink model.
+func (p *Proxy) recordWSEnd(ctx context.Context, captureDir string, provider string, upstreamURL string, messageCount int, corr correlation.Context, closeErr error) {
+	closeReason := ""
+	status := logevent.StatusOK
+	errorMessage := ""
 	if closeErr != nil {
-		endEvent["err"] = closeErr.Error()
+		closeReason = closeErr.Error()
+		status = logevent.StatusError
+		errorMessage = closeReason
 	}
-	err := p.writeCaptureEvent(captureDir, endEvent, policy)
-	if err == nil {
-		return
-	}
-	if errors.Is(err, ErrCaptureSinkClosed) {
-		p.log.Debug("mitm.ws.capture_end_skipped_closed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-		)
-		return
-	}
-	p.log.Warn("mitm.ws.capture_end_failed",
-		"component", "mitm",
-		"concern", "providers.mitm.wire",
-		"err", err,
-	)
+	var input wsCaptureEventInput
+	input.CaptureDir = captureDir
+	input.Provider = provider
+	input.UpstreamURL = upstreamURL
+	input.Correlation = corr
+	input.Transport = "websocket"
+	input.Sequence = messageCount
+	input.CloseReason = closeReason
+	input.Phase = logevent.PhaseCompleted
+	input.Status = status
+	input.Error = errorMessage
+	p.emitWSCaptureEvent(ctx, input)
 }
 
-func addCaptureCorrelation(event map[string]any, corr correlation.Context) {
-	if corr.TraceID != "" {
-		event["trace_id"] = string(corr.TraceID)
+type wsCaptureEventInput struct {
+	CaptureDir          string
+	Provider            string
+	UpstreamURL         string
+	Correlation         correlation.Context
+	Transport           string
+	Direction           string
+	Sequence            int
+	CloseReason         string
+	RequestContentType  string
+	ResponseContentType string
+	Phase               logevent.Phase
+	Status              logevent.Status
+	Error               string
+	BytesIn             int64
+	BytesOut            int64
+	Payload             *logevent.PayloadView
+}
+
+func (p *Proxy) emitWSCaptureEvent(ctx context.Context, input wsCaptureEventInput) {
+	if p == nil || p.requestLog == nil {
+		return
 	}
-	if corr.SpanID != "" {
-		event["span_id"] = string(corr.SpanID)
+	var identity logevent.Identity
+	identity.TraceID = string(input.Correlation.TraceID)
+	identity.SpanID = string(input.Correlation.SpanID)
+	identity.ParentSpanID = string(input.Correlation.ParentSpanID)
+	identity.RequestID = input.Correlation.RequestID
+	identity.CursorRequestID = input.Correlation.CursorRequestID
+	identity.CursorConversationID = input.Correlation.CursorConversationID
+	identity.CursorGenerationID = input.Correlation.CursorGenerationID
+	identity.UpstreamRequestID = input.Correlation.UpstreamRequestID
+	identity.UpstreamResponseID = input.Correlation.UpstreamResponseID
+	parsedURL, err := url.Parse(input.UpstreamURL)
+	pathValue := input.UpstreamURL
+	host := ""
+	if err == nil {
+		pathValue = parsedURL.Path
+		host = parsedURL.Host
 	}
-	if corr.ParentSpanID != "" {
-		event["parent_span_id"] = string(corr.ParentSpanID)
+	status := input.Status
+	if status == "" {
+		status = logevent.StatusOK
 	}
-	if corr.RequestID != "" {
-		event["request_id"] = corr.RequestID
-	}
-	if corr.CursorRequestID != "" {
-		event["cursor_request_id"] = corr.CursorRequestID
-	}
-	if corr.CursorConversationID != "" {
-		event["cursor_conversation_id"] = corr.CursorConversationID
-	}
-	if corr.UpstreamRequestID != "" {
-		event["upstream_request_id"] = corr.UpstreamRequestID
-	}
-	if corr.UpstreamResponseID != "" {
-		event["upstream_response_id"] = corr.UpstreamResponseID
-	}
+	var outcome logevent.Outcome
+	outcome.Status = status
+	outcome.ErrorMessage = input.Error
+	outcome.BytesIn = input.BytesIn
+	outcome.BytesOut = input.BytesOut
+	var path logevent.Path
+	path.Surface = logevent.SurfaceMITMIDE
+	path.RouteFamily = logevent.RouteFamilyMITMProxy
+	path.Leg = logevent.LegMITMCaptureIndex
+	path.Phase = input.Phase
+	path.Path = pathValue
+	path.Method = http.MethodGet
+	path.Host = host
+	path.Provider = input.Provider
+	path.UpstreamURL = input.UpstreamURL
+	var facet logevent.MITMFacet
+	facet.Concern = "providers.mitm.wire"
+	facet.Transport = input.Transport
+	facet.Direction = input.Direction
+	facet.Sequence = input.Sequence
+	facet.CloseReason = input.CloseReason
+	facet.RequestContentType = input.RequestContentType
+	facet.ResponseContentType = input.ResponseContentType
+	facet.CapturePath = filepath.Join(expandHome(input.CaptureDir), "capture.jsonl")
+	var providerFacets logevent.ProviderFacets
+	providerFacets.MITM = &facet
+	var event logevent.Event
+	event.Identity = identity
+	event.Path = path
+	event.Outcome = outcome
+	event.Payload = input.Payload
+	event.Facets = providerFacets
+	p.requestLog.Emit(ctx, event)
 }

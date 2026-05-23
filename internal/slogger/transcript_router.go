@@ -19,16 +19,6 @@ import (
 	"time"
 )
 
-// TranscriptMode controls body redaction for teed records.
-type TranscriptMode string
-
-const (
-	// TranscriptModeSummary strips known body fields before write.
-	TranscriptModeSummary TranscriptMode = "summary"
-	// TranscriptModeRaw passes records through verbatim.
-	TranscriptModeRaw TranscriptMode = "raw"
-)
-
 const (
 	chatKeyAttr              = "chat_key"
 	requestIDAttr            = "request_id"
@@ -37,24 +27,20 @@ const (
 	transcriptDirPerm        = 0o755
 )
 
-// transcriptAllowlist is the set of slog message names that get teed into the
-// per-chat file. Everything else stays in the per-concern file only.
+// transcriptAllowlist is the set of unified request event names that get teed
+// into the per-chat file. Everything else stays in the per-concern file only.
 var transcriptAllowlist = map[string]struct{}{
-	"adapter.chat.raw":            {},
-	"adapter.chat.ingress":        {},
-	"adapter.chat.discovery":      {},
-	"adapter.chat.received":       {},
-	"anthropic.messages.request":  {},
-	"codex.responses.request":     {},
-	"adapter.chat.completed":      {},
-	"adapter.event.delta_summary": {},
+	"logging.request.leg":        {},
+	"logging.request.incomplete": {},
 }
 
-// transcriptStrippedBodyFields is the summary-mode redaction list. These keys
-// are dropped from the cloned record before writing to the per-chat file.
+// transcriptStrippedBodyFields is the defensive redaction list. Unified
+// request events should already carry `payload_*` fields instead of these
+// legacy raw payload keys.
 var transcriptStrippedBodyFields = map[string]struct{}{
-	"body":     {},
-	"body_b64": {},
+	"body":           {},
+	"body_b64":       {},
+	"body_truncated": {},
 }
 
 // TranscriptRouterConfig configures the per-chat file router.
@@ -62,8 +48,6 @@ type TranscriptRouterConfig struct {
 	// Root is the directory under which <chat_key>.jsonl files are written.
 	// Typically <state>/clyde/logs/chats.
 	Root string
-	// Mode is summary or raw.
-	Mode TranscriptMode
 	// PoolCap caps simultaneously open file handles. Zero falls back to
 	// transcriptDefaultPoolCap.
 	PoolCap int
@@ -102,9 +86,6 @@ type transcriptHandle struct {
 func NewTranscriptRouter(cfg TranscriptRouterConfig) *TranscriptRouter {
 	if cfg.PoolCap <= 0 {
 		cfg.PoolCap = transcriptDefaultPoolCap
-	}
-	if cfg.Mode == "" {
-		cfg.Mode = TranscriptModeSummary
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -254,10 +235,8 @@ func (r *TranscriptRouter) encodeRecord(record slog.Record) ([]byte, error) {
 	out["msg"] = msgBytes
 
 	addAttr := func(attr slog.Attr) error {
-		if r.state.cfg.Mode == TranscriptModeSummary {
-			if _, drop := transcriptStrippedBodyFields[attr.Key]; drop {
-				return nil
-			}
+		if _, drop := transcriptStrippedBodyFields[attr.Key]; drop {
+			return nil
 		}
 		raw, err := json.Marshal(attr.Value.Any())
 		if err != nil {

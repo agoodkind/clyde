@@ -24,7 +24,8 @@ different rules. Do not conflate them.
   rule documented in this file lives on this surface.
 
 Symptoms can appear on either surface. When debugging, identify which
-surface is involved before applying any rule from this file.
+surface is involved before applying any rule from this file. Use
+`docs/logging/request-paths.md` for the shared request-leg model.
 
 ## OpenAI-compatible adapter route family: error envelope rule
 

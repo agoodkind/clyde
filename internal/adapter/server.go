@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,8 +23,8 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/slogger"
 )
@@ -50,57 +49,6 @@ const DefaultHost = "::1"
 // config omits a value.
 const DefaultMaxConcurrent = 4
 
-type rawChatLogEvent struct {
-	RequestID     string
-	Method        string
-	Path          string
-	RemoteAddr    string
-	Headers       map[string]string
-	BodyBytes     int
-	BodySummary   *BodySummary
-	BodyRaw       string
-	BodyB64       string
-	BodyTruncated bool
-	Correlation   correlation.Context
-}
-
-func (attrs rawChatLogEvent) asAttrs() []slog.Attr {
-	out := []slog.Attr{
-		slog.String("request_id", attrs.RequestID),
-		slog.String("method", attrs.Method),
-		slog.String("path", attrs.Path),
-		slog.String("remote_addr", attrs.RemoteAddr),
-		slog.Any("headers", attrs.Headers),
-		slog.Int("body_bytes", attrs.BodyBytes),
-	}
-	if attrs.BodySummary != nil {
-		out = append(out, slog.Any("body_summary", attrs.BodySummary))
-	}
-	if attrs.BodyRaw != "" {
-		out = append(out, slog.String("body", attrs.BodyRaw))
-	}
-	if attrs.BodyB64 != "" {
-		out = append(out, slog.String("body_b64", attrs.BodyB64))
-	}
-	if attrs.BodyTruncated {
-		out = append(out, slog.Bool("body_truncated", true))
-	}
-	return correlation.AppendAttrs(out, attrs.Correlation)
-}
-
-func encodeBodyB64(body []byte, maxBytes int) string {
-	if len(body) == 0 {
-		return ""
-	}
-	if maxBytes <= 0 {
-		return ""
-	}
-	if len(body) > maxBytes {
-		body = body[:maxBytes]
-	}
-	return base64.StdEncoding.EncodeToString(body)
-}
-
 func (s *Server) evaluateUsageNotices(windows []adapterruntime.UsageWindowNoticeInput) []adapterruntime.UsageNotice {
 	if s == nil || s.usageNoticeGate == nil {
 		return nil
@@ -122,6 +70,7 @@ type Server struct {
 	logprobs       config.AdapterLogprobs
 	deps           Deps
 	log            *slog.Logger
+	requestLog     *logevent.Emitter
 	logging        config.LoggingConfig
 	runtimeLogging *RuntimeLogging
 	registry       *Registry
@@ -158,12 +107,6 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		log = slog.Default()
 	}
 	log = slogger.WithConcern(log, slogger.ConcernAdapterHTTPIngress)
-	if logging.Body.Mode == "" {
-		logging.Body.Mode = "summary"
-	}
-	if logging.Body.MaxKB <= 0 {
-		logging.Body.MaxKB = 32
-	}
 	runtimeLogging := deps.RuntimeLogging
 	if runtimeLogging == nil {
 		runtimeLogging = NewRuntimeLogging(logging)
@@ -184,10 +127,15 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	egressReg := newEgressRegistry()
 	wsReg := adaptercodex.NewWsSessionRegistry()
 	s := &Server{
-		cfg:            cfg,
-		logprobs:       cfg.Logprobs,
-		deps:           deps,
-		log:            adapterLog,
+		cfg:      cfg,
+		logprobs: cfg.Logprobs,
+		deps:     deps,
+		log:      adapterLog,
+		requestLog: logevent.NewEmitter(
+			slogger.WithConcern(adapterLog, slogger.ConcernAdapterChatDispatch),
+			logevent.RequiredLegsFromStrings(logging.Request.RequiredLegs),
+			adapterEmitterOptions(logging.Request)...,
+		),
 		logging:        logging,
 		runtimeLogging: runtimeLogging,
 		registry:       registry,
@@ -219,7 +167,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		log.LogAttrs(ctx, slog.LevelError, "adapter.logpolicy.resolve_failed", slog.String("err", err.Error()))
 		return nil, fmt.Errorf("adapter: resolve logging policy: %w", err)
 	}
-	s.registerProviders(ctx, cfg, logging, runtimeLogging, deps, log, max, wsReg, policies)
+	s.registerProviders(ctx, cfg, deps, log, max, wsReg, policies)
 	s.mux = s.routes()
 	return s, nil
 }
@@ -230,8 +178,6 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 func (s *Server) registerProviders(
 	ctx context.Context,
 	cfg config.AdapterConfig,
-	logging config.LoggingConfig,
-	runtimeLogging *RuntimeLogging,
 	deps Deps,
 	log *slog.Logger,
 	maxConcurrent int,
@@ -252,7 +198,7 @@ func (s *Server) registerProviders(
 			HTTPClient: s.httpClient,
 			Telemetry:  nil,
 			Now:        nil,
-		}, codexProviderOptionsWithRegistry(logging, runtimeLogging, wsReg, policies))
+		}, codexProviderOptionsWithRegistry(wsReg, policies))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
 			slog.String("provider", string(adapterresolver.ProviderCodex)),
@@ -329,19 +275,12 @@ func (s *Server) registerAnthropicProvider(
 // options from the daemon's logging config snapshots and the per-daemon
 // ws-session registry. Extracted so [New] stays under the funlen budget.
 func codexProviderOptionsWithRegistry(
-	logging config.LoggingConfig,
-	runtimeLogging *RuntimeLogging,
 	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
 	policies logpolicy.PolicySet,
 ) adaptercodex.ProviderOptions {
 	codexSidecarRotation := policies.Sinks[logpolicy.SinkCodexSidecar].Rotation
 	return adaptercodex.ProviderOptions{
 		AccountID: "",
-		BodyLog:   adaptercodex.BodyLogConfig{Mode: logging.Body.Mode, MaxKB: logging.Body.MaxKB},
-		BodyLogProvider: func() adaptercodex.BodyLogConfig {
-			body := runtimeLogging.Body()
-			return adaptercodex.BodyLogConfig{Mode: body.Mode, MaxKB: body.MaxKB}
-		},
 		FileLog: adaptercodex.FileLogRotationConfig{
 			MaxSizeMB:  codexSidecarRotation.MaxSizeMB,
 			MaxBackups: codexSidecarRotation.MaxBackups,
@@ -355,6 +294,24 @@ func codexProviderOptionsWithRegistry(
 
 func (s *Server) codexWebsocketEnabled() bool {
 	return s.cfg.Codex.WebsocketEnabled
+}
+
+// adapterEmitterOptions converts the typed [config.LoggingRequest] into the
+// [logevent.EmitterOption] set the adapter's request emitter uses.
+//
+// The production server passes a nil handler to [logevent.WithTestingTB]; only
+// tests wire a non-nil handler to fail the active test under
+// [logevent.IncompletePolicyFailTest]. The nil handler is intentional and keeps
+// the test-fail integration option reachable from production callers.
+func adapterEmitterOptions(request config.LoggingRequest) []logevent.EmitterOption {
+	policy, ok := logevent.ParseIncompletePolicy(request.IncompletePolicy)
+	if !ok {
+		policy = logevent.IncompletePolicyWarn
+	}
+	return []logevent.EmitterOption{
+		logevent.WithIncompletePolicy(policy),
+		logevent.WithTestingTB(nil),
+	}
 }
 
 // Addr returns the host:port the adapter will bind when Start is

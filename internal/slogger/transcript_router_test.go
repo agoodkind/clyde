@@ -12,12 +12,11 @@ import (
 	"time"
 )
 
-func newTestRouter(t *testing.T, mode TranscriptMode, poolCap int) (*TranscriptRouter, string) {
+func newTestRouter(t *testing.T, poolCap int) (*TranscriptRouter, string) {
 	t.Helper()
 	root := t.TempDir()
 	r := NewTranscriptRouter(TranscriptRouterConfig{
 		Root:    root,
-		Mode:    mode,
 		PoolCap: poolCap,
 		Now:     func() time.Time { return time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC) },
 	})
@@ -40,7 +39,7 @@ func handleRecord(t *testing.T, r *TranscriptRouter, msg string, attrs ...slog.A
 
 func TestTranscriptRouterDropsNonAllowlistedMsg(t *testing.T) {
 	t.Parallel()
-	r, root := newTestRouter(t, TranscriptModeRaw, 0)
+	r, root := newTestRouter(t, 0)
 	handleRecord(t, r, "adapter.unrelated.event",
 		slog.String("chat_key", "abc"),
 		slog.String("request_id", "req-1"),
@@ -53,8 +52,8 @@ func TestTranscriptRouterDropsNonAllowlistedMsg(t *testing.T) {
 
 func TestTranscriptRouterDropsRecordWithoutChatKey(t *testing.T) {
 	t.Parallel()
-	r, root := newTestRouter(t, TranscriptModeRaw, 0)
-	handleRecord(t, r, "adapter.chat.ingress",
+	r, root := newTestRouter(t, 0)
+	handleRecord(t, r, "logging.request.leg",
 		slog.String("request_id", "req-1"),
 	)
 	entries, _ := os.ReadDir(root)
@@ -65,8 +64,8 @@ func TestTranscriptRouterDropsRecordWithoutChatKey(t *testing.T) {
 
 func TestTranscriptRouterSanitizesPathTraversal(t *testing.T) {
 	t.Parallel()
-	r, root := newTestRouter(t, TranscriptModeRaw, 0)
-	handleRecord(t, r, "adapter.chat.ingress",
+	r, root := newTestRouter(t, 0)
+	handleRecord(t, r, "logging.request.leg",
 		slog.String("chat_key", "../../etc/passwd"),
 		slog.String("request_id", "req-1"),
 	)
@@ -80,10 +79,10 @@ func TestTranscriptRouterSanitizesPathTraversal(t *testing.T) {
 	}
 }
 
-func TestTranscriptRouterSummaryStripsBodyFields(t *testing.T) {
+func TestTranscriptRouterStripsLegacyBodyFields(t *testing.T) {
 	t.Parallel()
-	r, root := newTestRouter(t, TranscriptModeSummary, 0)
-	handleRecord(t, r, "anthropic.messages.request",
+	r, root := newTestRouter(t, 0)
+	handleRecord(t, r, "logging.request.leg",
 		slog.String("chat_key", "k1"),
 		slog.String("request_id", "req-1"),
 		slog.String("body", "secret"),
@@ -95,7 +94,7 @@ func TestTranscriptRouterSummaryStripsBodyFields(t *testing.T) {
 		t.Fatalf("read transcript: %v", err)
 	}
 	if strings.Contains(string(data), "secret") {
-		t.Fatalf("summary mode leaked body: %s", data)
+		t.Fatalf("fixed transcript policy leaked body: %s", data)
 	}
 	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal(data[:len(data)-1], &decoded); err != nil {
@@ -112,10 +111,10 @@ func TestTranscriptRouterSummaryStripsBodyFields(t *testing.T) {
 	}
 }
 
-func TestTranscriptRouterRawKeepsBody(t *testing.T) {
+func TestTranscriptRouterAlwaysStripsBodyFields(t *testing.T) {
 	t.Parallel()
-	r, root := newTestRouter(t, TranscriptModeRaw, 0)
-	handleRecord(t, r, "anthropic.messages.request",
+	r, root := newTestRouter(t, 0)
+	handleRecord(t, r, "logging.request.leg",
 		slog.String("chat_key", "k1"),
 		slog.String("request_id", "req-1"),
 		slog.String("body", "raw-body"),
@@ -124,16 +123,16 @@ func TestTranscriptRouterRawKeepsBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if !strings.Contains(string(data), "raw-body") {
-		t.Fatalf("raw mode dropped body: %s", data)
+	if strings.Contains(string(data), "raw-body") {
+		t.Fatalf("fixed transcript policy leaked body: %s", data)
 	}
 }
 
 func TestTranscriptRouterLRUEviction(t *testing.T) {
 	t.Parallel()
-	r, root := newTestRouter(t, TranscriptModeRaw, 2)
+	r, root := newTestRouter(t, 2)
 	for i, key := range []string{"a", "b", "c"} {
-		handleRecord(t, r, "adapter.chat.ingress",
+		handleRecord(t, r, "logging.request.leg",
 			slog.String("chat_key", key),
 			slog.String("request_id", "req-"+string(rune('0'+i))),
 		)
@@ -154,7 +153,7 @@ func TestTranscriptRouterLRUEviction(t *testing.T) {
 
 func TestTranscriptRouterConcurrentWriters(t *testing.T) {
 	t.Parallel()
-	r, root := newTestRouter(t, TranscriptModeRaw, 8)
+	r, root := newTestRouter(t, 8)
 	var wg sync.WaitGroup
 	const writers = 16
 	const perWriter = 25
@@ -163,7 +162,7 @@ func TestTranscriptRouterConcurrentWriters(t *testing.T) {
 		go func(wid int) {
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
-				handleRecord(t, r, "adapter.chat.ingress",
+				handleRecord(t, r, "logging.request.leg",
 					slog.String("chat_key", "shared"),
 					slog.String("request_id", "req-shared"),
 					slog.Int("writer", wid),

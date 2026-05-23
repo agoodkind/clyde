@@ -164,7 +164,6 @@ func ResolveTranscriptPath(captureRoot, upstream string) (string, error) {
 	}
 	for _, candidate := range []string{
 		filepath.Join(root, "capture.jsonl"),
-		filepath.Join(root, "always-on", "capture.jsonl"),
 		filepath.Join(root, strings.TrimSpace(upstream), "capture.jsonl"),
 	} {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {

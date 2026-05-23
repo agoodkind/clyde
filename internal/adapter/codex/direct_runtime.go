@@ -38,8 +38,6 @@ type DirectConfig struct {
 	// Provider. Required: RunDirect refuses to run without it.
 	SessionCache     *WebsocketSessionCache
 	Log              *slog.Logger
-	BodyLog          BodyLogConfig
-	BodyLogProvider  BodyLogConfigProvider
 	FileLog          FileLogRotationConfig
 	ReasoningSummary string
 	// InboundThinkingMaterialization picks how round-tripped synthetic
@@ -195,8 +193,6 @@ func RunDirect(
 		TurnMetadata:       transportPayload.ClientMetadata[CodexTurnMetadataHeader],
 		Prewarm:            false,
 		PrewarmTimeout:     0,
-		BodyLog:            cfg.BodyLog,
-		BodyLogProvider:    cfg.BodyLogProvider,
 		SessionCache:       cfg.SessionCache,
 		Log:                cfg.Log,
 		WireCaptureMode:    cfg.WireCaptureMode,

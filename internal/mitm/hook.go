@@ -360,19 +360,20 @@ func resolveHookMode(m config.MITMHookMode) config.MITMHookMode {
 	return m
 }
 
-// writeHookResponse streams the hook's output body to the client
-// connection, simultaneously appending the bytes to responseRawPath
-// so the existing capture pipeline still records the rewritten
-// response verbatim. The total bytes written to the client (header +
-// body) are returned for the capture metadata's response_bytes
-// field.
+// writeHookResponse streams the hook's output body to the client connection.
+// When responseRawPath is set, it also appends the bytes to the raw sidecar.
+// The total bytes written to the client are returned for capture metadata.
 func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath string, log *slog.Logger) (int64, error) {
-	responseFile, err := os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
-	if err != nil {
-		log.Warn("mitm.hook.response.open_capture_failed", "path", responseRawPath, "err", err)
-		return 0, fmt.Errorf("open raw hook response: %w", err)
+	var responseFile *os.File
+	if responseRawPath != "" {
+		var err error
+		responseFile, err = os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
+		if err != nil {
+			log.Warn("mitm.hook.response.open_capture_failed", "path", responseRawPath, "err", err)
+			return 0, fmt.Errorf("open raw hook response: %w", err)
+		}
+		defer func() { _ = responseFile.Close() }()
 	}
-	defer func() { _ = responseFile.Close() }()
 
 	headers := http.Header{}
 	if result.Headers != nil {

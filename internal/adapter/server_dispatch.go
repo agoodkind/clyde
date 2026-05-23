@@ -14,36 +14,9 @@ import (
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
 )
-
-// CountNormalizedTools counts tools that arrived without a `function` key
-// and were likely sent in native alternate shape.
-func CountNormalizedTools(req ChatRequest, raw []byte) int {
-	if len(req.Tools) == 0 {
-		return 0
-	}
-	var wire struct {
-		Tools []json.RawMessage `json:"tools"`
-	}
-	if err := json.Unmarshal(raw, &wire); err != nil {
-		return 0
-	}
-
-	count := 0
-	for _, rawTool := range wire.Tools {
-		var w struct {
-			Function json.RawMessage `json:"function"`
-		}
-		if err := json.Unmarshal(rawTool, &w); err != nil {
-			continue
-		}
-		if len(w.Function) == 0 {
-			count++
-		}
-	}
-	return count
-}
 
 func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	w := hctx.Writer
@@ -115,32 +88,18 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	}
 
 	bodyBytes := len(body)
-	s.logChatIngress(ctx, r, corr, reqID, bodyBytes)
+	recorder := s.beginChatLogRecorder(r, corr)
+	defer s.completeChatLogRecorder(ctx, recorder)
+	s.emitChatRequestLeg(ctx, recorder, logevent.LegAdapterIngress, logevent.PhaseStarted, logevent.StatusOK)
 	discovery := DiscoverRequest(body)
-	s.logChatDiscovery(ctx, r, corr, reqID, discovery)
 
-	var req ChatRequest
-	parseErr := json.Unmarshal(body, &req)
-	s.emitRawChatLog(ctx, r, corr, reqID, body, bodyBytes, &req, parseErr)
-
-	if parseErr != nil {
-		s.logChatParseFailed(ctx, corr, reqID, bodyBytes, parseErr)
-		return adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
-	}
-	forceStreamUsageOptIn(&req)
-	s.logToolNormalization(ctx, corr, reqID, req, body)
-	if normErr := s.normalizeRequestMessages(ctx, corr, reqID, &req); normErr != nil {
-		return normErr
-	}
-	if len(req.Messages) == 0 {
-		s.logMessagesRequired(ctx, corr, reqID, req)
-		return adapterErrInvalidRequest("messages is required", nil)
-	}
-	if req.ReasoningEffort == "" && req.Reasoning != nil {
-		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
+	req, err := s.prepareChatRequest(ctx, r, corr, reqID, body, bodyBytes, recorder)
+	if err != nil {
+		return err
 	}
 	ingress, ok := activeIngressContract()
 	if !ok || ingress == nil {
+		recorder.EmitError(ctx, "ingress_contract_missing", "ingress contract not registered")
 		return adapterErrInternal("ingress contract not registered", nil)
 	}
 	ingressCtx := ingress.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
@@ -150,6 +109,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	}
 	identity := ingress.ResolveIdentity(corr, ingressCtx, ingresscontract.ChatRequestPrimitive{Body: req})
 	corr = corr.WithChatIdentity(identity.ChatKey, identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
+	s.emitChatCursorMetadataLeg(ctx, recorder, corr)
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
 	req.Model = ingressCtx.NormalizedModel
@@ -158,9 +118,11 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
 	if err != nil {
 		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, err)
+		recorder.EmitError(ctx, "model_resolve_failed", err.Error())
 		return adapterErrModelNotFound(err.Error())
 	}
 	s.logChatResolved(ctx, corr, reqID, req, ingressCtx, ingress, model, effort)
+	s.emitChatModelResolveLeg(ctx, recorder, corr, model, effort)
 
 	// Step D: build the typed resolver.ResolvedRequest alongside the
 	// legacy resolution. Backends still use model.ResolvedModel for now;
@@ -172,6 +134,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 
 	model, err = s.applyBackendOverride(r, req, model, reqID)
 	if err != nil {
+		recorder.EmitError(ctx, "backend_override_failed", err.Error())
 		return err
 	}
 
@@ -182,116 +145,39 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	}
 
 	if perr := s.preflightChat(ctx, &req, model, reqID); perr != nil {
+		recorder.EmitError(ctx, "preflight_failed", perr.Error())
 		return perr
 	}
 
+	s.emitChatProviderSendStartedLeg(ctx, recorder, corr, req, model, effort)
 	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, ingressCtx, resolvedReq, resolverErr)
+	s.completeChatDispatchLegs(ctx, recorder, corr, req, model, effort)
 	return nil
 }
 
-// logChatIngress emits the per-request adapter ingress event.
-func (s *Server) logChatIngress(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, bodyBytes int) {
-	ingressAttrs := []slog.Attr{
-		slog.String("request_id", reqID),
-		slog.String("method", r.Method),
-		slog.String("path", r.URL.Path),
-		slog.String("remote_addr", r.RemoteAddr),
-		slog.Int("body_bytes", bodyBytes),
-		slog.String("user_agent", r.UserAgent()),
-		slog.String("cf_ray", r.Header.Get("Cf-Ray")),
-		slog.String("cf_connecting_ip", r.Header.Get("Cf-Connecting-Ip")),
+func (s *Server) prepareChatRequest(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, body []byte, bodyBytes int, recorder *logevent.Recorder) (ChatRequest, error) {
+	var req ChatRequest
+	parseErr := json.Unmarshal(body, &req)
+	s.emitChatPayloadLeg(ctx, recorder, body, r.Header.Get("Content-Type"), parseErr)
+	if parseErr != nil {
+		recorder.EmitError(ctx, "invalid_json", parseErr.Error())
+		s.logChatParseFailed(ctx, corr, reqID, bodyBytes, parseErr)
+		return ChatRequest{}, adapterErrInvalidJSON("invalid JSON: "+parseErr.Error(), parseErr)
 	}
-	ingressAttrs = append(ingressAttrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPIngress).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.ingress", ingressAttrs...)
-}
-
-// logChatDiscovery emits the structural discovery event for a chat body.
-func (s *Server) logChatDiscovery(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, discovery RequestDiscovery) {
-	discoveryAttrs := []slog.Attr{
-		slog.String("request_id", reqID),
-		slog.Int("body_bytes", discovery.BodyBytes),
-		slog.Any("top_level_keys", discovery.TopLevelKeys),
-		slog.Any("unknown_keys", discovery.UnknownKeys),
-		slog.Any("metadata_keys", discovery.MetadataKeys),
-		slog.Bool("metadata_is_object", discovery.MetadataIsObject),
-		slog.Any("input_item_keys", discovery.InputItemKeys),
-		slog.Any("input_item_roles", discovery.InputItemRoles),
-		slog.Any("input_item_types", discovery.InputItemTypes),
-		slog.Any("input_content_types", discovery.InputContentTypes),
-		slog.Int("tool_count", discovery.ToolCount),
-		slog.Any("tool_kinds", discovery.ToolKinds),
-		slog.Any("tool_function_top_keys", discovery.ToolFunctionTopKeys),
-		slog.Any("tool_custom_top_keys", discovery.ToolCustomTopKeys),
-		slog.Any("tool_custom_format_keys", discovery.ToolCustomFormatKeys),
-		slog.Any("tool_function_names", discovery.ToolFunctionNames),
-		slog.Any("tool_custom_names", discovery.ToolCustomNames),
-		slog.Any("mcp_tool_names", discovery.MCPToolNames),
-		slog.Bool("has_mcp_like_fields", discovery.HasMCPLikeFields),
-		slog.Any("mcp_like_field_names", discovery.MCPLikeFieldNames),
-		slog.Any("header_names", HeaderNames(r.Header)),
+	forceStreamUsageOptIn(&req)
+	if normErr := normalizeRequestMessages(&req); normErr != nil {
+		recorder.EmitError(ctx, "message_normalization_failed", normErr.Error())
+		return ChatRequest{}, normErr
 	}
-	discoveryAttrs = append(discoveryAttrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(ctx, slog.LevelInfo, "adapter.chat.discovery", discoveryAttrs...)
-}
-
-// emitRawChatLog assembles the optional raw-body log payload per the
-// configured body-logging mode and writes it when logging is enabled.
-func (s *Server) emitRawChatLog(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, body []byte, bodyBytes int, req *ChatRequest, parseErr error) {
-	rawAttrs := rawChatLogEvent{
-		RequestID:   reqID,
-		Method:      r.Method,
-		Path:        r.URL.Path,
-		RemoteAddr:  r.RemoteAddr,
-		Headers:     redactedHeaders(r.Header),
-		BodyBytes:   bodyBytes,
-		Correlation: corr,
+	if len(req.Messages) == 0 {
+		s.logMessagesRequired(ctx, corr, reqID, req)
+		recorder.EmitError(ctx, "messages_required", "messages is required")
+		return ChatRequest{}, adapterErrInvalidRequest("messages is required", nil)
 	}
-	bodyLogging := s.bodyLogging()
-	bodyLimit := bodyLogging.MaxKB * 1024
-
-	switch bodyLogging.Mode {
-	case "summary":
-		if parseErr == nil {
-			bodySummary := SummarizeChatRequest(*req)
-			rawAttrs.BodySummary = &bodySummary
-		}
-	case "whitelist":
-		if parseErr == nil {
-			bodySummary := SummarizeChatRequest(*req)
-			rawAttrs.BodySummary = &bodySummary
-			rawAttrs.BodyRaw, rawAttrs.BodyTruncated = buildWhitelistBody(*req, bodyLimit)
-		} else {
-			rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
-		}
-	case "raw":
-		if parseErr == nil {
-			bodySummary := SummarizeChatRequest(*req)
-			rawAttrs.BodySummary = &bodySummary
-		}
-		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
-		rawAttrs.BodyB64 = encodeBodyB64(body, bodyLimit)
-	case "off", "":
-	default:
-		rawAttrs.BodyRaw, rawAttrs.BodyTruncated = truncateBody(body, bodyLimit)
+	if req.ReasoningEffort == "" && req.Reasoning != nil {
+		req.ReasoningEffort = strings.TrimSpace(req.Reasoning.Effort)
 	}
-	if bodyLogging.Mode != "off" {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPRaw).LogAttrs(ctx, slog.LevelDebug, "adapter.chat.raw", rawAttrs.asAttrs()...)
-	}
-}
-
-// logToolNormalization records when tools arrived in non-OpenAI shape.
-func (s *Server) logToolNormalization(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest, body []byte) {
-	n := CountNormalizedTools(req, body)
-	if n == 0 {
-		return
-	}
-	slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(ctx, slog.LevelInfo, "adapter.tools.normalized",
-		correlation.AppendAttrs([]slog.Attr{
-			slog.String("request_id", reqID),
-			slog.String("from_shape", "anthropic_native"),
-			slog.Int("count", n),
-		}, corr)...,
-	)
+	return req, nil
 }
 
 // logChatParseFailed records a body that did not parse as JSON.
@@ -307,29 +193,12 @@ func (s *Server) logChatParseFailed(ctx context.Context, corr correlation.Contex
 
 // normalizeRequestMessages folds Responses-style input into req.Messages.
 // Returns a non-nil adapter error when the caller should abort.
-func (s *Server) normalizeRequestMessages(ctx context.Context, corr correlation.Context, reqID string, req *ChatRequest) error {
+func normalizeRequestMessages(req *ChatRequest) error {
 	if len(req.Messages) != 0 || len(req.Input) == 0 {
 		return nil
 	}
-	count, nerr := parseMessagesFromInput(req)
-	if nerr != nil {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.messages.normalize_failed",
-			correlation.AppendAttrs([]slog.Attr{
-				slog.String("request_id", reqID),
-				slog.String("model", req.Model),
-				slog.String("err", nerr.Error()),
-			}, corr)...,
-		)
-		return adapterErrInvalidRequest(nerr.Error(), nerr)
-	}
-	if count > 0 {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterChatDiscovery).LogAttrs(ctx, slog.LevelInfo, "adapter.messages.normalized",
-			correlation.AppendAttrs([]slog.Attr{
-				slog.String("request_id", reqID),
-				slog.String("from_shape", "responses_input"),
-				slog.Int("count", count),
-			}, corr)...,
-		)
+	if _, err := parseMessagesFromInput(req); err != nil {
+		return adapterErrInvalidRequest(err.Error(), err)
 	}
 	return nil
 }
@@ -355,98 +224,6 @@ func chatToolNames(req ChatRequest) []string {
 		toolNames = append(toolNames, f.Name)
 	}
 	return toolNames
-}
-
-func truncateBody(body []byte, maxBytes int) (string, bool) {
-	if maxBytes <= 0 {
-		return "", false
-	}
-	if len(body) <= maxBytes {
-		return string(body), false
-	}
-	return string(body[:maxBytes]), true
-}
-
-func buildWhitelistBody(req ChatRequest, maxBytes int) (string, bool) {
-	type whitelistTool struct {
-		Type     string `json:"type"`
-		Function struct {
-			Name string `json:"name"`
-		} `json:"function"`
-	}
-	type whitelistMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	payloadMessages := make([]whitelistMessage, 0, len(req.Messages))
-	payload := map[string]any{
-		"model":    req.Model,
-		"stream":   req.Stream,
-		"messages": payloadMessages,
-	}
-
-	for _, msg := range req.Messages {
-		content := FlattenContent(msg.Content)
-		if len(content) > 2048 {
-			content = content[:2048]
-		}
-		payloadMessages = append(payloadMessages, whitelistMessage{
-			Role:    msg.Role,
-			Content: content,
-		})
-	}
-	payload["messages"] = payloadMessages
-	if len(req.Tools) > 0 {
-		tools := make([]whitelistTool, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			tools = append(tools, whitelistTool{
-				Type: "function",
-				Function: struct {
-					Name string `json:"name"`
-				}{Name: tool.Function.Name},
-			})
-		}
-		payload["tools"] = tools
-	}
-	if len(req.Functions) > 0 {
-		functions := make([]whitelistTool, 0, len(req.Functions))
-		for _, fn := range req.Functions {
-			functions = append(functions, whitelistTool{
-				Type: "function",
-				Function: struct {
-					Name string `json:"name"`
-				}{Name: fn.Name},
-			})
-		}
-		payload["functions"] = functions
-	}
-	if req.ToolChoice != nil {
-		payload["tool_choice"] = req.ToolChoice
-	}
-	if req.ParallelTools != nil {
-		payload["parallel_tool_calls"] = req.ParallelTools
-	}
-	if req.Logprobs != nil {
-		payload["logprobs"] = req.Logprobs
-	}
-	if req.Temperature != nil {
-		payload["temperature"] = req.Temperature
-	}
-	if req.TopP != nil {
-		payload["top_p"] = req.TopP
-	}
-	if req.MaxTokens != nil {
-		payload["max_tokens"] = req.MaxTokens
-	}
-
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", false
-	}
-
-	logBody, bodyTruncated := truncateBody(raw, maxBytes)
-	return logBody, bodyTruncated
 }
 
 func parseMessagesFromInput(req *ChatRequest) (int, error) {
@@ -483,6 +260,22 @@ func parseMessagesFromInput(req *ChatRequest) (int, error) {
 	return len(messages), nil
 }
 
+type responsesInputContentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL json.RawMessage `json:"image_url,omitempty"`
+}
+
+type openAIChatContentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL json.RawMessage `json:"image_url,omitempty"`
+}
+
+type imageURLObject struct {
+	URL string `json:"url"`
+}
+
 func parseInputContent(raw json.RawMessage) (json.RawMessage, error) {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {
@@ -494,13 +287,13 @@ func parseInputContent(raw json.RawMessage) (json.RawMessage, error) {
 		// Plain OpenAI string content.
 		return json.RawMessage(trimmed), nil
 	case '{':
-		var part map[string]any
+		var part responsesInputContentPart
 		if err := json.Unmarshal(raw, &part); err != nil {
 			return nil, fmt.Errorf("invalid input content: %w", err)
 		}
-		return parseInputParts([]map[string]any{part})
+		return parseInputParts([]responsesInputContentPart{part})
 	case '[':
-		var parts []map[string]any
+		var parts []responsesInputContentPart
 		if err := json.Unmarshal(raw, &parts); err != nil {
 			return nil, fmt.Errorf("invalid input content: %w", err)
 		}
@@ -510,36 +303,34 @@ func parseInputContent(raw json.RawMessage) (json.RawMessage, error) {
 	}
 }
 
-func parseInputParts(parts []map[string]any) (json.RawMessage, error) {
-	out := make([]map[string]any, 0, len(parts))
+func parseInputParts(parts []responsesInputContentPart) (json.RawMessage, error) {
+	out := make([]openAIChatContentPart, 0, len(parts))
 	for _, p := range parts {
-		typ, _ := p["type"].(string)
-		switch typ {
+		switch p.Type {
 		case "text", "input_text", "output_text":
-			text, _ := p["text"].(string)
-			out = append(out, map[string]any{
-				"type": "text",
-				"text": text,
+			out = append(out, openAIChatContentPart{
+				Type:     "text",
+				Text:     p.Text,
+				ImageURL: nil,
 			})
 		case "image_url":
-			out = append(out, map[string]any{
-				"type":      "image_url",
-				"image_url": p["image_url"],
-			})
-		case "input_image":
-			image := map[string]any{}
-			switch v := p["image_url"].(type) {
-			case map[string]any:
-				image = v
-			case string:
-				image["url"] = v
-			}
-			if len(image) == 0 {
+			if len(p.ImageURL) == 0 {
 				continue
 			}
-			out = append(out, map[string]any{
-				"type":      "image_url",
-				"image_url": image,
+			out = append(out, openAIChatContentPart{
+				Type:     "image_url",
+				Text:     "",
+				ImageURL: p.ImageURL,
+			})
+		case "input_image":
+			image, ok := normalizeResponsesInputImageURL(p.ImageURL)
+			if !ok {
+				continue
+			}
+			out = append(out, openAIChatContentPart{
+				Type:     "image_url",
+				Text:     "",
+				ImageURL: image,
 			})
 		}
 	}
@@ -551,6 +342,28 @@ func parseInputParts(parts []map[string]any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("failed to normalize input content: %w", err)
 	}
 	return buf, nil
+}
+
+func normalizeResponsesInputImageURL(raw json.RawMessage) (json.RawMessage, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, false
+	}
+	if trimmed[0] == '{' {
+		return json.RawMessage(trimmed), true
+	}
+	if trimmed[0] != '"' {
+		return nil, false
+	}
+	var imageURL string
+	if err := json.Unmarshal(raw, &imageURL); err != nil {
+		return nil, false
+	}
+	encoded, err := json.Marshal(imageURLObject{URL: imageURL})
+	if err != nil {
+		return nil, false
+	}
+	return encoded, true
 }
 
 func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {

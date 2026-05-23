@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -50,8 +51,8 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Logging.Rotation.MaxAgeDays).To(Equal(14))
 		Expect(cfg.Logging.Rotation.Compress).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
-		Expect(cfg.Logging.Body.Mode).To(Equal("summary"))
-		Expect(cfg.Logging.Body.MaxKB).To(Equal(32))
+		Expect(cfg.Logging.RawCapture.Enabled).NotTo(BeNil())
+		Expect(*cfg.Logging.RawCapture.Enabled).To(BeFalse())
 		Expect(cfg.Defaults.CompactCounter).To(Equal("api"))
 	})
 
@@ -113,19 +114,19 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.MITM.EnabledFor("codex")).To(BeTrue())
 	})
 
-	It("loads default MITM capture route rules", func() {
+	It("normalizes legacy MITM always-on capture dir", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 		globalDir := filepath.Join(tmpDir, "clyde")
+		captureDir := filepath.Join(tmpDir, "state", "mitm", "always-on")
+		configText := "[mitm]\ncapture_dir = " + strconv.Quote(captureDir) + "\n"
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[mitm]\nproviders = [\"cursor\"]\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.MITM.CaptureRules).NotTo(BeEmpty())
-		Expect(cfg.MITM.CaptureRules[0].Concern).To(Equal("cursor.bidi"))
-		Expect(cfg.MITM.CaptureRules[len(cfg.MITM.CaptureRules)-1].Concern).To(Equal("unknown"))
+		Expect(cfg.MITM.CaptureDir).To(Equal(filepath.Dir(captureDir)))
 	})
 
 	It("loads custom MITM capture route rules", func() {
@@ -362,23 +363,9 @@ concern = "unknown"
 		Expect(cfg.Logging.Rotation.MaxAgeDays).To(Equal(14))
 		Expect(cfg.Logging.Rotation.Compress).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
-		Expect(cfg.Logging.Body.Mode).To(Equal("summary"))
-		Expect(cfg.Logging.Body.MaxKB).To(Equal(32))
+		Expect(cfg.Logging.RawCapture.Enabled).NotTo(BeNil())
+		Expect(*cfg.Logging.RawCapture.Enabled).To(BeFalse())
 	})
-
-	It("rejects invalid logging.body.mode", func() {
-		tmpDir := GinkgoT().TempDir()
-		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-		globalDir := filepath.Join(tmpDir, "clyde")
-		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.body]\nmode = \"bogus\"\n"), 0o644)).To(Succeed())
-
-		_, err := config.LoadGlobalOrDefault()
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("logging.body.mode must be one of summary|whitelist|raw|off"))
-	})
-
 	It("accepts logging.rotation.enabled = false", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
@@ -419,60 +406,28 @@ concern = "unknown"
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("logging.rotation.max_backups must be >= 0"))
 	})
-
-	It("rejects invalid logging.body.max_kb", func() {
+	It("loads logging sink and concern controls", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.body]\nmax_kb = 300\n"), 0o644)).To(Succeed())
+		configData := `[logging.sinks]
+enabled = ["daemon", "concerns"]
 
-		_, err := config.LoadGlobalOrDefault()
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("logging.body.max_kb must be between 1 and 256"))
-	})
-
-	It("loads logging sink and concern overrides", func() {
-		tmpDir := GinkgoT().TempDir()
-		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-		globalDir := filepath.Join(tmpDir, "clyde")
-		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		configData := `[logging.sinks.daemon]
-level = "debug"
-detail = "verbose"
-
-[logging.sinks.daemon.retention]
-max_age_days = 7
-max_backups = 3
-max_total_mb = 256
-compress = false
-cleanup_mode = "audit_only"
-
-[logging.concerns."adapter.http.raw"]
+[logging.concerns."adapter.chat.dispatch"]
 level = "warn"
-detail = "raw"
+detail = "verbose"
 sink = "concerns"
 `
 		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Logging.Sinks[config.LoggingSinkDaemon].Level).To(Equal("debug"))
-		Expect(cfg.Logging.Sinks[config.LoggingSinkDaemon].Detail).To(Equal("verbose"))
-		Expect(cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.MaxAgeDays).NotTo(BeNil())
-		Expect(*cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.MaxAgeDays).To(Equal(7))
-		Expect(cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.MaxBackups).NotTo(BeNil())
-		Expect(*cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.MaxBackups).To(Equal(3))
-		Expect(cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.MaxTotalMB).NotTo(BeNil())
-		Expect(*cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.MaxTotalMB).To(Equal(256))
-		Expect(cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.Compress).NotTo(BeNil())
-		Expect(*cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.Compress).To(BeFalse())
-		Expect(cfg.Logging.Sinks[config.LoggingSinkDaemon].Retention.CleanupMode).To(Equal("audit_only"))
-		Expect(cfg.Logging.Concerns["adapter.http.raw"].Level).To(Equal("warn"))
-		Expect(cfg.Logging.Concerns["adapter.http.raw"].Detail).To(Equal("raw"))
-		Expect(cfg.Logging.Concerns["adapter.http.raw"].Sink).To(Equal("concerns"))
+		Expect(cfg.Logging.Sinks.Enabled).To(Equal([]string{config.LoggingSinkDaemon, config.LoggingSinkConcerns}))
+		Expect(cfg.Logging.Concerns["adapter.chat.dispatch"].Level).To(Equal("warn"))
+		Expect(cfg.Logging.Concerns["adapter.chat.dispatch"].Detail).To(Equal("verbose"))
+		Expect(cfg.Logging.Concerns["adapter.chat.dispatch"].Sink).To(Equal("concerns"))
 	})
 
 	It("rejects unknown logging sink names", func() {
@@ -481,24 +436,24 @@ sink = "concerns"
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.sinks.nope]\nlevel = \"debug\"\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.sinks]\nenabled = [\"nope\"]\n"), 0o644)).To(Succeed())
 
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("logging.sinks.nope is not a known sink"))
+		Expect(err.Error()).To(ContainSubstring("logging.sinks.enabled contains unknown sink"))
 	})
 
-	It("rejects invalid logging retention controls", func() {
+	It("rejects invalid logging cleanup controls", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.sinks.daemon.retention]\nmax_total_mb = -1\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.cleanup]\nmax_total_mb = -1\n"), 0o644)).To(Succeed())
 
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("logging.sinks.daemon.retention.max_total_mb must be >= 0"))
+		Expect(err.Error()).To(ContainSubstring("logging.cleanup.max_total_mb must be >= 0"))
 	})
 
 	It("rejects invalid MITM capture rotation controls", func() {
@@ -514,4 +469,23 @@ sink = "concerns"
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("mitm.capture.rotation.max_size_mb must be >= 0"))
 	})
+
+	DescribeTable("rejects removed logging config surfaces",
+		func(configData string, expectedMessage string) {
+			tmpDir := GinkgoT().TempDir()
+			_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+			globalDir := filepath.Join(tmpDir, "clyde")
+			Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
+
+			_, err := config.LoadGlobalOrDefault()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(expectedMessage))
+		},
+		Entry("logging.body", "[logging.body]\nmode = \"summary\"\n", "logging.body has been removed"),
+		Entry("mitm.body_mode", "[mitm]\nbody_mode = \"summary\"\n", "mitm.body_mode has been removed"),
+		Entry("logging.cleanup.audit_only", "[logging.cleanup]\naudit_only = true\n", "logging.cleanup.audit_only has been removed"),
+		Entry("logging.cleanup.cleanup_mode", "[logging.cleanup]\ncleanup_mode = \"audit\"\n", "logging.cleanup.cleanup_mode has been removed"),
+	)
 })

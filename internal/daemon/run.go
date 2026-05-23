@@ -1395,7 +1395,7 @@ func startMITM(log *slog.Logger, inherited net.Listener) (*mitmProcess, error) {
 			return nil, fmt.Errorf("mitm listen %s: %w", wantAddr, err)
 		}
 	}
-	proxy, err := mitm.NewProxy(cfg.MITM, log, lis)
+	proxy, err := mitm.NewProxy(cfg.MITM, cfg.Logging.Request, log, lis)
 	if err != nil {
 		_ = lis.Close()
 		return nil, fmt.Errorf("mitm proxy: %w", err)
@@ -1960,8 +1960,6 @@ func (c *adapterController) apply(ctx context.Context, next adapterLaunchConfig,
 }
 
 func adapterLaunchEquivalent(a, b adapterLaunchConfig) bool {
-	a.Logging.Body = config.LoggingBody{}
-	b.Logging.Body = config.LoggingBody{}
 	return reflect.DeepEqual(a, b)
 }
 

@@ -16,7 +16,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/config"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -63,46 +62,6 @@ func TestAdapterControllerApplyNoopDoesNotStopProcess(t *testing.T) {
 	}
 	if stopped {
 		t.Fatalf("no-op apply should not stop existing process")
-	}
-}
-
-func TestAdapterControllerApplyBodyLoggingChangeDoesNotStopProcess(t *testing.T) {
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	stopped := false
-	proc := &adapterProcess{
-		cancel: func() { stopped = true },
-		done:   make(chan struct{}),
-	}
-	close(proc.done)
-	runtimeLogging := adapter.NewRuntimeLogging(config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "summary", MaxKB: 32},
-	})
-
-	ctrl := &adapterController{
-		log:            log,
-		runtimeLogging: runtimeLogging,
-		current: adapterLaunchConfig{
-			Enabled: true,
-			Adapter: config.AdapterConfig{Port: 11434},
-			Logging: config.LoggingConfig{Body: config.LoggingBody{Mode: "summary", MaxKB: 32}},
-		},
-		proc: proc,
-	}
-
-	err := ctrl.apply(context.Background(), adapterLaunchConfig{
-		Enabled: true,
-		Adapter: config.AdapterConfig{Port: 11434},
-		Logging: config.LoggingConfig{Body: config.LoggingBody{Mode: "raw", MaxKB: 256}},
-	}, false, nil)
-	if err != nil {
-		t.Fatalf("apply returned error: %v", err)
-	}
-	if stopped {
-		t.Fatalf("body-only apply should not stop existing process")
-	}
-	body := runtimeLogging.Body()
-	if body.Mode != "raw" || body.MaxKB != 256 {
-		t.Fatalf("runtime body logging = %+v, want raw/256", body)
 	}
 }
 

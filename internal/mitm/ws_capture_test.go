@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,11 +19,9 @@ import (
 	"github.com/gorilla/websocket"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/slogger"
 )
-
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
 
 func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	t.Parallel()
@@ -102,30 +99,44 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 			lines = append(lines, scanner.Text())
 		}
 		f.Close()
-		if hasKind(lines, "ws_start") && hasKind(lines, "ws_msg") && hasKind(lines, "ws_end") {
+		if hasWSEvents(lines) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	kinds := map[string]int{}
+	phases := map[string]int{}
+	directions := map[string]int{}
 	for _, line := range lines {
 		var ev map[string]any
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("parse capture line: %v (%q)", err, line)
 		}
-		if k, _ := ev["kind"].(string); k != "" {
-			kinds[k]++
+		if ev["leg"] != string(logevent.LegMITMCaptureIndex) {
+			continue
+		}
+		if phase, _ := ev["phase"].(string); phase != "" {
+			phases[phase]++
+		}
+		mitmFields, ok := ev["mitm"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if direction, _ := mitmFields["direction"].(string); direction != "" {
+			directions[direction]++
 		}
 	}
-	if kinds["ws_start"] < 1 {
-		t.Errorf("expected ws_start record, got kinds=%v", kinds)
+	if phases[string(logevent.PhaseStarted)] < 1 {
+		t.Errorf("expected websocket start record, got phases=%v directions=%v", phases, directions)
 	}
-	if kinds["ws_msg"] < 2 {
-		t.Errorf("expected at least 2 ws_msg records (client + upstream), got kinds=%v", kinds)
+	if directions["client_to_upstream"] < 1 {
+		t.Errorf("expected client websocket message record, got phases=%v directions=%v", phases, directions)
 	}
-	if kinds["ws_end"] < 1 {
-		t.Errorf("expected ws_end record, got kinds=%v", kinds)
+	if directions["upstream_to_client"] < 1 {
+		t.Errorf("expected upstream websocket message record, got phases=%v directions=%v", phases, directions)
+	}
+	if phases[string(logevent.PhaseCompleted)] < 2 {
+		t.Errorf("expected websocket completed records, got phases=%v directions=%v", phases, directions)
 	}
 }
 
@@ -147,7 +158,7 @@ func TestIsWebsocketUpgradeRejectsPlainHTTP(t *testing.T) {
 
 func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 	t.Helper()
-	logger := discardLogger()
+	logger := slog.New(newMITMCaptureTestHandler(t, cfg.CaptureDir))
 	proxy := &Proxy{
 		log:                   logger,
 		client:                http.DefaultClient,
@@ -158,6 +169,7 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 		rawCaptureSeq:         atomic.Uint64{},
 		Tunnels:               newTestTunnelRegistry(),
 		captureWriters:        newCaptureWriterCache(logger),
+		requestLog:            logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:                    sync.RWMutex{},
 		cfg:                   cfg,
 		base:                  "",
@@ -167,13 +179,29 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 	return proxy
 }
 
-func hasKind(lines []string, kind string) bool {
+func hasWSEvents(lines []string) bool {
+	foundStart := false
+	foundClientMessage := false
+	foundUpstreamMessage := false
+	foundCompleted := false
 	for _, line := range lines {
-		if strings.Contains(line, `"kind":"`+kind+`"`) {
-			return true
+		if !strings.Contains(line, `"leg":"`+string(logevent.LegMITMCaptureIndex)+`"`) {
+			continue
+		}
+		if strings.Contains(line, `"phase":"`+string(logevent.PhaseStarted)+`"`) {
+			foundStart = true
+		}
+		if strings.Contains(line, `"direction":"client_to_upstream"`) {
+			foundClientMessage = true
+		}
+		if strings.Contains(line, `"direction":"upstream_to_client"`) {
+			foundUpstreamMessage = true
+		}
+		if strings.Contains(line, `"phase":"`+string(logevent.PhaseCompleted)+`"`) {
+			foundCompleted = true
 		}
 	}
-	return false
+	return foundStart && foundClientMessage && foundUpstreamMessage && foundCompleted
 }
 
 // overrideChatGPTUpstream temporarily reroutes the chatGPTUpstream

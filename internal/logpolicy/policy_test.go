@@ -27,35 +27,27 @@ func TestResolveUsesDefaults(t *testing.T) {
 	if daemonPolicy.Rotation.MaxSizeMB != 64 {
 		t.Fatalf("daemon rotation max size = %d, want 64", daemonPolicy.Rotation.MaxSizeMB)
 	}
-	if daemonPolicy.Retention.CleanupMode != logpolicy.CleanupOff {
-		t.Fatalf("daemon cleanup mode = %q, want %q", daemonPolicy.Retention.CleanupMode, logpolicy.CleanupOff)
+	if !daemonPolicy.Cleanup.Enabled {
+		t.Fatalf("daemon cleanup should default to enabled")
 	}
-	if _, ok := policies.Concerns[slogger.ConcernAdapterHTTPRaw]; !ok {
-		t.Fatalf("policy set should include registered concern %q", slogger.ConcernAdapterHTTPRaw)
+	if _, ok := policies.Concerns[slogger.ConcernAdapterChatDispatch]; !ok {
+		t.Fatalf("policy set should include registered concern %q", slogger.ConcernAdapterChatDispatch)
 	}
 }
 
-func TestResolveAppliesSinkAndConcernPrecedence(t *testing.T) {
-	enabled := false
+func TestResolveAppliesEnabledSinkSetAndConcernOverride(t *testing.T) {
 	maxTotalMB := 512
 	maxSizeMB := 7
 	cfg := config.NewConfigWithDefaults()
 	cfg.Logging.Level = "info"
 	cfg.Logging.Sinks = config.LoggingSinks{
-		config.LoggingSinkConcerns: {
-			Level:   "warn",
-			Detail:  "verbose",
-			Enabled: &enabled,
-			Retention: config.LoggingRetention{
-				MaxTotalMB:  &maxTotalMB,
-				CleanupMode: "audit_only",
-			},
-		},
+		Enabled: []string{config.LoggingSinkDaemon, config.LoggingSinkConcerns},
 	}
+	cfg.Logging.Cleanup.MaxTotalMB = &maxTotalMB
 	cfg.Logging.Concerns = config.LoggingConcerns{
-		slogger.ConcernAdapterHTTPRaw: {
+		slogger.ConcernAdapterChatDispatch: {
 			Level:  "debug",
-			Detail: "raw",
+			Detail: "verbose",
 			Rotation: config.LoggingRotation{
 				MaxSizeMB: maxSizeMB,
 			},
@@ -67,36 +59,39 @@ func TestResolveAppliesSinkAndConcernPrecedence(t *testing.T) {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
 
+	if !policies.Sinks[logpolicy.SinkDaemon].Enabled {
+		t.Fatalf("daemon sink should be enabled by configured sink set")
+	}
+	if policies.Sinks[logpolicy.SinkAudit].Enabled {
+		t.Fatalf("audit sink should be disabled when omitted from configured sink set")
+	}
 	sinkPolicy := policies.Sinks[logpolicy.SinkConcerns]
-	if sinkPolicy.Level != logpolicy.LevelWarn {
-		t.Fatalf("concerns sink level = %q, want %q", sinkPolicy.Level, logpolicy.LevelWarn)
+	if !sinkPolicy.Enabled {
+		t.Fatalf("concerns sink should be enabled by configured sink set")
 	}
-	if sinkPolicy.Enabled {
-		t.Fatalf("concerns sink should use explicit disabled override")
-	}
-	if sinkPolicy.Retention.MaxTotalMB == nil || *sinkPolicy.Retention.MaxTotalMB != 512 {
-		t.Fatalf("concerns sink max total MB = %v, want 512", sinkPolicy.Retention.MaxTotalMB)
+	if sinkPolicy.Cleanup.MaxTotalMB == nil || *sinkPolicy.Cleanup.MaxTotalMB != 512 {
+		t.Fatalf("concerns sink max total MB = %v, want 512", sinkPolicy.Cleanup.MaxTotalMB)
 	}
 
-	concernPolicy := policies.Concerns[slogger.ConcernAdapterHTTPRaw]
-	if concernPolicy.Enabled {
-		t.Fatalf("concern should inherit disabled sink state")
+	concernPolicy := policies.Concerns[slogger.ConcernAdapterChatDispatch]
+	if !concernPolicy.Enabled {
+		t.Fatalf("concern should inherit enabled sink state")
 	}
 	if concernPolicy.Level != logpolicy.LevelDebug {
 		t.Fatalf("concern level = %q, want %q", concernPolicy.Level, logpolicy.LevelDebug)
 	}
-	if concernPolicy.Detail != logpolicy.DetailRaw {
-		t.Fatalf("concern detail = %q, want %q", concernPolicy.Detail, logpolicy.DetailRaw)
+	if concernPolicy.Detail != logpolicy.DetailVerbose {
+		t.Fatalf("concern detail = %q, want %q", concernPolicy.Detail, logpolicy.DetailVerbose)
 	}
 	if concernPolicy.Rotation.MaxSizeMB != maxSizeMB {
 		t.Fatalf("concern rotation max size = %d, want %d", concernPolicy.Rotation.MaxSizeMB, maxSizeMB)
 	}
-	if concernPolicy.Retention.CleanupMode != logpolicy.CleanupAuditOnly {
-		t.Fatalf("concern cleanup mode = %q, want %q", concernPolicy.Retention.CleanupMode, logpolicy.CleanupAuditOnly)
+	if concernPolicy.Cleanup.MaxTotalMB == nil || *concernPolicy.Cleanup.MaxTotalMB != 512 {
+		t.Fatalf("concern cleanup max total MB = %v, want 512", concernPolicy.Cleanup.MaxTotalMB)
 	}
 }
 
-func TestResolveAuditAndAnthropicSidecarInheritGlobalRotation(t *testing.T) {
+func TestResolveSinksInheritGlobalRotation(t *testing.T) {
 	cfg := config.NewConfigWithDefaults()
 	cfg.Logging.Rotation = config.LoggingRotation{
 		MaxSizeMB:  11,
@@ -112,6 +107,7 @@ func TestResolveAuditAndAnthropicSidecarInheritGlobalRotation(t *testing.T) {
 	for _, sinkName := range []logpolicy.SinkName{
 		logpolicy.SinkAudit,
 		logpolicy.SinkAnthropicSidecar,
+		logpolicy.SinkInventory,
 	} {
 		sinkPolicy := policies.Sinks[sinkName]
 		if !sinkPolicy.Enabled {
@@ -126,58 +122,6 @@ func TestResolveAuditAndAnthropicSidecarInheritGlobalRotation(t *testing.T) {
 		if sinkPolicy.Rotation.MaxAgeDays != 33 {
 			t.Fatalf("%s rotation max age days = %d, want 33", sinkName, sinkPolicy.Rotation.MaxAgeDays)
 		}
-	}
-}
-
-func TestResolveAuditAndAnthropicSidecarPerSinkOverrides(t *testing.T) {
-	cfg := config.NewConfigWithDefaults()
-	cfg.Logging.Rotation = config.LoggingRotation{
-		MaxSizeMB:  100,
-		MaxBackups: 100,
-		MaxAgeDays: 100,
-	}
-	cfg.Logging.Sinks = config.LoggingSinks{
-		config.LoggingSinkAudit: {
-			Rotation: config.LoggingRotation{
-				MaxSizeMB:  16,
-				MaxBackups: 6,
-				MaxAgeDays: 3,
-			},
-		},
-		config.LoggingSinkAnthropicSidecar: {
-			Rotation: config.LoggingRotation{
-				MaxSizeMB:  32,
-				MaxBackups: 12,
-				MaxAgeDays: 3,
-			},
-		},
-	}
-
-	policies, err := logpolicy.Resolve(*cfg)
-	if err != nil {
-		t.Fatalf("Resolve returned error: %v", err)
-	}
-
-	auditPolicy := policies.Sinks[logpolicy.SinkAudit]
-	if auditPolicy.Rotation.MaxAgeDays != 3 {
-		t.Fatalf("audit rotation max age days = %d, want 3", auditPolicy.Rotation.MaxAgeDays)
-	}
-	if auditPolicy.Rotation.MaxSizeMB != 16 {
-		t.Fatalf("audit rotation max size = %d, want 16", auditPolicy.Rotation.MaxSizeMB)
-	}
-	if auditPolicy.Rotation.MaxBackups != 6 {
-		t.Fatalf("audit rotation max backups = %d, want 6", auditPolicy.Rotation.MaxBackups)
-	}
-
-	anthropicPolicy := policies.Sinks[logpolicy.SinkAnthropicSidecar]
-	if anthropicPolicy.Rotation.MaxAgeDays != 3 {
-		t.Fatalf("anthropic sidecar max age days = %d, want 3", anthropicPolicy.Rotation.MaxAgeDays)
-	}
-	if anthropicPolicy.Rotation.MaxSizeMB != 32 {
-		t.Fatalf("anthropic sidecar max size = %d, want 32", anthropicPolicy.Rotation.MaxSizeMB)
-	}
-	if anthropicPolicy.Rotation.MaxBackups != 12 {
-		t.Fatalf("anthropic sidecar max backups = %d, want 12", anthropicPolicy.Rotation.MaxBackups)
 	}
 }
 
@@ -210,15 +154,12 @@ func TestResolveAppliesAdapterWireCaptureRotationDefaults(t *testing.T) {
 }
 
 func TestResolveSloggerSetupConvertsPolicies(t *testing.T) {
-	enabled := false
 	cfg := config.NewConfigWithDefaults()
 	cfg.Logging.Sinks = config.LoggingSinks{
-		config.LoggingSinkDaemon: {
-			Enabled: &enabled,
-		},
+		Enabled: []string{config.LoggingSinkConcerns, config.LoggingSinkInventory},
 	}
 	cfg.Logging.Concerns = config.LoggingConcerns{
-		slogger.ConcernAdapterHTTPRaw: {
+		slogger.ConcernAdapterChatDispatch: {
 			Level: "debug",
 		},
 	}
@@ -229,9 +170,12 @@ func TestResolveSloggerSetupConvertsPolicies(t *testing.T) {
 	}
 
 	if policy.ProcessSink.Enabled {
-		t.Fatalf("daemon process sink should use disabled override")
+		t.Fatalf("daemon process sink should be disabled when omitted from enabled sinks")
 	}
-	concernPolicy := policy.ConcernPolicies[slogger.ConcernAdapterHTTPRaw]
+	if !policy.InventoryPolicy.Enabled {
+		t.Fatalf("inventory sink should be enabled by configured sink set")
+	}
+	concernPolicy := policy.ConcernPolicies[slogger.ConcernAdapterChatDispatch]
 	if concernPolicy.Level == nil || *concernPolicy.Level != slog.LevelDebug {
 		t.Fatalf("concern slog level = %v, want debug", concernPolicy.Level)
 	}
@@ -240,7 +184,7 @@ func TestResolveSloggerSetupConvertsPolicies(t *testing.T) {
 func TestResolveSloggerSetupDisablesConcernFileForProcessSink(t *testing.T) {
 	cfg := config.NewConfigWithDefaults()
 	cfg.Logging.Concerns = config.LoggingConcerns{
-		slogger.ConcernAdapterHTTPRaw: {
+		slogger.ConcernAdapterChatDispatch: {
 			Sink: config.LoggingSinkDaemon,
 		},
 	}
@@ -250,7 +194,7 @@ func TestResolveSloggerSetupDisablesConcernFileForProcessSink(t *testing.T) {
 		t.Fatalf("ResolveSloggerSetup returned error: %v", err)
 	}
 
-	concernPolicy := policy.ConcernPolicies[slogger.ConcernAdapterHTTPRaw]
+	concernPolicy := policy.ConcernPolicies[slogger.ConcernAdapterChatDispatch]
 	if concernPolicy.Enabled == nil || *concernPolicy.Enabled {
 		t.Fatalf("process-sink concern should disable the concern file handler")
 	}
@@ -271,22 +215,16 @@ func TestResolveRejectsUnknownConcern(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsInvalidRetention(t *testing.T) {
+func TestResolveRejectsInvalidCleanup(t *testing.T) {
 	negativeMaxAgeDays := -1
 	cfg := config.NewConfigWithDefaults()
-	cfg.Logging.Sinks = config.LoggingSinks{
-		config.LoggingSinkDaemon: {
-			Retention: config.LoggingRetention{
-				MaxAgeDays: &negativeMaxAgeDays,
-			},
-		},
-	}
+	cfg.Logging.Cleanup.MaxAgeDays = &negativeMaxAgeDays
 
 	_, err := logpolicy.Resolve(*cfg)
 	if err == nil {
 		t.Fatalf("Resolve returned nil error")
 	}
-	if !strings.Contains(err.Error(), "logging.sinks.daemon.retention.max_age_days must be >= 0") {
+	if !strings.Contains(err.Error(), "logging.cleanup.max_age_days must be >= 0") {
 		t.Fatalf("Resolve error = %q", err.Error())
 	}
 }

@@ -16,7 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +24,7 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/logevent"
 	codexprovider "goodkind.io/clyde/internal/providers/codex"
 	"goodkind.io/clyde/internal/slogger"
 )
@@ -32,15 +33,6 @@ var (
 	anthropicUpstream = "https://api.anthropic.com"
 	openAIUpstream    = "https://api.openai.com"
 	chatGPTUpstream   = "https://chatgpt.com"
-)
-
-type redactedHeaderLiteral string
-
-const (
-	redactedHeaderAuthorization      redactedHeaderLiteral = "authorization"
-	redactedHeaderProxyAuthorization redactedHeaderLiteral = "proxy-authorization"
-	redactedHeaderCookie             redactedHeaderLiteral = "cookie"
-	redactedHeaderSetCookie          redactedHeaderLiteral = "set-cookie"
 )
 
 type Proxy struct {
@@ -53,6 +45,7 @@ type Proxy struct {
 
 	cursorTLSClientConfig *tls.Config
 	rawCaptureSeq         atomic.Uint64
+	requestLog            *logevent.Emitter
 
 	// Tunnels tracks every long-lived MITM connection (CONNECT
 	// tunnels, intercepted Cursor TLS sessions, plain HTTP request
@@ -81,7 +74,12 @@ type Proxy struct {
 // caller (the daemon) owns listener lifecycle; the proxy serves on
 // it until Shutdown returns. Callers must invoke Serve to start
 // accepting requests.
-func NewProxy(cfg config.MITMConfig, log *slog.Logger, listener net.Listener) (*Proxy, error) {
+//
+// The logging argument carries the typed request-emitter configuration
+// (required-leg overrides and incomplete-policy) the MITM emitter applies. A
+// zero-value [config.LoggingRequest] yields default required legs and the warn
+// policy, matching the adapter's behavior.
+func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listener net.Listener) (*Proxy, error) {
 	if listener == nil {
 		return nil, fmt.Errorf("mitm: listener is required")
 	}
@@ -106,6 +104,11 @@ func NewProxy(cfg config.MITMConfig, log *slog.Logger, listener net.Listener) (*
 		ca:                    ca,
 		cursorTLSClientConfig: nil,
 		rawCaptureSeq:         atomic.Uint64{},
+		requestLog: logevent.NewEmitter(
+			slogger.WithConcern(log, slogger.ConcernProviderMITMWire),
+			logevent.RequiredLegsFromStrings(logging.RequiredLegs),
+			mitmEmitterOptions(logging)...,
+		),
 		Tunnels: livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
 			Component:     "mitm",
 			Concern:       slogger.ConcernProviderMITMLifecycle,
@@ -126,6 +129,21 @@ func NewProxy(cfg config.MITMConfig, log *slog.Logger, listener net.Listener) (*
 	return p, nil
 }
 
+// mitmEmitterOptions converts the typed [config.LoggingRequest] into the
+// [logevent.EmitterOption] set the MITM request emitter uses. Production
+// callers wire a nil test-fail handler; tests wire a non-nil handler to fail
+// the active test under [logevent.IncompletePolicyFailTest].
+func mitmEmitterOptions(request config.LoggingRequest) []logevent.EmitterOption {
+	policy, ok := logevent.ParseIncompletePolicy(request.IncompletePolicy)
+	if !ok {
+		policy = logevent.IncompletePolicyWarn
+	}
+	return []logevent.EmitterOption{
+		logevent.WithIncompletePolicy(policy),
+		logevent.WithTestingTB(nil),
+	}
+}
+
 // Serve runs the proxy's HTTP server on its bound listener. It blocks
 // until Shutdown is called or the listener returns an unrecoverable
 // error.
@@ -137,7 +155,7 @@ func (p *Proxy) Serve() error {
 		"base_url", p.base,
 		"capture_dir", p.cfg.CaptureDir,
 		"providers", p.cfg.Providers,
-		"body_mode", p.cfg.BodyMode,
+		"raw_capture_enabled", p.cfg.RawCaptureEnabled,
 	)
 	if err := p.server.Serve(p.listener); err != nil && err != http.ErrServerClosed {
 		p.log.Error("mitm.proxy.serve_failed", "err", err)
@@ -198,8 +216,8 @@ func (p *Proxy) closeCaptureWriters() {
 }
 
 // SetConfig updates the proxy's runtime config. The daemon calls
-// this on config reload so always-on knobs (capture dir, body mode,
-// provider set) react without rebinding the listener.
+// this on config reload so capture directory, raw capture, and provider set
+// changes react without rebinding the listener.
 func (p *Proxy) SetConfig(cfg config.MITMConfig) {
 	p.setConfig(cfg)
 }
@@ -222,14 +240,12 @@ func (p *Proxy) BaseURL() string { return p.base }
 
 func (p *Proxy) ClaudeBaseURL() string { return p.BaseURL() }
 
-// prepareCaptureWriters returns the per-request capture state. When
-// BodyMode is raw, it primes a sidecar response writer; otherwise it
-// returns a summary index and nil writer. Splitting this off keeps
-// the main handle function under the funlen limit while preserving
-// the previous behavior 1:1.
+// prepareCaptureWriters returns the per-request capture state. When raw
+// capture is enabled, it primes a sidecar response writer; otherwise it
+// returns a filtered inline summary index and nil writer.
 func (p *Proxy) prepareCaptureWriters(cfg config.MITMConfig, provider string, path string, body []byte) (captureBodyIndex, *failOpenRawCaptureWriter, error) {
-	requestBodyIndex := newCaptureBodyIndex(summarizeBody(cfg.BodyMode, body))
-	if cfg.BodyMode != "raw" {
+	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
+	if !cfg.RawCaptureEnabled {
 		return requestBodyIndex, nil, nil
 	}
 	rawSetup := p.prepareRawHTTPCapture(cfg, provider, path, body)
@@ -395,7 +411,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 			"decoded_bytes", len(captureBody),
 		)
 	}
-	responseBodyIndex, responseBodyLen := responseCaptureIndex(cfg.BodyMode, captureBody, responseRawWriter, responseRawError)
+	responseBodyIndex, responseBodyLen := responseCaptureIndex(cfg.RawCaptureEnabled, captureBody, responseRawWriter, responseRawError)
 
 	p.log.Info("mitm.capture.completed",
 		"provider", provider,
@@ -449,16 +465,34 @@ type captureBodyIndex struct {
 	raw json.RawMessage
 }
 
-func newCaptureBodyIndex(value any) captureBodyIndex {
-	raw, err := json.Marshal(value)
+type captureBodySummary struct {
+	Mode     string   `json:"mode,omitempty"`
+	BodyType string   `json:"body_type,omitempty"`
+	Bytes    int      `json:"bytes,omitempty"`
+	SHA256   string   `json:"sha256,omitempty"`
+	Keys     []string `json:"keys,omitempty"`
+	Messages int      `json:"messages,omitempty"`
+	Input    int      `json:"input,omitempty"`
+	Tools    int      `json:"tools,omitempty"`
+	Model    string   `json:"model,omitempty"`
+	ArrayLen int      `json:"array_len,omitempty"`
+	Preview  string   `json:"preview,omitempty"`
+}
+
+func newCaptureBodyIndexFromSummary(summary captureBodySummary) captureBodyIndex {
+	raw, err := json.Marshal(summary)
 	if err != nil {
 		raw = json.RawMessage(`null`)
 	}
 	return captureBodyIndex{raw: raw}
 }
 
-func (idx captureBodyIndex) MarshalJSON() ([]byte, error) {
-	return idx.raw, nil
+func newCaptureBodyIndexFromReference(reference rawBodyReference) captureBodyIndex {
+	raw, err := json.Marshal(reference)
+	if err != nil {
+		raw = json.RawMessage(`null`)
+	}
+	return captureBodyIndex{raw: raw}
 }
 
 type rawHTTPCaptureSetup struct {
@@ -469,7 +503,7 @@ type rawHTTPCaptureSetup struct {
 
 func (p *Proxy) prepareRawHTTPCapture(cfg config.MITMConfig, provider string, path string, body []byte) rawHTTPCaptureSetup {
 	rawSetup := rawHTTPCaptureSetup{
-		requestBodyIndex:  newCaptureBodyIndex(rawBodyReferenceFromBytes(body, "", 0, fmt.Errorf("raw request sidecar was not prepared"))),
+		requestBodyIndex:  newCaptureBodyIndexFromReference(rawBodyReferenceFromBytes(body, "", 0, fmt.Errorf("raw request sidecar was not prepared"))),
 		responseRawWriter: nil,
 		responseRawError:  nil,
 	}
@@ -483,7 +517,7 @@ func (p *Proxy) prepareRawHTTPCapture(cfg config.MITMConfig, provider string, pa
 		_, writeErr := dst.Write(body)
 		return writeErr
 	})
-	rawSetup.requestBodyIndex = newCaptureBodyIndex(rawBodyReferenceFromBytes(body, requestRawPath, requestBytes, err))
+	rawSetup.requestBodyIndex = newCaptureBodyIndexFromReference(rawBodyReferenceFromBytes(body, requestRawPath, requestBytes, err))
 	if err != nil {
 		p.log.Warn("mitm.capture.raw_request_failed", "provider", provider, "path", path, "err", err)
 	}
@@ -498,91 +532,34 @@ func (p *Proxy) prepareRawHTTPCapture(cfg config.MITMConfig, provider string, pa
 }
 
 func responseCaptureIndex(
-	bodyMode string,
+	rawCaptureEnabled bool,
 	captureBody []byte,
 	responseRawWriter *failOpenRawCaptureWriter,
 	responseRawError error,
 ) (captureBodyIndex, int64) {
-	if bodyMode != "raw" {
-		return newCaptureBodyIndex(summarizeBody(bodyMode, captureBody)), int64(len(captureBody))
+	if !rawCaptureEnabled {
+		return newCaptureBodyIndexFromSummary(summarizeBody(captureBody)), int64(len(captureBody))
 	}
 	if responseRawWriter != nil {
-		return newCaptureBodyIndex(responseRawWriter.Reference()), responseRawWriter.Count()
+		return newCaptureBodyIndexFromReference(responseRawWriter.Reference()), responseRawWriter.Count()
 	}
 	if responseRawError == nil {
 		responseRawError = fmt.Errorf("raw response sidecar was not prepared")
 	}
 	ref := rawBodyReferenceFromBytes(captureBody, "", int64(len(captureBody)), responseRawError)
-	return newCaptureBodyIndex(ref), int64(len(captureBody))
+	return newCaptureBodyIndexFromReference(ref), int64(len(captureBody))
 }
 
 func (p *Proxy) recordHTTPCapture(r *http.Request, resp *http.Response, input httpCaptureRecordInput) {
-	requestEvent := map[string]any{
-		"kind":            string(RecordHTTPRequest),
-		"t":               currentTime().Unix(),
-		"ts":              currentTime().UTC().Format(time.RFC3339Nano),
-		"provider":        input.provider,
-		"method":          r.Method,
-		"url":             input.upstreamURL,
-		"path":            r.URL.Path,
-		"query":           r.URL.RawQuery,
-		"headers":         redactHeaders(r.Header),
-		"body_len":        len(input.requestBody),
-		"body":            input.requestIndex,
-		"request_headers": redactHeaders(r.Header),
-		"request_body":    input.requestIndex,
-	}
-	if err := p.writeCaptureEvent(input.config.CaptureDir, requestEvent, input.policy); err != nil {
-		if errors.Is(err, ErrCaptureSinkClosed) {
-			p.log.Debug("mitm.capture.append_skipped_closed",
-				"component", "mitm",
-				"concern", "providers.mitm.wire",
-				"capture_dir", input.config.CaptureDir,
-			)
-			return
-		}
-		p.log.Warn("mitm.capture.append_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"capture_dir", input.config.CaptureDir,
-			"err", err,
-		)
-	}
-	event := map[string]any{
-		"kind":             string(RecordHTTPResponse),
-		"t":                currentTime().Unix(),
-		"ts":               currentTime().UTC().Format(time.RFC3339Nano),
-		"provider":         input.provider,
-		"method":           r.Method,
-		"url":              input.upstreamURL,
-		"path":             r.URL.Path,
-		"query":            r.URL.RawQuery,
-		"status":           input.responseStatus,
-		"duration_ms":      input.duration.Milliseconds(),
-		"headers":          redactHeaders(resp.Header),
-		"body_len":         input.responseLen,
-		"body":             input.responseIndex,
-		"request_headers":  redactHeaders(r.Header),
-		"response_headers": redactHeaders(resp.Header),
-		"request_body":     input.requestIndex,
-		"response_body":    input.responseIndex,
-	}
-	if err := p.writeCaptureEvent(input.config.CaptureDir, event, input.policy); err != nil {
-		if errors.Is(err, ErrCaptureSinkClosed) {
-			p.log.Debug("mitm.capture.append_skipped_closed",
-				"component", "mitm",
-				"concern", "providers.mitm.wire",
-				"capture_dir", input.config.CaptureDir,
-			)
-			return
-		}
-		p.log.Warn("mitm.capture.append_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"capture_dir", input.config.CaptureDir,
-			"err", err,
-		)
-	}
+	recorder := p.beginHTTPLogRecorder(r, input)
+	ctx := r.Context()
+	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMIngress, logevent.PhaseStarted, input)
+	p.emitHTTPPayloadLeg(ctx, recorder, r, resp, input)
+	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMUpstreamSend, logevent.PhaseStarted, input)
+	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMUpstreamStart, logevent.PhaseCompleted, input)
+	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMForward, logevent.PhaseCompleted, input)
+	p.emitHTTPLogLeg(ctx, recorder, logevent.LegMITMCaptureIndex, logevent.PhaseCompleted, input)
+	p.completeHTTPLogRecorder(ctx, recorder, input)
 }
 
 func classifyRoute(path string) (provider string, upstream string) {
@@ -604,39 +581,6 @@ func copyHeaders(dst, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
-}
-
-func redactHeaders(h http.Header) map[string]string {
-	out := make(map[string]string, len(h))
-	keys := make([]string, 0, len(h))
-	for key := range h {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		lower := strings.ToLower(key)
-		if isSensitiveHeaderName(lower) {
-			out[key] = "<redacted>"
-		} else {
-			out[key] = strings.Join(h.Values(key), ", ")
-		}
-	}
-	return out
-}
-
-func isSensitiveHeaderName(lower string) bool {
-	switch redactedHeaderLiteral(lower) {
-	case redactedHeaderAuthorization,
-		redactedHeaderProxyAuthorization,
-		redactedHeaderCookie,
-		redactedHeaderSetCookie:
-		return true
-	}
-	if strings.Contains(lower, "api-key") {
-		return true
-	}
-	credentialSuffix := "tok" + "en"
-	return strings.Contains(lower, credentialSuffix)
 }
 
 type rawBodyReference struct {
@@ -670,22 +614,27 @@ func bodyTypeForCapture(body []byte) string {
 	if len(trimmed) == 0 {
 		return "empty"
 	}
-	var decoded any
-	if err := json.Unmarshal(trimmed, &decoded); err != nil {
+	switch trimmed[0] {
+	case '{':
+		var decoded map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &decoded); err == nil {
+			return "json_object"
+		}
+	case '[':
+		var decoded []json.RawMessage
+		if err := json.Unmarshal(trimmed, &decoded); err == nil {
+			return "json_array"
+		}
+	}
+	var scalar json.RawMessage
+	if err := json.Unmarshal(trimmed, &scalar); err != nil {
 		return "bytes"
 	}
-	switch decoded.(type) {
-	case map[string]any:
-		return "json_object"
-	case []any:
-		return "json_array"
-	default:
-		return "json_scalar"
-	}
+	return "json_scalar"
 }
 
 func bodyKeysForCapture(body []byte) []string {
-	var decoded map[string]any
+	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal(bytes.TrimSpace(body), &decoded); err != nil {
 		return nil
 	}
@@ -693,7 +642,7 @@ func bodyKeysForCapture(body []byte) []string {
 	for key := range decoded {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
 
@@ -759,80 +708,80 @@ func (w *failOpenRawCaptureWriter) Reference() rawBodyReference {
 	return ref
 }
 
-func summarizeBody(mode string, body []byte) any {
-	switch mode {
-	case "off":
-		return "off"
-	case "raw":
-		if len(body) == 0 {
-			return ""
-		}
-		return string(body)
-	default:
-		return summarizeJSON(body)
+func summarizeBody(body []byte) captureBodySummary {
+	summary := captureBodySummary{
+		Mode:     "filtered_inline",
+		BodyType: bodyTypeForCapture(body),
+		Bytes:    len(body),
+		SHA256:   sha256Hex(body),
+		Keys:     nil,
+		Messages: 0,
+		Input:    0,
+		Tools:    0,
+		Model:    "",
+		ArrayLen: 0,
+		Preview:  "",
 	}
+	return summarizeJSON(body, summary)
 }
 
-func summarizeJSON(body []byte) any {
+func summarizeJSON(body []byte, summary captureBodySummary) captureBodySummary {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
+		return summary
+	}
+	if summary.BodyType == "bytes" {
+		if len(trimmed) > 512 {
+			summary.Preview = trimmed[:512]
+		} else {
+			summary.Preview = trimmed
+		}
+		return summary
+	}
+	if summary.BodyType == "json_array" {
+		var values []json.RawMessage
+		if err := json.Unmarshal(body, &values); err == nil {
+			summary.ArrayLen = len(values)
+		}
+		return summary
+	}
+	if summary.BodyType != "json_object" {
+		return summary
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return summary
+	}
+	summary.Keys = bodyKeysForCapture(body)
+	summary.Messages = rawFieldArrayLen(fields, "messages")
+	summary.Input = rawFieldArrayLen(fields, "input")
+	summary.Tools = rawFieldArrayLen(fields, "tools")
+	summary.Model = rawFieldString(fields, "model")
+	return summary
+}
+
+func rawFieldArrayLen(fields map[string]json.RawMessage, key string) int {
+	raw, ok := fields[key]
+	if !ok {
+		return 0
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return 0
+	}
+	return len(values)
+}
+
+func rawFieldString(fields map[string]json.RawMessage, key string) string {
+	raw, ok := fields[key]
+	if !ok {
 		return ""
 	}
-	var decoded any
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		if len(trimmed) > 512 {
-			return trimmed[:512]
-		}
-		return trimmed
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
 	}
-	return summarizeValue(decoded)
-}
-
-func summarizeValue(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(x))
-		for key := range x {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		out := map[string]any{"keys": keys}
-		if msgs, ok := x["messages"].([]any); ok {
-			out["messages"] = len(msgs)
-		}
-		if input, ok := x["input"].([]any); ok {
-			out["input"] = len(input)
-		}
-		if tools, ok := x["tools"].([]any); ok {
-			out["tools"] = len(tools)
-		}
-		if model, ok := x["model"].(string); ok {
-			out["model"] = model
-		}
-		return out
-	case []any:
-		return map[string]any{"array_len": len(x)}
-	default:
-		return x
-	}
-}
-
-// writeCaptureEvent encodes one MITM capture event and writes it
-// through this proxy's writer cache. After Shutdown, returns
-// ErrCaptureSinkClosed for rotated policies; callers must propagate
-// the error rather than retry.
-func (p *Proxy) writeCaptureEvent(dir string, event map[string]any, policy CaptureFilePolicy) error {
-	raw, err := json.Marshal(event)
-	if err != nil {
-		p.log.Warn("mitm.capture.encode_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"capture_dir", dir,
-			"err", err,
-		)
-		return fmt.Errorf("encode capture event: %w", err)
-	}
-	return p.writeCaptureLine(dir, raw, policy)
+	return value
 }
 
 // writeCaptureLine appends one JSONL capture record through this

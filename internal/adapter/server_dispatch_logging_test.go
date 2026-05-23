@@ -3,7 +3,6 @@ package adapter
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -14,232 +13,122 @@ import (
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/logevent"
 )
 
-func TestHandleChatLogsSummaryBody(t *testing.T) {
+func TestHandleChatLogsFixedFilteredPayload(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode:  "summary",
-			MaxKB: 32,
-		},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	body := map[string]any{
-		"model":    "missing-model",
-		"messages": []map[string]string{{"role": "system", "content": "ping"}},
+		"model":       "missing-model",
+		"temperature": 0.2,
+		"messages":    []map[string]string{{"role": "system", "content": "ping"}},
 	}
 	postChatToServer(t, srv, body)
 
-	rawEvt := findRawLogEvent(t, buf)
-	if rawEvt == nil {
-		t.Fatalf("expected adapter.chat.raw event")
+	payloadEvent := findPayloadLogEvent(t, buf)
+	if payloadEvent == nil {
+		t.Fatalf("expected adapter payload request leg")
 	}
-	if rawEvt["msg"] != "adapter.chat.raw" {
-		t.Fatalf("msg = %q", rawEvt["msg"])
+	if payloadEvent["msg"] != "logging.request.leg" {
+		t.Fatalf("msg = %q", payloadEvent["msg"])
 	}
-	if _, hasBody := rawEvt["body"]; hasBody {
-		t.Fatalf("summary mode should not include raw body")
+	if _, hasBody := payloadEvent["body"]; hasBody {
+		t.Fatalf("fixed payload policy should not include body")
 	}
-	if _, hasSummary := rawEvt["body_summary"]; !hasSummary {
-		t.Fatalf("summary mode should include body_summary")
+	if _, hasBodyB64 := payloadEvent["body_b64"]; hasBodyB64 {
+		t.Fatalf("fixed payload policy should not include body_b64")
+	}
+	if _, hasBodySummary := payloadEvent["body_summary"]; hasBodySummary {
+		t.Fatalf("fixed payload policy should not include legacy body_summary")
+	}
+	if _, hasSummary := payloadEvent["payload_summary"]; !hasSummary {
+		t.Fatalf("fixed payload policy should include payload_summary")
+	}
+	if !payloadEventHasField(payloadEvent, "$.temperature") {
+		t.Fatalf("payload_fields should retain unknown non-context fields: %v", payloadEvent["payload_fields"])
+	}
+	if !payloadEventHasRemoved(payloadEvent, "$.messages") {
+		t.Fatalf("payload_removed should record context fields: %v", payloadEvent["payload_removed"])
 	}
 }
 
-func TestHandleChatLogsWhitelistBody(t *testing.T) {
+func TestHandleChatEmitsRequiredRequestLegSequence(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode:  "whitelist",
-			MaxKB: 4,
+	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
+		cfg.Codex.Enabled = true
+		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+	})
+
+	postChatToServer(t, srv, map[string]any{
+		"model": "gpt-5.4",
+		"messages": []map[string]string{
+			{"role": "user", "content": "ping"},
 		},
 	})
 
-	body := map[string]any{
-		"model": "missing-model",
-		"tools": []map[string]any{
-			{
-				"type": "function",
-				"function": map[string]any{
-					"name":       "weather",
-					"parameters": map[string]any{"city": "string"},
-				},
-			},
-		},
-		"tool_choice": "auto",
-		"messages": []map[string]any{
-			{"role": "user", "content": strings.Repeat("x", 10000)},
-		},
+	seen := make(map[string]bool)
+	for _, event := range findLogEvents(t, buf, "logging.request.leg") {
+		if event["surface"] != string(logevent.SurfaceAdapterChat) {
+			continue
+		}
+		leg, ok := event["leg"].(string)
+		if ok {
+			seen[leg] = true
+		}
 	}
-	postChatToServer(t, srv, body)
-
-	rawEvt := findRawLogEvent(t, buf)
-	if rawEvt == nil {
-		t.Fatalf("expected adapter.chat.raw event")
+	for _, leg := range logevent.DefaultRequiredLegs()[logevent.SurfaceAdapterChat] {
+		if !seen[string(leg)] {
+			t.Fatalf("missing required leg %s in events %v", leg, seen)
+		}
 	}
-	rawBody, ok := rawEvt["body"].(string)
-	if !ok {
-		t.Fatalf("body type = %T", rawEvt["body"])
-	}
-	if len(rawBody) > 4*1024 {
-		t.Fatalf("whitelist body should be capped to 4KB")
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(rawBody), &payload); err != nil {
-		t.Fatalf("unmarshal body: %v", err)
-	}
-	tools, ok := payload["tools"].([]any)
-	if !ok || len(tools) == 0 {
-		t.Fatalf("expected tools in whitelist body")
-	}
-	tool0, ok := tools[0].(map[string]any)
-	if !ok {
-		t.Fatalf("tool shape %T", tools[0])
-	}
-	if _, hasParams := tool0["parameters"]; hasParams {
-		t.Fatalf("tool parameters should be redacted in whitelist body")
-	}
-	fn, ok := tool0["function"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool function shape = %T", tool0["function"])
-	}
-	if fn["name"] != "weather" {
-		t.Fatalf("tool name = %v", fn["name"])
-	}
-	if _, ok := rawEvt["body_summary"]; !ok {
-		t.Fatalf("whitelist mode should include body_summary")
+	if event := findLogEvent(t, buf, "logging.request.incomplete"); event != nil {
+		t.Fatalf("did not expect incomplete request event: %v", event)
 	}
 }
 
-func TestHandleChatLogsRawBody(t *testing.T) {
+func TestHandleChatEarlyFailureEmitsErrorLegWithoutIncomplete(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode:  "raw",
-			MaxKB: 1,
-		},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
-	body := map[string]any{
-		"model":    "missing-model",
-		"messages": []map[string]string{{"role": "system", "content": strings.Repeat("y", 2048)}},
-	}
-	postChatToServer(t, srv, body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	srv.mux.ServeHTTP(resp, req)
 
-	rawEvt := findRawLogEvent(t, buf)
-	if rawEvt == nil {
-		t.Fatalf("expected adapter.chat.raw event")
+	errorLeg := false
+	for _, event := range findLogEvents(t, buf, "logging.request.leg") {
+		if event["leg"] == string(logevent.LegRequestError) {
+			errorLeg = true
+		}
 	}
-	rawBody, ok := rawEvt["body"].(string)
-	if !ok {
-		t.Fatalf("body type = %T", rawEvt["body"])
+	if !errorLeg {
+		t.Fatalf("expected request_error leg")
 	}
-	if len(rawBody) > 1024 {
-		t.Fatalf("raw body should be capped to 1KB")
-	}
-	if truncated, ok := rawEvt["body_truncated"].(bool); !ok || !truncated {
-		t.Fatalf("expected body_truncated=true")
-	}
-	if _, hasSummary := rawEvt["body_summary"]; !hasSummary {
-		t.Fatalf("raw mode should include body_summary")
-	}
-	bodyB64, ok := rawEvt["body_b64"].(string)
-	if !ok {
-		t.Fatalf("raw mode should include body_b64")
-	}
-	decoded, err := base64.StdEncoding.DecodeString(bodyB64)
-	if err != nil {
-		t.Fatalf("decode body_b64: %v", err)
-	}
-	if len(decoded) > 1024 {
-		t.Fatalf("decoded body_b64 should be capped to 1KB; got %d", len(decoded))
+	if event := findLogEvent(t, buf, "logging.request.incomplete"); event != nil {
+		t.Fatalf("did not expect incomplete request event: %v", event)
 	}
 }
 
-func TestHandleChatUsesRuntimeBodyLoggingConfig(t *testing.T) {
+func TestAdapterRoutesDoNotEmitRequestDebugBypass(t *testing.T) {
 	t.Parallel()
-	runtimeLogging := NewRuntimeLogging(config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "summary", MaxKB: 32},
-	})
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "summary", MaxKB: 32},
-	})
-	srv.runtimeLogging = runtimeLogging
-
-	body := map[string]any{
-		"model":    "missing-model",
-		"messages": []map[string]string{{"role": "user", "content": strings.Repeat("z", 2048)}},
-	}
-	postChatToServer(t, srv, body)
-	summaryEvt := findRawLogEvent(t, buf)
-	if summaryEvt == nil {
-		t.Fatalf("expected summary adapter.chat.raw event")
-	}
-	if _, hasBody := summaryEvt["body"]; hasBody {
-		t.Fatalf("summary mode should not include raw body")
-	}
-
-	buf.Reset()
-	runtimeLogging.Set(config.LoggingConfig{
-		Body: config.LoggingBody{Mode: "raw", MaxKB: 1},
-	})
-	postChatToServer(t, srv, body)
-	rawEvt := findRawLogEvent(t, buf)
-	if rawEvt == nil {
-		t.Fatalf("expected raw adapter.chat.raw event")
-	}
-	if _, ok := rawEvt["body"].(string); !ok {
-		t.Fatalf("raw mode should include body, got %T", rawEvt["body"])
-	}
-	if _, ok := rawEvt["body_b64"].(string); !ok {
-		t.Fatalf("raw mode should include body_b64")
-	}
-	if truncated, ok := rawEvt["body_truncated"].(bool); !ok || !truncated {
-		t.Fatalf("expected body_truncated=true after runtime max_kb change")
-	}
-}
-
-func TestRequestDebugLogsRawPayloadForEveryRoute(t *testing.T) {
-	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode:  "raw",
-			MaxKB: 4,
-		},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	payload := `{"prompt":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/completions", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Cursor/raw-debug-test")
 	resp := httptest.NewRecorder()
 	srv.mux.ServeHTTP(resp, req)
 
-	evt := findLogEvent(t, buf, "adapter.request.raw")
-	if evt == nil {
-		t.Fatalf("expected adapter.request.raw event")
-	}
-	if evt["path"] != "/v1/completions" {
-		t.Fatalf("path=%v", evt["path"])
-	}
-	if evt["user_agent"] != "Cursor/raw-debug-test" {
-		t.Fatalf("user_agent=%v", evt["user_agent"])
-	}
-	if evt["body"] != payload {
-		t.Fatalf("body=%v", evt["body"])
-	}
-	if _, ok := evt["body_b64"].(string); !ok {
-		t.Fatalf("expected body_b64 in raw request debug event")
+	if evt := findLogEvent(t, buf, "logging.request.debug"); evt != nil {
+		t.Fatalf("did not expect logging.request.debug bypass event: %v", evt)
 	}
 }
 
 func TestAdapterErrorBoundaryRecoversPanicWithShapedError(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
 		panic("boom")
@@ -278,45 +167,24 @@ func TestAdapterErrorBoundaryRecoversPanicWithShapedError(t *testing.T) {
 	}
 }
 
-func TestHandleChatLogsOffModeSkipsEvent(t *testing.T) {
-	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	})
-	body := map[string]any{
-		"model":    "missing-model",
-		"messages": []map[string]string{{"role": "system", "content": "ping"}},
-	}
-	postChatToServer(t, srv, body)
-	if evt := findRawLogEvent(t, buf); evt != nil {
-		t.Fatalf("expected no adapter.chat.raw event in off mode")
-	}
-}
-
 func TestHandleChatLogsIngressBeforeParse(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	})
+	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
 	req.Header.Set("User-Agent", "Cursor/route-probe")
 	resp := httptest.NewRecorder()
 	srv.mux.ServeHTTP(resp, req)
 
-	ingress := findLogEvent(t, buf, "adapter.chat.ingress")
+	ingress := findRequestLegLogEvent(t, buf, logevent.LegAdapterIngress)
 	if ingress == nil {
-		t.Fatalf("expected adapter.chat.ingress event")
+		t.Fatalf("expected adapter ingress request leg")
 	}
-	if ingress["user_agent"] != "Cursor/route-probe" {
-		t.Fatalf("user_agent=%v", ingress["user_agent"])
+	if ingress["phase"] != string(logevent.PhaseStarted) {
+		t.Fatalf("phase=%v", ingress["phase"])
 	}
-	if ingress["body_bytes"] != float64(1) {
-		t.Fatalf("body_bytes=%v", ingress["body_bytes"])
+	if ingress["status"] != string(logevent.StatusOK) {
+		t.Fatalf("status=%v", ingress["status"])
 	}
 	if evt := findLogEvent(t, buf, "adapter.chat.parse_failed"); evt == nil {
 		t.Fatalf("expected adapter.chat.parse_failed event")
@@ -325,12 +193,7 @@ func TestHandleChatLogsIngressBeforeParse(t *testing.T) {
 
 func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode:  "summary",
-			MaxKB: 32,
-		},
-	}, func(cfg *config.AdapterConfig) {
+	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
 		cfg.Codex.ModelPrefixes = []string{"gpt-"}
 	})
@@ -357,20 +220,20 @@ func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 	resp := httptest.NewRecorder()
 	srv.mux.ServeHTTP(resp, req)
 
-	ingress := findLogEvent(t, buf, "adapter.chat.ingress")
+	ingress := findRequestLegLogEvent(t, buf, logevent.LegAdapterIngress)
 	if ingress == nil {
-		t.Fatalf("expected adapter.chat.ingress event")
+		t.Fatalf("expected adapter ingress request leg")
 	}
 	assertCorrelationEvent(t, ingress, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
 	if ingress["cursor_request_id"] != "cursor-header-req" {
 		t.Fatalf("ingress cursor_request_id=%v", ingress["cursor_request_id"])
 	}
 
-	rawEvt := findLogEvent(t, buf, "adapter.chat.raw")
-	if rawEvt == nil {
-		t.Fatalf("expected adapter.chat.raw event")
+	payloadEvent := findPayloadLogEvent(t, buf)
+	if payloadEvent == nil {
+		t.Fatalf("expected adapter payload request leg")
 	}
-	assertCorrelationEvent(t, rawEvt, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
+	assertCorrelationEvent(t, payloadEvent, "clyde-req-1", "0123456789abcdef0123456789abcdef", "0123456789abcdef")
 
 	received := findLogEvent(t, buf, "adapter.chat.received")
 	if received == nil {
@@ -396,11 +259,7 @@ func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 
 func TestHandleChatLogsForkDetectedForDerivedBranch(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	}, func(cfg *config.AdapterConfig) {
+	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
 		cfg.Codex.ModelPrefixes = []string{"gpt-"}
 	})
@@ -464,11 +323,7 @@ func assertCorrelationEvent(t *testing.T, evt map[string]any, requestID, traceID
 
 func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
 	body := map[string]any{
 		"model": "missing-model",
@@ -492,11 +347,7 @@ func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 
 func TestHandleChatRejectsUnsupportedBackendWithoutLegacyRunner(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
 	payload, err := json.Marshal(map[string]any{
 		"model": "clyde-haiku-4-5",
@@ -526,11 +377,7 @@ func TestHandleChatRejectsUnsupportedBackendWithoutLegacyRunner(t *testing.T) {
 
 func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	}, func(cfg *config.AdapterConfig) {
+	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
 		cfg.Codex.NativeModelRouting = "codex"
 	})
@@ -590,11 +437,7 @@ func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 
 func TestHandleChatRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	}, func(cfg *config.AdapterConfig) {
+	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
 		cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
 	})
@@ -627,11 +470,7 @@ func TestHandleChatRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 
 func TestHandleChatModelResolutionErrorUsesCursorNativeShape(t *testing.T) {
 	t.Parallel()
-	srv, buf := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	}, func(cfg *config.AdapterConfig) {
+	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
 		cfg.Codex.NativeModelRouting = "off"
 	})
@@ -681,14 +520,56 @@ func TestHandleChatModelResolutionErrorUsesCursorNativeShape(t *testing.T) {
 
 func TestServerAddrUsesIPv6LoopbackDefault(t *testing.T) {
 	t.Parallel()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{
-		Body: config.LoggingBody{
-			Mode: "off",
-		},
-	})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
 	if got := srv.Addr(); got != "[::1]:11434" {
 		t.Fatalf("Addr()=%q want [::1]:11434", got)
+	}
+}
+
+func TestAdapterEmitterHonorsConfiguredIncompletePolicy(t *testing.T) {
+	t.Parallel()
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	var handlerCalls int
+	options := append(
+		adapterEmitterOptions(config.LoggingRequest{IncompletePolicy: "fail_test"}),
+		logevent.WithTestingTB(func(report logevent.IncompleteReport) {
+			handlerCalls++
+			_ = report
+		}),
+	)
+	emitter := logevent.NewEmitter(
+		logger,
+		logevent.RequiredLegs{logevent.SurfaceAdapterChat: {logevent.LegAdapterIngress, logevent.LegAdapterPayload}},
+		options...,
+	)
+	recorder := emitter.Begin(
+		logevent.Identity{RequestID: "policy-probe"},
+		logevent.Path{Surface: logevent.SurfaceAdapterChat, RouteFamily: logevent.RouteFamilyOpenAICompatible},
+	)
+	recorder.Emit(context.Background(), logevent.Event{Path: logevent.Path{Leg: logevent.LegAdapterIngress, Phase: logevent.PhaseStarted}})
+	if recorder.Complete(context.Background()) {
+		t.Fatalf("Complete returned true on a missing required leg")
+	}
+
+	incomplete := findLogEvent(t, logBuffer, "logging.request.incomplete")
+	if incomplete == nil {
+		t.Fatalf("expected logging.request.incomplete event")
+	}
+	if incomplete["incomplete_policy"] != string(logevent.IncompletePolicyFailTest) {
+		t.Fatalf("incomplete_policy=%v want %s", incomplete["incomplete_policy"], logevent.IncompletePolicyFailTest)
+	}
+	if handlerCalls != 1 {
+		t.Fatalf("test fail handler called %d times, want 1", handlerCalls)
+	}
+
+	if policy := adapterEmitterOptions(config.LoggingRequest{IncompletePolicy: "warn"}); len(policy) != 2 {
+		t.Fatalf("warn options length = %d want 2", len(policy))
+	}
+	if policy := adapterEmitterOptions(config.LoggingRequest{IncompletePolicy: ""}); len(policy) != 2 {
+		t.Fatalf("default options length = %d want 2", len(policy))
 	}
 }
 
@@ -724,8 +605,73 @@ func postChatToServer(t *testing.T, srv *Server, body map[string]any) {
 	srv.mux.ServeHTTP(resp, req)
 }
 
-func findRawLogEvent(t *testing.T, logBuffer *bytes.Buffer) map[string]any {
-	return findLogEvent(t, logBuffer, "adapter.chat.raw")
+func findPayloadLogEvent(t *testing.T, logBuffer *bytes.Buffer) map[string]any {
+	t.Helper()
+	return findRequestLegLogEvent(t, logBuffer, logevent.LegAdapterPayload)
+}
+
+func findRequestLegLogEvent(t *testing.T, logBuffer *bytes.Buffer, leg logevent.Leg) map[string]any {
+	t.Helper()
+	for _, event := range findLogEvents(t, logBuffer, "logging.request.leg") {
+		if event["surface"] == string(logevent.SurfaceAdapterChat) && event["leg"] == string(leg) {
+			return event
+		}
+	}
+	return nil
+}
+
+func payloadEventHasField(event map[string]any, path string) bool {
+	fields, ok := event["payload_fields"].([]any)
+	if !ok {
+		return false
+	}
+	for _, field := range fields {
+		fieldMap, ok := field.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fieldMap["path"] == path {
+			return true
+		}
+	}
+	return false
+}
+
+func payloadEventHasRemoved(event map[string]any, path string) bool {
+	removed, ok := event["payload_removed"].([]any)
+	if !ok {
+		return false
+	}
+	for _, field := range removed {
+		fieldMap, ok := field.(map[string]any)
+		if !ok {
+			continue
+		}
+		if fieldMap["path"] == path {
+			return true
+		}
+	}
+	return false
+}
+
+func findLogEvents(t *testing.T, logBuffer *bytes.Buffer, message string) []map[string]any {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(logBuffer.String()), "\n")
+	events := make([]map[string]any, 0)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			continue
+		}
+		if evt["msg"] == message {
+			events = append(events, evt)
+		}
+	}
+	return events
 }
 
 func findLogEvent(t *testing.T, logBuffer *bytes.Buffer, message string) map[string]any {

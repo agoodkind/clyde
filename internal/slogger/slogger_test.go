@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/logevent"
 )
 
 func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
@@ -335,7 +336,6 @@ func TestSetupWithPolicyPreservesDefaultLevelAndTranscriptSummary(t *testing.T) 
 	unified := filepath.Join(root, "clyde-daemon.jsonl")
 	policy := testSetupPolicy(root)
 	policy.TranscriptPolicy.Enabled = true
-	policy.TranscriptPolicy.Mode = TranscriptModeSummary
 	closer, err := SetupWithPolicy(policy)
 	if err != nil {
 		t.Fatalf("SetupWithPolicy: %v", err)
@@ -344,18 +344,39 @@ func TestSetupWithPolicyPreservesDefaultLevelAndTranscriptSummary(t *testing.T) 
 
 	slog.Debug("daemon.debug_default_filtered")
 	slog.Info("daemon.info_default_kept")
-	slog.Info("adapter.chat.raw", "chat_key", "chat-defaults", "body", "secret-body")
+	slog.Info("logging.request.leg", "chat_key", "chat-defaults", "request_id", "req-defaults", "body", "secret-body")
 	_ = closer.Close()
 
 	assertLogContains(t, unified, "daemon.info_default_kept")
 	assertLogMissing(t, unified, "daemon.debug_default_filtered")
 	transcriptPath := filepath.Join(root, "logs", "chats", "chat-defaults.jsonl")
-	assertLogContains(t, transcriptPath, "adapter.chat.raw")
+	assertLogContains(t, transcriptPath, "logging.request.leg")
 	assertLogMissing(t, transcriptPath, "secret-body")
+}
+
+func TestSetupWithPolicyWritesInventoryIndexSink(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	policy := testSetupPolicy(root)
+	policy.InventoryPolicy.Enabled = true
+	closer, err := SetupWithPolicy(policy)
+	if err != nil {
+		t.Fatalf("SetupWithPolicy: %v", err)
+	}
+	t.Cleanup(func() { _ = closer.Close() })
+
+	slog.Info("logging.request.leg", "request_id", "req-inventory", "sinks", []logevent.SinkName{logevent.SinkProcess, logevent.SinkInventory})
+	slog.Info("daemon.info_without_inventory", "request_id", "req-skip")
+	_ = closer.Close()
+
+	inventoryPath := filepath.Join(root, "logs", "inventory", "events.jsonl")
+	assertLogContains(t, inventoryPath, "req-inventory")
+	assertLogMissing(t, inventoryPath, "req-skip")
 }
 
 func TestConcernForEventCoversPrimaryTree(t *testing.T) {
 	cases := map[string]string{
+		"logging.request.leg":              ConcernAdapterChatDispatch,
 		"adapter.codex.transport.prepared": ConcernAdapterProviderCodexWS,
 		"adapter.anthropic.ingress":        ConcernAdapterProviderAnthReq,
 		"session.adopt.completed":          ConcernSessionDiscoveryAdopt,
@@ -415,7 +436,6 @@ func testSetupPolicy(root string) SetupPolicy {
 		ConcernPolicies: nil,
 		TranscriptPolicy: TranscriptPolicy{
 			Enabled: false,
-			Mode:    "",
 		},
 	}
 }

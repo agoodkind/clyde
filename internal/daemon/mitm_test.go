@@ -35,7 +35,7 @@ func TestProviderLaunchEnvironmentReturnsClaudeMITMEnvWhenEnabled(t *testing.T) 
 			KeyPath:  filepath.Join(caDir, "clyde-mitm-ca.key"),
 		},
 	}
-	proxy, err := mitm.NewProxy(mitmCfg, slog.New(slog.NewTextHandler(io.Discard, nil)), listener)
+	proxy, err := mitm.NewProxy(mitmCfg, config.LoggingRequest{}, slog.New(slog.NewTextHandler(io.Discard, nil)), listener)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestProviderLaunchEnvironmentReturnsCodexMITMEnvWhenEnabled(t *testing.T) {
 			KeyPath:  keyPath,
 		},
 	}
-	proxy, err := mitm.NewProxy(mitmCfg, slog.New(slog.NewTextHandler(io.Discard, nil)), listener)
+	proxy, err := mitm.NewProxy(mitmCfg, config.LoggingRequest{}, slog.New(slog.NewTextHandler(io.Discard, nil)), listener)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -145,7 +145,7 @@ func writeMITMConfigWithCA(t *testing.T, enabledDefault bool, certPath, keyPath 
 	if enabledDefault {
 		enabled = "true"
 	}
-	cfgText := "[mitm]\nenabled_default = " + enabled + "\nproviders = [\"claude\", \"codex\"]\nbody_mode = \"summary\"\ncapture_dir = \"" + t.TempDir() + "\"\n"
+	cfgText := "[mitm]\nenabled_default = " + enabled + "\nproviders = [\"claude\", \"codex\"]\ncapture_dir = \"" + t.TempDir() + "\"\n"
 	if certPath != "" {
 		cfgText += "\n[mitm.ca]\ncert_path = \"" + certPath + "\"\nkey_path = \"" + keyPath + "\"\n"
 	}

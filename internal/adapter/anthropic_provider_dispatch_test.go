@@ -160,7 +160,7 @@ func TestAnthropicIngressProviderErrorPreservesNativeRateLimitShape(t *testing.T
 		Message:        "too many requests",
 	}
 	rec := httptest.NewRecorder()
-	srv, _ := newLoggingServer(t, config.LoggingConfig{Body: config.LoggingBody{Mode: "off"}})
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	srv.writeAnthropicIngressProviderError(rec, req, upstreamErr)
 
