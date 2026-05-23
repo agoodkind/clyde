@@ -470,8 +470,8 @@ sink = "concerns"
 		Expect(err.Error()).To(ContainSubstring("mitm.capture.rotation.max_size_mb must be >= 0"))
 	})
 
-	DescribeTable("rejects removed logging config surfaces",
-		func(configData string, expectedMessage string) {
+	DescribeTable("accepts removed logging config surfaces as no-op warnings",
+		func(configData string) {
 			tmpDir := GinkgoT().TempDir()
 			_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -479,13 +479,13 @@ sink = "concerns"
 			Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
 			Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
 
-			_, err := config.LoadGlobalOrDefault()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(expectedMessage))
+			cfg, err := config.LoadGlobalOrDefault()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg).NotTo(BeNil())
 		},
-		Entry("logging.body", "[logging.body]\nmode = \"summary\"\n", "logging.body has been removed"),
-		Entry("mitm.body_mode", "[mitm]\nbody_mode = \"summary\"\n", "mitm.body_mode has been removed"),
-		Entry("logging.cleanup.audit_only", "[logging.cleanup]\naudit_only = true\n", "logging.cleanup.audit_only has been removed"),
-		Entry("logging.cleanup.cleanup_mode", "[logging.cleanup]\ncleanup_mode = \"audit\"\n", "logging.cleanup.cleanup_mode has been removed"),
+		Entry("logging.body", "[logging.body]\nmode = \"summary\"\n"),
+		Entry("mitm.body_mode", "[mitm]\nbody_mode = \"summary\"\n"),
+		Entry("logging.cleanup.audit_only", "[logging.cleanup]\naudit_only = true\n"),
+		Entry("logging.cleanup.cleanup_mode", "[logging.cleanup]\ncleanup_mode = \"audit\"\n"),
 	)
 })

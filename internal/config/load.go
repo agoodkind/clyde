@@ -48,16 +48,7 @@ func loadConfig(dir string) (*Config, error) {
 		)
 		return nil, fmt.Errorf("failed to parse %s: %w", tomlPath, err)
 	}
-	if err := rejectRemovedLoggingConfig(data); err != nil {
-		log.Warn("config.load.removed_logging_config",
-			"component", "config",
-			"subcomponent", "load",
-			"path", tomlPath,
-			"format", "toml",
-			"err", err,
-		)
-		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
-	}
+	warnRemovedLoggingConfig(data, tomlPath, log)
 	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
 		log.Warn("config.load.instructions_failed",
 			"component", "config",
@@ -111,24 +102,41 @@ type removedMITMSection struct {
 	BodyMode *string `toml:"body_mode"`
 }
 
-func rejectRemovedLoggingConfig(data []byte) error {
+// warnRemovedLoggingConfig surfaces a clear slog warning for every
+// removed logging key that still appears in the operator's config. The
+// intent is to make the hard cut visible without blocking startup:
+// existing operator configs predate the refactor, and forcing them to
+// edit a file before `clyde` can run again is a worse failure mode
+// than ignoring the stale section. Operators see one warning per
+// removed key so the migration path is obvious in the daemon log, and
+// the values themselves have no effect because the corresponding
+// config structs no longer exist.
+func warnRemovedLoggingConfig(data []byte, tomlPath string, log *slog.Logger) {
 	removedConfig, err := unmarshalRemovedLoggingConfig(data)
 	if err != nil {
-		return err
+		return
+	}
+	emitRemovedLoggingKeyWarning := func(key string) {
+		log.Warn("config.load.removed_logging_key",
+			"component", "config",
+			"subcomponent", "load",
+			"path", tomlPath,
+			"format", "toml",
+			"removed_key", key,
+		)
 	}
 	if removedConfig.Logging.Body != nil {
-		return fmt.Errorf("logging.body has been removed")
+		emitRemovedLoggingKeyWarning("logging.body")
 	}
 	if removedConfig.MITM.BodyMode != nil {
-		return fmt.Errorf("mitm.body_mode has been removed")
+		emitRemovedLoggingKeyWarning("mitm.body_mode")
 	}
 	if removedConfig.Logging.Cleanup.AuditOnly != nil {
-		return fmt.Errorf("logging.cleanup.audit_only has been removed")
+		emitRemovedLoggingKeyWarning("logging.cleanup.audit_only")
 	}
 	if removedConfig.Logging.Cleanup.CleanupMode != nil {
-		return fmt.Errorf("logging.cleanup.cleanup_mode has been removed")
+		emitRemovedLoggingKeyWarning("logging.cleanup.cleanup_mode")
 	}
-	return nil
 }
 
 func unmarshalRemovedLoggingConfig(data []byte) (removedLoggingConfig, error) {
