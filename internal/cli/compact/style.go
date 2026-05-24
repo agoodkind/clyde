@@ -463,23 +463,25 @@ func (p *progressView) composePanelLines(
 	return lines
 }
 
-// deltaText formats a ctx-to-target delta as colored "+X over" or
-// "-X under" suitable for inline display.
+// deltaText formats a ctx-to-target delta for inline display. The
+// target is a floor: a result at or above target is valid, and a
+// result under target means the planner trimmed more than asked, so
+// only the under-target case is colored bad.
 func deltaText(d int) string {
-	if d > 0 {
-		return styleBad.Render(fmt.Sprintf("+%s over", humanInt(d)))
+	if d < 0 {
+		return styleBad.Render(fmt.Sprintf("-%s under target", humanInt(-d)))
 	}
-	return styleGood.Render(fmt.Sprintf("-%s under", humanInt(-d)))
+	return styleGood.Render(fmt.Sprintf("+%s above target", humanInt(d)))
 }
 
 func deltaTextFriendly(d int) string {
-	if d > 0 {
-		return styleBad.Render(fmt.Sprintf("+%s (over target)", humanInt(d)))
-	}
 	if d < 0 {
-		return styleGood.Render("within target by " + humanInt(-d))
+		return styleBad.Render(humanInt(-d) + " under target (over-trimmed)")
 	}
-	return styleGood.Render("0 (on target)")
+	if d > 0 {
+		return styleGood.Render("above target by " + humanInt(d))
+	}
+	return styleGood.Render("on target")
 }
 
 func phaseFromStep(step string) string {
@@ -719,9 +721,9 @@ func RenderFinalPreview(w io.Writer, res *compactengine.PlanResult, target, stat
 
 	var verdict string
 	if res.HitTarget {
-		verdict = styleGood.Render("✓ under target")
+		verdict = styleGood.Render("✓ reached target")
 	} else {
-		verdict = styleBad.Render("✗ STILL OVER TARGET")
+		verdict = styleWarn.Render("floor above target (kept minimum)")
 	}
 
 	rows := []string{
@@ -734,7 +736,7 @@ func RenderFinalPreview(w io.Writer, res *compactengine.PlanResult, target, stat
 		kv("ctx total", fmt.Sprintf("%s → %s", humanInt(before), humanInt(after))),
 		kv("target", fmt.Sprintf("%s   %s",
 			humanInt(target),
-			styleMuted.Render(fmt.Sprintf("(margin %s)", humanInt(target-after))))),
+			styleMuted.Render(fmt.Sprintf("(%s above target)", humanInt(after-target))))),
 		kv("iterations", strconv.Itoa(len(res.Iterations))),
 		"",
 		styleTitle.Render("what was stripped"),
@@ -759,7 +761,7 @@ func RenderFinalApply(w io.Writer, res *compactengine.PlanResult, target, static
 
 	verdict := styleWarn.Render("✓ APPLIED · transcript mutated")
 	if !res.HitTarget {
-		verdict = styleBad.Render("⚠ APPLIED but STILL OVER TARGET")
+		verdict = styleWarn.Render("✓ APPLIED · transcript mutated · floor above target")
 	}
 
 	rows := []string{

@@ -479,7 +479,7 @@ func TestRunPlan_RecompactsLargeSyntheticTurnByPart(t *testing.T) {
 		t.Fatalf("dropped part still rendered")
 	}
 	if !strings.Contains(text, "**User:**") || !strings.Contains(text, "large-part-b") || !strings.Contains(text, "large-part-c") {
-		t.Fatalf("remaining parts should render with speaker label: %q", text[:minInt(len(text), 200)])
+		t.Fatalf("remaining parts should render with speaker label: %q", text[:min(len(text), 200)])
 	}
 }
 

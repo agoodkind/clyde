@@ -333,7 +333,6 @@ func buildRuntimePlan(
 				onIteration(RuntimeIteration{Iteration: r, Accepted: !r.Probe})
 			}
 		},
-		BatchSize:    0,
 		StopTimeout:  0,
 		CompactRunID: "",
 	})

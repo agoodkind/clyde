@@ -22,10 +22,12 @@ message CompactRunRequest {
   bool force = 8;
   string summarize_mode = 9;
   bool refresh = 10;
-  // force_over_target opts out of the Apply over-target refusal gate.
-  // When false (default) Apply refuses to mutate the transcript if the
-  // planner's final projection exceeds target_tokens. See CLYDE-356.
-  bool force_over_target = 11;
+  // Field 11 (force_over_target) was removed. The target is a floor:
+  // the planner always commits a result at or above target and never
+  // refuses, so there is nothing to force. See the target contract in
+  // docs/compaction/algorithm.md.
+  reserved 11;
+  reserved "force_over_target";
 }
 
 message CompactUpfront {

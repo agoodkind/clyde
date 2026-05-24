@@ -81,7 +81,6 @@ func TestRunPlanUsesContextCounterTranscript(t *testing.T) {
 		Counter:        fake,
 		Out:            nil,
 		OnIteration:    nil,
-		BatchSize:      1,
 		StopTimeout:    0,
 		CompactRunID:   "",
 	})

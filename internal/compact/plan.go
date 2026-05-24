@@ -50,7 +50,6 @@ type PlanInput struct {
 	Counter        contextcount.Counter  // required for targeted planning
 	Out            io.Writer             // fallback streaming sink when OnIteration nil
 	OnIteration    func(IterationRecord) // preferred: called after each measure
-	BatchSize      int                   // tool demotion batch size; default 8
 	StopTimeout    time.Duration         // max wall time for whole loop; 0 = no limit
 	// CompactRunID is the correlation id stamped on every
 	// compact.plan.iteration slog event the planner emits. RunPlan
@@ -67,6 +66,12 @@ type PlanResult struct {
 	BaselineTail int
 	FinalTail    int
 	Iterations   []IterationRecord
+	// HitTarget is informational, not a pass or fail. It is true when
+	// the planner brought the result down to the target neighborhood,
+	// and false only when every enabled axis dropped everything and the
+	// result still sits above target because the floor sits above
+	// target. The committed result is always valid (at or above target)
+	// either way.
 	HitTarget    bool
 	BoundaryTail []OutputBlock // the synthesized content array
 }
@@ -167,9 +172,6 @@ func normalizePlanInput(in *PlanInput) error {
 	if in.Slice == nil {
 		return fmt.Errorf("plan: nil slice")
 	}
-	if in.BatchSize <= 0 {
-		in.BatchSize = 32
-	}
 	if in.Target <= 0 {
 		return fmt.Errorf("plan: target must be greater than zero")
 	}
@@ -226,18 +228,25 @@ type planRunner struct {
 	tail           int
 	ctxTotal       int
 	log            []IterationRecord
+	// exhaustedAllDrops stays true only while every enabled axis the
+	// planner ran was driven to its maximum without crossing under
+	// target. It flips to false the moment an axis stops short because
+	// dropping more would undershoot. When it is still true at the end
+	// and the result is above target, the floor sits above target.
+	exhaustedAllDrops bool
 }
 
 func newPlanRunner(in PlanInput, opts SynthOptions) *planRunner {
 	return &planRunner{
-		in:             in,
-		opts:           opts,
-		totalToolPairs: len(in.Slice.PairIndex),
-		totalChatTurns: countChatTurns(in.Slice),
-		baseline:       0,
-		tail:           0,
-		ctxTotal:       0,
-		log:            nil,
+		in:                in,
+		opts:              opts,
+		totalToolPairs:    len(in.Slice.PairIndex),
+		totalChatTurns:    countChatTurns(in.Slice),
+		baseline:          0,
+		tail:              0,
+		ctxTotal:          0,
+		log:               nil,
+		exhaustedAllDrops: true,
 	}
 }
 
@@ -255,26 +264,26 @@ func (r *planRunner) runTarget(ctx context.Context) (*PlanResult, error) {
 	if err := r.measureBaseline(ctx); err != nil {
 		return nil, err
 	}
-	if r.hitTarget() {
+	if r.atOrUnderTarget() {
 		return r.finalize(true), nil
 	}
 	if err := r.dropThinking(ctx); err != nil {
 		return nil, err
 	}
-	if r.hitTarget() {
+	if r.atOrUnderTarget() {
 		return r.finalize(true), nil
 	}
 	if err := r.replaceImagesWithPlaceholders(ctx); err != nil {
 		return nil, err
 	}
-	if r.hitTarget() {
+	if r.atOrUnderTarget() {
 		return r.finalize(true), nil
 	}
 	if r.in.Strippers.Tools {
 		if err := r.runToolDemotions(ctx); err != nil {
 			return nil, err
 		}
-		if r.hitTarget() {
+		if r.atOrUnderTarget() {
 			return r.finalize(true), nil
 		}
 	}
@@ -283,7 +292,7 @@ func (r *planRunner) runTarget(ctx context.Context) (*PlanResult, error) {
 			return nil, err
 		}
 	}
-	return r.finalize(r.hitTarget()), nil
+	return r.finalize(r.reachedTarget()), nil
 }
 
 func (r *planRunner) measureBaseline(ctx context.Context) error {
@@ -406,8 +415,25 @@ func (r *planRunner) emitProbe(ctx context.Context, record IterationRecord) {
 	r.emitRecord(record)
 }
 
-func (r *planRunner) hitTarget() bool {
+// atOrUnderTarget reports whether the current projection is already at
+// or under the target. It is the precondition guard for the bisect
+// (BisectMin requires the baseline to be over target) and the early
+// exit between axes. A result under target never happens once any axis
+// has accepted, because every accept path rejects an undershoot.
+func (r *planRunner) atOrUnderTarget() bool {
 	return r.ctxTotal <= r.in.Target
+}
+
+// reachedTarget reports whether the planner brought the result down to
+// the target neighborhood. It is true when the projection is at or
+// under target, or when some enabled axis stopped short of its maximum
+// because dropping more would undershoot. It is false only when every
+// enabled axis dropped everything and the projection still sits above
+// target, which means the floor sits above target. The result is
+// always valid (at or above target) either way; this flag is
+// informational, not a pass or fail.
+func (r *planRunner) reachedTarget() bool {
+	return r.atOrUnderTarget() || !r.exhaustedAllDrops
 }
 
 func (r *planRunner) finalize(hit bool) *PlanResult {
@@ -425,6 +451,7 @@ func (r *planRunner) dropThinking(ctx context.Context) error {
 	}
 	if record.CtxTotal < r.in.Target {
 		r.opts.DropThinking = false
+		r.exhaustedAllDrops = false
 		return nil
 	}
 	r.accept(ctx, record)
@@ -442,6 +469,7 @@ func (r *planRunner) replaceImagesWithPlaceholders(ctx context.Context) error {
 	}
 	if record.CtxTotal < r.in.Target {
 		r.opts.ImagesAsPlaceholder = false
+		r.exhaustedAllDrops = false
 		return nil
 	}
 	r.accept(ctx, record)
@@ -455,26 +483,18 @@ func (r *planRunner) shouldReplaceImagesWithPlaceholders() bool {
 
 func (r *planRunner) runToolDemotions(ctx context.Context) error {
 	toolIDs := orderedToolUseIDs(r.in.Slice)
-	nearTargetBrake := maxInt(20_000, r.in.Target/10)
+	if len(toolIDs) == 0 {
+		return nil
+	}
 	passes := []toolDemotionPass{
-		{
-			Detail:         ToolDetailLineOnly,
-			RevertDetail:   ToolDetailFull,
-			DeleteOnRevert: true,
-			Label:          "tools full -> line-only",
-		},
-		{
-			Detail:         ToolDetailDrop,
-			RevertDetail:   ToolDetailLineOnly,
-			DeleteOnRevert: false,
-			Label:          "tools line-only -> drop",
-		},
+		{Detail: ToolDetailLineOnly, Label: "tools full -> line-only"},
+		{Detail: ToolDetailDrop, Label: "tools line-only -> drop"},
 	}
 	for _, pass := range passes {
-		if err := r.runToolDemotionPass(ctx, toolIDs, nearTargetBrake, pass); err != nil {
+		if err := r.runToolDemotionPass(ctx, toolIDs, pass); err != nil {
 			return err
 		}
-		if r.hitTarget() {
+		if r.atOrUnderTarget() {
 			return nil
 		}
 	}
@@ -482,61 +502,66 @@ func (r *planRunner) runToolDemotions(ctx context.Context) error {
 }
 
 type toolDemotionPass struct {
-	Detail         ToolDetail
-	RevertDetail   ToolDetail
-	DeleteOnRevert bool
-	Label          string
+	Detail ToolDetail
+	Label  string
 }
 
-func (r *planRunner) runToolDemotionPass(ctx context.Context, toolIDs []string, nearTargetBrake int, pass toolDemotionPass) error {
-	index := 0
-	lastStepUnits := 0
-	lastStepAmount := 0
-	for index < len(toolIDs) && !r.hitTarget() {
-		batchSize := adaptiveToolBatchSize(r.in.BatchSize, r.ctxTotal-r.in.Target, nearTargetBrake, lastStepUnits, lastStepAmount)
-		batchEnd := minInt(index+batchSize, len(toolIDs))
-		stepUnits := batchEnd - index
-		r.applyToolDetail(toolIDs[index:batchEnd], pass.Detail)
-		record, err := r.measure(ctx, fmt.Sprintf("%s (oldest %d)", pass.Label, stepUnits))
-		if err != nil {
-			return err
-		}
-		if record.CtxTotal < r.in.Target {
-			r.revertToolDetail(toolIDs[index:batchEnd], pass)
-			if batchSize > 1 {
-				lastStepUnits = 0
-				lastStepAmount = 0
-				continue
+// runToolDemotionPass finds, by binary search, the largest prefix of
+// toolIDs (oldest first) it can demote to pass.Detail while keeping the
+// projection at or above target. It mirrors runChatDrops: the same
+// BisectMin primitive bounds the search to about ceil(log2(N))+1
+// probes, so it always terminates. A returned k below the count of
+// tools means the search stopped short of demoting everything, which
+// records that dropping more would undershoot.
+func (r *planRunner) runToolDemotionPass(ctx context.Context, toolIDs []string, pass toolDemotionPass) error {
+	if r.atOrUnderTarget() {
+		return nil
+	}
+	label := func(k int) string { return fmt.Sprintf("%s (oldest %d)", pass.Label, k) }
+	axis := Axis{
+		N: len(toolIDs),
+		Probe: func(ctx context.Context, k int) (int, error) {
+			return r.probeToolDetail(ctx, toolIDs[:k], pass.Detail, label(k))
+		},
+		Target: r.in.Target,
+		Label:  label,
+		Emit:   func(rec IterationRecord) { r.emitProbe(ctx, rec) },
+		BuildRecord: func(lbl string, k int, ctxTotal int) IterationRecord {
+			toolCounts := r.countToolFidelity()
+			return IterationRecord{
+				Step:              lbl,
+				TailTokens:        ctxTotal,
+				CtxTotal:          ctxTotal,
+				Delta:             ctxTotal - r.in.Target,
+				ThinkingDropped:   r.opts.DropThinking,
+				ImagesPlaceholder: r.opts.ImagesAsPlaceholder,
+				ToolsFull:         toolCounts.Full,
+				ToolsLineOnly:     toolCounts.LineOnly,
+				ToolsDropped:      toolCounts.Dropped,
+				ChatTurnsTotal:    r.totalChatTurns,
+				ChatTurnsDropped:  len(r.opts.DroppedChatEntries) + droppedSummaryChunkCount(r.opts),
+				Probe:             true,
 			}
-			break
-		}
-		lastStepUnits = stepUnits
-		lastStepAmount = maxInt(r.ctxTotal-record.CtxTotal, 0)
-		r.accept(ctx, record)
-		index = batchEnd
+		},
 	}
-	return nil
-}
 
-func adaptiveToolBatchSize(defaultBatchSize, deltaOver, nearTargetBrake, lastStepUnits, lastStepAmount int) int {
-	batchSize := defaultBatchSize
-	if lastStepUnits > 0 && lastStepAmount > 0 {
-		tokensPerUnit := maxInt(lastStepAmount/lastStepUnits, 1)
-		needed := maxInt(deltaOver/tokensPerUnit, 1)
-		if needed < batchSize {
-			batchSize = needed
-		}
+	k, err := BisectMin(ctx, axis)
+	if err != nil {
+		return err
 	}
-	if deltaOver <= nearTargetBrake {
-		batchSize = minInt(batchSize, 4)
+	if k < len(toolIDs) {
+		r.exhaustedAllDrops = false
 	}
-	if deltaOver <= nearTargetBrake/2 {
-		batchSize = minInt(batchSize, 2)
+	if k == 0 {
+		return nil
 	}
-	if deltaOver <= nearTargetBrake/4 {
-		batchSize = 1
+	r.applyToolDetail(toolIDs[:k], pass.Detail)
+	record, err := r.measure(ctx, label(k))
+	if err != nil {
+		return err
 	}
-	return batchSize
+	r.accept(ctx, record)
+	return nil
 }
 
 func (r *planRunner) applyToolDetail(toolIDs []string, detail ToolDetail) {
@@ -545,14 +570,33 @@ func (r *planRunner) applyToolDetail(toolIDs []string, detail ToolDetail) {
 	}
 }
 
-func (r *planRunner) revertToolDetail(toolIDs []string, pass toolDemotionPass) {
-	for _, id := range toolIDs {
-		if pass.DeleteOnRevert {
-			delete(r.opts.ToolDetailOverride, id)
+// probeToolDetail sets the given tool ids to detail, measures the
+// projection, then restores each id's prior detail exactly so the
+// probe leaves no trace. It is the Probe for a tool demotion axis.
+func (r *planRunner) probeToolDetail(ctx context.Context, ids []string, detail ToolDetail, label string) (int, error) {
+	type priorDetail struct {
+		id  string
+		had bool
+		val ToolDetail
+	}
+	priors := make([]priorDetail, len(ids))
+	for i, id := range ids {
+		val, had := r.opts.ToolDetailOverride[id]
+		priors[i] = priorDetail{id: id, had: had, val: val}
+		r.opts.ToolDetailOverride[id] = detail
+	}
+	record, measErr := r.measure(ctx, label)
+	for _, prior := range priors {
+		if prior.had {
+			r.opts.ToolDetailOverride[prior.id] = prior.val
 		} else {
-			r.opts.ToolDetailOverride[id] = pass.RevertDetail
+			delete(r.opts.ToolDetailOverride, prior.id)
 		}
 	}
+	if measErr != nil {
+		return 0, measErr
+	}
+	return record.CtxTotal, nil
 }
 
 // runChatDrops finds the smallest prefix of chatDropOrder whose
@@ -560,7 +604,7 @@ func (r *planRunner) revertToolDetail(toolIDs []string, pass toolDemotionPass) {
 // The bisect probes ceil(log2(N))+1 times instead of the N times the
 // linear scan used.
 func (r *planRunner) runChatDrops(ctx context.Context) error {
-	if r.hitTarget() {
+	if r.atOrUnderTarget() {
 		return nil
 	}
 	dropOrder := chatDropOrder(r.in.Slice)
@@ -607,6 +651,9 @@ func (r *planRunner) runChatDrops(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if k < len(dropOrder) {
+		r.exhaustedAllDrops = false
+	}
 	if k == 0 {
 		return nil
 	}
@@ -629,22 +676,6 @@ func (r *planRunner) revertChatDropSteps(steps []chatDropStep) {
 	for _, step := range steps {
 		revertChatDropStep(r.opts.DroppedChatEntries, r.opts.DroppedSummaryChunks, step)
 	}
-}
-
-// maxInt is a tiny helper to avoid importing golang.org/x/exp or
-// introducing a generics constraint just for this file.
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // allImpliedByTarget reports whether the orchestrator should treat
