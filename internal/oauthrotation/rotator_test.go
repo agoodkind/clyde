@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -388,6 +389,170 @@ func TestRotatorRefreshAll(t *testing.T) {
 		if !snap.ExpiresAt.Equal(now.Add(2 * time.Hour)) {
 			t.Fatalf("account %q expiry = %s, want refreshed +2h", snap.Account, snap.ExpiresAt)
 		}
+	}
+}
+
+// seedRotatorWithExpiry builds a rotator like seedRotator but lets each account
+// carry its own stored ExpiresAt, so a test can place one account well within
+// validity and another at or inside the safety window. Seeding through the
+// production Harvest path keeps the persisted-expiry source of truth exercised:
+// each account's ExpiresAt is read back from its written .credentials.json.
+func seedRotatorWithExpiry(t *testing.T, now time.Time, expiries map[string]time.Time) (*Rotator, *fakeProvider) {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	upstreamDir := t.TempDir()
+	prov := newFakeProvider("anthropic")
+	accounts := make([]string, 0, len(expiries))
+	for account := range expiries {
+		accounts = append(accounts, account)
+	}
+	sort.Strings(accounts)
+	for _, account := range accounts {
+		path := filepath.Join(upstreamDir, account+".json")
+		cred := credFor(account, expiries[account])
+		encoded, err := prov.EncodeStored(cred)
+		if err != nil {
+			t.Fatalf("EncodeStored(%q): %v", account, err)
+		}
+		if err := os.WriteFile(path, encoded, 0o600); err != nil {
+			t.Fatalf("write upstream %q: %v", account, err)
+		}
+		prov.mirror = append(prov.mirror, provider.MirrorSource{Kind: provider.MirrorSourceKindFile, Location: path})
+	}
+	rot := NewRotator(nil)
+	rot.now = fixedClock(now)
+	rot.Register(prov)
+	rot.Harvest(context.Background())
+	return rot, prov
+}
+
+// refreshCountFor reads how many times the fake refreshed the account's
+// original stored token. The fake keys its counter by the access token it was
+// handed, which credFor sets to "<account>:token", so a never-refreshed account
+// has no counter and reports 0.
+func refreshCountFor(prov *fakeProvider, account string) int64 {
+	prov.mu.Lock()
+	defer prov.mu.Unlock()
+	counter, ok := prov.refreshCount[account+":token"]
+	if !ok {
+		return 0
+	}
+	return atomic.LoadInt64(counter)
+}
+
+func TestRefreshIsDue(t *testing.T) {
+	now := time.UnixMilli(10_000_000)
+	tests := []struct {
+		name      string
+		expiresAt time.Time
+		want      bool
+	}{
+		{name: "well within validity not due", expiresAt: now.Add(time.Hour), want: false},
+		{name: "just outside safety window not due", expiresAt: now.Add(refreshSafetyWindow + time.Minute), want: false},
+		{name: "exactly at safety window edge is due", expiresAt: now.Add(refreshSafetyWindow), want: true},
+		{name: "inside safety window is due", expiresAt: now.Add(refreshSafetyWindow - time.Minute), want: true},
+		{name: "already expired is due", expiresAt: now.Add(-time.Hour), want: true},
+		{name: "zero expiry is due", expiresAt: time.Time{}, want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := refreshIsDue(now, tc.expiresAt); got != tc.want {
+				t.Fatalf("refreshIsDue(now, %s) = %v, want %v", tc.expiresAt, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRotatorRefreshDue(t *testing.T) {
+	now := time.UnixMilli(20_000_000)
+	tests := []struct {
+		name          string
+		expiries      map[string]time.Time
+		wantRefreshed map[string]int64
+	}{
+		{
+			name: "healthy account is skipped",
+			expiries: map[string]time.Time{
+				"acct-a": now.Add(time.Hour),
+			},
+			wantRefreshed: map[string]int64{"acct-a": 0},
+		},
+		{
+			name: "account inside safety window is refreshed",
+			expiries: map[string]time.Time{
+				"acct-a": now.Add(refreshSafetyWindow - time.Minute),
+			},
+			wantRefreshed: map[string]int64{"acct-a": 1},
+		},
+		{
+			name: "due refreshed and healthy skipped in one pass",
+			expiries: map[string]time.Time{
+				"acct-a": now.Add(time.Hour),
+				"acct-b": now.Add(-time.Minute),
+			},
+			wantRefreshed: map[string]int64{"acct-a": 0, "acct-b": 1},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			rot, prov := seedRotatorWithExpiry(t, now, tc.expiries)
+			if err := rot.RefreshDue(ctx); err != nil {
+				t.Fatalf("RefreshDue: %v", err)
+			}
+			for account, want := range tc.wantRefreshed {
+				if got := refreshCountFor(prov, account); got != want {
+					t.Fatalf("account %q refreshed %d times, want %d", account, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRotatorRefreshDueStartupHealthyFleetMintsZeroTokens models a daemon
+// reload of a healthy persisted fleet: Harvest imports the accounts (a
+// read-only mirror pass that performs no refresh) and the following RefreshDue
+// skips every still-valid account, so zero new tokens are minted.
+func TestRotatorRefreshDueStartupHealthyFleetMintsZeroTokens(t *testing.T) {
+	now := time.UnixMilli(30_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotatorWithExpiry(t, now, map[string]time.Time{
+		"acct-a": now.Add(time.Hour),
+		"acct-b": now.Add(2 * time.Hour),
+	})
+
+	// Harvest alone must not refresh: it is the read-only import the startup
+	// path runs before the due-check.
+	rot.Harvest(ctx)
+	if got := refreshCountFor(prov, "acct-a") + refreshCountFor(prov, "acct-b"); got != 0 {
+		t.Fatalf("Harvest refreshed %d times, want 0", got)
+	}
+
+	if err := rot.RefreshDue(ctx); err != nil {
+		t.Fatalf("RefreshDue: %v", err)
+	}
+	for _, account := range []string{"acct-a", "acct-b"} {
+		if got := refreshCountFor(prov, account); got != 0 {
+			t.Fatalf("healthy account %q refreshed %d times, want 0", account, got)
+		}
+	}
+}
+
+// TestRotatorRefreshDueStartupRefreshesDueAccount models a reload where one
+// persisted account is already inside its safety window: the startup due-check
+// refreshes exactly that account.
+func TestRotatorRefreshDueStartupRefreshesDueAccount(t *testing.T) {
+	now := time.UnixMilli(40_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotatorWithExpiry(t, now, map[string]time.Time{
+		"acct-a": now.Add(refreshSafetyWindow - time.Minute),
+	})
+
+	if err := rot.RefreshDue(ctx); err != nil {
+		t.Fatalf("RefreshDue: %v", err)
+	}
+	if got := refreshCountFor(prov, "acct-a"); got != 1 {
+		t.Fatalf("due account refreshed %d times, want 1", got)
 	}
 }
 

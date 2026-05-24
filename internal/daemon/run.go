@@ -1708,7 +1708,7 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener, mitmPro
 
 	// Build the single, daemon-owned OAuth rotation layer once and share it
 	// with both the adapter (serve + throttle) and the in-process refresh loop
-	// (harvest + RefreshAll). One instance means an on-disk token the refresh
+	// (harvest + due-check). One instance means an on-disk token the refresh
 	// loop renews is visible to the adapter's serve path through shared
 	// in-memory slots, fixing the stale-token window the two-instance wiring
 	// had. The instance is retained on the controller's Deps so adapter reloads

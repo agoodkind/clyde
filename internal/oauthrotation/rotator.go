@@ -23,6 +23,14 @@ const (
 	refreshLockTimeout = 10 * time.Second
 	// refreshLockRetry is the poll interval while waiting for the lock.
 	refreshLockRetry = 100 * time.Millisecond
+	// refreshSafetyWindow is how far ahead of a stored credential's ExpiresAt a
+	// refresh is allowed to run. An account is "due" only when now plus this
+	// window reaches or passes its ExpiresAt, so a healthy account is renewed
+	// about once per token lifetime rather than on every refresh-loop tick or
+	// daemon reload. Anthropic rotates the refresh token on every refresh and
+	// invalidates the prior one, so refreshing a still-valid account strands the
+	// shared keychain credential other tools rely on (see CLYDE-457/CLYDE-458).
+	refreshSafetyWindow = 5 * time.Minute
 )
 
 // AccountSnapshot is a read-only view of one account slot for the RPC layer.
@@ -311,6 +319,71 @@ func (r *Rotator) RefreshAll(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+// RefreshDue refreshes only the accounts whose stored credential is at or
+// inside the safety window, leaving still-valid accounts untouched. The daemon
+// refresh loop calls it on every tick and at startup so a reload of a healthy
+// fleet mints zero new tokens, while a token approaching expiry is still
+// renewed ahead of time. The due decision reads each slot's persisted
+// ExpiresAt (loaded from the account's .credentials.json on Harvest), so the
+// persisted expiry is the source of truth across restarts. It returns the
+// first error encountered after attempting every due slot.
+func (r *Rotator) RefreshDue(ctx context.Context) error {
+	r.mu.RLock()
+	type named struct {
+		name  provider.Name
+		state *providerState
+	}
+	states := make([]named, 0, len(r.providers))
+	for name, state := range r.providers {
+		states = append(states, named{name: name, state: state})
+	}
+	r.mu.RUnlock()
+
+	now := r.now()
+	var firstErr error
+	for _, entry := range states {
+		state := entry.state
+		state.mu.Lock()
+		slots := make([]*accountSlot, 0, len(state.order))
+		for _, account := range state.order {
+			slots = append(slots, state.slots[account])
+		}
+		prov := state.prov
+		state.mu.Unlock()
+
+		for _, slot := range slots {
+			slot.mu.Lock()
+			expiresAt := slot.cred.ExpiresAt
+			account := slot.account
+			slot.mu.Unlock()
+			if !refreshIsDue(now, expiresAt) {
+				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_not_due",
+					"component", "oauthrotation",
+					"provider", string(entry.name),
+					"account", string(account),
+					"expires_at_ms", expiresAt.UnixMilli(),
+				)
+				continue
+			}
+			if err := r.refreshSlot(ctx, prov, slot); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// refreshIsDue reports whether a credential expiring at expiresAt should be
+// refreshed at now: it is due once now plus the safety window reaches or passes
+// expiresAt. A zero expiresAt is treated as due because an unknown expiry can
+// not be proven still valid.
+func refreshIsDue(now time.Time, expiresAt time.Time) bool {
+	if expiresAt.IsZero() {
+		return true
+	}
+	return !now.Add(refreshSafetyWindow).Before(expiresAt)
 }
 
 // Accounts returns read-only snapshots for the RPC layer, in stable order.

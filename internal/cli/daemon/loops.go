@@ -149,11 +149,12 @@ func runOnePrune(
 
 // oauthLoop returns a daemonsvc.ExtraLoop that periodically harvests upstream
 // Claude Code credentials into Clyde's per-account OAuth rotation store and
-// refreshes every harvested account's access token, so the adapter's
-// direct-OAuth path almost never has to refresh inline. Defaults on; the user
-// can disable it via [oauth] disabled = true in the global config. The cadence
-// is the rotation refresh interval (default 30m), replacing the legacy fixed
-// 4h single-Manager refresh.
+// refreshes only the accounts inside the rotator's expiry safety window, so the
+// adapter's direct-OAuth path almost never has to refresh inline while a
+// still-valid account is left untouched. Defaults on; the user can disable it
+// via [oauth] disabled = true in the global config. The cadence is the rotation
+// refresh interval (default 30m), which is how often the loop checks for due
+// accounts, not a force-refresh-everything timer.
 func oauthLoop() daemonsvc.ExtraLoop {
 	return func(log *slog.Logger) func() {
 		cfg, err := config.LoadGlobalOrDefault()
@@ -177,7 +178,7 @@ func oauthLoop() daemonsvc.ExtraLoop {
 		rotation := cfg.Adapter.Anthropic.OAuth.Accounts.WithDefaults()
 		interval := rotation.RefreshInterval.AsDuration()
 
-		// Drive the single, daemon-owned rotator so harvest and RefreshAll run
+		// Drive the single, daemon-owned rotator so harvest and RefreshDue run
 		// against the same in-memory account slots the adapter serves from. A
 		// nil holder means the daemon did not build a rotator (direct-OAuth
 		// off, or the adapter subsystem has not been assembled), so the loop
@@ -361,18 +362,22 @@ func defaultDriftLogDir() string {
 }
 
 // runOAuthRefresh runs one harvest pass to import any newly added upstream
-// Claude Code credentials into the per-account store, then refreshes every
-// harvested account's access token through the rotation layer. A dead refresh
+// Claude Code credentials into the per-account store, then refreshes only the
+// accounts whose stored credential is at or inside the rotator's safety window.
+// Harvest is a read-only mirror import and performs no token refresh, and
+// RefreshDue skips still-valid accounts, so a reload of a healthy fleet mints
+// zero new tokens; this avoids stranding the shared keychain refresh token that
+// Anthropic rotates on every refresh (CLYDE-457/CLYDE-458). A dead refresh
 // credential (invalid_grant) is handled inside the rotator: the account is
-// marked needing re-auth and dropped from selection. RefreshAll returns the
-// first error encountered after attempting every account, which is logged and
-// swallowed so one bad account does not stop the loop.
+// marked needing re-auth and dropped from selection. RefreshDue returns the
+// first error encountered after attempting every due account, which is logged
+// and swallowed so one bad account does not stop the loop.
 func runOAuthRefresh(ctx context.Context, log *slog.Logger, rotator *oauthrotation.Rotator) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	started := cliDaemonNow()
 	rotator.Harvest(timeoutCtx)
-	err := rotator.RefreshAll(timeoutCtx)
+	err := rotator.RefreshDue(timeoutCtx)
 	elapsed := time.Since(started)
 	if err != nil {
 		log.LogAttrs(ctx, slog.LevelError, "oauth.refresh.failed",

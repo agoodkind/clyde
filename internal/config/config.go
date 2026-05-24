@@ -814,8 +814,9 @@ const (
 // different account on a throttle signal; when SwitchOnLimit is true a throttle
 // signal moves selection to the next non-throttled account. ScanInterval is the
 // harvest cadence and RefreshInterval is the proactive token-refresh cadence;
-// the daemon refresh loop runs one harvest pass and one RefreshAll per
-// RefreshInterval tick.
+// the daemon refresh loop runs one harvest pass and one due-check per
+// RefreshInterval tick, refreshing only accounts at or inside the rotator's
+// expiry safety window rather than every account.
 type AdapterOAuthRotation struct {
 	SwitchOnLimit   bool     `json:"switchOnLimit,omitempty" toml:"switch_on_limit,omitempty"`
 	ScanInterval    Duration `json:"scanInterval,omitempty" toml:"scan_interval,omitempty"`
