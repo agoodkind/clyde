@@ -100,6 +100,14 @@ func buildSurvivorEntries(
 			continue
 		}
 		transformedContent, keep := transformSurvivorContent(entry.Content, opts)
+		if !keep && entry.TextOnly != "" {
+			// String-form message.content: claude stores some user prompts
+			// as message.content = "...string..." instead of an array. Treat
+			// them like a single text block so they survive instead of
+			// silently disappearing.
+			transformedContent = []json.RawMessage{encodeSurvivorTextBlock(entry.TextOnly)}
+			keep = true
+		}
 		if !keep {
 			continue
 		}
