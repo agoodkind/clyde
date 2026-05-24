@@ -20,6 +20,7 @@ func (sessionsLoaded) isAsyncLoadEvent()       {}
 func (configControlsLoaded) isAsyncLoadEvent() {}
 func (exportStatsLoaded) isAsyncLoadEvent()    {}
 func (detailsLoaded) isAsyncLoadEvent()        {}
+func (accountStatusLoaded) isAsyncLoadEvent()  {}
 
 // postInterruptIfActive forwards data to the screen via postInterrupt
 // only when the App context has not been canceled. Async TUI workers

@@ -126,6 +126,25 @@ type AppCallbacks struct {
 	CompactApply func(req CompactRunRequest) (events <-chan CompactEvent, done <-chan error, cancel func(), err error)
 	// CompactUndo rolls back the latest compact apply for a session.
 	CompactUndo func(sessionName string) (*CompactUndoResult, error)
+	// OAuthAccountList returns the daemon-rotated OAuth accounts so the TUI
+	// can derive account-status health for the status bar and accounts panel.
+	// Empty provider lists every registered provider.
+	OAuthAccountList func(provider string) ([]OAuthAccountInfo, error)
+	// OAuthAccountLogin drives an interactive daemon-owned login. onUpdate
+	// fires once with the authorize URL, then once with the resulting account.
+	OAuthAccountLogin func(provider, email, label string, onUpdate func(OAuthLoginUpdate)) error
+	// OAuthAccountForget removes one account by id or label and reports the
+	// resolved account id when a match was removed.
+	OAuthAccountForget func(provider, idOrLabel string) (forgotten bool, accountID string, err error)
+}
+
+// OAuthLoginUpdate is one streamed phase of an interactive login. Exactly one
+// of AuthorizeURL or Account is set: AuthorizeURL on the authorize phase,
+// Account on the final result phase. The ui package keeps its own copy so the
+// daemonclient type does not leak into widget code.
+type OAuthLoginUpdate struct {
+	AuthorizeURL string
+	Account      *OAuthAccountInfo
 }
 
 type SessionExportFormat string
@@ -511,6 +530,14 @@ type App struct {
 	exportStatsCache   map[string]SessionExportStats
 	exportStatsLoading map[string]bool
 
+	// accountStatus holds the daemon-rotated OAuth accounts last fetched off
+	// the draw path. The status-bar segment and accounts panel both read from
+	// it; accountStatusLoading coalesces concurrent fetches.
+	accountStatusMu      sync.Mutex
+	accountStatus        []OAuthAccountInfo
+	accountStatusLoaded  bool
+	accountStatusLoading bool
+
 	// spinnerFrame increments on each redraw that is waiting for async
 	// data so the user sees motion in the details header.
 	spinnerFrame int
@@ -712,7 +739,20 @@ func NewApp(sessions []*session.Session, cb AppCallbacks, opts ...AppOptions) *A
 	}
 	a.details = NewDetailsView()
 	a.details.LookupLiveURL = a.liveURLRecordFor
-	a.status = &StatusBarWidget{Mode: StatusBrowse}
+	a.status = &StatusBarWidget{
+		Mode:                    StatusBrowse,
+		Position:                "",
+		Clock:                   "",
+		LegendOverride:          nil,
+		LiveURLCount:            0,
+		DaemonOnline:            false,
+		DaemonStatus:            "",
+		DaemonConnecting:        false,
+		DaemonSpinner:           "",
+		AccountNeedsReauthCount: 0,
+		AccountThrottledCount:   0,
+		accountSegmentRect:      Rect{X: 0, Y: 0, W: 0, H: 0},
+	}
 
 	a.populateTable()
 	if cb.LoadConfigControls != nil {
@@ -1776,6 +1816,11 @@ type detailsLoaded struct {
 	err    error
 }
 
+type accountStatusLoaded struct {
+	accounts []OAuthAccountInfo
+	err      error
+}
+
 type summaryRefreshDone struct {
 	name    string
 	updated *session.Session
@@ -2440,6 +2485,7 @@ func (a *App) populateStatusBarFields() {
 	a.status.LiveURLCount = len(a.liveURLs)
 	a.liveURLMu.RUnlock()
 	a.applyDaemonStatusBarFields()
+	a.applyAccountStatusBarFields()
 }
 
 // applyDaemonStatusBarFields populates the status bar widget's
@@ -3046,6 +3092,9 @@ func (a *App) handleRefreshInterruptEvent(e *tcell.EventInterrupt) (bool, bool) 
 		return true, true
 	case exportStatsLoaded:
 		a.handleExportStatsLoaded(d)
+		return true, true
+	case accountStatusLoaded:
+		a.handleAccountStatusLoaded(d)
 		return true, true
 	case spinnerTick:
 		a.handleSpinnerTick()
@@ -3714,6 +3763,9 @@ func (a *App) handleActionRuneKey(r rune) bool {
 			a.openSessionOptionsFor(sess)
 		}
 		return true
+	case 'A':
+		a.openAccountsPanel()
+		return true
 	case 'v':
 		if a.selected != nil {
 			a.viewSelected()
@@ -3862,6 +3914,11 @@ func (a *App) handleOverlayMouse(e *tcell.EventMouse) bool {
 func (a *App) handleStatusMouse(x int, y int, btns tcell.ButtonMask) bool {
 	if btns&tcell.Button1 == 0 || !a.statusRect.Contains(x, y) {
 		return false
+	}
+	if rect := a.status.AccountSegmentRect(); rect.W > 0 && rect.Contains(x, y) {
+		tuiLog.Logger().Debug("tui.input.mouse.route", "component", "tui", "route", "status_account_segment")
+		a.openAccountsPanel()
+		return true
 	}
 	action, ok := legendActionAt(a.status, a.statusRect, x)
 	if !ok {
@@ -6565,6 +6622,161 @@ func (a *App) sessionOptionsEntriesFor(sess *session.Session, close func(), incl
 	return entries
 }
 
+// openAccountsPanel shows the OAuth accounts the daemon rotates, one row per
+// account with its derived status glyph, label, and detail. Selecting a row
+// opens a per-account action sub-menu (Log in / Remove). The panel is reached
+// from the 'A' keybinding and from a click on the status-bar account segment.
+func (a *App) openAccountsPanel() {
+	if a.cb.OAuthAccountList == nil {
+		return
+	}
+	a.requestAccountStatusAsync("panel")
+	entries := a.accountPanelEntries()
+	modal := NewOptionsModal("OAuth accounts", entries)
+	modal.OnCancel = func() { a.closeOverlay() }
+	a.overlay = modal
+	a.mode = StatusFilter
+}
+
+// accountPanelEntries builds one informational+actionable row per cached
+// account. With no accounts cached yet it shows a single disabled placeholder
+// so the panel is never empty while the first fetch is in flight.
+func (a *App) accountPanelEntries() []OptionsModalEntry {
+	accounts := a.accountStatusSnapshot()
+	if len(accounts) == 0 {
+		return []OptionsModalEntry{{Label: "No OAuth accounts", Disabled: true}}
+	}
+	now := a.now()
+	entries := make([]OptionsModalEntry, 0, len(accounts))
+	for _, account := range accounts {
+		status := DeriveAccountStatus(account, now)
+		presentation := PresentAccountStatus(status)
+		label := string(presentation.Glyph) + " " + accountDisplayName(account)
+		entries = append(entries, OptionsModalEntry{
+			Label: label,
+			Hint:  accountDetailText(account, status),
+			Action: func() {
+				a.openAccountActions(account)
+			},
+		})
+	}
+	return entries
+}
+
+// openAccountActions opens the Log in / Remove sub-menu for one account,
+// preserving the accounts panel underneath so Esc returns to the list.
+func (a *App) openAccountActions(account OAuthAccountInfo) {
+	a.overlayStack = append(a.overlayStack, overlayFrame{widget: a.overlay, mode: a.mode})
+	entries := []OptionsModalEntry{
+		{
+			Label:    "Log in",
+			Hint:     "re-authorize",
+			Disabled: a.cb.OAuthAccountLogin == nil,
+			Action: func() {
+				a.closeOverlay()
+				a.startAccountLogin(account)
+			},
+		},
+		{
+			Label:    "Remove",
+			Hint:     "forget account",
+			Disabled: a.cb.OAuthAccountForget == nil,
+			Action: func() {
+				a.closeOverlay()
+				a.startAccountForget(account)
+			},
+		},
+	}
+	modal := NewOptionsModal(accountDisplayName(account), entries)
+	modal.OnCancel = func() { a.closeOverlay() }
+	a.overlay = modal
+	a.mode = StatusFilter
+}
+
+// startAccountLogin drives an interactive login through the daemon stream off
+// the UI goroutine, surfacing the authorize URL in a notice modal and
+// refreshing account status when the stream completes.
+func (a *App) startAccountLogin(account OAuthAccountInfo) {
+	if a.cb.OAuthAccountLogin == nil {
+		return
+	}
+	provider := account.Provider
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("account_login", fmt.Sprint(r))
+			}
+		}()
+		err := a.cb.OAuthAccountLogin(provider, "", account.Label, func(update OAuthLoginUpdate) {
+			if update.AuthorizeURL == "" {
+				return
+			}
+			_ = CopyToClipboard(update.AuthorizeURL)
+		})
+		if err != nil {
+			tuiLog.Logger().Warn("tui.account_login.failed", "component", "tui", "provider", provider, "err", err)
+		}
+		a.requestAccountStatusAsync("login")
+	}()
+}
+
+// startAccountForget removes one account through the daemon off the UI
+// goroutine, then refreshes status so the panel and status bar update.
+func (a *App) startAccountForget(account OAuthAccountInfo) {
+	if a.cb.OAuthAccountForget == nil {
+		return
+	}
+	provider := account.Provider
+	idOrLabel := account.AccountID
+	if idOrLabel == "" {
+		idOrLabel = account.Label
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("account_forget", fmt.Sprint(r))
+			}
+		}()
+		if _, _, err := a.cb.OAuthAccountForget(provider, idOrLabel); err != nil {
+			tuiLog.Logger().Warn("tui.account_forget.failed", "component", "tui", "provider", provider, "err", err)
+		}
+		a.requestAccountStatusAsync("forget")
+	}()
+}
+
+// accountDisplayName prefers the operator label, then the account id, then a
+// provider-qualified dash so a row is never blank.
+func accountDisplayName(account OAuthAccountInfo) string {
+	if account.Label != "" {
+		return account.Label
+	}
+	if account.AccountID != "" {
+		return account.AccountID
+	}
+	if account.Provider != "" {
+		return account.Provider + " account"
+	}
+	return "account"
+}
+
+// accountDetailText renders the right-side detail for one account row: plain
+// "ready"/"refreshing", or the throttle reset time, or "needs re-auth".
+func accountDetailText(account OAuthAccountInfo, status AccountStatus) string {
+	switch status {
+	case AccountThrottled:
+		reset := time.UnixMilli(account.ThrottledUntilMS).Local().Format("15:04")
+		return "throttled · " + reset
+	case AccountNeedsReauth:
+		return "needs re-auth"
+	case AccountRefreshing:
+		return "refreshing"
+	case AccountReady:
+		return "ready"
+	default:
+		return "ready"
+	}
+}
+
 func (a *App) openSessionContextWindowOptions(sess *session.Session, closeParent func()) {
 	if sess == nil || a.cb.UpdateSessionContextWindow == nil {
 		return
@@ -7008,6 +7220,89 @@ func (a *App) requestStatsAsync(source string) {
 		a.statsMu.Unlock()
 		a.postInterrupt(a)
 	}()
+}
+
+// requestAccountStatusAsync fetches OAuth accounts off the draw path and
+// posts the result back through the interrupt loop. It coalesces concurrent
+// fetches so a draw-triggered poll and an explicit refresh do not stack RPCs.
+// source == "draw" skips re-fetching once a snapshot is already loaded so the
+// status bar does not poll the daemon on every frame; explicit sources (panel
+// open, post-action) always refresh.
+func (a *App) requestAccountStatusAsync(source string) {
+	if a.cb.OAuthAccountList == nil {
+		return
+	}
+	a.accountStatusMu.Lock()
+	if a.accountStatusLoading {
+		a.accountStatusMu.Unlock()
+		return
+	}
+	if a.accountStatusLoaded && source == "draw" {
+		a.accountStatusMu.Unlock()
+		return
+	}
+	a.accountStatusLoading = true
+	a.accountStatusMu.Unlock()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logUIGoroutinePanic("account_status_load", fmt.Sprint(r))
+			}
+		}()
+		accounts, err := a.cb.OAuthAccountList("")
+		a.postInterruptIfActive("account_status_load", accountStatusLoaded{accounts: accounts, err: err})
+	}()
+}
+
+// handleAccountStatusLoaded stores the fetched accounts (or clears the
+// loading flag on error) so the next draw renders fresh status-bar counts.
+func (a *App) handleAccountStatusLoaded(d accountStatusLoaded) {
+	a.accountStatusMu.Lock()
+	a.accountStatusLoading = false
+	if d.err != nil {
+		a.accountStatusMu.Unlock()
+		tuiLog.Logger().Debug("tui.account_status.load_failed", "component", "tui", "err", d.err)
+		return
+	}
+	a.accountStatus = d.accounts
+	a.accountStatusLoaded = true
+	a.accountStatusMu.Unlock()
+}
+
+// accountStatusSnapshot returns a copy of the last-fetched accounts for
+// readers off the App goroutine-owned state.
+func (a *App) accountStatusSnapshot() []OAuthAccountInfo {
+	a.accountStatusMu.Lock()
+	defer a.accountStatusMu.Unlock()
+	if len(a.accountStatus) == 0 {
+		return nil
+	}
+	out := make([]OAuthAccountInfo, len(a.accountStatus))
+	copy(out, a.accountStatus)
+	return out
+}
+
+// applyAccountStatusBarFields derives worst-severity counts from the cached
+// accounts and writes them into the status bar widget. It also kicks a
+// draw-sourced async refresh so the counts hydrate without blocking the draw
+// path. Counts stay zero (segment quiet) until the first fetch lands.
+func (a *App) applyAccountStatusBarFields() {
+	a.requestAccountStatusAsync("draw")
+	now := a.now()
+	needsReauth := 0
+	throttled := 0
+	for _, account := range a.accountStatusSnapshot() {
+		switch DeriveAccountStatus(account, now) {
+		case AccountNeedsReauth:
+			needsReauth++
+		case AccountThrottled:
+			throttled++
+		case AccountReady, AccountRefreshing:
+		}
+	}
+	a.status.AccountNeedsReauthCount = needsReauth
+	a.status.AccountThrottledCount = throttled
 }
 
 func (a *App) restartDaemonAsync() {

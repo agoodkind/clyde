@@ -45,6 +45,40 @@ type StatusBarWidget struct {
 	// DaemonSpinner is the single-glyph frame to render inside the
 	// connecting badge.
 	DaemonSpinner string
+	// AccountNeedsReauthCount and AccountThrottledCount carry the number of
+	// OAuth accounts in each degraded state, pre-derived off the draw path by
+	// the App. The status bar renders a worst-severity-first segment from
+	// these counts and stays quiet (renders nothing) when both are zero, so a
+	// healthy fleet adds no chrome to the bottom bar.
+	AccountNeedsReauthCount int
+	AccountThrottledCount   int
+	// accountSegmentRect records the last drawn hit area of the account-status
+	// segment so the App can route a click on it to the accounts panel. Zero
+	// width means the segment was not drawn this frame.
+	accountSegmentRect Rect
+}
+
+// AccountSegmentRect exposes the last drawn account-status segment hit area
+// for mouse routing. A zero-width rect means nothing was drawn.
+func (s *StatusBarWidget) AccountSegmentRect() Rect {
+	return s.accountSegmentRect
+}
+
+// accountStatusSegment returns the right-aligned text and style for the
+// account-status segment, plus ok=false when there is nothing to show. It
+// surfaces the worst severity first: needs-re-auth (ColorError) takes
+// precedence over throttled (ColorWarning). When both counts are present it
+// favors the action-required color so the bar reads as "act now".
+func accountStatusSegment(s *StatusBarWidget) (string, tcell.Style, bool) {
+	if s.AccountNeedsReauthCount > 0 {
+		txt := " ✕ " + itoa(s.AccountNeedsReauthCount) + " needs re-auth "
+		return txt, badgeStyle(ColorError), true
+	}
+	if s.AccountThrottledCount > 0 {
+		txt := " ▲ " + itoa(s.AccountThrottledCount) + " throttled "
+		return txt, badgeStyle(ColorWarning), true
+	}
+	return "", tcell.StyleDefault, false
 }
 
 // LegendProvider is implemented by overlays that want to customize
@@ -267,6 +301,7 @@ func legendHintForAction(action LegendAction) (legendHint, bool) {
 // Draw renders the status bar into r (r.H should be 1).
 func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 	fillRow(scr, r.X, r.Y, r.W, StyleStatusBar)
+	s.accountSegmentRect = Rect{X: 0, Y: 0, W: 0, H: 0}
 
 	label, bg := badgeFor(s.Mode)
 	modeBadgeStyle := badgeStyle(bg)
@@ -350,6 +385,18 @@ func (s *StatusBarWidget) Draw(scr tcell.Screen, r Rect) {
 		bx := rightX - runeCount(txt)
 		if bx > x {
 			drawString(scr, bx, r.Y, badgeStyle(ColorSuccess), txt, rightX-bx)
+			rightX = bx
+		}
+	}
+
+	// Right aligned account-status segment. Quiet when the fleet is healthy;
+	// otherwise shows worst-severity-first counts. Sits to the left of the
+	// live-session indicator.
+	if txt, style, ok := accountStatusSegment(s); ok {
+		bx := rightX - runeCount(txt)
+		if bx > x {
+			drawString(scr, bx, r.Y, style, txt, rightX-bx)
+			s.accountSegmentRect = Rect{X: bx, Y: r.Y, W: rightX - bx, H: 1}
 		}
 	}
 }

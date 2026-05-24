@@ -100,3 +100,36 @@ func TestBadgeTextColorTracksLightPalette(t *testing.T) {
 		t.Fatalf("dark accent badge text = %v, want black", got)
 	}
 }
+
+func TestAccountStatusSegmentQuietWhenHealthy(t *testing.T) {
+	_, _, ok := accountStatusSegment(&StatusBarWidget{})
+	if ok {
+		t.Fatal("expected no account segment when all accounts are ready")
+	}
+}
+
+func TestAccountStatusSegmentWorstSeverityFirst(t *testing.T) {
+	txt, style, ok := accountStatusSegment(&StatusBarWidget{AccountNeedsReauthCount: 2, AccountThrottledCount: 3})
+	if !ok {
+		t.Fatal("expected a segment when accounts are degraded")
+	}
+	if !strings.Contains(txt, "needs re-auth") || !strings.Contains(txt, "2") {
+		t.Fatalf("expected needs-re-auth count first, got %q", txt)
+	}
+	if style != badgeStyle(ColorError) {
+		t.Fatalf("expected ColorError style for needs-re-auth, got %v", style)
+	}
+}
+
+func TestAccountStatusSegmentThrottledOnly(t *testing.T) {
+	txt, style, ok := accountStatusSegment(&StatusBarWidget{AccountThrottledCount: 4})
+	if !ok {
+		t.Fatal("expected a segment when accounts are throttled")
+	}
+	if !strings.Contains(txt, "throttled") || !strings.Contains(txt, "4") {
+		t.Fatalf("expected throttled count, got %q", txt)
+	}
+	if style != badgeStyle(ColorWarning) {
+		t.Fatalf("expected ColorWarning style for throttled, got %v", style)
+	}
+}

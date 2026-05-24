@@ -1143,6 +1143,29 @@ func ListSessionsViaDaemon(ctx context.Context) (*clydev1.ListSessionsResponse, 
 	return resp, nil
 }
 
+// OAuthAccountListViaDaemon returns rotation-store account snapshots for one
+// provider, or across every registered provider when providerName is empty.
+// It follows the ListSessionsViaDaemon pattern: connect, single RPC, close.
+func OAuthAccountListViaDaemon(ctx context.Context, providerName string) (*clydev1.OAuthAccountListResponse, error) {
+	log := daemonClientLog(ctx)
+	log.DebugContext(ctx, "daemon.client.oauth_account_list.begin", "provider", providerName)
+	c, err := ConnectOrStart(ctx)
+	if err != nil {
+		log.DebugContext(ctx, "daemon.client.oauth_account_list.connect_failed", "err", err)
+		return nil, err
+	}
+	defer func() { _ = c.conn.Close() }()
+	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, rpcErr := c.rpc.OAuthAccountList(rpcCtx, &clydev1.OAuthAccountListRequest{Provider: providerName})
+	if rpcErr != nil {
+		log.ErrorContext(rpcCtx, "daemon.client.oauth_account_list.rpc_failed", "err", rpcErr)
+		return nil, fmt.Errorf("oauth account list rpc: %w", rpcErr)
+	}
+	log.DebugContext(rpcCtx, "daemon.client.oauth_account_list.ok", "accounts", len(resp.GetAccounts()))
+	return resp, nil
+}
+
 func GetSessionDetailViaDaemon(ctx context.Context, sessionName string) (*clydev1.GetSessionDetailResponse, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.session_detail.begin", "session", sessionName)

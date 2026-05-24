@@ -194,6 +194,9 @@ func buildAppCallbacks(parentCtx context.Context, dashboardLaunchCWD string) ui.
 		CompactApply:               builder.compactApply,
 		CompactUndo:                builder.compactUndo,
 		GetSessionDetail:           builder.getSessionDetail,
+		OAuthAccountList:           builder.oauthAccountList,
+		OAuthAccountLogin:          builder.oauthAccountLogin,
+		OAuthAccountForget:         builder.oauthAccountForget,
 	}
 }
 
@@ -220,6 +223,106 @@ func (builder appCallbackBuilder) listSessions() (ui.SessionSnapshot, error) {
 
 func (builder appCallbackBuilder) loadStats() (ui.DashboardStats, error) {
 	return loadDashboardStats(builder.childContext("dashboard.load_stats"))
+}
+
+// oauthAccountList fetches rotation-store accounts across every provider and
+// maps the proto snapshots into the ui-facing OAuthAccountInfo shape.
+func (builder appCallbackBuilder) oauthAccountList(provider string) ([]ui.OAuthAccountInfo, error) {
+	ctx := builder.childContext("dashboard.oauth_account_list")
+	resp, err := daemon.OAuthAccountListViaDaemon(ctx, provider)
+	if err != nil {
+		slog.ErrorContext(ctx, "dashboard.oauth_account_list.failed", "component", "tui", "provider", provider, "err", err)
+		return nil, fmt.Errorf("oauth account list: %w", err)
+	}
+	accounts := resp.GetAccounts()
+	out := make([]ui.OAuthAccountInfo, 0, len(accounts))
+	for _, snapshot := range accounts {
+		out = append(out, oauthAccountInfoFromProto(snapshot))
+	}
+	return out, nil
+}
+
+// oauthAccountLogin drives an interactive daemon-owned login and forwards each
+// streamed phase to onUpdate. The browser PKCE flow waits on operator
+// interaction, so the call gets a generous deadline mirroring cmd/oauth.go.
+func (builder appCallbackBuilder) oauthAccountLogin(provider, email, label string, onUpdate func(ui.OAuthLoginUpdate)) error {
+	loginCtx, cancel := context.WithTimeout(builder.childContext("dashboard.oauth_account_login"), 6*time.Minute)
+	defer cancel()
+	dc, err := daemon.ConnectOrStart(loginCtx)
+	if err != nil {
+		slog.ErrorContext(loginCtx, "dashboard.oauth_account_login.connect_failed", "component", "tui", "provider", provider, "err", err)
+		return fmt.Errorf("connect to daemon: %w", err)
+	}
+	defer func() { _ = dc.Close() }()
+	client := daemonclient.NewOAuthAccountClient(dc.Connection())
+	loginErr := client.Login(loginCtx, provider, email, label, func(update daemonclient.OAuthLoginUpdate) {
+		mapped := ui.OAuthLoginUpdate{AuthorizeURL: update.AuthorizeURL, Account: nil}
+		if update.Account != nil {
+			account := oauthAccountInfoFromClient(*update.Account)
+			mapped.Account = &account
+		}
+		onUpdate(mapped)
+	})
+	if loginErr != nil {
+		slog.ErrorContext(loginCtx, "dashboard.oauth_account_login.failed", "component", "tui", "provider", provider, "err", loginErr)
+		return fmt.Errorf("oauth account login: %w", loginErr)
+	}
+	return nil
+}
+
+// oauthAccountForget removes one account by id or label through the daemon.
+func (builder appCallbackBuilder) oauthAccountForget(provider, idOrLabel string) (bool, string, error) {
+	ctx := builder.childContext("dashboard.oauth_account_forget")
+	dc, err := daemon.ConnectOrStart(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "dashboard.oauth_account_forget.connect_failed", "component", "tui", "provider", provider, "err", err)
+		return false, "", fmt.Errorf("connect to daemon: %w", err)
+	}
+	defer func() { _ = dc.Close() }()
+	client := daemonclient.NewOAuthAccountClient(dc.Connection())
+	forgotten, accountID, forgetErr := client.Forget(ctx, provider, idOrLabel)
+	if forgetErr != nil {
+		slog.ErrorContext(ctx, "dashboard.oauth_account_forget.failed", "component", "tui", "provider", provider, "err", forgetErr)
+		return false, "", fmt.Errorf("oauth account forget: %w", forgetErr)
+	}
+	return forgotten, accountID, nil
+}
+
+// oauthAccountInfoFromProto maps a daemon proto snapshot into the ui shape.
+func oauthAccountInfoFromProto(snapshot *clydev1.OAuthAccountSnapshot) ui.OAuthAccountInfo {
+	if snapshot == nil {
+		return ui.OAuthAccountInfo{
+			Provider:         "",
+			AccountID:        "",
+			Label:            "",
+			ExpiresAtMS:      0,
+			ThrottledUntilMS: 0,
+			NeedsReauth:      false,
+			Refreshing:       false,
+		}
+	}
+	return ui.OAuthAccountInfo{
+		Provider:         snapshot.GetProvider(),
+		AccountID:        snapshot.GetAccountId(),
+		Label:            snapshot.GetLabel(),
+		ExpiresAtMS:      snapshot.GetExpiresAtMs(),
+		ThrottledUntilMS: snapshot.GetThrottledUntilMs(),
+		NeedsReauth:      snapshot.GetNeedsReauth(),
+		Refreshing:       false,
+	}
+}
+
+// oauthAccountInfoFromClient maps a daemonclient account into the ui shape.
+func oauthAccountInfoFromClient(account daemonclient.OAuthAccount) ui.OAuthAccountInfo {
+	return ui.OAuthAccountInfo{
+		Provider:         account.Provider,
+		AccountID:        account.AccountID,
+		Label:            account.Label,
+		ExpiresAtMS:      account.ExpiresAtMS,
+		ThrottledUntilMS: account.ThrottledUntilMS,
+		NeedsReauth:      account.NeedsReauth,
+		Refreshing:       false,
+	}
 }
 
 func (builder appCallbackBuilder) subscribeProviderStats() (<-chan ui.ProviderStats, func(), error) {
