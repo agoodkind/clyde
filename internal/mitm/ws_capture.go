@@ -1,9 +1,10 @@
 package mitm
 
 import (
+	"bufio"
 	"context"
-	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -117,6 +118,95 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	}
 	queueBaselineRefresh(ctx, cfg, provider, p.log)
 	p.log.Info("mitm.ws.closed", "url", upstreamURL, "messages", state.messageCount)
+}
+
+func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client net.Conn, reader *bufio.Reader, writer *bufio.Writer, r *http.Request, target string, host string, provider Provider) error {
+	cfg := p.config()
+	providerID := string(provider.ID())
+	upstreamURL := wsUpstreamURL("https://"+target, r.URL.RequestURI())
+	upstreamHeaders := wsUpstreamHeaders(r.Header)
+	requestContentType := r.Header.Get("Content-Type")
+	recorder := p.beginWSLogRecorder(r, providerID, upstreamURL)
+	clientFacet := provider.ExtractIdentity(r.Header).Facet
+
+	p.emitWSInitialLogLegs(ctx, recorder, cfg.CaptureDir, requestContentType, clientFacet)
+
+	upstreamConn, upstreamRespHeaders, upstreamStatus, err := p.dialWSUpstreamContext(ctx, upstreamURL, upstreamHeaders)
+	if err != nil {
+		_ = p.writeInterceptedHTTPError(ctx, writer, http.StatusBadGateway, "ws upstream dial failed: "+err.Error())
+		p.recordWSFailure(ctx, recorder, "ws_upstream_dial_failed", err.Error())
+		return fmt.Errorf("dial intercepted websocket upstream %s: %w", upstreamURL, err)
+	}
+	defer func() { _ = upstreamConn.Close() }()
+	responseContentType := upstreamRespHeaders.Get("Content-Type")
+	p.emitWSUpstreamStartLogLeg(ctx, recorder, cfg.CaptureDir, requestContentType, responseContentType, upstreamStatus, clientFacet)
+
+	responseWriter := &interceptedWebsocketResponseWriter{
+		header:      http.Header{},
+		conn:        client,
+		reader:      reader,
+		writer:      writer,
+		status:      0,
+		wroteHeader: false,
+	}
+	upgrader := websocket.Upgrader{
+		ReadBufferSize:    32 * 1024,
+		WriteBufferSize:   32 * 1024,
+		CheckOrigin:       func(*http.Request) bool { return true },
+		EnableCompression: false,
+	}
+	clientConn, err := upgrader.Upgrade(responseWriter, r, nil)
+	if err != nil {
+		p.log.WarnContext(ctx, "mitm.provider.ws.upgrade_failed", "provider", providerID, "host", host, "err", err)
+		p.recordWSFailure(ctx, recorder, "ws_client_upgrade_failed", err.Error())
+		return fmt.Errorf("upgrade intercepted websocket client: %w", err)
+	}
+	defer func() { _ = clientConn.Close() }()
+
+	p.recordWSStart(ctx, recorder, cfg.CaptureDir, r.Header, upstreamRespHeaders)
+
+	state := &wsRelayState{
+		mu:           sync.Mutex{},
+		messageCount: 0,
+		closeOnce:    sync.Once{},
+		closeErr:     nil,
+		closeChan:    make(chan struct{}),
+	}
+	closeBoth := wsCloseBoth(state, clientConn, upstreamConn)
+	relay := p.wsMakeRelay(ctx, wsRelayParams{
+		state:      state,
+		closeBoth:  closeBoth,
+		recorder:   recorder,
+		captureDir: cfg.CaptureDir,
+	})
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				p.wsHandleRelayPanic("mitm.provider.ws.client_relay_panic", upstreamURL, fmt.Sprintf("%v", recovered), closeBoth)
+			}
+		}()
+		relay(clientConn, upstreamConn, true)
+	}()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				p.wsHandleRelayPanic("mitm.provider.ws.upstream_relay_panic", upstreamURL, fmt.Sprintf("%v", recovered), closeBoth)
+			}
+		}()
+		relay(upstreamConn, clientConn, false)
+	}()
+
+	<-state.closeChan
+
+	p.emitWSForwardLogLeg(ctx, recorder, cfg.CaptureDir, requestContentType, responseContentType, clientFacet)
+	p.recordWSEnd(ctx, recorder, cfg.CaptureDir, state.messageCount, state.closeErr)
+	p.emitWSCompleteLogLeg(ctx, recorder, cfg.CaptureDir, requestContentType, responseContentType, clientFacet)
+	if recorder != nil {
+		recorder.Complete(ctx)
+	}
+	queueBaselineRefresh(ctx, cfg, providerID, p.log)
+	p.log.InfoContext(ctx, "mitm.provider.ws.closed", "provider", providerID, "url", upstreamURL, "messages", state.messageCount)
+	return nil
 }
 
 func (p *Proxy) emitWSInitialLogLegs(ctx context.Context, recorder *logevent.Recorder, captureDir string, requestContentType string, clientFacet logevent.Facet) {
@@ -265,11 +355,22 @@ func wsUpstreamHeaders(src http.Header) http.Header {
 // handshake response headers; the response body is empty for a
 // successful websocket upgrade so we do not return it to the caller.
 func (p *Proxy) dialWSUpstream(w http.ResponseWriter, r *http.Request, upstreamURL string, headers http.Header) (*websocket.Conn, http.Header, int, error) {
+	upstreamConn, headersCopy, status, err := p.dialWSUpstreamContext(r.Context(), upstreamURL, headers)
+	if err == nil {
+		return upstreamConn, headersCopy, status, nil
+	}
+	p.log.Warn("mitm.ws.dial_failed", "url", upstreamURL, "status", status, "err", err)
+	http.Error(w, "ws upstream dial failed: "+err.Error(), http.StatusBadGateway)
+	return nil, nil, status, fmt.Errorf("dial websocket upstream: %w", err)
+}
+
+func (p *Proxy) dialWSUpstreamContext(ctx context.Context, upstreamURL string, headers http.Header) (*websocket.Conn, http.Header, int, error) {
 	dialer := &websocket.Dialer{
 		HandshakeTimeout: 30 * time.Second,
-		TLSClientConfig:  &tls.Config{},
+		NetDialContext:   p.dialContext,
+		TLSClientConfig:  p.tlsClientConfig,
 	}
-	upstreamConn, upstreamResp, err := dialer.DialContext(r.Context(), upstreamURL, headers)
+	upstreamConn, upstreamResp, err := dialer.DialContext(ctx, upstreamURL, headers)
 	if err != nil {
 		status := http.StatusBadGateway
 		if upstreamResp != nil {
@@ -278,8 +379,7 @@ func (p *Proxy) dialWSUpstream(w http.ResponseWriter, r *http.Request, upstreamU
 				_ = upstreamResp.Body.Close()
 			}
 		}
-		p.log.Warn("mitm.ws.dial_failed", "url", upstreamURL, "status", status, "err", err)
-		http.Error(w, "ws upstream dial failed: "+err.Error(), http.StatusBadGateway)
+		p.log.WarnContext(ctx, "mitm.ws.upstream_dial_failed", "url", upstreamURL, "status", status, "err", err)
 		return nil, nil, status, fmt.Errorf("dial websocket upstream: %w", err)
 	}
 	headersCopy := upstreamResp.Header.Clone()
@@ -287,6 +387,81 @@ func (p *Proxy) dialWSUpstream(w http.ResponseWriter, r *http.Request, upstreamU
 		_ = upstreamResp.Body.Close()
 	}
 	return upstreamConn, headersCopy, http.StatusSwitchingProtocols, nil
+}
+
+type interceptedWebsocketResponseWriter struct {
+	header      http.Header
+	conn        net.Conn
+	reader      *bufio.Reader
+	writer      *bufio.Writer
+	status      int
+	wroteHeader bool
+}
+
+func (w *interceptedWebsocketResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *interceptedWebsocketResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	statusText := http.StatusText(status)
+	if statusText == "" {
+		statusText = "status"
+	}
+	_, _ = fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", status, statusText)
+	for key, values := range w.header {
+		for _, value := range values {
+			_, _ = fmt.Fprintf(w.writer, "%s: %s\r\n", key, value)
+		}
+	}
+	_, _ = w.writer.WriteString("\r\n")
+	_ = w.writer.Flush()
+}
+
+func (w *interceptedWebsocketResponseWriter) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	written, err := w.writer.Write(body)
+	if err != nil {
+		return written, fmt.Errorf("write intercepted websocket response body: %w", err)
+	}
+	if err := w.writer.Flush(); err != nil {
+		return written, fmt.Errorf("flush intercepted websocket response body: %w", err)
+	}
+	return written, nil
+}
+
+func (w *interceptedWebsocketResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, bufio.NewReadWriter(w.reader, w.writer), nil
+}
+
+func (p *Proxy) writeInterceptedHTTPError(ctx context.Context, writer *bufio.Writer, status int, body string) error {
+	statusText := http.StatusText(status)
+	if statusText == "" {
+		statusText = "status"
+	}
+	_, err := fmt.Fprintf(
+		writer,
+		"HTTP/1.1 %d %s\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s",
+		status,
+		statusText,
+		len(body),
+		body,
+	)
+	if err != nil {
+		p.log.WarnContext(ctx, "mitm.provider.write_error_response_failed", "status", status, "err", err)
+		return fmt.Errorf("write intercepted HTTP error response: %w", err)
+	}
+	if err := writer.Flush(); err != nil {
+		p.log.WarnContext(ctx, "mitm.provider.flush_error_response_failed", "status", status, "err", err)
+		return fmt.Errorf("flush intercepted HTTP error response: %w", err)
+	}
+	return nil
 }
 
 func (p *Proxy) beginWSLogRecorder(r *http.Request, provider string, upstreamURL string) *logevent.Recorder {

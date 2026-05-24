@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,9 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 // TestHandleConnectTunnelsBytesBothWays stands up a fake upstream
@@ -267,6 +270,99 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	}
 }
 
+func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
+	const providerHost = "chatgpt.com"
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upstream upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		messageType, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("upstream read: %v", err)
+			return
+		}
+		if messageType != websocket.TextMessage {
+			t.Errorf("message type = %d, want text", messageType)
+		}
+		if string(payload) != `{"type":"response.create"}` {
+			t.Errorf("payload = %s", payload)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed"}`)); err != nil {
+			t.Errorf("upstream write: %v", err)
+		}
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	proxy := startCursorMITMTestProxy(t, captureDir, providerHost, upstream, true)
+	defer proxy.shutdown()
+	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
+	proxy.proxy.log = logger
+	proxy.proxy.requestLog = logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil)
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(proxy.proxy.ca.cert)
+	proxyURL := &url.URL{Scheme: "http", Host: proxy.addr}
+	dialer := websocket.Dialer{
+		Proxy: http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{
+			RootCAs:    caPool,
+			ServerName: providerHost,
+			NextProtos: []string{"http/1.1"},
+		},
+		HandshakeTimeout: 2 * time.Second,
+	}
+	conn, resp, err := dialer.Dial("wss://"+providerHost+"/backend-api/codex/responses", nil)
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("dial websocket through CONNECT: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create"}`)); err != nil {
+		t.Fatalf("write websocket message: %v", err)
+	}
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read websocket message: %v", err)
+	}
+	if messageType != websocket.TextMessage {
+		t.Fatalf("message type = %d, want text", messageType)
+	}
+	if string(payload) != `{"type":"response.completed"}` {
+		t.Fatalf("payload = %s", payload)
+	}
+	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+		t.Fatalf("write websocket close: %v", err)
+	}
+
+	capturePath := filepath.Join(captureDir, "capture.jsonl")
+	deadline := time.Now().Add(2 * time.Second)
+	var lines []string
+	foundCapture := false
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(capturePath); err == nil {
+			lines = strings.Split(string(readFile(t, capturePath)), "\n")
+			if hasWSEvents(lines) {
+				foundCapture = true
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !foundCapture {
+		t.Fatalf("websocket capture records were not written: %v", lines)
+	}
+	_ = conn.Close()
+	waitForExactTunnelCount(t, proxy.proxy, 0, 2*time.Second)
+}
+
 func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing.T) {
 	const cursorHost = "api2.cursor.sh"
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -286,6 +382,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 		ca:              nil,
 		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
 		rawCaptureSeq:   atomic.Uint64{},
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		Tunnels:         newTestTunnelRegistry(),
 		captureWriters:  newCaptureWriterCache(logger),
 		mu:              sync.RWMutex{},
@@ -300,7 +397,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	req.Header.Set("content-type", "application/json")
 	var output bytes.Buffer
 	writer := bufio.NewWriter(&output)
-	if err := proxy.handleProviderInterceptedRequest(writer, req, cursorHost+":443", cursorHost, testCursorProvider{}); err != nil {
+	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, writer, req, cursorHost+":443", cursorHost, testCursorProvider{}); err != nil {
 		t.Fatalf("handle cursor request: %v", err)
 	}
 
@@ -370,6 +467,18 @@ func (t *testProxy) shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = t.server.Shutdown(ctx)
+}
+
+func waitForExactTunnelCount(t *testing.T, proxy *Proxy, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if proxy.Tunnels.Count() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("Tunnels.Count: got %d, want %d after %s", proxy.Tunnels.Count(), want, timeout)
 }
 
 func newTestTunnelRegistry() *livetrack.Registry[TunnelMeta] {

@@ -28,18 +28,10 @@ import (
 // default mux returns 404 and the client cannot establish the
 // upstream connection.
 //
-// Tunnel mode forwards opaque bytes in both directions. We do not
-// terminate TLS, so the tunneled bytes are end-to-end encrypted; the
-// payload is not captured in the JSONL transcript. The capture path
-// only sees the CONNECT request line and the duration of the
-// tunnel. This is intentional: terminating TLS would require a
-// per-host certificate and cert pinning would break the upstream's
-// trust anyway.
-//
-// Drift detection for upstreams that exclusively use CONNECT (e.g.
-// codex-cli's wss://chatgpt.com path) needs an external mitmproxy
-// session because we deliberately do not MITM-decrypt at this
-// layer.
+// Provider-owned CONNECT hosts terminate TLS inside Clyde with a
+// generated leaf certificate, then route the decoded HTTP request
+// through the provider capture path. Unclaimed CONNECT hosts keep
+// opaque tunnel mode and forward bytes without payload capture.
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	started := currentTime()
 	target := strings.TrimSpace(r.RequestURI)
@@ -261,7 +253,7 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			p.log.WarnContext(ctx, "mitm.provider.http.register_rejected", "provider", providerID, "host", host, "err", registerErr)
 			return
 		}
-		if err := p.handleProviderInterceptedRequest(writer, req, target, host, provider); err != nil {
+		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider); err != nil {
 			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 			p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.failed")
 			return
@@ -324,7 +316,7 @@ func (p *Proxy) prepareProviderRequestCapture(req *http.Request, params provider
 	return params, nil
 }
 
-func (p *Proxy) handleProviderInterceptedRequest(writer *bufio.Writer, req *http.Request, target string, host string, provider Provider) error {
+func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer *bufio.Writer, req *http.Request, target string, host string, provider Provider) error {
 	started := currentTime()
 	cfg := p.config()
 	capturePolicy := captureFilePolicyFromConfig(cfg)
@@ -352,6 +344,12 @@ func (p *Proxy) handleProviderInterceptedRequest(writer *bufio.Writer, req *http
 	req.RequestURI = ""
 	req.URL.Scheme = "https"
 	req.URL.Host = target
+	if isWebsocketUpgrade(req) {
+		if client == nil || reader == nil {
+			return fmt.Errorf("provider websocket requires intercepted TLS connection")
+		}
+		return p.handleProviderInterceptedWebsocket(ctx, client, reader, writer, req, target, host, provider)
+	}
 
 	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{
 		Provider:            string(provider.ID()),
@@ -383,7 +381,7 @@ func (p *Proxy) handleProviderInterceptedRequest(writer *bufio.Writer, req *http
 	}
 
 	if rule, ok := matchHookRule(cfg.Hooks, host, req.Method, req.URL.Path); ok {
-		return p.runHookedProviderRequest(req.Context(), hookedProviderParams{
+		return p.runHookedProviderRequest(ctx, hookedProviderParams{
 			writer:          writer,
 			req:             req,
 			body:            body,

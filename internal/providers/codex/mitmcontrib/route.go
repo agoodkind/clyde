@@ -16,6 +16,13 @@ const (
 	chatGPTUpstream = "https://chatgpt.com"
 )
 
+const (
+	openAIAPIHost   = "api.openai.com"
+	openAIChatHost  = "chat.openai.com"
+	chatGPTApexHost = "chatgpt.com"
+	chatGPTSuffix   = ".chatgpt.com"
+)
+
 // providerID is the typed provider id this package registers with
 // the MITM provider registry.
 const providerID mitm.ProviderID = codexContributorID
@@ -29,14 +36,30 @@ type routeProvider struct{}
 // concern path and emitted event provider field.
 func (routeProvider) ID() mitm.ProviderID { return providerID }
 
-// ClassifyConnect returns the zero ConnectClaim. Codex does not
-// own any CONNECT host in the MITM registry.
+// ClassifyConnect claims Codex's OpenAI and ChatGPT CONNECT hosts
+// for TLS interception.
 func (routeProvider) ClassifyConnect(host string) mitm.ConnectClaim {
+	if isCodexConnectHost(host) {
+		return mitm.ConnectClaim{
+			Claimed:    true,
+			Host:       host,
+			ProviderID: providerID,
+		}
+	}
 	return mitm.ConnectClaim{
 		Claimed:    false,
 		Host:       host,
 		ProviderID: providerID,
 	}
+}
+
+func isCodexConnectHost(host string) bool {
+	normalizedHost := strings.Trim(strings.ToLower(host), ".")
+	switch normalizedHost {
+	case openAIAPIHost, openAIChatHost, chatGPTApexHost:
+		return true
+	}
+	return strings.HasSuffix(normalizedHost, chatGPTSuffix)
 }
 
 // ClassifyPlain claims the OpenAI plain-HTTP routes the MITM proxy
