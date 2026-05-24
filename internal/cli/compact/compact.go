@@ -8,10 +8,6 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-// DefaultReservedBuffer is the compact planner's default reserved
-// context buffer.
-const DefaultReservedBuffer = 13_000
-
 // DefaultModel is the model name used for display and the optional
 // debug counter. Override with --model. The planner itself routes
 // through the configured counter and does not depend on this value.
@@ -79,7 +75,7 @@ both work.`,
 	cmd.Flags().Bool("apply", false, "Actually append the boundary + synthetic user message (default is preview)")
 	cmd.Flags().Bool("undo", false, "Roll back the most recent apply for this session")
 	cmd.Flags().Bool("list-backups", false, "Print the per-session backup ledger and exit")
-	cmd.Flags().Int("reserved", DefaultReservedBuffer, "Reserved buffer included in context total")
+	cmd.Flags().Int("reserved", 0, "Override the provider's auto-compact buffer (default: read from the live /context snapshot)")
 	cmd.Flags().String("model", DefaultModel, "Model name used for display and the optional debug counter")
 	cmd.Flags().Bool("force", false, "Bypass the open-session concurrency guard during --apply")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")

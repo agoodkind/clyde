@@ -233,6 +233,10 @@ func RunRuntime(
 	if err != nil {
 		return nil, err
 	}
+	// Propagate the snapshot-derived Reserved out of BuildRuntimeUpfront's
+	// by-value scope so downstream consumers (apply path, finalProjection,
+	// daemon RPC responses) see the same value the planner used.
+	req.Reserved = upfront.Reserved
 	logRuntimeRunStarted(req, modelForCount)
 	planRes, err := buildRuntimePlan(ctx, req, upfront, staticOverhead, slice, modelForCount, onIteration)
 	if err != nil {
@@ -320,7 +324,7 @@ func buildRuntimePlan(
 		Strippers:      req.Strippers,
 		Target:         req.TargetTokens,
 		StaticOverhead: staticOverhead,
-		Reserved:       req.Reserved,
+		Reserved:       upfront.Reserved,
 		Counter:        counter,
 		Out:            nil,
 		OnIteration: func(r IterationRecord) {
