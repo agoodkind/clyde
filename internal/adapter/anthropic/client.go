@@ -43,7 +43,7 @@ func onceSessionID() string {
 // client is used; long timeouts matter because /v1/messages can keep
 // a connection open for the full inference window on large outputs.
 // cfg carries wire values from [adapter.client_identity] and
-// [adapter.oauth]. source supplies the bearer token per request; the
+// [adapter.anthropic.oauth]. source supplies the bearer token per request; the
 // adapter passes a thin shim over the OAuth rotation layer. A nil source
 // is tolerated at construction but every request then fails with a missing
 // oauth source error. New does not validate cfg; callers should refuse

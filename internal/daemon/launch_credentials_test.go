@@ -54,13 +54,15 @@ func newLaunchCredentialsServer(t *testing.T, account string) (*Server, *oauthro
 }
 
 // launchCredentialsConfig builds a Config whose only meaningful field for the
-// launch-credentials path is the route-launched-claude switch.
-func launchCredentialsConfig(routeLaunchedClaude bool) config.Config {
+// launch-credentials path is the set-claude-config-dir switch.
+func launchCredentialsConfig(setClaudeConfigDir bool) config.Config {
 	return config.Config{
 		Adapter: config.AdapterConfig{
-			OAuth: config.AdapterOAuth{
-				Rotation: config.AdapterOAuthRotation{
-					RouteLaunchedClaude: routeLaunchedClaude,
+			Anthropic: config.AdapterAnthropic{
+				OAuth: config.AdapterOAuth{
+					Accounts: config.AdapterOAuthRotation{
+						SetClaudeConfigDir: setClaudeConfigDir,
+					},
 				},
 			},
 		},

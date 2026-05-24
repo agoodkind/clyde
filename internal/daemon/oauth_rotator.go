@@ -23,7 +23,7 @@ func buildDaemonOAuthRotator(cfg config.AdapterConfig, log *slog.Logger) *oauthr
 	}
 	rotatorLog := slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth)
 	rotator := oauthrotation.NewRotator(rotatorLog)
-	rotator.Register(oauthprovider.New(cfg.OAuth, ""))
+	rotator.Register(oauthprovider.New(cfg.Anthropic.OAuth, ""))
 	return rotator
 }
 

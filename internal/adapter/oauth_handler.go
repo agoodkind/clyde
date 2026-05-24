@@ -38,7 +38,7 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		PromptCachingEnabled:            s.cfg.ClientIdentity.PromptCachingEnabled,
 		PromptCacheTTL:                  s.cfg.ClientIdentity.PromptCacheTTL,
 		PromptCacheScope:                s.cfg.ClientIdentity.PromptCacheScope,
-		ToolResultCacheReferenceEnabled: s.cfg.OAuth.ToolResultCacheReferenceEnabled,
+		ToolResultCacheReferenceEnabled: s.cfg.Anthropic.OAuth.ToolResultCacheReferenceEnabled,
 		MicrocompactEnabled:             s.cfg.ClientIdentity.MicrocompactEnabled,
 		MicrocompactKeepRecent:          s.cfg.ClientIdentity.MicrocompactKeepRecent,
 		PerContextBetas:                 s.cfg.ClientIdentity.PerContextBetas,

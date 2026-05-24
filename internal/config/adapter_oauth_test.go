@@ -5,8 +5,69 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"goodkind.io/clyde/internal/config"
 )
+
+// TestAdapterAnthropicOAuthCanonicalBlockLoads asserts the canonical
+// [adapter.anthropic.oauth] block and its [adapter.anthropic.oauth.accounts]
+// rotation sub-block parse into cfg.Adapter.Anthropic.OAuth with the renamed
+// account field names (switch_on_limit, set_claude_config_dir, scan_interval).
+func TestAdapterAnthropicOAuthCanonicalBlockLoads(t *testing.T) {
+	const raw = `
+[adapter.anthropic.oauth]
+token_url = "https://example/token"
+messages_url = "https://example/messages"
+client_id = "cid"
+anthropic_beta = "beta"
+anthropic_version = "2023-06-01"
+keychain_service = "svc"
+scopes = ["user:profile", "user:inference"]
+tool_result_cache_reference_enabled = true
+
+[adapter.anthropic.oauth.accounts]
+switch_on_limit = true
+scan_interval = "5m"
+refresh_interval = "30m"
+set_claude_config_dir = true
+`
+	var cfg config.Config
+	if err := toml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("unmarshal canonical block: %v", err)
+	}
+	oauth := cfg.Adapter.Anthropic.OAuth
+	if oauth.TokenURL != "https://example/token" {
+		t.Fatalf("token_url = %q", oauth.TokenURL)
+	}
+	if oauth.MessagesURL != "https://example/messages" {
+		t.Fatalf("messages_url = %q", oauth.MessagesURL)
+	}
+	if oauth.ClientID != "cid" {
+		t.Fatalf("client_id = %q", oauth.ClientID)
+	}
+	if !oauth.ToolResultCacheReferenceEnabled {
+		t.Fatal("tool_result_cache_reference_enabled not parsed")
+	}
+	if len(oauth.Scopes) != 2 {
+		t.Fatalf("scopes = %v", oauth.Scopes)
+	}
+	if err := oauth.ValidateOAuthFields(); err != nil {
+		t.Fatalf("canonical block must validate: %v", err)
+	}
+	accounts := oauth.Accounts
+	if !accounts.SwitchOnLimit {
+		t.Fatal("switch_on_limit not parsed")
+	}
+	if !accounts.SetClaudeConfigDir {
+		t.Fatal("set_claude_config_dir not parsed")
+	}
+	if accounts.ScanInterval.AsDuration() != 5*time.Minute {
+		t.Fatalf("scan_interval = %s", accounts.ScanInterval.AsDuration())
+	}
+	if accounts.RefreshInterval.AsDuration() != 30*time.Minute {
+		t.Fatalf("refresh_interval = %s", accounts.RefreshInterval.AsDuration())
+	}
+}
 
 func TestAdapterOAuthValidateOAuthFields(t *testing.T) {
 	full := config.AdapterOAuth{
@@ -58,23 +119,23 @@ func TestAdapterOAuthRotationValidate(t *testing.T) {
 	}{
 		{
 			name:    "zero intervals are valid (defaults apply)",
-			rot:     config.AdapterOAuthRotation{Enabled: true},
+			rot:     config.AdapterOAuthRotation{SwitchOnLimit: true},
 			wantErr: false,
 		},
 		{
 			name:    "positive intervals are valid",
-			rot:     config.AdapterOAuthRotation{Enabled: true, MirrorInterval: time.Minute, RefreshInterval: time.Hour},
+			rot:     config.AdapterOAuthRotation{SwitchOnLimit: true, ScanInterval: config.Duration(time.Minute), RefreshInterval: config.Duration(time.Hour)},
 			wantErr: false,
 		},
 		{
-			name:    "negative mirror interval is rejected",
-			rot:     config.AdapterOAuthRotation{MirrorInterval: -time.Second},
+			name:    "negative scan interval is rejected",
+			rot:     config.AdapterOAuthRotation{ScanInterval: config.Duration(-time.Second)},
 			wantErr: true,
-			sub:     "mirror_interval",
+			sub:     "scan_interval",
 		},
 		{
 			name:    "negative refresh interval is rejected",
-			rot:     config.AdapterOAuthRotation{RefreshInterval: -time.Second},
+			rot:     config.AdapterOAuthRotation{RefreshInterval: config.Duration(-time.Second)},
 			wantErr: true,
 			sub:     "refresh_interval",
 		},
@@ -99,16 +160,16 @@ func TestAdapterOAuthRotationValidate(t *testing.T) {
 }
 
 func TestAdapterOAuthRotationWithDefaults(t *testing.T) {
-	got := config.AdapterOAuthRotation{Enabled: true}.WithDefaults()
-	if got.MirrorInterval != config.DefaultOAuthRotationMirrorInterval {
-		t.Fatalf("mirror interval = %s, want %s", got.MirrorInterval, config.DefaultOAuthRotationMirrorInterval)
+	got := config.AdapterOAuthRotation{SwitchOnLimit: true}.WithDefaults()
+	if got.ScanInterval != config.DefaultOAuthRotationScanInterval {
+		t.Fatalf("scan interval = %d, want %d", got.ScanInterval, config.DefaultOAuthRotationScanInterval)
 	}
 	if got.RefreshInterval != config.DefaultOAuthRotationRefreshInterval {
-		t.Fatalf("refresh interval = %s, want %s", got.RefreshInterval, config.DefaultOAuthRotationRefreshInterval)
+		t.Fatalf("refresh interval = %d, want %d", got.RefreshInterval, config.DefaultOAuthRotationRefreshInterval)
 	}
 	// An explicit interval must survive WithDefaults.
-	custom := config.AdapterOAuthRotation{MirrorInterval: time.Minute, RefreshInterval: 2 * time.Minute}.WithDefaults()
-	if custom.MirrorInterval != time.Minute || custom.RefreshInterval != 2*time.Minute {
+	custom := config.AdapterOAuthRotation{ScanInterval: config.Duration(time.Minute), RefreshInterval: config.Duration(2 * time.Minute)}.WithDefaults()
+	if custom.ScanInterval != config.Duration(time.Minute) || custom.RefreshInterval != config.Duration(2*time.Minute) {
 		t.Fatalf("explicit intervals overwritten: %+v", custom)
 	}
 }

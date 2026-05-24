@@ -223,7 +223,7 @@ func validateAdapterCoreConfig(cfg config.AdapterConfig) error {
 		return fmt.Errorf("adapter: [adapter.client_identity].cc_entrypoint must be set")
 	}
 	if cfg.DirectOAuth {
-		if err := cfg.OAuth.ValidateOAuthFields(); err != nil {
+		if err := cfg.Anthropic.OAuth.ValidateOAuthFields(); err != nil {
 			return err
 		}
 	}

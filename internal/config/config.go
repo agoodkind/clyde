@@ -267,11 +267,6 @@ type AdapterConfig struct {
 	// at the configured messages URL using the user's OAuth token from
 	// the local keychain.
 	DirectOAuth bool `json:"directOauth,omitempty" toml:"direct_oauth,omitempty"`
-	// OAuth holds token endpoint, API URLs, and keychain label for the
-	// direct-OAuth path and the background token refresher. Required
-	// when DirectOAuth is true; also required when the global [oauth]
-	// refresher is enabled so periodic refresh can reach the token URL.
-	OAuth AdapterOAuth `json:"oauth,omitzero" toml:"oauth,omitempty"`
 	// ClientIdentity carries wire request-shape fields (headers and
 	// body-side billing line inputs). There are no compiled-in defaults:
 	// NewRegistry rejects empty required fields. See clyde.example.toml.
@@ -298,12 +293,11 @@ type AdapterConfig struct {
 	// same adapter endpoint/port while letting model name choose
 	// backend.
 	Codex AdapterCodex `json:"codex,omitzero" toml:"codex,omitempty"`
-	// Anthropic carries Anthropic-specific sub-blocks introduced after
-	// the original AdapterConfig shape stabilized. Existing Anthropic
-	// settings (OAuth, ClientIdentity, Notices, etc.) stay as siblings
-	// of this struct on AdapterConfig for backward compatibility; new
-	// per-provider sub-blocks live here so callers see one canonical
-	// [adapter.anthropic] root.
+	// Anthropic carries Anthropic-specific sub-blocks under the canonical
+	// [adapter.anthropic] root. Provider-specific OAuth config lives here
+	// at [adapter.anthropic.oauth] (with the rotation sub-block at
+	// [adapter.anthropic.oauth.accounts]), alongside the wire-capture and
+	// reasoning levers.
 	Anthropic AdapterAnthropic `json:"anthropic,omitzero" toml:"anthropic,omitempty"`
 	// WireCapture holds the shared rotation budget for upstream wire
 	// body logging. Per-provider mode levers live on each provider's
@@ -523,6 +517,12 @@ type AdapterWireCapture struct {
 // the original AdapterConfig shape stabilized.
 type AdapterAnthropic struct {
 	WireCapture AdapterAnthropicWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
+	// OAuth holds token endpoint, API URLs, and keychain label for the
+	// direct-OAuth path and the background token refresher. Required
+	// when DirectOAuth is true; also required when the global [oauth]
+	// refresher is enabled so periodic refresh can reach the token URL.
+	// Lives at [adapter.anthropic.oauth].
+	OAuth AdapterOAuth `json:"oauth,omitzero" toml:"oauth,omitempty"`
 	// Reasoning carries the per-provider reasoning round-trip levers.
 	// Anthropic has a single lever (the visible thinking block); see
 	// [AdapterAnthropicReasoning]. Empty values resolve to documented
@@ -790,36 +790,37 @@ type AdapterOAuth struct {
 	// tool-followup path rejected this field in production and MITM
 	// captures of the official Claude CLI succeeded without it.
 	ToolResultCacheReferenceEnabled bool `json:"toolResultCacheReferenceEnabled,omitempty" toml:"tool_result_cache_reference_enabled,omitempty"`
-	// Rotation configures the daemon's multi-account OAuth rotation layer.
-	Rotation AdapterOAuthRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
+	// Accounts configures the daemon's multi-account OAuth rotation layer.
+	// Lives at [adapter.anthropic.oauth.accounts].
+	Accounts AdapterOAuthRotation `json:"accounts,omitzero" toml:"accounts,omitempty"`
 }
 
 const (
-	// DefaultOAuthRotationMirrorInterval is the cadence the rotation harvest
+	// DefaultOAuthRotationScanInterval is the cadence the rotation harvest
 	// pass imports upstream Claude Code credentials into the per-account store.
-	DefaultOAuthRotationMirrorInterval = 5 * time.Minute
+	DefaultOAuthRotationScanInterval = Duration(5 * time.Minute)
 	// DefaultOAuthRotationRefreshInterval is the cadence the rotation layer
 	// refreshes every harvested account's access token.
-	DefaultOAuthRotationRefreshInterval = 30 * time.Minute
+	DefaultOAuthRotationRefreshInterval = Duration(30 * time.Minute)
 )
 
 // AdapterOAuthRotation configures Clyde's OAuth rotation layer.
 //
 // The rotator always serves tokens: it harvests upstream Claude Code
 // credentials, refreshes them, and serves the resulting access token to the
-// adapter. There is no legacy single-Manager fallback. Enabled gates only
-// throttle-based multi-account switching: when Enabled is false the rotator
-// serves the primary harvested account and does not rotate to a different
-// account on a throttle signal; when Enabled is true a throttle signal moves
-// selection to the next non-throttled account. MirrorInterval is the harvest
-// cadence and RefreshInterval is the proactive token-refresh cadence; the
-// daemon refresh loop runs one harvest pass and one RefreshAll per
+// adapter. There is no legacy single-Manager fallback. SwitchOnLimit gates
+// only throttle-based multi-account switching: when SwitchOnLimit is false the
+// rotator serves the primary harvested account and does not rotate to a
+// different account on a throttle signal; when SwitchOnLimit is true a throttle
+// signal moves selection to the next non-throttled account. ScanInterval is the
+// harvest cadence and RefreshInterval is the proactive token-refresh cadence;
+// the daemon refresh loop runs one harvest pass and one RefreshAll per
 // RefreshInterval tick.
 type AdapterOAuthRotation struct {
-	Enabled         bool          `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	MirrorInterval  time.Duration `json:"mirrorInterval,omitempty" toml:"mirror_interval,omitempty"`
-	RefreshInterval time.Duration `json:"refreshInterval,omitempty" toml:"refresh_interval,omitempty"`
-	// RouteLaunchedClaude, when true, makes a Clyde-launched `claude`
+	SwitchOnLimit   bool     `json:"switchOnLimit,omitempty" toml:"switch_on_limit,omitempty"`
+	ScanInterval    Duration `json:"scanInterval,omitempty" toml:"scan_interval,omitempty"`
+	RefreshInterval Duration `json:"refreshInterval,omitempty" toml:"refresh_interval,omitempty"`
+	// SetClaudeConfigDir, when true, makes a Clyde-launched `claude`
 	// authenticate as the rotator's currently-selected Anthropic account
 	// instead of the user's own Claude Code login. The daemon writes the
 	// selected account's .credentials.json into a fresh scratch dir and
@@ -827,13 +828,13 @@ type AdapterOAuthRotation struct {
 	// entry is empty for any non-default CLAUDE_CONFIG_DIR, so claude falls
 	// back to the planted file and never touches the real keychain or
 	// ~/.claude. Default is false because it changes how claude launches.
-	RouteLaunchedClaude bool `json:"routeLaunchedClaude,omitempty" toml:"route_launched_claude,omitempty"`
+	SetClaudeConfigDir bool `json:"setClaudeConfigDir,omitempty" toml:"set_claude_config_dir,omitempty"`
 }
 
 // WithDefaults returns a copy with zero intervals replaced by their defaults.
 func (r AdapterOAuthRotation) WithDefaults() AdapterOAuthRotation {
-	if r.MirrorInterval <= 0 {
-		r.MirrorInterval = DefaultOAuthRotationMirrorInterval
+	if r.ScanInterval <= 0 {
+		r.ScanInterval = DefaultOAuthRotationScanInterval
 	}
 	if r.RefreshInterval <= 0 {
 		r.RefreshInterval = DefaultOAuthRotationRefreshInterval
@@ -845,11 +846,11 @@ func (r AdapterOAuthRotation) WithDefaults() AdapterOAuthRotation {
 // A zero interval is treated as "use the default" and is valid; a negative
 // interval is rejected because it can never produce a usable ticker.
 func (r AdapterOAuthRotation) Validate() error {
-	if r.MirrorInterval < 0 {
-		return fmt.Errorf("adapter: [adapter.oauth.rotation].mirror_interval must be greater than 0")
+	if r.ScanInterval < 0 {
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth.accounts].scan_interval must be greater than 0")
 	}
 	if r.RefreshInterval < 0 {
-		return fmt.Errorf("adapter: [adapter.oauth.rotation].refresh_interval must be greater than 0")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth.accounts].refresh_interval must be greater than 0")
 	}
 	return nil
 }
@@ -857,27 +858,27 @@ func (r AdapterOAuthRotation) Validate() error {
 // ValidateOAuthFields returns an error if any required field is empty.
 func (o AdapterOAuth) ValidateOAuthFields() error {
 	if o.TokenURL == "" {
-		return fmt.Errorf("adapter: [adapter.oauth].token_url must be set")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth].token_url must be set")
 	}
 	if o.MessagesURL == "" {
-		return fmt.Errorf("adapter: [adapter.oauth].messages_url must be set")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth].messages_url must be set")
 	}
 	if o.ClientID == "" {
-		return fmt.Errorf("adapter: [adapter.oauth].client_id must be set")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth].client_id must be set")
 	}
 	if o.AnthropicBeta == "" {
-		return fmt.Errorf("adapter: [adapter.oauth].anthropic_beta must be set")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth].anthropic_beta must be set")
 	}
 	if o.AnthropicVersion == "" {
-		return fmt.Errorf("adapter: [adapter.oauth].anthropic_version must be set")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth].anthropic_version must be set")
 	}
 	if o.KeychainService == "" {
-		return fmt.Errorf("adapter: [adapter.oauth].keychain_service must be set")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth].keychain_service must be set")
 	}
 	if len(o.Scopes) == 0 {
-		return fmt.Errorf("adapter: [adapter.oauth].scopes must be non-empty")
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth].scopes must be non-empty")
 	}
-	if err := o.Rotation.Validate(); err != nil {
+	if err := o.Accounts.Validate(); err != nil {
 		return err
 	}
 	return nil

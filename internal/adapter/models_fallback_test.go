@@ -48,7 +48,7 @@ func TestNewRegistryDirectOAuthRequiresOAuthBlock(t *testing.T) {
 	cfg.DirectOAuth = true
 	_, err := NewRegistry(cfg)
 	if err == nil {
-		t.Fatal("expected error when direct_oauth without [adapter.oauth]")
+		t.Fatal("expected error when direct_oauth without [adapter.anthropic.oauth]")
 	}
 	if !strings.Contains(err.Error(), "token_url") {
 		t.Fatalf("err = %v", err)

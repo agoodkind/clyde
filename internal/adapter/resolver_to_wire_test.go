@@ -30,7 +30,7 @@ func resolverToWireConfig() config.AdapterConfig {
 	// models to BackendAnthropic; otherwise the resolver returns
 	// ErrUnresolvedProvider and the test never reaches the wire.
 	cfg.DirectOAuth = true
-	cfg.OAuth = config.AdapterOAuth{
+	cfg.Anthropic.OAuth = config.AdapterOAuth{
 		TokenURL:         "https://example.test/v1/oauth/token",
 		MessagesURL:      "https://example.test/v1/messages",
 		ClientID:         "test-client",

@@ -2,7 +2,7 @@
 #
 # Copy sections into your
 # config; the adapter refuses to start when required tables are
-# missing ([adapter.families], [adapter.client_identity], [adapter.oauth]
+# missing ([adapter.families], [adapter.client_identity], [adapter.anthropic.oauth]
 # when direct_oauth = true).
 #
 # Bootstrap:
@@ -10,7 +10,7 @@
 #   $EDITOR ~/.config/clyde/config.toml
 #   launchctl kickstart -k gui/$UID/io.goodkind.clyde
 #
-# Operator note: [adapter.oauth] and the stainless/* / cc_* fields under
+# Operator note: [adapter.anthropic.oauth] and the stainless/* / cc_* fields under
 # [adapter.client_identity] must match the canonical desktop client you
 # use for login (capture from your environment or vendor docs).
 
@@ -110,7 +110,7 @@ model = ""
 # backend = "passthrough_override"
 # passthrough_override = "local"
 
-[adapter.oauth]
+[adapter.anthropic.oauth]
 token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
 messages_url = "https://REDACTED-UPSTREAM/v1/messages"
 client_id = "REDACTED-CLIENT-ID"
@@ -127,19 +127,19 @@ scopes = [
 
 # Multi-account OAuth rotation. The daemon always serves a token from the
 # harvested Claude Code credentials; this block tunes the rotation layer.
-# enabled gates throttle-based account switching only: when false the rotator
-# serves the primary harvested account and does not switch on a 429/throttle
-# signal; when true a throttle moves selection to the next non-throttled
-# account. mirror_interval is the cadence the harvest pass imports upstream
-# Claude Code credentials into the per-account store (default 5m).
+# switch_on_limit gates throttle-based account switching only: when false the
+# rotator serves the primary harvested account and does not switch on a
+# 429/throttle signal; when true a throttle moves selection to the next
+# non-throttled account. scan_interval is the cadence the harvest pass imports
+# upstream Claude Code credentials into the per-account store (default 5m).
 # refresh_interval is the proactive token-refresh cadence (default 30m).
 # Manage accounts with `clyde oauth login`, `clyde oauth list`, and
 # `clyde oauth forget`.
-[adapter.oauth.rotation]
-enabled = true
-mirror_interval = "5m"
+[adapter.anthropic.oauth.accounts]
+switch_on_limit = true
+scan_interval = "5m"
 refresh_interval = "30m"
-# route_launched_claude makes a Clyde-launched `claude` authenticate as the
+# set_claude_config_dir makes a Clyde-launched `claude` authenticate as the
 # rotator's currently-selected account instead of your own Claude Code login.
 # The daemon plants the selected account's .credentials.json (0600) in a fresh
 # scratch dir and points the child at it via CLYDE_CONFIG_DIR; on macOS the
@@ -147,7 +147,7 @@ refresh_interval = "30m"
 # planted file and never touches your real keychain or ~/.claude. The scratch
 # dir is removed when the launched claude exits and on daemon shutdown. Default
 # is false because it changes how claude launches.
-route_launched_claude = false
+set_claude_config_dir = false
 
 [adapter.client_identity]
 beta_header = "REDACTED-OAUTH-BETA,REDACTED-CC-BETA,effort-2025-11-24"

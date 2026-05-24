@@ -46,7 +46,7 @@ const (
 )
 
 // applyRotatorLaunchCredentials adds CLAUDE_CONFIG_DIR to env when the launched
-// provider is claude and [adapter.oauth.rotation].route_launched_claude is on.
+// provider is claude and [adapter.anthropic.oauth.accounts].set_claude_config_dir is on.
 // It selects the rotator's currently-active Anthropic account, plants its
 // .credentials.json in a scratch dir, and points the child there so claude
 // authenticates as that account with no write-back to the user's real config or
@@ -63,7 +63,7 @@ func (s *Server) applyRotatorLaunchCredentials(ctx context.Context, provider ses
 	if provider != session.ProviderClaude {
 		return nil, nil
 	}
-	if cfg == nil || !cfg.Adapter.OAuth.Rotation.RouteLaunchedClaude {
+	if cfg == nil || !cfg.Adapter.Anthropic.OAuth.Accounts.SetClaudeConfigDir {
 		return nil, nil
 	}
 	scratchDir, reauth, err := s.plantRotatorLaunchCredentials(ctx, s.OAuthRotator(), rotatorProviderNameForClaude)

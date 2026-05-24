@@ -227,10 +227,10 @@ func (s *Server) registerAnthropicProvider(
 		// visible to the serve path through shared in-memory slots.
 		s.oauthRotator = deps.OAuthRotator
 	} else {
-		s.oauthRotator = buildAnthropicRotator(cfg.OAuth, slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth))
+		s.oauthRotator = buildAnthropicRotator(cfg.Anthropic.OAuth, slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth))
 	}
 	id := cfg.ClientIdentity
-	messagesURL := cfg.OAuth.MessagesURL
+	messagesURL := cfg.Anthropic.OAuth.MessagesURL
 	if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
 		// Rewrite messages outbound through the MITM proxy. The
 		// proxy's classifyRoute strips api.anthropic.com from
@@ -243,7 +243,7 @@ func (s *Server) registerAnthropicProvider(
 	}
 	s.anthr = anthropic.New(nil, newRotatorTokenSource(s.oauthRotator, s.log), anthropic.Config{
 		MessagesURL:             messagesURL,
-		OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
+		OAuthAnthropicVersion:   cfg.Anthropic.OAuth.AnthropicVersion,
 		BetaHeader:              id.BetaHeader,
 		UserAgent:               id.UserAgent,
 		SystemPromptPrefix:      id.SystemPromptPrefix,

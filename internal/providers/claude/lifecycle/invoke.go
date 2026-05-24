@@ -494,7 +494,7 @@ func launchSessionID(env map[string]string, sessionID string) string {
 // applyDaemonLaunchEnv fetches the daemon-owned claude launch environment and
 // merges it into env through Clyde-owned apply helpers. The daemon decides what
 // to contribute: ANTHROPIC_BASE_URL when MITM capture is on, CLAUDE_CONFIG_DIR
-// when [adapter.oauth.rotation].route_launched_claude is on (CLYDE-448), or
+// when [adapter.anthropic.oauth.accounts].set_claude_config_dir is on (CLYDE-448), or
 // nothing. The fetch runs regardless of MITM so the rotator-credentials path
 // works with capture disabled; the MITM-specific sanitize of stale Clyde-owned
 // values only runs when MITM is enabled for claude, matching prior behavior.

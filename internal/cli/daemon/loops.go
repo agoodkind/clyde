@@ -167,15 +167,15 @@ func oauthLoop() daemonsvc.ExtraLoop {
 		if !cfg.OAuth.IsEnabled() {
 			return nil
 		}
-		if err := cfg.Adapter.OAuth.ValidateOAuthFields(); err != nil {
+		if err := cfg.Adapter.Anthropic.OAuth.ValidateOAuthFields(); err != nil {
 			log.LogAttrs(context.Background(), slog.LevelWarn, "oauth.refresher.skipped_incomplete_adapter_oauth",
 				slog.String("component", "oauth"),
 				slog.Any("err", err),
 			)
 			return nil
 		}
-		rotation := cfg.Adapter.OAuth.Rotation.WithDefaults()
-		interval := rotation.RefreshInterval
+		rotation := cfg.Adapter.Anthropic.OAuth.Accounts.WithDefaults()
+		interval := rotation.RefreshInterval.AsDuration()
 
 		// Drive the single, daemon-owned rotator so harvest and RefreshAll run
 		// against the same in-memory account slots the adapter serves from. A
