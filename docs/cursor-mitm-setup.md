@@ -16,11 +16,11 @@ The port number must match the daemon's configured `[mitm.listen.port]` (default
 
 ## Why the value matters
 
-Cursor's `http.proxy` setting overrides Chromium's `--proxy-server` command-line flag and the `HTTPS_PROXY` environment variable. If the proxy address drifts from the daemon's actual MITM listener, Cursor silently routes through a dead port. Every BYOK turn fails with a generic `ConnectError: [internal] Failed to establish a socket connection to proxies: PROXY [::1]:<stale>`. There is no visible error in Cursor's logs; the failure appears as a connection refusal at the system level.
+Cursor uses its `http.proxy` setting for BYOK network traffic. If the proxy address drifts from the daemon's actual MITM listener, Cursor silently routes through a dead port. Every BYOK turn fails with a generic `ConnectError: [internal] Failed to establish a socket connection to proxies: PROXY [::1]:<stale>`. There is no visible error in Cursor's logs; the failure appears as a connection refusal at the system level.
 
 ## The desktop-via-clyde patch role
 
-`desktop-via-clyde` patches `/Applications/Cursor.app` in place. The patched `Contents/MacOS/Cursor` executable is a Swift shim that checks the Clyde MITM CA file, checks the Clyde MITM proxy socket at `[::1]:48723`, sets proxy arguments and environment variables, and then execs the original Cursor executable at `Contents/MacOS/Cursor.real`. The shim does not modify Cursor's `settings.json`. The settings file value is the user's responsibility.
+`desktop-via-clyde` patches `/Applications/Cursor.app` in place. The patched `Contents/MacOS/Cursor` executable is a Swift shim that checks the Clyde MITM CA file, checks the Clyde MITM proxy socket at `[::1]:48723`, and then execs the original Cursor executable at `Contents/MacOS/Cursor.real`. The shim does not modify Cursor's `settings.json`. The settings file value is the user's responsibility.
 
 ## Detect drift manually
 

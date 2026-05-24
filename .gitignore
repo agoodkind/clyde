@@ -69,3 +69,6 @@ tmp_*
 
 # Cursor IDE plan exports and chat transcripts (local, regenerable)
 /.cursor/
+
+# Added by ggshield
+.cache_ggshield
