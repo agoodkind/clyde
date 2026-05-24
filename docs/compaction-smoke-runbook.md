@@ -160,7 +160,7 @@ The `/tmp` backup from Step 1 is the safety net for the whole run. The final res
 
 This step proves your methodology is sound. Before any Apply runs, the model should see the canary you just inserted.
 
-Every pre-Apply and post-Apply LLM probe in this runbook MUST capture `/context` alongside the canary question. Run the canary probe first to record cost and answer, then run a separate `claude -p "/context"` call against the same `--resume <id>` (also with `--no-session-persistence`, no tools) and save the result. The captured `/context` Messages and Tokens lines are the upstream-truth dual-counter view that the clyde planner's prober is compared against. Without /context capture, a regression in the prober's `ctx_total` is silent and only surfaces later as an over-target Apply or a refused trim.
+Every pre-Apply and post-Apply LLM probe in this runbook MUST capture `/context` alongside the canary question. Run the canary probe first to record cost and answer, then run a separate `claude -p "/context"` call against the same `--resume <id>` (also with `--no-session-persistence`, no tools) and save the result. The captured `/context` Messages and Tokens lines are the upstream-truth dual-counter view that the clyde planner's prober is compared against. Without /context capture, a regression in the prober's `ctx_total` is silent and only surfaces later as a result that lands further from the target than intended.
 
 Model selection: when the smoke target is `motd-shell-rules-cleanup` (or any small session under roughly 200k tokens), use `--model 'claude-haiku-4-5'` for every probe in this runbook. Opus is unnecessary at this scale and costs roughly 25 times more per probe with no signal benefit. Reserve opus 1M (`claude-opus-4-7[1m]`) for runs against sessions that genuinely require the 1M window (lm-review at 877k, the mwan-handoff sessions at 720k to 977k). The model choice does not affect the canary-survival semantics; it only affects probe cost and latency.
 
@@ -432,7 +432,7 @@ The dual-counter divergence is CLYDE-373. Recording this number every run tracks
 
 The first Apply puts a synthetic into the transcript but does not exercise the new Rehydrate path, because nothing in the pre-first-Apply PostBoundary was a synthetic. The Rehydrate code only runs when LoadSlice's PostBoundary already contains an `IsSummary=true` entry from a prior compaction. A second Apply on top of the first puts the slice into exactly that shape, so this step is what proves CLYDE-415 and CLYDE-416 actually work.
 
-Pick a second target that is below the current planner ctx_total reported in the first Apply's result box. Use a number that is also above the minimum projection the planner can achieve (the refusal target from the over-target test). For a session whose first-Apply ctx_total was around 22k with a min projection around 20.6k, a second target around 24000 lands cleanly and gives the planner room to write a new synthetic.
+Pick a second target that is below the current planner ctx_total reported in the first Apply's result box. Use a number that is also above the minimum projection the planner can achieve, so the planner has room to land at or above the target per [the target contract](compaction/algorithm.md#the-target-contract). For a session whose first-Apply ctx_total was around 22k with a min projection around 20.6k, a second target around 24000 lands cleanly and gives the planner room to write a new synthetic.
 
 ```bash
 clyde compact <session> 24000 --chat --apply
@@ -603,7 +603,7 @@ Use this table to record verdicts for each fix-chain milestone. Today's column d
 | Post-undo sha matches pre-Apply | FAIL | pass | pass | pass | pass | pass | pass | pass |
 | Snapshot file deleted after undo | FAIL | FAIL | pass | pass | pass | pass | pass | pass |
 | Planner projection within 1 percent of `/context` | FAIL | FAIL | FAIL | pass | pass | pass | pass | pass |
-| Apply refuses when projection over target | FAIL | FAIL | FAIL | FAIL | pass | pass | pass | pass |
+| Result satisfies [the target contract](compaction/algorithm.md#the-target-contract) (at or above target, closest from above) | FAIL | FAIL | FAIL | FAIL | pass | pass | pass | pass |
 | Wall clock under 90 seconds | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | pass | pass |
 | Counter calls under 30 | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | pass | pass |
 | ETA appears within 5 seconds | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | pass |

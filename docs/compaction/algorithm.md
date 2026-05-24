@@ -4,6 +4,14 @@ The planner takes a transcript Slice and a target context total. It returns a pl
 
 See [glossary.md](glossary.md) for the vocabulary and [edge-cases.md](edge-cases.md) for the failure modes that touch each stage.
 
+## The target contract
+
+This section is the single definition of how the planner treats the target. Every other compaction doc points here instead of restating the rule, so the contract cannot drift.
+
+The target is a floor on the resulting context total, not a ceiling. The result must be greater than or equal to the target. Among the results the enabled strippers can reach, the planner commits the one closest to the target from above, which is the smallest projection that is still at or above the target. With target 50, a result of 51 is valid and a result of 49 is invalid because it removed more than the caller asked for.
+
+When even maximal dropping leaves the projection above the target, because the static overhead, the reserved buffer, and the undroppable tail already sum above it, that larger projection is the result the planner commits. It is at or above the target, so it is valid. A result above the target is the correct outcome when the floor sits above the target, and the planner always commits a result rather than declining to act.
+
 ## Inputs
 
 The caller hands the planner four values.

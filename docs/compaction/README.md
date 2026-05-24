@@ -8,7 +8,7 @@ This hub is the entry point for working on compaction. The pages below cover the
 
 - [algorithm.md](algorithm.md) describes the pipeline end-to-end: the inputs the planner takes, the four axes it runs in fixed order, the Rehydrate and Dehydrate passes that flank the bisect, the Bisect Axis primitive, and the projection arithmetic.
 - [glossary.md](glossary.md) is the shared vocabulary the other pages assume. Read this first if a term in any other page is unfamiliar.
-- [edge-cases.md](edge-cases.md) catalogs the failure modes the pipeline has to tolerate, including legacy synthetic shapes, infeasible target refusal, probe `WorkDir` mismatch, and attached-session probe pollution.
+- [edge-cases.md](edge-cases.md) catalogs the failure modes the pipeline has to tolerate, including legacy synthetic shapes, a target below the floor, probe `WorkDir` mismatch, and attached-session probe pollution.
 - [canary-system.md](canary-system.md) documents the canary methodology the smoke runbook uses to verify compaction correctness, including the metadata-footer canary form, the prompt-injection trap, and the spawn-flag rule.
 - [acceptance.md](acceptance.md) is the pointer into the smoke runbook for end-to-end verification, including the pass-and-fail matrix.
 - [providers/claude.md](providers/claude.md) covers the Claude provider's probe spawn shape, the `control_request` and `control_response` envelope round trip, the `ProbeOptions.WorkDir` requirement, and the `CandidateProber` JSONL spawn.

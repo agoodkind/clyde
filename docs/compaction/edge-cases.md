@@ -26,13 +26,11 @@ The `Rehydrate` pass runs at most `maxLayers` iterations, and each iteration exp
 
 A session compacted more times than `maxLayers` still compacts, but the deepest layer counts toward the projection as one indivisible chunk. The planner cannot reduce the floor below the size of that chunk plus the static overhead and reserved buffer.
 
-## Infeasible target refusal
+## Target below the floor
 
-The planner's final projection still exceeds the user's target after every enabled axis has searched to its maximum k, and Apply returns `ApplyOverTargetError` carrying the projection, the target, and the overshoot delta.
+The transcript's floor sits above the requested target after every enabled axis has searched to its maximum k. The floor combines the static overhead, the reserved buffer, and whatever post-boundary content cannot be dropped under the bits the caller authorized. No combination of strippers can bring the projection down to the target without dropping content the caller did not authorize.
 
-The transcript's floor sits above the requested target. The floor combines the static overhead, the reserved buffer, and whatever post-boundary content cannot be dropped under the bits the caller authorized. No combination of strippers can reach the target without dropping content the user did not approve or without consuming the reserved buffer that protects the next Apply from landing at the ceiling.
-
-The user sees a typed error rendered as `apply refused: projection N over target T (+delta)`. The caller can override the gate by setting `ForceOverTarget` on `ApplyInput`, and Apply still proceeds. A structured warning log fires when the override is used, so a forced over-target Apply is always recoverable from logs after the fact.
+This is not an error. Per [the target contract](algorithm.md#the-target-contract), the planner commits the smallest projection it can reach, which sits above the target, and a result above the target is valid because the result must be greater than or equal to the target. The planner always commits a result rather than declining to act.
 
 ## Probe WorkDir mismatch
 
@@ -40,7 +38,7 @@ A /context probe returns numbers that do not match what the live session sees, o
 
 The `claude --resume <session-id>` command resolves memory files such as `CLAUDE.md`, skills, and other workspace-relative configuration from the process's current working directory. The `ProbeOptions.WorkDir` field on the spawn options controls that cwd. When `WorkDir` does not match the directory the original interactive session ran from, the probe loads a different set of memory files and skills than the live session uses, so its /context categories diverge from reality.
 
-Compaction plans against a wrong baseline when this happens. Apply may refuse a target that the live session could in fact reach, or may approve a target that the live session will overshoot. The planner emits `work_dir` on every probe log so the divergence is recoverable from logs after the fact.
+Compaction plans against a wrong baseline when this happens. The planner may then commit a result that drops too much or too little relative to what the live session would, because the probe's category totals diverge from reality. The planner emits `work_dir` on every probe log so the divergence is recoverable from logs after the fact.
 
 ## Attached-session probe pollution
 
