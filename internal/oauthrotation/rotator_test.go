@@ -53,8 +53,17 @@ func newFakeProvider(name provider.Name) *fakeProvider {
 
 func (f *fakeProvider) Name() provider.Name { return f.name }
 
-func (f *fakeProvider) AccountID(accessToken string) (provider.AccountID, error) {
-	// The fake encodes the account into the token as "<account>:token".
+func (f *fakeProvider) AccountIdentity(_ context.Context, accessToken string) (provider.AccountIdentity, error) {
+	account, err := f.accountFromToken(accessToken)
+	if err != nil {
+		return provider.AccountIdentity{}, err
+	}
+	return provider.AccountIdentity{Account: account, Label: ""}, nil
+}
+
+// accountFromToken decodes the account the fake encodes into the token as
+// "<account>:token". It backs both AccountIdentity and EncodeStored.
+func (f *fakeProvider) accountFromToken(accessToken string) (provider.AccountID, error) {
 	for i := 0; i < len(accessToken); i++ {
 		if accessToken[i] == ':' {
 			return provider.AccountID(accessToken[:i]), nil
@@ -140,7 +149,7 @@ func (f *fakeProvider) ParseStored(raw []byte) (provider.Credentials, error) {
 }
 
 func (f *fakeProvider) EncodeStored(c provider.Credentials) ([]byte, error) {
-	account, err := f.AccountID(c.AccessToken)
+	account, err := f.accountFromToken(c.AccessToken)
 	if err != nil {
 		return nil, err
 	}

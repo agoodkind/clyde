@@ -25,17 +25,20 @@ type fakeProvider struct {
 	// keychainCreds, when set, is returned by ReadMirror for any keychain
 	// source so a keychain mirror can be exercised without an on-disk file.
 	keychainCreds *provider.Credentials
+	// label, when set, is returned as the AccountIdentity label so the
+	// derived-label write path can be exercised.
+	label string
 }
 
 func (f *fakeProvider) Name() provider.Name { return f.name }
 
-func (f *fakeProvider) AccountID(accessToken string) (provider.AccountID, error) {
+func (f *fakeProvider) AccountIdentity(_ context.Context, accessToken string) (provider.AccountIdentity, error) {
 	for i := 0; i < len(accessToken); i++ {
 		if accessToken[i] == ':' {
-			return provider.AccountID(accessToken[:i]), nil
+			return provider.AccountIdentity{Account: provider.AccountID(accessToken[:i]), Label: f.label}, nil
 		}
 	}
-	return provider.AccountID(accessToken), nil
+	return provider.AccountIdentity{Account: provider.AccountID(accessToken), Label: f.label}, nil
 }
 
 func (f *fakeProvider) Refresh(_ context.Context, c provider.Credentials) (provider.Credentials, error) {

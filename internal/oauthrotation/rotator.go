@@ -105,6 +105,9 @@ func (r *Rotator) Register(p provider.Provider) {
 		CredentialsFile: func(account provider.AccountID) string {
 			return accountCredentialsPath(name, account)
 		},
+		LabelFile: func(account provider.AccountID) string {
+			return accountLabelPath(name, account)
+		},
 	}
 	modes := mirror.Modes{FileMode: credentialFileMode, DirMode: storeDirMode}
 	state := &providerState{

@@ -2,7 +2,6 @@ package oauthprovider
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -187,46 +186,112 @@ func TestReadMirrorUnknownKind(t *testing.T) {
 	}
 }
 
-// jwtWithSub builds a three-segment JWT whose payload carries the given sub
-// claim. The signature segment is filler since AccountUUIDFromAccessToken only
-// reads the payload.
-func jwtWithSub(t *testing.T, sub string) string {
+// profileServer starts an httptest server that serves the Anthropic OAuth
+// profile endpoint. It asserts the request carries the Bearer access token and
+// targets /api/oauth/profile, then returns the given JSON body with the given
+// status. requestCount is incremented on every profile hit so cache behavior is
+// observable.
+func profileServer(t *testing.T, wantToken string, status int, body string, requestCount *int) *httptest.Server {
 	t.Helper()
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
-	payloadJSON, err := json.Marshal(struct {
-		Sub string `json:"sub"`
-	}{Sub: sub})
-	if err != nil {
-		t.Fatalf("marshal jwt payload: %v", err)
-	}
-	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
-	signature := base64.RawURLEncoding.EncodeToString([]byte("signature"))
-	return header + "." + payload + "." + signature
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*requestCount++
+		if r.URL.Path != profilePath {
+			t.Errorf("profile path = %q, want %q", r.URL.Path, profilePath)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+wantToken {
+			t.Errorf("Authorization = %q, want Bearer <token>", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
 }
 
-func TestAccountID(t *testing.T) {
-	p := New(config.AdapterOAuth{}, t.TempDir())
+// providerForProfile builds a Provider whose MessagesURL host is the test
+// server, so profileEndpoint derives the profile URL from it.
+func providerForProfile(t *testing.T, serverURL string) *Provider {
+	t.Helper()
+	return New(config.AdapterOAuth{MessagesURL: serverURL + "/v1/messages"}, t.TempDir())
+}
 
-	t.Run("jwt token", func(t *testing.T) {
-		token := jwtWithSub(t, "acct-12345")
-		account, err := p.AccountID(token)
-		if err != nil {
-			t.Fatalf("AccountID: %v", err)
-		}
-		if account != provider.AccountID("acct-12345") {
-			t.Fatalf("AccountID = %q, want acct-12345", account)
-		}
-	})
+func TestAccountIdentityFromProfile(t *testing.T) {
+	const token = "fake-oat-profile" //gitleaks:allow test fixture, not a real token
+	count := 0
+	server := profileServer(t, token, http.StatusOK,
+		`{"account":{"uuid":"acct-uuid-1","email":"alice@example.com","display_name":"Alice"},"organization":{"uuid":"org-1"}}`,
+		&count)
+	defer server.Close()
+	p := providerForProfile(t, server.URL)
 
-	t.Run("opaque token yields empty", func(t *testing.T) {
-		account, err := p.AccountID("fake-oat-opaque")
-		if err != nil {
-			t.Fatalf("AccountID: %v", err)
-		}
-		if account != "" {
-			t.Fatalf("AccountID = %q, want empty for opaque token", account)
-		}
-	})
+	identity, err := p.AccountIdentity(context.Background(), token)
+	if err != nil {
+		t.Fatalf("AccountIdentity: %v", err)
+	}
+	if identity.Account != provider.AccountID("acct-uuid-1") {
+		t.Fatalf("Account = %q, want acct-uuid-1", identity.Account)
+	}
+	if identity.Label != "alice@example.com" {
+		t.Fatalf("Label = %q, want alice@example.com", identity.Label)
+	}
+
+	// A second resolution of the same token must be served from cache without a
+	// second profile request.
+	if _, err := p.AccountIdentity(context.Background(), token); err != nil {
+		t.Fatalf("AccountIdentity (cached): %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("profile request count = %d, want 1 (second call should hit cache)", count)
+	}
+}
+
+func TestAccountIdentityFallsBackToTokenAccount(t *testing.T) {
+	const token = "fake-oat-refreshed" //gitleaks:allow test fixture, not a real token
+	count := 0
+	// The profile endpoint fails, so resolution must fall back to the
+	// token-exchange account block the refresh path seeded into the cache.
+	server := profileServer(t, token, http.StatusInternalServerError, `{"error":"boom"}`, &count)
+	defer server.Close()
+	p := providerForProfile(t, server.URL)
+
+	p.seedIdentityFromTokenAccount(token, tokenExchangeAccount{UUID: "acct-uuid-2", EmailAddress: "bob@example.com"})
+
+	identity, err := p.AccountIdentity(context.Background(), token)
+	if err != nil {
+		t.Fatalf("AccountIdentity: %v", err)
+	}
+	if identity.Account != provider.AccountID("acct-uuid-2") {
+		t.Fatalf("Account = %q, want acct-uuid-2", identity.Account)
+	}
+	if identity.Label != "bob@example.com" {
+		t.Fatalf("Label = %q, want bob@example.com", identity.Label)
+	}
+}
+
+func TestAccountIdentityUnidentifiable(t *testing.T) {
+	const token = "fake-oat-unknown" //gitleaks:allow test fixture, not a real token
+	count := 0
+	server := profileServer(t, token, http.StatusUnauthorized, `{"error":"unauthorized"}`, &count)
+	defer server.Close()
+	p := providerForProfile(t, server.URL)
+
+	_, err := p.AccountIdentity(context.Background(), token)
+	if err == nil {
+		t.Fatal("AccountIdentity returned nil error with no profile and no fallback")
+	}
+	if !errors.Is(err, ErrAccountUnidentifiable) {
+		t.Fatalf("error %v does not wrap ErrAccountUnidentifiable", err)
+	}
+}
+
+func TestAccountIdentityEmptyToken(t *testing.T) {
+	p := New(config.AdapterOAuth{MessagesURL: "https://localhost/v1/messages"}, t.TempDir())
+	_, err := p.AccountIdentity(context.Background(), "")
+	if err == nil {
+		t.Fatal("AccountIdentity returned nil error for empty token")
+	}
+	if !errors.Is(err, ErrAccountUnidentifiable) {
+		t.Fatalf("error %v does not wrap ErrAccountUnidentifiable", err)
+	}
 }
 
 func TestRefreshSuccess(t *testing.T) {

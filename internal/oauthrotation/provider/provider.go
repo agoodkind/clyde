@@ -30,9 +30,23 @@ var ErrReauthRequired = errors.New("oauthrotation: account requires re-authentic
 type Name string
 
 // AccountID uniquely identifies one credentialed account within a provider.
-// The provider derives it from an access token via AccountID so the rotation
-// layer can key per-account slots without parsing provider tokens itself.
+// The provider derives it from an access token via AccountIdentity so the
+// rotation layer can key per-account slots without parsing provider tokens
+// itself.
 type AccountID string
+
+// AccountIdentity is what a provider resolves an access token into: the stable
+// AccountID the rotation layer keys slots under, plus an optional human-facing
+// Label (an email or display name) the rotation layer records when the operator
+// supplied none. The provider owns how it resolves these from a token, which may
+// involve a provider-specific profile lookup; the rotation layer stays neutral
+// and never parses the token itself. Label is best-effort: a provider that
+// cannot surface one returns it empty and the rotation layer leaves the label
+// unset.
+type AccountIdentity struct {
+	Account AccountID
+	Label   string
+}
 
 // Credentials is the rotation layer's provider-neutral view of one account's
 // OAuth material. Raw carries the provider's own stored encoding so the
@@ -84,10 +98,15 @@ type Provider interface {
 	// Name returns the stable provider identifier.
 	Name() Name
 
-	// AccountID derives the account identity for an access token. The
-	// rotation layer uses it to key per-account slots and to reverse-look-up
-	// a slot from a token observed in a rate-limit signal.
-	AccountID(accessToken string) (AccountID, error)
+	// AccountIdentity resolves an access token into the account it belongs to,
+	// returning the stable AccountID the rotation layer keys per-account slots
+	// under plus an optional human Label. The provider may perform a
+	// provider-specific lookup (for example an OAuth profile call) to resolve
+	// the identity, so it takes a context for cancellation and timeouts. A
+	// provider that cannot determine the account returns a non-nil error rather
+	// than an empty AccountID, so the rotation layer can skip an unidentifiable
+	// account instead of collapsing distinct accounts under an empty key.
+	AccountIdentity(ctx context.Context, accessToken string) (AccountIdentity, error)
 
 	// Refresh exchanges the current credentials for fresh ones. It must not
 	// mutate the passed Credentials and must return the renewed set.

@@ -36,10 +36,11 @@ const (
 // refreshResponse is the token-endpoint success body. The Go field names
 // avoid secret-pattern keywords while the JSON tags carry the wire contract.
 type refreshResponse struct {
-	GrantedAccess  string `json:"access_token"`
-	GrantedRefresh string `json:"refresh_token"`
-	ExpiresIn      int64  `json:"expires_in"`
-	Scope          string `json:"scope"`
+	GrantedAccess  string               `json:"access_token"`
+	GrantedRefresh string               `json:"refresh_token"`
+	ExpiresIn      int64                `json:"expires_in"`
+	Scope          string               `json:"scope"`
+	Account        tokenExchangeAccount `json:"account"`
 }
 
 // refreshErrorResponse carries the OAuth2 error code from a non-200 body.
@@ -69,6 +70,10 @@ func (p *Provider) Refresh(ctx context.Context, current provider.Credentials) (p
 		"endpoint_url", p.oauthCfg.TokenURL,
 		"scope_count", len(p.oauthCfg.Scopes),
 	)
+	// Seed the identity cache with any account block the token endpoint
+	// returned so a later AccountIdentity call can fall back to it when the
+	// profile endpoint is unavailable. The new access token is the cache key.
+	p.seedIdentityFromTokenAccount(resp.GrantedAccess, resp.Account)
 	return p.credentialsFromRefresh(resp, current), nil
 }
 

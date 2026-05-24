@@ -37,13 +37,13 @@ type oauthRPCStored struct {
 
 func (p *oauthRPCFakeProvider) Name() provider.Name { return p.name }
 
-func (p *oauthRPCFakeProvider) AccountID(accessToken string) (provider.AccountID, error) {
+func (p *oauthRPCFakeProvider) AccountIdentity(_ context.Context, accessToken string) (provider.AccountIdentity, error) {
 	for i := 0; i < len(accessToken); i++ {
 		if accessToken[i] == ':' {
-			return provider.AccountID(accessToken[:i]), nil
+			return provider.AccountIdentity{Account: provider.AccountID(accessToken[:i]), Label: ""}, nil
 		}
 	}
-	return provider.AccountID(accessToken), nil
+	return provider.AccountIdentity{Account: provider.AccountID(accessToken), Label: ""}, nil
 }
 
 func (p *oauthRPCFakeProvider) Refresh(_ context.Context, current provider.Credentials) (provider.Credentials, error) {

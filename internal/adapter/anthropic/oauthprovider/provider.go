@@ -1,10 +1,10 @@
 // Package oauthprovider implements the provider-agnostic OAuth rotation
 // contract (internal/oauthrotation/provider.Provider) for Anthropic. It is a
 // thin plug-in that delegates to the existing Claude OAuth code: credential
-// read/write/round-trip lives in internal/providers/claude/oauthcredentials and
-// account identity in internal/adapter/anthropic. This package owns the
-// Anthropic-specific wire shapes and the refresh and login flows; the rotation
-// layer stays provider-neutral.
+// read/write/round-trip lives in internal/providers/claude/oauthcredentials.
+// Account identity is resolved against the Anthropic OAuth profile endpoint in
+// identity.go. This package owns the Anthropic-specific wire shapes and the
+// refresh and login flows; the rotation layer stays provider-neutral.
 package oauthprovider
 
 import (
@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"goodkind.io/clyde/internal/adapter/anthropic"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/oauthrotation/provider"
 	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
@@ -44,6 +43,7 @@ type Provider struct {
 	credentialsDir string
 	httpClient     *http.Client
 	now            nowFunc
+	identities     *identityCache
 }
 
 // New builds an Anthropic OAuth rotation plug-in. oauthCfg supplies the token
@@ -61,20 +61,13 @@ func New(oauthCfg config.AdapterOAuth, credentialsDir string) *Provider {
 		credentialsDir: credentialsDir,
 		httpClient:     &http.Client{Timeout: refreshTimeout},
 		now:            time.Now,
+		identities:     newIdentityCache(),
 	}
 }
 
 // Name returns the stable Anthropic provider identifier.
 func (p *Provider) Name() provider.Name {
 	return providerName
-}
-
-// AccountID derives the account identity for an access token by extracting the
-// account uuid via anthropic.AccountUUIDFromAccessToken. Anthropic OAuth tokens
-// are opaque (sk-ant-oat...), so this returns an empty AccountID for the
-// real-world case; it is exact for JWT-shaped tokens.
-func (p *Provider) AccountID(accessToken string) (provider.AccountID, error) {
-	return provider.AccountID(anthropic.AccountUUIDFromAccessToken(accessToken)), nil
 }
 
 // MirrorSources lists the two upstream Claude Code credential locations the

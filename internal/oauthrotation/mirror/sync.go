@@ -1,6 +1,6 @@
 // Package mirror performs one-way import of a provider's upstream OAuth
 // credentials into Clyde's per-account store. It reads the provider's declared
-// MirrorSources, asks the provider for each token's AccountID, and writes
+// MirrorSources, asks the provider for each token's account identity, and writes
 // Clyde's per-account copy when the upstream copy is missing or fresher. It
 // never writes back to any upstream source. It depends only on the provider
 // contract and on injected path resolution; it imports no provider package and
@@ -26,6 +26,11 @@ type Paths struct {
 	AccountDir func(account provider.AccountID) string
 	// CredentialsFile returns the per-account credentials file path.
 	CredentialsFile func(account provider.AccountID) string
+	// LabelFile returns the per-account label file path. The syncer writes a
+	// provider-derived label here only when the file does not already exist, so
+	// an operator-supplied label set at login time is never overwritten by a
+	// harvest pass.
+	LabelFile func(account provider.AccountID) string
 }
 
 // Modes carries the permissions the syncer applies when it creates account
@@ -78,21 +83,22 @@ func (s *Syncer) Sync(ctx context.Context, now time.Time) (SyncResult, error) {
 	}
 	result := SyncResult{Imported: nil, Skipped: nil}
 	for _, source := range sources {
-		upstream, account, present, readErr := s.readSource(ctx, source)
+		upstream, identity, present, readErr := s.readSource(ctx, source)
 		if readErr != nil {
 			return result, readErr
 		}
 		if !present {
 			continue
 		}
-		wrote, writeErr := s.importOne(ctx, account, upstream)
+		s.writeDerivedLabel(ctx, identity)
+		wrote, writeErr := s.importOne(ctx, identity.Account, upstream)
 		if writeErr != nil {
 			return result, writeErr
 		}
 		if wrote {
-			result.Imported = append(result.Imported, account)
+			result.Imported = append(result.Imported, identity.Account)
 		} else {
-			result.Skipped = append(result.Skipped, account)
+			result.Skipped = append(result.Skipped, identity.Account)
 		}
 	}
 	return result, nil
@@ -103,8 +109,9 @@ func (s *Syncer) Sync(ctx context.Context, now time.Time) (SyncResult, error) {
 // mirror never reads a file or shells a keychain itself. A source that is not
 // present (missing file, empty keychain item) returns present=false with no
 // error so the caller skips it.
-func (s *Syncer) readSource(ctx context.Context, source provider.MirrorSource) (provider.Credentials, provider.AccountID, bool, error) {
+func (s *Syncer) readSource(ctx context.Context, source provider.MirrorSource) (provider.Credentials, provider.AccountIdentity, bool, error) {
 	empty := provider.Credentials{AccessToken: "", RefreshToken: "", ExpiresAt: time.Time{}, Raw: nil, Fingerprint: ""}
+	emptyIdentity := provider.AccountIdentity{Account: "", Label: ""}
 	upstream, present, err := s.prov.ReadMirror(ctx, source)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "oauthrotation.mirror.source_read_failed",
@@ -115,12 +122,12 @@ func (s *Syncer) readSource(ctx context.Context, source provider.MirrorSource) (
 			"location", source.Location,
 			"err", err.Error(),
 		)
-		return empty, "", false, fmt.Errorf("read mirror source %q at %s: %w", source.Kind, source.Location, err)
+		return empty, emptyIdentity, false, fmt.Errorf("read mirror source %q at %s: %w", source.Kind, source.Location, err)
 	}
 	if !present {
-		return empty, "", false, nil
+		return empty, emptyIdentity, false, nil
 	}
-	account, err := s.prov.AccountID(upstream.AccessToken)
+	identity, err := s.prov.AccountIdentity(ctx, upstream.AccessToken)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "oauthrotation.mirror.source_account_failed",
 			"component", "oauthrotation",
@@ -129,9 +136,66 @@ func (s *Syncer) readSource(ctx context.Context, source provider.MirrorSource) (
 			"location", source.Location,
 			"err", err.Error(),
 		)
-		return empty, "", false, fmt.Errorf("derive account for mirror source %s: %w", source.Location, err)
+		return empty, emptyIdentity, false, fmt.Errorf("derive account for mirror source %s: %w", source.Location, err)
 	}
-	return upstream, account, true, nil
+	return upstream, identity, true, nil
+}
+
+// writeDerivedLabel writes the provider-derived label (an email or display
+// name) into the per-account label file, but only when the identity carries a
+// label and no label file already exists. The existing-file guard means an
+// operator label recorded at login time wins over the harvested one, and a
+// later harvest pass does not rewrite an unchanged label. A write failure is
+// logged and swallowed so a label problem never blocks credential import. It is
+// a no-op when Paths.LabelFile is nil.
+func (s *Syncer) writeDerivedLabel(ctx context.Context, identity provider.AccountIdentity) {
+	if s.paths.LabelFile == nil || identity.Account == "" || identity.Label == "" {
+		return
+	}
+	labelPath := s.paths.LabelFile(identity.Account)
+	if _, err := os.Stat(labelPath); err == nil {
+		return
+	} else if !os.IsNotExist(err) {
+		s.logger.WarnContext(ctx, "oauthrotation.mirror.label_stat_failed",
+			"component", "oauthrotation",
+			"subcomponent", "mirror",
+			"provider", string(s.prov.Name()),
+			"account", string(identity.Account),
+			"path", labelPath,
+			"err", err.Error(),
+		)
+		return
+	}
+	dir := s.paths.AccountDir(identity.Account)
+	if err := os.MkdirAll(dir, s.modes.DirMode); err != nil {
+		s.logger.WarnContext(ctx, "oauthrotation.mirror.label_mkdir_failed",
+			"component", "oauthrotation",
+			"subcomponent", "mirror",
+			"provider", string(s.prov.Name()),
+			"account", string(identity.Account),
+			"dir", dir,
+			"err", err.Error(),
+		)
+		return
+	}
+	if err := os.WriteFile(labelPath, []byte(identity.Label), s.modes.FileMode); err != nil {
+		s.logger.WarnContext(ctx, "oauthrotation.mirror.label_write_failed",
+			"component", "oauthrotation",
+			"subcomponent", "mirror",
+			"provider", string(s.prov.Name()),
+			"account", string(identity.Account),
+			"path", labelPath,
+			"err", err.Error(),
+		)
+		return
+	}
+	s.logger.InfoContext(ctx, "oauthrotation.mirror.label_derived",
+		"component", "oauthrotation",
+		"subcomponent", "mirror",
+		"provider", string(s.prov.Name()),
+		"account", string(identity.Account),
+		"label", identity.Label,
+	)
 }
 
 // importOne writes the upstream credential into the per-account store when no

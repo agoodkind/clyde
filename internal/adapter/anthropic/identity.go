@@ -2,7 +2,6 @@ package anthropic
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -94,33 +93,6 @@ func readOrGenerateDeviceID() (string, error) {
 		return "", fmt.Errorf("persist device_id: %w", err)
 	}
 	return id, nil
-}
-
-// AccountUUIDFromAccessToken extracts the `sub` claim from a JWT
-// access token. Anthropic's OAuth tokens are opaque (`sk-ant-oat...`),
-// not JWTs, so this is a fallback that returns empty for the
-// real-world case. Kept for parity with other providers that may
-// issue JWT access tokens.
-func AccountUUIDFromAccessToken(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return ""
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		// Some IdPs emit standard padded base64.
-		payload, err = base64.StdEncoding.DecodeString(parts[1])
-		if err != nil {
-			return ""
-		}
-	}
-	var claims struct {
-		Sub string `json:"sub"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ""
-	}
-	return claims.Sub
 }
 
 // AccountUUIDFromClaudeConfig reads ~/.claude.json (claude-cli's

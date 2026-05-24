@@ -59,7 +59,7 @@ func (r *Rotator) Login(ctx context.Context, name provider.Name, opts provider.L
 		return LoginResult{}, fmt.Errorf("complete login for provider %q: %w", name, err)
 	}
 
-	account, err := prov.AccountID(cred.AccessToken)
+	identity, err := prov.AccountIdentity(ctx, cred.AccessToken)
 	if err != nil {
 		r.logger.ErrorContext(ctx, "oauthrotation.login.account_id_failed",
 			"component", "oauthrotation",
@@ -68,8 +68,15 @@ func (r *Rotator) Login(ctx context.Context, name provider.Name, opts provider.L
 		)
 		return LoginResult{}, fmt.Errorf("derive account id after login for provider %q: %w", name, err)
 	}
+	account := identity.Account
 
+	// The operator label wins when supplied; otherwise fall back to the
+	// provider-derived label (an email or display name) so a login with no
+	// explicit label still shows a human-readable account in `clyde oauth list`.
 	label := strings.TrimSpace(opts.Label)
+	if label == "" {
+		label = strings.TrimSpace(identity.Label)
+	}
 	if err := r.persistLoggedInAccount(ctx, prov, account, cred, label); err != nil {
 		return LoginResult{}, err
 	}
