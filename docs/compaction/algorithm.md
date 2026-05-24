@@ -76,3 +76,11 @@ Every probe returns three numbers that combine into the projection compared agai
 `reserved` is a fixed buffer the planner adds to the projection, so Apply does not remove content so aggressively that it crosses the target.
 
 The projection equals `static_overhead + tail_tokens + reserved`. The target gate accepts the closest result that is not smaller than target. Example: with target 50, result 51 is valid and result 49 is invalid. The static overhead and the reserved buffer come from the planner config and the calibration runner. The tail tokens come from the Counter on every probe.
+
+## Resume-time truncation, why the boundary must be on the active chain
+
+Apply writes the boundary and the summary, but whether they take effect depends on how claude reconstructs the session on resume. Claude does not read the JSONL in file order. It starts at the last message and follows each entry's `parentUuid` back to the root to rebuild the message list (`buildConversationChain` in the claude source `src/utils/sessionStorage.ts`). It then finds the most-recent `compact_boundary` on that reconstructed chain and keeps only the boundary and the messages after it (`findLastCompactBoundaryIndex` and `getMessagesAfterCompactBoundary` in `src/utils/messages.ts`).
+
+For a transcript at or under 5 MiB claude reads the whole file and applies only this chain-based truncation, so a boundary takes effect only when it lies on the active `parentUuid` chain. Above 5 MiB claude also truncates pre-boundary bytes before parsing, which catches a boundary regardless of the chain (`SKIP_PRECOMPACT_THRESHOLD`, set to 5 MiB, in `src/utils/sessionStoragePortable.ts`).
+
+Apply parents the boundary at the last entry that has a uuid in file order (`lastChainUUID` in `internal/compact/apply.go`). When that entry is claude's chain leaf the boundary joins the chain and the compaction reduces context on resume. When it is not, the boundary lands off the chain and, on a transcript at or under 5 MiB, claude ignores it. The decisive check that a boundary took effect is whether claude's `/context` total drops on a fresh resume; whether the boundary's `parentUuid` is set and whether it lies on the active chain are the two predictors of that drop.

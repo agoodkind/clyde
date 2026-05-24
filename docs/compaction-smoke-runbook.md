@@ -39,6 +39,8 @@ The procedure runs once per non-empty subset of the four stripper bits, so each 
 
 Each row is one independent run. Every run starts from the pristine restore in step 1 and ends with the final restore in step 12, so no state leaks between rows. Pick a target for each row that forces the planner to actually do work for that combination: targets above pre-Apply ctx do not exercise the bisect.
 
+A row can only drop the content its axes govern, so a row whose enabled axes have little removable content in the chosen session cannot reach an aggressive target and lands at or near the baseline. Pick a smoke session, or per-row targets, so each row's enabled axes have real content to drop. A transcript that is almost all tool output, for example, exercises the tools axis but leaves the chat-only, thinking-only, and images-only rows as no-ops; record those rows as floor-above-target rather than reading their lack of movement as a planner fault.
+
 ## Why not use the model to find the canary directly
 
 We tried the obvious thing first: insert a UUID into the transcript, then ask the model "find the UUID starting with X." That methodology is unreliable. Same canary, same file, different prompt phrasing produces different results. The model can miss content that is in its context, and it can fabricate content that is not. We cannot trust "not found" as evidence the content was dropped.
@@ -331,6 +333,20 @@ gunzip -c "$SNAPSHOT" | shasum -a 256
 ```
 
 Expected: matches the post-Step-3 splice hash (the file's state right before you pressed Apply).
+
+## Step 7.A: Boundary chain and resume effectiveness
+
+This step decides whether the boundary Apply just wrote will take effect on a fresh resume. The resume-time truncation section in [docs/compaction/algorithm.md](compaction/algorithm.md#resume-time-truncation-why-the-boundary-must-be-on-the-active-chain) explains why a boundary takes effect only when it lies on the active `parentUuid` chain.
+
+Record three things per row:
+
+1. Whether the new boundary entry's `parentUuid` is non-null. Read the boundary line from the post-Apply transcript.
+2. Whether the new boundary uuid lies on the active chain. Rebuild the chain by following `parentUuid` from the last message back to the root, and check membership. The helper scripts that print both are saved at `~/Desktop/clyde-compaction-baselines/scripts/` (`map_cmbuild.py`, `chain_cmbuild.py`).
+3. Whether claude's `/context` total drops on a fresh resume. This is captured in Step 10 and is the decisive proof that the compaction took effect.
+
+Pass: `parentUuid` is set, the boundary is on the active chain, and `/context` drops on resume below the pre-Apply total.
+
+Fail: the boundary is off the active chain, or `/context` does not drop on resume. On a transcript at or under 5 MiB an off-chain boundary is ignored, so the result the planner reported is not the result the next session sees.
 
 ## Step 8: Post-Apply LLM probe (the load-bearing CLYDE-345 test)
 
