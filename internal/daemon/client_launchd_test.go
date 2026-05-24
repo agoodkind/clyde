@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -77,15 +76,9 @@ func withFakeDaemonRunner(t *testing.T, runner *fakeDaemonCommandRunner) {
 	})
 }
 
-func TestStartDarwinLaunchdDaemonBootstrapsAndKickstarts(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	target := "gui/" + userIDForTest() + "/" + launchAgentLabel
-	plistPath := launchAgentPathForTest()
-	runner := &fakeDaemonCommandRunner{
-		runErrors: map[string]error{
-			commandKey("launchctl", []string{"kickstart", "-k", target}): errors.New("not loaded"),
-		},
-	}
+func TestStartDarwinLaunchdDaemonKickstartsOwnedService(t *testing.T) {
+	target := darwinLaunchdTarget()
+	runner := &fakeDaemonCommandRunner{}
 	withFakeDaemonRunner(t, runner)
 
 	err := startDarwinLaunchdDaemon(context.Background(), daemonClientLog(context.Background()))
@@ -93,31 +86,67 @@ func TestStartDarwinLaunchdDaemonBootstrapsAndKickstarts(t *testing.T) {
 		t.Fatalf("startDarwinLaunchdDaemon returned error: %v", err)
 	}
 
-	if len(runner.commands) != 3 {
-		t.Fatalf("command count = %d, want 3: %#v", len(runner.commands), runner.commands)
+	if len(runner.commands) != 2 {
+		t.Fatalf("command count = %d, want 2: %#v", len(runner.commands), runner.commands)
 	}
-	assertCommand(t, runner.commands[0], "launchctl", "kickstart", "-k", target)
-	assertCommand(t, runner.commands[1], "launchctl", "bootstrap", "gui/"+userIDForTest(), plistPath)
-	assertCommand(t, runner.commands[2], "launchctl", "kickstart", "-k", target)
+	assertCommand(t, runner.commands[0], "launchctl", "print", target)
+	assertCommand(t, runner.commands[1], "launchctl", "kickstart", "-k", target)
 }
 
-func TestStartDarwinLaunchdDaemonDoesNotDirectSpawnWhenLaunchctlFails(t *testing.T) {
+func TestStartDarwinLaunchdDaemonFailsWhenServiceIsMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	target := darwinLaunchdTarget()
+	runner := &fakeDaemonCommandRunner{
+		runErrors: map[string]error{
+			commandKey("launchctl", []string{"print", target}): errors.New("not loaded"),
+		},
+	}
+	withFakeDaemonRunner(t, runner)
+
+	err := startDarwinLaunchdDaemon(context.Background(), daemonClientLog(context.Background()))
+	if err == nil {
+		t.Fatal("startDarwinLaunchdDaemon returned nil, want install error")
+	}
+	if !strings.Contains(err.Error(), "make service-install") {
+		t.Fatalf("error = %q, want make service-install guidance", err.Error())
+	}
+	if !strings.Contains(err.Error(), filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")) {
+		t.Fatalf("error = %q, want launch agent path", err.Error())
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("command count = %d, want 1: %#v", len(runner.commands), runner.commands)
+	}
+	assertCommand(t, runner.commands[0], "launchctl", "print", target)
+}
+
+func TestRestartManagedDaemonKickstartsOwnedService(t *testing.T) {
+	target := darwinLaunchdTarget()
+	runner := &fakeDaemonCommandRunner{}
+	withFakeDaemonRunner(t, runner)
+
+	err := RestartManagedDaemon(context.Background())
+	if err != nil {
+		t.Fatalf("RestartManagedDaemon returned error: %v", err)
+	}
+
+	if len(runner.commands) != 2 {
+		t.Fatalf("command count = %d, want 2: %#v", len(runner.commands), runner.commands)
+	}
+	assertCommand(t, runner.commands[0], "launchctl", "print", target)
+	assertCommand(t, runner.commands[1], "launchctl", "kickstart", "-k", target)
+}
+
+func TestStartDaemonDoesNotDirectSpawnWhenLaunchdOwnershipMissing(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("startDaemon only takes the launchd path on Darwin")
 	}
 
 	t.Setenv("HOME", t.TempDir())
-	target := "gui/" + userIDForTest() + "/" + launchAgentLabel
-	plistPath := launchAgentPathForTest()
+	target := darwinLaunchdTarget()
 	runner := &fakeDaemonCommandRunner{
 		runErrors: map[string]error{
-			commandKey("launchctl", []string{"kickstart", "-k", target}): errors.New("not loaded"),
-		},
-		combinedErrors: map[string]error{
-			commandKey("launchctl", []string{"bootstrap", "gui/" + userIDForTest(), plistPath}): errors.New("bootstrap failed"),
-		},
-		combinedOutputs: map[string][]byte{
-			commandKey("launchctl", []string{"bootstrap", "gui/" + userIDForTest(), plistPath}): []byte("bootstrap denied"),
+			commandKey("launchctl", []string{"print", target}): errors.New("not loaded"),
 		},
 	}
 	withFakeDaemonRunner(t, runner)
@@ -134,13 +163,13 @@ func TestStartDarwinLaunchdDaemonDoesNotDirectSpawnWhenLaunchctlFails(t *testing
 
 	err := startDaemon(context.Background())
 	if err == nil {
-		t.Fatal("startDaemon returned nil, want launchctl error")
+		t.Fatal("startDaemon returned nil, want launchctl ownership error")
 	}
 	if spawnCalled {
-		t.Fatal("startDaemon called direct spawn after launchctl failure")
+		t.Fatal("startDaemon called direct spawn after launchd ownership failure")
 	}
-	if !strings.Contains(err.Error(), "bootstrap launch agent") {
-		t.Fatalf("error = %q, want bootstrap launch agent context", err.Error())
+	if !strings.Contains(err.Error(), "make service-install") {
+		t.Fatalf("error = %q, want service-install guidance", err.Error())
 	}
 }
 
@@ -172,7 +201,7 @@ func TestEnsureConnectedDaemonOwnedByLaunchdReportsUnownedDaemon(t *testing.T) {
 		t.Skip("launchd ownership check only runs on Darwin")
 	}
 
-	target := "gui/" + userIDForTest() + "/" + launchAgentLabel
+	target := darwinLaunchdTarget()
 	runner := &fakeDaemonCommandRunner{
 		runErrors: map[string]error{
 			commandKey("launchctl", []string{"print", target}): errors.New("not loaded"),
@@ -204,11 +233,29 @@ func assertCommand(t *testing.T, got recordedDaemonCommand, name string, args ..
 	}
 }
 
-func userIDForTest() string {
-	return strconv.Itoa(os.Getuid())
-}
+func TestEnsureDarwinLaunchdOwnershipReportsBootstrapGuidanceWhenPlistExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		t.Fatalf("mkdir launch agents dir: %v", err)
+	}
+	if err := os.WriteFile(plistPath, []byte("existing"), 0o644); err != nil {
+		t.Fatalf("write plist: %v", err)
+	}
+	target := darwinLaunchdTarget()
+	runner := &fakeDaemonCommandRunner{
+		runErrors: map[string]error{
+			commandKey("launchctl", []string{"print", target}): errors.New("not loaded"),
+		},
+	}
+	withFakeDaemonRunner(t, runner)
 
-func launchAgentPathForTest() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")
+	_, err := ensureDarwinLaunchdOwnership(context.Background())
+	if err == nil {
+		t.Fatal("ensureDarwinLaunchdOwnership returned nil, want bootstrap guidance")
+	}
+	if !strings.Contains(err.Error(), "run `make service-install` to bootstrap") {
+		t.Fatalf("error = %q, want bootstrap guidance", err.Error())
+	}
 }

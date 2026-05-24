@@ -632,8 +632,8 @@ func ensureConnectedDaemonOwnedByLaunchd(ctx context.Context) error {
 		log.WarnContext(ctx, "daemon.client.launchd_owner_check_failed",
 			"target", target,
 			"err", err)
-		return fmt.Errorf("daemon is reachable but launchd does not own %s; run `make service-install` or `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/%s.plist`: %w",
-			target, launchAgentLabel, err)
+		return fmt.Errorf("daemon is reachable but launchd does not own %s; run `make service-install`: %w",
+			target, err)
 	}
 	return nil
 }
@@ -1331,29 +1331,18 @@ var (
 	reloadClientRetryDelay     = 100 * time.Millisecond
 )
 
-// RestartManagedDaemon rewrites the local LaunchAgent target when needed and
-// restarts the daemon under launchd on macOS. Other platforms fall back to a
-// best-effort direct spawn.
+// RestartManagedDaemon restarts the daemon through the service manager on
+// macOS. Other platforms fall back to a best-effort direct spawn.
 func RestartManagedDaemon(ctx context.Context) error {
 	log := daemonClientLog(ctx)
 	if runtime.GOOS != "darwin" {
 		log.DebugContext(ctx, "daemon.client.restart.non_darwin_spawn_direct")
 		return spawnDaemonDirectForPlatform()
 	}
-	plistPath, err := ensureDarwinLaunchAgent()
+	target, err := ensureDarwinLaunchdOwnership(ctx)
 	if err != nil {
-		log.DebugContext(ctx, "daemon.client.restart.ensure_launch_agent_failed", "err", err)
+		log.DebugContext(ctx, "daemon.client.restart.ensure_launchd_ownership_failed", "err", err)
 		return err
-	}
-	uid := strconv.Itoa(os.Getuid())
-	target := "gui/" + uid + "/" + launchAgentLabel
-	_ = clientCommandRunner.Run("launchctl", "bootout", target)
-	if out, err := clientCommandRunner.CombinedOutput("launchctl", "bootstrap", "gui/"+uid, plistPath); err != nil {
-		log.WarnContext(ctx, "daemon.client.restart.bootstrap_failed",
-			"plist_path", plistPath,
-			"err", err,
-			"output", string(out))
-		return fmt.Errorf("bootstrap launch agent %s from %s: %w: %s", target, plistPath, err, strings.TrimSpace(string(out)))
 	}
 	if out, err := clientCommandRunner.CombinedOutput("launchctl", "kickstart", "-k", target); err != nil {
 		log.WarnContext(ctx, "daemon.client.restart.kickstart_failed",
@@ -1362,7 +1351,7 @@ func RestartManagedDaemon(ctx context.Context) error {
 			"output", string(out))
 		return fmt.Errorf("kickstart launch agent %s: %w: %s", target, err, strings.TrimSpace(string(out)))
 	}
-	log.DebugContext(ctx, "daemon.client.restart.ok", "target", target, "plist_path", plistPath)
+	log.DebugContext(ctx, "daemon.client.restart.ok", "target", target)
 	return nil
 }
 
@@ -1378,35 +1367,19 @@ func startDaemon(ctx context.Context) error {
 }
 
 func startDarwinLaunchdDaemon(ctx context.Context, log *slog.Logger) error {
-	plistPath, err := ensureDarwinLaunchAgent()
+	target, err := ensureDarwinLaunchdOwnership(ctx)
 	if err != nil {
-		log.WarnContext(ctx, "daemon.client.start_daemon.ensure_launch_agent_failed", "err", err)
-		return fmt.Errorf("ensure launch agent %s: %w", launchAgentLabel, err)
+		log.WarnContext(ctx, "daemon.client.start_daemon.ensure_launchd_ownership_failed", "err", err)
+		return fmt.Errorf("ensure launchd ownership for %s: %w", launchAgentLabel, err)
 	}
-	uid := strconv.Itoa(os.Getuid())
-	domain := "gui/" + uid
-	target := domain + "/" + launchAgentLabel
-	if err := clientCommandRunner.Run("launchctl", "kickstart", "-k", target); err == nil {
-		log.DebugContext(ctx, "daemon.client.start_daemon.kickstart_ok", "target", target)
-		return nil
-	}
-
-	out, err := clientCommandRunner.CombinedOutput("launchctl", "bootstrap", domain, plistPath)
-	if err != nil {
-		log.WarnContext(ctx, "daemon.client.start_daemon.bootstrap_failed",
-			"plist_path", plistPath,
+	if out, err := clientCommandRunner.CombinedOutput("launchctl", "kickstart", "-k", target); err != nil {
+		log.WarnContext(ctx, "daemon.client.start_daemon.kickstart_failed",
+			"target", target,
 			"err", err,
 			"output", string(out))
-		return fmt.Errorf("bootstrap launch agent %s from %s: %w: %s", target, plistPath, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("kickstart launch agent %s: %w: %s", target, err, strings.TrimSpace(string(out)))
 	}
-	log.DebugContext(ctx, "daemon.client.start_daemon.bootstrap_ok", "target", target, "plist_path", plistPath)
-	if err := clientCommandRunner.Run("launchctl", "kickstart", "-k", target); err != nil {
-		log.WarnContext(ctx, "daemon.client.start_daemon.kickstart_after_bootstrap_failed",
-			"target", target,
-			"err", err)
-		return fmt.Errorf("kickstart launch agent %s after bootstrap: %w", target, err)
-	}
-	log.DebugContext(ctx, "daemon.client.start_daemon.kickstart_after_bootstrap_ok", "target", target)
+	log.DebugContext(ctx, "daemon.client.start_daemon.kickstart_ok", "target", target)
 	return nil
 }
 
@@ -1444,100 +1417,39 @@ func spawnDaemonDirect() error {
 	return nil
 }
 
-func ensureDarwinLaunchAgent() (string, error) {
+func ensureDarwinLaunchdOwnership(ctx context.Context) (string, error) {
+	log := daemonClientLog(ctx)
+	target := darwinLaunchdTarget()
+	if err := clientCommandRunner.Run("launchctl", "print", target); err == nil {
+		return target, nil
+	}
+	plistPath, err := darwinLaunchAgentPath()
+	if err != nil {
+		log.WarnContext(ctx, "daemon.client.launchd_path_failed", "target", target, "err", err)
+		return "", fmt.Errorf("resolve launch agent path: %w", err)
+	}
+	if _, err := os.Stat(plistPath); err != nil {
+		if os.IsNotExist(err) {
+			log.WarnContext(ctx, "daemon.client.launchd_plist_missing", "target", target, "plist_path", plistPath)
+			return "", fmt.Errorf("launchd does not own %s and %s is missing; run `make service-install`", target, plistPath)
+		}
+		log.WarnContext(ctx, "daemon.client.launchd_plist_stat_failed", "target", target, "plist_path", plistPath, "err", err)
+		return "", fmt.Errorf("launchd does not own %s and stat %s failed: %w", target, plistPath, err)
+	}
+	log.WarnContext(ctx, "daemon.client.launchd_ownership_missing", "target", target, "plist_path", plistPath)
+	return "", fmt.Errorf("launchd does not own %s; run `make service-install` to bootstrap %s", target, plistPath)
+}
+
+func darwinLaunchdTarget() string {
+	return "gui/" + strconv.Itoa(os.Getuid()) + "/" + launchAgentLabel
+}
+
+func darwinLaunchAgentPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist")
-	stateDir := filepath.Join(home, ".local", "state", "clyde")
-	args, err := darwinLaunchAgentProgramArguments()
-	if err != nil {
-		return "", err
-	}
-	content := renderDarwinLaunchAgentPlist(args)
-	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		return "", err
-	}
-	current, _ := os.ReadFile(plistPath)
-	if string(current) == content {
-		return plistPath, nil
-	}
-	if err := os.WriteFile(plistPath, []byte(content), 0o644); err != nil {
-		return "", err
-	}
-	return plistPath, nil
-}
-
-func darwinLaunchAgentProgramArguments() ([]string, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	return []string{self, "daemon"}, nil
-}
-
-func renderDarwinLaunchAgentPlist(args []string) string {
-	home, _ := os.UserHomeDir()
-	stateDir := filepath.Join(home, ".local", "state", "clyde")
-	logPath := filepath.Join(stateDir, "daemon.log")
-	pathEnv := os.Getenv("PATH")
-	if pathEnv == "" {
-		pathEnv = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-	}
-	var argv strings.Builder
-	for _, arg := range args {
-		argv.WriteString("    <string>" + xmlEscape(arg) + "</string>\n")
-	}
-	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>%s</string>
-  <key>ProgramArguments</key>
-  <array>
-%s  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key>
-    <string>%s</string>
-    <key>PATH</key>
-    <string>%s</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ThrottleInterval</key>
-  <integer>5</integer>
-  <key>StandardOutPath</key>
-  <string>%s</string>
-  <key>StandardErrorPath</key>
-  <string>%s</string>
-</dict>
-</plist>
-`, xmlEscape(launchAgentLabel), argv.String(), xmlEscape(home), xmlEscape(pathEnv), xmlEscape(logPath), xmlEscape(logPath))
-}
-
-func xmlEscape(s string) string {
-	replacer := []struct {
-		old string
-		new string
-	}{
-		{"&", "&amp;"},
-		{"<", "&lt;"},
-		{">", "&gt;"},
-		{`"`, "&quot;"},
-		{"'", "&apos;"},
-	}
-	for _, item := range replacer {
-		s = replaceAll(s, item.old, item.new)
-	}
-	return s
+	return filepath.Join(home, "Library", "LaunchAgents", launchAgentLabel+".plist"), nil
 }
 
 // CalibrateSessionViaDaemon asks the daemon to probe the live
@@ -1591,26 +1503,4 @@ func SetCalibrationViaDaemon(ctx context.Context, sessionName string, staticOver
 		"session", sessionName,
 		"static_overhead", resp.GetCalibration().GetStaticOverhead())
 	return resp, nil
-}
-
-func replaceAll(s, old, new string) string {
-	if old == "" || s == "" {
-		return s
-	}
-	for {
-		idx := indexOf(s, old)
-		if idx < 0 {
-			return s
-		}
-		s = s[:idx] + new + s[idx+len(old):]
-	}
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

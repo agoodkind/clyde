@@ -24,6 +24,8 @@ GKLOG_VPKG := goodkind.io/gklog/version
 LAUNCHD_LABEL := io.goodkind.clyde.daemon
 SYSTEMD_UNIT  := clyde-daemon.service
 LOG_PATH      := $(HOME)/Library/Logs/clyde-daemon.log
+SUPERVISOR_FINGERPRINT := $(shell ./scripts/supervisor-fingerprint.sh)
+GO_BUILD_LDFLAGS += -X goodkind.io/clyde/internal/daemonsupervisor.BuildFingerprint=$(SUPERVISOR_FINGERPRINT)
 
 # Exclude protobuf-generated code under /api/ from staticcheck-extra.
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
@@ -103,9 +105,17 @@ setup-hooks: ## Configure git hooks
 # ---------------------------------------------------------------------------
 
 deploy: install ## Install binary, ensure supervisor ownership, reload daemon, and print service status
-	@$(MAKE) service-install
-	@"$(INSTALL_BIN)" daemon reload
-	@$(MAKE) service-status
+	@INSTALL_BIN="$(INSTALL_BIN)" \
+		LAUNCHD_LABEL="$(LAUNCHD_LABEL)" \
+		LAUNCHD_PLIST="$(LAUNCHD_PLIST)" \
+		LAUNCHD_TEMPLATE="$(LAUNCHD_TEMPLATE)" \
+		LAUNCHD_DOMAIN="$(LAUNCHD_DOMAIN)" \
+		SYSTEMD_UNIT="$(SYSTEMD_UNIT)" \
+		SYSTEMD_USER_UNIT="$(SYSTEMD_USER_UNIT)" \
+		SYSTEMD_TEMPLATE="$(SYSTEMD_TEMPLATE)" \
+		LOG_PATH="$(LOG_PATH)" \
+		MAKE="$(MAKE)" \
+		./scripts/deploy-daemon.sh
 
 # ---------------------------------------------------------------------------
 # Claude Code SessionStart hook (jq-based ~/.claude/settings.json edit).

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemonsupervisor"
 )
 
 // StatusReport describes the current daemon supervisor and worker ownership
@@ -22,6 +23,9 @@ type StatusReport struct {
 	SupervisorPID          int
 	SupervisorSocketPath   string
 	SupervisorSocketExists bool
+	SupervisorResponding   bool
+	SupervisorFingerprint  string
+	SupervisorError        string
 	DaemonSocketPath       string
 	DaemonSocketExists     bool
 	DaemonResponding       bool
@@ -36,6 +40,9 @@ func InspectStatus(ctx context.Context) StatusReport {
 		LaunchdTarget:          "",
 		LaunchdError:           "",
 		SupervisorPID:          0,
+		SupervisorResponding:   false,
+		SupervisorFingerprint:  "",
+		SupervisorError:        "",
 		DaemonSocketPath:       config.DaemonSocketPath(),
 		DaemonSocketExists:     pathExists(config.DaemonSocketPath()),
 		DaemonResponding:       false,
@@ -52,6 +59,16 @@ func InspectStatus(ctx context.Context) StatusReport {
 	} else {
 		report.DaemonResponding = true
 		_ = client.Close()
+	}
+	supervisorStatus, err := daemonsupervisor.RequestStatus(ctx, report.SupervisorSocketPath)
+	if err != nil {
+		report.SupervisorError = err.Error()
+	} else {
+		report.SupervisorResponding = true
+		report.SupervisorFingerprint = supervisorStatus.Fingerprint
+		if report.SupervisorPID == 0 {
+			report.SupervisorPID = supervisorStatus.PID
+		}
 	}
 
 	if runtime.GOOS != "darwin" {
@@ -77,6 +94,27 @@ func InspectStatus(ctx context.Context) StatusReport {
 	}
 	report.WorkerPIDs = workerPIDs
 	return report
+}
+
+// CompiledSupervisorFingerprint returns the fingerprint stamped into this binary.
+func CompiledSupervisorFingerprint() string {
+	return daemonsupervisor.CompiledFingerprint()
+}
+
+// RunningSupervisorFingerprint asks the running supervisor for its fingerprint.
+func RunningSupervisorFingerprint(ctx context.Context) (string, error) {
+	log := daemonClientLog(ctx)
+	status, err := daemonsupervisor.RequestStatus(ctx, supervisorSocketPath())
+	if err != nil {
+		log.WarnContext(ctx, "daemon.status.supervisor_fingerprint_failed", "err", err)
+		return "", fmt.Errorf("request running supervisor fingerprint: %w", err)
+	}
+	fingerprint := strings.TrimSpace(status.Fingerprint)
+	if fingerprint == "" {
+		log.WarnContext(ctx, "daemon.status.supervisor_fingerprint_empty")
+		return "", fmt.Errorf("daemon supervisor returned an empty fingerprint")
+	}
+	return fingerprint, nil
 }
 
 func pathExists(path string) bool {

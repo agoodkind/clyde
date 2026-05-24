@@ -31,6 +31,7 @@ import (
 	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemonsupervisor"
 	"goodkind.io/clyde/internal/mitm"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
@@ -70,10 +71,10 @@ const (
 const (
 	reloadHTTPDrainWait         = adapterShutdownWait
 	reloadGRPCDrainWait         = 10 * time.Minute
-	envDaemonReloadChild        = "CLYDE_DAEMON_RELOAD_CHILD"
-	envDaemonInheritedListeners = "CLYDE_DAEMON_INHERITED_LISTENERS"
-	envDaemonReadyFD            = "CLYDE_DAEMON_READY_FD"
-	envDaemonSupervisorSocket   = "CLYDE_DAEMON_SUPERVISOR_SOCKET"
+	envDaemonReloadChild        = daemonsupervisor.EnvReloadChild
+	envDaemonInheritedListeners = daemonsupervisor.EnvInheritedListeners
+	envDaemonReadyFD            = daemonsupervisor.EnvReadyFD
+	envDaemonSupervisorSocket   = daemonsupervisor.EnvSupervisorSocket
 )
 
 const (
@@ -949,7 +950,7 @@ func (directReplacementDaemonStarter) startReplacementDaemon(_ context.Context, 
 			"err", err)
 		return nil, fmt.Errorf("encode inherited listeners: %w", err)
 	}
-	cmd.Env = daemonEnvWithOverrides(os.Environ(),
+	cmd.Env = daemonsupervisor.EnvWithOverrides(os.Environ(),
 		envDaemonReloadChild+"=1",
 		envDaemonInheritedListeners+"="+string(specJSON),
 		envDaemonReadyFD+"="+strconv.Itoa(req.readyFD),

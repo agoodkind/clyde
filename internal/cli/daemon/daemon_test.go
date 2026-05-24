@@ -32,6 +32,8 @@ func TestDaemonStatusDoesNotRunSupervisor(t *testing.T) {
 			DaemonResponding:       true,
 			SupervisorSocketPath:   "/tmp/clyde-supervisor.sock",
 			SupervisorSocketExists: true,
+			SupervisorResponding:   true,
+			SupervisorFingerprint:  "supervisor-hash",
 			WorkerPIDs:             []int{56680},
 		}
 	}
@@ -51,6 +53,9 @@ func TestDaemonStatusDoesNotRunSupervisor(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "worker: pids=56680") {
 		t.Fatalf("status output missing worker pid: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "supervisor_rpc: responding socket=/tmp/clyde-supervisor.sock fingerprint=supervisor-hash") {
+		t.Fatalf("status output missing supervisor fingerprint: %q", output.String())
 	}
 }
 
@@ -147,6 +152,36 @@ func TestDaemonReloadReportsUnconfirmedTimeout(t *testing.T) {
 	}
 }
 
+func TestSupervisorFingerprintPrintsBuiltFingerprint(t *testing.T) {
+	command, output := newTestDaemonCommand(t)
+	builtFingerprint = func() string {
+		return "built-hash"
+	}
+
+	err := executeDaemonCommand(command, "supervisor-fingerprint", "--built")
+	if err != nil {
+		t.Fatalf("execute daemon supervisor-fingerprint --built: %v", err)
+	}
+	if strings.TrimSpace(output.String()) != "built-hash" {
+		t.Fatalf("output = %q, want built-hash", output.String())
+	}
+}
+
+func TestSupervisorFingerprintPrintsRunningFingerprint(t *testing.T) {
+	command, output := newTestDaemonCommand(t)
+	runningFingerprint = func(_ context.Context) (string, error) {
+		return "running-hash", nil
+	}
+
+	err := executeDaemonCommand(command, "supervisor-fingerprint")
+	if err != nil {
+		t.Fatalf("execute daemon supervisor-fingerprint: %v", err)
+	}
+	if strings.TrimSpace(output.String()) != "running-hash" {
+		t.Fatalf("output = %q, want running-hash", output.String())
+	}
+}
+
 func newTestDaemonCommand(t *testing.T) (*cobra.Command, *bytes.Buffer) {
 	t.Helper()
 	restoreDaemonCommandFunctions(t)
@@ -167,11 +202,15 @@ func restoreDaemonCommandFunctions(t *testing.T) {
 	previousRunWorker := runWorker
 	previousReloadDaemon := reloadDaemon
 	previousInspectDaemonStatus := inspectDaemonStatus
+	previousBuiltFingerprint := builtFingerprint
+	previousRunningFingerprint := runningFingerprint
 	t.Cleanup(func() {
 		runCommand = previousRunCommand
 		runWorker = previousRunWorker
 		reloadDaemon = previousReloadDaemon
 		inspectDaemonStatus = previousInspectDaemonStatus
+		builtFingerprint = previousBuiltFingerprint
+		runningFingerprint = previousRunningFingerprint
 	})
 }
 

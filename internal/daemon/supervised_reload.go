@@ -1,40 +1,17 @@
 package daemon
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
-	"strconv"
 	"strings"
-	"syscall"
-	"time"
-)
 
-const (
-	supervisorReloadOperation      = "replace_daemon_worker"
-	supervisorReloadRequestTimeout = 5 * time.Second
+	"goodkind.io/clyde/internal/daemonsupervisor"
 )
 
 type supervisorReplacementDaemonStarter struct {
 	socketPath string
-}
-
-type supervisorReloadRequest struct {
-	Operation      string                  `json:"operation"`
-	ExecutablePath string                  `json:"executable_path"`
-	Arguments      []string                `json:"arguments"`
-	Environment    []string                `json:"environment"`
-	Listeners      []inheritedListenerSpec `json:"listeners"`
-	ReadyFD        int                     `json:"ready_fd"`
-}
-
-type supervisorReloadResponse struct {
-	PID   int    `json:"pid"`
-	Error string `json:"error,omitempty"`
 }
 
 func (s supervisorReplacementDaemonStarter) startReplacementDaemon(ctx context.Context, log *slog.Logger, req replacementDaemonRequest) (*replacementDaemonProcess, error) {
@@ -44,11 +21,15 @@ func (s supervisorReplacementDaemonStarter) startReplacementDaemon(ctx context.C
 	}
 	files := append([]*os.File{}, req.files...)
 	files = append(files, req.readyWrite)
-	controlReq, err := supervisorReplacementRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := requestSupervisorReplacement(ctx, socketPath, controlReq, files)
+	pid, err := daemonsupervisor.RequestReplacement(
+		ctx,
+		socketPath,
+		req.executablePath,
+		supervisorListenerSpecs(req.specs),
+		req.readyFD,
+		os.Environ(),
+		files,
+	)
 	if err != nil {
 		log.WarnContext(ctx, "daemon.reload.supervisor_request_failed",
 			"component", "daemon",
@@ -61,125 +42,24 @@ func (s supervisorReplacementDaemonStarter) startReplacementDaemon(ctx context.C
 	log.InfoContext(ctx, "daemon.reload.supervisor_replacement_started",
 		"component", "daemon",
 		"socket_path", socketPath,
-		"new_pid", resp.PID,
+		"new_pid", pid,
 	)
 	return &replacementDaemonProcess{
-		pid:  resp.PID,
+		pid:  pid,
 		wait: func() error { return nil },
 		kill: func() error { return nil },
 	}, nil
 }
 
-func supervisorReplacementRequest(req replacementDaemonRequest) (supervisorReloadRequest, error) {
-	specJSON, err := json.Marshal(req.specs)
-	if err != nil {
-		slog.Warn("daemon.supervisor.reload_request.encode_listeners_failed", "err", err)
-		return supervisorReloadRequest{}, fmt.Errorf("encode inherited listeners: %w", err)
+func supervisorListenerSpecs(specs []inheritedListenerSpec) []daemonsupervisor.ListenerSpec {
+	out := make([]daemonsupervisor.ListenerSpec, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, daemonsupervisor.ListenerSpec{
+			Name:    spec.Name,
+			Network: spec.Network,
+			Addr:    spec.Addr,
+			FD:      spec.FD,
+		})
 	}
-	return supervisorReloadRequest{
-		Operation:      supervisorReloadOperation,
-		ExecutablePath: req.executablePath,
-		Arguments:      []string{req.executablePath, "daemon", "worker"},
-		Environment: daemonEnvWithOverrides(os.Environ(),
-			envDaemonReloadChild+"=1",
-			envDaemonInheritedListeners+"="+string(specJSON),
-			envDaemonReadyFD+"="+strconv.Itoa(req.readyFD),
-		),
-		Listeners: req.specs,
-		ReadyFD:   req.readyFD,
-	}, nil
-}
-
-func requestSupervisorReplacement(ctx context.Context, socketPath string, req supervisorReloadRequest, files []*os.File) (supervisorReloadResponse, error) {
-	deadlineCtx, cancel := context.WithTimeout(ctx, supervisorReloadRequestTimeout)
-	defer cancel()
-
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(deadlineCtx, "unix", socketPath)
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.reload.connect_failed", "socket_path", socketPath, "err", err)
-		return supervisorReloadResponse{}, fmt.Errorf("connect supervisor: %w", err)
-	}
-	defer conn.Close()
-
-	unixConn, ok := conn.(*net.UnixConn)
-	if !ok {
-		return supervisorReloadResponse{}, fmt.Errorf("supervisor connection has type %T, want *net.UnixConn", conn)
-	}
-	if deadline, ok := deadlineCtx.Deadline(); ok {
-		_ = unixConn.SetDeadline(deadline)
-	}
-	payload, err := json.Marshal(req)
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.reload.encode_request_failed", "err", err)
-		return supervisorReloadResponse{}, fmt.Errorf("encode supervisor reload request: %w", err)
-	}
-	payload = append(payload, '\n')
-	rights := syscall.UnixRights(fileDescriptors(files)...)
-	if _, _, err := unixConn.WriteMsgUnix(payload, rights, nil); err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.reload.send_request_failed", "err", err)
-		return supervisorReloadResponse{}, fmt.Errorf("send supervisor reload request: %w", err)
-	}
-
-	var resp supervisorReloadResponse
-	if err := json.NewDecoder(bufio.NewReader(unixConn)).Decode(&resp); err != nil {
-		slog.WarnContext(ctx, "daemon.supervisor.reload.decode_response_failed", "err", err)
-		return supervisorReloadResponse{}, fmt.Errorf("decode supervisor reload response: %w", err)
-	}
-	if resp.Error != "" {
-		return supervisorReloadResponse{}, fmt.Errorf("supervisor reload rejected: %s", resp.Error)
-	}
-	if resp.PID <= 0 {
-		return supervisorReloadResponse{}, fmt.Errorf("supervisor reload returned invalid pid %d", resp.PID)
-	}
-	return resp, nil
-}
-
-func fileDescriptors(files []*os.File) []int {
-	fds := make([]int, 0, len(files))
-	maxInt := uintptr(^uint(0) >> 1)
-	for _, file := range files {
-		if file == nil {
-			continue
-		}
-		fd := file.Fd()
-		if fd > maxInt {
-			continue
-		}
-		fds = append(fds, int(fd))
-	}
-	return fds
-}
-
-func daemonEnvWithOverrides(base []string, overrides ...string) []string {
-	remove := make(map[string]bool, len(overrides))
-	for _, override := range overrides {
-		key, ok := envKey(override)
-		if !ok {
-			continue
-		}
-		remove[key] = true
-	}
-	out := make([]string, 0, len(base)+len(overrides))
-	for _, entry := range base {
-		key, ok := envKey(entry)
-		if !ok {
-			out = append(out, entry)
-			continue
-		}
-		if remove[key] {
-			continue
-		}
-		out = append(out, entry)
-	}
-	out = append(out, overrides...)
 	return out
-}
-
-func envKey(entry string) (string, bool) {
-	index := strings.IndexByte(entry, '=')
-	if index <= 0 {
-		return "", false
-	}
-	return entry[:index], true
 }

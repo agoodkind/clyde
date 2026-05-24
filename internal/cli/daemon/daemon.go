@@ -22,6 +22,8 @@ var (
 	runWorker           = daemonsvc.Run
 	reloadDaemon        = daemonsvc.ReloadDaemon
 	inspectDaemonStatus = daemonsvc.InspectStatus
+	builtFingerprint    = daemonsvc.CompiledSupervisorFingerprint
+	runningFingerprint  = daemonsvc.RunningSupervisorFingerprint
 )
 
 func NewCmd(f *cli.Factory) *cobra.Command {
@@ -42,6 +44,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd.AddCommand(newWorkerCmd(f))
 	cmd.AddCommand(newReloadCmd(f))
 	cmd.AddCommand(newStatusCmd(f))
+	cmd.AddCommand(newSupervisorFingerprintCmd(f))
 	cmd.AddCommand(newLaunchRemoteWorkerCmd(f))
 	return cmd
 }
@@ -106,6 +109,32 @@ func newStatusCmd(f *cli.Factory) *cobra.Command {
 	}
 }
 
+func newSupervisorFingerprintCmd(f *cli.Factory) *cobra.Command {
+	var built bool
+	cmd := &cobra.Command{
+		Use:    "supervisor-fingerprint",
+		Short:  "Print the supervisor fingerprint",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if built {
+				_, _ = fmt.Fprintln(f.IOStreams.Out, builtFingerprint())
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+			defer cancel()
+			fingerprint, err := runningFingerprint(ctx)
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintln(f.IOStreams.Out, fingerprint)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&built, "built", false, "print the compiled supervisor fingerprint")
+	return cmd
+}
+
 func writeStatusReport(f *cli.Factory, report daemonsvc.StatusReport) {
 	out := f.IOStreams.Out
 	_, _ = fmt.Fprintln(out, "daemon status")
@@ -140,6 +169,16 @@ func writeStatusReport(f *cli.Factory, report daemonsvc.StatusReport) {
 		supervisorSocketState = "present"
 	}
 	_, _ = fmt.Fprintf(out, "supervisor_socket: %s path=%s\n", supervisorSocketState, report.SupervisorSocketPath)
+	switch {
+	case report.SupervisorResponding && report.SupervisorFingerprint != "":
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: responding socket=%s fingerprint=%s\n", report.SupervisorSocketPath, report.SupervisorFingerprint)
+	case report.SupervisorResponding:
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: responding socket=%s fingerprint=unknown\n", report.SupervisorSocketPath)
+	case report.SupervisorError != "":
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: unavailable socket=%s error=%s\n", report.SupervisorSocketPath, report.SupervisorError)
+	default:
+		_, _ = fmt.Fprintf(out, "supervisor_rpc: unavailable socket=%s\n", report.SupervisorSocketPath)
+	}
 
 	if len(report.WorkerPIDs) > 0 {
 		_, _ = fmt.Fprintf(out, "worker: pids=%s\n", joinPIDs(report.WorkerPIDs))
