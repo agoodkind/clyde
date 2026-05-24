@@ -42,6 +42,22 @@ var categoryNamesNotInTotal = map[string]bool{
 	"Free space":     true,
 }
 
+// CompactBuffer returns the tokens reserved by the provider as headroom
+// for auto-compaction. Sourced from the "Compact buffer" category row
+// when present; returns 0 otherwise. Compact uses this as the planner's
+// "reserved" floor so its projection matches the provider's actual
+// reservation rather than a static guess. The bucket is not part of
+// TotalTokens, which is why it gets its own accessor instead of being
+// folded into StaticOverhead.
+func (s Snapshot) CompactBuffer() int {
+	for _, cat := range s.Categories {
+		if cat.Name == "Compact buffer" {
+			return cat.Tokens
+		}
+	}
+	return 0
+}
+
 // StaticOverhead derives the non-trimmable floor from the live context
 // total itself. Provider category rows are not guaranteed to be
 // additive, especially once deferred buckets are present, so summing

@@ -65,9 +65,6 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	if req.Session == nil {
 		return RuntimeUpfront{}, 0, nil, fmt.Errorf("nil session")
 	}
-	if req.Reserved <= 0 {
-		req.Reserved = 13_000
-	}
 	slice, err := LoadSlice(req.Session.Metadata.ProviderTranscriptPath())
 	if err != nil {
 		compactLog.Logger().Error("compact.runtime.upfront.load_slice_failed",
@@ -98,6 +95,10 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	} else {
 		upfront.UsageError = usageErr.Error()
 	}
+	// Reserved comes from the provider's live compact-buffer snapshot so
+	// the planner's projection matches the provider's accounting.
+	req.Reserved = usage.CompactBuffer()
+	upfront.Reserved = req.Reserved
 	cal, calOK, calErr := LoadCalibration(req.Session.Metadata.ProviderSessionID())
 	if calErr != nil {
 		compactLog.Logger().Error("compact.runtime.upfront.calibration_load_failed",
@@ -259,9 +260,6 @@ func validateRuntimeRequest(req *RuntimeRequest) error {
 	}
 	if req.TargetTokens <= 0 {
 		return fmt.Errorf("runtime: target must be greater than zero")
-	}
-	if req.Reserved <= 0 {
-		req.Reserved = 13_000
 	}
 	return nil
 }

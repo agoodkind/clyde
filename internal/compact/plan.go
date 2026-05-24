@@ -46,7 +46,7 @@ type PlanInput struct {
 	Strippers      Strippers
 	Target         int                   // required effective (billable) context total floor for the planned result
 	StaticOverhead int                   // calibrated overhead used when projecting context total
-	Reserved       int                   // reserved buffer (default 13_000)
+	Reserved       int                   // provider compact buffer (tokens)
 	Counter        contextcount.Counter  // required for targeted planning
 	Out            io.Writer             // fallback streaming sink when OnIteration nil
 	OnIteration    func(IterationRecord) // preferred: called after each measure
