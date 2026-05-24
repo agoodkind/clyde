@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -358,14 +357,7 @@ func runDriftTick(
 }
 
 func defaultDriftLogDir() string {
-	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
-		return filepath.Join(base, "clyde", "mitm-drift")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "mitm-drift"
-	}
-	return filepath.Join(home, ".local", "state", "clyde", "mitm-drift")
+	return mitm.DefaultDriftLogDir()
 }
 
 // runOAuthRefresh runs one harvest pass to import any newly added upstream

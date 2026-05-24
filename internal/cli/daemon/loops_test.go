@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -32,11 +33,21 @@ func TestRunDriftTickFallsBackToLocalBaselineWithoutReference(t *testing.T) {
 }
 
 func TestDefaultDriftLogDir(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-state")
-	want := "/tmp/xdg-state/clyde/mitm-drift"
+	stateRoot := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+	want := filepath.Join(stateRoot, "clyde", "mitm-drift")
 	if got := defaultDriftLogDir(); got != want {
 		t.Errorf("defaultDriftLogDir XDG path: got %q want %q", got, want)
 	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", "~/state/../state-root")
+	want = filepath.Join(home, "state-root", "clyde", "mitm-drift")
+	if got := defaultDriftLogDir(); got != want {
+		t.Errorf("defaultDriftLogDir expanded XDG path: got %q want %q", got, want)
+	}
+
 	t.Setenv("XDG_STATE_HOME", "")
 	got := defaultDriftLogDir()
 	if !strings.HasSuffix(got, ".local/state/clyde/mitm-drift") {

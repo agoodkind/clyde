@@ -129,6 +129,37 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.MITM.CaptureDir).To(Equal(filepath.Dir(captureDir)))
 	})
 
+	It("defaults absent MITM capture dir to the state MITM directory", func() {
+		tmpDir := GinkgoT().TempDir()
+		stateDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+		GinkgoT().Setenv("XDG_STATE_HOME", stateDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[mitm]\n"), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.MITM.CaptureDir).To(Equal(filepath.Join(stateDir, "clyde", "mitm")))
+	})
+
+	It("home-expands and cleans MITM capture dir before legacy always-on normalization", func() {
+		tmpDir := GinkgoT().TempDir()
+		home := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+		GinkgoT().Setenv("HOME", home)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		configText := "[mitm]\ncapture_dir = \"~/x/always-on\"\n"
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.MITM.CaptureDir).To(Equal(filepath.Join(home, "x")))
+	})
+
 	It("loads custom MITM capture route rules", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

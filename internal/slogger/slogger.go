@@ -28,7 +28,6 @@ import (
 
 const (
 	envOverride       = "CLYDE_SLOG_PATH"
-	defaultBaseSubdir = "clyde"
 	defaultTUIFile    = "clyde-tui.jsonl"
 	defaultDaemonFile = "clyde-daemon.jsonl"
 	concernAttr       = "concern"
@@ -194,15 +193,7 @@ func defaultPath(cfg config.LoggingConfig, role ProcessRole) string {
 	if role == ProcessRoleTUI && cfg.Paths.TUI != "" {
 		return cfg.Paths.TUI
 	}
-	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return filepath.Join(os.TempDir(), defaultBaseSubdir, fileForRole(role))
-		}
-		state = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(state, defaultBaseSubdir, fileForRole(role))
+	return filepath.Join(config.DefaultStateDir(), fileForRole(role))
 }
 
 func defaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {

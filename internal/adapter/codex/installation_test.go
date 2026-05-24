@@ -14,6 +14,21 @@ type fakeInstallationFinder struct {
 func (f fakeInstallationFinder) codexPath() (string, error) { return f.codex, nil }
 func (f fakeInstallationFinder) clydePath() (string, error) { return f.clyde, nil }
 
+func TestInstallationFileFinderClydePathUsesConfigResolver(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "~/xdg/../config-root")
+
+	got, err := installationFileFinder{}.clydePath()
+	if err != nil {
+		t.Fatalf("clydePath: %v", err)
+	}
+	want := filepath.Join(home, "config-root", "clyde", "codex-installation-id")
+	if got != want {
+		t.Fatalf("clydePath=%q want %q", got, want)
+	}
+}
+
 func TestLoadInstallationIDReadsCodexFileWhenPresent(t *testing.T) {
 	dir := t.TempDir()
 	codex := filepath.Join(dir, "installation_id")

@@ -26,6 +26,17 @@ func TestAnthropicLogPathFromXDGState(t *testing.T) {
 	}
 }
 
+func TestAnthropicLogPathExpandsXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLYDE_ANTHROPIC_LOG_PATH", "")
+	t.Setenv("XDG_STATE_HOME", "~/state/../state-root")
+	want := filepath.Join(home, "state-root", "clyde", "anthropic.jsonl")
+	if got := AnthropicLogPath(); got != want {
+		t.Fatalf("AnthropicLogPath=%q want %q", got, want)
+	}
+}
+
 func TestLogResponseDoubleWritesToDedicatedSink(t *testing.T) {
 	dir := t.TempDir()
 	sinkPath := filepath.Join(dir, "anthropic.jsonl")

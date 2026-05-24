@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 // LoadInstallationID returns the stable installation id used for the
@@ -48,14 +50,7 @@ func (installationFileFinder) codexPath() (string, error) {
 }
 
 func (installationFileFinder) clydePath() (string, error) {
-	if base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); base != "" {
-		return filepath.Join(base, "clyde", "codex-installation-id"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "clyde", "codex-installation-id"), nil
+	return filepath.Join(filepath.Dir(config.GlobalConfigPath()), "codex-installation-id"), nil
 }
 
 func newInstallationLoader(finder installationPathFinder) *installationLoader {

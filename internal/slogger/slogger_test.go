@@ -11,9 +11,23 @@ import (
 	"sync"
 	"testing"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/logevent"
 )
+
+func TestDefaultProcessPathUsesConfigStateResolver(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", "~/state/../state-root")
+	t.Setenv("CLYDE_SLOG_PATH", "")
+
+	got := DefaultProcessPath(config.LoggingConfig{}, ProcessRoleDaemon)
+	want := filepath.Join(home, "state-root", "clyde", "clyde-daemon.jsonl")
+	if got != want {
+		t.Fatalf("DefaultProcessPath()=%q want %q", got, want)
+	}
+}
 
 func TestSetupWritesConcernLogToHardCodedNestedTree(t *testing.T) {
 	root := t.TempDir()

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 type BaselineRefreshOptions struct {
@@ -212,14 +214,7 @@ func DefaultUseV2Baseline(upstream string) bool {
 }
 
 func DefaultCaptureRoot() string {
-	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
-		return filepath.Join(v, "clyde", "mitm")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".clyde/mitm"
-	}
-	return filepath.Join(home, ".local", "state", "clyde", "mitm")
+	return filepath.Join(config.DefaultStateDir(), "mitm")
 }
 
 func resolveBaselinePath(opts BaselineRefreshOptions) (string, bool) {

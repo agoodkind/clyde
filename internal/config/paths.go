@@ -32,12 +32,7 @@ func GetSessionDir(clydeRoot, sessionStorageKey string) string {
 // GlobalConfigPath returns the path to the global config file.
 // Respects $XDG_CONFIG_HOME if set, otherwise uses ~/.config/clyde/config.toml.
 func GlobalConfigPath() string {
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		home, _ := os.UserHomeDir()
-		configHome = filepath.Join(home, ".config")
-	}
-	return filepath.Join(configHome, "clyde", ConfigFile)
+	return filepath.Join(defaultXDGResolver.configRoot(), ConfigFile)
 }
 
 // FindProjectRoot determines the project root directory.
@@ -88,12 +83,7 @@ func ProjectRootFromPath(startPath string) string {
 // GlobalCacheDir returns the global cache directory for clyde.
 // Respects $XDG_CACHE_HOME if set, otherwise uses ~/.cache/clyde.
 func GlobalCacheDir() string {
-	cacheHome := os.Getenv("XDG_CACHE_HOME")
-	if cacheHome == "" {
-		home, _ := os.UserHomeDir()
-		cacheHome = filepath.Join(home, ".cache")
-	}
-	return filepath.Join(cacheHome, "clyde")
+	return defaultXDGResolver.cacheRoot()
 }
 
 // SearchResultCacheDir returns the directory where search result caches are stored.
@@ -109,12 +99,7 @@ func EnsureSearchResultCacheDir() error {
 // GlobalDataDir returns the global data directory for clyde.
 // Respects $XDG_DATA_HOME if set, otherwise uses ~/.local/share/clyde.
 func GlobalDataDir() string {
-	dataHome := os.Getenv("XDG_DATA_HOME")
-	if dataHome == "" {
-		home, _ := os.UserHomeDir()
-		dataHome = filepath.Join(home, ".local", "share")
-	}
-	return filepath.Join(dataHome, "clyde")
+	return defaultXDGResolver.dataRoot()
 }
 
 // GlobalSessionsDir returns the path to the global sessions directory.
@@ -131,6 +116,5 @@ func EnsureGlobalSessionsDir() error {
 // paths that live in ~/.claude/output-styles/. The extra path component ensures
 // filepath.Join(root, "..", "output-styles") resolves to ~/.claude/output-styles/.
 func GlobalOutputStyleRoot() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "clyde")
+	return filepath.Join(homeRelativeRoot(".claude"), "clyde")
 }

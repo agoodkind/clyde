@@ -5,9 +5,95 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const appName = "clyde"
+
+type xdgResolver struct {
+	appName string
+	uid     func() int
+}
+
+var defaultXDGResolver = xdgResolver{
+	appName: appName,
+	uid:     os.Getuid,
+}
+
+func (r xdgResolver) configRoot() string {
+	return r.appScopedRoot("XDG_CONFIG_HOME", ".config")
+}
+
+func (r xdgResolver) cacheRoot() string {
+	return r.appScopedRoot("XDG_CACHE_HOME", ".cache")
+}
+
+func (r xdgResolver) dataRoot() string {
+	return r.appScopedRoot("XDG_DATA_HOME", filepath.Join(".local", "share"))
+}
+
+func (r xdgResolver) stateRoot() string {
+	return r.appScopedRoot("XDG_STATE_HOME", filepath.Join(".local", "state"))
+}
+
+func (r xdgResolver) runtimeRoot() string {
+	if base, ok := xdgBaseFromEnv("XDG_RUNTIME_DIR"); ok {
+		return filepath.Join(base, r.appName)
+	}
+	uid := r.uid()
+	if base, ok := xdgBaseFromEnv("TMPDIR"); ok {
+		return filepath.Join(base, fmt.Sprintf("%s-%d", r.appName, uid))
+	}
+	return filepath.Join(cleanExpandedPath(os.TempDir()), fmt.Sprintf("%s-%d", r.appName, uid))
+}
+
+func (r xdgResolver) appScopedRoot(envVar string, fallbackRelative string) string {
+	if base, ok := xdgBaseFromEnv(envVar); ok {
+		return filepath.Join(base, r.appName)
+	}
+	return filepath.Join(homeRelativeRoot(fallbackRelative), r.appName)
+}
+
+func xdgBaseFromEnv(envVar string) (string, bool) {
+	value := strings.TrimSpace(os.Getenv(envVar))
+	if value == "" {
+		return "", false
+	}
+	return cleanExpandedPath(value), true
+}
+
+func homeRelativeRoot(relativePath string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.Getenv("HOME")
+	}
+	return cleanExpandedPath(filepath.Join(home, relativePath))
+}
+
+func cleanExpandedPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(expandLeadingHome(path))
+}
+
+func expandLeadingHome(path string) string {
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
 
 // DefaultStateDir returns the XDG-derived state directory for clyde.
 //
@@ -16,28 +102,13 @@ const appName = "clyde"
 //	$XDG_STATE_HOME/clyde    (if $XDG_STATE_HOME is set)
 //	~/.local/state/clyde      (XDG spec default)
 func DefaultStateDir() string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = os.Getenv("HOME")
-		}
-		base = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(base, appName)
+	return defaultXDGResolver.stateRoot()
 }
 
 // RuntimeDir returns a user-scoped runtime directory for the daemon socket.
 // Uses XDG_RUNTIME_DIR if set, then TMPDIR, then a UID-scoped fallback.
 func RuntimeDir() string {
-	uid := os.Getuid()
-	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
-		return filepath.Join(base, appName)
-	}
-	if base := os.Getenv("TMPDIR"); base != "" {
-		return filepath.Join(base, fmt.Sprintf("%s-%d", appName, uid))
-	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", appName, uid))
+	return defaultXDGResolver.runtimeRoot()
 }
 
 // DaemonSocketPath returns the Unix socket path for the clyde daemon.

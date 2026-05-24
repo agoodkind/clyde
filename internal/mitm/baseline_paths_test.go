@@ -17,6 +17,26 @@ func TestDefaultBaselineRootUsesXDGStateHome(t *testing.T) {
 	}
 }
 
+func TestDefaultMITMStateRootsExpandXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", "~/state/../state-root")
+
+	stateRoot := filepath.Join(home, "state-root", "clyde")
+	if got := DefaultBaselineRoot(); got != filepath.Join(stateRoot, "mitm-baselines") {
+		t.Fatalf("DefaultBaselineRoot()=%q want %q", got, filepath.Join(stateRoot, "mitm-baselines"))
+	}
+	if got := DefaultHookStagingRoot(); got != filepath.Join(stateRoot, "mitm-hooks") {
+		t.Fatalf("DefaultHookStagingRoot()=%q want %q", got, filepath.Join(stateRoot, "mitm-hooks"))
+	}
+	if got := DefaultDriftLogDir(); got != filepath.Join(stateRoot, "mitm-drift") {
+		t.Fatalf("DefaultDriftLogDir()=%q want %q", got, filepath.Join(stateRoot, "mitm-drift"))
+	}
+	if got := DefaultCaptureRoot(); got != filepath.Join(stateRoot, "mitm") {
+		t.Fatalf("DefaultCaptureRoot()=%q want %q", got, filepath.Join(stateRoot, "mitm"))
+	}
+}
+
 func TestFindBaselineReferencePrefersV2(t *testing.T) {
 	root := t.TempDir()
 	upstream := "claude-code"

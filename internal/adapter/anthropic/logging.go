@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog"
 )
 
@@ -115,15 +116,7 @@ func AnthropicLogPath() string {
 	if p := os.Getenv("CLYDE_ANTHROPIC_LOG_PATH"); p != "" {
 		return p
 	}
-	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return filepath.Join(os.TempDir(), "clyde", "anthropic.jsonl")
-		}
-		state = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(state, "clyde", "anthropic.jsonl")
+	return filepath.Join(config.DefaultStateDir(), "anthropic.jsonl")
 }
 
 func dedicatedLogger() *slog.Logger {

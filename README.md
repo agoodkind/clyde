@@ -145,13 +145,12 @@ MITM configuration lives in the global Clyde config under `[mitm]`:
 [mitm]
 enabled_default = true
 providers = ["claude", "codex", "cursor"]
-capture_dir = "~/.local/state/clyde/mitm"
 
 [logging.raw_capture]
 enabled = false
 ```
 
-`providers` is a provider set. Use explicit provider names such as `claude`, `codex`, and `cursor`, or use `["all"]` to capture every supported family. Raw sidecar payload files are controlled only by `logging.raw_capture.enabled`; normal capture indexes use filtered inline payload metadata.
+`providers` is a provider set. Use explicit provider names such as `claude`, `codex`, and `cursor`, or use `["all"]` to capture every supported family. `capture_dir` is optional and defaults to Clyde's state directory under `mitm`. Raw sidecar payload files are controlled only by `logging.raw_capture.enabled`; normal capture indexes use filtered inline payload metadata.
 
 When MITM is enabled for Claude, Clyde's Claude passthrough path injects `ANTHROPIC_BASE_URL` so forwarded Claude traffic uses the local proxy. The daemon also starts a daemon-owned MITM listener when `[mitm].enabled_default` is true.
 

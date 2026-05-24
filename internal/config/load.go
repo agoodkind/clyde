@@ -219,7 +219,7 @@ func loadInstructionFile(configDir string, configuredPath string) (string, error
 	if trimmedPath == "" {
 		return "", nil
 	}
-	resolvedPath := trimmedPath
+	resolvedPath := cleanExpandedPath(trimmedPath)
 	if !filepath.IsAbs(resolvedPath) {
 		resolvedPath = filepath.Join(configDir, resolvedPath)
 	}
@@ -457,8 +457,8 @@ func applyLoggingCoreDefaults(logging *LoggingConfig) error {
 		logLevel = "info"
 	}
 	logging.Level = logLevel
-	logging.Paths.TUI = strings.TrimSpace(logging.Paths.TUI)
-	logging.Paths.Daemon = strings.TrimSpace(logging.Paths.Daemon)
+	logging.Paths.TUI = cleanExpandedPath(strings.TrimSpace(logging.Paths.TUI))
+	logging.Paths.Daemon = cleanExpandedPath(strings.TrimSpace(logging.Paths.Daemon))
 	if err := validateLoggingLevel("logging.level", logging.Level); err != nil {
 		return err
 	}
@@ -765,11 +765,11 @@ func normalizeMITMCaptureDir(captureDir string) string {
 	if captureDir == "" {
 		return ""
 	}
-	cleanCaptureDir := filepath.Clean(captureDir)
+	cleanCaptureDir := cleanExpandedPath(captureDir)
 	if filepath.Base(cleanCaptureDir) == "always-on" {
 		return filepath.Dir(cleanCaptureDir)
 	}
-	return captureDir
+	return cleanCaptureDir
 }
 
 const (
@@ -799,7 +799,7 @@ func applyMITMCADefaultsAndValidate(ca *MITMCAConfig) error {
 	if ca.CertPath == "" {
 		ca.CertPath = filepath.Join(caDir, "clyde-mitm-ca.crt")
 	} else {
-		ca.CertPath = expandHome(ca.CertPath)
+		ca.CertPath = cleanExpandedPath(ca.CertPath)
 	}
 	if !filepath.IsAbs(ca.CertPath) {
 		return fmt.Errorf("mitm.ca.cert_path %q must be an absolute path after expansion", ca.CertPath)
@@ -809,7 +809,7 @@ func applyMITMCADefaultsAndValidate(ca *MITMCAConfig) error {
 	if ca.KeyPath == "" {
 		ca.KeyPath = filepath.Join(caDir, "clyde-mitm-ca.key")
 	} else {
-		ca.KeyPath = expandHome(ca.KeyPath)
+		ca.KeyPath = cleanExpandedPath(ca.KeyPath)
 	}
 	if !filepath.IsAbs(ca.KeyPath) {
 		return fmt.Errorf("mitm.ca.key_path %q must be an absolute path after expansion", ca.KeyPath)

@@ -27,6 +27,17 @@ func TestCodexLogPathFromXDGState(t *testing.T) {
 	}
 }
 
+func TestCodexLogPathExpandsXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLYDE_CODEX_LOG_PATH", "")
+	t.Setenv("XDG_STATE_HOME", "~/state/../state-root")
+	want := filepath.Join(home, "state-root", "clyde", "codex.jsonl")
+	if got := CodexLogPath(); got != want {
+		t.Fatalf("CodexLogPath=%q want %q", got, want)
+	}
+}
+
 func TestLogCodexEventDoubleWritesToDedicatedSink(t *testing.T) {
 	dir := t.TempDir()
 	sinkPath := filepath.Join(dir, "codex.jsonl")

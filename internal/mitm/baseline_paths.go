@@ -5,20 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 // DefaultBaselineRoot returns the user-local directory that stores golden
 // MITM wire baselines. Baselines are machine-local because they are generated
 // from each user's real upstream clients and should not be committed.
 func DefaultBaselineRoot() string {
-	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
-		return filepath.Join(base, "clyde", "mitm-baselines")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "mitm-baselines"
-	}
-	return filepath.Join(home, ".local", "state", "clyde", "mitm-baselines")
+	return filepath.Join(config.DefaultStateDir(), "mitm-baselines")
 }
 
 // DefaultHookStagingRoot returns the user-local directory that holds
@@ -27,25 +22,11 @@ func DefaultBaselineRoot() string {
 // subprocesses. The directory is auto-created on first use and each
 // per-request subdirectory is removed after the hook returns.
 func DefaultHookStagingRoot() string {
-	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
-		return filepath.Join(base, "clyde", "mitm-hooks")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "mitm-hooks"
-	}
-	return filepath.Join(home, ".local", "state", "clyde", "mitm-hooks")
+	return filepath.Join(config.DefaultStateDir(), "mitm-hooks")
 }
 
 func DefaultDriftLogDir() string {
-	if base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); base != "" {
-		return filepath.Join(base, "clyde", "mitm-drift")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "mitm-drift"
-	}
-	return filepath.Join(home, ".local", "state", "clyde", "mitm-drift")
+	return filepath.Join(config.DefaultStateDir(), "mitm-drift")
 }
 
 func BaselineReferencePath(root, upstream string, useV2 bool) string {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog"
 )
@@ -42,15 +43,7 @@ func CodexLogPath() string {
 	if p := os.Getenv("CLYDE_CODEX_LOG_PATH"); p != "" {
 		return p
 	}
-	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return filepath.Join(os.TempDir(), "clyde", "codex.jsonl")
-		}
-		state = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(state, "clyde", "codex.jsonl")
+	return filepath.Join(config.DefaultStateDir(), "codex.jsonl")
 }
 
 var (
