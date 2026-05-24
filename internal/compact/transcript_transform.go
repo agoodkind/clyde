@@ -18,6 +18,7 @@ type transcriptTransform struct {
 	droppedMessages     map[int]bool
 	summaryChunkDrops   map[int]map[string]bool
 	summaryEntries      map[int]Entry
+	survivingToolUseIDs map[string]bool
 }
 
 func applySynthOptionsToTranscript(
@@ -33,12 +34,48 @@ func applySynthOptionsToTranscript(
 		droppedMessages:     nil,
 		summaryChunkDrops:   nil,
 		summaryEntries:      nil,
+		survivingToolUseIDs: nil,
 	}
 	transform.droppedMessages, transform.summaryChunkDrops, transform.summaryEntries = transcriptDropPlan(
 		slice,
 		opts,
 	)
+	transform.survivingToolUseIDs = collectTranscriptSurvivingToolUseIDs(transcript, transform)
 	return applyTranscriptTransform(transcript, transform)
+}
+
+// collectTranscriptSurvivingToolUseIDs walks the transcript the same
+// way applyTranscriptTransform will, after dropped-message and
+// tool-detail rules apply, and returns the set of tool_use ids that
+// will survive into the projected transcript. Used to gate
+// tool_result blocks in transformToolResultBlock so the planner's
+// projection matches the orphan-guard Apply path emits.
+//
+// Mirrors collectSurvivingToolUseIDs in apply_natural.go on the
+// contextcount.Transcript shape rather than the Entry shape.
+func collectTranscriptSurvivingToolUseIDs(
+	transcript contextcount.Transcript,
+	transform transcriptTransform,
+) map[string]bool {
+	keep := map[string]bool{}
+	for messageIndex, message := range transcript.Messages {
+		if transform.droppedMessages != nil && transform.droppedMessages[messageIndex] {
+			continue
+		}
+		for _, block := range message.Content {
+			if transcriptBlockType(block.Type) != transcriptBlockToolUse {
+				continue
+			}
+			if block.ToolUseID == "" {
+				continue
+			}
+			if transform.toolDetail(block.ToolUseID) == ToolDetailDrop {
+				continue
+			}
+			keep[block.ToolUseID] = true
+		}
+	}
+	return keep
 }
 
 func applyTranscriptTransform(
@@ -128,6 +165,15 @@ func transformToolResultBlock(
 	block contextcount.ContentBlock,
 	transform transcriptTransform,
 ) (contextcount.ContentBlock, bool) {
+	// Orphan-result guard: when the matching tool_use was dropped (by
+	// the chat axis or by tool-detail Drop), drop the tool_result too,
+	// matching what Apply writes via apply_natural.go. Without this
+	// gate, the planner's projection counts tool_result blocks that
+	// Apply will remove, and the floor contract is violated when the
+	// planner stops trimming believing the projection is safe.
+	if transform.survivingToolUseIDs != nil && !transform.survivingToolUseIDs[block.ToolUseID] {
+		return newTextContentBlock(""), false
+	}
 	detail := transform.toolDetail(block.ToolUseID)
 	switch detail {
 	case ToolDetailDrop:
