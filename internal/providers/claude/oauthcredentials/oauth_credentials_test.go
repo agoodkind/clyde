@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -41,15 +40,6 @@ func TestReadCandidates_ReadsFileCredential(t *testing.T) {
 	}
 	if result.Metadata.Fingerprint == "" {
 		t.Fatal("fingerprint is empty")
-	}
-	summaries := Summarize(results)
-	encoded, err := json.Marshal(summaries)
-	if err != nil {
-		t.Fatalf("marshal summaries: %v", err)
-	}
-	encodedText := string(encoded)
-	if strings.Contains(encodedText, "access-file-secret") || strings.Contains(encodedText, "refresh-file-secret") {
-		t.Fatalf("summary leaked token value: %s", encodedText)
 	}
 }
 
@@ -114,99 +104,6 @@ func TestReadCandidates_LinuxPolicyUsesFileEvenWithKeychainService(t *testing.T)
 	}
 	if result.Tokens == nil || result.Tokens.AccessToken != "access-file-secret" {
 		t.Fatal("tokens did not match the file credential")
-	}
-}
-
-func TestWrite_FilePreservesOtherKeys(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".credentials.json")
-	initial := []byte(`{"mcpOAuth":{"server":{"accessToken":"other-secret"}}}`)
-	if err := os.WriteFile(path, initial, 0o600); err != nil {
-		t.Fatalf("write initial credentials: %v", err)
-	}
-	tokens := &Tokens{
-		AccessToken:  "new-access-secret",
-		RefreshToken: "new-refresh-secret",
-		ExpiresAt:    time.Now().Add(time.Hour).UnixMilli(),
-	}
-	result := Write(context.Background(), ReadOptions{
-		CredentialsDir:  dir,
-		KeychainService: "",
-		SecurityBinary:  "",
-		Platform:        "linux",
-		Now:             time.Now(),
-	}, SourceFile, tokens)
-	if result.Err != nil {
-		t.Fatalf("Write file error = %v", result.Err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read credentials: %v", err)
-	}
-	var document map[string]json.RawMessage
-	if err := json.Unmarshal(data, &document); err != nil {
-		t.Fatalf("unmarshal credentials: %v", err)
-	}
-	if _, ok := document["mcpOAuth"]; !ok {
-		t.Fatal("mcpOAuth key was not preserved")
-	}
-	if _, ok := document["claudeAiOauth"]; !ok {
-		t.Fatal("claudeAiOauth key was not written")
-	}
-}
-
-func TestWrite_KeychainWritesPasswordOnStdinWithoutTokenArguments(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "keychain.json")
-	argsPath := filepath.Join(dir, "args.txt")
-	initial := []byte(`{"mcpOAuth":{"server":{"accessToken":"other-secret"}}}`)
-	if err := os.WriteFile(statePath, initial, 0o600); err != nil {
-		t.Fatalf("write fake keychain state: %v", err)
-	}
-	t.Setenv("CLYDE_TEST_SECURITY_STATE", statePath)
-	t.Setenv("CLYDE_TEST_SECURITY_ARGS", argsPath)
-	t.Setenv("CLYDE_TEST_SECURITY_ACCOUNT", "test-account")
-
-	tokens := &Tokens{
-		AccessToken:  "new-access-secret",
-		RefreshToken: "new-refresh-secret",
-		ExpiresAt:    time.Now().Add(time.Hour).UnixMilli(),
-	}
-	result := Write(context.Background(), ReadOptions{
-		KeychainService: "Claude Code-credentials",
-		SecurityBinary:  fakeSecurityPath(t),
-		Platform:        "darwin",
-		Now:             time.Now(),
-	}, SourceKeychain, tokens)
-	if result.Err != nil {
-		t.Fatalf("Write keychain error = %v", result.Err)
-	}
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read fake keychain state: %v", err)
-	}
-	var document map[string]json.RawMessage
-	if err := json.Unmarshal(data, &document); err != nil {
-		t.Fatalf("unmarshal fake keychain state: %v", err)
-	}
-	if _, ok := document["mcpOAuth"]; !ok {
-		t.Fatal("mcpOAuth key was not preserved")
-	}
-	if !strings.Contains(string(document["claudeAiOauth"]), "new-access-secret") {
-		t.Fatal("claudeAiOauth was not written")
-	}
-
-	argsData, err := os.ReadFile(argsPath)
-	if err != nil {
-		t.Fatalf("read fake security args: %v", err)
-	}
-	argsText := string(argsData)
-	if strings.Contains(argsText, "new-access-secret") || strings.Contains(argsText, "new-refresh-secret") {
-		t.Fatal("keychain command args leaked token value")
-	}
-	if !strings.Contains(argsText, "-w") {
-		t.Fatalf("keychain command args = %q, want prompt-form -w", argsText)
 	}
 }
 

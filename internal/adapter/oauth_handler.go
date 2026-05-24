@@ -62,9 +62,12 @@ func (s *Server) anthropicIdentity(req ChatRequest) anthropic.Identity {
 	}
 	if uuid, err := anthropic.AccountUUIDFromClaudeConfig(); err == nil && uuid != "" {
 		id.AccountUUID = uuid
-	} else if s.oauthMgr != nil {
-		if tok, err := s.oauthMgr.Token(context.Background()); err == nil {
-			id.AccountUUID = anthropic.AccountUUIDFromAccessToken(tok)
+	} else if s.oauthRotator != nil {
+		// The rotator returns the account id (the account_uuid) alongside the
+		// token, so the metadata.user_id account uuid comes from the selected
+		// rotation slot rather than re-parsing the opaque access token.
+		if _, account, err := s.oauthRotator.Token(context.Background(), anthropicProviderName); err == nil {
+			id.AccountUUID = string(account)
 		}
 	}
 	switch {

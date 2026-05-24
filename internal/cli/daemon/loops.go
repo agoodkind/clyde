@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	adapteroauth "goodkind.io/clyde/internal/adapter/oauth"
 	"goodkind.io/clyde/internal/config"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/prune"
 	"goodkind.io/clyde/internal/session"
 )
@@ -148,10 +148,13 @@ func runOnePrune(
 	)
 }
 
-// oauthLoop returns a daemonsvc.ExtraLoop that periodically refreshes
-// the Anthropic OAuth access token so the adapter's direct-OAuth path
-// almost never has to refresh inline. Defaults on; user can disable
-// via [oauth] disabled = true in the global config.
+// oauthLoop returns a daemonsvc.ExtraLoop that periodically harvests upstream
+// Claude Code credentials into Clyde's per-account OAuth rotation store and
+// refreshes every harvested account's access token, so the adapter's
+// direct-OAuth path almost never has to refresh inline. Defaults on; the user
+// can disable it via [oauth] disabled = true in the global config. The cadence
+// is the rotation refresh interval (default 30m), replacing the legacy fixed
+// 4h single-Manager refresh.
 func oauthLoop() daemonsvc.ExtraLoop {
 	return func(log *slog.Logger) func() {
 		cfg, err := config.LoadGlobalOrDefault()
@@ -172,9 +175,20 @@ func oauthLoop() daemonsvc.ExtraLoop {
 			)
 			return nil
 		}
-		interval := cfg.OAuth.Interval
-		if interval <= 0 {
-			interval = 4 * time.Hour
+		rotation := cfg.Adapter.OAuth.Rotation.WithDefaults()
+		interval := rotation.RefreshInterval
+
+		// Drive the single, daemon-owned rotator so harvest and RefreshAll run
+		// against the same in-memory account slots the adapter serves from. A
+		// nil holder means the daemon did not build a rotator (direct-OAuth
+		// off, or the adapter subsystem has not been assembled), so the loop
+		// has nothing to refresh and stays dormant.
+		rotator := daemonsvc.SharedOAuthRotator()
+		if rotator == nil {
+			log.LogAttrs(context.Background(), slog.LevelInfo, "oauth.refresher.skipped_no_rotator",
+				slog.String("component", "oauth"),
+			)
+			return nil
 		}
 
 		log.LogAttrs(context.Background(), slog.LevelInfo, "oauth.refresher.scheduled",
@@ -194,13 +208,13 @@ func oauthLoop() daemonsvc.ExtraLoop {
 			}()
 			ticker := time.NewTicker(interval)
 			defer func() { ticker.Stop() }()
-			runOAuthRefresh(ctx, log)
+			runOAuthRefresh(ctx, log, rotator)
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					runOAuthRefresh(ctx, log)
+					runOAuthRefresh(ctx, log, rotator)
 				}
 			}
 		}()
@@ -354,20 +368,19 @@ func defaultDriftLogDir() string {
 	return filepath.Join(home, ".local", "state", "clyde", "mitm-drift")
 }
 
-func runOAuthRefresh(ctx context.Context, log *slog.Logger) {
-	cfg, err := config.LoadGlobalOrDefault()
-	if err != nil {
-		log.LogAttrs(ctx, slog.LevelWarn, "oauth.refresh.config_failed",
-			slog.String("component", "oauth"),
-			slog.Any("err", err),
-		)
-		return
-	}
-	mgr := adapteroauth.NewManager(cfg.Adapter.OAuth, "")
+// runOAuthRefresh runs one harvest pass to import any newly added upstream
+// Claude Code credentials into the per-account store, then refreshes every
+// harvested account's access token through the rotation layer. A dead refresh
+// credential (invalid_grant) is handled inside the rotator: the account is
+// marked needing re-auth and dropped from selection. RefreshAll returns the
+// first error encountered after attempting every account, which is logged and
+// swallowed so one bad account does not stop the loop.
+func runOAuthRefresh(ctx context.Context, log *slog.Logger, rotator *oauthrotation.Rotator) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	started := cliDaemonNow()
-	token, err := mgr.Token(timeoutCtx)
+	rotator.Harvest(timeoutCtx)
+	err := rotator.RefreshAll(timeoutCtx)
 	elapsed := time.Since(started)
 	if err != nil {
 		log.LogAttrs(ctx, slog.LevelError, "oauth.refresh.failed",
@@ -380,6 +393,5 @@ func runOAuthRefresh(ctx context.Context, log *slog.Logger) {
 	log.LogAttrs(ctx, slog.LevelInfo, "oauth.refresh.completed",
 		slog.String("component", "oauth"),
 		slog.Int64("duration_ms", elapsed.Milliseconds()),
-		slog.Int("token_len", len(token)),
 	)
 }

@@ -1,6 +1,9 @@
 package adapter
 
-import adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+import (
+	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/oauthrotation"
+)
 
 // Deps are the host hooks the adapter needs from the daemon process.
 // The daemon owns the real implementations (findRealClaude and the
@@ -26,4 +29,13 @@ type Deps struct {
 	// true and the provider list includes "claude". The adapter
 	// otherwise sends directly to api.anthropic.com.
 	AnthropicMessagesURLOverride string
+	// OAuthRotator is the single, daemon-owned OAuth rotation layer the
+	// adapter shares with the daemon's periodic harvest-and-refresh loop.
+	// When set, registerAnthropicProvider injects it instead of building
+	// a per-server instance, so a token the refresh loop renews on disk
+	// is reflected in the adapter's in-memory slot immediately rather
+	// than only on the next re-import. When nil (tests, or when the
+	// daemon has not built one), the adapter falls back to building its
+	// own instance via buildAnthropicRotator.
+	OAuthRotator *oauthrotation.Rotator
 }

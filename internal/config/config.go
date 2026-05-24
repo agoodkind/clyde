@@ -790,6 +790,68 @@ type AdapterOAuth struct {
 	// tool-followup path rejected this field in production and MITM
 	// captures of the official Claude CLI succeeded without it.
 	ToolResultCacheReferenceEnabled bool `json:"toolResultCacheReferenceEnabled,omitempty" toml:"tool_result_cache_reference_enabled,omitempty"`
+	// Rotation configures the daemon's multi-account OAuth rotation layer.
+	Rotation AdapterOAuthRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
+}
+
+const (
+	// DefaultOAuthRotationMirrorInterval is the cadence the rotation harvest
+	// pass imports upstream Claude Code credentials into the per-account store.
+	DefaultOAuthRotationMirrorInterval = 5 * time.Minute
+	// DefaultOAuthRotationRefreshInterval is the cadence the rotation layer
+	// refreshes every harvested account's access token.
+	DefaultOAuthRotationRefreshInterval = 30 * time.Minute
+)
+
+// AdapterOAuthRotation configures Clyde's OAuth rotation layer.
+//
+// The rotator always serves tokens: it harvests upstream Claude Code
+// credentials, refreshes them, and serves the resulting access token to the
+// adapter. There is no legacy single-Manager fallback. Enabled gates only
+// throttle-based multi-account switching: when Enabled is false the rotator
+// serves the primary harvested account and does not rotate to a different
+// account on a throttle signal; when Enabled is true a throttle signal moves
+// selection to the next non-throttled account. MirrorInterval is the harvest
+// cadence and RefreshInterval is the proactive token-refresh cadence; the
+// daemon refresh loop runs one harvest pass and one RefreshAll per
+// RefreshInterval tick.
+type AdapterOAuthRotation struct {
+	Enabled         bool          `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	MirrorInterval  time.Duration `json:"mirrorInterval,omitempty" toml:"mirror_interval,omitempty"`
+	RefreshInterval time.Duration `json:"refreshInterval,omitempty" toml:"refresh_interval,omitempty"`
+	// RouteLaunchedClaude, when true, makes a Clyde-launched `claude`
+	// authenticate as the rotator's currently-selected Anthropic account
+	// instead of the user's own Claude Code login. The daemon writes the
+	// selected account's .credentials.json into a fresh scratch dir and
+	// points the child at it via CLYDE_CONFIG_DIR; on macOS the keychain
+	// entry is empty for any non-default CLAUDE_CONFIG_DIR, so claude falls
+	// back to the planted file and never touches the real keychain or
+	// ~/.claude. Default is false because it changes how claude launches.
+	RouteLaunchedClaude bool `json:"routeLaunchedClaude,omitempty" toml:"route_launched_claude,omitempty"`
+}
+
+// WithDefaults returns a copy with zero intervals replaced by their defaults.
+func (r AdapterOAuthRotation) WithDefaults() AdapterOAuthRotation {
+	if r.MirrorInterval <= 0 {
+		r.MirrorInterval = DefaultOAuthRotationMirrorInterval
+	}
+	if r.RefreshInterval <= 0 {
+		r.RefreshInterval = DefaultOAuthRotationRefreshInterval
+	}
+	return r
+}
+
+// Validate returns an error when an explicitly set interval is non-positive.
+// A zero interval is treated as "use the default" and is valid; a negative
+// interval is rejected because it can never produce a usable ticker.
+func (r AdapterOAuthRotation) Validate() error {
+	if r.MirrorInterval < 0 {
+		return fmt.Errorf("adapter: [adapter.oauth.rotation].mirror_interval must be greater than 0")
+	}
+	if r.RefreshInterval < 0 {
+		return fmt.Errorf("adapter: [adapter.oauth.rotation].refresh_interval must be greater than 0")
+	}
+	return nil
 }
 
 // ValidateOAuthFields returns an error if any required field is empty.
@@ -814,6 +876,9 @@ func (o AdapterOAuth) ValidateOAuthFields() error {
 	}
 	if len(o.Scopes) == 0 {
 		return fmt.Errorf("adapter: [adapter.oauth].scopes must be non-empty")
+	}
+	if err := o.Rotation.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

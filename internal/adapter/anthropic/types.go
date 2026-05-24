@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
+	"goodkind.io/clyde/internal/oauthrotation/ratelimitsink"
 )
 
 // MaxOutputTokens is the upper bound the adapter requests when the
@@ -66,9 +67,16 @@ type Config struct {
 	// other modes route to adapter.providers.anthropic.wire_capture for
 	// short-retention diagnostics.
 	WireCaptureMode WireCaptureMode
+	// RateLimitSink receives observed upstream rate-limit signals so the
+	// OAuth rotation layer can throttle the account behind the current
+	// token and rotate to another. The adapter passes the rotator here
+	// (it implements [ratelimitsink.Sink]). The signal-emission calls land
+	// in a later wave; wiring the field now keeps the client constructor
+	// stable. A nil sink means rate-limit signals are not reported.
+	RateLimitSink ratelimitsink.Sink
 }
 
-// Client wraps an http.Client and an oauth.Manager.
+// Client wraps an http.Client and an OAuth token source.
 type Client struct {
 	http  *http.Client
 	oauth OAuthSource

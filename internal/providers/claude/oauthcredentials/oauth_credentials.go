@@ -65,26 +65,6 @@ type ReadResult struct {
 	Metadata Metadata `json:"metadata"`
 }
 
-// WriteResult describes one credential source write.
-type WriteResult struct {
-	Source Source `json:"source"`
-	Err    error  `json:"-"`
-}
-
-// Summary is safe to include in structured logs and errors.
-type Summary struct {
-	Source              Source `json:"source"`
-	Present             bool   `json:"present"`
-	AccessTokenPresent  bool   `json:"accessTokenPresent"`
-	RefreshTokenPresent bool   `json:"refreshTokenPresent"`
-	ExpiresAtPresent    bool   `json:"expiresAtPresent"`
-	ExpiresAt           int64  `json:"expiresAt"`
-	Expired             bool   `json:"expired"`
-	Fingerprint         string `json:"fingerprint,omitempty"`
-	FileMtime           int64  `json:"fileMtime,omitempty"`
-	ParseError          string `json:"parseError,omitempty"`
-}
-
 // ReadOptions configures Claude Code credential discovery.
 type ReadOptions struct {
 	CredentialsDir  string
@@ -94,14 +74,22 @@ type ReadOptions struct {
 	Now             time.Time
 }
 
-// Store reads and optionally writes one Claude OAuth store.
+// Store reads one Claude OAuth store. The harvest is one-way: Clyde imports
+// credentials from the local Claude Code store and never writes back to it.
 type Store interface {
 	Source() Source
 	Read(ctx context.Context) ReadResult
-	Write(ctx context.Context, tokens *Tokens) WriteResult
 }
 
 type credentialsDocument struct {
+	ClaudeAIOauth *Tokens `json:"claudeAiOauth,omitempty"`
+}
+
+// Document is the Claude `.credentials.json` top-level shape: an object with a
+// single claudeAiOauth key holding the OAuth tokens. It is exported so callers
+// outside this package can round-trip the on-disk encoding through encoding/json
+// with the typed shape rather than hand-rolling the wrapper.
+type Document struct {
 	ClaudeAIOauth *Tokens `json:"claudeAiOauth,omitempty"`
 }
 
@@ -123,39 +111,6 @@ func ReadCandidates(ctx context.Context, options ReadOptions) []ReadResult {
 		results = append(results, store.Read(ctx))
 	}
 	return results
-}
-
-// Write writes tokens back to the selected authoritative credential source.
-func Write(ctx context.Context, options ReadOptions, source Source, tokens *Tokens) WriteResult {
-	options = normalizeReadOptions(options)
-	store, err := storeForSource(options, source)
-	if err != nil {
-		return WriteResult{Source: source, Err: err}
-	}
-	return store.Write(ctx, tokens)
-}
-
-// Summarize returns log-safe summaries for credential reads.
-func Summarize(results []ReadResult) []Summary {
-	summaries := make([]Summary, 0, len(results))
-	for _, result := range results {
-		summary := Summary{
-			Source:              result.Source,
-			Present:             result.Present,
-			AccessTokenPresent:  result.Metadata.AccessTokenPresent,
-			RefreshTokenPresent: result.Metadata.RefreshTokenPresent,
-			ExpiresAtPresent:    result.Metadata.ExpiresAtPresent,
-			ExpiresAt:           result.Metadata.ExpiresAt,
-			Expired:             result.Metadata.Expired,
-			Fingerprint:         result.Metadata.Fingerprint,
-			FileMtime:           result.Metadata.FileMtime,
-		}
-		if result.Err != nil {
-			summary.ParseError = result.Err.Error()
-		}
-		summaries = append(summaries, summary)
-	}
-	return summaries
 }
 
 // NewMetadata builds safe metadata for a token payload.
@@ -235,30 +190,6 @@ func credentialStores(options ReadOptions) []Store {
 			credentialsDir: options.CredentialsDir,
 			now:            options.Now,
 		},
-	}
-}
-
-func storeForSource(options ReadOptions, source Source) (Store, error) {
-	switch source {
-	case SourceKeychain:
-		if options.Platform != "darwin" {
-			return nil, fmt.Errorf("keychain credential store is unavailable on %s", options.Platform)
-		}
-		if options.KeychainService == "" {
-			return nil, fmt.Errorf("keychain credential store requires keychain service")
-		}
-		return keychainStore{
-			keychainService: options.KeychainService,
-			securityBinary:  options.SecurityBinary,
-			now:             options.Now,
-		}, nil
-	case SourceFile:
-		return fileStore{
-			credentialsDir: options.CredentialsDir,
-			now:            options.Now,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported credential source %q", source)
 	}
 }
 

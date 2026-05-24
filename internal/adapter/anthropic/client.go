@@ -19,8 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"goodkind.io/clyde/internal/adapter/oauth"
 )
 
 // sessionID is a per-daemon-process UUIDv4 used for the session
@@ -45,13 +43,16 @@ func onceSessionID() string {
 // client is used; long timeouts matter because /v1/messages can keep
 // a connection open for the full inference window on large outputs.
 // cfg carries wire values from [adapter.client_identity] and
-// [adapter.oauth]. New does not validate cfg; callers should refuse
+// [adapter.oauth]. source supplies the bearer token per request; the
+// adapter passes a thin shim over the OAuth rotation layer. A nil source
+// is tolerated at construction but every request then fails with a missing
+// oauth source error. New does not validate cfg; callers should refuse
 // to start when required fields are empty.
-func New(httpClient *http.Client, source *oauth.Manager, cfg Config) *Client {
+func New(httpClient *http.Client, source OAuthSource, cfg Config) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Minute}
 	}
-	return &Client{http: httpClient, oauth: managerWrap(source), cfg: cfg}
+	return &Client{http: httpClient, oauth: source, cfg: cfg}
 }
 
 // SystemPromptPrefix returns the configured prefix so callers
@@ -74,15 +75,6 @@ func (c *Client) CCVersion() string { return c.cfg.CCVersion }
 // CCEntrypoint returns the configured cc_entrypoint suffix for the
 // billing line.
 func (c *Client) CCEntrypoint() string { return c.cfg.CCEntrypoint }
-
-// managerWrap lets us pass an *oauth.Manager directly while keeping
-// the OAuthSource interface for tests.
-func managerWrap(m *oauth.Manager) OAuthSource {
-	if m == nil {
-		return nil
-	}
-	return OAuthSource(m)
-}
 
 // StreamEvents issues a streaming /v1/messages request and invokes sink
 // for each decoded stream event (text, tool-use lifecycle, thinking,
@@ -326,6 +318,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		// headers; fall back to the headerless "extra usage required"
 		// entitlement message; fall back to the raw body otherwise.
 		class := Classify(resp, nil)
+		c.maybeEmitRateLimitSignal(ctx, class, resp.Header, token)
 		var message string
 		switch {
 		case FormatRateLimitMessage(resp.Header) != "":
@@ -358,11 +351,39 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		}
 	}
 	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
+	// A 200 can still carry a hard limit when the upstream rejected an
+	// overage (anthropic-ratelimit-unified-overage-status: rejected). Classify
+	// the success headers and emit a rate-limit signal so the rotator can
+	// throttle this account; soft warnings do not emit (see rateLimitSignal).
+	c.maybeEmitRateLimitSignal(ctx, Classify(resp, nil), resp.Header, token)
 	if req.OnHeaders != nil {
 		req.OnHeaders(resp.Header.Clone())
 	}
 	c.maybeAttachWireCapture(ctx, resp, base)
 	return resp, nil
+}
+
+// maybeEmitRateLimitSignal is the do() boundary helper that builds a
+// rate-limit signal from the observed classification and headers and reports
+// it to the configured sink when one is hard-limited. A nil sink is a no-op.
+// The signal carries the per-request bearer token so the rotation layer can
+// reverse-look-up the account to throttle; the token is never logged.
+func (c *Client) maybeEmitRateLimitSignal(ctx context.Context, class Classification, h http.Header, token string) {
+	if c.cfg.RateLimitSink == nil {
+		return
+	}
+	sig, emit := rateLimitSignal(class, h, token)
+	if !emit {
+		return
+	}
+	if err := c.cfg.RateLimitSink.Throttle(ctx, sig); err != nil {
+		anthropicRequestLog.Logger().WarnContext(ctx, "anthropic.ratelimit.signal_emit_failed",
+			"subcomponent", "anthropic",
+			"claim", string(sig.Claim),
+			"status", sig.HTTPStatus,
+			"err", err.Error(),
+		)
+	}
 }
 
 // maybeAttachWireCapture is the do() boundary helper that filters Off and

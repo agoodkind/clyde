@@ -37,6 +37,7 @@ import (
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/outputstyle"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/providers/discoveryroots"
@@ -102,6 +103,17 @@ type Server struct {
 
 	mitmAccess mitmAccessor
 
+	oauthRotatorAccess oauthRotatorAccessor
+
+	// launchCredentialDirs tracks scratch dirs into which the daemon planted a
+	// rotator-selected account's .credentials.json for a launched provider
+	// (CLYDE-448). The launching wrapper removes its own dir when the child
+	// exits; this set is the daemon-side backstop so a crashed or abandoned
+	// wrapper never leaves planted credentials behind: every tracked dir is
+	// removed on daemon Close.
+	launchCredentialDirsMu sync.Mutex
+	launchCredentialDirs   map[string]bool
+
 	skipRuntimeCleanup atomic.Bool
 
 	autoNameMu sync.RWMutex
@@ -135,6 +147,36 @@ func (s *Server) mitmProxy() *mitm.Proxy {
 		return nil
 	}
 	return s.mitmAccess.fn()
+}
+
+// oauthRotatorAccessor stores the daemon's optional accessor for the
+// adapter-owned OAuth rotation layer. The adapter builds and owns the rotator;
+// the daemon registers a getter here so RPC handlers (a later wave) can reach
+// the single live rotator without importing the adapter's internals.
+type oauthRotatorAccessor struct {
+	mu sync.RWMutex
+	fn func() *oauthrotation.Rotator
+}
+
+// SetOAuthRotatorAccessor wires a getter the daemon uses when callers need the
+// adapter-owned OAuth rotation layer. The accessor returns nil when the
+// adapter or its direct-OAuth path is not running.
+func (s *Server) SetOAuthRotatorAccessor(fn func() *oauthrotation.Rotator) {
+	s.oauthRotatorAccess.mu.Lock()
+	defer s.oauthRotatorAccess.mu.Unlock()
+	s.oauthRotatorAccess.fn = fn
+}
+
+// OAuthRotator returns the daemon's single OAuth rotation layer, or nil when
+// the adapter direct-OAuth path is not running. It is the accessor RPC
+// handlers use to read accounts and drive logins in a later wave.
+func (s *Server) OAuthRotator() *oauthrotation.Rotator {
+	s.oauthRotatorAccess.mu.RLock()
+	defer s.oauthRotatorAccess.mu.RUnlock()
+	if s.oauthRotatorAccess.fn == nil {
+		return nil
+	}
+	return s.oauthRotatorAccess.fn()
 }
 
 // wrapperSession holds runtime state for one active claude wrapper process.
@@ -380,18 +422,21 @@ func newServerState(log *slog.Logger, watcher *fsnotify.Watcher) *Server {
 			ParallelClose: false,
 			Now:           nil,
 		}),
-		contextMu:          sync.Mutex{},
-		contextStates:      make(map[string]sessionContextState),
-		contextRefreshSem:  make(chan contextRefreshPermit, 2),
-		contextUsageCache:  newContextUsageStateCache(30 * time.Second),
-		contextUsageProbe:  nil,
-		reloadMu:           sync.Mutex{},
-		reloadFn:           nil,
-		mitmAccess:         mitmAccessor{mu: sync.RWMutex{}, fn: nil},
-		skipRuntimeCleanup: atomic.Bool{},
-		autoNameMu:         sync.RWMutex{},
-		autoName:           nil,
-		RPCs:               newRPCRegistry(),
+		contextMu:              sync.Mutex{},
+		contextStates:          make(map[string]sessionContextState),
+		contextRefreshSem:      make(chan contextRefreshPermit, 2),
+		contextUsageCache:      newContextUsageStateCache(30 * time.Second),
+		contextUsageProbe:      nil,
+		reloadMu:               sync.Mutex{},
+		reloadFn:               nil,
+		mitmAccess:             mitmAccessor{mu: sync.RWMutex{}, fn: nil},
+		oauthRotatorAccess:     oauthRotatorAccessor{mu: sync.RWMutex{}, fn: nil},
+		launchCredentialDirsMu: sync.Mutex{},
+		launchCredentialDirs:   make(map[string]bool),
+		skipRuntimeCleanup:     atomic.Bool{},
+		autoNameMu:             sync.RWMutex{},
+		autoName:               nil,
+		RPCs:                   newRPCRegistry(),
 	}
 }
 
@@ -907,8 +952,10 @@ func (s *Server) Close() {
 			_ = os.RemoveAll(config.SessionRuntimeDir(sess.wrapperID))
 		}
 	}
+	cleanedLaunchCredentialDirs := s.removeLaunchCredentialDirs()
 	s.log.LogAttrs(context.Background(), slog.LevelInfo, "daemon closed",
 		slog.Int("cleaned_sessions", len(s.sessions)),
+		slog.Int("cleaned_launch_credential_dirs", cleanedLaunchCredentialDirs),
 		slog.Bool("preserved_runtime_dirs", s.skipRuntimeCleanup.Load()),
 	)
 }

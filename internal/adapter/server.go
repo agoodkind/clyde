@@ -18,7 +18,6 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/errcontract"
-	"goodkind.io/clyde/internal/adapter/oauth"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
@@ -26,6 +25,7 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/logpolicy"
+	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -84,7 +84,7 @@ type Server struct {
 	mux                  *http.ServeMux
 	httpSrv              *http.Server
 	requests             *livetrack.Registry[IngressMeta]
-	oauthMgr             *oauth.Manager
+	oauthRotator         *oauthrotation.Rotator
 	anthr                *anthropic.Client
 	httpClient           *http.Client
 	ctxUsage             *contextUsageTracker
@@ -145,7 +145,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		mux:            nil,
 		httpSrv:        nil,
 		requests:       newAdapterIngressRegistry(adapterLog),
-		oauthMgr:       nil,
+		oauthRotator:   nil,
 		anthr:          nil,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
@@ -221,7 +221,14 @@ func (s *Server) registerAnthropicProvider(
 	maxConcurrent int,
 	policies logpolicy.PolicySet,
 ) {
-	s.oauthMgr = oauth.NewManager(cfg.OAuth, "")
+	if deps.OAuthRotator != nil {
+		// Single daemon-owned rotator: share the instance the daemon's
+		// harvest-and-refresh loop also drives so on-disk renewals are
+		// visible to the serve path through shared in-memory slots.
+		s.oauthRotator = deps.OAuthRotator
+	} else {
+		s.oauthRotator = buildAnthropicRotator(cfg.OAuth, slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth))
+	}
 	id := cfg.ClientIdentity
 	messagesURL := cfg.OAuth.MessagesURL
 	if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
@@ -234,7 +241,7 @@ func (s *Server) registerAnthropicProvider(
 			slog.String("messages_url", messagesURL),
 		)
 	}
-	s.anthr = anthropic.New(nil, s.oauthMgr, anthropic.Config{
+	s.anthr = anthropic.New(nil, newRotatorTokenSource(s.oauthRotator, s.log), anthropic.Config{
 		MessagesURL:             messagesURL,
 		OAuthAnthropicVersion:   cfg.OAuth.AnthropicVersion,
 		BetaHeader:              id.BetaHeader,
@@ -246,6 +253,10 @@ func (s *Server) registerAnthropicProvider(
 		CCVersion:               id.CCVersion,
 		CCEntrypoint:            id.CCEntrypoint,
 		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
+		// The rotator implements ratelimitsink.Sink. The signal-emission
+		// calls on the client side land in a later wave; wiring the field
+		// now keeps the constructor stable and the rotator reachable.
+		RateLimitSink: s.oauthRotator,
 	})
 	anthropicSidecarRotation := policies.Sinks[logpolicy.SinkAnthropicSidecar].Rotation
 	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{

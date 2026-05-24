@@ -137,6 +137,10 @@ type adapterController struct {
 	mu             sync.Mutex
 	current        adapterLaunchConfig
 	proc           *adapterProcess
+	// srv is the current adapter.Server, retained so the daemon can reach the
+	// adapter-owned OAuth rotation layer for RPC handlers. It is replaced on
+	// each successful reload and nil when the adapter is disabled.
+	srv *adapter.Server
 }
 
 type inheritedListenerSpec struct {
@@ -564,6 +568,11 @@ func startDaemonSubsystems(log *slog.Logger, srv *Server, inherited inheritedRun
 		}
 		return daemonSubsystems{}, fmt.Errorf("adapter startup: %w", err)
 	}
+	// Expose the single daemon-owned rotator to RPC handlers. It is the same
+	// instance injected into the adapter's Deps and driven by the refresh loop,
+	// so reads here observe the live serve/refresh state directly rather than
+	// reaching through the reload-replaced adapter Server.
+	srv.SetOAuthRotatorAccessor(SharedOAuthRotator)
 	webProc, err := startWebApp(log, srv, inherited.listeners[listenerNameWebApp])
 	if err != nil {
 		log.Error("daemon.subsystems.webapp_failed", "component", "daemon", "err", err)
@@ -1697,14 +1706,33 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener, mitmPro
 
 	mitmOverride := adapterMITMOverride(*cfg, log, mitmProc)
 
+	// Build the single, daemon-owned OAuth rotation layer once and share it
+	// with both the adapter (serve + throttle) and the in-process refresh loop
+	// (harvest + RefreshAll). One instance means an on-disk token the refresh
+	// loop renews is visible to the adapter's serve path through shared
+	// in-memory slots, fixing the stale-token window the two-instance wiring
+	// had. The instance is retained on the controller's Deps so adapter reloads
+	// reuse it rather than constructing a new one.
+	oauthRotator := buildDaemonOAuthRotator(cfg.Adapter, log)
+	setSharedOAuthRotator(oauthRotator)
+
+	// current starts as the zero launch config; apply overwrites it on the
+	// first call below. A var (not a composite literal) avoids the exhaustruct
+	// gate firing on the nested empty config structs.
+	var zeroLaunch adapterLaunchConfig
 	ctrl := &adapterController{
 		log:            log,
 		runtimeLogging: adapter.NewRuntimeLogging(cfg.Logging),
+		mu:             sync.Mutex{},
+		current:        zeroLaunch,
+		proc:           nil,
+		srv:            nil,
 		deps: adapter.Deps{
 			ResolveClaude:                findRealClaude,
 			ScratchDir:                   adapterScratchDir,
 			RequestEvents:                srv.providerStats.Record,
 			AnthropicMessagesURLOverride: mitmOverride,
+			OAuthRotator:                 oauthRotator,
 		},
 	}
 	if err := ctrl.apply(context.Background(), launchConfigFromGlobal(cfg), true, inherited); err != nil {
@@ -1931,6 +1959,7 @@ func (c *adapterController) apply(ctx context.Context, next adapterLaunchConfig,
 	if !next.Enabled {
 		c.runtimeLogging.Set(next.Logging)
 		c.proc = nil
+		c.srv = nil
 		c.current = next
 		c.log.Info("adapter.config_reload.disabled",
 			"component", "adapter",
@@ -1948,6 +1977,7 @@ func (c *adapterController) apply(ctx context.Context, next adapterLaunchConfig,
 	proc := startAdapterProcess(ctx, c.log, srv, lis)
 	c.runtimeLogging.Set(next.Logging)
 	c.proc = proc
+	c.srv = srv
 	c.current = next
 	c.log.Info("adapter.config_reload.applied",
 		"component", "adapter",
