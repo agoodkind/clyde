@@ -73,9 +73,26 @@ Every probe returns three numbers that combine into the projection compared agai
 
 `static_overhead` is a calibrated estimate of the system-prompt, tools, and memory categories that are counted before transcript messages in /context output.
 
-`reserved` is a fixed buffer the planner adds to the projection, so Apply does not remove content so aggressively that it crosses the target.
+`reserved` is the provider's own auto-compact buffer as the live `/context` snapshot reports it. The planner reads this value at run start from the `Compact buffer` category row in `contextusage.Snapshot` and uses it directly. There is no static default for `reserved` and there is no CLI override path that does not run through the live snapshot.
 
-The projection equals `static_overhead + tail_tokens + reserved`. The target gate accepts the closest result that is not smaller than target. Example: with target 50, result 51 is valid and result 49 is invalid. The static overhead and the reserved buffer come from the planner config and the calibration runner. The tail tokens come from the Counter on every probe.
+The projection equals `static_overhead + tail_tokens + reserved`. The target gate accepts the closest result that is not smaller than target. Example: with target 50, result 51 is valid and result 49 is invalid. The static overhead comes from the calibration runner. The reserved value comes from the live `/context` probe. The tail tokens come from the Counter on every probe.
+
+## Counter gap, the planner counter is not the /context counter
+
+The planner counts tail tokens through Anthropic's `messages/count_tokens` API. The user-facing `/context` view counts the same content through a different internal counter that backs the slash command. These two counters do not agree on the same content.
+
+Observed behaviour for the FDD56B03 fixture under haiku:
+
+| Phase | API count_tokens (planner) | /context Messages | Direction |
+| --- | --- | --- | --- |
+| Pre-apply | 20,716 | 22,000 | planner low by 6% |
+| Post-apply | 15,212 | 12,600 | planner high by 21% |
+
+The direction flips between pre-apply and post-apply, so a single fixed ratio cannot reconcile the two counters. The planner satisfies the floor contract in its own units. The `/context` view a user sees after a run can land below the user-set target by a small fraction. For the row 1 chat-axis run with target 90,000 the planner committed a result of 91,164 in planner units and `/context` reported 85,500. The 5,664 gap is the counter disagreement plus claude's own bucket-sum-versus-headline variance of roughly 3,000 in the same fixture.
+
+The gap is documented here so callers understand what the planner is doing. It is not silently absorbed. The target contract holds in planner units. The user-perceived `/context` number can be lower than the user-set target by an amount that depends on the fixture and the chosen axes.
+
+We chose not to wire a counter-ratio calibration because the ratio is not stable across the trim range, so any single anchor would push the projection the wrong way for one phase. We chose not to use a per-iteration `/context` probe because the planner's bisect runs entirely on in-memory transformed transcripts, and `/context` reads from disk only.
 
 ## Resume-time truncation, why the boundary must be on the active chain
 
