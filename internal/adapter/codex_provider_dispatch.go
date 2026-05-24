@@ -314,9 +314,9 @@ func (s *Server) logCodexProviderError(ctx context.Context, reqID, alias string,
 		slog.String("request_id", reqID),
 		slog.String("alias", alias),
 		slog.Int("status", aerr.HTTPStatus),
-		slog.String("error_type", aerr.OpenAIType),
-		slog.String("error_code", aerr.OpenAICode),
-		slog.String("error_param", aerr.OpenAIParam),
+		slog.String("error_class", string(aerr.Class)),
+		slog.String("error_code", aerr.Code),
+		slog.String("error_param", aerr.Param),
 		slog.Bool("stream_headers_written", streamHeadersWritten),
 	)
 }

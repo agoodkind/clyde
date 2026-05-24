@@ -25,12 +25,14 @@ const (
 )
 
 // errorBoundaryAssertion captures the shape every contract row checks
-// after writeShapedError or mapUpstreamForFamily runs.
+// after writeShapedError or mapUpstreamForFamily runs. The neutral
+// adapterError carries only Class/Code/Param now, so rows assert the
+// neutral Code on the struct and assert the provider wire type by
+// decoding the rendered envelope end-to-end.
 type errorBoundaryAssertion struct {
 	wantStatus      int
-	wantOpenAIType  string
-	wantOpenAICode  string
-	wantAnthropic   string
+	wantNeutralCode string
+	wantWireType    string
 	wantMsgContains string
 	family          errorBoundaryRouteFamily
 }
@@ -54,20 +56,41 @@ func (e *fakeUpstreamError) build() *anthropic.UpstreamError {
 	}
 }
 
+// renderedOpenAIEnvelope renders an adapterError through the full
+// boundary on the OpenAI route family and decodes the resulting
+// envelope so contract rows can assert the provider wire type that
+// actually reaches the client, not a cached struct field.
+func renderedOpenAIEnvelope(t *testing.T, aerr *adapterError) adapteropenai.ErrorResponse {
+	t.Helper()
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	resp := httptest.NewRecorder()
+	srv.writeShapedError(resp, req, aerr)
+	var out adapteropenai.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal openai envelope: %v body=%s", err, resp.Body.String())
+	}
+	return out
+}
+
 func TestMapUpstreamForFamilyCatchAllDefault(t *testing.T) {
 	t.Parallel()
 	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", 0, upstreamClassUnknown, "", "")
 	if aerr.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("catch-all status=%d", aerr.HTTPStatus)
 	}
-	if aerr.OpenAIType != "invalid_request_error" {
-		t.Fatalf("catch-all type=%q", aerr.OpenAIType)
-	}
-	if aerr.OpenAICode != "upstream_failed" {
-		t.Fatalf("catch-all code=%q", aerr.OpenAICode)
+	if aerr.Code != "upstream_failed" {
+		t.Fatalf("catch-all code=%q", aerr.Code)
 	}
 	if !strings.Contains(aerr.Message, "provider=codex") {
 		t.Fatalf("catch-all message missing provider field: %q", aerr.Message)
+	}
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" {
+		t.Fatalf("catch-all rendered type=%q", env.Error.Type)
+	}
+	if env.Error.Code != "upstream_failed" {
+		t.Fatalf("catch-all rendered code=%q", env.Error.Code)
 	}
 }
 
@@ -75,17 +98,16 @@ func TestApplyFamilyShapeFlipsServerError(t *testing.T) {
 	t.Parallel()
 	aerr := newAdapterError(adapterErrorUpstreamFailed, "boom upstream message")
 	aerr.HTTPStatus = http.StatusBadGateway
-	aerr.OpenAIType = "server_error"
-	aerr.OpenAICode = "upstream_failed"
 	got := applyFamilyShape(adapterRouteOpenAI, aerr)
 	if got.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("expected status flipped to 400, got %d", got.HTTPStatus)
 	}
-	if got.OpenAIType != "invalid_request_error" {
-		t.Fatalf("expected type flipped, got %q", got.OpenAIType)
-	}
 	if !strings.Contains(got.Message, "boom upstream message") {
 		t.Fatalf("upstream message lost: %q", got.Message)
+	}
+	env := renderedOpenAIEnvelope(t, got)
+	if env.Error.Type != "invalid_request_error" {
+		t.Fatalf("expected rendered type invalid_request_error, got %q", env.Error.Type)
 	}
 }
 
@@ -96,8 +118,16 @@ func TestApplyFamilyShapePreservesAnthropicNative(t *testing.T) {
 	if got.HTTPStatus != http.StatusTooManyRequests {
 		t.Fatalf("anthropic native path must preserve 429, got %d", got.HTTPStatus)
 	}
-	if got.AnthropicType != "rate_limit_error" {
-		t.Fatalf("anthropic envelope type changed: %q", got.AnthropicType)
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	resp := httptest.NewRecorder()
+	srv.writeShapedError(resp, req, got)
+	var env anthropic.ErrorEnvelope
+	if err := json.Unmarshal(resp.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal anthropic envelope: %v body=%s", err, resp.Body.String())
+	}
+	if env.Error.Type != "rate_limit_error" {
+		t.Fatalf("anthropic rendered envelope type=%q", env.Error.Type)
 	}
 }
 
@@ -117,8 +147,8 @@ func TestErrorBoundaryAnthropicProviderAdapterError(t *testing.T) {
 			},
 			assertion: errorBoundaryAssertion{
 				wantStatus:      http.StatusBadRequest,
-				wantOpenAIType:  "invalid_request_error",
-				wantOpenAICode:  "upstream_rate_limited",
+				wantWireType:    "invalid_request_error",
+				wantNeutralCode: "upstream_rate_limited",
 				wantMsgContains: "rate-limit-canary-DEADBEEF",
 				family:          errorBoundaryFamilyOpenAI,
 			},
@@ -132,8 +162,8 @@ func TestErrorBoundaryAnthropicProviderAdapterError(t *testing.T) {
 			},
 			assertion: errorBoundaryAssertion{
 				wantStatus:      http.StatusBadRequest,
-				wantOpenAIType:  "invalid_request_error",
-				wantOpenAICode:  "upstream_failed",
+				wantWireType:    "invalid_request_error",
+				wantNeutralCode: "upstream_failed",
 				wantMsgContains: "anthropic-500-canary-CAFEBABE",
 				family:          errorBoundaryFamilyOpenAI,
 			},
@@ -146,14 +176,18 @@ func TestErrorBoundaryAnthropicProviderAdapterError(t *testing.T) {
 			if aerr.HTTPStatus != tc.assertion.wantStatus {
 				t.Fatalf("status=%d want=%d", aerr.HTTPStatus, tc.assertion.wantStatus)
 			}
-			if aerr.OpenAIType != tc.assertion.wantOpenAIType {
-				t.Fatalf("openai_type=%q want=%q", aerr.OpenAIType, tc.assertion.wantOpenAIType)
-			}
-			if aerr.OpenAICode != tc.assertion.wantOpenAICode {
-				t.Fatalf("openai_code=%q want=%q", aerr.OpenAICode, tc.assertion.wantOpenAICode)
+			if aerr.Code != tc.assertion.wantNeutralCode {
+				t.Fatalf("neutral code=%q want=%q", aerr.Code, tc.assertion.wantNeutralCode)
 			}
 			if !strings.Contains(aerr.Message, tc.assertion.wantMsgContains) {
 				t.Fatalf("message=%q missing canary=%q", aerr.Message, tc.assertion.wantMsgContains)
+			}
+			env := renderedOpenAIEnvelope(t, aerr)
+			if env.Error.Type != tc.assertion.wantWireType {
+				t.Fatalf("rendered type=%q want=%q", env.Error.Type, tc.assertion.wantWireType)
+			}
+			if env.Error.Code != tc.assertion.wantNeutralCode {
+				t.Fatalf("rendered code=%q want=%q", env.Error.Code, tc.assertion.wantNeutralCode)
 			}
 		})
 	}
@@ -171,8 +205,8 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 			err:  errors.New("[ObjectParam] [input[5].summary] [missing_required_parameter]: schema-violation-canary-FEED"),
 			assertion: errorBoundaryAssertion{
 				wantStatus:      http.StatusBadRequest,
-				wantOpenAIType:  "invalid_request_error",
-				wantOpenAICode:  "upstream_malformed_request",
+				wantWireType:    "invalid_request_error",
+				wantNeutralCode: "upstream_malformed_request",
 				wantMsgContains: "schema-violation-canary-FEED",
 				family:          errorBoundaryFamilyOpenAI,
 			},
@@ -182,8 +216,8 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 			err:  errors.New("codex 502 bad-gateway-canary-BEAD"),
 			assertion: errorBoundaryAssertion{
 				wantStatus:      http.StatusBadRequest,
-				wantOpenAIType:  "invalid_request_error",
-				wantOpenAICode:  "upstream_failed",
+				wantWireType:    "invalid_request_error",
+				wantNeutralCode: "upstream_failed",
 				wantMsgContains: "bad-gateway-canary-BEAD",
 				family:          errorBoundaryFamilyOpenAI,
 			},
@@ -193,8 +227,8 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 			err:  errors.New("codex http transport: upstream status 503: http-503-canary-DEED"),
 			assertion: errorBoundaryAssertion{
 				wantStatus:      http.StatusBadRequest,
-				wantOpenAIType:  "invalid_request_error",
-				wantOpenAICode:  "upstream_failed",
+				wantWireType:    "invalid_request_error",
+				wantNeutralCode: "upstream_failed",
 				wantMsgContains: "http-503-canary-DEED",
 				family:          errorBoundaryFamilyOpenAI,
 			},
@@ -204,8 +238,8 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 			err:  errors.New("codex http transport: upstream status 429: http-429-canary-FACE"),
 			assertion: errorBoundaryAssertion{
 				wantStatus:      http.StatusBadRequest,
-				wantOpenAIType:  "invalid_request_error",
-				wantOpenAICode:  "upstream_failed",
+				wantWireType:    "invalid_request_error",
+				wantNeutralCode: "upstream_failed",
 				wantMsgContains: "http-429-canary-FACE",
 				family:          errorBoundaryFamilyOpenAI,
 			},
@@ -215,8 +249,8 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 			err:  errors.New("websocket handshake failed: status 401: handshake-401-canary-BABE"),
 			assertion: errorBoundaryAssertion{
 				wantStatus:      http.StatusBadRequest,
-				wantOpenAIType:  "invalid_request_error",
-				wantOpenAICode:  "upstream_failed",
+				wantWireType:    "invalid_request_error",
+				wantNeutralCode: "upstream_failed",
 				wantMsgContains: "handshake-401-canary-BABE",
 				family:          errorBoundaryFamilyOpenAI,
 			},
@@ -229,14 +263,18 @@ func TestErrorBoundaryCodexProviderAdapterError(t *testing.T) {
 			if aerr.HTTPStatus != tc.assertion.wantStatus {
 				t.Fatalf("status=%d want=%d", aerr.HTTPStatus, tc.assertion.wantStatus)
 			}
-			if aerr.OpenAIType != tc.assertion.wantOpenAIType {
-				t.Fatalf("openai_type=%q want=%q", aerr.OpenAIType, tc.assertion.wantOpenAIType)
-			}
-			if aerr.OpenAICode != tc.assertion.wantOpenAICode {
-				t.Fatalf("openai_code=%q want=%q", aerr.OpenAICode, tc.assertion.wantOpenAICode)
+			if aerr.Code != tc.assertion.wantNeutralCode {
+				t.Fatalf("neutral code=%q want=%q", aerr.Code, tc.assertion.wantNeutralCode)
 			}
 			if !strings.Contains(aerr.Message, tc.assertion.wantMsgContains) {
 				t.Fatalf("message=%q missing canary=%q", aerr.Message, tc.assertion.wantMsgContains)
+			}
+			env := renderedOpenAIEnvelope(t, aerr)
+			if env.Error.Type != tc.assertion.wantWireType {
+				t.Fatalf("rendered type=%q want=%q", env.Error.Type, tc.assertion.wantWireType)
+			}
+			if env.Error.Code != tc.assertion.wantNeutralCode {
+				t.Fatalf("rendered code=%q want=%q", env.Error.Code, tc.assertion.wantNeutralCode)
 			}
 		})
 	}

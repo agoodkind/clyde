@@ -21,12 +21,15 @@ func toolChoiceRequestsTools(raw json.RawMessage) bool {
 	return true
 }
 
+// newPreflightError builds a neutral adapter preflight rejection. The
+// status is pinned to 400 and the neutral Code carries the typed
+// preflight reason; the OpenAI renderer derives invalid_request_error
+// from the neutral class, so this helper names no provider wire type.
 func newPreflightError(class adapterErrorClass, message, code string) *adapterError {
 	err := newAdapterError(class, message)
 	err.HTTPStatus = http.StatusBadRequest
-	err.OpenAIType = "invalid_request_error"
-	err.OpenAICode = code
-	err.OpenAIParam = ""
+	err.Code = code
+	err.Param = ""
 	return err
 }
 

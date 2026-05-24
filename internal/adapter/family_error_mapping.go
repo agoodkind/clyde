@@ -163,18 +163,20 @@ func mapUpstreamForFamily(
 
 // adapterErrorFromMapping folds a primitive UpstreamMapping returned
 // by a provider mapper into the generic *adapterError. The boundary
-// uses HTTPStatus and ErrorInfo verbatim, derives a coarse class for
-// logs/metrics, and stitches in a family-correct envelope type so
-// applyDefaults still picks up the right shape.
-func adapterErrorFromMapping(family adapterRouteFamily, provider string, upstreamStatus int, mapping errcontract.UpstreamMapping) *adapterError {
+// uses HTTPStatus and the neutral Code/Param/Message verbatim and
+// derives a coarse Class for logs, metrics, and the renderer's
+// class-to-wire-type translation. The mapper already chose the
+// family-correct envelope wire type, but the generic adapterError no
+// longer carries a provider wire type: each family renderer re-derives
+// its own envelope `error.type` from the neutral Class, so the wire
+// string never lives on the generic struct.
+func adapterErrorFromMapping(_ adapterRouteFamily, provider string, upstreamStatus int, mapping errcontract.UpstreamMapping) *adapterError {
 	return &adapterError{
 		Class:          classForMappedCode(mapping.Info.Code),
 		HTTPStatus:     mapping.HTTPStatus,
 		Message:        mapping.Info.Message,
-		OpenAIType:     mapping.Info.Type,
-		OpenAICode:     mapping.Info.Code,
-		OpenAIParam:    mapping.Info.Param,
-		AnthropicType:  envelopeTypeForFamily(family, mapping.Info.Type),
+		Code:           mapping.Info.Code,
+		Param:          mapping.Info.Param,
 		Provider:       provider,
 		Backend:        "",
 		ModelAlias:     "",
@@ -195,10 +197,8 @@ func upstreamCatchAllAdapterError(provider string, upstreamStatus int, upstreamC
 		Class:          adapterErrorUpstreamFailed,
 		HTTPStatus:     http.StatusBadRequest,
 		Message:        folded,
-		OpenAIType:     "invalid_request_error",
-		OpenAICode:     "upstream_failed",
-		OpenAIParam:    "",
-		AnthropicType:  "api_error",
+		Code:           "upstream_failed",
+		Param:          "",
 		Provider:       provider,
 		Backend:        "",
 		ModelAlias:     "",
@@ -234,19 +234,6 @@ func classForMappedCode(code string) adapterErrorClass {
 	return adapterErrorUpstreamFailed
 }
 
-// envelopeTypeForFamily picks the adapterError.AnthropicType field
-// the boundary needs when the mapping came from a non-OpenAI family.
-// The OpenAI family path leaves the field empty so applyDefaults still
-// picks up its row; non-OpenAI families pass the mapper's Info.Type
-// through verbatim because their mapper already chose the spec-correct
-// envelope type for that family.
-func envelopeTypeForFamily(family adapterRouteFamily, infoType string) string {
-	if family == adapterRouteOpenAI {
-		return ""
-	}
-	return infoType
-}
-
 // upstreamFallbackMessage folds every available upstream field into a
 // single string. The boundary uses this for the catch-all and for
 // adapterError instances built outside the mapper path.
@@ -275,12 +262,17 @@ func upstreamFallbackMessage(provider string, upstreamStatus int, upstreamCode, 
 // The boundary calls into the registered renderer to write the
 // final response; this helper exists so adapterErrors built directly
 // (panics, validation failures, internal-only flows) can still pick
-// up the family-correct envelope shape before rendering.
+// up the family-correct shape before rendering.
 //
-// For the OpenAI family the existing OpenAI envelope fields are
-// flipped into the invalid_request shape when they would otherwise
-// land on a non-renderable status. For the Anthropic family the
-// spec-correct envelope is preserved verbatim.
+// The helper speaks only neutral fields: HTTPStatus, Class, Code, and
+// Message. Each family renderer derives its own envelope `error.type`
+// from the neutral Class, so this helper never names a provider wire
+// type. For the OpenAI family it pins the status to 400 and the code
+// to a typed upstream_* value when an upstream class would otherwise
+// land on a non-renderable status, so the renderer's class-to-type
+// map produces invalid_request_error per the OpenAI route family rule.
+// For the Anthropic family the spec-correct shape is preserved
+// verbatim.
 func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterError {
 	if aerr == nil {
 		return nil
@@ -288,23 +280,36 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 	if family != adapterRouteOpenAI {
 		return aerr
 	}
-	if aerr.HTTPStatus == http.StatusBadRequest && aerr.OpenAIType == "invalid_request_error" {
-		return aerr
-	}
+	// auth_failed, method_not_allowed, and internal are local
+	// adapter-side rejections, not upstream failures; their status and
+	// renderer-derived envelope type are already client-correct, so the
+	// Cursor upstream rule does not apply to them.
 	if aerr.Class == adapterErrorInternal {
 		return aerr
 	}
 	if aerr.Class == adapterErrorAuthFailed || aerr.Class == adapterErrorMethodNotAllowed {
 		return aerr
 	}
+	// Anything already on HTTP 400 whose class is not the rate-limit
+	// class renders as invalid_request_error under the OpenAI renderer's
+	// class-to-type map, so it is already Cursor-safe. The rate-limit
+	// class maps to rate_limit_error and must be flipped even at 400.
+	if aerr.HTTPStatus == http.StatusBadRequest && aerr.Class != adapterErrorRateLimited {
+		return aerr
+	}
 	folded := aerr.Message
 	if folded == "" {
-		folded = upstreamFallbackMessage(aerr.Provider, aerr.UpstreamStatus, aerr.OpenAICode, "")
+		folded = upstreamFallbackMessage(aerr.Provider, aerr.UpstreamStatus, aerr.Code, "")
 	}
 	aerr.HTTPStatus = http.StatusBadRequest
-	aerr.OpenAIType = "invalid_request_error"
-	if aerr.OpenAICode == "" || aerr.OpenAICode == "server_error" {
-		aerr.OpenAICode = "upstream_failed"
+	// Normalize the neutral class to upstream_failed so the renderer
+	// derives invalid_request_error. An already-typed upstream_* class
+	// is preserved so its specific upstream_* code survives.
+	if !strings.HasPrefix(string(aerr.Class), "upstream_") {
+		aerr.Class = adapterErrorUpstreamFailed
+	}
+	if aerr.Code == "" || aerr.Code == "server_error" {
+		aerr.Code = "upstream_failed"
 	}
 	aerr.Message = folded
 	return aerr

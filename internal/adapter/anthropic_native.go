@@ -114,7 +114,10 @@ func (s *Server) handleAnthropicCountTokens(_ context.Context, hctx *handlerCtx)
 	}
 	err := newAdapterError(adapterErrorModelNotSupported, "/v1/messages/count_tokens is not implemented yet on the adapter Anthropic ingress")
 	err.HTTPStatus = http.StatusNotImplemented
-	err.AnthropicType = "not_supported_error"
+	// The neutral Code carries the not_supported_error reason; the
+	// Anthropic renderer derives the spec-correct envelope type from it,
+	// so the generic adapter never names the wire type.
+	err.Code = "not_supported_error"
 	return err
 }
 
@@ -146,8 +149,11 @@ func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *ht
 		// Native Anthropic ingress preserves the spec-correct
 		// Anthropic envelope so claude-cli parses it natively.
 		codeClass := anthropicCodeClassForStatus(execErr.Status)
+		// The Anthropic mapper classifies status and code into the
+		// neutral Code/Class; the Anthropic renderer derives the
+		// spec-correct envelope type from those neutral fields, so the
+		// generic adapter never assigns a provider wire type here.
 		aerr := mapUpstreamForFamily(adapterRouteAnthropic, "anthropic", execErr.Status, codeClass, execErr.Code, execErr.Message)
-		aerr.AnthropicType = anthropicErrorType(execErr.Status, execErr.Code)
 		aerr.Cause = err
 		s.respondAdapterError(w, r, aerr)
 		return
@@ -185,22 +191,6 @@ func anthropicCodeClassForStatus(status int) upstreamCodeClass {
 		return upstreamClassInvalidRequest
 	default:
 		return upstreamClassUnknown
-	}
-}
-
-func anthropicErrorType(status int, code string) string {
-	if strings.TrimSpace(code) == "not_supported_error" {
-		return "not_supported_error"
-	}
-	switch status {
-	case http.StatusBadRequest, http.StatusMethodNotAllowed:
-		return "invalid_request_error"
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return "authentication_error"
-	case http.StatusTooManyRequests:
-		return "rate_limit_error"
-	default:
-		return "api_error"
 	}
 }
 

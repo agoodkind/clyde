@@ -25,15 +25,68 @@ type ErrorRenderer struct{}
 // NewErrorRenderer returns the canonical OpenAI ErrorRenderer.
 func NewErrorRenderer() ErrorRenderer { return ErrorRenderer{} }
 
-// Render serializes a canonical OpenAI error envelope. Code defaults
-// to Type when empty so Cursor's BYOK error renderer always has
-// something to dispatch on. Encoding failure falls back to a
+// openAITypeByClass maps the boundary's neutral error classes to the
+// OpenAI family wire `error.type`. This map is the OpenAI package's
+// own source of truth for the class-to-type translation; the generic
+// adapter never names these wire strings. Classes absent from the map
+// fall back to invalid_request_error, the Cursor-safe default.
+//
+// Every upstream_* class resolves to invalid_request_error because the
+// OpenAI-compatible route family rule (documented in docs/cursor.md)
+// requires every non-2xx upstream to surface as HTTP 400 +
+// invalid_request_error + a typed upstream_* code: Cursor BYOK swaps
+// in generic vendor fallback chrome on server_error/rate_limit_error
+// and erases the chosen error.message. The OpenAI package owns that
+// rule here, so deriving the wire type from the neutral class produces
+// the same Cursor-safe shape the upstream mapper produces.
+var openAITypeByClass = map[string]string{
+	"auth_failed":               "authentication_error",
+	"method_not_allowed":        "invalid_request_error",
+	"invalid_json":              "invalid_request_error",
+	"invalid_request":           "invalid_request_error",
+	"model_not_found":           "invalid_request_error",
+	"model_not_supported":       "invalid_request_error",
+	"unsupported_backend":       "invalid_request_error",
+	"unsupported_content":       "invalid_request_error",
+	"context_length_exceeded":   "invalid_request_error",
+	"rate_limited":              "rate_limit_error",
+	"upstream_auth_failed":      "invalid_request_error",
+	"upstream_rate_limited":     "invalid_request_error",
+	"upstream_schema_violation": "invalid_request_error",
+	"upstream_network_error":    "invalid_request_error",
+	"upstream_unavailable":      "invalid_request_error",
+	"upstream_failed":           "invalid_request_error",
+	"timeout":                   "invalid_request_error",
+	"canceled":                  "invalid_request_error",
+	"internal":                  "internal_error",
+}
+
+// openAITypeForClass derives the OpenAI wire `error.type` from the
+// boundary's neutral class. Unknown classes resolve to the Cursor-safe
+// invalid_request_error default so an unseen class can never escape as
+// a server_error or rate_limit_error that triggers Cursor BYOK chrome.
+func openAITypeForClass(class string) string {
+	if t, ok := openAITypeByClass[strings.TrimSpace(class)]; ok {
+		return t
+	}
+	return "invalid_request_error"
+}
+
+// Render serializes a canonical OpenAI error envelope. Type is
+// derived from the neutral Class when the boundary did not already
+// pick one (the upstream-mapper path fills Type directly). Code
+// defaults to Type when empty so Cursor's BYOK error renderer always
+// has something to dispatch on. Encoding failure falls back to a
 // deterministic constant envelope so the response writer is never
 // left dangling without a body.
 func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.ErrorInfo) error {
+	envelopeType := info.Type
+	if envelopeType == "" {
+		envelopeType = openAITypeForClass(info.Class)
+	}
 	body := ErrorBody{
 		Message: info.Message,
-		Type:    info.Type,
+		Type:    envelopeType,
 		Code:    info.Code,
 		Param:   info.Param,
 		Clyde:   info.Diagnostics,
@@ -135,11 +188,13 @@ func openAIInvalidRequestMapping(code, message string) errcontract.UpstreamMappi
 	return errcontract.UpstreamMapping{
 		HTTPStatus: http.StatusBadRequest,
 		Info: errcontract.ErrorInfo{
-			Type:        "invalid_request_error",
-			Code:        code,
-			Message:     message,
-			Param:       "",
-			Diagnostics: nil,
+			Type:           "invalid_request_error",
+			Class:          "",
+			Code:           code,
+			Message:        message,
+			Param:          "",
+			UpstreamStatus: 0,
+			Diagnostics:    nil,
 		},
 	}
 }

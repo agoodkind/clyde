@@ -17,12 +17,30 @@ import (
 // renderer. Every field is a primitive string so the boundary never
 // imports a provider envelope type. An empty Code means omit the
 // field from the rendered envelope.
+//
+// Class is the boundary's neutral error classification (the adapter's
+// own adapterErrorClass values such as "auth_failed" or
+// "upstream_failed"). The boundary never names a provider's wire Type;
+// it hands the neutral Class through, and each family renderer derives
+// its own envelope Type from that Class when Type is empty. The
+// upstream-mapper path fills Type directly because the mapper already
+// chose the family-correct envelope type, so renderers prefer a
+// non-empty Type and fall back to the Class-derived type otherwise.
 type ErrorInfo struct {
-	Type        string
-	Code        string
-	Message     string
-	Param       string
-	Diagnostics *ErrorDiagnostics
+	Type    string
+	Class   string
+	Code    string
+	Message string
+	Param   string
+	// UpstreamStatus is the neutral upstream HTTP status (0 when the
+	// failure did not originate from an upstream HTTP response). A
+	// family renderer may use it to derive a spec-correct envelope type
+	// when the status carries the classification (e.g. the Anthropic
+	// family maps 401 to authentication_error and 429 to
+	// rate_limit_error). It is a plain integer, not a provider wire
+	// string, so the generic boundary stays blind to envelope syntax.
+	UpstreamStatus int
+	Diagnostics    *ErrorDiagnostics
 }
 
 // ErrorDiagnostics carries primitive, client-visible breadcrumbs that let an

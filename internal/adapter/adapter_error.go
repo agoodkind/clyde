@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/errcontract"
-	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
 )
@@ -46,14 +45,21 @@ const (
 	adapterErrorInternal                adapterErrorClass = "internal"
 )
 
+// adapterError is the single generic error type every non-2xx adapter
+// response becomes. Its fields are neutral: Class is the boundary's
+// own classification, Code and Param are Clyde's neutral wire-agnostic
+// values that the OpenAI renderer passes through and the Anthropic
+// renderer ignores, and Message is the chosen client-visible text. The
+// provider-specific envelope Type lives in the provider renderers,
+// which derive it from Class. The generic adapter never holds a
+// provider envelope wire string such as "authentication_error" or
+// "api_error".
 type adapterError struct {
 	Class          adapterErrorClass
 	HTTPStatus     int
 	Message        string
-	OpenAIType     string
-	OpenAICode     string
-	OpenAIParam    string
-	AnthropicType  string
+	Code           string
+	Param          string
 	Provider       string
 	Backend        string
 	ModelAlias     string
@@ -85,9 +91,18 @@ func (e *adapterError) Unwrap() error {
 
 func newAdapterError(class adapterErrorClass, message string) *adapterError {
 	e := &adapterError{
-		Class:         class,
-		Message:       strings.TrimSpace(message),
-		SafeForClient: true,
+		Class:          class,
+		HTTPStatus:     0,
+		Message:        strings.TrimSpace(message),
+		Code:           "",
+		Param:          "",
+		Provider:       "",
+		Backend:        "",
+		ModelAlias:     "",
+		ResolvedModel:  "",
+		UpstreamStatus: 0,
+		Cause:          nil,
+		SafeForClient:  true,
 	}
 	e.applyDefaults()
 	return e
@@ -123,55 +138,51 @@ func adapterErrUpstreamFailed(provider, message string, cause error) *adapterErr
 	return e
 }
 
-// adapterErrorDefaults holds the default envelope fields for a single
+// adapterErrorDefaults holds the neutral default fields for a single
 // adapterErrorClass. The applyDefaults table below is the single
-// source of truth for class-to-envelope mapping; new classes plug in
-// by adding a row instead of growing the switch.
+// source of truth for class-to-HTTP-status and class-to-neutral-code
+// mapping; new classes plug in by adding a row. The table holds no
+// provider wire type string: the OpenAI and Anthropic renderers each
+// derive their own envelope `error.type` from the neutral class.
 type adapterErrorDefaults struct {
-	HTTPStatus    int
-	OpenAIType    string
-	OpenAICode    string
-	OpenAIParam   string
-	AnthropicType string
+	HTTPStatus int
+	Code       string
+	Param      string
 }
 
 var adapterErrorDefaultsByClass = map[adapterErrorClass]adapterErrorDefaults{
-	adapterErrorAuthFailed:              {HTTPStatus: http.StatusUnauthorized, OpenAIType: "authentication_error", OpenAICode: "unauthorized", OpenAIParam: "", AnthropicType: "authentication_error"},
-	adapterErrorMethodNotAllowed:        {HTTPStatus: http.StatusMethodNotAllowed, OpenAIType: "invalid_request_error", OpenAICode: "method_not_allowed", OpenAIParam: "", AnthropicType: "invalid_request_error"},
-	adapterErrorInvalidJSON:             {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "invalid_json", OpenAIParam: "", AnthropicType: "invalid_request_error"},
-	adapterErrorInvalidRequest:          {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "invalid_request", OpenAIParam: "", AnthropicType: "invalid_request_error"},
-	adapterErrorModelNotFound:           {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "model_not_found", OpenAIParam: "model", AnthropicType: "invalid_request_error"},
-	adapterErrorModelNotSupported:       {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "model_not_supported", OpenAIParam: "model", AnthropicType: "invalid_request_error"},
-	adapterErrorUnsupportedBackend:      {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "unsupported_backend", OpenAIParam: "", AnthropicType: "invalid_request_error"},
-	adapterErrorUnsupportedContent:      {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "unsupported_content", OpenAIParam: "", AnthropicType: "invalid_request_error"},
-	adapterErrorContextLengthExceeded:   {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "context_length_exceeded", OpenAIParam: "messages", AnthropicType: "invalid_request_error"},
-	adapterErrorRateLimited:             {HTTPStatus: http.StatusTooManyRequests, OpenAIType: "rate_limit_error", OpenAICode: "rate_limit_exceeded", OpenAIParam: "", AnthropicType: "rate_limit_error"},
-	adapterErrorUpstreamAuthFailed:      {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_auth_failed", OpenAIParam: "", AnthropicType: "authentication_error"},
-	adapterErrorUpstreamRateLimited:     {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_rate_limited", OpenAIParam: "", AnthropicType: "rate_limit_error"},
-	adapterErrorUpstreamSchemaViolation: {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_malformed_request", OpenAIParam: "", AnthropicType: "invalid_request_error"},
-	adapterErrorUpstreamNetworkError:    {HTTPStatus: http.StatusBadRequest, OpenAIType: "invalid_request_error", OpenAICode: "upstream_network_error", OpenAIParam: "", AnthropicType: "api_error"},
-	adapterErrorUpstreamUnavailable:     {HTTPStatus: http.StatusBadGateway, OpenAIType: "server_error", OpenAICode: "upstream_unavailable", OpenAIParam: "", AnthropicType: "api_error"},
-	adapterErrorUpstreamFailed:          {HTTPStatus: http.StatusBadGateway, OpenAIType: "server_error", OpenAICode: "upstream_failed", OpenAIParam: "", AnthropicType: "api_error"},
-	adapterErrorTimeout:                 {HTTPStatus: http.StatusGatewayTimeout, OpenAIType: "server_error", OpenAICode: "timeout", OpenAIParam: "", AnthropicType: "api_error"},
-	adapterErrorCanceled:                {HTTPStatus: 499, OpenAIType: "server_error", OpenAICode: "canceled", OpenAIParam: "", AnthropicType: "api_error"},
-	adapterErrorInternal:                {HTTPStatus: http.StatusInternalServerError, OpenAIType: "internal_error", OpenAICode: "internal_error", OpenAIParam: "", AnthropicType: "api_error"},
+	adapterErrorAuthFailed:              {HTTPStatus: http.StatusUnauthorized, Code: "unauthorized", Param: ""},
+	adapterErrorMethodNotAllowed:        {HTTPStatus: http.StatusMethodNotAllowed, Code: "method_not_allowed", Param: ""},
+	adapterErrorInvalidJSON:             {HTTPStatus: http.StatusBadRequest, Code: "invalid_json", Param: ""},
+	adapterErrorInvalidRequest:          {HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Param: ""},
+	adapterErrorModelNotFound:           {HTTPStatus: http.StatusBadRequest, Code: "model_not_found", Param: "model"},
+	adapterErrorModelNotSupported:       {HTTPStatus: http.StatusBadRequest, Code: "model_not_supported", Param: "model"},
+	adapterErrorUnsupportedBackend:      {HTTPStatus: http.StatusBadRequest, Code: "unsupported_backend", Param: ""},
+	adapterErrorUnsupportedContent:      {HTTPStatus: http.StatusBadRequest, Code: "unsupported_content", Param: ""},
+	adapterErrorContextLengthExceeded:   {HTTPStatus: http.StatusBadRequest, Code: "context_length_exceeded", Param: "messages"},
+	adapterErrorRateLimited:             {HTTPStatus: http.StatusTooManyRequests, Code: "rate_limit_exceeded", Param: ""},
+	adapterErrorUpstreamAuthFailed:      {HTTPStatus: http.StatusBadRequest, Code: "upstream_auth_failed", Param: ""},
+	adapterErrorUpstreamRateLimited:     {HTTPStatus: http.StatusBadRequest, Code: "upstream_rate_limited", Param: ""},
+	adapterErrorUpstreamSchemaViolation: {HTTPStatus: http.StatusBadRequest, Code: "upstream_malformed_request", Param: ""},
+	adapterErrorUpstreamNetworkError:    {HTTPStatus: http.StatusBadRequest, Code: "upstream_network_error", Param: ""},
+	adapterErrorUpstreamUnavailable:     {HTTPStatus: http.StatusBadGateway, Code: "upstream_unavailable", Param: ""},
+	adapterErrorUpstreamFailed:          {HTTPStatus: http.StatusBadGateway, Code: "upstream_failed", Param: ""},
+	adapterErrorTimeout:                 {HTTPStatus: http.StatusGatewayTimeout, Code: "timeout", Param: ""},
+	adapterErrorCanceled:                {HTTPStatus: 499, Code: "canceled", Param: ""},
+	adapterErrorInternal:                {HTTPStatus: http.StatusInternalServerError, Code: "internal_error", Param: ""},
 }
 
 func (e *adapterError) applyDefaults() {
 	explicitStatus := e.HTTPStatus
-	explicitOpenAIType := e.OpenAIType
-	explicitOpenAICode := e.OpenAICode
-	explicitOpenAIParam := e.OpenAIParam
-	explicitAnthropicType := e.AnthropicType
+	explicitCode := e.Code
+	explicitParam := e.Param
 	if e.HTTPStatus == 0 {
 		e.HTTPStatus = http.StatusInternalServerError
 	}
 	if defaults, ok := adapterErrorDefaultsByClass[e.Class]; ok {
 		e.HTTPStatus = defaults.HTTPStatus
-		e.OpenAIType = defaults.OpenAIType
-		e.OpenAICode = defaults.OpenAICode
-		e.OpenAIParam = defaults.OpenAIParam
-		e.AnthropicType = defaults.AnthropicType
+		e.Code = defaults.Code
+		e.Param = defaults.Param
 	}
 	if e.Message == "" {
 		e.Message = string(e.Class)
@@ -179,17 +190,11 @@ func (e *adapterError) applyDefaults() {
 	if explicitStatus > 0 {
 		e.HTTPStatus = explicitStatus
 	}
-	if explicitOpenAIType != "" {
-		e.OpenAIType = explicitOpenAIType
+	if explicitCode != "" {
+		e.Code = explicitCode
 	}
-	if explicitOpenAICode != "" {
-		e.OpenAICode = explicitOpenAICode
-	}
-	if explicitOpenAIParam != "" {
-		e.OpenAIParam = explicitOpenAIParam
-	}
-	if explicitAnthropicType != "" {
-		e.AnthropicType = explicitAnthropicType
+	if explicitParam != "" {
+		e.Param = explicitParam
 	}
 }
 
@@ -252,9 +257,8 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		slog.String("route_family", string(family)),
 		slog.Int("status", aerr.HTTPStatus),
 		slog.String("error_class", string(aerr.Class)),
-		slog.String("openai_type", aerr.OpenAIType),
-		slog.String("openai_code", aerr.OpenAICode),
-		slog.String("anthropic_type", aerr.AnthropicType),
+		slog.String("error_code", aerr.Code),
+		slog.String("error_param", aerr.Param),
 		slog.String("model", aerr.ModelAlias),
 		slog.String("backend", aerr.Backend),
 		slog.String("provider", aerr.Provider),
@@ -279,28 +283,24 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 	}
 }
 
-// rendererTypeForFamily picks the envelope Type primitive the
-// renderer should use. The Anthropic family wants the spec-correct
-// envelope type that lives on AnthropicType; the OpenAI family wants
-// the OpenAIType stored on the adapterError.
-func rendererTypeForFamily(family adapterRouteFamily, aerr *adapterError) string {
-	if family == adapterRouteAnthropic {
-		if aerr.AnthropicType != "" {
-			return aerr.AnthropicType
-		}
-		return "api_error"
-	}
-	return aerr.OpenAIType
-}
-
-func adapterErrorInfoForFamily(family adapterRouteFamily, aerr *adapterError, message string) errcontract.ErrorInfo {
+// adapterErrorInfoForFamily builds the primitive ErrorInfo the
+// boundary hands to a family renderer. It passes the neutral Class,
+// Code, Param, and Message through and leaves Type empty so each
+// renderer derives its own family-correct envelope `error.type` from
+// the neutral Class. The upstream-mapper path is the only caller that
+// fills Type directly, because the provider mapper already chose the
+// family-correct type; this direct-construction path never names a
+// provider wire type.
+func adapterErrorInfoForFamily(_ adapterRouteFamily, aerr *adapterError, message string) errcontract.ErrorInfo {
 	if aerr == nil {
 		return errcontract.ErrorInfo{
-			Type:        "internal_error",
-			Code:        "internal_error",
-			Message:     "adapter internal error",
-			Param:       "",
-			Diagnostics: nil,
+			Type:           "",
+			Class:          string(adapterErrorInternal),
+			Code:           "internal_error",
+			Message:        "adapter internal error",
+			Param:          "",
+			UpstreamStatus: 0,
+			Diagnostics:    nil,
 		}
 	}
 	aerr.applyDefaults()
@@ -308,11 +308,13 @@ func adapterErrorInfoForFamily(family adapterRouteFamily, aerr *adapterError, me
 		message = aerr.Message
 	}
 	return errcontract.ErrorInfo{
-		Type:        rendererTypeForFamily(family, aerr),
-		Code:        aerr.OpenAICode,
-		Message:     message,
-		Param:       aerr.OpenAIParam,
-		Diagnostics: nil,
+		Type:           "",
+		Class:          string(aerr.Class),
+		Code:           aerr.Code,
+		Message:        message,
+		Param:          aerr.Param,
+		UpstreamStatus: aerr.UpstreamStatus,
+		Diagnostics:    nil,
 	}
 }
 
@@ -461,7 +463,7 @@ func (s *Server) writeFallbackError(ctx context.Context, w http.ResponseWriter, 
 // followed by the [DONE] terminator. Mid-stream errors must use this
 // helper because the response headers have already been committed and
 // switching to a JSON envelope would corrupt the SSE channel.
-func (s *Server) respondAdapterStreamError(ctx context.Context, sse *adapteropenai.SSEWriter, err error) error {
+func (s *Server) respondAdapterStreamError(ctx context.Context, sse errcontract.StreamErrorWriter, err error) error {
 	if sse == nil {
 		return nil
 	}

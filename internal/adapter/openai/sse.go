@@ -13,6 +13,11 @@ import (
 
 var ErrSSENoFlusher = errors.New("streaming not supported by this transport")
 
+// SSEWriter satisfies errcontract.StreamErrorWriter so the generic
+// adapter error boundary can hand it mid-stream errors through the
+// neutral primitive interface without importing this OpenAI package.
+var _ errcontract.StreamErrorWriter = (*SSEWriter)(nil)
+
 type SSEWriter struct {
 	w                http.ResponseWriter
 	f                http.Flusher
@@ -112,9 +117,13 @@ func (r StreamErrorRenderer) WriteStreamError(w errcontract.StreamErrorWriter, i
 }
 
 func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info errcontract.ErrorInfo) error {
+	envelopeType := info.Type
+	if envelopeType == "" {
+		envelopeType = openAITypeForClass(info.Class)
+	}
 	body := ErrorBody{
 		Message: info.Message,
-		Type:    info.Type,
+		Type:    envelopeType,
 		Code:    info.Code,
 		Param:   info.Param,
 		Clyde:   info.Diagnostics,

@@ -158,6 +158,36 @@ func TestTopLevelAdapterProductionDoesNotOwnOpenAIErrorBodies(t *testing.T) {
 	}
 }
 
+// TestAdapterErrorFileImportsNoProviderPackage asserts that the
+// generic boundary file adapter_error.go imports no provider package.
+// The boundary speaks only the neutral errcontract primitives; a
+// provider import here would re-leak a concrete envelope or stream
+// type into the generic adapter and reverse the dependency inversion
+// the error boundary depends on.
+func TestAdapterErrorFileImportsNoProviderPackage(t *testing.T) {
+	t.Parallel()
+	forbiddenImports := []string{
+		"goodkind.io/clyde/internal/adapter/openai",
+		"goodkind.io/clyde/internal/adapter/anthropic",
+		"goodkind.io/clyde/internal/adapter/codex",
+	}
+	fset := token.NewFileSet()
+	const target = "adapter_error.go"
+	file, parseErr := parser.ParseFile(fset, target, nil, parser.ImportsOnly)
+	if parseErr != nil {
+		t.Fatalf("parse %s: %v", target, parseErr)
+	}
+	for _, imp := range file.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		for _, forbidden := range forbiddenImports {
+			if path == forbidden {
+				pos := fset.Position(imp.Pos())
+				t.Errorf("%s:%d: generic boundary file must not import provider package %q", pos.Filename, pos.Line, path)
+			}
+		}
+	}
+}
+
 // identifierCandidatesFromNode returns every textual form by which a
 // node could reference a prohibited symbol. SelectorExpr nodes
 // produce both the qualified form (http.Error) and the bare method

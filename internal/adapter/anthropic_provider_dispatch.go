@@ -411,13 +411,20 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 func anthropicProviderAdapterError(err error) *adapterError {
 	var execErr *anthropic.ExecuteError
 	if errors.As(err, &execErr) {
+		// ExecuteError carries an adapter-internal anthropic provider
+		// rejection (invalid_request, oauth_unconfigured, rate_limited).
+		// The neutral Code carries the typed reason and the status is
+		// preserved; applyFamilyShape coerces it into the OpenAI family
+		// safe shape at render time, and the OpenAI renderer derives the
+		// wire type from the neutral class. No provider wire type lives
+		// on the generic struct.
 		aerr := adapterErrUpstreamFailed("anthropic", execErr.Message, execErr)
 		aerr.HTTPStatus = execErr.Status
-		if execErr.Code != "upstream_failed" {
-			aerr.OpenAIType = execErr.Code
+		aerr.UpstreamStatus = execErr.Status
+		if execErr.Code != "" {
+			aerr.Code = execErr.Code
+			aerr.Class = classForMappedCode(execErr.Code)
 		}
-		aerr.OpenAICode = execErr.Code
-		aerr.AnthropicType = anthropicErrorType(execErr.Status, execErr.Code)
 		return aerr
 	}
 	if upstreamErr, ok := anthropic.AsUpstreamError(err); ok {

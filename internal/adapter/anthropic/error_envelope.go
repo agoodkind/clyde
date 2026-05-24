@@ -22,14 +22,82 @@ type ErrorRenderer struct{}
 // NewErrorRenderer returns the canonical Anthropic ErrorRenderer.
 func NewErrorRenderer() ErrorRenderer { return ErrorRenderer{} }
 
-// Render serializes a spec-correct Anthropic error envelope. Falls
-// back to a deterministic constant envelope when the encoder fails
-// so the response writer never sees a plain-text body.
+// anthropicTypeByClass maps the boundary's neutral error classes to
+// the spec-correct Anthropic family wire `error.type`. This map is the
+// Anthropic package's own source of truth for the class-to-type
+// translation; the generic adapter never names these wire strings.
+// Classes absent from the map fall back to api_error, the Anthropic
+// catch-all envelope type.
+var anthropicTypeByClass = map[string]string{
+	"auth_failed":               "authentication_error",
+	"method_not_allowed":        "invalid_request_error",
+	"invalid_json":              "invalid_request_error",
+	"invalid_request":           "invalid_request_error",
+	"model_not_found":           "invalid_request_error",
+	"model_not_supported":       "invalid_request_error",
+	"unsupported_backend":       "invalid_request_error",
+	"unsupported_content":       "invalid_request_error",
+	"context_length_exceeded":   "invalid_request_error",
+	"rate_limited":              "rate_limit_error",
+	"upstream_auth_failed":      "authentication_error",
+	"upstream_rate_limited":     "rate_limit_error",
+	"upstream_schema_violation": "invalid_request_error",
+	"upstream_network_error":    "api_error",
+	"upstream_unavailable":      "api_error",
+	"upstream_failed":           "api_error",
+	"timeout":                   "api_error",
+	"canceled":                  "api_error",
+	"internal":                  "api_error",
+}
+
+// anthropicTypeForClass derives the spec-correct Anthropic wire
+// `error.type` from the boundary's neutral class. Unknown classes
+// resolve to api_error, the Anthropic catch-all envelope type.
+func anthropicTypeForClass(class string) string {
+	if t, ok := anthropicTypeByClass[strings.TrimSpace(class)]; ok {
+		return t
+	}
+	return "api_error"
+}
+
+// anthropicTypeForInfo derives the spec-correct Anthropic wire
+// `error.type` from the neutral ErrorInfo when the boundary did not
+// pre-fill a type. The native Anthropic ingress emits a
+// not_supported_error envelope for unimplemented endpoints (e.g.
+// /v1/messages/count_tokens), carried on the neutral Code. Upstream
+// failures carry their HTTP status on the neutral UpstreamStatus, and
+// the Anthropic spec maps 401/403 to authentication_error and 429 to
+// rate_limit_error, so this derivation reproduces the status-correct
+// envelope without the generic adapter ever naming a wire type.
+func anthropicTypeForInfo(info errcontract.ErrorInfo) string {
+	if strings.TrimSpace(info.Code) == "not_supported_error" {
+		return "not_supported_error"
+	}
+	switch info.UpstreamStatus {
+	case http.StatusBadRequest, http.StatusMethodNotAllowed:
+		return "invalid_request_error"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "authentication_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	}
+	return anthropicTypeForClass(info.Class)
+}
+
+// Render serializes a spec-correct Anthropic error envelope. The
+// envelope Type is derived from the neutral Class when the boundary
+// did not already pick one (the upstream-mapper path fills Type
+// directly). Falls back to a deterministic constant envelope when the
+// encoder fails so the response writer never sees a plain-text body.
 func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.ErrorInfo) error {
+	envelopeType := info.Type
+	if envelopeType == "" {
+		envelopeType = anthropicTypeForInfo(info)
+	}
 	env := ErrorEnvelope{
 		Type: "error",
 		Error: ErrorDetail{
-			Type:    info.Type,
+			Type:    envelopeType,
 			Message: info.Message,
 		},
 	}
@@ -100,11 +168,13 @@ func (UpstreamErrorMapper) Map(
 	return errcontract.UpstreamMapping{
 		HTTPStatus: httpStatus,
 		Info: errcontract.ErrorInfo{
-			Type:        envelopeType,
-			Code:        trimmedCode,
-			Message:     resolvedMessage,
-			Param:       "",
-			Diagnostics: nil,
+			Type:           envelopeType,
+			Class:          "",
+			Code:           trimmedCode,
+			Message:        resolvedMessage,
+			Param:          "",
+			UpstreamStatus: httpStatus,
+			Diagnostics:    nil,
 		},
 	}
 }

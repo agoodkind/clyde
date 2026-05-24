@@ -43,11 +43,15 @@ func TestCodexProviderAdapterErrorMapsContextWindowError(t *testing.T) {
 	if aerr.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "context_length_exceeded" || aerr.OpenAIParam != "messages" {
+	if aerr.Code != "context_length_exceeded" || aerr.Param != "messages" {
 		t.Fatalf("adapter error=%+v", aerr)
 	}
 	if aerr.Message != "This model's maximum context length was exceeded. Please reduce the length of the messages." {
 		t.Fatalf("message=%q", aerr.Message)
+	}
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" || env.Error.Code != "context_length_exceeded" || env.Error.Param != "messages" {
+		t.Fatalf("rendered envelope=%+v", env.Error)
 	}
 }
 
@@ -62,8 +66,8 @@ func TestCodexProviderAdapterErrorMapsWrappedContextWindowError(t *testing.T) {
 	if aerr.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if aerr.OpenAICode != "context_length_exceeded" {
-		t.Fatalf("code=%q want context_length_exceeded", aerr.OpenAICode)
+	if aerr.Code != "context_length_exceeded" {
+		t.Fatalf("code=%q want context_length_exceeded", aerr.Code)
 	}
 }
 
@@ -78,11 +82,15 @@ func TestCodexProviderAdapterErrorMapsWrappedUnsupportedModelError(t *testing.T)
 	if aerr.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "model_not_supported" || aerr.OpenAIParam != "model" {
+	if aerr.Code != "model_not_supported" || aerr.Param != "model" {
 		t.Fatalf("adapter error=%+v", aerr)
 	}
 	if aerr.Message != "The '5.5' model is not supported when using Codex with a ChatGPT account." {
 		t.Fatalf("message=%q", aerr.Message)
+	}
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" || env.Error.Code != "model_not_supported" || env.Error.Param != "model" {
+		t.Fatalf("rendered envelope=%+v", env.Error)
 	}
 }
 
@@ -99,25 +107,36 @@ func TestCodexProviderAdapterErrorMapsGenericProviderError(t *testing.T) {
 	if aerr.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "upstream_failed" || aerr.OpenAIParam != "" {
+	if aerr.Code != "upstream_failed" || aerr.Param != "" {
 		t.Fatalf("adapter error=%+v", aerr)
 	}
 	if !strings.Contains(aerr.Message, "codex websocket read failed") {
 		t.Fatalf("message=%q", aerr.Message)
 	}
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" || env.Error.Code != "upstream_failed" {
+		t.Fatalf("rendered envelope=%+v", env.Error)
+	}
 }
 
-func TestAdapterErrUpstreamFailedUsesOpenAICompatibleServerError(t *testing.T) {
+func TestAdapterErrUpstreamFailedRendersCursorSafeInvalidRequest(t *testing.T) {
 	t.Parallel()
 
 	aerr := adapterErrUpstreamFailed("codex", "codex websocket read failed", errors.New("boom"))
 	aerr.applyDefaults()
 
-	if aerr.OpenAIType != "server_error" || aerr.OpenAICode != "upstream_failed" || aerr.OpenAIParam != "" {
+	if aerr.Class != adapterErrorUpstreamFailed || aerr.Code != "upstream_failed" || aerr.Param != "" {
 		t.Fatalf("adapter error=%+v", aerr)
 	}
 	if aerr.Message != "codex websocket read failed" {
 		t.Fatalf("message=%q", aerr.Message)
+	}
+	// The OpenAI renderer owns the Cursor rule: an upstream_failed class
+	// renders as HTTP 400 + invalid_request_error so Cursor BYOK shows
+	// the chosen error.message instead of its generic fallback chrome.
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" || env.Error.Code != "upstream_failed" {
+		t.Fatalf("rendered envelope=%+v", env.Error)
 	}
 }
 

@@ -74,7 +74,7 @@ func TestAnthropicProviderErrorResponseMapsUpstreamRateLimitToCursorSafeInvalidR
 	if aerr.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if aerr.OpenAIType != "invalid_request_error" || aerr.OpenAICode != "upstream_rate_limited" {
+	if aerr.Code != "upstream_rate_limited" {
 		t.Fatalf("adapter error=%+v", aerr)
 	}
 	if aerr.Message != "rate limit reached" {
@@ -82,6 +82,10 @@ func TestAnthropicProviderErrorResponseMapsUpstreamRateLimitToCursorSafeInvalidR
 	}
 	if aerr.UpstreamStatus != http.StatusTooManyRequests {
 		t.Fatalf("upstream status=%d want %d", aerr.UpstreamStatus, http.StatusTooManyRequests)
+	}
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" || env.Error.Code != "upstream_rate_limited" {
+		t.Fatalf("rendered envelope=%+v", env.Error)
 	}
 }
 
@@ -118,11 +122,15 @@ func TestAnthropicProviderErrorResponseMapsSSEErrorEventToTypedClass(t *testing.
 			if aerr.HTTPStatus != http.StatusBadRequest {
 				t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 			}
-			if aerr.OpenAIType != "invalid_request_error" {
-				t.Fatalf("type=%q want invalid_request_error", aerr.OpenAIType)
+			if aerr.Code != tc.wantCode {
+				t.Fatalf("code=%q want %q", aerr.Code, tc.wantCode)
 			}
-			if aerr.OpenAICode != tc.wantCode {
-				t.Fatalf("code=%q want %q", aerr.OpenAICode, tc.wantCode)
+			env := renderedOpenAIEnvelope(t, aerr)
+			if env.Error.Type != "invalid_request_error" {
+				t.Fatalf("rendered type=%q want invalid_request_error", env.Error.Type)
+			}
+			if env.Error.Code != tc.wantCode {
+				t.Fatalf("rendered code=%q want %q", env.Error.Code, tc.wantCode)
 			}
 		})
 	}
@@ -143,11 +151,12 @@ func TestAnthropicProviderErrorResponseMapsWrappedTransportFailure(t *testing.T)
 	if aerr.HTTPStatus != http.StatusBadRequest {
 		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
 	}
-	if aerr.OpenAIType != "invalid_request_error" {
-		t.Fatalf("adapter error=%+v", aerr)
-	}
 	if aerr.Message == "" {
 		t.Fatalf("message must not be empty")
+	}
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" {
+		t.Fatalf("rendered envelope=%+v", env.Error)
 	}
 }
 
