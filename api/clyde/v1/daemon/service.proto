@@ -7,6 +7,7 @@ option go_package = "goodkind.io/clyde/api/clyde/v1;clydev1";
 import "clyde/v1/daemon/bridge.proto";
 import "clyde/v1/daemon/compact.proto";
 import "clyde/v1/daemon/context.proto";
+import "clyde/v1/daemon/oauth_account.proto";
 import "clyde/v1/daemon/provider.proto";
 import "clyde/v1/daemon/registry.proto";
 import "clyde/v1/daemon/session.proto";
@@ -52,4 +53,7 @@ service ClydeService {
   rpc ProbeContextUsage(ProbeContextUsageRequest) returns (ProbeContextUsageResponse);
   rpc CalibrateSession(CalibrateSessionRequest) returns (CalibrateSessionResponse);
   rpc SetCalibration(SetCalibrationRequest) returns (SetCalibrationResponse);
+  rpc OAuthAccountList(OAuthAccountListRequest) returns (OAuthAccountListResponse);
+  rpc OAuthAccountLogin(OAuthAccountLoginRequest) returns (stream OAuthAccountLoginEvent);
+  rpc OAuthAccountForget(OAuthAccountForgetRequest) returns (OAuthAccountForgetResponse);
 }

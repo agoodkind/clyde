@@ -165,6 +165,7 @@ func attachSubcommands(root *cobra.Command, f *cli.Factory) {
 	root.AddCommand(newRenameCmd(f))
 	root.AddCommand(sessioncmd.NewCmd(f))
 	root.AddCommand(cmd.NewResumeCmd())
+	root.AddCommand(cmd.NewOAuthCmd())
 }
 
 func isReadOnlyLogsInventoryCommand(args []string) bool {

@@ -24,7 +24,7 @@ var File_clyde_v1_daemon_service_proto protoreflect.FileDescriptor
 
 const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1dclyde/v1/daemon/service.proto\x12\bclyde.v1\x1a\x1cclyde/v1/daemon/bridge.proto\x1a\x1dclyde/v1/daemon/compact.proto\x1a\x1dclyde/v1/daemon/context.proto\x1a\x1eclyde/v1/daemon/provider.proto\x1a\x1eclyde/v1/daemon/registry.proto\x1a\x1dclyde/v1/daemon/session.proto\x1a\x1eclyde/v1/daemon/settings.proto2\xd6\x1b\n" +
+	"\x1dclyde/v1/daemon/service.proto\x12\bclyde.v1\x1a\x1cclyde/v1/daemon/bridge.proto\x1a\x1dclyde/v1/daemon/compact.proto\x1a\x1dclyde/v1/daemon/context.proto\x1a#clyde/v1/daemon/oauth_account.proto\x1a\x1eclyde/v1/daemon/provider.proto\x1a\x1eclyde/v1/daemon/registry.proto\x1a\x1dclyde/v1/daemon/session.proto\x1a\x1eclyde/v1/daemon/settings.proto2\xef\x1d\n" +
 	"\fClydeService\x12S\n" +
 	"\x0eAcquireSession\x12\x1f.clyde.v1.AcquireSessionRequest\x1a .clyde.v1.AcquireSessionResponse\x12S\n" +
 	"\x0eReleaseSession\x12\x1f.clyde.v1.ReleaseSessionRequest\x1a .clyde.v1.ReleaseSessionResponse\x12D\n" +
@@ -64,7 +64,10 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\vCompactUndo\x12\x1c.clyde.v1.CompactUndoRequest\x1a\x1d.clyde.v1.CompactUndoResponse\x12\\\n" +
 	"\x11ProbeContextUsage\x12\".clyde.v1.ProbeContextUsageRequest\x1a#.clyde.v1.ProbeContextUsageResponse\x12Y\n" +
 	"\x10CalibrateSession\x12!.clyde.v1.CalibrateSessionRequest\x1a\".clyde.v1.CalibrateSessionResponse\x12S\n" +
-	"\x0eSetCalibration\x12\x1f.clyde.v1.SetCalibrationRequest\x1a .clyde.v1.SetCalibrationResponseB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
+	"\x0eSetCalibration\x12\x1f.clyde.v1.SetCalibrationRequest\x1a .clyde.v1.SetCalibrationResponse\x12Y\n" +
+	"\x10OAuthAccountList\x12!.clyde.v1.OAuthAccountListRequest\x1a\".clyde.v1.OAuthAccountListResponse\x12[\n" +
+	"\x11OAuthAccountLogin\x12\".clyde.v1.OAuthAccountLoginRequest\x1a .clyde.v1.OAuthAccountLoginEvent0\x01\x12_\n" +
+	"\x12OAuthAccountForget\x12#.clyde.v1.OAuthAccountForgetRequest\x1a$.clyde.v1.OAuthAccountForgetResponseB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
 
 var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(*AcquireSessionRequest)(nil),             // 0: clyde.v1.AcquireSessionRequest
@@ -105,44 +108,50 @@ var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(*ProbeContextUsageRequest)(nil),          // 35: clyde.v1.ProbeContextUsageRequest
 	(*CalibrateSessionRequest)(nil),           // 36: clyde.v1.CalibrateSessionRequest
 	(*SetCalibrationRequest)(nil),             // 37: clyde.v1.SetCalibrationRequest
-	(*AcquireSessionResponse)(nil),            // 38: clyde.v1.AcquireSessionResponse
-	(*ReleaseSessionResponse)(nil),            // 39: clyde.v1.ReleaseSessionResponse
-	(*HookEventResponse)(nil),                 // 40: clyde.v1.HookEventResponse
-	(*ListActiveSessionsResponse)(nil),        // 41: clyde.v1.ListActiveSessionsResponse
-	(*ListSessionsResponse)(nil),              // 42: clyde.v1.ListSessionsResponse
-	(*GetSessionDetailResponse)(nil),          // 43: clyde.v1.GetSessionDetailResponse
-	(*GetSessionExportStatsResponse)(nil),     // 44: clyde.v1.GetSessionExportStatsResponse
-	(*ExportSessionResponse)(nil),             // 45: clyde.v1.ExportSessionResponse
-	(*TriggerScanResponse)(nil),               // 46: clyde.v1.TriggerScanResponse
-	(*ReloadDaemonResponse)(nil),              // 47: clyde.v1.ReloadDaemonResponse
-	(*SubscribeRegistryResponse)(nil),         // 48: clyde.v1.SubscribeRegistryResponse
-	(*GetProviderStatsResponse)(nil),          // 49: clyde.v1.GetProviderStatsResponse
-	(*ProviderStatsEvent)(nil),                // 50: clyde.v1.ProviderStatsEvent
-	(*RenameSessionResponse)(nil),             // 51: clyde.v1.RenameSessionResponse
-	(*DeleteSessionResponse)(nil),             // 52: clyde.v1.DeleteSessionResponse
-	(*UpdateSessionMetadataResponse)(nil),     // 53: clyde.v1.UpdateSessionMetadataResponse
-	(*UpdateSessionSettingsResponse)(nil),     // 54: clyde.v1.UpdateSessionSettingsResponse
-	(*UpdateGlobalSettingsResponse)(nil),      // 55: clyde.v1.UpdateGlobalSettingsResponse
-	(*ListConfigControlsResponse)(nil),        // 56: clyde.v1.ListConfigControlsResponse
-	(*UpdateConfigControlResponse)(nil),       // 57: clyde.v1.UpdateConfigControlResponse
-	(*CreateSessionResponse)(nil),             // 58: clyde.v1.CreateSessionResponse
-	(*StartRemoteSessionResponse)(nil),        // 59: clyde.v1.StartRemoteSessionResponse
-	(*ListLiveSessionsResponse)(nil),          // 60: clyde.v1.ListLiveSessionsResponse
-	(*StartLiveSessionResponse)(nil),          // 61: clyde.v1.StartLiveSessionResponse
-	(*SendLiveSessionResponse)(nil),           // 62: clyde.v1.SendLiveSessionResponse
-	(*StreamLiveSessionResponse)(nil),         // 63: clyde.v1.StreamLiveSessionResponse
-	(*StopLiveSessionResponse)(nil),           // 64: clyde.v1.StopLiveSessionResponse
-	(*AcquireForegroundSessionResponse)(nil),  // 65: clyde.v1.AcquireForegroundSessionResponse
-	(*ReleaseForegroundSessionResponse)(nil),  // 66: clyde.v1.ReleaseForegroundSessionResponse
-	(*ProviderLaunchEnvironmentResponse)(nil), // 67: clyde.v1.ProviderLaunchEnvironmentResponse
-	(*ListBridgesResponse)(nil),               // 68: clyde.v1.ListBridgesResponse
-	(*TailTranscriptResponse)(nil),            // 69: clyde.v1.TailTranscriptResponse
-	(*SendToSessionResponse)(nil),             // 70: clyde.v1.SendToSessionResponse
-	(*CompactEvent)(nil),                      // 71: clyde.v1.CompactEvent
-	(*CompactUndoResponse)(nil),               // 72: clyde.v1.CompactUndoResponse
-	(*ProbeContextUsageResponse)(nil),         // 73: clyde.v1.ProbeContextUsageResponse
-	(*CalibrateSessionResponse)(nil),          // 74: clyde.v1.CalibrateSessionResponse
-	(*SetCalibrationResponse)(nil),            // 75: clyde.v1.SetCalibrationResponse
+	(*OAuthAccountListRequest)(nil),           // 38: clyde.v1.OAuthAccountListRequest
+	(*OAuthAccountLoginRequest)(nil),          // 39: clyde.v1.OAuthAccountLoginRequest
+	(*OAuthAccountForgetRequest)(nil),         // 40: clyde.v1.OAuthAccountForgetRequest
+	(*AcquireSessionResponse)(nil),            // 41: clyde.v1.AcquireSessionResponse
+	(*ReleaseSessionResponse)(nil),            // 42: clyde.v1.ReleaseSessionResponse
+	(*HookEventResponse)(nil),                 // 43: clyde.v1.HookEventResponse
+	(*ListActiveSessionsResponse)(nil),        // 44: clyde.v1.ListActiveSessionsResponse
+	(*ListSessionsResponse)(nil),              // 45: clyde.v1.ListSessionsResponse
+	(*GetSessionDetailResponse)(nil),          // 46: clyde.v1.GetSessionDetailResponse
+	(*GetSessionExportStatsResponse)(nil),     // 47: clyde.v1.GetSessionExportStatsResponse
+	(*ExportSessionResponse)(nil),             // 48: clyde.v1.ExportSessionResponse
+	(*TriggerScanResponse)(nil),               // 49: clyde.v1.TriggerScanResponse
+	(*ReloadDaemonResponse)(nil),              // 50: clyde.v1.ReloadDaemonResponse
+	(*SubscribeRegistryResponse)(nil),         // 51: clyde.v1.SubscribeRegistryResponse
+	(*GetProviderStatsResponse)(nil),          // 52: clyde.v1.GetProviderStatsResponse
+	(*ProviderStatsEvent)(nil),                // 53: clyde.v1.ProviderStatsEvent
+	(*RenameSessionResponse)(nil),             // 54: clyde.v1.RenameSessionResponse
+	(*DeleteSessionResponse)(nil),             // 55: clyde.v1.DeleteSessionResponse
+	(*UpdateSessionMetadataResponse)(nil),     // 56: clyde.v1.UpdateSessionMetadataResponse
+	(*UpdateSessionSettingsResponse)(nil),     // 57: clyde.v1.UpdateSessionSettingsResponse
+	(*UpdateGlobalSettingsResponse)(nil),      // 58: clyde.v1.UpdateGlobalSettingsResponse
+	(*ListConfigControlsResponse)(nil),        // 59: clyde.v1.ListConfigControlsResponse
+	(*UpdateConfigControlResponse)(nil),       // 60: clyde.v1.UpdateConfigControlResponse
+	(*CreateSessionResponse)(nil),             // 61: clyde.v1.CreateSessionResponse
+	(*StartRemoteSessionResponse)(nil),        // 62: clyde.v1.StartRemoteSessionResponse
+	(*ListLiveSessionsResponse)(nil),          // 63: clyde.v1.ListLiveSessionsResponse
+	(*StartLiveSessionResponse)(nil),          // 64: clyde.v1.StartLiveSessionResponse
+	(*SendLiveSessionResponse)(nil),           // 65: clyde.v1.SendLiveSessionResponse
+	(*StreamLiveSessionResponse)(nil),         // 66: clyde.v1.StreamLiveSessionResponse
+	(*StopLiveSessionResponse)(nil),           // 67: clyde.v1.StopLiveSessionResponse
+	(*AcquireForegroundSessionResponse)(nil),  // 68: clyde.v1.AcquireForegroundSessionResponse
+	(*ReleaseForegroundSessionResponse)(nil),  // 69: clyde.v1.ReleaseForegroundSessionResponse
+	(*ProviderLaunchEnvironmentResponse)(nil), // 70: clyde.v1.ProviderLaunchEnvironmentResponse
+	(*ListBridgesResponse)(nil),               // 71: clyde.v1.ListBridgesResponse
+	(*TailTranscriptResponse)(nil),            // 72: clyde.v1.TailTranscriptResponse
+	(*SendToSessionResponse)(nil),             // 73: clyde.v1.SendToSessionResponse
+	(*CompactEvent)(nil),                      // 74: clyde.v1.CompactEvent
+	(*CompactUndoResponse)(nil),               // 75: clyde.v1.CompactUndoResponse
+	(*ProbeContextUsageResponse)(nil),         // 76: clyde.v1.ProbeContextUsageResponse
+	(*CalibrateSessionResponse)(nil),          // 77: clyde.v1.CalibrateSessionResponse
+	(*SetCalibrationResponse)(nil),            // 78: clyde.v1.SetCalibrationResponse
+	(*OAuthAccountListResponse)(nil),          // 79: clyde.v1.OAuthAccountListResponse
+	(*OAuthAccountLoginEvent)(nil),            // 80: clyde.v1.OAuthAccountLoginEvent
+	(*OAuthAccountForgetResponse)(nil),        // 81: clyde.v1.OAuthAccountForgetResponse
 }
 var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	0,  // 0: clyde.v1.ClydeService.AcquireSession:input_type -> clyde.v1.AcquireSessionRequest
@@ -184,47 +193,53 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	35, // 36: clyde.v1.ClydeService.ProbeContextUsage:input_type -> clyde.v1.ProbeContextUsageRequest
 	36, // 37: clyde.v1.ClydeService.CalibrateSession:input_type -> clyde.v1.CalibrateSessionRequest
 	37, // 38: clyde.v1.ClydeService.SetCalibration:input_type -> clyde.v1.SetCalibrationRequest
-	38, // 39: clyde.v1.ClydeService.AcquireSession:output_type -> clyde.v1.AcquireSessionResponse
-	39, // 40: clyde.v1.ClydeService.ReleaseSession:output_type -> clyde.v1.ReleaseSessionResponse
-	40, // 41: clyde.v1.ClydeService.HookEvent:output_type -> clyde.v1.HookEventResponse
-	41, // 42: clyde.v1.ClydeService.ListActiveSessions:output_type -> clyde.v1.ListActiveSessionsResponse
-	42, // 43: clyde.v1.ClydeService.ListSessions:output_type -> clyde.v1.ListSessionsResponse
-	43, // 44: clyde.v1.ClydeService.GetSessionDetail:output_type -> clyde.v1.GetSessionDetailResponse
-	44, // 45: clyde.v1.ClydeService.GetSessionExportStats:output_type -> clyde.v1.GetSessionExportStatsResponse
-	45, // 46: clyde.v1.ClydeService.ExportSession:output_type -> clyde.v1.ExportSessionResponse
-	46, // 47: clyde.v1.ClydeService.TriggerScan:output_type -> clyde.v1.TriggerScanResponse
-	47, // 48: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	48, // 49: clyde.v1.ClydeService.SubscribeRegistry:output_type -> clyde.v1.SubscribeRegistryResponse
-	49, // 50: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
-	50, // 51: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
-	51, // 52: clyde.v1.ClydeService.RenameSession:output_type -> clyde.v1.RenameSessionResponse
-	52, // 53: clyde.v1.ClydeService.DeleteSession:output_type -> clyde.v1.DeleteSessionResponse
-	53, // 54: clyde.v1.ClydeService.UpdateSessionMetadata:output_type -> clyde.v1.UpdateSessionMetadataResponse
-	54, // 55: clyde.v1.ClydeService.UpdateSessionSettings:output_type -> clyde.v1.UpdateSessionSettingsResponse
-	55, // 56: clyde.v1.ClydeService.UpdateGlobalSettings:output_type -> clyde.v1.UpdateGlobalSettingsResponse
-	56, // 57: clyde.v1.ClydeService.ListConfigControls:output_type -> clyde.v1.ListConfigControlsResponse
-	57, // 58: clyde.v1.ClydeService.UpdateConfigControl:output_type -> clyde.v1.UpdateConfigControlResponse
-	58, // 59: clyde.v1.ClydeService.CreateSession:output_type -> clyde.v1.CreateSessionResponse
-	59, // 60: clyde.v1.ClydeService.StartRemoteSession:output_type -> clyde.v1.StartRemoteSessionResponse
-	60, // 61: clyde.v1.ClydeService.ListLiveSessions:output_type -> clyde.v1.ListLiveSessionsResponse
-	61, // 62: clyde.v1.ClydeService.StartLiveSession:output_type -> clyde.v1.StartLiveSessionResponse
-	62, // 63: clyde.v1.ClydeService.SendLiveSession:output_type -> clyde.v1.SendLiveSessionResponse
-	63, // 64: clyde.v1.ClydeService.StreamLiveSession:output_type -> clyde.v1.StreamLiveSessionResponse
-	64, // 65: clyde.v1.ClydeService.StopLiveSession:output_type -> clyde.v1.StopLiveSessionResponse
-	65, // 66: clyde.v1.ClydeService.AcquireForegroundSession:output_type -> clyde.v1.AcquireForegroundSessionResponse
-	66, // 67: clyde.v1.ClydeService.ReleaseForegroundSession:output_type -> clyde.v1.ReleaseForegroundSessionResponse
-	67, // 68: clyde.v1.ClydeService.ProviderLaunchEnvironment:output_type -> clyde.v1.ProviderLaunchEnvironmentResponse
-	68, // 69: clyde.v1.ClydeService.ListBridges:output_type -> clyde.v1.ListBridgesResponse
-	69, // 70: clyde.v1.ClydeService.TailTranscript:output_type -> clyde.v1.TailTranscriptResponse
-	70, // 71: clyde.v1.ClydeService.SendToSession:output_type -> clyde.v1.SendToSessionResponse
-	71, // 72: clyde.v1.ClydeService.CompactPreview:output_type -> clyde.v1.CompactEvent
-	71, // 73: clyde.v1.ClydeService.CompactApply:output_type -> clyde.v1.CompactEvent
-	72, // 74: clyde.v1.ClydeService.CompactUndo:output_type -> clyde.v1.CompactUndoResponse
-	73, // 75: clyde.v1.ClydeService.ProbeContextUsage:output_type -> clyde.v1.ProbeContextUsageResponse
-	74, // 76: clyde.v1.ClydeService.CalibrateSession:output_type -> clyde.v1.CalibrateSessionResponse
-	75, // 77: clyde.v1.ClydeService.SetCalibration:output_type -> clyde.v1.SetCalibrationResponse
-	39, // [39:78] is the sub-list for method output_type
-	0,  // [0:39] is the sub-list for method input_type
+	38, // 39: clyde.v1.ClydeService.OAuthAccountList:input_type -> clyde.v1.OAuthAccountListRequest
+	39, // 40: clyde.v1.ClydeService.OAuthAccountLogin:input_type -> clyde.v1.OAuthAccountLoginRequest
+	40, // 41: clyde.v1.ClydeService.OAuthAccountForget:input_type -> clyde.v1.OAuthAccountForgetRequest
+	41, // 42: clyde.v1.ClydeService.AcquireSession:output_type -> clyde.v1.AcquireSessionResponse
+	42, // 43: clyde.v1.ClydeService.ReleaseSession:output_type -> clyde.v1.ReleaseSessionResponse
+	43, // 44: clyde.v1.ClydeService.HookEvent:output_type -> clyde.v1.HookEventResponse
+	44, // 45: clyde.v1.ClydeService.ListActiveSessions:output_type -> clyde.v1.ListActiveSessionsResponse
+	45, // 46: clyde.v1.ClydeService.ListSessions:output_type -> clyde.v1.ListSessionsResponse
+	46, // 47: clyde.v1.ClydeService.GetSessionDetail:output_type -> clyde.v1.GetSessionDetailResponse
+	47, // 48: clyde.v1.ClydeService.GetSessionExportStats:output_type -> clyde.v1.GetSessionExportStatsResponse
+	48, // 49: clyde.v1.ClydeService.ExportSession:output_type -> clyde.v1.ExportSessionResponse
+	49, // 50: clyde.v1.ClydeService.TriggerScan:output_type -> clyde.v1.TriggerScanResponse
+	50, // 51: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	51, // 52: clyde.v1.ClydeService.SubscribeRegistry:output_type -> clyde.v1.SubscribeRegistryResponse
+	52, // 53: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
+	53, // 54: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
+	54, // 55: clyde.v1.ClydeService.RenameSession:output_type -> clyde.v1.RenameSessionResponse
+	55, // 56: clyde.v1.ClydeService.DeleteSession:output_type -> clyde.v1.DeleteSessionResponse
+	56, // 57: clyde.v1.ClydeService.UpdateSessionMetadata:output_type -> clyde.v1.UpdateSessionMetadataResponse
+	57, // 58: clyde.v1.ClydeService.UpdateSessionSettings:output_type -> clyde.v1.UpdateSessionSettingsResponse
+	58, // 59: clyde.v1.ClydeService.UpdateGlobalSettings:output_type -> clyde.v1.UpdateGlobalSettingsResponse
+	59, // 60: clyde.v1.ClydeService.ListConfigControls:output_type -> clyde.v1.ListConfigControlsResponse
+	60, // 61: clyde.v1.ClydeService.UpdateConfigControl:output_type -> clyde.v1.UpdateConfigControlResponse
+	61, // 62: clyde.v1.ClydeService.CreateSession:output_type -> clyde.v1.CreateSessionResponse
+	62, // 63: clyde.v1.ClydeService.StartRemoteSession:output_type -> clyde.v1.StartRemoteSessionResponse
+	63, // 64: clyde.v1.ClydeService.ListLiveSessions:output_type -> clyde.v1.ListLiveSessionsResponse
+	64, // 65: clyde.v1.ClydeService.StartLiveSession:output_type -> clyde.v1.StartLiveSessionResponse
+	65, // 66: clyde.v1.ClydeService.SendLiveSession:output_type -> clyde.v1.SendLiveSessionResponse
+	66, // 67: clyde.v1.ClydeService.StreamLiveSession:output_type -> clyde.v1.StreamLiveSessionResponse
+	67, // 68: clyde.v1.ClydeService.StopLiveSession:output_type -> clyde.v1.StopLiveSessionResponse
+	68, // 69: clyde.v1.ClydeService.AcquireForegroundSession:output_type -> clyde.v1.AcquireForegroundSessionResponse
+	69, // 70: clyde.v1.ClydeService.ReleaseForegroundSession:output_type -> clyde.v1.ReleaseForegroundSessionResponse
+	70, // 71: clyde.v1.ClydeService.ProviderLaunchEnvironment:output_type -> clyde.v1.ProviderLaunchEnvironmentResponse
+	71, // 72: clyde.v1.ClydeService.ListBridges:output_type -> clyde.v1.ListBridgesResponse
+	72, // 73: clyde.v1.ClydeService.TailTranscript:output_type -> clyde.v1.TailTranscriptResponse
+	73, // 74: clyde.v1.ClydeService.SendToSession:output_type -> clyde.v1.SendToSessionResponse
+	74, // 75: clyde.v1.ClydeService.CompactPreview:output_type -> clyde.v1.CompactEvent
+	74, // 76: clyde.v1.ClydeService.CompactApply:output_type -> clyde.v1.CompactEvent
+	75, // 77: clyde.v1.ClydeService.CompactUndo:output_type -> clyde.v1.CompactUndoResponse
+	76, // 78: clyde.v1.ClydeService.ProbeContextUsage:output_type -> clyde.v1.ProbeContextUsageResponse
+	77, // 79: clyde.v1.ClydeService.CalibrateSession:output_type -> clyde.v1.CalibrateSessionResponse
+	78, // 80: clyde.v1.ClydeService.SetCalibration:output_type -> clyde.v1.SetCalibrationResponse
+	79, // 81: clyde.v1.ClydeService.OAuthAccountList:output_type -> clyde.v1.OAuthAccountListResponse
+	80, // 82: clyde.v1.ClydeService.OAuthAccountLogin:output_type -> clyde.v1.OAuthAccountLoginEvent
+	81, // 83: clyde.v1.ClydeService.OAuthAccountForget:output_type -> clyde.v1.OAuthAccountForgetResponse
+	42, // [42:84] is the sub-list for method output_type
+	0,  // [0:42] is the sub-list for method input_type
 	0,  // [0:0] is the sub-list for extension type_name
 	0,  // [0:0] is the sub-list for extension extendee
 	0,  // [0:0] is the sub-list for field type_name
@@ -238,6 +253,7 @@ func file_clyde_v1_daemon_service_proto_init() {
 	file_clyde_v1_daemon_bridge_proto_init()
 	file_clyde_v1_daemon_compact_proto_init()
 	file_clyde_v1_daemon_context_proto_init()
+	file_clyde_v1_daemon_oauth_account_proto_init()
 	file_clyde_v1_daemon_provider_proto_init()
 	file_clyde_v1_daemon_registry_proto_init()
 	file_clyde_v1_daemon_session_proto_init()

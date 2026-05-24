@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package clyde.v1;
+
+option go_package = "goodkind.io/clyde/api/clyde/v1;clydev1";
+
+// OAuthAccountSnapshot is a read-only view of one rotation-store account slot.
+// It mirrors the rotator's typed snapshot: provider name, derived account id,
+// operator-supplied label, token expiry, whether a refresh credential is
+// present, the active throttle window (if any), and whether the account needs
+// re-authentication because its refresh credential is dead.
+message OAuthAccountSnapshot {
+  string provider = 1;
+  string account_id = 2;
+  string label = 3;
+  int64 expires_at_ms = 4;
+  bool refresh_token_present = 5;
+  int64 throttled_until_ms = 6;
+  string throttled_claim = 7;
+  bool needs_reauth = 8;
+}
+
+message OAuthAccountListRequest {
+  // provider selects one provider by stable name (for example "anthropic").
+  // Empty lists accounts across every registered provider.
+  string provider = 1;
+}
+
+message OAuthAccountListResponse {
+  repeated OAuthAccountSnapshot accounts = 1;
+}
+
+message OAuthAccountLoginRequest {
+  string provider = 1;
+  string email = 2;
+  string label = 3;
+}
+
+// OAuthAccountLoginAuthorize carries the authorize URL the operator must visit.
+// It is the first event the login stream emits, as soon as the provider's login
+// child surfaces its URL and before the credential exchange completes.
+message OAuthAccountLoginAuthorize {
+  string authorize_url = 1;
+}
+
+// OAuthAccountLoginResult carries the account the login produced. It is the
+// final event the login stream emits, after the provider saves the new
+// credential into the rotation store.
+message OAuthAccountLoginResult {
+  OAuthAccountSnapshot account = 1;
+}
+
+// OAuthAccountLoginEvent is one of the two login stream phases. The two cases
+// are modeled explicitly rather than as a bare string union so each carries its
+// own typed fields.
+message OAuthAccountLoginEvent {
+  oneof event {
+    OAuthAccountLoginAuthorize authorize = 1;
+    OAuthAccountLoginResult result = 2;
+  }
+}
+
+message OAuthAccountForgetRequest {
+  string provider = 1;
+  string id_or_label = 2;
+}
+
+message OAuthAccountForgetResponse {
+  // forgotten reports whether an account matched id_or_label and was removed.
+  bool forgotten = 1;
+  // account_id is the resolved account id that was removed, when forgotten.
+  string account_id = 2;
+}

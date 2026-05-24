@@ -58,6 +58,9 @@ const (
 	ClydeService_ProbeContextUsage_FullMethodName         = "/clyde.v1.ClydeService/ProbeContextUsage"
 	ClydeService_CalibrateSession_FullMethodName          = "/clyde.v1.ClydeService/CalibrateSession"
 	ClydeService_SetCalibration_FullMethodName            = "/clyde.v1.ClydeService/SetCalibration"
+	ClydeService_OAuthAccountList_FullMethodName          = "/clyde.v1.ClydeService/OAuthAccountList"
+	ClydeService_OAuthAccountLogin_FullMethodName         = "/clyde.v1.ClydeService/OAuthAccountLogin"
+	ClydeService_OAuthAccountForget_FullMethodName        = "/clyde.v1.ClydeService/OAuthAccountForget"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -103,6 +106,9 @@ type ClydeServiceClient interface {
 	ProbeContextUsage(ctx context.Context, in *ProbeContextUsageRequest, opts ...grpc.CallOption) (*ProbeContextUsageResponse, error)
 	CalibrateSession(ctx context.Context, in *CalibrateSessionRequest, opts ...grpc.CallOption) (*CalibrateSessionResponse, error)
 	SetCalibration(ctx context.Context, in *SetCalibrationRequest, opts ...grpc.CallOption) (*SetCalibrationResponse, error)
+	OAuthAccountList(ctx context.Context, in *OAuthAccountListRequest, opts ...grpc.CallOption) (*OAuthAccountListResponse, error)
+	OAuthAccountLogin(ctx context.Context, in *OAuthAccountLoginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OAuthAccountLoginEvent], error)
+	OAuthAccountForget(ctx context.Context, in *OAuthAccountForgetRequest, opts ...grpc.CallOption) (*OAuthAccountForgetResponse, error)
 }
 
 type clydeServiceClient struct {
@@ -557,6 +563,45 @@ func (c *clydeServiceClient) SetCalibration(ctx context.Context, in *SetCalibrat
 	return out, nil
 }
 
+func (c *clydeServiceClient) OAuthAccountList(ctx context.Context, in *OAuthAccountListRequest, opts ...grpc.CallOption) (*OAuthAccountListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OAuthAccountListResponse)
+	err := c.cc.Invoke(ctx, ClydeService_OAuthAccountList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) OAuthAccountLogin(ctx context.Context, in *OAuthAccountLoginRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[OAuthAccountLoginEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[6], ClydeService_OAuthAccountLogin_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[OAuthAccountLoginRequest, OAuthAccountLoginEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_OAuthAccountLoginClient = grpc.ServerStreamingClient[OAuthAccountLoginEvent]
+
+func (c *clydeServiceClient) OAuthAccountForget(ctx context.Context, in *OAuthAccountForgetRequest, opts ...grpc.CallOption) (*OAuthAccountForgetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OAuthAccountForgetResponse)
+	err := c.cc.Invoke(ctx, ClydeService_OAuthAccountForget_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClydeServiceServer is the server API for ClydeService service.
 // All implementations should embed UnimplementedClydeServiceServer
 // for forward compatibility.
@@ -600,6 +645,9 @@ type ClydeServiceServer interface {
 	ProbeContextUsage(context.Context, *ProbeContextUsageRequest) (*ProbeContextUsageResponse, error)
 	CalibrateSession(context.Context, *CalibrateSessionRequest) (*CalibrateSessionResponse, error)
 	SetCalibration(context.Context, *SetCalibrationRequest) (*SetCalibrationResponse, error)
+	OAuthAccountList(context.Context, *OAuthAccountListRequest) (*OAuthAccountListResponse, error)
+	OAuthAccountLogin(*OAuthAccountLoginRequest, grpc.ServerStreamingServer[OAuthAccountLoginEvent]) error
+	OAuthAccountForget(context.Context, *OAuthAccountForgetRequest) (*OAuthAccountForgetResponse, error)
 }
 
 // UnimplementedClydeServiceServer should be embedded to have
@@ -725,6 +773,15 @@ func (UnimplementedClydeServiceServer) CalibrateSession(context.Context, *Calibr
 }
 func (UnimplementedClydeServiceServer) SetCalibration(context.Context, *SetCalibrationRequest) (*SetCalibrationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetCalibration not implemented")
+}
+func (UnimplementedClydeServiceServer) OAuthAccountList(context.Context, *OAuthAccountListRequest) (*OAuthAccountListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OAuthAccountList not implemented")
+}
+func (UnimplementedClydeServiceServer) OAuthAccountLogin(*OAuthAccountLoginRequest, grpc.ServerStreamingServer[OAuthAccountLoginEvent]) error {
+	return status.Error(codes.Unimplemented, "method OAuthAccountLogin not implemented")
+}
+func (UnimplementedClydeServiceServer) OAuthAccountForget(context.Context, *OAuthAccountForgetRequest) (*OAuthAccountForgetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OAuthAccountForget not implemented")
 }
 func (UnimplementedClydeServiceServer) testEmbeddedByValue() {}
 
@@ -1406,6 +1463,53 @@ func _ClydeService_SetCalibration_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_OAuthAccountList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OAuthAccountListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).OAuthAccountList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_OAuthAccountList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).OAuthAccountList(ctx, req.(*OAuthAccountListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_OAuthAccountLogin_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(OAuthAccountLoginRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).OAuthAccountLogin(m, &grpc.GenericServerStream[OAuthAccountLoginRequest, OAuthAccountLoginEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_OAuthAccountLoginServer = grpc.ServerStreamingServer[OAuthAccountLoginEvent]
+
+func _ClydeService_OAuthAccountForget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OAuthAccountForgetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).OAuthAccountForget(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_OAuthAccountForget_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).OAuthAccountForget(ctx, req.(*OAuthAccountForgetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClydeService_ServiceDesc is the grpc.ServiceDesc for ClydeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1545,6 +1649,14 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "SetCalibration",
 			Handler:    _ClydeService_SetCalibration_Handler,
 		},
+		{
+			MethodName: "OAuthAccountList",
+			Handler:    _ClydeService_OAuthAccountList_Handler,
+		},
+		{
+			MethodName: "OAuthAccountForget",
+			Handler:    _ClydeService_OAuthAccountForget_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1575,6 +1687,11 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "CompactApply",
 			Handler:       _ClydeService_CompactApply_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "OAuthAccountLogin",
+			Handler:       _ClydeService_OAuthAccountLogin_Handler,
 			ServerStreams: true,
 		},
 	},
