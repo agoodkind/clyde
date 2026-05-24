@@ -48,7 +48,7 @@ CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then
 .PHONY: test-ginkgo test-watch coverage \
         install-build-guard uninstall-build-guard setup-hooks \
         install-hook uninstall-hook \
-        deploy deadcode
+        deploy deadcode proto
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
 # runs ginkgo specs registered through RunSpecs. test-ginkgo is for when you
@@ -65,6 +65,19 @@ coverage: ## Generate coverage report via ginkgo
 	@echo "coverage report: coverage.html"
 
 deadcode: lint-deadcode ## Alias for the central deadcode gate
+
+# ---------------------------------------------------------------------------
+# Protobuf / gRPC codegen. Sources live under api/**/*.proto; config is
+# buf.yaml + buf.gen.yaml (remote plugins, so only the buf binary is needed).
+# Wired as a prerequisite of build so generated code stays in sync; note buf
+# generate reaches buf.build for remote plugins, so it needs network.
+# ---------------------------------------------------------------------------
+
+proto: ## Regenerate protobuf/gRPC Go code from api/**/*.proto via buf
+	@command -v buf >/dev/null 2>&1 || { echo "proto: 'buf' not found on PATH; install it (brew install bufbuild/buf/buf) or see https://buf.build/docs/installation"; exit 1; }
+	@buf generate
+
+build: proto
 
 # ---------------------------------------------------------------------------
 # Build-guard: install a GOFLAGS=-toolexec wrapper that enforces clyde's
