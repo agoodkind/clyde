@@ -619,7 +619,6 @@ The three new rows above belong to the CLYDE-415, CLYDE-416, CLYDE-417 column on
 |--------|---------|
 | CLYDE-345 | Planner drops near-tail user messages under chat-only Apply |
 | CLYDE-354 | Compact panel Progress region first row is iter 3 not iter 1 |
-| CLYDE-356 | Apply mutates disk when final projection is over target |
 | CLYDE-357 | Compact panel Context block shows dashes on form-open |
 | CLYDE-358 | Dashboard `/` filter binding actually opens transcript search |
 | CLYDE-359 | Dashboard `G` opens DETAIL pane instead of jumping to bottom |
