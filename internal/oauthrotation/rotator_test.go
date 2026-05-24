@@ -444,19 +444,24 @@ func TestRefreshIsDue(t *testing.T) {
 	now := time.UnixMilli(10_000_000)
 	tests := []struct {
 		name      string
+		window    time.Duration
 		expiresAt time.Time
 		want      bool
 	}{
-		{name: "well within validity not due", expiresAt: now.Add(time.Hour), want: false},
-		{name: "just outside safety window not due", expiresAt: now.Add(refreshSafetyWindow + time.Minute), want: false},
-		{name: "exactly at safety window edge is due", expiresAt: now.Add(refreshSafetyWindow), want: true},
-		{name: "inside safety window is due", expiresAt: now.Add(refreshSafetyWindow - time.Minute), want: true},
-		{name: "already expired is due", expiresAt: now.Add(-time.Hour), want: true},
-		{name: "zero expiry is due", expiresAt: time.Time{}, want: true},
+		{name: "well within validity not due", window: defaultRefreshSafetyWindow, expiresAt: now.Add(time.Hour), want: false},
+		{name: "just outside safety window not due", window: defaultRefreshSafetyWindow, expiresAt: now.Add(defaultRefreshSafetyWindow + time.Minute), want: false},
+		{name: "exactly at safety window edge is due", window: defaultRefreshSafetyWindow, expiresAt: now.Add(defaultRefreshSafetyWindow), want: true},
+		{name: "inside safety window is due", window: defaultRefreshSafetyWindow, expiresAt: now.Add(defaultRefreshSafetyWindow - time.Minute), want: true},
+		{name: "already expired is due", window: defaultRefreshSafetyWindow, expiresAt: now.Add(-time.Hour), want: true},
+		{name: "zero expiry is due", window: defaultRefreshSafetyWindow, expiresAt: time.Time{}, want: true},
+		{name: "one hour window treats thirty minutes to expiry as due", window: time.Hour, expiresAt: now.Add(30 * time.Minute), want: true},
+		{name: "one hour window treats five hours to expiry as not due", window: time.Hour, expiresAt: now.Add(5 * time.Hour), want: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := refreshIsDue(now, tc.expiresAt); got != tc.want {
+			rot := NewRotator(nil)
+			rot.SetRefreshSafetyWindow(tc.window)
+			if got := rot.refreshIsDue(now, tc.expiresAt); got != tc.want {
 				t.Fatalf("refreshIsDue(now, %s) = %v, want %v", tc.expiresAt, got, tc.want)
 			}
 		})
@@ -480,7 +485,7 @@ func TestRotatorRefreshDue(t *testing.T) {
 		{
 			name: "account inside safety window is refreshed",
 			expiries: map[string]time.Time{
-				"acct-a": now.Add(refreshSafetyWindow - time.Minute),
+				"acct-a": now.Add(defaultRefreshSafetyWindow - time.Minute),
 			},
 			wantRefreshed: map[string]int64{"acct-a": 1},
 		},
@@ -545,7 +550,7 @@ func TestRotatorRefreshDueStartupRefreshesDueAccount(t *testing.T) {
 	now := time.UnixMilli(40_000_000)
 	ctx := context.Background()
 	rot, prov := seedRotatorWithExpiry(t, now, map[string]time.Time{
-		"acct-a": now.Add(refreshSafetyWindow - time.Minute),
+		"acct-a": now.Add(defaultRefreshSafetyWindow - time.Minute),
 	})
 
 	if err := rot.RefreshDue(ctx); err != nil {

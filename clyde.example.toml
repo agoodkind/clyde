@@ -139,6 +139,8 @@ scopes = [
 switch_on_limit = true
 scan_interval = "5m"
 refresh_interval = "30m"
+# refresh an account only when the access token is within this window of expiry.
+refresh_safety_window = "1h"
 # set_claude_config_dir makes a Clyde-launched `claude` authenticate as the
 # rotator's currently-selected account instead of your own Claude Code login.
 # The daemon plants the selected account's .credentials.json (0600) in a fresh

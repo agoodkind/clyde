@@ -26,6 +26,8 @@ const anthropicProviderName provider.Name = "anthropic"
 // rotatorTokenSource) and its rate-limit sink.
 func buildAnthropicRotator(oauthCfg config.AdapterOAuth, log *slog.Logger) *oauthrotation.Rotator {
 	rotator := oauthrotation.NewRotator(log)
+	rotation := oauthCfg.Accounts.WithDefaults()
+	rotator.SetRefreshSafetyWindow(rotation.RefreshSafetyWindow.AsDuration())
 	rotator.Register(oauthprovider.New(oauthCfg, ""))
 	return rotator
 }

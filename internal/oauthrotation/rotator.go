@@ -23,14 +23,15 @@ const (
 	refreshLockTimeout = 10 * time.Second
 	// refreshLockRetry is the poll interval while waiting for the lock.
 	refreshLockRetry = 100 * time.Millisecond
-	// refreshSafetyWindow is how far ahead of a stored credential's ExpiresAt a
-	// refresh is allowed to run. An account is "due" only when now plus this
+	// defaultRefreshSafetyWindow is the fallback for how far ahead of a stored
+	// credential's ExpiresAt a refresh is allowed to run when no configured
+	// window is set on the rotator. An account is "due" only when now plus this
 	// window reaches or passes its ExpiresAt, so a healthy account is renewed
 	// about once per token lifetime rather than on every refresh-loop tick or
 	// daemon reload. Anthropic rotates the refresh token on every refresh and
 	// invalidates the prior one, so refreshing a still-valid account strands the
 	// shared keychain credential other tools rely on (see CLYDE-457/CLYDE-458).
-	refreshSafetyWindow = 5 * time.Minute
+	defaultRefreshSafetyWindow = 5 * time.Minute
 )
 
 // AccountSnapshot is a read-only view of one account slot for the RPC layer.
@@ -87,6 +88,10 @@ type Rotator struct {
 	providers map[provider.Name]*providerState
 	logger    *slog.Logger
 	now       func() time.Time
+	// refreshSafetyWindow is how far ahead of a credential's ExpiresAt a refresh
+	// is allowed to run. It defaults to defaultRefreshSafetyWindow and is
+	// overridden by SetRefreshSafetyWindow from configuration.
+	refreshSafetyWindow time.Duration
 }
 
 // NewRotator builds an empty rotator. A nil logger falls back to [slog.Default].
@@ -95,10 +100,20 @@ func NewRotator(logger *slog.Logger) *Rotator {
 		logger = slog.Default()
 	}
 	return &Rotator{
-		mu:        sync.RWMutex{},
-		providers: make(map[provider.Name]*providerState),
-		logger:    logger,
-		now:       time.Now,
+		mu:                  sync.RWMutex{},
+		providers:           make(map[provider.Name]*providerState),
+		logger:              logger,
+		now:                 time.Now,
+		refreshSafetyWindow: defaultRefreshSafetyWindow,
+	}
+}
+
+// SetRefreshSafetyWindow overrides how far ahead of a credential's ExpiresAt a
+// refresh is allowed to run. It assigns only when d is positive so a zero or
+// negative configured value leaves the default in place.
+func (r *Rotator) SetRefreshSafetyWindow(d time.Duration) {
+	if d > 0 {
+		r.refreshSafetyWindow = d
 	}
 }
 
@@ -358,7 +373,7 @@ func (r *Rotator) RefreshDue(ctx context.Context) error {
 			expiresAt := slot.cred.ExpiresAt
 			account := slot.account
 			slot.mu.Unlock()
-			if !refreshIsDue(now, expiresAt) {
+			if !r.refreshIsDue(now, expiresAt) {
 				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_not_due",
 					"component", "oauthrotation",
 					"provider", string(entry.name),
@@ -379,11 +394,11 @@ func (r *Rotator) RefreshDue(ctx context.Context) error {
 // refreshed at now: it is due once now plus the safety window reaches or passes
 // expiresAt. A zero expiresAt is treated as due because an unknown expiry can
 // not be proven still valid.
-func refreshIsDue(now time.Time, expiresAt time.Time) bool {
+func (r *Rotator) refreshIsDue(now time.Time, expiresAt time.Time) bool {
 	if expiresAt.IsZero() {
 		return true
 	}
-	return !now.Add(refreshSafetyWindow).Before(expiresAt)
+	return !now.Add(r.refreshSafetyWindow).Before(expiresAt)
 }
 
 // Accounts returns read-only snapshots for the RPC layer, in stable order.

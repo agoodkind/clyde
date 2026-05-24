@@ -802,6 +802,10 @@ const (
 	// DefaultOAuthRotationRefreshInterval is the cadence the rotation layer
 	// refreshes every harvested account's access token.
 	DefaultOAuthRotationRefreshInterval = Duration(30 * time.Minute)
+	// DefaultOAuthRotationRefreshSafetyWindow is how far ahead of a stored
+	// credential's ExpiresAt the rotator refreshes an account. An account is
+	// "due" only when now plus this window reaches or passes its ExpiresAt.
+	DefaultOAuthRotationRefreshSafetyWindow = Duration(1 * time.Hour)
 )
 
 // AdapterOAuthRotation configures Clyde's OAuth rotation layer.
@@ -830,6 +834,10 @@ type AdapterOAuthRotation struct {
 	// back to the planted file and never touches the real keychain or
 	// ~/.claude. Default is false because it changes how claude launches.
 	SetClaudeConfigDir bool `json:"setClaudeConfigDir,omitempty" toml:"set_claude_config_dir,omitempty"`
+	// RefreshSafetyWindow is how far ahead of a stored credential's ExpiresAt
+	// the rotator refreshes an account. A zero value is treated as "use the
+	// default" by WithDefaults.
+	RefreshSafetyWindow Duration `json:"refreshSafetyWindow,omitempty" toml:"refresh_safety_window,omitempty"`
 }
 
 // WithDefaults returns a copy with zero intervals replaced by their defaults.
@@ -839,6 +847,9 @@ func (r AdapterOAuthRotation) WithDefaults() AdapterOAuthRotation {
 	}
 	if r.RefreshInterval <= 0 {
 		r.RefreshInterval = DefaultOAuthRotationRefreshInterval
+	}
+	if r.RefreshSafetyWindow <= 0 {
+		r.RefreshSafetyWindow = DefaultOAuthRotationRefreshSafetyWindow
 	}
 	return r
 }
@@ -852,6 +863,9 @@ func (r AdapterOAuthRotation) Validate() error {
 	}
 	if r.RefreshInterval < 0 {
 		return fmt.Errorf("adapter: [adapter.anthropic.oauth.accounts].refresh_interval must be greater than 0")
+	}
+	if r.RefreshSafetyWindow < 0 {
+		return fmt.Errorf("adapter: [adapter.anthropic.oauth.accounts].refresh_safety_window must be greater than 0")
 	}
 	return nil
 }

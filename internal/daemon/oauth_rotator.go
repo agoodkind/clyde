@@ -23,6 +23,8 @@ func buildDaemonOAuthRotator(cfg config.AdapterConfig, log *slog.Logger) *oauthr
 	}
 	rotatorLog := slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth)
 	rotator := oauthrotation.NewRotator(rotatorLog)
+	rotation := cfg.Anthropic.OAuth.Accounts.WithDefaults()
+	rotator.SetRefreshSafetyWindow(rotation.RefreshSafetyWindow.AsDuration())
 	rotator.Register(oauthprovider.New(cfg.Anthropic.OAuth, ""))
 	return rotator
 }
