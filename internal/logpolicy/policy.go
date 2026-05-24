@@ -461,6 +461,7 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 			MaxBackups: cleanupInt(processSink.Cleanup.MaxBackups),
 			MaxTotalMB: cleanupInt(processSink.Cleanup.MaxTotalMB),
 		},
+		AsyncCleanup: role == slogger.ProcessRoleDaemon,
 	}
 	if !concernSink.Enabled {
 		for concernName, concernPolicy := range setupPolicy.ConcernPolicies {

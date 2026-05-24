@@ -250,15 +250,22 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			KeepaliveSeen: false,
 		}, closer, livetrack.WithParent(parent))
 		if registerErr != nil {
-			p.log.WarnContext(ctx, "mitm.provider.http.register_rejected", "provider", providerID, "host", host, "err", registerErr)
-			return
+			if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil || p.Tunnels.State() != livetrack.StateDraining {
+				p.log.WarnContext(ctx, "mitm.provider.http.register_rejected", "provider", providerID, "host", host, "err", registerErr)
+				return
+			}
+			p.log.DebugContext(ctx, "mitm.provider.http.register_skipped_reload_drain", "provider", providerID, "host", host, "err", registerErr)
 		}
 		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider); err != nil {
 			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
-			p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.failed")
+			if reqSess != nil {
+				p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.failed")
+			}
 			return
 		}
-		p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.completed")
+		if reqSess != nil {
+			p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.completed")
+		}
 		if req.Close {
 			return
 		}

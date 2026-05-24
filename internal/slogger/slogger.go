@@ -54,42 +54,26 @@ func DefaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {
 // SetupWithPolicy initializes slog from a resolved typed policy. This is the
 // policy-driven path for config/logpolicy resolvers.
 func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
-	if err := applyCleanupPolicy(policy.CleanupPolicy); err != nil {
-		return nopCloser{Closed: false}, err
+	if !policy.AsyncCleanup {
+		if err := applyCleanupPolicy(policy.CleanupPolicy); err != nil {
+			return nopCloser{Closed: false}, err
+		}
 	}
 	if err := validateConcernPolicyNames(policy.ConcernPolicies); err != nil {
 		return nopCloser{Closed: false}, err
 	}
-	appendSharedHandlers := func(handlers []slog.Handler, rotation RotationPolicy) []slog.Handler {
-		handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, rotation, policy.ConcernPolicies)...)
-		if captureHandler := buildMITMCaptureIndexHandler(policy.MITMCapturePolicy, policy.Level); captureHandler != nil {
-			handlers = append(handlers, captureHandler)
-		}
-		if inventoryHandler := buildInventoryIndexHandler(policy.InventoryPolicy, policy.ConcernRoot, policy.Level); inventoryHandler != nil {
-			handlers = append(handlers, inventoryHandler)
-		}
-		if router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot); router != nil {
-			handlers = append(handlers, router)
-		}
-		return handlers
+	closer, err := setupPolicyLogger(policy)
+	if err != nil {
+		return nopCloser{Closed: false}, err
 	}
-	buildAsyncLogger := func(handlers []slog.Handler) (io.Closer, error) {
-		if len(handlers) == 0 {
-			handlers = append(handlers, slog.DiscardHandler)
-		}
-		handlerCloser := handlersCloser(handlers)
-		rootHandler := newCorrelationHandler(newAsyncHandler(gklog.NewTeeHandler(handlers...), handlerCloser))
-		logger := slog.New(rootHandler).With("build", version.String())
-		slog.SetDefault(logger)
-		closer, ok := rootHandler.(io.Closer)
-		if !ok {
-			return nopCloser{Closed: false}, nil
-		}
-		return closer, nil
-	}
+	startAsyncCleanup(policy)
+	return closer, nil
+}
+
+func setupPolicyLogger(policy SetupPolicy) (io.Closer, error) {
 	if !policy.ProcessSink.Enabled {
-		handlers := appendSharedHandlers(nil, policy.ProcessSink.Rotation)
-		return buildAsyncLogger(handlers)
+		handlers := appendSharedPolicyHandlers(nil, policy, policy.ProcessSink.Rotation)
+		return buildPolicyAsyncLogger(handlers), nil
 	}
 	path := policy.ProcessSink.Path
 	if strings.TrimSpace(path) == "" {
@@ -123,19 +107,60 @@ func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
 			MaxAgeDays: 0,
 			Compress:   nil,
 		}
-		handlers = appendSharedHandlers(handlers, disabledRotation)
-		closer, err := buildAsyncLogger(handlers)
-		if err != nil {
-			_ = lockedFile.Close()
-			return nopCloser{Closed: false}, err
-		}
+		handlers = appendSharedPolicyHandlers(handlers, policy, disabledRotation)
+		closer := buildPolicyAsyncLogger(handlers)
 		return newMultiCloser(closer, lockedFile), nil
 	}
 	handlers := []slog.Handler{
 		gklog.FileJSON(path, policy.Level, rotationConfig(policy.ProcessSink.Rotation)),
 	}
-	handlers = appendSharedHandlers(handlers, policy.ProcessSink.Rotation)
-	return buildAsyncLogger(handlers)
+	handlers = appendSharedPolicyHandlers(handlers, policy, policy.ProcessSink.Rotation)
+	return buildPolicyAsyncLogger(handlers), nil
+}
+
+func appendSharedPolicyHandlers(handlers []slog.Handler, policy SetupPolicy, rotation RotationPolicy) []slog.Handler {
+	handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, rotation, policy.ConcernPolicies)...)
+	if captureHandler := buildMITMCaptureIndexHandler(policy.MITMCapturePolicy, policy.Level); captureHandler != nil {
+		handlers = append(handlers, captureHandler)
+	}
+	if inventoryHandler := buildInventoryIndexHandler(policy.InventoryPolicy, policy.ConcernRoot, policy.Level); inventoryHandler != nil {
+		handlers = append(handlers, inventoryHandler)
+	}
+	if router := buildTranscriptRouter(policy.TranscriptPolicy, policy.ConcernRoot); router != nil {
+		handlers = append(handlers, router)
+	}
+	return handlers
+}
+
+func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
+	if len(handlers) == 0 {
+		handlers = append(handlers, slog.DiscardHandler)
+	}
+	handlerCloser := handlersCloser(handlers)
+	rootHandler := newCorrelationHandler(newAsyncHandler(gklog.NewTeeHandler(handlers...), handlerCloser))
+	logger := slog.New(rootHandler).With("build", version.String())
+	slog.SetDefault(logger)
+	closer, ok := rootHandler.(io.Closer)
+	if !ok {
+		return nopCloser{Closed: false}
+	}
+	return closer
+}
+
+func startAsyncCleanup(policy SetupPolicy) {
+	if !policy.AsyncCleanup {
+		return
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("slogger.cleanup.async_panicked", "component", "slogger", "err", fmt.Errorf("panic: %v", recovered))
+			}
+		}()
+		if err := applyCleanupPolicy(policy.CleanupPolicy); err != nil {
+			slog.Warn("slogger.cleanup.async_failed", "component", "slogger", "err", err)
+		}
+	}()
 }
 
 // buildTranscriptRouter returns a configured router, or nil when the feature

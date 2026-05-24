@@ -172,6 +172,9 @@ func TestResolveSloggerSetupConvertsPolicies(t *testing.T) {
 	if policy.ProcessSink.Enabled {
 		t.Fatalf("daemon process sink should be disabled when omitted from enabled sinks")
 	}
+	if !policy.AsyncCleanup {
+		t.Fatalf("daemon setup should defer cleanup until after logger setup")
+	}
 	if !policy.InventoryPolicy.Enabled {
 		t.Fatalf("inventory sink should be enabled by configured sink set")
 	}
