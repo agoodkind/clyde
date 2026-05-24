@@ -28,6 +28,7 @@ Prefer code and tests over this file for exact behavior.
 - Use `internal/adapter/` for adapter, Cursor, Codex, Anthropic, model routing, and request-shape details.
 - Use `docs/SLOG.md`, `docs/logging/`, and `internal/slogger/` for detailed logging, sink, inventory, and correlation contracts.
 - Use `docs/cursor.md` for the empirical reasons behind Cursor-specific rules.
+- Use `docs/oauth-rotation/` and `internal/oauthrotation/` for the multi-account Anthropic OAuth rotation store, harvest, selection, refresh, throttle, login, and launch-credential contracts.
 
 Do not add stale snapshots of command tables, schemas, request payloads, local machine setup, or dated audits to this file. Add links or brief pointers instead.
 
