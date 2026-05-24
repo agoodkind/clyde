@@ -433,7 +433,8 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 		env[envEnableSelfReload] = "1"
 	}
 	maps.Copy(env, opts.ExtraEnvironment)
-	applyMITMEnv(env)
+	applyDaemonLaunchEnv(env)
+	defer cleanupLaunchCredentialDir(env)
 
 	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
 	defer cleanupSettings()
@@ -470,7 +471,8 @@ func StartNewInteractive(env map[string]string, settingsFile string, workDir str
 		env["CLYDE_SESSION_ID"] = sessionID
 		args = append(args, "--session-id", sessionID)
 	}
-	applyMITMEnv(env)
+	applyDaemonLaunchEnv(env)
+	defer cleanupLaunchCredentialDir(env)
 	if forceRemoteControl || remoteControlEnabled(effectiveSettingsFile) {
 		return invokeInteractivePTY(args, env, workDir, sessionID)
 	}
@@ -488,15 +490,21 @@ func launchSessionID(env map[string]string, sessionID string) string {
 	return strings.TrimSpace(env["CLYDE_SESSION_ID"])
 }
 
-func applyMITMEnv(env map[string]string) {
+// applyDaemonLaunchEnv fetches the daemon-owned claude launch environment and
+// merges it into env through Clyde-owned apply helpers. The daemon decides what
+// to contribute: ANTHROPIC_BASE_URL when MITM capture is on, CLAUDE_CONFIG_DIR
+// when [adapter.oauth.rotation].route_launched_claude is on (CLYDE-448), or
+// nothing. The fetch runs regardless of MITM so the rotator-credentials path
+// works with capture disabled; the MITM-specific sanitize of stale Clyde-owned
+// values only runs when MITM is enabled for claude, matching prior behavior.
+func applyDaemonLaunchEnv(env map[string]string) {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
 		return
 	}
-	if !cfg.MITM.EnabledDefault || !cfg.MITM.EnabledFor("claude") {
-		return
+	if cfg.MITM.EnabledDefault && cfg.MITM.EnabledFor("claude") {
+		claudeprovider.SanitizeMITMMap(env)
 	}
-	claudeprovider.SanitizeMITMMap(env)
 	extra, err := providerLaunchEnvironmentViaDaemon(context.Background(), "claude")
 	if err != nil {
 		claudeLog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
@@ -506,11 +514,36 @@ func applyMITMEnv(env map[string]string) {
 		if item.GetKey() == "" {
 			continue
 		}
-		if item.GetKey() == claudeprovider.AnthropicBaseURLEnv {
+		switch item.GetKey() {
+		case claudeprovider.AnthropicBaseURLEnv:
 			claudeprovider.ApplyMITMMap(env, item.GetValue())
-			continue
+		case claudeprovider.ClaudeConfigDirEnv:
+			claudeprovider.ApplyClaudeConfigDirMap(env, item.GetValue())
+		default:
+			env[item.GetKey()] = item.GetValue()
 		}
-		env[item.GetKey()] = item.GetValue()
+	}
+}
+
+// cleanupLaunchCredentialDir removes the rotator-planted CLAUDE_CONFIG_DIR
+// scratch dir after the launched claude exits, so planted token material does
+// not outlive the process. It only removes a dir Clyde itself planted (marked
+// by ClydeLaunchClaudeConfigDirEnv) so a user-supplied CLAUDE_CONFIG_DIR is
+// never deleted. The daemon's Close path is the backstop for a crashed wrapper.
+func cleanupLaunchCredentialDir(env map[string]string) {
+	if env[claudeprovider.ClydeLaunchClaudeConfigDirEnv] != "1" {
+		return
+	}
+	dir := strings.TrimSpace(env[claudeprovider.ClaudeConfigDirEnv])
+	if dir == "" {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		claudeLog.Warn("wrapper.launch_credentials.cleanup_failed",
+			"component", "wrapper",
+			"config_dir", dir,
+			"err", err,
+		)
 	}
 }
 

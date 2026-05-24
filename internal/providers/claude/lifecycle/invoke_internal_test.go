@@ -237,7 +237,7 @@ func TestApplyMITMEnvAddsAnthropicBaseURLForWrapperLaunch(t *testing.T) {
 		"ANTHROPIC_BASE_URL": "https://old.example",
 		"KEEP":               "1",
 	}
-	applyMITMEnv(env)
+	applyDaemonLaunchEnv(env)
 
 	if env["KEEP"] != "1" {
 		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
@@ -274,7 +274,7 @@ func TestApplyMITMEnvFailsOpenWhenDaemonUnavailable(t *testing.T) {
 		"ANTHROPIC_BASE_URL": "https://old.example",
 		"KEEP":               "1",
 	}
-	applyMITMEnv(env)
+	applyDaemonLaunchEnv(env)
 
 	if env["KEEP"] != "1" {
 		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
@@ -307,7 +307,7 @@ func TestApplyMITMEnvDropsInheritedLoopbackWhenDaemonUnavailable(t *testing.T) {
 		"ANTHROPIC_BASE_URL": "http://[::1]:50067",
 		"KEEP":               "1",
 	}
-	applyMITMEnv(env)
+	applyDaemonLaunchEnv(env)
 
 	if env["KEEP"] != "1" {
 		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])

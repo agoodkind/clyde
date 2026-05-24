@@ -30,6 +30,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/daemonclient"
+	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	"goodkind.io/clyde/internal/providers/mitmcontrib"
 	"goodkind.io/clyde/internal/providers/registry"
 	"goodkind.io/clyde/internal/session"
@@ -1045,6 +1046,17 @@ func applyClaudeMITMEnv(ctx context.Context, env []string) []string {
 		}
 		for _, item := range extra {
 			if item.GetKey() == "" {
+				continue
+			}
+			// CLAUDE_CONFIG_DIR is the rotator launch-credentials contribution
+			// (CLYDE-448). It plants a scratch dir the launching process must
+			// remove on child exit. This passthrough-forward helper has no such
+			// cleanup, so it would leak planted token material; the lifecycle
+			// launch path (internal/providers/claude/lifecycle) owns that flow
+			// and its cleanup. Skip the key here. Follow-up: extend rotator
+			// launch credentials to the `clyde claude ...` forward path with
+			// matching scratch-dir cleanup.
+			if item.GetKey() == claudeprovider.ClaudeConfigDirEnv {
 				continue
 			}
 			out = withEnvValue(out, item.GetKey(), item.GetValue())

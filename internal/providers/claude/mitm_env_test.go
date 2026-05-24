@@ -70,3 +70,89 @@ func TestApplyMITMMapMarksBaseURLAsClydeOwned(t *testing.T) {
 		t.Fatalf("%s = %q", ClydeMITMAnthropicBaseURLEnv, env[ClydeMITMAnthropicBaseURLEnv])
 	}
 }
+
+func TestApplyClaudeConfigDirMapMarksConfigDirAsClydeOwned(t *testing.T) {
+	env := map[string]string{}
+
+	ApplyClaudeConfigDirMap(env, " /tmp/scratch ")
+
+	if env[ClaudeConfigDirEnv] != "/tmp/scratch" {
+		t.Fatalf("%s = %q", ClaudeConfigDirEnv, env[ClaudeConfigDirEnv])
+	}
+	if env[ClydeLaunchClaudeConfigDirEnv] != "1" {
+		t.Fatalf("%s = %q", ClydeLaunchClaudeConfigDirEnv, env[ClydeLaunchClaudeConfigDirEnv])
+	}
+}
+
+func TestApplyClaudeConfigDirMapIgnoresEmpty(t *testing.T) {
+	env := map[string]string{}
+
+	ApplyClaudeConfigDirMap(env, "   ")
+
+	if _, ok := env[ClaudeConfigDirEnv]; ok {
+		t.Fatalf("%s set for empty config dir: %#v", ClaudeConfigDirEnv, env)
+	}
+	if _, ok := env[ClydeLaunchClaudeConfigDirEnv]; ok {
+		t.Fatalf("%s set for empty config dir: %#v", ClydeLaunchClaudeConfigDirEnv, env)
+	}
+}
+
+func TestSanitizeMITMMapScrubsMarkedClaudeConfigDir(t *testing.T) {
+	env := map[string]string{
+		ClaudeConfigDirEnv:            "/tmp/stale-scratch",
+		ClydeLaunchClaudeConfigDirEnv: "1",
+		"KEEP":                        "1",
+	}
+
+	SanitizeMITMMap(env)
+
+	if _, ok := env[ClaudeConfigDirEnv]; ok {
+		t.Fatalf("marked %s was not scrubbed: %#v", ClaudeConfigDirEnv, env)
+	}
+	if _, ok := env[ClydeLaunchClaudeConfigDirEnv]; ok {
+		t.Fatalf("marker %s was not removed: %#v", ClydeLaunchClaudeConfigDirEnv, env)
+	}
+	if env["KEEP"] != "1" {
+		t.Fatalf("KEEP changed unexpectedly: %#v", env)
+	}
+}
+
+func TestSanitizeMITMMapPreservesUnmarkedClaudeConfigDir(t *testing.T) {
+	env := map[string]string{
+		ClaudeConfigDirEnv: "/home/user/.claude",
+	}
+
+	SanitizeMITMMap(env)
+
+	if env[ClaudeConfigDirEnv] != "/home/user/.claude" {
+		t.Fatalf("user-owned %s changed: %#v", ClaudeConfigDirEnv, env)
+	}
+}
+
+func TestSanitizeMITMListScrubsMarkedClaudeConfigDir(t *testing.T) {
+	got := SanitizeMITMList([]string{
+		ClaudeConfigDirEnv + "=/tmp/stale-scratch",
+		ClydeLaunchClaudeConfigDirEnv + "=1",
+		"KEEP=1",
+	})
+
+	if envValue(got, ClaudeConfigDirEnv) != "" {
+		t.Fatalf("marked %s was not scrubbed: %v", ClaudeConfigDirEnv, got)
+	}
+	if envValue(got, ClydeLaunchClaudeConfigDirEnv) != "" {
+		t.Fatalf("marker %s was not removed: %v", ClydeLaunchClaudeConfigDirEnv, got)
+	}
+	if envValue(got, "KEEP") != "1" {
+		t.Fatalf("KEEP missing from sanitized env: %v", got)
+	}
+}
+
+func TestSanitizeMITMListPreservesUnmarkedClaudeConfigDir(t *testing.T) {
+	got := SanitizeMITMList([]string{
+		ClaudeConfigDirEnv + "=/home/user/.claude",
+	})
+
+	if envValue(got, ClaudeConfigDirEnv) != "/home/user/.claude" {
+		t.Fatalf("user-owned %s changed: %v", ClaudeConfigDirEnv, got)
+	}
+}

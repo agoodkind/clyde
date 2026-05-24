@@ -53,7 +53,8 @@ func StartHeadlessRemoteWorker(env map[string]string, settingsFile string, workD
 		env["CLYDE_SESSION_ID"] = sessionID
 		args = append(args, "--session-id", sessionID)
 	}
-	applyMITMEnv(env)
+	applyDaemonLaunchEnv(env)
+	defer cleanupLaunchCredentialDir(env)
 	return invokePTY(args, env, workDir, sessionID, false)
 }
 
