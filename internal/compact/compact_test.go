@@ -609,28 +609,44 @@ func TestBuildBoundaryEntry_NullParent(t *testing.T) {
 	}
 }
 
-// TestBuildSyntheticUserEntry_FieldOrderAndContent freezes the
-// synthetic user entry shape including the embedded content array.
-func TestBuildSyntheticUserEntry_FieldOrderAndContent(t *testing.T) {
+// TestMarshalPreludeEntry_FieldOrderAndContent freezes the prelude
+// user entry shape that Apply now writes between the compact boundary
+// and the chain of survivor entries. The content is a single text
+// block emitted by renderHeader; this test pins the field order, the
+// isCompactSummary marker, and the role.
+func TestMarshalPreludeEntry_FieldOrderAndContent(t *testing.T) {
 	ts := time.Date(2026, 4, 18, 12, 0, 0, 1_000_000, time.UTC)
-	got, err := buildSyntheticUserEntry(syntheticEntryArgs{
+	slice := &Slice{
+		Path:         "/tmp/x.jsonl",
+		AllEntries:   nil,
+		BoundaryLine: -1,
+		BoundaryUUID: "",
+		BoundaryTime: time.Time{},
+		PostBoundary: nil,
+		PairIndex:    nil,
+		FileBytes:    0,
+	}
+	opts := newSynthOptions()
+	got, err := MarshalPreludeEntry(preludeEntryArgs{
 		UUID:       "syn-1",
 		ParentUUID: "boundary-1",
 		SessionID:  "sess-1",
 		Cwd:        "/tmp",
 		Version:    "v",
 		Timestamp:  ts,
-		Content: []OutputBlock{
-			{Text: "hello"},
-			{Image: &OutputImage{MediaType: "image/png", DataB64: "QUJD"}},
-		},
+		Slice:      slice,
+		Options:    opts,
 	})
 	if err != nil {
-		t.Fatalf("buildSyntheticUserEntry: %v", err)
+		t.Fatalf("MarshalPreludeEntry: %v", err)
 	}
-	want := `{"parentUuid":"boundary-1","isSidechain":false,"type":"user","isCompactSummary":true,"timestamp":"2026-04-18T12:00:00.001Z","uuid":"syn-1","message":{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}]},"cwd":"/tmp","sessionId":"sess-1","version":"v"}`
-	if string(got) != want {
-		t.Errorf("synthetic user JSON mismatch\n got:  %s\n want: %s", got, want)
+	prefix := `{"parentUuid":"boundary-1","isSidechain":false,"type":"user","isCompactSummary":true,"timestamp":"2026-04-18T12:00:00.001Z","uuid":"syn-1","message":{"role":"user","content":[{"type":"text","text":`
+	if !strings.HasPrefix(string(got), prefix) {
+		t.Errorf("prelude JSON prefix mismatch\n got prefix:  %s\n want prefix: %s", string(got)[:min(len(got), len(prefix))], prefix)
+	}
+	tail := `}]},"cwd":"/tmp","sessionId":"sess-1","version":"v"}`
+	if !strings.HasSuffix(string(got), tail) {
+		t.Errorf("prelude JSON tail mismatch\n got tail:  %s\n want tail: %s", string(got)[max(0, len(got)-len(tail)):], tail)
 	}
 }
 

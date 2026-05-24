@@ -36,11 +36,22 @@ type ApplyInput struct {
 
 // ApplyResult summarises what apply did. Returned for preview and
 // recorded in the ledger.
+//
+// In the natural-shape apply path, SyntheticUUID is the UUID of the
+// prelude user entry (the small continuity-notice + dropped-stats
+// message that follows the boundary). SyntheticLine is the file-line
+// index of that prelude. SurvivorUUIDs lists the fresh UUIDs minted
+// for the per-entry copies of slice.PostBoundary that follow the
+// prelude. SurvivorLines is the number of survivor lines appended;
+// the post-apply tail has 2+len(SurvivorUUIDs) new entries in total
+// (boundary + prelude + survivors).
 type ApplyResult struct {
 	BoundaryUUID    string
 	SyntheticUUID   string
 	BoundaryLine    int
 	SyntheticLine   int
+	SurvivorUUIDs   []string
+	SurvivorLines   int
 	PreApplyOffset  int64
 	PostApplyOffset int64
 	SnapshotPath    string
@@ -48,12 +59,19 @@ type ApplyResult struct {
 	NoOp            bool
 }
 
-// Apply appends one compact_boundary system entry and one synthetic
-// user entry to the JSONL transcript. A gzipped snapshot of the
-// pre-Apply transcript and its sha256 are recorded in the ledger so
-// --undo can restore the transcript byte-for-byte. The pre-Apply
-// byte offset stays in the ledger entry for diagnostic value but is
-// no longer used as a restore source (see CLYDE-375).
+// Apply appends one compact_boundary system entry, one prelude user
+// entry, and one entry per surviving post-boundary message to the
+// JSONL transcript. The prelude carries the continuity notice plus the
+// dropped-stats summary; the survivors are copies of slice.PostBoundary
+// with the configured drops and transforms applied, chained via fresh
+// parentUuid links so claude on resume reads them as natural messages
+// after the boundary. A gzipped snapshot of the pre-Apply transcript
+// and its sha256 are recorded in the ledger so --undo can restore the
+// transcript byte-for-byte. The pre-Apply byte offset stays in the
+// ledger entry for diagnostic value but is no longer used as a restore
+// source (see CLYDE-375). The natural-shape append replaces the prior
+// single-synthetic shape so the planner's projection matches the bytes
+// Apply writes (see CLYDE-376).
 func Apply(in ApplyInput) (*ApplyResult, error) {
 	if in.Slice == nil {
 		return nil, fmt.Errorf("apply: nil slice")
@@ -106,7 +124,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 	}
 
 	in.Slice = Dehydrate(in.Slice, in.Options)
-	if err := appendBoundaryAndSynthetic(path, entries.BoundaryLine, entries.SyntheticLine); err != nil {
+	if err := appendApplyEntries(path, entries); err != nil {
 		return nil, err
 	}
 
@@ -130,7 +148,7 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 		PreApplySHA256: snap.SHA256Hex,
 		SnapshotPath:   snap.Path,
 		BoundaryUUID:   entries.BoundaryUUID,
-		SyntheticUUID:  entries.SyntheticUUID,
+		SyntheticUUID:  entries.PreludeUUID,
 	})
 	if err != nil {
 		slog.Error("compact.apply.ledger_append_failed", "component", "compact", "session_id", in.SessionID, "err", err)
@@ -142,9 +160,11 @@ func Apply(in ApplyInput) (*ApplyResult, error) {
 
 type applyEntries struct {
 	BoundaryUUID  string
-	SyntheticUUID string
+	PreludeUUID   string
+	SurvivorUUIDs []string
 	BoundaryLine  []byte
-	SyntheticLine []byte
+	PreludeLine   []byte
+	SurvivorLines [][]byte
 }
 
 func buildApplyEntries(in ApplyInput, parentUUID string, now time.Time) (applyEntries, error) {
@@ -162,25 +182,41 @@ func buildApplyEntries(in ApplyInput, parentUUID string, now time.Time) (applyEn
 		slog.Error("compact.apply.build_boundary_failed", "component", "compact", "session_id", in.SessionID, "err", err)
 		return applyEntries{}, fmt.Errorf("build boundary: %w", err)
 	}
-	syntheticUUID := uuid.NewString()
-	syntheticLine, err := buildSyntheticUserEntry(syntheticEntryArgs{
-		UUID:       syntheticUUID,
+	preludeUUID := uuid.NewString()
+	preludeLine, err := MarshalPreludeEntry(preludeEntryArgs{
+		UUID:       preludeUUID,
 		ParentUUID: boundaryUUID,
 		SessionID:  in.SessionID,
 		Cwd:        in.Cwd,
 		Version:    in.Version,
 		Timestamp:  now.Add(time.Millisecond),
-		Content:    in.BoundaryTail,
+		Slice:      in.Slice,
+		Options:    in.Options,
 	})
 	if err != nil {
-		slog.Error("compact.apply.build_synthetic_failed", "component", "compact", "session_id", in.SessionID, "err", err)
-		return applyEntries{}, fmt.Errorf("build synthetic user: %w", err)
+		slog.Error("compact.apply.build_prelude_failed", "component", "compact", "session_id", in.SessionID, "err", err)
+		return applyEntries{}, fmt.Errorf("build prelude: %w", err)
+	}
+	survivorLines, survivorUUIDs, _, err := buildSurvivorEntries(
+		in.Slice,
+		in.Options,
+		preludeUUID,
+		in.SessionID,
+		in.Cwd,
+		in.Version,
+		now.Add(2*time.Millisecond),
+	)
+	if err != nil {
+		slog.Error("compact.apply.build_survivors_failed", "component", "compact", "session_id", in.SessionID, "err", err)
+		return applyEntries{}, fmt.Errorf("build survivors: %w", err)
 	}
 	return applyEntries{
 		BoundaryUUID:  boundaryUUID,
-		SyntheticUUID: syntheticUUID,
+		PreludeUUID:   preludeUUID,
+		SurvivorUUIDs: survivorUUIDs,
 		BoundaryLine:  boundaryLine,
-		SyntheticLine: syntheticLine,
+		PreludeLine:   preludeLine,
+		SurvivorLines: survivorLines,
 	}, nil
 }
 
@@ -190,6 +226,8 @@ func newNoOpApplyResult(offset int64) *ApplyResult {
 		SyntheticUUID:   "",
 		BoundaryLine:    0,
 		SyntheticLine:   0,
+		SurvivorUUIDs:   nil,
+		SurvivorLines:   0,
 		PreApplyOffset:  offset,
 		PostApplyOffset: offset,
 		SnapshotPath:    "",
@@ -207,9 +245,11 @@ func newApplyResult(
 ) *ApplyResult {
 	return &ApplyResult{
 		BoundaryUUID:    entries.BoundaryUUID,
-		SyntheticUUID:   entries.SyntheticUUID,
+		SyntheticUUID:   entries.PreludeUUID,
 		BoundaryLine:    len(slice.AllEntries),
 		SyntheticLine:   len(slice.AllEntries) + 1,
+		SurvivorUUIDs:   entries.SurvivorUUIDs,
+		SurvivorLines:   len(entries.SurvivorLines),
 		PreApplyOffset:  preOffset,
 		PostApplyOffset: postOffset,
 		SnapshotPath:    snapshotPath,
@@ -238,23 +278,35 @@ func hasNetApplyChange(slice *Slice, opts SynthOptions) bool {
 	return false
 }
 
-// appendBoundaryAndSynthetic opens the transcript for append and
-// writes the two compact entries followed by fsync. Extracted from
-// Apply to keep the orchestrator function under the funlen ceiling.
-func appendBoundaryAndSynthetic(path string, boundaryLine, syntheticLine []byte) error {
+// appendApplyEntries opens the transcript for append and writes the
+// boundary, the prelude, and every survivor line followed by fsync.
+// Extracted from Apply to keep the orchestrator function under the
+// funlen ceiling.
+func appendApplyEntries(path string, entries applyEntries) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		slog.Error("compact.apply.open_failed", "component", "compact", "path", path, "err", err)
 		return fmt.Errorf("open transcript for append: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := f.Write(append(boundaryLine, '\n')); err != nil {
+	if _, err := f.Write(append(entries.BoundaryLine, '\n')); err != nil {
 		slog.Error("compact.apply.append_boundary_failed", "component", "compact", "path", path, "err", err)
 		return fmt.Errorf("append boundary: %w", err)
 	}
-	if _, err := f.Write(append(syntheticLine, '\n')); err != nil {
-		slog.Error("compact.apply.append_synthetic_failed", "component", "compact", "path", path, "err", err)
-		return fmt.Errorf("append synthetic user: %w", err)
+	if _, err := f.Write(append(entries.PreludeLine, '\n')); err != nil {
+		slog.Error("compact.apply.append_prelude_failed", "component", "compact", "path", path, "err", err)
+		return fmt.Errorf("append prelude: %w", err)
+	}
+	for index, line := range entries.SurvivorLines {
+		if _, err := f.Write(append(line, '\n')); err != nil {
+			slog.Error("compact.apply.append_survivor_failed",
+				"component", "compact",
+				"path", path,
+				"survivor_index", index,
+				"err", err,
+			)
+			return fmt.Errorf("append survivor %d: %w", index, err)
+		}
 	}
 	if err := f.Sync(); err != nil {
 		slog.Error("compact.apply.fsync_failed", "component", "compact", "path", path, "err", err)
@@ -263,6 +315,12 @@ func appendBoundaryAndSynthetic(path string, boundaryLine, syntheticLine []byte)
 	return nil
 }
 
+// validateAppendedJSONL reads the bytes appended by Apply (from
+// preOffset to EOF) and confirms the first line is the compact
+// boundary and the second line is the prelude user entry carrying the
+// isCompactSummary marker. Survivor lines after the prelude are not
+// individually validated here; the appended writer's fsync plus the
+// per-line JSON marshalling are the integrity guarantees there.
 func validateAppendedJSONL(path string, preOffset int64) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -289,7 +347,7 @@ func validateAppendedJSONL(path string, preOffset int64) error {
 		return fmt.Errorf("read transcript tail: %w", err)
 	}
 	if len(lines) < 2 {
-		return fmt.Errorf("expected 2 appended lines, found %d", len(lines))
+		return fmt.Errorf("expected at least 2 appended lines, found %d", len(lines))
 	}
 	var boundary struct {
 		Type           string `json:"type"`
@@ -305,16 +363,16 @@ func validateAppendedJSONL(path string, preOffset int64) error {
 	if boundary.Type != "system" || boundary.Subtype != "compact_boundary" {
 		return fmt.Errorf("boundary line has unexpected type/subtype: %s/%s", boundary.Type, boundary.Subtype)
 	}
-	var synthetic struct {
+	var prelude struct {
 		Type           string `json:"type"`
 		CompactSummary bool   `json:"isCompactSummary"`
 	}
-	if err := json.Unmarshal([]byte(lines[1]), &synthetic); err != nil {
-		slog.Error("compact.apply.validate_synthetic_unmarshal_failed", "component", "compact", "path", path, "err", err)
-		return fmt.Errorf("unmarshal synthetic line: %w", err)
+	if err := json.Unmarshal([]byte(lines[1]), &prelude); err != nil {
+		slog.Error("compact.apply.validate_prelude_unmarshal_failed", "component", "compact", "path", path, "err", err)
+		return fmt.Errorf("unmarshal prelude line: %w", err)
 	}
-	if synthetic.Type != "user" || !synthetic.CompactSummary {
-		return fmt.Errorf("synthetic line missing compact summary marker")
+	if prelude.Type != "user" || !prelude.CompactSummary {
+		return fmt.Errorf("prelude line missing compact summary marker")
 	}
 	if boundary.CompactPayload.PreCompactTokenCount < 0 {
 		return fmt.Errorf("boundary pre-compact token count is invalid: %d", boundary.CompactPayload.PreCompactTokenCount)
@@ -399,36 +457,6 @@ func buildBoundaryEntry(a boundaryEntryArgs) ([]byte, error) {
 	return orderedJSON(fields).Marshal()
 }
 
-type syntheticEntryArgs struct {
-	UUID       string
-	ParentUUID string
-	SessionID  string
-	Cwd        string
-	Version    string
-	Timestamp  time.Time
-	Content    []OutputBlock
-}
-
-func buildSyntheticUserEntry(a syntheticEntryArgs) ([]byte, error) {
-	message := syntheticMessage{Role: "user", Content: a.Content}
-	fields, err := orderedFields(
-		field("parentUuid", optionalString(a.ParentUUID)),
-		field("isSidechain", false),
-		field("type", "user"),
-		field("isCompactSummary", true),
-		field("timestamp", a.Timestamp.Format(time.RFC3339Nano)),
-		field("uuid", a.UUID),
-		field("message", message),
-		field("cwd", a.Cwd),
-		field("sessionId", a.SessionID),
-		field("version", a.Version),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return orderedJSON(fields).Marshal()
-}
-
 // orderedJSON is a minimal "ordered map" for JSON emission so we can
 // control key order on disk. Each field carries a pre-encoded
 // [json.RawMessage], so the ordered emitter never sees raw `any`: the
@@ -445,10 +473,11 @@ type orderedJSONField struct {
 }
 
 // jsonEncodable is the closed set of value types orderedJSONField
-// accepts. Constrained to the concrete shapes apply.go actually
-// emits so we never widen the surface to bare interface{}.
+// accepts. Constrained to the concrete shapes apply.go and
+// apply_natural.go actually emit so we never widen the surface to
+// bare interface{}.
 type jsonEncodable interface {
-	string | bool | int | compactMetadata | syntheticMessage | optionalString
+	string | bool | int | compactMetadata | syntheticMessage | survivorMessage | optionalString
 }
 
 // optionalString models a value that may be either a JSON string or
