@@ -77,6 +77,13 @@ type survivorEntryArgs struct {
 // Returns the list of JSONL lines, the list of new UUIDs (for ledger
 // telemetry), and the final parentUuid in the chain (the last
 // survivor's UUID; used by callers that need to know the leaf).
+//
+// Emission is two-pass. Pass one builds the set of tool_use ids that
+// will land in survivors after applying every drop and transform.
+// Pass two emits each entry's content, dropping tool_result blocks
+// whose ref id is not in that set so we never leave a dangling
+// tool_result on the post-boundary chain (the Anthropic API rejects a
+// tool_result without its matching tool_use).
 func buildSurvivorEntries(
 	slice *Slice,
 	opts SynthOptions,
@@ -89,6 +96,7 @@ func buildSurvivorEntries(
 	if slice == nil {
 		return nil, nil, "", fmt.Errorf("buildSurvivorEntries: nil slice")
 	}
+	survivingToolUseIDs := collectSurvivingToolUseIDs(slice, opts)
 	lines := make([][]byte, 0, len(slice.PostBoundary))
 	uuids := make([]string, 0, len(slice.PostBoundary))
 	parentUUID := preludeUUID
@@ -99,7 +107,7 @@ func buildSurvivorEntries(
 		if !entryTypeIsCopyable(entry.Type) {
 			continue
 		}
-		transformedContent, keep := transformSurvivorContent(entry.Content, opts)
+		transformedContent, keep := transformSurvivorContent(entry.Content, opts, survivingToolUseIDs)
 		if !keep && entry.TextOnly != "" {
 			// String-form message.content: claude stores some user prompts
 			// as message.content = "...string..." instead of an array. Treat
@@ -144,6 +152,37 @@ func buildSurvivorEntries(
 	return lines, uuids, parentUUID, nil
 }
 
+// collectSurvivingToolUseIDs scans slice.PostBoundary the same way
+// buildSurvivorEntries does and returns the set of tool_use ids that
+// will land in the final survivors. Used to gate tool_result blocks
+// in the second pass so we never emit a tool_result whose tool_use
+// was dropped by the chat axis or demoted to drop by the tools axis.
+func collectSurvivingToolUseIDs(slice *Slice, opts SynthOptions) map[string]bool {
+	keep := map[string]bool{}
+	for entryIndex, entry := range slice.PostBoundary {
+		if opts.DroppedChatEntries != nil && opts.DroppedChatEntries[entryIndex] {
+			continue
+		}
+		if !entryTypeIsCopyable(entry.Type) {
+			continue
+		}
+		for _, b := range entry.Content {
+			if contentBlockType(b.Type) != contentBlockTypeToolUse {
+				continue
+			}
+			detail := survivorToolDetail(b.ToolUseID, opts)
+			if detail == ToolDetailDrop {
+				continue
+			}
+			if b.ToolUseID == "" {
+				continue
+			}
+			keep[b.ToolUseID] = true
+		}
+	}
+	return keep
+}
+
 // entryTypeIsCopyable reports whether a post-boundary entry's type
 // should be carried forward as a survivor at all. Only user and
 // assistant chat-shaped entries qualify; system entries (compact
@@ -166,14 +205,18 @@ func entryTypeIsCopyable(rawType string) bool {
 //
 // The transforms mirror what the planner's measure path applies via
 // applySynthOptionsToTranscript, so the projection the planner counts
-// matches the bytes Apply writes.
+// matches the bytes Apply writes. survivingToolUseIDs gates
+// tool_result blocks: a tool_result whose tool_use id is not in this
+// set is dropped because its matching tool_use will not be present
+// on the post-boundary chain.
 func transformSurvivorContent(
 	blocks []ContentBlock,
 	opts SynthOptions,
+	survivingToolUseIDs map[string]bool,
 ) ([]json.RawMessage, bool) {
 	out := make([]json.RawMessage, 0, len(blocks))
 	for _, b := range blocks {
-		raw, keep := transformSurvivorBlock(b, opts)
+		raw, keep := transformSurvivorBlock(b, opts, survivingToolUseIDs)
 		if !keep {
 			continue
 		}
@@ -184,10 +227,12 @@ func transformSurvivorContent(
 
 // transformSurvivorBlock applies the configured transform to one
 // content block. Returns the JSON bytes to emit and a keep flag. A
-// false keep means "drop this block entirely."
+// false keep means "drop this block entirely." survivingToolUseIDs
+// gates tool_result blocks against the surviving tool_use ids.
 func transformSurvivorBlock(
 	b ContentBlock,
 	opts SynthOptions,
+	survivingToolUseIDs map[string]bool,
 ) (json.RawMessage, bool) {
 	switch contentBlockType(b.Type) {
 	case contentBlockTypeText:
@@ -213,6 +258,9 @@ func transformSurvivorBlock(
 			return b.Raw, true
 		}
 	case contentBlockTypeToolResult:
+		if !survivingToolUseIDs[b.ToolUseRefID] {
+			return nil, false
+		}
 		detail := survivorToolDetail(b.ToolUseRefID, opts)
 		switch detail {
 		case ToolDetailDrop:
