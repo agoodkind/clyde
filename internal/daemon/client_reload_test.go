@@ -62,6 +62,31 @@ func TestReloadDaemonAllowsSlowConfirmedReload(t *testing.T) {
 	}
 }
 
+func TestReloadDaemonAllowsConfirmedReloadNearRPCTimeout(t *testing.T) {
+	startFakeReloadDaemon(t, &fakeReloadClydeServer{
+		reload: func(context.Context) (*clydev1.ReloadDaemonResponse, error) {
+			time.Sleep(125 * time.Millisecond)
+			return &clydev1.ReloadDaemonResponse{
+				ActiveSessions: 1,
+				BinaryReloaded: true,
+				NewPid:         9753,
+			}, nil
+		},
+	})
+	withFakeReloadClientTiming(t, 400*time.Millisecond, 150*time.Millisecond, time.Millisecond)
+
+	resp, err := ReloadDaemon(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadDaemon returned error: %v", err)
+	}
+	if resp.GetActiveSessions() != 1 {
+		t.Fatalf("active sessions = %d, want 1", resp.GetActiveSessions())
+	}
+	if resp.GetNewPid() != 9753 {
+		t.Fatalf("new pid = %d, want 9753", resp.GetNewPid())
+	}
+}
+
 func TestReloadDaemonRetriesUntilProcessLockOwnerConfirms(t *testing.T) {
 	var attempts atomic.Int32
 	startFakeReloadDaemon(t, &fakeReloadClydeServer{

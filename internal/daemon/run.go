@@ -756,6 +756,7 @@ func loadInheritedListeners(raw string, out inheritedRuntime) (inheritedRuntime,
 func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, rt *daemonRuntime, srv *Server, stopExclusive func(string), releaseProcessLock func(string)) (reloadReport, error) {
 	rt.reloadLock.Lock()
 	defer rt.reloadLock.Unlock()
+	reloadStart := daemonNow()
 	executablePath, err := validatedReplacementDaemonPath(ctx, log)
 	if err != nil {
 		return reloadReport{}, err
@@ -786,6 +787,11 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	if err != nil {
 		return reloadReport{}, err
 	}
+	log.InfoContext(ctx, "daemon.reload.replacement_requested",
+		"component", "daemon",
+		"new_pid", proc.pid,
+		"elapsed_ms", daemonNow().Sub(reloadStart).Milliseconds(),
+	)
 	_ = readyWrite.Close()
 	watchReplacementDaemon(ctx, log, proc)
 
@@ -793,17 +799,42 @@ func reloadDaemonBinary(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 		_ = proc.kill()
 		return reloadReport{}, err
 	}
+	log.InfoContext(ctx, "daemon.reload.replacement_ready",
+		"component", "daemon",
+		"new_pid", proc.pid,
+		"elapsed_ms", daemonNow().Sub(reloadStart).Milliseconds(),
+	)
 	srv.preserveRuntimeDirsOnClose()
 	drainReloadedPublicHTTP(ctx, log, rt)
-	drainReloadedLiveWorkers(ctx, log, srv)
+	rt.setDrainDone("live_workers", startLiveWorkerReloadDrain(ctx, log, srv))
+	log.InfoContext(ctx, "daemon.reload.async_drains_scheduled",
+		"component", "daemon",
+		"new_pid", proc.pid,
+		"elapsed_ms", daemonNow().Sub(reloadStart).Milliseconds(),
+	)
 	if stopExclusive != nil {
 		stopExclusive("reload_handoff")
 	}
+	log.InfoContext(ctx, "daemon.reload.exclusive_stop_complete",
+		"component", "daemon",
+		"new_pid", proc.pid,
+		"elapsed_ms", daemonNow().Sub(reloadStart).Milliseconds(),
+	)
 	grpcDrainStarted := startReloadGRPCDrain(ctx, log, grpcServer, proc, srv)
 	<-grpcDrainStarted
 	if releaseProcessLock != nil {
 		releaseProcessLock("reload_handoff")
 	}
+	log.InfoContext(ctx, "daemon.reload.process_lock_released",
+		"component", "daemon",
+		"new_pid", proc.pid,
+		"elapsed_ms", daemonNow().Sub(reloadStart).Milliseconds(),
+	)
+	log.InfoContext(ctx, "daemon.reload.returning_report",
+		"component", "daemon",
+		"new_pid", proc.pid,
+		"elapsed_ms", daemonNow().Sub(reloadStart).Milliseconds(),
+	)
 	return reloadReport{BinaryReloaded: true, NewPID: proc.pid}, nil
 }
 
@@ -1537,6 +1568,30 @@ func mitmTunnelForceClose(proxy *mitm.Proxy) func() error {
 // workers still alive at the deadline are force-closed so the replacement
 // daemon owns a clean slate. The drain runs against a short-lived context so
 // a wedged worker cannot block the reload indefinitely.
+func startLiveWorkerReloadDrain(ctx context.Context, log *slog.Logger, srv *Server) <-chan struct{} {
+	if srv == nil || srv.liveWorkers == nil {
+		return nil
+	}
+	remaining := srv.liveWorkers.Count()
+	if remaining == 0 {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "daemon.reload.live_workers_drain_panicked",
+					"component", "daemon",
+					"panic", r,
+				)
+			}
+		}()
+		drainReloadedLiveWorkers(ctx, log, srv)
+	}()
+	return done
+}
+
 func drainReloadedLiveWorkers(ctx context.Context, log *slog.Logger, srv *Server) {
 	if srv == nil || srv.liveWorkers == nil {
 		return
@@ -2083,6 +2138,9 @@ func stopAdapterProcess(proc *adapterProcess, timeout time.Duration) {
 		return
 	}
 	proc.cancel()
+	if proc.reloadDraining.Load() {
+		return
+	}
 	select {
 	case <-proc.done:
 	case <-time.After(timeout):

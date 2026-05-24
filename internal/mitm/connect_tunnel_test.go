@@ -270,7 +270,7 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	}
 }
 
-func TestProviderTLSKeepaliveRequestsContinueDuringDrain(t *testing.T) {
+func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	const providerHost = "chatgpt.com"
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
@@ -331,8 +331,7 @@ func TestProviderTLSKeepaliveRequestsContinueDuringDrain(t *testing.T) {
 	}()
 	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
 
-	assertProviderTLSRequest(t, tlsClient, tlsReader, providerHost, "/second")
-	_ = tlsClient.Close()
+	assertProviderTLSRequestRejected(t, tlsClient, tlsReader, providerHost, "/second")
 
 	select {
 	case result := <-drainDone:
@@ -344,6 +343,80 @@ func TestProviderTLSKeepaliveRequestsContinueDuringDrain(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for drain to finish after TLS close")
+	}
+}
+
+func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
+	const providerHost = "chatgpt.com"
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+	}))
+	defer upstream.Close()
+
+	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, true)
+	defer proxy.shutdown()
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(proxy.proxy.ca.cert)
+	client, err := net.DialTimeout("tcp", proxy.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", providerHost, providerHost); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+	br := bufio.NewReader(client)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT status: %v", err)
+	}
+	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read CONNECT header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
+		ServerName: providerHost,
+		RootCAs:    caPool,
+		NextProtos: []string{"http/1.1"},
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatalf("client TLS handshake: %v", err)
+	}
+	defer tlsClient.Close()
+	tlsReader := bufio.NewReader(tlsClient)
+
+	assertProviderTLSRequest(t, tlsClient, tlsReader, providerHost, "/first")
+	waitForExactTunnelCount(t, proxy.proxy, 1, 2*time.Second)
+
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelDrain()
+	drainDone := make(chan livetrack.DrainResult, 1)
+	go func() {
+		drainDone <- proxy.proxy.Tunnels.Drain(drainCtx, "test.reload")
+	}()
+	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
+
+	select {
+	case result := <-drainDone:
+		if result.Final != livetrack.StateClosed {
+			t.Fatalf("drain final state = %s, want closed", result.Final)
+		}
+		if result.ForceClosed != 0 {
+			t.Fatalf("drain force_closed = %d, want 0", result.ForceClosed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for idle provider TLS tunnel to close during drain")
 	}
 }
 
@@ -593,6 +666,24 @@ func assertProviderTLSRequest(t *testing.T, conn net.Conn, reader *bufio.Reader,
 	}
 	if !bytes.Contains(body, []byte(path)) {
 		t.Fatalf("response for %s missing path marker: %q", path, body)
+	}
+}
+
+func assertProviderTLSRequestRejected(t *testing.T, conn net.Conn, reader *bufio.Reader, host string, path string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "https://"+host+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+	if err := req.Write(conn); err != nil {
+		return
+	}
+	resp, err := http.ReadResponse(reader, req)
+	if err == nil {
+		defer resp.Body.Close()
+		t.Fatalf("expected provider TLS request %s to fail during drain, got status %d", path, resp.StatusCode)
 	}
 }
 

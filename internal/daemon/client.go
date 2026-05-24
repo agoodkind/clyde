@@ -1326,8 +1326,8 @@ var (
 )
 
 var (
-	reloadClientOverallTimeout = 30 * time.Second
-	reloadClientRPCTimeout     = 10 * time.Second
+	reloadClientOverallTimeout = 60 * time.Second
+	reloadClientRPCTimeout     = 30 * time.Second
 	reloadClientRetryDelay     = 100 * time.Millisecond
 )
 

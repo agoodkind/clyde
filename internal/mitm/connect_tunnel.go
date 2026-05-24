@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goodkind.io/clyde/internal/config"
@@ -228,6 +229,21 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 	providerID := string(provider.ID())
 	reader := bufio.NewReader(client)
 	writer := bufio.NewWriter(client)
+	stopWatcher := make(chan struct{})
+	var activeRequests atomic.Int32
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				p.log.WarnContext(ctx, "mitm.provider.tls.drain_watcher_panicked",
+					"provider", providerID,
+					"host", host,
+					"panic", recovered,
+				)
+			}
+		}()
+		p.watchProviderTunnelDrain(ctx, client, host, providerID, &activeRequests, stopWatcher)
+	}()
+	defer close(stopWatcher)
 	for {
 		req, err := http.ReadRequest(reader)
 		if err != nil {
@@ -236,6 +252,7 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			}
 			return
 		}
+		activeRequests.Add(1)
 		// Register per-request session so the daemon's reload drain
 		// sees in-flight cursor exchanges, not just the parent TLS
 		// session. The closer terminates the underlying TLS conn so
@@ -250,23 +267,57 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			KeepaliveSeen: false,
 		}, closer, livetrack.WithParent(parent))
 		if registerErr != nil {
+			_ = req.Body.Close()
 			if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil || p.Tunnels.State() != livetrack.StateDraining {
+				activeRequests.Add(-1)
 				p.log.WarnContext(ctx, "mitm.provider.http.register_rejected", "provider", providerID, "host", host, "err", registerErr)
 				return
 			}
-			p.log.DebugContext(ctx, "mitm.provider.http.register_skipped_reload_drain", "provider", providerID, "host", host, "err", registerErr)
+			activeRequests.Add(-1)
+			p.log.DebugContext(ctx, "mitm.provider.http.request_rejected_reload_drain", "provider", providerID, "host", host, "err", registerErr)
+			return
 		}
 		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider); err != nil {
+			activeRequests.Add(-1)
 			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 			if reqSess != nil {
 				p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.failed")
 			}
 			return
 		}
+		activeRequests.Add(-1)
 		if reqSess != nil {
 			p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.completed")
 		}
 		if req.Close {
+			return
+		}
+		if parent != nil && p.Tunnels.State() == livetrack.StateDraining {
+			p.log.DebugContext(ctx, "mitm.provider.http.keepalive_closed_reload_drain", "provider", providerID, "host", host, "path", req.URL.Path)
+			return
+		}
+	}
+}
+
+func (p *Proxy) watchProviderTunnelDrain(ctx context.Context, client *tls.Conn, host, providerID string, activeRequests *atomic.Int32, stop <-chan struct{}) {
+	if p == nil || p.Tunnels == nil || client == nil {
+		return
+	}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if p.Tunnels.State() != livetrack.StateDraining {
+				continue
+			}
+			if activeRequests != nil && activeRequests.Load() > 0 {
+				continue
+			}
+			p.log.DebugContext(ctx, "mitm.provider.tls.closed_reload_drain", "provider", providerID, "host", host)
+			_ = client.Close()
 			return
 		}
 	}

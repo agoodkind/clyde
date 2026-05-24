@@ -90,6 +90,16 @@ long-lived MITM CONNECT tunnel registers with the livetrack registry,
 so the daemon's reload chain can issue an explicit bounded
 force-close instead of waiting forever for Cloudflare to give up.
 
+The intended drain contract is narrower than "keep the old tunnel
+alive until Cursor decides to reconnect." An old MITM generation may
+finish the request that was already in flight when reload began, but
+it must not continue serving fresh requests on a reused provider TLS
+keepalive tunnel after drain starts. Once the current request
+completes, Clyde should close the old tunnel and let Cursor reconnect
+to the new generation. That keeps long-lived Cloudflare tunnels from
+pinning old workers indefinitely while still avoiding mid-request
+truncation.
+
 ## Cursor BYOK setup against the daemon MITM
 
 Cursor's BYOK against the daemon-owned MITM proxy requires `http.proxy`

@@ -75,7 +75,10 @@ reload_worker() {
     local built="$1"
     local running="$2"
     printf 'deploy: action=daemon-reload reason=worker_reload built_supervisor=%s running_supervisor=%s\n' "$built" "$running"
-    "$INSTALL_BIN" daemon reload
+    if ! "$INSTALL_BIN" daemon reload; then
+        "$MAKE_BIN" service-status
+        exit 1
+    fi
     "$MAKE_BIN" service-status
 }
 

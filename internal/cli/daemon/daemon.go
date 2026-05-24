@@ -15,7 +15,7 @@ import (
 	daemonsvc "goodkind.io/clyde/internal/daemon"
 )
 
-const reloadCommandTimeout = 45 * time.Second
+const reloadCommandTimeout = 75 * time.Second
 
 var (
 	runCommand          = daemonsvc.RunCommand
