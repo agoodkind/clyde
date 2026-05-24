@@ -29,12 +29,19 @@ type claudeProber struct{}
 // can wire `clyde compact --refresh` through without a follow-up
 // interface change once a caching prober path is added.
 func (claudeProber) Probe(ctx context.Context, sessionRef string, opts contextusage.ProbeOptions) (contextusage.Snapshot, error) {
+	// ForkSession is intentionally false. With ForkSession=true the
+	// probe spawns claude with `--fork-session --session-id <new-uuid>`
+	// and claude treats the new uuid as a resume target it cannot find,
+	// stderr: "No conversation found with session ID: <new-uuid>".
+	// `--no-session-persistence` (set inside ProbeContextUsage) already
+	// guarantees the probe leaves no side effects on the original
+	// transcript, so a fork is not needed for safety.
 	return ProbeContextUsage(ctx, ProbeOptions{
 		SessionID:   sessionRef,
 		WorkDir:     opts.WorkDir,
 		Binary:      "",
 		Timeout:     0,
-		ForkSession: true,
+		ForkSession: false,
 	})
 }
 
