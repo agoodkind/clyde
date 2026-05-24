@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
@@ -18,7 +19,23 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/oauthrotation"
 )
+
+// reauthLoginMessage builds the actionable client-visible message for a
+// rotator NeedsReauthError. It names the affected Anthropic login by account
+// id and points the operator at the exact command that restores it. No token
+// material is included; only the provider-neutral account identifier.
+func reauthLoginMessage(reauthErr oauthrotation.NeedsReauthError) string {
+	account := strings.TrimSpace(string(reauthErr.Account))
+	if account == "" {
+		account = "account"
+	}
+	return fmt.Sprintf(
+		"Anthropic login %s needs re-auth; run `clyde oauth login` to restore it",
+		account,
+	)
+}
 
 func (s *Server) dispatchAnthropicProvider(
 	w http.ResponseWriter,
@@ -409,6 +426,20 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 }
 
 func anthropicProviderAdapterError(err error) *adapterError {
+	var reauthErr oauthrotation.NeedsReauthError
+	if errors.As(err, &reauthErr) {
+		// The rotator has no usable account because the candidate's refresh
+		// credential is dead. Surface an actionable re-auth instruction as a
+		// typed upstream_auth_failed adapterError so it flows through the same
+		// boundary marshalling path as every other upstream failure: on the
+		// OpenAI route applyFamilyShape pins HTTP 400 + invalid_request_error
+		// and the renderer preserves error.message verbatim. The message names
+		// the account label or id and the exact command to restore it.
+		aerr := newAdapterError(adapterErrorUpstreamAuthFailed, reauthLoginMessage(reauthErr))
+		aerr.Provider = "anthropic"
+		aerr.Cause = err
+		return aerr
+	}
 	var execErr *anthropic.ExecuteError
 	if errors.As(err, &execErr) {
 		// ExecuteError carries an adapter-internal anthropic provider

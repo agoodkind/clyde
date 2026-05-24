@@ -401,10 +401,22 @@ func TestRotatorReauthRequiredExcludesAccount(t *testing.T) {
 		t.Fatal("RefreshAll: want error, got nil")
 	}
 
-	// With both accounts marked, Token must report no usable account.
+	// With both accounts marked and none throttled, Token must report the
+	// re-auth outcome with a typed NeedsReauthError naming the first marked
+	// account so the client can surface the actionable login instruction.
 	_, _, err := rot.Token(ctx, prov.Name())
 	if err == nil {
 		t.Fatal("Token: want error after both accounts marked reauth-required, got nil")
+	}
+	var reauthErr NeedsReauthError
+	if !errors.As(err, &reauthErr) {
+		t.Fatalf("want NeedsReauthError, got %v", err)
+	}
+	if reauthErr.Account != "acct-a" {
+		t.Fatalf("reauth account = %q, want acct-a", reauthErr.Account)
+	}
+	if reauthErr.Provider != prov.Name() {
+		t.Fatalf("reauth provider = %q, want %q", reauthErr.Provider, prov.Name())
 	}
 
 	// A successful refresh clears the mark and restores selection.
@@ -420,5 +432,85 @@ func TestRotatorReauthRequiredExcludesAccount(t *testing.T) {
 	}
 	if account != "acct-a" {
 		t.Fatalf("account = %q, want acct-a after recovery", account)
+	}
+}
+
+// markReauth flips an account's re-auth bit directly so a test can isolate the
+// selection outcome without driving a full refresh failure.
+func markReauth(t *testing.T, rot *Rotator, name provider.Name, account provider.AccountID) {
+	t.Helper()
+	rot.mu.RLock()
+	state, ok := rot.providers[name]
+	rot.mu.RUnlock()
+	if !ok {
+		t.Fatalf("provider %q not registered", name)
+	}
+	state.mu.Lock()
+	state.reauth[account] = true
+	state.mu.Unlock()
+}
+
+func TestRotatorSoleReauthAccountReturnsNeedsReauth(t *testing.T) {
+	now := time.UnixMilli(6_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a")
+	markReauth(t, rot, prov.Name(), "acct-a")
+
+	_, _, err := rot.Token(ctx, prov.Name())
+	var reauthErr NeedsReauthError
+	if !errors.As(err, &reauthErr) {
+		t.Fatalf("want NeedsReauthError, got %v", err)
+	}
+	if reauthErr.Account != "acct-a" {
+		t.Fatalf("reauth account = %q, want acct-a", reauthErr.Account)
+	}
+}
+
+func TestRotatorUsableAccountWinsOverReauthMarked(t *testing.T) {
+	now := time.UnixMilli(7_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	// acct-a needs re-auth, acct-b is healthy: selection must return acct-b
+	// rather than erroring, because a usable account exists.
+	markReauth(t, rot, prov.Name(), "acct-a")
+
+	token, account, err := rot.Token(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if account != "acct-b" {
+		t.Fatalf("account = %q, want acct-b", account)
+	}
+	if token != "acct-b:token" {
+		t.Fatalf("token = %q, want acct-b:token", token)
+	}
+}
+
+func TestRotatorReauthPreferredOverThrottledWhenNoneUsable(t *testing.T) {
+	now := time.UnixMilli(8_000_000)
+	hour := int64(time.Hour / time.Millisecond)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	// acct-a needs re-auth (never self-recovers); acct-b is throttled (recovers
+	// at its reset). With no usable account, the re-auth remedy is actionable so
+	// the rotator surfaces NeedsReauthError rather than AllAccountsThrottledError.
+	markReauth(t, rot, prov.Name(), "acct-a")
+	store := newThrottleStore(prov.Name(), nil)
+	entry := throttleEntry{UntilMS: now.UnixMilli() + hour, ObservedMS: now.UnixMilli(), Claim: string(ratelimitsink.ClaimFiveHour), HTTPStatus: 429}
+	if err := store.put(ctx, now, provider.AccountID("acct-b"), entry); err != nil {
+		t.Fatalf("seed throttle: %v", err)
+	}
+
+	_, _, err := rot.Token(ctx, prov.Name())
+	var reauthErr NeedsReauthError
+	if !errors.As(err, &reauthErr) {
+		t.Fatalf("want NeedsReauthError, got %v", err)
+	}
+	if reauthErr.Account != "acct-a" {
+		t.Fatalf("reauth account = %q, want acct-a", reauthErr.Account)
+	}
+	var throttledErr AllAccountsThrottledError
+	if errors.As(err, &throttledErr) {
+		t.Fatalf("did not expect AllAccountsThrottledError, got %v", err)
 	}
 }

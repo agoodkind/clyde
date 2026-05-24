@@ -4,17 +4,65 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/oauthrotation"
+	"goodkind.io/clyde/internal/oauthrotation/provider"
 )
+
+func TestAnthropicProviderErrorMapsNeedsReauthToActionableInstruction(t *testing.T) {
+	t.Parallel()
+
+	// The rotator surfaces NeedsReauthError wrapped the same way the anthropic
+	// client wraps a token-source failure ("oauth token: %w"). The adapter must
+	// classify it as a typed upstream_auth_failed error carrying an actionable
+	// re-auth instruction, and the rendered OpenAI envelope must be the
+	// Cursor-safe HTTP 400 + invalid_request_error shape with the message
+	// preserved verbatim.
+	reauthErr := oauthrotation.NeedsReauthError{
+		Provider: provider.Name("anthropic"),
+		Account:  provider.AccountID("work-login"),
+	}
+	wrapped := fmt.Errorf("oauth token: %w", error(reauthErr))
+	aerr := anthropicProviderAdapterError(wrapped)
+
+	if aerr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
+	}
+	if aerr.Code != "upstream_auth_failed" {
+		t.Fatalf("code=%q want upstream_auth_failed", aerr.Code)
+	}
+	if aerr.Class != adapterErrorUpstreamAuthFailed {
+		t.Fatalf("class=%q want upstream_auth_failed", aerr.Class)
+	}
+	if !strings.Contains(aerr.Message, "clyde oauth login") {
+		t.Fatalf("message missing re-auth command: %q", aerr.Message)
+	}
+	if !strings.Contains(aerr.Message, "work-login") {
+		t.Fatalf("message missing account label: %q", aerr.Message)
+	}
+
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" {
+		t.Fatalf("rendered type=%q want invalid_request_error", env.Error.Type)
+	}
+	if env.Error.Code != "upstream_auth_failed" {
+		t.Fatalf("rendered code=%q want upstream_auth_failed", env.Error.Code)
+	}
+	if !strings.Contains(env.Error.Message, "clyde oauth login") {
+		t.Fatalf("rendered message missing re-auth command: %q", env.Error.Message)
+	}
+}
 
 func TestPrepareAnthropicProviderRequestPreservesOpenAIStreamIntent(t *testing.T) {
 	t.Parallel()

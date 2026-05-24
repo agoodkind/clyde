@@ -174,9 +174,15 @@ func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*ac
 		soonestSet     bool
 		soonestReset   time.Time
 		soonestAccount provider.AccountID
+		reauthSeen     bool
+		reauthAccount  provider.AccountID
 	)
 	for _, account := range order {
 		if reauth[account] {
+			if !reauthSeen {
+				reauthSeen = true
+				reauthAccount = account
+			}
 			continue
 		}
 		entry, throttled := active[account]
@@ -197,6 +203,22 @@ func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*ac
 			"provider", string(name),
 		)
 		return nil, "", fmt.Errorf("no accounts registered for provider %q", name)
+	}
+	// No usable account remained. A re-auth account never recovers without an
+	// operator login, while a throttled account clears on its own at its reset
+	// time, so when both kinds blocked selection the re-auth remedy is the
+	// actionable one to surface. Throttled-only failures keep the existing
+	// AllAccountsThrottledError so the soonest-reset hint survives.
+	if reauthSeen {
+		r.logger.WarnContext(ctx, "oauthrotation.token.needs_reauth",
+			"component", "oauthrotation",
+			"provider", string(name),
+			"account", string(reauthAccount),
+		)
+		return nil, "", NeedsReauthError{
+			Provider: name,
+			Account:  reauthAccount,
+		}
 	}
 	r.logger.WarnContext(ctx, "oauthrotation.token.all_throttled",
 		"component", "oauthrotation",

@@ -28,3 +28,23 @@ func (e AllAccountsThrottledError) Error() string {
 		e.Provider, e.SoonestReset.Format(time.RFC3339), e.Account,
 	)
 }
+
+// NeedsReauthError is returned by the rotator when no usable account is
+// available for a provider because one or more candidate accounts have a dead
+// refresh credential and need a fresh login. Account names the account that
+// holds the soonest path back into rotation through re-authentication. It is
+// distinct from AllAccountsThrottledError: a throttled account recovers on its
+// own at the reset time, whereas a re-auth account stays out of rotation until
+// the operator logs in again, so the client-facing remedy differs.
+type NeedsReauthError struct {
+	Provider provider.Name
+	Account  provider.AccountID
+}
+
+// Error implements error.
+func (e NeedsReauthError) Error() string {
+	return fmt.Sprintf(
+		"oauthrotation: account %q for provider %q needs re-authentication",
+		e.Account, e.Provider,
+	)
+}
