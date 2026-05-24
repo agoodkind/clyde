@@ -26,7 +26,7 @@ import (
 func realisticCredentialsBlob(t *testing.T) []byte {
 	t.Helper()
 	tokens := &oauthcredentials.Tokens{
-		AccessToken:      "fake-oat-access-secret", //gitleaks:allow test fixture, not a real token
+		AccessToken:      "fake-oat-access-secret",  //gitleaks:allow test fixture, not a real token
 		RefreshToken:     "fake-ort-refresh-secret", //gitleaks:allow test fixture, not a real token
 		ExpiresAt:        time.UnixMilli(1_900_000_000_000).UnixMilli(),
 		Scopes:           []string{"user:inference", "user:profile"},
