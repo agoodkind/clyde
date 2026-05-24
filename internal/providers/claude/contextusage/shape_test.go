@@ -75,12 +75,15 @@ func TestUsageShape_FromRealProbe(t *testing.T) {
 	}
 }
 
-// TestStaticOverhead_ExcludesMessageAndReserved asserts that the
-// floor is derived from totalTokens, with Messages, Compact buffer,
-// and Free space removed as dynamic buckets.
+// TestStaticOverhead_ExcludesMessageAndReserved asserts that the floor
+// is derived from totalTokens with Messages removed. TotalTokens is the
+// provider's consumed-token count (system prompt, tools, memory,
+// skills, and Messages); free space and compact buffer sit outside it
+// in the window remainder, so the fixture keeps them out of the 875
+// total. The floor equals the static categories: 100+200+50+25 = 375.
 func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
 	raw := genericcontextusage.Snapshot{
-		TotalTokens: 890,
+		TotalTokens: 875,
 		MaxTokens:   1000,
 		Categories: []genericcontextusage.Category{
 			{Name: "System prompt", Tokens: 100},
@@ -89,11 +92,11 @@ func TestStaticOverhead_ExcludesMessageAndReserved(t *testing.T) {
 			{Name: "Skills", Tokens: 25},
 			{Name: "Messages", Tokens: 500},
 			{Name: "Compact buffer", Tokens: 10},
-			{Name: "Free space", Tokens: 5},
+			{Name: "Free space", Tokens: 115},
 		},
 	}
 	usage := contextusage.Usage{Snapshot: raw}
-	want := 890 - 500 - 10 - 5
+	want := 875 - 500
 	if got := usage.StaticOverhead(); got != want {
 		t.Fatalf("StaticOverhead = %d, want %d", got, want)
 	}

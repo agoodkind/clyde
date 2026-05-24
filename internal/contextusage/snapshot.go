@@ -22,41 +22,54 @@ type Category struct {
 	IsDeferred bool   `json:"isDeferred"`
 }
 
-// categoryNamesExcludedFromOverhead lists the category names whose
-// tokens are NOT part of static overhead. Messages is the transcript
-// tail that compact trims. Compact buffer matches the --reserved knob
-// and is added back by the planner; including it here would double
-// count. Free space is a visualization artifact, not real tokens.
-var categoryNamesExcludedFromOverhead = map[string]bool{
-	"Messages":       true,
+// categoryNamesDynamicInTotal lists the categories that are counted in
+// TotalTokens and that compact can trim. Messages is the transcript
+// tail compact removes, and it is the only consumed bucket the floor
+// must exclude. It is subtracted from TotalTokens to derive the floor.
+var categoryNamesDynamicInTotal = map[string]bool{
+	"Messages": true,
+}
+
+// categoryNamesNotInTotal lists categories whose tokens are not part of
+// TotalTokens at all. Free space is the unused remainder of the context
+// window. Compact buffer is reserved headroom carved out of that same
+// remainder. Neither is consumed, so neither is subtracted from the
+// total nor summed into the fallback floor. The provider's used-token
+// count (TotalTokens) is system prompt, tools, memory, skills, and
+// Messages; free space and compact buffer sit outside it.
+var categoryNamesNotInTotal = map[string]bool{
 	"Compact buffer": true,
 	"Free space":     true,
 }
 
-// StaticOverhead derives the non-trimmable floor from the live
-// context total itself. Provider category rows are not guaranteed to
-// be additive, especially once deferred buckets are present, so summing
-// every non-message category can materially overstate the floor.
-// When TotalTokens is present we treat it as the authority and
-// subtract the dynamic buckets (Messages, Compact buffer, Free
-// space). If total is unavailable, fall back to the older "sum
-// included categories" behavior.
+// StaticOverhead derives the non-trimmable floor from the live context
+// total itself. Provider category rows are not guaranteed to be
+// additive, especially once deferred buckets are present, so summing
+// every non-message category can materially overstate the floor. When
+// TotalTokens is present we treat it as the authority and subtract only
+// Messages, the one consumed bucket compact trims. Free space and
+// compact buffer are not part of TotalTokens, so subtracting them would
+// over-remove and drive the floor negative. If total is unavailable,
+// fall back to summing the static categories directly.
 func (s Snapshot) StaticOverhead() int {
-	excluded := 0
-	included := 0
+	dynamicInTotal := 0
+	includedFloor := 0
 	for _, cat := range s.Categories {
-		if categoryNamesExcludedFromOverhead[cat.Name] {
-			excluded += cat.Tokens
-			continue
+		switch {
+		case categoryNamesDynamicInTotal[cat.Name]:
+			dynamicInTotal += cat.Tokens
+		case categoryNamesNotInTotal[cat.Name]:
+			// Not part of the total and not part of the floor.
+		default:
+			includedFloor += cat.Tokens
 		}
-		included += cat.Tokens
 	}
 	if s.TotalTokens > 0 {
-		floor := s.TotalTokens - excluded
+		floor := s.TotalTokens - dynamicInTotal
 		if floor < 0 {
 			return 0
 		}
 		return floor
 	}
-	return included
+	return includedFloor
 }
