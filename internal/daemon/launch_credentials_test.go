@@ -3,13 +3,16 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/oauthrotation/provider"
@@ -73,8 +76,12 @@ func TestApplyRotatorLaunchCredentialsPlantsConfigDir(t *testing.T) {
 	cfg := launchCredentialsConfig(true)
 
 	env := map[string]string{}
-	if err := srv.applyRotatorLaunchCredentials(context.Background(), session.ProviderClaude, &cfg, &env); err != nil {
+	reauth, err := srv.applyRotatorLaunchCredentials(context.Background(), session.ProviderClaude, &cfg, &env)
+	if err != nil {
 		t.Fatalf("applyRotatorLaunchCredentials: %v", err)
+	}
+	if reauth != nil {
+		t.Fatalf("unexpected reauth signal with a usable account: %+v", reauth)
 	}
 
 	configDir := env[claudeConfigDirEnv]
@@ -119,8 +126,12 @@ func TestApplyRotatorLaunchCredentialsDisabledByDefault(t *testing.T) {
 	cfg := launchCredentialsConfig(false)
 
 	env := map[string]string{}
-	if err := srv.applyRotatorLaunchCredentials(context.Background(), session.ProviderClaude, &cfg, &env); err != nil {
+	reauth, err := srv.applyRotatorLaunchCredentials(context.Background(), session.ProviderClaude, &cfg, &env)
+	if err != nil {
 		t.Fatalf("applyRotatorLaunchCredentials: %v", err)
+	}
+	if reauth != nil {
+		t.Fatalf("unexpected reauth signal with switch off: %+v", reauth)
 	}
 	if _, ok := env[claudeConfigDirEnv]; ok {
 		t.Fatalf("CLAUDE_CONFIG_DIR set with switch off, env=%v", env)
@@ -132,6 +143,52 @@ func TestApplyRotatorLaunchCredentialsDisabledByDefault(t *testing.T) {
 	}
 }
 
+// TestLaunchReauthFromSelectErrorClassifiesNeedsReauth confirms a rotator
+// NeedsReauthError maps to a NEEDS_REAUTH signal naming the affected account.
+func TestLaunchReauthFromSelectErrorClassifiesNeedsReauth(t *testing.T) {
+	err := oauthrotation.NeedsReauthError{Provider: "anthropic", Account: "acct-dead"}
+	reauth := launchReauthFromSelectError(provider.Name("anthropic"), err)
+	if reauth == nil {
+		t.Fatalf("nil reauth for NeedsReauthError")
+	}
+	if reauth.GetKind() != clydev1.LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH {
+		t.Fatalf("kind = %v, want NEEDS_REAUTH", reauth.GetKind())
+	}
+	if reauth.GetAccount() != "acct-dead" || reauth.GetProvider() != "anthropic" {
+		t.Fatalf("reauth = %+v, want anthropic/acct-dead", reauth)
+	}
+	if reauth.GetThrottledUntilMs() != 0 {
+		t.Fatalf("throttled_until_ms = %d, want 0 for needs-reauth", reauth.GetThrottledUntilMs())
+	}
+}
+
+// TestLaunchReauthFromSelectErrorClassifiesAllThrottled confirms a rotator
+// AllAccountsThrottledError maps to an ALL_THROTTLED signal carrying the
+// soonest reset.
+func TestLaunchReauthFromSelectErrorClassifiesAllThrottled(t *testing.T) {
+	reset := time.UnixMilli(1_700_000_000_000).UTC()
+	err := oauthrotation.AllAccountsThrottledError{Provider: "anthropic", SoonestReset: reset, Account: "acct-throttled"}
+	reauth := launchReauthFromSelectError(provider.Name("anthropic"), err)
+	if reauth == nil {
+		t.Fatalf("nil reauth for AllAccountsThrottledError")
+	}
+	if reauth.GetKind() != clydev1.LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED {
+		t.Fatalf("kind = %v, want ALL_THROTTLED", reauth.GetKind())
+	}
+	if reauth.GetThrottledUntilMs() != reset.UnixMilli() {
+		t.Fatalf("throttled_until_ms = %d, want %d", reauth.GetThrottledUntilMs(), reset.UnixMilli())
+	}
+}
+
+// TestLaunchReauthFromSelectErrorIgnoresOtherErrors confirms an unrelated
+// selection error yields nil so the caller treats it as no-credentials rather
+// than prompting.
+func TestLaunchReauthFromSelectErrorIgnoresOtherErrors(t *testing.T) {
+	if reauth := launchReauthFromSelectError(provider.Name("anthropic"), errors.New("boom")); reauth != nil {
+		t.Fatalf("reauth = %+v for unrelated error, want nil", reauth)
+	}
+}
+
 // TestApplyRotatorLaunchCredentialsNonClaudeProviderNoop confirms a non-claude
 // launch provider never plants credentials, even with the switch on.
 func TestApplyRotatorLaunchCredentialsNonClaudeProviderNoop(t *testing.T) {
@@ -140,8 +197,12 @@ func TestApplyRotatorLaunchCredentialsNonClaudeProviderNoop(t *testing.T) {
 	cfg := launchCredentialsConfig(true)
 
 	env := map[string]string{}
-	if err := srv.applyRotatorLaunchCredentials(context.Background(), session.ProviderCodex, &cfg, &env); err != nil {
+	reauth, err := srv.applyRotatorLaunchCredentials(context.Background(), session.ProviderCodex, &cfg, &env)
+	if err != nil {
 		t.Fatalf("applyRotatorLaunchCredentials: %v", err)
+	}
+	if reauth != nil {
+		t.Fatalf("unexpected reauth signal for non-claude provider: %+v", reauth)
 	}
 	if _, ok := env[claudeConfigDirEnv]; ok {
 		t.Fatalf("CLAUDE_CONFIG_DIR set for non-claude provider, env=%v", env)

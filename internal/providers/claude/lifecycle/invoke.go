@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
@@ -505,12 +506,32 @@ func applyDaemonLaunchEnv(env map[string]string) {
 	if cfg.MITM.EnabledDefault && cfg.MITM.EnabledFor("claude") {
 		claudeprovider.SanitizeMITMMap(env)
 	}
-	extra, err := providerLaunchEnvironmentViaDaemon(context.Background(), "claude")
+	ctx := context.Background()
+	launchEnv, err := providerLaunchEnvironmentViaDaemon(ctx, "claude")
 	if err != nil {
 		claudeLog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
 		return
 	}
-	for _, item := range extra {
+	// When the rotator could not select a usable account, the daemon planted no
+	// CLAUDE_CONFIG_DIR and instead returned a reauth signal. On a real terminal
+	// the operator is prompted to log in, skip, or remove the dead login, and the
+	// chosen action re-fetches the launch env so a freshly usable account can be
+	// planted. Headless / non-TTY launches never prompt and fall through to the
+	// no-planted-creds launch (claude uses its own login) below (CLYDE-453).
+	if launchEnv.Reauth.Kind != daemon.LaunchReauthNone {
+		if resolved, ok := resolveLaunchReauth(ctx, launchEnv.Reauth); ok {
+			launchEnv = resolved
+		}
+	}
+	applyLaunchEnvItems(env, launchEnv.Environment)
+}
+
+// applyLaunchEnvItems merges the daemon-owned launch environment variables into
+// env through the Clyde-owned apply helpers so MITM base-url and rotator
+// config-dir contributions land in their typed slots and other keys pass
+// through unchanged.
+func applyLaunchEnvItems(env map[string]string, items []*clydev1.EnvironmentVariable) {
+	for _, item := range items {
 		if item.GetKey() == "" {
 			continue
 		}

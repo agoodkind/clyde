@@ -11,6 +11,7 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/ui"
 )
@@ -175,18 +176,20 @@ func TestApplyClaudeMITMEnvAddsAnthropicBaseURLForPassthrough(t *testing.T) {
 	t.Cleanup(func() {
 		claudeLaunchEnvironmentViaDaemon = oldLaunchEnvironment
 	})
-	claudeLaunchEnvironmentViaDaemon = func(_ context.Context, provider string) ([]*clydev1.EnvironmentVariable, error) {
+	claudeLaunchEnvironmentViaDaemon = func(_ context.Context, provider string) (daemon.ProviderLaunchEnvironment, error) {
 		switch provider {
 		case "claude":
-			return []*clydev1.EnvironmentVariable{
-				{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
-				{Key: "CLYDE_MITM_ANTHROPIC_BASE_URL", Value: "1"},
+			return daemon.ProviderLaunchEnvironment{
+				Environment: []*clydev1.EnvironmentVariable{
+					{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
+					{Key: "CLYDE_MITM_ANTHROPIC_BASE_URL", Value: "1"},
+				},
 			}, nil
 		case "codex":
-			return nil, nil
+			return daemon.ProviderLaunchEnvironment{}, nil
 		default:
 			t.Fatalf("unexpected provider %q", provider)
-			return nil, nil
+			return daemon.ProviderLaunchEnvironment{}, nil
 		}
 	}
 
@@ -222,8 +225,8 @@ func TestApplyClaudeMITMEnvFailsOpenWhenDaemonUnavailable(t *testing.T) {
 	t.Cleanup(func() {
 		claudeLaunchEnvironmentViaDaemon = oldLaunchEnvironment
 	})
-	claudeLaunchEnvironmentViaDaemon = func(context.Context, string) ([]*clydev1.EnvironmentVariable, error) {
-		return nil, errors.New("daemon unavailable")
+	claudeLaunchEnvironmentViaDaemon = func(context.Context, string) (daemon.ProviderLaunchEnvironment, error) {
+		return daemon.ProviderLaunchEnvironment{}, errors.New("daemon unavailable")
 	}
 
 	got := applyClaudeMITMEnv(context.Background(), []string{"ANTHROPIC_BASE_URL=https://old.example", "KEEP=1"})
@@ -255,8 +258,8 @@ func TestApplyClaudeMITMEnvDropsInheritedLoopbackWhenDaemonUnavailable(t *testin
 	t.Cleanup(func() {
 		claudeLaunchEnvironmentViaDaemon = oldLaunchEnvironment
 	})
-	claudeLaunchEnvironmentViaDaemon = func(context.Context, string) ([]*clydev1.EnvironmentVariable, error) {
-		return nil, errors.New("daemon unavailable")
+	claudeLaunchEnvironmentViaDaemon = func(context.Context, string) (daemon.ProviderLaunchEnvironment, error) {
+		return daemon.ProviderLaunchEnvironment{}, errors.New("daemon unavailable")
 	}
 
 	got := applyClaudeMITMEnv(context.Background(), []string{"ANTHROPIC_BASE_URL=http://[::1]:50067", "KEEP=1"})

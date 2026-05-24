@@ -14,6 +14,7 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/session"
 )
 
@@ -224,12 +225,14 @@ func TestApplyMITMEnvAddsAnthropicBaseURLForWrapperLaunch(t *testing.T) {
 	t.Cleanup(func() {
 		providerLaunchEnvironmentViaDaemon = oldLaunchEnvironment
 	})
-	providerLaunchEnvironmentViaDaemon = func(_ context.Context, provider string) ([]*clydev1.EnvironmentVariable, error) {
+	providerLaunchEnvironmentViaDaemon = func(_ context.Context, provider string) (daemon.ProviderLaunchEnvironment, error) {
 		if provider != "claude" {
 			t.Fatalf("provider = %q, want claude", provider)
 		}
-		return []*clydev1.EnvironmentVariable{
-			{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
+		return daemon.ProviderLaunchEnvironment{
+			Environment: []*clydev1.EnvironmentVariable{
+				{Key: "ANTHROPIC_BASE_URL", Value: "http://daemon.example"},
+			},
 		}, nil
 	}
 
@@ -266,8 +269,8 @@ func TestApplyMITMEnvFailsOpenWhenDaemonUnavailable(t *testing.T) {
 	t.Cleanup(func() {
 		providerLaunchEnvironmentViaDaemon = oldLaunchEnvironment
 	})
-	providerLaunchEnvironmentViaDaemon = func(context.Context, string) ([]*clydev1.EnvironmentVariable, error) {
-		return nil, errors.New("daemon unavailable")
+	providerLaunchEnvironmentViaDaemon = func(context.Context, string) (daemon.ProviderLaunchEnvironment, error) {
+		return daemon.ProviderLaunchEnvironment{}, errors.New("daemon unavailable")
 	}
 
 	env := map[string]string{
@@ -299,8 +302,8 @@ func TestApplyMITMEnvDropsInheritedLoopbackWhenDaemonUnavailable(t *testing.T) {
 	t.Cleanup(func() {
 		providerLaunchEnvironmentViaDaemon = oldLaunchEnvironment
 	})
-	providerLaunchEnvironmentViaDaemon = func(context.Context, string) ([]*clydev1.EnvironmentVariable, error) {
-		return nil, errors.New("daemon unavailable")
+	providerLaunchEnvironmentViaDaemon = func(context.Context, string) (daemon.ProviderLaunchEnvironment, error) {
+		return daemon.ProviderLaunchEnvironment{}, errors.New("daemon unavailable")
 	}
 
 	env := map[string]string{

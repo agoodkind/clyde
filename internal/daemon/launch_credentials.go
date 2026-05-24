@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 
+	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/oauthrotation"
 	oauthprovider "goodkind.io/clyde/internal/oauthrotation/provider"
@@ -51,25 +53,34 @@ const (
 // keychain. It is a no-op when the switch is off, the rotator is absent, or the
 // provider is not claude, so the default launch path is unchanged. The env map
 // is initialized if nil before a key is added.
-func (s *Server) applyRotatorLaunchCredentials(ctx context.Context, provider session.ProviderID, cfg *config.Config, env *map[string]string) error {
+//
+// When selection finds no usable account because the only candidate needs
+// re-authentication or every account is throttled, it plants nothing and
+// returns a non-nil *clydev1.LaunchCredentialReauth describing the state so the
+// launching client can prompt the operator before launch (CLYDE-453). A nil
+// return with no error means selection succeeded or the path is off.
+func (s *Server) applyRotatorLaunchCredentials(ctx context.Context, provider session.ProviderID, cfg *config.Config, env *map[string]string) (*clydev1.LaunchCredentialReauth, error) {
 	if provider != session.ProviderClaude {
-		return nil
+		return nil, nil
 	}
 	if cfg == nil || !cfg.Adapter.OAuth.Rotation.RouteLaunchedClaude {
-		return nil
+		return nil, nil
 	}
-	scratchDir, err := s.plantRotatorLaunchCredentials(ctx, s.OAuthRotator(), rotatorProviderNameForClaude)
+	scratchDir, reauth, err := s.plantRotatorLaunchCredentials(ctx, s.OAuthRotator(), rotatorProviderNameForClaude)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if reauth != nil {
+		return reauth, nil
 	}
 	if scratchDir == "" {
-		return nil
+		return nil, nil
 	}
 	if *env == nil {
 		*env = make(map[string]string, 1)
 	}
 	(*env)[claudeConfigDirEnv] = scratchDir
-	return nil
+	return nil, nil
 }
 
 // plantRotatorLaunchCredentials selects the rotator's currently-active account
@@ -77,44 +88,60 @@ func (s *Server) applyRotatorLaunchCredentials(ctx context.Context, provider ses
 // dir under the daemon runtime dir, tracks the dir for daemon-Close cleanup,
 // and returns the scratch dir path. The caller adds it to the launch env as
 // CLAUDE_CONFIG_DIR. It never writes to the user's real provider config or
-// keychain. A nil rotator, an unregistered provider, or no usable account
-// yields ("", nil): the launch proceeds with the child's own credentials.
-func (s *Server) plantRotatorLaunchCredentials(ctx context.Context, rotator *oauthrotation.Rotator, provider oauthprovider.Name) (string, error) {
+// keychain. A nil rotator or an unregistered provider yields ("", nil, nil):
+// the launch proceeds with the child's own credentials.
+//
+// When selection finds no usable account because the only candidate needs
+// re-authentication (NeedsReauthError) or every account is throttled
+// (AllAccountsThrottledError), it plants nothing and returns a non-nil
+// *clydev1.LaunchCredentialReauth so the launching client can prompt the
+// operator. Selection failures of other kinds are logged and treated as
+// no-credentials so the launch is never blocked by an unexpected rotator error.
+func (s *Server) plantRotatorLaunchCredentials(ctx context.Context, rotator *oauthrotation.Rotator, provider oauthprovider.Name) (string, *clydev1.LaunchCredentialReauth, error) {
 	// This runs in the ProviderLaunchEnvironment request context; read the peer
 	// and metadata so the structured events below carry request correlation,
 	// matching the daemon's other request-scoped helpers.
 	_, _ = peer.FromContext(ctx)
 	_, _ = metadata.FromIncomingContext(ctx)
 	if rotator == nil {
-		return "", nil
+		return "", nil, nil
 	}
 	account, encoded, err := rotator.SelectForLaunch(ctx, provider)
 	if err != nil {
+		if reauth := launchReauthFromSelectError(provider, err); reauth != nil {
+			s.log.WarnContext(ctx, "daemon.launch_credentials.select_needs_reauth",
+				"component", "daemon",
+				"provider", string(provider),
+				"account", reauth.GetAccount(),
+				"kind", reauth.GetKind().String(),
+			)
+			return "", reauth, nil
+		}
 		s.log.WarnContext(ctx, "daemon.launch_credentials.select_failed",
 			"component", "daemon",
 			"provider", string(provider),
 			"err", err,
 		)
-		return "", nil
+		return "", nil, nil
 	}
 
 	root := filepath.Join(config.RuntimeDir(), launchCredentialsSubdir)
 	if err := os.MkdirAll(root, launchCredentialsDirMode); err != nil {
-		return "", fmt.Errorf("create launch-credentials root %s: %w", root, err)
+		return "", nil, fmt.Errorf("create launch-credentials root %s: %w", root, err)
 	}
 	scratchDir, err := os.MkdirTemp(root, string(provider)+"-")
 	if err != nil {
-		return "", fmt.Errorf("create launch-credentials scratch dir under %s: %w", root, err)
+		return "", nil, fmt.Errorf("create launch-credentials scratch dir under %s: %w", root, err)
 	}
 	if err := os.Chmod(scratchDir, launchCredentialsDirMode); err != nil {
 		_ = os.RemoveAll(scratchDir)
-		return "", fmt.Errorf("chmod launch-credentials scratch dir %s: %w", scratchDir, err)
+		return "", nil, fmt.Errorf("chmod launch-credentials scratch dir %s: %w", scratchDir, err)
 	}
 
 	credPath := filepath.Join(scratchDir, launchCredentialsFileName)
 	if err := os.WriteFile(credPath, encoded, launchCredentialsFileMode); err != nil {
 		_ = os.RemoveAll(scratchDir)
-		return "", fmt.Errorf("write planted credentials %s: %w", credPath, err)
+		return "", nil, fmt.Errorf("write planted credentials %s: %w", credPath, err)
 	}
 
 	s.trackLaunchCredentialDir(scratchDir)
@@ -124,7 +151,35 @@ func (s *Server) plantRotatorLaunchCredentials(ctx context.Context, rotator *oau
 		slog.String("account", string(account)),
 		slog.String("config_dir", scratchDir),
 	)
-	return scratchDir, nil
+	return scratchDir, nil, nil
+}
+
+// launchReauthFromSelectError maps a rotator SelectForLaunch failure to the
+// typed reauth state the launching client prompts on. It recognizes the two
+// "no usable account" signals: NeedsReauthError (a dead refresh credential that
+// needs an operator login) and AllAccountsThrottledError (every account is
+// rate-limited and recovers on its own). Any other error returns nil so the
+// caller treats it as an unexpected failure and launches without planted creds.
+func launchReauthFromSelectError(provider oauthprovider.Name, err error) *clydev1.LaunchCredentialReauth {
+	var reauthErr oauthrotation.NeedsReauthError
+	if errors.As(err, &reauthErr) {
+		return &clydev1.LaunchCredentialReauth{
+			Kind:             clydev1.LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH,
+			Provider:         string(provider),
+			Account:          string(reauthErr.Account),
+			ThrottledUntilMs: 0,
+		}
+	}
+	var throttledErr oauthrotation.AllAccountsThrottledError
+	if errors.As(err, &throttledErr) {
+		return &clydev1.LaunchCredentialReauth{
+			Kind:             clydev1.LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED,
+			Provider:         string(provider),
+			Account:          string(throttledErr.Account),
+			ThrottledUntilMs: throttledErr.SoonestReset.UnixMilli(),
+		}
+	}
+	return nil
 }
 
 // trackLaunchCredentialDir records a planted scratch dir so daemon Close can

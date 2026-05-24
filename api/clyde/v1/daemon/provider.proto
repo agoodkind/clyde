@@ -187,6 +187,36 @@ message ProviderLaunchEnvironmentRequest {
   string provider = 1;
 }
 
+// LaunchCredentialReauthKind names why no usable rotator account could be
+// planted for a launch. NEEDS_REAUTH means the soonest-recoverable account has
+// a dead refresh credential and stays out of rotation until the operator logs
+// in again. ALL_THROTTLED means every account is rate-limited and recovers on
+// its own at the reported reset time.
+enum LaunchCredentialReauthKind {
+  LAUNCH_CREDENTIAL_REAUTH_KIND_UNSPECIFIED = 0;
+  LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH = 1;
+  LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED = 2;
+}
+
+// LaunchCredentialReauth surfaces a rotator selection that yielded no usable
+// account so the launching client can prompt the operator before launch instead
+// of proceeding with no planted credentials. It is set only when the rotator
+// launch-credentials path is active and selection failed with a re-auth or
+// all-throttled signal; an empty/absent value means selection either succeeded
+// or the path is off, and the launch proceeds normally.
+message LaunchCredentialReauth {
+  LaunchCredentialReauthKind kind = 1;
+  string provider = 2;
+  string account = 3;
+  // throttled_until_ms is the soonest reset for the all-throttled case, in unix
+  // milliseconds; zero for the needs-reauth case.
+  int64 throttled_until_ms = 4;
+}
+
 message ProviderLaunchEnvironmentResponse {
   repeated EnvironmentVariable environment = 1;
+  // reauth is set when the rotator could not select a usable account to plant.
+  // The launching client decides whether to prompt; headless clients fall back
+  // to launching without planted credentials.
+  LaunchCredentialReauth reauth = 2;
 }

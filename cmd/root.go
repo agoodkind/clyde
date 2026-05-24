@@ -1138,7 +1138,7 @@ func applyClaudeMITMEnv(ctx context.Context, env []string) []string {
 		out = sanitizer.Sanitize(out)
 	}
 	for _, providerID := range mitmcontrib.IDs() {
-		extra, fetchErr := claudeLaunchEnvironmentViaDaemon(ctx, providerID)
+		launchEnv, fetchErr := claudeLaunchEnvironmentViaDaemon(ctx, providerID)
 		if fetchErr != nil {
 			cmdDispatchLog.Logger().WarnContext(ctx, "forward.mitm.env_fetch_failed",
 				"component", "cli",
@@ -1147,7 +1147,10 @@ func applyClaudeMITMEnv(ctx context.Context, env []string) []string {
 			)
 			continue
 		}
-		for _, item := range extra {
+		// The forward path does not plant rotator launch credentials (it skips
+		// CLAUDE_CONFIG_DIR below), so a reauth signal here has no planted-creds
+		// decision to gate; the lifecycle launch path owns the prompt. Ignore it.
+		for _, item := range launchEnv.Environment {
 			if item.GetKey() == "" {
 				continue
 			}

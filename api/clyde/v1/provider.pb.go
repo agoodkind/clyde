@@ -21,6 +21,60 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// LaunchCredentialReauthKind names why no usable rotator account could be
+// planted for a launch. NEEDS_REAUTH means the soonest-recoverable account has
+// a dead refresh credential and stays out of rotation until the operator logs
+// in again. ALL_THROTTLED means every account is rate-limited and recovers on
+// its own at the reported reset time.
+type LaunchCredentialReauthKind int32
+
+const (
+	LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_UNSPECIFIED   LaunchCredentialReauthKind = 0
+	LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH  LaunchCredentialReauthKind = 1
+	LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED LaunchCredentialReauthKind = 2
+)
+
+// Enum value maps for LaunchCredentialReauthKind.
+var (
+	LaunchCredentialReauthKind_name = map[int32]string{
+		0: "LAUNCH_CREDENTIAL_REAUTH_KIND_UNSPECIFIED",
+		1: "LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH",
+		2: "LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED",
+	}
+	LaunchCredentialReauthKind_value = map[string]int32{
+		"LAUNCH_CREDENTIAL_REAUTH_KIND_UNSPECIFIED":   0,
+		"LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH":  1,
+		"LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED": 2,
+	}
+)
+
+func (x LaunchCredentialReauthKind) Enum() *LaunchCredentialReauthKind {
+	p := new(LaunchCredentialReauthKind)
+	*p = x
+	return p
+}
+
+func (x LaunchCredentialReauthKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LaunchCredentialReauthKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_clyde_v1_daemon_provider_proto_enumTypes[0].Descriptor()
+}
+
+func (LaunchCredentialReauthKind) Type() protoreflect.EnumType {
+	return &file_clyde_v1_daemon_provider_proto_enumTypes[0]
+}
+
+func (x LaunchCredentialReauthKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LaunchCredentialReauthKind.Descriptor instead.
+func (LaunchCredentialReauthKind) EnumDescriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{0}
+}
+
 type StartRemoteSessionResponse_LaunchState int32
 
 const (
@@ -54,11 +108,11 @@ func (x StartRemoteSessionResponse_LaunchState) String() string {
 }
 
 func (StartRemoteSessionResponse_LaunchState) Descriptor() protoreflect.EnumDescriptor {
-	return file_clyde_v1_daemon_provider_proto_enumTypes[0].Descriptor()
+	return file_clyde_v1_daemon_provider_proto_enumTypes[1].Descriptor()
 }
 
 func (StartRemoteSessionResponse_LaunchState) Type() protoreflect.EnumType {
-	return &file_clyde_v1_daemon_provider_proto_enumTypes[0]
+	return &file_clyde_v1_daemon_provider_proto_enumTypes[1]
 }
 
 func (x StartRemoteSessionResponse_LaunchState) Number() protoreflect.EnumNumber {
@@ -1864,16 +1918,96 @@ func (x *ProviderLaunchEnvironmentRequest) GetProvider() string {
 	return ""
 }
 
+// LaunchCredentialReauth surfaces a rotator selection that yielded no usable
+// account so the launching client can prompt the operator before launch instead
+// of proceeding with no planted credentials. It is set only when the rotator
+// launch-credentials path is active and selection failed with a re-auth or
+// all-throttled signal; an empty/absent value means selection either succeeded
+// or the path is off, and the launch proceeds normally.
+type LaunchCredentialReauth struct {
+	state    protoimpl.MessageState     `protogen:"open.v1"`
+	Kind     LaunchCredentialReauthKind `protobuf:"varint,1,opt,name=kind,proto3,enum=clyde.v1.LaunchCredentialReauthKind" json:"kind,omitempty"`
+	Provider string                     `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
+	Account  string                     `protobuf:"bytes,3,opt,name=account,proto3" json:"account,omitempty"`
+	// throttled_until_ms is the soonest reset for the all-throttled case, in unix
+	// milliseconds; zero for the needs-reauth case.
+	ThrottledUntilMs int64 `protobuf:"varint,4,opt,name=throttled_until_ms,json=throttledUntilMs,proto3" json:"throttled_until_ms,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *LaunchCredentialReauth) Reset() {
+	*x = LaunchCredentialReauth{}
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LaunchCredentialReauth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LaunchCredentialReauth) ProtoMessage() {}
+
+func (x *LaunchCredentialReauth) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LaunchCredentialReauth.ProtoReflect.Descriptor instead.
+func (*LaunchCredentialReauth) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *LaunchCredentialReauth) GetKind() LaunchCredentialReauthKind {
+	if x != nil {
+		return x.Kind
+	}
+	return LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_UNSPECIFIED
+}
+
+func (x *LaunchCredentialReauth) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *LaunchCredentialReauth) GetAccount() string {
+	if x != nil {
+		return x.Account
+	}
+	return ""
+}
+
+func (x *LaunchCredentialReauth) GetThrottledUntilMs() int64 {
+	if x != nil {
+		return x.ThrottledUntilMs
+	}
+	return 0
+}
+
 type ProviderLaunchEnvironmentResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Environment   []*EnvironmentVariable `protobuf:"bytes,1,rep,name=environment,proto3" json:"environment,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Environment []*EnvironmentVariable `protobuf:"bytes,1,rep,name=environment,proto3" json:"environment,omitempty"`
+	// reauth is set when the rotator could not select a usable account to plant.
+	// The launching client decides whether to prompt; headless clients fall back
+	// to launching without planted credentials.
+	Reauth        *LaunchCredentialReauth `protobuf:"bytes,2,opt,name=reauth,proto3" json:"reauth,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProviderLaunchEnvironmentResponse) Reset() {
 	*x = ProviderLaunchEnvironmentResponse{}
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1885,7 +2019,7 @@ func (x *ProviderLaunchEnvironmentResponse) String() string {
 func (*ProviderLaunchEnvironmentResponse) ProtoMessage() {}
 
 func (x *ProviderLaunchEnvironmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_provider_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1898,12 +2032,19 @@ func (x *ProviderLaunchEnvironmentResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ProviderLaunchEnvironmentResponse.ProtoReflect.Descriptor instead.
 func (*ProviderLaunchEnvironmentResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{30}
+	return file_clyde_v1_daemon_provider_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ProviderLaunchEnvironmentResponse) GetEnvironment() []*EnvironmentVariable {
 	if x != nil {
 		return x.Environment
+	}
+	return nil
+}
+
+func (x *ProviderLaunchEnvironmentResponse) GetReauth() *LaunchCredentialReauth {
+	if x != nil {
+		return x.Reauth
 	}
 	return nil
 }
@@ -2053,9 +2194,19 @@ const file_clyde_v1_daemon_provider_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\">\n" +
 	" ProviderLaunchEnvironmentRequest\x12\x1a\n" +
-	"\bprovider\x18\x01 \x01(\tR\bprovider\"d\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\"\xb6\x01\n" +
+	"\x16LaunchCredentialReauth\x128\n" +
+	"\x04kind\x18\x01 \x01(\x0e2$.clyde.v1.LaunchCredentialReauthKindR\x04kind\x12\x1a\n" +
+	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x18\n" +
+	"\aaccount\x18\x03 \x01(\tR\aaccount\x12,\n" +
+	"\x12throttled_until_ms\x18\x04 \x01(\x03R\x10throttledUntilMs\"\x9e\x01\n" +
 	"!ProviderLaunchEnvironmentResponse\x12?\n" +
-	"\venvironment\x18\x01 \x03(\v2\x1d.clyde.v1.EnvironmentVariableR\venvironmentB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
+	"\venvironment\x18\x01 \x03(\v2\x1d.clyde.v1.EnvironmentVariableR\venvironment\x128\n" +
+	"\x06reauth\x18\x02 \x01(\v2 .clyde.v1.LaunchCredentialReauthR\x06reauth*\xac\x01\n" +
+	"\x1aLaunchCredentialReauthKind\x12-\n" +
+	")LAUNCH_CREDENTIAL_REAUTH_KIND_UNSPECIFIED\x10\x00\x12.\n" +
+	"*LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH\x10\x01\x12/\n" +
+	"+LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED\x10\x02B(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
 
 var (
 	file_clyde_v1_daemon_provider_proto_rawDescOnce sync.Once
@@ -2069,60 +2220,64 @@ func file_clyde_v1_daemon_provider_proto_rawDescGZIP() []byte {
 	return file_clyde_v1_daemon_provider_proto_rawDescData
 }
 
-var file_clyde_v1_daemon_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_clyde_v1_daemon_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_clyde_v1_daemon_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_clyde_v1_daemon_provider_proto_goTypes = []any{
-	(StartRemoteSessionResponse_LaunchState)(0), // 0: clyde.v1.StartRemoteSessionResponse.LaunchState
-	(*ProviderSessionIdentity)(nil),             // 1: clyde.v1.ProviderSessionIdentity
-	(*SessionHistoryBoundary)(nil),              // 2: clyde.v1.SessionHistoryBoundary
-	(*LiveSessionBoundary)(nil),                 // 3: clyde.v1.LiveSessionBoundary
-	(*ProviderRuntimeBoundary)(nil),             // 4: clyde.v1.ProviderRuntimeBoundary
-	(*GetProviderStatsRequest)(nil),             // 5: clyde.v1.GetProviderStatsRequest
-	(*SubscribeProviderStatsRequest)(nil),       // 6: clyde.v1.SubscribeProviderStatsRequest
-	(*ProviderStats)(nil),                       // 7: clyde.v1.ProviderStats
-	(*GetProviderStatsResponse)(nil),            // 8: clyde.v1.GetProviderStatsResponse
-	(*ProviderStatsEvent)(nil),                  // 9: clyde.v1.ProviderStatsEvent
-	(*CreateSessionRequest)(nil),                // 10: clyde.v1.CreateSessionRequest
-	(*CreateSessionResponse)(nil),               // 11: clyde.v1.CreateSessionResponse
-	(*StartRemoteSessionRequest)(nil),           // 12: clyde.v1.StartRemoteSessionRequest
-	(*StartRemoteSessionResponse)(nil),          // 13: clyde.v1.StartRemoteSessionResponse
-	(*LiveSession)(nil),                         // 14: clyde.v1.LiveSession
-	(*ListLiveSessionsRequest)(nil),             // 15: clyde.v1.ListLiveSessionsRequest
-	(*ListLiveSessionsResponse)(nil),            // 16: clyde.v1.ListLiveSessionsResponse
-	(*StartLiveSessionRequest)(nil),             // 17: clyde.v1.StartLiveSessionRequest
-	(*StartLiveSessionResponse)(nil),            // 18: clyde.v1.StartLiveSessionResponse
-	(*SendLiveSessionRequest)(nil),              // 19: clyde.v1.SendLiveSessionRequest
-	(*SendLiveSessionResponse)(nil),             // 20: clyde.v1.SendLiveSessionResponse
-	(*StreamLiveSessionRequest)(nil),            // 21: clyde.v1.StreamLiveSessionRequest
-	(*StreamLiveSessionResponse)(nil),           // 22: clyde.v1.StreamLiveSessionResponse
-	(*StopLiveSessionRequest)(nil),              // 23: clyde.v1.StopLiveSessionRequest
-	(*StopLiveSessionResponse)(nil),             // 24: clyde.v1.StopLiveSessionResponse
-	(*AcquireForegroundSessionRequest)(nil),     // 25: clyde.v1.AcquireForegroundSessionRequest
-	(*AcquireForegroundSessionResponse)(nil),    // 26: clyde.v1.AcquireForegroundSessionResponse
-	(*ReleaseForegroundSessionRequest)(nil),     // 27: clyde.v1.ReleaseForegroundSessionRequest
-	(*ReleaseForegroundSessionResponse)(nil),    // 28: clyde.v1.ReleaseForegroundSessionResponse
-	(*EnvironmentVariable)(nil),                 // 29: clyde.v1.EnvironmentVariable
-	(*ProviderLaunchEnvironmentRequest)(nil),    // 30: clyde.v1.ProviderLaunchEnvironmentRequest
-	(*ProviderLaunchEnvironmentResponse)(nil),   // 31: clyde.v1.ProviderLaunchEnvironmentResponse
+	(LaunchCredentialReauthKind)(0),             // 0: clyde.v1.LaunchCredentialReauthKind
+	(StartRemoteSessionResponse_LaunchState)(0), // 1: clyde.v1.StartRemoteSessionResponse.LaunchState
+	(*ProviderSessionIdentity)(nil),             // 2: clyde.v1.ProviderSessionIdentity
+	(*SessionHistoryBoundary)(nil),              // 3: clyde.v1.SessionHistoryBoundary
+	(*LiveSessionBoundary)(nil),                 // 4: clyde.v1.LiveSessionBoundary
+	(*ProviderRuntimeBoundary)(nil),             // 5: clyde.v1.ProviderRuntimeBoundary
+	(*GetProviderStatsRequest)(nil),             // 6: clyde.v1.GetProviderStatsRequest
+	(*SubscribeProviderStatsRequest)(nil),       // 7: clyde.v1.SubscribeProviderStatsRequest
+	(*ProviderStats)(nil),                       // 8: clyde.v1.ProviderStats
+	(*GetProviderStatsResponse)(nil),            // 9: clyde.v1.GetProviderStatsResponse
+	(*ProviderStatsEvent)(nil),                  // 10: clyde.v1.ProviderStatsEvent
+	(*CreateSessionRequest)(nil),                // 11: clyde.v1.CreateSessionRequest
+	(*CreateSessionResponse)(nil),               // 12: clyde.v1.CreateSessionResponse
+	(*StartRemoteSessionRequest)(nil),           // 13: clyde.v1.StartRemoteSessionRequest
+	(*StartRemoteSessionResponse)(nil),          // 14: clyde.v1.StartRemoteSessionResponse
+	(*LiveSession)(nil),                         // 15: clyde.v1.LiveSession
+	(*ListLiveSessionsRequest)(nil),             // 16: clyde.v1.ListLiveSessionsRequest
+	(*ListLiveSessionsResponse)(nil),            // 17: clyde.v1.ListLiveSessionsResponse
+	(*StartLiveSessionRequest)(nil),             // 18: clyde.v1.StartLiveSessionRequest
+	(*StartLiveSessionResponse)(nil),            // 19: clyde.v1.StartLiveSessionResponse
+	(*SendLiveSessionRequest)(nil),              // 20: clyde.v1.SendLiveSessionRequest
+	(*SendLiveSessionResponse)(nil),             // 21: clyde.v1.SendLiveSessionResponse
+	(*StreamLiveSessionRequest)(nil),            // 22: clyde.v1.StreamLiveSessionRequest
+	(*StreamLiveSessionResponse)(nil),           // 23: clyde.v1.StreamLiveSessionResponse
+	(*StopLiveSessionRequest)(nil),              // 24: clyde.v1.StopLiveSessionRequest
+	(*StopLiveSessionResponse)(nil),             // 25: clyde.v1.StopLiveSessionResponse
+	(*AcquireForegroundSessionRequest)(nil),     // 26: clyde.v1.AcquireForegroundSessionRequest
+	(*AcquireForegroundSessionResponse)(nil),    // 27: clyde.v1.AcquireForegroundSessionResponse
+	(*ReleaseForegroundSessionRequest)(nil),     // 28: clyde.v1.ReleaseForegroundSessionRequest
+	(*ReleaseForegroundSessionResponse)(nil),    // 29: clyde.v1.ReleaseForegroundSessionResponse
+	(*EnvironmentVariable)(nil),                 // 30: clyde.v1.EnvironmentVariable
+	(*ProviderLaunchEnvironmentRequest)(nil),    // 31: clyde.v1.ProviderLaunchEnvironmentRequest
+	(*LaunchCredentialReauth)(nil),              // 32: clyde.v1.LaunchCredentialReauth
+	(*ProviderLaunchEnvironmentResponse)(nil),   // 33: clyde.v1.ProviderLaunchEnvironmentResponse
 }
 var file_clyde_v1_daemon_provider_proto_depIdxs = []int32{
-	1,  // 0: clyde.v1.SessionHistoryBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
-	1,  // 1: clyde.v1.SessionHistoryBoundary.previous:type_name -> clyde.v1.ProviderSessionIdentity
-	1,  // 2: clyde.v1.LiveSessionBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
-	2,  // 3: clyde.v1.ProviderRuntimeBoundary.history:type_name -> clyde.v1.SessionHistoryBoundary
-	3,  // 4: clyde.v1.ProviderRuntimeBoundary.live:type_name -> clyde.v1.LiveSessionBoundary
-	7,  // 5: clyde.v1.GetProviderStatsResponse.providers:type_name -> clyde.v1.ProviderStats
-	7,  // 6: clyde.v1.ProviderStatsEvent.stats:type_name -> clyde.v1.ProviderStats
-	0,  // 7: clyde.v1.StartRemoteSessionResponse.launch_state:type_name -> clyde.v1.StartRemoteSessionResponse.LaunchState
-	14, // 8: clyde.v1.ListLiveSessionsResponse.sessions:type_name -> clyde.v1.LiveSession
-	14, // 9: clyde.v1.StartLiveSessionResponse.session:type_name -> clyde.v1.LiveSession
-	14, // 10: clyde.v1.ReleaseForegroundSessionResponse.live_session:type_name -> clyde.v1.LiveSession
-	29, // 11: clyde.v1.ProviderLaunchEnvironmentResponse.environment:type_name -> clyde.v1.EnvironmentVariable
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	2,  // 0: clyde.v1.SessionHistoryBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
+	2,  // 1: clyde.v1.SessionHistoryBoundary.previous:type_name -> clyde.v1.ProviderSessionIdentity
+	2,  // 2: clyde.v1.LiveSessionBoundary.current:type_name -> clyde.v1.ProviderSessionIdentity
+	3,  // 3: clyde.v1.ProviderRuntimeBoundary.history:type_name -> clyde.v1.SessionHistoryBoundary
+	4,  // 4: clyde.v1.ProviderRuntimeBoundary.live:type_name -> clyde.v1.LiveSessionBoundary
+	8,  // 5: clyde.v1.GetProviderStatsResponse.providers:type_name -> clyde.v1.ProviderStats
+	8,  // 6: clyde.v1.ProviderStatsEvent.stats:type_name -> clyde.v1.ProviderStats
+	1,  // 7: clyde.v1.StartRemoteSessionResponse.launch_state:type_name -> clyde.v1.StartRemoteSessionResponse.LaunchState
+	15, // 8: clyde.v1.ListLiveSessionsResponse.sessions:type_name -> clyde.v1.LiveSession
+	15, // 9: clyde.v1.StartLiveSessionResponse.session:type_name -> clyde.v1.LiveSession
+	15, // 10: clyde.v1.ReleaseForegroundSessionResponse.live_session:type_name -> clyde.v1.LiveSession
+	0,  // 11: clyde.v1.LaunchCredentialReauth.kind:type_name -> clyde.v1.LaunchCredentialReauthKind
+	30, // 12: clyde.v1.ProviderLaunchEnvironmentResponse.environment:type_name -> clyde.v1.EnvironmentVariable
+	32, // 13: clyde.v1.ProviderLaunchEnvironmentResponse.reauth:type_name -> clyde.v1.LaunchCredentialReauth
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_provider_proto_init() }
@@ -2135,8 +2290,8 @@ func file_clyde_v1_daemon_provider_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_provider_proto_rawDesc), len(file_clyde_v1_daemon_provider_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   31,
+			NumEnums:      2,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

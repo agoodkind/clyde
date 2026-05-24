@@ -37,10 +37,11 @@ func (s *Server) ProviderLaunchEnvironment(ctx context.Context, req *clydev1.Pro
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "provider launch environment: %v", err)
 	}
-	if err := s.applyRotatorLaunchCredentials(ctx, provider, cfg, &env); err != nil {
+	reauth, err := s.applyRotatorLaunchCredentials(ctx, provider, cfg, &env)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "rotator launch credentials: %v", err)
 	}
-	resp := &clydev1.ProviderLaunchEnvironmentResponse{}
+	resp := &clydev1.ProviderLaunchEnvironmentResponse{Reauth: reauth}
 	for key, value := range env {
 		resp.Environment = append(resp.Environment, &clydev1.EnvironmentVariable{
 			Key:   key,

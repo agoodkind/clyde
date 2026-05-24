@@ -972,9 +972,43 @@ func ReleaseForegroundSessionViaDaemon(ctx context.Context, leaseToken, exitStat
 	return resp, nil
 }
 
+// LaunchCredentialReauthKind names why the rotator could not plant a usable
+// account for a launch. It mirrors the proto enum without leaking generated
+// types past this boundary.
+type LaunchCredentialReauthKind int
+
+const (
+	// LaunchReauthNone means selection succeeded or the rotator path is off.
+	LaunchReauthNone LaunchCredentialReauthKind = iota
+	// LaunchReauthNeedsReauth means the soonest-recoverable account has a dead
+	// refresh credential and needs an operator login.
+	LaunchReauthNeedsReauth
+	// LaunchReauthAllThrottled means every account is rate-limited and recovers
+	// on its own at the reported reset time.
+	LaunchReauthAllThrottled
+)
+
+// LaunchCredentialReauth is the typed view of a rotator selection that yielded
+// no usable account. Kind is LaunchReauthNone when the launch can proceed
+// normally.
+type LaunchCredentialReauth struct {
+	Kind             LaunchCredentialReauthKind
+	Provider         string
+	Account          string
+	ThrottledUntilMS int64
+}
+
+// ProviderLaunchEnvironment is the typed result of a launch-environment fetch:
+// the daemon-owned environment variables to merge into the child env, plus an
+// optional reauth signal the launching client prompts on (CLYDE-453).
+type ProviderLaunchEnvironment struct {
+	Environment []*clydev1.EnvironmentVariable
+	Reauth      LaunchCredentialReauth
+}
+
 // ProviderLaunchEnvironmentViaDaemon asks the daemon for provider launch
 // environment while keeping provider-owned setup in the daemon process.
-func ProviderLaunchEnvironmentViaDaemon(ctx context.Context, provider string) ([]*clydev1.EnvironmentVariable, error) {
+func ProviderLaunchEnvironmentViaDaemon(ctx context.Context, provider string) (ProviderLaunchEnvironment, error) {
 	log := daemonClientLog(ctx)
 	log.DebugContext(ctx, "daemon.client.provider_launch_environment.begin",
 		"provider", provider,
@@ -982,7 +1016,7 @@ func ProviderLaunchEnvironmentViaDaemon(ctx context.Context, provider string) ([
 	c, err := ConnectOrStart(ctx)
 	if err != nil {
 		log.DebugContext(ctx, "daemon.client.provider_launch_environment.connect_failed", "err", err)
-		return nil, err
+		return ProviderLaunchEnvironment{}, err
 	}
 	defer func() { _ = c.conn.Close() }()
 	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -992,13 +1026,44 @@ func ProviderLaunchEnvironmentViaDaemon(ctx context.Context, provider string) ([
 	})
 	if err != nil {
 		log.WarnContext(rpcCtx, "daemon.client.provider_launch_environment.rpc_failed", "err", err)
-		return nil, fmt.Errorf("provider launch environment rpc: %w", err)
+		return ProviderLaunchEnvironment{}, fmt.Errorf("provider launch environment rpc: %w", err)
 	}
 	log.DebugContext(rpcCtx, "daemon.client.provider_launch_environment.ok",
 		"provider", provider,
 		"env_count", len(resp.GetEnvironment()),
 	)
-	return resp.GetEnvironment(), nil
+	return ProviderLaunchEnvironment{
+		Environment: resp.GetEnvironment(),
+		Reauth:      launchReauthFromProto(resp.GetReauth()),
+	}, nil
+}
+
+// launchReauthFromProto maps the wire reauth message to the typed client view.
+// A nil message (selection succeeded or path off) yields LaunchReauthNone.
+func launchReauthFromProto(reauth *clydev1.LaunchCredentialReauth) LaunchCredentialReauth {
+	if reauth == nil {
+		return LaunchCredentialReauth{
+			Kind:             LaunchReauthNone,
+			Provider:         "",
+			Account:          "",
+			ThrottledUntilMS: 0,
+		}
+	}
+	kind := LaunchReauthNone
+	switch reauth.GetKind() {
+	case clydev1.LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_NEEDS_REAUTH:
+		kind = LaunchReauthNeedsReauth
+	case clydev1.LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_ALL_THROTTLED:
+		kind = LaunchReauthAllThrottled
+	case clydev1.LaunchCredentialReauthKind_LAUNCH_CREDENTIAL_REAUTH_KIND_UNSPECIFIED:
+		kind = LaunchReauthNone
+	}
+	return LaunchCredentialReauth{
+		Kind:             kind,
+		Provider:         reauth.GetProvider(),
+		Account:          reauth.GetAccount(),
+		ThrottledUntilMS: reauth.GetThrottledUntilMs(),
+	}
 }
 
 type CompactRunOptions struct {
