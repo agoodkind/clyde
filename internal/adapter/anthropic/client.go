@@ -220,13 +220,11 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		}
 	}
 	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
-	// A 200 response means Anthropic served the request; even when the headers
-	// carry anthropic-ratelimit-unified-overage-status: rejected, Anthropic
-	// continues to serve other simultaneous requests on the same account, so
-	// the rotator must not throttle. rateLimitSignal returns (_, false) on
-	// every non-429 status, including this case, leaving this call as a no-op
-	// today. The call site stays so the boundary helper still observes the
-	// success-headers path if the emit policy ever needs to change.
+	// Observe runs on every response. A clean 200 records an allowed status
+	// that clears any stale rejected observation on the slot; a 200 with
+	// overage-status: rejected records that warning state for the operator
+	// surface without taking the account out of rotation, since Anthropic
+	// kept serving the request.
 	c.maybeEmitRateLimitSignal(ctx, Classify(resp, nil), resp.Header, token)
 	if req.OnHeaders != nil {
 		req.OnHeaders(resp.Header.Clone())
@@ -237,8 +235,9 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 
 // handle429Response builds the typed UpstreamError for a 429 reply, logs the
 // rate-limit event, fires the OnHeaders callback, and reports a rate-limit
-// signal to the configured sink so the rotator can throttle the account. The
-// returned error is the value do() propagates to its caller.
+// signal to the configured sink so the rotator can record the rejected
+// observation on the account. The returned error is the value do()
+// propagates to its caller.
 func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.Response, base responseEvent, token string) error {
 	errBody := readDecodedBody(resp)
 	ev := base
@@ -472,9 +471,9 @@ func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, fa
 
 // maybeEmitRateLimitSignal is the do() boundary helper that builds a
 // rate-limit signal from the observed classification and headers and reports
-// it to the configured sink when one is hard-limited. A nil sink is a no-op.
-// The signal carries the per-request bearer token so the rotation layer can
-// reverse-look-up the account to throttle; the token is never logged.
+// it to the configured sink on every response. A nil sink is a no-op. The
+// signal carries the per-request bearer token so the rotation layer can
+// reverse-look-up the account to update; the token is never logged.
 func (c *Client) maybeEmitRateLimitSignal(ctx context.Context, class Classification, h http.Header, token string) {
 	if c.cfg.RateLimitSink == nil {
 		return
@@ -483,7 +482,7 @@ func (c *Client) maybeEmitRateLimitSignal(ctx context.Context, class Classificat
 	if !emit {
 		return
 	}
-	if err := c.cfg.RateLimitSink.Throttle(ctx, sig); err != nil {
+	if err := c.cfg.RateLimitSink.Observe(ctx, sig); err != nil {
 		anthropicRequestLog.Logger().WarnContext(ctx, "anthropic.ratelimit.signal_emit_failed",
 			"subcomponent", "anthropic",
 			"claim", string(sig.Claim),

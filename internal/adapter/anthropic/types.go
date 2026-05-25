@@ -67,12 +67,11 @@ type Config struct {
 	// other modes route to adapter.providers.anthropic.wire_capture for
 	// short-retention diagnostics.
 	WireCaptureMode WireCaptureMode
-	// RateLimitSink receives observed upstream rate-limit signals so the
-	// OAuth rotation layer can throttle the account behind the current
-	// token and rotate to another. The adapter passes the rotator here
-	// (it implements [ratelimitsink.Sink]). The signal-emission calls land
-	// in a later wave; wiring the field now keeps the client constructor
-	// stable. A nil sink means rate-limit signals are not reported.
+	// RateLimitSink receives observed upstream rate-limit signals on every
+	// response so the OAuth rotation layer can update the in-memory quota
+	// state for the account behind the current token. The adapter passes
+	// the rotator here (it implements [ratelimitsink.Sink]). A nil sink
+	// means rate-limit signals are not reported.
 	RateLimitSink ratelimitsink.Sink
 }
 

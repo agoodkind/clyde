@@ -24,10 +24,8 @@ const (
 	lockFileName = ".clyde-oauth.lock"
 	// labelFileName is the per-account operator label file. Written 0600.
 	labelFileName = ".label"
-	// throttleFileName is the per-provider throttle ledger. Written 0600.
-	throttleFileName = "throttle.json"
 
-	// credentialFileMode is the permission for credential and throttle files.
+	// credentialFileMode is the permission for credential files.
 	credentialFileMode = 0o600
 	// storeDirMode is the permission for store directories.
 	storeDirMode = 0o700
@@ -70,10 +68,4 @@ func accountLockPath(name provider.Name, account provider.AccountID) string {
 // accountLabelPath returns the per-account operator label file path.
 func accountLabelPath(name provider.Name, account provider.AccountID) string {
 	return filepath.Join(accountDir(name, account), labelFileName)
-}
-
-// throttlePath returns the per-provider throttle ledger path:
-// <storeRoot>/<provider>/throttle.json.
-func throttlePath(name provider.Name) string {
-	return filepath.Join(providerDir(name), throttleFileName)
 }

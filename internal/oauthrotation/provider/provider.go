@@ -141,3 +141,32 @@ type Provider interface {
 	// on-disk encoding for persistence.
 	EncodeStored(c Credentials) ([]byte, error)
 }
+
+// RefreshCoordinator is an optional contract a provider can implement to
+// participate in a cross-process refresh coordination protocol. The rotation
+// layer detects it with a type assertion and falls back to the unlocked
+// refresh path when the provider does not implement it.
+//
+// The Anthropic provider implements this so the rotator can share Claude
+// Code's ~/.claude/.lock during an OAuth refresh: while the lock is held the
+// rotator re-reads the upstream credential, refreshes if its own copy is
+// still the freshest, and writes the new tokens back so Claude Code sees
+// them on its next read.
+type RefreshCoordinator interface {
+	// AcquireRefreshLock blocks until the cross-process refresh lock is in
+	// hand or ctx is cancelled. The returned release function MUST be called
+	// exactly once when the caller is done with the lock; the caller may
+	// invoke release in a defer.
+	AcquireRefreshLock(ctx context.Context) (release func() error, err error)
+
+	// ReadUpstreamCredentials reads the cross-process source of truth (for
+	// example the macOS keychain) and returns its current credentials. A
+	// missing or empty source returns (zero, false, nil); a genuine read
+	// failure returns an error.
+	ReadUpstreamCredentials(ctx context.Context) (Credentials, bool, error)
+
+	// WriteUpstreamCredentials persists credentials to the cross-process
+	// source of truth so other processes see the new tokens on their next
+	// read.
+	WriteUpstreamCredentials(ctx context.Context, c Credentials) error
+}

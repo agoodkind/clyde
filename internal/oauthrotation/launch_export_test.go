@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/oauthrotation/provider"
-	"goodkind.io/clyde/internal/oauthrotation/ratelimitsink"
 )
 
 // TestSelectForLaunchPicksReadyAccount confirms SelectForLaunch returns the
@@ -39,31 +38,22 @@ func TestSelectForLaunchPicksReadyAccount(t *testing.T) {
 	}
 }
 
-// TestSelectForLaunchHonorsThrottle confirms a throttle on the first account
-// moves the launch selection to the next non-throttled account, identical to
-// Token.
+// TestSelectForLaunchHonorsThrottle confirms a fresh rejection on the first
+// account moves the launch selection to the next non-throttled account,
+// identical to Token.
 func TestSelectForLaunchHonorsThrottle(t *testing.T) {
 	now := time.UnixMilli(6_000_000)
 	ctx := context.Background()
 	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
 
-	store := newThrottleStore(prov.Name(), nil)
-	entry := throttleEntry{
-		UntilMS:    now.Add(time.Hour).UnixMilli(),
-		ObservedMS: now.UnixMilli(),
-		Claim:      string(ratelimitsink.ClaimFiveHour),
-		HTTPStatus: 429,
-	}
-	if err := store.put(ctx, now, provider.AccountID("acct-a"), entry); err != nil {
-		t.Fatalf("seed throttle: %v", err)
-	}
+	seedRejection(t, rot, prov, "acct-a", now, now.Add(time.Hour))
 
 	account, encoded, err := rot.SelectForLaunch(ctx, prov.Name())
 	if err != nil {
 		t.Fatalf("SelectForLaunch: %v", err)
 	}
 	if account != "acct-b" {
-		t.Fatalf("account = %q, want acct-b after acct-a throttle", account)
+		t.Fatalf("account = %q, want acct-b after acct-a rejection", account)
 	}
 	var stored fakeStored
 	if err := json.Unmarshal(encoded, &stored); err != nil {
@@ -75,23 +65,15 @@ func TestSelectForLaunchHonorsThrottle(t *testing.T) {
 }
 
 // TestSelectForLaunchAllThrottled confirms SelectForLaunch surfaces the typed
-// AllAccountsThrottledError (and no bytes) when every account is throttled.
+// AllAccountsThrottledError (and no bytes) when every account is
+// fresh-rejected.
 func TestSelectForLaunchAllThrottled(t *testing.T) {
 	now := time.UnixMilli(7_000_000)
 	ctx := context.Background()
 	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
 
-	store := newThrottleStore(prov.Name(), nil)
 	for _, acct := range []string{"acct-a", "acct-b"} {
-		entry := throttleEntry{
-			UntilMS:    now.Add(time.Hour).UnixMilli(),
-			ObservedMS: now.UnixMilli(),
-			Claim:      string(ratelimitsink.ClaimFiveHour),
-			HTTPStatus: 429,
-		}
-		if err := store.put(ctx, now, provider.AccountID(acct), entry); err != nil {
-			t.Fatalf("seed throttle %q: %v", acct, err)
-		}
+		seedRejection(t, rot, prov, acct, now, now.Add(time.Hour))
 	}
 
 	account, encoded, err := rot.SelectForLaunch(ctx, prov.Name())

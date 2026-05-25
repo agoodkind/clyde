@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
 	"goodkind.io/clyde/internal/oauthrotation/provider"
 )
@@ -82,6 +80,20 @@ func (r *Rotator) Login(ctx context.Context, name provider.Name, opts provider.L
 	}
 	r.foldLoggedInAccount(state, account, cred, label)
 	r.clearReauthRequired(name, account)
+	// Surface the fresh credential to the cross-process source of truth (the
+	// macOS keychain entry on Anthropic) so Claude Code's next read picks up
+	// the new login without prompting the operator a second time. A nil-
+	// coordinator provider is a no-op.
+	if coord, ok := prov.(provider.RefreshCoordinator); ok {
+		if err := coord.WriteUpstreamCredentials(ctx, cred); err != nil {
+			r.logger.WarnContext(ctx, "oauthrotation.login.upstream_write_failed",
+				"component", "oauthrotation",
+				"provider", string(name),
+				"account", string(account),
+				"err", err.Error(),
+			)
+		}
+	}
 	r.logger.InfoContext(ctx, "oauthrotation.login.completed",
 		"component", "oauthrotation",
 		"provider", string(name),
@@ -128,7 +140,7 @@ func (r *Rotator) foldLoggedInAccount(state *providerState, account provider.Acc
 	state.mu.Lock()
 	slot, exists := state.slots[account]
 	if !exists {
-		slot = &accountSlot{account: account, mu: sync.Mutex{}, cred: provider.Credentials{AccessToken: "", RefreshToken: "", ExpiresAt: time.Time{}, Raw: nil, Fingerprint: ""}, label: ""}
+		slot = newAccountSlot(account)
 		state.slots[account] = slot
 		state.order = append(state.order, account)
 	}

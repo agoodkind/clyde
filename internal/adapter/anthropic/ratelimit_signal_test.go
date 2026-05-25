@@ -20,7 +20,7 @@ type fakeSink struct {
 	err     error
 }
 
-func (f *fakeSink) Throttle(_ context.Context, sig ratelimitsink.Signal) error {
+func (f *fakeSink) Observe(_ context.Context, sig ratelimitsink.Signal) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.signals = append(f.signals, sig)
@@ -44,8 +44,10 @@ func headerFrom(pairs map[string]string) http.Header {
 }
 
 // TestRateLimitSignal mirrors the header matrix from classify_test.go and
-// asserts emit vs no-emit, the mapped Claim, the HTTPStatus, and ResetAt for
-// each (status, overage-status, representative-claim, reset) combination.
+// asserts the mapped Claim, the HTTPStatus, the mapped Status, and ResetAt
+// for each (status, overage-status, representative-claim, reset)
+// combination. The rotator now observes every response, not just 429, so
+// every entry asserts emit=true.
 func TestRateLimitSignal(t *testing.T) {
 	t.Parallel()
 
@@ -56,75 +58,99 @@ func TestRateLimitSignal(t *testing.T) {
 		name        string
 		status      int
 		headers     map[string]string
-		wantEmit    bool
 		wantClaim   ratelimitsink.Claim
 		wantStatus  int
+		wantSink    ratelimitsink.Status
 		wantResetAt time.Time
 	}{
 		{
-			name:     "200_no_warning_does_not_emit",
-			status:   http.StatusOK,
-			headers:  map[string]string{},
-			wantEmit: false,
+			name:       "200_no_warning_observes_unknown",
+			status:     http.StatusOK,
+			headers:    map[string]string{},
+			wantClaim:  ratelimitsink.ClaimUnknown,
+			wantStatus: http.StatusOK,
+			wantSink:   ratelimitsink.StatusUnknown,
 		},
 		{
-			name:   "200_allowed_warning_soft_does_not_emit",
+			name:   "200_allowed_observes_allowed",
+			status: http.StatusOK,
+			headers: map[string]string{
+				"Anthropic-Ratelimit-Unified-Status": "allowed",
+			},
+			wantClaim:  ratelimitsink.ClaimUnknown,
+			wantStatus: http.StatusOK,
+			wantSink:   ratelimitsink.StatusAllowed,
+		},
+		{
+			name:   "200_allowed_warning_observes_allowed_warning",
 			status: http.StatusOK,
 			headers: map[string]string{
 				"Anthropic-Ratelimit-Unified-Status": "allowed_warning",
 			},
-			wantEmit: false,
+			wantClaim:  ratelimitsink.ClaimUnknown,
+			wantStatus: http.StatusOK,
+			wantSink:   ratelimitsink.StatusAllowedWarning,
 		},
 		{
-			name:   "200_overage_active_soft_does_not_emit",
+			name:   "200_overage_active_observes_unknown_status",
 			status: http.StatusOK,
 			headers: map[string]string{
 				"Anthropic-Ratelimit-Unified-Overage-Status": "allowed",
 			},
-			wantEmit: false,
+			wantClaim:  ratelimitsink.ClaimUnknown,
+			wantStatus: http.StatusOK,
+			wantSink:   ratelimitsink.StatusUnknown,
 		},
 		{
-			name:   "200_surpassed_threshold_soft_does_not_emit",
+			name:   "200_surpassed_threshold_observes_unknown_status",
 			status: http.StatusOK,
 			headers: map[string]string{
 				"anthropic-ratelimit-unified-7d-surpassed-threshold": "1",
 			},
-			wantEmit: false,
+			wantClaim:  ratelimitsink.ClaimUnknown,
+			wantStatus: http.StatusOK,
+			wantSink:   ratelimitsink.StatusUnknown,
 		},
 		{
-			// A 200 with overage-status: rejected is advisory; Anthropic served
-			// the request, so the rotator must not throttle the account.
-			name:   "200_overage_rejected_does_not_emit",
+			// A 200 with overage-status: rejected is advisory; Anthropic
+			// served the request. The signal is still emitted (so the
+			// operator surface can record the warning), but the rotator's
+			// quotaStatus reads as unknown so selection does not skip the
+			// account.
+			name:   "200_overage_rejected_observes_unknown_status",
 			status: http.StatusOK,
 			headers: map[string]string{
 				"Anthropic-Ratelimit-Unified-Overage-Status":       "rejected",
 				"Anthropic-Ratelimit-Unified-Representative-Claim": "five_hour",
 				"Anthropic-Ratelimit-Unified-Reset":                fiveHourReset,
 			},
-			wantEmit: false,
+			wantClaim:   ratelimitsink.ClaimFiveHour,
+			wantStatus:  http.StatusOK,
+			wantSink:    ratelimitsink.StatusUnknown,
+			wantResetAt: time.Unix(1735689600, 0),
 		},
 		{
-			name:   "429_seven_day_emits",
+			name:   "429_seven_day_observes_rejected",
 			status: http.StatusTooManyRequests,
 			headers: map[string]string{
 				"Anthropic-Ratelimit-Unified-Representative-Claim": "seven_day",
 				"Anthropic-Ratelimit-Unified-Reset":                fiveHourReset,
 			},
-			wantEmit:    true,
 			wantClaim:   ratelimitsink.ClaimSevenDay,
 			wantStatus:  http.StatusTooManyRequests,
+			wantSink:    ratelimitsink.StatusRejected,
 			wantResetAt: time.Unix(1735689600, 0),
 		},
 		{
-			name:   "429_seven_day_opus_emits",
+			name:   "429_seven_day_opus_observes_rejected",
 			status: http.StatusTooManyRequests,
 			headers: map[string]string{
 				"Anthropic-Ratelimit-Unified-Representative-Claim": "seven_day_opus",
 				"Anthropic-Ratelimit-Unified-Reset":                fiveHourReset,
 			},
-			wantEmit:    true,
 			wantClaim:   ratelimitsink.ClaimSevenDayOpus,
 			wantStatus:  http.StatusTooManyRequests,
+			wantSink:    ratelimitsink.StatusRejected,
 			wantResetAt: time.Unix(1735689600, 0),
 		},
 		{
@@ -135,9 +161,9 @@ func TestRateLimitSignal(t *testing.T) {
 				"Anthropic-Ratelimit-Unified-Reset":                fiveHourReset,
 				"Anthropic-Ratelimit-Unified-Overage-Reset":        overageReset,
 			},
-			wantEmit:    true,
 			wantClaim:   ratelimitsink.ClaimFiveHour,
 			wantStatus:  http.StatusTooManyRequests,
+			wantSink:    ratelimitsink.StatusRejected,
 			wantResetAt: time.Unix(1735603200, 0),
 		},
 		{
@@ -146,9 +172,9 @@ func TestRateLimitSignal(t *testing.T) {
 			headers: map[string]string{
 				"Anthropic-Ratelimit-Unified-Representative-Claim": "lunar_cycle",
 			},
-			wantEmit:    true,
 			wantClaim:   ratelimitsink.ClaimUnknown,
 			wantStatus:  http.StatusTooManyRequests,
+			wantSink:    ratelimitsink.StatusRejected,
 			wantResetAt: time.Time{},
 		},
 		{
@@ -157,9 +183,9 @@ func TestRateLimitSignal(t *testing.T) {
 			headers: map[string]string{
 				"Anthropic-Ratelimit-Unified-Reset": fiveHourReset,
 			},
-			wantEmit:    true,
 			wantClaim:   ratelimitsink.ClaimUnknown,
 			wantStatus:  http.StatusTooManyRequests,
+			wantSink:    ratelimitsink.StatusRejected,
 			wantResetAt: time.Unix(1735689600, 0),
 		},
 	}
@@ -170,11 +196,8 @@ func TestRateLimitSignal(t *testing.T) {
 			h := headerFrom(tt.headers)
 			class := Classify(&http.Response{StatusCode: tt.status, Header: h}, nil)
 			sig, emit := rateLimitSignal(class, h, "tok")
-			if emit != tt.wantEmit {
-				t.Fatalf("emit = %v, want %v (class=%s overageRejected=%v)", emit, tt.wantEmit, class.Class, class.HasOverageRejected)
-			}
-			if !tt.wantEmit {
-				return
+			if !emit {
+				t.Fatalf("emit = false, want true (Observe runs on every response)")
 			}
 			if sig.Provider != "anthropic" {
 				t.Fatalf("provider = %q, want anthropic", sig.Provider)
@@ -188,6 +211,9 @@ func TestRateLimitSignal(t *testing.T) {
 			if sig.HTTPStatus != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", sig.HTTPStatus, tt.wantStatus)
 			}
+			if sig.Status != tt.wantSink {
+				t.Fatalf("sink status = %q, want %q", sig.Status, tt.wantSink)
+			}
 			if !sig.ResetAt.Equal(tt.wantResetAt) {
 				t.Fatalf("reset_at = %v, want %v", sig.ResetAt, tt.wantResetAt)
 			}
@@ -198,12 +224,15 @@ func TestRateLimitSignal(t *testing.T) {
 	}
 }
 
-// Test200OverageRejectedDoesNotEmitSignal pins the throttle-policy contract:
-// a 200 response carrying anthropic-ratelimit-unified-overage-status: rejected
-// and representative-claim: five_hour MUST NOT emit a rotator throttle signal,
-// because Anthropic served the request and continues to serve other concurrent
-// requests on the same account. Only HTTP 429 emits.
-func Test200OverageRejectedDoesNotEmitSignal(t *testing.T) {
+// Test200OverageRejectedObservesWithoutRejectedStatus pins the
+// throttle-policy contract: a 200 response carrying
+// anthropic-ratelimit-unified-overage-status: rejected and
+// representative-claim: five_hour DOES emit an Observe signal (so the
+// operator surface can record the warning), but the carried sink Status is
+// not Rejected. The rotator therefore must not treat the slot as fresh-
+// rejected for selection, because Anthropic served the request and keeps
+// serving other concurrent requests on the same account.
+func Test200OverageRejectedObservesWithoutRejectedStatus(t *testing.T) {
 	t.Parallel()
 	h := headerFrom(map[string]string{
 		"Anthropic-Ratelimit-Unified-Overage-Status":       "rejected",
@@ -215,14 +244,11 @@ func Test200OverageRejectedDoesNotEmitSignal(t *testing.T) {
 		t.Fatalf("Classification.HasOverageRejected must remain true so notice surfaces the warning")
 	}
 	sig, emit := rateLimitSignal(class, h, "tok")
-	if emit {
-		t.Fatalf("rateLimitSignal must return (_, false) on 200 with overage rejected, got signal %+v", sig)
+	if !emit {
+		t.Fatal("rateLimitSignal must emit on 200 so the rotator records the observation")
 	}
-	if sig.Provider != "" || sig.AccessToken != "" || sig.Claim != "" || sig.HTTPStatus != 0 {
-		t.Fatalf("rateLimitSignal must return a zero Signal on no-emit, got %+v", sig)
-	}
-	if !sig.ResetAt.IsZero() || !sig.ObservedAt.IsZero() {
-		t.Fatalf("rateLimitSignal must return zero timestamps on no-emit, got reset=%v observed=%v", sig.ResetAt, sig.ObservedAt)
+	if sig.Status == ratelimitsink.StatusRejected {
+		t.Fatalf("sink status must not be StatusRejected on a 200 (Anthropic served it), got %q", sig.Status)
 	}
 }
 
@@ -314,17 +340,19 @@ func TestClientEmitsRateLimitSignalOn429(t *testing.T) {
 	if recorded[0].HTTPStatus != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", recorded[0].HTTPStatus)
 	}
+	if recorded[0].Status != ratelimitsink.StatusRejected {
+		t.Fatalf("sink status = %q, want StatusRejected on 429", recorded[0].Status)
+	}
 	if recorded[0].AccessToken != "test-token" {
 		t.Fatalf("access token = %q, want test-token", recorded[0].AccessToken)
 	}
 }
 
-// TestClientDoesNotEmitOn200OverageRejected drives do() against a 200 carrying
-// overage-status: rejected and asserts the client reports no signal. The
-// header is advisory on a 200: Anthropic served the request and keeps serving
-// other simultaneous requests on the same account, so the rotator must not
-// throttle. Only 429 emits.
-func TestClientDoesNotEmitOn200OverageRejected(t *testing.T) {
+// TestClientEmitsObserveOn200OverageRejected drives do() against a 200
+// carrying overage-status: rejected and asserts the client emits one
+// Observe signal whose Status is not Rejected. The rotator therefore
+// records the observation without taking the slot out of rotation.
+func TestClientEmitsObserveOn200OverageRejected(t *testing.T) {
 	t.Parallel()
 	sink := &fakeSink{}
 	cli := newSignalTestClient(t, http.StatusOK, map[string]string{
@@ -342,14 +370,19 @@ func TestClientDoesNotEmitOn200OverageRejected(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = resp.Body.Close() })
 
-	if recorded := sink.recorded(); len(recorded) != 0 {
-		t.Fatalf("sink received %d signals on 200 with overage rejected, want 0", len(recorded))
+	recorded := sink.recorded()
+	if len(recorded) != 1 {
+		t.Fatalf("sink received %d signals on 200, want 1", len(recorded))
+	}
+	if recorded[0].Status == ratelimitsink.StatusRejected {
+		t.Fatalf("sink status = %q, must not be StatusRejected (Anthropic served the request)", recorded[0].Status)
 	}
 }
 
-// TestClientDoesNotEmitOnCleanSuccess drives do() against a clean 200 and
-// asserts the client reports nothing.
-func TestClientDoesNotEmitOnCleanSuccess(t *testing.T) {
+// TestClientEmitsObserveOnCleanSuccess drives do() against a clean 200 and
+// asserts the client emits one Observe signal carrying an unknown status (no
+// unified-status header on the response).
+func TestClientEmitsObserveOnCleanSuccess(t *testing.T) {
 	t.Parallel()
 	sink := &fakeSink{}
 	cli := newSignalTestClient(t, http.StatusOK, map[string]string{}, sink)
@@ -363,8 +396,12 @@ func TestClientDoesNotEmitOnCleanSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = resp.Body.Close() })
 
-	if recorded := sink.recorded(); len(recorded) != 0 {
-		t.Fatalf("sink received %d signals on clean success, want 0", len(recorded))
+	recorded := sink.recorded()
+	if len(recorded) != 1 {
+		t.Fatalf("sink received %d signals on clean success, want 1", len(recorded))
+	}
+	if recorded[0].Status != ratelimitsink.StatusUnknown {
+		t.Fatalf("sink status = %q, want StatusUnknown on bare 200", recorded[0].Status)
 	}
 }
 

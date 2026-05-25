@@ -4,13 +4,12 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"goodkind.io/clyde/internal/oauthrotation/ratelimitsink"
 )
 
 // providerName is the value the rate-limit Signal carries so the rotation
-// layer can route the throttle to the Anthropic provider's accounts.
+// layer can route the observation to the Anthropic provider's accounts.
 const providerName = "anthropic"
 
 // representativeClaim is the closed set of unified representative-claim header
@@ -36,42 +35,63 @@ var unknownClaimWarnedOnce sync.Map
 
 // rateLimitSignal builds a [ratelimitsink.Signal] from an observed upstream
 // response and reports whether the client should emit it. The signal is
-// emitted only when the upstream returned HTTP 429, since that is the only
-// status where Anthropic actually refused the request. Soft warnings
-// (approaching-threshold, allowed_warning, active overage) and the advisory
-// 200-with-overage-status-rejected case do not emit: the request was served
-// and Anthropic continues to serve other simultaneous requests on the same
-// account, so the rotator must not throttle the account for them.
+// emitted on every response, not only on 429: the rotator's Observe entry
+// point records the last status per account so a clean response clears any
+// stale rejection within 60s.
 //
 // accessToken is the bearer token used for the request; it is carried on the
-// Signal so the rotation layer can reverse-look-up the slot to throttle. The
+// Signal so the rotation layer can reverse-look-up the slot to update. The
 // caller must never log the token.
 func rateLimitSignal(class Classification, h http.Header, accessToken string) (ratelimitsink.Signal, bool) {
-	if class.Status != http.StatusTooManyRequests {
-		return ratelimitsink.Signal{
-			Provider:    "",
-			AccessToken: "",
-			Claim:       "",
-			ResetAt:     time.Time{},
-			ObservedAt:  time.Time{},
-			HTTPStatus:  0,
-		}, false
-	}
-
 	claim := mapRepresentativeClaim(h.Get("Anthropic-Ratelimit-Unified-Representative-Claim"))
 	resetAt := earliestReset(
 		parseUnix(h.Get("Anthropic-Ratelimit-Unified-Reset")),
 		parseUnix(h.Get("Anthropic-Ratelimit-Unified-Overage-Reset")),
 	)
+	status := mapUnifiedStatus(h.Get("Anthropic-Ratelimit-Unified-Status"), class.Status)
 
 	return ratelimitsink.Signal{
 		Provider:    providerName,
 		AccessToken: accessToken,
+		Status:      status,
 		Claim:       claim,
 		ResetAt:     resetAt,
 		ObservedAt:  anthropicClock.Now(),
 		HTTPStatus:  class.Status,
 	}, true
+}
+
+// unifiedStatusHeader is the closed set of unified-status header values this
+// package recognizes. Values arrive on the wire as the
+// anthropic-ratelimit-unified-status header; any other value maps to
+// StatusUnknown.
+type unifiedStatusHeader string
+
+const (
+	unifiedStatusAllowed        unifiedStatusHeader = "allowed"
+	unifiedStatusAllowedWarning unifiedStatusHeader = "allowed_warning"
+	unifiedStatusRejected       unifiedStatusHeader = "rejected"
+)
+
+// mapUnifiedStatus maps the wire anthropic-ratelimit-unified-status value to
+// a typed [ratelimitsink.Status]. A missing header on a 429 still implies the
+// account was rejected, so HTTP 429 with no status header maps to
+// StatusRejected; other missing-header cases map to StatusUnknown so the
+// rotator does not synthesize a state Anthropic did not report.
+func mapUnifiedStatus(raw string, httpStatus int) ratelimitsink.Status {
+	value := unifiedStatusHeader(strings.ToLower(strings.TrimSpace(raw)))
+	switch value {
+	case unifiedStatusAllowed:
+		return ratelimitsink.StatusAllowed
+	case unifiedStatusAllowedWarning:
+		return ratelimitsink.StatusAllowedWarning
+	case unifiedStatusRejected:
+		return ratelimitsink.StatusRejected
+	}
+	if httpStatus == http.StatusTooManyRequests {
+		return ratelimitsink.StatusRejected
+	}
+	return ratelimitsink.StatusUnknown
 }
 
 // mapRepresentativeClaim maps the unified representative-claim header value to

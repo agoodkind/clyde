@@ -20,10 +20,10 @@ type ForgetResult struct {
 // Forget removes one account from a provider. idOrLabel is matched first
 // against the account id and then against the recorded operator label. On a
 // match the slot is dropped from the in-memory map and selection order, the
-// throttle entry is cleared, the reauth mark is cleared, and the on-disk
-// account directory is deleted. A non-match returns Forgotten=false with no
-// error so the caller can report "no such account" without treating it as a
-// failure.
+// reauth mark is cleared, and the on-disk account directory is deleted. The
+// observation fields disappear with the slot itself. A non-match returns
+// Forgotten=false with no error so the caller can report "no such account"
+// without treating it as a failure.
 func (r *Rotator) Forget(ctx context.Context, name provider.Name, idOrLabel string) (ForgetResult, error) {
 	state, err := r.providerState(ctx, name)
 	if err != nil {
@@ -52,15 +52,6 @@ func (r *Rotator) Forget(ctx context.Context, name provider.Name, idOrLabel stri
 			"query", query,
 		)
 		return ForgetResult{Forgotten: false, Account: ""}, nil
-	}
-
-	if err := state.throttle.clear(ctx, account); err != nil {
-		r.logger.WarnContext(ctx, "oauthrotation.forget.clear_throttle_failed",
-			"component", "oauthrotation",
-			"provider", string(name),
-			"account", string(account),
-			"err", err.Error(),
-		)
 	}
 
 	dir := accountDir(name, account)

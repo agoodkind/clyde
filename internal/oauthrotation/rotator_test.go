@@ -227,18 +227,38 @@ func seedRotator(t *testing.T, now time.Time, accounts ...string) (*Rotator, *fa
 	return rot, prov
 }
 
+// seedRejection drives the rotator's Observe entry point with a rejected
+// signal for a given account so the test exercises the same code path the
+// Anthropic client takes on a 429. observedAt and resetAt let the test pin
+// the freshness window relative to the rotator's fake clock.
+func seedRejection(t *testing.T, rot *Rotator, prov *fakeProvider, account string, observedAt, resetAt time.Time) {
+	t.Helper()
+	sig := ratelimitsink.Signal{
+		Provider:    string(prov.Name()),
+		AccessToken: account + ":token",
+		Status:      ratelimitsink.StatusRejected,
+		Claim:       ratelimitsink.ClaimFiveHour,
+		ResetAt:     resetAt,
+		ObservedAt:  observedAt,
+		HTTPStatus:  429,
+	}
+	if err := rot.Observe(context.Background(), sig); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+}
+
 func TestRotatorToken(t *testing.T) {
 	now := time.UnixMilli(1_000_000)
-	hour := int64(time.Hour / time.Millisecond)
 
-	type throttle struct {
-		account string
-		untilMS int64
+	type rejection struct {
+		account    string
+		observedAt time.Time
+		resetAt    time.Time
 	}
 	tests := []struct {
 		name        string
 		accounts    []string
-		throttles   []throttle
+		rejections  []rejection
 		wantAccount provider.AccountID
 		wantErrAll  bool
 		wantSoonest provider.AccountID
@@ -246,35 +266,37 @@ func TestRotatorToken(t *testing.T) {
 		{
 			name:        "ready account picked",
 			accounts:    []string{"acct-a", "acct-b"},
-			throttles:   nil,
+			rejections:  nil,
 			wantAccount: "acct-a",
 			wantErrAll:  false,
 			wantSoonest: "",
 		},
 		{
-			name:        "throttled first skips to second",
-			accounts:    []string{"acct-a", "acct-b"},
-			throttles:   []throttle{{account: "acct-a", untilMS: now.UnixMilli() + hour}},
+			name:     "rejected first skips to second",
+			accounts: []string{"acct-a", "acct-b"},
+			rejections: []rejection{
+				{account: "acct-a", observedAt: now, resetAt: now.Add(time.Hour)},
+			},
 			wantAccount: "acct-b",
 			wantErrAll:  false,
 			wantSoonest: "",
 		},
 		{
-			name:     "all throttled returns typed error with soonest reset",
+			name:     "all rejected inside freshness returns typed error with soonest reset",
 			accounts: []string{"acct-a", "acct-b"},
-			throttles: []throttle{
-				{account: "acct-a", untilMS: now.UnixMilli() + 2*hour},
-				{account: "acct-b", untilMS: now.UnixMilli() + hour},
+			rejections: []rejection{
+				{account: "acct-a", observedAt: now, resetAt: now.Add(2 * time.Hour)},
+				{account: "acct-b", observedAt: now, resetAt: now.Add(time.Hour)},
 			},
 			wantAccount: "",
 			wantErrAll:  true,
 			wantSoonest: "acct-b",
 		},
 		{
-			name:     "expired throttle entries are ignored",
+			name:     "rejection past reset is ignored",
 			accounts: []string{"acct-a", "acct-b"},
-			throttles: []throttle{
-				{account: "acct-a", untilMS: now.UnixMilli() - hour},
+			rejections: []rejection{
+				{account: "acct-a", observedAt: now.Add(-30 * time.Second), resetAt: now.Add(-time.Minute)},
 			},
 			wantAccount: "acct-a",
 			wantErrAll:  false,
@@ -286,12 +308,8 @@ func TestRotatorToken(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			rot, prov := seedRotator(t, now, tc.accounts...)
-			for _, th := range tc.throttles {
-				store := newThrottleStore(prov.Name(), nil)
-				entry := throttleEntry{UntilMS: th.untilMS, ObservedMS: now.UnixMilli(), Claim: string(ratelimitsink.ClaimFiveHour), HTTPStatus: 429}
-				if err := store.put(ctx, now, provider.AccountID(th.account), entry); err != nil {
-					t.Fatalf("seed throttle: %v", err)
-				}
+			for _, rej := range tc.rejections {
+				seedRejection(t, rot, prov, rej.account, rej.observedAt, rej.resetAt)
 			}
 
 			token, account, err := rot.Token(ctx, prov.Name())
@@ -322,7 +340,7 @@ func TestRotatorToken(t *testing.T) {
 	}
 }
 
-func TestRotatorThrottleReverseLookup(t *testing.T) {
+func TestRotatorObserveReverseLookup(t *testing.T) {
 	now := time.UnixMilli(2_000_000)
 	ctx := context.Background()
 	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
@@ -330,29 +348,30 @@ func TestRotatorThrottleReverseLookup(t *testing.T) {
 	sig := ratelimitsink.Signal{
 		Provider:    string(prov.Name()),
 		AccessToken: "acct-b:token",
+		Status:      ratelimitsink.StatusRejected,
 		Claim:       ratelimitsink.ClaimSevenDay,
 		ResetAt:     now.Add(time.Hour),
 		ObservedAt:  now,
 		HTTPStatus:  429,
 	}
-	if err := rot.Throttle(ctx, sig); err != nil {
-		t.Fatalf("Throttle: %v", err)
+	if err := rot.Observe(ctx, sig); err != nil {
+		t.Fatalf("Observe: %v", err)
 	}
 
-	// acct-b is now throttled, so Token must pick acct-a.
+	// acct-b is now fresh-rejected, so Token must pick acct-a.
 	_, account, err := rot.Token(ctx, prov.Name())
 	if err != nil {
-		t.Fatalf("Token after throttle: %v", err)
+		t.Fatalf("Token after Observe: %v", err)
 	}
 	if account != "acct-a" {
 		t.Fatalf("account = %q, want acct-a", account)
 	}
 
-	// An unknown token must not throttle any slot.
+	// An unknown token must not match any slot.
 	unknown := sig
 	unknown.AccessToken = "ghost:token"
-	if err := rot.Throttle(ctx, unknown); err == nil {
-		t.Fatalf("Throttle for unknown token: want error, got nil")
+	if err := rot.Observe(ctx, unknown); err == nil {
+		t.Fatalf("Observe for unknown token: want error, got nil")
 	}
 }
 
@@ -689,18 +708,13 @@ func TestRotatorUsableAccountWinsOverReauthMarked(t *testing.T) {
 
 func TestRotatorReauthPreferredOverThrottledWhenNoneUsable(t *testing.T) {
 	now := time.UnixMilli(8_000_000)
-	hour := int64(time.Hour / time.Millisecond)
 	ctx := context.Background()
 	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
-	// acct-a needs re-auth (never self-recovers); acct-b is throttled (recovers
+	// acct-a needs re-auth (never self-recovers); acct-b is rejected (recovers
 	// at its reset). With no usable account, the re-auth remedy is actionable so
 	// the rotator surfaces NeedsReauthError rather than AllAccountsThrottledError.
 	markReauth(t, rot, prov.Name(), "acct-a")
-	store := newThrottleStore(prov.Name(), nil)
-	entry := throttleEntry{UntilMS: now.UnixMilli() + hour, ObservedMS: now.UnixMilli(), Claim: string(ratelimitsink.ClaimFiveHour), HTTPStatus: 429}
-	if err := store.put(ctx, now, provider.AccountID("acct-b"), entry); err != nil {
-		t.Fatalf("seed throttle: %v", err)
-	}
+	seedRejection(t, rot, prov, "acct-b", now, now.Add(time.Hour))
 
 	_, _, err := rot.Token(ctx, prov.Name())
 	var reauthErr NeedsReauthError
@@ -1001,7 +1015,12 @@ func registerFakeDetector(t *testing.T, name provider.Name, inUseAccounts ...pro
 	return det
 }
 
-func TestRefreshDueSkipsInUseAccount(t *testing.T) {
+// TestRefreshDueRefreshesEveryDueAccountIncludingInUse pins the
+// coordinated-refresh contract: the in-use skip is gone. Both accounts are
+// due (already past their stored ExpiresAt), one of them is reported as
+// in-use by the detector, and RefreshDue refreshes BOTH so the in-use
+// account does not silently decay.
+func TestRefreshDueRefreshesEveryDueAccountIncludingInUse(t *testing.T) {
 	now := time.UnixMilli(100_000_000)
 	ctx := context.Background()
 	rot, prov := seedRotatorWithExpiry(t, now, map[string]time.Time{
@@ -1013,15 +1032,17 @@ func TestRefreshDueSkipsInUseAccount(t *testing.T) {
 	if err := rot.RefreshDue(ctx); err != nil {
 		t.Fatalf("RefreshDue: %v", err)
 	}
-	if got := refreshCountFor(prov, "acct-a"); got != 0 {
-		t.Fatalf("in-use acct-a refreshed %d times, want 0", got)
+	if got := refreshCountFor(prov, "acct-a"); got != 1 {
+		t.Fatalf("in-use acct-a refreshed %d times, want 1 (in-use skip is gone)", got)
 	}
 	if got := refreshCountFor(prov, "acct-b"); got != 1 {
-		t.Fatalf("non-in-use acct-b refreshed %d times, want 1", got)
+		t.Fatalf("acct-b refreshed %d times, want 1", got)
 	}
 }
 
-func TestRefreshAllSkipsInUseAccount(t *testing.T) {
+// TestRefreshAllRefreshesEveryAccountIncludingInUse mirrors
+// TestRefreshDueRefreshesEveryDueAccountIncludingInUse for RefreshAll.
+func TestRefreshAllRefreshesEveryAccountIncludingInUse(t *testing.T) {
 	now := time.UnixMilli(110_000_000)
 	ctx := context.Background()
 	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
@@ -1031,10 +1052,10 @@ func TestRefreshAllSkipsInUseAccount(t *testing.T) {
 		t.Fatalf("RefreshAll: %v", err)
 	}
 	if got := refreshCountFor(prov, "acct-a"); got != 1 {
-		t.Fatalf("non-in-use acct-a refreshed %d times, want 1", got)
+		t.Fatalf("acct-a refreshed %d times, want 1", got)
 	}
-	if got := refreshCountFor(prov, "acct-b"); got != 0 {
-		t.Fatalf("in-use acct-b refreshed %d times, want 0", got)
+	if got := refreshCountFor(prov, "acct-b"); got != 1 {
+		t.Fatalf("in-use acct-b refreshed %d times, want 1 (in-use skip is gone)", got)
 	}
 }
 
@@ -1085,6 +1106,152 @@ func TestTokenAfterAuthFailureNotInUseRefreshes(t *testing.T) {
 	}
 	if got := refreshCountFor(prov, "acct-a"); got != 1 {
 		t.Fatalf("non-in-use TokenAfterAuthFailure refreshed %d times, want 1", got)
+	}
+}
+
+// TestRejectedObservationSkipsWithinFreshness pins the selection contract:
+// a rejected observation made 30s ago with reset 5min in the future keeps
+// the slot out of rotation, so the next slot is selected.
+func TestRejectedObservationSkipsWithinFreshness(t *testing.T) {
+	now := time.UnixMilli(200_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	seedRejection(t, rot, prov, "acct-a", now.Add(-30*time.Second), now.Add(5*time.Minute))
+
+	_, account, err := rot.Token(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if account != "acct-b" {
+		t.Fatalf("account = %q, want acct-b (acct-a is fresh-rejected)", account)
+	}
+}
+
+// TestRejectedObservationOutsideFreshness pins the other side: a rejected
+// observation made 90s ago is past the 60s freshness ceiling, so the slot
+// re-enters rotation even though Anthropic's reported reset is still in the
+// future. The next live request finds out the truth.
+func TestRejectedObservationOutsideFreshness(t *testing.T) {
+	now := time.UnixMilli(210_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	seedRejection(t, rot, prov, "acct-a", now.Add(-90*time.Second), now.Add(5*time.Minute))
+
+	_, account, err := rot.Token(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if account != "acct-a" {
+		t.Fatalf("account = %q, want acct-a (stale rejection past freshness window)", account)
+	}
+}
+
+// TestAllowedObservationClearsRejected pins the recovery contract: after a
+// rejected observation, an allowed observation immediately makes the slot
+// eligible again.
+func TestAllowedObservationClearsRejected(t *testing.T) {
+	now := time.UnixMilli(220_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	seedRejection(t, rot, prov, "acct-a", now, now.Add(5*time.Minute))
+
+	// Selection should pick acct-b while acct-a is fresh-rejected.
+	if _, account, err := rot.Token(ctx, prov.Name()); err != nil || account != "acct-b" {
+		t.Fatalf("Token (rejected) = (%q, %v), want (acct-b, nil)", account, err)
+	}
+
+	// An allowed observation overrides the rejection.
+	if err := rot.Observe(ctx, ratelimitsink.Signal{
+		Provider:    string(prov.Name()),
+		AccessToken: "acct-a:token",
+		Status:      ratelimitsink.StatusAllowed,
+		Claim:       ratelimitsink.ClaimFiveHour,
+		ResetAt:     now.Add(5 * time.Minute),
+		ObservedAt:  now,
+		HTTPStatus:  200,
+	}); err != nil {
+		t.Fatalf("Observe (allowed): %v", err)
+	}
+
+	if _, account, err := rot.Token(ctx, prov.Name()); err != nil || account != "acct-a" {
+		t.Fatalf("Token (allowed) = (%q, %v), want (acct-a, nil)", account, err)
+	}
+}
+
+// TestFreshRotatorEveryAccountEligible pins the post-restart contract: a
+// brand-new rotator has zero observation state, so every account selects as
+// eligible.
+func TestFreshRotatorEveryAccountEligible(t *testing.T) {
+	now := time.UnixMilli(230_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+
+	if _, account, err := rot.Token(ctx, prov.Name()); err != nil || account != "acct-a" {
+		t.Fatalf("Token (fresh) = (%q, %v), want (acct-a, nil)", account, err)
+	}
+	snapshots, err := rot.Accounts(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	for _, snap := range snapshots {
+		if snap.Throttled {
+			t.Fatalf("snapshot for %q reports Throttled=true on a fresh rotator", snap.Account)
+		}
+	}
+}
+
+// TestStartupLoaderDeletesLegacyThrottle pins the on-disk migration: a
+// pre-existing throttle.json (plus its .lock companion) is deleted on
+// startup load, and the rotator emits the legacy_file_removed event so an
+// operator can confirm the migration ran.
+func TestStartupLoaderDeletesLegacyThrottle(t *testing.T) {
+	now := time.UnixMilli(240_000_000)
+	ctx := context.Background()
+	prov := newFakeProvider("anthropic")
+	prov.mirror = nil
+	rot, logBuf := newLoadTestRotator(t, now, prov)
+
+	dir := providerDir(prov.Name())
+	if err := os.MkdirAll(dir, storeDirMode); err != nil {
+		t.Fatalf("mkdir provider dir: %v", err)
+	}
+	legacyPath := filepath.Join(dir, legacyThrottleFileName)
+	if err := os.WriteFile(legacyPath, []byte(`{"version":1,"entries":{}}`), credentialFileMode); err != nil {
+		t.Fatalf("seed legacy file: %v", err)
+	}
+	legacyLockPath := legacyPath + ".lock"
+	if err := os.WriteFile(legacyLockPath, []byte{}, credentialFileMode); err != nil {
+		t.Fatalf("seed legacy lock: %v", err)
+	}
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected legacy throttle file removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(legacyLockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected legacy throttle lock removed, stat err=%v", err)
+	}
+	if got := countEventLines(logBuf, "oauthrotation.throttle.legacy_file_removed"); got < 1 {
+		t.Fatalf("legacy_file_removed events = %d, want >= 1, logs=%s", got, logBuf.String())
+	}
+}
+
+// TestStartupLoaderLegacyThrottleMissingIsNoop confirms the migration is
+// silent when no legacy file exists on disk.
+func TestStartupLoaderLegacyThrottleMissingIsNoop(t *testing.T) {
+	now := time.UnixMilli(250_000_000)
+	ctx := context.Background()
+	prov := newFakeProvider("anthropic")
+	prov.mirror = nil
+	rot, logBuf := newLoadTestRotator(t, now, prov)
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := countEventLines(logBuf, "oauthrotation.throttle.legacy_file_removed"); got != 0 {
+		t.Fatalf("legacy_file_removed events = %d, want 0 when nothing is on disk", got)
 	}
 }
 

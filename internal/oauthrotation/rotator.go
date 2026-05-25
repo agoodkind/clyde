@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -39,6 +40,18 @@ const (
 	// returns nil immediately so a reload-time re-load or an external trigger
 	// does not duplicate the startup walk.
 	loadMinInterval = 10 * time.Second
+	// maxObservationFreshness is the upper bound on how long a "rejected"
+	// observation may keep an account out of rotation. Without this ceiling a
+	// stale observation could block an account for hours the same way the
+	// legacy throttle ledger did. With it, the rotator trusts the rejection
+	// for at most one minute and the next live request finds out the current
+	// truth.
+	maxObservationFreshness = 60 * time.Second
+	// legacyThrottleFileName is the on-disk name of the retired throttle
+	// ledger. The startup loader deletes it (and its proper-lockfile
+	// companion) so a daemon that upgraded to the in-memory observation
+	// model does not leave stale state on disk.
+	legacyThrottleFileName = "throttle.json"
 )
 
 // AccountSnapshot is a read-only view of one account slot for the RPC layer.
@@ -67,18 +80,58 @@ type accountSlot struct {
 	// label is the operator-supplied human label captured at login time. It is
 	// loaded from the per-account label file on import and persisted on login.
 	label string
+	// lastObservedStatus is the most recent rate-limit status the Anthropic
+	// HTTP client reported for this slot. quotaUnknown is the zero value;
+	// every account starts there after a daemon restart and remains there
+	// until the next live response writes truth.
+	lastObservedStatus quotaStatus
+	// lastObservedAt is when lastObservedStatus was recorded. Selection uses
+	// this with maxObservationFreshness to bound how long a rejected
+	// observation may keep the slot out of rotation.
+	lastObservedAt time.Time
+	// lastResetAt is the upstream-reported reset time the last observation
+	// carried. Selection skips the slot only while now is before lastResetAt
+	// AND within the freshness window.
+	lastResetAt time.Time
+	// lastClaim is the rate-limit window the last observation referred to
+	// (five_hour, seven_day, seven_day_opus, or unknown). It is surfaced in
+	// AccountSnapshot.Claim so the CLI and TUI can label the throttle.
+	lastClaim string
+	// pendingCoordRelease is the cross-process refresh-lock release function
+	// the coordinator acquired in coordinateRefresh and that the subsequent
+	// runProviderRefresh must run on its own defer. It is set and cleared
+	// within a single refreshSlot call and never accessed concurrently
+	// because refreshSlot holds the slot mutex for the duration.
+	pendingCoordRelease func() error
+}
+
+// newAccountSlot returns a zero-valued slot keyed to the given account. Every
+// callsite that constructs an accountSlot literal goes through this helper so
+// adding a new field cannot leave a slot partially initialized.
+func newAccountSlot(account provider.AccountID) *accountSlot {
+	return &accountSlot{
+		account:             account,
+		mu:                  sync.Mutex{},
+		cred:                provider.Credentials{AccessToken: "", RefreshToken: "", ExpiresAt: time.Time{}, Raw: nil, Fingerprint: ""},
+		label:               "",
+		lastObservedStatus:  quotaUnknown,
+		lastObservedAt:      time.Time{},
+		lastResetAt:         time.Time{},
+		lastClaim:           "",
+		pendingCoordRelease: nil,
+	}
 }
 
 // providerState groups everything the rotator tracks for one registered
-// provider: the provider implementation, its ordered account slots, its
-// throttle store, and a one-way mirror syncer.
+// provider: the provider implementation, its ordered account slots, and a
+// one-way mirror syncer. The in-memory quota observations live on each slot;
+// nothing is persisted to disk for the throttle state.
 type providerState struct {
-	prov     provider.Provider
-	mu       sync.Mutex
-	slots    map[provider.AccountID]*accountSlot
-	order    []provider.AccountID
-	throttle *throttleStore
-	syncer   *mirror.Syncer
+	prov   provider.Provider
+	mu     sync.Mutex
+	slots  map[provider.AccountID]*accountSlot
+	order  []provider.AccountID
+	syncer *mirror.Syncer
 	// reauth marks accounts whose refresh credential is dead (the provider
 	// reported [provider.ErrReauthRequired]). A marked account is dropped from
 	// token selection until a fresh login replaces its credential. The
@@ -103,8 +156,8 @@ type providerState struct {
 }
 
 // Rotator picks a non-throttled account per provider, mirrors upstream
-// credentials one-way, refreshes tokens, and records rate-limit throttles. It
-// implements [ratelimitsink.Sink].
+// credentials one-way, refreshes tokens, and records the most recent
+// rate-limit observation per account. It implements [ratelimitsink.Sink].
 type Rotator struct {
 	mu        sync.RWMutex
 	providers map[provider.Name]*providerState
@@ -179,7 +232,6 @@ func (r *Rotator) Register(p provider.Provider) {
 		mu:           sync.Mutex{},
 		slots:        make(map[provider.AccountID]*accountSlot),
 		order:        nil,
-		throttle:     newThrottleStore(name, r.logger),
 		syncer:       mirror.NewSyncer(p, mirrorPaths, modes, r.logger),
 		reauth:       make(map[provider.AccountID]bool),
 		loadOnce:     &sync.Once{},
@@ -191,10 +243,11 @@ func (r *Rotator) Register(p provider.Provider) {
 	r.mu.Unlock()
 }
 
-// Token runs one mirror-sync pass, drops expired throttle entries, walks the
-// provider's accounts in a stable order, and returns the first account that is
-// not throttled along with its access token. When every account is throttled
-// it returns AllAccountsThrottledError with the soonest reset.
+// Token runs one mirror-sync pass, walks the provider's accounts in a stable
+// order, and returns the first account whose last observation is not a fresh
+// rejection along with its access token. When every account is rejected
+// inside the freshness window it returns AllAccountsThrottledError with the
+// soonest reset.
 func (r *Rotator) Token(ctx context.Context, name provider.Name) (string, provider.AccountID, error) {
 	slot, account, err := r.selectActiveSlot(ctx, name)
 	if err != nil {
@@ -206,13 +259,14 @@ func (r *Rotator) Token(ctx context.Context, name provider.Name) (string, provid
 	return token, account, nil
 }
 
-// selectActiveSlot runs the same selection Token uses: one mirror-sync pass, a
-// throttle-ledger load, then a stable walk over the provider's accounts that
-// skips re-auth-marked and throttled slots and returns the first usable one.
-// It returns the selected slot so callers can read either the access token
-// (Token) or the stored credential encoding (SelectForLaunch) without
-// duplicating selection semantics. When every account is throttled it returns
-// AllAccountsThrottledError with the soonest reset.
+// selectActiveSlot runs the same selection Token uses: one mirror-sync pass,
+// then a stable walk over the provider's accounts that skips re-auth-marked
+// slots and slots whose last observation is a fresh rejection still inside
+// the freshness window. It returns the selected slot so callers can read
+// either the access token (Token) or the stored credential encoding
+// (SelectForLaunch) without duplicating selection semantics. When every
+// account is fresh-rejected it returns AllAccountsThrottledError with the
+// soonest reset.
 func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*accountSlot, provider.AccountID, error) {
 	state, err := r.providerState(ctx, name)
 	if err != nil {
@@ -222,15 +276,6 @@ func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*ac
 	r.runMirrorSync(ctx, name, state)
 
 	now := r.now()
-	active, err := state.throttle.load(ctx, now)
-	if err != nil {
-		r.logger.ErrorContext(ctx, "oauthrotation.token.load_throttle_failed",
-			"component", "oauthrotation",
-			"provider", string(name),
-			"err", err.Error(),
-		)
-		return nil, "", fmt.Errorf("load throttle ledger for %q: %w", name, err)
-	}
 
 	state.mu.Lock()
 	order := append([]provider.AccountID(nil), state.order...)
@@ -255,14 +300,20 @@ func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*ac
 			}
 			continue
 		}
-		entry, throttled := active[account]
+		slot := slots[account]
+		throttled, _ := slotIsFreshRejected(slot, now)
 		if !throttled {
-			return slots[account], account, nil
+			return slot, account, nil
 		}
-		until := time.UnixMilli(entry.UntilMS)
-		if !soonestSet || until.Before(soonestReset) {
+		// Use the unclamped upstream reset for the soonest-reset comparison so
+		// the typed error still surfaces the earlier real recovery window when
+		// two slots share the same observation freshness cap.
+		slot.mu.Lock()
+		resetAt := slot.lastResetAt
+		slot.mu.Unlock()
+		if !soonestSet || resetAt.Before(soonestReset) {
 			soonestSet = true
-			soonestReset = until
+			soonestReset = resetAt
 			soonestAccount = account
 		}
 	}
@@ -374,10 +425,14 @@ func (r *Rotator) TokenAfterAuthFailure(ctx context.Context, name provider.Name,
 	return token, nil
 }
 
-// Throttle implements [ratelimitsink.Sink]. It reverse-looks-up the account
-// slot by access token, persists a throttle entry keyed by that account, and
-// logs.
-func (r *Rotator) Throttle(ctx context.Context, sig ratelimitsink.Signal) error {
+// Observe implements [ratelimitsink.Sink]. It reverse-looks-up the account
+// slot by access token and records the signal's status, claim, reset time,
+// and observation timestamp into the slot's in-memory observation fields.
+// Observe runs on every upstream response, not only on 429: a 200 with
+// status=allowed clears any stale rejection on the slot, and a 429 with
+// status=rejected makes the slot ineligible for the next selection pass for
+// up to maxObservationFreshness.
+func (r *Rotator) Observe(ctx context.Context, sig ratelimitsink.Signal) error {
 	name := provider.Name(sig.Provider)
 	state, err := r.providerState(ctx, name)
 	if err != nil {
@@ -386,47 +441,73 @@ func (r *Rotator) Throttle(ctx context.Context, sig ratelimitsink.Signal) error 
 
 	account, found := r.accountForToken(state, sig.AccessToken)
 	if !found {
-		r.logger.WarnContext(ctx, "oauthrotation.throttle.unknown_token",
+		r.logger.WarnContext(ctx, "oauthrotation.observe.unknown_token",
 			"component", "oauthrotation",
 			"provider", string(name),
 			"http_status", sig.HTTPStatus,
 		)
-		return fmt.Errorf("throttle signal for unknown access token on provider %q", name)
+		return fmt.Errorf("observe signal for unknown access token on provider %q", name)
 	}
 
-	entry := throttleEntry{
-		UntilMS:    sig.ResetAt.UnixMilli(),
-		ObservedMS: sig.ObservedAt.UnixMilli(),
-		Claim:      string(sig.Claim),
-		HTTPStatus: sig.HTTPStatus,
+	state.mu.Lock()
+	slot, ok := state.slots[account]
+	state.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("observe signal for missing slot on provider %q", name)
 	}
-	if err := state.throttle.put(ctx, r.now(), account, entry); err != nil {
-		r.logger.ErrorContext(ctx, "oauthrotation.throttle.persist_failed",
-			"component", "oauthrotation",
-			"provider", string(name),
-			"account", string(account),
-			"err", err.Error(),
-		)
-		return fmt.Errorf("persist throttle for account %q: %w", account, err)
+
+	status := quotaFromSink(sig.Status)
+	observedAt := sig.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = r.now()
 	}
-	r.logger.InfoContext(ctx, "oauthrotation.account.throttled",
+
+	slot.mu.Lock()
+	slot.lastObservedStatus = status
+	slot.lastObservedAt = observedAt
+	slot.lastResetAt = sig.ResetAt
+	slot.lastClaim = string(sig.Claim)
+	slot.mu.Unlock()
+
+	r.logger.InfoContext(ctx, "oauthrotation.account.observed",
 		"component", "oauthrotation",
 		"provider", string(name),
 		"account", string(account),
+		"status", status.String(),
 		"claim", string(sig.Claim),
 		"http_status", sig.HTTPStatus,
-		"reset_at_ms", entry.UntilMS,
+		"reset_at_ms", sig.ResetAt.UnixMilli(),
 	)
 	return nil
 }
 
+// quotaFromSink maps the typed sink status to the rotator's internal
+// quotaStatus enum. An unrecognized value is treated as quotaUnknown so the
+// rotator never invents a state Anthropic did not report.
+func quotaFromSink(status ratelimitsink.Status) quotaStatus {
+	switch status {
+	case ratelimitsink.StatusAllowed:
+		return quotaAllowed
+	case ratelimitsink.StatusAllowedWarning:
+		return quotaAllowedWarning
+	case ratelimitsink.StatusRejected:
+		return quotaRejected
+	case ratelimitsink.StatusUnknown:
+		return quotaUnknown
+	default:
+		return quotaUnknown
+	}
+}
+
 // RefreshAll fans a refresh out over every slot of every provider, persisting
 // each renewed credential through the provider's EncodeStored under a
-// per-account file lock. Slots whose credential is currently held by an
-// external Claude Code session (as reported by the in-use detector) are
-// skipped with a debug event so refresh does not invalidate the keychain copy
-// the external session is mid-flight on. RefreshAll returns the first error
-// encountered after attempting every slot it did not skip.
+// per-account file lock. Every account is refreshed, including any account
+// currently in use by an external Claude Code session: the per-provider
+// cross-process refresh lock (when the provider implements
+// [provider.RefreshCoordinator]) serializes Clyde's refresh against Claude
+// Code's, and the re-read step inside refreshSlot absorbs a fresher upstream
+// credential without re-calling the token endpoint. RefreshAll returns the
+// first error encountered after attempting every slot.
 func (r *Rotator) RefreshAll(ctx context.Context) error {
 	r.mu.RLock()
 	type named struct {
@@ -443,7 +524,6 @@ func (r *Rotator) RefreshAll(ctx context.Context) error {
 	for _, entry := range states {
 		state := entry.state
 		state.mu.Lock()
-		order := append([]provider.AccountID(nil), state.order...)
 		slots := make([]*accountSlot, 0, len(state.order))
 		for _, account := range state.order {
 			slots = append(slots, state.slots[account])
@@ -451,19 +531,7 @@ func (r *Rotator) RefreshAll(ctx context.Context) error {
 		prov := state.prov
 		state.mu.Unlock()
 
-		inUse := r.inUseSet(ctx, entry.name, order)
 		for _, slot := range slots {
-			slot.mu.Lock()
-			account := slot.account
-			slot.mu.Unlock()
-			if inUse.Contains(account) {
-				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_in_use",
-					"component", "oauthrotation",
-					"provider", string(entry.name),
-					"account", string(account),
-				)
-				continue
-			}
 			if err := r.refreshSlot(ctx, prov, slot); err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -473,13 +541,19 @@ func (r *Rotator) RefreshAll(ctx context.Context) error {
 }
 
 // RefreshDue refreshes only the accounts whose stored credential is at or
-// inside the safety window, leaving still-valid accounts untouched. The daemon
-// refresh loop calls it on every tick and at startup so a reload of a healthy
-// fleet mints zero new tokens, while a token approaching expiry is still
-// renewed ahead of time. The due decision reads each slot's persisted
+// inside the safety window, leaving still-valid accounts untouched. The
+// daemon refresh loop calls it on every tick and at startup so a reload of a
+// healthy fleet mints zero new tokens, while a token approaching expiry is
+// still renewed ahead of time. The due decision reads each slot's persisted
 // ExpiresAt (loaded from the account's .credentials.json on Harvest), so the
-// persisted expiry is the source of truth across restarts. It returns the
-// first error encountered after attempting every due slot.
+// persisted expiry is the source of truth across restarts.
+//
+// Every due account is refreshed, including any account currently in use by
+// an external Claude Code session. The cross-process refresh lock (acquired
+// inside refreshSlot for providers implementing
+// [provider.RefreshCoordinator]) serializes Clyde's refresh against Claude
+// Code's. RefreshDue returns the first error encountered after attempting
+// every due slot.
 func (r *Rotator) RefreshDue(ctx context.Context) error {
 	r.mu.RLock()
 	type named struct {
@@ -497,7 +571,6 @@ func (r *Rotator) RefreshDue(ctx context.Context) error {
 	for _, entry := range states {
 		state := entry.state
 		state.mu.Lock()
-		order := append([]provider.AccountID(nil), state.order...)
 		slots := make([]*accountSlot, 0, len(state.order))
 		for _, account := range state.order {
 			slots = append(slots, state.slots[account])
@@ -505,20 +578,11 @@ func (r *Rotator) RefreshDue(ctx context.Context) error {
 		prov := state.prov
 		state.mu.Unlock()
 
-		inUse := r.inUseSet(ctx, entry.name, order)
 		for _, slot := range slots {
 			slot.mu.Lock()
 			expiresAt := slot.cred.ExpiresAt
 			account := slot.account
 			slot.mu.Unlock()
-			if inUse.Contains(account) {
-				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_in_use",
-					"component", "oauthrotation",
-					"provider", string(entry.name),
-					"account", string(account),
-				)
-				continue
-			}
 			if !r.refreshIsDue(now, expiresAt) {
 				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_not_due",
 					"component", "oauthrotation",
@@ -536,6 +600,41 @@ func (r *Rotator) RefreshDue(ctx context.Context) error {
 	return firstErr
 }
 
+// slotIsFreshRejected reports whether selection should skip the slot because
+// the last observation is a rejection that is both still inside the freshness
+// window and still before its upstream-reported reset. It also returns the
+// effective reset time (capped at lastObservedAt + maxObservationFreshness)
+// so the caller can surface "skipped until X" without duplicating the cap
+// logic. A slot that is not rejected returns (false, zero).
+func slotIsFreshRejected(slot *accountSlot, now time.Time) (bool, time.Time) {
+	if slot == nil {
+		return false, time.Time{}
+	}
+	slot.mu.Lock()
+	status := slot.lastObservedStatus
+	observedAt := slot.lastObservedAt
+	resetAt := slot.lastResetAt
+	slot.mu.Unlock()
+	if status != quotaRejected {
+		return false, time.Time{}
+	}
+	if observedAt.IsZero() {
+		return false, time.Time{}
+	}
+	if now.Sub(observedAt) >= maxObservationFreshness {
+		return false, time.Time{}
+	}
+	if !now.Before(resetAt) {
+		return false, time.Time{}
+	}
+	freshnessCap := observedAt.Add(maxObservationFreshness)
+	effective := resetAt
+	if freshnessCap.Before(effective) {
+		effective = freshnessCap
+	}
+	return true, effective
+}
+
 // refreshIsDue reports whether a credential expiring at expiresAt should be
 // refreshed at now: it is due once now plus the safety window reaches or passes
 // expiresAt. A zero expiresAt is treated as due because an unknown expiry can
@@ -548,20 +647,17 @@ func (r *Rotator) refreshIsDue(now time.Time, expiresAt time.Time) bool {
 }
 
 // Accounts returns read-only snapshots for the RPC layer, in stable order.
+// The throttle fields (Throttled, ThrottledTo, Claim) reflect the in-memory
+// observation state of each slot, gated by the same freshness rule selection
+// uses; an account whose last rejection is older than maxObservationFreshness
+// reads as not throttled even when the upstream-reported reset time is still
+// in the future.
 func (r *Rotator) Accounts(ctx context.Context, name provider.Name) ([]AccountSnapshot, error) {
 	state, err := r.providerState(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	active, err := state.throttle.load(ctx, r.now())
-	if err != nil {
-		r.logger.ErrorContext(ctx, "oauthrotation.accounts.load_throttle_failed",
-			"component", "oauthrotation",
-			"provider", string(name),
-			"err", err.Error(),
-		)
-		return nil, fmt.Errorf("load throttle ledger for %q: %w", name, err)
-	}
+	now := r.now()
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	snapshots := make([]AccountSnapshot, 0, len(state.order))
@@ -570,6 +666,7 @@ func (r *Rotator) Accounts(ctx context.Context, name provider.Name) ([]AccountSn
 		slot.mu.Lock()
 		cred := slot.cred
 		label := slot.label
+		claim := slot.lastClaim
 		slot.mu.Unlock()
 		snapshot := AccountSnapshot{
 			Account:             account,
@@ -582,10 +679,10 @@ func (r *Rotator) Accounts(ctx context.Context, name provider.Name) ([]AccountSn
 			Claim:               "",
 			NeedsReauth:         state.reauth[account],
 		}
-		if entry, throttled := active[account]; throttled {
+		if throttled, until := slotIsFreshRejected(slot, now); throttled {
 			snapshot.Throttled = true
-			snapshot.ThrottledTo = time.UnixMilli(entry.UntilMS)
-			snapshot.Claim = entry.Claim
+			snapshot.ThrottledTo = until
+			snapshot.Claim = claim
 		}
 		snapshots = append(snapshots, snapshot)
 	}
@@ -606,9 +703,13 @@ func (r *Rotator) ProviderNames() []provider.Name {
 }
 
 // refreshSlot refreshes one account under its per-account file lock and
-// persists the renewed credential. Concurrent Token callers do not refresh,
-// but RefreshAll and any future refresh-on-use path share this lock so only one
-// refresh per account runs at a time.
+// persists the renewed credential. When the provider implements
+// [provider.RefreshCoordinator] the slot is wrapped in the provider's
+// cross-process refresh lock and the upstream source of truth is re-read
+// inside the lock: when the upstream copy is fresher than the slot's current
+// credential, the rotator absorbs that copy and skips the token-endpoint
+// call entirely. Concurrent Token callers do not refresh, but RefreshAll
+// shares this lock so only one refresh per account runs at a time.
 func (r *Rotator) refreshSlot(ctx context.Context, prov provider.Provider, slot *accountSlot) error {
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
@@ -618,6 +719,112 @@ func (r *Rotator) refreshSlot(ctx context.Context, prov provider.Provider, slot 
 		return err
 	}
 	defer release()
+
+	coord, hasCoord := prov.(provider.RefreshCoordinator)
+	if hasCoord {
+		absorbed, coordErr := r.coordinateRefresh(ctx, coord, prov, slot)
+		if coordErr != nil {
+			return coordErr
+		}
+		if absorbed {
+			return nil
+		}
+	}
+
+	return r.runProviderRefresh(ctx, prov, slot, hasCoord, coord)
+}
+
+// coordinateRefresh acquires the cross-process refresh lock and absorbs a
+// fresher upstream credential when one is available, returning absorbed=true
+// in that case so the caller skips the token-endpoint call. When the
+// upstream copy is not fresher (or the upstream read fails non-fatally), it
+// returns absorbed=false with the lock held: the caller's deferred release
+// path must release the lock. To keep the deferred release simple this
+// helper does NOT defer the release itself; instead it returns a release
+// function on the slot's mutex deferral path.
+//
+// The implementation: take the lock; if absorbed, persist+release; if not
+// absorbed, register the release on the slot's per-call defer chain by
+// piggy-backing through the closure stored on the rotator.
+func (r *Rotator) coordinateRefresh(ctx context.Context, coord provider.RefreshCoordinator, prov provider.Provider, slot *accountSlot) (bool, error) {
+	coordRelease, err := coord.AcquireRefreshLock(ctx)
+	if err != nil {
+		r.logger.WarnContext(ctx, "oauthrotation.refresh.coord_lock_failed",
+			"component", "oauthrotation",
+			"provider", string(prov.Name()),
+			"account", string(slot.account),
+			"err", err.Error(),
+		)
+		return false, fmt.Errorf("acquire refresh coord lock for account %q: %w", slot.account, err)
+	}
+
+	upstream, present, readErr := coord.ReadUpstreamCredentials(ctx)
+	if readErr == nil && present && upstream.ExpiresAt.After(slot.cred.ExpiresAt) {
+		// Claude Code (or some other peer holding the same keychain entry)
+		// already produced a fresher credential during our wait. Absorb it
+		// into the slot and persist the imported bytes; skip the token-
+		// endpoint call entirely so we do not invalidate the peer's freshly
+		// minted credential by minting another.
+		persistErr := r.absorbUpstream(ctx, prov, slot, upstream)
+		r.releaseCoordLock(ctx, prov, slot.account, coordRelease)
+		if persistErr != nil {
+			return false, persistErr
+		}
+		r.logger.InfoContext(ctx, "oauthrotation.refresh.absorbed_upstream",
+			"component", "oauthrotation",
+			"provider", string(prov.Name()),
+			"account", string(slot.account),
+			"expires_at_ms", upstream.ExpiresAt.UnixMilli(),
+		)
+		return true, nil
+	}
+	if readErr != nil {
+		// A keychain read failure is not fatal: fall through to the
+		// existing refresh path so a transient read does not block the
+		// refresh tick. The lock is still held so the actual refresh
+		// remains serialized against the peer.
+		r.logger.WarnContext(ctx, "oauthrotation.refresh.upstream_read_failed",
+			"component", "oauthrotation",
+			"provider", string(prov.Name()),
+			"account", string(slot.account),
+			"err", readErr.Error(),
+		)
+	}
+	// The slot's caller is responsible for releasing through
+	// runProviderRefresh which is called with hasCoord=true and the same
+	// coord reference; we store the release here on a per-slot field for
+	// pickup. To keep this implementation straightforward, we instead defer
+	// the release on the goroutine via a closure: the runProviderRefresh
+	// helper receives the release and runs it on its own defer.
+	slot.pendingCoordRelease = coordRelease
+	return false, nil
+}
+
+// releaseCoordLock runs the coordinator release and logs any failure. The
+// helper exists so callers can keep their happy path linear.
+func (r *Rotator) releaseCoordLock(ctx context.Context, prov provider.Provider, account provider.AccountID, release func() error) {
+	if release == nil {
+		return
+	}
+	if releaseErr := release(); releaseErr != nil {
+		r.logger.WarnContext(ctx, "oauthrotation.refresh.coord_release_failed",
+			"component", "oauthrotation",
+			"provider", string(prov.Name()),
+			"account", string(account),
+			"err", releaseErr.Error(),
+		)
+	}
+}
+
+// runProviderRefresh performs the actual upstream token-endpoint exchange
+// and persists the renewed credential. When hasCoord is true the helper also
+// writes the renewed credential back to the cross-process source of truth
+// and releases the coordinator lock the caller acquired.
+func (r *Rotator) runProviderRefresh(ctx context.Context, prov provider.Provider, slot *accountSlot, hasCoord bool, coord provider.RefreshCoordinator) error {
+	if hasCoord {
+		defer r.releaseCoordLock(ctx, prov, slot.account, slot.pendingCoordRelease)
+		defer func() { slot.pendingCoordRelease = nil }()
+	}
 
 	renewed, err := prov.Refresh(ctx, slot.cred)
 	if err != nil {
@@ -648,12 +855,55 @@ func (r *Rotator) refreshSlot(ctx context.Context, prov provider.Provider, slot 
 		return err
 	}
 	slot.cred = renewed
+	if hasCoord {
+		if writeErr := coord.WriteUpstreamCredentials(ctx, renewed); writeErr != nil {
+			// Surface the write failure but do not unwind the local persist;
+			// Clyde's per-account copy is the canonical one for the next
+			// rotation pass, and Claude Code will pull from disk on its next
+			// read if the keychain write missed.
+			r.logger.WarnContext(ctx, "oauthrotation.refresh.upstream_write_failed",
+				"component", "oauthrotation",
+				"provider", string(prov.Name()),
+				"account", string(slot.account),
+				"err", writeErr.Error(),
+			)
+		}
+	}
 	r.logger.InfoContext(ctx, "oauthrotation.account.refreshed",
 		"component", "oauthrotation",
 		"provider", string(prov.Name()),
 		"account", string(slot.account),
 		"expires_at_ms", renewed.ExpiresAt.UnixMilli(),
 	)
+	return nil
+}
+
+// absorbUpstream persists a credential that came from the cross-process
+// upstream source (for example Claude Code's keychain refresh) into the
+// per-account .credentials.json and replaces the slot's in-memory credential
+// with it. The caller must hold both the per-account file lock and the slot
+// mutex. The cross-process refresh lock should also be held so a peer cannot
+// race with the persist.
+func (r *Rotator) absorbUpstream(ctx context.Context, prov provider.Provider, slot *accountSlot, upstream provider.Credentials) error {
+	encoded := upstream.Raw
+	if len(encoded) == 0 {
+		var encodeErr error
+		encoded, encodeErr = prov.EncodeStored(upstream)
+		if encodeErr != nil {
+			r.logger.ErrorContext(ctx, "oauthrotation.refresh.absorb_encode_failed",
+				"component", "oauthrotation",
+				"provider", string(prov.Name()),
+				"account", string(slot.account),
+				"err", encodeErr.Error(),
+			)
+			return fmt.Errorf("encode absorbed credential for account %q: %w", slot.account, encodeErr)
+		}
+	}
+	if err := r.persistCredential(ctx, prov.Name(), slot.account, encoded); err != nil {
+		return err
+	}
+	slot.cred = upstream
+	r.clearReauthRequired(prov.Name(), slot.account)
 	return nil
 }
 
@@ -804,8 +1054,11 @@ func (r *Rotator) Load(ctx context.Context, name provider.Name) error {
 // runStartupLoad performs the actual upstream pass plus on-disk walk for one
 // provider. It is the body Load gates; it never enforces gating itself, so a
 // test can call it directly when it needs to bypass the once and debounce
-// gates.
+// gates. As a side effect it removes the legacy throttle.json file (and its
+// proper-lockfile companion) so a daemon that upgraded to the in-memory
+// observation model does not leave stale on-disk state.
 func (r *Rotator) runStartupLoad(ctx context.Context, name provider.Name, state *providerState) {
+	r.removeLegacyThrottleFile(ctx, name)
 	start := r.now()
 	syncResult, syncErr := state.syncer.Sync(ctx, r.now())
 	if syncErr != nil {
@@ -833,6 +1086,44 @@ func (r *Rotator) runStartupLoad(ctx context.Context, name provider.Name, state 
 		"sources_written", len(syncResult.Imported),
 		"duration_ms", r.now().Sub(start).Milliseconds(),
 	)
+}
+
+// removeLegacyThrottleFile deletes the retired throttle.json and its
+// proper-lockfile companion from the per-provider directory. The on-disk
+// throttle ledger was replaced by in-memory observation state on each slot,
+// so the file is dead weight after the first daemon start on the new code
+// and would otherwise sit there indefinitely. Missing files are a no-op so
+// the function is safe to call on every startup.
+func (r *Rotator) removeLegacyThrottleFile(ctx context.Context, name provider.Name) {
+	dir := providerDir(name)
+	candidates := []string{
+		filepath.Join(dir, legacyThrottleFileName),
+		filepath.Join(dir, legacyThrottleFileName+".lock"),
+	}
+	var removed []string
+	for _, path := range candidates {
+		err := os.Remove(path)
+		if err == nil {
+			removed = append(removed, path)
+			continue
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		r.logger.WarnContext(ctx, "oauthrotation.throttle.legacy_file_remove_failed",
+			"component", "oauthrotation",
+			"provider", string(name),
+			"path", path,
+			"err", err.Error(),
+		)
+	}
+	if len(removed) > 0 {
+		r.logger.InfoContext(ctx, "oauthrotation.throttle.legacy_file_removed",
+			"component", "oauthrotation",
+			"provider", string(name),
+			"paths", removed,
+		)
+	}
 }
 
 // foldOnDiskAccounts walks the per-account directory for a provider and
@@ -1019,12 +1310,7 @@ func (r *Rotator) foldAccount(state *providerState, account provider.AccountID, 
 	state.mu.Lock()
 	slot, exists := state.slots[account]
 	if !exists {
-		slot = &accountSlot{
-			account: account,
-			mu:      sync.Mutex{},
-			cred:    provider.Credentials{AccessToken: "", RefreshToken: "", ExpiresAt: time.Time{}, Raw: nil, Fingerprint: ""},
-			label:   "",
-		}
+		slot = newAccountSlot(account)
 		state.slots[account] = slot
 		state.order = append(state.order, account)
 	}
