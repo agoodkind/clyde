@@ -220,10 +220,13 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		}
 	}
 	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
-	// A 200 can still carry a hard limit when the upstream rejected an
-	// overage (anthropic-ratelimit-unified-overage-status: rejected). Classify
-	// the success headers and emit a rate-limit signal so the rotator can
-	// throttle this account; soft warnings do not emit (see rateLimitSignal).
+	// A 200 response means Anthropic served the request; even when the headers
+	// carry anthropic-ratelimit-unified-overage-status: rejected, Anthropic
+	// continues to serve other simultaneous requests on the same account, so
+	// the rotator must not throttle. rateLimitSignal returns (_, false) on
+	// every non-429 status, including this case, leaving this call as a no-op
+	// today. The call site stays so the boundary helper still observes the
+	// success-headers path if the emit policy ever needs to change.
 	c.maybeEmitRateLimitSignal(ctx, Classify(resp, nil), resp.Header, token)
 	if req.OnHeaders != nil {
 		req.OnHeaders(resp.Header.Clone())

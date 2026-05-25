@@ -36,18 +36,18 @@ var unknownClaimWarnedOnce sync.Map
 
 // rateLimitSignal builds a [ratelimitsink.Signal] from an observed upstream
 // response and reports whether the client should emit it. The signal is
-// emitted only on a hard usage limit: either Classify reports an overage was
-// rejected (a 200 carrying anthropic-ratelimit-unified-overage-status:
-// rejected), or the upstream returned HTTP 429. Soft warnings
-// (approaching-threshold, allowed_warning, active overage) do not emit, since
-// those windows still served the request and the rotator should not throttle
-// the account for them.
+// emitted only when the upstream returned HTTP 429, since that is the only
+// status where Anthropic actually refused the request. Soft warnings
+// (approaching-threshold, allowed_warning, active overage) and the advisory
+// 200-with-overage-status-rejected case do not emit: the request was served
+// and Anthropic continues to serve other simultaneous requests on the same
+// account, so the rotator must not throttle the account for them.
 //
 // accessToken is the bearer token used for the request; it is carried on the
 // Signal so the rotation layer can reverse-look-up the slot to throttle. The
 // caller must never log the token.
 func rateLimitSignal(class Classification, h http.Header, accessToken string) (ratelimitsink.Signal, bool) {
-	if !class.HasOverageRejected && class.Status != http.StatusTooManyRequests {
+	if class.Status != http.StatusTooManyRequests {
 		return ratelimitsink.Signal{
 			Provider:    "",
 			AccessToken: "",
