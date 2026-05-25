@@ -2574,6 +2574,28 @@ func (s *Server) StartRemoteSession(ctx context.Context, req *clydev1.StartRemot
 	}, nil
 }
 
+// claudeWorkerPIDs returns the PIDs of every live Claude worker the daemon
+// currently tracks through livetrack. The in-use detector calls this to
+// exclude daemon-spawned `claude` processes from the external-session count,
+// which is how the OAuth rotator decides whether the keychain credential is
+// held by an external Claude Code session. A nil receiver or a server with no
+// liveWorkers registry yields an empty slice so the detector treats every
+// running `claude` process as external, the conservative default.
+func (s *Server) claudeWorkerPIDs() []int {
+	if s == nil || s.liveWorkers == nil {
+		return nil
+	}
+	snapshot := s.liveWorkers.Snapshot()
+	out := make([]int, 0, len(snapshot))
+	for _, sess := range snapshot {
+		if sess.Meta.Provider != "claude" || sess.Meta.WorkerPID == 0 {
+			continue
+		}
+		out = append(out, sess.Meta.WorkerPID)
+	}
+	return out
+}
+
 // registerClaudeRemoteWorker registers a newly-launched Claude remote worker
 // with the livetrack registry.
 func (s *Server) registerClaudeRemoteWorker(ctx context.Context, worker *remoteWorker) {

@@ -1769,7 +1769,11 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener, mitmPro
 	// in-memory slots, fixing the stale-token window the two-instance wiring
 	// had. The instance is retained on the controller's Deps so adapter reloads
 	// reuse it rather than constructing a new one.
-	oauthRotator := buildDaemonOAuthRotator(context.Background(), cfg.Adapter, log)
+	//
+	// The accessor closure feeds the in-use detector daemon-tracked Claude
+	// worker PIDs so the rotator can tell its own children apart from an
+	// external Claude Code session sharing the same keychain credential.
+	oauthRotator := buildDaemonOAuthRotator(context.Background(), cfg.Adapter, log, srv.claudeWorkerPIDs)
 	setSharedOAuthRotator(oauthRotator)
 
 	// current starts as the zero launch config; apply overwrites it on the

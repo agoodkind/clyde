@@ -157,6 +157,135 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, fmt.Errorf("oauth token: %w", err)
 	}
 
+	httpReq, err := c.buildMessagesRequest(ctx, req, body, token)
+	if err != nil {
+		return nil, err
+	}
+
+	postStarted := anthropicClock.Now()
+	resp, err := c.http.Do(httpReq)
+	if resp != nil {
+		// We set Accept-Encoding explicitly, so Go's transparent gzip
+		// handling is disabled.
+		// Swap resp.Body in place with a decoding reader so every
+		// downstream consumer (error body readers, SSE stream parser)
+		// sees plaintext. Unsupported encodings (br, zstd) leave the
+		// body untouched so callers can still inspect bytes for debug.
+		decodeResponseBody(resp)
+	}
+	if err != nil {
+		logResponse(slog.LevelError, "anthropic.messages.post_failed", responseEvent{
+			Subcomponent: "anthropic",
+			Model:        req.Model,
+			BodyBytes:    len(body),
+			DurationMs:   time.Since(postStarted).Milliseconds(),
+			Err:          err.Error(),
+		})
+		return nil, &UpstreamError{
+			Classification: Classify(nil, err),
+			Status:         0,
+			Message:        fmt.Sprintf("post /v1/messages: %v", err),
+			Cause:          err,
+			ErrorType:      ErrorKindNone,
+		}
+	}
+
+	resp, postStarted = c.maybeRetryOn401(ctx, req, body, token, resp, postStarted)
+
+	base := responseEvent{
+		Subcomponent: "anthropic",
+		Model:        req.Model,
+		Status:       resp.StatusCode,
+		RequestID:    resp.Header.Get("Request-Id"),
+		BodyBytes:    len(body),
+		DurationMs:   time.Since(postStarted).Milliseconds(),
+		RateLimits:   rateLimitAttrs(resp.Header),
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, c.handle429Response(ctx, req, resp, base, token)
+	}
+	if resp.StatusCode != http.StatusOK {
+		errBody := readDecodedBody(resp)
+		ev := base
+		ev.Body = string(errBody)
+		ev.BodyBytes = len(errBody)
+		logResponse(slog.LevelError, "anthropic.messages.upstream_error", ev)
+		return nil, &UpstreamError{
+			Classification: Classify(resp, nil),
+			Status:         resp.StatusCode,
+			Message:        truncate(string(errBody), 600),
+			Cause:          nil,
+			ErrorType:      ErrorKindNone,
+		}
+	}
+	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
+	// A 200 can still carry a hard limit when the upstream rejected an
+	// overage (anthropic-ratelimit-unified-overage-status: rejected). Classify
+	// the success headers and emit a rate-limit signal so the rotator can
+	// throttle this account; soft warnings do not emit (see rateLimitSignal).
+	c.maybeEmitRateLimitSignal(ctx, Classify(resp, nil), resp.Header, token)
+	if req.OnHeaders != nil {
+		req.OnHeaders(resp.Header.Clone())
+	}
+	c.maybeAttachWireCapture(ctx, resp, base)
+	return resp, nil
+}
+
+// handle429Response builds the typed UpstreamError for a 429 reply, logs the
+// rate-limit event, fires the OnHeaders callback, and reports a rate-limit
+// signal to the configured sink so the rotator can throttle the account. The
+// returned error is the value do() propagates to its caller.
+func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.Response, base responseEvent, token string) error {
+	errBody := readDecodedBody(resp)
+	ev := base
+	ev.RetryAfter = resp.Header.Get("Retry-After")
+	ev.Body = string(errBody)
+	ev.BodyBytes = len(errBody)
+	logResponse(slog.LevelWarn, "anthropic.ratelimit", ev)
+
+	// Surface unified rate-limit headers to the OnHeaders callback even
+	// on 429 so the chat handler can Claim and inject the in-band
+	// overage / early-warning notice into the user-facing error. The
+	// 200-OK path also calls OnHeaders; this is the rejection peer of
+	// that hook and is intentionally invoked before returning.
+	if req.OnHeaders != nil {
+		slog.LogAttrs(context.Background(), slog.LevelDebug, "anthropic.notice.headers_observed",
+			slog.String("subcomponent", "anthropic"),
+			slog.String("phase", "ratelimit_429"),
+			slog.String("model", req.Model),
+			slog.String("request_id", resp.Header.Get("Request-Id")),
+		)
+		req.OnHeaders(resp.Header.Clone())
+	}
+
+	class := Classify(resp, nil)
+	c.maybeEmitRateLimitSignal(ctx, class, resp.Header, token)
+	var message string
+	switch {
+	case FormatRateLimitMessage(resp.Header) != "":
+		message = FormatRateLimitMessage(resp.Header)
+	case strings.Contains(string(errBody), "Extra usage is required for long context"):
+		message = "Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or switch to a standard-context model"
+	default:
+		message = truncate(string(errBody), 600)
+	}
+	return &UpstreamError{
+		Classification: class,
+		Status:         resp.StatusCode,
+		Message:        message,
+		Cause:          nil,
+		ErrorType:      ErrorKindNone,
+	}
+}
+
+// buildMessagesRequest assembles the outbound /v1/messages POST: it
+// constructs the [http.Request] with the marshaled body bytes, attaches the
+// bearer token, and applies every wire identity header the captured flavor
+// and config dictate. The helper exists so the on-401 retry path can rebuild
+// the request with a fresh token without re-marshaling the body.
+func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []byte, token string) (*http.Request, error) {
+	log := anthropicRequestLog.Logger()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.MessagesURL, bytes.NewReader(body))
 	if err != nil {
 		log.WarnContext(ctx, "anthropic.messages.request_build_failed",
@@ -167,9 +296,34 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		)
 		return nil, fmt.Errorf("build messages request: %w", err)
 	}
-	// Wire signals required by the upstream identity check; values come from cfg.
+	dropped := c.applyMessagesHeaders(httpReq, req, token)
+	if len(dropped) > 0 {
+		keys := make([]string, 0, len(dropped))
+		for k := range dropped {
+			keys = append(keys, k)
+		}
+		log.WarnContext(ctx, "anthropic.probe.headers_dropped",
+			"subcomponent", "anthropic",
+			"dropped", keys,
+		)
+	}
+	log.DebugContext(ctx, "anthropic.messages.request",
+		"subcomponent", "anthropic",
+		"model", req.Model,
+		"url", c.cfg.MessagesURL,
+		"body_bytes", len(body),
+		"headers", redactedOutboundHeaders(httpReq.Header),
+		"body", string(body),
+	)
+	return httpReq, nil
+}
 
-	// Auth + protocol.
+// applyMessagesHeaders sets every outbound header /v1/messages requires onto
+// httpReq: bearer auth, protocol version, content negotiation, the captured
+// wire flavor identity headers, and the optional CLYDE_PROBE_DROP exclusion
+// set. The returned drop set is non-nil only when an operator opted into
+// header omission for local debugging.
+func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token string) map[string]struct{} {
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Anthropic-Version", c.cfg.OAuthAnthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -184,8 +338,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		httpReq.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	}
 
-	// CLYDE_PROBE_DROP is a comma-separated list of header names to
-	// omit below for debugging. Empty means send the full configured set.
 	dropped := probeDropSet()
 	setHard := func(key, value string) {
 		if _, skip := dropped[strings.ToLower(key)]; skip {
@@ -194,10 +346,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		httpReq.Header.Set(key, value)
 	}
 
-	// Wire identity values: prefer the captured flavor, allow
-	// cfg.ClientIdentity.* to override (operator escape hatch for
-	// testing). req.ExtraBetas merges into the beta header without
-	// dropping any flag from the captured set.
 	flavor := c.activeFlavor()
 	beta := flavor.AnthropicBeta
 	if v := strings.TrimSpace(c.cfg.BetaHeader); v != "" {
@@ -228,139 +376,95 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	setHard("User-Agent", userAgent)
 
-	// Runtime-derived headers plus defaults.
 	for _, h := range freeIdentityHeaders(c) {
 		httpReq.Header.Set(h.key, h.value)
 	}
+	return dropped
+}
 
-	if len(dropped) > 0 {
-		keys := make([]string, 0, len(dropped))
-		for k := range dropped {
-			keys = append(keys, k)
-		}
-		log.WarnContext(ctx, "anthropic.probe.headers_dropped",
-			"subcomponent", "anthropic",
-			"dropped", keys,
-		)
+// maybeRetryOn401 is the do() boundary helper that invokes one on-401 retry
+// when the initial response is a 401, and swaps the response and post-start
+// timestamp so downstream logging measures the retry duration. When the
+// initial response is not 401 or the retry is skipped or fails, the original
+// response and timestamp pass through unchanged.
+func (c *Client) maybeRetryOn401(ctx context.Context, req Request, body []byte, token string, resp *http.Response, postStarted time.Time) (*http.Response, time.Time) {
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, postStarted
 	}
+	retried, retryDuration, retryErr := c.retryAfter401(ctx, req, body, token, resp)
+	if retryErr != nil || retried == nil {
+		return resp, postStarted
+	}
+	return retried, anthropicClock.Now().Add(-retryDuration)
+}
 
-	log.DebugContext(ctx, "anthropic.messages.request",
+// retryAfter401 runs one recovery attempt for an upstream 401. It drains and
+// closes the original response body, asks the OAuth source for a recovered
+// token, and posts the same request body once more with a freshly built
+// [http.Request]. A nil return value means the retry was skipped (oauth
+// reported the token is unchanged) or failed; the caller falls through to the
+// existing classifier with the original 401 in that case.
+func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, failedToken string, originalResp *http.Response) (*http.Response, time.Duration, error) {
+	log := anthropicRequestLog.Logger()
+	log.InfoContext(ctx, "anthropic.messages.auth_retry_attempted",
 		"subcomponent", "anthropic",
 		"model", req.Model,
-		"url", c.cfg.MessagesURL,
-		"body_bytes", len(body),
-		"headers", redactedOutboundHeaders(httpReq.Header),
-		"body", string(body),
+		"attempt", 1,
 	)
+	// Read and close the original 401 body, then replace it with a reader
+	// over the saved bytes. The retry path consumes the underlying
+	// connection either way; the in-memory copy lets the fall-through
+	// classifier still emit the upstream error text in error.message when
+	// the retry is skipped (oauth reported the token is unchanged) or fails.
+	savedBody, _ := io.ReadAll(originalResp.Body)
+	_ = originalResp.Body.Close()
+	originalResp.Body = io.NopCloser(bytes.NewReader(savedBody))
 
-	postStarted := anthropicClock.Now()
-	resp, err := c.http.Do(httpReq)
-	if resp != nil {
-		// We set Accept-Encoding explicitly, so Go's transparent gzip
-		// handling is disabled.
-		// Swap resp.Body in place with a decoding reader so every
-		// downstream consumer (error body readers, SSE stream parser)
-		// sees plaintext. Unsupported encodings (br, zstd) leave the
-		// body untouched so callers can still inspect bytes for debug.
-		decodeResponseBody(resp)
+	freshToken, recoverErr := c.oauth.TokenAfterAuthFailure(ctx, failedToken)
+	if recoverErr != nil {
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"err", recoverErr.Error(),
+		)
+		return nil, 0, fmt.Errorf("anthropic auth-retry recover: %w", recoverErr)
 	}
-	if err != nil {
-		logResponse(slog.LevelError, "anthropic.messages.post_failed", responseEvent{
-			Subcomponent: "anthropic",
-			Model:        req.Model,
-			BodyBytes:    len(body),
-			DurationMs:   time.Since(postStarted).Milliseconds(),
-			Err:          err.Error(),
-		})
-		return nil, &UpstreamError{
-			Classification: Classify(nil, err),
-			Status:         0,
-			Message:        fmt.Sprintf("post /v1/messages: %v", err),
-			Cause:          err,
-			ErrorType:      ErrorKindNone,
-		}
+	if freshToken == "" || freshToken == failedToken {
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"reason", "token_unchanged",
+		)
+		return nil, 0, errors.New("token unchanged after recovery")
 	}
 
-	base := responseEvent{
-		Subcomponent: "anthropic",
-		Model:        req.Model,
-		Status:       resp.StatusCode,
-		RequestID:    resp.Header.Get("Request-Id"),
-		BodyBytes:    len(body),
-		DurationMs:   time.Since(postStarted).Milliseconds(),
-		RateLimits:   rateLimitAttrs(resp.Header),
+	retryReq, buildErr := c.buildMessagesRequest(ctx, req, body, freshToken)
+	if buildErr != nil {
+		return nil, 0, buildErr
 	}
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		errBody := readDecodedBody(resp)
-		ev := base
-		ev.RetryAfter = resp.Header.Get("Retry-After")
-		ev.Body = string(errBody)
-		ev.BodyBytes = len(errBody)
-		logResponse(slog.LevelWarn, "anthropic.ratelimit", ev)
-
-		// Surface unified rate-limit headers to the OnHeaders callback even
-		// on 429 so the chat handler can Claim and inject the in-band
-		// overage / early-warning notice into the user-facing error. The
-		// 200-OK path also calls OnHeaders below; this is the rejection
-		// peer of that hook and is intentionally invoked before returning.
-		if req.OnHeaders != nil {
-			slog.LogAttrs(context.Background(), slog.LevelDebug, "anthropic.notice.headers_observed",
-				slog.String("subcomponent", "anthropic"),
-				slog.String("phase", "ratelimit_429"),
-				slog.String("model", req.Model),
-				slog.String("request_id", resp.Header.Get("Request-Id")),
-			)
-			req.OnHeaders(resp.Header.Clone())
-		}
-
-		// Prefer a friendly message built from the unified rate-limit
-		// headers; fall back to the headerless "extra usage required"
-		// entitlement message; fall back to the raw body otherwise.
-		class := Classify(resp, nil)
-		c.maybeEmitRateLimitSignal(ctx, class, resp.Header, token)
-		var message string
-		switch {
-		case FormatRateLimitMessage(resp.Header) != "":
-			message = FormatRateLimitMessage(resp.Header)
-		case strings.Contains(string(errBody), "Extra usage is required for long context"):
-			message = "Extra usage is required for 1M context · enable extra usage at claude.ai/settings/usage, or switch to a standard-context model"
-		default:
-			message = truncate(string(errBody), 600)
-		}
-		return nil, &UpstreamError{
-			Classification: class,
-			Status:         resp.StatusCode,
-			Message:        message,
-			Cause:          nil,
-			ErrorType:      ErrorKindNone,
-		}
+	retryStarted := anthropicClock.Now()
+	retryResp, retryErr := c.http.Do(retryReq)
+	if retryResp != nil {
+		decodeResponseBody(retryResp)
 	}
-	if resp.StatusCode != http.StatusOK {
-		errBody := readDecodedBody(resp)
-		ev := base
-		ev.Body = string(errBody)
-		ev.BodyBytes = len(errBody)
-		logResponse(slog.LevelError, "anthropic.messages.upstream_error", ev)
-		return nil, &UpstreamError{
-			Classification: Classify(resp, nil),
-			Status:         resp.StatusCode,
-			Message:        truncate(string(errBody), 600),
-			Cause:          nil,
-			ErrorType:      ErrorKindNone,
-		}
+	if retryErr != nil {
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_post_failed",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"err", retryErr.Error(),
+		)
+		return nil, 0, fmt.Errorf("anthropic auth-retry post: %w", retryErr)
 	}
-	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
-	// A 200 can still carry a hard limit when the upstream rejected an
-	// overage (anthropic-ratelimit-unified-overage-status: rejected). Classify
-	// the success headers and emit a rate-limit signal so the rotator can
-	// throttle this account; soft warnings do not emit (see rateLimitSignal).
-	c.maybeEmitRateLimitSignal(ctx, Classify(resp, nil), resp.Header, token)
-	if req.OnHeaders != nil {
-		req.OnHeaders(resp.Header.Clone())
+	if retryResp.StatusCode != http.StatusUnauthorized {
+		log.InfoContext(ctx, "anthropic.messages.auth_retry_recovered",
+			"subcomponent", "anthropic",
+			"model", req.Model,
+			"attempt", 1,
+			"status", retryResp.StatusCode,
+			"duration_ms", time.Since(retryStarted).Milliseconds(),
+		)
 	}
-	c.maybeAttachWireCapture(ctx, resp, base)
-	return resp, nil
+	return retryResp, time.Since(retryStarted), nil
 }
 
 // maybeEmitRateLimitSignal is the do() boundary helper that builds a

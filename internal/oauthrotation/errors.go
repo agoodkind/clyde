@@ -1,11 +1,21 @@
 package oauthrotation
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"goodkind.io/clyde/internal/oauthrotation/provider"
 )
+
+// ErrTokenUnchanged is returned by TokenAfterAuthFailure when a recovery
+// attempt for an in-use account re-imports the same access token that just
+// returned 401 from upstream. The caller treats it as "the retry would resend
+// the same dead token", skips the second post, and lets the original 401 fall
+// through to the existing classifier. The sentinel exists so the Anthropic
+// client can short-circuit the retry without inspecting the access token's
+// value, which never leaves the rotator.
+var ErrTokenUnchanged = errors.New("oauthrotation: token unchanged after auth failure recovery")
 
 // AllAccountsThrottledError is returned by the rotator when every registered
 // account for a provider is currently throttled. SoonestReset is the earliest

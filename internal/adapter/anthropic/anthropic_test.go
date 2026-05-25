@@ -16,6 +16,13 @@ func (staticToken) Token(ctx context.Context) (string, error) {
 	return "test-token", nil
 }
 
+// TokenAfterAuthFailure satisfies the extended OAuthSource interface. The
+// static fake returns the same token it always returns; tests that exercise
+// the retry path use the dedicated fakeOAuth helper in client_retry_test.go.
+func (staticToken) TokenAfterAuthFailure(_ context.Context, _ string) (string, error) {
+	return "test-token", nil
+}
+
 type rewriteMessagesHost struct {
 	serverURL *url.URL
 	inner     http.RoundTripper

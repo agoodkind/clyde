@@ -86,8 +86,18 @@ type Client struct {
 // OAuthSource is the minimum surface anthropic.Client needs from
 // the oauth manager. Defined as a small interface so callers can
 // swap it for a fake in tests.
+//
+// TokenAfterAuthFailure recovers from an upstream 401. The implementation
+// inspects the failed token and either returns a freshly imported keychain
+// credential (for an externally-held account), a freshly refreshed token (for
+// an account Clyde owns the refresh credential for), or the original failed
+// token alongside oauthrotation.ErrTokenUnchanged when neither path produces
+// a new value. The client treats the unchanged sentinel as "the retry would
+// resend the same dead token", skips the retry, and lets the original 401
+// fall through to the existing classifier.
 type OAuthSource interface {
 	Token(ctx context.Context) (string, error)
+	TokenAfterAuthFailure(ctx context.Context, failedToken string) (string, error)
 }
 
 // CacheControl marks a block / tool / system element as a prompt

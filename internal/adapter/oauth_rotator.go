@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -90,6 +91,29 @@ func (s *rotatorTokenSource) Token(ctx context.Context) (string, error) {
 	if err != nil {
 		wrapped := fmt.Errorf("oauth rotation token for %q: %w", s.name, err)
 		s.log.ErrorContext(ctx, "adapter.oauth.token_lookup_failed",
+			"subcomponent", "oauth_rotation",
+			"provider", string(s.name),
+			"err", wrapped.Error(),
+		)
+		return "", wrapped
+	}
+	return token, nil
+}
+
+// TokenAfterAuthFailure forwards the recovery call to the rotator, which
+// either re-imports a live keychain credential (for an in-use account) or
+// runs the refresh path (for an account Clyde owns). The rotator returns
+// oauthrotation.ErrTokenUnchanged when the recovered token equals failedToken;
+// the shim passes that sentinel through so the anthropic client can skip a
+// pointless retry.
+func (s *rotatorTokenSource) TokenAfterAuthFailure(ctx context.Context, failedToken string) (string, error) {
+	token, err := s.rotator.TokenAfterAuthFailure(ctx, s.name, failedToken)
+	if err != nil {
+		if errors.Is(err, oauthrotation.ErrTokenUnchanged) {
+			return token, fmt.Errorf("oauth rotation recover for %q: %w", s.name, err)
+		}
+		wrapped := fmt.Errorf("oauth rotation recover for %q: %w", s.name, err)
+		s.log.ErrorContext(ctx, "adapter.oauth.recover_failed",
 			"subcomponent", "oauth_rotation",
 			"provider", string(s.name),
 			"err", wrapped.Error(),

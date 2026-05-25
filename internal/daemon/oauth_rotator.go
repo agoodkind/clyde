@@ -29,7 +29,12 @@ const daemonOAuthProviderName provider.Name = "anthropic"
 // load. A reload-triggered cancellation aborts the load cleanly. The caller
 // retains ownership of cancellation; this function neither cancels nor
 // derives a new ctx.
-func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log *slog.Logger) *oauthrotation.Rotator {
+//
+// daemonClaudePIDs is the accessor the in-use detector consults to exclude
+// daemon-spawned Claude workers from the external-session count. Passing nil
+// disables the in-use detector entirely, which is the right default for
+// callers that have not stood up livetrack yet.
+func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log *slog.Logger, daemonClaudePIDs oauthprovider.DaemonPIDSource) *oauthrotation.Rotator {
 	if !cfg.DirectOAuth {
 		return nil
 	}
@@ -38,6 +43,14 @@ func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log 
 	rotation := cfg.Anthropic.OAuth.Accounts.WithDefaults()
 	rotator.SetRefreshSafetyWindow(rotation.RefreshSafetyWindow.AsDuration())
 	rotator.Register(oauthprovider.New(cfg.Anthropic.OAuth, ""))
+	if daemonClaudePIDs != nil {
+		oauthprovider.RegisterAnthropicDetector(oauthprovider.AnthropicDetectorDeps{
+			AccountSnapshots: anthropicAccountSnapshots(ctx, rotator),
+			DaemonPIDs:       daemonClaudePIDs,
+			KeychainService:  cfg.Anthropic.OAuth.KeychainService,
+			Logger:           rotatorLog,
+		})
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -57,6 +70,28 @@ func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log 
 		}
 	}()
 	return rotator
+}
+
+// anthropicAccountSnapshots adapts the rotator's typed Accounts snapshot into
+// the FingerprintSource shape the Anthropic detector consumes. The detector
+// only needs the (account id, fingerprint) pairs from each snapshot; the
+// rotator owns the full AccountSnapshot type so the projection lives here at
+// the wiring boundary rather than in the provider package.
+func anthropicAccountSnapshots(ctx context.Context, rotator *oauthrotation.Rotator) oauthprovider.FingerprintSource {
+	return func() []oauthprovider.AccountFingerprint {
+		snapshots, err := rotator.Accounts(ctx, daemonOAuthProviderName)
+		if err != nil {
+			return nil
+		}
+		out := make([]oauthprovider.AccountFingerprint, 0, len(snapshots))
+		for _, snapshot := range snapshots {
+			out = append(out, oauthprovider.AccountFingerprint{
+				Account:     snapshot.Account,
+				Fingerprint: snapshot.Fingerprint,
+			})
+		}
+		return out
+	}
 }
 
 // oauthRotatorHolder publishes the daemon's single OAuth rotation layer so the

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/oauthrotation/inuse"
 	"goodkind.io/clyde/internal/oauthrotation/provider"
 	"goodkind.io/clyde/internal/oauthrotation/ratelimitsink"
 )
@@ -963,6 +964,127 @@ func TestLoadDebounced(t *testing.T) {
 	thirdMirror := mirrorSourcesCallCount(prov)
 	if thirdMirror != firstMirror+1 {
 		t.Fatalf("post-debounce Load MirrorSources delta = %d, want 1", thirdMirror-firstMirror)
+	}
+}
+
+// fakeDetector implements inuse.Detector with a fixed in-use set so tests can
+// drive the rotator's skip branches without depending on a real keychain or
+// process scanner. It records each Detect call so cache-style assertions
+// remain available if a test needs them.
+type fakeDetector struct {
+	inUse inuse.Set
+	err   error
+	calls atomic.Int64
+}
+
+func (f *fakeDetector) Detect(_ context.Context, _ []provider.AccountID) (inuse.Set, error) {
+	f.calls.Add(1)
+	if f.err != nil {
+		return inuse.NewSet(), f.err
+	}
+	return f.inUse, nil
+}
+
+// registerFakeDetector swaps the process-wide registry entry for one provider
+// with a fake detector returning inUseAccounts as the in-use set. The fixture
+// restores the prior entry on test cleanup so concurrent tests do not leak
+// detector state across the suite.
+func registerFakeDetector(t *testing.T, name provider.Name, inUseAccounts ...provider.AccountID) *fakeDetector {
+	t.Helper()
+	det := &fakeDetector{
+		inUse: inuse.NewSet(inUseAccounts...),
+		err:   nil,
+		calls: atomic.Int64{},
+	}
+	inuse.Register(name, det)
+	t.Cleanup(func() { inuse.Register(name, nil) })
+	return det
+}
+
+func TestRefreshDueSkipsInUseAccount(t *testing.T) {
+	now := time.UnixMilli(100_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotatorWithExpiry(t, now, map[string]time.Time{
+		"acct-a": now.Add(-time.Minute),
+		"acct-b": now.Add(-time.Minute),
+	})
+	registerFakeDetector(t, prov.Name(), provider.AccountID("acct-a"))
+
+	if err := rot.RefreshDue(ctx); err != nil {
+		t.Fatalf("RefreshDue: %v", err)
+	}
+	if got := refreshCountFor(prov, "acct-a"); got != 0 {
+		t.Fatalf("in-use acct-a refreshed %d times, want 0", got)
+	}
+	if got := refreshCountFor(prov, "acct-b"); got != 1 {
+		t.Fatalf("non-in-use acct-b refreshed %d times, want 1", got)
+	}
+}
+
+func TestRefreshAllSkipsInUseAccount(t *testing.T) {
+	now := time.UnixMilli(110_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	registerFakeDetector(t, prov.Name(), provider.AccountID("acct-b"))
+
+	if err := rot.RefreshAll(ctx); err != nil {
+		t.Fatalf("RefreshAll: %v", err)
+	}
+	if got := refreshCountFor(prov, "acct-a"); got != 1 {
+		t.Fatalf("non-in-use acct-a refreshed %d times, want 1", got)
+	}
+	if got := refreshCountFor(prov, "acct-b"); got != 0 {
+		t.Fatalf("in-use acct-b refreshed %d times, want 0", got)
+	}
+}
+
+// TestTokenAfterAuthFailureInUseSyncsKeychain models the in-use path: the
+// detector reports acct-a in use, so the rotator runs one mirror sync and
+// returns the slot's access token. When the slot is already on the failed
+// token (because the upstream mirror file holds the same value), the rotator
+// returns ErrTokenUnchanged so the client skips the retry.
+func TestTokenAfterAuthFailureInUseSyncsKeychain(t *testing.T) {
+	now := time.UnixMilli(120_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a")
+	registerFakeDetector(t, prov.Name(), provider.AccountID("acct-a"))
+
+	// The upstream file is unchanged from the original Harvest, so a second
+	// mirror sync re-imports the same access token. The rotator therefore
+	// returns ErrTokenUnchanged with that same value.
+	token, err := rot.TokenAfterAuthFailure(ctx, prov.Name(), "acct-a:token")
+	if !errors.Is(err, ErrTokenUnchanged) {
+		t.Fatalf("err = %v, want ErrTokenUnchanged", err)
+	}
+	if token != "acct-a:token" {
+		t.Fatalf("token = %q, want acct-a:token", token)
+	}
+	// The non-in-use branch is the refresh path, which would have bumped the
+	// refresh counter. Confirm the in-use path did not trigger it.
+	if got := refreshCountFor(prov, "acct-a"); got != 0 {
+		t.Fatalf("in-use TokenAfterAuthFailure refreshed %d times, want 0", got)
+	}
+}
+
+// TestTokenAfterAuthFailureNotInUseRefreshes models the refresh path: the
+// detector reports nothing in use, so the rotator runs the standard refresh
+// against the provider. The returned token is the renewed access token and
+// the refresh counter increments by exactly one.
+func TestTokenAfterAuthFailureNotInUseRefreshes(t *testing.T) {
+	now := time.UnixMilli(130_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a")
+	registerFakeDetector(t, prov.Name())
+
+	token, err := rot.TokenAfterAuthFailure(ctx, prov.Name(), "acct-a:token")
+	if err != nil {
+		t.Fatalf("TokenAfterAuthFailure: %v", err)
+	}
+	if token != "acct-a:token+refreshed" {
+		t.Fatalf("token = %q, want acct-a:token+refreshed", token)
+	}
+	if got := refreshCountFor(prov, "acct-a"); got != 1 {
+		t.Fatalf("non-in-use TokenAfterAuthFailure refreshed %d times, want 1", got)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gofrs/flock"
 
+	"goodkind.io/clyde/internal/oauthrotation/inuse"
 	"goodkind.io/clyde/internal/oauthrotation/mirror"
 	"goodkind.io/clyde/internal/oauthrotation/provider"
 	"goodkind.io/clyde/internal/oauthrotation/ratelimitsink"
@@ -136,6 +137,25 @@ func (r *Rotator) SetRefreshSafetyWindow(d time.Duration) {
 	if d > 0 {
 		r.refreshSafetyWindow = d
 	}
+}
+
+// inUseSet returns the current in-use set for one provider by looking up the
+// process-wide detector registry and calling Detect with the supplied account
+// order. A registry miss returns the noop detector, which yields an empty
+// set. A Detect error is logged and treated as "nothing in use" so a transient
+// detection failure never blocks a refresh.
+func (r *Rotator) inUseSet(ctx context.Context, name provider.Name, accounts []provider.AccountID) inuse.Set {
+	detector := inuse.Lookup(name)
+	set, err := detector.Detect(ctx, accounts)
+	if err != nil {
+		r.logger.WarnContext(ctx, "oauthrotation.inuse.detect_failed",
+			"component", "oauthrotation",
+			"provider", string(name),
+			"err", err.Error(),
+		)
+		return inuse.NewSet()
+	}
+	return set
 }
 
 // Register adds a provider to the rotator. Registering the same provider name
@@ -283,6 +303,77 @@ func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*ac
 	}
 }
 
+// TokenAfterAuthFailure recovers from an upstream 401 by returning a fresh
+// access token for the same account Token would currently pick. The caller
+// passes the access token that just failed so the rotator can decide whether
+// a recovery would actually produce a different value. Two paths are taken,
+// depending on whether the account is currently in use by an external Claude
+// Code session.
+//
+// For an in-use account, the rotator runs one mirror-sync pass to re-import
+// whatever credential the keychain holds today, then re-reads the slot's
+// access token. When the freshly imported token equals failedToken byte for
+// byte, the rotator returns the same token plus ErrTokenUnchanged so the
+// client skips a pointless retry. Otherwise the new token is returned.
+//
+// For a non-in-use account, the rotator takes the per-account flock and runs
+// the same refresh path RefreshDue uses; the resulting token is returned. A
+// refresh failure surfaces verbatim so the client can fall through to its
+// existing error classification.
+func (r *Rotator) TokenAfterAuthFailure(ctx context.Context, name provider.Name, failedToken string) (string, error) {
+	slot, account, err := r.selectActiveSlot(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	state, err := r.providerState(ctx, name)
+	if err != nil {
+		return "", err
+	}
+
+	inUse := r.inUseSet(ctx, name, []provider.AccountID{account})
+	if inUse.Contains(account) {
+		// Re-import the live keychain credential through the same syncer the
+		// startup load runs. A fresh import lands on disk and folds into the
+		// slot in place, so the next Token call sees the updated value.
+		r.runMirrorSync(ctx, name, state)
+		slot.mu.Lock()
+		token := slot.cred.AccessToken
+		slot.mu.Unlock()
+		if token == failedToken {
+			r.logger.DebugContext(ctx, "oauthrotation.recover.token_unchanged",
+				"component", "oauthrotation",
+				"provider", string(name),
+				"account", string(account),
+			)
+			return token, ErrTokenUnchanged
+		}
+		r.logger.InfoContext(ctx, "oauthrotation.recover.synced_from_keychain",
+			"component", "oauthrotation",
+			"provider", string(name),
+			"account", string(account),
+		)
+		return token, nil
+	}
+
+	if err := r.refreshSlot(ctx, state.prov, slot); err != nil {
+		return "", err
+	}
+	slot.mu.Lock()
+	token := slot.cred.AccessToken
+	slot.mu.Unlock()
+	if token == failedToken {
+		// A successful refresh that produced the same token is degenerate;
+		// surface ErrTokenUnchanged so the client does not loop on it.
+		return token, ErrTokenUnchanged
+	}
+	r.logger.InfoContext(ctx, "oauthrotation.recover.refreshed",
+		"component", "oauthrotation",
+		"provider", string(name),
+		"account", string(account),
+	)
+	return token, nil
+}
+
 // Throttle implements [ratelimitsink.Sink]. It reverse-looks-up the account
 // slot by access token, persists a throttle entry keyed by that account, and
 // logs.
@@ -331,19 +422,28 @@ func (r *Rotator) Throttle(ctx context.Context, sig ratelimitsink.Signal) error 
 
 // RefreshAll fans a refresh out over every slot of every provider, persisting
 // each renewed credential through the provider's EncodeStored under a
-// per-account file lock. It returns the first error encountered after
-// attempting every slot.
+// per-account file lock. Slots whose credential is currently held by an
+// external Claude Code session (as reported by the in-use detector) are
+// skipped with a debug event so refresh does not invalidate the keychain copy
+// the external session is mid-flight on. RefreshAll returns the first error
+// encountered after attempting every slot it did not skip.
 func (r *Rotator) RefreshAll(ctx context.Context) error {
 	r.mu.RLock()
-	states := make([]*providerState, 0, len(r.providers))
-	for _, state := range r.providers {
-		states = append(states, state)
+	type named struct {
+		name  provider.Name
+		state *providerState
+	}
+	states := make([]named, 0, len(r.providers))
+	for name, state := range r.providers {
+		states = append(states, named{name: name, state: state})
 	}
 	r.mu.RUnlock()
 
 	var firstErr error
-	for _, state := range states {
+	for _, entry := range states {
+		state := entry.state
 		state.mu.Lock()
+		order := append([]provider.AccountID(nil), state.order...)
 		slots := make([]*accountSlot, 0, len(state.order))
 		for _, account := range state.order {
 			slots = append(slots, state.slots[account])
@@ -351,7 +451,19 @@ func (r *Rotator) RefreshAll(ctx context.Context) error {
 		prov := state.prov
 		state.mu.Unlock()
 
+		inUse := r.inUseSet(ctx, entry.name, order)
 		for _, slot := range slots {
+			slot.mu.Lock()
+			account := slot.account
+			slot.mu.Unlock()
+			if inUse.Contains(account) {
+				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_in_use",
+					"component", "oauthrotation",
+					"provider", string(entry.name),
+					"account", string(account),
+				)
+				continue
+			}
 			if err := r.refreshSlot(ctx, prov, slot); err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -385,6 +497,7 @@ func (r *Rotator) RefreshDue(ctx context.Context) error {
 	for _, entry := range states {
 		state := entry.state
 		state.mu.Lock()
+		order := append([]provider.AccountID(nil), state.order...)
 		slots := make([]*accountSlot, 0, len(state.order))
 		for _, account := range state.order {
 			slots = append(slots, state.slots[account])
@@ -392,11 +505,20 @@ func (r *Rotator) RefreshDue(ctx context.Context) error {
 		prov := state.prov
 		state.mu.Unlock()
 
+		inUse := r.inUseSet(ctx, entry.name, order)
 		for _, slot := range slots {
 			slot.mu.Lock()
 			expiresAt := slot.cred.ExpiresAt
 			account := slot.account
 			slot.mu.Unlock()
+			if inUse.Contains(account) {
+				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_in_use",
+					"component", "oauthrotation",
+					"provider", string(entry.name),
+					"account", string(account),
+				)
+				continue
+			}
 			if !r.refreshIsDue(now, expiresAt) {
 				r.logger.DebugContext(ctx, "oauthrotation.refresh.skipped_not_due",
 					"component", "oauthrotation",
