@@ -276,7 +276,7 @@ func renderCompactDaemonResult(
 
 	if in.Mode == ModePreview {
 		if in.Target > 0 && !in.IsTTY {
-			RenderFinalPreview(out, planRes, in.Target, int(final.GetStaticFloor()), int(final.GetReservedTokens()))
+			RenderFinalPreview(out, planRes, in.SessionName, in.Target, int(final.GetStaticFloor()), int(final.GetReservedTokens()))
 		}
 		return
 	}
@@ -285,7 +285,7 @@ func renderCompactDaemonResult(
 		renderApplyMutationBlock(out, state.mutation)
 	}
 	if in.Target > 0 && !in.IsTTY {
-		RenderFinalApply(out, planRes, in.Target, int(final.GetStaticFloor()), int(final.GetReservedTokens()), final.GetTranscriptPath())
+		RenderFinalApply(out, planRes, in.SessionName, in.Target, int(final.GetStaticFloor()), int(final.GetReservedTokens()), final.GetTranscriptPath())
 	}
 }
 

@@ -533,45 +533,44 @@ func RenderIterationLog(w io.Writer, iterations []compactengine.IterationRecord)
 // summary with optional progress bar.
 func categoryStateThinking(r compactengine.IterationRecord) string {
 	if r.ThinkingDropped {
-		return styleGood.Render("dropped")
+		return styleGood.Render("all dropped")
 	}
-	return styleMuted.Render("kept")
+	return styleMuted.Render("none changed")
 }
 
 func categoryStateImages(r compactengine.IterationRecord) string {
 	if r.ImagesPlaceholder {
-		return styleGood.Render("placeholdered")
+		return styleGood.Render("replaced with text")
 	}
-	return styleMuted.Render("kept")
+	return styleMuted.Render("none changed")
 }
 
 func categoryStateTools(r compactengine.IterationRecord) string {
 	total := r.ToolsFull + r.ToolsLineOnly + r.ToolsDropped
 	if total == 0 {
-		return styleMuted.Render("none")
+		return styleMuted.Render("none in transcript")
 	}
-	// Stacked bar: full = muted, line-only = warn, dropped = bad.
-	bar := stackedBar(20, []segment{
-		{count: r.ToolsFull, style: styleMuted, char: "█"},
-		{count: r.ToolsLineOnly, style: styleWarn, char: "█"},
-		{count: r.ToolsDropped, style: styleBad, char: "█"},
-	}, total)
-	return fmt.Sprintf("%s  %d full · %d line-only · %d dropped",
-		bar, r.ToolsFull, r.ToolsLineOnly, r.ToolsDropped)
+	if r.ToolsLineOnly == 0 && r.ToolsDropped == 0 {
+		return styleMuted.Render("none changed")
+	}
+	parts := []string{}
+	if r.ToolsLineOnly > 0 {
+		parts = append(parts, fmt.Sprintf("%d of %d demoted to line-only", r.ToolsLineOnly, total))
+	}
+	if r.ToolsDropped > 0 {
+		parts = append(parts, fmt.Sprintf("%d of %d dropped", r.ToolsDropped, total))
+	}
+	return styleGood.Render(strings.Join(parts, ", "))
 }
 
 func categoryStateChat(r compactengine.IterationRecord) string {
 	if r.ChatTurnsTotal == 0 {
-		return styleMuted.Render("none")
+		return styleMuted.Render("none in transcript")
 	}
-	kept := r.ChatTurnsTotal - r.ChatTurnsDropped
-	bar := stackedBar(20, []segment{
-		{count: kept, style: styleMuted, char: "█"},
-		{count: r.ChatTurnsDropped, style: styleBad, char: "█"},
-	}, r.ChatTurnsTotal)
-	return fmt.Sprintf("%s  %d kept · %d dropped  %s",
-		bar, kept, r.ChatTurnsDropped,
-		styleMuted.Render(fmt.Sprintf("of %d", r.ChatTurnsTotal)))
+	if r.ChatTurnsDropped == 0 {
+		return styleMuted.Render("none changed")
+	}
+	return styleGood.Render(fmt.Sprintf("%d of %d dropped", r.ChatTurnsDropped, r.ChatTurnsTotal))
 }
 
 // renderBreakdownRow formats a label + value row with consistent
@@ -582,42 +581,6 @@ func renderBreakdownRow(label, value string) string {
 
 func renderPaneRow(label, value string) string {
 	return "  " + stylePaneKey.Render(label) + " " + value
-}
-
-// segment is one colored slice of a stacked bar.
-type segment struct {
-	count int
-	style lipgloss.Style
-	char  string
-}
-
-// stackedBar renders a width-cell bar divided among segments in
-// proportion to their count of total. Cell widths round so the total
-// never exceeds width. Zero-count segments contribute no cells.
-func stackedBar(width int, segs []segment, total int) string {
-	if total <= 0 || width <= 0 {
-		return strings.Repeat(" ", width)
-	}
-	var cells []int
-	remaining := width
-	for i, s := range segs {
-		if i == len(segs)-1 {
-			cells = append(cells, remaining)
-			break
-		}
-		c := s.count * width / total
-		c = min(c, remaining)
-		cells = append(cells, c)
-		remaining -= c
-	}
-	var b strings.Builder
-	for i, s := range segs {
-		if cells[i] <= 0 {
-			continue
-		}
-		b.WriteString(s.style.Render(strings.Repeat(s.char, cells[i])))
-	}
-	return b.String()
 }
 
 // Update refreshes the iteration numbers. For non TTY sinks, like
@@ -709,80 +672,75 @@ func finalRecord(res *compactengine.PlanResult) compactengine.IterationRecord {
 	return res.Iterations[len(res.Iterations)-1]
 }
 
-// RenderFinalPreview draws the phase-3 result box for a preview run
-// with the full what-was-lopped-off breakdown.
-func RenderFinalPreview(w io.Writer, res *compactengine.PlanResult, target, static, reserved int) {
+// RenderFinalPreview draws the result box for a preview run with the
+// full per-category breakdown of what would change. The session name
+// is woven into the Apply command shown at the bottom so the user can
+// copy and paste it without retyping their session reference.
+func RenderFinalPreview(w io.Writer, res *compactengine.PlanResult, sessionName string, target, static, reserved int) {
 	before := static + res.BaselineTail + reserved
 	after := static + res.FinalTail + reserved
-	reduction := 0
-	if res.BaselineTail > 0 {
-		reduction = int(float64(res.BaselineTail-res.FinalTail) / float64(res.BaselineTail) * 100)
-	}
-
-	var verdict string
-	if res.HitTarget {
-		verdict = styleGood.Render("✓ reached target")
-	} else {
-		verdict = styleWarn.Render("floor above target (kept minimum)")
-	}
 
 	rows := []string{
-		styleTitle.Render("result") + "   " + ribbon(ModePreview) + "   " + verdict,
+		styleTitle.Render("Compact preview") + "   " + ribbon(ModePreview),
 		"",
-		kv("tail", fmt.Sprintf("%s → %s   %s",
-			humanInt(res.BaselineTail),
-			humanInt(res.FinalTail),
-			styleMuted.Render(fmt.Sprintf("(%d%% reduction)", reduction)))),
-		kv("ctx total", fmt.Sprintf("%s → %s", humanInt(before), humanInt(after))),
-		kv("target", fmt.Sprintf("%s   %s",
-			humanInt(target),
-			styleMuted.Render(fmt.Sprintf("(%s above target)", humanInt(after-target))))),
-		kv("iterations", strconv.Itoa(len(res.Iterations))),
+		kv("Before", humanInt(before)),
+		kv("After", humanInt(after)),
+		kv("Target", humanInt(target)),
 		"",
-		styleTitle.Render("what was stripped"),
+		styleTitle.Render("Trimmed"),
 	}
 	rows = append(rows, finalBreakdownRows(finalRecord(res))...)
 	rows = append(rows,
 		"",
-		styleMuted.Render("nothing was written. pass --apply to mutate."),
+		kv("Apply", styleMuted.Render(fmt.Sprintf("clyde compact %s %s --apply", sessionName, humanInt(target)))),
 	)
+	if !res.HitTarget {
+		rows = append(rows, "", styleMuted.Render(floorAboveTargetText(target, after, static, reserved)))
+	}
 	fmt.Fprintln(w, stylePreviewBox.Render(strings.Join(rows, "\n")))
 }
 
-// RenderFinalApply draws the phase-3 result box for an applied run.
-// The box is red-bordered and explicit about the transcript mutation.
-func RenderFinalApply(w io.Writer, res *compactengine.PlanResult, target, static, reserved int, transcriptPath string) {
+// RenderFinalApply draws the result box for an applied run. The box is
+// red-bordered so destructive runs stay visually distinct from previews
+// and the body ends with the literal undo command for this session.
+func RenderFinalApply(w io.Writer, res *compactengine.PlanResult, sessionName string, target, static, reserved int, transcriptPath string) {
 	before := static + res.BaselineTail + reserved
 	after := static + res.FinalTail + reserved
-	reduction := 0
-	if res.BaselineTail > 0 {
-		reduction = int(float64(res.BaselineTail-res.FinalTail) / float64(res.BaselineTail) * 100)
-	}
-
-	verdict := styleWarn.Render("✓ APPLIED · transcript mutated")
-	if !res.HitTarget {
-		verdict = styleWarn.Render("✓ APPLIED · transcript mutated · floor above target")
-	}
 
 	rows := []string{
-		styleTitle.Render("result") + "   " + ribbon(ModeApply) + "   " + verdict,
+		styleTitle.Render("Compacted") + "   " + ribbon(ModeApply),
 		"",
-		kv("tail", fmt.Sprintf("%s → %s   %s",
-			humanInt(res.BaselineTail),
-			humanInt(res.FinalTail),
-			styleMuted.Render(fmt.Sprintf("(%d%% reduction)", reduction)))),
-		kv("ctx total", fmt.Sprintf("%s → %s", humanInt(before), humanInt(after))),
-		kv("target", humanInt(target)),
-		kv("transcript", styleMuted.Render(transcriptPath)),
+		kv("Before", humanInt(before)),
+		kv("After", humanInt(after)),
+		kv("Target", humanInt(target)),
 		"",
-		styleTitle.Render("what was stripped"),
+		styleTitle.Render("Trimmed"),
 	}
 	rows = append(rows, finalBreakdownRows(finalRecord(res))...)
 	rows = append(rows,
 		"",
-		styleMuted.Render("to revert: clyde compact <session> --undo"),
+		kv("Transcript", styleMuted.Render(transcriptPath)),
+		kv("Undo", styleMuted.Render(fmt.Sprintf("clyde compact %s --undo", sessionName))),
 	)
+	if !res.HitTarget {
+		rows = append(rows, "", styleMuted.Render(floorAboveTargetText(target, after, static, reserved)))
+	}
 	fmt.Fprintln(w, styleApplyBox.Render(strings.Join(rows, "\n")))
+}
+
+// floorAboveTargetText produces the single explanatory paragraph shown
+// on the result panel when the planner's minimum reachable result sits
+// above the user-set target. The wording names the static buckets that
+// the compact engine cannot trim so the user understands why the
+// target was unreachable.
+func floorAboveTargetText(target, after, static, reserved int) string {
+	floor := static + reserved
+	return fmt.Sprintf(
+		"The %s target could not be met because the system prompt, tool definitions, and memory take %s on their own, which leaves no room to trim further. Result landed at %s.",
+		humanInt(target),
+		humanInt(floor),
+		humanInt(after),
+	)
 }
 
 // RenderUndoResult draws the successful undo summary.
