@@ -51,7 +51,6 @@ func (p *Provider) ReadUpstreamCredentials(ctx context.Context) (provider.Creden
 	options := oauthcredentials.ReadOptions{
 		CredentialsDir:  p.credentialsDir,
 		KeychainService: p.oauthCfg.KeychainService,
-		SecurityBinary:  securityBinary,
 		Platform:        "",
 		Now:             p.now(),
 	}

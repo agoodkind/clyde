@@ -45,18 +45,20 @@ func TestReadCandidates_ReadsFileCredential(t *testing.T) {
 
 func TestReadCandidates_DarwinKeychainPolicyDoesNotFallBackToFile(t *testing.T) {
 	dir := t.TempDir()
-	statePath := filepath.Join(t.TempDir(), "missing-keychain.json")
 	writeTestCredentials(t, dir, &Tokens{
 		AccessToken:  "access-file-secret",
 		RefreshToken: "refresh-file-secret",
 		ExpiresAt:    time.Now().Add(time.Hour).UnixMilli(),
 	})
 
-	t.Setenv("CLYDE_TEST_SECURITY_STATE", statePath)
+	// Use a unique test-only service that is guaranteed to be absent from the
+	// real keychain so the darwin reader returns Present=false; on non-darwin
+	// the keychain stub returns Present=false unconditionally. Either way the
+	// darwin policy must NOT fall back to the .credentials.json file.
+	service := "io.goodkind.clyde-test-missing-" + t.Name()
 	results := ReadCandidates(context.Background(), ReadOptions{
 		CredentialsDir:  dir,
-		KeychainService: "Claude Code-credentials",
-		SecurityBinary:  fakeSecurityPath(t),
+		KeychainService: service,
 		Platform:        "darwin",
 		Now:             time.Now(),
 	})
@@ -87,7 +89,6 @@ func TestReadCandidates_LinuxPolicyUsesFileEvenWithKeychainService(t *testing.T)
 	results := ReadCandidates(context.Background(), ReadOptions{
 		CredentialsDir:  dir,
 		KeychainService: "Claude Code-credentials",
-		SecurityBinary:  "/path/to/missing/security",
 		Platform:        "linux",
 		Now:             time.Now(),
 	})
@@ -118,13 +119,4 @@ func writeTestCredentials(t *testing.T, dir string, tokens *Tokens) {
 	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), encoded, 0o600); err != nil {
 		t.Fatalf("write test credentials: %v", err)
 	}
-}
-
-func fakeSecurityPath(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join("testdata", "fake_security.sh")
-	if err := os.Chmod(path, 0o755); err != nil {
-		t.Fatalf("chmod fake security: %v", err)
-	}
-	return path
 }

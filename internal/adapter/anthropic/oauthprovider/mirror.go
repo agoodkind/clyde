@@ -10,11 +10,6 @@ import (
 	"goodkind.io/clyde/internal/providers/claude/oauthcredentials"
 )
 
-// securityBinary is the macOS keychain tool the underlying oauthcredentials
-// keychain store shells out to. It matches the legacy adapter OAuth manager
-// default so keychain reads behave identically after the rotation cutover.
-const securityBinary = "security"
-
 // readMirrorPlatformDarwin is the platform value that makes the
 // oauthcredentials reader select its keychain store. A keychain MirrorSource
 // is meaningful only on macOS; passing this explicitly lets ReadMirror route a
@@ -81,7 +76,6 @@ func (p *Provider) readOptionsForSource(src provider.MirrorSource) (oauthcredent
 		return oauthcredentials.ReadOptions{
 			CredentialsDir:  credentialsDir,
 			KeychainService: "",
-			SecurityBinary:  securityBinary,
 			Platform:        readMirrorPlatformFile,
 			Now:             p.now(),
 		}, oauthcredentials.SourceFile, nil
@@ -89,11 +83,10 @@ func (p *Provider) readOptionsForSource(src provider.MirrorSource) (oauthcredent
 		return oauthcredentials.ReadOptions{
 			CredentialsDir:  "",
 			KeychainService: src.Location,
-			SecurityBinary:  securityBinary,
 			Platform:        readMirrorPlatformDarwin,
 			Now:             p.now(),
 		}, oauthcredentials.SourceKeychain, nil
 	default:
-		return oauthcredentials.ReadOptions{CredentialsDir: "", KeychainService: "", SecurityBinary: "", Platform: "", Now: time.Time{}}, "", fmt.Errorf("anthropic: unsupported mirror source kind %q", src.Kind)
+		return oauthcredentials.ReadOptions{CredentialsDir: "", KeychainService: "", Platform: "", Now: time.Time{}}, "", fmt.Errorf("anthropic: unsupported mirror source kind %q", src.Kind)
 	}
 }

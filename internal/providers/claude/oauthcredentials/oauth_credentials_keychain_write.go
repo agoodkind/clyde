@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 )
 
@@ -14,19 +13,10 @@ import (
 // surfaces to Claude Code on its next read.
 const DefaultKeychainService = "Claude Code-credentials"
 
-// securityBinaryPath is the absolute path to the macOS keychain tool, used
-// by the keychain writer's process invocations.
-const securityBinaryPath = "/usr/bin/security"
-
-// idBinaryPath is the absolute path to the login-user lookup tool, used as
-// the fallback when no existing keychain entry can be inspected for its
-// acct attribute.
-const idBinaryPath = "/usr/bin/id"
-
 // keychainWriter updates the OAuth entry in the macOS login keychain.
-// Read-once-then-cache semantics on the kSecAttrAccount value (the "acct"
-// attribute) protect against operator configurations where the account name
-// is anything other than the current login user.
+// Read-once-then-cache semantics on the kSecAttrAccount value protect
+// against operator configurations where the account name is anything other
+// than the current login user.
 type keychainWriter struct {
 	service string
 
@@ -51,9 +41,8 @@ var defaultKeychainWriter = &keychainWriter{
 // kSecAttrAccount value of the existing entry is read once and reused so the
 // rewrite preserves the entry's identity for Claude Code's reader.
 //
-// Errors from the underlying security invocation are wrapped with the
-// trimmed stderr text and logged at warn. The token bytes are never
-// logged.
+// Errors from the underlying keychain call are wrapped and logged at warn.
+// The token bytes are never logged.
 func WriteKeychainCredentials(ctx context.Context, jsonBytes []byte) error {
 	if err := defaultKeychainWriter.write(ctx, jsonBytes); err != nil {
 		slog.WarnContext(ctx, "oauthcredentials.keychain.public_write_failed",
@@ -75,18 +64,7 @@ func (w *keychainWriter) write(ctx context.Context, jsonBytes []byte) error {
 	if err != nil {
 		return err
 	}
-	stderrText, runErr := writeSecurityEntry(ctx, securityBinaryPath, w.service, account, string(jsonBytes))
-	stderrText = strings.TrimSpace(stderrText)
-	if runErr != nil {
-		slog.WarnContext(ctx, "oauthcredentials.keychain.write_failed",
-			"component", "oauthcredentials",
-			"service", w.service,
-			"err", runErr.Error(),
-			"stderr", stderrText,
-		)
-		return fmt.Errorf("keychain: security add-generic-password %q: %w (stderr=%s)", w.service, runErr, stderrText)
-	}
-	return nil
+	return w.writeEntry(ctx, account, jsonBytes)
 }
 
 // resolveAccount returns the kSecAttrAccount value for the existing keychain
@@ -112,74 +90,4 @@ func (w *keychainWriter) resolveAccount(ctx context.Context) (string, error) {
 	w.macOSAccount = account
 	w.mu.Unlock()
 	return account, nil
-}
-
-// readExistingAccount runs `security find-generic-password -g` and parses
-// the "acct" attribute line. A missing entry returns the current login user
-// as the fallback account name so the first-ever write still succeeds
-// without prompting the user.
-func (w *keychainWriter) readExistingAccount(ctx context.Context) (string, error) {
-	combined, runErr := readSecurityEntry(ctx, securityBinaryPath, w.service)
-	if account := parseAcctAttribute(combined); account != "" {
-		return account, nil
-	}
-	if runErr == nil {
-		// security succeeded but no acct line was found; fall through to the
-		// login-user fallback so the write still has a valid key.
-		return loginUser(ctx)
-	}
-	if keychainItemNotFound(runErr) {
-		return loginUser(ctx)
-	}
-	slog.WarnContext(ctx, "oauthcredentials.keychain.find_failed",
-		"component", "oauthcredentials",
-		"service", w.service,
-		"err", runErr.Error(),
-	)
-	return "", fmt.Errorf("keychain: security find-generic-password %q: %w", w.service, runErr)
-}
-
-// parseAcctAttribute scans the `security find-generic-password -g` output for
-// the line:
-//
-//	"acct"<blob>="some-account"
-//
-// and returns the unquoted value. Returns "" when the line is absent.
-func parseAcctAttribute(text string) string {
-	for line := range strings.SplitSeq(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, `"acct"`) {
-			continue
-		}
-		_, after, found := strings.Cut(trimmed, "=")
-		if !found {
-			continue
-		}
-		value := strings.TrimSpace(after)
-		value = strings.TrimSuffix(value, ",")
-		value = strings.TrimSpace(value)
-		// security wraps quoted strings in <blob>"..." for printable text and
-		// in the bare form for non-printable bytes. Strip the quotes when
-		// present; leave the value untouched otherwise.
-		if strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) && len(value) >= 2 {
-			return value[1 : len(value)-1]
-		}
-		return value
-	}
-	return ""
-}
-
-// loginUser returns the current login user. The macOS keychain accepts any
-// non-empty string for the -a attribute; using the login user matches
-// Claude Code's behavior when it creates the entry for the first time.
-func loginUser(ctx context.Context) (string, error) {
-	out, err := readLoginUser(ctx, idBinaryPath)
-	if err != nil {
-		slog.WarnContext(ctx, "oauthcredentials.keychain.login_user_failed",
-			"component", "oauthcredentials",
-			"err", err.Error(),
-		)
-		return "", fmt.Errorf("keychain: read login user: %w", err)
-	}
-	return strings.TrimSpace(out), nil
 }

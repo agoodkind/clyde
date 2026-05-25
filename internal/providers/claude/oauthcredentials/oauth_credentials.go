@@ -69,7 +69,6 @@ type ReadResult struct {
 type ReadOptions struct {
 	CredentialsDir  string
 	KeychainService string
-	SecurityBinary  string
 	Platform        string
 	Now             time.Time
 }
@@ -163,9 +162,6 @@ func normalizeReadOptionsWithClock(options ReadOptions, nowFunc func() time.Time
 			options.CredentialsDir = filepath.Join(home, ".claude")
 		}
 	}
-	if options.SecurityBinary == "" {
-		options.SecurityBinary = "security"
-	}
 	if options.Platform == "" {
 		options.Platform = runtime.GOOS
 	}
@@ -180,7 +176,6 @@ func credentialStores(options ReadOptions) []Store {
 		return []Store{
 			keychainStore{
 				keychainService: options.KeychainService,
-				securityBinary:  options.SecurityBinary,
 				now:             options.Now,
 			},
 		}

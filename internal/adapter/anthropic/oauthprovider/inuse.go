@@ -322,7 +322,6 @@ func defaultKeychainReader(service string, now func() time.Time) KeychainReader 
 		results := oauthcredentials.ReadCandidates(ctx, oauthcredentials.ReadOptions{
 			CredentialsDir:  "",
 			KeychainService: service,
-			SecurityBinary:  "",
 			Platform:        runtime.GOOS,
 			Now:             now(),
 		})
