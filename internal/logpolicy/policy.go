@@ -119,9 +119,9 @@ func Resolve(cfg config.Config) (PolicySet, error) {
 	})
 	globalCleanup, err := resolveCleanup("logging.cleanup", cfg.Logging.Cleanup, CleanupPolicy{
 		Enabled:    true,
-		MaxAgeDays: nil,
-		MaxBackups: nil,
-		MaxTotalMB: nil,
+		MaxAgeDays: intPointer(14),
+		MaxBackups: intPointer(192),
+		MaxTotalMB: intPointer(4096),
 	})
 	if err != nil {
 		return PolicySet{}, err
@@ -455,13 +455,16 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 			},
 		},
 		CleanupPolicy: slogger.CleanupPolicy{
-			Enabled:    processSink.Cleanup.Enabled,
+			// Cleanup is daemon-only. The walker scans the full state tree
+			// (logs, MITM raw captures, etc.) and must never block a CLI or
+			// TUI process start. The daemon runs RunCleanupOnce on a periodic
+			// loop instead.
+			Enabled:    processSink.Cleanup.Enabled && role == slogger.ProcessRoleDaemon,
 			Root:       config.DefaultStateDir(),
 			MaxAgeDays: cleanupInt(processSink.Cleanup.MaxAgeDays),
 			MaxBackups: cleanupInt(processSink.Cleanup.MaxBackups),
 			MaxTotalMB: cleanupInt(processSink.Cleanup.MaxTotalMB),
 		},
-		AsyncCleanup: role == slogger.ProcessRoleDaemon,
 	}
 	if !concernSink.Enabled {
 		for concernName, concernPolicy := range setupPolicy.ConcernPolicies {
@@ -513,6 +516,11 @@ func levelToSlog(level Level) slog.Level {
 }
 
 func boolPointer(value bool) *bool {
+	copiedValue := value
+	return &copiedValue
+}
+
+func intPointer(value int) *int {
 	copiedValue := value
 	return &copiedValue
 }

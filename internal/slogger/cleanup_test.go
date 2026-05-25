@@ -34,7 +34,7 @@ func TestSelectCleanupCandidatesHonorsAgeBackupsAndTotalSize(t *testing.T) {
 func TestApplyCleanupPolicyTolerantOfMissingRoot(t *testing.T) {
 	missingRoot := filepath.Join(t.TempDir(), "does-not-exist")
 	policy := CleanupPolicy{Enabled: true, Root: missingRoot, MaxAgeDays: 7}
-	if err := applyCleanupPolicy(policy); err != nil {
+	if _, err := applyCleanupPolicy(policy); err != nil {
 		t.Fatalf("applyCleanupPolicy on missing root returned err=%v, want nil", err)
 	}
 	if _, err := os.Stat(missingRoot); !os.IsNotExist(err) {
@@ -61,7 +61,7 @@ func TestApplyCleanupPolicyDeletesOldLogs(t *testing.T) {
 	}
 
 	policy := CleanupPolicy{Enabled: true, Root: root, MaxAgeDays: 1}
-	if err := applyCleanupPolicy(policy); err != nil {
+	if _, err := applyCleanupPolicy(policy); err != nil {
 		t.Fatalf("applyCleanupPolicy: %v", err)
 	}
 	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
@@ -91,7 +91,7 @@ func TestApplyCleanupPolicyDeletesOldRawCaptures(t *testing.T) {
 	}
 
 	policy := CleanupPolicy{Enabled: true, Root: root, MaxAgeDays: 1}
-	if err := applyCleanupPolicy(policy); err != nil {
+	if _, err := applyCleanupPolicy(policy); err != nil {
 		t.Fatalf("applyCleanupPolicy: %v", err)
 	}
 	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
@@ -135,7 +135,7 @@ func TestApplyCleanupPolicyEmitsCompletedEventWithTypedFields(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(original) })
 
 	policy := CleanupPolicy{Enabled: true, Root: root, MaxAgeDays: 1}
-	if err := applyCleanupPolicy(policy); err != nil {
+	if _, err := applyCleanupPolicy(policy); err != nil {
 		t.Fatalf("applyCleanupPolicy: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestApplyCleanupPolicyReportsSkippedAndErrors(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(original) })
 
 	policy := CleanupPolicy{Enabled: true, Root: root, MaxAgeDays: 1}
-	if err := applyCleanupPolicy(policy); err == nil {
+	if _, err := applyCleanupPolicy(policy); err == nil {
 		t.Fatalf("applyCleanupPolicy returned nil; want error from skipped file")
 	}
 
@@ -235,6 +235,103 @@ func TestApplyCleanupPolicyReportsSkippedAndErrors(t *testing.T) {
 	errs, ok := completed["errors"].([]any)
 	if !ok || len(errs) == 0 {
 		t.Fatalf("errors=%v want at least one entry", completed["errors"])
+	}
+}
+
+func TestRunCleanupOnceReturnsTypedResultWithAgeAndTotalCaps(t *testing.T) {
+	root := t.TempDir()
+	logsDir := filepath.Join(root, "logs", "adapter")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	rawDir := filepath.Join(root, "mitm", "raw", "api.anthropic.com")
+	if err := os.MkdirAll(rawDir, 0o755); err != nil {
+		t.Fatalf("mkdir raw: %v", err)
+	}
+
+	oldLog := filepath.Join(logsDir, "old.jsonl")
+	freshLog := filepath.Join(logsDir, "fresh.jsonl")
+	oldRaw := filepath.Join(rawDir, "old.raw")
+	freshRaw := filepath.Join(rawDir, "fresh.raw")
+
+	for _, path := range []string{oldLog, freshLog, oldRaw, freshRaw} {
+		if err := os.WriteFile(path, []byte("payload-"+filepath.Base(path)), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	oldTime := cleanupPolicyNow().Add(-48 * time.Hour)
+	for _, path := range []string{oldLog, oldRaw} {
+		if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
+
+	result, err := RunCleanupOnce(CleanupPolicy{
+		Enabled:    true,
+		Root:       root,
+		MaxAgeDays: 1,
+	})
+	if err != nil {
+		t.Fatalf("RunCleanupOnce: %v", err)
+	}
+	if len(result.ScannedRoots) != 1 || result.ScannedRoots[0] != root {
+		t.Fatalf("scanned_roots=%v want [%s]", result.ScannedRoots, root)
+	}
+	if result.Candidates != 2 {
+		t.Fatalf("candidates=%d want 2", result.Candidates)
+	}
+	if result.Deleted != 2 {
+		t.Fatalf("deleted=%d want 2", result.Deleted)
+	}
+	if result.BytesDeleted <= 0 {
+		t.Fatalf("bytes_deleted=%d want > 0", result.BytesDeleted)
+	}
+	if len(result.Skipped) != 0 {
+		t.Fatalf("skipped=%v want empty", result.Skipped)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("errors=%v want empty", result.Errors)
+	}
+	if result.DurationMS <= 0 {
+		t.Fatalf("duration_ms=%d want > 0", result.DurationMS)
+	}
+	if _, err := os.Stat(oldLog); !os.IsNotExist(err) {
+		t.Fatalf("old log should be removed: %v", err)
+	}
+	if _, err := os.Stat(oldRaw); !os.IsNotExist(err) {
+		t.Fatalf("old raw should be removed: %v", err)
+	}
+	if _, err := os.Stat(freshLog); err != nil {
+		t.Fatalf("fresh log should remain: %v", err)
+	}
+	if _, err := os.Stat(freshRaw); err != nil {
+		t.Fatalf("fresh raw should remain: %v", err)
+	}
+}
+
+func TestRunCleanupOnceDisabledReturnsZeroResult(t *testing.T) {
+	root := t.TempDir()
+	logPath := filepath.Join(root, "logs", "adapter", "old.jsonl")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	oldTime := cleanupPolicyNow().Add(-48 * time.Hour)
+	if err := os.Chtimes(logPath, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	result, err := RunCleanupOnce(CleanupPolicy{Enabled: false, Root: root, MaxAgeDays: 1})
+	if err != nil {
+		t.Fatalf("RunCleanupOnce disabled: %v", err)
+	}
+	if result.Candidates != 0 || result.Deleted != 0 {
+		t.Fatalf("disabled run modified state: %+v", result)
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("disabled run removed file: %v", err)
 	}
 }
 

@@ -12,11 +12,19 @@ import (
 
 	"goodkind.io/clyde/internal/config"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/prune"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/slogger"
 )
+
+// slogCleanupInterval is the cadence at which the daemon runs one pass of the
+// slogger cleanup walker. The walker scans the full Clyde state tree (logs and
+// MITM raw captures) so a frequent cadence would waste IO; a half-day cadence
+// is enough to keep the configured caps from drifting far between ticks.
+const slogCleanupInterval = 12 * time.Hour
 
 // pruneLoop returns a daemonsvc.ExtraLoop that runs the periodic
 // session pruner when enabled in the global config. The loop ticks
@@ -391,4 +399,83 @@ func runOAuthRefresh(ctx context.Context, log *slog.Logger, rotator *oauthrotati
 		slog.String("component", "oauth"),
 		slog.Int64("duration_ms", elapsed.Milliseconds()),
 	)
+}
+
+// slogCleanupLoop returns a daemonsvc.ExtraLoop that runs the slogger file
+// cleanup walker on a fixed cadence. The walker scans the Clyde state tree
+// (logs and MITM raw captures) and deletes files that exceed the configured
+// age, backup count, or total size caps. The CLI and TUI processes never run
+// this walker; if they did, every CLI invocation would block on a full-tree
+// scan during slogger setup. The daemon is the single owner.
+//
+// The loop is enabled when the resolved daemon-role CleanupPolicy is enabled,
+// which is the default. Operators can override the caps and the enabled flag
+// through [logging.cleanup] in the global config; the loop re-reads config on
+// daemon start, not per tick.
+func slogCleanupLoop() daemonsvc.ExtraLoop {
+	return func(log *slog.Logger) func() {
+		cfg, err := config.LoadGlobalOrDefault()
+		if err != nil {
+			log.LogAttrs(context.Background(), slog.LevelWarn, "slogger.cleanup.config_load_failed",
+				slog.String("component", "slogger"),
+				slog.Any("err", err),
+			)
+			return nil
+		}
+		setupPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, slogger.ProcessRoleDaemon)
+		if err != nil {
+			log.LogAttrs(context.Background(), slog.LevelWarn, "slogger.cleanup.policy_resolve_failed",
+				slog.String("component", "slogger"),
+				slog.Any("err", err),
+			)
+			return nil
+		}
+		cleanupPolicy := setupPolicy.CleanupPolicy
+		if !cleanupPolicy.Enabled {
+			return nil
+		}
+
+		log.LogAttrs(context.Background(), slog.LevelInfo, "slogger.cleanup.tick.scheduled",
+			slog.String("component", "slogger"),
+			slog.Int64("interval_ms", slogCleanupInterval.Milliseconds()),
+			slog.String("root", cleanupPolicy.Root),
+			slog.Int("max_age_days", cleanupPolicy.MaxAgeDays),
+			slog.Int("max_backups", cleanupPolicy.MaxBackups),
+			slog.Int("max_total_mb", cleanupPolicy.MaxTotalMB),
+		)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.WarnContext(ctx, "slogger.cleanup.loop.panicked",
+						"component", "slogger",
+						"panic", r,
+					)
+				}
+			}()
+			ticker := time.NewTicker(slogCleanupInterval)
+			defer func() { ticker.Stop() }()
+			runSlogCleanupTick(ctx, log, cleanupPolicy)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					runSlogCleanupTick(ctx, log, cleanupPolicy)
+				}
+			}
+		}()
+		return cancel
+	}
+}
+
+func runSlogCleanupTick(ctx context.Context, log *slog.Logger, policy slogger.CleanupPolicy) {
+	if _, err := slogger.RunCleanupOnce(policy); err != nil {
+		log.LogAttrs(ctx, slog.LevelWarn, "slogger.cleanup.tick.failed",
+			slog.String("component", "slogger"),
+			slog.String("root", policy.Root),
+			slog.Any("err", err),
+		)
+	}
 }

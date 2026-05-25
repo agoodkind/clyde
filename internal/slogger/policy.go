@@ -47,7 +47,6 @@ type SetupPolicy struct {
 	InventoryPolicy   InventoryPolicy
 	MITMCapturePolicy MITMCapturePolicy
 	CleanupPolicy     CleanupPolicy
-	AsyncCleanup      bool
 }
 
 // InventoryPolicy describes the lightweight inventory index sink.

@@ -53,21 +53,15 @@ func DefaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {
 
 // SetupWithPolicy initializes slog from a resolved typed policy. This is the
 // policy-driven path for config/logpolicy resolvers.
+//
+// SetupWithPolicy no longer runs the file-cleanup walker. The walker now runs
+// only inside the daemon, on the periodic loop, via RunCleanupOnce. CLI and
+// TUI invocations must not block on filesystem scans during process start.
 func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
-	if !policy.AsyncCleanup {
-		if err := applyCleanupPolicy(policy.CleanupPolicy); err != nil {
-			return nopCloser{Closed: false}, err
-		}
-	}
 	if err := validateConcernPolicyNames(policy.ConcernPolicies); err != nil {
 		return nopCloser{Closed: false}, err
 	}
-	closer, err := setupPolicyLogger(policy)
-	if err != nil {
-		return nopCloser{Closed: false}, err
-	}
-	startAsyncCleanup(policy)
-	return closer, nil
+	return setupPolicyLogger(policy)
 }
 
 func setupPolicyLogger(policy SetupPolicy) (io.Closer, error) {
@@ -145,22 +139,6 @@ func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
 		return nopCloser{Closed: false}
 	}
 	return closer
-}
-
-func startAsyncCleanup(policy SetupPolicy) {
-	if !policy.AsyncCleanup {
-		return
-	}
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				slog.Error("slogger.cleanup.async_panicked", "component", "slogger", "err", fmt.Errorf("panic: %v", recovered))
-			}
-		}()
-		if err := applyCleanupPolicy(policy.CleanupPolicy); err != nil {
-			slog.Warn("slogger.cleanup.async_failed", "component", "slogger", "err", err)
-		}
-	}()
 }
 
 // buildTranscriptRouter returns a configured router, or nil when the feature

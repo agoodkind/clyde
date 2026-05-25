@@ -172,9 +172,6 @@ func TestResolveSloggerSetupConvertsPolicies(t *testing.T) {
 	if policy.ProcessSink.Enabled {
 		t.Fatalf("daemon process sink should be disabled when omitted from enabled sinks")
 	}
-	if !policy.AsyncCleanup {
-		t.Fatalf("daemon setup should defer cleanup until after logger setup")
-	}
 	if !policy.InventoryPolicy.Enabled {
 		t.Fatalf("inventory sink should be enabled by configured sink set")
 	}
@@ -215,6 +212,56 @@ func TestResolveRejectsUnknownConcern(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "logging.concerns.adapter.nope is not a known concern") {
 		t.Fatalf("Resolve error = %q", err.Error())
+	}
+}
+
+func TestResolveCleanupAppliesDefaultCaps(t *testing.T) {
+	cfg := config.NewConfigWithDefaults()
+	policies, err := logpolicy.Resolve(*cfg)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	daemonCleanup := policies.Sinks[logpolicy.SinkDaemon].Cleanup
+	if !daemonCleanup.Enabled {
+		t.Fatalf("daemon cleanup should default to enabled")
+	}
+	if daemonCleanup.MaxAgeDays == nil || *daemonCleanup.MaxAgeDays != 14 {
+		t.Fatalf("daemon cleanup max age days = %v, want 14", daemonCleanup.MaxAgeDays)
+	}
+	if daemonCleanup.MaxBackups == nil || *daemonCleanup.MaxBackups != 192 {
+		t.Fatalf("daemon cleanup max backups = %v, want 192", daemonCleanup.MaxBackups)
+	}
+	if daemonCleanup.MaxTotalMB == nil || *daemonCleanup.MaxTotalMB != 4096 {
+		t.Fatalf("daemon cleanup max total mb = %v, want 4096", daemonCleanup.MaxTotalMB)
+	}
+}
+
+func TestResolveSloggerSetupGatesCleanupByRole(t *testing.T) {
+	cfg := config.NewConfigWithDefaults()
+
+	daemonPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, slogger.ProcessRoleDaemon)
+	if err != nil {
+		t.Fatalf("daemon ResolveSloggerSetup: %v", err)
+	}
+	if !daemonPolicy.CleanupPolicy.Enabled {
+		t.Fatalf("daemon role should keep cleanup enabled by default")
+	}
+	if daemonPolicy.CleanupPolicy.MaxAgeDays != 14 {
+		t.Fatalf("daemon cleanup max age days = %d, want 14", daemonPolicy.CleanupPolicy.MaxAgeDays)
+	}
+	if daemonPolicy.CleanupPolicy.MaxBackups != 192 {
+		t.Fatalf("daemon cleanup max backups = %d, want 192", daemonPolicy.CleanupPolicy.MaxBackups)
+	}
+	if daemonPolicy.CleanupPolicy.MaxTotalMB != 4096 {
+		t.Fatalf("daemon cleanup max total mb = %d, want 4096", daemonPolicy.CleanupPolicy.MaxTotalMB)
+	}
+
+	tuiPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, slogger.ProcessRoleTUI)
+	if err != nil {
+		t.Fatalf("tui ResolveSloggerSetup: %v", err)
+	}
+	if tuiPolicy.CleanupPolicy.Enabled {
+		t.Fatalf("tui/cli role must disable cleanup; it would block process start")
 	}
 }
 

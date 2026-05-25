@@ -38,7 +38,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 				"version", f.Build.Version,
 			)
 			log := slog.Default().With("component", "daemon")
-			return runCommand(log, pruneLoop(), oauthLoop(), driftLoop())
+			return runCommand(log, pruneLoop(), oauthLoop(), driftLoop(), slogCleanupLoop())
 		},
 	}
 	cmd.AddCommand(newWorkerCmd(f))
@@ -60,7 +60,7 @@ func newWorkerCmd(_ *cli.Factory) *cobra.Command {
 				"component", "cli",
 			)
 			log := slog.Default().With("component", "daemon")
-			return runWorker(log, pruneLoop(), oauthLoop(), driftLoop())
+			return runWorker(log, pruneLoop(), oauthLoop(), driftLoop(), slogCleanupLoop())
 		},
 	}
 }

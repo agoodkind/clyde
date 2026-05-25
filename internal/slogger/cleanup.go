@@ -61,15 +61,36 @@ type CleanupResult struct {
 	DurationMS int64 `json:"duration_ms"`
 }
 
-func applyCleanupPolicy(policy CleanupPolicy) error {
+// RunCleanupOnce runs one pass of the slogger file cleanup walker against the
+// provided policy and returns the typed result together with any walk or
+// removal error. It is the exported entry point the daemon's periodic cleanup
+// loop calls; the loop owns scheduling, this function owns one pass.
+//
+// The result mirrors the slogger.cleanup.completed slog event one-for-one, so
+// callers that want to log or aggregate cleanup outcomes can do so without
+// re-parsing the slog stream.
+func RunCleanupOnce(policy CleanupPolicy) (CleanupResult, error) {
+	return applyCleanupPolicy(policy)
+}
+
+func applyCleanupPolicy(policy CleanupPolicy) (CleanupResult, error) {
+	emptyResult := CleanupResult{
+		ScannedRoots: []string{},
+		Candidates:   0,
+		Deleted:      0,
+		BytesDeleted: 0,
+		Skipped:      []string{},
+		Errors:       []string{},
+		DurationMS:   0,
+	}
 	if !policy.Enabled {
 		slog.Debug("slogger.cleanup.skipped", "component", "slogger", "reason", "disabled")
-		return nil
+		return emptyResult, nil
 	}
 	root := strings.TrimSpace(policy.Root)
 	if root == "" {
 		slog.Debug("slogger.cleanup.skipped", "component", "slogger", "reason", "empty_root")
-		return nil
+		return emptyResult, nil
 	}
 	if _, statErr := os.Stat(root); errors.Is(statErr, fs.ErrNotExist) {
 		slog.Debug("slogger.cleanup.skipped",
@@ -77,7 +98,7 @@ func applyCleanupPolicy(policy CleanupPolicy) error {
 			"reason", "root_missing",
 			"root", root,
 		)
-		return nil
+		return emptyResult, nil
 	}
 	scannedRoots := []string{root}
 	startedAt := cleanupPolicyNow()
@@ -132,12 +153,12 @@ func applyCleanupPolicy(policy CleanupPolicy) error {
 		"duration_ms", result.DurationMS,
 	)
 	if walkErr != nil {
-		return walkErr
+		return result, walkErr
 	}
 	if len(result.Errors) > 0 {
-		return fmt.Errorf("cleanup encountered %d removal errors under %s", len(result.Errors), root)
+		return result, fmt.Errorf("cleanup encountered %d removal errors under %s", len(result.Errors), root)
 	}
-	return nil
+	return result, nil
 }
 
 func collectCleanupFiles(root string) ([]cleanupFile, error) {
