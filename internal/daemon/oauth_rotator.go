@@ -30,11 +30,12 @@ const daemonOAuthProviderName provider.Name = "anthropic"
 // retains ownership of cancellation; this function neither cancels nor
 // derives a new ctx.
 //
-// daemonClaudePIDs is the accessor the in-use detector consults to exclude
-// daemon-spawned Claude workers from the external-session count. Passing nil
-// disables the in-use detector entirely, which is the right default for
-// callers that have not stood up livetrack yet.
-func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log *slog.Logger, daemonClaudePIDs oauthprovider.DaemonPIDSource) *oauthrotation.Rotator {
+// mitmTracker reports the count of active claude-to-anthropic MITM sessions
+// the in-use detector uses to decide whether the keychain-matched account is
+// currently held by Claude Code. Passing nil disables the in-use detector
+// entirely, which is the right default for callers that have not stood up
+// the MITM proxy yet.
+func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log *slog.Logger, mitmTracker oauthprovider.ClaudeMITMTracker) *oauthrotation.Rotator {
 	if !cfg.DirectOAuth {
 		return nil
 	}
@@ -43,10 +44,10 @@ func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log 
 	rotation := cfg.Anthropic.OAuth.Accounts.WithDefaults()
 	rotator.SetRefreshSafetyWindow(rotation.RefreshSafetyWindow.AsDuration())
 	rotator.Register(oauthprovider.New(cfg.Anthropic.OAuth, ""))
-	if daemonClaudePIDs != nil {
+	if mitmTracker != nil {
 		oauthprovider.RegisterAnthropicDetector(oauthprovider.AnthropicDetectorDeps{
 			AccountSnapshots: anthropicAccountSnapshots(ctx, rotator),
-			DaemonPIDs:       daemonClaudePIDs,
+			MITMTracker:      mitmTracker,
 			KeychainService:  cfg.Anthropic.OAuth.KeychainService,
 			Logger:           rotatorLog,
 		})

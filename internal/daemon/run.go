@@ -1770,10 +1770,16 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener, mitmPro
 	// had. The instance is retained on the controller's Deps so adapter reloads
 	// reuse it rather than constructing a new one.
 	//
-	// The accessor closure feeds the in-use detector daemon-tracked Claude
-	// worker PIDs so the rotator can tell its own children apart from an
-	// external Claude Code session sharing the same keychain credential.
-	oauthRotator := buildDaemonOAuthRotator(context.Background(), cfg.Adapter, log, srv.claudeWorkerPIDs)
+	// The MITM tracker feeds the in-use detector the live count of active
+	// claude-to-anthropic MITM sessions so the rotator skips refresh for an
+	// account currently held by Claude Code traffic flowing through the proxy.
+	mitmTracker := newAnthropicMITMTracker(func() *mitm.Proxy {
+		if mitmProc == nil {
+			return nil
+		}
+		return mitmProc.proxy
+	})
+	oauthRotator := buildDaemonOAuthRotator(context.Background(), cfg.Adapter, log, mitmTracker)
 	setSharedOAuthRotator(oauthRotator)
 
 	// current starts as the zero launch config; apply overwrites it on the
