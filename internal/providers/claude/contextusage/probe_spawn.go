@@ -67,7 +67,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (contextusage.Sna
 	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
-		timeout = 60 * time.Second
+		timeout = 180 * time.Second
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

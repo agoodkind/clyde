@@ -655,8 +655,7 @@ func probeSessionSnapshot(ctx context.Context, sess *session.Session, refresh bo
 		)
 		return contextusage.Snapshot{}, fmt.Errorf("contextusage: no prober registered for provider %q", sess.ProviderID())
 	}
-	// Probe spawns claude; observed completion 3-28s on haiku fixtures.
-	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
 		RefreshHint: refresh,

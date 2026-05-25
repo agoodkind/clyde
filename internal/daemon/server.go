@@ -1848,7 +1848,7 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 		s.log.WarnContext(ctx, "daemon.context_usage.probe_unregistered", "component", "daemon", "provider", string(sess.ProviderID()))
 		return emptySessionContextState(), err
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
 		RefreshHint: false,
