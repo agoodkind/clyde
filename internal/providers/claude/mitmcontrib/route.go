@@ -13,11 +13,17 @@ import (
 // internal/mitm package never names a provider upstream.
 const anthropicUpstream = "https://api.anthropic.com"
 
+const (
+	anthropicAPIHost     = "api.anthropic.com"
+	anthropicConsoleHost = "console.anthropic.com"
+	claudeAIHost         = "claude.ai"
+	anthropicSuffix      = ".anthropic.com"
+)
+
 // routeProvider satisfies the [mitm.Provider] contract for the
 // Claude (Anthropic) upstream. It claims plain-HTTP paths under
-// `/v1/messages` and `/v1/models`. Claude does not currently opt
-// into TLS interception via this contract; the upstream is reached
-// over plain HTTP MITM only.
+// `/v1/messages` and `/v1/models`, and claims Anthropic and
+// claude.ai CONNECT hosts for TLS interception.
 type routeProvider struct{}
 
 // providerID is the typed provider id this package registers with
@@ -28,14 +34,31 @@ const providerID mitm.ProviderID = claudeContributorID
 // concern path and emitted event provider field.
 func (routeProvider) ID() mitm.ProviderID { return providerID }
 
-// ClassifyConnect returns the zero ConnectClaim. The Claude
-// provider does not own any CONNECT host in the MITM registry.
+// ClassifyConnect claims Anthropic and claude.ai CONNECT hosts for
+// TLS interception so the MITM proxy can decrypt and capture the
+// inner HTTP requests instead of opaque-byte splicing.
 func (routeProvider) ClassifyConnect(host string) mitm.ConnectClaim {
+	if isClaudeConnectHost(host) {
+		return mitm.ConnectClaim{
+			Claimed:    true,
+			Host:       host,
+			ProviderID: providerID,
+		}
+	}
 	return mitm.ConnectClaim{
 		Claimed:    false,
 		Host:       host,
 		ProviderID: providerID,
 	}
+}
+
+func isClaudeConnectHost(host string) bool {
+	normalizedHost := strings.Trim(strings.ToLower(host), ".")
+	switch normalizedHost {
+	case anthropicAPIHost, anthropicConsoleHost, claudeAIHost:
+		return true
+	}
+	return strings.HasSuffix(normalizedHost, anthropicSuffix)
 }
 
 // ClassifyPlain claims the Anthropic plain-HTTP routes the MITM
