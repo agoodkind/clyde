@@ -655,12 +655,7 @@ func probeSessionSnapshot(ctx context.Context, sess *session.Session, refresh bo
 		)
 		return contextusage.Snapshot{}, fmt.Errorf("contextusage: no prober registered for provider %q", sess.ProviderID())
 	}
-	// 90s outer cap. The inner ProbeContextUsage has a 60s default that
-	// bounds the actual claude spawn, and the previously-observed
-	// successful probes landed around 26s under haiku. A 30s outer cap
-	// was too tight when the spawn was on the slow side of that range
-	// and timed out before claude emitted control_response.
-	probeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
 		RefreshHint: refresh,
