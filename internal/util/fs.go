@@ -2,6 +2,8 @@ package util
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -71,18 +73,49 @@ func HomeDir() (string, error) {
 
 // WriteFile writes content to a file, creating parent directories if
 // needed. The write is atomic from the reader's perspective: the
-// content lands in a sibling .tmp file first and is then renamed onto
-// the destination. Concurrent writers can still clobber each other on
-// the rename, but no reader ever sees a half-written metadata file.
+// content lands in a sibling temp file with a unique suffix produced
+// by [os.CreateTemp] and is then renamed onto the destination. The
+// per-writer unique suffix means concurrent writers to the same path
+// no longer collide on a fixed ".tmp" name, so the rename step does
+// not race itself into ENOENT. Each failure path emits one structured
+// warn event with the failing step labeled so callers can correlate the
+// returned wrapped error with the lifecycle log.
 func WriteFile(path string, content []byte) error {
 	if err := ensureDirForFile(path); err != nil {
-		return err
+		slog.Warn("util.write_file.failed", "path", path, "step", "ensure_dir", "err", err)
+		return fmt.Errorf("ensure dir for %s: %w", path, err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, DefaultFileMode); err != nil {
-		return err
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, base+".tmp-*")
+	if err != nil {
+		slog.Warn("util.write_file.failed", "path", path, "step", "create_temp", "err", err)
+		return fmt.Errorf("create temp for %s: %w", path, err)
 	}
-	return os.Rename(tmp, path)
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		slog.Warn("util.write_file.failed", "path", path, "step", "write_temp", "tmp", tmpName, "err", err)
+		return fmt.Errorf("write temp %s: %w", tmpName, err)
+	}
+	if err := tmp.Chmod(DefaultFileMode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		slog.Warn("util.write_file.failed", "path", path, "step", "chmod_temp", "tmp", tmpName, "err", err)
+		return fmt.Errorf("chmod temp %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		slog.Warn("util.write_file.failed", "path", path, "step", "close_temp", "tmp", tmpName, "err", err)
+		return fmt.Errorf("close temp %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		slog.Warn("util.write_file.failed", "path", path, "step", "rename", "tmp", tmpName, "err", err)
+		return fmt.Errorf("rename temp %s onto %s: %w", tmpName, path, err)
+	}
+	return nil
 }
 
 // ReadFile reads the entire contents of a file.

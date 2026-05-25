@@ -3,12 +3,54 @@ package util_test
 import (
 	"os"
 	"path/filepath"
+	"sync"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"goodkind.io/clyde/internal/util"
 )
+
+// TestWriteFileConcurrentSameDestination exercises the unique-temp-name
+// guarantee of util.WriteFile. The historical bug used a fixed ".tmp"
+// suffix, so two writers racing to the same destination would have one
+// rename succeed and the other rename fail with ENOENT once the first
+// rename consumed the shared temp file. Fifty goroutines writing the
+// same content to the same path here is enough to expose that race; all
+// of them must return nil and the destination must hold the expected
+// bytes once they all return.
+func TestWriteFileConcurrentSameDestination(t *testing.T) {
+	tempDir := t.TempDir()
+	target := filepath.Join(tempDir, "concurrent.bin")
+	content := []byte("payload bytes for concurrent writers")
+
+	const writerCount = 50
+	errs := make([]error, writerCount)
+	var wg sync.WaitGroup
+	wg.Add(writerCount)
+	for i := 0; i < writerCount; i++ {
+		go func(index int) {
+			defer wg.Done()
+			errs[index] = util.WriteFile(target, content)
+		}(i)
+	}
+	wg.Wait()
+
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("writer %d returned error: %v", index, err)
+		}
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read destination after concurrent writes: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("destination content mismatch: got %q want %q", got, content)
+	}
+}
 
 var _ = Describe("EnsureDir", func() {
 	var tempDir string
