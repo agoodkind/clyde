@@ -1,11 +1,8 @@
 package contextusage
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,52 +12,65 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"goodkind.io/clyde/internal/contextusage"
 )
 
-// ProbeOptions configures a get_context_usage spawn against the
-// Claude CLI. The spawn is Claude-specific (control_request envelope,
-// stream-json IO format, --resume semantics) and intentionally lives
-// in the Claude provider package so the generic contextusage package
-// stays provider-neutral.
+// ProbeOptions configures a /context spawn against the Claude CLI.
+// The spawn is Claude-specific (slash-command argv, JSON envelope
+// output) and lives in the Claude provider package so the generic
+// contextusage package stays provider-neutral.
+//
+// The Snapshot ProbeContextUsage returns is workspace and session
+// scoped: System tools, MCP tools, Memory files, Skills, and Compact
+// buffer reflect the workspace WorkDir points at, and Messages
+// reflects the resumed transcript identified by SessionID.
 type ProbeOptions struct {
-	// SessionID resumes the live session so the probe measures the
-	// actual per-session overhead (model choice, agent, custom system
-	// prompt, injected context). Required.
+	// SessionID is the provider's session identifier. The probe
+	// hands it to claude as `--resume <SessionID>` so the Snapshot
+	// reflects that session's transcript and not a fresh session.
 	SessionID string
 
 	// WorkDir is the cwd used when spawning claude. Must match the
-	// session's original workspace so memory files (CLAUDE.md) and
-	// skills resolve to the same set the live session sees.
+	// session's original workspace so memory files (CLAUDE.md),
+	// skills, agents, and MCP servers resolve to the same set the
+	// live session sees.
 	WorkDir string
+
+	// Model is the model name handed to claude as `--model <Model>`.
+	// The Snapshot's MaxTokens (and the per-model context budget the
+	// planner targets) follows the model claude resolves the flag
+	// to. An empty value omits the flag and lets claude pick its
+	// default model, which is rarely the right one for compaction.
+	Model string
 
 	// Binary is the path to the claude CLI. Defaults to "claude" on
 	// $PATH when empty. Tests inject a fake binary path here.
 	Binary string
 
-	// Timeout caps the probe. claude cold-starts plus MCP servers can
-	// take 15-30 seconds on a large workspace, so callers should
-	// budget at least 60 seconds for the default.
+	// Timeout caps the probe. claude cold-starts plus MCP servers
+	// can take 15-30 seconds on a large workspace, so callers
+	// should budget at least 60 seconds for the default.
 	Timeout time.Duration
-
-	// ForkSession, when true, resumes the target session through a
-	// disposable fork so the probe does not append /context noise to
-	// the real transcript that compaction is about to mutate.
-	ForkSession bool
 }
 
-// ProbeContextUsage spawns claude in SDK stream-json mode against a
-// specific session, sends a get_context_usage control request over
-// stdin, reads stdout until the matching control_response arrives, and
-// returns the parsed Snapshot. The spawned claude process is closed
-// when the function returns. No session persistence side effects are
-// written because the probe passes --no-session-persistence.
+// ProbeContextUsage spawns claude in print mode with the /context
+// slash command and returns the workspace+session scoped Snapshot.
+// The flow is:
+//
+//  1. Spawn claude with `-p /context --resume <session-id> --model <model>
+//     --no-session-persistence --output-format json --max-turns 1`.
+//  2. Read the full stdout as a JSON list of stream envelopes.
+//  3. Find the envelope whose `type` field is `result` and whose
+//     `subtype` is `success`; extract the `result` field, which
+//     carries the markdown payload.
+//  4. Parse the markdown header (`**Model:**`, `**Tokens:** N / M (P%)`)
+//     and the "Estimated usage by category" table into a Snapshot.
+//
+// The probe runs claude as a one-shot non-interactive turn. Because
+// the slash command does not call a model, the spawn does not
+// consume API tokens and `--no-session-persistence` keeps the
+// transcript untouched.
 func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (contextusage.Snapshot, error) {
-	if opts.SessionID == "" {
-		return contextusage.Snapshot{}, errors.New("probe: session id required")
-	}
 	binary := opts.Binary
 	if binary == "" {
 		binary = "claude"
@@ -72,13 +82,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (contextusage.Sna
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	const requestID = "clyde-auto-calibrate-r1"
-	reqLine, err := marshalControlRequest(ctx, requestID)
-	if err != nil {
-		return contextusage.Snapshot{}, err
-	}
-
-	cmd, stdin, stdout, stderr, err := startProbeCmd(probeCtx, ctx, binary, opts)
+	cmd, stdout, stderr, err := startProbeCmd(probeCtx, ctx, binary, opts)
 	if err != nil {
 		return contextusage.Snapshot{}, err
 	}
@@ -89,38 +93,31 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (contextusage.Sna
 		"subcomponent", "probe",
 		"binary", binary,
 		"session_id", opts.SessionID,
+		"model", opts.Model,
 		"work_dir", opts.WorkDir,
 		"timeout_s", int(timeout.Seconds()),
 	)
 
-	// Drain stderr concurrently so a noisy claude does not block on a
-	// full pipe buffer. Keep the tail for diagnostics on failure.
 	var stderrTail strings.Builder
 	var stderrWG sync.WaitGroup
 	stderrWG.Go(func() { drainStderr(stderr, &stderrTail) })
 
-	if _, err := stdin.Write(reqLine); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		stderrWG.Wait()
-		slog.ErrorContext(ctx, "compact.probe.write_request_failed", "component", "compact", "subcomponent", "probe", "session_id", opts.SessionID, "err", err)
-		return contextusage.Snapshot{}, fmt.Errorf("probe: write control request: %w", err)
-	}
-	// Close stdin so claude sees EOF and exits after the response.
-	// Keeping stdin open would leave the process waiting for more
-	// messages until the context deadline.
-	if err := stdin.Close(); err != nil {
-		sessionContextLog.Logger().Debug("compact.probe.stdin_close_warn",
-			"component", "compact",
-			"subcomponent", "probe",
-			"err", err,
-		)
-	}
-
-	usage, parseErr := scanForUsage(probeCtx, stdout, requestID)
+	stdoutBytes, readErr := io.ReadAll(stdout)
 	waitErr := cmd.Wait()
 	stderrWG.Wait()
-	return finalizeProbeResult(ctx, opts, usage, parseErr, waitErr, stderrTail.String(), time.Since(started).Milliseconds())
+
+	var usage contextusage.Snapshot
+	var parseErr error
+	switch {
+	case readErr != nil:
+		parseErr = fmt.Errorf("probe: read stdout: %w", readErr)
+	case waitErr != nil:
+		parseErr = fmt.Errorf("probe: claude exited with error: %w", waitErr)
+	default:
+		usage, parseErr = decodeProbeStdout(ctx, stdoutBytes)
+	}
+
+	return finalizeProbeResult(ctx, opts, usage, parseErr, stderrTail.String(), time.Since(started).Milliseconds())
 }
 
 // finalizeProbeResult emits the terminal log line for the probe and
@@ -130,23 +127,19 @@ func finalizeProbeResult(
 	ctx context.Context,
 	opts ProbeOptions,
 	usage contextusage.Snapshot,
-	parseErr, waitErr error,
+	parseErr error,
 	stderrTail string,
 	durationMs int64,
 ) (contextusage.Snapshot, error) {
 	if parseErr != nil {
-		waitErrMsg := ""
-		if waitErr != nil {
-			waitErrMsg = waitErr.Error()
-		}
 		slog.WarnContext(ctx, "compact.probe.parse_failed",
 			"component", "compact",
 			"subcomponent", "probe",
 			"session_id", opts.SessionID,
+			"model", opts.Model,
 			"duration_ms", durationMs,
 			"stderr_tail", stderrTail,
 			"err", parseErr,
-			"wait_err", waitErrMsg,
 		)
 		return contextusage.Snapshot{}, parseErr
 	}
@@ -164,12 +157,13 @@ func finalizeProbeResult(
 	return usage, nil
 }
 
-// startProbeCmd configures the claude command, attaches stdio pipes,
-// and starts the process. Split out so ProbeContextUsage stays under
-// the function-length budget. The logCtx argument is the caller's
-// context used for structured logging; probeCtx is the bounded
-// execution context the command runs under.
-func startProbeCmd(probeCtx, logCtx context.Context, binary string, opts ProbeOptions) (*exec.Cmd, io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
+// startProbeCmd configures the claude command, attaches stdout and
+// stderr pipes, and starts the process. The probe does not write to
+// stdin; the slash command runs as a single non-interactive turn,
+// so claude closes its own input pipeline. The logCtx argument is
+// the caller's context used for structured logging; probeCtx is the
+// bounded execution context the command runs under.
+func startProbeCmd(probeCtx, logCtx context.Context, binary string, opts ProbeOptions) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
 	args := buildProbeArgs(opts)
 	cmd := exec.CommandContext(probeCtx, binary, args...)
 	if opts.WorkDir != "" {
@@ -177,58 +171,27 @@ func startProbeCmd(probeCtx, logCtx context.Context, binary string, opts ProbeOp
 	}
 	cmd.Env = append(os.Environ(), "CLYDE_SUPPRESS_HOOKS=1")
 
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		slog.ErrorContext(logCtx, "compact.probe.stdin_pipe_failed", "component", "compact", "subcomponent", "probe", "err", err)
-		return nil, nil, nil, nil, fmt.Errorf("probe: stdin pipe: %w", err)
-	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		slog.ErrorContext(logCtx, "compact.probe.stdout_pipe_failed", "component", "compact", "subcomponent", "probe", "err", err)
-		return nil, nil, nil, nil, fmt.Errorf("probe: stdout pipe: %w", err)
+		return nil, nil, nil, fmt.Errorf("probe: stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		slog.ErrorContext(logCtx, "compact.probe.stderr_pipe_failed", "component", "compact", "subcomponent", "probe", "err", err)
-		return nil, nil, nil, nil, fmt.Errorf("probe: stderr pipe: %w", err)
+		return nil, nil, nil, fmt.Errorf("probe: stderr pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
 		slog.ErrorContext(logCtx, "compact.probe.start_failed", "component", "compact", "subcomponent", "probe", "binary", binary, "session_id", opts.SessionID, "err", err)
-		return nil, nil, nil, nil, fmt.Errorf("probe: start claude: %w", err)
+		return nil, nil, nil, fmt.Errorf("probe: start claude: %w", err)
 	}
-	return cmd, stdin, stdout, stderr, nil
+	return cmd, stdout, stderr, nil
 }
 
-// marshalControlRequest encodes the get_context_usage control request
-// envelope claude expects on stdin. Split out so ProbeContextUsage
-// stays under the function-length budget without inlining the type
-// declarations.
-func marshalControlRequest(ctx context.Context, requestID string) ([]byte, error) {
-	type controlRequestPayload struct {
-		Subtype string `json:"subtype"`
-	}
-	type controlRequestEnvelope struct {
-		Type      string                `json:"type"`
-		RequestID string                `json:"request_id"`
-		Request   controlRequestPayload `json:"request"`
-	}
-	controlReq := controlRequestEnvelope{
-		Type:      "control_request",
-		RequestID: requestID,
-		Request:   controlRequestPayload{Subtype: "get_context_usage"},
-	}
-	reqLine, err := json.Marshal(controlReq)
-	if err != nil {
-		slog.ErrorContext(ctx, "compact.probe.marshal_request_failed", "component", "compact", "subcomponent", "probe", "err", err)
-		return nil, fmt.Errorf("probe: marshal control request: %w", err)
-	}
-	reqLine = append(reqLine, '\n')
-	return reqLine, nil
-}
-
-// drainStderr reads stderr to EOF, keeping the first 2048 bytes as a
-// tail for diagnostics. Split out so ProbeContextUsage stays under
-// the function-length budget.
+// drainStderr reads stderr to EOF, keeping the first 2048 bytes as
+// a tail for diagnostics. The probe never writes its own bytes to
+// stderr; the tail exists so a failure inside claude (a missing
+// session, a refused workspace) surfaces on the parent log.
 func drainStderr(stderr io.Reader, tail *strings.Builder) {
 	buf := make([]byte, 4096)
 	for {
@@ -249,93 +212,74 @@ func drainStderr(stderr io.Reader, tail *strings.Builder) {
 	}
 }
 
+// buildProbeArgs assembles the claude argv for the probe. The probe
+// runs the /context slash command in print JSON mode against the
+// resumed session. claude resolves the workspace (memory files, MCP
+// servers, skills, agents) from cmd.Dir, which the caller sets to
+// ProbeOptions.WorkDir. `--resume` re-hydrates the transcript so the
+// Messages bucket reflects the live session. `--max-turns 1` caps
+// the call at one non-model turn so the spawn returns as soon as the
+// slash command renders. `--no-session-persistence` suppresses
+// transcript writes through claude's session storage.
 func buildProbeArgs(opts ProbeOptions) []string {
 	args := []string{
-		"-p",
-		"--resume", opts.SessionID,
-	}
-	if opts.ForkSession {
-		probeID := uuid.NewString()
-		args = append(args,
-			"--fork-session",
-			"--session-id", probeID,
-			"-n", "clyde-probe-"+probeID[:8],
-		)
-	}
-	args = append(args,
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
-		"--verbose",
+		"-p", "/context",
 		"--no-session-persistence",
-	)
+		"--output-format", "json",
+		"--max-turns", "1",
+	}
+	if opts.SessionID != "" {
+		args = append(args, "--resume", opts.SessionID)
+	}
+	if opts.Model != "" {
+		args = append(args, "--model", opts.Model)
+	}
 	return args
 }
 
-// scanForUsage reads stdout line by line looking for a control_response
-// whose request_id matches the one we sent. The stream may also carry
-// hook events, session events, and other SDK messages that we ignore.
-// Returns an error if stdout closes before the matching response is
-// seen or if the response is an error rather than success.
-func scanForUsage(ctx context.Context, stdout io.Reader, requestID string) (contextusage.Snapshot, error) {
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 128*1024), 8*1024*1024)
-
-	type controlInner struct {
-		Subtype   string          `json:"subtype"`
-		RequestID string          `json:"request_id"`
-		Error     string          `json:"error,omitempty"`
-		Response  json.RawMessage `json:"response,omitempty"`
-	}
-	type controlEnvelope struct {
-		Type     string       `json:"type"`
-		Response controlInner `json:"response"`
-	}
-
-	lines := 0
-	for scanner.Scan() {
-		lines++
-		line := scanner.Bytes()
-		if !hasControlResponsePrefix(line) {
-			continue
-		}
-		var env controlEnvelope
-		if err := json.Unmarshal(line, &env); err != nil {
-			continue
-		}
-		if env.Type != "control_response" {
-			continue
-		}
-		if env.Response.RequestID != requestID {
-			continue
-		}
-		if env.Response.Subtype != "success" {
-			return contextusage.Snapshot{}, fmt.Errorf("probe: claude returned error: %s", env.Response.Error)
-		}
-		var usage contextusage.Snapshot
-		if err := json.Unmarshal(env.Response.Response, &usage); err != nil {
-			slog.ErrorContext(ctx, "compact.probe.decode_usage_failed", "component", "compact", "subcomponent", "probe", "request_id", requestID, "err", err)
-			return contextusage.Snapshot{}, fmt.Errorf("probe: decode usage payload: %w", err)
-		}
-		sessionContextLog.Logger().Debug("compact.probe.response_received",
-			"component", "compact",
-			"subcomponent", "probe",
-			"lines_scanned", lines,
-			"request_id", requestID,
-		)
-		return usage, nil
-	}
-	if err := scanner.Err(); err != nil {
-		slog.ErrorContext(ctx, "compact.probe.scan_stdout_failed", "component", "compact", "subcomponent", "probe", "request_id", requestID, "lines_scanned", lines, "err", err)
-		return contextusage.Snapshot{}, fmt.Errorf("probe: scan stdout: %w (lines=%d)", err, lines)
-	}
-	return contextusage.Snapshot{}, fmt.Errorf("probe: no control_response before stdout closed (lines=%d)", lines)
+// sdkResultEnvelope mirrors the `result` entry in claude's print
+// JSON output. The remaining envelopes (`system`, `assistant`) carry
+// metadata the probe does not consume.
+type sdkResultEnvelope struct {
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
+	IsError   bool   `json:"is_error"`
+	Result    string `json:"result"`
+	SessionID string `json:"session_id"`
 }
 
-// hasControlResponsePrefix avoids the JSON parse cost on the vast
-// majority of stream lines that are not control_response messages.
-// Stream-json events always start with `{"type":` so a cheap substring
-// check rules out user messages, hook events, and partial-message
-// chunks before the heavier Unmarshal.
-func hasControlResponsePrefix(line []byte) bool {
-	return len(line) > 0 && line[0] == '{' && bytes.Contains(line, []byte(`"control_response"`))
+// decodeProbeStdout parses the full stdout payload into a Snapshot.
+// claude in `--output-format json` emits a top-level JSON list of
+// stream envelopes; only one carries the markdown the probe needs.
+func decodeProbeStdout(ctx context.Context, stdout []byte) (contextusage.Snapshot, error) {
+	var envelopes []json.RawMessage
+	if err := json.Unmarshal(stdout, &envelopes); err != nil {
+		slog.ErrorContext(ctx, "compact.probe.decode_envelope_failed",
+			"component", "compact",
+			"subcomponent", "probe",
+			"err", err,
+			"stdout_bytes", len(stdout),
+		)
+		return contextusage.Snapshot{}, fmt.Errorf("probe: decode stdout envelope: %w", err)
+	}
+	for _, raw := range envelopes {
+		var env sdkResultEnvelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			continue
+		}
+		if env.Type != "result" {
+			continue
+		}
+		if env.IsError {
+			return contextusage.Snapshot{}, fmt.Errorf("probe: claude reported is_error on result envelope (subtype=%q)", env.Subtype)
+		}
+		if env.Subtype != "success" {
+			return contextusage.Snapshot{}, fmt.Errorf("probe: claude returned result subtype %q", env.Subtype)
+		}
+		if env.Result == "" {
+			return contextusage.Snapshot{}, fmt.Errorf("probe: empty result payload from claude")
+		}
+		return unmarshalContextMarkdown(env.Result)
+	}
+	return contextusage.Snapshot{}, fmt.Errorf("probe: no result envelope in stdout (envelopes=%d, bytes=%d)", len(envelopes), len(stdout))
 }

@@ -78,7 +78,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		return RuntimeUpfront{}, 0, nil, err
 	}
 	upfront := newRuntimeUpfront(req, slice, modelForRender)
-	usage, usageErr := probeSessionSnapshot(ctx, req.Session, req.Refresh)
+	usage, usageErr := probeSessionSnapshot(ctx, req.Session, modelForRender, req.Refresh)
 	if usageErr != nil && req.TargetTokens > 0 {
 		slog.ErrorContext(ctx, "compact.runtime.upfront.probe_required",
 			"component", "compact",
@@ -643,8 +643,10 @@ func contextCategoryTokens(usage contextusage.Snapshot, name string) int {
 // session's provider id and asks it for a Snapshot. The function
 // keeps the compact engine provider-neutral: it does not import any
 // provider's spawn machinery and instead relies on the package-level
-// registry the provider populated at init.
-func probeSessionSnapshot(ctx context.Context, sess *session.Session, refresh bool) (contextusage.Snapshot, error) {
+// registry the provider populated at init. The model argument pins
+// the probe's MaxTokens to the model the planner targets so the
+// projection compares against the right budget.
+func probeSessionSnapshot(ctx context.Context, sess *session.Session, model string, refresh bool) (contextusage.Snapshot, error) {
 	prober, ok := contextusage.Get(string(sess.ProviderID()))
 	if !ok {
 		slog.WarnContext(ctx, "compact.runtime.probe_no_prober",
@@ -660,6 +662,7 @@ func probeSessionSnapshot(ctx context.Context, sess *session.Session, refresh bo
 	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
 		RefreshHint: refresh,
 		WorkDir:     sess.Metadata.WorkspaceRoot,
+		Model:       model,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "compact.runtime.probe_failed",

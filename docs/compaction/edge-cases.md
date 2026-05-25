@@ -34,24 +34,16 @@ This is not an error. Per [the target contract](algorithm.md#the-target-contract
 
 ## Probe WorkDir mismatch
 
-A /context probe returns numbers that do not match what the live session sees, or the probe fails to resolve memory files and skills entirely, when the probe runs from the wrong working directory.
+A `/context` probe returns numbers that do not match what the live session sees, or the probe fails to resolve memory files and skills entirely, when the probe runs from the wrong working directory.
 
-The `claude --resume <session-id>` command resolves memory files such as `CLAUDE.md`, skills, and other workspace-relative configuration from the process's current working directory. The `ProbeOptions.WorkDir` field on the spawn options controls that cwd. When `WorkDir` does not match the directory the original interactive session ran from, the probe loads a different set of memory files and skills than the live session uses, so its /context categories diverge from reality.
+claude resolves memory files such as `CLAUDE.md`, skills, agents, MCP servers, and other workspace-relative configuration from its current working directory. The `ProbeOptions.WorkDir` field on the spawn options sets that cwd. When `WorkDir` does not match the directory the original interactive session ran from, the probe loads a different set of memory files and skills than the live session uses, so its `/context` categories diverge from reality.
 
 Compaction plans against a wrong baseline when this happens. The planner may then commit a result that drops too much or too little relative to what the live session would, because the probe's category totals diverge from reality. The planner emits `work_dir` on every probe log so the divergence is recoverable from logs after the fact.
 
-## Attached-session probe pollution
+## MCP warm-up undercount
 
-A /context probe against a session that has a live interactive `claude` process attached can append probe-related entries to the transcript the live session is writing, racing with the live process for the JSONL file.
+A `/context` probe returns fewer "MCP tools" tokens than the live session reports once the same session has been open for some time, when the probe runs immediately after the session connects.
 
-The probe defaults to `--resume <session-id> --no-session-persistence`, which prevents the probe from writing its own session history but does not prevent claude from updating per-session state during the probe. The compaction Apply path also writes to the same JSONL the live session writes to, so two writers can touch the same file at the same time.
+MCP servers declare their tool lists asynchronously as they finish connecting. Each server's contribution to the "MCP tools" category becomes visible to claude only after that server has declared its tools. A probe that fires during warm-up sees the partial set.
 
-The `ProbeOptions.ForkSession` field is the mitigation. When set, the probe runs against a disposable fork of the session so it does not touch the transcript Apply is about to mutate. Callers that compact attached sessions set `ForkSession` to true. Callers that compact sessions with no live attachment leave it false to avoid the fork cost.
-
-## CandidateProber writes near the live session
-
-The candidate-prober writes a temporary JSONL inside the live session's project directory and resumes against it for projection measurements. A stale candidate JSONL can sit next to the real session file if the process dies mid-probe or the disk fills up before cleanup.
-
-The placement near the live session is deliberate. The candidate transcript lives in the same volume and the same workspace resolution path as the real session, so memory files and skills resolve identically and the projection number stays comparable to a probe against the live session.
-
-A stale candidate file is harmless to the live session because claude only resumes against the explicit session id the caller passes. The stale file consumes disk until routine session maintenance removes it.
+The planner sees an undercount of the static overhead floor. The compaction result lands above target by a margin that grows with the number of tools that finished declaring after the probe ran. The probe's `compact.probe.completed` log line carries the snapshot's `total_tokens` and `model` so the developer can spot the warm-up artifact in retrospect.

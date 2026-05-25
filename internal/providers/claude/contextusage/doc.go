@@ -10,15 +10,15 @@
 //
 // # Exactness invariant
 //
-// The probe returns the same numbers Claude's /context slash command
-// prints. By construction. The probe spawns claude with --resume
-// --input-format stream-json --no-session-persistence and issues a
-// get_context_usage control request. Claude itself runs
-// collectContextData (commands/context/context-noninteractive.ts),
-// which runs the exact same code path /context runs inside the live
-// chat. The control response carries the ContextData payload
-// verbatim. Any divergence between the probe and a live /context is
-// a bug in the probe transport, not in the numbers.
+// The probe returns the same numbers Claude's /context slash
+// command prints in the live chat. By construction. The probe runs
+// claude in print mode with the /context slash command, `--resume`
+// loaded against the session UUID, `--model` pinned to the planner's
+// target model, and `--no-session-persistence` set. claude renders
+// the same markdown table the live UI would render and emits it
+// inside a `result` envelope on stdout. Any divergence between the
+// probe and a live /context is a bug in the markdown parser or in
+// claude's renderer, not in the numbers themselves.
 //
 // # Freshness window
 //
@@ -32,11 +32,11 @@
 //
 // # Probe side effects
 //
-// --no-session-persistence suppresses every transcript write through
-// sessionStorage.ts shouldSkipPersistence(). Control responses are
-// written to stdout only via structuredIO.ts writeToStdout(). Control
-// requests bypass the user-message loop, so ~/.claude/history.jsonl
-// is not appended. The SessionStart:resume hook fires and invokes
-// clyde's own `clyde hook sessionstart`; that hook only updates
-// metadata lastAccessed and never writes to the transcript.
+// --no-session-persistence suppresses every transcript write
+// through sessionStorage.ts shouldSkipPersistence(). The slash
+// command does not invoke the model, so the spawn consumes no API
+// tokens and produces no assistant message in the transcript. The
+// SessionStart:resume hook fires and invokes clyde's own
+// `clyde hook sessionstart`; that hook only updates metadata
+// lastAccessed and never writes to the transcript.
 package contextusage

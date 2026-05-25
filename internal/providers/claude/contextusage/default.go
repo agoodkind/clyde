@@ -18,30 +18,24 @@ const claudeProberID = "claude"
 type claudeProber struct{}
 
 // Probe satisfies the generic contextusage.Prober interface. The
-// sessionRef argument is the Claude session UUID and WorkDir is the
-// session's workspace root: the caller passes it through so the
-// spawn anchors at the project directory, which is required for
-// claude --resume to locate MCP servers, hooks, and settings.
+// sessionRef argument is the Claude session UUID, WorkDir is the
+// session's workspace root, and Model is the model name claude
+// should pin so the Snapshot's MaxTokens matches the planner's
+// target budget. The probe hands all three to claude on argv as
+// `--resume`, `cmd.Dir`, and `--model`.
 //
-// The generic RefreshHint is accepted for protocol completeness. The
-// claude prober spawns a fresh /context probe on every call, so the
-// hint is effectively a no-op today; the field exists so the daemon
-// can wire `clyde compact --refresh` through without a follow-up
-// interface change once a caching prober path is added.
+// The generic RefreshHint is accepted for protocol completeness.
+// The claude prober spawns a fresh /context probe on every call, so
+// the hint is effectively a no-op today; the field exists so the
+// daemon can wire `clyde compact --refresh` through without a
+// follow-up interface change once a caching prober path is added.
 func (claudeProber) Probe(ctx context.Context, sessionRef string, opts contextusage.ProbeOptions) (contextusage.Snapshot, error) {
-	// ForkSession is intentionally false. With ForkSession=true the
-	// probe spawns claude with `--fork-session --session-id <new-uuid>`
-	// and claude treats the new uuid as a resume target it cannot find,
-	// stderr: "No conversation found with session ID: <new-uuid>".
-	// `--no-session-persistence` (set inside ProbeContextUsage) already
-	// guarantees the probe leaves no side effects on the original
-	// transcript, so a fork is not needed for safety.
 	return ProbeContextUsage(ctx, ProbeOptions{
-		SessionID:   sessionRef,
-		WorkDir:     opts.WorkDir,
-		Binary:      "",
-		Timeout:     0,
-		ForkSession: false,
+		SessionID: sessionRef,
+		WorkDir:   opts.WorkDir,
+		Model:     opts.Model,
+		Binary:    "",
+		Timeout:   0,
 	})
 }
 

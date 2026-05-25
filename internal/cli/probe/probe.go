@@ -15,6 +15,7 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
+	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/contextusage"
 )
 
@@ -67,9 +68,11 @@ func run(cmd *cobra.Command, f *cli.Factory, name string) error {
 		)
 		return fmt.Errorf("no context-usage prober registered for provider %q", providerID)
 	}
+	modelForProbe, _, _ := compactengine.ResolveModelForCounting(store, sess, "")
 	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
 		RefreshHint: false,
 		WorkDir:     sess.Metadata.WorkspaceRoot,
+		Model:       modelForProbe,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "cli.probe.failed",

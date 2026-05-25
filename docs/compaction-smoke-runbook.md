@@ -131,8 +131,8 @@ A run needs three helpers, each held to its requirement:
   end of every run. Confirm no canary strings remain in any transcript except
   the chat you are running from.
 - Every non-chat use of `claude` (reading a session, asking about its context,
-  capturing `/context`) passes `--no-session-persistence` and never passes
-  `--fork-session`, so the probe writes nothing and cannot contaminate the run.
+  capturing `/context`) runs read-only against the workspace cwd, so the probe
+  writes nothing and cannot contaminate the run.
 - Capture `/context` alongside every canary probe. The `/context` reading is the
   upstream truth the planner's projection is compared against.
 - Disable tools on every probe so the model cannot read the transcript from disk

@@ -39,6 +39,14 @@ type ProbeOptions struct {
 	// the implementation inherit its parent process cwd, which is
 	// usually wrong for daemon-spawned probes.
 	WorkDir string
+
+	// Model is the provider model name the probe should pin so the
+	// Snapshot's MaxTokens matches the model the caller is targeting.
+	// Provider implementations that take a model on argv pass this
+	// through; implementations that do not negotiate a model treat it
+	// as advisory. An empty string lets the provider pick whatever
+	// default it would have used.
+	Model string
 }
 
 // Prober is the generic contract the compact engine and any other
