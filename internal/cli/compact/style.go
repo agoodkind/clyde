@@ -3,7 +3,6 @@ package compact
 import (
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -126,69 +125,36 @@ type UpfrontStats struct {
 	TargetDate    string // calibration capture date (empty when not calibrated)
 }
 
-// RenderUpfrontPanel draws the phase-1 information box. Every number
-// a user could want BEFORE the long calculation is on screen. The box
-// border and ribbon both reflect Mode so there is no ambiguity.
+// RenderUpfrontPanel draws the information box shown before the
+// planner starts. It carries the core run identity (session, model)
+// plus the current and target token counts, in label-first form, with
+// no debug arithmetic rows.
 func RenderUpfrontPanel(w io.Writer, s UpfrontStats) {
 	box := boxFor(s.Mode)
 
-	shrinkBy := s.CurrentTotal - s.Target
-	floorSum := s.StaticFloor + s.Reserved
-	budget := max(0, s.Target-floorSum)
-
 	rows := []string{
-		styleTitle.Render("compact") + "   " + ribbon(s.Mode),
+		styleTitle.Render("Compact") + "   " + ribbon(s.Mode),
 		"",
-		kv("session", s.SessionName),
-		kv("uuid", styleMuted.Render(s.SessionID)),
-		kv("model", s.Model),
+		kv("Session", s.SessionName),
+		kv("Model", s.Model),
 	}
 
 	if s.CurrentTotal > 0 {
-		pct := ""
+		current := humanInt(s.CurrentTotal)
 		if s.MaxTokens > 0 {
-			pct = styleMuted.Render(fmt.Sprintf("   (%d%% of %s, what your chat shows)",
+			current += styleMuted.Render(fmt.Sprintf("   (%d%% of %s)",
 				int(float64(s.CurrentTotal)/float64(s.MaxTokens)*100),
 				humanInt(s.MaxTokens)))
 		}
-		rows = append(rows,
-			"",
-			kv("current ctx", humanInt(s.CurrentTotal)+pct),
-		)
+		rows = append(rows, kv("Current", current))
 	}
 
 	if s.Target > 0 {
-		shrinkNote := ""
-		if shrinkBy > 0 {
-			shrinkNote = styleMuted.Render("   → must shrink by " + humanInt(shrinkBy))
-		}
-		rows = append(rows, kv("target", humanInt(s.Target)+shrinkNote))
+		rows = append(rows, kv("Target", humanInt(s.Target)))
 	}
 
-	rows = append(rows,
-		"",
-		kv("static floor", humanInt(s.StaticFloor)+styleMuted.Render("   (system + tools + memory + skills)")),
-		kv("reserved", humanInt(s.Reserved)+styleMuted.Render("   (autocompact buffer)")),
-	)
-
-	if s.TargetDate != "" {
-		rows = append(rows, kv("calibrated", styleMuted.Render(s.TargetDate)))
-	}
-
-	if s.Target > 0 {
-		rows = append(rows,
-			"",
-			kv("tail budget", humanInt(budget)+styleMuted.Render(fmt.Sprintf("   (target - static - reserved = %s)", humanInt(budget)))),
-		)
-	}
-
-	rows = append(rows,
-		"",
-		kv("tail blocks", fmt.Sprintf("thinking %d · images %d · tools %d · chat %d",
-			s.Thinking, s.Images, s.ToolPairs, s.ChatTurns)),
-	)
 	if s.StrippersText != "" {
-		rows = append(rows, kv("strippers", s.StrippersText))
+		rows = append(rows, kv("Trim", s.StrippersText))
 	}
 
 	fmt.Fprintln(w, box.Render(strings.Join(rows, "\n")))
@@ -346,7 +312,7 @@ func (p *progressView) draw() {
 		ctxStr = "?"
 	}
 
-	lines := p.composePanelLines(spin, elapsed, iter, rec, step, ctxStr)
+	lines := p.composePanelLines(spin, elapsed, rec, step, ctxStr)
 
 	var buf strings.Builder
 	// Move cursor up prevLines (if any) and clear each line so we can
@@ -371,117 +337,63 @@ func (p *progressView) draw() {
 func (p *progressView) composePanelLines(
 	spin string,
 	elapsed time.Duration,
-	iter int,
 	rec compactengine.IterationRecord,
 	step string,
 	ctxStr string,
 ) []string {
-	status := "running planner"
-	if iter == 0 {
-		status = "starting"
-	}
-	if p.completed {
-		status = "finished"
-	}
-	phase := phaseFromStep(rec.Step)
-	if phase == "" {
-		phase = "n/a"
-	}
-	alwaysKept := p.upfront.StaticFloor + p.upfront.Reserved
-	messageBudget := max(p.target-alwaysKept, 0)
 	currentTotal := rec.CtxTotal
-	messageTokensNowCount := rec.TailTokens
-	delta := rec.Delta
 	if p.completed && p.finalRes != nil {
 		currentTotal = p.finalStatic + p.finalRes.FinalTail + p.finalReserved
-		messageTokensNowCount = p.finalRes.FinalTail
-		delta = currentTotal - p.target
 	}
 	if currentTotal > 0 {
 		ctxStr = humanInt(currentTotal)
 	}
-	messageTokensNow := "?"
-	if messageTokensNowCount > 0 {
-		messageTokensNow = humanInt(messageTokensNowCount)
-	}
-	deltaText := deltaTextFriendly(delta)
-	header := fmt.Sprintf("%s %s  %s", spin, p.modeLabel(), styleMuted.Render(fmt.Sprintf("time %s", elapsed)))
+
+	var header string
 	if p.completed {
-		header = fmt.Sprintf("%s %s  %s", styleGood.Render("✓"), p.modeLabel(), styleMuted.Render(fmt.Sprintf("finished in %s", elapsed)))
+		header = fmt.Sprintf("%s %s  %s",
+			styleGood.Render("✓"),
+			p.modeLabel(),
+			styleMuted.Render(fmt.Sprintf("finished in %s", elapsed)))
+	} else {
+		header = fmt.Sprintf("%s %s  %s",
+			spin,
+			p.modeLabel(),
+			styleMuted.Render(fmt.Sprintf("running %s", elapsed)))
 	}
+
 	lines := []string{
 		header,
-		"  " + styleTitle.Render("run"),
-		renderPaneRow("status", styleVal.Render(status)),
-		renderPaneRow("step", styleVal.Render(strconv.Itoa(iter))),
-		renderPaneRow("now doing", styleVal.Render(phase)),
-		"  " + styleMuted.Render(strings.Repeat("─", 62)),
-		"  " + styleTitle.Render("target"),
-		renderPaneRow("current total", styleNum.Render(ctxStr)),
-		renderPaneRow("target limit", styleNum.Render(humanInt(p.target))),
-		renderPaneRow("over/under target", deltaText),
-		"  " + styleMuted.Render(strings.Repeat("─", 62)),
-		"  " + styleTitle.Render("token math"),
-		renderPaneRow("equation", styleMuted.Render("current total = always-kept + message tokens")),
-		renderPaneRow("check", styleNum.Render(ctxStr)+styleMuted.Render(fmt.Sprintf(" = %s + %s", humanInt(alwaysKept), messageTokensNow))),
-		renderPaneRow("static tokens", styleNum.Render(humanInt(p.upfront.StaticFloor))),
-		renderPaneRow("safety buffer", styleNum.Render(humanInt(p.upfront.Reserved))),
-		renderPaneRow("always-kept", styleNum.Render(humanInt(alwaysKept))+styleMuted.Render(" (= static + safety)")),
-		renderPaneRow("message tokens", styleNum.Render(messageTokensNow)),
-		renderPaneRow("message budget", styleNum.Render(humanInt(messageBudget))+styleMuted.Render(" (= target - always-kept)")),
-		"  " + styleMuted.Render(strings.Repeat("─", 62)),
-		"  " + styleTitle.Render("what changed"),
+		"",
+		renderPaneRow("Current", styleNum.Render(ctxStr)),
+		renderPaneRow("Target", styleNum.Render(humanInt(p.target))),
+		"",
+		"  " + styleTitle.Render("Trimmed"),
 		renderBreakdownRow("thinking", categoryStateThinking(rec)),
 		renderBreakdownRow("images", categoryStateImages(rec)),
-		renderBreakdownRow("tools", categoryStateTools(rec)),
 		renderBreakdownRow("chat", categoryStateChat(rec)),
+		renderBreakdownRow("tools", categoryStateTools(rec)),
 	}
-	if p.completed && p.finalRes != nil {
-		after := p.finalStatic + p.finalRes.FinalTail + p.finalReserved
-		reduction := 0
-		if p.finalRes.BaselineTail > 0 {
-			reduction = int(float64(p.finalRes.BaselineTail-p.finalRes.FinalTail) / float64(p.finalRes.BaselineTail) * 100)
+
+	if !p.completed && len(step) > 0 {
+		phase := phaseFromStep(rec.Step)
+		if phase == "" {
+			phase = step
 		}
-		lines = append(lines,
-			"  "+styleMuted.Render(strings.Repeat("─", 62)),
-			"  "+styleTitle.Render("result"),
-			renderPaneRow("message tokens", styleVal.Render(fmt.Sprintf("%s -> %s", humanInt(p.finalRes.BaselineTail), humanInt(p.finalRes.FinalTail)))),
-			renderPaneRow("total reduction", styleVal.Render(fmt.Sprintf("%d%%", reduction))),
-			renderPaneRow("final total", styleNum.Render(humanInt(after))),
-			renderPaneRow("target limit", styleNum.Render(humanInt(p.target))),
-			renderPaneRow("over/under target", deltaTextFriendly(after-p.target)),
-		)
-		if p.finalApplied {
-			lines = append(lines, renderPaneRow("transcript", styleMuted.Render(p.finalPath)))
-		} else {
-			lines = append(lines, "  "+styleMuted.Render("note: nothing was written. pass --apply to mutate."))
-		}
+		lines = append(lines, "", "  "+styleMuted.Render("Step: "+phase))
 	}
-	if len(step) > 0 && !p.completed {
-		lines = append(lines, "  "+styleMuted.Render("detail: "+step))
-	}
+
 	return lines
 }
 
-// deltaText formats a ctx-to-target delta for inline display. The
-// target is a floor: a result at or above target is valid, and a
-// result under target means the planner trimmed more than asked, so
-// only the under-target case is colored bad.
+// deltaText formats a ctx-to-target delta for inline display in the
+// per-iteration log table. The target is a floor, so a result at or
+// above target is valid and only the under-target case is colored bad.
 func deltaText(d int) string {
 	if d < 0 {
 		return styleBad.Render(fmt.Sprintf("-%s under target", humanInt(-d)))
 	}
 	return styleGood.Render(fmt.Sprintf("+%s above target", humanInt(d)))
-}
-
-func deltaTextFriendly(d int) string {
-	if d < 0 {
-		return styleBad.Render(humanInt(-d) + " under target (over-trimmed)")
-	}
-	if d > 0 {
-		return styleGood.Render("above target by " + humanInt(d))
-	}
-	return styleGood.Render("on target")
 }
 
 func phaseFromStep(step string) string {
