@@ -1,13 +1,16 @@
 package oauthrotation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,7 +22,9 @@ import (
 
 // fakeProvider is a provider.Provider test double. It derives the account from
 // a stored JSON encoding and counts Refresh calls per access token so tests can
-// assert single-flight behavior.
+// assert single-flight behavior. It also counts MirrorSources and ReadMirror
+// calls so the startup-load tests can assert the second Load performs no
+// upstream reads.
 type fakeProvider struct {
 	name         provider.Name
 	mirror       []provider.MirrorSource
@@ -30,6 +35,12 @@ type fakeProvider struct {
 	// exercise the reauth-required path.
 	refreshErr error
 	mu         sync.Mutex
+	// mirrorSourcesCalls counts how many times MirrorSources was invoked. It is
+	// taken under mu.
+	mirrorSourcesCalls int64
+	// readMirrorCalls counts how many times ReadMirror was invoked. It is
+	// taken under mu.
+	readMirrorCalls int64
 }
 
 type fakeStored struct {
@@ -42,13 +53,15 @@ type fakeStored struct {
 
 func newFakeProvider(name provider.Name) *fakeProvider {
 	return &fakeProvider{
-		name:         name,
-		mirror:       nil,
-		mirrorErr:    nil,
-		refreshDelay: 0,
-		refreshCount: make(map[string]*int64),
-		refreshErr:   nil,
-		mu:           sync.Mutex{},
+		name:               name,
+		mirror:             nil,
+		mirrorErr:          nil,
+		refreshDelay:       0,
+		refreshCount:       make(map[string]*int64),
+		refreshErr:         nil,
+		mu:                 sync.Mutex{},
+		mirrorSourcesCalls: 0,
+		readMirrorCalls:    0,
 	}
 }
 
@@ -103,16 +116,24 @@ func (f *fakeProvider) Refresh(_ context.Context, current provider.Credentials) 
 }
 
 func (f *fakeProvider) MirrorSources(_ context.Context) ([]provider.MirrorSource, error) {
-	if f.mirrorErr != nil {
-		return nil, f.mirrorErr
+	f.mu.Lock()
+	f.mirrorSourcesCalls++
+	mirror := f.mirror
+	mirrorErr := f.mirrorErr
+	f.mu.Unlock()
+	if mirrorErr != nil {
+		return nil, mirrorErr
 	}
-	return f.mirror, nil
+	return mirror, nil
 }
 
 // ReadMirror reads a file-backed mirror source by reading the path and parsing
 // it, mirroring how the real Anthropic provider reads a "file" source. A
 // missing file returns present=false with no error.
 func (f *fakeProvider) ReadMirror(_ context.Context, src provider.MirrorSource) (provider.Credentials, bool, error) {
+	f.mu.Lock()
+	f.readMirrorCalls++
+	f.mu.Unlock()
 	raw, err := os.ReadFile(src.Location)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -691,5 +712,294 @@ func TestRotatorReauthPreferredOverThrottledWhenNoneUsable(t *testing.T) {
 	var throttledErr AllAccountsThrottledError
 	if errors.As(err, &throttledErr) {
 		t.Fatalf("did not expect AllAccountsThrottledError, got %v", err)
+	}
+}
+
+// mirrorSourcesCallCount reads the fake's MirrorSources call counter under
+// the fake's own mutex.
+func mirrorSourcesCallCount(f *fakeProvider) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mirrorSourcesCalls
+}
+
+// readMirrorCallCount reads the fake's ReadMirror call counter under the
+// fake's own mutex.
+func readMirrorCallCount(f *fakeProvider) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.readMirrorCalls
+}
+
+// writeAccountDir lays out one per-account directory under accountsDir(name)
+// with a .credentials.json the fake provider can ParseStored, plus an
+// optional .label file when label is non-empty. The credential bytes are
+// produced through the same fakeProvider.EncodeStored helper the production
+// path uses, so the test exercises the real parse round-trip on Load.
+func writeAccountDir(t *testing.T, prov *fakeProvider, name provider.Name, account string, expiresAt time.Time, label string) {
+	t.Helper()
+	dir := accountDir(name, provider.AccountID(account))
+	if err := os.MkdirAll(dir, storeDirMode); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	cred := credFor(account, expiresAt)
+	encoded, err := prov.EncodeStored(cred)
+	if err != nil {
+		t.Fatalf("EncodeStored(%q): %v", account, err)
+	}
+	credPath := accountCredentialsPath(name, provider.AccountID(account))
+	if err := os.WriteFile(credPath, encoded, credentialFileMode); err != nil {
+		t.Fatalf("write %s: %v", credPath, err)
+	}
+	if label != "" {
+		labelPath := accountLabelPath(name, provider.AccountID(account))
+		if err := os.WriteFile(labelPath, []byte(label), credentialFileMode); err != nil {
+			t.Fatalf("write %s: %v", labelPath, err)
+		}
+	}
+}
+
+// captureLogger builds a slog logger that writes JSON events to buf so a test
+// can assert which events fired.
+func captureLogger(buf *bytes.Buffer) *slog.Logger {
+	handler := slog.NewJSONHandler(buf, &slog.HandlerOptions{
+		AddSource:   false,
+		Level:       slog.LevelDebug,
+		ReplaceAttr: nil,
+	})
+	return slog.New(handler)
+}
+
+// countEventLines reports how many log lines in buf carry an exact msg field.
+// The handler writes one JSON object per line, so a simple substring match on
+// the exact "msg":"<name>" field is sufficient.
+func countEventLines(buf *bytes.Buffer, msg string) int {
+	count := 0
+	needle := `"msg":"` + msg + `"`
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, needle) {
+			count++
+		}
+	}
+	return count
+}
+
+// newLoadTestRotator wires a rotator with a captured logger and the fixed
+// clock. It registers the fake but does not Harvest or Load. Callers are
+// responsible for the rest of the setup.
+func newLoadTestRotator(t *testing.T, now time.Time, prov *fakeProvider) (*Rotator, *bytes.Buffer) {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	buf := &bytes.Buffer{}
+	rot := NewRotator(captureLogger(buf))
+	rot.now = fixedClock(now)
+	rot.Register(prov)
+	return rot, buf
+}
+
+func TestLoadDiskOnly(t *testing.T) {
+	now := time.UnixMilli(50_000_000)
+	ctx := context.Background()
+	prov := newFakeProvider("anthropic")
+	// Provider stub declares no upstream sources so the upstream pass is a
+	// no-op and the on-disk fold is the only path that populates state.slots.
+	prov.mirror = nil
+	rot, _ := newLoadTestRotator(t, now, prov)
+
+	// Two valid per-account dirs on disk, written before Load runs.
+	writeAccountDir(t, prov, prov.Name(), "acct-b", now.Add(time.Hour), "label-b")
+	writeAccountDir(t, prov, prov.Name(), "acct-a", now.Add(time.Hour), "label-a")
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	snapshots, err := rot.Accounts(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	if len(snapshots) != 2 {
+		t.Fatalf("snapshots = %d, want 2", len(snapshots))
+	}
+	// Lexicographic order: acct-a before acct-b.
+	if snapshots[0].Account != "acct-a" || snapshots[1].Account != "acct-b" {
+		t.Fatalf("order = %q,%q, want acct-a,acct-b", snapshots[0].Account, snapshots[1].Account)
+	}
+	if snapshots[0].Label != "label-a" {
+		t.Fatalf("acct-a label = %q, want label-a", snapshots[0].Label)
+	}
+	if snapshots[1].Label != "label-b" {
+		t.Fatalf("acct-b label = %q, want label-b", snapshots[1].Label)
+	}
+}
+
+func TestLoadKeychainHarvest(t *testing.T) {
+	now := time.UnixMilli(60_000_000)
+	ctx := context.Background()
+	prov := newFakeProvider("anthropic")
+	rot, _ := newLoadTestRotator(t, now, prov)
+
+	// Zero per-account dirs on disk. The provider stub's only mirror source is
+	// a "keychain" entry whose Location points to a file the fake's ReadMirror
+	// can read; the fake's ReadMirror is content-only and ignores Kind, so this
+	// faithfully exercises the upstream-pass path that imports an account from
+	// a source other than the on-disk per-account store.
+	upstreamDir := t.TempDir()
+	keychainSourcePath := filepath.Join(upstreamDir, "keychain.json")
+	cred := credFor("acct-k", now.Add(time.Hour))
+	encoded, err := prov.EncodeStored(cred)
+	if err != nil {
+		t.Fatalf("EncodeStored: %v", err)
+	}
+	if err := os.WriteFile(keychainSourcePath, encoded, 0o600); err != nil {
+		t.Fatalf("write keychain source: %v", err)
+	}
+	prov.mirror = []provider.MirrorSource{
+		{Kind: provider.MirrorSourceKindKeychain, Location: keychainSourcePath},
+	}
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	snapshots, err := rot.Accounts(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Account != "acct-k" {
+		t.Fatalf("snapshots = %+v, want one acct-k", snapshots)
+	}
+	// The mirror pass writes a per-account file under accountsDir(name).
+	credPath := accountCredentialsPath(prov.Name(), "acct-k")
+	if _, err := os.Stat(credPath); err != nil {
+		t.Fatalf("expected per-account file at %s: %v", credPath, err)
+	}
+}
+
+func TestLoadIdempotent(t *testing.T) {
+	now := time.UnixMilli(70_000_000)
+	ctx := context.Background()
+	prov := newFakeProvider("anthropic")
+	prov.mirror = nil
+	rot, _ := newLoadTestRotator(t, now, prov)
+	writeAccountDir(t, prov, prov.Name(), "acct-a", now.Add(time.Hour), "")
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load (first): %v", err)
+	}
+	firstMirror := mirrorSourcesCallCount(prov)
+	firstReadMirror := readMirrorCallCount(prov)
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load (second): %v", err)
+	}
+	secondMirror := mirrorSourcesCallCount(prov)
+	secondReadMirror := readMirrorCallCount(prov)
+
+	if firstMirror != 1 {
+		t.Fatalf("first Load MirrorSources calls = %d, want 1", firstMirror)
+	}
+	if secondMirror != firstMirror {
+		t.Fatalf("second Load MirrorSources delta = %d, want 0", secondMirror-firstMirror)
+	}
+	if secondReadMirror != firstReadMirror {
+		t.Fatalf("second Load ReadMirror delta = %d, want 0", secondReadMirror-firstReadMirror)
+	}
+	// And the in-memory slot is still present after the second Load.
+	snapshots, err := rot.Accounts(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Account != "acct-a" {
+		t.Fatalf("snapshots = %+v, want one acct-a", snapshots)
+	}
+}
+
+// TestLoadDebounced covers the debounce gate independently of the in-process
+// sync.Once. The test calls Load once, then resets the provider state's Once
+// so the loadOnce.Do path would fire again if the debounce check did not
+// short-circuit first. Within loadMinInterval the second Load must return nil
+// without invoking Sync, even though the Once gate would otherwise re-trigger
+// the upstream pass.
+func TestLoadDebounced(t *testing.T) {
+	now := time.UnixMilli(80_000_000)
+	ctx := context.Background()
+	prov := newFakeProvider("anthropic")
+	prov.mirror = nil
+	rot, _ := newLoadTestRotator(t, now, prov)
+	writeAccountDir(t, prov, prov.Name(), "acct-a", now.Add(time.Hour), "")
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load (first): %v", err)
+	}
+	firstMirror := mirrorSourcesCallCount(prov)
+
+	// Reset loadOnce so the debounce gate is the only thing that can keep the
+	// second pass from running. Advance the clock by less than loadMinInterval
+	// to land inside the debounce window relative to the first Load.
+	state, err := rot.providerState(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("providerState: %v", err)
+	}
+	state.mu.Lock()
+	state.loadOnce = &sync.Once{}
+	state.mu.Unlock()
+	rot.now = fixedClock(now.Add(loadMinInterval / 2))
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load (debounced): %v", err)
+	}
+	secondMirror := mirrorSourcesCallCount(prov)
+	if secondMirror != firstMirror {
+		t.Fatalf("debounced Load MirrorSources delta = %d, want 0", secondMirror-firstMirror)
+	}
+
+	// After loadMinInterval elapses, a third Load runs the upstream pass
+	// again so the debounce window is bounded as advertised.
+	rot.now = fixedClock(now.Add(loadMinInterval + time.Second))
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load (post-debounce): %v", err)
+	}
+	thirdMirror := mirrorSourcesCallCount(prov)
+	if thirdMirror != firstMirror+1 {
+		t.Fatalf("post-debounce Load MirrorSources delta = %d, want 1", thirdMirror-firstMirror)
+	}
+}
+
+func TestLoadMalformedSkipped(t *testing.T) {
+	now := time.UnixMilli(90_000_000)
+	ctx := context.Background()
+	prov := newFakeProvider("anthropic")
+	prov.mirror = nil
+	rot, logBuf := newLoadTestRotator(t, now, prov)
+
+	// One valid account dir.
+	writeAccountDir(t, prov, prov.Name(), "acct-good", now.Add(time.Hour), "")
+	// One dir with a malformed .credentials.json that fakeProvider.ParseStored
+	// rejects (the fake decodes fakeStored JSON; a non-JSON blob fails the
+	// json.Unmarshal in ParseStored).
+	badDir := accountDir(prov.Name(), "acct-bad")
+	if err := os.MkdirAll(badDir, storeDirMode); err != nil {
+		t.Fatalf("mkdir bad: %v", err)
+	}
+	badPath := accountCredentialsPath(prov.Name(), "acct-bad")
+	if err := os.WriteFile(badPath, []byte("not json"), credentialFileMode); err != nil {
+		t.Fatalf("write bad: %v", err)
+	}
+
+	if err := rot.Load(ctx, prov.Name()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	snapshots, err := rot.Accounts(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Account != "acct-good" {
+		t.Fatalf("snapshots = %+v, want one acct-good", snapshots)
+	}
+	skipped := countEventLines(logBuf, "oauthrotation.startup.account_skipped")
+	if skipped < 1 {
+		t.Fatalf("oauthrotation.startup.account_skipped events = %d, want >= 1, logs=%s", skipped, logBuf.String())
 	}
 }

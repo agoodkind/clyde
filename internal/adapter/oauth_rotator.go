@@ -24,11 +24,43 @@ const anthropicProviderName provider.Name = "anthropic"
 // anthropic client can report rate-limit signals back to it. The returned
 // rotator is shared as both the client's token source (through
 // rotatorTokenSource) and its rate-limit sink.
-func buildAnthropicRotator(oauthCfg config.AdapterOAuth, log *slog.Logger) *oauthrotation.Rotator {
+//
+// This adapter-owned construction path is the fallback the adapter server
+// uses when the daemon did not inject its single process-wide rotator (see
+// internal/adapter/server.go registerAnthropicProvider). It still ships
+// because tests and any non-daemon caller of the adapter package rely on it,
+// so a Load kick lives here for symmetry with buildDaemonOAuthRotator.
+//
+// ctx is the caller-owned context used to drive the background startup load
+// goroutine. Cancellation aborts the load cleanly; the caller retains
+// ownership of cancellation and this function neither cancels nor derives a
+// new ctx.
+func buildAnthropicRotator(ctx context.Context, oauthCfg config.AdapterOAuth, log *slog.Logger) *oauthrotation.Rotator {
+	if log == nil {
+		log = slog.Default()
+	}
 	rotator := oauthrotation.NewRotator(log)
 	rotation := oauthCfg.Accounts.WithDefaults()
 	rotator.SetRefreshSafetyWindow(rotation.RefreshSafetyWindow.AsDuration())
 	rotator.Register(oauthprovider.New(oauthCfg, ""))
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnContext(ctx, "oauthrotation.startup.load_panicked",
+					"component", "oauthrotation",
+					"provider", string(anthropicProviderName),
+					"panic", r,
+				)
+			}
+		}()
+		if err := rotator.Load(ctx, anthropicProviderName); err != nil {
+			log.WarnContext(ctx, "oauthrotation.startup.load_failed",
+				"component", "oauthrotation",
+				"provider", string(anthropicProviderName),
+				"err", err.Error(),
+			)
+		}
+	}()
 	return rotator
 }
 

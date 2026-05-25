@@ -61,9 +61,13 @@ func NewSyncer(prov provider.Provider, paths Paths, modes Modes, logger *slog.Lo
 }
 
 // SyncResult reports what one Sync pass did, for logging by the caller.
+// SourcesRead is the number of upstream MirrorSources the provider declared on
+// this pass, regardless of whether each source was present or yielded an import.
+// It lets the rotator surface the upstream-pass cost in its startup-load event.
 type SyncResult struct {
-	Imported []provider.AccountID
-	Skipped  []provider.AccountID
+	Imported    []provider.AccountID
+	Skipped     []provider.AccountID
+	SourcesRead int
 }
 
 // Sync runs one import pass. For each upstream MirrorSource it reads the raw
@@ -79,9 +83,9 @@ func (s *Syncer) Sync(ctx context.Context, now time.Time) (SyncResult, error) {
 			"provider", string(s.prov.Name()),
 			"err", err.Error(),
 		)
-		return SyncResult{Imported: nil, Skipped: nil}, fmt.Errorf("list mirror sources for %q: %w", s.prov.Name(), err)
+		return SyncResult{Imported: nil, Skipped: nil, SourcesRead: 0}, fmt.Errorf("list mirror sources for %q: %w", s.prov.Name(), err)
 	}
-	result := SyncResult{Imported: nil, Skipped: nil}
+	result := SyncResult{Imported: nil, Skipped: nil, SourcesRead: len(sources)}
 	for _, source := range sources {
 		upstream, identity, present, readErr := s.readSource(ctx, source)
 		if readErr != nil {

@@ -1,14 +1,21 @@
 package daemon
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 
 	"goodkind.io/clyde/internal/adapter/anthropic/oauthprovider"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/oauthrotation"
+	"goodkind.io/clyde/internal/oauthrotation/provider"
 	"goodkind.io/clyde/internal/slogger"
 )
+
+// daemonOAuthProviderName is the rotation-store provider key the Anthropic
+// OAuth plug-in registers under. It matches the Name the Anthropic provider
+// returns and the path segment the rotation store keys accounts under.
+const daemonOAuthProviderName provider.Name = "anthropic"
 
 // buildDaemonOAuthRotator constructs the single, process-wide OAuth rotation
 // layer the daemon owns. The adapter's serve and throttle path and the daemon's
@@ -17,7 +24,12 @@ import (
 // account slot immediately, instead of only on the next mirror re-import. It
 // returns nil when the adapter's direct-OAuth Anthropic path is disabled, in
 // which case no rotator is needed.
-func buildDaemonOAuthRotator(cfg config.AdapterConfig, log *slog.Logger) *oauthrotation.Rotator {
+//
+// ctx is the daemon's long-lived context used to drive the background startup
+// load. A reload-triggered cancellation aborts the load cleanly. The caller
+// retains ownership of cancellation; this function neither cancels nor
+// derives a new ctx.
+func buildDaemonOAuthRotator(ctx context.Context, cfg config.AdapterConfig, log *slog.Logger) *oauthrotation.Rotator {
 	if !cfg.DirectOAuth {
 		return nil
 	}
@@ -26,6 +38,24 @@ func buildDaemonOAuthRotator(cfg config.AdapterConfig, log *slog.Logger) *oauthr
 	rotation := cfg.Anthropic.OAuth.Accounts.WithDefaults()
 	rotator.SetRefreshSafetyWindow(rotation.RefreshSafetyWindow.AsDuration())
 	rotator.Register(oauthprovider.New(cfg.Anthropic.OAuth, ""))
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				rotatorLog.WarnContext(ctx, "oauthrotation.startup.load_panicked",
+					"component", "oauthrotation",
+					"provider", string(daemonOAuthProviderName),
+					"panic", r,
+				)
+			}
+		}()
+		if err := rotator.Load(ctx, daemonOAuthProviderName); err != nil {
+			rotatorLog.WarnContext(ctx, "oauthrotation.startup.load_failed",
+				"component", "oauthrotation",
+				"provider", string(daemonOAuthProviderName),
+				"err", err.Error(),
+			)
+		}
+	}()
 	return rotator
 }
 

@@ -227,7 +227,7 @@ func (s *Server) registerAnthropicProvider(
 		// visible to the serve path through shared in-memory slots.
 		s.oauthRotator = deps.OAuthRotator
 	} else {
-		s.oauthRotator = buildAnthropicRotator(cfg.Anthropic.OAuth, slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth))
+		s.oauthRotator = buildAnthropicRotator(ctx, cfg.Anthropic.OAuth, slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth))
 	}
 	id := cfg.ClientIdentity
 	messagesURL := cfg.Anthropic.OAuth.MessagesURL

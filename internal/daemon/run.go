@@ -1769,7 +1769,7 @@ func startAdapter(log *slog.Logger, srv *Server, inherited net.Listener, mitmPro
 	// in-memory slots, fixing the stale-token window the two-instance wiring
 	// had. The instance is retained on the controller's Deps so adapter reloads
 	// reuse it rather than constructing a new one.
-	oauthRotator := buildDaemonOAuthRotator(cfg.Adapter, log)
+	oauthRotator := buildDaemonOAuthRotator(context.Background(), cfg.Adapter, log)
 	setSharedOAuthRotator(oauthRotator)
 
 	// current starts as the zero launch config; apply overwrites it on the

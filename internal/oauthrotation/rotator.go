@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -32,6 +33,11 @@ const (
 	// invalidates the prior one, so refreshing a still-valid account strands the
 	// shared keychain credential other tools rely on (see CLYDE-457/CLYDE-458).
 	defaultRefreshSafetyWindow = 5 * time.Minute
+	// loadMinInterval is the debounce window between successive Load passes for
+	// a given provider. A call inside this window of a prior successful load
+	// returns nil immediately so a reload-time re-load or an external trigger
+	// does not duplicate the startup walk.
+	loadMinInterval = 10 * time.Second
 )
 
 // AccountSnapshot is a read-only view of one account slot for the RPC layer.
@@ -78,6 +84,21 @@ type providerState struct {
 	// user-facing re-auth surface lands in a later wave; the set keeps the
 	// account out of rotation in the meantime.
 	reauth map[provider.AccountID]bool
+	// loadOnce gates the first-call startup load so the second caller in the
+	// same process returns nil without re-running the upstream pass or the
+	// on-disk walk. A future cross-process trigger uses the debounce and
+	// single-flight gate below instead, so loadOnce only protects the
+	// process-local first call. It is a pointer so test code can replace it
+	// under state.mu without tripping the copylocks vet rule.
+	loadOnce *sync.Once
+	// lastLoadAt records when the most recent successful Load returned. A new
+	// Load that lands inside loadMinInterval of this timestamp returns nil
+	// immediately. It is guarded by mu.
+	lastLoadAt time.Time
+	// loadInFlight is true while a Load is running for this provider. A second
+	// concurrent caller observes the flag and returns nil immediately instead
+	// of duplicating the upstream pass and on-disk walk. It is guarded by mu.
+	loadInFlight bool
 }
 
 // Rotator picks a non-throttled account per provider, mirrors upstream
@@ -134,13 +155,16 @@ func (r *Rotator) Register(p provider.Provider) {
 	}
 	modes := mirror.Modes{FileMode: credentialFileMode, DirMode: storeDirMode}
 	state := &providerState{
-		prov:     p,
-		mu:       sync.Mutex{},
-		slots:    make(map[provider.AccountID]*accountSlot),
-		order:    nil,
-		throttle: newThrottleStore(name, r.logger),
-		syncer:   mirror.NewSyncer(p, mirrorPaths, modes, r.logger),
-		reauth:   make(map[provider.AccountID]bool),
+		prov:         p,
+		mu:           sync.Mutex{},
+		slots:        make(map[provider.AccountID]*accountSlot),
+		order:        nil,
+		throttle:     newThrottleStore(name, r.logger),
+		syncer:       mirror.NewSyncer(p, mirrorPaths, modes, r.logger),
+		reauth:       make(map[provider.AccountID]bool),
+		loadOnce:     &sync.Once{},
+		lastLoadAt:   time.Time{},
+		loadInFlight: false,
 	}
 	r.mu.Lock()
 	r.providers[name] = state
@@ -590,6 +614,167 @@ func (r *Rotator) acquireAccountLock(ctx context.Context, name provider.Name, ac
 	}, nil
 }
 
+// Load runs the daemon's one-shot startup load for a provider: one upstream
+// import pass through the mirror syncer, then a walk of the per-account
+// directory on disk to fold any account that exists on disk but was not
+// imported by the upstream pass. Both steps fold into the same in-memory slot
+// map, and the fold is idempotent on existing ids so a partial run followed
+// by a full run remains correct.
+//
+// Load is gated three ways for a given provider. [sync.Once] guards the
+// in-process first call so two callers in the same process trigger at most
+// one full pass. A single-flight bool drops a concurrent re-entrant call
+// while the first one runs. A debounce window drops a call that lands inside
+// loadMinInterval of a prior successful return. The fold logic itself is
+// idempotent on state.slots, so a partial run plus a later full run remains
+// correct even when the gates drop a caller.
+//
+// Load returns nil to a caller that was dropped by any gate. It emits an
+// info event at the end of every pass that ran with the final in-memory
+// account count, the upstream sources read, the upstream imports written,
+// and the wall time spent.
+func (r *Rotator) Load(ctx context.Context, name provider.Name) error {
+	state, err := r.providerState(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	now := r.now()
+	state.mu.Lock()
+	if state.loadInFlight {
+		state.mu.Unlock()
+		return nil
+	}
+	if !state.lastLoadAt.IsZero() && now.Sub(state.lastLoadAt) < loadMinInterval {
+		state.mu.Unlock()
+		return nil
+	}
+	state.loadInFlight = true
+	state.mu.Unlock()
+
+	defer func() {
+		state.mu.Lock()
+		state.loadInFlight = false
+		state.mu.Unlock()
+	}()
+
+	var ranOnce bool
+	state.loadOnce.Do(func() {
+		r.runStartupLoad(ctx, name, state)
+		ranOnce = true
+	})
+	if !ranOnce {
+		// The in-process Once already fired on a prior call. Treat this as a
+		// successful no-op and refresh the debounce timestamp so subsequent
+		// callers continue to coalesce against the most recent return.
+		state.mu.Lock()
+		state.lastLoadAt = r.now()
+		state.mu.Unlock()
+		return nil
+	}
+
+	state.mu.Lock()
+	state.lastLoadAt = r.now()
+	state.mu.Unlock()
+	return nil
+}
+
+// runStartupLoad performs the actual upstream pass plus on-disk walk for one
+// provider. It is the body Load gates; it never enforces gating itself, so a
+// test can call it directly when it needs to bypass the once and debounce
+// gates.
+func (r *Rotator) runStartupLoad(ctx context.Context, name provider.Name, state *providerState) {
+	start := r.now()
+	syncResult, syncErr := state.syncer.Sync(ctx, r.now())
+	if syncErr != nil {
+		r.logger.WarnContext(ctx, "oauthrotation.mirror.sync_failed",
+			"component", "oauthrotation",
+			"provider", string(name),
+			"err", syncErr.Error(),
+		)
+	}
+	for _, account := range syncResult.Imported {
+		r.loadImportedAccount(ctx, name, state, account)
+	}
+
+	r.foldOnDiskAccounts(ctx, name, state)
+
+	state.mu.Lock()
+	accountCount := len(state.order)
+	state.mu.Unlock()
+
+	r.logger.InfoContext(ctx, "oauthrotation.startup.loaded",
+		"component", "oauthrotation",
+		"provider", string(name),
+		"accounts", accountCount,
+		"sources_read", syncResult.SourcesRead,
+		"sources_written", len(syncResult.Imported),
+		"duration_ms", r.now().Sub(start).Milliseconds(),
+	)
+}
+
+// foldOnDiskAccounts walks the per-account directory for a provider and
+// folds every entry whose id is not already in state.slots. Entries are
+// processed in lexicographic order so the in-memory account order is stable
+// across process restarts. A missing accounts directory is a no-op. A
+// missing or unparseable per-account credential file emits the
+// oauthrotation.startup.account_skipped warn event with the account id and
+// the underlying error, then the walk continues to the next entry.
+func (r *Rotator) foldOnDiskAccounts(ctx context.Context, name provider.Name, state *providerState) {
+	dir := accountsDir(name)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		r.logger.WarnContext(ctx, "oauthrotation.startup.accounts_dir_read_failed",
+			"component", "oauthrotation",
+			"provider", string(name),
+			"dir", dir,
+			"err", err.Error(),
+		)
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		account := provider.AccountID(entry.Name())
+		state.mu.Lock()
+		_, exists := state.slots[account]
+		state.mu.Unlock()
+		if exists {
+			continue
+		}
+		credPath := accountCredentialsPath(name, account)
+		raw, readErr := os.ReadFile(credPath)
+		if readErr != nil {
+			r.logger.WarnContext(ctx, "oauthrotation.startup.account_skipped",
+				"component", "oauthrotation",
+				"provider", string(name),
+				"account", string(account),
+				"err", readErr.Error(),
+			)
+			continue
+		}
+		cred, parseErr := state.prov.ParseStored(raw)
+		if parseErr != nil {
+			r.logger.WarnContext(ctx, "oauthrotation.startup.account_skipped",
+				"component", "oauthrotation",
+				"provider", string(name),
+				"account", string(account),
+				"err", parseErr.Error(),
+			)
+			continue
+		}
+		label := r.readAccountLabel(name, account)
+		r.foldAccount(state, account, cred, label)
+	}
+}
+
 // Harvest runs one mirror-import pass for every registered provider, folding
 // any newly imported account into its slot map. It is the public entry point
 // the daemon refresh loop calls before RefreshAll so freshly added upstream
@@ -670,7 +855,9 @@ func (r *Rotator) runMirrorSync(ctx context.Context, name provider.Name, state *
 }
 
 // loadImportedAccount reads the just-written per-account credential and folds
-// it into the slot map, preserving append-only account order.
+// it into the slot map, preserving append-only account order. It is a thin
+// wrapper over foldAccount that reads the credential bytes and label from the
+// per-account directory the mirror syncer just wrote.
 func (r *Rotator) loadImportedAccount(ctx context.Context, name provider.Name, state *providerState, account provider.AccountID) {
 	credPath := accountCredentialsPath(name, account)
 	raw, err := os.ReadFile(credPath)
@@ -694,10 +881,28 @@ func (r *Rotator) loadImportedAccount(ctx context.Context, name provider.Name, s
 		return
 	}
 	label := r.readAccountLabel(name, account)
+	r.foldAccount(state, account, cred, label)
+}
+
+// foldAccount folds a parsed credential into state.slots and state.order
+// under state.mu, preserving append-only account order. When an account id
+// already exists, the slot's cred is updated in place and the label is
+// overwritten only when the caller supplies a non-empty label, so a later
+// fold never clears an earlier label. The state mutex is taken once.
+//
+// Parsing happens at the call site so each caller can log a parse failure
+// with the source-specific event name (mirror-import vs startup walk). This
+// helper only does the state mutation step shared between the two.
+func (r *Rotator) foldAccount(state *providerState, account provider.AccountID, cred provider.Credentials, label string) {
 	state.mu.Lock()
 	slot, exists := state.slots[account]
 	if !exists {
-		slot = &accountSlot{account: account, mu: sync.Mutex{}, cred: provider.Credentials{AccessToken: "", RefreshToken: "", ExpiresAt: time.Time{}, Raw: nil, Fingerprint: ""}, label: ""}
+		slot = &accountSlot{
+			account: account,
+			mu:      sync.Mutex{},
+			cred:    provider.Credentials{AccessToken: "", RefreshToken: "", ExpiresAt: time.Time{}, Raw: nil, Fingerprint: ""},
+			label:   "",
+		}
 		state.slots[account] = slot
 		state.order = append(state.order, account)
 	}
