@@ -388,8 +388,28 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	}
 
 	applyAutoNameDefaults(&cfg.AutoName)
+	applyDebugDefaults(&cfg.Debug)
 
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
+}
+
+// defaultPprofListen is the documented bind address for the worker's
+// pprof endpoint when [debug.pprof] is enabled without an explicit
+// listen value. "localhost:0" binds to a localhost-only ephemeral port
+// the kernel picks; operators pin a stable address such as
+// "localhost:6060" or "[::1]:6060" when they want a known port.
+const defaultPprofListen = "localhost:0"
+
+// applyDebugDefaults fills in absent debug knobs with their documented
+// defaults. The pprof block stays disabled by default and the listen
+// address defaults to a localhost-only ephemeral port.
+func applyDebugDefaults(debug *DebugConfig) {
+	if debug == nil {
+		return
+	}
+	if strings.TrimSpace(debug.Pprof.Listen) == "" {
+		debug.Pprof.Listen = defaultPprofListen
+	}
 }
 
 func applySessionDefaults(defaults *Defaults) {

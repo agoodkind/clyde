@@ -519,4 +519,33 @@ sink = "concerns"
 		Entry("logging.cleanup.audit_only", "[logging.cleanup]\naudit_only = true\n"),
 		Entry("logging.cleanup.cleanup_mode", "[logging.cleanup]\ncleanup_mode = \"audit\"\n"),
 	)
+
+	It("defaults debug.pprof off with the documented listen address", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(""), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Debug.Pprof.Enabled).To(BeFalse())
+		Expect(cfg.Debug.Pprof.Listen).To(Equal("localhost:0"))
+	})
+
+	It("round-trips an explicit debug.pprof block", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		configData := "[debug.pprof]\nenabled = true\nlisten = \"[::1]:6060\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Debug.Pprof.Enabled).To(BeTrue())
+		Expect(cfg.Debug.Pprof.Listen).To(Equal("[::1]:6060"))
+	})
 })

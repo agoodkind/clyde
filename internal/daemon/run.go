@@ -448,6 +448,12 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) error {
 		return err
 	}
 
+	stdioCloser := setupWorkerStdioRedirect(log)
+	if stdioCloser != nil {
+		defer func() { _ = stdioCloser.Close() }()
+	}
+	maybeStartDebugPprofListener(log)
+
 	reloadChild := os.Getenv(envDaemonReloadChild) == "1"
 	processLock, err := acquireDaemonProcessLock(log, reloadChild)
 	if err != nil {
@@ -969,8 +975,9 @@ func replacementDaemonStarterForPlatform(goos string, supervisorSocket string) r
 
 func (directReplacementDaemonStarter) startReplacementDaemon(_ context.Context, log *slog.Logger, req replacementDaemonRequest) (*replacementDaemonProcess, error) {
 	cmd := daemonReplacementCommand(req.executablePath, "daemon")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	// Inherit parent stdio so the reload-child's pre-redirect crash
+	// output reaches the launchd log. The child's own
+	// RedirectWorkerStdio replaces fd 1 and fd 2 once it is up.
 	extraFiles := append([]*os.File{}, req.files...)
 	extraFiles = append(extraFiles, req.readyWrite)
 	cmd.ExtraFiles = extraFiles

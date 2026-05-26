@@ -53,6 +53,30 @@ type Config struct {
 	// consumes this config lands in PR4. Defaults are applied when
 	// the [autoname] block is absent or partial.
 	AutoName AutoNameConfig `json:"autoName" toml:"autoname"`
+	// Debug carries operator-facing debug knobs. Off by default; each
+	// sub-block opts the operator in explicitly. The pprof endpoint is
+	// the first inhabitant and binds to a localhost-only address.
+	Debug DebugConfig `json:"debug" toml:"debug"`
+}
+
+// DebugConfig groups operator-facing debug knobs. Each sub-block is
+// off by default so default builds carry no extra listeners.
+type DebugConfig struct {
+	Pprof PprofConfig `json:"pprof,omitzero" toml:"pprof,omitempty"`
+}
+
+// PprofConfig controls the worker's optional pprof HTTP listener. The
+// listener uses a fresh http.ServeMux rather than http.DefaultServeMux
+// so enabling pprof never mutates global handler state. Listen is
+// validated for a non-empty value when Enabled is true; the documented
+// default "localhost:0" picks a random port and is appropriate for
+// ad-hoc operator inspection.
+type PprofConfig struct {
+	// Enabled toggles the listener. Default false.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// Listen is the bind address. Default "localhost:0". Operators may
+	// pin a stable address such as "localhost:6060" or "[::1]:6060".
+	Listen string `json:"listen,omitempty" toml:"listen,omitempty"`
 }
 
 // LoggingConfig carries global logging settings.

@@ -305,8 +305,11 @@ func runSupervisorLoop(log *slog.Logger, signalCh <-chan os.Signal, handle worke
 
 func workerCommand(executablePath string, readyWrite *os.File, readyFD int, supervisorSocketPath string) *exec.Cmd {
 	cmd := supervisorCommand(executablePath, "daemon", "worker")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	// Leave cmd.Stdout and cmd.Stderr unset so the child inherits the
+	// supervisor's stdio. The supervisor's stdio is routed to the launchd
+	// log via the plist, so worker panics and runtime fatal writes land
+	// there until the worker's own RedirectWorkerStdio takes over fd 1
+	// and fd 2 (CLYDE-XXX worker stdio capture).
 	cmd.ExtraFiles = []*os.File{readyWrite}
 	cmd.Env = EnvWithOverrides(os.Environ(),
 		EnvReloadChild+"=",
@@ -469,8 +472,9 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 	}
 	cmd := supervisorCommand(req.ExecutablePath, req.Arguments[1:]...)
 	cmd.Args = append([]string{}, req.Arguments...)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	// Leave cmd.Stdout and cmd.Stderr unset so the replacement worker
+	// inherits the supervisor's stdio and any pre-redirect crash output
+	// reaches the launchd log instead of being discarded.
 	cmd.Env = env
 	cmd.ExtraFiles = append([]*os.File{}, files...)
 	handle, err := startWorker(cmd)
