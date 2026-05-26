@@ -6,7 +6,11 @@ Selection is the rotator deciding which account's access token to return for an 
 
 - Runs one harvest pass for the provider (see `harvest.md`).
 - Drops throttle entries whose reset time has passed (see `rate-limit-throttle.md`).
-- Walks the provider's accounts in a stable order and returns the first account that is not throttled and not marked for re-auth, along with its access token and account identity.
+- Partitions the provider's accounts into eligible, throttled, and re-auth-marked sets.
+- Among eligible accounts, picks the one whose upstream rate-limit window resets soonest in the future. Spending down the credit that refreshes first keeps monthly utilization balanced across accounts.
+- Ties on the reset time are broken by oldest `lastObservedAt` so an account that has not been touched recently gets a turn.
+- An account with no observation yet (zero `lastResetAt`) sorts after every observed account, so a freshly added account does not displace an observed one until it has been used at least once.
+- When no eligible account exists, returns one of the typed errors below.
 
 Two conditions produce a typed error instead of a token, both defined in `internal/oauthrotation/errors.go`:
 

@@ -9,3 +9,5 @@ For each source the harvester reads the credential, asks the provider for the ac
 Harvest is import-only. It never writes back to `~/.claude/.credentials.json` or the macOS keychain, because the Claude command-line tool refreshes those itself and two writers would conflict. Harvest performs no token refresh; importing a credential does not call the provider's refresh.
 
 The macOS keychain holds one Anthropic login at a time. Clyde keeps every distinct account it has imported, keyed by account identity, so logging into a second account through the Claude tool adds that account to the store without removing the first.
+
+The keychain harvest runs on every refresh tick even though upstream requests reach Anthropic through the adapter rather than through the keychain bearer. Claude Code's `/login` command writes its result to the keychain on each interactive login, so the harvest absorbs that token into the rotator. A reflex `claude /login` therefore does not leave its credential stranded outside the managed pool.

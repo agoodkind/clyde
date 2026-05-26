@@ -285,37 +285,10 @@ func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*ac
 	maps.Copy(reauth, state.reauth)
 	state.mu.Unlock()
 
-	var (
-		soonestSet     bool
-		soonestReset   time.Time
-		soonestAccount provider.AccountID
-		reauthSeen     bool
-		reauthAccount  provider.AccountID
-	)
-	for _, account := range order {
-		if reauth[account] {
-			if !reauthSeen {
-				reauthSeen = true
-				reauthAccount = account
-			}
-			continue
-		}
-		slot := slots[account]
-		throttled, _ := slotIsFreshRejected(slot, now)
-		if !throttled {
-			return slot, account, nil
-		}
-		// Use the unclamped upstream reset for the soonest-reset comparison so
-		// the typed error still surfaces the earlier real recovery window when
-		// two slots share the same observation freshness cap.
-		slot.mu.Lock()
-		resetAt := slot.lastResetAt
-		slot.mu.Unlock()
-		if !soonestSet || resetAt.Before(soonestReset) {
-			soonestSet = true
-			soonestReset = resetAt
-			soonestAccount = account
-		}
+	eligibles, blocked := partitionEligibleSlots(order, slots, reauth, now)
+	if len(eligibles) > 0 {
+		chosen := pickEligibleSlot(eligibles)
+		return chosen.slot, chosen.account, nil
 	}
 
 	if len(order) == 0 {
@@ -330,28 +303,129 @@ func (r *Rotator) selectActiveSlot(ctx context.Context, name provider.Name) (*ac
 	// time, so when both kinds blocked selection the re-auth remedy is the
 	// actionable one to surface. Throttled-only failures keep the existing
 	// AllAccountsThrottledError so the soonest-reset hint survives.
-	if reauthSeen {
+	if blocked.reauthSeen {
 		r.logger.WarnContext(ctx, "oauthrotation.token.needs_reauth",
 			"component", "oauthrotation",
 			"provider", string(name),
-			"account", string(reauthAccount),
+			"account", string(blocked.reauthAccount),
 		)
 		return nil, "", NeedsReauthError{
 			Provider: name,
-			Account:  reauthAccount,
+			Account:  blocked.reauthAccount,
 		}
 	}
 	r.logger.WarnContext(ctx, "oauthrotation.token.all_throttled",
 		"component", "oauthrotation",
 		"provider", string(name),
-		"soonest_account", string(soonestAccount),
-		"soonest_reset_ms", soonestReset.UnixMilli(),
+		"soonest_account", string(blocked.soonestAccount),
+		"soonest_reset_ms", blocked.soonestReset.UnixMilli(),
 	)
 	return nil, "", AllAccountsThrottledError{
 		Provider:     name,
-		SoonestReset: soonestReset,
-		Account:      soonestAccount,
+		SoonestReset: blocked.soonestReset,
+		Account:      blocked.soonestAccount,
 	}
+}
+
+// eligibleSlot pairs an account that can serve right now with the observation
+// timestamps the soonest-reset selector compares.
+type eligibleSlot struct {
+	account        provider.AccountID
+	slot           *accountSlot
+	resetAt        time.Time
+	observedAt     time.Time
+	resetUnknown   bool
+	observedAtZero bool
+}
+
+// blockedSlots tracks the worst-case fallback selection inputs: the first
+// reauth-marked account encountered (its remedy is actionable) and the
+// throttled account with the soonest upstream reset (its window clears first).
+type blockedSlots struct {
+	soonestSet     bool
+	soonestReset   time.Time
+	soonestAccount provider.AccountID
+	reauthSeen     bool
+	reauthAccount  provider.AccountID
+}
+
+// partitionEligibleSlots walks the account order in stable order and returns
+// the slots that can serve right now along with the worst-case fallback
+// fields the caller surfaces when no slot is eligible. A reauth-marked slot
+// is dropped entirely. A throttled slot contributes to the soonest-reset
+// fallback through its unclamped upstream reset.
+func partitionEligibleSlots(order []provider.AccountID, slots map[provider.AccountID]*accountSlot, reauth map[provider.AccountID]bool, now time.Time) ([]eligibleSlot, blockedSlots) {
+	var (
+		eligibles []eligibleSlot
+		blocked   blockedSlots
+	)
+	for _, account := range order {
+		if reauth[account] {
+			if !blocked.reauthSeen {
+				blocked.reauthSeen = true
+				blocked.reauthAccount = account
+			}
+			continue
+		}
+		slot := slots[account]
+		throttled, _ := slotIsFreshRejected(slot, now)
+		if !throttled {
+			slot.mu.Lock()
+			resetAt := slot.lastResetAt
+			observedAt := slot.lastObservedAt
+			slot.mu.Unlock()
+			resetUnknown := resetAt.IsZero() || !resetAt.After(now)
+			eligibles = append(eligibles, eligibleSlot{
+				account:        account,
+				slot:           slot,
+				resetAt:        resetAt,
+				observedAt:     observedAt,
+				resetUnknown:   resetUnknown,
+				observedAtZero: observedAt.IsZero(),
+			})
+			continue
+		}
+		// Use the unclamped upstream reset for the soonest-reset comparison so
+		// the typed error still surfaces the earlier real recovery window when
+		// two slots share the same observation freshness cap.
+		slot.mu.Lock()
+		resetAt := slot.lastResetAt
+		slot.mu.Unlock()
+		if !blocked.soonestSet || resetAt.Before(blocked.soonestReset) {
+			blocked.soonestSet = true
+			blocked.soonestReset = resetAt
+			blocked.soonestAccount = account
+		}
+	}
+	return eligibles, blocked
+}
+
+// pickEligibleSlot orders the eligible slots by soonest upstream reset and
+// returns the front of the order. A stable sort keeps the original account
+// order as the final tie-break so a fresh rotator with no observations still
+// selects the first registered account, matching the historical contract.
+func pickEligibleSlot(eligibles []eligibleSlot) eligibleSlot {
+	sort.SliceStable(eligibles, func(i, j int) bool {
+		a, b := eligibles[i], eligibles[j]
+		// Accounts with no recorded reset sort after accounts with one.
+		if a.resetUnknown != b.resetUnknown {
+			return !a.resetUnknown
+		}
+		// When both have a recorded reset, prefer the soonest in the future.
+		if !a.resetUnknown && !b.resetUnknown && !a.resetAt.Equal(b.resetAt) {
+			return a.resetAt.Before(b.resetAt)
+		}
+		// Tie-break by oldest lastObservedAt so unused accounts get a turn.
+		// A zero observedAt (never observed) sorts after any real timestamp.
+		if a.observedAtZero != b.observedAtZero {
+			return !a.observedAtZero
+		}
+		if !a.observedAt.Equal(b.observedAt) {
+			return a.observedAt.Before(b.observedAt)
+		}
+		return false
+	})
+	return eligibles[0]
 }
 
 // TokenAfterAuthFailure recovers from an upstream 401 by returning a fresh
@@ -1194,6 +1268,12 @@ func (r *Rotator) foldOnDiskAccounts(ctx context.Context, name provider.Name, st
 // accounts are present in memory before the refresh fan-out. A per-provider
 // sync error is logged and swallowed so one provider's transient upstream read
 // failure does not block the others.
+//
+// The keychain harvest stays even though upstream requests no longer
+// use the keychain bearer. Claude Code's /login command writes its
+// result to the keychain on each interactive login. The harvest
+// absorbs those tokens into the rotator so a reflex `claude /login`
+// does not leave its credential stranded outside the managed pool.
 func (r *Rotator) Harvest(ctx context.Context) {
 	r.mu.RLock()
 	type named struct {

@@ -19,6 +19,7 @@ import (
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	claudeartifacts "goodkind.io/clyde/internal/providers/claude/lifecycle/artifacts"
 	"goodkind.io/clyde/internal/session"
+	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/terminalcontrol"
 	"goodkind.io/clyde/internal/util"
 )
@@ -498,6 +499,9 @@ func launchSessionID(env map[string]string, sessionID string) string {
 // nothing. The fetch runs regardless of MITM so the rotator-credentials path
 // works with capture disabled; the MITM-specific sanitize of stale Clyde-owned
 // values only runs when MITM is enabled for claude, matching prior behavior.
+// When neither the caller nor the daemon supplied ANTHROPIC_BASE_URL the helper
+// also fills in the adapter loopback default so a daemon-spawned remote-control
+// claude session reaches the adapter without inheriting the operator's shell rc.
 func applyDaemonLaunchEnv(env map[string]string) {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
@@ -510,6 +514,7 @@ func applyDaemonLaunchEnv(env map[string]string) {
 	launchEnv, err := providerLaunchEnvironmentViaDaemon(ctx, "claude")
 	if err != nil {
 		claudeLog.Warn("wrapper.mitm.claude_env_failed", "component", "wrapper", "err", err)
+		defaultAnthropicBaseURL(env)
 		return
 	}
 	// When the rotator could not select a usable account, the daemon planted no
@@ -524,7 +529,30 @@ func applyDaemonLaunchEnv(env map[string]string) {
 		}
 	}
 	applyLaunchEnvItems(env, launchEnv.Environment)
+	defaultAnthropicBaseURL(env)
 }
+
+// defaultAnthropicBaseURL inserts the adapter loopback URL into env when no
+// caller or daemon-supplied value is present, then emits one slog event
+// recording the default. A daemon-spawned remote-control claude session does
+// not read the operator's shell rc, so the dotfile-set ANTHROPIC_BASE_URL does
+// not reach it; this default keeps the redirect to clyde's adapter in place.
+// A caller-supplied or daemon-supplied value (including the MITM path) wins.
+func defaultAnthropicBaseURL(env map[string]string) {
+	if _, ok := env[claudeprovider.AnthropicBaseURLEnv]; ok {
+		return
+	}
+	env[claudeprovider.AnthropicBaseURLEnv] = defaultAnthropicAdapterURL
+	slogger.For(slogger.ConcernProcessDaemonLifecycle).Info(
+		"claude.launch.anthropic_base_url.default_applied",
+		"component", "claude.lifecycle",
+		"addr", defaultAnthropicAdapterURL,
+	)
+}
+
+// defaultAnthropicAdapterURL is the loopback URL of clyde's adapter that
+// claude code must reach for ANTHROPIC API calls to flow through the rotator.
+const defaultAnthropicAdapterURL = "http://localhost:11434"
 
 // applyLaunchEnvItems merges the daemon-owned launch environment variables into
 // env through the Clyde-owned apply helpers so MITM base-url and rotator

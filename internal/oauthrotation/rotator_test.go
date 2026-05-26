@@ -1109,6 +1109,93 @@ func TestTokenAfterAuthFailureNotInUseRefreshes(t *testing.T) {
 	}
 }
 
+// seedAllowedObservation drives the rotator's Observe entry point with an
+// allowed signal for one account so the slot carries a recorded lastResetAt
+// and lastObservedAt the soonest-reset selector can read. The fixed clock on
+// the rotator pins the relationship between observation timestamps and the
+// selection moment.
+func seedAllowedObservation(t *testing.T, rot *Rotator, prov *fakeProvider, account string, observedAt, resetAt time.Time) {
+	t.Helper()
+	sig := ratelimitsink.Signal{
+		Provider:    string(prov.Name()),
+		AccessToken: account + ":token",
+		Status:      ratelimitsink.StatusAllowed,
+		Claim:       ratelimitsink.ClaimFiveHour,
+		ResetAt:     resetAt,
+		ObservedAt:  observedAt,
+		HTTPStatus:  200,
+	}
+	if err := rot.Observe(context.Background(), sig); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+}
+
+// TestSelectActiveSlotPrefersSoonestReset pins the soonest-reset selection
+// contract: two eligible accounts both carry an allowed observation with
+// distinct upstream reset times in the future, and the rotator returns the
+// account whose window resets first so its credit is spent before refresh.
+func TestSelectActiveSlotPrefersSoonestReset(t *testing.T) {
+	now := time.UnixMilli(300_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	seedAllowedObservation(t, rot, prov, "acct-a", now, now.Add(2*time.Hour))
+	seedAllowedObservation(t, rot, prov, "acct-b", now, now.Add(4*time.Hour))
+
+	_, account, err := rot.Token(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if account != "acct-a" {
+		t.Fatalf("account = %q, want acct-a (soonest reset)", account)
+	}
+}
+
+// TestSelectActiveSlotTieBreaksByLeastRecentlyObserved pins the tie-break:
+// when two eligible accounts share the same upstream reset time, the rotator
+// picks the one whose lastObservedAt is older so an account that has not been
+// touched recently gets a turn.
+func TestSelectActiveSlotTieBreaksByLeastRecentlyObserved(t *testing.T) {
+	now := time.UnixMilli(310_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-a", "acct-b")
+	// Both accounts share the same upstream reset time, but acct-b was
+	// observed earlier than acct-a, so acct-b sorts first under the
+	// least-recently-observed tie-break.
+	reset := now.Add(2 * time.Hour)
+	seedAllowedObservation(t, rot, prov, "acct-a", now, reset)
+	seedAllowedObservation(t, rot, prov, "acct-b", now.Add(-time.Minute), reset)
+
+	_, account, err := rot.Token(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if account != "acct-b" {
+		t.Fatalf("account = %q, want acct-b (older lastObservedAt)", account)
+	}
+}
+
+// TestSelectActiveSlotUnobservedAccountSortsLast pins the unobserved-account
+// rule: an account with a real recorded reset wins over an account whose
+// lastResetAt is the zero value, so a freshly added account does not displace
+// an observed account until it has been used at least once.
+func TestSelectActiveSlotUnobservedAccountSortsLast(t *testing.T) {
+	now := time.UnixMilli(320_000_000)
+	ctx := context.Background()
+	rot, prov := seedRotator(t, now, "acct-fresh", "acct-observed")
+	// acct-observed has a real reset in the future. acct-fresh has no
+	// observation at all (zero lastResetAt), so it sorts after acct-observed
+	// even though it appears first in the stable account order.
+	seedAllowedObservation(t, rot, prov, "acct-observed", now, now.Add(2*time.Hour))
+
+	_, account, err := rot.Token(ctx, prov.Name())
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	if account != "acct-observed" {
+		t.Fatalf("account = %q, want acct-observed (unobserved account sorts last)", account)
+	}
+}
+
 // TestRejectedObservationSkipsWithinFreshness pins the selection contract:
 // a rejected observation made 30s ago with reset 5min in the future keeps
 // the slot out of rotation, so the next slot is selected.

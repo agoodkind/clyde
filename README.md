@@ -92,6 +92,8 @@ clyde -r auth-feature
 
 For Claude Code sessions, the provider runtime launches the real `claude` binary with the resolved session ID and session settings when available. Clyde also forwards Claude-native invocations through the real `claude` binary when the arguments are not Clyde-owned commands.
 
+Claude Code routes its Anthropic API calls through Clyde's adapter at `localhost:11434`. The redirect comes from `ANTHROPIC_BASE_URL`, set system-wide via the operator's shell rc for shell-launched sessions and filled in by the daemon's claude launch env for daemon-spawned remote-control sessions when the variable is missing. The adapter then selects the next eligible OAuth account from the rotator, swaps in that account's access token, and forwards the request. Account lifecycle commands are `clyde oauth login`, `clyde oauth list`, and `clyde oauth forget <id-or-label>`. Account selection prefers the account whose usage window resets soonest so monthly spend stays balanced. The keychain entry `Claude Code-credentials` is harvested periodically: a token written there by Claude Code's `/login` is absorbed into the rotator, and upstream requests do not read from the keychain.
+
 The SessionStart hook command is:
 
 ```text

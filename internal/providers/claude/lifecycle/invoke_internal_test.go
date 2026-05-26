@@ -315,8 +315,78 @@ func TestApplyMITMEnvDropsInheritedLoopbackWhenDaemonUnavailable(t *testing.T) {
 	if env["KEEP"] != "1" {
 		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
 	}
-	if baseURL, ok := env["ANTHROPIC_BASE_URL"]; ok {
-		t.Fatalf("ANTHROPIC_BASE_URL=%q, want stale Clyde proxy removed", baseURL)
+	// SanitizeMITMMap strips the stale loopback override, and the daemon-fail
+	// branch then fills the adapter loopback default so a daemon-spawned claude
+	// still reaches the adapter rather than calling Anthropic directly.
+	if env["ANTHROPIC_BASE_URL"] != defaultAnthropicAdapterURL {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q, want adapter loopback default %q", env["ANTHROPIC_BASE_URL"], defaultAnthropicAdapterURL)
+	}
+}
+
+func TestLaunchEnvDefaultsAnthropicBaseURLWhenMissing(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfgDir := filepath.Join(configHome, "clyde")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := []byte("[mitm]\nenabled_default = false\n")
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldLaunchEnvironment := providerLaunchEnvironmentViaDaemon
+	t.Cleanup(func() {
+		providerLaunchEnvironmentViaDaemon = oldLaunchEnvironment
+	})
+	providerLaunchEnvironmentViaDaemon = func(context.Context, string) (daemon.ProviderLaunchEnvironment, error) {
+		return daemon.ProviderLaunchEnvironment{}, nil
+	}
+
+	env := map[string]string{
+		"KEEP": "1",
+	}
+	applyDaemonLaunchEnv(env)
+
+	if env["KEEP"] != "1" {
+		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
+	}
+	if env["ANTHROPIC_BASE_URL"] != defaultAnthropicAdapterURL {
+		t.Fatalf("ANTHROPIC_BASE_URL = %q, want adapter loopback default %q", env["ANTHROPIC_BASE_URL"], defaultAnthropicAdapterURL)
+	}
+}
+
+func TestLaunchEnvPreservesAnthropicBaseURLOverride(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfgDir := filepath.Join(configHome, "clyde")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfg := []byte("[mitm]\nenabled_default = false\n")
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), cfg, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	oldLaunchEnvironment := providerLaunchEnvironmentViaDaemon
+	t.Cleanup(func() {
+		providerLaunchEnvironmentViaDaemon = oldLaunchEnvironment
+	})
+	providerLaunchEnvironmentViaDaemon = func(context.Context, string) (daemon.ProviderLaunchEnvironment, error) {
+		return daemon.ProviderLaunchEnvironment{}, nil
+	}
+
+	env := map[string]string{
+		"ANTHROPIC_BASE_URL": "https://my.override.example",
+		"KEEP":               "1",
+	}
+	applyDaemonLaunchEnv(env)
+
+	if env["KEEP"] != "1" {
+		t.Fatalf("KEEP env = %q, want 1", env["KEEP"])
+	}
+	if env["ANTHROPIC_BASE_URL"] != "https://my.override.example" {
+		t.Fatalf("ANTHROPIC_BASE_URL = %q, want caller-supplied override", env["ANTHROPIC_BASE_URL"])
 	}
 }
 
