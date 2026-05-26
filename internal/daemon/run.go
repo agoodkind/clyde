@@ -32,6 +32,7 @@ import (
 	"goodkind.io/clyde/internal/binaryhandoff"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemonsupervisor"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/session"
@@ -1084,7 +1085,7 @@ func buildWebappReloadDrain(log *slog.Logger, addr string, wp *webAppProcess) fu
 			return nil
 		}
 		if wp.srv != nil && wp.srv.Channels != nil {
-			result := wp.srv.Channels.Drain(ctx, "webapp.reload")
+			result := wp.srv.Channels.DrainWith(ctx, "webapp.reload", livetrack.DrainOptions{IdleGrace: reloadDrainIdleGrace})
 			if len(result.Errors) > 0 {
 				err := errors.Join(result.Errors...)
 				log.Warn("daemon.reload.webapp_channels_drain_errors",
@@ -1461,7 +1462,7 @@ func startMITM(log *slog.Logger, inherited net.Listener) (*mitmProcess, error) {
 	}()
 	proc := &mitmProcess{
 		cancel:         nil,
-		drain:          proxy.Shutdown,
+		drain:          mitmReloadDrain(proxy),
 		waitIdle:       mitmTunnelWaitIdle(proxy),
 		activeCount:    mitmTunnelActiveCount(proxy),
 		forceClose:     mitmTunnelForceClose(proxy),
@@ -1536,6 +1537,23 @@ func mitmTunnelWaitIdle(proxy *mitm.Proxy) func(context.Context) int {
 				}
 			}
 		}
+	}
+}
+
+// mitmReloadDrain returns the drain function the reload orchestrator
+// invokes for the MITM surface. It wraps [mitm.Proxy.ShutdownWith]
+// so the registry's idle-grace fast-path force-closes wedged
+// keepalive tunnels at drain start instead of waiting them out
+// against the outer cap. Plain shutdown (non-reload) callers still
+// use [mitm.Proxy.Shutdown], which uses the zero-grace path so
+// existing tests and the full-exit path keep their pre-grace
+// semantics.
+func mitmReloadDrain(proxy *mitm.Proxy) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if proxy == nil {
+			return nil
+		}
+		return proxy.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: reloadDrainIdleGrace})
 	}
 }
 
@@ -2157,6 +2175,24 @@ func stopAdapterProcess(proc *adapterProcess, timeout time.Duration) {
 	}
 }
 
+// adapterReloadDrain returns the drain function the reload
+// orchestrator invokes for the adapter surface. It wraps
+// [adapter.Server.ShutdownWith] so the ingress and egress registries
+// each apply the daemon's idle-grace fast-path: wedged ingress
+// sessions that have not moved a byte since drain start get
+// force-closed immediately, while sessions still streaming SSE ride
+// out the outer cap. The full-exit shutdown path keeps using
+// [adapter.Server.Shutdown] so non-reload callers retain the
+// zero-grace semantics.
+func adapterReloadDrain(adapterSrv *adapter.Server) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if adapterSrv == nil {
+			return nil
+		}
+		return adapterSrv.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: reloadDrainIdleGrace})
+	}
+}
+
 func startAdapterProcess(parent context.Context, log *slog.Logger, adapterSrv *adapter.Server, lis net.Listener) *adapterProcess {
 	if parent == nil {
 		parent = context.Background()
@@ -2182,7 +2218,7 @@ func startAdapterProcess(parent context.Context, log *slog.Logger, adapterSrv *a
 	}()
 	proc := &adapterProcess{
 		cancel:         nil,
-		drain:          adapterSrv.Shutdown,
+		drain:          adapterReloadDrain(adapterSrv),
 		waitIdle:       adapterSrv.WaitForIdle,
 		activeCount:    adapterSrv.ActiveRequestCount,
 		forceClose:     adapterSrv.Close,

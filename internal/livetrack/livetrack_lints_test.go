@@ -142,7 +142,12 @@ func functionReferencesDrain(body *ast.BlockStmt) bool {
 		if !ok {
 			return true
 		}
-		if sel.Sel != nil && sel.Sel.Name == "Drain" {
+		// Accept Drain, DrainWith, or any sibling Drain* helper the
+		// registry exposes. Drain and DrainWith both close out
+		// tracked sessions; the lint exists to catch bare
+		// http.Server.Shutdown calls that lack any registry drain
+		// pairing, not to prescribe one specific Drain spelling.
+		if sel.Sel != nil && strings.HasPrefix(sel.Sel.Name, "Drain") {
 			found = true
 			return false
 		}

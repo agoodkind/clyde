@@ -15,14 +15,29 @@ import (
 // already owns the inherited listener file descriptors and is serving
 // new connections, so the old generation can keep forwarding bytes for
 // any stream that was in flight when reload fired without holding up
-// the reload RPC. The cap is large enough to outlast the longest
-// plausible LLM response (multi-minute thinking streams, Cursor BYOK
-// SSE, Codex streaming) while still preventing a permanently wedged
-// Cloudflare-keepalive tunnel from pinning the old generation forever
-// (CLYDE-270, CLYDE-324, CLYDE-437). Force-close fires only after this
-// cap elapses with sessions still alive; under normal operation
-// in-flight work finishes via natural completion long before the cap.
-const reloadDrainCap = 1 * time.Hour
+// the reload RPC. The cap covers actively-streaming sessions only; the
+// reloadDrainIdleGrace fast-path evicts wedged keepalive sessions
+// before the cap timer starts, so the cap no longer needs to dwarf the
+// longest plausible LLM response. Force-close fires only after this
+// cap elapses with active sessions still streaming.
+//
+// The pre-grace generation set this to one hour so wedged
+// Cloudflare-keepalive tunnels (Cursor, Claude Code) could not pin
+// the old worker forever. The empirical cost was that every reload
+// did pin the old worker for an hour because those wedged tunnels
+// never closed. Pairing a 60s cap with a 5s idle grace shifts the
+// eviction policy from "wait everyone out" to "evict the silent ones
+// now, give the active ones a minute", which is the behavior every
+// real LLM stream needs and no idle keepalive deserves
+// (CLYDE-270, CLYDE-324, CLYDE-437 follow-up).
+const reloadDrainCap = 60 * time.Second
+
+// reloadDrainIdleGrace is the window of byte silence after which a
+// drained session is force-closed at drain start. Sessions still
+// moving bytes (byte-pipe Touch calls in MITM splice and stream
+// paths refresh livetrack last-activity timestamps) are spared the
+// pre-poll force-close and waited on until reloadDrainCap fires.
+const reloadDrainIdleGrace = 5 * time.Second
 
 // reloadDrainSurface is the per-surface contract the shared graceful
 // drain orchestrator consumes. Each long-lived listener subsystem

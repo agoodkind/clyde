@@ -105,12 +105,54 @@ type Session[M Meta] struct {
 	state    *sessionState
 }
 
+// Touch records the current time as the session's most recent
+// byte-level activity. The byte-pipe owner calls this after every
+// successful read or write on the underlying transport so the drain
+// idle-grace fast-path can distinguish wedged sessions from actively
+// streaming ones. Safe to call from any goroutine; the underlying
+// atomic store is lock-free. Snapshot-copied Session values have a
+// nil state pointer and Touch is a no-op on them; only the live
+// pointer returned from Register carries a writable state.
+//
+// The clock reference comes from the registry's injected
+// [Options.Now], so tests that drive a fake clock through Register
+// also drive Touch's timestamp.
+func (s *Session[M]) Touch() {
+	if s == nil || s.state == nil || s.state.now == nil {
+		return
+	}
+	s.state.lastActivityNano.Store(s.state.now().UnixNano())
+}
+
+// IdleSince returns the wall-clock duration between now and the
+// session's most recently recorded activity. The drain idle-grace
+// fast-path compares this against its grace window so wedged sessions
+// (no byte movement since registration or since the last Touch) get
+// force-closed immediately, while sessions whose owners are still
+// pushing bytes ride out the deadline path. Returns zero on a
+// snapshot-copied Session whose state pointer is nil.
+func (s *Session[M]) IdleSince(now time.Time) time.Duration {
+	if s == nil || s.state == nil {
+		return 0
+	}
+	last := time.Unix(0, s.state.lastActivityNano.Load())
+	return now.Sub(last)
+}
+
 // sessionState carries the mutable bits of a tracked session. It
 // lives behind a pointer on Session so that Snapshot can return a
-// Session value without copying a [sync.Once] or [atomic.Bool].
+// Session value without copying a [sync.Once], [atomic.Bool], or
+// [atomic.Int64]. lastActivityNano is the per-session
+// last-activity timestamp stored as UnixNano so atomic load and
+// store stay lock-free on the hot byte-pipe path; see
+// [Session.Touch] and [Session.IdleSince]. now is the registry's
+// injected clock so Touch and IdleSince stay testable without
+// reaching for the package-level [time.Now].
 type sessionState struct {
-	once     sync.Once
-	released atomic.Bool
+	once             sync.Once
+	released         atomic.Bool
+	lastActivityNano atomic.Int64
+	now              func() time.Time
 }
 
 // sessionEntry is the package-internal record stored in the registry
@@ -251,16 +293,18 @@ func (r *Registry[M]) Register(ctx context.Context, kind string, meta M, closer 
 		}
 	}
 	id := randomSessionID(r.now)
+	openedAt := r.now()
 	sess := &Session[M]{
 		ID:       id,
 		ParentID: cfg.parentID,
 		Kind:     kind,
-		OpenedAt: r.now(),
+		OpenedAt: openedAt,
 		Meta:     meta,
 		corr:     correlation.FromContext(ctx),
 		closer:   closer,
-		state:    &sessionState{once: sync.Once{}, released: atomic.Bool{}},
+		state:    &sessionState{once: sync.Once{}, released: atomic.Bool{}, lastActivityNano: atomic.Int64{}, now: r.now},
 	}
+	sess.state.lastActivityNano.Store(openedAt.UnixNano())
 	r.mu.Lock()
 	if State(r.state.Load()) != StateOpen {
 		r.mu.Unlock()

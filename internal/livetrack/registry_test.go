@@ -300,6 +300,94 @@ func TestCorrelationPropagation(t *testing.T) {
 	}
 }
 
+// TestSessionTouchUpdatesLastActivity registers one session, lets a
+// short wall-clock interval pass, calls Touch, and asserts the
+// post-Touch IdleSince reading drops back near zero. The interval
+// has to clear the OS scheduler jitter floor so the assertion is
+// asymmetric: pre-Touch idleness exceeds the wait, post-Touch
+// idleness sits below a generous ceiling that survives slow CI.
+func TestSessionTouchUpdatesLastActivity(t *testing.T) {
+	t.Parallel()
+	r := New[testMeta](Options[testMeta]{
+		Component: "test",
+		Concern:   "test.touch.update",
+	})
+	sess, err := r.Register(context.Background(), "touch", testMeta{Tag: "touch"}, &noopCloser{count: atomic.Int32{}, err: nil, delay: 0})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	wait := 10 * time.Millisecond
+	time.Sleep(wait)
+	beforeTouch := sess.IdleSince(time.Now())
+	if beforeTouch < wait {
+		t.Fatalf("pre-touch idle: got %v, want >= %v", beforeTouch, wait)
+	}
+	sess.Touch()
+	afterTouch := sess.IdleSince(time.Now())
+	if afterTouch > 5*time.Millisecond {
+		t.Fatalf("post-touch idle: got %v, want < 5ms", afterTouch)
+	}
+}
+
+// TestSessionTouchRaceFree spawns many goroutines that each call
+// Touch many times in parallel and asserts the registry sees no
+// data race under `go test -race`. The atomic.Int64 store is the
+// load-bearing piece; a regression that swapped it for a mutex
+// would surface here as a race detector fault when the test runs
+// under -race.
+func TestSessionTouchRaceFree(t *testing.T) {
+	t.Parallel()
+	r := New[testMeta](Options[testMeta]{
+		Component: "test",
+		Concern:   "test.touch.race",
+	})
+	sess, err := r.Register(context.Background(), "race", testMeta{Tag: "race"}, &noopCloser{count: atomic.Int32{}, err: nil, delay: 0})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	const goroutines = 100
+	const perGoroutine = 1000
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perGoroutine; j++ {
+				sess.Touch()
+			}
+		}()
+	}
+	wg.Wait()
+	// Sanity: a recent Touch leaves IdleSince small.
+	if got := sess.IdleSince(time.Now()); got > 100*time.Millisecond {
+		t.Fatalf("post-race idle: got %v, want < 100ms", got)
+	}
+}
+
+// TestSessionIdleSinceMonotonic registers one session, takes two
+// IdleSince readings with no Touch in between, and asserts the
+// second reading is at least as large as the first. A regression
+// that stored the timestamp in a non-monotonic field (e.g. raw
+// wall-clock comparison across a stretch where the clock jumps
+// backwards) would surface as a smaller second reading.
+func TestSessionIdleSinceMonotonic(t *testing.T) {
+	t.Parallel()
+	r := New[testMeta](Options[testMeta]{
+		Component: "test",
+		Concern:   "test.idle.monotonic",
+	})
+	sess, err := r.Register(context.Background(), "mono", testMeta{Tag: "mono"}, &noopCloser{count: atomic.Int32{}, err: nil, delay: 0})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	first := sess.IdleSince(time.Now())
+	time.Sleep(1 * time.Millisecond)
+	second := sess.IdleSince(time.Now())
+	if second < first {
+		t.Fatalf("monotonic: got first=%v second=%v, want second >= first", first, second)
+	}
+}
+
 func TestCloserErrorAggregation(t *testing.T) {
 	t.Parallel()
 	r := New[testMeta](Options[testMeta]{

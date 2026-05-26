@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 )
 
@@ -90,6 +91,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		closeBoth:  closeBoth,
 		recorder:   recorder,
 		captureDir: cfg.CaptureDir,
+		session:    nil,
 	})
 	go func() {
 		defer func() {
@@ -120,7 +122,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	p.log.Info("mitm.ws.closed", "url", upstreamURL, "messages", state.messageCount)
 }
 
-func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client net.Conn, reader *bufio.Reader, writer *bufio.Writer, r *http.Request, target string, host string, provider Provider) error {
+func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client net.Conn, reader *bufio.Reader, writer *bufio.Writer, r *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
 	cfg := p.config()
 	providerID := string(provider.ID())
 	upstreamURL := wsUpstreamURL("https://"+target, r.URL.RequestURI())
@@ -178,6 +180,7 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 		closeBoth:  closeBoth,
 		recorder:   recorder,
 		captureDir: cfg.CaptureDir,
+		session:    parent,
 	})
 	go func() {
 		defer func() {
@@ -263,12 +266,24 @@ type wsRelayParams struct {
 	closeBoth  func(error)
 	recorder   *logevent.Recorder
 	captureDir string
+	// session, when non-nil, has its activity timestamp refreshed
+	// after every successful ReadMessage and WriteMessage so the
+	// daemon reload-drain idle-grace fast-path can tell an actively
+	// streaming websocket from a wedged one. Plain (non-intercepted)
+	// websocket sessions never register with livetrack and pass nil
+	// here.
+	session *livetrack.Session[TunnelMeta]
 }
 
 // wsMakeRelay returns the per-direction relay loop. It reads frames
 // from src, mirrors them to dst, and records each frame to the JSONL
 // capture stream. On any read, write, or capture failure it triggers
 // the shared closeBoth so the partner direction also exits.
+//
+// When params.session is non-nil, each successful ReadMessage and
+// WriteMessage refreshes the session's activity timestamp so the
+// daemon reload-drain idle-grace fast-path can distinguish active
+// streaming bridges from wedged keepalive ones.
 func (p *Proxy) wsMakeRelay(ctx context.Context, params wsRelayParams) func(src, dst *websocket.Conn, fromClient bool) {
 	return func(src, dst *websocket.Conn, fromClient bool) {
 		for {
@@ -277,6 +292,7 @@ func (p *Proxy) wsMakeRelay(ctx context.Context, params wsRelayParams) func(src,
 				params.closeBoth(err)
 				return
 			}
+			params.session.Touch()
 			params.state.mu.Lock()
 			params.state.messageCount++
 			count := params.state.messageCount
@@ -297,6 +313,7 @@ func (p *Proxy) wsMakeRelay(ctx context.Context, params wsRelayParams) func(src,
 				params.closeBoth(err)
 				return
 			}
+			params.session.Touch()
 		}
 	}
 }

@@ -232,7 +232,7 @@ func TestRegisterPlainHTTPDecouplesUpstreamFromInboundContext(t *testing.T) {
 	// pattern), then register the tunnel.
 	upstreamCtx, upstreamCancel := context.WithCancel(context.WithoutCancel(req.Context()))
 	t.Cleanup(upstreamCancel)
-	release, ok := proxy.registerPlainHTTP(upstreamCtx, upstreamCancel, rec, req, "https://api.anthropic.com")
+	_, release, ok := proxy.registerPlainHTTP(upstreamCtx, upstreamCancel, rec, req, "https://api.anthropic.com")
 	if !ok {
 		t.Fatalf("registerPlainHTTP rejected the request: status=%d body=%q", rec.Code, rec.Body.String())
 	}

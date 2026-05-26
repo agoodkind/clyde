@@ -106,7 +106,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		"target", target,
 		"host", host,
 	)
-	bytesUp, bytesDown := spliceConnections(clientConn, upstream)
+	bytesUp, bytesDown := spliceConnections(clientConn, upstream, sess)
 	p.log.Info("mitm.connect.tunnel_closed",
 		"target", target,
 		"host", host,
@@ -119,7 +119,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 // spliceConnections forwards bytes between two connections in both
 // directions until one side closes. Returns the count of bytes that
 // flowed in each direction.
-func spliceConnections(client, upstream net.Conn) (bytesUp, bytesDown int64) {
+//
+// session, when non-nil, has its activity timestamp refreshed after
+// each successful write in either direction so the daemon reload-drain
+// idle-grace fast-path can tell a wedged keepalive tunnel from an
+// actively streaming one. Snapshot-copied sessions or callers that do
+// not register with livetrack may pass nil; the Touch is a no-op.
+func spliceConnections(client, upstream net.Conn, session *livetrack.Session[TunnelMeta]) (bytesUp, bytesDown int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var upN, downN int64
@@ -133,7 +139,7 @@ func spliceConnections(client, upstream net.Conn) (bytesUp, bytesDown int64) {
 			}
 		}()
 		defer wg.Done()
-		n, _ := io.Copy(upstream, client)
+		n, _ := io.Copy(&touchOnWrite{w: upstream, touch: session.Touch}, client)
 		upN = n
 		// Half-close so the upstream's read returns EOF instead of
 		// hanging when the client closes its write side.
@@ -151,7 +157,7 @@ func spliceConnections(client, upstream net.Conn) (bytesUp, bytesDown int64) {
 			}
 		}()
 		defer wg.Done()
-		n, _ := io.Copy(client, upstream)
+		n, _ := io.Copy(&touchOnWrite{w: client, touch: session.Touch}, upstream)
 		downN = n
 		if cw, ok := client.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
@@ -159,6 +165,29 @@ func spliceConnections(client, upstream net.Conn) (bytesUp, bytesDown int64) {
 	}()
 	wg.Wait()
 	return upN, downN
+}
+
+// touchOnWrite wraps an [io.Writer] so a livetrack session activity
+// timestamp refreshes after each successful chunk write. The touch
+// fires only when n > 0 so a zero-byte write does not falsely extend
+// an idle session past the drain grace window. The wrapper exists so
+// spliceConnections can stay inside [io.Copy] without losing the
+// per-chunk activity signal that the idle-grace drain fast-path
+// consumes.
+type touchOnWrite struct {
+	w     io.Writer
+	touch func()
+}
+
+func (t *touchOnWrite) Write(p []byte) (int, error) {
+	n, err := t.w.Write(p)
+	if n > 0 && t.touch != nil {
+		t.touch()
+	}
+	if err != nil {
+		return n, fmt.Errorf("touch-on-write: %w", err)
+	}
+	return n, nil
 }
 
 func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWriter, target string, host string, provider Provider, started time.Time) {
@@ -252,6 +281,12 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			}
 			return
 		}
+		// Reading a fresh request off the parent TLS session counts
+		// as byte movement; refresh the parent's idle timestamp so
+		// the daemon reload-drain idle-grace fast-path does not
+		// evict a session that is actively serving requests through
+		// a long-lived keepalive tunnel.
+		parent.Touch()
 		activeRequests.Add(1)
 		// Register per-request session so the daemon's reload drain
 		// sees in-flight cursor exchanges, not just the parent TLS
@@ -277,13 +312,21 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			p.log.DebugContext(ctx, "mitm.provider.http.request_rejected_reload_drain", "provider", providerID, "host", host, "err", registerErr)
 			return
 		}
-		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider); err != nil {
+		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider, parent); err != nil {
 			activeRequests.Add(-1)
 			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 			if reqSess != nil {
 				p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.failed")
 			}
 			return
+		}
+		// Response body forwarded successfully: refresh both the
+		// parent TLS session and the per-request session so the
+		// idle-grace drain fast-path sees activity on whichever
+		// session a future reload chooses to inspect.
+		parent.Touch()
+		if reqSess != nil {
+			reqSess.Touch()
 		}
 		activeRequests.Add(-1)
 		if reqSess != nil {
@@ -374,7 +417,7 @@ func (p *Proxy) prepareProviderRequestCapture(req *http.Request, params provider
 	return params, nil
 }
 
-func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer *bufio.Writer, req *http.Request, target string, host string, provider Provider) error {
+func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer *bufio.Writer, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
 	started := currentTime()
 	cfg := p.config()
 	capturePolicy := captureFilePolicyFromConfig(cfg)
@@ -406,7 +449,7 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 		if client == nil || reader == nil {
 			return fmt.Errorf("provider websocket requires intercepted TLS connection")
 		}
-		return p.handleProviderInterceptedWebsocket(ctx, client, reader, writer, req, target, host, provider)
+		return p.handleProviderInterceptedWebsocket(ctx, client, reader, writer, req, target, host, provider, parent)
 	}
 
 	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{

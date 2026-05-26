@@ -169,6 +169,17 @@ func (p *Proxy) Serve() error {
 // tunnel goroutines from re-creating a fresh writer on the same path
 // (CLYDE-299). Idempotent: multiple Shutdown calls are safe.
 func (p *Proxy) Shutdown(ctx context.Context) error {
+	return p.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: 0})
+}
+
+// ShutdownWith is the drain-option-aware sibling of [Proxy.Shutdown].
+// The daemon reload chain calls it with [livetrack.DrainOptions.IdleGrace]
+// set so the per-tunnel registry can force-close wedged keepalive
+// sessions at drain start instead of waiting them out against the
+// outer cap. The semantics, idempotency, and capture-writer close
+// behavior are identical to [Proxy.Shutdown]; only the registry
+// drain shape differs.
+func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) error {
 	if p.server == nil {
 		return nil
 	}
@@ -184,7 +195,7 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "err", httpErr)
 	}
 	if p.Tunnels != nil && (httpErr != nil || p.Tunnels.Count() > 0) {
-		result := p.Tunnels.Drain(ctx, "mitm.shutdown")
+		result := p.Tunnels.DrainWith(ctx, "mitm.shutdown", opts)
 		p.log.InfoContext(ctx, "mitm.proxy.tunnels_drained",
 			"final", result.Final.String(),
 			"remaining", result.Remaining,
@@ -307,7 +318,7 @@ func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWri
 // which calls cancel) or by the deferred release at the end of the
 // handler. Genuine client disconnect surfaces via streamWithFlush's
 // failed write, which fires the deferred release naturally.
-func (p *Proxy) registerPlainHTTP(ctx context.Context, cancel context.CancelFunc, w http.ResponseWriter, r *http.Request, upstream string) (func(string), bool) {
+func (p *Proxy) registerPlainHTTP(ctx context.Context, cancel context.CancelFunc, w http.ResponseWriter, r *http.Request, upstream string) (*livetrack.Session[TunnelMeta], func(string), bool) {
 	reqSess, registerErr := p.Tunnels.Register(ctx, "mitm.http", TunnelMeta{
 		ConnectHost:   r.Host,
 		UpstreamAddr:  upstream,
@@ -318,13 +329,13 @@ func (p *Proxy) registerPlainHTTP(ctx context.Context, cancel context.CancelFunc
 		cancel()
 		p.log.WarnContext(ctx, "mitm.http.register_rejected", "path", r.URL.Path, "err", registerErr)
 		http.Error(w, "service draining", http.StatusServiceUnavailable)
-		return nil, false
+		return nil, nil, false
 	}
 	release := func(reason string) {
 		p.Tunnels.Release(ctx, reqSess, reason)
 		cancel()
 	}
-	return release, true
+	return reqSess, release, true
 }
 
 func (p *Proxy) recordPlainHTTPReadFailure(r *http.Request, cfg config.MITMConfig, capturePolicy CaptureFilePolicy, provider, upstreamURL string, started time.Time, err error) {
@@ -390,7 +401,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	// installed in registerPlainHTTP; the deferred release also
 	// cancels at handler return.
 	upstreamCtx, upstreamCancel := context.WithCancel(context.WithoutCancel(r.Context()))
-	releasePlainHTTP, ok := p.registerPlainHTTP(upstreamCtx, upstreamCancel, w, r, upstream)
+	plainHTTPSession, releasePlainHTTP, ok := p.registerPlainHTTP(upstreamCtx, upstreamCancel, w, r, upstream)
 	if !ok {
 		return
 	}
@@ -427,7 +438,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		captureWriter = io.MultiWriter(capture, responseRawWriter)
 	}
 	flusher, _ := w.(http.Flusher)
-	copyErr := streamWithFlush(w, captureWriter, resp.Body, flusher)
+	copyErr := streamWithFlush(w, captureWriter, resp.Body, flusher, plainHTTPSession)
 	if responseRawWriter != nil {
 		responseRawWriter.Close()
 	}
@@ -865,7 +876,14 @@ func (b *limitedBuffer) Bytes() []byte {
 // flush, Go's http.Server buffers up to its internal threshold and
 // stream consumers (claude-cli, Cursor) see batched deltas or hang
 // waiting for the first byte.
-func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher http.Flusher) error {
+//
+// session, when non-nil, has its activity timestamp refreshed after
+// each successful client write so the daemon reload-drain idle-grace
+// fast-path can distinguish actively streaming SSE responses from
+// wedged keepalive sessions. The session is the per-request livetrack
+// handle returned by registerPlainHTTP; callers from outside the
+// plain-HTTP path (tests, refactors) may pass nil.
+func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher http.Flusher, session *livetrack.Session[TunnelMeta]) error {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := src.Read(buf)
@@ -878,6 +896,7 @@ func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher
 			if flusher != nil {
 				flusher.Flush()
 			}
+			session.Touch()
 		}
 		if err == io.EOF {
 			return nil

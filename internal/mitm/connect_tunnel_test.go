@@ -547,7 +547,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	req.Header.Set("content-type", "application/json")
 	var output bytes.Buffer
 	writer := bufio.NewWriter(&output)
-	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, writer, req, cursorHost+":443", cursorHost, testCursorProvider{}); err != nil {
+	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, writer, req, cursorHost+":443", cursorHost, testCursorProvider{}, nil); err != nil {
 		t.Fatalf("handle cursor request: %v", err)
 	}
 
@@ -950,4 +950,111 @@ func reverse(s string) string {
 		b[i], b[j] = b[j], b[i]
 	}
 	return string(b)
+}
+
+// TestSpliceConnectionsTouchesSessionOnWrite drives a pair of
+// net.Pipe connections through spliceConnections, sends bytes in one
+// direction at a time, and asserts the registered livetrack session's
+// IdleSince drops back under 10ms after each successful write. The
+// test exists so a refactor that drops the touchOnWrite wrapper from
+// spliceConnections fails here instead of silently regressing the
+// daemon reload-drain idle-grace behavior.
+func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
+	t.Parallel()
+	registry := livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
+		Component:   "test",
+		Concern:     "test.splice.touch",
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:   5 * time.Millisecond,
+		CloserGrace: 100 * time.Millisecond,
+	})
+	clientLocal, clientRemote := net.Pipe()
+	upstreamLocal, upstreamRemote := net.Pipe()
+	sess, err := registry.Register(context.Background(), "splice.test", TunnelMeta{
+		ConnectHost:   "test.host",
+		UpstreamAddr:  "test.host:443",
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, newTunnelCloser(&connCloser{conn: clientLocal}, &connCloser{conn: upstreamLocal}))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Sleep so initial IdleSince comfortably exceeds 10ms before any
+	// byte flows, giving the post-write assertion something to drop
+	// against.
+	time.Sleep(15 * time.Millisecond)
+	if before := sess.IdleSince(time.Now()); before < 10*time.Millisecond {
+		t.Fatalf("pre-splice idle: got %v, want >= 10ms (test fixture timing)", before)
+	}
+
+	spliceDone := make(chan struct{})
+	go func() {
+		defer close(spliceDone)
+		_, _ = spliceConnections(clientLocal, upstreamLocal, sess)
+	}()
+
+	// Send one byte from client to upstream and drain it on the
+	// remote side. The corresponding spliceConnections goroutine
+	// writes into upstreamLocal via touchOnWrite, which fires
+	// sess.Touch on success.
+	go func() {
+		_, _ = clientRemote.Write([]byte("c"))
+	}()
+	readBuf := make([]byte, 1)
+	if _, err := upstreamRemote.Read(readBuf); err != nil {
+		t.Fatalf("upstream read after client write: %v", err)
+	}
+	// Allow the io.Copy goroutine in spliceConnections to return
+	// from its write call so Touch has fired.
+	deadlineCh := time.After(500 * time.Millisecond)
+	for {
+		if sess.IdleSince(time.Now()) < 10*time.Millisecond {
+			break
+		}
+		select {
+		case <-deadlineCh:
+			t.Fatalf("client->upstream touch never observed: idle=%v", sess.IdleSince(time.Now()))
+		default:
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Now drive a byte the other direction and confirm Touch fires
+	// from the downstream goroutine too.
+	preDown := sess.IdleSince(time.Now())
+	time.Sleep(15 * time.Millisecond)
+	if mid := sess.IdleSince(time.Now()); mid <= preDown {
+		t.Fatalf("idle should grow during silence: pre=%v mid=%v", preDown, mid)
+	}
+	go func() {
+		_, _ = upstreamRemote.Write([]byte("u"))
+	}()
+	if _, err := clientRemote.Read(readBuf); err != nil {
+		t.Fatalf("client read after upstream write: %v", err)
+	}
+	deadlineCh = time.After(500 * time.Millisecond)
+	for {
+		if sess.IdleSince(time.Now()) < 10*time.Millisecond {
+			break
+		}
+		select {
+		case <-deadlineCh:
+			t.Fatalf("upstream->client touch never observed: idle=%v", sess.IdleSince(time.Now()))
+		default:
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Close both ends so spliceConnections returns. clientRemote
+	// and upstreamRemote close together; the spliceConnections
+	// goroutines exit when both io.Copy calls return.
+	_ = clientRemote.Close()
+	_ = upstreamRemote.Close()
+	_ = clientLocal.Close()
+	_ = upstreamLocal.Close()
+	select {
+	case <-spliceDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("spliceConnections did not return after closing pipes")
+	}
 }

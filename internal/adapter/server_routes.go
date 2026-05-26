@@ -87,9 +87,19 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 // sessions are also drained through their livetrack registry so the
 // reload deadline applies to egress traffic as well as ingress.
 func (s *Server) Shutdown(ctx context.Context) error {
+	return s.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: 0})
+}
+
+// ShutdownWith is the drain-option-aware sibling of [Server.Shutdown].
+// The daemon reload chain calls it with [livetrack.DrainOptions.IdleGrace]
+// set so the ingress and egress registries can force-close wedged
+// sessions at drain start instead of waiting them out against the
+// outer cap. Semantics and error handling are otherwise identical to
+// [Server.Shutdown].
+func (s *Server) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) error {
 	if s.httpSrv == nil {
 		if s.egressRegistry != nil {
-			egressResult := s.egressRegistry.Drain(ctx, "adapter.shutdown")
+			egressResult := s.egressRegistry.DrainWith(ctx, "adapter.shutdown", opts)
 			s.log.InfoContext(ctx, "adapter.egress.drained",
 				"final", egressResult.Final.String(),
 				"remaining", egressResult.Remaining,
@@ -104,7 +114,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	s.httpSrv.SetKeepAlivesEnabled(false)
 	if s.requests != nil {
-		result := s.requests.Drain(ctx, "adapter.shutdown")
+		result := s.requests.DrainWith(ctx, "adapter.shutdown", opts)
 		if len(result.Errors) > 0 {
 			s.log.WarnContext(ctx, "adapter.ingress.drain_errors",
 				"subcomponent", "adapter",
@@ -115,7 +125,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	err := s.httpSrv.Shutdown(ctx)
 	if s.egressRegistry != nil {
-		egressResult := s.egressRegistry.Drain(ctx, "adapter.shutdown")
+		egressResult := s.egressRegistry.DrainWith(ctx, "adapter.shutdown", opts)
 		s.log.InfoContext(ctx, "adapter.egress.drained",
 			"final", egressResult.Final.String(),
 			"remaining", egressResult.Remaining,
