@@ -28,7 +28,7 @@ require (
 	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
 	golang.org/x/tools v0.44.0
-	goodkind.io/gklog v0.2.1
+	goodkind.io/gklog v0.3.1
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1

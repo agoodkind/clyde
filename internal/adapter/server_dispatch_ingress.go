@@ -7,8 +7,8 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog/correlation"
 )
 
 // This file holds every dispatch-time logging helper that consumes a

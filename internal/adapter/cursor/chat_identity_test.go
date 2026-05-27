@@ -4,7 +4,8 @@ import (
 	"testing"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestChatIdentityResolverSplitsForkedLineage(t *testing.T) {
@@ -100,7 +101,7 @@ func TestChatIdentityResolverKeepsNativeKey(t *testing.T) {
 			{Role: "user", Content: mustMarshalString(t, "same root")},
 		},
 	}
-	corr := correlation.New("").WithChatIdentity("native-conv", "native", "native-conv", "")
+	corr := clydeingress.WithChatIdentity(correlation.New(""), "native-conv", "native", "native-conv", "")
 	identity := resolver.Resolve(corr, TranslateRequest(req), req)
 
 	if identity.ChatKey != "native-conv" {

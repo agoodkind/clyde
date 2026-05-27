@@ -7,7 +7,8 @@ import (
 	"strings"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 // This file contains only renderer diagnostics: structured event logs,
@@ -31,7 +32,7 @@ func (r *EventRenderer) SetUpstreamResponseID(ctx context.Context, responseID st
 		return
 	}
 	r.upstreamResponseID = responseID
-	corr := correlation.FromContext(ctx).WithUpstreamResponseID(responseID)
+	corr := clydeingress.WithUpstreamResponseID(correlation.FromContext(ctx), responseID)
 	r.ctx = correlation.WithContext(ctx, corr)
 }
 
@@ -70,7 +71,7 @@ func (r *EventRenderer) LogAssistantTextSummary(ctx context.Context, finishReaso
 	}
 	corr := correlation.FromContext(ctx)
 	if r.upstreamResponseID != "" {
-		corr = corr.WithUpstreamResponseID(r.upstreamResponseID)
+		corr = clydeingress.WithUpstreamResponseID(corr, r.upstreamResponseID)
 	}
 	attrs = correlation.AppendAttrs(attrs, corr)
 	if usage != nil {

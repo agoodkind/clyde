@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/logevent"
 )
 
@@ -20,18 +20,18 @@ import (
 // provider-agnostic; provider-specific identity headers are folded
 // into the typed [logevent.Facet] returned alongside.
 func mitmRequestIdentity(headers http.Header, contrib IdentityContribution) logevent.Identity {
-	corr := correlation.FromHTTPHeader(headers, headers.Get(correlation.HeaderRequestID))
+	corr := clydeingress.FromHTTPHeader(headers, headers.Get(clydeingress.HeaderRequestID))
 	var identity logevent.Identity
 	identity.TraceID = string(corr.TraceID)
 	identity.SpanID = string(corr.SpanID)
 	identity.ParentSpanID = string(corr.ParentSpanID)
 	identity.RequestID = firstNonEmptyString(corr.RequestID, contrib.PreferredRequestID)
-	identity.UpstreamRequestID = firstNonEmptyString(corr.UpstreamRequestID, contrib.PreferredUpstreamRequestID)
-	identity.UpstreamResponseID = corr.UpstreamResponseID
-	identity.ChatKey = corr.ChatKey
-	identity.ChatKeySource = corr.ChatKeySource
-	identity.ChatRootKey = corr.ChatRootKey
-	identity.ChatBranchKey = corr.ChatBranchKey
+	identity.UpstreamRequestID = firstNonEmptyString(clydeingress.UpstreamRequestID(corr), contrib.PreferredUpstreamRequestID)
+	identity.UpstreamResponseID = clydeingress.UpstreamResponseID(corr)
+	identity.ChatKey = clydeingress.ChatKey(corr)
+	identity.ChatKeySource = clydeingress.ChatKeySource(corr)
+	identity.ChatRootKey = clydeingress.ChatRootKey(corr)
+	identity.ChatBranchKey = clydeingress.ChatBranchKey(corr)
 	identity.SessionID = contrib.SessionID
 	return identity
 }

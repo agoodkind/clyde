@@ -3,7 +3,7 @@ package resolver
 import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 // ContextBudget describes the advertised token budget for a resolved

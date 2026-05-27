@@ -12,8 +12,8 @@ import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/correlation"
 )
 
 func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
@@ -84,17 +84,17 @@ func TestAdapterErrorBoundaryLogsCorrelationFields(t *testing.T) {
 		panic("correlated boundary probe")
 	})
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set(correlation.HeaderRequestID, "req-boundary-1")
-	req.Header.Set(correlation.HeaderTraceID, "11111111111111111111111111111111")
-	req.Header.Set(correlation.HeaderSpanID, "2222222222222222")
+	req.Header.Set(clydeingress.HeaderRequestID, "req-boundary-1")
+	req.Header.Set(clydeingress.HeaderTraceID, "11111111111111111111111111111111")
+	req.Header.Set(clydeingress.HeaderSpanID, "2222222222222222")
 	req.Header.Set(adaptercursor.HeaderRequestID, "cursor-req-1")
 	req.Header.Set(adaptercursor.HeaderConversationID, "cursor-conv-1")
 	req.Header.Set("User-Agent", "Cursor/boundary-fields")
 	resp := httptest.NewRecorder()
 	handler(resp, req)
 
-	if resp.Header().Get(correlation.HeaderRequestID) != "req-boundary-1" {
-		t.Fatalf("response request id header=%q", resp.Header().Get(correlation.HeaderRequestID))
+	if resp.Header().Get(clydeingress.HeaderRequestID) != "req-boundary-1" {
+		t.Fatalf("response request id header=%q", resp.Header().Get(clydeingress.HeaderRequestID))
 	}
 	evt := findLogEvent(t, buf, "adapter.request.panic")
 	if evt == nil {

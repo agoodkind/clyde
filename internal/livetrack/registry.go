@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 // State enumerates the registry lifecycle states. Open is the

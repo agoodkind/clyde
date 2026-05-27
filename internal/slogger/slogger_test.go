@@ -11,9 +11,10 @@ import (
 	"sync"
 	"testing"
 
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestDefaultProcessPathUsesConfigStateResolver(t *testing.T) {
@@ -174,16 +175,16 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	t.Cleanup(func() { _ = closer.Close() })
 
 	corr := correlation.Context{
-		TraceID:            "0123456789abcdef0123456789abcdef",
-		SpanID:             "0123456789abcdef",
-		ParentSpanID:       "fedcba9876543210",
-		RequestID:          "req-ctx",
-		UpstreamRequestID:  "upstream-req",
-		UpstreamResponseID: "upstream-resp",
+		TraceID:      "0123456789abcdef0123456789abcdef",
+		SpanID:       "0123456789abcdef",
+		ParentSpanID: "fedcba9876543210",
+		RequestID:    "req-ctx",
 		IdentityAttributes: []correlation.IdentityAttribute{
 			{Key: "cursor_generation_id", Value: "cursor-gen"},
 		},
 	}
+	corr = clydeingress.WithUpstreamRequestID(corr, "upstream-req")
+	corr = clydeingress.WithUpstreamResponseID(corr, "upstream-resp")
 	ctx := correlation.WithContext(context.Background(), corr)
 	For(ConcernDaemonRPCRequests).InfoContext(ctx,
 		"daemon.rpc.started",
@@ -211,11 +212,11 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	if event.CursorGenerationID != "cursor-gen" {
 		t.Fatalf("cursor_generation_id = %q, want cursor-gen", event.CursorGenerationID)
 	}
-	if event.UpstreamRequestID != corr.UpstreamRequestID {
-		t.Fatalf("upstream_request_id = %q, want %q", event.UpstreamRequestID, corr.UpstreamRequestID)
+	if event.UpstreamRequestID != "upstream-req" {
+		t.Fatalf("upstream_request_id = %q, want upstream-req", event.UpstreamRequestID)
 	}
-	if event.UpstreamResponseID != corr.UpstreamResponseID {
-		t.Fatalf("upstream_response_id = %q, want %q", event.UpstreamResponseID, corr.UpstreamResponseID)
+	if event.UpstreamResponseID != "upstream-resp" {
+		t.Fatalf("upstream_response_id = %q, want upstream-resp", event.UpstreamResponseID)
 	}
 }
 

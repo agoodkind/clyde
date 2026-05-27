@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 // emitSessionEvent logs one register/release event with the canonical

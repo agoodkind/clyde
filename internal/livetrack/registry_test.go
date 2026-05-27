@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 // testMeta is the marker-bearing metadata struct used throughout the

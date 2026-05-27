@@ -8,9 +8,10 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog/correlation"
 )
 
 // adapterHandler is the canonical handler signature for adapter HTTP routes.
@@ -48,20 +49,20 @@ type handlerCtx struct {
 // The returned [http.HandlerFunc] is what gets registered on the mux.
 func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		reqID := strings.TrimSpace(r.Header.Get(correlation.HeaderRequestID))
+		reqID := strings.TrimSpace(r.Header.Get(clydeingress.HeaderRequestID))
 		if reqID == "" {
 			reqID = newRequestID()
 		}
-		corr := correlation.FromHTTPHeader(r.Header, reqID)
+		corr := clydeingress.FromHTTPHeader(r.Header, reqID)
 		if ingress, ok := activeIngressContract(); ok && ingress != nil {
 			ingressCtx := ingress.TranslateHeaders(r.Header)
-			if ingressCtx.ConversationID != "" && corr.ChatKey == "" {
-				corr = corr.WithChatIdentity(ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
+			if ingressCtx.ConversationID != "" && clydeingress.ChatKey(corr) == "" {
+				corr = clydeingress.WithChatIdentity(corr, ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
 			}
 			corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
 		}
-		corr.SetHTTPHeaders(r.Header)
-		corr.SetHTTPHeaders(w.Header())
+		clydeingress.SetHTTPHeaders(corr, r.Header)
+		clydeingress.SetHTTPHeaders(corr, w.Header())
 		ctx, ingressCancel := context.WithCancel(correlation.WithContext(r.Context(), corr))
 		defer ingressCancel()
 		ctx = context.WithValue(ctx, ingressCancelKey{}, ingressCancel)

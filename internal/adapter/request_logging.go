@@ -6,8 +6,9 @@ import (
 	"net/http"
 
 	"goodkind.io/clyde/internal/adapter/backendfacet"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/gklog/correlation"
 )
 
 // logEventIdentityFromCorrelation builds the generic typed
@@ -20,12 +21,12 @@ func logEventIdentityFromCorrelation(corr correlation.Context) logevent.Identity
 		SpanID:             string(corr.SpanID),
 		ParentSpanID:       string(corr.ParentSpanID),
 		RequestID:          corr.RequestID,
-		UpstreamRequestID:  corr.UpstreamRequestID,
-		UpstreamResponseID: corr.UpstreamResponseID,
-		ChatKey:            corr.ChatKey,
-		ChatKeySource:      corr.ChatKeySource,
-		ChatRootKey:        corr.ChatRootKey,
-		ChatBranchKey:      corr.ChatBranchKey,
+		UpstreamRequestID:  clydeingress.UpstreamRequestID(corr),
+		UpstreamResponseID: clydeingress.UpstreamResponseID(corr),
+		ChatKey:            clydeingress.ChatKey(corr),
+		ChatKeySource:      clydeingress.ChatKeySource(corr),
+		ChatRootKey:        clydeingress.ChatRootKey(corr),
+		ChatBranchKey:      clydeingress.ChatBranchKey(corr),
 		SessionID:          "",
 	}
 }

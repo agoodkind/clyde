@@ -34,7 +34,6 @@ import (
 	compactengine "goodkind.io/clyde/internal/compact"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/contextusage"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/oauthrotation"
@@ -48,6 +47,7 @@ import (
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/slogger"
 	itranscript "goodkind.io/clyde/internal/transcript"
+	"goodkind.io/gklog/correlation"
 )
 
 // Server implements the Clyde gRPC service.

@@ -11,7 +11,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 type DirectConfig struct {

@@ -14,8 +14,9 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/gklog/correlation"
 )
 
 // codexEgressContext builds a derived context for a Codex provider
@@ -150,7 +151,7 @@ func (s *Server) dispatchCodexProviderStream(
 		s.handleCodexProviderStreamError(ctx, w, r, writer, runErr, model, reqID, started)
 		return
 	}
-	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
+	corr := clydeingress.WithUpstreamResponseID(correlation.FromContext(ctx), result.UpstreamResponseID)
 	ctx = correlation.WithContext(ctx, corr)
 	usage := result.Usage
 	finishReason := normalizedProviderFinishReason(result)
@@ -256,7 +257,7 @@ func (s *Server) dispatchCodexProviderCollect(
 		s.respondAdapterError(w, r, aerr)
 		return
 	}
-	corr := correlation.FromContext(ctx).WithUpstreamResponseID(result.UpstreamResponseID)
+	corr := clydeingress.WithUpstreamResponseID(correlation.FromContext(ctx), result.UpstreamResponseID)
 	ctx = correlation.WithContext(ctx, corr)
 	finishReason := normalizedProviderFinishReason(result)
 	var notices []adapterruntime.UsageNotice

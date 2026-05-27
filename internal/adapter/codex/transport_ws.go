@@ -15,7 +15,8 @@ import (
 	"github.com/gorilla/websocket"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 type ResponseCreateClientMetadata map[string]string
@@ -374,7 +375,7 @@ func writeAndParseWebsocketRequest(
 		})
 	}
 	if strings.TrimSpace(result.ResponseID) != "" {
-		corr := cfg.Correlation.WithUpstreamResponseID(result.ResponseID)
+		corr := clydeingress.WithUpstreamResponseID(cfg.Correlation, result.ResponseID)
 		attrs := []slog.Attr{
 			slog.String("component", "adapter"),
 			slog.String("subcomponent", "codex"),
@@ -617,7 +618,7 @@ func logCodexRetryDecision(ctx context.Context, cfg WebsocketTransportConfig, de
 	adapterretry.LogDecision(ctx, cfg.Log, decision, attempt, maxAttempts, adapterretry.AttemptLogContext{
 		RequestID: cfg.RequestID,
 		TraceID:   string(cfg.Correlation.TraceID),
-		ChatKey:   cfg.Correlation.ChatKey,
+		ChatKey:   clydeingress.ChatKey(cfg.Correlation),
 		Operation: codexWebsocketRetryOperation,
 	}, finalOutcome)
 }

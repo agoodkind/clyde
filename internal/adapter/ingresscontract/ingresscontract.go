@@ -24,8 +24,8 @@ import (
 	"net/http"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/gklog/correlation"
 )
 
 // ChatRequestPrimitive is the typed wire-shape primitive an ingress

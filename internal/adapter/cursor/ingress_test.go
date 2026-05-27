@@ -7,7 +7,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 func newTestIngress() *Ingress {

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/gklog"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestDaemonDetachedCorrelationContextCreatesChildSpan(t *testing.T) {
@@ -16,12 +16,7 @@ func TestDaemonDetachedCorrelationContextCreatesChildSpan(t *testing.T) {
 		SpanID:             correlation.SpanID("2222222222222222"),
 		ParentSpanID:       "",
 		RequestID:          "request-1",
-		UpstreamRequestID:  "",
-		UpstreamResponseID: "",
-		ChatKey:            "",
-		ChatKeySource:      "",
-		ChatRootKey:        "",
-		ChatBranchKey:      "",
+		IdentityAttributes: nil,
 	}
 	parent := correlation.WithContext(context.Background(), parentCorr)
 
@@ -47,16 +42,10 @@ func TestLogDaemonRPCCompletedIncludesCorrelationAttrs(t *testing.T) {
 	handler := &daemonTestLogHandler{records: &records}
 	log := slog.New(handler)
 	corr := correlation.Context{
-		TraceID:            correlation.TraceID("33333333333333333333333333333333"),
-		SpanID:             correlation.SpanID("4444444444444444"),
-		ParentSpanID:       correlation.SpanID("5555555555555555"),
-		RequestID:          "request-2",
-		UpstreamRequestID:  "",
-		UpstreamResponseID: "",
-		ChatKey:            "",
-		ChatKeySource:      "",
-		ChatRootKey:        "",
-		ChatBranchKey:      "",
+		TraceID:      correlation.TraceID("33333333333333333333333333333333"),
+		SpanID:       correlation.SpanID("4444444444444444"),
+		ParentSpanID: correlation.SpanID("5555555555555555"),
+		RequestID:    "request-2",
 		IdentityAttributes: []correlation.IdentityAttribute{
 			{Key: "cursor_request_id", Value: "cursor-1"},
 		},
@@ -82,12 +71,7 @@ func TestDaemonDiscoveryScanContextCreatesChildSpan(t *testing.T) {
 		SpanID:             correlation.SpanID("7777777777777777"),
 		ParentSpanID:       "",
 		RequestID:          "request-3",
-		UpstreamRequestID:  "",
-		UpstreamResponseID: "",
-		ChatKey:            "",
-		ChatKeySource:      "",
-		ChatRootKey:        "",
-		ChatBranchKey:      "",
+		IdentityAttributes: nil,
 	}
 
 	ctx := daemonDiscoveryScanContext(discoveryScanSignal{
