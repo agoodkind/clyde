@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	claudediscovery "goodkind.io/clyde/internal/providers/claude/discovery"
@@ -36,10 +37,10 @@ func (l *Lifecycle) GetSessionName(_ context.Context, sess *session.Session) (st
 	if sess == nil {
 		return "", fmt.Errorf("nil session")
 	}
-	transcriptPath := strings.TrimSpace(sess.Metadata.ProviderTranscriptPath())
-	if transcriptPath == "" {
+	if strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return "", nil
 	}
+	transcriptPath := session.EffectiveTranscriptPath(sess)
 	discovered, ok := claudediscovery.ReadTranscriptHeader(transcriptPath)
 	if !ok {
 		return "", nil
@@ -128,8 +129,8 @@ func readClaudeTitleWindow(file *os.File, start, end int64) ([]byte, error) {
 
 func latestClaudeTitleField(window []byte, field claudeTitleField) string {
 	lines := strings.Split(string(window), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
+	for _, raw := range slices.Backward(lines) {
+		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}
@@ -171,10 +172,10 @@ func (l *Lifecycle) RenameSession(ctx context.Context, sess *session.Session, ne
 	if sess == nil {
 		return fmt.Errorf("nil session")
 	}
-	transcriptPath := strings.TrimSpace(sess.Metadata.ProviderTranscriptPath())
-	if transcriptPath == "" {
+	if strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return fmt.Errorf("missing transcript path")
 	}
+	transcriptPath := session.EffectiveTranscriptPath(sess)
 	sessionID := strings.TrimSpace(sess.Metadata.ProviderSessionID())
 	if sessionID == "" {
 		return fmt.Errorf("missing provider session id")

@@ -26,7 +26,8 @@ func ResolveModelForCounting(store session.Store, sess *session.Session, fallbac
 		fallback = DefaultCountModel
 	}
 	if sess != nil && sess.Metadata.ProviderTranscriptPath() != "" {
-		rawModel, displayModel := extractRawModelAndFamily(sess.Metadata.ProviderTranscriptPath())
+		transcriptPath := session.EffectiveTranscriptPath(sess)
+		rawModel, displayModel := extractRawModelAndFamily(transcriptPath)
 		rawModel = strings.TrimSpace(rawModel)
 		if rawModel != "" {
 			compactLog.Logger().Debug("compact.runtime.model_resolved",
@@ -65,19 +66,20 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	if req.Session == nil {
 		return RuntimeUpfront{}, 0, nil, fmt.Errorf("nil session")
 	}
-	slice, err := LoadSlice(req.Session.Metadata.ProviderTranscriptPath())
+	transcriptPath := session.EffectiveTranscriptPath(req.Session)
+	slice, err := LoadSlice(transcriptPath)
 	if err != nil {
 		compactLog.Logger().Error("compact.runtime.upfront.load_slice_failed",
 			"component", "compact",
 			"subcomponent", "runtime",
 			"session", req.Session.Name,
 			"session_id", req.Session.Metadata.ProviderSessionID(),
-			"transcript", req.Session.Metadata.ProviderTranscriptPath(),
+			"transcript", transcriptPath,
 			"err", err.Error(),
 		)
 		return RuntimeUpfront{}, 0, nil, err
 	}
-	upfront := newRuntimeUpfront(req, slice, modelForRender)
+	upfront := newRuntimeUpfront(req, slice, modelForRender, transcriptPath)
 	usage, usageErr := probeSessionSnapshot(ctx, req.Session, modelForRender, req.Refresh)
 	if usageErr != nil && req.TargetTokens > 0 {
 		slog.ErrorContext(ctx, "compact.runtime.upfront.probe_required",
@@ -127,9 +129,8 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 	return upfront, staticOverhead, slice, nil
 }
 
-func newRuntimeUpfront(req RuntimeRequest, slice *Slice, modelForRender string) RuntimeUpfront {
+func newRuntimeUpfront(req RuntimeRequest, slice *Slice, modelForRender, transcriptPath string) RuntimeUpfront {
 	thinking, images, toolPairs, chatTurns := categoryCounts(slice)
-	transcriptPath := req.Session.Metadata.ProviderTranscriptPath()
 	var fileSize int64
 	if stat, statErr := os.Stat(transcriptPath); statErr == nil {
 		fileSize = stat.Size()
@@ -355,7 +356,7 @@ func newRuntimeResult(
 		Slice:          slice,
 		Plan:           planRes,
 		Apply:          nil,
-		TranscriptPath: req.Session.Metadata.ProviderTranscriptPath(),
+		TranscriptPath: session.EffectiveTranscriptPath(req.Session),
 	}
 }
 

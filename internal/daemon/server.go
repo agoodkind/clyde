@@ -1927,8 +1927,8 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	caps := sess.SessionProviderCapabilities()
 	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
-	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
-		if m := inspectExtractModel(sess.Metadata.ProviderTranscriptPath()); m != "" {
+	if p := session.EffectiveTranscriptPath(sess); caps.TranscriptExport && p != "" {
+		if m := inspectExtractModel(p); m != "" {
 			model = m
 		}
 	}
@@ -1941,7 +1941,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 	}
 	size := int64(0)
 	lastActivity := sess.Metadata.LastAccessed
-	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
+	if p := session.EffectiveTranscriptPath(sess); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {
 			size = info.Size()
 			if info.ModTime().After(lastActivity) {
@@ -1970,7 +1970,7 @@ func (s *Server) sessionSummary(ctx context.Context, store *session.FileStore, s
 		MetadataName:          sess.Metadata.Name,
 		ClydeUuid:             sess.ClydeUUID(),
 		SessionId:             sess.Metadata.ProviderSessionID(),
-		TranscriptPath:        sess.Metadata.ProviderTranscriptPath(),
+		TranscriptPath:        session.EffectiveTranscriptPath(sess),
 		WorkDir:               sess.Metadata.WorkDir,
 		CreatedNanos:          sess.Metadata.Created.UnixNano(),
 		LastAccessedNanos:     sess.Metadata.LastAccessed.UnixNano(),
@@ -2010,7 +2010,7 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 	settings, _ := sessionsettings.Load(store, sess)
 	model := "-"
 	if caps.TranscriptExport && sess.Metadata.ProviderTranscriptPath() != "" {
-		if m := inspectExtractModel(sess.Metadata.ProviderTranscriptPath()); m != "" {
+		if m := inspectExtractModel(session.EffectiveTranscriptPath(sess)); m != "" {
 			model = m
 		}
 	}
@@ -2042,24 +2042,24 @@ func (s *Server) sessionDetail(ctx context.Context, store *session.FileStore, se
 		ContextUsageStatus:    contextState.Status,
 		ResumeInstructions:    session.ResumeInstructions(sess),
 	}
-	if p := sess.Metadata.ProviderTranscriptPath(); caps.TranscriptExport && p != "" {
+	if p := session.EffectiveTranscriptPath(sess); caps.TranscriptExport && p != "" {
 		if info, err := os.Stat(p); err == nil {
 			resp.TranscriptSizeBytes = info.Size()
 			resp.LastActivityNanos = info.ModTime().UnixNano()
 		}
 	}
 	if caps.TranscriptExport {
-		for _, m := range inspectRecentMessages(sess.Metadata.ProviderTranscriptPath(), 5, 150) {
+		for _, m := range inspectRecentMessages(session.EffectiveTranscriptPath(sess), 5, 150) {
 			text := strings.TrimSpace(m.Text)
 			if text == "" || strings.HasPrefix(text, "<") || len(text) < 5 {
 				continue
 			}
 			resp.RecentMessages = append(resp.RecentMessages, detailMessageProto(m.Role, text, m.Timestamp))
 		}
-		for _, m := range inspectAllMessages(sess.Metadata.ProviderTranscriptPath(), 1000) {
+		for _, m := range inspectAllMessages(session.EffectiveTranscriptPath(sess), 1000) {
 			resp.AllMessages = append(resp.AllMessages, detailMessageProto(m.Role, m.Text, m.Timestamp))
 		}
-		for _, t := range inspectToolUseStats(sess.Metadata.ProviderTranscriptPath(), 8) {
+		for _, t := range inspectToolUseStats(session.EffectiveTranscriptPath(sess), 8) {
 			resp.Tools = append(resp.Tools, &clydev1.ToolUse{Name: t.Name, Count: compactInt32(t.Count)})
 		}
 	}

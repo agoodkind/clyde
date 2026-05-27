@@ -109,6 +109,7 @@ func extractFromSession(ctx context.Context, sess *session.Session) (candidateSo
 	if sess.ProviderID() == session.ProviderCodex {
 		return extractFromCodexTranscript(ctx, path)
 	}
+	path = session.EffectiveTranscriptPath(sess)
 	return extractFromClaudeTranscript(ctx, path)
 }
 

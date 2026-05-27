@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 
 	"goodkind.io/clyde/internal/notify"
@@ -134,7 +135,20 @@ func handleCompact(
 	}
 
 	sess.AddPreviousSessionID(hookData.SessionID)
-	sess.Metadata.SetProviderTranscriptPath(hookData.TranscriptPath)
+	canonicalPath := canonicalTranscriptPath(realHomeDir(), hookData.TranscriptPath, sess.Metadata.WorkspaceRoot, hookData.SessionID)
+	if canonicalPath != "" {
+		sess.Metadata.SetProviderTranscriptPath(canonicalPath)
+	}
+	if canonicalPath != "" && canonicalPath != hookData.TranscriptPath {
+		log.InfoContext(ctx, "hook.sessionstart.transcript_canonicalized",
+			"component", "hook",
+			"subject", "sessionstart",
+			"reason", "compact",
+			"session", sessionName,
+			"reported", hookData.TranscriptPath,
+			"canonical", canonicalPath,
+		)
+	}
 	sess.UpdateLastAccessed()
 
 	if err := store.Update(sess); err != nil {
@@ -193,7 +207,20 @@ func saveTranscriptPath(store session.Store, sessionName, transcriptPath string)
 		return fmt.Errorf("session '%s' not found: %w", sessionName, err)
 	}
 
-	sess.Metadata.SetProviderTranscriptPath(transcriptPath)
+	canonicalPath := canonicalTranscriptPath(realHomeDir(), transcriptPath, sess.Metadata.WorkspaceRoot, sess.Metadata.ProviderSessionID())
+	if canonicalPath == "" {
+		return nil
+	}
+	if canonicalPath != transcriptPath {
+		hookLog.Info("hook.sessionstart.transcript_canonicalized",
+			"component", "hook",
+			"subject", "sessionstart",
+			"session", sessionName,
+			"reported", transcriptPath,
+			"canonical", canonicalPath,
+		)
+	}
+	sess.Metadata.SetProviderTranscriptPath(canonicalPath)
 	sess.UpdateLastAccessed()
 
 	if err := store.Update(sess); err != nil {
@@ -201,13 +228,30 @@ func saveTranscriptPath(store session.Store, sessionName, transcriptPath string)
 			"component", "hook",
 			"subject", "sessionstart",
 			"session", sessionName,
-			"transcript", transcriptPath,
+			"transcript", canonicalPath,
 			"err", err,
 		)
 		return fmt.Errorf("failed to update session metadata: %w", err)
 	}
 
 	return nil
+}
+
+// realHomeDir returns the user's real home directory for canonicalizing
+// transcript paths. The hook process inherits CLAUDE_CONFIG_DIR from claude
+// but $HOME stays the operator's home, so [os.UserHomeDir] returns the right
+// value here.
+func realHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		hookLog.Warn("hook.sessionstart.home_dir_failed",
+			"component", "hook",
+			"subject", "sessionstart",
+			"err", err,
+		)
+		return ""
+	}
+	return home
 }
 
 func outputContexts(log *slog.Logger, store session.Store, sessionName string, out io.Writer) {

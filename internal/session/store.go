@@ -115,6 +115,13 @@ func NewGlobalFileStore() (*FileStore, error) {
 	fs := &FileStore{clydeRoot: config.GlobalDataDir()}
 	if home, err := os.UserHomeDir(); err == nil {
 		fs.discoveryCache = defaultDiscoveryCache(home)
+		if _, err := MigrateTranscriptPath(config.GlobalDataDir(), home); err != nil {
+			sessionLog.Warn("session.store.transcript_path_migration_failed",
+				"component", "session",
+				"subcomponent", "store",
+				"err", err,
+			)
+		}
 	} else {
 		sessionLog.Warn("session.store.home_dir_failed",
 			"component", "session",
@@ -140,6 +147,16 @@ func NewGlobalFileStoreReadOnly() (*FileStore, error) {
 	}
 	if _, err := MigrateTitleMetadata(config.GlobalDataDir()); err != nil {
 		return nil, err
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if _, err := MigrateTranscriptPath(config.GlobalDataDir(), home); err != nil {
+			sessionLog.Warn("session.store.transcript_path_migration_failed",
+				"component", "session",
+				"subcomponent", "store",
+				"readonly", true,
+				"err", err,
+			)
+		}
 	}
 	return &FileStore{clydeRoot: config.GlobalDataDir(), noAdopt: true}, nil
 }

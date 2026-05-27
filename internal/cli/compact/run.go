@@ -60,7 +60,7 @@ func resolveModelLikeTUI(
 	fallback string,
 ) (countModel string, displayModel string, source string) {
 	if sess != nil && sess.Metadata.ProviderTranscriptPath() != "" {
-		rawModel, _ := claudelifecycle.ExtractRawModelAndLastTime(sess.Metadata.ProviderTranscriptPath())
+		rawModel, _ := claudelifecycle.ExtractRawModelAndLastTime(session.EffectiveTranscriptPath(sess))
 		rawModel = strings.TrimSpace(rawModel)
 		if rawModel != "" {
 			return rawModel, claudelifecycle.FormatModelFamily(rawModel), "transcript"
@@ -191,11 +191,11 @@ func resolveCompactSession(store session.Store, name string) (*session.Session, 
 }
 
 func validateCompactTranscript(name string, sess *session.Session) (string, error) {
-	path := sess.Metadata.ProviderTranscriptPath()
-	if path == "" {
+	if sess.Metadata.ProviderTranscriptPath() == "" {
 		cliCompactLog.Logger().Warn("cli.compact.no_transcript_path", "session", name, "session_id", sess.Metadata.ProviderSessionID())
 		return "", fmt.Errorf("session %q has no transcript path", name)
 	}
+	path := session.EffectiveTranscriptPath(sess)
 	if _, err := os.Stat(path); err != nil {
 		cliCompactLog.Logger().Error("cli.compact.transcript_stat_failed", "session", name, "transcript", path, "err", err)
 		return "", fmt.Errorf("transcript not found: %s", path)

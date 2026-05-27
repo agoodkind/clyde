@@ -664,7 +664,7 @@ func loadMessages(name string) ([]transcript.Message, error) {
 			paths = append(paths, claudeTranscriptPath(homeDir, clydeRoot, prevID))
 		}
 	}
-	current := sess.Metadata.ProviderTranscriptPath()
+	current := session.EffectiveTranscriptPath(sess)
 	if current == "" && sess.Metadata.ProviderSessionID() != "" {
 		current = claudeTranscriptPath(homeDir, clydeRoot, sess.Metadata.ProviderSessionID())
 	}

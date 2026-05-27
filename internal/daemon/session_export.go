@@ -133,7 +133,7 @@ func loadSessionExportMessages(sess *session.Session, includeSystemPrompts bool,
 	if sess.ProviderID() == session.ProviderCodex {
 		return loadCodexExportMessages(path)
 	}
-	return loadExportMessagesFromPath(path, includeSystemPrompts, includeToolOutputs)
+	return loadExportMessagesFromPath(session.EffectiveTranscriptPath(sess), includeSystemPrompts, includeToolOutputs)
 }
 
 func loadCodexExportMessages(path string) ([]transcript.Message, error) {

@@ -255,7 +255,7 @@ func inspectStatsForSession(sess *session.Session) inspectStats {
 	if sess.ProviderID() == session.ProviderCodex {
 		return inspectCodexStats(sess.Metadata.ProviderTranscriptPath())
 	}
-	return inspectStatsFor(sess.Metadata.ProviderTranscriptPath())
+	return inspectStatsFor(session.EffectiveTranscriptPath(sess))
 }
 
 func inspectExportStatsFor(transcriptPath string) inspectExportStats {
@@ -351,7 +351,7 @@ func inspectExportStatsForSession(sess *session.Session) inspectExportStats {
 	if sess.ProviderID() == session.ProviderCodex {
 		return inspectCodexExportStats(sess.Metadata.ProviderTranscriptPath())
 	}
-	return inspectExportStatsFor(sess.Metadata.ProviderTranscriptPath())
+	return inspectExportStatsFor(session.EffectiveTranscriptPath(sess))
 }
 
 func inspectToolUseStats(transcriptPath string, topN int) []inspectToolUse {

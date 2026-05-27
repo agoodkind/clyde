@@ -1,3 +1,4 @@
+// Package claude exposes Claude provider helpers shared outside lifecycle code.
 package claude
 
 import (

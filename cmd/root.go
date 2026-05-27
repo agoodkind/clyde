@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -1280,8 +1281,7 @@ func withEnvValue(env []string, key, value string) []string {
 
 func envListValue(env []string, key string) string {
 	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		item := env[i]
+	for _, item := range slices.Backward(env) {
 		if value, ok := strings.CutPrefix(item, prefix); ok {
 			return value
 		}

@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"goodkind.io/clyde/internal/config"
-	claudeprovider "goodkind.io/clyde/internal/providers/claude"
+	"goodkind.io/clyde/internal/providers/claude/claudepath"
 	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 	"goodkind.io/clyde/internal/session"
 )
@@ -75,7 +75,7 @@ var _ = Describe("defaultSessionUsed", func() {
 		homeDir, err := os.UserHomeDir()
 		Expect(err).NotTo(HaveOccurred())
 
-		projectDir := claudeprovider.ProjectDir(clydeRoot)
+		projectDir := claudepath.ProjectDir(clydeRoot)
 		computedDir := filepath.Join(homeDir, ".claude", "projects", projectDir)
 		err = os.MkdirAll(computedDir, 0o755)
 		Expect(err).NotTo(HaveOccurred())

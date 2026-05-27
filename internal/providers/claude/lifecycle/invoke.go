@@ -17,6 +17,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemon"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
+	"goodkind.io/clyde/internal/providers/claude/claudepath"
 	claudeartifacts "goodkind.io/clyde/internal/providers/claude/lifecycle/artifacts"
 	"goodkind.io/clyde/internal/session"
 	"goodkind.io/clyde/internal/slogger"
@@ -179,7 +180,7 @@ func (l *Lifecycle) RecentContextMessages(sess *session.Session, limit, maxLen i
 	if sess == nil || strings.TrimSpace(sess.Metadata.ProviderTranscriptPath()) == "" {
 		return nil
 	}
-	recent := ExtractRecentMessages(sess.Metadata.ProviderTranscriptPath(), limit, maxLen)
+	recent := ExtractRecentMessages(session.EffectiveTranscriptPath(sess), limit, maxLen)
 	out := make([]session.ContextMessage, 0, len(recent))
 	for _, msg := range recent {
 		out = append(out, session.ContextMessage{
@@ -826,6 +827,6 @@ func DefaultSessionUsed(globalRoot string, sess *session.Session) bool {
 		clydeRoot = filepath.Join(sess.Metadata.WorkspaceRoot, config.ClydeDir)
 	}
 
-	transcriptPath := claudeprovider.TranscriptPath(homeDir, clydeRoot, sessionID)
+	transcriptPath := claudepath.TranscriptPath(homeDir, clydeRoot, sessionID)
 	return util.FileExists(transcriptPath)
 }
