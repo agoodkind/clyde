@@ -79,7 +79,11 @@ func linuxExecRun(ctx context.Context, name string, args ...string) ([]byte, err
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = nil
 	cmd.Stdout = nil
-	return cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return output, fmt.Errorf("cli.mitm.truststore.linux: exec %s: %w", name, err)
+	}
+	return output, nil
 }
 
 func (l linuxRegistry) Platform() PlatformID {
@@ -95,10 +99,7 @@ func (l linuxRegistry) CACommonName() string {
 // mutates the trust store, the filesystem, or any environment the
 // platform layer can observe.
 func (l linuxRegistry) Status(certPath string) (InstallStatus, error) {
-	status := InstallStatus{
-		Platform:   PlatformLinux,
-		CommonName: l.commonName,
-	}
+	status := NewInstallStatus(PlatformLinux, l.commonName)
 	slog.Debug("cli.mitm.truststore.linux.status_begin",
 		"cert_path", certPath, "install_path", l.installPath)
 
@@ -115,9 +116,9 @@ func (l linuxRegistry) Status(certPath string) (InstallStatus, error) {
 	status.InstalledFingerprint = installed
 	status.Installed = !installed.IsZero()
 	if status.Installed {
-		status.Detail = fmt.Sprintf("ca file present at %s", l.installPath)
+		status.Detail = "ca file present at " + l.installPath
 	} else {
-		status.Detail = fmt.Sprintf("ca file absent at %s", l.installPath)
+		status.Detail = "ca file absent at " + l.installPath
 	}
 	return status, nil
 }
