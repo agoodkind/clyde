@@ -260,7 +260,35 @@ func (p *CompactPanel) SetBusy(action string, busy bool) {
 	p.busyAction = action
 	if busy {
 		p.status = action + " in progress..."
+		// When a preview or apply run starts the daemon probes /context
+		// before it can populate any of the upfront totals. Mirror the
+		// session-details pane: show a "loading..." placeholder on the
+		// context-usage rows while the probe runs so the panel reflects
+		// in-flight work instead of stale or zero numbers. The placeholders
+		// clear when the KIND_UPFRONT event arrives.
+		if action == "preview" || action == "apply" {
+			p.markContextProbing()
+		}
 	}
+}
+
+// markContextProbing resets the upfront-derived numeric fields and sets
+// the loading status sentinels so the context-usage rows render
+// "loading..." while the daemon probes /context. Called when a run
+// starts; cleared on the KIND_UPFRONT event.
+func (p *CompactPanel) markContextProbing() {
+	p.currentTotal = 0
+	p.messagesTok = 0
+	p.bufferTok = 0
+	p.overheadTok = 0
+	p.freeTok = 0
+	p.thinkingBlocks = 0
+	p.imageBlocks = 0
+	p.toolPairs = 0
+	p.chatTurns = 0
+	p.contextPercentage = 0
+	p.contextStatus = string(loadingStatusLoadingDots)
+	p.countsStatus = string(loadingStatusLoadingDots)
 }
 
 func (p *CompactPanel) SetUndoResult(res *CompactUndoResult, err error) {

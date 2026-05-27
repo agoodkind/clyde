@@ -419,6 +419,98 @@ func TestCompactPanelInitialContextUsageShowsCachedContext(t *testing.T) {
 	}
 }
 
+// TestCompactPanelPreviewBusyShowsContextLoadingPlaceholders verifies
+// that when a preview run starts the daemon spends 4-7 seconds in the
+// /context probe before any upfront totals are known. During that
+// window the context-usage rows must render "loading..." rather than
+// blank dashes so the panel mirrors the session-details pane.
+func TestCompactPanelPreviewBusyShowsContextLoadingPlaceholders(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(100, 28)
+
+	panel := NewCompactPanel("demo")
+	// Simulate the dashboard handing the panel a cached usage snapshot.
+	// When the user clicks Preview the cached number must be replaced by
+	// "loading..." so the panel reflects the in-flight probe instead of
+	// the pre-run snapshot.
+	panel.setInitialContextUsage(SessionContextUsage{
+		Model:          "opus",
+		TotalTokens:    123456,
+		MaxTokens:      1000000,
+		Percentage:     12,
+		MessagesTokens: 98765,
+	}, true, "")
+	panel.SetBusy("preview", true)
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 100, H: 28})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	loadingRows := []string{
+		"current    loading...",
+		"messages   loading...",
+		"buffer     loading...",
+		"overhead   loading...",
+		"free       loading...",
+		"chat turns      loading...",
+		"tool pairs      loading...",
+		"images          loading...",
+		"thinking blocks loading...",
+	}
+	for _, want := range loadingRows {
+		if !strings.Contains(text, want) {
+			t.Fatalf("preview-busy compact panel missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestCompactPanelUpfrontEventClearsLoadingPlaceholders verifies the
+// loading placeholders set by SetBusy("preview", true) clear when the
+// daemon's KIND_UPFRONT event arrives with real totals.
+func TestCompactPanelUpfrontEventClearsLoadingPlaceholders(t *testing.T) {
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init simulation screen: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(100, 28)
+
+	panel := NewCompactPanel("demo")
+	panel.SetBusy("preview", true)
+	panel.ApplyCompactEvent(CompactEvent{
+		Kind: "upfront",
+		Upfront: &CompactUpfront{
+			SessionName:    "demo",
+			SessionID:      "sess-1",
+			Model:          "opus",
+			CurrentTotal:   500000,
+			MaxTokens:      1000000,
+			MessagesTokens: 400000,
+			BufferTokens:   50000,
+			OverheadTokens: 10000,
+			FreeTokens:     500000,
+			TargetTokens:   200000,
+			ThinkingBlocks: 3,
+			ImageBlocks:    1,
+			ToolPairs:      5,
+			ChatTurns:      8,
+		},
+	})
+	panel.Draw(scr, Rect{X: 0, Y: 0, W: 100, H: 28})
+	scr.Show()
+
+	text := compactPanelScreenText(scr)
+	if strings.Contains(text, "loading...") {
+		t.Fatalf("upfront event should clear loading placeholders:\n%s", text)
+	}
+	if !strings.Contains(text, "current    500,000 / 1,000,000") {
+		t.Fatalf("upfront event should populate current row:\n%s", text)
+	}
+}
+
 func TestCompactPanelProgressLogStaysAboveActions(t *testing.T) {
 	scr := tcell.NewSimulationScreen("UTF-8")
 	if err := scr.Init(); err != nil {

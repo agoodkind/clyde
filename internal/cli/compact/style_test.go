@@ -74,6 +74,93 @@ func TestComposePanelLines_CompletedShowsUpfrontCurrent(t *testing.T) {
 	}
 }
 
+// TestComposePanelLines_ProbingShowsLoadingPlaceholders verifies that
+// while the daemon's /context probe is in flight the running panel
+// renders "loading..." for the Current row and every Trimmed category
+// rather than "?" or zero values. The panel mirrors the session-details
+// pane so the user sees an immediate spinner+loading-row view instead
+// of an empty terminal for the 4-7 seconds the probe takes.
+func TestComposePanelLines_ProbingShowsLoadingPlaceholders(t *testing.T) {
+	p := &progressView{
+		target:        200000,
+		mode:          ModePreview,
+		startedAt:     time.Now().Add(-1 * time.Second),
+		probing:       true,
+		statusMessage: "loading transcript and probing context...",
+	}
+	rec := compactengine.IterationRecord{
+		Step:     "",
+		CtxTotal: 0,
+	}
+	// Pass "?" as the synthetic ctxStr the draw loop would compute when
+	// rec.CtxTotal is zero; the probing branch must override it.
+	lines := p.composePanelLines("⠙", 1*time.Second, rec, "", "?")
+	joined := strings.Join(lines, "\n")
+
+	wantContains := []string{
+		"loading...",
+		"probing context",
+	}
+	for _, want := range wantContains {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("probing panel missing %q\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "Current") {
+		// Sanity: the Current row exists. Its value must read loading...
+		// rather than "?" or "0".
+		for _, line := range lines {
+			if !strings.Contains(line, "Current") {
+				continue
+			}
+			if strings.Contains(line, "?") {
+				t.Fatalf("Current row should not show '?' while probing: %q", line)
+			}
+			if !strings.Contains(line, "loading...") {
+				t.Fatalf("Current row should show loading...: %q", line)
+			}
+		}
+	}
+}
+
+// TestComposePanelLines_ClearProbingShowsLiveValues verifies that the
+// running panel transitions from "loading..." back to live numbers
+// after the upfront event lands.
+func TestComposePanelLines_ClearProbingShowsLiveValues(t *testing.T) {
+	p := &progressView{
+		target:        200000,
+		mode:          ModePreview,
+		startedAt:     time.Now().Add(-1 * time.Second),
+		probing:       true,
+		statusMessage: "probing",
+	}
+	upfront := UpfrontStats{
+		SessionName:   "demo",
+		Mode:          ModePreview,
+		CurrentTotal:  412345,
+		MaxTokens:     1000000,
+		Target:        200000,
+		StrippersText: "thinking,images,tools,chat",
+	}
+	// Simulate the upfront event arriving by clearing probing in place.
+	p.probing = false
+	p.statusMessage = ""
+	p.upfront = upfront
+	rec := compactengine.IterationRecord{
+		Step:     "baseline",
+		CtxTotal: 412345,
+	}
+	lines := p.composePanelLines("⠙", 2*time.Second, rec, "baseline", humanInt(rec.CtxTotal))
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "loading...") {
+		t.Fatalf("post-probe panel should not show loading placeholders:\n%s", joined)
+	}
+	wantCurrent := humanInt(upfront.CurrentTotal)
+	if !strings.Contains(joined, wantCurrent) {
+		t.Fatalf("post-probe panel should show live Current %q\n%s", wantCurrent, joined)
+	}
+}
+
 func TestComposePanelLines_LabelFirstLayout(t *testing.T) {
 	p := &progressView{
 		target: 200000,

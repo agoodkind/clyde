@@ -18,6 +18,16 @@ import (
 // Styles follow Charm's convention: foreground colors, bold for headers,
 // faint for secondary info, borders for summary boxes.
 
+// compactLoadingPlaceholder is the literal the upfront panel and the
+// running spinner use while the daemon /context probe is in flight.
+// Matches the session-details pane so the two surfaces read the same.
+type compactPanelStatus string
+
+const (
+	compactLoadingPlaceholder compactPanelStatus = "loading..."
+	compactProbeMessage       compactPanelStatus = "probing context..."
+)
+
 // Mode signals whether the run will mutate the transcript. Rendered
 // prominently in every panel so destructive vs non-destructive runs
 // are obvious at a glance.
@@ -125,6 +135,21 @@ type UpfrontStats struct {
 	TargetDate    string // calibration capture date (empty when not calibrated)
 }
 
+// RenderProbingNotice emits a one-line "probing context..." notice for
+// non-TTY sinks (pipes, hook captures, JSON callers piping to stdout).
+// It is the non-interactive counterpart to the progressView spinner so
+// the user sees the daemon has work in flight before the upfront panel
+// arrives. The notice line includes the mode ribbon so destructive vs
+// non-destructive runs stay obvious.
+func RenderProbingNotice(w io.Writer, mode Mode, sessionName string) {
+	label := sessionName
+	if label == "" {
+		label = "session"
+	}
+	fmt.Fprintln(w, ribbon(mode)+" "+styleMuted.Render(
+		fmt.Sprintf("%s · %s", label, compactProbeMessage)))
+}
+
 // RenderUpfrontPanel draws the information box shown before the
 // planner starts. It carries the core run identity (session, model)
 // plus the current and target token counts, in label-first form, with
@@ -188,6 +213,12 @@ type progressView struct {
 	finalReserved int
 	finalPath     string
 	finalApplied  bool
+	// probing is true while the daemon is running /context probe and
+	// upfront totals are not yet known. The composePanelLines path
+	// renders "loading..." placeholders instead of "?" or zero values
+	// during this window so the panel mirrors the session-details pane.
+	probing       bool
+	statusMessage string
 
 	// Ticker goroutine lifecycle channels.
 	stop chan progressSignal
@@ -204,7 +235,30 @@ const spinnerFPS = 16
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// progressViewOptions tunes the initial state of a newly created
+// progressView. probing flips the panel into the "loading..."
+// placeholder mode used while the daemon /context probe is in flight
+// before any upfront totals are known.
+type progressViewOptions struct {
+	probing       bool
+	statusMessage string
+}
+
 func newProgressView(w io.Writer, target int, mode Mode, isTTY bool, upfront UpfrontStats) *progressView {
+	return newProgressViewWithOptions(w, target, mode, isTTY, upfront, progressViewOptions{
+		probing:       false,
+		statusMessage: "",
+	})
+}
+
+func newProgressViewWithOptions(
+	w io.Writer,
+	target int,
+	mode Mode,
+	isTTY bool,
+	upfront UpfrontStats,
+	opts progressViewOptions,
+) *progressView {
 	p := &progressView{
 		w:         w,
 		target:    target,
@@ -236,6 +290,8 @@ func newProgressView(w io.Writer, target int, mode Mode, isTTY bool, upfront Upf
 		finalReserved: 0,
 		finalPath:     "",
 		finalApplied:  false,
+		probing:       opts.probing,
+		statusMessage: opts.statusMessage,
 		stop:          make(chan progressSignal),
 		done:          make(chan progressSignal),
 	}
@@ -353,34 +409,62 @@ func (p *progressView) composePanelLines(
 	if p.completed {
 		currentTotal = p.upfront.CurrentTotal
 	}
+	// Between upfront landing and the first iteration record, rec.CtxTotal
+	// is still zero. Show the upfront's CurrentTotal so the panel never
+	// flashes "?" once the probe has returned a real number.
+	if currentTotal == 0 && p.upfront.CurrentTotal > 0 {
+		currentTotal = p.upfront.CurrentTotal
+	}
 	if currentTotal > 0 {
 		ctxStr = humanInt(currentTotal)
 	}
+	// Probing window: the daemon is mid-/context probe so no upfront
+	// totals are known yet. Mirror the session-details pane and show
+	// "loading..." placeholders rather than "?" or zero values until
+	// the upfront event lands.
+	if p.probing && !p.completed {
+		ctxStr = string(compactLoadingPlaceholder)
+	}
 
 	var header string
-	if p.completed {
+	switch {
+	case p.completed:
 		header = fmt.Sprintf("%s %s  %s",
 			styleGood.Render("✓"),
 			p.modeLabel(),
 			styleMuted.Render(fmt.Sprintf("finished in %s", elapsed)))
-	} else {
+	case p.probing:
+		probeNote := strings.TrimSpace(p.statusMessage)
+		if probeNote == "" {
+			probeNote = string(compactProbeMessage)
+		}
+		header = fmt.Sprintf("%s %s  %s",
+			spin,
+			p.modeLabel(),
+			styleMuted.Render(probeNote))
+	default:
 		header = fmt.Sprintf("%s %s  %s",
 			spin,
 			p.modeLabel(),
 			styleMuted.Render(fmt.Sprintf("running %s", elapsed)))
 	}
 
+	targetStr := humanInt(p.target)
+	if p.probing && p.target <= 0 {
+		targetStr = string(compactLoadingPlaceholder)
+	}
+
 	lines := []string{
 		header,
 		"",
 		renderPaneRow("Current", styleNum.Render(ctxStr)),
-		renderPaneRow("Target", styleNum.Render(humanInt(p.target))),
+		renderPaneRow("Target", styleNum.Render(targetStr)),
 		"",
 		"  " + styleTitle.Render("Trimmed"),
-		renderBreakdownRow("thinking", categoryStateThinking(rec)),
-		renderBreakdownRow("images", categoryStateImages(rec)),
-		renderBreakdownRow("chat", categoryStateChat(rec)),
-		renderBreakdownRow("tools", categoryStateTools(rec)),
+		renderBreakdownRow("thinking", p.categoryRow(categoryStateThinking, rec)),
+		renderBreakdownRow("images", p.categoryRow(categoryStateImages, rec)),
+		renderBreakdownRow("chat", p.categoryRow(categoryStateChat, rec)),
+		renderBreakdownRow("tools", p.categoryRow(categoryStateTools, rec)),
 	}
 
 	if !p.completed && len(step) > 0 {
@@ -392,6 +476,19 @@ func (p *progressView) composePanelLines(
 	}
 
 	return lines
+}
+
+// categoryRow renders the right-hand cell of a breakdown row, returning
+// a "loading..." placeholder when the probe has not finished. The
+// category-specific renderer drives the post-probe view.
+func (p *progressView) categoryRow(
+	render func(compactengine.IterationRecord) string,
+	rec compactengine.IterationRecord,
+) string {
+	if p.probing && !p.completed {
+		return styleMuted.Render(string(compactLoadingPlaceholder))
+	}
+	return render(rec)
 }
 
 // deltaText formats a ctx-to-target delta for inline display in the
@@ -501,6 +598,33 @@ func renderBreakdownRow(label, value string) string {
 
 func renderPaneRow(label, value string) string {
 	return "  " + stylePaneKey.Render(label) + " " + value
+}
+
+// SetProbing flips the view into the upfront-probing state. While
+// probing, the panel renders "loading..." in the data rows and a
+// probing header. The caller passes the status message the daemon
+// emitted so the header matches the daemon's narration.
+func (p *progressView) SetProbing(message string) {
+	p.mu.Lock()
+	p.probing = true
+	p.statusMessage = message
+	p.mu.Unlock()
+	if p.isTTY {
+		p.draw()
+	}
+}
+
+// ClearProbing exits the probing state. Called after the upfront
+// event lands and the running spinner can show real numbers.
+func (p *progressView) ClearProbing(upfront UpfrontStats) {
+	p.mu.Lock()
+	p.probing = false
+	p.statusMessage = ""
+	p.upfront = upfront
+	p.mu.Unlock()
+	if p.isTTY {
+		p.draw()
+	}
 }
 
 // Update refreshes the iteration numbers. For non TTY sinks, like

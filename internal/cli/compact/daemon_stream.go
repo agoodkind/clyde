@@ -163,8 +163,10 @@ func openCompactDaemonStream(
 
 func consumeCompactEvent(out io.Writer, in compactDaemonRunInput, state *compactDaemonStreamState, ev *clydev1.CompactEvent) {
 	switch ev.GetKind() {
-	case clydev1.CompactEvent_KIND_UNSPECIFIED, clydev1.CompactEvent_KIND_STATUS:
+	case clydev1.CompactEvent_KIND_UNSPECIFIED:
 		return
+	case clydev1.CompactEvent_KIND_STATUS:
+		handleStatusEvent(out, in, state, ev.GetMessage())
 	case clydev1.CompactEvent_KIND_UPFRONT:
 		handleUpfrontEvent(out, in, state, ev.GetUpfront())
 	case clydev1.CompactEvent_KIND_ITERATION:
@@ -174,6 +176,54 @@ func consumeCompactEvent(out io.Writer, in compactDaemonRunInput, state *compact
 	case clydev1.CompactEvent_KIND_APPLY_MUTATION:
 		state.mutation = ev.GetApplyMutation()
 	}
+}
+
+// handleStatusEvent reacts to the daemon's KIND_STATUS events. The
+// first status the daemon emits is the "loading transcript and probing
+// context..." narration that fires before the multi-second /context
+// probe. The CLI mirrors the session-details pane and starts a
+// progressView in probing mode so the panel renders "loading..."
+// placeholders for the duration of the probe instead of leaving an
+// empty terminal.
+func handleStatusEvent(out io.Writer, in compactDaemonRunInput, state *compactDaemonStreamState, message string) {
+	if in.JSONMode || in.Target <= 0 {
+		return
+	}
+	if state.haveUpfront {
+		// Once upfront has landed, subsequent status events ("planning
+		// compaction...") are narrative and would just flicker the
+		// already-populated panel header. Drop them.
+		return
+	}
+	if in.IsTTY {
+		if state.progress == nil {
+			state.progress = newProgressViewWithOptions(out, in.Target, in.Mode, true, UpfrontStats{
+				SessionName:   in.SessionName,
+				SessionID:     "",
+				Model:         "",
+				Mode:          in.Mode,
+				CurrentTotal:  0,
+				MaxTokens:     0,
+				Target:        in.Target,
+				StaticFloor:   0,
+				Reserved:      in.Reserved,
+				Thinking:      0,
+				Images:        0,
+				ToolPairs:     0,
+				ChatTurns:     0,
+				BaselineTail:  0,
+				StrippersText: "",
+				TargetDate:    "",
+			}, progressViewOptions{
+				probing:       true,
+				statusMessage: message,
+			})
+			return
+		}
+		state.progress.SetProbing(message)
+		return
+	}
+	RenderProbingNotice(out, in.Mode, in.SessionName)
 }
 
 func handleUpfrontEvent(out io.Writer, in compactDaemonRunInput, state *compactDaemonStreamState, u *clydev1.CompactUpfront) {
@@ -206,7 +256,13 @@ func handleUpfrontEvent(out io.Writer, in compactDaemonRunInput, state *compactD
 	if in.IsTTY {
 		if state.progress == nil {
 			state.progress = newProgressView(out, in.Target, in.Mode, true, state.upfront)
+			return
 		}
+		// progressView was started during the probe in loading state.
+		// Hand it the real upfront totals so the running panel swaps
+		// "loading..." for the live numbers without re-rendering from
+		// scratch or losing scroll context.
+		state.progress.ClearProbing(state.upfront)
 		return
 	}
 	RenderUpfrontPanel(out, state.upfront)
