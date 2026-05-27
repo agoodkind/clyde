@@ -20,6 +20,60 @@ func TestPhaseFromStep_ToolsPassLabels(t *testing.T) {
 	}
 }
 
+func TestComposePanelLines_CompletedShowsUpfrontCurrent(t *testing.T) {
+	// On completion the Current row must reflect the live /context probe
+	// value captured upfront, not the planner projection
+	// (static_floor + final_tail + reserved). The planner projection
+	// drifts from claude's /context reporter; the upfront probe value is
+	// the same number /context would render inside the chat.
+	const upfrontCurrent = 412345
+	const staticFloor = 70703
+	const reserved = 13000
+	const finalTail = 100
+	p := &progressView{
+		target: 200000,
+		mode:   ModePreview,
+		upfront: UpfrontStats{
+			StaticFloor:  staticFloor,
+			Reserved:     reserved,
+			CurrentTotal: upfrontCurrent,
+		},
+		startedAt:     time.Now().Add(-3 * time.Second),
+		completed:     true,
+		finalStatic:   staticFloor,
+		finalReserved: reserved,
+		finalRes: &compactengine.PlanResult{
+			FinalTail: finalTail,
+		},
+	}
+	rec := compactengine.IterationRecord{
+		Step:     "done",
+		CtxTotal: 999999, // intentionally not the value we want to render
+	}
+
+	lines := p.composePanelLines("⠙", 3*time.Second, rec, rec.Step, humanInt(rec.CtxTotal))
+	joined := strings.Join(lines, "\n")
+
+	wantCurrent := humanInt(upfrontCurrent)
+	if !strings.Contains(joined, wantCurrent) {
+		t.Fatalf("completed panel Current should show upfront value %q\n%s", wantCurrent, joined)
+	}
+
+	projection := humanInt(staticFloor + finalTail + reserved)
+	// Render-only sanity: the old projection number should not appear
+	// where the Current row sits. Use a Current-row substring to scope
+	// the check so we do not accidentally trip on the same number
+	// appearing in an unrelated row in future renderers.
+	for _, line := range lines {
+		if !strings.Contains(line, "Current") {
+			continue
+		}
+		if strings.Contains(line, projection) {
+			t.Fatalf("Current row should not show planner projection %q: %q", projection, line)
+		}
+	}
+}
+
 func TestComposePanelLines_LabelFirstLayout(t *testing.T) {
 	p := &progressView{
 		target: 200000,

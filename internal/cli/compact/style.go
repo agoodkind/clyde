@@ -341,9 +341,17 @@ func (p *progressView) composePanelLines(
 	step string,
 	ctxStr string,
 ) []string {
+	// During iteration, show the planner's per-iteration projection so
+	// the user sees progress as the bisect converges. On completion,
+	// show the live /context probe value captured upfront so the result
+	// panel's Current matches what running /context inside the chat
+	// would report. The planner projection
+	// (static_floor + final_tail + reserved) drifts from claude's own
+	// /context reporter and is therefore an unreliable label for
+	// "Current" on the result panel.
 	currentTotal := rec.CtxTotal
-	if p.completed && p.finalRes != nil {
-		currentTotal = p.finalStatic + p.finalRes.FinalTail + p.finalReserved
+	if p.completed {
+		currentTotal = p.upfront.CurrentTotal
 	}
 	if currentTotal > 0 {
 		ctxStr = humanInt(currentTotal)

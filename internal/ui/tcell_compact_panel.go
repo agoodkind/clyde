@@ -823,10 +823,15 @@ func (p *CompactPanel) renderIterationLine(iter CompactIteration) string {
 }
 
 func (p *CompactPanel) renderFinalLine(final CompactFinal) string {
-	total := final.StaticFloor + final.ReservedTokens + final.FinalTail
+	// The planner projection (static_floor + reserved + final_tail)
+	// drifts from claude's /context reporter. The result line shows the
+	// live /context value captured upfront so the user sees the same
+	// number they would see by running /context in the chat. Only the
+	// target field on the CompactFinal payload is consumed; the
+	// planner projection fields are ignored on purpose.
 	return fmt.Sprintf(
-		"final projected %s  target %s",
-		formatTokensExact(total),
+		"final current %s  target %s",
+		formatTokensExact(p.currentTotal),
 		formatTokensExact(final.TargetTokens),
 	)
 }

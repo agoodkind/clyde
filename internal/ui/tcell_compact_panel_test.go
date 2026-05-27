@@ -455,7 +455,7 @@ func TestCompactPanelProgressLogStaysAboveActions(t *testing.T) {
 		t.Fatalf("expected progress log box title in render:\n%s", text)
 	}
 	afterActions := text[actionIdx:]
-	if strings.Contains(afterActions, "final projected") || strings.Contains(afterActions, "step-") {
+	if strings.Contains(afterActions, "final current") || strings.Contains(afterActions, "step-") {
 		t.Fatalf("progress log leaked into action rows:\n%s", afterActions)
 	}
 }
