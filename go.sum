@@ -641,8 +641,8 @@ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8T
 golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
 gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
 gonum.org/v1/gonum v0.17.0/go.mod h1:El3tOrEuMpv2UdMrbNlKEh9vd86bmQ6vqIcDwxEOc1E=
-goodkind.io/gklog v0.3.0 h1:CjcXflKrxYmMMhfVPnjdJ1EZBVOdzqvl770mQRbbnww=
-goodkind.io/gklog v0.3.0/go.mod h1:RxCsj/TfxtPcU24NnUWTXOTvruRIYRIOUujnlMjoIHo=
+goodkind.io/gklog v0.3.1 h1:7yXrXs8BFEqp9R6LuYuMUxfc6ghU5g99WZ1ykSij3Ts=
+goodkind.io/gklog v0.3.1/go.mod h1:oKFcZWL0Fhk3BE1hlb4JQ25QBpoXlPBvv37ufW6XG6M=
 goodkind.io/lmctl v0.0.0-20260415155018-40a95b881e3e h1:dU5RGb73g87UJrguqzieEH11Weq0UJw+Gs/TfedLaM4=
 goodkind.io/lmctl v0.0.0-20260415155018-40a95b881e3e/go.mod h1:Ir591j+5Kf+XdKdrs7/jQABMwQEw8DFn3zUYLKsQJJU=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20260420184626-e10c466a9529 h1:XF8+t6QQiS0o9ArVan/HW8Q7cycNPGsJf6GA2nXxYAg=

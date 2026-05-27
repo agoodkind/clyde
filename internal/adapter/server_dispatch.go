@@ -118,7 +118,13 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	ingressCtx := ingress.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
 	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
 	identity := ingress.ResolveIdentity(corr, ingressCtx, ingresscontract.ChatRequestPrimitive{Body: req})
-	corr = clydeingress.WithChatIdentity(corr, identity.ChatKey, identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
+	// Body-derived backfill must not overwrite a header-resolved ChatKey.
+	// WithChatKey is a first-wins setter; only the source/root/branch fields
+	// get rewritten as a unit when the body has the canonical identity.
+	corr = clydeingress.WithChatKey(corr, identity.ChatKey)
+	if identity.ChatKeySource != "" || identity.ChatRootKey != "" || identity.ChatBranchKey != "" {
+		corr = clydeingress.WithChatIdentity(corr, clydeingress.ChatKey(corr), identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
+	}
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
 	bodyFacets := ingress.RequestFacets(ingressCtx)

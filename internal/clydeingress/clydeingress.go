@@ -23,7 +23,6 @@ package clydeingress
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -254,20 +253,6 @@ func WithUpstreamRequestID(corr correlation.Context, requestID string) correlati
 // the field.
 func WithUpstreamResponseID(corr correlation.Context, responseID string) correlation.Context {
 	return setOrClear(corr, AttrKeyUpstreamResponseID, responseID)
-}
-
-// IdentityAttributeValue returns the identity attribute value attached
-// for key on corr, mirroring [correlation.Context.IdentityAttributeValue]
-// so call sites importing only clydeingress have a single entry point.
-func IdentityAttributeValue(corr correlation.Context, key string) string {
-	return corr.IdentityAttributeValue(key)
-}
-
-// Attrs returns the [slog.Attr] view of corr. It is a passthrough to
-// [correlation.Context.Attrs] kept here so call sites that import
-// clydeingress for its other helpers do not need a second import.
-func Attrs(corr correlation.Context) []slog.Attr {
-	return corr.Attrs()
 }
 
 // setOrClear sets the attribute when value is non-empty and clears it
