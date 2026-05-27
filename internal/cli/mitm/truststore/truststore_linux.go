@@ -14,6 +14,7 @@ import (
 	"time"
 )
 
+
 // linuxRegistry installs the Clyde MITM CA into the system trust
 // store on update-ca-certificates distros. The certificate is copied
 // to /usr/local/share/ca-certificates/clyde-mitm-ca.crt and
@@ -81,10 +82,25 @@ func linuxExecRun(ctx context.Context, name string, args ...string) ([]byte, err
 	cmd.Stdout = nil
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return output, fmt.Errorf("cli.mitm.truststore.linux: exec %s: %w", name, err)
+		slog.WarnContext(ctx, "cli.mitm.truststore.linux.exec_failed", "binary", name, "err", err)
+		return output, &linuxExecError{binary: name, err: err}
 	}
 	return output, nil
 }
+
+// linuxExecError wraps an external command failure as a typed error so
+// wrapcheck and the staticcheck-extra wrapped-error rule both accept
+// the wrap path without losing the underlying cause.
+type linuxExecError struct {
+	binary string
+	err    error
+}
+
+func (e *linuxExecError) Error() string {
+	return "cli.mitm.truststore.linux: exec " + e.binary + ": " + e.err.Error()
+}
+
+func (e *linuxExecError) Unwrap() error { return e.err }
 
 func (l linuxRegistry) Platform() PlatformID {
 	return PlatformLinux
