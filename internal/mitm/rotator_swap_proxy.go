@@ -27,33 +27,39 @@ func (p *Proxy) rotator() RotatorSink {
 	return p.rotatorSink
 }
 
-// maybeRetryOnAuthFailure inspects resp; on HTTP 401 it asks the
-// rotator for a recovery token, retries the upstream call once, and
-// returns the retry response with the new bearer-derived token.
+// maybeRetryOnAuthFailure inspects resp; on HTTP 401 for a request whose
+// bearer the proxy actively swapped, it asks the rotator for a recovery
+// token, retries the upstream call once, and returns the retry response
+// with the new bearer-derived token.
 //
-// When no retry is appropriate (non-401 response, no prior swap, nil
-// sink, or the rotator declined a fresh token), it returns the
-// original resp and swappedToken unchanged so the caller's observe
-// path runs against the response actually delivered to the client.
+// When no retry is appropriate (non-401 response, the proxy passed the
+// inbound bearer through unchanged, nil sink, or the rotator declined a
+// fresh token), it returns the original resp and observeToken unchanged
+// so the caller's observe path runs against the response actually
+// delivered to the client. Skipping retry on passthrough requests is
+// deliberate: TokenAfterAuthFailure returns the rotator's currently
+// selected token, and applying that to a path the swap allowlist
+// rejected would route a rotator-owned bearer onto an env-bound
+// resource we explicitly chose to leave alone.
 //
 // The retry budget is one extra round-trip per inbound request, by
 // design: the goal is to recover from a token that went stale between
 // selection and dispatch, not to mask repeated upstream failures.
-func (p *Proxy) maybeRetryOnAuthFailure(ctx context.Context, resp *http.Response, req upstreamRequest, swappedToken string, sink RotatorSink) (*http.Response, string) {
-	if resp.StatusCode != http.StatusUnauthorized || swappedToken == "" || sink == nil {
-		return resp, swappedToken
+func (p *Proxy) maybeRetryOnAuthFailure(ctx context.Context, resp *http.Response, req upstreamRequest, observeToken string, didSwap bool, sink RotatorSink) (*http.Response, string) {
+	if resp.StatusCode != http.StatusUnauthorized || !didSwap || sink == nil {
+		return resp, observeToken
 	}
-	freshToken, err := sink.TokenAfterAuthFailure(ctx, AnthropicProviderName, swappedToken)
+	freshToken, err := sink.TokenAfterAuthFailure(ctx, AnthropicProviderName, observeToken)
 	if err != nil {
 		p.log.DebugContext(ctx, "mitm.rotator_swap.retry_skipped",
 			"provider", string(AnthropicProviderName),
 			"path", req.path,
 			"err", err,
 		)
-		return resp, swappedToken
+		return resp, observeToken
 	}
-	if freshToken == "" || freshToken == swappedToken {
-		return resp, swappedToken
+	if freshToken == "" || freshToken == observeToken {
+		return resp, observeToken
 	}
 	retryReq, retryErr := http.NewRequestWithContext(ctx, req.method, req.upstream+req.path, bytes.NewReader(req.body))
 	if retryErr != nil {
@@ -61,7 +67,7 @@ func (p *Proxy) maybeRetryOnAuthFailure(ctx context.Context, resp *http.Response
 			"provider", string(AnthropicProviderName),
 			"err", retryErr,
 		)
-		return resp, swappedToken
+		return resp, observeToken
 	}
 	copyHeaders(retryReq.Header, req.header)
 	retryReq.Header.Set("Authorization", authSchemePrefix+freshToken)
@@ -73,7 +79,7 @@ func (p *Proxy) maybeRetryOnAuthFailure(ctx context.Context, resp *http.Response
 			"path", req.path,
 			"err", retryDoErr,
 		)
-		return resp, swappedToken
+		return resp, observeToken
 	}
 	p.log.InfoContext(ctx, "mitm.rotator_swap.retry_succeeded",
 		"provider", string(AnthropicProviderName),

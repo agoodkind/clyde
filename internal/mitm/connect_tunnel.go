@@ -533,8 +533,10 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 	// The provider intercept path forwards req as-is; swap the bearer on
 	// the live request header so providerUpstreamRequest copies the
 	// rotator-owned bearer into the upstream call. This mirrors the
-	// plain-HTTP path's pre-Do swap.
-	swappedToken := swapAuthorizationForRotator(params.req, sink, p.log)
+	// plain-HTTP path's pre-Do swap. The swap helper applies a path
+	// allowlist so resource-bound endpoints (/v1/environments, /v1/sessions)
+	// pass through unchanged with Claude Code's original bearer.
+	observeToken, didSwap := swapAuthorizationForRotator(params.req, sink, p.log)
 	resp, err := p.providerUpstreamRoundTrip(params.req, params.body, params.target, params.host)
 	if err != nil {
 		return p.recordProviderFailure(params.req, http.Header{}, buildProviderFailureInput(params, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
@@ -546,15 +548,17 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 	}
 	// CLYDE-OAUTH: TLS-intercepted 401 retry mirrors the plain-HTTP
 	// dispatch path. The retry budget is one extra round-trip per
-	// inbound request.
-	if resp.StatusCode == http.StatusUnauthorized && swappedToken != "" && sink != nil {
-		if retryResp, retried := p.retryProviderAfterAuthFailure(ctx, params, swappedToken, sink); retried {
+	// inbound request and only fires when the swap actually ran;
+	// passthrough requests keep their original bearer on 401 so the
+	// caller's existing recovery flow is not disturbed.
+	if resp.StatusCode == http.StatusUnauthorized && didSwap && sink != nil {
+		if retryResp, retried := p.retryProviderAfterAuthFailure(ctx, params, observeToken, sink); retried {
 			_ = resp.Body.Close()
 			resp = retryResp
-			swappedToken = strings.TrimPrefix(params.req.Header.Get("Authorization"), authSchemePrefix)
+			observeToken = strings.TrimPrefix(params.req.Header.Get("Authorization"), authSchemePrefix)
 		}
 	}
-	observeAnthropicResponse(ctx, sink, resp, swappedToken, p.log)
+	observeAnthropicResponse(ctx, sink, resp, observeToken, p.log)
 	defer func() { _ = resp.Body.Close() }()
 
 	responseBytes, err := p.forwardAndCaptureProviderResponse(params.writer, resp, params.responseRawPath)

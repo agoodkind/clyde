@@ -241,3 +241,78 @@ func TestProxyDispatchUpstreamSkipsObserveOnNonAnthropicBearer(t *testing.T) {
 		t.Fatalf("observe count = %d, want 0 (non-anthropic bearer was not swapped)", len(sink.snapshot()))
 	}
 }
+
+// sendProxyRequestPath issues a request through the proxy targeting an
+// arbitrary path. The test fixture's upstream accepts any path; this
+// helper exists so the test can drive paths outside the bearer-swap
+// allowlist (e.g. /v1/environments/*) through the same dispatchUpstream
+// codepath as the messages-targeted tests above.
+func sendProxyRequestPath(t *testing.T, proxy *Proxy, path, authHeader string) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "http://clyde.test"+path, http.NoBody)
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	recorder := httptest.NewRecorder()
+	proxy.handle(recorder, req)
+	return recorder.Result()
+}
+
+// TestProxyDispatchUpstreamPassesEnvironmentPathThrough exercises the
+// path allowlist gate end-to-end. A /v1/environments/<env_id>/work/poll
+// poll carries an Anthropic OAuth bearer, but the upstream binds the env
+// to the creating bearer; swapping it would 403. The proxy must leave
+// the Authorization header untouched and still emit one observe signal
+// against the inbound bearer so the rotator sees the response's
+// rate-limit headers.
+func TestProxyDispatchUpstreamPassesEnvironmentPathThrough(t *testing.T) {
+	fixture := newRotatorProxyFixture(t)
+	sink := &stubRotatorSink{token: "fresh-token", account: "acct-1"}
+	fixture.proxy.SetRotatorSink(sink)
+
+	resp := sendProxyRequestPath(t, fixture.proxy, "/v1/environments/env_01ABC/work/poll?ack=true", "Bearer sk-ant-oat01-inbound")
+	defer resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+
+	if got := fixture.lastAuthHeader(); got != "Bearer sk-ant-oat01-inbound" {
+		t.Fatalf("upstream Authorization = %q, want passthrough (no swap on /v1/environments/*)", got)
+	}
+	if sink.tokenCalls != 0 {
+		t.Fatalf("Token calls = %d, want 0 for non-allowlisted path", sink.tokenCalls)
+	}
+	signals := sink.snapshot()
+	if len(signals) != 1 {
+		t.Fatalf("observe count = %d, want 1 (observe still fires using inbound bearer)", len(signals))
+	}
+	if signals[0].AccessToken != "sk-ant-oat01-inbound" {
+		t.Fatalf("observed token = %q, want inbound bearer surfaced to Observe", signals[0].AccessToken)
+	}
+}
+
+// TestProxyDispatchUpstreamDoesNotRetryOn401WhenPathNotSwapped covers
+// the other half of the path-scoping contract: when the upstream
+// returns 401 on a passthrough request, the proxy must NOT invoke
+// TokenAfterAuthFailure. Retrying with a rotator-owned bearer on a path
+// we deliberately routed around would put a different token on a
+// resource-bound endpoint and reintroduce the 403 cascade the gate
+// exists to prevent.
+func TestProxyDispatchUpstreamDoesNotRetryOn401WhenPathNotSwapped(t *testing.T) {
+	fixture := newRotatorProxyFixture(t)
+	fixture.upstreamStatus = http.StatusUnauthorized
+	sink := &stubRotatorSink{token: "fresh-token", afterFailure: "after-failure-token"}
+	fixture.proxy.SetRotatorSink(sink)
+
+	resp := sendProxyRequestPath(t, fixture.proxy, "/v1/environments/env_01ABC/work/poll", "Bearer sk-ant-oat01-inbound")
+	defer resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("response status = %d, want 401 propagated unchanged", resp.StatusCode)
+	}
+	if hits := fixture.hitCount(); hits != 1 {
+		t.Fatalf("upstream hits = %d, want 1 (no retry on passthrough path)", hits)
+	}
+	if sink.afterFailureCalls != 0 {
+		t.Fatalf("TokenAfterAuthFailure calls = %d, want 0 on passthrough path", sink.afterFailureCalls)
+	}
+}

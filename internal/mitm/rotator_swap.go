@@ -75,26 +75,65 @@ const (
 	representativeClaimSevenDayOpus representativeClaim = "seven_day_opus"
 )
 
+// pathAllowsBearerSwap reports whether the request path is on the list of
+// Anthropic endpoints where swapping the bearer to a rotator-owned token
+// is safe. Stateless endpoints accept any valid bearer for an entitled
+// account; resource-scoped endpoints (`/v1/environments/<env_id>`,
+// `/v1/sessions/*`, `/v1/code/*`) bind the resource to the exact bearer
+// that created it and reject any other bearer with 403, so we leave those
+// requests with Claude Code's original Authorization header untouched.
+// Observation still fires for non-swapped paths so the rotator learns
+// account quota state from every bearer-carrying response.
+func pathAllowsBearerSwap(path string) bool {
+	if strings.HasPrefix(path, "/v1/messages") {
+		return true
+	}
+	if path == "/v1/models" {
+		return true
+	}
+	return false
+}
+
 // swapAuthorizationForRotator inspects req's Authorization header. When
-// it carries an Anthropic OAuth bearer, the helper asks the rotator for
+// it carries an Anthropic OAuth bearer AND the path is on the bearer-swap
+// allowlist (see pathAllowsBearerSwap), the helper asks the rotator for
 // a fresh token via sink.Token and rewrites the header to use the
-// rotator-owned token. Returns the access token now on the outbound
-// request, or "" when no swap happened (missing header, non-anthropic
-// bearer, nil sink, or a rotator error).
+// rotator-owned token. The returned observation token names the bearer the
+// caller should record in the rotator's Observe sink: the freshly swapped
+// token when a swap fired, the inbound token when the swap was bypassed,
+// or "" when the request carries no Anthropic bearer.
 //
-// A rotator error leaves the request header unchanged and returns
-// "" so the caller proceeds with the original bearer rather than
-// failing the request outright.
-func swapAuthorizationForRotator(req *http.Request, sink RotatorSink, log *slog.Logger) string {
-	if sink == nil || req == nil {
-		return ""
+// didSwap discriminates the two non-empty cases so the 401 retry path
+// only fires when we actually replaced the bearer; running TokenAfterAuthFailure
+// on a passthrough request would put a rotator-owned bearer on an
+// env-bound resource we deliberately routed around.
+//
+// A rotator error during swap leaves the request header unchanged and
+// degrades to passthrough semantics (observation against the inbound
+// bearer, no 401 retry) rather than failing the request outright.
+func swapAuthorizationForRotator(req *http.Request, sink RotatorSink, log *slog.Logger) (observeToken string, didSwap bool) {
+	if req == nil {
+		return "", false
 	}
 	header := req.Header.Get("Authorization")
 	if header == "" {
-		return ""
+		return "", false
 	}
 	if !strings.HasPrefix(header, anthropicAccessTokenAuthValue) {
-		return ""
+		return "", false
+	}
+	inboundToken := strings.TrimPrefix(header, authSchemePrefix)
+	if sink == nil {
+		return inboundToken, false
+	}
+	if !pathAllowsBearerSwap(req.URL.Path) {
+		if log != nil {
+			log.DebugContext(req.Context(), "mitm.rotator_swap.path_skipped",
+				"provider", string(AnthropicProviderName),
+				"path", req.URL.Path,
+			)
+		}
+		return inboundToken, false
 	}
 	ctx := req.Context()
 	freshToken, account, err := sink.Token(ctx, AnthropicProviderName)
@@ -105,20 +144,21 @@ func swapAuthorizationForRotator(req *http.Request, sink RotatorSink, log *slog.
 				"err", err,
 			)
 		}
-		return ""
+		return inboundToken, false
 	}
 	if freshToken == "" {
-		return ""
+		return inboundToken, false
 	}
 	req.Header.Set("Authorization", authSchemePrefix+freshToken)
 	if log != nil {
 		log.DebugContext(ctx, "mitm.rotator_swap.swapped",
 			"provider", string(AnthropicProviderName),
 			"account", string(account),
+			"path", req.URL.Path,
 			"token_fp", tokenFingerprint(freshToken),
 		)
 	}
-	return freshToken
+	return freshToken, true
 }
 
 // observeAnthropicResponse builds a [ratelimitsink.Signal] from the

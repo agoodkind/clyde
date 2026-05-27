@@ -299,15 +299,15 @@ func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWri
 	copyHeaders(upReq.Header, req.header)
 	upReq.Host = ""
 	sink := p.rotator()
-	swappedToken := swapAuthorizationForRotator(upReq, sink, p.log)
+	observeToken, didSwap := swapAuthorizationForRotator(upReq, sink, p.log)
 	resp, err := p.client.Do(upReq)
 	if err != nil {
 		p.log.WarnContext(upstreamCtx, "mitm.proxy.upstream_failed", "provider", req.provider, "path", req.path, "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return nil, false
 	}
-	resp, swappedToken = p.maybeRetryOnAuthFailure(upstreamCtx, resp, req, swappedToken, sink)
-	observeAnthropicResponse(upstreamCtx, sink, resp, swappedToken, p.log)
+	resp, observeToken = p.maybeRetryOnAuthFailure(upstreamCtx, resp, req, observeToken, didSwap, sink)
+	observeAnthropicResponse(upstreamCtx, sink, resp, observeToken, p.log)
 	return resp, true
 }
 

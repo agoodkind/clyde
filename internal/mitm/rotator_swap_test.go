@@ -89,10 +89,13 @@ func TestSwapAuthorizationReplacesAnthropicBearer(t *testing.T) {
 	sink := &stubRotatorSink{token: "fresh-token", account: provider.AccountID("acct-1")}
 	req := newProbeRequest(t, "Bearer sk-ant-oat01-original")
 
-	got := swapAuthorizationForRotator(req, sink, discardLogger())
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
 
 	if got != "fresh-token" {
-		t.Fatalf("swappedToken = %q, want fresh-token", got)
+		t.Fatalf("observeToken = %q, want fresh-token", got)
+	}
+	if !didSwap {
+		t.Fatalf("didSwap = false, want true for /v1/messages with anthropic bearer")
 	}
 	if outbound := req.Header.Get("Authorization"); outbound != "Bearer fresh-token" {
 		t.Fatalf("outbound Authorization = %q, want Bearer fresh-token", outbound)
@@ -110,10 +113,13 @@ func TestSwapAuthorizationLeavesNonAnthropicBearerAlone(t *testing.T) {
 	sink := &stubRotatorSink{token: "fresh-token"}
 	req := newProbeRequest(t, "Bearer some-other-token")
 
-	got := swapAuthorizationForRotator(req, sink, discardLogger())
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
 
 	if got != "" {
-		t.Fatalf("swappedToken = %q, want empty", got)
+		t.Fatalf("observeToken = %q, want empty for non-anthropic bearer", got)
+	}
+	if didSwap {
+		t.Fatalf("didSwap = true, want false for non-anthropic bearer")
 	}
 	if outbound := req.Header.Get("Authorization"); outbound != "Bearer some-other-token" {
 		t.Fatalf("outbound Authorization = %q, want unchanged", outbound)
@@ -128,10 +134,13 @@ func TestSwapAuthorizationLeavesMissingAuthAlone(t *testing.T) {
 	sink := &stubRotatorSink{token: "fresh-token"}
 	req := newProbeRequest(t, "")
 
-	got := swapAuthorizationForRotator(req, sink, discardLogger())
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
 
 	if got != "" {
-		t.Fatalf("swappedToken = %q, want empty", got)
+		t.Fatalf("observeToken = %q, want empty when no auth header", got)
+	}
+	if didSwap {
+		t.Fatalf("didSwap = true, want false when no auth header")
 	}
 	if outbound := req.Header.Get("Authorization"); outbound != "" {
 		t.Fatalf("outbound Authorization = %q, want unset", outbound)
@@ -145,10 +154,16 @@ func TestSwapAuthorizationNilSinkIsPassthrough(t *testing.T) {
 	t.Parallel()
 	req := newProbeRequest(t, "Bearer sk-ant-oat01-original")
 
-	got := swapAuthorizationForRotator(req, nil, discardLogger())
+	got, didSwap := swapAuthorizationForRotator(req, nil, discardLogger())
 
-	if got != "" {
-		t.Fatalf("swappedToken = %q, want empty", got)
+	// Nil sink still surfaces the inbound bearer as observeToken so callers
+	// can pair the response with the inbound account, even though the
+	// observe path no-ops on a nil sink.
+	if got != "sk-ant-oat01-original" {
+		t.Fatalf("observeToken = %q, want inbound bearer surfaced", got)
+	}
+	if didSwap {
+		t.Fatalf("didSwap = true, want false with nil sink")
 	}
 	if outbound := req.Header.Get("Authorization"); outbound != "Bearer sk-ant-oat01-original" {
 		t.Fatalf("outbound Authorization = %q, want unchanged", outbound)
@@ -160,16 +175,107 @@ func TestSwapAuthorizationLeavesRequestAloneOnRotatorError(t *testing.T) {
 	sink := &stubRotatorSink{tokenErr: errStubBoom}
 	req := newProbeRequest(t, "Bearer sk-ant-oat01-original")
 
-	got := swapAuthorizationForRotator(req, sink, discardLogger())
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
 
-	if got != "" {
-		t.Fatalf("swappedToken = %q, want empty on rotator error", got)
+	// Rotator error degrades to passthrough: observeToken carries the
+	// inbound bearer so observation against the inbound slot still fires,
+	// didSwap stays false so the 401 retry path stays disabled.
+	if got != "sk-ant-oat01-original" {
+		t.Fatalf("observeToken = %q, want inbound bearer surfaced on rotator error", got)
+	}
+	if didSwap {
+		t.Fatalf("didSwap = true, want false on rotator error")
 	}
 	if outbound := req.Header.Get("Authorization"); outbound != "Bearer sk-ant-oat01-original" {
 		t.Fatalf("outbound Authorization = %q, want original preserved", outbound)
 	}
 	if sink.tokenCalls != 1 {
 		t.Fatalf("Token calls = %d, want 1 (the failed attempt)", sink.tokenCalls)
+	}
+}
+
+// TestSwapAuthorizationSkipsEnvironmentPaths covers the path allowlist:
+// /v1/environments/<env_id>/* is resource-bound on the upstream, so we
+// pass the original bearer through to keep Anthropic's env-to-bearer
+// binding intact. The observe path still gets the inbound bearer so
+// rotator quota state stays current.
+func TestSwapAuthorizationSkipsEnvironmentPaths(t *testing.T) {
+	t.Parallel()
+	sink := &stubRotatorSink{token: "fresh-token"}
+	req := httptest.NewRequest(http.MethodGet, "https://api.anthropic.com/v1/environments/env_01ABC/work/poll?ack=true", nil)
+	req.Header.Set("Authorization", "Bearer sk-ant-oat01-original")
+
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
+
+	if got != "sk-ant-oat01-original" {
+		t.Fatalf("observeToken = %q, want inbound bearer surfaced for /v1/environments/*", got)
+	}
+	if didSwap {
+		t.Fatalf("didSwap = true, want false for /v1/environments/*")
+	}
+	if outbound := req.Header.Get("Authorization"); outbound != "Bearer sk-ant-oat01-original" {
+		t.Fatalf("outbound Authorization = %q, want passthrough", outbound)
+	}
+	if sink.tokenCalls != 0 {
+		t.Fatalf("Token calls = %d, want 0 for non-allowlisted path", sink.tokenCalls)
+	}
+}
+
+// TestSwapAuthorizationSkipsSessionPaths covers the same allowlist gate
+// for session-bound resources. Same rationale as environment paths:
+// session_* IDs are bound to the creating bearer upstream.
+func TestSwapAuthorizationSkipsSessionPaths(t *testing.T) {
+	t.Parallel()
+	sink := &stubRotatorSink{token: "fresh-token"}
+	req := httptest.NewRequest(http.MethodGet, "https://api.anthropic.com/v1/sessions/session_01ABC/watch", nil)
+	req.Header.Set("Authorization", "Bearer sk-ant-oat01-original")
+
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
+
+	if got != "sk-ant-oat01-original" {
+		t.Fatalf("observeToken = %q, want inbound bearer surfaced for /v1/sessions/*", got)
+	}
+	if didSwap {
+		t.Fatalf("didSwap = true, want false for /v1/sessions/*")
+	}
+	if sink.tokenCalls != 0 {
+		t.Fatalf("Token calls = %d, want 0 for non-allowlisted path", sink.tokenCalls)
+	}
+}
+
+// TestSwapAuthorizationAllowsCountTokens confirms the allowlist prefix
+// match covers /v1/messages/count_tokens too, not just exact /v1/messages.
+func TestSwapAuthorizationAllowsCountTokens(t *testing.T) {
+	t.Parallel()
+	sink := &stubRotatorSink{token: "fresh-token"}
+	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages/count_tokens", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-ant-oat01-original")
+
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
+
+	if !didSwap {
+		t.Fatalf("didSwap = false, want true for /v1/messages/count_tokens")
+	}
+	if got != "fresh-token" {
+		t.Fatalf("observeToken = %q, want fresh-token", got)
+	}
+}
+
+// TestSwapAuthorizationAllowsModels confirms /v1/models is on the swap
+// allowlist alongside /v1/messages.
+func TestSwapAuthorizationAllowsModels(t *testing.T) {
+	t.Parallel()
+	sink := &stubRotatorSink{token: "fresh-token"}
+	req := httptest.NewRequest(http.MethodGet, "https://api.anthropic.com/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer sk-ant-oat01-original")
+
+	got, didSwap := swapAuthorizationForRotator(req, sink, discardLogger())
+
+	if !didSwap {
+		t.Fatalf("didSwap = false, want true for /v1/models")
+	}
+	if got != "fresh-token" {
+		t.Fatalf("observeToken = %q, want fresh-token", got)
 	}
 }
 

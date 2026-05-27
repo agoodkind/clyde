@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-
 // linuxRegistry installs the Clyde MITM CA into the system trust
 // store on update-ca-certificates distros. The certificate is copied
 // to /usr/local/share/ca-certificates/clyde-mitm-ca.crt and
