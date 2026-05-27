@@ -500,7 +500,7 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 		})
 	}
 
-	return p.forwardProviderRequestToUpstream(params)
+	return p.forwardProviderRequestToUpstream(ctx, params)
 }
 
 // providerForwardParams bundles the per-request state computed inside
@@ -528,7 +528,13 @@ type providerForwardParams struct {
 // the client, and append capture metadata. Split out of
 // handleProviderInterceptedRequest to keep both functions under the
 // funlen ceiling.
-func (p *Proxy) forwardProviderRequestToUpstream(params providerForwardParams) error {
+func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params providerForwardParams) error {
+	sink := p.rotator()
+	// The provider intercept path forwards req as-is; swap the bearer on
+	// the live request header so providerUpstreamRequest copies the
+	// rotator-owned bearer into the upstream call. This mirrors the
+	// plain-HTTP path's pre-Do swap.
+	swappedToken := swapAuthorizationForRotator(params.req, sink, p.log)
 	resp, err := p.providerUpstreamRoundTrip(params.req, params.body, params.target, params.host)
 	if err != nil {
 		return p.recordProviderFailure(params.req, http.Header{}, buildProviderFailureInput(params, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
@@ -538,6 +544,17 @@ func (p *Proxy) forwardProviderRequestToUpstream(params providerForwardParams) e
 			errorMessage:        err.Error(),
 		})
 	}
+	// CLYDE-OAUTH: TLS-intercepted 401 retry mirrors the plain-HTTP
+	// dispatch path. The retry budget is one extra round-trip per
+	// inbound request.
+	if resp.StatusCode == http.StatusUnauthorized && swappedToken != "" && sink != nil {
+		if retryResp, retried := p.retryProviderAfterAuthFailure(ctx, params, swappedToken, sink); retried {
+			_ = resp.Body.Close()
+			resp = retryResp
+			swappedToken = strings.TrimPrefix(params.req.Header.Get("Authorization"), authSchemePrefix)
+		}
+	}
+	observeAnthropicResponse(ctx, sink, resp, swappedToken, p.log)
 	defer func() { _ = resp.Body.Close() }()
 
 	responseBytes, err := p.forwardAndCaptureProviderResponse(params.writer, resp, params.responseRawPath)
@@ -568,13 +585,13 @@ func (p *Proxy) forwardProviderRequestToUpstream(params providerForwardParams) e
 		HookName:            "",
 	}), params.capturePolicy); appendErr != nil {
 		if errors.Is(appendErr, ErrCaptureSinkClosed) {
-			p.log.Debug("mitm.provider.capture.append_skipped_closed",
+			p.log.DebugContext(ctx, "mitm.provider.capture.append_skipped_closed",
 				"component", "mitm",
 				"concern", "providers.mitm.wire",
 				"capture_dir", params.cfg.CaptureDir,
 			)
 		} else {
-			p.log.Warn("mitm.provider.capture.append_failed",
+			p.log.WarnContext(ctx, "mitm.provider.capture.append_failed",
 				"component", "mitm",
 				"concern", "providers.mitm.wire",
 				"capture_dir", params.cfg.CaptureDir,
@@ -582,7 +599,7 @@ func (p *Proxy) forwardProviderRequestToUpstream(params providerForwardParams) e
 			)
 		}
 	}
-	p.log.Info("mitm.provider.capture.completed",
+	p.log.InfoContext(ctx, "mitm.provider.capture.completed",
 		"provider", string(params.provider.ID()),
 		"host", params.host,
 		"concern", params.concern,
@@ -636,6 +653,48 @@ func providerHTTPCaptureRecordInput(params providerForwardParams, statusCode int
 		responseStatus: statusCode,
 		clientFacet:    nil,
 	}
+}
+
+// retryProviderAfterAuthFailure asks the rotator for a fresh token
+// after an upstream 401 on the TLS-intercepted forwarding path,
+// rewrites the bearer on params.req, and retries one round-trip.
+// Returns the retry response and true when the retry produced a
+// response (regardless of status); returns nil and false when the
+// rotator refuses a new token, returns the same token, or the retry
+// transport fails. The retry budget matches the plain-HTTP dispatch
+// path: exactly one extra round-trip per inbound request.
+func (p *Proxy) retryProviderAfterAuthFailure(ctx context.Context, params providerForwardParams, failedToken string, sink RotatorSink) (*http.Response, bool) {
+	freshToken, err := sink.TokenAfterAuthFailure(ctx, AnthropicProviderName, failedToken)
+	if err != nil {
+		p.log.DebugContext(ctx, "mitm.rotator_swap.retry_skipped",
+			"provider", string(AnthropicProviderName),
+			"host", params.host,
+			"path", params.req.URL.Path,
+			"err", err,
+		)
+		return nil, false
+	}
+	if freshToken == "" || freshToken == failedToken {
+		return nil, false
+	}
+	params.req.Header.Set("Authorization", authSchemePrefix+freshToken)
+	retryResp, retryErr := p.providerUpstreamRoundTrip(params.req, params.body, params.target, params.host)
+	if retryErr != nil {
+		p.log.WarnContext(ctx, "mitm.rotator_swap.retry_failed",
+			"provider", string(AnthropicProviderName),
+			"host", params.host,
+			"path", params.req.URL.Path,
+			"err", retryErr,
+		)
+		return nil, false
+	}
+	p.log.InfoContext(ctx, "mitm.rotator_swap.retry_succeeded",
+		"provider", string(AnthropicProviderName),
+		"host", params.host,
+		"path", params.req.URL.Path,
+		"retry_status", retryResp.StatusCode,
+	)
+	return retryResp, true
 }
 
 // providerUpstreamRoundTrip dials the upstream over the proxy's TLS

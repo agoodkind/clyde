@@ -102,19 +102,45 @@ func anthropicAccountSnapshots(ctx context.Context, rotator *oauthrotation.Rotat
 // subsystems, before the exclusive loops start; the loop reads it through
 // [SharedOAuthRotator]. A package-level holder is used because ExtraLoop
 // receives only a logger and cannot be handed the daemon-owned instance
-// directly.
+// directly. The receiver field carries the daemon's downstream injector (the
+// MITM proxy wiring) so the rotator setter can notify the proxy in the same
+// critical section that publishes the shared instance.
 type oauthRotatorHolder struct {
-	mu      sync.RWMutex
-	rotator *oauthrotation.Rotator
+	mu       sync.RWMutex
+	rotator  *oauthrotation.Rotator
+	receiver func(*oauthrotation.Rotator)
 }
 
 var sharedOAuthRotator oauthRotatorHolder
 
-// setSharedOAuthRotator records the daemon's single OAuth rotation layer.
+// setSharedOAuthRotator records the daemon's single OAuth rotation layer and
+// notifies any registered downstream receiver (typically the MITM proxy) so
+// subsystems that need the live rotator instance see it as soon as it
+// publishes. Receiver callbacks must be cheap and non-blocking; they run
+// under the holder mutex.
 func setSharedOAuthRotator(rotator *oauthrotation.Rotator) {
 	sharedOAuthRotator.mu.Lock()
 	defer sharedOAuthRotator.mu.Unlock()
 	sharedOAuthRotator.rotator = rotator
+	if sharedOAuthRotator.receiver != nil {
+		sharedOAuthRotator.receiver(rotator)
+	}
+}
+
+// registerOAuthRotatorReceiver records a single downstream consumer of the
+// daemon's OAuth rotator. The receiver fires once at registration time with
+// the current rotator (which may be nil if the daemon has not assembled the
+// adapter yet) and again whenever setSharedOAuthRotator publishes a new
+// instance. Used by the MITM proxy startup so the proxy can call
+// SetRotatorSink as soon as the rotator exists, without enlarging
+// startAdapter's wiring footprint in run.go.
+func registerOAuthRotatorReceiver(receiver func(*oauthrotation.Rotator)) {
+	sharedOAuthRotator.mu.Lock()
+	defer sharedOAuthRotator.mu.Unlock()
+	sharedOAuthRotator.receiver = receiver
+	if receiver != nil {
+		receiver(sharedOAuthRotator.rotator)
+	}
 }
 
 // SharedOAuthRotator returns the daemon's single OAuth rotation layer, or nil

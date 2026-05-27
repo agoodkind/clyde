@@ -41,6 +41,11 @@ type Proxy struct {
 	rawCaptureSeq   atomic.Uint64
 	requestLog      *logevent.Emitter
 
+	// rotatorSink + rotatorMu are owned by rotator_swap_proxy.go; see
+	// that file for the OAuth bearer swap and Observe wiring contract.
+	rotatorMu   sync.RWMutex
+	rotatorSink RotatorSink
+
 	// Tunnels tracks every long-lived MITM connection (CONNECT
 	// tunnels, intercepted provider TLS sessions, plain HTTP request
 	// loops) so the daemon can drain or force-close them on reload
@@ -103,6 +108,8 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 			logevent.RequiredLegsFromStrings(logging.RequiredLegs),
 			mitmEmitterOptions(logging)...,
 		),
+		rotatorMu:   sync.RWMutex{},
+		rotatorSink: nil, // wired post-construction via SetRotatorSink
 		Tunnels: livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
 			Component:     "mitm",
 			Concern:       slogger.ConcernProviderMITMLifecycle,
@@ -291,12 +298,16 @@ func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWri
 	}
 	copyHeaders(upReq.Header, req.header)
 	upReq.Host = ""
+	sink := p.rotator()
+	swappedToken := swapAuthorizationForRotator(upReq, sink, p.log)
 	resp, err := p.client.Do(upReq)
 	if err != nil {
 		p.log.WarnContext(upstreamCtx, "mitm.proxy.upstream_failed", "provider", req.provider, "path", req.path, "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return nil, false
 	}
+	resp, swappedToken = p.maybeRetryOnAuthFailure(upstreamCtx, resp, req, swappedToken, sink)
+	observeAnthropicResponse(upstreamCtx, sink, resp, swappedToken, p.log)
 	return resp, true
 }
 
