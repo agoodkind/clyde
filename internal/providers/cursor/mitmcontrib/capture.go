@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/gklog/correlation"
 )
 
 const captureKind = "cursor_tls_http"

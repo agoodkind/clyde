@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 // Ingress is the Cursor implementation of

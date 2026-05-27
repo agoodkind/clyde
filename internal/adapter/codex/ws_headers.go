@@ -4,7 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 const (
@@ -39,7 +40,7 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 	if clientRequestID != "" {
 		header.Set("x-client-request-id", clientRequestID)
 	}
-	for key, values := range cfg.Correlation.HTTPHeaders() {
+	for key, values := range clydeingress.HTTPHeaders(cfg.Correlation) {
 		for _, value := range values {
 			header.Add(key, value)
 		}

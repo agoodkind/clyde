@@ -7,7 +7,7 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 // applyBackendOverride keeps backend selection in the root adapter so request

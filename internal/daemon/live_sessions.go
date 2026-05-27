@@ -16,7 +16,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
 	claudeprovider "goodkind.io/clyde/internal/providers/claude"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
@@ -24,6 +23,7 @@ import (
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 	"goodkind.io/clyde/internal/util"
 	"goodkind.io/clyde/internal/webapp"
+	"goodkind.io/gklog/correlation"
 )
 
 var newCodexLiveRuntime = codex.NewLiveRuntime

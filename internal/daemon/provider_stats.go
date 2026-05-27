@@ -15,8 +15,9 @@ import (
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 type providerAggregate struct {
@@ -176,19 +177,7 @@ func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.Reque
 		CostMicrocents:             numberValue(rec.CostMicrocents),
 		DurationMs:                 numberValue(rec.DurationMs),
 		Err:                        rec.Error,
-		Correlation: correlation.Context{
-			TraceID:            correlation.TraceID(rec.TraceID),
-			SpanID:             correlation.SpanID(rec.SpanID),
-			ParentSpanID:       correlation.SpanID(rec.ParentSpanID),
-			RequestID:          rec.RequestID,
-			UpstreamRequestID:  rec.UpstreamRequestID,
-			UpstreamResponseID: rec.UpstreamResponseID,
-			ChatKey:            "",
-			ChatKeySource:      "",
-			ChatRootKey:        "",
-			ChatBranchKey:      "",
-			IdentityAttributes: providerStatsIdentityAttributes(rec),
-		},
+		Correlation: providerStatsCorrelation(rec),
 	}
 	if ev.Err == "" {
 		ev.Err = rec.Err
@@ -208,6 +197,28 @@ func providerStatsIdentityAttributes(rec providerStatsLogRecord) []correlation.I
 		attrs = append(attrs, correlation.IdentityAttribute{Key: "cursor_conversation_id", Value: rec.CursorConversationID})
 	}
 	return attrs
+}
+
+// providerStatsCorrelation builds a correlation.Context for one
+// provider-stats record. The trace, span, and request identifiers go
+// on the gklog core fields; cursor metadata stays under provider-owned
+// IdentityAttribute keys; clyde's upstream-request/upstream-response
+// identifiers ride alongside via the clydeingress helpers.
+func providerStatsCorrelation(rec providerStatsLogRecord) correlation.Context {
+	corr := correlation.Context{
+		TraceID:            correlation.TraceID(rec.TraceID),
+		SpanID:             correlation.SpanID(rec.SpanID),
+		ParentSpanID:       correlation.SpanID(rec.ParentSpanID),
+		RequestID:          rec.RequestID,
+		IdentityAttributes: providerStatsIdentityAttributes(rec),
+	}
+	if rec.UpstreamRequestID != "" {
+		corr = clydeingress.WithUpstreamRequestID(corr, rec.UpstreamRequestID)
+	}
+	if rec.UpstreamResponseID != "" {
+		corr = clydeingress.WithUpstreamResponseID(corr, rec.UpstreamResponseID)
+	}
+	return corr
 }
 
 func numberValue(v json.Number) int64 {

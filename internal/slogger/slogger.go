@@ -21,8 +21,8 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/gklog"
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/gklog/version"
 )
 
@@ -131,7 +131,13 @@ func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
 		handlers = append(handlers, slog.DiscardHandler)
 	}
 	handlerCloser := handlersCloser(handlers)
-	rootHandler := newCorrelationHandler(newAsyncHandler(gklog.NewTeeHandler(handlers...), handlerCloser))
+	rootHandler := correlation.SlogHandler(
+		newAsyncHandler(gklog.NewTeeHandler(handlers...), handlerCloser),
+		correlation.HandlerOptions{
+			Strict:   false,
+			Required: nil,
+		},
+	)
 	logger := slog.New(rootHandler).With("build", version.String())
 	slog.SetDefault(logger)
 	closer, ok := rootHandler.(io.Closer)
@@ -220,72 +226,6 @@ type concernFilterHandler struct {
 	concern string
 	attrs   []slog.Attr
 	handler slog.Handler
-}
-
-type correlationHandler struct {
-	attrs   []slog.Attr
-	handler slog.Handler
-}
-
-func newCorrelationHandler(handler slog.Handler) slog.Handler {
-	return &correlationHandler{handler: handler}
-}
-
-func (h *correlationHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.handler.Enabled(ctx, level)
-}
-
-func (h *correlationHandler) Handle(ctx context.Context, record slog.Record) error {
-	corrAttrs := correlation.AttrsFromContext(ctx)
-	if len(corrAttrs) == 0 {
-		return h.handler.Handle(ctx, record)
-	}
-	existing := attrKeySet(h.attrs, record)
-	var missing []slog.Attr
-	for _, attr := range corrAttrs {
-		if !existing[attr.Key] {
-			missing = append(missing, attr)
-		}
-	}
-	if len(missing) == 0 {
-		return h.handler.Handle(ctx, record)
-	}
-	next := record.Clone()
-	next.AddAttrs(missing...)
-	return h.handler.Handle(ctx, next)
-}
-
-func (h *correlationHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &correlationHandler{
-		attrs:   append(append([]slog.Attr(nil), h.attrs...), attrs...),
-		handler: h.handler.WithAttrs(attrs),
-	}
-}
-
-func (h *correlationHandler) WithGroup(name string) slog.Handler {
-	return &correlationHandler{
-		attrs:   append([]slog.Attr(nil), h.attrs...),
-		handler: h.handler.WithGroup(name),
-	}
-}
-
-func (h *correlationHandler) Close() error {
-	if closer, ok := h.handler.(io.Closer); ok {
-		return closer.Close()
-	}
-	return nil
-}
-
-func attrKeySet(handlerAttrs []slog.Attr, record slog.Record) map[string]bool {
-	keys := make(map[string]bool, len(handlerAttrs)+record.NumAttrs())
-	for _, attr := range handlerAttrs {
-		keys[attr.Key] = true
-	}
-	record.Attrs(func(attr slog.Attr) bool {
-		keys[attr.Key] = true
-		return true
-	})
-	return keys
 }
 
 func newConcernFilterHandler(concern string, handler slog.Handler) slog.Handler {

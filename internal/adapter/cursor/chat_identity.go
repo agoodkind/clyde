@@ -11,7 +11,8 @@ import (
 	"sync"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 const (
@@ -71,8 +72,8 @@ func NewChatIdentityResolver() *ChatIdentityResolver {
 
 // Resolve returns the effective chat identity for a Cursor request.
 func (r *ChatIdentityResolver) Resolve(corr correlation.Context, cursorReq Request, req adapteropenai.ChatRequest) ChatIdentity {
-	if strings.TrimSpace(corr.ChatKey) != "" {
-		return nativeChatIdentity(corr.ChatKey)
+	if existing := strings.TrimSpace(clydeingress.ChatKey(corr)); existing != "" {
+		return nativeChatIdentity(existing)
 	}
 	if strings.TrimSpace(cursorReq.ConversationID) != "" {
 		return nativeChatIdentity(cursorReq.ConversationID)

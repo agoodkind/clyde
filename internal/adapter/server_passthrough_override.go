@@ -12,7 +12,8 @@ import (
 	"time"
 
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 const structuredOutputPassthroughOverrideParseFailedEvent = "passthrough_override structured-output parse failed; retrying"
@@ -22,9 +23,9 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	reqID := newRequestID()
 	corr := correlation.FromContext(r.Context()).Child().WithRequestID(reqID)
 	if corr.TraceID == "" {
-		corr = correlation.FromHTTPHeader(r.Header, reqID)
+		corr = clydeingress.FromHTTPHeader(r.Header, reqID)
 	}
-	corr.SetHTTPHeaders(w.Header())
+	clydeingress.SetHTTPHeaders(corr, w.Header())
 	ctx := correlation.WithContext(r.Context(), corr)
 	r = r.WithContext(ctx)
 	streamRequested := false

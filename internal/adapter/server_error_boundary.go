@@ -4,7 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/correlation"
 )
 
 // adapterRecoveryWriter wraps [http.ResponseWriter] so the adapter boundary
@@ -47,9 +48,9 @@ func correlationForRequest(r *http.Request) correlation.Context {
 	if corr.RequestID != "" {
 		return corr
 	}
-	reqID := strings.TrimSpace(r.Header.Get(correlation.HeaderRequestID))
+	reqID := strings.TrimSpace(r.Header.Get(clydeingress.HeaderRequestID))
 	if reqID == "" {
 		reqID = newRequestID()
 	}
-	return correlation.FromHTTPHeader(r.Header, reqID)
+	return clydeingress.FromHTTPHeader(r.Header, reqID)
 }

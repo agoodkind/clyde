@@ -7,8 +7,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog/correlation"
 )
 
 const (
@@ -80,7 +81,7 @@ func (c sseAggregateCollector) Log(ctx context.Context, logCtx sseInstrumentatio
 	}
 	corr := logCtx.Correlation
 	if strings.TrimSpace(responseID) != "" {
-		corr = corr.WithUpstreamResponseID(responseID)
+		corr = clydeingress.WithUpstreamResponseID(corr, responseID)
 	}
 	attrs := []slog.Attr{
 		slog.String("subcomponent", "codex"),

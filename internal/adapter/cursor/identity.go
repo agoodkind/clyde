@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/gklog/correlation"
 )
 
 const (

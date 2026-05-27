@@ -13,10 +13,10 @@ import (
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/oauthrotation/provider"
+	"goodkind.io/gklog/correlation"
 )
 
 // defaultOAuthProvider is the provider name the CLI defaults to when a caller

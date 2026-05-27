@@ -18,7 +18,7 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestNormalizedProviderFinishReasonPreservesToolCallTerminalState(t *testing.T) {
@@ -408,16 +408,10 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 		t.Fatalf("NewSSEWriter: %v", err)
 	}
 	corr := correlation.Context{
-		TraceID:            "11111111111111111111111111111111",
-		SpanID:             "2222222222222222",
-		ParentSpanID:       "3333333333333333",
-		RequestID:          "req-final",
-		UpstreamRequestID:  "",
-		UpstreamResponseID: "",
-		ChatKey:            "",
-		ChatKeySource:      "",
-		ChatRootKey:        "",
-		ChatBranchKey:      "",
+		TraceID:      "11111111111111111111111111111111",
+		SpanID:       "2222222222222222",
+		ParentSpanID: "3333333333333333",
+		RequestID:    "req-final",
 		IdentityAttributes: []correlation.IdentityAttribute{
 			{Key: "cursor_request_id", Value: "cursor-final"},
 			{Key: "cursor_conversation_id", Value: "conversation-final"},

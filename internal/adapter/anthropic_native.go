@@ -15,6 +15,7 @@ import (
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/clydeingress"
 )
 
 const maxAnthropicMessagesBodyBytes = 8 << 20
@@ -33,7 +34,7 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 
 	corr := hctx.Correlation
 	reqID := corr.RequestID
-	corr.SetHTTPHeaders(w.Header())
+	clydeingress.SetHTTPHeaders(corr, w.Header())
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAnthropicMessagesBodyBytes))
 	if err != nil {
 		return adapterErrInvalidRequest("failed to read body", err)

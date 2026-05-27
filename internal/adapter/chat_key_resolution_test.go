@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
 )
 
 // TestChatKeyHeaderWinsOverBodyBackfill exercises the resolution chain that
@@ -18,16 +18,16 @@ func TestChatKeyHeaderWinsOverBodyBackfill(t *testing.T) {
 
 	header := http.Header{}
 	header.Set(adaptercursor.HeaderConversationID, "header-conv")
-	corr := correlation.FromHTTPHeader(header, "req-1")
+	corr := clydeingress.FromHTTPHeader(header, "req-1")
 	ingress := adaptercursor.NewIngress()
 	ingressCtx := ingress.TranslateHeaders(header)
-	corr = corr.WithChatIdentity(ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
-	if corr.ChatKey != "header-conv" {
-		t.Fatalf("header should resolve ChatKey, got %q", corr.ChatKey)
+	corr = clydeingress.WithChatIdentity(corr, ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")
+	if got := clydeingress.ChatKey(corr); got != "header-conv" {
+		t.Fatalf("header should resolve ChatKey, got %q", got)
 	}
-	corr = corr.WithChatKey("body-conv")
-	if corr.ChatKey != "header-conv" {
-		t.Fatalf("body backfill must not overwrite header value, got %q", corr.ChatKey)
+	corr = clydeingress.WithChatKey(corr, "body-conv")
+	if got := clydeingress.ChatKey(corr); got != "header-conv" {
+		t.Fatalf("body backfill must not overwrite header value, got %q", got)
 	}
 }
 
@@ -38,13 +38,13 @@ func TestChatKeyBodyBackfillWhenHeaderMissing(t *testing.T) {
 	t.Parallel()
 
 	header := http.Header{}
-	corr := correlation.FromHTTPHeader(header, "req-2")
-	if corr.ChatKey != "" {
-		t.Fatalf("ChatKey should be empty before backfill, got %q", corr.ChatKey)
+	corr := clydeingress.FromHTTPHeader(header, "req-2")
+	if got := clydeingress.ChatKey(corr); got != "" {
+		t.Fatalf("ChatKey should be empty before backfill, got %q", got)
 	}
-	corr = corr.WithChatKey("body-conv")
-	if corr.ChatKey != "body-conv" {
-		t.Fatalf("backfill should populate ChatKey, got %q", corr.ChatKey)
+	corr = clydeingress.WithChatKey(corr, "body-conv")
+	if got := clydeingress.ChatKey(corr); got != "body-conv" {
+		t.Fatalf("backfill should populate ChatKey, got %q", got)
 	}
 }
 
@@ -54,10 +54,10 @@ func TestChatKeyClaudeCodeSessionFallback(t *testing.T) {
 	t.Parallel()
 
 	header := http.Header{}
-	header.Set(correlation.HeaderClaudeCodeSessionID, "claude-sess")
-	corr := correlation.FromHTTPHeader(header, "req-3")
-	if corr.ChatKey != "claude-sess" {
-		t.Fatalf("expected claude session id, got %q", corr.ChatKey)
+	header.Set(clydeingress.HeaderClaudeCodeSessionID, "claude-sess")
+	corr := clydeingress.FromHTTPHeader(header, "req-3")
+	if got := clydeingress.ChatKey(corr); got != "claude-sess" {
+		t.Fatalf("expected claude session id, got %q", got)
 	}
 }
 
@@ -67,9 +67,9 @@ func TestChatKeyUnresolvedRemainsEmpty(t *testing.T) {
 	t.Parallel()
 
 	header := http.Header{}
-	corr := correlation.FromHTTPHeader(header, "req-4")
-	corr = corr.WithChatKey("")
-	if corr.ChatKey != "" {
-		t.Fatalf("unresolved ChatKey should remain empty, got %q", corr.ChatKey)
+	corr := clydeingress.FromHTTPHeader(header, "req-4")
+	corr = clydeingress.WithChatKey(corr, "")
+	if got := clydeingress.ChatKey(corr); got != "" {
+		t.Fatalf("unresolved ChatKey should remain empty, got %q", got)
 	}
 }

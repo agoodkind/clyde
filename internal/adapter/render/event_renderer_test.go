@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestEventRendererSuppressesArgumentOnlyToolDeltaLogs(t *testing.T) {
@@ -352,16 +352,10 @@ func TestEventRendererLogsAssistantTextSummaryCorrelation(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	corr := correlation.Context{
-		TraceID:            "0123456789abcdef0123456789abcdef",
-		SpanID:             "0123456789abcdef",
-		ParentSpanID:       "fedcba9876543210",
-		RequestID:          "req-corr",
-		UpstreamRequestID:  "",
-		UpstreamResponseID: "",
-		ChatKey:            "",
-		ChatKeySource:      "",
-		ChatRootKey:        "",
-		ChatBranchKey:      "",
+		TraceID:      "0123456789abcdef0123456789abcdef",
+		SpanID:       "0123456789abcdef",
+		ParentSpanID: "fedcba9876543210",
+		RequestID:    "req-corr",
 		IdentityAttributes: []correlation.IdentityAttribute{
 			{Key: "cursor_request_id", Value: "cursor-req"},
 			{Key: "cursor_conversation_id", Value: "cursor-conv"},

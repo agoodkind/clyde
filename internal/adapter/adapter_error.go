@@ -9,8 +9,9 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/errcontract"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog/correlation"
 )
 
 type adapterRouteFamily string
@@ -372,13 +373,13 @@ func errorDiagnosticsForRequest(
 		TraceID:            string(corr.TraceID),
 		SpanID:             string(corr.SpanID),
 		ParentSpanID:       string(corr.ParentSpanID),
-		ChatKey:            corr.ChatKey,
-		ChatKeySource:      corr.ChatKeySource,
-		ChatRootKey:        corr.ChatRootKey,
-		ChatBranchKey:      corr.ChatBranchKey,
+		ChatKey:            clydeingress.ChatKey(corr),
+		ChatKeySource:      clydeingress.ChatKeySource(corr),
+		ChatRootKey:        clydeingress.ChatRootKey(corr),
+		ChatBranchKey:      clydeingress.ChatBranchKey(corr),
 		IdentityAttributes: diagnosticIdentityAttributes(corr),
-		UpstreamRequestID:  corr.UpstreamRequestID,
-		UpstreamResponseID: corr.UpstreamResponseID,
+		UpstreamRequestID:  clydeingress.UpstreamRequestID(corr),
+		UpstreamResponseID: clydeingress.UpstreamResponseID(corr),
 		Provider:           aerr.Provider,
 		Backend:            aerr.Backend,
 		ModelAlias:         aerr.ModelAlias,
@@ -403,12 +404,31 @@ func diagnosticIdentityAttributes(corr correlation.Context) []errcontract.Diagno
 		if attr.Key == "" || attr.Value == "" {
 			continue
 		}
+		// Skip clyde-owned identity attribute keys that the diagnostics
+		// envelope already exposes as named fields. Vendor metadata
+		// (cursor_request_id, etc.) flows through unchanged.
+		if diagnosticReservedIdentityKey(attr.Key) {
+			continue
+		}
 		fields = append(fields, errcontract.DiagnosticField{
 			Key:   attr.Key,
 			Value: attr.Value,
 		})
 	}
 	return fields
+}
+
+func diagnosticReservedIdentityKey(key string) bool {
+	switch key {
+	case clydeingress.AttrKeyChatKey,
+		clydeingress.AttrKeyChatKeySource,
+		clydeingress.AttrKeyChatRootKey,
+		clydeingress.AttrKeyChatBranchKey,
+		clydeingress.AttrKeyUpstreamRequestID,
+		clydeingress.AttrKeyUpstreamResponseID:
+		return true
+	}
+	return false
 }
 
 func errorLogHint(requestID string) string {

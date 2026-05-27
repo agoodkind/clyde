@@ -13,16 +13,17 @@ import (
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
-	"goodkind.io/clyde/internal/correlation"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog/correlation"
 )
 
 func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	w := hctx.Writer
 	r := hctx.Request
 	corr := hctx.Correlation
-	corr.SetHTTPHeaders(w.Header())
+	clydeingress.SetHTTPHeaders(corr, w.Header())
 	entries := s.registry.List()
 	fingerprint := modelCatalogFingerprint(entries)
 	resp := ModelsResponse{Object: "list"}
@@ -92,7 +93,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	}
 	corr := hctx.Correlation
 	reqID := corr.RequestID
-	corr.SetHTTPHeaders(w.Header())
+	clydeingress.SetHTTPHeaders(corr, w.Header())
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<20))
 	if err != nil {
 		return adapterErrInvalidRequest("failed to read body", err)
@@ -117,7 +118,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	ingressCtx := ingress.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
 	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
 	identity := ingress.ResolveIdentity(corr, ingressCtx, ingresscontract.ChatRequestPrimitive{Body: req})
-	corr = corr.WithChatIdentity(identity.ChatKey, identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
+	corr = clydeingress.WithChatIdentity(corr, identity.ChatKey, identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
 	ctx = correlation.WithContext(ctx, corr)
 	r = r.WithContext(ctx)
 	bodyFacets := ingress.RequestFacets(ingressCtx)
@@ -167,8 +168,8 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 
 func applyHeaderIngressContext(ctx context.Context, r *http.Request, corr correlation.Context, ingress ingresscontract.IngressContract) (context.Context, *http.Request, correlation.Context, []logevent.Facet) {
 	headerIngressCtx := ingress.TranslateHeaders(r.Header)
-	if headerIngressCtx.ConversationID != "" && corr.ChatKey == "" {
-		corr = corr.WithChatIdentity(headerIngressCtx.ConversationID, "native", headerIngressCtx.ConversationID, "")
+	if headerIngressCtx.ConversationID != "" && clydeingress.ChatKey(corr) == "" {
+		corr = clydeingress.WithChatIdentity(corr, headerIngressCtx.ConversationID, "native", headerIngressCtx.ConversationID, "")
 	}
 	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(headerIngressCtx)...)
 	ctx = correlation.WithContext(ctx, corr)

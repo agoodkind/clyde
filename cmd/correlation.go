@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"goodkind.io/clyde/internal/correlation"
 	"goodkind.io/clyde/internal/util"
 	"goodkind.io/gklog"
+	"goodkind.io/gklog/correlation"
 )
 
 func newCommandContext(operation string) context.Context {
