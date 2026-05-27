@@ -12,7 +12,7 @@ updates:
           - patch
     open-pull-requests-limit: 5
     reviewers:
-      - fgrehm
+      - agoodkind
 
   - package-ecosystem: github-actions
     directory: /
@@ -25,4 +25,4 @@ updates:
           - "*"
     open-pull-requests-limit: 3
     reviewers:
-      - fgrehm
+      - agoodkind
