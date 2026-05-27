@@ -743,33 +743,6 @@ func UpdateConfigControlViaDaemon(ctx context.Context, key, value string) (*clyd
 	return resp.GetControl(), nil
 }
 
-// UpdateSessionContextWindowViaDaemon updates a session-specific context window setting through the daemon.
-func UpdateSessionContextWindowViaDaemon(ctx context.Context, sessionName, contextWindow string) error {
-	log := daemonClientLog(ctx)
-	log.DebugContext(ctx, "daemon.client.update_session_context_window.begin", "session", sessionName, "context_window", contextWindow)
-	c, err := ConnectOrStart(ctx)
-	if err != nil {
-		log.DebugContext(ctx, "daemon.client.update_session_context_window.connect_failed", "err", err)
-		return err
-	}
-	defer func() { _ = c.conn.Close() }()
-	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err = c.rpc.UpdateSessionSettings(rpcCtx, &clydev1.UpdateSessionSettingsRequest{
-		Name: sessionName,
-		Settings: &clydev1.Settings{
-			ContextWindow: contextWindow,
-		},
-		UpdateMask: []string{"context_window"},
-	})
-	if err != nil {
-		log.WarnContext(rpcCtx, "daemon.client.update_session_context_window.rpc_failed", "session", sessionName, "err", err)
-		return fmt.Errorf("update session context window %q: %w", sessionName, err)
-	}
-	log.DebugContext(rpcCtx, "daemon.client.update_session_context_window.ok", "session", sessionName, "context_window", contextWindow)
-	return nil
-}
-
 func lifecycleOutcomeForError(err error) LifecycleOutcome {
 	if err == nil {
 		return LifecycleOutcomeReady

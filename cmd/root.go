@@ -171,33 +171,32 @@ func buildAppCallbacks(parentCtx context.Context, dashboardLaunchCWD string) ui.
 		dashboardLaunchCWD: dashboardLaunchCWD,
 	}
 	return ui.AppCallbacks{
-		ListSessions:               builder.listSessions,
-		LoadStats:                  builder.loadStats,
-		SubscribeProviderStats:     builder.subscribeProviderStats,
-		RestartDaemon:              builder.restartDaemon,
-		StartSessionWithBasedir:    builder.startSessionWithBasedir,
-		StartLiveSession:           builder.startLiveSession,
-		ResumeSession:              builder.resumeSession,
-		DeleteSession:              builder.deleteSession,
-		RenameSession:              builder.renameSession,
-		SetBasedir:                 builder.setBasedir,
-		RefreshSummary:             builder.refreshSummary,
-		ViewContent:                builder.viewContent,
-		ExportSession:              builder.exportSession,
-		LoadExportStats:            builder.loadExportStats,
-		SubscribeRegistry:          builder.subscribeRegistry,
-		LoadConfigControls:         builder.loadConfigControls,
-		UpdateConfigControl:        builder.updateConfigControl,
-		UpdateSessionContextWindow: builder.updateSessionContextWindow,
-		SendLiveSession:            builder.sendLiveSession,
-		StreamLiveSession:          builder.streamLiveSession,
-		CompactPreview:             builder.compactPreview,
-		CompactApply:               builder.compactApply,
-		CompactUndo:                builder.compactUndo,
-		GetSessionDetail:           builder.getSessionDetail,
-		OAuthAccountList:           builder.oauthAccountList,
-		OAuthAccountLogin:          builder.oauthAccountLogin,
-		OAuthAccountForget:         builder.oauthAccountForget,
+		ListSessions:            builder.listSessions,
+		LoadStats:               builder.loadStats,
+		SubscribeProviderStats:  builder.subscribeProviderStats,
+		RestartDaemon:           builder.restartDaemon,
+		StartSessionWithBasedir: builder.startSessionWithBasedir,
+		StartLiveSession:        builder.startLiveSession,
+		ResumeSession:           builder.resumeSession,
+		DeleteSession:           builder.deleteSession,
+		RenameSession:           builder.renameSession,
+		SetBasedir:              builder.setBasedir,
+		RefreshSummary:          builder.refreshSummary,
+		ViewContent:             builder.viewContent,
+		ExportSession:           builder.exportSession,
+		LoadExportStats:         builder.loadExportStats,
+		SubscribeRegistry:       builder.subscribeRegistry,
+		LoadConfigControls:      builder.loadConfigControls,
+		UpdateConfigControl:     builder.updateConfigControl,
+		SendLiveSession:         builder.sendLiveSession,
+		StreamLiveSession:       builder.streamLiveSession,
+		CompactPreview:          builder.compactPreview,
+		CompactApply:            builder.compactApply,
+		CompactUndo:             builder.compactUndo,
+		GetSessionDetail:        builder.getSessionDetail,
+		OAuthAccountList:        builder.oauthAccountList,
+		OAuthAccountLogin:       builder.oauthAccountLogin,
+		OAuthAccountForget:      builder.oauthAccountForget,
 	}
 }
 
@@ -625,27 +624,6 @@ func (builder appCallbackBuilder) loadConfigControls() ([]ui.ConfigControl, erro
 func (builder appCallbackBuilder) updateConfigControl(key, value string) error {
 	_, err := daemon.UpdateConfigControlViaDaemon(builder.childContext("dashboard.config_controls.update"), key, value)
 	return err
-}
-
-func (builder appCallbackBuilder) updateSessionContextWindow(sess *session.Session, contextWindow string) error {
-	if sess == nil {
-		return fmt.Errorf("nil session")
-	}
-	if err := daemon.UpdateSessionContextWindowViaDaemon(
-		builder.childContext("dashboard.session.context_window.update"),
-		sess.Name,
-		contextWindow,
-	); err != nil {
-		slog.WarnContext(
-			builder.childContext("dashboard.session.context_window.update_failed"),
-			"dashboard.session.context_window.update_failed",
-			"component", "tui",
-			"session", sess.Name,
-			"err", err,
-		)
-		return fmt.Errorf("update session context window %q: %w", sess.Name, err)
-	}
-	return nil
 }
 
 func (builder appCallbackBuilder) sendLiveSession(sessionID, text string) error {

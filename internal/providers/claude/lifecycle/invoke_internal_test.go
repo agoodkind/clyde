@@ -2,7 +2,6 @@ package claude
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"maps"
 	"os"
@@ -388,110 +387,6 @@ func TestLaunchEnvPreservesAnthropicBaseURLOverride(t *testing.T) {
 	if env["ANTHROPIC_BASE_URL"] != "https://my.override.example" {
 		t.Fatalf("ANTHROPIC_BASE_URL = %q, want caller-supplied override", env["ANTHROPIC_BASE_URL"])
 	}
-}
-
-func TestApplyContextWindowLaunchSettingsFor200KDisables1MAndStripsModelSuffix(t *testing.T) {
-	settingsFile := filepath.Join(t.TempDir(), "settings.json")
-	settingsJSON := []byte(`{"model":"opus[1m]","contextWindow":"200k","remoteControl":true}`)
-	if err := os.WriteFile(settingsFile, settingsJSON, 0o600); err != nil {
-		t.Fatalf("write settings: %v", err)
-	}
-
-	env := map[string]string{"CLYDE_SESSION_NAME": "chat-1"}
-	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-	defer cleanupSettings()
-
-	if env[envDisable1MContext] != "1" {
-		t.Fatalf("%s = %q, want 1", envDisable1MContext, env[envDisable1MContext])
-	}
-	if effectiveSettingsFile == settingsFile {
-		t.Fatal("effective settings file matched original, want temporary rewritten file")
-	}
-	model := settingsModel(t, effectiveSettingsFile)
-	if model != "opus" {
-		t.Fatalf("effective model = %q, want opus", model)
-	}
-	if originalModel := settingsModel(t, settingsFile); originalModel != "opus[1m]" {
-		t.Fatalf("original model = %q, want opus[1m]", originalModel)
-	}
-	if got := commandEnvironmentValue(commandEnvironment(env), envDisable1MContext); got != "1" {
-		t.Fatalf("command env %s = %q, want 1", envDisable1MContext, got)
-	}
-}
-
-func TestApplyContextWindowLaunchSettingsFor1MUnsetsDisableAndAddsOpusSuffix(t *testing.T) {
-	settingsFile := filepath.Join(t.TempDir(), "settings.json")
-	settingsJSON := []byte(`{"model":"claude-opus-4-1","contextWindow":"1m"}`)
-	if err := os.WriteFile(settingsFile, settingsJSON, 0o600); err != nil {
-		t.Fatalf("write settings: %v", err)
-	}
-
-	t.Setenv(envDisable1MContext, "1")
-	env := map[string]string{"CLYDE_SESSION_NAME": "chat-1"}
-	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-	defer cleanupSettings()
-
-	if env[envDisable1MContext] != envUnsetValue {
-		t.Fatalf("%s marker = %q, want unset marker", envDisable1MContext, env[envDisable1MContext])
-	}
-	model := settingsModel(t, effectiveSettingsFile)
-	if model != "claude-opus-4-1[1m]" {
-		t.Fatalf("effective model = %q, want claude-opus-4-1[1m]", model)
-	}
-	for _, entry := range commandEnvironment(env) {
-		if strings.HasPrefix(entry, envDisable1MContext+"=") {
-			t.Fatalf("command env contained %q, want absent", entry)
-		}
-	}
-}
-
-func TestApplyContextWindowLaunchSettingsDefaultLeavesEnvAndSettingsAlone(t *testing.T) {
-	settingsFile := filepath.Join(t.TempDir(), "settings.json")
-	settingsJSON := []byte(`{"model":"opus[1m]"}`)
-	if err := os.WriteFile(settingsFile, settingsJSON, 0o600); err != nil {
-		t.Fatalf("write settings: %v", err)
-	}
-
-	env := map[string]string{"CLYDE_SESSION_NAME": "chat-1"}
-	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-	defer cleanupSettings()
-
-	if effectiveSettingsFile != settingsFile {
-		t.Fatalf("effective settings file = %q, want %q", effectiveSettingsFile, settingsFile)
-	}
-	if _, ok := env[envDisable1MContext]; ok {
-		t.Fatalf("%s was set for default context window", envDisable1MContext)
-	}
-	if model := settingsModel(t, effectiveSettingsFile); model != "opus[1m]" {
-		t.Fatalf("effective model = %q, want opus[1m]", model)
-	}
-}
-
-func settingsModel(t *testing.T, settingsFile string) string {
-	t.Helper()
-
-	content, err := os.ReadFile(settingsFile)
-	if err != nil {
-		t.Fatalf("read settings %q: %v", settingsFile, err)
-	}
-	var settings struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(content, &settings); err != nil {
-		t.Fatalf("decode settings %q: %v", settingsFile, err)
-	}
-	return settings.Model
-}
-
-func commandEnvironmentValue(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		entry := env[i]
-		if strings.HasPrefix(entry, prefix) {
-			return strings.TrimPrefix(entry, prefix)
-		}
-	}
-	return ""
 }
 
 func TestLifecycleStartInteractiveReturnsUUIDAllocationError(t *testing.T) {

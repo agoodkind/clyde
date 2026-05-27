@@ -31,7 +31,7 @@ GO_BUILD_LDFLAGS += -X goodkind.io/clyde/internal/daemonsupervisor.BuildFingerpr
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
 
 # Project allowlist for the central lint-deadcode gate.
-DEADCODE_EXCLUDE_PATHS = cmd/root.go:.*NewRootCmd,internal/mitm/(baseline_paths|codegen|codegen_v2|drift_runner)\.go:,internal/testutil/claude.go:.*CreateFakeClaude,internal/testutil/claude.go:.*ReadClaudeArgs
+DEADCODE_EXCLUDE_PATHS = cmd/root.go:.*NewRootCmd,internal/mitm/(baseline_paths|codegen|codegen_v2|drift_runner)\.go:,internal/testutil/claude.go:.*CreateFakeClaude,internal/testutil/claude.go:.*ReadClaudeArgs,internal/providers/claude/claudepath/settings_overlay\.go:.*WriteModelOverrideSettings
 
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk

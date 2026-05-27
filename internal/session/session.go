@@ -82,7 +82,6 @@ type Settings struct {
 	EffortLevel   string      `json:"effortLevel,omitempty"`
 	OutputStyle   string      `json:"outputStyle,omitempty"`
 	RemoteControl bool        `json:"remoteControl,omitempty"`
-	ContextWindow string      `json:"contextWindow,omitempty"`
 	Permissions   Permissions `json:"permissions,omitzero"`
 }
 

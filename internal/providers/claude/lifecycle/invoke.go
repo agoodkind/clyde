@@ -2,7 +2,6 @@ package claude
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -39,16 +38,6 @@ var (
 
 const (
 	envEnableSelfReload = "CLYDE_ENABLE_SELF_RELOAD"
-	envDisable1MContext = "CLAUDE_CODE_DISABLE_1M_CONTEXT"
-	envUnsetValue       = "\x00clyde-unset\x00"
-)
-
-type contextWindowSetting string
-
-const (
-	contextWindowUnset contextWindowSetting = ""
-	contextWindow200K  contextWindowSetting = "200k"
-	contextWindow1M    contextWindowSetting = "1m"
 )
 
 type monitorState struct {
@@ -249,139 +238,12 @@ func sessionSettingsFileForSession(clydeRoot string, sess *session.Session) stri
 	return settingsPath
 }
 
-func applyContextWindowLaunchSettings(settingsFile string, env map[string]string) (string, func()) {
-	contextWindow, model, rawSettings, ok := readContextWindowLaunchSettings(settingsFile)
-	if !ok {
-		return settingsFile, func() {}
-	}
-
-	effectiveModel := model
-	switch contextWindow {
-	case contextWindow200K:
-		env[envDisable1MContext] = "1"
-		effectiveModel = strings.TrimSuffix(strings.TrimSpace(model), "[1m]")
-	case contextWindow1M:
-		env[envDisable1MContext] = envUnsetValue
-		if shouldUse1MModelSuffix(model) {
-			effectiveModel = strings.TrimSpace(model) + "[1m]"
-		}
-	case contextWindowUnset:
-		return settingsFile, func() {}
-	default:
-		return settingsFile, func() {}
-	}
-
-	if effectiveModel == model {
-		return settingsFile, func() {}
-	}
-	effectiveFile, err := writeTemporaryLaunchSettings(rawSettings, effectiveModel)
-	if err != nil {
-		claudeLog.Warn("claude.context_window.settings_rewrite_failed",
-			"component", "claude",
-			"settings_file", settingsFile,
-			"err", err,
-		)
-		return settingsFile, func() {}
-	}
-	return effectiveFile, func() { _ = os.Remove(effectiveFile) }
-}
-
-func readContextWindowLaunchSettings(settingsFile string) (contextWindowSetting, string, map[string]json.RawMessage, bool) {
-	if settingsFile == "" || !util.FileExists(settingsFile) {
-		return contextWindowUnset, "", nil, false
-	}
-	content, err := os.ReadFile(settingsFile)
-	if err != nil {
-		return contextWindowUnset, "", nil, false
-	}
-	var rawSettings map[string]json.RawMessage
-	if err := json.Unmarshal(content, &rawSettings); err != nil {
-		return contextWindowUnset, "", nil, false
-	}
-	contextWindow := rawSettingsString(rawSettings, "contextWindow")
-	if contextWindow == "" {
-		return contextWindowUnset, "", rawSettings, false
-	}
-	model := rawSettingsString(rawSettings, "model")
-	return contextWindowSetting(strings.ToLower(contextWindow)), model, rawSettings, true
-}
-
-func rawSettingsString(rawSettings map[string]json.RawMessage, key string) string {
-	rawValue, ok := rawSettings[key]
-	if !ok {
-		return ""
-	}
-	var value string
-	if err := json.Unmarshal(rawValue, &value); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(value)
-}
-
-func shouldUse1MModelSuffix(model string) bool {
-	trimmedModel := strings.TrimSpace(model)
-	if trimmedModel == "" || strings.HasSuffix(trimmedModel, "[1m]") {
-		return false
-	}
-	return strings.Contains(strings.ToLower(trimmedModel), "opus")
-}
-
-func writeTemporaryLaunchSettings(rawSettings map[string]json.RawMessage, model string) (string, error) {
-	modelJSON, err := json.Marshal(model)
-	if err != nil {
-		claudeLog.Warn("claude.context_window.model_json_failed", "component", "claude", "err", err)
-		return "", fmt.Errorf("marshal context window model: %w", err)
-	}
-	rawSettings["model"] = modelJSON
-	content, err := json.MarshalIndent(rawSettings, "", "  ")
-	if err != nil {
-		claudeLog.Warn("claude.context_window.settings_json_failed", "component", "claude", "err", err)
-		return "", fmt.Errorf("marshal context window settings: %w", err)
-	}
-	tmpFile, err := os.CreateTemp("", "clyde-claude-settings-*.json")
-	if err != nil {
-		claudeLog.Warn("claude.context_window.temp_create_failed", "component", "claude", "err", err)
-		return "", fmt.Errorf("create context window settings temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	if _, err := tmpFile.Write(content); err != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-		claudeLog.Warn("claude.context_window.temp_write_failed", "component", "claude", "path", tmpPath, "err", err)
-		return "", fmt.Errorf("write context window settings temp file %q: %w", tmpPath, err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		claudeLog.Warn("claude.context_window.temp_close_failed", "component", "claude", "path", tmpPath, "err", err)
-		return "", fmt.Errorf("close context window settings temp file %q: %w", tmpPath, err)
-	}
-	return tmpPath, nil
-}
-
 func commandEnvironment(env map[string]string) []string {
 	commandEnv := os.Environ()
-	if _, ok := env[envDisable1MContext]; ok {
-		commandEnv = withoutEnvironmentKey(commandEnv, envDisable1MContext)
-	}
 	for key, value := range env {
-		if value == envUnsetValue {
-			continue
-		}
 		commandEnv = append(commandEnv, fmt.Sprintf("%s=%s", key, value))
 	}
 	return commandEnv
-}
-
-func withoutEnvironmentKey(env []string, key string) []string {
-	prefix := key + "="
-	filtered := make([]string, 0, len(env))
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			continue
-		}
-		filtered = append(filtered, entry)
-	}
-	return filtered
 }
 
 func resumeAdditionalArgs(sess *session.Session, currentWorkDir string) []string {
@@ -409,7 +271,6 @@ func PersistRemoteControlSetting(store SessionSettingsStore, sessionName string)
 			EffortLevel:   "",
 			OutputStyle:   "",
 			RemoteControl: false,
-			ContextWindow: "",
 			Permissions: session.Permissions{
 				Allow:                        nil,
 				Ask:                          nil,
@@ -439,11 +300,8 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 	applyDaemonLaunchEnv(env)
 	defer cleanupLaunchCredentialDir(env)
 
-	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-	defer cleanupSettings()
-
 	args := []string{"--resume", sessionID, "-n", sess.Name}
-	args = appendCommonArgs(args, effectiveSettingsFile)
+	args = appendCommonArgs(args, settingsFile)
 	args = append(args, resumeAdditionalArgs(sess, opts.CurrentWorkDir)...)
 	args = append(args, opts.AdditionalArgs...)
 
@@ -451,7 +309,7 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 		return invokeWithCleanup(clydeRoot, sess, args, env, sess.Metadata.WorkDir)
 	}
 
-	if remoteControlEnabled(effectiveSettingsFile) {
+	if remoteControlEnabled(settingsFile) {
 		return invokeInteractivePTY(args, env, sess.Metadata.WorkDir, sessionID)
 	}
 	return invokeInteractive(args, env, sess.Metadata.WorkDir)
@@ -465,18 +323,16 @@ func Resume(clydeRoot string, sess *session.Session, opts ResumeOptions) error {
 // inject socket, metadata, and later resume flows all share one UUID.
 func StartNewInteractive(env map[string]string, settingsFile string, workDir string, forceRemoteControl bool, sessionID string) error {
 	sessionID = launchSessionID(env, sessionID)
-	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-	defer cleanupSettings()
 
 	args := []string{}
-	args = appendCommonArgs(args, effectiveSettingsFile)
+	args = appendCommonArgs(args, settingsFile)
 	if sessionID != "" {
 		env["CLYDE_SESSION_ID"] = sessionID
 		args = append(args, "--session-id", sessionID)
 	}
 	applyDaemonLaunchEnv(env)
 	defer cleanupLaunchCredentialDir(env)
-	if forceRemoteControl || remoteControlEnabled(effectiveSettingsFile) {
+	if forceRemoteControl || remoteControlEnabled(settingsFile) {
 		return invokeInteractivePTY(args, env, workDir, sessionID)
 	}
 	return invokeInteractive(args, env, workDir)
@@ -614,9 +470,6 @@ func displayCommand(claudeBin string, args []string, env map[string]string) {
 		if len(env) > 0 {
 			fmt.Fprintln(os.Stderr, "[DEBUG] Environment variables:")
 			for k, v := range env {
-				if v == envUnsetValue {
-					continue
-				}
 				fmt.Fprintf(os.Stderr, "  %s=%s\n", k, v)
 			}
 		}
@@ -640,10 +493,8 @@ func invokeInteractive(args []string, env map[string]string, workDir string) err
 	sessionID := env["CLYDE_SESSION_ID"]
 
 	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName, sessionID); settingsFile != "" {
-		effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-		defer cleanupSettings()
 		// Inject per-session settings before other args.
-		args = append([]string{"--settings", effectiveSettingsFile}, args...)
+		args = append([]string{"--settings", settingsFile}, args...)
 	}
 
 	displayCommand(claudeBin, args, env)

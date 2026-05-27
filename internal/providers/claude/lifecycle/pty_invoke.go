@@ -44,11 +44,9 @@ func invokeInteractivePTY(args []string, env map[string]string, workDir, session
 // text to the running Claude session, but local terminal IO is detached.
 func StartHeadlessRemoteWorker(env map[string]string, settingsFile string, workDir, sessionID string) error {
 	sessionID = launchSessionID(env, sessionID)
-	effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-	defer cleanupSettings()
 
 	args := []string{}
-	args = appendCommonArgs(args, effectiveSettingsFile)
+	args = appendCommonArgs(args, settingsFile)
 	if sessionID != "" {
 		env["CLYDE_SESSION_ID"] = sessionID
 		args = append(args, "--session-id", sessionID)
@@ -70,9 +68,7 @@ func invokePTY(args []string, env map[string]string, workDir, sessionID string, 
 		sessionID = envSessionID
 	}
 	if settingsFile := acquireDaemonSession(ctx, wrapperID, sessionName, sessionID); settingsFile != "" {
-		effectiveSettingsFile, cleanupSettings := applyContextWindowLaunchSettings(settingsFile, env)
-		defer cleanupSettings()
-		args = append([]string{"--settings", effectiveSettingsFile}, args...)
+		args = append([]string{"--settings", settingsFile}, args...)
 	}
 
 	if interactive {

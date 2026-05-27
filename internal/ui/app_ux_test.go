@@ -808,59 +808,6 @@ func TestUX_SessionOptionsIncludeExportWhenCallbackConfigured(t *testing.T) {
 	}
 }
 
-func TestUX_SessionOptionsIncludeClaudeContextWhenCallbackConfigured(t *testing.T) {
-	a, _, cleanup := mkAppWithSessions(t, 1)
-	defer cleanup()
-	a.cb.UpdateSessionContextWindow = func(*session.Session, string) error { return nil }
-
-	a.openSessionOptionsFor(a.sessions[a.visibleIdx[0]])
-	modal, ok := a.overlay.(*OptionsModal)
-	if !ok {
-		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
-	}
-	entry := findModalEntry(modal, "Claude context")
-	if entry == nil {
-		t.Fatalf("session options missing Claude context action")
-	}
-	if entry.Disabled {
-		t.Fatalf("Claude context entry disabled for Claude session with callback")
-	}
-}
-
-func TestUX_SessionContextWindowOptionsPersistOnlySelectedValue(t *testing.T) {
-	a, _, cleanup := mkAppWithSessions(t, 1)
-	defer cleanup()
-	var gotSession string
-	var gotContextWindow string
-	a.cb.UpdateSessionContextWindow = func(sess *session.Session, contextWindow string) error {
-		gotSession = sess.Name
-		gotContextWindow = contextWindow
-		return nil
-	}
-
-	sess := a.sessions[a.visibleIdx[0]]
-	a.openSessionContextWindowOptions(sess, nil)
-	modal, ok := a.overlay.(*OptionsModal)
-	if !ok {
-		t.Fatalf("overlay = %T, want *OptionsModal", a.overlay)
-	}
-	action := findModalAction(modal, "Force 200k")
-	if action == nil {
-		t.Fatalf("context options missing Force 200k action")
-	}
-	action()
-
-	if gotSession != sess.Name {
-		t.Fatalf("updated session = %q want %q", gotSession, sess.Name)
-	}
-	if gotContextWindow != "200k" {
-		t.Fatalf("context window = %q want 200k", gotContextWindow)
-	}
-	if a.overlay != nil {
-		t.Fatalf("overlay = %T, want nil", a.overlay)
-	}
-}
-
 func TestUX_OpenExportOptionsDoesNotBlockOnExportStats(t *testing.T) {
 	a, _, cleanup := mkAppWithSessions(t, 1)
 	defer cleanup()

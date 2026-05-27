@@ -2247,9 +2247,6 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 	if settings != nil && applyMask("remote_control") {
 		current.RemoteControl = settings.GetRemoteControl()
 	}
-	if settings != nil && applyMask("context_window") {
-		current.ContextWindow = settings.GetContextWindow()
-	}
 	if err := sessionsettings.Save(store, sess, current); err != nil {
 		return nil, status.Errorf(codes.Internal, "save settings: %v", err)
 	}
@@ -2260,7 +2257,6 @@ func (s *Server) UpdateSessionSettings(ctx context.Context, req *clydev1.UpdateS
 		slog.String("model", current.Model),
 		slog.String("cursor_normalized_model", adaptercursor.NormalizeModelAlias(current.Model)),
 		slog.String("effort", current.EffortLevel),
-		slog.String("context_window", current.ContextWindow),
 	)
 	return &clydev1.UpdateSessionSettingsResponse{}, nil
 }
@@ -2611,7 +2607,6 @@ func defaultSessionSettings(remoteControl bool) *session.Settings {
 		EffortLevel:   "",
 		OutputStyle:   "",
 		RemoteControl: remoteControl,
-		ContextWindow: "",
 		Permissions: session.Permissions{
 			Allow:                        nil,
 			Ask:                          nil,

@@ -92,9 +92,6 @@ type AppCallbacks struct {
 	LoadConfigControls func() ([]ConfigControl, error)
 	// UpdateConfigControl persists one config control change via the daemon.
 	UpdateConfigControl func(key, value string) error
-	// UpdateSessionContextWindow persists one Claude Code context-window
-	// choice for one session. Empty means provider default behavior.
-	UpdateSessionContextWindow func(sess *session.Session, contextWindow string) error
 	// ListSessions returns the daemon-owned dashboard snapshot.
 	ListSessions func() (SessionSnapshot, error)
 	// LoadStats returns asynchronously rendered dashboard-wide cache stats.
@@ -6593,14 +6590,6 @@ func (a *App) sessionOptionsEntriesFor(sess *session.Session, close func(), incl
 			Disabled: !caps.Compaction,
 		},
 		{
-			Label: "Claude context",
-			Hint:  "default / 200k / 1M",
-			Action: func() {
-				a.openSessionContextWindowOptions(sess, close)
-			},
-			Disabled: a.cb.UpdateSessionContextWindow == nil || !caps.PerSessionSettings,
-		},
-		{
 			Label: "Fork",
 			Hint:  "f",
 			Action: func() {
@@ -6775,50 +6764,6 @@ func accountDetailText(account OAuthAccountInfo, status AccountStatus) string {
 	default:
 		return "ready"
 	}
-}
-
-func (a *App) openSessionContextWindowOptions(sess *session.Session, closeParent func()) {
-	if sess == nil || a.cb.UpdateSessionContextWindow == nil {
-		return
-	}
-	if closeParent != nil {
-		closeParent()
-	}
-	apply := func(value string) func() {
-		return func() {
-			err := a.cb.UpdateSessionContextWindow(sess, value)
-			if err != nil {
-				a.mode = StatusFilter
-				return
-			}
-			a.closeOverlay()
-			a.mode = StatusFilter
-		}
-	}
-	entries := []OptionsModalEntry{
-		{
-			Label:  "Default",
-			Hint:   "provider default",
-			Action: apply(""),
-		},
-		{
-			Label:  "Force 200k",
-			Hint:   "this chat",
-			Action: apply("200k"),
-		},
-		{
-			Label:  "Force 1M",
-			Hint:   "this chat",
-			Action: apply("1m"),
-		},
-	}
-	modal := NewOptionsModal("Claude context for "+sessionTitle(sess), entries)
-	modal.OnCancel = func() {
-		a.closeOverlay()
-		a.mode = StatusFilter
-	}
-	a.overlay = modal
-	a.mode = StatusFilter
 }
 
 func (a *App) openLiveURLEntry(sess *session.Session, close func()) OptionsModalEntry {

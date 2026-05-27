@@ -9,7 +9,8 @@ message Settings {
   string effort_level = 2;
   string output_style = 3;
   bool remote_control = 4;
-  string context_window = 5;
+  reserved 5;
+  reserved "context_window";
 }
 
 message UpdateSessionSettingsRequest {

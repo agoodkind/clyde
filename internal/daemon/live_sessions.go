@@ -628,7 +628,6 @@ func saveClaudeLiveEffort(sessionName string, effort claudeprovider.EffortLevel)
 			EffortLevel:   "",
 			OutputStyle:   "",
 			RemoteControl: true,
-			ContextWindow: "",
 			Permissions: session.Permissions{
 				Allow:                        nil,
 				Ask:                          nil,

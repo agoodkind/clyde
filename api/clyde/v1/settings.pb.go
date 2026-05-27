@@ -82,7 +82,6 @@ type Settings struct {
 	EffortLevel   string                 `protobuf:"bytes,2,opt,name=effort_level,json=effortLevel,proto3" json:"effort_level,omitempty"`
 	OutputStyle   string                 `protobuf:"bytes,3,opt,name=output_style,json=outputStyle,proto3" json:"output_style,omitempty"`
 	RemoteControl bool                   `protobuf:"varint,4,opt,name=remote_control,json=remoteControl,proto3" json:"remote_control,omitempty"`
-	ContextWindow string                 `protobuf:"bytes,5,opt,name=context_window,json=contextWindow,proto3" json:"context_window,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -143,13 +142,6 @@ func (x *Settings) GetRemoteControl() bool {
 		return x.RemoteControl
 	}
 	return false
-}
-
-func (x *Settings) GetContextWindow() string {
-	if x != nil {
-		return x.ContextWindow
-	}
-	return ""
 }
 
 type UpdateSessionSettingsRequest struct {
@@ -739,13 +731,12 @@ var File_clyde_v1_daemon_settings_proto protoreflect.FileDescriptor
 
 const file_clyde_v1_daemon_settings_proto_rawDesc = "" +
 	"\n" +
-	"\x1eclyde/v1/daemon/settings.proto\x12\bclyde.v1\"\xb4\x01\n" +
+	"\x1eclyde/v1/daemon/settings.proto\x12\bclyde.v1\"\xa3\x01\n" +
 	"\bSettings\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12!\n" +
 	"\feffort_level\x18\x02 \x01(\tR\veffortLevel\x12!\n" +
 	"\foutput_style\x18\x03 \x01(\tR\voutputStyle\x12%\n" +
-	"\x0eremote_control\x18\x04 \x01(\bR\rremoteControl\x12%\n" +
-	"\x0econtext_window\x18\x05 \x01(\tR\rcontextWindow\"\x83\x01\n" +
+	"\x0eremote_control\x18\x04 \x01(\bR\rremoteControlJ\x04\b\x05\x10\x06R\x0econtext_window\"\x83\x01\n" +
 	"\x1cUpdateSessionSettingsRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12.\n" +
 	"\bsettings\x18\x02 \x01(\v2\x12.clyde.v1.SettingsR\bsettings\x12\x1f\n" +
