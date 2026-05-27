@@ -1,4 +1,16 @@
-# golangci-lint: generated_at=2026-05-23T06:21:08Z
+# golangci-lint: generated_at=2026-05-26T03:47:54Z
+cmd/root.go:1577: file-length-limit: file length is 1577 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/adapter/codex/protocol.go:1196: file-length-limit: file length is 1196 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/config/config.go:1526: file-length-limit: file length is 1526 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/config/load.go:1170: file-length-limit: file length is 1170 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/daemon/client.go:1506: file-length-limit: file length is 1506 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/daemon/live_sessions.go:1294: file-length-limit: file length is 1294 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/daemon/run.go:2258: file-length-limit: file length is 2258 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/daemon/server.go:3659: file-length-limit: file length is 3659 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/logevent/logevent.go:1157: file-length-limit: file length is 1157 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/oauthrotation/rotator.go:1438: file-length-limit: file length is 1438 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/session/store.go:1079: file-length-limit: file length is 1079 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
+internal/ui/app.go:7641: file-length-limit: file length is 7641 lines, which exceeds the limit of 1000 (revive)	# golangci-lint:first_added=2026-05-26T03:47:54Z last_seen=2026-05-26T03:47:54Z
 cmd/clyde-staticcheck/main.go:1:1: package-comments: should have a package comment (revive)	# golangci-lint:first_added=2026-05-05T00:41:47Z last_seen=2026-05-23T06:21:08Z
 cmd/clyde/main.go:203:28: cli.BuildInfo is missing fields Commit, Date (exhaustruct)	# golangci-lint:first_added=2026-05-05T04:53:11Z last_seen=2026-05-23T06:21:08Z
 cmd/clyde/main.go:96:3: missing cases in switch of type cmd.InvocationMode: cmd.ModeClyde (exhaustive)	# golangci-lint:first_added=2026-05-05T04:53:11Z last_seen=2026-05-23T06:21:08Z
