@@ -1007,10 +1007,7 @@ func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	// Allow the io.Copy goroutine in spliceConnections to return
 	// from its write call so Touch has fired.
 	deadlineCh := time.After(500 * time.Millisecond)
-	for {
-		if sess.IdleSince(time.Now()) < 10*time.Millisecond {
-			break
-		}
+	for sess.IdleSince(time.Now()) >= 10*time.Millisecond {
 		select {
 		case <-deadlineCh:
 			t.Fatalf("client->upstream touch never observed: idle=%v", sess.IdleSince(time.Now()))
@@ -1033,10 +1030,7 @@ func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 		t.Fatalf("client read after upstream write: %v", err)
 	}
 	deadlineCh = time.After(500 * time.Millisecond)
-	for {
-		if sess.IdleSince(time.Now()) < 10*time.Millisecond {
-			break
-		}
+	for sess.IdleSince(time.Now()) >= 10*time.Millisecond {
 		select {
 		case <-deadlineCh:
 			t.Fatalf("upstream->client touch never observed: idle=%v", sess.IdleSince(time.Now()))
