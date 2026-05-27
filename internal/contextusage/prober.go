@@ -40,13 +40,26 @@ type ProbeOptions struct {
 	// usually wrong for daemon-spawned probes.
 	WorkDir string
 
-	// Model is the provider model name the probe should pin so the
-	// Snapshot's MaxTokens matches the model the caller is targeting.
-	// Provider implementations that take a model on argv pass this
-	// through; implementations that do not negotiate a model treat it
-	// as advisory. An empty string lets the provider pick whatever
-	// default it would have used.
+	// Model is an explicit caller-supplied model override. When
+	// non-empty the provider implementation should pin the probe to
+	// this model (typically by writing a one-shot settings file that
+	// swaps in the value before spawning the provider CLI). When
+	// empty the provider should defer to its own settings layering
+	// chain so the probe runs against whatever model the session is
+	// already configured for. Implementations that do not negotiate
+	// a model treat it as advisory.
 	Model string
+
+	// SessionSettingsFile is the path to a per-session settings file
+	// the provider implementation should layer on top of the
+	// provider CLI's own settings chain when probing. Provider
+	// implementations that accept a settings file on argv pass this
+	// through (Claude does so via `--settings`). When Model is also
+	// non-empty the provider should produce a one-shot settings file
+	// that copies this one and swaps in the override model before
+	// spawning. An empty value lets the provider rely on its own
+	// settings layering only.
+	SessionSettingsFile string
 }
 
 // Prober is the generic contract the compact engine and any other

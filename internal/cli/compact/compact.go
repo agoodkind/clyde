@@ -8,11 +8,6 @@ import (
 	"goodkind.io/clyde/internal/session"
 )
 
-// DefaultModel is the model name used for display and the optional
-// debug counter. Override with --model. The planner itself routes
-// through the configured counter and does not depend on this value.
-const DefaultModel = "claude-sonnet-4-5"
-
 // NewCmd returns the cobra command for clyde compact.
 func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
@@ -76,7 +71,7 @@ both work.`,
 	cmd.Flags().Bool("undo", false, "Roll back the most recent apply for this session")
 	cmd.Flags().Bool("list-backups", false, "Print the per-session backup ledger and exit")
 	cmd.Flags().Int("reserved", 0, "Override the provider's auto-compact buffer (default: read from the live /context snapshot)")
-	cmd.Flags().String("model", DefaultModel, "Model name used for display and the optional debug counter")
+	cmd.Flags().String("model", "", "Explicit model override; when omitted the session's stored model from settings.json wins via --settings to claude")
 	cmd.Flags().Bool("force", false, "Bypass the open-session concurrency guard during --apply")
 	cmd.Flags().Bool("refresh", false, "Force a fresh context probe; bust both the in-process and on-disk cache tiers")
 	cmd.Flags().String("target", "", "Compaction target token count (e.g. 200k, 120,000, 1.2m). Overrides the positional [target] arg when both are present.")

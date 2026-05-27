@@ -1,17 +1,13 @@
 package compact
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
-	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	"goodkind.io/clyde/internal/categorystyle"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/contextcount"
@@ -20,45 +16,24 @@ import (
 	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
 
-// ResolveModelForCounting resolves the model used for compact context counting.
-func ResolveModelForCounting(store session.Store, sess *session.Session, fallback string) (string, string, string) {
-	if strings.TrimSpace(fallback) == "" {
-		fallback = DefaultCountModel
-	}
-	if sess != nil && sess.Metadata.ProviderTranscriptPath() != "" {
-		transcriptPath := session.EffectiveTranscriptPath(sess)
-		rawModel, displayModel := extractRawModelAndFamily(transcriptPath)
-		rawModel = strings.TrimSpace(rawModel)
-		if rawModel != "" {
-			compactLog.Logger().Debug("compact.runtime.model_resolved",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"source", "transcript",
-				"model", rawModel,
-			)
-			return rawModel, displayModel, "transcript"
-		}
-	}
+// resolveTokenizerModel returns the model name stamped on the planner
+// transcript so the local Counter selects a matching tokenizer config.
+// The session-stored settings.Model wins when set; otherwise the
+// FallbackCountModel constant applies. Claude tokenizer configs are
+// shared across Claude 3+ family members, so the choice is academic
+// for token-count accuracy; this exists only because the transcript
+// shape requires a non-empty model field.
+func resolveTokenizerModel(store session.Store, sess *session.Session) string {
 	if store != nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
 		settings, err := sessionsettings.Load(store, sess)
-		if err == nil && settings != nil && strings.TrimSpace(settings.Model) != "" {
-			settingsModel := adaptercursor.NormalizeSessionSettingsModel(strings.TrimSpace(settings.Model))
-			compactLog.Logger().Debug("compact.runtime.model_resolved",
-				"component", "compact",
-				"subcomponent", "runtime",
-				"source", "settings",
-				"model", settingsModel,
-			)
-			return settingsModel, settingsModel, "settings"
+		if err == nil && settings != nil {
+			model := strings.TrimSpace(settings.Model)
+			if model != "" {
+				return model
+			}
 		}
 	}
-	compactLog.Logger().Debug("compact.runtime.model_resolved",
-		"component", "compact",
-		"subcomponent", "runtime",
-		"source", "fallback",
-		"model", fallback,
-	)
-	return fallback, fallback, "fallback"
+	return FallbackCountModel
 }
 
 // BuildRuntimeUpfront gathers transcript and context metadata before runtime planning.
@@ -80,7 +55,7 @@ func BuildRuntimeUpfront(ctx context.Context, req RuntimeRequest, modelForRender
 		return RuntimeUpfront{}, 0, nil, err
 	}
 	upfront := newRuntimeUpfront(req, slice, modelForRender, transcriptPath)
-	usage, usageErr := probeSessionSnapshot(ctx, req.Session, modelForRender, req.Refresh)
+	usage, usageErr := probeSessionSnapshot(ctx, req, modelForRender)
 	if usageErr != nil && req.TargetTokens > 0 {
 		slog.ErrorContext(ctx, "compact.runtime.upfront.probe_required",
 			"component", "compact",
@@ -269,13 +244,28 @@ func validateRuntimeRequest(req *RuntimeRequest) error {
 	return nil
 }
 
+// runtimeModels returns the model strings used downstream for token
+// counting and for label rendering. When the caller supplied an
+// explicit override (--model X) the override wins; otherwise the
+// session-stored settings.Model wins; otherwise the
+// FallbackCountModel constant applies. The probe itself does not
+// take a --model argument anymore; it resolves the model claude-side
+// from the per-session settings file passed via --settings.
 func runtimeModels(req RuntimeRequest) (string, string) {
-	modelForCount := req.Model
-	modelForRender := req.Model
-	if !req.ModelExplicit {
-		modelForCount, modelForRender, _ = ResolveModelForCounting(req.Store, req.Session, req.Model)
+	return ResolveTokenizerModelForRequest(req.Store, req.Session, req.Model, req.ModelExplicit)
+}
+
+// ResolveTokenizerModelForRequest is the publicly-exported variant of
+// runtimeModels for callers (the daemon CompactRun setup) that need
+// to compute the same modelForCount and modelForRender values without
+// constructing a full RuntimeRequest. Explicit override wins; then
+// session-stored settings.Model; then FallbackCountModel.
+func ResolveTokenizerModelForRequest(store session.Store, sess *session.Session, model string, modelExplicit bool) (string, string) {
+	if modelExplicit && strings.TrimSpace(model) != "" {
+		return model, model
 	}
-	return modelForCount, modelForRender
+	resolved := resolveTokenizerModel(store, sess)
+	return resolved, resolved
 }
 
 func prepareRuntimeInputs(ctx context.Context, req RuntimeRequest, modelForRender string) (RuntimeUpfront, int, *Slice, error) {
@@ -542,48 +532,6 @@ func finalProjection(plan *PlanResult, staticOverhead, reserved int) int {
 	return staticOverhead + plan.FinalTail + reserved
 }
 
-var runtimeModelFamilyRegex = regexp.MustCompile(`claude-(?:\d+-)*(\w+)-\d+`)
-
-func extractRawModelAndFamily(transcriptPath string) (string, string) {
-	if strings.TrimSpace(transcriptPath) == "" {
-		return "", ""
-	}
-	file, err := os.Open(transcriptPath)
-	if err != nil {
-		return "", ""
-	}
-	defer func() { _ = file.Close() }()
-
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024), 4*1024*1024)
-	lastModel := ""
-	for scanner.Scan() {
-		var entry struct {
-			Type    string `json:"type"`
-			Message struct {
-				Model string `json:"model"`
-			} `json:"message"`
-		}
-		if jsonErr := json.Unmarshal(scanner.Bytes(), &entry); jsonErr != nil {
-			continue
-		}
-		if entry.Type == "assistant" {
-			model := strings.TrimSpace(entry.Message.Model)
-			if model != "" && model != "<synthetic>" {
-				lastModel = model
-			}
-		}
-	}
-	if lastModel == "" {
-		return "", ""
-	}
-	matches := runtimeModelFamilyRegex.FindStringSubmatch(lastModel)
-	if len(matches) > 1 {
-		return lastModel, matches[1]
-	}
-	return lastModel, lastModel
-}
-
 type categoryBlockType string
 
 const (
@@ -644,10 +592,12 @@ func contextCategoryTokens(usage contextusage.Snapshot, name string) int {
 // session's provider id and asks it for a Snapshot. The function
 // keeps the compact engine provider-neutral: it does not import any
 // provider's spawn machinery and instead relies on the package-level
-// registry the provider populated at init. The model argument pins
-// the probe's MaxTokens to the model the planner targets so the
-// projection compares against the right budget.
-func probeSessionSnapshot(ctx context.Context, sess *session.Session, model string, refresh bool) (contextusage.Snapshot, error) {
+// registry the provider populated at init. The model override (if
+// any) and the per-session settings file are passed through so the
+// provider can spawn its CLI with the right --settings arg (and a
+// one-shot temp override file when --model is non-empty).
+func probeSessionSnapshot(ctx context.Context, req RuntimeRequest, modelOverride string) (contextusage.Snapshot, error) {
+	sess := req.Session
 	prober, ok := contextusage.Get(string(sess.ProviderID()))
 	if !ok {
 		slog.WarnContext(ctx, "compact.runtime.probe_no_prober",
@@ -660,10 +610,15 @@ func probeSessionSnapshot(ctx context.Context, sess *session.Session, model stri
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
+	probeModel := ""
+	if req.ModelExplicit {
+		probeModel = modelOverride
+	}
 	snapshot, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
-		RefreshHint: refresh,
-		WorkDir:     sess.Metadata.WorkspaceRoot,
-		Model:       model,
+		RefreshHint:         req.Refresh,
+		WorkDir:             sess.Metadata.WorkspaceRoot,
+		Model:               probeModel,
+		SessionSettingsFile: req.SessionSettingsFile,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "compact.runtime.probe_failed",

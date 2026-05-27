@@ -39,6 +39,7 @@ import (
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/outputstyle"
+	"goodkind.io/clyde/internal/providers/claude/claudepath"
 	codex "goodkind.io/clyde/internal/providers/codex/lifecycle"
 	"goodkind.io/clyde/internal/providers/discoveryroots"
 	sessionartifacts "goodkind.io/clyde/internal/providers/registry/artifacts"
@@ -1848,13 +1849,13 @@ func (s *Server) probeContextUsageState(ctx context.Context, sess *session.Sessi
 		s.log.WarnContext(ctx, "daemon.context_usage.probe_unregistered", "component", "daemon", "provider", string(sess.ProviderID()))
 		return emptySessionContextState(), err
 	}
-	modelForProbe, _, _ := compactengine.ResolveModelForCounting(nil, sess, "")
 	probeCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	usage, err := prober.Probe(probeCtx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
-		RefreshHint: false,
-		WorkDir:     sess.Metadata.WorkspaceRoot,
-		Model:       modelForProbe,
+		RefreshHint:         false,
+		WorkDir:             sess.Metadata.WorkspaceRoot,
+		Model:               "",
+		SessionSettingsFile: claudepath.SessionSettingsFileByStorageKey(config.GlobalDataDir(), sess.StorageKey()),
 	})
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.context_usage.probe_failed", "component", "daemon", "err", err)
@@ -3060,11 +3061,11 @@ func (s *Server) CalibrateSession(ctx context.Context, req *clydev1.CalibrateSes
 	if !ok {
 		return nil, status.Errorf(codes.FailedPrecondition, "no context-usage prober registered for provider %q", sess.ProviderID())
 	}
-	modelForProbe, _, _ := compactengine.ResolveModelForCounting(store, sess, "")
 	snapshot, err := prober.Probe(ctx, sess.Metadata.ProviderSessionID(), contextusage.ProbeOptions{
-		RefreshHint: false,
-		WorkDir:     sess.Metadata.WorkspaceRoot,
-		Model:       modelForProbe,
+		RefreshHint:         false,
+		WorkDir:             sess.Metadata.WorkspaceRoot,
+		Model:               "",
+		SessionSettingsFile: claudepath.SessionSettingsFileByStorageKey(config.GlobalDataDir(), sess.StorageKey()),
 	})
 	if err != nil {
 		s.log.WarnContext(ctx, "daemon.calibrate.probe_failed",
@@ -3227,12 +3228,13 @@ func (s *Server) runCompact(
 		TargetTokens:           int(req.GetTargetTokens()),
 		Reserved:               int(req.GetReservedTokens()),
 		Model:                  run.modelForCount,
-		ModelExplicit:          false,
+		ModelExplicit:          req.GetModelExplicit(),
 		Strippers:              run.strippers,
 		Summarize:              false,
 		SummarizeMode:          "",
 		Force:                  false,
 		Mode:                   compactengine.RuntimeModePreview,
+		SessionSettingsFile:    claudepath.SessionSettingsFileByStorageKey(config.GlobalDataDir(), run.session.StorageKey()),
 		Refresh:                req.GetRefresh(),
 		PreparedUpfront:        nil,
 		PreparedStaticOverhead: 0,
@@ -3267,6 +3269,7 @@ func (s *Server) runCompact(
 		SummarizeMode:          summarizeMode,
 		Force:                  req.GetForce(),
 		Mode:                   mode,
+		SessionSettingsFile:    claudepath.SessionSettingsFileByStorageKey(config.GlobalDataDir(), run.session.StorageKey()),
 		Refresh:                req.GetRefresh(),
 		PreparedUpfront:        &upfront,
 		PreparedStaticOverhead: staticOverhead,
@@ -3350,11 +3353,8 @@ func (s *Server) prepareCompactRun(
 	if mode == compactengine.RuntimeModeApply && !req.GetForce() && s.sessionIsActive(sess.Name) {
 		return emptyCompactRunSetup(), status.Errorf(codes.FailedPrecondition, "session %q is currently open; exit it first or pass --force", sess.Name)
 	}
-	modelForCount := req.GetModel()
-	modelForRender := req.GetModel()
-	if !req.GetModelExplicit() {
-		modelForCount, modelForRender, _ = compactengine.ResolveModelForCounting(store, sess, req.GetModel())
-	}
+	modelForCount, modelForRender := compactengine.ResolveTokenizerModelForRequest(
+		store, sess, req.GetModel(), req.GetModelExplicit())
 	return compactRunSetup{
 		store:          store,
 		session:        sess,

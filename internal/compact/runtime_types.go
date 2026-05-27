@@ -20,8 +20,13 @@ type RuntimeUsageCategory struct {
 	Color string
 }
 
-// DefaultCountModel is the fallback context-count model for compact runtime runs.
-const DefaultCountModel = "claude-sonnet-4-5"
+// FallbackCountModel is the model name stamped on the planner
+// transcript when no per-session model is available. Claude
+// tokenizer configs are shared across Claude 3+ family members, so
+// the specific Claude name here is academic for token-count
+// accuracy; the constant exists only because the planner transcript
+// shape requires a non-empty model field.
+const FallbackCountModel = "claude-opus-4-7"
 
 // RuntimeMode selects whether a runtime compact run previews or applies changes.
 type RuntimeMode int
@@ -46,6 +51,16 @@ type RuntimeRequest struct {
 	SummarizeMode SummarizeMode
 	Force         bool
 	Mode          RuntimeMode
+
+	// SessionSettingsFile is the path to the per-session settings
+	// file the prober hands to the provider CLI on argv. The provider
+	// CLI resolves the probe model from this file layered on top of
+	// its own global settings so the Snapshot scopes to the same
+	// model the launch and resume paths would resolve. Caller-side
+	// provider packages compute this path (Claude uses
+	// claudelifecycle.SessionSettingsFile); the compact runtime is
+	// provider-neutral and treats the value as opaque.
+	SessionSettingsFile string
 
 	// Refresh asks the upfront builder to bypass any cached
 	// context-usage snapshot and force a fresh provider-native probe.

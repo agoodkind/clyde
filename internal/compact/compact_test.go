@@ -650,26 +650,31 @@ func TestMarshalPreludeEntry_FieldOrderAndContent(t *testing.T) {
 	}
 }
 
-func TestResolveModelForCountingNormalizesSettingsModel(t *testing.T) {
+func TestResolveTokenizerModelUsesSessionSettingsModel(t *testing.T) {
 	store := session.NewFileStore(t.TempDir())
 	sess := session.NewSession("chat-compact", "uuid-compact")
 	if err := store.Create(sess); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.SaveSettings("chat-compact", &session.Settings{
-		Model: "clyde-gpt-5.4-1m-medium",
+		Model: "claude-haiku-4-5",
 	}); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 
-	modelForCount, modelForRender, source := ResolveModelForCounting(store, sess, "")
-	if modelForCount != "clyde-gpt-5.4-1m-medium" {
-		t.Fatalf("modelForCount=%q want %q", modelForCount, "clyde-gpt-5.4-1m-medium")
+	if got := resolveTokenizerModel(store, sess); got != "claude-haiku-4-5" {
+		t.Fatalf("resolveTokenizerModel(store, sess) = %q want %q", got, "claude-haiku-4-5")
 	}
-	if modelForRender != "clyde-gpt-5.4-1m-medium" {
-		t.Fatalf("modelForRender=%q want %q", modelForRender, "clyde-gpt-5.4-1m-medium")
+}
+
+func TestResolveTokenizerModelFallsBackWhenSettingsModelEmpty(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	sess := session.NewSession("chat-empty", "uuid-empty")
+	if err := store.Create(sess); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if source != "settings" {
-		t.Fatalf("source=%q want %q", source, "settings")
+
+	if got := resolveTokenizerModel(store, sess); got != FallbackCountModel {
+		t.Fatalf("resolveTokenizerModel with empty settings = %q want %q", got, FallbackCountModel)
 	}
 }

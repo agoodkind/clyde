@@ -199,7 +199,7 @@ func buildPlanTranscriptFromSlice(slice *Slice) (contextcount.Transcript, error)
 		return contextcount.Transcript{}, fmt.Errorf("plan: build transcript: %w", err)
 	}
 	return contextcount.Transcript{
-		Model:    DefaultCountModel,
+		Model:    FallbackCountModel,
 		System:   nil,
 		Tools:    nil,
 		Messages: messages,

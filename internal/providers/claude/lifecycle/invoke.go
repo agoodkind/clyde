@@ -228,14 +228,10 @@ func remoteControlEnabled(settingsFile string) bool {
 }
 
 func sessionSettingsFileForSession(clydeRoot string, sess *session.Session) string {
-	if strings.TrimSpace(clydeRoot) == "" || sess == nil || strings.TrimSpace(sess.StorageKey()) == "" {
+	if sess == nil {
 		return ""
 	}
-	settingsPath := filepath.Join(config.GetSessionDir(clydeRoot, sess.StorageKey()), "settings.json")
-	if !util.FileExists(settingsPath) {
-		return ""
-	}
-	return settingsPath
+	return claudepath.SessionSettingsFileByStorageKey(clydeRoot, sess.StorageKey())
 }
 
 func commandEnvironment(env map[string]string) []string {

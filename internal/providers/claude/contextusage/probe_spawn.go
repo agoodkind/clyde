@@ -36,12 +36,16 @@ type ProbeOptions struct {
 	// live session sees.
 	WorkDir string
 
-	// Model is the model name handed to claude as `--model <Model>`.
-	// The Snapshot's MaxTokens (and the per-model context budget the
-	// planner targets) follows the model claude resolves the flag
-	// to. An empty value omits the flag and lets claude pick its
-	// default model, which is rarely the right one for compaction.
-	Model string
+	// SettingsFile is the path to a JSON settings file claude will
+	// layer on top of ~/.claude/settings.json to resolve the model
+	// and other per-session preferences. The probe hands it to
+	// claude as `--settings <SettingsFile>` so the Snapshot's
+	// MaxTokens (and the per-model context budget the planner
+	// targets) follows the model claude resolves from the settings
+	// chain (session settings -> ~/.claude/settings.json -> built-in
+	// default). An empty value omits the flag and lets claude pick
+	// from its own settings layering only.
+	SettingsFile string
 
 	// Binary is the path to the claude CLI. Defaults to "claude" on
 	// $PATH when empty. Tests inject a fake binary path here.
@@ -57,14 +61,22 @@ type ProbeOptions struct {
 // slash command and returns the workspace+session scoped Snapshot.
 // The flow is:
 //
-//  1. Spawn claude with `-p /context --resume <session-id> --model <model>
-//     --no-session-persistence --output-format json --max-turns 1`.
+//  1. Spawn claude with `-p /context --resume <session-id>
+//     --settings <session-settings-path> --no-session-persistence
+//     --output-format json --max-turns 1`.
 //  2. Read the full stdout as a JSON list of stream envelopes.
 //  3. Find the envelope whose `type` field is `result` and whose
 //     `subtype` is `success`; extract the `result` field, which
 //     carries the markdown payload.
 //  4. Parse the markdown header (`**Model:**`, `**Tokens:** N / M (P%)`)
 //     and the "Estimated usage by category" table into a Snapshot.
+//
+// claude resolves the model from its own settings layering chain
+// (--settings file -> ~/.claude/settings.json -> built-in default),
+// matching how the launch and resume paths resolve it. The probe
+// does not pass --model so a user who explicitly pinned a model in
+// per-session settings (or the global settings.json) sees the
+// Snapshot scoped to that same model.
 //
 // The probe runs claude as a one-shot non-interactive turn. Because
 // the slash command does not call a model, the spawn does not
@@ -93,7 +105,7 @@ func ProbeContextUsage(ctx context.Context, opts ProbeOptions) (contextusage.Sna
 		"subcomponent", "probe",
 		"binary", binary,
 		"session_id", opts.SessionID,
-		"model", opts.Model,
+		"settings_file", opts.SettingsFile,
 		"work_dir", opts.WorkDir,
 		"timeout_s", int(timeout.Seconds()),
 	)
@@ -136,7 +148,7 @@ func finalizeProbeResult(
 			"component", "compact",
 			"subcomponent", "probe",
 			"session_id", opts.SessionID,
-			"model", opts.Model,
+			"settings_file", opts.SettingsFile,
 			"duration_ms", durationMs,
 			"stderr_tail", stderrTail,
 			"err", parseErr,
@@ -217,10 +229,13 @@ func drainStderr(stderr io.Reader, tail *strings.Builder) {
 // resumed session. claude resolves the workspace (memory files, MCP
 // servers, skills, agents) from cmd.Dir, which the caller sets to
 // ProbeOptions.WorkDir. `--resume` re-hydrates the transcript so the
-// Messages bucket reflects the live session. `--max-turns 1` caps
-// the call at one non-model turn so the spawn returns as soon as the
-// slash command renders. `--no-session-persistence` suppresses
-// transcript writes through claude's session storage.
+// Messages bucket reflects the live session. `--settings` layers a
+// per-session settings file on top of ~/.claude/settings.json so
+// claude resolves the same model the launch and resume paths
+// resolve. `--max-turns 1` caps the call at one non-model turn so
+// the spawn returns as soon as the slash command renders.
+// `--no-session-persistence` suppresses transcript writes through
+// claude's session storage.
 func buildProbeArgs(opts ProbeOptions) []string {
 	args := []string{
 		"-p", "/context",
@@ -231,8 +246,8 @@ func buildProbeArgs(opts ProbeOptions) []string {
 	if opts.SessionID != "" {
 		args = append(args, "--resume", opts.SessionID)
 	}
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
+	if opts.SettingsFile != "" {
+		args = append(args, "--settings", opts.SettingsFile)
 	}
 	return args
 }

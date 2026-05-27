@@ -13,9 +13,7 @@ import (
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
 	compactengine "goodkind.io/clyde/internal/compact"
-	claudelifecycle "goodkind.io/clyde/internal/providers/claude/lifecycle"
 	"goodkind.io/clyde/internal/session"
-	sessionsettings "goodkind.io/clyde/internal/session/settings"
 )
 
 type stripperTypeToken string
@@ -52,28 +50,6 @@ func mergeTypeFlag(s *compactengine.Strippers, csv string) error {
 		}
 	}
 	return nil
-}
-
-func resolveModelLikeTUI(
-	store session.Store,
-	sess *session.Session,
-	fallback string,
-) (countModel string, displayModel string, source string) {
-	if sess != nil && sess.Metadata.ProviderTranscriptPath() != "" {
-		rawModel, _ := claudelifecycle.ExtractRawModelAndLastTime(session.EffectiveTranscriptPath(sess))
-		rawModel = strings.TrimSpace(rawModel)
-		if rawModel != "" {
-			return rawModel, claudelifecycle.FormatModelFamily(rawModel), "transcript"
-		}
-	}
-	if store != nil && sess != nil && strings.TrimSpace(sess.Name) != "" {
-		settings, err := sessionsettings.Load(store, sess)
-		if err == nil && settings != nil && strings.TrimSpace(settings.Model) != "" {
-			settingsModel := strings.TrimSpace(settings.Model)
-			return settingsModel, settingsModel, "settings"
-		}
-	}
-	return fallback, fallback, "fallback"
 }
 
 type compactCommandInput struct {
@@ -160,7 +136,7 @@ func completeCompactCommandInput(cmd *cobra.Command, input compactCommandInput, 
 	if err != nil {
 		return compactCommandInput{}, err
 	}
-	flags, err := readCompactFlags(cmd, input.Store, input.Session, target)
+	flags, err := readCompactFlags(cmd, input.Session, target)
 	if err != nil {
 		return compactCommandInput{}, err
 	}
@@ -236,7 +212,7 @@ func compactSecondArg(args []string) (string, bool) {
 	return "", false
 }
 
-func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Session, target int) (compactCommandInput, error) {
+func readCompactFlags(cmd *cobra.Command, sess *session.Session, target int) (compactCommandInput, error) {
 	flagTools, _ := cmd.Flags().GetBool("tools")
 	flagThinking, _ := cmd.Flags().GetBool("thinking")
 	flagImages, _ := cmd.Flags().GetBool("images")
@@ -267,18 +243,10 @@ func readCompactFlags(cmd *cobra.Command, store session.Store, sess *session.Ses
 		}
 		summarizeMode = string(mode)
 	}
-	if !modelExplicit {
-		resolvedModel, resolvedDisplayModel, resolvedSource := resolveModelLikeTUI(store, sess, model)
-		model = resolvedModel
-		modelDisplay = resolvedDisplayModel
-		cliCompactLog.Logger().Info("cli.compact.model_resolved",
-			"session", sess.Name,
-			"model_count", model,
-			"model_display", modelDisplay,
-			"source", resolvedSource,
-		)
-	}
-
+	// No CLI-side model resolution: when --model is unset the daemon
+	// resolves modelForCount/modelForRender from session settings via
+	// compactengine.ResolveTokenizerModelForRequest and the probe
+	// resolves the live model claude-side from --settings.
 	strippers := compactengine.Strippers{
 		Tools:    flagTools,
 		Thinking: flagThinking,

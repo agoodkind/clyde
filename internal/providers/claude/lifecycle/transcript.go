@@ -1,100 +1,11 @@
 package claude
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
-	"errors"
-	"io"
 	"os"
-	"regexp"
-	"strings"
 	"time"
 
 	itranscript "goodkind.io/clyde/internal/transcript"
 )
-
-var modelFamilyRegex = regexp.MustCompile(`claude-(?:\d+-)*(\w+)-\d+`)
-
-// forEachTailLine opens a transcript file, seeks to the last tailSize bytes,
-// and calls fn for each complete JSONL line in the tail. Uses bufio.Reader with
-// ReadSlice so that oversized lines are drained and skipped rather than halting
-// the scan (unlike bufio.Scanner which stops permanently on ErrTooLong).
-// Returns a non-nil error only for unexpected I/O failures.
-func forEachTailLine(transcriptPath string, tailSize int, fn func(line []byte)) error {
-	if transcriptPath == "" {
-		return nil
-	}
-
-	file, err := os.Open(transcriptPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }()
-
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-
-	skipFirstLine := false
-	if info.Size() > int64(tailSize) {
-		if _, err := file.Seek(info.Size()-int64(tailSize), io.SeekStart); err != nil {
-			return err
-		}
-		check := make([]byte, 1)
-		if _, err := file.ReadAt(check, info.Size()-int64(tailSize)-1); err == nil {
-			skipFirstLine = check[0] != '\n'
-		} else {
-			skipFirstLine = true
-		}
-	}
-
-	reader := bufio.NewReaderSize(file, tailSize)
-
-	if skipFirstLine {
-		// Drain partial first line (may span multiple ReadSlice calls).
-		var drainErr error
-		for {
-			_, drainErr = reader.ReadSlice('\n')
-			if !errors.Is(drainErr, bufio.ErrBufferFull) {
-				break
-			}
-		}
-		if drainErr == io.EOF {
-			return nil
-		}
-		if drainErr != nil {
-			return drainErr
-		}
-	}
-
-	for {
-		line, readErr := reader.ReadSlice('\n')
-		if errors.Is(readErr, bufio.ErrBufferFull) {
-			for errors.Is(readErr, bufio.ErrBufferFull) {
-				_, readErr = reader.ReadSlice('\n')
-			}
-			if readErr == io.EOF {
-				return nil
-			}
-			if readErr != nil {
-				return readErr
-			}
-			continue
-		}
-		line = bytes.TrimRight(line, "\r\n")
-		if len(line) > 0 {
-			fn(line)
-		}
-		if readErr == io.EOF {
-			return nil
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
-}
 
 // RecentMessage holds a single user or assistant message extracted from a transcript.
 type RecentMessage struct {
@@ -159,59 +70,4 @@ func LoadAllMessages(transcriptPath string, maxLen int) []RecentMessage {
 		})
 	}
 	return out
-}
-
-// isRealModel reports whether a model string came from an actual API call.
-// Claude Code writes `<synthetic>` for assistant entries it injects locally
-// (interrupt notices, hook fallbacks, context refreshes). Those should not
-// pollute the model column in the session list.
-func isRealModel(m string) bool {
-	return m != "" && m != "<synthetic>"
-}
-
-// FormatModelFamily extracts the model family name from the full model ID.
-// e.g. "claude-sonnet-4-5-20250929" -> "sonnet"
-func FormatModelFamily(fullModel string) string {
-	if fullModel == "" {
-		return ""
-	}
-
-	matches := modelFamilyRegex.FindStringSubmatch(fullModel)
-	if len(matches) > 1 {
-		return matches[1] // Return the captured family name
-	}
-
-	// Fallback: return full model if regex doesn't match
-	return fullModel
-}
-
-// ExtractRawModelAndLastTime reads the transcript tail once and returns the
-// last assistant model ID exactly as written in the transcript plus the
-// timestamp of the last entry. Returns empty string and zero time if the
-// transcript is missing or unreadable.
-func ExtractRawModelAndLastTime(transcriptPath string) (string, time.Time) {
-	type entry struct {
-		Type      string    `json:"type"`
-		Timestamp time.Time `json:"timestamp"`
-		Message   struct {
-			Model string `json:"model"`
-		} `json:"message"`
-	}
-	var lastModel string
-	var lastTime time.Time
-	err := forEachTailLine(transcriptPath, 128*1024, func(line []byte) {
-		var e entry
-		if err := json.Unmarshal(line, &e); err == nil {
-			if !e.Timestamp.IsZero() {
-				lastTime = e.Timestamp
-			}
-			if e.Type == "assistant" && isRealModel(e.Message.Model) {
-				lastModel = e.Message.Model
-			}
-		}
-	})
-	if err != nil {
-		return "", time.Time{}
-	}
-	return strings.TrimSpace(lastModel), lastTime
 }
