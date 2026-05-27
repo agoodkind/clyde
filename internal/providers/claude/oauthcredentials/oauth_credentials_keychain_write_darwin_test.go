@@ -5,11 +5,10 @@ package oauthcredentials
 import (
 	"context"
 	"encoding/json"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/keybase/go-keychain"
 )
 
 // TestWriteKeychainRoundTrip writes a credential under a test-only service
@@ -20,7 +19,7 @@ import (
 func TestWriteKeychainRoundTrip(t *testing.T) {
 	const testService = "io.goodkind.clyde-test-credentials"
 	t.Cleanup(func() {
-		_ = keychain.DeleteGenericPasswordItem(testService, currentUserForTest(t))
+		_ = exec.Command(securityBinaryPath, "delete-generic-password", "-s", testService).Run() //nolint:gosec // test cleanup; service is a typed constant.
 	})
 
 	writer := &keychainWriter{
@@ -70,7 +69,7 @@ func TestWriteKeychainRoundTrip(t *testing.T) {
 func TestWriteKeychainRoundTripUpdatesExisting(t *testing.T) {
 	const testService = "io.goodkind.clyde-test-credentials-update"
 	t.Cleanup(func() {
-		_ = keychain.DeleteGenericPasswordItem(testService, currentUserForTest(t))
+		_ = exec.Command(securityBinaryPath, "delete-generic-password", "-s", testService).Run() //nolint:gosec // test cleanup; service is a typed constant.
 	})
 
 	writer := &keychainWriter{
@@ -119,19 +118,41 @@ func TestWriteKeychainRoundTripUpdatesExisting(t *testing.T) {
 	}
 }
 
-// TestWriteKeychainNoSecurityBinary verifies the writer does not depend on
-// the legacy /usr/bin/security subprocess. Setting PATH empty makes the
-// `security` binary unfindable; the write must still succeed because the
-// new implementation calls the Security framework directly via cgo. If a
-// regression reintroduces an exec.Command shell-out, exec.LookPath fails
-// inside that code path and this test catches it.
-func TestWriteKeychainNoSecurityBinary(t *testing.T) {
-	const testService = "io.goodkind.clyde-test-no-binary"
-	t.Cleanup(func() {
-		_ = keychain.DeleteGenericPasswordItem(testService, currentUserForTest(t))
-	})
+// TestKeychainReadMissingEntry verifies the reader maps the security tool's
+// "item not found" exit code (44) to a Present=false result with no error,
+// so callers distinguish "no credential configured" from a genuine read
+// failure.
+func TestKeychainReadMissingEntry(t *testing.T) {
+	const testService = "io.goodkind.clyde-test-credentials-missing"
+	// Pre-cleanup in case a prior aborted run left the entry behind.
+	_ = exec.Command(securityBinaryPath, "delete-generic-password", "-s", testService).Run() //nolint:gosec // test setup; service is a typed constant.
 
-	t.Setenv("PATH", "")
+	reader := keychainStore{
+		keychainService: testService,
+		now:             time.Now(),
+	}
+	result := reader.Read(context.Background())
+	if result.Err != nil {
+		t.Fatalf("read on missing entry returned error: %v", result.Err)
+	}
+	if result.Present {
+		t.Fatalf("read on missing entry returned Present=true: result=%+v", result)
+	}
+	if result.Tokens != nil {
+		t.Fatalf("read on missing entry returned non-nil tokens: result=%+v", result)
+	}
+}
+
+// TestKeychainReadShellOutSurvivesEmptyPath verifies the reader uses an
+// absolute path to /usr/bin/security and therefore works with PATH unset.
+// PATH is irrelevant when exec.Command receives a fully qualified path,
+// which is the invariant the production code depends on so the daemon's
+// harvest loop is not affected by operator shell environment variations.
+func TestKeychainReadShellOutSurvivesEmptyPath(t *testing.T) {
+	const testService = "io.goodkind.clyde-test-credentials-path"
+	t.Cleanup(func() {
+		_ = exec.Command(securityBinaryPath, "delete-generic-password", "-s", testService).Run() //nolint:gosec // test cleanup; service is a typed constant.
+	})
 
 	writer := &keychainWriter{
 		service:         testService,
@@ -141,8 +162,8 @@ func TestWriteKeychainNoSecurityBinary(t *testing.T) {
 	}
 
 	doc := Document{ClaudeAIOauth: &Tokens{
-		AccessToken:  "no-binary-access",
-		RefreshToken: "no-binary-refresh",
+		AccessToken:  "empty-path-access",
+		RefreshToken: "empty-path-refresh",
 		ExpiresAt:    time.Now().Add(time.Hour).UnixMilli(),
 	}}
 	payload, err := json.Marshal(doc)
@@ -150,8 +171,10 @@ func TestWriteKeychainNoSecurityBinary(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	if err := writer.write(context.Background(), payload); err != nil {
-		t.Fatalf("write with empty PATH: %v", err)
+		t.Fatalf("write before clearing PATH: %v", err)
 	}
+
+	t.Setenv("PATH", "")
 
 	reader := keychainStore{
 		keychainService: testService,
@@ -161,19 +184,7 @@ func TestWriteKeychainNoSecurityBinary(t *testing.T) {
 	if result.Err != nil {
 		t.Fatalf("read with empty PATH: %v", result.Err)
 	}
-	if !result.Present || result.Tokens == nil || result.Tokens.AccessToken != "no-binary-access" {
+	if !result.Present || result.Tokens == nil || result.Tokens.AccessToken != "empty-path-access" {
 		t.Fatalf("round-trip with empty PATH: got result=%+v", result)
 	}
-}
-
-// currentUserForTest reads the login user the same way the production
-// writer resolves the account name on a fresh keychain. The test uses it to
-// scope the cleanup delete to the entry the writer just created.
-func currentUserForTest(t *testing.T) string {
-	t.Helper()
-	username, err := readLoginUser()
-	if err != nil {
-		t.Fatalf("loginUser: %v", err)
-	}
-	return username
 }

@@ -13,7 +13,6 @@ require (
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/keybase/go-keychain v0.0.1
 	github.com/klauspost/compress v1.18.5
 	github.com/mark3labs/mcp-go v0.49.0
 	github.com/mattn/go-isatty v0.0.21
@@ -26,6 +25,7 @@ require (
 	github.com/sahilm/fuzzy v0.1.1
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
 	golang.org/x/tools v0.44.0
 	goodkind.io/gklog v0.2.1
@@ -240,7 +240,6 @@ require (
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260423152414-329d219564b0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/vuln v1.3.0 // indirect

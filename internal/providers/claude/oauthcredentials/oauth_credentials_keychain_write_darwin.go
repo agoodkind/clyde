@@ -3,86 +3,107 @@
 package oauthcredentials
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"os/user"
-
-	"github.com/keybase/go-keychain"
+	"strings"
 )
 
 // writeEntry creates or updates the generic-password entry for w.service
-// with the given account name and payload bytes. The payload is passed
-// through Security framework data parameters, never through process argv,
-// so the secret is not visible to other processes via ps.
+// with the given account name and payload bytes. The implementation shells
+// out to `security add-generic-password -U`. The calling process is
+// /usr/bin/security, which is in every keychain entry's ACL by default, so
+// the write proceeds without prompting the operator.
 func (w *keychainWriter) writeEntry(ctx context.Context, account string, payload []byte) error {
-	newItem := keychain.NewGenericPassword(w.service, account, "", payload, "")
-	newItem.SetSynchronizable(keychain.SynchronizableNo)
-	newItem.SetAccessible(keychain.AccessibleWhenUnlocked)
-
-	addErr := keychain.AddItem(newItem)
-	if addErr == nil {
-		return nil
-	}
-	if !errors.Is(addErr, keychain.ErrorDuplicateItem) {
+	cmd := exec.CommandContext(ctx, securityBinaryPath, "add-generic-password",
+		"-U",
+		"-s", w.service,
+		"-a", account,
+		"-w", string(payload),
+	)
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		stderrText := strings.TrimSpace(stderr.String())
 		slog.WarnContext(ctx, "oauthcredentials.keychain.add_failed",
 			"component", "oauthcredentials",
 			"service", w.service,
-			"err", addErr.Error(),
-		)
-		return fmt.Errorf("keychain: add item %q: %w", w.service, addErr)
-	}
-
-	query := keychain.NewItem()
-	query.SetSecClass(keychain.SecClassGenericPassword)
-	query.SetService(w.service)
-	query.SetAccount(account)
-
-	update := keychain.NewItem()
-	update.SetData(payload)
-
-	if err := keychain.UpdateItem(query, update); err != nil {
-		slog.WarnContext(ctx, "oauthcredentials.keychain.update_failed",
-			"component", "oauthcredentials",
-			"service", w.service,
 			"err", err.Error(),
+			"stderr", stderrText,
 		)
-		return fmt.Errorf("keychain: update item %q: %w", w.service, err)
+		return fmt.Errorf("keychain: security add-generic-password %q: %w (stderr=%s)", w.service, err, stderrText)
 	}
 	return nil
 }
 
-// readExistingAccount reads the kSecAttrAccount attribute for the existing
-// keychain entry. A missing entry falls back to the current login user so
-// the first-ever write still succeeds without prompting the user.
+// readExistingAccount returns the kSecAttrAccount attribute for the existing
+// keychain entry. It shells out to `security find-generic-password -g`,
+// which prints attribute metadata (including the "acct" line) to stderr,
+// and parses the value from there. A missing entry falls back to the
+// current login user so the first-ever write still succeeds.
 func (w *keychainWriter) readExistingAccount(ctx context.Context) (string, error) {
-	query := keychain.NewItem()
-	query.SetSecClass(keychain.SecClassGenericPassword)
-	query.SetService(w.service)
-	query.SetMatchLimit(keychain.MatchLimitOne)
-	query.SetReturnAttributes(true)
-
-	results, err := keychain.QueryItem(query)
-	if err != nil && !errors.Is(err, keychain.ErrorItemNotFound) {
-		slog.WarnContext(ctx, "oauthcredentials.keychain.find_failed",
-			"component", "oauthcredentials",
-			"service", w.service,
-			"err", err.Error(),
-		)
-		return "", fmt.Errorf("keychain: query item %q: %w", w.service, err)
+	cmd := exec.CommandContext(ctx, securityBinaryPath, "find-generic-password",
+		"-s", w.service,
+		"-g",
+	)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	runErr := cmd.Run()
+	combined := stdout.String() + stderr.String()
+	if account := parseAcctAttribute(combined); account != "" {
+		return account, nil
 	}
-	for _, result := range results {
-		if result.Account != "" {
-			return result.Account, nil
-		}
+	if runErr == nil {
+		return readLoginUser()
 	}
-	return readLoginUser()
+	if keychainItemNotFound(runErr) {
+		return readLoginUser()
+	}
+	slog.WarnContext(ctx, "oauthcredentials.keychain.find_failed",
+		"component", "oauthcredentials",
+		"service", w.service,
+		"err", runErr.Error(),
+	)
+	return "", fmt.Errorf("keychain: security find-generic-password %q: %w", w.service, runErr)
 }
 
-// readLoginUser returns the current login user. The macOS keychain accepts any
-// non-empty string for the account attribute; using the login user matches
-// Claude Code's behavior when it creates the entry for the first time.
+// parseAcctAttribute scans `security find-generic-password -g` output for
+// the line:
+//
+//	"acct"<blob>="some-account"
+//
+// and returns the unquoted value. Returns "" when the line is absent.
+func parseAcctAttribute(text string) string {
+	for line := range strings.SplitSeq(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, `"acct"`) {
+			continue
+		}
+		_, after, found := strings.Cut(trimmed, "=")
+		if !found {
+			continue
+		}
+		value := strings.TrimSpace(after)
+		value = strings.TrimSuffix(value, ",")
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) && len(value) >= 2 {
+			return value[1 : len(value)-1]
+		}
+		return value
+	}
+	return ""
+}
+
+// readLoginUser returns the current login user. The macOS keychain accepts
+// any non-empty string for the account attribute; using the login user
+// matches Claude Code's behavior when it creates the entry for the first
+// time.
 func readLoginUser() (string, error) {
 	current, err := user.Current()
 	if err != nil {
