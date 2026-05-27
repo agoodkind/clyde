@@ -177,7 +177,7 @@ func requestEventFromLogRecord(rec providerStatsLogRecord) (adapterruntime.Reque
 		CostMicrocents:             numberValue(rec.CostMicrocents),
 		DurationMs:                 numberValue(rec.DurationMs),
 		Err:                        rec.Error,
-		Correlation: providerStatsCorrelation(rec),
+		Correlation:                providerStatsCorrelation(rec),
 	}
 	if ev.Err == "" {
 		ev.Err = rec.Err

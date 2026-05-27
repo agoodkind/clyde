@@ -12,6 +12,7 @@ import (
 
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
+	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -292,7 +293,7 @@ func logHTTPRetryDecision(ctx context.Context, cfg HTTPTransportConfig, decision
 	adapterretry.LogDecision(ctx, cfg.Log, decision, attempt, maxAttempts, adapterretry.AttemptLogContext{
 		RequestID: cfg.RequestID,
 		TraceID:   string(cfg.Correlation.TraceID),
-		ChatKey:   cfg.Correlation.ChatKey,
+		ChatKey:   clydeingress.ChatKey(cfg.Correlation),
 		Operation: codexHTTPRetryOperation,
 	}, finalOutcome)
 }
