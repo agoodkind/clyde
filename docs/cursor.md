@@ -85,7 +85,7 @@ those tunnels to drain, then time out. The tunnel goroutines keep
 running, and any process-scoped resource the goroutine holds
 (capture-writer flock, in-process state, derived contexts) does not
 release until the goroutine actually returns. This is the motivating
-reason for the livetrack tracked-sessions rule in AGENTS.md: every
+reason for the livetrack long-lived work rule in AGENTS.md: every
 long-lived MITM CONNECT tunnel registers with the livetrack registry,
 so the daemon's reload chain can issue an explicit bounded
 force-close instead of waiting forever for Cloudflare to give up.

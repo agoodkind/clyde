@@ -2,16 +2,21 @@ package mitm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 )
 
+// BaselineRefreshOptions is part of Clyde's typed adapter surface.
 type BaselineRefreshOptions struct {
 	Upstream        string
 	CaptureRoot     string
@@ -25,6 +30,7 @@ type BaselineRefreshOptions struct {
 	Log             *slog.Logger
 }
 
+// BaselineRefreshOutcome is part of Clyde's typed adapter surface.
 type BaselineRefreshOutcome struct {
 	DriftOutcome
 	BaselinePath string `json:"baseline_path"`
@@ -32,6 +38,7 @@ type BaselineRefreshOutcome struct {
 	Updated      bool   `json:"updated"`
 }
 
+// RefreshBaseline is part of Clyde's typed adapter surface.
 func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (BaselineRefreshOutcome, error) {
 	log := opts.Log
 	if log == nil {
@@ -47,8 +54,7 @@ func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (Baseline
 	}
 	transcriptPath, err := ResolveTranscriptPath(captureRoot, upstream)
 	if err != nil {
-		log.WarnContext(ctx, "mitm.baseline.transcript_resolve_failed",
-			"component", "mitm",
+		log.WarnContext(ctx, "mitm.baseline.transcript_resolve_failed", "concern", "providers.mitm.wire", "component", "mitm",
 			"upstream", upstream,
 			"capture_root", captureRoot,
 			"err", err,
@@ -57,23 +63,25 @@ func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (Baseline
 	}
 	baselinePath, useV2 := resolveBaselinePath(opts)
 	if err := os.MkdirAll(filepath.Dir(baselinePath), 0o755); err != nil {
-		log.WarnContext(ctx, "mitm.baseline.mkdir_failed",
-			"component", "mitm",
+		log.WarnContext(ctx, "mitm.baseline.mkdir_failed", "concern", "providers.mitm.wire", "component", "mitm",
 			"path", filepath.Dir(baselinePath),
 			"err", err,
 		)
 		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh mkdir: %w", err)
 	}
 
-	versionTag := "live-" + currentTime().UTC().Format("20060102T150405")
+	versionTag := "live-" + clock.Now().UTC().Format("20060102T150405")
 	outcome := BaselineRefreshOutcome{
 		DriftOutcome: DriftOutcome{
 			Upstream:       upstream,
 			ReferencePath:  baselinePath,
 			TranscriptPath: transcriptPath,
-			StartedAt:      currentTime().UTC(),
+			StartedAt:      clock.Now().UTC(), Timestamp: time.
+					Time{},
+
+			SchemaVersion: "", Diverged: false, Summary: "", V1: nil, V2: nil,
 		},
-		BaselinePath: baselinePath,
+		BaselinePath: baselinePath, Created: false, Updated: false,
 	}
 	if useV2 {
 		return refreshBaselineV2(log, outcome, opts, versionTag, transcriptPath, baselinePath)
@@ -89,7 +97,7 @@ func refreshBaselineV2(log *slog.Logger, outcome BaselineRefreshOutcome, opts Ba
 		IncludeUserAgentSubstrings: opts.IncludeUA,
 		ExcludeUserAgentSubstrings: opts.ExcludeUA,
 		RequireBodyKeys:            opts.RequireBodyKeys,
-		ForbidBodyKeys:             opts.ForbidBodyKeys,
+		ForbidBodyKeys:             opts.ForbidBodyKeys, MaxBodyDepth: 0, EnumThreshold: 0,
 	})
 	if err != nil {
 		return outcome, err
@@ -104,16 +112,16 @@ func refreshBaselineV2(log *slog.Logger, outcome BaselineRefreshOutcome, opts Ba
 			return outcome, nil
 		}
 		outcome.Updated = true
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return outcome, fmt.Errorf("load baseline v2: %w", err)
 	} else {
 		outcome.Created = true
 		outcome.Updated = true
-		outcome.Summary = fmt.Sprintf("initialized local v2 baseline for upstream=%s", opts.Upstream)
+		outcome.Summary = "initialized local v2 baseline for upstream=" + opts.Upstream
 	}
 	if opts.DriftLogPath != "" {
 		if err := AppendDriftOutcome(opts.DriftLogPath, outcome.DriftOutcome); err != nil {
-			log.Warn("mitm.baseline.drift_log_append_failed", "path", opts.DriftLogPath, "err", err)
+			log.Warn("mitm.baseline.drift_log_append_failed", "concern", "providers.mitm.wire", "path", opts.DriftLogPath, "err", err)
 		}
 	}
 	if err := writeSnapshotV2Atomic(candidate, baselinePath); err != nil {
@@ -141,16 +149,16 @@ func refreshBaselineV1(log *slog.Logger, outcome BaselineRefreshOutcome, opts Ba
 			return outcome, nil
 		}
 		outcome.Updated = true
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return outcome, fmt.Errorf("load baseline v1: %w", err)
 	} else {
 		outcome.Created = true
 		outcome.Updated = true
-		outcome.Summary = fmt.Sprintf("initialized local v1 baseline for upstream=%s", opts.Upstream)
+		outcome.Summary = "initialized local v1 baseline for upstream=" + opts.Upstream
 	}
 	if opts.DriftLogPath != "" {
 		if err := AppendDriftOutcome(opts.DriftLogPath, outcome.DriftOutcome); err != nil {
-			log.Warn("mitm.baseline.drift_log_append_failed", "path", opts.DriftLogPath, "err", err)
+			log.Warn("mitm.baseline.drift_log_append_failed", "concern", "providers.mitm.wire", "path", opts.DriftLogPath, "err", err)
 		}
 	}
 	if err := writeSnapshotV1Atomic(candidate, baselinePath); err != nil {
@@ -159,6 +167,7 @@ func refreshBaselineV1(log *slog.Logger, outcome BaselineRefreshOutcome, opts Ba
 	return outcome, nil
 }
 
+// ResolveTranscriptPath is part of Clyde's typed adapter surface.
 func ResolveTranscriptPath(captureRoot, upstream string) (string, error) {
 	root := expandHome(strings.TrimSpace(captureRoot))
 	if root == "" {
@@ -198,6 +207,7 @@ func ResolveTranscriptPath(captureRoot, upstream string) (string, error) {
 	return candidates[0].path, nil
 }
 
+// ProviderForUpstream is part of Clyde's typed adapter surface.
 func ProviderForUpstream(upstream string) string {
 	name := strings.ToLower(strings.TrimSpace(upstream))
 	switch {
@@ -209,10 +219,12 @@ func ProviderForUpstream(upstream string) string {
 	return ""
 }
 
+// DefaultUseV2Baseline is part of Clyde's typed adapter surface.
 func DefaultUseV2Baseline(upstream string) bool {
 	return ProviderForUpstream(upstream) != "codex"
 }
 
+// DefaultCaptureRoot is part of Clyde's typed adapter surface.
 func DefaultCaptureRoot() string {
 	return filepath.Join(config.DefaultStateDir(), "mitm")
 }
@@ -236,8 +248,7 @@ func writeSnapshotV2Atomic(snap SnapshotV2, baselinePath string) error {
 	dir := filepath.Dir(baselinePath)
 	tmpDir, err := os.MkdirTemp(dir, "baseline-v2-")
 	if err != nil {
-		slog.Warn("mitm.baseline.v2_temp_dir_failed",
-			"component", "mitm",
+		slog.Warn("mitm.baseline.v2_temp_dir_failed", "concern", "providers.mitm.wire", "component", "mitm",
 			"dir", dir,
 			"err", err,
 		)
@@ -246,17 +257,19 @@ func writeSnapshotV2Atomic(snap SnapshotV2, baselinePath string) error {
 	defer os.RemoveAll(tmpDir)
 	written, err := WriteSnapshotV2TOML(snap, tmpDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("write v2 snapshot temp file: %w", err)
 	}
-	return os.Rename(written, baselinePath)
+	if err := os.Rename(written, baselinePath); err != nil {
+		return fmt.Errorf("install v2 baseline %s: %w", baselinePath, err)
+	}
+	return nil
 }
 
 func writeSnapshotV1Atomic(snap Snapshot, baselinePath string) error {
 	dir := filepath.Dir(baselinePath)
 	tmpDir, err := os.MkdirTemp(dir, "baseline-v1-")
 	if err != nil {
-		slog.Warn("mitm.baseline.v1_temp_dir_failed",
-			"component", "mitm",
+		slog.Warn("mitm.baseline.v1_temp_dir_failed", "concern", "providers.mitm.wire", "component", "mitm",
 			"dir", dir,
 			"err", err,
 		)
@@ -265,7 +278,10 @@ func writeSnapshotV1Atomic(snap Snapshot, baselinePath string) error {
 	defer os.RemoveAll(tmpDir)
 	written, err := WriteSnapshotTOML(snap, tmpDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("write v1 snapshot temp file: %w", err)
 	}
-	return os.Rename(written, baselinePath)
+	if err := os.Rename(written, baselinePath); err != nil {
+		return fmt.Errorf("install v1 baseline %s: %w", baselinePath, err)
+	}
+	return nil
 }

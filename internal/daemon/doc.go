@@ -1,2 +1,3 @@
-// Package daemon hosts the long-running Clyde background services.
+// Package daemon runs Clyde's local adapter, MITM proxy, and derived
+// conversation index refresh loop.
 package daemon

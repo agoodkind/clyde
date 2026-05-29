@@ -12,14 +12,16 @@ import (
 
 // TestOutboundHeadersMatchClaudeCLIInteractiveFlavor asserts the
 // Anthropic client emits headers that byte-match the captured
-// claude-cli interactive flavor in wire_flavors_gen.go. CLYDE-124
-// requires this for parity with the official CLI; drift would push
-// our requests onto a different identity and degrade quality on
-// Cursor's Anthropic OAuth bucket.
+// claude-cli interactive flavor loaded at runtime from the daemon-owned
+// MITM baseline. CLYDE-124 requires this for parity with the official
+// CLI; drift would push our requests onto a different identity and
+// degrade quality on Cursor's Anthropic OAuth bucket.
 //
-// When the captured reference is regenerated from the daemon-owned MITM
-// baseline and a header genuinely changed upstream, this test fails until the
-// override values in the test cfg or the runtime-only branches in
+// The flavor is no longer compiled in: the test seeds a v2 baseline on
+// disk and the client projects it through [WireFlavorsLoader], the same
+// path production uses. When the real reference is re-seeded and a
+// header genuinely changed upstream, this test fails until the override
+// values in the test cfg or the runtime-only branches in
 // freeIdentityHeaders are updated to match.
 func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	t.Parallel()
@@ -38,15 +40,19 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	baselinePath := writeTestWireBaseline(t)
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
-		http:  hc,
-		oauth: &staticToken{},
-		// Empty cfg.* fields force the flavor-driven defaults to be used.
-		// Only the fields Send actually requires before header build are set.
+		http:         hc,
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
+		// Empty cfg.* override fields force the flavor-driven defaults to
+		// be used. Only the fields Send requires before header build are
+		// set, plus the on-disk wire baseline.
 		cfg: Config{
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
+			WireBaselinePath:      baselinePath,
 		},
 	}
 
@@ -63,7 +69,14 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	if got == nil {
 		t.Fatal("server did not capture any request")
 	}
-	flavor := WireFlavorClaudeCodeInteractive
+	loaded, err := cli.flavorLoader.Load(baselinePath)
+	if err != nil {
+		t.Fatalf("load baseline flavors: %v", err)
+	}
+	flavor, ok := selectInteractiveFlavor(loaded)
+	if !ok {
+		t.Fatal("baseline has no interactive flavor")
+	}
 
 	if v := got.Get("User-Agent"); v != flavor.UserAgent {
 		t.Errorf("User-Agent = %q, want %q", v, flavor.UserAgent)
@@ -101,7 +114,7 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 
 // TestOutboundHeadersAllowConfigOverride confirms that
 // cfg.ClientIdentity.* overrides still take effect when set, so
-// operators can iterate without regenerating wire_flavors_gen.go.
+// operators can iterate without re-seeding the MITM baseline.
 func TestOutboundHeadersAllowConfigOverride(t *testing.T) {
 	t.Parallel()
 
@@ -121,8 +134,9 @@ func TestOutboundHeadersAllowConfigOverride(t *testing.T) {
 
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
-		http:  hc,
-		oauth: &staticToken{},
+		http:         hc,
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:             "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion:   "2023-06-01",
@@ -131,6 +145,7 @@ func TestOutboundHeadersAllowConfigOverride(t *testing.T) {
 			StainlessPackageVersion: "override-pkg",
 			StainlessRuntime:        "override-runtime",
 			StainlessRuntimeVersion: "override-runtime-version",
+			WireBaselinePath:        writeTestWireBaseline(t),
 		},
 	}
 

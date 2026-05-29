@@ -5,18 +5,22 @@ import (
 	"strings"
 )
 
+// RenderPlainTextWithOptions is part of Clyde's typed adapter surface.
 func RenderPlainTextWithOptions(messages []Message, opts ShapeOptions) string {
 	return renderConversationMessages(ShapeConversation(messages, opts), -1)
 }
 
+// RenderMarkdownWithOptions is part of Clyde's typed adapter surface.
 func RenderMarkdownWithOptions(messages []Message, opts ShapeOptions) string {
 	return RenderMarkdownConversation(ShapeConversation(messages, opts))
 }
 
+// RenderHTMLWithOptions is part of Clyde's typed adapter surface.
 func RenderHTMLWithOptions(messages []Message, opts ShapeOptions) string {
 	return RenderHTMLConversation(ShapeConversation(messages, opts))
 }
 
+// RenderJSONWithOptions is part of Clyde's typed adapter surface.
 func RenderJSONWithOptions(messages []Message, opts ShapeOptions) ([]byte, error) {
 	return RenderJSONConversation(ShapeConversation(messages, opts))
 }

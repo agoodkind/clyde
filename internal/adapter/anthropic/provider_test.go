@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -37,13 +36,10 @@ func TestProviderExecuteCollectBuildsFinalResponse(t *testing.T) {
 	t.Parallel()
 	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
 		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (PreparedRequest, error) {
+			resolved := req
 			return PreparedRequest{
 				RequestID: reqID,
-				Model: adaptermodel.ResolvedModel{
-					Alias:       req.Model,
-					Backend:     adaptermodel.BackendAnthropic,
-					ClaudeModel: req.Model,
-				},
+				Resolved:  &resolved,
 			}, nil
 		},
 		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
@@ -110,14 +106,11 @@ func TestProviderExecuteStreamUsesStreamCallback(t *testing.T) {
 	called := false
 	provider := NewProvider(adapterprovider.Deps{}, ProviderOptions{
 		Prepare: func(_ context.Context, req adapterresolver.ResolvedRequest, reqID string) (PreparedRequest, error) {
+			resolved := req
 			return PreparedRequest{
 				RequestID: reqID,
 				Request:   Request{Stream: req.OpenAI.Stream},
-				Model: adaptermodel.ResolvedModel{
-					Alias:       req.Model,
-					Backend:     adaptermodel.BackendAnthropic,
-					ClaudeModel: req.Model,
-				},
+				Resolved:  &resolved,
 			}, nil
 		},
 		ExecutePrepared: func(_ context.Context, req PreparedRequest, _ adapterprovider.EventWriter) (adapterprovider.Result, error) {
@@ -164,10 +157,10 @@ func TestProviderExecutePreparedUsesPreparedCallback(t *testing.T) {
 	result, err := provider.ExecutePrepared(context.Background(), PreparedRequest{
 		RequestID: "req-native",
 		Request:   Request{Model: "claude-test", Stream: true},
-		Model: adaptermodel.ResolvedModel{
-			Alias:       "claude-test",
-			Backend:     adaptermodel.BackendAnthropic,
-			ClaudeModel: "claude-test",
+		Resolved: &adapterresolver.ResolvedRequest{
+			Provider: adapterresolver.ProviderAnthropic,
+			Model:    "claude-test",
+			Alias:    "claude-test",
 		},
 	}, nil)
 	if err != nil {

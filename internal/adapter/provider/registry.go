@@ -18,7 +18,8 @@ type Registry struct {
 // providers during adapter construction.
 func NewRegistry() *Registry {
 	return &Registry{
-		providers: make(map[adapterresolver.ProviderID]Provider),
+		providers: make(map[adapterresolver.ProviderID]Provider), mu: sync.
+				RWMutex{},
 	}
 }
 

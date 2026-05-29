@@ -8,6 +8,28 @@ import (
 	"goodkind.io/clyde/internal/adapter/errcontract"
 )
 
+// openAIToolWireType enumerates the OpenAI tool entry "type" strings
+// the adapter accepts when normalizing the tools array.
+type openAIToolWireType string
+
+const (
+	openAIToolWireTypeEmpty    openAIToolWireType = ""
+	openAIToolWireTypeFunction openAIToolWireType = "function"
+	openAIToolWireTypeCustom   openAIToolWireType = "custom"
+)
+
+// openAIChatContentPartType enumerates the OpenAI content-part "type"
+// strings the chat-flattener walks when emitting a textual preview.
+type openAIChatContentPartType string
+
+const (
+	openAIChatContentPartText       openAIChatContentPartType = "text"
+	openAIChatContentPartImageURL   openAIChatContentPartType = "image_url"
+	openAIChatContentPartInputAudio openAIChatContentPartType = "input_audio"
+	openAIChatContentPartRefusal    openAIChatContentPartType = "refusal"
+)
+
+// ChatRequest is part of Clyde's typed adapter surface.
 type ChatRequest struct {
 	Model                string          `json:"model"`
 	Messages             []ChatMessage   `json:"messages"`
@@ -47,16 +69,19 @@ type ChatRequest struct {
 	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
 }
 
+// Reasoning is part of Clyde's typed adapter surface.
 type Reasoning struct {
 	Effort  string `json:"effort,omitempty"`
 	Summary string `json:"summary,omitempty"`
 }
 
+// Tool is part of Clyde's typed adapter surface.
 type Tool struct {
 	Type     string             `json:"type"`
 	Function ToolFunctionSchema `json:"function"`
 }
 
+// UnmarshalJSON is part of Clyde's typed adapter surface.
 func (t *Tool) UnmarshalJSON(raw []byte) error {
 	type rawTool struct {
 		Type        string              `json:"type"`
@@ -70,7 +95,7 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 
 	var w rawTool
 	if err := json.Unmarshal(raw, &w); err != nil {
-		return err
+		return fmt.Errorf("unmarshal OpenAI tool: %w", err)
 	}
 
 	if w.Function != nil {
@@ -85,8 +110,8 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 	if w.Name == "" {
 		return fmt.Errorf("tool missing function schema")
 	}
-	switch w.Type {
-	case "", "function", "custom":
+	switch openAIToolWireType(w.Type) {
+	case openAIToolWireTypeEmpty, openAIToolWireTypeFunction, openAIToolWireTypeCustom:
 	default:
 		return fmt.Errorf("tool has unsupported type %q", w.Type)
 	}
@@ -106,6 +131,7 @@ func (t *Tool) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// ToolFunctionSchema is part of Clyde's typed adapter surface.
 type ToolFunctionSchema struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -113,12 +139,14 @@ type ToolFunctionSchema struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
+// Function is part of Clyde's typed adapter surface.
 type Function struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
+// ChatMessage is part of Clyde's typed adapter surface.
 type ChatMessage struct {
 	Role             string              `json:"role"`
 	Content          json.RawMessage     `json:"content,omitempty"`
@@ -131,16 +159,19 @@ type ChatMessage struct {
 	Annotations      []MessageAnnotation `json:"annotations,omitempty"`
 }
 
+// MessageAnnotation is part of Clyde's typed adapter surface.
 type MessageAnnotation struct {
 	Type        string       `json:"type"`
 	URLCitation *URLCitation `json:"url_citation,omitempty"`
 }
 
+// URLCitation is part of Clyde's typed adapter surface.
 type URLCitation struct {
 	URL   string `json:"url"`
 	Title string `json:"title,omitempty"`
 }
 
+// ToolCall is part of Clyde's typed adapter surface.
 type ToolCall struct {
 	Index    int              `json:"index"`
 	ID       string           `json:"id,omitempty"`
@@ -148,11 +179,13 @@ type ToolCall struct {
 	Function ToolCallFunction `json:"function,omitzero"`
 }
 
+// ToolCallFunction is part of Clyde's typed adapter surface.
 type ToolCallFunction struct {
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 }
 
+// ContentPart is part of Clyde's typed adapter surface.
 type ContentPart struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -168,20 +201,24 @@ type ContentPart struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 }
 
+// ImageURLPart is part of Clyde's typed adapter surface.
 type ImageURLPart struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"`
 }
 
+// AudioInputRef is part of Clyde's typed adapter surface.
 type AudioInputRef struct {
 	Data   string `json:"data"`
 	Format string `json:"format,omitempty"`
 }
 
+// StreamOptions is part of Clyde's typed adapter surface.
 type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
+// ChatResponse is part of Clyde's typed adapter surface.
 type ChatResponse struct {
 	ID                string       `json:"id"`
 	Object            string       `json:"object"`
@@ -192,6 +229,7 @@ type ChatResponse struct {
 	SystemFingerprint string       `json:"system_fingerprint,omitempty"`
 }
 
+// ChatChoice is part of Clyde's typed adapter surface.
 type ChatChoice struct {
 	Index        int             `json:"index"`
 	Message      ChatMessage     `json:"message"`
@@ -199,10 +237,12 @@ type ChatChoice struct {
 	FinishReason string          `json:"finish_reason"`
 }
 
+// LogprobsResult is part of Clyde's typed adapter surface.
 type LogprobsResult struct {
 	Content []LogprobToken `json:"content,omitempty"`
 }
 
+// LogprobToken is part of Clyde's typed adapter surface.
 type LogprobToken struct {
 	Token       string       `json:"token"`
 	Logprob     float64      `json:"logprob"`
@@ -210,12 +250,14 @@ type LogprobToken struct {
 	TopLogprobs []TopLogprob `json:"top_logprobs,omitempty"`
 }
 
+// TopLogprob is part of Clyde's typed adapter surface.
 type TopLogprob struct {
 	Token   string  `json:"token"`
 	Logprob float64 `json:"logprob"`
 	Bytes   []int   `json:"bytes,omitempty"`
 }
 
+// StreamChunk is part of Clyde's typed adapter surface.
 type StreamChunk struct {
 	ID                string         `json:"id"`
 	Object            string         `json:"object"`
@@ -226,6 +268,7 @@ type StreamChunk struct {
 	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
 }
 
+// StreamChoice is part of Clyde's typed adapter surface.
 type StreamChoice struct {
 	Index        int             `json:"index"`
 	Delta        StreamDelta     `json:"delta"`
@@ -233,6 +276,7 @@ type StreamChoice struct {
 	FinishReason *string         `json:"finish_reason"`
 }
 
+// StreamDelta is part of Clyde's typed adapter surface.
 type StreamDelta struct {
 	Role             string     `json:"role,omitempty"`
 	Content          string     `json:"content,omitempty"`
@@ -242,6 +286,7 @@ type StreamDelta struct {
 	Refusal          string     `json:"refusal,omitempty"`
 }
 
+// Usage is part of Clyde's typed adapter surface.
 type Usage struct {
 	PromptTokens        int                  `json:"prompt_tokens"`
 	CompletionTokens    int                  `json:"completion_tokens"`
@@ -254,10 +299,12 @@ type Usage struct {
 	MaxTokens           int                  `json:"max_tokens,omitempty"`
 }
 
+// PromptTokensDetails is part of Clyde's typed adapter surface.
 type PromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 
+// CachedTokens is part of Clyde's typed adapter surface.
 func (u Usage) CachedTokens() int {
 	if u.PromptTokensDetails == nil {
 		return 0
@@ -265,11 +312,13 @@ func (u Usage) CachedTokens() int {
 	return u.PromptTokensDetails.CachedTokens
 }
 
+// ModelsResponse is part of Clyde's typed adapter surface.
 type ModelsResponse struct {
 	Object string       `json:"object"`
 	Data   []ModelEntry `json:"data"`
 }
 
+// ModelEntry is part of Clyde's typed adapter surface.
 type ModelEntry struct {
 	ID                               string   `json:"id"`
 	Object                           string   `json:"object"`
@@ -292,10 +341,12 @@ type ModelEntry struct {
 	ClaudeModel                      string   `json:"claude_model,omitempty"`
 }
 
+// ErrorResponse is part of Clyde's typed adapter surface.
 type ErrorResponse struct {
 	Error ErrorBody `json:"error"`
 }
 
+// ErrorBody is part of Clyde's typed adapter surface.
 type ErrorBody struct {
 	Message string                        `json:"message"`
 	Type    string                        `json:"type"`
@@ -304,14 +355,19 @@ type ErrorBody struct {
 	Clyde   *errcontract.ErrorDiagnostics `json:"clyde,omitempty"`
 }
 
+// ContentKind is part of Clyde's typed adapter surface.
 type ContentKind int
 
 const (
+	// ContentKindEmpty is part of Clyde's typed adapter surface.
 	ContentKindEmpty ContentKind = iota
+	// ContentKindString is part of Clyde's typed adapter surface.
 	ContentKindString
+	// ContentKindParts is part of Clyde's typed adapter surface.
 	ContentKindParts
 )
 
+// FlattenContent is part of Clyde's typed adapter surface.
 func FlattenContent(raw json.RawMessage) string {
 	parts, kind := NormalizeContent(raw)
 	if kind == ContentKindString {
@@ -322,14 +378,14 @@ func FlattenContent(raw json.RawMessage) string {
 	}
 	var b strings.Builder
 	for _, p := range parts {
-		switch p.Type {
-		case "text":
+		switch openAIChatContentPartType(p.Type) {
+		case openAIChatContentPartText:
 			b.WriteString(p.Text)
-		case "image_url":
+		case openAIChatContentPartImageURL:
 			b.WriteString("[image]")
-		case "input_audio":
+		case openAIChatContentPartInputAudio:
 			b.WriteString("[audio]")
-		case "refusal":
+		case openAIChatContentPartRefusal:
 			b.WriteString("[refusal: ")
 			b.WriteString(p.Refusal)
 			b.WriteString("]")
@@ -342,6 +398,7 @@ func FlattenContent(raw json.RawMessage) string {
 	return b.String()
 }
 
+// NormalizeContent is part of Clyde's typed adapter surface.
 func NormalizeContent(raw json.RawMessage) ([]ContentPart, ContentKind) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, ContentKindEmpty

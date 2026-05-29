@@ -9,11 +9,15 @@ import (
 )
 
 const (
-	NoticeKindEarlyWarning5H  = "early_warning_5h"
-	NoticeKindEarlyWarning7D  = "early_warning_7d"
+	// NoticeKindEarlyWarning5H is part of Clyde's typed adapter surface.
+	NoticeKindEarlyWarning5H = "early_warning_5h"
+	// NoticeKindEarlyWarning7D is part of Clyde's typed adapter surface.
+	NoticeKindEarlyWarning7D = "early_warning_7d"
+	// NoticeKindEarlyWarningOVR is part of Clyde's typed adapter surface.
 	NoticeKindEarlyWarningOVR = "early_warning_overage"
 )
 
+// EarlyWarningUsageWindows is part of Clyde's typed adapter surface.
 func EarlyWarningUsageWindows(h http.Header) []adapterruntime.UsageWindowNoticeInput {
 	if ClassifyHeaders(h, http.StatusOK).Class == ResponseClassSuccessNoWarning {
 		return nil
@@ -50,28 +54,42 @@ func EarlyWarningUsageWindows(h http.Header) []adapterruntime.UsageWindowNoticeI
 	return windows
 }
 
+// rateLimitClaim is the closed enum of Anthropic ratelimit-claim
+// strings the adapter recognizes on early-warning headers.
+type rateLimitClaim string
+
+const (
+	rateLimitClaimFiveHour       rateLimitClaim = "five_hour"
+	rateLimitClaimSevenDay       rateLimitClaim = "seven_day"
+	rateLimitClaimSevenDayOpus   rateLimitClaim = "seven_day_opus"
+	rateLimitClaimSevenDaySonnet rateLimitClaim = "seven_day_sonnet"
+	rateLimitClaimOverage        rateLimitClaim = "overage"
+)
+
 func earlyWarningKind(claim string) string {
-	switch claim {
-	case "five_hour":
+	switch rateLimitClaim(claim) {
+	case rateLimitClaimFiveHour:
 		return NoticeKindEarlyWarning5H
-	case "overage":
+	case rateLimitClaimOverage:
 		return NoticeKindEarlyWarningOVR
+	case rateLimitClaimSevenDay, rateLimitClaimSevenDayOpus, rateLimitClaimSevenDaySonnet:
+		return NoticeKindEarlyWarning7D
 	default:
 		return NoticeKindEarlyWarning7D
 	}
 }
 
 func rateLimitLabel(claim string) string {
-	switch claim {
-	case "five_hour":
+	switch rateLimitClaim(claim) {
+	case rateLimitClaimFiveHour:
 		return "session limit"
-	case "seven_day":
+	case rateLimitClaimSevenDay:
 		return "weekly limit"
-	case "seven_day_opus":
+	case rateLimitClaimSevenDayOpus:
 		return "Opus limit"
-	case "seven_day_sonnet":
+	case rateLimitClaimSevenDaySonnet:
 		return "Sonnet limit"
-	case "overage":
+	case rateLimitClaimOverage:
 		return "extra usage limit"
 	default:
 		return "usage limit"
@@ -79,13 +97,15 @@ func rateLimitLabel(claim string) string {
 }
 
 func earlyWarningHeaderClaim(claim string) string {
-	switch claim {
-	case "five_hour":
+	switch rateLimitClaim(claim) {
+	case rateLimitClaimFiveHour:
 		return "5h"
-	case "seven_day":
+	case rateLimitClaimSevenDay:
 		return "7d"
-	case "overage":
+	case rateLimitClaimOverage:
 		return "overage"
+	case rateLimitClaimSevenDayOpus, rateLimitClaimSevenDaySonnet:
+		return "7d"
 	default:
 		return "7d"
 	}

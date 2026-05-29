@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -59,7 +61,7 @@ func newEmbeddingFilter(cfg config.SearchLocal) *embeddingFilter {
 // cosine similarity to the query exceeds the threshold.
 func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks [][]transcript.Message) [][]transcript.Message {
 	log := slog.Default()
-	start := searchClock.Now()
+	start := clock.Now()
 
 	// Build text for each chunk
 	chunkTexts := make([]string, len(chunks))
@@ -76,22 +78,22 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 	}
 
 	// Embed query
-	queryEmbStart := searchClock.Now()
+	queryEmbStart := clock.Now()
 	queryEmb, err := e.embed(ctx, []string{query})
 	if err != nil {
-		log.WarnContext(ctx, "embedding query failed, skipping pre-filter", "err", err)
+		log.WarnContext(ctx, "embedding query failed, skipping pre-filter", "concern", "search", "err", err)
 		return chunks // fall back to no filtering
 	}
-	log.DebugContext(ctx, "embedding: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "embedding: query embedded", "concern", "search", "duration", clock.Since(queryEmbStart).Round(time.Millisecond))
 
 	// Embed all chunks in one batch
-	chunksEmbStart := searchClock.Now()
+	chunksEmbStart := clock.Now()
 	chunkEmbs, err := e.embed(ctx, chunkTexts)
 	if err != nil {
-		log.WarnContext(ctx, "embedding chunks failed, skipping pre-filter", "err", err)
+		log.WarnContext(ctx, "embedding chunks failed, skipping pre-filter", "concern", "search", "err", err)
 		return chunks
 	}
-	log.DebugContext(ctx, "embedding: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "embedding: chunks embedded", "concern", "search", "chunks", len(chunkTexts), "duration", clock.Since(chunksEmbStart).Round(time.Millisecond))
 
 	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
 		return chunks
@@ -107,20 +109,19 @@ func (e *embeddingFilter) filterChunks(ctx context.Context, query string, chunks
 		}
 	}
 
-	log.InfoContext(ctx, "embedding pre-filter complete",
-		"model", e.model,
+	log.InfoContext(ctx, "embedding pre-filter complete", "concern", "search", "model", e.model,
 		"total_chunks", len(chunks),
 		"passed", len(filtered),
 		"filtered_out", len(chunks)-len(filtered),
 		"threshold", e.threshold,
-		"query_embed_duration", time.Since(queryEmbStart).Round(time.Millisecond),
-		"chunks_embed_duration", time.Since(chunksEmbStart).Round(time.Millisecond),
-		"total_duration", time.Since(start).Round(time.Millisecond),
+		"query_embed_duration", clock.Since(queryEmbStart).Round(time.Millisecond),
+		"chunks_embed_duration", clock.Since(chunksEmbStart).Round(time.Millisecond),
+		"total_duration", clock.Since(start).Round(time.Millisecond),
 	)
 
 	if len(filtered) == 0 {
 		// If nothing passed, return all chunks (threshold might be too high)
-		log.WarnContext(ctx, "embedding filter removed all chunks, falling back to unfiltered")
+		log.WarnContext(ctx, "embedding filter removed all chunks, falling back to unfiltered", "concern", "search")
 		return chunks
 	}
 
@@ -136,7 +137,8 @@ func (e *embeddingFilter) embed(ctx context.Context, texts []string) ([][]float6
 		},
 	})
 	if err != nil {
-		return nil, err
+		slog.WarnContext(ctx, "search.embedding.create_failed", "concern", "search", "model", e.model, "err", err)
+		return nil, fmt.Errorf("create embeddings with model %s: %w", e.model, err)
 	}
 
 	result := make([][]float64, len(resp.Data))

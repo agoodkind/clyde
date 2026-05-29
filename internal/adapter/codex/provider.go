@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
@@ -46,8 +45,7 @@ type ProviderOptions struct {
 	WsSessionIdleTTL time.Duration
 	// WsSessionRegistry is the per-daemon livetrack registry for
 	// tracking live Codex websocket connections so daemon reload can
-	// drain or force-close them. When nil, CloseAll is the only
-	// shutdown mechanism.
+	// drain or force-close them. Required.
 	WsSessionRegistry *livetrack.Registry[WsSessionMeta]
 }
 
@@ -89,42 +87,23 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	}
 }
 
-// CloseAllSessions closes every cached websocket connection. ctx is
-// passed to livetrack release events. When a WsSessionRegistry was
-// supplied at construction time, it delegates to ForceCloseMatching
-// via the registry so force-close is bounded. When nil, it falls back
-// to the legacy CloseAll path.
-func (p *Provider) CloseAllSessions(ctx context.Context, reason string) {
-	if p == nil || p.sessionCache == nil {
-		return
-	}
-	p.sessionCache.CloseAll(ctx, reason)
-}
-
 // DrainSessions blocks until all cached websocket sessions complete or
-// ctx expires. When the registry was not supplied, it falls back to the
-// legacy CloseAllSessions. Callers (adapter.Server.Shutdown) should
-// prefer this so the reload deadline participates in livetrack drain
-// accounting.
+// ctx expires. Callers (adapter.Server.Shutdown) use this so the reload
+// deadline participates in livetrack drain accounting.
 func (p *Provider) DrainSessions(ctx context.Context, reason string) {
 	if p == nil {
 		return
 	}
-	if p.wsRegistry != nil {
-		result := p.wsRegistry.Drain(ctx, reason)
-		if p.log != nil {
-			p.log.InfoContext(ctx, "adapter.codex.ws_sessions.drained",
-				"component", "adapter",
-				"subcomponent", "codex",
-				"final", result.Final.String(),
-				"remaining", result.Remaining,
-				"force_closed", result.ForceClosed,
-				"duration_ms", result.Duration.Milliseconds(),
-			)
-		}
-		return
+	result := p.wsRegistry.Drain(ctx, reason)
+	if p.log != nil {
+		p.log.InfoContext(ctx, "adapter.codex.ws_sessions.drained", "concern", "adapter.providers.codex.request", "component", "adapter",
+			"subcomponent", "codex",
+			"final", result.Final.String(),
+			"remaining", result.Remaining,
+			"force_closed", result.ForceClosed,
+			"duration_ms", result.Duration.Milliseconds(),
+		)
 	}
-	p.CloseAllSessions(ctx, reason)
 }
 
 // ID satisfies adapterprovider.Provider.
@@ -171,8 +150,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 
 	token, err := p.auth.Token(ctx)
 	if err != nil {
-		p.log.WarnContext(ctx, "adapter.codex.auth_lookup_failed",
-			"component", "adapter",
+		p.log.WarnContext(ctx, "adapter.codex.auth_lookup_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex_provider",
 			"err", err.Error(),
 		)
@@ -227,21 +205,19 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		Now:        p.now,
 	})
 	if usageWarningErr != nil {
-		p.log.WarnContext(ctx, "adapter.codex.usage_warning_probe_failed",
-			"component", "adapter",
+		p.log.WarnContext(ctx, "adapter.codex.usage_warning_probe_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex_provider",
 			"request_id", directCfg.RequestID,
 			"err", usageWarningErr,
 		)
 	}
 
-	model := resolvedModelFromRequest(req)
-	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, model, req.Effort.String(), w.WriteEvent)
+	runResult, runErr := RunDirect(ctx, directCfg, req.OpenAI, &req, req.Effort.String(), w.WriteEvent)
 	if runErr != nil {
 		return adapterprovider.Result{}, runErr
 	}
 	if flushErr := w.Flush(); flushErr != nil {
-		return adapterprovider.Result{}, flushErr
+		return adapterprovider.Result{}, fmt.Errorf("flush codex provider events: %w", flushErr)
 	}
 	return adapterprovider.Result{
 		Usage:                      runResult.Usage,
@@ -253,7 +229,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		ToolCallCount:              runResult.ToolCallCount,
 		ToolCallNames:              runResult.ToolCallNames,
 		HasSubagentToolCall:        runResult.HasSubagentToolCall,
-		UsageNoticeWindows:         warningWindows,
+		UsageNoticeWindows:         warningWindows, FinalResponse: nil, SystemFingerprint: "", ReasoningSummary: "", UsageNotices: nil,
 	}, nil
 }
 
@@ -262,23 +238,6 @@ func codexRequestID(req adapterresolver.ResolvedRequest) string {
 		return strings.TrimSpace(req.RequestID)
 	}
 	return strings.TrimSpace(req.Cursor.RequestID)
-}
-
-// resolvedModelFromRequest reconstructs the legacy
-// adaptermodel.ResolvedModel surface from the typed ResolvedRequest.
-// The websocket transport still consumes ResolvedModel today; Plan 7
-// removes that dependency.
-func resolvedModelFromRequest(req adapterresolver.ResolvedRequest) adaptermodel.ResolvedModel {
-	return adaptermodel.ResolvedModel{
-		Alias:           req.Model,
-		Backend:         adaptermodel.BackendCodex,
-		ClaudeModel:     req.Model,
-		Context:         req.ContextBudget.InputTokens,
-		Effort:          req.Effort.String(),
-		MaxOutputTokens: req.ContextBudget.OutputTokens,
-		FamilySlug:      req.Family,
-		Instructions:    req.Instructions,
-	}
 }
 
 // codexSummaryRenderStrategy translates the typed Codex round-trip summary

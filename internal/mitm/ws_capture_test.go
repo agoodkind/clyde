@@ -160,7 +160,7 @@ func waitForWebsocketHandler(t *testing.T, done <-chan struct{}) {
 }
 
 func TestProxyWebsocketCaptureUsesNativeCursorHeadersAndRequiredLegs(t *testing.T) {
-	const identityProviderID ProviderID = "test_cursor_ws_identity"
+	const identityProviderID ProviderID = ProviderIDCursor
 	RegisterProviderFirst(testCursorProvider{id: identityProviderID})
 	t.Cleanup(func() {
 		UnregisterProvider(identityProviderID)

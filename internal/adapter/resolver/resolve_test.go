@@ -6,6 +6,7 @@ import (
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/config"
 )
 
 type stubRegistry struct {
@@ -57,6 +58,11 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 		Context:         200000,
 		MaxOutputTokens: 16384,
 		Instructions:    "follow repo conventions",
+		Alias:           "gpt-5.3-codex",
+		SupportsTools:   true,
+		SupportsVision:  false,
+		ObservedContext: 272000,
+		ThinkingModes:   []string{"default", "enabled"},
 	}
 	got, err := Resolve(cursorReq, stubRegistry{view: view})
 	if err != nil {
@@ -88,6 +94,96 @@ func TestResolveBuildsTypedRequest(t *testing.T) {
 	}
 	if got.Instructions != "follow repo conventions" {
 		t.Errorf("Instructions = %q, want follow repo conventions", got.Instructions)
+	}
+	if got.Alias != "gpt-5.3-codex" {
+		t.Errorf("Alias = %q, want gpt-5.3-codex", got.Alias)
+	}
+	if !got.SupportsTools {
+		t.Errorf("SupportsTools = %v, want true", got.SupportsTools)
+	}
+	if got.SupportsVision {
+		t.Errorf("SupportsVision = %v, want false", got.SupportsVision)
+	}
+	if got.ObservedContext != 272000 {
+		t.Errorf("ObservedContext = %d, want 272000", got.ObservedContext)
+	}
+	if got.MaxOutputTokens != 16384 {
+		t.Errorf("MaxOutputTokens = %d, want 16384", got.MaxOutputTokens)
+	}
+	if len(got.ThinkingModes) != 2 || got.ThinkingModes[0] != "default" || got.ThinkingModes[1] != "enabled" {
+		t.Errorf("ThinkingModes = %v, want [default enabled]", got.ThinkingModes)
+	}
+}
+
+func TestResolveBuildsAnthropicRequest(t *testing.T) {
+	openaiReq := adapteropenai.ChatRequest{Model: "clyde-opus-4.7", ReasoningEffort: "high"}
+	cursorReq := adaptercursor.Request{OpenAI: openaiReq, ConversationID: "conv-anthropic"}
+	view := ResolvedModelView{
+		Provider:        ProviderAnthropic,
+		Family:          "opus-4-7",
+		Model:           "claude-opus-4-7",
+		Effort:          EffortHigh,
+		Context:         200000,
+		MaxOutputTokens: 32000,
+		Alias:           "clyde-opus-4.7",
+		SupportsTools:   true,
+		SupportsVision:  true,
+		ObservedContext: 0,
+		ThinkingModes:   []string{"default", "adaptive"},
+	}
+	got, err := Resolve(cursorReq, stubRegistry{view: view})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Provider != ProviderAnthropic {
+		t.Errorf("Provider = %v, want %v", got.Provider, ProviderAnthropic)
+	}
+	if got.Alias != "clyde-opus-4.7" {
+		t.Errorf("Alias = %q, want clyde-opus-4.7", got.Alias)
+	}
+	if !got.SupportsTools || !got.SupportsVision {
+		t.Errorf("SupportsTools/SupportsVision = %v/%v, want true/true", got.SupportsTools, got.SupportsVision)
+	}
+	if got.ObservedContext != 0 {
+		t.Errorf("ObservedContext = %d, want 0", got.ObservedContext)
+	}
+	if got.MaxOutputTokens != 32000 {
+		t.Errorf("MaxOutputTokens = %d, want 32000", got.MaxOutputTokens)
+	}
+	if len(got.ThinkingModes) != 2 {
+		t.Errorf("ThinkingModes = %v, want length 2", got.ThinkingModes)
+	}
+}
+
+func TestResolveBuildsPassthroughRequest(t *testing.T) {
+	openaiReq := adapteropenai.ChatRequest{Model: "unknown-upstream-model"}
+	cursorReq := adaptercursor.Request{OpenAI: openaiReq, ConversationID: "conv-passthrough"}
+	passthrough := config.AdapterOpenAICompatPassthrough{
+		BaseURL:   "https://upstream.invalid/v1",
+		APIKeyEnv: "UPSTREAM_API_KEY",
+		Model:     "upstream-model",
+	}
+	view := ResolvedModelView{
+		Provider:                ProviderPassthrough,
+		Family:                  "",
+		Model:                   "unknown-upstream-model",
+		Effort:                  EffortMedium,
+		Alias:                   "unknown-upstream-model",
+		PassthroughOverrideName: "vendor-x",
+		OpenAICompatPassthrough: passthrough,
+	}
+	got, err := Resolve(cursorReq, stubRegistry{view: view})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Provider != ProviderPassthrough {
+		t.Errorf("Provider = %v, want %v", got.Provider, ProviderPassthrough)
+	}
+	if got.PassthroughOverrideName != "vendor-x" {
+		t.Errorf("PassthroughOverrideName = %q, want vendor-x", got.PassthroughOverrideName)
+	}
+	if got.OpenAICompatPassthrough != passthrough {
+		t.Errorf("OpenAICompatPassthrough = %+v, want %+v", got.OpenAICompatPassthrough, passthrough)
 	}
 }
 

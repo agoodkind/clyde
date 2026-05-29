@@ -7,9 +7,8 @@
 #
 # clyde Makefile.
 # Build/lint/release/service pipeline lives in go-makefile and is fetched at
-# runtime. Project-local: clyde-staticcheck custom analyzer, deadcode allowlist,
-# ginkgo as an alternate test runner, build-guard hook, and the SessionStart
-# hook installer.
+# runtime. Project-local additions are the staticcheck-extra exclude for
+# generated protobuf code and ginkgo as an alternate test runner.
 
 # Optional local overrides (signing creds, never committed). Copy config.mk.example.
 -include config.mk
@@ -30,9 +29,6 @@ GO_BUILD_LDFLAGS += -X goodkind.io/clyde/internal/daemonsupervisor.BuildFingerpr
 # Exclude protobuf-generated code under /api/ from staticcheck-extra.
 STATICCHECK_EXTRA_EXCLUDE_PATHS = \.pb\.go:,/api/
 
-# Project allowlist for the central lint-deadcode gate.
-DEADCODE_EXCLUDE_PATHS = cmd/root.go:.*NewRootCmd,internal/mitm/(baseline_paths|codegen|codegen_v2|drift_runner)\.go:,internal/testutil/claude.go:.*CreateFakeClaude,internal/testutil/claude.go:.*ReadClaudeArgs,internal/providers/claude/claudepath/settings_overlay\.go:.*WriteModelOverrideSettings
-
 # Pipeline modules
 GO_MK_MODULES := go-build.mk go-release.mk go-service.mk
 
@@ -47,9 +43,7 @@ include bootstrap.mk
 BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
-.PHONY: test-ginkgo test-watch coverage \
-        install-build-guard uninstall-build-guard setup-hooks \
-        install-hook uninstall-hook \
+.PHONY: test-ginkgo test-watch coverage setup-hooks \
         deploy deadcode proto
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
@@ -81,18 +75,6 @@ proto: ## Regenerate protobuf/gRPC Go code from api/**/*.proto via buf
 
 build: proto
 
-# ---------------------------------------------------------------------------
-# Build-guard: install a GOFLAGS=-toolexec wrapper that enforces clyde's
-# staticcheck on every direct `go build` so out-of-band builds cannot bypass
-# the gate. Project-local; not part of the canonical pipeline.
-# ---------------------------------------------------------------------------
-
-install-build-guard: ## Enforce repo staticcheck on direct go build via GOFLAGS toolexec
-	@./scripts/install-go-build-guard.sh
-
-uninstall-build-guard: ## Remove the repo staticcheck toolexec from GOFLAGS
-	@./scripts/install-go-build-guard.sh --uninstall
-
 setup-hooks: ## Configure git hooks
 	@git config core.hooksPath .githooks
 	@chmod +x .githooks/*
@@ -116,30 +98,3 @@ deploy: install ## Install binary, ensure supervisor ownership, reload daemon, a
 		LOG_PATH="$(LOG_PATH)" \
 		MAKE="$(MAKE)" \
 		./scripts/deploy-daemon.sh
-
-# ---------------------------------------------------------------------------
-# Claude Code SessionStart hook (jq-based ~/.claude/settings.json edit).
-# Project-local; not part of canonical pipeline.
-# ---------------------------------------------------------------------------
-
-install-hook: ## Register the SessionStart hook in ~/.claude/settings.json
-	@mkdir -p "$(HOME)/.claude"
-	@touch "$(HOME)/.claude/settings.json"
-	@if [ ! -s "$(HOME)/.claude/settings.json" ]; then echo '{}' > "$(HOME)/.claude/settings.json"; fi
-	@cp "$(HOME)/.claude/settings.json" "$(HOME)/.claude/settings.json.bak.$$(date +%s)"
-	@jq --arg cmd "$(INSTALL_BIN) hook sessionstart" \
-		'.hooks = (.hooks // {}) | .hooks.SessionStart = (.hooks.SessionStart // []) | \
-		 .hooks.SessionStart = (.hooks.SessionStart | map(select(.hooks[0].command != $$cmd))) + \
-		 [{matcher: "*", hooks: [{type: "command", command: $$cmd}]}]' \
-		"$(HOME)/.claude/settings.json" > "$(HOME)/.claude/settings.json.tmp"
-	@mv "$(HOME)/.claude/settings.json.tmp" "$(HOME)/.claude/settings.json"
-	@echo "SessionStart hook registered"
-
-uninstall-hook: ## Remove the SessionStart hook from ~/.claude/settings.json
-	@if [ -f "$(HOME)/.claude/settings.json" ]; then \
-		jq --arg cmd "$(INSTALL_BIN) hook sessionstart" \
-			'if .hooks.SessionStart then .hooks.SessionStart |= map(select(.hooks[0].command != $$cmd)) else . end' \
-			"$(HOME)/.claude/settings.json" > "$(HOME)/.claude/settings.json.tmp" && \
-		mv "$(HOME)/.claude/settings.json.tmp" "$(HOME)/.claude/settings.json"; \
-		echo "SessionStart hook removed"; \
-	fi

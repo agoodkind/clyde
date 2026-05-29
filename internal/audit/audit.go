@@ -1,4 +1,4 @@
-// Package audit provides a shared slog.Logger that writes structured JSON
+// Package audit provides a shared [slog.Logger] that writes structured JSON
 // to ~/.local/state/clyde/audit.jsonl. All processes (CLI, MCP server,
 // daemon) write to the same file via rotating append writes.
 package audit
@@ -44,7 +44,7 @@ func (c RotationConfig) normalized() RotationConfig {
 	return c
 }
 
-// NewLogger creates an slog.Logger that writes JSON to stderr and the audit
+// NewLogger creates an [slog.Logger] that writes JSON to stderr and the audit
 // log file with rotation. The rotation policy is supplied by the caller so
 // the logpolicy boundary owns the budget. Returns the logger and a cleanup
 // function.

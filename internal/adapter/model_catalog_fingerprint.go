@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 )
 
 type modelCatalogFingerprintRow struct {
@@ -24,12 +26,12 @@ type modelCatalogFingerprintRow struct {
 	FamilySlug          string
 }
 
-func modelCatalogFingerprint(models []ResolvedModel) string {
+func modelCatalogFingerprint(models []adaptermodel.ResolvedAlias) string {
 	rows := make([]modelCatalogFingerprintRow, 0, len(models))
 	for _, m := range models {
 		rows = append(rows, modelCatalogFingerprintRow{
 			Alias:               m.Alias,
-			Backend:             m.Backend,
+			Backend:             m.Backend.String(),
 			ClaudeModel:         m.ClaudeModel,
 			Context:             m.Context,
 			MaxOutputTokens:     m.MaxOutputTokens,

@@ -1,48 +1,41 @@
-You have access to clyde, a session management layer for Claude Code.
+You have access to Clyde transcript tools for raw Claude and Codex conversations.
 
 Available tools:
 
-### clyde_list_sessions
-List all sessions with names, workspaces, models, and context summaries.
-- Pass all=true to see every session across all workspaces.
+### clyde_list_conversations
+List Claude and Codex conversations discovered from their native transcript stores.
 
 ### clyde_get_conversation
-Get the plain text conversation from any session (user + assistant messages, no tool call noise).
-- session_name (required): which session to read
+Get plain text from a conversation.
+- conversation_id (required): conversation id, native id, title, or artifact path
 - last_n (optional): only get the last N messages
 
 ### clyde_search_conversation
-Search a session's conversation history for where a topic was discussed.
-- session_name (required): which session to search
+Search a conversation for where a topic was discussed.
+- conversation_id (required): conversation id, native id, title, or artifact path
 - query (required): natural language description of what to find
-- depth (optional): controls speed vs accuracy
-
-**Search depth levels (always start at quick, escalate only if needed):**
-- `quick` (default, ~20s): embedding similarity only, no LLM. Use this first.
-- `normal` (~4min): embedding filter + LLM sweep. Use when quick results are vague or missing.
-- `deep` (~5min): adds a reranker pass for better precision. Use for important lookups.
-- `extra-deep` (20min+): adds large model verification. Only use when explicitly asked.
+- depth (optional): quick, normal, deep, or extra-deep
 
 ### clyde_get_context
-Get context around a specific message index in a session.
-- session_name (required): which session to read
-- index (required): message index to center on
-- before (optional): messages to include before (default 3)
-- after (optional): messages to include after (default 3)
+Get messages around a timestamp or message index.
+- conversation_id (required): conversation id, native id, title, or artifact path
+- timestamp or message_index: center point
+- before and after: context window size
 
 ### clyde_analyze_results
-Run an LLM synthesis pass over the results from a previous search without re-running it.
+Run an analysis pass over cached results from a previous search.
 - result_id (required): the result_id returned by clyde_search_conversation
-- prompt (required): what to extract or analyze (e.g. "List every frustration instance with timestamp and verbatim quote")
+- prompt (required): what to extract or analyze
 
-Results are cached in memory for the lifetime of the MCP server process.
+### clyde_export_transcript
+Export a conversation transcript.
+- conversation_id (required): conversation id, native id, title, or artifact path
+- format (optional): markdown, html, json, or plain_text
+- whitespace (optional): preserve, tidy, compact, or dense
 
-## Typical workflow
-1. Call clyde_list_sessions to see what sessions exist
-2. Call clyde_search_conversation with depth=quick to find a specific discussion
-3. If quick results are insufficient, retry with depth=normal
-4. Call clyde_analyze_results with the result_id to synthesize or extract structured data from matches
-5. Call clyde_get_context to expand around a relevant message index
-6. Call clyde_get_conversation with last_n to get recent context from another session
-
-This lets you search your own history, cross-reference other sessions, and recall past discussions.
+Typical workflow:
+1. Call clyde_list_conversations.
+2. Call clyde_search_conversation with depth=quick.
+3. Call clyde_get_context around a useful message index.
+4. Call clyde_analyze_results when a synthesis pass is useful.
+5. Call clyde_export_transcript when you need a portable transcript.

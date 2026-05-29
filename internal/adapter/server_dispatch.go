@@ -12,11 +12,13 @@ import (
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/gklog/trace"
 )
 
 func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
@@ -26,7 +28,7 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	clydeingress.SetHTTPHeaders(corr, w.Header())
 	entries := s.registry.List()
 	fingerprint := modelCatalogFingerprint(entries)
-	resp := ModelsResponse{Object: "list"}
+	resp := ModelsResponse{Object: "list", Data: nil}
 	for _, m := range entries {
 		entry := modelEntryFromResolved(m)
 		if m.Backend == BackendCodex {
@@ -36,7 +38,12 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 		}
 		resp.Data = append(resp.Data, entry)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	respBody, err := json.Marshal(resp)
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.models.marshal_failed", "concern", "adapter.models.catalog", "err", err)
+		return fmt.Errorf("marshal models response: %w", err)
+	}
+	writeJSON(w, respBody)
 	attrs := []slog.Attr{
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
@@ -46,11 +53,11 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 		slog.String("catalog_fingerprint", fingerprint),
 	}
 	attrs = append(attrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCatalog).LogAttrs(ctx, slog.LevelInfo, "adapter.models.listed", attrs...)
+	slogger.WithConcern(s.log, slogger.ConcernAdapterModelsCatalog).LogAttrs(ctx, slog.LevelInfo, "adapter.models.listed", append([]slog.Attr{slog.String("concern", "adapter.models.catalog")}, attrs...)...)
 	return nil
 }
 
-func modelEntryFromResolved(m ResolvedModel) ModelEntry {
+func modelEntryFromResolved(m adaptermodel.ResolvedAlias) ModelEntry {
 	// Prefer the empirically-observed context window over the nominal
 	// advertised value for capability reports. This matches what the
 	// Codex capability overlay already does for that backend and gives
@@ -80,12 +87,13 @@ func modelEntryFromResolved(m ResolvedModel) ModelEntry {
 		ContextTokenLimitForMaxMode:      advertised,
 		ContextTokenLimitForMaxModeCamel: advertised,
 		Efforts:                          m.Efforts,
-		Backend:                          m.Backend,
+		Backend:                          m.Backend.String(),
 		ClaudeModel:                      m.ClaudeModel,
 	}
 }
 
-func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
+func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
+	defer trace.Op(ctx, "adapter.openai.chat_completions")(&err)
 	w := hctx.Writer
 	r := hctx.Request
 	if r.Method != http.MethodPost {
@@ -132,43 +140,42 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) error {
 	req.Model = ingressCtx.NormalizedModel
 	s.logChatForkDetected(ctx, corr, identity)
 
-	model, effort, err := s.registry.Resolve(req.Model, req.ReasoningEffort)
-	if err != nil {
-		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, err)
-		recorder.EmitError(ctx, "model_resolve_failed", err.Error())
-		return adapterErrModelNotFound(err.Error())
-	}
-	s.logChatResolved(ctx, corr, reqID, req, ingressCtx, ingress, model, effort)
-	s.emitChatModelResolveLeg(ctx, recorder, corr, model, effort, bodyFacets)
-
-	// Step D: build the typed resolver.ResolvedRequest alongside the
-	// legacy resolution. Backends still use model.ResolvedModel for now;
-	// this call validates the resolver in production traffic and emits a
-	// telemetry event so we can confirm provider+effort+budget mapping is
-	// consistent before flipping the dispatcher to use it.
+	// The resolver is the authoritative single resolution path. It maps
+	// the alias and reasoning effort to a typed ResolvedRequest carrying
+	// provider identity, effort, budget, and the per-provider knobs the
+	// dispatcher and backends consume directly.
 	resolvedReq, resolverErr := resolveCursorChatRequest(req, adapterresolver.NewModelRegistryAdapter(s.registry))
-	s.logResolverOutcome(ctx, corr, reqID, req, ingressCtx, &resolvedReq, resolverErr)
+	if resolverErr != nil {
+		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, resolverErr)
+		recorder.EmitError(ctx, "model_resolve_failed", resolverErr.Error())
+		return adapterErrModelNotFound(resolverErr.Error())
+	}
+	resolvedReq.RequestID = reqID
+	resolvedReq.Correlation = corr
+	effort := resolvedReq.Effort.String()
+	s.logChatResolved(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, effort)
+	s.emitChatModelResolveLeg(ctx, recorder, corr, &resolvedReq, effort, bodyFacets)
+	s.logResolverOutcome(ctx, corr, reqID, req, ingressCtx, &resolvedReq, nil)
 
-	model, err = s.applyBackendOverride(r, req, model, reqID)
-	if err != nil {
+	if err := s.applyBackendOverride(r, req, &resolvedReq, reqID); err != nil {
 		recorder.EmitError(ctx, "backend_override_failed", err.Error())
 		return err
 	}
 
 	toolNames := chatToolNames(req)
-	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, model, toolNames)
+	s.logChatReceived(ctx, corr, reqID, req, ingressCtx, ingress, &resolvedReq, toolNames)
 	if ingressCtx.PathKind == ingresscontract.PathKindSubagent && ingressCtx.GenerationID == "" {
 		s.logSubagentMissingGenerationID(ctx, r, corr, reqID, ingressCtx, ingress, discovery)
 	}
 
-	if perr := s.preflightChat(ctx, &req, model, reqID); perr != nil {
+	if perr := s.preflightChat(ctx, &req, &resolvedReq, reqID); perr != nil {
 		recorder.EmitError(ctx, "preflight_failed", perr.Error())
 		return perr
 	}
 
-	s.emitChatProviderSendStartedLeg(ctx, recorder, corr, req, model, effort, bodyFacets)
-	s.dispatchResolvedChat(w, r, req, model, effort, reqID, body, ingressCtx, resolvedReq, resolverErr)
-	s.completeChatDispatchLegs(ctx, recorder, corr, req, model, effort, bodyFacets)
+	s.emitChatProviderSendStartedLeg(ctx, recorder, corr, req, &resolvedReq, effort, bodyFacets)
+	s.dispatchResolvedChat(w, r, req, effort, reqID, body, ingressCtx, resolvedReq)
+	s.completeChatDispatchLegs(ctx, recorder, corr, req, &resolvedReq, effort, bodyFacets)
 	return nil
 }
 
@@ -209,12 +216,11 @@ func (s *Server) prepareChatRequest(ctx context.Context, r *http.Request, corr c
 
 // logChatParseFailed records a body that did not parse as JSON.
 func (s *Server) logChatParseFailed(ctx context.Context, corr correlation.Context, reqID string, bodyBytes int, parseErr error) {
-	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.chat.parse_failed",
-		correlation.AppendAttrs([]slog.Attr{
-			slog.String("request_id", reqID),
-			slog.String("err", parseErr.Error()),
-			slog.Int("body_bytes", bodyBytes),
-		}, corr)...,
+	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.chat.parse_failed", append([]slog.Attr{slog.String("concern", "adapter.http.errors")}, correlation.AppendAttrs([]slog.Attr{
+		slog.String("request_id", reqID),
+		slog.String("err", parseErr.Error()),
+		slog.Int("body_bytes", bodyBytes),
+	}, corr)...)...,
 	)
 }
 
@@ -232,12 +238,11 @@ func normalizeRequestMessages(req *ChatRequest) error {
 
 // logMessagesRequired records a request that arrived with no messages.
 func (s *Server) logMessagesRequired(ctx context.Context, corr correlation.Context, reqID string, req ChatRequest) {
-	slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.chat.validation_failed",
-		correlation.AppendAttrs([]slog.Attr{
-			slog.String("request_id", reqID),
-			slog.String("model", req.Model),
-			slog.String("reason", "messages_required"),
-		}, corr)...,
+	slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.chat.validation_failed", append([]slog.Attr{slog.String("concern", "adapter.chat.preflight")}, correlation.AppendAttrs([]slog.Attr{
+		slog.String("request_id", reqID),
+		slog.String("model", req.Model),
+		slog.String("reason", "messages_required"),
+	}, corr)...)...,
 	)
 }
 
@@ -259,6 +264,7 @@ func parseMessagesFromInput(req *ChatRequest) (int, error) {
 		Content json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(req.Input, &inputItems); err != nil {
+		slog.Warn("adapter.server_dispatch.input_payload_invalid", "concern", "adapter.chat.dispatch", "err", err)
 		return 0, fmt.Errorf("invalid input payload: %w", err)
 	}
 	if len(inputItems) == 0 {
@@ -277,7 +283,7 @@ func parseMessagesFromInput(req *ChatRequest) (int, error) {
 		}
 		messages = append(messages, ChatMessage{
 			Role:    role,
-			Content: content,
+			Content: content, Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
 		})
 	}
 	if len(messages) == 0 {
@@ -316,6 +322,7 @@ func parseInputContent(raw json.RawMessage) (json.RawMessage, error) {
 	case '{':
 		var part responsesInputContentPart
 		if err := json.Unmarshal(raw, &part); err != nil {
+			slog.Warn("adapter.server_dispatch.input_content_invalid", "concern", "adapter.chat.dispatch", "shape", "object", "err", err)
 			return nil, fmt.Errorf("invalid input content: %w", err)
 		}
 		return parseInputParts([]responsesInputContentPart{part})
@@ -330,17 +337,30 @@ func parseInputContent(raw json.RawMessage) (json.RawMessage, error) {
 	}
 }
 
+// responsesInputPartType enumerates the OpenAI Responses-API input
+// content-part type strings the adapter normalizes into the OpenAI
+// chat-completion content-part shape.
+type responsesInputPartType string
+
+const (
+	responsesInputPartText       responsesInputPartType = "text"
+	responsesInputPartInputText  responsesInputPartType = "input_text"
+	responsesInputPartOutputText responsesInputPartType = "output_text"
+	responsesInputPartImageURL   responsesInputPartType = "image_url"
+	responsesInputPartInputImage responsesInputPartType = "input_image"
+)
+
 func parseInputParts(parts []responsesInputContentPart) (json.RawMessage, error) {
 	out := make([]openAIChatContentPart, 0, len(parts))
 	for _, p := range parts {
-		switch p.Type {
-		case "text", "input_text", "output_text":
+		switch responsesInputPartType(p.Type) {
+		case responsesInputPartText, responsesInputPartInputText, responsesInputPartOutputText:
 			out = append(out, openAIChatContentPart{
 				Type:     "text",
 				Text:     p.Text,
 				ImageURL: nil,
 			})
-		case "image_url":
+		case responsesInputPartImageURL:
 			if len(p.ImageURL) == 0 {
 				continue
 			}
@@ -349,7 +369,7 @@ func parseInputParts(parts []responsesInputContentPart) (json.RawMessage, error)
 				Text:     "",
 				ImageURL: p.ImageURL,
 			})
-		case "input_image":
+		case responsesInputPartInputImage:
 			image, ok := normalizeResponsesInputImageURL(p.ImageURL)
 			if !ok {
 				continue
@@ -366,6 +386,7 @@ func parseInputParts(parts []responsesInputContentPart) (json.RawMessage, error)
 	}
 	buf, err := json.Marshal(out)
 	if err != nil {
+		slog.Warn("adapter.server_dispatch.input_content_marshal_failed", "concern", "adapter.chat.dispatch", "err", err)
 		return nil, fmt.Errorf("failed to normalize input content: %w", err)
 	}
 	return buf, nil
@@ -413,10 +434,18 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 		ReasoningEffort: legacy.ReasoningEffort,
 		Messages: []ChatMessage{{
 			Role:    "user",
-			Content: json.RawMessage(strconv.Quote(legacy.Prompt)),
-		}},
+			Content: json.RawMessage(strconv.Quote(legacy.Prompt)), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
+		}}, Input: nil, StreamOptions: nil, Reasoning: nil, Tools: nil, ToolChoice: nil, Functions: nil, FunctionCall: nil, N: 0, User: "", Temperature: nil, TopP: nil, MaxTokens: nil, MaxComplTokens: nil, MaxOutputTokens: nil, PresencePenalty: nil, FrequencyPenalty: nil, LogitBias:
+
+		// forceStreamUsageOptIn applies the generic OpenAI route family policy that
+		// every streaming completion emits the trailing usage chunk regardless of what
+		// the client requested via `stream_options.include_usage`.
+		nil, Logprobs: nil, TopLogprobs: nil, Stop: nil, Seed: nil, ResponseFormat: nil, Audio: nil, Modalities: nil, ParallelTools: nil, Store: nil, Metadata: nil, Include: nil, ServiceTier: "", Text: nil, Truncation: "", PromptCacheRetention: "",
 	}
-	body, _ := json.Marshal(synthetic)
+	body, err := json.Marshal(synthetic)
+	if err != nil {
+		return adapterErrInternal("serialize legacy completion request", err)
+	}
 	r.Body = io.NopCloser(strings.NewReader(string(body)))
 	r.ContentLength = int64(len(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -424,19 +453,6 @@ func (s *Server) handleLegacy(ctx context.Context, hctx *handlerCtx) error {
 	return s.handleChat(ctx, hctx)
 }
 
-// forceStreamUsageOptIn applies the generic OpenAI route family
-// policy that every streaming completion emits the trailing usage
-// chunk regardless of what the client requested via
-// `stream_options.include_usage`. Clyde owns the auto-compact signal
-// path for Cursor BYOK and other OpenAI-SDK clients, and Cursor in
-// particular only sets the opt-in for model aliases it recognizes as
-// OpenAI-shaped (`clyde-codex-*`) and not for Anthropic-shaped
-// aliases (`clyde-opus-*`). Honoring the opt-in per client surface
-// leaves Anthropic chats without the usage signal Cursor needs to
-// trigger auto-compact, so they grow until Anthropic per-request-
-// rate-limits the oversized turn. Forcing the opt-in at the generic
-// boundary keeps the dispatchers backend-agnostic and prevents any
-// client from opting out (CLYDE-438).
 func forceStreamUsageOptIn(req *ChatRequest) {
 	if req == nil {
 		return

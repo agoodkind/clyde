@@ -10,7 +10,6 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
@@ -31,13 +30,10 @@ func resolverToWireConfig() config.AdapterConfig {
 	// ErrUnresolvedProvider and the test never reaches the wire.
 	cfg.DirectOAuth = true
 	cfg.Anthropic.OAuth = config.AdapterOAuth{
-		TokenURL:         "https://example.test/v1/oauth/token",
 		MessagesURL:      "https://example.test/v1/messages",
-		ClientID:         "test-client",
 		AnthropicBeta:    "test-beta",
 		AnthropicVersion: "2023-06-01",
 		KeychainService:  "test-keychain",
-		Scopes:           []string{"test"},
 	}
 	cfg.Codex.Enabled = true
 	cfg.Codex.AuthFile = "~/.codex/auth.json"
@@ -57,9 +53,7 @@ func resolverToWireConfig() config.AdapterConfig {
 //
 //   - Registry.Resolve to ResolvedModelView (registry_bridge.go)
 //   - ResolvedModelView to ResolvedRequest (resolve.go)
-//   - ResolvedRequest to per-request adaptermodel.ResolvedModel
-//     (anthropicResolvedModelFromRequest)
-//   - adaptermodel.ResolvedModel to anthropic.Request.Thinking
+//   - ResolvedRequest to anthropic.Request.Thinking
 //     (BuildRequest -> ApplyThinkingConfig)
 func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 	t.Parallel()
@@ -76,9 +70,9 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 		wantThinking string // anthropic.Thinking.Type
 	}{
 		{
-			// modelMatrixConfig sets thinking_wire_mode=adaptive on
-			// opus-4-7 implicitly (no explicit override) so the
-			// registry's withResolvedThinkingWireMode fallback fires.
+			// modelMatrixConfig declares thinking_wire_mode = "adaptive"
+			// explicitly on the opus-4-7 family, so the resolved wire mode
+			// is adaptive (there is no implicit per-model remap).
 			alias:        "clyde-opus-4.7-medium-thinking",
 			wantThinking: "adaptive",
 		},
@@ -87,8 +81,8 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 			wantThinking: "disabled",
 		},
 		{
-			// opus-4-6 has no implicit fallback; thinking_wire_mode is
-			// empty so generateFamilyAliases stamps "enabled".
+			// opus-4-6 declares no thinking_wire_mode, so the empty-default
+			// resolves to "enabled".
 			alias:        "clyde-opus-4.6-medium-thinking",
 			wantThinking: "enabled",
 		},
@@ -188,9 +182,12 @@ func TestResolverToAnthropicWirePropagatesInstructions(t *testing.T) {
 
 // TestResolverToCodexWirePropagatesEffort is the parallel of the
 // Anthropic test for the Codex provider. It locks in that the Effort
-// resolved from a clyde-gpt alias reaches codex.HTTPTransportRequest
-// as the Reasoning.Effort field. If the resolver-to-codex layer
-// boundary ever silently drops Effort, this test fails immediately.
+// resolved from a declared clyde-gpt effort alias reaches
+// codex.HTTPTransportRequest as the Reasoning.Effort field. If the
+// resolver-to-codex layer boundary ever silently drops Effort, this
+// test fails immediately. The aliases are the config-declared
+// effort-qualified codex aliases (clyde-gpt-5.4-1m-<effort>); there is
+// no alias-suffix effort guessing.
 func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 	t.Parallel()
 
@@ -206,12 +203,12 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 		wantInstructions string
 	}{
 		{
-			alias:            "gpt-5.4-medium",
+			alias:            "clyde-gpt-5.4-1m-medium",
 			wantEffort:       "medium",
 			wantInstructions: "model base instructions\n\ncaller system instructions",
 		},
 		{
-			alias:            "gpt-5.4-high",
+			alias:            "clyde-gpt-5.4-1m-high",
 			wantEffort:       "high",
 			wantInstructions: "model base instructions\n\ncaller system instructions",
 		},
@@ -224,8 +221,7 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
 			}
-			model := codexResolvedModelForTest(resolved)
-			built := adaptercodex.BuildRequestWithConfig(resolved.OpenAI, model, resolved.Effort.String(), adaptercodex.RequestBuilderConfig{})
+			built := adaptercodex.BuildRequestWithConfig(resolved.OpenAI, &resolved, resolved.Effort.String(), adaptercodex.RequestBuilderConfig{})
 			if built.Reasoning == nil {
 				t.Fatalf("Reasoning is nil; expected effort=%q", tc.wantEffort)
 			}
@@ -270,27 +266,5 @@ func newAnthropicWireServer(t *testing.T) *Server {
 			CCEntrypoint:       "sdk-cli",
 		}),
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-}
-
-// codexResolvedModelForTest projects a ResolvedRequest into the
-// adaptermodel.ResolvedModel that codex.BuildRequest expects. The
-// production code path lives inside dispatchCodexProvider; this test
-// helper mirrors just the field-mapping subset.
-func codexResolvedModelForTest(req adapterresolver.ResolvedRequest) adaptermodel.ResolvedModel {
-	alias := req.Cursor.NormalizedModel
-	if alias == "" {
-		alias = req.OpenAI.Model
-	}
-	return adaptermodel.ResolvedModel{
-		Alias:           alias,
-		Backend:         adaptermodel.BackendCodex,
-		ClaudeModel:     req.Model,
-		Context:         req.ContextBudget.InputTokens,
-		Effort:          req.Effort.String(),
-		Efforts:         req.Efforts,
-		MaxOutputTokens: req.ContextBudget.OutputTokens,
-		FamilySlug:      req.Family,
-		Instructions:    req.Instructions,
 	}
 }

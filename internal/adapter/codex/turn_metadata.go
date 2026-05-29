@@ -2,6 +2,8 @@ package codex
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -30,6 +32,7 @@ type TurnMetadataWorkspace struct {
 	HasChanges           bool                   `json:"has_changes"`
 }
 
+// TurnMetadataRemoteURLs is part of Clyde's typed adapter surface.
 type TurnMetadataRemoteURLs struct {
 	Origin string `json:"origin,omitempty"`
 }
@@ -41,7 +44,8 @@ type TurnMetadataRemoteURLs struct {
 func (m TurnMetadata) MarshalCompact() (string, error) {
 	raw, err := json.Marshal(m)
 	if err != nil {
-		return "", err
+		slog.Warn("adapter.codex.turn_metadata.marshal_failed", "concern", "adapter.providers.codex.request", "err", err)
+		return "", fmt.Errorf("marshal codex turn metadata: %w", err)
 	}
 	return string(raw), nil
 }
@@ -54,12 +58,15 @@ func NewTurnMetadata(sessionID, turnID string) TurnMetadata {
 		SessionID:    strings.TrimSpace(sessionID),
 		ThreadSource: "user",
 		TurnID:       strings.TrimSpace(turnID),
-		Sandbox:      "none",
+		Sandbox:      "none", Workspaces:
+
+		// WithWorkspace adds or replaces a workspace entry. Returns the
+		// receiver for chaining.
+		nil,
 	}
 }
 
-// WithWorkspace adds or replaces a workspace entry. Returns the
-// receiver for chaining.
+// WithWorkspace is part of Clyde's typed adapter surface.
 func (m TurnMetadata) WithWorkspace(absPath string, ws TurnMetadataWorkspace) TurnMetadata {
 	if absPath == "" {
 		return m

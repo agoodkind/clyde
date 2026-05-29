@@ -59,7 +59,7 @@ func (r FlavorDiffReport) HasDiverged() bool {
 // for cron logs and CLI output.
 func (r DiffReportV2) SummaryString() string {
 	if !r.HasDiverged() {
-		return fmt.Sprintf("v2 wire shape OK for upstream=%s", r.Upstream)
+		return "v2 wire shape OK for upstream=" + r.Upstream
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "v2 wire shape DRIFT for upstream=%s\n", r.Upstream)
@@ -110,7 +110,7 @@ func (r DiffReportV2) SummaryString() string {
 // the local baseline or explicit reference; the second is the
 // candidate observed in the latest capture.
 func DiffSnapshotsV2(reference, candidate SnapshotV2) DiffReportV2 {
-	report := DiffReportV2{Upstream: reference.Upstream.Name}
+	report := DiffReportV2{Upstream: reference.Upstream.Name, MissingFlavors: nil, ExtraFlavors: nil, FlavorReports: nil}
 
 	refFlavors := make(map[string]FlavorShape, len(reference.Flavors))
 	for _, fl := range reference.Flavors {
@@ -152,7 +152,7 @@ func DiffSnapshotsV2(reference, candidate SnapshotV2) DiffReportV2 {
 }
 
 func diffFlavor(ref, cand FlavorShape) FlavorDiffReport {
-	out := FlavorDiffReport{Slug: ref.Slug}
+	out := FlavorDiffReport{Slug: ref.Slug, HeaderMissing: nil, HeaderExtra: nil, HeaderClassChanged: nil, HeaderValuesDiff: nil, BodyMissing: nil, BodyExtra: nil, BetaFingerprintChange: nil, UserAgentChange: nil}
 
 	if ref.Signature.UserAgent != cand.Signature.UserAgent {
 		out.UserAgentChange = &DiffMismatch{

@@ -194,7 +194,7 @@ func TestAnthropicMessagesModelErrorUsesNativeEnvelope(t *testing.T) {
 	srv, _ := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Models = map[string]config.AdapterModel{
 			"local-codex": {
-				Backend: BackendCodex,
+				Backend: BackendCodex.String(),
 				Model:   "gpt-5.4",
 			},
 		}

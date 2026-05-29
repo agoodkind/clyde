@@ -12,6 +12,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -28,7 +29,7 @@ type providerStreamWriter struct {
 	renderer          *adapterrender.EventRenderer
 	reqID             string
 	modelAlias        string
-	ctx               context.Context
+	logContext        func() context.Context
 	log               *slog.Logger
 	server            *Server
 	streamChunkSeq    int
@@ -44,7 +45,8 @@ func newProviderStreamWriter(
 ) (*providerStreamWriter, error) {
 	sse, err := adapteropenai.NewSSEWriter(w)
 	if err != nil {
-		return nil, err
+		s.log.WarnContext(ctx, "adapter.provider_writer.new_sse_failed", "concern", "adapter.chat.render", "request_id", reqID, "model", modelAlias, "err", err)
+		return nil, fmt.Errorf("create provider SSE writer: %w", err)
 	}
 	flusher, _ := w.(http.Flusher)
 	return &providerStreamWriter{
@@ -54,10 +56,14 @@ func newProviderStreamWriter(
 		renderer:          adapterrender.NewEventRendererWithContext(ctx, reqID, modelAlias, backend, s.log),
 		reqID:             reqID,
 		modelAlias:        modelAlias,
-		ctx:               ctx,
+		logContext:        func() context.Context { return ctx },
 		log:               slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPEgress),
-		server:            s,
+		server:            s, headersWritten: false, streamChunkSeq: 0,
 	}, nil
+}
+
+func (p *providerStreamWriter) context() context.Context {
+	return p.logContext()
 }
 
 func (p *providerStreamWriter) writeRenderedChunk(ctx context.Context, chunk adapteropenai.StreamChunk) error {
@@ -66,7 +72,8 @@ func (p *providerStreamWriter) writeRenderedChunk(ctx context.Context, chunk ada
 		p.headersWritten = true
 	}
 	if err := p.sse.EmitStreamChunk(p.systemFingerprint, chunk); err != nil {
-		return err
+		p.log.WarnContext(ctx, "adapter.provider_writer.emit_chunk_failed", "concern", "adapter.chat.render", "request_id", p.reqID, "model", p.modelAlias, "err", err)
+		return fmt.Errorf("emit provider stream chunk: %w", err)
 	}
 	p.logStreamChunkFlushed(ctx, chunk)
 	return nil
@@ -85,7 +92,8 @@ func (p *providerStreamWriter) writeStreamDone(ctx context.Context) error {
 		return nil
 	}
 	if err := p.sse.WriteStreamDone(); err != nil {
-		return err
+		p.log.WarnContext(ctx, "adapter.provider_writer.stream_done_failed", "concern", "adapter.chat.render", "request_id", p.reqID, "model", p.modelAlias, "err", err)
+		return fmt.Errorf("write provider stream done: %w", err)
 	}
 	p.streamChunkSeq++
 	p.logStreamFrameFlushed(ctx, streamFlushLogShape{
@@ -96,7 +104,7 @@ func (p *providerStreamWriter) writeStreamDone(ctx context.Context) error {
 		StreamDone:       true,
 		ToolCallIDs:      []string{},
 		ToolCallNames:    []string{},
-		FlushedAtRFC3339: adapterClock.Now().Format(time.RFC3339Nano),
+		FlushedAtRFC3339: clock.Now().Format(time.RFC3339Nano), ChoiceCount: 0, DeltaRolePresent: false, DeltaContentPresent: false, DeltaToolCallsPresent: false, DeltaRefusalPresent: false, DeltaReasoningContentPresent: false, DeltaReasoningPresent: false, UsagePresent: false, DeltaContentLength: 0, DeltaReasoningLength: 0, ToolCallCount: 0, FinishReason: "",
 	})
 	return nil
 }
@@ -146,7 +154,7 @@ func streamFlushLogShapeFromChunk(chunk adapteropenai.StreamChunk, sequence int,
 		UsagePresent:     chunk.Usage != nil,
 		ToolCallIDs:      []string{},
 		ToolCallNames:    []string{},
-		FlushedAtRFC3339: adapterClock.Now().Format(time.RFC3339Nano),
+		FlushedAtRFC3339: clock.Now().Format(time.RFC3339Nano), StreamDone: false, DeltaRolePresent: false, DeltaContentPresent: false, DeltaToolCallsPresent: false, DeltaRefusalPresent: false, DeltaReasoningContentPresent: false, DeltaReasoningPresent: false, DeltaContentLength: 0, DeltaReasoningLength: 0, ToolCallCount: 0, FinishReason: "",
 	}
 	for _, choice := range chunk.Choices {
 		if choice.Delta.Role != "" {
@@ -190,8 +198,7 @@ func (p *providerStreamWriter) logStreamFrameFlushed(ctx context.Context, shape 
 	if log == nil {
 		log = slogger.WithConcern(slog.Default(), slogger.ConcernAdapterHTTPEgress)
 	}
-	log.LogAttrs(ctx, slog.LevelDebug, "adapter.openai.sse.stream_chunk_flushed",
-		slog.String("component", "adapter"),
+	log.LogAttrs(ctx, slog.LevelDebug, "adapter.openai.sse.stream_chunk_flushed", slog.String("concern", "adapter.chat.render"), slog.String("component", "adapter"),
 		slog.String("subcomponent", "openai_sse"),
 		slog.String("request_id", shape.RequestID),
 		slog.String("model", shape.Model),
@@ -222,7 +229,7 @@ func (p *providerStreamWriter) WriteEvent(ev adapterrender.Event) error {
 	}
 	chunks := p.renderer.HandleEvent(ev)
 	for _, chunk := range chunks {
-		if err := p.writeRenderedChunk(p.ctx, chunk); err != nil {
+		if err := p.writeRenderedChunk(p.context(), chunk); err != nil {
 			return err
 		}
 	}
@@ -233,7 +240,7 @@ func (p *providerStreamWriter) WriteEvent(ev adapterrender.Event) error {
 }
 
 func (p *providerStreamWriter) Flush() error {
-	return p.flush(p.ctx)
+	return p.flush(p.context())
 }
 
 func (p *providerStreamWriter) flush(ctx context.Context) error {
@@ -270,9 +277,9 @@ func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapte
 		Model:   p.modelAlias,
 		Choices: []adapteropenai.StreamChoice{{
 			Index:        0,
-			Delta:        adapteropenai.StreamDelta{},
-			FinishReason: &finishReason,
-		}},
+			Delta:        adapteropenai.StreamDelta{Role: "", Content: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""},
+			FinishReason: &finishReason, Logprobs: nil,
+		}}, Usage: nil, SystemFingerprint: "",
 	}
 	if includeUsage {
 		usage := result.Usage
@@ -289,7 +296,7 @@ func (p *providerStreamWriter) finalizeStream(ctx context.Context, result adapte
 			Created: p.createdUnix(),
 			Model:   p.modelAlias,
 			Choices: []adapteropenai.StreamChoice{},
-			Usage:   &usage,
+			Usage:   &usage, SystemFingerprint: "",
 		}); err != nil {
 			return err
 		}
@@ -306,8 +313,7 @@ func (p *providerStreamWriter) writeStreamError(ctx context.Context, err error) 
 	// [DONE] terminator. The boundary helper delegates native error
 	// event shape to a registered provider renderer.
 	if err := p.server.respondAdapterStreamError(ctx, p.sse, err); err != nil {
-		p.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_responder_failed",
-			slog.String("request_id", p.reqID),
+		p.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_responder_failed", slog.String("concern", "adapter.chat.render"), slog.String("request_id", p.reqID),
 			slog.String("model", p.modelAlias),
 			slog.Any("err", err),
 		)
@@ -327,7 +333,7 @@ type providerCollectorWriter struct {
 }
 
 func newProviderCollectorWriter() *providerCollectorWriter {
-	return &providerCollectorWriter{}
+	return &providerCollectorWriter{events: nil}
 }
 
 func (p *providerCollectorWriter) appendEvent(ev adapterrender.Event) error {

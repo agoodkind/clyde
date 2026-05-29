@@ -3,25 +3,29 @@ package anthropicbackend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
+// StreamClient is part of Clyde's typed adapter surface.
 type StreamClient interface {
 	StreamEvents(context.Context, anthropic.Request, anthropic.EventSink) (anthropic.Usage, string, error)
 }
 
+// RunTranslatorEvents is part of Clyde's typed adapter surface.
 func RunTranslatorEvents(
 	client StreamClient,
 	ctx context.Context,
 	anthReq anthropic.Request,
-	model adaptermodel.ResolvedModel,
+	resolved *adapterresolver.ResolvedRequest,
 	reqID string,
 	emit func(adapterrender.Event) error,
 ) (anthropic.Usage, string, string, error) {
-	tr := NewStreamTranslator(reqID, model.Alias)
+	tr := NewStreamTranslator(reqID, requestAlias(resolved))
 	msgStartPayload, err := json.Marshal(struct {
 		Message struct {
 			Usage struct {
@@ -29,18 +33,23 @@ func RunTranslatorEvents(
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 		} `json:"message"`
-	}{})
+	}{
+		Message: struct {
+			Usage struct {
+				InputTokens  int "json:\"input_tokens\""
+				OutputTokens int "json:\"output_tokens\""
+			} "json:\"usage\""
+		}{Usage: struct {
+			InputTokens  int "json:\"input_tokens\""
+			OutputTokens int "json:\"output_tokens\""
+		}{InputTokens: 0, OutputTokens: 0}},
+	})
 	if err != nil {
-		return anthropic.Usage{}, "", "", err
+		slog.WarnContext(ctx, "adapter.anthropic.translator.marshal_message_start_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return anthropic.Usage{}, "", "", fmt.Errorf("marshal anthropic message_start: %w", err)
 	}
-	msgStartEvents, _, _, _, err := tr.HandleEventEvents("message_start", msgStartPayload)
-	if err != nil {
+	if _, err := emitTranslatorEvents(tr, "message_start", msgStartPayload, emit); err != nil {
 		return anthropic.Usage{}, "", "", err
-	}
-	for _, ev := range msgStartEvents {
-		if err := emit(ev); err != nil {
-			return anthropic.Usage{}, "", "", err
-		}
 	}
 
 	var streamStopReason string
@@ -53,19 +62,12 @@ func RunTranslatorEvents(
 		if !ok {
 			return nil
 		}
-		outEvents, _, _, _, handleErr := tr.HandleEventEvents(evName, payload)
-		if handleErr != nil {
-			return handleErr
-		}
-		for _, outEvent := range outEvents {
-			if err := emit(outEvent); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := emitTranslatorEvents(tr, evName, payload, emit)
+		return err
 	})
 	if err != nil {
-		return anthUsage, streamStopReason, "", err
+		slog.WarnContext(ctx, "adapter.anthropic.translator.stream_events_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return anthUsage, streamStopReason, "", fmt.Errorf("stream anthropic translator events: %w", err)
 	}
 
 	mdPayload, err := json.Marshal(struct {
@@ -84,26 +86,36 @@ func RunTranslatorEvents(
 		}{OutputTokens: anthUsage.OutputTokens},
 	})
 	if err != nil {
-		return anthUsage, streamStopReason, "", err
+		slog.WarnContext(ctx, "adapter.anthropic.translator.marshal_message_delta_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return anthUsage, streamStopReason, "", fmt.Errorf("marshal anthropic message_delta: %w", err)
 	}
-	mdEvents, _, _, _, err := tr.HandleEventEvents("message_delta", mdPayload)
-	if err != nil {
+	if _, err := emitTranslatorEvents(tr, "message_delta", mdPayload, emit); err != nil {
 		return anthUsage, streamStopReason, "", err
-	}
-	for _, ev := range mdEvents {
-		if err := emit(ev); err != nil {
-			return anthUsage, streamStopReason, "", err
-		}
 	}
 
-	stopEvents, _, finishReason, _, err := tr.HandleEventEvents("message_stop", []byte("{}"))
+	finishReason, err := emitTranslatorEvents(tr, "message_stop", []byte("{}"), emit)
 	if err != nil {
 		return anthropic.Usage{}, streamStopReason, "", err
 	}
-	for _, ev := range stopEvents {
-		if err := emit(ev); err != nil {
-			return anthropic.Usage{}, streamStopReason, "", err
+	return anthUsage, streamStopReason, finishReason, nil
+}
+
+func emitTranslatorEvents(
+	tr *StreamTranslator,
+	eventName string,
+	payload []byte,
+	emit func(adapterrender.Event) error,
+) (string, error) {
+	outEvents, _, finishReason, _, err := tr.HandleEventEvents(eventName, payload)
+	if err != nil {
+		slog.Warn("adapter.anthropic.translator.handle_event_failed", "concern", "adapter.providers.anthropic.request", "event", eventName, "err", err)
+		return "", fmt.Errorf("handle anthropic translator event %s: %w", eventName, err)
+	}
+	for _, event := range outEvents {
+		if err := emit(event); err != nil {
+			slog.Warn("adapter.anthropic.translator.emit_event_failed", "concern", "adapter.providers.anthropic.request", "event", eventName, "err", err)
+			return "", fmt.Errorf("emit anthropic translator event %s: %w", eventName, err)
 		}
 	}
-	return anthUsage, streamStopReason, finishReason, nil
+	return finishReason, nil
 }

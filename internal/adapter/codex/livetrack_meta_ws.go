@@ -66,8 +66,7 @@ func (c *wsConnCloser) Close(reason string) error {
 	}
 	if err := conn.Close(); err != nil {
 		wrapped := fmt.Errorf("close codex websocket session (%s): %w", reason, err)
-		slog.Warn("adapter.codex.ws_session.close_failed",
-			"component", "adapter",
+		slog.Warn("adapter.codex.ws_session.close_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"reason", reason,
 			"err", wrapped,

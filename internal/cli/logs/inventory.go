@@ -23,12 +23,11 @@ const (
 	categoryMITMCaptureIndexes     category = "MITM capture indexes"
 	categoryMITMRawCaptures        category = "MITM raw captures"
 	categoryMITMProfileProcessLogs category = "MITM profile/process logs"
-	categoryTopLevelProcessLogs    category = "Top-level daemon/tui logs"
+	categoryTopLevelProcessLogs    category = "Top-level daemon/cli logs"
 	categoryProviderSidecarLogs    category = "Provider sidecar logs"
 	categoryConcernLogs            category = "Concern logs"
 	categoryPerChatTranscriptLogs  category = "Per-chat transcript logs"
 	categoryInventoryIndexes       category = "Inventory indexes"
-	categorySessionBackupArtifacts category = "Session backup ledgers/archives"
 	categoryPreRepairRetainedLogs  category = "Pre-repair retained logs"
 	categoryLockFiles              category = "Lock files"
 	categoryUncategorizedLogs      category = "Uncategorized logs"
@@ -43,7 +42,6 @@ var categoryOrder = []category{
 	categoryConcernLogs,
 	categoryPerChatTranscriptLogs,
 	categoryInventoryIndexes,
-	categorySessionBackupArtifacts,
 	categoryPreRepairRetainedLogs,
 	categoryLockFiles,
 	categoryUncategorizedLogs,
@@ -115,7 +113,7 @@ type fileSummary struct {
 func buildInventory(options inventoryOptions) (inventory, error) {
 	stateRoot := filepath.Clean(strings.TrimSpace(options.StateRoot))
 	if stateRoot == "." || stateRoot == "" {
-		slog.Warn("cli.logs.inventory.state_root_missing", "component", "cli")
+		slog.Warn("cli.logs.inventory.state_root_missing", "concern", "cli.logs", "component", "cli")
 		return inventory{}, fmt.Errorf("state root is required")
 	}
 	largestFileLimit := options.LargestFileLimit
@@ -134,7 +132,7 @@ func buildInventory(options inventoryOptions) (inventory, error) {
 	if mode == inventoryModeDeep {
 		source = inventorySourceDeepScan
 		if err := collectDeepInventory(stateRoot, builders); err != nil {
-			slog.Warn("cli.logs.inventory.walk_failed", "component", "cli", "state_root", stateRoot, "err", err)
+			slog.Warn("cli.logs.inventory.walk_failed", "concern", "cli.logs", "component", "cli", "state_root", stateRoot, "err", err)
 			return inventory{}, fmt.Errorf("walk state root %s: %w", stateRoot, err)
 		}
 	} else {
@@ -184,7 +182,7 @@ func newCategoryBuilders(largestFileLimit int) map[category]*categoryBuilder {
 func collectDeepInventory(stateRoot string, builders map[category]*categoryBuilder) error {
 	walkErr := filepath.WalkDir(stateRoot, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			slog.Warn("cli.logs.inventory.walk_entry_failed", "component", "cli", "path", path, "err", err)
+			slog.Warn("cli.logs.inventory.walk_entry_failed", "concern", "cli.logs", "component", "cli", "path", path, "err", err)
 			return fmt.Errorf("walk %s: %w", path, err)
 		}
 		if entry.IsDir() {
@@ -192,12 +190,12 @@ func collectDeepInventory(stateRoot string, builders map[category]*categoryBuild
 		}
 		info, infoErr := entry.Info()
 		if infoErr != nil {
-			slog.Warn("cli.logs.inventory.stat_failed", "component", "cli", "path", path, "err", infoErr)
+			slog.Warn("cli.logs.inventory.stat_failed", "concern", "cli.logs", "component", "cli", "path", path, "err", infoErr)
 			return fmt.Errorf("stat %s: %w", path, infoErr)
 		}
 		relativePath, relErr := filepath.Rel(stateRoot, path)
 		if relErr != nil {
-			slog.Warn("cli.logs.inventory.relative_path_failed", "component", "cli", "state_root", stateRoot, "path", path, "err", relErr)
+			slog.Warn("cli.logs.inventory.relative_path_failed", "concern", "cli.logs", "component", "cli", "state_root", stateRoot, "path", path, "err", relErr)
 			return fmt.Errorf("relative path %s: %w", path, relErr)
 		}
 		file := fileSummary{
@@ -217,7 +215,7 @@ func collectDeepInventory(stateRoot string, builders map[category]*categoryBuild
 
 func collectIndexedInventory(stateRoot string, builders map[category]*categoryBuilder, options inventoryOptions) {
 	addIndexedLocation(builders, categoryTopLevelProcessLogs, stateRoot, defaultProcessPath(stateRoot, options.Logging.Paths.Daemon, "clyde-daemon.jsonl"))
-	addIndexedLocation(builders, categoryTopLevelProcessLogs, stateRoot, defaultProcessPath(stateRoot, options.Logging.Paths.TUI, "clyde-tui.jsonl"))
+	addIndexedLocation(builders, categoryTopLevelProcessLogs, stateRoot, defaultProcessPath(stateRoot, options.Logging.Paths.CLI, "clyde-cli.jsonl"))
 	addIndexedLocation(builders, categoryProviderSidecarLogs, stateRoot, filepath.Join(stateRoot, "codex.jsonl"))
 	addIndexedLocation(builders, categoryConcernLogs, stateRoot, filepath.Join(stateRoot, "logs"))
 	addIndexedLocation(builders, categoryPerChatTranscriptLogs, stateRoot, filepath.Join(stateRoot, "logs", "chats"))
@@ -229,8 +227,6 @@ func collectIndexedInventory(stateRoot string, builders map[category]*categoryBu
 	addIndexedLocation(builders, categoryMITMCaptureIndexes, stateRoot, filepath.Join(captureRoot, "capture.jsonl"))
 	addIndexedLocation(builders, categoryMITMRawCaptures, stateRoot, filepath.Join(captureRoot, "raw"))
 	addIndexedLocation(builders, categoryMITMProfileProcessLogs, stateRoot, filepath.Join(stateRoot, "mitm-launcher"))
-	addIndexedLocation(builders, categorySessionBackupArtifacts, stateRoot, filepath.Join(stateRoot, "sessions"))
-	addIndexedLocation(builders, categorySessionBackupArtifacts, stateRoot, filepath.Join(stateRoot, "manual-backups"))
 }
 
 func defaultProcessPath(stateRoot string, configuredPath string, defaultFile string) string {
@@ -385,8 +381,6 @@ func sinkForCategory(currentCategory category) string {
 		return string(logevent.SinkInventory)
 	case categoryMITMProfileProcessLogs:
 		return string(logevent.SinkProcess)
-	case categorySessionBackupArtifacts:
-		return "session_backup"
 	case categoryPreRepairRetainedLogs:
 		return string(logevent.SinkProcess)
 	case categoryLockFiles:
@@ -423,9 +417,6 @@ func classifyPath(relativePath string) category {
 	}
 	if isMITMProfileProcessLog(lowerPath, base) {
 		return categoryMITMProfileProcessLogs
-	}
-	if isSessionBackupArtifact(lowerPath, base) {
-		return categorySessionBackupArtifacts
 	}
 	if isInventoryIndexLog(lowerPath) {
 		return categoryInventoryIndexes
@@ -473,31 +464,6 @@ func isMITMProfileProcessLog(lowerPath string, base string) bool {
 	return strings.Contains(lowerPath, "/process-monitor/") && strings.HasSuffix(base, ".log")
 }
 
-func isSessionBackupArtifact(lowerPath string, base string) bool {
-	if strings.HasPrefix(lowerPath, "manual-backups/") {
-		return true
-	}
-	if !strings.HasPrefix(lowerPath, "sessions/") || !strings.Contains(lowerPath, "/backups/") {
-		return false
-	}
-	switch {
-	case base == "ledger.jsonl":
-		return true
-	case strings.HasSuffix(base, ".jsonl"):
-		return true
-	case strings.HasSuffix(base, ".jsonl.gz"):
-		return true
-	case strings.HasSuffix(base, ".tar"):
-		return true
-	case strings.HasSuffix(base, ".tar.gz"):
-		return true
-	case strings.HasSuffix(base, ".zip"):
-		return true
-	default:
-		return false
-	}
-}
-
 func isInventoryIndexLog(lowerPath string) bool {
 	return strings.HasPrefix(lowerPath, "logs/inventory/") && isLogFile(lowerPath)
 }
@@ -528,7 +494,7 @@ func isTopLevelProcessLog(lowerPath string, base string) bool {
 		return false
 	}
 	return strings.HasPrefix(base, "clyde-daemon") ||
-		strings.HasPrefix(base, "clyde-tui") ||
+		strings.HasPrefix(base, "clyde-cli") ||
 		strings.HasPrefix(base, "clyde-")
 }
 

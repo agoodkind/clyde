@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"goodkind.io/clyde/codexwire"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
@@ -44,7 +45,7 @@ func buildPhase6Request(
 	t *testing.T,
 	envelopeText string,
 	cfg RequestBuilderConfig,
-) []map[string]any {
+) []codexwire.InputItem {
 	t.Helper()
 	req := ChatRequest{
 		Messages: []ChatMessage{
@@ -52,8 +53,8 @@ func buildPhase6Request(
 			{Role: "user", Content: json.RawMessage(`"next"`)},
 		},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
-	out := BuildRequestWithConfig(req, model, "", cfg)
+	resolved := codexResolvedForTest(ResolvedAlias{Alias: "gpt-5.4"})
+	out := BuildRequestWithConfig(req, resolved, "", cfg)
 	return out.Input
 }
 
@@ -65,44 +66,32 @@ func toJSONString(s string) string {
 	return string(b)
 }
 
-// findFirstReasoningItem returns the first item with type=="reasoning" in
-// the input slice or nil when none is present.
-func findFirstReasoningItem(items []map[string]any) map[string]any {
+// findFirstReasoningItem returns the first item with type=="reasoning"
+// in the input slice or zero+false when none is present.
+func findFirstReasoningItem(items []codexwire.InputItem) (codexwire.InputItem, bool) {
 	for _, item := range items {
-		t, _ := item["type"].(string)
-		if t == "reasoning" {
-			return item
+		if item.Type == codexwire.ItemTypeReasoning {
+			return item, true
 		}
 	}
-	return nil
+	return codexwire.InputItem{}, false
 }
 
 // findFirstAssistantMessage returns the first item with type=="message"
-// and role=="assistant" or nil when none is present.
-func findFirstAssistantMessage(items []map[string]any) (int, map[string]any) {
+// and role=="assistant" or (-1, zero, false) when none is present.
+func findFirstAssistantMessage(items []codexwire.InputItem) (int, codexwire.InputItem, bool) {
 	for idx, item := range items {
-		t, _ := item["type"].(string)
-		role, _ := item["role"].(string)
-		if t == "message" && role == "assistant" {
-			return idx, item
+		if item.Type == codexwire.ItemTypeMessage && item.Role == "assistant" {
+			return idx, item, true
 		}
 	}
-	return -1, nil
+	return -1, codexwire.InputItem{}, false
 }
 
-func extractSummaryTexts(item map[string]any) []string {
-	raw, ok := item["summary"]
-	if !ok {
-		return nil
-	}
-	entries, ok := raw.([]map[string]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		text, _ := entry["text"].(string)
-		out = append(out, text)
+func extractSummaryTexts(item codexwire.InputItem) []string {
+	out := make([]string, 0, len(item.Summary))
+	for _, entry := range item.Summary {
+		out = append(out, entry.Text)
 	}
 	return out
 }
@@ -114,15 +103,15 @@ func TestPhase6NativeSummaryRoundTripWithEncryptedEmitsBothFields(t *testing.T) 
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
 	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
+	r, ok := findFirstReasoningItem(items)
+	if !ok {
 		t.Fatalf("expected reasoning item, got %#v", items)
 	}
-	if r["id"] != "rs_abc" {
-		t.Fatalf("id = %v, want rs_abc", r["id"])
+	if r.ID != "rs_abc" {
+		t.Fatalf("id = %q, want rs_abc", r.ID)
 	}
-	if r["encrypted_content"] != "ENC123" {
-		t.Fatalf("encrypted_content = %v, want ENC123", r["encrypted_content"])
+	if r.EncryptedContent != "ENC123" {
+		t.Fatalf("encrypted_content = %q, want ENC123", r.EncryptedContent)
 	}
 	got := extractSummaryTexts(r)
 	if len(got) != 1 || got[0] != "deep thinking" {
@@ -138,15 +127,15 @@ func TestPhase6NativeSummaryRoundTripWithoutEncryptedOmitsField(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
 	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
+	r, ok := findFirstReasoningItem(items)
+	if !ok {
 		t.Fatalf("expected reasoning item")
 	}
-	if _, has := r["encrypted_content"]; has {
-		t.Fatalf("encrypted_content should be absent when marker had none, got %#v", r)
+	if r.EncryptedContent != "" {
+		t.Fatalf("encrypted_content should be absent when marker had none, got %q", r.EncryptedContent)
 	}
-	if r["id"] != "rs_miss" {
-		t.Fatalf("id = %v", r["id"])
+	if r.ID != "rs_miss" {
+		t.Fatalf("id = %q", r.ID)
 	}
 	if got := extractSummaryTexts(r); len(got) != 1 || got[0] != "thinking" {
 		t.Fatalf("summary = %v", got)
@@ -161,11 +150,11 @@ func TestPhase6NativeSummaryDropEncryptedOmitsField(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
 	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
+	r, ok := findFirstReasoningItem(items)
+	if !ok {
 		t.Fatalf("expected reasoning item")
 	}
-	if _, has := r["encrypted_content"]; has {
+	if r.EncryptedContent != "" {
 		t.Fatalf("encrypted_content present under drop mode")
 	}
 	if got := extractSummaryTexts(r); len(got) != 1 || got[0] != "thinking" {
@@ -180,19 +169,18 @@ func TestPhase6DropSummaryRoundTripWithEncryptedOnlyEncrypted(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
 	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
+	r, ok := findFirstReasoningItem(items)
+	if !ok {
 		t.Fatalf("expected reasoning item")
 	}
-	summary, has := r["summary"]
-	if !has {
-		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	if r.Summary == nil {
+		t.Fatalf("summary slice must be present (Codex Responses requires it; empty array allowed)")
 	}
-	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
-		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
+	if len(r.Summary) != 0 {
+		t.Fatalf("summary must be an empty slice, got %v", r.Summary)
 	}
-	if r["encrypted_content"] != "ENC" {
-		t.Fatalf("encrypted_content = %v", r["encrypted_content"])
+	if r.EncryptedContent != "ENC" {
+		t.Fatalf("encrypted_content = %q", r.EncryptedContent)
 	}
 }
 
@@ -204,21 +192,20 @@ func TestPhase6DropSummaryRoundTripWithoutEncryptedEmitsStubID(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
 	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
+	r, ok := findFirstReasoningItem(items)
+	if !ok {
 		t.Fatalf("expected stub reasoning item with just id")
 	}
-	if r["id"] != "rs_only" {
-		t.Fatalf("id = %v", r["id"])
+	if r.ID != "rs_only" {
+		t.Fatalf("id = %q", r.ID)
 	}
-	summary, has := r["summary"]
-	if !has {
-		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	if r.Summary == nil {
+		t.Fatalf("summary slice must be present (Codex Responses requires it; empty array allowed)")
 	}
-	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
-		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
+	if len(r.Summary) != 0 {
+		t.Fatalf("summary must be an empty slice, got %v", r.Summary)
 	}
-	if _, has := r["encrypted_content"]; has {
+	if r.EncryptedContent != "" {
 		t.Fatalf("encrypted_content must be absent on miss")
 	}
 }
@@ -230,21 +217,20 @@ func TestPhase6DropSummaryDropEncryptedEmitsStubIDWhenRefPresent(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
 	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
+	r, ok := findFirstReasoningItem(items)
+	if !ok {
 		t.Fatalf("expected reasoning stub")
 	}
-	if r["id"] != "rs_id" {
-		t.Fatalf("id = %v", r["id"])
+	if r.ID != "rs_id" {
+		t.Fatalf("id = %q", r.ID)
 	}
-	summary, has := r["summary"]
-	if !has {
-		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	if r.Summary == nil {
+		t.Fatalf("summary slice must be present (Codex Responses requires it; empty array allowed)")
 	}
-	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
-		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
+	if len(r.Summary) != 0 {
+		t.Fatalf("summary must be an empty slice, got %v", r.Summary)
 	}
-	if _, has := r["encrypted_content"]; has {
+	if r.EncryptedContent != "" {
 		t.Fatalf("encrypted_content must be absent under drop mode")
 	}
 }
@@ -264,22 +250,21 @@ func TestPhase6PlainTextConcatRoundTripWithEncryptedFoldsBodyAndEmitsEncrypted(t
 		// codexSummaryRenderStrategy.
 		InboundThinkingMaterialization: adapterrender.MaterializePlainTextConcat,
 	})
-	r := findFirstReasoningItem(items)
-	if r == nil {
+	r, ok := findFirstReasoningItem(items)
+	if !ok {
 		t.Fatalf("expected reasoning item carrying encrypted_content")
 	}
-	if r["encrypted_content"] != "ENC" {
-		t.Fatalf("encrypted_content = %v", r["encrypted_content"])
+	if r.EncryptedContent != "ENC" {
+		t.Fatalf("encrypted_content = %q", r.EncryptedContent)
 	}
-	summary, has := r["summary"]
-	if !has {
-		t.Fatalf("summary field must be present (Codex Responses requires it; empty array allowed)")
+	if r.Summary == nil {
+		t.Fatalf("summary slice must be present (Codex Responses requires it; empty array allowed)")
 	}
-	if arr, ok := summary.([]map[string]any); !ok || len(arr) != 0 {
-		t.Fatalf("summary must be an empty array, got %T %v", summary, summary)
+	if len(r.Summary) != 0 {
+		t.Fatalf("summary must be an empty slice, got %v", r.Summary)
 	}
-	idx, msg := findFirstAssistantMessage(items)
-	if msg == nil {
+	idx, _, found := findFirstAssistantMessage(items)
+	if !found {
 		t.Fatalf("expected assistant message")
 	}
 	// Reasoning must precede the assistant message (codex-rs ordering).
@@ -297,8 +282,8 @@ func TestPhase6PlainTextConcatRoundTripWithoutEncryptedEmitsNoReasoningItem(t *t
 		RoundTripEncrypted:             RoundTripEncryptedRoundTrip,
 		InboundThinkingMaterialization: adapterrender.MaterializePlainTextConcat,
 	})
-	if r := findFirstReasoningItem(items); r != nil {
-		t.Fatalf("expected no reasoning item, got %#v", r)
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected no reasoning item")
 	}
 }
 
@@ -311,8 +296,8 @@ func TestPhase6PlainTextConcatDropEncryptedEmitsNoReasoningItem(t *testing.T) {
 		RoundTripEncrypted:             RoundTripEncryptedDrop,
 		InboundThinkingMaterialization: adapterrender.MaterializePlainTextConcat,
 	})
-	if r := findFirstReasoningItem(items); r != nil {
-		t.Fatalf("expected no reasoning item, got %#v", r)
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected no reasoning item")
 	}
 }
 
@@ -325,8 +310,8 @@ func TestPhase6LegacyNoRefDropsSilentlyUnderDropEncrypted(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
 	})
-	if r := findFirstReasoningItem(items); r != nil {
-		t.Fatalf("expected NO reasoning item for legacy no-ref under drop+drop, got %#v", r)
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected NO reasoning item for legacy no-ref under drop+drop")
 	}
 }
 
@@ -348,8 +333,8 @@ func TestPhase6EmptyRefNeverEmitsReasoningItem(t *testing.T) {
 				RoundTripSummary:   mode,
 				RoundTripEncrypted: RoundTripEncryptedRoundTrip,
 			})
-			if r := findFirstReasoningItem(items); r != nil {
-				t.Fatalf("summary=%s: expected NO reasoning item when ref is empty, got %#v", mode, r)
+			if _, ok := findFirstReasoningItem(items); ok {
+				t.Fatalf("summary=%s: expected NO reasoning item when ref is empty", mode)
 			}
 		})
 	}
@@ -366,12 +351,10 @@ func TestPhase6ReasoningPrecedesMessage(t *testing.T) {
 	reasoningIdx := -1
 	messageIdx := -1
 	for idx, item := range items {
-		t, _ := item["type"].(string)
-		role, _ := item["role"].(string)
 		switch {
-		case t == "reasoning" && reasoningIdx < 0:
+		case item.Type == codexwire.ItemTypeReasoning && reasoningIdx < 0:
 			reasoningIdx = idx
-		case t == "message" && role == "assistant" && messageIdx < 0:
+		case item.Type == codexwire.ItemTypeMessage && item.Role == "assistant" && messageIdx < 0:
 			messageIdx = idx
 		}
 	}
@@ -394,8 +377,8 @@ var _ = adapteropenai.ChatRequest{}
 // rejects requests with [ObjectParam] [input[i].summary]
 // [missing_required_parameter] when this field is absent, regardless of
 // whether the round-trip strategy is drop, plain_text_concat, or
-// native_summary_field. This test exists to ensure the asMap renderer
-// never reverts to omitempty-style behavior on summary.
+// native_summary_field. This test exists to ensure the toInputItem
+// renderer never reverts to omitempty-style behavior on summary.
 func TestReasoningInputItemAlwaysEmitsSummaryField(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -430,17 +413,12 @@ func TestReasoningInputItemAlwaysEmitsSummaryField(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			out := tc.item.asMap()
-			summary, has := out["summary"]
-			if !has {
-				t.Fatalf("summary field must always be present; out=%v", out)
+			out := tc.item.toInputItem()
+			if out.Summary == nil {
+				t.Fatalf("summary slice must always be non-nil; out=%+v", out)
 			}
-			arr, ok := summary.([]map[string]any)
-			if !ok {
-				t.Fatalf("summary must be a []map[string]any; got %T", summary)
-			}
-			if len(tc.item.Summary) != len(arr) {
-				t.Fatalf("summary length mismatch: in=%d out=%d", len(tc.item.Summary), len(arr))
+			if len(tc.item.Summary) != len(out.Summary) {
+				t.Fatalf("summary length mismatch: in=%d out=%d", len(tc.item.Summary), len(out.Summary))
 			}
 		})
 	}

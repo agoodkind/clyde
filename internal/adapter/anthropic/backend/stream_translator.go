@@ -12,12 +12,18 @@ import (
 )
 
 type (
-	OpenAIStreamChunk  = adapteropenai.StreamChunk
+	// OpenAIStreamChunk is part of Clyde's typed adapter surface.
+	OpenAIStreamChunk = adapteropenai.StreamChunk
+	// OpenAIStreamChoice is part of Clyde's typed adapter surface.
 	OpenAIStreamChoice = adapteropenai.StreamChoice
-	OpenAIStreamDelta  = adapteropenai.StreamDelta
-	OpenAIUsage        = adapteropenai.Usage
-	EventRenderer      = adapterrender.EventRenderer
-	Event              = adapterrender.Event
+	// OpenAIStreamDelta is part of Clyde's typed adapter surface.
+	OpenAIStreamDelta = adapteropenai.StreamDelta
+	// OpenAIUsage is part of Clyde's typed adapter surface.
+	OpenAIUsage = adapteropenai.Usage
+	// EventRenderer is part of Clyde's typed adapter surface.
+	EventRenderer = adapterrender.EventRenderer
+	// Event is part of Clyde's typed adapter surface.
+	Event = adapterrender.Event
 )
 
 const (
@@ -41,6 +47,7 @@ const (
 	EventToolCallDelta = adapterrender.EventToolCallDelta
 )
 
+// NewEventRenderer is part of Clyde's typed adapter surface.
 var NewEventRenderer = adapterrender.NewEventRenderer
 
 // StreamTranslator converts Anthropic SSE events into normalized render events.
@@ -59,11 +66,15 @@ type StreamTranslator struct {
 func NewStreamTranslator(reqID, modelAlias string) *StreamTranslator {
 	return &StreamTranslator{
 		toolCallByBlockIdx: make(map[int]int),
-		renderer:           NewEventRenderer(reqID, modelAlias, "anthropic", slog.Default()),
+		renderer:           NewEventRenderer(reqID, modelAlias, "anthropic", slog.Default()), currentBlockType:
+
+		// HandleEventEvents maps one Anthropic stream event to zero or more normalized events.
+		"", toolCallIndex: 0, pendingInputTokens: 0, lastStopReason: "", lastOutputTokens: 0, visibleText: strings.
+					Builder{},
 	}
 }
 
-// HandleEventEvents maps one Anthropic stream event to zero or more normalized events.
+// HandleEventEvents is part of Clyde's typed adapter surface.
 func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) (
 	events []Event,
 	finished bool,
@@ -73,27 +84,53 @@ func (t *StreamTranslator) HandleEventEvents(eventName string, dataJSON []byte) 
 ) {
 	evName := resolveStreamEventName(eventName, dataJSON)
 
-	switch evName {
-	case "message_start":
+	switch anthropicBackendSSEEvent(evName) {
+	case anthropicBackendSSEMessageStart:
 		return t.handleMessageStart(dataJSON)
-	case "content_block_start":
+	case anthropicBackendSSEContentBlockStart:
 		return t.handleContentBlockStart(dataJSON)
-	case "content_block_delta":
+	case anthropicBackendSSEContentBlockDelta:
 		return t.handleContentBlockDelta(dataJSON)
-	case "content_block_stop":
+	case anthropicBackendSSEContentBlockStop:
 		return t.handleContentBlockStop()
-	case "message_delta":
+	case anthropicBackendSSEMessageDelta:
 		return t.handleMessageDelta(dataJSON)
-	case "message_stop":
+	case anthropicBackendSSEMessageStop:
 		return t.handleMessageStop()
-	case "ping":
+	case anthropicBackendSSEPing:
 		return nil, false, "", nil, nil
-	case "error":
+	case anthropicBackendSSEError:
 		return t.handleStreamError(dataJSON)
 	default:
 		return nil, false, "", nil, nil
 	}
 }
+
+// anthropicBackendSSEEvent enumerates the SSE event names the
+// translator dispatcher recognizes.
+type anthropicBackendSSEEvent string
+
+const (
+	anthropicBackendSSEMessageStart      anthropicBackendSSEEvent = "message_start"
+	anthropicBackendSSEContentBlockStart anthropicBackendSSEEvent = "content_block_start"
+	anthropicBackendSSEContentBlockDelta anthropicBackendSSEEvent = "content_block_delta"
+	anthropicBackendSSEContentBlockStop  anthropicBackendSSEEvent = "content_block_stop"
+	anthropicBackendSSEMessageDelta      anthropicBackendSSEEvent = "message_delta"
+	anthropicBackendSSEMessageStop       anthropicBackendSSEEvent = "message_stop"
+	anthropicBackendSSEPing              anthropicBackendSSEEvent = "ping"
+	anthropicBackendSSEError             anthropicBackendSSEEvent = "error"
+)
+
+// anthropicBackendSSEDelta enumerates the delta type strings the
+// translator dispatches on inside content_block_delta events.
+type anthropicBackendSSEDelta string
+
+const (
+	anthropicBackendSSEDeltaText      anthropicBackendSSEDelta = "text_delta"
+	anthropicBackendSSEDeltaInputJSON anthropicBackendSSEDelta = "input_json_delta"
+	anthropicBackendSSEDeltaThinking  anthropicBackendSSEDelta = "thinking_delta"
+	anthropicBackendSSEDeltaSignature anthropicBackendSSEDelta = "signature_delta"
+)
 
 // resolveStreamEventName trims the SSE event name and falls back to the
 // embedded `type` field when the line lacked an explicit event header.
@@ -119,7 +156,8 @@ func (t *StreamTranslator) handleMessageStart(dataJSON []byte) ([]Event, bool, s
 		} `json:"message"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		return nil, false, "", nil, err
+		slog.Warn("adapter.anthropic.stream.message_start_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic message_start event: %w", err)
 	}
 	if ev.Message.Usage != nil {
 		t.pendingInputTokens = ev.Message.Usage.InputTokens
@@ -134,7 +172,8 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 		ContentBlock json.RawMessage `json:"content_block"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		return nil, false, "", nil, err
+		slog.Warn("adapter.anthropic.stream.content_block_start_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic content_block_start event: %w", err)
 	}
 	if len(ev.ContentBlock) == 0 {
 		return nil, false, "", nil, nil
@@ -198,20 +237,21 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 		Delta *AnthSSEDelta `json:"delta"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		return nil, false, "", nil, err
+		slog.Warn("adapter.anthropic.stream.content_block_delta_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic content_block_delta event: %w", err)
 	}
 	if ev.Delta == nil {
 		return nil, false, "", nil, nil
 	}
-	switch ev.Delta.Type {
-	case "text_delta":
+	switch anthropicBackendSSEDelta(ev.Delta.Type) {
+	case anthropicBackendSSEDeltaText:
 		t.visibleText.WriteString(ev.Delta.Text)
 		return []Event{assistantTextDeltaEvent(ev.Delta.Text)}, false, "", nil, nil
-	case "input_json_delta":
+	case anthropicBackendSSEDeltaInputJSON:
 		return t.toolArgumentsDelta(ev.Index, ev.Delta.PartialJSON)
-	case "thinking_delta":
+	case anthropicBackendSSEDeltaThinking:
 		return []Event{reasoningTextDeltaEvent(ev.Delta.Thinking)}, false, "", nil, nil
-	case "signature_delta":
+	case anthropicBackendSSEDeltaSignature:
 		return []Event{reasoningSignatureDeltaEvent(ev.Delta.Signature)}, false, "", nil, nil
 	default:
 		return nil, false, "", nil, nil
@@ -239,8 +279,8 @@ func (t *StreamTranslator) toolArgumentsDelta(blockIdx int, partialJSON string) 
 		Index: tcIdx,
 		Type:  "function",
 		Function: OpenAIToolCallFunction{
-			Arguments: partialJSON,
-		},
+			Arguments: partialJSON, Name: "",
+		}, ID: "",
 	}})}, false, "", nil, nil
 }
 
@@ -279,7 +319,8 @@ func (t *StreamTranslator) handleMessageDelta(dataJSON []byte) ([]Event, bool, s
 		Usage *AnthSSEUsage `json:"usage"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		return nil, false, "", nil, err
+		slog.Warn("adapter.anthropic.stream.message_delta_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic message_delta event: %w", err)
 	}
 	if ev.Delta.StopReason != "" {
 		t.lastStopReason = ev.Delta.StopReason
@@ -296,7 +337,7 @@ func (t *StreamTranslator) handleMessageStop() ([]Event, bool, string, *OpenAIUs
 	u := &OpenAIUsage{
 		PromptTokens:     t.pendingInputTokens,
 		CompletionTokens: t.lastOutputTokens,
-		TotalTokens:      t.pendingInputTokens + t.lastOutputTokens,
+		TotalTokens:      t.pendingInputTokens + t.lastOutputTokens, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0,
 	}
 	var extra []Event
 	if t.lastStopReason == "refusal" && t.visibleText.Len() > 0 {
@@ -313,7 +354,8 @@ func (t *StreamTranslator) handleStreamError(dataJSON []byte) ([]Event, bool, st
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(dataJSON, &ev); err != nil {
-		return nil, false, "", nil, err
+		slog.Warn("adapter.anthropic.stream.error_event_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return nil, false, "", nil, fmt.Errorf("unmarshal anthropic error event: %w", err)
 	}
 	msg := strings.TrimSpace(ev.Error.Message)
 	if msg == "" {

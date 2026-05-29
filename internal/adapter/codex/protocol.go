@@ -4,32 +4,33 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"slices"
 	"strings"
 
+	"goodkind.io/clyde/codexwire"
 	"goodkind.io/clyde/internal/adapter/finishreason"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
+// Reasoning is part of Clyde's typed adapter surface.
 type Reasoning struct {
 	Effort  string `json:"effort,omitempty"`
 	Summary string `json:"summary,omitempty"`
 }
 
+// RunResult is part of Clyde's typed adapter surface.
 type RunResult struct {
 	Usage                      adapteropenai.Usage
-	UsageTelemetry             CodexUsageTelemetry
+	UsageTelemetry             UsageTelemetry
 	FinishReason               string
 	ReasoningSignaled          bool
 	ReasoningVisible           bool
 	DerivedCacheCreationTokens int
 	ResponseID                 string
-	OutputItems                []map[string]any
+	OutputItems                []codexwire.InputItem
 	ToolCallCount              int
 	ToolCallNames              []string
 	HasSubagentToolCall        bool
@@ -37,11 +38,12 @@ type RunResult struct {
 
 // ContextWindowError reports an upstream Codex over-context rejection.
 // The adapter maps this to OpenAI's context_length_exceeded shape so
-// Cursor can run its normal compaction/retry flow.
+// Cursor can run its normal retry flow.
 type ContextWindowError struct {
 	Message string
 }
 
+// Error is part of Clyde's typed adapter surface.
 func (e *ContextWindowError) Error() string {
 	if e == nil || strings.TrimSpace(e.Message) == "" {
 		return "codex input exceeds context window"
@@ -55,6 +57,7 @@ type UnsupportedModelError struct {
 	Message string
 }
 
+// Error is part of Clyde's typed adapter surface.
 func (e *UnsupportedModelError) Error() string {
 	if e == nil || strings.TrimSpace(e.Message) == "" {
 		return "codex model is not supported"
@@ -62,10 +65,19 @@ func (e *UnsupportedModelError) Error() string {
 	return e.Message
 }
 
+// NewRunResult is part of Clyde's typed adapter surface.
 func NewRunResult(finishReason string) RunResult {
-	return RunResult{FinishReason: finishreason.FromCodex(finishReason)}
+	return RunResult{
+		FinishReason: finishreason.FromCodex(finishReason), Usage: adapteropenai.
+				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+		UsageTelemetry: UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
+
+		ReasoningSignaled: false, ReasoningVisible: false, DerivedCacheCreationTokens: 0, ResponseID: "", OutputItems: nil, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false,
+	}
 }
 
+// SetFinishReason is part of Clyde's typed adapter surface.
 func (r *RunResult) SetFinishReason(finishReason string) {
 	r.FinishReason = finishreason.FromCodex(finishReason)
 }
@@ -104,10 +116,10 @@ type completedOutputTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-// CodexUsageTelemetry is the provider-owned diagnostic view of Codex
+// UsageTelemetry is the provider-owned diagnostic view of Codex
 // Responses usage. The boolean fields intentionally distinguish an
 // explicitly present zero from omitted/null details.
-type CodexUsageTelemetry struct {
+type UsageTelemetry struct {
 	UsagePresent               bool
 	InputTokens                int
 	OutputTokens               int
@@ -154,6 +166,22 @@ type transportErrorBody struct {
 
 type transportItem map[string]json.RawMessage
 
+// codexItemType is the closed enum of Codex history item type
+// strings observed on response output items. It is kept as a thin
+// alias over [codexwire.ItemType] so the codex package can spell
+// the item-type switches without an import-path stutter.
+type codexItemType = codexwire.ItemType
+
+const (
+	codexItemTypeMessage              = codexwire.ItemTypeMessage
+	codexItemTypeFunctionCall         = codexwire.ItemTypeFunctionCall
+	codexItemTypeLocalShellCall       = codexwire.ItemTypeLocalShellCall
+	codexItemTypeCustomToolCall       = codexwire.ItemTypeCustomToolCall
+	codexItemTypeFunctionCallOutput   = codexwire.ItemTypeFunctionCallOutput
+	codexItemTypeCustomToolCallOutput = codexwire.ItemTypeCustomToolCallOutput
+	codexItemTypeReasoning            = codexwire.ItemTypeReasoning
+)
+
 type reasoningItemPayload struct {
 	ID      string                 `json:"id,omitempty"`
 	Summary []reasoningSummaryPart `json:"summary,omitempty"`
@@ -175,7 +203,6 @@ type toolCallState struct {
 	ItemID            string
 	CallID            string
 	Name              string
-	NativeName        string
 	Type              string
 	IdentityEmitted   bool
 	ArgumentDeltaSeen bool
@@ -193,7 +220,7 @@ type toolCallState struct {
 // sites that have no surrounding config context.
 //
 // Operators who want to promote thinking round-tripping to plain-text
-// concat use [config.AdapterSyntheticContent.Codex.InboundThinkingMaterialization].
+// concat use [config.AdapterCodexReasoning.RoundTripSummary].
 // The codex request builder threads that strategy through to
 // [SanitizeForUpstreamCacheWithStrategy] explicitly; this wrapper retains
 // the conservative default for ad-hoc callers (e.g. canonical_items).
@@ -258,36 +285,39 @@ func sanitizeReasoningPartForCodex(part adapterrender.SyntheticPart, strategy ad
 			return ""
 		}
 	}
-	codexConcernLog.Logger().Debug("adapter.codex.thinking.foreign_origin_injected",
-		"subcomponent", "codex_mapper",
+	codexConcernLog.Logger().Debug("adapter.codex.thinking.foreign_origin_injected", "concern", "adapter.providers.codex.request", "subcomponent", "codex_mapper",
 		"origin", string(part.Origin),
 		"body_len", len(body),
 	)
 	return body
 }
 
-// ClientMetadataWithTurn extends ClientMetadata with the
-// `x-codex-turn-metadata` JSON blob. Codex CLI and Codex Desktop both
-// mirror the handshake header into client_metadata; we do the same.
-// turnMetadataJSON should be the already-marshaled JSON string from
-// TurnMetadata.MarshalCompact.
-func ClientMetadataWithTurn(installationID, windowID, turnMetadataJSON string) map[string]string {
-	out := map[string]string{}
-	if v := strings.TrimSpace(installationID); v != "" {
-		out["x-codex-installation-id"] = v
+// ClientMetadataWithTurn builds the typed codex-cli client_metadata
+// carrying the installation id, window id, and `x-codex-turn-metadata`
+// JSON blob. codex-rs build_ws_client_metadata
+// (research/codex/codex-rs/core/src/client.rs) populates the same keys;
+// Clyde mirrors that subset. turnMetadataJSON should be the
+// already-marshaled JSON string from TurnMetadata.MarshalCompact.
+// Returns nil when no key is populated so the caller omits the whole
+// `client_metadata` field.
+func ClientMetadataWithTurn(installationID, windowID, turnMetadataJSON string) *ClientMetadata {
+	out := ClientMetadata{
+		InstallationID:  strings.TrimSpace(installationID),
+		WindowID:        strings.TrimSpace(windowID),
+		Subagent:        "",
+		ParentThreadID:  "",
+		TurnMetadata:    strings.TrimSpace(turnMetadataJSON),
+		WSStreamStartMS: "",
+		Traceparent:     "",
+		Tracestate:      "",
 	}
-	if v := strings.TrimSpace(windowID); v != "" {
-		out["x-codex-window-id"] = v
-	}
-	if v := strings.TrimSpace(turnMetadataJSON); v != "" {
-		out["x-codex-turn-metadata"] = v
-	}
-	if len(out) == 0 {
+	if out.IsEmpty() {
 		return nil
 	}
-	return out
+	return &out
 }
 
+// RequestInclude is part of Clyde's typed adapter surface.
 func RequestInclude(requested []string, reasoningEnabled bool) []string {
 	if len(requested) == 0 && !reasoningEnabled {
 		return nil
@@ -317,6 +347,7 @@ func RequestInclude(requested []string, reasoningEnabled bool) []string {
 	return out
 }
 
+// EffectiveReasoningWithDefaultSummary is part of Clyde's typed adapter surface.
 func EffectiveReasoningWithDefaultSummary(req adapteropenai.ChatRequest, effort, defaultSummary string) *Reasoning {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	if effort == "" {
@@ -326,22 +357,22 @@ func EffectiveReasoningWithDefaultSummary(req adapteropenai.ChatRequest, effort,
 		effort = strings.ToLower(strings.TrimSpace(req.Reasoning.Effort))
 	}
 	var out Reasoning
-	switch effort {
-	case "none", "minimal", "low", "medium", "high", "xhigh":
+	switch reasoningEffort(effort) {
+	case reasoningEffortNone, reasoningEffortMinimal, reasoningEffortLow, reasoningEffortMedium, reasoningEffortHigh, reasoningEffortXHigh:
 		out.Effort = effort
 	}
 	if req.Reasoning != nil {
-		switch strings.ToLower(strings.TrimSpace(req.Reasoning.Summary)) {
-		case "auto", "concise", "detailed", "none":
+		switch reasoningSummary(strings.ToLower(strings.TrimSpace(req.Reasoning.Summary))) {
+		case reasoningSummaryAuto, reasoningSummaryConcise, reasoningSummaryDetailed, reasoningSummaryNone:
 			out.Summary = strings.ToLower(strings.TrimSpace(req.Reasoning.Summary))
 		}
 	}
 	if out.Effort != "" && out.Summary == "" {
-		switch strings.ToLower(strings.TrimSpace(defaultSummary)) {
-		case "auto", "concise", "detailed", "none":
+		switch reasoningSummary(strings.ToLower(strings.TrimSpace(defaultSummary))) {
+		case reasoningSummaryAuto, reasoningSummaryConcise, reasoningSummaryDetailed, reasoningSummaryNone:
 			out.Summary = strings.ToLower(strings.TrimSpace(defaultSummary))
 		default:
-			out.Summary = "auto"
+			out.Summary = string(reasoningSummaryAuto)
 		}
 	}
 	if out.Effort == "" && out.Summary == "" {
@@ -361,6 +392,13 @@ type SSEParseOptions struct {
 	// RoundTripEncryptedDrop so the synthetic-thinking close marker
 	// stays bare.
 	DropEncryptedContent bool
+	// DeclaredTools is the tools array the client sent on this request.
+	// When codex answers with one of its native tool types (a freeform
+	// apply_patch custom_tool_call, or a local_shell_call), the parser
+	// maps the native call back to the client-declared tool name by
+	// SHAPE using these specs, so the client receives a tool name it
+	// recognizes. It is never used to match by hardcoded client names.
+	DeclaredTools []codexwire.ToolSpec
 }
 
 // ParseSSEEventsWithOptions is the option-aware codex SSE parser entry
@@ -369,7 +407,8 @@ type SSEParseOptions struct {
 func ParseSSEEventsWithOptions(ctx context.Context, body io.Reader, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext, opts SSEParseOptions) (RunResult, error) {
 	parser := newSSEEventParser(ctx, emit, logCtx)
 	parser.dropEncryptedContent = opts.DropEncryptedContent
-	return parser.parse(body)
+	parser.tools = newToolHandlers(newDeclaredToolResolver(opts.DeclaredTools))
+	return parser.parse(ctx, body)
 }
 
 type ssePayloadAction int
@@ -387,7 +426,7 @@ type ssePayloadResult struct {
 }
 
 type sseEventParser struct {
-	ctx                       context.Context
+	logContext                func() context.Context
 	emit                      func(adapterrender.Event) error
 	logCtx                    sseInstrumentationContext
 	out                       RunResult
@@ -404,20 +443,28 @@ type sseEventParser struct {
 	// the EventReasoningFinished emit. False (default) keeps the
 	// codex-rs round_trip behavior; true honors a config drop.
 	dropEncryptedContent bool
+	// tools is the provider-neutral set of reply-item handlers plus the
+	// chooser that maps codex native tool item types back to the
+	// client-declared tool name and field names by parameter shape.
+	tools toolHandlers
 }
 
 func newSSEEventParser(ctx context.Context, emit func(adapterrender.Event) error, logCtx sseInstrumentationContext) *sseEventParser {
 	return &sseEventParser{
-		ctx:                  ctx,
+		logContext:           func() context.Context { return ctx },
 		emit:                 emit,
 		logCtx:               logCtx,
 		out:                  NewRunResult("stop"),
 		toolCallsByItemID:    make(map[string]*toolCallState),
-		dropEncryptedContent: false,
+		tools:                newToolHandlers(newDeclaredToolResolver(nil)),
+		dropEncryptedContent: false, reasoningSignaled: false, reasoningVisible: false, reasoningTextDeltaSeen: false, reasoningSummaryDeltaSeen: false, nextToolIndex: 0, aggregate: sseAggregateCollector{Assistant: assistantTextDeltaAggregate{DeltaCount: 0, CharCount: 0, FirstPreview: "", LastPreview: "", NormalizedText: strings.
+					Builder{}, PendingWhitespace: false}, Items: outputItemAggregate{Added: outputItemCounts{Total: 0, ToolTotal: 0, TypeCounts: nil}, Done: outputItemCounts{Total: 0, ToolTotal: 0, TypeCounts: nil}}, Tools: toolDeltaAggregate{FunctionArgumentDeltaCount: 0, FunctionArgumentDeltaChars: 0, CustomToolInputDeltaCount: 0, CustomToolInputDeltaChars: 0}, Reasoning: reasoningAggregate{DeltaCount: 0, DeltaChars: 0, TextDeltaCount: 0, TextDeltaChars: 0, SummaryDeltaCount: 0, SummaryDeltaChars: 0}},
+
+		upstreamEventSeq: 0,
 	}
 }
 
-func (p *sseEventParser) parse(body io.Reader) (RunResult, error) {
+func (p *sseEventParser) parse(ctx context.Context, body io.Reader) (RunResult, error) {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 0, 1024*128), 1024*1024*8)
 
@@ -446,10 +493,10 @@ func (p *sseEventParser) parse(body io.Reader) (RunResult, error) {
 		eventName = ""
 		dataLines = nil
 
-		result := p.processPayload(eventNameLocal, payload)
+		result := p.processPayload(ctx, eventNameLocal, payload)
 		switch result.Action {
 		case ssePayloadBreak:
-			return p.finishEOF(), nil
+			return p.finishEOF(ctx), nil
 		case ssePayloadReturn:
 			return result.Result, result.Err
 		case ssePayloadContinue:
@@ -457,92 +504,101 @@ func (p *sseEventParser) parse(body io.Reader) (RunResult, error) {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		p.logAggregate(p.out.ResponseID, "scanner_error", err)
-		return p.out, err
+		p.logAggregate(ctx, p.out.ResponseID, "scanner_error", err)
+		slog.WarnContext(ctx, "adapter.codex.protocol.parse_scanner_error", "concern", "adapter.providers.codex.request", "request_id", p.logCtx.RequestID, "err", err)
+		return p.out, fmt.Errorf("scan codex SSE events: %w", err)
 	}
-	return p.finishEOF(), nil
+	return p.finishEOF(ctx), nil
 }
 
-func (p *sseEventParser) finishEOF() RunResult {
+func (p *sseEventParser) finishEOF(ctx context.Context) RunResult {
 	p.out.ReasoningSignaled = p.reasoningSignaled
 	p.out.ReasoningVisible = p.reasoningVisible
-	p.logAggregate(p.out.ResponseID, "eof", nil)
+	p.logAggregate(ctx, p.out.ResponseID, "eof", nil)
 	return p.out
 }
 
-func (p *sseEventParser) processPayload(eventName, payload string) ssePayloadResult {
+func (p *sseEventParser) processPayload(ctx context.Context, eventName, payload string) ssePayloadResult {
 	if strings.TrimSpace(payload) == "[DONE]" {
-		return ssePayloadResult{Action: ssePayloadBreak, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadBreak, Result: p.out, Err: nil}
 	}
 	var raw transportStreamEvent
 	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 	}
 	p.upstreamEventSeq++
 	p.aggregate.observe(eventName, raw)
-	return p.handleEvent(eventName, payload, raw)
+	return p.handleEvent(ctx, eventName, payload, raw)
 }
 
-func (p *sseEventParser) handleEvent(eventName, payload string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleEvent(ctx context.Context, eventName, payload string, raw transportStreamEvent) ssePayloadResult {
 	switch {
 	case eventName == "response.output_text.delta":
-		return p.handleOutputTextDelta(eventName, raw)
+		return p.handleOutputTextDelta(raw)
 	case eventName == "response.output_item.added" || eventName == "response.output_item.done":
-		return p.handleOutputItemEvent(eventName, raw)
+		return p.handleOutputItemEvent(ctx, eventName, raw)
 	case eventName == "response.function_call_arguments.delta":
-		return p.handleFunctionCallArgumentsDelta(eventName, raw)
+		return p.handleFunctionCallArgumentsDelta(raw)
 	case eventName == "response.custom_tool_call_input.delta":
-		return p.handleCustomToolCallInputDelta(eventName, raw)
+		return p.handleCustomToolCallInputDelta(raw)
 	case strings.Contains(eventName, "reasoning") && strings.HasSuffix(eventName, ".delta"):
 		return p.handleReasoningDelta(eventName, raw)
 	case eventName == "response.reasoning_summary_part.added":
-		return p.handleReasoningSummaryPartAdded(eventName, raw)
+		return p.handleReasoningSummaryPartAdded(raw)
 	case eventName == "response.completed":
-		return p.handleResponseCompleted(eventName, payload, raw)
+		return p.handleResponseCompleted(ctx, payload, raw)
 	case eventName == "response.created":
 		return p.handleResponseCreated(raw)
 	case eventName == "response.failed":
-		return p.handleResponseFailed(eventName, raw)
+		return p.handleResponseFailed(ctx, raw)
 	default:
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 	}
 }
 
-func (p *sseEventParser) handleOutputTextDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleOutputTextDelta(raw transportStreamEvent) ssePayloadResult {
 	if delta := raw.Delta; delta != "" {
 		if err := p.emitNormalized(adapterrender.TextDelta{Text: delta}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleOutputItemEvent(eventName string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleOutputItemEvent(ctx context.Context, eventName string, raw transportStreamEvent) ssePayloadResult {
 	item := raw.Item
 	itemType := item.string("type")
-	switch itemType {
-	case "reasoning":
-		return p.handleReasoningOutputItem(eventName, raw, item)
-	case "function_call":
-		return p.handleFunctionCallOutputItem(eventName, raw, item, itemType)
-	case "local_shell_call":
-		return p.handleLocalShellOutputItem(eventName, raw, item, itemType)
-	case "custom_tool_call":
-		return p.handleCustomToolOutputItem(eventName, raw, item, itemType)
-	default:
-		if eventName == "response.output_item.done" && item != nil {
-			p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
-		}
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	if codexItemType(itemType) == codexItemTypeReasoning {
+		return p.handleReasoningOutputItem(eventName, item)
 	}
+	// A tool reply routes to the handler keyed by its reply kind. The
+	// chooser inside each handler maps the native call back to the
+	// client-declared tool by parameter shape.
+	if kind, ok := toolReplyKindForItemType(codexItemType(itemType)); ok {
+		switch kind {
+		case toolReplyFunction:
+			return p.handleFunctionCallOutputItem(eventName, item)
+		case toolReplyShell:
+			return p.handleLocalShellOutputItem(ctx, eventName, item, itemType)
+		case toolReplyPatch:
+			return p.handleCustomToolOutputItem(ctx, eventName, item, itemType)
+		}
+	}
+	// Output-item messages and tool outputs are not tool replies; the
+	// parser keeps the raw envelope on response.output_item.done so the
+	// renderer can replay it.
+	if eventName == "response.output_item.done" && item != nil {
+		p.out.OutputItems = append(p.out.OutputItems, item.toInputItem())
+	}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transportStreamEvent, item transportItem) ssePayloadResult {
+func (p *sseEventParser) handleReasoningOutputItem(eventName string, item transportItem) ssePayloadResult {
 	if err := p.emitReasoningPresence(item.string("id")); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	if eventName != "response.output_item.done" || item == nil {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 	}
 	for _, ev := range reasoningEventsFromItem(item, p.reasoningSummaryDeltaSeen, p.reasoningTextDeltaSeen) {
 		if ev.ReasoningKind == "summary" {
@@ -554,7 +610,7 @@ func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transpo
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	cloned := item.cloneMap()
+	cloned := item.toInputItem()
 	p.out.OutputItems = append(p.out.OutputItems, cloned)
 	// Surface the encrypted_content blob on a per-item Finished event
 	// when present. The renderer captures it and embeds the bytes on
@@ -563,34 +619,38 @@ func (p *sseEventParser) handleReasoningOutputItem(eventName string, raw transpo
 	// any side-channel persistence. Drop mode is honored upstream by
 	// the WebsocketTransportConfig knob: when the resolver picks drop,
 	// the parser config strips the blob before emit.
-	encrypted := mapString(cloned, "encrypted_content")
+	encrypted := cloned.EncryptedContent
 	if !p.dropEncryptedContent && encrypted != "" {
 		ev := adapterrender.ReasoningFinished{
 			ReasoningKind:    "",
 			EncryptedContent: encrypted,
 			Signature:        "",
-			ItemID:           mapString(cloned, "id"),
+			ItemID:           cloned.ID,
 			ItemType:         "reasoning",
 		}
 		if err := p.emitNormalized(ev); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleFunctionCallOutputItem(eventName string, raw transportStreamEvent, item transportItem, itemType string) ssePayloadResult {
+func (p *sseEventParser) handleFunctionCallOutputItem(eventName string, item transportItem) ssePayloadResult {
 	itemID := strings.TrimSpace(item.string("id"))
 	callID := strings.TrimSpace(item.string("call_id"))
 	itemID, callID = normalizedToolIDs(itemID, callID)
-	name := strings.TrimSpace(item.string("name"))
+	// The function handler relays the client-declared tool name: a
+	// function_call already carries the name the client declared, so it
+	// passes through; an empty name falls back to a stable item-type name.
+	rawName := strings.TrimSpace(item.string("name"))
+	name := ""
+	if rawName != "" {
+		name = p.tools.functionToolName(rawName)
+	}
 	args := item.string("arguments")
 	state, created := p.getToolState(itemID, callID, name)
-	if state.NativeName == "" {
-		state.NativeName = name
-	}
 	if created {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name, Arguments: ""}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -604,7 +664,7 @@ func (p *sseEventParser) handleFunctionCallOutputItem(eventName string, raw tran
 	}
 	p.appendCompletedFunctionCallItem(eventName, item, state)
 	p.out.SetFinishReason("tool_calls")
-	return p.finishFunctionCallOutputItem(eventName, raw, itemType, itemID, args, state)
+	return p.finishFunctionCallOutputItem(eventName, args, state)
 }
 
 func normalizedToolIDs(itemID, callID string) (string, string) {
@@ -621,91 +681,79 @@ func (p *sseEventParser) appendCompletedFunctionCallItem(eventName string, item 
 	if eventName != "response.output_item.done" || item == nil {
 		return
 	}
-	completed := item.cloneMap()
-	if strings.TrimSpace(mapString(completed, "arguments")) == "" && state.Arguments.Len() > 0 {
-		completed["arguments"] = state.Arguments.String()
+	completed := item.toInputItem()
+	if strings.TrimSpace(completed.Arguments) == "" && state.Arguments.Len() > 0 {
+		completed.Arguments = state.Arguments.String()
 	}
 	p.out.OutputItems = append(p.out.OutputItems, completed)
 }
 
-func (p *sseEventParser) finishFunctionCallOutputItem(eventName string, raw transportStreamEvent, itemType, itemID, args string, state *toolCallState) ssePayloadResult {
-	if eventName == "response.output_item.done" && state.NativeName == "shell_command" {
-		return p.finishShellCommandOutputItem(eventName, raw, itemType, itemID, args, state)
-	}
-	if eventName == "response.output_item.done" && args != "" && !state.ArgumentDeltaSeen {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+func (p *sseEventParser) finishFunctionCallOutputItem(eventName, args string, state *toolCallState) ssePayloadResult {
+	// The function handler relays the arguments string verbatim: it is
+	// opaque JSON the model emitted, so clyde does not reshape it.
+	relayed, ok := p.tools.handleFunctionArguments(args)
+	if eventName == "response.output_item.done" && ok && !state.ArgumentDeltaSeen {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: relayed, Name: ""}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 		state.ArgumentsEmitted = true
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) finishShellCommandOutputItem(eventName string, raw transportStreamEvent, itemType, itemID, args string, state *toolCallState) ssePayloadResult {
-	if args == "" {
-		args = state.Arguments.String()
-	}
-	if converted, ok := ShellArgsFromShellCommandArguments(args); ok && !state.ArgumentsEmitted {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: converted}); err != nil {
-			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
-		}
-		state.ArgumentsEmitted = true
-	} else if !state.ArgumentsEmitted {
-		LogToolingEvent(nil, context.Background(), "", "shell_command.parse_failed",
-			slog.String("item_type", itemType),
-			slog.String("item_id", itemID),
-			slog.String("tool_name", "Shell"),
-		)
-	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
-}
-
-func (p *sseEventParser) handleLocalShellOutputItem(eventName string, raw transportStreamEvent, item transportItem, itemType string) ssePayloadResult {
+func (p *sseEventParser) handleLocalShellOutputItem(ctx context.Context, eventName string, item transportItem, itemType string) ssePayloadResult {
 	if eventName == "response.output_item.done" && item != nil {
-		p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
+		p.out.OutputItems = append(p.out.OutputItems, item.toInputItem())
 	}
 	itemID := strings.TrimSpace(item.string("id"))
 	callID := strings.TrimSpace(item.string("call_id"))
-	state, created := p.getToolState(itemID, callID, "Shell")
+	// local_shell_call is a codex-internal item TYPE; the shell handler
+	// maps it back to the client-declared command-like tool name by shape.
+	// If none is declared, the chooser falls back to the codex item type
+	// so the call still has a stable name.
+	toolName := p.tools.shellToolName()
+	state, created := p.getToolState(itemID, callID, toolName)
 	p.observeActualToolCallName(state.Name)
 	if created {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: "Shell"}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name, Arguments: ""}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
 	p.out.SetFinishReason("tool_calls")
-	if args, ok := ShellArgsFromLocalShellItem(item.cloneMap()); ok {
-		return p.emitNativeParsedArguments(eventName, raw, itemType, state, "Shell", args)
+	// The shell handler renders the action under the field names the
+	// client declared on its command-like tool, not hardcoded names.
+	if args, ok := p.tools.handleShellAction(item.toInputItem()); ok {
+		return p.emitNativeParsedArguments(ctx, eventName, itemType, state, state.Name, args)
 	}
 	if eventName == "response.output_item.done" && !state.ArgumentsEmitted {
-		LogToolingEvent(nil, context.Background(), "", "native_local_shell.parse_failed",
+		LogToolingEvent(nil, ctx, p.logCtx.RequestID, "native_local_shell.parse_failed",
 			slog.String("item_type", itemType),
 			slog.String("item_id", itemID),
-			slog.String("tool_name", "Shell"),
+			slog.String("tool_name", state.Name),
 		)
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleCustomToolOutputItem(eventName string, raw transportStreamEvent, item transportItem, itemType string) ssePayloadResult {
+func (p *sseEventParser) handleCustomToolOutputItem(ctx context.Context, eventName string, item transportItem, itemType string) ssePayloadResult {
 	if eventName == "response.output_item.done" && item != nil {
-		p.out.OutputItems = append(p.out.OutputItems, item.cloneMap())
+		p.out.OutputItems = append(p.out.OutputItems, item.toInputItem())
 	}
 	itemID := strings.TrimSpace(item.string("id"))
 	callID := strings.TrimSpace(item.string("call_id"))
 	name := strings.TrimSpace(item.string("name"))
-	cursorName := name
-	if IsApplyPatchToolName(cursorName) || IsApplyPatchToolName(name) {
-		cursorName = "ApplyPatch"
-	}
-	state, created := p.getToolState(itemID, callID, cursorName)
+	// custom_tool_call is codex's freeform apply_patch type; the patch
+	// handler maps it back to the client-declared patch-like tool name by
+	// shape rather than by the codex-internal "apply_patch" name.
+	clientName := p.tools.patchToolName(name)
+	state, created := p.getToolState(itemID, callID, clientName)
 	if name != "" {
 		p.observeActualToolCallName(name)
 	} else {
 		p.observeActualToolCallName(state.Name)
 	}
 	if created {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name, Arguments: ""}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
@@ -714,77 +762,82 @@ func (p *sseEventParser) handleCustomToolOutputItem(eventName string, raw transp
 	if input == "" {
 		input = state.Input.String()
 	}
-	if args, ok := ApplyPatchArgs(input); ok {
-		return p.emitNativeParsedArguments(eventName, raw, itemType, state, cursorName, args)
+	// The patch handler unwraps the JSON wrapper and repairs the
+	// freeform body so it satisfies the vendored apply_patch grammar.
+	if args, ok := p.tools.handlePatchInput(input); ok {
+		return p.emitNativeParsedArguments(ctx, eventName, itemType, state, state.Name, args)
 	}
 	if eventName == "response.output_item.done" && !state.ArgumentsEmitted {
-		LogToolingEvent(nil, context.Background(), "", "native_custom_tool.parse_failed",
+		LogToolingEvent(nil, ctx, p.logCtx.RequestID, "native_custom_tool.parse_failed",
 			slog.String("item_type", itemType),
 			slog.String("item_id", itemID),
-			slog.String("tool_name", cursorName),
+			slog.String("tool_name", state.Name),
 		)
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) emitNativeParsedArguments(eventName string, raw transportStreamEvent, itemType string, state *toolCallState, toolName, args string) ssePayloadResult {
-	p.logNativeToolParsed(eventName, itemType, state, toolName)
+func (p *sseEventParser) emitNativeParsedArguments(ctx context.Context, eventName string, itemType string, state *toolCallState, toolName, args string) ssePayloadResult {
+	p.logNativeToolParsed(ctx, eventName, itemType, state, toolName)
 	if state.ArgumentsEmitted {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 	}
-	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args}); err != nil {
+	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: args, Name: ""}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	state.ArgumentsEmitted = true
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleFunctionCallArgumentsDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleFunctionCallArgumentsDelta(raw transportStreamEvent) ssePayloadResult {
 	itemID := strings.TrimSpace(raw.ItemID)
 	delta := raw.Delta
 	state := p.toolCallsByItemID[itemID]
 	if state == nil || delta == "" {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 	}
 	state.ArgumentDeltaSeen = true
 	state.Arguments.WriteString(delta)
 	p.out.SetFinishReason("tool_calls")
-	if state.NativeName == "shell_command" {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
-	}
-	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+	// Function-call argument deltas stream through verbatim: the
+	// arguments are opaque JSON the model emitted, so clyde does not
+	// buffer-and-reshape any tool's args.
+	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta, Name: ""}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleCustomToolCallInputDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleCustomToolCallInputDelta(raw transportStreamEvent) ssePayloadResult {
 	itemID := strings.TrimSpace(raw.ItemID)
 	callID := strings.TrimSpace(raw.CallID)
 	delta := raw.Delta
-	state, created := p.getToolState(itemID, callID, "ApplyPatch")
+	// custom_tool_call input deltas carry codex's freeform apply_patch
+	// body; the patch handler maps it back to the client-declared
+	// patch-like tool name by shape.
+	state, created := p.getToolState(itemID, callID, p.tools.patchToolName(""))
 	p.observeActualToolCallName(state.Name)
 	if created {
-		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name}); err != nil {
+		if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Name: state.Name, Arguments: ""}); err != nil {
 			return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 		}
 	}
 	if delta == "" {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 	}
 	state.Input.WriteString(delta)
 	state.ArgumentDeltaSeen = true
 	p.out.SetFinishReason("tool_calls")
-	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta}); err != nil {
+	if err := p.emitToolCall(state, adapteropenai.ToolCallFunction{Arguments: delta, Name: ""}); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
 	state.ArgumentsEmitted = true
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
 func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStreamEvent) ssePayloadResult {
 	if raw.Delta == "" {
-		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+		return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 	}
 	p.reasoningSignaled = true
 	p.reasoningVisible = true
@@ -807,19 +860,26 @@ func (p *sseEventParser) handleReasoningDelta(eventName string, raw transportStr
 		ItemType:      "reasoning",
 	})
 	if err != nil {
-		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{}, Err: err}
+		return ssePayloadResult{Action: ssePayloadReturn, Result: RunResult{
+			Usage: adapteropenai.
+				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+			UsageTelemetry: UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
+
+			FinishReason: "", ReasoningSignaled: false, ReasoningVisible: false, DerivedCacheCreationTokens: 0, ResponseID: "", OutputItems: nil, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false,
+		}, Err: err}
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleReasoningSummaryPartAdded(eventName string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleReasoningSummaryPartAdded(raw transportStreamEvent) ssePayloadResult {
 	if err := p.emitReasoningPresence(raw.ItemID); err != nil {
 		return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleResponseCompleted(eventName, payload string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleResponseCompleted(ctx context.Context, payload string, raw transportStreamEvent) ssePayloadResult {
 	status := ""
 	var c completedResponse
 	if err := json.Unmarshal([]byte(payload), &c); err == nil {
@@ -849,18 +909,18 @@ func (p *sseEventParser) handleResponseCompleted(eventName, payload string, raw 
 	}
 	p.out.ReasoningSignaled = p.reasoningSignaled
 	p.out.ReasoningVisible = p.reasoningVisible
-	p.logAggregate(p.out.ResponseID, status, nil)
-	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out}
+	p.logAggregate(ctx, p.out.ResponseID, status, nil)
+	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: nil}
 }
 
 func (p *sseEventParser) handleResponseCreated(raw transportStreamEvent) ssePayloadResult {
 	if raw.Response != nil {
 		p.out.ResponseID = strings.TrimSpace(raw.Response.ID)
 	}
-	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out}
+	return ssePayloadResult{Action: ssePayloadContinue, Result: p.out, Err: nil}
 }
 
-func (p *sseEventParser) handleResponseFailed(eventName string, raw transportStreamEvent) ssePayloadResult {
+func (p *sseEventParser) handleResponseFailed(ctx context.Context, raw transportStreamEvent) ssePayloadResult {
 	msg := "codex response failed"
 	if raw.Error != nil && raw.Error.Message != "" {
 		msg = raw.Error.Message
@@ -875,11 +935,11 @@ func (p *sseEventParser) handleResponseFailed(eventName string, raw transportStr
 			ItemType:         "",
 		})
 	}
-	p.logAggregate(p.out.ResponseID, "failed", err)
+	p.logAggregate(ctx, p.out.ResponseID, "failed", err)
 	return ssePayloadResult{Action: ssePayloadReturn, Result: p.out, Err: err}
 }
 
-func (p *sseEventParser) logAggregate(responseID, status string, err error) {
+func (p *sseEventParser) logAggregate(ctx context.Context, responseID, status string, err error) {
 	if !p.logCtx.Enabled() {
 		return
 	}
@@ -887,7 +947,7 @@ func (p *sseEventParser) logAggregate(responseID, status string, err error) {
 	if err != nil {
 		errText = err.Error()
 	}
-	p.aggregate.Log(p.ctx, p.logCtx, responseID, status, errText)
+	p.aggregate.Log(ctx, p.logCtx, responseID, status, errText)
 }
 
 func (p *sseEventParser) emitNormalized(ev adapterrender.Event) error {
@@ -913,7 +973,7 @@ func (p *sseEventParser) emitToolCall(state *toolCallState, fn adapteropenai.Too
 	}
 	tc := adapteropenai.ToolCall{
 		Index:    state.Index,
-		Function: fn,
+		Function: fn, ID: "", Type: "",
 	}
 	if !state.IdentityEmitted {
 		tc.ID = state.CallID
@@ -925,272 +985,16 @@ func (p *sseEventParser) emitToolCall(state *toolCallState, fn adapteropenai.Too
 	})
 }
 
-func (p *sseEventParser) logNativeToolParsed(eventName, itemType string, state *toolCallState, toolName string) {
+func (p *sseEventParser) logNativeToolParsed(ctx context.Context, eventName, itemType string, state *toolCallState, toolName string) {
 	if state == nil || state.NativeParseLogged {
 		return
 	}
 	state.NativeParseLogged = true
-	LogToolingEvent(nil, p.ctx, p.logCtx.RequestID, "native_tool_item.parsed",
+	LogToolingEvent(nil, ctx, p.logCtx.RequestID, "native_tool_item.parsed",
 		slog.String("sse_event", eventName),
 		slog.String("item_type", itemType),
 		slog.String("item_id", state.ItemID),
 		slog.String("call_id", state.CallID),
 		slog.String("tool_name", toolName),
 	)
-}
-
-func (p *sseEventParser) getToolState(itemID, callID, name string) (*toolCallState, bool) {
-	itemID = strings.TrimSpace(itemID)
-	callID = strings.TrimSpace(callID)
-	itemID, callID = normalizedToolIDs(itemID, callID)
-	if state := p.toolCallsByItemID[itemID]; state != nil {
-		p.updateToolState(state, callID, name)
-		return state, false
-	}
-	if callID != "" {
-		if state := p.toolCallsByItemID[callID]; state != nil {
-			if itemID != "" {
-				p.toolCallsByItemID[itemID] = state
-			}
-			if state.Name == "" {
-				state.Name = name
-			}
-			return state, false
-		}
-	}
-	return p.createToolState(itemID, callID, name), true
-}
-
-func (p *sseEventParser) updateToolState(state *toolCallState, callID, name string) {
-	if state.CallID == "" {
-		state.CallID = callID
-	}
-	if state.Name == "" {
-		state.Name = name
-	}
-	if callID != "" {
-		p.toolCallsByItemID[callID] = state
-	}
-}
-
-func (p *sseEventParser) createToolState(itemID, callID, name string) *toolCallState {
-	state := &toolCallState{
-		Index:  p.nextToolIndex,
-		ItemID: itemID,
-		CallID: callID,
-		Name:   name,
-		Type:   "function",
-	}
-	p.nextToolIndex++
-	p.out.ToolCallCount = max(p.out.ToolCallCount, p.nextToolIndex)
-	if itemID != "" {
-		p.toolCallsByItemID[itemID] = state
-	}
-	if callID != "" {
-		p.toolCallsByItemID[callID] = state
-	}
-	return state
-}
-
-func (p *sseEventParser) observeActualToolCallName(name string) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return
-	}
-	p.recordToolCallName(name)
-	if isSubagentToolCallName(name) {
-		p.out.HasSubagentToolCall = true
-	}
-}
-
-func (p *sseEventParser) recordToolCallName(name string) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return
-	}
-	if slices.Contains(p.out.ToolCallNames, name) {
-		return
-	}
-	p.out.ToolCallNames = append(p.out.ToolCallNames, name)
-}
-
-func isSubagentToolCallName(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "Task", "Subagent", "spawn_agent":
-		return true
-	default:
-		return false
-	}
-}
-
-func isContextWindowError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var contextErr *ContextWindowError
-	return errors.As(err, &contextErr)
-}
-
-func codexResponseFailedError(message string) error {
-	if isCodexContextWindowMessage(message) {
-		return &ContextWindowError{Message: strings.TrimSpace(message)}
-	}
-	if isCodexUnsupportedModelMessage(message) {
-		return &UnsupportedModelError{Message: strings.TrimSpace(message)}
-	}
-	return fmt.Errorf("%s", message)
-}
-
-func isCodexContextWindowMessage(message string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(message))
-	switch {
-	case strings.Contains(normalized, "exceeds the context window"):
-		return true
-	case strings.Contains(normalized, "context_length_exceeded"):
-		return true
-	case strings.Contains(normalized, "maximum context length"):
-		return true
-	default:
-		return false
-	}
-}
-
-func isCodexUnsupportedModelMessage(message string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(message))
-	switch {
-	case strings.Contains(normalized, "model is not supported"):
-		return true
-	case strings.Contains(normalized, "unsupported model"):
-		return true
-	default:
-		return false
-	}
-}
-
-func (item transportItem) string(key string) string {
-	raw := item[key]
-	if len(raw) == 0 {
-		return ""
-	}
-	var out string
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return ""
-	}
-	return out
-}
-
-func (item transportItem) cloneMap() map[string]any {
-	if item == nil {
-		return nil
-	}
-	raw, _ := json.Marshal(item)
-	var out map[string]any
-	_ = json.Unmarshal(raw, &out)
-	return out
-}
-
-func reasoningEventsFromItem(item transportItem, skipSummary, skipText bool) []adapterrender.ReasoningDelta {
-	if item == nil {
-		return nil
-	}
-	raw, err := json.Marshal(item)
-	if err != nil {
-		return nil
-	}
-	var payload reasoningItemPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil
-	}
-	itemID := strings.TrimSpace(payload.ID)
-	var out []adapterrender.ReasoningDelta
-	if !skipSummary {
-		for i, part := range payload.Summary {
-			if strings.TrimSpace(part.Type) != "summary_text" || part.Text == "" {
-				continue
-			}
-			idx := i
-			out = append(out, adapterrender.ReasoningDelta{
-				Text:          part.Text,
-				ReasoningKind: "summary",
-				SummaryIndex:  &idx,
-				Signature:     "",
-				RedactedData:  "",
-				ItemID:        itemID,
-				ItemType:      "reasoning",
-			})
-		}
-	}
-	if !skipText {
-		for _, part := range payload.Content {
-			switch strings.TrimSpace(part.Type) {
-			case "reasoning_text", "text":
-				if part.Text == "" {
-					continue
-				}
-				out = append(out, adapterrender.ReasoningDelta{
-					Text:          part.Text,
-					ReasoningKind: "text",
-					SummaryIndex:  nil,
-					Signature:     "",
-					RedactedData:  "",
-					ItemID:        itemID,
-					ItemType:      "reasoning",
-				})
-			}
-		}
-	}
-	return out
-}
-
-func mapUsage(c completedResponse) adapteropenai.Usage {
-	if c.Response.Usage == nil {
-		return adapteropenai.Usage{}
-	}
-	usage := c.Response.Usage
-	u := adapteropenai.Usage{
-		PromptTokens:     usage.InputTokens,
-		CompletionTokens: usage.OutputTokens,
-		TotalTokens:      usage.TotalTokens,
-	}
-	if usage.InputTokensDetails != nil {
-		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: usage.InputTokensDetails.CachedTokens}
-	}
-	return u
-}
-
-func reasoningTokensFromEvent(raw transportStreamEvent) int {
-	if raw.Response == nil {
-		return 0
-	}
-	return raw.Response.Usage.OutputTokensDetails.ReasoningTokens
-}
-
-func usageTelemetry(c completedResponse) CodexUsageTelemetry {
-	if c.Response.Usage == nil {
-		return CodexUsageTelemetry{}
-	}
-	usage := c.Response.Usage
-	out := CodexUsageTelemetry{
-		UsagePresent: true,
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
-		TotalTokens:  usage.TotalTokens,
-	}
-	if usage.InputTokensDetails != nil {
-		out.InputTokensDetailsPresent = true
-		out.CachedTokens = usage.InputTokensDetails.CachedTokens
-	}
-	if usage.OutputTokensDetails != nil {
-		out.OutputTokensDetailsPresent = true
-		out.ReasoningOutputTokens = usage.OutputTokensDetails.ReasoningTokens
-	}
-	return out
-}
-
-func rawString(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	v, _ := m[key].(string)
-	return v
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"goodkind.io/clyde/codexwire"
 	"goodkind.io/clyde/internal/livetrack"
 )
 
@@ -23,7 +24,7 @@ type WebsocketSession struct {
 	Model              string
 	PromptCacheKey     string
 	LastResponseID     string
-	LastInputItems     []map[string]any
+	LastInputItems     []codexwire.InputItem
 	OpenedAt           time.Time
 	LastUsed           time.Time
 	FrameCount         int
@@ -72,7 +73,8 @@ func NewWebsocketSessionCache(log *slog.Logger, idleTTL time.Duration, reg *live
 		log:          log,
 		idleTTL:      idleTTL,
 		now:          time.Now,
-		wsRegistry:   reg,
+		wsRegistry:   reg, mu: sync.
+				Mutex{},
 	}
 }
 
@@ -222,8 +224,7 @@ func (c *WebsocketSessionCache) registerEntry(ctx context.Context, s *WebsocketS
 	if err != nil {
 		// Registry is draining; log and continue without registration.
 		if c.log != nil {
-			c.log.WarnContext(ctx, "adapter.codex.ws_session.register_rejected",
-				"component", "adapter",
+			c.log.WarnContext(ctx, "adapter.codex.ws_session.register_rejected", "concern", "adapter.providers.codex.request", "component", "adapter",
 				"subcomponent", "codex",
 				"conversation_id", conv,
 				"err", err,
@@ -264,8 +265,7 @@ func (c *WebsocketSessionCache) invalidateEntry(entry *WebsocketSession, reason 
 		_ = entry.Conn.Close()
 	}
 	if c.log != nil {
-		c.log.Info("adapter.codex.ws_session.invalidated",
-			"component", "adapter",
+		c.log.Info("adapter.codex.ws_session.invalidated", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"conversation_id", entry.ConversationID,
 			"reason", reason,

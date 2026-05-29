@@ -11,7 +11,30 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
+
+// resolvedForTest projects the legacy ResolvedAlias fields these tests
+// construct into the typed ResolvedRequest the builder now consumes. The
+// Alias is carried on Cursor.NormalizedModel so the builder's request
+// alias derivation reproduces the prior ResolvedAlias.Alias behavior.
+func resolvedForTest(model adaptermodel.ResolvedAlias) *adapterresolver.ResolvedRequest {
+	resolved := &adapterresolver.ResolvedRequest{
+		Provider:        adaptermodel.BackendAnthropic,
+		Family:          model.FamilySlug,
+		Model:           model.ClaudeModel,
+		Effort:          adapterresolver.Effort(model.Effort),
+		ContextBudget:   adapterresolver.ContextBudget{InputTokens: model.Context, OutputTokens: model.MaxOutputTokens, TotalTokens: model.Context},
+		Thinking:        model.Thinking,
+		Instructions:    model.Instructions,
+		Efforts:         model.Efforts,
+		Alias:           model.Alias,
+		MaxOutputTokens: model.MaxOutputTokens,
+	}
+	resolved.Cursor.NormalizedModel = model.Alias
+	resolved.OpenAI.Model = model.Alias
+	return resolved
+}
 
 func anthropicID() anthropic.Identity {
 	return anthropic.Identity{
@@ -46,7 +69,7 @@ func TestBuildRequestEmitsMetadataAndContextManagement(t *testing.T) {
 	req := requestBuilderChatRequest()
 	stream := true
 	req.Stream = stream
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-medium-thinking-enabled",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
@@ -55,7 +78,7 @@ func TestBuildRequestEmitsMetadataAndContextManagement(t *testing.T) {
 	cfg := requestBuilderConfig()
 	cfg.Identity = anthropicID()
 
-	out, err := BuildRequest(context.Background(), req, model, adaptermodel.EffortMedium, cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), adaptermodel.EffortMedium, cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -83,12 +106,12 @@ func TestBuildRequestEmitsMetadataAndContextManagement(t *testing.T) {
 func TestBuildRequestSkipsContextManagementWhenThinkingOff(t *testing.T) {
 	req := requestBuilderChatRequest()
 	req.Stream = true
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-haiku-4-5",
 		ClaudeModel:     "claude-haiku-4-5",
 		MaxOutputTokens: 4096,
 	}
-	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -99,14 +122,14 @@ func TestBuildRequestSkipsContextManagementWhenThinkingOff(t *testing.T) {
 
 func TestBuildRequestThinkingDisplaySummarizedWhenEnabled(t *testing.T) {
 	req := requestBuilderChatRequest()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-haiku-4-5-thinking-enabled",
 		ClaudeModel:     "claude-haiku-4-5-20251001",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -123,21 +146,21 @@ func TestBuildRequestThinkingDisplaySummarizedWhenEnabled(t *testing.T) {
 
 // TestBuildRequestPassesThinkingAdaptiveThrough locks in the contract
 // after the registry took ownership of per-family thinking_wire_mode
-// mapping. BuildRequest is now a passthrough: whatever Thinking value
-// the registry put on the ResolvedModel is what reaches the wire.
-// Callers that need the historical opus-4-7 enabled-to-adaptive remap
-// rely on the registry to apply it at construction time, not on
-// BuildRequest to patch it at request time.
+// resolution. BuildRequest is now a passthrough: whatever Thinking value
+// the registry put on the ResolvedAlias is what reaches the wire. A
+// family that wants adaptive declares thinking_wire_mode = "adaptive";
+// the registry stamps it onto the ResolvedAlias at construction time,
+// and BuildRequest does not patch it at request time.
 func TestBuildRequestPassesThinkingAdaptiveThrough(t *testing.T) {
 	req := requestBuilderChatRequest()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-medium-thinking",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingAdaptive,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -159,14 +182,14 @@ func TestBuildRequestPassesThinkingAdaptiveThrough(t *testing.T) {
 // request builder no longer rewrites it.
 func TestBuildRequestPassesThinkingEnabledThrough(t *testing.T) {
 	req := requestBuilderChatRequest()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-medium-thinking",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -183,14 +206,14 @@ func TestBuildRequestPassesThinkingEnabledThrough(t *testing.T) {
 
 func TestBuildRequestHaikuEnabledStaysManual(t *testing.T) {
 	req := requestBuilderChatRequest()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-haiku-4-5-thinking-enabled",
 		ClaudeModel:     "claude-haiku-4-5-20251001",
 		MaxOutputTokens: 16000,
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -207,14 +230,14 @@ func TestBuildRequestHaikuEnabledStaysManual(t *testing.T) {
 
 func TestBuildRequestThinkingAdaptiveKeepsSummarizedDisplay(t *testing.T) {
 	req := requestBuilderChatRequest()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-thinking-adaptive",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingAdaptive,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -231,14 +254,14 @@ func TestBuildRequestThinkingAdaptiveKeepsSummarizedDisplay(t *testing.T) {
 
 func TestBuildRequestThinkingDisabledHasNoDisplay(t *testing.T) {
 	req := requestBuilderChatRequest()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-thinking-disabled",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingDisabled,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -256,14 +279,14 @@ func TestBuildRequestThinkingDisabledHasNoDisplay(t *testing.T) {
 func TestBuildRequestAddsModelInstructionsBeforeCallerSystem(t *testing.T) {
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Instructions:    "model base instructions",
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -279,13 +302,13 @@ func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()
 	cfg.JSONSystemPrompt = "Return JSON only."
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -318,13 +341,13 @@ func TestBuildRequestOmitsFineGrainedToolStreamingBeta(t *testing.T) {
 			Parameters:  []byte(`{"type":"object"}`),
 		},
 	}}
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -356,7 +379,7 @@ func TestBuildRequestSystemPrefixBlockOrderingAndCache(t *testing.T) {
 	cfg := requestBuilderConfig()
 	cfg.PromptCacheTTL = "1h"
 	cfg.PromptCacheScope = "global"
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
@@ -364,7 +387,7 @@ func TestBuildRequestSystemPrefixBlockOrderingAndCache(t *testing.T) {
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: []byte(`"caller system text"`)}
 	req.Messages = append([]adapteropenai.ChatMessage{systemMsg}, req.Messages...)
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -416,7 +439,7 @@ func TestBuildRequestEmptyPrefixOmitsPrefixBlock(t *testing.T) {
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()
 	cfg.SystemPromptPrefix = ""
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
@@ -424,7 +447,7 @@ func TestBuildRequestEmptyPrefixOmitsPrefixBlock(t *testing.T) {
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: []byte(`"only caller"`)}
 	req.Messages = append([]adapteropenai.ChatMessage{systemMsg}, req.Messages...)
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -447,13 +470,13 @@ func TestBuildRequestPrefixBlockEmittedWithoutCallerSystem(t *testing.T) {
 	// caller block.
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -474,7 +497,7 @@ func TestBuildRequestStripsPrefixWhenCallerAlreadyPrepended(t *testing.T) {
 	// block) and the caller block must not duplicate it.
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
@@ -489,7 +512,7 @@ func TestBuildRequestStripsPrefixWhenCallerAlreadyPrepended(t *testing.T) {
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: body}
 	req.Messages = append([]adapteropenai.ChatMessage{systemMsg}, req.Messages...)
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -515,7 +538,7 @@ func TestBuildRequestCachingDisabledDropsCacheMarkers(t *testing.T) {
 	cfg := requestBuilderConfig()
 	disabled := false
 	cfg.PromptCachingEnabled = &disabled
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
@@ -523,7 +546,7 @@ func TestBuildRequestCachingDisabledDropsCacheMarkers(t *testing.T) {
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: []byte(`"caller text"`)}
 	req.Messages = append([]adapteropenai.ChatMessage{systemMsg}, req.Messages...)
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -546,13 +569,13 @@ func TestBuildRequestNormalizesPromptCacheTTLAndScope(t *testing.T) {
 	cfg := requestBuilderConfig()
 	cfg.PromptCacheTTL = "90m"
 	cfg.PromptCacheScope = "team"
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -582,7 +605,7 @@ func TestBuildRequestJSONPromptAppendsAfterCallerSystemBelowPrefix(t *testing.T)
 	req := requestBuilderChatRequest()
 	cfg := requestBuilderConfig()
 	cfg.JSONSystemPrompt = "Return JSON only."
-	model := adaptermodel.ResolvedModel{
+	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
@@ -595,7 +618,7 @@ func TestBuildRequestJSONPromptAppendsAfterCallerSystemBelowPrefix(t *testing.T)
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: body}
 	req.Messages = append([]adapteropenai.ChatMessage{systemMsg}, req.Messages...)
 
-	out, err := BuildRequest(context.Background(), req, model, "", cfg, "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}

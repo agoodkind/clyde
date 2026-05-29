@@ -159,7 +159,7 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 }
 
 func TestBeginHTTPLogRecorderUsesNativeCursorHeadersWhenClydeHeadersMissing(t *testing.T) {
-	const identityProviderID ProviderID = "test_cursor_identity"
+	const identityProviderID ProviderID = ProviderIDCursor
 	RegisterProviderFirst(testCursorProvider{id: identityProviderID})
 	t.Cleanup(func() {
 		UnregisterProvider(identityProviderID)

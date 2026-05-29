@@ -9,12 +9,15 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	"goodkind.io/clyde/internal/adapter/finishreason"
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/gklog/correlation"
 )
 
+// TrackedUsage is part of Clyde's typed adapter surface.
 type TrackedUsage struct {
 	Usage      adapteropenai.Usage
 	RawPrompt  int
@@ -22,6 +25,7 @@ type TrackedUsage struct {
 	RolledFrom int
 }
 
+// ExecutionRuntime is part of Clyde's typed adapter surface.
 type ExecutionRuntime interface {
 	Log() *slog.Logger
 	AnthropicStreamClient() StreamClient
@@ -30,6 +34,7 @@ type ExecutionRuntime interface {
 	CacheTTL() string
 }
 
+// CollectExecutionResult is part of Clyde's typed adapter surface.
 type CollectExecutionResult struct {
 	Events              []adapterrender.Event
 	Usage               adapteropenai.Usage
@@ -38,6 +43,7 @@ type CollectExecutionResult struct {
 	AnthropicUsage      anthropic.Usage
 }
 
+// StreamExecutionResult is part of Clyde's typed adapter surface.
 type StreamExecutionResult struct {
 	Usage               adapteropenai.Usage
 	FinishReason        string
@@ -48,11 +54,12 @@ type StreamExecutionResult struct {
 	HasSubagentToolCall bool
 }
 
+// RunCollectExecution is part of Clyde's typed adapter surface.
 func RunCollectExecution(
 	rt ExecutionRuntime,
 	ctx context.Context,
 	req anthropic.Request,
-	model adaptermodel.ResolvedModel,
+	resolved *adapterresolver.ResolvedRequest,
 	reqID string,
 	started time.Time,
 	trackerKey string,
@@ -64,7 +71,7 @@ func RunCollectExecution(
 		rt.AnthropicStreamClient(),
 		ctx,
 		req,
-		model,
+		resolved,
 		reqID,
 		emit,
 	)
@@ -74,10 +81,10 @@ func RunCollectExecution(
 	if err := flush(); err != nil {
 		return CollectExecutionResult{}, err
 	}
-	usage := trackAndLogAnthropicContextUsage(rt, ctx, anthUsage, model, reqID, trackerKey)
+	usage := trackAndLogAnthropicContextUsage(rt, ctx, anthUsage, resolved, reqID, trackerKey)
 	finalizeAnthropicExecution(rt, ctx, anthropicExecutionFinalize{
 		Req:          req,
-		Model:        model,
+		Resolved:     resolved,
 		ReqID:        reqID,
 		Started:      started,
 		Usage:        usage,
@@ -98,11 +105,12 @@ func RunCollectExecution(
 	}, nil
 }
 
+// RunStreamExecution is part of Clyde's typed adapter surface.
 func RunStreamExecution(
 	rt ExecutionRuntime,
 	ctx context.Context,
 	req anthropic.Request,
-	model adaptermodel.ResolvedModel,
+	resolved *adapterresolver.ResolvedRequest,
 	reqID string,
 	started time.Time,
 	trackerKey string,
@@ -126,7 +134,7 @@ func RunStreamExecution(
 		rt.AnthropicStreamClient(),
 		ctx,
 		req,
-		model,
+		resolved,
 		reqID,
 		emitTracked,
 	)
@@ -141,10 +149,10 @@ func RunStreamExecution(
 	if finishReason == "" {
 		finishReason = finishreason.FromAnthropicStream(anthStopReason)
 	}
-	finalUsage := trackAndLogAnthropicContextUsage(rt, ctx, anthUsage, model, reqID, trackerKey)
+	finalUsage := trackAndLogAnthropicContextUsage(rt, ctx, anthUsage, resolved, reqID, trackerKey)
 	finalizeAnthropicExecution(rt, ctx, anthropicExecutionFinalize{
 		Req:          req,
-		Model:        model,
+		Resolved:     resolved,
 		ReqID:        reqID,
 		Started:      started,
 		Usage:        finalUsage,
@@ -172,18 +180,21 @@ func trackAndLogAnthropicContextUsage(
 	rt ExecutionRuntime,
 	ctx context.Context,
 	anthUsage anthropic.Usage,
-	model adaptermodel.ResolvedModel,
+	resolved *adapterresolver.ResolvedRequest,
 	reqID string,
 	trackerKey string,
 ) adapteropenai.Usage {
-	rawUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), model.Context)
+	contextWindow := 0
+	if resolved != nil {
+		contextWindow = resolved.ContextBudget.InputTokens
+	}
+	rawUsage := usageWithContextWindow(UsageFromAnthropic(anthUsage), contextWindow)
 	tracked := rt.TrackAnthropicContextUsage(trackerKey, rawUsage)
 	usage := tracked.Usage
 	if usage.PromptTokens != rawUsage.PromptTokens || usage.TotalTokens != rawUsage.TotalTokens {
-		rt.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked",
-			slog.String("backend", "anthropic"),
+		rt.Log().LogAttrs(ctx, slog.LevelInfo, "adapter.context_usage.tracked", slog.String("concern", "adapter.chat.render"), slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
+			slog.String("alias", requestAlias(resolved)),
 			slog.Int("raw_prompt_tokens", tracked.RawPrompt),
 			slog.Int("raw_total_tokens", tracked.RawTotal),
 			slog.Int("rolled_output_tokens", tracked.RolledFrom),
@@ -196,7 +207,7 @@ func trackAndLogAnthropicContextUsage(
 
 type anthropicExecutionFinalize struct {
 	Req          anthropic.Request
-	Model        adaptermodel.ResolvedModel
+	Resolved     *adapterresolver.ResolvedRequest
 	ReqID        string
 	Started      time.Time
 	Usage        adapteropenai.Usage
@@ -208,20 +219,23 @@ type anthropicExecutionFinalize struct {
 // finalizeAnthropicExecution emits the two terminal log events that
 // follow every Anthropic backend turn: adapter.request.completed via
 // runtime.LogCompleted and the runtime RequestEvent terminal record
-// carrying the cost estimate. Cache token fields are now carried on
-// adapter.chat.completed directly (Phase A2); the prior dedicated
-// adapter.cache.usage emit is retired. Both collect and stream paths
-// must call this so the streaming surface (which is what Cursor BYOK
-// uses) does not silently skip cache and completion accounting.
+// carrying the recorded token and cache counts. Dollar cost is no
+// longer precomputed here; the daemon provider-stats aggregator prices
+// the recorded tokens at read time from the config pricing table. Cache
+// token fields are carried on adapter.chat.completed directly (Phase
+// A2); the prior dedicated adapter.cache.usage emit is retired. Both
+// collect and stream paths must call this so the streaming surface
+// (which is what Cursor BYOK uses) does not silently skip cache and
+// completion accounting.
 func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args anthropicExecutionFinalize) {
-	durationMs := time.Since(args.Started).Milliseconds()
+	durationMs := clock.Since(args.Started).Milliseconds()
 	adapterruntime.LogCompleted(rt.Log(), ctx, adapterruntime.CompletedAttrs{
 		Backend:               "anthropic",
 		Provider:              "anthropic-oauth",
 		Path:                  "oauth",
 		SessionID:             args.ReqID,
 		RequestID:             args.ReqID,
-		Alias:                 args.Model.Alias,
+		Alias:                 requestAlias(args.Resolved),
 		ModelID:               args.Req.Model,
 		FinishReason:          args.FinishReason,
 		TokensIn:              args.Usage.PromptTokens,
@@ -231,22 +245,15 @@ func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args a
 		CacheCreationReported: true,
 		CacheTTL:              rt.CacheTTL(),
 		DurationMs:            durationMs,
-		Stream:                args.Stream,
-	})
-	breakdown := adapterruntime.EstimateCost(adapterruntime.CostInputs{
-		ModelID:             args.Req.Model,
-		TTL:                 rt.CacheTTL(),
-		InputTokens:         args.Usage.PromptTokens,
-		OutputTokens:        args.Usage.CompletionTokens,
-		CacheCreationTokens: args.AnthUsage.CacheCreationInputTokens,
-		CacheReadTokens:     args.AnthUsage.CacheReadInputTokens,
+		Stream:                args.Stream, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.
+					Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 	rt.LogTerminal(ctx, adapterruntime.RequestEvent{
 		Stage:               adapterruntime.RequestStageCompleted,
 		Provider:            "anthropic-oauth",
-		Backend:             args.Model.Backend,
+		Backend:             anthropicBackendName(args.Resolved),
 		RequestID:           args.ReqID,
-		Alias:               args.Model.Alias,
+		Alias:               requestAlias(args.Resolved),
 		ModelID:             args.Req.Model,
 		Stream:              args.Stream,
 		FinishReason:        args.FinishReason,
@@ -254,8 +261,8 @@ func finalizeAnthropicExecution(rt ExecutionRuntime, ctx context.Context, args a
 		TokensOut:           args.Usage.CompletionTokens,
 		CacheReadTokens:     args.AnthUsage.CacheReadInputTokens,
 		CacheCreationTokens: args.AnthUsage.CacheCreationInputTokens,
-		CostMicrocents:      breakdown.TotalMicrocents,
-		DurationMs:          durationMs,
+		DurationMs:          durationMs, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Err: "", Correlation: correlation.
+					Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 }
 
@@ -286,13 +293,24 @@ func toolCallStats(ev adapterrender.Event) (count int, names []string, hasSubage
 		}
 		count++
 		appendUniqueStrings(&names, []string{name})
-		switch name {
-		case "Subagent", "Task", "spawn_agent":
+		switch subagentToolNameAnth(name) {
+		case subagentToolNameAnthSubagent, subagentToolNameAnthTask, subagentToolNameAnthSpawnAgent:
 			hasSubagent = true
 		}
 	}
 	return count, names, hasSubagent
 }
+
+// subagentToolNameAnth enumerates the tool aliases Cursor uses for
+// subagent or task-spawning calls when the adapter routes the
+// translated response back through the Anthropic backend.
+type subagentToolNameAnth string
+
+const (
+	subagentToolNameAnthSubagent   subagentToolNameAnth = "Subagent"
+	subagentToolNameAnthTask       subagentToolNameAnth = "Task"
+	subagentToolNameAnthSpawnAgent subagentToolNameAnth = "spawn_agent"
+)
 
 func appendUniqueStrings(dst *[]string, values []string) {
 	for _, value := range values {

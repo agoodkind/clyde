@@ -29,12 +29,15 @@ type contextUsageState struct {
 }
 
 func newContextUsageTracker() *contextUsageTracker {
-	return &contextUsageTracker{state: make(map[string]contextUsageState)}
+	return &contextUsageTracker{
+		state: make(map[string]contextUsageState), mu: sync.
+			Mutex{},
+	}
 }
 
 func (t *contextUsageTracker) Track(key string, raw Usage) trackedUsage {
 	if t == nil || strings.TrimSpace(key) == "" {
-		return trackedUsage{usage: raw, rawPrompt: raw.PromptTokens, rawTotal: raw.TotalTokens}
+		return trackedUsage{usage: raw, rawPrompt: raw.PromptTokens, rawTotal: raw.TotalTokens, rolledFrom: 0}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -42,7 +45,7 @@ func (t *contextUsageTracker) Track(key string, raw Usage) trackedUsage {
 	st := t.state[key]
 	rolledFrom := st.CumulativeOutput
 	if shouldResetTrackedContext(st, raw) {
-		st = contextUsageState{}
+		st = contextUsageState{LatestPrompt: 0, CumulativeOutput: 0, LastTotal: 0}
 		rolledFrom = 0
 	}
 
@@ -142,13 +145,14 @@ func metadataString(raw json.RawMessage, keys ...string) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
-	var m map[string]any
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return ""
 	}
 	for _, key := range keys {
 		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			var s string
+			if json.Unmarshal(v, &s) == nil && strings.TrimSpace(s) != "" {
 				return strings.TrimSpace(s)
 			}
 		}

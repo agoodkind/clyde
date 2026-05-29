@@ -1,3 +1,4 @@
+// Package mitmcontrib registers Codex MITM route classification.
 package mitmcontrib
 
 import (
@@ -25,7 +26,7 @@ const (
 
 // providerID is the typed provider id this package registers with
 // the MITM provider registry.
-const providerID mitm.ProviderID = codexContributorID
+const providerID mitm.ProviderID = mitm.ProviderIDCodex
 
 // routeProvider satisfies the [mitm.Provider] contract for the
 // Codex (OpenAI) upstream. It claims plain-HTTP paths under
@@ -70,13 +71,13 @@ func (routeProvider) ClassifyPlain(path string) mitm.PlainRouteClaim {
 	case strings.HasPrefix(path, "/backend-api/"):
 		return mitm.PlainRouteClaim{
 			Claimed:     true,
-			Provider:    string(providerID),
+			Provider:    providerID.String(),
 			UpstreamURL: chatGPTUpstream,
 		}
 	case strings.HasPrefix(path, "/v1/"):
 		return mitm.PlainRouteClaim{
 			Claimed:     true,
-			Provider:    string(providerID),
+			Provider:    providerID.String(),
 			UpstreamURL: openAIUpstream,
 		}
 	}

@@ -732,7 +732,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	t.Helper()
 	RegisterProviderFirst(testCursorProvider{host: cursorHost})
 	t.Cleanup(func() {
-		UnregisterProvider(ProviderID("cursor"))
+		UnregisterProvider(ProviderIDCursor)
 	})
 	listener, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
@@ -777,10 +777,10 @@ type testCursorProvider struct {
 }
 
 func (p testCursorProvider) ID() ProviderID {
-	if p.id != "" {
+	if p.id != ProviderIDUnknown {
 		return p.id
 	}
-	return ProviderID("cursor")
+	return ProviderIDCursor
 }
 
 func (p testCursorProvider) ClassifyConnect(host string) ConnectClaim {

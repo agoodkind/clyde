@@ -76,12 +76,12 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 	req := anthropic.Request{Model: "claude-sonnet-4-6"}
-	model := adaptermodel.ResolvedModel{Alias: "clyde-sonnet-4.6-medium-thinking", ClaudeModel: "claude-sonnet-4-6"}
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-sonnet-4.6-medium-thinking", ClaudeModel: "claude-sonnet-4-6"})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
 	}
-	_, err := RunStreamExecution(dispatcher, context.Background(), req, model, "req-stream-test", time.Now(), "tracker", emit)
+	_, err := RunStreamExecution(dispatcher, context.Background(), req, resolved, "req-stream-test", time.Now(), "tracker", emit)
 	if err != nil {
 		t.Fatalf("RunStreamExecution: %v", err)
 	}
@@ -188,12 +188,12 @@ func TestRunStreamExecutionRecoversFinishReasonAfterLateError(t *testing.T) {
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 
 	req := anthropic.Request{Model: "claude-opus-4-7"}
-	model := adaptermodel.ResolvedModel{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000}
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
 	}
-	result, err := RunStreamExecution(dispatcher, context.Background(), req, model, "req-late-err", time.Now(), "tracker", emit)
+	result, err := RunStreamExecution(dispatcher, context.Background(), req, resolved, "req-late-err", time.Now(), "tracker", emit)
 	if err == nil {
 		t.Fatalf("expected late error to propagate, got nil")
 	}
@@ -244,12 +244,12 @@ func TestRunStreamExecutionRecoversFinishReasonFromToolUseStopReason(t *testing.
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 
 	req := anthropic.Request{Model: "claude-opus-4-7"}
-	model := adaptermodel.ResolvedModel{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000}
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
 	}
-	result, err := RunStreamExecution(dispatcher, context.Background(), req, model, "req-late-tool", time.Now(), "tracker", emit)
+	result, err := RunStreamExecution(dispatcher, context.Background(), req, resolved, "req-late-tool", time.Now(), "tracker", emit)
 	if err == nil {
 		t.Fatalf("expected late error to propagate, got nil")
 	}

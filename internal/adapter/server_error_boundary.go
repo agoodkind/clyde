@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -27,7 +28,11 @@ func (w *adapterRecoveryWriter) Write(body []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
-	return w.ResponseWriter.Write(body)
+	n, err := w.ResponseWriter.Write(body)
+	if err != nil {
+		return n, fmt.Errorf("adapter recovery write: %w", err)
+	}
+	return n, nil
 }
 
 func (w *adapterRecoveryWriter) Flush() {

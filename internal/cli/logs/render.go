@@ -108,7 +108,7 @@ func writeTableSeparator(writer io.Writer, widths []int) error {
 }
 
 func writeTableError(operation string, err error) error {
-	slog.Warn("cli.logs.inventory.write_failed", "component", "cli", "operation", operation, "err", err)
+	slog.Warn("cli.logs.inventory.write_failed", "concern", "cli.logs", "component", "cli", "operation", operation, "err", err)
 	return fmt.Errorf("%s: %w", operation, err)
 }
 

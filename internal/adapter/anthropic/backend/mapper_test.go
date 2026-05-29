@@ -805,10 +805,10 @@ func TestTranslateRequestAssistantNoticeIsDroppedFromUpstream(t *testing.T) {
 }
 
 // TestTranslateRequestAssistantThinkingDropStrategyOptsOut asserts that when
-// the operator flips Anthropic's inbound_thinking_materialization from the
-// default `native_thinking_block` to `drop`, the round-tripped thinking
-// content is removed and only the surrounding text survives. The lever is
-// documented at config.AdapterSyntheticContent.Anthropic.InboundThinkingMaterialization.
+// the operator flips Anthropic's inbound_thinking from the default
+// `native_thinking_block` to `drop`, the round-tripped thinking content is
+// removed and only the surrounding text survives. The lever is documented at
+// config.AdapterAnthropicReasoning.InboundThinking.
 func TestTranslateRequestAssistantThinkingDropStrategyOptsOut(t *testing.T) {
 	t.Parallel()
 	thinking := adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, "I should answer 42.")

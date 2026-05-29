@@ -8,9 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/clyde/codexwire"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
 type (
@@ -20,8 +22,7 @@ type (
 	ToolFunctionSchema = adapteropenai.ToolFunctionSchema
 	ToolCall           = adapteropenai.ToolCall
 	ToolCallFunction   = adapteropenai.ToolCallFunction
-	ResolvedModel      = adaptermodel.ResolvedModel
-	codexInputItem     = map[string]any
+	ResolvedAlias      = adaptermodel.ResolvedAlias
 )
 
 type managedPromptPlanForTest struct {
@@ -31,8 +32,33 @@ type managedPromptPlanForTest struct {
 	AssistantAnchor   string
 }
 
-func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string) HTTPTransportRequest {
-	return BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{})
+func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedAlias, effort string) HTTPTransportRequest {
+	return BuildRequestWithConfig(req, codexResolvedForTest(model), effort, RequestBuilderConfig{})
+}
+
+// codexResolvedForTest projects the legacy ResolvedAlias fields these
+// tests construct into the typed ResolvedRequest the codex request
+// builder now consumes.
+func codexResolvedForTest(model adaptermodel.ResolvedAlias) *adapterresolver.ResolvedRequest {
+	// The production resolver always carries a non-empty wire model; these
+	// older fixtures sometimes set only Alias and relied on the builder's
+	// ClaudeModel-to-Alias fallback, so reproduce that fallback here.
+	wireModel := strings.TrimSpace(model.ClaudeModel)
+	if wireModel == "" {
+		wireModel = model.Alias
+	}
+	resolved := &adapterresolver.ResolvedRequest{
+		Provider:        adaptermodel.BackendCodex,
+		Family:          model.FamilySlug,
+		Model:           wireModel,
+		Effort:          adapterresolver.Effort(model.Effort),
+		ContextBudget:   adapterresolver.ContextBudget{InputTokens: model.Context, OutputTokens: model.MaxOutputTokens, TotalTokens: model.Context},
+		Instructions:    model.Instructions,
+		Alias:           model.Alias,
+		MaxOutputTokens: model.MaxOutputTokens,
+	}
+	resolved.OpenAI.Model = model.Alias
+	return resolved
 }
 
 const (
@@ -81,7 +107,7 @@ func deriveCacheCreationTokensForTest(previousCachedInputTokens, currentCachedIn
 	return derived
 }
 
-func clientMetadataForTest(installationID, windowID string) map[string]string {
+func clientMetadataForTest(installationID, windowID string) *ClientMetadata {
 	return ClientMetadataWithTurn(installationID, windowID, "")
 }
 
@@ -115,7 +141,7 @@ func TestBuildCodexRequestIncludesReasoningEffort(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, EffortMedium)
 	if out.Reasoning == nil {
@@ -136,7 +162,7 @@ func TestBuildCodexRequestUsesNormalizedUpstreamModel(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{
+	model := ResolvedAlias{
 		Alias:       "clyde-gpt-5.4",
 		ClaudeModel: "gpt-5.4",
 	}
@@ -154,7 +180,7 @@ func TestBuildCodexRequestUsesSparkModelSlug(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{
+	model := ResolvedAlias{
 		Alias:       "clyde-gpt-5.3-codex-spark",
 		ClaudeModel: "gpt-5.3-codex-spark",
 	}
@@ -172,7 +198,7 @@ func TestBuildCodexRequestUsesNativeModelAndRequestEffort(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{
+	model := ResolvedAlias{
 		Alias:       "gpt-5.4",
 		ClaudeModel: "gpt-5.4",
 	}
@@ -194,7 +220,7 @@ func TestBuildCodexRequestFallsBackToRequestReasoningEffort(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.Reasoning == nil || out.Reasoning.Effort != EffortHigh {
@@ -213,9 +239,9 @@ func TestBuildCodexRequestUsesConfiguredDefaultReasoningSummary(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	resolved := codexResolvedForTest(ResolvedAlias{Alias: "gpt-5.4"})
 
-	out := BuildRequestWithConfig(req, model, "", RequestBuilderConfig{
+	out := BuildRequestWithConfig(req, resolved, "", RequestBuilderConfig{
 		ReasoningSummary: "detailed",
 	})
 	if out.Reasoning == nil {
@@ -240,7 +266,7 @@ func TestBuildCodexRequestAcceptsFullCodexReasoningEnums(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.Reasoning == nil {
@@ -262,7 +288,7 @@ func TestBuildCodexRequestSkipsInvalidReasoningEffort(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.Reasoning != nil {
@@ -282,7 +308,7 @@ func TestBuildCodexRequestUsesResponsesReasoningFields(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.Reasoning == nil {
@@ -299,22 +325,23 @@ func TestBuildCodexRequestUsesResponsesReasoningFields(t *testing.T) {
 	}
 }
 
-func TestBuildCodexRequestPassesThroughMaxCompletionTokens(t *testing.T) {
+// TestBuildCodexRequestOmitsNonCodexCLIWireFields pins that the three
+// clyde-invented wire fields codex-cli never sends are absent from the
+// serialized body, even when the inbound Cursor request supplies the
+// corresponding hints. Output capping relies on the upstream server-side
+// policy, exactly as codex-cli relies on it.
+func TestBuildCodexRequestOmitsNonCodexCLIWireFields(t *testing.T) {
 	maxCompletion := 4096
 	req := ChatRequest{
-		MaxComplTokens: &maxCompletion,
+		MaxComplTokens:       &maxCompletion,
+		Truncation:           "auto",
+		PromptCacheRetention: "24h",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
-	if out.MaxCompletion == nil {
-		t.Fatalf("expected max_completion_tokens passthrough")
-	}
-	if *out.MaxCompletion != maxCompletion {
-		t.Fatalf("max_completion_tokens=%d want %d", *out.MaxCompletion, maxCompletion)
-	}
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	encoded, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
@@ -323,8 +350,66 @@ func TestBuildCodexRequestPassesThroughMaxCompletionTokens(t *testing.T) {
 	if err := json.Unmarshal(encoded, &payload); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if got, _ := payload["max_completion_tokens"].(float64); int(got) != maxCompletion {
-		t.Fatalf("serialized max_completion_tokens=%v want %d", payload["max_completion_tokens"], maxCompletion)
+	for _, field := range []string{"max_completion_tokens", "truncation", "prompt_cache_retention"} {
+		if _, present := payload[field]; present {
+			t.Fatalf("serialized body must not include codex-cli-foreign field %q: %v", field, payload[field])
+		}
+	}
+}
+
+// TestBuildCodexRequestSerializesCodexCLIFaithfulEnvelope pins the
+// codex-rs ResponsesApiRequest wire shape: the always-present fields
+// serialize even at their zero value (`tools`, `include`, `tool_choice`,
+// `parallel_tool_calls`), `reasoning` serializes `null` when unset, and
+// the websocket session key never leaks into the body. Reference:
+// research/codex/codex-rs/codex-api/src/common.rs ResponsesApiRequest.
+func TestBuildCodexRequestSerializesCodexCLIFaithfulEnvelope(t *testing.T) {
+	// No tools, no reasoning effort: tools must still be `[]`, reasoning
+	// must still be `null`, include must still be `[]`.
+	req := ChatRequest{
+		ReasoningEffort: "max", // invalid effort -> reasoning stays nil
+		Metadata:        mustRaw(`{"conversation_id":"thread-xyz"}`),
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
+	if out.Reasoning != nil {
+		t.Fatalf("expected nil reasoning for invalid effort, got %+v", out.Reasoning)
+	}
+	if out.WebsocketSessionKey == "" {
+		t.Fatalf("expected websocket session key populated for keyed conversation")
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	raw := string(encoded)
+	if !strings.Contains(raw, `"tools":[]`) {
+		t.Fatalf("tools must serialize as []: %s", raw)
+	}
+	if !strings.Contains(raw, `"include":[]`) {
+		t.Fatalf("include must serialize as []: %s", raw)
+	}
+	if !strings.Contains(raw, `"tool_choice":"auto"`) {
+		t.Fatalf("tool_choice must serialize: %s", raw)
+	}
+	if !strings.Contains(raw, `"parallel_tool_calls":`) {
+		t.Fatalf("parallel_tool_calls must serialize: %s", raw)
+	}
+	if !strings.Contains(raw, `"reasoning":null`) {
+		t.Fatalf("reasoning must serialize as null when unset: %s", raw)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if _, present := payload["previous_response_id"]; present {
+		t.Fatalf("body must not include previous_response_id (store=false): %v", payload["previous_response_id"])
+	}
+	if _, present := payload["WebsocketSessionKey"]; present {
+		t.Fatalf("websocket session key must never serialize into the body")
 	}
 }
 
@@ -336,7 +421,7 @@ func TestBuildCodexRequestMapsFastServiceTierToPriority(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	if out.ServiceTier != "priority" {
 		t.Fatalf("service_tier=%q want priority", out.ServiceTier)
 	}
@@ -361,7 +446,7 @@ func TestBuildCodexRequestPreservesFlexServiceTier(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	if out.ServiceTier != "flex" {
 		t.Fatalf("service_tier=%q want flex", out.ServiceTier)
 	}
@@ -391,12 +476,12 @@ func TestBuildCodexRequestReplaysAssistantTurnsAsOutputText(t *testing.T) {
 			},
 		},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	foundOutput := false
 	for _, item := range out.Input {
-		if codexInputContentType(item) == "output_text" {
+		if codexInputContentType(item) == codexwire.ContentItemOutputText {
 			foundOutput = true
 		}
 		if strings.Contains(codexInputContentText(item), "<permissions_instructions>") || strings.Contains(codexInputContentText(item), "<environment_context>") {
@@ -418,14 +503,14 @@ func TestBuildCodexRequestForwardsCursorInstructionsBeforeFinalUserTurn(t *testi
 		},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", Instructions: "model base instructions"}, "")
-	if got, _ := out.Input[0]["role"].(string); got != "user" {
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", Instructions: "model base instructions"}, "")
+	if got := out.Input[0].Role; got != "user" {
 		t.Fatalf("role[0]=%q want user", got)
 	}
-	if got, _ := out.Input[1]["role"].(string); got != "assistant" {
+	if got := out.Input[1].Role; got != "assistant" {
 		t.Fatalf("role[1]=%q want assistant", got)
 	}
-	if got, _ := out.Input[2]["role"].(string); got != "user" {
+	if got := out.Input[2].Role; got != "user" {
 		t.Fatalf("role[2]=%q want final user", got)
 	}
 	if out.Instructions != "model base instructions\n\nsystem rules" {
@@ -450,23 +535,23 @@ func TestBuildCodexRequestPreservesChatImageParts(t *testing.T) {
 		}},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var sawText, sawImage bool
 	for _, item := range out.Input {
-		if item["role"] != "user" {
+		if item.Role != "user" {
 			continue
 		}
 		for _, part := range codexInputContentParts(item) {
-			switch part["type"] {
-			case "input_text":
-				if part["text"] == "what is in this image?" {
+			switch part.Type {
+			case codexwire.ContentItemInputText:
+				if part.Text == "what is in this image?" {
 					sawText = true
 				}
-				if strings.Contains(part["text"].(string), "[image]") {
+				if strings.Contains(part.Text, "[image]") {
 					t.Fatalf("image collapsed into text part: %#v", part)
 				}
-			case "input_image":
-				if part["image_url"] == "data:image/png;base64,abc123" && part["detail"] == "high" {
+			case codexwire.ContentItemInputImage:
+				if part.ImageURL == "data:image/png;base64,abc123" && part.Detail == "high" {
 					sawImage = true
 				}
 			}
@@ -491,20 +576,20 @@ func TestBuildCodexRequestPreservesResponsesInputImageParts(t *testing.T) {
 		]`),
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var sawText, sawImage bool
 	for _, item := range out.Input {
-		if item["role"] != "user" {
+		if item.Role != "user" {
 			continue
 		}
 		for _, part := range codexInputContentParts(item) {
-			switch part["type"] {
-			case "input_text":
-				if part["text"] == "describe this" {
+			switch part.Type {
+			case codexwire.ContentItemInputText:
+				if part.Text == "describe this" {
 					sawText = true
 				}
-			case "input_image":
-				if part["image_url"] == "https://example.test/image.png" && part["detail"] == "low" {
+			case codexwire.ContentItemInputImage:
+				if part.ImageURL == "https://example.test/image.png" && part.Detail == "low" {
 					sawImage = true
 				}
 			}
@@ -519,12 +604,12 @@ func TestBuildCodexRequestDoesNotInjectClydePrompts(t *testing.T) {
 	req := ChatRequest{
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"hello"`)}},
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	if out.Instructions != "" {
 		t.Fatalf("instructions=%q want empty without Cursor-provided instructions", out.Instructions)
 	}
 	for _, item := range out.Input {
-		if item["role"] == "developer" {
+		if item.Role == "developer" {
 			t.Fatalf("unexpected Clyde developer context: %v", item)
 		}
 	}
@@ -537,7 +622,7 @@ func TestBuildCodexRequestPrependsModelInstructions(t *testing.T) {
 			{Role: "user", Content: mustRaw(`"hello"`)},
 		},
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", Instructions: "model base instructions"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", Instructions: "model base instructions"}, "")
 	if out.Instructions != "model base instructions\n\ncaller system rules" {
 		t.Fatalf("instructions=%q", out.Instructions)
 	}
@@ -551,15 +636,15 @@ func TestBuildCodexRequestForwardsCursorProvidedDeveloperContentAsInstructions(t
 			{Role: "user", Content: mustRaw(`"hello"`)},
 		},
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var developerText strings.Builder
 	for _, item := range out.Input {
-		if item["role"] != "developer" {
+		if item.Role != "developer" {
 			continue
 		}
 		for _, part := range codexInputContentParts(item) {
-			if text, _ := part["text"].(string); text != "" {
-				developerText.WriteString(text)
+			if part.Text != "" {
+				developerText.WriteString(part.Text)
 			}
 		}
 	}
@@ -585,7 +670,7 @@ func TestBuildCodexRequestDoesNotInjectPlanModeInstructionPrefix(t *testing.T) {
 		}},
 		Messages: []ChatMessage{{Role: "user", Content: mustRaw(`"draft the plan"`)}},
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	if strings.Contains(out.Instructions, "Plan Mode") || strings.Contains(out.Instructions, "Only edit markdown files") {
 		t.Fatalf("instructions still contain Clyde plan mode prefix: %q", out.Instructions)
 	}
@@ -609,16 +694,13 @@ func TestBuildCodexRequestIncludesToolsAndParallelToolCalls(t *testing.T) {
 		}},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	if len(out.Tools) != 1 {
 		t.Fatalf("tools len=%d want 1", len(out.Tools))
 	}
-	tool, ok := out.Tools[0].(map[string]any)
-	if !ok {
-		t.Fatalf("tool type=%T", out.Tools[0])
-	}
-	if tool["type"] != "function" || tool["name"] != "write_file" {
-		t.Fatalf("tool=%v", tool)
+	tool := out.Tools[0]
+	if tool.Type != codexwire.ToolSpecTypeFunction || tool.Name != "write_file" {
+		t.Fatalf("tool=%+v", tool)
 	}
 	if out.ToolChoice != "auto" {
 		t.Fatalf("tool_choice=%q want auto", out.ToolChoice)
@@ -644,13 +726,10 @@ func TestBuildCodexRequestPassesThroughCursorToolNames(t *testing.T) {
 		}},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
-	tool, ok := out.Tools[0].(map[string]any)
-	if !ok {
-		t.Fatalf("tool type=%T", out.Tools[0])
-	}
-	if tool["name"] != "ReadFile" {
-		t.Fatalf("tool=%v", tool)
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
+	tool := out.Tools[0]
+	if tool.Name != "ReadFile" {
+		t.Fatalf("tool=%+v", tool)
 	}
 }
 
@@ -667,23 +746,22 @@ func TestBuildCodexRequestPassesThroughShellAndApplyPatchFunctionTools(t *testin
 		}},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var sawShell, sawApplyPatch, sawReadFile bool
-	for _, raw := range out.Tools {
-		tool, _ := raw.(map[string]any)
+	for _, tool := range out.Tools {
 		switch {
-		case tool["type"] == "function" && tool["name"] == "Shell":
+		case tool.Type == codexwire.ToolSpecTypeFunction && tool.Name == "Shell":
 			sawShell = true
-		case tool["type"] == "function" && tool["name"] == "ApplyPatch":
+		case tool.Type == codexwire.ToolSpecTypeFunction && tool.Name == "ApplyPatch":
 			sawApplyPatch = true
-		case tool["type"] == "function" && tool["name"] == "ReadFile":
+		case tool.Type == codexwire.ToolSpecTypeFunction && tool.Name == "ReadFile":
 			sawReadFile = true
-		case tool["name"] == "shell_command" || tool["name"] == "apply_patch":
-			t.Fatalf("tool was translated instead of passed through: %v", tool)
+		case tool.Name == "shell_command" || tool.Name == "apply_patch":
+			t.Fatalf("tool was translated instead of passed through: %+v", tool)
 		}
 	}
 	if !sawShell || !sawApplyPatch || !sawReadFile {
-		t.Fatalf("tool passthrough Shell=%v ApplyPatch=%v ReadFile=%v tools=%v", sawShell, sawApplyPatch, sawReadFile, out.Tools)
+		t.Fatalf("tool passthrough Shell=%v ApplyPatch=%v ReadFile=%v tools=%+v", sawShell, sawApplyPatch, sawReadFile, out.Tools)
 	}
 }
 
@@ -709,12 +787,11 @@ func TestBuildCodexRequestPreservesCursorProductToolsForWriteIntent(t *testing.T
 		}},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var names []string
-	for _, raw := range out.Tools {
-		tool, _ := raw.(map[string]any)
-		if name, _ := tool["name"].(string); name != "" {
-			names = append(names, name)
+	for _, tool := range out.Tools {
+		if tool.Name != "" {
+			names = append(names, tool.Name)
 		}
 	}
 	got := strings.Join(names, ",")
@@ -739,12 +816,11 @@ func TestBuildCodexRequestPreservesCurrentCursorEditToolsForWriteIntent(t *testi
 		}},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var names []string
-	for _, raw := range out.Tools {
-		tool, _ := raw.(map[string]any)
-		if name, _ := tool["name"].(string); name != "" {
-			names = append(names, name)
+	for _, tool := range out.Tools {
+		if tool.Name != "" {
+			names = append(names, tool.Name)
 		}
 	}
 	got := strings.Join(names, ",")
@@ -767,12 +843,11 @@ func TestBuildCodexRequestPreservesUnknownToolsForWriteIntent(t *testing.T) {
 		}},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var names []string
-	for _, raw := range out.Tools {
-		tool, _ := raw.(map[string]any)
-		if name, _ := tool["name"].(string); name != "" {
-			names = append(names, name)
+	for _, tool := range out.Tools {
+		if tool.Name != "" {
+			names = append(names, tool.Name)
 		}
 	}
 	got := strings.Join(names, ",")
@@ -813,28 +888,28 @@ func TestBuildCodexRequestReplaysNativeShellAndApplyPatchHistory(t *testing.T) {
 		},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var sawShellCall, sawShellOutput, sawPatchCall, sawPatchOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
-		case "function_call":
-			switch item["call_id"] {
+		case codexwire.ItemTypeFunctionCall:
+			switch item.CallID {
 			case "call_shell":
-				if item["name"] != "Shell" {
-					t.Fatalf("shell call name=%v", item["name"])
+				if item.Name != "Shell" {
+					t.Fatalf("shell call name=%q", item.Name)
 				}
-				if !strings.Contains(item["arguments"].(string), `"command":"pwd"`) {
-					t.Fatalf("shell command call=%v", item)
+				if !strings.Contains(item.Arguments, `"command":"pwd"`) {
+					t.Fatalf("shell command call=%+v", item)
 				}
 				sawShellCall = true
 			case "call_patch":
-				if item["name"] != "ApplyPatch" || !strings.Contains(item["arguments"].(string), "*** Begin Patch") {
-					t.Fatalf("patch call=%v", item)
+				if item.Name != "ApplyPatch" || !strings.Contains(item.Arguments, "*** Begin Patch") {
+					t.Fatalf("patch call=%+v", item)
 				}
 				sawPatchCall = true
 			}
-		case "function_call_output":
-			switch item["call_id"] {
+		case codexwire.ItemTypeFunctionCallOutput:
+			switch item.CallID {
 			case "call_shell":
 				sawShellOutput = true
 			case "call_patch":
@@ -843,7 +918,7 @@ func TestBuildCodexRequestReplaysNativeShellAndApplyPatchHistory(t *testing.T) {
 		}
 	}
 	if !sawShellCall || !sawShellOutput || !sawPatchCall || !sawPatchOutput {
-		t.Fatalf("shell_call=%v shell_output=%v patch_call=%v patch_output=%v input=%v", sawShellCall, sawShellOutput, sawPatchCall, sawPatchOutput, out.Input)
+		t.Fatalf("shell_call=%v shell_output=%v patch_call=%v patch_output=%v input=%+v", sawShellCall, sawShellOutput, sawPatchCall, sawPatchOutput, out.Input)
 	}
 }
 
@@ -871,19 +946,19 @@ func TestBuildCodexRequestSerializesAssistantToolCallsAndToolOutputs(t *testing.
 		},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4"}, "")
 	var sawCall, sawOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
-		case "function_call":
+		case codexwire.ItemTypeFunctionCall:
 			sawCall = true
-			if got, _ := item["name"].(string); got != "ReadFile" {
-				t.Fatalf("function_call name=%q want ReadFile", got)
+			if item.Name != "ReadFile" {
+				t.Fatalf("function_call name=%q want ReadFile", item.Name)
 			}
-		case "function_call_output":
+		case codexwire.ItemTypeFunctionCallOutput:
 			sawOutput = true
-			if got, _ := item["call_id"].(string); got != "call_1" {
-				t.Fatalf("call_id=%q want call_1", got)
+			if item.CallID != "call_1" {
+				t.Fatalf("call_id=%q want call_1", item.CallID)
 			}
 		}
 	}
@@ -914,36 +989,37 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 		},
 	}
 
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
 	var sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
-		case "message":
-			if item["role"] == "developer" {
-				t.Fatalf("unexpected duplicated developer context in input: %v", item)
+		case codexwire.ItemTypeMessage:
+			if item.Role == "developer" {
+				t.Fatalf("unexpected duplicated developer context in input: %+v", item)
 			}
-		case "function_call":
-			switch item["call_id"] {
+		case codexwire.ItemTypeFunctionCall:
+			switch item.CallID {
 			case "call_glob":
 				sawGlobCall = true
-				if item["name"] != "Glob" {
-					t.Fatalf("glob call name=%v", item["name"])
+				if item.Name != "Glob" {
+					t.Fatalf("glob call name=%q", item.Name)
 				}
 			case "call_shell":
 				sawShellCommand = true
-				if item["name"] != "Shell" {
-					t.Fatalf("shell call name=%v", item["name"])
+				if item.Name != "Shell" {
+					t.Fatalf("shell call name=%q", item.Name)
 				}
-				if !strings.Contains(item["arguments"].(string), `"command":"pwd"`) {
-					t.Fatalf("shell arguments=%v", item["arguments"])
+				if !strings.Contains(item.Arguments, `"command":"pwd"`) {
+					t.Fatalf("shell arguments=%q", item.Arguments)
 				}
 			}
-		case "function_call_output":
-			switch item["call_id"] {
+		case codexwire.ItemTypeFunctionCallOutput:
+			outputText := codexwire.OutputText(item.Output)
+			switch item.CallID {
 			case "call_glob":
-				sawGlobOutput = strings.Contains(item["output"].(string), "README.md")
+				sawGlobOutput = strings.Contains(outputText, "README.md")
 			case "call_shell":
-				sawShellOutput = strings.Contains(item["output"].(string), "/repo")
+				sawShellOutput = strings.Contains(outputText, "/repo")
 			}
 		}
 	}
@@ -951,7 +1027,7 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 		t.Fatalf("instructions=%q want Cursor-provided system rules", out.Instructions)
 	}
 	if !sawGlobCall || !sawGlobOutput || !sawShellCommand || !sawShellOutput {
-		t.Fatalf("glob_call=%v glob_output=%v shell_call=%v shell_output=%v input=%v", sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput, out.Input)
+		t.Fatalf("glob_call=%v glob_output=%v shell_call=%v shell_output=%v input=%+v", sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput, out.Input)
 	}
 }
 
@@ -965,7 +1041,7 @@ func TestBuildCodexRequestAddsEncryptedReasoningIncludeAutomatically(t *testing.
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if len(out.Include) != 1 || out.Include[0] != "reasoning.encrypted_content" {
@@ -981,7 +1057,7 @@ func TestBuildCodexRequestUsesStablePromptCacheKeyFromMetadata(t *testing.T) {
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.PromptCache != "meta:thread-123" {
@@ -1000,7 +1076,7 @@ func TestBuildCodexRequestDoesNotUseAccountUserAsSessionKey(t *testing.T) {
 			Content: json.RawMessage(`"same account, distinct chat"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if strings.HasPrefix(out.PromptCache, "user:") {
@@ -1021,7 +1097,7 @@ func TestBuildCodexRequestDoesNotUseContentFingerprintAsSessionKey(t *testing.T)
 			Content: json.RawMessage(`"same first prompt can start unrelated chats"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if !strings.HasPrefix(out.PromptCache, "fingerprint:") {
@@ -1041,7 +1117,7 @@ func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
-	out := BuildRequest(req, ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
 	if len(out.Tools) == 0 {
 		t.Fatalf("expected tools")
 	}
@@ -1065,7 +1141,7 @@ func TestBuildCodexRequestPrefersCursorConversationPromptCacheKey(t *testing.T) 
 			Content: json.RawMessage(`"hello"`),
 		}},
 	}
-	model := ResolvedModel{Alias: "gpt-5.4"}
+	model := ResolvedAlias{Alias: "gpt-5.4"}
 
 	out := BuildRequest(req, model, "")
 	if out.PromptCache != "cursor:conv-123" {
@@ -1078,11 +1154,29 @@ func TestBuildCodexRequestPrefersCursorConversationPromptCacheKey(t *testing.T) 
 
 func TestCodexClientMetadataIncludesInstallationAndWindowIDs(t *testing.T) {
 	got := clientMetadataForTest("acct-123", "cursor:conv-123:0")
-	if got["x-codex-installation-id"] != "acct-123" {
-		t.Fatalf("installation id=%q", got["x-codex-installation-id"])
+	if got == nil {
+		t.Fatalf("expected populated client metadata")
 	}
-	if got["x-codex-window-id"] != "cursor:conv-123:0" {
-		t.Fatalf("window id=%q", got["x-codex-window-id"])
+	if got.InstallationID != "acct-123" {
+		t.Fatalf("installation id=%q", got.InstallationID)
+	}
+	if got.WindowID != "cursor:conv-123:0" {
+		t.Fatalf("window id=%q", got.WindowID)
+	}
+	// The serialized JSON keys must be the codex-cli wire keys.
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if payload["x-codex-installation-id"] != "acct-123" {
+		t.Fatalf("wire installation id=%q", payload["x-codex-installation-id"])
+	}
+	if payload["x-codex-window-id"] != "cursor:conv-123:0" {
+		t.Fatalf("wire window id=%q", payload["x-codex-window-id"])
 	}
 }
 
@@ -1327,7 +1421,7 @@ func TestParseCodexSSEPassesThroughToolNames(t *testing.T) {
 	}
 }
 
-func TestParseCodexSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
+func TestParseCodexSSEMapsNativeLocalShellToDeclaredCommandTool(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.done",
 		`data: {"item":{"id":"ls_1","type":"local_shell_call","call_id":"call_shell","status":"completed","action":{"type":"exec","command":["zsh","-lc","pwd"],"working_directory":"/repo","timeout_ms":1000}}}`,
@@ -1336,7 +1430,10 @@ func TestParseCodexSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	got, res, err := parseCodexSSEChunksForTest(stream)
+	// Declared command tool "Shell"; codex answered with a native
+	// local_shell_call. The call maps back to the declared name by shape.
+	declared := []codexwire.ToolSpec{declaredCommandToolSpec("Shell")}
+	got, res, err := parseCodexSSEChunksForTestWithTools(stream, declared)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1348,18 +1445,18 @@ func TestParseCodexSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
 	}
 	if calls[0].Function.Name != "Shell" {
-		t.Fatalf("tool name=%q want Shell", calls[0].Function.Name)
+		t.Fatalf("tool name=%q want Shell (the declared command tool)", calls[0].Function.Name)
 	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(calls[1].Function.Arguments), &args); err != nil {
 		t.Fatalf("args JSON: %v", err)
 	}
-	if args["command"] != "pwd" || args["working_directory"] != "/repo" || args["block_until_ms"].(float64) != 1000 {
+	if args["command"] != "pwd" || args["workdir"] != "/repo" || args["timeout_ms"].(float64) != 1000 {
 		t.Fatalf("args=%v", args)
 	}
 }
 
-func TestParseCodexSSEMapsShellCommandToCursorShell(t *testing.T) {
+func TestParseCodexSSEPassesShellCommandFunctionCallThrough(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",
 		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_shell","name":"shell_command","arguments":""}}`,
@@ -1385,22 +1482,26 @@ func TestParseCodexSSEMapsShellCommandToCursorShell(t *testing.T) {
 		t.Fatalf("finish_reason=%q", res.FinishReason)
 	}
 	calls := collectToolCalls(got)
-	if len(calls) != 2 {
-		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
-	}
+	// shell_command is a plain function_call: its name and JSON arguments
+	// pass through verbatim with no field reshaping, so the streamed
+	// argument deltas arrive unmodified.
 	if calls[0].Function.Name != "shell_command" {
 		t.Fatalf("tool name=%q want shell_command", calls[0].Function.Name)
 	}
-	var args map[string]any
-	if err := json.Unmarshal([]byte(calls[1].Function.Arguments), &args); err != nil {
-		t.Fatalf("args JSON: %v", err)
+	var joined strings.Builder
+	for _, c := range calls[1:] {
+		joined.WriteString(c.Function.Arguments)
 	}
-	if args["command"] != "pwd" || args["working_directory"] != "/repo" || args["block_until_ms"].(float64) != 1000 {
-		t.Fatalf("args=%v", args)
+	var args map[string]any
+	if err := json.Unmarshal([]byte(joined.String()), &args); err != nil {
+		t.Fatalf("args JSON: %v from %q", err, joined.String())
+	}
+	if args["command"] != "pwd" || args["workdir"] != "/repo" || args["timeout_ms"].(float64) != 1000 {
+		t.Fatalf("args=%v want verbatim codex shell_command fields", args)
 	}
 }
 
-func TestParseCodexSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
+func TestParseCodexSSEMapsNativeApplyPatchToDeclaredPatchTool(t *testing.T) {
 	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",
@@ -1419,7 +1520,11 @@ func TestParseCodexSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	got, res, err := parseCodexSSEChunksForTest(stream)
+	// Declared patch tool "ApplyPatch"; codex answered with a native
+	// freeform apply_patch custom_tool_call. The call maps back to the
+	// declared name by shape and the patch body arrives intact.
+	declared := []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")}
+	got, res, err := parseCodexSSEChunksForTestWithTools(stream, declared)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -1431,7 +1536,7 @@ func TestParseCodexSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		t.Fatalf("tool call chunks=%d want 3: %#v", len(calls), calls)
 	}
 	if calls[0].Function.Name != "ApplyPatch" {
-		t.Fatalf("tool name=%q want ApplyPatch", calls[0].Function.Name)
+		t.Fatalf("tool name=%q want ApplyPatch (the declared patch tool)", calls[0].Function.Name)
 	}
 	if gotPatch := calls[1].Function.Arguments + calls[2].Function.Arguments; gotPatch != patch {
 		t.Fatalf("patch args=%q want %q", gotPatch, patch)
@@ -1524,12 +1629,16 @@ func collectCodexSSEForTest(stream *strings.Reader) (string, RunResult, error) {
 }
 
 func parseCodexSSEChunksForTest(stream *strings.Reader) ([]adapteropenai.StreamChunk, RunResult, error) {
+	return parseCodexSSEChunksForTestWithTools(stream, nil)
+}
+
+func parseCodexSSEChunksForTestWithTools(stream *strings.Reader, declaredTools []codexwire.ToolSpec) ([]adapteropenai.StreamChunk, RunResult, error) {
 	renderer := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got []adapteropenai.StreamChunk
 	res, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
 		got = append(got, renderer.HandleEvent(ev)...)
 		return nil
-	}, sseInstrumentationContext{}, SSEParseOptions{DropEncryptedContent: false})
+	}, sseInstrumentationContext{}, SSEParseOptions{DropEncryptedContent: false, DeclaredTools: declaredTools})
 	return got, res, err
 }
 
@@ -1544,86 +1653,74 @@ func collectToolCalls(chunks []adapteropenai.StreamChunk) []adapteropenai.ToolCa
 	return out
 }
 
-func codexInputContentType(item codexInputItem) string {
-	content, _ := item["content"].([]map[string]any)
-	if len(content) == 0 {
+func codexInputContentType(item codexwire.InputItem) codexwire.ContentItemType {
+	if len(item.Content) == 0 {
 		return ""
 	}
-	v, _ := content[0]["type"].(string)
-	return v
+	return item.Content[0].Type
 }
 
-func codexInputContentText(item codexInputItem) string {
-	content, _ := item["content"].([]map[string]any)
-	if len(content) == 0 {
+func codexInputContentText(item codexwire.InputItem) string {
+	if len(item.Content) == 0 {
 		return ""
 	}
-	v, _ := content[0]["text"].(string)
-	return v
+	return item.Content[0].Text
 }
 
-func codexInputContentParts(item codexInputItem) []map[string]any {
-	content, _ := item["content"].([]map[string]any)
-	return content
+func codexInputContentParts(item codexwire.InputItem) codexwire.ContentItems {
+	return item.Content
 }
 
-func codexItemTypeString(item codexInputItem) string {
-	v, _ := item["type"].(string)
-	return v
+func codexItemTypeString(item codexwire.InputItem) codexwire.ItemType {
+	return item.Type
 }
 
 func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 	cases := []struct {
-		name                 string
-		model                ResolvedModel
-		metadata             []byte
+		name        string
+		model       ResolvedAlias
+		metadata    []byte
+		serviceTier string
+		text        []byte
+		// Non-codex-cli budget hints supplied on the inbound request. They
+		// must never reach the codex wire body.
 		maxCompletion        *int
-		maxOutput            *int
-		serviceTier          string
-		text                 []byte
 		truncation           string
 		promptCacheRetention string
 		wantModel            string
 		wantTier             string
-		wantMax              int
 	}{
 		{
 			name:      "native_alias_preserves_upstream_model",
-			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			model:     ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
 			wantModel: "gpt-5.4",
 		},
 		{
 			name:      "native_long_context_alias_preserves_upstream_model",
-			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			model:     ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
 			wantModel: "gpt-5.4",
 		},
 		{
 			name:      "spark_alias_preserves_spark_slug",
-			model:     ResolvedModel{Alias: "gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
+			model:     ResolvedAlias{Alias: "gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
 			wantModel: "gpt-5.3-codex-spark",
 		},
 		{
-			name:      "service_tier_and_max_completion_passthrough",
-			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			name:      "service_tier_passthrough_drops_max_completion",
+			model:     ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
 			metadata:  mustRaw(`{"service_tier":"fast"}`),
 			wantModel: "gpt-5.4",
 			wantTier:  "priority",
-			wantMax:   4096,
 			maxCompletion: func() *int {
 				v := 4096
 				return &v
 			}(),
 		},
 		{
-			name:      "responses_controls_passthrough",
-			model:     ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
-			wantModel: "gpt-5.4",
-			wantTier:  "priority",
-			wantMax:   8192,
-			maxOutput: func() *int {
-				v := 8192
-				return &v
-			}(),
+			name:                 "text_passthrough_drops_truncation_and_retention",
+			model:                ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			wantModel:            "gpt-5.4",
+			wantTier:             "priority",
 			serviceTier:          "fast",
 			text:                 mustRaw(`{"verbosity":"high"}`),
 			truncation:           "auto",
@@ -1636,7 +1733,6 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 			req := ChatRequest{
 				Metadata:             tc.metadata,
 				MaxComplTokens:       tc.maxCompletion,
-				MaxOutputTokens:      tc.maxOutput,
 				ServiceTier:          tc.serviceTier,
 				Text:                 tc.text,
 				Truncation:           tc.truncation,
@@ -1653,19 +1749,21 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 			if tc.wantTier != "" && out.ServiceTier != tc.wantTier {
 				t.Fatalf("service_tier=%q want %q", out.ServiceTier, tc.wantTier)
 			}
-			if tc.wantMax != 0 {
-				if out.MaxCompletion == nil || *out.MaxCompletion != tc.wantMax {
-					t.Fatalf("max_completion_tokens=%v want %d", out.MaxCompletion, tc.wantMax)
-				}
-			}
 			if len(tc.text) > 0 && string(out.Text) != string(tc.text) {
 				t.Fatalf("text=%s want %s", out.Text, tc.text)
 			}
-			if tc.truncation != "" && out.Truncation != tc.truncation {
-				t.Fatalf("truncation=%q want %q", out.Truncation, tc.truncation)
+			encoded, err := json.Marshal(out)
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
 			}
-			if tc.promptCacheRetention != "" && out.PromptCacheRetention != tc.promptCacheRetention {
-				t.Fatalf("prompt_cache_retention=%q want %q", out.PromptCacheRetention, tc.promptCacheRetention)
+			var payload map[string]any
+			if err := json.Unmarshal(encoded, &payload); err != nil {
+				t.Fatalf("unmarshal payload: %v", err)
+			}
+			for _, field := range []string{"max_completion_tokens", "truncation", "prompt_cache_retention"} {
+				if _, present := payload[field]; present {
+					t.Fatalf("codex-cli-foreign field %q leaked into body: %v", field, payload[field])
+				}
 			}
 		})
 	}

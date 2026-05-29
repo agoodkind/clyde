@@ -12,15 +12,17 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/gklog/trace"
 )
 
 const maxAnthropicMessagesBodyBytes = 8 << 20
 
-func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) error {
+func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) (err error) {
+	defer trace.Op(ctx, "adapter.anthropic.messages")(&err)
 	w := hctx.Writer
 	r := hctx.Request
 	if r.Method != http.MethodPost {
@@ -48,22 +50,21 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 		return adapterErrInvalidRequest("messages is required", nil)
 	}
 
-	model, _, err := s.registry.Resolve(req.Model, "")
-	if err != nil {
-		return adapterErrModelNotFound(err.Error())
-	}
-	nativeClaudeModel := isNativeClaudeModelID(req.Model)
-	if !nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
+	requestedModel := strings.TrimSpace(req.Model)
+	resolved, resolveOK := s.anthropicNativeResolvedRequest(ctx, requestedModel)
+	nativeClaudeModel := isNativeClaudeModelID(requestedModel)
+	resolvedToAnthropic := resolveOK && (resolved.Provider == BackendAnthropic || resolved.Provider == BackendClaude)
+	switch {
+	case !resolveOK && !nativeClaudeModel:
+		return adapterErrModelNotFound("model " + requestedModel + " does not resolve to a known backend")
+	case !resolveOK:
+		resolved = anthropicNativeClaudeResolvedRequest(requestedModel)
+	case !nativeClaudeModel && !resolvedToAnthropic:
 		return adapterErrInvalidRequest("model does not resolve to the anthropic backend", nil)
+	case nativeClaudeModel && !resolvedToAnthropic:
+		resolved = anthropicNativeClaudeResolvedRequest(requestedModel)
 	}
-	if nativeClaudeModel && model.Backend != BackendAnthropic && model.Backend != BackendClaude {
-		model = ResolvedModel{
-			Alias:       strings.TrimSpace(req.Model),
-			Backend:     BackendClaude,
-			ClaudeModel: strings.TrimSpace(req.Model),
-		}
-	}
-	req.Model = anthropicIngressWireModel(req.Model, model)
+	req.Model = anthropicIngressWireModel(requestedModel, resolved.Model)
 
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
@@ -73,14 +74,17 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 		slog.Int("body_bytes", len(body)),
 	}
 	attrs = append(attrs, corr.Attrs()...)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.anthropic.ingress", attrs...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.anthropic.ingress", append([]slog.Attr{slog.String("concern", "adapter.providers.anthropic.request")}, attrs...)...)
 
 	prepared := anthropic.PreparedRequest{
 		Request:       req,
-		Model:         anthropicIngressResolvedModel(model),
+		Resolved:      &resolved,
 		RequestID:     reqID,
 		Stream:        req.Stream,
-		NativeIngress: true,
+		NativeIngress: true, TrackerKey: "", JSONCoercion: anthropic.
+				JSONCoercion{Coerce: nil, Validate: nil},
+
+		IncludeUsage: false,
 	}
 	execCtx := anthropic.WithRequestID(ctx, reqID)
 	if req.Stream {
@@ -126,25 +130,71 @@ func isNativeClaudeModelID(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-")
 }
 
-func anthropicIngressWireModel(requested string, model ResolvedModel) string {
+func anthropicIngressWireModel(requested string, resolvedModel string) string {
 	if isNativeClaudeModelID(requested) {
 		return anthropicbackend.StripContextSuffix(requested)
 	}
-	return anthropicbackend.StripContextSuffix(model.ClaudeModel)
+	return anthropicbackend.StripContextSuffix(resolvedModel)
 }
 
-func anthropicIngressResolvedModel(model ResolvedModel) adaptermodel.ResolvedModel {
-	return adaptermodel.ResolvedModel{
-		Alias:           model.Alias,
-		Backend:         adaptermodel.BackendAnthropic,
-		ClaudeModel:     model.ClaudeModel,
-		Context:         model.Context,
-		Effort:          "",
-		MaxOutputTokens: model.MaxOutputTokens,
+// anthropicNativeResolvedRequest resolves a native `/v1/messages` model
+// id through the resolver bridge and projects the result into a
+// ResolvedRequest. The native ingress execution path does not read most
+// of these fields, but the alias and resolved wire model are carried so
+// shared backend helpers (request alias derivation, betas) see the same
+// shape the OpenAI ingress path produces.
+func (s *Server) anthropicNativeResolvedRequest(ctx context.Context, requestedModel string) (adapterresolver.ResolvedRequest, bool) {
+	view, err := adapterresolver.NewModelRegistryAdapter(s.registry).Resolve(requestedModel, "")
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.anthropic.native_resolve_failed", "concern", "adapter.providers.anthropic.request", "model", requestedModel, "err", err)
+		return zeroNativeResolvedRequest(requestedModel), false
 	}
+	resolved := zeroNativeResolvedRequest(requestedModel)
+	resolved.Provider = view.Provider
+	resolved.Family = view.Family
+	resolved.Model = view.Model
+	resolved.ContextBudget = adapterresolver.ContextBudget{InputTokens: view.Context, OutputTokens: view.MaxOutputTokens, TotalTokens: view.Context}
+	resolved.MaxOutputTokens = view.MaxOutputTokens
+	resolved.Alias = view.Alias
+	return resolved, true
+}
+
+// anthropicNativeClaudeResolvedRequest builds the fallback ResolvedRequest
+// for a native `claude-*` model id that the registry did not map to the
+// anthropic backend. It pins the provider to claude and carries the raw
+// requested id as both the alias and the wire model, matching the prior
+// inline ResolvedAlias fallback.
+func anthropicNativeClaudeResolvedRequest(requestedModel string) adapterresolver.ResolvedRequest {
+	resolved := zeroNativeResolvedRequest(requestedModel)
+	resolved.Provider = BackendClaude
+	resolved.Model = requestedModel
+	resolved.Alias = requestedModel
+	return resolved
+}
+
+// zeroNativeResolvedRequest returns a zero-value ResolvedRequest the
+// native ingress callers fill in. Native ingress does not consume the
+// per-provider knobs (effort, thinking, betas), so they stay at their
+// zero values; the OpenAI model is carried so the shared request-alias
+// derivation has the requested id. Built from the zero value rather than
+// a struct literal so the OpenAI/Cursor sub-structs need not be
+// enumerated field-by-field.
+func zeroNativeResolvedRequest(requestedModel string) adapterresolver.ResolvedRequest {
+	var resolved adapterresolver.ResolvedRequest
+	resolved.OpenAI.Model = requestedModel
+	return resolved
 }
 
 func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, anthropic.ErrBaselineMissing) || errors.Is(err, anthropic.ErrBaselineInvalid) {
+		aerr := adapterErrBaselineMissing(
+			"anthropic",
+			"anthropic wire baseline is unavailable: seed it by running claude-cli once through the Clyde MITM proxy, or restore the reference-v2.toml baseline file, then retry",
+			err,
+		)
+		s.respondAdapterError(w, r, aerr)
+		return
+	}
 	var execErr *anthropic.ExecuteError
 	if errors.As(err, &execErr) {
 		// Native Anthropic ingress preserves the spec-correct
@@ -204,7 +254,7 @@ type nativeAnthropicJSONWriter struct {
 func newNativeAnthropicJSONWriter() *nativeAnthropicJSONWriter {
 	return &nativeAnthropicJSONWriter{
 		status: http.StatusOK,
-		header: make(http.Header),
+		header: make(http.Header), body: nil,
 	}
 }
 
@@ -267,7 +317,7 @@ func newNativeAnthropicStreamWriter(w http.ResponseWriter) (*nativeAnthropicStre
 	}
 	return &nativeAnthropicStreamWriter{
 		w:       w,
-		flusher: flusher,
+		flusher: flusher, committed: false,
 	}, nil
 }
 
@@ -309,7 +359,8 @@ func (w *nativeAnthropicStreamWriter) write(chunk []byte) error {
 		w.commit(http.Header{"Content-Type": {"text/event-stream"}})
 	}
 	if _, err := w.w.Write(chunk); err != nil {
-		return err
+		slog.Warn("adapter.anthropic_native.write_chunk_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return fmt.Errorf("write native anthropic stream chunk: %w", err)
 	}
 	return w.Flush()
 }
@@ -333,7 +384,8 @@ func (w *nativeAnthropicStreamWriter) relay(resp *http.Response) error {
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
-		return err
+		slog.Warn("adapter.anthropic_native.relay_read_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return fmt.Errorf("read native anthropic stream response: %w", err)
 	}
 }
 

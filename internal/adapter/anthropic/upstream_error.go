@@ -1,23 +1,3 @@
-// Package anthropic implements Anthropic wire models and helpers.
-// failed /v1/messages calls. It bundles the Classification (so
-// downstream code can route on the four classes without re-parsing
-// headers or status codes), the original error message, and the
-// upstream HTTP status when present.
-//
-// Downstream consumers should use errors.As(err, &target) to recover
-// the structured shape:
-//
-//	var ue *anthropic.UpstreamError
-//	if errors.As(err, &ue) {
-//	    switch ue.Class() {
-//	    case anthropic.ResponseClassRetryableError: ...
-//	    case anthropic.ResponseClassFatalError:     ...
-//	    }
-//	}
-//
-// UpstreamError implements error and unwraps to the underlying
-// transport error when one was the root cause, so existing
-// errors.Is(err, [context.Canceled]) checks keep working.
 package anthropic
 
 import (
@@ -101,7 +81,7 @@ func (e *UpstreamError) Error() string {
 	}
 }
 
-// Unwrap exposes the underlying cause for errors.Is and errors.As.
+// Unwrap exposes the underlying cause for [errors.Is] and [errors.As].
 func (e *UpstreamError) Unwrap() error {
 	if e == nil {
 		return nil
@@ -127,7 +107,7 @@ func (e *UpstreamError) Retryable() bool {
 }
 
 // AsUpstreamError is a small helper for callers that prefer a single
-// call site over manual errors.As. Returns the typed value (or nil)
+// call site over manual [errors.As]. Returns the typed value (or nil)
 // and a found bool.
 func AsUpstreamError(err error) (*UpstreamError, bool) {
 	if err == nil {

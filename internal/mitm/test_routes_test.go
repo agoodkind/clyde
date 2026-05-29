@@ -18,8 +18,14 @@ const (
 	testRouteOpenAIBackend testRouteID = "test_route_openai_backend"
 )
 
+const (
+	testRouteProviderOpenAIV1 ProviderID = 100 + iota
+	testRouteProviderOpenAIBackend
+)
+
 type testRouteProvider struct {
 	id         ProviderID
+	label      string
 	pathPrefix string
 	upstream   string
 }
@@ -36,7 +42,7 @@ func (p testRouteProvider) ClassifyPlain(path string) PlainRouteClaim {
 	}
 	return PlainRouteClaim{
 		Claimed:     true,
-		Provider:    string(p.id),
+		Provider:    p.label,
 		UpstreamURL: p.upstream,
 	}
 }
@@ -60,7 +66,8 @@ func (testRouteProvider) BuildCaptureExtension(CaptureExchange) CaptureExtension
 func registerTestRoute(t *testing.T, id testRouteID, upstream string) func() {
 	t.Helper()
 	provider := testRouteProvider{
-		id:         ProviderID(id),
+		id:         providerIDForTestRoute(id),
+		label:      string(id),
 		pathPrefix: prefixForTestRoute(id),
 		upstream:   upstream,
 	}
@@ -68,6 +75,16 @@ func registerTestRoute(t *testing.T, id testRouteID, upstream string) func() {
 	return func() {
 		UnregisterProvider(provider.ID())
 	}
+}
+
+func providerIDForTestRoute(id testRouteID) ProviderID {
+	switch id {
+	case testRouteOpenAIV1:
+		return testRouteProviderOpenAIV1
+	case testRouteOpenAIBackend:
+		return testRouteProviderOpenAIBackend
+	}
+	return ProviderIDUnknown
 }
 
 func prefixForTestRoute(id testRouteID) string {

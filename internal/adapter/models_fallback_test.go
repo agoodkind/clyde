@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -50,7 +51,7 @@ func TestNewRegistryDirectOAuthRequiresOAuthBlock(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when direct_oauth without [adapter.anthropic.oauth]")
 	}
-	if !strings.Contains(err.Error(), "token_url") {
+	if !strings.Contains(err.Error(), "messages_url") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -74,13 +75,16 @@ func modelMatrixConfig() config.AdapterConfig {
 	cfg := baseConfig()
 	cfg.DefaultModel = "clyde-opus-4.7-medium"
 	cfg.Families["opus-4-7"] = config.AdapterFamily{
-		AliasPrefix:     "opus-4.7",
-		Model:           "claude-opus-4-7",
-		Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
-		ThinkingModes:   []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
-		MaxOutputTokens: 128000,
-		SupportsTools:   &testBoolTrue,
-		SupportsVision:  &testBoolTrue,
+		AliasPrefix: "opus-4.7",
+		Model:       "claude-opus-4-7",
+		// opus-4-7 declares adaptive explicitly; there is no implicit
+		// per-model remap, so the family must state its wire mode.
+		ThinkingWireMode: ThinkingAdaptive,
+		Efforts:          []string{EffortLow, EffortMedium, EffortHigh, EffortMax},
+		ThinkingModes:    []string{ThinkingDefault, ThinkingAdaptive, ThinkingEnabled, ThinkingDisabled},
+		MaxOutputTokens:  128000,
+		SupportsTools:    &testBoolTrue,
+		SupportsVision:   &testBoolTrue,
 		Contexts: []config.AdapterModelContext{
 			{Tokens: 200000},
 			{Tokens: 1000000, AliasSuffix: "1m", WireSuffix: "[1m]"},
@@ -100,7 +104,6 @@ func modelMatrixConfig() config.AdapterConfig {
 		},
 	}
 	cfg.Codex.Enabled = true
-	cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
 	cfg.Codex.NativeModelRouting = "codex"
 	cfg.Codex.Models = testCodexModels()
 	return cfg
@@ -147,6 +150,33 @@ func testCodexModels() []config.AdapterCodexModel {
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
 				{Tokens: 272000, NativeAliases: []string{"gpt-5.3-codex-spark"}},
+			},
+		},
+		{
+			AliasPrefix:     "gpt-5.2",
+			Model:           "gpt-5.2",
+			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			MaxOutputTokens: 128000,
+			Contexts: []config.AdapterCodexModelContext{
+				{Tokens: 272000, NativeAliases: []string{"gpt-5.2"}},
+			},
+		},
+		{
+			AliasPrefix:     "gpt-5.4-mini",
+			Model:           "gpt-5.4-mini",
+			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			MaxOutputTokens: 128000,
+			Contexts: []config.AdapterCodexModelContext{
+				{Tokens: 272000, NativeAliases: []string{"gpt-5.4-mini"}},
+			},
+		},
+		{
+			AliasPrefix:     "o3",
+			Model:           "o3",
+			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+			MaxOutputTokens: 128000,
+			Contexts: []config.AdapterCodexModelContext{
+				{Tokens: 272000, NativeAliases: []string{"o3"}},
 			},
 		},
 	}
@@ -217,10 +247,15 @@ func TestNewRegistryPropagatesInstructionsFromConfig(t *testing.T) {
 	}
 }
 
-func TestResolveRoutesCodexModelPrefixes(t *testing.T) {
+// TestResolveRoutesDeclaredNativeCodexAlias locks in that a declared
+// native alias (an advertised_native_aliases entry) routes to Codex
+// under native_model_routing = "codex". There is no prefix guessing;
+// the alias resolves because it is declared.
+func TestResolveRoutesDeclaredNativeCodexAlias(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
 	cfg.Codex.NativeModelRouting = "codex"
+	cfg.Codex.Models = testCodexModels()
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -240,10 +275,33 @@ func TestResolveRoutesCodexModelPrefixes(t *testing.T) {
 	}
 }
 
+// TestResolveDoesNotPrefixGuessUndeclaredNativeAlias locks in the
+// pure-config contract: an undeclared gpt-* alias is NOT auto-routed to
+// Codex by prefix sniffing. With no passthrough configured it falls
+// through to the registry default alias (a Claude family model).
+func TestResolveDoesNotPrefixGuessUndeclaredNativeAlias(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.NativeModelRouting = "codex"
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, _, err := r.Resolve("gpt-5.4", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Backend == BackendCodex {
+		t.Fatalf("backend = %q; undeclared gpt-* alias must not prefix-route to codex", m.Backend)
+	}
+	if m.ClaudeModel != "claude-haiku-4-5-20251001" {
+		t.Fatalf("ClaudeModel = %q want the default Claude family model", m.ClaudeModel)
+	}
+}
+
 func TestResolveRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
-	cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
 	cfg.Codex.Models = testCodexModels()
 	r, err := NewRegistry(cfg)
 	if err != nil {
@@ -271,12 +329,13 @@ func TestResolveRejectsNativeCodexWhenRoutingExplicitlyOff(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
 	cfg.Codex.NativeModelRouting = "off"
+	cfg.Codex.Models = testCodexModels()
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	if _, _, err := r.Resolve("gpt-5.4", ""); err == nil {
-		t.Fatalf("expected native gpt alias to be rejected when routing is off")
+		t.Fatalf("expected declared native gpt alias to be rejected when routing is off")
 	} else if !strings.Contains(err.Error(), "native model routing is off") {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -291,7 +350,7 @@ func TestListIncludesNativeCodexModelsWhenRoutable(t *testing.T) {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 
-	var gpt54 *ResolvedModel
+	var gpt54 *adaptermodel.ResolvedAlias
 	for _, m := range r.List() {
 		if m.Alias == "gpt-5.4" {
 			copy := m
@@ -319,7 +378,7 @@ func TestListIncludesClydeGPTCodexEffortAliasesWhenRoutable(t *testing.T) {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 
-	models := make(map[string]ResolvedModel)
+	models := make(map[string]adaptermodel.ResolvedAlias)
 	for _, model := range r.List() {
 		models[model.Alias] = model
 	}
@@ -387,17 +446,6 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	r, err := NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
-	}
-
-	m, _, err := r.Resolve("clyde-codex-gpt-5.4", "")
-	if err != nil {
-		t.Fatalf("Resolve clyde-codex-gpt: %v", err)
-	}
-	if m.Backend != BackendCodex {
-		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
-	}
-	if m.ClaudeModel != "gpt-5.4" {
-		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
 	}
 
 	m, effort, err := r.Resolve("clyde-codex-5.5-high", "")
@@ -494,7 +542,11 @@ func TestResolveRoutesClydeCodexAliases(t *testing.T) {
 	}
 }
 
-func TestResolveExplicitConfiguredClydeCodexAliasWinsOverDynamicPrefix(t *testing.T) {
+// TestResolveExplicitConfiguredCodexModelEntry locks in that an
+// explicit [adapter.models.<name>] entry with backend = "codex"
+// resolves to the Codex backend by exact-key lookup. There is no
+// dynamic prefix path left; the entry resolves because it is declared.
+func TestResolveExplicitConfiguredCodexModelEntry(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Codex.Enabled = true
 	cfg.Codex.NativeModelRouting = "codex"
@@ -632,8 +684,7 @@ func TestResolveDoesNotRouteClydeOpusAliasesToCodex(t *testing.T) {
 			},
 		},
 		Codex: config.AdapterCodex{
-			Enabled:       true,
-			ModelPrefixes: []string{"gpt-", "o"},
+			Enabled: true,
 		},
 	})
 	if err != nil {
@@ -661,7 +712,7 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 	cases := []struct {
 		alias              string
 		reqEffort          string
-		wantBackend        string
+		wantBackend        adaptermodel.BackendID
 		wantModel          string
 		wantContext        int
 		wantEffort         string
@@ -680,9 +731,8 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 			wantSupportsVision: true,
 		},
 		{
-			// claude-opus-4-7 with no explicit thinking_wire_mode hits
-			// the registry's implicit fallback in
-			// withResolvedThinkingWireMode and resolves to adaptive.
+			// opus-4-7 declares thinking_wire_mode = "adaptive" explicitly
+			// in modelMatrixConfig, so the resolved wire mode is adaptive.
 			alias:              "clyde-opus-4.7-medium-thinking",
 			wantBackend:        BackendClaude,
 			wantModel:          "claude-opus-4-7",
@@ -739,6 +789,7 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 			reqEffort:   EffortLow,
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.4-mini",
+			wantContext: 272000,
 			wantEffort:  EffortLow,
 		},
 		{
@@ -761,11 +812,17 @@ func TestResolveModelRoutingMatrix(t *testing.T) {
 			alias:       "gpt-5.2",
 			wantBackend: BackendCodex,
 			wantModel:   "gpt-5.2",
+			wantContext: 272000,
 		},
 		{
-			alias:       "o3-high",
+			// Pure-config routing: an o-series alias routes to Codex only
+			// because it is declared as a native alias. The effort comes
+			// from the request, not from a "-high" alias suffix.
+			alias:       "o3",
+			reqEffort:   EffortHigh,
 			wantBackend: BackendCodex,
 			wantModel:   "o3",
+			wantContext: 272000,
 			wantEffort:  EffortHigh,
 		},
 	}
@@ -885,42 +942,55 @@ func TestNewRegistrySupportsOpus46FamilyAliases(t *testing.T) {
 	}
 }
 
-// TestThinkingWireModeExplicitOverridesImplicitFallback locks in that
-// an operator can pin claude-opus-4-7 to enabled-mode wire shape by
-// setting thinking_wire_mode = "enabled". The implicit
-// enabled-to-adaptive fallback in withResolvedThinkingWireMode must
-// not override an explicit operator choice.
-func TestThinkingWireModeExplicitOverridesImplicitFallback(t *testing.T) {
-	cfg := baseConfig()
-	cfg.DefaultModel = "clyde-opus-4.7-medium-thinking"
-	cfg.Families["opus-4-7"] = config.AdapterFamily{
-		AliasPrefix:      "opus-4.7",
-		Model:            "claude-opus-4-7",
-		Efforts:          []string{EffortMedium},
-		ThinkingModes:    []string{ThinkingDefault, ThinkingEnabled},
-		ThinkingWireMode: ThinkingEnabled,
-		MaxOutputTokens:  32000,
-		SupportsTools:    &testBoolTrue,
-		SupportsVision:   &testBoolTrue,
-		Contexts:         []config.AdapterModelContext{{Tokens: 200000}},
+// TestThinkingWireModeExplicitDeclarationIsHonored locks in that the
+// resolved wire mode is exactly what the family declares. There is no
+// implicit per-model remap: an explicit "adaptive" resolves to adaptive
+// and an explicit "enabled" resolves to enabled.
+func TestThinkingWireModeExplicitDeclarationIsHonored(t *testing.T) {
+	cases := []struct {
+		name     string
+		declared string
+		want     string
+	}{
+		{name: "adaptive", declared: ThinkingAdaptive, want: ThinkingAdaptive},
+		{name: "enabled", declared: ThinkingEnabled, want: ThinkingEnabled},
 	}
 
-	r, err := NewRegistry(cfg)
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	m, ok := r.Models()["clyde-opus-4.7-medium-thinking"]
-	if !ok {
-		t.Fatalf("alias missing")
-	}
-	if m.Thinking != ThinkingEnabled {
-		t.Fatalf("Thinking = %q want %q (explicit thinking_wire_mode must win)", m.Thinking, ThinkingEnabled)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseConfig()
+			cfg.DefaultModel = "clyde-opus-4.7-medium-thinking"
+			cfg.Families["opus-4-7"] = config.AdapterFamily{
+				AliasPrefix:      "opus-4.7",
+				Model:            "claude-opus-4-7",
+				Efforts:          []string{EffortMedium},
+				ThinkingModes:    []string{ThinkingDefault, ThinkingEnabled},
+				ThinkingWireMode: tc.declared,
+				MaxOutputTokens:  32000,
+				SupportsTools:    &testBoolTrue,
+				SupportsVision:   &testBoolTrue,
+				Contexts:         []config.AdapterModelContext{{Tokens: 200000}},
+			}
+
+			r, err := NewRegistry(cfg)
+			if err != nil {
+				t.Fatalf("NewRegistry: %v", err)
+			}
+			m, ok := r.Models()["clyde-opus-4.7-medium-thinking"]
+			if !ok {
+				t.Fatalf("alias missing")
+			}
+			if m.Thinking != tc.want {
+				t.Fatalf("Thinking = %q want %q (declared wire mode must be honored)", m.Thinking, tc.want)
+			}
+		})
 	}
 }
 
 // TestThinkingWireModeExplicitAdaptive locks in the explicit-adaptive
 // path, so an operator who sets thinking_wire_mode = "adaptive" gets
-// adaptive without depending on the implicit fallback.
+// adaptive. This is the only way to get adaptive now that the implicit
+// per-model remap is gone.
 func TestThinkingWireModeExplicitAdaptive(t *testing.T) {
 	cfg := baseConfig()
 	cfg.DefaultModel = "clyde-opus-4.7-medium-thinking"
@@ -968,5 +1038,81 @@ func TestThinkingWireModeRejectsInvalid(t *testing.T) {
 
 	if _, err := NewRegistry(cfg); err == nil {
 		t.Fatal("expected NewRegistry to reject invalid thinking_wire_mode, got nil error")
+	}
+}
+
+// TestFamilyBackendCodexRoutesToCodex locks in that a family declared
+// with backend = "codex" stamps BackendCodex onto its expanded aliases.
+// This is the declarative way to route a custom alias_prefix (including
+// a gpt-* one) at the Codex backend, replacing the deleted prefix
+// guessing.
+func TestFamilyBackendCodexRoutesToCodex(t *testing.T) {
+	cfg := baseConfig()
+	cfg.DefaultModel = "clyde-gptfam-medium"
+	cfg.Families["gpt-fam"] = config.AdapterFamily{
+		AliasPrefix:     "gptfam",
+		Model:           "gpt-5.4",
+		Backend:         BackendCodex.String(),
+		Efforts:         []string{EffortLow, EffortMedium, EffortHigh},
+		ThinkingModes:   []string{ThinkingDefault},
+		MaxOutputTokens: 128000,
+		SupportsTools:   &testBoolTrue,
+		SupportsVision:  &testBoolTrue,
+		Contexts:        []config.AdapterModelContext{{Tokens: 272000}},
+	}
+
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, effort, err := r.Resolve("clyde-gptfam-high", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
+	}
+	if m.ClaudeModel != "gpt-5.4" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.4", m.ClaudeModel)
+	}
+	if effort != EffortHigh {
+		t.Fatalf("effort = %q want %q", effort, EffortHigh)
+	}
+}
+
+// TestFamilyBackendEmptyDefaultsToClaude locks in that a family with no
+// declared backend defaults to BackendClaude, and that direct_oauth
+// rewrites that default to BackendAnthropic at registry construction.
+func TestFamilyBackendEmptyDefaultsToClaude(t *testing.T) {
+	cfg := baseConfig()
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, _, err := r.Resolve("clyde-haiku-4.5-medium", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Backend != BackendClaude {
+		t.Fatalf("backend = %q want %q (empty family backend defaults to claude)", m.Backend, BackendClaude)
+	}
+
+	oauthCfg := baseConfig()
+	oauthCfg.DirectOAuth = true
+	oauthCfg.Anthropic.OAuth = config.AdapterOAuth{
+		MessagesURL:      "https://example.invalid/v1/messages",
+		AnthropicBeta:    "beta",
+		AnthropicVersion: "2023-06-01",
+	}
+	or, err := NewRegistry(oauthCfg)
+	if err != nil {
+		t.Fatalf("NewRegistry direct_oauth: %v", err)
+	}
+	om, _, err := or.Resolve("clyde-haiku-4.5-medium", "")
+	if err != nil {
+		t.Fatalf("Resolve direct_oauth: %v", err)
+	}
+	if om.Backend != BackendAnthropic {
+		t.Fatalf("backend = %q want %q (claude family rewritten under direct_oauth)", om.Backend, BackendAnthropic)
 	}
 }

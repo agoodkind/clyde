@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -158,7 +159,7 @@ type EventRenderer struct {
 	modelAlias            string
 	reqID                 string
 	backend               string
-	ctx                   context.Context
+	contextFunc           func() context.Context
 	log                   *slog.Logger
 	suppressed            map[EventKind]*deltaSummary
 	seenRole              bool
@@ -210,7 +211,7 @@ type EventRenderer struct {
 	upstreamResponseID string
 }
 
-// NewEventRenderer constructs a renderer with a background context.
+// NewEventRenderer constructs a renderer with a detached diagnostic context.
 func NewEventRenderer(reqID, modelAlias, backend string, log *slog.Logger) *EventRenderer {
 	return NewEventRendererWithContext(context.Background(), reqID, modelAlias, backend, log)
 }
@@ -221,16 +222,13 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 	if log == nil {
 		log = slog.Default()
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	log = slogger.WithConcern(log, slogger.ConcernAdapterChatRender)
 	return &EventRenderer{
-		createdUnix:               renderClock.Now().Unix(),
+		createdUnix:               clock.Now().Unix(),
 		modelAlias:                modelAlias,
 		reqID:                     reqID,
 		backend:                   backend,
-		ctx:                       ctx,
+		contextFunc:               func() context.Context { return ctx },
 		log:                       log,
 		suppressed:                nil,
 		seenRole:                  false,
@@ -281,10 +279,7 @@ func (r *EventRenderer) SetContext(ctx context.Context) {
 	if r == nil {
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	r.ctx = ctx
+	r.contextFunc = func() context.Context { return ctx }
 }
 
 // HandleEvent renders one normalized event into zero or more stream chunks.
@@ -442,7 +437,7 @@ func (r *EventRenderer) renderText(text string) *adapteropenai.StreamChunk {
 	if strings.TrimSpace(text) == "" && text == "" {
 		return nil
 	}
-	delta := adapteropenai.StreamDelta{Content: text}
+	delta := adapteropenai.StreamDelta{Content: text, Role: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
@@ -455,7 +450,7 @@ func (r *EventRenderer) renderRefusal(text string) *adapteropenai.StreamChunk {
 	if strings.TrimSpace(text) == "" && text == "" {
 		return nil
 	}
-	delta := adapteropenai.StreamDelta{Refusal: text}
+	delta := adapteropenai.StreamDelta{Refusal: text, Role: "", Content: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
@@ -468,7 +463,7 @@ func (r *EventRenderer) renderToolCalls(toolCalls []adapteropenai.ToolCall) *ada
 	if len(toolCalls) == 0 {
 		return nil
 	}
-	delta := adapteropenai.StreamDelta{ToolCalls: toolCalls}
+	delta := adapteropenai.StreamDelta{ToolCalls: toolCalls, Role: "", Content: "", Reasoning: "", ReasoningContent: "", Refusal: ""}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
@@ -483,6 +478,6 @@ func (r *EventRenderer) baseChunk(delta adapteropenai.StreamDelta) adapteropenai
 		Object:  "chat.completion.chunk",
 		Created: r.createdUnix,
 		Model:   r.modelAlias,
-		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: delta}},
+		Choices: []adapteropenai.StreamChoice{{Index: 0, Delta: delta, Logprobs: nil, FinishReason: nil}}, Usage: nil, SystemFingerprint: "",
 	}
 }

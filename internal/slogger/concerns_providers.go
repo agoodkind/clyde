@@ -1,64 +1,39 @@
 package slogger
 
-// Provider concern constants (Claude, Codex, MITM).
+// Provider concern constants. The set covers live providers code
+// only. Subsystems whose code was deleted in the raw-transcript plus
+// adapter refactor (Claude session lifecycle, discovery, settings,
+// transcript, remote-control, cleanup; Codex session lifecycle,
+// discovery, transcript, cleanup) no longer have constants here;
+// removing them keeps the registry honest about which JSONL files
+// can actually receive records.
 const (
-	ConcernProviderClaudeLifecycle     = "providers.claude.lifecycle"
-	ConcernProviderClaudeDiscovery     = "providers.claude.discovery"
-	ConcernProviderClaudeSettings      = "providers.claude.settings"
-	ConcernProviderClaudeTranscript    = "providers.claude.transcript"
-	ConcernProviderClaudeRemoteControl = "providers.claude.remote-control"
-	ConcernProviderClaudeCleanup       = "providers.claude.cleanup"
-	ConcernProviderClaudeWire          = "providers.claude.wire"
-	ConcernProviderCodexLifecycle      = "providers.codex.lifecycle"
-	ConcernProviderCodexDiscovery      = "providers.codex.discovery"
-	ConcernProviderCodexTranscript     = "providers.codex.transcript"
-	ConcernProviderCodexCleanup        = "providers.codex.cleanup"
-	ConcernProviderCodexWire           = "providers.codex.wire"
-	ConcernProviderMITMLifecycle       = "providers.mitm.lifecycle"
-	ConcernProviderMITMWire            = "providers.mitm.wire"
-	ConcernProviderMITMErrors          = "providers.mitm.errors"
+	// ConcernProviderClaudeOAuth covers slog records from the
+	// surviving claude/oauthcredentials reader: macOS keychain
+	// lookups and OAuth blob parse failures.
+	ConcernProviderClaudeOAuth = "providers.claude.oauth"
+	// ConcernProviderCodexStore covers slog records from the
+	// surviving codex/store reader: rollout path resolution,
+	// scanner walk, session-index open, and history-read failures.
+	ConcernProviderCodexStore = "providers.codex.store"
+	// ConcernProviderMITMLifecycle covers MITM proxy startup and
+	// shutdown events.
+	ConcernProviderMITMLifecycle = "providers.mitm.lifecycle"
+	// ConcernProviderMITMWire covers per-frame and per-tunnel
+	// wire-capture events (mitm.connect.tunnel spans,
+	// mitm.capture.*, mitm.ws.*, mitm.baseline.*).
+	ConcernProviderMITMWire = "providers.mitm.wire"
+	// ConcernProviderMITMErrors covers MITM upstream and CONNECT
+	// failures.
+	ConcernProviderMITMErrors = "providers.mitm.errors"
 )
 
 func init() {
 	registerConcernPaths(map[string]string{
-		ConcernProviderClaudeLifecycle:     "providers/claude/lifecycle.jsonl",
-		ConcernProviderClaudeDiscovery:     "providers/claude/discovery.jsonl",
-		ConcernProviderClaudeSettings:      "providers/claude/settings.jsonl",
-		ConcernProviderClaudeTranscript:    "providers/claude/transcript.jsonl",
-		ConcernProviderClaudeRemoteControl: "providers/claude/remote-control.jsonl",
-		ConcernProviderClaudeCleanup:       "providers/claude/cleanup.jsonl",
-		ConcernProviderClaudeWire:          "providers/claude/wire.jsonl",
-		ConcernProviderCodexLifecycle:      "providers/codex/lifecycle.jsonl",
-		ConcernProviderCodexDiscovery:      "providers/codex/discovery.jsonl",
-		ConcernProviderCodexTranscript:     "providers/codex/transcript.jsonl",
-		ConcernProviderCodexCleanup:        "providers/codex/cleanup.jsonl",
-		ConcernProviderCodexWire:           "providers/codex/wire.jsonl",
-		ConcernProviderMITMLifecycle:       "providers/mitm/lifecycle.jsonl",
-		ConcernProviderMITMWire:            "providers/mitm/wire.jsonl",
-		ConcernProviderMITMErrors:          "providers/mitm/errors.jsonl",
-	})
-
-	registerEventConcernRules([]eventConcernRule{
-		{"claude.lifecycle.", ConcernProviderClaudeLifecycle},
-		{"claude.discovery.", ConcernProviderClaudeDiscovery},
-		{"claude.settings.", ConcernProviderClaudeSettings},
-		{"claude.transcript.", ConcernProviderClaudeTranscript},
-		{"claude.remote", ConcernProviderClaudeRemoteControl},
-		{"claude.cleanup.", ConcernProviderClaudeCleanup},
-		{"claude.", ConcernProviderClaudeLifecycle},
-		{"codex.lifecycle.", ConcernProviderCodexLifecycle},
-		{"codex.discovery.", ConcernProviderCodexDiscovery},
-		{"codex.transcript.", ConcernProviderCodexTranscript},
-		{"codex.cleanup.", ConcernProviderCodexCleanup},
-		{"codex.", ConcernProviderCodexLifecycle},
-		{"mitm.proxy.started", ConcernProviderMITMLifecycle},
-		{"mitm.launch.", ConcernProviderMITMLifecycle},
-		{"mitm.connect.tunnel_", ConcernProviderMITMWire},
-		{"mitm.capture.", ConcernProviderMITMWire},
-		{"mitm.ws.", ConcernProviderMITMWire},
-		{"mitm.baseline.", ConcernProviderMITMWire},
-		{"mitm.proxy.upstream_failed", ConcernProviderMITMErrors},
-		{"mitm.connect.", ConcernProviderMITMErrors},
-		{"mitm.", ConcernProviderMITMWire},
+		ConcernProviderClaudeOAuth:   "providers/claude/oauth.jsonl",
+		ConcernProviderCodexStore:    "providers/codex/store.jsonl",
+		ConcernProviderMITMLifecycle: "providers/mitm/lifecycle.jsonl",
+		ConcernProviderMITMWire:      "providers/mitm/wire.jsonl",
+		ConcernProviderMITMErrors:    "providers/mitm/errors.jsonl",
 	})
 }

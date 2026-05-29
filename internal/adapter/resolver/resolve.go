@@ -2,8 +2,12 @@ package resolver
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/gklog/correlation"
 )
 
 // ModelRegistry is the narrow interface the resolver consumes from the
@@ -20,7 +24,7 @@ type ModelRegistry interface {
 
 // ResolvedModelView is the resolver's view of the existing model
 // registry's per-alias output. It is a typed surface, not a pointer to
-// the existing model.ResolvedModel, so the resolver can be exercised
+// the existing model.ResolvedAlias, so the resolver can be exercised
 // with fakes that do not depend on the live registry.
 type ResolvedModelView struct {
 	Provider        ProviderID
@@ -46,6 +50,24 @@ type ResolvedModelView struct {
 	// non-empty so they only send the effort field to families that
 	// accept it. Empty means leave output_config unset.
 	Efforts []string
+	// Alias is the public alias the client sent, before normalization.
+	Alias string
+	// SupportsTools mirrors the family's declared tool capability.
+	SupportsTools bool
+	// SupportsVision mirrors the family's declared vision capability.
+	SupportsVision bool
+	// ObservedContext is the provider-specific context window the
+	// registry resolved for capability reports. Zero means use Context.
+	ObservedContext int
+	// ThinkingModes enumerates the allowed thinking values the family
+	// declared. Distinct from Thinking, which is the single bound mode.
+	ThinkingModes []string
+	// PassthroughOverrideName names an entry in the adapter's passthrough
+	// override table. Set only for a named passthrough_override alias.
+	PassthroughOverrideName string
+	// OpenAICompatPassthrough carries the inline configured upstream the
+	// registry resolved for an unnamed passthrough_override alias.
+	OpenAICompatPassthrough config.AdapterOpenAICompatPassthrough
 }
 
 // ErrUnresolvedProvider signals that the model alias resolved to a
@@ -67,7 +89,8 @@ func Resolve(req adaptercursor.Request, registry ModelRegistry) (ResolvedRequest
 	}
 	view, err := registry.Resolve(req.OpenAI.Model, req.OpenAI.ReasoningEffort)
 	if err != nil {
-		return ResolvedRequest{}, err
+		slog.Warn("adapter.resolver.resolve_failed", "concern", "adapter.models.resolve", "model", req.OpenAI.Model, "err", err)
+		return ResolvedRequest{}, fmt.Errorf("resolve request model %s: %w", req.OpenAI.Model, err)
 	}
 	if !view.Provider.Valid() {
 		return ResolvedRequest{}, ErrUnresolvedProvider
@@ -82,10 +105,21 @@ func Resolve(req adaptercursor.Request, registry ModelRegistry) (ResolvedRequest
 			OutputTokens: view.MaxOutputTokens,
 			TotalTokens:  view.Context,
 		},
-		Thinking:     view.Thinking,
-		Instructions: view.Instructions,
-		Efforts:      view.Efforts,
-		Cursor:       req,
-		OpenAI:       req.OpenAI,
+		Thinking:                view.Thinking,
+		Instructions:            view.Instructions,
+		Efforts:                 view.Efforts,
+		Alias:                   view.Alias,
+		SupportsTools:           view.SupportsTools,
+		SupportsVision:          view.SupportsVision,
+		ObservedContext:         view.ObservedContext,
+		ThinkingModes:           view.ThinkingModes,
+		MaxOutputTokens:         view.MaxOutputTokens,
+		PassthroughOverrideName: view.PassthroughOverrideName,
+		OpenAICompatPassthrough: view.OpenAICompatPassthrough,
+		Cursor:                  req,
+		OpenAI:                  req.OpenAI,
+		Verbosity:               "",
+		RequestID:               "",
+		Correlation:             correlation.Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	}, nil
 }

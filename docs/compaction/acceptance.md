@@ -1,7 +1,0 @@
-# Compaction acceptance
-
-A compaction change is acceptable when the smoke runbook passes every step against a real session. The runbook at [docs/compaction-smoke-runbook.md](../compaction-smoke-runbook.md) is the executable procedure, and its Appendix B is the canonical pass-and-fail matrix. This page exists so the compaction hub has an explicit acceptance entry point; it does not duplicate the matrix, because the runbook is the source of truth and a copied matrix here would drift the moment the runbook is updated.
-
-A reviewer evaluating a compaction change runs the runbook against the agreed smoke session, follows every step in order without skipping, and compares each step's observed behavior against the matrix row at [Appendix B](../compaction-smoke-runbook.md#appendix-b-pass-and-fail-matrix). The change is acceptable when every matrix row reads as a pass under the modified code. Any matrix row that flips from pass to fail is a regression and blocks the merge until the change either restores the prior behavior or the matrix row is updated in the same commit with a stated rationale.
-
-The smoke runbook also enforces the methodology requirements documented in [canary-system.md](canary-system.md), the spawn-flag rule, and the `/context` capture requirement. A run that skipped any of those requirements is not a valid acceptance run, even if its matrix rows happen to read as passes.

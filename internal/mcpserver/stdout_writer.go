@@ -6,7 +6,7 @@ package mcpserver
 // dedicated goroutine and toolCallWorker on a worker pool. Both write
 // JSON-RPC frames to the same [os.Stdout]. Some upstream paths
 // (RequestSampling, ListRoots, RequestElicitation) write directly to the
-// session writer without going through writeResponse, so they bypass the
+// stdio writer without going through writeResponse, so they bypass the
 // upstream writeMu. Two concurrent writes can interleave at the byte level,
 // and the receiver sees torn JSON. Wrapping stdout in a writer that locks on
 // every Write call serializes every byte regardless of the upstream code

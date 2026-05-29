@@ -8,7 +8,7 @@ import (
 )
 
 func TestCapabilityReportForModelUsesObservedHTTPContextForCodexResponses(t *testing.T) {
-	report := CapabilityReportForModel(adaptermodel.ResolvedModel{
+	report := CapabilityReportForModel(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-test-codex-1m-high",
 		Backend:         adaptermodel.BackendCodex,
 		ClaudeModel:     "configured-codex-model",
@@ -28,7 +28,7 @@ func TestCapabilityReportForModelUsesObservedHTTPContextForCodexResponses(t *tes
 }
 
 func TestCapabilityReportForModelPreservesAdvertisedContextWhenWebsocketEnabled(t *testing.T) {
-	report := CapabilityReportForModel(adaptermodel.ResolvedModel{
+	report := CapabilityReportForModel(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-test-codex-1m-high",
 		Backend:         adaptermodel.BackendCodex,
 		ClaudeModel:     "configured-codex-model",

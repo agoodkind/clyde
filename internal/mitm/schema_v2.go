@@ -19,6 +19,7 @@ type SnapshotV2 struct {
 	Flavors  []FlavorShape `toml:"flavors" json:"flavors"`
 }
 
+// V2Upstream is part of Clyde's typed adapter surface.
 type V2Upstream struct {
 	Name        string `toml:"name" json:"name"`
 	Version     string `toml:"version" json:"version"`
@@ -37,6 +38,7 @@ type FlavorShape struct {
 	Body        V2Body      `toml:"body" json:"body"`
 }
 
+// V2Signature is part of Clyde's typed adapter surface.
 type V2Signature struct {
 	UserAgent       string   `toml:"user_agent" json:"user_agent"`
 	BetaFingerprint string   `toml:"beta_fingerprint" json:"beta_fingerprint"`
@@ -48,9 +50,12 @@ type V2Signature struct {
 type V2HeaderClassification string
 
 const (
+	// V2HeaderClassConstant is part of Clyde's typed adapter surface.
 	V2HeaderClassConstant V2HeaderClassification = "constant" // single value across all records
-	V2HeaderClassEnum     V2HeaderClassification = "enum"     // small finite set of observed values
-	V2HeaderClassFree     V2HeaderClassification = "free"     // high cardinality, value patterned out
+	// V2HeaderClassEnum is part of Clyde's typed adapter surface.
+	V2HeaderClassEnum V2HeaderClassification = "enum" // small finite set of observed values
+	// V2HeaderClassFree is part of Clyde's typed adapter surface.
+	V2HeaderClassFree V2HeaderClassification = "free" // high cardinality, value patterned out
 )
 
 // V2HeaderPresence labels whether a header appeared on every record
@@ -58,10 +63,13 @@ const (
 type V2HeaderPresence string
 
 const (
+	// V2HeaderPresenceRequired is part of Clyde's typed adapter surface.
 	V2HeaderPresenceRequired V2HeaderPresence = "required"
+	// V2HeaderPresenceOptional is part of Clyde's typed adapter surface.
 	V2HeaderPresenceOptional V2HeaderPresence = "optional"
 )
 
+// V2Header is part of Clyde's typed adapter surface.
 type V2Header struct {
 	Name           string                 `toml:"name" json:"name"`
 	Classification V2HeaderClassification `toml:"classification" json:"classification"`
@@ -71,6 +79,7 @@ type V2Header struct {
 	OccurrenceRate float64                `toml:"occurrence_rate" json:"occurrence_rate"`
 }
 
+// V2Body is part of Clyde's typed adapter surface.
 type V2Body struct {
 	BodyType string    `toml:"body_type" json:"body_type"`
 	Fields   []V2Field `toml:"fields" json:"fields"`
@@ -81,15 +90,23 @@ type V2Body struct {
 type V2FieldKind string
 
 const (
-	V2FieldKindString  V2FieldKind = "string"
-	V2FieldKindNumber  V2FieldKind = "number"
-	V2FieldKindBool    V2FieldKind = "bool"
-	V2FieldKindObject  V2FieldKind = "object"
-	V2FieldKindArray   V2FieldKind = "array"
-	V2FieldKindNull    V2FieldKind = "null"
+	// V2FieldKindString is part of Clyde's typed adapter surface.
+	V2FieldKindString V2FieldKind = "string"
+	// V2FieldKindNumber is part of Clyde's typed adapter surface.
+	V2FieldKindNumber V2FieldKind = "number"
+	// V2FieldKindBool is part of Clyde's typed adapter surface.
+	V2FieldKindBool V2FieldKind = "bool"
+	// V2FieldKindObject is part of Clyde's typed adapter surface.
+	V2FieldKindObject V2FieldKind = "object"
+	// V2FieldKindArray is part of Clyde's typed adapter surface.
+	V2FieldKindArray V2FieldKind = "array"
+	// V2FieldKindNull is part of Clyde's typed adapter surface.
+	V2FieldKindNull V2FieldKind = "null"
+	// V2FieldKindUnknown is part of Clyde's typed adapter surface.
 	V2FieldKindUnknown V2FieldKind = "unknown"
 )
 
+// V2Field is part of Clyde's typed adapter surface.
 type V2Field struct {
 	Name           string           `toml:"name" json:"name"`
 	Kind           V2FieldKind      `toml:"kind" json:"kind"`

@@ -40,7 +40,7 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 			if f != nil && f.Config != nil {
 				loaded, err := f.Config()
 				if err != nil {
-					slog.WarnContext(cmd.Context(), "cli.logs.inventory.config_failed", "component", "cli", "err", err)
+					slog.WarnContext(cmd.Context(), "cli.logs.inventory.config_failed", "concern", "cli.logs", "component", "cli", "err", err)
 					return fmt.Errorf("load config for log inventory: %w", err)
 				}
 				if loaded != nil {
@@ -62,7 +62,7 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 				MITM:             loadedConfig.MITM,
 			})
 			if err != nil {
-				slog.WarnContext(cmd.Context(), "cli.logs.inventory.failed", "component", "cli", "state_root", root, "err", err)
+				slog.WarnContext(cmd.Context(), "cli.logs.inventory.failed", "concern", "cli.logs", "component", "cli", "state_root", root, "err", err)
 				return fmt.Errorf("build log inventory: %w", err)
 			}
 			enc, err := output.From(cmd, f.IOStreams.Out)

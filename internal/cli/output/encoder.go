@@ -41,8 +41,7 @@ func (e *Encoder) Emit(p Payload, textFn func(io.Writer) error) error {
 	switch e.Format {
 	case FormatJSON:
 		if err := json.NewEncoder(e.W).Encode(p); err != nil {
-			slog.Warn("output.encoder.encode_failed",
-				"component", "cli",
+			slog.Warn("output.encoder.encode_failed", "concern", "cli.output", "component", "cli",
 				"subcomponent", "output",
 				"err", err,
 			)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -18,16 +19,25 @@ type ThreadSource struct {
 	AgentRole      string
 }
 
+// ThreadSourceKind is part of Clyde's typed adapter surface.
 type ThreadSourceKind string
 
 const (
-	ThreadSourceUnknown     ThreadSourceKind = "unknown"
-	ThreadSourceCLI         ThreadSourceKind = "cli"
-	ThreadSourceVSCode      ThreadSourceKind = "vscode"
-	ThreadSourceExec        ThreadSourceKind = "exec"
-	ThreadSourceMCP         ThreadSourceKind = "mcp"
-	ThreadSourceCustom      ThreadSourceKind = "custom"
-	ThreadSourceSubagent    ThreadSourceKind = "subagent"
+	// ThreadSourceUnknown is part of Clyde's typed adapter surface.
+	ThreadSourceUnknown ThreadSourceKind = "unknown"
+	// ThreadSourceCLI is part of Clyde's typed adapter surface.
+	ThreadSourceCLI ThreadSourceKind = "cli"
+	// ThreadSourceVSCode is part of Clyde's typed adapter surface.
+	ThreadSourceVSCode ThreadSourceKind = "vscode"
+	// ThreadSourceExec is part of Clyde's typed adapter surface.
+	ThreadSourceExec ThreadSourceKind = "exec"
+	// ThreadSourceMCP is part of Clyde's typed adapter surface.
+	ThreadSourceMCP ThreadSourceKind = "mcp"
+	// ThreadSourceCustom is part of Clyde's typed adapter surface.
+	ThreadSourceCustom ThreadSourceKind = "custom"
+	// ThreadSourceSubagent is part of Clyde's typed adapter surface.
+	ThreadSourceSubagent ThreadSourceKind = "subagent"
+	// ThreadSourceSubagentOld is part of Clyde's typed adapter surface.
 	ThreadSourceSubagentOld ThreadSourceKind = "subAgent"
 )
 
@@ -66,13 +76,22 @@ type HistoryMessage struct {
 func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (ThreadSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ThreadSummary{}, err
+		slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
+		return ThreadSummary{}, fmt.Errorf("open codex rollout %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 
 	summary := ThreadSummary{
 		RolloutPath: path,
-		IsArchived:  archived,
+		IsArchived:  archived, ID: "", ForkedFromID: "", Preview: "", Name: "", ModelProvider: "", CreatedAt: time.
+				Time{},
+
+		UpdatedAt: time.
+			Time{},
+
+		CWD: "", LatestCWD: "", CLIVersion: "", Originator: "", Source: ThreadSource{Kind: "", ParentThreadID: "", AgentNickname: "", AgentRole: ""},
+
+		AgentNickname: "", AgentRole: "", IsSubagent: false, Messages: nil,
 	}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -89,29 +108,29 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 		if !lineTime.IsZero() {
 			summary.UpdatedAt = lineTime
 		}
-		switch envelope.Type {
-		case "session_meta":
+		switch historyEnvelopeType(envelope.Type) {
+		case historyEnvelopeSessionMeta:
 			var payload sessionMetaPayload
 			if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-				return ThreadSummary{}, err
+				return ThreadSummary{}, fmt.Errorf("unmarshal codex session metadata %s: %w", path, err)
 			}
 			applySessionMeta(&summary, payload, lineTime)
-		case "response_item":
+		case historyEnvelopeResponseItem:
 			msg, ok := responseItemMessage(envelope.Payload, lineTime)
 			if ok {
 				applyMessage(&summary, msg, includeHistory)
 			}
-		case "event_msg":
+		case historyEnvelopeEventMsg:
 			msg, ok := eventMessage(envelope.Payload, lineTime)
 			if ok {
 				applyMessage(&summary, msg, includeHistory)
 			}
-		case "turn_context":
+		case historyEnvelopeTurnContext:
 			applyTurnContext(&summary, envelope.Payload)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return ThreadSummary{}, err
+		return ThreadSummary{}, fmt.Errorf("scan codex rollout %s: %w", path, err)
 	}
 	if summary.ID == "" {
 		return ThreadSummary{}, fmt.Errorf("codex rollout %s missing session_meta id", path)
@@ -156,7 +175,7 @@ func (s *sourceUnion) UnmarshalJSON(data []byte) error {
 	}
 	var object sourceObject
 	if err := json.Unmarshal(data, &object); err != nil {
-		return err
+		return fmt.Errorf("unmarshal codex source object: %w", err)
 	}
 	switch {
 	case object.Subagent.ThreadSpawn.ParentThreadID != "":
@@ -270,14 +289,29 @@ func applyMessage(summary *ThreadSummary, msg HistoryMessage, includeHistory boo
 func responseItemMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
 	var payload responsePayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return HistoryMessage{}, false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	if payload.Type != "message" {
-		return HistoryMessage{}, false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	text := strings.TrimSpace(contentText(payload.Content))
 	if text == "" {
-		return HistoryMessage{}, false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	return HistoryMessage{
 		Role:      payload.Role,
@@ -290,20 +324,35 @@ func responseItemMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessa
 func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
 	var payload eventPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return HistoryMessage{}, false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	var role string
-	switch payload.Type {
-	case "user_message":
+	switch eventMessageType(payload.Type) {
+	case eventMessageTypeUser:
 		role = "user"
-	case "agent_message":
+	case eventMessageTypeAgent:
 		role = "assistant"
 	default:
-		return HistoryMessage{}, false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	text := strings.TrimSpace(payload.Message)
 	if text == "" {
-		return HistoryMessage{}, false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	return HistoryMessage{
 		Role:      role,
@@ -316,8 +365,8 @@ func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, boo
 func contentText(parts []contentPart) string {
 	var b strings.Builder
 	for _, part := range parts {
-		switch part.Type {
-		case "input_text", "output_text":
+		switch contentPartTypeKey(part.Type) {
+		case contentPartTypeKeyInputText, contentPartTypeKeyOutputText:
 			if part.Text == "" {
 				continue
 			}
@@ -344,18 +393,18 @@ func parseCodexTime(value string) time.Time {
 }
 
 func normalizeThreadSourceKind(value string) ThreadSourceKind {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "cli":
+	switch threadSourceAlias(strings.ToLower(strings.TrimSpace(value))) {
+	case threadSourceAliasCLI:
 		return ThreadSourceCLI
-	case "vscode", "vs_code":
+	case threadSourceAliasVSCode, threadSourceAliasVSCodeSnake:
 		return ThreadSourceVSCode
-	case "exec":
+	case threadSourceAliasExec:
 		return ThreadSourceExec
-	case "mcp", "appserver", "app_server":
+	case threadSourceAliasMCP, threadSourceAliasAppserver, threadSourceAliasAppServerSnake:
 		return ThreadSourceMCP
-	case "custom":
+	case threadSourceAliasCustom:
 		return ThreadSourceCustom
-	case "subagent", "sub_agent", "subagent_old", "subagent-old":
+	case threadSourceAliasSubagent, threadSourceAliasSubAgentSnake, threadSourceAliasSubagentOld, threadSourceAliasSubagentOldDash:
 		return ThreadSourceSubagent
 	default:
 		if strings.TrimSpace(value) == "" {
@@ -364,3 +413,51 @@ func normalizeThreadSourceKind(value string) ThreadSourceKind {
 		return ThreadSourceKind(strings.TrimSpace(value))
 	}
 }
+
+// historyEnvelopeType enumerates the top-level type strings codex
+// writes per rollout-line envelope.
+type historyEnvelopeType string
+
+const (
+	historyEnvelopeSessionMeta  historyEnvelopeType = "session_meta"
+	historyEnvelopeResponseItem historyEnvelopeType = "response_item"
+	historyEnvelopeEventMsg     historyEnvelopeType = "event_msg"
+	historyEnvelopeTurnContext  historyEnvelopeType = "turn_context"
+)
+
+// eventMessageType enumerates the event_msg payload types codex uses
+// for user vs agent turns.
+type eventMessageType string
+
+const (
+	eventMessageTypeUser  eventMessageType = "user_message"
+	eventMessageTypeAgent eventMessageType = "agent_message"
+)
+
+// contentPartTypeKey enumerates the message content-part type strings
+// codex's history-line content arrays use for free-form text.
+type contentPartTypeKey string
+
+const (
+	contentPartTypeKeyInputText  contentPartTypeKey = "input_text"
+	contentPartTypeKeyOutputText contentPartTypeKey = "output_text"
+)
+
+// threadSourceAlias enumerates the lowercase aliases the codex history
+// loader maps to canonical ThreadSourceKind values.
+type threadSourceAlias string
+
+const (
+	threadSourceAliasCLI             threadSourceAlias = "cli"
+	threadSourceAliasVSCode          threadSourceAlias = "vscode"
+	threadSourceAliasVSCodeSnake     threadSourceAlias = "vs_code"
+	threadSourceAliasExec            threadSourceAlias = "exec"
+	threadSourceAliasMCP             threadSourceAlias = "mcp"
+	threadSourceAliasAppserver       threadSourceAlias = "appserver"
+	threadSourceAliasAppServerSnake  threadSourceAlias = "app_server"
+	threadSourceAliasCustom          threadSourceAlias = "custom"
+	threadSourceAliasSubagent        threadSourceAlias = "subagent"
+	threadSourceAliasSubAgentSnake   threadSourceAlias = "sub_agent"
+	threadSourceAliasSubagentOld     threadSourceAlias = "subagent_old"
+	threadSourceAliasSubagentOldDash threadSourceAlias = "subagent-old"
+)

@@ -1,17 +1,3 @@
-// Package render owns the single source of truth for synthetic content
-// envelopes that Clyde injects into Cursor's BYOK chat surface.
-//
-// Cursor's custom-OpenAI ingress reliably renders delta.content but does not
-// honor secondary fields like reasoning_content for BYOK streams. To get the
-// same visible affordances as Cursor's first-party providers (collapsible
-// reasoning blocks, transient quota notices) we wrap synthetic UI bodies in
-// HTML-comment marker pairs and emit them as ordinary delta.content. Every
-// surface that emits synthetic content uses [FormatSyntheticContent], and
-// every backend that needs to consume these envelopes before reusing the
-// transcript upstream uses [ExtractSyntheticParts] and decides per kind
-// whether to drop, materialize as a native upstream block, or keep as
-// plain text. Adding a new synthetic block is a single entry in
-// [syntheticContentSpecs].
 package render
 
 import (

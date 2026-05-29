@@ -1,7 +1,3 @@
-// Package codex contains Codex transport and runtime integration.
-// The package keeps a dedicated logging surface so payload corruption on the
-// Codex path is observable end-to-end. The dedicated JSONL sidecar lives at
-// $XDG_STATE_HOME/clyde/codex.jsonl and uses locked volume-based rotation.
 package codex
 
 import (
@@ -31,15 +27,9 @@ type FileLogRotationConfig struct {
 	Compress   *bool
 }
 
-const (
-	defaultCodexLogRotationMaxSizeMB  = 64
-	defaultCodexLogRotationMaxBackups = 192
-	defaultCodexLogRotationMaxAgeDays = 14
-)
-
-// CodexLogPath returns the JSONL file the codex package double-writes
+// LogPath returns the JSONL file the codex package double-writes
 // its wire events to. Honors $CLYDE_CODEX_LOG_PATH for tests.
-func CodexLogPath() string {
+func LogPath() string {
 	if p := os.Getenv("CLYDE_CODEX_LOG_PATH"); p != "" {
 		return p
 	}
@@ -52,9 +42,9 @@ var (
 	codexFileLogger     *slog.Logger
 	codexFileCloser     io.Closer
 	codexFileRotation   = FileLogRotationConfig{
-		MaxSizeMB:  defaultCodexLogRotationMaxSizeMB,
-		MaxBackups: defaultCodexLogRotationMaxBackups,
-		MaxAgeDays: defaultCodexLogRotationMaxAgeDays,
+		MaxSizeMB:  config.SidecarRotationMaxSizeMB,
+		MaxBackups: config.SidecarRotationMaxBackups,
+		MaxAgeDays: config.SidecarRotationMaxAgeDays,
 		Compress:   new(true),
 	}
 )
@@ -72,13 +62,13 @@ func ConfigureCodexFileLogger(rotation FileLogRotationConfig) {
 }
 
 // dedicatedCodexLogger returns a JSON slog handler writing to
-// CodexLogPath(). Best effort: a missing log dir never blocks traffic. The
+// LogPath(). Best effort: a missing log dir never blocks traffic. The
 // handler is bound to the path and rotation config observed at first call.
 func dedicatedCodexLogger() *slog.Logger {
 	codexFileLoggerMu.Lock()
 	defer codexFileLoggerMu.Unlock()
 	codexFileLoggerOnce.Do(func() {
-		path := CodexLogPath()
+		path := LogPath()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return
 		}
@@ -91,20 +81,22 @@ func dedicatedCodexLogger() *slog.Logger {
 	return codexFileLogger
 }
 
+// normalizeCodexLogRotation clamps the sidecar rotation to the shared
+// provider-sidecar defaults via [config.NormalizeSidecarRotation] so the
+// codex and anthropic sidecars cannot drift apart on retention policy.
 func normalizeCodexLogRotation(rotation FileLogRotationConfig) FileLogRotationConfig {
-	if rotation.MaxSizeMB <= 0 {
-		rotation.MaxSizeMB = defaultCodexLogRotationMaxSizeMB
+	normalized := config.NormalizeSidecarRotation(config.SidecarRotation{
+		MaxSizeMB:  rotation.MaxSizeMB,
+		MaxBackups: rotation.MaxBackups,
+		MaxAgeDays: rotation.MaxAgeDays,
+		Compress:   rotation.Compress,
+	})
+	return FileLogRotationConfig{
+		MaxSizeMB:  normalized.MaxSizeMB,
+		MaxBackups: normalized.MaxBackups,
+		MaxAgeDays: normalized.MaxAgeDays,
+		Compress:   normalized.Compress,
 	}
-	if rotation.MaxBackups <= 0 {
-		rotation.MaxBackups = defaultCodexLogRotationMaxBackups
-	}
-	if rotation.MaxAgeDays <= 0 {
-		rotation.MaxAgeDays = defaultCodexLogRotationMaxAgeDays
-	}
-	if rotation.Compress == nil {
-		rotation.Compress = new(true)
-	}
-	return rotation
 }
 
 func (c FileLogRotationConfig) toGKLog() gklog.RotationConfig {
@@ -117,7 +109,7 @@ func (c FileLogRotationConfig) toGKLog() gklog.RotationConfig {
 	}
 }
 
-// logCodexEvent writes the event to both slog.Default() (which the
+// logCodexEvent writes the event to both [slog.Default]() (which the
 // daemon configures to fan out to clyde-daemon.jsonl) and the
 // dedicated codex.jsonl sink. The dedicated file is best effort.
 func logCodexEvent(ctx context.Context, level slog.Level, event string, attrs []slog.Attr) {
@@ -125,12 +117,10 @@ func logCodexEvent(ctx context.Context, level slog.Level, event string, attrs []
 }
 
 func logCodexEventWithConcern(ctx context.Context, level slog.Level, event, concern string, attrs []slog.Attr) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	slogger.WithConcern(slog.Default(), concern).LogAttrs(ctx, level, event, attrs...)
+	enriched := append([]slog.Attr{slog.String("concern", concern)}, attrs...)
+	slog.Default().LogAttrs(ctx, level, event, enriched...)
 	if l := dedicatedCodexLogger(); l != nil {
-		slogger.WithConcern(l, concern).LogAttrs(ctx, level, event, attrs...)
+		l.LogAttrs(ctx, level, event, enriched...)
 	}
 }
 

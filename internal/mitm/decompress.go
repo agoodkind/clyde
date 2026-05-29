@@ -11,6 +11,18 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// mitmContentEncoding enumerates the Content-Encoding values the MITM
+// proxy's capture decoder recognizes.
+type mitmContentEncoding string
+
+const (
+	mitmContentEncodingGzip      mitmContentEncoding = "gzip"
+	mitmContentEncodingXGzip     mitmContentEncoding = "x-gzip"
+	mitmContentEncodingDeflate   mitmContentEncoding = "deflate"
+	mitmContentEncodingZstd      mitmContentEncoding = "zstd"
+	mitmContentEncodingZstandard mitmContentEncoding = "zstandard"
+)
+
 // decodeForCapture transparently decompresses captured response
 // bytes when a Content-Encoding the standard library can handle is
 // present. Forward bytes to the client are unaffected. Returns the
@@ -22,8 +34,8 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 	if enc == "" || enc == "identity" {
 		return raw, false
 	}
-	switch enc {
-	case "gzip", "x-gzip":
+	switch mitmContentEncoding(enc) {
+	case mitmContentEncodingGzip, mitmContentEncodingXGzip:
 		gr, err := gzip.NewReader(bytes.NewReader(raw))
 		if err != nil {
 			return raw, false
@@ -34,7 +46,7 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 			return raw, false
 		}
 		return out, true
-	case "deflate":
+	case mitmContentEncodingDeflate:
 		// Some servers send raw RFC 1951 deflate; others send RFC 1950 zlib.
 		zr, err := zlib.NewReader(bytes.NewReader(raw))
 		if err == nil {
@@ -51,7 +63,7 @@ func decodeForCapture(raw []byte, contentEncoding string) ([]byte, bool) {
 			return raw, false
 		}
 		return out, true
-	case "zstd", "zstandard":
+	case mitmContentEncodingZstd, mitmContentEncodingZstandard:
 		dec, err := zstd.NewReader(bytes.NewReader(raw))
 		if err != nil {
 			return raw, false

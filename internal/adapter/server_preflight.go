@@ -7,7 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/slogger"
+)
+
+// logprobsPolicy enumerates the per-backend handling lever the adapter
+// applies when a request asks for logprobs.
+type logprobsPolicy string
+
+const (
+	logprobsPolicyReject logprobsPolicy = "reject"
+	logprobsPolicyDrop   logprobsPolicy = "drop"
 )
 
 func toolChoiceRequestsTools(raw json.RawMessage) bool {
@@ -86,8 +96,7 @@ func (s *Server) validateAudio(ctx context.Context, req *ChatRequest, reqID stri
 			if p.Type != "input_audio" {
 				continue
 			}
-			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.audio_rejected",
-				slog.String("request_id", reqID),
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.audio_rejected", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.Int("message_index", msgIdx),
 			)
@@ -109,16 +118,15 @@ func requestHasImageContent(req *ChatRequest) bool {
 	return false
 }
 
-func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
-	if model.Backend == BackendPassthroughOverride {
+func (s *Server) validateVision(ctx context.Context, req *ChatRequest, resolved *adapterresolver.ResolvedRequest, reqID string) *adapterError {
+	if resolved.Provider == BackendPassthroughOverride {
 		return nil
 	}
 	if !requestHasImageContent(req) {
 		return nil
 	}
-	if model.Backend == BackendAnthropic && !model.SupportsVision {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.vision_rejected",
-			slog.String("request_id", reqID),
+	if resolved.Provider == BackendAnthropic && !resolved.SupportsVision {
+		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.vision_rejected", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 			slog.String("model", req.Model),
 		)
 		return errVisionAnthropicUnsupported(req.Model)
@@ -129,8 +137,7 @@ func (s *Server) validateVision(ctx context.Context, req *ChatRequest, model Res
 func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID string) *adapterError {
 	for tIdx, t := range req.Tools {
 		if t.Function.Name == "" {
-			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name",
-				slog.String("request_id", reqID),
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.Int("tool_index", tIdx),
 				slog.String("reason", "empty function.name"),
@@ -140,8 +147,7 @@ func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID stri
 	}
 	for fIdx, f := range req.Functions {
 		if f.Name == "" {
-			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name",
-				slog.String("request_id", reqID),
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_invalid_name", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.Int("function_index", fIdx),
 				slog.String("reason", "empty functions[].name"),
@@ -152,14 +158,13 @@ func (s *Server) validateTools(ctx context.Context, req *ChatRequest, reqID stri
 	return nil
 }
 
-func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
-	if model.Backend != BackendAnthropic {
+func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, resolved *adapterresolver.ResolvedRequest, reqID string) *adapterError {
+	if resolved.Provider != BackendAnthropic {
 		return nil
 	}
 	wantsTools := len(req.Tools) > 0 || len(req.Functions) > 0 || toolChoiceRequestsTools(req.ToolChoice)
-	if wantsTools && !model.SupportsTools {
-		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_rejected",
-			slog.String("request_id", reqID),
+	if wantsTools && !resolved.SupportsTools {
+		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_rejected", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 			slog.String("model", req.Model),
 		)
 		return errToolsNotEnabledForAlias()
@@ -167,43 +172,45 @@ func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, model
 	return nil
 }
 
-func (s *Server) validateLogprobs(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
+func (s *Server) validateLogprobs(ctx context.Context, req *ChatRequest, resolved *adapterresolver.ResolvedRequest, reqID string) *adapterError {
 	wantsLogprobs := (req.Logprobs != nil && *req.Logprobs) || req.TopLogprobs != nil
 	if !wantsLogprobs {
 		return nil
 	}
-	switch model.Backend {
-	case BackendAnthropic:
-		switch s.logprobs.Anthropic {
-		case "reject":
-			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.logprobs_rejected",
-				slog.String("request_id", reqID),
+	switch resolved.Provider {
+	case BackendClaude, BackendAnthropic:
+		switch logprobsPolicy(s.logprobs.Anthropic) {
+		case logprobsPolicyReject:
+			slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.logprobs_rejected", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 				slog.String("model", req.Model),
 				slog.String("backend", "anthropic"),
 			)
 			return errLogprobsUnsupported()
-		case "drop":
+		case logprobsPolicyDrop:
 			req.Logprobs = nil
 			req.TopLogprobs = nil
 		}
+	case BackendCodex, BackendPassthroughOverride:
+		// Logprobs policy is anthropic-specific; non-anthropic backends do not
+		// gate logprobs at this preflight stage.
 	}
 	return nil
 }
 
 // preflightChat enforces adapter capability gates after alias resolution.
 // It may mutate req when logprobs policy is "drop".
-func (s *Server) preflightChat(ctx context.Context, req *ChatRequest, model ResolvedModel, reqID string) *adapterError {
+func (s *Server) preflightChat(ctx context.Context, req *ChatRequest, resolved *adapterresolver.ResolvedRequest, reqID string) *adapterError {
 	if err := s.validateAudio(ctx, req, reqID); err != nil {
 		return err
 	}
-	if err := s.validateVision(ctx, req, model, reqID); err != nil {
+	if err := s.validateVision(ctx, req, resolved, reqID); err != nil {
 		return err
 	}
 	if err := s.validateTools(ctx, req, reqID); err != nil {
 		return err
 	}
-	if err := s.validateToolChoice(ctx, req, model, reqID); err != nil {
+	if err := s.validateToolChoice(ctx, req, resolved, reqID); err != nil {
 		return err
 	}
-	return s.validateLogprobs(ctx, req, model, reqID)
+	return s.validateLogprobs(ctx, req, resolved, reqID)
 }

@@ -30,7 +30,7 @@ func ReadCodexHistory(path string) (CodexHistory, error) {
 		slog.Warn("transcript.codex.read_failed",
 			"component", "codex",
 			"subcomponent", "transcript",
-			"concern", slogger.ConcernProviderCodexLifecycle,
+			"concern", slogger.ConcernProviderCodexStore,
 			"path", path,
 			"err", err,
 		)
@@ -68,15 +68,6 @@ func (h CodexHistory) ConversationTurns(opts ShapeOptions) []ConversationTurn {
 		turn.Timestamp = msg.Timestamp
 		turn.Text = text
 		turns = append(turns, turn)
-	}
-	return turns
-}
-
-// RecentConversationTurns returns the last shaped turns from the history.
-func (h CodexHistory) RecentConversationTurns(limit int, opts ShapeOptions) []ConversationTurn {
-	turns := h.ConversationTurns(opts)
-	if limit > 0 && len(turns) > limit {
-		turns = turns[len(turns)-limit:]
 	}
 	return turns
 }

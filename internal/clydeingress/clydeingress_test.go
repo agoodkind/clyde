@@ -1,12 +1,10 @@
 package clydeingress
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
 	"goodkind.io/gklog/correlation"
-	"google.golang.org/grpc/metadata"
 )
 
 func TestFromHTTPHeaderReadsClydeHeaders(t *testing.T) {
@@ -160,55 +158,5 @@ func TestUpstreamHelpersRoundTripThroughAttrs(t *testing.T) {
 	}
 	if values[AttrKeyUpstreamResponseID] != "u-resp" {
 		t.Fatalf("attr upstream_response_id = %q", values[AttrKeyUpstreamResponseID])
-	}
-}
-
-func TestFromIncomingMetadataAddsUpstreamFields(t *testing.T) {
-	t.Parallel()
-
-	md := metadata.MD{}
-	md.Set("x-clyde-request-id", "req-md")
-	md.Set("x-clyde-trace-id", "11111111111111111111111111111111")
-	md.Set("x-clyde-span-id", "2222222222222222")
-	md.Set("x-upstream-request-id", "u-md-req")
-	md.Set("x-upstream-response-id", "u-md-resp")
-	ctx := metadata.NewIncomingContext(context.Background(), md)
-
-	corr := FromIncomingMetadata(ctx)
-	// gklog speaks the neutral x-request-id / x-trace-id keys on the
-	// wire, so the legacy x-clyde-* metadata above contributes only the
-	// upstream identifiers via this layer. The trace/span fields fall
-	// through to gklog defaults (a fresh trace in the absence of neutral
-	// keys), which is acceptable: daemon clients now write the neutral
-	// keys via NewOutgoingContext.
-	if got := UpstreamRequestID(corr); got != "u-md-req" {
-		t.Fatalf("upstream request id from metadata = %q", got)
-	}
-	if got := UpstreamResponseID(corr); got != "u-md-resp" {
-		t.Fatalf("upstream response id from metadata = %q", got)
-	}
-}
-
-func TestNewOutgoingContextWritesUpstreamMetadata(t *testing.T) {
-	t.Parallel()
-
-	corr := correlation.New("req-out")
-	corr = WithUpstreamRequestID(corr, "u-out-req")
-	corr = WithUpstreamResponseID(corr, "u-out-resp")
-	ctx := correlation.WithContext(context.Background(), corr)
-
-	ctx = NewOutgoingContext(ctx)
-	md, ok := metadata.FromOutgoingContext(ctx)
-	if !ok {
-		t.Fatalf("outgoing metadata missing")
-	}
-	if got := md.Get("x-upstream-request-id"); len(got) != 1 || got[0] != "u-out-req" {
-		t.Fatalf("upstream request md = %v", got)
-	}
-	if got := md.Get("x-upstream-response-id"); len(got) != 1 || got[0] != "u-out-resp" {
-		t.Fatalf("upstream response md = %v", got)
-	}
-	if got := md.Get("x-request-id"); len(got) != 1 || got[0] != "req-out" {
-		t.Fatalf("standard request md = %v", got)
 	}
 }

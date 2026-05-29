@@ -11,12 +11,12 @@ import (
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/slogger"
 )
 
-type encodeJSON func(any) ([]byte, error)
-
+// UsageWindowNoticeInput is part of Clyde's typed adapter surface.
 type UsageWindowNoticeInput struct {
 	Provider    string
 	WindowKey   string
@@ -26,6 +26,7 @@ type UsageWindowNoticeInput struct {
 	Kind        string
 }
 
+// UsageNotice is part of Clyde's typed adapter surface.
 type UsageNotice struct {
 	Kind       string
 	Text       string
@@ -62,11 +63,14 @@ func NewUsageNoticeGateWithLogger(log *slog.Logger) *UsageNoticeGate {
 	log = slogger.WithConcern(log, slogger.ConcernAdapterNotice)
 	return &UsageNoticeGate{
 		records: make(map[string]usageNoticeRecord),
-		log:     log,
+		log:     log, mu: sync.
+				Mutex{},
 	}
 }
 
+// Evaluate is part of Clyde's typed adapter surface.
 func (g *UsageNoticeGate) Evaluate(
+	ctx context.Context,
 	windows []UsageWindowNoticeInput,
 	notices config.AdapterNotices,
 	now time.Time,
@@ -88,8 +92,7 @@ func (g *UsageNoticeGate) Evaluate(
 	for _, window := range windows {
 		notice, ok := evaluateUsageWindow(window, thresholds, now)
 		if !ok {
-			logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.skipped",
-				slog.String("component", "adapter"),
+			logger.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.skipped", slog.String("concern", "adapter.notice"), slog.String("component", "adapter"),
 				slog.String("subcomponent", "usage_notice_gate"),
 				slog.String("provider", strings.TrimSpace(window.Provider)),
 				slog.String("window_key", strings.TrimSpace(window.WindowKey)),
@@ -107,8 +110,7 @@ func (g *UsageNoticeGate) Evaluate(
 			record.TurnsSinceEmission = 0
 			g.records[key] = record
 			due = append(due, notice)
-			logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.evaluated",
-				slog.String("component", "adapter"),
+			logger.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.evaluated", slog.String("concern", "adapter.notice"), slog.String("component", "adapter"),
 				slog.String("subcomponent", "usage_notice_gate"),
 				slog.String("provider", notice.Provider),
 				slog.String("window_key", notice.WindowKey),
@@ -125,8 +127,7 @@ func (g *UsageNoticeGate) Evaluate(
 		record.ResetAt = notice.ResetsAt.UTC()
 		record.TurnsSinceEmission++
 		g.records[key] = record
-		logger.LogAttrs(context.Background(), slog.LevelDebug, "adapter.notice.suppressed",
-			slog.String("component", "adapter"),
+		logger.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.suppressed", slog.String("concern", "adapter.notice"), slog.String("component", "adapter"),
 			slog.String("subcomponent", "usage_notice_gate"),
 			slog.String("provider", notice.Provider),
 			slog.String("window_key", notice.WindowKey),
@@ -149,8 +150,7 @@ func (g *UsageNoticeGate) Evaluate(
 			windowKeys = append(windowKeys, notice.WindowKey)
 			limitLabels = append(limitLabels, notice.LimitLabel)
 		}
-		logger.LogAttrs(context.Background(), slog.LevelInfo, "adapter.notice.evaluate_summary",
-			slog.String("component", "adapter"),
+		logger.LogAttrs(ctx, slog.LevelInfo, "adapter.notice.evaluate_summary", slog.String("concern", "adapter.notice"), slog.String("component", "adapter"),
 			slog.String("subcomponent", "usage_notice_gate"),
 			slog.Int("due_count", len(due)),
 			slog.Int("window_count", len(windows)),
@@ -179,11 +179,21 @@ func evaluateUsageWindow(
 	windowKey := strings.TrimSpace(window.WindowKey)
 	limitLabel := strings.TrimSpace(window.LimitLabel)
 	if provider == "" || windowKey == "" || limitLabel == "" {
-		return UsageNotice{}, false
+		return UsageNotice{
+			Kind: "", Text: "", ResetsAt: time.
+				Time{},
+
+			Threshold: 0, WindowKey: "", Provider: "", LimitLabel: "",
+		}, false
 	}
 	highestThreshold, ok := highestUsageThreshold(window.UsedPercent, thresholdsUsedPercent)
 	if !ok {
-		return UsageNotice{}, false
+		return UsageNotice{
+			Kind: "", Text: "", ResetsAt: time.
+				Time{},
+
+			Threshold: 0, WindowKey: "", Provider: "", LimitLabel: "",
+		}, false
 	}
 	kind := strings.TrimSpace(window.Kind)
 	if kind == "" {
@@ -253,16 +263,26 @@ func usageNoticeText(provider string, remainingPercent int, limitLabel string, r
 	)
 }
 
+// noticeProviderID enumerates the provider identifier strings the
+// notice formatter recognizes by name.
+type noticeProviderID string
+
+const (
+	noticeProviderEmpty     noticeProviderID = ""
+	noticeProviderCodex     noticeProviderID = "codex"
+	noticeProviderAnthropic noticeProviderID = "anthropic"
+)
+
 // providerDisplayLabel converts a provider id (lowercase, snake/dotted) into
 // a human-friendly label that fits the user-visible notice text.
 func providerDisplayLabel(provider string) string {
 	trimmed := strings.TrimSpace(provider)
-	switch strings.ToLower(trimmed) {
-	case "":
+	switch noticeProviderID(strings.ToLower(trimmed)) {
+	case noticeProviderEmpty:
 		return ""
-	case "codex":
+	case noticeProviderCodex:
 		return "Codex"
-	case "anthropic":
+	case noticeProviderAnthropic:
 		return "Anthropic"
 	default:
 		lower := strings.ToLower(trimmed)
@@ -359,6 +379,7 @@ func noticeEvent(text string) (adapterrender.Event, bool) {
 	return adapterrender.TextDelta{Text: formattedText}, true
 }
 
+// EventsWithInjectedUsageNotices is part of Clyde's typed adapter surface.
 func EventsWithInjectedUsageNotices(ctx context.Context, events []adapterrender.Event, notices []UsageNotice) []adapterrender.Event {
 	if len(notices) == 0 {
 		return events
@@ -384,8 +405,7 @@ func EventsWithInjectedUsageNotices(ctx context.Context, events []adapterrender.
 // info-level evaluate summary that bounds these per-emission lines.
 func LogNoticeEmission(ctx context.Context, notice UsageNotice, surface string) {
 	logger := slogger.WithConcern(slog.Default(), slogger.ConcernAdapterNotice)
-	logger.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.emitted",
-		slog.String("component", "adapter"),
+	logger.LogAttrs(ctx, slog.LevelDebug, "adapter.notice.emitted", slog.String("concern", "adapter.notice"), slog.String("component", "adapter"),
 		slog.String("subcomponent", "usage_notice_gate"),
 		slog.String("provider", notice.Provider),
 		slog.String("window_key", notice.WindowKey),
@@ -397,11 +417,11 @@ func LogNoticeEmission(ctx context.Context, notice UsageNotice, surface string) 
 	)
 }
 
+// AppendUsageNoticesToResponse is part of Clyde's typed adapter surface.
 func AppendUsageNoticesToResponse(
 	ctx context.Context,
 	resp ChatResponse,
 	notices []UsageNotice,
-	encode encodeJSON,
 ) (ChatResponse, bool) {
 	if len(notices) == 0 || len(resp.Choices) == 0 {
 		return resp, false
@@ -423,10 +443,7 @@ func AppendUsageNoticesToResponse(
 		return resp, false
 	}
 	content = builder.String() + content
-	if encode == nil {
-		encode = json.Marshal
-	}
-	encoded, err := encode(content)
+	encoded, err := json.Marshal(content)
 	if err != nil {
 		return resp, false
 	}
@@ -434,19 +451,20 @@ func AppendUsageNoticesToResponse(
 	return resp, true
 }
 
+// OpenAINoticeChunk is part of Clyde's typed adapter surface.
 func OpenAINoticeChunk(reqID string, modelAlias string, text string, includeRole bool) adapteropenai.StreamChunk {
-	delta := adapteropenai.StreamDelta{Content: text}
+	delta := adapteropenai.StreamDelta{Content: text, Role: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""}
 	if includeRole {
 		delta.Role = "assistant"
 	}
 	return adapteropenai.StreamChunk{
 		ID:      reqID,
 		Object:  "chat.completion.chunk",
-		Created: runtimeClock.Now().Unix(),
+		Created: clock.Now().Unix(),
 		Model:   modelAlias,
 		Choices: []adapteropenai.StreamChoice{{
 			Index: 0,
-			Delta: delta,
-		}},
+			Delta: delta, Logprobs: nil, FinishReason: nil,
+		}}, Usage: nil, SystemFingerprint: "",
 	}
 }

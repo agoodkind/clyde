@@ -8,33 +8,35 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"goodkind.io/clyde/internal/config"
 )
 
-func TestCodexLogPathHonorsOverride(t *testing.T) {
+func TestLogPathHonorsOverride(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "codex.jsonl")
 	t.Setenv("CLYDE_CODEX_LOG_PATH", tmp)
-	if got := CodexLogPath(); got != tmp {
-		t.Fatalf("CodexLogPath=%q want %q", got, tmp)
+	if got := LogPath(); got != tmp {
+		t.Fatalf("LogPath=%q want %q", got, tmp)
 	}
 }
 
-func TestCodexLogPathFromXDGState(t *testing.T) {
+func TestLogPathFromXDGState(t *testing.T) {
 	t.Setenv("CLYDE_CODEX_LOG_PATH", "")
 	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-codex-test")
 	want := "/tmp/xdg-codex-test/clyde/codex.jsonl"
-	if got := CodexLogPath(); got != want {
-		t.Fatalf("CodexLogPath=%q want %q", got, want)
+	if got := LogPath(); got != want {
+		t.Fatalf("LogPath=%q want %q", got, want)
 	}
 }
 
-func TestCodexLogPathExpandsXDGStateHome(t *testing.T) {
+func TestLogPathExpandsXDGStateHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLYDE_CODEX_LOG_PATH", "")
 	t.Setenv("XDG_STATE_HOME", "~/state/../state-root")
 	want := filepath.Join(home, "state-root", "clyde", "codex.jsonl")
-	if got := CodexLogPath(); got != want {
-		t.Fatalf("CodexLogPath=%q want %q", got, want)
+	if got := LogPath(); got != want {
+		t.Fatalf("LogPath=%q want %q", got, want)
 	}
 }
 
@@ -126,9 +128,9 @@ func resetDedicatedCodexLoggerForTest(t *testing.T) {
 	codexFileLogger = nil
 	codexFileCloser = nil
 	codexFileRotation = FileLogRotationConfig{
-		MaxSizeMB:  defaultCodexLogRotationMaxSizeMB,
-		MaxBackups: defaultCodexLogRotationMaxBackups,
-		MaxAgeDays: defaultCodexLogRotationMaxAgeDays,
+		MaxSizeMB:  config.SidecarRotationMaxSizeMB,
+		MaxBackups: config.SidecarRotationMaxBackups,
+		MaxAgeDays: config.SidecarRotationMaxAgeDays,
 		Compress:   new(true),
 	}
 	t.Cleanup(func() {
@@ -141,9 +143,9 @@ func resetDedicatedCodexLoggerForTest(t *testing.T) {
 		codexFileLogger = nil
 		codexFileCloser = nil
 		codexFileRotation = FileLogRotationConfig{
-			MaxSizeMB:  defaultCodexLogRotationMaxSizeMB,
-			MaxBackups: defaultCodexLogRotationMaxBackups,
-			MaxAgeDays: defaultCodexLogRotationMaxAgeDays,
+			MaxSizeMB:  config.SidecarRotationMaxSizeMB,
+			MaxBackups: config.SidecarRotationMaxBackups,
+			MaxAgeDays: config.SidecarRotationMaxAgeDays,
 			Compress:   new(true),
 		}
 	})

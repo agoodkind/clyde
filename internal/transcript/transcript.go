@@ -1,16 +1,26 @@
-// Package transcript parses Claude Code JSONL transcripts into structured
-// conversation messages. Used by both HTML and plain text export, conversation
-// search, and the TUI viewer.
 package transcript
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
+)
+
+// transcriptContentBlockType enumerates the content-block "type"
+// strings the transcript parser walks on user and assistant entries.
+type transcriptContentBlockType string
+
+const (
+	transcriptContentBlockText       transcriptContentBlockType = "text"
+	transcriptContentBlockThinking   transcriptContentBlockType = "thinking"
+	transcriptContentBlockToolUse    transcriptContentBlockType = "tool_use"
+	transcriptContentBlockToolResult transcriptContentBlockType = "tool_result"
 )
 
 // Message represents a single parsed conversation turn.
@@ -33,6 +43,7 @@ type ToolInputJSON struct {
 	Raw json.RawMessage
 }
 
+// UnmarshalJSON is part of Clyde's typed adapter surface.
 func (j *ToolInputJSON) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return nil
@@ -41,14 +52,22 @@ func (j *ToolInputJSON) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (j ToolInputJSON) MarshalJSON() ([]byte, error) {
+// MarshalJSON is part of Clyde's typed adapter surface.
+func (j *ToolInputJSON) MarshalJSON() ([]byte, error) {
+	if j == nil {
+		return []byte("null"), nil
+	}
 	if len(j.Raw) == 0 {
 		return []byte("null"), nil
 	}
 	return j.Raw, nil
 }
 
-func (j ToolInputJSON) Len() int {
+// Len is part of Clyde's typed adapter surface.
+func (j *ToolInputJSON) Len() int {
+	if j == nil {
+		return 0
+	}
 	return len(j.Raw)
 }
 
@@ -61,9 +80,12 @@ type ToolCall struct {
 	IsError bool          // true if tool result was an error
 }
 
+// ParseOptions is part of Clyde's typed adapter surface.
 type ParseOptions struct {
 	PreserveSystemPrompts bool
 }
+
+// ParseOptions is part of Clyde's typed adapter surface.
 
 // ToolNames returns the names of all tools used in this message.
 func (m *Message) ToolNames() []string {
@@ -121,16 +143,11 @@ var transcriptNoisePatterns = func() []*regexp.Regexp {
 	return out
 }()
 
-// Parse reads a transcript JSONL file and returns structured messages.
-// Tool outputs are NOT loaded by default (expensive). Call LoadToolOutputs
-// to populate them for specific messages.
-func Parse(r io.Reader) ([]Message, error) {
-	return ParseWithOptions(r, ParseOptions{})
-}
-
+// ParseWithOptions is part of Clyde's typed adapter surface.
 func ParseWithOptions(r io.Reader, opts ParseOptions) ([]Message, error) {
 	reader := bufio.NewReader(r)
 
+	// ParseWithOptions is part of Clyde's typed adapter surface.
 	var messages []Message
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -146,7 +163,8 @@ func ParseWithOptions(r io.Reader, opts ParseOptions) ([]Message, error) {
 			break
 		}
 		if err != nil {
-			return messages, err
+			slog.Warn("transcript.parse.read_line_failed", "concern", "transcript", "err", err)
+			return messages, fmt.Errorf("read transcript line: %w", err)
 		}
 	}
 	return messages, nil
@@ -155,30 +173,56 @@ func ParseWithOptions(r io.Reader, opts ParseOptions) ([]Message, error) {
 func parseLine(line []byte, opts ParseOptions) (Message, bool) {
 	var entry rawEntry
 	if err := json.Unmarshal(line, &entry); err != nil {
-		return Message{}, false
+		return Message{
+			UUID: "", Role: "", Timestamp: time.
+				Time{},
+
+			Text: "", Thinking: "", HasTools: false, Tools: nil,
+		}, false
 	}
 	if entry.Type != "user" && entry.Type != "assistant" {
-		return Message{}, false
+		return Message{
+			UUID: "", Role: "", Timestamp: time.
+				Time{},
+
+			Text: "", Thinking: "", HasTools: false, Tools: nil,
+		}, false
 	}
 	if len(entry.Message) == 0 {
-		return Message{}, false
+		return Message{
+			UUID: "", Role: "", Timestamp: time.
+				Time{},
+
+			Text: "", Thinking: "", HasTools: false, Tools: nil,
+		}, false
 	}
 
 	var msg rawMessage
 	if err := json.Unmarshal(entry.Message, &msg); err != nil {
-		return Message{}, false
+		return Message{
+			UUID: "", Role: "", Timestamp: time.
+				Time{},
+
+			Text: "", Thinking: "", HasTools: false, Tools: nil,
+		}, false
 	}
 
 	m := Message{
 		UUID:      entry.UUID,
 		Role:      entry.Type,
-		Timestamp: entry.Timestamp,
+		Timestamp: entry.Timestamp, Text: "", Thinking: "", HasTools: false, Tools: nil,
 	}
 
 	if entry.Type == "user" {
 		text := extractUserText(msg.Content)
 		if text == "" {
-			return Message{}, false // tool result entry, skip
+			return Message{
+				UUID: "", Role: // tool result entry, skip
+				"", Timestamp: time.
+					Time{},
+
+				Text: "", Thinking: "", HasTools: false, Tools: nil,
+			}, false
 		}
 		if !opts.PreserveSystemPrompts {
 			text = stripSystemTags(text)
@@ -210,14 +254,18 @@ func extractUserText(raw json.RawMessage) string {
 	hasText := false
 	var parts []string
 	for _, b := range blocks {
-		switch b.Type {
-		case "text":
+		switch transcriptContentBlockType(b.Type) {
+		case transcriptContentBlockText:
 			if t := strings.TrimSpace(b.Text); t != "" {
 				parts = append(parts, t)
 				hasText = true
 			}
-		case "tool_result":
+		case transcriptContentBlockToolResult:
 			// tool results are not user-authored text, skip
+		case transcriptContentBlockThinking, transcriptContentBlockToolUse:
+			// User entries do not normally carry these block kinds,
+			// and the user-text aggregator ignores them when they
+			// appear.
 		}
 	}
 	if !hasText {
@@ -235,22 +283,25 @@ func parseAssistantBlocks(m *Message, raw json.RawMessage) {
 
 	var textParts []string
 	for _, b := range blocks {
-		switch b.Type {
-		case "text":
+		switch transcriptContentBlockType(b.Type) {
+		case transcriptContentBlockText:
 			if t := strings.TrimSpace(b.Text); t != "" {
 				textParts = append(textParts, t)
 			}
-		case "thinking":
+		case transcriptContentBlockThinking:
 			if t := strings.TrimSpace(b.Thinking); t != "" {
 				m.Thinking = t
 			}
-		case "tool_use":
+		case transcriptContentBlockToolUse:
 			m.HasTools = true
 			m.Tools = append(m.Tools, ToolCall{
 				ID:    b.ID,
 				Name:  b.Name,
-				Input: b.Input,
+				Input: b.Input, Output: "", IsError: false,
 			})
+		case transcriptContentBlockToolResult:
+			// Assistant entries should not carry tool results; the
+			// assistant aggregator ignores them if they appear.
 		}
 	}
 	m.Text = strings.Join(textParts, "\n\n")

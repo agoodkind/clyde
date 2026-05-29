@@ -7,7 +7,7 @@
 // (SetupWithPolicy).
 //
 // The standard is non-negotiable: every operation in the codebase MUST
-// emit at least one slog event. Free-form fmt.Println / log.Printf are
+// emit at least one slog event. Free-form [fmt.Println] / [log.Printf] are
 // rejected by `make slog-audit`. See AGENTS.md for the full spec.
 package slogger
 
@@ -28,7 +28,7 @@ import (
 
 const (
 	envOverride       = "CLYDE_SLOG_PATH"
-	defaultTUIFile    = "clyde-tui.jsonl"
+	defaultCLIFile    = "clyde-cli.jsonl"
 	defaultDaemonFile = "clyde-daemon.jsonl"
 	concernAttr       = "concern"
 )
@@ -37,7 +37,9 @@ const (
 type ProcessRole string
 
 const (
-	ProcessRoleTUI    ProcessRole = "tui"
+	// ProcessRoleCLI identifies a short-lived CLI invocation.
+	ProcessRoleCLI ProcessRole = "cli"
+	// ProcessRoleDaemon identifies the long-lived daemon process.
 	ProcessRoleDaemon ProcessRole = "daemon"
 )
 
@@ -56,7 +58,7 @@ func DefaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {
 //
 // SetupWithPolicy no longer runs the file-cleanup walker. The walker now runs
 // only inside the daemon, on the periodic loop, via RunCleanupOnce. CLI and
-// TUI invocations must not block on filesystem scans during process start.
+// CLI invocations must not block on filesystem scans during process start.
 func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
 	if err := validateConcernPolicyNames(policy.ConcernPolicies); err != nil {
 		return nopCloser{Closed: false}, err
@@ -155,10 +157,14 @@ func buildTranscriptRouter(policy TranscriptPolicy, concernRoot string) *Transcr
 		return nil
 	}
 	return NewTranscriptRouter(TranscriptRouterConfig{
-		Root: filepath.Join(concernRoot, "chats"),
+		Root: filepath.Join(concernRoot, "chats"), PoolCap: 0,
+
+		// WithConcern is part of Clyde's typed adapter surface.
+		Now: nil,
 	})
 }
 
+// WithConcern is part of Clyde's typed adapter surface.
 func WithConcern(logger *slog.Logger, concern string) *slog.Logger {
 	if logger == nil {
 		logger = slog.Default()
@@ -169,22 +175,25 @@ func WithConcern(logger *slog.Logger, concern string) *slog.Logger {
 	return logger.With(concernAttr, concern)
 }
 
+// For is part of Clyde's typed adapter surface.
 func For(concern string) *slog.Logger {
 	return WithConcern(slog.Default(), concern)
 }
 
 // ConcernLogger is a package-level safe concern logger.
 //
-// It intentionally resolves slog.Default at each call instead of retaining a
-// *slog.Logger captured during package init. Clyde initializes logging after
+// It intentionally resolves [slog.Default] at each call instead of retaining a
+// *[slog.Logger] captured during package init. Clyde initializes logging after
 // packages are loaded, so package-level `slogger.For(...)` variables would bind
 // to Go's bootstrap text logger and corrupt JSON logs after setup.
 type ConcernLogger string
 
+// Concern is part of Clyde's typed adapter surface.
 func Concern(concern string) ConcernLogger {
 	return ConcernLogger(concern)
 }
 
+// Logger is part of Clyde's typed adapter surface.
 func (l ConcernLogger) Logger() *slog.Logger {
 	return For(string(l))
 }
@@ -199,8 +208,8 @@ func defaultPath(cfg config.LoggingConfig, role ProcessRole) string {
 	if role == ProcessRoleDaemon && cfg.Paths.Daemon != "" {
 		return cfg.Paths.Daemon
 	}
-	if role == ProcessRoleTUI && cfg.Paths.TUI != "" {
-		return cfg.Paths.TUI
+	if role == ProcessRoleCLI && cfg.Paths.CLI != "" {
+		return cfg.Paths.CLI
 	}
 	return filepath.Join(config.DefaultStateDir(), fileForRole(role))
 }
@@ -213,7 +222,7 @@ func fileForRole(role ProcessRole) string {
 	if role == ProcessRoleDaemon {
 		return defaultDaemonFile
 	}
-	return defaultTUIFile
+	return defaultCLIFile
 }
 
 type nopCloser struct {
@@ -229,7 +238,7 @@ type concernFilterHandler struct {
 }
 
 func newConcernFilterHandler(concern string, handler slog.Handler) slog.Handler {
-	return &concernFilterHandler{concern: concern, handler: handler}
+	return &concernFilterHandler{concern: concern, handler: handler, attrs: nil}
 }
 
 func (h *concernFilterHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -240,7 +249,16 @@ func (h *concernFilterHandler) Handle(ctx context.Context, record slog.Record) e
 	if !h.matches(record) {
 		return nil
 	}
-	return h.handler.Handle(ctx, record)
+	err := h.handler.Handle(ctx, record)
+	if err != nil {
+		// Use stderr rather than slog to avoid recursing into the
+		// same handler chain when the inner handler reports a write
+		// error.
+		fmt.Fprintln(os.Stderr, "slogger.concern_filter.handle_failed:", err.Error())
+		slog.WarnContext(ctx, "slogger.concern_filter.handle_failed", "concern", h.concern, "err", err)
+		return fmt.Errorf("handle concern-filtered slog record: %w", err)
+	}
+	return nil
 }
 
 func (h *concernFilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -262,15 +280,20 @@ func (h *concernFilterHandler) WithGroup(name string) slog.Handler {
 
 func (h *concernFilterHandler) Close() error {
 	if closer, ok := h.handler.(io.Closer); ok {
-		return closer.Close()
+		if err := closer.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "slogger.concern_filter.close_failed:", err.Error())
+			slog.Warn("slogger.concern_filter.close_failed", "concern", h.concern, "err", err)
+			return fmt.Errorf("close concern-filtered slog handler: %w", err)
+		}
 	}
 	return nil
 }
 
+// matches reports whether record carries an explicit concern
+// attribute that selects this handler. Every slog call site in the
+// repository emits the concern attr explicitly; the historical
+// message-prefix router has been removed.
 func (h *concernFilterHandler) matches(record slog.Record) bool {
-	if concernForEvent(record.Message) == h.concern {
-		return true
-	}
 	for _, attr := range h.attrs {
 		if attr.Key == concernAttr && attr.Value.String() == h.concern {
 			return true

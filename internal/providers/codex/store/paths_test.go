@@ -9,7 +9,7 @@ func TestResolveStorePathsUsesCodexAndSQLiteHomes(t *testing.T) {
 	codexHome := filepath.Join(t.TempDir(), "codex-home")
 	sqliteHome := filepath.Join(t.TempDir(), "sqlite-home")
 
-	paths, err := ResolveStorePaths(codexHome, sqliteHome)
+	paths, err := ResolveStorePaths(t.Context(), codexHome, sqliteHome)
 	if err != nil {
 		t.Fatalf("ResolveStorePaths returned error: %v", err)
 	}

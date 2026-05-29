@@ -108,7 +108,7 @@ func TestMCPStdoutWriterFrameContentRoundtrips(t *testing.T) {
 }
 
 // frame mirrors the JSON-RPC notification shape the upstream stdio
-// transport writes through writeResponse and through direct session writes.
+// transport writes through writeResponse and through direct stdio writes.
 type frame struct {
 	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`

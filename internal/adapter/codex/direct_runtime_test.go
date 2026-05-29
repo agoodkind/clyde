@@ -65,10 +65,10 @@ func TestRunDirectDoesNotReusePreviousResponseIDForRepeatedFreshPromptWithoutCon
 			Content: json.RawMessage(`"identical first prompt"`),
 		}},
 	}
-	model := adaptermodel.ResolvedModel{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}
+	resolved := codexResolvedForTest(adaptermodel.ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"})
 
 	for range 2 {
-		if _, err := RunDirect(context.Background(), cfg, req, model, "", func(adapterrender.Event) error {
+		if _, err := RunDirect(context.Background(), cfg, req, resolved, "", func(adapterrender.Event) error {
 			return nil
 		}); err != nil {
 			t.Fatalf("run direct: %v", err)

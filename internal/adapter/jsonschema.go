@@ -5,6 +5,15 @@ import (
 	"strings"
 )
 
+// responseFormatType enumerates the OpenAI `response_format.type`
+// values the adapter parses.
+type responseFormatType string
+
+const (
+	responseFormatJSONObject responseFormatType = "json_object"
+	responseFormatJSONSchema responseFormatType = "json_schema"
+)
+
 // JSONResponseSpec describes what the caller asked for in
 // `response_format`. The adapter uses this to coerce claude into
 // returning parseable JSON since claude does not natively honor
@@ -24,7 +33,7 @@ type JSONResponseSpec struct {
 // JSONResponseSpec when the field is missing or names plain text.
 func ParseResponseFormat(raw json.RawMessage) JSONResponseSpec {
 	if len(raw) == 0 {
-		return JSONResponseSpec{}
+		return JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil}
 	}
 	var rf struct {
 		Type       string `json:"type"`
@@ -34,14 +43,14 @@ func ParseResponseFormat(raw json.RawMessage) JSONResponseSpec {
 		} `json:"json_schema"`
 	}
 	if err := json.Unmarshal(raw, &rf); err != nil {
-		return JSONResponseSpec{}
+		return JSONResponseSpec{Mode: "", SchemaName: "", Schema: nil}
 	}
-	switch rf.Type {
-	case "json_object":
-		return JSONResponseSpec{Mode: "json_object"}
-	case "json_schema":
+	switch responseFormatType(rf.Type) {
+	case responseFormatJSONObject:
+		return JSONResponseSpec{Mode: "json_object", SchemaName: "", Schema: nil}
+	case responseFormatJSONSchema:
 		if rf.JSONSchema == nil {
-			return JSONResponseSpec{Mode: "json_schema"}
+			return JSONResponseSpec{Mode: "json_schema", SchemaName: "", Schema: nil}
 		}
 		return JSONResponseSpec{
 			Mode:       "json_schema",
@@ -49,12 +58,17 @@ func ParseResponseFormat(raw json.RawMessage) JSONResponseSpec {
 			Schema:     rf.JSONSchema.Schema,
 		}
 	}
-	return JSONResponseSpec{}
+	return JSONResponseSpec{
+		Mode: "",
+
+		// SystemPrompt returns text to inject into claude's system prompt so
+		// the model emits raw JSON. The retryHint flag adds extra emphasis
+		// for the second attempt after a failed parse.
+		SchemaName: "", Schema: nil,
+	}
 }
 
-// SystemPrompt returns text to inject into claude's system prompt so
-// the model emits raw JSON. The retryHint flag adds extra emphasis
-// for the second attempt after a failed parse.
+// SystemPrompt is part of Clyde's typed adapter surface.
 func (s JSONResponseSpec) SystemPrompt(retryHint bool) string {
 	if s.Mode == "" {
 		return ""
@@ -83,7 +97,7 @@ func (s JSONResponseSpec) SystemPrompt(retryHint bool) string {
 // breaks JSON.parse: leading prose, trailing prose, surrounding
 // markdown code fences, and a few stubborn single-quote / smart-
 // quote slips. The function never alters the JSON shape; it only
-// trims and unwraps. Callers should still json.Unmarshal the result
+// trims and unwraps. Callers should still [json.Unmarshal] the result
 // to confirm validity.
 func CoerceJSON(text string) string {
 	s := strings.TrimSpace(text)
@@ -135,6 +149,6 @@ func LooksLikeJSON(text string) bool {
 	if text == "" {
 		return false
 	}
-	var v any
+	var v json.RawMessage
 	return json.Unmarshal([]byte(text), &v) == nil
 }

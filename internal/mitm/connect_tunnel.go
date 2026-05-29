@@ -18,8 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/gklog/trace"
 )
 
 // handleConnect implements RFC 7230 section 4.3.6 HTTP CONNECT
@@ -34,7 +36,9 @@ import (
 // through the provider capture path. Unclaimed CONNECT hosts keep
 // opaque tunnel mode and forward bytes without payload capture.
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
-	started := currentTime()
+	var spanErr error
+	defer trace.Op(r.Context(), "mitm.connect.tunnel")(&spanErr)
+	started := clock.Now()
 	target := strings.TrimSpace(r.RequestURI)
 	if target == "" {
 		target = strings.TrimSpace(r.Host)
@@ -43,13 +47,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing CONNECT target", http.StatusBadRequest)
 		return
 	}
-	host, _, err := net.SplitHostPort(target)
-	if err != nil || host == "" {
+	cleanTarget, connectHost, err := cleanConnectTarget(target)
+	if err != nil {
 		http.Error(w, "invalid CONNECT target: "+target, http.StatusBadRequest)
 		return
 	}
-	if provider, claim, ok := providerForConnect(target); ok {
-		p.handleProviderTLSConnect(r.Context(), w, target, claim.Host, provider, started)
+	if provider, claim, ok := providerForConnect(cleanTarget); ok {
+		p.handleProviderTLSConnect(r.Context(), w, cleanTarget, claim.Host, provider, started)
 		return
 	}
 
@@ -59,10 +63,11 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstream, err := net.DialTimeout("tcp", target, 30*time.Second)
+	dialCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	upstream, err := new(net.Dialer).DialContext(dialCtx, "tcp", cleanTarget)
 	if err != nil {
-		p.log.Warn("mitm.connect.upstream_dial_failed",
-			"target", target,
+		p.log.Warn("mitm.connect.upstream_dial_failed", "concern", "providers.mitm.errors", "target", cleanTarget,
 			"err", err,
 		)
 		http.Error(w, "upstream dial failed", http.StatusBadGateway)
@@ -72,7 +77,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	clientConn, bufrw, err := hijacker.Hijack()
 	if err != nil {
-		p.log.Warn("mitm.connect.hijack_failed", "target", target, "err", err)
+		p.log.Warn("mitm.connect.hijack_failed", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
 		_ = upstream.Close()
 		return
 	}
@@ -81,39 +86,59 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Tell the client the tunnel is established. The client will
 	// follow with TLS handshake + websocket frames.
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		p.log.Warn("mitm.connect.write_established_failed", "err", err)
+		p.log.Warn("mitm.connect.write_established_failed", "concern", "providers.mitm.errors", "err", err)
 		return
 	}
 	if err := bufrw.Flush(); err != nil {
-		p.log.Warn("mitm.connect.flush_failed", "err", err)
+		p.log.Warn("mitm.connect.flush_failed", "concern", "providers.mitm.errors", "err", err)
 		return
 	}
 
 	closer := newTunnelCloser(&connCloser{conn: clientConn}, &connCloser{conn: upstream})
 	sess, err := p.Tunnels.Register(r.Context(), "mitm.connect", TunnelMeta{
-		ConnectHost:   host,
-		UpstreamAddr:  target,
+		ConnectHost:   connectHost,
+		UpstreamAddr:  cleanTarget,
 		CaptureFile:   "",
 		KeepaliveSeen: false,
 	}, closer)
 	if err != nil {
-		p.log.WarnContext(r.Context(), "mitm.connect.register_rejected", "target", target, "err", err)
+		p.log.WarnContext(r.Context(), "mitm.connect.register_rejected", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
 		return
 	}
 	defer p.Tunnels.Release(r.Context(), sess, "mitm.connect.tunnel_closed")
 
-	p.log.Info("mitm.connect.tunnel_open",
-		"target", target,
-		"host", host,
+	p.log.Info("mitm.connect.tunnel_open", "concern", "providers.mitm.wire", "target", cleanTarget,
+		"host", connectHost,
 	)
 	bytesUp, bytesDown := spliceConnections(clientConn, upstream, sess)
-	p.log.Info("mitm.connect.tunnel_closed",
-		"target", target,
-		"host", host,
-		"duration_ms", time.Since(started).Milliseconds(),
+	p.log.Info("mitm.connect.tunnel_closed", "concern", "providers.mitm.wire", "target", cleanTarget,
+		"host", connectHost,
+		"duration_ms", clock.Since(started).Milliseconds(),
 		"bytes_up", bytesUp,
 		"bytes_down", bytesDown,
 	)
+}
+
+func cleanConnectTarget(target string) (string, string, error) {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(target))
+	if err != nil {
+		slog.Warn("mitm.connect.split_target_failed", "concern", "providers.mitm.errors", "target", target, "err", err)
+		return "", "", fmt.Errorf("split CONNECT target: %w", err)
+	}
+	if strings.TrimSpace(host) == "" {
+		return "", "", fmt.Errorf("missing CONNECT host")
+	}
+	if strings.ContainsRune(host, 0) || strings.ContainsRune(port, 0) {
+		return "", "", fmt.Errorf("CONNECT target contains NUL")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil {
+		return "", "", fmt.Errorf("parse CONNECT port: %w", err)
+	}
+	if portNumber <= 0 || portNumber > 65535 {
+		return "", "", fmt.Errorf("CONNECT port out of range")
+	}
+	return net.JoinHostPort(host, strconv.Itoa(portNumber)), host, nil
 }
 
 // spliceConnections forwards bytes between two connections in both
@@ -132,8 +157,7 @@ func spliceConnections(client, upstream net.Conn, session *livetrack.Session[Tun
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.Error("mitm.connect.copy_up_panic",
-					"component", "mitm",
+				slog.Error("mitm.connect.copy_up_panic", "concern", "providers.mitm.errors", "component", "mitm",
 					"err", fmt.Errorf("panic: %v", recovered),
 				)
 			}
@@ -150,8 +174,7 @@ func spliceConnections(client, upstream net.Conn, session *livetrack.Session[Tun
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.Error("mitm.connect.copy_down_panic",
-					"component", "mitm",
+				slog.Error("mitm.connect.copy_down_panic", "concern", "providers.mitm.errors", "component", "mitm",
 					"err", fmt.Errorf("panic: %v", recovered),
 				)
 			}
@@ -191,7 +214,7 @@ func (t *touchOnWrite) Write(p []byte) (int, error) {
 }
 
 func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWriter, target string, host string, provider Provider, started time.Time) {
-	providerID := string(provider.ID())
+	providerID := provider.ID().String()
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
@@ -199,28 +222,28 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 	}
 	clientConn, bufrw, err := hijacker.Hijack()
 	if err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.connect.hijack_failed", "provider", providerID, "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.connect.hijack_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
 
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.connect.write_established_failed", "provider", providerID, "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.connect.write_established_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 	if err := bufrw.Flush(); err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.connect.flush_failed", "provider", providerID, "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.connect.flush_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 
 	ca, err := p.mitmCA()
 	if err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.connect.ca_failed", "provider", providerID, "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.connect.ca_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 	leaf, err := ca.leafForHost(host)
 	if err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.connect.leaf_failed", "provider", providerID, "target", target, "host", host, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.connect.leaf_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
 	tlsConn := tls.Server(clientConn, &tls.Config{
@@ -229,7 +252,7 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		MinVersion:   tls.VersionTLS12,
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.connect.client_tls_failed", "provider", providerID, "target", target, "host", host, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.connect.client_tls_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
 	closer := newTunnelCloser(&connCloser{conn: tlsConn}, &connCloser{conn: clientConn})
@@ -240,22 +263,21 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		KeepaliveSeen: false,
 	}, closer)
 	if err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.connect.register_rejected", "provider", providerID, "target", target, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.connect.register_rejected", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 	defer p.Tunnels.Release(ctx, sess, "mitm."+providerID+".tls.closed")
-	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_open", "provider", providerID, "target", target, "host", host)
+	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_open", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host)
 	p.serveProviderInterceptedHTTP(ctx, tlsConn, target, host, provider, sess)
-	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_closed",
-		"provider", providerID,
+	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_closed", "concern", "providers.mitm.wire", "provider", providerID,
 		"target", target,
 		"host", host,
-		"duration_ms", time.Since(started).Milliseconds(),
+		"duration_ms", clock.Since(started).Milliseconds(),
 	)
 }
 
 func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Conn, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) {
-	providerID := string(provider.ID())
+	providerID := provider.ID().String()
 	reader := bufio.NewReader(client)
 	writer := bufio.NewWriter(client)
 	stopWatcher := make(chan struct{})
@@ -263,8 +285,7 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				p.log.WarnContext(ctx, "mitm.provider.tls.drain_watcher_panicked",
-					"provider", providerID,
+				p.log.WarnContext(ctx, "mitm.provider.tls.drain_watcher_panicked", "concern", "providers.mitm.wire", "provider", providerID,
 					"host", host,
 					"panic", recovered,
 				)
@@ -277,7 +298,7 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 		req, err := http.ReadRequest(reader)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				p.log.DebugContext(ctx, "mitm.provider.http.read_request_failed", "provider", providerID, "host", host, "err", err)
+				p.log.DebugContext(ctx, "mitm.provider.http.read_request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", err)
 			}
 			return
 		}
@@ -305,16 +326,16 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			_ = req.Body.Close()
 			if !errors.Is(registerErr, livetrack.ErrRegistryClosed) || parent == nil || p.Tunnels.State() != livetrack.StateDraining {
 				activeRequests.Add(-1)
-				p.log.WarnContext(ctx, "mitm.provider.http.register_rejected", "provider", providerID, "host", host, "err", registerErr)
+				p.log.WarnContext(ctx, "mitm.provider.http.register_rejected", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
 				return
 			}
 			activeRequests.Add(-1)
-			p.log.DebugContext(ctx, "mitm.provider.http.request_rejected_reload_drain", "provider", providerID, "host", host, "err", registerErr)
+			p.log.DebugContext(ctx, "mitm.provider.http.request_rejected_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
 			return
 		}
 		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider, parent); err != nil {
 			activeRequests.Add(-1)
-			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
+			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 			if reqSess != nil {
 				p.Tunnels.Release(ctx, reqSess, "mitm."+providerID+".http.failed")
 			}
@@ -336,7 +357,7 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			return
 		}
 		if parent != nil && p.Tunnels.State() == livetrack.StateDraining {
-			p.log.DebugContext(ctx, "mitm.provider.http.keepalive_closed_reload_drain", "provider", providerID, "host", host, "path", req.URL.Path)
+			p.log.DebugContext(ctx, "mitm.provider.http.keepalive_closed_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path)
 			return
 		}
 	}
@@ -359,7 +380,7 @@ func (p *Proxy) watchProviderTunnelDrain(ctx context.Context, client *tls.Conn, 
 			if activeRequests != nil && activeRequests.Load() > 0 {
 				continue
 			}
-			p.log.DebugContext(ctx, "mitm.provider.tls.closed_reload_drain", "provider", providerID, "host", host)
+			p.log.DebugContext(ctx, "mitm.provider.tls.closed_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host)
 			_ = client.Close()
 			return
 		}
@@ -370,12 +391,12 @@ func buildProviderFailureInput(params providerForwardParams, requestIndex captur
 	return buildHTTPFailureCaptureInput(
 		params.cfg,
 		params.capturePolicy,
-		string(params.provider.ID()),
+		params.provider.ID().String(),
 		"https://"+params.host+params.req.URL.RequestURI(),
 		params.body,
 		requestIndex,
 		responseIndex,
-		time.Since(params.started),
+		clock.Since(params.started),
 		statusCode,
 	)
 }
@@ -418,7 +439,7 @@ func (p *Proxy) prepareProviderRequestCapture(req *http.Request, params provider
 }
 
 func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer *bufio.Writer, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
-	started := currentTime()
+	started := clock.Now()
 	cfg := p.config()
 	capturePolicy := captureFilePolicyFromConfig(cfg)
 	body, err := io.ReadAll(req.Body)
@@ -426,12 +447,12 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 		return p.recordProviderFailure(req, http.Header{}, buildHTTPFailureCaptureInput(
 			cfg,
 			capturePolicy,
-			string(provider.ID()),
+			provider.ID().String(),
 			"https://"+host+req.URL.RequestURI(),
 			nil,
 			emptyCaptureBodyIndex(),
 			emptyCaptureBodyIndex(),
-			time.Since(started),
+			clock.Since(started),
 			http.StatusBadRequest,
 		), httpFailureRecord{
 			includePayload:      false,
@@ -453,7 +474,7 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 	}
 
 	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{
-		Provider:            string(provider.ID()),
+		Provider:            provider.ID().String(),
 		Host:                host,
 		Method:              req.Method,
 		Path:                req.URL.Path,
@@ -529,14 +550,6 @@ type providerForwardParams struct {
 // handleProviderInterceptedRequest to keep both functions under the
 // funlen ceiling.
 func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params providerForwardParams) error {
-	sink := p.rotator()
-	// The provider intercept path forwards req as-is; swap the bearer on
-	// the live request header so providerUpstreamRequest copies the
-	// rotator-owned bearer into the upstream call. This mirrors the
-	// plain-HTTP path's pre-Do swap. The swap helper applies a path
-	// allowlist so resource-bound endpoints (/v1/environments, /v1/sessions)
-	// pass through unchanged with Claude Code's original bearer.
-	observeToken, didSwap := swapAuthorizationForRotator(params.req, sink, p.log)
 	resp, err := p.providerUpstreamRoundTrip(params.req, params.body, params.target, params.host)
 	if err != nil {
 		return p.recordProviderFailure(params.req, http.Header{}, buildProviderFailureInput(params, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
@@ -546,19 +559,6 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 			errorMessage:        err.Error(),
 		})
 	}
-	// CLYDE-OAUTH: TLS-intercepted 401 retry mirrors the plain-HTTP
-	// dispatch path. The retry budget is one extra round-trip per
-	// inbound request and only fires when the swap actually ran;
-	// passthrough requests keep their original bearer on 401 so the
-	// caller's existing recovery flow is not disturbed.
-	if resp.StatusCode == http.StatusUnauthorized && didSwap && sink != nil {
-		if retryResp, retried := p.retryProviderAfterAuthFailure(ctx, params, observeToken, sink); retried {
-			_ = resp.Body.Close()
-			resp = retryResp
-			observeToken = strings.TrimPrefix(params.req.Header.Get("Authorization"), authSchemePrefix)
-		}
-	}
-	observeAnthropicResponse(ctx, sink, resp, observeToken, p.log)
 	defer func() { _ = resp.Body.Close() }()
 
 	responseBytes, err := p.forwardAndCaptureProviderResponse(params.writer, resp, params.responseRawPath)
@@ -570,7 +570,7 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 		decodedRequestBody = params.body
 	}
 	if appendErr := p.appendProviderCaptureExtension(params.cfg.CaptureDir, params.provider.BuildCaptureExtension(CaptureExchange{
-		CapturedAt:          currentTime().UTC(),
+		CapturedAt:          clock.Now().UTC(),
 		RequestHeader:       params.req.Header,
 		RequestBody:         params.body,
 		DecodedRequestBody:  decodedRequestBody,
@@ -604,12 +604,12 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 		}
 	}
 	p.log.InfoContext(ctx, "mitm.provider.capture.completed",
-		"provider", string(params.provider.ID()),
+		"provider", params.provider.ID().String(),
 		"host", params.host,
 		"concern", params.concern,
 		"path", params.req.URL.Path,
 		"status", resp.StatusCode,
-		"duration_ms", time.Since(params.started).Milliseconds(),
+		"duration_ms", clock.Since(params.started).Milliseconds(),
 		"request_bytes", params.requestBytes,
 		"response_bytes", responseBytes,
 	)
@@ -646,59 +646,17 @@ func providerHTTPCaptureRecordInput(params providerForwardParams, statusCode int
 	return httpCaptureRecordInput{
 		config:         params.cfg,
 		policy:         params.capturePolicy,
-		provider:       string(params.provider.ID()),
+		provider:       params.provider.ID().String(),
 		upstreamURL:    "https://" + params.host + params.req.URL.RequestURI(),
 		requestBody:    params.body,
 		responseBody:   nil,
 		requestIndex:   newCaptureBodyIndexFromReference(requestRef),
 		responseIndex:  newCaptureBodyIndexFromReference(responseRef),
 		responseLen:    responseBytes,
-		duration:       time.Since(params.started),
+		duration:       clock.Since(params.started),
 		responseStatus: statusCode,
 		clientFacet:    nil,
 	}
-}
-
-// retryProviderAfterAuthFailure asks the rotator for a fresh token
-// after an upstream 401 on the TLS-intercepted forwarding path,
-// rewrites the bearer on params.req, and retries one round-trip.
-// Returns the retry response and true when the retry produced a
-// response (regardless of status); returns nil and false when the
-// rotator refuses a new token, returns the same token, or the retry
-// transport fails. The retry budget matches the plain-HTTP dispatch
-// path: exactly one extra round-trip per inbound request.
-func (p *Proxy) retryProviderAfterAuthFailure(ctx context.Context, params providerForwardParams, failedToken string, sink RotatorSink) (*http.Response, bool) {
-	freshToken, err := sink.TokenAfterAuthFailure(ctx, AnthropicProviderName, failedToken)
-	if err != nil {
-		p.log.DebugContext(ctx, "mitm.rotator_swap.retry_skipped",
-			"provider", string(AnthropicProviderName),
-			"host", params.host,
-			"path", params.req.URL.Path,
-			"err", err,
-		)
-		return nil, false
-	}
-	if freshToken == "" || freshToken == failedToken {
-		return nil, false
-	}
-	params.req.Header.Set("Authorization", authSchemePrefix+freshToken)
-	retryResp, retryErr := p.providerUpstreamRoundTrip(params.req, params.body, params.target, params.host)
-	if retryErr != nil {
-		p.log.WarnContext(ctx, "mitm.rotator_swap.retry_failed",
-			"provider", string(AnthropicProviderName),
-			"host", params.host,
-			"path", params.req.URL.Path,
-			"err", retryErr,
-		)
-		return nil, false
-	}
-	p.log.InfoContext(ctx, "mitm.rotator_swap.retry_succeeded",
-		"provider", string(AnthropicProviderName),
-		"host", params.host,
-		"path", params.req.URL.Path,
-		"retry_status", retryResp.StatusCode,
-	)
-	return retryResp, true
 }
 
 // providerUpstreamRoundTrip dials the upstream over the proxy's TLS
@@ -749,7 +707,7 @@ func (p *Proxy) forwardAndCaptureProviderResponse(client *bufio.Writer, resp *ht
 		var err error
 		responseFile, err = os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 		if err != nil {
-			p.log.Warn("mitm.provider.response.open_capture_failed", "path", responseRawPath, "err", err)
+			p.log.Warn("mitm.provider.response.open_capture_failed", "concern", "providers.mitm.wire", "path", responseRawPath, "err", err)
 			return 0, fmt.Errorf("open raw cursor response: %w", err)
 		}
 		defer func() { _ = responseFile.Close() }()
@@ -780,7 +738,7 @@ func (p *Proxy) forwardAndCaptureProviderResponse(client *bufio.Writer, resp *ht
 			return responseBytes, nil
 		}
 		if readErr != nil {
-			p.log.Warn("mitm.provider.response.read_body_failed", "err", readErr)
+			p.log.Warn("mitm.provider.response.read_body_failed", "concern", "providers.mitm.wire", "err", readErr)
 			return responseBytes, fmt.Errorf("read cursor response body: %w", readErr)
 		}
 	}
@@ -826,7 +784,7 @@ func writeProviderResponseBodyChunk(client *bufio.Writer, responseFile *os.File,
 func writeProviderResponseEOF(client *bufio.Writer, responseFile *os.File, chunked bool) (int64, error) {
 	if !chunked {
 		if err := client.Flush(); err != nil {
-			slog.Warn("mitm.provider.response.flush_body_failed", "err", err)
+			slog.Warn("mitm.provider.response.flush_body_failed", "concern", "providers.mitm.wire", "err", err)
 			return 0, fmt.Errorf("flush cursor response body: %w", err)
 		}
 		return 0, nil
@@ -836,17 +794,17 @@ func writeProviderResponseEOF(client *bufio.Writer, responseFile *os.File, chunk
 
 func writeProviderResponseBytes(client *bufio.Writer, responseFile *os.File, chunk []byte, label string) (int64, error) {
 	if _, err := client.Write(chunk); err != nil {
-		slog.Warn("mitm.provider.response.write_client_failed", "label", label, "err", err)
+		slog.Warn("mitm.provider.response.write_client_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
 		return 0, fmt.Errorf("write cursor response %s: %w", label, err)
 	}
 	if responseFile != nil {
 		if _, err := responseFile.Write(chunk); err != nil {
-			slog.Warn("mitm.provider.response.capture_write_failed", "label", label, "err", err)
+			slog.Warn("mitm.provider.response.capture_write_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
 			return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
 		}
 	}
 	if err := client.Flush(); err != nil {
-		slog.Warn("mitm.provider.response.flush_failed", "label", label, "err", err)
+		slog.Warn("mitm.provider.response.flush_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
 		return 0, fmt.Errorf("flush cursor response %s: %w", label, err)
 	}
 	return int64(len(chunk)), nil
@@ -854,17 +812,17 @@ func writeProviderResponseBytes(client *bufio.Writer, responseFile *os.File, chu
 
 func writeProviderResponseString(client *bufio.Writer, responseFile *os.File, text string, label string) (int64, error) {
 	if _, err := client.WriteString(text); err != nil {
-		slog.Warn("mitm.provider.response.write_client_failed", "label", label, "err", err)
+		slog.Warn("mitm.provider.response.write_client_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
 		return 0, fmt.Errorf("write cursor response %s: %w", label, err)
 	}
 	if responseFile != nil {
 		if _, err := responseFile.WriteString(text); err != nil {
-			slog.Warn("mitm.provider.response.capture_write_failed", "label", label, "err", err)
+			slog.Warn("mitm.provider.response.capture_write_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
 			return 0, fmt.Errorf("capture cursor response %s: %w", label, err)
 		}
 	}
 	if err := client.Flush(); err != nil {
-		slog.Warn("mitm.provider.response.flush_failed", "label", label, "err", err)
+		slog.Warn("mitm.provider.response.flush_failed", "concern", "providers.mitm.wire", "label", label, "err", err)
 		return 0, fmt.Errorf("flush cursor response %s: %w", label, err)
 	}
 	return int64(len(text)), nil

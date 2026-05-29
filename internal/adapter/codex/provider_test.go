@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -349,7 +350,7 @@ func TestCodexRequestIDFallsBackToCursorID(t *testing.T) {
 	}
 }
 
-func TestResolvedModelFromRequestPopulatesCodexFields(t *testing.T) {
+func TestBuildRequestConsumesResolvedRequestCodexFields(t *testing.T) {
 	req := adapterresolver.ResolvedRequest{
 		Provider:     adapterresolver.ProviderCodex,
 		Family:       "gpt-5",
@@ -361,26 +362,16 @@ func TestResolvedModelFromRequestPopulatesCodexFields(t *testing.T) {
 			OutputTokens: 16384,
 		},
 	}
-	rm := resolvedModelFromRequest(req)
-	if rm.Alias != "gpt-5.3-codex" {
-		t.Errorf("Alias = %q", rm.Alias)
+	req.OpenAI = adapteropenai.ChatRequest{
+		Messages: []adapteropenai.ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
 	}
-	if rm.ClaudeModel != "gpt-5.3-codex" {
-		t.Errorf("ClaudeModel = %q", rm.ClaudeModel)
+	out := BuildRequestWithConfig(req.OpenAI, &req, req.Effort.String(), RequestBuilderConfig{})
+	if out.Model != "gpt-5.3-codex" {
+		t.Errorf("Model = %q, want gpt-5.3-codex", out.Model)
 	}
-	if rm.Context != 200000 {
-		t.Errorf("Context = %d", rm.Context)
-	}
-	if rm.MaxOutputTokens != 16384 {
-		t.Errorf("MaxOutputTokens = %d", rm.MaxOutputTokens)
-	}
-	if rm.Effort != "high" {
-		t.Errorf("Effort = %q", rm.Effort)
-	}
-	if rm.FamilySlug != "gpt-5" {
-		t.Errorf("FamilySlug = %q", rm.FamilySlug)
-	}
-	if rm.Instructions != "model base instructions" {
-		t.Errorf("Instructions = %q", rm.Instructions)
+	if !strings.HasPrefix(out.Instructions, "model base instructions") {
+		t.Errorf("Instructions = %q, want model base instructions prefix", out.Instructions)
 	}
 }

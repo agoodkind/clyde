@@ -4,11 +4,52 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+)
+
+// openAIChatRole is the closed enum of OpenAI chat roles the
+// Anthropic mapper accepts when translating one OpenAI message into
+// the Anthropic message tree.
+type openAIChatRole string
+
+const (
+	openAIChatRoleSystem    openAIChatRole = "system"
+	openAIChatRoleDeveloper openAIChatRole = "developer"
+	openAIChatRoleUser      openAIChatRole = "user"
+	openAIChatRoleAssistant openAIChatRole = "assistant"
+	openAIChatRoleTool      openAIChatRole = "tool"
+	openAIChatRoleFunction  openAIChatRole = "function"
+)
+
+// openAIContentPartType is the closed enum of OpenAI content-part
+// types recognized by the Anthropic mapper. The mapper rejects
+// audio parts and routes the rest to Anthropic block constructors.
+type openAIContentPartType string
+
+const (
+	openAIContentPartTypeText       openAIContentPartType = "text"
+	openAIContentPartTypeImageURL   openAIContentPartType = "image_url"
+	openAIContentPartTypeInputAudio openAIContentPartType = "input_audio"
+	openAIContentPartTypeRefusal    openAIContentPartType = "refusal"
+	openAIContentPartTypeToolResult openAIContentPartType = "tool_result"
+	openAIContentPartTypeToolUse    openAIContentPartType = "tool_use"
+	openAIContentPartTypeThinking   openAIContentPartType = "thinking"
+)
+
+// openAIToolChoiceString is the closed enum of bare-string forms the
+// OpenAI tool_choice payload may carry. Object forms are decoded
+// separately.
+type openAIToolChoiceString string
+
+const (
+	openAIToolChoiceNone     openAIToolChoiceString = "none"
+	openAIToolChoiceAuto     openAIToolChoiceString = "auto"
+	openAIToolChoiceRequired openAIToolChoiceString = "required"
 )
 
 var (
@@ -20,14 +61,22 @@ var (
 )
 
 type (
-	OpenAIRequest            = adapteropenai.ChatRequest
-	OpenAITool               = adapteropenai.Tool
+	// OpenAIRequest is part of Clyde's typed adapter surface.
+	OpenAIRequest = adapteropenai.ChatRequest
+	// OpenAITool is part of Clyde's typed adapter surface.
+	OpenAITool = adapteropenai.Tool
+	// OpenAIToolFunctionSchema is part of Clyde's typed adapter surface.
 	OpenAIToolFunctionSchema = adapteropenai.ToolFunctionSchema
-	OpenAIFunction           = adapteropenai.Function
-	OpenAIMessage            = adapteropenai.ChatMessage
-	OpenAIToolCall           = adapteropenai.ToolCall
-	OpenAIToolCallFunction   = adapteropenai.ToolCallFunction
-	OpenAIContentPart        = adapteropenai.ContentPart
+	// OpenAIFunction is part of Clyde's typed adapter surface.
+	OpenAIFunction = adapteropenai.Function
+	// OpenAIMessage is part of Clyde's typed adapter surface.
+	OpenAIMessage = adapteropenai.ChatMessage
+	// OpenAIToolCall is part of Clyde's typed adapter surface.
+	OpenAIToolCall = adapteropenai.ToolCall
+	// OpenAIToolCallFunction is part of Clyde's typed adapter surface.
+	OpenAIToolCallFunction = adapteropenai.ToolCallFunction
+	// OpenAIContentPart is part of Clyde's typed adapter surface.
+	OpenAIContentPart = adapteropenai.ContentPart
 )
 
 // TranslateRequest maps an OpenAI-shaped chat request to Anthropic
@@ -106,14 +155,14 @@ func translateMessage(
 	msg OpenAIMessage,
 	inboundThinkingStrategy adapterrender.MaterializationStrategy,
 ) (string, *AnthMessage, error) {
-	switch msg.Role {
-	case "system", "developer":
+	switch openAIChatRole(msg.Role) {
+	case openAIChatRoleSystem, openAIChatRoleDeveloper:
 		t := flattenContent(msg.Content)
 		if strings.TrimSpace(t) == "" {
 			return "", nil, nil
 		}
 		return t, nil, nil
-	case "user":
+	case openAIChatRoleUser:
 		blocks, err := openAIMessageToUserBlocks(msgIdx, msg)
 		if err != nil {
 			return "", nil, err
@@ -122,7 +171,7 @@ func translateMessage(
 			return "", nil, nil
 		}
 		return "", &AnthMessage{Role: "user", Content: blocks}, nil
-	case "assistant":
+	case openAIChatRoleAssistant:
 		blocks, err := openAIMessageToAssistantBlocks(msgIdx, msg, inboundThinkingStrategy)
 		if err != nil {
 			return "", nil, err
@@ -131,7 +180,7 @@ func translateMessage(
 			return "", nil, nil
 		}
 		return "", &AnthMessage{Role: "assistant", Content: blocks}, nil
-	case "tool", "function":
+	case openAIChatRoleTool, openAIChatRoleFunction:
 		result := flattenContent(msg.Content)
 		if result == "" {
 			result = " "
@@ -154,7 +203,7 @@ func resolveToolChoice(req OpenAIRequest) (*AnthToolChoice, error) {
 	}
 	if req.ParallelTools != nil && !*req.ParallelTools {
 		if toolChoice == nil {
-			toolChoice = &AnthToolChoice{Type: "auto"}
+			toolChoice = &AnthToolChoice{Type: "auto", Name: "", DisableParallelToolUse: false}
 		}
 		toolChoice.DisableParallelToolUse = true
 	}
@@ -181,8 +230,7 @@ func logRequestTranslated(
 		choiceName = toolChoice.Name
 	}
 	toolUseCount, toolResultCount := countToolBlocks(out)
-	anthropicBackendLog.Logger().Info("adapter.anthropic.request.translated",
-		"subcomponent", "anthropic",
+	anthropicBackendLog.Logger().Info("adapter.anthropic.request.translated", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 		"model", req.Model,
 		"system_len", len(systemStr),
 		"message_count", len(out),
@@ -252,8 +300,7 @@ func dropTrailingAssistantPrefill(in []AnthMessage) []AnthMessage {
 			textBytes += len(tb.Text)
 		}
 	}
-	anthropicBackendLog.Logger().Info("adapter.anthropic.trailing_assistant_prefill.dropped",
-		"subcomponent", "anthropic_mapper",
+	anthropicBackendLog.Logger().Info("adapter.anthropic.trailing_assistant_prefill.dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 		"text_bytes", textBytes,
 		"block_count", len(last.Content),
 	)
@@ -274,20 +321,19 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 	parts, _ := normalizeContent(msg.Content)
 	var blocks []AnthContentBlock
 	for partIdx, p := range parts {
-		switch p.Type {
-		case "text":
+		switch openAIContentPartType(p.Type) {
+		case openAIContentPartTypeText:
 			if p.Text == "" {
 				continue
 			}
 			blocks = append(blocks, TextBlock{Text: p.Text})
-		case "image_url":
+		case openAIContentPartTypeImageURL:
 			if p.ImageURL == nil {
 				continue
 			}
 			src, err := imageURLToSource(p.ImageURL.URL)
 			if err != nil {
-				log.Warn("adapter.anthropic.user_part.image_rejected",
-					"subcomponent", "anthropic_mapper",
+				log.Warn("adapter.anthropic.user_part.image_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 					"msg_idx", msgIdx,
 					"part_idx", partIdx,
 					"err", err.Error(),
@@ -295,27 +341,30 @@ func openAIMessageToUserBlocks(msgIdx int, msg OpenAIMessage) ([]AnthContentBloc
 				return nil, err
 			}
 			blocks = append(blocks, ImageBlock{Source: src})
-		case "input_audio":
-			log.Warn("adapter.anthropic.user_part.audio_rejected",
-				"subcomponent", "anthropic_mapper",
+		case openAIContentPartTypeInputAudio:
+			log.Warn("adapter.anthropic.user_part.audio_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
 			)
 			return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
-		case "refusal":
+		case openAIContentPartTypeRefusal:
 			if p.Refusal == "" {
 				continue
 			}
 			blocks = append(blocks, TextBlock{Text: p.Refusal})
-		case "tool_result":
+		case openAIContentPartTypeToolResult:
 			result := flattenToolResultContent(p.Content)
 			if result == "" {
 				result = " "
 			}
 			blocks = append(blocks, ToolResultBlock{ToolUseID: p.ToolUseID, ResultContent: result})
+		case openAIContentPartTypeToolUse, openAIContentPartTypeThinking:
+			// These part kinds only appear on assistant messages; the
+			// user-block translator falls through to the unknown-type
+			// branch below to preserve any opaque text.
+			fallthrough
 		default:
-			log.Warn("adapter.anthropic.user_part.unknown_type",
-				"subcomponent", "anthropic",
+			log.Warn("adapter.anthropic.user_part.unknown_type", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 				"msg_idx", msgIdx,
 				"part_idx", partIdx,
 				"part_type", p.Type,
@@ -398,34 +447,37 @@ func assistantPartToBlocks(
 	inboundThinkingStrategy adapterrender.MaterializationStrategy,
 ) ([]AnthContentBlock, error) {
 	log := anthropicBackendLog.Logger()
-	switch p.Type {
-	case "text":
+	switch openAIContentPartType(p.Type) {
+	case openAIContentPartTypeText:
 		return materializeSyntheticAssistantText(p.Text, inboundThinkingStrategy), nil
-	case "image_url":
+	case openAIContentPartTypeImageURL:
 		return assistantImagePart(msgIdx, partIdx, p)
-	case "input_audio":
-		log.Warn("adapter.anthropic.assistant_part.audio_rejected",
-			"subcomponent", "anthropic_mapper",
+	case openAIContentPartTypeInputAudio:
+		log.Warn("adapter.anthropic.assistant_part.audio_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 			"msg_idx", msgIdx,
 			"part_idx", partIdx,
 		)
 		return nil, fmt.Errorf("%w: message %d part %d", ErrAudioUnsupported, msgIdx, partIdx)
-	case "refusal":
+	case openAIContentPartTypeRefusal:
 		// Mirror the assistant-text path: a refusal block can also
 		// carry a marker-wrapped thinking envelope from Cursor's
 		// replay. Materialize per the same generic strategy.
 		return materializeSyntheticAssistantText(p.Refusal, inboundThinkingStrategy), nil
-	case "tool_use":
+	case openAIContentPartTypeToolUse:
 		input := p.Input
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
 		}
 		return []AnthContentBlock{ToolUseBlock{ID: p.ID, Name: p.Name, Input: input}}, nil
-	case "thinking":
+	case openAIContentPartTypeThinking:
 		return assistantThinkingPart(msgIdx, partIdx, p), nil
+	case openAIContentPartTypeToolResult:
+		// Tool-result parts belong on user messages, not assistant
+		// messages, so the assistant translator falls through to the
+		// unknown-type branch and logs.
+		fallthrough
 	default:
-		log.Warn("adapter.anthropic.assistant_part.unknown_type",
-			"subcomponent", "anthropic",
+		log.Warn("adapter.anthropic.assistant_part.unknown_type", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"msg_idx", msgIdx,
 			"part_idx", partIdx,
 			"part_type", p.Type,
@@ -443,8 +495,7 @@ func assistantThinkingPart(msgIdx int, partIdx int, p OpenAIContentPart) []AnthC
 	if body == "" {
 		return nil
 	}
-	anthropicBackendLog.Logger().Debug("adapter.anthropic.thinking.raw_unsigned_injected",
-		"subcomponent", "anthropic_mapper",
+	anthropicBackendLog.Logger().Debug("adapter.anthropic.thinking.raw_unsigned_injected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 		"msg_idx", msgIdx,
 		"part_idx", partIdx,
 		"body_len", len(body),
@@ -460,7 +511,7 @@ func assistantThinkingPart(msgIdx int, partIdx int, p OpenAIContentPart) []AnthC
 // strategy decides whether each round-tripped envelope becomes a native
 // thinking content block (Anthropic default), gets concatenated as plain
 // text, dropped, or passed through unchanged. The lever lives at
-// [config.AdapterSyntheticContent.Anthropic.InboundThinkingMaterialization].
+// [config.AdapterAnthropicReasoning.InboundThinking].
 func materializeSyntheticAssistantText(
 	text string,
 	inboundThinkingStrategy adapterrender.MaterializationStrategy,
@@ -518,8 +569,7 @@ func nativeThinkingBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, b
 	log := anthropicBackendLog.Logger()
 	if mp.Origin == adapterrender.OriginAnthropic {
 		if strings.TrimSpace(mp.Signature) == "" {
-			log.Debug("adapter.anthropic.thinking.unsigned_dropped",
-				"subcomponent", "anthropic_mapper",
+			log.Debug("adapter.anthropic.thinking.unsigned_dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 				"origin", string(mp.Origin),
 				"body_len", len(body),
 			)
@@ -527,8 +577,7 @@ func nativeThinkingBlock(mp adapterrender.MaterializedPart) (AnthContentBlock, b
 		}
 		return ThinkingBlock{Thinking: body, Signature: mp.Signature}, true
 	}
-	log.Debug("adapter.anthropic.thinking.foreign_origin_injected",
-		"subcomponent", "anthropic_mapper",
+	log.Debug("adapter.anthropic.thinking.foreign_origin_injected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 		"origin", string(mp.Origin),
 		"body_len", len(body),
 	)
@@ -541,8 +590,7 @@ func nativeRedactedThinkingBlock(mp adapterrender.MaterializedPart) (AnthContent
 		return nil, false
 	}
 	if mp.Origin != adapterrender.OriginAnthropic {
-		anthropicBackendLog.Logger().Debug("adapter.anthropic.redacted_thinking.foreign_origin_dropped",
-			"subcomponent", "anthropic_mapper",
+		anthropicBackendLog.Logger().Debug("adapter.anthropic.redacted_thinking.foreign_origin_dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 			"origin", string(mp.Origin),
 			"body_len", len(body),
 		)
@@ -561,8 +609,7 @@ func assistantImagePart(msgIdx int, partIdx int, p OpenAIContentPart) ([]AnthCon
 	}
 	src, err := imageURLToSource(p.ImageURL.URL)
 	if err != nil {
-		log.Warn("adapter.anthropic.assistant_part.image_rejected",
-			"subcomponent", "anthropic_mapper",
+		log.Warn("adapter.anthropic.assistant_part.image_rejected", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_mapper",
 			"msg_idx", msgIdx,
 			"part_idx", partIdx,
 			"err", err.Error(),
@@ -576,18 +623,19 @@ func imageURLToSource(rawURL string) (*AnthImageSource, error) {
 	if strings.HasPrefix(rawURL, "data:") {
 		media, data, err := parseDataURI(rawURL)
 		if err != nil {
-			return nil, err
+			slog.Warn("adapter.anthropic.mapper.parse_data_uri_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+			return nil, fmt.Errorf("parse image data URI: %w", err)
 		}
-		return &AnthImageSource{Type: "base64", MediaType: media, Data: data}, nil
+		return &AnthImageSource{Type: "base64", MediaType: media, Data: data, URL: ""}, nil
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse image URL: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported image url scheme: %q", u.Scheme)
 	}
-	return &AnthImageSource{Type: "url", URL: rawURL}, nil
+	return &AnthImageSource{Type: "url", URL: rawURL, MediaType: "", Data: ""}, nil
 }
 
 func parseDataURI(s string) (mediaType string, data string, err error) {
@@ -654,16 +702,19 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		switch s {
-		case "none":
-			return &AnthToolChoice{Type: "none"}, nil
-		case "auto":
+		switch openAIToolChoiceString(s) {
+		case openAIToolChoiceNone:
+			return &AnthToolChoice{Type: "none", Name: "", DisableParallelToolUse:
+
 			// claude-cli does not send tool_choice when behavior is
 			// "auto" (the Anthropic default). Returning nil omits the
 			// field on the wire. CLYDE-124 parity.
+			false}, nil
+		case openAIToolChoiceAuto:
+
 			return nil, nil
-		case "required":
-			return &AnthToolChoice{Type: "any"}, nil
+		case openAIToolChoiceRequired:
+			return &AnthToolChoice{Type: "any", Name: "", DisableParallelToolUse: false}, nil
 		default:
 			return nil, nil
 		}
@@ -675,10 +726,11 @@ func translateToolChoice(raw json.RawMessage) (*AnthToolChoice, error) {
 		} `json:"function"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return nil, err
+		slog.Warn("adapter.anthropic.mapper.tool_choice_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return nil, fmt.Errorf("unmarshal Anthropic tool choice: %w", err)
 	}
 	if obj.Type == "function" {
-		return &AnthToolChoice{Type: "tool", Name: obj.Function.Name}, nil
+		return &AnthToolChoice{Type: "tool", Name: obj.Function.Name, DisableParallelToolUse: false}, nil
 	}
 	return nil, nil
 }

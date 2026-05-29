@@ -56,6 +56,7 @@ var openAITypeByClass = map[string]string{
 	"upstream_network_error":    "invalid_request_error",
 	"upstream_unavailable":      "invalid_request_error",
 	"upstream_failed":           "invalid_request_error",
+	"baseline_missing":          "invalid_request_error",
 	"timeout":                   "invalid_request_error",
 	"canceled":                  "invalid_request_error",
 	"internal":                  "internal_error",
@@ -99,8 +100,7 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 	if err != nil {
 		const fallback = `{"error":{"message":"failed to encode error envelope","type":"internal_error","code":"internal_error"}}`
 		writeErr := erroring.WriteJSONStatus(w, http.StatusInternalServerError, []byte(fallback))
-		log.Warn("adapter.openai_error_envelope.render_failed",
-			"event", "marshal_failed",
+		log.Warn("adapter.openai_error_envelope.render_failed", "concern", "adapter.http.errors", "event", "marshal_failed",
 			"err", err.Error(),
 		)
 		if writeErr != nil {
@@ -109,8 +109,7 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 		return fmt.Errorf("marshal openai error envelope: %w", err)
 	}
 	if writeErr := erroring.WriteJSONStatus(w, code, payload); writeErr != nil {
-		log.Warn("adapter.openai_error_envelope.render_failed",
-			"event", "write_failed",
+		log.Warn("adapter.openai_error_envelope.render_failed", "concern", "adapter.http.errors", "event", "write_failed",
 			"err", writeErr.Error(),
 		)
 		return fmt.Errorf("write openai error envelope: %w", writeErr)

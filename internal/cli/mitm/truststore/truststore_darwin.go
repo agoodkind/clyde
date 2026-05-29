@@ -72,16 +72,14 @@ func newPlatformRegistry() Registry {
 // execRun is the production runner. It captures combined output so
 // the CLI can surface a single diagnostic blob on failure.
 func execRun(ctx context.Context, name string, args ...string) ([]byte, error) {
-	slog.DebugContext(ctx, "cli.mitm.truststore.darwin.exec",
-		"binary", name, "argv_count", len(args))
+	slog.DebugContext(ctx, "cli.mitm.truststore.darwin.exec", "concern", "cli.mitm.truststore", "binary", name, "argv_count", len(args))
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = nil
 	cmd.Stdout = nil
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		slog.WarnContext(ctx, "cli.mitm.truststore.darwin.exec_failed",
-			"binary", name, "argv_count", len(args), "err", err)
+		slog.WarnContext(ctx, "cli.mitm.truststore.darwin.exec_failed", "concern", "cli.mitm.truststore", "binary", name, "argv_count", len(args), "err", err)
 		return output, fmt.Errorf("cli.mitm.truststore.darwin: exec %s: %w", name, err)
 	}
 	return output, nil
@@ -101,8 +99,7 @@ func (d darwinRegistry) CACommonName() string {
 // environment the platform layer can observe.
 func (d darwinRegistry) Status(certPath string) (InstallStatus, error) {
 	status := NewInstallStatus(PlatformDarwin, d.commonName)
-	slog.Debug("cli.mitm.truststore.darwin.status_begin",
-		"cert_path", certPath, "keychain", d.systemKeychain)
+	slog.Debug("cli.mitm.truststore.darwin.status_begin", "concern", "cli.mitm.truststore", "cert_path", certPath, "keychain", d.systemKeychain)
 
 	onDisk, fpErr := fingerprintPEM(certPath)
 	if fpErr != nil {
@@ -123,8 +120,7 @@ func (d darwinRegistry) Status(certPath string) (InstallStatus, error) {
 			status.Detail = "no Clyde MITM CA found in System.keychain"
 			return status, nil
 		}
-		slog.Warn("cli.mitm.truststore.darwin.find_certificate_failed",
-			"err", err, "output", strings.TrimSpace(string(output)))
+		slog.Warn("cli.mitm.truststore.darwin.find_certificate_failed", "concern", "cli.mitm.truststore", "err", err, "output", strings.TrimSpace(string(output)))
 		return status, fmt.Errorf("security find-certificate: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
 	der := extractFirstCertDER(output, "<security stdout>")
@@ -152,10 +148,10 @@ func (d darwinRegistry) Install(certPath string) error {
 	}
 	if _, err := os.Stat(certPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("cli.mitm.truststore.darwin.install_ca_absent", "cert_path", certPath)
+			slog.Warn("cli.mitm.truststore.darwin.install_ca_absent", "concern", "cli.mitm.truststore", "cert_path", certPath)
 			return fmt.Errorf("%w: %s", ErrCAAbsent, certPath)
 		}
-		slog.Warn("cli.mitm.truststore.darwin.install_stat_failed", "cert_path", certPath, "err", err)
+		slog.Warn("cli.mitm.truststore.darwin.install_stat_failed", "concern", "cli.mitm.truststore", "cert_path", certPath, "err", err)
 		return fmt.Errorf("stat ca cert %q: %w", certPath, err)
 	}
 
@@ -167,11 +163,10 @@ func (d darwinRegistry) Install(certPath string) error {
 		return nil
 	}
 	if current.Installed && !current.FingerprintsMatch() {
-		slog.Info("cli.mitm.truststore.darwin.replace_stale_ca",
-			"installed_fingerprint", current.InstalledFingerprint.String(),
+		slog.Info("cli.mitm.truststore.darwin.replace_stale_ca", "concern", "cli.mitm.truststore", "installed_fingerprint", current.InstalledFingerprint.String(),
 			"on_disk_fingerprint", current.OnDiskFingerprint.String())
 		if removeErr := d.Uninstall(); removeErr != nil {
-			slog.Warn("cli.mitm.truststore.darwin.replace_uninstall_failed", "err", removeErr)
+			slog.Warn("cli.mitm.truststore.darwin.replace_uninstall_failed", "concern", "cli.mitm.truststore", "err", removeErr)
 			return fmt.Errorf("replace stale ca: %w", removeErr)
 		}
 	}
@@ -183,12 +178,10 @@ func (d darwinRegistry) Install(certPath string) error {
 		"-k", d.systemKeychain, certPath,
 	)
 	if runErr != nil {
-		slog.Warn("cli.mitm.truststore.darwin.add_trusted_cert_failed",
-			"err", runErr, "output", strings.TrimSpace(string(output)))
+		slog.Warn("cli.mitm.truststore.darwin.add_trusted_cert_failed", "concern", "cli.mitm.truststore", "err", runErr, "output", strings.TrimSpace(string(output)))
 		return fmt.Errorf("sudo security add-trusted-cert: %w (%s)", runErr, strings.TrimSpace(string(output)))
 	}
-	slog.Info("cli.mitm.truststore.darwin.installed",
-		"keychain", d.systemKeychain, "cert_path", certPath)
+	slog.Info("cli.mitm.truststore.darwin.installed", "concern", "cli.mitm.truststore", "keychain", d.systemKeychain, "cert_path", certPath)
 	return nil
 }
 
@@ -202,17 +195,14 @@ func (d darwinRegistry) Uninstall() error {
 		securityPath, "delete-certificate", "-c", d.commonName, d.systemKeychain,
 	)
 	if runErr == nil {
-		slog.Info("cli.mitm.truststore.darwin.uninstalled",
-			"keychain", d.systemKeychain, "common_name", d.commonName)
+		slog.Info("cli.mitm.truststore.darwin.uninstalled", "concern", "cli.mitm.truststore", "keychain", d.systemKeychain, "common_name", d.commonName)
 		return nil
 	}
 	if isSecurityNotFound(output, runErr) {
-		slog.Debug("cli.mitm.truststore.darwin.uninstall_already_absent",
-			"common_name", d.commonName)
+		slog.Debug("cli.mitm.truststore.darwin.uninstall_already_absent", "concern", "cli.mitm.truststore", "common_name", d.commonName)
 		return nil
 	}
-	slog.Warn("cli.mitm.truststore.darwin.delete_certificate_failed",
-		"err", runErr, "output", strings.TrimSpace(string(output)))
+	slog.Warn("cli.mitm.truststore.darwin.delete_certificate_failed", "concern", "cli.mitm.truststore", "err", runErr, "output", strings.TrimSpace(string(output)))
 	return fmt.Errorf("sudo security delete-certificate: %w (%s)", runErr, strings.TrimSpace(string(output)))
 }
 

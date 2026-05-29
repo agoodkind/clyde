@@ -64,6 +64,7 @@ func buildResponsesHTTPHeaders(cfg HTTPTransportConfig) http.Header {
 		TurnMetadata:         cfg.TurnMetadata,
 		IncludeTimingMetrics: false,
 		Originator:           "",
+		UserAgent:            "",
 	})
 	// Strip the websocket-only OpenAI-Beta upgrade-version header. The
 	// WS header builder Set()s it under its canonical form, so deleting
@@ -213,7 +214,7 @@ func runHTTPTransportEventsOnce(
 		PreviousResponseID: "",
 		Warmup:             false,
 	}
-	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop}
+	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
 	responseStarted := false
 	result, parseErr := ParseSSEEventsWithOptions(ctx, resp.Body, func(event adapterrender.Event) error {
 		if codexRenderEventStartsClientResponse(event) {
@@ -279,8 +280,7 @@ func logHTTPTransportError(ctx context.Context, cfg HTTPTransportConfig, stage s
 	if log == nil {
 		log = slog.Default()
 	}
-	log.WarnContext(ctx, "adapter.codex.http_transport_error",
-		"component", "adapter",
+	log.WarnContext(ctx, "adapter.codex.http_transport_error", "concern", "adapter.providers.codex.request", "component", "adapter",
 		"subcomponent", "codex",
 		"request_id", cfg.RequestID,
 		"trace_id", string(cfg.Correlation.TraceID),

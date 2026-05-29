@@ -13,6 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -76,10 +77,9 @@ func newLocalClient(cfg config.SearchLocal) *localClient {
 func (c *localClient) Complete(ctx context.Context, prompt string) (string, error) {
 	log := slog.Default()
 	promptLen := len(prompt)
-	start := searchClock.Now()
+	start := clock.Now()
 
-	log.DebugContext(ctx, "llm request",
-		"model", c.model,
+	log.DebugContext(ctx, "llm request", "concern", "search", "model", c.model,
 		"prompt_chars", promptLen,
 		"prompt_preview", truncate(prompt, 200),
 	)
@@ -94,24 +94,22 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 		FrequencyPenalty: param.NewOpt(c.cfg.FrequencyPenalty),
 		MaxTokens:        param.NewOpt(int64(512)),
 	})
-	elapsed := time.Since(start)
+	elapsed := clock.Since(start)
 
 	if err != nil {
-		log.ErrorContext(ctx, "llm request failed",
-			"model", c.model,
+		log.ErrorContext(ctx, "llm request failed", "concern", "search", "model", c.model,
 			"duration", elapsed.Round(time.Millisecond),
 			"err", err,
 		)
 		return "", fmt.Errorf("local LLM request failed: %w", err)
 	}
 	if len(resp.Choices) == 0 {
-		log.WarnContext(ctx, "llm returned no choices", "model", c.model, "duration", elapsed.Round(time.Millisecond))
+		log.WarnContext(ctx, "llm returned no choices", "concern", "search", "model", c.model, "duration", elapsed.Round(time.Millisecond))
 		return "", fmt.Errorf("local LLM returned no choices")
 	}
 
 	result := resp.Choices[0].Message.Content
-	log.InfoContext(ctx, "llm response",
-		"model", c.model,
+	log.InfoContext(ctx, "llm response", "concern", "search", "model", c.model,
 		"prompt_chars", promptLen,
 		"response_chars", len(result),
 		"response_preview", truncate(result, 200),
@@ -144,11 +142,27 @@ func (c *claudeClient) Complete(ctx context.Context, prompt string) (string, err
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", c.model, prompt)
+	model, err := cleanClaudeModelArg(c.model)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "claude")
+	cmd.Args = []string{"claude", "-p", "--model", model, prompt}
 	output, err := cmd.Output()
 	if err != nil {
-		slog.ErrorContext(ctx, "claude search request failed", "model", c.model, "err", err)
+		slog.ErrorContext(ctx, "claude search request failed", "concern", "search", "model", c.model, "err", err)
 		return "", fmt.Errorf("claude -p failed: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func cleanClaudeModelArg(model string) (string, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", fmt.Errorf("empty claude model")
+	}
+	if strings.ContainsRune(model, 0) {
+		return "", fmt.Errorf("claude model contains NUL")
+	}
+	return model, nil
 }

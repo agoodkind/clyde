@@ -12,19 +12,8 @@ import (
 func GenerateUUIDE() (string, error) {
 	id, err := uuid.NewRandom()
 	if err != nil {
-		slog.Warn("util.uuid.generate_failed", "component", "util", "err", err)
+		slog.Warn("util.uuid.generate_failed", "concern", "util", "component", "util", "err", err)
 		return "", fmt.Errorf("generate uuid: %w", err)
 	}
 	return id.String(), nil
-}
-
-// GenerateUUID generates a new UUID v4 string. Callers that can
-// surface errors should prefer GenerateUUIDE.
-func GenerateUUID() string {
-	id, err := GenerateUUIDE()
-	if err != nil {
-		slog.Error("util.uuid.generate_failed", "component", "util", "err", err)
-		return ""
-	}
-	return id
 }

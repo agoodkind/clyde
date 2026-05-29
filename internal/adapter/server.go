@@ -21,11 +21,11 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/logpolicy"
-	"goodkind.io/clyde/internal/oauthrotation"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -49,22 +49,22 @@ const DefaultHost = "::1"
 // config omits a value.
 const DefaultMaxConcurrent = 4
 
-func (s *Server) evaluateUsageNotices(windows []adapterruntime.UsageWindowNoticeInput) []adapterruntime.UsageNotice {
+func (s *Server) evaluateUsageNotices(ctx context.Context, windows []adapterruntime.UsageWindowNoticeInput) []adapterruntime.UsageNotice {
 	if s == nil || s.usageNoticeGate == nil {
 		return nil
 	}
-	return s.usageNoticeGate.Evaluate(windows, s.cfg.Notices, adapterClock.Now())
+	return s.usageNoticeGate.Evaluate(ctx, windows, s.cfg.Notices, clock.Now())
 }
 
 // systemFingerprint is the value the adapter reports in the OpenAI
 // response field of the same name. It changes when the binary is
 // rebuilt so clients can detect a behavioral change. Kept stable
 // across requests within one daemon run.
-var systemFingerprint = "fp_clyde_" + adapterClock.Now().UTC().Format("20060102")
+var systemFingerprint = "fp_clyde_" + clock.Now().UTC().Format("20060102")
 
 // Server is the HTTP facade. The daemon process creates one and
 // either calls Start in a goroutine (production) or hands the
-// handler to httptest.Server (tests).
+// handler to [httptest.Server] (tests).
 type Server struct {
 	cfg            config.AdapterConfig
 	logprobs       config.AdapterLogprobs
@@ -84,7 +84,6 @@ type Server struct {
 	mux                  *http.ServeMux
 	httpSrv              *http.Server
 	requests             *livetrack.Registry[IngressMeta]
-	oauthRotator         *oauthrotation.Rotator
 	anthr                *anthropic.Client
 	httpClient           *http.Client
 	ctxUsage             *contextUsageTracker
@@ -111,9 +110,9 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	if runtimeLogging == nil {
 		runtimeLogging = NewRuntimeLogging(logging)
 	}
-	max := cfg.MaxConcurrent
-	if max <= 0 {
-		max = DefaultMaxConcurrent
+	maxConcurrent := cfg.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = DefaultMaxConcurrent
 	}
 	token := cfg.RequireToken
 	if v := os.Getenv("CLYDE_ADAPTER_TOKEN"); v != "" {
@@ -140,12 +139,11 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		runtimeLogging: runtimeLogging,
 		registry:       registry,
 		egressRegistry: egressReg,
-		sem:            make(chan struct{}, max),
+		sem:            make(chan struct{}, maxConcurrent),
 		token:          token,
 		mux:            nil,
 		httpSrv:        nil,
 		requests:       newAdapterIngressRegistry(adapterLog),
-		oauthRotator:   nil,
 		anthr:          nil,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
@@ -164,10 +162,10 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	probeCfg.Adapter.WireCapture = cfg.WireCapture
 	policies, err := logpolicy.Resolve(*probeCfg)
 	if err != nil {
-		log.LogAttrs(ctx, slog.LevelError, "adapter.logpolicy.resolve_failed", slog.String("err", err.Error()))
+		log.LogAttrs(ctx, slog.LevelError, "adapter.logpolicy.resolve_failed", slog.String("concern", "adapter.http.errors"), slog.String("err", err.Error()))
 		return nil, fmt.Errorf("adapter: resolve logging policy: %w", err)
 	}
-	s.registerProviders(ctx, cfg, deps, log, max, wsReg, policies)
+	s.registerProviders(ctx, cfg, deps, log, maxConcurrent, wsReg, policies)
 	s.mux = s.routes()
 	return s, nil
 }
@@ -185,12 +183,15 @@ func (s *Server) registerProviders(
 	policies logpolicy.PolicySet,
 ) {
 	if cfg.Codex.Enabled {
-		codexAuth := adaptercodex.NewAuthManager(cfg.Codex.AuthFile, adaptercodex.AuthManagerOptions{
-			HTTPClient: s.httpClient,
-			Log:        slogger.WithConcern(log.With("subcomponent", "codex_auth"), slogger.ConcernAdapterProviderCodex),
-			Now:        nil,
-			RefreshURL: "",
-		})
+		codexAuth := deps.authForProvider(adapterresolver.ProviderCodex)
+		if codexAuth == nil {
+			codexAuth = adaptercodex.NewAuthManager(cfg.Codex.AuthFile, adaptercodex.AuthManagerOptions{
+				HTTPClient: s.httpClient,
+				Log:        slogger.WithConcern(log.With("subcomponent", "codex_auth"), slogger.ConcernAdapterProviderCodex),
+				Now:        nil,
+				RefreshURL: "",
+			})
+		}
 		s.codexProvider = adaptercodex.NewProvider(adapterprovider.Deps{
 			Config:     cfg,
 			Auth:       codexAuth,
@@ -200,8 +201,7 @@ func (s *Server) registerProviders(
 			Now:        nil,
 		}, codexProviderOptionsWithRegistry(wsReg, policies))
 		s.providerRegistry.Register(s.codexProvider)
-		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
-			slog.String("provider", string(adapterresolver.ProviderCodex)),
+		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered", slog.String("concern", "adapter.http.ingress"), slog.String("provider", adapterresolver.ProviderCodex.String()),
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
 		)
 	}
@@ -221,13 +221,9 @@ func (s *Server) registerAnthropicProvider(
 	maxConcurrent int,
 	policies logpolicy.PolicySet,
 ) {
-	if deps.OAuthRotator != nil {
-		// Single daemon-owned rotator: share the instance the daemon's
-		// harvest-and-refresh loop also drives so on-disk renewals are
-		// visible to the serve path through shared in-memory slots.
-		s.oauthRotator = deps.OAuthRotator
-	} else {
-		s.oauthRotator = buildAnthropicRotator(ctx, cfg.Anthropic.OAuth, slogger.WithConcern(log.With("subcomponent", "oauth_rotation"), slogger.ConcernAdapterProviderAnthOAuth))
+	claudeAuth := deps.authForProvider(adapterresolver.ProviderAnthropic)
+	if claudeAuth == nil {
+		claudeAuth = anthropic.NewAuthManager(cfg.Anthropic.OAuth, "")
 	}
 	id := cfg.ClientIdentity
 	messagesURL := cfg.Anthropic.OAuth.MessagesURL
@@ -237,11 +233,9 @@ func (s *Server) registerAnthropicProvider(
 		// upstreamURL and prepends its own base, so we only need
 		// to match the path the proxy expects (/v1/messages).
 		messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed",
-			slog.String("messages_url", messagesURL),
-		)
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed", slog.String("concern", "adapter.providers.anthropic.oauth"), slog.String("messages_url", messagesURL))
 	}
-	s.anthr = anthropic.New(nil, newRotatorTokenSource(s.oauthRotator, s.log), anthropic.Config{
+	s.anthr = anthropic.New(nil, claudeAuth, anthropic.Config{
 		MessagesURL:             messagesURL,
 		OAuthAnthropicVersion:   cfg.Anthropic.OAuth.AnthropicVersion,
 		BetaHeader:              id.BetaHeader,
@@ -253,15 +247,16 @@ func (s *Server) registerAnthropicProvider(
 		CCVersion:               id.CCVersion,
 		CCEntrypoint:            id.CCEntrypoint,
 		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
-		// The rotator implements ratelimitsink.Sink. The signal-emission
-		// calls on the client side land in a later wave; wiring the field
-		// now keeps the constructor stable and the rotator reachable.
-		RateLimitSink: s.oauthRotator,
+		WireBaselinePath:        deps.AnthropicWireBaselinePath,
 	})
 	anthropicSidecarRotation := policies.Sinks[logpolicy.SinkAnthropicSidecar].Rotation
 	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{
-		Config: cfg,
-		Logger: slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
+		Config:     cfg,
+		Auth:       claudeAuth,
+		Logger:     slogger.WithConcern(log.With("subcomponent", "anthropic_provider"), slogger.ConcernAdapterProviderAnthReq),
+		HTTPClient: nil,
+		Telemetry:  nil,
+		Now:        nil,
 	}, anthropic.ProviderOptions{
 		Prepare:         s.prepareAnthropicProviderRequest,
 		ExecutePrepared: s.executeAnthropicPreparedRequest,
@@ -273,13 +268,10 @@ func (s *Server) registerAnthropicProvider(
 		},
 	})
 	s.providerRegistry.Register(s.anthropicProvider)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered",
-		slog.String("provider", string(adapterresolver.ProviderAnthropic)),
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered", slog.String("concern", "adapter.http.ingress"), slog.String("provider", adapterresolver.ProviderAnthropic.String()),
 		slog.Int("registered_count", len(s.providerRegistry.IDs())),
 	)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled",
-		slog.Int("max_concurrent", maxConcurrent),
-	)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.enabled", slog.String("concern", "adapter.providers.anthropic.oauth"), slog.Int("max_concurrent", maxConcurrent))
 }
 
 // codexProviderOptionsWithRegistry builds the codex provider's startup
@@ -355,7 +347,8 @@ func (s *Server) acquire(ctx context.Context) error {
 	case s.sem <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		s.log.WarnContext(ctx, "adapter.acquire.ctx_done", "concern", "adapter.chat.dispatch", "err", ctx.Err())
+		return fmt.Errorf("adapter acquire concurrency slot: %w", ctx.Err())
 	case <-time.After(30 * time.Second):
 		return fmt.Errorf("timed out waiting for concurrency slot")
 	}
@@ -378,12 +371,16 @@ func newRequestID() string {
 	return "chatcmpl-" + hex.EncodeToString(b[:])
 }
 
-// writeJSON serializes v to the response writer. The type parameter is
-// constrained to any only because encoding/json takes any; call sites must
-// pass a typed concrete value (no untyped composite literals such as
-// map[string]any{...}) so the wire shape stays auditable.
-func writeJSON[T any](w http.ResponseWriter, code int, v T) {
+// writeJSON writes a pre-marshaled JSON body to the response writer
+// with HTTP 200. Callers marshal their concrete typed response shape
+// with [json.Marshal] and hand the resulting [json.RawMessage] in, so
+// the wire-shape boundary stays anchored on each caller's concrete
+// type rather than on a generic `any` constraint. Non-2xx responses
+// go through the adapter error boundary, not this helper.
+func writeJSON(w http.ResponseWriter, body json.RawMessage) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(body); err != nil {
+		slog.Warn("adapter.write_json_failed", "concern", "adapter.http.errors", "err", err)
+	}
 }

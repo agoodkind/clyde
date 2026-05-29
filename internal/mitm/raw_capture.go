@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -39,13 +40,13 @@ func resolveCaptureConcern(rules []config.MITMCaptureRouteRule, input captureCon
 }
 
 func captureRuleMatches(rule config.MITMCaptureRouteRule, input captureConcernInput) bool {
-	if rule.Provider != "" && !strings.EqualFold(rule.Provider, strings.TrimSpace(input.Provider)) {
+	if rule.Provider != "" && !strings.EqualFold(string(rule.Provider), strings.TrimSpace(input.Provider)) {
 		return false
 	}
 	if rule.Host != "" && normalizeCaptureHost(rule.Host) != normalizeCaptureHost(input.Host) {
 		return false
 	}
-	if rule.Method != "" && !strings.EqualFold(rule.Method, strings.TrimSpace(input.Method)) {
+	if rule.Method != "" && !strings.EqualFold(string(rule.Method), strings.TrimSpace(input.Method)) {
 		return false
 	}
 	if rule.PathExact != "" && rule.PathExact != input.Path {
@@ -77,11 +78,11 @@ func captureContentTypeMatches(needle string, input captureConcernInput) bool {
 func (p *Proxy) nextRawCapturePaths(captureDir string, concern string, host string, path string) (string, string, error) {
 	dir := filepath.Join(expandHome(captureDir), "concerns", safePathPart(concern), "raw", safePathPart(host))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("mitm.raw_capture.mkdir_failed", "dir", dir, "err", err)
+		slog.Warn("mitm.raw_capture.mkdir_failed", "concern", "providers.mitm.wire", "dir", dir, "err", err)
 		return "", "", fmt.Errorf("create raw capture dir: %w", err)
 	}
 	seq := p.rawCaptureSeq.Add(1)
-	stamp := currentTime().UTC().Format("20060102T150405.000000000Z")
+	stamp := clock.Now().UTC().Format("20060102T150405.000000000Z")
 	name := fmt.Sprintf("%s-%06d-%s", stamp, seq, safePathPart(path))
 	return filepath.Join(dir, name+".request.raw"), filepath.Join(dir, name+".response.raw"), nil
 }
@@ -89,11 +90,11 @@ func (p *Proxy) nextRawCapturePaths(captureDir string, concern string, host stri
 func (p *Proxy) nextHTTPCapturePaths(captureDir string, provider string, path string) (string, string, error) {
 	dir := filepath.Join(expandHome(captureDir), "raw", safePathPart(provider))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("mitm.raw_capture.mkdir_failed", "dir", dir, "err", err)
+		slog.Warn("mitm.raw_capture.mkdir_failed", "concern", "providers.mitm.wire", "dir", dir, "err", err)
 		return "", "", fmt.Errorf("create raw capture dir: %w", err)
 	}
 	seq := p.rawCaptureSeq.Add(1)
-	stamp := currentTime().UTC().Format("20060102T150405.000000000Z")
+	stamp := clock.Now().UTC().Format("20060102T150405.000000000Z")
 	name := fmt.Sprintf("%s-%06d-%s", stamp, seq, safePathPart(path))
 	return filepath.Join(dir, name+".request.raw"), filepath.Join(dir, name+".response.raw"), nil
 }
@@ -101,7 +102,7 @@ func (p *Proxy) nextHTTPCapturePaths(captureDir string, provider string, path st
 func writeRawCaptureFile(path string, write func(io.Writer) error) (int64, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 	if err != nil {
-		slog.Warn("mitm.raw_capture.open_failed", "path", path, "err", err)
+		slog.Warn("mitm.raw_capture.open_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
 		return 0, fmt.Errorf("open raw capture file: %w", err)
 	}
 	defer func() { _ = f.Close() }()

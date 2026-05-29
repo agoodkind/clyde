@@ -2,21 +2,23 @@ package codex
 
 import (
 	"testing"
+
+	"goodkind.io/clyde/codexwire"
 )
 
-func msg(role, text string) map[string]any {
-	return map[string]any{
-		"type": "message",
-		"role": role,
-		"content": []map[string]any{{
-			"type": "input_text",
-			"text": text,
+func msg(role, text string) codexwire.InputItem {
+	return codexwire.InputItem{
+		Type: codexwire.ItemTypeMessage,
+		Role: role,
+		Content: codexwire.ContentItems{{
+			Type: codexwire.ContentItemInputText,
+			Text: text,
 		}},
 	}
 }
 
 func TestComputeDeltaReturnsAllItemsWhenPriorEmpty(t *testing.T) {
-	current := []map[string]any{msg("user", "hi"), msg("assistant", "hello")}
+	current := []codexwire.InputItem{msg("user", "hi"), msg("assistant", "hello")}
 	got := ComputeDelta(nil, current)
 	if !got.Ok {
 		t.Fatalf("expected ok, got %#v", got)
@@ -27,8 +29,8 @@ func TestComputeDeltaReturnsAllItemsWhenPriorEmpty(t *testing.T) {
 }
 
 func TestComputeDeltaReturnsSuffixWhenPriorIsStrictPrefix(t *testing.T) {
-	prior := []map[string]any{msg("user", "hi"), msg("assistant", "hello")}
-	current := []map[string]any{msg("user", "hi"), msg("assistant", "hello"), msg("user", "next question")}
+	prior := []codexwire.InputItem{msg("user", "hi"), msg("assistant", "hello")}
+	current := []codexwire.InputItem{msg("user", "hi"), msg("assistant", "hello"), msg("user", "next question")}
 	got := ComputeDelta(prior, current)
 	if !got.Ok {
 		t.Fatalf("expected ok, got reason %q", got.Reason)
@@ -36,14 +38,14 @@ func TestComputeDeltaReturnsSuffixWhenPriorIsStrictPrefix(t *testing.T) {
 	if len(got.Items) != 1 {
 		t.Errorf("expected single new item, got %d", len(got.Items))
 	}
-	if text := got.Items[0]["content"].([]map[string]any)[0]["text"]; text != "next question" {
-		t.Errorf("expected delta text=next question, got %v", text)
+	if text := got.Items[0].Content[0].Text; text != "next question" {
+		t.Errorf("expected delta text=next question, got %q", text)
 	}
 }
 
 func TestComputeDeltaNoExtensionWhenEqual(t *testing.T) {
-	prior := []map[string]any{msg("user", "hi")}
-	current := []map[string]any{msg("user", "hi")}
+	prior := []codexwire.InputItem{msg("user", "hi")}
+	current := []codexwire.InputItem{msg("user", "hi")}
 	got := ComputeDelta(prior, current)
 	if got.Ok {
 		t.Errorf("equal lists should not produce delta")
@@ -54,8 +56,8 @@ func TestComputeDeltaNoExtensionWhenEqual(t *testing.T) {
 }
 
 func TestComputeDeltaBaselineDivergenceOnRewrite(t *testing.T) {
-	prior := []map[string]any{msg("user", "hi"), msg("assistant", "hello")}
-	current := []map[string]any{msg("user", "different"), msg("assistant", "hello")}
+	prior := []codexwire.InputItem{msg("user", "hi"), msg("assistant", "hello")}
+	current := []codexwire.InputItem{msg("user", "different"), msg("assistant", "hello")}
 	got := ComputeDelta(prior, current)
 	if got.Ok {
 		t.Errorf("rewrite should not produce delta")
@@ -66,8 +68,8 @@ func TestComputeDeltaBaselineDivergenceOnRewrite(t *testing.T) {
 }
 
 func TestComputeDeltaBaselineDivergenceWhenCurrentShorter(t *testing.T) {
-	prior := []map[string]any{msg("user", "a"), msg("assistant", "b"), msg("user", "c")}
-	current := []map[string]any{msg("user", "a")}
+	prior := []codexwire.InputItem{msg("user", "a"), msg("assistant", "b"), msg("user", "c")}
+	current := []codexwire.InputItem{msg("user", "a")}
 	got := ComputeDelta(prior, current)
 	if got.Ok {
 		t.Errorf("shorter current should not produce delta")

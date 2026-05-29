@@ -5,6 +5,22 @@ import (
 	"strings"
 )
 
+// billingProbeMode enumerates the CLYDE_PROBE_BILLING modes the
+// adapter recognizes when synthesizing a corrupted billing header
+// for diagnostic captures.
+type billingProbeMode string
+
+const (
+	billingProbeOmit           billingProbeMode = "omit"
+	billingProbeWrongFP        billingProbeMode = "wrong_fp"
+	billingProbeOmitFP         billingProbeMode = "omit_fp"
+	billingProbeBadEntrypoint  billingProbeMode = "bad_entrypoint"
+	billingProbeOmitEntrypoint billingProbeMode = "omit_entrypoint"
+	billingProbeCCHZero        billingProbeMode = "cch_zero"
+	billingProbeCCHZ           billingProbeMode = "cch_z"
+	billingProbeCCHLong        billingProbeMode = "cch_long"
+)
+
 // MutateBillingForProbe applies the CLYDE_PROBE_BILLING env var for
 // debugging the Anthropic identity check. canonical includes
 // cc_version, cc_entrypoint, and cch. Returns "" to omit the
@@ -15,32 +31,32 @@ func MutateBillingForProbe(canonical, cliVersion, ccEntrypoint string) string {
 		return canonical
 	}
 	const prefix = "x-anthropic-billing-header: "
-	switch mode {
-	case "omit":
+	switch billingProbeMode(mode) {
+	case billingProbeOmit:
 		return ""
-	case "wrong_fp":
+	case billingProbeWrongFP:
 		return prefix + "cc_version=" + cliVersion + ".zzz; cc_entrypoint=" + ccEntrypoint + "; cch=00000;"
-	case "omit_fp":
+	case billingProbeOmitFP:
 		return prefix + "cc_version=" + cliVersion + "; cc_entrypoint=" + ccEntrypoint + "; cch=00000;"
-	case "bad_entrypoint":
+	case billingProbeBadEntrypoint:
 		fp := extractFingerprint(canonical)
 		cchVal := extractBillingCCH(canonical)
 		if cchVal == "" {
 			cchVal = "00000"
 		}
 		return prefix + "cc_version=" + cliVersion + "." + fp + "; cc_entrypoint=garbage; cch=" + cchVal + ";"
-	case "omit_entrypoint":
+	case billingProbeOmitEntrypoint:
 		fp := extractFingerprint(canonical)
 		cchVal := extractBillingCCH(canonical)
 		if cchVal == "" {
 			cchVal = "00000"
 		}
 		return prefix + "cc_version=" + cliVersion + "." + fp + "; cch=" + cchVal + ";"
-	case "cch_zero":
+	case billingProbeCCHZero:
 		return replaceBillingCCH(canonical, "00000")
-	case "cch_z":
+	case billingProbeCCHZ:
 		return replaceBillingCCH(canonical, "ZZZZZ")
-	case "cch_long":
+	case billingProbeCCHLong:
 		return replaceBillingCCH(canonical, strings.Repeat("a", 32))
 	default:
 		// Unknown mode: ship canonical so a typo doesn't silently

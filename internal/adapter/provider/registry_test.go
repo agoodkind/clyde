@@ -42,7 +42,7 @@ func TestRegistryRegisterRejectsInvalidProvider(t *testing.T) {
 	r := NewRegistry()
 	r.Register(nil)
 	r.Register(stubProvider{id: adapterresolver.ProviderUnknown})
-	r.Register(stubProvider{id: adapterresolver.ProviderID("nonsense")})
+	r.Register(stubProvider{id: adapterresolver.ProviderID("not-a-real-backend")})
 	if ids := r.IDs(); len(ids) != 0 {
 		t.Errorf("expected empty registry, got %v", ids)
 	}

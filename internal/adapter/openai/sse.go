@@ -11,6 +11,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/errcontract"
 )
 
+// ErrSSENoFlusher is part of Clyde's typed adapter surface.
 var ErrSSENoFlusher = errors.New("streaming not supported by this transport")
 
 // SSEWriter satisfies errcontract.StreamErrorWriter so the generic
@@ -18,20 +19,26 @@ var ErrSSENoFlusher = errors.New("streaming not supported by this transport")
 // neutral primitive interface without importing this OpenAI package.
 var _ errcontract.StreamErrorWriter = (*SSEWriter)(nil)
 
+// SSEWriter is part of Clyde's typed adapter surface.
 type SSEWriter struct {
 	w                http.ResponseWriter
 	f                http.Flusher
 	headersCommitted bool
 }
 
+// NewSSEWriter is part of Clyde's typed adapter surface.
 func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	f, ok := w.(http.Flusher)
 	if !ok {
 		return nil, ErrSSENoFlusher
 	}
-	return &SSEWriter{w: w, f: f}, nil
+	return &SSEWriter{w: w, f: f, headersCommitted:
+
+	// WriteSSEHeaders is part of Clyde's typed adapter surface.
+	false}, nil
 }
 
+// WriteSSEHeaders is part of Clyde's typed adapter surface.
 func (sw *SSEWriter) WriteSSEHeaders() {
 	if sw.headersCommitted {
 		return
@@ -45,15 +52,18 @@ func (sw *SSEWriter) WriteSSEHeaders() {
 	sw.f.Flush()
 }
 
+// EmitStreamChunk is part of Clyde's typed adapter surface.
 func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk) error {
 	sw.WriteSSEHeaders()
 	chunk.SystemFingerprint = systemFingerprint
 	b, err := json.Marshal(chunk)
 	if err != nil {
-		return err
+		slog.Warn("adapter.openai_sse.marshal_chunk_failed", "concern", "adapter.chat.render", "err", err)
+		return fmt.Errorf("marshal OpenAI stream chunk: %w", err)
 	}
 	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", b); err != nil {
-		return err
+		slog.Warn("adapter.openai_sse.write_chunk_failed", "concern", "adapter.chat.render", "err", err)
+		return fmt.Errorf("write OpenAI stream chunk: %w", err)
 	}
 	sw.f.Flush()
 	return nil
@@ -63,15 +73,18 @@ func (sw *SSEWriter) EmitStreamChunk(systemFingerprint string, chunk StreamChunk
 func (sw *SSEWriter) WriteStreamEvent(payload []byte) error {
 	sw.WriteSSEHeaders()
 	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", payload); err != nil {
-		return err
+		slog.Warn("adapter.openai_sse.write_event_failed", "concern", "adapter.chat.render", "err", err)
+		return fmt.Errorf("write OpenAI stream event: %w", err)
 	}
 	sw.f.Flush()
 	return nil
 }
 
+// WriteStreamDone is part of Clyde's typed adapter surface.
 func (sw *SSEWriter) WriteStreamDone() error {
 	if _, err := io.WriteString(sw.w, "data: [DONE]\n\n"); err != nil {
-		return err
+		slog.Warn("adapter.openai_sse.write_done_failed", "concern", "adapter.chat.render", "err", err)
+		return fmt.Errorf("write OpenAI stream done: %w", err)
 	}
 	sw.f.Flush()
 	return nil
@@ -107,8 +120,7 @@ func (r StreamErrorRenderer) WriteStreamError(w errcontract.StreamErrorWriter, i
 		return err
 	}
 	if err := w.WriteStreamDone(); err != nil {
-		slog.Warn("adapter.openai_stream_error_write_failed",
-			"event", "write_done_failed",
+		slog.Warn("adapter.openai_stream_error_write_failed", "concern", "adapter.http.errors", "event", "write_done_failed",
 			"err", err.Error(),
 		)
 		return fmt.Errorf("write stream done terminator: %w", err)
@@ -131,11 +143,10 @@ func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info 
 	envelope := ErrorResponse{Error: body}
 	b, err := json.Marshal(envelope)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal OpenAI stream error: %w", err)
 	}
 	if err := w.WriteStreamEvent(b); err != nil {
-		slog.Warn("adapter.openai_stream_error_write_failed",
-			"event", "write_event_failed",
+		slog.Warn("adapter.openai_stream_error_write_failed", "concern", "adapter.http.errors", "event", "write_event_failed",
 			"err", err.Error(),
 		)
 		return fmt.Errorf("write stream error event: %w", err)
@@ -143,6 +154,7 @@ func (StreamErrorRenderer) emitErrorEvent(w errcontract.StreamErrorWriter, info 
 	return nil
 }
 
+// HasCommittedHeaders is part of Clyde's typed adapter surface.
 func (sw *SSEWriter) HasCommittedHeaders() bool {
 	return sw.headersCommitted
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -51,14 +52,14 @@ func TestHandleModelsIncludesLegacyAndOpenAIContextFields(t *testing.T) {
 }
 
 func TestModelEntryFromResolvedIsBackendNeutral(t *testing.T) {
-	entry := modelEntryFromResolved(ResolvedModel{
+	entry := modelEntryFromResolved(adaptermodel.ResolvedAlias{
 		Alias:       "clyde-gpt-5.4-1m-high",
 		Backend:     BackendCodex,
 		ClaudeModel: "gpt-5.4",
 		Context:     1_000_000,
 	})
 
-	if entry.ID != "clyde-gpt-5.4-1m-high" || entry.Backend != BackendCodex {
+	if entry.ID != "clyde-gpt-5.4-1m-high" || entry.Backend != BackendCodex.String() {
 		t.Fatalf("entry identity = %+v", entry)
 	}
 	if entry.Context != 1_000_000 || entry.ContextWindow != 1_000_000 || entry.ContextLength != 1_000_000 || entry.MaxModelLen != 1_000_000 {
@@ -67,14 +68,14 @@ func TestModelEntryFromResolvedIsBackendNeutral(t *testing.T) {
 }
 
 func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
-	entry := modelEntryFromResolved(ResolvedModel{
+	entry := modelEntryFromResolved(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-configured-codex-1m-high",
 		Backend:         BackendCodex,
 		ClaudeModel:     "configured-codex-model",
 		Context:         1_000_000,
 		ObservedContext: 333_000,
 	})
-	entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(ResolvedModel{
+	entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-configured-codex-1m-high",
 		Backend:         BackendCodex,
 		ClaudeModel:     "configured-codex-model",
@@ -95,7 +96,7 @@ func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
 }
 
 func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing.T) {
-	models := []ResolvedModel{
+	models := []adaptermodel.ResolvedAlias{
 		{
 			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
@@ -122,7 +123,7 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 			FamilySlug:      "sonnet-4.6",
 		},
 	}
-	reordered := []ResolvedModel{
+	reordered := []adaptermodel.ResolvedAlias{
 		{
 			Alias:           "clyde-sonnet-4.6-medium-thinking",
 			Backend:         BackendAnthropic,
@@ -156,7 +157,7 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 }
 
 func TestModelCatalogFingerprintChangesWhenCatalogSemanticsChange(t *testing.T) {
-	models := []ResolvedModel{
+	models := []adaptermodel.ResolvedAlias{
 		{
 			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
@@ -167,7 +168,7 @@ func TestModelCatalogFingerprintChangesWhenCatalogSemanticsChange(t *testing.T) 
 			SupportsTools:   true,
 		},
 	}
-	changed := append([]ResolvedModel(nil), models...)
+	changed := append([]adaptermodel.ResolvedAlias(nil), models...)
 	changed[0].Context = 1_000_000
 
 	if got, wantDifferent := modelCatalogFingerprint(changed), modelCatalogFingerprint(models); got == wantDifferent {

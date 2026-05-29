@@ -1,15 +1,14 @@
-// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
-	"goodkind.io/clyde/internal/oauthrotation/ratelimitsink"
 )
 
 // MaxOutputTokens is the upper bound the adapter requests when the
@@ -67,36 +66,38 @@ type Config struct {
 	// other modes route to adapter.providers.anthropic.wire_capture for
 	// short-retention diagnostics.
 	WireCaptureMode WireCaptureMode
-	// RateLimitSink receives observed upstream rate-limit signals on every
-	// response so the OAuth rotation layer can update the in-memory quota
-	// state for the account behind the current token. The adapter passes
-	// the rotator here (it implements [ratelimitsink.Sink]). A nil sink
-	// means rate-limit signals are not reported.
-	RateLimitSink ratelimitsink.Sink
+	// WireBaselinePath is the absolute path to the daemon-owned MITM v2
+	// baseline (reference-v2.toml) the client reads at request time to
+	// project its outbound wire identity. There is no compiled-in
+	// default; the daemon resolves this from
+	// [mitm].drift.upstreams["claude-code"].reference, falling back to
+	// the default baseline root. An empty value or a missing file makes
+	// every /v1/messages request fail with [ErrBaselineMissing] so the
+	// adapter can return an operator-actionable HTTP 503 rather than
+	// sending a wrong-shaped request.
+	WireBaselinePath string
 }
 
-// Client wraps an http.Client and an OAuth token source.
+// Client wraps an [http.Client] and an OAuth token source.
 type Client struct {
-	http  *http.Client
-	oauth OAuthSource
-	cfg   Config
+	http         *http.Client
+	oauth        OAuthSource
+	cfg          Config
+	flavorLoader *WireFlavorsLoader
 }
 
-// OAuthSource is the minimum surface anthropic.Client needs from
-// the oauth manager. Defined as a small interface so callers can
-// swap it for a fake in tests.
-//
-// TokenAfterAuthFailure recovers from an upstream 401. The implementation
-// inspects the failed token and either returns a freshly imported keychain
-// credential (for an externally-held account), a freshly refreshed token (for
-// an account Clyde owns the refresh credential for), or the original failed
-// token alongside oauthrotation.ErrTokenUnchanged when neither path produces
-// a new value. The client treats the unchanged sentinel as "the retry would
-// resend the same dead token", skips the retry, and lets the original 401
-// fall through to the existing classifier.
+// OAuthSource is the minimum surface anthropic.Client needs from an auth
+// manager. The shape matches the generic adapter provider auth boundary so
+// provider construction can inject Claude and Codex auth sources the same way.
 type OAuthSource interface {
 	Token(ctx context.Context) (string, error)
-	TokenAfterAuthFailure(ctx context.Context, failedToken string) (string, error)
+}
+
+// OAuthRefresher extends OAuthSource with an explicit refresh hook for an
+// upstream 401. It intentionally matches adapterprovider.AuthRefresher.
+type OAuthRefresher interface {
+	OAuthSource
+	ForceRefresh(ctx context.Context) (string, error)
 }
 
 // CacheControl marks a block / tool / system element as a prompt
@@ -172,18 +173,20 @@ type Message struct {
 	Content []ContentBlock `json:"content"`
 }
 
+// UnmarshalJSON is part of Clyde's typed adapter surface.
 func (m *Message) UnmarshalJSON(raw []byte) error {
+	// UnmarshalJSON is part of Clyde's typed adapter surface.
 	type messageWire struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	}
 	var wire messageWire
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return err
+		return fmt.Errorf("unmarshal anthropic message: %w", err)
 	}
 	content, err := decodeContentBlocks(wire.Content)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode anthropic message content: %w", err)
 	}
 	m.Role = wire.Role
 	m.Content = content
@@ -198,21 +201,29 @@ func (m *Message) UnmarshalJSON(raw []byte) error {
 // marker survives serialization.
 func (m Message) MarshalJSON() ([]byte, error) {
 	if len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].CacheControl == nil {
-		return json.Marshal(struct {
+		encoded, err := json.Marshal(struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		}{
 			Role:    m.Role,
 			Content: m.Content[0].Text,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal anthropic text message: %w", err)
+		}
+		return encoded, nil
 	}
-	return json.Marshal(struct {
+	encoded, err := json.Marshal(struct {
 		Role    string         `json:"role"`
 		Content []ContentBlock `json:"content"`
 	}{
 		Role:    m.Role,
 		Content: m.Content,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal anthropic block message: %w", err)
+	}
+	return encoded, nil
 }
 
 // Tool is the wire shape for the tools array on /v1/messages.
@@ -292,7 +303,9 @@ type Request struct {
 	ExtraBetas []string `json:"-"`
 }
 
+// UnmarshalJSON is part of Clyde's typed adapter surface.
 func (r *Request) UnmarshalJSON(raw []byte) error {
+	// UnmarshalJSON is part of Clyde's typed adapter surface.
 	type requestWire struct {
 		Model             string             `json:"model"`
 		System            json.RawMessage    `json:"system"`
@@ -308,11 +321,11 @@ func (r *Request) UnmarshalJSON(raw []byte) error {
 	}
 	var wire requestWire
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return err
+		return fmt.Errorf("unmarshal anthropic request: %w", err)
 	}
 	system, blocks, err := decodeSystemPrompt(wire.System)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode anthropic system prompt: %w", err)
 	}
 	r.Model = wire.Model
 	r.System = system
@@ -337,20 +350,24 @@ func (r Request) MarshalJSON() ([]byte, error) {
 	base := alias(r)
 	base.SystemBlocks = nil
 	if len(r.SystemBlocks) == 0 {
-		return json.Marshal(base)
+		encoded, err := json.Marshal(base)
+		if err != nil {
+			return nil, fmt.Errorf("marshal anthropic request: %w", err)
+		}
+		return encoded, nil
 	}
 	// SystemBlocks wins. Clear the string form on the wire so we do
 	// not double-emit system.
 	base.System = ""
 	encoded, err := json.Marshal(base)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal anthropic request without system blocks: %w", err)
 	}
 	// Splice "system":<blocks> into the encoded object. This is
 	// cheaper than a second struct definition mirroring every field.
 	blocks, err := json.Marshal(r.SystemBlocks)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal anthropic system blocks: %w", err)
 	}
 	insertion := []byte(`"system":` + string(blocks) + `,`)
 	// Insert just after the opening brace.
@@ -514,7 +531,9 @@ type Result struct {
 	Stop  string
 }
 
+// MessageResponse is part of Clyde's typed adapter surface.
 type MessageResponse struct {
+	// MessageResponse is part of Clyde's typed adapter surface.
 	ID           string         `json:"id"`
 	Type         string         `json:"type"`
 	Role         string         `json:"role"`
@@ -525,24 +544,32 @@ type MessageResponse struct {
 	Usage        ResponseUsage  `json:"usage"`
 }
 
+// ResponseUsage is part of Clyde's typed adapter surface.
 type ResponseUsage struct {
+	// ResponseUsage is part of Clyde's typed adapter surface.
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
+// ErrorEnvelope is part of Clyde's typed adapter surface.
 type ErrorEnvelope struct {
+	// ErrorEnvelope is part of Clyde's typed adapter surface.
 	Type  string      `json:"type"`
 	Error ErrorDetail `json:"error"`
 }
 
+// ErrorDetail is part of Clyde's typed adapter surface.
 type ErrorDetail struct {
+	// ErrorDetail is part of Clyde's typed adapter surface.
 	Type    string `json:"type"`
 	Message string `json:"message"`
 }
 
+// CountTokensResponse is part of Clyde's typed adapter surface.
 type CountTokensResponse struct {
+	// CountTokensResponse is part of Clyde's typed adapter surface.
 	InputTokens int `json:"input_tokens"`
 }
 
@@ -554,7 +581,8 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 	if trimmed[0] == '"' {
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
-			return nil, err
+			slog.Warn("adapter.anthropic.types.text_content_block_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+			return nil, fmt.Errorf("unmarshal anthropic text content block: %w", err)
 		}
 		return []ContentBlock{{
 			Type:           "text",
@@ -575,7 +603,7 @@ func decodeContentBlocks(raw json.RawMessage) ([]ContentBlock, error) {
 	if trimmed[0] == '[' {
 		var blocks []ContentBlock
 		if err := json.Unmarshal(raw, &blocks); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unmarshal anthropic content blocks: %w", err)
 		}
 		for i := range blocks {
 			if strings.TrimSpace(blocks[i].Type) == "" {
@@ -595,14 +623,15 @@ func decodeSystemPrompt(raw json.RawMessage) (string, []SystemBlock, error) {
 	if trimmed[0] == '"' {
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
-			return "", nil, err
+			slog.Warn("adapter.anthropic.types.system_text_unmarshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+			return "", nil, fmt.Errorf("unmarshal anthropic system text: %w", err)
 		}
 		return text, nil, nil
 	}
 	if trimmed[0] == '[' {
 		var blocks []SystemBlock
 		if err := json.Unmarshal(raw, &blocks); err != nil {
-			return "", nil, err
+			return "", nil, fmt.Errorf("unmarshal anthropic system blocks: %w", err)
 		}
 		for i := range blocks {
 			if strings.TrimSpace(blocks[i].Type) == "" {

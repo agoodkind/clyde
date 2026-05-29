@@ -9,17 +9,20 @@ const (
 	defaultEffectiveContextPercent = 90
 )
 
+// CapabilityMode is part of Clyde's typed adapter surface.
 type CapabilityMode struct {
 	WebsocketEnabled bool
 }
 
+// CapabilityReport is part of Clyde's typed adapter surface.
 type CapabilityReport struct {
 	AdvertisedContextWindow int
 	ObservedContextWindow   int
 	EffectiveSafeWindow     int
 }
 
-func CapabilityReportForModel(model adaptermodel.ResolvedModel, mode CapabilityMode) CapabilityReport {
+// CapabilityReportForModel is part of Clyde's typed adapter surface.
+func CapabilityReportForModel(model adaptermodel.ResolvedAlias, mode CapabilityMode) CapabilityReport {
 	advertised := model.Context
 	observed := advertised
 	if model.Backend == adaptermodel.BackendCodex && !mode.WebsocketEnabled && model.ObservedContext > 0 {
@@ -39,6 +42,7 @@ func CapabilityReportForModel(model adaptermodel.ResolvedModel, mode CapabilityM
 	}
 }
 
+// ApplyCapabilityReport is part of Clyde's typed adapter surface.
 func ApplyCapabilityReport(entry adapteropenai.ModelEntry, report CapabilityReport) adapteropenai.ModelEntry {
 	entry.Context = report.ObservedContextWindow
 	entry.ContextWindow = report.ObservedContextWindow

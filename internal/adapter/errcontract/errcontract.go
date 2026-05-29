@@ -62,7 +62,7 @@ type ErrorDiagnostics struct {
 	Provider           string            `json:"provider,omitempty"`
 	Backend            string            `json:"backend,omitempty"`
 	ModelAlias         string            `json:"model_alias,omitempty"`
-	ResolvedModel      string            `json:"resolved_model,omitempty"`
+	ResolvedModelName  string            `json:"resolved_model,omitempty"`
 	ErrorClass         string            `json:"error_class,omitempty"`
 	RouteFamily        string            `json:"route_family,omitempty"`
 	Method             string            `json:"method,omitempty"`

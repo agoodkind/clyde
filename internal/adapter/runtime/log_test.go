@@ -178,6 +178,47 @@ func TestLogCompletedCanonicalFieldsPresent(t *testing.T) {
 	}
 }
 
+// TestLogCompletedOmitsCostFields asserts that dollar cost is no longer
+// precomputed at write time. Track C moved cost to a read-time
+// calculation in the daemon provider-stats aggregator, so the
+// adapter.chat.completed emit must carry token and cache counts but none
+// of the former cost_* fields.
+func TestLogCompletedOmitsCostFields(t *testing.T) {
+	forbidden := []string{
+		"cost_microcents",
+		"cost_rates_known",
+		"cost_input_microcents",
+		"cost_output_microcents",
+		"cost_cache_write_microcents",
+		"cost_cache_read_microcents",
+		"cost_nocache_microcents",
+		"cost_cache_savings_microcents",
+	}
+	buf := &bytes.Buffer{}
+	LogCompleted(captureLogger(buf), context.Background(), CompletedAttrs{
+		Backend:               "anthropic",
+		ModelID:               "claude-opus-4-8",
+		TokensIn:              100,
+		TokensOut:             50,
+		CacheReadTokens:       200,
+		CacheCreationTokens:   300,
+		CacheCreationReported: true,
+	})
+	_, raw := decodeFirstRecord(t, buf)
+	for _, k := range forbidden {
+		if _, ok := raw[k]; ok {
+			t.Errorf("write-time cost field %q must not be emitted; got keys %v", k, sortedKeys(raw))
+		}
+	}
+	// The token fields must still be present so the read-time aggregator
+	// has something to price.
+	for _, k := range []string{"prompt_tokens", "completion_tokens", "cache_read_tokens", "cache_creation_tokens"} {
+		if _, ok := raw[k]; !ok {
+			t.Errorf("token field %q must still be emitted", k)
+		}
+	}
+}
+
 func sortedKeys(m map[string]json.RawMessage) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

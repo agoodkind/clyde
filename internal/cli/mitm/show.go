@@ -116,7 +116,7 @@ func newShowCmdWithLoader(f *cli.Factory, loadConfig func() (*config.Config, err
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
-				slog.WarnContext(cmd.Context(), "cli.mitm.show.load_config_failed", "err", err)
+				slog.WarnContext(cmd.Context(), "cli.mitm.show.load_config_failed", "concern", "cli.mitm", "err", err)
 				return fmt.Errorf("load config: %w", err)
 			}
 			return runShow(cmd.Context(), f.IOStreams.Out, cfg, args[0], asJSON)
@@ -177,7 +177,7 @@ func runShow(ctx context.Context, out io.Writer, cfg *config.Config, inputID str
 		encoder := json.NewEncoder(out)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(output); err != nil {
-			slog.WarnContext(ctx, "cli.mitm.show.encode_json_failed", "err", err)
+			slog.WarnContext(ctx, "cli.mitm.show.encode_json_failed", "concern", "cli.mitm", "err", err)
 			return fmt.Errorf("encode json: %w", err)
 		}
 		return nil
@@ -312,7 +312,7 @@ func searchRawDir(dir, id string) RawSection {
 	root, openErr := os.OpenRoot(dir)
 	if openErr != nil {
 		if !errors.Is(openErr, fs.ErrNotExist) {
-			slog.Warn("cli.mitm.show.raw_open_failed", "dir", dir, "err", openErr)
+			slog.Warn("cli.mitm.show.raw_open_failed", "concern", "cli.mitm", "dir", dir, "err", openErr)
 		}
 		return raw
 	}
@@ -339,7 +339,7 @@ func searchRawDir(dir, id string) RawSection {
 		return nil
 	})
 	if walkErr != nil && !errors.Is(walkErr, fs.ErrNotExist) {
-		slog.Warn("cli.mitm.show.raw_walk_failed", "dir", dir, "err", walkErr)
+		slog.Warn("cli.mitm.show.raw_walk_failed", "concern", "cli.mitm", "dir", dir, "err", walkErr)
 	}
 	return raw
 }

@@ -172,18 +172,18 @@ func mapUpstreamForFamily(
 // string never lives on the generic struct.
 func adapterErrorFromMapping(_ adapterRouteFamily, provider string, upstreamStatus int, mapping errcontract.UpstreamMapping) *adapterError {
 	return &adapterError{
-		Class:          classForMappedCode(mapping.Info.Code),
-		HTTPStatus:     mapping.HTTPStatus,
-		Message:        mapping.Info.Message,
-		Code:           mapping.Info.Code,
-		Param:          mapping.Info.Param,
-		Provider:       provider,
-		Backend:        "",
-		ModelAlias:     "",
-		ResolvedModel:  "",
-		UpstreamStatus: upstreamStatus,
-		Cause:          nil,
-		SafeForClient:  true,
+		Class:             classForMappedCode(mapping.Info.Code),
+		HTTPStatus:        mapping.HTTPStatus,
+		Message:           mapping.Info.Message,
+		Code:              mapping.Info.Code,
+		Param:             mapping.Info.Param,
+		Provider:          provider,
+		Backend:           "",
+		ModelAlias:        "",
+		ResolvedModelName: "",
+		UpstreamStatus:    upstreamStatus,
+		Cause:             nil,
+		SafeForClient:     true,
 	}
 }
 
@@ -194,18 +194,18 @@ func adapterErrorFromMapping(_ adapterRouteFamily, provider string, upstreamStat
 func upstreamCatchAllAdapterError(provider string, upstreamStatus int, upstreamCode, upstreamMessage string) *adapterError {
 	folded := upstreamFallbackMessage(provider, upstreamStatus, upstreamCode, upstreamMessage)
 	return &adapterError{
-		Class:          adapterErrorUpstreamFailed,
-		HTTPStatus:     http.StatusBadRequest,
-		Message:        folded,
-		Code:           "upstream_failed",
-		Param:          "",
-		Provider:       provider,
-		Backend:        "",
-		ModelAlias:     "",
-		ResolvedModel:  "",
-		UpstreamStatus: upstreamStatus,
-		Cause:          nil,
-		SafeForClient:  true,
+		Class:             adapterErrorUpstreamFailed,
+		HTTPStatus:        http.StatusBadRequest,
+		Message:           folded,
+		Code:              "upstream_failed",
+		Param:             "",
+		Provider:          provider,
+		Backend:           "",
+		ModelAlias:        "",
+		ResolvedModelName: "",
+		UpstreamStatus:    upstreamStatus,
+		Cause:             nil,
+		SafeForClient:     true,
 	}
 }
 
@@ -288,6 +288,14 @@ func applyFamilyShape(family adapterRouteFamily, aerr *adapterError) *adapterErr
 		return aerr
 	}
 	if aerr.Class == adapterErrorAuthFailed || aerr.Class == adapterErrorMethodNotAllowed {
+		return aerr
+	}
+	// baseline_missing is a local configuration failure: the daemon-owned
+	// MITM wire baseline is absent or invalid, so there is no upstream
+	// call to fold. Its HTTP 503 and operator-actionable message must
+	// survive to the client unchanged rather than be flipped to the
+	// Cursor-safe upstream shape.
+	if aerr.Class == adapterErrorBaselineMissing {
 		return aerr
 	}
 	// Anything already on HTTP 400 whose class is not the rate-limit

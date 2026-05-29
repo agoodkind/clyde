@@ -19,8 +19,7 @@ import (
 func ReadStatus(reg Registry, certPath string) (InstallStatus, error) {
 	status, err := reg.Status(certPath)
 	if err != nil {
-		slog.Warn("cli.mitm.truststore.read_status_failed",
-			"platform", string(reg.Platform()),
+		slog.Warn("cli.mitm.truststore.read_status_failed", "concern", "cli.mitm.truststore", "platform", string(reg.Platform()),
 			"cert_path", certPath,
 			"err", err,
 		)

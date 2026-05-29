@@ -10,9 +10,8 @@ import (
 
 // PersistentFlag registers --output-format on the root command. The
 // flag is persistent so every subcommand inherits it without any
-// additional wiring. Subcommands that never emit structured data
-// (interactive launchers, the TUI dashboard) ignore the flag; the
-// flag is a no-op until a subcommand opts in via From.
+// additional wiring. Subcommands that never emit structured data ignore the
+// flag; the flag is a no-op until a subcommand opts in via From.
 func PersistentFlag(root *cobra.Command) {
 	root.PersistentFlags().String(FlagName, string(FormatText),
 		"Output format: text (default, human-readable) or json")
@@ -25,8 +24,7 @@ func PersistentFlag(root *cobra.Command) {
 func From(cmd *cobra.Command, w io.Writer) (*Encoder, error) {
 	raw, err := cmd.Flags().GetString(FlagName)
 	if err != nil {
-		slog.Warn("output.factory.read_flag_failed",
-			"component", "cli",
+		slog.Warn("output.factory.read_flag_failed", "concern", "cli.output", "component", "cli",
 			"subcomponent", "output",
 			"flag", FlagName,
 			"err", err,

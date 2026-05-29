@@ -1,8 +1,3 @@
-// Package anthropic implements Anthropic wire models and helpers.
-// response headers. Mirrors the user-visible strings the upstream CLI shows
-// (e.g. "You've hit your weekly limit · resets 3:45pm (PDT)") so OpenAI-spec
-// clients like Cursor surface something actionable instead of the raw 429
-// JSON envelope.
 package anthropic
 
 import (
@@ -11,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/clock"
 )
 
 // FormatRateLimitMessage inspects anthropic-ratelimit-unified-* headers on a
@@ -30,14 +27,14 @@ func FormatRateLimitMessage(h http.Header) string {
 
 	resetMsg := ""
 	if !resetAt.IsZero() {
-		resetMsg = " · resets " + formatResetTime(resetAt, anthropicClock.Now())
+		resetMsg = " · resets " + formatResetTime(resetAt, clock.Now())
 	}
 
 	if overage == "rejected" {
 		earliest := earliestReset(resetAt, overageResetAt)
 		suffix := ""
 		if !earliest.IsZero() {
-			suffix = " · resets " + formatResetTime(earliest, anthropicClock.Now())
+			suffix = " · resets " + formatResetTime(earliest, clock.Now())
 		}
 		if overageDisabled == "out_of_credits" {
 			return "You're out of extra usage" + suffix
@@ -50,15 +47,17 @@ func FormatRateLimitMessage(h http.Header) string {
 }
 
 func limitNameForClaim(claim string) string {
-	switch claim {
-	case "five_hour":
+	switch rateLimitClaim(claim) {
+	case rateLimitClaimFiveHour:
 		return "session limit"
-	case "seven_day":
+	case rateLimitClaimSevenDay:
 		return "weekly limit"
-	case "seven_day_opus":
+	case rateLimitClaimSevenDayOpus:
 		return "Opus limit"
-	case "seven_day_sonnet":
+	case rateLimitClaimSevenDaySonnet:
 		return "Sonnet limit"
+	case rateLimitClaimOverage:
+		return "extra usage limit"
 	default:
 		return "usage limit"
 	}
@@ -92,7 +91,11 @@ func earliestReset(a, b time.Time) time.Time {
 // "Apr 22, 3pm (PDT)" further out. Keeps the lowercase am/pm and bracketed
 // timezone abbreviation so output matches what users have seen elsewhere.
 func formatResetTime(t, now time.Time) string {
-	local := t.Local()
+	location := now.Location()
+	if location == nil {
+		location = time.UTC
+	}
+	local := t.In(location)
 	zone, _ := local.Zone()
 
 	hoursUntil := local.Sub(now).Hours()

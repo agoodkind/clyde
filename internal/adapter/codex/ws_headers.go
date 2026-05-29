@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	openAIBetaHeader                     = "OpenAI-Beta"
+	openAIBetaHeader                     = "Openai-Beta"
 	responsesWebsocketsV2BetaHeaderValue = "responses_websockets=2026-02-06"
 )
 
+// ResponsesWebsocketHeaderConfig is part of Clyde's typed adapter surface.
 type ResponsesWebsocketHeaderConfig struct {
 	RequestID            string
 	ConversationID       string
@@ -25,8 +26,10 @@ type ResponsesWebsocketHeaderConfig struct {
 	TurnMetadata         string
 	IncludeTimingMetrics bool
 	Originator           string // empty means use CodexOriginatorValue
+	UserAgent            string // empty means use CodexUserAgent()
 }
 
+// BuildResponsesWebsocketHeaders is part of Clyde's typed adapter surface.
 func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Header {
 	header := http.Header{}
 	if token := strings.TrimSpace(cfg.Token); token != "" {
@@ -38,7 +41,7 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 		clientRequestID = strings.TrimSpace(cfg.RequestID)
 	}
 	if clientRequestID != "" {
-		header.Set("x-client-request-id", clientRequestID)
+		header.Set("X-Client-Request-Id", clientRequestID)
 	}
 	for key, values := range clydeingress.HTTPHeaders(cfg.Correlation) {
 		for _, value := range values {
@@ -46,17 +49,17 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 		}
 	}
 	if conversationID != "" {
-		header.Set("session_id", conversationID)
+		header.Set("Session_id", conversationID)
 	}
 	if installationID := strings.TrimSpace(cfg.InstallationID); installationID != "" {
 		header.Set(CodexInstallationIDHeader, installationID)
 	}
 	windowID := strings.TrimSpace(cfg.WindowID)
 	if windowID == "" {
-		windowID = CodexWindowID(conversationID)
+		windowID = WindowID(conversationID)
 	}
 	if windowID != "" {
-		header.Set(CodexWindowIDHeader, windowID)
+		header.Set(WindowIDHeader, windowID)
 	}
 	if betaFeatures := strings.TrimSpace(cfg.BetaFeatures); betaFeatures != "" {
 		header.Set(CodexBetaFeaturesHeader, betaFeatures)
@@ -76,5 +79,10 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 		originator = CodexOriginatorValue
 	}
 	header.Set(CodexOriginatorHeader, originator)
+	userAgent := strings.TrimSpace(cfg.UserAgent)
+	if userAgent == "" {
+		userAgent = UserAgent()
+	}
+	header.Set("User-Agent", userAgent)
 	return header
 }

@@ -1,6 +1,6 @@
 package anthropic
 
-import adaptermodel "goodkind.io/clyde/internal/adapter/model"
+import adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 
 // JSONCoercion carries the optional structured-output post-processing
 // contract used by the current OpenAI facade collect path. Native
@@ -15,7 +15,7 @@ type JSONCoercion struct {
 // native Anthropic ingress can construct it directly from `/v1/messages`.
 type PreparedRequest struct {
 	Request       Request
-	Model         adaptermodel.ResolvedModel
+	Resolved      *adapterresolver.ResolvedRequest
 	RequestID     string
 	TrackerKey    string
 	JSONCoercion  JSONCoercion

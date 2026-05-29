@@ -4,7 +4,7 @@ Log layout is discovered through `clyde logs inventory`. The rules here describe
 
 Stable classes:
 
-- Process logs hold daemon, TUI, and CLI process events.
+- Process logs hold daemon and CLI process events.
 - Concern logs hold concern-routed JSONL under the active concern root.
 - Per-chat logs hold unified request events for one chat key.
 - MITM capture indexes hold typed capture records for captured forward-proxy traffic.

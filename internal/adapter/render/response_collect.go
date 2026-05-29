@@ -7,6 +7,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
+// CollectedMessage is part of Clyde's typed adapter surface.
 type CollectedMessage struct {
 	Text      string
 	Reasoning string
@@ -28,12 +29,13 @@ type collectedReasoningState struct {
 	haveReasoning bool
 }
 
+// CollectMessage is part of Clyde's typed adapter surface.
 func CollectMessage(events []Event) CollectedMessage {
 	var out CollectedMessage
 	var text strings.Builder
 	var reasoning strings.Builder
 	toolCalls := make(map[int]*collectedToolCall)
-	reasoningState := collectedReasoningState{}
+	reasoningState := collectedReasoningState{lastKind: "", lastSummary: 0, haveSummary: false, haveReasoning: false}
 
 	for _, ev := range events {
 		switch e := ev.(type) {
@@ -89,7 +91,7 @@ func accumulateCollectedToolCalls(acc map[int]*collectedToolCall, toolCalls []ad
 	for _, tc := range toolCalls {
 		slot := acc[tc.Index]
 		if slot == nil {
-			slot = &collectedToolCall{}
+			slot = &collectedToolCall{id: "", typ: "", name: "", args: ""}
 			acc[tc.Index] = slot
 		}
 		if tc.ID != "" {

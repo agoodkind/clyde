@@ -17,7 +17,7 @@ import (
 )
 
 // TestToolCallMiddlewareRegistersAndReleases verifies that toolCallMiddleware
-// registers a session before dispatching the inner handler and releases it
+// registers a tool call before dispatching the inner handler and releases it
 // after the handler returns.
 func TestToolCallMiddlewareRegistersAndReleases(t *testing.T) {
 	t.Parallel()
@@ -46,12 +46,12 @@ func TestToolCallMiddlewareRegistersAndReleases(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 
-	// During the call the session must have been registered (count == 1).
+	// During the call the registry entry must exist (count == 1).
 	if got := countDuringCall.Load(); got != 1 {
 		t.Fatalf("count during call: got %d, want 1", got)
 	}
 
-	// After return the session must have been released.
+	// After return the registry entry must be released.
 	if got := reg.Count(); got != 0 {
 		t.Fatalf("count after call: got %d, want 0", got)
 	}
@@ -80,7 +80,7 @@ func TestToolCallMiddlewareMetaFields(t *testing.T) {
 	wrapped := mw(inner)
 
 	req := mcp.CallToolRequest{}
-	req.Params.Name = "clyde_list_sessions"
+	req.Params.Name = "clyde_list_conversations"
 	if _, err := wrapped(context.Background(), req); err != nil {
 		t.Fatalf("wrapped handler: %v", err)
 	}
@@ -88,8 +88,8 @@ func TestToolCallMiddlewareMetaFields(t *testing.T) {
 	if capturedMeta.ServerName != "my-server" {
 		t.Errorf("ServerName: got %q, want %q", capturedMeta.ServerName, "my-server")
 	}
-	if capturedMeta.Tool != "clyde_list_sessions" {
-		t.Errorf("Tool: got %q, want %q", capturedMeta.Tool, "clyde_list_sessions")
+	if capturedMeta.Tool != "clyde_list_conversations" {
+		t.Errorf("Tool: got %q, want %q", capturedMeta.Tool, "clyde_list_conversations")
 	}
 	if capturedMeta.Op != "tool_call" {
 		t.Errorf("Op: got %q, want %q", capturedMeta.Op, "tool_call")
@@ -157,7 +157,7 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 		CloserGrace: 200 * time.Millisecond,
 	})
 
-	// Register a long-lived session manually so there is something to drain.
+	// Register a long-lived tool call manually so there is something to drain.
 	closer := &testReleaseCloser{released: nil}
 	sess, err := reg.Register(context.Background(), "mcp.tool_call", MCPMeta{
 		ServerName: "test",
@@ -207,7 +207,7 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 	}
 
 	// The drain call inside serveStdioLocked should have force-closed the
-	// session because it was still registered when Listen returned.
+	// entry because it was still registered when Listen returned.
 	if reg.Count() != 0 {
 		t.Fatalf("registry count after drain: got %d, want 0", reg.Count())
 	}
@@ -215,7 +215,7 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 	if closer.count.Load() != 1 {
 		t.Fatalf("closer call count: got %d, want 1", closer.count.Load())
 	}
-	// The session was already removed by force-close so Release is a no-op.
+	// The entry was already removed by force-close so Release is a no-op.
 	reg.Release(context.Background(), sess, "test.cleanup")
 }
 
@@ -276,7 +276,7 @@ func TestForceCloseOnDeadlineCancelsHandlerContext(t *testing.T) {
 
 // testReleaseCloser records how many times Close was called and signals
 // the released channel on first Close. Used by drain tests to verify
-// the force-close fan-out reached the registered session.
+// the force-close fan-out reached the registered call.
 type testReleaseCloser struct {
 	count    atomic.Int32
 	released chan struct{}

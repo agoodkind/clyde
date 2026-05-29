@@ -16,24 +16,16 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/oauthrotation"
-	"goodkind.io/clyde/internal/oauthrotation/provider"
 )
 
-func TestAnthropicProviderErrorMapsNeedsReauthToActionableInstruction(t *testing.T) {
+func TestAnthropicProviderErrorMapsClaudeAuthFailureToActionableInstruction(t *testing.T) {
 	t.Parallel()
 
-	// The rotator surfaces NeedsReauthError wrapped the same way the anthropic
-	// client wraps a token-source failure ("oauth token: %w"). The adapter must
-	// classify it as a typed upstream_auth_failed error carrying an actionable
-	// re-auth instruction, and the rendered OpenAI envelope must be the
-	// Cursor-safe HTTP 400 + invalid_request_error shape with the message
-	// preserved verbatim.
-	reauthErr := oauthrotation.NeedsReauthError{
-		Provider: provider.Name("anthropic"),
-		Account:  provider.AccountID("work-login"),
+	authErr := &anthropic.AuthCredentialError{
+		Message: "no usable Claude login credentials found; run `claude auth login`",
+		Summary: []string{"credentials_file:present=false:access=false:refresh=false:expired=false:fingerprint=:error="},
 	}
-	wrapped := fmt.Errorf("oauth token: %w", error(reauthErr))
+	wrapped := fmt.Errorf("oauth token: %w", authErr)
 	aerr := anthropicProviderAdapterError(wrapped)
 
 	if aerr.HTTPStatus != http.StatusBadRequest {
@@ -45,11 +37,8 @@ func TestAnthropicProviderErrorMapsNeedsReauthToActionableInstruction(t *testing
 	if aerr.Class != adapterErrorUpstreamAuthFailed {
 		t.Fatalf("class=%q want upstream_auth_failed", aerr.Class)
 	}
-	if !strings.Contains(aerr.Message, "clyde oauth login") {
+	if !strings.Contains(aerr.Message, "claude auth login") {
 		t.Fatalf("message missing re-auth command: %q", aerr.Message)
-	}
-	if !strings.Contains(aerr.Message, "work-login") {
-		t.Fatalf("message missing account label: %q", aerr.Message)
 	}
 
 	env := renderedOpenAIEnvelope(t, aerr)
@@ -59,7 +48,7 @@ func TestAnthropicProviderErrorMapsNeedsReauthToActionableInstruction(t *testing
 	if env.Error.Code != "upstream_auth_failed" {
 		t.Fatalf("rendered code=%q want upstream_auth_failed", env.Error.Code)
 	}
-	if !strings.Contains(env.Error.Message, "clyde oauth login") {
+	if !strings.Contains(env.Error.Message, "claude auth login") {
 		t.Fatalf("rendered message missing re-auth command: %q", env.Error.Message)
 	}
 }

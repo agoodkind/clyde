@@ -1,96 +1,95 @@
 package runtime
 
 import (
+	"math"
 	"strings"
+
+	"goodkind.io/clyde/internal/config"
 )
 
-// ModelRates captures the public per-token billing rates for one
-// model, in microcents per token. A microcent is 1e-6 of one US
-// cent; using integers avoids floating-point drift when summing
-// millions of requests in aggregation pipelines.
-//
-// Keep rates in sync with Anthropic's published pricing page:
-//
-//	https://docs.claude.com/en/docs/about-claude/models/overview#model-pricing
-//
-// Rates below assume the standard Messages API list price. They do
-// NOT represent what the user is billed when running against a Max
-// subscription bucket; they are the reference rates used to compare
-// costs across paths (e.g. Anthropic OAuth vs passthrough-overridden) so the
-// user can pick the cheapest effective route for a given workload.
-type ModelRates struct {
-	InputPerToken        int64
-	OutputPerToken       int64
-	CacheWrite5mPerToken int64 // 1.25x input
-	CacheWrite1hPerToken int64 // 2x input
-	CacheReadPerToken    int64 // 0.1x input
-}
-
-// Public-list rates, expressed as microcents-per-token. One million
-// tokens at $X.YY translates to (X.YY * 100 * 1_000_000) / 1_000_000
-// = X.YY * 100 microcents per token. Example: Sonnet 4 input at $3/M
-// tokens = 300 microcents/token.
-//
-// The map is intentionally tolerant to alias spellings clyde may see
-// on the wire (snapshot IDs, context-suffixed variants). Lookup uses
-// prefix / substring matching in LookupRates.
-var modelRates = map[string]ModelRates{
-	"claude-opus-4-6": {
-		InputPerToken:        500,  // $5/M
-		OutputPerToken:       2500, // $25/M
-		CacheWrite5mPerToken: 625,  // $6.25/M (1.25x)
-		CacheWrite1hPerToken: 1000, // $10/M   (2x)
-		CacheReadPerToken:    50,   // $0.50/M (0.1x)
-	},
-	"claude-opus-4": {
-		InputPerToken:        1500, // $15/M
-		OutputPerToken:       7500, // $75/M
-		CacheWrite5mPerToken: 1875, // $18.75/M (1.25x)
-		CacheWrite1hPerToken: 3000, // $30/M   (2x)
-		CacheReadPerToken:    150,  // $1.50/M (0.1x)
-	},
-	"claude-sonnet-4": {
-		InputPerToken:        300,
-		OutputPerToken:       1500,
-		CacheWrite5mPerToken: 375,
-		CacheWrite1hPerToken: 600,
-		CacheReadPerToken:    30,
-	},
-	"claude-haiku-4": {
-		InputPerToken:        100,
-		OutputPerToken:       500,
-		CacheWrite5mPerToken: 125,
-		CacheWrite1hPerToken: 200,
-		CacheReadPerToken:    10,
-	},
-}
-
-// LookupRates returns billing rates for the given model id. Matches
-// by longest-prefix: "claude-opus-4-7" matches "claude-opus-4".
-// Zero-valued rates are returned when nothing matches; callers
-// should treat zero-cost results as "unknown model, skip estimate".
-func LookupRates(modelID string) (ModelRates, bool) {
-	if modelID == "" {
-		return ModelRates{}, false
+// dollarsPerMTokToMicrocentsPerToken converts a dollars-per-million-tokens
+// list price into microcents-per-token. A microcent is 1e-6 of one US
+// cent. One million tokens at $X.YY costs X.YY * 100 cents = X.YY * 100 *
+// 1_000_000 microcents over 1_000_000 tokens, which is X.YY * 100
+// microcents per token. Rounding to the nearest integer keeps the table
+// in the integer domain so summing millions of requests in the
+// aggregation pipeline never drifts.
+func dollarsPerMTokToMicrocentsPerToken(dollarsPerMTok float64) int64 {
+	if dollarsPerMTok <= 0 {
+		return 0
 	}
-	id := strings.ToLower(modelID)
+	return int64(math.Round(dollarsPerMTok * 100))
+}
+
+// modelRates captures the public per-token billing rates for one model,
+// in microcents per token. Using integers avoids floating-point drift
+// when summing millions of requests in aggregation pipelines.
+//
+// These rates assume the standard Messages API list price. They do NOT
+// represent what the user is billed when running against a Max
+// subscription bucket; they are the reference rates used to compare
+// costs across paths so the user can pick the cheapest effective route.
+type modelRates struct {
+	InputPerToken      int64
+	OutputPerToken     int64
+	CacheWritePerToken int64
+	CacheReadPerToken  int64
+}
+
+// PricingTable is the read-time rate table the cost calculator consumes.
+// It holds microcents-per-token rates keyed by wire model id. Lookups
+// match the recorded model id against the keys by longest-prefix so a
+// single "claude-opus-4-8" entry covers "claude-opus-4-8[1m]" and
+// snapshot variants. The table is built once from the config pricing map
+// at load and threaded to the aggregator; it is read-only afterward.
+type PricingTable struct {
+	rates map[string]modelRates
+}
+
+// NewPricingTable builds a [PricingTable] from the config-supplied
+// dollars-per-MTok pricing map. Each entry's dollar rates are converted
+// to microcents-per-token. A nil or empty map yields a table whose
+// lookups always miss, which the calculator treats as "unknown model,
+// no estimate".
+func NewPricingTable(pricing map[string]config.AdapterModelPricing) PricingTable {
+	rates := make(map[string]modelRates, len(pricing))
+	for modelID, p := range pricing {
+		key := strings.ToLower(strings.TrimSpace(modelID))
+		if key == "" {
+			continue
+		}
+		rates[key] = modelRates{
+			InputPerToken:      dollarsPerMTokToMicrocentsPerToken(p.InputPerMTok),
+			OutputPerToken:     dollarsPerMTokToMicrocentsPerToken(p.OutputPerMTok),
+			CacheWritePerToken: dollarsPerMTokToMicrocentsPerToken(p.CacheWritePerMTok),
+			CacheReadPerToken:  dollarsPerMTokToMicrocentsPerToken(p.CacheReadPerMTok),
+		}
+	}
+	return PricingTable{rates: rates}
+}
+
+// lookup returns the rates for the given model id, matched by
+// longest-prefix: "claude-opus-4-8[1m]" matches a "claude-opus-4-8" key.
+// The second return is false when nothing matches; callers treat a miss
+// as "unknown model, skip estimate".
+func (t PricingTable) lookup(modelID string) (modelRates, bool) {
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if id == "" || len(t.rates) == 0 {
+		return modelRates{InputPerToken: 0, OutputPerToken: 0, CacheWritePerToken: 0, CacheReadPerToken: 0}, false
+	}
 	var bestKey string
-	for k := range modelRates {
+	for k := range t.rates {
 		if strings.HasPrefix(id, k) && len(k) > len(bestKey) {
 			bestKey = k
 		}
 	}
 	if bestKey == "" {
-		return ModelRates{}, false
+		return modelRates{InputPerToken: 0, OutputPerToken: 0, CacheWritePerToken: 0, CacheReadPerToken: 0}, false
 	}
-	return modelRates[bestKey], true
+	return t.rates[bestKey], true
 }
 
-// CostInputs contains token counts and TTL settings used by
-// EstimateCostMicrocents.
-//
-// TTL values accepted: "5m" (default), "1h". Any other string is
-// treated as 5m since the API defaults to 5m when omitted.
+// CostInputs is part of Clyde's typed adapter surface.
 type CostInputs struct {
 	ModelID             string
 	TTL                 string // "" / "5m" / "1h"
@@ -100,6 +99,7 @@ type CostInputs struct {
 	CacheReadTokens     int
 }
 
+// CostBreakdown is part of Clyde's typed adapter surface.
 type CostBreakdown struct {
 	InputMicrocents      int64
 	OutputMicrocents     int64
@@ -112,32 +112,35 @@ type CostBreakdown struct {
 	HypotheticalNoCacheMicrocents int64
 	// CacheSavingsMicrocents = Hypothetical - Total.
 	CacheSavingsMicrocents int64
-	RatesKnown             bool
+	// RatesKnown is true only when the model id matched an entry in the
+	// pricing table.
+	RatesKnown bool
 }
 
-// EstimateCost returns the zero value when rates are unknown.
-func EstimateCost(in CostInputs) CostBreakdown {
-	rates, ok := LookupRates(in.ModelID)
+// EstimateCost prices the recorded token counts against the supplied
+// pricing table. It returns a breakdown with RatesKnown=false and all
+// zero costs when the model id does not match any table entry. The TTL
+// argument is accepted for forward compatibility with per-TTL cache
+// rates; the config table currently carries a single cache-write rate,
+// so TTL does not change the result today.
+func EstimateCost(in CostInputs, rates PricingTable) CostBreakdown {
+	r, ok := rates.lookup(in.ModelID)
 	if !ok {
-		return CostBreakdown{RatesKnown: false}
-	}
-	cacheWriteRate := rates.CacheWrite5mPerToken
-	if in.TTL == "1h" {
-		cacheWriteRate = rates.CacheWrite1hPerToken
+		return CostBreakdown{RatesKnown: false, InputMicrocents: 0, OutputMicrocents: 0, CacheWriteMicrocents: 0, CacheReadMicrocents: 0, TotalMicrocents: 0, HypotheticalNoCacheMicrocents: 0, CacheSavingsMicrocents: 0}
 	}
 	b := CostBreakdown{
-		InputMicrocents:      int64(in.InputTokens) * rates.InputPerToken,
-		OutputMicrocents:     int64(in.OutputTokens) * rates.OutputPerToken,
-		CacheWriteMicrocents: int64(in.CacheCreationTokens) * cacheWriteRate,
-		CacheReadMicrocents:  int64(in.CacheReadTokens) * rates.CacheReadPerToken,
-		RatesKnown:           true,
+		InputMicrocents:      int64(in.InputTokens) * r.InputPerToken,
+		OutputMicrocents:     int64(in.OutputTokens) * r.OutputPerToken,
+		CacheWriteMicrocents: int64(in.CacheCreationTokens) * r.CacheWritePerToken,
+		CacheReadMicrocents:  int64(in.CacheReadTokens) * r.CacheReadPerToken,
+		RatesKnown:           true, TotalMicrocents: 0, HypotheticalNoCacheMicrocents: 0, CacheSavingsMicrocents: 0,
 	}
 	b.TotalMicrocents = b.InputMicrocents + b.OutputMicrocents + b.CacheWriteMicrocents + b.CacheReadMicrocents
 	// Had the cache-read tokens been fresh input, they would have cost
-	// the full input rate instead of the 0.1x cache-read rate. The
-	// write surcharge was paid on the first turn, which we don't
-	// subtract here; this measures marginal savings on reads only.
-	noCacheInput := int64(in.InputTokens+in.CacheReadTokens) * rates.InputPerToken
+	// the full input rate instead of the cache-read rate. The write
+	// surcharge was paid on the first turn, which we don't subtract
+	// here; this measures marginal savings on reads only.
+	noCacheInput := int64(in.InputTokens+in.CacheReadTokens) * r.InputPerToken
 	b.HypotheticalNoCacheMicrocents = noCacheInput + b.OutputMicrocents + b.CacheWriteMicrocents
 	b.CacheSavingsMicrocents = b.HypotheticalNoCacheMicrocents - b.TotalMicrocents
 	return b

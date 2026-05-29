@@ -16,7 +16,6 @@ var _ = Describe("NewConfig", func() {
 	It("should create config with defaults", func() {
 		cfg := config.NewConfig()
 		Expect(cfg).NotTo(BeNil())
-		Expect(cfg.Profiles).To(BeEmpty())
 	})
 })
 
@@ -42,7 +41,6 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg).NotTo(BeNil())
-		Expect(cfg.Profiles).To(BeEmpty())
 		Expect(cfg.Logging.Level).To(Equal("info"))
 		Expect(cfg.Logging.Rotation.Enabled).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Enabled).To(BeTrue())
@@ -53,33 +51,6 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
 		Expect(cfg.Logging.RawCapture.Enabled).NotTo(BeNil())
 		Expect(*cfg.Logging.RawCapture.Enabled).To(BeFalse())
-		Expect(cfg.Defaults.CompactCounter).To(Equal("api"))
-	})
-
-	It("loads compact counter source", func() {
-		tmpDir := GinkgoT().TempDir()
-		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-		globalDir := filepath.Join(tmpDir, "clyde")
-		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[defaults]\ncompact_counter = \"probe\"\n"), 0o644)).To(Succeed())
-
-		cfg, err := config.LoadGlobalOrDefault()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Defaults.CompactCounter).To(Equal("probe"))
-	})
-
-	It("loads profiles correctly when config.toml is present", func() {
-		tmpDir := GinkgoT().TempDir()
-		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-		globalDir := filepath.Join(tmpDir, "clyde")
-		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[profiles.quick]\nmodel = \"haiku\"\n"), 0o644)).To(Succeed())
-
-		cfg, err := config.LoadGlobalOrDefault()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Profiles["quick"].Model).To(Equal("haiku"))
 	})
 
 	It("loads MITM provider sets with cursor", func() {
@@ -186,9 +157,40 @@ concern = "unknown"
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.MITM.CaptureRules).To(HaveLen(2))
 		Expect(cfg.MITM.CaptureRules[0].Concern).To(Equal("cursor.custom"))
+		Expect(cfg.MITM.CaptureRules[0].Provider).To(Equal(config.MITMProvider("cursor")))
 		Expect(cfg.MITM.CaptureRules[0].Host).To(Equal("api2.cursor.sh"))
-		Expect(cfg.MITM.CaptureRules[0].Method).To(Equal("POST"))
+		Expect(cfg.MITM.CaptureRules[0].Method).To(Equal(config.MITMMethodPost))
 		Expect(cfg.MITM.CaptureRules[0].ContentTypeContains).To(Equal("protobuf"))
+	})
+
+	It("rejects an unknown MITM capture rule provider", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		toml := "[[mitm.capture_rules]]\nconcern = \"weird\"\nprovider = \"definitely-not-a-provider\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(toml), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("provider"))
+		Expect(err.Error()).To(ContainSubstring("definitely-not-a-provider"))
+	})
+
+	It("rejects an unknown MITM capture rule method", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		toml := "[[mitm.capture_rules]]\nconcern = \"weird\"\nmethod = \"FETCH\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(toml), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("method"))
+		Expect(err.Error()).To(ContainSubstring("FETCH"))
 	})
 
 	It("loads openai_compat_passthrough upstream", func() {
@@ -317,7 +319,7 @@ concern = "unknown"
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Profiles).To(BeEmpty())
+		Expect(cfg).NotTo(BeNil())
 	})
 
 	It("loads adapter notice usage thresholds", func() {
@@ -383,7 +385,7 @@ concern = "unknown"
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[profiles.quick]\nmodel = \"haiku\"\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(""), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
@@ -411,18 +413,18 @@ concern = "unknown"
 		Expect(*cfg.Logging.Rotation.Enabled).To(BeFalse())
 	})
 
-	It("loads logging.paths for daemon and tui", func() {
+	It("loads logging.paths for daemon and cli", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 		globalDir := filepath.Join(tmpDir, "clyde")
 		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.paths]\ndaemon = \"/tmp/clyde-daemon.jsonl\"\ntui = \"/tmp/clyde-tui.jsonl\"\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[logging.paths]\ndaemon = \"/tmp/clyde-daemon.jsonl\"\ncli = \"/tmp/clyde-cli.jsonl\"\n"), 0o644)).To(Succeed())
 
 		cfg, err := config.LoadGlobalOrDefault()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.Logging.Paths.Daemon).To(Equal("/tmp/clyde-daemon.jsonl"))
-		Expect(cfg.Logging.Paths.TUI).To(Equal("/tmp/clyde-tui.jsonl"))
+		Expect(cfg.Logging.Paths.CLI).To(Equal("/tmp/clyde-cli.jsonl"))
 	})
 
 	It("rejects negative logging.rotation.max_backups", func() {
@@ -519,33 +521,4 @@ sink = "concerns"
 		Entry("logging.cleanup.audit_only", "[logging.cleanup]\naudit_only = true\n"),
 		Entry("logging.cleanup.cleanup_mode", "[logging.cleanup]\ncleanup_mode = \"audit\"\n"),
 	)
-
-	It("defaults debug.pprof off with the documented listen address", func() {
-		tmpDir := GinkgoT().TempDir()
-		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-		globalDir := filepath.Join(tmpDir, "clyde")
-		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(""), 0o644)).To(Succeed())
-
-		cfg, err := config.LoadGlobalOrDefault()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Debug.Pprof.Enabled).To(BeFalse())
-		Expect(cfg.Debug.Pprof.Listen).To(Equal("localhost:0"))
-	})
-
-	It("round-trips an explicit debug.pprof block", func() {
-		tmpDir := GinkgoT().TempDir()
-		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-		globalDir := filepath.Join(tmpDir, "clyde")
-		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		configData := "[debug.pprof]\nenabled = true\nlisten = \"[::1]:6060\"\n"
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
-
-		cfg, err := config.LoadGlobalOrDefault()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Debug.Pprof.Enabled).To(BeTrue())
-		Expect(cfg.Debug.Pprof.Listen).To(Equal("[::1]:6060"))
-	})
 })

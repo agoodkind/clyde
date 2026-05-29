@@ -32,8 +32,7 @@ func runCloserBounded(grace time.Duration, sess sessionEntry, reason string) err
 			if recovered := recover(); recovered != nil {
 				stack := make([]byte, 4096)
 				stack = stack[:runtime.Stack(stack, false)]
-				slog.Error("livetrack.closer.panic",
-					"component", "livetrack",
+				slog.Error("livetrack.closer.panic", "concern", "livetrack", "component", "livetrack",
 					"session_id", sess.id,
 					"reason", reason,
 					"panic", recovered,
@@ -104,8 +103,7 @@ func runCloserParallel(ctx context.Context, grace time.Duration, entries []sessi
 			defer wg.Done()
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					slog.ErrorContext(ctx, "livetrack.closer.worker_panic",
-						"component", "livetrack",
+					slog.ErrorContext(ctx, "livetrack.closer.worker_panic", "concern", "livetrack", "component", "livetrack",
 						"reason", reason,
 						"panic", recovered,
 						"err", fmt.Errorf("worker panic: %v", recovered),

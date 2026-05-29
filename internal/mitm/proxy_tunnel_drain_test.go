@@ -57,7 +57,7 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 		_ = proxy.Serve()
 	}()
 
-	connectClient(t, proxy.ClaudeBaseURL(), upstreamAddr)
+	connectClient(t, proxy.BaseURL(), upstreamAddr)
 	waitForCount(t, proxy, 1, 2*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -123,7 +123,7 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 		_ = proxy.Serve()
 	}()
 
-	clientConn := openConnectTunnel(t, proxy.ClaudeBaseURL(), upstreamAddr)
+	clientConn := openConnectTunnel(t, proxy.BaseURL(), upstreamAddr)
 	defer func() { _ = clientConn.Close() }()
 	waitForCount(t, proxy, 1, 2*time.Second)
 

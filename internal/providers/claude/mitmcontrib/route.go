@@ -1,3 +1,4 @@
+// Package mitmcontrib registers Claude MITM route classification.
 package mitmcontrib
 
 import (
@@ -28,7 +29,7 @@ type routeProvider struct{}
 
 // providerID is the typed provider id this package registers with
 // the MITM provider registry.
-const providerID mitm.ProviderID = claudeContributorID
+const providerID mitm.ProviderID = mitm.ProviderIDClaude
 
 // ID returns the typed provider id used in the per-provider
 // concern path and emitted event provider field.
@@ -69,7 +70,7 @@ func (routeProvider) ClassifyPlain(path string) mitm.PlainRouteClaim {
 	case strings.HasPrefix(path, "/v1/messages"), strings.HasPrefix(path, "/v1/models"):
 		return mitm.PlainRouteClaim{
 			Claimed:     true,
-			Provider:    string(claudeContributorID),
+			Provider:    providerID.String(),
 			UpstreamURL: anthropicUpstream,
 		}
 	}

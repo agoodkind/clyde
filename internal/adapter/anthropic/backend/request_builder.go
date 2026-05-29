@@ -6,13 +6,37 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
+// requestAlias returns the caller-facing model alias for a resolved
+// request. It prefers the normalized Cursor model and falls back to the
+// raw OpenAI model so logs and response `model` fields carry the alias
+// the client sent, matching the prior ResolvedAlias-based behavior.
+func requestAlias(resolved *adapterresolver.ResolvedRequest) string {
+	if resolved == nil {
+		return ""
+	}
+	if alias := strings.TrimSpace(resolved.Cursor.NormalizedModel); alias != "" {
+		return alias
+	}
+	return strings.TrimSpace(resolved.OpenAI.Model)
+}
+
+// anthropicBackendName is the backend label the Anthropic backend
+// reports in completion telemetry. Both the OpenAI ingress and native
+// ingress prepared requests resolve to the anthropic backend, so the
+// label is constant; it stays a function so callers read it uniformly.
+func anthropicBackendName(_ *adapterresolver.ResolvedRequest) string {
+	return "anthropic"
+}
+
+// FineGrainedToolStreamingBeta is part of Clyde's typed adapter surface.
 const FineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14"
 
+// BuildRequestConfig is part of Clyde's typed adapter surface.
 type BuildRequestConfig struct {
 	SystemPromptPrefix              string
 	UserAgent                       string
@@ -23,8 +47,6 @@ type BuildRequestConfig struct {
 	PromptCacheTTL                  string
 	PromptCacheScope                string
 	ToolResultCacheReferenceEnabled bool
-	MicrocompactEnabled             *bool
-	MicrocompactKeepRecent          int
 	PerContextBetas                 map[string]string
 	// Identity sources metadata.user_id. AccountUUID and DeviceID
 	// stay constant across requests; the per-request session_id is
@@ -40,8 +62,9 @@ type BuildRequestConfig struct {
 	Logger                         *slog.Logger
 }
 
-func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adaptermodel.ResolvedModel, effort string, cfg BuildRequestConfig, reqID string) (anthropic.Request, error) {
-	maxTok := ResolveMaxTokens(req.MaxTokens, model)
+// BuildRequest is part of Clyde's typed adapter surface.
+func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *adapterresolver.ResolvedRequest, effort string, cfg BuildRequestConfig, reqID string) (anthropic.Request, error) {
+	maxTok := ResolveMaxTokens(req.MaxTokens, resolved)
 	strategy := cfg.InboundThinkingMaterialization
 	if strategy == "" {
 		strategy = adapterrender.MaterializeNativeThinkingBlock
@@ -51,7 +74,7 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adap
 		return anthropic.Request{}, err
 	}
 	callerSystem := stripSystemPrefix(tr.System, cfg.SystemPromptPrefix)
-	if instr := strings.TrimSpace(model.Instructions); instr != "" {
+	if instr := strings.TrimSpace(resolved.Instructions); instr != "" {
 		if callerSystem == "" {
 			callerSystem = instr
 		} else {
@@ -87,18 +110,17 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adap
 		cachingEnabled,
 	)
 
-	strippedModel := StripContextSuffix(model.ClaudeModel)
+	strippedModel := StripContextSuffix(resolved.Model)
 	out, cacheStats := ToAPIRequest(tr, strippedModel, cfg.ToolResultCacheReferenceEnabled)
 	if cacheStats.ToolResultCandidates > 0 && cfg.Logger != nil {
 		level := slog.LevelInfo
 		if cfg.ToolResultCacheReferenceEnabled {
 			level = slog.LevelWarn
 		}
-		cfg.Logger.LogAttrs(ctx, level, "adapter.cache_breakpoints.tool_result_cache_reference",
-			slog.String("component", "adapter"),
+		cfg.Logger.LogAttrs(ctx, level, "adapter.cache_breakpoints.tool_result_cache_reference", slog.String("concern", "adapter.chat.render"), slog.String("component", "adapter"),
 			slog.String("subcomponent", "oauth"),
 			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
+			slog.String("alias", requestAlias(resolved)),
 			slog.String("model", strippedModel),
 			slog.Bool("enabled", cfg.ToolResultCacheReferenceEnabled),
 			slog.Int("tool_result_candidates", cacheStats.ToolResultCandidates),
@@ -107,22 +129,14 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, model adap
 	}
 	out.SystemBlocks = sysBlocks
 
-	microEnabled := true
-	if cfg.MicrocompactEnabled != nil {
-		microEnabled = *cfg.MicrocompactEnabled
-	}
-	if microEnabled {
-		cleared, bytes := ApplyMicrocompact(out.Messages, cfg.MicrocompactKeepRecent)
-		LogMicrocompact(cfg.Logger, "", model.Alias, cleared, bytes, cfg.MicrocompactKeepRecent)
-	}
-	out.ExtraBetas = DerivePerRequestBetas(model, cfg.PerContextBetas)
+	out.ExtraBetas = DerivePerRequestBetas(resolved, cfg.PerContextBetas)
 	// Note: claude-cli does NOT send fine-grained-tool-streaming-2025-05-14
 	// (verified against the local Claude Code MITM baseline). The flavor's
 	// beta header is the canonical set; do not append it here.
-	if effort != "" && len(model.Efforts) > 0 {
+	if effort != "" && len(resolved.Efforts) > 0 {
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
-	ApplyThinkingConfig(&out, model, strippedModel)
+	ApplyThinkingConfig(&out, resolved, strippedModel)
 	if userID := cfg.Identity.EncodeUserID(); userID != "" {
 		out.Metadata = &anthropic.RequestMetadata{UserID: userID}
 	}

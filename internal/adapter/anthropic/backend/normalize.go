@@ -63,14 +63,18 @@ func flattenContent(raw json.RawMessage) string {
 	}
 	var b strings.Builder
 	for _, p := range parts {
-		switch p.Type {
-		case "text":
+		switch openAIContentPartType(p.Type) {
+		case openAIContentPartTypeText:
 			b.WriteString(p.Text)
-		case "image_url":
+		case openAIContentPartTypeImageURL:
 			b.WriteString("[image]")
-		case "input_audio":
+		case openAIContentPartTypeInputAudio:
 			b.WriteString("[audio]")
-		case "refusal":
+		case openAIContentPartTypeToolResult, openAIContentPartTypeToolUse, openAIContentPartTypeThinking:
+			b.WriteString("[")
+			b.WriteString(p.Type)
+			b.WriteString("]")
+		case openAIContentPartTypeRefusal:
 			b.WriteString("[refusal: ")
 			b.WriteString(p.Refusal)
 			b.WriteString("]")

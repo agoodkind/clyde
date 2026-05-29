@@ -34,7 +34,7 @@ func TestUsageNoticeGateFormatsWarningWithLocalResetTime(t *testing.T) {
 	reset := time.Date(2026, time.May, 5, 17, 30, 0, 0, location)
 	gate := NewUsageNoticeGateWithLogger(nil)
 
-	notices := gate.Evaluate([]UsageWindowNoticeInput{{
+	notices := gate.Evaluate(context.Background(), []UsageWindowNoticeInput{{
 		Provider:    "codex",
 		WindowKey:   "weekly",
 		LimitLabel:  "weekly",
@@ -66,7 +66,7 @@ func TestUsageNoticeGateLogsProviderAndWindowKey(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	gate := NewUsageNoticeGateWithLogger(logger)
 
-	notices := gate.Evaluate([]UsageWindowNoticeInput{{
+	notices := gate.Evaluate(context.Background(), []UsageWindowNoticeInput{{
 		Provider:    "codex",
 		WindowKey:   "weekly",
 		LimitLabel:  "weekly",
@@ -127,7 +127,7 @@ func TestAppendUsageNoticesToResponsePrependsSyntheticNotice(t *testing.T) {
 		}},
 	}
 
-	updated, ok := AppendUsageNoticesToResponse(context.Background(), response, []UsageNotice{{Text: "⚠️ Notice text."}}, json.Marshal)
+	updated, ok := AppendUsageNoticesToResponse(context.Background(), response, []UsageNotice{{Text: "⚠️ Notice text."}})
 	if !ok {
 		t.Fatalf("AppendUsageNoticesToResponse did not update response")
 	}

@@ -256,12 +256,12 @@ func TestResolveSloggerSetupGatesCleanupByRole(t *testing.T) {
 		t.Fatalf("daemon cleanup max total mb = %d, want 4096", daemonPolicy.CleanupPolicy.MaxTotalMB)
 	}
 
-	tuiPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, slogger.ProcessRoleTUI)
+	cliPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, slogger.ProcessRoleCLI)
 	if err != nil {
-		t.Fatalf("tui ResolveSloggerSetup: %v", err)
+		t.Fatalf("cli ResolveSloggerSetup: %v", err)
 	}
-	if tuiPolicy.CleanupPolicy.Enabled {
-		t.Fatalf("tui/cli role must disable cleanup; it would block process start")
+	if cliPolicy.CleanupPolicy.Enabled {
+		t.Fatalf("cli role must disable cleanup; it would block process start")
 	}
 }
 

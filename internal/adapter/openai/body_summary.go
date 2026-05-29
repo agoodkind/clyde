@@ -14,6 +14,22 @@ const (
 	maxToolCallSummaryItems     = 4
 )
 
+// toolCallPathArgKey enumerates the OpenAI tool-call argument key
+// names the body summary harvests as file/directory paths.
+type toolCallPathArgKey string
+
+const (
+	toolCallPathKeyPath             toolCallPathArgKey = "path"
+	toolCallPathKeyFile             toolCallPathArgKey = "file"
+	toolCallPathKeyFilepath         toolCallPathArgKey = "filepath"
+	toolCallPathKeyTargetFile       toolCallPathArgKey = "target_file"
+	toolCallPathKeyTargetDirectory  toolCallPathArgKey = "target_directory"
+	toolCallPathKeyCwd              toolCallPathArgKey = "cwd"
+	toolCallPathKeyWorkdir          toolCallPathArgKey = "workdir"
+	toolCallPathKeyWorkingDirectory toolCallPathArgKey = "working_directory"
+)
+
+// BodySummary is part of Clyde's typed adapter surface.
 type BodySummary struct {
 	Model                string          `json:"model,omitempty"`
 	Stream               bool            `json:"stream"`
@@ -36,6 +52,7 @@ type BodySummary struct {
 	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
 }
 
+// MsgSummary is part of Clyde's typed adapter surface.
 type MsgSummary struct {
 	Role             string   `json:"role"`
 	ContentChars     int      `json:"content_chars"`
@@ -50,17 +67,18 @@ type MsgSummary struct {
 	ToolCallPaths    []string `json:"tool_call_paths,omitempty"`
 }
 
+// ToolSummary is part of Clyde's typed adapter surface.
 type ToolSummary struct {
 	Name        string `json:"name"`
 	ParamsChars int    `json:"params_chars"`
 }
 
+// SummarizeChatBody is part of Clyde's typed adapter surface.
 func SummarizeChatBody(raw []byte) (BodySummary, error) {
 	log := slog.Default()
 	var req ChatRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
-		log.Warn("adapter.openai.body_summary.decode_failed",
-			"subcomponent", "openai",
+		log.Warn("adapter.openai.body_summary.decode_failed", "concern", "adapter.chat.preflight", "subcomponent", "openai",
 			"body_bytes", len(raw),
 			"err", err.Error(),
 		)
@@ -69,6 +87,7 @@ func SummarizeChatBody(raw []byte) (BodySummary, error) {
 	return SummarizeChatRequest(req), nil
 }
 
+// SummarizeChatRequest is part of Clyde's typed adapter surface.
 func SummarizeChatRequest(req ChatRequest) BodySummary {
 	toolChoice := req.ToolChoice
 	if string(toolChoice) == "null" {
@@ -90,7 +109,7 @@ func SummarizeChatRequest(req ChatRequest) BodySummary {
 		ServiceTier:          req.ServiceTier,
 		HasTextControls:      len(req.Text) > 0 && string(req.Text) != "null",
 		Truncation:           req.Truncation,
-		PromptCacheRetention: req.PromptCacheRetention,
+		PromptCacheRetention: req.PromptCacheRetention, MessagesChars: 0, Messages: nil, Tools: nil, ToolCount: 0,
 	}
 
 	summary.ToolCount = len(req.Tools) + len(req.Functions)
@@ -137,7 +156,7 @@ func summarizeMessage(msg ChatMessage) MsgSummary {
 		Role:         msg.Role,
 		ContentChars: len(content),
 		Name:         msg.Name,
-		ToolCallID:   msg.ToolCallID,
+		ToolCallID:   msg.ToolCallID, HasToolCalls: false, ToolCallCount: 0, ToolCallIDs: nil, ToolCallNames: nil, ToolCallArgChars: 0, ToolCallArgKeys: nil, ToolCallPaths: nil,
 	}
 	if len(msg.ToolCalls) > 0 {
 		summary.HasToolCalls = true
@@ -156,7 +175,7 @@ func summarizeMessage(msg ChatMessage) MsgSummary {
 }
 
 func summarizeToolCallArguments(raw string, summary *MsgSummary) {
-	var args map[string]any
+	var args map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return
 	}
@@ -167,9 +186,10 @@ func summarizeToolCallArguments(raw string, summary *MsgSummary) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		appendUniqueString(&summary.ToolCallArgKeys, key)
-		switch key {
-		case "path", "file", "filepath", "target_file", "target_directory", "cwd", "workdir", "working_directory":
-			if value, ok := args[key].(string); ok {
+		switch toolCallPathArgKey(key) {
+		case toolCallPathKeyPath, toolCallPathKeyFile, toolCallPathKeyFilepath, toolCallPathKeyTargetFile, toolCallPathKeyTargetDirectory, toolCallPathKeyCwd, toolCallPathKeyWorkdir, toolCallPathKeyWorkingDirectory:
+			var value string
+			if json.Unmarshal(args[key], &value) == nil {
 				appendUniqueString(&summary.ToolCallPaths, value)
 			}
 		}

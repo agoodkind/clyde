@@ -20,7 +20,7 @@ func TestRouteProviderClaimsCursorConnectHosts(t *testing.T) {
 		t.Fatal("expected api2.cursor.sh claim")
 	}
 	if claim.ProviderID != providerID {
-		t.Fatalf("provider id = %q want %q", claim.ProviderID, providerID)
+		t.Fatalf("provider id = %v want %v", claim.ProviderID, providerID)
 	}
 	if provider.ClassifyConnect("api.openai.com").Claimed {
 		t.Fatal("expected non-Cursor host to fall through")

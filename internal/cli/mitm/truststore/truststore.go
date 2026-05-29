@@ -168,7 +168,7 @@ func fingerprintPEM(path string) (Fingerprint, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
-		slog.Warn("cli.mitm.truststore.read_ca_failed", "path", path, "err", err)
+		slog.Warn("cli.mitm.truststore.read_ca_failed", "concern", "cli.mitm.truststore", "path", path, "err", err)
 		return "", fmt.Errorf("read ca cert %q: %w", path, err)
 	}
 	return fingerprintDER(extractFirstCertDER(body, path))

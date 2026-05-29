@@ -5,19 +5,24 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
 // EffectiveThinkingMode returns the wire-level thinking mode for the
-// resolved model. The registry resolves per-family fallbacks
-// (including the historical claude-opus-4-7 enabled-to-adaptive remap)
-// at construction time, so this function is a passthrough today. The
-// strippedModel parameter is kept for callers that still pass it; the
-// mapping does not depend on the wire model id at request time.
-func EffectiveThinkingMode(model adaptermodel.ResolvedModel, strippedModel string) string {
+// resolved request. The registry resolves the per-family
+// thinking_wire_mode (including its empty-default) at construction time,
+// so this function is a passthrough today. The strippedModel parameter
+// is kept for callers that still pass it; the mode does not depend on
+// the wire model id at request time.
+func EffectiveThinkingMode(req *adapterresolver.ResolvedRequest, strippedModel string) string {
 	_ = strippedModel
-	return model.Thinking
+	if req == nil {
+		return ""
+	}
+	return req.Thinking
 }
 
+// StripContextSuffix is part of Clyde's typed adapter surface.
 func StripContextSuffix(model string) string {
 	if prefix, _, ok := strings.Cut(model, "["); ok {
 		return strings.TrimSpace(prefix)
@@ -25,6 +30,7 @@ func StripContextSuffix(model string) string {
 	return strings.TrimSpace(model)
 }
 
+// MaxTokens is part of Clyde's typed adapter surface.
 func MaxTokens(req *int) int {
 	if req == nil || *req <= 0 {
 		return 4096
@@ -35,39 +41,49 @@ func MaxTokens(req *int) int {
 	return *req
 }
 
-func ResolveMaxTokens(req *int, model adaptermodel.ResolvedModel) int {
-	maxTokens := MaxTokens(req)
-	if (req == nil || *req <= 0) && model.MaxOutputTokens > 0 {
-		maxTokens = model.MaxOutputTokens
+// ResolveMaxTokens is part of Clyde's typed adapter surface.
+func ResolveMaxTokens(maxTokensReq *int, resolved *adapterresolver.ResolvedRequest) int {
+	maxTokens := MaxTokens(maxTokensReq)
+	maxOutputTokens := 0
+	if resolved != nil {
+		maxOutputTokens = resolved.MaxOutputTokens
 	}
-	if model.MaxOutputTokens > 0 && maxTokens > model.MaxOutputTokens {
-		maxTokens = model.MaxOutputTokens
+	if (maxTokensReq == nil || *maxTokensReq <= 0) && maxOutputTokens > 0 {
+		maxTokens = maxOutputTokens
+	}
+	if maxOutputTokens > 0 && maxTokens > maxOutputTokens {
+		maxTokens = maxOutputTokens
 	}
 	return maxTokens
 }
 
-func ApplyThinkingConfig(req *anthropic.Request, model adaptermodel.ResolvedModel, strippedModel string) {
-	switch EffectiveThinkingMode(model, strippedModel) {
+// ApplyThinkingConfig is part of Clyde's typed adapter surface.
+func ApplyThinkingConfig(req *anthropic.Request, resolved *adapterresolver.ResolvedRequest, strippedModel string) {
+	maxOutputTokens := 0
+	if resolved != nil {
+		maxOutputTokens = resolved.MaxOutputTokens
+	}
+	switch EffectiveThinkingMode(resolved, strippedModel) {
 	case adaptermodel.ThinkingAdaptive:
 		req.Thinking = &anthropic.Thinking{
 			Type:    "adaptive",
-			Display: "summarized",
+			Display: "summarized", BudgetTokens: 0,
 		}
 	case adaptermodel.ThinkingEnabled:
-		cap := model.MaxOutputTokens
-		if cap <= 0 {
-			cap = req.MaxTokens
+		tokenCap := maxOutputTokens
+		if tokenCap <= 0 {
+			tokenCap = req.MaxTokens
 		}
-		if cap < 1025 {
-			cap = 1025
+		if tokenCap < 1025 {
+			tokenCap = 1025
 		}
-		req.MaxTokens = cap
+		req.MaxTokens = tokenCap
 		req.Thinking = &anthropic.Thinking{
 			Type:         "enabled",
-			BudgetTokens: cap - 1,
+			BudgetTokens: tokenCap - 1,
 			Display:      "summarized",
 		}
 	case adaptermodel.ThinkingDisabled:
-		req.Thinking = &anthropic.Thinking{Type: "disabled"}
+		req.Thinking = &anthropic.Thinking{Type: "disabled", BudgetTokens: 0, Display: ""}
 	}
 }

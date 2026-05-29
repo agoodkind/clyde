@@ -1,6 +1,7 @@
 package codexstore
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,8 +27,8 @@ type StorePaths struct {
 
 // ResolveStorePaths resolves the Codex data roots Clyde needs for local
 // rollout discovery and cleanup.
-func ResolveStorePaths(codexHome, sqliteHome string) (StorePaths, error) {
-	home, err := resolveCodexHome(codexHome)
+func ResolveStorePaths(ctx context.Context, codexHome, sqliteHome string) (StorePaths, error) {
+	home, err := resolveCodexHome(ctx, codexHome)
 	if err != nil {
 		return StorePaths{}, err
 	}
@@ -52,11 +53,11 @@ func ResolveStorePaths(codexHome, sqliteHome string) (StorePaths, error) {
 
 // ResolveStorePathsFromEnv uses CODEX_HOME when set and otherwise falls back
 // to ~/.codex, matching Codex's documented home resolution.
-func ResolveStorePathsFromEnv() (StorePaths, error) {
-	return ResolveStorePaths(os.Getenv("CODEX_HOME"), os.Getenv("CODEX_SQLITE_HOME"))
+func ResolveStorePathsFromEnv(ctx context.Context) (StorePaths, error) {
+	return ResolveStorePaths(ctx, os.Getenv("CODEX_HOME"), os.Getenv("CODEX_SQLITE_HOME"))
 }
 
-func resolveCodexHome(value string) (string, error) {
+func resolveCodexHome(ctx context.Context, value string) (string, error) {
 	home := strings.TrimSpace(value)
 	if home == "" {
 		home = strings.TrimSpace(os.Getenv("CODEX_HOME"))
@@ -64,8 +65,7 @@ func resolveCodexHome(value string) (string, error) {
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			// TODO: thread ctx for correlation
-			slog.Error("codex.store.home_resolve_failed", "err", err)
+			slog.ErrorContext(ctx, "codex.store.home_resolve_failed", "concern", "providers.codex.store", "err", err)
 			return "", fmt.Errorf("resolve codex home: %w", err)
 		}
 		home = filepath.Join(userHome, ".codex")
@@ -73,8 +73,7 @@ func resolveCodexHome(value string) (string, error) {
 	if strings.HasPrefix(home, "~") {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
-			// TODO: thread ctx for correlation
-			slog.Error("codex.store.home_expand_failed", "err", err)
+			slog.ErrorContext(ctx, "codex.store.home_expand_failed", "concern", "providers.codex.store", "err", err)
 			return "", fmt.Errorf("expand codex home: %w", err)
 		}
 		switch {

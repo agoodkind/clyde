@@ -1,19 +1,39 @@
 package mitm
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/providerid"
 )
 
-// ProviderID identifies an MITM-aware provider package. The id flows
-// into the generic capture log and the per-provider concern path; it
-// must be a short, stable, lower-case token (e.g. "cursor", "claude",
-// "codex").
-type ProviderID string
+// ProviderID identifies an MITM-aware provider package.
+type ProviderID providerid.Provider
+
+const (
+	// ProviderIDUnknown is the zero value for an unclaimed MITM provider.
+	ProviderIDUnknown ProviderID = ProviderID(providerid.ProviderUnspecified)
+	// ProviderIDClaude identifies Claude/Anthropic MITM traffic.
+	ProviderIDClaude ProviderID = ProviderID(providerid.ProviderClaude)
+	// ProviderIDCodex identifies Codex/OpenAI MITM traffic.
+	ProviderIDCodex ProviderID = ProviderID(providerid.ProviderCodex)
+	// ProviderIDCursor identifies Cursor MITM traffic.
+	ProviderIDCursor ProviderID = ProviderID(providerid.ProviderCursor)
+)
+
+// String returns the stable provider label used in capture logs.
+func (id ProviderID) String() string {
+	return providerid.Provider(id).String()
+}
+
+// LogValue emits the stable provider label in structured logs.
+func (id ProviderID) LogValue() slog.Value {
+	return slog.StringValue(id.String())
+}
 
 // ConnectClaim is a Provider's claim of a CONNECT target for TLS
 // interception. When Claimed is true the generic CONNECT handler
@@ -192,7 +212,7 @@ func providerForConnect(target string) (Provider, ConnectClaim, bool) {
 			return p, claim, true
 		}
 	}
-	return nil, ConnectClaim{Claimed: false, Host: "", ProviderID: ""}, false
+	return nil, ConnectClaim{Claimed: false, Host: "", ProviderID: ProviderIDUnknown}, false
 }
 
 // providerForPlain returns the first registered provider that claims

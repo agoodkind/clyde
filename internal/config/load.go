@@ -11,7 +11,6 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
 	"goodkind.io/clyde/internal/util"
 )
 
@@ -20,7 +19,7 @@ import (
 // and was removed. Pelletier mirrors the same Marshal / Unmarshal API surface
 // so the migration is a one-line import swap on each call.
 func loadConfig(dir string) (*Config, error) {
-	log := slog.Default().With("concern", "process.daemon.config")
+	log := slog.Default()
 	tomlPath := filepath.Join(dir, "config.toml")
 	if !util.FileExists(tomlPath) {
 		return nil, os.ErrNotExist
@@ -29,8 +28,7 @@ func loadConfig(dir string) (*Config, error) {
 	var cfg Config
 	data, err := os.ReadFile(tomlPath)
 	if err != nil {
-		log.Warn("config.load.read_failed",
-			"component", "config",
+		log.Warn("config.load.read_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -39,8 +37,7 @@ func loadConfig(dir string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read %s: %w", tomlPath, err)
 	}
 	if err := toml.Unmarshal(data, &cfg); err != nil {
-		log.Warn("config.load.parse_failed",
-			"component", "config",
+		log.Warn("config.load.parse_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -50,8 +47,7 @@ func loadConfig(dir string) (*Config, error) {
 	}
 	warnRemovedLoggingConfig(data, tomlPath, log)
 	if err := hydrateAdapterInstructionFiles(&cfg, tomlPath); err != nil {
-		log.Warn("config.load.instructions_failed",
-			"component", "config",
+		log.Warn("config.load.instructions_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -60,8 +56,7 @@ func loadConfig(dir string) (*Config, error) {
 		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
 	}
 	if err := applyLoggingDefaultsAndValidate(&cfg); err != nil {
-		log.Warn("config.load.validate_failed",
-			"component", "config",
+		log.Warn("config.load.validate_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -69,8 +64,7 @@ func loadConfig(dir string) (*Config, error) {
 		)
 		return nil, fmt.Errorf("invalid %s: %w", tomlPath, err)
 	}
-	log.Debug("config.load.loaded",
-		"component", "config",
+	log.Debug("config.load.loaded", "concern", "config", "component", "config",
 		"subcomponent", "load",
 		"format", "toml",
 		"path", tomlPath,
@@ -102,23 +96,13 @@ type removedMITMSection struct {
 	BodyMode *string `toml:"body_mode"`
 }
 
-// warnRemovedLoggingConfig surfaces a clear slog warning for every
-// removed logging key that still appears in the operator's config. The
-// intent is to make the hard cut visible without blocking startup:
-// existing operator configs predate the refactor, and forcing them to
-// edit a file before `clyde` can run again is a worse failure mode
-// than ignoring the stale section. Operators see one warning per
-// removed key so the migration path is obvious in the daemon log, and
-// the values themselves have no effect because the corresponding
-// config structs no longer exist.
 func warnRemovedLoggingConfig(data []byte, tomlPath string, log *slog.Logger) {
 	removedConfig, err := unmarshalRemovedLoggingConfig(data)
 	if err != nil {
 		return
 	}
 	emitRemovedLoggingKeyWarning := func(key string) {
-		log.Warn("config.load.removed_logging_key",
-			"component", "config",
+		log.Warn("config.load.removed_logging_key", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", tomlPath,
 			"format", "toml",
@@ -142,8 +126,7 @@ func warnRemovedLoggingConfig(data []byte, tomlPath string, log *slog.Logger) {
 func unmarshalRemovedLoggingConfig(data []byte) (removedLoggingConfig, error) {
 	var removedConfig removedLoggingConfig
 	if err := toml.Unmarshal(data, &removedConfig); err != nil {
-		slog.Warn("config.load.removed_logging_config_scan_failed",
-			"component", "config",
+		slog.Warn("config.load.removed_logging_config_scan_failed", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"format", "toml",
 			"err", err,
@@ -157,13 +140,12 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 	if cfg == nil {
 		return nil
 	}
-	log := slog.Default().With("concern", "process.daemon.config")
+	log := slog.Default()
 	configDir := filepath.Dir(configPath)
 	for name, model := range cfg.Adapter.Models {
 		contents, err := loadInstructionFile(configDir, model.InstructionsFile)
 		if err != nil {
-			log.Warn("config.load.instructions_file_failed",
-				"component", "config",
+			log.Warn("config.load.instructions_file_failed", "concern", "config", "component", "config",
 				"subcomponent", "load",
 				"scope", "adapter.models",
 				"name", name,
@@ -178,8 +160,7 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 	for name, family := range cfg.Adapter.Families {
 		contents, err := loadInstructionFile(configDir, family.InstructionsFile)
 		if err != nil {
-			log.Warn("config.load.instructions_file_failed",
-				"component", "config",
+			log.Warn("config.load.instructions_file_failed", "concern", "config", "component", "config",
 				"subcomponent", "load",
 				"scope", "adapter.families",
 				"name", name,
@@ -198,8 +179,7 @@ func hydrateAdapterInstructionFiles(cfg *Config, configPath string) error {
 			if aliasPrefix == "" {
 				aliasPrefix = fmt.Sprintf("#%d", i)
 			}
-			log.Warn("config.load.instructions_file_failed",
-				"component", "config",
+			log.Warn("config.load.instructions_file_failed", "concern", "config", "component", "config",
 				"subcomponent", "load",
 				"scope", "adapter.codex.models",
 				"name", aliasPrefix,
@@ -225,18 +205,18 @@ func loadInstructionFile(configDir string, configuredPath string) (string, error
 	}
 	contents, err := os.ReadFile(resolvedPath)
 	if err != nil {
-		slog.Default().With("concern", "process.daemon.config").Warn("config.load.instructions_file_read_failed",
+		slog.Warn("config.load.instructions_file_read_failed",
+			"concern", "process.daemon.config",
 			"component", "config",
 			"subcomponent", "load",
 			"path", resolvedPath,
 			"err", err,
 		)
-		return "", err
+		return "", fmt.Errorf("read instructions file %s: %w", resolvedPath, err)
 	}
 	if len(contents) == 0 {
 		err := fmt.Errorf("read %q: file is empty", resolvedPath)
-		slog.Default().With("concern", "process.daemon.config").Warn("config.load.instructions_file_empty",
-			"component", "config",
+		slog.Default().Warn("config.load.instructions_file_empty", "concern", "config", "component", "config",
 			"subcomponent", "load",
 			"path", resolvedPath,
 			"err", err,
@@ -263,57 +243,7 @@ func LoadGlobalOrDefault() (*Config, error) {
 	return cfg, nil
 }
 
-// SaveGlobal writes the config back to the global location as TOML.
-// The directory is created if missing.
-func SaveGlobal(cfg *Config) error {
-	if cfg == nil {
-		return fmt.Errorf("nil config")
-	}
-	log := slog.Default().With("concern", "process.daemon.config")
-	globalDir := filepath.Dir(GlobalConfigPath())
-	if err := os.MkdirAll(globalDir, 0o755); err != nil {
-		log.Warn("config.save.mkdir_failed",
-			"component", "config",
-			"subcomponent", "save",
-			"path", globalDir,
-			"err", err,
-		)
-		return fmt.Errorf("create global config dir: %w", err)
-	}
-	tomlPath := filepath.Join(globalDir, "config.toml")
-	tmp := tomlPath + ".tmp"
-	encoded, err := toml.Marshal(cfg)
-	if err != nil {
-		log.Warn("config.save.encode_failed",
-			"component", "config",
-			"subcomponent", "save",
-			"err", err,
-		)
-		return fmt.Errorf("encode toml: %w", err)
-	}
-	if err := os.WriteFile(tmp, encoded, 0o644); err != nil {
-		log.Warn("config.save.write_tmp_failed",
-			"component", "config",
-			"subcomponent", "save",
-			"path", tmp,
-			"err", err,
-		)
-		return fmt.Errorf("write tmp: %w", err)
-	}
-	if err := os.Rename(tmp, tomlPath); err != nil {
-		_ = os.Remove(tmp)
-		log.Warn("config.save.rename_failed",
-			"component", "config",
-			"subcomponent", "save",
-			"tmp", tmp,
-			"path", tomlPath,
-			"err", err,
-		)
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
-}
-
+// NewConfigWithDefaults is part of Clyde's typed adapter surface.
 func NewConfigWithDefaults() *Config {
 	cfg := NewConfig()
 	_ = applyLoggingDefaultsAndValidate(cfg)
@@ -328,7 +258,7 @@ const (
 
 var knownLoggingSinkNames = map[string]bool{
 	LoggingSinkDaemon:           true,
-	LoggingSinkTUI:              true,
+	LoggingSinkCLI:              true,
 	LoggingSinkCodexSidecar:     true,
 	LoggingSinkAnthropicSidecar: true,
 	LoggingSinkAudit:            true,
@@ -343,7 +273,6 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg == nil {
 		return nil
 	}
-	applySessionDefaults(&cfg.Defaults)
 	if err := applyLoggingCoreDefaults(&cfg.Logging); err != nil {
 		return err
 	}
@@ -374,8 +303,8 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	}
 
 	cfg.Adapter.Codex.ReasoningSummary = normalizeCodexReasoningSummary(cfg.Adapter.Codex.ReasoningSummary)
-	switch cfg.Adapter.Codex.ReasoningSummary {
-	case "auto", "concise", "detailed", "none":
+	switch codexReasoningSummary(cfg.Adapter.Codex.ReasoningSummary) {
+	case codexReasoningSummaryAuto, codexReasoningSummaryConcise, codexReasoningSummaryDetailed, codexReasoningSummaryNone:
 	default:
 		return fmt.Errorf("adapter.codex.reasoning_summary must be one of auto|concise|detailed|none")
 	}
@@ -387,88 +316,7 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
-	applyAutoNameDefaults(&cfg.AutoName)
-	applyDebugDefaults(&cfg.Debug)
-
 	return applyAdapterReasoningDefaultsAndValidate(&cfg.Adapter)
-}
-
-// defaultPprofListen is the documented bind address for the worker's
-// pprof endpoint when [debug.pprof] is enabled without an explicit
-// listen value. "localhost:0" binds to a localhost-only ephemeral port
-// the kernel picks; operators pin a stable address such as
-// "localhost:6060" or "[::1]:6060" when they want a known port.
-const defaultPprofListen = "localhost:0"
-
-// applyDebugDefaults fills in absent debug knobs with their documented
-// defaults. The pprof block stays disabled by default and the listen
-// address defaults to a localhost-only ephemeral port.
-func applyDebugDefaults(debug *DebugConfig) {
-	if debug == nil {
-		return
-	}
-	if strings.TrimSpace(debug.Pprof.Listen) == "" {
-		debug.Pprof.Listen = defaultPprofListen
-	}
-}
-
-func applySessionDefaults(defaults *Defaults) {
-	if strings.TrimSpace(defaults.CompactCounter) == "" {
-		defaults.CompactCounter = "api"
-	}
-}
-
-const (
-	defaultAutoNameMaxCallsPerHour      = 6
-	defaultAutoNameCooldown             = 30 * time.Minute
-	defaultAutoNameMinUserMessages      = 3
-	defaultAutoNameMinDigitRunForRedact = 7
-)
-
-// applyAutoNameDefaults fills in absent or zero AutoName fields with
-// the canonical defaults documented on the AutoNameConfig type. The
-// pointer-bool fields preserve the distinction between "operator
-// explicitly set false" and "absent" so a partial [autoname] block
-// merges defaults for the missing fields only.
-func applyAutoNameDefaults(autoname *AutoNameConfig) {
-	if autoname == nil {
-		return
-	}
-	if autoname.Enabled == nil {
-		enabled := true
-		autoname.Enabled = &enabled
-	}
-	if autoname.MaxCallsPerHour == 0 {
-		autoname.MaxCallsPerHour = defaultAutoNameMaxCallsPerHour
-	}
-	if autoname.Cooldown == 0 {
-		autoname.Cooldown = Duration(defaultAutoNameCooldown)
-	}
-	if autoname.MinUserMessages == 0 {
-		autoname.MinUserMessages = defaultAutoNameMinUserMessages
-	}
-	applyAutoNameRedactDefaults(&autoname.Redact)
-}
-
-func applyAutoNameRedactDefaults(redact *RedactPolicy) {
-	if redact == nil {
-		return
-	}
-	if redact.MinDigitRunForRedact == 0 {
-		redact.MinDigitRunForRedact = defaultAutoNameMinDigitRunForRedact
-	}
-	if redact.StripEmails == nil {
-		strip := true
-		redact.StripEmails = &strip
-	}
-	if redact.StripPaths == nil {
-		strip := true
-		redact.StripPaths = &strip
-	}
-	if redact.StripKeyPrefixes == nil {
-		strip := true
-		redact.StripKeyPrefixes = &strip
-	}
 }
 
 func applyLoggingCoreDefaults(logging *LoggingConfig) error {
@@ -477,7 +325,7 @@ func applyLoggingCoreDefaults(logging *LoggingConfig) error {
 		logLevel = "info"
 	}
 	logging.Level = logLevel
-	logging.Paths.TUI = cleanExpandedPath(strings.TrimSpace(logging.Paths.TUI))
+	logging.Paths.CLI = cleanExpandedPath(strings.TrimSpace(logging.Paths.CLI))
 	logging.Paths.Daemon = cleanExpandedPath(strings.TrimSpace(logging.Paths.Daemon))
 	if err := validateLoggingLevel("logging.level", logging.Level); err != nil {
 		return err
@@ -566,8 +414,8 @@ func normalizeLoggingRequest(request *LoggingRequest) error {
 	if policy == "" {
 		policy = "warn"
 	}
-	switch policy {
-	case "warn", "fail_test":
+	switch loggingIncompletePolicy(policy) {
+	case loggingIncompletePolicyWarn, loggingIncompletePolicyFailTest:
 		request.IncompletePolicy = policy
 	default:
 		return fmt.Errorf("logging.request.incomplete_policy must be one of warn|fail_test")
@@ -594,8 +442,8 @@ func normalizeLoggingInventory(inventory *LoggingInventory) error {
 	if mode == "" {
 		mode = "indexed"
 	}
-	switch mode {
-	case "indexed", "deep":
+	switch loggingInventoryMode(mode) {
+	case loggingInventoryModeIndexed, loggingInventoryModeDeep:
 		inventory.Mode = mode
 		return nil
 	default:
@@ -632,8 +480,8 @@ func normalizeLoggingControl(path string, level string, detail string) error {
 	if err := validateLoggingLevel(path+".level", normalizeLoggingOptionalValue(level)); err != nil {
 		return err
 	}
-	switch normalizeLoggingOptionalValue(detail) {
-	case "", "summary", "verbose":
+	switch loggingDetail(normalizeLoggingOptionalValue(detail)) {
+	case loggingDetailUnset, loggingDetailSummary, loggingDetailVerbose:
 		return nil
 	default:
 		return fmt.Errorf("%s.detail must be one of summary|verbose", path)
@@ -641,8 +489,8 @@ func normalizeLoggingControl(path string, level string, detail string) error {
 }
 
 func validateLoggingLevel(path string, level string) error {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "", "debug", "info", "warn", "error":
+	switch loggingLevel(strings.ToLower(strings.TrimSpace(level))) {
+	case loggingLevelUnset, loggingLevelDebug, loggingLevelInfo, loggingLevelWarn, loggingLevelError:
 		return nil
 	default:
 		return fmt.Errorf("%s must be one of debug|info|warn|error", path)
@@ -666,11 +514,6 @@ func normalizeLoggingOptionalValue(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-// applyAdapterRetryDefaultsAndValidate normalizes and validates
-// operator-supplied retry policies. Provider-specific builtin policies
-// are not injected here; each provider package owns and appends its own
-// builtins at construction so provider knowledge stays out of the
-// generic config layer.
 func applyAdapterRetryDefaultsAndValidate(retry *AdapterRetry) error {
 	if retry == nil {
 		return nil
@@ -844,7 +687,7 @@ func DefaultMITMCaptureRouteRules() []MITMCaptureRouteRule {
 			Concern:             "cursor.bidi",
 			Provider:            "cursor",
 			Host:                "",
-			Method:              "POST",
+			Method:              MITMMethodPost,
 			PathExact:           "/aiserver.v1.AiService/BidiAppend",
 			PathPrefix:          "",
 			PathContains:        "",
@@ -940,12 +783,15 @@ func normalizeMITMCaptureRouteRule(rule MITMCaptureRouteRule) (MITMCaptureRouteR
 	if rule.Concern == "" {
 		return MITMCaptureRouteRule{}, fmt.Errorf("concern is required")
 	}
-	rule.Provider = normalizeMITMProviderName(rule.Provider)
-	if rule.Provider != "" && !isValidMITMProviderName(rule.Provider) {
+	rule.Provider = MITMProvider(normalizeMITMProviderName(string(rule.Provider)))
+	if !rule.Provider.IsValid() {
 		return MITMCaptureRouteRule{}, fmt.Errorf("provider %q is invalid", rule.Provider)
 	}
 	rule.Host = strings.Trim(strings.ToLower(strings.TrimSpace(rule.Host)), ".")
-	rule.Method = strings.ToUpper(strings.TrimSpace(rule.Method))
+	rule.Method = MITMHTTPMethod(strings.ToUpper(strings.TrimSpace(string(rule.Method))))
+	if !rule.Method.IsValid() {
+		return MITMCaptureRouteRule{}, fmt.Errorf("method %q is invalid", rule.Method)
+	}
 	rule.PathExact = strings.TrimSpace(rule.PathExact)
 	rule.PathPrefix = strings.TrimSpace(rule.PathPrefix)
 	rule.PathContains = strings.TrimSpace(rule.PathContains)
@@ -953,47 +799,12 @@ func normalizeMITMCaptureRouteRule(rule MITMCaptureRouteRule) (MITMCaptureRouteR
 	return rule, nil
 }
 
-// applyAdapterReasoningDefaultsAndValidate validates the per-provider
-// [adapter.anthropic.reasoning] and [adapter.codex.reasoning] blocks and
-// folds the legacy [adapter.synthetic_content] inbound materialization
-// values forward when the new blocks are unset. The legacy path stays
-// readable for one release; each forwarded value emits a single startup
-// WARN so operators see the migration prompt without log spam.
 func applyAdapterReasoningDefaultsAndValidate(adapter *AdapterConfig) error {
 	if adapter == nil {
 		return nil
 	}
-	log := slog.Default().With("concern", "adapter.reasoning.config")
-
-	legacyAnthropic := strings.TrimSpace(string(adapter.SyntheticContent.Anthropic.InboundThinkingMaterialization))
-	if adapter.Anthropic.Reasoning.InboundThinking == "" && legacyAnthropic != "" {
-		adapter.Anthropic.Reasoning.InboundThinking = anthmode.InboundThinking(legacyAnthropic)
-		log.Warn("adapter.reasoning.legacy_synthetic_content_forwarded",
-			"component", "config",
-			"subcomponent", "adapter_reasoning",
-			"provider", "anthropic",
-			"legacy_field", "adapter.synthetic_content.anthropic.inbound_thinking_materialization",
-			"new_field", "adapter.anthropic.reasoning.inbound_thinking",
-			"value", legacyAnthropic,
-			"reason", "legacy synthetic_content block is deprecated; copy the value into the new block",
-		)
-	}
 	if err := adapter.Anthropic.Reasoning.InboundThinking.Validate(); err != nil {
 		return fmt.Errorf("adapter.anthropic.reasoning.inbound_thinking must be one of native_thinking_block|drop|plain_text_concat|passthrough (got %q)", adapter.Anthropic.Reasoning.InboundThinking)
-	}
-
-	legacyCodex := strings.TrimSpace(string(adapter.SyntheticContent.Codex.InboundThinkingMaterialization))
-	if adapter.Codex.Reasoning.RoundTripSummary == "" && legacyCodex != "" {
-		adapter.Codex.Reasoning.RoundTripSummary = CodexRoundTripSummary(legacyCodex)
-		log.Warn("adapter.reasoning.legacy_synthetic_content_forwarded",
-			"component", "config",
-			"subcomponent", "adapter_reasoning",
-			"provider", "codex",
-			"legacy_field", "adapter.synthetic_content.codex.inbound_thinking_materialization",
-			"new_field", "adapter.codex.reasoning.round_trip_summary",
-			"value", legacyCodex,
-			"reason", "legacy synthetic_content block is deprecated; copy the value into the new block",
-		)
 	}
 	switch adapter.Codex.Reasoning.RoundTripSummary {
 	case "",
@@ -1054,22 +865,6 @@ func parseMITMProviders(providers MITMProviderSet) (MITMProviderSet, error) {
 	return normalizedProviders, nil
 }
 
-func normalizeMITMProviders(providers MITMProviderSet) MITMProviderSet {
-	normalizedProviders, err := parseMITMProviders(providers)
-	if err != nil {
-		return providers
-	}
-	return normalizedProviders
-}
-
-func parseMITMProviderControlValue(value string) (MITMProviderSet, error) {
-	return parseMITMProviders(MITMProviderSet{value})
-}
-
-func formatMITMProviders(providers MITMProviderSet) string {
-	return strings.Join(normalizeMITMProviders(providers), ",")
-}
-
 func splitMITMProviderList(providerList string) []string {
 	return strings.FieldsFunc(providerList, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
@@ -1100,15 +895,15 @@ func isValidMITMProviderName(provider string) bool {
 }
 
 func normalizeCodexReasoningSummary(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "", "auto":
-		return "auto"
-	case "concise":
-		return "concise"
-	case "detailed":
-		return "detailed"
-	case "none":
-		return "none"
+	switch codexReasoningSummary(strings.ToLower(strings.TrimSpace(v))) {
+	case "", codexReasoningSummaryAuto:
+		return string(codexReasoningSummaryAuto)
+	case codexReasoningSummaryConcise:
+		return string(codexReasoningSummaryConcise)
+	case codexReasoningSummaryDetailed:
+		return string(codexReasoningSummaryDetailed)
+	case codexReasoningSummaryNone:
+		return string(codexReasoningSummaryNone)
 	default:
 		return strings.ToLower(strings.TrimSpace(v))
 	}
@@ -1143,7 +938,7 @@ func normalizeNoticeUsageRepeatPolicy(raw AdapterNoticeRepeatPolicy) (AdapterNot
 	if mode == "" {
 		mode = AdapterNoticeRepeatEvery
 	}
-	out := AdapterNoticeRepeatPolicy{Mode: mode}
+	out := AdapterNoticeRepeatPolicy{Mode: mode, Cooldown: "", CooldownDuration: 0, CooldownTurns: 0}
 	switch mode {
 	case AdapterNoticeRepeatEvery, AdapterNoticeRepeatOncePerThresholdUntilReset:
 		return out, nil
@@ -1165,6 +960,3 @@ func normalizeNoticeUsageRepeatPolicy(raw AdapterNoticeRepeatPolicy) (AdapterNot
 		return AdapterNoticeRepeatPolicy{}, fmt.Errorf("adapter.notices.usage.repeat.mode must be one of every|once_per_threshold_until_reset|time_cooldown|turn_cooldown")
 	}
 }
-
-// MergedProfiles helper removed; callers now use LoadGlobalOrDefault and project
-// config loading inline at their callsites.

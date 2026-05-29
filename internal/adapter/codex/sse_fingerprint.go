@@ -52,17 +52,17 @@ type sseAggregateCollector struct {
 }
 
 func (c *sseAggregateCollector) observe(eventName string, raw transportStreamEvent) {
-	switch eventName {
-	case "response.output_text.delta":
+	switch codexSSEEventName(eventName) {
+	case codexSSEEventOutputTextDelta:
 		c.Assistant.Add(raw.Delta)
-	case "response.output_item.added":
+	case codexSSEEventOutputItemAdded:
 		c.Items.Added.Add(raw.Item)
-	case "response.output_item.done":
+	case codexSSEEventOutputItemDone:
 		c.Items.Done.Add(raw.Item)
-	case "response.function_call_arguments.delta":
+	case codexSSEEventFunctionCallArgsDelta:
 		c.Tools.FunctionArgumentDeltaCount++
 		c.Tools.FunctionArgumentDeltaChars += utf8.RuneCountInString(raw.Delta)
-	case "response.custom_tool_call_input.delta":
+	case codexSSEEventCustomToolCallInputDelta:
 		c.Tools.CustomToolInputDeltaCount++
 		c.Tools.CustomToolInputDeltaChars += utf8.RuneCountInString(raw.Delta)
 	default:
@@ -72,10 +72,7 @@ func (c *sseAggregateCollector) observe(eventName string, raw transportStreamEve
 	}
 }
 
-func (c sseAggregateCollector) Log(ctx context.Context, logCtx sseInstrumentationContext, responseID, status, errText string) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (c *sseAggregateCollector) Log(ctx context.Context, logCtx sseInstrumentationContext, responseID, status, errText string) {
 	if logCtx.Transport == "" {
 		logCtx.Transport = "responses_websocket"
 	}
@@ -162,7 +159,7 @@ func (a *assistantTextDeltaAggregate) appendText(delta string) {
 	}
 }
 
-func (a assistantTextDeltaAggregate) toSlogAttrs() []slog.Attr {
+func (a *assistantTextDeltaAggregate) toSlogAttrs() []slog.Attr {
 	normalized := a.NormalizedText.String()
 	repeated := detectRepeatedAssistantText(normalized)
 	attrs := []slog.Attr{
@@ -202,7 +199,7 @@ type assistantRepeatedText struct {
 func detectRepeatedAssistantText(text string) assistantRepeatedText {
 	normalized := normalizeAssistantText(text)
 	if normalized == "" {
-		return assistantRepeatedText{}
+		return assistantRepeatedText{Detected: false, BlockCount: 0, BlockChars: 0, BlockSHA256: "", BlockPreview: "", PrefixSuffixChars: 0}
 	}
 	prefixSuffixChars := repeatedPrefixSuffixChars(normalized)
 	runes := []rune(normalized)
@@ -247,7 +244,7 @@ func detectRepeatedAssistantText(text string) assistantRepeatedText {
 			}
 		}
 	}
-	return assistantRepeatedText{PrefixSuffixChars: prefixSuffixChars}
+	return assistantRepeatedText{PrefixSuffixChars: prefixSuffixChars, Detected: false, BlockCount: 0, BlockChars: 0, BlockSHA256: "", BlockPreview: ""}
 }
 
 func repeatedPrefixSuffixChars(text string) int {
@@ -297,11 +294,26 @@ func (c *outputItemCounts) Add(item transportItem) {
 		c.TypeCounts = make(map[string]int)
 	}
 	c.TypeCounts[itemType]++
-	switch itemType {
-	case "function_call", "local_shell_call", "custom_tool_call":
+	switch codexItemType(itemType) {
+	case codexItemTypeFunctionCall, codexItemTypeLocalShellCall, codexItemTypeCustomToolCall:
 		c.ToolTotal++
+	case codexItemTypeMessage, codexItemTypeFunctionCallOutput, codexItemTypeCustomToolCallOutput, codexItemTypeReasoning:
+		// Non-tool items don't bump ToolTotal; explicit cases keep
+		// the switch exhaustive for the codexItemType enum.
 	}
 }
+
+// codexSSEEventName enumerates the SSE event names the codex
+// aggregate collector recognizes.
+type codexSSEEventName string
+
+const (
+	codexSSEEventOutputTextDelta          codexSSEEventName = "response.output_text.delta"
+	codexSSEEventOutputItemAdded          codexSSEEventName = "response.output_item.added"
+	codexSSEEventOutputItemDone           codexSSEEventName = "response.output_item.done"
+	codexSSEEventFunctionCallArgsDelta    codexSSEEventName = "response.function_call_arguments.delta"
+	codexSSEEventCustomToolCallInputDelta codexSSEEventName = "response.custom_tool_call_input.delta"
+)
 
 type toolDeltaAggregate struct {
 	FunctionArgumentDeltaCount int
@@ -344,7 +356,7 @@ func (a *reasoningAggregate) Add(eventName, delta string) {
 	a.TextDeltaChars += chars
 }
 
-func (a reasoningAggregate) toSlogAttrs() []slog.Attr {
+func (a *reasoningAggregate) toSlogAttrs() []slog.Attr {
 	return []slog.Attr{
 		slog.Int("reasoning_delta_count", a.DeltaCount),
 		slog.Int("reasoning_delta_chars", a.DeltaChars),

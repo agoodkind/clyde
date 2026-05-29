@@ -66,7 +66,7 @@ func RegisterBackendFacet(reg backendfacet.Registrar) {
 	if reg == nil {
 		return
 	}
-	reg.Register(adaptermodel.BackendAnthropic, backendfacet.FactoryFunc(newBackendFacet))
+	reg.Register(adaptermodel.BackendAnthropic.String(), backendfacet.FactoryFunc(newBackendFacet))
 }
 
 func newBackendFacet(input backendfacet.Input) logevent.Facet {

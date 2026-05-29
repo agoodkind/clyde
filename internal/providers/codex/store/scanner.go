@@ -2,16 +2,20 @@ package codexstore
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
+// DiscoveryScanner is part of Clyde's typed adapter surface.
 type DiscoveryScanner struct {
 	Paths StorePaths
 }
 
+// DiscoveryResult is part of Clyde's typed adapter surface.
 type DiscoveryResult struct {
 	ThreadID      string
 	ThreadName    string
@@ -27,14 +31,17 @@ type DiscoveryResult struct {
 	IsArchived    bool
 }
 
+// NewDiscoveryScanner is part of Clyde's typed adapter surface.
 func NewDiscoveryScanner(paths StorePaths) DiscoveryScanner {
 	return DiscoveryScanner{Paths: paths}
 }
 
+// Scan is part of Clyde's typed adapter surface.
 func (s DiscoveryScanner) Scan() ([]DiscoveryResult, error) {
 	idx, err := ReadSessionIndex(s.Paths.SessionIndexPath)
 	if err != nil {
-		return nil, err
+		slog.Warn("codex.store.scanner.read_session_index_failed", "concern", "providers.codex.store", "path", s.Paths.SessionIndexPath, "err", err)
+		return nil, fmt.Errorf("walk codex rollout roots: %w", err)
 	}
 	var out []DiscoveryResult
 	for _, root := range rolloutRoots(s.Paths) {
@@ -66,7 +73,12 @@ func scanRolloutRoot(root rolloutRoot, idx SessionIndex) ([]DiscoveryResult, err
 					ID:          id,
 					RolloutPath: path,
 					CreatedAt:   createdAt,
-					IsArchived:  root.Archived,
+					IsArchived:  root.Archived, ForkedFromID: "", Preview: "", Name: "", ModelProvider: "", UpdatedAt: time.
+							Time{},
+
+					CWD: "", LatestCWD: "", CLIVersion: "", Originator: "", Source: ThreadSource{Kind: "", ParentThreadID: "", AgentNickname: "", AgentRole: ""},
+
+					AgentNickname: "", AgentRole: "", IsSubagent: false, Messages: nil,
 				}
 			} else {
 				return nil
@@ -90,67 +102,10 @@ func scanRolloutRoot(root rolloutRoot, idx SessionIndex) ([]DiscoveryResult, err
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		slog.Warn("codex.store.scanner.walk_failed", "concern", "providers.codex.store", "root", root.Path, "err", err)
+		return nil, fmt.Errorf("walk codex rollout tree: %w", err)
 	}
 	return out, nil
-}
-
-func FindRolloutPathByThreadID(paths StorePaths, threadID string) (string, bool, error) {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return "", false, nil
-	}
-	for _, root := range rolloutRoots(paths) {
-		path, ok, err := findRolloutPathInRoot(root.Path, threadID)
-		if err != nil {
-			return "", false, err
-		}
-		if ok {
-			return path, root.Archived, nil
-		}
-	}
-	return "", false, nil
-}
-
-func findRolloutPathInRoot(root, threadID string) (string, bool, error) {
-	var matchedPath string
-	var matchedUpdated time.Time
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() || !isRolloutFilename(d.Name()) {
-			return nil
-		}
-		if id, _, ok := rolloutIdentityFromFilename(d.Name()); ok && id != threadID {
-			return nil
-		}
-		matches := false
-		if id, _, ok := rolloutIdentityFromFilename(d.Name()); ok && id == threadID {
-			matches = true
-		} else if thread, err := ReadThreadByRolloutPath(path, false, false); err == nil && thread.ID == threadID {
-			matches = true
-		}
-		if !matches {
-			return nil
-		}
-		updated := time.Time{}
-		if stat, err := os.Stat(path); err == nil {
-			updated = stat.ModTime()
-		}
-		if matchedPath == "" || updated.After(matchedUpdated) {
-			matchedPath = path
-			matchedUpdated = updated
-		}
-		return nil
-	})
-	if err != nil {
-		return "", false, err
-	}
-	return matchedPath, matchedPath != "", nil
 }
 
 func isRolloutFilename(name string) bool {

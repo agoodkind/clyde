@@ -12,12 +12,12 @@ import (
 	"strings"
 )
 
-// ProviderID is the stable identifier the generic MITM layer and
+// ProviderName is the stable identifier the generic MITM layer and
 // downstream concern routing use for Cursor traffic. The value also
 // flows through the per-provider concern path under
 // `mitm/capture.jsonl` and the typed `provider` field on emitted
 // events.
-const ProviderID = "cursor"
+const ProviderName = "cursor"
 
 // serviceHost enumerates the well-known Cursor backend hosts that
 // always claim TLS interception. Hosts outside this set fall through

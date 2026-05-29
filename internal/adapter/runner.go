@@ -1,17 +1,15 @@
 package adapter
 
 import (
+	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/oauthrotation"
 )
 
 // Deps are the host hooks the adapter needs from the daemon process.
-// The daemon owns the real implementations (findRealClaude and the
-// scratch directory helper); the adapter accepts them as fields so
-// the package stays testable without pulling the daemon in.
+// The daemon owns the real implementations; the adapter accepts them
+// as fields so the package stays testable without pulling the daemon in.
 type Deps struct {
-	// ResolveClaude returns the path to the real claude binary.
-	ResolveClaude func() (string, error)
 	// ScratchDir returns a clyde owned cwd for the subprocess.
 	// Empty string is tolerated; the runner falls back to the
 	// current working directory.
@@ -22,6 +20,10 @@ type Deps struct {
 	// RuntimeLogging carries logging settings that can be refreshed by
 	// the daemon without reconstructing the adapter server.
 	RuntimeLogging *RuntimeLogging
+	// GetAuth returns the auth source for a provider when the host wants
+	// to inject one. A nil result lets the adapter build the provider's
+	// default auth manager.
+	GetAuth func(adapterresolver.ProviderID) adapterprovider.AuthLookup
 	// AnthropicMessagesURLOverride, when non-empty, replaces the
 	// configured /v1/messages URL on the Anthropic client so its
 	// outbound HTTP rides through the local MITM capture proxy.
@@ -29,13 +31,19 @@ type Deps struct {
 	// true and the provider list includes "claude". The adapter
 	// otherwise sends directly to api.anthropic.com.
 	AnthropicMessagesURLOverride string
-	// OAuthRotator is the single, daemon-owned OAuth rotation layer the
-	// adapter shares with the daemon's periodic harvest-and-refresh loop.
-	// When set, registerAnthropicProvider injects it instead of building
-	// a per-server instance, so a token the refresh loop renews on disk
-	// is reflected in the adapter's in-memory slot immediately rather
-	// than only on the next re-import. When nil (tests, or when the
-	// daemon has not built one), the adapter falls back to building its
-	// own instance via buildAnthropicRotator.
-	OAuthRotator *oauthrotation.Rotator
+	// AnthropicWireBaselinePath is the absolute path to the daemon-owned
+	// MITM v2 baseline (reference-v2.toml) the Anthropic client reads at
+	// request time to project its outbound wire identity. The daemon
+	// resolves it from [mitm].drift.upstreams["claude-code"].reference,
+	// falling back to the default baseline root. There is no compiled-in
+	// flavor data; a missing or invalid file makes /v1/messages fail with
+	// an operator-actionable HTTP 503.
+	AnthropicWireBaselinePath string
+}
+
+func (d Deps) authForProvider(id adapterresolver.ProviderID) adapterprovider.AuthLookup {
+	if d.GetAuth == nil {
+		return nil
+	}
+	return d.GetAuth(id)
 }

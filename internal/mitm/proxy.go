@@ -22,13 +22,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
-	codexprovider "goodkind.io/clyde/internal/providers/codex"
 	"goodkind.io/clyde/internal/slogger"
 )
 
+// Proxy is part of Clyde's typed adapter surface.
 type Proxy struct {
 	log         *slog.Logger
 	client      *http.Client
@@ -41,15 +42,10 @@ type Proxy struct {
 	rawCaptureSeq   atomic.Uint64
 	requestLog      *logevent.Emitter
 
-	// rotatorSink + rotatorMu are owned by rotator_swap_proxy.go; see
-	// that file for the OAuth bearer swap and Observe wiring contract.
-	rotatorMu   sync.RWMutex
-	rotatorSink RotatorSink
-
 	// Tunnels tracks every long-lived MITM connection (CONNECT
 	// tunnels, intercepted provider TLS sessions, plain HTTP request
 	// loops) so the daemon can drain or force-close them on reload
-	// instead of relying on http.Server.Shutdown alone. See
+	// instead of relying on [http.Server].Shutdown alone. See
 	// internal/livetrack for the contract; the proxy installs each
 	// session's closer to terminate hijacked client and upstream
 	// connections.
@@ -79,6 +75,12 @@ type Proxy struct {
 // zero-value [config.LoggingRequest] yields default required legs and the warn
 // policy, matching the adapter's behavior.
 func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listener net.Listener) (*Proxy, error) {
+	TunnelMeta{
+		ConnectHost:   "",
+		UpstreamAddr:  "",
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}.IsLivetrackMeta()
 	if listener == nil {
 		return nil, fmt.Errorf("mitm: listener is required")
 	}
@@ -88,8 +90,7 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
 	ca, err := loadOrCreateCertAuthority(cfg.CA.CertPath, cfg.CA.KeyPath, time.Now)
 	if err != nil {
-		log.Warn("mitm.tls.ca_load_failed",
-			"cert_path", cfg.CA.CertPath,
+		log.Warn("mitm.tls.ca_load_failed", "concern", "providers.mitm.wire", "cert_path", cfg.CA.CertPath,
 			"key_path", cfg.CA.KeyPath,
 			"err", err,
 		)
@@ -108,8 +109,6 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 			logevent.RequiredLegsFromStrings(logging.RequiredLegs),
 			mitmEmitterOptions(logging)...,
 		),
-		rotatorMu:   sync.RWMutex{},
-		rotatorSink: nil, // wired post-construction via SetRotatorSink
 		Tunnels: livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
 			Component:     "mitm",
 			Concern:       slogger.ConcernProviderMITMLifecycle,
@@ -126,7 +125,10 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 		listener:       listener,
 		server:         nil,
 	}
-	p.server = &http.Server{Handler: http.HandlerFunc(p.handle)}
+	p.server = &http.Server{
+		Handler:           http.HandlerFunc(p.handle),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 	return p, nil
 }
 
@@ -152,14 +154,13 @@ func (p *Proxy) Serve() error {
 	if p.listener == nil {
 		return fmt.Errorf("mitm: proxy has no listener")
 	}
-	p.log.Info("mitm.proxy.started",
-		"base_url", p.base,
+	p.log.Info("mitm.proxy.started", "concern", "providers.mitm.lifecycle", "base_url", p.base,
 		"capture_dir", p.cfg.CaptureDir,
 		"providers", p.cfg.Providers,
 		"raw_capture_enabled", p.cfg.RawCaptureEnabled,
 	)
 	if err := p.server.Serve(p.listener); err != nil && err != http.ErrServerClosed {
-		p.log.Error("mitm.proxy.serve_failed", "err", err)
+		p.log.Error("mitm.proxy.serve_failed", "concern", "providers.mitm.wire", "err", err)
 		return fmt.Errorf("mitm serve: %w", err)
 	}
 	return nil
@@ -170,7 +171,7 @@ func (p *Proxy) Serve() error {
 // capture writer cache so the replacement daemon can rebind. The
 // Cloudflare keepalive case (api2.cursor.sh CONNECT tunnels that
 // never close on their own) is the empirical reason this is no longer
-// a bare [http.Server.Shutdown]: the registry's force-close path
+// a bare [[http.Server].Shutdown]: the registry's force-close path
 // terminates wedged tunnels under the configured grace, and the
 // writer-cache close releases the JSONL flock and locks out late
 // tunnel goroutines from re-creating a fresh writer on the same path
@@ -199,12 +200,11 @@ func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) e
 	}
 	httpErr := p.server.Shutdown(ctx)
 	if httpErr != nil {
-		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "err", httpErr)
+		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "concern", "providers.mitm.wire", "err", httpErr)
 	}
 	if p.Tunnels != nil && (httpErr != nil || p.Tunnels.Count() > 0) {
 		result := p.Tunnels.DrainWith(ctx, "mitm.shutdown", opts)
-		p.log.InfoContext(ctx, "mitm.proxy.tunnels_drained",
-			"final", result.Final.String(),
+		p.log.InfoContext(ctx, "mitm.proxy.tunnels_drained", "concern", "providers.mitm.wire", "final", result.Final.String(),
 			"remaining", result.Remaining,
 			"force_closed", result.ForceClosed,
 			"duration_ms", result.Duration.Milliseconds(),
@@ -227,19 +227,6 @@ func (p *Proxy) closeCaptureWriters() {
 	p.captureWriters.close()
 }
 
-// SetConfig updates the proxy's runtime config. The daemon calls
-// this on config reload so capture directory, raw capture, and provider set
-// changes react without rebinding the listener.
-func (p *Proxy) SetConfig(cfg config.MITMConfig) {
-	p.setConfig(cfg)
-}
-
-func (p *Proxy) setConfig(cfg config.MITMConfig) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.cfg = cfg
-}
-
 func (p *Proxy) config() config.MITMConfig {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -249,8 +236,6 @@ func (p *Proxy) config() config.MITMConfig {
 // BaseURL returns the loopback HTTP URL clients should use to reach the
 // daemon-owned MITM proxy.
 func (p *Proxy) BaseURL() string { return p.base }
-
-func (p *Proxy) ClaudeBaseURL() string { return p.BaseURL() }
 
 // prepareCaptureWriters returns the per-request capture state. When raw
 // capture is enabled, it primes a sidecar response writer; otherwise it
@@ -268,7 +253,7 @@ func (p *Proxy) prepareCaptureWriters(cfg config.MITMConfig, provider string, pa
 // forwards to the upstream HTTPS endpoint. Splitting the inbound
 // [http.Request] from the upstream request lets the upstream call
 // run on its own context (decoupled from r.Context() to survive
-// stdlib http.Server lifecycle cancellations; CLYDE-324) without
+// stdlib [http.Server] lifecycle cancellations; CLYDE-324) without
 // passing two distinct contexts into the same dispatch helper.
 type upstreamRequest struct {
 	method   string
@@ -284,7 +269,7 @@ type upstreamRequest struct {
 // error response to w and returns false. The upstreamCtx is supplied
 // by [Proxy.registerPlainHTTP] and is NOT [http.Request.Context]: it
 // shares request-scoped values via [context.WithoutCancel] but breaks
-// the cancel chain, so stdlib http.Server lifecycle transitions and
+// the cancel chain, so stdlib [http.Server] lifecycle transitions and
 // HTTP keep-alive churn do not abort the upstream stream mid-flight.
 // Force-close from the registry's [mitmHTTPCloser] cancels upstreamCtx
 // directly. Genuine client disconnect surfaces via streamWithFlush's
@@ -298,16 +283,12 @@ func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWri
 	}
 	copyHeaders(upReq.Header, req.header)
 	upReq.Host = ""
-	sink := p.rotator()
-	observeToken, didSwap := swapAuthorizationForRotator(upReq, sink, p.log)
 	resp, err := p.client.Do(upReq)
 	if err != nil {
-		p.log.WarnContext(upstreamCtx, "mitm.proxy.upstream_failed", "provider", req.provider, "path", req.path, "err", err)
+		p.log.WarnContext(upstreamCtx, "mitm.proxy.upstream_failed", "concern", "providers.mitm.errors", "provider", req.provider, "path", req.path, "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return nil, false
 	}
-	resp, observeToken = p.maybeRetryOnAuthFailure(upstreamCtx, resp, req, observeToken, didSwap, sink)
-	observeAnthropicResponse(upstreamCtx, sink, resp, observeToken, p.log)
 	return resp, true
 }
 
@@ -322,7 +303,7 @@ func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWri
 // trace and other request-scoped values flow through to the upstream
 // call but the cancel chain from r.Context() is broken. This is the
 // CLYDE-324 fix: the inbound r.Context() is cancelled by the stdlib
-// http.Server lifecycle on shutdown and by HTTP keep-alive churn,
+// [http.Server] lifecycle on shutdown and by HTTP keep-alive churn,
 // and that cancellation would silently abort the in-flight upstream
 // HTTPS request to api.anthropic.com mid-stream. ctx is cancelled
 // only by the registry's force-close path (via [mitmHTTPCloser.Close],
@@ -338,7 +319,7 @@ func (p *Proxy) registerPlainHTTP(ctx context.Context, cancel context.CancelFunc
 	}, &mitmHTTPCloser{cancel: cancel})
 	if registerErr != nil {
 		cancel()
-		p.log.WarnContext(ctx, "mitm.http.register_rejected", "path", r.URL.Path, "err", registerErr)
+		p.log.WarnContext(ctx, "mitm.http.register_rejected", "concern", "providers.mitm.wire", "path", r.URL.Path, "err", registerErr)
 		http.Error(w, "service draining", http.StatusServiceUnavailable)
 		return nil, nil, false
 	}
@@ -358,7 +339,7 @@ func (p *Proxy) recordPlainHTTPReadFailure(r *http.Request, cfg config.MITMConfi
 		nil,
 		emptyCaptureBodyIndex(),
 		emptyCaptureBodyIndex(),
-		time.Since(started),
+		clock.Since(started),
 		http.StatusBadRequest,
 	), httpFailureRecord{
 		includePayload:      false,
@@ -377,7 +358,7 @@ func (p *Proxy) recordPlainHTTPDispatchFailure(r *http.Request, cfg config.MITMC
 		body,
 		requestIndex,
 		emptyCaptureBodyIndex(),
-		time.Since(started),
+		clock.Since(started),
 		http.StatusBadGateway,
 	), httpFailureRecord{
 		includePayload:      true,
@@ -388,7 +369,7 @@ func (p *Proxy) recordPlainHTTPDispatchFailure(r *http.Request, cfg config.MITMC
 }
 
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
-	started := currentTime()
+	started := clock.Now()
 	cfg := p.config()
 	capturePolicy := captureFilePolicyFromConfig(cfg)
 	if r.Method == http.MethodConnect {
@@ -406,7 +387,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	// CLYDE-324: upstream context shares request-scoped values with
 	// r.Context() (trace ids, etc.) via [context.WithoutCancel] but
-	// breaks the cancel chain so stdlib http.Server lifecycle changes
+	// breaks the cancel chain so stdlib [http.Server] lifecycle changes
 	// and HTTP keep-alive churn cannot abort the upstream HTTPS stream
 	// mid-flight. Force-close from the registry cancels via the closer
 	// installed in registerPlainHTTP; the deferred release also
@@ -443,7 +424,10 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 
 	forwardResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	capture := &limitedBuffer{limit: 16 * 1024}
+	capture := &limitedBuffer{
+		limit: 16 * 1024, buf: bytes.
+			Buffer{},
+	}
 	captureWriter := io.Writer(capture)
 	if responseRawWriter != nil {
 		captureWriter = io.MultiWriter(capture, responseRawWriter)
@@ -453,14 +437,13 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	if responseRawWriter != nil {
 		responseRawWriter.Close()
 	}
-	duration := time.Since(started)
+	duration := clock.Since(started)
 	if copyErr != nil {
-		p.log.Warn("mitm.proxy.copy_failed", "provider", provider, "path", r.URL.Path, "err", copyErr)
+		p.log.Warn("mitm.proxy.copy_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", copyErr)
 	}
 	captureBody, decoded := decodeForCapture(capture.Bytes(), resp.Header.Get("Content-Encoding"))
 	if decoded {
-		p.log.Debug("mitm.capture.decoded",
-			"provider", provider,
+		p.log.Debug("mitm.capture.decoded", "concern", "providers.mitm.wire", "provider", provider,
 			"path", r.URL.Path,
 			"encoding", resp.Header.Get("Content-Encoding"),
 			"raw_bytes", len(capture.Bytes()),
@@ -469,8 +452,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	responseBodyIndex, responseBodyLen := responseCaptureIndex(cfg.RawCaptureEnabled, captureBody, responseRawWriter, responseRawError)
 
-	p.log.Info("mitm.capture.completed",
-		"provider", provider,
+	p.log.Info("mitm.capture.completed", "concern", "providers.mitm.wire", "provider", provider,
 		"path", r.URL.Path,
 		"status", resp.StatusCode,
 		"duration_ms", duration.Milliseconds(),
@@ -492,10 +474,21 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	queueBaselineRefresh(r.Context(), cfg, provider, p.log)
 }
 
+// hopByHopHeader enumerates the response headers the MITM proxy
+// strips before forwarding because they describe the upstream
+// transport rather than the client-visible response body.
+type hopByHopHeader string
+
+const (
+	hopByHopContentLength    hopByHopHeader = "content-length"
+	hopByHopTransferEncoding hopByHopHeader = "transfer-encoding"
+	hopByHopConnection       hopByHopHeader = "connection"
+)
+
 func forwardResponseHeaders(dst http.Header, src http.Header) {
 	for key, values := range src {
-		switch strings.ToLower(key) {
-		case "content-length", "transfer-encoding", "connection":
+		switch hopByHopHeader(strings.ToLower(key)) {
+		case hopByHopContentLength, hopByHopTransferEncoding, hopByHopConnection:
 			continue
 		}
 		for _, value := range values {
@@ -575,21 +568,23 @@ func (p *Proxy) prepareRawHTTPCapture(cfg config.MITMConfig, provider string, pa
 	}
 	requestRawPath, responseRawPath, err := p.nextHTTPCapturePaths(cfg.CaptureDir, provider, path)
 	if err != nil {
-		p.log.Warn("mitm.capture.raw_paths_failed", "provider", provider, "path", path, "err", err)
+		p.log.Warn("mitm.capture.raw_paths_failed", "concern", "providers.mitm.wire", "provider", provider, "path", path, "err", err)
 		rawSetup.responseRawError = err
 		return rawSetup
 	}
 	requestBytes, err := writeRawCaptureFile(requestRawPath, func(dst io.Writer) error {
-		_, writeErr := dst.Write(body)
-		return writeErr
+		if _, writeErr := dst.Write(body); writeErr != nil {
+			return fmt.Errorf("write raw request body: %w", writeErr)
+		}
+		return nil
 	})
 	rawSetup.requestBodyIndex = newCaptureBodyIndexFromReference(rawBodyReferenceFromBytes(body, requestRawPath, requestBytes, err))
 	if err != nil {
-		p.log.Warn("mitm.capture.raw_request_failed", "provider", provider, "path", path, "err", err)
+		p.log.Warn("mitm.capture.raw_request_failed", "concern", "providers.mitm.wire", "provider", provider, "path", path, "err", err)
 	}
 	responseFile, err := os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 	if err != nil {
-		p.log.Warn("mitm.capture.raw_response_open_failed", "provider", provider, "path", path, "raw_path", responseRawPath, "err", err)
+		p.log.Warn("mitm.capture.raw_response_open_failed", "concern", "providers.mitm.wire", "provider", provider, "path", path, "raw_path", responseRawPath, "err", err)
 		rawSetup.responseRawError = err
 		return rawSetup
 	}
@@ -739,7 +734,7 @@ func (w *failOpenRawCaptureWriter) Write(chunk []byte) (int, error) {
 	w.count += int64(n)
 	if err != nil {
 		w.failed = true
-		w.log.Warn("mitm.capture.raw_response_write_failed", "raw_path", w.path, "err", err)
+		w.log.Warn("mitm.capture.raw_response_write_failed", "concern", "providers.mitm.wire", "raw_path", w.path, "err", err)
 		return len(chunk), nil
 	}
 	return len(chunk), nil
@@ -748,7 +743,7 @@ func (w *failOpenRawCaptureWriter) Write(chunk []byte) (int, error) {
 func (w *failOpenRawCaptureWriter) Close() {
 	if err := w.file.Close(); err != nil {
 		w.failed = true
-		w.log.Warn("mitm.capture.raw_response_close_failed", "raw_path", w.path, "err", err)
+		w.log.Warn("mitm.capture.raw_response_close_failed", "concern", "providers.mitm.wire", "raw_path", w.path, "err", err)
 	}
 }
 
@@ -884,7 +879,7 @@ func (b *limitedBuffer) Bytes() []byte {
 // streamWithFlush copies upstream response bytes to the client and
 // the capture buffer in chunks, flushing after each successful read
 // so SSE deltas reach the client in real time. Without the per-read
-// flush, Go's http.Server buffers up to its internal threshold and
+// flush, Go's [http.Server] buffers up to its internal threshold and
 // stream consumers (claude-cli, Cursor) see batched deltas or hang
 // waiting for the first byte.
 //
@@ -901,7 +896,8 @@ func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher
 		if n > 0 {
 			chunk := buf[:n]
 			if _, werr := client.Write(chunk); werr != nil {
-				return werr
+				slog.Warn("mitm.stream.client_write_failed", "concern", "providers.mitm.wire", "err", werr)
+				return fmt.Errorf("stream client write: %w", werr)
 			}
 			_, _ = capture.Write(chunk)
 			if flusher != nil {
@@ -913,13 +909,13 @@ func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher
 			return nil
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("stream upstream read: %w", err)
 		}
 	}
 }
 
 // expandHome rewrites a leading "~" or "~/" in a path to the user's
-// home directory. Go's os.MkdirAll and os.OpenFile do not perform
+// home directory. Go's [os.MkdirAll] and [os.OpenFile] do not perform
 // shell-style tilde expansion, and TOML configs frequently use "~"
 // as a portable home marker. This helper closes that gap for the
 // capture_dir setting and any other path the proxy reads.
@@ -939,52 +935,4 @@ func expandHome(path string) string {
 		}
 	}
 	return path
-}
-
-// ClaudeEnv returns the env overrides Claude CLI needs to route
-// through the daemon-owned MITM proxy. The proxy must already be
-// running; callers pass the daemon-owned instance. If MITM is
-// disabled by config, returns nil so callers can skip env injection
-// entirely.
-func ClaudeEnv(_ context.Context, cfg config.MITMConfig, proxy *Proxy) (map[string]string, error) {
-	if !cfg.EnabledDefault || !cfg.EnabledFor("claude") {
-		return nil, nil
-	}
-	if proxy == nil {
-		return nil, fmt.Errorf("mitm: proxy is not running")
-	}
-	return map[string]string{"ANTHROPIC_BASE_URL": proxy.ClaudeBaseURL()}, nil
-}
-
-// CodexEnv returns the env overrides Codex CLI needs to route through the
-// daemon-owned MITM proxy. Codex talks to HTTPS and CONNECT targets, so the
-// daemon advertises a standard loopback proxy URL rather than a provider-
-// specific base URL override.
-func CodexEnv(_ context.Context, cfg config.MITMConfig, proxy *Proxy) (map[string]string, error) {
-	if !cfg.EnabledDefault || !cfg.EnabledFor("codex") {
-		return nil, nil
-	}
-	if proxy == nil {
-		return nil, fmt.Errorf("mitm: proxy is not running")
-	}
-	env := make(map[string]string, len(codexProxyEnvKeys()))
-	for _, key := range codexProxyEnvKeys() {
-		env[key] = proxy.BaseURL()
-	}
-	return env, nil
-}
-
-func codexProxyEnvKeys() []string {
-	return []string{
-		codexprovider.HTTPProxyEnv,
-		codexprovider.HTTPSProxyEnv,
-		codexprovider.AllProxyEnv,
-		"http_proxy",
-		"https_proxy",
-		"all_proxy",
-	}
-}
-
-type CodexOverlay struct {
-	Home string
 }

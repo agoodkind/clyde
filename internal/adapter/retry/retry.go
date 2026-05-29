@@ -204,8 +204,7 @@ func Sleep(ctx context.Context, delay time.Duration) error {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		slog.WarnContext(ctx, "adapter.retry.sleep_cancelled",
-			"component", "adapter",
+		slog.WarnContext(ctx, "adapter.retry.sleep_cancelled", "concern", "adapter.chat.dispatch", "component", "adapter",
 			"subcomponent", "retry",
 			"delay_ms", delay.Milliseconds(),
 			"err", ctx.Err(),
@@ -221,8 +220,7 @@ func LogDecision(ctx context.Context, log *slog.Logger, decision Decision, attem
 	if log == nil {
 		log = slog.Default()
 	}
-	log.InfoContext(ctx, "adapter.retry.decision",
-		"component", "adapter",
+	log.InfoContext(ctx, "adapter.retry.decision", "concern", "adapter.chat.dispatch", "component", "adapter",
 		"subcomponent", "retry",
 		"retry_policy", decision.PolicyName,
 		"attempt", attempt,

@@ -1,39 +1,42 @@
 package anthropic
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"goodkind.io/clyde/internal/config"
 )
 
-func TestAnthropicLogPathHonorsOverride(t *testing.T) {
+func TestLogPathHonorsOverride(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "anthropic.jsonl")
 	t.Setenv("CLYDE_ANTHROPIC_LOG_PATH", tmp)
-	if got := AnthropicLogPath(); got != tmp {
-		t.Fatalf("AnthropicLogPath=%q want %q", got, tmp)
+	if got := LogPath(); got != tmp {
+		t.Fatalf("LogPath=%q want %q", got, tmp)
 	}
 }
 
-func TestAnthropicLogPathFromXDGState(t *testing.T) {
+func TestLogPathFromXDGState(t *testing.T) {
 	t.Setenv("CLYDE_ANTHROPIC_LOG_PATH", "")
 	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-anthropic-test")
 	want := "/tmp/xdg-anthropic-test/clyde/anthropic.jsonl"
-	if got := AnthropicLogPath(); got != want {
-		t.Fatalf("AnthropicLogPath=%q want %q", got, want)
+	if got := LogPath(); got != want {
+		t.Fatalf("LogPath=%q want %q", got, want)
 	}
 }
 
-func TestAnthropicLogPathExpandsXDGStateHome(t *testing.T) {
+func TestLogPathExpandsXDGStateHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CLYDE_ANTHROPIC_LOG_PATH", "")
 	t.Setenv("XDG_STATE_HOME", "~/state/../state-root")
 	want := filepath.Join(home, "state-root", "clyde", "anthropic.jsonl")
-	if got := AnthropicLogPath(); got != want {
-		t.Fatalf("AnthropicLogPath=%q want %q", got, want)
+	if got := LogPath(); got != want {
+		t.Fatalf("LogPath=%q want %q", got, want)
 	}
 }
 
@@ -43,7 +46,7 @@ func TestLogResponseDoubleWritesToDedicatedSink(t *testing.T) {
 	t.Setenv("CLYDE_ANTHROPIC_LOG_PATH", sinkPath)
 	resetDedicatedAnthropicLoggerForTest(t)
 
-	logResponse(slog.LevelInfo, "anthropic.messages.response", responseEvent{
+	logResponse(context.Background(), slog.LevelInfo, "anthropic.messages.response", responseEvent{
 		Subcomponent: "anthropic",
 		Model:        "claude-sonnet-4-5",
 		Status:       200,
@@ -79,7 +82,7 @@ func TestDedicatedAnthropicLoggerRotatesByVolume(t *testing.T) {
 
 	largeBody := strings.Repeat("x", 700*1024)
 	for range 3 {
-		logResponse(slog.LevelInfo, "anthropic.messages.response", responseEvent{
+		logResponse(context.Background(), slog.LevelInfo, "anthropic.messages.response", responseEvent{
 			Subcomponent: "anthropic",
 			Model:        "claude-sonnet-4-5",
 			Status:       200,
@@ -117,14 +120,14 @@ func TestDedicatedAnthropicLoggerRotatesByVolume(t *testing.T) {
 func TestConfigureAnthropicFileLoggerNormalizesDefaults(t *testing.T) {
 	resetDedicatedAnthropicLoggerForTest(t)
 	ConfigureAnthropicFileLogger(FileLogRotationConfig{})
-	if fileLoggerRotation.MaxSizeMB != defaultAnthropicLogRotationMaxSizeMB {
-		t.Fatalf("max size MB = %d, want %d", fileLoggerRotation.MaxSizeMB, defaultAnthropicLogRotationMaxSizeMB)
+	if fileLoggerRotation.MaxSizeMB != config.SidecarRotationMaxSizeMB {
+		t.Fatalf("max size MB = %d, want %d", fileLoggerRotation.MaxSizeMB, config.SidecarRotationMaxSizeMB)
 	}
-	if fileLoggerRotation.MaxBackups != defaultAnthropicLogRotationMaxBackups {
-		t.Fatalf("max backups = %d, want %d", fileLoggerRotation.MaxBackups, defaultAnthropicLogRotationMaxBackups)
+	if fileLoggerRotation.MaxBackups != config.SidecarRotationMaxBackups {
+		t.Fatalf("max backups = %d, want %d", fileLoggerRotation.MaxBackups, config.SidecarRotationMaxBackups)
 	}
-	if fileLoggerRotation.MaxAgeDays != defaultAnthropicLogRotationMaxAgeDays {
-		t.Fatalf("max age days = %d, want %d", fileLoggerRotation.MaxAgeDays, defaultAnthropicLogRotationMaxAgeDays)
+	if fileLoggerRotation.MaxAgeDays != config.SidecarRotationMaxAgeDays {
+		t.Fatalf("max age days = %d, want %d", fileLoggerRotation.MaxAgeDays, config.SidecarRotationMaxAgeDays)
 	}
 	if fileLoggerRotation.Compress == nil || !*fileLoggerRotation.Compress {
 		t.Fatalf("compress should default to true")
@@ -142,9 +145,9 @@ func resetDedicatedAnthropicLoggerForTest(t *testing.T) {
 	fileLogger = nil
 	fileLoggerCloser = nil
 	fileLoggerRotation = FileLogRotationConfig{
-		MaxSizeMB:  defaultAnthropicLogRotationMaxSizeMB,
-		MaxBackups: defaultAnthropicLogRotationMaxBackups,
-		MaxAgeDays: defaultAnthropicLogRotationMaxAgeDays,
+		MaxSizeMB:  config.SidecarRotationMaxSizeMB,
+		MaxBackups: config.SidecarRotationMaxBackups,
+		MaxAgeDays: config.SidecarRotationMaxAgeDays,
 		Compress:   newBool(true),
 	}
 	t.Cleanup(func() {
@@ -157,9 +160,9 @@ func resetDedicatedAnthropicLoggerForTest(t *testing.T) {
 		fileLogger = nil
 		fileLoggerCloser = nil
 		fileLoggerRotation = FileLogRotationConfig{
-			MaxSizeMB:  defaultAnthropicLogRotationMaxSizeMB,
-			MaxBackups: defaultAnthropicLogRotationMaxBackups,
-			MaxAgeDays: defaultAnthropicLogRotationMaxAgeDays,
+			MaxSizeMB:  config.SidecarRotationMaxSizeMB,
+			MaxBackups: config.SidecarRotationMaxBackups,
+			MaxAgeDays: config.SidecarRotationMaxAgeDays,
 			Compress:   newBool(true),
 		}
 	})

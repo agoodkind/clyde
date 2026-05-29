@@ -1,8 +1,3 @@
-// Package mitm captures upstream wire traffic for parity tracking.
-// schema.go declares the typed shapes used across capture, snapshot
-// extraction, and diff. Capture records arrive as JSONL on disk and
-// share the dump.py schema from
-// research/codex/captures/2026-04-27/.
 package mitm
 
 import "encoding/json"
@@ -13,11 +8,16 @@ import "encoding/json"
 type CaptureRecordKind string
 
 const (
-	RecordHTTPRequest  CaptureRecordKind = "http_request"
+	// RecordHTTPRequest is part of Clyde's typed adapter surface.
+	RecordHTTPRequest CaptureRecordKind = "http_request"
+	// RecordHTTPResponse is part of Clyde's typed adapter surface.
 	RecordHTTPResponse CaptureRecordKind = "http_response"
-	RecordWSStart      CaptureRecordKind = "ws_start"
-	RecordWSMessage    CaptureRecordKind = "ws_msg"
-	RecordWSEnd        CaptureRecordKind = "ws_end"
+	// RecordWSStart is part of Clyde's typed adapter surface.
+	RecordWSStart CaptureRecordKind = "ws_start"
+	// RecordWSMessage is part of Clyde's typed adapter surface.
+	RecordWSMessage CaptureRecordKind = "ws_msg"
+	// RecordWSEnd is part of Clyde's typed adapter surface.
+	RecordWSEnd CaptureRecordKind = "ws_end"
 )
 
 // CaptureRecord is the typed view of one JSONL line. Different
@@ -81,22 +81,26 @@ type Snapshot struct {
 	Constants     SnapshotConstants     `toml:"constants" json:"constants"`
 }
 
+// SnapshotUpstream is part of Clyde's typed adapter surface.
 type SnapshotUpstream struct {
 	Name       string `toml:"name" json:"name"`
 	Version    string `toml:"version" json:"version"`
 	CapturedAt string `toml:"captured_at" json:"captured_at"`
 }
 
+// SnapshotHandshake is part of Clyde's typed adapter surface.
 type SnapshotHandshake struct {
 	URLPattern string           `toml:"url_pattern" json:"url_pattern"`
 	Headers    []SnapshotHeader `toml:"headers" json:"headers"`
 }
 
+// SnapshotHeader is part of Clyde's typed adapter surface.
 type SnapshotHeader struct {
 	Name  string `toml:"name" json:"name"`
 	Value string `toml:"value" json:"value"`
 }
 
+// SnapshotBody is part of Clyde's typed adapter surface.
 type SnapshotBody struct {
 	Type        string   `toml:"type" json:"type"`
 	FieldNames  []string `toml:"field_names" json:"field_names"`
@@ -104,6 +108,7 @@ type SnapshotBody struct {
 	IncludeKeys []string `toml:"include_keys" json:"include_keys"`
 }
 
+// SnapshotFrameSequence is part of Clyde's typed adapter surface.
 type SnapshotFrameSequence struct {
 	Opening    string                  `toml:"opening" json:"opening"`
 	Warmup     SnapshotFrameDescriptor `toml:"warmup" json:"warmup"`
@@ -111,6 +116,7 @@ type SnapshotFrameSequence struct {
 	ChainsPrev bool                    `toml:"chains_prev" json:"chains_prev"`
 }
 
+// SnapshotFrameDescriptor is part of Clyde's typed adapter surface.
 type SnapshotFrameDescriptor struct {
 	Generate           string `toml:"generate" json:"generate"`
 	HasPrev            bool   `toml:"has_prev" json:"has_prev"`
@@ -122,6 +128,7 @@ type SnapshotFrameDescriptor struct {
 	StoreValueObserved string `toml:"store_value_observed" json:"store_value_observed"`
 }
 
+// SnapshotConstants is part of Clyde's typed adapter surface.
 type SnapshotConstants struct {
 	Originator              string `toml:"originator" json:"originator"`
 	OpenAIBeta              string `toml:"openai_beta" json:"openai_beta"`
@@ -141,6 +148,7 @@ type DiffReport struct {
 	Missing    []DiffMismatch `json:"missing"`
 }
 
+// DiffMismatch is part of Clyde's typed adapter surface.
 type DiffMismatch struct {
 	Field    string `json:"field"`
 	Expected string `json:"expected"`

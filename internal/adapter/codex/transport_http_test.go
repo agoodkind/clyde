@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"goodkind.io/clyde/codexwire"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
 
@@ -98,7 +99,11 @@ func TestRunHTTPTransportEventsParsesSSEAndCompletes(t *testing.T) {
 		RequestID:  "req-http",
 	}, HTTPTransportRequest{
 		Model: "gpt-5.4",
-		Input: []map[string]any{{"role": "user", "content": "hi"}},
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hi"}},
+		}},
 	}, func(adapterrender.Event) error {
 		emittedCount.Add(1)
 		return nil
@@ -186,7 +191,11 @@ func TestRunHTTPTransportEventsRefreshesOn401AndRetriesOnce(t *testing.T) {
 		},
 	}, HTTPTransportRequest{
 		Model: "gpt-5.4",
-		Input: []map[string]any{{"role": "user", "content": "hi"}},
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hi"}},
+		}},
 	}, func(adapterrender.Event) error { return nil })
 	if err != nil {
 		t.Fatalf("runHTTPTransportEvents err=%v", err)

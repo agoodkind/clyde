@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,10 +16,10 @@ import (
 // Start binds the TCP listener and serves until ctx is done.
 func (s *Server) Start(ctx context.Context) error {
 	addr := s.Addr()
-	lis, err := net.Listen("tcp", addr)
+	listenConfig := net.ListenConfig{}
+	lis, err := listenConfig.Listen(ctx, "tcp", addr)
 	if err != nil {
-		s.log.WarnContext(ctx, "adapter.listen_failed",
-			"subcomponent", "adapter",
+		s.log.WarnContext(ctx, "adapter.listen_failed", "concern", "adapter.http.errors", "subcomponent", "adapter",
 			"addr", addr,
 			"err", err.Error(),
 		)
@@ -45,16 +46,14 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 			return context.WithValue(connCtx, ingressConnKey{}, c)
 		},
 	}
-	s.log.LogAttrs(context.Background(), slog.LevelInfo, "adapter listening",
-		slog.String("addr", lis.Addr().String()),
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter listening", slog.String("concern", "process.daemon.listeners"), slog.String("addr", lis.Addr().String()),
 		slog.Int("models", len(s.registry.List())),
 	)
 	errCh := make(chan error, 1)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				s.log.ErrorContext(ctx, "adapter.serve_panic",
-					"subcomponent", "adapter",
+				s.log.ErrorContext(ctx, "adapter.serve_panic", "concern", "adapter.http.errors", "subcomponent", "adapter",
 					"addr", lis.Addr().String(),
 					"err", fmt.Sprintf("panic: %v", recovered),
 					"panic", recovered,
@@ -66,7 +65,7 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	}()
 	select {
 	case <-ctx.Done():
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 		_ = s.Shutdown(shutCtx)
 		return nil
@@ -100,8 +99,7 @@ func (s *Server) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) 
 	if s.httpSrv == nil {
 		if s.egressRegistry != nil {
 			egressResult := s.egressRegistry.DrainWith(ctx, "adapter.shutdown", opts)
-			s.log.InfoContext(ctx, "adapter.egress.drained",
-				"final", egressResult.Final.String(),
+			s.log.InfoContext(ctx, "adapter.egress.drained", "concern", "adapter.http.egress", "final", egressResult.Final.String(),
 				"remaining", egressResult.Remaining,
 				"force_closed", egressResult.ForceClosed,
 				"duration_ms", egressResult.Duration.Milliseconds(),
@@ -116,8 +114,7 @@ func (s *Server) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) 
 	if s.requests != nil {
 		result := s.requests.DrainWith(ctx, "adapter.shutdown", opts)
 		if len(result.Errors) > 0 {
-			s.log.WarnContext(ctx, "adapter.ingress.drain_errors",
-				"subcomponent", "adapter",
+			s.log.WarnContext(ctx, "adapter.ingress.drain_errors", "concern", "adapter.http.ingress", "subcomponent", "adapter",
 				"force_closed", result.ForceClosed,
 				"errors", len(result.Errors),
 			)
@@ -126,8 +123,7 @@ func (s *Server) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) 
 	err := s.httpSrv.Shutdown(ctx)
 	if s.egressRegistry != nil {
 		egressResult := s.egressRegistry.DrainWith(ctx, "adapter.shutdown", opts)
-		s.log.InfoContext(ctx, "adapter.egress.drained",
-			"final", egressResult.Final.String(),
+		s.log.InfoContext(ctx, "adapter.egress.drained", "concern", "adapter.http.egress", "final", egressResult.Final.String(),
 			"remaining", egressResult.Remaining,
 			"force_closed", egressResult.ForceClosed,
 			"duration_ms", egressResult.Duration.Milliseconds(),
@@ -136,7 +132,10 @@ func (s *Server) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) 
 	if s.codexProvider != nil {
 		s.codexProvider.DrainSessions(ctx, "adapter.shutdown")
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("adapter HTTP shutdown: %w", err)
+	}
+	return nil
 }
 
 // Close force-closes all adapter HTTP connections. It is used after a
@@ -149,7 +148,11 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.ForceCloseAll()
-	return s.httpSrv.Close()
+	if err := s.httpSrv.Close(); err != nil {
+		s.log.Warn("adapter.server.http_close_failed", "concern", "adapter.http.ingress", "err", err)
+		return fmt.Errorf("adapter HTTP close: %w", err)
+	}
+	return nil
 }
 
 // ActiveRequestCount returns the number of in-flight requests currently
@@ -200,8 +203,7 @@ func (s *Server) ForceCloseAll() {
 	defer cancel()
 	result := s.requests.Drain(ctx, "adapter.force_close_all")
 	if len(result.Errors) > 0 {
-		s.log.WarnContext(ctx, "adapter.ingress.force_close_errors",
-			"subcomponent", "adapter",
+		s.log.WarnContext(ctx, "adapter.ingress.force_close_errors", "concern", "adapter.http.ingress", "subcomponent", "adapter",
 			"force_closed", result.ForceClosed,
 			"errors", len(result.Errors),
 		)
@@ -249,16 +251,38 @@ func (s *Server) routes() *http.ServeMux {
 	return mux
 }
 
-func (s *Server) handleRoot(_ context.Context, hctx *handlerCtx) error {
-	writeJSON(hctx.Writer, http.StatusOK, map[string]any{
-		"service": "clyde-adapter",
-		"paths":   []string{"/v1/models", "/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/messages/count_tokens", "/healthz"},
+// rootRouteIndex is the typed payload the `/` handler returns to
+// describe the adapter routes the daemon listens on.
+type rootRouteIndex struct {
+	Service string   `json:"service"`
+	Paths   []string `json:"paths"`
+}
+
+// healthStatus is the typed payload the `/healthz` handler returns.
+type healthStatus struct {
+	Status string `json:"status"`
+}
+
+func (s *Server) handleRoot(ctx context.Context, hctx *handlerCtx) error {
+	body, err := json.Marshal(rootRouteIndex{
+		Service: "clyde-adapter",
+		Paths:   []string{"/v1/models", "/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/messages/count_tokens", "/healthz"},
 	})
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.root.marshal_failed", "concern", "adapter.http.errors", "err", err)
+		return fmt.Errorf("marshal root index: %w", err)
+	}
+	writeJSON(hctx.Writer, body)
 	return nil
 }
 
-func (s *Server) handleHealth(_ context.Context, hctx *handlerCtx) error {
-	writeJSON(hctx.Writer, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) handleHealth(ctx context.Context, hctx *handlerCtx) error {
+	body, err := json.Marshal(healthStatus{Status: "ok"})
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.health.marshal_failed", "concern", "adapter.http.errors", "err", err)
+		return fmt.Errorf("marshal health response: %w", err)
+	}
+	writeJSON(hctx.Writer, body)
 	return nil
 }
 

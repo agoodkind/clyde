@@ -37,6 +37,7 @@ func resolveCursorChatRequest(req ChatRequest, registry adapterresolver.ModelReg
 	resolved, err := adapterresolver.Resolve(cursorReq, registry)
 	if err != nil {
 		slog.Warn("adapter: resolve cursor chat request failed",
+			slog.String("concern", "adapter.chat.preflight"),
 			slog.String("model", cursorReq.OpenAI.Model),
 			slog.String("normalized_model", cursorReq.NormalizedModel),
 			slog.String("err", err.Error()),

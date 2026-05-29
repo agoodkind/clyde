@@ -7,6 +7,7 @@ import (
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/clock"
 )
 
 // JSONCoercion captures the optional JSON-coercion contract a caller
@@ -24,17 +25,6 @@ type JSONCoercion struct {
 	// merger only swaps in the coerced text when Validate returns
 	// true. Set to nil when no validation is required.
 	Validate func(text string) bool
-}
-
-// ResponseFormatSpec is the backend-local shape for the optional OpenAI
-// `response_format` request contract. The root adapter translates its decoded
-// request field into this neutral backend form so Anthropic ownership stays
-// inside the backend package without creating a package cycle back to root.
-type ResponseFormatSpec struct {
-	Mode       string
-	SchemaName string
-	// TODO replace with a deeply enumerated named type
-	Schema json.RawMessage
 }
 
 // MergeCollectedEvents reconstructs the final ChatResponse from a
@@ -67,7 +57,7 @@ func MergeCollectedEvents(
 
 	msg := adapteropenai.ChatMessage{
 		Role:    "assistant",
-		Content: jsonRawQuoted(outText),
+		Content: jsonRawQuoted(outText), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
 	}
 	if collected.Reasoning != "" {
 		msg.Reasoning = collected.Reasoning
@@ -83,13 +73,13 @@ func MergeCollectedEvents(
 	return adapteropenai.ChatResponse{
 		ID:                reqID,
 		Object:            "chat.completion",
-		Created:           backendClock.Now().Unix(),
+		Created:           clock.Now().Unix(),
 		Model:             modelAlias,
 		SystemFingerprint: systemFingerprint,
 		Choices: []adapteropenai.ChatChoice{{
 			Index:        0,
 			Message:      msg,
-			FinishReason: finishReason,
+			FinishReason: finishReason, Logprobs: nil,
 		}},
 		Usage: &usage,
 	}

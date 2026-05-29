@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,9 +21,14 @@ import (
 type Source string
 
 const (
+	// SourceKeychain is part of Clyde's typed adapter surface.
 	SourceKeychain Source = "keychain"
-	SourceFile     Source = "credentials_file"
+	// SourceFile is part of Clyde's typed adapter surface.
+	SourceFile Source = "credentials_file"
 )
+
+// DefaultKeychainService is the macOS service name Claude uses for OAuth tokens.
+const DefaultKeychainService = "Claude Code-credentials"
 
 // Tokens is the claudeAiOauth credential payload written by Claude Code.
 type Tokens struct {
@@ -73,8 +79,7 @@ type ReadOptions struct {
 	Now             time.Time
 }
 
-// Store reads one Claude OAuth store. The harvest is one-way: Clyde imports
-// credentials from the local Claude Code store and never writes back to it.
+// Store reads one Claude OAuth credential source.
 type Store interface {
 	Source() Source
 	Read(ctx context.Context) ReadResult
@@ -102,7 +107,7 @@ func ReadCandidates(ctx context.Context, options ReadOptions) []ReadResult {
 		case <-ctx.Done():
 			results = append(results, ReadResult{
 				Source: store.Source(),
-				Err:    ctx.Err(),
+				Err:    ctx.Err(), Tokens: nil, Present: false, Metadata: Metadata{AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: "", FileMtime: 0},
 			})
 			continue
 		default:
@@ -121,7 +126,7 @@ func newMetadata(tokens *Tokens, now time.Time, fileMtime int64, nowFunc func() 
 	if now.IsZero() {
 		now = nowFunc()
 	}
-	metadata := Metadata{FileMtime: fileMtime}
+	metadata := Metadata{FileMtime: fileMtime, AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: ""}
 	if tokens == nil {
 		return metadata
 	}
@@ -191,10 +196,11 @@ func credentialStores(options ReadOptions) []Store {
 func parseBlob(data []byte, now time.Time, fileMtime int64) (*Tokens, Metadata, error) {
 	var document credentialsDocument
 	if err := json.Unmarshal(data, &document); err != nil {
-		return nil, Metadata{FileMtime: fileMtime}, fmt.Errorf("unmarshal credentials: %w", err)
+		slog.Warn("providers.claude.oauth.parse_blob_failed", "concern", "providers.claude.oauth", "err", err)
+		return nil, Metadata{FileMtime: fileMtime, AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: ""}, fmt.Errorf("unmarshal credentials: %w", err)
 	}
 	if document.ClaudeAIOauth == nil {
-		return nil, Metadata{FileMtime: fileMtime}, nil
+		return nil, Metadata{FileMtime: fileMtime, AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: ""}, nil
 	}
 	tokens := document.ClaudeAIOauth.Clone()
 	metadata := NewMetadata(tokens, now, fileMtime)

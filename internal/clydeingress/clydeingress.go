@@ -22,12 +22,10 @@
 package clydeingress
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
 	"goodkind.io/gklog/correlation"
-	"google.golang.org/grpc/metadata"
 )
 
 // Clyde-specific HTTP header names in canonical form. The daemon and
@@ -132,53 +130,6 @@ func HTTPHeaders(corr correlation.Context) http.Header {
 		header.Set(HeaderUpstreamResponseID, id)
 	}
 	return header
-}
-
-// FromIncomingMetadata builds a [correlation.Context] from gRPC
-// incoming metadata. Clyde daemon clients write their metadata under
-// gklog's neutral keys, so this delegates straight to gklog and layers
-// the clyde-specific upstream identifiers on top when present.
-func FromIncomingMetadata(ctx context.Context) correlation.Context {
-	corr := correlation.FromIncomingMetadata(ctx)
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return corr
-	}
-	if upstreamReq := firstMetadata(md, HeaderUpstreamRequestID); upstreamReq != "" {
-		corr = WithUpstreamRequestID(corr, upstreamReq)
-	}
-	if upstreamResp := firstMetadata(md, HeaderUpstreamResponseID); upstreamResp != "" {
-		corr = WithUpstreamResponseID(corr, upstreamResp)
-	}
-	return corr
-}
-
-// NewOutgoingContext returns a child of ctx carrying outgoing gRPC
-// metadata. The standard trace/span/request fields go through
-// [correlation.NewOutgoingContext]; clyde-specific upstream
-// identifiers ride alongside under the x-upstream-* keys when present
-// on the active [correlation.Context].
-func NewOutgoingContext(ctx context.Context) context.Context {
-	ctx = correlation.NewOutgoingContext(ctx)
-	corr := correlation.FromContext(ctx)
-	upstreamReq := UpstreamRequestID(corr)
-	upstreamResp := UpstreamResponseID(corr)
-	if upstreamReq == "" && upstreamResp == "" {
-		return ctx
-	}
-	md, ok := metadata.FromOutgoingContext(ctx)
-	if !ok {
-		md = metadata.MD{}
-	} else {
-		md = md.Copy()
-	}
-	if upstreamReq != "" {
-		md.Set(strings.ToLower(HeaderUpstreamRequestID), upstreamReq)
-	}
-	if upstreamResp != "" {
-		md.Set(strings.ToLower(HeaderUpstreamResponseID), upstreamResp)
-	}
-	return metadata.NewOutgoingContext(ctx, md)
 }
 
 // ChatKey returns the per-chat partition key on corr.
@@ -295,15 +246,4 @@ func copyIfPresent(dst, src http.Header, sourceKey, destKey string) {
 	if value := strings.TrimSpace(src.Get(sourceKey)); value != "" {
 		dst.Set(destKey, value)
 	}
-}
-
-func firstMetadata(md metadata.MD, key string) string {
-	values := md.Get(strings.ToLower(key))
-	if len(values) == 0 {
-		values = md.Get(key)
-	}
-	if len(values) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(values[0])
 }

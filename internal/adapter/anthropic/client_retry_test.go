@@ -11,15 +11,14 @@ import (
 )
 
 // fakeOAuth implements OAuthSource for the on-401 retry tests. Token returns
-// initialToken on every call. TokenAfterAuthFailure increments calls and
-// returns the configured recovery token plus the configured recovery error.
+// initialToken on every call. ForceRefresh increments calls and returns the
+// configured recovery token plus the configured recovery error.
 type fakeOAuth struct {
-	initialToken    string
-	recoveredToken  string
-	recoverErr      error
-	tokenCalls      atomic.Int64
-	recoverCalls    atomic.Int64
-	lastFailedToken atomic.Value
+	initialToken   string
+	recoveredToken string
+	recoverErr     error
+	tokenCalls     atomic.Int64
+	recoverCalls   atomic.Int64
 }
 
 func (f *fakeOAuth) Token(_ context.Context) (string, error) {
@@ -27,9 +26,8 @@ func (f *fakeOAuth) Token(_ context.Context) (string, error) {
 	return f.initialToken, nil
 }
 
-func (f *fakeOAuth) TokenAfterAuthFailure(_ context.Context, failedToken string) (string, error) {
+func (f *fakeOAuth) ForceRefresh(_ context.Context) (string, error) {
 	f.recoverCalls.Add(1)
-	f.lastFailedToken.Store(failedToken)
 	return f.recoveredToken, f.recoverErr
 }
 
@@ -66,16 +64,16 @@ func TestDoRetriesOn401WithFreshToken(t *testing.T) {
 	srv := newRetryTestServer(t, http.StatusOK, &auths)
 
 	oauth := &fakeOAuth{
-		initialToken:    "stale-token",
-		recoveredToken:  "fresh-token",
-		recoverErr:      nil,
-		tokenCalls:      atomic.Int64{},
-		recoverCalls:    atomic.Int64{},
-		lastFailedToken: atomic.Value{},
+		initialToken:   "stale-token",
+		recoveredToken: "fresh-token",
+		recoverErr:     nil,
+		tokenCalls:     atomic.Int64{},
+		recoverCalls:   atomic.Int64{},
 	}
 	cli := &Client{
-		http:  srv.Client(),
-		oauth: oauth,
+		http:         srv.Client(),
+		oauth:        oauth,
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:           srv.URL + "/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
@@ -83,6 +81,7 @@ func TestDoRetriesOn401WithFreshToken(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
+			WireBaselinePath:      writeTestWireBaseline(t),
 		},
 	}
 
@@ -102,9 +101,6 @@ func TestDoRetriesOn401WithFreshToken(t *testing.T) {
 	if got := oauth.recoverCalls.Load(); got != 1 {
 		t.Fatalf("recoverCalls = %d, want 1", got)
 	}
-	if got, _ := oauth.lastFailedToken.Load().(string); got != "stale-token" {
-		t.Fatalf("recover lastFailedToken = %q, want stale-token", got)
-	}
 	if len(auths) != 2 {
 		t.Fatalf("server observed %d requests, want 2", len(auths))
 	}
@@ -122,16 +118,16 @@ func TestDoFallsThroughOnSecond401(t *testing.T) {
 	srv := newRetryTestServer(t, http.StatusUnauthorized, &auths)
 
 	oauth := &fakeOAuth{
-		initialToken:    "stale-token",
-		recoveredToken:  "fresh-token",
-		recoverErr:      nil,
-		tokenCalls:      atomic.Int64{},
-		recoverCalls:    atomic.Int64{},
-		lastFailedToken: atomic.Value{},
+		initialToken:   "stale-token",
+		recoveredToken: "fresh-token",
+		recoverErr:     nil,
+		tokenCalls:     atomic.Int64{},
+		recoverCalls:   atomic.Int64{},
 	}
 	cli := &Client{
-		http:  srv.Client(),
-		oauth: oauth,
+		http:         srv.Client(),
+		oauth:        oauth,
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:           srv.URL + "/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
@@ -139,6 +135,7 @@ func TestDoFallsThroughOnSecond401(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
+			WireBaselinePath:      writeTestWireBaseline(t),
 		},
 	}
 
@@ -177,16 +174,16 @@ func TestDoSkipsRetryWhenRecoverErrors(t *testing.T) {
 	srv := newRetryTestServer(t, http.StatusOK, &auths)
 
 	oauth := &fakeOAuth{
-		initialToken:    "stale-token",
-		recoveredToken:  "stale-token",
-		recoverErr:      errors.New("recover failed"),
-		tokenCalls:      atomic.Int64{},
-		recoverCalls:    atomic.Int64{},
-		lastFailedToken: atomic.Value{},
+		initialToken:   "stale-token",
+		recoveredToken: "stale-token",
+		recoverErr:     errors.New("recover failed"),
+		tokenCalls:     atomic.Int64{},
+		recoverCalls:   atomic.Int64{},
 	}
 	cli := &Client{
-		http:  srv.Client(),
-		oauth: oauth,
+		http:         srv.Client(),
+		oauth:        oauth,
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:           srv.URL + "/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
@@ -194,6 +191,7 @@ func TestDoSkipsRetryWhenRecoverErrors(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
+			WireBaselinePath:      writeTestWireBaseline(t),
 		},
 	}
 
@@ -229,16 +227,16 @@ func TestDoSkipsRetryWhenTokenUnchanged(t *testing.T) {
 	srv := newRetryTestServer(t, http.StatusOK, &auths)
 
 	oauth := &fakeOAuth{
-		initialToken:    "stale-token",
-		recoveredToken:  "stale-token",
-		recoverErr:      nil,
-		tokenCalls:      atomic.Int64{},
-		recoverCalls:    atomic.Int64{},
-		lastFailedToken: atomic.Value{},
+		initialToken:   "stale-token",
+		recoveredToken: "stale-token",
+		recoverErr:     nil,
+		tokenCalls:     atomic.Int64{},
+		recoverCalls:   atomic.Int64{},
 	}
 	cli := &Client{
-		http:  srv.Client(),
-		oauth: oauth,
+		http:         srv.Client(),
+		oauth:        oauth,
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:           srv.URL + "/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
@@ -246,6 +244,7 @@ func TestDoSkipsRetryWhenTokenUnchanged(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
+			WireBaselinePath:      writeTestWireBaseline(t),
 		},
 	}
 

@@ -4,19 +4,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
 )
 
+// ToolOnlyMode is part of Clyde's typed adapter surface.
 type ToolOnlyMode string
 
 const (
-	ToolOnlyOmit           ToolOnlyMode = "omit"
+	// ToolOnlyOmit is part of Clyde's typed adapter surface.
+	ToolOnlyOmit ToolOnlyMode = "omit"
+	// ToolOnlyCompactSummary is part of Clyde's typed adapter surface.
 	ToolOnlyCompactSummary ToolOnlyMode = "compact_summary"
-	ToolOnlyFullDetail     ToolOnlyMode = "full_detail"
+	// ToolOnlyFullDetail is part of Clyde's typed adapter surface.
+	ToolOnlyFullDetail ToolOnlyMode = "full_detail"
 )
 
+// ShapeOptions is part of Clyde's typed adapter surface.
 type ShapeOptions struct {
 	IncludeThinking  bool
 	ConversationOnly bool
@@ -33,6 +39,7 @@ var (
 	conversationOnlyImageLineRe = regexp.MustCompile(`^\[Image(?::| #).*\]$`)
 )
 
+// ConversationTurn is part of Clyde's typed adapter surface.
 type ConversationTurn struct {
 	UUID       string    `json:"uuid,omitempty"`
 	Role       string    `json:"role"`
@@ -44,12 +51,17 @@ type ConversationTurn struct {
 	IsToolOnly bool      `json:"is_tool_only,omitempty"`
 }
 
+// DefaultShapeOptions is part of Clyde's typed adapter surface.
 func DefaultShapeOptions() ShapeOptions {
 	return ShapeOptions{
-		ToolOnly: ToolOnlyCompactSummary,
+		ToolOnly: ToolOnlyCompactSummary, IncludeThinking:
+
+		// ShapeConversation is part of Clyde's typed adapter surface.
+		false, ConversationOnly: false, MaxTextRunes: 0,
 	}
 }
 
+// ShapeConversation is part of Clyde's typed adapter surface.
 func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn {
 	if opts.ToolOnly == "" {
 		opts.ToolOnly = ToolOnlyCompactSummary
@@ -60,7 +72,7 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 			UUID:      msg.UUID,
 			Role:      msg.Role,
 			Timestamp: msg.Timestamp,
-			HasTools:  msg.HasTools,
+			HasTools:  msg.HasTools, Text: "", Thinking: "", ToolNames: nil, IsToolOnly: false,
 		}
 		text := normalizeConversationText(msg.Text, opts.MaxTextRunes, opts.ConversationOnly)
 		thinking := ""
@@ -157,7 +169,11 @@ func toolFullDetailText(tools []ToolCall) string {
 			lines = append(lines, "[tool: "+tool.Name+"]")
 			continue
 		}
-		body, _ := json.Marshal(tool.Input)
+		body, err := json.Marshal(&tool.Input)
+		if err != nil {
+			lines = append(lines, "[tool: "+tool.Name+"]")
+			continue
+		}
 		line := fmt.Sprintf("[tool: %s] %s", tool.Name, string(body))
 		if strings.TrimSpace(tool.Output) != "" {
 			line += "\n[tool output]\n" + strings.TrimSpace(tool.Output)
@@ -167,6 +183,7 @@ func toolFullDetailText(tools []ToolCall) string {
 	return strings.Join(lines, "\n")
 }
 
+// RenderMarkdownConversation is part of Clyde's typed adapter surface.
 func RenderMarkdownConversation(turns []ConversationTurn) string {
 	var b strings.Builder
 	for _, turn := range turns {
@@ -194,6 +211,7 @@ func RenderMarkdownConversation(turns []ConversationTurn) string {
 	return strings.TrimSpace(b.String())
 }
 
+// RenderHTMLConversation is part of Clyde's typed adapter surface.
 func RenderHTMLConversation(turns []ConversationTurn) string {
 	var b strings.Builder
 	b.WriteString("<div class=\"conversation\">\n")
@@ -220,6 +238,12 @@ func RenderHTMLConversation(turns []ConversationTurn) string {
 	return b.String()
 }
 
+// RenderJSONConversation is part of Clyde's typed adapter surface.
 func RenderJSONConversation(turns []ConversationTurn) ([]byte, error) {
-	return json.MarshalIndent(turns, "", "  ")
+	out, err := json.MarshalIndent(turns, "", "  ")
+	if err != nil {
+		slog.Warn("transcript.conversation.marshal_failed", "concern", "transcript", "err", err)
+		return nil, fmt.Errorf("marshal conversation JSON: %w", err)
+	}
+	return out, nil
 }

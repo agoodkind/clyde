@@ -1,4 +1,3 @@
-// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (
@@ -19,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/clock"
 )
 
 // sessionID is a per-daemon-process UUIDv4 used for the session
@@ -43,16 +44,15 @@ func onceSessionID() string {
 // client is used; long timeouts matter because /v1/messages can keep
 // a connection open for the full inference window on large outputs.
 // cfg carries wire values from [adapter.client_identity] and
-// [adapter.anthropic.oauth]. source supplies the bearer token per request; the
-// adapter passes a thin shim over the OAuth rotation layer. A nil source
-// is tolerated at construction but every request then fails with a missing
-// oauth source error. New does not validate cfg; callers should refuse
+// [adapter.anthropic.oauth]. source supplies the bearer token per request. A
+// nil source is tolerated at construction but every request then fails with a
+// missing oauth source error. New does not validate cfg; callers should refuse
 // to start when required fields are empty.
 func New(httpClient *http.Client, source OAuthSource, cfg Config) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Minute}
 	}
-	return &Client{http: httpClient, oauth: source, cfg: cfg}
+	return &Client{http: httpClient, oauth: source, cfg: cfg, flavorLoader: newWireFlavorsLoader()}
 }
 
 // SystemPromptPrefix returns the configured prefix so callers
@@ -88,7 +88,7 @@ func (c *Client) StreamEvents(ctx context.Context, req Request, sink EventSink) 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	usage := Usage{}
+	usage := Usage{InputTokens: 0, OutputTokens: 0, CacheCreationInputTokens: 0, CacheReadInputTokens: 0}
 	stopReason := ""
 	blockTypes := make(map[int]string)
 
@@ -112,8 +112,7 @@ func (c *Client) StreamEvents(ctx context.Context, req Request, sink EventSink) 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		log.WarnContext(ctx, "anthropic.stream.scan_failed",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.stream.scan_failed", "concern", "adapter.providers.anthropic.sse", "subcomponent", "anthropic",
 			"model", req.Model,
 			"err", err.Error(),
 		)
@@ -139,8 +138,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
-		log.WarnContext(ctx, "anthropic.messages.marshal_failed",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.messages.marshal_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"err", err.Error(),
 		)
@@ -149,8 +147,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 
 	token, err := c.oauth.Token(ctx)
 	if err != nil {
-		log.WarnContext(ctx, "anthropic.messages.auth_lookup_failed",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.messages.auth_lookup_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"err", err.Error(),
 		)
@@ -162,7 +159,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	postStarted := anthropicClock.Now()
+	postStarted := clock.Now()
 	resp, err := c.http.Do(httpReq)
 	if resp != nil {
 		// We set Accept-Encoding explicitly, so Go's transparent gzip
@@ -174,11 +171,16 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		decodeResponseBody(resp)
 	}
 	if err != nil {
-		logResponse(slog.LevelError, "anthropic.messages.post_failed", responseEvent{
+		logResponse(ctx, slog.LevelError, "anthropic.messages.post_failed", responseEvent{
 			Subcomponent: "anthropic",
 			Model:        req.Model,
+			Status:       0,
+			RequestID:    "",
 			BodyBytes:    len(body),
-			DurationMs:   time.Since(postStarted).Milliseconds(),
+			DurationMs:   clock.Since(postStarted).Milliseconds(),
+			RateLimits:   nil,
+			RetryAfter:   "",
+			Body:         "",
 			Err:          err.Error(),
 		})
 		return nil, &UpstreamError{
@@ -198,19 +200,19 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		Status:       resp.StatusCode,
 		RequestID:    resp.Header.Get("Request-Id"),
 		BodyBytes:    len(body),
-		DurationMs:   time.Since(postStarted).Milliseconds(),
-		RateLimits:   rateLimitAttrs(resp.Header),
+		DurationMs:   clock.Since(postStarted).Milliseconds(),
+		RateLimits:   rateLimitAttrs(resp.Header), RetryAfter: "", Body: "", Err: "",
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, c.handle429Response(ctx, req, resp, base, token)
+		return nil, c.handle429Response(ctx, req, resp, base)
 	}
 	if resp.StatusCode != http.StatusOK {
 		errBody := readDecodedBody(resp)
 		ev := base
 		ev.Body = string(errBody)
 		ev.BodyBytes = len(errBody)
-		logResponse(slog.LevelError, "anthropic.messages.upstream_error", ev)
+		logResponse(ctx, slog.LevelError, "anthropic.messages.upstream_error", ev)
 		return nil, &UpstreamError{
 			Classification: Classify(resp, nil),
 			Status:         resp.StatusCode,
@@ -219,13 +221,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 			ErrorType:      ErrorKindNone,
 		}
 	}
-	logResponse(slog.LevelInfo, "anthropic.messages.connected", base)
-	// Observe runs on every response. A clean 200 records an allowed status
-	// that clears any stale rejected observation on the slot; a 200 with
-	// overage-status: rejected records that warning state for the operator
-	// surface without taking the account out of rotation, since Anthropic
-	// kept serving the request.
-	c.maybeEmitRateLimitSignal(ctx, Classify(resp, nil), resp.Header, token)
+	logResponse(ctx, slog.LevelInfo, "anthropic.messages.connected", base)
 	if req.OnHeaders != nil {
 		req.OnHeaders(resp.Header.Clone())
 	}
@@ -234,17 +230,15 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 }
 
 // handle429Response builds the typed UpstreamError for a 429 reply, logs the
-// rate-limit event, fires the OnHeaders callback, and reports a rate-limit
-// signal to the configured sink so the rotator can record the rejected
-// observation on the account. The returned error is the value do()
-// propagates to its caller.
-func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.Response, base responseEvent, token string) error {
+// rate-limit event, and fires the OnHeaders callback. The returned error is
+// the value do() propagates to its caller.
+func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.Response, base responseEvent) error {
 	errBody := readDecodedBody(resp)
 	ev := base
 	ev.RetryAfter = resp.Header.Get("Retry-After")
 	ev.Body = string(errBody)
 	ev.BodyBytes = len(errBody)
-	logResponse(slog.LevelWarn, "anthropic.ratelimit", ev)
+	logResponse(ctx, slog.LevelWarn, "anthropic.ratelimit", ev)
 
 	// Surface unified rate-limit headers to the OnHeaders callback even
 	// on 429 so the chat handler can Claim and inject the in-band
@@ -252,8 +246,7 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 	// 200-OK path also calls OnHeaders; this is the rejection peer of
 	// that hook and is intentionally invoked before returning.
 	if req.OnHeaders != nil {
-		slog.LogAttrs(context.Background(), slog.LevelDebug, "anthropic.notice.headers_observed",
-			slog.String("subcomponent", "anthropic"),
+		slog.LogAttrs(ctx, slog.LevelDebug, "anthropic.notice.headers_observed", slog.String("concern", "adapter.notice"), slog.String("subcomponent", "anthropic"),
 			slog.String("phase", "ratelimit_429"),
 			slog.String("model", req.Model),
 			slog.String("request_id", resp.Header.Get("Request-Id")),
@@ -262,7 +255,6 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 	}
 
 	class := Classify(resp, nil)
-	c.maybeEmitRateLimitSignal(ctx, class, resp.Header, token)
 	var message string
 	switch {
 	case FormatRateLimitMessage(resp.Header) != "":
@@ -290,27 +282,32 @@ func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []b
 	log := anthropicRequestLog.Logger()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.MessagesURL, bytes.NewReader(body))
 	if err != nil {
-		log.WarnContext(ctx, "anthropic.messages.request_build_failed",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.messages.request_build_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"url", c.cfg.MessagesURL,
 			"err", err.Error(),
 		)
 		return nil, fmt.Errorf("build messages request: %w", err)
 	}
-	dropped := c.applyMessagesHeaders(httpReq, req, token)
+	dropped, err := c.applyMessagesHeaders(httpReq, req, token)
+	if err != nil {
+		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"baseline_path", c.cfg.WireBaselinePath,
+			"err", err.Error(),
+		)
+		return nil, err
+	}
 	if len(dropped) > 0 {
 		keys := make([]string, 0, len(dropped))
 		for k := range dropped {
 			keys = append(keys, k)
 		}
-		log.WarnContext(ctx, "anthropic.probe.headers_dropped",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.probe.headers_dropped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"dropped", keys,
 		)
 	}
-	log.DebugContext(ctx, "anthropic.messages.request",
-		"subcomponent", "anthropic",
+	log.DebugContext(ctx, "anthropic.messages.request", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 		"model", req.Model,
 		"url", c.cfg.MessagesURL,
 		"body_bytes", len(body),
@@ -324,8 +321,14 @@ func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []b
 // httpReq: bearer auth, protocol version, content negotiation, the captured
 // wire flavor identity headers, and the optional CLYDE_PROBE_DROP exclusion
 // set. The returned drop set is non-nil only when an operator opted into
-// header omission for local debugging.
-func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token string) map[string]struct{} {
+// header omission for local debugging. It fails with [ErrBaselineMissing] or
+// [ErrBaselineInvalid] when the daemon-owned MITM baseline cannot supply the
+// wire flavor, so the request never goes out with no identity.
+func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token string) (map[string]struct{}, error) {
+	flavor, err := c.activeFlavor()
+	if err != nil {
+		return nil, err
+	}
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Anthropic-Version", c.cfg.OAuthAnthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -348,7 +351,6 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 		httpReq.Header.Set(key, value)
 	}
 
-	flavor := c.activeFlavor()
 	beta := flavor.AnthropicBeta
 	if v := strings.TrimSpace(c.cfg.BetaHeader); v != "" {
 		beta = v
@@ -378,10 +380,10 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 	}
 	setHard("User-Agent", userAgent)
 
-	for _, h := range freeIdentityHeaders(c) {
+	for _, h := range freeIdentityHeaders(c, flavor) {
 		httpReq.Header.Set(h.key, h.value)
 	}
-	return dropped
+	return dropped, nil
 }
 
 // maybeRetryOn401 is the do() boundary helper that invokes one on-401 retry
@@ -397,7 +399,7 @@ func (c *Client) maybeRetryOn401(ctx context.Context, req Request, body []byte, 
 	if retryErr != nil || retried == nil {
 		return resp, postStarted
 	}
-	return retried, anthropicClock.Now().Add(-retryDuration)
+	return retried, clock.Now().Add(-retryDuration)
 }
 
 // retryAfter401 runs one recovery attempt for an upstream 401. It drains and
@@ -408,8 +410,7 @@ func (c *Client) maybeRetryOn401(ctx context.Context, req Request, body []byte, 
 // existing classifier with the original 401 in that case.
 func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, failedToken string, originalResp *http.Response) (*http.Response, time.Duration, error) {
 	log := anthropicRequestLog.Logger()
-	log.InfoContext(ctx, "anthropic.messages.auth_retry_attempted",
-		"subcomponent", "anthropic",
+	log.InfoContext(ctx, "anthropic.messages.auth_retry_attempted", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 		"model", req.Model,
 		"attempt", 1,
 	)
@@ -422,18 +423,24 @@ func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, fa
 	_ = originalResp.Body.Close()
 	originalResp.Body = io.NopCloser(bytes.NewReader(savedBody))
 
-	freshToken, recoverErr := c.oauth.TokenAfterAuthFailure(ctx, failedToken)
+	refresher, ok := c.oauth.(OAuthRefresher)
+	if !ok {
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"reason", "auth_refresh_unavailable",
+		)
+		return nil, 0, errors.New("auth refresh unavailable")
+	}
+	freshToken, recoverErr := refresher.ForceRefresh(ctx)
 	if recoverErr != nil {
-		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"err", recoverErr.Error(),
 		)
 		return nil, 0, fmt.Errorf("anthropic auth-retry recover: %w", recoverErr)
 	}
 	if freshToken == "" || freshToken == failedToken {
-		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_skipped", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"reason", "token_unchanged",
 		)
@@ -444,52 +451,27 @@ func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, fa
 	if buildErr != nil {
 		return nil, 0, buildErr
 	}
-	retryStarted := anthropicClock.Now()
+	retryStarted := clock.Now()
 	retryResp, retryErr := c.http.Do(retryReq)
 	if retryResp != nil {
 		decodeResponseBody(retryResp)
 	}
 	if retryErr != nil {
-		log.WarnContext(ctx, "anthropic.messages.auth_retry_post_failed",
-			"subcomponent", "anthropic",
+		log.WarnContext(ctx, "anthropic.messages.auth_retry_post_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"err", retryErr.Error(),
 		)
 		return nil, 0, fmt.Errorf("anthropic auth-retry post: %w", retryErr)
 	}
 	if retryResp.StatusCode != http.StatusUnauthorized {
-		log.InfoContext(ctx, "anthropic.messages.auth_retry_recovered",
-			"subcomponent", "anthropic",
+		log.InfoContext(ctx, "anthropic.messages.auth_retry_recovered", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"attempt", 1,
 			"status", retryResp.StatusCode,
-			"duration_ms", time.Since(retryStarted).Milliseconds(),
+			"duration_ms", clock.Since(retryStarted).Milliseconds(),
 		)
 	}
-	return retryResp, time.Since(retryStarted), nil
-}
-
-// maybeEmitRateLimitSignal is the do() boundary helper that builds a
-// rate-limit signal from the observed classification and headers and reports
-// it to the configured sink on every response. A nil sink is a no-op. The
-// signal carries the per-request bearer token so the rotation layer can
-// reverse-look-up the account to update; the token is never logged.
-func (c *Client) maybeEmitRateLimitSignal(ctx context.Context, class Classification, h http.Header, token string) {
-	if c.cfg.RateLimitSink == nil {
-		return
-	}
-	sig, emit := rateLimitSignal(class, h, token)
-	if !emit {
-		return
-	}
-	if err := c.cfg.RateLimitSink.Observe(ctx, sig); err != nil {
-		anthropicRequestLog.Logger().WarnContext(ctx, "anthropic.ratelimit.signal_emit_failed",
-			"subcomponent", "anthropic",
-			"claim", string(sig.Claim),
-			"status", sig.HTTPStatus,
-			"err", err.Error(),
-		)
-	}
+	return retryResp, clock.Since(retryStarted), nil
 }
 
 // maybeAttachWireCapture is the do() boundary helper that filters Off and
@@ -534,8 +516,7 @@ func attachWireCapture(ctx context.Context, mode WireCaptureMode, resp *http.Res
 }
 
 func emitWireCaptureSummary(ctx context.Context, mode WireCaptureMode, base responseEvent, headers map[string]string) {
-	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture",
-		slog.String("subcomponent", "anthropic"),
+	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture", slog.String("concern", "adapter.providers.anthropic.wire_capture"), slog.String("subcomponent", "anthropic"),
 		slog.String("mode", string(mode)),
 		slog.String("model", base.Model),
 		slog.Int("status", base.Status),
@@ -547,8 +528,7 @@ func emitWireCaptureSummary(ctx context.Context, mode WireCaptureMode, base resp
 }
 
 func emitWireCaptureFull(ctx context.Context, mode WireCaptureMode, base responseEvent, headers map[string]string, captured []byte, truncated bool, totalRead int) {
-	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture",
-		slog.String("subcomponent", "anthropic"),
+	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture", slog.String("concern", "adapter.providers.anthropic.wire_capture"), slog.String("subcomponent", "anthropic"),
 		slog.String("mode", string(mode)),
 		slog.String("model", base.Model),
 		slog.Int("status", base.Status),
@@ -600,8 +580,7 @@ func (t *captureTee) Read(p []byte) (int, error) {
 		return n, nil
 	}
 	if !errors.Is(err, io.EOF) {
-		slog.Warn("anthropic.wire_capture.tee_read_failed",
-			"subcomponent", "anthropic",
+		slog.Warn("anthropic.wire_capture.tee_read_failed", "concern", "adapter.providers.anthropic.wire_capture", "subcomponent", "anthropic",
 			"err", err.Error(),
 		)
 	}
@@ -623,8 +602,7 @@ func (t *captureTee) Close() error {
 	if err == nil {
 		return nil
 	}
-	slog.Warn("anthropic.wire_capture.tee_close_failed",
-		"subcomponent", "anthropic",
+	slog.Warn("anthropic.wire_capture.tee_close_failed", "concern", "adapter.providers.anthropic.wire_capture", "subcomponent", "anthropic",
 		"err", err.Error(),
 	)
 	return fmt.Errorf("captureTee close: %w", err)
@@ -672,38 +650,87 @@ type freeHeader struct {
 // activeFlavor returns the captured wire flavor we mirror on outbound
 // requests. Today this is the claude-cli interactive flavor; future
 // work can pick a flavor per caller shape (e.g. a probe flavor for
-// short non-streaming requests). The flavor is generated from the local XDG
-// MITM baseline so identity drift surfaces in daemon-owned drift checks.
-func (c *Client) activeFlavor() WireFlavor {
-	return WireFlavorClaudeCodeInteractive
+// short non-streaming requests). The flavor is loaded at request time
+// from the daemon-owned MITM baseline so identity drift surfaces in
+// daemon-owned drift checks. There is no compiled-in fallback: a
+// missing or invalid baseline returns [ErrBaselineMissing] or
+// [ErrBaselineInvalid] so the caller can map it to an HTTP 503.
+func (c *Client) activeFlavor() (WireFlavor, error) {
+	var zero WireFlavor
+	if c.flavorLoader == nil {
+		c.flavorLoader = newWireFlavorsLoader()
+	}
+	flavors, err := c.flavorLoader.Load(c.cfg.WireBaselinePath)
+	if err != nil {
+		// The loader logs the specific cause on its concern; return the
+		// typed sentinel-bearing error unchanged so the dispatch layer
+		// can map it to an operator-actionable HTTP 503.
+		return zero, err
+	}
+	flavor, ok := selectInteractiveFlavor(flavors)
+	if !ok {
+		slog.Warn("anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+			"baseline_path", c.cfg.WireBaselinePath,
+		)
+		return zero, fmt.Errorf("%w: no claude-code-interactive flavor in baseline %s", ErrBaselineInvalid, c.cfg.WireBaselinePath)
+	}
+	return flavor, nil
+}
+
+// interactiveFlavorSlugPrefix is the slug prefix of the claude-cli
+// interactive caller flavor. The captured baseline can hold several
+// interactive flavors (one per observed claude-cli version); the
+// loader keys them by full slug and the selector picks the
+// lexicographically smallest matching slug, which equals the first
+// entry in the snapshot's slug-sorted order the old generated
+// WireFlavorClaudeCodeInteractive var was assigned from.
+const interactiveFlavorSlugPrefix = "claude-code-interactive"
+
+// selectInteractiveFlavor picks the interactive flavor from the
+// slug-keyed map. It chooses the smallest slug carrying the
+// interactive prefix so selection is deterministic across reloads.
+func selectInteractiveFlavor(flavors map[string]WireFlavor) (WireFlavor, bool) {
+	best := ""
+	for slug := range flavors {
+		if !strings.HasPrefix(slug, interactiveFlavorSlugPrefix) {
+			continue
+		}
+		if best == "" || slug < best {
+			best = slug
+		}
+	}
+	if best == "" {
+		var zero WireFlavor
+		return zero, false
+	}
+	return flavors[best], true
 }
 
 // freeIdentityHeaders returns the per-request identity headers that
-// are not auth or cache-control. Static values come from the captured
+// are not auth or cache-control. Static values come from the resolved
 // WireFlavor; runtime-only fields (per-process session id, timeout
 // derived from c.http.Timeout) override the captured value.
 //
-// cfg.ClientIdentity.* still wins when explicitly set so operators
-// can override for testing without regenerating wire_flavors_gen.go.
-func freeIdentityHeaders(c *Client) []freeHeader {
-	flavor := c.activeFlavor()
+// cfg.ClientIdentity.* still wins when explicitly set so operators can
+// override for testing without re-seeding the MITM baseline.
+func freeIdentityHeaders(c *Client, flavor WireFlavor) []freeHeader {
 	out := make([]freeHeader, 0, len(flavor.StaticHeaders)+1)
 	for _, h := range flavor.StaticHeaders {
 		val := h.Value
-		switch strings.ToLower(h.Name) {
-		case "x-stainless-package-version":
+		switch stainlessHeaderName(strings.ToLower(h.Name)) {
+		case stainlessHeaderPackageVersion:
 			if v := strings.TrimSpace(c.cfg.StainlessPackageVersion); v != "" {
 				val = v
 			}
-		case "x-stainless-runtime":
+		case stainlessHeaderRuntime:
 			if v := strings.TrimSpace(c.cfg.StainlessRuntime); v != "" {
 				val = v
 			}
-		case "x-stainless-runtime-version":
+		case stainlessHeaderRuntimeVersion:
 			if v := strings.TrimSpace(c.cfg.StainlessRuntimeVersion); v != "" {
 				val = v
 			}
-		case "x-stainless-timeout":
+		case stainlessHeaderTimeout:
 			val = c.stainlessTimeout()
 		}
 		out = append(out, freeHeader{key: h.Name, value: val})
@@ -730,30 +757,61 @@ func (c *Client) stainlessTimeout() string {
 // br and zstd are passed through untouched (the upstream rarely picks
 // them when gzip is also offered). Removes the Content-Encoding
 // header on success so callers don't double-decode.
+// stainlessHeaderName enumerates the lowercase header names the
+// Anthropic client tunes per the configured Stainless identity.
+type stainlessHeaderName string
+
+const (
+	stainlessHeaderPackageVersion stainlessHeaderName = "x-stainless-package-version"
+	stainlessHeaderRuntime        stainlessHeaderName = "x-stainless-runtime"
+	stainlessHeaderRuntimeVersion stainlessHeaderName = "x-stainless-runtime-version"
+	stainlessHeaderTimeout        stainlessHeaderName = "x-stainless-timeout"
+)
+
+// httpContentEncoding enumerates the Content-Encoding values the
+// Anthropic client decodes inline before returning the response body
+// to higher layers.
+type httpContentEncoding string
+
+const (
+	httpContentEncodingGzip    httpContentEncoding = "gzip"
+	httpContentEncodingDeflate httpContentEncoding = "deflate"
+)
+
+// redactedHeaderName enumerates the lowercase header names that get
+// scrubbed in [redactedOutboundHeaders] before they reach the log
+// sink.
+type redactedHeaderName string
+
+const (
+	redactedHeaderAuthorization      redactedHeaderName = "authorization"
+	redactedHeaderXAPIKey            redactedHeaderName = "x-api-key"
+	redactedHeaderCookie             redactedHeaderName = "cookie"
+	redactedHeaderProxyAuthorization redactedHeaderName = "proxy-authorization"
+)
+
 func decodeResponseBody(resp *http.Response) {
 	enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
 	if enc == "" || enc == "identity" {
 		return
 	}
-	switch enc {
-	case "gzip":
+	switch httpContentEncoding(enc) {
+	case httpContentEncodingGzip:
 		zr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			anthropicRequestLog.Logger().Warn("anthropic.response.gzip_decode_failed",
-				"subcomponent", "anthropic", "err", err.Error())
+			anthropicRequestLog.Logger().Warn("anthropic.response.gzip_decode_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic", "err", err.Error())
 			return
 		}
 		resp.Body = &decodedBody{r: zr, src: resp.Body}
 		resp.Header.Del("Content-Encoding")
-	case "deflate":
+	case httpContentEncodingDeflate:
 		fr := flate.NewReader(resp.Body)
 		resp.Body = &decodedBody{r: fr, src: resp.Body}
 		resp.Header.Del("Content-Encoding")
 	default:
 		// br, zstd, etc. Keep raw bytes; callers will see binary in
 		// the slog body field if the server actually picks one of these.
-		anthropicRequestLog.Logger().Warn("anthropic.response.unsupported_encoding",
-			"subcomponent", "anthropic", "encoding", enc)
+		anthropicRequestLog.Logger().Warn("anthropic.response.unsupported_encoding", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic", "encoding", enc)
 	}
 }
 
@@ -764,14 +822,30 @@ type decodedBody struct {
 	src io.ReadCloser
 }
 
-func (d *decodedBody) Read(p []byte) (int, error) { return d.r.Read(p) }
+func (d *decodedBody) Read(p []byte) (int, error) {
+	n, err := d.r.Read(p)
+	switch {
+	case err == nil:
+		return n, nil
+	case errors.Is(err, io.EOF):
+		return n, io.EOF
+	default:
+		return n, fmt.Errorf("read decoded anthropic body: %w", err)
+	}
+}
+
 func (d *decodedBody) Close() error {
 	rerr := d.r.Close()
 	serr := d.src.Close()
 	if rerr != nil {
-		return rerr
+		slog.Warn("adapter.anthropic.decoded_body.reader_close_failed", "concern", "adapter.providers.anthropic.request", "err", rerr)
+		return fmt.Errorf("close decoded anthropic reader: %w", rerr)
 	}
-	return serr
+	if serr != nil {
+		slog.Warn("adapter.anthropic.decoded_body.source_close_failed", "concern", "adapter.providers.anthropic.request", "err", serr)
+		return fmt.Errorf("close anthropic source body: %w", serr)
+	}
+	return nil
 }
 
 // readDecodedBody reads resp.Body to EOF and closes it. Assumes
@@ -789,10 +863,10 @@ func redactedOutboundHeaders(h http.Header) map[string]string {
 	for key, values := range h {
 		lk := strings.ToLower(key)
 		joined := strings.Join(values, ", ")
-		switch lk {
-		case "authorization":
+		switch redactedHeaderName(lk) {
+		case redactedHeaderAuthorization:
 			out[lk] = fmt.Sprintf("Bearer <redacted len=%d>", len(joined)-len("Bearer "))
-		case "x-api-key", "cookie", "proxy-authorization":
+		case redactedHeaderXAPIKey, redactedHeaderCookie, redactedHeaderProxyAuthorization:
 			out[lk] = "<redacted>"
 		default:
 			out[lk] = joined

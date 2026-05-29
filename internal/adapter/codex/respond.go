@@ -6,13 +6,15 @@ import (
 
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	"goodkind.io/clyde/internal/clock"
 )
 
+// MergeEvents is part of Clyde's typed adapter surface.
 func MergeEvents(reqID, modelAlias, systemFingerprint string, events []adapterrender.Event, res RunResult) adapteropenai.ChatResponse {
 	collected := adapterrender.CollectMessage(events)
 	msg := adapteropenai.ChatMessage{
 		Role:    "assistant",
-		Content: json.RawMessage(strconv.Quote(collected.Text)),
+		Content: json.RawMessage(strconv.Quote(collected.Text)), Name: "", ToolCalls: nil, ToolCallID: "", Reasoning: "", ReasoningContent: "", Refusal: "", Annotations: nil,
 	}
 	if collected.Reasoning != "" {
 		msg.Reasoning = collected.Reasoning
@@ -26,13 +28,13 @@ func MergeEvents(reqID, modelAlias, systemFingerprint string, events []adapterre
 	return adapteropenai.ChatResponse{
 		ID:                reqID,
 		Object:            "chat.completion",
-		Created:           codexClock.Now().Unix(),
+		Created:           clock.Now().Unix(),
 		Model:             modelAlias,
 		SystemFingerprint: systemFingerprint,
 		Choices: []adapteropenai.ChatChoice{{
 			Index:        0,
 			Message:      msg,
-			FinishReason: res.FinishReason,
+			FinishReason: res.FinishReason, Logprobs: nil,
 		}},
 		Usage: &res.Usage,
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/transcript"
 	"goodkind.io/lmctl"
@@ -26,8 +27,8 @@ type Result struct {
 	Summary  string // LLM's description of what matched
 }
 
-// SearchWithDepth finds conversation messages with a configurable search depth.
-func SearchWithDepth(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
+// WithDepth finds conversation messages with a configurable search depth.
+func WithDepth(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
 	return searchInternal(ctx, slog.Default(), messages, query, cfg, depth)
 }
 
@@ -35,97 +36,95 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 	if len(messages) == 0 {
 		return nil, nil
 	}
-
-	// "quick" is embedding-only: no LLM involved.
 	if depth == "quick" {
-		log.InfoContext(ctx, "search starting (embedding only)",
-			"query", query,
-			"messages", len(messages),
-			"depth", depth,
-		)
-		start := searchClock.Now()
-		results, err := embeddingOnlySearch(ctx, log, messages, query, cfg)
-		log.InfoContext(ctx, "search complete",
-			"total_matches", len(results),
-			"total_duration", time.Since(start).Round(time.Millisecond),
-		)
-		return results, err
+		return runQuickSearch(ctx, log, messages, query, cfg)
 	}
-
-	// "extra-deep" runs the full pipeline and warns about runtime.
 	if depth == "extra-deep" {
-		log.WarnContext(ctx, "extra-deep search uses the full pipeline including large model verification; this may take 10+ minutes")
+		log.WarnContext(ctx, "extra-deep search uses the full pipeline including large model verification; this may take 10+ minutes", "concern", "search")
 	}
-
 	pipeline := cfg.Local.ResolvePipeline(depth)
 	if len(pipeline) == 0 {
 		return nil, fmt.Errorf("no search pipeline configured")
 	}
-
-	log.InfoContext(ctx, "search starting",
-		"query", query,
+	log.InfoContext(ctx, "search starting", "concern", "search", "query", query,
 		"messages", len(messages),
 		"depth", depth,
 		"layers", len(pipeline),
 	)
-	searchStart := searchClock.Now()
+	searchStart := clock.Now()
+	matched, currentModel, err := runSweepLayer(ctx, log, cfg, pipeline[0], messages, query)
+	if err != nil {
+		return nil, err
+	}
+	matched = runRerankLayers(ctx, log, cfg, pipeline, matched, query, currentModel)
+	log.InfoContext(ctx, "search complete", "concern", "search", "total_matches", len(matched),
+		"total_duration", clock.Since(searchStart).Round(time.Millisecond),
+	)
+	return matched, nil
+}
 
-	// Track current model so we only swap when needed
+func runQuickSearch(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig) ([]Result, error) {
+	log.InfoContext(ctx, "search starting (embedding only)", "concern", "search", "query", query,
+		"messages", len(messages),
+		"depth", "quick",
+	)
+	start := clock.Now()
+	results, err := embeddingOnlySearch(ctx, log, messages, query, cfg)
+	log.InfoContext(ctx, "search complete", "concern", "search", "total_matches", len(results),
+		"total_duration", clock.Since(start).Round(time.Millisecond),
+	)
+	return results, err
+}
+
+func runSweepLayer(ctx context.Context, log *slog.Logger, cfg config.SearchConfig, sweepLayer config.SearchLayer, messages []transcript.Message, query string) ([]Result, string, error) {
 	currentModel := ""
-
-	// Layer 1: sweep with fast model
-	sweepLayer := pipeline[0]
 	if cfg.Backend == "local" {
-		log.InfoContext(ctx, "loading sweep model", "model", sweepLayer.Model)
+		log.InfoContext(ctx, "loading sweep model", "concern", "search", "model", sweepLayer.Model)
 		if err := lmctl.EnsureLoaded(ctx, sweepLayer.Model,
 			lmctl.WithContextLength(cfg.Local.ContextLength),
 			lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
 			lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
 		); err != nil {
-			return nil, fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
+			log.WarnContext(ctx, "search.sweep_layer.model_load_failed", "concern", "search", "model", sweepLayer.Model, "err", err)
+			return nil, "", fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
 		}
 		currentModel = sweepLayer.Model
 	}
-	sweepStart := searchClock.Now()
+	sweepStart := clock.Now()
 	sweepClient := newClientForModel(cfg, sweepLayer.Model)
 	matched := sweepChunks(ctx, log, sweepClient, messages, query, cfg)
-	log.InfoContext(ctx, "sweep complete",
-		"model", sweepLayer.Model,
+	log.InfoContext(ctx, "sweep complete", "concern", "search", "model", sweepLayer.Model,
 		"matches", len(matched),
-		"duration", time.Since(sweepStart).Round(time.Millisecond),
+		"duration", clock.Since(sweepStart).Round(time.Millisecond),
 	)
+	return matched, currentModel, nil
+}
 
-	// Layer 2+: rerank/deep passes with progressively smarter models
+func runRerankLayers(ctx context.Context, log *slog.Logger, cfg config.SearchConfig, pipeline []config.SearchLayer, matched []Result, query string, currentModel string) []Result {
 	for i := 1; i < len(pipeline); i++ {
 		if len(matched) == 0 {
-			log.DebugContext(ctx, "no matches, skipping remaining layers")
+			log.DebugContext(ctx, "no matches, skipping remaining layers", "concern", "search")
 			break
 		}
 		layer := pipeline[i]
-
-		// Skip rerank if only 1 result (nothing to filter), but still run deep
 		if len(matched) <= 1 && layer.Name != "deep" {
-			log.DebugContext(ctx, "skipping rerank layer (single result)", "layer", layer.Name)
+			log.DebugContext(ctx, "skipping rerank layer (single result)", "concern", "search", "layer", layer.Name)
 			continue
 		}
-
-		// Swap model if this layer uses a different one
 		if cfg.Backend == "local" && layer.Model != currentModel {
-			log.DebugContext(ctx, "swapping model", "from", currentModel, "to", layer.Model, "layer", layer.Name)
+			log.DebugContext(ctx, "swapping model", "concern", "search", "from", currentModel, "to", layer.Model, "layer", layer.Name)
 			if err := lmctl.EnsureLoaded(ctx, layer.Model,
 				lmctl.WithContextLength(cfg.Local.ContextLength),
 				lmctl.WithMaxMemoryGB(cfg.Local.MaxMemoryGB),
 				lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
 			); err != nil {
-				log.WarnContext(ctx, "model load failed, skipping layer", "model", layer.Model, "err", err)
+				log.WarnContext(ctx, "model load failed, skipping layer", "concern", "search", "model", layer.Model, "err", err)
 				continue
 			}
 			currentModel = layer.Model
 		}
-
-		layerStart := searchClock.Now()
+		layerStart := clock.Now()
 		layerClient := newClientForModel(cfg, layer.Model)
-
 		beforeCount := len(matched)
 		switch layer.Name {
 		case "deep":
@@ -133,20 +132,14 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		default:
 			matched = rerankResults(ctx, layerClient, matched, query)
 		}
-		log.DebugContext(ctx, "layer complete",
-			"layer", layer.Name,
+		log.DebugContext(ctx, "layer complete", "concern", "search", "layer", layer.Name,
 			"model", layer.Model,
 			"before", beforeCount,
 			"after", len(matched),
-			"duration", time.Since(layerStart).Round(time.Millisecond),
+			"duration", clock.Since(layerStart).Round(time.Millisecond),
 		)
 	}
-
-	log.InfoContext(ctx, "search complete",
-		"total_matches", len(matched),
-		"total_duration", time.Since(searchStart).Round(time.Millisecond),
-	)
-	return matched, nil
+	return matched
 }
 
 // embeddingOnlySearch ranks chunks by cosine similarity and returns the top
@@ -157,14 +150,14 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		chunkSize = defaultChunkChars
 	}
 	chunks := chunkMessages(messages, chunkSize)
-	log.InfoContext(ctx, "quick search: chunked messages", "chunks", len(chunks), "messages", len(messages))
+	log.InfoContext(ctx, "quick search: chunked messages", "concern", "search", "chunks", len(chunks), "messages", len(messages))
 
 	if cfg.Backend != "local" {
 		return nil, fmt.Errorf("quick depth requires local backend with embedding model")
 	}
 
 	if err := ensureEmbeddingModelReady(ctx, cfg.Local); err != nil {
-		log.ErrorContext(ctx, "quick search: embedding model load failed", "err", err)
+		log.ErrorContext(ctx, "quick search: embedding model load failed", "concern", "search", "err", err)
 		return nil, fmt.Errorf("failed to load embedding model: %w", err)
 	}
 
@@ -185,22 +178,22 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 	}
 
 	// Embed query
-	queryEmbStart := searchClock.Now()
+	queryEmbStart := clock.Now()
 	queryEmb, err := filter.embed(ctx, []string{query})
 	if err != nil {
-		log.ErrorContext(ctx, "quick search: query embedding failed", "err", err)
+		log.ErrorContext(ctx, "quick search: query embedding failed", "concern", "search", "err", err)
 		return nil, fmt.Errorf("embedding query failed: %w", err)
 	}
-	log.DebugContext(ctx, "quick search: query embedded", "duration", time.Since(queryEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "quick search: query embedded", "concern", "search", "duration", clock.Since(queryEmbStart).Round(time.Millisecond))
 
 	// Embed all chunks in one batch
-	chunksEmbStart := searchClock.Now()
+	chunksEmbStart := clock.Now()
 	chunkEmbs, err := filter.embed(ctx, chunkTexts)
 	if err != nil {
-		log.ErrorContext(ctx, "quick search: chunk embedding failed", "chunks", len(chunkTexts), "err", err)
+		log.ErrorContext(ctx, "quick search: chunk embedding failed", "concern", "search", "chunks", len(chunkTexts), "err", err)
 		return nil, fmt.Errorf("embedding chunks failed: %w", err)
 	}
-	log.DebugContext(ctx, "quick search: chunks embedded", "chunks", len(chunkTexts), "duration", time.Since(chunksEmbStart).Round(time.Millisecond))
+	log.DebugContext(ctx, "quick search: chunks embedded", "concern", "search", "chunks", len(chunkTexts), "duration", clock.Since(chunksEmbStart).Round(time.Millisecond))
 
 	if len(queryEmb) == 0 || len(chunkEmbs) != len(chunks) {
 		return nil, fmt.Errorf("unexpected embedding response lengths")
@@ -229,12 +222,11 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		}
 	}
 
-	log.InfoContext(ctx, "quick search: embedding scored",
-		"total_chunks", len(chunks),
+	log.InfoContext(ctx, "quick search: embedding scored", "concern", "search", "total_chunks", len(chunks),
 		"hits", len(hits),
 		"threshold", filter.threshold,
-		"query_embed_duration", time.Since(queryEmbStart).Round(time.Millisecond),
-		"chunks_embed_duration", time.Since(chunksEmbStart).Round(time.Millisecond),
+		"query_embed_duration", clock.Since(queryEmbStart).Round(time.Millisecond),
+		"chunks_embed_duration", clock.Since(chunksEmbStart).Round(time.Millisecond),
 	)
 
 	results := make([]Result, len(hits))
@@ -254,7 +246,7 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 		chunkSize = defaultChunkChars
 	}
 	chunks := chunkMessages(messages, chunkSize)
-	log.InfoContext(ctx, "sweep: chunked messages", "chunks", len(chunks), "messages", len(messages), "chunk_size", chunkSize)
+	log.InfoContext(ctx, "sweep: chunked messages", "concern", "search", "chunks", len(chunks), "messages", len(messages), "chunk_size", chunkSize)
 
 	// Pre-filter with embeddings if available (local backend only).
 	// The embedding model is tiny (~0.1 GB) and can coexist with inference models.
@@ -288,22 +280,21 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 		go func(idx int, msgs []transcript.Message) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.ErrorContext(ctx, "sweep: chunk worker panic", "chunk", idx, "panic", r, "err", fmt.Errorf("panic: %v", r))
+					log.ErrorContext(ctx, "sweep: chunk worker panic", "concern", "search", "chunk", idx, "panic", r, "err", fmt.Errorf("panic: %v", r))
 				}
 			}()
 			defer wg.Done()
 			sem <- searchConcurrencyPermit{Acquired: true}
 			defer func() { <-sem }()
 
-			chunkStart := searchClock.Now()
+			chunkStart := clock.Now()
 			res, err := searchChunk(ctx, client, msgs, query)
 			results[idx] = chunkResult{idx: idx, result: res, err: err}
 			hit := res != nil && len(res.Messages) > 0
-			log.DebugContext(ctx, "sweep: chunk done",
-				"chunk", idx,
+			log.DebugContext(ctx, "sweep: chunk done", "concern", "search", "chunk", idx,
 				"messages", len(msgs),
 				"hit", hit,
-				"duration", time.Since(chunkStart).Round(time.Millisecond),
+				"duration", clock.Since(chunkStart).Round(time.Millisecond),
 			)
 		}(i, chunk)
 	}
@@ -459,7 +450,8 @@ Respond ONLY with message numbers + summary, or NO. Nothing else.`, query, convT
 
 	resp, err := client.Complete(ctx, prompt)
 	if err != nil {
-		return nil, err
+		slog.WarnContext(ctx, "search.search_chunk.complete_failed", "concern", "search", "err", err)
+		return nil, fmt.Errorf("complete search verification: %w", err)
 	}
 
 	resp = strings.TrimSpace(resp)

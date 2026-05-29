@@ -11,7 +11,6 @@ import (
 func TestLogTransportPreparedIncludesParityFields(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
-	maxCompletion := 2048
 
 	LogTransportPrepared(context.Background(), log, TransportTelemetry{
 		RequestID:                "req-1",
@@ -19,7 +18,6 @@ func TestLogTransportPreparedIncludesParityFields(t *testing.T) {
 		UpstreamModel:            "gpt-5.4",
 		Transport:                "responses_websocket",
 		ServiceTier:              "priority",
-		MaxCompletion:            &maxCompletion,
 		PromptCacheKey:           "cursor:conv-123",
 		ClientMetadata:           map[string]string{"x-codex-window-id": "cursor:conv-123:0"},
 		InputCount:               3,
@@ -58,7 +56,7 @@ func TestLogUsageTelemetryDistinguishesExplicitZeroCachedTokens(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	LogUsageTelemetry(context.Background(), log, CodexUsageTelemetry{
+	LogUsageTelemetry(context.Background(), log, UsageTelemetry{
 		UsagePresent:               true,
 		InputTokens:                100,
 		OutputTokens:               8,
@@ -67,7 +65,7 @@ func TestLogUsageTelemetryDistinguishesExplicitZeroCachedTokens(t *testing.T) {
 		CachedTokens:               0,
 		OutputTokensDetailsPresent: true,
 		ReasoningOutputTokens:      0,
-	}, CodexUsageLogContext{
+	}, UsageLogContext{
 		RequestID:          "req-1",
 		CursorRequestID:    "cursor-1",
 		Alias:              "clyde-codex-5.5-high",
@@ -99,12 +97,12 @@ func TestLogUsageTelemetryDistinguishesOmittedInputTokenDetails(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	LogUsageTelemetry(context.Background(), log, CodexUsageTelemetry{
+	LogUsageTelemetry(context.Background(), log, UsageTelemetry{
 		UsagePresent: true,
 		InputTokens:  100,
 		OutputTokens: 8,
 		TotalTokens:  108,
-	}, CodexUsageLogContext{
+	}, UsageLogContext{
 		RequestID:     "req-1",
 		Alias:         "clyde-codex-5.5-high",
 		UpstreamModel: "gpt-5.5",

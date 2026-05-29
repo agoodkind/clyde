@@ -46,15 +46,15 @@ compress = true
 
 # Optional per-process log file overrides.
 # Defaults:
-#   TUI and CLI commands -> $XDG_STATE_HOME/clyde/clyde-tui.jsonl
-#   daemon command       -> $XDG_STATE_HOME/clyde/clyde-daemon.jsonl
+#   CLI commands   -> $XDG_STATE_HOME/clyde/clyde-cli.jsonl
+#   daemon command -> $XDG_STATE_HOME/clyde/clyde-daemon.jsonl
 [logging.paths]
-tui = ""
+cli = ""
 daemon = ""
 [adapter]
 enabled = true
 direct_oauth = true
-default_model = "clyde-opus-4-7"
+default_model = "clyde-opus-4-8"
 
 [adapter.notices]
 enabled = true
@@ -62,7 +62,6 @@ enabled = true
 [adapter.codex]
 enabled = true
 native_model_routing = "codex"
-model_prefixes = ["gpt-", "o"]
 
 # GPT/Codex model aliases are config-owned. `tokens` is the advertised
 # catalog window; `observed_tokens` is the Responses HTTP window Clyde
@@ -110,6 +109,28 @@ model = ""
 # backend = "passthrough_override"
 # passthrough_override = "local"
 
+# Optional: per-model public list pricing in dollars-per-million-tokens.
+# The daemon prices recorded token counts at read time from this table,
+# matching the recorded model id by longest-prefix so one entry covers
+# context-suffixed and snapshot variants (e.g. "claude-opus-4-8" covers
+# "claude-opus-4-8[1m]"). Omit a sub-table to leave that model's
+# estimated cost at zero. Codex models price exactly the same way, which
+# is the only way codex spend is counted.
+#
+# Claude Opus 4.8 list pricing ($5/$25 per MTok in/out), verified against
+# the Claude API models overview 2026-05-28. Cache rates use Anthropic's
+# standard 5m-TTL multipliers: write = 1.25x input, read = 0.1x input.
+[adapter.pricing."claude-opus-4-8"]
+input_per_mtok = 5.0
+output_per_mtok = 25.0
+cache_write_per_mtok = 6.25
+cache_read_per_mtok = 0.50
+
+# [adapter.pricing."gpt-5"]
+# input_per_mtok = 1.25
+# output_per_mtok = 10
+# cache_read_per_mtok = 0.125
+
 [adapter.anthropic.oauth]
 token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
 messages_url = "https://REDACTED-UPSTREAM/v1/messages"
@@ -124,32 +145,6 @@ scopes = [
   "user:mcp_servers",
   "user:file_upload",
 ]
-
-# Multi-account OAuth rotation. The daemon always serves a token from the
-# harvested Claude Code credentials; this block tunes the rotation layer.
-# switch_on_limit gates throttle-based account switching only: when false the
-# rotator serves the primary harvested account and does not switch on a
-# 429/throttle signal; when true a throttle moves selection to the next
-# non-throttled account. scan_interval is the cadence the harvest pass imports
-# upstream Claude Code credentials into the per-account store (default 5m).
-# refresh_interval is the proactive token-refresh cadence (default 30m).
-# Manage accounts with `clyde oauth login`, `clyde oauth list`, and
-# `clyde oauth forget`.
-[adapter.anthropic.oauth.accounts]
-switch_on_limit = true
-scan_interval = "5m"
-refresh_interval = "30m"
-# refresh an account only when the access token is within this window of expiry.
-refresh_safety_window = "1h"
-# set_claude_config_dir makes a Clyde-launched `claude` authenticate as the
-# rotator's currently-selected account instead of your own Claude Code login.
-# The daemon plants the selected account's .credentials.json (0600) in a fresh
-# scratch dir and points the child at it via CLYDE_CONFIG_DIR; on macOS the
-# keychain entry is empty for any non-default config dir, so claude reads the
-# planted file and never touches your real keychain or ~/.claude. The scratch
-# dir is removed when the launched claude exits and on daemon shutdown. Default
-# is false because it changes how claude launches.
-set_claude_config_dir = false
 
 [adapter.client_identity]
 beta_header = "REDACTED-OAUTH-BETA,REDACTED-CC-BETA,effort-2025-11-24"
@@ -189,19 +184,26 @@ contexts = [
   { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
 ]
 
-# opus-4-7: low/medium/high/max effort, all four thinking modes,
-# 200k and 1M context. Empirically the highest-capability family on
-# the account. Verified 2026-04-18.
-[adapter.families.opus-4-7]
-model = "claude-opus-4-7"
+# opus-4-8: Claude Opus 4.8 (id "claude-opus-4-8"). 1M context, 128k max
+# output, $5/$25 per MTok in/out, adaptive thinking (same wire behavior as
+# 4.7). low/medium/high/max effort, all four thinking modes, 200k and 1M
+# context. Verified against the Claude API models overview 2026-05-28.
+# thinking_wire_mode = "adaptive" is required: the registry no longer
+# applies an implicit per-model remap, so the family must declare it.
+# Tip: for an evergreen Cursor id, set alias_prefix to a version-free stem
+# (e.g. alias_prefix = "opal") so aliases like clyde-opal-1m-high survive
+# model bumps; this example keeps the slug-derived clyde-opus-4-8-* aliases.
+[adapter.families.opus-4-8]
+model = "claude-opus-4-8"
 # Optional: prepend a shared developer instruction file before any caller
 # system message. Paths resolve relative to this config.toml.
-# instructions_file = "prompts/opus-4-7.md"
+# instructions_file = "prompts/opus-4-8.md"
 supports_tools = true
 supports_vision = true
 efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
-max_output_tokens = 32000
+thinking_wire_mode = "adaptive"
+max_output_tokens = 128000
 contexts = [
   { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
   { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
@@ -230,3 +232,26 @@ efforts = []
 thinking_modes = ["default", "enabled", "disabled"]
 max_output_tokens = 16000
 contexts = [{ tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" }]
+
+# MITM baseline / drift loop.
+#
+# The loop closes the cycle capture -> baseline refresh -> drift log:
+# every captured request to a known upstream debounces a baseline refresh,
+# and the daemon also runs a periodic compare-only drift check that diffs
+# the current local capture store against a pinned reference snapshot and
+# appends the outcome to <drift_log_dir>/<upstream>.jsonl. Operators enable
+# the loop by adding this [mitm.drift] block; with enabled = false (or the
+# block absent) nothing runs.
+[mitm.drift]
+enabled = true
+interval = "5m"
+drift_log_dir = "~/.local/state/clyde/mitm-drift"
+capture_root = "~/.local/state/clyde/mitm"
+
+[mitm.drift.upstreams.claude-code]
+reference = "~/.local/state/clyde/mitm-baselines/claude-code/reference-v2.toml"
+include_ua = ["claude-cli"]
+
+[mitm.drift.upstreams.codex-cli]
+reference = "~/.local/state/clyde/mitm-baselines/codex-cli/reference-v2.toml"
+include_ua = ["codex_cli_rs", "codex-tui"]

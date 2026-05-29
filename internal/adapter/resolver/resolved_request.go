@@ -3,6 +3,7 @@ package resolver
 import (
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -57,6 +58,37 @@ type ResolvedRequest struct {
 	// for this alias. Per-provider request builders gate output_config
 	// (and equivalents) on this being non-empty.
 	Efforts []string
+	// Alias is the public alias the client sent, before normalization.
+	// Carried for capability reports and cross-layer logging that need
+	// the caller-facing model name rather than the resolved snapshot.
+	Alias string
+	// SupportsTools mirrors the family's declared tool capability. Used
+	// by capability reports; per-provider dispatch does not gate on it.
+	SupportsTools bool
+	// SupportsVision mirrors the family's declared vision capability.
+	// Used by capability reports; per-provider dispatch does not gate on
+	// it.
+	SupportsVision bool
+	// ObservedContext is the provider-specific context window Clyde
+	// exposes for capability reports when it differs from the advertised
+	// budget. Zero means use the ContextBudget input tokens.
+	ObservedContext int
+	// ThinkingModes enumerates the allowed thinking values the family
+	// declared for this alias. Distinct from Thinking, which is the
+	// single bound mode for the request.
+	ThinkingModes []string
+	// MaxOutputTokens caps the family's output tokens. Carried alongside
+	// ContextBudget.OutputTokens during the shadow-run; a later phase
+	// dedups the two.
+	MaxOutputTokens int
+	// PassthroughOverrideName names an entry in the adapter's passthrough
+	// override table. Set only when the backend is passthrough_override
+	// and a named override applies.
+	PassthroughOverrideName string
+	// OpenAICompatPassthrough carries the inline configured upstream used
+	// for passthrough_override when no named override applies. Empty
+	// fields mean no inline passthrough was configured.
+	OpenAICompatPassthrough config.AdapterOpenAICompatPassthrough
 
 	Cursor adaptercursor.Request
 	OpenAI adapteropenai.ChatRequest

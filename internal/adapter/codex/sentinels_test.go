@@ -79,10 +79,10 @@ func codexOriginThinkingEnvelope(body string) string {
 }
 
 // TestSanitizeForUpstreamCacheWithStrategyPlainTextConcatPreservesThinking
-// verifies that operators who flip Codex's inbound_thinking_materialization
-// from the default `drop` to `plain_text_concat` actually get the thinking
-// content preserved as plain prose for the model. The lever is documented
-// at config.AdapterSyntheticContent.Codex.InboundThinkingMaterialization.
+// verifies that operators who flip Codex's round_trip_summary from the
+// default `native_summary_field` to `plain_text_concat` actually get the
+// thinking content preserved as plain prose for the model. The lever is
+// documented at config.AdapterCodexReasoning.RoundTripSummary.
 func TestSanitizeForUpstreamCacheWithStrategyPlainTextConcatPreservesThinking(t *testing.T) {
 	thinking := codexOriginThinkingEnvelope("the model considered three options")
 	in := "Pre.\n\n" + thinking + "Post."

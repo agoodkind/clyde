@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,8 @@ type installationFileFinder struct{}
 func (installationFileFinder) codexPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		slog.Warn("adapter.codex.installation.user_home_failed", "concern", "adapter.providers.codex.request", "err", err)
+		return "", fmt.Errorf("user home dir: %w", err)
 	}
 	return filepath.Join(home, ".codex", "installation_id"), nil
 }
@@ -54,7 +56,12 @@ func (installationFileFinder) clydePath() (string, error) {
 }
 
 func newInstallationLoader(finder installationPathFinder) *installationLoader {
-	return &installationLoader{finder: finder}
+	return &installationLoader{
+		finder: finder, mu: sync.
+			Mutex{},
+
+		cached: "",
+	}
 }
 
 func (l *installationLoader) Load() (string, error) {
@@ -110,8 +117,7 @@ func generateInstallationID() (string, error) {
 	log := codexConcernLog.Logger()
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		log.Warn("adapter.codex.installation_id.rand_failed",
-			"subcomponent", "codex",
+		log.Warn("adapter.codex.installation_id.rand_failed", "concern", "adapter.providers.codex.request", "subcomponent", "codex",
 			"err", err.Error(),
 		)
 		return "", fmt.Errorf("codex installation id rand: %w", err)
@@ -125,16 +131,14 @@ func persistInstallationID(path, id string) error {
 		return errors.New("codex installation id path is empty")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Warn("adapter.codex.installation_id.mkdir_failed",
-			"subcomponent", "codex",
+		log.Warn("adapter.codex.installation_id.mkdir_failed", "concern", "adapter.providers.codex.request", "subcomponent", "codex",
 			"path", filepath.Dir(path),
 			"err", err.Error(),
 		)
 		return fmt.Errorf("codex installation id mkdir: %w", err)
 	}
 	if err := os.WriteFile(path, []byte(id+"\n"), 0o600); err != nil {
-		log.Warn("adapter.codex.installation_id.write_failed",
-			"subcomponent", "codex",
+		log.Warn("adapter.codex.installation_id.write_failed", "concern", "adapter.providers.codex.request", "subcomponent", "codex",
 			"path", path,
 			"id_len", len(id),
 			"err", err.Error(),

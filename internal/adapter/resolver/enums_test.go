@@ -13,7 +13,7 @@ func TestProviderIDString(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := tc.id.String(); got != tc.want {
-			t.Errorf("ProviderID(%q).String() = %q, want %q", tc.id, got, tc.want)
+			t.Errorf("ProviderID(%v).String() = %q, want %q", tc.id, got, tc.want)
 		}
 	}
 }
@@ -30,7 +30,7 @@ func TestProviderIDValid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := tc.id.Valid(); got != tc.want {
-			t.Errorf("ProviderID(%q).Valid() = %v, want %v", tc.id, got, tc.want)
+			t.Errorf("ProviderID(%v).Valid() = %v, want %v", tc.id, got, tc.want)
 		}
 	}
 }

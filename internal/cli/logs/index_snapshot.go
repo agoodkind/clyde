@@ -88,8 +88,7 @@ func readInventoryIndexSnapshot(stateRoot string) inventoryIndexSnapshot {
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn(
-				"cli.logs.inventory.index_open_failed",
-				"component", "cli",
+				"cli.logs.inventory.index_open_failed", "concern", "cli.logs", "component", "cli",
 				"path", path,
 				"err", err,
 			)
@@ -99,8 +98,7 @@ func readInventoryIndexSnapshot(stateRoot string) inventoryIndexSnapshot {
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
 			slog.Warn(
-				"cli.logs.inventory.index_close_failed",
-				"component", "cli",
+				"cli.logs.inventory.index_close_failed", "concern", "cli.logs", "component", "cli",
 				"path", path,
 				"err", closeErr,
 			)
@@ -115,8 +113,7 @@ func readInventoryIndexSnapshot(stateRoot string) inventoryIndexSnapshot {
 		if readErr != nil {
 			if !errors.Is(readErr, io.EOF) {
 				slog.Warn(
-					"cli.logs.inventory.index_read_failed",
-					"component", "cli",
+					"cli.logs.inventory.index_read_failed", "concern", "cli.logs", "component", "cli",
 					"path", path,
 					"err", readErr,
 				)

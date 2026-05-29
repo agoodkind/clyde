@@ -63,7 +63,7 @@ func TranslateRequest(req adapteropenai.ChatRequest) Request {
 		),
 		WorkspacePath:   workspacePath(req),
 		NormalizedModel: NormalizeModelAlias(req.Model),
-		Metadata:        metadataMap(req.Metadata),
+		Metadata:        metadataMap(req.Metadata), RawToolNames: nil, Mode: "", CanSwitchMode: false, CanSpawnAgent: false, PathKind: "", HasSubagentTool: false, HasSwitchModeTool: false, HasAskQuestionTool: false, HasCreatePlanTool: false, HasApplyPatchTool: false, MCPToolNames: nil,
 	}
 	translated.RawToolNames = rawToolNames(req)
 	translated.Mode = requestMode(translated.RawToolNames)
@@ -100,15 +100,25 @@ func collectMCPToolNames(toolNames []string) []string {
 	return out
 }
 
+// mcpToolName enumerates the Cursor-emitted MCP tool aliases the
+// adapter recognizes as MCP routing entry points.
+type mcpToolName string
+
+const (
+	mcpToolCallTool      mcpToolName = "CallMcpTool"
+	mcpToolFetchResource mcpToolName = "FetchMcpResource"
+)
+
 func isMCPToolName(name string) bool {
-	switch name {
-	case "CallMcpTool", "FetchMcpResource":
+	switch mcpToolName(name) {
+	case mcpToolCallTool, mcpToolFetchResource:
 		return true
 	}
 	lowered := strings.ToLower(name)
 	return strings.Contains(lowered, "mcp")
 }
 
+// Context is part of Clyde's typed adapter surface.
 func (r Request) Context() Context {
 	return Context{
 		User:           r.User,

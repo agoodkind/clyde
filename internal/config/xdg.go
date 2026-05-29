@@ -28,10 +28,6 @@ func (r xdgResolver) cacheRoot() string {
 	return r.appScopedRoot("XDG_CACHE_HOME", ".cache")
 }
 
-func (r xdgResolver) dataRoot() string {
-	return r.appScopedRoot("XDG_DATA_HOME", filepath.Join(".local", "share"))
-}
-
 func (r xdgResolver) stateRoot() string {
 	return r.appScopedRoot("XDG_STATE_HOME", filepath.Join(".local", "state"))
 }
@@ -116,19 +112,14 @@ func DaemonSocketPath() string {
 	return filepath.Join(RuntimeDir(), "daemon.sock")
 }
 
-// SessionRuntimeDir returns the runtime directory for a specific wrapper session.
-func SessionRuntimeDir(wrapperID string) string {
-	return filepath.Join(RuntimeDir(), "sessions", wrapperID)
-}
-
 // EnsureRuntimeDir creates the clyde runtime directory with correct permissions.
 // XDG spec requires 0700 for XDG_RUNTIME_DIR contents.
 func EnsureRuntimeDir() error {
 	dir := RuntimeDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log := slog.Default().With("concern", "process.daemon.config")
-		log.Warn("config.runtime_dir.create_failed",
-			"component", "config",
+	err := os.MkdirAll(dir, 0o700)
+	if err != nil {
+		log := slog.Default()
+		log.Warn("config.runtime_dir.create_failed", "concern", "config", "component", "config",
 			"subcomponent", "runtime_dir",
 			"path", dir,
 			"err", err,

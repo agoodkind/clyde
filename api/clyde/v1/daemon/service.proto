@@ -4,56 +4,10 @@ package clyde.v1;
 
 option go_package = "goodkind.io/clyde/api/clyde/v1;clydev1";
 
-import "clyde/v1/daemon/bridge.proto";
-import "clyde/v1/daemon/compact.proto";
-import "clyde/v1/daemon/context.proto";
-import "clyde/v1/daemon/oauth_account.proto";
 import "clyde/v1/daemon/provider.proto";
-import "clyde/v1/daemon/registry.proto";
-import "clyde/v1/daemon/session.proto";
-import "clyde/v1/daemon/settings.proto";
 
 service ClydeService {
-  rpc AcquireSession(AcquireSessionRequest) returns (AcquireSessionResponse);
-  rpc ReleaseSession(ReleaseSessionRequest) returns (ReleaseSessionResponse);
-  rpc HookEvent(HookEventRequest) returns (HookEventResponse);
-  rpc ListActiveSessions(ListActiveSessionsRequest) returns (ListActiveSessionsResponse);
-  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
-  rpc GetSessionDetail(GetSessionDetailRequest) returns (GetSessionDetailResponse);
-  rpc GetSessionExportStats(GetSessionExportStatsRequest) returns (GetSessionExportStatsResponse);
-  rpc ExportSession(ExportSessionRequest) returns (ExportSessionResponse);
-  rpc TriggerScan(TriggerScanRequest) returns (TriggerScanResponse);
   rpc ReloadDaemon(ReloadDaemonRequest) returns (ReloadDaemonResponse);
-  rpc SubscribeRegistry(SubscribeRegistryRequest) returns (stream SubscribeRegistryResponse);
   rpc GetProviderStats(GetProviderStatsRequest) returns (GetProviderStatsResponse);
   rpc SubscribeProviderStats(SubscribeProviderStatsRequest) returns (stream ProviderStatsEvent);
-  rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse);
-  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
-  rpc UpdateSessionMetadata(UpdateSessionMetadataRequest) returns (UpdateSessionMetadataResponse);
-  rpc UpdateSessionSettings(UpdateSessionSettingsRequest) returns (UpdateSessionSettingsResponse);
-  rpc UpdateGlobalSettings(UpdateGlobalSettingsRequest) returns (UpdateGlobalSettingsResponse);
-  rpc ListConfigControls(ListConfigControlsRequest) returns (ListConfigControlsResponse);
-  rpc UpdateConfigControl(UpdateConfigControlRequest) returns (UpdateConfigControlResponse);
-  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
-  rpc StartRemoteSession(StartRemoteSessionRequest) returns (StartRemoteSessionResponse);
-  rpc ListLiveSessions(ListLiveSessionsRequest) returns (ListLiveSessionsResponse);
-  rpc StartLiveSession(StartLiveSessionRequest) returns (StartLiveSessionResponse);
-  rpc SendLiveSession(SendLiveSessionRequest) returns (SendLiveSessionResponse);
-  rpc StreamLiveSession(StreamLiveSessionRequest) returns (stream StreamLiveSessionResponse);
-  rpc StopLiveSession(StopLiveSessionRequest) returns (StopLiveSessionResponse);
-  rpc AcquireForegroundSession(AcquireForegroundSessionRequest) returns (AcquireForegroundSessionResponse);
-  rpc ReleaseForegroundSession(ReleaseForegroundSessionRequest) returns (ReleaseForegroundSessionResponse);
-  rpc ProviderLaunchEnvironment(ProviderLaunchEnvironmentRequest) returns (ProviderLaunchEnvironmentResponse);
-  rpc ListBridges(ListBridgesRequest) returns (ListBridgesResponse);
-  rpc TailTranscript(TailTranscriptRequest) returns (stream TailTranscriptResponse);
-  rpc SendToSession(SendToSessionRequest) returns (SendToSessionResponse);
-  rpc CompactPreview(CompactRunRequest) returns (stream CompactEvent);
-  rpc CompactApply(CompactRunRequest) returns (stream CompactEvent);
-  rpc CompactUndo(CompactUndoRequest) returns (CompactUndoResponse);
-  rpc ProbeContextUsage(ProbeContextUsageRequest) returns (ProbeContextUsageResponse);
-  rpc CalibrateSession(CalibrateSessionRequest) returns (CalibrateSessionResponse);
-  rpc SetCalibration(SetCalibrationRequest) returns (SetCalibrationResponse);
-  rpc OAuthAccountList(OAuthAccountListRequest) returns (OAuthAccountListResponse);
-  rpc OAuthAccountLogin(OAuthAccountLoginRequest) returns (stream OAuthAccountLoginEvent);
-  rpc OAuthAccountForget(OAuthAccountForgetRequest) returns (OAuthAccountForgetResponse);
 }

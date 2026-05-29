@@ -69,7 +69,7 @@ func newCaptureExtension(exchange mitm.CaptureExchange) CaptureExtension {
 		Kind:                captureKind,
 		T:                   capturedAt.Unix(),
 		TS:                  capturedAt.Format(time.RFC3339Nano),
-		Provider:            ProviderID,
+		Provider:            ProviderName,
 		ConcernName:         concern,
 		Host:                exchange.Host,
 		Method:              exchange.Method,

@@ -14,7 +14,7 @@ import (
 // absent in the candidate, and Extra flags fields the candidate
 // adds.
 func DiffSnapshots(reference, candidate Snapshot) DiffReport {
-	report := DiffReport{Upstream: reference.Upstream.Name}
+	report := DiffReport{Upstream: reference.Upstream.Name, Mismatches: nil, Extra: nil, Missing: nil}
 
 	addMismatch := func(field, expected, got, reason string) {
 		report.Mismatches = append(report.Mismatches, DiffMismatch{
@@ -106,12 +106,12 @@ func stringSetDiff(reference, candidate []string, field string, missing, extra [
 	}
 	for v := range refSet {
 		if !candSet[v] {
-			missing = append(missing, DiffMismatch{Field: field, Expected: v, Reason: "candidate missing key"})
+			missing = append(missing, DiffMismatch{Field: field, Expected: v, Reason: "candidate missing key", Got: ""})
 		}
 	}
 	for v := range candSet {
 		if !refSet[v] {
-			extra = append(extra, DiffMismatch{Field: field, Got: v, Reason: "candidate has extra key"})
+			extra = append(extra, DiffMismatch{Field: field, Got: v, Reason: "candidate has extra key", Expected: ""})
 		}
 	}
 	return missing, extra
@@ -130,7 +130,7 @@ func headerSetDiff(reference, candidate []SnapshotHeader, missing, extra []DiffM
 		candVal, ok := candMap[name]
 		if !ok {
 			missing = append(missing, DiffMismatch{
-				Field: "handshake.headers." + name, Expected: refVal, Reason: "candidate missing header",
+				Field: "handshake.headers." + name, Expected: refVal, Reason: "candidate missing header", Got: "",
 			})
 			continue
 		}
@@ -143,7 +143,7 @@ func headerSetDiff(reference, candidate []SnapshotHeader, missing, extra []DiffM
 	for name, candVal := range candMap {
 		if _, ok := refMap[name]; !ok {
 			extra = append(extra, DiffMismatch{
-				Field: "handshake.headers." + name, Got: candVal, Reason: "candidate has extra header",
+				Field: "handshake.headers." + name, Got: candVal, Reason: "candidate has extra header", Expected: "",
 			})
 		}
 	}

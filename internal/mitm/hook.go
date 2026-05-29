@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -129,7 +130,7 @@ type hookStaging struct {
 func newHookStaging(log *slog.Logger, baseDir, requestID string) (*hookStaging, error) {
 	dir := filepath.Join(baseDir, requestID)
 	if err := os.MkdirAll(dir, hookTempDirMode); err != nil {
-		log.Warn("mitm.hook.staging_create_failed", "dir", dir, "err", err)
+		log.Warn("mitm.hook.staging_create_failed", "concern", "providers.mitm.wire", "dir", dir, "err", err)
 		return nil, fmt.Errorf("create hook staging dir %s: %w", dir, err)
 	}
 	return &hookStaging{
@@ -142,7 +143,7 @@ func newHookStaging(log *slog.Logger, baseDir, requestID string) (*hookStaging, 
 
 func (h *hookStaging) cleanup(log *slog.Logger) {
 	if err := os.RemoveAll(h.dir); err != nil {
-		log.Warn("mitm.hook.staging_cleanup_failed", "dir", h.dir, "err", err)
+		log.Warn("mitm.hook.staging_cleanup_failed", "concern", "providers.mitm.wire", "dir", h.dir, "err", err)
 	}
 }
 
@@ -187,30 +188,27 @@ func runHook(ctx context.Context, d *hookDispatch) (*hookResult, error) {
 	}
 	stdinBytes, err := json.Marshal(envelope)
 	if err != nil {
-		d.log.WarnContext(ctx, "mitm.hook.envelope_marshal_failed", "rule", d.rule.Name, "err", err)
+		d.log.WarnContext(ctx, "mitm.hook.envelope_marshal_failed", "concern", "providers.mitm.wire", "rule", d.rule.Name, "err", err)
 		return nil, fmt.Errorf("marshal hook envelope: %w", err)
 	}
-	started := currentTime()
-	d.log.InfoContext(ctx, "mitm.hook.spawn",
-		"rule", d.rule.Name,
+	started := clock.Now()
+	d.log.InfoContext(ctx, "mitm.hook.spawn", "concern", "providers.mitm.wire", "rule", d.rule.Name,
 		"command", d.rule.Command,
 		"mode", envelope.Mode,
 		"request_id", d.requestID,
 	)
 	stdout, runErr := execHookCommand(hookCtx, d.rule.Command, d.rule.Args, stdinBytes)
 	if runErr != nil {
-		d.log.WarnContext(ctx, "mitm.hook.spawn_failed",
-			"rule", d.rule.Name,
+		d.log.WarnContext(ctx, "mitm.hook.spawn_failed", "concern", "providers.mitm.wire", "rule", d.rule.Name,
 			"command", d.rule.Command,
 			"err", runErr,
-			"duration_ms", time.Since(started).Milliseconds(),
+			"duration_ms", clock.Since(started).Milliseconds(),
 		)
 		return nil, fmt.Errorf("hook %q: %w", d.rule.Name, runErr)
 	}
 	resp := hookEnvelopeResponse{Status: 0, Headers: nil}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &resp); err != nil {
-		d.log.WarnContext(ctx, "mitm.hook.envelope_invalid",
-			"rule", d.rule.Name,
+		d.log.WarnContext(ctx, "mitm.hook.envelope_invalid", "concern", "providers.mitm.wire", "rule", d.rule.Name,
 			"stdout", stdout,
 			"err", err,
 		)
@@ -221,19 +219,18 @@ func runHook(ctx context.Context, d *hookDispatch) (*hookResult, error) {
 	}
 	bodyInfo, err := os.Stat(d.staging.outputBodyPath)
 	if err != nil {
-		d.log.WarnContext(ctx, "mitm.hook.output_stat_failed", "rule", d.rule.Name, "path", d.staging.outputBodyPath, "err", err)
+		d.log.WarnContext(ctx, "mitm.hook.output_stat_failed", "concern", "providers.mitm.wire", "rule", d.rule.Name, "path", d.staging.outputBodyPath, "err", err)
 		return nil, fmt.Errorf("stat hook output body: %w", err)
 	}
 	bodyFile, err := os.Open(d.staging.outputBodyPath)
 	if err != nil {
-		d.log.WarnContext(ctx, "mitm.hook.output_open_failed", "rule", d.rule.Name, "path", d.staging.outputBodyPath, "err", err)
+		d.log.WarnContext(ctx, "mitm.hook.output_open_failed", "concern", "providers.mitm.wire", "rule", d.rule.Name, "path", d.staging.outputBodyPath, "err", err)
 		return nil, fmt.Errorf("open hook output body: %w", err)
 	}
-	d.log.InfoContext(ctx, "mitm.hook.completed",
-		"rule", d.rule.Name,
+	d.log.InfoContext(ctx, "mitm.hook.completed", "concern", "providers.mitm.wire", "rule", d.rule.Name,
 		"status", resp.Status,
 		"output_bytes", bodyInfo.Size(),
-		"duration_ms", time.Since(started).Milliseconds(),
+		"duration_ms", clock.Since(started).Milliseconds(),
 	)
 	return &hookResult{
 		Status:        resp.Status,
@@ -249,8 +246,7 @@ func runHook(ctx context.Context, d *hookDispatch) (*hookResult, error) {
 // keeps runHook below the funlen ceiling.
 func stageHookEnvelope(d *hookDispatch) (hookEnvelopeRequest, error) {
 	if err := os.WriteFile(d.staging.requestBodyPath, d.requestRaw, 0o600); err != nil {
-		d.log.Warn("mitm.hook.request_body_write_failed",
-			"rule", d.rule.Name,
+		d.log.Warn("mitm.hook.request_body_write_failed", "concern", "providers.mitm.wire", "rule", d.rule.Name,
 			"path", d.staging.requestBodyPath,
 			"err", err,
 		)
@@ -283,8 +279,7 @@ func stageHookEnvelope(d *hookDispatch) (hookEnvelopeRequest, error) {
 	}
 	if d.upstream != nil {
 		if err := os.WriteFile(d.staging.upstreamBodyPath, d.upstream.Body, 0o600); err != nil {
-			d.log.Warn("mitm.hook.upstream_body_write_failed",
-				"rule", d.rule.Name,
+			d.log.Warn("mitm.hook.upstream_body_write_failed", "concern", "providers.mitm.wire", "rule", d.rule.Name,
 				"path", d.staging.upstreamBodyPath,
 				"err", err,
 			)
@@ -317,12 +312,11 @@ func stageHookEnvelope(d *hookDispatch) (hookEnvelopeRequest, error) {
 // that hook paths are resolved up front and not derived from a
 // search PATH at run time.
 func execHookCommand(ctx context.Context, command string, extraArgs []string, stdinBytes []byte) (string, error) {
-	slog.DebugContext(ctx, "mitm.hook.exec",
-		"command", command,
+	slog.DebugContext(ctx, "mitm.hook.exec", "concern", "providers.mitm.wire", "command", command,
 		"argv_count", len(extraArgs),
 	)
 	if !filepath.IsAbs(command) {
-		slog.WarnContext(ctx, "mitm.hook.exec_relative_path_rejected", "command", command)
+		slog.WarnContext(ctx, "mitm.hook.exec_relative_path_rejected", "concern", "providers.mitm.wire", "command", command)
 		return "", fmt.Errorf("hook command must be an absolute path: %s", command)
 	}
 	args := make([]string, 0, len(extraArgs))
@@ -333,8 +327,7 @@ func execHookCommand(ctx context.Context, command string, extraArgs []string, st
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		slog.WarnContext(ctx, "mitm.hook.exec_failed",
-			"command", command,
+		slog.WarnContext(ctx, "mitm.hook.exec_failed", "concern", "providers.mitm.wire", "command", command,
 			"err", err,
 			"stderr", stderr.String(),
 		)
@@ -369,7 +362,7 @@ func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath
 		var err error
 		responseFile, err = os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
 		if err != nil {
-			log.Warn("mitm.hook.response.open_capture_failed", "path", responseRawPath, "err", err)
+			log.Warn("mitm.hook.response.open_capture_failed", "concern", "providers.mitm.wire", "path", responseRawPath, "err", err)
 			return 0, fmt.Errorf("open raw hook response: %w", err)
 		}
 		defer func() { _ = responseFile.Close() }()
@@ -403,13 +396,13 @@ func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath
 		}
 		if errors.Is(readErr, io.EOF) {
 			if err := client.Flush(); err != nil {
-				log.Warn("mitm.hook.response.flush_failed", "err", err)
+				log.Warn("mitm.hook.response.flush_failed", "concern", "providers.mitm.wire", "err", err)
 				return written, fmt.Errorf("flush hook response: %w", err)
 			}
 			return written, nil
 		}
 		if readErr != nil {
-			log.Warn("mitm.hook.response.read_failed", "err", readErr)
+			log.Warn("mitm.hook.response.read_failed", "concern", "providers.mitm.wire", "err", readErr)
 			return written, fmt.Errorf("read hook output body: %w", readErr)
 		}
 	}
@@ -429,7 +422,7 @@ func nextHookRequestID() string {
 	hookRequestIDMu.Lock()
 	defer hookRequestIDMu.Unlock()
 	hookRequestIDCounter++
-	return strconv.FormatInt(currentTime().UnixNano(), 36) + "-" + strconv.FormatUint(hookRequestIDCounter, 36)
+	return strconv.FormatInt(clock.Now().UnixNano(), 36) + "-" + strconv.FormatUint(hookRequestIDCounter, 36)
 }
 
 // hookedProviderParams carries the per-request state the standard
@@ -512,12 +505,11 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 		return err
 	}
 	p.recordHookedCaptureMetadata(params, result, responseBytes)
-	p.log.InfoContext(ctx, "mitm.provider.hook.completed",
-		"host", params.host,
+	p.log.InfoContext(ctx, "mitm.provider.hook.completed", "concern", "providers.mitm.wire", "host", params.host,
 		"hook", params.rule.Name,
 		"path", params.req.URL.Path,
 		"status", result.Status,
-		"duration_ms", time.Since(params.started).Milliseconds(),
+		"duration_ms", clock.Since(params.started).Milliseconds(),
 		"request_bytes", params.requestBytes,
 		"response_bytes", responseBytes,
 	)
@@ -549,7 +541,7 @@ func (p *Proxy) recordHookedCaptureMetadata(params hookedProviderParams, result 
 		decodedRequestBody = params.body
 	}
 	if appendErr := p.appendProviderCaptureExtension(params.cfg.CaptureDir, params.provider.BuildCaptureExtension(CaptureExchange{
-		CapturedAt:          currentTime().UTC(),
+		CapturedAt:          clock.Now().UTC(),
 		RequestHeader:       params.req.Header,
 		RequestBody:         params.body,
 		DecodedRequestBody:  decodedRequestBody,
@@ -593,8 +585,7 @@ func (p *Proxy) maybeFetchUpstreamForHook(params hookedProviderParams) (*hookUps
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		p.log.Warn("mitm.provider.hook.upstream_read_failed",
-			"host", params.host,
+		p.log.Warn("mitm.provider.hook.upstream_read_failed", "concern", "providers.mitm.wire", "host", params.host,
 			"path", params.req.URL.Path,
 			"err", err,
 		)
@@ -620,26 +611,26 @@ func (p *Proxy) writeHookErrorResponse(client *bufio.Writer, hookErr error) {
 	headers.Set("Content-Length", strconv.Itoa(len(body)))
 	statusLine := "HTTP/1.1 " + strconv.Itoa(status) + " " + http.StatusText(status) + "\r\n"
 	if _, err := client.WriteString(statusLine); err != nil {
-		p.log.Warn("mitm.provider.hook.error_write_status_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_write_status_failed", "concern", "providers.mitm.wire", "err", err)
 		return
 	}
 	for key, values := range headers {
 		for _, value := range values {
 			if _, err := client.WriteString(key + ": " + value + "\r\n"); err != nil {
-				p.log.Warn("mitm.provider.hook.error_write_header_failed", "err", err)
+				p.log.Warn("mitm.provider.hook.error_write_header_failed", "concern", "providers.mitm.wire", "err", err)
 				return
 			}
 		}
 	}
 	if _, err := client.WriteString("\r\n"); err != nil {
-		p.log.Warn("mitm.provider.hook.error_write_header_end_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_write_header_end_failed", "concern", "providers.mitm.wire", "err", err)
 		return
 	}
 	if _, err := client.Write(body); err != nil {
-		p.log.Warn("mitm.provider.hook.error_write_body_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_write_body_failed", "concern", "providers.mitm.wire", "err", err)
 		return
 	}
 	if err := client.Flush(); err != nil {
-		p.log.Warn("mitm.provider.hook.error_flush_failed", "err", err)
+		p.log.Warn("mitm.provider.hook.error_flush_failed", "concern", "providers.mitm.wire", "err", err)
 	}
 }

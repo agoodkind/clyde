@@ -13,29 +13,13 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
-	"goodkind.io/clyde/internal/oauthrotation"
+	"goodkind.io/clyde/internal/clock"
 )
-
-// reauthLoginMessage builds the actionable client-visible message for a
-// rotator NeedsReauthError. It names the affected Anthropic login by account
-// id and points the operator at the exact command that restores it. No token
-// material is included; only the provider-neutral account identifier.
-func reauthLoginMessage(reauthErr oauthrotation.NeedsReauthError) string {
-	account := strings.TrimSpace(string(reauthErr.Account))
-	if account == "" {
-		account = "account"
-	}
-	return fmt.Sprintf(
-		"Anthropic login %s needs re-auth; run `clyde oauth login` to restore it",
-		account,
-	)
-}
 
 func (s *Server) dispatchAnthropicProvider(
 	w http.ResponseWriter,
@@ -73,15 +57,20 @@ func (s *Server) dispatchAnthropicProviderCollect(
 	finishReason := normalizedProviderFinishReason(result)
 	var notices []adapterruntime.UsageNotice
 	if finishReason == defaultProviderFinishReason {
-		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
 	finalResponse := *result.FinalResponse
-	updated, _ := adapterruntime.AppendUsageNoticesToResponse(ctx, finalResponse, notices, json.Marshal)
+	updated, _ := adapterruntime.AppendUsageNoticesToResponse(ctx, finalResponse, notices)
 	if len(notices) > 0 {
 		finalResponse = updated
 	}
-	writeJSON(w, http.StatusOK, finalResponse)
+	respBody, err := json.Marshal(finalResponse)
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.anthropic.collect_marshal_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return fmt.Errorf("marshal anthropic collect response: %w", err)
+	}
+	writeJSON(w, respBody)
 	return nil
 }
 
@@ -91,12 +80,12 @@ func (s *Server) dispatchAnthropicProviderStream(
 	reqID string,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) error {
-	model := anthropicResolvedModelFromRequest(resolvedReq)
-	streamWriter, err := newProviderStreamWriter(ctx, s, w, reqID, model.Alias, "anthropic")
+	alias := anthropicRequestAlias(resolvedReq)
+	streamWriter, err := newProviderStreamWriter(ctx, s, w, reqID, alias, "anthropic")
 	if err != nil {
 		return adapterErrInternal(err.Error(), err)
 	}
-	s.emitRequestStreamOpened(ctx, model, "oauth", reqID, resolvedReq.Model, true)
+	s.emitRequestStreamOpened(ctx, &resolvedReq, "oauth", reqID, resolvedReq.Model, true)
 	result, runErr := s.anthropicProvider.Execute(ctx, resolvedReq, streamWriter)
 	includeUsage := resolvedReq.OpenAI.StreamOptions != nil && resolvedReq.OpenAI.StreamOptions.IncludeUsage
 	// Anthropic streams sometimes end with a non-nil runErr after the
@@ -110,18 +99,17 @@ func (s *Server) dispatchAnthropicProviderStream(
 	// applies the same fallback by deriving stop_reason and using
 	// the cumulative usage when message_stop never arrives.
 	if runErr != nil {
-		return s.handleAnthropicStreamRunErr(ctx, streamWriter, model, reqID, runErr, result, includeUsage)
+		return s.handleAnthropicStreamRunErr(ctx, streamWriter, alias, reqID, runErr, result, includeUsage)
 	}
 	finishReason := normalizedProviderFinishReason(result)
 	var notices []adapterruntime.UsageNotice
 	if finishReason == defaultProviderFinishReason {
-		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized",
-		slog.String("backend", "anthropic"),
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
 		slog.String("request_id", reqID),
-		slog.String("model", model.Alias),
+		slog.String("model", alias),
 		slog.Bool("include_usage", includeUsage),
 		slog.String("finish_reason", finishReason),
 		slog.Int("usage_total_tokens", result.Usage.TotalTokens),
@@ -142,7 +130,7 @@ func (s *Server) dispatchAnthropicProviderStream(
 func (s *Server) handleAnthropicStreamRunErr(
 	ctx context.Context,
 	streamWriter *providerStreamWriter,
-	model adaptermodel.ResolvedModel,
+	alias string,
 	reqID string,
 	runErr error,
 	result adapterprovider.Result,
@@ -150,10 +138,9 @@ func (s *Server) handleAnthropicStreamRunErr(
 ) error {
 	aerr := anthropicProviderAdapterError(runErr)
 	if !streamWriter.headersWritten {
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_pre_content_error",
-			slog.String("backend", "anthropic"),
+		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_pre_content_error", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
-			slog.String("model", model.Alias),
+			slog.String("model", alias),
 			slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
 			slog.Bool("include_usage", includeUsage),
 		)
@@ -162,13 +149,12 @@ func (s *Server) handleAnthropicStreamRunErr(
 	finishReason := normalizedProviderFinishReason(result)
 	var notices []adapterruntime.UsageNotice
 	if finishReason == defaultProviderFinishReason {
-		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized_after_runerr",
-		slog.String("backend", "anthropic"),
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.anthropic_stream_finalized_after_runerr", slog.String("concern", "adapter.providers.anthropic.sse"), slog.String("backend", "anthropic"),
 		slog.String("request_id", reqID),
-		slog.String("model", model.Alias),
+		slog.String("model", alias),
 		slog.String("run_err", sanitizeAnthropicRunErr(runErr)),
 		slog.Bool("include_usage", includeUsage),
 		slog.Bool("headers_written", streamWriter.headersWritten),
@@ -176,8 +162,7 @@ func (s *Server) handleAnthropicStreamRunErr(
 		slog.Int("usage_total_tokens", result.Usage.TotalTokens),
 	)
 	if err := streamWriter.finalizeStream(ctx, result, includeUsage); err != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_after_runerr_failed",
-			slog.String("backend", "anthropic"),
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_after_runerr_failed", slog.String("concern", "adapter.chat.render"), slog.String("backend", "anthropic"),
 			slog.String("request_id", reqID),
 			slog.Any("err", err),
 		)
@@ -206,10 +191,9 @@ func (s *Server) prepareAnthropicProviderRequest(
 	req adapterresolver.ResolvedRequest,
 	reqID string,
 ) (anthropic.PreparedRequest, error) {
-	_ = ctx
-	model := anthropicResolvedModelFromRequest(req)
+	alias := anthropicRequestAlias(req)
 	jsonSpec := ParseResponseFormat(req.OpenAI.ResponseFormat)
-	anthReq, err := s.buildAnthropicWire(req.OpenAI, model, req.Effort.String(), jsonSpec, reqID)
+	anthReq, err := s.buildAnthropicWire(ctx, req.OpenAI, &req, req.Effort.String(), jsonSpec, reqID)
 	if err != nil {
 		return anthropic.PreparedRequest{}, &anthropic.ExecuteError{
 			Status:  http.StatusBadRequest,
@@ -218,22 +202,33 @@ func (s *Server) prepareAnthropicProviderRequest(
 			Cause:   err,
 		}
 	}
-	jsonCoercion := anthropic.JSONCoercion{}
+	jsonCoercion := anthropic.JSONCoercion{Coerce: nil, Validate: nil}
 	if jsonSpec.Mode != "" {
 		jsonCoercion = anthropic.JSONCoercion{
 			Coerce:   CoerceJSON,
 			Validate: LooksLikeJSON,
 		}
 	}
+	prepared := req
 	return anthropic.PreparedRequest{
 		Request:      anthReq,
-		Model:        model,
+		Resolved:     &prepared,
 		RequestID:    reqID,
-		TrackerKey:   requestContextTrackerKey(req.OpenAI, model.Alias),
+		TrackerKey:   requestContextTrackerKey(req.OpenAI, alias),
 		JSONCoercion: jsonCoercion,
 		IncludeUsage: req.OpenAI.StreamOptions != nil && req.OpenAI.StreamOptions.IncludeUsage,
-		Stream:       req.OpenAI.Stream,
+		Stream:       req.OpenAI.Stream, NativeIngress: false,
 	}, nil
+}
+
+// anthropicRequestAlias mirrors the backend's request-facing alias
+// derivation so adapter-side dispatch logs the caller alias rather
+// than the resolved snapshot alias.
+func anthropicRequestAlias(req adapterresolver.ResolvedRequest) string {
+	if alias := strings.TrimSpace(req.Cursor.NormalizedModel); alias != "" {
+		return alias
+	}
+	return strings.TrimSpace(req.OpenAI.Model)
 }
 
 func (s *Server) executeAnthropicPreparedRequest(
@@ -242,11 +237,16 @@ func (s *Server) executeAnthropicPreparedRequest(
 	writer adapterprovider.EventWriter,
 ) (adapterprovider.Result, error) {
 	if s.anthr == nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusInternalServerError,
-			Code:    "oauth_unconfigured",
-			Message: "adapter built without anthropic client; set adapter.direct_oauth=true and restart",
-		}
+		return adapterprovider.Result{
+				Usage: adapteropenai.
+					Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+			}, &anthropic.ExecuteError{
+				Status:  http.StatusInternalServerError,
+				Code:    "oauth_unconfigured",
+				Message: "adapter built without anthropic client; set adapter.direct_oauth=true and restart", Cause: nil,
+			}
 	}
 	if err := s.acquire(ctx); err != nil {
 		return adapterprovider.Result{}, &anthropic.ExecuteError{
@@ -271,21 +271,31 @@ func (s *Server) executeAnthropicPreparedCollect(
 	if prepared.NativeIngress {
 		nativeWriter, ok := writer.(*nativeAnthropicJSONWriter)
 		if !ok || nativeWriter == nil {
-			return adapterprovider.Result{}, &anthropic.ExecuteError{
-				Status:  http.StatusInternalServerError,
-				Code:    "internal_error",
-				Message: "anthropic native collect path requires a native response writer",
-			}
+			return adapterprovider.Result{
+					Usage: adapteropenai.
+						Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+					FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+				}, &anthropic.ExecuteError{
+					Status:  http.StatusInternalServerError,
+					Code:    "internal_error",
+					Message: "anthropic native collect path requires a native response writer", Cause: nil,
+				}
 		}
 		return adapterprovider.Result{}, s.executeAnthropicPreparedCollectNative(ctx, prepared, nativeWriter)
 	}
 	collector, ok := writer.(*providerCollectorWriter)
 	if !ok || collector == nil {
-		return adapterprovider.Result{}, &anthropic.ExecuteError{
-			Status:  http.StatusInternalServerError,
-			Code:    "internal_error",
-			Message: "anthropic collect provider requires a collector event writer",
-		}
+		return adapterprovider.Result{
+				Usage: adapteropenai.
+					Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+				FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+			}, &anthropic.ExecuteError{
+				Status:  http.StatusInternalServerError,
+				Code:    "internal_error",
+				Message: "anthropic collect provider requires a collector event writer", Cause: nil,
+			}
 	}
 	// Register this outbound Anthropic call in the egress registry so
 	// the daemon reload deadline can force-close a wedged HTTP
@@ -302,12 +312,12 @@ func (s *Server) executeAnthropicPreparedCollect(
 
 	runtime := &collectResponseDispatcher{server: s}
 	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
-	started := adapterClock.Now()
+	started := clock.Now()
 	result, err := anthropicbackend.RunCollectExecution(
 		runtime,
 		egressCtx,
 		reqWithWindows,
-		prepared.Model,
+		prepared.Resolved,
 		prepared.RequestID,
 		started,
 		prepared.TrackerKey,
@@ -316,11 +326,12 @@ func (s *Server) executeAnthropicPreparedCollect(
 		func() []adapterrender.Event { return collector.events },
 	)
 	if err != nil {
-		return adapterprovider.Result{}, err
+		s.log.WarnContext(egressCtx, "adapter.anthropic.collect_execution_failed", "concern", "adapter.providers.anthropic.request", "request_id", prepared.RequestID, "err", err)
+		return adapterprovider.Result{}, fmt.Errorf("run anthropic collect execution: %w", err)
 	}
 	resp := anthropicbackend.MergeCollectedEvents(
 		prepared.RequestID,
-		prepared.Model.Alias,
+		preparedRequestAlias(prepared),
 		systemFingerprint,
 		result.Events,
 		result.Usage,
@@ -344,11 +355,16 @@ func (s *Server) executeAnthropicPreparedStream(
 	if prepared.NativeIngress {
 		nativeWriter, ok := writer.(*nativeAnthropicStreamWriter)
 		if !ok || nativeWriter == nil {
-			return adapterprovider.Result{}, &anthropic.ExecuteError{
-				Status:  http.StatusInternalServerError,
-				Code:    "internal_error",
-				Message: "anthropic native stream path requires a native response writer",
-			}
+			return adapterprovider.Result{
+					Usage: adapteropenai.
+						Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+					FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+				}, &anthropic.ExecuteError{
+					Status:  http.StatusInternalServerError,
+					Code:    "internal_error",
+					Message: "anthropic native stream path requires a native response writer", Cause: nil,
+				}
 		}
 		return s.executeAnthropicPreparedStreamNative(ctx, prepared, nativeWriter)
 	}
@@ -366,12 +382,12 @@ func (s *Server) executeAnthropicPreparedStream(
 
 	runtime := &streamResponseDispatcher{server: s}
 	reqWithWindows, usageWindows := anthropicRequestWithUsageWindowCapture(prepared.Request)
-	started := adapterClock.Now()
+	started := clock.Now()
 	result, err := anthropicbackend.RunStreamExecution(
 		runtime,
 		egressCtx,
 		reqWithWindows,
-		prepared.Model,
+		prepared.Resolved,
 		prepared.RequestID,
 		started,
 		prepared.TrackerKey,
@@ -384,10 +400,11 @@ func (s *Server) executeAnthropicPreparedStream(
 		ToolCallCount:       result.ToolCallCount,
 		ToolCallNames:       result.ToolCallNames,
 		HasSubagentToolCall: result.HasSubagentToolCall,
-		UsageNoticeWindows:  usageWindows(),
+		UsageNoticeWindows:  usageWindows(), FinalResponse: nil, ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", UsageNotices: nil,
 	}
 	if err != nil {
-		return providerResult, err
+		s.log.WarnContext(egressCtx, "adapter.anthropic.stream_execution_failed", "concern", "adapter.providers.anthropic.request", "request_id", prepared.RequestID, "err", err)
+		return providerResult, fmt.Errorf("run anthropic stream execution: %w", err)
 	}
 	return providerResult, nil
 }
@@ -399,12 +416,14 @@ func (s *Server) executeAnthropicPreparedCollectNative(
 ) error {
 	resp, err := s.anthr.Do(ctx, prepared.Request)
 	if err != nil {
-		return err
+		s.log.WarnContext(ctx, "adapter.anthropic.native_collect_request_failed", "concern", "adapter.providers.anthropic.request", "request_id", prepared.RequestID, "err", err)
+		return fmt.Errorf("execute native anthropic collect request: %w", err)
 	}
 	body, readErr := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if readErr != nil {
-		return readErr
+		s.log.WarnContext(ctx, "adapter.anthropic.native_collect_read_failed", "concern", "adapter.providers.anthropic.request", "request_id", prepared.RequestID, "err", readErr)
+		return fmt.Errorf("read native anthropic collect response: %w", readErr)
 	}
 	return writer.capture(http.StatusOK, resp.Header.Clone(), body)
 }
@@ -416,26 +435,37 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 ) (adapterprovider.Result, error) {
 	resp, err := s.anthr.Do(ctx, prepared.Request)
 	if err != nil {
-		return adapterprovider.Result{}, err
+		s.log.WarnContext(ctx, "adapter.anthropic.native_stream_request_failed", "concern", "adapter.providers.anthropic.request", "request_id", prepared.RequestID, "err", err)
+		return adapterprovider.Result{}, fmt.Errorf("execute native anthropic stream request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if err := writer.relay(resp); err != nil {
-		return adapterprovider.Result{}, err
+		s.log.WarnContext(ctx, "adapter.anthropic.native_stream_relay_failed", "concern", "adapter.providers.anthropic.request", "request_id", prepared.RequestID, "err", err)
+		return adapterprovider.Result{}, fmt.Errorf("relay native anthropic stream response: %w", err)
 	}
-	return adapterprovider.Result{}, nil
+	return adapterprovider.Result{
+		Usage: adapteropenai.
+			Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+		FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+	}, nil
 }
 
 func anthropicProviderAdapterError(err error) *adapterError {
-	var reauthErr oauthrotation.NeedsReauthError
-	if errors.As(err, &reauthErr) {
-		// The rotator has no usable account because the candidate's refresh
-		// credential is dead. Surface an actionable re-auth instruction as a
-		// typed upstream_auth_failed adapterError so it flows through the same
-		// boundary marshalling path as every other upstream failure: on the
-		// OpenAI route applyFamilyShape pins HTTP 400 + invalid_request_error
-		// and the renderer preserves error.message verbatim. The message names
-		// the account label or id and the exact command to restore it.
-		aerr := newAdapterError(adapterErrorUpstreamAuthFailed, reauthLoginMessage(reauthErr))
+	if errors.Is(err, anthropic.ErrBaselineMissing) || errors.Is(err, anthropic.ErrBaselineInvalid) {
+		// The daemon-owned MITM wire baseline is absent or unparseable, so
+		// the adapter cannot mirror the claude-cli identity on outbound
+		// /v1/messages. Return an operator-actionable HTTP 503 rather than
+		// sending a request with no identity headers.
+		return adapterErrBaselineMissing(
+			"anthropic",
+			"anthropic wire baseline is unavailable: seed it by running claude-cli once through the Clyde MITM proxy, or restore the reference-v2.toml baseline file, then retry",
+			err,
+		)
+	}
+	var authErr *anthropic.AuthCredentialError
+	if errors.As(err, &authErr) {
+		aerr := newAdapterError(adapterErrorUpstreamAuthFailed, authErr.Error())
 		aerr.Provider = "anthropic"
 		aerr.Cause = err
 		return aerr
@@ -507,32 +537,31 @@ func anthropicProviderAdapterError(err error) *adapterError {
 	return adapterErrUpstreamFailed("anthropic", err.Error(), err)
 }
 
-func anthropicResolvedModelFromRequest(req adapterresolver.ResolvedRequest) adaptermodel.ResolvedModel {
-	alias := req.Cursor.NormalizedModel
-	if alias == "" {
-		alias = req.OpenAI.Model
+// preparedRequestAlias returns the caller-facing alias for a prepared
+// Anthropic request. Native ingress and OpenAI ingress both populate
+// Resolved; an empty Resolved falls back to the empty string.
+func preparedRequestAlias(prepared anthropic.PreparedRequest) string {
+	if prepared.Resolved == nil {
+		return ""
 	}
-	return adaptermodel.ResolvedModel{
-		Alias:           alias,
-		Backend:         adaptermodel.BackendAnthropic,
-		ClaudeModel:     req.Model,
-		Context:         req.ContextBudget.InputTokens,
-		Effort:          req.Effort.String(),
-		Efforts:         req.Efforts,
-		MaxOutputTokens: req.ContextBudget.OutputTokens,
-		FamilySlug:      req.Family,
-		Thinking:        req.Thinking,
-		Instructions:    req.Instructions,
-	}
+	return anthropicRequestAlias(*prepared.Resolved)
 }
 
 func anthropicProviderResultFromResponse(resp *adapteropenai.ChatResponse) adapterprovider.Result {
 	if resp == nil {
-		return adapterprovider.Result{}
+		return adapterprovider.Result{
+			Usage: adapteropenai.
+				Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+			FinalResponse: nil, FinishReason: "", SystemFingerprint: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
+		}
 	}
 	result := adapterprovider.Result{
 		FinalResponse:     resp,
-		SystemFingerprint: resp.SystemFingerprint,
+		SystemFingerprint: resp.SystemFingerprint, Usage: adapteropenai.
+					Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, PromptTokensDetails: nil, InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0, MaxTokens: 0},
+
+		FinishReason: "", ReasoningSignaled: false, ReasoningVisible: false, ReasoningSummary: "", DerivedCacheCreationTokens: 0, UpstreamResponseID: "", ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, UsageNoticeWindows: nil, UsageNotices: nil,
 	}
 	if resp.Usage != nil {
 		result.Usage = *resp.Usage

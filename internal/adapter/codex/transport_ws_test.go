@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"goodkind.io/clyde/codexwire"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
@@ -88,17 +89,23 @@ func TestWebsocketMessageToSyntheticSSEPreservesGenericError(t *testing.T) {
 
 func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 	req := HTTPTransportRequest{
-		Model:             "gpt-5.4",
-		Instructions:      "base instructions",
-		Input:             []map[string]any{{"type": "message", "role": "user"}},
-		Tools:             []any{map[string]any{"type": "function", "name": "read_file"}},
+		Model:        "gpt-5.4",
+		Instructions: "base instructions",
+		Input: []codexwire.InputItem{{
+			Type: codexwire.ItemTypeMessage,
+			Role: "user",
+		}},
+		Tools: []codexwire.ToolSpec{{
+			Type: codexwire.ToolSpecTypeFunction,
+			Name: "read_file",
+		}},
 		ToolChoice:        "auto",
 		ParallelToolCalls: true,
 		Reasoning:         &Reasoning{Effort: "medium"},
 		Include:           []string{"reasoning.encrypted_content"},
 		ServiceTier:       "priority",
 		PromptCache:       "cursor:conv-123",
-		ClientMetadata:    map[string]string{"x-codex-installation-id": "acct-123"},
+		ClientMetadata:    &ClientMetadata{InstallationID: "acct-123"},
 		Store:             false,
 		Stream:            true,
 	}
@@ -141,7 +148,7 @@ func TestResponseCreateRequestFromHTTPUsesResponseCreateShape(t *testing.T) {
 
 func TestWithWarmupGenerateFalseSetsGenerateFlag(t *testing.T) {
 	ws := WithWarmupGenerateFalse(ResponseCreateWsRequest{Type: "response.create"})
-	ws.Tools = []any{}
+	ws.Tools = []codexwire.ToolSpec{}
 	if ws.Generate == nil || *ws.Generate {
 		t.Fatalf("generate=%v want false", ws.Generate)
 	}
@@ -163,16 +170,24 @@ func TestWithWarmupGenerateFalseSetsGenerateFlag(t *testing.T) {
 
 func TestWithPreviousResponseIDOverridesInputIncrementally(t *testing.T) {
 	base := ResponseCreateWsRequest{
-		Type:  "response.create",
-		Input: []map[string]any{{"type": "message", "role": "user", "content": "full"}},
+		Type: "response.create",
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "full"}},
+		}},
 	}
-	incremental := []map[string]any{{"type": "message", "role": "user", "content": "delta"}}
+	incremental := []codexwire.InputItem{{
+		Type:    codexwire.ItemTypeMessage,
+		Role:    "user",
+		Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "delta"}},
+	}}
 	ws := WithPreviousResponseID(base, "resp-123", incremental)
 	if ws.PreviousResponseID != "resp-123" {
 		t.Fatalf("previous_response_id=%q want resp-123", ws.PreviousResponseID)
 	}
-	if len(ws.Input) != 1 || ws.Input[0]["content"] != "delta" {
-		t.Fatalf("input=%v want incremental delta", ws.Input)
+	if len(ws.Input) != 1 || ws.Input[0].Content[0].Text != "delta" {
+		t.Fatalf("input=%+v want incremental delta", ws.Input)
 	}
 	encoded, err := MarshalResponseCreateWsRequest(ws)
 	if err != nil {
@@ -186,7 +201,7 @@ func TestWithPreviousResponseIDOverridesInputIncrementally(t *testing.T) {
 		t.Fatalf("serialized previous_response_id=%q want resp-123", got)
 	}
 
-	ws = WithPreviousResponseID(base, "resp-123", []map[string]any{})
+	ws = WithPreviousResponseID(base, "resp-123", []codexwire.InputItem{})
 	encoded, err = MarshalResponseCreateWsRequest(ws)
 	if err != nil {
 		t.Fatalf("marshal websocket request with empty input: %v", err)
@@ -343,8 +358,8 @@ func TestRunWebsocketTransportParsesTextAndCompletion(t *testing.T) {
 		if got := r.Header.Get("session_id"); got != "cursor:conv-123" {
 			t.Fatalf("session_id=%q want cursor:conv-123", got)
 		}
-		if got := r.Header.Get(CodexWindowIDHeader); got != "cursor:conv-123:0" {
-			t.Fatalf("%s=%q want cursor:conv-123:0", CodexWindowIDHeader, got)
+		if got := r.Header.Get(WindowIDHeader); got != "cursor:conv-123:0" {
+			t.Fatalf("%s=%q want cursor:conv-123:0", WindowIDHeader, got)
 		}
 		// x-codex-installation-id now comes from LoadInstallationID
 		// (~/.codex/installation_id or persisted clyde uuid) rather
@@ -830,7 +845,7 @@ func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testi
 		TurnState:      NewTurnState(),
 	}
 
-	turn := func(items []map[string]any) {
+	turn := func(items []codexwire.InputItem) {
 		_, err := runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
 			Type:  "response.create",
 			Model: "gpt-5.4",
@@ -841,13 +856,27 @@ func TestRunWebsocketTransportCacheReusesConnectionAndChainsResponseIDs(t *testi
 		}
 	}
 
-	turn1 := []map[string]any{{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "first"}}}}
-	turn2 := append([]map[string]any{}, turn1...)
-	turn2 = append(turn2, map[string]any{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "ack-1"}}})
-	turn2 = append(turn2, map[string]any{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "second"}}})
-	turn3 := append([]map[string]any{}, turn2...)
-	turn3 = append(turn3, map[string]any{"type": "message", "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": "ack-2"}}})
-	turn3 = append(turn3, map[string]any{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "third"}}})
+	mkUserMessage := func(text string) codexwire.InputItem {
+		return codexwire.InputItem{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: text}},
+		}
+	}
+	mkAssistantMessage := func(text string) codexwire.InputItem {
+		return codexwire.InputItem{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "assistant",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemOutputText, Text: text}},
+		}
+	}
+	turn1 := []codexwire.InputItem{mkUserMessage("first")}
+	turn2 := append([]codexwire.InputItem{}, turn1...)
+	turn2 = append(turn2, mkAssistantMessage("ack-1"))
+	turn2 = append(turn2, mkUserMessage("second"))
+	turn3 := append([]codexwire.InputItem{}, turn2...)
+	turn3 = append(turn3, mkAssistantMessage("ack-2"))
+	turn3 = append(turn3, mkUserMessage("third"))
 
 	turn(turn1)
 	turn(turn2)
@@ -961,7 +990,11 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnDeltaMismatch(t *testing.
 		TurnState:      NewTurnState(),
 	}
 
-	first := []map[string]any{{"type": "message", "role": "user", "content": "first"}}
+	first := []codexwire.InputItem{{
+		Type:    codexwire.ItemTypeMessage,
+		Role:    "user",
+		Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "first"}},
+	}}
 	_, err := runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
 		Type:  "response.create",
 		Model: "gpt-5.4",
@@ -971,7 +1004,11 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnDeltaMismatch(t *testing.
 		t.Fatalf("first turn: %v", err)
 	}
 
-	mismatched := []map[string]any{{"type": "message", "role": "user", "content": "different root"}}
+	mismatched := []codexwire.InputItem{{
+		Type:    codexwire.ItemTypeMessage,
+		Role:    "user",
+		Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "different root"}},
+	}}
 	_, err = runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
 		Type:  "response.create",
 		Model: "gpt-5.4",
@@ -1053,7 +1090,11 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnModelMismatch(t *testing.
 		SessionCache:   cache,
 		TurnState:      NewTurnState(),
 	}
-	input := []map[string]any{{"type": "message", "role": "user", "content": "first"}}
+	input := []codexwire.InputItem{{
+		Type:    codexwire.ItemTypeMessage,
+		Role:    "user",
+		Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "first"}},
+	}}
 
 	_, err := runWebsocketTransportForTest(context.Background(), cfg, ResponseCreateWsRequest{
 		Type:           "response.create",
@@ -1069,7 +1110,11 @@ func TestRunWebsocketTransportInvalidatesTakenSessionOnModelMismatch(t *testing.
 		Type:           "response.create",
 		Model:          "gpt-5.5",
 		PromptCacheKey: "cursor:conv-cache",
-		Input:          append(input, map[string]any{"type": "message", "role": "user", "content": "second"}),
+		Input: append(input, codexwire.InputItem{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "second"}},
+		}),
 	}, func(adapteropenai.StreamChunk) error { return nil })
 	if err != nil {
 		t.Fatalf("second turn: %v", err)
@@ -1154,8 +1199,12 @@ func TestRunWebsocketTransportPrewarmsAndReusesConnection(t *testing.T) {
 	}, ResponseCreateWsRequest{
 		Type:  "response.create",
 		Model: "gpt-5.4",
-		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
-		Tools: []any{map[string]any{"type": "function", "name": "read_file"}},
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hello"}},
+		}},
+		Tools: []codexwire.ToolSpec{{Type: codexwire.ToolSpecTypeFunction, Name: "read_file"}},
 	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
@@ -1261,7 +1310,11 @@ func TestRunWebsocketTransportReconnectsAfterPrewarmFailure(t *testing.T) {
 	}, ResponseCreateWsRequest{
 		Type:  "response.create",
 		Model: "gpt-5.4",
-		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hello"}},
+		}},
 	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
@@ -1356,7 +1409,11 @@ func TestRunWebsocketTransportCacheFallsBackUncachedAfterWarmupFailure(t *testin
 	}, ResponseCreateWsRequest{
 		Type:  "response.create",
 		Model: "gpt-5.4",
-		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hello"}},
+		}},
 	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
@@ -1448,7 +1505,11 @@ func TestRunWebsocketTransportTimesOutHungPrewarmAndRunsGeneratedRequest(t *test
 	}, ResponseCreateWsRequest{
 		Type:  "response.create",
 		Model: "gpt-5.4",
-		Input: []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hello"}},
+		}},
 	}, func(ch adapteropenai.StreamChunk) error {
 		chunks = append(chunks, ch)
 		return nil
@@ -1480,24 +1541,24 @@ func TestRunWebsocketTransportTimesOutHungPrewarmAndRunsGeneratedRequest(t *test
 func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 	t.Parallel()
 
-	maxCompletion := 3072
 	httpReq := HTTPTransportRequest{
-		Model:                "gpt-5.4",
-		Instructions:         "base instructions",
-		Input:                []map[string]any{{"type": "message", "role": "user", "content": "hello"}},
-		Tools:                []any{map[string]any{"type": "function", "name": "read_file"}},
-		ToolChoice:           "auto",
-		ParallelToolCalls:    true,
-		Reasoning:            &Reasoning{Effort: "medium"},
-		Store:                false,
-		Stream:               true,
-		Include:              []string{"reasoning.encrypted_content"},
-		ServiceTier:          "priority",
-		PromptCache:          "cursor:conv-123",
-		PromptCacheRetention: "24h",
-		Text:                 json.RawMessage(`{"verbosity":"high"}`),
-		Truncation:           "auto",
-		MaxCompletion:        &maxCompletion,
+		Model:        "gpt-5.4",
+		Instructions: "base instructions",
+		Input: []codexwire.InputItem{{
+			Type:    codexwire.ItemTypeMessage,
+			Role:    "user",
+			Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "hello"}},
+		}},
+		Tools:             []codexwire.ToolSpec{{Type: codexwire.ToolSpecTypeFunction, Name: "read_file"}},
+		ToolChoice:        "auto",
+		ParallelToolCalls: true,
+		Reasoning:         &Reasoning{Effort: "medium"},
+		Store:             false,
+		Stream:            true,
+		Include:           []string{"reasoning.encrypted_content"},
+		ServiceTier:       "priority",
+		PromptCache:       "cursor:conv-123",
+		Text:              json.RawMessage(`{"verbosity":"high"}`),
 	}
 
 	httpEncoded, err := json.Marshal(httpReq)
@@ -1514,14 +1575,13 @@ func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 	if got, _ := httpPayload["service_tier"].(string); got != "priority" {
 		t.Fatalf("http service_tier=%q want priority", got)
 	}
-	if got, _ := httpPayload["max_completion_tokens"].(float64); int(got) != maxCompletion {
-		t.Fatalf("http max_completion_tokens=%v want %d", httpPayload["max_completion_tokens"], maxCompletion)
-	}
-	if got, _ := httpPayload["prompt_cache_retention"].(string); got != "24h" {
-		t.Fatalf("http prompt_cache_retention=%q want 24h", got)
-	}
-	if got, _ := httpPayload["truncation"].(string); got != "auto" {
-		t.Fatalf("http truncation=%q want auto", got)
+	// The three clyde-invented fields codex-cli never sends must be absent
+	// from the HTTP body. The HTTP body must also not carry the
+	// websocket-only `type` field.
+	for _, key := range []string{"max_completion_tokens", "prompt_cache_retention", "truncation", "type", "previous_response_id"} {
+		if _, ok := httpPayload[key]; ok {
+			t.Fatalf("http payload included codex-cli-foreign key %q: %v", key, httpPayload[key])
+		}
 	}
 	text, _ := httpPayload["text"].(map[string]any)
 	if text["verbosity"] != "high" {
@@ -1530,7 +1590,11 @@ func TestCodexTransportParityMatrixSerialization(t *testing.T) {
 
 	wsReq := ResponseCreateRequestFromHTTP(httpReq)
 	wsReq = WithWarmupGenerateFalse(wsReq)
-	wsReq = WithPreviousResponseID(wsReq, "resp-123", []map[string]any{{"type": "message", "role": "user", "content": "delta"}})
+	wsReq = WithPreviousResponseID(wsReq, "resp-123", []codexwire.InputItem{{
+		Type:    codexwire.ItemTypeMessage,
+		Role:    "user",
+		Content: codexwire.ContentItems{{Type: codexwire.ContentItemInputText, Text: "delta"}},
+	}})
 	wsEncoded, err := MarshalResponseCreateWsRequest(wsReq)
 	if err != nil {
 		t.Fatalf("marshal ws request: %v", err)

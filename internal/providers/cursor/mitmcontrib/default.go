@@ -8,7 +8,7 @@ import (
 
 // providerID is the typed provider id this package registers with
 // the MITM provider registry.
-const providerID mitm.ProviderID = ProviderID
+const providerID mitm.ProviderID = mitm.ProviderIDCursor
 
 // routeProvider satisfies the [mitm.Provider] contract for Cursor
 // traffic. It claims CONNECT targets that resolve to Cursor

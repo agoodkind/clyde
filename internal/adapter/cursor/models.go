@@ -6,32 +6,26 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
+// RequestPathKind is part of Clyde's typed adapter surface.
 type RequestPathKind string
 
 const (
+	// RequestPathForeground is part of Clyde's typed adapter surface.
 	RequestPathForeground RequestPathKind = "foreground"
+	// RequestPathBackground is part of Clyde's typed adapter surface.
 	RequestPathBackground RequestPathKind = "background"
-	RequestPathResume     RequestPathKind = "resume"
-	RequestPathSubagent   RequestPathKind = "subagent"
+	// RequestPathResume is part of Clyde's typed adapter surface.
+	RequestPathResume RequestPathKind = "resume"
+	// RequestPathSubagent is part of Clyde's typed adapter surface.
+	RequestPathSubagent RequestPathKind = "subagent"
 )
 
-// NormalizeModelAlias is the legacy whitespace-trim helper used by
-// daemon and TUI logging to produce a stable `cursor_normalized_model`
-// attribute. New adapter code should resolve full model identity via
-// internal/adapter/resolver.Resolve, which returns the typed
-// ResolvedRequest with provider, family, effort, and budget. This
-// helper stays as a slim shim until the remaining daemon log call
-// sites migrate.
+// NormalizeModelAlias trims Cursor's raw model alias for stable log attributes.
 func NormalizeModelAlias(rawModel string) string {
 	return strings.TrimSpace(rawModel)
 }
 
-// NormalizeSessionSettingsModel trims the selected model while preserving the
-// full declarative alias. Effort is part of the canonical clyde-* model name.
-func NormalizeSessionSettingsModel(rawModel string) string {
-	return NormalizeModelAlias(rawModel)
-}
-
+// RequestPath is part of Clyde's typed adapter surface.
 func RequestPath(req Request) RequestPathKind {
 	if metadataHasAny(req.Metadata, "cursorResumeTaskId", "resumeTaskId", "resume", "isResume") {
 		return RequestPathResume

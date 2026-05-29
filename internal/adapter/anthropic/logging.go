@@ -1,4 +1,3 @@
-// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (
@@ -25,26 +24,22 @@ type FileLogRotationConfig struct {
 	Compress   *bool
 }
 
-const (
-	defaultAnthropicLogRotationMaxSizeMB  = 64
-	defaultAnthropicLogRotationMaxBackups = 192
-	defaultAnthropicLogRotationMaxAgeDays = 14
-)
-
+// normalizeAnthropicLogRotation clamps the sidecar rotation to the shared
+// provider-sidecar defaults via [config.NormalizeSidecarRotation] so the
+// anthropic and codex sidecars cannot drift apart on retention policy.
 func normalizeAnthropicLogRotation(rotation FileLogRotationConfig) FileLogRotationConfig {
-	if rotation.MaxSizeMB <= 0 {
-		rotation.MaxSizeMB = defaultAnthropicLogRotationMaxSizeMB
+	normalized := config.NormalizeSidecarRotation(config.SidecarRotation{
+		MaxSizeMB:  rotation.MaxSizeMB,
+		MaxBackups: rotation.MaxBackups,
+		MaxAgeDays: rotation.MaxAgeDays,
+		Compress:   rotation.Compress,
+	})
+	return FileLogRotationConfig{
+		MaxSizeMB:  normalized.MaxSizeMB,
+		MaxBackups: normalized.MaxBackups,
+		MaxAgeDays: normalized.MaxAgeDays,
+		Compress:   normalized.Compress,
 	}
-	if rotation.MaxBackups <= 0 {
-		rotation.MaxBackups = defaultAnthropicLogRotationMaxBackups
-	}
-	if rotation.MaxAgeDays <= 0 {
-		rotation.MaxAgeDays = defaultAnthropicLogRotationMaxAgeDays
-	}
-	if rotation.Compress == nil {
-		rotation.Compress = new(true)
-	}
-	return rotation
 }
 
 func (c FileLogRotationConfig) toGKLog() gklog.RotationConfig {
@@ -88,9 +83,9 @@ var (
 	fileLogger         *slog.Logger
 	fileLoggerCloser   io.Closer
 	fileLoggerRotation = FileLogRotationConfig{
-		MaxSizeMB:  defaultAnthropicLogRotationMaxSizeMB,
-		MaxBackups: defaultAnthropicLogRotationMaxBackups,
-		MaxAgeDays: defaultAnthropicLogRotationMaxAgeDays,
+		MaxSizeMB:  config.SidecarRotationMaxSizeMB,
+		MaxBackups: config.SidecarRotationMaxBackups,
+		MaxAgeDays: config.SidecarRotationMaxAgeDays,
 		Compress:   new(true),
 	}
 )
@@ -108,11 +103,11 @@ func ConfigureAnthropicFileLogger(rotation FileLogRotationConfig) {
 	fileLoggerRotation = normalizeAnthropicLogRotation(rotation)
 }
 
-// AnthropicLogPath returns the JSONL file the anthropic package
+// LogPath returns the JSONL file the anthropic package
 // double-writes its events to. Honors $CLYDE_ANTHROPIC_LOG_PATH for
 // tests; otherwise lives next to the unified clyde log under
 // $XDG_STATE_HOME/clyde/anthropic.jsonl.
-func AnthropicLogPath() string {
+func LogPath() string {
 	if p := os.Getenv("CLYDE_ANTHROPIC_LOG_PATH"); p != "" {
 		return p
 	}
@@ -123,7 +118,7 @@ func dedicatedLogger() *slog.Logger {
 	fileLoggerMu.Lock()
 	defer fileLoggerMu.Unlock()
 	fileLoggerOnce.Do(func() {
-		path := AnthropicLogPath()
+		path := LogPath()
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return
 		}
@@ -158,44 +153,46 @@ type responseEvent struct {
 	Err          string
 }
 
-func (e responseEvent) toSlogAttrs() []any {
-	attrs := make([]any, 0, 14+2*len(e.RateLimits))
+func (e responseEvent) toSlogAttrs() []slog.Attr {
+	attrs := make([]slog.Attr, 0, 7+len(e.RateLimits))
 	if e.Subcomponent != "" {
-		attrs = append(attrs, "subcomponent", e.Subcomponent)
+		attrs = append(attrs, slog.String("subcomponent", e.Subcomponent))
 	}
 	if e.Model != "" {
-		attrs = append(attrs, "model", e.Model)
+		attrs = append(attrs, slog.String("model", e.Model))
 	}
 	if e.Status != 0 {
-		attrs = append(attrs, "status", e.Status)
+		attrs = append(attrs, slog.Int("status", e.Status))
 	}
 	if e.RequestID != "" {
-		attrs = append(attrs, "request_id", e.RequestID)
+		attrs = append(attrs, slog.String("request_id", e.RequestID))
 	}
-	attrs = append(attrs, "body_bytes", e.BodyBytes)
-	attrs = append(attrs, "duration_ms", e.DurationMs)
+	attrs = append(attrs, slog.Int("body_bytes", e.BodyBytes))
+	attrs = append(attrs, slog.Int64("duration_ms", e.DurationMs))
 	for _, r := range e.RateLimits {
-		attrs = append(attrs, r.Name, r.Value)
+		attrs = append(attrs, slog.String(r.Name, r.Value))
 	}
 	if e.RetryAfter != "" {
-		attrs = append(attrs, "retry_after", e.RetryAfter)
+		attrs = append(attrs, slog.String("retry_after", e.RetryAfter))
 	}
 	if e.Body != "" {
-		attrs = append(attrs, "body", e.Body)
+		attrs = append(attrs, slog.String("body", e.Body))
 	}
 	if e.Err != "" {
-		attrs = append(attrs, "err", e.Err)
+		attrs = append(attrs, slog.String("err", e.Err))
 	}
 	return attrs
 }
 
-// logResponse writes the event to both slog.Default() and the
+// logResponse writes the event to both [slog.Default]() and the
 // dedicated anthropic JSONL file. The dedicated file is best effort;
-// a missing log dir never blocks API traffic.
-func logResponse(level slog.Level, event string, e responseEvent) {
-	attrs := e.toSlogAttrs()
-	slog.Default().Log(context.Background(), level, event, attrs...)
+// a missing log dir never blocks API traffic. The concern attr is
+// injected at the wrapper boundary so the per-concern router routes
+// every Anthropic response event into the request file.
+func logResponse(ctx context.Context, level slog.Level, event string, e responseEvent) {
+	attrs := append([]slog.Attr{slog.String("concern", "adapter.providers.anthropic.request")}, e.toSlogAttrs()...)
+	slog.Default().LogAttrs(ctx, level, event, attrs...)
 	if l := dedicatedLogger(); l != nil {
-		l.Log(context.Background(), level, event, attrs...)
+		l.LogAttrs(ctx, level, event, attrs...)
 	}
 }

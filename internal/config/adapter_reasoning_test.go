@@ -1,8 +1,6 @@
 package config_test
 
 import (
-	"bytes"
-	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -109,69 +107,6 @@ round_trip_encrypted = "maybe"
 `)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("adapter.codex.reasoning.round_trip_encrypted"))
-		})
-	})
-
-	Describe("legacy synthetic_content fallback", func() {
-		// installCaptureLogger swaps the default slog logger for a JSON
-		// handler writing into the supplied buffer for the duration of
-		// the calling spec, restoring the original logger on cleanup.
-		installCaptureLogger := func(buf *bytes.Buffer) {
-			original := slog.Default()
-			slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-			DeferCleanup(func() { slog.SetDefault(original) })
-		}
-
-		It("forwards the legacy anthropic value, warns once, and resolves through the new path", func() {
-			var buf bytes.Buffer
-			installCaptureLogger(&buf)
-
-			cfg, err := configWithReasoningTOML(`
-[adapter.synthetic_content.anthropic]
-inbound_thinking_materialization = "plain_text_concat"
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Adapter.Anthropic.Reasoning.InboundThinking).To(Equal(anthmode.InboundThinkingPlainText))
-			Expect(cfg.Adapter.Anthropic.Reasoning.ResolvedInboundThinking()).To(Equal(anthmode.InboundThinkingPlainText))
-
-			logs := buf.String()
-			Expect(logs).To(ContainSubstring("adapter.reasoning.legacy_synthetic_content_forwarded"))
-			Expect(logs).To(ContainSubstring(`"provider":"anthropic"`))
-			// One WARN per provider: the codex provider warn must not fire here.
-			Expect(logs).NotTo(ContainSubstring(`"provider":"codex"`))
-		})
-
-		It("forwards the legacy codex value, warns once, and resolves through the new path", func() {
-			var buf bytes.Buffer
-			installCaptureLogger(&buf)
-
-			cfg, err := configWithReasoningTOML(`
-[adapter.synthetic_content.codex]
-inbound_thinking_materialization = "drop"
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Adapter.Codex.Reasoning.RoundTripSummary).To(Equal(config.CodexRoundTripSummaryDrop))
-			Expect(cfg.Adapter.Codex.Reasoning.ResolvedRoundTripSummary()).To(Equal(config.CodexRoundTripSummaryDrop))
-
-			logs := buf.String()
-			Expect(logs).To(ContainSubstring("adapter.reasoning.legacy_synthetic_content_forwarded"))
-			Expect(logs).To(ContainSubstring(`"provider":"codex"`))
-		})
-
-		It("prefers the new block when both legacy and new are set, and does not emit the legacy warn", func() {
-			var buf bytes.Buffer
-			installCaptureLogger(&buf)
-
-			cfg, err := configWithReasoningTOML(`
-[adapter.synthetic_content.anthropic]
-inbound_thinking_materialization = "plain_text_concat"
-
-[adapter.anthropic.reasoning]
-inbound_thinking = "drop"
-`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Adapter.Anthropic.Reasoning.InboundThinking).To(Equal(anthmode.InboundThinkingDrop))
-			Expect(buf.String()).NotTo(ContainSubstring("adapter.reasoning.legacy_synthetic_content_forwarded"))
 		})
 	})
 })

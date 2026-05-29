@@ -16,6 +16,7 @@ func (r *Registry[M]) emitSessionEvent(ctx context.Context, level slog.Level, me
 	}
 	openedMsAgo := r.now().Sub(sess.OpenedAt).Milliseconds()
 	attrs := []slog.Attr{
+		slog.String("concern", "livetrack"),
 		slog.String("session_id", sess.ID),
 		slog.String("parent_id", sess.ParentID),
 		slog.String("kind", sess.Kind),
@@ -45,10 +46,12 @@ func (r *Registry[M]) emitForceCloseEvent(ctx context.Context, sess *Session[M],
 		slog.String("reason", reason),
 	}
 	attrs = appendCorrelationAttrs(attrs, ctx, sess.corr)
-	r.log.LogAttrs(ctx, slog.LevelWarn, "livetrack.session.force_close", attrs...)
+	r.log.LogAttrs(ctx, slog.LevelWarn, "livetrack.session.force_close", append([]slog.Attr{
+		// emitDrainStarted logs the info-level drain.started event.
+		slog.String("concern", "livetrack"),
+	}, attrs...)...)
 }
 
-// emitDrainStarted logs the info-level drain.started event.
 func (r *Registry[M]) emitDrainStarted(ctx context.Context, reason string) {
 	if r.log == nil {
 		return
@@ -59,11 +62,13 @@ func (r *Registry[M]) emitDrainStarted(ctx context.Context, reason string) {
 		slog.Int("remaining", r.Count()),
 	}
 	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
-	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.started", attrs...)
+	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.started", append([]slog.Attr{
+		// emitDrainComplete logs the info-level drain.complete event with the
+		// terminal state and force-close accounting.
+		slog.String("concern", "livetrack"),
+	}, attrs...)...)
 }
 
-// emitDrainComplete logs the info-level drain.complete event with the
-// terminal state and force-close accounting.
 func (r *Registry[M]) emitDrainComplete(ctx context.Context, result DrainResult) {
 	if r.log == nil {
 		return
@@ -76,14 +81,16 @@ func (r *Registry[M]) emitDrainComplete(ctx context.Context, result DrainResult)
 		slog.Int64("duration_ms", result.Duration.Milliseconds()),
 	}
 	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
-	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.complete", attrs...)
+	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.complete", append([]slog.Attr{
+		// appendCorrelationAttrs merges correlation attributes from both the
+		// caller context and the session-captured correlation. Caller
+		// attributes win when both are present so drain events are tied to
+		// the drain caller while session events stay tied to the registering
+		// caller. The session correlation back-fills missing fields.
+		slog.String("concern", "livetrack"),
+	}, attrs...)...)
 }
 
-// appendCorrelationAttrs merges correlation attributes from both the
-// caller context and the session-captured correlation. Caller
-// attributes win when both are present so drain events are tied to
-// the drain caller while session events stay tied to the registering
-// caller. The session correlation back-fills missing fields.
 func appendCorrelationAttrs(attrs []slog.Attr, ctx context.Context, sessCorr correlation.Context) []slog.Attr {
 	ctxCorr := correlation.FromContext(ctx)
 	attrs = correlation.AppendAttrs(attrs, ctxCorr)

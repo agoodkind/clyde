@@ -16,8 +16,8 @@ type SinkName string
 const (
 	// SinkDaemon identifies the daemon process log sink.
 	SinkDaemon SinkName = config.LoggingSinkDaemon
-	// SinkTUI identifies the TUI process log sink.
-	SinkTUI SinkName = config.LoggingSinkTUI
+	// SinkCLI identifies the CLI process log sink.
+	SinkCLI SinkName = config.LoggingSinkCLI
 	// SinkCodexSidecar identifies the Codex sidecar log sink.
 	SinkCodexSidecar SinkName = config.LoggingSinkCodexSidecar
 	// SinkAnthropicSidecar identifies the Anthropic sidecar log sink.
@@ -339,7 +339,7 @@ func defaultSinkEnabled(cfg config.Config, sinkName SinkName, enabledOverride ma
 	case SinkMITMRaw:
 		return baseEnabled && cfg.Logging.RawCapture.Enabled != nil && *cfg.Logging.RawCapture.Enabled
 	case SinkDaemon,
-		SinkTUI,
+		SinkCLI,
 		SinkCodexSidecar,
 		SinkAnthropicSidecar,
 		SinkAudit,
@@ -354,7 +354,7 @@ func defaultSinkEnabled(cfg config.Config, sinkName SinkName, enabledOverride ma
 func allSinkNames() []SinkName {
 	return []SinkName{
 		SinkDaemon,
-		SinkTUI,
+		SinkCLI,
 		SinkCodexSidecar,
 		SinkAnthropicSidecar,
 		SinkAudit,
@@ -409,7 +409,7 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 	if err != nil {
 		return slogger.SetupPolicy{}, err
 	}
-	processSink := policies.Sinks[SinkTUI]
+	processSink := policies.Sinks[SinkCLI]
 	if role == slogger.ProcessRoleDaemon {
 		processSink = policies.Sinks[SinkDaemon]
 	}
@@ -456,9 +456,8 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 		},
 		CleanupPolicy: slogger.CleanupPolicy{
 			// Cleanup is daemon-only. The walker scans the full state tree
-			// (logs, MITM raw captures, etc.) and must never block a CLI or
-			// TUI process start. The daemon runs RunCleanupOnce on a periodic
-			// loop instead.
+			// (logs, MITM raw captures, etc.) and must never block a CLI process
+			// start. The daemon runs RunCleanupOnce on a periodic loop instead.
 			Enabled:    processSink.Cleanup.Enabled && role == slogger.ProcessRoleDaemon,
 			Root:       config.DefaultStateDir(),
 			MaxAgeDays: cleanupInt(processSink.Cleanup.MaxAgeDays),

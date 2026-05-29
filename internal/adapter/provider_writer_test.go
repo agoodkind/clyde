@@ -184,7 +184,7 @@ func TestProviderStreamWriterLogsSSEChunkFlushShapeWithoutContent(t *testing.T) 
 		reqID:      "req-flush-log",
 		modelAlias: "alias-flush-log",
 		log:        log,
-		ctx:        context.Background(),
+		logContext: func() context.Context { return context.Background() },
 	}
 	finishReason := "stop"
 	err = writer.writeRenderedChunk(context.Background(), adapteropenai.StreamChunk{
@@ -257,7 +257,7 @@ func TestProviderStreamWriterLogsToolCallChunkIDsAndNames(t *testing.T) {
 		reqID:      "req-tool-log",
 		modelAlias: "alias-tool-log",
 		log:        log,
-		ctx:        context.Background(),
+		logContext: func() context.Context { return context.Background() },
 	}
 
 	err = writer.writeRenderedChunk(context.Background(), adapteropenai.StreamChunk{
@@ -316,7 +316,7 @@ func TestProviderStreamWriterLogsFinishChunkAndDoneFlush(t *testing.T) {
 		reqID:      "req-finish-log",
 		modelAlias: "alias-finish-log",
 		log:        log,
-		ctx:        context.Background(),
+		logContext: func() context.Context { return context.Background() },
 	}
 
 	err = writer.finalizeStream(context.Background(), adapterprovider.Result{FinishReason: "stop"}, false)
@@ -423,7 +423,7 @@ func TestProviderStreamWriterLogsAssistantTextSummaryAtFinalize(t *testing.T) {
 		renderer:   adapterrender.NewEventRendererWithContext(ctx, "req-final", "alias-final", "codex", log),
 		reqID:      "req-final",
 		modelAlias: "alias-final",
-		ctx:        ctx,
+		logContext: func() context.Context { return ctx },
 	}
 
 	if err := writer.WriteEvent(adapterrender.TextDelta{Text: "finalized text"}); err != nil {
@@ -504,7 +504,7 @@ func TestProviderStreamWriterFinalizedNoticeDoesNotRepeatAssistantRole(t *testin
 		reqID:      "req-notice-role",
 		modelAlias: "alias-notice-role",
 		log:        log,
-		ctx:        context.Background(),
+		logContext: func() context.Context { return context.Background() },
 	}
 
 	if err := writer.WriteEvent(adapterrender.TextDelta{Text: "answer"}); err != nil {

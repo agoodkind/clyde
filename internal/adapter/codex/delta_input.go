@@ -1,12 +1,14 @@
 package codex
 
+import "goodkind.io/clyde/codexwire"
+
 // DeltaResult describes the outcome of comparing a Cursor request's
 // input against a cached session's prior baseline. The delta items
 // are the new ones to send when continuing on the same websocket
 // connection. Reason carries a single-word classification used in
 // telemetry when ok is false.
 type DeltaResult struct {
-	Items  []map[string]any
+	Items  []codexwire.InputItem
 	Ok     bool
 	Reason string
 }
@@ -29,36 +31,36 @@ type DeltaResult struct {
 // upstream guarantees response state is alive, so the only thing we
 // need to verify is that the conversation prefix has not been
 // rewritten by the client.
-func ComputeDelta(prior, current []map[string]any) DeltaResult {
+func ComputeDelta(prior, current []codexwire.InputItem) DeltaResult {
 	if len(prior) == 0 {
 		return DeltaResult{Items: cloneInputItems(current), Ok: len(current) > 0, Reason: zeroDeltaReason(current)}
 	}
 	if len(current) < len(prior) {
-		return DeltaResult{Reason: "baseline_divergence"}
+		return DeltaResult{Reason: "baseline_divergence", Items: nil, Ok: false}
 	}
 	for i := range prior {
 		if !continuationItemEqual(prior[i], current[i]) {
-			return DeltaResult{Reason: "baseline_divergence"}
+			return DeltaResult{Reason: "baseline_divergence", Items: nil, Ok: false}
 		}
 	}
 	if len(current) == len(prior) {
-		return DeltaResult{Reason: "no_extension"}
+		return DeltaResult{Reason: "no_extension", Items: nil, Ok: false}
 	}
-	return DeltaResult{Items: cloneInputItems(current[len(prior):]), Ok: true}
+	return DeltaResult{Items: cloneInputItems(current[len(prior):]), Ok: true, Reason: ""}
 }
 
-func zeroDeltaReason(current []map[string]any) string {
+func zeroDeltaReason(current []codexwire.InputItem) string {
 	if len(current) == 0 {
 		return "empty_input"
 	}
 	return ""
 }
 
-func cloneInputItems(items []map[string]any) []map[string]any {
+func cloneInputItems(items []codexwire.InputItem) []codexwire.InputItem {
 	if len(items) == 0 {
 		return nil
 	}
-	out := make([]map[string]any, len(items))
+	out := make([]codexwire.InputItem, len(items))
 	copy(out, items)
 	return out
 }

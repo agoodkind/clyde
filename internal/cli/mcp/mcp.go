@@ -18,18 +18,18 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = f
-			cliMCPLog.Logger().Info("cli.mcp.invoked")
-			// Use NewServer so that Server.Tunnels (a *livetrack.Registry[MCPMeta])
-			// is accessible from outside the mcpserver package. Holding the *Server
-			// reference here matches the internal/mitm.Proxy.Tunnels pattern from
-			// CLYDE-270, where the cross-package field access forces MCPMeta through
-			// the public API and makes MCPMeta.IsLivetrackMeta reflection-reachable
-			// to the deadcode analyzer.
+			cliMCPLog.Logger().Info("cli.mcp.invoked", "concern",
+				// Use NewServer so that Server.Tunnels (a *livetrack.Registry[MCPMeta])
+				// is accessible from outside the mcpserver package. Holding the *Server
+				// reference here matches the internal/mitm.Proxy.Tunnels pattern from
+				// CLYDE-270, where the cross-package field access forces MCPMeta through
+				// the public API and makes MCPMeta.IsLivetrackMeta reflection-reachable
+				// to the deadcode analyzer.
+				"cli.mcp")
+
 			auditRotation := resolveAuditRotation()
 			srv := mcpserver.NewServer(auditRotation)
-			cliMCPLog.Logger().Info("cli.mcp.server_ready",
-				"active_calls", srv.Tunnels.Count(),
-			)
+			cliMCPLog.Logger().Info("cli.mcp.server_ready", "concern", "cli.mcp", "active_calls", srv.Tunnels.Count())
 			return srv.Serve(cmd.Context())
 		},
 	}

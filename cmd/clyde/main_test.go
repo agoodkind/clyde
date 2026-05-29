@@ -1,37 +1,81 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
+	"bytes"
+	"strings"
 	"testing"
+
+	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/config"
 )
 
-func TestLogsInventoryCommandDetectedThroughFlags(t *testing.T) {
-	args := []string{"--config", "/tmp/clyde.toml", "logs", "inventory", "--state-root", "/tmp/state"}
+func TestRootNoArgsShowsHelp(t *testing.T) {
+	factory, stdout, _ := testFactory()
+	root := newRoot(factory)
+	root.SetArgs(nil)
 
-	if !isReadOnlyLogsInventoryCommand(args) {
-		t.Fatalf("logs inventory command was not detected")
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute root help: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Usage:") {
+		t.Fatalf("help output missing Usage: %q", output)
+	}
+	if !strings.Contains(output, "list-conversations") {
+		t.Fatalf("help output missing conversation commands: %q", output)
 	}
 }
 
-func TestReadOnlyLogsInventorySkipsLoggingSetupStateWrites(t *testing.T) {
-	stateHome := t.TempDir()
-	configHome := t.TempDir()
-	inventoryRoot := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", stateHome)
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	logPath := filepath.Join(inventoryRoot, "clyde-daemon.jsonl")
-	if err := os.WriteFile(logPath, []byte("{}\n"), 0o644); err != nil {
-		t.Fatalf("write inventory fixture: %v", err)
-	}
+func TestRootUnknownCommandErrors(t *testing.T) {
+	factory, _, _ := testFactory()
+	root := newRoot(factory)
+	root.SetArgs([]string{"definitely-not-a-clyde-command"})
 
-	exitCode := runReadOnlyLogsCommand([]string{"logs", "inventory", "--state-root", inventoryRoot})
-	if exitCode != 0 {
-		t.Fatalf("exitCode=%d, want 0", exitCode)
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected unknown command error")
 	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("error = %q, want unknown command", err.Error())
+	}
+}
 
-	defaultStateRoot := filepath.Join(stateHome, "clyde")
-	if _, err := os.Stat(defaultStateRoot); !os.IsNotExist(err) {
-		t.Fatalf("read-only inventory created default state root %s: %v", defaultStateRoot, err)
+func TestRootRegistersConversationCommands(t *testing.T) {
+	factory, _, _ := testFactory()
+	root := newRoot(factory)
+	expected := []string{
+		"list-conversations",
+		"get-conversation",
+		"get-context",
+		"search-conversation",
+		"analyze-results",
+		"export-transcript",
 	}
+	for _, name := range expected {
+		if _, _, err := root.Find([]string{name}); err != nil {
+			t.Fatalf("root command %q not registered: %v", name, err)
+		}
+	}
+}
+
+func testFactory() (*cli.Factory, *bytes.Buffer, *bytes.Buffer) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	return &cli.Factory{
+		IOStreams: &cli.IOStreams{
+			In:  strings.NewReader(""),
+			Out: stdout,
+			Err: stderr,
+		},
+		Logger: nil,
+		Build: cli.BuildInfo{
+			Version: "test",
+			Commit:  "",
+			Date:    "",
+		},
+		Verbose: func() bool { return false },
+		Config: func() (*config.Config, error) {
+			return &config.Config{}, nil
+		},
+	}, stdout, stderr
 }

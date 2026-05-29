@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -13,7 +14,7 @@ type fakeRunner struct {
 	err   map[string]error
 }
 
-func (f *fakeRunner) run(_ string, args ...string) ([]byte, error) {
+func (f *fakeRunner) run(_ context.Context, _ string, args ...string) ([]byte, error) {
 	f.calls.Add(1)
 	key := args[0]
 	if e, ok := f.err[key]; ok {
@@ -35,7 +36,7 @@ func TestWorkspaceProbeReturnsAllFields(t *testing.T) {
 	}
 	now := time.Unix(0, 0)
 	p := newWorkspaceProbeWith(r, time.Minute, func() time.Time { return now })
-	got := p.Probe("/some/path")
+	got := p.Probe(context.Background(), "/some/path")
 	if got.AssociatedRemoteURLs.Origin != "git@github.com:agoodkind/clyde.git" {
 		t.Errorf("origin: %q", got.AssociatedRemoteURLs.Origin)
 	}
@@ -57,8 +58,8 @@ func TestWorkspaceProbeCachesWithinTTL(t *testing.T) {
 	}
 	now := time.Unix(100, 0)
 	p := newWorkspaceProbeWith(r, time.Minute, func() time.Time { return now })
-	p.Probe("/a")
-	p.Probe("/a")
+	p.Probe(context.Background(), "/a")
+	p.Probe(context.Background(), "/a")
 	if r.calls.Load() != 3 {
 		t.Errorf("expected 3 git calls (one probe), got %d", r.calls.Load())
 	}
@@ -74,9 +75,9 @@ func TestWorkspaceProbeRefreshesAfterTTL(t *testing.T) {
 	}
 	now := time.Unix(100, 0)
 	p := newWorkspaceProbeWith(r, time.Second, func() time.Time { return now })
-	p.Probe("/a")
+	p.Probe(context.Background(), "/a")
 	now = now.Add(2 * time.Second)
-	p.Probe("/a")
+	p.Probe(context.Background(), "/a")
 	if r.calls.Load() != 6 {
 		t.Errorf("expected 6 git calls (two probes), got %d", r.calls.Load())
 	}
@@ -84,7 +85,7 @@ func TestWorkspaceProbeRefreshesAfterTTL(t *testing.T) {
 
 func TestWorkspaceProbeEmptyPathReturnsZero(t *testing.T) {
 	p := NewWorkspaceProbe()
-	got := p.Probe("")
+	got := p.Probe(context.Background(), "")
 	if got.AssociatedRemoteURLs.Origin != "" || got.LatestGitCommitHash != "" || got.HasChanges {
 		t.Errorf("expected zero, got %#v", got)
 	}
@@ -100,7 +101,7 @@ func TestWorkspaceProbeIgnoresGitFailures(t *testing.T) {
 	}
 	now := time.Unix(0, 0)
 	p := newWorkspaceProbeWith(r, time.Minute, func() time.Time { return now })
-	got := p.Probe("/not-a-repo")
+	got := p.Probe(context.Background(), "/not-a-repo")
 	if got.AssociatedRemoteURLs.Origin != "" {
 		t.Errorf("origin should be empty on git failure")
 	}

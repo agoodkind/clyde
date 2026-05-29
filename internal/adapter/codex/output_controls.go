@@ -7,29 +7,24 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
+// OutputControls carries the codex-cli output-shaping fields Clyde
+// forwards on the Responses request. codex-cli sends `text` (verbosity
+// and JSON-schema output formatting); it does not send a
+// max_completion_tokens, truncation, or prompt_cache_retention field, so
+// those are not modeled here. Output capping relies on the upstream
+// server-side policy, exactly as codex-cli relies on it.
 type OutputControls struct {
-	MaxCompletion        *int            `json:"max_completion_tokens,omitempty"`
-	Text                 json.RawMessage `json:"text,omitempty"`
-	Truncation           string          `json:"truncation,omitempty"`
-	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"`
+	Text json.RawMessage `json:"text,omitempty"`
 }
 
+// BuildOutputControls extracts the codex-cli-faithful output controls
+// from an inbound ChatRequest. Only `text` survives; the inbound
+// max-token, truncation, and prompt-cache-retention hints are dropped
+// because codex-cli never sends those wire fields.
 func BuildOutputControls(req adapteropenai.ChatRequest) OutputControls {
 	return OutputControls{
-		MaxCompletion:        firstInt(req.MaxComplTokens, req.MaxOutputTokens, req.MaxTokens),
-		Text:                 validJSONObject(req.Text),
-		Truncation:           normalizedTruncation(req.Truncation),
-		PromptCacheRetention: normalizedPromptCacheRetention(req.PromptCacheRetention),
+		Text: validJSONObject(req.Text),
 	}
-}
-
-func firstInt(values ...*int) *int {
-	for _, value := range values {
-		if value != nil {
-			return value
-		}
-	}
-	return nil
 }
 
 func validJSONObject(raw json.RawMessage) json.RawMessage {
@@ -44,22 +39,4 @@ func validJSONObject(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return raw
-}
-
-func normalizedTruncation(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "auto", "disabled":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return ""
-	}
-}
-
-func normalizedPromptCacheRetention(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "24h":
-		return "24h"
-	default:
-		return ""
-	}
 }

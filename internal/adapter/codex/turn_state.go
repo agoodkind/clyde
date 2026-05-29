@@ -7,31 +7,49 @@ import (
 )
 
 const (
-	CodexInstallationIDHeader = "x-codex-installation-id"
-	CodexTurnStateHeader      = "x-codex-turn-state"
-	CodexTurnMetadataHeader   = "x-codex-turn-metadata"
-	CodexWindowIDHeader       = "x-codex-window-id"
-	CodexTimingMetricsHeader  = "x-responsesapi-include-timing-metrics"
-	CodexBetaFeaturesHeader   = "x-codex-beta-features"
-	CodexOriginatorHeader     = "originator"
+	// CodexInstallationIDHeader is part of Clyde's typed adapter surface.
+	CodexInstallationIDHeader = "X-Codex-Installation-Id"
+	// CodexTurnStateHeader is part of Clyde's typed adapter surface.
+	CodexTurnStateHeader = "X-Codex-Turn-State"
+	// CodexTurnMetadataHeader is part of Clyde's typed adapter surface.
+	CodexTurnMetadataHeader = "X-Codex-Turn-Metadata"
+	// WindowIDHeader is part of Clyde's typed adapter surface.
+	WindowIDHeader = "X-Codex-Window-Id"
+	// CodexTimingMetricsHeader is part of Clyde's typed adapter surface.
+	CodexTimingMetricsHeader = "X-Responsesapi-Include-Timing-Metrics"
+	// CodexBetaFeaturesHeader is part of Clyde's typed adapter surface.
+	CodexBetaFeaturesHeader = "X-Codex-Beta-Features"
+	// CodexOriginatorHeader is part of Clyde's typed adapter surface.
+	CodexOriginatorHeader = "Originator"
 )
 
-// CodexOriginatorValue is our first-party identity in the
-// `originator` header. We do not spoof codex_exec or Codex Desktop;
-// our wire shape is a superset and we want it to be visible to the
-// upstream as a distinct client. Reference values observed:
-// codex_exec (CLI), Codex Desktop (app).
-const CodexOriginatorValue = "clyde"
+// CodexOriginatorValue is the value Clyde sends in the `originator`
+// header on the Codex path. It is grounded in the codex-rs source:
+// research/codex/codex-rs/login/src/auth/default_client.rs sets
+// `DEFAULT_ORIGINATOR = "codex_cli_rs"` and writes it into the
+// `originator` header via `default_headers()`. Clyde spoofs the
+// codex-cli identity so the ChatGPT-Pro Responses upstream treats the
+// request as a first-party codex-cli client
+// (is_first_party_originator matches "codex_cli_rs").
+const CodexOriginatorValue = "codex_cli_rs"
 
+// TurnState is part of Clyde's typed adapter surface.
 type TurnState struct {
 	mu    sync.RWMutex
 	value string
 }
 
+// NewTurnState is part of Clyde's typed adapter surface.
 func NewTurnState() *TurnState {
-	return &TurnState{}
+	return &TurnState{
+		mu: sync.
+			RWMutex{},
+
+		value: "",
+	}
 }
 
+// Value is part of Clyde's typed adapter surface.
 func (s *TurnState) Value() string {
 	if s == nil {
 		return ""
@@ -41,6 +59,7 @@ func (s *TurnState) Value() string {
 	return s.value
 }
 
+// CaptureFromHeaders is part of Clyde's typed adapter surface.
 func (s *TurnState) CaptureFromHeaders(header http.Header) bool {
 	if s == nil {
 		return false
@@ -58,7 +77,8 @@ func (s *TurnState) CaptureFromHeaders(header http.Header) bool {
 	return true
 }
 
-func CodexWindowID(conversationID string) string {
+// WindowID is part of Clyde's typed adapter surface.
+func WindowID(conversationID string) string {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return ""

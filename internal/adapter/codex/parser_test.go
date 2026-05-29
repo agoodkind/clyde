@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/clyde/codexwire"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 )
@@ -387,13 +388,13 @@ func TestParseSSECapturesCompletedOutputItems(t *testing.T) {
 	if len(res.OutputItems) != 2 {
 		t.Fatalf("output_items len=%d want 2: %#v", len(res.OutputItems), res.OutputItems)
 	}
-	if got, _ := res.OutputItems[0]["id"].(string); got != "msg_1" {
+	if got := res.OutputItems[0].ID; got != "msg_1" {
 		t.Fatalf("first output item id=%q want msg_1", got)
 	}
-	if got, _ := res.OutputItems[1]["type"].(string); got != "function_call" {
+	if got := res.OutputItems[1].Type; got != codexItemTypeFunctionCall {
 		t.Fatalf("second output item type=%q want function_call", got)
 	}
-	if got, _ := res.OutputItems[1]["name"].(string); got != "read_file" {
+	if got := res.OutputItems[1].Name; got != "read_file" {
 		t.Fatalf("second output item name=%q want read_file", got)
 	}
 }
@@ -423,7 +424,7 @@ func TestParseSSEStoresReconstructedFunctionCallArguments(t *testing.T) {
 	if len(res.OutputItems) != 1 {
 		t.Fatalf("output_items len=%d want 1: %#v", len(res.OutputItems), res.OutputItems)
 	}
-	args, _ := res.OutputItems[0]["arguments"].(string)
+	args := res.OutputItems[0].Arguments
 	if !strings.Contains(args, `"command":"pwd"`) || !strings.Contains(args, `"workdir":"/private/tmp/clyde-cursor-smoke-ws"`) {
 		t.Fatalf("arguments=%q", args)
 	}
@@ -595,7 +596,7 @@ func TestParseSSEDoesNotMarkOrdinaryToolCallsAsSubagent(t *testing.T) {
 	}
 }
 
-func TestParseSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
+func TestParseSSEMapsNativeLocalShellToDeclaredCommandTool(t *testing.T) {
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.done",
 		`data: {"item":{"id":"ls_1","type":"local_shell_call","call_id":"call_shell","status":"completed","action":{"type":"exec","command":["zsh","-lc","pwd"],"working_directory":"/repo","timeout_ms":1000}}}`,
@@ -604,7 +605,87 @@ func TestParseSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	got, res, err := parseSSEChunksForTest(stream)
+	// The client declared its command tool as "Shell"; codex answered
+	// with a native local_shell_call. The native call must reach the
+	// client as the name IT declared, resolved by shape from the
+	// declared set, not by a hardcoded "Shell" constant.
+	declared := []codexwire.ToolSpec{declaredCommandToolSpec("Shell")}
+	got, res, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{}, declared)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.FinishReason != "tool_calls" {
+		t.Fatalf("finish_reason=%q", res.FinishReason)
+	}
+	calls := collectToolCallsLocal(got)
+	if len(calls) != 2 {
+		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
+	}
+	if calls[0].Function.Name != "Shell" {
+		t.Fatalf("tool name=%q want Shell (the declared command tool)", calls[0].Function.Name)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(calls[1].Function.Arguments), &args); err != nil {
+		t.Fatalf("args JSON: %v", err)
+	}
+	if args["command"] != "pwd" || args["workdir"] != "/repo" || args["timeout_ms"].(float64) != 1000 {
+		t.Fatalf("args=%v", args)
+	}
+}
+
+func TestParseSSEMapsNativeLocalShellToCustomDeclaredCommandToolName(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ls_1","type":"local_shell_call","call_id":"call_shell","status":"completed","action":{"type":"exec","command":["zsh","-lc","pwd"],"working_directory":"/repo"}}}`,
+		"",
+		"event: response.completed",
+		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+		"",
+	}, "\n") + "\n")
+	// A client that names its command tool "RunShellCommand" still gets
+	// the native local_shell_call routed back to that name, proving the
+	// mapping is driven by the declared set rather than a constant.
+	declared := []codexwire.ToolSpec{declaredCommandToolSpec("RunShellCommand")}
+	got, _, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{}, declared)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	calls := collectToolCallsLocal(got)
+	if len(calls) == 0 || calls[0].Function.Name != "RunShellCommand" {
+		t.Fatalf("tool name=%q want RunShellCommand", calls[0].Function.Name)
+	}
+}
+
+// declaredShellToolSpecWithFields is a command-like client tool whose
+// parameter property names are caller-supplied, so a test can declare a
+// shell tool with non-default field names (e.g. cmd/cwd) and assert the
+// shell handler renders the action under those declared names.
+func declaredShellToolSpecWithFields(name string, properties string) codexwire.ToolSpec {
+	return codexwire.ToolSpec{
+		Type:       codexwire.ToolSpecTypeFunction,
+		Name:       name,
+		Parameters: json.RawMessage(`{"type":"object","properties":` + properties + `}`),
+	}
+}
+
+func TestParseSSEShellHandlerUsesDeclaredFieldNames(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ls_1","type":"local_shell_call","call_id":"call_shell","status":"completed","action":{"type":"exec","command":["zsh","-lc","pwd"],"working_directory":"/repo","timeout_ms":1000}}}`,
+		"",
+		"event: response.completed",
+		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+		"",
+	}, "\n") + "\n")
+	// The client declares its shell tool with non-default field names
+	// `cmd` and `cwd`. The shell handler must render the native action
+	// under the DECLARED names, not the hardcoded codex-rs names
+	// `command`/`workdir`. The VALUES are unchanged.
+	declared := []codexwire.ToolSpec{declaredShellToolSpecWithFields(
+		"Shell",
+		`{"cmd":{"type":"string"},"cwd":{"type":"string"}}`,
+	)}
+	got, res, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{}, declared)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -622,12 +703,104 @@ func TestParseSSEMapsNativeLocalShellToCursorShell(t *testing.T) {
 	if err := json.Unmarshal([]byte(calls[1].Function.Arguments), &args); err != nil {
 		t.Fatalf("args JSON: %v", err)
 	}
-	if args["command"] != "pwd" || args["working_directory"] != "/repo" || args["block_until_ms"].(float64) != 1000 {
-		t.Fatalf("args=%v", args)
+	if args["cmd"] != "pwd" {
+		t.Fatalf("args[cmd]=%v want pwd; full args=%v", args["cmd"], args)
+	}
+	if args["cwd"] != "/repo" {
+		t.Fatalf("args[cwd]=%v want /repo; full args=%v", args["cwd"], args)
+	}
+	// The hardcoded codex-rs names must NOT appear: the client never
+	// declared command/workdir, so they would be fields it cannot read.
+	if _, ok := args["command"]; ok {
+		t.Fatalf("args carries hardcoded command field: %v", args)
+	}
+	if _, ok := args["workdir"]; ok {
+		t.Fatalf("args carries hardcoded workdir field: %v", args)
+	}
+	// The client did not declare a timeout field, so no timeout is emitted
+	// even though the action carried timeout_ms.
+	if _, ok := args["timeout_ms"]; ok {
+		t.Fatalf("args carries undeclared timeout_ms: %v", args)
+	}
+	if _, ok := args["timeout"]; ok {
+		t.Fatalf("args carries undeclared timeout: %v", args)
 	}
 }
 
-func TestParseSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
+func TestParseSSEShellHandlerOmitsFieldsClientDidNotDeclare(t *testing.T) {
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ls_1","type":"local_shell_call","call_id":"call_shell","status":"completed","action":{"type":"exec","command":["zsh","-lc","pwd"],"working_directory":"/repo","timeout_ms":1000}}}`,
+		"",
+		"event: response.completed",
+		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+		"",
+	}, "\n") + "\n")
+	// The client declares ONLY a `command` field. Even though the native
+	// action carries a working directory and timeout, the handler emits
+	// only the declared field and does not invent workdir/timeout fields
+	// the client cannot read.
+	declared := []codexwire.ToolSpec{declaredShellToolSpecWithFields(
+		"Shell",
+		`{"command":{"type":"string"}}`,
+	)}
+	got, _, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{}, declared)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	calls := collectToolCallsLocal(got)
+	if len(calls) != 2 {
+		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(calls[1].Function.Arguments), &args); err != nil {
+		t.Fatalf("args JSON: %v", err)
+	}
+	if args["command"] != "pwd" {
+		t.Fatalf("args[command]=%v want pwd; full args=%v", args["command"], args)
+	}
+	if len(args) != 1 {
+		t.Fatalf("args has extra fields the client did not declare: %v", args)
+	}
+}
+
+func TestParseSSEFunctionHandlerRelaysNameAndArgumentsByteForByte(t *testing.T) {
+	// The verbatim arguments string the model emits, including odd
+	// whitespace and key order, must arrive unchanged through the
+	// function handler.
+	rawArgs := `{ "command":"echo hi",  "extra":[1,2,3] }`
+	encodedArgs, err := json.Marshal(rawArgs)
+	if err != nil {
+		t.Fatalf("encode args: %v", err)
+	}
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.done",
+		`data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_fn","name":"do_thing","arguments":` + string(encodedArgs) + `}}`,
+		"",
+		"event: response.completed",
+		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+		"",
+	}, "\n") + "\n")
+	got, res, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{}, nil)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	if res.FinishReason != "tool_calls" {
+		t.Fatalf("finish_reason=%q", res.FinishReason)
+	}
+	calls := collectToolCallsLocal(got)
+	if len(calls) != 2 {
+		t.Fatalf("tool call chunks=%d want 2: %#v", len(calls), calls)
+	}
+	if calls[0].Function.Name != "do_thing" {
+		t.Fatalf("tool name=%q want do_thing (relayed verbatim)", calls[0].Function.Name)
+	}
+	if calls[1].Function.Arguments != rawArgs {
+		t.Fatalf("arguments=%q want byte-for-byte %q", calls[1].Function.Arguments, rawArgs)
+	}
+}
+
+func TestParseSSEMapsNativeApplyPatchToDeclaredPatchTool(t *testing.T) {
 	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
 	stream := strings.NewReader(strings.Join([]string{
 		"event: response.output_item.added",
@@ -646,7 +819,13 @@ func TestParseSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	got, res, err := parseSSEChunksForTest(stream)
+	// The client declared its patch tool as "ApplyPatch"; codex answered
+	// with a native freeform apply_patch custom_tool_call. The native
+	// call must reach the client as the name IT declared, resolved by
+	// shape from the declared set, not by a hardcoded "ApplyPatch"
+	// constant. The patch body must still arrive intact.
+	declared := []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")}
+	got, res, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{}, declared)
 	if err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
@@ -658,10 +837,40 @@ func TestParseSSEMapsNativeApplyPatchToCursorApplyPatch(t *testing.T) {
 		t.Fatalf("tool call chunks=%d want 3: %#v", len(calls), calls)
 	}
 	if calls[0].Function.Name != "ApplyPatch" {
-		t.Fatalf("tool name=%q want ApplyPatch", calls[0].Function.Name)
+		t.Fatalf("tool name=%q want ApplyPatch (the declared patch tool)", calls[0].Function.Name)
 	}
 	if gotPatch := calls[1].Function.Arguments + calls[2].Function.Arguments; gotPatch != patch {
 		t.Fatalf("patch args=%q want %q", gotPatch, patch)
+	}
+}
+
+func TestParseSSEMapsNativeApplyPatchToCustomDeclaredPatchToolName(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: out.md\n+ok\n*** End Patch\n"
+	stream := strings.NewReader(strings.Join([]string{
+		"event: response.output_item.added",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+		"event: response.custom_tool_call_input.delta",
+		`data: {"item_id":"ct_1","call_id":"call_patch","delta":"` + patch + `"}`,
+		"",
+		"event: response.output_item.done",
+		`data: {"item":{"id":"ct_1","type":"custom_tool_call","call_id":"call_patch","name":"apply_patch","input":""}}`,
+		"",
+		"event: response.completed",
+		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+		"",
+	}, "\n") + "\n")
+	// A client that names its patch tool "Edit" still gets codex's native
+	// apply_patch routed back to "Edit", proving the mapping is driven by
+	// the declared set rather than a constant.
+	declared := []codexwire.ToolSpec{declaredPatchToolSpec("Edit")}
+	got, _, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{}, declared)
+	if err != nil {
+		t.Fatalf("ParseSSE: %v", err)
+	}
+	calls := collectToolCallsLocal(got)
+	if len(calls) == 0 || calls[0].Function.Name != "Edit" {
+		t.Fatalf("tool name=%q want Edit", calls[0].Function.Name)
 	}
 }
 
@@ -678,7 +887,8 @@ func TestParseSSELogsSuccessfulNativeLocalShellItem(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	if _, _, err := parseSSEChunksForTestWithLog(stream, sseInstrumentationContext{RequestID: "req_native_shell"}); err != nil {
+	declared := []codexwire.ToolSpec{declaredCommandToolSpec("Shell")}
+	if _, _, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{RequestID: "req_native_shell"}, declared); err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
 
@@ -716,7 +926,8 @@ func TestParseSSELogsSuccessfulNativeCustomToolItem(t *testing.T) {
 		`data: {"response":{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`,
 		"",
 	}, "\n") + "\n")
-	if _, _, err := parseSSEChunksForTestWithLog(stream, sseInstrumentationContext{RequestID: "req_native_custom"}); err != nil {
+	declared := []codexwire.ToolSpec{declaredPatchToolSpec("ApplyPatch")}
+	if _, _, err := parseSSEChunksForTestWithTools(stream, sseInstrumentationContext{RequestID: "req_native_custom"}, declared); err != nil {
 		t.Fatalf("ParseSSE: %v", err)
 	}
 
@@ -842,11 +1053,11 @@ func TestParseSSEEventsEmitsNormalizedSequence(t *testing.T) {
 }
 
 func TestCanonicalContinuationPreservesFunctionCallName(t *testing.T) {
-	item := map[string]any{
-		"type":      "function_call",
-		"call_id":   "call_1",
-		"name":      " read_file ",
-		"arguments": `{"path":"README.md"}`,
+	item := codexwire.InputItem{
+		Type:      codexwire.ItemTypeFunctionCall,
+		CallID:    "call_1",
+		Name:      " read_file ",
+		Arguments: `{"path":"README.md"}`,
 	}
 	event, ok := canonicalContinuationEvent(item)
 	if !ok {
@@ -856,21 +1067,21 @@ func TestCanonicalContinuationPreservesFunctionCallName(t *testing.T) {
 		t.Fatalf("event name=%q want read_file", event.Name)
 	}
 	canonical := canonicalContinuationItem(item)
-	if got, _ := canonical["name"].(string); got != "read_file" {
-		t.Fatalf("canonical item name=%q want read_file", got)
+	if canonical.Name != "read_file" {
+		t.Fatalf("canonical item name=%q want read_file", canonical.Name)
 	}
 }
 
 func TestCanonicalContinuationDoesNotEquateMappedToolNames(t *testing.T) {
-	readFile := map[string]any{
-		"type":      "function_call",
-		"name":      "read_file",
-		"arguments": `{"path":"README.md"}`,
+	readFile := codexwire.InputItem{
+		Type:      codexwire.ItemTypeFunctionCall,
+		Name:      "read_file",
+		Arguments: `{"path":"README.md"}`,
 	}
-	read := map[string]any{
-		"type":      "function_call",
-		"name":      "Read",
-		"arguments": `{"path":"README.md"}`,
+	read := codexwire.InputItem{
+		Type:      codexwire.ItemTypeFunctionCall,
+		Name:      "Read",
+		Arguments: `{"path":"README.md"}`,
 	}
 	if continuationItemEqual(readFile, read) {
 		t.Fatalf("read_file and Read should not compare equal")
@@ -896,13 +1107,44 @@ func parseSSEChunksForTest(stream *strings.Reader) ([]adapteropenai.StreamChunk,
 }
 
 func parseSSEChunksForTestWithLog(stream *strings.Reader, logCtx sseInstrumentationContext) ([]adapteropenai.StreamChunk, RunResult, error) {
+	return parseSSEChunksForTestWithTools(stream, logCtx, nil)
+}
+
+func parseSSEChunksForTestWithTools(stream *strings.Reader, logCtx sseInstrumentationContext, declaredTools []codexwire.ToolSpec) ([]adapteropenai.StreamChunk, RunResult, error) {
 	r := adapterrender.NewEventRenderer("req", "alias", "codex", nil)
 	var got []adapteropenai.StreamChunk
 	res, err := ParseSSEEventsWithOptions(context.Background(), stream, func(ev adapterrender.Event) error {
 		got = append(got, r.HandleEvent(ev)...)
 		return nil
-	}, logCtx, SSEParseOptions{DropEncryptedContent: false})
+	}, logCtx, SSEParseOptions{DropEncryptedContent: false, DeclaredTools: declaredTools})
 	return got, res, err
+}
+
+// declaredPatchToolSpec is a client-declared tool whose parameter shape
+// is patch-like (a single string patch parameter). The NAME is whatever
+// the test asserts the call should map back to; the resolver matches it
+// by SHAPE, not by this name.
+func declaredPatchToolSpec(name string) codexwire.ToolSpec {
+	return codexwire.ToolSpec{
+		Type:       codexwire.ToolSpecTypeFunction,
+		Name:       name,
+		Parameters: json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}`),
+	}
+}
+
+// declaredCommandToolSpec is a client-declared tool whose parameter
+// shape is command-like (a string command property). The NAME is
+// whatever the test asserts; the resolver matches it by SHAPE. The
+// field names mirror what Cursor declares today (command/workdir/
+// timeout_ms) so the shell handler renders the action under the
+// client's declared names; the resolver still routes by shape, not by
+// these names.
+func declaredCommandToolSpec(name string) codexwire.ToolSpec {
+	return codexwire.ToolSpec{
+		Type:       codexwire.ToolSpecTypeFunction,
+		Name:       name,
+		Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string"},"timeout_ms":{"type":"integer"}}}`),
+	}
 }
 
 func collectToolCallsLocal(chunks []adapteropenai.StreamChunk) []adapteropenai.ToolCall {

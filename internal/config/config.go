@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,10 +11,6 @@ import (
 
 // Config represents the clyde configuration.
 type Config struct {
-	// Defaults are applied to all sessions unless overridden
-	Defaults Defaults `json:"defaults" toml:"defaults"`
-	// Profiles is a map of named session profiles
-	Profiles map[string]Profile `json:"profiles,omitempty" toml:"profiles,omitempty"`
 	// Logging configures process-wide runtime behavior.
 	Logging LoggingConfig `json:"logging" toml:"logging"`
 	// Search configures the conversation search LLM backend
@@ -23,237 +18,9 @@ type Config struct {
 	// Adapter configures the OpenAI compatible HTTP adapter mounted
 	// inside the daemon process.
 	Adapter AdapterConfig `json:"adapter" toml:"adapter"`
-	// WebApp configures the optional remote dashboard mounted by the
-	// daemon. The dashboard exposes a small HTML form plus a JSON API
-	// for spawning new remote control sessions and lists every active
-	// bridge URL. Pair with cloudflared to expose securely.
-	WebApp WebAppConfig `json:"webApp" toml:"web_app"`
-	// Prune configures the daemon's periodic session pruning loop.
-	// Disabled by default so existing installs see no behavior change
-	// until the user opts in.
-	Prune PruneConfig `json:"prune" toml:"prune"`
-	// OAuth configures the daemon's background OAuth token refresher.
-	// The refresher keeps a warm access token in the keychain
-	// so the adapter direct-OAuth path almost never has to refresh
-	// inline.
-	OAuth OAuthConfig `json:"oauth" toml:"oauth"`
-	// Labeler configures the per-session topic labeler that writes a
-	// short bookmark-style label into Metadata.Context. The previous
-	// implementation shelled out to `claude -p --model sonnet`, which
-	// recursed through the SessionStart hook chain and fanned out
-	// uncontrollably. The shellout has been ripped out; this struct
-	// is the wiring point for the eventual rewrite against the
-	// in-process adapter. Disabled by default until then.
-	Labeler LabelerConfig `json:"labeler" toml:"labeler"`
 	// MITM configures the local capture proxy used for provider
 	// subprocesses and for adapter-side request observability.
 	MITM MITMConfig `json:"mitm" toml:"mitm"`
-	// AutoName configures the automatic session-naming worker.
-	// CLYDE-170 PR3 adds the parsed config block. The worker that
-	// consumes this config lands in PR4. Defaults are applied when
-	// the [autoname] block is absent or partial.
-	AutoName AutoNameConfig `json:"autoName" toml:"autoname"`
-	// Debug carries operator-facing debug knobs. Off by default; each
-	// sub-block opts the operator in explicitly. The pprof endpoint is
-	// the first inhabitant and binds to a localhost-only address.
-	Debug DebugConfig `json:"debug" toml:"debug"`
-}
-
-// DebugConfig groups operator-facing debug knobs. Each sub-block is
-// off by default so default builds carry no extra listeners.
-type DebugConfig struct {
-	Pprof PprofConfig `json:"pprof,omitzero" toml:"pprof,omitempty"`
-}
-
-// PprofConfig controls the worker's optional pprof HTTP listener. The
-// listener uses a fresh http.ServeMux rather than http.DefaultServeMux
-// so enabling pprof never mutates global handler state. Listen is
-// validated for a non-empty value when Enabled is true; the documented
-// default "localhost:0" picks a random port and is appropriate for
-// ad-hoc operator inspection.
-type PprofConfig struct {
-	// Enabled toggles the listener. Default false.
-	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// Listen is the bind address. Default "localhost:0". Operators may
-	// pin a stable address such as "localhost:6060" or "[::1]:6060".
-	Listen string `json:"listen,omitempty" toml:"listen,omitempty"`
-}
-
-// LoggingConfig carries global logging settings.
-type LoggingConfig struct {
-	Level      string            `json:"level,omitempty" toml:"level,omitempty"`
-	Rotation   LoggingRotation   `json:"rotation,omitzero" toml:"rotation,omitempty"`
-	RawCapture LoggingToggle     `json:"raw_capture,omitzero" toml:"raw_capture,omitempty"`
-	Cleanup    LoggingCleanup    `json:"cleanup,omitzero" toml:"cleanup,omitempty"`
-	Request    LoggingRequest    `json:"request,omitzero" toml:"request,omitempty"`
-	Inventory  LoggingInventory  `json:"inventory,omitzero" toml:"inventory,omitempty"`
-	Paths      LoggingPaths      `json:"paths,omitzero" toml:"paths,omitempty"`
-	Transcript LoggingTranscript `json:"transcript,omitzero" toml:"transcript,omitempty"`
-	Sinks      LoggingSinks      `json:"sinks,omitzero" toml:"sinks,omitempty"`
-	Concerns   LoggingConcerns   `json:"concerns,omitempty" toml:"concerns,omitempty"`
-}
-
-// LoggingSinks carries the enabled central sink names.
-type LoggingSinks struct {
-	Enabled []string `json:"enabled,omitempty" toml:"enabled,omitempty"`
-}
-
-// LoggingConcerns maps registered concern names to per-concern overrides.
-type LoggingConcerns map[string]LoggingConcern
-
-const (
-	// LoggingSinkDaemon names the daemon process log sink.
-	LoggingSinkDaemon = "daemon"
-	// LoggingSinkTUI names the TUI process log sink.
-	LoggingSinkTUI = "tui"
-	// LoggingSinkCodexSidecar names the Codex sidecar log sink.
-	LoggingSinkCodexSidecar = "codex_sidecar"
-	// LoggingSinkAnthropicSidecar names the Anthropic sidecar log sink.
-	LoggingSinkAnthropicSidecar = "anthropic_sidecar"
-	// LoggingSinkAudit names the cross-process audit log sink.
-	LoggingSinkAudit = "audit"
-	// LoggingSinkConcerns names the structured concern log sink.
-	LoggingSinkConcerns = "concerns"
-	// LoggingSinkTranscripts names the per-chat transcript sink.
-	LoggingSinkTranscripts = "transcripts"
-	// LoggingSinkMITMCapture names the MITM capture index sink.
-	LoggingSinkMITMCapture = "mitm_capture"
-	// LoggingSinkMITMRaw names the MITM raw payload sink.
-	LoggingSinkMITMRaw = "mitm_raw"
-	// LoggingSinkInventory names the inventory index sink.
-	LoggingSinkInventory = "inventory_index"
-)
-
-// LoggingConcern carries config-layer controls for a registered concern.
-type LoggingConcern struct {
-	Enabled  *bool           `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	Level    string          `json:"level,omitempty" toml:"level,omitempty"`
-	Detail   string          `json:"detail,omitempty" toml:"detail,omitempty"`
-	Sink     string          `json:"sink,omitempty" toml:"sink,omitempty"`
-	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
-}
-
-// LoggingTranscript controls the per-chat transcript router that tees a
-// curated allowlist of records to chats/<chat_key>.jsonl, one file per chat.
-// Default: on. The operator turns it off by setting Enabled = false.
-type LoggingTranscript struct {
-	// Enabled toggles the per-chat router. Default true.
-	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-}
-
-// IsEnabled reports whether the transcript router should be wired in.
-// Defaults to true; operators can flip Enabled = false to disable.
-func (t LoggingTranscript) IsEnabled() bool {
-	if t.Enabled == nil {
-		return true
-	}
-	return *t.Enabled
-}
-
-// LoggingRotation controls file rotation behavior for the unified clyde logger.
-type LoggingRotation struct {
-	Enabled    *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	MaxSizeMB  int   `json:"max_size_mb,omitempty" toml:"max_size_mb,omitempty"`
-	MaxBackups int   `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
-	MaxAgeDays int   `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
-	Compress   *bool `json:"compress,omitempty" toml:"compress,omitempty"`
-}
-
-// LoggingCleanup controls deletion of old log files separately from file rotation.
-type LoggingCleanup struct {
-	Enabled    *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	MaxAgeDays *int  `json:"max_age_days,omitempty" toml:"max_age_days,omitempty"`
-	MaxBackups *int  `json:"max_backups,omitempty" toml:"max_backups,omitempty"`
-	MaxTotalMB *int  `json:"max_total_mb,omitempty" toml:"max_total_mb,omitempty"`
-}
-
-// LoggingToggle is a named on/off logging control.
-type LoggingToggle struct {
-	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-}
-
-// LoggingRequest controls request-story contract checks.
-type LoggingRequest struct {
-	RequiredLegs     map[string][]string `json:"required_legs,omitempty" toml:"required_legs,omitempty"`
-	IncompletePolicy string              `json:"incomplete_policy,omitempty" toml:"incomplete_policy,omitempty"`
-}
-
-// LoggingInventory controls how clyde logs inventory discovers log locations.
-type LoggingInventory struct {
-	Mode string `json:"mode,omitempty" toml:"mode,omitempty"`
-}
-
-// LoggingPaths controls per-process JSONL destinations. When a path is empty,
-// slogger picks a process-specific default under $XDG_STATE_HOME/clyde.
-type LoggingPaths struct {
-	TUI    string `json:"tui,omitempty" toml:"tui,omitempty"`
-	Daemon string `json:"daemon,omitempty" toml:"daemon,omitempty"`
-}
-
-// LabelerConfig drives the (currently stubbed) session topic labeler.
-// Enabled is the only knob today; turning it on without a working
-// adapter implementation is a no-op and emits a warning log.
-type LabelerConfig struct {
-	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-}
-
-// PruneConfig drives the daemon's periodic session pruning loop. The
-// pruner is opt-in. When Enabled the daemon ticks every Interval and
-// runs the kinds set to true. Defaults are conservative: ephemeral
-// and empty are safe to auto-prune; autoname is left off because that
-// pruner is untested at scale.
-type PruneConfig struct {
-	Enabled        bool          `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	Interval       time.Duration `json:"interval,omitempty" toml:"interval,omitempty"`
-	Ephemeral      bool          `json:"ephemeral,omitempty" toml:"ephemeral,omitempty"`
-	Empty          bool          `json:"empty,omitempty" toml:"empty,omitempty"`
-	Autoname       bool          `json:"autoname,omitempty" toml:"autoname,omitempty"`
-	EmptyMaxLines  int           `json:"emptyMaxLines,omitempty" toml:"empty_max_lines,omitempty"`
-	EmptyMinAge    time.Duration `json:"emptyMinAge,omitempty" toml:"empty_min_age,omitempty"`
-	AutonameMinAge time.Duration `json:"autonameMinAge,omitempty" toml:"autoname_min_age,omitempty"`
-}
-
-// OAuthConfig drives the daemon's background OAuth refresh goroutine.
-// The refresher is opt-out (default on) because the adapter's
-// direct-OAuth path depends on a warm access token. Disabled is a
-// pointer so we can distinguish "not set" (use default: enabled) from
-// an explicit "disabled = true" in TOML.
-type OAuthConfig struct {
-	// Disabled, when explicitly true, turns the background refresher
-	// off. The adapter's inline refresh still works as a safety net.
-	// Default behavior (nil or false) is enabled.
-	Disabled *bool `json:"disabled,omitempty" toml:"disabled,omitempty"`
-	// Interval between refresh attempts. Default 4 hours (half the
-	// 8 hour OAuth access token lifetime so a single missed tick still
-	// leaves plenty of headroom before expiry).
-	Interval time.Duration `json:"interval,omitempty" toml:"interval,omitempty"`
-}
-
-// IsEnabled reports whether the background OAuth refresher should
-// run. Defaults to true unless the user explicitly set Disabled to
-// true in their config.
-func (o OAuthConfig) IsEnabled() bool {
-	if o.Disabled != nil && *o.Disabled {
-		return false
-	}
-	return true
-}
-
-// WebAppConfig configures the optional in daemon web dashboard.
-type WebAppConfig struct {
-	// Enabled toggles the listener.
-	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	// Host defaults to [::1].
-	Host string `json:"host,omitempty" toml:"host,omitempty"`
-	// Port defaults to 11435.
-	Port int `json:"port,omitempty" toml:"port,omitempty"`
-	// RequireToken, when set, demands matching bearer auth on every
-	// request. CLYDE_WEBAPP_TOKEN env override applies.
-	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
-	// ClydeBinary is the path used to spawn new sessions when the
-	// dashboard's "Start" button is invoked. Empty falls back to the
-	// daemon's resolved executable name.
-	ClydeBinary string `json:"clydeBinary,omitempty" toml:"clyde_binary,omitempty"`
 }
 
 // AdapterConfig configures the OpenAI compatible HTTP server folded
@@ -271,7 +38,7 @@ type AdapterConfig struct {
 	Port int `json:"port,omitempty" toml:"port,omitempty"`
 	// DefaultModel is the fallback when a request does not name one.
 	DefaultModel string `json:"defaultModel,omitempty" toml:"default_model,omitempty"`
-	// MaxConcurrent caps the number of in flight claude subprocesses.
+	// MaxConcurrent caps concurrently handled adapter requests.
 	MaxConcurrent int `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
 	// RequireToken, when set, demands a matching bearer token on
 	// every request. The env var CLYDE_ADAPTER_TOKEN overrides.
@@ -288,8 +55,8 @@ type AdapterConfig struct {
 	// BaseURL disables passthrough and unknown aliases 400.
 	OpenAICompatPassthrough AdapterOpenAICompatPassthrough `json:"openaiCompatPassthrough,omitzero" toml:"openai_compat_passthrough,omitempty"`
 	// DirectOAuth, when true, routes Claude backend requests straight
-	// at the configured messages URL using the user's OAuth token from
-	// the local keychain.
+	// at the configured messages URL using the current platform's
+	// Claude login credential store.
 	DirectOAuth bool `json:"directOauth,omitempty" toml:"direct_oauth,omitempty"`
 	// ClientIdentity carries wire request-shape fields (headers and
 	// body-side billing line inputs). There are no compiled-in defaults:
@@ -318,10 +85,9 @@ type AdapterConfig struct {
 	// backend.
 	Codex AdapterCodex `json:"codex,omitzero" toml:"codex,omitempty"`
 	// Anthropic carries Anthropic-specific sub-blocks under the canonical
-	// [adapter.anthropic] root. Provider-specific OAuth config lives here
-	// at [adapter.anthropic.oauth] (with the rotation sub-block at
-	// [adapter.anthropic.oauth.accounts]), alongside the wire-capture and
-	// reasoning levers.
+	// [adapter.anthropic] root. Provider-specific endpoint metadata lives
+	// at [adapter.anthropic.oauth], alongside wire-capture and reasoning
+	// levers.
 	Anthropic AdapterAnthropic `json:"anthropic,omitzero" toml:"anthropic,omitempty"`
 	// WireCapture holds the shared rotation budget for upstream wire
 	// body logging. Per-provider mode levers live on each provider's
@@ -329,20 +95,39 @@ type AdapterConfig struct {
 	// Rotation is shared because it is a filesystem concern, not a
 	// per-provider one; mode is per-provider because legal values differ.
 	WireCapture AdapterWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
-	// SyntheticContent declares per-provider rules for the synthetic
-	// envelope round-trip channel (`<!--clyde-...-->` markers). Each
-	// provider bucket controls whether outbound assistant content
-	// carries the visible envelope back to Cursor (BYOK has no native
-	// thinking UI, so the envelope is the visible affordance) and how
-	// inbound assistant content (envelopes Cursor replays back to us
-	// on the next turn) is materialized into upstream-native shapes.
-	// See [internal/adapter/render/synthetic_content.go] for the marker
-	// format and ExtractSyntheticParts contract.
-	SyntheticContent AdapterSyntheticContent `json:"syntheticContent,omitzero" toml:"synthetic_content,omitempty"`
 	// Retry declares operator-supplied adapter retry policies. This list
 	// holds only what config provides; provider packages append their
 	// own builtin policies at construction. There is no catch-all retry.
 	Retry AdapterRetry `json:"retry,omitzero" toml:"retry,omitempty"`
+	// Pricing maps a wire model id to its public per-token billing rates
+	// expressed in dollars-per-million-tokens. The read-time cost
+	// aggregator (internal/daemon provider stats) consumes this map to
+	// translate recorded token counts into an estimated dollar cost.
+	// Keys are matched against the recorded model id by longest-prefix,
+	// so "claude-opus-4-8" covers "claude-opus-4-8[1m]" and snapshot
+	// variants. Empty disables read-time cost estimation. There are no
+	// compiled-in rate defaults; operators declare the table they trust.
+	Pricing map[string]AdapterModelPricing `json:"pricing,omitempty" toml:"pricing,omitempty"`
+}
+
+// AdapterModelPricing declares one model's public list rates in
+// dollars-per-million-tokens. The read-time cost aggregator converts
+// these to microcents-per-token (dollars-per-MTok * 100) before summing
+// recorded token counts. Cache write/read are separate rates because
+// Anthropic bills cache creation above input and cache reads far below
+// it; a provider that does not bill those (e.g. Codex cache reads) can
+// leave them zero.
+type AdapterModelPricing struct {
+	// InputPerMTok is the list price per one million input tokens, in USD.
+	InputPerMTok float64 `json:"inputPerMtok,omitempty" toml:"input_per_mtok,omitempty"`
+	// OutputPerMTok is the list price per one million output tokens, in USD.
+	OutputPerMTok float64 `json:"outputPerMtok,omitempty" toml:"output_per_mtok,omitempty"`
+	// CacheWritePerMTok is the list price per one million cache-creation
+	// tokens, in USD. Anthropic's 5m TTL list rate is the common value.
+	CacheWritePerMTok float64 `json:"cacheWritePerMtok,omitempty" toml:"cache_write_per_mtok,omitempty"`
+	// CacheReadPerMTok is the list price per one million cache-read
+	// tokens, in USD.
+	CacheReadPerMTok float64 `json:"cacheReadPerMtok,omitempty" toml:"cache_read_per_mtok,omitempty"`
 }
 
 // AdapterRetry is the top-level retry config for adapter operations.
@@ -374,115 +159,6 @@ type AdapterRetryMatchers struct {
 	MessageSubstrings []string `json:"messageSubstrings,omitempty" toml:"message_substrings,omitempty"`
 }
 
-// AdapterSyntheticContent holds the per-provider synthetic envelope levers.
-// The zero value preserves the documented defaults; provider sub-structs only
-// need to be populated when an operator wants to deviate from them.
-type AdapterSyntheticContent struct {
-	Anthropic           AdapterSyntheticContentProvider `json:"anthropic,omitzero" toml:"anthropic,omitempty"`
-	Codex               AdapterSyntheticContentProvider `json:"codex,omitzero" toml:"codex,omitempty"`
-	PassthroughOverride AdapterSyntheticContentProvider `json:"passthroughOverride,omitzero" toml:"passthrough_override,omitempty"`
-}
-
-// SyntheticInboundMaterialization is the closed enum of inbound thinking
-// envelope materialization strategies. Round-tripped thinking content can be
-// turned into a native upstream thinking content block, concatenated as
-// plain text into the assistant text block, dropped, or passed through
-// unchanged with the marker still in place.
-type SyntheticInboundMaterialization string
-
-const (
-	// SyntheticInboundNativeThinkingBlock materializes round-tripped
-	// thinking content as the upstream-native thinking content block
-	// (e.g. Anthropic's `{type: "thinking", thinking: ...}`). This is the
-	// Anthropic default because Anthropic accepts thinking blocks in the
-	// assistant history and the model uses them for reasoning continuity.
-	SyntheticInboundNativeThinkingBlock SyntheticInboundMaterialization = "native_thinking_block"
-	// SyntheticInboundPlainTextConcat concatenates the envelope body (with
-	// decoration stripped) into the assistant text block as plain prose.
-	// Useful for upstreams that cannot accept native thinking blocks but
-	// where preserving the visible reasoning trace in context still helps.
-	SyntheticInboundPlainTextConcat SyntheticInboundMaterialization = "plain_text_concat"
-	// SyntheticInboundDrop discards thinking envelope bodies before
-	// forwarding upstream. This is the Codex default because Codex
-	// upstream cannot accept Anthropic-shaped thinking blocks and the
-	// reasoning trace bloats context with no model-side gain.
-	SyntheticInboundDrop SyntheticInboundMaterialization = "drop"
-	// SyntheticInboundPassthrough leaves the marker-wrapped envelope in
-	// place when forwarding upstream. Used by the passthrough override
-	// path so the upstream sees exactly what Cursor sent.
-	SyntheticInboundPassthrough SyntheticInboundMaterialization = "passthrough"
-)
-
-// AdapterSyntheticContentProvider holds the per-provider synthetic envelope
-// settings. Pointer-bool for OutboundThinkingEnvelope so we can distinguish
-// "operator set false" from "operator unset, take default".
-type AdapterSyntheticContentProvider struct {
-	// OutboundThinkingEnvelope toggles whether the renderer wraps
-	// reasoning bodies in the visible `<!--clyde-thinking-->` envelope
-	// on the way to Cursor. Defaults: anthropic=true, codex=true,
-	// passthrough_override=false. nil means take the default.
-	OutboundThinkingEnvelope *bool `json:"outboundThinkingEnvelope,omitempty" toml:"outbound_thinking_envelope,omitempty"`
-	// InboundThinkingMaterialization picks the strategy for
-	// round-tripped thinking content on the inbound (request-shaping)
-	// side. Empty string means take the default for the provider.
-	InboundThinkingMaterialization SyntheticInboundMaterialization `json:"inboundThinkingMaterialization,omitempty" toml:"inbound_thinking_materialization,omitempty"`
-}
-
-// AnthropicOutboundThinkingEnvelope returns the resolved per-provider value
-// for [AdapterSyntheticContentProvider.OutboundThinkingEnvelope] for the
-// Anthropic backend, applying the documented default when unset.
-func (s AdapterSyntheticContent) AnthropicOutboundThinkingEnvelope() bool {
-	if s.Anthropic.OutboundThinkingEnvelope != nil {
-		return *s.Anthropic.OutboundThinkingEnvelope
-	}
-	return true
-}
-
-// AnthropicInboundThinkingMaterialization returns the resolved strategy with
-// the documented default when unset.
-func (s AdapterSyntheticContent) AnthropicInboundThinkingMaterialization() SyntheticInboundMaterialization {
-	if s.Anthropic.InboundThinkingMaterialization != "" {
-		return s.Anthropic.InboundThinkingMaterialization
-	}
-	return SyntheticInboundNativeThinkingBlock
-}
-
-// CodexOutboundThinkingEnvelope returns the resolved per-provider value with
-// the documented default when unset.
-func (s AdapterSyntheticContent) CodexOutboundThinkingEnvelope() bool {
-	if s.Codex.OutboundThinkingEnvelope != nil {
-		return *s.Codex.OutboundThinkingEnvelope
-	}
-	return true
-}
-
-// CodexInboundThinkingMaterialization returns the resolved strategy with the
-// documented default when unset.
-func (s AdapterSyntheticContent) CodexInboundThinkingMaterialization() SyntheticInboundMaterialization {
-	if s.Codex.InboundThinkingMaterialization != "" {
-		return s.Codex.InboundThinkingMaterialization
-	}
-	return SyntheticInboundDrop
-}
-
-// PassthroughOverrideOutboundThinkingEnvelope returns the resolved value with
-// the documented default when unset.
-func (s AdapterSyntheticContent) PassthroughOverrideOutboundThinkingEnvelope() bool {
-	if s.PassthroughOverride.OutboundThinkingEnvelope != nil {
-		return *s.PassthroughOverride.OutboundThinkingEnvelope
-	}
-	return false
-}
-
-// PassthroughOverrideInboundThinkingMaterialization returns the resolved
-// strategy with the documented default when unset.
-func (s AdapterSyntheticContent) PassthroughOverrideInboundThinkingMaterialization() SyntheticInboundMaterialization {
-	if s.PassthroughOverride.InboundThinkingMaterialization != "" {
-		return s.PassthroughOverride.InboundThinkingMaterialization
-	}
-	return SyntheticInboundPassthrough
-}
-
 // AdapterCodex configures the direct Codex backend path plus optional
 // app-server fallback used when direct HTTP fails.
 type AdapterCodex struct {
@@ -497,15 +173,13 @@ type AdapterCodex struct {
 	WebsocketEnabled bool `json:"websocketEnabled,omitempty" toml:"websocket_enabled,omitempty"`
 	// AuthFile points at Codex auth state. Defaults to ~/.codex/auth.json.
 	AuthFile string `json:"authFile,omitempty" toml:"auth_file,omitempty"`
-	// ModelPrefixes are alias prefixes routed to codex when no explicit
-	// model entry matches and native_model_routing is "codex".
-	// Defaults to ["gpt-", "o"].
-	ModelPrefixes []string `json:"modelPrefixes,omitempty" toml:"model_prefixes,omitempty"`
-	// NativeModelRouting controls how native OpenAI/Codex-looking model
-	// IDs such as gpt-* and o* are handled when they are not declared in
-	// [adapter.models]. Empty and "off" reject them as unknown models.
-	// "codex" routes through the direct Codex backend.
+	// NativeModelRouting controls how declared native OpenAI/Codex aliases
+	// (the native_aliases / advertised_native_aliases entries under
+	// [adapter.codex.models]) resolve. Empty and "off" reject them as
+	// unknown models. "codex" routes through the direct Codex backend.
 	// "passthrough_override" routes to NativeModelPassthroughOverride.
+	// There is no model-name prefix guessing: an alias routes to Codex
+	// only when it is declared.
 	NativeModelRouting string `json:"nativeModelRouting,omitempty" toml:"native_model_routing,omitempty"`
 	// NativeModelPassthroughOverride is used when NativeModelRouting is
 	// "passthrough_override".
@@ -541,11 +215,9 @@ type AdapterWireCapture struct {
 // the original AdapterConfig shape stabilized.
 type AdapterAnthropic struct {
 	WireCapture AdapterAnthropicWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
-	// OAuth holds token endpoint, API URLs, and keychain label for the
-	// direct-OAuth path and the background token refresher. Required
-	// when DirectOAuth is true; also required when the global [oauth]
-	// refresher is enabled so periodic refresh can reach the token URL.
-	// Lives at [adapter.anthropic.oauth].
+	// OAuth holds Anthropic API URL, header metadata, and keychain label
+	// for the direct-OAuth path. Claude login credentials come from the
+	// current platform's normal Claude credential store.
 	OAuth AdapterOAuth `json:"oauth,omitzero" toml:"oauth,omitempty"`
 	// Reasoning carries the per-provider reasoning round-trip levers.
 	// Anthropic has a single lever (the visible thinking block); see
@@ -691,9 +363,17 @@ func (c AdapterCodex) ResolvedCodexWireCaptureMode() CodexWireCaptureMode {
 	return c.WireCapture.Mode
 }
 
+// AdapterCodexModel is part of Clyde's typed adapter surface.
 type AdapterCodexModel struct {
-	AliasPrefix      string                     `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
-	Model            string                     `json:"model,omitempty" toml:"model,omitempty"`
+	AliasPrefix string `json:"aliasPrefix,omitempty" toml:"alias_prefix,omitempty"`
+	Model       string `json:"model,omitempty" toml:"model,omitempty"`
+	// Backend names the routing backend for aliases generated from this
+	// codex model. It is one of the model.BackendID wire values
+	// (claude/anthropic/codex/passthrough_override); config cannot import
+	// internal/adapter/model without an import cycle, so the value is held
+	// as a string and converted to model.BackendID at registry build time.
+	// Empty defaults to the codex backend.
+	Backend          string                     `json:"backend,omitempty" toml:"backend,omitempty"`
 	InstructionsFile string                     `json:"instructionsFile,omitempty" toml:"instructions_file,omitempty"`
 	Instructions     string                     `json:"-" toml:"-"`
 	Efforts          []string                   `json:"efforts,omitempty" toml:"efforts,omitempty"`
@@ -701,6 +381,7 @@ type AdapterCodexModel struct {
 	Contexts         []AdapterCodexModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
 }
 
+// AdapterCodexModelContext is part of Clyde's typed adapter surface.
 type AdapterCodexModelContext struct {
 	Tokens int `json:"tokens,omitempty" toml:"tokens,omitempty"`
 	// ObservedTokens is the context window the Codex Responses HTTP
@@ -755,15 +436,21 @@ type AdapterNoticeUsage struct {
 	Repeat                AdapterNoticeRepeatPolicy `json:"repeat,omitzero" toml:"repeat,omitempty"`
 }
 
+// AdapterNoticeRepeatMode is part of Clyde's typed adapter surface.
 type AdapterNoticeRepeatMode string
 
 const (
-	AdapterNoticeRepeatEvery                      AdapterNoticeRepeatMode = "every"
+	// AdapterNoticeRepeatEvery is part of Clyde's typed adapter surface.
+	AdapterNoticeRepeatEvery AdapterNoticeRepeatMode = "every"
+	// AdapterNoticeRepeatOncePerThresholdUntilReset is part of Clyde's typed adapter surface.
 	AdapterNoticeRepeatOncePerThresholdUntilReset AdapterNoticeRepeatMode = "once_per_threshold_until_reset"
-	AdapterNoticeRepeatTimeCooldown               AdapterNoticeRepeatMode = "time_cooldown"
-	AdapterNoticeRepeatTurnCooldown               AdapterNoticeRepeatMode = "turn_cooldown"
+	// AdapterNoticeRepeatTimeCooldown is part of Clyde's typed adapter surface.
+	AdapterNoticeRepeatTimeCooldown AdapterNoticeRepeatMode = "time_cooldown"
+	// AdapterNoticeRepeatTurnCooldown is part of Clyde's typed adapter surface.
+	AdapterNoticeRepeatTurnCooldown AdapterNoticeRepeatMode = "turn_cooldown"
 )
 
+// AdapterNoticeRepeatPolicy is part of Clyde's typed adapter surface.
 type AdapterNoticeRepeatPolicy struct {
 	Mode             AdapterNoticeRepeatMode `json:"mode,omitempty" toml:"mode,omitempty"`
 	Cooldown         string                  `json:"cooldown,omitempty" toml:"cooldown,omitempty"`
@@ -790,6 +477,7 @@ func (n AdapterNotices) UsageThresholdsUsedPercentOrDefault() []float64 {
 	return append([]float64(nil), n.Usage.ThresholdsUsedPercent...)
 }
 
+// UsageRepeatPolicyOrDefault is part of Clyde's typed adapter surface.
 func (n AdapterNotices) UsageRepeatPolicyOrDefault() AdapterNoticeRepeatPolicy {
 	policy := n.Usage.Repeat
 	if policy.Mode == "" {
@@ -798,127 +486,32 @@ func (n AdapterNotices) UsageRepeatPolicyOrDefault() AdapterNoticeRepeatPolicy {
 	return policy
 }
 
-// AdapterOAuth holds endpoints and OAuth client metadata supplied by
-// the operator. No defaults are compiled into clyde.
+// AdapterOAuth holds Anthropic Messages endpoint metadata supplied by the
+// operator. Claude login credentials come from the normal Claude credential
+// store for the current platform.
 type AdapterOAuth struct {
-	TokenURL         string   `json:"tokenUrl,omitempty" toml:"token_url,omitempty"`
-	MessagesURL      string   `json:"messagesUrl,omitempty" toml:"messages_url,omitempty"`
-	ClientID         string   `json:"clientId,omitempty" toml:"client_id,omitempty"`
-	AnthropicBeta    string   `json:"anthropicBeta,omitempty" toml:"anthropic_beta,omitempty"`
-	AnthropicVersion string   `json:"anthropicVersion,omitempty" toml:"anthropic_version,omitempty"`
-	KeychainService  string   `json:"keychainService,omitempty" toml:"keychain_service,omitempty"`
-	Scopes           []string `json:"scopes,omitempty" toml:"scopes,omitempty"`
+	MessagesURL      string `json:"messagesUrl,omitempty" toml:"messages_url,omitempty"`
+	AnthropicBeta    string `json:"anthropicBeta,omitempty" toml:"anthropic_beta,omitempty"`
+	AnthropicVersion string `json:"anthropicVersion,omitempty" toml:"anthropic_version,omitempty"`
+	KeychainService  string `json:"keychainService,omitempty" toml:"keychain_service,omitempty"`
 	// ToolResultCacheReferenceEnabled controls whether Clyde emits
 	// tool_result.cache_reference on the direct Anthropic OAuth path.
 	// Default is false because the live Anthropic /v1/messages OAuth
 	// tool-followup path rejected this field in production and MITM
 	// captures of the official Claude CLI succeeded without it.
 	ToolResultCacheReferenceEnabled bool `json:"toolResultCacheReferenceEnabled,omitempty" toml:"tool_result_cache_reference_enabled,omitempty"`
-	// Accounts configures the daemon's multi-account OAuth rotation layer.
-	// Lives at [adapter.anthropic.oauth.accounts].
-	Accounts AdapterOAuthRotation `json:"accounts,omitzero" toml:"accounts,omitempty"`
-}
-
-const (
-	// DefaultOAuthRotationScanInterval is the cadence the rotation harvest
-	// pass imports upstream Claude Code credentials into the per-account store.
-	DefaultOAuthRotationScanInterval = Duration(5 * time.Minute)
-	// DefaultOAuthRotationRefreshInterval is the cadence the rotation layer
-	// refreshes every harvested account's access token.
-	DefaultOAuthRotationRefreshInterval = Duration(30 * time.Minute)
-	// DefaultOAuthRotationRefreshSafetyWindow is how far ahead of a stored
-	// credential's ExpiresAt the rotator refreshes an account. An account is
-	// "due" only when now plus this window reaches or passes its ExpiresAt.
-	DefaultOAuthRotationRefreshSafetyWindow = Duration(1 * time.Hour)
-)
-
-// AdapterOAuthRotation configures Clyde's OAuth rotation layer.
-//
-// The rotator always serves tokens: it harvests upstream Claude Code
-// credentials, refreshes them, and serves the resulting access token to the
-// adapter. There is no legacy single-Manager fallback. SwitchOnLimit gates
-// only throttle-based multi-account switching: when SwitchOnLimit is false the
-// rotator serves the primary harvested account and does not rotate to a
-// different account on a throttle signal; when SwitchOnLimit is true a throttle
-// signal moves selection to the next non-throttled account. ScanInterval is the
-// harvest cadence and RefreshInterval is the proactive token-refresh cadence;
-// the daemon refresh loop runs one harvest pass and one due-check per
-// RefreshInterval tick, refreshing only accounts at or inside the rotator's
-// expiry safety window rather than every account.
-type AdapterOAuthRotation struct {
-	SwitchOnLimit   bool     `json:"switchOnLimit,omitempty" toml:"switch_on_limit,omitempty"`
-	ScanInterval    Duration `json:"scanInterval,omitempty" toml:"scan_interval,omitempty"`
-	RefreshInterval Duration `json:"refreshInterval,omitempty" toml:"refresh_interval,omitempty"`
-	// SetClaudeConfigDir, when true, makes a Clyde-launched `claude`
-	// authenticate as the rotator's currently-selected Anthropic account
-	// instead of the user's own Claude Code login. The daemon writes the
-	// selected account's .credentials.json into a fresh scratch dir and
-	// points the child at it via CLYDE_CONFIG_DIR; on macOS the keychain
-	// entry is empty for any non-default CLAUDE_CONFIG_DIR, so claude falls
-	// back to the planted file and never touches the real keychain or
-	// ~/.claude. Default is false because it changes how claude launches.
-	SetClaudeConfigDir bool `json:"setClaudeConfigDir,omitempty" toml:"set_claude_config_dir,omitempty"`
-	// RefreshSafetyWindow is how far ahead of a stored credential's ExpiresAt
-	// the rotator refreshes an account. A zero value is treated as "use the
-	// default" by WithDefaults.
-	RefreshSafetyWindow Duration `json:"refreshSafetyWindow,omitempty" toml:"refresh_safety_window,omitempty"`
-}
-
-// WithDefaults returns a copy with zero intervals replaced by their defaults.
-func (r AdapterOAuthRotation) WithDefaults() AdapterOAuthRotation {
-	if r.ScanInterval <= 0 {
-		r.ScanInterval = DefaultOAuthRotationScanInterval
-	}
-	if r.RefreshInterval <= 0 {
-		r.RefreshInterval = DefaultOAuthRotationRefreshInterval
-	}
-	if r.RefreshSafetyWindow <= 0 {
-		r.RefreshSafetyWindow = DefaultOAuthRotationRefreshSafetyWindow
-	}
-	return r
-}
-
-// Validate returns an error when an explicitly set interval is non-positive.
-// A zero interval is treated as "use the default" and is valid; a negative
-// interval is rejected because it can never produce a usable ticker.
-func (r AdapterOAuthRotation) Validate() error {
-	if r.ScanInterval < 0 {
-		return fmt.Errorf("adapter: [adapter.anthropic.oauth.accounts].scan_interval must be greater than 0")
-	}
-	if r.RefreshInterval < 0 {
-		return fmt.Errorf("adapter: [adapter.anthropic.oauth.accounts].refresh_interval must be greater than 0")
-	}
-	if r.RefreshSafetyWindow < 0 {
-		return fmt.Errorf("adapter: [adapter.anthropic.oauth.accounts].refresh_safety_window must be greater than 0")
-	}
-	return nil
 }
 
 // ValidateOAuthFields returns an error if any required field is empty.
 func (o AdapterOAuth) ValidateOAuthFields() error {
-	if o.TokenURL == "" {
-		return fmt.Errorf("adapter: [adapter.anthropic.oauth].token_url must be set")
-	}
 	if o.MessagesURL == "" {
 		return fmt.Errorf("adapter: [adapter.anthropic.oauth].messages_url must be set")
-	}
-	if o.ClientID == "" {
-		return fmt.Errorf("adapter: [adapter.anthropic.oauth].client_id must be set")
 	}
 	if o.AnthropicBeta == "" {
 		return fmt.Errorf("adapter: [adapter.anthropic.oauth].anthropic_beta must be set")
 	}
 	if o.AnthropicVersion == "" {
 		return fmt.Errorf("adapter: [adapter.anthropic.oauth].anthropic_version must be set")
-	}
-	if o.KeychainService == "" {
-		return fmt.Errorf("adapter: [adapter.anthropic.oauth].keychain_service must be set")
-	}
-	if len(o.Scopes) == 0 {
-		return fmt.Errorf("adapter: [adapter.anthropic.oauth].scopes must be non-empty")
-	}
-	if err := o.Accounts.Validate(); err != nil {
-		return err
 	}
 	return nil
 }
@@ -960,16 +553,6 @@ type AdapterClientIdentity struct {
 	// ignored. Requires the prompt-caching-scope-2026-01-05 beta
 	// header in [adapter.client_identity.beta_header] to be effective.
 	PromptCacheScope string `json:"promptCacheScope,omitempty" toml:"prompt_cache_scope,omitempty"`
-	// MicrocompactEnabled rewrites aged tool_result bodies to a
-	// placeholder string before sending, mirroring Claude Code's
-	// time-based microcompact. Defaults to true when nil. Set to false
-	// if upstream caching is misbehaving and we need to isolate.
-	MicrocompactEnabled *bool `json:"microcompactEnabled,omitempty" toml:"microcompact_enabled,omitempty"`
-	// MicrocompactKeepRecent is how many most-recent compactable tool
-	// results are kept verbatim. Older ones get cleared. Defaults to
-	// 15 when nil or zero. Match Claude's GrowthBook default when it
-	// diverges.
-	MicrocompactKeepRecent int `json:"microcompactKeepRecent,omitempty" toml:"microcompact_keep_recent,omitempty"`
 }
 
 // AdapterFamily describes one Claude model family and the cross
@@ -985,6 +568,15 @@ type AdapterFamily struct {
 	// Contexts entries may add a wire
 	// suffix (e.g. "[1m]") when calling /v1/messages.
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
+	// Backend names the routing backend for aliases generated from this
+	// family. It is one of the model.BackendID wire values
+	// (claude/anthropic/codex/passthrough_override); config cannot import
+	// internal/adapter/model without an import cycle, so the value is held
+	// as a string and converted to model.BackendID at registry build time.
+	// Empty defaults to the claude backend (rewritten to anthropic when
+	// direct_oauth is on). Set "codex" to route a family at the Codex
+	// backend with a custom alias_prefix.
+	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
 	// InstructionsFile points at a markdown file whose verbatim contents
 	// are loaded once during config parsing and copied onto expanded
 	// registry aliases. Relative paths resolve from the declaring
@@ -1085,339 +677,6 @@ type AdapterPassthroughOverride struct {
 	Model string `json:"model,omitempty" toml:"model,omitempty"`
 }
 
-// SearchConfig configures the LLM backend for conversation search.
-type SearchConfig struct {
-	// Backend is "claude" (default) or "local"
-	Backend string       `json:"backend,omitempty" toml:"backend,omitempty"`
-	Local   SearchLocal  `json:"local,omitzero" toml:"local,omitempty"`
-	Claude  SearchClaude `json:"claude,omitzero" toml:"claude,omitempty"`
-}
-
-// SearchLocal configures a local OpenAI-compatible LLM endpoint.
-type SearchLocal struct {
-	URL                string        `json:"url,omitempty" toml:"url,omitempty"`
-	Token              string        `json:"token,omitempty" toml:"token,omitempty"`
-	EmbeddingURL       string        `json:"embeddingUrl,omitempty" toml:"embedding_url,omitempty"`
-	EmbeddingToken     string        `json:"embeddingToken,omitempty" toml:"embedding_token,omitempty"`
-	Model              string        `json:"model,omitempty" toml:"model,omitempty"`
-	RerankModel        string        `json:"rerankModel,omitempty" toml:"rerank_model,omitempty"`
-	DeepModel          string        `json:"deepModel,omitempty" toml:"deep_model,omitempty"`
-	Pipeline           []SearchLayer `json:"pipeline,omitempty" toml:"pipeline,omitempty"`
-	Temperature        float64       `json:"temperature" toml:"temperature"`
-	TopP               float64       `json:"topP" toml:"top_p"`
-	FrequencyPenalty   float64       `json:"frequencyPenalty" toml:"frequency_penalty"`
-	MaxConcurrent      int           `json:"maxConcurrent,omitempty" toml:"max_concurrent,omitempty"`
-	ChunkSize          int           `json:"chunkSize,omitempty" toml:"chunk_size,omitempty"`
-	MaxMemoryGB        int           `json:"maxMemoryGB,omitempty" toml:"max_memory_gb,omitempty"`
-	ContextLength      int           `json:"contextLength,omitempty" toml:"context_length,omitempty"`
-	EmbeddingThreshold float64       `json:"embeddingThreshold,omitempty" toml:"embedding_threshold,omitempty"`
-	EmbeddingModel     string        `json:"embeddingModel,omitempty" toml:"embedding_model,omitempty"`
-}
-
-// ResolvedEmbeddingURL returns the base URL for OpenAI-style embedding
-// requests (scheme plus host plus port, no trailing slash, no /v1 suffix).
-// When EmbeddingURL is empty it falls back to URL.
-func (s SearchLocal) ResolvedEmbeddingURL() string {
-	if trimmed := strings.TrimSpace(s.EmbeddingURL); trimmed != "" {
-		return strings.TrimSuffix(trimmed, "/")
-	}
-	return strings.TrimSuffix(strings.TrimSpace(s.URL), "/")
-}
-
-// ResolvedEmbeddingToken returns the bearer token for the embedding
-// endpoint. When EmbeddingToken is empty it falls back to Token.
-func (s SearchLocal) ResolvedEmbeddingToken() string {
-	if s.EmbeddingToken != "" {
-		return s.EmbeddingToken
-	}
-	return s.Token
-}
-
-// SearchLayer defines one stage of the search pipeline.
-type SearchLayer struct {
-	Name  string `json:"name" toml:"name"`   // "sweep", "rerank", "deep"
-	Model string `json:"model" toml:"model"` // model to use for this layer
-}
-
-// ResolvePipeline returns the LLM pipeline layers for a given depth.
-//
-// Depth levels:
-//   - "quick"      -- embedding similarity only, no LLM (returns nil)
-//   - "normal"     -- embedding filter + LLM sweep (1 layer)
-//   - "deep"       -- embedding filter + sweep + rerank (2 layers)
-//   - "extra-deep" -- full pipeline including deep analysis (all layers)
-func (s SearchLocal) ResolvePipeline(depth string) []SearchLayer {
-	// "quick" skips LLM entirely, handled by the embedding-only path in searchInternal.
-	if depth == "quick" {
-		return nil
-	}
-
-	// If explicit pipeline is configured, slice it to the requested depth.
-	if len(s.Pipeline) > 0 {
-		switch depth {
-		case "normal":
-			if len(s.Pipeline) >= 1 {
-				return s.Pipeline[:1]
-			}
-		case "deep":
-			if len(s.Pipeline) >= 2 {
-				return s.Pipeline[:2]
-			}
-			return s.Pipeline
-		default: // "extra-deep" and anything else: full pipeline
-			return s.Pipeline
-		}
-		return s.Pipeline
-	}
-
-	// Fall back to individual model fields.
-	var layers []SearchLayer
-	model := s.Model
-	if model == "" {
-		model = "qwen2.5-coder-32b"
-	}
-	layers = append(layers, SearchLayer{Name: "sweep", Model: model})
-
-	if depth == "normal" {
-		return layers
-	}
-
-	if s.RerankModel != "" {
-		layers = append(layers, SearchLayer{Name: "rerank", Model: s.RerankModel})
-	}
-
-	if depth == "extra-deep" && s.DeepModel != "" {
-		layers = append(layers, SearchLayer{Name: "deep", Model: s.DeepModel})
-	}
-
-	return layers
-}
-
-// SearchClaude configures the Claude backend for search.
-type SearchClaude struct {
-	Model string `json:"model,omitempty" toml:"model,omitempty"`
-}
-
-// Defaults are session defaults applied to all sessions.
-type Defaults struct {
-	RemoteControl   bool   `json:"remoteControl,omitempty" toml:"remote_control,omitempty"`
-	Model           string `json:"model,omitempty" toml:"model,omitempty"`
-	EffortLevel     string `json:"effortLevel,omitempty" toml:"effort_level,omitempty"`
-	AnthropicAPIKey string `json:"anthropicApiKey,omitempty" toml:"anthropic_api_key,omitempty"`
-	CompactCounter  string `json:"compactCounter,omitempty" toml:"compact_counter,omitempty"`
-}
-
-// AutoNameConfig holds the [autoname] block of clyde.toml.
-//
-// Enabled is the global kill switch. The system is on by default.
-// Operators set this to false to disable the auto-rename worker.
-//
-// Provider is the adapter route key the worker uses for the LLM
-// candidate-name call. The empty value means "fall back to whatever
-// the summary subsystem uses today" so day-one behavior matches the
-// model the operator already trusts. The worker resolves the route at
-// call time. Do not hardcode a model name here.
-//
-// MaxCallsPerHour caps the daemon-wide LLM call rate. Default 6.
-//
-// Cooldown is the minimum interval between probe attempts on the
-// same session. Default 30 minutes.
-//
-// MinUserMessages is the trigger threshold. Default 3 user messages
-// before a cold session enters the auto-rename pipeline.
-//
-// Redact controls the redaction pass on transcript content before it
-// reaches the LLM call.
-type AutoNameConfig struct {
-	Enabled         *bool        `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	Provider        string       `json:"provider,omitempty" toml:"provider,omitempty"`
-	MaxCallsPerHour int          `json:"maxCallsPerHour,omitempty" toml:"max_calls_per_hour,omitempty"`
-	Cooldown        Duration     `json:"cooldown,omitempty" toml:"cooldown,omitempty"`
-	MinUserMessages int          `json:"minUserMessages,omitempty" toml:"min_user_messages,omitempty"`
-	Redact          RedactPolicy `json:"redact,omitzero" toml:"redact,omitempty"`
-}
-
-// IsEnabled reports whether the auto-rename worker is enabled.
-// Treats a nil Enabled pointer as the default (true).
-func (a AutoNameConfig) IsEnabled() bool {
-	if a.Enabled == nil {
-		return true
-	}
-	return *a.Enabled
-}
-
-// RedactPolicy controls the auto-rename redaction pass.
-//
-// MinDigitRunForRedact is the minimum length of consecutive digits to
-// redact (e.g. 7 to drop phone numbers but keep small ints).
-// Default 7.
-//
-// StripEmails strips email-shaped substrings. Default true.
-// StripPaths strips substrings starting with `/`. Default true.
-// StripKeyPrefixes strips obvious credential prefixes (sk-, ghp_,
-// AKIA, AIza, etc.). Default true.
-//
-// All three Strip* flags use *bool so a partial [autoname.redact]
-// block can opt one off without flipping the others off by zero
-// value.
-type RedactPolicy struct {
-	MinDigitRunForRedact int   `json:"minDigitRunForRedact,omitempty" toml:"min_digit_run_for_redact,omitempty"`
-	StripEmails          *bool `json:"stripEmails,omitempty" toml:"strip_emails,omitempty"`
-	StripPaths           *bool `json:"stripPaths,omitempty" toml:"strip_paths,omitempty"`
-	StripKeyPrefixes     *bool `json:"stripKeyPrefixes,omitempty" toml:"strip_key_prefixes,omitempty"`
-}
-
-// StripEmailsOrDefault returns true when StripEmails is unset.
-func (r RedactPolicy) StripEmailsOrDefault() bool {
-	if r.StripEmails == nil {
-		return true
-	}
-	return *r.StripEmails
-}
-
-// StripPathsOrDefault returns true when StripPaths is unset.
-func (r RedactPolicy) StripPathsOrDefault() bool {
-	if r.StripPaths == nil {
-		return true
-	}
-	return *r.StripPaths
-}
-
-// StripKeyPrefixesOrDefault returns true when StripKeyPrefixes is unset.
-func (r RedactPolicy) StripKeyPrefixesOrDefault() bool {
-	if r.StripKeyPrefixes == nil {
-		return true
-	}
-	return *r.StripKeyPrefixes
-}
-
-// MITMConfig configures the local capture proxy and its persistence.
-// RawCaptureEnabled is derived from logging.raw_capture.enabled during config load
-// and is not a user-facing MITM config key.
-type MITMConfig struct {
-	EnabledDefault    bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
-	Providers         MITMProviderSet        `json:"providers,omitempty" toml:"providers,omitempty"`
-	RawCaptureEnabled bool                   `json:"-" toml:"-"`
-	CaptureDir        string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
-	Capture           MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
-	CaptureRules      []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
-	Hooks             []MITMHookRule         `json:"hooks,omitempty" toml:"hook,omitempty"`
-	Drift             MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
-	Listen            MITMListenConfig       `json:"listen,omitzero" toml:"listen,omitempty"`
-	CA                MITMCAConfig           `json:"ca,omitzero" toml:"ca,omitempty"`
-}
-
-// MITMListenConfig configures the stable listen address of the in-process
-// MITM proxy. Host and Port are config-driven so reloads keep the URL stable
-// across daemon restarts; clients pin this address and would break if the
-// daemon picked an ephemeral port on every reload.
-type MITMListenConfig struct {
-	Host string `json:"host,omitempty" toml:"host,omitempty"`
-	Port int    `json:"port,omitempty" toml:"port,omitempty"`
-}
-
-// MITMCAConfig configures on-disk persistence of the MITM CA. The certificate
-// and key are written to these absolute paths so the CA survives daemon
-// restarts and clients can install the cert once and trust it across reloads.
-type MITMCAConfig struct {
-	CertPath string `json:"certPath,omitempty" toml:"cert_path,omitempty"`
-	KeyPath  string `json:"keyPath,omitempty"  toml:"key_path,omitempty"`
-}
-
-// MITMCapture configures MITM capture index file policy. Raw request and
-// response body captures are separate files under CaptureDir/raw and are kept
-// out of this rotation policy.
-type MITMCapture struct {
-	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
-}
-
-// MITMProviderSet is the configured set of provider families routed through
-// the capture proxy. The special value "all" enables every provider family.
-type MITMProviderSet []string
-
-// MITMCaptureRouteRule classifies one captured MITM request into a concern.
-// Rules are evaluated in order, and every non-empty predicate must match.
-type MITMCaptureRouteRule struct {
-	Concern             string `json:"concern" toml:"concern"`
-	Provider            string `json:"provider,omitempty" toml:"provider,omitempty"`
-	Host                string `json:"host,omitempty" toml:"host,omitempty"`
-	Method              string `json:"method,omitempty" toml:"method,omitempty"`
-	PathExact           string `json:"pathExact,omitempty" toml:"path_exact,omitempty"`
-	PathPrefix          string `json:"pathPrefix,omitempty" toml:"path_prefix,omitempty"`
-	PathContains        string `json:"pathContains,omitempty" toml:"path_contains,omitempty"`
-	ContentTypeContains string `json:"contentTypeContains,omitempty" toml:"content_type_contains,omitempty"`
-}
-
-// MITMHookMode names one of the three supported hook execution modes
-// for [[mitm.hook]] rules. The mode controls whether clyde contacts
-// upstream before or after the hook runs, and which body the hook
-// receives on stdin.
-type MITMHookMode string
-
-const (
-	// MITMHookModeSynthesize skips the upstream call entirely. The hook
-	// produces the response body from the request alone. Use this when
-	// the proxy should fabricate a reply (stub, error injection,
-	// always-no-update response).
-	MITMHookModeSynthesize MITMHookMode = "synthesize"
-	// MITMHookModeTransformRequest invokes the hook before the upstream
-	// call so the hook can rewrite the outbound request body. clyde
-	// then forwards the rewritten request to upstream and streams
-	// upstream's response back unchanged.
-	MITMHookModeTransformRequest MITMHookMode = "transform_request"
-	// MITMHookModeTransformResponse forwards the request to upstream
-	// first, then invokes the hook with upstream's response body so the
-	// hook can rewrite it before clyde streams the result back to the
-	// client. This is the mode the desktop-via-clyde Cursor update
-	// re-patching flow uses.
-	MITMHookModeTransformResponse MITMHookMode = "transform_response"
-)
-
-// IsValid reports whether the mode is one of the three known values.
-func (m MITMHookMode) IsValid() bool {
-	switch m {
-	case MITMHookModeSynthesize, MITMHookModeTransformRequest, MITMHookModeTransformResponse:
-		return true
-	}
-	return false
-}
-
-// MITMHookRule declares an external subprocess that clyde forks for
-// every MITM-decrypted Cursor request whose host and path satisfy the
-// matchers. Hooks let external tools (such as desktop-via-clyde)
-// rewrite or synthesize traffic without coupling clyde to the
-// app-specific logic. The hook receives one JSON envelope on stdin
-// describing temp-file paths for the bodies and writes one JSON
-// envelope on stdout describing the response. See
-// internal/mitm/hook.go for the envelope contract.
-type MITMHookRule struct {
-	// Name is an operator-facing identifier echoed in clyde logs and
-	// in the capture event's hook field. Required.
-	Name string `json:"name" toml:"name"`
-	// MatchHost is a literal hostname matched against the intercepted
-	// request's Host header. A single leading "*." enables suffix
-	// matching ("*.cursor.com"). Empty matches every host.
-	MatchHost string `json:"matchHost,omitempty" toml:"match_host,omitempty"`
-	// MatchPathRegex is a Go regexp evaluated against the intercepted
-	// request's URL path. Empty matches every path.
-	MatchPathRegex string `json:"matchPathRegex,omitempty" toml:"match_path_regex,omitempty"`
-	// MatchMethod restricts the rule to one HTTP method when set.
-	MatchMethod string `json:"matchMethod,omitempty" toml:"match_method,omitempty"`
-	// Mode selects which of the three execution shapes the dispatcher
-	// uses. Defaults to MITMHookModeTransformResponse when empty.
-	Mode MITMHookMode `json:"mode,omitempty" toml:"mode,omitempty"`
-	// Command is the absolute path to the hook binary that clyde
-	// forks. Required.
-	Command string `json:"command" toml:"command"`
-	// Args are extra argv entries passed before the per-request
-	// arguments clyde appends.
-	Args []string `json:"args,omitempty" toml:"args,omitempty"`
-	// Timeout caps how long clyde waits for the hook subprocess to
-	// finish before killing it and returning 502 to the client. Empty
-	// uses the dispatcher's default (5 minutes).
-	Timeout Duration `json:"timeout,omitempty" toml:"timeout,omitempty"`
-}
-
 // Duration is the shared [time.Duration] wrapper for TOML-decoded
 // config fields. The TOML decoder cannot read a bare [time.Duration],
 // so every duration-shaped config field aliases this type and gets
@@ -1450,77 +709,10 @@ func (duration *Duration) AsDuration() time.Duration {
 	return time.Duration(*duration)
 }
 
-// MITMDriftConfig configures daemon-owned baseline refresh and drift
-// reporting. When Enabled, the daemon periodically reads the current
-// local capture store, refreshes each upstream baseline, and appends
-// drift outcomes to per-upstream JSONL logs under DriftLogDir before
-// accepting a changed baseline.
-type MITMDriftConfig struct {
-	Enabled     bool                            `json:"enabled,omitempty" toml:"enabled,omitempty"`
-	Interval    time.Duration                   `json:"interval,omitempty" toml:"interval,omitempty"`
-	DriftLogDir string                          `json:"driftLogDir,omitempty" toml:"drift_log_dir,omitempty"`
-	CaptureRoot string                          `json:"captureRoot,omitempty" toml:"capture_root,omitempty"`
-	CACertPath  string                          `json:"caCertPath,omitempty" toml:"ca_cert_path,omitempty"`
-	Upstreams   map[string]MITMDriftUpstreamCfg `json:"upstreams,omitempty" toml:"upstreams,omitempty"`
-}
-
-// MITMDriftUpstreamCfg configures one upstream's daemon-owned baseline
-// refresh. Reference is optional; when empty the daemon uses the
-// default XDG baseline path for the upstream. The remaining fields
-// match the snapshot/diff CLI filters.
-type MITMDriftUpstreamCfg struct {
-	Reference       string   `json:"reference" toml:"reference"`
-	IncludeUA       []string `json:"includeUa,omitempty" toml:"include_ua,omitempty"`
-	ExcludeUA       []string `json:"excludeUa,omitempty" toml:"exclude_ua,omitempty"`
-	RequireBodyKeys []string `json:"requireBodyKeys,omitempty" toml:"require_body_keys,omitempty"`
-	ForbidBodyKeys  []string `json:"forbidBodyKeys,omitempty" toml:"forbid_body_keys,omitempty"`
-}
-
-// EnabledFor reports whether the configured MITM provider set includes provider.
-func (m MITMConfig) EnabledFor(provider string) bool {
-	normalizedProvider := normalizeMITMProviderName(provider)
-	if !isValidMITMProviderName(normalizedProvider) {
-		return false
-	}
-	providers, err := parseMITMProviders(m.Providers)
-	if err != nil {
-		return false
-	}
-	if len(providers) == 1 && providers[0] == mitmProviderAll {
-		return true
-	}
-	return slices.Contains(providers, normalizedProvider)
-}
-
-// Profile represents a named preset of session settings.
-type Profile struct {
-	Model          string       `json:"model,omitempty" toml:"model,omitempty"`
-	PermissionMode string       `json:"permissionMode,omitempty" toml:"permission_mode,omitempty"`
-	Permissions    *Permissions `json:"permissions,omitempty" toml:"permissions,omitempty"`
-	OutputStyle    string       `json:"outputStyle,omitempty" toml:"output_style,omitempty"`
-	// RemoteControl is a per profile override of the global default.
-	// nil means inherit. false explicitly disables. true explicitly
-	// enables.
-	RemoteControl *bool `json:"remoteControl,omitempty" toml:"remote_control,omitempty"`
-}
-
-// Permissions represents the permissions configuration for sessions.
-// Kept in config package to avoid circular imports with session package.
-type Permissions struct {
-	Allow                        []string `json:"allow,omitempty" toml:"allow,omitempty"`
-	Ask                          []string `json:"ask,omitempty" toml:"ask,omitempty"`
-	Deny                         []string `json:"deny,omitempty" toml:"deny,omitempty"`
-	AdditionalDirectories        []string `json:"additionalDirectories,omitempty" toml:"additional_directories,omitempty"`
-	DefaultMode                  string   `json:"defaultMode,omitempty" toml:"default_mode,omitempty"`
-	DisableBypassPermissionsMode string   `json:"disableBypassPermissionsMode,omitempty" toml:"disable_bypass_permissions_mode,omitempty"`
-}
-
 // NewConfig creates a new Config with sensible defaults. The function uses
 // a var declaration plus per-field assignment so each sub-block defaults to
 // its zero value without forcing exhaustruct to walk the nested types. The
 // loader fills the sub-blocks when the user supplies them.
 func NewConfig() *Config {
-	cfg := new(Config)
-	cfg.Profiles = make(map[string]Profile)
-	return cfg
+	return new(Config)
 }

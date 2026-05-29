@@ -92,13 +92,19 @@ func NewTranscriptRouter(cfg TranscriptRouterConfig) *TranscriptRouter {
 	return &TranscriptRouter{
 		state: &transcriptRouterState{
 			cfg:   cfg,
-			cache: make(map[string]*transcriptHandle, cfg.PoolCap),
-		},
+			cache: make(map[string]*transcriptHandle, cfg.PoolCap), mu: sync.
+				Mutex{},
+
+			order: nil,
+		}, attrs: nil,
+
+		// Enabled implements [slog.Handler]. The router is unconditionally enabled at
+		// the level the caller produced; the allowlist filters by msg name later.
+		group: "",
 	}
 }
 
-// Enabled implements [slog.Handler]. The router is unconditionally enabled at
-// the level the caller produced; the allowlist filters by msg name later.
+// Enabled is part of Clyde's typed adapter surface.
 func (*TranscriptRouter) Enabled(_ context.Context, _ slog.Level) bool {
 	return true
 }

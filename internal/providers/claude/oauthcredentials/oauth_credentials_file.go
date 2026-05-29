@@ -23,11 +23,11 @@ func (s fileStore) Read(_ context.Context) ReadResult {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return ReadResult{Source: SourceFile}
+			return ReadResult{Source: SourceFile, Tokens: nil, Present: false, Err: nil, Metadata: Metadata{AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: "", FileMtime: 0}}
 		}
 		return ReadResult{
 			Source: SourceFile,
-			Err:    fmt.Errorf("read %s: %w", path, err),
+			Err:    fmt.Errorf("read %s: %w", path, err), Tokens: nil, Present: false, Metadata: Metadata{AccessTokenPresent: false, RefreshTokenPresent: false, ExpiresAtPresent: false, ExpiresAt: 0, Expired: false, Scopes: nil, Fingerprint: "", FileMtime: 0},
 		}
 	}
 	fileMtime := int64(0)

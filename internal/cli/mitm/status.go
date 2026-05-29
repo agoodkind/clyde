@@ -32,7 +32,7 @@ func newStatusCmdWithDialer(f *cli.Factory, dial statusDialer, loadConfig func()
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
-				slog.WarnContext(cmd.Context(), "cli.mitm.status.load_config_failed", "err", err)
+				slog.WarnContext(cmd.Context(), "cli.mitm.status.load_config_failed", "concern", "cli.mitm", "err", err)
 				return fmt.Errorf("load config: %w", err)
 			}
 			address := mitmListenAddress(cfg.MITM.Listen)

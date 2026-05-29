@@ -60,6 +60,7 @@ func (a *assistantTextAggregate) summary() assistantTextSummary {
 	}
 }
 
+// RecordAssistantTextDeltaEmitted is part of Clyde's typed adapter surface.
 func (r *EventRenderer) RecordAssistantTextDeltaEmitted(text string) {
 	if r == nil {
 		return

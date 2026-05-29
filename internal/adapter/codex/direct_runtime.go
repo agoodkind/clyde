@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"strings"
 
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/gklog/correlation"
 )
 
+// DirectConfig is part of Clyde's typed adapter surface.
 type DirectConfig struct {
 	HTTPClient       *http.Client
 	BaseURL          string
@@ -115,11 +116,12 @@ const (
 	WireCaptureFull          WireCaptureMode = "full"
 )
 
+// RunDirect is part of Clyde's typed adapter surface.
 func RunDirect(
 	ctx context.Context,
 	cfg DirectConfig,
 	req adapteropenai.ChatRequest,
-	model adaptermodel.ResolvedModel,
+	resolved *adapterresolver.ResolvedRequest,
 	effort string,
 	emit func(adapterrender.Event) error,
 ) (RunResult, error) {
@@ -128,7 +130,7 @@ func RunDirect(
 	}
 	ConfigureCodexFileLogger(cfg.FileLog)
 
-	transportPayload := BuildRequestWithConfig(req, model, effort, RequestBuilderConfig{
+	transportPayload := BuildRequestWithConfig(req, resolved, effort, RequestBuilderConfig{
 		ReasoningSummary:               cfg.ReasoningSummary,
 		InboundThinkingMaterialization: cfg.InboundThinkingMaterialization,
 		RoundTripSummary:               cfg.RoundTripSummary,
@@ -144,14 +146,18 @@ func RunDirect(
 	if conversationID != "" {
 		turnMeta := NewTurnMetadata(conversationID, "")
 		if ws := strings.TrimSpace(cfg.WorkspacePath); ws != "" {
-			entry := TurnMetadataWorkspace{}
+			entry := TurnMetadataWorkspace{
+				AssociatedRemoteURLs: TurnMetadataRemoteURLs{Origin: ""},
+
+				LatestGitCommitHash: "", HasChanges: false,
+			}
 			if cfg.WorkspaceProbe != nil {
-				entry = cfg.WorkspaceProbe.Probe(ws)
+				entry = cfg.WorkspaceProbe.Probe(ctx, ws)
 			}
 			turnMeta = turnMeta.WithWorkspace(ws, entry)
 		}
 		turnMetaJSON, _ := turnMeta.MarshalCompact()
-		transportPayload.ClientMetadata = ClientMetadataWithTurn(installationID, CodexWindowID(conversationID), turnMetaJSON)
+		transportPayload.ClientMetadata = ClientMetadataWithTurn(installationID, WindowID(conversationID), turnMetaJSON)
 	}
 
 	httpCfg := HTTPTransportConfig{
@@ -161,11 +167,11 @@ func RunDirect(
 		RequestID:          cfg.RequestID,
 		CursorRequestID:    cfg.CursorRequestID,
 		Correlation:        cfg.Correlation,
-		Alias:              model.Alias,
+		Alias:              codexResolvedModelName(resolved),
 		ConversationID:     conversationID,
 		InstallationID:     installationID,
-		WindowID:           CodexWindowID(conversationID),
-		TurnMetadata:       transportPayload.ClientMetadata[CodexTurnMetadataHeader],
+		WindowID:           WindowID(conversationID),
+		TurnMetadata:       transportPayload.ClientMetadata.TurnMetadataValue(),
 		Log:                cfg.Log,
 		RoundTripEncrypted: cfg.RoundTripEncrypted,
 		RetryPolicies:      cfg.RetryPolicies,
@@ -187,10 +193,10 @@ func RunDirect(
 		RequestID:          cfg.RequestID,
 		CursorRequestID:    cfg.CursorRequestID,
 		Correlation:        cfg.Correlation,
-		Alias:              model.Alias,
+		Alias:              codexResolvedModelName(resolved),
 		ConversationID:     conversationID,
 		TurnState:          NewTurnState(),
-		TurnMetadata:       transportPayload.ClientMetadata[CodexTurnMetadataHeader],
+		TurnMetadata:       transportPayload.ClientMetadata.TurnMetadataValue(),
 		Prewarm:            false,
 		PrewarmTimeout:     0,
 		SessionCache:       cfg.SessionCache,

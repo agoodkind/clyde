@@ -58,7 +58,7 @@ func TestHandleChatEmitsRequiredRequestLegSequence(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+		cfg.Codex.Models = testCodexModels()
 	})
 
 	postChatToServer(t, srv, map[string]any{
@@ -195,7 +195,7 @@ func TestHandleChatLogsCorrelationFieldsAtBoundaries(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+		cfg.Codex.Models = testCodexModels()
 	})
 
 	payload, err := json.Marshal(map[string]any{
@@ -262,7 +262,7 @@ func TestHandleChatAttachesRegisteredBackendFacet(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+		cfg.Codex.Models = testCodexModels()
 	})
 
 	postChatToServer(t, srv, map[string]any{
@@ -312,7 +312,7 @@ func TestHandleChatLogsForkDetectedForDerivedBranch(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.ModelPrefixes = []string{"gpt-"}
+		cfg.Codex.Models = testCodexModels()
 	})
 
 	postChatToServer(t, srv, map[string]any{
@@ -396,7 +396,12 @@ func TestHandleChatAcceptsResponsesInputShape(t *testing.T) {
 	}
 }
 
-func TestHandleChatRejectsUnsupportedBackendWithoutLegacyRunner(t *testing.T) {
+// TestHandleChatRoutesClaudeBackendToAnthropicPath verifies that a claude-backed
+// model alias routes through the anthropic backend path. The claude backend is
+// served by the anthropic path (the registry rewrites claude to anthropic under
+// direct_oauth), so when no anthropic provider is configured the dispatch reports
+// upstream_unavailable rather than treating claude as an unsupported backend.
+func TestHandleChatRoutesClaudeBackendToAnthropicPath(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
@@ -421,7 +426,7 @@ func TestHandleChatRejectsUnsupportedBackendWithoutLegacyRunner(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal error response: %v body=%s", err, resp.Body.String())
 	}
-	if out.Error.Type != "invalid_request_error" || out.Error.Code != "unsupported_backend" {
+	if out.Error.Type != "invalid_request_error" || out.Error.Code != "upstream_unavailable" {
 		t.Fatalf("error = %+v body=%s", out.Error, resp.Body.String())
 	}
 }
@@ -431,6 +436,7 @@ func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
 		cfg.Codex.NativeModelRouting = "codex"
+		cfg.Codex.Models = testCodexModels()
 	})
 
 	body := map[string]any{
@@ -474,7 +480,7 @@ func TestHandleChatLogsCursorModelNormalization(t *testing.T) {
 	if resolved == nil {
 		t.Fatalf("expected adapter.model.resolved event")
 	}
-	if resolved["backend"] != BackendCodex {
+	if resolved["backend"] != BackendCodex.String() {
 		t.Fatalf("resolved backend=%v", resolved["backend"])
 	}
 	dispatch := findLogEvent(t, buf, "adapter.backend.dispatching")
@@ -490,7 +496,7 @@ func TestHandleChatRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
-		cfg.Codex.ModelPrefixes = []string{"gpt-", "o"}
+		cfg.Codex.Models = testCodexModels()
 	})
 
 	body := map[string]any{
@@ -514,7 +520,7 @@ func TestHandleChatRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 	if evt["alias"] != "gpt-5.4" {
 		t.Fatalf("alias=%v want gpt-5.4", evt["alias"])
 	}
-	if evt["backend"] != BackendCodex {
+	if evt["backend"] != BackendCodex.String() {
 		t.Fatalf("backend=%v want %s", evt["backend"], BackendCodex)
 	}
 }
@@ -524,6 +530,7 @@ func TestHandleChatModelResolutionErrorUsesCursorNativeShape(t *testing.T) {
 	srv, buf := newLoggingServer(t, config.LoggingConfig{}, func(cfg *config.AdapterConfig) {
 		cfg.Codex.Enabled = true
 		cfg.Codex.NativeModelRouting = "off"
+		cfg.Codex.Models = testCodexModels()
 	})
 
 	payload, err := json.Marshal(map[string]any{
@@ -757,17 +764,10 @@ func facetFromEvent(t *testing.T, event map[string]any, key string) map[string]a
 	return facet
 }
 
-// TestForceStreamUsageOptInAlwaysSets pins the CLYDE-438 generic
-// adapter policy: every streaming completion that flows through the
-// OpenAI route family emits the trailing usage chunk regardless of
-// the client's `stream_options.include_usage` value. The helper is
-// applied at the chat parse boundary so all backend dispatchers
-// (Codex, Anthropic) inherit the policy uniformly and cannot be
-// silenced by a client that omits or disables the opt-in. Cursor
-// BYOK in particular only sets the opt-in for `clyde-codex-*`
-// aliases, so honoring the client choice starves the auto-compact
-// heuristic on Anthropic chats and lets them grow until Anthropic
-// per-request-rate-limits the oversized turn.
+// TestForceStreamUsageOptInAlwaysSets pins the CLYDE-438 generic adapter
+// policy: every streaming completion that flows through the OpenAI route family
+// emits the trailing usage chunk regardless of the client's
+// `stream_options.include_usage` value.
 func TestForceStreamUsageOptInAlwaysSets(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

@@ -5,13 +5,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
+
+	"goodkind.io/clyde/internal/config"
 )
+
+const anthropicDeviceIDFile = "device_id"
 
 // Identity carries the three IDs claude-cli serializes into
 // metadata.user_id. The wire form is a JSON-encoded string of
@@ -36,9 +41,9 @@ func (i Identity) EncodeUserID() string {
 }
 
 var (
-	deviceOnce sync.Once
-	deviceID   string
-	deviceErr  error
+	deviceOnce  sync.Once
+	deviceID    string
+	errDeviceID error
 )
 
 // DeviceID returns a stable per-machine identifier persisted under
@@ -47,36 +52,27 @@ var (
 // device_id shape (64 hex chars).
 func DeviceID() (string, error) {
 	deviceOnce.Do(func() {
-		deviceID, deviceErr = readOrGenerateDeviceID()
+		deviceID, errDeviceID = readOrGenerateDeviceID()
 	})
-	return deviceID, deviceErr
+	return deviceID, errDeviceID
 }
 
 func readOrGenerateDeviceID() (string, error) {
 	log := anthropicRequestLog.Logger()
-	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			log.Warn("anthropic.identity.home_dir_failed",
-				"subcomponent", "anthropic_identity",
-				"err", err.Error(),
-			)
-			return "", fmt.Errorf("user home dir: %w", err)
-		}
-		stateHome = filepath.Join(home, ".local", "state")
-	}
-	dir := filepath.Join(stateHome, "clyde", "adapter", "anthropic")
+	dir := filepath.Join(config.DefaultStateDir(), "adapter", "anthropic")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Warn("anthropic.identity.device_dir_failed",
-			"subcomponent", "anthropic_identity",
+		log.Warn("anthropic.identity.device_dir_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_identity",
 			"path", dir,
 			"err", err.Error(),
 		)
 		return "", fmt.Errorf("create device dir: %w", err)
 	}
-	path := filepath.Join(dir, "device_id")
-	if data, err := os.ReadFile(path); err == nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", fmt.Errorf("open device dir root: %w", err)
+	}
+	defer root.Close()
+	if data, err := root.ReadFile(anthropicDeviceIDFile); err == nil {
 		if v := strings.TrimSpace(string(data)); v != "" {
 			return v, nil
 		}
@@ -84,10 +80,9 @@ func readOrGenerateDeviceID() (string, error) {
 	seed := uuid.NewString()
 	sum := sha256.Sum256([]byte(seed))
 	id := hex.EncodeToString(sum[:])
-	if err := os.WriteFile(path, []byte(id), 0o600); err != nil {
-		log.Warn("anthropic.identity.device_id_write_failed",
-			"subcomponent", "anthropic_identity",
-			"path", path,
+	if err := root.WriteFile(anthropicDeviceIDFile, []byte(id), 0o600); err != nil {
+		log.Warn("anthropic.identity.device_id_write_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic_identity",
+			"path", filepath.Join(dir, anthropicDeviceIDFile),
 			"err", err.Error(),
 		)
 		return "", fmt.Errorf("persist device_id: %w", err)
@@ -104,12 +99,13 @@ func readOrGenerateDeviceID() (string, error) {
 func AccountUUIDFromClaudeConfig() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		slog.Warn("adapter.anthropic.identity.user_home_failed", "concern", "adapter.providers.anthropic.request", "err", err)
+		return "", fmt.Errorf("user home dir: %w", err)
 	}
 	path := filepath.Join(home, ".claude.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read claude config %s: %w", path, err)
 	}
 	var doc struct {
 		OAuthAccount struct {
@@ -117,7 +113,7 @@ func AccountUUIDFromClaudeConfig() (string, error) {
 		} `json:"oauthAccount"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return "", err
+		return "", fmt.Errorf("unmarshal claude config %s: %w", path, err)
 	}
 	return strings.TrimSpace(doc.OAuthAccount.AccountUUID), nil
 }

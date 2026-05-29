@@ -1,41 +1,29 @@
 package resolver
 
+import adaptermodel "goodkind.io/clyde/internal/adapter/model"
+
 // ProviderID is the typed enum naming the upstream provider that the
-// resolved request will be dispatched to. The set is intentionally
-// narrow. PassthroughOverride and fallback paths are handled by the dispatcher
-// directly today and do not flow through the provider registry.
-type ProviderID string
+// resolved request will be dispatched to. It is a type alias of the
+// adapter's single provider-routing enum, so the resolver and the model
+// registry share one set of provider-routing values. String() and
+// Valid() come from the underlying adaptermodel.BackendID.
+type ProviderID = adaptermodel.BackendID
 
 const (
 	// ProviderUnknown is the zero value. It signals that resolution
 	// produced no provider mapping, typically because the upstream
 	// model name was not registered. Callers must treat it as an
 	// error condition; dispatchers must not try to look it up.
-	ProviderUnknown ProviderID = ""
+	ProviderUnknown = adaptermodel.BackendID("")
 	// ProviderAnthropic dispatches to the Anthropic OAuth bucket
 	// implementation in internal/adapter/anthropic.
-	ProviderAnthropic ProviderID = "anthropic"
+	ProviderAnthropic = adaptermodel.BackendAnthropic
 	// ProviderCodex dispatches to the Codex websocket implementation
 	// in internal/adapter/codex.
-	ProviderCodex ProviderID = "codex"
+	ProviderCodex = adaptermodel.BackendCodex
+	// ProviderPassthrough dispatches to the passthrough-override path.
+	ProviderPassthrough = adaptermodel.BackendPassthroughOverride
 )
-
-// String returns the wire-form value of the ProviderID. It is the
-// canonical lower-case name and is safe to compare against the
-// existing model.Backend* constants.
-func (p ProviderID) String() string {
-	return string(p)
-}
-
-// Valid reports whether the ProviderID is one of the known typed
-// values (excluding ProviderUnknown).
-func (p ProviderID) Valid() bool {
-	switch p {
-	case ProviderAnthropic, ProviderCodex:
-		return true
-	}
-	return false
-}
 
 // Effort is the typed reasoning-effort enum carried on a ResolvedRequest.
 // The set mirrors the values the existing model registry accepts; the

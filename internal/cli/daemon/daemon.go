@@ -26,6 +26,7 @@ var (
 	runningFingerprint  = daemonsvc.RunningSupervisorFingerprint
 )
 
+// NewCmd is part of Clyde's typed adapter surface.
 func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    "daemon",
@@ -33,19 +34,17 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slog.Info("cli.daemon.invoked",
-				"component", "cli",
+			slog.Info("cli.daemon.invoked", "concern", "cli.daemon", "component", "cli",
 				"version", f.Build.Version,
 			)
 			log := slog.Default().With("component", "daemon")
-			return runCommand(log, pruneLoop(), oauthLoop(), driftLoop(), slogCleanupLoop())
+			return runCommand(log)
 		},
 	}
 	cmd.AddCommand(newWorkerCmd(f))
 	cmd.AddCommand(newReloadCmd(f))
 	cmd.AddCommand(newStatusCmd(f))
 	cmd.AddCommand(newSupervisorFingerprintCmd(f))
-	cmd.AddCommand(newLaunchRemoteWorkerCmd(f))
 	return cmd
 }
 
@@ -56,11 +55,9 @@ func newWorkerCmd(_ *cli.Factory) *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slog.Info("cli.daemon.worker.invoked",
-				"component", "cli",
-			)
+			slog.Info("cli.daemon.worker.invoked", "concern", "cli.daemon", "component", "cli")
 			log := slog.Default().With("component", "daemon")
-			return runWorker(log, pruneLoop(), oauthLoop(), driftLoop(), slogCleanupLoop())
+			return runWorker(log)
 		},
 	}
 }
@@ -81,7 +78,7 @@ func newReloadCmd(f *cli.Factory) *cobra.Command {
 			if resp.GetBinaryReloaded() {
 				status = "reloaded"
 			}
-			_, _ = fmt.Fprintf(f.IOStreams.Out, "daemon binary %s: active_sessions=%d new_pid=%d\n", status, resp.GetActiveSessions(), resp.GetNewPid())
+			_, _ = fmt.Fprintf(f.IOStreams.Out, "daemon binary %s: active_surfaces=%d new_pid=%d\n", status, resp.GetActiveSurfaces(), resp.GetNewPid())
 			return nil
 		},
 	}

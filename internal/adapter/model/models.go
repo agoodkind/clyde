@@ -10,21 +10,51 @@ import (
 	"goodkind.io/clyde/internal/config"
 )
 
+// BackendID is the typed enum naming the provider-routing backend that
+// fulfils a request. It is the single provider-routing enum for the
+// adapter; the resolver's ProviderID is a type alias of it.
+type BackendID string
+
+// String returns the wire-form value of the BackendID.
+func (b BackendID) String() string { return string(b) }
+
+// Valid reports whether the BackendID is one of the four known backends.
+func (b BackendID) Valid() bool {
+	switch b {
+	case BackendClaude, BackendAnthropic, BackendCodex, BackendPassthroughOverride:
+		return true
+	}
+	return false
+}
+
+// backendFromConfig converts a config-supplied backend string into a
+// typed BackendID, applying fallback when the operator left the field
+// blank. config holds the value as a string because importing
+// internal/adapter/model into internal/config would create an import
+// cycle. An unrecognised non-empty value is returned verbatim as a
+// BackendID so callers can validate it; the registry never silently
+// remaps an explicit operator choice.
+func backendFromConfig(raw string, fallback BackendID) BackendID {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return fallback
+	}
+	return BackendID(trimmed)
+}
+
 // Backend names the kind of worker that fulfils a request.
 const (
-	BackendClaude              = "claude"
-	BackendPassthroughOverride = "passthrough_override"
+	BackendClaude              BackendID = "claude"
+	BackendPassthroughOverride BackendID = "passthrough_override"
 	// BackendAnthropic routes the request directly at the configured
-	// messages URL. Auth uses the token from the keychain (the
-	// internal/adapter/oauth package handles credentials;
-	// internal/adapter/anthropic handles HTTP). Selected
-	// when adapter config sets direct_oauth=true; the registry
-	// rewrites every BackendClaude model to BackendAnthropic at
-	// construction so the HTTP layer only has to switch on this
-	// single value.
-	BackendAnthropic = "anthropic"
+	// messages URL. Auth comes from the provider-specific credential
+	// reader injected by the daemon. Selected when adapter config sets
+	// direct_oauth=true; the registry rewrites every BackendClaude model
+	// to BackendAnthropic at construction so the HTTP layer only has to
+	// switch on this single value.
+	BackendAnthropic BackendID = "anthropic"
 	// BackendCodex routes to ChatGPT/Codex-backed model execution.
-	BackendCodex = "codex"
+	BackendCodex BackendID = "codex"
 )
 
 // Effort tiers (low, medium, high, max). Sent inside output_config
@@ -50,14 +80,16 @@ const (
 	ThinkingDisabled = "disabled"
 )
 
-// ResolvedModel is the runtime view of one alias. The registry maps
-// every incoming model string to exactly one ResolvedModel.
-type ResolvedModel struct {
+// ResolvedAlias is the resolved per-alias table row: the registry maps
+// every alias to exactly one ResolvedAlias, consumed by the /v1/models
+// catalog path and the codex capability report. The per-request dispatch
+// object is resolver.ResolvedRequest, not this type.
+type ResolvedAlias struct {
 	// Alias is the public name the client sent.
 	Alias string
 	// Backend is one of BackendClaude / BackendPassthroughOverride /
 	// BackendAnthropic / BackendCodex.
-	Backend string
+	Backend BackendID
 	// ClaudeModel names the real Claude snapshot. May carry a
 	// context-window wire suffix (e.g. "[1m]");
 	// oauth_handler.stripContextSuffix removes it before the wire
@@ -116,16 +148,15 @@ type ResolvedModel struct {
 // NewRegistry rejects an AdapterConfig that omits families,
 // client_identity fields, or default_model.
 type Registry struct {
-	models                         map[string]ResolvedModel
+	models                         map[string]ResolvedAlias
 	passthroughOverrides           map[string]config.AdapterPassthroughOverride
 	def                            string
 	openAICompat                   config.AdapterOpenAICompatPassthrough
 	codexEnabled                   bool
-	codexPrefix                    []string
 	codexNativeRouting             string
 	codexNativePassthroughOverride string
-	codexModels                    map[string]ResolvedModel
-	nativeCodexModels              map[string]ResolvedModel
+	codexModels                    map[string]ResolvedAlias
+	nativeCodexModels              map[string]ResolvedAlias
 	nativeAdvertised               map[string]bool
 }
 
@@ -157,9 +188,6 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 	if err := finalizeCodexNativeRouting(r, cfg); err != nil {
 		return nil, err
 	}
-	if len(r.codexPrefix) == 0 {
-		r.codexPrefix = []string{"gpt-", "o"}
-	}
 
 	if err := loadConfigModels(r, cfg.Models); err != nil {
 		return nil, err
@@ -185,8 +213,7 @@ func NewRegistry(cfg config.AdapterConfig) (*Registry, error) {
 		}
 	}
 
-	modelCatalogLog.Logger().Info("adapter.registry.capabilities_loaded",
-		"subcomponent", "adapter",
+	modelCatalogLog.Logger().Info("adapter.registry.capabilities_loaded", "concern", "adapter.http.ingress", "subcomponent", "adapter",
 		"families", len(cfg.Families),
 		"tools_capable", toolsCapable,
 		"vision_capable", visionCapable,
@@ -224,7 +251,8 @@ func validateAdapterCoreConfig(cfg config.AdapterConfig) error {
 	}
 	if cfg.DirectOAuth {
 		if err := cfg.Anthropic.OAuth.ValidateOAuthFields(); err != nil {
-			return err
+			slog.Warn("adapter.model.validate_anthropic_oauth_failed", "concern", "adapter.models.resolve", "err", err)
+			return fmt.Errorf("validate anthropic OAuth config: %w", err)
 		}
 	}
 	return nil
@@ -256,8 +284,8 @@ func countFamilyCapabilities(families map[string]config.AdapterFamily) (int, int
 }
 
 // buildFamilyAliases validates each family and expands the alias cross-product.
-func buildFamilyAliases(families map[string]config.AdapterFamily) (map[string]ResolvedModel, error) {
-	models := map[string]ResolvedModel{}
+func buildFamilyAliases(families map[string]config.AdapterFamily) (map[string]ResolvedAlias, error) {
+	models := map[string]ResolvedAlias{}
 	for slug, family := range families {
 		if family.Model == "" {
 			return nil, fmt.Errorf("adapter: family %q missing model id", slug)
@@ -270,11 +298,11 @@ func buildFamilyAliases(families map[string]config.AdapterFamily) (map[string]Re
 		default:
 			return nil, fmt.Errorf("adapter: family %q has invalid thinking_wire_mode %q (allowed: %q, %q)", slug, family.ThinkingWireMode, ThinkingEnabled, ThinkingAdaptive)
 		}
-		// Resolve the implicit per-family fallback for thinking_wire_mode.
-		// The result is what generateFamilyAliases will stamp onto every
-		// thinking-enabled alias. EffectiveThinkingMode does not patch
-		// this at request time; the family's choice is the wire choice.
-		family = withResolvedThinkingWireMode(slog.Default(), slug, family)
+		// Resolve the empty-default for thinking_wire_mode. The result is
+		// what generateFamilyAliases will stamp onto every thinking-enabled
+		// alias. EffectiveThinkingMode does not patch this at request time;
+		// the family's choice is the wire choice.
+		family = withResolvedThinkingWireMode(family)
 		generateFamilyAliases(models, slug, family)
 	}
 	return models, nil
@@ -282,18 +310,17 @@ func buildFamilyAliases(families map[string]config.AdapterFamily) (map[string]Re
 
 // newEmptyRegistry constructs a Registry seeded with the family-expanded
 // alias map and the codex-related config knobs in their pre-validated form.
-func newEmptyRegistry(cfg config.AdapterConfig, models map[string]ResolvedModel) *Registry {
+func newEmptyRegistry(cfg config.AdapterConfig, models map[string]ResolvedAlias) *Registry {
 	return &Registry{
 		models:                         models,
 		passthroughOverrides:           map[string]config.AdapterPassthroughOverride{},
 		def:                            cfg.DefaultModel,
 		openAICompat:                   cfg.OpenAICompatPassthrough,
 		codexEnabled:                   cfg.Codex.Enabled,
-		codexPrefix:                    append([]string(nil), cfg.Codex.ModelPrefixes...),
 		codexNativeRouting:             strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelRouting)),
 		codexNativePassthroughOverride: strings.ToLower(strings.TrimSpace(cfg.Codex.NativeModelPassthroughOverride)),
-		codexModels:                    map[string]ResolvedModel{},
-		nativeCodexModels:              map[string]ResolvedModel{},
+		codexModels:                    map[string]ResolvedAlias{},
+		nativeCodexModels:              map[string]ResolvedAlias{},
 		nativeAdvertised:               map[string]bool{},
 	}
 }
@@ -309,11 +336,11 @@ func finalizeCodexNativeRouting(r *Registry, cfg config.AdapterConfig) error {
 		}
 	}
 	switch r.codexNativeRouting {
-	case "off", "codex", BackendPassthroughOverride:
+	case "off", "codex", BackendPassthroughOverride.String():
 	default:
 		return fmt.Errorf("adapter: [adapter.codex].native_model_routing must be one of: off, codex, passthrough_override")
 	}
-	if r.codexNativeRouting == BackendPassthroughOverride {
+	if r.codexNativeRouting == BackendPassthroughOverride.String() {
 		if r.codexNativePassthroughOverride == "" {
 			return fmt.Errorf("adapter: [adapter.codex].native_model_passthrough_override is required when native_model_routing = \"passthrough_override\"")
 		}
@@ -363,8 +390,7 @@ func applyDirectOAuthRewrite(r *Registry, cfg config.AdapterConfig) {
 		r.models[alias] = rm
 	}
 	if cfg.DirectOAuth {
-		modelCatalogLog.Logger().Info("adapter.registry.oauth_rewrite",
-			"subcomponent", "adapter",
+		modelCatalogLog.Logger().Info("adapter.registry.oauth_rewrite", "concern", "adapter.http.ingress", "subcomponent", "adapter",
 			"models_rewritten", rewritten,
 			"models_total", len(r.models),
 		)
@@ -383,36 +409,20 @@ func validateAdapterLogprobs(lp config.AdapterLogprobs) error {
 	return nil
 }
 
-// withResolvedThinkingWireMode populates family.ThinkingWireMode when
-// it is empty by applying any known per-model fallback. Today the only
-// fallback is the historical claude-opus-4-7 rule: that family's
-// upstream rejects enabled-mode thinking and requires adaptive, so an
-// unset config gets remapped to adaptive at registry construction. The
-// remap fires a one-shot Warn so operators see the implicit mapping
-// and can set thinking_wire_mode explicitly in their config to silence
-// it. Operators who explicitly set ThinkingWireMode (including
-// "enabled") are honored; this fallback never overrides them.
-func withResolvedThinkingWireMode(log *slog.Logger, slug string, f config.AdapterFamily) config.AdapterFamily {
+// withResolvedThinkingWireMode resolves the documented empty-default for
+// a family's ThinkingWireMode: an unset value resolves to ThinkingEnabled.
+// There is no per-model special-case; the resolved wire mode is exactly
+// what the family declares, so an operator who wants adaptive must set
+// thinking_wire_mode = "adaptive" in [adapter.families.<slug>]. A family
+// that does not declare any thinking-enabled mode is left untouched.
+func withResolvedThinkingWireMode(f config.AdapterFamily) config.AdapterFamily {
 	if f.ThinkingWireMode != "" {
 		return f
 	}
 	if !contains(f.ThinkingModes, ThinkingEnabled) {
 		return f
 	}
-	if !strings.EqualFold(f.Model, "claude-opus-4-7") {
-		return f
-	}
-	if log != nil {
-		log.Warn("adapter.family.thinking_wire_mode_implicit",
-			"component", "adapter",
-			"subcomponent", "models",
-			"family", slug,
-			"model", f.Model,
-			"effective_mode", ThinkingAdaptive,
-			"reason", "claude-opus-4-7 historically rejected enabled-mode thinking. The registry is mapping enabled to adaptive at registry construction. Set thinking_wire_mode = \"adaptive\" in [adapter.families."+slug+"] to make this explicit and silence this warning.",
-		)
-	}
-	f.ThinkingWireMode = ThinkingAdaptive
+	f.ThinkingWireMode = ThinkingEnabled
 	return f
 }
 
@@ -422,7 +432,7 @@ func withResolvedThinkingWireMode(log *slog.Logger, slug string, f config.Adapte
 //	clyde-<family>[-<ctx>]-<effort>[-thinking]
 //
 // Absence of -thinking is the canonical disabled-thinking variant.
-func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.AdapterFamily) {
+func generateFamilyAliases(out map[string]ResolvedAlias, slug string, f config.AdapterFamily) {
 	if len(f.Efforts) == 0 {
 		return
 	}
@@ -430,6 +440,7 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 	if family == "" {
 		family = slug
 	}
+	backend := backendFromConfig(f.Backend, BackendClaude)
 	emitThinking := contains(f.ThinkingModes, ThinkingEnabled)
 	thinkingWire := f.ThinkingWireMode
 	if thinkingWire == "" {
@@ -437,9 +448,9 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 	}
 	for _, ctx := range f.Contexts {
 		for _, eff := range f.Efforts {
-			base := ResolvedModel{
+			base := ResolvedAlias{
 				Alias:                   "",
-				Backend:                 BackendClaude,
+				Backend:                 backend,
 				ClaudeModel:             f.Model + ctx.WireSuffix,
 				Instructions:            f.Instructions,
 				Context:                 ctx.Tokens,
@@ -462,9 +473,9 @@ func generateFamilyAliases(out map[string]ResolvedModel, slug string, f config.A
 				out[buildAlias(family, ctx.AliasSuffix, eff, true)] = thinkingModel
 			}
 		}
-		out[buildAlias(family, ctx.AliasSuffix, "", false)] = ResolvedModel{
+		out[buildAlias(family, ctx.AliasSuffix, "", false)] = ResolvedAlias{
 			Alias:                   "",
-			Backend:                 BackendClaude,
+			Backend:                 backend,
 			ClaudeModel:             f.Model + ctx.WireSuffix,
 			Instructions:            f.Instructions,
 			Context:                 ctx.Tokens,
@@ -498,7 +509,7 @@ func buildAlias(family, ctxSuffix, effort string, thinking bool) string {
 	return strings.Join(parts, "-")
 }
 
-func addCodexModelAliases(out map[string]ResolvedModel, cfg config.AdapterCodexModel) error {
+func addCodexModelAliases(out map[string]ResolvedAlias, cfg config.AdapterCodexModel) error {
 	if strings.TrimSpace(cfg.AliasPrefix) == "" {
 		return fmt.Errorf("adapter: [adapter.codex.models] entry missing alias_prefix")
 	}
@@ -511,39 +522,46 @@ func addCodexModelAliases(out map[string]ResolvedModel, cfg config.AdapterCodexM
 	if len(cfg.Contexts) == 0 {
 		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing contexts", cfg.AliasPrefix)
 	}
+	backend := backendFromConfig(cfg.Backend, BackendCodex)
 	for _, ctx := range cfg.Contexts {
 		for _, effort := range cfg.Efforts {
 			alias := buildAlias(cfg.AliasPrefix, ctx.AliasSuffix, effort, false)
-			out[strings.ToLower(alias)] = ResolvedModel{
+			out[strings.ToLower(alias)] = ResolvedAlias{
 				Alias:           alias,
-				Backend:         BackendCodex,
+				Backend:         backend,
 				ClaudeModel:     cfg.Model,
 				Instructions:    cfg.Instructions,
 				Context:         ctx.Tokens,
 				ObservedContext: ctx.ObservedTokens,
 				Efforts:         []string{effort},
 				Effort:          effort,
-				MaxOutputTokens: cfg.MaxOutputTokens,
+				MaxOutputTokens: cfg.MaxOutputTokens, ThinkingModes: nil, Thinking: "", SupportsTools: false, SupportsVision: false, PassthroughOverride: "", OpenAICompatPassthrough: config.
+							AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
+
+				FamilySlug: "",
 			}
 		}
 	}
 	for _, ctx := range cfg.Contexts {
 		alias := buildAlias(cfg.AliasPrefix, ctx.AliasSuffix, "", false)
-		out[strings.ToLower(alias)] = ResolvedModel{
+		out[strings.ToLower(alias)] = ResolvedAlias{
 			Alias:           alias,
-			Backend:         BackendCodex,
+			Backend:         backend,
 			ClaudeModel:     cfg.Model,
 			Instructions:    cfg.Instructions,
 			Context:         ctx.Tokens,
 			ObservedContext: ctx.ObservedTokens,
 			Efforts:         cfg.Efforts,
-			MaxOutputTokens: cfg.MaxOutputTokens,
+			MaxOutputTokens: cfg.MaxOutputTokens, Effort: "", ThinkingModes: nil, Thinking: "", SupportsTools: false, SupportsVision: false, PassthroughOverride: "", OpenAICompatPassthrough: config.
+						AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
+
+			FamilySlug: "",
 		}
 	}
 	return nil
 }
 
-func addNativeCodexModelAliases(out map[string]ResolvedModel, advertised map[string]bool, cfg config.AdapterCodexModel) error {
+func addNativeCodexModelAliases(out map[string]ResolvedAlias, advertised map[string]bool, cfg config.AdapterCodexModel) error {
 	if strings.TrimSpace(cfg.Model) == "" {
 		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing model", cfg.AliasPrefix)
 	}
@@ -566,7 +584,7 @@ func addNativeCodexModelAliases(out map[string]ResolvedModel, advertised map[str
 	return nil
 }
 
-func addNativeCodexModelAlias(out map[string]ResolvedModel, alias string, cfg config.AdapterCodexModel, ctx config.AdapterCodexModelContext) {
+func addNativeCodexModelAlias(out map[string]ResolvedAlias, alias string, cfg config.AdapterCodexModel, ctx config.AdapterCodexModelContext) {
 	alias = strings.TrimSpace(alias)
 	if alias == "" {
 		return
@@ -575,23 +593,28 @@ func addNativeCodexModelAlias(out map[string]ResolvedModel, alias string, cfg co
 	if _, ok := out[key]; ok {
 		return
 	}
-	out[key] = ResolvedModel{
+	out[key] = ResolvedAlias{
 		Alias:           alias,
-		Backend:         BackendCodex,
+		Backend:         backendFromConfig(cfg.Backend, BackendCodex),
 		ClaudeModel:     cfg.Model,
 		Instructions:    cfg.Instructions,
 		Context:         ctx.Tokens,
 		ObservedContext: ctx.ObservedTokens,
 		Efforts:         cfg.Efforts,
-		MaxOutputTokens: cfg.MaxOutputTokens,
+		MaxOutputTokens: cfg.MaxOutputTokens, Effort: "",
+
+		// resolveFromConfig converts a user provided AdapterModel entry into
+		// a ResolvedAlias. Missing fields default to the claude backend so
+		// a minimal config stanza (just a Model name) works.
+		ThinkingModes: nil, Thinking: "", SupportsTools: false, SupportsVision: false, PassthroughOverride: "", OpenAICompatPassthrough: config.
+				AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
+
+		FamilySlug: "",
 	}
 }
 
-// resolveFromConfig converts a user provided AdapterModel entry into
-// a ResolvedModel. Missing fields default to the claude backend so
-// a minimal config stanza (just a Model name) works.
-func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
-	backend := m.Backend
+func resolveFromConfig(alias string, m config.AdapterModel) ResolvedAlias {
+	backend := BackendID(m.Backend)
 	if backend == "" {
 		if m.PassthroughOverride != "" {
 			backend = BackendPassthroughOverride
@@ -599,7 +622,7 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 			backend = BackendClaude
 		}
 	}
-	out := ResolvedModel{
+	out := ResolvedAlias{
 		Alias:               alias,
 		Backend:             backend,
 		ClaudeModel:         m.Model,
@@ -607,101 +630,40 @@ func resolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
 		Context:             m.Context,
 		ObservedContext:     m.ObservedContext,
 		Efforts:             m.Efforts,
-		PassthroughOverride: m.PassthroughOverride,
+		PassthroughOverride: m.PassthroughOverride, Effort: "", ThinkingModes:
+
+		// ResolveFromConfig is part of Clyde's typed adapter surface.
+		nil, Thinking: "", MaxOutputTokens: 0, SupportsTools: false, SupportsVision: false, OpenAICompatPassthrough: config.
+				AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
+
+		FamilySlug: "",
 	}
 	return out
 }
 
-func ResolveFromConfig(alias string, m config.AdapterModel) ResolvedModel {
+// ResolveFromConfig is part of Clyde's typed adapter surface.
+func ResolveFromConfig(alias string, m config.AdapterModel) ResolvedAlias {
 	return resolveFromConfig(alias, m)
 }
 
-func (r *Registry) looksLikeCodexModel(alias string) bool {
-	if !r.codexEnabled {
-		return false
-	}
-	key := strings.ToLower(strings.TrimSpace(alias))
-	if key == "" {
-		return false
-	}
-	if strings.HasPrefix(key, "clyde-o1") ||
-		strings.HasPrefix(key, "clyde-o3") ||
-		strings.HasPrefix(key, "clyde-o4") ||
-		strings.HasPrefix(key, "clyde-codex-") {
-		return true
-	}
-	return r.looksLikeNativeCodexModel(alias)
-}
-
-func (r *Registry) looksLikeNativeCodexModel(alias string) bool {
-	if !r.codexEnabled {
-		return false
-	}
-	key := strings.ToLower(strings.TrimSpace(alias))
-	if key == "" || strings.HasPrefix(key, "clyde-") {
-		return false
-	}
-	for _, p := range r.codexPrefix {
-		p = strings.ToLower(strings.TrimSpace(p))
-		if p == "" {
-			continue
-		}
-		if strings.HasPrefix(key, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeCodexModelAlias(alias string) string {
-	key := codexAliasModelKey(alias)
-	lower := strings.ToLower(key)
-	for _, prefix := range []string{"clyde-codex-"} {
-		if strings.HasPrefix(lower, prefix) {
-			key = key[len(prefix):]
-			lower = strings.ToLower(key)
-			break
-		}
-	}
-	if strings.HasPrefix(lower, "clyde-gpt-") {
-		key = "gpt-" + key[len("clyde-gpt-"):]
-	}
-	return key
-}
-
-func codexAliasModelKey(alias string) string {
-	key := strings.TrimSpace(alias)
-	lower := strings.ToLower(key)
-	for _, suffix := range []string{"-low", "-medium", "-high", "-xhigh"} {
-		if strings.HasSuffix(lower, suffix) {
-			key = key[:len(key)-len(suffix)]
-			break
-		}
-	}
-	return key
-}
-
-func codexAliasEffort(alias string) string {
-	lower := strings.ToLower(strings.TrimSpace(alias))
-	for _, suffix := range []string{"xhigh", "high", "medium", "low"} {
-		if strings.HasSuffix(lower, "-"+suffix) {
-			return suffix
-		}
-	}
-	return ""
-}
-
-// Resolve looks up the alias and returns the resolved model plus the
-// chosen effort tier. reqEffort may be empty; the registry uses the
-// alias-bound effort first, then the family default. Unknown aliases
-// fall through to the registry default alias (or the configured
-// OpenAI-compatible passthrough upstream).
+// Resolve maps an alias to a resolved model using declarative config
+// only. An alias resolves when it is declared in one of the registry's
+// maps: family-expanded [adapter.families.*] and per-alias
+// [adapter.models.*] entries (r.models), [adapter.codex.models] effort
+// aliases (r.codexModels), or [adapter.codex.models] native aliases
+// (r.nativeCodexModels). When no declared alias matches, the registry
+// falls through to the configured OpenAI-compatible passthrough
+// upstream, then the configured default alias, then an unknown-model
+// error. There is no model-name prefix guessing: a gpt-* or o* alias
+// routes to Codex only when the operator declares it (e.g. via a codex
+// model alias_prefix or a native_aliases entry).
 //
-// Returns an error when the caller asks for an effort value the
-// alias's family doesn't support server-side. This surfaces as a
-// 400 to the OpenAI client rather than letting the upstream return
-// a less actionable message.
-func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, error) {
+// reqEffort may be empty; the registry uses the alias-bound effort
+// first, then the family default. Resolve returns an error when the
+// caller asks for an effort value the alias's family does not support
+// server-side, which surfaces as a 400 to the OpenAI client rather than
+// letting the upstream return a less actionable message.
+func (r *Registry) Resolve(alias, reqEffort string) (ResolvedAlias, string, error) {
 	if alias == "" {
 		alias = r.def
 	}
@@ -709,118 +671,118 @@ func (r *Registry) Resolve(alias, reqEffort string) (ResolvedModel, string, erro
 	if m, ok := r.models[key]; ok {
 		return resolveConfiguredModel(m, reqEffort)
 	}
-	if r.looksLikeNativeCodexModel(alias) {
-		switch r.codexNativeRouting {
-		case "codex":
-			return r.resolveNativeCodexModel(alias, reqEffort)
-		case BackendPassthroughOverride:
-			if _, ok := r.passthroughOverrides[r.codexNativePassthroughOverride]; ok {
-				return ResolvedModel{
-					Alias:               alias,
-					Backend:             BackendPassthroughOverride,
-					PassthroughOverride: r.codexNativePassthroughOverride,
-				}, "", nil
-			}
-			return ResolvedModel{}, "", fmt.Errorf("native model passthrough override %q is not configured", r.codexNativePassthroughOverride)
-		default:
-			return ResolvedModel{}, "", fmt.Errorf(
-				"unknown model %q (native model routing is off; configure [adapter.models.%q] or [adapter.codex].native_model_routing)",
-				alias,
-				alias,
-			)
-		}
-	}
 	if m, ok := r.codexModels[key]; ok {
-		effort := strings.ToLower(strings.TrimSpace(reqEffort))
-		switch {
-		case effort == "":
-			if m.Effort == "" {
-				return ResolvedModel{}, "", fmt.Errorf(
-					"model %q requires an explicit effort-qualified alias",
-					m.Alias,
-				)
-			}
-			effort = m.Effort
-		case m.Effort != "" && effort != m.Effort:
-			return ResolvedModel{}, "", fmt.Errorf(
-				"effort %q conflicts with effort-bound model %q",
-				effort, m.Alias,
-			)
-		case m.Effort == "" && !contains(m.Efforts, effort):
-			return ResolvedModel{}, "", fmt.Errorf(
-				"effort %q not supported for %q (allowed: %s)",
-				effort, m.Alias, strings.Join(m.Efforts, ", "),
-			)
-		}
-		return m, effort, nil
+		return resolveCodexEffortModel(m, reqEffort)
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(alias)), "clyde-gpt-") {
-		return ResolvedModel{}, "", fmt.Errorf(
-			"unknown clyde GPT model %q (declare it under [adapter.codex.models] with an explicit effort alias)",
-			alias,
-		)
-	}
-	if r.looksLikeCodexModel(alias) {
-		return r.resolveNativeCodexModel(alias, reqEffort)
+	if m, ok := r.nativeCodexModels[key]; ok {
+		return r.resolveNativeCodexModel(alias, m, reqEffort)
 	}
 	if r.openAICompat.BaseURL != "" {
-		return ResolvedModel{
+		return ResolvedAlias{
 			Alias:                   alias,
 			Backend:                 BackendPassthroughOverride,
-			OpenAICompatPassthrough: r.openAICompat,
+			OpenAICompatPassthrough: r.openAICompat, ClaudeModel: "", Instructions: "", Context: 0, ObservedContext: 0, Efforts: nil, Effort: "", ThinkingModes: nil, Thinking: "", MaxOutputTokens: 0, SupportsTools: false, SupportsVision: false, PassthroughOverride: "", FamilySlug: "",
 		}, "", nil
 	}
 	def, dok := r.models[strings.ToLower(r.def)]
 	if !dok {
-		return ResolvedModel{}, "", fmt.Errorf("unknown model %q and no usable default", alias)
+		return ResolvedAlias{}, "", fmt.Errorf("unknown model %q and no usable default", alias)
 	}
 	return resolveConfiguredModel(def, reqEffort)
 }
 
-func (r *Registry) resolveNativeCodexModel(alias, reqEffort string) (ResolvedModel, string, error) {
+// resolveCodexEffortModel applies the effort-gating contract for a
+// [adapter.codex.models] effort alias matched by exact key.
+func resolveCodexEffortModel(m ResolvedAlias, reqEffort string) (ResolvedAlias, string, error) {
 	effort := strings.ToLower(strings.TrimSpace(reqEffort))
-	if effort == "" {
-		effort = codexAliasEffort(alias)
-	}
-	modelKey := strings.ToLower(strings.TrimSpace(normalizeCodexModelAlias(alias)))
-	if m, ok := r.nativeCodexModels[modelKey]; ok {
-		m.Alias = alias
-		if effort != "" && len(m.Efforts) > 0 && !contains(m.Efforts, effort) {
-			return ResolvedModel{}, "", fmt.Errorf(
-				"effort %q not supported for %q (allowed: %s)",
-				effort, alias, strings.Join(m.Efforts, ", "),
-			)
-		}
-		return m, effort, nil
-	}
-	return ResolvedModel{
-		Alias:       alias,
-		Backend:     BackendCodex,
-		ClaudeModel: normalizeCodexModelAlias(alias),
-	}, effort, nil
-}
-
-func resolveConfiguredModel(m ResolvedModel, reqEffort string) (ResolvedModel, string, error) {
-	effort := strings.ToLower(reqEffort)
-	if effort == "" {
-		if m.Effort != "" {
-			effort = m.Effort
-		} else if len(m.Efforts) > 0 {
-			effort = m.Efforts[0]
-		}
-	} else {
-		if len(m.Efforts) == 0 {
-			return ResolvedModel{}, "", fmt.Errorf(
-				"model %q does not accept effort (family declares no efforts in toml)",
+	switch {
+	case effort == "":
+		if m.Effort == "" {
+			return ResolvedAlias{}, "", fmt.Errorf(
+				"model %q requires an explicit effort-qualified alias",
 				m.Alias,
 			)
 		}
-		if !contains(m.Efforts, effort) {
-			return ResolvedModel{}, "", fmt.Errorf(
+		effort = m.Effort
+	case m.Effort != "" && effort != m.Effort:
+		return ResolvedAlias{}, "", fmt.Errorf(
+			"effort %q conflicts with effort-bound model %q",
+			effort, m.Alias,
+		)
+	case m.Effort == "" && !contains(m.Efforts, effort):
+		return ResolvedAlias{}, "", fmt.Errorf(
+			"effort %q not supported for %q (allowed: %s)",
+			effort, m.Alias, strings.Join(m.Efforts, ", "),
+		)
+	}
+	return m, effort, nil
+}
+
+// resolveNativeCodexModel resolves a declared native alias (an entry
+// from [adapter.codex.models].contexts.native_aliases /
+// advertised_native_aliases) honoring the codex native-routing mode.
+// The alias must already be a declared key in r.nativeCodexModels; the
+// matched model is passed in. native_model_routing controls the
+// outcome: "codex" (the enabled default) routes to the declared Codex
+// model, "passthrough_override" routes to the configured passthrough
+// override, and "off" rejects the alias as unknown.
+func (r *Registry) resolveNativeCodexModel(alias string, m ResolvedAlias, reqEffort string) (ResolvedAlias, string, error) {
+	switch r.codexNativeRouting {
+	case "codex":
+		effort := strings.ToLower(strings.TrimSpace(reqEffort))
+		out := m
+		out.Alias = alias
+		if effort != "" && len(out.Efforts) > 0 && !contains(out.Efforts, effort) {
+			return ResolvedAlias{}, "", fmt.Errorf(
 				"effort %q not supported for %q (allowed: %s)",
-				effort, m.Alias, strings.Join(m.Efforts, ", "),
+				effort, alias, strings.Join(out.Efforts, ", "),
 			)
 		}
+		return out, effort, nil
+	case BackendPassthroughOverride.String():
+		if _, ok := r.passthroughOverrides[r.codexNativePassthroughOverride]; ok {
+			return ResolvedAlias{
+				Alias:               alias,
+				Backend:             BackendPassthroughOverride,
+				PassthroughOverride: r.codexNativePassthroughOverride, ClaudeModel: "", Instructions: "", Context: 0, ObservedContext: 0, Efforts: nil, Effort: "", ThinkingModes: nil, Thinking: "", MaxOutputTokens: 0, SupportsTools: false, SupportsVision: false, OpenAICompatPassthrough: config.
+							AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
+
+				FamilySlug: "",
+			}, "", nil
+		}
+		return ResolvedAlias{}, "", fmt.Errorf("native model passthrough override %q is not configured", r.codexNativePassthroughOverride)
+	default:
+		return ResolvedAlias{}, "", fmt.Errorf(
+			"unknown model %q (native model routing is off; configure [adapter.models.%q] or [adapter.codex].native_model_routing)",
+			alias,
+			alias,
+		)
+	}
+}
+
+func resolveConfiguredModel(m ResolvedAlias, reqEffort string) (ResolvedAlias, string, error) {
+	effort := strings.ToLower(reqEffort)
+	if effort == "" {
+		switch {
+		case m.Effort != "":
+			return m, m.Effort, nil
+		case len(m.Efforts) > 0:
+			return m, m.Efforts[0], nil
+		default:
+			return m, "", nil
+		}
+	}
+	if len(m.Efforts) == 0 {
+		return ResolvedAlias{}, "", fmt.Errorf(
+			"model %q does not accept effort (family declares no efforts in toml)",
+			m.Alias,
+		)
+	}
+	if !contains(m.Efforts, effort) {
+		return ResolvedAlias{}, "", fmt.Errorf(
+			"effort %q not supported for %q (allowed: %s)",
+			effort, m.Alias, strings.Join(m.Efforts, ", "),
+		)
 	}
 	return m, effort, nil
 }
@@ -833,8 +795,8 @@ func (r *Registry) PassthroughOverride(name string) (config.AdapterPassthroughOv
 
 // List returns the resolved models for /v1/models. Order is
 // undefined; callers that care should sort by Alias.
-func (r *Registry) List() []ResolvedModel {
-	out := make([]ResolvedModel, 0, len(r.models)+len(r.codexModels))
+func (r *Registry) List() []ResolvedAlias {
+	out := make([]ResolvedAlias, 0, len(r.models)+len(r.codexModels))
 	seen := make(map[string]struct{}, len(r.models)+len(r.codexModels))
 	for _, m := range r.models {
 		out = append(out, m)
@@ -855,8 +817,9 @@ func (r *Registry) List() []ResolvedModel {
 	return out
 }
 
-func (r *Registry) Models() map[string]ResolvedModel {
-	out := make(map[string]ResolvedModel, len(r.models))
+// Models is part of Clyde's typed adapter surface.
+func (r *Registry) Models() map[string]ResolvedAlias {
+	out := make(map[string]ResolvedAlias, len(r.models))
 	maps.Copy(out, r.models)
 	return out
 }

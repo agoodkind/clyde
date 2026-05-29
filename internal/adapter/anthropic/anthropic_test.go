@@ -16,10 +16,10 @@ func (staticToken) Token(ctx context.Context) (string, error) {
 	return "test-token", nil
 }
 
-// TokenAfterAuthFailure satisfies the extended OAuthSource interface. The
-// static fake returns the same token it always returns; tests that exercise
-// the retry path use the dedicated fakeOAuth helper in client_retry_test.go.
-func (staticToken) TokenAfterAuthFailure(_ context.Context, _ string) (string, error) {
+// ForceRefresh satisfies the extended OAuthSource interface. The static fake
+// returns the same token it always returns; tests that exercise the retry path
+// use the dedicated fakeOAuth helper in client_retry_test.go.
+func (staticToken) ForceRefresh(_ context.Context) (string, error) {
 	return "test-token", nil
 }
 
@@ -171,8 +171,9 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 	}
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
-		http:  hc,
-		oauth: &staticToken{},
+		http:         hc,
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
@@ -180,6 +181,7 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
+			WireBaselinePath:      writeTestWireBaseline(t),
 		},
 	}
 
@@ -251,8 +253,9 @@ func TestDoUsesIdentityEncodingForStreams(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	cli := &Client{
-		http:  srv.Client(),
-		oauth: &staticToken{},
+		http:         srv.Client(),
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:           srv.URL + "/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
@@ -260,6 +263,7 @@ func TestDoUsesIdentityEncodingForStreams(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
+			WireBaselinePath:      writeTestWireBaseline(t),
 		},
 	}
 	req := Request{
@@ -377,8 +381,9 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 	}
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
-		http:  hc,
-		oauth: &staticToken{},
+		http:         hc,
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:             "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion:   "2023-06-01",
@@ -390,6 +395,7 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 			StainlessRuntimeVersion: "v0",
 			CCVersion:               "1.0.0",
 			CCEntrypoint:            "test",
+			WireBaselinePath:        writeTestWireBaseline(t),
 		},
 	}
 
@@ -515,8 +521,9 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	}
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
-		http:  hc,
-		oauth: &staticToken{},
+		http:         hc,
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
 		cfg: Config{
 			MessagesURL:             "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion:   "2023-06-01",
@@ -528,6 +535,7 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 			StainlessRuntimeVersion: "v0",
 			CCVersion:               "1.0.0",
 			CCEntrypoint:            "test",
+			WireBaselinePath:        writeTestWireBaseline(t),
 		},
 	}
 

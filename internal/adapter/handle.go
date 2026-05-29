@@ -149,7 +149,7 @@ func (s *Server) dispatchHandler(
 			slog.Bool("response_started", rw.wroteHeader),
 		}
 		attrs = append(attrs, corr.Attrs()...)
-		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.panic", attrs...)
+		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.panic", append([]slog.Attr{slog.String("concern", "adapter.http.errors")}, attrs...)...)
 		if rw.wroteHeader {
 			return
 		}
@@ -171,7 +171,7 @@ func (s *Server) dispatchHandler(
 				slog.Bool("response_started", true),
 			}
 			attrs = append(attrs, corr.Attrs()...)
-			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.request.error_after_headers", attrs...)
+			slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelWarn, "adapter.request.error_after_headers", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...)
 			return
 		}
 		s.respondAdapterError(w, r, err)
@@ -191,7 +191,7 @@ func (s *Server) dispatchHandler(
 			slog.String("route_family", string(family)),
 		}
 		attrs = append(attrs, corr.Attrs()...)
-		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.body_not_written", attrs...)
+		slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(ctx, slog.LevelError, "adapter.request.body_not_written", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, attrs...)...)
 		s.respondAdapterError(w, r, synth)
 	}
 }

@@ -7,6 +7,18 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"goodkind.io/clyde/internal/clock"
+)
+
+// driftSchemaVersion enumerates the snapshot schema versions the
+// drift log records carry. v1 is the legacy single-flavor format; v2
+// supports the [[flavors]] table introduced in Codex Desktop captures.
+type driftSchemaVersion string
+
+const (
+	driftSchemaV1 driftSchemaVersion = "v1"
+	driftSchemaV2 driftSchemaVersion = "v2"
 )
 
 // DriftOutcome is one entry in the drift log. Exactly one of V1 or V2
@@ -34,23 +46,22 @@ func AppendDriftOutcome(path string, outcome DriftOutcome) error {
 		return fmt.Errorf("drift log path is empty")
 	}
 	if outcome.Timestamp.IsZero() {
-		outcome.Timestamp = currentTime().UTC()
+		outcome.Timestamp = clock.Now().UTC()
 	}
-	switch outcome.SchemaVersion {
-	case "v2":
+	switch driftSchemaVersion(outcome.SchemaVersion) {
+	case driftSchemaV2:
 		if outcome.V2 != nil {
 			outcome.Diverged = outcome.V2.HasDiverged()
 			outcome.Summary = outcome.V2.SummaryString()
 		}
-	case "v1":
+	case driftSchemaV1:
 		if outcome.V1 != nil {
 			outcome.Diverged = outcome.V1.HasDiverged()
 			outcome.Summary = outcome.V1.SummaryString()
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		slog.Warn("mitm.drift_log.mkdir_failed",
-			"component", "mitm",
+		slog.Warn("mitm.drift_log.mkdir_failed", "concern", "providers.mitm.wire", "component", "mitm",
 			"path", path,
 			"err", err,
 		)
@@ -58,8 +69,7 @@ func AppendDriftOutcome(path string, outcome DriftOutcome) error {
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		slog.Warn("mitm.drift_log.open_failed",
-			"component", "mitm",
+		slog.Warn("mitm.drift_log.open_failed", "concern", "providers.mitm.wire", "component", "mitm",
 			"path", path,
 			"err", err,
 		)
@@ -68,8 +78,7 @@ func AppendDriftOutcome(path string, outcome DriftOutcome) error {
 	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	if err := enc.Encode(outcome); err != nil {
-		slog.Warn("mitm.drift_log.encode_failed",
-			"component", "mitm",
+		slog.Warn("mitm.drift_log.encode_failed", "concern", "providers.mitm.wire", "component", "mitm",
 			"path", path,
 			"err", err,
 		)

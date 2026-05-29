@@ -70,7 +70,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	}
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		p.log.Warn("mitm.ws.upgrade_failed", "err", err)
+		p.log.Warn("mitm.ws.upgrade_failed", "concern", "providers.mitm.wire", "err", err)
 		p.recordWSFailure(ctx, recorder, "ws_client_upgrade_failed", err.Error())
 		return
 	}
@@ -119,12 +119,12 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		recorder.Complete(ctx)
 	}
 	queueBaselineRefresh(ctx, cfg, provider, p.log)
-	p.log.Info("mitm.ws.closed", "url", upstreamURL, "messages", state.messageCount)
+	p.log.Info("mitm.ws.closed", "concern", "providers.mitm.wire", "url", upstreamURL, "messages", state.messageCount)
 }
 
 func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client net.Conn, reader *bufio.Reader, writer *bufio.Writer, r *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
 	cfg := p.config()
-	providerID := string(provider.ID())
+	providerID := provider.ID().String()
 	upstreamURL := wsUpstreamURL("https://"+target, r.URL.RequestURI())
 	upstreamHeaders := wsUpstreamHeaders(r.Header)
 	requestContentType := r.Header.Get("Content-Type")
@@ -159,7 +159,7 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 	}
 	clientConn, err := upgrader.Upgrade(responseWriter, r, nil)
 	if err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.ws.upgrade_failed", "provider", providerID, "host", host, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.ws.upgrade_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", err)
 		p.recordWSFailure(ctx, recorder, "ws_client_upgrade_failed", err.Error())
 		return fmt.Errorf("upgrade intercepted websocket client: %w", err)
 	}
@@ -208,7 +208,7 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 		recorder.Complete(ctx)
 	}
 	queueBaselineRefresh(ctx, cfg, providerID, p.log)
-	p.log.InfoContext(ctx, "mitm.provider.ws.closed", "provider", providerID, "url", upstreamURL, "messages", state.messageCount)
+	p.log.InfoContext(ctx, "mitm.provider.ws.closed", "concern", "providers.mitm.wire", "provider", providerID, "url", upstreamURL, "messages", state.messageCount)
 	return nil
 }
 
@@ -350,13 +350,27 @@ func wsUpstreamURL(upstream string, requestURI string) string {
 // wsUpstreamHeaders forwards all client headers to the upstream
 // handshake except the ws control headers gorilla/websocket sets
 // itself. The websocket library rejects requests carrying these.
+// wsHandshakeReservedHeader enumerates the websocket control headers
+// that gorilla/websocket sets itself; forwarding any of them on the
+// upstream handshake gets the upgrade rejected.
+type wsHandshakeReservedHeader string
+
+const (
+	wsHandshakeUpgrade                wsHandshakeReservedHeader = "upgrade"
+	wsHandshakeConnection             wsHandshakeReservedHeader = "connection"
+	wsHandshakeSecWebsocketKey        wsHandshakeReservedHeader = "sec-websocket-key"
+	wsHandshakeSecWebsocketVersion    wsHandshakeReservedHeader = "sec-websocket-version"
+	wsHandshakeSecWebsocketExtensions wsHandshakeReservedHeader = "sec-websocket-extensions"
+	wsHandshakeSecWebsocketProtocol   wsHandshakeReservedHeader = "sec-websocket-protocol"
+)
+
 func wsUpstreamHeaders(src http.Header) http.Header {
 	out := http.Header{}
 	for key, values := range src {
-		switch strings.ToLower(key) {
-		case "upgrade", "connection", "sec-websocket-key",
-			"sec-websocket-version", "sec-websocket-extensions",
-			"sec-websocket-protocol":
+		switch wsHandshakeReservedHeader(strings.ToLower(key)) {
+		case wsHandshakeUpgrade, wsHandshakeConnection, wsHandshakeSecWebsocketKey,
+			wsHandshakeSecWebsocketVersion, wsHandshakeSecWebsocketExtensions,
+			wsHandshakeSecWebsocketProtocol:
 			continue
 		}
 		for _, value := range values {
@@ -376,7 +390,7 @@ func (p *Proxy) dialWSUpstream(w http.ResponseWriter, r *http.Request, upstreamU
 	if err == nil {
 		return upstreamConn, headersCopy, status, nil
 	}
-	p.log.Warn("mitm.ws.dial_failed", "url", upstreamURL, "status", status, "err", err)
+	p.log.Warn("mitm.ws.dial_failed", "concern", "providers.mitm.wire", "url", upstreamURL, "status", status, "err", err)
 	http.Error(w, "ws upstream dial failed: "+err.Error(), http.StatusBadGateway)
 	return nil, nil, status, fmt.Errorf("dial websocket upstream: %w", err)
 }
@@ -396,7 +410,7 @@ func (p *Proxy) dialWSUpstreamContext(ctx context.Context, upstreamURL string, h
 				_ = upstreamResp.Body.Close()
 			}
 		}
-		p.log.WarnContext(ctx, "mitm.ws.upstream_dial_failed", "url", upstreamURL, "status", status, "err", err)
+		p.log.WarnContext(ctx, "mitm.ws.upstream_dial_failed", "concern", "providers.mitm.wire", "url", upstreamURL, "status", status, "err", err)
 		return nil, nil, status, fmt.Errorf("dial websocket upstream: %w", err)
 	}
 	headersCopy := upstreamResp.Header.Clone()
@@ -471,11 +485,11 @@ func (p *Proxy) writeInterceptedHTTPError(ctx context.Context, writer *bufio.Wri
 		body,
 	)
 	if err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.write_error_response_failed", "status", status, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.write_error_response_failed", "concern", "providers.mitm.wire", "status", status, "err", err)
 		return fmt.Errorf("write intercepted HTTP error response: %w", err)
 	}
 	if err := writer.Flush(); err != nil {
-		p.log.WarnContext(ctx, "mitm.provider.flush_error_response_failed", "status", status, "err", err)
+		p.log.WarnContext(ctx, "mitm.provider.flush_error_response_failed", "concern", "providers.mitm.wire", "status", status, "err", err)
 		return fmt.Errorf("flush intercepted HTTP error response: %w", err)
 	}
 	return nil

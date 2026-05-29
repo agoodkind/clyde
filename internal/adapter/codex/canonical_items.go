@@ -3,16 +3,18 @@ package codex
 import (
 	"encoding/json"
 	"strings"
+
+	"goodkind.io/clyde/codexwire"
 )
 
-// continuationEvent is the canonical shape used to compare two
-// Codex Responses input items for equivalence. The event extracts
-// the identity-bearing fields (kind, call_id, response_id) so
-// items that round-trip through canonicalization compare equal
-// even when their raw representations diverge in incidental
-// fields. Used by ComputeDelta in delta_input.go.
+// continuationEvent is the canonical shape used to compare two Codex
+// Responses input items for equivalence. The event extracts the
+// identity-bearing fields (kind, call_id, response_id) so items that
+// round-trip through canonicalization compare equal even when their
+// raw representations diverge in incidental fields. Used by
+// ComputeDelta in delta_input.go.
 type continuationEvent struct {
-	Kind     string
+	Kind     continuationKind
 	Identity string
 	Role     string
 	Name     string
@@ -20,160 +22,174 @@ type continuationEvent struct {
 	Payload  string
 }
 
+// continuationKind is the closed enum of continuation comparison
+// kinds.
+type continuationKind string
+
+const (
+	continuationKindMessage    continuationKind = "message"
+	continuationKindToolCall   continuationKind = "tool_call"
+	continuationKindToolOutput continuationKind = "tool_output"
+	continuationKindReasoning  continuationKind = "reasoning"
+)
+
 // continuationItemEqual reports whether two Codex input items refer
 // to the same logical event. Identity-bearing items compare on
 // kind+identity. Items without identity compare on canonical JSON.
-func continuationItemEqual(a, b map[string]any) bool {
-	if aEvent, ok := canonicalContinuationEvent(a); ok {
-		if bEvent, ok := canonicalContinuationEvent(b); ok {
-			if aEvent.Identity != "" || bEvent.Identity != "" {
-				return aEvent.Kind == bEvent.Kind && aEvent.Identity != "" && aEvent.Identity == bEvent.Identity
-			}
-			return aEvent == bEvent
+func continuationItemEqual(a, b codexwire.InputItem) bool {
+	aEvent, aOK := canonicalContinuationEvent(a)
+	bEvent, bOK := canonicalContinuationEvent(b)
+	if aOK && bOK {
+		if aEvent.Identity != "" || bEvent.Identity != "" {
+			return aEvent.Kind == bEvent.Kind && aEvent.Identity != "" && aEvent.Identity == bEvent.Identity
 		}
+		return aEvent == bEvent
 	}
 	return jsonEqual(canonicalContinuationItem(a), canonicalContinuationItem(b))
 }
 
-func canonicalContinuationEvent(item map[string]any) (continuationEvent, bool) {
-	itemType := strings.TrimSpace(mapString(item, "type"))
-	switch itemType {
-	case "message":
+func canonicalContinuationEvent(item codexwire.InputItem) (continuationEvent, bool) {
+	switch item.Type {
+	case codexwire.ItemTypeMessage:
 		return continuationEvent{
-			Kind: "message",
-			Role: strings.ToLower(strings.TrimSpace(mapString(item, "role"))),
-			Text: continuationContentText(item["content"]),
+			Kind:     continuationKindMessage,
+			Role:     strings.ToLower(strings.TrimSpace(item.Role)),
+			Text:     continuationContentText(item.Content),
+			Identity: "", Name: "", Payload: "",
 		}, true
-	case "function_call":
-		name := strings.TrimSpace(mapString(item, "name"))
-		payload := canonicalContinuationString(mapString(item, "arguments"))
-		if IsShellToolName(name) {
-			payload = canonicalContinuationShellArguments(mapString(item, "arguments"))
-		}
+	case codexwire.ItemTypeFunctionCall:
+		// The tool name and arguments are opaque content; the arguments
+		// compare by canonical JSON, never by interpreting tool-specific
+		// argument field aliases.
 		return continuationEvent{
-			Kind:     "tool_call",
-			Identity: strings.TrimSpace(mapString(item, "call_id")),
-			Name:     name,
-			Payload:  payload,
+			Kind:     continuationKindToolCall,
+			Identity: strings.TrimSpace(item.CallID),
+			Name:     strings.TrimSpace(item.Name),
+			Payload:  canonicalContinuationString(item.Arguments), Role: "", Text: "",
 		}, true
-	case "local_shell_call":
+	case codexwire.ItemTypeLocalShellCall:
+		// local_shell_call is a codex-internal item TYPE, so the canonical
+		// name is the type itself rather than any client tool name.
 		return continuationEvent{
-			Kind:     "tool_call",
-			Identity: strings.TrimSpace(mapString(item, "call_id")),
-			Name:     "Shell",
-			Payload:  canonicalContinuationLocalShellAction(item["action"]),
+			Kind:     continuationKindToolCall,
+			Identity: strings.TrimSpace(item.CallID),
+			Name:     string(codexwire.ItemTypeLocalShellCall),
+			Payload:  canonicalContinuationLocalShellAction(item.Action), Role: "", Text: "",
 		}, true
-	case "custom_tool_call":
+	case codexwire.ItemTypeCustomToolCall:
 		return continuationEvent{
-			Kind:     "tool_call",
-			Identity: strings.TrimSpace(mapString(item, "call_id")),
-			Name:     strings.TrimSpace(mapString(item, "name")),
-			Payload:  rawString(item, "input"),
+			Kind:     continuationKindToolCall,
+			Identity: strings.TrimSpace(item.CallID),
+			Name:     strings.TrimSpace(item.Name),
+			Payload:  item.Input, Role: "", Text: "",
 		}, true
-	case "function_call_output", "custom_tool_call_output":
+	case codexwire.ItemTypeFunctionCallOutput, codexwire.ItemTypeCustomToolCallOutput:
 		return continuationEvent{
-			Kind:     "tool_output",
-			Identity: strings.TrimSpace(mapString(item, "call_id")),
-			Text:     continuationOutputText(item["output"]),
+			Kind:     continuationKindToolOutput,
+			Identity: strings.TrimSpace(item.CallID),
+			Text:     codexwire.OutputText(item.Output), Role: "", Name: "", Payload: "",
 		}, true
-	case "reasoning":
+	case codexwire.ItemTypeReasoning:
 		return continuationEvent{
-			Kind:     "reasoning",
-			Identity: strings.TrimSpace(mapString(item, "id")),
+			Kind:     continuationKindReasoning,
+			Identity: strings.TrimSpace(item.ID),
 			Text:     continuationReasoningText(item),
-			Payload:  rawString(item, "encrypted_content"),
+			Payload:  item.EncryptedContent, Role: "", Name: "",
 		}, true
 	default:
-		return continuationEvent{}, false
+		return continuationEvent{Kind: "", Identity: "", Role: "", Name: "", Text: "", Payload: ""}, false
 	}
 }
 
-func canonicalContinuationItem(item map[string]any) map[string]any {
-	itemType := strings.TrimSpace(mapString(item, "type"))
-	out := map[string]any{"type": itemType}
-	switch itemType {
-	case "message":
-		out["role"] = strings.ToLower(strings.TrimSpace(mapString(item, "role")))
-		out["text"] = continuationContentText(item["content"])
-	case "function_call":
-		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["name"] = strings.TrimSpace(mapString(item, "name"))
-		out["arguments"] = canonicalContinuationString(mapString(item, "arguments"))
-	case "function_call_output":
-		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["output"] = continuationOutputText(item["output"])
-	case "custom_tool_call":
-		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["name"] = strings.TrimSpace(mapString(item, "name"))
-		out["input"] = rawString(item, "input")
-	case "custom_tool_call_output":
-		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["name"] = strings.TrimSpace(mapString(item, "name"))
-		out["output"] = continuationOutputText(item["output"])
-	case "local_shell_call":
-		out["call_id"] = strings.TrimSpace(mapString(item, "call_id"))
-		out["action"] = item["action"]
-	default:
-		for k, v := range item {
-			switch k {
-			case "id", "status":
-				continue
-			default:
-				out[k] = v
-			}
+// canonicalContinuationItem is the JSON-encodable canonical view of
+// one input item. Used as a fallback equality basis when the item
+// has no identity field.
+type canonicalContinuationItemView struct {
+	Type      codexwire.ItemType             `json:"type"`
+	Role      string                         `json:"role,omitempty"`
+	Text      string                         `json:"text,omitempty"`
+	CallID    string                         `json:"call_id,omitempty"`
+	Name      string                         `json:"name,omitempty"`
+	Arguments string                         `json:"arguments,omitempty"`
+	Input     string                         `json:"input,omitempty"`
+	Output    string                         `json:"output,omitempty"`
+	Action    *canonicalLocalShellActionView `json:"action,omitempty"`
+}
+
+// canonicalLocalShellActionView is the JSON-encodable view of a
+// local_shell_call action. Empty when the action raw payload is
+// empty or fails to decode.
+type canonicalLocalShellActionView struct {
+	Command string `json:"command,omitempty"`
+	Workdir string `json:"workdir,omitempty"`
+}
+
+func canonicalContinuationItem(item codexwire.InputItem) canonicalContinuationItemView {
+	out := canonicalContinuationItemView{
+		Type:      item.Type,
+		Role:      "",
+		Text:      "",
+		CallID:    "",
+		Name:      "",
+		Arguments: "",
+		Input:     "",
+		Output:    "",
+		Action:    nil,
+	}
+	switch item.Type {
+	case codexwire.ItemTypeMessage:
+		out.Role = strings.ToLower(strings.TrimSpace(item.Role))
+		out.Text = continuationContentText(item.Content)
+	case codexwire.ItemTypeFunctionCall:
+		out.CallID = strings.TrimSpace(item.CallID)
+		out.Name = strings.TrimSpace(item.Name)
+		out.Arguments = canonicalContinuationString(item.Arguments)
+	case codexwire.ItemTypeFunctionCallOutput:
+		out.CallID = strings.TrimSpace(item.CallID)
+		out.Output = codexwire.OutputText(item.Output)
+	case codexwire.ItemTypeCustomToolCall:
+		out.CallID = strings.TrimSpace(item.CallID)
+		out.Name = strings.TrimSpace(item.Name)
+		out.Input = item.Input
+	case codexwire.ItemTypeCustomToolCallOutput:
+		out.CallID = strings.TrimSpace(item.CallID)
+		out.Name = strings.TrimSpace(item.Name)
+		out.Output = codexwire.OutputText(item.Output)
+	case codexwire.ItemTypeLocalShellCall:
+		out.CallID = strings.TrimSpace(item.CallID)
+		out.Action = &canonicalLocalShellActionView{
+			Command: localShellCommandText(item.Action),
+			Workdir: localShellWorkdir(item.Action),
 		}
+	case codexwire.ItemTypeReasoning:
+		// Reasoning items canonicalize on identity (id), no field
+		// view captured here; the equality path is the event
+		// comparison above.
 	}
 	return out
 }
 
-func continuationContentText(raw any) string {
-	if text := responsesContentText(raw); text != "" {
-		return text
-	}
-	switch v := raw.(type) {
-	case []map[string]any:
-		parts := make([]string, 0, len(v))
-		for _, part := range v {
-			switch strings.TrimSpace(mapString(part, "type")) {
-			case "text", "input_text", "output_text":
-				if text := rawString(part, "text"); text != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-		return SanitizeForUpstreamCache(strings.Join(parts, "\n"))
+func continuationContentText(items codexwire.ContentItems) string {
+	if text := items.Text(); text != "" {
+		return SanitizeForUpstreamCache(text)
 	}
 	return ""
 }
 
-func continuationOutputText(raw any) string {
-	if text := responsesOutputText(raw); text != "" {
-		return text
-	}
-	if text := continuationContentText(raw); text != "" {
-		return text
-	}
-	return ""
-}
-
-func continuationReasoningText(item map[string]any) string {
-	if text := continuationContentText(item["summary"]); text != "" {
-		return text
-	}
-	if text := continuationContentText(item["content"]); text != "" {
-		return text
-	}
-	raw := map[string]any{}
-	if summary, ok := item["summary"]; ok {
-		raw["summary"] = summary
-	}
-	if content, ok := item["content"]; ok {
-		raw["content"] = content
-	}
-	if len(raw) == 0 {
+func continuationReasoningText(item codexwire.InputItem) string {
+	if len(item.Summary) == 0 {
 		return ""
 	}
-	return canonicalContinuationJSON(raw)
+	parts := make([]string, 0, len(item.Summary))
+	for _, summary := range item.Summary {
+		if summary.Text != "" {
+			parts = append(parts, summary.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return SanitizeForUpstreamCache(strings.Join(parts, "\n"))
 }
 
 func canonicalContinuationString(raw string) string {
@@ -181,7 +197,7 @@ func canonicalContinuationString(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	var decoded any
+	var decoded json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
 		return raw
 	}
@@ -192,81 +208,77 @@ func canonicalContinuationString(raw string) string {
 	return string(encoded)
 }
 
-func canonicalContinuationShellArguments(raw string) string {
-	args := ToolCallArgsMap(raw)
-	if args == nil {
-		return canonicalContinuationString(raw)
-	}
-	out := map[string]any{}
-	if command := StringArg(args, "command", "cmd"); command != "" {
-		out["command"] = command
-	}
-	if workdir := StringArg(args, "workdir", "working_directory", "cwd"); workdir != "" {
-		out["workdir"] = workdir
-	}
-	if timeout, ok := NumberArg(args, "timeout_ms", "block_until_ms"); ok {
-		out["timeout_ms"] = timeout
-	}
-	return canonicalContinuationJSON(out)
+// canonicalShellArgumentsView is the JSON shape used for canonical
+// equality of a codex native local_shell_call action.
+type canonicalShellArgumentsView struct {
+	Command   string `json:"command,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+	TimeoutMs *int64 `json:"timeout_ms,omitempty"`
 }
 
-func canonicalContinuationLocalShellAction(raw any) string {
-	action, _ := raw.(map[string]any)
-	if action == nil {
+func canonicalContinuationLocalShellAction(raw json.RawMessage) string {
+	if len(raw) == 0 {
 		return ""
 	}
-	out := map[string]any{}
-	if command := localShellActionCommand(action["command"]); command != "" {
-		out["command"] = command
-	}
-	if workdir := StringArg(action, "working_directory", "workdir", "cwd"); workdir != "" {
-		out["workdir"] = workdir
-	}
-	if timeout, ok := NumberArg(action, "timeout_ms", "block_until_ms"); ok {
-		out["timeout_ms"] = timeout
-	}
-	return canonicalContinuationJSON(out)
-}
-
-func localShellActionCommand(raw any) string {
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case []any:
-		if len(v) >= 3 {
-			if flag, _ := v[len(v)-2].(string); flag == "-lc" {
-				if command, _ := v[len(v)-1].(string); strings.TrimSpace(command) != "" {
-					return strings.TrimSpace(command)
-				}
-			}
-		}
-		parts := make([]string, 0, len(v))
-		for _, part := range v {
-			if text, _ := part.(string); text != "" {
-				parts = append(parts, text)
-			}
-		}
-		return strings.TrimSpace(strings.Join(parts, " "))
-	case []string:
-		if len(v) >= 3 && v[len(v)-2] == "-lc" {
-			return strings.TrimSpace(v[len(v)-1])
-		}
-		return strings.TrimSpace(strings.Join(v, " "))
-	default:
+	var action codexwire.LocalShellAction
+	if err := json.Unmarshal(raw, &action); err != nil {
 		return ""
 	}
+	view := canonicalShellArgumentsView{Command: "", Workdir: "", TimeoutMs: nil}
+	if command := CommandString(action.Command); command != "" {
+		view.Command = command
+	}
+	if workdir := action.WorkingDir(); workdir != "" {
+		view.Workdir = workdir
+	}
+	if action.TimeoutMs != nil {
+		ms := *action.TimeoutMs
+		view.TimeoutMs = &ms
+	} else if action.BlockUntilMs != nil {
+		ms := *action.BlockUntilMs
+		view.TimeoutMs = &ms
+	}
+	return canonicalContinuationJSON(view)
 }
 
-func canonicalContinuationJSON(raw any) string {
-	encoded, err := json.Marshal(raw)
+func localShellCommandText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var action codexwire.LocalShellAction
+	if err := json.Unmarshal(raw, &action); err != nil {
+		return ""
+	}
+	return CommandString(action.Command)
+}
+
+func localShellWorkdir(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var action codexwire.LocalShellAction
+	if err := json.Unmarshal(raw, &action); err != nil {
+		return ""
+	}
+	return action.WorkingDir()
+}
+
+func canonicalContinuationJSON(value canonicalShellArgumentsView) string {
+	encoded, err := json.Marshal(value)
 	if err != nil {
 		return ""
 	}
 	return string(encoded)
 }
 
-func jsonEqual(a, b any) bool {
-	ab, _ := json.Marshal(a)
-	bb, _ := json.Marshal(b)
+func jsonEqual(a, b canonicalContinuationItemView) bool {
+	ab, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bb, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
 	return string(ab) == string(bb)
 }

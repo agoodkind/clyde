@@ -11,9 +11,9 @@ func TestParseStripsControlTagNoiseFromUserMessages(t *testing.T) {
 		`{"uuid":"1","type":"user","timestamp":"2026-04-24T19:00:00Z","message":{"role":"user","content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>\nCatch you later!"}}` + "\n",
 	)
 
-	msgs, err := Parse(input)
+	msgs, err := ParseWithOptions(input, ParseOptions{})
 	if err != nil {
-		t.Fatalf("Parse: %v", err)
+		t.Fatalf("ParseWithOptions: %v", err)
 	}
 	if len(msgs) != 1 {
 		t.Fatalf("messages=%d want 1", len(msgs))

@@ -8,7 +8,7 @@ import (
 
 func TestDiscoveryScannerScansActiveAndArchivedRollouts(t *testing.T) {
 	codexHome := t.TempDir()
-	paths, err := ResolveStorePaths(codexHome, "")
+	paths, err := ResolveStorePaths(t.Context(), codexHome, "")
 	if err != nil {
 		t.Fatalf("ResolveStorePaths returned error: %v", err)
 	}
@@ -63,30 +63,5 @@ func TestDiscoveryScannerScansActiveAndArchivedRollouts(t *testing.T) {
 	}
 	if !archived.IsArchived {
 		t.Fatal("archived IsArchived = false, want true")
-	}
-}
-
-func TestFindRolloutPathByThreadIDFallsBackToFilename(t *testing.T) {
-	codexHome := t.TempDir()
-	paths, err := ResolveStorePaths(codexHome, "")
-	if err != nil {
-		t.Fatalf("ResolveStorePaths returned error: %v", err)
-	}
-	threadID := "019de9aa-3a00-7010-bd9f-a6ee71559357"
-	dir := filepath.Join(paths.SessionsDir, "2026", "05", "02")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir rollout dir: %v", err)
-	}
-	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-"+threadID+".jsonl")
-	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
-		t.Fatalf("write rollout: %v", err)
-	}
-
-	got, archived, err := FindRolloutPathByThreadID(paths, threadID)
-	if err != nil {
-		t.Fatalf("FindRolloutPathByThreadID returned error: %v", err)
-	}
-	if got != path || archived {
-		t.Fatalf("got path=%q archived=%v, want path=%q archived=false", got, archived, path)
 	}
 }

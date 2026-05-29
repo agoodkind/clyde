@@ -196,13 +196,15 @@ func (r *Registry[M]) emitIdleForceClosed(ctx context.Context, reason string, co
 		slog.String("reason", reason),
 	}
 	attrs = appendCorrelationAttrsCtxOnly(attrs, ctx)
-	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.idle_force_closed", attrs...)
+	r.log.LogAttrs(ctx, slog.LevelInfo, "livetrack.drain.idle_force_closed", append([]slog.Attr{
+		// waitForIdle polls Count at PollEvery until it reaches zero or ctx
+		// fires. Returns the final count (zero on the idle path, the
+		// remaining count on the deadline path so the caller knows how many
+		// sessions to force-close).
+		slog.String("concern", "livetrack"),
+	}, attrs...)...)
 }
 
-// waitForIdle polls Count at PollEvery until it reaches zero or ctx
-// fires. Returns the final count (zero on the idle path, the
-// remaining count on the deadline path so the caller knows how many
-// sessions to force-close).
 func (r *Registry[M]) waitForIdle(ctx context.Context) int {
 	if r.Count() == 0 {
 		return 0

@@ -16,7 +16,7 @@ func TestRouteProviderClaimsCodexConnectHosts(t *testing.T) {
 				t.Fatalf("ClassifyConnect(%q).Claimed = false, want true", host)
 			}
 			if claim.ProviderID != providerID {
-				t.Fatalf("ProviderID = %q, want %q", claim.ProviderID, providerID)
+				t.Fatalf("ProviderID = %v, want %v", claim.ProviderID, providerID)
 			}
 		})
 	}

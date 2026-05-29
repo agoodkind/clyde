@@ -2,12 +2,15 @@ package adapter
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/google/uuid"
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	anthropicbackend "goodkind.io/clyde/internal/adapter/anthropic/backend"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
 var (
@@ -28,8 +31,8 @@ func anthropicProcessSessionID() string {
 // buildAnthropicWire maps the OpenAI chat request to a native messages body,
 // then applies thinking and effort knobs that are not part of the OpenAI wire
 // shape.
-func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort string, jsonSpec JSONResponseSpec, reqID string) (anthropic.Request, error) {
-	return anthropicbackend.BuildRequest(context.Background(), req, model, effort, anthropicbackend.BuildRequestConfig{
+func (s *Server) buildAnthropicWire(ctx context.Context, req ChatRequest, resolved *adapterresolver.ResolvedRequest, effort string, jsonSpec JSONResponseSpec, reqID string) (anthropic.Request, error) {
+	wire, err := anthropicbackend.BuildRequest(ctx, req, resolved, effort, anthropicbackend.BuildRequestConfig{
 		SystemPromptPrefix:              s.anthr.SystemPromptPrefix(),
 		UserAgent:                       s.anthr.UserAgent(),
 		CCVersion:                       s.anthr.CCVersion(),
@@ -39,13 +42,16 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 		PromptCacheTTL:                  s.cfg.ClientIdentity.PromptCacheTTL,
 		PromptCacheScope:                s.cfg.ClientIdentity.PromptCacheScope,
 		ToolResultCacheReferenceEnabled: s.cfg.Anthropic.OAuth.ToolResultCacheReferenceEnabled,
-		MicrocompactEnabled:             s.cfg.ClientIdentity.MicrocompactEnabled,
-		MicrocompactKeepRecent:          s.cfg.ClientIdentity.MicrocompactKeepRecent,
 		PerContextBetas:                 s.cfg.ClientIdentity.PerContextBetas,
 		Identity:                        s.anthropicIdentity(req),
 		InboundThinkingMaterialization:  adapterrender.MaterializationStrategy(s.cfg.Anthropic.Reasoning.ResolvedInboundThinking()),
 		Logger:                          s.log,
 	}, reqID)
+	if err != nil {
+		slog.WarnContext(ctx, "adapter.oauth.build_anthropic_wire_failed", "concern", "adapter.providers.anthropic.oauth", "request_id", reqID, "err", err)
+		return anthropic.Request{}, fmt.Errorf("build anthropic wire request: %w", err)
+	}
+	return wire, nil
 }
 
 // anthropicIdentity assembles the metadata.user_id payload claude-cli
@@ -56,19 +62,12 @@ func (s *Server) buildAnthropicWire(req ChatRequest, model ResolvedModel, effort
 // per-daemon-process UUID so the field is never empty (claude-cli
 // always sends a non-empty session_id).
 func (s *Server) anthropicIdentity(req ChatRequest) anthropic.Identity {
-	id := anthropic.Identity{}
+	id := anthropic.Identity{DeviceID: "", AccountUUID: "", SessionID: ""}
 	if dev, err := anthropic.DeviceID(); err == nil {
 		id.DeviceID = dev
 	}
 	if uuid, err := anthropic.AccountUUIDFromClaudeConfig(); err == nil && uuid != "" {
 		id.AccountUUID = uuid
-	} else if s.oauthRotator != nil {
-		// The rotator returns the account id (the account_uuid) alongside the
-		// token, so the metadata.user_id account uuid comes from the selected
-		// rotation slot rather than re-parsing the opaque access token.
-		if _, account, err := s.oauthRotator.Token(context.Background(), anthropicProviderName); err == nil {
-			id.AccountUUID = string(account)
-		}
 	}
 	switch {
 	case metadataString(req.Metadata, "cursorConversationId") != "":

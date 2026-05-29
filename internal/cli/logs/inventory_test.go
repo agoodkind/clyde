@@ -12,22 +12,20 @@ func TestBuildInventoryCategorizesKnownLogFamilies(t *testing.T) {
 	root := t.TempDir()
 	baseTime := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
 	files := map[string]int64{
-		"mitm/capture.jsonl":                                              100,
-		"mitm/raw/example/20260506-request.raw":                           200,
-		"mitm-launcher/codex-desktop.log":                                 300,
-		"mitm/profiles/cursor/isolated/logs/run/main.log":                 400,
-		"clyde-daemon.jsonl":                                              500,
-		"clyde-daemon-2026-05-06T01-02-03.000.jsonl.gz":                   600,
-		"logs/adapter/http/ingress.jsonl":                                 700,
-		"logs/adapter/http/ingress-2026-05-06T01-02-03.000.jsonl.gz":      800,
-		"logs/chats/chat-key.jsonl":                                       900,
-		"sessions/session-id/backups/ledger.jsonl":                        1000,
-		"manual-backups/resume-repair-20260505-1740/session/ledger.jsonl": 1100,
-		"clyde-daemon.jsonl.pre-repair-20260425T082405":                   1200,
-		"logs/adapter/http/ingress.jsonl.lock":                            1300,
-		"adapter/anthropic/device_id":                                     1400,
-		"codex.jsonl":                                                     1500,
-		"logs/inventory/events.jsonl":                                     1600,
+		"mitm/capture.jsonl":                                         100,
+		"mitm/raw/example/20260506-request.raw":                      200,
+		"mitm-launcher/codex-desktop.log":                            300,
+		"mitm/profiles/cursor/isolated/logs/run/main.log":            400,
+		"clyde-daemon.jsonl":                                         500,
+		"clyde-daemon-2026-05-06T01-02-03.000.jsonl.gz":              600,
+		"logs/adapter/http/ingress.jsonl":                            700,
+		"logs/adapter/http/ingress-2026-05-06T01-02-03.000.jsonl.gz": 800,
+		"logs/chats/chat-key.jsonl":                                  900,
+		"clyde-daemon.jsonl.pre-repair-20260425T082405":              1200,
+		"logs/adapter/http/ingress.jsonl.lock":                       1300,
+		"adapter/anthropic/device_id":                                1400,
+		"codex.jsonl":                                                1500,
+		"logs/inventory/events.jsonl":                                1600,
 	}
 	index := 0
 	for relativePath, size := range files {
@@ -56,7 +54,6 @@ func TestBuildInventoryCategorizesKnownLogFamilies(t *testing.T) {
 	assertCategory(t, currentInventory, categoryConcernLogs, 2, 1500)
 	assertCategory(t, currentInventory, categoryPerChatTranscriptLogs, 1, 900)
 	assertCategory(t, currentInventory, categoryInventoryIndexes, 1, 1600)
-	assertCategory(t, currentInventory, categorySessionBackupArtifacts, 2, 2100)
 	assertCategory(t, currentInventory, categoryPreRepairRetainedLogs, 1, 1200)
 	assertCategory(t, currentInventory, categoryLockFiles, 1, 1300)
 	assertCategory(t, currentInventory, categoryUncategorizedLogs, 1, 1400)

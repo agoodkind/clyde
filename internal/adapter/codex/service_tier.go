@@ -7,6 +7,7 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
+// ServiceTierFromRequest is part of Clyde's typed adapter surface.
 func ServiceTierFromRequest(req adapteropenai.ChatRequest) string {
 	if serviceTier := normalizeServiceTier(req.ServiceTier); serviceTier != "" {
 		return serviceTier
@@ -14,16 +15,18 @@ func ServiceTierFromRequest(req adapteropenai.ChatRequest) string {
 	return ServiceTierFromMetadata(req.Metadata)
 }
 
+// ServiceTierFromMetadata is part of Clyde's typed adapter surface.
 func ServiceTierFromMetadata(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var metadata map[string]any
+	var metadata struct {
+		ServiceTier string `json:"service_tier"`
+	}
 	if err := json.Unmarshal(raw, &metadata); err != nil {
 		return ""
 	}
-	serviceTier, _ := metadata["service_tier"].(string)
-	return normalizeServiceTier(serviceTier)
+	return normalizeServiceTier(metadata.ServiceTier)
 }
 
 func normalizeServiceTier(serviceTier string) string {

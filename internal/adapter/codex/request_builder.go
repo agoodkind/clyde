@@ -8,49 +8,120 @@ import (
 	"os"
 	"strings"
 
+	"goodkind.io/clyde/codexwire"
 	adaptercontent "goodkind.io/clyde/internal/adapter/content"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
-	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
 // GetwdFn lets tests control workspace path rewriting.
 var GetwdFn = os.Getwd
 
-func MessageContent(role, textType, text string) map[string]any {
-	return MessageContentItems(role, []map[string]any{{
-		"type": textType,
-		"text": text,
+// codexResolvedModelName returns the upstream Codex model id from a
+// resolved request. The Codex model identity and the resolved model
+// string are the same value, so a nil-safe read of resolved.Model is
+// the model name.
+func codexResolvedModelName(resolved *adapterresolver.ResolvedRequest) string {
+	if resolved == nil {
+		return ""
+	}
+	return strings.TrimSpace(resolved.Model)
+}
+
+// codexResolvedInstructions returns the provider-neutral instructions
+// the resolver lifted for this request, nil-safe.
+func codexResolvedInstructions(resolved *adapterresolver.ResolvedRequest) string {
+	if resolved == nil {
+		return ""
+	}
+	return resolved.Instructions
+}
+
+// contentPartType is the closed enum of Codex content-part type
+// strings the request builder accepts when flattening assistant and
+// user messages.
+type contentPartType string
+
+const (
+	contentPartTypeText       contentPartType = "text"
+	contentPartTypeInputText  contentPartType = "input_text"
+	contentPartTypeOutputText contentPartType = "output_text"
+)
+
+// codexChatRole is the closed enum of OpenAI chat roles the codex
+// request builder recognizes.
+type codexChatRole string
+
+const (
+	codexChatRoleSystem    codexChatRole = "system"
+	codexChatRoleDeveloper codexChatRole = "developer"
+	codexChatRoleAssistant codexChatRole = "assistant"
+	codexChatRoleTool      codexChatRole = "tool"
+	codexChatRoleFunction  codexChatRole = "function"
+)
+
+// reasoningEffort is the closed enum of accepted reasoning effort
+// levels on the OpenAI Responses API.
+type reasoningEffort string
+
+const (
+	reasoningEffortNone    reasoningEffort = "none"
+	reasoningEffortMinimal reasoningEffort = "minimal"
+	reasoningEffortLow     reasoningEffort = "low"
+	reasoningEffortMedium  reasoningEffort = "medium"
+	reasoningEffortHigh    reasoningEffort = "high"
+	reasoningEffortXHigh   reasoningEffort = "xhigh"
+)
+
+// reasoningSummary is the closed enum of accepted reasoning summary
+// modes on the OpenAI Responses API.
+type reasoningSummary string
+
+const (
+	reasoningSummaryAuto     reasoningSummary = "auto"
+	reasoningSummaryConcise  reasoningSummary = "concise"
+	reasoningSummaryDetailed reasoningSummary = "detailed"
+	reasoningSummaryNone     reasoningSummary = "none"
+)
+
+// MessageContent builds a typed Codex `message` input item with a
+// single content part.
+func MessageContent(role, textType, text string) codexwire.InputItem {
+	return MessageContentItems(role, codexwire.ContentItems{{
+		Type: codexwire.ContentItemType(textType),
+		Text: text,
 	}})
 }
 
-func MessageContentItems(role string, content []map[string]any) map[string]any {
-	return map[string]any{
-		"type":    "message",
-		"role":    role,
-		"content": content,
+// MessageContentItems builds a typed Codex `message` input item
+// with multiple content parts.
+func MessageContentItems(role string, content codexwire.ContentItems) codexwire.InputItem {
+	return codexwire.InputItem{
+		Type:    codexwire.ItemTypeMessage,
+		Role:    role,
+		Content: content,
 	}
 }
 
-func codexContentFromRaw(raw json.RawMessage, textType string, strategy adapterrender.MaterializationStrategy) []map[string]any {
+func codexContentFromRaw(raw json.RawMessage, textType codexwire.ContentItemType, strategy adapterrender.MaterializationStrategy) codexwire.ContentItems {
 	parts, _ := adaptercontent.NormalizeRaw(raw)
 	return codexContentFromParts(parts, textType, strategy)
 }
 
-func codexContentFromAny(raw any, textType string, strategy adapterrender.MaterializationStrategy) []map[string]any {
-	if raw == nil {
-		return nil
-	}
-	b, err := json.Marshal(raw)
+// codexContentFromContent flattens a raw content payload (string,
+// array, or object) parsed from an inbound responses-input item.
+func codexContentFromContent(raw inputItemContent, textType codexwire.ContentItemType, strategy adapterrender.MaterializationStrategy) codexwire.ContentItems {
+	encoded, err := json.Marshal(raw)
 	if err != nil {
 		return nil
 	}
-	return codexContentFromRaw(json.RawMessage(b), textType, strategy)
+	return codexContentFromRaw(encoded, textType, strategy)
 }
 
-func codexContentFromParts(parts []adaptercontent.Part, textType string, strategy adapterrender.MaterializationStrategy) []map[string]any {
-	content := make([]map[string]any, 0, len(parts))
+func codexContentFromParts(parts []adaptercontent.Part, textType codexwire.ContentItemType, strategy adapterrender.MaterializationStrategy) codexwire.ContentItems {
+	content := make(codexwire.ContentItems, 0, len(parts))
 	for _, part := range parts {
 		switch part.Kind {
 		case adaptercontent.PartText:
@@ -58,22 +129,20 @@ func codexContentFromParts(parts []adaptercontent.Part, textType string, strateg
 			if text == "" {
 				continue
 			}
-			content = append(content, map[string]any{
-				"type": textType,
-				"text": text,
+			content = append(content, codexwire.ContentItem{
+				Type: textType,
+				Text: text,
 			})
 		case adaptercontent.PartImage:
 			if part.Image == nil || strings.TrimSpace(part.Image.URL) == "" {
 				continue
 			}
-			// Codex app-server ContentItem uses a string `image_url` for
-			// input_image parts; see research/codex/.../ContentItem.ts.
-			item := map[string]any{
-				"type":      "input_image",
-				"image_url": strings.TrimSpace(part.Image.URL),
+			item := codexwire.ContentItem{
+				Type:     codexwire.ContentItemInputImage,
+				ImageURL: strings.TrimSpace(part.Image.URL),
 			}
 			if detail := strings.TrimSpace(part.Image.Detail); detail != "" {
-				item["detail"] = detail
+				item.Detail = detail
 			}
 			content = append(content, item)
 		case adaptercontent.PartRefusal:
@@ -81,15 +150,18 @@ func codexContentFromParts(parts []adaptercontent.Part, textType string, strateg
 			if text == "" {
 				continue
 			}
-			content = append(content, map[string]any{
-				"type": textType,
-				"text": text,
+			content = append(content, codexwire.ContentItem{
+				Type: textType,
+				Text: text,
 			})
+		case adaptercontent.PartAudio, adaptercontent.PartToolResult, adaptercontent.PartToolUse, adaptercontent.PartUnsupported:
+			continue
 		}
 	}
 	return content
 }
 
+// RequestBuilderConfig is part of Clyde's typed adapter surface.
 type RequestBuilderConfig struct {
 	ReasoningSummary string
 	// InboundThinkingMaterialization picks how round-tripped synthetic
@@ -112,13 +184,13 @@ type RequestBuilderConfig struct {
 	RoundTripEncrypted RoundTripEncrypted
 }
 
-// reasoningInputItem is the typed wire shape for a Codex Responses
-// `reasoning` input item, mirroring codex-rs's ResponseItem::Reasoning
-// (research/codex/codex-rs/protocol/src/models.rs:740-780). Summary may be
-// empty when the round-trip summary lever is `drop`. EncryptedContent may
-// be empty when the round-trip encrypted lever is `drop` or the inbound
-// marker did not carry a `data-encrypted` attribute (legacy spans and
-// Anthropic).
+// reasoningInputItem is the internal staging shape for a Codex
+// Responses `reasoning` input item before it lands in the input
+// slice as a [codexwire.InputItem]. Summary may be empty when the
+// round-trip summary lever is `drop`. EncryptedContent may be empty
+// when the round-trip encrypted lever is `drop` or the inbound
+// marker did not carry a `data-encrypted` attribute (legacy spans
+// and Anthropic).
 type reasoningInputItem struct {
 	ID               string
 	Summary          []reasoningSummaryText
@@ -132,54 +204,57 @@ type reasoningSummaryText struct {
 	Text string
 }
 
-// asMap renders the typed Reasoning item into the map[string]any wire shape
-// the input slice uses for opaque-shape Codex items. The summary field is
-// always emitted, even as an empty array, because Codex Responses rejects
-// the request with [ObjectParam] [input[i].summary] [missing_required_parameter]
-// when summary is absent. encrypted_content stays optional and is dropped
-// when the round-trip strategy did not provide one.
-func (r reasoningInputItem) asMap() map[string]any {
-	summary := make([]map[string]any, 0, len(r.Summary))
+// toInputItem renders the typed Reasoning item into the wire shape
+// the input slice uses for Codex items. The summary field is always
+// emitted, even as an empty array, because Codex Responses rejects
+// the request with [ObjectParam] [input[i].summary]
+// [missing_required_parameter] when summary is absent.
+// encrypted_content stays optional and is dropped when the
+// round-trip strategy did not provide one.
+func (r reasoningInputItem) toInputItem() codexwire.InputItem {
+	summary := make([]codexwire.ReasoningSummary, 0, len(r.Summary))
 	for _, entry := range r.Summary {
-		summary = append(summary, map[string]any{
-			"type": "summary_text",
-			"text": entry.Text,
+		summary = append(summary, codexwire.ReasoningSummary{
+			Type: "summary_text",
+			Text: entry.Text,
 		})
 	}
-	out := map[string]any{
-		"type":    "reasoning",
-		"id":      r.ID,
-		"summary": summary,
+	out := codexwire.InputItem{
+		Type:    codexwire.ItemTypeReasoning,
+		ID:      r.ID,
+		Summary: summary,
 	}
 	if r.EncryptedContent != "" {
-		out["encrypted_content"] = r.EncryptedContent
+		out.EncryptedContent = r.EncryptedContent
 	}
 	return out
 }
 
 // emitReasoningItemsFromAssistantContent extracts synthetic Reasoning
 // envelopes from a single assistant content payload and appends a
-// Codex-native `reasoning` input item per the round-trip strategy table
-// to out. Items are appended in turn-relative order so they can be
-// inserted BEFORE the matching assistant Message item by the caller.
+// Codex-native `reasoning` input item per the round-trip strategy
+// table to out. Items are appended in turn-relative order so they
+// can be inserted BEFORE the matching assistant Message item by the
+// caller.
 //
 // The encrypted_content blob is read straight off
-// [adapterrender.SyntheticPart.Encrypted] (the `data-encrypted` attribute
-// on the close marker). There is no out-of-band store lookup: Cursor's
-// transcript carries the blob inline, so this function is pure.
+// [adapterrender.SyntheticPart.Encrypted] (the `data-encrypted`
+// attribute on the close marker). There is no out-of-band store
+// lookup: Cursor's transcript carries the blob inline, so this
+// function is pure.
 //
-// Legacy markers without a data-ref AND without an encrypted blob are
-// skipped silently when the round-trip mode would emit a stub with no
-// useful payload (matches pre-rewrite drop behavior). For
+// Legacy markers without a data-ref AND without an encrypted blob
+// are skipped silently when the round-trip mode would emit a stub
+// with no useful payload (matches pre-rewrite drop behavior). For
 // `plain_text_concat` summary mode the body is left to the existing
-// message-text materializer; only the encrypted_content half (if any)
-// is emitted as a separate Reasoning item to preserve codex-rs
+// message-text materializer; only the encrypted_content half (if
+// any) is emitted as a separate Reasoning item to preserve codex-rs
 // continuity.
 func emitReasoningItemsFromAssistantContent(
-	out []map[string]any,
+	out []codexwire.InputItem,
 	contentText string,
 	cfg RequestBuilderConfig,
-) []map[string]any {
+) []codexwire.InputItem {
 	parts := adapterrender.ExtractSyntheticParts(contentText)
 	if len(parts) == 0 {
 		return out
@@ -200,18 +275,19 @@ func emitReasoningItemsFromAssistantContent(
 		if !emit {
 			continue
 		}
-		out = append(out, item.asMap())
+		out = append(out, item.toInputItem())
 	}
 	return out
 }
 
 // buildReasoningItem applies the round-trip strategy table for one
-// reasoning synthetic part. The encrypted blob is now an inline property
-// of the part rather than the result of a store lookup, which collapses
-// the legacy 9-case table down to 6 cases (one per (summaryMode,
-// encryptedMode) pair). The boolean return reports whether the caller
-// should emit anything at all; markers with nothing to round-trip under
-// the chosen levers produce (zero, false).
+// reasoning synthetic part. The encrypted blob is now an inline
+// property of the part rather than the result of a store lookup,
+// which collapses the legacy 9-case table down to 6 cases (one per
+// (summaryMode, encryptedMode) pair). The boolean return reports
+// whether the caller should emit anything at all; markers with
+// nothing to round-trip under the chosen levers produce (zero,
+// false).
 func buildReasoningItem(
 	part adapterrender.SyntheticPart,
 	summaryMode RoundTripSummary,
@@ -263,39 +339,97 @@ func buildReasoningItem(
 	return zero, false
 }
 
+// inputItemContent is the JSON union the codex Responses input item
+// uses for the `content` field. It accepts a JSON string, a JSON
+// array of content parts, or a JSON object.
+type inputItemContent struct {
+	Raw json.RawMessage
+}
+
+// UnmarshalJSON stores the raw bytes verbatim so the downstream
+// flattener can decode whichever shape arrived.
+func (c *inputItemContent) UnmarshalJSON(data []byte) error {
+	c.Raw = append(json.RawMessage(nil), data...)
+	return nil
+}
+
+// MarshalJSON emits the raw bytes verbatim; null when empty.
+func (c inputItemContent) MarshalJSON() ([]byte, error) {
+	if len(c.Raw) == 0 {
+		return []byte("null"), nil
+	}
+	return c.Raw, nil
+}
+
+// responsesInputItem is the typed view of one entry in the inbound
+// `req.Input` array. The flexible fields (content as any-of-string-
+// array-or-object, output as string-or-array) are deferred to
+// inputItemContent.Raw for downstream flattening.
+type responsesInputItem struct {
+	Type      string           `json:"type,omitempty"`
+	Role      string           `json:"role,omitempty"`
+	Content   inputItemContent `json:"content"`
+	CallID    string           `json:"call_id,omitempty"`
+	Name      string           `json:"name,omitempty"`
+	Arguments string           `json:"arguments,omitempty"`
+	Input     string           `json:"input,omitempty"`
+	Output    json.RawMessage  `json:"output,omitempty"`
+}
+
 // assistantRawText flattens an assistant content payload from the
-// responses-input item shape into a single string suitable for synthetic
-// envelope extraction. Unlike [responsesContentText] this preserves
-// envelope markers verbatim (no SanitizeForUpstreamCache); marker parsing
-// runs over the raw text.
-func assistantRawText(raw any) string {
-	switch v := raw.(type) {
-	case nil:
+// responses-input item shape into a single string suitable for
+// synthetic envelope extraction. Unlike [responsesContentText] this
+// preserves envelope markers verbatim (no SanitizeForUpstreamCache);
+// marker parsing runs over the raw text.
+func assistantRawText(raw inputItemContent) string {
+	if len(raw.Raw) == 0 {
 		return ""
-	case string:
-		return v
-	case []any:
-		var parts []string
-		for _, entry := range v {
-			m, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			switch strings.TrimSpace(mapString(m, "type")) {
-			case "text", "input_text", "output_text":
-				if text := rawString(m, "text"); text != "" {
-					parts = append(parts, text)
+	}
+	trimmed := strings.TrimSpace(string(raw.Raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw.Raw, &s); err != nil {
+			return ""
+		}
+		return s
+	}
+	if trimmed[0] == '[' {
+		var parts []responsesContentPart
+		if err := json.Unmarshal(raw.Raw, &parts); err != nil {
+			return ""
+		}
+		var out []string
+		for _, part := range parts {
+			switch contentPartType(strings.TrimSpace(part.Type)) {
+			case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
+				if part.Text != "" {
+					out = append(out, part.Text)
 				}
 			}
 		}
-		return strings.Join(parts, "\n")
-	case map[string]any:
-		switch strings.TrimSpace(mapString(v, "type")) {
-		case "text", "input_text", "output_text":
-			return rawString(v, "text")
+		return strings.Join(out, "\n")
+	}
+	if trimmed[0] == '{' {
+		var part responsesContentPart
+		if err := json.Unmarshal(raw.Raw, &part); err != nil {
+			return ""
+		}
+		switch contentPartType(strings.TrimSpace(part.Type)) {
+		case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
+			return part.Text
 		}
 	}
 	return ""
+}
+
+// responsesContentPart is one entry inside a responses-input item's
+// content array.
+type responsesContentPart struct {
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
 }
 
 // BuildRequestWithConfig builds the HTTP transport request from a
@@ -305,7 +439,7 @@ func assistantRawText(raw any) string {
 // parameter is required.
 func BuildRequestWithConfig(
 	req adapteropenai.ChatRequest,
-	model adaptermodel.ResolvedModel,
+	resolved *adapterresolver.ResolvedRequest,
 	effort string,
 	cfg RequestBuilderConfig,
 ) HTTPTransportRequest {
@@ -314,12 +448,9 @@ func BuildRequestWithConfig(
 		strategy = adapterrender.MaterializeDrop
 	}
 	cursorReq := adaptercursor.TranslateRequest(req)
-	input := make([]map[string]any, 0, len(req.Messages))
+	input := make([]codexwire.InputItem, 0, len(req.Messages))
 	systemSections := make([]string, 0, 8)
-	modelName := strings.TrimSpace(model.ClaudeModel)
-	if modelName == "" {
-		modelName = model.Alias
-	}
+	modelName := codexResolvedModelName(resolved)
 	workspacePath := cursorReq.WorkspacePath
 	if rawInput, ok := inputFromResponsesInput(req.Input, workspacePath, &systemSections, strategy, cfg); ok {
 		input = rawInput
@@ -327,7 +458,7 @@ func BuildRequestWithConfig(
 		input, systemSections = appendChatMessageInputs(input, systemSections, req.Messages, strategy, cfg)
 	}
 	instructions := strings.TrimSpace(strings.Join(systemSections, "\n\n"))
-	if base := strings.TrimSpace(model.Instructions); base != "" {
+	if base := strings.TrimSpace(codexResolvedInstructions(resolved)); base != "" {
 		if instructions == "" {
 			instructions = base
 		} else {
@@ -335,12 +466,24 @@ func BuildRequestWithConfig(
 		}
 	}
 	if len(input) == 0 {
-		input = append(input, MessageContent("user", "input_text", " "))
+		input = append(input, MessageContent("user", string(codexwire.ContentItemInputText), " "))
 	}
 	reasoning := EffectiveReasoningWithDefaultSummary(req, effort, cfg.ReasoningSummary)
+	// codex-rs serializes `tools` and `include` as Vec<...> with no
+	// skip_serializing_if, so they appear as `[]` when empty rather than
+	// being omitted or null. Go marshals a nil slice as `null`, so the
+	// empty case is coerced to a non-nil empty slice to match codex-cli on
+	// the wire (research/codex/codex-rs/codex-api/src/common.rs).
 	include := RequestInclude(req.Include, reasoning != nil)
+	if include == nil {
+		include = []string{}
+	}
+	tools := toolSpecs(req)
+	if tools == nil {
+		tools = []codexwire.ToolSpec{}
+	}
 	outputControls := BuildOutputControls(req)
-	identity := requestContextIdentity(cursorReq, model.Alias)
+	identity := requestContextIdentity(cursorReq, codexResolvedModelName(resolved))
 	return HTTPTransportRequest{
 		Model:        modelName,
 		Instructions: instructions,
@@ -356,53 +499,52 @@ func BuildRequestWithConfig(
 		Store:   false,
 		Stream:  true,
 		Include: include,
-		// WARNING: prompt_cache_key and websocket session identity are
-		// intentionally not the same field. Codex upstream uses the real
-		// conversation/thread id for websocket headers and
-		// previous_response_id chaining, while prompt_cache_key is only a
-		// cache partition and may be content-derived. Reusing a websocket
-		// session from a cache key can cross-wire unrelated Cursor chats
-		// that share the same account, first prompt, or cache partition.
-		WebsocketSessionKey:  identity.WebsocketSessionKey,
-		PromptCache:          identity.PromptCacheKey,
-		PromptCacheRetention: outputControls.PromptCacheRetention,
-		ServiceTier:          ServiceTierFromRequest(req),
-		Reasoning:            reasoning,
-		MaxCompletion:        outputControls.MaxCompletion,
-		Text:                 outputControls.Text,
-		Truncation:           outputControls.Truncation,
-		Input:                input,
-		Tools:                toolSpecs(req),
-		ToolChoice:           "auto",
-		ParallelToolCalls:    parallelToolCalls(req),
+		// WARNING: prompt_cache_key and websocket session identity
+		// are intentionally not the same field. Codex upstream uses
+		// the real conversation/thread id for websocket headers and
+		// previous_response_id chaining, while prompt_cache_key is
+		// only a cache partition and may be content-derived. Reusing
+		// a websocket session from a cache key can cross-wire
+		// unrelated Cursor chats that share the same account, first
+		// prompt, or cache partition.
+		WebsocketSessionKey: identity.WebsocketSessionKey,
+		PromptCache:         identity.PromptCacheKey,
+		ServiceTier:         ServiceTierFromRequest(req),
+		Reasoning:           reasoning,
+		Text:                outputControls.Text,
+		Input:               input,
+		Tools:               tools,
+		ToolChoice:          "auto",
+		ParallelToolCalls:   parallelToolCalls(req),
+		ClientMetadata:      nil,
 	}
 }
 
-// appendChatMessageInputs walks the Chat-shaped messages once and folds
-// each into the Codex Responses input slice and system fragment list.
-// The returned slices replace the originals so the caller can keep this
-// call pure.
+// appendChatMessageInputs walks the Chat-shaped messages once and
+// folds each into the Codex Responses input slice and system
+// fragment list. The returned slices replace the originals so the
+// caller can keep this call pure.
 func appendChatMessageInputs(
-	input []map[string]any,
+	input []codexwire.InputItem,
 	systemSections []string,
 	messages []adapteropenai.ChatMessage,
 	strategy adapterrender.MaterializationStrategy,
 	cfg RequestBuilderConfig,
-) ([]map[string]any, []string) {
+) ([]codexwire.InputItem, []string) {
 	for _, msg := range messages {
 		rawText := adaptercontent.FlattenRaw(msg.Content)
 		text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(rawText, strategy))
-		switch strings.ToLower(msg.Role) {
-		case "system", "developer":
+		switch codexChatRole(strings.ToLower(msg.Role)) {
+		case codexChatRoleSystem, codexChatRoleDeveloper:
 			if text != "" {
 				systemSections = append(systemSections, text)
 			}
-		case "assistant":
+		case codexChatRoleAssistant:
 			input = appendAssistantInput(input, msg, rawText, strategy, cfg)
-		case "tool", "function":
+		case codexChatRoleTool, codexChatRoleFunction:
 			input = appendToolResultInput(input, msg, text)
 		default:
-			if content := codexContentFromRaw(msg.Content, "input_text", strategy); len(content) > 0 {
+			if content := codexContentFromRaw(msg.Content, codexwire.ContentItemInputText, strategy); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
 		}
@@ -414,12 +556,12 @@ func appendChatMessageInputs(
 // reasoning items, and visible content into the input slice. Reasoning
 // items must precede the matching Message item per codex-rs history.rs.
 func appendAssistantInput(
-	input []map[string]any,
+	input []codexwire.InputItem,
 	msg adapteropenai.ChatMessage,
 	rawText string,
 	strategy adapterrender.MaterializationStrategy,
 	cfg RequestBuilderConfig,
-) []map[string]any {
+) []codexwire.InputItem {
 	for _, tc := range msg.ToolCalls {
 		if strings.TrimSpace(tc.Function.Name) == "" {
 			continue
@@ -427,7 +569,7 @@ func appendAssistantInput(
 		input = append(input, FunctionCallItem(tc))
 	}
 	input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
-	if content := codexContentFromRaw(msg.Content, "output_text", strategy); len(content) > 0 {
+	if content := codexContentFromRaw(msg.Content, codexwire.ContentItemOutputText, strategy); len(content) > 0 {
 		input = append(input, MessageContentItems("assistant", content))
 	}
 	return input
@@ -437,17 +579,17 @@ func appendAssistantInput(
 // FunctionCallOutput item (when it has a tool_call_id) or as a tagged
 // user input fallback.
 func appendToolResultInput(
-	input []map[string]any,
+	input []codexwire.InputItem,
 	msg adapteropenai.ChatMessage,
 	text string,
-) []map[string]any {
+) []codexwire.InputItem {
 	if text == "" {
 		return input
 	}
 	if strings.TrimSpace(msg.ToolCallID) != "" {
 		return append(input, FunctionCallOutputItem(msg.ToolCallID, text))
 	}
-	return append(input, MessageContent("user", "input_text", "tool: "+text))
+	return append(input, MessageContent("user", string(codexwire.ContentItemInputText), "tool: "+text))
 }
 
 func parallelToolCalls(req adapteropenai.ChatRequest) bool {
@@ -468,7 +610,7 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 				Function: adapteropenai.ToolFunctionSchema{
 					Name:        fn.Name,
 					Description: fn.Description,
-					Parameters:  fn.Parameters,
+					Parameters:  fn.Parameters, Strict: nil,
 				},
 			})
 		}
@@ -476,64 +618,75 @@ func requestTools(req adapteropenai.ChatRequest) []adapteropenai.Tool {
 	return tools
 }
 
-func toolSpecs(req adapteropenai.ChatRequest) []any {
+func toolSpecs(req adapteropenai.ChatRequest) []codexwire.ToolSpec {
 	tools := requestTools(req)
 	if len(tools) == 0 {
 		return nil
 	}
-	out := make([]any, 0, len(tools))
+	out := make([]codexwire.ToolSpec, 0, len(tools))
 	for _, tool := range tools {
-		toolName := strings.TrimSpace(tool.Function.Name)
-		out = append(out, FunctionToolSpec(OutboundToolName(toolName), tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
+		// The tool name passes through verbatim: it is opaque
+		// application content owned by whoever declared the tool, so
+		// clyde does not rewrite it into a codex-internal vocabulary.
+		out = append(out, FunctionToolSpec(strings.TrimSpace(tool.Function.Name), tool.Function.Description, tool.Function.Parameters, tool.Function.Strict))
 	}
 	return out
 }
 
-func responsesContentText(raw any) string {
-	switch v := raw.(type) {
-	case nil:
+// responsesContentText extracts the plain-text body from one
+// inbound responses-input item's content. Returns sanitized text.
+func responsesContentText(raw inputItemContent) string {
+	if len(raw.Raw) == 0 {
 		return ""
-	case string:
-		return SanitizeForUpstreamCache(v)
-	case []any:
-		var parts []string
-		for _, part := range v {
-			m, _ := part.(map[string]any)
-			if m == nil {
-				continue
-			}
-			switch strings.TrimSpace(mapString(m, "type")) {
-			case "text", "input_text", "output_text":
-				if text := rawString(m, "text"); text != "" {
-					parts = append(parts, text)
+	}
+	trimmed := strings.TrimSpace(string(raw.Raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw.Raw, &s); err != nil {
+			return ""
+		}
+		return SanitizeForUpstreamCache(s)
+	}
+	if trimmed[0] == '[' {
+		var parts []responsesContentPart
+		if err := json.Unmarshal(raw.Raw, &parts); err != nil {
+			return ""
+		}
+		var out []string
+		for _, part := range parts {
+			switch contentPartType(strings.TrimSpace(part.Type)) {
+			case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
+				if part.Text != "" {
+					out = append(out, part.Text)
 				}
 			}
 		}
-		return SanitizeForUpstreamCache(strings.Join(parts, "\n"))
-	case map[string]any:
-		switch strings.TrimSpace(mapString(v, "type")) {
-		case "text", "input_text", "output_text":
-			return SanitizeForUpstreamCache(rawString(v, "text"))
+		return SanitizeForUpstreamCache(strings.Join(out, "\n"))
+	}
+	if trimmed[0] == '{' {
+		var part responsesContentPart
+		if err := json.Unmarshal(raw.Raw, &part); err != nil {
+			return ""
+		}
+		switch contentPartType(strings.TrimSpace(part.Type)) {
+		case contentPartTypeText, contentPartTypeInputText, contentPartTypeOutputText:
+			return SanitizeForUpstreamCache(part.Text)
 		}
 	}
 	return ""
 }
 
-func responsesOutputText(raw any) string {
-	text := responsesContentText(raw)
+// responsesOutputText flattens the inbound `output` field of a
+// function_call_output item to plain text. Sanitizes for cache.
+func responsesOutputText(raw json.RawMessage) string {
+	text := codexwire.OutputText(raw)
 	if text != "" {
-		return text
+		return SanitizeForUpstreamCache(text)
 	}
-	switch v := raw.(type) {
-	case string:
-		return SanitizeForUpstreamCache(v)
-	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			return ""
-		}
-		return SanitizeForUpstreamCache(string(b))
-	}
+	return ""
 }
 
 // rewriteWorkspacePath translates daemon-cwd-rooted paths to the
@@ -638,42 +791,44 @@ func isPathSeparatorByte(b byte) bool {
 	return false
 }
 
-func functionCallItem(tc adapteropenai.ToolCall) map[string]any {
+func functionCallItem(tc adapteropenai.ToolCall) codexwire.InputItem {
 	callID := strings.TrimSpace(tc.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("call_%d", tc.Index)
 	}
-	return map[string]any{
-		"type":      "function_call",
-		"call_id":   callID,
-		"name":      OutboundToolName(tc.Function.Name),
-		"arguments": tc.Function.Arguments,
+	return codexwire.InputItem{
+		Type:   codexwire.ItemTypeFunctionCall,
+		CallID: callID,
+		// The tool name and arguments pass through verbatim as the
+		// opaque content the client declared and the model emitted.
+		Name:      strings.TrimSpace(tc.Function.Name),
+		Arguments: tc.Function.Arguments,
 	}
 }
 
-func FunctionCallItem(tc adapteropenai.ToolCall) map[string]any {
+// FunctionCallItem is part of Clyde's typed adapter surface.
+func FunctionCallItem(tc adapteropenai.ToolCall) codexwire.InputItem {
 	return functionCallItem(tc)
 }
 
-func FunctionCallOutputItem(callID, text string) map[string]any {
-	return map[string]any{
-		"type":    "function_call_output",
-		"call_id": strings.TrimSpace(callID),
-		"output":  text,
+// FunctionCallOutputItem is part of Clyde's typed adapter surface.
+func FunctionCallOutputItem(callID, text string) codexwire.InputItem {
+	return codexwire.InputItem{
+		Type:   codexwire.ItemTypeFunctionCallOutput,
+		CallID: strings.TrimSpace(callID),
+		Output: codexwire.RawOutput(text),
 	}
 }
 
-func functionCallFromResponsesItem(item map[string]any, workspacePath string) map[string]any {
-	callID := mapString(item, "call_id")
-	name := mapString(item, "name")
-	args := rewriteWorkspacePath(rawString(item, "arguments"), workspacePath)
+func functionCallFromResponsesItem(item responsesInputItem, workspacePath string) codexwire.InputItem {
+	args := rewriteWorkspacePath(item.Arguments, workspacePath)
 	tc := adapteropenai.ToolCall{
-		ID:   callID,
+		ID:   item.CallID,
 		Type: "function",
 		Function: adapteropenai.ToolCallFunction{
-			Name:      InboundToolName(name),
+			Name:      strings.TrimSpace(item.Name),
 			Arguments: args,
-		},
+		}, Index: 0,
 	}
 	return functionCallItem(tc)
 }
@@ -684,67 +839,63 @@ func inputFromResponsesInput(
 	developerSections *[]string,
 	strategy adapterrender.MaterializationStrategy,
 	cfg RequestBuilderConfig,
-) ([]map[string]any, bool) {
+) ([]codexwire.InputItem, bool) {
 	if len(raw) == 0 {
 		return nil, false
 	}
-	var items []map[string]any
+	var items []responsesInputItem
 	if err := json.Unmarshal(raw, &items); err != nil || len(items) == 0 {
 		return nil, false
 	}
-	input := make([]map[string]any, 0, len(items))
+	input := make([]codexwire.InputItem, 0, len(items))
 	customToolCallIDs := make(map[string]bool)
 	for _, item := range items {
-		role := strings.ToLower(mapString(item, "role"))
-		itemType := strings.TrimSpace(mapString(item, "type"))
+		role := strings.ToLower(item.Role)
+		itemType := strings.TrimSpace(item.Type)
 		switch {
-		case role == "system" || role == "developer":
-			if text := strings.TrimSpace(responsesContentText(item["content"])); text != "" {
+		case role == string(codexChatRoleSystem) || role == string(codexChatRoleDeveloper):
+			if text := strings.TrimSpace(responsesContentText(item.Content)); text != "" {
 				*developerSections = append(*developerSections, text)
 			}
 		case role == "user":
-			if content := codexContentFromAny(item["content"], "input_text", strategy); len(content) > 0 {
+			if content := codexContentFromContent(item.Content, codexwire.ContentItemInputText, strategy); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
-		case role == "assistant":
-			// Reasoning items must precede the assistant Message they
-			// belong to in the input array; codex-rs history.rs
-			// preserves that order.
-			input = emitReasoningItemsFromAssistantContent(input, assistantRawText(item["content"]), cfg)
-			if content := codexContentFromAny(item["content"], "output_text", strategy); len(content) > 0 {
+		case role == string(codexChatRoleAssistant):
+			// Reasoning items must precede the assistant Message
+			// they belong to in the input array; codex-rs
+			// history.rs preserves that order.
+			input = emitReasoningItemsFromAssistantContent(input, assistantRawText(item.Content), cfg)
+			if content := codexContentFromContent(item.Content, codexwire.ContentItemOutputText, strategy); len(content) > 0 {
 				input = append(input, MessageContentItems("assistant", content))
 			}
-		case itemType == "function_call":
+		case itemType == string(codexwire.ItemTypeFunctionCall):
 			input = append(input, functionCallFromResponsesItem(item, workspacePath))
-		case itemType == "function_call_output":
-			callID := mapString(item, "call_id")
-			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item["output"]), workspacePath))
+		case itemType == string(codexwire.ItemTypeFunctionCallOutput):
+			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
 			if output == "" {
 				continue
 			}
-			if customToolCallIDs[callID] {
-				input = append(input, CustomToolCallOutputItem(callID, output))
+			if customToolCallIDs[item.CallID] {
+				input = append(input, CustomToolCallOutputItem(item.CallID, output))
 			} else {
-				input = append(input, FunctionCallOutputItem(callID, output))
+				input = append(input, FunctionCallOutputItem(item.CallID, output))
 			}
-		case itemType == "custom_tool_call":
-			callID := mapString(item, "call_id")
-			name := mapString(item, "name")
-			inputText := rewriteWorkspacePath(UnwrapApplyPatchInput(rawString(item, "input")), workspacePath)
-			if callID != "" {
-				customToolCallIDs[callID] = true
+		case itemType == string(codexwire.ItemTypeCustomToolCall):
+			inputText := rewriteWorkspacePath(UnwrapApplyPatchInput(item.Input), workspacePath)
+			if item.CallID != "" {
+				customToolCallIDs[item.CallID] = true
 			}
-			input = append(input, map[string]any{
-				"type":    "custom_tool_call",
-				"call_id": callID,
-				"name":    name,
-				"input":   inputText,
+			input = append(input, codexwire.InputItem{
+				Type:   codexwire.ItemTypeCustomToolCall,
+				CallID: item.CallID,
+				Name:   item.Name,
+				Input:  inputText,
 			})
-		case itemType == "custom_tool_call_output":
-			callID := mapString(item, "call_id")
-			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item["output"]), workspacePath))
+		case itemType == string(codexwire.ItemTypeCustomToolCallOutput):
+			output := strings.TrimSpace(rewriteWorkspacePath(responsesOutputText(item.Output), workspacePath))
 			if output != "" {
-				input = append(input, CustomToolCallOutputItem(callID, output))
+				input = append(input, CustomToolCallOutputItem(item.CallID, output))
 			}
 		}
 	}
@@ -782,9 +933,9 @@ func requestContextIdentity(req adaptercursor.Request, modelAlias string) codexR
 	}
 	if firstUser == "" {
 		if v := strings.TrimSpace(req.User); v != "" {
-			return codexRequestContextIdentity{PromptCacheKey: "user:" + v}
+			return codexRequestContextIdentity{PromptCacheKey: "user:" + v, WebsocketSessionKey: ""}
 		}
-		return codexRequestContextIdentity{}
+		return codexRequestContextIdentity{PromptCacheKey: "", WebsocketSessionKey: ""}
 	}
 	sum := sha256.Sum256([]byte(modelAlias + "\n" + firstUser))
 	// A content fingerprint is useful as an upstream prompt-cache
@@ -792,22 +943,31 @@ func requestContextIdentity(req adaptercursor.Request, modelAlias string) codexR
 	// live chat. Do not use it as WebsocketSessionKey: repeated fresh
 	// Cursor chats can start with identical text and must not inherit
 	// each other's previous_response_id.
-	return codexRequestContextIdentity{PromptCacheKey: "fingerprint:" + hex.EncodeToString(sum[:16])}
+	return codexRequestContextIdentity{PromptCacheKey: "fingerprint:" + hex.EncodeToString(sum[:16]), WebsocketSessionKey: ""}
 }
+
+// metadataString is the JSON view of a request `metadata` field.
+type metadataString map[string]json.RawMessage
 
 func requestMetadataString(raw json.RawMessage, keys ...string) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
-	var m map[string]any
+	var m metadataString
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return ""
 	}
 	for _, key := range keys {
-		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s)
-			}
+		v, ok := m[key]
+		if !ok {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			continue
+		}
+		if strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
 		}
 	}
 	return ""

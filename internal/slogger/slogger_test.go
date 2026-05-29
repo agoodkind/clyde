@@ -76,20 +76,20 @@ func TestSetupRoutesExistingEventNamesWhenConcernIsExplicit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = closer.Close() })
 
-	For(ConcernSessionDiscoveryScan).Warn("session.scan.walk_failed", "path", "/tmp/nope")
-	For(ConcernDaemonRPCRequests).Info("daemon.rpc.started", "method", "/clyde.v1.Daemon/ListSessions")
-	For(ConcernUITUIActions).Debug("tui.input.key", "key", "enter")
+	For(ConcernMCPServerContext).Warn("mcp.context.load_failed", "path", "/tmp/nope")
+	For(ConcernDaemonWorkersReload).Info("daemon.workers.reload.started", "reason", "test")
+	For(ConcernMCPServerRequest).Debug("mcp.requests.started", "tool", "needle")
 	_ = closer.Close()
 
-	assertLogContains(t, filepath.Join(root, "logs", "session", "discovery", "scan.jsonl"), "session.scan.walk_failed")
-	assertLogContains(t, filepath.Join(root, "logs", "daemon", "rpc", "requests.jsonl"), "daemon.rpc.started")
-	assertLogContains(t, filepath.Join(root, "logs", "ui", "tui", "actions.jsonl"), "tui.input.key")
+	assertLogContains(t, filepath.Join(root, "logs", "mcp", "server", "context.jsonl"), "mcp.context.load_failed")
+	assertLogContains(t, filepath.Join(root, "logs", "daemon", "workers", "reload.jsonl"), "daemon.workers.reload.started")
+	assertLogContains(t, filepath.Join(root, "logs", "mcp", "server", "requests.jsonl"), "mcp.requests.started")
 }
 
 func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 	root := t.TempDir()
 	unified := filepath.Join(root, "clyde-daemon.jsonl")
-	early := Concern(ConcernSessionDomainResolve)
+	early := Concern(ConcernMCPServerContext)
 
 	policy := testSetupPolicy(root)
 	policy.Level = slog.LevelDebug
@@ -99,20 +99,20 @@ func TestConcernLoggerResolvesDefaultAfterSetup(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = closer.Close() })
 
-	early.Logger().Info("session.resolve.lazy_logger", "session", "demo")
+	early.Logger().Info("mcp.context.lazy_logger", "conversation_id", "demo")
 	_ = closer.Close()
 
 	unifiedLog, err := os.ReadFile(unified)
 	if err != nil {
 		t.Fatalf("read unified log: %v", err)
 	}
-	if strings.Contains(string(unifiedLog), `"msg":"INFO session.resolve.lazy_logger`) {
+	if strings.Contains(string(unifiedLog), `"msg":"INFO mcp.context.lazy_logger`) {
 		t.Fatalf("lazy concern logger used bootstrap text logger: %s", unifiedLog)
 	}
-	if !strings.Contains(string(unifiedLog), `"msg":"session.resolve.lazy_logger"`) {
+	if !strings.Contains(string(unifiedLog), `"msg":"mcp.context.lazy_logger"`) {
 		t.Fatalf("unified log missing lazy logger event: %s", unifiedLog)
 	}
-	assertLogContains(t, filepath.Join(root, "logs", "session", "domain", "resolve.jsonl"), "session.resolve.lazy_logger")
+	assertLogContains(t, filepath.Join(root, "logs", "mcp", "server", "context.jsonl"), "mcp.context.lazy_logger")
 }
 
 func TestSetupInjectsContextCorrelationAttrs(t *testing.T) {
@@ -186,15 +186,15 @@ func TestSetupInjectsCorrelationAttrsIntoConcernLogWithoutOverwritingExplicitAtt
 	corr = clydeingress.WithUpstreamRequestID(corr, "upstream-req")
 	corr = clydeingress.WithUpstreamResponseID(corr, "upstream-resp")
 	ctx := correlation.WithContext(context.Background(), corr)
-	For(ConcernDaemonRPCRequests).InfoContext(ctx,
-		"daemon.rpc.started",
+	For(ConcernDaemonWorkersReload).InfoContext(ctx,
+		"daemon.workers.reload.started",
 		"trace_id", "explicit-trace",
 		"span_id", "explicit-span",
 	)
 	_ = closer.Close()
 
-	event := readSingleEvent(t, filepath.Join(root, "logs", "daemon", "rpc", "requests.jsonl"))
-	if event.Message != "daemon.rpc.started" {
+	event := readSingleEvent(t, filepath.Join(root, "logs", "daemon", "workers", "reload.jsonl"))
+	if event.Message != "daemon.workers.reload.started" {
 		t.Fatalf("message = %q", event.Message)
 	}
 	if event.TraceID != "explicit-trace" {
@@ -239,11 +239,11 @@ func TestSetupWithPolicyAppliesPerConcernLevel(t *testing.T) {
 	t.Cleanup(func() { _ = closer.Close() })
 
 	For(ConcernAdapterModelsCatalog).Debug("adapter.models.debug_event")
-	For(ConcernDaemonRPCRequests).Debug("daemon.rpc.debug_event")
+	For(ConcernDaemonWorkersReload).Debug("daemon.workers.reload.debug_event")
 	_ = closer.Close()
 
 	assertLogContains(t, filepath.Join(root, "logs", "adapter", "models", "catalog.jsonl"), "adapter.models.debug_event")
-	assertLogMissing(t, filepath.Join(root, "logs", "daemon", "rpc", "requests.jsonl"), "daemon.rpc.debug_event")
+	assertLogMissing(t, filepath.Join(root, "logs", "daemon", "workers", "reload.jsonl"), "daemon.workers.reload.debug_event")
 	assertLogMissing(t, filepath.Join(root, "clyde-daemon.jsonl"), "adapter.models.debug_event")
 }
 
@@ -476,25 +476,6 @@ func TestInventoryIndexHandlerWritesValidJSONLUnderConcurrentOverlap(t *testing.
 		var decoded map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
 			t.Fatalf("line %d invalid json: %v\n%s", index+1, err, line)
-		}
-	}
-}
-
-func TestConcernForEventCoversPrimaryTree(t *testing.T) {
-	cases := map[string]string{
-		"logging.request.leg":              ConcernAdapterChatDispatch,
-		"adapter.codex.transport.prepared": ConcernAdapterProviderCodexWS,
-		"adapter.anthropic.ingress":        ConcernAdapterProviderAnthReq,
-		"session.adopt.completed":          ConcernSessionDiscoveryAdopt,
-		"session.resolve.tier1_hit":        ConcernSessionDomainResolve,
-		"prune.autoname.started":           ConcernDaemonWorkersPrune,
-		"mitm.ws.closed":                   ConcernProviderMITMWire,
-		"compact.apply.completed":          ConcernCompactApply,
-		"mcp.context.loaded":               ConcernMCPServerContext,
-	}
-	for event, want := range cases {
-		if got := concernForEvent(event); got != want {
-			t.Fatalf("concernForEvent(%q)=%q want %q", event, got, want)
 		}
 	}
 }

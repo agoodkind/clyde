@@ -4,155 +4,61 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+
+	"goodkind.io/clyde/codexwire"
 )
 
-func FunctionToolSpec(name, description string, parameters json.RawMessage, strict *bool) map[string]any {
-	spec := map[string]any{
-		"type": "function",
-		"name": strings.TrimSpace(name),
+// FunctionToolSpec is part of Clyde's typed adapter surface. It
+// renders one function-tool spec for the codex `tools` array. The
+// caller-provided name and parameters pass through verbatim: the tool
+// name and its JSON-schema parameters are opaque application content
+// owned by whoever declared the tool, so clyde does not rewrite them.
+func FunctionToolSpec(name, description string, parameters json.RawMessage, strict *bool) codexwire.ToolSpec {
+	spec := codexwire.ToolSpec{
+		Type: codexwire.ToolSpecTypeFunction,
+		Name: strings.TrimSpace(name),
 	}
 	if desc := strings.TrimSpace(description); desc != "" {
-		spec["description"] = desc
+		spec.Description = desc
 	}
 	if len(parameters) > 0 && string(parameters) != "null" {
-		var params any
-		if err := json.Unmarshal(parameters, &params); err == nil {
-			spec["parameters"] = params
+		// Validate the parameters value parses as JSON; preserve the
+		// caller's raw bytes so the spec round-trips byte-identically.
+		var sink json.RawMessage
+		if err := json.Unmarshal(parameters, &sink); err == nil {
+			spec.Parameters = append(json.RawMessage(nil), parameters...)
 		}
 	}
 	if strict != nil {
-		spec["strict"] = *strict
+		v := *strict
+		spec.Strict = &v
 	}
 	return spec
 }
 
-func IsShellToolName(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "Shell", "shell", "local_shell", "shell_command", "container.exec":
-		return true
-	default:
-		return false
+// CustomToolCallOutputItem is part of Clyde's typed adapter surface.
+// The Name field is fixed to codex's freeform apply_patch tool type
+// because custom_tool_call outputs on this path are apply_patch
+// results; the codex tool type is "apply_patch"
+// (research/codex/codex-rs/core/src/tools/handlers/apply_patch_spec.rs
+// create_apply_patch_freeform_tool).
+func CustomToolCallOutputItem(callID, text string) codexwire.InputItem {
+	return codexwire.InputItem{
+		Type:   codexwire.ItemTypeCustomToolCallOutput,
+		CallID: strings.TrimSpace(callID),
+		Name:   codexApplyPatchToolType,
+		Output: codexwire.RawOutput(text),
 	}
 }
 
-func IsApplyPatchToolName(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "ApplyPatch", "apply_patch":
-		return true
-	default:
-		return false
-	}
-}
+// codexApplyPatchToolType is the codex-internal freeform tool type for
+// apply_patch. It is NOT a client tool name: it is the type codex emits
+// on custom_tool_call items and the name codex expects on
+// custom_tool_call_output items
+// (research/codex/codex-rs/core/src/tools/handlers/apply_patch_spec.rs).
+const codexApplyPatchToolType = "apply_patch"
 
-func ToolCallArgsMap(args string) map[string]any {
-	var out map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(args)), &out); err != nil {
-		return nil
-	}
-	return out
-}
-
-func StringArg(args map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if v, _ := args[key].(string); strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
-func NumberArg(args map[string]any, keys ...string) (float64, bool) {
-	for _, key := range keys {
-		switch v := args[key].(type) {
-		case float64:
-			return v, true
-		case int:
-			return float64(v), true
-		case json.Number:
-			f, err := v.Float64()
-			return f, err == nil
-		}
-	}
-	return 0, false
-}
-
-func CustomToolCallOutputItem(callID, text string) map[string]any {
-	return map[string]any{
-		"type":    "custom_tool_call_output",
-		"call_id": strings.TrimSpace(callID),
-		"name":    "apply_patch",
-		"output":  text,
-	}
-}
-
-func ShellArgsFromLocalShellItem(item map[string]any) (string, bool) {
-	action, _ := item["action"].(map[string]any)
-	if action == nil {
-		return "", false
-	}
-	command := StringSlice(action["command"])
-	if len(command) == 0 {
-		return "", false
-	}
-	args := map[string]any{"command": CommandString(command)}
-	if cwd, _ := action["working_directory"].(string); strings.TrimSpace(cwd) != "" {
-		args["working_directory"] = strings.TrimSpace(cwd)
-	}
-	if timeout, ok := NumberFromAny(action["timeout_ms"]); ok {
-		args["block_until_ms"] = int(timeout)
-	}
-	raw, _ := json.Marshal(args)
-	return string(raw), true
-}
-
-func ShellArgsFromShellCommandArguments(rawArgs string) (string, bool) {
-	args := ToolCallArgsMap(rawArgs)
-	if len(args) == 0 {
-		return "", false
-	}
-	command := StringArg(args, "command", "cmd")
-	if command == "" {
-		return "", false
-	}
-	out := map[string]any{"command": command}
-	if cwd := StringArg(args, "working_directory", "workdir", "cwd"); cwd != "" {
-		out["working_directory"] = cwd
-	}
-	if timeout, ok := NumberArg(args, "block_until_ms", "timeout_ms", "timeout"); ok {
-		out["block_until_ms"] = int(timeout)
-	}
-	raw, _ := json.Marshal(out)
-	return string(raw), true
-}
-
-func StringSlice(v any) []string {
-	raw, _ := v.([]any)
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, item := range raw {
-		if s, _ := item.(string); strings.TrimSpace(s) != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func NumberFromAny(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case int:
-		return float64(n), true
-	case json.Number:
-		f, err := n.Float64()
-		return f, err == nil
-	default:
-		return 0, false
-	}
-}
-
+// CommandString is part of Clyde's typed adapter surface.
 func CommandString(argv []string) string {
 	if len(argv) == 0 {
 		return ""
@@ -167,6 +73,7 @@ func CommandString(argv []string) string {
 	return strings.Join(parts, " ")
 }
 
+// ShellQuote is part of Clyde's typed adapter surface.
 func ShellQuote(arg string) string {
 	if arg == "" {
 		return "''"
@@ -188,6 +95,11 @@ func ShellQuote(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 
+// ApplyPatchArgs is part of Clyde's typed adapter surface. It enforces
+// codex's freeform apply_patch contract on the input emitted for a
+// native custom_tool_call: unwrap any JSON wrapper (codex's freeform
+// tool says "do not wrap the patch in JSON") and repair a known
+// malformed-header case. The result is the raw patch body.
 func ApplyPatchArgs(input string) (string, bool) {
 	input = UnwrapApplyPatchInput(input)
 	input = RepairApplyPatchInput(input)
@@ -197,6 +109,14 @@ func ApplyPatchArgs(input string) (string, bool) {
 	return input, true
 }
 
+// UnwrapApplyPatchInput strips a JSON wrapper from an apply_patch
+// payload so the raw patch body survives. codex's apply_patch is a
+// FREEFORM tool whose description states "do not wrap the patch in
+// JSON"
+// (research/codex/codex-rs/core/src/tools/handlers/apply_patch_spec.rs
+// create_apply_patch_freeform_tool, the FreeformTool description), so a
+// client that wraps the patch in {"input":...} or {"patch":...} must be
+// unwrapped before forwarding the freeform body.
 func UnwrapApplyPatchInput(input string) string {
 	if strings.TrimSpace(input) == "" {
 		return ""
@@ -214,6 +134,14 @@ func UnwrapApplyPatchInput(input string) string {
 	return input
 }
 
+// RepairApplyPatchInput drops a stray `*** Update File:` header that
+// immediately precedes another hunk header (e.g. `*** Add File:`). The
+// codex apply_patch LARK grammar (vendored at apply_patch.lark) defines
+// each hunk as exactly one of add_hunk / delete_hunk / update_hunk, so
+// an `*** Update File:` line followed directly by an `*** Add File:`
+// line is not a well-formed update_hunk (it has no change body) and the
+// upstream parser rejects it. Dropping the orphaned update header leaves
+// the well-formed add_hunk that follows.
 func RepairApplyPatchInput(input string) string {
 	if strings.TrimSpace(input) == "" {
 		return ""

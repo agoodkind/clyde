@@ -7,14 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
-
-	"goodkind.io/clyde/internal/slogger"
 )
-
-var currentTime = time.Now
 
 // SessionIndexEntry is the typed append-only row Codex writes to
 // CODEX_HOME/session_index.jsonl. The latest row wins for name/id lookups.
@@ -30,13 +24,15 @@ type SessionIndex struct {
 	entriesByID []SessionIndexEntry
 }
 
+// ReadSessionIndex is part of Clyde's typed adapter surface.
 func ReadSessionIndex(path string) (SessionIndex, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return SessionIndex{}, nil
+			return SessionIndex{entriesByID: nil}, nil
 		}
-		return SessionIndex{}, err
+		slog.Warn("codex.store.session_index.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
+		return SessionIndex{}, fmt.Errorf("open codex session index %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -60,7 +56,7 @@ func ReadSessionIndex(path string) (SessionIndex, error) {
 		latest[entry.ID] = entry
 	}
 	if err := scanner.Err(); err != nil {
-		return SessionIndex{}, err
+		return SessionIndex{}, fmt.Errorf("scan codex session index %s: %w", path, err)
 	}
 	out := make([]SessionIndexEntry, 0, len(latest))
 	for _, entry := range latest {
@@ -69,6 +65,7 @@ func ReadSessionIndex(path string) (SessionIndex, error) {
 	return SessionIndex{entriesByID: out}, nil
 }
 
+// ThreadName is part of Clyde's typed adapter surface.
 func (idx SessionIndex) ThreadName(id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -80,75 +77,4 @@ func (idx SessionIndex) ThreadName(id string) string {
 		}
 	}
 	return ""
-}
-
-// NormalizeThreadName matches Codex's thread/name/set normalization boundary:
-// whitespace-only names are rejected, and otherwise the trimmed title is stored.
-func NormalizeThreadName(name string) (string, bool) {
-	normalized := strings.TrimSpace(name)
-	return normalized, normalized != ""
-}
-
-// AppendThreadName records a Codex thread/name/set-compatible title update in
-// CODEX_HOME/session_index.jsonl. The file is append-only, and latest row wins.
-func AppendThreadName(paths StorePaths, threadID, name string) error {
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return errors.New("missing codex thread id")
-	}
-	normalized, ok := NormalizeThreadName(name)
-	if !ok {
-		return errors.New("thread name must not be empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(paths.SessionIndexPath), 0o755); err != nil {
-		// TODO: thread ctx for correlation
-		slog.Warn("codex.store.session_index.mkdir_failed",
-			"component", "codex",
-			"subcomponent", "store",
-			"concern", slogger.ConcernProviderCodexLifecycle,
-			"path", paths.SessionIndexPath,
-			"err", err,
-		)
-		return fmt.Errorf("create codex session index directory: %w", err)
-	}
-	file, err := os.OpenFile(paths.SessionIndexPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		// TODO: thread ctx for correlation
-		slog.Warn("codex.store.session_index.open_failed",
-			"component", "codex",
-			"subcomponent", "store",
-			"concern", slogger.ConcernProviderCodexLifecycle,
-			"path", paths.SessionIndexPath,
-			"err", err,
-		)
-		return fmt.Errorf("open codex session index for append: %w", err)
-	}
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(SessionIndexEntry{
-		ID:         threadID,
-		ThreadName: normalized,
-		UpdatedAt:  currentTime().UTC().Format(time.RFC3339),
-	}); err != nil {
-		// TODO: thread ctx for correlation
-		slog.Warn("codex.store.session_index.encode_failed",
-			"component", "codex",
-			"subcomponent", "store",
-			"concern", slogger.ConcernProviderCodexLifecycle,
-			"path", paths.SessionIndexPath,
-			"err", err,
-		)
-		return fmt.Errorf("append codex session index entry: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		// TODO: thread ctx for correlation
-		slog.Warn("codex.store.session_index.close_failed",
-			"component", "codex",
-			"subcomponent", "store",
-			"concern", slogger.ConcernProviderCodexLifecycle,
-			"path", paths.SessionIndexPath,
-			"err", err,
-		)
-		return fmt.Errorf("close codex session index after append: %w", err)
-	}
-	return nil
 }

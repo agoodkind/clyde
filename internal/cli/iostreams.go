@@ -12,8 +12,8 @@ import (
 )
 
 // IOStreams bundles the three standard streams every subcommand may
-// touch. Tests inject buffers; production wires os.Stdin / os.Stdout /
-// os.Stderr. Subcommands must read and write through the streams here
+// touch. Tests inject buffers; production wires [os.Stdin] / [[os.Stdout]] /
+// [os.Stderr]. Subcommands must read and write through the streams here
 // rather than touching os.Std* directly so the cobra command tree
 // stays drivable from tests.
 type IOStreams struct {

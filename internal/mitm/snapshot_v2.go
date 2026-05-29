@@ -1,8 +1,10 @@
 package mitm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -71,15 +73,18 @@ func ExtractSnapshotV2(path string, opts SnapshotV2Options) (SnapshotV2, error) 
 // so both can coexist for the same upstream.
 func WriteSnapshotV2TOML(snap SnapshotV2, dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		slog.Warn("mitm.snapshot_v2.write_mkdir_failed", "concern", "providers.mitm.wire", "dir", dir, "err", err)
+		return "", fmt.Errorf("create v2 snapshot dir %s: %w", dir, err)
 	}
 	out := filepath.Join(dir, "reference-v2.toml")
 	raw, err := toml.Marshal(snap)
 	if err != nil {
-		return "", err
+		slog.Warn("mitm.snapshot_v2.write_marshal_failed", "concern", "providers.mitm.wire", "path", out, "err", err)
+		return "", fmt.Errorf("marshal v2 snapshot TOML: %w", err)
 	}
-	if err := os.WriteFile(out, raw, 0o644); err != nil {
-		return "", err
+	if err := os.WriteFile(out, raw, 0o600); err != nil {
+		slog.Warn("mitm.snapshot_v2.write_failed", "concern", "providers.mitm.wire", "path", out, "err", err)
+		return "", fmt.Errorf("write v2 snapshot TOML %s: %w", out, err)
 	}
 	return out, nil
 }
@@ -89,14 +94,22 @@ func WriteSnapshotV2TOML(snap SnapshotV2, dir string) (string, error) {
 func LoadSnapshotV2TOML(path string) (SnapshotV2, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return SnapshotV2{}, err
+		slog.Warn("mitm.snapshot_v2.load_read_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
+		return SnapshotV2{}, fmt.Errorf("read v2 snapshot TOML %s: %w", path, err)
 	}
 	var snap SnapshotV2
 	if err := toml.Unmarshal(raw, &snap); err != nil {
-		return SnapshotV2{}, err
+		slog.Warn("mitm.snapshot_v2.load_unmarshal_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
+		return SnapshotV2{}, fmt.Errorf("unmarshal v2 snapshot TOML %s: %w", path, err)
 	}
 	return snap, nil
 }
+
+// rawCaptureFields is the typed view of one captured request line as
+// a map of named raw JSON fields. Each field stays opaque until a
+// specific accessor decodes it; the typed accessors are exposed via
+// rawJSONValue helpers below.
+type rawCaptureFields map[string]json.RawMessage
 
 // rawRequest pairs a parsed JSON map of one captured request with
 // its typed CaptureRecord. The v2 extractor needs both: the typed
@@ -104,7 +117,7 @@ func LoadSnapshotV2TOML(path string) (SnapshotV2, error) {
 // request_body.keys / request_headers nested under summary-mode
 // keys the typed schema doesn't expose.
 type rawRequest struct {
-	raw    map[string]any
+	fields rawCaptureFields
 	record CaptureRecord
 }
 
@@ -126,14 +139,14 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 		if rec.Kind != RecordHTTPRequest {
 			continue
 		}
-		var raw map[string]any
-		if err := json.Unmarshal(rawLines[i], &raw); err != nil {
+		fields := rawCaptureFields{}
+		if err := json.Unmarshal(rawLines[i], &fields); err != nil {
 			continue
 		}
 		// Synthesize a richer signature using the raw request_body
 		// keys (which the proxy emits in summary mode under
 		// request_body.keys but the typed schema does not expose).
-		sig := classifyRequestRaw(raw, rec)
+		sig := classifyRequestRaw(fields, rec)
 		if !uaMatches(sig.UserAgent, opts.IncludeUserAgentSubstrings, opts.ExcludeUserAgentSubstrings) {
 			continue
 		}
@@ -141,7 +154,7 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 			continue
 		}
 		slug := sig.FlavorSlug()
-		flavored[slug] = append(flavored[slug], rawRequest{raw: raw, record: rec})
+		flavored[slug] = append(flavored[slug], rawRequest{fields: fields, record: rec})
 		flavorSigs[slug] = sig
 	}
 
@@ -153,8 +166,8 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 		Upstream: V2Upstream{
 			Name:        opts.UpstreamName,
 			Version:     opts.UpstreamVersion,
-			RecordCount: len(records),
-		},
+			RecordCount: len(records), CapturedAt: "",
+		}, Flavors: nil,
 	}
 	if earliest > 0 {
 		snap.Upstream.CapturedAt = time.Unix(earliest, 0).UTC().Format(time.RFC3339)
@@ -232,14 +245,11 @@ func uaMatches(ua string, include, exclude []string) bool {
 // ClassifyRecord but pulls body keys from the raw map (which has the
 // summary-mode request_body.keys array the typed CaptureRecord
 // schema doesn't expose).
-func classifyRequestRaw(raw map[string]any, rec CaptureRecord) FlavorSignature {
-	headers, _ := raw["request_headers"].(map[string]any)
-	if headers == nil {
-		headers, _ = raw["headers"].(map[string]any)
-	}
-	ua := lowerStringFromAny(headers, "user-agent")
-	beta := lowerStringFromAny(headers, "anthropic-beta")
-	keys := bodyKeysFromRawMap(raw)
+func classifyRequestRaw(fields rawCaptureFields, rec CaptureRecord) FlavorSignature {
+	headers := requestHeaderMap(fields)
+	ua := lowerStringFromHeaders(headers, "user-agent")
+	beta := lowerStringFromHeaders(headers, "anthropic-beta")
+	keys := bodyKeysFromFields(fields)
 	_ = rec
 	return FlavorSignature{
 		UserAgent:       ua,
@@ -248,51 +258,72 @@ func classifyRequestRaw(raw map[string]any, rec CaptureRecord) FlavorSignature {
 	}
 }
 
-func lowerStringFromAny(m map[string]any, lower string) string {
-	if m == nil {
+// requestHeaderMap pulls the request_headers (or legacy headers)
+// field from a captured request as a string→string map.
+func requestHeaderMap(fields rawCaptureFields) map[string]string {
+	if raw, ok := fields["request_headers"]; ok {
+		if out := stringMapFromRaw(raw); len(out) > 0 {
+			return out
+		}
+	}
+	if raw, ok := fields["headers"]; ok {
+		return stringMapFromRaw(raw)
+	}
+	return nil
+}
+
+func lowerStringFromHeaders(headers map[string]string, lower string) string {
+	if headers == nil {
 		return ""
 	}
-	for k, v := range m {
+	for k, v := range headers {
 		if strings.ToLower(k) == lower {
-			s, _ := v.(string)
-			return s
+			return v
 		}
 	}
 	return ""
 }
 
-// bodyKeysFromRawMap extracts the list of top-level body keys from a
-// captured request record's raw JSON map. Handles both summary mode
-// (request_body.keys array) and raw mode (request_body is the full
-// object).
-func bodyKeysFromRawMap(raw map[string]any) []string {
-	body := raw["request_body"]
-	switch b := body.(type) {
-	case map[string]any:
-		if keys, ok := b["keys"].([]any); ok {
-			out := make([]string, 0, len(keys))
-			for _, v := range keys {
-				if s, ok := v.(string); ok {
-					out = append(out, s)
-				}
-			}
-			sort.Strings(out)
-			return out
+// bodyKeysFromFields extracts the list of top-level body keys from a
+// captured request record's typed field map. Handles both summary
+// mode (request_body.keys array) and raw mode (request_body is the
+// full object encoded as a JSON object, JSON string, or nested
+// fields).
+func bodyKeysFromFields(fields rawCaptureFields) []string {
+	body, ok := fields["request_body"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace([]byte(body))
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	switch trimmed[0] {
+	case '{':
+		var asMap rawCaptureFields
+		if err := json.Unmarshal(body, &asMap); err != nil {
+			return nil
 		}
-		// Raw mode (legacy shape where the proxy decoded JSON before
-		// recording): the body IS the full payload object.
-		out := make([]string, 0, len(b))
-		for k := range b {
+		if keysRaw, ok := asMap["keys"]; ok {
+			var keys []string
+			if err := json.Unmarshal(keysRaw, &keys); err == nil && len(keys) > 0 {
+				sort.Strings(keys)
+				return keys
+			}
+		}
+		out := make([]string, 0, len(asMap))
+		for k := range asMap {
 			out = append(out, k)
 		}
 		sort.Strings(out)
 		return out
-	case string:
-		// Raw mode: the proxy stores the JSON payload as a string.
-		// Parse it on the fly so the classifier sees real keys
-		// instead of clustering every raw-mode request as "other".
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(b), &parsed); err != nil {
+	case '"':
+		var bodyStr string
+		if err := json.Unmarshal(body, &bodyStr); err != nil {
+			return nil
+		}
+		var parsed rawCaptureFields
+		if err := json.Unmarshal([]byte(bodyStr), &parsed); err != nil {
 			return nil
 		}
 		out := make([]string, 0, len(parsed))
@@ -309,7 +340,7 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 	flav := FlavorShape{
 		Slug:        slug,
 		Signature:   V2Signature(sig),
-		RecordCount: len(requests),
+		RecordCount: len(requests), Methods: nil, Paths: nil, Headers: nil, Body: V2Body{BodyType: "", Fields: nil},
 	}
 
 	methodSet := map[string]bool{}
@@ -320,16 +351,13 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 	fieldObservations := map[string]*v2FieldAcc{} // top-level body field → aggregated observation
 
 	for _, req := range requests {
-		if m := lowerStringFromAny(req.raw, "method"); m != "" {
+		if m := stringFromRaw(req.fields["method"]); m != "" {
 			methodSet[m] = true
 		}
-		if p := lowerStringFromAny(req.raw, "path"); p != "" {
+		if p := stringFromRaw(req.fields["path"]); p != "" {
 			pathSet[p] = true
 		}
-		headers := mapStringsFromAny(req.raw["request_headers"])
-		if len(headers) == 0 {
-			headers = mapStringsFromAny(req.raw["headers"])
-		}
+		headers := requestHeaderMap(req.fields)
 		seenInThisRecord := map[string]bool{}
 		for k, v := range headers {
 			lower := strings.ToLower(k)
@@ -342,12 +370,9 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 		for h := range seenInThisRecord {
 			headerPresenceCount[h]++
 		}
-		// Body
-		body := req.raw["request_body"]
-		if bm, ok := body.(map[string]any); ok {
-			if t, ok := bm["body_type"].(string); ok && t != "" {
-				bodyTypeSet[t] = true
-			}
+		body := req.fields["request_body"]
+		if t := bodyTypeFromRaw(body); t != "" {
+			bodyTypeSet[t] = true
 		}
 		walkBodyTopLevel(body, fieldObservations, opts.MaxBodyDepth)
 	}
@@ -371,14 +396,54 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 	return flav
 }
 
-func mapStringsFromAny(v any) map[string]string {
-	m, ok := v.(map[string]any)
-	if !ok {
+// stringFromRaw decodes a JSON-encoded string. Returns "" when the
+// payload is empty, null, or not a string.
+func stringFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return s
+}
+
+// bodyTypeFromRaw pulls the body_type discriminator out of a
+// request_body payload when the proxy recorded it in summary mode.
+// Returns "" otherwise.
+func bodyTypeFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	trimmed := bytes.TrimSpace([]byte(raw))
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return ""
+	}
+	var fields rawCaptureFields
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ""
+	}
+	return stringFromRaw(fields["body_type"])
+}
+
+// stringMapFromRaw decodes a JSON object with string values into a
+// flat map[string]string. Non-string values are skipped.
+func stringMapFromRaw(raw json.RawMessage) map[string]string {
+	if len(raw) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(m))
-	for k, val := range m {
-		if s, ok := val.(string); ok {
+	trimmed := bytes.TrimSpace([]byte(raw))
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil
+	}
+	var fields rawCaptureFields
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(fields))
+	for k, v := range fields {
+		if s := stringFromRaw(v); s != "" {
 			out[k] = s
 		}
 	}
@@ -421,7 +486,7 @@ func classifyHeader(name string, values map[string]int, presence, total int, opt
 		Classification: classification,
 		Presence:       pres,
 		OccurrenceRate: rate,
-		ObservedValues: observed,
+		ObservedValues: observed, Pattern: "",
 	}
 	if classification == V2HeaderClassFree {
 		out.Pattern = canonicalHeaderValue(name, observed[0])
@@ -446,11 +511,12 @@ func newFieldAcc() *v2FieldAcc {
 		kindCounts:     map[V2FieldKind]int{},
 		subAcc:         map[string]*v2FieldAcc{},
 		itemKindCounts: map[V2FieldKind]int{},
-		itemSubAcc:     map[string]*v2FieldAcc{},
+		itemSubAcc:     map[string]*v2FieldAcc{}, count: 0, sample: "",
 	}
 }
 
-func (a *v2FieldAcc) observe(name string, value any, depth int) {
+// observe records one observation of this field's value.
+func (a *v2FieldAcc) observe(name string, value json.RawMessage, depth int) {
 	a.count++
 	kind := classifyKind(value)
 	a.kindCounts[kind]++
@@ -460,33 +526,64 @@ func (a *v2FieldAcc) observe(name string, value any, depth int) {
 	if depth <= 0 {
 		return
 	}
-	switch v := value.(type) {
-	case map[string]any:
-		for k, sub := range v {
-			child, ok := a.subAcc[k]
-			if !ok {
-				child = newFieldAcc()
-				a.subAcc[k] = child
-			}
-			child.observe(k, sub, depth-1)
+	switch kind {
+	case V2FieldKindObject:
+		a.observeObjectChildren(value, depth-1)
+	case V2FieldKindArray:
+		a.observeArrayItems(value, depth-1)
+	case V2FieldKindNull, V2FieldKindBool, V2FieldKindNumber, V2FieldKindString, V2FieldKindUnknown:
+		// Leaf kinds contribute no nested observations.
+	}
+}
+
+// observeObjectChildren folds each field of a JSON object value into
+// the sub-accumulator map.
+func (a *v2FieldAcc) observeObjectChildren(value json.RawMessage, depth int) {
+	sub := map[string]json.RawMessage{}
+	if err := json.Unmarshal(value, &sub); err != nil {
+		return
+	}
+	for k, child := range sub {
+		childAcc, ok := a.subAcc[k]
+		if !ok {
+			childAcc = newFieldAcc()
+			a.subAcc[k] = childAcc
 		}
-	case []any:
-		for _, item := range v {
-			itemKind := classifyKind(item)
-			a.itemKindCounts[itemKind]++
-			if itemKind == V2FieldKindObject {
-				if obj, ok := item.(map[string]any); ok {
-					for k, sub := range obj {
-						child, ok := a.itemSubAcc[k]
-						if !ok {
-							child = newFieldAcc()
-							a.itemSubAcc[k] = child
-						}
-						child.observe(k, sub, depth-1)
-					}
-				}
-			}
+		childAcc.observe(k, child, depth)
+	}
+}
+
+// observeArrayItems folds each item of a JSON array value into the
+// per-item kind counts and per-item sub-accumulator map.
+func (a *v2FieldAcc) observeArrayItems(value json.RawMessage, depth int) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(value, &items); err != nil {
+		return
+	}
+	for _, item := range items {
+		itemKind := classifyKind(item)
+		a.itemKindCounts[itemKind]++
+		if itemKind != V2FieldKindObject {
+			continue
 		}
+		a.observeArrayObjectItem(item, depth)
+	}
+}
+
+// observeArrayObjectItem folds one object array entry's fields into
+// the per-item sub-accumulator map.
+func (a *v2FieldAcc) observeArrayObjectItem(item json.RawMessage, depth int) {
+	obj := map[string]json.RawMessage{}
+	if err := json.Unmarshal(item, &obj); err != nil {
+		return
+	}
+	for k, child := range obj {
+		childAcc, ok := a.itemSubAcc[k]
+		if !ok {
+			childAcc = newFieldAcc()
+			a.itemSubAcc[k] = childAcc
+		}
+		childAcc.observe(k, child, depth)
 	}
 }
 
@@ -494,7 +591,7 @@ func (a *v2FieldAcc) materialize(name string, totalRecords int) V2Field {
 	out := V2Field{
 		Name:        name,
 		Kind:        dominantKind(a.kindCounts),
-		SampleValue: a.sample,
+		SampleValue: a.sample, Presence: "", OccurrenceRate: 0, SubFields: nil, ItemKind: "", ItemSubFields: nil,
 	}
 	if a.count >= totalRecords {
 		out.Presence = V2HeaderPresenceRequired
@@ -520,39 +617,70 @@ func (a *v2FieldAcc) materialize(name string, totalRecords int) V2Field {
 	return out
 }
 
-func walkBodyTopLevel(body any, dst map[string]*v2FieldAcc, maxDepth int) {
-	if raw, ok := body.(string); ok {
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+// absorbSummaryModeKeys folds summary-mode body keys into the
+// accumulator. Returns true when the body matched the summary shape
+// (and the caller should stop), false otherwise.
+func absorbSummaryModeKeys(fields map[string]json.RawMessage, dst map[string]*v2FieldAcc) bool {
+	keysRaw, ok := fields["keys"]
+	if !ok {
+		return false
+	}
+	var keys []string
+	if err := json.Unmarshal(keysRaw, &keys); err != nil {
+		return false
+	}
+	for _, name := range keys {
+		if name == "" {
+			continue
+		}
+		acc, ok := dst[name]
+		if !ok {
+			acc = newFieldAcc()
+			dst[name] = acc
+		}
+		acc.count++
+		acc.kindCounts[V2FieldKindUnknown]++
+	}
+	return true
+}
+
+// walkBodyTopLevel iterates the top-level fields of a captured
+// request body and folds each into the field accumulator. Handles
+// both raw mode (body is a JSON object) and string-encoded mode
+// (body is a JSON-encoded string holding a JSON object).
+func walkBodyTopLevel(body json.RawMessage, dst map[string]*v2FieldAcc, maxDepth int) {
+	if len(body) == 0 {
+		return
+	}
+	trimmed := bytes.TrimSpace([]byte(body))
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return
+	}
+	if trimmed[0] == '"' {
+		var bodyStr string
+		if err := json.Unmarshal(body, &bodyStr); err != nil {
 			return
 		}
-		body = parsed
+		body = json.RawMessage(bodyStr)
+		trimmed = bytes.TrimSpace([]byte(body))
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			return
+		}
 	}
-	bm, ok := body.(map[string]any)
-	if !ok {
+	if trimmed[0] != '{' {
+		return
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(body, &fields); err != nil {
 		return
 	}
 	// Special-case: summary-mode body has request_body.keys plus a
 	// few summary fields; treat each summary-key as a top-level body
 	// field with kind=unknown (we only know names, not values).
-	if keys, ok := bm["keys"].([]any); ok {
-		for _, k := range keys {
-			s, _ := k.(string)
-			if s == "" {
-				continue
-			}
-			acc, ok := dst[s]
-			if !ok {
-				acc = newFieldAcc()
-				dst[s] = acc
-			}
-			acc.count++
-			acc.kindCounts[V2FieldKindUnknown]++
-		}
+	if absorbSummaryModeKeys(fields, dst) {
 		return
 	}
-	// Raw mode: recurse into the actual body structure.
-	for name, value := range bm {
+	for name, value := range fields {
 		acc, ok := dst[name]
 		if !ok {
 			acc = newFieldAcc()
@@ -562,41 +690,65 @@ func walkBodyTopLevel(body any, dst map[string]*v2FieldAcc, maxDepth int) {
 	}
 }
 
-func classifyKind(v any) V2FieldKind {
-	switch v.(type) {
-	case nil:
+// classifyKind returns the JSON value kind by inspecting the leading
+// byte of the raw payload.
+func classifyKind(raw json.RawMessage) V2FieldKind {
+	trimmed := bytes.TrimSpace([]byte(raw))
+	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return V2FieldKindNull
-	case bool:
-		return V2FieldKindBool
-	case float64, int, int64, json.Number:
-		return V2FieldKindNumber
-	case string:
-		return V2FieldKindString
-	case []any:
-		return V2FieldKindArray
-	case map[string]any:
+	}
+	switch trimmed[0] {
+	case '{':
 		return V2FieldKindObject
+	case '[':
+		return V2FieldKindArray
+	case '"':
+		return V2FieldKindString
+	case 't', 'f':
+		return V2FieldKindBool
+	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return V2FieldKindNumber
 	}
 	return V2FieldKindUnknown
 }
 
-func sampleValue(fieldName string, v any) string {
+// sampleValue returns a single representative rendering for the
+// captured value. Secret-bearing field names are redacted. Strings
+// over 200 bytes are length-summarized to keep the snapshot
+// digestible.
+func sampleValue(fieldName string, raw json.RawMessage) string {
 	if shouldRedactBodySample(fieldName) {
 		return "<redacted>"
 	}
-	switch x := v.(type) {
-	case string:
-		if len(x) > 200 {
-			return fmt.Sprintf("<string len=%d>", len(x))
+	kind := classifyKind(raw)
+	switch kind {
+	case V2FieldKindString:
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return ""
 		}
-		return x
-	case []any:
-		return fmt.Sprintf("<array len=%d>", len(x))
-	case map[string]any:
-		return fmt.Sprintf("<object keys=%d>", len(x))
-	default:
-		return fmt.Sprintf("%v", v)
+		if len(s) > 200 {
+			return fmt.Sprintf("<string len=%d>", len(s))
+		}
+		return s
+	case V2FieldKindArray:
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return ""
+		}
+		return fmt.Sprintf("<array len=%d>", len(items))
+	case V2FieldKindObject:
+		var sub map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &sub); err != nil {
+			return ""
+		}
+		return fmt.Sprintf("<object keys=%d>", len(sub))
+	case V2FieldKindNull:
+		return "null"
+	case V2FieldKindBool, V2FieldKindNumber, V2FieldKindUnknown:
+		return string(bytes.TrimSpace([]byte(raw)))
 	}
+	return string(bytes.TrimSpace([]byte(raw)))
 }
 
 func shouldRedactBodySample(fieldName string) bool {

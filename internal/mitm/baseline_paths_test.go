@@ -60,15 +60,3 @@ func TestFindBaselineReferencePrefersV2(t *testing.T) {
 		t.Fatalf("FindBaselineReference()=%q want %q", got, v2)
 	}
 }
-
-func TestBaselineSourceLabelRedactsHomePath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", dir)
-	path := filepath.Join(dir, "clyde", "mitm-baselines", "claude-code", "reference-v2.toml")
-
-	got := BaselineSourceLabel(path)
-	want := filepath.Join("XDG_STATE_HOME", "clyde", "mitm-baselines", "claude-code", "reference-v2.toml")
-	if got != want {
-		t.Fatalf("BaselineSourceLabel()=%q want %q", got, want)
-	}
-}

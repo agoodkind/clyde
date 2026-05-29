@@ -19,7 +19,8 @@ type baselineRefresher struct {
 }
 
 var defaultBaselineRefresher = &baselineRefresher{
-	timers: map[string]*time.Timer{},
+	timers: map[string]*time.Timer{}, mu: sync.
+		Mutex{},
 }
 
 func queueBaselineRefresh(ctx context.Context, cfg config.MITMConfig, provider string, log *slog.Logger) {
@@ -51,7 +52,7 @@ func queueBaselineRefresh(ctx context.Context, cfg config.MITMConfig, provider s
 			ExcludeUA:       entry.ExcludeUA,
 			RequireBodyKeys: entry.RequireBodyKeys,
 			ForbidBodyKeys:  entry.ForbidBodyKeys,
-			Log:             log.With("upstream", upstream, "provider", provider),
+			Log:             log.With("upstream", upstream, "provider", provider), BaselineRoot: "",
 		}
 		defaultBaselineRefresher.schedule(ctx, opts)
 	}
@@ -77,14 +78,13 @@ func (r *baselineRefresher) schedule(ctx context.Context, opts BaselineRefreshOp
 	r.timers[key] = time.AfterFunc(baselineRefreshDebounce, func() {
 		outcome, err := RefreshBaseline(scheduledCtx, opts)
 		if err != nil {
-			opts.Log.WarnContext(scheduledCtx, "mitm.baseline.refresh_failed", "err", err)
+			opts.Log.WarnContext(scheduledCtx, "mitm.baseline.refresh_failed", "concern", "providers.mitm.wire", "err", err)
 		} else if outcome.Updated {
 			level := slog.LevelInfo
 			if outcome.Diverged {
 				level = slog.LevelWarn
 			}
-			opts.Log.LogAttrs(scheduledCtx, level, "mitm.baseline.refreshed",
-				slog.String("schema_version", outcome.SchemaVersion),
+			opts.Log.LogAttrs(scheduledCtx, level, "mitm.baseline.refreshed", slog.String("concern", "providers.mitm.wire"), slog.String("schema_version", outcome.SchemaVersion),
 				slog.String("baseline_path", outcome.BaselinePath),
 				slog.Bool("created", outcome.Created),
 				slog.Bool("diverged", outcome.Diverged),

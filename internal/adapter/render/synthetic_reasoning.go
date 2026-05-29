@@ -47,7 +47,7 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	r.reasoningBodyEmitted = true
 	delta := adapteropenai.StreamDelta{
 		Content:          contentOut,
-		ReasoningContent: decorated,
+		ReasoningContent: decorated, Role: "", Reasoning: "", ToolCalls: nil, Refusal: "",
 	}
 	if !r.seenRole {
 		delta.Role = "assistant"
@@ -60,7 +60,7 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
 	r.reasoningOpen = true
 	kind := r.activeSyntheticReasoningKind()
-	delta := adapteropenai.StreamDelta{Content: SyntheticContentOpenWithRef(kind, r.lastReasoningItemID, r.backendOrigin())}
+	delta := adapteropenai.StreamDelta{Content: SyntheticContentOpenWithRef(kind, r.lastReasoningItemID, r.backendOrigin()), Role: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""}
 	if !r.seenRole {
 		delta.Role = "assistant"
 		r.seenRole = true
@@ -72,11 +72,20 @@ func (r *EventRenderer) renderReasoningOpen() *adapteropenai.StreamChunk {
 // backendOrigin maps the renderer's backend string to the typed origin
 // stamped on the synthetic-thinking open marker. Unknown backends emit
 // OriginUnknown so the open marker stays attribute-less.
+// rendererBackend enumerates the renderer-side backend names used to
+// stamp the synthetic-thinking open marker's data-origin attribute.
+type rendererBackend string
+
+const (
+	rendererBackendAnthropic rendererBackend = "anthropic"
+	rendererBackendCodex     rendererBackend = "codex"
+)
+
 func (r *EventRenderer) backendOrigin() SyntheticOrigin {
-	switch r.backend {
-	case "anthropic":
+	switch rendererBackend(r.backend) {
+	case rendererBackendAnthropic:
 		return OriginAnthropic
-	case "codex":
+	case rendererBackendCodex:
 		return OriginCodex
 	default:
 		return OriginUnknown
@@ -132,9 +141,18 @@ func (r *EventRenderer) decorateReasoningFromDelta(ev ReasoningDelta) string {
 	return prefix + ev.Text
 }
 
+// thinkingPlaceholderText enumerates the placeholder strings the
+// renderer treats as empty reasoning body markers.
+type thinkingPlaceholderText string
+
+const (
+	thinkingPlaceholderASCII   thinkingPlaceholderText = "thinking..."
+	thinkingPlaceholderUnicode thinkingPlaceholderText = "thinking…"
+)
+
 func isThinkingPlaceholder(text string) bool {
-	switch strings.ToLower(strings.TrimSpace(text)) {
-	case "thinking...", "thinking…":
+	switch thinkingPlaceholderText(strings.ToLower(strings.TrimSpace(text))) {
+	case thinkingPlaceholderASCII, thinkingPlaceholderUnicode:
 		return true
 	default:
 		return false
@@ -171,6 +189,6 @@ func (r *EventRenderer) renderReasoningClose() *adapteropenai.StreamChunk {
 	r.lastReasoningRedactedData = ""
 	// Reset the kind so a later reasoning span starts fresh.
 	r.lastReasoningKind = ""
-	ch := r.baseChunk(adapteropenai.StreamDelta{Content: SyntheticContentCloseWithAttrs(kind, encrypted, signature)})
+	ch := r.baseChunk(adapteropenai.StreamDelta{Content: SyntheticContentCloseWithAttrs(kind, encrypted, signature), Role: "", Reasoning: "", ReasoningContent: "", ToolCalls: nil, Refusal: ""})
 	return &ch
 }

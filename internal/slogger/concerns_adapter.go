@@ -15,7 +15,6 @@ const (
 	ConcernAdapterProviderCodex           = "adapter.providers.codex.request"
 	ConcernAdapterProviderCodexWS         = "adapter.providers.codex.websocket"
 	ConcernAdapterProviderCodexSess       = "adapter.providers.codex.session-reuse"
-	ConcernAdapterProviderCodexResp       = "adapter.providers.codex.responses"
 	ConcernAdapterProviderCodexErr        = "adapter.providers.codex.errors"
 	ConcernAdapterProviderAnthReq         = "adapter.providers.anthropic.request"
 	ConcernAdapterProviderAnthSSE         = "adapter.providers.anthropic.sse"
@@ -25,15 +24,14 @@ const (
 	ConcernAdapterProviderCodexWire       = "adapter.providers.codex.wire_capture"
 	ConcernAdapterProviderPassthroughReq  = "adapter.providers.passthrough_override.request"
 	ConcernAdapterProviderPassthroughCoer = "adapter.providers.passthrough_override.coercion"
-	ConcernAdapterProviderPassthroughErr  = "adapter.providers.passthrough_override.errors"
-	// ConcernAdapterReasoningConfig is the slog concern for startup
-	// notices emitted when the per-provider reasoning config blocks
-	// fold legacy [adapter.synthetic_content] values forward.
-	ConcernAdapterReasoningConfig = "adapter.reasoning.config"
 )
 
 func init() {
-	registerConcernPaths(map[string]string{
+	registerConcernPaths(adapterConcernPaths())
+}
+
+func adapterConcernPaths() map[string]string {
+	return map[string]string{
 		ConcernAdapterHTTPIngress:             "adapter/http/ingress.jsonl",
 		ConcernAdapterHTTPEgress:              "adapter/http/egress.jsonl",
 		ConcernAdapterHTTPErrors:              "adapter/http/errors.jsonl",
@@ -47,7 +45,6 @@ func init() {
 		ConcernAdapterProviderCodex:           "adapter/providers/codex/request.jsonl",
 		ConcernAdapterProviderCodexWS:         "adapter/providers/codex/websocket.jsonl",
 		ConcernAdapterProviderCodexSess:       "adapter/providers/codex/session-reuse.jsonl",
-		ConcernAdapterProviderCodexResp:       "adapter/providers/codex/responses.jsonl",
 		ConcernAdapterProviderCodexErr:        "adapter/providers/codex/errors.jsonl",
 		ConcernAdapterProviderAnthReq:         "adapter/providers/anthropic/request.jsonl",
 		ConcernAdapterProviderAnthSSE:         "adapter/providers/anthropic/sse.jsonl",
@@ -57,38 +54,5 @@ func init() {
 		ConcernAdapterProviderCodexWire:       "adapter/providers/codex/wire_capture.jsonl",
 		ConcernAdapterProviderPassthroughReq:  "adapter/providers/passthrough_override/request.jsonl",
 		ConcernAdapterProviderPassthroughCoer: "adapter/providers/passthrough_override/coercion.jsonl",
-		ConcernAdapterProviderPassthroughErr:  "adapter/providers/passthrough_override/errors.jsonl",
-		ConcernAdapterReasoningConfig:         "adapter/reasoning/config.jsonl",
-	})
-
-	registerEventConcernRules([]eventConcernRule{
-		{"adapter.models.listed", ConcernAdapterModelsCatalog},
-		{"logging.request.leg", ConcernAdapterChatDispatch},
-		{"logging.request.incomplete", ConcernAdapterChatDispatch},
-		{"adapter.request.panic", ConcernAdapterHTTPErrors},
-		{"adapter.chat.panic", ConcernAdapterHTTPErrors},
-		{"adapter.chat.parse_failed", ConcernAdapterHTTPErrors},
-		{"adapter.chat.validation_failed", ConcernAdapterChatPreflight},
-		{"adapter.preflight.", ConcernAdapterChatPreflight},
-		{"adapter.model.", ConcernAdapterModelsResolve},
-		{"adapter.resolver.", ConcernAdapterModelsResolve},
-		{"adapter.cursor.", ConcernAdapterModelsCursor},
-		{"adapter.backend.", ConcernAdapterChatDispatch},
-		{"adapter.chat.received", ConcernAdapterChatDispatch},
-		{"adapter.chat.completed", ConcernAdapterChatRender},
-		{"adapter.chat.stream_", ConcernAdapterChatRender},
-		{"adapter.cache.", ConcernAdapterChatRender},
-		{"adapter.codex.provider_error", ConcernAdapterProviderCodexErr},
-		{"adapter.codex.transport.", ConcernAdapterProviderCodexWS},
-		{"adapter.codex.session", ConcernAdapterProviderCodexSess},
-		{"adapter.codex.response.", ConcernAdapterProviderCodexResp},
-		{"adapter.codex.", ConcernAdapterProviderCodex},
-		{"adapter.anthropic.oauth", ConcernAdapterProviderAnthOAuth},
-		{"adapter.anthropic.provider_error", ConcernAdapterProviderAnthErr},
-		{"adapter.anthropic.error", ConcernAdapterProviderAnthErr},
-		{"adapter.anthropic.sse", ConcernAdapterProviderAnthSSE},
-		{"adapter.anthropic.", ConcernAdapterProviderAnthReq},
-		{"adapter.passthrough_override.", ConcernAdapterProviderPassthroughReq},
-		{"adapter.notice.", ConcernAdapterNotice},
-	})
+	}
 }

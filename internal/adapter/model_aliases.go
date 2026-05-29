@@ -3,30 +3,46 @@ package adapter
 import adaptermodel "goodkind.io/clyde/internal/adapter/model"
 
 const (
-	BackendClaude              = adaptermodel.BackendClaude
+	// BackendClaude is part of Clyde's typed adapter surface.
+	BackendClaude = adaptermodel.BackendClaude
+	// BackendPassthroughOverride is part of Clyde's typed adapter surface.
 	BackendPassthroughOverride = adaptermodel.BackendPassthroughOverride
-	BackendAnthropic           = adaptermodel.BackendAnthropic
-	BackendCodex               = adaptermodel.BackendCodex
+	// BackendAnthropic is part of Clyde's typed adapter surface.
+	BackendAnthropic = adaptermodel.BackendAnthropic
+	// BackendCodex is part of Clyde's typed adapter surface.
+	BackendCodex = adaptermodel.BackendCodex
 
-	EffortLow    = adaptermodel.EffortLow
+	// EffortLow is part of Clyde's typed adapter surface.
+	EffortLow = adaptermodel.EffortLow
+	// EffortMedium is part of Clyde's typed adapter surface.
 	EffortMedium = adaptermodel.EffortMedium
-	EffortHigh   = adaptermodel.EffortHigh
-	EffortXHigh  = adaptermodel.EffortXHigh
-	EffortMax    = adaptermodel.EffortMax
+	// EffortHigh is part of Clyde's typed adapter surface.
+	EffortHigh = adaptermodel.EffortHigh
+	// EffortXHigh is part of Clyde's typed adapter surface.
+	EffortXHigh = adaptermodel.EffortXHigh
+	// EffortMax is part of Clyde's typed adapter surface.
+	EffortMax = adaptermodel.EffortMax
 
-	ThinkingDefault  = adaptermodel.ThinkingDefault
+	// ThinkingDefault is part of Clyde's typed adapter surface.
+	ThinkingDefault = adaptermodel.ThinkingDefault
+	// ThinkingAdaptive is part of Clyde's typed adapter surface.
 	ThinkingAdaptive = adaptermodel.ThinkingAdaptive
-	ThinkingEnabled  = adaptermodel.ThinkingEnabled
+	// ThinkingEnabled is part of Clyde's typed adapter surface.
+	ThinkingEnabled = adaptermodel.ThinkingEnabled
+	// ThinkingDisabled is part of Clyde's typed adapter surface.
 	ThinkingDisabled = adaptermodel.ThinkingDisabled
 )
 
 type (
-	ResolvedModel = adaptermodel.ResolvedModel
-	Registry      = adaptermodel.Registry
+	// Registry is part of Clyde's typed adapter surface.
+	Registry = adaptermodel.Registry
 )
 
 var (
-	NewRegistry       = adaptermodel.NewRegistry
-	ClaudeEffortFlag  = adaptermodel.ClaudeEffortFlag
+	// NewRegistry is part of Clyde's typed adapter surface.
+	NewRegistry = adaptermodel.NewRegistry
+	// ClaudeEffortFlag is part of Clyde's typed adapter surface.
+	ClaudeEffortFlag = adaptermodel.ClaudeEffortFlag
+	// ResolveFromConfig is part of Clyde's typed adapter surface.
 	ResolveFromConfig = adaptermodel.ResolveFromConfig
 )

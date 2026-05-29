@@ -95,7 +95,7 @@ var knownChatRequestKeys = map[string]bool{
 // RequestDiscovery describing every key that appeared. It does not retain
 // any payload values. It is safe to log the result.
 func DiscoverRequest(body []byte) RequestDiscovery {
-	disc := RequestDiscovery{BodyBytes: len(body)}
+	disc := RequestDiscovery{BodyBytes: len(body), TopLevelKeys: nil, UnknownKeys: nil, MetadataKeys: nil, MetadataIsObject: false, MessageFieldKeys: nil, InputItemKeys: nil, InputItemRoles: nil, InputItemTypes: nil, InputContentTypes: nil, ToolCount: 0, ToolKinds: nil, ToolFieldKeys: nil, ToolFunctionKeys: nil, ToolFunctionTopKeys: nil, ToolCustomTopKeys: nil, ToolCustomFormatKeys: nil, ToolFunctionNames: nil, ToolCustomNames: nil, MCPToolNames: nil, HasMCPLikeFields: false, MCPLikeFieldNames: nil}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
 		return disc
@@ -148,7 +148,7 @@ type inputInspect struct {
 // `function_call` / `function_call_output`. Content elements have their own
 // `type` (input_text, output_text, image, etc).
 func inspectInput(raw json.RawMessage) inputInspect {
-	out := inputInspect{}
+	out := inputInspect{itemKeys: nil, roles: nil, types: nil, contentTypes: nil}
 	var arr []json.RawMessage
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return out
@@ -237,7 +237,7 @@ func newToolInspectAccumulator() toolInspectAccumulator {
 }
 
 func inspectTools(raw json.RawMessage) toolsInspect {
-	out := toolsInspect{}
+	out := toolsInspect{count: 0, kinds: nil, functionTopKeys: nil, customTopKeys: nil, customFormatKeys: nil, functionNames: nil, customNames: nil, mcpNames: nil}
 	var arr []json.RawMessage
 	if err := json.Unmarshal(raw, &arr); err != nil {
 		return out
@@ -273,11 +273,14 @@ func (a *toolInspectAccumulator) foldElement(elem json.RawMessage) {
 	if probe.Type != "" {
 		a.kinds[probe.Type] = true
 	}
-	switch probe.Type {
-	case "function":
+	switch openAIToolWireType(probe.Type) {
+	case openAIToolWireTypeFunction:
 		a.foldFunctionTool(top, probe.Name)
-	case "custom":
+	case openAIToolWireTypeCustom:
 		a.foldCustomTool(top, probe.Name, probe.Format)
+	case openAIToolWireTypeEmpty:
+		// Empty type means the caller did not supply one; defaults
+		// have already been applied by the kinds tally above.
 	}
 }
 

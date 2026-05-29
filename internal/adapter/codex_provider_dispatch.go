@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/gklog/correlation"
@@ -106,21 +108,21 @@ func (s *Server) dispatchCodexProvider(
 	w http.ResponseWriter,
 	r *http.Request,
 	req ChatRequest,
-	model ResolvedModel,
 	reqID string,
 	ingressCtx ingresscontract.IngressContext,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
-	started := adapterClock.Now()
+	started := clock.Now()
 	_ = ingressCtx // resolvedReq.Cursor carries the same value; keep parameter for future hooks.
 
-	s.emitRequestStarted(r.Context(), model, "direct", reqID, model.Alias, req.Stream)
+	alias := resolvedRequestAlias(&resolvedReq)
+	s.emitRequestStarted(r.Context(), &resolvedReq, "direct", reqID, alias, req.Stream)
 
 	if req.Stream {
-		s.dispatchCodexProviderStream(r.Context(), w, r, req, model, reqID, started, resolvedReq)
+		s.dispatchCodexProviderStream(r.Context(), w, r, req, reqID, started, resolvedReq)
 		return
 	}
-	s.dispatchCodexProviderCollect(r.Context(), w, r, req, model, reqID, started, resolvedReq)
+	s.dispatchCodexProviderCollect(r.Context(), w, r, req, reqID, started, resolvedReq)
 }
 
 func (s *Server) dispatchCodexProviderStream(
@@ -128,18 +130,18 @@ func (s *Server) dispatchCodexProviderStream(
 	w http.ResponseWriter,
 	r *http.Request,
 	req ChatRequest,
-	model ResolvedModel,
 	reqID string,
 	started time.Time,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
-	writer, err := newProviderStreamWriter(ctx, s, w, reqID, model.Alias, "codex")
+	alias := resolvedRequestAlias(&resolvedReq)
+	writer, err := newProviderStreamWriter(ctx, s, w, reqID, alias, "codex")
 	if err != nil {
 		s.respondAdapterError(w, r, adapterErrInternal(err.Error(), err))
 		return
 	}
 
-	s.emitRequestStreamOpened(r.Context(), model, "direct", reqID, model.Alias, true)
+	s.emitRequestStreamOpened(ctx, &resolvedReq, "direct", reqID, alias, true)
 
 	// Register the overall Codex egress call and inject the per-attempt
 	// hook before dispatching to the provider.
@@ -148,7 +150,7 @@ func (s *Server) dispatchCodexProviderStream(
 
 	result, runErr := s.codexProvider.Execute(egressCtx, resolvedReq, writer)
 	if runErr != nil {
-		s.handleCodexProviderStreamError(ctx, w, r, writer, runErr, model, reqID, started)
+		s.handleCodexProviderStreamError(ctx, w, r, writer, runErr, resolvedReq, reqID, started)
 		return
 	}
 	corr := clydeingress.WithUpstreamResponseID(correlation.FromContext(ctx), result.UpstreamResponseID)
@@ -157,33 +159,32 @@ func (s *Server) dispatchCodexProviderStream(
 	finishReason := normalizedProviderFinishReason(result)
 	var notices []adapterruntime.UsageNotice
 	if finishReason == defaultProviderFinishReason {
-		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
-	if model.Context > 0 {
-		usage.MaxTokens = model.Context
+	if resolvedReq.ContextBudget.InputTokens > 0 {
+		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
 	}
 	result.Usage = usage
 	if err := writer.finalizeStream(ctx, result, req.StreamOptions != nil && req.StreamOptions.IncludeUsage); err != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_error",
-			slog.String("backend", "codex"),
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_finalize_error", slog.String("concern", "adapter.chat.render"), slog.String("backend", "codex"),
 			slog.String("request_id", reqID),
-			slog.String("alias", model.Alias),
+			slog.String("alias", alias),
 			slog.Any("err", err),
 		)
 		return
 	}
 
-	completedAttrs := codexCompletedAttrs(reqID, model.Alias, usage, result, finishReason, time.Since(started).Milliseconds(), true)
+	completedAttrs := codexCompletedAttrs(reqID, alias, usage, result, finishReason, clock.Since(started).Milliseconds(), true)
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:                      adapterruntime.RequestStageCompleted,
 		Provider:                   "codex_direct",
-		Backend:                    model.Backend,
+		Backend:                    resolvedReq.Provider.String(),
 		RequestID:                  reqID,
-		Alias:                      model.Alias,
-		ModelID:                    model.Alias,
+		Alias:                      alias,
+		ModelID:                    alias,
 		Stream:                     true,
 		FinishReason:               finishReason,
 		TokensIn:                   usage.PromptTokens,
@@ -194,8 +195,8 @@ func (s *Server) dispatchCodexProviderStream(
 		ToolCallCount:              result.ToolCallCount,
 		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
-		DurationMs:                 time.Since(started).Milliseconds(),
-		Correlation:                corr,
+		DurationMs:                 clock.Since(started).Milliseconds(),
+		Correlation:                corr, Err: "",
 	})
 }
 
@@ -205,21 +206,21 @@ func (s *Server) handleCodexProviderStreamError(
 	r *http.Request,
 	writer *providerStreamWriter,
 	runErr error,
-	model ResolvedModel,
+	resolvedReq adapterresolver.ResolvedRequest,
 	reqID string,
 	started time.Time,
 ) {
+	alias := resolvedRequestAlias(&resolvedReq)
 	aerr := codexProviderAdapterError(runErr)
-	aerr.Backend = model.Backend
-	aerr.ModelAlias = model.Alias
-	aerr.ResolvedModel = model.ClaudeModel
+	aerr.Backend = resolvedReq.Provider.String()
+	aerr.ModelAlias = alias
+	aerr.ResolvedModelName = resolvedReq.Model
 	aerr.Cause = runErr
-	s.logCodexProviderError(ctx, reqID, model.Alias, aerr, writer.headersWritten)
-	s.logCodexProviderTerminalFailure(ctx, model, reqID, started, runErr, true)
+	s.logCodexProviderError(ctx, reqID, alias, aerr, writer.headersWritten)
+	s.logCodexProviderTerminalFailure(ctx, resolvedReq, reqID, started, runErr, true)
 	if writer.headersWritten {
 		if err := writer.writeStreamError(ctx, aerr); err != nil {
-			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
-				slog.String("backend", "codex"),
+			s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("backend", "codex"),
 				slog.String("request_id", reqID),
 				slog.Any("err", err),
 			)
@@ -234,11 +235,11 @@ func (s *Server) dispatchCodexProviderCollect(
 	w http.ResponseWriter,
 	r *http.Request,
 	_ ChatRequest,
-	model ResolvedModel,
 	reqID string,
 	started time.Time,
 	resolvedReq adapterresolver.ResolvedRequest,
 ) {
+	alias := resolvedRequestAlias(&resolvedReq)
 	collector := newProviderCollectorWriter()
 	// Register the overall Codex egress call and inject the per-attempt
 	// hook before dispatching to the provider.
@@ -248,12 +249,12 @@ func (s *Server) dispatchCodexProviderCollect(
 	result, runErr := s.codexProvider.Execute(egressCtx, resolvedReq, collector)
 	if runErr != nil {
 		aerr := codexProviderAdapterError(runErr)
-		aerr.Backend = model.Backend
-		aerr.ModelAlias = model.Alias
-		aerr.ResolvedModel = model.ClaudeModel
+		aerr.Backend = resolvedReq.Provider.String()
+		aerr.ModelAlias = alias
+		aerr.ResolvedModelName = resolvedReq.Model
 		aerr.Cause = runErr
-		s.logCodexProviderError(ctx, reqID, model.Alias, aerr, false)
-		s.logCodexProviderTerminalFailure(ctx, model, reqID, started, runErr, false)
+		s.logCodexProviderError(ctx, reqID, alias, aerr, false)
+		s.logCodexProviderTerminalFailure(ctx, resolvedReq, reqID, started, runErr, false)
 		s.respondAdapterError(w, r, aerr)
 		return
 	}
@@ -262,7 +263,7 @@ func (s *Server) dispatchCodexProviderCollect(
 	finishReason := normalizedProviderFinishReason(result)
 	var notices []adapterruntime.UsageNotice
 	if finishReason == defaultProviderFinishReason {
-		notices = s.evaluateUsageNotices(result.UsageNoticeWindows)
+		notices = s.evaluateUsageNotices(ctx, result.UsageNoticeWindows)
 	}
 	result.UsageNotices = notices
 	runResult := adaptercodex.RunResult{
@@ -273,28 +274,36 @@ func (s *Server) dispatchCodexProviderCollect(
 		DerivedCacheCreationTokens: result.DerivedCacheCreationTokens,
 		ToolCallCount:              result.ToolCallCount,
 		ToolCallNames:              result.ToolCallNames,
-		HasSubagentToolCall:        result.HasSubagentToolCall,
+		HasSubagentToolCall:        result.HasSubagentToolCall, UsageTelemetry: adaptercodex.
+						UsageTelemetry{UsagePresent: false, InputTokens: 0, OutputTokens: 0, TotalTokens: 0, InputTokensDetailsPresent: false, CachedTokens: 0, OutputTokensDetailsPresent: false, ReasoningOutputTokens: 0},
+
+		ResponseID: "", OutputItems: nil,
 	}
 	mergedEvents := adapterruntime.EventsWithInjectedUsageNotices(ctx, collector.events, notices)
-	merged := adaptercodex.MergeEvents(reqID, model.Alias, systemFingerprint, mergedEvents, runResult)
+	merged := adaptercodex.MergeEvents(reqID, alias, systemFingerprint, mergedEvents, runResult)
 	usage := result.Usage
-	if model.Context > 0 {
-		usage.MaxTokens = model.Context
+	if resolvedReq.ContextBudget.InputTokens > 0 {
+		usage.MaxTokens = resolvedReq.ContextBudget.InputTokens
 	}
 	if merged.Usage != nil {
 		merged.Usage.MaxTokens = usage.MaxTokens
 	}
-	writeJSON(w, http.StatusOK, merged)
-	completedAttrs := codexCompletedAttrs(reqID, model.Alias, usage, result, finishReason, time.Since(started).Milliseconds(), false)
+	mergedBody, err := json.Marshal(merged)
+	if err != nil {
+		s.log.WarnContext(ctx, "adapter.codex.collect_marshal_failed", "concern", "adapter.providers.codex.request", "err", err)
+		return
+	}
+	writeJSON(w, mergedBody)
+	completedAttrs := codexCompletedAttrs(reqID, alias, usage, result, finishReason, clock.Since(started).Milliseconds(), false)
 	completedAttrs = append(completedAttrs, corr.Attrs()...)
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", completedAttrs...)
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.chat.completed", append([]slog.Attr{slog.String("concern", "adapter.chat.render")}, completedAttrs...)...)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:                      adapterruntime.RequestStageCompleted,
 		Provider:                   "codex_direct",
-		Backend:                    model.Backend,
+		Backend:                    resolvedReq.Provider.String(),
 		RequestID:                  reqID,
-		Alias:                      model.Alias,
-		ModelID:                    model.Alias,
+		Alias:                      alias,
+		ModelID:                    alias,
 		Stream:                     false,
 		FinishReason:               finishReason,
 		TokensIn:                   usage.PromptTokens,
@@ -305,14 +314,13 @@ func (s *Server) dispatchCodexProviderCollect(
 		ToolCallCount:              result.ToolCallCount,
 		ToolCallNames:              result.ToolCallNames,
 		HasSubagentToolCall:        result.HasSubagentToolCall,
-		DurationMs:                 time.Since(started).Milliseconds(),
-		Correlation:                corr,
+		DurationMs:                 clock.Since(started).Milliseconds(),
+		Correlation:                corr, Err: "",
 	})
 }
 
 func (s *Server) logCodexProviderError(ctx context.Context, reqID, alias string, aerr *adapterError, streamHeadersWritten bool) {
-	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped",
-		slog.String("request_id", reqID),
+	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.codex.provider_error_mapped", slog.String("concern", "adapter.providers.codex.errors"), slog.String("request_id", reqID),
 		slog.String("alias", alias),
 		slog.Int("status", aerr.HTTPStatus),
 		slog.String("error_class", string(aerr.Class)),
@@ -324,32 +332,36 @@ func (s *Server) logCodexProviderError(ctx context.Context, reqID, alias string,
 
 func (s *Server) logCodexProviderTerminalFailure(
 	ctx context.Context,
-	model ResolvedModel,
+	resolvedReq adapterresolver.ResolvedRequest,
 	reqID string,
 	started time.Time,
 	runErr error,
 	stream bool,
 ) {
+	alias := resolvedRequestAlias(&resolvedReq)
 	adapterruntime.LogTerminal(s.log, ctx, s.deps.RequestEvents, adapterruntime.RequestEvent{
 		Stage:      adapterruntime.RequestStageFailed,
 		Provider:   "codex_direct",
-		Backend:    model.Backend,
+		Backend:    resolvedReq.Provider.String(),
 		RequestID:  reqID,
-		Alias:      model.Alias,
-		ModelID:    model.Alias,
+		Alias:      alias,
+		ModelID:    alias,
 		Stream:     stream,
-		DurationMs: time.Since(started).Milliseconds(),
-		Err:        runErr.Error(),
+		DurationMs: clock.Since(started).Milliseconds(),
+		Err:        runErr.Error(), FinishReason:
+
+		// codexProviderAdapterError maps a codex provider error to the
+		// Cursor-safe adapterError shape. Codex must never surface
+		// HTTP 5xx + server_error to Cursor; all non-2xx returns flow through
+		// mapUpstreamForFamily. Schema violations are detected by message
+		// pattern (missing_required_parameter / [ObjectParam] / unknown
+		// parameter) so the operator sees a meaningful diagnostic instead of
+		// the generic upstream_failed.
+		"", TokensIn: 0, TokensOut: 0, CacheReadTokens: 0, CacheCreationTokens: 0, DerivedCacheCreationTokens: 0, ToolCallCount: 0, ToolCallNames: nil, HasSubagentToolCall: false, Correlation: correlation.
+				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
 }
 
-// codexProviderAdapterError maps a codex provider error to the
-// Cursor-safe adapterError shape. Codex must never surface
-// HTTP 5xx + server_error to Cursor; all non-2xx returns flow through
-// mapUpstreamForFamily. Schema violations are detected by message
-// pattern (missing_required_parameter / [ObjectParam] / unknown
-// parameter) so the operator sees a meaningful diagnostic instead of
-// the generic upstream_failed.
 func codexProviderAdapterError(err error) *adapterError {
 	var contextErr *adaptercodex.ContextWindowError
 	if errors.As(err, &contextErr) {

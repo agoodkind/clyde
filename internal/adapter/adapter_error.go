@@ -41,6 +41,7 @@ const (
 	adapterErrorUpstreamRateLimited     adapterErrorClass = "upstream_rate_limited"
 	adapterErrorUpstreamSchemaViolation adapterErrorClass = "upstream_schema_violation"
 	adapterErrorUpstreamNetworkError    adapterErrorClass = "upstream_network_error"
+	adapterErrorBaselineMissing         adapterErrorClass = "baseline_missing"
 	adapterErrorTimeout                 adapterErrorClass = "timeout"
 	adapterErrorCanceled                adapterErrorClass = "canceled"
 	adapterErrorInternal                adapterErrorClass = "internal"
@@ -56,18 +57,18 @@ const (
 // provider envelope wire string such as "authentication_error" or
 // "api_error".
 type adapterError struct {
-	Class          adapterErrorClass
-	HTTPStatus     int
-	Message        string
-	Code           string
-	Param          string
-	Provider       string
-	Backend        string
-	ModelAlias     string
-	ResolvedModel  string
-	UpstreamStatus int
-	Cause          error
-	SafeForClient  bool
+	Class             adapterErrorClass
+	HTTPStatus        int
+	Message           string
+	Code              string
+	Param             string
+	Provider          string
+	Backend           string
+	ModelAlias        string
+	ResolvedModelName string
+	UpstreamStatus    int
+	Cause             error
+	SafeForClient     bool
 }
 
 func (e *adapterError) Error() string {
@@ -92,18 +93,18 @@ func (e *adapterError) Unwrap() error {
 
 func newAdapterError(class adapterErrorClass, message string) *adapterError {
 	e := &adapterError{
-		Class:          class,
-		HTTPStatus:     0,
-		Message:        strings.TrimSpace(message),
-		Code:           "",
-		Param:          "",
-		Provider:       "",
-		Backend:        "",
-		ModelAlias:     "",
-		ResolvedModel:  "",
-		UpstreamStatus: 0,
-		Cause:          nil,
-		SafeForClient:  true,
+		Class:             class,
+		HTTPStatus:        0,
+		Message:           strings.TrimSpace(message),
+		Code:              "",
+		Param:             "",
+		Provider:          "",
+		Backend:           "",
+		ModelAlias:        "",
+		ResolvedModelName: "",
+		UpstreamStatus:    0,
+		Cause:             nil,
+		SafeForClient:     true,
 	}
 	e.applyDefaults()
 	return e
@@ -139,6 +140,18 @@ func adapterErrUpstreamFailed(provider, message string, cause error) *adapterErr
 	return e
 }
 
+// adapterErrBaselineMissing reports that a provider's daemon-owned MITM
+// wire baseline is absent or invalid, so the adapter cannot build a
+// correctly-shaped outbound request. It maps to HTTP 503 with an
+// operator-actionable message rather than sending a wrong-shaped
+// request or panicking.
+func adapterErrBaselineMissing(provider, message string, cause error) *adapterError {
+	e := newAdapterError(adapterErrorBaselineMissing, message)
+	e.Provider = strings.TrimSpace(provider)
+	e.Cause = cause
+	return e
+}
+
 // adapterErrorDefaults holds the neutral default fields for a single
 // adapterErrorClass. The applyDefaults table below is the single
 // source of truth for class-to-HTTP-status and class-to-neutral-code
@@ -168,6 +181,7 @@ var adapterErrorDefaultsByClass = map[adapterErrorClass]adapterErrorDefaults{
 	adapterErrorUpstreamNetworkError:    {HTTPStatus: http.StatusBadRequest, Code: "upstream_network_error", Param: ""},
 	adapterErrorUpstreamUnavailable:     {HTTPStatus: http.StatusBadGateway, Code: "upstream_unavailable", Param: ""},
 	adapterErrorUpstreamFailed:          {HTTPStatus: http.StatusBadGateway, Code: "upstream_failed", Param: ""},
+	adapterErrorBaselineMissing:         {HTTPStatus: http.StatusServiceUnavailable, Code: "wire_baseline_unavailable", Param: ""},
 	adapterErrorTimeout:                 {HTTPStatus: http.StatusGatewayTimeout, Code: "timeout", Param: ""},
 	adapterErrorCanceled:                {HTTPStatus: 499, Code: "canceled", Param: ""},
 	adapterErrorInternal:                {HTTPStatus: http.StatusInternalServerError, Code: "internal_error", Param: ""},
@@ -269,7 +283,7 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		slog.String("err", aerr.Error()),
 	}
 	attrs = append(attrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", attrs...)
+	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", append([]slog.Attr{slog.String("concern", "adapter.http.errors")}, attrs...)...)
 	info := adapterErrorInfoForRequest(family, aerr, message, corr, r)
 	renderer, ok := s.lookupErrorRenderer(family)
 	if !ok {
@@ -277,8 +291,7 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		return
 	}
 	if writeErr := renderer.Render(w, aerr.HTTPStatus, info); writeErr != nil {
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.error_boundary.render_failed",
-			slog.String("route_family", string(family)),
+		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.error_boundary.render_failed", slog.String("concern", "adapter.http.errors"), slog.String("route_family", string(family)),
 			slog.Any("err", writeErr),
 		)
 	}
@@ -383,7 +396,7 @@ func errorDiagnosticsForRequest(
 		Provider:           aerr.Provider,
 		Backend:            aerr.Backend,
 		ModelAlias:         aerr.ModelAlias,
-		ResolvedModel:      aerr.ResolvedModel,
+		ResolvedModelName:  aerr.ResolvedModelName,
 		ErrorClass:         string(aerr.Class),
 		RouteFamily:        string(family),
 		Method:             method,
@@ -467,8 +480,7 @@ func (s *Server) lookupStreamErrorRenderer(family adapterRouteFamily) (errcontra
 // minimal-on-purpose JSON string body; callers add the warning log so
 // regressions in registration get noticed.
 func (s *Server) writeFallbackError(ctx context.Context, w http.ResponseWriter, family adapterRouteFamily, status int, info errcontract.ErrorInfo) {
-	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.error_boundary.no_renderer_for_family",
-		slog.String("route_family", string(family)),
+	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.error_boundary.no_renderer_for_family", slog.String("concern", "adapter.http.errors"), slog.String("route_family", string(family)),
 		slog.Int("status", status),
 		slog.String("error_type", info.Type),
 		slog.String("error_code", info.Code),
@@ -505,8 +517,7 @@ func (s *Server) respondAdapterStreamError(ctx context.Context, sse errcontract.
 		return fmt.Errorf("no stream error renderer registered for route family %q", adapterRouteOpenAI)
 	}
 	if writeErr := renderer.WriteStreamError(sse, info); writeErr != nil {
-		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed",
-			slog.String("openai_type", info.Type),
+		s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.chat.stream_error_write_failed", slog.String("concern", "adapter.chat.render"), slog.String("openai_type", info.Type),
 			slog.String("openai_code", info.Code),
 			slog.Any("err", writeErr),
 		)

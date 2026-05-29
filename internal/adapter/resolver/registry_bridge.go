@@ -1,6 +1,9 @@
 package resolver
 
 import (
+	"fmt"
+	"log/slog"
+
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 )
 
@@ -9,9 +12,9 @@ import (
 // between the resolver and the existing per-alias resolution logic.
 //
 // The adapter performs no IO. It calls model.Registry.Resolve and
-// projects the returned model.ResolvedModel into the resolver's typed
+// projects the returned model.ResolvedAlias into the resolver's typed
 // ResolvedModelView. Only the fields the resolver needs are copied;
-// everything else stays on the underlying ResolvedModel and is
+// everything else stays on the underlying ResolvedAlias and is
 // available via downstream code paths that still consume the existing
 // type.
 type ModelRegistryAdapter struct {
@@ -34,37 +37,31 @@ func (a *ModelRegistryAdapter) Resolve(alias, reqEffort string) (ResolvedModelVi
 	}
 	resolved, effort, err := a.inner.Resolve(alias, reqEffort)
 	if err != nil {
-		return ResolvedModelView{}, err
+		slog.Warn("adapter.resolver.bridge_resolve_failed", "concern", "adapter.models.resolve", "alias", alias, "err", err)
+		return ResolvedModelView{}, fmt.Errorf("resolve model alias %s: %w", alias, err)
 	}
-	provider := backendToProvider(resolved.Backend)
+	provider := resolved.Backend
 	parsedEffort, _ := ParseEffort(effort)
 	family := resolved.FamilySlug
 	if family == "" {
 		family = resolved.ClaudeModel
 	}
 	return ResolvedModelView{
-		Provider:        provider,
-		Family:          family,
-		Model:           resolved.ClaudeModel,
-		Effort:          parsedEffort,
-		Context:         resolved.Context,
-		MaxOutputTokens: resolved.MaxOutputTokens,
-		Thinking:        resolved.Thinking,
-		Instructions:    resolved.Instructions,
-		Efforts:         resolved.Efforts,
+		Provider:                provider,
+		Family:                  family,
+		Model:                   resolved.ClaudeModel,
+		Effort:                  parsedEffort,
+		Context:                 resolved.Context,
+		MaxOutputTokens:         resolved.MaxOutputTokens,
+		Thinking:                resolved.Thinking,
+		Instructions:            resolved.Instructions,
+		Efforts:                 resolved.Efforts,
+		Alias:                   resolved.Alias,
+		SupportsTools:           resolved.SupportsTools,
+		SupportsVision:          resolved.SupportsVision,
+		ObservedContext:         resolved.ObservedContext,
+		ThinkingModes:           resolved.ThinkingModes,
+		PassthroughOverrideName: resolved.PassthroughOverride,
+		OpenAICompatPassthrough: resolved.OpenAICompatPassthrough,
 	}, nil
-}
-
-// backendToProvider maps the existing model.Backend* constants to the
-// resolver's narrower ProviderID enum. Backends that the resolver does
-// not represent (claude, passthrough_override, fallback) map to ProviderUnknown so
-// the dispatcher can route them through their legacy paths.
-func backendToProvider(backend string) ProviderID {
-	switch backend {
-	case adaptermodel.BackendAnthropic:
-		return ProviderAnthropic
-	case adaptermodel.BackendCodex:
-		return ProviderCodex
-	}
-	return ProviderUnknown
 }

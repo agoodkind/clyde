@@ -7,6 +7,7 @@ import (
 	"goodkind.io/gklog/correlation"
 )
 
+// TransportTelemetry is part of Clyde's typed adapter surface.
 type TransportTelemetry struct {
 	RequestID                string
 	CursorRequestID          string
@@ -15,7 +16,6 @@ type TransportTelemetry struct {
 	UpstreamModel            string
 	Transport                string
 	ServiceTier              string
-	MaxCompletion            *int
 	PromptCacheKey           string
 	ClientMetadata           map[string]string
 	InputCount               int
@@ -33,7 +33,8 @@ type TransportTelemetry struct {
 	ContextWindowError       bool
 }
 
-type CodexUsageLogContext struct {
+// UsageLogContext is part of Clyde's typed adapter surface.
+type UsageLogContext struct {
 	RequestID          string
 	CursorRequestID    string
 	Correlation        correlation.Context
@@ -48,6 +49,7 @@ type CodexUsageLogContext struct {
 	WebsocketWarmup    bool
 }
 
+// LogTransportPrepared is part of Clyde's typed adapter surface.
 func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry TransportTelemetry) {
 	if log == nil {
 		log = slog.Default()
@@ -61,7 +63,6 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 		slog.String("model", telemetry.UpstreamModel),
 		slog.String("transport", telemetry.Transport),
 		slog.String("service_tier", telemetry.ServiceTier),
-		slog.Any("max_completion_tokens", telemetry.MaxCompletion),
 		slog.Bool("has_prompt_cache_key", telemetry.PromptCacheKey != ""),
 		slog.Bool("has_client_metadata", len(telemetry.ClientMetadata) > 0),
 		slog.Int("input_count", telemetry.InputCount),
@@ -79,10 +80,11 @@ func LogTransportPrepared(ctx context.Context, log *slog.Logger, telemetry Trans
 		slog.Bool("context_window_error", telemetry.ContextWindowError),
 	}
 	attrs = append(attrs, telemetry.Correlation.Attrs()...)
-	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.transport.prepared", attrs...)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.transport.prepared", append([]slog.Attr{slog.String("concern", "adapter.providers.codex.websocket")}, attrs...)...)
 }
 
-func LogUsageTelemetry(ctx context.Context, log *slog.Logger, usage CodexUsageTelemetry, meta CodexUsageLogContext) {
+// LogUsageTelemetry is part of Clyde's typed adapter surface.
+func LogUsageTelemetry(ctx context.Context, log *slog.Logger, usage UsageTelemetry, meta UsageLogContext) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -112,5 +114,5 @@ func LogUsageTelemetry(ctx context.Context, log *slog.Logger, usage CodexUsageTe
 		slog.Int("reasoning_output_tokens", usage.ReasoningOutputTokens),
 	}
 	attrs = append(attrs, meta.Correlation.Attrs()...)
-	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.usage.completed", attrs...)
+	log.LogAttrs(ctx, slog.LevelInfo, "adapter.codex.usage.completed", append([]slog.Attr{slog.String("concern", "adapter.providers.codex.request")}, attrs...)...)
 }

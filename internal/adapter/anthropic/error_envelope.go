@@ -45,6 +45,7 @@ var anthropicTypeByClass = map[string]string{
 	"upstream_network_error":    "api_error",
 	"upstream_unavailable":      "api_error",
 	"upstream_failed":           "api_error",
+	"baseline_missing":          "api_error",
 	"timeout":                   "api_error",
 	"canceled":                  "api_error",
 	"internal":                  "api_error",
@@ -106,8 +107,7 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 	if err != nil {
 		const fallback = `{"type":"error","error":{"type":"api_error","message":"failed to encode error envelope"}}`
 		writeErr := erroring.WriteJSONStatus(w, http.StatusInternalServerError, []byte(fallback))
-		log.Warn("adapter.anthropic_error_envelope.render_failed",
-			"event", "marshal_failed",
+		log.Warn("adapter.anthropic_error_envelope.render_failed", "concern", "adapter.providers.anthropic.errors", "event", "marshal_failed",
 			"err", err.Error(),
 		)
 		if writeErr != nil {
@@ -116,8 +116,7 @@ func (ErrorRenderer) Render(w http.ResponseWriter, code int, info errcontract.Er
 		return fmt.Errorf("marshal anthropic error envelope: %w", err)
 	}
 	if writeErr := erroring.WriteJSONStatus(w, code, payload); writeErr != nil {
-		log.Warn("adapter.anthropic_error_envelope.render_failed",
-			"event", "write_failed",
+		log.Warn("adapter.anthropic_error_envelope.render_failed", "concern", "adapter.providers.anthropic.errors", "event", "write_failed",
 			"err", writeErr.Error(),
 		)
 		return fmt.Errorf("write anthropic error envelope: %w", writeErr)

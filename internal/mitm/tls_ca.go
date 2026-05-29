@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goodkind.io/clyde/internal/clock"
 )
 
 type certAuthority struct {
@@ -56,12 +58,12 @@ const (
 func loadOrCreateCertAuthority(certPath, keyPath string, now func() time.Time) (*certAuthority, error) {
 	if certPath == "" {
 		err := errors.New("mitm ca cert path is empty")
-		slog.Warn("mitm.tls.ca_cert_path_empty", "err", err)
+		slog.Warn("mitm.tls.ca_cert_path_empty", "concern", "providers.mitm.wire", "err", err)
 		return nil, err
 	}
 	if keyPath == "" {
 		err := errors.New("mitm ca key path is empty")
-		slog.Warn("mitm.tls.ca_key_path_empty", "err", err)
+		slog.Warn("mitm.tls.ca_key_path_empty", "concern", "providers.mitm.wire", "err", err)
 		return nil, err
 	}
 	if now == nil {
@@ -70,12 +72,12 @@ func loadOrCreateCertAuthority(certPath, keyPath string, now func() time.Time) (
 
 	certExists, err := pathExists(certPath)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_cert_stat_failed", "path", certPath, "err", err)
+		slog.Warn("mitm.tls.ca_cert_stat_failed", "concern", "providers.mitm.wire", "path", certPath, "err", err)
 		return nil, fmt.Errorf("stat mitm ca cert %q: %w", certPath, err)
 	}
 	keyExists, err := pathExists(keyPath)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_key_stat_failed", "path", keyPath, "err", err)
+		slog.Warn("mitm.tls.ca_key_stat_failed", "concern", "providers.mitm.wire", "path", keyPath, "err", err)
 		return nil, fmt.Errorf("stat mitm ca key %q: %w", keyPath, err)
 	}
 
@@ -90,8 +92,7 @@ func loadOrCreateCertAuthority(certPath, keyPath string, now func() time.Time) (
 			"mitm ca files inconsistent: cert exists=%t at %q, key exists=%t at %q",
 			certExists, certPath, keyExists, keyPath,
 		)
-		slog.Warn("mitm.tls.ca_files_inconsistent",
-			"cert_path", certPath, "cert_exists", certExists,
+		slog.Warn("mitm.tls.ca_files_inconsistent", "concern", "providers.mitm.wire", "cert_path", certPath, "cert_exists", certExists,
 			"key_path", keyPath, "key_exists", keyExists,
 		)
 		return nil, err
@@ -108,48 +109,48 @@ func pathExists(path string) (bool, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	slog.Warn("mitm.tls.path_stat_failed", "path", path, "err", err)
+	slog.Warn("mitm.tls.path_stat_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
 	return false, fmt.Errorf("os.Stat: %w", err)
 }
 
 func loadExistingCertAuthority(certPath, keyPath string) (*certAuthority, error) {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_cert_read_failed", "path", certPath, "err", err)
+		slog.Warn("mitm.tls.ca_cert_read_failed", "concern", "providers.mitm.wire", "path", certPath, "err", err)
 		return nil, fmt.Errorf("read mitm ca cert %q: %w", certPath, err)
 	}
 	keyPEM, err := os.ReadFile(keyPath)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_key_read_failed", "path", keyPath, "err", err)
+		slog.Warn("mitm.tls.ca_key_read_failed", "concern", "providers.mitm.wire", "path", keyPath, "err", err)
 		return nil, fmt.Errorf("read mitm ca key %q: %w", keyPath, err)
 	}
 
 	certBlock, _ := pem.Decode(certPEM)
 	if certBlock == nil || certBlock.Type != "CERTIFICATE" {
 		err := fmt.Errorf("mitm ca cert %q is not a PEM CERTIFICATE", certPath)
-		slog.Warn("mitm.tls.ca_cert_pem_invalid", "path", certPath)
+		slog.Warn("mitm.tls.ca_cert_pem_invalid", "concern", "providers.mitm.wire", "path", certPath)
 		return nil, err
 	}
 	cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_cert_parse_failed", "path", certPath, "err", err)
+		slog.Warn("mitm.tls.ca_cert_parse_failed", "concern", "providers.mitm.wire", "path", certPath, "err", err)
 		return nil, fmt.Errorf("parse mitm ca cert %q: %w", certPath, err)
 	}
 	if !cert.IsCA {
 		err := fmt.Errorf("mitm ca cert %q is not a CA (IsCA=false)", certPath)
-		slog.Warn("mitm.tls.ca_cert_not_a_ca", "path", certPath)
+		slog.Warn("mitm.tls.ca_cert_not_a_ca", "concern", "providers.mitm.wire", "path", certPath)
 		return nil, err
 	}
 
 	keyBlock, _ := pem.Decode(keyPEM)
 	if keyBlock == nil {
 		err := fmt.Errorf("mitm ca key %q is not PEM-encoded", keyPath)
-		slog.Warn("mitm.tls.ca_key_pem_invalid", "path", keyPath)
+		slog.Warn("mitm.tls.ca_key_pem_invalid", "concern", "providers.mitm.wire", "path", keyPath)
 		return nil, err
 	}
 	key, err := decodeRSAPrivateKey(keyBlock)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_key_parse_failed", "path", keyPath, "err", err)
+		slog.Warn("mitm.tls.ca_key_parse_failed", "concern", "providers.mitm.wire", "path", keyPath, "err", err)
 		return nil, fmt.Errorf("parse mitm ca key %q: %w", keyPath, err)
 	}
 
@@ -157,9 +158,7 @@ func loadExistingCertAuthority(certPath, keyPath string) (*certAuthority, error)
 	// catching the case where a cert and key from different generations have
 	// drifted into the same directory.
 	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
-		slog.Warn("mitm.tls.ca_pair_mismatch",
-			"cert_path", certPath, "key_path", keyPath, "err", err,
-		)
+		slog.Warn("mitm.tls.ca_pair_mismatch", "concern", "providers.mitm.wire", "cert_path", certPath, "key_path", keyPath, "err", err)
 		return nil, fmt.Errorf(
 			"mitm ca cert %q and key %q do not match: %w",
 			certPath, keyPath, err,
@@ -182,24 +181,24 @@ func decodeRSAPrivateKey(block *pem.Block) (*rsa.PrivateKey, error) {
 	case pemBlockKindPKCS1:
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			slog.Warn("mitm.tls.ca_key_pkcs1_parse_failed", "err", err)
+			slog.Warn("mitm.tls.ca_key_pkcs1_parse_failed", "concern", "providers.mitm.wire", "err", err)
 			return nil, fmt.Errorf("pkcs1: %w", err)
 		}
 		return key, nil
 	case pemBlockKindPKCS8:
 		parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
-			slog.Warn("mitm.tls.ca_key_pkcs8_parse_failed", "err", err)
+			slog.Warn("mitm.tls.ca_key_pkcs8_parse_failed", "concern", "providers.mitm.wire", "err", err)
 			return nil, fmt.Errorf("pkcs8: %w", err)
 		}
 		key, ok := parsed.(*rsa.PrivateKey)
 		if !ok {
-			slog.Warn("mitm.tls.ca_key_pkcs8_wrong_type", "type", fmt.Sprintf("%T", parsed))
+			slog.Warn("mitm.tls.ca_key_pkcs8_wrong_type", "concern", "providers.mitm.wire", "type", fmt.Sprintf("%T", parsed))
 			return nil, fmt.Errorf("pkcs8 key is %T, want *rsa.PrivateKey", parsed)
 		}
 		return key, nil
 	default:
-		slog.Warn("mitm.tls.ca_key_unsupported_pem_type", "type", block.Type)
+		slog.Warn("mitm.tls.ca_key_unsupported_pem_type", "concern", "providers.mitm.wire", "type", block.Type)
 		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
 	}
 }
@@ -207,7 +206,7 @@ func decodeRSAPrivateKey(block *pem.Block) (*rsa.PrivateKey, error) {
 func createCertAuthority(certPath, keyPath string, now func() time.Time) (*certAuthority, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_key_failed", "err", err)
+		slog.Warn("mitm.tls.ca_key_failed", "concern", "providers.mitm.wire", "err", err)
 		return nil, fmt.Errorf("generate mitm ca key: %w", err)
 	}
 	serial, err := randomSerial()
@@ -226,12 +225,12 @@ func createCertAuthority(certPath, keyPath string, now func() time.Time) (*certA
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_cert_failed", "err", err)
+		slog.Warn("mitm.tls.ca_cert_failed", "concern", "providers.mitm.wire", "err", err)
 		return nil, fmt.Errorf("create mitm ca cert: %w", err)
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		slog.Warn("mitm.tls.parse_ca_failed", "err", err)
+		slog.Warn("mitm.tls.parse_ca_failed", "concern", "providers.mitm.wire", "err", err)
 		return nil, fmt.Errorf("parse mitm ca cert: %w", err)
 	}
 
@@ -241,8 +240,7 @@ func createCertAuthority(certPath, keyPath string, now func() time.Time) (*certA
 	if err := persistCAFiles(certPath, keyPath, certPEM, keyPEM); err != nil {
 		return nil, err
 	}
-	slog.Info("mitm.tls.ca_persisted",
-		"cert_path", certPath,
+	slog.Info("mitm.tls.ca_persisted", "concern", "providers.mitm.wire", "cert_path", certPath,
 		"key_path", keyPath,
 		"not_before", cert.NotBefore.UTC().Format(time.RFC3339),
 		"not_after", cert.NotAfter.UTC().Format(time.RFC3339),
@@ -259,7 +257,7 @@ func createCertAuthority(certPath, keyPath string, now func() time.Time) (*certA
 func persistCAFiles(certPath, keyPath string, certPEM, keyPEM []byte) error {
 	for _, dir := range []string{filepath.Dir(certPath), filepath.Dir(keyPath)} {
 		if err := os.MkdirAll(dir, caDirFileMode); err != nil {
-			slog.Warn("mitm.tls.ca_dir_failed", "path", dir, "err", err)
+			slog.Warn("mitm.tls.ca_dir_failed", "concern", "providers.mitm.wire", "path", dir, "err", err)
 			return fmt.Errorf("create mitm ca dir %q: %w", dir, err)
 		}
 	}
@@ -267,14 +265,14 @@ func persistCAFiles(certPath, keyPath string, certPEM, keyPEM []byte) error {
 	// exists at this point a concurrent writer raced us, and overwriting would
 	// silently desynchronize the pair.
 	if err := writeFileExclusive(certPath, certPEM, caCertFileMode); err != nil {
-		slog.Warn("mitm.tls.ca_cert_write_failed", "path", certPath, "err", err)
+		slog.Warn("mitm.tls.ca_cert_write_failed", "concern", "providers.mitm.wire", "path", certPath, "err", err)
 		return fmt.Errorf("write mitm ca cert %q: %w", certPath, err)
 	}
 	if err := writeFileExclusive(keyPath, keyPEM, caKeyFileMode); err != nil {
 		// Roll back the cert so a failed key write does not leave a half
 		// populated pair that would block the next start.
 		_ = os.Remove(certPath)
-		slog.Warn("mitm.tls.ca_key_write_failed", "path", keyPath, "err", err)
+		slog.Warn("mitm.tls.ca_key_write_failed", "concern", "providers.mitm.wire", "path", keyPath, "err", err)
 		return fmt.Errorf("write mitm ca key %q: %w", keyPath, err)
 	}
 	return nil
@@ -285,16 +283,16 @@ func persistCAFiles(certPath, keyPath string, certPEM, keyPEM []byte) error {
 func writeFileExclusive(path string, data []byte, mode os.FileMode) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
-		slog.Warn("mitm.tls.ca_open_excl_failed", "path", path, "err", err)
+		slog.Warn("mitm.tls.ca_open_excl_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
 		return fmt.Errorf("os.OpenFile: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
-		slog.Warn("mitm.tls.ca_write_failed", "path", path, "err", err)
+		slog.Warn("mitm.tls.ca_write_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
 		return fmt.Errorf("file.Write: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		slog.Warn("mitm.tls.ca_close_failed", "path", path, "err", err)
+		slog.Warn("mitm.tls.ca_close_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
 		return fmt.Errorf("file.Close: %w", err)
 	}
 	return nil
@@ -310,14 +308,14 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		slog.Warn("mitm.tls.leaf_key_failed", "host", logHost, "err", err)
+		slog.Warn("mitm.tls.leaf_key_failed", "concern", "providers.mitm.wire", "host", logHost, "err", err)
 		return nil, fmt.Errorf("generate mitm leaf key: %w", err)
 	}
 	serial, err := randomSerial()
 	if err != nil {
 		return nil, err
 	}
-	now := currentTime()
+	now := clock.Now()
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
@@ -333,14 +331,14 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
-		slog.Warn("mitm.tls.leaf_cert_failed", "host", logHost, "err", err)
+		slog.Warn("mitm.tls.leaf_cert_failed", "concern", "providers.mitm.wire", "host", logHost, "err", err)
 		return nil, fmt.Errorf("create mitm leaf cert: %w", err)
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: string(pemBlockKindPKCS1), Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		slog.Warn("mitm.tls.leaf_pair_failed", "host", logHost, "err", err)
+		slog.Warn("mitm.tls.leaf_pair_failed", "concern", "providers.mitm.wire", "host", logHost, "err", err)
 		return nil, fmt.Errorf("load mitm leaf cert: %w", err)
 	}
 	ca.cache[host] = &cert
@@ -351,7 +349,7 @@ func randomSerial() (*big.Int, error) {
 	limit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serial, err := rand.Int(rand.Reader, limit)
 	if err != nil {
-		slog.Warn("mitm.tls.random_serial_failed", "err", err)
+		slog.Warn("mitm.tls.random_serial_failed", "concern", "providers.mitm.wire", "err", err)
 		return nil, fmt.Errorf("generate cert serial: %w", err)
 	}
 	return serial, nil
@@ -366,7 +364,7 @@ func (p *Proxy) mitmCA() (*certAuthority, error) {
 	defer p.certMu.Unlock()
 	if p.ca == nil {
 		err := errors.New("mitm ca not initialized")
-		slog.Warn("mitm.tls.ca_missing", "err", err)
+		slog.Warn("mitm.tls.ca_missing", "concern", "providers.mitm.wire", "err", err)
 		return nil, err
 	}
 	return p.ca, nil

@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
+
+	"goodkind.io/clyde/internal/clock"
 )
 
 // DriftCheckOptions configures one compare-only drift run against the
@@ -47,81 +50,37 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 	}
 	transcriptPath, err := ResolveTranscriptPath(captureRoot, opts.Upstream)
 	if err != nil {
-		opts.Log.WarnContext(ctx, "mitm.drift.transcript_resolve_failed",
-			"upstream", opts.Upstream,
+		opts.Log.WarnContext(ctx, "mitm.drift.transcript_resolve_failed", "concern", "providers.mitm.wire", "upstream", opts.Upstream,
 			"capture_root", captureRoot,
 			"err", err,
 		)
 		return DriftOutcome{}, err
 	}
-	startedAt := currentTime().UTC()
+	startedAt := clock.Now().UTC()
 
 	outcome := DriftOutcome{
 		Upstream:       opts.Upstream,
 		ReferencePath:  opts.Reference,
 		TranscriptPath: transcriptPath,
-		StartedAt:      startedAt,
+		StartedAt:      startedAt, Timestamp: time.
+				Time{},
+
+		SchemaVersion: "", Diverged: false, Summary: "", V1: nil, V2: nil,
 	}
 
 	versionTag := "live-" + startedAt.Format("20060102T150405")
 	if isV2SnapshotFile(opts.Reference) {
-		ref, err := LoadSnapshotV2TOML(opts.Reference)
-		if err != nil {
-			opts.Log.WarnContext(ctx, "mitm.drift.load_v2_reference_failed",
-				"reference", opts.Reference,
-				"err", err,
-			)
-			return outcome, fmt.Errorf("load v2 reference: %w", err)
+		if err := loadAndDiffSnapshotV2(ctx, opts, transcriptPath, versionTag, &outcome); err != nil {
+			return outcome, err
 		}
-		cand, err := ExtractSnapshotV2(transcriptPath, SnapshotV2Options{
-			UpstreamName:               opts.Upstream,
-			UpstreamVersion:            versionTag,
-			ProviderFilter:             ProviderForUpstream(opts.Upstream),
-			IncludeUserAgentSubstrings: opts.IncludeUA,
-			ExcludeUserAgentSubstrings: opts.ExcludeUA,
-			RequireBodyKeys:            opts.RequireBodyKeys,
-			ForbidBodyKeys:             opts.ForbidBodyKeys,
-		})
-		if err != nil {
-			opts.Log.WarnContext(ctx, "mitm.drift.extract_v2_failed",
-				"transcript", transcriptPath,
-				"upstream", opts.Upstream,
-				"err", err,
-			)
-			return outcome, fmt.Errorf("extract v2: %w", err)
-		}
-		report := DiffSnapshotsV2(ref, cand)
-		outcome.SchemaVersion = "v2"
-		outcome.V2 = &report
 	} else {
-		ref, err := LoadSnapshotTOML(opts.Reference)
-		if err != nil {
-			opts.Log.WarnContext(ctx, "mitm.drift.load_reference_failed",
-				"reference", opts.Reference,
-				"err", err,
-			)
-			return outcome, fmt.Errorf("load reference: %w", err)
+		if err := loadAndDiffSnapshotV1(ctx, opts, transcriptPath, versionTag, &outcome); err != nil {
+			return outcome, err
 		}
-		cand, err := ExtractSnapshot(transcriptPath, SnapshotOptions{
-			UpstreamName:    opts.Upstream,
-			UpstreamVersion: versionTag,
-			ProviderFilter:  ProviderForUpstream(opts.Upstream),
-		})
-		if err != nil {
-			opts.Log.WarnContext(ctx, "mitm.drift.extract_failed",
-				"transcript", transcriptPath,
-				"upstream", opts.Upstream,
-				"err", err,
-			)
-			return outcome, fmt.Errorf("extract: %w", err)
-		}
-		report := DiffSnapshots(ref, cand)
-		outcome.SchemaVersion = "v1"
-		outcome.V1 = &report
 	}
 
 	if err := AppendDriftOutcome(opts.DriftLogPath, outcome); err != nil {
-		opts.Log.WarnContext(ctx, "mitm.drift.log_append_failed", "path", opts.DriftLogPath, "err", err)
+		opts.Log.WarnContext(ctx, "mitm.drift.log_append_failed", "concern", "providers.mitm.wire", "path", opts.DriftLogPath, "err", err)
 	}
 	// AppendDriftOutcome populates Diverged + Summary on the in-place
 	// outcome. Re-derive here so callers that skip the log path still
@@ -134,6 +93,67 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 		outcome.Summary = outcome.V1.SummaryString()
 	}
 	return outcome, nil
+}
+
+// loadAndDiffSnapshotV2 loads a v2 reference snapshot, extracts a
+// fresh candidate from the live transcript, diffs the two, and writes
+// the result into outcome. Returns a wrapped error when either the
+// reference or the candidate fail to materialize.
+func loadAndDiffSnapshotV2(ctx context.Context, opts DriftCheckOptions, transcriptPath, versionTag string, outcome *DriftOutcome) error {
+	ref, err := LoadSnapshotV2TOML(opts.Reference)
+	if err != nil {
+		opts.Log.WarnContext(ctx, "mitm.drift.load_v2_reference_failed", "concern", "providers.mitm.wire", "reference", opts.Reference,
+			"err", err,
+		)
+		return fmt.Errorf("load v2 reference: %w", err)
+	}
+	cand, err := ExtractSnapshotV2(transcriptPath, SnapshotV2Options{
+		UpstreamName:               opts.Upstream,
+		UpstreamVersion:            versionTag,
+		ProviderFilter:             ProviderForUpstream(opts.Upstream),
+		IncludeUserAgentSubstrings: opts.IncludeUA,
+		ExcludeUserAgentSubstrings: opts.ExcludeUA,
+		RequireBodyKeys:            opts.RequireBodyKeys,
+		ForbidBodyKeys:             opts.ForbidBodyKeys, MaxBodyDepth: 0, EnumThreshold: 0,
+	})
+	if err != nil {
+		opts.Log.WarnContext(ctx, "mitm.drift.extract_v2_failed", "concern", "providers.mitm.wire", "transcript", transcriptPath,
+			"upstream", opts.Upstream,
+			"err", err,
+		)
+		return fmt.Errorf("extract v2: %w", err)
+	}
+	report := DiffSnapshotsV2(ref, cand)
+	outcome.SchemaVersion = "v2"
+	outcome.V2 = &report
+	return nil
+}
+
+// loadAndDiffSnapshotV1 is the v1 counterpart of loadAndDiffSnapshotV2.
+func loadAndDiffSnapshotV1(ctx context.Context, opts DriftCheckOptions, transcriptPath, versionTag string, outcome *DriftOutcome) error {
+	ref, err := LoadSnapshotTOML(opts.Reference)
+	if err != nil {
+		opts.Log.WarnContext(ctx, "mitm.drift.load_reference_failed", "concern", "providers.mitm.wire", "reference", opts.Reference,
+			"err", err,
+		)
+		return fmt.Errorf("load reference: %w", err)
+	}
+	cand, err := ExtractSnapshot(transcriptPath, SnapshotOptions{
+		UpstreamName:    opts.Upstream,
+		UpstreamVersion: versionTag,
+		ProviderFilter:  ProviderForUpstream(opts.Upstream),
+	})
+	if err != nil {
+		opts.Log.WarnContext(ctx, "mitm.drift.extract_failed", "concern", "providers.mitm.wire", "transcript", transcriptPath,
+			"upstream", opts.Upstream,
+			"err", err,
+		)
+		return fmt.Errorf("extract: %w", err)
+	}
+	report := DiffSnapshots(ref, cand)
+	outcome.SchemaVersion = "v1"
+	outcome.V1 = &report
+	return nil
 }
 
 // isV2SnapshotFile sniffs a reference TOML for the v2 [[flavors]]

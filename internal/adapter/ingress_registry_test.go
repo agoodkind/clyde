@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -43,7 +44,7 @@ func TestIngressRegistryRegisterAndRelease(t *testing.T) {
 	handler := srv.handle(adapterRouteOpenAI, func(ctx context.Context, hctx *handlerCtx) error {
 		close(inFlight)
 		<-release
-		writeJSON(hctx.Writer, http.StatusOK, map[string]string{"ok": "true"})
+		writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
 		return nil
 	})
 
@@ -99,7 +100,7 @@ func TestIngressRegistryDrainRejectsNewRequests(t *testing.T) {
 	handlerCalled := false
 	handler := srv.handle(adapterRouteOpenAI, func(_ context.Context, hctx *handlerCtx) error {
 		handlerCalled = true
-		writeJSON(hctx.Writer, http.StatusOK, map[string]string{"ok": "true"})
+		writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
 		return nil
 	})
 
@@ -143,7 +144,7 @@ func TestIngressRegistryWaitForIdlePollsCount(t *testing.T) {
 	handler := srv.handle(adapterRouteOpenAI, func(ctx context.Context, hctx *handlerCtx) error {
 		close(inFlight)
 		<-release
-		writeJSON(hctx.Writer, http.StatusOK, map[string]string{"ok": "true"})
+		writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
 		return nil
 	})
 

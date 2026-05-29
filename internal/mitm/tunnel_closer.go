@@ -42,17 +42,17 @@ func (c *tunnelCloser) Close(reason string) error {
 	}
 	if clientErr != nil && upperErr != nil {
 		err := fmt.Errorf("close tunnel client=%w upstream=%w", clientErr, upperErr)
-		slog.Warn("mitm.tunnel.close_failed", "component", "mitm", "reason", reason, "err", err)
+		slog.Warn("mitm.tunnel.close_failed", "concern", "providers.mitm.wire", "component", "mitm", "reason", reason, "err", err)
 		return err
 	}
 	if clientErr != nil {
 		err := fmt.Errorf("close tunnel client: %w", clientErr)
-		slog.Warn("mitm.tunnel.client_close_failed", "component", "mitm", "reason", reason, "err", err)
+		slog.Warn("mitm.tunnel.client_close_failed", "concern", "providers.mitm.wire", "component", "mitm", "reason", reason, "err", err)
 		return err
 	}
 	if upperErr != nil {
 		err := fmt.Errorf("close tunnel upstream: %w", upperErr)
-		slog.Warn("mitm.tunnel.upstream_close_failed", "component", "mitm", "reason", reason, "err", err)
+		slog.Warn("mitm.tunnel.upstream_close_failed", "concern", "providers.mitm.wire", "component", "mitm", "reason", reason, "err", err)
 		return err
 	}
 	return nil
@@ -86,7 +86,7 @@ func (c *connCloser) Close() error {
 	}
 	if err := c.conn.Close(); err != nil {
 		wrapped := fmt.Errorf("close conn: %w", err)
-		slog.Warn("mitm.conn.close_failed", "component", "mitm", "err", wrapped)
+		slog.Warn("mitm.conn.close_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
 		return wrapped
 	}
 	return nil

@@ -1,4 +1,3 @@
-// Package anthropic implements Anthropic wire models and helpers.
 package anthropic
 
 import (
@@ -123,135 +122,183 @@ func dispatchSSE(
 	stop *string,
 	blockTypes map[int]string,
 ) error {
-	switch eventName {
-	case "ping":
+	switch anthropicSSEEventName(eventName) {
+	case anthropicSSEEventPing:
 		return nil
-	case "message_start":
-		var ev streamMessageStartEvent
-		if err := json.Unmarshal([]byte(data), &ev); err == nil {
-			usage.InputTokens = ev.Message.Usage.InputTokens
-			usage.OutputTokens = ev.Message.Usage.OutputTokens
-			usage.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
-			usage.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
-		}
-	case "content_block_start":
-		var ev streamContentBlockStartEvent
-		if err := json.Unmarshal([]byte(data), &ev); err == nil {
-			t := ev.ContentBlock.Type
-			blockTypes[ev.Index] = t
-			switch streamContentBlockType(t) {
-			case streamContentBlockTypeToolUse:
-				return sink(StreamToolUseStart{
-					BlockIndex:  ev.Index,
-					ToolUseID:   ev.ContentBlock.ID,
-					ToolUseName: ev.ContentBlock.Name,
-				})
-			case streamContentBlockTypeThinking:
-				return sink(StreamThinkingStart{
-					BlockIndex: ev.Index,
-				})
-			case streamContentBlockTypeRedactedThinking:
-				// Anthropic emits the opaque payload on the start event
-				// itself. There is no redacted_thinking_delta; we surface
-				// one event per block carrying the data blob and rely on
-				// content_block_stop for closing.
-				return sink(StreamRedactedThinking{
-					BlockIndex: ev.Index,
-					Data:       ev.ContentBlock.Data,
-				})
-			case streamContentBlockTypeText:
-				// Plain text content blocks are observed via the
-				// per-delta path; no synchronous event is needed at
-				// start. Listed here so the enum switch is exhaustive
-				// for the canonical Anthropic block types.
-			}
-		}
-	case "content_block_delta":
-		var ev streamContentBlockDeltaEvent
-		if err := json.Unmarshal([]byte(data), &ev); err == nil {
-			switch ev.Delta.Type {
-			case "text_delta":
-				if ev.Delta.Text == "" {
-					return nil
-				}
-				return sink(StreamTextDelta{
-					BlockIndex: ev.Index,
-					Text:       ev.Delta.Text,
-				})
-			case "input_json_delta":
-				// Anthropic emits a leading content_block_delta with
-				// an empty partial_json to "open" the tool input
-				// stream. Forwarding it produces a tool_call delta with
-				// a zero-value Function block that json:"function,omitzero"
-				// drops, leaving a bare {"index":N,"type":"function"}
-				// chunk on the wire. Cursor's OpenAI SSE parser treats
-				// that as a finalize/reset and drops the whole tool
-				// call, so the user sees no Read/Glob card.
-				if ev.Delta.PartialJSON == "" {
-					return nil
-				}
-				return sink(StreamToolUseArgDelta{
-					BlockIndex:  ev.Index,
-					PartialJSON: ev.Delta.PartialJSON,
-				})
-			case "thinking_delta":
-				return sink(StreamThinkingDelta{
-					BlockIndex: ev.Index,
-					Text:       ev.Delta.Thinking,
-				})
-			case "signature_delta":
-				return sink(StreamThinkingSignature{
-					BlockIndex: ev.Index,
-					Signature:  ev.Delta.Signature,
-				})
-			}
-		}
-	case "content_block_stop":
-		var ev streamContentBlockStopEvent
-		if err := json.Unmarshal([]byte(data), &ev); err == nil {
-			if blockTypes[ev.Index] == "tool_use" {
-				delete(blockTypes, ev.Index)
-				return sink(StreamToolUseStop{
-					BlockIndex: ev.Index,
-				})
-			}
-			delete(blockTypes, ev.Index)
-		}
-	case "message_delta":
-		var ev streamMessageDeltaEvent
-		if err := json.Unmarshal([]byte(data), &ev); err == nil {
-			if ev.Delta.StopReason != "" {
-				*stop = ev.Delta.StopReason
-			}
-			if ev.Usage.OutputTokens > 0 {
-				usage.OutputTokens = ev.Usage.OutputTokens
-			}
-			if ev.Usage.CacheCreationInputTokens > 0 {
-				usage.CacheCreationInputTokens = ev.Usage.CacheCreationInputTokens
-			}
-			if ev.Usage.CacheReadInputTokens > 0 {
-				usage.CacheReadInputTokens = ev.Usage.CacheReadInputTokens
-			}
-		}
-	case "message_stop":
-		return sink(StreamStop{
-			StopReason: *stop,
-		})
-	case "error":
-		var ev streamErrorEvent
-		if err := json.Unmarshal([]byte(data), &ev); err == nil {
-			return newStreamUpstreamError(ErrorKind(ev.Error.Type), ev.Error.Message)
-		}
-		return newStreamUpstreamError(ErrorKindNone, "anthropic error: "+truncate(data, 400))
+	case anthropicSSEEventMessageStart:
+		handleSSEMessageStart(data, usage)
+		return nil
+	case anthropicSSEEventContentBlockStart:
+		return handleSSEContentBlockStart(data, sink, blockTypes)
+	case anthropicSSEEventContentBlockDelta:
+		return handleSSEContentBlockDelta(data, sink)
+	case anthropicSSEEventContentBlockStop:
+		return handleSSEContentBlockStop(data, sink, blockTypes)
+	case anthropicSSEEventMessageDelta:
+		handleSSEMessageDelta(data, usage, stop)
+		return nil
+	case anthropicSSEEventMessageStop:
+		return sink(StreamStop{StopReason: *stop})
+	case anthropicSSEEventError:
+		return handleSSEError(data)
 	}
 	return nil
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+// anthropicSSEEventName enumerates the SSE event names the Anthropic
+// streaming dispatcher recognizes.
+type anthropicSSEEventName string
+
+const (
+	anthropicSSEEventPing              anthropicSSEEventName = "ping"
+	anthropicSSEEventMessageStart      anthropicSSEEventName = "message_start"
+	anthropicSSEEventContentBlockStart anthropicSSEEventName = "content_block_start"
+	anthropicSSEEventContentBlockDelta anthropicSSEEventName = "content_block_delta"
+	anthropicSSEEventContentBlockStop  anthropicSSEEventName = "content_block_stop"
+	anthropicSSEEventMessageDelta      anthropicSSEEventName = "message_delta"
+	anthropicSSEEventMessageStop       anthropicSSEEventName = "message_stop"
+	anthropicSSEEventError             anthropicSSEEventName = "error"
+)
+
+// anthropicSSEDeltaType enumerates the delta type strings the
+// content_block_delta SSE event carries.
+type anthropicSSEDeltaType string
+
+const (
+	anthropicSSEDeltaText      anthropicSSEDeltaType = "text_delta"
+	anthropicSSEDeltaInputJSON anthropicSSEDeltaType = "input_json_delta"
+	anthropicSSEDeltaThinking  anthropicSSEDeltaType = "thinking_delta"
+	anthropicSSEDeltaSignature anthropicSSEDeltaType = "signature_delta"
+)
+
+func handleSSEMessageStart(data string, usage *Usage) {
+	var ev streamMessageStartEvent
+	if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		return
+	}
+	usage.InputTokens = ev.Message.Usage.InputTokens
+	usage.OutputTokens = ev.Message.Usage.OutputTokens
+	usage.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
+	usage.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
+}
+
+func handleSSEContentBlockStart(data string, sink EventSink, blockTypes map[int]string) error {
+	var ev streamContentBlockStartEvent
+	if err := json.Unmarshal([]byte(data), &ev); err == nil {
+		return dispatchContentBlockStart(ev, sink, blockTypes)
+	}
+	return nil
+}
+
+func dispatchContentBlockStart(ev streamContentBlockStartEvent, sink EventSink, blockTypes map[int]string) error {
+	t := ev.ContentBlock.Type
+	blockTypes[ev.Index] = t
+	switch streamContentBlockType(t) {
+	case streamContentBlockTypeToolUse:
+		return sink(StreamToolUseStart{
+			BlockIndex:  ev.Index,
+			ToolUseID:   ev.ContentBlock.ID,
+			ToolUseName: ev.ContentBlock.Name,
+		})
+	case streamContentBlockTypeThinking:
+		return sink(StreamThinkingStart{BlockIndex: ev.Index})
+	case streamContentBlockTypeRedactedThinking:
+		// Anthropic emits the opaque payload on the start event itself.
+		// There is no redacted_thinking_delta; one event per block
+		// carries the data blob and content_block_stop closes it.
+		return sink(StreamRedactedThinking{
+			BlockIndex: ev.Index,
+			Data:       ev.ContentBlock.Data,
+		})
+	case streamContentBlockTypeText:
+		// Plain text content blocks are observed via the per-delta
+		// path; no synchronous event is needed at start.
+	}
+	return nil
+}
+
+func handleSSEContentBlockDelta(data string, sink EventSink) error {
+	var ev streamContentBlockDeltaEvent
+	if err := json.Unmarshal([]byte(data), &ev); err == nil {
+		return dispatchContentBlockDelta(ev, sink)
+	}
+	return nil
+}
+
+func dispatchContentBlockDelta(ev streamContentBlockDeltaEvent, sink EventSink) error {
+	switch anthropicSSEDeltaType(ev.Delta.Type) {
+	case anthropicSSEDeltaText:
+		if ev.Delta.Text == "" {
+			return nil
+		}
+		return sink(StreamTextDelta{BlockIndex: ev.Index, Text: ev.Delta.Text})
+	case anthropicSSEDeltaInputJSON:
+		// Anthropic emits a leading content_block_delta with an empty
+		// partial_json to open the tool input stream. Forwarding it
+		// produces a tool_call delta with a zero-value Function block
+		// that json:"function,omitzero" drops, leaving a bare
+		// {"index":N,"type":"function"} chunk on the wire. Cursor's
+		// OpenAI SSE parser treats that as a finalize/reset and drops
+		// the whole tool call, so the user sees no Read/Glob card.
+		if ev.Delta.PartialJSON == "" {
+			return nil
+		}
+		return sink(StreamToolUseArgDelta{
+			BlockIndex:  ev.Index,
+			PartialJSON: ev.Delta.PartialJSON,
+		})
+	case anthropicSSEDeltaThinking:
+		return sink(StreamThinkingDelta{BlockIndex: ev.Index, Text: ev.Delta.Thinking})
+	case anthropicSSEDeltaSignature:
+		return sink(StreamThinkingSignature{BlockIndex: ev.Index, Signature: ev.Delta.Signature})
+	}
+	return nil
+}
+
+func handleSSEContentBlockStop(data string, sink EventSink, blockTypes map[int]string) error {
+	var ev streamContentBlockStopEvent
+	if err := json.Unmarshal([]byte(data), &ev); err == nil {
+		if blockTypes[ev.Index] == "tool_use" {
+			delete(blockTypes, ev.Index)
+			return sink(StreamToolUseStop{BlockIndex: ev.Index})
+		}
+		delete(blockTypes, ev.Index)
+	}
+	return nil
+}
+
+func handleSSEMessageDelta(data string, usage *Usage, stop *string) {
+	var ev streamMessageDeltaEvent
+	if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		return
+	}
+	if ev.Delta.StopReason != "" {
+		*stop = ev.Delta.StopReason
+	}
+	if ev.Usage.OutputTokens > 0 {
+		usage.OutputTokens = ev.Usage.OutputTokens
+	}
+	if ev.Usage.CacheCreationInputTokens > 0 {
+		usage.CacheCreationInputTokens = ev.Usage.CacheCreationInputTokens
+	}
+	if ev.Usage.CacheReadInputTokens > 0 {
+		usage.CacheReadInputTokens = ev.Usage.CacheReadInputTokens
+	}
+}
+
+func handleSSEError(data string) error {
+	var ev streamErrorEvent
+	if err := json.Unmarshal([]byte(data), &ev); err == nil {
+		return newStreamUpstreamError(ErrorKind(ev.Error.Type), ev.Error.Message)
+	}
+	return newStreamUpstreamError(ErrorKindNone, "anthropic error: "+truncate(data, 400))
+}
+
+func truncate(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:max] + "..."
+	return s[:maxBytes] + "..."
 }
 
 // newStreamUpstreamError builds the typed UpstreamError for an SSE
