@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -89,11 +88,13 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	_ = conn.Close()
 	waitForWebsocketHandler(t, requestDone)
 
-	// Drain capture file.
+	// Drain capture file. capture.jsonl is gone; MITM legs now land in
+	// this per-concern file.
+	capturePath := mitmWireConcernTestPath(dir)
 	deadline := time.Now().Add(2 * time.Second)
 	var lines []string
 	for time.Now().Before(deadline) {
-		f, err := os.Open(filepath.Join(dir, "capture.jsonl"))
+		f, err := os.Open(capturePath)
 		if err != nil {
 			time.Sleep(20 * time.Millisecond)
 			continue
@@ -373,14 +374,12 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 		tlsClientConfig: nil,
 		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
-		captureWriters:  newCaptureWriterCache(logger),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             cfg,
 		base:            "",
 		server:          nil,
 	}
-	t.Cleanup(proxy.closeCaptureWriters)
 	return proxy
 }
 
@@ -395,14 +394,12 @@ func newWebsocketRequestLogProxy(t *testing.T, captureDir string, logger *slog.L
 		tlsClientConfig: nil,
 		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
-		captureWriters:  newCaptureWriterCache(logger),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "",
 		server:          nil,
 	}
-	t.Cleanup(proxy.closeCaptureWriters)
 	return proxy
 }
 

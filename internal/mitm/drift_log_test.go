@@ -76,3 +76,29 @@ func TestAppendDriftOutcomeRejectsEmptyPath(t *testing.T) {
 		t.Fatal("expected error on empty path")
 	}
 }
+
+// TestAppendDriftOutcomeExpandsHome guards the bug where a drift_log_dir of
+// "~/..." was used verbatim, so the mkdir tried to create a literal "~" dir and
+// the outcome log was never written. The path must be home-expanded.
+func TestAppendDriftOutcomeExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := filepath.Join("~", "mitm-drift", "claude-code.jsonl")
+	outcome := DriftOutcome{
+		Upstream:      "claude-code",
+		SchemaVersion: "v2",
+		V2:            &DiffReportV2{Upstream: "claude-code"},
+	}
+	if err := AppendDriftOutcome(path, outcome); err != nil {
+		t.Fatalf("append with ~ path: %v", err)
+	}
+
+	want := filepath.Join(home, "mitm-drift", "claude-code.jsonl")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected outcome at expanded path %q: %v", want, err)
+	}
+	if _, err := os.Stat(filepath.Join("~", "mitm-drift")); err == nil {
+		t.Fatal("a literal ~ directory was created; path was not home-expanded")
+	}
+}

@@ -444,7 +444,6 @@ type hookedProviderParams struct {
 	requestRawPath  string
 	responseRawPath string
 	cfg             config.MITMConfig
-	capturePolicy   CaptureFilePolicy
 }
 
 // runHookedProviderRequest runs the provider request through the matched
@@ -490,7 +489,6 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 			requestRawPath:  params.requestRawPath,
 			responseRawPath: params.responseRawPath,
 			cfg:             params.cfg,
-			capturePolicy:   params.capturePolicy,
 		}, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
 			includePayload:      true,
 			includeUpstreamSend: false,
@@ -504,7 +502,6 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 	if err != nil {
 		return err
 	}
-	p.recordHookedCaptureMetadata(params, result, responseBytes)
 	p.log.InfoContext(ctx, "mitm.provider.hook.completed", "concern", "providers.mitm.wire", "host", params.host,
 		"hook", params.rule.Name,
 		"path", params.req.URL.Path,
@@ -513,7 +510,7 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 		"request_bytes", params.requestBytes,
 		"response_bytes", responseBytes,
 	)
-	p.recordHTTPCapture(params.req, result.Headers, providerHTTPCaptureRecordInput(providerForwardParams{
+	forwardParams := providerForwardParams{
 		writer:          params.writer,
 		req:             params.req,
 		body:            params.body,
@@ -526,47 +523,10 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 		requestRawPath:  params.requestRawPath,
 		responseRawPath: params.responseRawPath,
 		cfg:             params.cfg,
-		capturePolicy:   params.capturePolicy,
-	}, result.Status, responseBytes))
+	}
+	p.recordHTTPCapture(params.req, result.Headers, providerHTTPCaptureRecordInput(forwardParams, result.Status, responseBytes))
+	p.diagnoseProviderExchange(ctx, forwardParams, params.rule.Name)
 	return nil
-}
-
-// recordHookedCaptureMetadata writes the capture.jsonl entry for a
-// hook-rewritten request. The Hook field is set so downstream tooling
-// can distinguish hook-mediated rewrites from plain pass-through
-// exchanges.
-func (p *Proxy) recordHookedCaptureMetadata(params hookedProviderParams, result *hookResult, responseBytes int64) {
-	decodedRequestBody, decoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
-	if !decoded {
-		decodedRequestBody = params.body
-	}
-	if appendErr := p.appendProviderCaptureExtension(params.cfg.CaptureDir, params.provider.BuildCaptureExtension(CaptureExchange{
-		CapturedAt:          clock.Now().UTC(),
-		RequestHeader:       params.req.Header,
-		RequestBody:         params.body,
-		DecodedRequestBody:  decodedRequestBody,
-		ResponseHeader:      result.Headers,
-		ResponseStatus:      result.Status,
-		RequestBytes:        params.requestBytes,
-		ResponseBytes:       responseBytes,
-		Method:              params.req.Method,
-		Path:                params.req.URL.Path,
-		Host:                params.host,
-		Concern:             params.concern,
-		RequestRawPath:      params.requestRawPath,
-		ResponseRawPath:     params.responseRawPath,
-		RequestContentType:  params.req.Header.Get("Content-Type"),
-		ResponseContentType: result.Headers.Get("Content-Type"),
-		HookName:            params.rule.Name,
-	}), params.capturePolicy); appendErr != nil {
-		p.log.Warn("mitm.provider.hook.capture.append_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"hook", params.rule.Name,
-			"capture_dir", params.cfg.CaptureDir,
-			"err", appendErr,
-		)
-	}
 }
 
 // maybeFetchUpstreamForHook performs the upstream round-trip when the

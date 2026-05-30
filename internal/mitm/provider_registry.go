@@ -1,11 +1,11 @@
 package mitm
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/providerid"
@@ -75,44 +75,33 @@ type IdentityContribution struct {
 	Facet                      logevent.Facet
 }
 
-// CaptureExtension is a typed provider-owned capture-event payload
-// the generic intercept loop writes to capture.jsonl after a TLS
-// intercepted request completes. Each provider package defines its
-// own concrete extension struct with its own JSON wire shape; the
-// generic MITM layer only routes MarshalJSONLine bytes to the writer.
-type CaptureExtension interface {
-	// Concern is the concern name the generic layer uses for the
-	// per-concern capture subdirectory.
-	Concern() string
-	// MarshalJSONLine returns the JSONL line bytes (without a trailing
-	// newline). The generic writer adds the line break.
-	MarshalJSONLine() ([]byte, error)
+// ExchangeDiagnostic is the typed per-intercepted-request input the
+// optional [ExchangeDiagnostician] hook consumes. The generic MITM
+// intercept loop populates every field from the completed exchange
+// before invoking the diagnostician; implementations must not retain
+// references to DecodedRequestBody beyond the call return. The struct
+// carries only the fields a provider-specific diagnostic needs and is
+// distinct from the unified capture leg, which the generic layer owns.
+type ExchangeDiagnostic struct {
+	RequestHeader      http.Header
+	DecodedRequestBody []byte
+	Method             string
+	Path               string
+	Host               string
+	Concern            string
+	HookName           string
 }
 
-// CaptureExchange is the typed per-intercepted-request input a
-// Provider's BuildCaptureExtension consumes when producing its
-// CaptureExtension. The generic MITM intercept loop populates every
-// field before invoking the provider; provider implementations must
-// not retain references to RequestBody or ResponseBody beyond the
-// call return.
-type CaptureExchange struct {
-	CapturedAt          time.Time
-	RequestHeader       http.Header
-	RequestBody         []byte
-	DecodedRequestBody  []byte
-	ResponseHeader      http.Header
-	ResponseStatus      int
-	RequestBytes        int64
-	ResponseBytes       int64
-	Method              string
-	Path                string
-	Host                string
-	Concern             string
-	RequestRawPath      string
-	ResponseRawPath     string
-	RequestContentType  string
-	ResponseContentType string
-	HookName            string
+// ExchangeDiagnostician is an optional extension a [Provider] may
+// implement when it decodes provider-specific diagnostics from an
+// intercepted exchange. The generic forward path type-asserts the
+// claiming provider to this interface after the unified capture leg is
+// recorded and, when present, invokes DiagnoseExchange so the provider
+// can emit its own structured diagnostic on its wire concern log. The
+// hook never writes the unified capture.jsonl; it only logs. Providers
+// that decode nothing (Claude, Codex) do not implement it.
+type ExchangeDiagnostician interface {
+	DiagnoseExchange(ctx context.Context, log *slog.Logger, exchange ExchangeDiagnostic)
 }
 
 // Provider is the MITM-package facing contract for a single provider
@@ -141,13 +130,6 @@ type Provider interface {
 	// zero IdentityContribution when no provider-specific fields are
 	// present; the generic layer ignores nil facets.
 	ExtractIdentity(headers http.Header) IdentityContribution
-
-	// BuildCaptureExtension returns the provider-owned capture-event
-	// payload for the supplied intercepted exchange. Providers that
-	// do not own TLS interception (Claude, Codex) return nil; only
-	// providers that opt into TLS interception via ClassifyConnect
-	// build extensions.
-	BuildCaptureExtension(exchange CaptureExchange) CaptureExtension
 }
 
 // registry holds the registered providers.

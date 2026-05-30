@@ -93,12 +93,6 @@ func (routeProvider) ExtractIdentity(headers http.Header) mitm.IdentityContribut
 	}
 }
 
-// BuildCaptureExtension returns nil. Claude does not own a
-// provider-specific capture extension.
-func (routeProvider) BuildCaptureExtension(exchange mitm.CaptureExchange) mitm.CaptureExtension {
-	return nil
-}
-
 func init() {
 	mitm.RegisterProvider(routeProvider{})
 }

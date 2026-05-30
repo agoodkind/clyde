@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -83,10 +82,27 @@ func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (Baseline
 		},
 		BaselinePath: baselinePath, Created: false, Updated: false,
 	}
+	var (
+		result BaselineRefreshOutcome
+		refErr error
+	)
 	if useV2 {
-		return refreshBaselineV2(log, outcome, opts, versionTag, transcriptPath, baselinePath)
+		result, refErr = refreshBaselineV2(log, outcome, opts, versionTag, transcriptPath, baselinePath)
+	} else {
+		result, refErr = refreshBaselineV1(log, outcome, opts, versionTag, transcriptPath, baselinePath)
 	}
-	return refreshBaselineV1(log, outcome, opts, versionTag, transcriptPath, baselinePath)
+	if errors.Is(refErr, errNoSnapshotRecords) {
+		// The resolved per-concern wire transcript holds request-story leg
+		// records, not the http_request / ws_* CaptureRecord kinds the snapshot
+		// extractor needs, so an empty extraction is expected on live data.
+		// Skip the tick without surfacing it as an infrastructure failure.
+		log.WarnContext(ctx, "mitm.baseline.no_usable_records", "concern", "providers.mitm.wire", "component", "mitm",
+			"upstream", upstream,
+			"transcript", transcriptPath,
+		)
+		return result, nil
+	}
+	return result, refErr
 }
 
 func refreshBaselineV2(log *slog.Logger, outcome BaselineRefreshOutcome, opts BaselineRefreshOptions, versionTag, transcriptPath, baselinePath string) (BaselineRefreshOutcome, error) {
@@ -167,44 +183,24 @@ func refreshBaselineV1(log *slog.Logger, outcome BaselineRefreshOutcome, opts Ba
 	return outcome, nil
 }
 
-// ResolveTranscriptPath is part of Clyde's typed adapter surface.
+// ResolveTranscriptPath returns the JSONL transcript the drift loop reads when
+// extracting a live wire snapshot for upstream. The transcript source is the
+// per-upstream drift capture file (<captureRoot>/drift/<upstream>.jsonl) the
+// drift-capture writer appends one `http_request` [CaptureRecord] line to for
+// every native request the MITM forwards. Those records carry request_headers,
+// the request_body field-set summary, and (for claude) the billing attestation,
+// which is exactly the shape the snapshot extractor consumes. The captureRoot is
+// the same root the drift writer uses; upstream selects the per-upstream file.
+//
+// When the drift file does not exist yet (no native traffic has been captured
+// since the loop started), the error is the graceful-skip signal; callers must
+// degrade rather than treat a missing drift file as an infrastructure failure.
 func ResolveTranscriptPath(captureRoot, upstream string) (string, error) {
-	root := expandHome(strings.TrimSpace(captureRoot))
-	if root == "" {
-		return "", fmt.Errorf("capture root is required")
+	path := driftCapturePath(captureRoot, upstream)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path, nil
 	}
-	for _, candidate := range []string{
-		filepath.Join(root, "capture.jsonl"),
-		filepath.Join(root, strings.TrimSpace(upstream), "capture.jsonl"),
-	} {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	upstreamDir := filepath.Join(root, strings.TrimSpace(upstream))
-	entries, err := os.ReadDir(upstreamDir)
-	if err != nil {
-		return "", fmt.Errorf("no capture transcript for %q under %s", upstream, root)
-	}
-	type candidateDir struct {
-		path string
-		name string
-	}
-	var candidates []candidateDir
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(upstreamDir, entry.Name(), "capture.jsonl")
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			candidates = append(candidates, candidateDir{path: path, name: entry.Name()})
-		}
-	}
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no capture transcript for %q under %s", upstream, root)
-	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].name > candidates[j].name })
-	return candidates[0].path, nil
+	return "", fmt.Errorf("no MITM drift capture transcript at %s", path)
 }
 
 // ProviderForUpstream is part of Clyde's typed adapter surface.

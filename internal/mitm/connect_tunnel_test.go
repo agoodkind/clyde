@@ -230,27 +230,37 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 		t.Fatalf("response bytes = %d want %d", len(gotBody), len(upstreamBody))
 	}
 
-	capturePath := filepath.Join(captureDir, "capture.jsonl")
-	waitForFile(t, capturePath)
-	records := readCaptureJSONL(t, capturePath)
-	if len(records) != 1 {
-		t.Fatalf("records = %d want 1: %#v", len(records), records)
+	// capture.jsonl is gone; MITM legs now land in this per-concern file.
+	// recordHTTPCapture runs in the tunnel goroutine after the response is
+	// streamed to the client, so the capture-index leg can land a moment
+	// after the client read returns; poll until that leg appears.
+	capturePath := mitmWireConcernTestPath(captureDir)
+	records := waitForCaptureRecordWithLeg(t, capturePath, logevent.LegMITMCaptureIndex)
+	// Cursor now rides the same unified leg path as claude and codex:
+	// each MITM request emits the LegMITMCaptureIndex record (plus the
+	// other leg records) instead of a separate cursor_tls_http record.
+	record := firstCaptureRecordWithLeg(t, records, logevent.LegMITMCaptureIndex)
+	if record["provider"] != "cursor" {
+		t.Fatalf("provider = %q want cursor: %#v", record["provider"], record)
 	}
-	record := records[0]
-	if record["concern"] != "cursor.bidi" {
-		t.Fatalf("concern = %q want cursor.bidi: %#v", record["concern"], record)
-	}
-	if record["request_id"] != requestID || record["original_request_id"] != "orig-123" || record["session_id"] != "sess-123" {
+	if record["request_id"] != requestID || record["upstream_request_id"] != "orig-123" || record["session_id"] != "sess-123" {
 		t.Fatalf("metadata ids not captured: %#v", record)
 	}
-	if strings.Contains(fmt.Sprint(record), sentinel) {
-		t.Fatalf("JSONL metadata leaked sentinel prompt text")
+	cursorFacet, ok := record["cursor"].(map[string]any)
+	if !ok || cursorFacet["request_id"] != requestID {
+		t.Fatalf("cursor facet missing request id: %#v", record)
 	}
-	if strings.Contains(fmt.Sprint(record), "should-not-appear") {
-		t.Fatalf("JSONL metadata leaked authorization header")
+	for _, line := range records {
+		if strings.Contains(fmt.Sprint(line), sentinel) {
+			t.Fatalf("JSONL metadata leaked sentinel prompt text: %#v", line)
+		}
+		if strings.Contains(fmt.Sprint(line), "should-not-appear") {
+			t.Fatalf("JSONL metadata leaked authorization header: %#v", line)
+		}
 	}
-	requestRawPath := record["request_raw_path"].(string)
-	responseRawPath := record["response_raw_path"].(string)
+	mitmFields := mitmFieldsFromCaptureRecord(t, record)
+	requestRawPath := mitmFields["raw_request_path"].(string)
+	responseRawPath := mitmFields["raw_response_path"].(string)
 	wantRawPrefix := filepath.Join(captureDir, "concerns", "cursor.bidi", "raw", cursorHost)
 	if !strings.HasPrefix(requestRawPath, wantRawPrefix) || !strings.HasPrefix(responseRawPath, wantRawPrefix) {
 		t.Fatalf("raw paths = %q %q, want prefix %q", requestRawPath, responseRawPath, wantRawPrefix)
@@ -492,7 +502,8 @@ func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
 		t.Fatalf("write websocket close: %v", err)
 	}
 
-	capturePath := filepath.Join(captureDir, "capture.jsonl")
+	// capture.jsonl is gone; MITM legs now land in this per-concern file.
+	capturePath := mitmWireConcernTestPath(captureDir)
 	deadline := time.Now().Add(2 * time.Second)
 	var lines []string
 	foundCapture := false
@@ -523,7 +534,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 
 	captureDir := t.TempDir()
 	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
 	proxy := &Proxy{
 		log:             logger,
 		client:          http.DefaultClient,
@@ -534,13 +545,11 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 		rawCaptureSeq:   atomic.Uint64{},
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		Tunnels:         newTestTunnelRegistry(),
-		captureWriters:  newCaptureWriterCache(logger),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "",
 		server:          nil,
 	}
-	defer proxy.closeCaptureWriters()
 
 	requestBody := []byte(`{"probe":"summary"}`)
 	req := httptest.NewRequest(http.MethodPost, "https://"+cursorHost+"/aiserver.v1.AnalyticsService/Batch", bytes.NewReader(requestBody))
@@ -551,12 +560,12 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 		t.Fatalf("handle cursor request: %v", err)
 	}
 
-	records := readCaptureJSONL(t, filepath.Join(captureDir, "capture.jsonl"))
-	if len(records) != 1 {
-		t.Fatalf("records = %d want 1: %#v", len(records), records)
-	}
-	if records[0]["request_raw_path"] != "" || records[0]["response_raw_path"] != "" {
-		t.Fatalf("raw paths = %#v %#v, want empty", records[0]["request_raw_path"], records[0]["response_raw_path"])
+	// capture.jsonl is gone; MITM legs now land in this per-concern file.
+	records := readCaptureJSONL(t, mitmWireConcernTestPath(captureDir))
+	record := firstCaptureRecordWithLeg(t, records, logevent.LegMITMCaptureIndex)
+	mitmFields := mitmFieldsFromCaptureRecord(t, record)
+	if mitmFields["raw_request_path"] != nil || mitmFields["raw_response_path"] != nil {
+		t.Fatalf("raw paths = %#v %#v, want absent", mitmFields["raw_request_path"], mitmFields["raw_response_path"])
 	}
 	if _, err := os.Stat(filepath.Join(captureDir, "concerns", "unknown", "raw")); !os.IsNotExist(err) {
 		t.Fatalf("raw dir stat err=%v want not exist", err)
@@ -715,13 +724,11 @@ func startTestProxy(t *testing.T) *testProxy {
 		tlsClientConfig: nil,
 		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
-		captureWriters:  newCaptureWriterCache(logger),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: t.TempDir()},
 		base:            "http://" + listener.Addr().String(),
 		server:          nil,
 	}
-	t.Cleanup(p.closeCaptureWriters)
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(listener) }()
@@ -748,7 +755,11 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	if err != nil {
 		t.Fatalf("load ca: %v", err)
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// The capture index sink handler turns LegMITMCaptureIndex leg
+	// events emitted through requestLog into capture.jsonl records, the
+	// same unified leg path claude and codex use. The proxy no longer
+	// owns a separate capture writer.
+	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
 	p := &Proxy{
 		log:             logger,
 		client:          http.DefaultClient,
@@ -758,13 +769,12 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
 		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
-		captureWriters:  newCaptureWriterCache(logger),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
 		base:            "http://" + listener.Addr().String(),
 		server:          nil,
 	}
-	t.Cleanup(p.closeCaptureWriters)
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(listener) }()
@@ -811,36 +821,6 @@ func (p testCursorProvider) ExtractIdentity(headers http.Header) IdentityContrib
 		SessionID:                  headers.Get("x-session-id"),
 		Facet:                      facet,
 	}
-}
-
-func (p testCursorProvider) BuildCaptureExtension(exchange CaptureExchange) CaptureExtension {
-	return testCursorCaptureExtension{
-		ConcernName:       exchange.Concern,
-		Path:              exchange.Path,
-		RequestID:         exchange.RequestHeader.Get("x-request-id"),
-		OriginalRequestID: exchange.RequestHeader.Get("x-original-request-id"),
-		SessionID:         exchange.RequestHeader.Get("x-session-id"),
-		RequestRawPath:    exchange.RequestRawPath,
-		ResponseRawPath:   exchange.ResponseRawPath,
-	}
-}
-
-type testCursorCaptureExtension struct {
-	ConcernName       string `json:"concern"`
-	Path              string `json:"path"`
-	RequestID         string `json:"request_id"`
-	OriginalRequestID string `json:"original_request_id"`
-	SessionID         string `json:"session_id"`
-	RequestRawPath    string `json:"request_raw_path"`
-	ResponseRawPath   string `json:"response_raw_path"`
-}
-
-func (e testCursorCaptureExtension) Concern() string {
-	return e.ConcernName
-}
-
-func (e testCursorCaptureExtension) MarshalJSONLine() ([]byte, error) {
-	return json.Marshal(e)
 }
 
 type testCursorFacet struct {
@@ -919,6 +899,40 @@ func readFile(t *testing.T, path string) []byte {
 	return raw
 }
 
+// waitForCaptureRecordWithLeg polls the per-concern wire file until at
+// least one JSONL record carries the wanted leg, then returns every
+// parsed record. The capture leg is emitted from the tunnel goroutine
+// after the response is streamed to the client, so a bare file-exists
+// wait can race ahead of the capture-index write.
+func waitForCaptureRecordWithLeg(t *testing.T, path string, leg logevent.Leg) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if raw, err := os.ReadFile(path); err == nil {
+			records := make([]map[string]any, 0)
+			for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+				if len(line) == 0 {
+					continue
+				}
+				var record map[string]any
+				if err := json.Unmarshal(line, &record); err != nil {
+					continue
+				}
+				records = append(records, record)
+			}
+			for _, record := range records {
+				if record["leg"] == string(leg) {
+					return records
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for capture record with leg %s at %s", leg, path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -927,20 +941,6 @@ func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %#o want %#o", path, got, want)
-	}
-}
-
-func waitForFile(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", path)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 

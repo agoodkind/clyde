@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,14 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+// errNoSnapshotRecords is the sentinel the snapshot extractors return when a
+// resolved transcript contains no usable wire records (no ws_start frame for
+// v1, no records at all for v2). The drift loop treats this as a warn-and-skip
+// condition rather than an infrastructure failure, because the per-concern MITM
+// wire log holds request-story leg records that the extractor cannot turn into
+// a snapshot.
+var errNoSnapshotRecords = errors.New("mitm snapshot: no usable wire records in transcript")
 
 // SnapshotOptions configures Snapshot extraction from a JSONL
 // transcript.
@@ -90,7 +99,7 @@ func buildSnapshot(records []CaptureRecord, opts SnapshotOptions) (Snapshot, err
 		}
 	}
 	if wsStart == nil {
-		return Snapshot{}, fmt.Errorf("snapshot: no ws_start record in transcript")
+		return Snapshot{}, errNoSnapshotRecords
 	}
 
 	snap := Snapshot{

@@ -58,13 +58,6 @@ func (routeProvider) ExtractIdentity(headers http.Header) mitm.IdentityContribut
 	return extractIdentity(headers)
 }
 
-// BuildCaptureExtension returns the Cursor-owned capture extension
-// for an intercepted Cursor TLS request.
-func (routeProvider) BuildCaptureExtension(exchange mitm.CaptureExchange) mitm.CaptureExtension {
-	event := newCaptureExtension(exchange)
-	return event
-}
-
 func init() {
 	mitm.RegisterProvider(routeProvider{})
 }

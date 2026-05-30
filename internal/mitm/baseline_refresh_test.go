@@ -7,28 +7,64 @@ import (
 	"testing"
 )
 
-func TestResolveTranscriptPathPrefersRootCapture(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "capture.jsonl")
-	mustWriteLines(t, path, []map[string]any{{"provider": "claude", "kind": "http_request", "t": 1700000000}})
+func TestResolveTranscriptPathReturnsDriftCaptureFile(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	captureRoot := filepath.Join(stateHome, "clyde", "mitm")
+	driftPath := driftCapturePath(captureRoot, "claude-code")
+	mustWriteLines(t, driftPath, []map[string]any{{"provider": "claude", "kind": "http_request", "t": 1700000000}})
 
-	got, err := ResolveTranscriptPath(root, "claude-code")
+	got, err := ResolveTranscriptPath(captureRoot, "claude-code")
 	if err != nil {
 		t.Fatalf("ResolveTranscriptPath: %v", err)
 	}
-	if got != path {
-		t.Fatalf("ResolveTranscriptPath()=%q want %q", got, path)
+	if got != driftPath {
+		t.Fatalf("ResolveTranscriptPath()=%q want %q", got, driftPath)
+	}
+}
+
+func TestResolveTranscriptPathErrorsWhenDriftFileMissing(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	if _, err := ResolveTranscriptPath(filepath.Join(stateHome, "clyde", "mitm"), "claude-code"); err == nil {
+		t.Fatalf("ResolveTranscriptPath: want error for missing drift file, got nil")
+	}
+}
+
+func TestRefreshBaselineDegradesWhenTranscriptHasNoUsableRecords(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	// A drift file that holds only non-request leg records yields nothing the
+	// snapshot extractor can classify, so the tick must skip without error.
+	captureRoot := filepath.Join(stateHome, "clyde", "mitm")
+	driftPath := driftCapturePath(captureRoot, "claude-code")
+	mustWriteLines(t, driftPath, []map[string]any{
+		{"concern": "providers.mitm.wire", "msg": "logging.request.leg", "leg": "mitm_complete", "request_id": "req-1"},
+	})
+
+	outcome, err := RefreshBaseline(context.TODO(), BaselineRefreshOptions{
+		Upstream:     "claude-code",
+		CaptureRoot:  captureRoot,
+		BaselineRoot: filepath.Join(stateHome, "baselines"),
+	})
+	if err != nil {
+		t.Fatalf("RefreshBaseline: want nil error on degenerate transcript, got %v", err)
+	}
+	if outcome.Created {
+		t.Fatalf("Created=true want false on degenerate transcript")
+	}
+	if outcome.Updated {
+		t.Fatalf("Updated=true want false on degenerate transcript")
 	}
 }
 
 func TestRefreshBaselineInitializesLocalV2Baseline(t *testing.T) {
-	root := t.TempDir()
-	captureRoot := root
-	if err := os.MkdirAll(captureRoot, 0o755); err != nil {
-		t.Fatalf("mkdir capture root: %v", err)
-	}
-	transcript := filepath.Join(captureRoot, "capture.jsonl")
-	mustWriteLines(t, transcript, []map[string]any{
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	captureRoot := filepath.Join(stateHome, "clyde", "mitm")
+	driftPath := driftCapturePath(captureRoot, "claude-code")
+	mustWriteLines(t, driftPath, []map[string]any{
 		{
 			"provider": "claude",
 			"kind":     "http_request",
@@ -36,34 +72,23 @@ func TestRefreshBaselineInitializesLocalV2Baseline(t *testing.T) {
 			"url":      "https://api.anthropic.com/v1/messages",
 			"path":     "/v1/messages",
 			"request_headers": map[string]string{
-				"User-Agent":        "claude-cli/2.1.123 (external, sdk-cli)",
-				"Anthropic-Beta":    "oauth-2025-04-20,claude-code-20250219",
-				"Anthropic-Version": "2023-06-01",
+				"user-agent":        "claude-cli/2.1.123 (external, sdk-cli)",
+				"anthropic-beta":    "oauth-2025-04-20,claude-code-20250219",
+				"anthropic-version": "2023-06-01",
 			},
 			"request_body": map[string]any{
-				"keys": []any{"messages", "model", "system", "tools"},
+				"body_type": "json_object",
+				"keys":      []any{"messages", "model", "system", "tools"},
 			},
-		},
-		{
-			"provider": "codex",
-			"kind":     "http_request",
-			"t":        1700000001,
-			"url":      "https://api.openai.com/v1/responses",
-			"path":     "/v1/responses",
-			"request_headers": map[string]string{
-				"User-Agent": "codex/1.0",
-			},
-			"request_body": map[string]any{
-				"keys": []any{"input", "model"},
-			},
+			"billing_attestation": "abc123def",
 		},
 	})
 
 	outcome, err := RefreshBaseline(context.TODO(), BaselineRefreshOptions{
 		Upstream:     "claude-code",
-		CaptureRoot:  root,
-		BaselineRoot: filepath.Join(root, "baselines"),
-		DriftLogPath: filepath.Join(root, "mitm-drift", "claude-code.jsonl"),
+		CaptureRoot:  captureRoot,
+		BaselineRoot: filepath.Join(stateHome, "baselines"),
+		DriftLogPath: filepath.Join(stateHome, "mitm-drift", "claude-code.jsonl"),
 		IncludeUA:    []string{"claude-cli"},
 	})
 	if err != nil {
@@ -88,7 +113,11 @@ func TestRefreshBaselineInitializesLocalV2Baseline(t *testing.T) {
 	if len(snap.Flavors) != 1 {
 		t.Fatalf("flavor count=%d want 1", len(snap.Flavors))
 	}
-	if snap.Flavors[0].Signature.UserAgent != "claude-cli/2.1.123 (external, sdk-cli)" {
-		t.Fatalf("user agent=%q", snap.Flavors[0].Signature.UserAgent)
+	flavor := snap.Flavors[0]
+	if flavor.Signature.UserAgent != "claude-cli/2.1.123 (external, sdk-cli)" {
+		t.Fatalf("user agent=%q", flavor.Signature.UserAgent)
+	}
+	if flavor.BillingAttestation != "abc123def" {
+		t.Fatalf("billing attestation=%q want abc123def", flavor.BillingAttestation)
 	}
 }

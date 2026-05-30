@@ -184,6 +184,9 @@ func TestExtractSnapshotFiltersByProvider(t *testing.T) {
 
 func mustWriteLines(t *testing.T, path string, records []map[string]any) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		t.Fatalf("open: %v", err)

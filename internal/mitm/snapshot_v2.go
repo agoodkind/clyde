@@ -123,7 +123,7 @@ type rawRequest struct {
 
 func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2Options) (SnapshotV2, error) {
 	if len(records) == 0 {
-		return SnapshotV2{}, fmt.Errorf("snapshot v2: no records in transcript")
+		return SnapshotV2{}, errNoSnapshotRecords
 	}
 
 	// Group request records by flavor. Pair each with its raw line so
@@ -159,7 +159,7 @@ func buildSnapshotV2(rawLines [][]byte, records []CaptureRecord, opts SnapshotV2
 	}
 
 	if len(flavored) == 0 {
-		return SnapshotV2{}, fmt.Errorf("snapshot v2: no http_request records to classify")
+		return SnapshotV2{}, errNoSnapshotRecords
 	}
 
 	snap := SnapshotV2{
@@ -341,6 +341,7 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 		Slug:        slug,
 		Signature:   V2Signature(sig),
 		RecordCount: len(requests), Methods: nil, Paths: nil, Headers: nil, Body: V2Body{BodyType: "", Fields: nil},
+		BillingAttestation: "",
 	}
 
 	methodSet := map[string]bool{}
@@ -351,6 +352,13 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 	fieldObservations := map[string]*v2FieldAcc{} // top-level body field → aggregated observation
 
 	for _, req := range requests {
+		// The first non-empty attestation token observed in this
+		// flavor's records becomes the flavor's attestation. Records
+		// share one caller flavor, so any populated token represents the
+		// flavor; preferring the first keeps the output stable.
+		if flav.BillingAttestation == "" && req.record.BillingAttestation != "" {
+			flav.BillingAttestation = req.record.BillingAttestation
+		}
 		if m := stringFromRaw(req.fields["method"]); m != "" {
 			methodSet[m] = true
 		}

@@ -20,7 +20,6 @@ const defaultLargestFileLimit = 3
 type category string
 
 const (
-	categoryMITMCaptureIndexes     category = "MITM capture indexes"
 	categoryMITMRawCaptures        category = "MITM raw captures"
 	categoryMITMProfileProcessLogs category = "MITM profile/process logs"
 	categoryTopLevelProcessLogs    category = "Top-level daemon/cli logs"
@@ -34,7 +33,6 @@ const (
 )
 
 var categoryOrder = []category{
-	categoryMITMCaptureIndexes,
 	categoryMITMRawCaptures,
 	categoryMITMProfileProcessLogs,
 	categoryTopLevelProcessLogs,
@@ -224,7 +222,6 @@ func collectIndexedInventory(stateRoot string, builders map[category]*categoryBu
 	if captureRoot == "" {
 		captureRoot = filepath.Join(stateRoot, "mitm")
 	}
-	addIndexedLocation(builders, categoryMITMCaptureIndexes, stateRoot, filepath.Join(captureRoot, "capture.jsonl"))
 	addIndexedLocation(builders, categoryMITMRawCaptures, stateRoot, filepath.Join(captureRoot, "raw"))
 	addIndexedLocation(builders, categoryMITMProfileProcessLogs, stateRoot, filepath.Join(stateRoot, "mitm-launcher"))
 }
@@ -365,8 +362,6 @@ func categoryIsCleanupExempt(currentCategory category) bool {
 
 func sinkForCategory(currentCategory category) string {
 	switch currentCategory {
-	case categoryMITMCaptureIndexes:
-		return string(logevent.SinkMITMCapture)
 	case categoryMITMRawCaptures:
 		return string(logevent.SinkMITMRaw)
 	case categoryTopLevelProcessLogs:
@@ -412,9 +407,6 @@ func classifyPath(relativePath string) category {
 	if isMITMRawCapture(lowerPath) {
 		return categoryMITMRawCaptures
 	}
-	if isMITMCaptureIndex(lowerPath, base) {
-		return categoryMITMCaptureIndexes
-	}
 	if isMITMProfileProcessLog(lowerPath, base) {
 		return categoryMITMProfileProcessLogs
 	}
@@ -442,13 +434,6 @@ func isLockFile(lowerPath string, base string) bool {
 
 func isMITMRawCapture(lowerPath string) bool {
 	return strings.HasPrefix(lowerPath, "mitm/") && strings.Contains(lowerPath, "/raw/") && strings.HasSuffix(lowerPath, ".raw")
-}
-
-func isMITMCaptureIndex(lowerPath string, base string) bool {
-	if !strings.HasPrefix(lowerPath, "mitm/") {
-		return false
-	}
-	return strings.HasPrefix(base, "capture") && strings.HasSuffix(base, ".jsonl")
 }
 
 func isMITMProfileProcessLog(lowerPath string, base string) bool {

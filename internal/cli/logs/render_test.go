@@ -18,18 +18,18 @@ func TestRenderInventoryPrintsMetadataTable(t *testing.T) {
 		CleanupEnabled:    true,
 		Categories: []categorySummary{
 			{
-				Category:           categoryMITMCaptureIndexes,
-				Sink:               "mitm_capture_index",
+				Category:           categoryMITMRawCaptures,
+				Sink:               "mitm_raw",
 				Source:             inventorySourceIndexed,
 				RawCaptureEnabled:  false,
 				CleanupEnabled:     true,
 				Count:              1,
 				TotalBytes:         2048,
 				LatestModified:     modified,
-				RepresentativePath: "mitm/capture.jsonl",
+				RepresentativePath: "mitm/raw/example/20260506-request.raw",
 				LargestFiles: []fileSummary{
 					{
-						RelativePath: "mitm/capture.jsonl",
+						RelativePath: "mitm/raw/example/20260506-request.raw",
 						SizeBytes:    2048,
 						Modified:     modified,
 					},
@@ -51,10 +51,10 @@ func TestRenderInventoryPrintsMetadataTable(t *testing.T) {
 		"Raw capture: false",
 		"Cleanup: true",
 		"Category",
-		"MITM capture indexes",
+		"MITM raw captures",
 		"1",
 		"2.0 KiB",
-		"mitm/capture.jsonl (2.0 KiB)",
+		"mitm/raw/example/20260506-request.raw (2.0 KiB)",
 		"Uncategorized logs",
 	} {
 		if !strings.Contains(rendered, want) {

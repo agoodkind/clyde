@@ -45,7 +45,10 @@ type CaptureRecord struct {
 	UpstreamResponseID string `json:"upstream_response_id,omitempty"`
 
 	// HTTP fields.
-	Method  string            `json:"method,omitempty"`
+	Method string `json:"method,omitempty"`
+	// Path is the request URL path the snapshot extractor groups by. The
+	// drift-capture writer populates it; older transcripts may omit it.
+	Path    string            `json:"path,omitempty"`
 	Status  int               `json:"status,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 	BodyLen int               `json:"body_len,omitempty"`
@@ -53,6 +56,12 @@ type CaptureRecord struct {
 	// sidecar payloads are referenced by explicit raw path fields when raw
 	// capture is enabled.
 	Body json.RawMessage `json:"body,omitempty"`
+	// RequestBody is the filtered request payload summary (a {keys,
+	// body_type} object, never raw prompt text) the snapshot extractor
+	// reads to classify the body field-set. The drift-capture writer
+	// populates it; the v2 extractor keys on the `request_body` JSON
+	// field, distinct from the response-side `body` field above.
+	RequestBody json.RawMessage `json:"request_body,omitempty"`
 	// ws_start fields.
 	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
 	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
@@ -66,6 +75,14 @@ type CaptureRecord struct {
 	// ws_end fields.
 	Messages int    `json:"messages,omitempty"`
 	Err      string `json:"err,omitempty"`
+
+	// BillingAttestation carries the claude-code `cch=<value>` token
+	// lifted out of the first system text block's
+	// `x-anthropic-billing-header:` line. It is captured only on the
+	// drift-capture path for the claude provider and is needed later
+	// for egress replay; codex attestation rides through verbatim in
+	// the `x-oai-attestation` request header instead.
+	BillingAttestation string `json:"billing_attestation,omitempty"`
 }
 
 // Snapshot is the typed reference for what an upstream client emits

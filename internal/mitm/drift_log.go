@@ -45,6 +45,7 @@ func AppendDriftOutcome(path string, outcome DriftOutcome) error {
 	if path == "" {
 		return fmt.Errorf("drift log path is empty")
 	}
+	path = expandHome(path)
 	if outcome.Timestamp.IsZero() {
 		outcome.Timestamp = clock.Now().UTC()
 	}

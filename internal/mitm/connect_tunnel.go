@@ -390,7 +390,6 @@ func (p *Proxy) watchProviderTunnelDrain(ctx context.Context, client *tls.Conn, 
 func buildProviderFailureInput(params providerForwardParams, requestIndex captureBodyIndex, responseIndex captureBodyIndex, statusCode int) httpCaptureRecordInput {
 	return buildHTTPFailureCaptureInput(
 		params.cfg,
-		params.capturePolicy,
 		params.provider.ID().String(),
 		"https://"+params.host+params.req.URL.RequestURI(),
 		params.body,
@@ -441,12 +440,10 @@ func (p *Proxy) prepareProviderRequestCapture(req *http.Request, params provider
 func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer *bufio.Writer, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
 	started := clock.Now()
 	cfg := p.config()
-	capturePolicy := captureFilePolicyFromConfig(cfg)
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return p.recordProviderFailure(req, http.Header{}, buildHTTPFailureCaptureInput(
 			cfg,
-			capturePolicy,
 			provider.ID().String(),
 			"https://"+host+req.URL.RequestURI(),
 			nil,
@@ -495,7 +492,6 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 		requestRawPath:  "",
 		responseRawPath: "",
 		cfg:             cfg,
-		capturePolicy:   capturePolicy,
 	}
 	params, err = p.prepareProviderRequestCapture(req, params)
 	if err != nil {
@@ -517,7 +513,6 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 			requestRawPath:  params.requestRawPath,
 			responseRawPath: params.responseRawPath,
 			cfg:             cfg,
-			capturePolicy:   capturePolicy,
 		})
 	}
 
@@ -541,7 +536,6 @@ type providerForwardParams struct {
 	requestRawPath  string
 	responseRawPath string
 	cfg             config.MITMConfig
-	capturePolicy   CaptureFilePolicy
 }
 
 // forwardProviderRequestToUpstream runs the standard (non-hook)
@@ -565,44 +559,6 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 	if err != nil {
 		return err
 	}
-	decodedRequestBody, decoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
-	if !decoded {
-		decodedRequestBody = params.body
-	}
-	if appendErr := p.appendProviderCaptureExtension(params.cfg.CaptureDir, params.provider.BuildCaptureExtension(CaptureExchange{
-		CapturedAt:          clock.Now().UTC(),
-		RequestHeader:       params.req.Header,
-		RequestBody:         params.body,
-		DecodedRequestBody:  decodedRequestBody,
-		ResponseHeader:      resp.Header,
-		ResponseStatus:      resp.StatusCode,
-		RequestBytes:        params.requestBytes,
-		ResponseBytes:       responseBytes,
-		Method:              params.req.Method,
-		Path:                params.req.URL.Path,
-		Host:                params.host,
-		Concern:             params.concern,
-		RequestRawPath:      params.requestRawPath,
-		ResponseRawPath:     params.responseRawPath,
-		RequestContentType:  params.req.Header.Get("Content-Type"),
-		ResponseContentType: resp.Header.Get("Content-Type"),
-		HookName:            "",
-	}), params.capturePolicy); appendErr != nil {
-		if errors.Is(appendErr, ErrCaptureSinkClosed) {
-			p.log.DebugContext(ctx, "mitm.provider.capture.append_skipped_closed",
-				"component", "mitm",
-				"concern", "providers.mitm.wire",
-				"capture_dir", params.cfg.CaptureDir,
-			)
-		} else {
-			p.log.WarnContext(ctx, "mitm.provider.capture.append_failed",
-				"component", "mitm",
-				"concern", "providers.mitm.wire",
-				"capture_dir", params.cfg.CaptureDir,
-				"err", appendErr,
-			)
-		}
-	}
 	p.log.InfoContext(ctx, "mitm.provider.capture.completed",
 		"provider", params.provider.ID().String(),
 		"host", params.host,
@@ -614,7 +570,59 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 		"response_bytes", responseBytes,
 	)
 	p.recordHTTPCapture(params.req, resp.Header, providerHTTPCaptureRecordInput(params, resp.StatusCode, responseBytes))
+	p.diagnoseProviderExchange(ctx, params, "")
+	p.recordProviderDriftCapture(ctx, params)
 	return nil
+}
+
+// recordProviderDriftCapture feeds the provider TLS-intercept path's request
+// into the drift-capture writer and debounces a baseline refresh, matching the
+// plain-HTTP forward path. The intercepted request body may be content-encoded,
+// so it is decoded before the body field-set summary and the claude billing
+// attestation are derived. Native provider traffic reaches the upstream through
+// this path, so the drift baseline learns from real client requests here.
+func (p *Proxy) recordProviderDriftCapture(ctx context.Context, params providerForwardParams) {
+	provider := params.provider.ID().String()
+	decodedBody, decoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
+	if !decoded {
+		decodedBody = params.body
+	}
+	p.recordDriftCapture(params.cfg, driftCaptureInput{
+		provider:    provider,
+		method:      params.req.Method,
+		path:        params.req.URL.Path,
+		upstreamURL: "https://" + params.host + params.req.URL.RequestURI(),
+		header:      params.req.Header,
+		body:        decodedBody,
+	})
+	queueBaselineRefresh(ctx, params.cfg, provider, p.log)
+}
+
+// diagnoseProviderExchange invokes the claiming provider's optional
+// [ExchangeDiagnostician] hook after the unified capture leg has been
+// recorded. Providers that decode provider-specific diagnostics (only
+// Cursor today) emit them on their own wire concern log; providers
+// that do not implement the interface are skipped. The hook is given
+// the decoded request body so a provider can inspect a gRPC-web frame
+// without the generic layer knowing the wire shape.
+func (p *Proxy) diagnoseProviderExchange(ctx context.Context, params providerForwardParams, hookName string) {
+	diagnostician, ok := params.provider.(ExchangeDiagnostician)
+	if !ok {
+		return
+	}
+	decodedRequestBody, decoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
+	if !decoded {
+		decodedRequestBody = params.body
+	}
+	diagnostician.DiagnoseExchange(ctx, p.log, ExchangeDiagnostic{
+		RequestHeader:      params.req.Header,
+		DecodedRequestBody: decodedRequestBody,
+		Method:             params.req.Method,
+		Path:               params.req.URL.Path,
+		Host:               params.host,
+		Concern:            params.concern,
+		HookName:           hookName,
+	})
 }
 
 // providerHTTPCaptureRecordInput packages the provider request and the
@@ -645,7 +653,6 @@ func providerHTTPCaptureRecordInput(params providerForwardParams, statusCode int
 	}
 	return httpCaptureRecordInput{
 		config:         params.cfg,
-		policy:         params.capturePolicy,
 		provider:       params.provider.ID().String(),
 		upstreamURL:    "https://" + params.host + params.req.URL.RequestURI(),
 		requestBody:    params.body,

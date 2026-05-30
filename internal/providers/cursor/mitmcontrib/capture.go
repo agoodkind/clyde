@@ -1,111 +1,67 @@
 package mitmcontrib
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
+	"context"
+	"log/slog"
 	"strings"
-	"time"
 
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/gklog/correlation"
 )
 
-const captureKind = "cursor_tls_http"
-
-// CaptureExtension is the Cursor-owned capture.jsonl record emitted
-// after an intercepted Cursor TLS request completes.
-type CaptureExtension struct {
-	Kind                string                `json:"kind"`
-	T                   int64                 `json:"t"`
-	TS                  string                `json:"ts"`
-	Provider            string                `json:"provider"`
-	ConcernName         string                `json:"concern"`
-	Host                string                `json:"host"`
-	Method              string                `json:"method"`
-	Path                string                `json:"path"`
-	Status              int                   `json:"status"`
-	RequestBytes        int64                 `json:"request_bytes"`
-	ResponseBytes       int64                 `json:"response_bytes"`
-	RequestRawPath      string                `json:"request_raw_path"`
-	ResponseRawPath     string                `json:"response_raw_path"`
-	RequestID           string                `json:"request_id"`
-	OriginalRequestID   string                `json:"original_request_id"`
-	SessionID           string                `json:"session_id"`
-	Traceparent         string                `json:"traceparent"`
-	TraceID             string                `json:"trace_id,omitempty"`
-	RequestContentType  string                `json:"request_content_type"`
-	ResponseContentType string                `json:"response_content_type"`
-	Diagnostic          *BidiAppendDiagnostic `json:"bidi_append,omitempty"`
-	Hook                string                `json:"hook,omitempty"`
-}
-
-// Concern returns the provider-owned concern bucket for this capture
-// extension.
-func (e CaptureExtension) Concern() string {
-	return e.ConcernName
-}
-
-// MarshalJSONLine returns the single JSONL record body for the capture
-// extension.
-func (e CaptureExtension) MarshalJSONLine() ([]byte, error) {
-	type captureExtensionAlias CaptureExtension
-	raw, err := json.Marshal(captureExtensionAlias(e))
-	if err != nil {
-		return nil, fmt.Errorf("marshal cursor capture extension: %w", err)
+// DiagnoseExchange implements the optional [mitm.ExchangeDiagnostician]
+// contract. When the intercepted Cursor request looks like a BidiAppend
+// gRPC-Web call, it decodes the typed [BidiAppendDiagnostic] from the
+// decoded request body and emits it as a structured slog record on the
+// MITM wire concern. The diagnostic rides the cursor wire concern log
+// rather than the unified capture.jsonl leg: the unified capture record
+// is transport-shaped and the BidiAppend protobuf decode is a
+// cursor-only diagnostic, so it stays out of the shared leg facet. The
+// decode never logs raw prompt bytes; only request id, append seqno,
+// and content-length/hash summaries surface.
+func (routeProvider) DiagnoseExchange(ctx context.Context, log *slog.Logger, exchange mitm.ExchangeDiagnostic) {
+	if log == nil {
+		return
 	}
-	return raw, nil
-}
-
-func newCaptureExtension(exchange mitm.CaptureExchange) CaptureExtension {
+	if exchange.HookName != "" {
+		return
+	}
+	diag, ok := DiagnoseRequest(RequestCapture{
+		Path:    exchange.Path,
+		Headers: exchange.RequestHeader,
+		Body:    exchange.DecodedRequestBody,
+	}, nil)
+	if !ok {
+		return
+	}
 	headers := ExtractCaptureHeaders(exchange.RequestHeader)
 	traceID, _, hasTraceparent := correlation.ParseTraceparent(headers.Traceparent)
-	concern := strings.TrimSpace(resolveCaptureConcern(exchange))
-	capturedAt := exchange.CapturedAt.UTC()
-	if exchange.CapturedAt.IsZero() {
-		capturedAt = time.Unix(0, 0).UTC()
-	}
-	event := CaptureExtension{
-		Kind:                captureKind,
-		T:                   capturedAt.Unix(),
-		TS:                  capturedAt.Format(time.RFC3339Nano),
-		Provider:            ProviderName,
-		ConcernName:         concern,
-		Host:                exchange.Host,
-		Method:              exchange.Method,
-		Path:                exchange.Path,
-		Status:              exchange.ResponseStatus,
-		RequestBytes:        exchange.RequestBytes,
-		ResponseBytes:       exchange.ResponseBytes,
-		RequestRawPath:      exchange.RequestRawPath,
-		ResponseRawPath:     exchange.ResponseRawPath,
-		RequestID:           headers.RequestID,
-		OriginalRequestID:   headers.OriginalRequestID,
-		SessionID:           headers.SessionID,
-		Traceparent:         headers.Traceparent,
-		TraceID:             captureTraceID(traceID, hasTraceparent),
-		RequestContentType:  contentType(exchange.RequestHeader, exchange.RequestContentType),
-		ResponseContentType: contentType(exchange.ResponseHeader, exchange.ResponseContentType),
-		Diagnostic:          nil,
-		Hook:                exchange.HookName,
-	}
-	if exchange.HookName == "" {
-		diag, ok := DiagnoseRequest(RequestCapture{
-			Path:    exchange.Path,
-			Headers: exchange.RequestHeader,
-			Body:    exchange.DecodedRequestBody,
-		}, nil)
-		if ok {
-			event.Diagnostic = &diag
-		}
-	}
-	return event
+	log.InfoContext(ctx, "mitm.cursor.bidi_append.diagnostic",
+		"component", "mitm",
+		"concern", "providers.mitm.wire",
+		"provider", ProviderName,
+		"host", exchange.Host,
+		"path", exchange.Path,
+		"concern_bucket", resolveConcernBucket(exchange.Concern),
+		"request_id", headers.RequestID,
+		"original_request_id", headers.OriginalRequestID,
+		"session_id", headers.SessionID,
+		"trace_id", captureTraceID(traceID, hasTraceparent),
+		"bidi_request_id", diag.RequestID,
+		"bidi_append_seqno", diag.AppendSeqno,
+		"bidi_decoded_bytes", diag.DecodedBytes,
+		"bidi_decoded_sha256", diag.DecodedSHA256,
+		"bidi_payload_bytes", diag.PayloadBytes,
+		"bidi_payload_sha256", diag.PayloadSHA256,
+		"bidi_sentinel_found", diag.SentinelFound,
+		"bidi_sentinel_requested", diag.SentinelRequested,
+	)
 }
 
-func resolveCaptureConcern(exchange mitm.CaptureExchange) string {
-	concern := strings.TrimSpace(exchange.Concern)
+func resolveConcernBucket(concern string) string {
+	concern = strings.TrimSpace(concern)
 	if concern == "" {
-		concern = "unknown"
+		return "unknown"
 	}
 	return concern
 }
@@ -115,11 +71,4 @@ func captureTraceID(traceID correlation.TraceID, ok bool) string {
 		return ""
 	}
 	return string(traceID)
-}
-
-func contentType(header http.Header, fallback string) string {
-	if value := strings.TrimSpace(header.Get("Content-Type")); value != "" {
-		return value
-	}
-	return fallback
 }

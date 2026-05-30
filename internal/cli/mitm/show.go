@@ -108,7 +108,7 @@ func newShowCmdWithLoader(f *cli.Factory, loadConfig func() (*config.Config, err
 	cmd := &cobra.Command{
 		Use:   "show <id>",
 		Short: "Print log lines and MITM raw-capture paths that correlate to one request id",
-		Long: "Show searches Clyde adapter, daemon, and MITM capture sources for any line " +
+		Long: "Show searches Clyde adapter, daemon, and MITM per-concern wire logs for any line " +
 			"that mentions the given id. The id may be a Clyde request id (chatcmpl-<hex>), " +
 			"a Cursor request id (UUID), or an Anthropic upstream request id (req_<token>); " +
 			"the kind is detected by shape.",
@@ -194,7 +194,9 @@ type sourceSet struct {
 	adapterHTTPErrors   string
 	adapterChatDir      string
 	daemonLog           string
-	mitmCaptureIndex    string
+	mitmWire            string
+	mitmErrors          string
+	mitmLifecycle       string
 	mitmRawDir          string
 }
 
@@ -207,7 +209,9 @@ func resolveSources(cfg *config.Config) sourceSet {
 		adapterHTTPErrors:   filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernAdapterHTTPErrors)),
 		adapterChatDir:      filepath.Join(concernRoot, "adapter", "chat"),
 		daemonLog:           daemonLog,
-		mitmCaptureIndex:    filepath.Join(captureDir, "capture.jsonl"),
+		mitmWire:            filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMWire)),
+		mitmErrors:          filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMErrors)),
+		mitmLifecycle:       filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMLifecycle)),
 		mitmRawDir:          filepath.Join(captureDir, "raw"),
 	}
 }
@@ -238,7 +242,13 @@ func runOnePass(sources sourceSet, id string) LookupPass {
 		"clyde daemon log", sources.daemonLog, id, sourceKindAdapter, &pass.Found,
 	))
 	pass.Sections = append(pass.Sections, searchFile(
-		"mitm capture index", sources.mitmCaptureIndex, id, sourceKindCapture, &pass.Found,
+		"mitm wire concern log", sources.mitmWire, id, sourceKindCapture, &pass.Found,
+	))
+	pass.Sections = append(pass.Sections, searchFile(
+		"mitm errors concern log", sources.mitmErrors, id, sourceKindCapture, &pass.Found,
+	))
+	pass.Sections = append(pass.Sections, searchFile(
+		"mitm lifecycle concern log", sources.mitmLifecycle, id, sourceKindCapture, &pass.Found,
 	))
 	pass.Raw = searchRawDir(sources.mitmRawDir, id)
 	return pass
@@ -246,7 +256,7 @@ func runOnePass(sources sourceSet, id string) LookupPass {
 
 // sourceKind tells the correlation merger how to interpret the overloaded
 // request_id field, which carries the Clyde request id in adapter and daemon
-// logs and the Cursor request id in the MITM capture index.
+// logs and the Cursor request id in the MITM per-concern wire logs.
 type sourceKind int
 
 const (
@@ -356,8 +366,8 @@ type lineFields struct {
 
 // updateCorrelation parses one JSONL line and fills in any correlation slots
 // that are still empty. Source kind disambiguates the overloaded request_id
-// field: adapter and daemon logs record the Clyde id; the MITM capture index
-// records the Cursor id.
+// field: adapter and daemon logs record the Clyde id; the MITM per-concern
+// wire logs record the Cursor id.
 func updateCorrelation(line string, kind sourceKind, found *Correlation) {
 	var fields lineFields
 	if err := json.Unmarshal([]byte(line), &fields); err != nil {

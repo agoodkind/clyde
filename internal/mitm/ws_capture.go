@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -563,9 +562,12 @@ func (p *Proxy) emitWSLogLeg(ctx context.Context, recorder *logevent.Recorder, l
 		CloseReason:         input.CloseReason,
 		RequestContentType:  input.RequestContentType,
 		ResponseContentType: input.ResponseContentType,
-		CapturePath:         filepath.Join(expandHome(input.CaptureDir), "capture.jsonl"),
-		RawRequestPath:      "",
-		RawResponsePath:     "",
+		// CapturePath is intentionally empty: the dedicated capture.jsonl sink
+		// is gone, so each MITM leg lands in the per-concern wire log via the
+		// slog router rather than a record-embedded capture-file path.
+		CapturePath:     "",
+		RawRequestPath:  "",
+		RawResponsePath: "",
 	}
 	var event logevent.Event
 	event.Path.Leg = leg

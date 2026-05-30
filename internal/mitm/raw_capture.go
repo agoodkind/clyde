@@ -159,44 +159,6 @@ func safePathPart(value string) string {
 	return out
 }
 
-func (p *Proxy) appendProviderCaptureExtension(dir string, extension CaptureExtension, policy CaptureFilePolicy) error {
-	if extension == nil {
-		return nil
-	}
-	dir = expandHome(dir)
-	concern := strings.TrimSpace(extension.Concern())
-	if concern == "" {
-		concern = "unknown"
-	}
-	raw, err := extension.MarshalJSONLine()
-	if err != nil {
-		slog.Warn("mitm.provider.capture.encode_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"capture_dir", dir,
-			"err", err,
-		)
-		return fmt.Errorf("encode provider capture metadata: %w", err)
-	}
-	if err := p.appendProviderCaptureLineAtDir(dir, raw, policy); err != nil {
-		return err
-	}
-	return p.appendProviderCaptureLineAtDir(filepath.Join(dir, "concerns", safePathPart(concern)), raw, policy)
-}
-
-func (p *Proxy) appendProviderCaptureLineAtDir(dir string, raw []byte, policy CaptureFilePolicy) error {
-	if err := p.writeCaptureLine(dir, raw, policy); err != nil {
-		slog.Warn("mitm.provider.capture.write_failed",
-			"component", "mitm",
-			"concern", "providers.mitm.wire",
-			"capture_dir", dir,
-			"err", err,
-		)
-		return fmt.Errorf("write provider capture metadata: %w", err)
-	}
-	return nil
-}
-
 func headerBlock(statusLine string, h http.Header) []byte {
 	var buf bytes.Buffer
 	buf.WriteString(statusLine)

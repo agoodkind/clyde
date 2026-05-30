@@ -20,6 +20,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog"
 )
 
 func TestProxyRawHTTPCaptureWritesBoundedIndexWithSidecarRefs(t *testing.T) {
@@ -59,7 +60,7 @@ func TestProxyRawHTTPCaptureWritesBoundedIndexWithSidecarRefs(t *testing.T) {
 		t.Fatalf("response body length = %d want %d", len(gotResponse), len(responseBody))
 	}
 
-	capturePath := filepath.Join(captureDir, captureIndexFilename)
+	capturePath := mitmWireConcernTestPath(captureDir)
 	rawIndex := readFile(t, capturePath)
 	if bytes.Contains(rawIndex, []byte(strings.Repeat(largeValue, 8))) {
 		t.Fatalf("capture index contains repeated raw request body")
@@ -167,11 +168,9 @@ func TestBeginHTTPLogRecorderUsesNativeCursorHeadersWhenClydeHeadersMissing(t *t
 	logBuffer := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxy := &Proxy{
-		log:            logger,
-		requestLog:     logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		captureWriters: newCaptureWriterCache(logger),
+		log:        logger,
+		requestLog: logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 	}
-	t.Cleanup(proxy.closeCaptureWriters)
 
 	req := httptest.NewRequest(http.MethodPost, "http://cursor.test/aiserver.v1.DashboardService/GetTeams", strings.NewReader(`{"probe":"cursor-identity"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -182,7 +181,6 @@ func TestBeginHTTPLogRecorderUsesNativeCursorHeadersWhenClydeHeadersMissing(t *t
 
 	input := httpCaptureRecordInput{
 		config:         config.MITMConfig{CaptureDir: t.TempDir()},
-		policy:         CaptureFilePolicy{},
 		provider:       "cursor",
 		upstreamURL:    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetTeams",
 		requestBody:    []byte(`{"probe":"cursor-identity"}`),
@@ -228,17 +226,14 @@ func TestProxyHTTPCaptureEarlyFailureEmitsRequestErrorWithoutIncomplete(t *testi
 	logBuffer := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxy := &Proxy{
-		log:            logger,
-		requestLog:     logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		captureWriters: newCaptureWriterCache(logger),
+		log:        logger,
+		requestLog: logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 	}
-	t.Cleanup(proxy.closeCaptureWriters)
 
 	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/messages", strings.NewReader(`{"model":"claude","messages":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	input := httpCaptureRecordInput{
 		config:         config.MITMConfig{CaptureDir: t.TempDir()},
-		policy:         CaptureFilePolicy{},
 		provider:       "claude",
 		upstreamURL:    "https://api.anthropic.com/v1/messages",
 		requestBody:    []byte(`{"model":"claude","messages":[]}`),
@@ -280,17 +275,14 @@ func TestProxyHTTPCaptureEmitsRequiredRequestLegSequence(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	captureDir := t.TempDir()
 	proxy := &Proxy{
-		log:            logger,
-		requestLog:     logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		captureWriters: newCaptureWriterCache(logger),
+		log:        logger,
+		requestLog: logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 	}
-	t.Cleanup(proxy.closeCaptureWriters)
 	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/responses", strings.NewReader(`{"model":"gpt-5","input":"hello"}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := &http.Response{StatusCode: http.StatusAccepted, Header: http.Header{"Content-Type": []string{"application/json"}}}
 	input := httpCaptureRecordInput{
 		config:         config.MITMConfig{CaptureDir: captureDir},
-		policy:         CaptureFilePolicy{},
 		provider:       "openai",
 		upstreamURL:    "https://api.openai.com/v1/responses",
 		requestBody:    []byte(`{"model":"gpt-5","input":"hello"}`),
@@ -324,38 +316,62 @@ func TestProxyHTTPCaptureEmitsRequiredRequestLegSequence(t *testing.T) {
 	}
 }
 
-func TestProxyCaptureIndexLockFailureDoesNotFailTraffic(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
-	defer upstream.Close()
+// TestCaptureIndexSerializesConcurrentWritersWithoutDropping asserts the
+// post-collapse guarantee: the single MITM wire concern file takes a
+// blocking cross-process flock per write (via gklog.FileJSON's
+// NewLockedWriteCloser), so concurrent writers to the same
+// providers/mitm/wire.jsonl serialize and every record persists. The old
+// non-blocking lock would drop a record on contention; this test fails if any
+// record is lost.
+func TestCaptureIndexSerializesConcurrentWritersWithoutDropping(t *testing.T) {
+	concernRoot := t.TempDir()
+	if err := os.MkdirAll(concernRoot, 0o755); err != nil {
+		t.Fatalf("mkdir concern root: %v", err)
+	}
 
-	captureDir := t.TempDir()
-	if err := os.MkdirAll(captureDir, 0o755); err != nil {
-		t.Fatalf("mkdir capture dir: %v", err)
+	const writers = 8
+	const recordsPerWriter = 16
+	// One shared handler instance is the production shape: a single
+	// process owns one wire file handler. The blocking flock inside
+	// gklog.FileJSON serializes the concurrent Handle calls so every
+	// record lands intact rather than dropping on a non-blocking lock.
+	logger := slog.New(newMITMCaptureTestHandler(t, concernRoot))
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for w := 0; w < writers; w++ {
+		go func(writerIndex int) {
+			defer wg.Done()
+			for r := 0; r < recordsPerWriter; r++ {
+				logger.Info("logging.request.leg",
+					slog.String("concern", slogger.ConcernProviderMITMWire),
+					slog.Int("writer", writerIndex),
+					slog.Int("record", r),
+				)
+			}
+		}(w)
 	}
-	lock, err := lockCaptureIndex(filepath.Join(captureDir, captureIndexFilename))
-	if err != nil {
-		t.Fatalf("lock capture index: %v", err)
-	}
-	defer unlockCaptureIndex(lock)
+	wg.Wait()
 
-	proxy := newHTTPProxyForCaptureTest(t, captureDir, false, upstream)
-	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/responses", strings.NewReader(`{"input":"hello"}`))
-	recorder := httptest.NewRecorder()
-	proxy.handle(recorder, req)
-	resp := recorder.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("status = %d want %d", resp.StatusCode, http.StatusAccepted)
+	capturePath := mitmWireConcernTestPath(concernRoot)
+	records := readCaptureJSONL(t, capturePath)
+	if len(records) != writers*recordsPerWriter {
+		t.Fatalf("capture records = %d want %d (records dropped under contention)", len(records), writers*recordsPerWriter)
 	}
-	gotBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response: %v", err)
+	seen := make(map[[2]int]bool, writers*recordsPerWriter)
+	for _, record := range records {
+		writerValue, okWriter := record["writer"].(float64)
+		recordValue, okRecord := record["record"].(float64)
+		if !okWriter || !okRecord {
+			t.Fatalf("capture record missing writer/record fields: %#v", record)
+		}
+		key := [2]int{int(writerValue), int(recordValue)}
+		if seen[key] {
+			t.Fatalf("duplicate capture record %v", key)
+		}
+		seen[key] = true
 	}
-	if string(gotBody) != `{"ok":true}` {
-		t.Fatalf("body = %q want upstream response", string(gotBody))
+	if len(seen) != writers*recordsPerWriter {
+		t.Fatalf("unique capture records = %d want %d", len(seen), writers*recordsPerWriter)
 	}
 }
 
@@ -372,30 +388,37 @@ func newHTTPProxyForCaptureTest(t *testing.T, captureDir string, rawCaptureEnabl
 		tlsClientConfig: nil,
 		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
-		captureWriters:  newCaptureWriterCache(logger),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
 		base:            "http://[::1]",
 		server:          nil,
 	}
-	t.Cleanup(proxy.closeCaptureWriters)
 	return proxy
 }
 
-func newMITMCaptureTestHandler(t *testing.T, captureDir string) slog.Handler {
+// mitmWireConcernTestPath resolves the per-concern MITM wire JSONL file under
+// concernRoot, mirroring the slogger router layout
+// (providers/mitm/wire.jsonl). The capture sink that wrote a dedicated
+// capture.jsonl is gone; MITM legs now land in this per-concern file, so the
+// capture tests read from here.
+func mitmWireConcernTestPath(concernRoot string) string {
+	return filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMWire))
+}
+
+// newMITMCaptureTestHandler returns a gklog.FileJSON handler writing every
+// record to the per-concern MITM wire file under concernRoot. gklog.FileJSON
+// wraps a NewLockedWriteCloser that takes a blocking cross-process flock per
+// write, so concurrent writers serialize without dropping records. The proxy
+// test logger is dedicated, so every record it emits is a MITM wire leg and no
+// sink filtering is needed.
+func newMITMCaptureTestHandler(t *testing.T, concernRoot string) slog.Handler {
 	t.Helper()
-	handler := slogger.NewMITMCaptureIndexHandler(slogger.MITMCapturePolicy{
-		Enabled: true,
-		Root:    captureDir,
-		Rotation: slogger.RotationPolicy{
-			Enabled: false,
-		},
-	}, slog.LevelDebug)
-	if handler == nil {
-		t.Fatalf("MITM capture index handler was not created")
+	path := mitmWireConcernTestPath(concernRoot)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir MITM wire concern dir: %v", err)
 	}
-	return handler
+	return gklog.FileJSON(path, slog.LevelDebug, gklog.RotationConfig{})
 }
 
 func mitmFieldsFromCaptureRecord(t *testing.T, record map[string]any) map[string]any {

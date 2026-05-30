@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -112,9 +111,12 @@ func (p *Proxy) emitHTTPLogLeg(ctx context.Context, recorder *logevent.Recorder,
 		CloseReason:         "",
 		RequestContentType:  "",
 		ResponseContentType: "",
-		CapturePath:         filepath.Join(expandHome(input.config.CaptureDir), "capture.jsonl"),
-		RawRequestPath:      rawPathFromCaptureBodyIndex(input.requestIndex),
-		RawResponsePath:     rawPathFromCaptureBodyIndex(input.responseIndex),
+		// CapturePath is intentionally empty: the dedicated capture.jsonl sink
+		// is gone, so each MITM leg lands in the per-concern wire log via the
+		// slog router rather than a record-embedded capture-file path.
+		CapturePath:     "",
+		RawRequestPath:  rawPathFromCaptureBodyIndex(input.requestIndex),
+		RawResponsePath: rawPathFromCaptureBodyIndex(input.responseIndex),
 	}
 	var event logevent.Event
 	event.Path.Leg = leg
@@ -146,9 +148,12 @@ func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recor
 		CloseReason:         "",
 		RequestContentType:  r.Header.Get("Content-Type"),
 		ResponseContentType: responseHeader.Get("Content-Type"),
-		CapturePath:         filepath.Join(expandHome(input.config.CaptureDir), "capture.jsonl"),
-		RawRequestPath:      rawPathFromCaptureBodyIndex(input.requestIndex),
-		RawResponsePath:     rawPathFromCaptureBodyIndex(input.responseIndex),
+		// CapturePath is intentionally empty: the dedicated capture.jsonl sink
+		// is gone, so each MITM leg lands in the per-concern wire log via the
+		// slog router rather than a record-embedded capture-file path.
+		CapturePath:     "",
+		RawRequestPath:  rawPathFromCaptureBodyIndex(input.requestIndex),
+		RawResponsePath: rawPathFromCaptureBodyIndex(input.responseIndex),
 	}
 	var event logevent.Event
 	event.Path.Leg = logevent.LegMITMPayload
@@ -177,7 +182,6 @@ type httpFailureRecord struct {
 
 func buildHTTPFailureCaptureInput(
 	cfg config.MITMConfig,
-	policy CaptureFilePolicy,
 	provider string,
 	upstreamURL string,
 	requestBody []byte,
@@ -188,7 +192,6 @@ func buildHTTPFailureCaptureInput(
 ) httpCaptureRecordInput {
 	return httpCaptureRecordInput{
 		config:         cfg,
-		policy:         policy,
 		provider:       provider,
 		upstreamURL:    upstreamURL,
 		requestBody:    requestBody,

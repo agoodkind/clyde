@@ -2,11 +2,12 @@ package mitmcontrib
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"testing"
-	"time"
 
 	"goodkind.io/clyde/internal/mitm"
 )
@@ -50,7 +51,7 @@ func TestRouteProviderExtractsCursorIdentity(t *testing.T) {
 	}
 }
 
-func TestBuildCaptureExtensionAddsIdentityTraceAndBidiDiagnostic(t *testing.T) {
+func TestDiagnoseExchangeEmitsBidiDiagnosticOnWireConcern(t *testing.T) {
 	t.Parallel()
 
 	const requestID = "req_cursor_bidi_append"
@@ -63,53 +64,62 @@ func TestBuildCaptureExtensionAddsIdentityTraceAndBidiDiagnostic(t *testing.T) {
 	headers.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
 	body := cursorBidiAppendPayload(requestID, 42, []byte("before "+sentinel+" after"))
 
-	extension := routeProvider{}.BuildCaptureExtension(mitm.CaptureExchange{
-		CapturedAt:          time.Unix(123, 456).UTC(),
-		RequestHeader:       headers,
-		RequestBody:         body,
-		DecodedRequestBody:  body,
-		ResponseHeader:      http.Header{"Content-Type": []string{"application/json"}},
-		ResponseStatus:      http.StatusAccepted,
-		RequestBytes:        int64(len(body)),
-		ResponseBytes:       12,
-		Method:              http.MethodPost,
-		Path:                "/aiserver.v1.AiService/BidiAppend",
-		Host:                "api2.cursor.sh",
-		Concern:             "cursor.bidi",
-		RequestRawPath:      "/tmp/request.raw",
-		ResponseRawPath:     "/tmp/response.raw",
-		RequestContentType:  "application/protobuf",
-		ResponseContentType: "application/json",
-		HookName:            "",
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	routeProvider{}.DiagnoseExchange(context.Background(), logger, mitm.ExchangeDiagnostic{
+		RequestHeader:      headers,
+		DecodedRequestBody: body,
+		Method:             http.MethodPost,
+		Path:               "/aiserver.v1.AiService/BidiAppend",
+		Host:               "api2.cursor.sh",
+		Concern:            "cursor.bidi",
+		HookName:           "",
 	})
-	if extension == nil {
-		t.Fatal("expected capture extension")
-	}
-	raw, err := extension.MarshalJSONLine()
-	if err != nil {
-		t.Fatalf("encode capture extension: %v", err)
-	}
+
+	raw := logBuffer.Bytes()
 	if bytes.Contains(raw, []byte(sentinel)) {
-		t.Fatalf("diagnostic JSON leaked sentinel: %s", raw)
+		t.Fatalf("diagnostic log leaked sentinel: %s", raw)
 	}
-	var event CaptureExtension
-	if err := json.Unmarshal(raw, &event); err != nil {
-		t.Fatalf("unmarshal capture extension: %v", err)
+	var event map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &event); err != nil {
+		t.Fatalf("unmarshal diagnostic log: %v\n%s", err, raw)
 	}
-	if event.ConcernName != "cursor.bidi" {
-		t.Fatalf("concern = %q want cursor.bidi", event.ConcernName)
+	if event["msg"] != "mitm.cursor.bidi_append.diagnostic" {
+		t.Fatalf("msg = %v want mitm.cursor.bidi_append.diagnostic", event["msg"])
 	}
-	if event.TraceID != "0123456789abcdef0123456789abcdef" {
-		t.Fatalf("trace id = %q", event.TraceID)
+	if event["concern"] != "providers.mitm.wire" {
+		t.Fatalf("concern = %v want providers.mitm.wire", event["concern"])
 	}
-	if event.Diagnostic == nil {
-		t.Fatal("expected BidiAppend diagnostic")
+	if event["provider"] != ProviderName {
+		t.Fatalf("provider = %v want %q", event["provider"], ProviderName)
 	}
-	if event.Diagnostic.RequestID != requestID {
-		t.Fatalf("diagnostic request id = %q", event.Diagnostic.RequestID)
+	if event["trace_id"] != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("trace id = %v", event["trace_id"])
 	}
-	if event.Diagnostic.AppendSeqno != 42 {
-		t.Fatalf("diagnostic append seqno = %d", event.Diagnostic.AppendSeqno)
+	if event["bidi_request_id"] != requestID {
+		t.Fatalf("bidi request id = %v want %q", event["bidi_request_id"], requestID)
+	}
+	if event["bidi_append_seqno"].(float64) != 42 {
+		t.Fatalf("bidi append seqno = %v want 42", event["bidi_append_seqno"])
+	}
+}
+
+func TestDiagnoseExchangeSkipsNonBidiRequests(t *testing.T) {
+	t.Parallel()
+
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	routeProvider{}.DiagnoseExchange(context.Background(), logger, mitm.ExchangeDiagnostic{
+		RequestHeader:      http.Header{},
+		DecodedRequestBody: []byte("not a bidi frame"),
+		Method:             http.MethodPost,
+		Path:               "/aiserver.v1.DashboardService/GetTeams",
+		Host:               "api2.cursor.sh",
+		Concern:            "cursor.account",
+		HookName:           "",
+	})
+	if logBuffer.Len() != 0 {
+		t.Fatalf("expected no diagnostic for non-bidi request, got %s", logBuffer.String())
 	}
 }
 

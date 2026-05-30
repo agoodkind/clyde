@@ -51,13 +51,6 @@ type Proxy struct {
 	// connections.
 	Tunnels *livetrack.Registry[TunnelMeta]
 
-	// captureWriters owns this proxy's lumberjack rotated-writer pool
-	// plus its flock files. Per-proxy ownership means daemon reload
-	// closes the old proxy's writers and flocks deterministically; a
-	// late tunnel goroutine that races shutdown will see the closed
-	// cache and abort instead of re-creating the writer (CLYDE-299).
-	captureWriters *captureWriterCache
-
 	mu       sync.RWMutex
 	cfg      config.MITMConfig
 	base     string
@@ -118,12 +111,11 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 			ParallelClose: false,
 			Now:           nil,
 		}),
-		captureWriters: newCaptureWriterCache(log),
-		mu:             sync.RWMutex{},
-		cfg:            cfg,
-		base:           "http://" + listener.Addr().String(),
-		listener:       listener,
-		server:         nil,
+		mu:       sync.RWMutex{},
+		cfg:      cfg,
+		base:     "http://" + listener.Addr().String(),
+		listener: listener,
+		server:   nil,
 	}
 	p.server = &http.Server{
 		Handler:           http.HandlerFunc(p.handle),
@@ -166,16 +158,16 @@ func (p *Proxy) Serve() error {
 	return nil
 }
 
-// Shutdown gracefully stops the proxy's HTTP server, drains
-// registered tunnels until ctx is canceled, and closes the per-proxy
-// capture writer cache so the replacement daemon can rebind. The
-// Cloudflare keepalive case (api2.cursor.sh CONNECT tunnels that
-// never close on their own) is the empirical reason this is no longer
-// a bare [[http.Server].Shutdown]: the registry's force-close path
-// terminates wedged tunnels under the configured grace, and the
-// writer-cache close releases the JSONL flock and locks out late
-// tunnel goroutines from re-creating a fresh writer on the same path
-// (CLYDE-299). Idempotent: multiple Shutdown calls are safe.
+// Shutdown gracefully stops the proxy's HTTP server and drains
+// registered tunnels until ctx is canceled. The Cloudflare keepalive
+// case (api2.cursor.sh CONNECT tunnels that never close on their own)
+// is the empirical reason this is no longer a bare
+// [[http.Server].Shutdown]: the registry's force-close path
+// terminates wedged tunnels under the configured grace. The capture
+// index file handle and its cross-process flock are owned by the
+// slogger MITM-capture sink, not the proxy, so the async logger's
+// handler closer releases them on process shutdown. Idempotent:
+// multiple Shutdown calls are safe.
 func (p *Proxy) Shutdown(ctx context.Context) error {
 	return p.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: 0})
 }
@@ -184,9 +176,8 @@ func (p *Proxy) Shutdown(ctx context.Context) error {
 // The daemon reload chain calls it with [livetrack.DrainOptions.IdleGrace]
 // set so the per-tunnel registry can force-close wedged keepalive
 // sessions at drain start instead of waiting them out against the
-// outer cap. The semantics, idempotency, and capture-writer close
-// behavior are identical to [Proxy.Shutdown]; only the registry
-// drain shape differs.
+// outer cap. The semantics and idempotency are identical to
+// [Proxy.Shutdown]; only the registry drain shape differs.
 func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) error {
 	if p.server == nil {
 		return nil
@@ -195,7 +186,6 @@ func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) e
 		if err := p.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			return fmt.Errorf("close mitm listener: %w", err)
 		}
-		p.closeCaptureWriters()
 		return nil
 	}
 	httpErr := p.server.Shutdown(ctx)
@@ -210,21 +200,10 @@ func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) e
 			"duration_ms", result.Duration.Milliseconds(),
 		)
 	}
-	p.closeCaptureWriters()
 	if httpErr != nil {
 		return fmt.Errorf("mitm shutdown: %w", httpErr)
 	}
 	return nil
-}
-
-// closeCaptureWriters drains and closes the per-proxy capture writer
-// cache. Safe on a nil cache so test fixtures that build a *Proxy by
-// hand without going through NewProxy do not crash on Shutdown.
-func (p *Proxy) closeCaptureWriters() {
-	if p.captureWriters == nil {
-		return
-	}
-	p.captureWriters.close()
 }
 
 func (p *Proxy) config() config.MITMConfig {
@@ -330,10 +309,9 @@ func (p *Proxy) registerPlainHTTP(ctx context.Context, cancel context.CancelFunc
 	return reqSess, release, true
 }
 
-func (p *Proxy) recordPlainHTTPReadFailure(r *http.Request, cfg config.MITMConfig, capturePolicy CaptureFilePolicy, provider, upstreamURL string, started time.Time, err error) {
+func (p *Proxy) recordPlainHTTPReadFailure(r *http.Request, cfg config.MITMConfig, provider, upstreamURL string, started time.Time, err error) {
 	p.recordHTTPFailure(r, http.Header{}, buildHTTPFailureCaptureInput(
 		cfg,
-		capturePolicy,
 		provider,
 		upstreamURL,
 		nil,
@@ -349,10 +327,9 @@ func (p *Proxy) recordPlainHTTPReadFailure(r *http.Request, cfg config.MITMConfi
 	})
 }
 
-func (p *Proxy) recordPlainHTTPDispatchFailure(r *http.Request, cfg config.MITMConfig, capturePolicy CaptureFilePolicy, provider, upstreamURL string, body []byte, requestIndex captureBodyIndex, started time.Time) {
+func (p *Proxy) recordPlainHTTPDispatchFailure(r *http.Request, cfg config.MITMConfig, provider, upstreamURL string, body []byte, requestIndex captureBodyIndex, started time.Time) {
 	p.recordHTTPFailure(r, http.Header{}, buildHTTPFailureCaptureInput(
 		cfg,
-		capturePolicy,
 		provider,
 		upstreamURL,
 		body,
@@ -371,7 +348,6 @@ func (p *Proxy) recordPlainHTTPDispatchFailure(r *http.Request, cfg config.MITMC
 func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	started := clock.Now()
 	cfg := p.config()
-	capturePolicy := captureFilePolicyFromConfig(cfg)
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return
@@ -401,7 +377,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		p.recordPlainHTTPReadFailure(r, cfg, capturePolicy, provider, upstream+r.URL.RequestURI(), started, err)
+		p.recordPlainHTTPReadFailure(r, cfg, provider, upstream+r.URL.RequestURI(), started, err)
 		http.Error(w, "read request body", http.StatusBadRequest)
 		return
 	}
@@ -417,7 +393,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		upstream: upstream,
 	})
 	if !ok {
-		p.recordPlainHTTPDispatchFailure(r, cfg, capturePolicy, provider, upstream+r.URL.RequestURI(), body, requestBodyIndex, started)
+		p.recordPlainHTTPDispatchFailure(r, cfg, provider, upstream+r.URL.RequestURI(), body, requestBodyIndex, started)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -441,37 +417,78 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	if copyErr != nil {
 		p.log.Warn("mitm.proxy.copy_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", copyErr)
 	}
-	captureBody, decoded := decodeForCapture(capture.Bytes(), resp.Header.Get("Content-Encoding"))
+	p.finalizePlainHTTPCapture(r, resp, plainHTTPCaptureFinalize{
+		cfg:               cfg,
+		provider:          provider,
+		upstream:          upstream,
+		requestBody:       body,
+		capture:           capture,
+		responseRawWriter: responseRawWriter,
+		responseRawError:  responseRawError,
+		requestBodyIndex:  requestBodyIndex,
+		duration:          duration,
+	})
+}
+
+// plainHTTPCaptureFinalize bundles the post-stream state the plain-HTTP forward
+// path threads into [Proxy.finalizePlainHTTPCapture]. Splitting the
+// finalization out of [Proxy.handle] keeps that function under the funlen
+// ceiling while preserving the capture / drift / baseline-refresh ordering.
+type plainHTTPCaptureFinalize struct {
+	cfg               config.MITMConfig
+	provider          string
+	upstream          string
+	requestBody       []byte
+	capture           *limitedBuffer
+	responseRawWriter *failOpenRawCaptureWriter
+	responseRawError  error
+	requestBodyIndex  captureBodyIndex
+	duration          time.Duration
+}
+
+// finalizePlainHTTPCapture decodes the buffered response, records the unified
+// HTTP capture leg, appends the drift-capture record for native upstreams, and
+// debounces a baseline refresh.
+func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, fin plainHTTPCaptureFinalize) {
+	captureBody, decoded := decodeForCapture(fin.capture.Bytes(), resp.Header.Get("Content-Encoding"))
 	if decoded {
-		p.log.Debug("mitm.capture.decoded", "concern", "providers.mitm.wire", "provider", provider,
+		p.log.Debug("mitm.capture.decoded", "concern", "providers.mitm.wire", "provider", fin.provider,
 			"path", r.URL.Path,
 			"encoding", resp.Header.Get("Content-Encoding"),
-			"raw_bytes", len(capture.Bytes()),
+			"raw_bytes", len(fin.capture.Bytes()),
 			"decoded_bytes", len(captureBody),
 		)
 	}
-	responseBodyIndex, responseBodyLen := responseCaptureIndex(cfg.RawCaptureEnabled, captureBody, responseRawWriter, responseRawError)
+	responseBodyIndex, responseBodyLen := responseCaptureIndex(fin.cfg.RawCaptureEnabled, captureBody, fin.responseRawWriter, fin.responseRawError)
 
-	p.log.Info("mitm.capture.completed", "concern", "providers.mitm.wire", "provider", provider,
+	p.log.Info("mitm.capture.completed", "concern", "providers.mitm.wire", "provider", fin.provider,
 		"path", r.URL.Path,
 		"status", resp.StatusCode,
-		"duration_ms", duration.Milliseconds(),
+		"duration_ms", fin.duration.Milliseconds(),
 	)
+	upstreamURL := fin.upstream + r.URL.RequestURI()
 	p.recordHTTPCapture(r, resp.Header, httpCaptureRecordInput{
-		config:         cfg,
-		policy:         capturePolicy,
-		provider:       provider,
-		upstreamURL:    upstream + r.URL.RequestURI(),
-		requestBody:    body,
+		config:         fin.cfg,
+		provider:       fin.provider,
+		upstreamURL:    upstreamURL,
+		requestBody:    fin.requestBody,
 		responseBody:   captureBody,
-		requestIndex:   requestBodyIndex,
+		requestIndex:   fin.requestBodyIndex,
 		responseIndex:  responseBodyIndex,
 		responseLen:    responseBodyLen,
-		duration:       duration,
+		duration:       fin.duration,
 		responseStatus: resp.StatusCode,
 		clientFacet:    nil,
 	})
-	queueBaselineRefresh(r.Context(), cfg, provider, p.log)
+	p.recordDriftCapture(fin.cfg, driftCaptureInput{
+		provider:    fin.provider,
+		method:      r.Method,
+		path:        r.URL.Path,
+		upstreamURL: upstreamURL,
+		header:      r.Header,
+		body:        fin.requestBody,
+	})
+	queueBaselineRefresh(r.Context(), fin.cfg, fin.provider, p.log)
 }
 
 // hopByHopHeader enumerates the response headers the MITM proxy
@@ -499,7 +516,6 @@ func forwardResponseHeaders(dst http.Header, src http.Header) {
 
 type httpCaptureRecordInput struct {
 	config         config.MITMConfig
-	policy         CaptureFilePolicy
 	provider       string
 	upstreamURL    string
 	requestBody    []byte
@@ -841,16 +857,6 @@ func rawFieldString(fields map[string]json.RawMessage, key string) string {
 		return ""
 	}
 	return value
-}
-
-// writeCaptureLine appends one JSONL capture record through this
-// proxy's writer cache. After Shutdown, rotated writes return
-// ErrCaptureSinkClosed (CLYDE-299).
-func (p *Proxy) writeCaptureLine(dir string, line []byte, policy CaptureFilePolicy) error {
-	if p.captureWriters == nil {
-		return fmt.Errorf("mitm: proxy has no capture writer cache")
-	}
-	return p.captureWriters.writeLine(dir, line, policy)
 }
 
 type limitedBuffer struct {

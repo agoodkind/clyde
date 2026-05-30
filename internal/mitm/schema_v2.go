@@ -36,6 +36,12 @@ type FlavorShape struct {
 	Paths       []string    `toml:"paths" json:"paths"`
 	Headers     []V2Header  `toml:"headers" json:"headers"`
 	Body        V2Body      `toml:"body" json:"body"`
+	// BillingAttestation carries the claude-code `cch=<value>`
+	// attestation token observed across this flavor's drift records.
+	// It is empty for codex flavors, whose attestation rides through
+	// as a captured constant `x-oai-attestation` header instead. Later
+	// egress-replay slices read this to reproduce the billing line.
+	BillingAttestation string `toml:"billing_attestation,omitempty" json:"billing_attestation,omitempty"`
 }
 
 // V2Signature is part of Clyde's typed adapter surface.

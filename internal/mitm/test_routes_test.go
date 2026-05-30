@@ -56,10 +56,6 @@ func (testRouteProvider) ExtractIdentity(http.Header) IdentityContribution {
 	}
 }
 
-func (testRouteProvider) BuildCaptureExtension(CaptureExchange) CaptureExtension {
-	return nil
-}
-
 // registerTestRoute registers a typed test-only provider that
 // claims the supplied path prefix and routes it to upstream.
 // Returns a cleanup function that unregisters the provider.

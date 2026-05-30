@@ -210,13 +210,11 @@ func TestRegisterPlainHTTPDecouplesUpstreamFromInboundContext(t *testing.T) {
 		tlsClientConfig: nil,
 		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
-		captureWriters:  newCaptureWriterCache(logger),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{},
 		base:            "http://[::1]",
 		server:          nil,
 	}
-	t.Cleanup(proxy.closeCaptureWriters)
 
 	// Build a request whose context we can cancel independently of the
 	// proxy lifetime. Pre-fix, registerPlainHTTP derived its context

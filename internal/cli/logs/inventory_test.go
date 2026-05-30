@@ -12,7 +12,6 @@ func TestBuildInventoryCategorizesKnownLogFamilies(t *testing.T) {
 	root := t.TempDir()
 	baseTime := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
 	files := map[string]int64{
-		"mitm/capture.jsonl":                                         100,
 		"mitm/raw/example/20260506-request.raw":                      200,
 		"mitm-launcher/codex-desktop.log":                            300,
 		"mitm/profiles/cursor/isolated/logs/run/main.log":            400,
@@ -45,9 +44,8 @@ func TestBuildInventoryCategorizesKnownLogFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildInventory returned error: %v", err)
 	}
-	assertCategory(t, currentInventory, categoryMITMCaptureIndexes, 1, 100)
-	assertCategorySource(t, currentInventory, categoryMITMCaptureIndexes, inventorySourceDeepScan)
 	assertCategory(t, currentInventory, categoryMITMRawCaptures, 1, 200)
+	assertCategorySource(t, currentInventory, categoryMITMRawCaptures, inventorySourceDeepScan)
 	assertCategory(t, currentInventory, categoryMITMProfileProcessLogs, 2, 700)
 	assertCategory(t, currentInventory, categoryTopLevelProcessLogs, 2, 1100)
 	assertCategory(t, currentInventory, categoryProviderSidecarLogs, 1, 1500)
@@ -62,7 +60,7 @@ func TestBuildInventoryCategorizesKnownLogFamilies(t *testing.T) {
 func TestBuildInventoryUsesIndexedLocationsByDefault(t *testing.T) {
 	root := t.TempDir()
 	writeSizedFile(t, root, "logs/inventory/events.jsonl", 25)
-	writeSizedFile(t, root, "mitm/capture.jsonl", 50)
+	writeSizedFile(t, root, "mitm/raw/example/20260506-request.raw", 50)
 
 	currentInventory, err := buildInventory(inventoryOptions{StateRoot: root})
 	if err != nil {
@@ -71,9 +69,18 @@ func TestBuildInventoryUsesIndexedLocationsByDefault(t *testing.T) {
 	if currentInventory.Mode != inventoryModeIndexed {
 		t.Fatalf("mode=%q want indexed", currentInventory.Mode)
 	}
-	assertCategorySource(t, currentInventory, categoryMITMCaptureIndexes, inventorySourceIndexed)
+	// Indexed mode does a single stat per known location, so the MITM raw
+	// captures location is the mitm/raw directory rather than the leaf files
+	// inside it. The directory inode size is filesystem-dependent, so the
+	// expected byte total is the same os.Stat the production indexer uses
+	// rather than a hard-coded literal.
+	rawDirInfo, err := os.Stat(filepath.Join(root, "mitm", "raw"))
+	if err != nil {
+		t.Fatalf("stat mitm/raw: %v", err)
+	}
+	assertCategorySource(t, currentInventory, categoryMITMRawCaptures, inventorySourceIndexed)
 	assertCategorySource(t, currentInventory, categoryInventoryIndexes, inventorySourceIndexed)
-	assertCategory(t, currentInventory, categoryMITMCaptureIndexes, 1, 50)
+	assertCategory(t, currentInventory, categoryMITMRawCaptures, 1, rawDirInfo.Size())
 	assertCategory(t, currentInventory, categoryInventoryIndexes, 1, 25)
 }
 
@@ -116,15 +123,15 @@ func assertCategorySource(t *testing.T, currentInventory inventory, currentCateg
 
 func TestBuildInventoryIndexedModeSurfacesIndexSnapshotFields(t *testing.T) {
 	root := t.TempDir()
-	writeSizedFile(t, root, "mitm/capture.jsonl", 64)
+	writeSizedFile(t, root, "mitm/raw/example/20260506-request.raw", 64)
 	writeSizedFile(t, root, "logs/inventory/events.jsonl", 0)
 	indexPath := filepath.Join(root, "logs/inventory/events.jsonl")
 	cleanupTime := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
-	captureLegTime := cleanupTime.Add(time.Minute)
+	rawLegTime := cleanupTime.Add(time.Minute)
 	concernLegTime := cleanupTime.Add(2 * time.Minute)
 	contents := strings.Join([]string{
 		`{"time":"` + cleanupTime.Format(time.RFC3339Nano) + `","msg":"slogger.cleanup.completed","sinks":["inventory_index"],"root":"` + root + `","scanned_roots":["` + root + `"],"candidates":3,"deleted":2,"bytes_deleted":42,"skipped":["/skip/a"],"errors":["boom"],"duration_ms":7}`,
-		`{"time":"` + captureLegTime.Format(time.RFC3339Nano) + `","msg":"logging.request.leg","sinks":["mitm_capture_index","inventory_index"],"request_id":"req-capture-1"}`,
+		`{"time":"` + rawLegTime.Format(time.RFC3339Nano) + `","msg":"logging.request.leg","sinks":["mitm_raw","inventory_index"],"request_id":"req-raw-1"}`,
 		`{"time":"` + concernLegTime.Format(time.RFC3339Nano) + `","msg":"logging.request.leg","sinks":["concern","inventory_index"],"request_id":"req-concern-9"}`,
 		``,
 	}, "\n")
@@ -141,33 +148,33 @@ func TestBuildInventoryIndexedModeSurfacesIndexSnapshotFields(t *testing.T) {
 		t.Fatalf("mode=%q want indexed", currentInventory.Mode)
 	}
 
-	captureSummary := findCategorySummary(t, currentInventory, categoryMITMCaptureIndexes)
-	if !captureSummary.LastEventTimestamp.Equal(captureLegTime) {
-		t.Fatalf("capture last_event_timestamp=%v want %v", captureSummary.LastEventTimestamp, captureLegTime)
+	rawSummary := findCategorySummary(t, currentInventory, categoryMITMRawCaptures)
+	if !rawSummary.LastEventTimestamp.Equal(rawLegTime) {
+		t.Fatalf("raw last_event_timestamp=%v want %v", rawSummary.LastEventTimestamp, rawLegTime)
 	}
-	if captureSummary.LastEventRequestID != "req-capture-1" {
-		t.Fatalf("capture last_event_request_id=%q want req-capture-1", captureSummary.LastEventRequestID)
+	if rawSummary.LastEventRequestID != "req-raw-1" {
+		t.Fatalf("raw last_event_request_id=%q want req-raw-1", rawSummary.LastEventRequestID)
 	}
-	if captureSummary.LastCleanupResult == nil {
-		t.Fatalf("capture last_cleanup_result is nil")
+	if rawSummary.LastCleanupResult == nil {
+		t.Fatalf("raw last_cleanup_result is nil")
 	}
-	if captureSummary.LastCleanupResult.Deleted != 2 {
-		t.Fatalf("capture cleanup deleted=%d want 2", captureSummary.LastCleanupResult.Deleted)
+	if rawSummary.LastCleanupResult.Deleted != 2 {
+		t.Fatalf("raw cleanup deleted=%d want 2", rawSummary.LastCleanupResult.Deleted)
 	}
-	if captureSummary.LastCleanupResult.BytesDeleted != 42 {
-		t.Fatalf("capture cleanup bytes_deleted=%d want 42", captureSummary.LastCleanupResult.BytesDeleted)
+	if rawSummary.LastCleanupResult.BytesDeleted != 42 {
+		t.Fatalf("raw cleanup bytes_deleted=%d want 42", rawSummary.LastCleanupResult.BytesDeleted)
 	}
-	if captureSummary.LastCleanupResult.Candidates != 3 {
-		t.Fatalf("capture cleanup candidates=%d want 3", captureSummary.LastCleanupResult.Candidates)
+	if rawSummary.LastCleanupResult.Candidates != 3 {
+		t.Fatalf("raw cleanup candidates=%d want 3", rawSummary.LastCleanupResult.Candidates)
 	}
-	if captureSummary.LastCleanupResult.DurationMS != 7 {
-		t.Fatalf("capture cleanup duration_ms=%d want 7", captureSummary.LastCleanupResult.DurationMS)
+	if rawSummary.LastCleanupResult.DurationMS != 7 {
+		t.Fatalf("raw cleanup duration_ms=%d want 7", rawSummary.LastCleanupResult.DurationMS)
 	}
-	if len(captureSummary.LastCleanupResult.Skipped) != 1 || captureSummary.LastCleanupResult.Skipped[0] != "/skip/a" {
-		t.Fatalf("capture cleanup skipped=%v want [/skip/a]", captureSummary.LastCleanupResult.Skipped)
+	if len(rawSummary.LastCleanupResult.Skipped) != 1 || rawSummary.LastCleanupResult.Skipped[0] != "/skip/a" {
+		t.Fatalf("raw cleanup skipped=%v want [/skip/a]", rawSummary.LastCleanupResult.Skipped)
 	}
-	if len(captureSummary.LastCleanupResult.Errors) != 1 || captureSummary.LastCleanupResult.Errors[0] != "boom" {
-		t.Fatalf("capture cleanup errors=%v want [boom]", captureSummary.LastCleanupResult.Errors)
+	if len(rawSummary.LastCleanupResult.Errors) != 1 || rawSummary.LastCleanupResult.Errors[0] != "boom" {
+		t.Fatalf("raw cleanup errors=%v want [boom]", rawSummary.LastCleanupResult.Errors)
 	}
 
 	concernSummary := findCategorySummary(t, currentInventory, categoryConcernLogs)
@@ -186,28 +193,28 @@ func TestBuildInventoryIndexedModeSurfacesIndexSnapshotFields(t *testing.T) {
 
 func TestBuildInventoryIndexedModeMissingIndexFileLeavesSnapshotEmpty(t *testing.T) {
 	root := t.TempDir()
-	writeSizedFile(t, root, "mitm/capture.jsonl", 16)
+	writeSizedFile(t, root, "mitm/raw/example/20260506-request.raw", 16)
 
 	currentInventory, err := buildInventory(inventoryOptions{StateRoot: root})
 	if err != nil {
 		t.Fatalf("buildInventory returned error: %v", err)
 	}
 
-	captureSummary := findCategorySummary(t, currentInventory, categoryMITMCaptureIndexes)
-	if !captureSummary.LastEventTimestamp.IsZero() {
-		t.Fatalf("expected zero last_event_timestamp, got %v", captureSummary.LastEventTimestamp)
+	rawSummary := findCategorySummary(t, currentInventory, categoryMITMRawCaptures)
+	if !rawSummary.LastEventTimestamp.IsZero() {
+		t.Fatalf("expected zero last_event_timestamp, got %v", rawSummary.LastEventTimestamp)
 	}
-	if captureSummary.LastEventRequestID != "" {
-		t.Fatalf("expected empty last_event_request_id, got %q", captureSummary.LastEventRequestID)
+	if rawSummary.LastEventRequestID != "" {
+		t.Fatalf("expected empty last_event_request_id, got %q", rawSummary.LastEventRequestID)
 	}
-	if captureSummary.LastCleanupResult != nil {
-		t.Fatalf("expected nil last_cleanup_result, got %+v", captureSummary.LastCleanupResult)
+	if rawSummary.LastCleanupResult != nil {
+		t.Fatalf("expected nil last_cleanup_result, got %+v", rawSummary.LastCleanupResult)
 	}
 }
 
 func TestBuildInventoryDeepModeIgnoresIndexSnapshotMetadata(t *testing.T) {
 	root := t.TempDir()
-	writeSizedFile(t, root, "mitm/capture.jsonl", 64)
+	writeSizedFile(t, root, "mitm/raw/example/20260506-request.raw", 64)
 	writeSizedFile(t, root, "logs/inventory/events.jsonl", 0)
 	indexPath := filepath.Join(root, "logs/inventory/events.jsonl")
 	cleanupTime := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
@@ -226,15 +233,15 @@ func TestBuildInventoryDeepModeIgnoresIndexSnapshotMetadata(t *testing.T) {
 	if currentInventory.Mode != inventoryModeDeep {
 		t.Fatalf("mode=%q want deep", currentInventory.Mode)
 	}
-	captureSummary := findCategorySummary(t, currentInventory, categoryMITMCaptureIndexes)
-	if !captureSummary.LastEventTimestamp.IsZero() {
-		t.Fatalf("deep mode should ignore snapshot last_event_timestamp, got %v", captureSummary.LastEventTimestamp)
+	rawSummary := findCategorySummary(t, currentInventory, categoryMITMRawCaptures)
+	if !rawSummary.LastEventTimestamp.IsZero() {
+		t.Fatalf("deep mode should ignore snapshot last_event_timestamp, got %v", rawSummary.LastEventTimestamp)
 	}
-	if captureSummary.LastEventRequestID != "" {
-		t.Fatalf("deep mode should ignore snapshot last_event_request_id, got %q", captureSummary.LastEventRequestID)
+	if rawSummary.LastEventRequestID != "" {
+		t.Fatalf("deep mode should ignore snapshot last_event_request_id, got %q", rawSummary.LastEventRequestID)
 	}
-	if captureSummary.LastCleanupResult != nil {
-		t.Fatalf("deep mode should ignore snapshot last_cleanup_result, got %+v", captureSummary.LastCleanupResult)
+	if rawSummary.LastCleanupResult != nil {
+		t.Fatalf("deep mode should ignore snapshot last_cleanup_result, got %+v", rawSummary.LastCleanupResult)
 	}
 }
 
