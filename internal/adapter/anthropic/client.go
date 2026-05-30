@@ -136,13 +136,10 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if req.MaxTokens <= 0 {
 		req.MaxTokens = MaxOutputTokens
 	}
-	body, err := json.Marshal(req)
+
+	flavor, body, err := c.prepareRequestBody(ctx, req)
 	if err != nil {
-		log.WarnContext(ctx, "anthropic.messages.marshal_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-			"model", req.Model,
-			"err", err.Error(),
-		)
-		return nil, fmt.Errorf("marshal anthropic request: %w", err)
+		return nil, err
 	}
 
 	token, err := c.oauth.Token(ctx)
@@ -154,7 +151,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		return nil, fmt.Errorf("oauth token: %w", err)
 	}
 
-	httpReq, err := c.buildMessagesRequest(ctx, req, body, token)
+	httpReq, err := c.buildMessagesRequest(ctx, req, body, token, flavor)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +189,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		}
 	}
 
-	resp, postStarted = c.maybeRetryOn401(ctx, req, body, token, resp, postStarted)
+	resp, postStarted = c.maybeRetryOn401(ctx, req, body, token, flavor, resp, postStarted)
 
 	base := responseEvent{
 		Subcomponent: "anthropic",
@@ -273,12 +270,47 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 	}
 }
 
+// prepareRequestBody resolves the wire flavor and produces the marshaled
+// outbound body the learned baseline shapes. It resolves the flavor
+// before marshaling so the captured billing attestation can be
+// substituted into the attribution block, then validates the body's
+// top-level field set against the learned required fields. A missing or
+// invalid baseline returns the typed sentinel unchanged so the dispatch
+// layer can map it to an HTTP 503 rather than sending a wrong-shaped
+// request with no identity.
+func (c *Client) prepareRequestBody(ctx context.Context, req Request) (WireFlavor, []byte, error) {
+	log := anthropicRequestLog.Logger()
+	flavor, err := c.activeFlavor()
+	if err != nil {
+		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"baseline_path", c.cfg.WireBaselinePath,
+			"err", err.Error(),
+		)
+		return WireFlavor{}, nil, err
+	}
+	applyBillingAttestation(req.SystemBlocks, flavor.BillingAttestation)
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		log.WarnContext(ctx, "anthropic.messages.marshal_failed", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"err", err.Error(),
+		)
+		return WireFlavor{}, nil, fmt.Errorf("marshal anthropic request: %w", err)
+	}
+	checkBodyShape(ctx, req.Model, body, flavor)
+	return flavor, body, nil
+}
+
 // buildMessagesRequest assembles the outbound /v1/messages POST: it
 // constructs the [http.Request] with the marshaled body bytes, attaches the
 // bearer token, and applies every wire identity header the captured flavor
 // and config dictate. The helper exists so the on-401 retry path can rebuild
-// the request with a fresh token without re-marshaling the body.
-func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []byte, token string) (*http.Request, error) {
+// the request with a fresh token without re-marshaling the body. The flavor
+// is resolved once by the caller and threaded through so the header build
+// and the body shaping in do() agree on a single resolved baseline.
+func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []byte, token string, flavor WireFlavor) (*http.Request, error) {
 	log := anthropicRequestLog.Logger()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.MessagesURL, bytes.NewReader(body))
 	if err != nil {
@@ -289,15 +321,7 @@ func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []b
 		)
 		return nil, fmt.Errorf("build messages request: %w", err)
 	}
-	dropped, err := c.applyMessagesHeaders(httpReq, req, token)
-	if err != nil {
-		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-			"model", req.Model,
-			"baseline_path", c.cfg.WireBaselinePath,
-			"err", err.Error(),
-		)
-		return nil, err
-	}
+	dropped := c.applyMessagesHeaders(httpReq, req, token, flavor)
 	if len(dropped) > 0 {
 		keys := make([]string, 0, len(dropped))
 		for k := range dropped {
@@ -321,16 +345,19 @@ func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []b
 // httpReq: bearer auth, protocol version, content negotiation, the captured
 // wire flavor identity headers, and the optional CLYDE_PROBE_DROP exclusion
 // set. The returned drop set is non-nil only when an operator opted into
-// header omission for local debugging. It fails with [ErrBaselineMissing] or
-// [ErrBaselineInvalid] when the daemon-owned MITM baseline cannot supply the
-// wire flavor, so the request never goes out with no identity.
-func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token string) (map[string]struct{}, error) {
-	flavor, err := c.activeFlavor()
-	if err != nil {
-		return nil, err
-	}
+// header omission for local debugging. The flavor is resolved by do() and
+// passed in, so a missing or invalid baseline is rejected before this point
+// and the request never goes out with no identity.
+func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token string, flavor WireFlavor) map[string]struct{} {
 	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("Anthropic-Version", c.cfg.OAuthAnthropicVersion)
+	// Prefer the learned baseline's anthropic-version; the loader
+	// validates it is non-empty so the flavor wins in practice. Fall
+	// back to the configured value only when the flavor carries none.
+	anthropicVersion := strings.TrimSpace(flavor.AnthropicVersion)
+	if anthropicVersion == "" {
+		anthropicVersion = c.cfg.OAuthAnthropicVersion
+	}
+	httpReq.Header.Set("Anthropic-Version", anthropicVersion)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 	if req.Stream {
@@ -383,7 +410,7 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 	for _, h := range freeIdentityHeaders(c, flavor) {
 		httpReq.Header.Set(h.key, h.value)
 	}
-	return dropped, nil
+	return dropped
 }
 
 // maybeRetryOn401 is the do() boundary helper that invokes one on-401 retry
@@ -391,11 +418,11 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 // timestamp so downstream logging measures the retry duration. When the
 // initial response is not 401 or the retry is skipped or fails, the original
 // response and timestamp pass through unchanged.
-func (c *Client) maybeRetryOn401(ctx context.Context, req Request, body []byte, token string, resp *http.Response, postStarted time.Time) (*http.Response, time.Time) {
+func (c *Client) maybeRetryOn401(ctx context.Context, req Request, body []byte, token string, flavor WireFlavor, resp *http.Response, postStarted time.Time) (*http.Response, time.Time) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		return resp, postStarted
 	}
-	retried, retryDuration, retryErr := c.retryAfter401(ctx, req, body, token, resp)
+	retried, retryDuration, retryErr := c.retryAfter401(ctx, req, body, token, flavor, resp)
 	if retryErr != nil || retried == nil {
 		return resp, postStarted
 	}
@@ -408,7 +435,7 @@ func (c *Client) maybeRetryOn401(ctx context.Context, req Request, body []byte, 
 // [http.Request]. A nil return value means the retry was skipped (oauth
 // reported the token is unchanged) or failed; the caller falls through to the
 // existing classifier with the original 401 in that case.
-func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, failedToken string, originalResp *http.Response) (*http.Response, time.Duration, error) {
+func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, failedToken string, flavor WireFlavor, originalResp *http.Response) (*http.Response, time.Duration, error) {
 	log := anthropicRequestLog.Logger()
 	log.InfoContext(ctx, "anthropic.messages.auth_retry_attempted", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 		"model", req.Model,
@@ -447,7 +474,7 @@ func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, fa
 		return nil, 0, errors.New("token unchanged after recovery")
 	}
 
-	retryReq, buildErr := c.buildMessagesRequest(ctx, req, body, freshToken)
+	retryReq, buildErr := c.buildMessagesRequest(ctx, req, body, freshToken, flavor)
 	if buildErr != nil {
 		return nil, 0, buildErr
 	}
@@ -571,19 +598,23 @@ func newCaptureTee(inner io.ReadCloser, capBytes int, onClose func(captured []by
 }
 
 // Read passes through the inner Read; bytes also accumulate (capped) in the
-// internal buffer. Errors are wrapped with %w so [errors.Is] callers still
-// detect [io.EOF]. Non-EOF errors also emit on the wire-capture concern.
+// internal buffer. A terminal [io.EOF] is returned bare, not wrapped, because
+// the SSE consumer is a [bufio.Scanner] whose Err() compares the read error
+// against [io.EOF] with == (see stdlib bufio/scan.go), so a wrapped EOF would
+// be mistaken for a real failure and abort the stream scan. Genuine non-EOF
+// errors are wrapped with context and emitted on the wire-capture concern.
 func (t *captureTee) Read(p []byte) (int, error) {
 	n, err := t.inner.Read(p)
 	t.recordCapturedBytes(p, n)
 	if err == nil {
 		return n, nil
 	}
-	if !errors.Is(err, io.EOF) {
-		slog.Warn("anthropic.wire_capture.tee_read_failed", "concern", "adapter.providers.anthropic.wire_capture", "subcomponent", "anthropic",
-			"err", err.Error(),
-		)
+	if errors.Is(err, io.EOF) {
+		return n, io.EOF
 	}
+	slog.Warn("anthropic.wire_capture.tee_read_failed", "concern", "adapter.providers.anthropic.wire_capture", "subcomponent", "anthropic",
+		"err", err.Error(),
+	)
 	return n, fmt.Errorf("captureTee read: %w", err)
 }
 

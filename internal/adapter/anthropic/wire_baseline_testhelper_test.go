@@ -16,7 +16,19 @@ import (
 // [WireFlavorsLoader], the same path production uses.
 func writeTestWireBaseline(t *testing.T) string {
 	t.Helper()
+	return writeTestWireBaselineWithAttestation(t, "")
+}
+
+// writeTestWireBaselineWithAttestation seeds the same baseline as
+// [writeTestWireBaseline] but stamps the interactive flavor with the
+// given captured billing attestation (the `cch` token). An empty cch
+// leaves the flavor without an attestation so callers can exercise both
+// the substitution and placeholder-fallback egress branches.
+func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
+	t.Helper()
 	dir := t.TempDir()
+	interactive := testInteractiveFlavorShape()
+	interactive.BillingAttestation = cch
 	snap := mitm.SnapshotV2{
 		Upstream: mitm.V2Upstream{
 			Name:        "claude-code",
@@ -25,7 +37,7 @@ func writeTestWireBaseline(t *testing.T) string {
 			RecordCount: 4,
 		},
 		Flavors: []mitm.FlavorShape{
-			testInteractiveFlavorShape(),
+			interactive,
 			testProbeFlavorShape(),
 		},
 	}

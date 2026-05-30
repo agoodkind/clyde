@@ -560,3 +560,127 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 		t.Fatalf("cache_read_input_tokens = %d want 3200", usage.CacheReadInputTokens)
 	}
 }
+
+// TestStreamEvents_wireCaptureFullDoesNotAbortScan guards the production
+// configuration [adapter.anthropic.wire_capture] mode = "full", which wraps the
+// upstream SSE body in a captureTee. A regression made captureTee.Read wrap the
+// terminal io.EOF with %w, and the bufio.Scanner that consumes the SSE stream
+// compares its read error against io.EOF with == (stdlib bufio/scan.go), so the
+// wrapped EOF was mistaken for a real failure and StreamEvents returned
+// "anthropic stream scan: captureTee read: EOF" on an otherwise healthy 200
+// stream. This test drives a full, valid SSE stream with Full capture enabled
+// and asserts the scan completes and the events parse.
+func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
+	t.Parallel()
+	startPayload, err := json.Marshal(map[string]any{
+		"message": map[string]any{
+			"usage": map[string]any{"input_tokens": 3, "output_tokens": 0},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbStart, err := json.Marshal(map[string]any{
+		"index":         0,
+		"content_block": map[string]any{"type": "text"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbDelta, err := json.Marshal(map[string]any{
+		"index": 0,
+		"delta": map[string]any{"type": "text_delta", "text": "pong"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbStop, err := json.Marshal(map[string]any{"index": 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgDelta, err := json.Marshal(map[string]any{
+		"delta": map[string]any{"stop_reason": "end_turn"},
+		"usage": map[string]any{"output_tokens": 4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sse := strings.Join([]string{
+		"event: message_start",
+		"data: " + string(startPayload),
+		"",
+		"event: content_block_start",
+		"data: " + string(cbStart),
+		"",
+		"event: content_block_delta",
+		"data: " + string(cbDelta),
+		"",
+		"event: content_block_stop",
+		"data: " + string(cbStop),
+		"",
+		"event: message_delta",
+		"data: " + string(msgDelta),
+		"",
+		"event: message_stop",
+		"data: {}",
+		"",
+	}, "\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sse))
+	}))
+	t.Cleanup(srv.Close)
+
+	srvURL, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
+	cli := &Client{
+		http:         hc,
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
+		cfg: Config{
+			MessagesURL:             "https://REDACTED-UPSTREAM/v1/messages",
+			OAuthAnthropicVersion:   "2023-06-01",
+			BetaHeader:              "REDACTED-OAUTH-BETA",
+			UserAgent:               "anthropic-test/0",
+			SystemPromptPrefix:      "",
+			StainlessPackageVersion: "0",
+			StainlessRuntime:        "node",
+			StainlessRuntimeVersion: "v0",
+			CCVersion:               "1.0.0",
+			CCEntrypoint:            "test",
+			WireBaselinePath:        writeTestWireBaseline(t),
+			WireCaptureMode:         WireCaptureFull,
+		},
+	}
+
+	var got []StreamEvent
+	usage, stop, err := cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "ping"}}}},
+		MaxTokens: 10,
+	}, func(ev StreamEvent) error {
+		got = append(got, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamEvents with WireCaptureFull returned error on healthy 200 stream: %v", err)
+	}
+	if stop != "end_turn" {
+		t.Fatalf("stop reason: got %q want end_turn", stop)
+	}
+	if usage.InputTokens != 3 || usage.OutputTokens != 4 {
+		t.Fatalf("usage: got %+v want input 3 output 4", usage)
+	}
+	if len(got) == 0 {
+		t.Fatalf("expected at least one stream event, got none")
+	}
+}

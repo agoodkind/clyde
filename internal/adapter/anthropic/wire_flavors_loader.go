@@ -157,6 +157,7 @@ func projectFlavorShape(shape mitm.FlavorShape) WireFlavor {
 		StaticHeaders:      constantStaticHeadersFromShape(shape),
 		BodyFields:         copyStrings(shape.Signature.BodyKeys),
 		BodyFieldsRequired: requiredBodyFieldsFromShape(shape),
+		BillingAttestation: strings.TrimSpace(shape.BillingAttestation),
 	}
 }
 

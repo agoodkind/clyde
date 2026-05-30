@@ -29,4 +29,11 @@ type WireFlavor struct {
 	StaticHeaders      []WireHeader
 	BodyFields         []string
 	BodyFieldsRequired []string
+	// BillingAttestation is the captured claude-code `cch=<value>`
+	// token observed across this flavor's drift records. The egress
+	// path substitutes it into the billing/attribution system block in
+	// place of the locally-generated placeholder. It is empty when the
+	// baseline did not capture a `cch` token, in which case the egress
+	// keeps the placeholder value.
+	BillingAttestation string
 }
