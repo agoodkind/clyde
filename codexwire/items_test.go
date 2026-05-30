@@ -96,3 +96,70 @@ func TestLocalShellActionWorkingDirFallback(t *testing.T) {
 		t.Fatalf("preferred working_directory: %q", a.WorkingDir())
 	}
 }
+
+// TestReasoningItemAlwaysMarshalsSummary asserts a reasoning input item
+// with no summary text still serializes `"summary":[]` on the wire. The
+// Codex Responses API treats summary as required on reasoning items and
+// rejects the request with [ObjectParam] [input[i].summary]
+// [missing_required_parameter] when it is absent, which the omitempty tag
+// would otherwise cause for a replayed reasoning item carrying only
+// encrypted_content. A struct-level check passes on a nil/empty slice, so
+// this asserts the marshaled bytes specifically.
+func TestReasoningItemAlwaysMarshalsSummary(t *testing.T) {
+	t.Parallel()
+	in := InputItem{Type: ItemTypeReasoning, ID: "rs_1", EncryptedContent: "ENC"}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"summary":[]`) {
+		t.Fatalf("reasoning item must emit summary:[], got %s", string(raw))
+	}
+	if !strings.Contains(string(raw), `"encrypted_content":"ENC"`) {
+		t.Fatalf("reasoning item lost encrypted_content: %s", string(raw))
+	}
+}
+
+// TestReasoningItemPreservesSummaryEntries asserts non-empty summary text
+// round-trips through the custom marshaler unchanged.
+func TestReasoningItemPreservesSummaryEntries(t *testing.T) {
+	t.Parallel()
+	in := InputItem{
+		Type:    ItemTypeReasoning,
+		ID:      "rs_2",
+		Summary: []ReasoningSummary{{Type: "summary_text", Text: "step one"}},
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"summary":[{"type":"summary_text","text":"step one"}]`) {
+		t.Fatalf("reasoning summary entries lost: %s", string(raw))
+	}
+	var back InputItem
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(back.Summary) != 1 || back.Summary[0].Text != "step one" {
+		t.Fatalf("roundtrip lost summary: %+v", back.Summary)
+	}
+}
+
+// TestNonReasoningItemOmitsSummary asserts the summary field stays omitted
+// for non-reasoning item types so the custom marshaler is scoped to the
+// one variant that needs it.
+func TestNonReasoningItemOmitsSummary(t *testing.T) {
+	t.Parallel()
+	in := InputItem{
+		Type:    ItemTypeMessage,
+		Role:    "assistant",
+		Content: ContentItems{{Type: ContentItemOutputText, Text: "x"}},
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"summary"`) {
+		t.Fatalf("message item must omit summary, got %s", string(raw))
+	}
+}

@@ -32,6 +32,44 @@ type InputItem struct {
 	EncryptedContent string             `json:"encrypted_content,omitempty"`
 }
 
+// MarshalJSON forces the `summary` field to serialize on reasoning
+// items even when it is an empty array. The Codex Responses API treats
+// `summary` as a required parameter on reasoning input items and rejects
+// the whole request with `[ObjectParam] [input[i].summary]
+// [missing_required_parameter]` when it is absent, which happens for a
+// replayed reasoning item that carried encrypted_content but no summary
+// text (the omitempty tag drops the empty slice on the wire). Every
+// other item type keeps summary omitted, so the override is scoped to
+// the one variant that needs it. A nil summary on a reasoning item
+// marshals as `[]` so the field is always present.
+func (i InputItem) MarshalJSON() ([]byte, error) {
+	type inputItemAlias InputItem
+	if i.Type == ItemTypeReasoning {
+		summary := i.Summary
+		if summary == nil {
+			summary = []ReasoningSummary{}
+		}
+		withSummary := struct {
+			inputItemAlias
+			Summary []ReasoningSummary `json:"summary"`
+		}{
+			inputItemAlias: inputItemAlias(i),
+			Summary:        summary,
+		}
+		withSummary.inputItemAlias.Summary = nil
+		out, err := json.Marshal(withSummary)
+		if err != nil {
+			return nil, wrapJSONErr("codexwire reasoning input item", err)
+		}
+		return out, nil
+	}
+	out, err := json.Marshal(inputItemAlias(i))
+	if err != nil {
+		return nil, wrapJSONErr("codexwire input item", err)
+	}
+	return out, nil
+}
+
 // ItemType is the closed enum of Codex history item type strings
 // used across canonicalization, continuation parity, and SSE
 // handlers.
