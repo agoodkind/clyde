@@ -199,7 +199,7 @@ func (s *Server) registerProviders(
 			HTTPClient: s.httpClient,
 			Telemetry:  nil,
 			Now:        nil,
-		}, codexProviderOptionsWithRegistry(wsReg, policies))
+		}, codexProviderOptionsWithRegistry(wsReg, policies, deps.CodexWireBaselinePath))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered", slog.String("concern", "adapter.http.ingress"), slog.String("provider", adapterresolver.ProviderCodex.String()),
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
@@ -280,6 +280,7 @@ func (s *Server) registerAnthropicProvider(
 func codexProviderOptionsWithRegistry(
 	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
 	policies logpolicy.PolicySet,
+	wireBaselinePath string,
 ) adaptercodex.ProviderOptions {
 	codexSidecarRotation := policies.Sinks[logpolicy.SinkCodexSidecar].Rotation
 	return adaptercodex.ProviderOptions{
@@ -292,6 +293,7 @@ func codexProviderOptionsWithRegistry(
 		},
 		WsSessionIdleTTL:  0,
 		WsSessionRegistry: wsReg,
+		WireBaselinePath:  wireBaselinePath,
 	}
 }
 

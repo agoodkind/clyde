@@ -127,6 +127,12 @@ type WebsocketTransportConfig struct {
 	RoundTripEncrypted RoundTripEncrypted
 	// RetryPolicies are generic adapter retry rules compiled at daemon startup.
 	RetryPolicies []adapterretry.Policy
+	// WireIdentity carries the baseline-driven outbound wire identity
+	// (originator, openai-beta, user-agent, beta-features, attestation)
+	// projected from the daemon-owned MITM codex-cli baseline. Empty
+	// fields fall back to the compiled-in identity constants, so a
+	// zero-value WireIdentity preserves the cold-start behavior.
+	WireIdentity WireIdentity
 	// BeforeAttempt, when non-nil, is called at the start of every
 	// retry attempt (one-based attempt number). It returns a
 	// (possibly derived) context to use for the attempt and a release
@@ -375,13 +381,20 @@ func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (
 		}
 	}
 	header := BuildResponsesWebsocketHeaders(ResponsesWebsocketHeaderConfig{
-		RequestID:      cfg.RequestID,
-		ConversationID: cfg.ConversationID,
-		Correlation:    cfg.Correlation,
-		Token:          cfg.Token,
-		InstallationID: installationID,
-		TurnState:      cfg.TurnState,
-		TurnMetadata:   turnMetadataJSON, WindowID: "", BetaFeatures: "", IncludeTimingMetrics: false, Originator: "", UserAgent: "",
+		RequestID:            cfg.RequestID,
+		ConversationID:       cfg.ConversationID,
+		Correlation:          cfg.Correlation,
+		Token:                cfg.Token,
+		InstallationID:       installationID,
+		TurnState:            cfg.TurnState,
+		TurnMetadata:         turnMetadataJSON,
+		WindowID:             "",
+		BetaFeatures:         cfg.WireIdentity.BetaFeatures,
+		Originator:           cfg.WireIdentity.Originator,
+		UserAgent:            cfg.WireIdentity.UserAgent,
+		OpenAIBeta:           cfg.WireIdentity.OpenAIBeta,
+		Attestation:          cfg.WireIdentity.Attestation,
+		IncludeTimingMetrics: false,
 	})
 	conn, resp, err := dialer.DialContext(ctx, cfg.URL, header)
 	statusCode := 0

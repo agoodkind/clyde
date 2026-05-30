@@ -35,6 +35,15 @@ type Provider struct {
 	accountID      string
 	fileLog        FileLogRotationConfig
 	retryPolicies  []adapterretry.Policy
+	// wireBaselinePath is the absolute path to the daemon-owned MITM v2
+	// baseline (reference-v2.toml) for the codex-cli upstream. Empty
+	// means no baseline is wired; the egress then uses the compiled-in
+	// identity constants on every request.
+	wireBaselinePath string
+	// wireBaselineLoader projects the codex-cli flavor from the baseline
+	// at request time with mtime caching, so a baseline learned or
+	// refreshed after daemon startup is picked up without a restart.
+	wireBaselineLoader *WireBaselineLoader
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -47,6 +56,15 @@ type ProviderOptions struct {
 	// tracking live Codex websocket connections so daemon reload can
 	// drain or force-close them. Required.
 	WsSessionRegistry *livetrack.Registry[WsSessionMeta]
+	// WireBaselinePath is the absolute path to the daemon-owned MITM v2
+	// baseline (reference-v2.toml) for the codex-cli upstream. The
+	// daemon resolves it from
+	// [mitm].drift.upstreams["codex-cli"].reference, falling back to the
+	// default baseline root. Empty disables baseline-driven identity;
+	// the egress then uses the compiled-in identity constants. Unlike
+	// the Anthropic path, a missing or invalid baseline is NOT fatal: it
+	// falls back to constants so a cold-start codex still works.
+	WireBaselinePath string
 }
 
 const defaultWsSessionIdleTTL = 10 * time.Minute
@@ -72,18 +90,20 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	ConfigureCodexFileLogger(opts.FileLog)
 	wsReg := opts.WsSessionRegistry
 	return &Provider{
-		cfg:            deps.Config.Codex,
-		notices:        deps.Config.Notices,
-		auth:           deps.Auth,
-		log:            log,
-		httpClient:     httpClient,
-		now:            now,
-		sessionCache:   NewWebsocketSessionCache(log, idleTTL, wsReg),
-		wsRegistry:     wsReg,
-		workspaceProbe: NewWorkspaceProbe(),
-		accountID:      strings.TrimSpace(opts.AccountID),
-		fileLog:        opts.FileLog,
-		retryPolicies:  appendBuiltinCodexRetryPolicies(adapterretry.FromConfig(deps.Config.Retry)),
+		cfg:                deps.Config.Codex,
+		notices:            deps.Config.Notices,
+		auth:               deps.Auth,
+		log:                log,
+		httpClient:         httpClient,
+		now:                now,
+		sessionCache:       NewWebsocketSessionCache(log, idleTTL, wsReg),
+		wsRegistry:         wsReg,
+		workspaceProbe:     NewWorkspaceProbe(),
+		accountID:          strings.TrimSpace(opts.AccountID),
+		fileLog:            opts.FileLog,
+		retryPolicies:      appendBuiltinCodexRetryPolicies(adapterretry.FromConfig(deps.Config.Retry)),
+		wireBaselinePath:   strings.TrimSpace(opts.WireBaselinePath),
+		wireBaselineLoader: NewWireBaselineLoader(),
 	}
 }
 
@@ -195,6 +215,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		// nested livetrack egress session without changing this interface.
 		BeforeAttempt: beforeAttemptFromContext(ctx),
 		AuthRefresh:   authRefresh,
+		WireIdentity:  p.resolveWireIdentity(ctx),
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
@@ -231,6 +252,37 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		HasSubagentToolCall:        runResult.HasSubagentToolCall,
 		UsageNoticeWindows:         warningWindows, FinalResponse: nil, SystemFingerprint: "", ReasoningSummary: "", UsageNotices: nil,
 	}, nil
+}
+
+// resolveWireIdentity projects the codex-cli outbound wire identity from
+// the daemon-owned MITM baseline. When no baseline is wired, or the
+// baseline is missing or invalid, it returns the zero-value identity so
+// the egress falls back to the compiled-in identity constants and a
+// cold-start codex still works. Only an unexpected error (a stat or
+// parse failure on a configured path) is logged, and even then the
+// fallback keeps the request working.
+func (p *Provider) resolveWireIdentity(ctx context.Context) WireIdentity {
+	var fallback WireIdentity
+	if p == nil || strings.TrimSpace(p.wireBaselinePath) == "" {
+		return fallback
+	}
+	if p.wireBaselineLoader == nil {
+		p.wireBaselineLoader = NewWireBaselineLoader()
+	}
+	identity, err := p.wireBaselineLoader.Load(p.wireBaselinePath)
+	if err != nil {
+		if errors.Is(err, ErrCodexBaselineInvalid) {
+			p.log.WarnContext(ctx, "adapter.codex.wire_baseline.fallback_constants", "concern", codexWireBaselineConcern, "component", "adapter",
+				"subcomponent", "codex_provider",
+				"baseline_path", p.wireBaselinePath,
+				"err", err.Error(),
+			)
+		}
+		// Missing baseline is the expected cold-start case; the loader
+		// already logged it at Debug. Either way fall back to constants.
+		return fallback
+	}
+	return identity
 }
 
 func codexRequestID(req adapterresolver.ResolvedRequest) string {

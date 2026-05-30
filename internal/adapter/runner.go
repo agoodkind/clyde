@@ -39,6 +39,15 @@ type Deps struct {
 	// flavor data; a missing or invalid file makes /v1/messages fail with
 	// an operator-actionable HTTP 503.
 	AnthropicWireBaselinePath string
+	// CodexWireBaselinePath is the absolute path to the daemon-owned MITM
+	// v2 baseline (reference-v2.toml) the Codex provider reads at request
+	// time to project its outbound wire identity (originator, openai-beta,
+	// user-agent, beta-features, attestation). The daemon resolves it from
+	// [mitm].drift.upstreams["codex-cli"].reference, falling back to the
+	// default baseline root. Unlike the Anthropic path, a missing or
+	// invalid file is NOT fatal: the codex egress falls back to its
+	// compiled-in identity constants so a cold-start codex still works.
+	CodexWireBaselinePath string
 }
 
 func (d Deps) authForProvider(id adapterresolver.ProviderID) adapterprovider.AuthLookup {

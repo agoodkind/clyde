@@ -71,6 +71,12 @@ type DirectConfig struct {
 	// returns a fresh access token (or an error if refresh failed) so
 	// the transport can re-dial once before propagating the failure.
 	AuthRefresh func(ctx context.Context) (string, error)
+	// WireIdentity carries the baseline-driven outbound wire identity
+	// the Provider projected from the daemon-owned MITM codex-cli
+	// baseline. Empty fields fall back to the compiled-in identity
+	// constants, so a zero-value WireIdentity preserves the cold-start
+	// behavior.
+	WireIdentity WireIdentity
 }
 
 // RoundTripEncrypted is the closed enum the codex transport honors when the
@@ -177,6 +183,7 @@ func RunDirect(
 		RetryPolicies:      cfg.RetryPolicies,
 		BeforeAttempt:      cfg.BeforeAttempt,
 		AuthRefresh:        cfg.AuthRefresh,
+		WireIdentity:       cfg.WireIdentity,
 	}
 
 	// Websocket transport disabled by config: use the HTTP/SSE transport
@@ -206,6 +213,7 @@ func RunDirect(
 		RetryPolicies:      cfg.RetryPolicies,
 		BeforeAttempt:      cfg.BeforeAttempt,
 		AuthRefresh:        cfg.AuthRefresh,
+		WireIdentity:       cfg.WireIdentity,
 	}
 	result, err := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 	if errors.Is(err, ErrWebsocketFallbackToHTTP) {

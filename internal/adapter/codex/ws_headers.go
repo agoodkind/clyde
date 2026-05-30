@@ -11,6 +11,11 @@ import (
 const (
 	openAIBetaHeader                     = "Openai-Beta"
 	responsesWebsocketsV2BetaHeaderValue = "responses_websockets=2026-02-06"
+	// codexAttestationHeader is the `x-oai-attestation` request header
+	// codex-cli sends on the Responses websocket. Clyde does not mint
+	// this token; it only replays a captured value when the daemon-owned
+	// MITM baseline learned one (see [WireIdentity.Attestation]).
+	codexAttestationHeader = "X-Oai-Attestation"
 )
 
 // ResponsesWebsocketHeaderConfig is part of Clyde's typed adapter surface.
@@ -26,7 +31,15 @@ type ResponsesWebsocketHeaderConfig struct {
 	TurnMetadata         string
 	IncludeTimingMetrics bool
 	Originator           string // empty means use CodexOriginatorValue
-	UserAgent            string // empty means use CodexUserAgent()
+	UserAgent            string // empty means use UserAgent()
+	// OpenAIBeta overrides the responses-websocket upgrade beta value.
+	// Empty means use responsesWebsocketsV2BetaHeaderValue.
+	OpenAIBeta string
+	// Attestation is the captured `x-oai-attestation` token. When
+	// non-empty the builder replays it as the X-Oai-Attestation header.
+	// Empty means the header is omitted, which is the cold-start default
+	// because Clyde does not mint this token.
+	Attestation string
 }
 
 // BuildResponsesWebsocketHeaders is part of Clyde's typed adapter surface.
@@ -73,7 +86,11 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 	if cfg.IncludeTimingMetrics {
 		header.Set(CodexTimingMetricsHeader, "true")
 	}
-	header.Set(openAIBetaHeader, responsesWebsocketsV2BetaHeaderValue)
+	openAIBeta := strings.TrimSpace(cfg.OpenAIBeta)
+	if openAIBeta == "" {
+		openAIBeta = responsesWebsocketsV2BetaHeaderValue
+	}
+	header.Set(openAIBetaHeader, openAIBeta)
 	originator := strings.TrimSpace(cfg.Originator)
 	if originator == "" {
 		originator = CodexOriginatorValue
@@ -84,5 +101,8 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 		userAgent = UserAgent()
 	}
 	header.Set("User-Agent", userAgent)
+	if attestation := strings.TrimSpace(cfg.Attestation); attestation != "" {
+		header.Set(codexAttestationHeader, attestation)
+	}
 	return header
 }

@@ -42,6 +42,13 @@ type HTTPTransportConfig struct {
 	// error if the refresh itself failed) so the transport can retry
 	// once with the new token before propagating the failure.
 	AuthRefresh func(ctx context.Context) (string, error)
+	// WireIdentity carries the baseline-driven outbound wire identity
+	// (originator, user-agent, beta-features, attestation) projected
+	// from the daemon-owned MITM codex-cli baseline. The openai-beta
+	// upgrade header is stripped on the HTTP transport, so its value is
+	// unused here. Empty fields fall back to the compiled-in identity
+	// constants.
+	WireIdentity WireIdentity
 }
 
 const httpErrorBodySnippetLimit = 512
@@ -59,12 +66,14 @@ func buildResponsesHTTPHeaders(cfg HTTPTransportConfig) http.Header {
 		Token:                cfg.Token,
 		InstallationID:       cfg.InstallationID,
 		WindowID:             cfg.WindowID,
-		BetaFeatures:         "",
+		BetaFeatures:         cfg.WireIdentity.BetaFeatures,
 		TurnState:            NewTurnState(),
 		TurnMetadata:         cfg.TurnMetadata,
 		IncludeTimingMetrics: false,
-		Originator:           "",
-		UserAgent:            "",
+		Originator:           cfg.WireIdentity.Originator,
+		UserAgent:            cfg.WireIdentity.UserAgent,
+		OpenAIBeta:           cfg.WireIdentity.OpenAIBeta,
+		Attestation:          cfg.WireIdentity.Attestation,
 	})
 	// Strip the websocket-only OpenAI-Beta upgrade-version header. The
 	// WS header builder Set()s it under its canonical form, so deleting
