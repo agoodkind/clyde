@@ -30,8 +30,11 @@ func TestResolveUsesDefaults(t *testing.T) {
 	if !daemonPolicy.Cleanup.Enabled {
 		t.Fatalf("daemon cleanup should default to enabled")
 	}
-	if _, ok := policies.Concerns[slogger.ConcernAdapterChatDispatch]; !ok {
-		t.Fatalf("policy set should include registered concern %q", slogger.ConcernAdapterChatDispatch)
+	// Concerns are dynamic now: an unconfigured concern has no resolved policy
+	// entry and falls back to the structured concern sink defaults that
+	// slogger's router applies directly.
+	if _, ok := policies.Concerns[slogger.ConcernAdapterChatDispatch]; ok {
+		t.Fatalf("policy set should not seed unconfigured concern %q", slogger.ConcernAdapterChatDispatch)
 	}
 }
 
@@ -88,6 +91,56 @@ func TestResolveAppliesEnabledSinkSetAndConcernOverride(t *testing.T) {
 	}
 	if concernPolicy.Cleanup.MaxTotalMB == nil || *concernPolicy.Cleanup.MaxTotalMB != 512 {
 		t.Fatalf("concern cleanup max total MB = %v, want 512", concernPolicy.Cleanup.MaxTotalMB)
+	}
+}
+
+func TestResolveSeedsEverySinkFromRegistry(t *testing.T) {
+	cfg := config.NewConfigWithDefaults()
+	policies, err := logpolicy.Resolve(*cfg)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	specs := config.LoggingSinkSpecs()
+	if len(policies.Sinks) != len(specs) {
+		t.Fatalf("resolved sink count = %d, want %d (registry size)", len(policies.Sinks), len(specs))
+	}
+	for _, spec := range specs {
+		if _, ok := policies.Sinks[logpolicy.SinkName(spec.Name)]; !ok {
+			t.Fatalf("registry sink %q missing from resolved policy set", spec.Name)
+		}
+	}
+}
+
+func TestResolvePerSinkOverrideControlsEnabledAndRotation(t *testing.T) {
+	disabled := false
+	maxSizeMB := 9
+	cfg := config.NewConfigWithDefaults()
+	cfg.Logging.Sinks.Audit = config.LoggingSinkOverride{
+		Enabled: &disabled,
+		Level:   "warn",
+		Path:    "",
+		Rotation: config.LoggingRotation{
+			Enabled:    nil,
+			MaxSizeMB:  maxSizeMB,
+			MaxBackups: 0,
+			MaxAgeDays: 0,
+			Compress:   nil,
+		},
+	}
+
+	policies, err := logpolicy.Resolve(*cfg)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	auditPolicy := policies.Sinks[logpolicy.SinkAudit]
+	if auditPolicy.Enabled {
+		t.Fatalf("audit sink should be disabled by its per-sink override")
+	}
+	if auditPolicy.Level != logpolicy.LevelWarn {
+		t.Fatalf("audit sink level = %q, want %q", auditPolicy.Level, logpolicy.LevelWarn)
+	}
+	if auditPolicy.Rotation.MaxSizeMB != maxSizeMB {
+		t.Fatalf("audit sink rotation max size = %d, want %d", auditPolicy.Rotation.MaxSizeMB, maxSizeMB)
 	}
 }
 
@@ -200,18 +253,26 @@ func TestResolveSloggerSetupDisablesConcernFileForProcessSink(t *testing.T) {
 	}
 }
 
-func TestResolveRejectsUnknownConcern(t *testing.T) {
+func TestResolveAcceptsDynamicConcern(t *testing.T) {
 	cfg := config.NewConfigWithDefaults()
 	cfg.Logging.Concerns = config.LoggingConcerns{
-		"adapter.nope": {},
+		"adapter.nope": {
+			Level: "debug",
+		},
 	}
 
-	_, err := logpolicy.Resolve(*cfg)
-	if err == nil {
-		t.Fatalf("Resolve returned nil error")
+	policies, err := logpolicy.Resolve(*cfg)
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "logging.concerns.adapter.nope is not a known concern") {
-		t.Fatalf("Resolve error = %q", err.Error())
+	// Concerns are dynamic now: a previously-unknown concern is accepted and
+	// resolved from the configured override rather than rejected.
+	concernPolicy, ok := policies.Concerns["adapter.nope"]
+	if !ok {
+		t.Fatalf("Resolve dropped configured concern adapter.nope")
+	}
+	if concernPolicy.Level != logpolicy.LevelDebug {
+		t.Fatalf("concern level = %q, want %q", concernPolicy.Level, logpolicy.LevelDebug)
 	}
 }
 

@@ -12,7 +12,6 @@
 package slogger
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,6 +30,10 @@ const (
 	defaultCLIFile    = "clyde-cli.jsonl"
 	defaultDaemonFile = "clyde-daemon.jsonl"
 	concernAttr       = "concern"
+	// routerFallbackConcern is the concern the gklog router assigns to records
+	// that carry no concern attr. Its PathForConcern mapping returns the empty
+	// string so those records never reach a per-concern file.
+	routerFallbackConcern = "unrouted"
 )
 
 // ProcessRole identifies which process family is initializing slog.
@@ -60,9 +63,6 @@ func DefaultConcernRoot(cfg config.LoggingConfig, role ProcessRole) string {
 // only inside the daemon, on the periodic loop, via RunCleanupOnce. CLI and
 // CLI invocations must not block on filesystem scans during process start.
 func SetupWithPolicy(policy SetupPolicy) (io.Closer, error) {
-	if err := validateConcernPolicyNames(policy.ConcernPolicies); err != nil {
-		return nopCloser{Closed: false}, err
-	}
 	return setupPolicyLogger(policy)
 }
 
@@ -115,10 +115,7 @@ func setupPolicyLogger(policy SetupPolicy) (io.Closer, error) {
 }
 
 func appendSharedPolicyHandlers(handlers []slog.Handler, policy SetupPolicy, rotation RotationPolicy) []slog.Handler {
-	handlers = append(handlers, concernHandlers(policy.ConcernRoot, policy.Level, rotation, policy.ConcernPolicies)...)
-	if captureHandler := buildMITMCaptureIndexHandler(policy.MITMCapturePolicy, policy.Level); captureHandler != nil {
-		handlers = append(handlers, captureHandler)
-	}
+	handlers = append(handlers, buildConcernRouter(policy, rotation))
 	if inventoryHandler := buildInventoryIndexHandler(policy.InventoryPolicy, policy.ConcernRoot, policy.Level); inventoryHandler != nil {
 		handlers = append(handlers, inventoryHandler)
 	}
@@ -126,6 +123,75 @@ func appendSharedPolicyHandlers(handlers []slog.Handler, policy SetupPolicy, rot
 		handlers = append(handlers, router)
 	}
 	return handlers
+}
+
+// buildConcernRouter installs the gklog per-concern file router. The router
+// reads the concern from the "concern" record attribute that every clyde call
+// site tags via [Concern] / [WithConcern], maps it to a JSONL file under the
+// concern root via [ConcernRelPath], and applies any per-concern level override
+// from the policy. Records that carry no concern attr resolve to the
+// "unrouted" fallback, which [routerPathForConcern] keeps out of every concern
+// file so they land only on the process log (a sibling handler in the tee).
+// The router's combined sink is discarded here because the process log is its
+// own handler in the tee.
+func buildConcernRouter(policy SetupPolicy, rotation RotationPolicy) slog.Handler {
+	routerRotation := gklog.RotationConfig{}
+	if rotation.Enabled {
+		routerRotation = rotationConfig(rotation)
+	}
+	// The router's own Enabled gate must clear the lowest per-concern level so a
+	// concern override below the process-wide level still reaches Handle, where
+	// the per-concern child handler applies the precise level. Gating the router
+	// at policy.Level alone would let slog drop those records before routing.
+	routerLevel := routerMinLevel(policy.Level, policy.ConcernPolicies)
+	return gklog.NewRouter(policy.ConcernRoot, routerLevel, slog.DiscardHandler, gklog.RouterOptions{
+		FallbackConcern: routerFallbackConcern,
+		Rotation:        routerRotation,
+		ConcernAttr:     concernAttr,
+		PathForConcern:  routerPathForConcern(policy.ConcernPolicies),
+		LevelForConcern: routerLevelForConcern(policy.Level, policy.ConcernPolicies),
+	})
+}
+
+// routerMinLevel returns the lowest of the process-wide level and every
+// explicit per-concern level override, which is the level the router's own
+// Enabled gate must use so no concern's records are dropped before routing.
+func routerMinLevel(defaultLevel slog.Level, policies map[string]ConcernPolicy) slog.Level {
+	minLevel := defaultLevel
+	for _, policy := range policies {
+		if policy.Level != nil && *policy.Level < minLevel {
+			minLevel = *policy.Level
+		}
+	}
+	return minLevel
+}
+
+// routerPathForConcern returns the file router's concern-to-path mapper. The
+// fallback concern and any concern whose policy is explicitly disabled return
+// the empty string, which keeps those records out of per-concern files while
+// still letting the process-log sibling handler record them.
+func routerPathForConcern(policies map[string]ConcernPolicy) func(string) string {
+	return func(concern string) string {
+		if concern == routerFallbackConcern {
+			return ""
+		}
+		if policy, ok := policies[concern]; ok && policy.Enabled != nil && !*policy.Enabled {
+			return ""
+		}
+		return ConcernRelPath(concern)
+	}
+}
+
+// routerLevelForConcern returns the file router's per-concern level resolver.
+// A concern with an explicit level override uses that level; every other
+// concern uses the process-wide default level.
+func routerLevelForConcern(defaultLevel slog.Level, policies map[string]ConcernPolicy) func(string) slog.Level {
+	return func(concern string) slog.Level {
+		if policy, ok := policies[concern]; ok && policy.Level != nil {
+			return *policy.Level
+		}
+		return defaultLevel
+	}
 }
 
 func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
@@ -230,82 +296,3 @@ type nopCloser struct {
 }
 
 func (nopCloser) Close() error { return nil }
-
-type concernFilterHandler struct {
-	concern string
-	attrs   []slog.Attr
-	handler slog.Handler
-}
-
-func newConcernFilterHandler(concern string, handler slog.Handler) slog.Handler {
-	return &concernFilterHandler{concern: concern, handler: handler, attrs: nil}
-}
-
-func (h *concernFilterHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.handler.Enabled(ctx, level)
-}
-
-func (h *concernFilterHandler) Handle(ctx context.Context, record slog.Record) error {
-	if !h.matches(record) {
-		return nil
-	}
-	err := h.handler.Handle(ctx, record)
-	if err != nil {
-		// Use stderr rather than slog to avoid recursing into the
-		// same handler chain when the inner handler reports a write
-		// error.
-		fmt.Fprintln(os.Stderr, "slogger.concern_filter.handle_failed:", err.Error())
-		slog.WarnContext(ctx, "slogger.concern_filter.handle_failed", "concern", h.concern, "err", err)
-		return fmt.Errorf("handle concern-filtered slog record: %w", err)
-	}
-	return nil
-}
-
-func (h *concernFilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	next := &concernFilterHandler{
-		concern: h.concern,
-		attrs:   append(append([]slog.Attr(nil), h.attrs...), attrs...),
-		handler: h.handler.WithAttrs(attrs),
-	}
-	return next
-}
-
-func (h *concernFilterHandler) WithGroup(name string) slog.Handler {
-	return &concernFilterHandler{
-		concern: h.concern,
-		attrs:   append([]slog.Attr(nil), h.attrs...),
-		handler: h.handler.WithGroup(name),
-	}
-}
-
-func (h *concernFilterHandler) Close() error {
-	if closer, ok := h.handler.(io.Closer); ok {
-		if err := closer.Close(); err != nil {
-			fmt.Fprintln(os.Stderr, "slogger.concern_filter.close_failed:", err.Error())
-			slog.Warn("slogger.concern_filter.close_failed", "concern", h.concern, "err", err)
-			return fmt.Errorf("close concern-filtered slog handler: %w", err)
-		}
-	}
-	return nil
-}
-
-// matches reports whether record carries an explicit concern
-// attribute that selects this handler. Every slog call site in the
-// repository emits the concern attr explicitly; the historical
-// message-prefix router has been removed.
-func (h *concernFilterHandler) matches(record slog.Record) bool {
-	for _, attr := range h.attrs {
-		if attr.Key == concernAttr && attr.Value.String() == h.concern {
-			return true
-		}
-	}
-	matched := false
-	record.Attrs(func(attr slog.Attr) bool {
-		if attr.Key == concernAttr && attr.Value.String() == h.concern {
-			matched = true
-			return false
-		}
-		return true
-	})
-	return matched
-}

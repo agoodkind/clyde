@@ -9,9 +9,3 @@ package slogger
 const (
 	ConcernLivetrack = "livetrack"
 )
-
-func init() {
-	registerConcernPaths(map[string]string{
-		ConcernLivetrack: "livetrack/livetrack.jsonl",
-	})
-}

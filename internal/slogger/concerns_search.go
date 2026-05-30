@@ -9,9 +9,3 @@ package slogger
 const (
 	ConcernSearch = "search"
 )
-
-func init() {
-	registerConcernPaths(map[string]string{
-		ConcernSearch: "search/search.jsonl",
-	})
-}

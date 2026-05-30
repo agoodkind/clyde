@@ -27,13 +27,3 @@ const (
 	// failures.
 	ConcernProviderMITMErrors = "providers.mitm.errors"
 )
-
-func init() {
-	registerConcernPaths(map[string]string{
-		ConcernProviderClaudeOAuth:   "providers/claude/oauth.jsonl",
-		ConcernProviderCodexStore:    "providers/codex/store.jsonl",
-		ConcernProviderMITMLifecycle: "providers/mitm/lifecycle.jsonl",
-		ConcernProviderMITMWire:      "providers/mitm/wire.jsonl",
-		ConcernProviderMITMErrors:    "providers/mitm/errors.jsonl",
-	})
-}

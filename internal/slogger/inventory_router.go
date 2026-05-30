@@ -241,5 +241,8 @@ func flockInventoryFile(file *os.File, how int) error {
 }
 
 func attrCarriesInventorySink(attr slog.Attr) bool {
-	return attrCarriesSinkName(attr, inventoryIndexSinkName)
+	if attr.Key != inventorySinkAttrName {
+		return false
+	}
+	return strings.Contains(attr.Value.String(), inventoryIndexSinkName)
 }

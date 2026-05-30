@@ -12,13 +12,3 @@ const (
 	ConcernConversationSearch = "conversation.search"
 	ConcernConversationExport = "conversation.export"
 )
-
-func init() {
-	registerConcernPaths(map[string]string{
-		ConcernConversationIndex:  "conversation/index.jsonl",
-		ConcernConversationScan:   "conversation/scan.jsonl",
-		ConcernConversationLoad:   "conversation/load.jsonl",
-		ConcernConversationSearch: "conversation/search.jsonl",
-		ConcernConversationExport: "conversation/export.jsonl",
-	})
-}

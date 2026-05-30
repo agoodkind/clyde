@@ -256,19 +256,6 @@ const (
 	defaultLoggingRotationMaxAgeDays = 14
 )
 
-var knownLoggingSinkNames = map[string]bool{
-	LoggingSinkDaemon:           true,
-	LoggingSinkCLI:              true,
-	LoggingSinkCodexSidecar:     true,
-	LoggingSinkAnthropicSidecar: true,
-	LoggingSinkAudit:            true,
-	LoggingSinkConcerns:         true,
-	LoggingSinkTranscripts:      true,
-	LoggingSinkMITMCapture:      true,
-	LoggingSinkMITMRaw:          true,
-	LoggingSinkInventory:        true,
-}
-
 func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg == nil {
 		return nil
@@ -393,7 +380,7 @@ func normalizeLoggingSinks(sinks *LoggingSinks) error {
 		if normalizedName == "" {
 			return fmt.Errorf("logging.sinks.enabled contains an empty sink name")
 		}
-		if !knownLoggingSinkNames[normalizedName] {
+		if !IsKnownLoggingSink(normalizedName) {
 			return fmt.Errorf("logging.sinks.enabled contains unknown sink %q", sinkName)
 		}
 		if seen[normalizedName] {
@@ -403,6 +390,33 @@ func normalizeLoggingSinks(sinks *LoggingSinks) error {
 		normalizedEnabled = append(normalizedEnabled, normalizedName)
 	}
 	sinks.Enabled = normalizedEnabled
+	return normalizeLoggingSinkOverrides(sinks)
+}
+
+// normalizeLoggingSinkOverrides validates and normalizes each per-sink config
+// table that an operator may set with `[logging.sinks.<name>]`. It iterates the
+// canonical sink registry so a sink table cannot be validated unless the sink
+// is known, and writes the normalized override back to the matching struct
+// field.
+func normalizeLoggingSinkOverrides(sinks *LoggingSinks) error {
+	for _, spec := range LoggingSinkSpecs() {
+		override, ok := sinks.Override(spec.Name)
+		if !ok {
+			continue
+		}
+		path := "logging.sinks." + spec.Name
+		if err := validateLoggingLevel(path+".level", override.Level); err != nil {
+			return err
+		}
+		if err := validateLoggingRotation(path+".rotation", override.Rotation); err != nil {
+			return err
+		}
+		override.Level = normalizeLoggingOptionalValue(override.Level)
+		override.Path = strings.TrimSpace(override.Path)
+		if err := sinks.setOverride(spec.Name, override); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -464,7 +478,7 @@ func normalizeLoggingConcernOverrides(concerns LoggingConcerns) error {
 			return err
 		}
 		if sinkName := strings.ToLower(strings.TrimSpace(concern.Sink)); sinkName != "" {
-			if !knownLoggingSinkNames[sinkName] {
+			if !IsKnownLoggingSink(sinkName) {
 				return fmt.Errorf("logging.concerns.%s.sink is not a known sink", concernName)
 			}
 			concern.Sink = sinkName

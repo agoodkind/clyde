@@ -476,6 +476,57 @@ sink = "concerns"
 		Expect(err.Error()).To(ContainSubstring("logging.sinks.enabled contains unknown sink"))
 	})
 
+	It("loads per-sink config tables alongside the flat enabled list", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		configData := `[logging.sinks]
+enabled = ["daemon", "concerns"]
+
+[logging.sinks.audit]
+enabled = false
+level = "warn"
+
+[logging.sinks.anthropic_sidecar]
+enabled = true
+[logging.sinks.anthropic_sidecar.rotation]
+max_size_mb = 32
+`
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Logging.Sinks.Enabled).To(Equal([]string{config.LoggingSinkDaemon, config.LoggingSinkConcerns}))
+
+		auditOverride, ok := cfg.Logging.Sinks.Override(config.LoggingSinkAudit)
+		Expect(ok).To(BeTrue())
+		Expect(auditOverride.Enabled).NotTo(BeNil())
+		Expect(*auditOverride.Enabled).To(BeFalse())
+		Expect(auditOverride.Level).To(Equal("warn"))
+
+		anthOverride, ok := cfg.Logging.Sinks.Override(config.LoggingSinkAnthropicSidecar)
+		Expect(ok).To(BeTrue())
+		Expect(anthOverride.Enabled).NotTo(BeNil())
+		Expect(*anthOverride.Enabled).To(BeTrue())
+		Expect(anthOverride.Rotation.MaxSizeMB).To(Equal(32))
+	})
+
+	It("rejects an invalid per-sink table level", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		configData := "[logging.sinks.audit]\nlevel = \"nope\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
+
+		_, err := config.LoadGlobalOrDefault()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("logging.sinks.audit.level must be one of debug|info|warn|error"))
+	})
+
 	It("rejects invalid logging cleanup controls", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 func TestFilterPayloadRemovesContextFieldsAndPreservesSafeFields(t *testing.T) {
@@ -153,9 +155,41 @@ func TestDefaultSinksForEventSelectsCentralSinkModel(t *testing.T) {
 	event.Facets.Set(rawFacet{})
 
 	sinks := DefaultSinksForEvent(event)
-	want := []SinkName{SinkProcess, SinkConcern, SinkInventory, SinkPerChat, SinkMITMCapture, SinkMITMRaw}
+	want := []SinkName{SinkProcess, SinkConcern, SinkInventory, SinkPerChat, SinkMITMRaw}
 	if strings.Join(sinkNames(sinks), ",") != strings.Join(sinkNames(want), ",") {
 		t.Fatalf("sinks = %v, want %v", sinks, want)
+	}
+}
+
+// TestSinkWireValuesAreStable locks the on-the-wire "sinks" attr values that the
+// slogger filter handlers and the logs-inventory CLI match verbatim. Renaming
+// any of these silently breaks end-to-end event routing, so the literals are
+// pinned here. The two destinations that share a physical file with the config
+// roster are asserted equal to the canonical config sink constants so the two
+// taxonomies cannot drift apart on those names.
+func TestSinkWireValuesAreStable(t *testing.T) {
+	cases := []struct {
+		sink SinkName
+		want string
+	}{
+		{sink: SinkProcess, want: "process"},
+		{sink: SinkConcern, want: "concern"},
+		{sink: SinkPerRequest, want: "per_request"},
+		{sink: SinkPerChat, want: "per_chat"},
+		{sink: SinkMITMRaw, want: "mitm_raw"},
+		{sink: SinkProviderSidecar, want: "provider_sidecar"},
+		{sink: SinkInventory, want: "inventory_index"},
+	}
+	for _, tc := range cases {
+		if string(tc.sink) != tc.want {
+			t.Fatalf("sink %v wire value = %q, want %q", tc.sink, string(tc.sink), tc.want)
+		}
+	}
+	if string(SinkMITMRaw) != config.LoggingSinkMITMRaw {
+		t.Fatalf("SinkMITMRaw = %q, want config.LoggingSinkMITMRaw %q", string(SinkMITMRaw), config.LoggingSinkMITMRaw)
+	}
+	if string(SinkInventory) != config.LoggingSinkInventory {
+		t.Fatalf("SinkInventory = %q, want config.LoggingSinkInventory %q", string(SinkInventory), config.LoggingSinkInventory)
 	}
 }
 

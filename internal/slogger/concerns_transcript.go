@@ -6,9 +6,3 @@ package slogger
 const (
 	ConcernTranscript = "transcript"
 )
-
-func init() {
-	registerConcernPaths(map[string]string{
-		ConcernTranscript: "transcript/transcript.jsonl",
-	})
-}

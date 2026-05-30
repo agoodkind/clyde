@@ -6,9 +6,3 @@ package slogger
 const (
 	ConcernConfig = "config"
 )
-
-func init() {
-	registerConcernPaths(map[string]string{
-		ConcernConfig: "config/config.jsonl",
-	})
-}

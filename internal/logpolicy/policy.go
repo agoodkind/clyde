@@ -28,8 +28,6 @@ const (
 	SinkConcerns SinkName = config.LoggingSinkConcerns
 	// SinkTranscripts identifies the per-chat transcript log sink.
 	SinkTranscripts SinkName = config.LoggingSinkTranscripts
-	// SinkMITMCapture identifies the MITM capture index sink.
-	SinkMITMCapture SinkName = config.LoggingSinkMITMCapture
 	// SinkMITMRaw identifies the MITM raw payload sink.
 	SinkMITMRaw SinkName = config.LoggingSinkMITMRaw
 	// SinkInventory identifies the inventory index sink.
@@ -145,18 +143,42 @@ func resolveSinks(
 	globalCleanup CleanupPolicy,
 ) map[SinkName]SinkPolicy {
 	enabledOverride := enabledSinkOverride(cfg.Logging.Sinks.Enabled)
-	policies := make(map[SinkName]SinkPolicy, len(allSinkNames()))
-	for _, sinkName := range allSinkNames() {
+	specs := config.LoggingSinkSpecs()
+	policies := make(map[SinkName]SinkPolicy, len(specs))
+	for _, spec := range specs {
+		sinkName := SinkName(spec.Name)
+		level := globalLevel
+		rotation := globalRotation
+		enabled := defaultSinkEnabled(cfg, spec, enabledOverride)
+		if override, ok := cfg.Logging.Sinks.Override(spec.Name); ok {
+			level = sinkOverrideLevel("logging.sinks."+spec.Name, override.Level, level)
+			rotation = resolveRotation(override.Rotation, rotation)
+			if override.Enabled != nil {
+				enabled = *override.Enabled
+			}
+		}
 		policies[sinkName] = SinkPolicy{
 			Name:     sinkName,
-			Enabled:  defaultSinkEnabled(cfg, sinkName, enabledOverride),
-			Level:    globalLevel,
+			Enabled:  enabled,
+			Level:    level,
 			Detail:   DetailSummary,
-			Rotation: globalRotation,
+			Rotation: rotation,
 			Cleanup:  globalCleanup,
 		}
 	}
 	return policies
+}
+
+// sinkOverrideLevel parses a per-sink level override, falling back to the
+// inherited level when the override is empty. Config validation already
+// rejected malformed levels, so a parse failure here keeps the inherited level
+// rather than surfacing a second error.
+func sinkOverrideLevel(path string, value string, inherited Level) Level {
+	level, err := parseLevel(path+".level", value, inherited)
+	if err != nil {
+		return inherited
+	}
+	return level
 }
 
 func enabledSinkOverride(enabled []string) map[SinkName]bool {
@@ -174,25 +196,17 @@ func resolveConcerns(
 	cfg config.Config,
 	sinkPolicies map[SinkName]SinkPolicy,
 ) (map[string]ConcernPolicy, error) {
-	policies := make(map[string]ConcernPolicy, len(slogger.KnownConcerns()))
-	for _, concernName := range slogger.KnownConcerns() {
-		sinkPolicy := sinkPolicies[SinkConcerns]
-		policies[concernName] = ConcernPolicy{
-			Name:     concernName,
-			Sink:     SinkConcerns,
-			Enabled:  sinkPolicy.Enabled,
-			Level:    sinkPolicy.Level,
-			Detail:   sinkPolicy.Detail,
-			Rotation: sinkPolicy.Rotation,
-			Cleanup:  sinkPolicy.Cleanup,
-		}
-	}
-	applyAdapterWireCaptureConcernDefaults(cfg, policies)
+	// Concerns are dynamic: the only concern files that need a resolved policy
+	// are those the config overrides explicitly plus the adapter wire-capture
+	// concerns that carry built-in rotation defaults. Every other concern uses
+	// the SinkConcerns sink defaults that slogger's router applies directly.
+	policies := make(map[string]ConcernPolicy, len(cfg.Logging.Concerns))
+	applyAdapterWireCaptureConcernDefaults(cfg, sinkPolicies, policies)
 	for concernName, concernConfig := range cfg.Logging.Concerns {
-		if !slogger.IsKnownConcern(concernName) {
-			return nil, fmt.Errorf("logging.concerns.%s is not a known concern", concernName)
+		policy, ok := policies[concernName]
+		if !ok {
+			policy = baseConcernPolicy(concernName, sinkPolicies[SinkConcerns])
 		}
-		policy := policies[concernName]
 		if concernConfig.Sink != "" {
 			sinkName := SinkName(strings.ToLower(strings.TrimSpace(concernConfig.Sink)))
 			sinkPolicy, ok := sinkPolicies[sinkName]
@@ -225,7 +239,25 @@ func resolveConcerns(
 	return policies, nil
 }
 
-func applyAdapterWireCaptureConcernDefaults(cfg config.Config, policies map[string]ConcernPolicy) {
+// baseConcernPolicy returns the concern policy a concern inherits from the
+// structured concern sink before any per-concern config override applies.
+func baseConcernPolicy(concernName string, sinkPolicy SinkPolicy) ConcernPolicy {
+	return ConcernPolicy{
+		Name:     concernName,
+		Sink:     SinkConcerns,
+		Enabled:  sinkPolicy.Enabled,
+		Level:    sinkPolicy.Level,
+		Detail:   sinkPolicy.Detail,
+		Rotation: sinkPolicy.Rotation,
+		Cleanup:  sinkPolicy.Cleanup,
+	}
+}
+
+func applyAdapterWireCaptureConcernDefaults(
+	cfg config.Config,
+	sinkPolicies map[SinkName]SinkPolicy,
+	policies map[string]ConcernPolicy,
+) {
 	rot := cfg.Adapter.WireCapture.Rotation
 	if !loggingRotationSet(rot) {
 		return
@@ -242,7 +274,10 @@ func applyAdapterWireCaptureConcernDefaults(cfg config.Config, policies map[stri
 		slogger.ConcernAdapterProviderAnthWire,
 		slogger.ConcernAdapterProviderCodexWire,
 	} {
-		concernPolicy := policies[concernName]
+		concernPolicy, ok := policies[concernName]
+		if !ok {
+			concernPolicy = baseConcernPolicy(concernName, sinkPolicies[SinkConcerns])
+		}
 		concernPolicy.Rotation = policy
 		policies[concernName] = concernPolicy
 	}
@@ -328,41 +363,24 @@ func parseDetail(path string, value string, inherited Detail) (Detail, error) {
 	}
 }
 
-func defaultSinkEnabled(cfg config.Config, sinkName SinkName, enabledOverride map[SinkName]bool) bool {
+// defaultSinkEnabled resolves a sink's default-enabled state from its registry
+// spec. The registry tags each sink with a [config.LoggingSinkDefaultRule]; this
+// resolver applies the config-dependent gate the rule names so the per-sink
+// roster lives in the registry rather than in a hand-maintained switch here.
+func defaultSinkEnabled(cfg config.Config, spec config.LoggingSinkSpec, enabledOverride map[SinkName]bool) bool {
 	baseEnabled := true
 	if enabledOverride != nil {
-		baseEnabled = enabledOverride[sinkName]
+		baseEnabled = enabledOverride[SinkName(spec.Name)]
 	}
-	switch sinkName {
-	case SinkTranscripts:
+	switch spec.DefaultRule {
+	case config.LoggingSinkDefaultTranscript:
 		return baseEnabled && cfg.Logging.Transcript.IsEnabled()
-	case SinkMITMRaw:
+	case config.LoggingSinkDefaultRawCapture:
 		return baseEnabled && cfg.Logging.RawCapture.Enabled != nil && *cfg.Logging.RawCapture.Enabled
-	case SinkDaemon,
-		SinkCLI,
-		SinkCodexSidecar,
-		SinkAnthropicSidecar,
-		SinkAudit,
-		SinkConcerns,
-		SinkMITMCapture,
-		SinkInventory:
+	case config.LoggingSinkDefaultAlwaysOn:
 		return baseEnabled
-	}
-	return baseEnabled
-}
-
-func allSinkNames() []SinkName {
-	return []SinkName{
-		SinkDaemon,
-		SinkCLI,
-		SinkCodexSidecar,
-		SinkAnthropicSidecar,
-		SinkAudit,
-		SinkConcerns,
-		SinkTranscripts,
-		SinkMITMCapture,
-		SinkMITMRaw,
-		SinkInventory,
+	default:
+		return baseEnabled
 	}
 }
 
@@ -441,17 +459,6 @@ func ResolveSloggerSetup(cfg config.Config, role slogger.ProcessRole) (slogger.S
 				MaxBackups: policies.Sinks[SinkInventory].Rotation.MaxBackups,
 				MaxAgeDays: policies.Sinks[SinkInventory].Rotation.MaxAgeDays,
 				Compress:   boolPointer(policies.Sinks[SinkInventory].Rotation.Compress),
-			},
-		},
-		MITMCapturePolicy: slogger.MITMCapturePolicy{
-			Enabled: policies.Sinks[SinkMITMCapture].Enabled,
-			Root:    cfg.MITM.CaptureDir,
-			Rotation: slogger.RotationPolicy{
-				Enabled:    policies.Sinks[SinkMITMCapture].Rotation.Enabled,
-				MaxSizeMB:  policies.Sinks[SinkMITMCapture].Rotation.MaxSizeMB,
-				MaxBackups: policies.Sinks[SinkMITMCapture].Rotation.MaxBackups,
-				MaxAgeDays: policies.Sinks[SinkMITMCapture].Rotation.MaxAgeDays,
-				Compress:   boolPointer(policies.Sinks[SinkMITMCapture].Rotation.Compress),
 			},
 		},
 		CleanupPolicy: slogger.CleanupPolicy{

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goodkind.io/clyde/internal/config"
 )
 
 // Surface names the product surface that owns a request story.
@@ -107,6 +109,18 @@ const (
 )
 
 // SinkName identifies a stable logging sink selected by the central emitter.
+//
+// This is the per-event routing taxonomy written to the "sinks" slog attr and
+// matched downstream by the slogger filter handlers and the logs-inventory CLI.
+// It overlaps the config sink roster ([config.LoggingSinkSpecs]) on the two
+// destinations that name the same physical file, [SinkMITMRaw] and
+// [SinkInventory]; those two constants reference the canonical config strings so
+// there is one source for those wire values. The remaining names are
+// routing-only concepts ([SinkProcess], [SinkConcern], [SinkPerRequest],
+// [SinkPerChat], [SinkProviderSidecar]), so they stay defined here as the
+// routing taxonomy's own constants rather than as a second copy of the config
+// roster. MITM wire legs reach their per-concern file through [SinkConcern];
+// there is no longer a dedicated capture-index sink.
 type SinkName string
 
 const (
@@ -118,14 +132,16 @@ const (
 	SinkPerRequest SinkName = "per_request"
 	// SinkPerChat routes events to per-chat logs.
 	SinkPerChat SinkName = "per_chat"
-	// SinkMITMCapture routes events to the MITM capture index.
-	SinkMITMCapture SinkName = "mitm_capture_index"
-	// SinkMITMRaw identifies MITM raw sidecar captures.
-	SinkMITMRaw SinkName = "mitm_raw"
+	// SinkMITMRaw identifies MITM raw sidecar captures. The wire value is the
+	// canonical config sink string so the routing taxonomy and the config roster
+	// share one source for this name.
+	SinkMITMRaw SinkName = SinkName(config.LoggingSinkMITMRaw)
 	// SinkProviderSidecar routes events to provider sidecar logs.
 	SinkProviderSidecar SinkName = "provider_sidecar"
-	// SinkInventory routes events to the inventory index.
-	SinkInventory SinkName = "inventory_index"
+	// SinkInventory routes events to the inventory index. The wire value is the
+	// canonical config sink string so the routing taxonomy and the config roster
+	// share one source for this name.
+	SinkInventory SinkName = SinkName(config.LoggingSinkInventory)
 )
 
 // Identity carries provider-neutral request identity fields shared
@@ -848,9 +864,6 @@ func DefaultSinksForEvent(event Event) []SinkName {
 	sinks := []SinkName{SinkProcess, SinkConcern, SinkInventory}
 	if event.Identity.ChatKey != "" {
 		sinks = append(sinks, SinkPerChat)
-	}
-	if event.Path.Surface == SurfaceMITMIDE {
-		sinks = append(sinks, SinkMITMCapture)
 	}
 	hints := event.Facets.AggregateSinkHints()
 	if hints.HasRawCapture {

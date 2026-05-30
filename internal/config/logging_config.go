@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // LoggingConfig carries global logging settings.
 type LoggingConfig struct {
 	Level      string            `json:"level,omitempty" toml:"level,omitempty"`
@@ -14,9 +16,102 @@ type LoggingConfig struct {
 	Concerns   LoggingConcerns   `json:"concerns,omitempty" toml:"concerns,omitempty"`
 }
 
-// LoggingSinks carries the enabled central sink names.
+// LoggingSinks carries per-sink logging controls. The flat Enabled list is the
+// back-compatible form (`[logging.sinks] enabled = ["daemon", ...]`); the
+// per-sink fields are the per-sink-table form
+// (`[logging.sinks.<name>] enabled = true`). Both forms feed the same resolved
+// sink roster, so an operator may migrate one sink at a time. The per-sink
+// fields are named after the canonical sink registry entries; resolve one by
+// canonical name with [LoggingSinks.Override].
 type LoggingSinks struct {
-	Enabled []string `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Enabled          []string            `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Daemon           LoggingSinkOverride `json:"daemon,omitzero" toml:"daemon,omitempty"`
+	CLI              LoggingSinkOverride `json:"cli,omitzero" toml:"cli,omitempty"`
+	CodexSidecar     LoggingSinkOverride `json:"codex_sidecar,omitzero" toml:"codex_sidecar,omitempty"`
+	AnthropicSidecar LoggingSinkOverride `json:"anthropic_sidecar,omitzero" toml:"anthropic_sidecar,omitempty"`
+	Audit            LoggingSinkOverride `json:"audit,omitzero" toml:"audit,omitempty"`
+	Concerns         LoggingSinkOverride `json:"concerns,omitzero" toml:"concerns,omitempty"`
+	Transcripts      LoggingSinkOverride `json:"transcripts,omitzero" toml:"transcripts,omitempty"`
+	MITMRaw          LoggingSinkOverride `json:"mitm_raw,omitzero" toml:"mitm_raw,omitempty"`
+	Inventory        LoggingSinkOverride `json:"inventory_index,omitzero" toml:"inventory_index,omitempty"`
+}
+
+// Override returns the per-sink config table for a canonical sink name. The
+// lookup is keyed off the canonical registry names so callers never branch on a
+// struct field; an unknown name returns the zero override and ok=false.
+func (s *LoggingSinks) Override(name string) (LoggingSinkOverride, bool) {
+	switch name {
+	case LoggingSinkDaemon:
+		return s.Daemon, true
+	case LoggingSinkCLI:
+		return s.CLI, true
+	case LoggingSinkCodexSidecar:
+		return s.CodexSidecar, true
+	case LoggingSinkAnthropicSidecar:
+		return s.AnthropicSidecar, true
+	case LoggingSinkAudit:
+		return s.Audit, true
+	case LoggingSinkConcerns:
+		return s.Concerns, true
+	case LoggingSinkTranscripts:
+		return s.Transcripts, true
+	case LoggingSinkMITMRaw:
+		return s.MITMRaw, true
+	case LoggingSinkInventory:
+		return s.Inventory, true
+	default:
+		return LoggingSinkOverride{
+			Enabled: nil,
+			Level:   "",
+			Path:    "",
+			Rotation: LoggingRotation{
+				Enabled:    nil,
+				MaxSizeMB:  0,
+				MaxBackups: 0,
+				MaxAgeDays: 0,
+				Compress:   nil,
+			},
+		}, false
+	}
+}
+
+// setOverride writes a normalized per-sink config table back to the matching
+// canonical struct field. An unknown name is rejected so a normalize pass can
+// never silently drop a sink override.
+func (s *LoggingSinks) setOverride(name string, override LoggingSinkOverride) error {
+	switch name {
+	case LoggingSinkDaemon:
+		s.Daemon = override
+	case LoggingSinkCLI:
+		s.CLI = override
+	case LoggingSinkCodexSidecar:
+		s.CodexSidecar = override
+	case LoggingSinkAnthropicSidecar:
+		s.AnthropicSidecar = override
+	case LoggingSinkAudit:
+		s.Audit = override
+	case LoggingSinkConcerns:
+		s.Concerns = override
+	case LoggingSinkTranscripts:
+		s.Transcripts = override
+	case LoggingSinkMITMRaw:
+		s.MITMRaw = override
+	case LoggingSinkInventory:
+		s.Inventory = override
+	default:
+		return fmt.Errorf("logging.sinks: unknown sink %q", name)
+	}
+	return nil
+}
+
+// LoggingSinkOverride carries the per-sink config table fields. Enabled is a
+// tri-state pointer so an unset table leaves the sink at its registry default
+// while an explicit value (true or false) overrides it.
+type LoggingSinkOverride struct {
+	Enabled  *bool           `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Level    string          `json:"level,omitempty" toml:"level,omitempty"`
+	Path     string          `json:"path,omitempty" toml:"path,omitempty"`
+	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
 }
 
 // LoggingConcerns maps registered concern names to per-concern overrides.
@@ -37,13 +132,74 @@ const (
 	LoggingSinkConcerns = "concerns"
 	// LoggingSinkTranscripts names the per-chat transcript sink.
 	LoggingSinkTranscripts = "transcripts"
-	// LoggingSinkMITMCapture names the MITM capture index sink.
-	LoggingSinkMITMCapture = "mitm_capture"
 	// LoggingSinkMITMRaw names the MITM raw payload sink.
 	LoggingSinkMITMRaw = "mitm_raw"
 	// LoggingSinkInventory names the inventory index sink.
 	LoggingSinkInventory = "inventory_index"
 )
+
+// LoggingSinkDefaultRule names how a sink's default-enabled state resolves.
+// The registry tags each sink with a rule; the logging policy resolver reads
+// the rule to apply config-dependent gates without hard-coding a per-sink
+// switch of its own.
+type LoggingSinkDefaultRule int
+
+const (
+	// LoggingSinkDefaultAlwaysOn marks a sink enabled by default whenever it is
+	// in the active sink set.
+	LoggingSinkDefaultAlwaysOn LoggingSinkDefaultRule = iota
+	// LoggingSinkDefaultTranscript marks a sink whose default-enabled state is
+	// additionally gated by [LoggingTranscript.IsEnabled].
+	LoggingSinkDefaultTranscript
+	// LoggingSinkDefaultRawCapture marks a sink whose default-enabled state is
+	// additionally gated by logging.raw_capture.enabled.
+	LoggingSinkDefaultRawCapture
+)
+
+// LoggingSinkSpec is one declarative row in the canonical sink registry. The
+// registry is the single source of truth for the logging sink roster: config
+// validation, the logging policy resolver, and slogger all derive their sink
+// names and default-enabled rules from these specs rather than from
+// independently maintained const lists or maps.
+type LoggingSinkSpec struct {
+	Name        string
+	DefaultRule LoggingSinkDefaultRule
+}
+
+// loggingSinkSpecs is the ordered canonical sink roster. Adding, removing, or
+// retagging a sink happens here once; every other layer iterates this table.
+var loggingSinkSpecs = []LoggingSinkSpec{
+	{Name: LoggingSinkDaemon, DefaultRule: LoggingSinkDefaultAlwaysOn},
+	{Name: LoggingSinkCLI, DefaultRule: LoggingSinkDefaultAlwaysOn},
+	{Name: LoggingSinkCodexSidecar, DefaultRule: LoggingSinkDefaultAlwaysOn},
+	{Name: LoggingSinkAnthropicSidecar, DefaultRule: LoggingSinkDefaultAlwaysOn},
+	{Name: LoggingSinkAudit, DefaultRule: LoggingSinkDefaultAlwaysOn},
+	{Name: LoggingSinkConcerns, DefaultRule: LoggingSinkDefaultAlwaysOn},
+	{Name: LoggingSinkTranscripts, DefaultRule: LoggingSinkDefaultTranscript},
+	{Name: LoggingSinkMITMRaw, DefaultRule: LoggingSinkDefaultRawCapture},
+	{Name: LoggingSinkInventory, DefaultRule: LoggingSinkDefaultAlwaysOn},
+}
+
+// LoggingSinkSpecs returns the canonical sink registry in roster order. The
+// returned slice is a copy, so callers may iterate or sort it freely without
+// mutating the source table.
+func LoggingSinkSpecs() []LoggingSinkSpec {
+	specs := make([]LoggingSinkSpec, len(loggingSinkSpecs))
+	copy(specs, loggingSinkSpecs)
+	return specs
+}
+
+// IsKnownLoggingSink reports whether name matches a sink in the canonical
+// registry. Config validation asks the registry this question instead of
+// consulting a separately maintained map.
+func IsKnownLoggingSink(name string) bool {
+	for _, spec := range loggingSinkSpecs {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
 
 // LoggingConcern carries config-layer controls for a registered concern.
 type LoggingConcern struct {

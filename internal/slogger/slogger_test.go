@@ -247,28 +247,19 @@ func TestSetupWithPolicyAppliesPerConcernLevel(t *testing.T) {
 	assertLogMissing(t, filepath.Join(root, "clyde-daemon.jsonl"), "adapter.models.debug_event")
 }
 
-func TestSetupWithPolicyAppliesPerConcernRotationOverride(t *testing.T) {
+// TestSetupWithPolicyAppliesSharedRotationToConcernFiles proves the gklog
+// router rotates per-concern files using the single shared rotation budget the
+// policy carries. The router does not honor a per-concern rotation override; it
+// applies one RotationConfig to every concern file it opens.
+func TestSetupWithPolicyAppliesSharedRotationToConcernFiles(t *testing.T) {
 	root := t.TempDir()
 	policy := testSetupPolicy(root)
 	policy.ProcessSink.Rotation = RotationPolicy{
 		Enabled:    true,
-		MaxSizeMB:  64,
-		MaxBackups: 1,
+		MaxSizeMB:  1,
+		MaxBackups: 4,
 		MaxAgeDays: 1,
 		Compress:   new(false),
-	}
-	policy.ConcernPolicies = map[string]ConcernPolicy{
-		ConcernAdapterModelsCatalog: {
-			Enabled: nil,
-			Level:   nil,
-			Rotation: &RotationPolicy{
-				Enabled:    true,
-				MaxSizeMB:  1,
-				MaxBackups: 2,
-				MaxAgeDays: 1,
-				Compress:   new(false),
-			},
-		},
 	}
 
 	closer, err := SetupWithPolicy(policy)
@@ -287,34 +278,23 @@ func TestSetupWithPolicyAppliesPerConcernRotationOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob concern logs: %v", err)
 	}
+	concernLogs = filterLockFiles(concernLogs)
 	if len(concernLogs) < 2 {
-		t.Fatalf("concern rotation did not create backups: %v", concernLogs)
-	}
-	processLogs, err := filepath.Glob(filepath.Join(root, "clyde-daemon*.jsonl*"))
-	if err != nil {
-		t.Fatalf("glob process logs: %v", err)
-	}
-	processLogs = filterLockFiles(processLogs)
-	if len(processLogs) != 1 {
-		t.Fatalf("process sink should keep global rotation budget, got logs: %v", processLogs)
+		t.Fatalf("shared concern rotation did not create backups: %v", concernLogs)
 	}
 }
 
-func TestSetupWithPolicyDisablesPerConcernRotation(t *testing.T) {
+// TestSetupWithPolicyKeepsConcernFilesUnrotatedWhenRotationDisabled proves a
+// disabled shared rotation leaves one concern file with no rotated backups.
+func TestSetupWithPolicyKeepsConcernFilesUnrotatedWhenRotationDisabled(t *testing.T) {
 	root := t.TempDir()
 	policy := testSetupPolicy(root)
-	policy.ConcernPolicies = map[string]ConcernPolicy{
-		ConcernAdapterModelsCatalog: {
-			Enabled: nil,
-			Level:   nil,
-			Rotation: &RotationPolicy{
-				Enabled:    false,
-				MaxSizeMB:  1,
-				MaxBackups: 2,
-				MaxAgeDays: 1,
-				Compress:   new(false),
-			},
-		},
+	policy.ProcessSink.Rotation = RotationPolicy{
+		Enabled:    false,
+		MaxSizeMB:  0,
+		MaxBackups: 0,
+		MaxAgeDays: 0,
+		Compress:   nil,
 	}
 
 	closer, err := SetupWithPolicy(policy)
@@ -335,20 +315,22 @@ func TestSetupWithPolicyDisablesPerConcernRotation(t *testing.T) {
 	}
 	concernLogs = filterLockFiles(concernLogs)
 	if len(concernLogs) != 1 {
-		t.Fatalf("concern rotation should be disabled, got logs: %v", concernLogs)
+		t.Fatalf("disabled rotation should keep a single concern file, got: %v", concernLogs)
 	}
 }
 
-func TestValidateConcernNamesRejectsUnknownConcern(t *testing.T) {
-	err := ValidateConcernNames([]string{
-		ConcernAdapterModelsCatalog,
-		"adapter.models.",
-	})
-	if err == nil {
-		t.Fatal("ValidateConcernNames accepted unknown concern")
+func TestConcernRelPathMapsDottedConcernToNestedPath(t *testing.T) {
+	cases := map[string]string{
+		ConcernAdapterModelsCatalog: "adapter/models/catalog.jsonl",
+		ConcernCLIMITMTruststore:    "cli/mitm/truststore.jsonl",
+		ConcernConfig:               "config.jsonl",
+		"":                          "",
+		"   ":                       "",
 	}
-	if !strings.Contains(err.Error(), `unknown concern "adapter.models."`) {
-		t.Fatalf("unexpected validation error: %v", err)
+	for concern, want := range cases {
+		if got := ConcernRelPath(concern); got != want {
+			t.Fatalf("ConcernRelPath(%q) = %q, want %q", concern, got, want)
+		}
 	}
 }
 

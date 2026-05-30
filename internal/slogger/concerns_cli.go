@@ -13,15 +13,3 @@ const (
 	ConcernCLIConversation   = "cli.conversation"
 	ConcernCLIOutput         = "cli.output"
 )
-
-func init() {
-	registerConcernPaths(map[string]string{
-		ConcernCLIDaemon:         "cli/daemon.jsonl",
-		ConcernCLIMCP:            "cli/mcp.jsonl",
-		ConcernCLILogs:           "cli/logs.jsonl",
-		ConcernCLIMITM:           "cli/mitm.jsonl",
-		ConcernCLIMITMTruststore: "cli/mitm/truststore.jsonl",
-		ConcernCLIConversation:   "cli/conversation.jsonl",
-		ConcernCLIOutput:         "cli/output.jsonl",
-	})
-}
