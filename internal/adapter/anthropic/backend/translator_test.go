@@ -78,6 +78,88 @@ func TestStreamTranslatorThinkingEmitsBlockquoteContent(t *testing.T) {
 	}
 }
 
+// TestStreamTranslatorHiddenThinkingEmitsPlaceholder asserts that an
+// Opus 4.8 thinking block which streams only empty thinking_delta
+// heartbeats followed by a signature_delta renders a visible placeholder
+// body in the thinking envelope (instead of an empty block) and does not
+// leak the signature onto the close marker, so the span replays as an
+// unsigned (dropped) thinking block.
+func TestStreamTranslatorHiddenThinkingEmitsPlaceholder(t *testing.T) {
+	tr := newTranslatorForTest()
+	renderer := adapterrender.NewEventRenderer("req-hidden", "clyde-test", "anthropic", nil)
+	var out []adapteropenai.StreamChunk
+	emit := func(name string, payload string) {
+		events, _, _, _, err := tr.HandleEventEvents(name, []byte(payload))
+		if err != nil {
+			t.Fatalf("HandleEventEvents(%s): %v", name, err)
+		}
+		for _, event := range events {
+			out = append(out, renderer.HandleEvent(event)...)
+		}
+	}
+	emit("message_start", `{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}`)
+	emit("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`)
+	emit("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`)
+	emit("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`)
+	emit("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"SIGBYTES"}}`)
+	emit("content_block_stop", `{"type":"content_block_stop","index":0}`)
+
+	var seenOpener, seenPlaceholder, leakedSignature bool
+	for _, ch := range out {
+		if len(ch.Choices) == 0 {
+			continue
+		}
+		c := ch.Choices[0].Delta.Content
+		if strings.Contains(c, `<!--clyde-thinking`) {
+			seenOpener = true
+		}
+		if strings.Contains(c, "thinking hidden by provider") {
+			seenPlaceholder = true
+		}
+		if strings.Contains(c, "SIGBYTES") || strings.Contains(c, "data-signature") {
+			leakedSignature = true
+		}
+	}
+	if !seenOpener {
+		t.Fatalf("missing thinking envelope opener in %+v", out)
+	}
+	if !seenPlaceholder {
+		t.Fatalf("missing hidden-thinking placeholder body in %+v", out)
+	}
+	if leakedSignature {
+		t.Fatalf("signature must not ride the close marker for a hidden span; got %+v", out)
+	}
+}
+
+// TestStreamTranslatorThinkingWithTextKeepsSignature asserts the normal
+// path is unchanged: when real thinking text arrives, a following
+// signature_delta is still surfaced (so the close marker carries the
+// signature for native replay).
+func TestStreamTranslatorThinkingWithTextKeepsSignature(t *testing.T) {
+	tr := newTranslatorForTest()
+	events, _, _, _, err := tr.HandleEventEvents("content_block_start", []byte(`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`))
+	if err != nil || len(events) != 1 {
+		t.Fatalf("thinking start events=%v err=%v", events, err)
+	}
+	if _, _, _, _, err := tr.HandleEventEvents("content_block_delta", []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"real reasoning"}}`)); err != nil {
+		t.Fatalf("thinking delta: %v", err)
+	}
+	sigEvents, _, _, _, err := tr.HandleEventEvents("content_block_delta", []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"SIG"}}`))
+	if err != nil {
+		t.Fatalf("signature delta: %v", err)
+	}
+	if len(sigEvents) != 1 {
+		t.Fatalf("signature events=%d want 1", len(sigEvents))
+	}
+	rd, ok := sigEvents[0].(adapterrender.ReasoningDelta)
+	if !ok {
+		t.Fatalf("event type=%T want ReasoningDelta", sigEvents[0])
+	}
+	if rd.Signature != "SIG" {
+		t.Fatalf("signature=%q want SIG", rd.Signature)
+	}
+}
+
 func TestStreamTextTranslator(t *testing.T) {
 	t.Parallel()
 	tr := NewStreamTranslator("chatcmpl-s", "alias")

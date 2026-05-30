@@ -59,18 +59,33 @@ type StreamTranslator struct {
 	lastStopReason     string
 	lastOutputTokens   int
 	visibleText        strings.Builder
-	renderer           *EventRenderer
+	// thinkingTextSeen records whether the current thinking block has
+	// carried at least one non-empty thinking_delta. Opus 4.8 with the
+	// thinking-token-count beta streams the thinking body as empty
+	// thinking_delta events plus an estimated_tokens heartbeat and puts
+	// the real reasoning only in the encrypted signature_delta, so a
+	// block can close having "thought" without any plaintext. When the
+	// signature_delta arrives (Anthropic orders it after every
+	// thinking_delta) and no plaintext was seen, the translator renders a
+	// visible hidden-thinking placeholder instead of an empty block, and
+	// deliberately drops the signature so the span replays as an unsigned
+	// (therefore dropped) thinking block rather than a signed fake body.
+	thinkingTextSeen bool
+	renderer         *EventRenderer
 }
 
 // NewStreamTranslator builds per-request stream state.
 func NewStreamTranslator(reqID, modelAlias string) *StreamTranslator {
 	return &StreamTranslator{
+		currentBlockType:   "",
+		toolCallIndex:      0,
 		toolCallByBlockIdx: make(map[int]int),
-		renderer:           NewEventRenderer(reqID, modelAlias, "anthropic", slog.Default()), currentBlockType:
-
-		// HandleEventEvents maps one Anthropic stream event to zero or more normalized events.
-		"", toolCallIndex: 0, pendingInputTokens: 0, lastStopReason: "", lastOutputTokens: 0, visibleText: strings.
-					Builder{},
+		pendingInputTokens: 0,
+		lastStopReason:     "",
+		lastOutputTokens:   0,
+		visibleText:        strings.Builder{},
+		thinkingTextSeen:   false,
+		renderer:           NewEventRenderer(reqID, modelAlias, "anthropic", slog.Default()),
 	}
 }
 
@@ -131,6 +146,14 @@ const (
 	anthropicBackendSSEDeltaThinking  anthropicBackendSSEDelta = "thinking_delta"
 	anthropicBackendSSEDeltaSignature anthropicBackendSSEDelta = "signature_delta"
 )
+
+// hiddenThinkingPlaceholder is the visible body emitted in a thinking
+// envelope when Opus 4.8 streamed a thinking block with no plaintext
+// (only empty thinking_delta heartbeats plus an encrypted signature).
+// It tells the user the model thought without exposing internals, and
+// because it is not the real signed thinking text the translator drops
+// the signature so the span replays as an unsigned (dropped) block.
+const hiddenThinkingPlaceholder = "_(thinking hidden by provider)_"
 
 // resolveStreamEventName trims the SSE event name and falls back to the
 // embedded `type` field when the line lacked an explicit event header.
@@ -193,6 +216,7 @@ func (t *StreamTranslator) handleContentBlockStart(dataJSON []byte) ([]Event, bo
 		return t.openToolUseBlock(ev.Index, b), false, "", nil, nil
 	case ThinkingBlock:
 		t.currentBlockType = "thinking"
+		t.thinkingTextSeen = false
 		return []Event{reasoningSignaledEvent("")}, false, "", nil, nil
 	case RedactedThinkingBlock:
 		// Anthropic emits the entire opaque payload on the start event
@@ -250,8 +274,30 @@ func (t *StreamTranslator) handleContentBlockDelta(dataJSON []byte) ([]Event, bo
 	case anthropicBackendSSEDeltaInputJSON:
 		return t.toolArgumentsDelta(ev.Index, ev.Delta.PartialJSON)
 	case anthropicBackendSSEDeltaThinking:
+		if ev.Delta.Thinking != "" {
+			t.thinkingTextSeen = true
+		}
 		return []Event{reasoningTextDeltaEvent(ev.Delta.Thinking)}, false, "", nil, nil
 	case anthropicBackendSSEDeltaSignature:
+		// A thinking block that reaches its signature_delta without ever
+		// carrying plaintext is a hidden (token-count) span. Emit a
+		// visible placeholder body in the already-open clyde-thinking
+		// envelope so the user sees the block exists, and drop the
+		// signature. The open marker shipped as the regular thinking kind
+		// at content_block_start, so the placeholder must stay that same
+		// kind to keep open/close markers paired for round-trip
+		// extraction. Dropping the signature is deliberate: the
+		// placeholder is not the real signed thinking text, so replaying
+		// it as a signed native block would fail upstream signature
+		// validation; leaving it unsigned routes it through the existing
+		// unsigned-drop path on the return trip, matching today's
+		// empty-block behavior. The currentBlockType gate scopes this to
+		// a genuine in-stream thinking block; a bare signature_delta
+		// outside one keeps the normal signature plumbing.
+		if t.currentBlockType == "thinking" && !t.thinkingTextSeen {
+			t.thinkingTextSeen = true
+			return []Event{reasoningTextDeltaEvent(hiddenThinkingPlaceholder)}, false, "", nil, nil
+		}
 		return []Event{reasoningSignatureDeltaEvent(ev.Delta.Signature)}, false, "", nil, nil
 	default:
 		return nil, false, "", nil, nil

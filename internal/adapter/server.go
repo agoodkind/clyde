@@ -239,6 +239,7 @@ func (s *Server) registerAnthropicProvider(
 		MessagesURL:             messagesURL,
 		OAuthAnthropicVersion:   cfg.Anthropic.OAuth.AnthropicVersion,
 		BetaHeader:              id.BetaHeader,
+		BetaSuppress:            id.BetaSuppress,
 		UserAgent:               id.UserAgent,
 		SystemPromptPrefix:      id.SystemPromptPrefix,
 		StainlessPackageVersion: id.StainlessPackageVersion,

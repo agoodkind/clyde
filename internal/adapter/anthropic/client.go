@@ -399,6 +399,17 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 			existing[extra] = struct{}{}
 		}
 	}
+	if len(c.cfg.BetaSuppress) > 0 {
+		filtered, removed := suppressBetaFlags(beta, c.cfg.BetaSuppress)
+		if len(removed) > 0 {
+			anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.beta_suppressed",
+				"concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+				"model", req.Model,
+				"removed", removed,
+			)
+			beta = filtered
+		}
+	}
 	setHard("anthropic-beta", beta)
 
 	userAgent := flavor.UserAgent
@@ -411,6 +422,46 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 		httpReq.Header.Set(h.key, h.value)
 	}
 	return dropped
+}
+
+// suppressBetaFlags removes every flag in suppress from the comma-joined
+// anthropic-beta value, preserving the order of the surviving flags.
+// Matching is exact per trimmed token and case-insensitive. It returns
+// the rebuilt header value and the list of removed flags (in the order
+// they appeared in beta) so the caller can log exactly what changed. A
+// flag in suppress that is absent from beta is silently ignored.
+func suppressBetaFlags(beta string, suppress []string) (string, []string) {
+	if strings.TrimSpace(beta) == "" || len(suppress) == 0 {
+		return beta, nil
+	}
+	drop := make(map[string]struct{}, len(suppress))
+	for _, s := range suppress {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		drop[strings.ToLower(s)] = struct{}{}
+	}
+	if len(drop) == 0 {
+		return beta, nil
+	}
+	kept := make([]string, 0)
+	removed := make([]string, 0)
+	for f := range strings.SplitSeq(beta, ",") {
+		flag := strings.TrimSpace(f)
+		if flag == "" {
+			continue
+		}
+		if _, skip := drop[strings.ToLower(flag)]; skip {
+			removed = append(removed, flag)
+			continue
+		}
+		kept = append(kept, flag)
+	}
+	if len(removed) == 0 {
+		return beta, nil
+	}
+	return strings.Join(kept, ","), removed
 }
 
 // maybeRetryOn401 is the do() boundary helper that invokes one on-401 retry

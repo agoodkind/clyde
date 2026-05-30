@@ -22,7 +22,7 @@ enabled = true
 max_size_mb = 64
 max_backups = 192
 max_age_days = 14
-compress = true
+compress = false
 
 # Logging sinks. The canonical sink names are: daemon, cli, codex_sidecar,
 # anthropic_sidecar, audit, concerns, transcripts, mitm_raw, inventory_index.
@@ -94,7 +94,9 @@ model = "gpt-5.4"
 efforts = ["low", "medium", "high", "xhigh"]
 max_output_tokens = 128000
 contexts = [
-  { tokens = 1000000, observed_tokens = 272000, alias_suffix = "1m", advertised_native_aliases = ["gpt-5.4"] },
+  { tokens = 1000000, observed_tokens = 272000, alias_suffix = "1m", advertised_native_aliases = [
+    "gpt-5.4",
+  ] },
 ]
 
 [[adapter.codex.models]]
@@ -102,9 +104,7 @@ alias_prefix = "codex-5.5"
 model = "gpt-5.5"
 efforts = ["low", "medium", "high", "xhigh"]
 max_output_tokens = 128000
-contexts = [
-  { tokens = 272000, native_aliases = ["gpt-5.5"] },
-]
+contexts = [{ tokens = 272000, native_aliases = ["gpt-5.5"] }]
 
 # Optional: forward otherwise-unknown model aliases to one
 # OpenAI-compatible upstream. The caller's model value is preserved unless
@@ -174,6 +174,21 @@ stainless_runtime = "node"
 stainless_runtime_version = "v24.3.0"
 cc_version = "2.1.114"
 cc_entrypoint = "sdk-cli"
+# beta_suppress removes specific anthropic-beta flags from the assembled
+# outbound header (after the learned baseline / beta_header value and any
+# per_context_betas merge). The runtime-learned MITM baseline mirrors
+# claude-cli byte-for-byte, and claude-cli carries two thinking-redaction
+# betas because Claude Code only shows a token counter, not the reasoning
+# text. Inheriting them makes Opus 4.8 withhold cleartext thinking, so the
+# Cursor chat shows no thinking:
+#   - thinking-token-count-2026-05-13: empty thinking_delta plus an
+#     estimated_tokens heartbeat (real reasoning only in the signature).
+#   - redact-thinking-2026-02-12: redacts the thinking text itself, so the
+#     block jumps from content_block_start straight to signature_delta.
+# Dropping both restores plaintext thinking deltas while keeping every
+# other learned header identical. Matching is exact per flag token and
+# case-insensitive.
+beta_suppress = ["thinking-token-count-2026-05-13", "redact-thinking-2026-02-12"]
 
 [adapter.client_identity.per_context_betas]
 "[1m]" = "REDACTED-1M-BETA"
@@ -204,9 +219,14 @@ contexts = [
 ]
 
 # opus-4-8: Claude Opus 4.8 (id "claude-opus-4-8"). 1M context, 128k max
-# output, $5/$25 per MTok in/out, adaptive thinking (same wire behavior as
-# 4.7). low/medium/high/max effort, all four thinking modes, 200k and 1M
-# context. Verified against the Claude API models overview 2026-05-28.
+# output, $5/$25 per MTok in/out, adaptive thinking. low/medium/high/max
+# effort, all four thinking modes, 200k and 1M context. Verified against
+# the Claude API models overview 2026-05-28. Thinking-display note: when
+# the outbound anthropic-beta carries thinking-token-count-2026-05-13
+# (which the learned claude-cli baseline includes), 4.8 redacts thinking
+# text on the wire and streams only an estimated_tokens heartbeat plus an
+# encrypted signature; drop that flag via
+# [adapter.client_identity].beta_suppress to render plaintext thinking.
 # thinking_wire_mode = "adaptive" is required: the registry no longer
 # applies an implicit per-model remap, so the family must declare it.
 # Tip: for an evergreen Cursor id, set alias_prefix to a version-free stem
@@ -237,7 +257,9 @@ supports_vision = true
 efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
 max_output_tokens = 64000
-contexts = [{ tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" }]
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+]
 
 # haiku-4-5: server rejects effort
 # (`400 This model does not support the effort parameter`) and
@@ -250,7 +272,9 @@ supports_vision = true
 efforts = []
 thinking_modes = ["default", "enabled", "disabled"]
 max_output_tokens = 16000
-contexts = [{ tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" }]
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+]
 
 # MITM baseline / drift loop.
 #
