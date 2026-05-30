@@ -24,12 +24,29 @@ max_backups = 192
 max_age_days = 14
 compress = true
 
-# Per-sink rotation overrides. Each sink inherits the global
-# [logging.rotation] block above unless its own [logging.sinks.<name>.rotation]
-# table overrides a field. Use these to tighten retention for noisy sinks
-# (for example three-day retention on the audit log) without affecting
-# unrelated sinks.
+# Logging sinks. The canonical sink names are: daemon, cli, codex_sidecar,
+# anthropic_sidecar, audit, concerns, transcripts, mitm_raw, inventory_index.
+# Each sink is enabled by default (mitm_raw additionally requires
+# logging.raw_capture.enabled; transcripts additionally requires
+# logging.transcript.enabled). MITM wire events land in the per-concern file
+# logs/providers/mitm/wire.jsonl via the concerns sink.
 #
+# Back-compatible flat form: restrict the active sink set to an explicit
+# allowlist. When set, only the listed sinks stay enabled.
+#
+# [logging.sinks]
+# enabled = ["daemon", "cli", "concerns", "inventory_index"]
+#
+# Per-sink table form: configure one sink at a time with its own enabled flag,
+# level, path, and rotation. Each sink inherits the global [logging.rotation]
+# block above unless its own [logging.sinks.<name>.rotation] table overrides a
+# field. The flat allowlist and the per-sink tables can be used together; an
+# explicit [logging.sinks.<name>] enabled value wins over the flat allowlist for
+# that sink.
+#
+# [logging.sinks.audit]
+# enabled = true
+# level = "warn"
 # [logging.sinks.audit.rotation]
 # enabled = true
 # max_size_mb = 16
@@ -37,6 +54,8 @@ compress = true
 # max_age_days = 3
 # compress = true
 #
+# [logging.sinks.anthropic_sidecar]
+# enabled = true
 # [logging.sinks.anthropic_sidecar.rotation]
 # enabled = true
 # max_size_mb = 32

@@ -21,10 +21,10 @@ Follow one request with shared identity fields. Prefer these fields when present
 - `chat_key`
 - `session_id`
 
-Cursor-owned logs can also include `cursor_request_id`, `cursor_conversation_id`, and `cursor_generation_id`. Use those Cursor fields only for Cursor BYOK adapter traffic and Cursor MITM IDE backend traffic.
+Cursor identity fields differ by surface, so match the field shape to the traffic surface before querying. Adapter BYOK (OpenAI-compatible) Cursor traffic emits the flat fields `cursor_request_id`, `cursor_conversation_id`, and `cursor_generation_id`. Cursor MITM IDE backend traffic nests its Cursor identity under a `cursor` group object with the keys `request_id`, `conversation_id`, `generation_id`, `session_id`, and `original_request_id`. When searching the MITM wire logs at `logs/providers/mitm/wire.jsonl`, query the nested `cursor.*` keys rather than the flat `cursor_*` names.
 
 For Cursor chat issues, identify whether the traffic is adapter BYOK or MITM IDE backend traffic, then apply the rule for that traffic surface. Adapter BYOK uses the OpenAI-compatible adapter route family. Cursor IDE backend traffic traverses the MITM proxy. See `request-paths.md` for the shared logging leg model.
 
-For missing logs, check for `logging.request.incomplete`. That event names the required legs, observed legs, missing legs, and last observed phase.
+For missing logs, check for `logging.request.incomplete`. That event names the required legs, observed legs, missing legs, and last observed phase in the JSON fields `expected_legs`, `observed_legs`, `missing_legs`, and `last_phase`.
 
 For sensitive data review, inspect `payload_removed` and confirm that it records context field removals. Do not paste raw prompts, tokens, cookies, credentials, or response bodies into tickets or chat.

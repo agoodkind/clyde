@@ -29,13 +29,15 @@ Cursor facet fields:
 - `request_id`
 - `conversation_id`
 - `generation_id`
+- `original_request_id`
+- `session_id`
 
 MITM facet fields:
 
 - `concern`
 - `request_content_type`
 - `response_content_type`
-- `capture_path`
+- `capture_path` (deprecated, always empty: the struct field is retained but every emit site sets it to the empty string)
 - `raw_request_path`
 - `raw_response_path`
 
@@ -45,9 +47,13 @@ When provider-specific information is useful but unsafe, do not add it to the fa
 
 ## Cursor TLS-intercept
 
-Cursor TLS-intercept HTTP traffic emits the shared `logging.request.leg` sequence used by Claude and Codex MITM HTTP paths. The transport-specific code in `internal/mitm/connect_tunnel.go` owns certificate impersonation, raw sidecar paths, and hook dispatch. Decrypted HTTP requests feed `recordHTTPCapture(...)`, the shared MITM request recorder in `internal/mitm/request_logging.go`.
+Cursor TLS-intercept HTTP traffic emits the shared `logging.request.leg` sequence used by Claude and Codex MITM HTTP paths. The transport-specific code in `internal/mitm/connect_tunnel.go` owns certificate impersonation, raw sidecar paths, and hook dispatch. Decrypted HTTP requests feed `recordHTTPCapture(...)`, defined in `internal/mitm/proxy.go`, which orchestrates the leg-emit helpers `emitHTTPLogLeg` and `emitHTTPPayloadLeg` in `internal/mitm/request_logging.go`.
 
-The `mitm/capture.jsonl` file is the append-only MITM capture index with raw file references. The shared MITM facet points at that capture index through `capture_path`, `raw_request_path`, and `raw_response_path`. Cursor TLS-intercept HTTP entries keep the original `traceparent` header and write a derived `trace_id` alias when the header parses cleanly.
+There is no separate capture index file. The dedicated `capture.jsonl` file and the `mitm_capture` sink are eliminated. MITM wire legs, both the HTTP path and the websocket path, emit on the `providers.mitm.wire` concern and land in `logs/providers/mitm/wire.jsonl` through the gklog concern router, with one non-dropping blocking `FileJSON` writer behind the async logger.
+
+The shared MITM facet sets `capture_path` to empty at every emit site, so that field is deprecated and always empty. The facet still carries `raw_request_path` and `raw_response_path` as the live per-request raw sidecar references, populated only when `logging.raw_capture` is enabled.
+
+Cursor TLS-intercept HTTP entries keep the original `traceparent` header and write a derived `trace_id` alias when the header parses cleanly. Both ride the `providers.mitm.wire` concern log rather than a separate `capture.jsonl`.
 
 ## Codex provider sidecar
 

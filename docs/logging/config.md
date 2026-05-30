@@ -15,7 +15,10 @@ Cleanup controls:
 
 Sink controls:
 
-- `logging.sinks.enabled` is the allowlist of stable sink names to enable.
+- `logging.sinks.enabled` is the flat allowlist of stable sink names to enable.
+- Per-sink config also uses `[logging.sinks.<name>]` table blocks, each with `enabled`, `level`, `path`, and `rotation`, to specialize an individual sink alongside the flat allowlist.
+- The flat allowlist and the per-sink table blocks resolve through one declarative sink registry in `internal/config/logging_config.go`, validated by `IsKnownLoggingSink`.
+- The canonical sink names are `daemon`, `cli`, `codex_sidecar`, `anthropic_sidecar`, `audit`, `concerns`, `transcripts`, `mitm_raw`, and `inventory_index`. There is no `mitm_capture` sink.
 - `logging.concerns` maps registered concern names to concern-specific overrides.
 
 Rotation controls:
@@ -25,7 +28,7 @@ Rotation controls:
 
 Inventory controls:
 
-- `clyde logs inventory --json` returns the default typed discovery view from configured active locations and the `inventory_index` sink.
-- `clyde logs inventory --deep --json` performs an exact filesystem scan.
+- `clyde logs inventory --output-format json` returns the default typed discovery view from configured active locations and the `inventory_index` sink, which backs the indexed inventory view at `logs/inventory/events.jsonl`.
+- `clyde logs inventory --deep --output-format json` adds `--deep` to perform an exact filesystem scan.
 
 Legacy payload controls are not user-facing logging controls and do not change the shape of normal request logs.

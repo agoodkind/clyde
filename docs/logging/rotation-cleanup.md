@@ -2,21 +2,26 @@
 
 Clyde keeps file rotation and cleanup separate.
 
-Rotation controls active log files. It applies max file size, max backups, max age, and compression policy through `internal/slogger`.
+Rotation controls active log files. It applies max file size, max backups, max age, and compression policy. Rotation is driven by `gklog` `RotationConfig`, with the rotation policy declared in `internal/logpolicy` and `internal/config`, while `internal/slogger` converts that policy into the `gklog` config and owns the cleanup walker.
 
 Cleanup controls stale files. It is enabled by `logging.cleanup.enabled` and uses retention settings to remove aged rotated files, aged sidecars, empty artifacts, and files that exceed total budget rules.
 
 When cleanup is disabled, Clyde may audit eligible files, but it should not delete them.
 
-Cleanup applies across the logging surfaces exposed by inventory:
+Cleanup applies across the logging surfaces exposed by inventory, aligned to the inventory categories in `internal/cli/logs/inventory.go`:
 
-- Process logs.
+- MITM raw captures.
+- MITM profile/process logs.
+- Top-level daemon/cli logs.
+- Provider sidecar logs.
 - Concern logs.
-- Per-chat logs.
-- MITM capture indexes.
-- MITM raw sidecars.
-- Provider sidecars.
-- LaunchAgent fallback logs.
+- Per-chat transcript logs.
+- Inventory indexes.
+- Pre-repair retained logs.
+- Lock files.
+- Uncategorized.
+
+MITM wire legs are concern logs at `logs/providers/mitm/wire.jsonl`, not a capture index, so they fall under Concern logs rather than a separate MITM capture-index category.
 
 Use `clyde logs inventory --deep --json` around manual cleanup when exact file counts matter.
 

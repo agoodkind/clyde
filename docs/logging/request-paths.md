@@ -58,4 +58,4 @@ MITM IDE backend required legs:
 
 Early request failures emit the `request_error` leg with phase `failed`. A request with that leg is closed as an early failure rather than reported as a vanished incomplete request.
 
-If a non-error request story completes without a required leg, `logevent.Recorder` emits `logging.request.incomplete` with the surface, expected legs, observed legs, missing legs, last phase, request identity, and duration.
+If a non-error request story completes without a required leg, `logevent.Recorder` emits `logging.request.incomplete` with the surface, route_family, expected legs, observed legs, missing legs, last phase, incomplete_policy, request identity, and duration.

@@ -2,22 +2,24 @@
 
 Log layout is discovered through `clyde logs inventory`. The rules here describe stable classes only, not local machine paths.
 
-Stable classes:
+Stable classes, in inventory `categoryOrder`:
 
-- Process logs hold daemon and CLI process events.
-- Concern logs hold concern-routed JSONL under the active concern root.
-- Per-chat logs hold unified request events for one chat key.
-- MITM capture indexes hold typed capture records for captured forward-proxy traffic.
-- MITM raw sidecars hold raw request or response bytes only when `logging.raw_capture.enabled` is true.
-- Provider sidecars hold provider-specific safe summaries and transport diagnostics.
+- MITM raw captures hold raw request or response bytes, written only when `logging.raw_capture.enabled` is true.
+- MITM profile/process logs hold MITM launcher, profile, and process-monitor output.
+- Top-level daemon/cli logs hold daemon and CLI process events.
+- Provider sidecar logs hold provider-specific safe summaries and transport diagnostics.
+- Concern logs hold concern-routed JSONL under the active concern root. Captured forward-proxy MITM wire legs are concern-routed here under the `providers.mitm.wire` concern, at `logs/providers/mitm/wire.jsonl`.
+- Per-chat transcript logs hold unified request events for one chat key.
 - Inventory indexes hold lightweight discovery data for default inventory mode under the `inventory_index` sink.
-- LaunchAgent fallback logs hold macOS process output when the service manager captures it externally.
+- Pre-repair retained logs hold files preserved by a log-repair pass.
+- Lock files hold flock and lock-file entries.
+- Uncategorized logs hold anything that matches no other class. The macOS LaunchAgent fallback file `daemon.log` currently classifies as Uncategorized logs.
 
 File naming rules:
 
 - JSONL logs use `.jsonl` suffixes.
 - Per-chat files use a sanitized chat key and must stay under the configured chat log root.
-- MITM raw sidecars stay under the configured raw capture root and are referenced from the typed MITM facet.
+- MITM raw request and response sidecar paths ride on the typed MITM facet `RawRequestPath` and `RawResponsePath` fields. The facet `CapturePath` is intentionally empty, and sidecars are written only when `logging.raw_capture.enabled` is true.
 - Rotated files use the cleanup class of their active file.
 
 Humans and LLMs should start with `clyde logs inventory --json` instead of guessing paths. Use `--deep` when the exact filesystem view matters.
