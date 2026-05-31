@@ -18,6 +18,7 @@ import (
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -146,6 +147,10 @@ type WebsocketTransportConfig struct {
 	// token (or an error if the refresh itself failed) so the dial can
 	// retry once with the new token before propagating the failure.
 	AuthRefresh func(ctx context.Context) (string, error)
+	// CaptureStore, when non-nil, receives one capture.Record per
+	// non-warmup websocket exchange tagged client="adapter.codex" with the
+	// full outbound and inbound frame streams. Nil records nothing.
+	CaptureStore *capture.Store
 }
 
 // Mirrors the observed Responses websocket envelope from
@@ -182,11 +187,13 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, logCtx sseInstrumentationContext, wireMode WireCaptureMode) io.Reader {
+func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, logCtx sseInstrumentationContext, wireMode WireCaptureMode, capCfg *wsEgressCapture) io.Reader {
 	pr, pw := io.Pipe()
+	rec := newWsFrameRecorder(capCfg)
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				rec.record(0)
 				slog.Default().Error("adapter.codex.websocket_reader_panic", "concern", "adapter.providers.codex.request", "component", "adapter",
 					"subcomponent", "codex",
 					"err", fmt.Sprintf("panic: %v", recovered),
@@ -195,39 +202,54 @@ func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, lo
 				_ = pw.CloseWithError(fmt.Errorf("codex websocket reader panic: %v", recovered))
 				return
 			}
+			rec.record(200)
 			_ = pw.Close()
 		}()
-		seq := 0
-		for {
-			messageType, message, err := conn.ReadMessage()
-			if err != nil {
-				_ = pw.CloseWithError(err)
-				return
-			}
-			if messageType != websocket.TextMessage {
-				continue
-			}
-			seq++
-			frame, err := websocketMessageToSyntheticSSE(message)
-			if err != nil {
-				_ = pw.CloseWithError(err)
-				return
-			}
-			if _, err := pw.Write(frame); err != nil {
-				_ = pw.CloseWithError(err)
-				return
-			}
-			var raw websocketEventEnvelope
-			parseOK := json.Unmarshal(message, &raw) == nil
-			if wireMode != "" && wireMode != WireCaptureOff {
-				emitCodexWireCapture(ctx, wireMode, logCtx, seq, raw, message)
-			}
-			if parseOK && (raw.Type == "response.completed" || raw.Type == "response.failed") {
-				return
-			}
-		}
+		wsReadFrames(ctx, conn, pw, logCtx, wireMode, rec)
 	}()
 	return pr
+}
+
+// wsReadFrames runs the inbound websocket read loop for one turn. It mirrors
+// each text frame as a synthetic SSE frame onto pw, accumulates frames for the
+// capture record, and optionally logs per-frame wire capture. On a transport or
+// frame error it records a failed exchange and closes pw with the error. On a
+// clean completion frame it returns, leaving the caller's defer to record the
+// successful exchange and close pw.
+func wsReadFrames(ctx context.Context, conn *websocket.Conn, pw *io.PipeWriter, logCtx sseInstrumentationContext, wireMode WireCaptureMode, rec *wsFrameRecorder) {
+	seq := 0
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			rec.record(0)
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if messageType != websocket.TextMessage {
+			continue
+		}
+		rec.add(message)
+		seq++
+		frame, frameErr := websocketMessageToSyntheticSSE(message)
+		if frameErr != nil {
+			rec.record(0)
+			_ = pw.CloseWithError(frameErr)
+			return
+		}
+		if _, writeErr := pw.Write(frame); writeErr != nil {
+			rec.record(0)
+			_ = pw.CloseWithError(writeErr)
+			return
+		}
+		var raw websocketEventEnvelope
+		parseOK := json.Unmarshal(message, &raw) == nil
+		if wireMode != "" && wireMode != WireCaptureOff {
+			emitCodexWireCapture(ctx, wireMode, logCtx, seq, raw, message)
+		}
+		if parseOK && (raw.Type == "response.completed" || raw.Type == "response.failed") {
+			return
+		}
+	}
 }
 
 // codexReasoningItemDone reports whether the inbound frame is a
@@ -294,6 +316,7 @@ func writeAndParseWebsocketRequest(
 	emit func(adapterrender.Event) error,
 	warmup bool,
 ) (RunResult, bool, error) {
+	started := clock.Now()
 	raw, err := MarshalResponseCreateWsRequest(payload)
 	if err != nil {
 		return NewRunResult("stop"), false, err
@@ -314,7 +337,18 @@ func writeAndParseWebsocketRequest(
 		PreviousResponseID: payload.PreviousResponseID,
 		Warmup:             warmup,
 	}
-	synthetic := streamWebsocketAsSyntheticSSE(ctx, conn, logCtx, cfg.WireCaptureMode)
+	var capCfg *wsEgressCapture
+	if cfg.CaptureStore != nil && !warmup {
+		capCfg = &wsEgressCapture{
+			store:     cfg.CaptureStore,
+			corr:      cfg.Correlation,
+			url:       cfg.URL,
+			outbound:  raw,
+			sessionID: cfg.ConversationID,
+			started:   started,
+		}
+	}
+	synthetic := streamWebsocketAsSyntheticSSE(ctx, conn, logCtx, cfg.WireCaptureMode, capCfg)
 	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
 	responseStarted := false
 	result, err := ParseSSEEventsWithOptions(ctx, synthetic, func(event adapterrender.Event) error {

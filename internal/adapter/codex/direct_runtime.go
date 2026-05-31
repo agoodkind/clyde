@@ -11,6 +11,7 @@ import (
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -50,6 +51,9 @@ type DirectConfig struct {
 	// websocket bodies. Off (default) is safe; the other modes route to
 	// adapter.providers.codex.wire_capture for short-retention diagnostics.
 	WireCaptureMode WireCaptureMode
+	// CaptureStore, when non-nil, receives one capture.Record per outbound
+	// Codex exchange tagged client="adapter.codex". Nil records nothing.
+	CaptureStore *capture.Store
 	// RoundTripEncrypted controls whether the renderer embeds the
 	// encrypted_content blob on the synthetic-thinking close marker.
 	// RoundTripEncryptedRoundTrip (the codex-rs default) emits the
@@ -184,6 +188,7 @@ func RunDirect(
 		BeforeAttempt:      cfg.BeforeAttempt,
 		AuthRefresh:        cfg.AuthRefresh,
 		WireIdentity:       cfg.WireIdentity,
+		CaptureStore:       cfg.CaptureStore,
 	}
 
 	// Websocket transport disabled by config: use the HTTP/SSE transport
@@ -214,6 +219,7 @@ func RunDirect(
 		BeforeAttempt:      cfg.BeforeAttempt,
 		AuthRefresh:        cfg.AuthRefresh,
 		WireIdentity:       cfg.WireIdentity,
+		CaptureStore:       cfg.CaptureStore,
 	}
 	result, err := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 	if errors.Is(err, ErrWebsocketFallbackToHTTP) {

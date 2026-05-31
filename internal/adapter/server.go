@@ -26,6 +26,7 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/logpolicy"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -199,7 +200,7 @@ func (s *Server) registerProviders(
 			HTTPClient: s.httpClient,
 			Telemetry:  nil,
 			Now:        nil,
-		}, codexProviderOptionsWithRegistry(wsReg, policies, deps.CodexWireBaselinePath))
+		}, codexProviderOptionsWithRegistry(wsReg, policies, deps.CodexWireBaselinePath, deps.CaptureStore))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered", slog.String("concern", "adapter.http.ingress"), slog.String("provider", adapterresolver.ProviderCodex.String()),
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
@@ -275,6 +276,7 @@ func codexProviderOptionsWithRegistry(
 	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
 	policies logpolicy.PolicySet,
 	wireBaselinePath string,
+	captureStore *capture.Store,
 ) adaptercodex.ProviderOptions {
 	codexSidecarRotation := policies.Sinks[logpolicy.SinkCodexSidecar].Rotation
 	return adaptercodex.ProviderOptions{
@@ -288,6 +290,7 @@ func codexProviderOptionsWithRegistry(
 		WsSessionIdleTTL:  0,
 		WsSessionRegistry: wsReg,
 		WireBaselinePath:  wireBaselinePath,
+		CaptureStore:      captureStore,
 	}
 }
 

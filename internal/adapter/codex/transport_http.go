@@ -12,7 +12,9 @@ import (
 
 	adapterrender "goodkind.io/clyde/internal/adapter/render"
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -49,6 +51,9 @@ type HTTPTransportConfig struct {
 	// unused here. Empty fields fall back to the compiled-in identity
 	// constants.
 	WireIdentity WireIdentity
+	// CaptureStore, when non-nil, receives one capture.Record for the
+	// exchange tagged client="adapter.codex". Nil records nothing.
+	CaptureStore *capture.Store
 }
 
 const httpErrorBodySnippetLimit = 512
@@ -155,6 +160,7 @@ func runHTTPTransportEventsOnce(
 	payload HTTPTransportRequest,
 	emit func(adapterrender.Event) error,
 ) (RunResult, bool, error) {
+	started := clock.Now()
 	// The Codex Responses HTTP endpoint requires stream:true so it
 	// replies with a text/event-stream body. Reference:
 	// research/codex/codex-rs/core/src/client.rs ResponsesApiRequest.
@@ -207,6 +213,7 @@ func runHTTPTransportEventsOnce(
 		snippet := readHTTPErrorSnippet(resp.Body)
 		statusErr := fmt.Errorf("codex http transport: upstream status %d: %s", resp.StatusCode, snippet)
 		logHTTPTransportError(ctx, cfg, "upstream_non_200", statusErr)
+		recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, []byte(snippet), cfg.ConversationID, started)
 		return NewRunResult("stop"), false, statusErr
 	}
 
@@ -225,12 +232,18 @@ func runHTTPTransportEventsOnce(
 	}
 	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
 	responseStarted := false
-	result, parseErr := ParseSSEEventsWithOptions(ctx, resp.Body, func(event adapterrender.Event) error {
+	sink := &cappedSink{buf: bytes.Buffer{}, cap: codexCaptureBodyCap, truncated: false}
+	var bodyReader io.Reader = resp.Body
+	if cfg.CaptureStore != nil {
+		bodyReader = io.TeeReader(resp.Body, sink)
+	}
+	result, parseErr := ParseSSEEventsWithOptions(ctx, bodyReader, func(event adapterrender.Event) error {
 		if codexRenderEventStartsClientResponse(event) {
 			responseStarted = true
 		}
 		return emit(event)
 	}, logCtx, parseOpts)
+	recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, sink.buf.Bytes(), cfg.ConversationID, started)
 	return result, responseStarted, parseErr
 }
 

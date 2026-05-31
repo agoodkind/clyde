@@ -15,6 +15,7 @@ import (
 	adapterretry "goodkind.io/clyde/internal/adapter/retry"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 // Provider implements adapterprovider.Provider for the Codex
@@ -44,6 +45,9 @@ type Provider struct {
 	// at request time with mtime caching, so a baseline learned or
 	// refreshed after daemon startup is picked up without a restart.
 	wireBaselineLoader *WireBaselineLoader
+	// captureStore receives one capture.Record per outbound Codex
+	// exchange tagged client="adapter.codex". Nil disables recording.
+	captureStore *capture.Store
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -65,6 +69,10 @@ type ProviderOptions struct {
 	// the Anthropic path, a missing or invalid baseline is NOT fatal: it
 	// falls back to constants so a cold-start codex still works.
 	WireBaselinePath string
+	// CaptureStore, when non-nil, receives one [capture.Record] per
+	// outbound Codex exchange tagged client="adapter.codex". The daemon
+	// sets it from its shared capture store; a nil store records nothing.
+	CaptureStore *capture.Store
 }
 
 const defaultWsSessionIdleTTL = 10 * time.Minute
@@ -104,6 +112,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		retryPolicies:      appendBuiltinCodexRetryPolicies(adapterretry.FromConfig(deps.Config.Retry)),
 		wireBaselinePath:   strings.TrimSpace(opts.WireBaselinePath),
 		wireBaselineLoader: NewWireBaselineLoader(),
+		captureStore:       opts.CaptureStore,
 	}
 }
 
@@ -216,6 +225,7 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		BeforeAttempt: beforeAttemptFromContext(ctx),
 		AuthRefresh:   authRefresh,
 		WireIdentity:  p.resolveWireIdentity(ctx),
+		CaptureStore:  p.captureStore,
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{
