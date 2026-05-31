@@ -17,7 +17,6 @@ func writeInventoryTable(writer io.Writer, currentInventory inventory) error {
 			string(summary.Category),
 			summary.Sink,
 			string(summary.Source),
-			formatBool(summary.RawCaptureEnabled),
 			formatBool(summary.CleanupEnabled),
 			strconv.Itoa(summary.Count),
 			formatBytes(summary.TotalBytes),
@@ -26,16 +25,13 @@ func writeInventoryTable(writer io.Writer, currentInventory inventory) error {
 			formatLargestFiles(summary.LargestFiles),
 		})
 	}
-	headers := []string{"Category", "Sink", "Source", "Raw", "Cleanup", "Count", "Total", "Latest modified", "Representative path", "Largest files"}
+	headers := []string{"Category", "Sink", "Source", "Cleanup", "Count", "Total", "Latest modified", "Representative path", "Largest files"}
 	widths := columnWidths(headers, rows)
 	if _, err := fmt.Fprintf(writer, "State root: %s\n", currentInventory.StateRoot); err != nil {
 		return writeTableError("write state root line", err)
 	}
 	if _, err := fmt.Fprintf(writer, "Mode: %s\n", currentInventory.Mode); err != nil {
 		return writeTableError("write mode line", err)
-	}
-	if _, err := fmt.Fprintf(writer, "Raw capture: %s\n", formatBool(currentInventory.RawCaptureEnabled)); err != nil {
-		return writeTableError("write raw capture line", err)
 	}
 	if _, err := fmt.Fprintf(writer, "Cleanup: %s\n", formatBool(currentInventory.CleanupEnabled)); err != nil {
 		return writeTableError("write cleanup line", err)

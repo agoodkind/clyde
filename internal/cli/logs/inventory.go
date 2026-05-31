@@ -20,7 +20,7 @@ const defaultLargestFileLimit = 3
 type category string
 
 const (
-	categoryMITMRawCaptures        category = "MITM raw captures"
+	categoryMITMCaptureStore       category = "MITM capture store"
 	categoryMITMProfileProcessLogs category = "MITM profile/process logs"
 	categoryTopLevelProcessLogs    category = "Top-level daemon/cli logs"
 	categoryProviderSidecarLogs    category = "Provider sidecar logs"
@@ -33,7 +33,7 @@ const (
 )
 
 var categoryOrder = []category{
-	categoryMITMRawCaptures,
+	categoryMITMCaptureStore,
 	categoryMITMProfileProcessLogs,
 	categoryTopLevelProcessLogs,
 	categoryProviderSidecarLogs,
@@ -71,12 +71,11 @@ type inventoryOptions struct {
 // table renderer and the JSON encoder consume, and implements the
 // output.Payload marker so it can be passed through output.Encoder.
 type inventory struct {
-	StateRoot         string            `json:"state_root"`
-	Generated         time.Time         `json:"generated"`
-	Mode              inventoryMode     `json:"mode"`
-	RawCaptureEnabled bool              `json:"raw_capture_enabled"`
-	CleanupEnabled    bool              `json:"cleanup_enabled"`
-	Categories        []categorySummary `json:"categories"`
+	StateRoot      string            `json:"state_root"`
+	Generated      time.Time         `json:"generated"`
+	Mode           inventoryMode     `json:"mode"`
+	CleanupEnabled bool              `json:"cleanup_enabled"`
+	Categories     []categorySummary `json:"categories"`
 }
 
 // IsOutputPayload marks inventory as a valid output.Encoder payload
@@ -95,7 +94,6 @@ type categorySummary struct {
 	LastEventTimestamp time.Time                `json:"last_event_timestamp"`
 	LastEventRequestID string                   `json:"last_event_request_id,omitempty"`
 	LastCleanupResult  *inventoryCleanupSummary `json:"last_cleanup_result,omitempty"`
-	RawCaptureEnabled  bool                     `json:"raw_capture_enabled"`
 	CleanupEnabled     bool                     `json:"cleanup_enabled"`
 	Rotation           config.LoggingRotation   `json:"rotation"`
 	Cleanup            config.LoggingCleanup    `json:"cleanup"`
@@ -124,7 +122,6 @@ func buildInventory(options inventoryOptions) (inventory, error) {
 		mode = inventoryModeIndexed
 	}
 	cleanupEnabled := loggingToggleEnabled(options.Logging.Cleanup.Enabled, true)
-	rawCaptureEnabled := loggingToggleEnabled(options.Logging.RawCapture.Enabled, false)
 	builders := newCategoryBuilders(largestFileLimit)
 	source := inventorySourceIndexed
 	if mode == inventoryModeDeep {
@@ -143,21 +140,19 @@ func buildInventory(options inventoryOptions) (inventory, error) {
 	categories := make([]categorySummary, 0, len(categoryOrder))
 	for _, currentCategory := range categoryOrder {
 		categories = append(categories, builders[currentCategory].summary(categorySummarySettings{
-			source:            source,
-			rawCaptureEnabled: rawCaptureEnabled,
-			cleanupEnabled:    cleanupEnabled,
-			rotation:          options.Logging.Rotation,
-			cleanup:           options.Logging.Cleanup,
-			snapshot:          snapshot,
+			source:         source,
+			cleanupEnabled: cleanupEnabled,
+			rotation:       options.Logging.Rotation,
+			cleanup:        options.Logging.Cleanup,
+			snapshot:       snapshot,
 		}))
 	}
 	return inventory{
-		StateRoot:         stateRoot,
-		Generated:         generated,
-		Mode:              mode,
-		RawCaptureEnabled: rawCaptureEnabled,
-		CleanupEnabled:    cleanupEnabled,
-		Categories:        categories,
+		StateRoot:      stateRoot,
+		Generated:      generated,
+		Mode:           mode,
+		CleanupEnabled: cleanupEnabled,
+		Categories:     categories,
 	}, nil
 }
 
@@ -222,7 +217,7 @@ func collectIndexedInventory(stateRoot string, builders map[category]*categoryBu
 	if captureRoot == "" {
 		captureRoot = filepath.Join(stateRoot, "mitm")
 	}
-	addIndexedLocation(builders, categoryMITMRawCaptures, stateRoot, filepath.Join(captureRoot, "raw"))
+	addIndexedLocation(builders, categoryMITMCaptureStore, stateRoot, filepath.Join(captureRoot, "capture.db"))
 	addIndexedLocation(builders, categoryMITMProfileProcessLogs, stateRoot, filepath.Join(stateRoot, "mitm-launcher"))
 }
 
@@ -294,12 +289,11 @@ func (builder *categoryBuilder) add(file fileSummary) {
 }
 
 type categorySummarySettings struct {
-	source            inventorySource
-	rawCaptureEnabled bool
-	cleanupEnabled    bool
-	rotation          config.LoggingRotation
-	cleanup           config.LoggingCleanup
-	snapshot          inventoryIndexSnapshot
+	source         inventorySource
+	cleanupEnabled bool
+	rotation       config.LoggingRotation
+	cleanup        config.LoggingCleanup
+	snapshot       inventoryIndexSnapshot
 }
 
 func (builder *categoryBuilder) summary(settings categorySummarySettings) categorySummary {
@@ -323,7 +317,6 @@ func (builder *categoryBuilder) summary(settings categorySummarySettings) catego
 		LastEventTimestamp: lastEventTimestamp,
 		LastEventRequestID: lastEventRequestID,
 		LastCleanupResult:  cleanupSummaryForCategory(builder.category, settings.snapshot),
-		RawCaptureEnabled:  settings.rawCaptureEnabled,
 		CleanupEnabled:     settings.cleanupEnabled,
 		Rotation:           settings.rotation,
 		Cleanup:            settings.cleanup,
@@ -362,8 +355,6 @@ func categoryIsCleanupExempt(currentCategory category) bool {
 
 func sinkForCategory(currentCategory category) string {
 	switch currentCategory {
-	case categoryMITMRawCaptures:
-		return string(logevent.SinkMITMRaw)
 	case categoryTopLevelProcessLogs:
 		return string(logevent.SinkProcess)
 	case categoryProviderSidecarLogs:
@@ -378,6 +369,8 @@ func sinkForCategory(currentCategory category) string {
 		return string(logevent.SinkProcess)
 	case categoryPreRepairRetainedLogs:
 		return string(logevent.SinkProcess)
+	case categoryMITMCaptureStore:
+		return "mitm_capture"
 	case categoryLockFiles:
 		return "lock"
 	case categoryUncategorizedLogs:
@@ -404,8 +397,8 @@ func classifyPath(relativePath string) category {
 	if strings.Contains(lowerPath, "pre-repair") {
 		return categoryPreRepairRetainedLogs
 	}
-	if isMITMRawCapture(lowerPath) {
-		return categoryMITMRawCaptures
+	if isMITMCaptureStorePath(lowerPath) {
+		return categoryMITMCaptureStore
 	}
 	if isMITMProfileProcessLog(lowerPath, base) {
 		return categoryMITMProfileProcessLogs
@@ -432,8 +425,8 @@ func isLockFile(lowerPath string, base string) bool {
 	return strings.HasSuffix(base, ".lock") || base == "lock" || base == "code.lock" || strings.HasSuffix(lowerPath, "/lock")
 }
 
-func isMITMRawCapture(lowerPath string) bool {
-	return strings.HasPrefix(lowerPath, "mitm/") && strings.Contains(lowerPath, "/raw/") && strings.HasSuffix(lowerPath, ".raw")
+func isMITMCaptureStorePath(lowerPath string) bool {
+	return strings.HasPrefix(lowerPath, "mitm/") && strings.HasSuffix(lowerPath, "/capture.db")
 }
 
 func isMITMProfileProcessLog(lowerPath string, base string) bool {
