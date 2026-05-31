@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"goodkind.io/clyde/internal/homedir"
 )
 
 const (
@@ -176,19 +178,19 @@ func NewAuthManager(path string, opts AuthManagerOptions) *AuthManager {
 	}
 }
 
-// resolveCodexAuthFilePath applies the documented default and ~/
-// expansion for the codex auth file. Empty resolves to ~/.codex/auth.json.
+// resolveCodexAuthFilePath applies the documented default and tilde
+// expansion for the codex auth file. An empty path resolves to auth.json
+// under the user's .codex directory in their home directory.
 func resolveCodexAuthFilePath(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
-		trimmed = "~/.codex/auth.json"
-	}
-	if strings.HasPrefix(trimmed, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, trimmed[2:])
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return filepath.Join(".codex", "auth.json")
 		}
+		return filepath.Join(home, ".codex", "auth.json")
 	}
-	return trimmed
+	return homedir.Expand(trimmed)
 }
 
 // Token returns a fresh codex access token. If the in-memory cache or
@@ -209,7 +211,8 @@ func (m *AuthManager) Token(ctx context.Context) (string, error) {
 	}
 	if strings.TrimSpace(doc.tokens.accessToken) == "" {
 		err := errors.New("codex auth file missing tokens.access_token")
-		m.log.WarnContext(ctx, "adapter.codex.auth.token_missing", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.token_missing", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"path", m.path,
 		)
@@ -238,7 +241,8 @@ func (m *AuthManager) ForceRefresh(ctx context.Context) (string, error) {
 func (m *AuthManager) readAuthFile(ctx context.Context) (*codexAuthFile, error) {
 	doc, err := readCodexAuthFileFromDisk(m.path)
 	if err != nil {
-		m.log.WarnContext(ctx, "adapter.codex.auth.file_read_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.file_read_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"path", m.path,
 			"err", err.Error(),
@@ -249,7 +253,8 @@ func (m *AuthManager) readAuthFile(ctx context.Context) (*codexAuthFile, error) 
 
 func (m *AuthManager) refreshFromAuthorityLocked(ctx context.Context, rejectedToken string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(m.path), 0o700); err != nil {
-		m.log.WarnContext(ctx, "adapter.codex.auth.mkdir_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.mkdir_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"dir", filepath.Dir(m.path),
 			"err", err.Error(),
@@ -261,7 +266,8 @@ func (m *AuthManager) refreshFromAuthorityLocked(ctx context.Context, rejectedTo
 	defer cancel()
 	got, lockErr := lock.TryLockContext(lockCtx, codexRefreshLockPoll)
 	if lockErr != nil {
-		m.log.WarnContext(ctx, "adapter.codex.auth.lock_acquire_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.lock_acquire_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"lock_path", m.lockPath,
 			"err", lockErr.Error(),
@@ -269,7 +275,8 @@ func (m *AuthManager) refreshFromAuthorityLocked(ctx context.Context, rejectedTo
 		return "", fmt.Errorf("acquire codex auth lock: %w", lockErr)
 	}
 	if !got {
-		m.log.WarnContext(ctx, "adapter.codex.auth.lock_acquire_timeout", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.lock_acquire_timeout", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"lock_path", m.lockPath,
 		)
@@ -288,7 +295,8 @@ func (m *AuthManager) refreshFromAuthorityLocked(ctx context.Context, rejectedTo
 
 	if strings.TrimSpace(doc.tokens.refreshToken) == "" {
 		err := errors.New("codex auth file missing tokens.refresh_token; re-run codex login")
-		m.log.WarnContext(ctx, "adapter.codex.auth.refresh_credential_missing", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.refresh_credential_missing", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"path", m.path,
 		)
@@ -301,7 +309,8 @@ func (m *AuthManager) refreshFromAuthorityLocked(ctx context.Context, rejectedTo
 	}
 	if strings.TrimSpace(response.AccessToken) == "" {
 		err := errors.New("codex token refresh response missing access_token")
-		m.log.WarnContext(ctx, "adapter.codex.auth.refresh_response_invalid", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.refresh_response_invalid", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"err", err.Error(),
 		)
@@ -325,7 +334,8 @@ func (m *AuthManager) takeFreshOnDiskToken(ctx context.Context, doc *codexAuthFi
 	}
 	m.cachedToken = onDisk
 	m.cachedExpiry = expiry
-	m.log.InfoContext(ctx, "adapter.codex.auth.refresh_raced", "concern", "adapter.providers.codex.request", "component", "adapter",
+	m.log.InfoContext(
+		ctx, "adapter.codex.auth.refresh_raced", "concern", "adapter.providers.codex.request", "component", "adapter",
 		"subcomponent", "codex",
 		"expires_at_unix", expiry.Unix(),
 	)
@@ -344,7 +354,8 @@ func (m *AuthManager) persistRefreshedTokens(ctx context.Context, doc *codexAuth
 
 	encoded, marshalErr := json.Marshal(doc)
 	if marshalErr != nil {
-		m.log.WarnContext(ctx, "adapter.codex.auth.marshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.marshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"err", marshalErr.Error(),
 		)
@@ -357,7 +368,8 @@ func (m *AuthManager) persistRefreshedTokens(ctx context.Context, doc *codexAuth
 	expiry, _ := parseCodexAccessTokenExpiry(response.AccessToken)
 	m.cachedToken = response.AccessToken
 	m.cachedExpiry = expiry
-	m.log.InfoContext(ctx, "adapter.codex.auth.refreshed", "concern", "adapter.providers.codex.request", "component", "adapter",
+	m.log.InfoContext(
+		ctx, "adapter.codex.auth.refreshed", "concern", "adapter.providers.codex.request", "component", "adapter",
 		"subcomponent", "codex",
 		"expires_at_unix", expiry.Unix(),
 		"refresh_credential_rotated", response.RefreshToken != "",
@@ -383,7 +395,8 @@ func (m *AuthManager) callRefreshEndpoint(ctx context.Context, refreshCredential
 	}
 	bodyBytes, marshalErr := json.Marshal(bodyMap)
 	if marshalErr != nil {
-		m.log.WarnContext(ctx, "adapter.codex.auth.refresh_body_marshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.refresh_body_marshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"err", marshalErr.Error(),
 		)
@@ -391,7 +404,8 @@ func (m *AuthManager) callRefreshEndpoint(ctx context.Context, refreshCredential
 	}
 	req, buildErr := http.NewRequestWithContext(ctx, http.MethodPost, m.refreshURL, bytes.NewReader(bodyBytes))
 	if buildErr != nil {
-		m.log.WarnContext(ctx, "adapter.codex.auth.refresh_request_build_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		m.log.WarnContext(
+			ctx, "adapter.codex.auth.refresh_request_build_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"endpoint", m.refreshURL,
 			"err", buildErr.Error(),
@@ -417,7 +431,8 @@ func (m *AuthManager) callRefreshEndpoint(ctx context.Context, refreshCredential
 	if resp.StatusCode == http.StatusOK {
 		var parsed codexRefreshResponse
 		if unmarshalErr := json.Unmarshal(respBytes, &parsed); unmarshalErr != nil {
-			m.log.WarnContext(ctx, "adapter.codex.auth.refresh_response_decode_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+			m.log.WarnContext(
+				ctx, "adapter.codex.auth.refresh_response_decode_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 				"subcomponent", "codex",
 				"err", unmarshalErr.Error(),
 				"body_bytes", len(respBytes),
@@ -446,7 +461,8 @@ func (m *AuthManager) logRefreshFailure(ctx context.Context, err *AuthRefreshErr
 	if err.Permanent {
 		level = slog.LevelError
 	}
-	m.log.LogAttrs(ctx, level, "adapter.codex.auth.refresh_failed", slog.String("concern", "adapter.providers.codex.request"), slog.String("component", "adapter"),
+	m.log.LogAttrs(
+		ctx, level, "adapter.codex.auth.refresh_failed", slog.String("concern", "adapter.providers.codex.request"), slog.String("component", "adapter"),
 		slog.String("subcomponent", "codex"),
 		slog.Bool("permanent", err.Permanent),
 		slog.Int("status", err.Status),
@@ -574,7 +590,8 @@ func marshalRawString(raw map[string]json.RawMessage, key string, value string) 
 	v, err := json.Marshal(value)
 	if err != nil {
 		log := slog.Default()
-		log.Warn("adapter.codex.auth.raw_string_marshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.Warn(
+			"adapter.codex.auth.raw_string_marshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"key", key,
 			"err", err.Error(),
@@ -600,7 +617,8 @@ func readCodexAuthFileFromDisk(path string) (*codexAuthFile, error) {
 	log := slog.Default()
 	data, err := os.ReadFile(path) // operator-controlled config path
 	if err != nil {
-		log.Warn("adapter.codex.auth.file_read_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.Warn(
+			"adapter.codex.auth.file_read_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"path", path,
 			"err", err.Error(),
@@ -609,7 +627,8 @@ func readCodexAuthFileFromDisk(path string) (*codexAuthFile, error) {
 	}
 	var doc codexAuthFile
 	if err := json.Unmarshal(data, &doc); err != nil {
-		log.Warn("adapter.codex.auth.file_parse_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.Warn(
+			"adapter.codex.auth.file_parse_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"path", path,
 			"err", err.Error(),
@@ -623,7 +642,8 @@ func writeCodexAuthFileAtomic(ctx context.Context, log *slog.Logger, path string
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".clyde-codex-auth-*")
 	if err != nil {
-		log.WarnContext(ctx, "adapter.codex.auth.tempfile_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.WarnContext(
+			ctx, "adapter.codex.auth.tempfile_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"dir", dir,
 			"err", err.Error(),
@@ -633,7 +653,8 @@ func writeCodexAuthFileAtomic(ctx context.Context, log *slog.Logger, path string
 	tmpName := tmp.Name()
 	if writeErr := writeTempAuthFile(tmp, data); writeErr != nil {
 		_ = os.Remove(tmpName)
-		log.WarnContext(ctx, "adapter.codex.auth.tempfile_write_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.WarnContext(
+			ctx, "adapter.codex.auth.tempfile_write_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"path", tmpName,
 			"err", writeErr.Error(),
@@ -642,7 +663,8 @@ func writeCodexAuthFileAtomic(ctx context.Context, log *slog.Logger, path string
 	}
 	if renameErr := os.Rename(tmpName, path); renameErr != nil {
 		_ = os.Remove(tmpName)
-		log.WarnContext(ctx, "adapter.codex.auth.rename_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.WarnContext(
+			ctx, "adapter.codex.auth.rename_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"src", tmpName,
 			"dst", path,
@@ -650,7 +672,8 @@ func writeCodexAuthFileAtomic(ctx context.Context, log *slog.Logger, path string
 		)
 		return fmt.Errorf("rename codex auth file: %w", renameErr)
 	}
-	log.InfoContext(ctx, "adapter.codex.auth.file_written", "concern", "adapter.providers.codex.request", "component", "adapter",
+	log.InfoContext(
+		ctx, "adapter.codex.auth.file_written", "concern", "adapter.providers.codex.request", "component", "adapter",
 		"subcomponent", "codex",
 		"path", path,
 		"bytes", len(data),
@@ -704,7 +727,8 @@ func readCodexAccessTokenExpiry(accessToken string) (time.Time, error) {
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		log := slog.Default()
-		log.Warn("adapter.codex.auth.jwt_claims_unmarshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.Warn(
+			"adapter.codex.auth.jwt_claims_unmarshal_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"err", err.Error(),
 		)
@@ -729,7 +753,8 @@ func readJWTSegment(segment string) ([]byte, error) {
 	raw, err := base64.URLEncoding.DecodeString(padded)
 	if err != nil {
 		log := slog.Default()
-		log.Warn("adapter.codex.auth.jwt_segment_decode_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+		log.Warn(
+			"adapter.codex.auth.jwt_segment_decode_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
 			"subcomponent", "codex",
 			"err", err.Error(),
 		)
