@@ -241,6 +241,7 @@ func (s *Server) registerAnthropicProvider(
 		CCEntrypoint:            id.CCEntrypoint,
 		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
 		WireBaselinePath:        deps.AnthropicWireBaselinePath,
+		CaptureStore:            deps.CaptureStore,
 	})
 	anthropicSidecarRotation := policies.Sinks[logpolicy.SinkAnthropicSidecar].Rotation
 	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{

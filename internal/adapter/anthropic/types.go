@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"goodkind.io/clyde/internal/adapter/anthropic/anthmode"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 // MaxOutputTokens is the upper bound the adapter requests when the
@@ -85,6 +86,12 @@ type Config struct {
 	// adapter can return an operator-actionable HTTP 503 rather than
 	// sending a wrong-shaped request.
 	WireBaselinePath string
+	// CaptureStore, when non-nil, receives one [capture.Record] per
+	// outbound /v1/messages exchange tagged client="adapter.anthropic", so
+	// the BYOK egress lands in mitm/capture.db alongside proxied client
+	// traffic. The daemon sets it from its shared capture store; a nil store
+	// records nothing.
+	CaptureStore *capture.Store
 }
 
 // Client wraps an [http.Client] and an OAuth token source.

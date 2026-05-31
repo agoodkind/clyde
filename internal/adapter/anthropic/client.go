@@ -157,6 +157,15 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 
 	postStarted := clock.Now()
+	ex := egressExchange{
+		method:     httpReq.Method,
+		host:       httpReq.URL.Host,
+		path:       httpReq.URL.Path,
+		reqType:    httpReq.Header.Get("Content-Type"),
+		reqHeaders: httpReq.Header,
+		reqBody:    body,
+		started:    postStarted,
+	}
 	resp, err := c.http.Do(httpReq)
 	if resp != nil {
 		// We set Accept-Encoding explicitly, so Go's transparent gzip
@@ -202,7 +211,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, c.handle429Response(ctx, req, resp, base)
+		return nil, c.handle429Response(ctx, req, resp, base, ex)
 	}
 	if resp.StatusCode != http.StatusOK {
 		errBody := readDecodedBody(resp)
@@ -210,6 +219,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		ev.Body = string(errBody)
 		ev.BodyBytes = len(errBody)
 		logResponse(ctx, slog.LevelError, "anthropic.messages.upstream_error", ev)
+		c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
 		return nil, &UpstreamError{
 			Classification: Classify(resp, nil),
 			Status:         resp.StatusCode,
@@ -222,20 +232,21 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if req.OnHeaders != nil {
 		req.OnHeaders(resp.Header.Clone())
 	}
-	c.maybeAttachWireCapture(ctx, resp, base)
+	c.attachEgressObservers(ctx, resp, base, ex)
 	return resp, nil
 }
 
 // handle429Response builds the typed UpstreamError for a 429 reply, logs the
 // rate-limit event, and fires the OnHeaders callback. The returned error is
 // the value do() propagates to its caller.
-func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.Response, base responseEvent) error {
+func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.Response, base responseEvent, ex egressExchange) error {
 	errBody := readDecodedBody(resp)
 	ev := base
 	ev.RetryAfter = resp.Header.Get("Retry-After")
 	ev.Body = string(errBody)
 	ev.BodyBytes = len(errBody)
 	logResponse(ctx, slog.LevelWarn, "anthropic.ratelimit", ev)
+	c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
 
 	// Surface unified rate-limit headers to the OnHeaders callback even
 	// on 429 so the chat handler can Claim and inject the in-band
@@ -552,46 +563,11 @@ func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, fa
 	return retryResp, clock.Since(retryStarted), nil
 }
 
-// maybeAttachWireCapture is the do() boundary helper that filters Off and
-// delegates to the per-mode emitter; keeps do()'s cognitive complexity
-// budget under the lint threshold.
-func (c *Client) maybeAttachWireCapture(ctx context.Context, resp *http.Response, base responseEvent) {
-	mode := c.cfg.WireCaptureMode
-	if mode == "" || mode == WireCaptureOff {
-		return
-	}
-	attachWireCapture(ctx, mode, resp, base)
-}
-
-// wireCaptureBodyCap bounds how many bytes a Full-mode capture buffers in
-// memory per response. SSE responses can exceed this on long thinking turns;
+// wireCaptureBodyCap bounds how many bytes a Full-mode wire-capture log buffers
+// in memory per response. SSE responses can exceed this on long thinking turns;
 // we truncate and surface the truncation flag so the operator knows to flip
 // rotation up if they need full bodies.
 const wireCaptureBodyCap = 2 * 1024 * 1024
-
-// attachWireCapture emits the per-success-path wire-capture event and, for
-// Full mode, swaps resp.Body for a tee reader so the streamed SSE body is
-// buffered (capped) and logged on Close. Summary mode emits a fingerprint
-// immediately and leaves resp.Body untouched. Off is filtered by the caller.
-func attachWireCapture(ctx context.Context, mode WireCaptureMode, resp *http.Response, base responseEvent) {
-	headers := redactedOutboundHeaders(resp.Header)
-	switch mode {
-	case WireCaptureOff:
-		// Caller filters Off before reaching this site; explicit case
-		// keeps the switch exhaustive over the closed enum.
-		return
-	case WireCaptureSummaryOnly:
-		emitWireCaptureSummary(ctx, mode, base, headers)
-	case WireCaptureFull:
-		// Detach from request cancellation so the on-close emission still
-		// fires after the SSE stream completes; preserve correlation
-		// values via context.WithoutCancel.
-		emitCtx := context.WithoutCancel(ctx)
-		resp.Body = newCaptureTee(resp.Body, wireCaptureBodyCap, func(captured []byte, truncated bool, totalRead int) {
-			emitWireCaptureFull(emitCtx, mode, base, headers, captured, truncated, totalRead)
-		})
-	}
-}
 
 func emitWireCaptureSummary(ctx context.Context, mode WireCaptureMode, base responseEvent, headers map[string]string) {
 	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture", slog.String("concern", "adapter.providers.anthropic.wire_capture"), slog.String("subcomponent", "anthropic"),

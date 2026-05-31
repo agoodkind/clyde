@@ -4,6 +4,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 // Deps are the host hooks the adapter needs from the daemon process.
@@ -41,6 +42,12 @@ type Deps struct {
 	// invalid file is NOT fatal: the codex egress falls back to its
 	// compiled-in identity constants so a cold-start codex still works.
 	CodexWireBaselinePath string
+	// CaptureStore is the daemon's shared SQLite capture store. When set, the
+	// adapter records each outbound provider exchange (BYOK egress) to it
+	// tagged by an adapter.<provider> client id, so the egress lands in
+	// mitm/capture.db without routing through the MITM proxy. A nil store
+	// disables egress recording.
+	CaptureStore *capture.Store
 }
 
 func (d Deps) authForProvider(id adapterresolver.ProviderID) adapterprovider.AuthLookup {
