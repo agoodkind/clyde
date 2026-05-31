@@ -112,15 +112,13 @@ const (
 //
 // This is the per-event routing taxonomy written to the "sinks" slog attr and
 // matched downstream by the slogger filter handlers and the logs-inventory CLI.
-// It overlaps the config sink roster ([config.LoggingSinkSpecs]) on the two
-// destinations that name the same physical file, [SinkMITMRaw] and
-// [SinkInventory]; those two constants reference the canonical config strings so
-// there is one source for those wire values. The remaining names are
-// routing-only concepts ([SinkProcess], [SinkConcern], [SinkPerRequest],
-// [SinkPerChat], [SinkProviderSidecar]), so they stay defined here as the
-// routing taxonomy's own constants rather than as a second copy of the config
-// roster. MITM wire legs reach their per-concern file through [SinkConcern];
-// there is no longer a dedicated capture-index sink.
+// It overlaps the config sink roster ([config.LoggingSinkSpecs]) on
+// [SinkInventory], which references the canonical config string so there is one
+// source for that wire value. The remaining names are routing-only concepts
+// ([SinkProcess], [SinkConcern], [SinkPerRequest], [SinkPerChat],
+// [SinkProviderSidecar]), so they stay defined here as the routing taxonomy's
+// own constants rather than as a second copy of the config roster. MITM wire
+// legs reach their per-concern file through [SinkConcern].
 type SinkName string
 
 const (
@@ -132,10 +130,6 @@ const (
 	SinkPerRequest SinkName = "per_request"
 	// SinkPerChat routes events to per-chat logs.
 	SinkPerChat SinkName = "per_chat"
-	// SinkMITMRaw identifies MITM raw sidecar captures. The wire value is the
-	// canonical config sink string so the routing taxonomy and the config roster
-	// share one source for this name.
-	SinkMITMRaw SinkName = SinkName(config.LoggingSinkMITMRaw)
 	// SinkProviderSidecar routes events to provider sidecar logs.
 	SinkProviderSidecar SinkName = "provider_sidecar"
 	// SinkInventory routes events to the inventory index. The wire value is the
@@ -214,9 +208,6 @@ type Facet interface {
 // an event. The generic sink selector ORs the hints across all
 // facets on the event; no field in this struct names a provider.
 type SinkHints struct {
-	// HasRawCapture indicates the event references raw request and
-	// response sidecar paths that must mirror to [SinkMITMRaw].
-	HasRawCapture bool
 	// NeedsProviderSidecar indicates the event should mirror to
 	// [SinkProviderSidecar]. Provider packages set this hint on
 	// facets whose payloads carry provider-specific telemetry the
@@ -228,7 +219,6 @@ type SinkHints struct {
 // argument results in true on the returned value.
 func (s SinkHints) Merge(other SinkHints) SinkHints {
 	return SinkHints{
-		HasRawCapture:        s.HasRawCapture || other.HasRawCapture,
 		NeedsProviderSidecar: s.NeedsProviderSidecar || other.NeedsProviderSidecar,
 	}
 }
@@ -866,9 +856,6 @@ func DefaultSinksForEvent(event Event) []SinkName {
 		sinks = append(sinks, SinkPerChat)
 	}
 	hints := event.Facets.AggregateSinkHints()
-	if hints.HasRawCapture {
-		sinks = append(sinks, SinkMITMRaw)
-	}
 	if hints.NeedsProviderSidecar {
 		sinks = append(sinks, SinkProviderSidecar)
 	}

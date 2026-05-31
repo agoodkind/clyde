@@ -28,8 +28,6 @@ const (
 	SinkConcerns SinkName = config.LoggingSinkConcerns
 	// SinkTranscripts identifies the per-chat transcript log sink.
 	SinkTranscripts SinkName = config.LoggingSinkTranscripts
-	// SinkMITMRaw identifies the MITM raw payload sink.
-	SinkMITMRaw SinkName = config.LoggingSinkMITMRaw
 	// SinkInventory identifies the inventory index sink.
 	SinkInventory SinkName = config.LoggingSinkInventory
 )
@@ -375,8 +373,6 @@ func defaultSinkEnabled(cfg config.Config, spec config.LoggingSinkSpec, enabledO
 	switch spec.DefaultRule {
 	case config.LoggingSinkDefaultTranscript:
 		return baseEnabled && cfg.Logging.Transcript.IsEnabled()
-	case config.LoggingSinkDefaultRawCapture:
-		return baseEnabled && cfg.Logging.RawCapture.Enabled != nil && *cfg.Logging.RawCapture.Enabled
 	case config.LoggingSinkDefaultAlwaysOn:
 		return baseEnabled
 	default:

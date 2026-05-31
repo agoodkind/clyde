@@ -13,12 +13,11 @@ import (
 // contract. When the intercepted Cursor request looks like a BidiAppend
 // gRPC-Web call, it decodes the typed [BidiAppendDiagnostic] from the
 // decoded request body and emits it as a structured slog record on the
-// MITM wire concern. The diagnostic rides the cursor wire concern log
-// rather than the unified capture.jsonl leg: the unified capture record
-// is transport-shaped and the BidiAppend protobuf decode is a
-// cursor-only diagnostic, so it stays out of the shared leg facet. The
-// decode never logs raw prompt bytes; only request id, append seqno,
-// and content-length/hash summaries surface.
+// MITM wire concern. The diagnostic rides the cursor wire concern log:
+// the shared capture leg is transport-shaped and the BidiAppend
+// protobuf decode is a cursor-only diagnostic, so it stays out of the
+// shared leg facet. The decode never logs raw prompt bytes; only
+// request id, append seqno, and content-length/hash summaries surface.
 func (routeProvider) DiagnoseExchange(ctx context.Context, log *slog.Logger, exchange mitm.ExchangeDiagnostic) {
 	if log == nil {
 		return

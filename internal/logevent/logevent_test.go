@@ -122,7 +122,7 @@ func TestFacetsBundleEmitsAttrsAndJSON(t *testing.T) {
 			{Key: "model", Value: "gpt-5"},
 			{Key: "effort", Value: "high"},
 		},
-		Hints: SinkHints{HasRawCapture: false, NeedsProviderSidecar: true},
+		Hints: SinkHints{NeedsProviderSidecar: true},
 		Extra: nil,
 	}
 	var event Event
@@ -138,24 +138,24 @@ func TestFacetsBundleEmitsAttrsAndJSON(t *testing.T) {
 	}
 }
 
-// rawFacet is a Facet stand-in that contributes the raw-capture
-// sink hint without naming a provider in the generic test.
-type rawFacet struct{}
+// transportFacet is a Facet stand-in that contributes no extra sink
+// hints, standing in for a transport-surface facet in the generic test.
+type transportFacet struct{}
 
-func (rawFacet) FacetKey() string        { return "transport" }
-func (rawFacet) FacetAttrs() []slog.Attr { return nil }
-func (rawFacet) SinkHints() SinkHints {
-	return SinkHints{HasRawCapture: true, NeedsProviderSidecar: false}
+func (transportFacet) FacetKey() string        { return "transport" }
+func (transportFacet) FacetAttrs() []slog.Attr { return nil }
+func (transportFacet) SinkHints() SinkHints {
+	return SinkHints{NeedsProviderSidecar: false}
 }
 
 func TestDefaultSinksForEventSelectsCentralSinkModel(t *testing.T) {
 	var event Event
 	event.Identity = Identity{RequestID: "req-3", ChatKey: "chat-1"}
 	event.Path = Path{Surface: SurfaceMITMIDE}
-	event.Facets.Set(rawFacet{})
+	event.Facets.Set(transportFacet{})
 
 	sinks := DefaultSinksForEvent(event)
-	want := []SinkName{SinkProcess, SinkConcern, SinkInventory, SinkPerChat, SinkMITMRaw}
+	want := []SinkName{SinkProcess, SinkConcern, SinkInventory, SinkPerChat}
 	if strings.Join(sinkNames(sinks), ",") != strings.Join(sinkNames(want), ",") {
 		t.Fatalf("sinks = %v, want %v", sinks, want)
 	}
@@ -176,7 +176,6 @@ func TestSinkWireValuesAreStable(t *testing.T) {
 		{sink: SinkConcern, want: "concern"},
 		{sink: SinkPerRequest, want: "per_request"},
 		{sink: SinkPerChat, want: "per_chat"},
-		{sink: SinkMITMRaw, want: "mitm_raw"},
 		{sink: SinkProviderSidecar, want: "provider_sidecar"},
 		{sink: SinkInventory, want: "inventory_index"},
 	}
@@ -184,9 +183,6 @@ func TestSinkWireValuesAreStable(t *testing.T) {
 		if string(tc.sink) != tc.want {
 			t.Fatalf("sink %v wire value = %q, want %q", tc.sink, string(tc.sink), tc.want)
 		}
-	}
-	if string(SinkMITMRaw) != config.LoggingSinkMITMRaw {
-		t.Fatalf("SinkMITMRaw = %q, want config.LoggingSinkMITMRaw %q", string(SinkMITMRaw), config.LoggingSinkMITMRaw)
 	}
 	if string(SinkInventory) != config.LoggingSinkInventory {
 		t.Fatalf("SinkInventory = %q, want config.LoggingSinkInventory %q", string(SinkInventory), config.LoggingSinkInventory)

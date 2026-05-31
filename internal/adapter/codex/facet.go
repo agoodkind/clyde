@@ -79,7 +79,6 @@ func (f Facet) FacetAttrs() []slog.Attr {
 // selector reads only the aggregated typed [logevent.SinkHints].
 func (f Facet) SinkHints() logevent.SinkHints {
 	return logevent.SinkHints{
-		HasRawCapture:        false,
 		NeedsProviderSidecar: true,
 	}
 }

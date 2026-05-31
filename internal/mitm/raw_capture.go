@@ -4,20 +4,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
-	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 )
 
-const rawCaptureFileMode os.FileMode = 0o600
-
+// captureConcernInput is the request shape the concern classifier matches
+// capture rules against to bucket one captured exchange.
 type captureConcernInput struct {
 	Provider            string
 	Host                string
@@ -27,6 +21,11 @@ type captureConcernInput struct {
 	ResponseContentType string
 }
 
+// resolveCaptureConcern returns the concern label for one captured exchange.
+// Configured capture rules (or the built-in defaults) win first as curated
+// overrides; when none match, the concern is auto-derived from the request via
+// [autoClassifyConcern] so every exchange lands in a meaningful per-provider
+// bucket instead of a single opaque "unknown".
 func resolveCaptureConcern(rules []config.MITMCaptureRouteRule, input captureConcernInput) string {
 	if len(rules) == 0 {
 		rules = config.DefaultMITMCaptureRouteRules()
@@ -36,7 +35,106 @@ func resolveCaptureConcern(rules []config.MITMCaptureRouteRule, input captureCon
 			return rule.Concern
 		}
 	}
-	return "unknown"
+	return autoClassifyConcern(input)
+}
+
+// autoClassifyConcern derives a stable, low-cardinality concern label from the
+// request when no curated rule matched. The label is always provider-prefixed
+// so a query can group by provider first; it falls back to "<provider>.other"
+// when the path carries no usable token, and to "unknown" only when the
+// provider itself is unknown. concern is a descriptive grouping column on the
+// capture store (indexed for GROUP BY), not a control-flow value, so deriving
+// it heuristically is safe.
+func autoClassifyConcern(input captureConcernInput) string {
+	provider := strings.ToLower(strings.TrimSpace(input.Provider))
+	if provider == "" {
+		return "unknown"
+	}
+	if token := concernTokenFromPath(provider, input.Path); token != "" {
+		return provider + "." + token
+	}
+	return provider + ".other"
+}
+
+// concernTokenFromPath extracts a single semantic token from a request path.
+// It prefers a gRPC "<pkg>.<Xxx>Service/Method" service name, then the first
+// path segment that is not a version marker, generic prefix, the provider's own
+// name, or an opaque id. Returns "" when nothing meaningful is found.
+func concernTokenFromPath(provider, path string) string {
+	if svc := grpcServiceToken(path); svc != "" {
+		return svc
+	}
+	skip := map[string]bool{
+		"": true, "v1": true, "v2": true, "v3": true, "api": true,
+		"backend-api": true, "ces": true, "tev1": true, "rest": true,
+		provider: true,
+	}
+	for seg := range strings.SplitSeq(strings.Trim(path, "/"), "/") {
+		lower := strings.ToLower(seg)
+		if skip[lower] || strings.Contains(lower, ".") || concernSegmentIsIDLike(lower) {
+			continue
+		}
+		if slug := concernSlug(lower); slug != "" {
+			return slug
+		}
+	}
+	return ""
+}
+
+// grpcServiceToken returns the slugified service name from a gRPC-style first
+// path segment ("aiserver.v1.AnalyticsService/Batch" -> "analytics"), or "".
+func grpcServiceToken(path string) string {
+	first, _, _ := strings.Cut(strings.Trim(path, "/"), "/")
+	if !strings.Contains(first, ".") {
+		return ""
+	}
+	for part := range strings.SplitSeq(first, ".") {
+		if len(part) > len("Service") && strings.HasSuffix(part, "Service") {
+			return concernSlug(strings.TrimSuffix(part, "Service"))
+		}
+	}
+	return ""
+}
+
+// concernSegmentIsIDLike reports whether a segment looks like an opaque id (a
+// long hex/uuid run) that would only inflate concern cardinality.
+func concernSegmentIsIDLike(seg string) bool {
+	if len(seg) < 12 {
+		return false
+	}
+	for _, r := range seg {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// concernSlug lowercases value and collapses every run of non-alphanumeric
+// runes to a single underscore, bounding the result to 40 characters so concern
+// labels stay short and queryable.
+func concernSlug(value string) string {
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if len(out) > 40 {
+		return out[:40]
+	}
+	return out
 }
 
 func captureRuleMatches(rule config.MITMCaptureRouteRule, input captureConcernInput) bool {
@@ -75,58 +173,10 @@ func captureContentTypeMatches(needle string, input captureConcernInput) bool {
 	return strings.Contains(requestContentType, needle) || strings.Contains(responseContentType, needle)
 }
 
-func (p *Proxy) nextRawCapturePaths(captureDir string, concern string, host string, path string) (string, string, error) {
-	dir := filepath.Join(expandHome(captureDir), "concerns", safePathPart(concern), "raw", safePathPart(host))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("mitm.raw_capture.mkdir_failed", "concern", "providers.mitm.wire", "dir", dir, "err", err)
-		return "", "", fmt.Errorf("create raw capture dir: %w", err)
-	}
-	seq := p.rawCaptureSeq.Add(1)
-	stamp := clock.Now().UTC().Format("20060102T150405.000000000Z")
-	name := fmt.Sprintf("%s-%06d-%s", stamp, seq, safePathPart(path))
-	return filepath.Join(dir, name+".request.raw"), filepath.Join(dir, name+".response.raw"), nil
-}
-
-func (p *Proxy) nextHTTPCapturePaths(captureDir string, provider string, path string) (string, string, error) {
-	dir := filepath.Join(expandHome(captureDir), "raw", safePathPart(provider))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("mitm.raw_capture.mkdir_failed", "concern", "providers.mitm.wire", "dir", dir, "err", err)
-		return "", "", fmt.Errorf("create raw capture dir: %w", err)
-	}
-	seq := p.rawCaptureSeq.Add(1)
-	stamp := clock.Now().UTC().Format("20060102T150405.000000000Z")
-	name := fmt.Sprintf("%s-%06d-%s", stamp, seq, safePathPart(path))
-	return filepath.Join(dir, name+".request.raw"), filepath.Join(dir, name+".response.raw"), nil
-}
-
-func writeRawCaptureFile(path string, write func(io.Writer) error) (int64, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
-	if err != nil {
-		slog.Warn("mitm.raw_capture.open_failed", "concern", "providers.mitm.wire", "path", path, "err", err)
-		return 0, fmt.Errorf("open raw capture file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	counter := &countingWriter{writer: f, count: 0}
-	if err := write(counter); err != nil {
-		return counter.count, err
-	}
-	return counter.count, nil
-}
-
-type countingWriter struct {
-	writer io.Writer
-	count  int64
-}
-
-func (w *countingWriter) Write(p []byte) (int, error) {
-	n, err := w.writer.Write(p)
-	w.count += int64(n)
-	if err != nil {
-		return n, fmt.Errorf("write counted bytes: %w", err)
-	}
-	return n, nil
-}
-
+// safePathPart sanitizes an arbitrary string (host, upstream slug) into a
+// filesystem-safe token. The drift transcript path and the TLS leaf-cert log
+// host both derive on-disk or log identifiers from untrusted input, so unsafe
+// runes collapse to '-' and the result is bounded to 80 characters.
 func safePathPart(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" || value == "/" {
@@ -159,6 +209,9 @@ func safePathPart(value string) string {
 	return out
 }
 
+// headerBlock renders an HTTP status line plus header set into the wire-format
+// byte block the intercepted-TLS and hook response writers stream back to the
+// hijacked client connection.
 func headerBlock(statusLine string, h http.Header) []byte {
 	var buf bytes.Buffer
 	buf.WriteString(statusLine)
@@ -167,6 +220,8 @@ func headerBlock(statusLine string, h http.Header) []byte {
 	return buf.Bytes()
 }
 
+// sha256Hex returns the lowercase hex-encoded SHA-256 digest of body, used to
+// fingerprint captured request and response payloads for correlation.
 func sha256Hex(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])

@@ -2,7 +2,6 @@ package mitm
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -111,12 +110,6 @@ func (p *Proxy) emitHTTPLogLeg(ctx context.Context, recorder *logevent.Recorder,
 		CloseReason:         "",
 		RequestContentType:  "",
 		ResponseContentType: "",
-		// CapturePath is intentionally empty: the dedicated capture.jsonl sink
-		// is gone, so each MITM leg lands in the per-concern wire log via the
-		// slog router rather than a record-embedded capture-file path.
-		CapturePath:     "",
-		RawRequestPath:  rawPathFromCaptureBodyIndex(input.requestIndex),
-		RawResponsePath: rawPathFromCaptureBodyIndex(input.responseIndex),
 	}
 	var event logevent.Event
 	event.Path.Leg = leg
@@ -148,12 +141,6 @@ func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recor
 		CloseReason:         "",
 		RequestContentType:  r.Header.Get("Content-Type"),
 		ResponseContentType: responseHeader.Get("Content-Type"),
-		// CapturePath is intentionally empty: the dedicated capture.jsonl sink
-		// is gone, so each MITM leg lands in the per-concern wire log via the
-		// slog router rather than a record-embedded capture-file path.
-		CapturePath:     "",
-		RawRequestPath:  rawPathFromCaptureBodyIndex(input.requestIndex),
-		RawResponsePath: rawPathFromCaptureBodyIndex(input.responseIndex),
 	}
 	var event logevent.Event
 	event.Path.Leg = logevent.LegMITMPayload
@@ -223,19 +210,6 @@ func (p *Proxy) recordHTTPFailure(r *http.Request, responseHeader http.Header, i
 	}
 	recorder.EmitError(ctx, failure.errorCode, failure.errorMessage)
 	recorder.Complete(ctx)
-}
-
-func rawPathFromCaptureBodyIndex(index captureBodyIndex) string {
-	if len(index.raw) == 0 {
-		return ""
-	}
-	var reference struct {
-		RawPath string `json:"raw_path"`
-	}
-	if err := json.Unmarshal(index.raw, &reference); err != nil {
-		return ""
-	}
-	return reference.RawPath
 }
 
 func firstNonEmptyString(values ...string) string {

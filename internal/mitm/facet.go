@@ -14,8 +14,8 @@ const FacetKey = "mitm"
 
 // Facet is the typed MITM-surface contribution attached to a
 // shared [logevent.Event] by code under internal/mitm. The struct
-// describes the transport surface that proxied the request and the
-// raw capture sidecar paths a downstream tool can read.
+// describes the transport surface that proxied the request and
+// carries no request or response bodies.
 type Facet struct {
 	Concern             string `json:"concern,omitempty"`
 	Transport           string `json:"transport,omitempty"`
@@ -24,9 +24,6 @@ type Facet struct {
 	CloseReason         string `json:"close_reason,omitempty"`
 	RequestContentType  string `json:"request_content_type,omitempty"`
 	ResponseContentType string `json:"response_content_type,omitempty"`
-	CapturePath         string `json:"capture_path,omitempty"`
-	RawRequestPath      string `json:"raw_request_path,omitempty"`
-	RawResponsePath     string `json:"raw_response_path,omitempty"`
 }
 
 // FacetKey returns the typed wire key for the MITM facet.
@@ -35,7 +32,7 @@ func (f Facet) FacetKey() string { return FacetKey }
 // FacetAttrs returns the slog attributes flushed under the MITM
 // facet group in the canonical request event.
 func (f Facet) FacetAttrs() []slog.Attr {
-	attrs := make([]slog.Attr, 0, 10)
+	attrs := make([]slog.Attr, 0, 7)
 	if f.Concern != "" {
 		attrs = append(attrs, slog.String("concern", f.Concern))
 	}
@@ -57,25 +54,14 @@ func (f Facet) FacetAttrs() []slog.Attr {
 	if f.ResponseContentType != "" {
 		attrs = append(attrs, slog.String("response_content_type", f.ResponseContentType))
 	}
-	if f.CapturePath != "" {
-		attrs = append(attrs, slog.String("capture_path", f.CapturePath))
-	}
-	if f.RawRequestPath != "" {
-		attrs = append(attrs, slog.String("raw_request_path", f.RawRequestPath))
-	}
-	if f.RawResponsePath != "" {
-		attrs = append(attrs, slog.String("raw_response_path", f.RawResponsePath))
-	}
 	return attrs
 }
 
 // SinkHints reports the typed sink-routing hints the MITM facet
-// contributes. RawRequestPath or RawResponsePath being non-empty
-// implies the event references raw capture sidecars that must
-// mirror to the raw sink.
+// contributes. The MITM facet routes only to the concern sink, so it
+// contributes no extra hints.
 func (f Facet) SinkHints() logevent.SinkHints {
 	return logevent.SinkHints{
-		HasRawCapture:        f.RawRequestPath != "" || f.RawResponsePath != "",
 		NeedsProviderSidecar: false,
 	}
 }

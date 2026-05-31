@@ -6,7 +6,6 @@ import "fmt"
 type LoggingConfig struct {
 	Level      string            `json:"level,omitempty" toml:"level,omitempty"`
 	Rotation   LoggingRotation   `json:"rotation,omitzero" toml:"rotation,omitempty"`
-	RawCapture LoggingToggle     `json:"raw_capture,omitzero" toml:"raw_capture,omitempty"`
 	Cleanup    LoggingCleanup    `json:"cleanup,omitzero" toml:"cleanup,omitempty"`
 	Request    LoggingRequest    `json:"request,omitzero" toml:"request,omitempty"`
 	Inventory  LoggingInventory  `json:"inventory,omitzero" toml:"inventory,omitempty"`
@@ -32,7 +31,6 @@ type LoggingSinks struct {
 	Audit            LoggingSinkOverride `json:"audit,omitzero" toml:"audit,omitempty"`
 	Concerns         LoggingSinkOverride `json:"concerns,omitzero" toml:"concerns,omitempty"`
 	Transcripts      LoggingSinkOverride `json:"transcripts,omitzero" toml:"transcripts,omitempty"`
-	MITMRaw          LoggingSinkOverride `json:"mitm_raw,omitzero" toml:"mitm_raw,omitempty"`
 	Inventory        LoggingSinkOverride `json:"inventory_index,omitzero" toml:"inventory_index,omitempty"`
 }
 
@@ -55,8 +53,6 @@ func (s *LoggingSinks) Override(name string) (LoggingSinkOverride, bool) {
 		return s.Concerns, true
 	case LoggingSinkTranscripts:
 		return s.Transcripts, true
-	case LoggingSinkMITMRaw:
-		return s.MITMRaw, true
 	case LoggingSinkInventory:
 		return s.Inventory, true
 	default:
@@ -94,8 +90,6 @@ func (s *LoggingSinks) setOverride(name string, override LoggingSinkOverride) er
 		s.Concerns = override
 	case LoggingSinkTranscripts:
 		s.Transcripts = override
-	case LoggingSinkMITMRaw:
-		s.MITMRaw = override
 	case LoggingSinkInventory:
 		s.Inventory = override
 	default:
@@ -132,8 +126,6 @@ const (
 	LoggingSinkConcerns = "concerns"
 	// LoggingSinkTranscripts names the per-chat transcript sink.
 	LoggingSinkTranscripts = "transcripts"
-	// LoggingSinkMITMRaw names the MITM raw payload sink.
-	LoggingSinkMITMRaw = "mitm_raw"
 	// LoggingSinkInventory names the inventory index sink.
 	LoggingSinkInventory = "inventory_index"
 )
@@ -151,9 +143,6 @@ const (
 	// LoggingSinkDefaultTranscript marks a sink whose default-enabled state is
 	// additionally gated by [LoggingTranscript.IsEnabled].
 	LoggingSinkDefaultTranscript
-	// LoggingSinkDefaultRawCapture marks a sink whose default-enabled state is
-	// additionally gated by logging.raw_capture.enabled.
-	LoggingSinkDefaultRawCapture
 )
 
 // LoggingSinkSpec is one declarative row in the canonical sink registry. The
@@ -176,7 +165,6 @@ var loggingSinkSpecs = []LoggingSinkSpec{
 	{Name: LoggingSinkAudit, DefaultRule: LoggingSinkDefaultAlwaysOn},
 	{Name: LoggingSinkConcerns, DefaultRule: LoggingSinkDefaultAlwaysOn},
 	{Name: LoggingSinkTranscripts, DefaultRule: LoggingSinkDefaultTranscript},
-	{Name: LoggingSinkMITMRaw, DefaultRule: LoggingSinkDefaultRawCapture},
 	{Name: LoggingSinkInventory, DefaultRule: LoggingSinkDefaultAlwaysOn},
 }
 

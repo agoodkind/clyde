@@ -12,7 +12,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -367,12 +366,11 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 	logger := slog.New(newMITMCaptureTestHandler(t, cfg.CaptureDir))
 	proxy := &Proxy{
 		log:             logger,
-		client:          http.DefaultClient,
+		httpClient:      http.DefaultClient,
 		dialContext:     nil,
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
@@ -387,12 +385,11 @@ func newWebsocketRequestLogProxy(t *testing.T, captureDir string, logger *slog.L
 	t.Helper()
 	proxy := &Proxy{
 		log:             logger,
-		client:          http.DefaultClient,
+		httpClient:      http.DefaultClient,
 		dialContext:     nil,
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},

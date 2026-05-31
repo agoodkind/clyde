@@ -55,7 +55,6 @@ func (f Facet) FacetAttrs() []slog.Attr {
 // provider sidecar sink.
 func (f Facet) SinkHints() logevent.SinkHints {
 	return logevent.SinkHints{
-		HasRawCapture:        false,
 		NeedsProviderSidecar: true,
 	}
 }

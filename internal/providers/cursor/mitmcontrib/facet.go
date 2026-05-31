@@ -50,12 +50,9 @@ func (f Facet) FacetAttrs() []slog.Attr {
 }
 
 // SinkHints reports the Cursor facet contributes no extra sink
-// routing on its own. Cursor traffic flows through the MITM
-// surface, whose [internal/mitm.Facet] reports any raw-capture
-// sidecar paths.
+// routing on its own. Cursor traffic flows through the MITM surface.
 func (f Facet) SinkHints() logevent.SinkHints {
 	return logevent.SinkHints{
-		HasRawCapture:        false,
 		NeedsProviderSidecar: false,
 	}
 }

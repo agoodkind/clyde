@@ -51,7 +51,6 @@ func (f Facet) FacetAttrs() []slog.Attr {
 // SinkHints reports that Cursor ingress identity does not add sinks.
 func (f Facet) SinkHints() logevent.SinkHints {
 	return logevent.SinkHints{
-		HasRawCapture:        false,
 		NeedsProviderSidecar: false,
 	}
 }
