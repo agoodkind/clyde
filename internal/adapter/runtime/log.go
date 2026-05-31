@@ -119,12 +119,15 @@ func LogCompleted(log *slog.Logger, ctx context.Context, attrs CompletedAttrs) {
 
 // StartedAttrs is part of Clyde's typed adapter surface.
 type StartedAttrs struct {
-	Provider    string
-	Backend     string
-	RequestID   string
-	Alias       string
-	ModelID     string
-	Stream      bool
+	Provider  string
+	Backend   string
+	RequestID string
+	Alias     string
+	ModelID   string
+	Stream    bool
+	// Ingress names the adapter listener the request arrived on
+	// ("openai" or "cursor"); empty when the split is not configured.
+	Ingress     string
 	Correlation correlation.Context
 }
 
@@ -144,6 +147,7 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 		slog.String("alias", attrs.Alias),
 		slog.String("model", attrs.ModelID),
 		slog.Bool("stream", attrs.Stream),
+		slog.String("ingress", attrs.Ingress),
 	}
 	logAttrs = append(logAttrs, corr.Attrs()...)
 	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.started", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, logAttrs...)...)
@@ -166,12 +170,15 @@ func LogStarted(log *slog.Logger, ctx context.Context, sink RequestEventSink, at
 
 // StreamOpenedAttrs is part of Clyde's typed adapter surface.
 type StreamOpenedAttrs struct {
-	Provider    string
-	Backend     string
-	RequestID   string
-	Alias       string
-	ModelID     string
-	Stream      bool
+	Provider  string
+	Backend   string
+	RequestID string
+	Alias     string
+	ModelID   string
+	Stream    bool
+	// Ingress names the adapter listener the request arrived on
+	// ("openai" or "cursor"); empty when the split is not configured.
+	Ingress     string
 	Correlation correlation.Context
 }
 
@@ -191,6 +198,7 @@ func LogStreamOpened(log *slog.Logger, ctx context.Context, sink RequestEventSin
 		slog.String("alias", attrs.Alias),
 		slog.String("model", attrs.ModelID),
 		slog.Bool("stream", attrs.Stream),
+		slog.String("ingress", attrs.Ingress),
 	}
 	logAttrs = append(logAttrs, corr.Attrs()...)
 	log.LogAttrs(ctx, slog.LevelInfo, "adapter.request.stream_opened", append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, logAttrs...)...)

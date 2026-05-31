@@ -62,6 +62,7 @@ func (s *Server) emitRequestStarted(ctx context.Context, req *adapterresolver.Re
 		RequestID: reqID,
 		Alias:     resolvedRequestAlias(req),
 		ModelID:   modelID,
+		Ingress:   ingressLabelFromContext(ctx),
 		Stream:    stream, Correlation: correlation.
 				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})
@@ -78,6 +79,7 @@ func (s *Server) emitRequestStreamOpened(ctx context.Context, req *adapterresolv
 		RequestID: reqID,
 		Alias:     resolvedRequestAlias(req),
 		ModelID:   modelID,
+		Ingress:   ingressLabelFromContext(ctx),
 		Stream:    stream, Correlation: correlation.
 				Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
 	})

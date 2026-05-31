@@ -330,6 +330,20 @@ func (s *Server) Addr() string {
 	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(port))
 }
 
+// CursorIngressAddr returns the listen address for the optional Cursor BYOK
+// ingress listener, or empty when [config.AdapterConfig.CursorIngressPort] is
+// not set. Requests arriving on this address are tagged ingress=cursor.
+func (s *Server) CursorIngressAddr() string {
+	if s.cfg.CursorIngressPort <= 0 {
+		return ""
+	}
+	host := s.cfg.Host
+	if host == "" {
+		host = DefaultHost
+	}
+	return net.JoinHostPort(normalizeListenHost(host), strconv.Itoa(s.cfg.CursorIngressPort))
+}
+
 func normalizeListenHost(host string) string {
 	trimmed := strings.TrimSpace(host)
 	if len(trimmed) >= 2 && strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {

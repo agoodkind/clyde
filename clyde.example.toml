@@ -74,6 +74,12 @@ daemon = ""
 enabled = true
 direct_oauth = true
 default_model = "clyde-opus-4-8"
+# Optional second adapter listener for Cursor BYOK. When set, requests arriving
+# on this port are tagged ingress=cursor while the primary port (default 11434)
+# is tagged ingress=openai, separating Cursor traffic from generic
+# OpenAI-compatible clients for accounting. It changes nothing about
+# translation, routing, or error mapping. Omit to bind only the primary port.
+cursor_ingress_port = 11435
 
 [adapter.notices]
 enabled = true

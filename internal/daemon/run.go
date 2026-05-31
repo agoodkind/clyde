@@ -45,6 +45,9 @@ const (
 
 	listenerNameDaemon  = "daemon"
 	listenerNameAdapter = "adapter"
+	// listenerNameAdapterCursor keys the optional second adapter listener
+	// (Cursor BYOK ingress) for reload file-descriptor inheritance.
+	listenerNameAdapterCursor = "adapter.cursor"
 	// listenerNameMITMPrefix prefixes each per-listener MITM reload key. The
 	// daemon keys inherited file descriptors and per-listener proxies by
 	// listenerNameMITMPrefix+<listener id> so a reload restores one FD per
@@ -195,9 +198,10 @@ func runStartupCleanup(log *slog.Logger, cfg *config.Config) {
 }
 
 type runtimeServices struct {
-	listener        net.Listener
-	adapter         *adapter.Server
-	adapterListener net.Listener
+	listener              net.Listener
+	adapter               *adapter.Server
+	adapterListener       net.Listener
+	adapterCursorListener net.Listener
 	// mitmProxies holds one running proxy per configured MITM listener,
 	// keyed by listener id. mitmListeners holds the matching bound sockets
 	// keyed by the same id; a "localhost" listener binds two loopback sockets
@@ -230,15 +234,16 @@ func startRuntime(
 		return nil, err
 	}
 	runtime := &runtimeServices{
-		listener:        listener,
-		adapter:         nil,
-		adapterListener: nil,
-		mitmProxies:     map[string]*mitm.Proxy{},
-		mitmListeners:   map[string][]net.Listener{},
-		captureStore:    nil,
-		errors:          make(chan error, 3),
-		reloadMu:        sync.Mutex{},
-		reloadDrain:     nil,
+		listener:              listener,
+		adapter:               nil,
+		adapterListener:       nil,
+		adapterCursorListener: nil,
+		mitmProxies:           map[string]*mitm.Proxy{},
+		mitmListeners:         map[string][]net.Listener{},
+		captureStore:          nil,
+		errors:                make(chan error, 3),
+		reloadMu:              sync.Mutex{},
+		reloadDrain:           nil,
 	}
 	if cfg.MITM.EnabledDefault {
 		if err := startMITM(ctx, cfg, log, runtime, inherited.listeners); err != nil {
@@ -250,14 +255,15 @@ func startRuntime(
 		return nil, fmt.Errorf("mitm listener inherited but mitm is disabled; full daemon restart required")
 	}
 	if cfg.Adapter.Enabled {
-		server, adapterListener, err := startAdapter(ctx, cfg, log, stats, runtime.captureStore, runtime.errors, inherited.listeners[listenerNameAdapter])
+		server, adapterListener, adapterCursorListener, err := startAdapter(ctx, cfg, log, stats, runtime.captureStore, runtime.errors, inherited.listeners[listenerNameAdapter], inherited.listeners[listenerNameAdapterCursor])
 		if err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
 			return nil, err
 		}
 		runtime.adapter = server
 		runtime.adapterListener = adapterListener
-	} else if inherited.listeners[listenerNameAdapter] != nil {
+		runtime.adapterCursorListener = adapterCursorListener
+	} else if inherited.listeners[listenerNameAdapter] != nil || inherited.listeners[listenerNameAdapterCursor] != nil {
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("adapter listener inherited but adapter is disabled; full daemon restart required")
 	}
@@ -376,7 +382,8 @@ func startAdapter(
 	store *capture.Store,
 	errCh chan<- error,
 	inherited net.Listener,
-) (*adapter.Server, net.Listener, error) {
+	inheritedCursor net.Listener,
+) (*adapter.Server, net.Listener, net.Listener, error) {
 	deps := adapter.Deps{
 		ScratchDir:                ensureScratchDir,
 		RequestEvents:             stats.record,
@@ -389,20 +396,23 @@ func startAdapter(
 	server, err := adapter.New(ctx, cfg.Adapter, cfg.Logging, deps, log)
 	if err != nil {
 		log.WarnContext(ctx, "daemon.adapter.init_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
-		return nil, nil, fmt.Errorf("adapter init: %w", err)
+		return nil, nil, nil, fmt.Errorf("adapter init: %w", err)
 	}
-	listener := inherited
-	if listener != nil {
-		if got, want := listener.Addr().String(), server.Addr(); got != want {
-			return nil, nil, fmt.Errorf("adapter inherited listener address %s does not match config %s; full daemon restart required", got, want)
-		}
-	} else {
-		listenConfig := net.ListenConfig{}
-		listener, err = listenConfig.Listen(ctx, "tcp", server.Addr())
+	primary, err := bindOrInheritAdapterListener(ctx, log, server.Addr(), inherited)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var cursor net.Listener
+	if cursorAddr := server.CursorIngressAddr(); cursorAddr != "" {
+		cursor, err = bindOrInheritAdapterListener(ctx, log, cursorAddr, inheritedCursor)
 		if err != nil {
-			log.WarnContext(ctx, "daemon.adapter.listen_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "addr", server.Addr(), "err", err)
-			return nil, nil, fmt.Errorf("adapter listen %s: %w", server.Addr(), err)
+			_ = primary.Close()
+			return nil, nil, nil, err
 		}
+	}
+	listeners := []net.Listener{primary}
+	if cursor != nil {
+		listeners = append(listeners, cursor)
 	}
 	go func() {
 		defer func() {
@@ -410,12 +420,31 @@ func startAdapter(
 				log.ErrorContext(ctx, "daemon.adapter.serve_panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
-		if serveErr := server.StartOnListener(ctx, listener); serveErr != nil {
+		if serveErr := server.StartOnListeners(ctx, listeners...); serveErr != nil {
 			errCh <- serveErr
 		}
 	}()
-	log.InfoContext(ctx, "daemon.adapter.started", "concern", "process.daemon.lifecycle", "component", "daemon", "addr", listener.Addr().String())
-	return server, listener, nil
+	log.InfoContext(ctx, "daemon.adapter.started", "concern", "process.daemon.lifecycle", "component", "daemon", "addr", primary.Addr().String())
+	return server, primary, cursor, nil
+}
+
+// bindOrInheritAdapterListener returns the inherited listener when its address
+// matches addr (reload reuses the socket with no bind gap), rejecting a changed
+// address with a restart-required error, and otherwise binds a fresh listener.
+func bindOrInheritAdapterListener(ctx context.Context, log *slog.Logger, addr string, inherited net.Listener) (net.Listener, error) {
+	if inherited != nil {
+		if got := inherited.Addr().String(); got != addr {
+			return nil, fmt.Errorf("adapter inherited listener address %s does not match config %s; full daemon restart required", got, addr)
+		}
+		return inherited, nil
+	}
+	listenConfig := net.ListenConfig{}
+	listener, err := listenConfig.Listen(ctx, "tcp", addr)
+	if err != nil {
+		log.WarnContext(ctx, "daemon.adapter.listen_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "addr", addr, "err", err)
+		return nil, fmt.Errorf("adapter listen %s: %w", addr, err)
+	}
+	return listener, nil
 }
 
 func getAuth(cfg *config.Config, log *slog.Logger) func(adapterresolver.ProviderID) adapterprovider.AuthLookup {
@@ -575,6 +604,9 @@ func inheritedListenerFiles(runtime *runtimeServices) ([]*os.File, []daemonsuper
 	if runtime.adapterListener != nil {
 		listeners = append(listeners, namedListener{name: listenerNameAdapter, lis: runtime.adapterListener})
 	}
+	if runtime.adapterCursorListener != nil {
+		listeners = append(listeners, namedListener{name: listenerNameAdapterCursor, lis: runtime.adapterCursorListener})
+	}
 	mitmIDs := make([]string, 0, len(runtime.mitmListeners))
 	for id := range runtime.mitmListeners {
 		mitmIDs = append(mitmIDs, id)
@@ -646,6 +678,11 @@ func validateReloadListenerConfig(runtime *runtimeServices) error {
 	if runtime.adapterListener != nil && runtime.adapter != nil {
 		if got, want := runtime.adapterListener.Addr().String(), runtime.adapter.Addr(); got != want {
 			return fmt.Errorf("adapter listen address changed from %s to %s; full daemon restart required", got, want)
+		}
+	}
+	if runtime.adapterCursorListener != nil && runtime.adapter != nil {
+		if got, want := runtime.adapterCursorListener.Addr().String(), runtime.adapter.CursorIngressAddr(); got != want {
+			return fmt.Errorf("adapter cursor ingress listener changed from %s to %s; full daemon restart required", got, want)
 		}
 	}
 	if len(runtime.mitmListeners) > 0 && !cfg.MITM.EnabledDefault {

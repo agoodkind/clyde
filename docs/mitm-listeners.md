@@ -30,3 +30,20 @@ proxy, so they never feed the wire baseline.
 
 `clyde mitm status` lists every listener with its bound sockets and reports
 whether each socket is up.
+
+## Adapter ingress ports
+
+The adapter HTTP listener is a separate surface from the MITM listeners above.
+It can bind two ports so the port a request arrives on records which client
+class it is, for accounting only; the split changes nothing about translation,
+routing, or error mapping.
+
+| id | port | traffic |
+| --- | --- | --- |
+| ingress.openai | 11434 | generic OpenAI-compatible clients (`[adapter].port`); tagged `ingress=openai` |
+| ingress.cursor | 11435 | Cursor BYOK (`[adapter].cursor_ingress_port`); tagged `ingress=cursor` |
+
+The Cursor port binds only when `[adapter].cursor_ingress_port` is set; with it
+unset the adapter binds the primary port alone and every request is tagged
+`ingress=openai`. The `ingress` label is recorded on the
+`adapter.request.started` and `adapter.request.stream_opened` events.

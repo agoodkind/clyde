@@ -34,35 +34,88 @@ func (s *Server) Start(ctx context.Context) error {
 // underlying TCP connection on force-close.
 type ingressConnKey struct{}
 
-// StartOnListener serves the adapter on an already-bound listener.
-// Daemon reload uses this to inherit the existing adapter socket
-// without creating a bind gap.
+// ingressLabelKey is the context key carrying the ingress label
+// ("openai" or "cursor") derived from the listener a request arrived on.
+type ingressLabelKey struct{}
+
+// ingressLabelFromContext returns the ingress label stamped by
+// [Server.StartOnListeners], or empty when the split is not configured.
+func ingressLabelFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ingressLabelKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// ingressLabel maps an accepted connection to its ingress label by the
+// local port it landed on: the configured Cursor ingress port is tagged
+// "cursor", every other adapter port is tagged "openai".
+func (s *Server) ingressLabel(c net.Conn) string {
+	localPort := 0
+	if tcpAddr, ok := c.LocalAddr().(*net.TCPAddr); ok {
+		localPort = tcpAddr.Port
+	}
+	return ingressLabelForPort(s.cfg.CursorIngressPort, localPort)
+}
+
+// ingressLabelForPort returns "cursor" when localPort matches the configured
+// Cursor ingress port (and that port is set), otherwise "openai".
+func ingressLabelForPort(cursorPort, localPort int) string {
+	if cursorPort > 0 && localPort == cursorPort {
+		return "cursor"
+	}
+	return "openai"
+}
+
+// StartOnListener serves the adapter on a single already-bound listener.
+// Daemon reload uses this to inherit the existing adapter socket without
+// creating a bind gap.
 func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
+	return s.StartOnListeners(ctx, lis)
+}
+
+// StartOnListeners serves the adapter on one or more already-bound
+// listeners that share the single HTTP server and mux. Each accepted
+// connection is tagged with an ingress label by its local port, so the
+// generic OpenAI-compatible port and the Cursor BYOK port are
+// distinguishable in request telemetry without any change to translation,
+// routing, or error mapping.
+func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener) error {
+	if len(listeners) == 0 {
+		return fmt.Errorf("adapter: no listeners to serve")
+	}
 	s.httpSrv = &http.Server{
-		Addr:              lis.Addr().String(),
+		Addr:              listeners[0].Addr().String(),
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ConnContext: func(connCtx context.Context, c net.Conn) context.Context {
-			return context.WithValue(connCtx, ingressConnKey{}, c)
+			connCtx = context.WithValue(connCtx, ingressConnKey{}, c)
+			return context.WithValue(connCtx, ingressLabelKey{}, s.ingressLabel(c))
 		},
 	}
-	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter listening", slog.String("concern", "process.daemon.listeners"), slog.String("addr", lis.Addr().String()),
+	addrs := make([]string, 0, len(listeners))
+	for _, lis := range listeners {
+		addrs = append(addrs, lis.Addr().String())
+	}
+	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter listening", slog.String("concern", "process.daemon.listeners"), slog.Any("addrs", addrs),
 		slog.Int("models", len(s.registry.List())),
 	)
-	errCh := make(chan error, 1)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				s.log.ErrorContext(ctx, "adapter.serve_panic", "concern", "adapter.http.errors", "subcomponent", "adapter",
-					"addr", lis.Addr().String(),
-					"err", fmt.Sprintf("panic: %v", recovered),
-					"panic", recovered,
-				)
-				errCh <- fmt.Errorf("adapter serve panic: %v", recovered)
-			}
-		}()
-		errCh <- s.httpSrv.Serve(lis)
-	}()
+	errCh := make(chan error, len(listeners))
+	for _, lis := range listeners {
+		go func(lis net.Listener) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					s.log.ErrorContext(ctx, "adapter.serve_panic", "concern", "adapter.http.errors", "subcomponent", "adapter",
+						"addr", lis.Addr().String(),
+						"err", fmt.Sprintf("panic: %v", recovered),
+						"panic", recovered,
+					)
+					errCh <- fmt.Errorf("adapter serve panic: %v", recovered)
+				}
+			}()
+			errCh <- s.httpSrv.Serve(lis)
+		}(lis)
+	}
 	select {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)

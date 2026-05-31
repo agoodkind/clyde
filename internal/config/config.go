@@ -34,8 +34,17 @@ type AdapterConfig struct {
 	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
 	// Host defaults to [::1] (loopback only).
 	Host string `json:"host,omitempty" toml:"host,omitempty"`
-	// Port defaults to 11434 (shared with Ollama conventions).
+	// Port defaults to 11434 (shared with Ollama conventions). Requests
+	// arriving on this port are tagged ingress=openai.
 	Port int `json:"port,omitempty" toml:"port,omitempty"`
+	// CursorIngressPort, when greater than zero, binds a second adapter
+	// listener on Host:port. Requests arriving there are tagged
+	// ingress=cursor while the primary Port is tagged ingress=openai, so
+	// Cursor BYOK traffic is separated from generic OpenAI-compatible
+	// clients for accounting. It changes nothing about translation,
+	// routing, or error mapping. Zero (default) binds only the primary
+	// listener.
+	CursorIngressPort int `json:"cursorIngressPort,omitempty" toml:"cursor_ingress_port,omitempty"`
 	// DefaultModel is the fallback when a request does not name one.
 	DefaultModel string `json:"defaultModel,omitempty" toml:"default_model,omitempty"`
 	// MaxConcurrent caps concurrently handled adapter requests.
