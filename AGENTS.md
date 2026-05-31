@@ -135,7 +135,7 @@ The adapter HTTP listener serves three route families. They share the listener, 
 | Native Anthropic | `/v1/messages`, `/v1/messages/count_tokens` | Code shipped, untested in production. Proposed for cross-provider use. |
 | Health | `/healthz`, `/` | Ops only. |
 
-The MITM proxy is a separate surface, not an adapter route. It runs on its own listener under `internal/mitm/`, acts as a forward proxy for arbitrary HTTPS targets, and is not subject to the adapter error boundary.
+The MITM proxy is a separate surface, not an adapter route. It runs on its own per-client listeners under `internal/mitm/`, one loopback port per traffic type (see `docs/mitm-listeners.md`), acts as a forward proxy for arbitrary HTTPS targets, and is not subject to the adapter error boundary.
 
 ### Routing rules
 
@@ -180,7 +180,7 @@ Default log paths are under `$XDG_STATE_HOME/clyde`; when `XDG_STATE_HOME` is un
 - Main CLI log: `clyde-cli.jsonl`.
 - Concern logs: `logs/<concern-path>.jsonl`.
 - Dedicated Codex sidecar log: `codex.jsonl`, unless `CLYDE_CODEX_LOG_PATH` overrides it.
-- MITM capture store: `mitm/capture.db` (SQLite; full decoded request/response bodies plus per-request metadata, one row per exchange with a side table for bodies).
+- MITM capture store: `mitm/capture.db` (SQLite; full decoded request/response bodies plus per-request metadata, one row per exchange with a side table for bodies; each row is tagged by `client` (the listener id, or `adapter.<provider>` for in-code BYOK egress) and an autoclassified `concern`).
 - MITM wire legs: `logs/providers/mitm/wire.jsonl` via the `providers.mitm.wire` concern; join to capture.db rows on `request_id`/`trace_id`.
 - macOS LaunchAgent stderr/stdout fallback: `daemon.log`.
 
