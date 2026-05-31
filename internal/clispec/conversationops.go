@@ -55,6 +55,15 @@ func (searchConversationInput) isClispecInput() {}
 func (analyzeResultsInput) isClispecInput()     {}
 func (exportInput) isClispecInput()             {}
 
+// conversationGroup is the terminal parent the six conversation operations
+// attach under. The MCP tool names stay verbose; only the terminal grouping
+// and short verbs come from here.
+var conversationGroup = &Group{
+	Use:   "conversation",
+	Short: "Inspect Claude and Codex conversations",
+	Long:  "",
+}
+
 var exportFormatValues = []string{
 	string(conv.ExportFormatMarkdown),
 	string(conv.ExportFormatHTML),
@@ -73,7 +82,8 @@ var whitespaceValues = []string{
 // prints tab-separated rows; the MCP tool returns a counted bullet list.
 func listConversationsOp() Operation[listConversationsInput] {
 	return Operation[listConversationsInput]{
-		Name:     Name{Canonical: "list_conversations"},
+		Name:     Name{Canonical: "list_conversations", CLIOverride: "list"},
+		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "List Claude and Codex conversations.",
 		Long:     "",
@@ -119,7 +129,8 @@ func listConversationsOp() Operation[listConversationsInput] {
 // getConversationOp prints a conversation transcript as plain text.
 func getConversationOp() Operation[getConversationInput] {
 	return Operation[getConversationInput]{
-		Name:     Name{Canonical: "get_conversation"},
+		Name:     Name{Canonical: "get_conversation", CLIOverride: "get"},
+		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Get plain text from a conversation.",
 		Long:     "",
@@ -156,7 +167,8 @@ func getConversationOp() Operation[getConversationInput] {
 // getContextOp prints the messages around a point in a conversation.
 func getContextOp() Operation[getContextInput] {
 	return Operation[getContextInput]{
-		Name:     Name{Canonical: "get_context"},
+		Name:     Name{Canonical: "get_context", CLIOverride: "context"},
+		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Get messages around a point in a conversation.",
 		Long:     "",
@@ -217,7 +229,8 @@ func getContextOp() Operation[getContextInput] {
 // searchConversationOp searches one conversation and caches the results.
 func searchConversationOp() Operation[searchConversationInput] {
 	return Operation[searchConversationInput]{
-		Name:     Name{Canonical: "search_conversation"},
+		Name:     Name{Canonical: "search_conversation", CLIOverride: "search"},
+		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Search a conversation and return a result_id for follow-up analysis.",
 		Long:     "",
@@ -258,7 +271,8 @@ func searchConversationOp() Operation[searchConversationInput] {
 // analyzeResultsOp runs the local analysis model over cached search results.
 func analyzeResultsOp() Operation[analyzeResultsInput] {
 	return Operation[analyzeResultsInput]{
-		Name:     Name{Canonical: "analyze_results"},
+		Name:     Name{Canonical: "analyze_results", CLIOverride: "analyze"},
+		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Analyze cached results from clyde_search_conversation.",
 		Long:     "",
@@ -295,7 +309,8 @@ func exportTranscriptOp() Operation[exportInput] {
 	outputPathParam.CLIOnly = true
 
 	return Operation[exportInput]{
-		Name:     Name{Canonical: "export_transcript"},
+		Name:     Name{Canonical: "export_transcript", CLIOverride: "export"},
+		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
 		Long:     "",

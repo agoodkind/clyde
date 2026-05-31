@@ -21,8 +21,8 @@ func TestRootNoArgsShowsHelp(t *testing.T) {
 	if !strings.Contains(output, "Usage:") {
 		t.Fatalf("help output missing Usage: %q", output)
 	}
-	if !strings.Contains(output, "list-conversations") {
-		t.Fatalf("help output missing conversation commands: %q", output)
+	if !strings.Contains(output, "conversation") {
+		t.Fatalf("help output missing conversation parent: %q", output)
 	}
 }
 
@@ -43,17 +43,17 @@ func TestRootUnknownCommandErrors(t *testing.T) {
 func TestRootRegistersConversationCommands(t *testing.T) {
 	factory, _, _ := testFactory()
 	root := newRoot(factory)
-	expected := []string{
-		"list-conversations",
-		"get-conversation",
-		"get-context",
-		"search-conversation",
-		"analyze-results",
-		"export-transcript",
+	expected := [][]string{
+		{"conversation", "list"},
+		{"conversation", "get"},
+		{"conversation", "context"},
+		{"conversation", "search"},
+		{"conversation", "analyze"},
+		{"conversation", "export"},
 	}
-	for _, name := range expected {
-		if _, _, err := root.Find([]string{name}); err != nil {
-			t.Fatalf("root command %q not registered: %v", name, err)
+	for _, path := range expected {
+		if _, _, err := root.Find(path); err != nil {
+			t.Fatalf("conversation command %v not registered: %v", path, err)
 		}
 	}
 }

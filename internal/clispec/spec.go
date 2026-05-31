@@ -45,16 +45,25 @@ type SurfaceSet struct {
 }
 
 // Name carries one canonical operation identity and derives both spellings.
-// The terminal spelling uses dashes; the MCP spelling uses underscores with
-// a clyde_ prefix. Both spellings are derived, never typed by hand, so the
-// two front ends cannot drift on naming.
+// The MCP tool name is always the canonical form with the clyde_ prefix. The
+// terminal command name defaults to the dash-spelled canonical but an
+// operation can override it with a shorter verb that reads better under a
+// parent command, for example "get" under a "conversation" parent rather than
+// "get-conversation" at the root.
 type Name struct {
 	// Canonical is snake_case without the clyde_ prefix, e.g. get_conversation.
 	Canonical string
+	// CLIOverride is an optional short terminal verb. Empty means derive from
+	// Canonical by replacing underscores with dashes.
+	CLIOverride string
 }
 
-// CLI returns the dash-spelled terminal command name, e.g. get-conversation.
+// CLI returns the terminal command name. It uses CLIOverride when set and
+// otherwise derives the name from Canonical.
 func (n Name) CLI() string {
+	if n.CLIOverride != "" {
+		return n.CLIOverride
+	}
 	return strings.ReplaceAll(n.Canonical, "_", "-")
 }
 
@@ -62,6 +71,15 @@ func (n Name) CLI() string {
 // clyde_get_conversation.
 func (n Name) MCP() string {
 	return "clyde_" + n.Canonical
+}
+
+// Group declares a terminal parent command that one or more operations attach
+// under. Operations sharing the same *Group value land as subcommands of one
+// rendered parent.
+type Group struct {
+	Use   string
+	Short string
+	Long  string
 }
 
 // Input is the constraint for per-operation input structs. Each input type
@@ -75,9 +93,12 @@ type Input interface {
 
 // Operation is one declared command. I is the per-operation input struct that
 // both adapters decode into. New returns a zeroed input pre-populated with
-// defaults. Run is the single shared work function.
+// defaults. Run is the single shared work function. Group is nil for a
+// root-level operation and otherwise points at the parent the operation
+// attaches under.
 type Operation[I Input] struct {
 	Name     Name
+	Group    *Group
 	Surfaces SurfaceSet
 	Short    string
 	Long     string
@@ -94,11 +115,13 @@ type Operation[I Input] struct {
 // closed interface rather than through map[string]any.
 type renderable interface {
 	surfaceSet() SurfaceSet
+	group() *Group
 	cobraCommand(f *cli.Factory) *cobra.Command
 	mcpTool() (mcp.Tool, server.ToolHandlerFunc)
 }
 
 func (op Operation[I]) surfaceSet() SurfaceSet { return op.Surfaces }
+func (op Operation[I]) group() *Group          { return op.Group }
 
 // Registry is the one ordered list of every command. It holds two entry
 // kinds: full operations that render to both front ends, and pointers to

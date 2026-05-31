@@ -65,11 +65,6 @@ func TestConversationAlignment(t *testing.T) {
 		}
 		tool, _ := op.mcpTool()
 
-		wantTool := "clyde_" + strings.ReplaceAll(cmd.Name(), "-", "_")
-		if tool.Name != wantTool {
-			t.Errorf("tool name: got %q, want %q (from command %q)", tool.Name, wantTool, cmd.Name())
-		}
-
 		props := propertyNames(tool.InputSchema.Properties)
 		cliInputs := union(positionals, flags)
 
@@ -93,6 +88,32 @@ func TestConversationAlignment(t *testing.T) {
 				t.Errorf("%s: positional %q is not required on the mcp surface", tool.Name, name)
 			}
 		}
+	}
+}
+
+// TestRenderCobraGroupsConversationOps confirms RenderCobra emits exactly one
+// "conversation" parent at the root that owns the six short-verb children. It
+// pins the grouped surface shape so a stray ungrouped operation, a missing
+// verb, or a regressed parent name fails closed.
+func TestRenderCobraGroupsConversationOps(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	roots := RenderCobra(NewConversationRegistry(), testFactory(&out))
+	if len(roots) != 1 {
+		t.Fatalf("root commands: got %d, want 1 (the conversation parent)", len(roots))
+	}
+	parent := roots[0]
+	if parent.Name() != "conversation" {
+		t.Fatalf("parent name: got %q, want %q", parent.Name(), "conversation")
+	}
+	wantChildren := []string{"analyze", "context", "export", "get", "list", "search"}
+	var gotChildren []string
+	for _, child := range parent.Commands() {
+		gotChildren = append(gotChildren, child.Name())
+	}
+	sort.Strings(gotChildren)
+	if strings.Join(gotChildren, ",") != strings.Join(wantChildren, ",") {
+		t.Fatalf("conversation children: got %v, want %v", gotChildren, wantChildren)
 	}
 }
 
