@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/config"
 	conv "goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/homedir"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -435,15 +435,5 @@ func findNearestMessage(messages []transcript.Message, rawTimestamp string) int 
 }
 
 func shortPath(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if path == home {
-		return "~"
-	}
-	if strings.HasPrefix(path, home+"/") {
-		return "~/" + path[len(home)+1:]
-	}
-	return path
+	return homedir.Contract(path)
 }
