@@ -11,12 +11,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
-	cliconversation "goodkind.io/clyde/internal/cli/conversation"
 	"goodkind.io/clyde/internal/cli/daemon"
 	"goodkind.io/clyde/internal/cli/logs"
 	"goodkind.io/clyde/internal/cli/mcp"
 	cliMITM "goodkind.io/clyde/internal/cli/mitm"
 	"goodkind.io/clyde/internal/cli/output"
+	"goodkind.io/clyde/internal/clispec"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logpolicy"
 	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
@@ -82,13 +82,15 @@ func newRoot(f *cli.Factory) *cobra.Command {
 
 	cli.RegisterGlobalFlags(root)
 	output.PersistentFlag(root)
-	for _, command := range cliconversation.NewCommands(f) {
+
+	reg := clispec.NewConversationRegistry()
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewCmd})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: logs.NewCmd})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliMITM.NewCmd})
+	reg.AddHandwritten(clispec.HandwrittenCommand{Build: mcp.NewCmd})
+	for _, command := range clispec.RenderCobra(reg, f) {
 		root.AddCommand(command)
 	}
-	root.AddCommand(daemon.NewCmd(f))
-	root.AddCommand(logs.NewCmd(f))
-	root.AddCommand(cliMITM.NewCmd(f))
-	root.AddCommand(mcp.NewCmd(f))
 	return root
 }
 

@@ -48,13 +48,8 @@ Do not add stale snapshots of command tables, schemas, request payloads, local m
 
 - Running `clyde` with no arguments must show help.
 - Unknown arguments must fail through Cobra/help. Do not forward unknown arguments to provider CLIs.
-- Keep the CLI and MCP operation sets aligned:
-  - `clyde_list_conversations`
-  - `clyde_get_conversation`
-  - `clyde_get_context`
-  - `clyde_search_conversation`
-  - `clyde_analyze_results`
-  - `clyde_export_transcript`
+- Each conversation operation is declared once in `internal/clispec` and rendered onto both the terminal command and the MCP tool. Add or change an operation there, not in two places.
+- The CLI and MCP operation sets stay aligned structurally. `internal/clispec/alignment_test.go` reads the one registry and fails if an operation, parameter, or required flag exists on one surface but not the other, so there is no separate list to maintain here.
 
 ## Daemon Reload
 
