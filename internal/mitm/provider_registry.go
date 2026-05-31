@@ -95,11 +95,11 @@ type ExchangeDiagnostic struct {
 // ExchangeDiagnostician is an optional extension a [Provider] may
 // implement when it decodes provider-specific diagnostics from an
 // intercepted exchange. The generic forward path type-asserts the
-// claiming provider to this interface after the unified capture leg is
+// claiming provider to this interface after the capture leg is
 // recorded and, when present, invokes DiagnoseExchange so the provider
-// can emit its own structured diagnostic on its wire concern log. The
-// hook never writes the unified capture.jsonl; it only logs. Providers
-// that decode nothing (Claude, Codex) do not implement it.
+// can emit its own structured diagnostic on its wire concern log; it
+// only logs. Providers that decode nothing (Claude, Codex) do not
+// implement it.
 type ExchangeDiagnostician interface {
 	DiagnoseExchange(ctx context.Context, log *slog.Logger, exchange ExchangeDiagnostic)
 }

@@ -47,7 +47,7 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 		},
 		CaptureDir: t.TempDir(),
 	}
-	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, listener)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test")
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 		_ = proxy.Serve()
 	}()
 
-	connectClient(t, proxy.BaseURL(), upstreamAddr)
+	connectClient(t, proxy.base, upstreamAddr)
 	waitForCount(t, proxy, 1, 2*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -113,7 +113,7 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 		},
 		CaptureDir: t.TempDir(),
 	}
-	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, listener)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test")
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 		_ = proxy.Serve()
 	}()
 
-	clientConn := openConnectTunnel(t, proxy.BaseURL(), upstreamAddr)
+	clientConn := openConnectTunnel(t, proxy.base, upstreamAddr)
 	defer func() { _ = clientConn.Close() }()
 	waitForCount(t, proxy, 1, 2*time.Second)
 
@@ -203,12 +203,11 @@ func TestRegisterPlainHTTPDecouplesUpstreamFromInboundContext(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	proxy := &Proxy{
 		log:             logger,
-		client:          http.DefaultClient,
+		httpClient:      http.DefaultClient,
 		dialContext:     nil,
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		rawCaptureSeq:   atomic.Uint64{},
 		Tunnels:         newTestTunnelRegistry(),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{},

@@ -3,6 +3,7 @@ package mitm
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	_ "github.com/mattn/go-sqlite3" // database/sql driver "sqlite3"
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
@@ -44,12 +46,29 @@ type Section struct {
 	Matches []string `json:"matches"`
 }
 
-// RawSection lists raw-byte capture file paths discovered under the MITM
-// capture directory for one lookup pass.
-type RawSection struct {
-	Source string   `json:"source"`
-	Path   string   `json:"path"`
-	Files  []string `json:"files"`
+// CaptureSection lists SQLite capture-store rows whose correlation ids match
+// the looked-up id for one lookup pass.
+type CaptureSection struct {
+	Source string       `json:"source"`
+	Path   string       `json:"path"`
+	Rows   []CaptureRow `json:"rows"`
+}
+
+// CaptureRow is the typed projection of one `requests` row the show command
+// surfaces. Bodies live in the side table and are not loaded here.
+type CaptureRow struct {
+	Timestamp         int64  `json:"ts"`
+	Client            string `json:"client"`
+	Provider          string `json:"provider"`
+	Concern           string `json:"concern"`
+	Host              string `json:"host"`
+	Method            string `json:"method"`
+	Path              string `json:"path"`
+	Status            int    `json:"status"`
+	RequestID         string `json:"request_id"`
+	UpstreamRequestID string `json:"upstream_request_id"`
+	SessionID         string `json:"session_id"`
+	TraceID           string `json:"trace_id"`
 }
 
 // Correlation captures the resolved correlation context after a lookup. Each
@@ -64,10 +83,10 @@ type Correlation struct {
 
 // LookupPass is the result of one lookup against a single id.
 type LookupPass struct {
-	ID       string      `json:"id"`
-	Sections []Section   `json:"sections"`
-	Raw      RawSection  `json:"raw"`
-	Found    Correlation `json:"found"`
+	ID       string         `json:"id"`
+	Sections []Section      `json:"sections"`
+	Capture  CaptureSection `json:"capture"`
+	Found    Correlation    `json:"found"`
 }
 
 // ShowOutput is the typed JSON document emitted by clyde mitm show.
@@ -107,7 +126,7 @@ func newShowCmdWithLoader(f *cli.Factory, loadConfig func() (*config.Config, err
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "show <id>",
-		Short: "Print log lines and MITM raw-capture paths that correlate to one request id",
+		Short: "Print log lines and MITM capture-store rows that correlate to one request id",
 		Long: "Show searches Clyde adapter, daemon, and MITM per-concern wire logs for any line " +
 			"that mentions the given id. The id may be a Clyde request id (chatcmpl-<hex>), " +
 			"a Cursor request id (UUID), or an Anthropic upstream request id (req_<token>); " +
@@ -155,13 +174,13 @@ func runShow(ctx context.Context, out io.Writer, cfg *config.Config, inputID str
 	case IDKindAny:
 	}
 
-	firstPass := runOnePass(sources, inputID)
+	firstPass := runOnePass(ctx, sources, inputID)
 	mergeCorrelation(&correlation, firstPass.Found)
 
 	passes := []LookupPass{firstPass}
 
 	if kind != IDKindUpstream && correlation.UpstreamRequestID != "" && correlation.UpstreamRequestID != inputID {
-		secondPass := runOnePass(sources, correlation.UpstreamRequestID)
+		secondPass := runOnePass(ctx, sources, correlation.UpstreamRequestID)
 		mergeCorrelation(&correlation, secondPass.Found)
 		passes = append(passes, secondPass)
 	}
@@ -197,13 +216,12 @@ type sourceSet struct {
 	mitmWire            string
 	mitmErrors          string
 	mitmLifecycle       string
-	mitmRawDir          string
+	captureDBPath       string
 }
 
 func resolveSources(cfg *config.Config) sourceSet {
 	concernRoot := slogger.DefaultConcernRoot(cfg.Logging, slogger.ProcessRoleDaemon)
 	daemonLog := slogger.DefaultProcessPath(cfg.Logging, slogger.ProcessRoleDaemon)
-	captureDir := expandHomeLocal(strings.TrimSpace(cfg.MITM.CaptureDir))
 	return sourceSet{
 		adapterAnthropicReq: filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernAdapterProviderAnthReq)),
 		adapterHTTPErrors:   filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernAdapterHTTPErrors)),
@@ -212,17 +230,17 @@ func resolveSources(cfg *config.Config) sourceSet {
 		mitmWire:            filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMWire)),
 		mitmErrors:          filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMErrors)),
 		mitmLifecycle:       filepath.Join(concernRoot, slogger.ConcernRelPath(slogger.ConcernProviderMITMLifecycle)),
-		mitmRawDir:          filepath.Join(captureDir, "raw"),
+		captureDBPath:       strings.TrimSpace(cfg.MITM.CaptureStore.DBPath),
 	}
 }
 
 // runOnePass searches every configured source for literal substring matches
 // of id and updates the correlation context from each matched JSONL line.
-func runOnePass(sources sourceSet, id string) LookupPass {
+func runOnePass(ctx context.Context, sources sourceSet, id string) LookupPass {
 	pass := LookupPass{
 		ID:       id,
 		Sections: []Section{},
-		Raw:      RawSection{Source: "mitm raw capture files", Path: sources.mitmRawDir, Files: []string{}},
+		Capture:  CaptureSection{Source: "mitm capture store", Path: sources.captureDBPath, Rows: []CaptureRow{}},
 		Found: Correlation{
 			ClydeRequestID:    "",
 			CursorRequestID:   "",
@@ -250,7 +268,7 @@ func runOnePass(sources sourceSet, id string) LookupPass {
 	pass.Sections = append(pass.Sections, searchFile(
 		"mitm lifecycle concern log", sources.mitmLifecycle, id, sourceKindCapture, &pass.Found,
 	))
-	pass.Raw = searchRawDir(sources.mitmRawDir, id)
+	pass.Capture = searchCaptureStore(ctx, sources.captureDBPath, id, &pass.Found)
 	return pass
 }
 
@@ -310,48 +328,72 @@ func searchChatDir(dir, id string, found *Correlation) Section {
 	return section
 }
 
-// searchRawDir lists raw-byte capture files whose name encodes the id and any
-// sibling .metadata.jsonl file that references the id. The directory layout
-// is ${CaptureDir}/raw/<host>/. The walk is rooted with [os.Root] so
-// any symlink that escapes the capture dir cannot redirect a metadata read.
-func searchRawDir(dir, id string) RawSection {
-	raw := RawSection{Source: "mitm raw capture files", Path: dir, Files: []string{}}
-	if dir == "" {
-		return raw
+// searchCaptureStore returns every SQLite capture-store row whose request id,
+// upstream request id, session id, or trace id matches id, newest first. The
+// database is opened read-only and immutable so the lookup never contends with
+// the daemon's live writer. A missing database is reported as an empty section.
+func searchCaptureStore(ctx context.Context, dbPath, id string, found *Correlation) CaptureSection {
+	section := CaptureSection{Source: "mitm capture store", Path: dbPath, Rows: []CaptureRow{}}
+	if dbPath == "" {
+		return section
 	}
-	root, openErr := os.OpenRoot(dir)
+	if _, statErr := os.Stat(dbPath); statErr != nil {
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			slog.WarnContext(ctx, "cli.mitm.show.capture_stat_failed", "concern", "cli.mitm", "path", dbPath, "err", statErr)
+		}
+		return section
+	}
+	db, openErr := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&immutable=1&_busy_timeout=5000")
 	if openErr != nil {
-		if !errors.Is(openErr, fs.ErrNotExist) {
-			slog.Warn("cli.mitm.show.raw_open_failed", "concern", "cli.mitm", "dir", dir, "err", openErr)
-		}
-		return raw
+		slog.WarnContext(ctx, "cli.mitm.show.capture_open_failed", "concern", "cli.mitm", "path", dbPath, "err", openErr)
+		return section
 	}
-	defer func() { _ = root.Close() }()
-	rootFS := root.FS()
-	walkErr := fs.WalkDir(rootFS, ".", func(relPath string, entry fs.DirEntry, perEntryErr error) error {
-		if perEntryErr != nil {
-			return filepath.SkipDir
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		fullPath := filepath.Join(dir, relPath)
-		if strings.Contains(entry.Name(), id) {
-			raw.Files = append(raw.Files, fullPath)
-			return nil
-		}
-		if strings.HasSuffix(entry.Name(), ".metadata.jsonl") {
-			content, readErr := fs.ReadFile(rootFS, relPath)
-			if readErr == nil && strings.Contains(string(content), id) {
-				raw.Files = append(raw.Files, fullPath)
-			}
-		}
-		return nil
-	})
-	if walkErr != nil && !errors.Is(walkErr, fs.ErrNotExist) {
-		slog.Warn("cli.mitm.show.raw_walk_failed", "concern", "cli.mitm", "dir", dir, "err", walkErr)
+	defer func() { _ = db.Close() }()
+	rows, queryErr := db.QueryContext(
+		ctx,
+		`SELECT ts, client, provider, concern, host, method, path, status,
+			request_id, upstream_request_id, session_id, trace_id
+		 FROM requests
+		 WHERE request_id=? OR upstream_request_id=? OR session_id=? OR trace_id=?
+		 ORDER BY ts DESC`,
+		id, id, id, id,
+	)
+	if queryErr != nil {
+		slog.WarnContext(ctx, "cli.mitm.show.capture_query_failed", "concern", "cli.mitm", "path", dbPath, "err", queryErr)
+		return section
 	}
-	return raw
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var row CaptureRow
+		if scanErr := rows.Scan(
+			&row.Timestamp, &row.Client, &row.Provider, &row.Concern, &row.Host, &row.Method, &row.Path, &row.Status,
+			&row.RequestID, &row.UpstreamRequestID, &row.SessionID, &row.TraceID,
+		); scanErr != nil {
+			slog.WarnContext(ctx, "cli.mitm.show.capture_scan_failed", "concern", "cli.mitm", "path", dbPath, "err", scanErr)
+			continue
+		}
+		section.Rows = append(section.Rows, row)
+		updateCorrelationFromCaptureRow(row, found)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		slog.WarnContext(ctx, "cli.mitm.show.capture_rows_failed", "concern", "cli.mitm", "path", dbPath, "err", rowsErr)
+	}
+	return section
+}
+
+// updateCorrelationFromCaptureRow fills any still-empty correlation slot from a
+// capture-store row. The store records the Cursor request id in request_id, so
+// it maps to the Cursor slot, matching the per-concern wire-log convention.
+func updateCorrelationFromCaptureRow(row CaptureRow, found *Correlation) {
+	if found.TraceID == "" && row.TraceID != "" {
+		found.TraceID = row.TraceID
+	}
+	if found.CursorRequestID == "" && row.RequestID != "" {
+		found.CursorRequestID = row.RequestID
+	}
+	if found.UpstreamRequestID == "" && row.UpstreamRequestID != "" {
+		found.UpstreamRequestID = row.UpstreamRequestID
+	}
 }
 
 // lineFields is the typed projection of the few correlation fields the show
@@ -427,7 +469,7 @@ func writeText(out io.Writer, output ShowOutput) {
 		for _, section := range pass.Sections {
 			writeSection(out, section)
 		}
-		writeRawSection(out, pass.Raw)
+		writeCaptureSection(out, pass.Capture)
 	}
 	_, _ = fmt.Fprintf(out, "\n=== correlation ===\n")
 	_, _ = fmt.Fprintf(out, "  clyde_request_id   : %s\n", emptyAsUnset(output.Correlation.ClydeRequestID))
@@ -448,15 +490,20 @@ func writeSection(out io.Writer, section Section) {
 	}
 }
 
-func writeRawSection(out io.Writer, raw RawSection) {
-	_, _ = fmt.Fprintf(out, "\n=== %s ===\n", raw.Source)
-	_, _ = fmt.Fprintf(out, "source: %s\n", raw.Path)
-	if len(raw.Files) == 0 {
+func writeCaptureSection(out io.Writer, capture CaptureSection) {
+	_, _ = fmt.Fprintf(out, "\n=== %s ===\n", capture.Source)
+	_, _ = fmt.Fprintf(out, "source: %s\n", capture.Path)
+	if len(capture.Rows) == 0 {
 		_, _ = fmt.Fprintln(out, "no matches")
 		return
 	}
-	for _, file := range raw.Files {
-		_, _ = fmt.Fprintln(out, file)
+	for _, row := range capture.Rows {
+		_, _ = fmt.Fprintf(
+			out, "%s %s %s %s %s %d req=%s upstream=%s session=%s trace=%s\n",
+			row.Provider, row.Client, row.Concern, row.Method, row.Path, row.Status,
+			emptyAsUnset(row.RequestID), emptyAsUnset(row.UpstreamRequestID),
+			emptyAsUnset(row.SessionID), emptyAsUnset(row.TraceID),
+		)
 	}
 }
 
@@ -465,30 +512,4 @@ func emptyAsUnset(value string) string {
 		return "unset"
 	}
 	return value
-}
-
-// expandHomeLocal mirrors config.expandHome so the CLI can normalize a tilde
-// prefix in MITMConfig.CaptureDir without depending on an internal config
-// helper. The config loader already expands user-supplied CA paths; the
-// CaptureDir field is normalized here so a "~/captures" override still
-// resolves to an absolute path on disk.
-func expandHomeLocal(path string) string {
-	if path == "" {
-		return path
-	}
-	if path == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
-		return home
-	}
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
-		return filepath.Join(home, path[2:])
-	}
-	return path
 }

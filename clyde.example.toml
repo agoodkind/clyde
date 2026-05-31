@@ -25,11 +25,11 @@ max_age_days = 14
 compress = false
 
 # Logging sinks. The canonical sink names are: daemon, cli, codex_sidecar,
-# anthropic_sidecar, audit, concerns, transcripts, mitm_raw, inventory_index.
-# Each sink is enabled by default (mitm_raw additionally requires
-# logging.raw_capture.enabled; transcripts additionally requires
+# anthropic_sidecar, audit, concerns, transcripts, inventory_index.
+# Each sink is enabled by default (transcripts additionally requires
 # logging.transcript.enabled). MITM wire events land in the per-concern file
-# logs/providers/mitm/wire.jsonl via the concerns sink.
+# logs/providers/mitm/wire.jsonl via the concerns sink; full MITM request and
+# response bodies persist to mitm/capture.db (see [mitm.capture_store]).
 #
 # Back-compatible flat form: restrict the active sink set to an explicit
 # allowlist. When set, only the listed sinks stay enabled.
@@ -275,6 +275,52 @@ max_output_tokens = 16000
 contexts = [
   { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
 ]
+
+# Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
+# ([mitm.app.<name>]). The table key is the client name; each gets its own
+# loopback port so every captured exchange in mitm/capture.db is tagged with the
+# originating client. The id lands in the capture `client` column as the
+# group-qualified "cli.<name>" / "app.<name>", so the same leaf name (codex) can
+# appear in both groups. One traffic type per port keeps the `client` tag
+# unambiguous. The full map lives in docs/mitm-listeners.md.
+
+# CLI model-API base URLs (passthrough; these capture the wire baseline source).
+[mitm.cli.claude-code]
+host = "localhost"
+port = 48723
+
+[mitm.cli.codex]
+host = "localhost"
+port = 48724
+
+# CLI everything-else via HTTPS_PROXY (telemetry, updates, and so on).
+[mitm.cli.claude-code-proxy]
+host = "localhost"
+port = 48728
+
+[mitm.cli.codex-proxy]
+host = "localhost"
+port = 48729
+
+# Codex CLI chatgpt_base_url backend (auth, cloud, analytics; codex auth bypasses
+# HTTPS_PROXY, so this is the only listener that captures it).
+[mitm.cli.codex-backend]
+host = "localhost"
+port = 48730
+
+# Desktop Electron shells (the apps' own non-CLI traffic; the embedded CLI rides
+# the cli.* listeners above).
+[mitm.app.cursor]
+host = "localhost"
+port = 48725
+
+[mitm.app.claude]
+host = "localhost"
+port = 48726
+
+[mitm.app.codex]
+host = "localhost"
+port = 48727
 
 # MITM baseline / drift loop.
 #

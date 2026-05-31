@@ -3,44 +3,47 @@ package mitm
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/homedir"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/slogger"
 )
 
 // Proxy is part of Clyde's typed adapter surface.
 type Proxy struct {
 	log         *slog.Logger
-	client      *http.Client
+	httpClient  *http.Client
 	dialContext func(context.Context, string, string) (net.Conn, error)
 
 	certMu sync.Mutex
 	ca     *certAuthority
 
 	tlsClientConfig *tls.Config
-	rawCaptureSeq   atomic.Uint64
 	requestLog      *logevent.Emitter
+
+	// store is the shared SQLite capture sink that persists each completed
+	// exchange. It may be nil (tests pass nil to skip capture); the capture
+	// package's Record guards a nil receiver, so callers need not branch.
+	store *capture.Store
+	// client is the coarse client population label (the listener's ID) that
+	// tags every capture.Record this proxy writes.
+	client string
 
 	// Tunnels tracks every long-lived MITM connection (CONNECT
 	// tunnels, intercepted provider TLS sessions, plain HTTP request
@@ -51,11 +54,16 @@ type Proxy struct {
 	// connections.
 	Tunnels *livetrack.Registry[TunnelMeta]
 
-	mu       sync.RWMutex
-	cfg      config.MITMConfig
-	base     string
-	listener net.Listener
-	server   *http.Server
+	mu  sync.RWMutex
+	cfg config.MITMConfig
+	// base is the loopback HTTP URL of the first bound listener, returned by
+	// BaseURL for in-process clients (the adapter egress).
+	base string
+	// listeners holds every socket this proxy serves. A "localhost" listener id
+	// binds two loopback sockets ([::1] and 127.0.0.1) served by this one proxy,
+	// so every captured exchange across them carries the same client tag.
+	listeners []net.Listener
+	server    *http.Server
 }
 
 // NewProxy constructs a Proxy bound to the supplied listener. The
@@ -63,19 +71,29 @@ type Proxy struct {
 // it until Shutdown returns. Callers must invoke Serve to start
 // accepting requests.
 //
+// store is the shared SQLite capture sink every proxy records completed
+// exchanges to; it may be nil to skip capture (the capture package guards a
+// nil receiver). client is the coarse client population label (the listener's
+// ID) that tags every record this proxy writes.
+//
 // The logging argument carries the typed request-emitter configuration
 // (required-leg overrides and incomplete-policy) the MITM emitter applies. A
 // zero-value [config.LoggingRequest] yields default required legs and the warn
 // policy, matching the adapter's behavior.
-func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listener net.Listener) (*Proxy, error) {
+func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listeners []net.Listener, store *capture.Store, client string) (*Proxy, error) {
 	TunnelMeta{
 		ConnectHost:   "",
 		UpstreamAddr:  "",
 		CaptureFile:   "",
 		KeepaliveSeen: false,
 	}.IsLivetrackMeta()
-	if listener == nil {
-		return nil, fmt.Errorf("mitm: listener is required")
+	if len(listeners) == 0 {
+		return nil, fmt.Errorf("mitm: at least one listener is required")
+	}
+	for index, listener := range listeners {
+		if listener == nil {
+			return nil, fmt.Errorf("mitm: listener %d is nil", index)
+		}
 	}
 	if log == nil {
 		log = slog.Default()
@@ -83,7 +101,8 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 	log = slogger.WithConcern(log, slogger.ConcernProviderMITMLifecycle)
 	ca, err := loadOrCreateCertAuthority(cfg.CA.CertPath, cfg.CA.KeyPath, time.Now)
 	if err != nil {
-		log.Warn("mitm.tls.ca_load_failed", "concern", "providers.mitm.wire", "cert_path", cfg.CA.CertPath,
+		log.Warn(
+			"mitm.tls.ca_load_failed", "concern", "providers.mitm.wire", "cert_path", cfg.CA.CertPath,
 			"key_path", cfg.CA.KeyPath,
 			"err", err,
 		)
@@ -91,17 +110,18 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 	}
 	p := &Proxy{
 		log:             log.With("component", "mitm"),
-		client:          http.DefaultClient,
+		httpClient:      http.DefaultClient,
 		dialContext:     (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 		certMu:          sync.Mutex{},
 		ca:              ca,
 		tlsClientConfig: nil,
-		rawCaptureSeq:   atomic.Uint64{},
 		requestLog: logevent.NewEmitter(
 			slogger.WithConcern(log, slogger.ConcernProviderMITMWire),
 			logevent.RequiredLegsFromStrings(logging.RequiredLegs),
 			mitmEmitterOptions(logging)...,
 		),
+		store:  store,
+		client: client,
 		Tunnels: livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
 			Component:     "mitm",
 			Concern:       slogger.ConcernProviderMITMLifecycle,
@@ -111,11 +131,11 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 			ParallelClose: false,
 			Now:           nil,
 		}),
-		mu:       sync.RWMutex{},
-		cfg:      cfg,
-		base:     "http://" + listener.Addr().String(),
-		listener: listener,
-		server:   nil,
+		mu:        sync.RWMutex{},
+		cfg:       cfg,
+		base:      "http://" + listeners[0].Addr().String(),
+		listeners: listeners,
+		server:    nil,
 	}
 	p.server = &http.Server{
 		Handler:           http.HandlerFunc(p.handle),
@@ -139,21 +159,38 @@ func mitmEmitterOptions(request config.LoggingRequest) []logevent.EmitterOption 
 	}
 }
 
-// Serve runs the proxy's HTTP server on its bound listener. It blocks
-// until Shutdown is called or the listener returns an unrecoverable
-// error.
+// Serve runs the proxy's HTTP server on every bound listener concurrently. It
+// blocks until Shutdown is called or a listener returns an unrecoverable error,
+// and returns the first non-[http.ErrServerClosed] error any listener produced.
+// A single [http.Server] may serve multiple listeners; its Shutdown closes all
+// of them, so the per-listener goroutines unblock together on drain.
 func (p *Proxy) Serve() error {
-	if p.listener == nil {
+	if len(p.listeners) == 0 {
 		return fmt.Errorf("mitm: proxy has no listener")
 	}
-	p.log.Info("mitm.proxy.started", "concern", "providers.mitm.lifecycle", "base_url", p.base,
+	p.log.Info(
+		"mitm.proxy.started", "concern", "providers.mitm.lifecycle", "base_url", p.base,
 		"capture_dir", p.cfg.CaptureDir,
 		"providers", p.cfg.Providers,
-		"raw_capture_enabled", p.cfg.RawCaptureEnabled,
+		"client", p.client,
+		"sockets", len(p.listeners),
 	)
-	if err := p.server.Serve(p.listener); err != nil && err != http.ErrServerClosed {
-		p.log.Error("mitm.proxy.serve_failed", "concern", "providers.mitm.wire", "err", err)
-		return fmt.Errorf("mitm serve: %w", err)
+	errs := make(chan error, len(p.listeners))
+	var wg sync.WaitGroup
+	for _, listener := range p.listeners {
+		wg.Go(func() {
+			if err := p.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+				p.log.Error("mitm.proxy.serve_failed", "concern", "providers.mitm.wire", "addr", listener.Addr().String(), "err", err)
+				errs <- fmt.Errorf("mitm serve %s: %w", listener.Addr().String(), err)
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -183,8 +220,10 @@ func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) e
 		return nil
 	}
 	if p.Tunnels == nil || p.Tunnels.Count() == 0 {
-		if err := p.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			return fmt.Errorf("close mitm listener: %w", err)
+		for _, listener := range p.listeners {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				return fmt.Errorf("close mitm listener %s: %w", listener.Addr().String(), err)
+			}
 		}
 		return nil
 	}
@@ -194,7 +233,8 @@ func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) e
 	}
 	if p.Tunnels != nil && (httpErr != nil || p.Tunnels.Count() > 0) {
 		result := p.Tunnels.DrainWith(ctx, "mitm.shutdown", opts)
-		p.log.InfoContext(ctx, "mitm.proxy.tunnels_drained", "concern", "providers.mitm.wire", "final", result.Final.String(),
+		p.log.InfoContext(
+			ctx, "mitm.proxy.tunnels_drained", "concern", "providers.mitm.wire", "final", result.Final.String(),
 			"remaining", result.Remaining,
 			"force_closed", result.ForceClosed,
 			"duration_ms", result.Duration.Milliseconds(),
@@ -212,20 +252,20 @@ func (p *Proxy) config() config.MITMConfig {
 	return p.cfg
 }
 
-// BaseURL returns the loopback HTTP URL clients should use to reach the
-// daemon-owned MITM proxy.
-func (p *Proxy) BaseURL() string { return p.base }
+// defaultCaptureBodyCap is the fallback response-body buffer cap when the
+// configured capture-store MaxBodyBytes is unset. It mirrors the capture
+// package's own default so a body that the store will persist in full is not
+// truncated by the proxy's response buffer first.
+const defaultCaptureBodyCap = 8 * 1024 * 1024
 
-// prepareCaptureWriters returns the per-request capture state. When raw
-// capture is enabled, it primes a sidecar response writer; otherwise it
-// returns a filtered inline summary index and nil writer.
-func (p *Proxy) prepareCaptureWriters(cfg config.MITMConfig, provider string, path string, body []byte) (captureBodyIndex, *failOpenRawCaptureWriter, error) {
-	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
-	if !cfg.RawCaptureEnabled {
-		return requestBodyIndex, nil, nil
+// captureBodyCap returns the number of response bytes the proxy buffers for
+// the capture store, defaulting to [defaultCaptureBodyCap] when the configured
+// store MaxBodyBytes is non-positive.
+func (p *Proxy) captureBodyCap(cfg config.MITMConfig) int {
+	if cfg.CaptureStore.MaxBodyBytes > 0 {
+		return cfg.CaptureStore.MaxBodyBytes
 	}
-	rawSetup := p.prepareRawHTTPCapture(cfg, provider, path, body)
-	return rawSetup.requestBodyIndex, rawSetup.responseRawWriter, rawSetup.responseRawError
+	return defaultCaptureBodyCap
 }
 
 // upstreamRequest captures the inbound request fields the proxy
@@ -262,7 +302,7 @@ func (p *Proxy) dispatchUpstream(upstreamCtx context.Context, w http.ResponseWri
 	}
 	copyHeaders(upReq.Header, req.header)
 	upReq.Host = ""
-	resp, err := p.client.Do(upReq)
+	resp, err := p.httpClient.Do(upReq)
 	if err != nil {
 		p.log.WarnContext(upstreamCtx, "mitm.proxy.upstream_failed", "concern", "providers.mitm.errors", "provider", req.provider, "path", req.path, "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -383,7 +423,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.Body.Close()
 
-	requestBodyIndex, responseRawWriter, responseRawError := p.prepareCaptureWriters(cfg, provider, r.URL.Path, body)
+	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
 	resp, ok := p.dispatchUpstream(upstreamCtx, w, upstreamRequest{
 		method:   r.Method,
 		path:     r.URL.RequestURI(),
@@ -400,33 +440,24 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 
 	forwardResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	capture := &limitedBuffer{
-		limit: 16 * 1024, buf: bytes.
-			Buffer{},
-	}
-	captureWriter := io.Writer(capture)
-	if responseRawWriter != nil {
-		captureWriter = io.MultiWriter(capture, responseRawWriter)
-	}
+	// Buffer the response up to the store body cap so the full body reaches
+	// the capture store while still streaming to the client. The wire-leg
+	// summary is derived from this same buffer (summarizeBody previews/caps).
+	captureBuffer := &limitedBuffer{limit: p.captureBodyCap(cfg), buf: bytes.Buffer{}}
 	flusher, _ := w.(http.Flusher)
-	copyErr := streamWithFlush(w, captureWriter, resp.Body, flusher, plainHTTPSession)
-	if responseRawWriter != nil {
-		responseRawWriter.Close()
-	}
+	copyErr := streamWithFlush(w, captureBuffer, resp.Body, flusher, plainHTTPSession)
 	duration := clock.Since(started)
 	if copyErr != nil {
 		p.log.Warn("mitm.proxy.copy_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", copyErr)
 	}
 	p.finalizePlainHTTPCapture(r, resp, plainHTTPCaptureFinalize{
-		cfg:               cfg,
-		provider:          provider,
-		upstream:          upstream,
-		requestBody:       body,
-		capture:           capture,
-		responseRawWriter: responseRawWriter,
-		responseRawError:  responseRawError,
-		requestBodyIndex:  requestBodyIndex,
-		duration:          duration,
+		cfg:              cfg,
+		provider:         provider,
+		upstream:         upstream,
+		requestBody:      body,
+		capture:          captureBuffer,
+		requestBodyIndex: requestBodyIndex,
+		duration:         duration,
 	})
 }
 
@@ -435,33 +466,35 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 // finalization out of [Proxy.handle] keeps that function under the funlen
 // ceiling while preserving the capture / drift / baseline-refresh ordering.
 type plainHTTPCaptureFinalize struct {
-	cfg               config.MITMConfig
-	provider          string
-	upstream          string
-	requestBody       []byte
-	capture           *limitedBuffer
-	responseRawWriter *failOpenRawCaptureWriter
-	responseRawError  error
-	requestBodyIndex  captureBodyIndex
-	duration          time.Duration
+	cfg              config.MITMConfig
+	provider         string
+	upstream         string
+	requestBody      []byte
+	capture          *limitedBuffer
+	requestBodyIndex captureBodyIndex
+	duration         time.Duration
 }
 
 // finalizePlainHTTPCapture decodes the buffered response, records the unified
-// HTTP capture leg, appends the drift-capture record for native upstreams, and
-// debounces a baseline refresh.
+// HTTP capture leg, persists the exchange to the SQLite capture store, appends
+// the drift-capture record for native upstreams, and debounces a baseline
+// refresh.
 func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, fin plainHTTPCaptureFinalize) {
 	captureBody, decoded := decodeForCapture(fin.capture.Bytes(), resp.Header.Get("Content-Encoding"))
 	if decoded {
-		p.log.Debug("mitm.capture.decoded", "concern", "providers.mitm.wire", "provider", fin.provider,
+		p.log.Debug(
+			"mitm.capture.decoded", "concern", "providers.mitm.wire", "provider", fin.provider,
 			"path", r.URL.Path,
 			"encoding", resp.Header.Get("Content-Encoding"),
 			"raw_bytes", len(fin.capture.Bytes()),
 			"decoded_bytes", len(captureBody),
 		)
 	}
-	responseBodyIndex, responseBodyLen := responseCaptureIndex(fin.cfg.RawCaptureEnabled, captureBody, fin.responseRawWriter, fin.responseRawError)
+	responseBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(captureBody))
+	responseBodyLen := int64(len(captureBody))
 
-	p.log.Info("mitm.capture.completed", "concern", "providers.mitm.wire", "provider", fin.provider,
+	p.log.Info(
+		"mitm.capture.completed", "concern", "providers.mitm.wire", "provider", fin.provider,
 		"path", r.URL.Path,
 		"status", resp.StatusCode,
 		"duration_ms", fin.duration.Milliseconds(),
@@ -480,6 +513,16 @@ func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, f
 		responseStatus: resp.StatusCode,
 		clientFacet:    nil,
 	})
+	p.recordCaptureStore(r, resp.Header, captureStoreInput{
+		provider:     fin.provider,
+		host:         r.Host,
+		method:       r.Method,
+		path:         r.URL.Path,
+		status:       resp.StatusCode,
+		requestBody:  fin.requestBody,
+		responseBody: captureBody,
+		duration:     fin.duration,
+	})
 	p.recordDriftCapture(fin.cfg, driftCaptureInput{
 		provider:    fin.provider,
 		method:      r.Method,
@@ -489,6 +532,58 @@ func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, f
 		body:        fin.requestBody,
 	})
 	queueBaselineRefresh(r.Context(), fin.cfg, fin.provider, p.log)
+}
+
+// captureStoreInput bundles the typed fields needed to build a
+// [capture.Record]. The proxy derives identity (request id, upstream request
+// id, session id, trace id) from the same provider identity extraction the
+// wire-leg emitter uses so a stored row joins back to its wire log.
+type captureStoreInput struct {
+	provider     string
+	host         string
+	method       string
+	path         string
+	status       int
+	requestBody  []byte
+	responseBody []byte
+	duration     time.Duration
+}
+
+// recordCaptureStore builds a [capture.Record] from the completed exchange and
+// hands it to the shared store. The store's Record is non-blocking and
+// nil-receiver-safe, so this fires unconditionally; a nil store is a no-op.
+func (p *Proxy) recordCaptureStore(r *http.Request, responseHeader http.Header, in captureStoreInput) {
+	contrib := extractIdentityContribution(r.Host, r.URL.Path, r.Header)
+	identity := mitmRequestIdentity(r.Header, contrib)
+	concern := resolveCaptureConcern(p.config().CaptureRules, captureConcernInput{
+		Provider:            in.provider,
+		Host:                in.host,
+		Method:              in.method,
+		Path:                in.path,
+		RequestContentType:  r.Header.Get("Content-Type"),
+		ResponseContentType: responseHeader.Get("Content-Type"),
+	})
+	p.store.Record(capture.Record{
+		Timestamp:         clock.Now(),
+		Client:            p.client,
+		Provider:          in.provider,
+		Concern:           concern,
+		Host:              in.host,
+		Method:            in.method,
+		Path:              in.path,
+		Status:            in.status,
+		RequestID:         identity.RequestID,
+		UpstreamRequestID: identity.UpstreamRequestID,
+		SessionID:         identity.SessionID,
+		TraceID:           identity.TraceID,
+		RequestHeaders:    r.Header,
+		ResponseHeaders:   responseHeader,
+		RequestBody:       in.requestBody,
+		ResponseBody:      in.responseBody,
+		RequestType:       r.Header.Get("Content-Type"),
+		ResponseType:      responseHeader.Get("Content-Type"),
+		Duration:          in.duration,
+	})
 }
 
 // hopByHopHeader enumerates the response headers the MITM proxy
@@ -562,71 +657,6 @@ func newCaptureBodyIndexFromSummary(summary captureBodySummary) captureBodyIndex
 	return captureBodyIndex{raw: raw}
 }
 
-func newCaptureBodyIndexFromReference(reference rawBodyReference) captureBodyIndex {
-	raw, err := json.Marshal(reference)
-	if err != nil {
-		raw = json.RawMessage(`null`)
-	}
-	return captureBodyIndex{raw: raw}
-}
-
-type rawHTTPCaptureSetup struct {
-	requestBodyIndex  captureBodyIndex
-	responseRawWriter *failOpenRawCaptureWriter
-	responseRawError  error
-}
-
-func (p *Proxy) prepareRawHTTPCapture(cfg config.MITMConfig, provider string, path string, body []byte) rawHTTPCaptureSetup {
-	rawSetup := rawHTTPCaptureSetup{
-		requestBodyIndex:  newCaptureBodyIndexFromReference(rawBodyReferenceFromBytes(body, "", 0, fmt.Errorf("raw request sidecar was not prepared"))),
-		responseRawWriter: nil,
-		responseRawError:  nil,
-	}
-	requestRawPath, responseRawPath, err := p.nextHTTPCapturePaths(cfg.CaptureDir, provider, path)
-	if err != nil {
-		p.log.Warn("mitm.capture.raw_paths_failed", "concern", "providers.mitm.wire", "provider", provider, "path", path, "err", err)
-		rawSetup.responseRawError = err
-		return rawSetup
-	}
-	requestBytes, err := writeRawCaptureFile(requestRawPath, func(dst io.Writer) error {
-		if _, writeErr := dst.Write(body); writeErr != nil {
-			return fmt.Errorf("write raw request body: %w", writeErr)
-		}
-		return nil
-	})
-	rawSetup.requestBodyIndex = newCaptureBodyIndexFromReference(rawBodyReferenceFromBytes(body, requestRawPath, requestBytes, err))
-	if err != nil {
-		p.log.Warn("mitm.capture.raw_request_failed", "concern", "providers.mitm.wire", "provider", provider, "path", path, "err", err)
-	}
-	responseFile, err := os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
-	if err != nil {
-		p.log.Warn("mitm.capture.raw_response_open_failed", "concern", "providers.mitm.wire", "provider", provider, "path", path, "raw_path", responseRawPath, "err", err)
-		rawSetup.responseRawError = err
-		return rawSetup
-	}
-	rawSetup.responseRawWriter = newFailOpenRawCaptureWriter(p.log, responseRawPath, responseFile)
-	return rawSetup
-}
-
-func responseCaptureIndex(
-	rawCaptureEnabled bool,
-	captureBody []byte,
-	responseRawWriter *failOpenRawCaptureWriter,
-	responseRawError error,
-) (captureBodyIndex, int64) {
-	if !rawCaptureEnabled {
-		return newCaptureBodyIndexFromSummary(summarizeBody(captureBody)), int64(len(captureBody))
-	}
-	if responseRawWriter != nil {
-		return newCaptureBodyIndexFromReference(responseRawWriter.Reference()), responseRawWriter.Count()
-	}
-	if responseRawError == nil {
-		responseRawError = fmt.Errorf("raw response sidecar was not prepared")
-	}
-	ref := rawBodyReferenceFromBytes(captureBody, "", int64(len(captureBody)), responseRawError)
-	return newCaptureBodyIndexFromReference(ref), int64(len(captureBody))
-}
-
 func (p *Proxy) recordHTTPCapture(r *http.Request, responseHeader http.Header, input httpCaptureRecordInput) {
 	recorder := p.beginHTTPLogRecorder(r, &input)
 	ctx := r.Context()
@@ -656,32 +686,6 @@ func copyHeaders(dst, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
-}
-
-type rawBodyReference struct {
-	Mode         string   `json:"mode"`
-	RawPath      string   `json:"raw_path,omitempty"`
-	Bytes        int64    `json:"bytes"`
-	SHA256       string   `json:"sha256,omitempty"`
-	BodyType     string   `json:"body_type,omitempty"`
-	Keys         []string `json:"keys,omitempty"`
-	CaptureError string   `json:"capture_error,omitempty"`
-}
-
-func rawBodyReferenceFromBytes(body []byte, rawPath string, byteCount int64, err error) rawBodyReference {
-	ref := rawBodyReference{
-		Mode:         "raw_file",
-		RawPath:      rawPath,
-		Bytes:        byteCount,
-		SHA256:       sha256Hex(body),
-		BodyType:     bodyTypeForCapture(body),
-		Keys:         bodyKeysForCapture(body),
-		CaptureError: "",
-	}
-	if err != nil {
-		ref.CaptureError = err.Error()
-	}
-	return ref
 }
 
 func bodyTypeForCapture(body []byte) string {
@@ -719,68 +723,6 @@ func bodyKeysForCapture(body []byte) []string {
 	}
 	slices.Sort(keys)
 	return keys
-}
-
-type failOpenRawCaptureWriter struct {
-	log    *slog.Logger
-	path   string
-	file   *os.File
-	hash   hash.Hash
-	count  int64
-	failed bool
-}
-
-func newFailOpenRawCaptureWriter(log *slog.Logger, path string, file *os.File) *failOpenRawCaptureWriter {
-	return &failOpenRawCaptureWriter{
-		log:    log,
-		path:   path,
-		file:   file,
-		hash:   sha256.New(),
-		count:  0,
-		failed: false,
-	}
-}
-
-func (w *failOpenRawCaptureWriter) Write(chunk []byte) (int, error) {
-	_, _ = w.hash.Write(chunk)
-	if w.failed {
-		return len(chunk), nil
-	}
-	n, err := w.file.Write(chunk)
-	w.count += int64(n)
-	if err != nil {
-		w.failed = true
-		w.log.Warn("mitm.capture.raw_response_write_failed", "concern", "providers.mitm.wire", "raw_path", w.path, "err", err)
-		return len(chunk), nil
-	}
-	return len(chunk), nil
-}
-
-func (w *failOpenRawCaptureWriter) Close() {
-	if err := w.file.Close(); err != nil {
-		w.failed = true
-		w.log.Warn("mitm.capture.raw_response_close_failed", "concern", "providers.mitm.wire", "raw_path", w.path, "err", err)
-	}
-}
-
-func (w *failOpenRawCaptureWriter) Count() int64 {
-	return w.count
-}
-
-func (w *failOpenRawCaptureWriter) Reference() rawBodyReference {
-	ref := rawBodyReference{
-		Mode:         "raw_file",
-		RawPath:      w.path,
-		Bytes:        w.count,
-		SHA256:       hex.EncodeToString(w.hash.Sum(nil)),
-		BodyType:     "",
-		Keys:         nil,
-		CaptureError: "",
-	}
-	if w.failed {
-		ref.CaptureError = "raw response sidecar write failed"
-	}
-	return ref
 }
 
 func summarizeBody(body []byte) captureBodySummary {
@@ -920,25 +862,9 @@ func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher
 	}
 }
 
-// expandHome rewrites a leading "~" or "~/" in a path to the user's
-// home directory. Go's [os.MkdirAll] and [os.OpenFile] do not perform
-// shell-style tilde expansion, and TOML configs frequently use "~"
-// as a portable home marker. This helper closes that gap for the
-// capture_dir setting and any other path the proxy reads.
+// expandHome resolves a leading "~" in a proxy config path against the
+// user's home directory. It delegates to [homedir.Expand] so the tilde
+// expansion logic lives in exactly one place.
 func expandHome(path string) string {
-	if path == "" {
-		return path
-	}
-	if path == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return home
-		}
-		return path
-	}
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, path[2:])
-		}
-	}
-	return path
+	return homedir.Expand(path)
 }

@@ -29,9 +29,11 @@ func TestStatusCommandPrintsConfigAndListenerLiveness(t *testing.T) {
 	}
 	cfg := &config.Config{
 		MITM: config.MITMConfig{
-			Listen: config.MITMListenConfig{
-				Host: "[::1]",
-				Port: port,
+			Listeners: map[string]config.MITMListenerConfig{
+				"cursor": {
+					Host: "[::1]",
+					Port: port,
+				},
 			},
 			CA: config.MITMCAConfig{
 				CertPath: "/tmp/clyde-mitm-ca.crt",
@@ -56,7 +58,7 @@ func TestStatusCommandPrintsConfigAndListenerLiveness(t *testing.T) {
 		t.Fatal("dial was not called")
 	}
 	got := out.String()
-	wantAddr := "listen_address: [::1]:" + portStr
+	wantAddr := "listener[cursor] listen_address: [::1]:" + portStr
 	if !strings.Contains(got, wantAddr) {
 		t.Fatalf("expected %q in output: %q", wantAddr, got)
 	}
@@ -66,7 +68,7 @@ func TestStatusCommandPrintsConfigAndListenerLiveness(t *testing.T) {
 	if !strings.Contains(got, "ca_key_path: /tmp/clyde-mitm-ca.key") {
 		t.Fatalf("ca_key_path line missing: %q", got)
 	}
-	if !strings.Contains(got, "listener_up: true") {
+	if !strings.Contains(got, "listener[cursor] listener_up: true") {
 		t.Fatalf("listener_up should be true; got %q", got)
 	}
 }
@@ -74,8 +76,10 @@ func TestStatusCommandPrintsConfigAndListenerLiveness(t *testing.T) {
 func TestStatusCommandReportsListenerDownWhenDialFails(t *testing.T) {
 	cfg := &config.Config{
 		MITM: config.MITMConfig{
-			Listen: config.MITMListenConfig{Host: "[::1]", Port: 65535},
-			CA:     config.MITMCAConfig{CertPath: "/tmp/c", KeyPath: "/tmp/k"},
+			Listeners: map[string]config.MITMListenerConfig{
+				"cursor": {Host: "[::1]", Port: 65535},
+			},
+			CA: config.MITMCAConfig{CertPath: "/tmp/c", KeyPath: "/tmp/k"},
 		},
 	}
 	dial := func(_ string, _ string, _ time.Duration) (net.Conn, error) {
@@ -89,7 +93,7 @@ func TestStatusCommandReportsListenerDownWhenDialFails(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if !strings.Contains(out.String(), "listener_up: false") {
+	if !strings.Contains(out.String(), "listener[cursor] listener_up: false") {
 		t.Fatalf("listener_up should be false; got %q", out.String())
 	}
 }

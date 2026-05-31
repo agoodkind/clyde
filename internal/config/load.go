@@ -279,12 +279,6 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
-	rawCaptureEnabled := false
-	if cfg.Logging.RawCapture.Enabled != nil {
-		rawCaptureEnabled = *cfg.Logging.RawCapture.Enabled
-	}
-	cfg.MITM.RawCaptureEnabled = rawCaptureEnabled
-
 	if err := applyMITMDefaultsAndValidate(&cfg.MITM); err != nil {
 		return err
 	}
@@ -340,10 +334,6 @@ func applyLoggingCoreDefaults(logging *LoggingConfig) error {
 	if logging.Cleanup.Enabled == nil {
 		v := true
 		logging.Cleanup.Enabled = &v
-	}
-	if logging.RawCapture.Enabled == nil {
-		v := false
-		logging.RawCapture.Enabled = &v
 	}
 	return validateLoggingCleanup("logging.cleanup", logging.Cleanup)
 }
@@ -621,17 +611,15 @@ func applyMITMDefaultsAndValidate(mitm *MITMConfig) error {
 	if mitm.CaptureDir == "" {
 		mitm.CaptureDir = filepath.Join(DefaultStateDir(), "mitm")
 	}
-	if err := validateLoggingRotation("mitm.capture.rotation", mitm.Capture.Rotation); err != nil {
-		return err
-	}
 	captureRules, err := normalizeMITMCaptureRouteRules(mitm.CaptureRules)
 	if err != nil {
 		return err
 	}
 	mitm.CaptureRules = captureRules
-	if err := applyMITMListenDefaultsAndValidate(&mitm.Listen); err != nil {
+	if err := applyMITMListenerDefaultsAndValidate(mitm); err != nil {
 		return err
 	}
+	applyMITMCaptureStoreDefaults(&mitm.CaptureStore, mitm.CaptureDir)
 	if err := applyMITMCADefaultsAndValidate(&mitm.CA); err != nil {
 		return err
 	}
@@ -652,21 +640,38 @@ func normalizeMITMCaptureDir(captureDir string) string {
 const (
 	defaultMITMListenHost = "[::1]"
 	defaultMITMListenPort = 48723
+	defaultMITMListenerID = "default"
 )
 
-func applyMITMListenDefaultsAndValidate(listen *MITMListenConfig) error {
-	listen.Host = strings.TrimSpace(listen.Host)
-	if listen.Host == "" {
-		listen.Host = defaultMITMListenHost
+func normalizeMITMListener(id string, listener *MITMListenerConfig) error {
+	listener.ID = strings.TrimSpace(id)
+	if listener.ID == "" {
+		return fmt.Errorf("mitm listener has an empty id; listener names are required")
 	}
-	if listen.Port == 0 {
-		listen.Port = defaultMITMListenPort
+	listener.Host = strings.TrimSpace(listener.Host)
+	if listener.Host == "" {
+		listener.Host = defaultMITMListenHost
+	}
+	if listener.Port == 0 {
+		listener.Port = defaultMITMListenPort
 		return nil
 	}
-	if listen.Port < 0 || listen.Port > 65535 {
-		return fmt.Errorf("mitm.listen.port %d is outside the valid TCP port range 1-65535", listen.Port)
+	if listener.Port < 0 || listener.Port > 65535 {
+		return fmt.Errorf("mitm.%s.port %d is outside the valid TCP port range 1-65535", listener.ID, listener.Port)
 	}
 	return nil
+}
+
+// applyMITMCaptureStoreDefaults defaults the capture store DBPath to
+// <captureDir>/capture.db when unset. The remaining store fields default
+// inside the capture package when zero, so they are left untouched here.
+func applyMITMCaptureStoreDefaults(store *MITMCaptureStoreConfig, captureDir string) {
+	store.DBPath = strings.TrimSpace(store.DBPath)
+	if store.DBPath == "" {
+		store.DBPath = filepath.Join(captureDir, "capture.db")
+		return
+	}
+	store.DBPath = cleanExpandedPath(store.DBPath)
 }
 
 func applyMITMCADefaultsAndValidate(ca *MITMCAConfig) error {
@@ -755,16 +760,6 @@ func DefaultMITMCaptureRouteRules() []MITMCaptureRouteRule {
 			PathExact:           "",
 			PathPrefix:          "",
 			PathContains:        "FileSync",
-			ContentTypeContains: "",
-		},
-		{
-			Concern:             "unknown",
-			Provider:            "",
-			Host:                "",
-			Method:              "",
-			PathExact:           "",
-			PathPrefix:          "",
-			PathContains:        "",
 			ContentTypeContains: "",
 		},
 	}

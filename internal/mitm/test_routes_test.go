@@ -6,11 +6,8 @@ import (
 	"testing"
 )
 
-// testRouteID identifies a built-in test-only [Provider]
-// registration that claims a path prefix and routes it to an
-// arbitrary upstream URL. Tests use this to redirect production
-// route shapes onto an httptest server without importing a
-// provider package from the generic MITM layer.
+// testRouteID identifies a built-in test-only [Provider] registered for
+// capture tests via [registerTestRoute].
 type testRouteID string
 
 const (
@@ -23,11 +20,13 @@ const (
 	testRouteProviderOpenAIBackend
 )
 
+// testRouteProvider is a typed test-only [Provider] that claims a single
+// plain-HTTP path prefix and routes it to a fixed upstream URL.
 type testRouteProvider struct {
-	id         ProviderID
-	label      string
-	pathPrefix string
-	upstream   string
+	id       ProviderID
+	provider string
+	upstream string
+	prefix   string
 }
 
 func (p testRouteProvider) ID() ProviderID { return p.id }
@@ -37,40 +36,29 @@ func (p testRouteProvider) ClassifyConnect(host string) ConnectClaim {
 }
 
 func (p testRouteProvider) ClassifyPlain(path string) PlainRouteClaim {
-	if !strings.HasPrefix(path, p.pathPrefix) {
-		return PlainRouteClaim{Claimed: false, Provider: "", UpstreamURL: ""}
+	if p.prefix != "" && strings.HasPrefix(path, p.prefix) {
+		return PlainRouteClaim{Claimed: true, Provider: p.provider, UpstreamURL: p.upstream}
 	}
-	return PlainRouteClaim{
-		Claimed:     true,
-		Provider:    p.label,
-		UpstreamURL: p.upstream,
-	}
+	return PlainRouteClaim{Claimed: false, Provider: "", UpstreamURL: ""}
 }
 
-func (testRouteProvider) ExtractIdentity(http.Header) IdentityContribution {
-	return IdentityContribution{
-		PreferredRequestID:         "",
-		PreferredUpstreamRequestID: "",
-		SessionID:                  "",
-		Facet:                      nil,
-	}
+func (p testRouteProvider) ExtractIdentity(h http.Header) IdentityContribution {
+	return IdentityContribution{}
 }
 
-// registerTestRoute registers a typed test-only provider that
-// claims the supplied path prefix and routes it to upstream.
-// Returns a cleanup function that unregisters the provider.
+// registerTestRoute registers a typed test-only provider that claims a plain
+// HTTP route to the supplied upstream for the duration of a test, returning a
+// cleanup func that unregisters it.
 func registerTestRoute(t *testing.T, id testRouteID, upstream string) func() {
 	t.Helper()
 	provider := testRouteProvider{
-		id:         providerIDForTestRoute(id),
-		label:      string(id),
-		pathPrefix: prefixForTestRoute(id),
-		upstream:   upstream,
+		id:       providerIDForTestRoute(id),
+		provider: providerNameForTestRoute(id),
+		upstream: upstream,
+		prefix:   prefixForTestRoute(id),
 	}
 	RegisterProviderFirst(provider)
-	return func() {
-		UnregisterProvider(provider.ID())
-	}
+	return func() { UnregisterProvider(provider.id) }
 }
 
 func providerIDForTestRoute(id testRouteID) ProviderID {
@@ -83,12 +71,22 @@ func providerIDForTestRoute(id testRouteID) ProviderID {
 	return ProviderIDUnknown
 }
 
+func providerNameForTestRoute(id testRouteID) string {
+	switch id {
+	case testRouteOpenAIV1:
+		return "openai"
+	case testRouteOpenAIBackend:
+		return "openai"
+	}
+	return ""
+}
+
 func prefixForTestRoute(id testRouteID) string {
 	switch id {
 	case testRouteOpenAIV1:
-		return "/v1/"
+		return "/v1"
 	case testRouteOpenAIBackend:
-		return "/backend-api/"
+		return "/backend-api"
 	}
-	return "/"
+	return ""
 }

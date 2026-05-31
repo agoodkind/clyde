@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +27,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -158,7 +159,12 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
-	proxy := startCursorMITMTestProxy(t, captureDir, cursorHost, upstream, true)
+	dbPath := filepath.Join(captureDir, "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	proxy := startCursorMITMTestProxy(t, captureDir, cursorHost, upstream, store)
 	defer proxy.shutdown()
 
 	caPool := x509.NewCertPool()
@@ -258,25 +264,56 @@ func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
 			t.Fatalf("JSONL metadata leaked authorization header: %#v", line)
 		}
 	}
-	mitmFields := mitmFieldsFromCaptureRecord(t, record)
-	requestRawPath := mitmFields["raw_request_path"].(string)
-	responseRawPath := mitmFields["raw_response_path"].(string)
-	wantRawPrefix := filepath.Join(captureDir, "concerns", "cursor.bidi", "raw", cursorHost)
-	if !strings.HasPrefix(requestRawPath, wantRawPrefix) || !strings.HasPrefix(responseRawPath, wantRawPrefix) {
-		t.Fatalf("raw paths = %q %q, want prefix %q", requestRawPath, responseRawPath, wantRawPrefix)
+	// The full decoded request/response bodies persist to the SQLite capture
+	// store, not to per-leg .raw files. Close flushes the writer queue so the
+	// row is committed before we query it.
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
 	}
-	assertFileMode(t, requestRawPath, rawCaptureFileMode)
-	assertFileMode(t, responseRawPath, rawCaptureFileMode)
-	rawRequest := readFile(t, requestRawPath)
-	if !bytes.Contains(rawRequest, []byte("POST /aiserver.v1.AiService/BidiAppend HTTP/1.1")) {
-		t.Fatalf("raw request missing request line")
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open verifier db: %v", err)
 	}
-	rawResponse := readFile(t, responseRawPath)
-	if len(rawResponse) <= 16*1024 {
-		t.Fatalf("raw response length = %d, want larger than old 16 KiB cap", len(rawResponse))
+	defer func() { _ = db.Close() }()
+
+	var (
+		gotClient   string
+		gotProvider string
+		gotConcern  string
+	)
+	row := db.QueryRow(`SELECT client, provider, concern FROM requests WHERE request_id=? ORDER BY ts DESC LIMIT 1`, requestID)
+	if err := row.Scan(&gotClient, &gotProvider, &gotConcern); err != nil {
+		t.Fatalf("scan request row: %v", err)
 	}
-	if !bytes.Contains(rawResponse, upstreamBody[:128]) {
-		t.Fatalf("raw response missing upstream payload prefix")
+	if gotClient != "test" {
+		t.Fatalf("client = %q want test", gotClient)
+	}
+	if gotProvider != "cursor" {
+		t.Fatalf("provider = %q want cursor", gotProvider)
+	}
+	if gotConcern != "cursor.bidi" {
+		t.Fatalf("concern = %q want cursor.bidi", gotConcern)
+	}
+
+	var storedResponse []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='response'`, requestID).Scan(&storedResponse); err != nil {
+		t.Fatalf("scan response body: %v", err)
+	}
+	if len(storedResponse) != len(upstreamBody) {
+		t.Fatalf("stored response length = %d want %d (full body, not the old 16 KiB cap)", len(storedResponse), len(upstreamBody))
+	}
+	if !bytes.Contains(storedResponse, upstreamBody[:128]) {
+		t.Fatalf("stored response missing upstream payload prefix")
+	}
+
+	var storedRequest []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='request'`, requestID).Scan(&storedRequest); err != nil {
+		t.Fatalf("scan request body: %v", err)
+	}
+	// The proxy decodes the gzip content-encoding before storing, so the
+	// sentinel prompt text is present in cleartext in the stored request body.
+	if !bytes.Contains(storedRequest, []byte(sentinel)) {
+		t.Fatalf("stored request body missing decoded sentinel payload")
 	}
 }
 
@@ -288,7 +325,7 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, true)
+	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
 	defer proxy.shutdown()
 
 	caPool := x509.NewCertPool()
@@ -364,7 +401,7 @@ func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, true)
+	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
 	defer proxy.shutdown()
 
 	caPool := x509.NewCertPool()
@@ -458,7 +495,7 @@ func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
 	defer upstream.Close()
 
 	captureDir := t.TempDir()
-	proxy := startCursorMITMTestProxy(t, captureDir, providerHost, upstream, true)
+	proxy := startCursorMITMTestProxy(t, captureDir, providerHost, upstream, nil)
 	defer proxy.shutdown()
 	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
 	proxy.proxy.log = logger
@@ -537,12 +574,13 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
 	proxy := &Proxy{
 		log:             logger,
-		client:          http.DefaultClient,
+		httpClient:      http.DefaultClient,
 		dialContext:     mappedDialContext(cursorHost+":443", upstreamAddr),
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
-		rawCaptureSeq:   atomic.Uint64{},
+		store:           nil,
+		client:          "test",
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		Tunnels:         newTestTunnelRegistry(),
 		mu:              sync.RWMutex{},
@@ -717,12 +755,13 @@ func startTestProxy(t *testing.T) *testProxy {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := &Proxy{
 		log:             logger,
-		client:          http.DefaultClient,
+		httpClient:      http.DefaultClient,
 		dialContext:     (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		rawCaptureSeq:   atomic.Uint64{},
+		store:           nil,
+		client:          "test",
 		Tunnels:         newTestTunnelRegistry(),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: t.TempDir()},
@@ -735,7 +774,7 @@ func startTestProxy(t *testing.T) *testProxy {
 	return &testProxy{server: server, proxy: p, addr: listener.Addr().String()}
 }
 
-func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server, rawCaptureEnabled bool) *testProxy {
+func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server, store *capture.Store) *testProxy {
 	t.Helper()
 	RegisterProviderFirst(testCursorProvider{host: cursorHost})
 	t.Cleanup(func() {
@@ -755,23 +794,23 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	if err != nil {
 		t.Fatalf("load ca: %v", err)
 	}
-	// The capture index sink handler turns LegMITMCaptureIndex leg
-	// events emitted through requestLog into capture.jsonl records, the
-	// same unified leg path claude and codex use. The proxy no longer
-	// owns a separate capture writer.
+	// MITM wire legs land in the per-concern providers/mitm/wire.jsonl file;
+	// full request/response bodies are persisted to the shared SQLite capture
+	// store. The proxy no longer owns a separate raw-file writer.
 	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
 	p := &Proxy{
 		log:             logger,
-		client:          http.DefaultClient,
+		httpClient:      http.DefaultClient,
 		dialContext:     mappedDialContext(cursorHost+":443", upstreamAddr),
 		certMu:          sync.Mutex{},
 		ca:              ca,
 		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
-		rawCaptureSeq:   atomic.Uint64{},
+		store:           store,
+		client:          "test",
 		Tunnels:         newTestTunnelRegistry(),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
-		cfg:             config.MITMConfig{CaptureDir: captureDir, RawCaptureEnabled: rawCaptureEnabled},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "http://" + listener.Addr().String(),
 		server:          nil,
 	}
@@ -843,7 +882,6 @@ func (f testCursorFacet) FacetAttrs() []slog.Attr {
 
 func (f testCursorFacet) SinkHints() logevent.SinkHints {
 	return logevent.SinkHints{
-		HasRawCapture:        false,
 		NeedsProviderSidecar: false,
 	}
 }
@@ -930,17 +968,6 @@ func waitForCaptureRecordWithLeg(t *testing.T, path string, leg logevent.Leg) []
 			t.Fatalf("timed out waiting for capture record with leg %s at %s", leg, path)
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func assertFileMode(t *testing.T, path string, want os.FileMode) {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	if got := info.Mode().Perm(); got != want {
-		t.Fatalf("%s mode = %#o want %#o", path, got, want)
 	}
 }
 

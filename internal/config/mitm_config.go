@@ -8,27 +8,57 @@ import (
 
 // MITMConfig configures the local capture proxy and its persistence.
 type MITMConfig struct {
-	EnabledDefault    bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
-	Providers         MITMProviderSet        `json:"providers,omitempty" toml:"providers,omitempty"`
-	RawCaptureEnabled bool                   `json:"-" toml:"-"`
-	CaptureDir        string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
-	Capture           MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
-	CaptureRules      []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
+	EnabledDefault bool                   `json:"enabledDefault,omitempty" toml:"enabled_default,omitempty"`
+	Providers      MITMProviderSet        `json:"providers,omitempty" toml:"providers,omitempty"`
+	CaptureDir     string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
+	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
+	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
 	// Hooks fire in TOML declaration order: matchHookRule returns the first
 	// [[mitm.hook]] whose host/method/path match, so the order [[mitm.hook]]
 	// blocks appear in the config file is the order they are evaluated and
 	// the first match wins. Config load preserves this slice order.
-	Hooks  []MITMHookRule   `json:"hooks,omitempty" toml:"hook,omitempty"`
-	Drift  MITMDriftConfig  `json:"drift,omitzero" toml:"drift,omitempty"`
-	Listen MITMListenConfig `json:"listen,omitzero" toml:"listen,omitempty"`
-	CA     MITMCAConfig     `json:"ca,omitzero" toml:"ca,omitempty"`
+	Hooks []MITMHookRule  `json:"hooks,omitempty" toml:"hook,omitempty"`
+	Drift MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
+	// App maps each desktop (Electron) client name to its MITM listen endpoint,
+	// declared as [mitm.app.<name>] (for example [mitm.app.cursor]). CLI maps
+	// each CLI client name, declared as [mitm.cli.<name>] (for example
+	// [mitm.cli.claude-code]). The two groups mirror the desktop-via-clyde
+	// config's [apps.*] / [clis.*] split.
+	App map[string]MITMListenerConfig `json:"app,omitempty" toml:"app,omitempty"`
+	CLI map[string]MITMListenerConfig `json:"cli,omitempty" toml:"cli,omitempty"`
+	// Listeners is the flattened, normalized id->endpoint map derived from App
+	// and CLI at load time under a group-qualified id ("app.<name>" /
+	// "cli.<name>"); it is not a TOML field. The daemon binds each address, tags
+	// every captured exchange with the id, and keys per-listener proxies and
+	// reload-inherited file descriptors from this map. An empty App and CLI
+	// default to a single "default" listener.
+	Listeners map[string]MITMListenerConfig `json:"listeners,omitempty"`
+	// CaptureStore configures the shared SQLite store that persists completed
+	// MITM exchanges.
+	CaptureStore MITMCaptureStoreConfig `json:"captureStore,omitzero" toml:"capture_store,omitempty"`
+	CA           MITMCAConfig           `json:"ca,omitzero" toml:"ca,omitempty"`
 }
 
-// MITMListenConfig configures the stable listen address of the in-process
-// MITM proxy.
-type MITMListenConfig struct {
+// MITMListenerConfig configures one MITM listen endpoint. ID is the coarse
+// client label that tags every captured exchange the listener serves (for
+// example "cursor", "claude-code", "codex-cli", "claude-app", "codex-app"). It
+// is populated from the [mitm.listeners.<id>] table key at load time and is not
+// itself a TOML field.
+type MITMListenerConfig struct {
+	ID   string `json:"id,omitempty"`
 	Host string `json:"host,omitempty" toml:"host,omitempty"`
 	Port int    `json:"port,omitempty" toml:"port,omitempty"`
+}
+
+// MITMCaptureStoreConfig configures the shared SQLite capture store that
+// persists completed MITM exchanges. DBPath defaults to <capture_dir>/capture.db;
+// the remaining fields default inside the capture package when zero.
+type MITMCaptureStoreConfig struct {
+	DBPath            string   `json:"dbPath,omitempty" toml:"db_path,omitempty"`
+	MaxBodyBytes      int      `json:"maxBodyBytes,omitempty" toml:"max_body_bytes,omitempty"`
+	RetentionMaxAge   Duration `json:"retentionMaxAge,omitempty" toml:"retention_max_age,omitempty"`
+	RetentionMaxBytes int64    `json:"retentionMaxBytes,omitempty" toml:"retention_max_bytes,omitempty"`
+	RetentionInterval Duration `json:"retentionInterval,omitempty" toml:"retention_interval,omitempty"`
 }
 
 // MITMCAConfig configures on-disk persistence of the MITM CA.
@@ -37,7 +67,9 @@ type MITMCAConfig struct {
 	KeyPath  string `json:"keyPath,omitempty"  toml:"key_path,omitempty"`
 }
 
-// MITMCapture configures MITM capture index file policy.
+// MITMCapture configures rotation of the drift-capture transcript that feeds
+// baseline learning. The full request/response exchange store is SQLite and is
+// configured under MITMCaptureStoreConfig.
 type MITMCapture struct {
 	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
 }

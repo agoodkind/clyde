@@ -354,20 +354,11 @@ func resolveHookMode(m config.MITMHookMode) config.MITMHookMode {
 }
 
 // writeHookResponse streams the hook's output body to the client connection.
-// When responseRawPath is set, it also appends the bytes to the raw sidecar.
-// The total bytes written to the client are returned for capture metadata.
-func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath string, log *slog.Logger) (int64, error) {
-	var responseFile *os.File
-	if responseRawPath != "" {
-		var err error
-		responseFile, err = os.OpenFile(responseRawPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, rawCaptureFileMode)
-		if err != nil {
-			log.Warn("mitm.hook.response.open_capture_failed", "concern", "providers.mitm.wire", "path", responseRawPath, "err", err)
-			return 0, fmt.Errorf("open raw hook response: %w", err)
-		}
-		defer func() { _ = responseFile.Close() }()
-	}
-
+// The total bytes written to the client are returned for capture metadata. Hook
+// responses are large binary download rewrites (for example Cursor and Claude
+// desktop update zips), so the body is forwarded straight through and is not
+// buffered into the SQLite capture store.
+func writeHookResponse(client *bufio.Writer, result *hookResult, log *slog.Logger) (int64, error) {
 	headers := http.Header{}
 	if result.Headers != nil {
 		headers = result.Headers.Clone()
@@ -380,7 +371,7 @@ func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath
 
 	statusLine := "HTTP/1.1 " + strconv.Itoa(result.Status) + " " + http.StatusText(result.Status) + "\r\n"
 	header := headerBlock(statusLine, headers)
-	written, err := writeProviderResponseBytes(client, responseFile, header, "hook header")
+	written, err := writeProviderResponseBytes(client, header, "hook header")
 	if err != nil {
 		return 0, err
 	}
@@ -388,7 +379,7 @@ func writeHookResponse(client *bufio.Writer, result *hookResult, responseRawPath
 	for {
 		n, readErr := result.Body.Read(buf)
 		if n > 0 {
-			count, err := writeProviderResponseBytes(client, responseFile, buf[:n], "hook body")
+			count, err := writeProviderResponseBytes(client, buf[:n], "hook body")
 			written += count
 			if err != nil {
 				return written, err
@@ -426,24 +417,21 @@ func nextHookRequestID() string {
 }
 
 // hookedProviderParams carries the per-request state the standard
-// provider request handler already computed (concern, raw capture
-// paths, request bytes) so the hook variant can reuse them without
-// recomputing. Bundling them in a struct keeps the call site readable
-// and avoids a ten-argument helper.
+// provider request handler already computed (concern, request bytes) so the
+// hook variant can reuse them without recomputing. Bundling them in a struct
+// keeps the call site readable and avoids a ten-argument helper.
 type hookedProviderParams struct {
-	writer          *bufio.Writer
-	req             *http.Request
-	body            []byte
-	target          string
-	host            string
-	provider        Provider
-	rule            config.MITMHookRule
-	started         time.Time
-	concern         string
-	requestBytes    int64
-	requestRawPath  string
-	responseRawPath string
-	cfg             config.MITMConfig
+	writer       *bufio.Writer
+	req          *http.Request
+	body         []byte
+	target       string
+	host         string
+	provider     Provider
+	rule         config.MITMHookRule
+	started      time.Time
+	concern      string
+	requestBytes int64
+	cfg          config.MITMConfig
 }
 
 // runHookedProviderRequest runs the provider request through the matched
@@ -477,18 +465,16 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 	if err != nil {
 		p.writeHookErrorResponse(params.writer, err)
 		return p.recordProviderFailure(params.req, http.Header{}, buildProviderFailureInput(providerForwardParams{
-			writer:          params.writer,
-			req:             params.req,
-			body:            params.body,
-			target:          params.target,
-			host:            params.host,
-			provider:        params.provider,
-			started:         params.started,
-			concern:         params.concern,
-			requestBytes:    params.requestBytes,
-			requestRawPath:  params.requestRawPath,
-			responseRawPath: params.responseRawPath,
-			cfg:             params.cfg,
+			writer:       params.writer,
+			req:          params.req,
+			body:         params.body,
+			target:       params.target,
+			host:         params.host,
+			provider:     params.provider,
+			started:      params.started,
+			concern:      params.concern,
+			requestBytes: params.requestBytes,
+			cfg:          params.cfg,
 		}, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
 			includePayload:      true,
 			includeUpstreamSend: false,
@@ -498,7 +484,7 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 	}
 	defer func() { _ = result.Body.Close() }()
 
-	responseBytes, err := writeHookResponse(params.writer, result, params.responseRawPath, p.log)
+	responseBytes, err := writeHookResponse(params.writer, result, p.log)
 	if err != nil {
 		return err
 	}
@@ -511,18 +497,16 @@ func (p *Proxy) runHookedProviderRequest(ctx context.Context, params hookedProvi
 		"response_bytes", responseBytes,
 	)
 	forwardParams := providerForwardParams{
-		writer:          params.writer,
-		req:             params.req,
-		body:            params.body,
-		target:          params.target,
-		host:            params.host,
-		provider:        params.provider,
-		started:         params.started,
-		concern:         params.concern,
-		requestBytes:    params.requestBytes,
-		requestRawPath:  params.requestRawPath,
-		responseRawPath: params.responseRawPath,
-		cfg:             params.cfg,
+		writer:       params.writer,
+		req:          params.req,
+		body:         params.body,
+		target:       params.target,
+		host:         params.host,
+		provider:     params.provider,
+		started:      params.started,
+		concern:      params.concern,
+		requestBytes: params.requestBytes,
+		cfg:          params.cfg,
 	}
 	p.recordHTTPCapture(params.req, result.Headers, providerHTTPCaptureRecordInput(forwardParams, result.Status, responseBytes))
 	p.diagnoseProviderExchange(ctx, forwardParams, params.rule.Name)

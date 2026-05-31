@@ -49,8 +49,6 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Logging.Rotation.MaxAgeDays).To(Equal(14))
 		Expect(cfg.Logging.Rotation.Compress).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
-		Expect(cfg.Logging.RawCapture.Enabled).NotTo(BeNil())
-		Expect(*cfg.Logging.RawCapture.Enabled).To(BeFalse())
 	})
 
 	It("loads MITM provider sets with cursor", func() {
@@ -396,8 +394,6 @@ concern = "unknown"
 		Expect(cfg.Logging.Rotation.MaxAgeDays).To(Equal(14))
 		Expect(cfg.Logging.Rotation.Compress).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
-		Expect(cfg.Logging.RawCapture.Enabled).NotTo(BeNil())
-		Expect(*cfg.Logging.RawCapture.Enabled).To(BeFalse())
 	})
 	It("accepts logging.rotation.enabled = false", func() {
 		tmpDir := GinkgoT().TempDir()
@@ -538,20 +534,6 @@ max_size_mb = 32
 		_, err := config.LoadGlobalOrDefault()
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("logging.cleanup.max_total_mb must be >= 0"))
-	})
-
-	It("rejects invalid MITM capture rotation controls", func() {
-		tmpDir := GinkgoT().TempDir()
-		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-		globalDir := filepath.Join(tmpDir, "clyde")
-		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
-		configData := "[mitm.capture.rotation]\nmax_size_mb = -1\n"
-		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configData), 0o644)).To(Succeed())
-
-		_, err := config.LoadGlobalOrDefault()
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("mitm.capture.rotation.max_size_mb must be >= 0"))
 	})
 
 	DescribeTable("accepts removed logging config surfaces as no-op warnings",
