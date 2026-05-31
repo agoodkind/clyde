@@ -15,12 +15,22 @@ name can appear in both groups.
 | --- | --- | --- |
 | cli.claude-code | 48723 | Claude Code CLI model API (`ANTHROPIC_BASE_URL`); wire-baseline source |
 | cli.claude-code-proxy | 48728 | Claude Code CLI everything else (`HTTPS_PROXY`) |
-| cli.codex | 48724 | Codex CLI model API (`model_providers.<id>.base_url`); wire-baseline source |
-| cli.codex-backend | 48730 | Codex CLI auth, cloud, analytics (`chatgpt_base_url`) |
-| cli.codex-proxy | 48729 | Codex CLI everything else (`HTTPS_PROXY`) |
+| cli.codex-proxy | 48729 | Codex CLI all traffic (`HTTPS_PROXY` transparent proxy); model API and auth |
+| cli.codex | 48724 | Codex CLI model API base URL (`model_providers.<id>.base_url`); API-key codex only |
+| cli.codex-backend | 48730 | Codex CLI backend base URL (`chatgpt_base_url`); API-key codex only |
 | app.cursor | 48725 | Cursor desktop Electron shell |
 | app.claude | 48726 | Claude desktop Electron shell |
 | app.codex | 48727 | Codex desktop Electron shell |
+
+A Codex CLI that authenticates with a ChatGPT login routes all of its traffic
+through `cli.codex-proxy` as a transparent proxy: set `HTTPS_PROXY` to that
+listener and `CODEX_CA_CERTIFICATE` to the clyde MITM CA. The codex reqwest
+client honors `HTTPS_PROXY` outside the seatbelt sandbox, so clyde intercepts
+the hosts it owns (`chatgpt.com`) and blind-tunnels the rest, capturing the
+model API and the auth traffic without any `~/.codex/config.toml` change and
+without disturbing the login. The `cli.codex` and `cli.codex-backend` base-URL
+listeners apply only to a codex configured with an API key (a `model_providers`
+entry plus `chatgpt_base_url`), which is a different auth mode.
 
 The adapter's outbound BYOK calls to real providers are recorded in code rather
 than through a listener. They land in `mitm/capture.db` tagged
