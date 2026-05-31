@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"goodkind.io/clyde/internal/homedir"
 )
 
 const (
@@ -70,18 +72,12 @@ func resolveCodexHome(ctx context.Context, value string) (string, error) {
 		}
 		home = filepath.Join(userHome, ".codex")
 	}
-	if strings.HasPrefix(home, "~") {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
+	if len(home) > 0 && home[0] == '~' {
+		if _, err := os.UserHomeDir(); err != nil {
 			slog.ErrorContext(ctx, "codex.store.home_expand_failed", "concern", "providers.codex.store", "err", err)
 			return "", fmt.Errorf("expand codex home: %w", err)
 		}
-		switch {
-		case home == "~":
-			home = userHome
-		case strings.HasPrefix(home, "~/"):
-			home = filepath.Join(userHome, strings.TrimPrefix(home, "~/"))
-		}
+		home = homedir.Expand(home)
 	}
 	if abs, err := filepath.Abs(home); err == nil {
 		home = abs

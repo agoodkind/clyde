@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"goodkind.io/clyde/internal/homedir"
 )
 
 const appName = "clyde"
@@ -70,25 +72,7 @@ func cleanExpandedPath(path string) string {
 	if path == "" {
 		return ""
 	}
-	return filepath.Clean(expandLeadingHome(path))
-}
-
-func expandLeadingHome(path string) string {
-	if path == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
-		return home
-	}
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
-		return filepath.Join(home, path[2:])
-	}
-	return path
+	return filepath.Clean(homedir.Expand(path))
 }
 
 // DefaultStateDir returns the XDG-derived state directory for clyde.
@@ -119,7 +103,8 @@ func EnsureRuntimeDir() error {
 	err := os.MkdirAll(dir, 0o700)
 	if err != nil {
 		log := slog.Default()
-		log.Warn("config.runtime_dir.create_failed", "concern", "config", "component", "config",
+		log.Warn(
+			"config.runtime_dir.create_failed", "concern", "config", "component", "config",
 			"subcomponent", "runtime_dir",
 			"path", dir,
 			"err", err,
