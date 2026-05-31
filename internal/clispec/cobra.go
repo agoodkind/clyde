@@ -22,10 +22,11 @@ func (op Operation[I]) cobraCommand(f *cli.Factory) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   useBuilder.String(),
-		Short: op.Short,
-		Long:  op.Long,
-		Args:  cobra.ExactArgs(len(op.Args)),
+		Use:     useBuilder.String(),
+		Short:   op.Short,
+		Long:    op.longHelp(),
+		Example: strings.Join(op.Examples, "\n"),
+		Args:    cobra.ExactArgs(len(op.Args)),
 	}
 
 	applies := make([]func(in *I), 0, len(op.Params))
@@ -45,6 +46,36 @@ func (op Operation[I]) cobraCommand(f *cli.Factory) *cobra.Command {
 		return op.Run(cmd.Context(), in, SurfaceCLI, sink)
 	}
 	return cmd
+}
+
+// longHelp builds the full description shown by `--help`. It starts from the
+// author's Long text, or the one-line Short when Long is empty, and appends a
+// documented Arguments section for every positional input so the reader sees
+// what each placeholder means without leaving the help screen.
+func (op Operation[I]) longHelp() string {
+	var b strings.Builder
+	switch {
+	case op.Long != "":
+		b.WriteString(op.Long)
+	case op.Short != "":
+		b.WriteString(op.Short)
+	}
+	if len(op.Args) > 0 {
+		width := 0
+		for _, arg := range op.Args {
+			if len(arg.placeholder()) > width {
+				width = len(arg.placeholder())
+			}
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Arguments:")
+		for _, arg := range op.Args {
+			fmt.Fprintf(&b, "\n  %-*s  %s", width, arg.placeholder(), arg.Description)
+		}
+	}
+	return b.String()
 }
 
 // registerFlag registers one parameter as a terminal flag and returns a
@@ -104,7 +135,12 @@ func (e *enumValue) Set(raw string) error {
 	return fmt.Errorf("unsupported value %q (allowed: %s)", raw, strings.Join(e.allowed, ", "))
 }
 
-// Type names the flag value kind shown in help output.
+// Type names the flag value kind shown in help output. For an enum it lists
+// the accepted words, so `--format` reads as `--format markdown|html|json|...`
+// and the help screen shows the constraint inline next to the default.
 func (e *enumValue) Type() string {
+	if len(e.allowed) > 0 {
+		return strings.Join(e.allowed, "|")
+	}
 	return "string"
 }

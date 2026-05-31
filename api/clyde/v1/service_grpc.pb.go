@@ -22,6 +22,16 @@ const (
 	ClydeService_ReloadDaemon_FullMethodName           = "/clyde.v1.ClydeService/ReloadDaemon"
 	ClydeService_GetProviderStats_FullMethodName       = "/clyde.v1.ClydeService/GetProviderStats"
 	ClydeService_SubscribeProviderStats_FullMethodName = "/clyde.v1.ClydeService/SubscribeProviderStats"
+	ClydeService_ListConversations_FullMethodName      = "/clyde.v1.ClydeService/ListConversations"
+	ClydeService_GetConversation_FullMethodName        = "/clyde.v1.ClydeService/GetConversation"
+	ClydeService_GetConversationContext_FullMethodName = "/clyde.v1.ClydeService/GetConversationContext"
+	ClydeService_SearchConversation_FullMethodName     = "/clyde.v1.ClydeService/SearchConversation"
+	ClydeService_AnalyzeSearchResults_FullMethodName   = "/clyde.v1.ClydeService/AnalyzeSearchResults"
+	ClydeService_ExportTranscript_FullMethodName       = "/clyde.v1.ClydeService/ExportTranscript"
+	ClydeService_GetMITMStatus_FullMethodName          = "/clyde.v1.ClydeService/GetMITMStatus"
+	ClydeService_ShowCapture_FullMethodName            = "/clyde.v1.ClydeService/ShowCapture"
+	ClydeService_SeedBaseline_FullMethodName           = "/clyde.v1.ClydeService/SeedBaseline"
+	ClydeService_LogsInventory_FullMethodName          = "/clyde.v1.ClydeService/LogsInventory"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -31,6 +41,16 @@ type ClydeServiceClient interface {
 	ReloadDaemon(ctx context.Context, in *ReloadDaemonRequest, opts ...grpc.CallOption) (*ReloadDaemonResponse, error)
 	GetProviderStats(ctx context.Context, in *GetProviderStatsRequest, opts ...grpc.CallOption) (*GetProviderStatsResponse, error)
 	SubscribeProviderStats(ctx context.Context, in *SubscribeProviderStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProviderStatsEvent], error)
+	ListConversations(ctx context.Context, in *ListConversationsRequest, opts ...grpc.CallOption) (*ListConversationsResponse, error)
+	GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error)
+	GetConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (*GetConversationContextResponse, error)
+	SearchConversation(ctx context.Context, in *SearchConversationRequest, opts ...grpc.CallOption) (*SearchConversationResponse, error)
+	AnalyzeSearchResults(ctx context.Context, in *AnalyzeSearchResultsRequest, opts ...grpc.CallOption) (*AnalyzeSearchResultsResponse, error)
+	ExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (*ExportTranscriptResponse, error)
+	GetMITMStatus(ctx context.Context, in *GetMITMStatusRequest, opts ...grpc.CallOption) (*GetMITMStatusResponse, error)
+	ShowCapture(ctx context.Context, in *ShowCaptureRequest, opts ...grpc.CallOption) (*ShowCaptureResponse, error)
+	SeedBaseline(ctx context.Context, in *SeedBaselineRequest, opts ...grpc.CallOption) (*SeedBaselineResponse, error)
+	LogsInventory(ctx context.Context, in *LogsInventoryRequest, opts ...grpc.CallOption) (*LogsInventoryResponse, error)
 }
 
 type clydeServiceClient struct {
@@ -80,6 +100,106 @@ func (c *clydeServiceClient) SubscribeProviderStats(ctx context.Context, in *Sub
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ClydeService_SubscribeProviderStatsClient = grpc.ServerStreamingClient[ProviderStatsEvent]
 
+func (c *clydeServiceClient) ListConversations(ctx context.Context, in *ListConversationsRequest, opts ...grpc.CallOption) (*ListConversationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListConversationsResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ListConversations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetConversationResponse)
+	err := c.cc.Invoke(ctx, ClydeService_GetConversation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) GetConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (*GetConversationContextResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetConversationContextResponse)
+	err := c.cc.Invoke(ctx, ClydeService_GetConversationContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) SearchConversation(ctx context.Context, in *SearchConversationRequest, opts ...grpc.CallOption) (*SearchConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchConversationResponse)
+	err := c.cc.Invoke(ctx, ClydeService_SearchConversation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) AnalyzeSearchResults(ctx context.Context, in *AnalyzeSearchResultsRequest, opts ...grpc.CallOption) (*AnalyzeSearchResultsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AnalyzeSearchResultsResponse)
+	err := c.cc.Invoke(ctx, ClydeService_AnalyzeSearchResults_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) ExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (*ExportTranscriptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportTranscriptResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ExportTranscript_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) GetMITMStatus(ctx context.Context, in *GetMITMStatusRequest, opts ...grpc.CallOption) (*GetMITMStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMITMStatusResponse)
+	err := c.cc.Invoke(ctx, ClydeService_GetMITMStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) ShowCapture(ctx context.Context, in *ShowCaptureRequest, opts ...grpc.CallOption) (*ShowCaptureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ShowCaptureResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ShowCapture_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) SeedBaseline(ctx context.Context, in *SeedBaselineRequest, opts ...grpc.CallOption) (*SeedBaselineResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SeedBaselineResponse)
+	err := c.cc.Invoke(ctx, ClydeService_SeedBaseline_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) LogsInventory(ctx context.Context, in *LogsInventoryRequest, opts ...grpc.CallOption) (*LogsInventoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogsInventoryResponse)
+	err := c.cc.Invoke(ctx, ClydeService_LogsInventory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClydeServiceServer is the server API for ClydeService service.
 // All implementations should embed UnimplementedClydeServiceServer
 // for forward compatibility.
@@ -87,6 +207,16 @@ type ClydeServiceServer interface {
 	ReloadDaemon(context.Context, *ReloadDaemonRequest) (*ReloadDaemonResponse, error)
 	GetProviderStats(context.Context, *GetProviderStatsRequest) (*GetProviderStatsResponse, error)
 	SubscribeProviderStats(*SubscribeProviderStatsRequest, grpc.ServerStreamingServer[ProviderStatsEvent]) error
+	ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error)
+	GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error)
+	GetConversationContext(context.Context, *GetConversationContextRequest) (*GetConversationContextResponse, error)
+	SearchConversation(context.Context, *SearchConversationRequest) (*SearchConversationResponse, error)
+	AnalyzeSearchResults(context.Context, *AnalyzeSearchResultsRequest) (*AnalyzeSearchResultsResponse, error)
+	ExportTranscript(context.Context, *ExportTranscriptRequest) (*ExportTranscriptResponse, error)
+	GetMITMStatus(context.Context, *GetMITMStatusRequest) (*GetMITMStatusResponse, error)
+	ShowCapture(context.Context, *ShowCaptureRequest) (*ShowCaptureResponse, error)
+	SeedBaseline(context.Context, *SeedBaselineRequest) (*SeedBaselineResponse, error)
+	LogsInventory(context.Context, *LogsInventoryRequest) (*LogsInventoryResponse, error)
 }
 
 // UnimplementedClydeServiceServer should be embedded to have
@@ -104,6 +234,36 @@ func (UnimplementedClydeServiceServer) GetProviderStats(context.Context, *GetPro
 }
 func (UnimplementedClydeServiceServer) SubscribeProviderStats(*SubscribeProviderStatsRequest, grpc.ServerStreamingServer[ProviderStatsEvent]) error {
 	return status.Error(codes.Unimplemented, "method SubscribeProviderStats not implemented")
+}
+func (UnimplementedClydeServiceServer) ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListConversations not implemented")
+}
+func (UnimplementedClydeServiceServer) GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetConversation not implemented")
+}
+func (UnimplementedClydeServiceServer) GetConversationContext(context.Context, *GetConversationContextRequest) (*GetConversationContextResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetConversationContext not implemented")
+}
+func (UnimplementedClydeServiceServer) SearchConversation(context.Context, *SearchConversationRequest) (*SearchConversationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchConversation not implemented")
+}
+func (UnimplementedClydeServiceServer) AnalyzeSearchResults(context.Context, *AnalyzeSearchResultsRequest) (*AnalyzeSearchResultsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AnalyzeSearchResults not implemented")
+}
+func (UnimplementedClydeServiceServer) ExportTranscript(context.Context, *ExportTranscriptRequest) (*ExportTranscriptResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExportTranscript not implemented")
+}
+func (UnimplementedClydeServiceServer) GetMITMStatus(context.Context, *GetMITMStatusRequest) (*GetMITMStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMITMStatus not implemented")
+}
+func (UnimplementedClydeServiceServer) ShowCapture(context.Context, *ShowCaptureRequest) (*ShowCaptureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ShowCapture not implemented")
+}
+func (UnimplementedClydeServiceServer) SeedBaseline(context.Context, *SeedBaselineRequest) (*SeedBaselineResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SeedBaseline not implemented")
+}
+func (UnimplementedClydeServiceServer) LogsInventory(context.Context, *LogsInventoryRequest) (*LogsInventoryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LogsInventory not implemented")
 }
 func (UnimplementedClydeServiceServer) testEmbeddedByValue() {}
 
@@ -172,6 +332,186 @@ func _ClydeService_SubscribeProviderStats_Handler(srv interface{}, stream grpc.S
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ClydeService_SubscribeProviderStatsServer = grpc.ServerStreamingServer[ProviderStatsEvent]
 
+func _ClydeService_ListConversations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListConversationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ListConversations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ListConversations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ListConversations(ctx, req.(*ListConversationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_GetConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).GetConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_GetConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).GetConversation(ctx, req.(*GetConversationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_GetConversationContext_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConversationContextRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).GetConversationContext(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_GetConversationContext_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).GetConversationContext(ctx, req.(*GetConversationContextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_SearchConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).SearchConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_SearchConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).SearchConversation(ctx, req.(*SearchConversationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_AnalyzeSearchResults_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AnalyzeSearchResultsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).AnalyzeSearchResults(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_AnalyzeSearchResults_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).AnalyzeSearchResults(ctx, req.(*AnalyzeSearchResultsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_ExportTranscript_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportTranscriptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ExportTranscript(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ExportTranscript_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ExportTranscript(ctx, req.(*ExportTranscriptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_GetMITMStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMITMStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).GetMITMStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_GetMITMStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).GetMITMStatus(ctx, req.(*GetMITMStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_ShowCapture_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ShowCaptureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ShowCapture(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ShowCapture_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ShowCapture(ctx, req.(*ShowCaptureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_SeedBaseline_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SeedBaselineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).SeedBaseline(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_SeedBaseline_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).SeedBaseline(ctx, req.(*SeedBaselineRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_LogsInventory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogsInventoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).LogsInventory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_LogsInventory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).LogsInventory(ctx, req.(*LogsInventoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClydeService_ServiceDesc is the grpc.ServiceDesc for ClydeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -186,6 +526,46 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetProviderStats",
 			Handler:    _ClydeService_GetProviderStats_Handler,
+		},
+		{
+			MethodName: "ListConversations",
+			Handler:    _ClydeService_ListConversations_Handler,
+		},
+		{
+			MethodName: "GetConversation",
+			Handler:    _ClydeService_GetConversation_Handler,
+		},
+		{
+			MethodName: "GetConversationContext",
+			Handler:    _ClydeService_GetConversationContext_Handler,
+		},
+		{
+			MethodName: "SearchConversation",
+			Handler:    _ClydeService_SearchConversation_Handler,
+		},
+		{
+			MethodName: "AnalyzeSearchResults",
+			Handler:    _ClydeService_AnalyzeSearchResults_Handler,
+		},
+		{
+			MethodName: "ExportTranscript",
+			Handler:    _ClydeService_ExportTranscript_Handler,
+		},
+		{
+			MethodName: "GetMITMStatus",
+			Handler:    _ClydeService_GetMITMStatus_Handler,
+		},
+		{
+			MethodName: "ShowCapture",
+			Handler:    _ClydeService_ShowCapture_Handler,
+		},
+		{
+			MethodName: "SeedBaseline",
+			Handler:    _ClydeService_SeedBaseline_Handler,
+		},
+		{
+			MethodName: "LogsInventory",
+			Handler:    _ClydeService_LogsInventory_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

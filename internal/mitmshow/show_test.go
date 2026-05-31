@@ -1,7 +1,6 @@
-package mitm
+package mitmshow
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/config"
 )
 
@@ -39,8 +37,7 @@ func TestClassifyIDByShape(t *testing.T) {
 }
 
 // fixtureConfig writes a synthetic concern log tree under tmp and returns a
-// config that points the show command at it. The capture dir is a sibling so
-// the raw-bytes search does not see the daemon log.
+// config that points the lookup at it.
 func fixtureConfig(t *testing.T, tmp string) *config.Config {
 	t.Helper()
 	logsRoot := filepath.Join(tmp, "logs")
@@ -99,11 +96,10 @@ func TestRunShowFindsMatchesInRequestAndErrorsLogs(t *testing.T) {
 		t.Fatalf("write errors log: %v", err)
 	}
 
-	out := &bytes.Buffer{}
-	if err := runShow(context.Background(), out, cfg, clydeID, false); err != nil {
-		t.Fatalf("runShow: %v", err)
+	got, err := Render(context.Background(), cfg, clydeID, false)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
 	}
-	got := out.String()
 	if !strings.Contains(got, requestLine) {
 		t.Fatalf("request log line missing in output: %q", got)
 	}
@@ -136,13 +132,13 @@ func TestRunShowJSONShape(t *testing.T) {
 		t.Fatalf("write request log: %v", err)
 	}
 
-	out := &bytes.Buffer{}
-	if err := runShow(context.Background(), out, cfg, clydeID, true); err != nil {
-		t.Fatalf("runShow: %v", err)
+	rendered, err := Render(context.Background(), cfg, clydeID, true)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
 	}
 	var got ShowOutput
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v\n%s", err, out.String())
+	if err := json.Unmarshal([]byte(rendered), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, rendered)
 	}
 	if got.Query != clydeID {
 		t.Fatalf("query=%q want %q", got.Query, clydeID)
@@ -193,13 +189,13 @@ func TestRunShowExpandsToUpstreamRequestID(t *testing.T) {
 		t.Fatalf("write errors log: %v", err)
 	}
 
-	out := &bytes.Buffer{}
-	if err := runShow(context.Background(), out, cfg, clydeID, true); err != nil {
-		t.Fatalf("runShow: %v", err)
+	rendered, err := Render(context.Background(), cfg, clydeID, true)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
 	}
 	var got ShowOutput
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v\n%s", err, out.String())
+	if err := json.Unmarshal([]byte(rendered), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, rendered)
 	}
 	if len(got.Passes) != 2 {
 		t.Fatalf("passes=%d want 2 (initial + expansion)", len(got.Passes))
@@ -223,21 +219,6 @@ func TestRunShowExpandsToUpstreamRequestID(t *testing.T) {
 	}
 	if got.Correlation.UpstreamRequestID != upstreamID {
 		t.Fatalf("correlation.upstream_request_id=%q want %q", got.Correlation.UpstreamRequestID, upstreamID)
-	}
-}
-
-func TestNewShowCmdRegistersWithFactory(t *testing.T) {
-	tmp := t.TempDir()
-	cfg := fixtureConfig(t, tmp)
-	out := &bytes.Buffer{}
-	factory := &cli.Factory{IOStreams: &cli.IOStreams{Out: out, Err: &bytes.Buffer{}, In: &bytes.Buffer{}}}
-	cmd := newShowCmdWithLoader(factory, func() (*config.Config, error) { return cfg, nil })
-	cmd.SetArgs([]string{"chatcmpl-zzz"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("execute: %v", err)
-	}
-	if !strings.Contains(out.String(), "input id  : chatcmpl-zzz") {
-		t.Fatalf("expected input id line; got %q", out.String())
 	}
 }
 

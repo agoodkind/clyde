@@ -29,10 +29,11 @@ var (
 // NewCmd is part of Clyde's typed adapter surface.
 func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:    "daemon",
-		Short:  "Start the background daemon (internal)",
-		Hidden: true,
-		Args:   cobra.NoArgs,
+		Use:     "daemon",
+		Short:   "Start the background daemon",
+		Long:    "Start the background daemon process. launchd owns the daemon's lifecycle, so this entry point is normally invoked by the launch agent rather than directly.",
+		Example: "clyde daemon",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.Info("cli.daemon.invoked", "concern", "cli.daemon", "component", "cli",
 				"version", f.Build.Version,
@@ -50,10 +51,11 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 
 func newWorkerCmd(_ *cli.Factory) *cobra.Command {
 	return &cobra.Command{
-		Use:    "worker",
-		Short:  "Run the daemon worker service",
-		Hidden: true,
-		Args:   cobra.NoArgs,
+		Use:     "worker",
+		Short:   "Run the daemon worker service",
+		Long:    "Run the daemon worker service, the process that owns the public listeners. The supervisor spawns the worker during startup and reload; it is not normally run directly.",
+		Example: "clyde daemon worker",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.Info("cli.daemon.worker.invoked", "concern", "cli.daemon", "component", "cli")
 			log := slog.Default().With("component", "daemon")
@@ -64,9 +66,11 @@ func newWorkerCmd(_ *cli.Factory) *cobra.Command {
 
 func newReloadCmd(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
-		Use:   "reload",
-		Short: "Reload the running daemon without restarting it",
-		Args:  cobra.NoArgs,
+		Use:     "reload",
+		Short:   "Reload the running daemon without restarting it",
+		Long:    "Reload the running daemon in place, handing its live listeners to a supervisor-spawned replacement worker so public traffic keeps flowing across the swap.",
+		Example: "clyde daemon reload",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), reloadCommandTimeout)
 			defer cancel()
@@ -93,9 +97,11 @@ func reloadCommandError(err error) error {
 
 func newStatusCmd(f *cli.Factory) *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Report daemon supervisor and worker status",
-		Args:  cobra.NoArgs,
+		Use:     "status",
+		Short:   "Report daemon supervisor and worker status",
+		Long:    "Report whether the launch agent, the supervisor, and the worker are reachable, including the control socket paths the CLI uses to reach them.",
+		Example: "clyde daemon status",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 			defer cancel()
@@ -109,10 +115,11 @@ func newStatusCmd(f *cli.Factory) *cobra.Command {
 func newSupervisorFingerprintCmd(f *cli.Factory) *cobra.Command {
 	var built bool
 	cmd := &cobra.Command{
-		Use:    "supervisor-fingerprint",
-		Short:  "Print the supervisor fingerprint",
-		Hidden: true,
-		Args:   cobra.NoArgs,
+		Use:     "supervisor-fingerprint",
+		Short:   "Print the supervisor fingerprint",
+		Long:    "Print the supervisor fingerprint, the build identity the supervisor compares across a reload to decide whether the daemon binary changed.",
+		Example: "clyde daemon supervisor-fingerprint",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if built {
 				_, _ = fmt.Fprintln(f.IOStreams.Out, builtFingerprint())

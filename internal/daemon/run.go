@@ -34,6 +34,7 @@ import (
 	"goodkind.io/clyde/internal/logpolicy"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
+	"goodkind.io/clyde/internal/mitmshow"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/trace"
 )
@@ -102,6 +103,15 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	clydev1.RegisterClydeServiceServer(grpcServer, &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,
+		searchConfig:                    cfg.Search,
+		loggingConfig:                   cfg.Logging,
+		mitmConfig:                      cfg.MITM,
+		mitmStatus: func() MITMStatus {
+			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
+		},
+		showCapture: func(showCtx context.Context, id string, asJSON bool) (string, error) {
+			return mitmshow.Render(showCtx, cfg, id, asJSON)
+		},
 		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
 		},

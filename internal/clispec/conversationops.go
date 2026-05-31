@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
-	"goodkind.io/clyde/internal/config"
 	conv "goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/homedir"
-	"goodkind.io/clyde/internal/transcript"
 )
 
 // listConversationsInput is the input vehicle for the zero-input list
@@ -59,9 +57,10 @@ func (exportInput) isClispecInput()             {}
 // attach under. The MCP tool names stay verbose; only the terminal grouping
 // and short verbs come from here.
 var conversationGroup = &Group{
-	Use:   "conversation",
-	Short: "Inspect Claude and Codex conversations",
-	Long:  "",
+	Use:    "conversation",
+	Short:  "Inspect Claude and Codex conversations",
+	Long:   "",
+	Parent: nil,
 }
 
 var exportFormatValues = []string{
@@ -86,12 +85,13 @@ func listConversationsOp() Operation[listConversationsInput] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "List Claude and Codex conversations.",
-		Long:     "",
+		Long:     "List every indexed Claude and Codex conversation, one per line, as id, provider, native id, workspace, and title.",
+		Examples: []string{"clyde conversation list"},
 		Args:     nil,
 		Params:   nil,
 		New:      func() listConversationsInput { return listConversationsInput{} },
 		Run: func(ctx context.Context, _ listConversationsInput, surface Surface, sink ResultSink) error {
-			records, err := conv.DefaultIndex.List(ctx)
+			records, err := daemon.ListConversations(ctx)
 			if err != nil {
 				return logFail(ctx, surface, "list_failed", "list conversations", err)
 			}
@@ -133,7 +133,8 @@ func getConversationOp() Operation[getConversationInput] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Get plain text from a conversation.",
-		Long:     "",
+		Long:     "Print one conversation transcript as plain text. Resolve the conversation by id, native id, title, or artifact path.",
+		Examples: []string{"clyde conversation get claude:1a2b3c --last-n 20"},
 		Args: []Arg[getConversationInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *getConversationInput, v string) { in.ConversationID = v }),
@@ -144,20 +145,9 @@ func getConversationOp() Operation[getConversationInput] {
 		},
 		New: func() getConversationInput { return getConversationInput{ConversationID: "", LastN: 0} },
 		Run: func(ctx context.Context, in getConversationInput, surface Surface, sink ResultSink) error {
-			record, err := resolveConversation(ctx, surface, in.ConversationID)
+			text, err := daemon.GetConversation(ctx, in.ConversationID, in.LastN)
 			if err != nil {
-				return err
-			}
-			messages, err := conv.LoadMessages(record, false, false)
-			if err != nil {
-				return logFail(ctx, surface, "load_failed", "load conversation", err)
-			}
-			if in.LastN > 0 && in.LastN < len(messages) {
-				messages = messages[len(messages)-in.LastN:]
-			}
-			text := transcript.RenderPlainTextWithOptions(messages, transcript.DefaultShapeOptions())
-			if text == "" {
-				return sink.Text("No conversation messages found.")
+				return logFail(ctx, surface, "get_failed", "get conversation", err)
 			}
 			return sink.Text(text)
 		},
@@ -171,7 +161,8 @@ func getContextOp() Operation[getContextInput] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Get messages around a point in a conversation.",
-		Long:     "",
+		Long:     "Print the messages surrounding a center point chosen by timestamp or by message index, with a configurable number of messages before and after.",
+		Examples: []string{"clyde conversation context claude:1a2b3c --message-index 42 --before 5 --after 5"},
 		Args: []Arg[getContextInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *getContextInput, v string) { in.ConversationID = v }),
@@ -190,37 +181,10 @@ func getContextOp() Operation[getContextInput] {
 			return getContextInput{ConversationID: "", Timestamp: "", MessageIndex: -1, Before: 5, After: 5}
 		},
 		Run: func(ctx context.Context, in getContextInput, surface Surface, sink ResultSink) error {
-			record, err := resolveConversation(ctx, surface, in.ConversationID)
+			text, err := daemon.GetConversationContext(ctx, in.ConversationID, in.Timestamp, in.MessageIndex, in.Before, in.After)
 			if err != nil {
-				return err
+				return logFail(ctx, surface, "context_failed", "get conversation context", err)
 			}
-			messages, err := conv.LoadMessages(record, false, false)
-			if err != nil {
-				return logFail(ctx, surface, "load_failed", "load conversation", err)
-			}
-			if len(messages) == 0 {
-				return sink.Text("No conversation messages found.")
-			}
-			center := -1
-			if in.Timestamp != "" {
-				center = findNearestMessage(messages, in.Timestamp)
-			}
-			if center < 0 && in.MessageIndex >= 0 && in.MessageIndex < len(messages) {
-				center = in.MessageIndex
-			}
-			if center < 0 {
-				return sink.Text("Provide timestamp or message_index to center on.")
-			}
-			start := max(center-in.Before, 0)
-			end := min(center+in.After+1, len(messages))
-			text := fmt.Sprintf(
-				"Messages %d-%d of %d centered on %d:\n\n%s",
-				start,
-				end-1,
-				len(messages),
-				center,
-				transcript.RenderPlainTextWithOptions(messages[start:end], transcript.DefaultShapeOptions()),
-			)
 			return sink.Text(text)
 		},
 	}
@@ -233,7 +197,8 @@ func searchConversationOp() Operation[searchConversationInput] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Search a conversation and return a result_id for follow-up analysis.",
-		Long:     "",
+		Long:     "Search one conversation and print matching excerpts together with a result_id. Pass that result_id to analyze to run the analysis model over the same matches.",
+		Examples: []string{"clyde conversation search claude:1a2b3c \"auth timeout\" --depth normal"},
 		Args: []Arg[searchConversationInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *searchConversationInput, v string) { in.ConversationID = v }),
@@ -248,22 +213,11 @@ func searchConversationOp() Operation[searchConversationInput] {
 			return searchConversationInput{ConversationID: "", Query: "", Depth: "quick"}
 		},
 		Run: func(ctx context.Context, in searchConversationInput, surface Surface, sink ResultSink) error {
-			if in.Query == "" {
-				return sink.Text("query is required")
-			}
-			cfg, err := config.LoadGlobalOrDefault()
-			if err != nil {
-				return logFail(ctx, surface, "config_failed", "load config", err)
-			}
-			record, err := resolveConversation(ctx, surface, in.ConversationID)
-			if err != nil {
-				return err
-			}
-			output, err := conv.SearchConversation(ctx, record, in.Query, in.Depth, cfg.Search)
+			text, err := daemon.SearchConversation(ctx, in.ConversationID, in.Query, in.Depth)
 			if err != nil {
 				return logFail(ctx, surface, "search_failed", "search conversation", err)
 			}
-			return sink.Text(output.Text)
+			return sink.Text(text)
 		},
 	}
 }
@@ -275,7 +229,8 @@ func analyzeResultsOp() Operation[analyzeResultsInput] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Analyze cached results from clyde_search_conversation.",
-		Long:     "",
+		Long:     "Run the analysis model over a cached search result set named by result_id, following the instruction in prompt.",
+		Examples: []string{"clyde conversation analyze 7f3e2d10 \"summarize the decisions made\""},
 		Params:   nil,
 		Args: []Arg[analyzeResultsInput]{
 			PositionalArg("result_id", "The result_id returned by clyde_search_conversation.",
@@ -285,14 +240,7 @@ func analyzeResultsOp() Operation[analyzeResultsInput] {
 		},
 		New: func() analyzeResultsInput { return analyzeResultsInput{ResultID: "", Prompt: ""} },
 		Run: func(ctx context.Context, in analyzeResultsInput, surface Surface, sink ResultSink) error {
-			if in.ResultID == "" || in.Prompt == "" {
-				return sink.Text("result_id and prompt are required")
-			}
-			cfg, err := config.LoadGlobalOrDefault()
-			if err != nil {
-				return logFail(ctx, surface, "config_failed", "load config", err)
-			}
-			text, err := conv.AnalyzeSearchResults(ctx, in.ResultID, in.Prompt, cfg.Search)
+			text, err := daemon.AnalyzeSearchResults(ctx, in.ResultID, in.Prompt)
 			if err != nil {
 				return logFail(ctx, surface, "analyze_failed", "analyze results", err)
 			}
@@ -313,7 +261,8 @@ func exportTranscriptOp() Operation[exportInput] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
-		Long:     "",
+		Long:     "Export one conversation transcript in the chosen format. The terminal writes to --output when set and otherwise prints to stdout; the MCP tool returns the body as text.",
+		Examples: []string{"clyde conversation export claude:1a2b3c --format markdown --output transcript.md"},
 		Args: []Arg[exportInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *exportInput, v string) { in.ConversationID = v }),
@@ -357,11 +306,7 @@ func exportTranscriptOp() Operation[exportInput] {
 			}
 		},
 		Run: func(ctx context.Context, in exportInput, surface Surface, sink ResultSink) error {
-			record, err := resolveConversation(ctx, surface, in.ConversationID)
-			if err != nil {
-				return err
-			}
-			body, err := conv.Export(record, in.Options)
+			body, err := daemon.ExportTranscript(ctx, in.ConversationID, in.Options)
 			if err != nil {
 				return logFail(ctx, surface, "export_failed", "export transcript", err)
 			}
@@ -371,20 +316,6 @@ func exportTranscriptOp() Operation[exportInput] {
 			return sink.Bytes(body)
 		},
 	}
-}
-
-// resolveConversation looks up one conversation by selector and logs a
-// surface-correct failure event when the lookup fails.
-func resolveConversation(ctx context.Context, surface Surface, selector string) (conv.Record, error) {
-	var zero conv.Record
-	if selector == "" {
-		return zero, fmt.Errorf("conversation_id is required")
-	}
-	record, err := conv.DefaultIndex.Resolve(ctx, selector)
-	if err != nil {
-		return zero, logFail(ctx, surface, "resolve_failed", "resolve conversation", err)
-	}
-	return record, nil
 }
 
 // logFail emits a surface-correct warning event and returns the wrapped error.
@@ -400,38 +331,6 @@ func logFail(ctx context.Context, surface Surface, shortEvent, operation string,
 		slog.WarnContext(ctx, "cli.conversation."+shortEvent, "concern", "cli.conversation", "component", "cli", "operation", operation, "err", err)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
-}
-
-func findNearestMessage(messages []transcript.Message, rawTimestamp string) int {
-	var target time.Time
-	for _, layout := range []string{
-		"2006-01-02 15:04",
-		time.RFC3339,
-		"2006-01-02T15:04",
-		"2006-01-02 15:04:05",
-	} {
-		parsed, err := time.Parse(layout, rawTimestamp)
-		if err == nil {
-			target = parsed
-			break
-		}
-	}
-	if target.IsZero() {
-		return -1
-	}
-	best := -1
-	bestDiff := time.Duration(1<<63 - 1)
-	for i, message := range messages {
-		diff := message.Timestamp.Sub(target)
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff < bestDiff {
-			bestDiff = diff
-			best = i
-		}
-	}
-	return best
 }
 
 func shortPath(path string) string {

@@ -80,6 +80,10 @@ type Group struct {
 	Use   string
 	Short string
 	Long  string
+	// Parent is the enclosing group, or nil for a top-level group. A non-nil
+	// Parent nests this group one level deeper, so a chain renders as nested
+	// terminal parents, for example mitm -> trust -> install.
+	Parent *Group
 }
 
 // Input is the constraint for per-operation input structs. Each input type
@@ -102,6 +106,9 @@ type Operation[I Input] struct {
 	Surfaces SurfaceSet
 	Short    string
 	Long     string
+	// Examples are complete command lines shown in terminal help and appended
+	// to the MCP tool description. Each entry is one runnable invocation.
+	Examples []string
 	Args     []Arg[I]
 	Params   []Param[I]
 	New      func() I

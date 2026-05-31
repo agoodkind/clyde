@@ -52,9 +52,11 @@ func newTrustInstallCmd(
 	loadConfig func() (*config.Config, error),
 ) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "install",
-		Short: "Install the Clyde MITM CA into the OS trust store",
-		Args:  cobra.NoArgs,
+		Use:     "install",
+		Short:   "Install the Clyde MITM CA into the OS trust store",
+		Long:    "Install the Clyde MITM certificate authority into the operating system trust store so clients accept the proxy's intercepted TLS. This changes the OS trust store using your own privileges.",
+		Example: "clyde mitm trust install",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -84,9 +86,11 @@ func newTrustUninstallCmd(
 	registryFactory func() truststore.Registry,
 ) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "uninstall",
-		Short: "Remove the Clyde MITM CA from the OS trust store",
-		Args:  cobra.NoArgs,
+		Use:     "uninstall",
+		Short:   "Remove the Clyde MITM CA from the OS trust store",
+		Long:    "Remove the Clyde MITM certificate authority from the operating system trust store. This changes the OS trust store using your own privileges.",
+		Example: "clyde mitm trust uninstall",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			reg := registryFactory()
 			if reg.Platform() == truststore.PlatformUnsupported {
@@ -111,9 +115,11 @@ func newTrustStatusCmd(
 	loadConfig func() (*config.Config, error),
 ) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Print the OS trust-store state for the Clyde MITM CA",
-		Args:  cobra.NoArgs,
+		Use:     "status",
+		Short:   "Print the OS trust-store state for the Clyde MITM CA",
+		Long:    "Report whether the Clyde MITM certificate authority is present in the operating system trust store, for the configured CA certificate path.",
+		Example: "clyde mitm trust status",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := loadConfig()
 			if err != nil {

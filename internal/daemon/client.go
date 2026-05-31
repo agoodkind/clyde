@@ -10,15 +10,21 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/mitm"
 )
 
 const (
 	reloadClientOverallTimeout = 60 * time.Second
 	reloadClientRPCTimeout     = 30 * time.Second
+	queryClientRPCTimeout      = 30 * time.Second
+	analysisClientRPCTimeout   = 10 * time.Minute
 	daemonProbeTimeout         = 2 * time.Second
 )
 
@@ -54,6 +60,284 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 		return nil, fmt.Errorf("daemon reload rpc: %w", err)
 	}
 	return resp, nil
+}
+
+// ListConversations asks the running daemon for its conversation index and
+// returns the typed records. When the daemon is not reachable it returns a
+// clear error that names the rpc socket and points at `clyde daemon status`.
+func ListConversations(ctx context.Context) ([]conversation.Record, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.ListConversations(rpcCtx, &clydev1.ListConversationsRequest{})
+	if err != nil {
+		return nil, daemonRPCError(rpcCtx, "list conversations", err)
+	}
+
+	wireRecords := resp.GetConversations()
+	records := make([]conversation.Record, 0, len(wireRecords))
+	for _, wire := range wireRecords {
+		records = append(records, conversation.Record{
+			ID:            wire.GetId(),
+			Provider:      providerFromProto(wire.GetProvider()),
+			NativeID:      wire.GetNativeId(),
+			Title:         wire.GetTitle(),
+			WorkspaceRoot: wire.GetWorkspaceRoot(),
+			ArtifactPath:  wire.GetArtifactPath(),
+			ArtifactKind:  wire.GetArtifactKind(),
+			Model:         wire.GetModel(),
+			CreatedAt:     time.Unix(wire.GetCreatedAtUnix(), 0),
+			UpdatedAt:     time.Unix(wire.GetUpdatedAtUnix(), 0),
+			SizeBytes:     wire.GetSizeBytes(),
+			Archived:      wire.GetArchived(),
+		})
+	}
+	return records, nil
+}
+
+// GetConversation asks the daemon for one conversation transcript rendered as
+// plain text.
+func GetConversation(ctx context.Context, conversationID string, lastN int) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.GetConversation(rpcCtx, &clydev1.GetConversationRequest{
+		ConversationId: conversationID,
+		LastN:          int64(lastN),
+	})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "get conversation", err)
+	}
+	return resp.GetText(), nil
+}
+
+// GetConversationContext asks the daemon for the messages around a center point
+// rendered as plain text.
+func GetConversationContext(ctx context.Context, conversationID, timestamp string, messageIndex, before, after int) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.GetConversationContext(rpcCtx, &clydev1.GetConversationContextRequest{
+		ConversationId: conversationID,
+		Timestamp:      timestamp,
+		MessageIndex:   int64(messageIndex),
+		Before:         int64(before),
+		After:          int64(after),
+	})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "get conversation context", err)
+	}
+	return resp.GetText(), nil
+}
+
+// SearchConversation asks the daemon to search one conversation and cache the
+// result set for a later analyze call.
+func SearchConversation(ctx context.Context, conversationID, query, depth string) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.SearchConversation(rpcCtx, &clydev1.SearchConversationRequest{
+		ConversationId: conversationID,
+		Query:          query,
+		Depth:          depth,
+	})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "search conversation", err)
+	}
+	return resp.GetText(), nil
+}
+
+// AnalyzeSearchResults asks the daemon to run the analysis model over a cached
+// search result set.
+func AnalyzeSearchResults(ctx context.Context, resultID, prompt string) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.AnalyzeSearchResults(rpcCtx, &clydev1.AnalyzeSearchResultsRequest{
+		ResultId: resultID,
+		Prompt:   prompt,
+	})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "analyze results", err)
+	}
+	return resp.GetText(), nil
+}
+
+// ExportTranscript asks the daemon to export one conversation and returns the
+// exported body.
+func ExportTranscript(ctx context.Context, conversationID string, options conversation.ExportOptions) ([]byte, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.ExportTranscript(rpcCtx, &clydev1.ExportTranscriptRequest{
+		ConversationId:         conversationID,
+		Format:                 string(options.Format),
+		Whitespace:             string(options.Whitespace),
+		HistoryStart:           int64(options.HistoryStart),
+		IncludeSystemPrompts:   options.IncludeSystemPrompts,
+		IncludeToolOutputs:     options.IncludeToolOutputs,
+		IncludeRawJsonMetadata: options.IncludeRawJSONMetadata,
+		IncludeThinking:        options.IncludeThinking,
+		IncludeToolCalls:       options.IncludeToolCalls,
+		IncludeChat:            options.IncludeChat,
+	})
+	if err != nil {
+		return nil, daemonRPCError(rpcCtx, "export transcript", err)
+	}
+	return resp.GetBody(), nil
+}
+
+// GetMITMStatus asks the daemon for each MITM listener address, whether it is
+// bound, and the CA paths.
+func GetMITMStatus(ctx context.Context) (MITMStatus, error) {
+	empty := MITMStatus{Listeners: nil, CACertPath: "", CAKeyPath: ""}
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return empty, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.GetMITMStatus(rpcCtx, &clydev1.GetMITMStatusRequest{})
+	if err != nil {
+		return empty, daemonRPCError(rpcCtx, "get mitm status", err)
+	}
+
+	wire := resp.GetListeners()
+	listeners := make([]MITMListenerStatus, 0, len(wire))
+	for _, item := range wire {
+		listeners = append(listeners, MITMListenerStatus{
+			ID:      item.GetId(),
+			Address: item.GetAddress(),
+			Up:      item.GetUp(),
+		})
+	}
+	return MITMStatus{
+		Listeners:  listeners,
+		CACertPath: resp.GetCaCertPath(),
+		CAKeyPath:  resp.GetCaKeyPath(),
+	}, nil
+}
+
+// ShowCapture asks the daemon to correlate one request id across its logs and
+// the SQLite capture store and returns the rendered text or JSON document.
+func ShowCapture(ctx context.Context, id string, asJSON bool) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.ShowCapture(rpcCtx, &clydev1.ShowCaptureRequest{Id: id, Json: asJSON})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "show capture", err)
+	}
+	return resp.GetOutput(), nil
+}
+
+// SeedBaseline asks the daemon to extract a v2 wire baseline from a capture
+// transcript and write it for the given upstream.
+func SeedBaseline(ctx context.Context, upstream, from, output string, includeUA, excludeUA []string) (mitm.SeedBaselineResult, error) {
+	empty := mitm.SeedBaselineResult{Written: "", Upstream: "", Flavors: 0}
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return empty, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.SeedBaseline(rpcCtx, &clydev1.SeedBaselineRequest{
+		Upstream:  upstream,
+		From:      from,
+		Output:    output,
+		IncludeUa: includeUA,
+		ExcludeUa: excludeUA,
+	})
+	if err != nil {
+		return empty, daemonRPCError(rpcCtx, "seed baseline", err)
+	}
+	return mitm.SeedBaselineResult{
+		Written:  resp.GetWritten(),
+		Upstream: resp.GetUpstream(),
+		Flavors:  int(resp.GetFlavors()),
+	}, nil
+}
+
+// LogsInventory asks the daemon to build a metadata-only inventory of its log
+// files and return it rendered as a table or as JSON.
+func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, deep, asJSON bool) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.LogsInventory(rpcCtx, &clydev1.LogsInventoryRequest{
+		StateRoot:        stateRoot,
+		LargestFileLimit: int64(largestFileLimit),
+		Deep:             deep,
+		Json:             asJSON,
+	})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "logs inventory", err)
+	}
+	return resp.GetOutput(), nil
+}
+
+// daemonRPCError translates a failed control-plane rpc into a caller-facing
+// error. An Unavailable code means the daemon is not running, so the message
+// names the rpc socket and how to check the daemon.
+func daemonRPCError(ctx context.Context, operation string, err error) error {
+	socketPath := config.DaemonSocketPath()
+	if status.Code(err) == codes.Unavailable {
+		slog.WarnContext(ctx, "daemon.client.rpc.unavailable", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"operation", operation,
+			"socket_path", socketPath,
+			"err", err,
+		)
+		return fmt.Errorf("clyde daemon is not running at %s; check `clyde daemon status` (launchd starts the daemon): %w", socketPath, err)
+	}
+	slog.WarnContext(ctx, "daemon.client.rpc.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		"operation", operation,
+		"err", err,
+	)
+	return fmt.Errorf("daemon rpc: %w", err)
 }
 
 func probeDaemonRPC(ctx context.Context) error {

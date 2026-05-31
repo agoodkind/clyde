@@ -14,11 +14,28 @@ import (
 // untyped boundary this package exists to avoid. Read each input through the
 // typed Require/Get accessors instead.
 
+// mcpDescription builds the tool description from the one-line summary, the
+// longer description, and the example command lines, so a caller with no help
+// screen reads the same guidance the terminal shows.
+func (op Operation[I]) mcpDescription() string {
+	var b strings.Builder
+	b.WriteString(op.Short)
+	if op.Long != "" {
+		b.WriteString("\n\n")
+		b.WriteString(op.Long)
+	}
+	if len(op.Examples) > 0 {
+		b.WriteString("\n\nExamples:\n")
+		b.WriteString(strings.Join(op.Examples, "\n"))
+	}
+	return b.String()
+}
+
 // mcpTool renders the operation as an MCP tool plus its handler. The tool
 // schema comes from the arguments and parameters; the handler decodes the same
 // request into a fresh input struct and runs the shared work function.
 func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
-	options := []mcp.ToolOption{mcp.WithDescription(op.Short)}
+	options := []mcp.ToolOption{mcp.WithDescription(op.mcpDescription())}
 	for _, arg := range op.Args {
 		properties := []mcp.PropertyOption{mcp.Required(), mcp.Description(arg.Description)}
 		options = append(options, mcp.WithString(arg.MCPName, properties...))

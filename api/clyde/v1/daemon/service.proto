@@ -10,4 +10,140 @@ service ClydeService {
   rpc ReloadDaemon(ReloadDaemonRequest) returns (ReloadDaemonResponse);
   rpc GetProviderStats(GetProviderStatsRequest) returns (GetProviderStatsResponse);
   rpc SubscribeProviderStats(SubscribeProviderStatsRequest) returns (stream ProviderStatsEvent);
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
+  rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
+  rpc GetConversationContext(GetConversationContextRequest) returns (GetConversationContextResponse);
+  rpc SearchConversation(SearchConversationRequest) returns (SearchConversationResponse);
+  rpc AnalyzeSearchResults(AnalyzeSearchResultsRequest) returns (AnalyzeSearchResultsResponse);
+  rpc ExportTranscript(ExportTranscriptRequest) returns (ExportTranscriptResponse);
+  rpc GetMITMStatus(GetMITMStatusRequest) returns (GetMITMStatusResponse);
+  rpc ShowCapture(ShowCaptureRequest) returns (ShowCaptureResponse);
+  rpc SeedBaseline(SeedBaselineRequest) returns (SeedBaselineResponse);
+  rpc LogsInventory(LogsInventoryRequest) returns (LogsInventoryResponse);
+}
+
+message LogsInventoryRequest {
+  string state_root = 1;
+  int64 largest_file_limit = 2;
+  bool deep = 3;
+  bool json = 4;
+}
+
+message LogsInventoryResponse {
+  string output = 1;
+}
+
+message SeedBaselineRequest {
+  string upstream = 1;
+  string from = 2;
+  string output = 3;
+  repeated string include_ua = 4;
+  repeated string exclude_ua = 5;
+}
+
+message SeedBaselineResponse {
+  string written = 1;
+  string upstream = 2;
+  int64 flavors = 3;
+}
+
+message ShowCaptureRequest {
+  string id = 1;
+  bool json = 2;
+}
+
+message ShowCaptureResponse {
+  string output = 1;
+}
+
+message GetMITMStatusRequest {}
+
+message MITMListenerStatus {
+  string id = 1;
+  string address = 2;
+  bool up = 3;
+}
+
+message GetMITMStatusResponse {
+  repeated MITMListenerStatus listeners = 1;
+  string ca_cert_path = 2;
+  string ca_key_path = 3;
+}
+
+message ListConversationsRequest {}
+
+message GetConversationRequest {
+  string conversation_id = 1;
+  int64 last_n = 2;
+}
+
+message GetConversationResponse {
+  string text = 1;
+}
+
+message GetConversationContextRequest {
+  string conversation_id = 1;
+  string timestamp = 2;
+  int64 message_index = 3;
+  int64 before = 4;
+  int64 after = 5;
+}
+
+message GetConversationContextResponse {
+  string text = 1;
+}
+
+message SearchConversationRequest {
+  string conversation_id = 1;
+  string query = 2;
+  string depth = 3;
+}
+
+message SearchConversationResponse {
+  string text = 1;
+}
+
+message AnalyzeSearchResultsRequest {
+  string result_id = 1;
+  string prompt = 2;
+}
+
+message AnalyzeSearchResultsResponse {
+  string text = 1;
+}
+
+message ExportTranscriptRequest {
+  string conversation_id = 1;
+  string format = 2;
+  string whitespace = 3;
+  int64 history_start = 4;
+  bool include_system_prompts = 5;
+  bool include_tool_outputs = 6;
+  bool include_raw_json_metadata = 7;
+  bool include_thinking = 8;
+  bool include_tool_calls = 9;
+  bool include_chat = 10;
+}
+
+message ExportTranscriptResponse {
+  bytes body = 1;
+}
+
+message ConversationRecord {
+  string id = 1;
+  Provider provider = 2;
+  string native_id = 3;
+  string title = 4;
+  string workspace_root = 5;
+  string artifact_path = 6;
+  string artifact_kind = 7;
+  string model = 8;
+  int64 created_at_unix = 9;
+  int64 updated_at_unix = 10;
+  int64 size_bytes = 11;
+  bool archived = 12;
+}
+
+message ListConversationsResponse {
+  repeated ConversationRecord conversations = 1;
 }

@@ -26,22 +26,34 @@ func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
 			commands = append(commands, child)
 			continue
 		}
-		parent, ok := parents[groupRef]
-		if !ok {
-			parent = &cobra.Command{
-				Use:   groupRef.Use,
-				Short: groupRef.Short,
-				Long:  groupRef.Long,
-			}
-			parents[groupRef] = parent
-			commands = append(commands, parent)
-		}
+		parent := ensureGroup(groupRef, parents, &commands)
 		parent.AddCommand(child)
 	}
 	for _, hand := range reg.handwritten {
 		commands = append(commands, hand.Build(f))
 	}
 	return commands
+}
+
+// ensureGroup returns the cobra parent for one group, building the whole parent
+// chain on first use. A top-level group lands among roots; a nested group is
+// attached under its own parent, so a chain renders as nested commands.
+func ensureGroup(group *Group, parents map[*Group]*cobra.Command, roots *[]*cobra.Command) *cobra.Command {
+	if existing, ok := parents[group]; ok {
+		return existing
+	}
+	cmd := &cobra.Command{
+		Use:   group.Use,
+		Short: group.Short,
+		Long:  group.Long,
+	}
+	parents[group] = cmd
+	if group.Parent == nil {
+		*roots = append(*roots, cmd)
+	} else {
+		ensureGroup(group.Parent, parents, roots).AddCommand(cmd)
+	}
+	return cmd
 }
 
 // RenderMCP registers every MCP-exposed operation in the registry as a tool on

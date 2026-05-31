@@ -1,16 +1,15 @@
 package output
 
 import (
-	"bytes"
 	"errors"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
 
-// newRootWithChild builds the same wiring shape as the production
-// root: a persistent --output-format flag at the root and a child
-// subcommand that inherits the flag without re-declaring it.
+// newRootWithChild builds the same wiring shape as the production root: a
+// persistent --output-format flag at the root and a child subcommand that
+// inherits the flag without re-declaring it.
 func newRootWithChild() (*cobra.Command, *cobra.Command) {
 	root := &cobra.Command{Use: "test-root"}
 	PersistentFlag(root)
@@ -22,22 +21,33 @@ func newRootWithChild() (*cobra.Command, *cobra.Command) {
 	return root, child
 }
 
-func TestFrom_DefaultIsText(t *testing.T) {
+// resolveFormat reads the inherited --output-format flag from cmd and parses
+// it, mirroring how a subcommand resolves the output format.
+func resolveFormat(t *testing.T, cmd *cobra.Command) (Format, error) {
+	t.Helper()
+	raw, err := cmd.Flags().GetString(FlagName)
+	if err != nil {
+		t.Fatalf("GetString(%q): %v", FlagName, err)
+	}
+	return ParseFormat(raw)
+}
+
+func TestOutputFormatDefaultIsText(t *testing.T) {
 	root, child := newRootWithChild()
 	root.SetArgs([]string{"child"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("root.Execute returned err: %v", err)
 	}
-	enc, err := From(child, &bytes.Buffer{})
+	format, err := resolveFormat(t, child)
 	if err != nil {
-		t.Fatalf("From returned err: %v", err)
+		t.Fatalf("resolveFormat returned err: %v", err)
 	}
-	if enc.Format != FormatText {
-		t.Fatalf("default Format = %q, want %q", enc.Format, FormatText)
+	if format != FormatText {
+		t.Fatalf("default Format = %q, want %q", format, FormatText)
 	}
 }
 
-func TestFrom_JSONOnEitherSideOfSubcommand(t *testing.T) {
+func TestOutputFormatJSONOnEitherSideOfSubcommand(t *testing.T) {
 	cases := [][]string{
 		{"--output-format", "json", "child"},
 		{"child", "--output-format", "json"},
@@ -50,25 +60,25 @@ func TestFrom_JSONOnEitherSideOfSubcommand(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("root.Execute(%v) returned err: %v", args, err)
 		}
-		enc, err := From(child, &bytes.Buffer{})
+		format, err := resolveFormat(t, child)
 		if err != nil {
-			t.Fatalf("From(%v) returned err: %v", args, err)
+			t.Fatalf("resolveFormat(%v) returned err: %v", args, err)
 		}
-		if enc.Format != FormatJSON {
-			t.Fatalf("Format for %v = %q, want %q", args, enc.Format, FormatJSON)
+		if format != FormatJSON {
+			t.Fatalf("Format for %v = %q, want %q", args, format, FormatJSON)
 		}
 	}
 }
 
-func TestFrom_UnknownValueIsTypedError(t *testing.T) {
+func TestOutputFormatUnknownValueIsTypedError(t *testing.T) {
 	root, child := newRootWithChild()
 	root.SetArgs([]string{"--output-format", "banana", "child"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("root.Execute returned err: %v", err)
 	}
-	_, err := From(child, &bytes.Buffer{})
+	_, err := resolveFormat(t, child)
 	if err == nil {
-		t.Fatal("From with banana returned nil error")
+		t.Fatal("resolveFormat with banana returned nil error")
 	}
 	var typed *UnknownFormatError
 	if !errors.As(err, &typed) {

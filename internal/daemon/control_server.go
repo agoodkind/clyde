@@ -8,9 +8,14 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/loginventory"
+	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/providerid"
 )
 
@@ -18,8 +23,13 @@ const providerStatsStreamInterval = time.Second
 
 type controlServer struct {
 	clydev1.UnimplementedClydeServiceServer
-	stats  *providerStatsRecorder
-	reload func(context.Context) (*clydev1.ReloadDaemonResponse, error)
+	stats         *providerStatsRecorder
+	searchConfig  config.SearchConfig
+	loggingConfig config.LoggingConfig
+	mitmConfig    config.MITMConfig
+	mitmStatus    func() MITMStatus
+	showCapture   func(ctx context.Context, id string, asJSON bool) (string, error)
+	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 }
 
 func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
@@ -31,6 +41,252 @@ func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemo
 
 func (s *controlServer) GetProviderStats(context.Context, *clydev1.GetProviderStatsRequest) (*clydev1.GetProviderStatsResponse, error) {
 	return providerStatsResponse(s.stats), nil
+}
+
+// ListConversations answers the conversation index that the daemon refreshes in
+// the background. It is the one place that reads the index for every front end.
+func (s *controlServer) ListConversations(ctx context.Context, _ *clydev1.ListConversationsRequest) (*clydev1.ListConversationsResponse, error) {
+	records, err := conversation.DefaultIndex.List(ctx)
+	if err != nil {
+		client, _ := peer.FromContext(ctx)
+		slog.WarnContext(ctx, "daemon.list_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "list conversations: %v", err)
+	}
+	out := make([]*clydev1.ConversationRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, &clydev1.ConversationRecord{
+			Id:            record.ID,
+			Provider:      protoProvider(record.Provider),
+			NativeId:      record.NativeID,
+			Title:         record.Title,
+			WorkspaceRoot: record.WorkspaceRoot,
+			ArtifactPath:  record.ArtifactPath,
+			ArtifactKind:  record.ArtifactKind,
+			Model:         record.Model,
+			CreatedAtUnix: record.CreatedAt.Unix(),
+			UpdatedAtUnix: record.UpdatedAt.Unix(),
+			SizeBytes:     record.SizeBytes,
+			Archived:      record.Archived,
+		})
+	}
+	return &clydev1.ListConversationsResponse{Conversations: out}, nil
+}
+
+// GetConversation resolves one conversation and returns its transcript rendered
+// as plain text.
+func (s *controlServer) GetConversation(ctx context.Context, req *clydev1.GetConversationRequest) (*clydev1.GetConversationResponse, error) {
+	client, _ := peer.FromContext(ctx)
+	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.get_conversation.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", req.GetConversationId(),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
+	}
+	text, err := conversation.RenderPlainText(record, int(req.GetLastN()))
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.get_conversation.render_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", record.ID,
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "render conversation: %v", err)
+	}
+	return &clydev1.GetConversationResponse{Text: text}, nil
+}
+
+// GetConversationContext resolves one conversation and returns the messages
+// around a center point rendered as plain text.
+func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1.GetConversationContextRequest) (*clydev1.GetConversationContextResponse, error) {
+	client, _ := peer.FromContext(ctx)
+	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.get_context.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", req.GetConversationId(),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
+	}
+	text, err := conversation.ContextWindowText(record, req.GetTimestamp(), int(req.GetMessageIndex()), int(req.GetBefore()), int(req.GetAfter()))
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.get_context.render_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", record.ID,
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "render context: %v", err)
+	}
+	return &clydev1.GetConversationContextResponse{Text: text}, nil
+}
+
+// SearchConversation searches one conversation and caches the result set in the
+// daemon so a later AnalyzeSearchResults call can reach it.
+func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.SearchConversationRequest) (*clydev1.SearchConversationResponse, error) {
+	client, _ := peer.FromContext(ctx)
+	if req.GetQuery() == "" {
+		return &clydev1.SearchConversationResponse{Text: "query is required"}, nil
+	}
+	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.search.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", req.GetConversationId(),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
+	}
+	output, err := conversation.SearchConversation(ctx, record, req.GetQuery(), req.GetDepth(), s.searchConfig)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.search.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", record.ID,
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "search conversation: %v", err)
+	}
+	return &clydev1.SearchConversationResponse{Text: output.Text}, nil
+}
+
+// AnalyzeSearchResults runs the configured analysis model over a cached search
+// result set held by the daemon.
+func (s *controlServer) AnalyzeSearchResults(ctx context.Context, req *clydev1.AnalyzeSearchResultsRequest) (*clydev1.AnalyzeSearchResultsResponse, error) {
+	client, _ := peer.FromContext(ctx)
+	if req.GetResultId() == "" || req.GetPrompt() == "" {
+		return &clydev1.AnalyzeSearchResultsResponse{Text: "result_id and prompt are required"}, nil
+	}
+	text, err := conversation.AnalyzeSearchResults(ctx, req.GetResultId(), req.GetPrompt(), s.searchConfig)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.analyze.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"result_id", req.GetResultId(),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "analyze results: %v", err)
+	}
+	return &clydev1.AnalyzeSearchResultsResponse{Text: text}, nil
+}
+
+// ExportTranscript resolves one conversation and returns its exported body.
+func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.ExportTranscriptRequest) (*clydev1.ExportTranscriptResponse, error) {
+	client, _ := peer.FromContext(ctx)
+	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.export.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", req.GetConversationId(),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
+	}
+	options := conversation.ExportOptions{
+		Format:                 conversation.ExportFormat(req.GetFormat()),
+		HistoryStart:           int(req.GetHistoryStart()),
+		Whitespace:             conversation.WhitespaceMode(req.GetWhitespace()),
+		IncludeChat:            req.GetIncludeChat(),
+		IncludeThinking:        req.GetIncludeThinking(),
+		IncludeSystemPrompts:   req.GetIncludeSystemPrompts(),
+		IncludeToolCalls:       req.GetIncludeToolCalls(),
+		IncludeToolOutputs:     req.GetIncludeToolOutputs(),
+		IncludeRawJSONMetadata: req.GetIncludeRawJsonMetadata(),
+	}
+	body, err := conversation.Export(record, options)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.export.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"conversation_id", record.ID,
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "export transcript: %v", err)
+	}
+	return &clydev1.ExportTranscriptResponse{Body: body}, nil
+}
+
+// GetMITMStatus reports each configured MITM listener address, whether the
+// daemon has it bound, and the CA paths.
+func (s *controlServer) GetMITMStatus(context.Context, *clydev1.GetMITMStatusRequest) (*clydev1.GetMITMStatusResponse, error) {
+	snapshot := MITMStatus{Listeners: nil, CACertPath: "", CAKeyPath: ""}
+	if s.mitmStatus != nil {
+		snapshot = s.mitmStatus()
+	}
+	listeners := make([]*clydev1.MITMListenerStatus, 0, len(snapshot.Listeners))
+	for _, listener := range snapshot.Listeners {
+		listeners = append(listeners, &clydev1.MITMListenerStatus{
+			Id:      listener.ID,
+			Address: listener.Address,
+			Up:      listener.Up,
+		})
+	}
+	return &clydev1.GetMITMStatusResponse{
+		Listeners:  listeners,
+		CaCertPath: snapshot.CACertPath,
+		CaKeyPath:  snapshot.CAKeyPath,
+	}, nil
+}
+
+// ShowCapture correlates one request id across the daemon's logs and the SQLite
+// capture store and returns the rendered text or JSON document.
+func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptureRequest) (*clydev1.ShowCaptureResponse, error) {
+	if s.showCapture == nil {
+		return &clydev1.ShowCaptureResponse{Output: ""}, nil
+	}
+	output, err := s.showCapture(ctx, req.GetId(), req.GetJson())
+	if err != nil {
+		client, _ := peer.FromContext(ctx)
+		slog.WarnContext(ctx, "daemon.show_capture.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "show capture: %v", err)
+	}
+	return &clydev1.ShowCaptureResponse{Output: output}, nil
+}
+
+// SeedBaseline extracts a v2 wire baseline from a capture transcript and writes
+// reference-v2.toml for the given upstream.
+func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBaselineRequest) (*clydev1.SeedBaselineResponse, error) {
+	result, err := mitm.SeedBaseline(ctx, req.GetFrom(), req.GetUpstream(), req.GetOutput(), req.GetIncludeUa(), req.GetExcludeUa())
+	if err != nil {
+		client, _ := peer.FromContext(ctx)
+		slog.WarnContext(ctx, "daemon.seed_baseline.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"upstream", req.GetUpstream(),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.InvalidArgument, "seed baseline: %v", err)
+	}
+	return &clydev1.SeedBaselineResponse{
+		Written:  result.Written,
+		Upstream: result.Upstream,
+		Flavors:  int64(result.Flavors),
+	}, nil
+}
+
+// LogsInventory builds a metadata-only inventory of the daemon's log files and
+// returns it rendered as a table or as JSON.
+func (s *controlServer) LogsInventory(ctx context.Context, req *clydev1.LogsInventoryRequest) (*clydev1.LogsInventoryResponse, error) {
+	output, err := loginventory.Render(
+		req.GetStateRoot(),
+		int(req.GetLargestFileLimit()),
+		req.GetDeep(),
+		s.loggingConfig,
+		s.mitmConfig,
+		req.GetJson(),
+	)
+	if err != nil {
+		client, _ := peer.FromContext(ctx)
+		slog.WarnContext(ctx, "daemon.logs_inventory.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "logs inventory: %v", err)
+	}
+	return &clydev1.LogsInventoryResponse{Output: output}, nil
 }
 
 func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest, stream grpc.ServerStreamingServer[clydev1.ProviderStatsEvent]) error {
@@ -98,6 +354,38 @@ func int32FromInt(value int) int32 {
 		return minInt32Value
 	}
 	return int32(value)
+}
+
+// peerString formats a gRPC peer for log enrichment, returning an empty string
+// when no addressable peer is present.
+func peerString(client *peer.Peer) string {
+	if client != nil && client.Addr != nil {
+		return client.Addr.String()
+	}
+	return ""
+}
+
+func providerFromProto(provider clydev1.Provider) providerid.Provider {
+	switch provider {
+	case clydev1.Provider_PROVIDER_CLAUDE:
+		return providerid.ProviderClaude
+	case clydev1.Provider_PROVIDER_CODEX:
+		return providerid.ProviderCodex
+	case clydev1.Provider_PROVIDER_ANTHROPIC:
+		return providerid.ProviderAnthropic
+	case clydev1.Provider_PROVIDER_OPENAI_COMPAT:
+		return providerid.ProviderOpenAICompat
+	case clydev1.Provider_PROVIDER_MITM:
+		return providerid.ProviderMITM
+	case clydev1.Provider_PROVIDER_ARTIFACT:
+		return providerid.ProviderArtifact
+	case clydev1.Provider_PROVIDER_CURSOR:
+		return providerid.ProviderCursor
+	case clydev1.Provider_PROVIDER_UNSPECIFIED:
+		return providerid.ProviderUnspecified
+	default:
+		return providerid.ProviderUnspecified
+	}
 }
 
 func protoProvider(provider providerid.Provider) clydev1.Provider {

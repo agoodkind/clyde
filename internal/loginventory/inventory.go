@@ -1,5 +1,6 @@
-// Package logs implements metadata-only Clyde log inspection commands.
-package logs
+// Package loginventory builds a metadata-only inventory of Clyde log files,
+// categorised for the daemon-owned logs inventory query.
+package loginventory
 
 import (
 	"fmt"
@@ -66,10 +67,9 @@ type inventoryOptions struct {
 	MITM             config.MITMConfig
 }
 
-// inventory is the typed output payload for `clyde logs inventory`.
-// It carries the categorised log-file metadata that both the text
-// table renderer and the JSON encoder consume, and implements the
-// output.Payload marker so it can be passed through output.Encoder.
+// inventory is the typed payload for the logs inventory query. It carries the
+// categorised log-file metadata that both the text table renderer and the JSON
+// encoder consume.
 type inventory struct {
 	StateRoot      string            `json:"state_root"`
 	Generated      time.Time         `json:"generated"`
@@ -77,11 +77,6 @@ type inventory struct {
 	CleanupEnabled bool              `json:"cleanup_enabled"`
 	Categories     []categorySummary `json:"categories"`
 }
-
-// IsOutputPayload marks inventory as a valid output.Encoder payload
-// variant. The method is intentionally empty; it exists so the closed
-// output.Payload interface is satisfied without widening the marker.
-func (inventory) IsOutputPayload() {}
 
 type categorySummary struct {
 	Category           category                 `json:"category"`
