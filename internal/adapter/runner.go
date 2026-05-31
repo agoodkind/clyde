@@ -24,13 +24,6 @@ type Deps struct {
 	// to inject one. A nil result lets the adapter build the provider's
 	// default auth manager.
 	GetAuth func(adapterresolver.ProviderID) adapterprovider.AuthLookup
-	// AnthropicMessagesURLOverride, when non-empty, replaces the
-	// configured /v1/messages URL on the Anthropic client so its
-	// outbound HTTP rides through the local MITM capture proxy.
-	// The daemon populates this when [mitm].enabled_default is
-	// true and the provider list includes "claude". The adapter
-	// otherwise sends directly to api.anthropic.com.
-	AnthropicMessagesURLOverride string
 	// AnthropicWireBaselinePath is the absolute path to the daemon-owned
 	// MITM v2 baseline (reference-v2.toml) the Anthropic client reads at
 	// request time to project its outbound wire identity. The daemon

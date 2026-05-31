@@ -227,14 +227,6 @@ func (s *Server) registerAnthropicProvider(
 	}
 	id := cfg.ClientIdentity
 	messagesURL := cfg.Anthropic.OAuth.MessagesURL
-	if override := strings.TrimSpace(deps.AnthropicMessagesURLOverride); override != "" {
-		// Rewrite messages outbound through the MITM proxy. The
-		// proxy's classifyRoute strips api.anthropic.com from
-		// upstreamURL and prepends its own base, so we only need
-		// to match the path the proxy expects (/v1/messages).
-		messagesURL = strings.TrimRight(override, "/") + "/v1/messages"
-		s.log.LogAttrs(ctx, slog.LevelInfo, "adapter.oauth.mitm_routed", slog.String("concern", "adapter.providers.anthropic.oauth"), slog.String("messages_url", messagesURL))
-	}
 	s.anthr = anthropic.New(nil, claudeAuth, anthropic.Config{
 		MessagesURL:             messagesURL,
 		OAuthAnthropicVersion:   cfg.Anthropic.OAuth.AnthropicVersion,
