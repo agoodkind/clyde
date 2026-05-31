@@ -83,7 +83,7 @@ The practical effect: an MITM proxy that calls `http.Server.Shutdown`
 on a generation transition will block the full deadline waiting for
 those tunnels to drain, then time out. The tunnel goroutines keep
 running, and any process-scoped resource the goroutine holds
-(raw-capture file handle when logging.raw_capture.enabled is set, in-process state, derived contexts) does not
+(the SQLite capture store handle, in-process state, derived contexts) does not
 release until the goroutine actually returns. This is the motivating
 reason for the livetrack long-lived work rule in AGENTS.md: every
 long-lived MITM CONNECT tunnel registers with the livetrack registry,

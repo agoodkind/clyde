@@ -1,38 +1,13 @@
-# Log Inventory
+# Logging inventory
 
-`clyde logs inventory` is the first-class discovery surface for active log locations.
+The inventory index records where logs live so the CLI can enumerate them. Records and categories are emitted by `internal/cli/logs`.
 
-The JSON output includes:
+## Record fields
 
-- `state_root`
-- `generated`
-- `mode`
-- `raw_capture_enabled`
-- `cleanup_enabled`
-- `categories`
+Each inventory record carries `path`, `category`, `sizeBytes`, and `modTime`.
 
-Each category includes:
+## Categories
 
-- `category`
-- `sink`
-- `source`
-- `count`
-- `total_bytes`
-- `latest_modified`
-- `representative_path`
-- `last_event_timestamp`
-- `last_event_request_id`
-- `last_cleanup_result`
-- `raw_capture_enabled`
-- `cleanup_enabled`
-- `rotation`
-- `cleanup`
-- `largest_files`
+The `inventoryCategory` constants are, in order: `mitm_capture_index`, `mitm_profile`, `daemon_cli`, `provider_sidecar`, `concern`, `per_chat`, `inventory_index`, `pre_repair`, `lock`, and `uncategorized`.
 
-`last_event_timestamp` and `last_event_request_id` reflect the most recent event the sink received, as recorded by the lightweight `inventory_index` sink at `logs/inventory/events.jsonl`. `last_cleanup_result` is the typed `slogger.cleanup.completed` payload (scanned roots, candidate count, deleted count, bytes deleted, skipped paths, errors, duration) for the most recent cleanup pass, repeated on every cleanup-eligible category and omitted on lock files and uncategorized entries.
-
-Use the default indexed mode for routine diagnostics. Indexed mode stats configured active log locations and parses the lightweight `inventory_index` sink instead of recursively walking the full state tree.
-
-Deep mode is a pure filesystem walk. `clyde logs inventory --deep` does not read `logs/inventory/events.jsonl`, so fields derived from the inventory index (`last_event_timestamp`, `last_event_request_id`, `last_cleanup_result`) remain empty in deep mode even when the index file exists. Use `--deep` when exact file counts matter, such as manual deletion of aged logs or verification of a suspected stale index.
-
-Inventory categories cover, in order, MITM raw captures, MITM profile/process logs, top-level daemon/cli logs, provider sidecar logs, concern logs, per-chat transcript logs, inventory indexes, pre-repair retained logs, lock files, and uncategorized logs. MITM wire legs route through the `providers.mitm.wire` concern to `logs/providers/mitm/wire.jsonl`, surfaced under Concern logs, so there is no separate MITM capture index category. Add a category only when a stable sink or external fallback location appears.
+MITM wire legs route through the `providers.mitm.wire` concern to `logs/providers/mitm/wire.jsonl`, surfaced under the `concern` category. Full MITM request/response bodies persist to the SQLite capture store at `mitm/capture.db`, which is not a log file and is not inventoried. Add a category only when a stable sink or external fallback location appears.

@@ -21,7 +21,7 @@ Cleanup applies across the logging surfaces exposed by inventory, aligned to the
 - Lock files.
 - Uncategorized.
 
-MITM wire legs are concern logs at `logs/providers/mitm/wire.jsonl`, not a capture index, so they fall under Concern logs rather than a separate MITM capture-index category.
+MITM wire legs are concern logs at `logs/providers/mitm/wire.jsonl`, so they fall under Concern logs.
 
 Use `clyde logs inventory --deep --json` around manual cleanup when exact file counts matter.
 

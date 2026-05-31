@@ -1,6 +1,6 @@
 # SLOG contract
 
-Clyde request logging uses one typed event contract in `internal/logevent`. Normal JSONL logs always carry a filtered inline payload view, and raw bodies are only written to raw-capture sidecar files when `logging.raw_capture.enabled = true`.
+Clyde request logging uses one typed event contract in `internal/logevent`. Normal JSONL logs always carry a filtered inline payload view; full decoded MITM request/response bodies persist only to the SQLite capture store at `mitm/capture.db`.
 
 ## Request Events
 
@@ -17,7 +17,7 @@ The required adapter chat legs are `adapter_ingress`, `adapter_payload`, `adapte
 
 The required MITM IDE backend legs are `mitm_ingress`, `mitm_payload`, `mitm_upstream_send`, `mitm_upstream_start`, `mitm_forward`, `mitm_capture_index`, and `mitm_complete`. The `mitm_capture_index` leg is a request-story sequencing leg in that ordered series, not a write to a capture-index file.
 
-Plain HTTP MITM traffic and Cursor TLS-intercept HTTP traffic both use this 7-leg MITM sequence. Decrypted HTTP requests enter `recordHTTPCapture(...)`, the shared MITM request recorder in `internal/mitm/proxy.go`, which sequences the per-leg helpers `beginHTTPLogRecorder`, `emitHTTPLogLeg`, `emitHTTPPayloadLeg`, `recordHTTPFailure`, and `completeHTTPLogRecorder` in `internal/mitm/request_logging.go`. Provider packages own TLS interception mechanics, and `internal/logevent` owns the request-story event shape. MITM request-story legs are written to the `providers.mitm.wire` concern file `logs/providers/mitm/wire.jsonl` through the gklog concern Router, because the dedicated `mitm/capture.jsonl` sink and the `mitm_capture` sink were removed.
+Plain HTTP MITM traffic and Cursor TLS-intercept HTTP traffic both use this 7-leg MITM sequence. Decrypted HTTP requests enter `recordHTTPCapture(...)`, the shared MITM request recorder in `internal/mitm/proxy.go`, which sequences the per-leg helpers `beginHTTPLogRecorder`, `emitHTTPLogLeg`, `emitHTTPPayloadLeg`, `recordHTTPFailure`, and `completeHTTPLogRecorder` in `internal/mitm/request_logging.go`. Provider packages own TLS interception mechanics, and `internal/logevent` owns the request-story event shape. MITM request-story legs are written to the `providers.mitm.wire` concern file `logs/providers/mitm/wire.jsonl` through the gklog concern Router.
 
 A recorder emits `logging.request.incomplete` at warning level when a request story completes without every required leg.
 
@@ -25,7 +25,7 @@ A recorder emits `logging.request.incomplete` at warning level when a request st
 
 The inline payload policy is fixed. It keeps metadata and non-context JSON fields, and it removes context-bearing fields such as messages, input, tools, functions, instructions, prompts, conversation, context, and system content. Removed fields are represented by path, reason, byte count, and item count.
 
-`logging.raw_capture.enabled` controls whether raw request and response bodies can be written to local sidecar files. Normal process logs, concern logs, and request logs do not inline raw payload bodies; raw bodies go only to the `mitm/raw/<host>/` sidecars, and only when `logging.raw_capture.enabled` is true.
+Normal process logs, concern logs, and request logs do not inline raw payload bodies. Full decoded MITM request and response bodies persist to the SQLite capture store at `mitm/capture.db` (`internal/mitm/capture`), one row per exchange plus a side table for bodies, joined to wire legs on `request_id`/`trace_id`.
 
 `logging.cleanup.enabled` controls whether retention cleanup may delete rotated logs. When disabled, cleanup policy resolves to `off`.
 

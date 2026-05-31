@@ -4,9 +4,9 @@ Logging configuration is centralized under `[logging]`.
 
 Payload controls:
 
-- `logging.raw_capture.enabled` controls whether raw payload sidecar files may be written.
 - Normal JSONL request logs always use the fixed filtered inline payload view.
 - There is no user-facing payload mode ladder.
+- MITM request/response bodies are not a `[logging]` concern; they persist to the SQLite capture store at `mitm/capture.db`, configured under `[mitm.capture_store]`.
 
 Cleanup controls:
 
@@ -18,7 +18,7 @@ Sink controls:
 - `logging.sinks.enabled` is the flat allowlist of stable sink names to enable.
 - Per-sink config also uses `[logging.sinks.<name>]` table blocks, each with `enabled`, `level`, `path`, and `rotation`, to specialize an individual sink alongside the flat allowlist.
 - The flat allowlist and the per-sink table blocks resolve through one declarative sink registry in `internal/config/logging_config.go`, validated by `IsKnownLoggingSink`.
-- The canonical sink names are `daemon`, `cli`, `codex_sidecar`, `anthropic_sidecar`, `audit`, `concerns`, `transcripts`, `mitm_raw`, and `inventory_index`. There is no `mitm_capture` sink.
+- The canonical sink names are `daemon`, `cli`, `codex_sidecar`, `anthropic_sidecar`, `audit`, `concerns`, `transcripts`, and `inventory_index`. MITM wire legs route through the `concerns` sink to `logs/providers/mitm/wire.jsonl`; full MITM bodies persist to `mitm/capture.db`.
 - `logging.concerns` maps registered concern names to concern-specific overrides.
 
 Rotation controls:

@@ -180,8 +180,8 @@ Default log paths are under `$XDG_STATE_HOME/clyde`; when `XDG_STATE_HOME` is un
 - Main CLI log: `clyde-cli.jsonl`.
 - Concern logs: `logs/<concern-path>.jsonl`.
 - Dedicated Codex sidecar log: `codex.jsonl`, unless `CLYDE_CODEX_LOG_PATH` overrides it.
-- MITM capture index: `mitm/capture.jsonl`.
-- MITM raw payload files: `mitm/raw/<host>/`, only when `logging.raw_capture.enabled` is true.
+- MITM capture store: `mitm/capture.db` (SQLite; full decoded request/response bodies plus per-request metadata, one row per exchange with a side table for bodies).
+- MITM wire legs: `logs/providers/mitm/wire.jsonl` via the `providers.mitm.wire` concern; join to capture.db rows on `request_id`/`trace_id`.
 - macOS LaunchAgent stderr/stdout fallback: `daemon.log`.
 
 Useful concern roots include `adapter.http`, `adapter.chat`, `adapter.models`, `adapter.providers`, `providers.claude`, `providers.codex`, `providers.mitm`, `daemon.rpc`, `daemon.workers`, `process.daemon`, and `mcp.server`.

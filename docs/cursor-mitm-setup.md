@@ -12,7 +12,7 @@ Add these three settings to your Cursor user `settings.json`. The location depen
 "http.proxySupport": "override"
 ```
 
-The port number must match the daemon's configured `[mitm.listen.port]` (default `48723`). The host must match the daemon's configured `[mitm.listen.host]` (default `[::1]`). If your daemon runs on a non-default address, adjust these values accordingly.
+The port and host must match a daemon `[[mitm.listeners]]` entry (the synthesized default is `host = "[::1]"`, `port = 48723`). If your daemon binds a non-default address, adjust these values accordingly.
 
 ## Why the value matters
 

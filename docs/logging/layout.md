@@ -4,7 +4,7 @@ Log layout is discovered through `clyde logs inventory`. The rules here describe
 
 Stable classes, in inventory `categoryOrder`:
 
-- MITM raw captures hold raw request or response bytes, written only when `logging.raw_capture.enabled` is true.
+- MITM request/response bodies persist to the SQLite capture store at `mitm/capture.db`, not to a log category.
 - MITM profile/process logs hold MITM launcher, profile, and process-monitor output.
 - Top-level daemon/cli logs hold daemon and CLI process events.
 - Provider sidecar logs hold provider-specific safe summaries and transport diagnostics.
@@ -19,7 +19,6 @@ File naming rules:
 
 - JSONL logs use `.jsonl` suffixes.
 - Per-chat files use a sanitized chat key and must stay under the configured chat log root.
-- MITM raw request and response sidecar paths ride on the typed MITM facet `RawRequestPath` and `RawResponsePath` fields. The facet `CapturePath` is intentionally empty, and sidecars are written only when `logging.raw_capture.enabled` is true.
 - Rotated files use the cleanup class of their active file.
 
 Humans and LLMs should start with `clyde logs inventory --json` instead of guessing paths. Use `--deep` when the exact filesystem view matters.
