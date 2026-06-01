@@ -150,6 +150,73 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	}
 }
 
+func TestProxyWebsocketCaptureBridgesCodexRemoteControlPath(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	upstreamPath := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath <- r.URL.Path
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upstream upgrade: %v", err)
+		}
+		defer conn.Close()
+		messageType, payload, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		if err := conn.WriteMessage(messageType, payload); err != nil {
+			return
+		}
+	}))
+	defer upstream.Close()
+
+	logBuffer := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	proxy := newWebsocketRequestLogProxy(t, t.TempDir(), logger)
+	defer overrideChatGPTUpstream(t, upstream.URL)()
+
+	srv := httptest.NewServer(http.HandlerFunc(proxy.handle))
+	defer srv.Close()
+
+	const remoteControlPath = "/backend-api/wham/remote/control/server"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + remoteControlPath
+	conn, resp, err := websocket.DefaultDialer.DialContext(context.Background(), wsURL, nil)
+	if err != nil {
+		t.Fatalf("client dial: %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"hello":"phone"}`)); err != nil {
+		t.Fatalf("write client frame: %v", err)
+	}
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read upstream echo: %v", err)
+	}
+	_ = conn.Close()
+
+	select {
+	case got := <-upstreamPath:
+		if got != remoteControlPath {
+			t.Fatalf("upstream path = %q, want %q", got, remoteControlPath)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for upstream websocket request")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		events := captureLogEvents(t, logBuffer.String(), "logging.request.leg")
+		for _, event := range events {
+			if event["provider"] == "codex" && event["path"] == remoteControlPath {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("missing codex request leg for %s in logs:\n%s", remoteControlPath, logBuffer.String())
+}
+
 func waitForWebsocketHandler(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {

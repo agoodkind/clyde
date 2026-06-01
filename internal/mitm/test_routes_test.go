@@ -76,7 +76,7 @@ func providerNameForTestRoute(id testRouteID) string {
 	case testRouteOpenAIV1:
 		return "openai"
 	case testRouteOpenAIBackend:
-		return "openai"
+		return "codex"
 	}
 	return ""
 }

@@ -744,6 +744,15 @@ func (r *Recorder) Emit(ctx context.Context, event Event) {
 	if event.Path.Host == "" {
 		event.Path.Host = r.basePath.Host
 	}
+	if event.Path.Backend == "" {
+		event.Path.Backend = r.basePath.Backend
+	}
+	if event.Path.Provider == "" {
+		event.Path.Provider = r.basePath.Provider
+	}
+	if event.Path.UpstreamURL == "" {
+		event.Path.UpstreamURL = r.basePath.UpstreamURL
+	}
 	if len(event.Sinks) == 0 {
 		event.Sinks = DefaultSinksForEvent(event)
 	}
