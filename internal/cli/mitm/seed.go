@@ -3,11 +3,13 @@ package mitm
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/response"
 )
 
 // seedBaselineCommand builds `clyde mitm seed-baseline`, a thin wrapper that
@@ -40,11 +42,11 @@ func seedBaselineCommand(f *cli.Factory) *cobra.Command {
 				slog.WarnContext(cmd.Context(), "cli.mitm.seed_baseline.failed", "concern", "cli.mitm", "component", "cli", "upstream", upstream, "err", err)
 				return fmt.Errorf("seed-baseline: %w", err)
 			}
-			out := f.IOStreams.Out
-			fmt.Fprintf(out, "wrote: %s\n", result.Written)
-			fmt.Fprintf(out, "upstream: %s\n", result.Upstream)
-			fmt.Fprintf(out, "flavors: %d\n", result.Flavors)
-			return nil
+			var out strings.Builder
+			fmt.Fprintf(&out, "wrote: %s\n", result.Written)
+			fmt.Fprintf(&out, "upstream: %s\n", result.Upstream)
+			fmt.Fprintf(&out, "flavors: %d\n", result.Flavors)
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
 	cmd.Flags().StringVar(&upstream, "upstream", "", "Upstream name, e.g. claude-code or codex-cli (required)")

@@ -42,7 +42,7 @@ func (op Operation[I]) cobraCommand(f *cli.Factory) *cobra.Command {
 		for _, apply := range applies {
 			apply(&in)
 		}
-		sink := NewCLISink(f.IOStreams.Out)
+		sink := NewCLISink(cmd.Context(), f.IOStreams.Out)
 		return op.Run(cmd.Context(), in, SurfaceCLI, sink)
 	}
 	return cmd

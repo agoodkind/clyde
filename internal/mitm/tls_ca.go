@@ -17,23 +17,41 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"goodkind.io/clyde/internal/clock"
 )
+
+// cachedLeaf is a generated per-host leaf certificate held alongside the
+// expiry it was signed with, so the cache can decide whether the leaf is still
+// presentable without reparsing it.
+type cachedLeaf struct {
+	cert     *tls.Certificate
+	notAfter time.Time
+}
 
 type certAuthority struct {
 	cert  *x509.Certificate
 	key   *rsa.PrivateKey
-	cache map[string]*tls.Certificate
+	cache map[string]cachedLeaf
+	now   func() time.Time
 	mu    sync.Mutex
 }
 
 // caValidity is the lifetime applied to a freshly minted MITM CA.
-// The CA is persisted on disk and only signs ephemeral leaf certs at request
-// time, so the long horizon avoids pointless rotations during normal daemon
-// operation. Real key rotation is handled by deleting the on-disk pair and
-// letting the next start regenerate it.
+// The CA is persisted on disk and signs per-host leaf certs at request time, so
+// the long horizon avoids pointless rotations during normal daemon operation.
+// Real key rotation is handled by deleting the on-disk pair and letting the
+// next start regenerate it.
 const caValidity = 10 * 365 * 24 * time.Hour
+
+// leafBackdate offsets a freshly minted leaf's NotBefore so a small clock
+// difference between the proxy and a connecting client does not reject an
+// otherwise valid leaf.
+const leafBackdate = time.Hour
+
+// leafRenewBefore re-mints a cached leaf once the clock comes within this
+// window of the leaf's NotAfter, so a handshake never presents a leaf inside
+// its final expiry margin. A leaf's NotAfter tracks the signing CA's NotAfter,
+// so this path engages only as the CA itself approaches expiry.
+const leafRenewBefore = time.Hour
 
 const (
 	caCertFileMode os.FileMode = 0o644
@@ -83,7 +101,7 @@ func loadOrCreateCertAuthority(certPath, keyPath string, now func() time.Time) (
 
 	switch {
 	case certExists && keyExists:
-		return loadExistingCertAuthority(certPath, keyPath)
+		return loadExistingCertAuthority(certPath, keyPath, now)
 	case certExists != keyExists:
 		// Refuse to overwrite a half-populated directory. The operator must
 		// resolve the inconsistency manually so a failed earlier write or a
@@ -113,7 +131,10 @@ func pathExists(path string) (bool, error) {
 	return false, fmt.Errorf("os.Stat: %w", err)
 }
 
-func loadExistingCertAuthority(certPath, keyPath string) (*certAuthority, error) {
+func loadExistingCertAuthority(certPath, keyPath string, now func() time.Time) (*certAuthority, error) {
+	if now == nil {
+		now = time.Now
+	}
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		slog.Warn("mitm.tls.ca_cert_read_failed", "concern", "providers.mitm.wire", "path", certPath, "err", err)
@@ -168,7 +189,8 @@ func loadExistingCertAuthority(certPath, keyPath string) (*certAuthority, error)
 	return &certAuthority{
 		cert:  cert,
 		key:   key,
-		cache: make(map[string]*tls.Certificate),
+		cache: make(map[string]cachedLeaf),
+		now:   now,
 		mu:    sync.Mutex{},
 	}, nil
 }
@@ -249,7 +271,8 @@ func createCertAuthority(certPath, keyPath string, now func() time.Time) (*certA
 	return &certAuthority{
 		cert:  cert,
 		key:   key,
-		cache: make(map[string]*tls.Certificate),
+		cache: make(map[string]cachedLeaf),
+		now:   now,
 		mu:    sync.Mutex{},
 	}, nil
 }
@@ -303,9 +326,13 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 	logHost := safePathPart(host)
 	ca.mu.Lock()
 	defer ca.mu.Unlock()
-	if cert := ca.cache[host]; cert != nil {
-		return cert, nil
+	now := ca.now()
+	if entry := ca.cache[host]; entry.cert != nil && now.Add(leafRenewBefore).Before(entry.notAfter) {
+		return entry.cert, nil
 	}
+	// A non-nil cached entry that survived the validity check above is being
+	// replaced because it is at or near expiry; record that as a re-mint.
+	reminted := ca.cache[host].cert != nil
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		slog.Warn("mitm.tls.leaf_key_failed", "concern", "providers.mitm.wire", "host", logHost, "err", err)
@@ -315,12 +342,19 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := clock.Now()
+	// The leaf is valid for the entire remaining life of the signing CA, so a
+	// long-running daemon can never serve a leaf that has outlived its own
+	// stamp. NotBefore is backdated for clock skew but never precedes the CA's
+	// own NotBefore.
+	notBefore := now.Add(-leafBackdate)
+	if notBefore.Before(ca.cert.NotBefore) {
+		notBefore = ca.cert.NotBefore
+	}
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
-		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.Add(12 * time.Hour),
+		NotBefore:    notBefore,
+		NotAfter:     ca.cert.NotAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{host},
@@ -341,7 +375,11 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 		slog.Warn("mitm.tls.leaf_pair_failed", "concern", "providers.mitm.wire", "host", logHost, "err", err)
 		return nil, fmt.Errorf("load mitm leaf cert: %w", err)
 	}
-	ca.cache[host] = &cert
+	ca.cache[host] = cachedLeaf{cert: &cert, notAfter: template.NotAfter}
+	slog.Info("mitm.tls.leaf_minted", "concern", "providers.mitm.wire", "host", logHost,
+		"not_after", template.NotAfter.UTC().Format(time.RFC3339),
+		"reminted", reminted,
+	)
 	return &cert, nil
 }
 

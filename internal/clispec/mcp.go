@@ -6,6 +6,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+
+	"goodkind.io/clyde/internal/response"
 )
 
 // Do not replace the per-parameter decoding below with
@@ -60,7 +62,7 @@ func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 			arg.bind(&in, value)
 		}
 		if missingArg != "" {
-			return mcp.NewToolResultText(missingArg + " is required"), nil
+			return newMCPTextResult(ctx, missingArg+" is required"), nil
 		}
 		for _, param := range op.Params {
 			if param.CLIOnly {
@@ -74,9 +76,13 @@ func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 		if runErr != nil {
 			text = runErr.Error()
 		}
-		return mcp.NewToolResultText(text), nil
+		return newMCPTextResult(ctx, text), nil
 	}
 	return tool, handler
+}
+
+func newMCPTextResult(ctx context.Context, text string) *mcp.CallToolResult {
+	return mcp.NewToolResultText(response.Text(ctx, text))
 }
 
 // mcpOption builds the schema property for one parameter.

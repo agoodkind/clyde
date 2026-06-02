@@ -156,11 +156,6 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 		return nil, fmt.Errorf("quick depth requires local backend with embedding model")
 	}
 
-	if err := ensureEmbeddingModelReady(ctx, cfg.Local); err != nil {
-		log.ErrorContext(ctx, "quick search: embedding model load failed", "concern", "search", "err", err)
-		return nil, fmt.Errorf("failed to load embedding model: %w", err)
-	}
-
 	filter := newEmbeddingFilter(cfg.Local)
 
 	// Build chunk texts
@@ -249,9 +244,7 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 	log.InfoContext(ctx, "sweep: chunked messages", "concern", "search", "chunks", len(chunks), "messages", len(messages), "chunk_size", chunkSize)
 
 	// Pre-filter with embeddings if available (local backend only).
-	// The embedding model is tiny (~0.1 GB) and can coexist with inference models.
 	if cfg.Backend == "local" {
-		_ = ensureEmbeddingModelReady(ctx, cfg.Local)
 		filter := newEmbeddingFilter(cfg.Local)
 		chunks = filter.filterChunks(ctx, query, chunks)
 	}

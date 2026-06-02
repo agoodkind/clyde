@@ -3,11 +3,13 @@ package mitm
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/response"
 )
 
 func newStatusCmd(f *cli.Factory) *cobra.Command {
@@ -23,14 +25,14 @@ func newStatusCmd(f *cli.Factory) *cobra.Command {
 				slog.WarnContext(cmd.Context(), "cli.mitm.status.failed", "concern", "cli.mitm", "component", "cli", "err", err)
 				return fmt.Errorf("mitm status: %w", err)
 			}
-			out := f.IOStreams.Out
+			var out strings.Builder
 			for _, listener := range status.Listeners {
-				fmt.Fprintf(out, "listener[%s] listen_address: %s\n", listener.ID, listener.Address)
-				fmt.Fprintf(out, "listener[%s] listener_up: %t\n", listener.ID, listener.Up)
+				fmt.Fprintf(&out, "listener[%s] listen_address: %s\n", listener.ID, listener.Address)
+				fmt.Fprintf(&out, "listener[%s] listener_up: %t\n", listener.ID, listener.Up)
 			}
-			fmt.Fprintf(out, "ca_cert_path: %s\n", status.CACertPath)
-			fmt.Fprintf(out, "ca_key_path: %s\n", status.CAKeyPath)
-			return nil
+			fmt.Fprintf(&out, "ca_cert_path: %s\n", status.CACertPath)
+			fmt.Fprintf(&out, "ca_key_path: %s\n", status.CAKeyPath)
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
 }

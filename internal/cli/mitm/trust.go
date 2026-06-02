@@ -5,12 +5,14 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/mitm/truststore"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/response"
 )
 
 // newTrustCmd builds the `clyde mitm trust` parent and its three
@@ -73,9 +75,10 @@ func newTrustInstallCmd(
 					"err", err)
 				return fmt.Errorf("install ca: %w", err)
 			}
-			fmt.Fprintf(f.IOStreams.Out, "installed: %s\n", cfg.MITM.CA.CertPath)
-			fmt.Fprintf(f.IOStreams.Out, "platform: %s\n", reg.Platform())
-			return nil
+			var out strings.Builder
+			fmt.Fprintf(&out, "installed: %s\n", cfg.MITM.CA.CertPath)
+			fmt.Fprintf(&out, "platform: %s\n", reg.Platform())
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
 	return cmd
@@ -101,9 +104,10 @@ func newTrustUninstallCmd(
 					"err", err)
 				return fmt.Errorf("uninstall ca: %w", err)
 			}
-			fmt.Fprintf(f.IOStreams.Out, "uninstalled\n")
-			fmt.Fprintf(f.IOStreams.Out, "platform: %s\n", reg.Platform())
-			return nil
+			var out strings.Builder
+			fmt.Fprintf(&out, "uninstalled\n")
+			fmt.Fprintf(&out, "platform: %s\n", reg.Platform())
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
 	return cmd
@@ -132,11 +136,14 @@ func newTrustStatusCmd(
 				slog.WarnContext(cmd.Context(), "cli.mitm.trust.status.read_failed", "concern", "cli.mitm.truststore", "platform", string(reg.Platform()),
 					"err", statusErr)
 				wrapped := fmt.Errorf("cli.mitm.trust: read truststore status: %w", statusErr)
-				writeTrustStatus(f.IOStreams.Out, status, cfg.MITM.CA.CertPath, wrapped)
+				var out strings.Builder
+				writeTrustStatus(&out, status, cfg.MITM.CA.CertPath, wrapped)
+				_ = response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
 				return wrapped
 			}
-			writeTrustStatus(f.IOStreams.Out, status, cfg.MITM.CA.CertPath, nil)
-			return nil
+			var out strings.Builder
+			writeTrustStatus(&out, status, cfg.MITM.CA.CertPath, nil)
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
 		},
 	}
 	return cmd

@@ -8,6 +8,7 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/response"
 )
 
 func newShowCmd(f *cli.Factory) *cobra.Command {
@@ -28,8 +29,10 @@ func newShowCmd(f *cli.Factory) *cobra.Command {
 				slog.WarnContext(cmd.Context(), "cli.mitm.show.failed", "concern", "cli.mitm", "component", "cli", "err", err)
 				return fmt.Errorf("mitm show: %w", err)
 			}
-			_, _ = fmt.Fprint(f.IOStreams.Out, output)
-			return nil
+			if asJSON {
+				return response.WriteJSON(cmd.Context(), f.IOStreams.Out, []byte(output), response.JSONIndented)
+			}
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, output)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit a typed JSON document instead of human-readable text")

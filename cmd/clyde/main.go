@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,7 +23,9 @@ import (
 	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/cursor/mitmcontrib"
+	"goodkind.io/clyde/internal/response"
 	"goodkind.io/clyde/internal/slogger"
+	"goodkind.io/gklog/correlation"
 )
 
 func main() {
@@ -35,19 +38,20 @@ func main() {
 }
 
 func run() int {
+	rootCtx := correlation.WithContext(context.Background(), correlation.New(""))
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "config load failed:", err)
+		_ = response.WriteText(rootCtx, os.Stderr, "config load failed: "+err.Error()+"\n")
 		return 1
 	}
 	setupPolicy, err := logpolicy.ResolveSloggerSetup(*cfg, detectSlogRole(os.Args[1:]))
 	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "logging policy failed:", err)
+		_ = response.WriteText(rootCtx, os.Stderr, "logging policy failed: "+err.Error()+"\n")
 		return 1
 	}
 	closer, err := slogger.SetupWithPolicy(setupPolicy)
 	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "slogger setup failed:", err)
+		_ = response.WriteText(rootCtx, os.Stderr, "slogger setup failed: "+err.Error()+"\n")
 		return 1
 	}
 	defer func() { _ = closer.Close() }()
@@ -55,9 +59,10 @@ func run() int {
 	slog.Info("cli.main.start", "concern", "cmd.dispatch", "component", "cli")
 	f := cli.NewSystemFactory(cli.BuildInfo{Version: "DEVELOPMENT", Commit: "", Date: ""})
 	root := newRoot(f)
+	root.SetContext(rootCtx)
 	root.SetArgs(os.Args[1:])
 	if err := root.Execute(); err != nil {
-		_, _ = fmt.Fprintln(f.IOStreams.Err, "Error:", err)
+		_ = response.WriteText(rootCtx, f.IOStreams.Err, "Error: "+err.Error()+"\n")
 		return 1
 	}
 	return 0
@@ -79,6 +84,9 @@ func newRoot(f *cli.Factory) *cobra.Command {
 	root.SetIn(f.IOStreams.In)
 	root.SetOut(f.IOStreams.Out)
 	root.SetErr(f.IOStreams.Err)
+	root.SetHelpFunc(func(cmd *cobra.Command, _ []string) {
+		_ = response.WriteText(cmd.Context(), cmd.OutOrStdout(), helpText(cmd))
+	})
 
 	cli.RegisterGlobalFlags(root)
 	output.PersistentFlag(root)
@@ -92,6 +100,18 @@ func newRoot(f *cli.Factory) *cobra.Command {
 		root.AddCommand(command)
 	}
 	return root
+}
+
+func helpText(cmd *cobra.Command) string {
+	description := strings.TrimSpace(cmd.Long)
+	if description == "" {
+		description = strings.TrimSpace(cmd.Short)
+	}
+	usage := cmd.UsageString()
+	if description == "" {
+		return usage
+	}
+	return description + "\n\n" + usage
 }
 
 func detectSlogRole(args []string) slogger.ProcessRole {

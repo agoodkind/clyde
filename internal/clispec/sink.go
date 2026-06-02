@@ -1,11 +1,14 @@
 package clispec
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
+
+	"goodkind.io/clyde/internal/response"
 )
 
 // ResultSink is where a work function writes its result without knowing which
@@ -27,25 +30,49 @@ type ResultSink interface {
 
 // CLISink writes to the terminal output stream.
 type CLISink struct {
-	out io.Writer
+	metadata response.Metadata
+	out      io.Writer
+	wrote    bool
 }
 
 // NewCLISink builds a terminal sink over the given output stream.
-func NewCLISink(out io.Writer) *CLISink {
-	return &CLISink{out: out}
+func NewCLISink(ctx context.Context, out io.Writer) *CLISink {
+	return &CLISink{metadata: response.FromContext(ctx), out: out, wrote: false}
 }
 
-// Text writes the string to the terminal stream. A stream write error is
-// ignored, matching how the rest of the CLI treats terminal output.
+// Text writes a text response to the terminal stream.
 func (s *CLISink) Text(text string) error {
-	_, _ = io.WriteString(s.out, text)
+	if s.wrote {
+		if _, err := io.WriteString(s.out, text); err != nil {
+			slog.Warn("clispec.sink.write_text_continuation_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+			return fmt.Errorf("clispec: write text continuation: %w", err)
+		}
+		return nil
+	}
+	s.wrote = true
+	if _, err := io.WriteString(s.out, s.metadata.Text(text)); err != nil {
+		slog.Warn("clispec.sink.write_text_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("clispec: write text response: %w", err)
+	}
 	return nil
 }
 
-// Bytes writes the bytes to the terminal stream. A stream write error is
-// ignored, matching how the rest of the CLI treats terminal output.
+// Bytes writes raw bytes to the terminal stream after the response metadata line.
 func (s *CLISink) Bytes(body []byte) error {
-	_, _ = s.out.Write(body)
+	if !s.wrote {
+		header := s.metadata.HeaderLine()
+		if header != "" {
+			if _, err := io.WriteString(s.out, header+"\n"); err != nil {
+				slog.Warn("clispec.sink.write_byte_metadata_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+				return fmt.Errorf("clispec: write byte response metadata: %w", err)
+			}
+		}
+		s.wrote = true
+	}
+	if _, err := s.out.Write(body); err != nil {
+		slog.Warn("clispec.sink.write_byte_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("clispec: write byte response: %w", err)
+	}
 	return nil
 }
 

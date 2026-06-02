@@ -81,6 +81,7 @@ func TestToolCallMiddlewareMetaFields(t *testing.T) {
 
 	req := mcp.CallToolRequest{}
 	req.Params.Name = "clyde_list_conversations"
+	stampCallToolRequestID("rpc-1", &req)
 	if _, err := wrapped(context.Background(), req); err != nil {
 		t.Fatalf("wrapped handler: %v", err)
 	}
@@ -93,6 +94,22 @@ func TestToolCallMiddlewareMetaFields(t *testing.T) {
 	}
 	if capturedMeta.Op != "tool_call" {
 		t.Errorf("Op: got %q, want %q", capturedMeta.Op, "tool_call")
+	}
+	if capturedMeta.RequestID != "rpc-1" {
+		t.Errorf("RequestID: got %q, want %q", capturedMeta.RequestID, "rpc-1")
+	}
+}
+
+func TestMCPHookStampsRequestID(t *testing.T) {
+	t.Parallel()
+	req := mcp.CallToolRequest{}
+	hooks := newHooks()
+	if len(hooks.OnBeforeCallTool) != 1 {
+		t.Fatalf("before call tool hooks: got %d, want 1", len(hooks.OnBeforeCallTool))
+	}
+	hooks.OnBeforeCallTool[0](context.Background(), float64(42), &req)
+	if got := req.Header.Get(mcpRequestIDHeader); got != "42" {
+		t.Fatalf("request id header: got %q, want %q", got, "42")
 	}
 }
 

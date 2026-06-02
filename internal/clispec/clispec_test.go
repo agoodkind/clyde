@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/gklog/correlation"
 )
 
 func TestNameSpellings(t *testing.T) {
@@ -27,7 +28,7 @@ func TestCLISinkWriteFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.txt")
-	sink := NewCLISink(&bytes.Buffer{})
+	sink := NewCLISink(context.Background(), &bytes.Buffer{})
 	if err := sink.WriteFile(path, []byte("body")); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -181,6 +182,27 @@ func TestMCPHandlerBindsAndIsLenient(t *testing.T) {
 	}
 }
 
+func TestMCPHandlerPrependsCorrelationMetadata(t *testing.T) {
+	t.Parallel()
+	_, handler := probeOp().mcpTool()
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"the_id": "xyz",
+	}
+	result, err := handler(ctx, req)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	want := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\nxyz:7:off:alpha:mcp"
+	if got := textOf(t, result); got != want {
+		t.Fatalf("mcp output: got %q, want %q", got, want)
+	}
+}
+
 func TestMCPHandlerRequiresPositional(t *testing.T) {
 	t.Parallel()
 	_, handler := probeOp().mcpTool()
@@ -192,6 +214,14 @@ func TestMCPHandlerRequiresPositional(t *testing.T) {
 	}
 	if got := textOf(t, result); got != "the_id is required" {
 		t.Errorf("missing positional: got %q, want %q", got, "the_id is required")
+	}
+}
+
+func TestDefaultExportOutputPath(t *testing.T) {
+	t.Parallel()
+	got := defaultExportOutputPath("claude:1a2b/3c", "json")
+	if got != "claude-1a2b-3c.json" {
+		t.Fatalf("defaultExportOutputPath() = %q, want %q", got, "claude-1a2b-3c.json")
 	}
 }
 

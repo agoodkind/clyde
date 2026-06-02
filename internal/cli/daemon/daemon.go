@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/response"
 )
 
 const reloadCommandTimeout = 75 * time.Second
@@ -82,8 +84,8 @@ func newReloadCmd(f *cli.Factory) *cobra.Command {
 			if resp.GetBinaryReloaded() {
 				status = "reloaded"
 			}
-			_, _ = fmt.Fprintf(f.IOStreams.Out, "daemon binary %s: active_surfaces=%d new_pid=%d\n", status, resp.GetActiveSurfaces(), resp.GetNewPid())
-			return nil
+			body := fmt.Sprintf("daemon binary %s: active_surfaces=%d new_pid=%d\n", status, resp.GetActiveSurfaces(), resp.GetNewPid())
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, body)
 		},
 	}
 }
@@ -106,8 +108,9 @@ func newStatusCmd(f *cli.Factory) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 			defer cancel()
 			report := inspectDaemonStatus(ctx)
-			writeStatusReport(f, report)
-			return nil
+			var body strings.Builder
+			writeStatusReport(&body, report)
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, body.String())
 		},
 	}
 }
@@ -122,8 +125,7 @@ func newSupervisorFingerprintCmd(f *cli.Factory) *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if built {
-				_, _ = fmt.Fprintln(f.IOStreams.Out, builtFingerprint())
-				return nil
+				return response.WriteText(cmd.Context(), f.IOStreams.Out, builtFingerprint()+"\n")
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 			defer cancel()
@@ -131,16 +133,14 @@ func newSupervisorFingerprintCmd(f *cli.Factory) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(f.IOStreams.Out, fingerprint)
-			return nil
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, fingerprint+"\n")
 		},
 	}
 	cmd.Flags().BoolVar(&built, "built", false, "print the compiled supervisor fingerprint")
 	return cmd
 }
 
-func writeStatusReport(f *cli.Factory, report daemonsvc.StatusReport) {
-	out := f.IOStreams.Out
+func writeStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	_, _ = fmt.Fprintln(out, "daemon status")
 	switch {
 	case report.LaunchdTarget == "":

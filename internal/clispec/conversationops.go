@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
+	"unicode"
 
 	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
@@ -261,7 +263,7 @@ func exportTranscriptOp() Operation[exportInput] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
-		Long:     "Export one conversation transcript in the chosen format. The terminal writes to --output when set and otherwise prints to stdout; the MCP tool returns the body as text.",
+		Long:     "Export one conversation transcript in the chosen format. The terminal always writes an artifact file and reports the written path; the MCP tool returns the body as text.",
 		Examples: []string{"clyde conversation export claude:1a2b3c --format markdown --output transcript.md"},
 		Args: []Arg[exportInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
@@ -310,8 +312,16 @@ func exportTranscriptOp() Operation[exportInput] {
 			if err != nil {
 				return logFail(ctx, surface, "export_failed", "export transcript", err)
 			}
-			if in.OutputPath != "" {
-				return sink.WriteFile(in.OutputPath, body)
+			if surface == SurfaceCLI {
+				path := in.OutputPath
+				if path == "" {
+					path = defaultExportOutputPath(in.ConversationID, in.Options.Format)
+				}
+				if err := sink.WriteFile(path, body); err != nil {
+					slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
+					return fmt.Errorf("export transcript: write output %s: %w", path, err)
+				}
+				return sink.Text("wrote: " + path + "\n")
 			}
 			return sink.Bytes(body)
 		},
@@ -335,4 +345,56 @@ func logFail(ctx context.Context, surface Surface, shortEvent, operation string,
 
 func shortPath(path string) string {
 	return homedir.Contract(path)
+}
+
+func defaultExportOutputPath(conversationID string, format conv.ExportFormat) string {
+	base := sanitizeExportBasename(conversationID)
+	if base == "" {
+		base = "transcript"
+	}
+	return base + exportExtension(format)
+}
+
+func sanitizeExportBasename(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	var out []rune
+	lastDash := false
+	for _, r := range trimmed {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			out = append(out, r)
+			lastDash = false
+		case r == '.', r == '_':
+			out = append(out, r)
+			lastDash = false
+		default:
+			if !lastDash {
+				out = append(out, '-')
+				lastDash = true
+			}
+		}
+	}
+	sanitized := strings.Trim(string(out), "-")
+	if sanitized == "" {
+		return ""
+	}
+	return filepath.Clean(sanitized)
+}
+
+func exportExtension(format conv.ExportFormat) string {
+	switch format {
+	case conv.ExportFormatHTML:
+		return ".html"
+	case conv.ExportFormatJSON:
+		return ".json"
+	case conv.ExportFormatPlainText:
+		return ".txt"
+	case conv.ExportFormatMarkdown, "":
+		fallthrough
+	default:
+		return ".md"
+	}
 }

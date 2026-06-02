@@ -11,6 +11,7 @@ import (
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/response"
 )
 
 const defaultLargestFileLimit = 3
@@ -48,8 +49,10 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 				slog.WarnContext(cmd.Context(), "cli.logs.inventory.failed", "concern", "cli.logs", "component", "cli", "err", err)
 				return fmt.Errorf("logs inventory: %w", err)
 			}
-			_, _ = fmt.Fprint(f.IOStreams.Out, result)
-			return nil
+			if format == output.FormatJSON {
+				return response.WriteJSON(cmd.Context(), f.IOStreams.Out, []byte(result), response.JSONCompact)
+			}
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, result)
 		},
 	}
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "Override the Clyde state root to inventory")
