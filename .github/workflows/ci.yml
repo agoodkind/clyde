@@ -20,7 +20,11 @@ jobs:
   project-test:
     name: Project Ginkgo Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The runner cap sits above ginkgo's own --timeout (set in the test-ginkgo
+    # target) so a hanging spec is aborted by ginkgo with a goroutine dump and the
+    # job completes and flushes logs, instead of being SIGKILLed by the runner cap
+    # mid-step, which discards the in-progress step's output.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
