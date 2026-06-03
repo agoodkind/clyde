@@ -31,15 +31,32 @@ jobs:
       # cache is warm before the timed run below.
       - name: Compile race suites
         run: time go run github.com/onsi/ginkgo/v2/ginkgo build -r --race
-      # Run under an external timeout so a hang completes the job (red) instead of
-      # being SIGKILLed by the runner cap, which discards the step log. ginkgo's
-      # --poll-progress-after prints the running node's full goroutine stacks into
-      # stdout every interval, so a deadlock is captured before the timeout ends
-      # the run. Running ginkgo directly (not via make) lets `go run` forward the
-      # signal to the process.
+      # Run with a watchdog that SIGQUITs the whole process group on a deadline so
+      # a hung run completes the job (red) with goroutine dumps instead of being
+      # SIGKILLed by the runner cap (which discards the step log). SIGQUIT makes
+      # every Go process in the group (including the hung suite subprocess) print
+      # all goroutine stacks; SIGKILL then reaps the group so the step exits and
+      # the log persists. ginkgo's --poll-progress-after also streams the running
+      # node's stacks every interval as a second capture path. `set -m` puts the
+      # run in its own process group so the negative-pid signals reach the whole
+      # tree, which a plain `timeout` on `go run` does not (orphans keep the step
+      # pipe open and the job cancels).
       - name: Run race suites
         run: |
-          timeout --kill-after=90s 12m \
-            go run github.com/onsi/ginkgo/v2/ginkgo -r \
+          set -m
+          go run github.com/onsi/ginkgo/v2/ginkgo -r \
             --randomize-all --randomize-suites --fail-on-pending --race \
-            --poll-progress-after=25s --poll-progress-interval=25s
+            --poll-progress-after=25s --poll-progress-interval=25s &
+          run_pid=$!
+          (
+            sleep 720
+            echo "::warning::ginkgo exceeded 12m; SIGQUIT for goroutine dump"
+            kill -QUIT -"$run_pid" 2>/dev/null || true
+            sleep 45
+            kill -KILL -"$run_pid" 2>/dev/null || true
+          ) &
+          watch_pid=$!
+          wait "$run_pid"
+          rc=$?
+          kill "$watch_pid" 2>/dev/null || true
+          exit "$rc"
