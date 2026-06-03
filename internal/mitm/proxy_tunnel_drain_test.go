@@ -345,6 +345,15 @@ func startSlowDripUpstream(t *testing.T, payload []byte, chunkInterval time.Dura
 // openConnectTunnel issues a CONNECT through the proxy to the
 // supplied upstream and returns the established tunnel connection so
 // the caller can read the upstream payload directly.
+//
+// The CONNECT response is parsed with a bufio.Reader, which can read
+// past the response headers into the first bytes of the tunneled
+// payload in a single syscall. Returning the bare conn would drop
+// those buffered bytes and truncate the payload from the front (the
+// CLYDE-324 drain test then reported a spurious tail-truncation). The
+// returned conn drains the bufio buffer before the socket, mirroring
+// how a real buffered client consumes the stream, so no delivered
+// byte is lost.
 func openConnectTunnel(t *testing.T, proxyBase string, upstreamAddr string) net.Conn {
 	t.Helper()
 	u, err := url.Parse(proxyBase)
@@ -388,7 +397,22 @@ func openConnectTunnel(t *testing.T, proxyBase string, upstreamAddr string) net.
 		_ = conn.Close()
 		t.Fatalf("clear deadline: %v", err)
 	}
-	return conn
+	return &bufferedReadConn{Conn: conn, reader: reader}
+}
+
+// bufferedReadConn is a net.Conn whose Read drains a bufio.Reader
+// before falling through to the underlying socket. It lets a helper
+// that parsed a header preamble with bufio hand back a conn that still
+// yields any payload bytes the reader buffered past the headers. All
+// other conn methods (Write, Close, deadlines) operate on the embedded
+// conn directly.
+type bufferedReadConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedReadConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
 }
 
 // connectClient issues a CONNECT through the proxy to the supplied
