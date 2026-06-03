@@ -22,6 +22,26 @@ import (
 	"goodkind.io/clyde/internal/slogger"
 )
 
+// syncBuffer is a goroutine-safe bytes.Buffer for tests where the proxy writes
+// log output from one goroutine while the test reads it from another. Write and
+// String hold the same lock, removing the data race on the shared buffer.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	t.Parallel()
 
@@ -170,7 +190,7 @@ func TestProxyWebsocketCaptureBridgesCodexRemoteControlPath(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	logBuffer := &bytes.Buffer{}
+	logBuffer := &syncBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxy := newWebsocketRequestLogProxy(t, t.TempDir(), logger)
 	defer overrideChatGPTUpstream(t, upstream.URL)()
@@ -251,7 +271,7 @@ func TestProxyWebsocketCaptureUsesNativeCursorHeadersAndRequiredLegs(t *testing.
 	}))
 	defer upstream.Close()
 
-	logBuffer := &bytes.Buffer{}
+	logBuffer := &syncBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxy := newWebsocketRequestLogProxy(t, t.TempDir(), logger)
 	defer overrideChatGPTUpstream(t, upstream.URL)()
@@ -362,7 +382,7 @@ func TestProxyWebsocketCaptureEarlyDialFailureEmitsRequestErrorWithoutIncomplete
 	}))
 	defer upstream.Close()
 
-	logBuffer := &bytes.Buffer{}
+	logBuffer := &syncBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	proxy := newWebsocketRequestLogProxy(t, t.TempDir(), logger)
 	defer overrideChatGPTUpstream(t, upstream.URL)()
