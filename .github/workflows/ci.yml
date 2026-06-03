@@ -31,32 +31,40 @@ jobs:
       # cache is warm before the timed run below.
       - name: Compile race suites
         run: time go run github.com/onsi/ginkgo/v2/ginkgo build -r --race
-      # Run each suite serially in shuffled order, mirroring ginkgo's serial
-      # randomized execution that reproduces the hang, but via `go test` so a
-      # deadlocked package hits Go's own -timeout and prints a full goroutine
-      # dump directly (no ginkgo output buffering, no process-tree kill needed,
-      # which both defeated capture before). The compile step above warms the
-      # race build cache so each package run is fast.
+      # Diagnostic + likely fix: --output-interceptor-mode=none. ginkgo normally
+      # pipes each suite's stdout/stderr through an OS pipe and drains it; under
+      # -race the heavy slog output can fill that 64KB pipe while ginkgo is busy,
+      # blocking the suite's write() forever (a ginkgo-specific, output-volume
+      # deadlock that amd64 timing hits and arm64 does not). With interception
+      # off, the suite writes straight to the job log, so either the hang
+      # disappears (confirming the interceptor) or the suite output (including
+      # --poll-progress-after goroutine stacks) streams live and is captured even
+      # if the run is later killed. The sidecar still SIGQUITs a suite stuck past
+      # 120s so the job completes with a dump rather than the cap discarding it.
       - name: Run race suites
         env:
           GOTRACEBACK: all
         run: |
-          set -u
-          pkgs=$(go list ./...)
-          for trial in 1 2 3 4; do
-            echo "::group::shuffled trial $trial"
-            for pkg in $(printf '%s\n' "$pkgs" | shuf); do
-              if ! go test -race -timeout=50s "$pkg" >/tmp/pkg.out 2>&1; then
-                echo "::endgroup::"
-                if grep -q "test timed out" /tmp/pkg.out; then
-                  echo "::error::DEADLOCK reproduced in ${pkg} (trial ${trial})"
-                else
-                  echo "::error::failure in ${pkg} (trial ${trial})"
-                fi
-                cat /tmp/pkg.out
-                exit 1
-              fi
+          go run github.com/onsi/ginkgo/v2/ginkgo -r \
+            --randomize-all --randomize-suites --fail-on-pending --race \
+            --output-interceptor-mode=none -v \
+            --poll-progress-after=25s --poll-progress-interval=25s &
+          run_pid=$!
+          (
+            while kill -0 "$run_pid" 2>/dev/null; do
+              sleep 15
+              for pid in $(ps -eo pid=,etimes=,args= | awk '$2>120 && /\.test/ && $0 !~ /go[ ]+test[ ]+-c/ {print $1}'); do
+                echo "::warning::SIGQUIT stuck suite pid=$pid (goroutine dump follows)"
+                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
+                echo
+                kill -QUIT "$pid" 2>/dev/null || true
+                sleep 20
+                kill -KILL "$pid" 2>/dev/null || true
+              done
             done
-            echo "::endgroup::"
-          done
-          echo "no deadlock reproduced across 4 shuffled trials"
+          ) &
+          watch_pid=$!
+          wait "$run_pid"
+          rc=$?
+          kill "$watch_pid" 2>/dev/null || true
+          exit "$rc"
