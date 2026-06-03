@@ -18,7 +18,7 @@ jobs:
     uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
 
   project-test:
-    name: Project Ginkgo Tests
+    name: Project Race Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -26,4 +26,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: make test-ginkgo
+      # Race coverage runs the suites with `go test -race` (Go's own runner)
+      # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
+      # the suites finish on linux/amd64 under -race (reproduced on every CI run,
+      # both ginkgo v2.28.1 and v2.29.0; clean on arm64; go test runs the same
+      # RunSpecs suites fine), matching ginkgo issue #871. -shuffle=on keeps the
+      # randomized-order coverage; -timeout makes any real deadlock fail fast with
+      # a full goroutine dump instead of hanging.
+      - name: Race tests
+        env:
+          GOTRACEBACK: all
+        run: go test -race -shuffle=on -count=2 -timeout=8m ./...
