@@ -53,14 +53,22 @@ jobs:
           (
             while kill -0 "$run_pid" 2>/dev/null; do
               sleep 15
-              for pid in $(ps -eo pid=,etimes=,args= | awk '$2>120 && /\.test/ && $0 !~ /go[ ]+test[ ]+-c/ {print $1}'); do
+              stuck=$(ps -eo pid=,etimes=,args= | awk '$2>120 && /\.test/ && $0 !~ /go[ ]+test[ ]+-c/ {print $1}')
+              [ -z "$stuck" ] && continue
+              for pid in $stuck; do
                 echo "::warning::SIGQUIT stuck suite pid=$pid (goroutine dump follows)"
                 tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
                 echo
                 kill -QUIT "$pid" 2>/dev/null || true
-                sleep 20
-                kill -KILL "$pid" 2>/dev/null || true
               done
+              # With the interceptor off the SIGQUIT dump goes straight to this
+              # step's stdout. Give it a moment to flush, then reap the stuck
+              # suites AND the ginkgo CLI so `wait` returns and the job completes
+              # (red) with the dump intact, instead of hanging to the runner cap.
+              sleep 25
+              for pid in $stuck; do kill -KILL "$pid" 2>/dev/null || true; done
+              kill -KILL "$run_pid" 2>/dev/null || true
+              break
             done
           ) &
           watch_pid=$!
