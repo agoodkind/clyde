@@ -31,37 +31,32 @@ jobs:
       # cache is warm before the timed run below.
       - name: Compile race suites
         run: time go run github.com/onsi/ginkgo/v2/ginkgo build -r --race
-      # A sidecar watchdog finds a genuinely-hung suite by elapsed time and dumps
-      # it. Compilation finished in the prior step (cache warm), so any *.test
-      # process still running after 120s is a deadlock, not slow compilation.
-      # SIGQUIT with GOTRACEBACK=all makes that process print every goroutine
-      # stack, which ginkgo relays as the failed suite's output, then SIGKILL
-      # backstops so the step exits and the log persists (instead of the runner
-      # cap SIGKILLing the whole job and discarding the log). Targeting by PID
-      # avoids the process-group pitfalls of `timeout`/`set -m` in CI bash.
+      # Run each suite serially in shuffled order, mirroring ginkgo's serial
+      # randomized execution that reproduces the hang, but via `go test` so a
+      # deadlocked package hits Go's own -timeout and prints a full goroutine
+      # dump directly (no ginkgo output buffering, no process-tree kill needed,
+      # which both defeated capture before). The compile step above warms the
+      # race build cache so each package run is fast.
       - name: Run race suites
         env:
           GOTRACEBACK: all
         run: |
-          go run github.com/onsi/ginkgo/v2/ginkgo -r \
-            --randomize-all --randomize-suites --fail-on-pending --race -v \
-            --poll-progress-after=25s --poll-progress-interval=25s &
-          run_pid=$!
-          (
-            while kill -0 "$run_pid" 2>/dev/null; do
-              sleep 15
-              for pid in $(ps -eo pid=,etimes=,args= | awk '$2>120 && /\.test/ && $0 !~ /go[ ]+test[ ]+-c/ {print $1}'); do
-                echo "::warning::SIGQUIT stuck suite pid=$pid (deadlock goroutine dump follows)"
-                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
-                echo
-                kill -QUIT "$pid" 2>/dev/null || true
-                sleep 20
-                kill -KILL "$pid" 2>/dev/null || true
-              done
+          set -u
+          pkgs=$(go list ./...)
+          for trial in 1 2 3 4; do
+            echo "::group::shuffled trial $trial"
+            for pkg in $(printf '%s\n' "$pkgs" | shuf); do
+              if ! go test -race -timeout=50s "$pkg" >/tmp/pkg.out 2>&1; then
+                echo "::endgroup::"
+                if grep -q "test timed out" /tmp/pkg.out; then
+                  echo "::error::DEADLOCK reproduced in ${pkg} (trial ${trial})"
+                else
+                  echo "::error::failure in ${pkg} (trial ${trial})"
+                fi
+                cat /tmp/pkg.out
+                exit 1
+              fi
             done
-          ) &
-          watch_pid=$!
-          wait "$run_pid"
-          rc=$?
-          kill "$watch_pid" 2>/dev/null || true
-          exit "$rc"
+            echo "::endgroup::"
+          done
+          echo "no deadlock reproduced across 4 shuffled trials"
