@@ -70,8 +70,8 @@ deadcode: lint-deadcode ## Alias for the central deadcode gate
 # ---------------------------------------------------------------------------
 
 proto: ## Regenerate protobuf/gRPC Go code from api/**/*.proto via buf
-	@command -v buf >/dev/null 2>&1 || { echo "proto: 'buf' not found on PATH; install it (brew install bufbuild/buf/buf) or see https://buf.build/docs/installation"; exit 1; }
-	@buf generate
+	@command -v buf >/dev/null 2>&1 || go install github.com/bufbuild/buf/cmd/buf@v1.70.0
+	@PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
 
 build: proto
 
