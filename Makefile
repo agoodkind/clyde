@@ -49,8 +49,14 @@ CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
 # runs ginkgo specs registered through RunSpecs. test-ginkgo is for when you
 # want the ginkgo runner's flags (randomize, race, etc.) explicitly.
+# --timeout sits under the CI job's timeout-minutes so a spec that blocks forever
+# fails the suite with a full progress report instead of being SIGKILLed by the
+# runner with no diagnostics. --poll-progress-after dumps the goroutine of any
+# node still running after the interval, which surfaces a CI-only hang that does
+# not reproduce locally.
 test-ginkgo: ## Run tests with Ginkgo's runner
-	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --race
+	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --fail-on-pending --race \
+		--timeout=8m --poll-progress-after=60s --poll-progress-interval=30s
 
 test-watch: ## Run ginkgo in watch mode
 	@go run github.com/onsi/ginkgo/v2/ginkgo watch -r
