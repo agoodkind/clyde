@@ -44,7 +44,7 @@ BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
 .PHONY: test-ginkgo test-watch coverage setup-hooks \
-        deploy deadcode proto
+        deploy daemon-reload deadcode proto
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
 # runs ginkgo specs registered through RunSpecs. test-ginkgo is for when you
@@ -90,11 +90,18 @@ deploy: install ## Install binary, ensure supervisor ownership, reload daemon, a
 	@INSTALL_BIN="$(INSTALL_BIN)" \
 		LAUNCHD_LABEL="$(LAUNCHD_LABEL)" \
 		LAUNCHD_PLIST="$(LAUNCHD_PLIST)" \
-		LAUNCHD_TEMPLATE="$(LAUNCHD_TEMPLATE)" \
 		LAUNCHD_DOMAIN="$(LAUNCHD_DOMAIN)" \
 		SYSTEMD_UNIT="$(SYSTEMD_UNIT)" \
 		SYSTEMD_USER_UNIT="$(SYSTEMD_USER_UNIT)" \
-		SYSTEMD_TEMPLATE="$(SYSTEMD_TEMPLATE)" \
 		LOG_PATH="$(LOG_PATH)" \
-		MAKE="$(MAKE)" \
-		./scripts/deploy-daemon.sh
+		"$(INSTALL_BIN)" daemon deploy
+
+daemon-reload: install ## Reload or restart the daemon without changing service config
+	@INSTALL_BIN="$(INSTALL_BIN)" \
+		LAUNCHD_LABEL="$(LAUNCHD_LABEL)" \
+		LAUNCHD_PLIST="$(LAUNCHD_PLIST)" \
+		LAUNCHD_DOMAIN="$(LAUNCHD_DOMAIN)" \
+		SYSTEMD_UNIT="$(SYSTEMD_UNIT)" \
+		SYSTEMD_USER_UNIT="$(SYSTEMD_USER_UNIT)" \
+		LOG_PATH="$(LOG_PATH)" \
+		"$(INSTALL_BIN)" daemon deploy --reload-only

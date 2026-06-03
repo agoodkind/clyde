@@ -1,0 +1,14 @@
+[Unit]
+Description=Clyde daemon
+Documentation=https://github.com/agoodkind/clyde
+
+[Service]
+Type=simple
+ExecStart=@@BIN_PATH@@ daemon
+Restart=always
+RestartSec=5
+Environment=HOME=@@HOME@@
+Environment=PATH=@@HOME@@/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

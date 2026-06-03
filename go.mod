@@ -1,6 +1,6 @@
 module goodkind.io/clyde
 
-go 1.26.3
+go 1.26.4
 
 require goodkind.io/lmctl v0.0.0-20260415155018-40a95b881e3e
 

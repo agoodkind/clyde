@@ -45,6 +45,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newWorkerCmd(f))
+	cmd.AddCommand(newDeployCmd(f))
 	cmd.AddCommand(newReloadCmd(f))
 	cmd.AddCommand(newStatusCmd(f))
 	cmd.AddCommand(newSupervisorFingerprintCmd(f))
