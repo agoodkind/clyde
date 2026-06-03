@@ -51,25 +51,24 @@ jobs:
             --poll-progress-after=25s --poll-progress-interval=25s &
           run_pid=$!
           (
-            while kill -0 "$run_pid" 2>/dev/null; do
-              sleep 15
-              stuck=$(ps -eo pid=,etimes=,args= | awk '$2>120 && /\.test/ && $0 !~ /go[ ]+test[ ]+-c/ {print $1}')
-              [ -z "$stuck" ] && continue
-              for pid in $stuck; do
-                echo "::warning::SIGQUIT stuck suite pid=$pid (goroutine dump follows)"
-                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
-                echo
-                kill -QUIT "$pid" 2>/dev/null || true
-              done
-              # With the interceptor off the SIGQUIT dump goes straight to this
-              # step's stdout. Give it a moment to flush, then reap the stuck
-              # suites AND the ginkgo CLI so `wait` returns and the job completes
-              # (red) with the dump intact, instead of hanging to the runner cap.
-              sleep 25
-              for pid in $stuck; do kill -KILL "$pid" 2>/dev/null || true; done
-              kill -KILL "$run_pid" 2>/dev/null || true
-              break
-            done
+            # The hang lands during the run (compile is ~2min), so at a fixed
+            # deadline unconditionally SIGQUIT every Go process by name - the
+            # ginkgo CLI and every suite .test - so whichever is wedged prints its
+            # full goroutine stacks. With the interceptor off these dumps go
+            # straight to this step's stdout/stderr. Then SIGKILL so `wait`
+            # returns and the job completes (red) with the dump, instead of
+            # hanging to the runner cap which discards the log. pkill by name
+            # needs no process groups (which set -m/timeout failed to form here).
+            sleep 540
+            echo "::warning::deadline reached - SIGQUIT all Go processes for goroutine dumps"
+            ps -eo pid=,etimes=,args= | awk '/\.test|onsi\/ginkgo|b[0-9]+\/exe/ {print}' || true
+            pkill -QUIT -f '\.test' 2>/dev/null || true
+            sleep 3
+            pkill -QUIT -f 'onsi/ginkgo|b[0-9]*/exe/ginkgo' 2>/dev/null || true
+            sleep 30
+            pkill -KILL -f '\.test' 2>/dev/null || true
+            pkill -KILL -f 'onsi/ginkgo|b[0-9]*/exe/ginkgo' 2>/dev/null || true
+            kill -KILL "$run_pid" 2>/dev/null || true
           ) &
           watch_pid=$!
           wait "$run_pid"
