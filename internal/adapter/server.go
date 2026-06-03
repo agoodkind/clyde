@@ -18,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	"goodkind.io/clyde/internal/adapter/errcontract"
+	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
@@ -94,6 +95,10 @@ type Server struct {
 	anthropicProvider    *anthropic.Provider
 	errorRenderers       map[adapterRouteFamily]errcontract.ErrorRenderer
 	streamErrorRenderers map[adapterRouteFamily]errcontract.StreamErrorRenderer
+	// ingress is this Server's own ingress contract. It owns a
+	// per-Server ChatIdentityResolver so branch/fork state is isolated
+	// per Server rather than shared through the package-level registry.
+	ingress ingresscontract.IngressContract
 }
 
 // New constructs a Server from the given adapter config. The deps
@@ -156,6 +161,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		anthropicProvider:    nil,
 		errorRenderers:       defaultBoundaryRegistry.snapshotRenderers(),
 		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
+		ingress:              newServerIngress(),
 	}
 	s.providerRegistry = adapterprovider.NewRegistry()
 	probeCfg := config.NewConfigWithDefaults()

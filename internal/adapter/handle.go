@@ -54,7 +54,7 @@ func (s *Server) handle(family adapterRouteFamily, fn adapterHandler) http.Handl
 			reqID = newRequestID()
 		}
 		corr := clydeingress.FromHTTPHeader(r.Header, reqID)
-		if ingress, ok := activeIngressContract(); ok && ingress != nil {
+		if ingress := s.ingress; ingress != nil {
 			ingressCtx := ingress.TranslateHeaders(r.Header)
 			if ingressCtx.ConversationID != "" && clydeingress.ChatKey(corr) == "" {
 				corr = clydeingress.WithChatIdentity(corr, ingressCtx.ConversationID, "native", ingressCtx.ConversationID, "")

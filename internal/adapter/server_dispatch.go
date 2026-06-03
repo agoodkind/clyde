@@ -108,8 +108,8 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	}
 
 	bodyBytes := len(body)
-	ingress, ok := activeIngressContract()
-	if !ok || ingress == nil {
+	ingress := s.ingress
+	if ingress == nil {
 		return adapterErrInternal("ingress contract not registered", nil)
 	}
 	ctx, r, corr, headerFacets := applyHeaderIngressContext(ctx, r, corr, ingress)

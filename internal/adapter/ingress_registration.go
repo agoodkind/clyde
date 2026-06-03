@@ -7,8 +7,23 @@ import (
 	adapteranthropic "goodkind.io/clyde/internal/adapter/anthropic"
 	adaptercodex "goodkind.io/clyde/internal/adapter/codex"
 	adaptercursor "goodkind.io/clyde/internal/adapter/cursor"
+	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
+
+// newServerIngress builds a fresh ingress contract owned by one adapter
+// Server. The Cursor ingress carries a per-daemon ChatIdentityResolver
+// holding branch/fork state, so each Server must own its own instance:
+// the package-level defaultIngressRegistry is a single shared instance,
+// and two Servers in one process (every parallel test, or any future
+// multi-tenant case) would otherwise cross-pollute that branch state and
+// drop fork-detection events. The global registry stays for stateless
+// boundary lookups (header/body translation) that hold no resolver
+// state. This file is the composition root, the only depth-1 adapter
+// file allowed to construct a vendor ingress type.
+func newServerIngress() ingresscontract.IngressContract {
+	return adaptercursor.NewIngress()
+}
 
 // init wires canonical vendor implementations into package-level
 // registries. This file is the adapter composition root: it is the
