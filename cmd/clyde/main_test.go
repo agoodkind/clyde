@@ -12,7 +12,9 @@ import (
 func TestRootNoArgsShowsHelp(t *testing.T) {
 	factory, stdout, _ := testFactory()
 	root := newRoot(factory)
-	root.SetArgs(nil)
+	// An explicit empty slice runs the root with no args; SetArgs(nil) would make
+	// cobra fall back to os.Args, which carries the test runner's -test.* flags.
+	root.SetArgs([]string{})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute root help: %v", err)
