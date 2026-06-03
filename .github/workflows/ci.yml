@@ -41,6 +41,15 @@ jobs:
       # --poll-progress-after goroutine stacks) streams live and is captured even
       # if the run is later killed. The sidecar still SIGQUITs a suite stuck past
       # 120s so the job completes with a dump rather than the cap discarding it.
+      # ginkgo's output (and the SIGQUIT goroutine dumps) is redirected to a FILE,
+      # not this step's stdout pipe. Every prior capture attempt failed because a
+      # surviving orphan child kept the step's stdout pipe open, so the runner
+      # never saw the step finish and cancelled the job (discarding the log). With
+      # the output in a file, orphans hold the file fd (harmless); at a fixed
+      # deadline we SIGQUIT every Go process so whichever is wedged (the ginkgo
+      # CLI or a suite .test) dumps its goroutine stacks into the file, SIGKILL to
+      # release `wait`, then cat the file so the dump reaches the job log and the
+      # step exits cleanly.
       - name: Run race suites
         env:
           GOTRACEBACK: all
@@ -48,30 +57,24 @@ jobs:
           go run github.com/onsi/ginkgo/v2/ginkgo -r \
             --randomize-all --randomize-suites --fail-on-pending --race \
             --output-interceptor-mode=none -v \
-            --poll-progress-after=25s --poll-progress-interval=25s &
+            --poll-progress-after=25s --poll-progress-interval=25s >/tmp/ginkgo.out 2>&1 &
           run_pid=$!
           (
-            # The hang lands during the run (compile is ~2min), so at a fixed
-            # deadline unconditionally SIGQUIT every Go process by name - the
-            # ginkgo CLI and every suite .test - so whichever is wedged prints its
-            # full goroutine stacks. With the interceptor off these dumps go
-            # straight to this step's stdout/stderr. Then SIGKILL so `wait`
-            # returns and the job completes (red) with the dump, instead of
-            # hanging to the runner cap which discards the log. pkill by name
-            # needs no process groups (which set -m/timeout failed to form here).
             sleep 540
             echo "::warning::deadline reached - SIGQUIT all Go processes for goroutine dumps"
-            ps -eo pid=,etimes=,args= | awk '/\.test|onsi\/ginkgo|b[0-9]+\/exe/ {print}' || true
+            ps -eo pid=,etimes=,args= | awk '/\.test|onsi\/ginkgo|exe\/ginkgo/ {print}' || true
             pkill -QUIT -f '\.test' 2>/dev/null || true
             sleep 3
-            pkill -QUIT -f 'onsi/ginkgo|b[0-9]*/exe/ginkgo' 2>/dev/null || true
+            pkill -QUIT -f 'exe/ginkgo|onsi/ginkgo' 2>/dev/null || true
             sleep 30
             pkill -KILL -f '\.test' 2>/dev/null || true
-            pkill -KILL -f 'onsi/ginkgo|b[0-9]*/exe/ginkgo' 2>/dev/null || true
+            pkill -KILL -f 'exe/ginkgo|onsi/ginkgo' 2>/dev/null || true
             kill -KILL "$run_pid" 2>/dev/null || true
           ) &
           watch_pid=$!
           wait "$run_pid"
           rc=$?
           kill "$watch_pid" 2>/dev/null || true
+          echo "===== GINKGO OUTPUT (with goroutine dumps if it hung) ====="
+          cat /tmp/ginkgo.out || true
           exit "$rc"
