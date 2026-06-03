@@ -31,29 +31,34 @@ jobs:
       # cache is warm before the timed run below.
       - name: Compile race suites
         run: time go run github.com/onsi/ginkgo/v2/ginkgo build -r --race
-      # Run with a watchdog that SIGQUITs the whole process group on a deadline so
-      # a hung run completes the job (red) with goroutine dumps instead of being
-      # SIGKILLed by the runner cap (which discards the step log). SIGQUIT makes
-      # every Go process in the group (including the hung suite subprocess) print
-      # all goroutine stacks; SIGKILL then reaps the group so the step exits and
-      # the log persists. ginkgo's --poll-progress-after also streams the running
-      # node's stacks every interval as a second capture path. `set -m` puts the
-      # run in its own process group so the negative-pid signals reach the whole
-      # tree, which a plain `timeout` on `go run` does not (orphans keep the step
-      # pipe open and the job cancels).
+      # A sidecar watchdog finds a genuinely-hung suite by elapsed time and dumps
+      # it. Compilation finished in the prior step (cache warm), so any *.test
+      # process still running after 120s is a deadlock, not slow compilation.
+      # SIGQUIT with GOTRACEBACK=all makes that process print every goroutine
+      # stack, which ginkgo relays as the failed suite's output, then SIGKILL
+      # backstops so the step exits and the log persists (instead of the runner
+      # cap SIGKILLing the whole job and discarding the log). Targeting by PID
+      # avoids the process-group pitfalls of `timeout`/`set -m` in CI bash.
       - name: Run race suites
+        env:
+          GOTRACEBACK: all
         run: |
-          set -m
           go run github.com/onsi/ginkgo/v2/ginkgo -r \
-            --randomize-all --randomize-suites --fail-on-pending --race \
+            --randomize-all --randomize-suites --fail-on-pending --race -v \
             --poll-progress-after=25s --poll-progress-interval=25s &
           run_pid=$!
           (
-            sleep 720
-            echo "::warning::ginkgo exceeded 12m; SIGQUIT for goroutine dump"
-            kill -QUIT -"$run_pid" 2>/dev/null || true
-            sleep 45
-            kill -KILL -"$run_pid" 2>/dev/null || true
+            while kill -0 "$run_pid" 2>/dev/null; do
+              sleep 15
+              for pid in $(ps -eo pid=,etimes=,args= | awk '$2>120 && /\.test/ && $0 !~ /go[ ]+test[ ]+-c/ {print $1}'); do
+                echo "::warning::SIGQUIT stuck suite pid=$pid (deadlock goroutine dump follows)"
+                tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
+                echo
+                kill -QUIT "$pid" 2>/dev/null || true
+                sleep 20
+                kill -KILL "$pid" 2>/dev/null || true
+              done
+            done
           ) &
           watch_pid=$!
           wait "$run_pid"
