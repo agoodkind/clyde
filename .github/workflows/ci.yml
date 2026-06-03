@@ -20,17 +20,26 @@ jobs:
   project-test:
     name: Project Ginkgo Tests
     runs-on: ubuntu-latest
-    # The runner cap sits above ginkgo's own --timeout (set in the test-ginkgo
-    # target) so a hanging spec is aborted by ginkgo with a goroutine dump and the
-    # job completes and flushes logs, instead of being SIGKILLed by the runner cap
-    # mid-step, which discards the in-progress step's output. The cap is generous
-    # because the first run compiles 48 race-instrumented suites from a cold Go
-    # build cache on a 2-core runner; once a run completes, setup-go saves the
-    # cache and later runs are far faster.
-    timeout-minutes: 35
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: make test-ginkgo
+      # Compile the race-instrumented suites first, timed on its own line, so the
+      # compile cost is visible separately from the run and this job's Go build
+      # cache is warm before the timed run below.
+      - name: Compile race suites
+        run: time go run github.com/onsi/ginkgo/v2/ginkgo build -r --race
+      # Run under an external timeout so a hang completes the job (red) instead of
+      # being SIGKILLed by the runner cap, which discards the step log. ginkgo's
+      # --poll-progress-after prints the running node's full goroutine stacks into
+      # stdout every interval, so a deadlock is captured before the timeout ends
+      # the run. Running ginkgo directly (not via make) lets `go run` forward the
+      # signal to the process.
+      - name: Run race suites
+        run: |
+          timeout --kill-after=90s 12m \
+            go run github.com/onsi/ginkgo/v2/ginkgo -r \
+            --randomize-all --randomize-suites --fail-on-pending --race \
+            --poll-progress-after=25s --poll-progress-interval=25s
