@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 
 	"goodkind.io/clyde/internal/homedir"
 )
@@ -38,12 +41,34 @@ func (r xdgResolver) runtimeRoot() string {
 	if base, ok := xdgBaseFromEnv("XDG_RUNTIME_DIR"); ok {
 		return filepath.Join(base, r.appName)
 	}
-	uid := r.uid()
-	if base, ok := xdgBaseFromEnv("TMPDIR"); ok {
-		return filepath.Join(base, fmt.Sprintf("%s-%d", r.appName, uid))
-	}
-	return filepath.Join(cleanExpandedPath(os.TempDir()), fmt.Sprintf("%s-%d", r.appName, uid))
+	return filepath.Join(platformRuntimeBase(), fmt.Sprintf("%s-%d", r.appName, r.uid()))
 }
+
+// platformRuntimeBase returns the per-user runtime base directory used when
+// XDG_RUNTIME_DIR is unset. On macOS it reads the Darwin per-user temp dir from
+// the OS, independent of the $TMPDIR environment variable, so the daemon and
+// every client agree on the socket path even when a sandbox overrides $TMPDIR.
+// Elsewhere it uses [os.TempDir].
+func platformRuntimeBase() string {
+	if runtime.GOOS == "darwin" {
+		if dir := darwinUserTempDir(); dir != "" {
+			return cleanExpandedPath(dir)
+		}
+	}
+	return cleanExpandedPath(os.TempDir())
+}
+
+// darwinUserTempDir resolves and caches the Darwin per-user temp directory from
+// the OS via getconf, independent of the $TMPDIR environment variable. It
+// returns the empty string when the lookup fails, so callers fall back to
+// [os.TempDir].
+var darwinUserTempDir = sync.OnceValue(func() string {
+	out, err := exec.Command("getconf", "DARWIN_USER_TEMP_DIR").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+})
 
 func (r xdgResolver) appScopedRoot(envVar string, fallbackRelative string) string {
 	if base, ok := xdgBaseFromEnv(envVar); ok {
@@ -85,8 +110,10 @@ func DefaultStateDir() string {
 	return defaultXDGResolver.stateRoot()
 }
 
-// RuntimeDir returns a user-scoped runtime directory for the daemon socket.
-// Uses XDG_RUNTIME_DIR if set, then TMPDIR, then a UID-scoped fallback.
+// RuntimeDir returns a user-scoped runtime directory for the daemon socket. It
+// uses XDG_RUNTIME_DIR when set, otherwise the OS per-user runtime directory
+// resolved independently of $TMPDIR (the Darwin user temp dir on macOS), so
+// every clyde process agrees on the path regardless of the environment.
 func RuntimeDir() string {
 	return defaultXDGResolver.runtimeRoot()
 }
