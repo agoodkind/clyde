@@ -40,11 +40,17 @@ func newClientForModel(cfg config.SearchConfig, model string) Client {
 	return newClaudeClient(claudeCfg)
 }
 
+// localRequestTimeout bounds one search completion so a wedged or unreachable
+// local model cannot consume the whole search RPC budget. It is well under the
+// daemon's 10-minute analysis RPC timeout.
+const localRequestTimeout = 90 * time.Second
+
 // localClient uses an OpenAI-compatible endpoint (LM Studio, Ollama, etc.)
 type localClient struct {
-	client *openai.Client
-	model  string
-	cfg    config.SearchLocal
+	client  *openai.Client
+	model   string
+	baseURL string
+	cfg     config.SearchLocal
 }
 
 func newLocalClient(cfg config.SearchLocal) *localClient {
@@ -59,6 +65,7 @@ func newLocalClient(cfg config.SearchLocal) *localClient {
 
 	opts := []option.RequestOption{
 		option.WithBaseURL(url + "/v1"),
+		option.WithRequestTimeout(localRequestTimeout),
 	}
 	if cfg.Token != "" {
 		opts = append(opts, option.WithAPIKey(cfg.Token))
@@ -68,9 +75,10 @@ func newLocalClient(cfg config.SearchLocal) *localClient {
 
 	c := openai.NewClient(opts...)
 	return &localClient{
-		client: &c,
-		model:  model,
-		cfg:    cfg,
+		client:  &c,
+		model:   model,
+		baseURL: url,
+		cfg:     cfg,
 	}
 }
 
@@ -98,10 +106,11 @@ func (c *localClient) Complete(ctx context.Context, prompt string) (string, erro
 
 	if err != nil {
 		log.ErrorContext(ctx, "llm request failed", "concern", "search", "model", c.model,
+			"endpoint", c.baseURL,
 			"duration", elapsed.Round(time.Millisecond),
 			"err", err,
 		)
-		return "", fmt.Errorf("local LLM request failed: %w", err)
+		return "", fmt.Errorf("local LLM request to %s failed: %w", c.baseURL, err)
 	}
 	if len(resp.Choices) == 0 {
 		log.WarnContext(ctx, "llm returned no choices", "concern", "search", "model", c.model, "duration", elapsed.Round(time.Millisecond))

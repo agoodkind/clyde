@@ -41,17 +41,28 @@ func (metadata Metadata) Empty() bool {
 		metadata.ParentSpanID == ""
 }
 
+// headerMarker prefixes the metadata header line so callers can detect a body
+// that already carries one and avoid stamping a second header.
+const headerMarker = "🔎 "
+
 // HeaderLine returns the first line for text responses.
 func (metadata Metadata) HeaderLine() string {
 	fields := metadata.fields()
 	if len(fields) == 0 {
 		return ""
 	}
-	return "🔎 " + strings.Join(fields, " ")
+	return headerMarker + strings.Join(fields, " ")
 }
 
-// Text renders a text response using this metadata value.
+// Text renders a text response using this metadata value. When body already
+// begins with a metadata header (for example a daemon RPC response that the
+// daemon already stamped with its own trace id), it is returned unchanged so a
+// front end does not stamp a second header and the original id is preserved end
+// to end.
 func (metadata Metadata) Text(body string) string {
+	if strings.HasPrefix(body, headerMarker) {
+		return body
+	}
 	header := metadata.HeaderLine()
 	if header == "" {
 		return body

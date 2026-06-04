@@ -17,6 +17,8 @@ import (
 	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/providerid"
+	"goodkind.io/clyde/internal/response"
+	"goodkind.io/gklog/correlation"
 )
 
 const providerStatsStreamInterval = time.Second
@@ -24,6 +26,7 @@ const providerStatsStreamInterval = time.Second
 type controlServer struct {
 	clydev1.UnimplementedClydeServiceServer
 	stats         *providerStatsRecorder
+	index         *conversation.Index
 	searchConfig  config.SearchConfig
 	loggingConfig config.LoggingConfig
 	mitmConfig    config.MITMConfig
@@ -46,7 +49,7 @@ func (s *controlServer) GetProviderStats(context.Context, *clydev1.GetProviderSt
 // ListConversations answers the conversation index that the daemon refreshes in
 // the background. It is the one place that reads the index for every front end.
 func (s *controlServer) ListConversations(ctx context.Context, _ *clydev1.ListConversationsRequest) (*clydev1.ListConversationsResponse, error) {
-	records, err := conversation.DefaultIndex.List(ctx)
+	records, err := s.index.List(ctx)
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
 		slog.WarnContext(ctx, "daemon.list_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -79,7 +82,7 @@ func (s *controlServer) ListConversations(ctx context.Context, _ *clydev1.ListCo
 // as plain text.
 func (s *controlServer) GetConversation(ctx context.Context, req *clydev1.GetConversationRequest) (*clydev1.GetConversationResponse, error) {
 	client, _ := peer.FromContext(ctx)
-	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.get_conversation.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -88,7 +91,7 @@ func (s *controlServer) GetConversation(ctx context.Context, req *clydev1.GetCon
 		)
 		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
 	}
-	text, err := conversation.RenderPlainText(record, int(req.GetLastN()))
+	text, err := s.index.RenderPlainText(record, int(req.GetLastN()))
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.get_conversation.render_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -104,7 +107,7 @@ func (s *controlServer) GetConversation(ctx context.Context, req *clydev1.GetCon
 // around a center point rendered as plain text.
 func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1.GetConversationContextRequest) (*clydev1.GetConversationContextResponse, error) {
 	client, _ := peer.FromContext(ctx)
-	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.get_context.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -113,7 +116,7 @@ func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1
 		)
 		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
 	}
-	text, err := conversation.ContextWindowText(record, req.GetTimestamp(), int(req.GetMessageIndex()), int(req.GetBefore()), int(req.GetAfter()))
+	text, err := s.index.ContextWindowText(record, req.GetTimestamp(), int(req.GetMessageIndex()), int(req.GetBefore()), int(req.GetAfter()))
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.get_context.render_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -128,11 +131,12 @@ func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1
 // SearchConversation searches one conversation and caches the result set in the
 // daemon so a later AnalyzeSearchResults call can reach it.
 func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.SearchConversationRequest) (*clydev1.SearchConversationResponse, error) {
+	ctx, _ = correlation.Ensure(ctx, "")
 	client, _ := peer.FromContext(ctx)
 	if req.GetQuery() == "" {
-		return &clydev1.SearchConversationResponse{Text: "query is required"}, nil
+		return &clydev1.SearchConversationResponse{Text: response.Text(ctx, "query is required")}, nil
 	}
-	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -141,7 +145,7 @@ func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.Sea
 		)
 		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
 	}
-	output, err := conversation.SearchConversation(ctx, record, req.GetQuery(), req.GetDepth(), s.searchConfig)
+	output, err := s.index.SearchConversation(ctx, record, req.GetQuery(), req.GetDepth(), s.searchConfig)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -150,15 +154,16 @@ func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.Sea
 		)
 		return nil, status.Errorf(codes.Internal, "search conversation: %v", err)
 	}
-	return &clydev1.SearchConversationResponse{Text: output.Text}, nil
+	return &clydev1.SearchConversationResponse{Text: response.Text(ctx, output.Text)}, nil
 }
 
 // AnalyzeSearchResults runs the configured analysis model over a cached search
 // result set held by the daemon.
 func (s *controlServer) AnalyzeSearchResults(ctx context.Context, req *clydev1.AnalyzeSearchResultsRequest) (*clydev1.AnalyzeSearchResultsResponse, error) {
+	ctx, _ = correlation.Ensure(ctx, "")
 	client, _ := peer.FromContext(ctx)
 	if req.GetResultId() == "" || req.GetPrompt() == "" {
-		return &clydev1.AnalyzeSearchResultsResponse{Text: "result_id and prompt are required"}, nil
+		return &clydev1.AnalyzeSearchResultsResponse{Text: response.Text(ctx, "result_id and prompt are required")}, nil
 	}
 	text, err := conversation.AnalyzeSearchResults(ctx, req.GetResultId(), req.GetPrompt(), s.searchConfig)
 	if err != nil {
@@ -169,13 +174,13 @@ func (s *controlServer) AnalyzeSearchResults(ctx context.Context, req *clydev1.A
 		)
 		return nil, status.Errorf(codes.Internal, "analyze results: %v", err)
 	}
-	return &clydev1.AnalyzeSearchResultsResponse{Text: text}, nil
+	return &clydev1.AnalyzeSearchResultsResponse{Text: response.Text(ctx, text)}, nil
 }
 
 // ExportTranscript resolves one conversation and returns its exported body.
 func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.ExportTranscriptRequest) (*clydev1.ExportTranscriptResponse, error) {
 	client, _ := peer.FromContext(ctx)
-	record, err := conversation.DefaultIndex.Resolve(ctx, req.GetConversationId())
+	record, err := s.index.Resolve(ctx, req.GetConversationId())
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.export.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -195,7 +200,7 @@ func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.Expor
 		IncludeToolOutputs:     req.GetIncludeToolOutputs(),
 		IncludeRawJSONMetadata: req.GetIncludeRawJsonMetadata(),
 	}
-	body, err := conversation.Export(record, options)
+	body, err := s.index.Export(record, options)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.export.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
