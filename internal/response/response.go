@@ -42,16 +42,19 @@ func (metadata Metadata) Empty() bool {
 }
 
 // headerMarker prefixes the metadata header line so callers can detect a body
-// that already carries one and avoid stamping a second header.
-const headerMarker = "🔎 "
+// that already carries one and avoid stamping a second header. It is the shared
+// gklog marker, so every producer renders the header the same way.
+const headerMarker = correlation.HeaderMarker
 
-// HeaderLine returns the first line for text responses.
+// HeaderLine returns the first line for text responses, rendered through the
+// shared gklog helper so the format stays canonical across producers.
 func (metadata Metadata) HeaderLine() string {
-	fields := metadata.fields()
-	if len(fields) == 0 {
-		return ""
-	}
-	return headerMarker + strings.Join(fields, " ")
+	return correlation.MarkerLine(
+		"trace_id", metadata.TraceID,
+		"span_id", metadata.SpanID,
+		"parent_span_id", metadata.ParentSpanID,
+		"request_id", metadata.RequestID,
+	)
 }
 
 // Text renders a text response using this metadata value. When body already
@@ -71,23 +74,6 @@ func (metadata Metadata) Text(body string) string {
 		return header + "\n"
 	}
 	return header + "\n" + body
-}
-
-func (metadata Metadata) fields() []string {
-	fields := make([]string, 0, 4)
-	if metadata.TraceID != "" {
-		fields = append(fields, "trace_id="+metadata.TraceID)
-	}
-	if metadata.SpanID != "" {
-		fields = append(fields, "span_id="+metadata.SpanID)
-	}
-	if metadata.ParentSpanID != "" {
-		fields = append(fields, "parent_span_id="+metadata.ParentSpanID)
-	}
-	if metadata.RequestID != "" {
-		fields = append(fields, "request_id="+metadata.RequestID)
-	}
-	return fields
 }
 
 // Text renders a text response with the metadata line first when metadata exists.
