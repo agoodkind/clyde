@@ -2,10 +2,8 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -54,6 +52,11 @@ const (
 	// listenerNameMITMPrefix+<listener id> so a reload restores one FD per
 	// configured [[mitm.listeners]] block.
 	listenerNameMITMPrefix = "mitm:"
+	// listenerNamePProf keys the optional loopback pprof listener for reload
+	// file-descriptor inheritance, so the debug HTTP surface keeps its open
+	// socket across a hot reload instead of colliding with the draining
+	// generation on rebind.
+	listenerNamePProf = "debug.pprof"
 )
 
 // ExtraLoop is a small daemon-owned background loop hook.
@@ -99,10 +102,13 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	}
 	defer runtime.shutdown(context.Background())
 
+	conversationIndex := conversation.NewIndex(newConversationRegistry())
+
 	grpcServer := grpc.NewServer()
 	clydev1.RegisterClydeServiceServer(grpcServer, &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,
+		index:                           conversationIndex,
 		searchConfig:                    cfg.Search,
 		loggingConfig:                   cfg.Logging,
 		mitmConfig:                      cfg.MITM,
@@ -134,7 +140,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 				log.Error("daemon.conversation_index.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
-		conversation.DefaultIndex.Start(ctx, time.Minute)
+		conversationIndex.Start(ctx, time.Minute)
 	}()
 	go func() {
 		defer func() {
@@ -144,6 +150,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 		}()
 		mitm.RunPeriodicDrift(ctx, cfg.MITM, log)
 	}()
+	startDebugFacilities(ctx, log)
 
 	if err := signalReady(); err != nil {
 		return fmt.Errorf("signal daemon readiness: %w", err)
@@ -222,6 +229,10 @@ type runtimeServices struct {
 	mitmProxies   map[string]*mitm.Proxy
 	mitmListeners map[string][]net.Listener
 	captureStore  *capture.Store
+	// pprofListener is the optional loopback pprof socket. It is nil when pprof
+	// is off. When set, it is inherited across reload like the adapter and MITM
+	// listeners so the debug surface survives a hot reload with no bind gap.
+	pprofListener net.Listener
 	errors        chan error
 	reloadMu      sync.Mutex
 	reloadDrain   <-chan struct{}
@@ -251,6 +262,7 @@ func startRuntime(
 		mitmProxies:           map[string]*mitm.Proxy{},
 		mitmListeners:         map[string][]net.Listener{},
 		captureStore:          nil,
+		pprofListener:         nil,
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},
 		reloadDrain:           nil,
@@ -276,6 +288,17 @@ func startRuntime(
 	} else if inherited.listeners[listenerNameAdapter] != nil || inherited.listeners[listenerNameAdapterCursor] != nil {
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("adapter listener inherited but adapter is disabled; full daemon restart required")
+	}
+	if pprofAddr := resolvePProfAddr(cfg.Debug.PProfAddr); pprofAddr != "" {
+		listener, err := startPProf(ctx, log, pprofAddr, inherited.listeners[listenerNamePProf])
+		if err != nil {
+			runtime.shutdown(context.WithoutCancel(ctx))
+			return nil, err
+		}
+		runtime.pprofListener = listener
+	} else if inherited.listeners[listenerNamePProf] != nil {
+		runtime.shutdown(context.WithoutCancel(ctx))
+		return nil, fmt.Errorf("pprof listener inherited but pprof is disabled; full daemon restart required")
 	}
 	return runtime, nil
 }
@@ -408,13 +431,13 @@ func startAdapter(
 		log.WarnContext(ctx, "daemon.adapter.init_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return nil, nil, nil, fmt.Errorf("adapter init: %w", err)
 	}
-	primary, err := bindOrInheritAdapterListener(ctx, log, server.Addr(), inherited)
+	primary, err := bindOrInheritTCPListener(ctx, log, server.Addr(), inherited, listenerNameAdapter)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	var cursor net.Listener
 	if cursorAddr := server.CursorIngressAddr(); cursorAddr != "" {
-		cursor, err = bindOrInheritAdapterListener(ctx, log, cursorAddr, inheritedCursor)
+		cursor, err = bindOrInheritTCPListener(ctx, log, cursorAddr, inheritedCursor, listenerNameAdapterCursor)
 		if err != nil {
 			_ = primary.Close()
 			return nil, nil, nil, err
@@ -438,22 +461,45 @@ func startAdapter(
 	return server, primary, cursor, nil
 }
 
-// bindOrInheritAdapterListener returns the inherited listener when its address
-// matches addr (reload reuses the socket with no bind gap), rejecting a changed
-// address with a restart-required error, and otherwise binds a fresh listener.
-func bindOrInheritAdapterListener(ctx context.Context, log *slog.Logger, addr string, inherited net.Listener) (net.Listener, error) {
+// bindOrInheritTCPListener returns the inherited listener when its address
+// matches addr (reload reuses the open socket with no bind gap), rejecting a
+// changed address with a restart-required error, and otherwise binds a fresh
+// listener. label names the surface in the log event and error so each caller
+// (adapter, adapter cursor, pprof) stays distinguishable.
+func bindOrInheritTCPListener(ctx context.Context, log *slog.Logger, addr string, inherited net.Listener, label string) (net.Listener, error) {
 	if inherited != nil {
 		if got := inherited.Addr().String(); got != addr {
-			return nil, fmt.Errorf("adapter inherited listener address %s does not match config %s; full daemon restart required", got, addr)
+			return nil, fmt.Errorf("%s inherited listener address %s does not match config %s; full daemon restart required", label, got, addr)
 		}
 		return inherited, nil
 	}
 	listenConfig := net.ListenConfig{}
 	listener, err := listenConfig.Listen(ctx, "tcp", addr)
 	if err != nil {
-		log.WarnContext(ctx, "daemon.adapter.listen_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "addr", addr, "err", err)
-		return nil, fmt.Errorf("adapter listen %s: %w", addr, err)
+		log.WarnContext(ctx, "daemon.listener.listen_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "surface", label, "addr", addr, "err", err)
+		return nil, fmt.Errorf("%s listen %s: %w", label, addr, err)
 	}
+	return listener, nil
+}
+
+// startPProf binds, or inherits across reload, the loopback pprof listener at
+// addr and serves net/http/pprof on it in a recovered goroutine. Inheriting the
+// open socket from the previous generation removes the rebind race where the
+// draining worker still holds the port, so the debug surface stays reachable
+// through a hot reload.
+func startPProf(ctx context.Context, log *slog.Logger, addr string, inherited net.Listener) (net.Listener, error) {
+	listener, err := bindOrInheritTCPListener(ctx, log, addr, inherited, listenerNamePProf)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.ErrorContext(ctx, "daemon.debug.pprof_panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
+			}
+		}()
+		servePProf(ctx, log, listener)
+	}()
 	return listener, nil
 }
 
@@ -581,6 +627,13 @@ func reloadDaemonWorker(ctx context.Context, log *slog.Logger, grpcServer *grpc.
 	if err := waitForReplacementDaemon(ctx, readyRead); err != nil {
 		return nil, err
 	}
+	// The replacement generation has inherited the pprof socket's file
+	// descriptor, so closing this generation's copy stops it serving pprof
+	// without dropping the socket, leaving exactly the new worker on the debug
+	// port.
+	if runtime.pprofListener != nil {
+		_ = runtime.pprofListener.Close()
+	}
 	runtime.reloadDrain = runtime.startReloadDrain(ctx, log)
 	go func() {
 		defer func() {
@@ -616,6 +669,9 @@ func inheritedListenerFiles(runtime *runtimeServices) ([]*os.File, []daemonsuper
 	}
 	if runtime.adapterCursorListener != nil {
 		listeners = append(listeners, namedListener{name: listenerNameAdapterCursor, lis: runtime.adapterCursorListener})
+	}
+	if runtime.pprofListener != nil {
+		listeners = append(listeners, namedListener{name: listenerNamePProf, lis: runtime.pprofListener})
 	}
 	mitmIDs := make([]string, 0, len(runtime.mitmListeners))
 	for id := range runtime.mitmListeners {
@@ -653,170 +709,6 @@ func inheritedListenerFiles(runtime *runtimeServices) ([]*os.File, []daemonsuper
 		})
 	}
 	return files, specs, cleanup, nil
-}
-
-func listenerFile(listener net.Listener) (*os.File, error) {
-	switch typed := listener.(type) {
-	case *net.UnixListener:
-		file, err := typed.File()
-		if err != nil {
-			slog.Warn("daemon.listener.duplicate_unix_failed", "concern", "process.daemon.lifecycle", "err", err)
-			return nil, fmt.Errorf("duplicate unix listener file: %w", err)
-		}
-		return file, nil
-	case *net.TCPListener:
-		file, err := typed.File()
-		if err != nil {
-			slog.Warn("daemon.listener.duplicate_tcp_failed", "concern", "process.daemon.lifecycle", "err", err)
-			return nil, fmt.Errorf("duplicate tcp listener file: %w", err)
-		}
-		return file, nil
-	default:
-		return nil, fmt.Errorf("unsupported listener type %T", listener)
-	}
-}
-
-func validateReloadListenerConfig(runtime *runtimeServices) error {
-	cfg, err := config.LoadGlobalOrDefault()
-	if err != nil {
-		slog.Warn("daemon.reload.load_config_failed", "concern", "daemon.workers.reload", "err", err)
-		return fmt.Errorf("load config for reload validation: %w", err)
-	}
-	if runtime.adapterListener != nil && !cfg.Adapter.Enabled {
-		return fmt.Errorf("adapter listener set changed; full daemon restart required")
-	}
-	if runtime.adapterListener != nil && runtime.adapter != nil {
-		if got, want := runtime.adapterListener.Addr().String(), runtime.adapter.Addr(); got != want {
-			return fmt.Errorf("adapter listen address changed from %s to %s; full daemon restart required", got, want)
-		}
-	}
-	if runtime.adapterCursorListener != nil && runtime.adapter != nil {
-		if got, want := runtime.adapterCursorListener.Addr().String(), runtime.adapter.CursorIngressAddr(); got != want {
-			return fmt.Errorf("adapter cursor ingress listener changed from %s to %s; full daemon restart required", got, want)
-		}
-	}
-	if len(runtime.mitmListeners) > 0 && !cfg.MITM.EnabledDefault {
-		return fmt.Errorf("mitm listener set changed; full daemon restart required")
-	}
-	return validateMITMListenerSet(runtime, cfg)
-}
-
-func waitForReplacementDaemon(ctx context.Context, ready io.Reader) error {
-	deadlineCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				done <- fmt.Errorf("replacement daemon readiness panic: %v", recovered)
-			}
-		}()
-		data, err := io.ReadAll(ready)
-		if err != nil {
-			slog.WarnContext(ctx, "daemon.reload.readiness_read_failed", "concern", "daemon.workers.reload", "component", "daemon",
-				"err", err,
-			)
-			done <- fmt.Errorf("read replacement daemon readiness: %w", err)
-			return
-		}
-		if string(data) != "ready\n" {
-			done <- fmt.Errorf("replacement daemon readiness failed: %q", string(data))
-			return
-		}
-		done <- nil
-	}()
-	select {
-	case <-deadlineCtx.Done():
-		slog.WarnContext(ctx, "daemon.reload.readiness_timeout", "concern", "daemon.workers.reload", "component", "daemon",
-			"err", deadlineCtx.Err(),
-		)
-		return fmt.Errorf("replacement daemon did not become ready: %w", deadlineCtx.Err())
-	case err := <-done:
-		return err
-	}
-}
-
-func loadInheritedRuntime() (inheritedRuntime, error) {
-	runtime := inheritedRuntime{listeners: make(map[string]net.Listener), ready: nil}
-	raw := os.Getenv(daemonsupervisor.EnvInheritedListeners)
-	if raw != "" {
-		if err := loadInheritedListeners(raw, runtime.listeners); err != nil {
-			return runtime, err
-		}
-	}
-	return runtime, nil
-}
-
-func loadInheritedListeners(raw string, listeners map[string]net.Listener) error {
-	var specs []daemonsupervisor.ListenerSpec
-	if err := json.Unmarshal([]byte(raw), &specs); err != nil {
-		slog.Warn("daemon.reload.inherited_specs_decode_failed", "concern", "daemon.workers.reload", "component", "daemon",
-			"err", err,
-		)
-		return fmt.Errorf("decode listener specs: %w", err)
-	}
-	for _, spec := range specs {
-		file := os.NewFile(uintptr(spec.FD), spec.Name)
-		if file == nil {
-			return fmt.Errorf("listener %s fd %d unavailable", spec.Name, spec.FD)
-		}
-		listener, err := net.FileListener(file)
-		_ = file.Close()
-		if err != nil {
-			slog.Warn("daemon.reload.inherited_listener_failed", "concern", "daemon.workers.reload", "component", "daemon",
-				"name", spec.Name,
-				"fd", spec.FD,
-				"err", err,
-			)
-			return fmt.Errorf("listener %s from fd %d: %w", spec.Name, spec.FD, err)
-		}
-		if listener.Addr().Network() != spec.Network || listener.Addr().String() != spec.Addr {
-			_ = listener.Close()
-			return fmt.Errorf("listener %s inherited as %s/%s, expected %s/%s", spec.Name, listener.Addr().Network(), listener.Addr().String(), spec.Network, spec.Addr)
-		}
-		if unixListener, ok := listener.(*net.UnixListener); ok {
-			unixListener.SetUnlinkOnClose(false)
-		}
-		listeners[spec.Name] = listener
-	}
-	return nil
-}
-
-func daemonListener(ctx context.Context, socketPath string, inherited net.Listener) (net.Listener, error) {
-	if inherited != nil {
-		if unixListener, ok := inherited.(*net.UnixListener); ok {
-			unixListener.SetUnlinkOnClose(false)
-		}
-		slog.InfoContext(ctx, "daemon.listener.inherited", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"socket_path", socketPath,
-			"addr", inherited.Addr().String(),
-		)
-		return inherited, nil
-	}
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		slog.WarnContext(ctx, "daemon.listener.remove_stale_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"socket_path", socketPath,
-			"err", err,
-		)
-		return nil, fmt.Errorf("remove stale daemon socket %s: %w", socketPath, err)
-	}
-	listenConfig := net.ListenConfig{}
-	listener, err := listenConfig.Listen(ctx, "unix", socketPath)
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.listener.listen_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"socket_path", socketPath,
-			"err", err,
-		)
-		return nil, fmt.Errorf("daemon listen %s: %w", socketPath, err)
-	}
-	if unixListener, ok := listener.(*net.UnixListener); ok {
-		unixListener.SetUnlinkOnClose(false)
-	}
-	slog.InfoContext(ctx, "daemon.listener.started", "concern", "process.daemon.lifecycle", "component", "daemon",
-		"socket_path", socketPath,
-		"addr", listener.Addr().String(),
-	)
-	return listener, nil
 }
 
 func (r *runtimeServices) startReloadDrain(parent context.Context, log *slog.Logger) <-chan struct{} {
@@ -907,6 +799,9 @@ func (r *runtimeServices) shutdown(parent context.Context) {
 	}
 	if r.listener != nil {
 		_ = r.listener.Close()
+	}
+	if r.pprofListener != nil {
+		_ = r.pprofListener.Close()
 	}
 	if r.adapter != nil {
 		_ = r.adapter.Shutdown(ctx)

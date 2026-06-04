@@ -21,6 +21,19 @@ type Config struct {
 	// MITM configures the local capture proxy used for provider
 	// subprocesses and for adapter-side request observability.
 	MITM MITMConfig `json:"mitm" toml:"mitm"`
+	// Debug configures opt-in daemon diagnostics such as the loopback
+	// pprof endpoint. It is empty by default, so no debug surface is exposed.
+	Debug DebugConfig `json:"debug" toml:"debug"`
+}
+
+// DebugConfig holds opt-in daemon diagnostics. Everything here is off by
+// default; an operator enables a facet by setting its value.
+type DebugConfig struct {
+	// PProfAddr, when set to a loopback address such as "[::1]:6060", makes
+	// the daemon serve net/http/pprof there. Empty means the pprof endpoint
+	// is not started. The CLYDE_DEBUG_PPROF_ADDR environment variable
+	// overrides this when set.
+	PProfAddr string `json:"pprof_addr" toml:"pprof_addr"`
 }
 
 // AdapterConfig configures the OpenAI compatible HTTP server folded
