@@ -33,15 +33,17 @@ type SearchOutput struct {
 
 var searchResultCache sync.Map
 
-// SearchConversation searches one raw conversation artifact.
-func SearchConversation(
+// SearchConversation searches one raw conversation artifact. It loads the whole
+// conversation because the depth-driven search ranks across every message, then
+// caches the flattened match set for a later analyze call.
+func (idx *Index) SearchConversation(
 	ctx context.Context,
 	record Record,
 	query string,
 	depth string,
 	searchConfig config.SearchConfig,
 ) (SearchOutput, error) {
-	messages, err := LoadMessages(record, false, false)
+	messages, err := idx.LoadMessages(record, false, false)
 	if err != nil {
 		slog.WarnContext(ctx, "conversation.search.load_failed", "concern", "conversation.search", "component", "conversation", "conversation_id", record.ID, "err", err)
 		return SearchOutput{}, fmt.Errorf("load conversation: %w", err)

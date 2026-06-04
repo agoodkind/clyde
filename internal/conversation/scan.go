@@ -1,235 +1,66 @@
 package conversation
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
-	"time"
-
-	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 )
 
-const (
-	artifactKindTranscript = "transcript"
-	artifactKindRollout    = "rollout"
-)
-
-type claudeHeader struct {
-	SessionID   string `json:"sessionId"`
-	CWD         string `json:"cwd"`
-	Timestamp   string `json:"timestamp"`
-	Type        string `json:"type"`
-	Content     string `json:"content"`
-	CustomTitle string `json:"customTitle"`
+// scanCache is the prior scan's output, keyed by artifact path, that the next
+// incremental scan reuses for unchanged files.
+type scanCache struct {
+	records map[string]Record
+	stamps  map[string]FileStamp
 }
 
-// Scan discovers raw Claude and Codex conversation artifacts.
-func Scan(ctx context.Context) ([]Record, error) {
-	var out []Record
-	claudeRecords, claudeErr := scanClaude(ctx)
-	if claudeErr != nil && !errors.Is(claudeErr, os.ErrNotExist) {
-		slog.WarnContext(ctx, "conversation.scan.claude_failed", "concern", "conversation.scan", "component", "conversation", "err", claudeErr)
-		return nil, fmt.Errorf("scan Claude conversations: %w", claudeErr)
-	}
-	out = append(out, claudeRecords...)
-	codexRecords, codexErr := scanCodex(ctx)
-	if codexErr != nil && !errors.Is(codexErr, os.ErrNotExist) {
-		slog.WarnContext(ctx, "conversation.scan.codex_failed", "concern", "conversation.scan", "component", "conversation", "err", codexErr)
-		return nil, fmt.Errorf("scan Codex conversations: %w", codexErr)
-	}
-	out = append(out, codexRecords...)
-	return out, nil
+// scanResult bundles the records a scan discovered with the file stamps it
+// captured, which become the next scan's prior cache.
+type scanResult struct {
+	records []Record
+	stamps  map[string]FileStamp
 }
 
-func scanClaude(ctx context.Context) ([]Record, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		slog.WarnContext(ctx, "conversation.scan.home_failed", "concern", "conversation.scan", "component", "conversation", "err", err)
-		return nil, fmt.Errorf("resolve home dir: %w", err)
-	}
-	root := filepath.Join(home, ".claude", "projects")
-	var out []Record
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if ctx.Err() != nil {
-			slog.WarnContext(ctx, "conversation.scan.claude_canceled", "concern", "conversation.scan", "component", "conversation", "err", ctx.Err())
-			return fmt.Errorf("scan Claude conversations canceled: %w", ctx.Err())
+// scan discovers raw conversation artifacts through the registered parsers. For
+// each provider it lists candidates with [Parser.Discover] and reuses any record
+// in prior whose file stamp is unchanged, so only new or modified artifacts are
+// re-read through [Parser.ScanRecord]. The size and mtime skip is the steady
+// state that keeps the background index near idle.
+func scan(ctx context.Context, registry *Registry, prior scanCache) (scanResult, error) {
+	out := make([]Record, 0, len(prior.records))
+	stamps := make(map[string]FileStamp, len(prior.stamps))
+	for _, provider := range registry.Providers() {
+		parser, err := registry.Lookup(provider)
+		if err != nil {
+			return scanResult{}, fmt.Errorf("lookup parser for %s: %w", provider.String(), err)
 		}
-		if walkErr != nil {
-			if errors.Is(walkErr, os.ErrPermission) || errors.Is(walkErr, os.ErrNotExist) {
-				return nil
+		candidates, err := parser.Discover(ctx, prior.records)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
-			slog.WarnContext(ctx, "conversation.scan.claude_walk_entry_failed", "concern", "conversation.scan", "component", "conversation", "path", path, "err", walkErr)
-			return fmt.Errorf("walk Claude transcript entry: %w", walkErr)
+			slog.WarnContext(ctx, "conversation.scan.discover_failed", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", err)
+			return scanResult{}, fmt.Errorf("discover %s conversations: %w", provider.String(), err)
 		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			return nil
-		}
-		if strings.Contains(path, string(os.PathSeparator)+"subagents"+string(os.PathSeparator)) {
-			return nil
-		}
-		record, ok := readClaudeRecord(path)
-		if ok {
-			out = append(out, record)
-		}
-		return nil
-	})
-	if err != nil {
-		slog.WarnContext(ctx, "conversation.scan.claude_walk_failed", "concern", "conversation.scan", "component", "conversation", "root", root, "err", err)
-		return nil, fmt.Errorf("walk Claude transcript root: %w", err)
-	}
-	return out, nil
-}
-
-func readClaudeRecord(path string) (Record, bool) {
-	file, err := os.Open(path)
-	if err != nil {
-		return emptyRecord(), false
-	}
-	defer func() { _ = file.Close() }()
-
-	providerID := ""
-	title := ""
-	workspaceRoot := ""
-	createdAt := time.Time{}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var header claudeHeader
-		if err := json.Unmarshal(line, &header); err != nil {
-			continue
-		}
-		if header.SessionID != "" && providerID == "" {
-			providerID = header.SessionID
-		}
-		if header.CWD != "" && workspaceRoot == "" {
-			workspaceRoot = header.CWD
-		}
-		if header.CustomTitle != "" {
-			title = header.CustomTitle
-		}
-		if header.Type == "user" && title == "" && strings.TrimSpace(header.Content) != "" {
-			title = trimTitle(header.Content)
-		}
-		if header.Timestamp != "" && createdAt.IsZero() {
-			if parsed, parseErr := time.Parse(time.RFC3339, header.Timestamp); parseErr == nil {
-				createdAt = parsed
+		for _, candidate := range candidates {
+			if ctx.Err() != nil {
+				slog.WarnContext(ctx, "conversation.scan.canceled", "concern", "conversation.scan", "component", "conversation", "provider", provider.String(), "err", ctx.Err())
+				return scanResult{}, fmt.Errorf("scan %s conversations canceled: %w", provider.String(), ctx.Err())
+			}
+			stamps[candidate.Path] = candidate.Stamp
+			if prev, ok := prior.stamps[candidate.Path]; ok && prev.Equal(candidate.Stamp) {
+				// The artifact did not change. Reuse the prior record, or nothing
+				// when the file previously yielded none, without re-reading it.
+				if record, ok := prior.records[candidate.Path]; ok {
+					out = append(out, record)
+				}
+				continue
+			}
+			if record, ok := parser.ScanRecord(candidate.Path, candidate.Stamp); ok {
+				out = append(out, record)
 			}
 		}
 	}
-	if providerID == "" {
-		return emptyRecord(), false
-	}
-	info, statErr := os.Stat(path)
-	updatedAt := createdAt
-	sizeBytes := int64(0)
-	if statErr == nil {
-		updatedAt = info.ModTime()
-		sizeBytes = info.Size()
-	}
-	if title == "" {
-		title = providerID
-	}
-	return Record{
-		ID:            derivedID(ProviderClaude, providerID, path),
-		Provider:      ProviderClaude,
-		NativeID:      providerID,
-		Title:         title,
-		WorkspaceRoot: workspaceRoot,
-		ArtifactPath:  path,
-		ArtifactKind:  artifactKindTranscript,
-		Model:         "",
-		CreatedAt:     createdAt,
-		UpdatedAt:     updatedAt,
-		SizeBytes:     sizeBytes,
-		Archived:      false,
-	}, true
-}
-
-func scanCodex(ctx context.Context) ([]Record, error) {
-	paths, err := codexstore.ResolveStorePathsFromEnv(ctx)
-	if err != nil {
-		slog.WarnContext(ctx, "conversation.scan.codex_paths_failed", "concern", "conversation.scan", "component", "conversation", "err", err)
-		return nil, fmt.Errorf("resolve Codex store paths: %w", err)
-	}
-	results, err := codexstore.NewDiscoveryScanner(paths).Scan()
-	if err != nil {
-		slog.WarnContext(ctx, "conversation.scan.codex_store_failed", "concern", "conversation.scan", "component", "conversation", "err", err)
-		return nil, fmt.Errorf("scan Codex store: %w", err)
-	}
-	out := make([]Record, 0, len(results))
-	for _, result := range results {
-		if ctx.Err() != nil {
-			slog.WarnContext(ctx, "conversation.scan.codex_canceled", "concern", "conversation.scan", "component", "conversation", "err", ctx.Err())
-			return nil, fmt.Errorf("scan Codex conversations canceled: %w", ctx.Err())
-		}
-		if result.IsSubagent {
-			continue
-		}
-		workspaceRoot := result.LatestWorkDir
-		if workspaceRoot == "" {
-			workspaceRoot = result.WorkspaceRoot
-		}
-		title := result.ThreadName
-		if title == "" {
-			title = result.ThreadID
-		}
-		sizeBytes := int64(0)
-		if info, statErr := os.Stat(result.RolloutPath); statErr == nil {
-			sizeBytes = info.Size()
-		}
-		out = append(out, Record{
-			ID:            derivedID(ProviderCodex, result.ThreadID, result.RolloutPath),
-			Provider:      ProviderCodex,
-			NativeID:      result.ThreadID,
-			Title:         title,
-			WorkspaceRoot: workspaceRoot,
-			ArtifactPath:  result.RolloutPath,
-			ArtifactKind:  artifactKindRollout,
-			Model:         result.ModelProvider,
-			CreatedAt:     result.CreatedAt,
-			UpdatedAt:     result.UpdatedAt,
-			SizeBytes:     sizeBytes,
-			Archived:      result.IsArchived,
-		})
-	}
-	return out, nil
-}
-
-func trimTitle(text string) string {
-	fields := strings.Fields(text)
-	if len(fields) == 0 {
-		return ""
-	}
-	title := strings.Join(fields, " ")
-	if len(title) > 80 {
-		return strings.TrimSpace(title[:80])
-	}
-	return title
-}
-
-func emptyRecord() Record {
-	return Record{
-		ID:            "",
-		Provider:      ProviderArtifact,
-		NativeID:      "",
-		Title:         "",
-		WorkspaceRoot: "",
-		ArtifactPath:  "",
-		ArtifactKind:  "",
-		Model:         "",
-		CreatedAt:     time.Time{},
-		UpdatedAt:     time.Time{},
-		SizeBytes:     0,
-		Archived:      false,
-	}
+	return scanResult{records: out, stamps: stamps}, nil
 }

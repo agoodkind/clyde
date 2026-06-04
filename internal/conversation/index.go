@@ -25,39 +25,52 @@ const (
 	refreshDebounce = 30 * time.Second
 )
 
-// Index owns the derived raw conversation cache.
+// Index owns the derived raw conversation cache. It resolves each artifact's
+// parser through the registry it is constructed with, so the daemon wires the
+// provider parsers in once and every read and scan dispatches through them.
 type Index struct {
 	mu           sync.Mutex
+	registry     *Registry
 	records      []Record
+	prevRecords  map[string]Record
+	prevStamps   map[string]FileStamp
 	loaded       bool
 	refreshing   bool
 	lastRefresh  time.Time
 	cachePath    string
 	debounce     time.Duration
-	scanProvider func(context.Context) ([]Record, error)
+	scanProvider func(context.Context, *Registry, scanCache) (scanResult, error)
 }
 
-// NewIndex returns an index backed by the default XDG cache path.
-func NewIndex() *Index {
+// NewIndex returns an index backed by the default XDG cache path that resolves
+// artifacts through registry. The daemon registers the Claude and Codex parsers
+// before constructing the index.
+func NewIndex(registry *Registry) *Index {
 	return &Index{
 		mu:           sync.Mutex{},
+		registry:     registry,
 		records:      nil,
+		prevRecords:  nil,
+		prevStamps:   nil,
 		loaded:       false,
 		refreshing:   false,
 		lastRefresh:  time.Time{},
 		cachePath:    filepath.Join(config.GlobalCacheDir(), cacheFilename),
 		debounce:     refreshDebounce,
-		scanProvider: Scan,
+		scanProvider: scan,
 	}
 }
-
-// DefaultIndex is the process-wide conversation index used by CLI and MCP.
-var DefaultIndex = NewIndex()
 
 // Start runs a periodic debounced cache refresh until ctx is canceled.
 func (idx *Index) Start(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Minute
+	}
+	// Load the cached records and their file stamps before the first refresh so
+	// the worker reuses unchanged transcripts and re-parses only what changed,
+	// rather than re-reading the whole corpus on every start.
+	if err := idx.loadOnce(); err != nil {
+		slog.WarnContext(ctx, "conversation.index.start_load_failed", "concern", "conversation.index", "component", "conversation", "err", err)
 	}
 	idx.refreshAsync(ctx)
 	ticker := time.NewTicker(interval)
@@ -122,24 +135,27 @@ func (idx *Index) Refresh(ctx context.Context) (err error) {
 		return nil
 	}
 	idx.refreshing = true
+	prior := scanCache{records: idx.prevRecords, stamps: idx.prevStamps}
 	idx.mu.Unlock()
 
-	records, err := idx.scanProvider(ctx)
+	result, err := idx.scanProvider(ctx, idx.registry, prior)
 	if err != nil {
 		idx.mu.Lock()
 		idx.refreshing = false
 		idx.mu.Unlock()
 		return err
 	}
-	sortRecords(records)
-	if err := writeCache(idx.cachePath, records); err != nil {
+	sortRecords(result.records)
+	if err := writeCache(idx.cachePath, result.records, result.stamps); err != nil {
 		idx.mu.Lock()
 		idx.refreshing = false
 		idx.mu.Unlock()
 		return err
 	}
 	idx.mu.Lock()
-	idx.records = records
+	idx.records = result.records
+	idx.prevRecords = recordsByPath(result.records)
+	idx.prevStamps = result.stamps
 	idx.loaded = true
 	idx.refreshing = false
 	idx.lastRefresh = clock.Now()
@@ -155,12 +171,14 @@ func (idx *Index) loadOnce() error {
 	}
 	idx.mu.Unlock()
 
-	records, err := readCache(idx.cachePath)
+	records, stamps, err := readCache(idx.cachePath)
 	if err != nil {
 		return err
 	}
 	idx.mu.Lock()
 	idx.records = records
+	idx.prevRecords = recordsByPath(records)
+	idx.prevStamps = stamps
 	idx.loaded = true
 	idx.mu.Unlock()
 	return nil
@@ -173,6 +191,7 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 		return
 	}
 	idx.refreshing = true
+	prior := scanCache{records: idx.prevRecords, stamps: idx.prevStamps}
 	idx.mu.Unlock()
 	go func() {
 		defer func() {
@@ -180,15 +199,17 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 				slog.ErrorContext(ctx, "conversation.index.refresh_panic", "concern", "conversation.index", "component", "conversation", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
-		records, err := idx.scanProvider(context.WithoutCancel(ctx))
+		result, err := idx.scanProvider(context.WithoutCancel(ctx), idx.registry, prior)
 		if err == nil {
-			sortRecords(records)
-			err = writeCache(idx.cachePath, records)
+			sortRecords(result.records)
+			err = writeCache(idx.cachePath, result.records, result.stamps)
 		}
 		idx.mu.Lock()
 		defer idx.mu.Unlock()
 		if err == nil {
-			idx.records = records
+			idx.records = result.records
+			idx.prevRecords = recordsByPath(result.records)
+			idx.prevStamps = result.stamps
 			idx.loaded = true
 			idx.lastRefresh = clock.Now()
 		}
@@ -196,30 +217,57 @@ func (idx *Index) refreshAsync(ctx context.Context) {
 	}()
 }
 
-func readCache(path string) ([]Record, error) {
+// recordsByPath indexes records by artifact path so the next incremental scan
+// can reuse the record for any file whose stamp is unchanged.
+func recordsByPath(records []Record) map[string]Record {
+	byPath := make(map[string]Record, len(records))
+	for _, record := range records {
+		byPath[record.ArtifactPath] = record
+	}
+	return byPath
+}
+
+// cacheFile is the on-disk index cache. It persists the per-file stamps next to
+// the records so a freshly started worker reuses them on its first refresh and
+// re-parses only changed transcripts, instead of re-reading the whole corpus on
+// every start.
+type cacheFile struct {
+	Records []Record             `json:"records"`
+	Stamps  map[string]FileStamp `json:"stamps"`
+}
+
+func readCache(path string) ([]Record, map[string]FileStamp, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, nil, nil
 		}
 		slog.Warn("conversation.index.cache_read_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
-		return nil, fmt.Errorf("read conversation cache: %w", err)
+		return nil, nil, fmt.Errorf("read conversation cache: %w", err)
 	}
+	var cache cacheFile
+	if err := json.Unmarshal(data, &cache); err == nil && cache.Records != nil {
+		sortRecords(cache.Records)
+		return cache.Records, cache.Stamps, nil
+	}
+	// Fall back to the legacy records-only array. The next write upgrades the
+	// file to the stamped envelope, so the first refresh re-parses once and then
+	// the startup path is cheap.
 	var records []Record
 	if err := json.Unmarshal(data, &records); err != nil {
 		slog.Warn("conversation.index.cache_decode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
-		return nil, fmt.Errorf("decode conversation cache: %w", err)
+		return nil, nil, fmt.Errorf("decode conversation cache: %w", err)
 	}
 	sortRecords(records)
-	return records, nil
+	return records, nil, nil
 }
 
-func writeCache(path string, records []Record) error {
+func writeCache(path string, records []Record, stamps map[string]FileStamp) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		slog.Warn("conversation.index.cache_mkdir_failed", "concern", "conversation.index", "component", "conversation", "path", filepath.Dir(path), "err", err)
 		return fmt.Errorf("create conversation cache dir: %w", err)
 	}
-	data, err := json.MarshalIndent(records, "", "  ")
+	data, err := json.MarshalIndent(cacheFile{Records: records, Stamps: stamps}, "", "  ")
 	if err != nil {
 		slog.Warn("conversation.index.cache_encode_failed", "concern", "conversation.index", "component", "conversation", "path", path, "err", err)
 		return fmt.Errorf("encode conversation cache: %w", err)
@@ -273,7 +321,11 @@ func cloneRecords(records []Record) []Record {
 	return out
 }
 
-func derivedID(provider Provider, providerID string, artifactPath string) string {
+// DerivedID returns the stable conversation id for an artifact: the provider
+// label joined to the native provider id, or an artifact-hash id when the
+// native id is missing. The provider parser packages call it so every record
+// shares one id derivation.
+func DerivedID(provider Provider, providerID string, artifactPath string) string {
 	providerID = strings.TrimSpace(providerID)
 	if providerID != "" {
 		return provider.String() + ":" + providerID

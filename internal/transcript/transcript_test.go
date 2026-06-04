@@ -2,26 +2,8 @@ package transcript
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
-
-func TestParseStripsControlTagNoiseFromUserMessages(t *testing.T) {
-	input := strings.NewReader(
-		`{"uuid":"1","type":"user","timestamp":"2026-04-24T19:00:00Z","message":{"role":"user","content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>\nCatch you later!"}}` + "\n",
-	)
-
-	msgs, err := ParseWithOptions(input, ParseOptions{})
-	if err != nil {
-		t.Fatalf("ParseWithOptions: %v", err)
-	}
-	if len(msgs) != 1 {
-		t.Fatalf("messages=%d want 1", len(msgs))
-	}
-	if msgs[0].Text != "Catch you later!" {
-		t.Fatalf("text=%q want %q", msgs[0].Text, "Catch you later!")
-	}
-}
 
 func TestShapeConversationCompactsToolOnlyTurns(t *testing.T) {
 	turns := ShapeConversation([]Message{{

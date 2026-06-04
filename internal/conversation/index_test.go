@@ -14,28 +14,34 @@ func TestListUsesCacheAndDoesNotForceDebouncedScan(t *testing.T) {
 	scanCalls := 0
 	idx := &Index{
 		mu:          sync.Mutex{},
+		registry:    NewRegistry(),
 		records:     nil,
+		prevRecords: nil,
+		prevStamps:  nil,
 		loaded:      false,
 		refreshing:  false,
 		lastRefresh: time.Now(),
 		cachePath:   filepath.Join(t.TempDir(), cacheFilename),
 		debounce:    time.Hour,
-		scanProvider: func(context.Context) ([]Record, error) {
+		scanProvider: func(context.Context, *Registry, scanCache) (scanResult, error) {
 			scanCalls++
-			return []Record{{
-				ID:            "claude:cached",
-				Provider:      ProviderClaude,
-				NativeID:      "cached",
-				Title:         "cached",
-				WorkspaceRoot: "",
-				ArtifactPath:  "/tmp/cached.jsonl",
-				ArtifactKind:  artifactKindTranscript,
-				Model:         "",
-				CreatedAt:     time.Time{},
-				UpdatedAt:     time.Time{},
-				SizeBytes:     0,
-				Archived:      false,
-			}}, nil
+			return scanResult{
+				records: []Record{{
+					ID:            "claude:cached",
+					Provider:      ProviderClaude,
+					NativeID:      "cached",
+					Title:         "cached",
+					WorkspaceRoot: "",
+					ArtifactPath:  "/tmp/cached.jsonl",
+					ArtifactKind:  "transcript",
+					Model:         "",
+					CreatedAt:     time.Time{},
+					UpdatedAt:     time.Time{},
+					SizeBytes:     0,
+					Archived:      false,
+				}},
+				stamps: nil,
+			}, nil
 		},
 	}
 

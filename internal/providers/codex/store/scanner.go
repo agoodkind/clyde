@@ -15,101 +15,79 @@ type DiscoveryScanner struct {
 	Paths StorePaths
 }
 
-// DiscoveryResult is part of Clyde's typed adapter surface.
-type DiscoveryResult struct {
-	ThreadID      string
-	ThreadName    string
-	RolloutPath   string
-	WorkspaceRoot string
-	LatestWorkDir string
-	Entrypoint    string
-	ModelProvider string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	ForkParentID  string
-	IsSubagent    bool
-	IsArchived    bool
-}
-
 // NewDiscoveryScanner is part of Clyde's typed adapter surface.
 func NewDiscoveryScanner(paths StorePaths) DiscoveryScanner {
 	return DiscoveryScanner{Paths: paths}
 }
 
-// Scan is part of Clyde's typed adapter surface.
-func (s DiscoveryScanner) Scan() ([]DiscoveryResult, error) {
-	idx, err := ReadSessionIndex(s.Paths.SessionIndexPath)
-	if err != nil {
-		slog.Warn("codex.store.scanner.read_session_index_failed", "concern", "providers.codex.store", "path", s.Paths.SessionIndexPath, "err", err)
-		return nil, fmt.Errorf("walk codex rollout roots: %w", err)
-	}
-	var out []DiscoveryResult
-	for _, root := range rolloutRoots(s.Paths) {
-		scanned, err := scanRolloutRoot(root, idx)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, scanned...)
-	}
-	return out, nil
+// RolloutStamp is the file size and modification time used to detect whether a
+// rollout file changed since the last incremental scan. Rollout files are
+// append-only, so a matching size and mtime means the parsed contents are
+// unchanged and can be skipped.
+type RolloutStamp struct {
+	Size  int64
+	Mtime time.Time
 }
 
-func scanRolloutRoot(root rolloutRoot, idx SessionIndex) ([]DiscoveryResult, error) {
-	var out []DiscoveryResult
-	err := filepath.WalkDir(root.Path, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() || !isRolloutFilename(d.Name()) {
-			return nil
-		}
-		thread, err := ReadThreadByRolloutPath(path, false, root.Archived)
-		if err != nil {
-			if id, createdAt, ok := rolloutIdentityFromFilename(d.Name()); ok {
-				thread = ThreadSummary{
-					ID:          id,
-					RolloutPath: path,
-					CreatedAt:   createdAt,
-					IsArchived:  root.Archived, ForkedFromID: "", Preview: "", Name: "", ModelProvider: "", UpdatedAt: time.
-							Time{},
+// RolloutCandidate is one rollout file surfaced by discovery, with the file
+// stamp used to skip unchanged files and the archived flag that records which
+// root it came from.
+type RolloutCandidate struct {
+	Path     string
+	Stamp    RolloutStamp
+	Archived bool
+}
 
-					CWD: "", LatestCWD: "", CLIVersion: "", Originator: "", Source: ThreadSource{Kind: "", ParentThreadID: "", AgentNickname: "", AgentRole: ""},
-
-					AgentNickname: "", AgentRole: "", IsSubagent: false, Messages: nil,
+// DiscoverCandidates walks every rollout root and returns one candidate per
+// rollout file without opening or parsing it. The caller stats nothing further
+// for unchanged files and reads only changed files through
+// [ReadThreadByRolloutPath].
+func (s DiscoveryScanner) DiscoverCandidates() ([]RolloutCandidate, error) {
+	var out []RolloutCandidate
+	for _, root := range rolloutRoots(s.Paths) {
+		err := filepath.WalkDir(root.Path, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+					return nil
 				}
-			} else {
+				return err
+			}
+			if d.IsDir() || !isRolloutFilename(d.Name()) {
 				return nil
 			}
-		}
-		name := idx.ThreadName(thread.ID)
-		out = append(out, DiscoveryResult{
-			ThreadID:      thread.ID,
-			ThreadName:    name,
-			RolloutPath:   path,
-			WorkspaceRoot: thread.CWD,
-			LatestWorkDir: firstNonEmpty(thread.LatestCWD, thread.CWD),
-			Entrypoint:    thread.Originator,
-			ModelProvider: thread.ModelProvider,
-			CreatedAt:     thread.CreatedAt,
-			UpdatedAt:     thread.UpdatedAt,
-			ForkParentID:  thread.ForkedFromID,
-			IsSubagent:    thread.IsSubagent,
-			IsArchived:    thread.IsArchived,
+			info, infoErr := d.Info()
+			if infoErr != nil {
+				if errors.Is(infoErr, os.ErrNotExist) {
+					return nil
+				}
+				slog.Warn("codex.store.scanner.stat_failed", "concern", "providers.codex.store", "path", path, "err", infoErr)
+				return nil
+			}
+			out = append(out, RolloutCandidate{
+				Path:     path,
+				Stamp:    RolloutStamp{Size: info.Size(), Mtime: info.ModTime()},
+				Archived: root.Archived,
+			})
+			return nil
 		})
-		return nil
-	})
-	if err != nil {
-		slog.Warn("codex.store.scanner.walk_failed", "concern", "providers.codex.store", "root", root.Path, "err", err)
-		return nil, fmt.Errorf("walk codex rollout tree: %w", err)
+		if err != nil {
+			slog.Warn("codex.store.scanner.walk_failed", "concern", "providers.codex.store", "root", root.Path, "err", err)
+			return nil, fmt.Errorf("walk codex rollout tree: %w", err)
+		}
 	}
 	return out, nil
 }
 
 func isRolloutFilename(name string) bool {
 	return strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl")
+}
+
+// RolloutIdentityFromFilename derives the thread id and created time encoded in
+// a rollout filename, used as the fallback identity when a rollout file is too
+// short or malformed to parse a header. The boolean is false when name is not a
+// recognizable rollout filename.
+func RolloutIdentityFromFilename(name string) (string, time.Time, bool) {
+	return rolloutIdentityFromFilename(name)
 }
 
 func rolloutIdentityFromFilename(name string) (string, time.Time, bool) {
@@ -130,13 +108,4 @@ func rolloutIdentityFromFilename(name string) (string, time.Time, bool) {
 		return "", time.Time{}, false
 	}
 	return threadID, createdAt, true
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

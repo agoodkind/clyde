@@ -10,9 +10,10 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-// Export renders one raw conversation artifact.
-func Export(record Record, options ExportOptions) ([]byte, error) {
-	messages, err := LoadMessages(record, options.IncludeSystemPrompts, options.IncludeToolOutputs)
+// Export renders one raw conversation artifact. It collects every message
+// because the rendered document spans the whole conversation.
+func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
+	messages, err := idx.LoadMessages(record, options.IncludeSystemPrompts, options.IncludeToolOutputs)
 	if err != nil {
 		return nil, err
 	}

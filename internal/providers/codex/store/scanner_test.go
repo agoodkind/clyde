@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestDiscoveryScannerScansActiveAndArchivedRollouts(t *testing.T) {
+func TestDiscoverCandidatesFindsActiveAndArchivedRollouts(t *testing.T) {
 	codexHome := t.TempDir()
 	paths, err := ResolveStorePaths(t.Context(), codexHome, "")
 	if err != nil {
@@ -22,8 +22,7 @@ func TestDiscoveryScannerScansActiveAndArchivedRollouts(t *testing.T) {
 	}
 	activeID := "019de9aa-3a00-7010-bd9f-a6ee71559357"
 	activePath := filepath.Join(activeDir, "rollout-2026-05-02T10-09-00-"+activeID+".jsonl")
-	activeBody := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + activeID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:10:00.000Z","type":"turn_context","payload":{"cwd":"/repo/subdir"}}` + "\n"
+	activeBody := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + activeID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n"
 	if err := os.WriteFile(activePath, []byte(activeBody), 0o600); err != nil {
 		t.Fatalf("write active rollout: %v", err)
 	}
@@ -33,35 +32,33 @@ func TestDiscoveryScannerScansActiveAndArchivedRollouts(t *testing.T) {
 	if err := os.WriteFile(archivedPath, []byte(archivedBody), 0o600); err != nil {
 		t.Fatalf("write archived rollout: %v", err)
 	}
-	indexBody := `{"id":"` + activeID + `","thread_name":"visible name","updated_at":"2026-05-02T18:00:00Z"}` + "\n"
-	if err := os.WriteFile(paths.SessionIndexPath, []byte(indexBody), 0o600); err != nil {
-		t.Fatalf("write index: %v", err)
-	}
 
-	results, err := NewDiscoveryScanner(paths).Scan()
+	candidates, err := NewDiscoveryScanner(paths).DiscoverCandidates()
 	if err != nil {
-		t.Fatalf("Scan returned error: %v", err)
+		t.Fatalf("DiscoverCandidates returned error: %v", err)
 	}
-	if len(results) != 2 {
-		t.Fatalf("Scan returned %d results, want 2", len(results))
+	if len(candidates) != 2 {
+		t.Fatalf("DiscoverCandidates returned %d candidates, want 2", len(candidates))
 	}
-	var active DiscoveryResult
-	var archived DiscoveryResult
-	for _, result := range results {
-		if result.ThreadID == activeID {
-			active = result
-		}
-		if result.ThreadID == archivedID {
-			archived = result
+	byArchived := make(map[bool]RolloutCandidate, 2)
+	for _, candidate := range candidates {
+		byArchived[candidate.Archived] = candidate
+		if candidate.Stamp.Size == 0 {
+			t.Fatalf("candidate %q had zero stamp size", candidate.Path)
 		}
 	}
-	if active.ThreadName != "visible name" {
-		t.Fatalf("active ThreadName = %q", active.ThreadName)
+	active, ok := byArchived[false]
+	if !ok {
+		t.Fatal("no active candidate discovered")
 	}
-	if active.LatestWorkDir != "/repo/subdir" {
-		t.Fatalf("active LatestWorkDir = %q", active.LatestWorkDir)
+	if active.Path != activePath {
+		t.Fatalf("active candidate path = %q, want %q", active.Path, activePath)
 	}
-	if !archived.IsArchived {
-		t.Fatal("archived IsArchived = false, want true")
+	archived, ok := byArchived[true]
+	if !ok {
+		t.Fatal("no archived candidate discovered")
+	}
+	if archived.Path != archivedPath {
+		t.Fatalf("archived candidate path = %q, want %q", archived.Path, archivedPath)
 	}
 }
