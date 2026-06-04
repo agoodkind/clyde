@@ -3,6 +3,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,8 +69,8 @@ func TestRunDarwinFingerprintFailureRestartsService(t *testing.T) {
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = rendered
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")
-	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint", "--built"}}, "built-123")
-	fixture.runner.setFailure(command{name: fixture.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint"}}, 9, "running failed")
+	fixture.compiledFingerprint = func() string { return "built-123" }
+	fixture.runningFingerprint = func(context.Context) (string, error) { return "", errors.New("running failed") }
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"kickstart", "-k", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "")
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "running")
 
@@ -92,8 +93,8 @@ func TestRunDarwinMatchingFingerprintsReloadsDaemon(t *testing.T) {
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = rendered
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")
-	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint", "--built"}}, "same-fingerprint")
-	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint"}}, "same-fingerprint")
+	fixture.compiledFingerprint = func() string { return "same-fingerprint" }
+	fixture.runningFingerprint = func(context.Context) (string, error) { return "same-fingerprint", nil }
 	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "reload"}}, "reload ok")
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "running")
 
@@ -164,8 +165,8 @@ func TestRunReloadOnlyReloadsWhenStateIsValid(t *testing.T) {
 	fixture.fs.exists[fixture.config.LaunchdPlist] = true
 	fixture.fs.files[fixture.config.LaunchdPlist] = rendered
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "loaded")
-	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint", "--built"}}, "same-fingerprint")
-	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint"}}, "same-fingerprint")
+	fixture.compiledFingerprint = func() string { return "same-fingerprint" }
+	fixture.runningFingerprint = func(context.Context) (string, error) { return "same-fingerprint", nil }
 	fixture.runner.setSuccess(command{name: fixture.config.InstallBin, args: []string{"daemon", "reload"}}, "reload ok")
 	fixture.runner.setSuccess(command{name: "launchctl", args: []string{"print", fixture.config.LaunchdDomain + "/" + fixture.config.LaunchdLabel}}, "running")
 
@@ -182,13 +183,15 @@ func TestRunReloadOnlyReloadsWhenStateIsValid(t *testing.T) {
 }
 
 type deployFixture struct {
-	t      *testing.T
-	config config
-	fs     *fakeFileSystem
-	runner *fakeRunner
-	logs   bytes.Buffer
-	stdout bytes.Buffer
-	stderr bytes.Buffer
+	t                   *testing.T
+	config              config
+	fs                  *fakeFileSystem
+	runner              *fakeRunner
+	logs                bytes.Buffer
+	stdout              bytes.Buffer
+	stderr              bytes.Buffer
+	compiledFingerprint func() string
+	runningFingerprint  func(ctx context.Context) (string, error)
 }
 
 func newDeployFixture(t *testing.T, targetPlatform platform) *deployFixture {
@@ -217,20 +220,24 @@ func newDeployFixture(t *testing.T, targetPlatform platform) *deployFixture {
 		config.SystemdUserUnit = filepath.Join(homeDir, ".config", "systemd", "user", defaultSystemdUnit)
 	}
 	return &deployFixture{
-		t:      t,
-		config: config,
-		fs:     newFakeFileSystem(),
-		runner: newFakeRunner(),
+		t:                   t,
+		config:              config,
+		fs:                  newFakeFileSystem(),
+		runner:              newFakeRunner(),
+		compiledFingerprint: func() string { return "built-default" },
+		runningFingerprint:  func(context.Context) (string, error) { return "built-default", nil },
 	}
 }
 
 func (fixture *deployFixture) deps() dependencies {
 	return dependencies{
-		fileSystem: fixture.fs,
-		runner:     fixture.runner,
-		logWriter:  &fixture.logs,
-		stdout:     &fixture.stdout,
-		stderr:     &fixture.stderr,
+		fileSystem:          fixture.fs,
+		runner:              fixture.runner,
+		logWriter:           &fixture.logs,
+		stdout:              &fixture.stdout,
+		stderr:              &fixture.stderr,
+		compiledFingerprint: fixture.compiledFingerprint,
+		runningFingerprint:  fixture.runningFingerprint,
 	}
 }
 

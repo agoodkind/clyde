@@ -99,11 +99,24 @@ type runner interface {
 }
 
 type dependencies struct {
-	fileSystem fileSystem
-	runner     runner
-	logWriter  io.Writer
-	stdout     io.Writer
-	stderr     io.Writer
+	fileSystem          fileSystem
+	runner              runner
+	logWriter           io.Writer
+	stdout              io.Writer
+	stderr              io.Writer
+	compiledFingerprint func() string
+	runningFingerprint  func(ctx context.Context) (string, error)
+}
+
+// Fingerprints supplies the supervisor fingerprints the deploy compares to
+// choose between a hot reload and a full restart. Compiled returns the running
+// deploy process's own build-stamped fingerprint, which is the freshly
+// installed binary because make deploy runs the installed binary's deploy
+// command. Running RPCs the live daemon. Passing them as typed calls keeps the
+// deploy from scraping a subprocess's console for the values.
+type Fingerprints struct {
+	Compiled func() string
+	Running  func(ctx context.Context) (string, error)
 }
 
 type outcome struct {
@@ -124,13 +137,15 @@ type commandResult struct {
 }
 
 type executor struct {
-	config  config
-	files   fileSystem
-	runner  runner
-	logger  logger
-	stdout  io.Writer
-	stderr  io.Writer
-	outcome outcome
+	config              config
+	files               fileSystem
+	runner              runner
+	logger              logger
+	stdout              io.Writer
+	stderr              io.Writer
+	outcome             outcome
+	compiledFingerprint func() string
+	runningFingerprint  func(ctx context.Context) (string, error)
 }
 
 const (
@@ -146,7 +161,7 @@ var linuxTemplate string
 
 // RunFromEnv loads deploy config from the current runtime and environment, then
 // executes the daemon deploy decision tree.
-func RunFromEnv(ctx context.Context, lookup func(string) (string, bool), reloadOnly bool, stdout io.Writer, stderr io.Writer) error {
+func RunFromEnv(ctx context.Context, lookup func(string) (string, bool), reloadOnly bool, stdout io.Writer, stderr io.Writer, fingerprints Fingerprints) error {
 	logWriter := stderr
 	if logWriter == nil {
 		logWriter = io.Discard
@@ -165,11 +180,13 @@ func RunFromEnv(ctx context.Context, lookup func(string) (string, bool), reloadO
 	}
 	cfg.ReloadOnly = reloadOnly
 	return run(ctx, cfg, dependencies{
-		fileSystem: osFileSystem{},
-		runner:     execRunner{},
-		logWriter:  logWriter,
-		stdout:     stdout,
-		stderr:     stderr,
+		fileSystem:          osFileSystem{},
+		runner:              execRunner{},
+		logWriter:           logWriter,
+		stdout:              stdout,
+		stderr:              stderr,
+		compiledFingerprint: fingerprints.Compiled,
+		runningFingerprint:  fingerprints.Running,
 	})
 }
 
@@ -280,13 +297,15 @@ func run(ctx context.Context, cfg config, deps dependencies) error {
 	}
 
 	executor := executor{
-		config:  cfg,
-		files:   files,
-		runner:  commandRunner,
-		logger:  newLogger(deps.logWriter),
-		stdout:  stdout,
-		stderr:  stderr,
-		outcome: outcome{action: actionUnset, reason: "", cause: causeUnset},
+		config:              cfg,
+		files:               files,
+		runner:              commandRunner,
+		logger:              newLogger(deps.logWriter),
+		stdout:              stdout,
+		stderr:              stderr,
+		outcome:             outcome{action: actionUnset, reason: "", cause: causeUnset},
+		compiledFingerprint: deps.compiledFingerprint,
+		runningFingerprint:  deps.runningFingerprint,
 	}
 	return executor.run(ctx)
 }
@@ -382,11 +401,7 @@ func (executor *executor) deployLinux(ctx context.Context) error {
 }
 
 func (executor *executor) reloadOrRestart(ctx context.Context) error {
-	built, err := executor.builtFingerprint(ctx)
-	if err != nil {
-		executor.logger.event("branch.built_fingerprint_failed", field{Key: "err", Value: err.Error()})
-		return err
-	}
+	built := executor.compiledFingerprint()
 	if built == "" {
 		executor.logger.event("branch.built_fingerprint_empty")
 		return errors.New("installed binary returned an empty supervisor fingerprint")
@@ -587,7 +602,7 @@ func (executor *executor) darwinServiceMatches() (bool, error) {
 
 func (executor *executor) darwinServiceLoaded(ctx context.Context) (bool, error) {
 	executor.logger.event("darwin.service_loaded.check", field{Key: "target", Value: executor.darwinTarget()})
-	_, err := executor.runQuietCommand(ctx, "darwin.service_loaded.command", command{name: "launchctl", args: []string{"print", executor.darwinTarget()}})
+	err := executor.runQuietCommand(ctx, "darwin.service_loaded.command", command{name: "launchctl", args: []string{"print", executor.darwinTarget()}})
 	if err != nil {
 		var runErr *commandRunError
 		if errors.As(err, &runErr) {
@@ -630,7 +645,7 @@ func (executor *executor) linuxServiceMatches() (bool, error) {
 
 func (executor *executor) linuxServiceActive(ctx context.Context) (bool, error) {
 	executor.logger.event("linux.service_active.check", field{Key: "unit", Value: executor.config.SystemdUnit})
-	_, err := executor.runQuietCommand(ctx, "linux.service_active.command", command{name: "systemctl", args: []string{"--user", "is-active", "--quiet", executor.config.SystemdUnit}})
+	err := executor.runQuietCommand(ctx, "linux.service_active.command", command{name: "systemctl", args: []string{"--user", "is-active", "--quiet", executor.config.SystemdUnit}})
 	if err != nil {
 		var runErr *commandRunError
 		if errors.As(err, &runErr) {
@@ -643,20 +658,12 @@ func (executor *executor) linuxServiceActive(ctx context.Context) (bool, error) 
 	return true, nil
 }
 
-func (executor *executor) builtFingerprint(ctx context.Context) (string, error) {
-	return executor.runQuietCommand(ctx, "fingerprint.built", command{name: executor.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint", "--built"}})
-}
-
-func (executor *executor) runningFingerprint(ctx context.Context) (string, error) {
-	return executor.runQuietCommand(ctx, "fingerprint.running", command{name: executor.config.InstallBin, args: []string{"daemon", "supervisor-fingerprint"}})
-}
-
-func (executor *executor) runQuietCommand(ctx context.Context, step string, current command) (string, error) {
+func (executor *executor) runQuietCommand(ctx context.Context, step string, current command) error {
 	executor.logger.event(step+".start", field{Key: "command", Value: current.display()})
 	result := executor.runner.run(ctx, current)
 	if result.success() {
 		executor.logger.event(step+".success", field{Key: "command", Value: current.display()}, field{Key: "output", Value: strings.TrimSpace(result.output)})
-		return strings.TrimSpace(result.output), nil
+		return nil
 	}
 	err := newCommandRunError(step, current, result)
 	executor.logger.event(step+".failed",
@@ -665,7 +672,7 @@ func (executor *executor) runQuietCommand(ctx context.Context, step string, curr
 		field{Key: "output", Value: strings.TrimSpace(result.output)},
 		field{Key: "err", Value: err.Error()},
 	)
-	return "", err
+	return err
 }
 
 func (executor *executor) runActionCommand(ctx context.Context, step string, current command) error {

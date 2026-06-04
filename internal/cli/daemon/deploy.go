@@ -20,7 +20,11 @@ func newDeployCmd(f *cli.Factory) *cobra.Command {
 		Example: "clyde daemon deploy",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := deploy.RunFromEnv(cmd.Context(), os.LookupEnv, reloadOnly, f.IOStreams.Out, f.IOStreams.Err); err != nil {
+			fingerprints := deploy.Fingerprints{
+				Compiled: builtFingerprint,
+				Running:  runningFingerprint,
+			}
+			if err := deploy.RunFromEnv(cmd.Context(), os.LookupEnv, reloadOnly, f.IOStreams.Out, f.IOStreams.Err, fingerprints); err != nil {
 				slog.WarnContext(cmd.Context(), "cli.daemon.deploy.failed", "concern", "cli.daemon", "component", "cli", "err", err)
 				return fmt.Errorf("daemon deploy: %w", err)
 			}
