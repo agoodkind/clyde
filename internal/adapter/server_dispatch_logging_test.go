@@ -46,11 +46,11 @@ func TestHandleChatLogsFixedFilteredPayload(t *testing.T) {
 	if _, hasSummary := payloadEvent["payload_summary"]; !hasSummary {
 		t.Fatalf("fixed payload policy should include payload_summary")
 	}
-	if !payloadEventHasField(payloadEvent, "$.temperature") {
-		t.Fatalf("payload_fields should retain unknown non-context fields: %v", payloadEvent["payload_fields"])
+	if _, hasFields := payloadEvent["payload_fields"]; hasFields {
+		t.Fatalf("payload_fields must not be logged; bodies live in capture.db: %v", payloadEvent["payload_fields"])
 	}
-	if !payloadEventHasRemoved(payloadEvent, "$.messages") {
-		t.Fatalf("payload_removed should record context fields: %v", payloadEvent["payload_removed"])
+	if _, hasRemoved := payloadEvent["payload_removed"]; hasRemoved {
+		t.Fatalf("payload_removed must not be logged: %v", payloadEvent["payload_removed"])
 	}
 }
 
@@ -676,40 +676,6 @@ func findRequestLegLogEvent(t *testing.T, logBuffer *bytes.Buffer, leg logevent.
 		}
 	}
 	return nil
-}
-
-func payloadEventHasField(event map[string]any, path string) bool {
-	fields, ok := event["payload_fields"].([]any)
-	if !ok {
-		return false
-	}
-	for _, field := range fields {
-		fieldMap, ok := field.(map[string]any)
-		if !ok {
-			continue
-		}
-		if fieldMap["path"] == path {
-			return true
-		}
-	}
-	return false
-}
-
-func payloadEventHasRemoved(event map[string]any, path string) bool {
-	removed, ok := event["payload_removed"].([]any)
-	if !ok {
-		return false
-	}
-	for _, field := range removed {
-		fieldMap, ok := field.(map[string]any)
-		if !ok {
-			continue
-		}
-		if fieldMap["path"] == path {
-			return true
-		}
-	}
-	return false
 }
 
 func findLogEvents(t *testing.T, logBuffer *bytes.Buffer, message string) []map[string]any {

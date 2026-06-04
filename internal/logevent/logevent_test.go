@@ -3,7 +3,6 @@ package logevent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -12,7 +11,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 )
 
-func TestFilterPayloadRemovesContextFieldsAndPreservesSafeFields(t *testing.T) {
+func TestFilterPayloadSummarizesWithoutBodyContent(t *testing.T) {
 	raw := []byte(`{"model":"gpt-5","messages":[{"role":"user","content":"secret"}],"unknown_debug":{"kept":true},"tools":[{"type":"function"}]}`)
 
 	view := FilterPayload(raw, "application/json")
@@ -20,21 +19,18 @@ func TestFilterPayloadRemovesContextFieldsAndPreservesSafeFields(t *testing.T) {
 	if view.Summary.BodyType != "json_object" {
 		t.Fatalf("BodyType = %q, want json_object", view.Summary.BodyType)
 	}
-	if len(view.Fields) != 2 {
-		t.Fatalf("Fields length = %d, want 2", len(view.Fields))
+	if view.Summary.FieldCount != 4 {
+		t.Fatalf("FieldCount = %d, want 4", view.Summary.FieldCount)
 	}
-	paths := []string{view.Fields[0].Path, view.Fields[1].Path}
-	if strings.Join(paths, ",") != "$.model,$.unknown_debug" {
-		t.Fatalf("retained paths = %v, want model and unknown_debug", paths)
+	if view.Summary.Bytes != len(raw) {
+		t.Fatalf("Bytes = %d, want %d", view.Summary.Bytes, len(raw))
 	}
-	if len(view.Removed) != 2 {
-		t.Fatalf("Removed length = %d, want 2", len(view.Removed))
+	if view.Summary.SHA256 == "" {
+		t.Fatal("SHA256 is empty")
 	}
-	for _, removed := range view.Removed {
-		if removed.Path == "$.messages" || removed.Path == "$.tools" {
-			continue
-		}
-		t.Fatalf("unexpected removed path %q", removed.Path)
+	// The body content must never appear in the summary view; capture.db holds it.
+	if strings.Contains(view.Summary.BodyType, "secret") {
+		t.Fatalf("summary leaked body content: %+v", view.Summary)
 	}
 }
 
@@ -58,14 +54,13 @@ func TestRecorderReportsMissingRequiredLegs(t *testing.T) {
 	}
 }
 
-func TestRecorderEmitsTypedPayloadFields(t *testing.T) {
+func TestRecorderEmitsPayloadSummary(t *testing.T) {
 	var output bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{}))
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress}})
 	recorder := emitter.Begin(Identity{RequestID: "req-2"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 	payload := PayloadView{
 		Summary: PayloadSummary{BodyType: "json_object", Bytes: 16},
-		Fields:  []PayloadField{{Path: "$.model", Value: json.RawMessage(`"gpt-5"`), Bytes: 7}},
 	}
 
 	recorder.Emit(context.Background(), Event{
@@ -75,8 +70,8 @@ func TestRecorderEmitsTypedPayloadFields(t *testing.T) {
 		Payload: &payload,
 	})
 
-	if !strings.Contains(output.String(), "payload_fields") {
-		t.Fatalf("log output does not include payload_fields: %s", output.String())
+	if !strings.Contains(output.String(), "payload_summary") {
+		t.Fatalf("log output does not include payload_summary: %s", output.String())
 	}
 	if !strings.Contains(output.String(), `"component":"adapter"`) {
 		t.Fatalf("log output does not include adapter component: %s", output.String())
@@ -112,7 +107,7 @@ func (f testFacet) SinkHints() SinkHints { return f.Hints }
 
 func TestFacetsBundleEmitsAttrsAndJSON(t *testing.T) {
 	var output bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{}))
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	emitter := NewEmitter(logger, RequiredLegs{SurfaceAdapterChat: {LegAdapterIngress}})
 	recorder := emitter.Begin(Identity{RequestID: "req-facet"}, Path{Surface: SurfaceAdapterChat, RouteFamily: RouteFamilyChatCompatible})
 

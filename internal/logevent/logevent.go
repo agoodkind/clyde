@@ -678,7 +678,17 @@ func (e *Emitter) Emit(ctx context.Context, event Event) {
 	if event.Name == "" {
 		event.Name = "logging.request.leg"
 	}
-	e.logger.LogAttrs(ctx, slog.LevelInfo, event.Name, append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...)
+	e.logger.LogAttrs(ctx, legLevel(event), event.Name, append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...)
+}
+
+// legLevel keeps healthy request legs at Debug so a busy adapter does not flood
+// the logs, while failures stay at Info so they remain visible at the default
+// level.
+func legLevel(event Event) slog.Level {
+	if event.Outcome.Status == StatusError || event.Path.Phase == PhaseFailed {
+		return slog.LevelInfo
+	}
+	return slog.LevelDebug
 }
 
 // Begin starts a request story.
@@ -768,7 +778,7 @@ func (r *Recorder) Emit(ctx context.Context, event Event) {
 	r.lastPhase = event.Path.Phase
 	logger := r.emitter.logger
 	r.mu.Unlock()
-	logger.LogAttrs(ctx, slog.LevelInfo, event.Name, append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...)
+	logger.LogAttrs(ctx, legLevel(event), event.Name, append([]slog.Attr{slog.String("concern", "adapter.chat.dispatch")}, event.Attrs()...)...)
 }
 
 // EmitError closes an early failure with the request error leg.

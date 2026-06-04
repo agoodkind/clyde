@@ -146,13 +146,3 @@ func (c *multiCloser) Close() error {
 	})
 	return c.err
 }
-
-func handlersCloser(handlers []slog.Handler) io.Closer {
-	closers := make([]io.Closer, 0, len(handlers))
-	for _, handler := range handlers {
-		if closer, ok := handler.(io.Closer); ok {
-			closers = append(closers, closer)
-		}
-	}
-	return newMultiCloser(closers...)
-}

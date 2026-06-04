@@ -198,9 +198,19 @@ func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
 	if len(handlers) == 0 {
 		handlers = append(handlers, slog.DiscardHandler)
 	}
-	handlerCloser := handlersCloser(handlers)
+	// Each sink gets its own async drain goroutine behind the tee, rather than a
+	// single drain wrapping the whole tee. A rotation or a slow write on one log
+	// file then runs on that file's own goroutine and never blocks the producers
+	// or the other sinks, so log rotation is off every producing hot path.
+	asyncChildren := make([]slog.Handler, len(handlers))
+	closers := make([]io.Closer, 0, len(handlers))
+	for i, handler := range handlers {
+		async := newAsyncHandler(handler, sinkCloser(handler))
+		asyncChildren[i] = async
+		closers = append(closers, async)
+	}
 	rootHandler := correlation.SlogHandler(
-		newAsyncHandler(gklog.NewTeeHandler(handlers...), handlerCloser),
+		gklog.NewTeeHandler(asyncChildren...),
 		correlation.HandlerOptions{
 			Strict:   false,
 			Required: nil,
@@ -208,11 +218,16 @@ func buildPolicyAsyncLogger(handlers []slog.Handler) io.Closer {
 	)
 	logger := slog.New(rootHandler).With("build", version.String())
 	slog.SetDefault(logger)
-	closer, ok := rootHandler.(io.Closer)
-	if !ok {
-		return nopCloser{Closed: false}
+	return newMultiCloser(closers...)
+}
+
+// sinkCloser returns handler as an [io.Closer] when it owns OS resources that
+// must be flushed and released on shutdown, or nil when it does not.
+func sinkCloser(handler slog.Handler) io.Closer {
+	if closer, ok := handler.(io.Closer); ok {
+		return closer
 	}
-	return closer
+	return nil
 }
 
 // buildTranscriptRouter returns a configured router, or nil when the feature
