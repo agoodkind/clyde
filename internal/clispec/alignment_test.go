@@ -19,9 +19,9 @@ var cliOnlyFlags = map[string]bool{
 	"output": true,
 }
 
-// TestConversationRegistryNamesAreExactlySix guards the operation set. It
+// TestConversationRegistryNamesAreExactlyEight guards the operation set. It
 // stands in for the hand-maintained checklist that AGENTS.md used to carry.
-func TestConversationRegistryNamesAreExactlySix(t *testing.T) {
+func TestConversationRegistryNamesAreExactlyEight(t *testing.T) {
 	t.Parallel()
 	reg := NewConversationRegistry()
 	want := []string{
@@ -30,7 +30,9 @@ func TestConversationRegistryNamesAreExactlySix(t *testing.T) {
 		"clyde_get_context",
 		"clyde_get_conversation",
 		"clyde_list_conversations",
+		"clyde_search_cancel",
 		"clyde_search_conversation",
+		"clyde_search_status",
 	}
 	var got []string
 	for _, op := range reg.ops {
@@ -92,9 +94,9 @@ func TestConversationAlignment(t *testing.T) {
 }
 
 // TestRenderCobraGroupsConversationOps confirms RenderCobra emits exactly one
-// "conversation" parent at the root that owns the six short-verb children. It
-// pins the grouped surface shape so a stray ungrouped operation, a missing
-// verb, or a regressed parent name fails closed.
+// "conversation" parent at the root that owns the short-verb children. It pins
+// the grouped surface shape so a stray ungrouped operation, a missing verb, or
+// a regressed parent name fails closed.
 func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
@@ -106,7 +108,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if parent.Name() != "conversation" {
 		t.Fatalf("parent name: got %q, want %q", parent.Name(), "conversation")
 	}
-	wantChildren := []string{"analyze", "context", "export", "get", "list", "search"}
+	wantChildren := []string{"analyze", "context", "export", "get", "list", "search", "search-cancel", "search-status"}
 	var gotChildren []string
 	for _, child := range parent.Commands() {
 		gotChildren = append(gotChildren, child.Name())

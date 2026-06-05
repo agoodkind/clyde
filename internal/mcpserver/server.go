@@ -33,6 +33,9 @@ var gettingStartedPrompt string
 
 const mcpRequestIDHeader = "X-Clyde-Mcp-Request-Id"
 
+// maxConcurrentMCPTasks bounds how many task-augmented tool calls run at once.
+const maxConcurrentMCPTasks = 4
+
 // Server is the top-level holder for the MCP stdio server.
 type Server struct {
 	// Tunnels tracks every in-flight MCP tool call.
@@ -86,7 +89,14 @@ func (srv *Server) Serve(ctx context.Context) error {
 		defer srv.Tunnels.Release(ctx, serveHandle, "mcp.serve.done")
 	}
 
-	mcpServer := server.NewMCPServer("clyde", "0.13.0-dev", server.WithHooks(newHooks()))
+	mcpServer := server.NewMCPServer("clyde", "0.13.0-dev",
+		server.WithHooks(newHooks()),
+		// Enable the 2025-11-25 Tasks primitive (list, cancel, tool-call tasks)
+		// so a Tasks-capable client can run a task-augmented search_conversation
+		// and poll tasks/get, tasks/result, and tasks/cancel.
+		server.WithTaskCapabilities(true, true, true),
+		server.WithMaxConcurrentTasks(maxConcurrentMCPTasks),
+	)
 	mcpServer.Use(toolCallMiddleware(srv.Tunnels, "clyde"))
 	registerPrompt(mcpServer)
 	registerTools(mcpServer)

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -167,7 +168,153 @@ func SearchConversation(ctx context.Context, conversationID, query, depth string
 	return resp.GetText(), nil
 }
 
-// AnalyzeSearchResults asks the daemon to run the analysis model over a cached
+// GetSearchStatus asks the daemon for the state, progress, and result of an
+// async search job, rendered for display.
+func GetSearchStatus(ctx context.Context, resultID string) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.GetSearchStatus(rpcCtx, &clydev1.GetSearchStatusRequest{ResultId: resultID})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "get search status", err)
+	}
+	return renderSearchStatus(resp), nil
+}
+
+// CancelSearch asks the daemon to cancel a running search job.
+func CancelSearch(ctx context.Context, resultID string) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.CancelSearch(rpcCtx, &clydev1.CancelSearchRequest{ResultId: resultID})
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "cancel search", err)
+	}
+	return fmt.Sprintf("result_id: %s\nstatus: %s", resultID, searchStatusLabel(resp.GetStatus())), nil
+}
+
+func renderSearchStatus(resp *clydev1.GetSearchStatusResponse) string {
+	if !resp.GetFound() {
+		return fmt.Sprintf("result_id %s not found", resp.GetResultId())
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "result_id: %s\n", resp.GetResultId())
+	fmt.Fprintf(&b, "status: %s\n", searchStatusLabel(resp.GetStatus()))
+	p := resp.GetProgress()
+	if p != nil && (p.GetChunksTotal() > 0 || p.GetLayerTotal() > 0) {
+		fmt.Fprintf(&b, "progress: sweep %d/%d chunks, layer %d/%d (%s)\n",
+			p.GetChunksDone(), p.GetChunksTotal(), p.GetLayerIndex(), p.GetLayerTotal(), p.GetLayerName())
+	}
+	switch resp.GetStatus() {
+	case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
+		b.WriteString("\n")
+		b.WriteString(resp.GetResultText())
+	case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
+		fmt.Fprintf(&b, "error: %s\n", resp.GetError())
+	case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED,
+		clydev1.SearchStatus_SEARCH_STATUS_PENDING,
+		clydev1.SearchStatus_SEARCH_STATUS_RUNNING,
+		clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
+		// No extra body for non-terminal or canceled states.
+	}
+	return b.String()
+}
+
+func searchStatusLabel(s clydev1.SearchStatus) string {
+	switch s {
+	case clydev1.SearchStatus_SEARCH_STATUS_PENDING:
+		return "pending"
+	case clydev1.SearchStatus_SEARCH_STATUS_RUNNING:
+		return "running"
+	case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
+		return "complete"
+	case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
+		return "failed"
+	case clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
+		return "canceled"
+	case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED:
+		return "unspecified"
+	default:
+		return "unspecified"
+	}
+}
+
+// searchTaskPollInterval is how often the run-to-completion path polls the
+// daemon for a terminal search status.
+const searchTaskPollInterval = 500 * time.Millisecond
+
+// SearchToCompletion starts a search and blocks until it reaches a terminal
+// state, returning the rendered result. It is the run-to-completion path used by
+// the native MCP task handler; mcp-go runs it in a task goroutine so the client
+// is not blocked and can poll tasks/get. Canceling ctx (via tasks/cancel)
+// cancels the underlying search.
+func SearchToCompletion(ctx context.Context, conversationID, query, depth string) (string, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	startCtx, startCancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	startResp, err := client.rpc.SearchConversation(startCtx, &clydev1.SearchConversationRequest{
+		ConversationId: conversationID,
+		Query:          query,
+		Depth:          depth,
+	})
+	startCancel()
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.search_to_completion.start_failed", "concern", "mcp.server.context", "component", "daemon", "err", err)
+		return "", daemonRPCError(ctx, "start search", err)
+	}
+	resultID := startResp.GetResultId()
+	if resultID == "" {
+		return startResp.GetText(), nil
+	}
+
+	ticker := time.NewTicker(searchTaskPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			cancelCtx, cancelCancel := context.WithTimeout(context.WithoutCancel(ctx), analysisClientRPCTimeout)
+			_, _ = client.rpc.CancelSearch(cancelCtx, &clydev1.CancelSearchRequest{ResultId: resultID})
+			cancelCancel()
+			return "", fmt.Errorf("search task canceled")
+		case <-ticker.C:
+			statusCtx, statusCancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+			resp, err := client.rpc.GetSearchStatus(statusCtx, &clydev1.GetSearchStatusRequest{ResultId: resultID})
+			statusCancel()
+			if err != nil {
+				slog.WarnContext(ctx, "daemon.search_to_completion.poll_failed", "concern", "mcp.server.context", "component", "daemon", "result_id", resultID, "err", err)
+				return "", daemonRPCError(ctx, "poll search status", err)
+			}
+			switch resp.GetStatus() {
+			case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
+				return renderSearchStatus(resp), nil
+			case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
+				return "", fmt.Errorf("search failed: %s", resp.GetError())
+			case clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
+				return "", fmt.Errorf("search canceled")
+			case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED,
+				clydev1.SearchStatus_SEARCH_STATUS_PENDING,
+				clydev1.SearchStatus_SEARCH_STATUS_RUNNING:
+				// Still running; keep polling.
+			}
+		}
+	}
+}
+
+// AnalyzeSearchResults asks the daemon to run the analysis model over a stored
 // search result set.
 func AnalyzeSearchResults(ctx context.Context, resultID, prompt string) (string, error) {
 	client, err := connectDaemon(ctx)

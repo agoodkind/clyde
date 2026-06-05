@@ -48,6 +48,9 @@ func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 		}
 		options = append(options, param.mcpOption())
 	}
+	if op.MCPTaskSupport != "" {
+		options = append(options, mcp.WithTaskSupport(op.MCPTaskSupport))
+	}
 	tool := mcp.NewTool(op.Name.MCP(), options...)
 
 	handler := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -71,7 +74,17 @@ func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 			param.decodeMCP(&in, req)
 		}
 		sink := &MCPSink{buf: strings.Builder{}}
-		runErr := op.Run(ctx, in, SurfaceMCP, sink)
+		// A task-augmented call (the client supplied task params) runs the
+		// run-to-completion work function so the result reaches the client
+		// through tasks/result. mcp-go runs this handler in its own task
+		// goroutine, so the caller is not blocked. A plain call runs Run, which
+		// for an async operation returns immediately.
+		var runErr error
+		if op.MCPTaskRun != nil && req.Params.Task != nil {
+			runErr = op.MCPTaskRun(ctx, in, sink)
+		} else {
+			runErr = op.Run(ctx, in, SurfaceMCP, sink)
+		}
 		text := sink.String()
 		if runErr != nil {
 			text = runErr.Error()

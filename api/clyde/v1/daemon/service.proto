@@ -14,6 +14,8 @@ service ClydeService {
   rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
   rpc GetConversationContext(GetConversationContextRequest) returns (GetConversationContextResponse);
   rpc SearchConversation(SearchConversationRequest) returns (SearchConversationResponse);
+  rpc GetSearchStatus(GetSearchStatusRequest) returns (GetSearchStatusResponse);
+  rpc CancelSearch(CancelSearchRequest) returns (CancelSearchResponse);
   rpc AnalyzeSearchResults(AnalyzeSearchResultsRequest) returns (AnalyzeSearchResultsResponse);
   rpc ExportTranscript(ExportTranscriptRequest) returns (ExportTranscriptResponse);
   rpc GetMITMStatus(GetMITMStatusRequest) returns (GetMITMStatusResponse);
@@ -101,6 +103,48 @@ message SearchConversationRequest {
 
 message SearchConversationResponse {
   string text = 1;
+  string result_id = 2;
+}
+
+// SearchStatus is the lifecycle state of an async search job.
+enum SearchStatus {
+  SEARCH_STATUS_UNSPECIFIED = 0;
+  SEARCH_STATUS_PENDING = 1;
+  SEARCH_STATUS_RUNNING = 2;
+  SEARCH_STATUS_COMPLETE = 3;
+  SEARCH_STATUS_FAILED = 4;
+  SEARCH_STATUS_CANCELED = 5;
+}
+
+// SearchProgress is the live advancement of a running search across its chunk
+// sweep and its rerank layers.
+message SearchProgress {
+  int64 chunks_done = 1;
+  int64 chunks_total = 2;
+  int64 layer_index = 3;
+  int64 layer_total = 4;
+  string layer_name = 5;
+}
+
+message GetSearchStatusRequest {
+  string result_id = 1;
+}
+
+message GetSearchStatusResponse {
+  bool found = 1;
+  string result_id = 2;
+  SearchStatus status = 3;
+  SearchProgress progress = 4;
+  string result_text = 5;
+  string error = 6;
+}
+
+message CancelSearchRequest {
+  string result_id = 1;
+}
+
+message CancelSearchResponse {
+  SearchStatus status = 1;
 }
 
 message AnalyzeSearchResultsRequest {

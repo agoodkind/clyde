@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.18.5
-	github.com/mark3labs/mcp-go v0.49.0
+	github.com/mark3labs/mcp-go v0.54.1
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.40.0

@@ -113,6 +113,17 @@ type Operation[I Input] struct {
 	Params   []Param[I]
 	New      func() I
 	Run      func(ctx context.Context, in I, surface Surface, sink ResultSink) error
+	// MCPTaskSupport, when set to optional or required, marks the rendered MCP
+	// tool as task-augmentable so a Tasks-capable client can run it as an MCP
+	// task. It is MCP-only: the terminal command ignores it. The zero value
+	// leaves the tool a plain synchronous tool.
+	MCPTaskSupport mcp.TaskSupport
+	// MCPTaskRun is the work function used when an MCP call is task-augmented
+	// (the client supplied task params). It typically runs the operation to
+	// completion so the result reaches the client through tasks/result, whereas
+	// Run returns immediately. It is only consulted when MCPTaskSupport is set
+	// and the request carries task params.
+	MCPTaskRun func(ctx context.Context, in I, sink ResultSink) error
 }
 
 // renderable is the type-erased view of an [Operation]. Concrete

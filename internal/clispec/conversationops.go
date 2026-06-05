@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/mark3labs/mcp-go/mcp"
+
 	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/homedir"
@@ -37,6 +39,14 @@ type searchConversationInput struct {
 	Depth          string
 }
 
+type searchStatusInput struct {
+	ResultID string
+}
+
+type searchCancelInput struct {
+	ResultID string
+}
+
 type analyzeResultsInput struct {
 	ResultID string
 	Prompt   string
@@ -52,6 +62,8 @@ func (listConversationsInput) isClispecInput()  {}
 func (getConversationInput) isClispecInput()    {}
 func (getContextInput) isClispecInput()         {}
 func (searchConversationInput) isClispecInput() {}
+func (searchStatusInput) isClispecInput()       {}
+func (searchCancelInput) isClispecInput()       {}
 func (analyzeResultsInput) isClispecInput()     {}
 func (exportInput) isClispecInput()             {}
 
@@ -83,15 +95,17 @@ var whitespaceValues = []string{
 // prints tab-separated rows; the MCP tool returns a counted bullet list.
 func listConversationsOp() Operation[listConversationsInput] {
 	return Operation[listConversationsInput]{
-		Name:     Name{Canonical: "list_conversations", CLIOverride: "list"},
-		Group:    conversationGroup,
-		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "List Claude and Codex conversations.",
-		Long:     "List every indexed Claude and Codex conversation, one per line, as id, provider, native id, workspace, and title.",
-		Examples: []string{"clyde conversation list"},
-		Args:     nil,
-		Params:   nil,
-		New:      func() listConversationsInput { return listConversationsInput{} },
+		Name:           Name{Canonical: "list_conversations", CLIOverride: "list"},
+		Group:          conversationGroup,
+		Surfaces:       SurfaceSet{CLI: true, MCP: true},
+		Short:          "List Claude and Codex conversations.",
+		Long:           "List every indexed Claude and Codex conversation, one per line, as id, provider, native id, workspace, and title.",
+		Examples:       []string{"clyde conversation list"},
+		Args:           nil,
+		Params:         nil,
+		New:            func() listConversationsInput { return listConversationsInput{} },
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
 		Run: func(ctx context.Context, _ listConversationsInput, surface Surface, sink ResultSink) error {
 			records, err := daemon.ListConversations(ctx)
 			if err != nil {
@@ -145,7 +159,9 @@ func getConversationOp() Operation[getConversationInput] {
 			IntParam("last_n", "Only return the last N messages.", 0,
 				func(in *getConversationInput, v int) { in.LastN = v }),
 		},
-		New: func() getConversationInput { return getConversationInput{ConversationID: "", LastN: 0} },
+		New:            func() getConversationInput { return getConversationInput{ConversationID: "", LastN: 0} },
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
 		Run: func(ctx context.Context, in getConversationInput, surface Surface, sink ResultSink) error {
 			text, err := daemon.GetConversation(ctx, in.ConversationID, in.LastN)
 			if err != nil {
@@ -182,6 +198,8 @@ func getContextOp() Operation[getContextInput] {
 		New: func() getContextInput {
 			return getContextInput{ConversationID: "", Timestamp: "", MessageIndex: -1, Before: 5, After: 5}
 		},
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
 		Run: func(ctx context.Context, in getContextInput, surface Surface, sink ResultSink) error {
 			text, err := daemon.GetConversationContext(ctx, in.ConversationID, in.Timestamp, in.MessageIndex, in.Before, in.After)
 			if err != nil {
@@ -192,14 +210,18 @@ func getContextOp() Operation[getContextInput] {
 	}
 }
 
-// searchConversationOp searches one conversation and caches the results.
+// searchConversationOp starts an async search and returns a result_id. The MCP
+// tool is task-augmentable: a Tasks-capable client that supplies task params
+// runs it to completion and gets the result through tasks/result, while a plain
+// call (CLI or a non-Tasks client) returns the result_id immediately and polls
+// search-status.
 func searchConversationOp() Operation[searchConversationInput] {
 	return Operation[searchConversationInput]{
 		Name:     Name{Canonical: "search_conversation", CLIOverride: "search"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "Search a conversation and return a result_id for follow-up analysis.",
-		Long:     "Search one conversation and print matching excerpts together with a result_id. Pass that result_id to analyze to run the analysis model over the same matches.",
+		Short:    "Start an async conversation search and return a result_id.",
+		Long:     "Start a search over one conversation and return a result_id immediately; the search runs in the background. Poll search-status with the result_id for progress and the result, then pass the result_id to analyze. A Tasks-capable MCP client can instead run this as a task and receive the result through tasks/result.",
 		Examples: []string{"clyde conversation search claude:1a2b3c \"auth timeout\" --depth normal"},
 		Args: []Arg[searchConversationInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
@@ -214,10 +236,72 @@ func searchConversationOp() Operation[searchConversationInput] {
 		New: func() searchConversationInput {
 			return searchConversationInput{ConversationID: "", Query: "", Depth: "quick"}
 		},
+		MCPTaskSupport: mcp.TaskSupportOptional,
 		Run: func(ctx context.Context, in searchConversationInput, surface Surface, sink ResultSink) error {
 			text, err := daemon.SearchConversation(ctx, in.ConversationID, in.Query, in.Depth)
 			if err != nil {
 				return logFail(ctx, surface, "search_failed", "search conversation", err)
+			}
+			return sink.Text(text)
+		},
+		MCPTaskRun: func(ctx context.Context, in searchConversationInput, sink ResultSink) error {
+			text, err := daemon.SearchToCompletion(ctx, in.ConversationID, in.Query, in.Depth)
+			if err != nil {
+				return logFail(ctx, SurfaceMCP, "search_task_failed", "search conversation task", err)
+			}
+			return sink.Text(text)
+		},
+	}
+}
+
+// searchStatusOp reports the state, progress, and result of an async search job.
+func searchStatusOp() Operation[searchStatusInput] {
+	return Operation[searchStatusInput]{
+		Name:     Name{Canonical: "search_status", CLIOverride: "search-status"},
+		Group:    conversationGroup,
+		Surfaces: SurfaceSet{CLI: true, MCP: true},
+		Short:    "Get the status, progress, and result of an async search.",
+		Long:     "Report the state (pending, running, complete, failed, or canceled), the live progress, and, once complete, the matching excerpts for a search started by search.",
+		Examples: []string{"clyde conversation search-status 7f3e2d10"},
+		Args: []Arg[searchStatusInput]{
+			PositionalArg("result_id", "The result_id returned by search.",
+				func(in *searchStatusInput, v string) { in.ResultID = v }),
+		},
+		Params:         nil,
+		New:            func() searchStatusInput { return searchStatusInput{ResultID: ""} },
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		Run: func(ctx context.Context, in searchStatusInput, surface Surface, sink ResultSink) error {
+			text, err := daemon.GetSearchStatus(ctx, in.ResultID)
+			if err != nil {
+				return logFail(ctx, surface, "search_status_failed", "get search status", err)
+			}
+			return sink.Text(text)
+		},
+	}
+}
+
+// searchCancelOp cancels a running async search job.
+func searchCancelOp() Operation[searchCancelInput] {
+	return Operation[searchCancelInput]{
+		Name:     Name{Canonical: "search_cancel", CLIOverride: "search-cancel"},
+		Group:    conversationGroup,
+		Surfaces: SurfaceSet{CLI: true, MCP: true},
+		Short:    "Cancel a running async search.",
+		Long:     "Cancel a search started by search, freeing the local model, and report the resulting status.",
+		Examples: []string{"clyde conversation search-cancel 7f3e2d10"},
+		Args: []Arg[searchCancelInput]{
+			PositionalArg("result_id", "The result_id returned by search.",
+				func(in *searchCancelInput, v string) { in.ResultID = v }),
+		},
+		Params:         nil,
+		New:            func() searchCancelInput { return searchCancelInput{ResultID: ""} },
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		Run: func(ctx context.Context, in searchCancelInput, surface Surface, sink ResultSink) error {
+			text, err := daemon.CancelSearch(ctx, in.ResultID)
+			if err != nil {
+				return logFail(ctx, surface, "search_cancel_failed", "cancel search", err)
 			}
 			return sink.Text(text)
 		},
@@ -240,7 +324,9 @@ func analyzeResultsOp() Operation[analyzeResultsInput] {
 			PositionalArg("prompt", "Analysis instruction.",
 				func(in *analyzeResultsInput, v string) { in.Prompt = v }),
 		},
-		New: func() analyzeResultsInput { return analyzeResultsInput{ResultID: "", Prompt: ""} },
+		New:            func() analyzeResultsInput { return analyzeResultsInput{ResultID: "", Prompt: ""} },
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
 		Run: func(ctx context.Context, in analyzeResultsInput, surface Surface, sink ResultSink) error {
 			text, err := daemon.AnalyzeSearchResults(ctx, in.ResultID, in.Prompt)
 			if err != nil {
@@ -307,6 +393,8 @@ func exportTranscriptOp() Operation[exportInput] {
 				},
 			}
 		},
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
 		Run: func(ctx context.Context, in exportInput, surface Surface, sink ResultSink) error {
 			body, err := daemon.ExportTranscript(ctx, in.ConversationID, in.Options)
 			if err != nil {

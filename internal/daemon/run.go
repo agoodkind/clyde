@@ -33,6 +33,7 @@ import (
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/mitmshow"
+	searchstore "goodkind.io/clyde/internal/search/store"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/trace"
 )
@@ -103,25 +104,11 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	defer runtime.shutdown(context.Background())
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
+	searchJobs := conversation.NewSearchJobManager(conversationIndex, runtime.searchStore, cfg.Search, log)
+	runtime.searchJobs = searchJobs
 
 	grpcServer := grpc.NewServer()
-	clydev1.RegisterClydeServiceServer(grpcServer, &controlServer{
-		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
-		stats:                           stats,
-		index:                           conversationIndex,
-		searchConfig:                    cfg.Search,
-		loggingConfig:                   cfg.Logging,
-		mitmConfig:                      cfg.MITM,
-		mitmStatus: func() MITMStatus {
-			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
-		},
-		showCapture: func(showCtx context.Context, id string, asJSON bool) (string, error) {
-			return mitmshow.Render(showCtx, cfg, id, asJSON)
-		},
-		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
-			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
-		},
-	})
+	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, searchJobs, grpcServer, runtime))
 	grpcDone := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -214,6 +201,38 @@ func runStartupCleanup(log *slog.Logger, cfg *config.Config) {
 	)
 }
 
+// newControlServer builds the gRPC control server, wiring the closures that
+// reach back into the daemon runtime for MITM status, capture rendering, and
+// reload.
+func newControlServer(
+	cfg *config.Config,
+	log *slog.Logger,
+	stats *providerStatsRecorder,
+	index *conversation.Index,
+	searchJobs *conversation.SearchJobManager,
+	grpcServer *grpc.Server,
+	runtime *runtimeServices,
+) *controlServer {
+	return &controlServer{
+		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
+		stats:                           stats,
+		index:                           index,
+		searchJobs:                      searchJobs,
+		searchConfig:                    cfg.Search,
+		loggingConfig:                   cfg.Logging,
+		mitmConfig:                      cfg.MITM,
+		mitmStatus: func() MITMStatus {
+			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
+		},
+		showCapture: func(showCtx context.Context, id string, asJSON bool) (string, error) {
+			return mitmshow.Render(showCtx, cfg, id, asJSON)
+		},
+		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
+			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
+		},
+	}
+}
+
 type runtimeServices struct {
 	listener              net.Listener
 	adapter               *adapter.Server
@@ -229,6 +248,12 @@ type runtimeServices struct {
 	mitmProxies   map[string]*mitm.Proxy
 	mitmListeners map[string][]net.Listener
 	captureStore  *capture.Store
+	// searchStore is the SQLite store for async conversation search jobs, and
+	// searchJobs is the manager that runs them. The store is closed and the
+	// manager drained on reload and shutdown so in-flight jobs stop and the WAL
+	// flushes before a new generation reopens the same db.
+	searchStore *searchstore.Store
+	searchJobs  *conversation.SearchJobManager
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -254,6 +279,11 @@ func startRuntime(
 	if err != nil {
 		return nil, err
 	}
+	searchStore, err := openSearchStore(ctx, log)
+	if err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
 	runtime := &runtimeServices{
 		listener:              listener,
 		adapter:               nil,
@@ -262,6 +292,8 @@ func startRuntime(
 		mitmProxies:           map[string]*mitm.Proxy{},
 		mitmListeners:         map[string][]net.Listener{},
 		captureStore:          nil,
+		searchStore:           searchStore,
+		searchJobs:            nil,
 		pprofListener:         nil,
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},
@@ -755,15 +787,30 @@ func (r *runtimeServices) startReloadDrain(parent context.Context, log *slog.Log
 			})
 		}
 		wg.Wait()
-		// Close the shared capture store only after every proxy has drained so
-		// the SQLite WAL flushes before the new generation reopens the same db.
-		if r.captureStore != nil {
-			if err := r.captureStore.Close(parent, "reload"); err != nil {
-				log.WarnContext(ctx, "daemon.reload.capture_store_close_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
-			}
-		}
+		// Close the SQLite stores only after every public surface has drained so
+		// the WAL flushes before the new generation reopens the same db files.
+		r.closeStoresOnReload(parent, ctx, log)
 	}()
 	return done
+}
+
+// closeStoresOnReload drains in-flight search jobs and closes the search and
+// capture stores so their SQLite WALs flush before the reload child reopens
+// them.
+func (r *runtimeServices) closeStoresOnReload(parent, ctx context.Context, log *slog.Logger) {
+	if r.searchJobs != nil {
+		r.searchJobs.Drain(ctx, "reload")
+	}
+	if r.searchStore != nil {
+		if err := r.searchStore.Close(parent, "reload"); err != nil {
+			log.WarnContext(ctx, "daemon.reload.search_store_close_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
+		}
+	}
+	if r.captureStore != nil {
+		if err := r.captureStore.Close(parent, "reload"); err != nil {
+			log.WarnContext(ctx, "daemon.reload.capture_store_close_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
+		}
+	}
 }
 
 func (r *runtimeServices) waitReloadDrain(log *slog.Logger) {
@@ -808,6 +855,16 @@ func (r *runtimeServices) shutdown(parent context.Context) {
 	}
 	for _, proxy := range r.mitmProxies {
 		_ = proxy.Shutdown(ctx)
+	}
+	// Drain in-flight search jobs and close their store so the SQLite WAL
+	// flushes before the process exits.
+	if r.searchJobs != nil {
+		r.searchJobs.Drain(ctx, "shutdown")
+	}
+	if r.searchStore != nil {
+		if err := r.searchStore.Close(parent, "shutdown"); err != nil {
+			slog.WarnContext(ctx, "daemon.shutdown.search_store_close_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		}
 	}
 	// Close the shared capture store after the proxies stop so the SQLite WAL
 	// flushes before the process exits.

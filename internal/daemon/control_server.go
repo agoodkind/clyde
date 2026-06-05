@@ -18,6 +18,7 @@ import (
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/response"
+	searchstore "goodkind.io/clyde/internal/search/store"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -27,6 +28,7 @@ type controlServer struct {
 	clydev1.UnimplementedClydeServiceServer
 	stats         *providerStatsRecorder
 	index         *conversation.Index
+	searchJobs    *conversation.SearchJobManager
 	searchConfig  config.SearchConfig
 	loggingConfig config.LoggingConfig
 	mitmConfig    config.MITMConfig
@@ -128,44 +130,85 @@ func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1
 	return &clydev1.GetConversationContextResponse{Text: text}, nil
 }
 
-// SearchConversation searches one conversation and caches the result set in the
-// daemon so a later AnalyzeSearchResults call can reach it.
+// SearchConversation starts an async search job and returns its result id
+// immediately. The caller polls GetSearchStatus for progress and the result.
 func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.SearchConversationRequest) (*clydev1.SearchConversationResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
 	client, _ := peer.FromContext(ctx)
 	if req.GetQuery() == "" {
 		return &clydev1.SearchConversationResponse{Text: response.Text(ctx, "query is required")}, nil
 	}
-	record, err := s.index.Resolve(ctx, req.GetConversationId())
+	resultID, err := s.searchJobs.Start(ctx, req.GetConversationId(), req.GetQuery(), req.GetDepth())
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.search.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+		slog.WarnContext(ctx, "daemon.search.start_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
 			"conversation_id", req.GetConversationId(),
 			"err", err,
 		)
-		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
+		return nil, status.Errorf(codes.Internal, "start search: %v", err)
 	}
-	output, err := s.index.SearchConversation(ctx, record, req.GetQuery(), req.GetDepth(), s.searchConfig)
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.search.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", record.ID,
-			"err", err,
-		)
-		return nil, status.Errorf(codes.Internal, "search conversation: %v", err)
-	}
-	return &clydev1.SearchConversationResponse{Text: response.Text(ctx, output.Text)}, nil
+	hint := fmt.Sprintf("Search started.\nresult_id: %s\nPoll with: conversation search-status %s", resultID, resultID)
+	return &clydev1.SearchConversationResponse{Text: response.Text(ctx, hint), ResultId: resultID}, nil
 }
 
-// AnalyzeSearchResults runs the configured analysis model over a cached search
-// result set held by the daemon.
+// GetSearchStatus returns the state, progress, and (when complete) the result of
+// an async search job.
+func (s *controlServer) GetSearchStatus(ctx context.Context, req *clydev1.GetSearchStatusRequest) (*clydev1.GetSearchStatusResponse, error) {
+	ctx, _ = correlation.Ensure(ctx, "")
+	if req.GetResultId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "result_id is required")
+	}
+	job, ok, err := s.searchJobs.Status(ctx, req.GetResultId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get search status: %v", err)
+	}
+	if !ok {
+		return &clydev1.GetSearchStatusResponse{Found: false, ResultId: req.GetResultId()}, nil
+	}
+	return &clydev1.GetSearchStatusResponse{
+		Found:    true,
+		ResultId: job.ResultID,
+		Status:   protoSearchStatus(job.Status),
+		Progress: &clydev1.SearchProgress{
+			ChunksDone:  int64(job.Progress.ChunksDone),
+			ChunksTotal: int64(job.Progress.ChunksTotal),
+			LayerIndex:  int64(job.Progress.LayerIndex),
+			LayerTotal:  int64(job.Progress.LayerTotal),
+			LayerName:   job.Progress.LayerName,
+		},
+		ResultText: job.ResultText,
+		Error:      job.Error,
+	}, nil
+}
+
+// CancelSearch cancels a running search job and reports its resulting status.
+func (s *controlServer) CancelSearch(ctx context.Context, req *clydev1.CancelSearchRequest) (*clydev1.CancelSearchResponse, error) {
+	ctx, _ = correlation.Ensure(ctx, "")
+	if req.GetResultId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "result_id is required")
+	}
+	if err := s.searchJobs.Cancel(ctx, req.GetResultId()); err != nil {
+		return nil, status.Errorf(codes.Internal, "cancel search: %v", err)
+	}
+	job, ok, err := s.searchJobs.Status(ctx, req.GetResultId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "cancel search: %v", err)
+	}
+	if !ok {
+		return &clydev1.CancelSearchResponse{Status: clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED}, nil
+	}
+	return &clydev1.CancelSearchResponse{Status: protoSearchStatus(job.Status)}, nil
+}
+
+// AnalyzeSearchResults runs the configured analysis model over a completed
+// search job's stored result set.
 func (s *controlServer) AnalyzeSearchResults(ctx context.Context, req *clydev1.AnalyzeSearchResultsRequest) (*clydev1.AnalyzeSearchResultsResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
 	client, _ := peer.FromContext(ctx)
 	if req.GetResultId() == "" || req.GetPrompt() == "" {
 		return &clydev1.AnalyzeSearchResultsResponse{Text: response.Text(ctx, "result_id and prompt are required")}, nil
 	}
-	text, err := conversation.AnalyzeSearchResults(ctx, req.GetResultId(), req.GetPrompt(), s.searchConfig)
+	text, err := s.searchJobs.Analyze(ctx, req.GetResultId(), req.GetPrompt())
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.analyze.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
@@ -175,6 +218,23 @@ func (s *controlServer) AnalyzeSearchResults(ctx context.Context, req *clydev1.A
 		return nil, status.Errorf(codes.Internal, "analyze results: %v", err)
 	}
 	return &clydev1.AnalyzeSearchResultsResponse{Text: response.Text(ctx, text)}, nil
+}
+
+func protoSearchStatus(s searchstore.Status) clydev1.SearchStatus {
+	switch s {
+	case searchstore.StatusPending:
+		return clydev1.SearchStatus_SEARCH_STATUS_PENDING
+	case searchstore.StatusRunning:
+		return clydev1.SearchStatus_SEARCH_STATUS_RUNNING
+	case searchstore.StatusComplete:
+		return clydev1.SearchStatus_SEARCH_STATUS_COMPLETE
+	case searchstore.StatusFailed:
+		return clydev1.SearchStatus_SEARCH_STATUS_FAILED
+	case searchstore.StatusCanceled:
+		return clydev1.SearchStatus_SEARCH_STATUS_CANCELED
+	default:
+		return clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED
+	}
 }
 
 // ExportTranscript resolves one conversation and returns its exported body.

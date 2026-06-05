@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goodkind.io/clyde/internal/clock"
@@ -27,17 +28,38 @@ type Result struct {
 	Summary  string // LLM's description of what matched
 }
 
-// WithDepth finds conversation messages with a configurable search depth.
-func WithDepth(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
-	return searchInternal(ctx, slog.Default(), messages, query, cfg, depth)
+// Progress is the live advancement of a running search across its chunk sweep
+// and its rerank layers. A search reports it through a [ProgressFunc] so a
+// caller can persist or display how far along a long search has gotten.
+type Progress struct {
+	ChunksDone  int
+	ChunksTotal int
+	LayerIndex  int
+	LayerTotal  int
+	LayerName   string
 }
 
-func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig, depth string) ([]Result, error) {
+// ProgressFunc receives progress updates during a search. It must be safe to
+// call from multiple goroutines, since the sweep reports from parallel chunk
+// workers.
+type ProgressFunc func(Progress)
+
+// WithDepthProgress finds conversation messages with a configurable search
+// depth, invoking progress as chunks complete and as rerank layers advance. A
+// nil progress is treated as a no-op.
+func WithDepthProgress(ctx context.Context, messages []transcript.Message, query string, cfg config.SearchConfig, depth string, progress ProgressFunc) ([]Result, error) {
+	return searchInternal(ctx, slog.Default(), messages, query, cfg, depth, progress)
+}
+
+func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig, depth string, progress ProgressFunc) ([]Result, error) {
+	if progress == nil {
+		progress = func(Progress) {}
+	}
 	if len(messages) == 0 {
 		return nil, nil
 	}
 	if depth == "quick" {
-		return runQuickSearch(ctx, log, messages, query, cfg)
+		return runQuickSearch(ctx, log, messages, query, cfg, progress)
 	}
 	if depth == "extra-deep" {
 		log.WarnContext(ctx, "extra-deep search uses the full pipeline including large model verification; this may take 10+ minutes", "concern", "search")
@@ -52,23 +74,25 @@ func searchInternal(ctx context.Context, log *slog.Logger, messages []transcript
 		"layers", len(pipeline),
 	)
 	searchStart := clock.Now()
-	matched, currentModel, err := runSweepLayer(ctx, log, cfg, pipeline[0], messages, query)
+	layerTotal := len(pipeline)
+	matched, currentModel, chunkTotal, err := runSweepLayer(ctx, log, cfg, pipeline[0], messages, query, progress, layerTotal)
 	if err != nil {
 		return nil, err
 	}
-	matched = runRerankLayers(ctx, log, cfg, pipeline, matched, query, currentModel)
+	matched = runRerankLayers(ctx, log, cfg, pipeline, matched, query, currentModel, progress, chunkTotal)
 	log.InfoContext(ctx, "search complete", "concern", "search", "total_matches", len(matched),
 		"total_duration", clock.Since(searchStart).Round(time.Millisecond),
 	)
 	return matched, nil
 }
 
-func runQuickSearch(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig) ([]Result, error) {
+func runQuickSearch(ctx context.Context, log *slog.Logger, messages []transcript.Message, query string, cfg config.SearchConfig, progress ProgressFunc) ([]Result, error) {
 	log.InfoContext(ctx, "search starting (embedding only)", "concern", "search", "query", query,
 		"messages", len(messages),
 		"depth", "quick",
 	)
 	start := clock.Now()
+	progress(Progress{ChunksDone: 0, ChunksTotal: 0, LayerIndex: 1, LayerTotal: 1, LayerName: "quick"})
 	results, err := embeddingOnlySearch(ctx, log, messages, query, cfg)
 	log.InfoContext(ctx, "search complete", "concern", "search", "total_matches", len(results),
 		"total_duration", clock.Since(start).Round(time.Millisecond),
@@ -76,7 +100,7 @@ func runQuickSearch(ctx context.Context, log *slog.Logger, messages []transcript
 	return results, err
 }
 
-func runSweepLayer(ctx context.Context, log *slog.Logger, cfg config.SearchConfig, sweepLayer config.SearchLayer, messages []transcript.Message, query string) ([]Result, string, error) {
+func runSweepLayer(ctx context.Context, log *slog.Logger, cfg config.SearchConfig, sweepLayer config.SearchLayer, messages []transcript.Message, query string, progress ProgressFunc, layerTotal int) ([]Result, string, int, error) {
 	currentModel := ""
 	if cfg.Backend == "local" {
 		log.InfoContext(ctx, "loading sweep model", "concern", "search", "model", sweepLayer.Model)
@@ -86,27 +110,29 @@ func runSweepLayer(ctx context.Context, log *slog.Logger, cfg config.SearchConfi
 			lmctl.WithWarmup(cfg.Local.URL, cfg.Local.Token),
 		); err != nil {
 			log.WarnContext(ctx, "search.sweep_layer.model_load_failed", "concern", "search", "model", sweepLayer.Model, "err", err)
-			return nil, "", fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
+			return nil, "", 0, fmt.Errorf("failed to load model %s: %w", sweepLayer.Model, err)
 		}
 		currentModel = sweepLayer.Model
 	}
 	sweepStart := clock.Now()
 	sweepClient := newClientForModel(cfg, sweepLayer.Model)
-	matched := sweepChunks(ctx, log, sweepClient, messages, query, cfg)
+	matched, chunkTotal := sweepChunks(ctx, log, sweepClient, messages, query, cfg, progress, layerTotal, sweepLayer.Name)
 	log.InfoContext(ctx, "sweep complete", "concern", "search", "model", sweepLayer.Model,
 		"matches", len(matched),
 		"duration", clock.Since(sweepStart).Round(time.Millisecond),
 	)
-	return matched, currentModel, nil
+	return matched, currentModel, chunkTotal, nil
 }
 
-func runRerankLayers(ctx context.Context, log *slog.Logger, cfg config.SearchConfig, pipeline []config.SearchLayer, matched []Result, query string, currentModel string) []Result {
+func runRerankLayers(ctx context.Context, log *slog.Logger, cfg config.SearchConfig, pipeline []config.SearchLayer, matched []Result, query string, currentModel string, progress ProgressFunc, chunkTotal int) []Result {
+	layerTotal := len(pipeline)
 	for i := 1; i < len(pipeline); i++ {
 		if len(matched) == 0 {
 			log.DebugContext(ctx, "no matches, skipping remaining layers", "concern", "search")
 			break
 		}
 		layer := pipeline[i]
+		progress(Progress{ChunksDone: chunkTotal, ChunksTotal: chunkTotal, LayerIndex: i + 1, LayerTotal: layerTotal, LayerName: layer.Name})
 		if len(matched) <= 1 && layer.Name != "deep" {
 			log.DebugContext(ctx, "skipping rerank layer (single result)", "concern", "search", "layer", layer.Name)
 			continue
@@ -234,8 +260,10 @@ func embeddingOnlySearch(ctx context.Context, log *slog.Logger, messages []trans
 	return results, nil
 }
 
-// sweepChunks runs the initial parallel chunk search.
-func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages []transcript.Message, query string, cfg config.SearchConfig) []Result {
+// sweepChunks runs the initial parallel chunk search. It returns the matched
+// results and the post-filter chunk total it swept, reporting per-chunk
+// completion through progress.
+func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages []transcript.Message, query string, cfg config.SearchConfig, progress ProgressFunc, layerTotal int, layerName string) ([]Result, int) {
 	chunkSize := cfg.Local.ChunkSize
 	if chunkSize <= 0 {
 		chunkSize = defaultChunkChars
@@ -248,6 +276,8 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 		filter := newEmbeddingFilter(cfg.Local)
 		chunks = filter.filterChunks(ctx, query, chunks)
 	}
+	chunkTotal := len(chunks)
+	progress(Progress{ChunksDone: 0, ChunksTotal: chunkTotal, LayerIndex: 1, LayerTotal: layerTotal, LayerName: layerName})
 
 	type chunkResult struct {
 		idx    int
@@ -267,6 +297,7 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 	results := make([]chunkResult, len(chunks))
 	sem := make(chan searchConcurrencyPermit, maxConc)
 	var wg sync.WaitGroup
+	var chunksDone atomic.Int64
 
 	for i, chunk := range chunks {
 		wg.Add(1)
@@ -284,6 +315,8 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 			res, err := searchChunk(ctx, client, msgs, query)
 			results[idx] = chunkResult{idx: idx, result: res, err: err}
 			hit := res != nil && len(res.Messages) > 0
+			done := int(chunksDone.Add(1))
+			progress(Progress{ChunksDone: done, ChunksTotal: chunkTotal, LayerIndex: 1, LayerTotal: layerTotal, LayerName: layerName})
 			log.DebugContext(ctx, "sweep: chunk done", "concern", "search", "chunk", idx,
 				"messages", len(msgs),
 				"hit", hit,
@@ -302,7 +335,7 @@ func sweepChunks(ctx context.Context, log *slog.Logger, client Client, messages 
 			matched = append(matched, *r.result)
 		}
 	}
-	return matched
+	return matched, chunkTotal
 }
 
 // deepAnalysis re-evaluates each result with a large model, asking it to
