@@ -93,7 +93,17 @@ func (srv *Server) Serve(ctx context.Context) error {
 		server.WithHooks(newHooks()),
 		// Enable the 2025-11-25 Tasks primitive (list, cancel, tool-call tasks)
 		// so a Tasks-capable client can run a task-augmented search_conversation
-		// and poll tasks/get, tasks/result, and tasks/cancel.
+		// and poll tasks/get, tasks/list, and tasks/cancel. The task lifecycle
+		// (status transitions and cancellation) works; the bespoke search_status
+		// and analyze tools remain the way every client (Tasks-capable or not)
+		// retrieves the actual result.
+		//
+		// Known upstream limitation: mark3labs/mcp-go v0.54.1's experimental
+		// Tasks feature does not propagate a tool result's Content through
+		// tasks/result for task-augmented tool calls, so tasks/result returns an
+		// empty body. A minimal standalone server reproduces this independent of
+		// clyde. Until that is fixed upstream, the result is read via
+		// search_status / analyze by result_id, not tasks/result.
 		server.WithTaskCapabilities(true, true, true),
 		server.WithMaxConcurrentTasks(maxConcurrentMCPTasks),
 	)
