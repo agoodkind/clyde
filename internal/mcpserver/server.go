@@ -93,17 +93,19 @@ func (srv *Server) Serve(ctx context.Context) error {
 		server.WithHooks(newHooks()),
 		// Enable the 2025-11-25 Tasks primitive (list, cancel, tool-call tasks)
 		// so a Tasks-capable client can run a task-augmented search_conversation
-		// and poll tasks/get, tasks/list, and tasks/cancel. The task lifecycle
-		// (status transitions and cancellation) works; the bespoke search_status
-		// and analyze tools remain the way every client (Tasks-capable or not)
-		// retrieves the actual result.
+		// and poll tasks/get, tasks/list, tasks/result, and tasks/cancel. The
+		// task result carries the rendered search output, including the
+		// result_id, which also resolves through the bespoke search_status and
+		// analyze tools.
 		//
-		// Known upstream limitation: mark3labs/mcp-go v0.54.1's experimental
-		// Tasks feature does not propagate a tool result's Content through
-		// tasks/result for task-augmented tool calls, so tasks/result returns an
-		// empty body. A minimal standalone server reproduces this independent of
-		// clyde. Until that is fixed upstream, the result is read via
-		// search_status / analyze by result_id, not tasks/result.
+		// Two mark3labs/mcp-go v0.54.1 quirks are worked around. (1) Its server
+		// returns a tool result's content at the top level of the tasks/result
+		// response, but its own client parser (mcp.ParseTaskResultResult) reads
+		// it from result.content, so mcp-go-based clients see empty content even
+		// though the wire response is correct; non-mcp-go clients are unaffected.
+		// (2) It cancels the task context as soon as the task handle is returned,
+		// so the run-to-completion path in daemon.SearchToCompletion detaches its
+		// daemon calls with context.WithoutCancel to let the search finish.
 		server.WithTaskCapabilities(true, true, true),
 		server.WithMaxConcurrentTasks(maxConcurrentMCPTasks),
 	)

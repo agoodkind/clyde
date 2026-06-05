@@ -253,19 +253,30 @@ func searchStatusLabel(s clydev1.SearchStatus) string {
 // daemon for a terminal search status.
 const searchTaskPollInterval = 500 * time.Millisecond
 
+// maxSearchTaskPolls bounds the run-to-completion poll loop so a stuck daemon
+// job cannot pin a task goroutine forever. At the 500ms interval this is about
+// 30 minutes, comfortably past even an extra-deep search.
+const maxSearchTaskPolls = 3600
+
 // SearchToCompletion starts a search and blocks until it reaches a terminal
 // state, returning the rendered result. It is the run-to-completion path used by
 // the native MCP task handler; mcp-go runs it in a task goroutine so the client
 // is not blocked and can poll tasks/get. Canceling ctx (via tasks/cancel)
 // cancels the underlying search.
 func SearchToCompletion(ctx context.Context, conversationID, query, depth string) (string, error) {
-	client, err := connectDaemon(ctx)
+	// mcp-go v0.54.1 ties the task goroutine's context to the create-task
+	// request, which it cancels once the task handle is returned to the client.
+	// Detach the daemon operations from that context so the search runs to
+	// completion; the original ctx is still watched below so a real tasks/cancel
+	// (which cancels the task context) stops the underlying search.
+	opCtx := context.WithoutCancel(ctx)
+	client, err := connectDaemon(opCtx)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = client.conn.Close() }()
 
-	startCtx, startCancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	startCtx, startCancel := context.WithTimeout(opCtx, analysisClientRPCTimeout)
 	startResp, err := client.rpc.SearchConversation(startCtx, &clydev1.SearchConversationRequest{
 		ConversationId: conversationID,
 		Query:          query,
@@ -273,45 +284,45 @@ func SearchToCompletion(ctx context.Context, conversationID, query, depth string
 	})
 	startCancel()
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.search_to_completion.start_failed", "concern", "mcp.server.context", "component", "daemon", "err", err)
-		return "", daemonRPCError(ctx, "start search", err)
+		slog.WarnContext(opCtx, "daemon.search_to_completion.start_failed", "concern", "mcp.server.context", "component", "daemon", "err", err)
+		return "", daemonRPCError(opCtx, "start search", err)
 	}
 	resultID := startResp.GetResultId()
 	if resultID == "" {
 		return startResp.GetText(), nil
 	}
 
+	// Do not select on ctx.Done() here: mcp-go cancels the task context the moment
+	// the task handle is returned, so it cannot distinguish a real tasks/cancel
+	// from that premature cancel. The search therefore runs to completion under
+	// opCtx; a Tasks client that wants to stop a running search calls the bespoke
+	// search_cancel with the result_id (which the result text carries). The poll
+	// is bounded so a stuck job cannot pin the task goroutine forever.
 	ticker := time.NewTicker(searchTaskPollInterval)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			cancelCtx, cancelCancel := context.WithTimeout(context.WithoutCancel(ctx), analysisClientRPCTimeout)
-			_, _ = client.rpc.CancelSearch(cancelCtx, &clydev1.CancelSearchRequest{ResultId: resultID})
-			cancelCancel()
-			return "", fmt.Errorf("search task canceled")
-		case <-ticker.C:
-			statusCtx, statusCancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
-			resp, err := client.rpc.GetSearchStatus(statusCtx, &clydev1.GetSearchStatusRequest{ResultId: resultID})
-			statusCancel()
-			if err != nil {
-				slog.WarnContext(ctx, "daemon.search_to_completion.poll_failed", "concern", "mcp.server.context", "component", "daemon", "result_id", resultID, "err", err)
-				return "", daemonRPCError(ctx, "poll search status", err)
-			}
-			switch resp.GetStatus() {
-			case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
-				return renderSearchStatus(resp), nil
-			case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
-				return "", fmt.Errorf("search failed: %s", resp.GetError())
-			case clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
-				return "", fmt.Errorf("search canceled")
-			case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED,
-				clydev1.SearchStatus_SEARCH_STATUS_PENDING,
-				clydev1.SearchStatus_SEARCH_STATUS_RUNNING:
-				// Still running; keep polling.
-			}
+	for range maxSearchTaskPolls {
+		<-ticker.C
+		statusCtx, statusCancel := context.WithTimeout(opCtx, analysisClientRPCTimeout)
+		resp, err := client.rpc.GetSearchStatus(statusCtx, &clydev1.GetSearchStatusRequest{ResultId: resultID})
+		statusCancel()
+		if err != nil {
+			slog.WarnContext(opCtx, "daemon.search_to_completion.poll_failed", "concern", "mcp.server.context", "component", "daemon", "result_id", resultID, "err", err)
+			return "", daemonRPCError(opCtx, "poll search status", err)
+		}
+		switch resp.GetStatus() {
+		case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
+			return renderSearchStatus(resp), nil
+		case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
+			return "", fmt.Errorf("search failed: %s", resp.GetError())
+		case clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
+			return "", fmt.Errorf("search canceled")
+		case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED,
+			clydev1.SearchStatus_SEARCH_STATUS_PENDING,
+			clydev1.SearchStatus_SEARCH_STATUS_RUNNING:
+			// Still running; keep polling.
 		}
 	}
+	return "", fmt.Errorf("search task timed out waiting for completion")
 }
 
 // AnalyzeSearchResults asks the daemon to run the analysis model over a stored
