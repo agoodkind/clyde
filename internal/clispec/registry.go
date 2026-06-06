@@ -9,6 +9,7 @@ func NewConversationRegistry() *Registry {
 	Register(reg, listConversationsOp())
 	Register(reg, getConversationOp())
 	Register(reg, getContextOp())
+	Register(reg, searchConversationsOp())
 	Register(reg, searchConversationOp())
 	Register(reg, searchStatusOp())
 	Register(reg, searchCancelOp())

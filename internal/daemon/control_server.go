@@ -50,8 +50,16 @@ func (s *controlServer) GetProviderStats(context.Context, *clydev1.GetProviderSt
 
 // ListConversations answers the conversation index that the daemon refreshes in
 // the background. It is the one place that reads the index for every front end.
-func (s *controlServer) ListConversations(ctx context.Context, _ *clydev1.ListConversationsRequest) (*clydev1.ListConversationsResponse, error) {
-	records, err := s.index.List(ctx)
+func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.ListConversationsRequest) (*clydev1.ListConversationsResponse, error) {
+	result, err := s.index.ListPage(ctx, conversation.ListOptions{
+		Limit:           int(req.GetLimit()),
+		Offset:          int(req.GetOffset()),
+		Provider:        providerFromProto(req.GetProvider()),
+		WorkspaceRoot:   req.GetWorkspace(),
+		Query:           req.GetQuery(),
+		IncludeArchived: req.GetIncludeArchived(),
+		All:             req.GetAll(),
+	})
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
 		slog.WarnContext(ctx, "daemon.list_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -60,24 +68,19 @@ func (s *controlServer) ListConversations(ctx context.Context, _ *clydev1.ListCo
 		)
 		return nil, status.Errorf(codes.Internal, "list conversations: %v", err)
 	}
-	out := make([]*clydev1.ConversationRecord, 0, len(records))
-	for _, record := range records {
-		out = append(out, &clydev1.ConversationRecord{
-			Id:            record.ID,
-			Provider:      protoProvider(record.Provider),
-			NativeId:      record.NativeID,
-			Title:         record.Title,
-			WorkspaceRoot: record.WorkspaceRoot,
-			ArtifactPath:  record.ArtifactPath,
-			ArtifactKind:  record.ArtifactKind,
-			Model:         record.Model,
-			CreatedAtUnix: record.CreatedAt.Unix(),
-			UpdatedAtUnix: record.UpdatedAt.Unix(),
-			SizeBytes:     record.SizeBytes,
-			Archived:      record.Archived,
-		})
+	out := make([]*clydev1.ConversationRecord, 0, len(result.Records))
+	for _, record := range result.Records {
+		out = append(out, protoConversationRecord(record))
 	}
-	return &clydev1.ListConversationsResponse{Conversations: out}, nil
+	return &clydev1.ListConversationsResponse{
+		Conversations: out,
+		TotalMatched:  int64(result.TotalMatched),
+		ReturnedCount: int64(result.ReturnedCount),
+		Offset:        int64(result.Offset),
+		Limit:         int64(result.Limit),
+		NextOffset:    int64(result.NextOffset),
+		HasMore:       result.HasMore,
+	}, nil
 }
 
 // GetConversation resolves one conversation and returns its transcript rendered
@@ -128,6 +131,47 @@ func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1
 		return nil, status.Errorf(codes.Internal, "render context: %v", err)
 	}
 	return &clydev1.GetConversationContextResponse{Text: text}, nil
+}
+
+// SearchConversations scans transcript text for candidate conversations and
+// returns bounded first matches that an agent can pass to get or context.
+func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
+	ctx, _ = correlation.Ensure(ctx, "")
+	client, _ := peer.FromContext(ctx)
+	if req.GetQuery() == "" {
+		return nil, status.Error(codes.InvalidArgument, "query is required")
+	}
+	result, err := s.index.SearchConversations(ctx, conversation.SearchConversationsOptions{
+		Query:           req.GetQuery(),
+		Limit:           int(req.GetLimit()),
+		Provider:        providerFromProto(req.GetProvider()),
+		WorkspaceRoot:   req.GetWorkspace(),
+		IncludeArchived: req.GetIncludeArchived(),
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.search_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"peer", peerString(client),
+			"err", err,
+		)
+		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
+	}
+	matches := make([]*clydev1.ConversationSearchMatch, 0, len(result.Matches))
+	for _, match := range result.Matches {
+		matches = append(matches, &clydev1.ConversationSearchMatch{
+			Conversation:  protoConversationRecord(match.Record),
+			MessageIndex:  int64(match.MessageIndex),
+			Role:          match.Role,
+			TimestampUnix: match.Timestamp.Unix(),
+			Snippet:       match.Snippet,
+		})
+	}
+	return &clydev1.SearchConversationsResponse{
+		Matches:              matches,
+		ConversationsScanned: int64(result.ConversationsScanned),
+		ReturnedCount:        int64(result.ReturnedCount),
+		Limit:                int64(result.Limit),
+		HasMore:              result.HasMore,
+	}, nil
 }
 
 // SearchConversation starts an async search job and returns its result id
@@ -428,6 +472,23 @@ func peerString(client *peer.Peer) string {
 		return client.Addr.String()
 	}
 	return ""
+}
+
+func protoConversationRecord(record conversation.Record) *clydev1.ConversationRecord {
+	return &clydev1.ConversationRecord{
+		Id:            record.ID,
+		Provider:      protoProvider(record.Provider),
+		NativeId:      record.NativeID,
+		Title:         record.Title,
+		WorkspaceRoot: record.WorkspaceRoot,
+		ArtifactPath:  record.ArtifactPath,
+		ArtifactKind:  record.ArtifactKind,
+		Model:         record.Model,
+		CreatedAtUnix: record.CreatedAt.Unix(),
+		UpdatedAtUnix: record.UpdatedAt.Unix(),
+		SizeBytes:     record.SizeBytes,
+		Archived:      record.Archived,
+	}
 }
 
 func providerFromProto(provider clydev1.Provider) providerid.Provider {

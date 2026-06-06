@@ -12,20 +12,21 @@ import (
 )
 
 // cliOnlyFlags lists terminal flags that intentionally have no MCP property.
-// The export file-path flag is the only one: the terminal writes a file, the
-// MCP tool returns text. A new terminal-only flag must be added here
-// deliberately, which keeps the omission visible.
+// A new terminal-only flag must be added here deliberately, which keeps the
+// omission visible.
 var cliOnlyFlags = map[string]bool{
+	"all":    true,
 	"output": true,
 }
 
-// TestConversationRegistryNamesAreExactlyEight guards the operation set. It
+// TestConversationRegistryNamesAreExactlyNine guards the operation set. It
 // stands in for the hand-maintained checklist that AGENTS.md used to carry.
-func TestConversationRegistryNamesAreExactlyEight(t *testing.T) {
+func TestConversationRegistryNamesAreExactlyNine(t *testing.T) {
 	t.Parallel()
 	reg := NewConversationRegistry()
 	want := []string{
 		"clyde_analyze_results",
+		"clyde_conversations_search",
 		"clyde_export_transcript",
 		"clyde_get_context",
 		"clyde_get_conversation",
@@ -93,29 +94,44 @@ func TestConversationAlignment(t *testing.T) {
 	}
 }
 
-// TestRenderCobraGroupsConversationOps confirms RenderCobra emits exactly one
-// "conversation" parent at the root that owns the short-verb children. It pins
-// the grouped surface shape so a stray ungrouped operation, a missing verb, or
-// a regressed parent name fails closed.
+// TestRenderCobraGroupsConversationOps confirms RenderCobra emits the
+// conversation parents at the root with the intended short-verb children.
 func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	roots := RenderCobra(NewConversationRegistry(), testFactory(&out))
-	if len(roots) != 1 {
-		t.Fatalf("root commands: got %d, want 1 (the conversation parent)", len(roots))
+	if len(roots) != 2 {
+		t.Fatalf("root commands: got %d, want 2 (conversation and conversations)", len(roots))
 	}
-	parent := roots[0]
-	if parent.Name() != "conversation" {
-		t.Fatalf("parent name: got %q, want %q", parent.Name(), "conversation")
+	parents := map[string]*cobra.Command{}
+	for _, root := range roots {
+		parents[root.Name()] = root
 	}
-	wantChildren := []string{"analyze", "context", "export", "get", "list", "search", "search-cancel", "search-status"}
+
+	conversationParent := parents["conversation"]
+	if conversationParent == nil {
+		t.Fatal("conversation parent missing")
+	}
+	wantConversationChildren := []string{"analyze", "context", "export", "get", "list", "search", "search-cancel", "search-status"}
 	var gotChildren []string
-	for _, child := range parent.Commands() {
+	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())
 	}
 	sort.Strings(gotChildren)
-	if strings.Join(gotChildren, ",") != strings.Join(wantChildren, ",") {
-		t.Fatalf("conversation children: got %v, want %v", gotChildren, wantChildren)
+	if strings.Join(gotChildren, ",") != strings.Join(wantConversationChildren, ",") {
+		t.Fatalf("conversation children: got %v, want %v", gotChildren, wantConversationChildren)
+	}
+
+	conversationsParent := parents["conversations"]
+	if conversationsParent == nil {
+		t.Fatal("conversations parent missing")
+	}
+	gotChildren = nil
+	for _, child := range conversationsParent.Commands() {
+		gotChildren = append(gotChildren, child.Name())
+	}
+	if strings.Join(gotChildren, ",") != "search" {
+		t.Fatalf("conversations children: got %v, want [search]", gotChildren)
 	}
 }
 

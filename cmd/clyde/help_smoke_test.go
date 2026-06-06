@@ -15,7 +15,7 @@ func TestRootListsAllTopLevelCommands(t *testing.T) {
 		t.Fatalf("root help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"conversation", "daemon", "logs", "mitm", "mcp"} {
+	for _, name := range []string{"conversation", "conversations", "daemon", "logs", "mitm", "mcp"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("root help missing %q:\n%s", name, out)
 		}

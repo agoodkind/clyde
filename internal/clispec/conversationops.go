@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -13,12 +14,18 @@ import (
 	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/homedir"
+	"goodkind.io/clyde/internal/providerid"
 )
 
-// listConversationsInput is the input vehicle for the zero-input list
-// operation. It is a generic type argument for a real operation, not a wire or
-// config payload, so the empty struct is intentional here.
-type listConversationsInput struct{}
+type listConversationsInput struct {
+	Limit           int
+	Offset          int
+	Provider        string
+	WorkspaceRoot   string
+	Query           string
+	IncludeArchived bool
+	All             bool
+}
 
 type getConversationInput struct {
 	ConversationID string
@@ -37,6 +44,14 @@ type searchConversationInput struct {
 	ConversationID string
 	Query          string
 	Depth          string
+}
+
+type searchConversationsInput struct {
+	Query           string
+	Limit           int
+	Provider        string
+	WorkspaceRoot   string
+	IncludeArchived bool
 }
 
 type searchStatusInput struct {
@@ -58,21 +73,30 @@ type exportInput struct {
 	OutputPath     string
 }
 
-func (listConversationsInput) isClispecInput()  {}
-func (getConversationInput) isClispecInput()    {}
-func (getContextInput) isClispecInput()         {}
-func (searchConversationInput) isClispecInput() {}
-func (searchStatusInput) isClispecInput()       {}
-func (searchCancelInput) isClispecInput()       {}
-func (analyzeResultsInput) isClispecInput()     {}
-func (exportInput) isClispecInput()             {}
+func (listConversationsInput) isClispecInput()   {}
+func (getConversationInput) isClispecInput()     {}
+func (getContextInput) isClispecInput()          {}
+func (searchConversationInput) isClispecInput()  {}
+func (searchConversationsInput) isClispecInput() {}
+func (searchStatusInput) isClispecInput()        {}
+func (searchCancelInput) isClispecInput()        {}
+func (analyzeResultsInput) isClispecInput()      {}
+func (exportInput) isClispecInput()              {}
 
-// conversationGroup is the terminal parent the six conversation operations
-// attach under. The MCP tool names stay verbose; only the terminal grouping
-// and short verbs come from here.
+// conversationGroup is the terminal parent for operations that act on one
+// selected conversation or list conversation metadata.
 var conversationGroup = &Group{
 	Use:    "conversation",
 	Short:  "Inspect Claude and Codex conversations",
+	Long:   "",
+	Parent: nil,
+}
+
+// conversationsGroup is the terminal parent for corpus-wide conversation
+// operations.
+var conversationsGroup = &Group{
+	Use:    "conversations",
+	Short:  "Search Claude and Codex conversations",
 	Long:   "",
 	Parent: nil,
 }
@@ -91,53 +115,58 @@ var whitespaceValues = []string{
 	string(conv.WhitespaceDense),
 }
 
-// listConversationsOp prints every Claude and Codex conversation. The terminal
-// prints tab-separated rows; the MCP tool returns a counted bullet list.
+// listConversationsOp prints one filtered page of Claude and Codex
+// conversation metadata.
 func listConversationsOp() Operation[listConversationsInput] {
+	allParam := BoolParam("all", "Return every matched conversation on the CLI.", false,
+		func(in *listConversationsInput, v bool) { in.All = v })
+	allParam.CLIOnly = true
 	return Operation[listConversationsInput]{
-		Name:           Name{Canonical: "list_conversations", CLIOverride: "list"},
-		Group:          conversationGroup,
-		Surfaces:       SurfaceSet{CLI: true, MCP: true},
-		Short:          "List Claude and Codex conversations.",
-		Long:           "List every indexed Claude and Codex conversation, one per line, as id, provider, native id, workspace, and title.",
-		Examples:       []string{"clyde conversation list"},
-		Args:           nil,
-		Params:         nil,
-		New:            func() listConversationsInput { return listConversationsInput{} },
+		Name:     Name{Canonical: "list_conversations", CLIOverride: "list"},
+		Group:    conversationGroup,
+		Surfaces: SurfaceSet{CLI: true, MCP: true},
+		Short:    "List Claude and Codex conversations.",
+		Long:     "List one filtered page of indexed Claude and Codex conversation metadata.",
+		Examples: []string{"clyde conversation list --limit 20 --query auth"},
+		Args:     nil,
+		Params: []Param[listConversationsInput]{
+			IntParam("limit", "Maximum conversations to return.", conv.DefaultListLimit,
+				func(in *listConversationsInput, v int) { in.Limit = v }),
+			IntParam("offset", "Zero-based result offset.", 0,
+				func(in *listConversationsInput, v int) { in.Offset = v }),
+			StringParam("provider", "Provider filter, such as claude or codex.", "", false,
+				func(in *listConversationsInput, v string) { in.Provider = v }),
+			StringParam("workspace", "Workspace root filter.", "", false,
+				func(in *listConversationsInput, v string) { in.WorkspaceRoot = v }),
+			StringParam("query", "Metadata query over ids, title, workspace, artifact path, kind, provider, and model.", "", false,
+				func(in *listConversationsInput, v string) { in.Query = v }),
+			BoolParam("include_archived", "Include archived conversations.", false,
+				func(in *listConversationsInput, v bool) { in.IncludeArchived = v }),
+			allParam,
+		},
+		New: func() listConversationsInput {
+			return listConversationsInput{
+				Limit:           conv.DefaultListLimit,
+				Offset:          0,
+				Provider:        "",
+				WorkspaceRoot:   "",
+				Query:           "",
+				IncludeArchived: false,
+				All:             false,
+			}
+		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, _ listConversationsInput, surface Surface, sink ResultSink) error {
-			records, err := daemon.ListConversations(ctx)
+		Run: func(ctx context.Context, in listConversationsInput, surface Surface, sink ResultSink) error {
+			options, err := listOptionsFromInput(in)
 			if err != nil {
 				return logFail(ctx, surface, "list_failed", "list conversations", err)
 			}
-			if len(records) == 0 {
-				return sink.Text("No conversations found.")
+			result, err := daemon.ListConversations(ctx, options)
+			if err != nil {
+				return logFail(ctx, surface, "list_failed", "list conversations", err)
 			}
-			var out strings.Builder
-			if surface == SurfaceMCP {
-				fmt.Fprintf(&out, "%d conversations:\n\n", len(records))
-				for _, record := range records {
-					fmt.Fprintf(&out, "- %s [%s] %s", record.ID, record.Provider.String(), record.Title)
-					if record.WorkspaceRoot != "" {
-						fmt.Fprintf(&out, " (%s)", shortPath(record.WorkspaceRoot))
-					}
-					out.WriteString("\n")
-				}
-				return sink.Text(out.String())
-			}
-			for _, record := range records {
-				fmt.Fprintf(
-					&out,
-					"%s\t%s\t%s\t%s\t%s\n",
-					record.ID,
-					record.Provider.String(),
-					record.NativeID,
-					shortPath(record.WorkspaceRoot),
-					record.Title,
-				)
-			}
-			return sink.Text(out.String())
+			return sink.Text(formatListResult(result))
 		},
 	}
 }
@@ -206,6 +235,55 @@ func getContextOp() Operation[getContextInput] {
 				return logFail(ctx, surface, "context_failed", "get conversation context", err)
 			}
 			return sink.Text(text)
+		},
+	}
+}
+
+// searchConversationsOp scans transcript text across conversations and returns
+// bounded candidate conversation ids with first-match snippets.
+func searchConversationsOp() Operation[searchConversationsInput] {
+	return Operation[searchConversationsInput]{
+		Name:     Name{Canonical: "conversations_search", CLIOverride: "search"},
+		Group:    conversationsGroup,
+		Surfaces: SurfaceSet{CLI: true, MCP: true},
+		Short:    "Search across conversations for candidate ids.",
+		Long:     "Search transcript text across filtered conversations and return bounded candidate conversation ids with first-match snippets.",
+		Examples: []string{"clyde conversations search \"auth timeout\" --limit 10"},
+		Args: []Arg[searchConversationsInput]{
+			PositionalArg("query", "Text query to find in transcript messages.",
+				func(in *searchConversationsInput, v string) { in.Query = v }),
+		},
+		Params: []Param[searchConversationsInput]{
+			IntParam("limit", "Maximum matching conversations to return.", conv.DefaultSearchLimit,
+				func(in *searchConversationsInput, v int) { in.Limit = v }),
+			StringParam("provider", "Provider filter, such as claude or codex.", "", false,
+				func(in *searchConversationsInput, v string) { in.Provider = v }),
+			StringParam("workspace", "Workspace root filter.", "", false,
+				func(in *searchConversationsInput, v string) { in.WorkspaceRoot = v }),
+			BoolParam("include_archived", "Include archived conversations.", false,
+				func(in *searchConversationsInput, v bool) { in.IncludeArchived = v }),
+		},
+		New: func() searchConversationsInput {
+			return searchConversationsInput{
+				Query:           "",
+				Limit:           conv.DefaultSearchLimit,
+				Provider:        "",
+				WorkspaceRoot:   "",
+				IncludeArchived: false,
+			}
+		},
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		Run: func(ctx context.Context, in searchConversationsInput, surface Surface, sink ResultSink) error {
+			options, err := searchConversationsOptionsFromInput(in)
+			if err != nil {
+				return logFail(ctx, surface, "search_conversations_failed", "search conversations", err)
+			}
+			result, err := daemon.SearchConversations(ctx, options)
+			if err != nil {
+				return logFail(ctx, surface, "search_conversations_failed", "search conversations", err)
+			}
+			return sink.Text(formatSearchConversationsResult(result))
 		},
 	}
 }
@@ -414,6 +492,153 @@ func exportTranscriptOp() Operation[exportInput] {
 			return sink.Bytes(body)
 		},
 	}
+}
+
+func listOptionsFromInput(in listConversationsInput) (conv.ListOptions, error) {
+	provider, err := providerFilter(in.Provider)
+	if err != nil {
+		return conv.ListOptions{}, err
+	}
+	return conv.ListOptions{
+		Limit:           in.Limit,
+		Offset:          in.Offset,
+		Provider:        provider,
+		WorkspaceRoot:   cleanWorkspaceRoot(in.WorkspaceRoot),
+		Query:           in.Query,
+		IncludeArchived: in.IncludeArchived,
+		All:             in.All,
+	}, nil
+}
+
+func searchConversationsOptionsFromInput(in searchConversationsInput) (conv.SearchConversationsOptions, error) {
+	provider, err := providerFilter(in.Provider)
+	if err != nil {
+		return conv.SearchConversationsOptions{}, err
+	}
+	return conv.SearchConversationsOptions{
+		Query:           in.Query,
+		Limit:           in.Limit,
+		Provider:        provider,
+		WorkspaceRoot:   cleanWorkspaceRoot(in.WorkspaceRoot),
+		IncludeArchived: in.IncludeArchived,
+	}, nil
+}
+
+func providerFilter(raw string) (conv.Provider, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return providerid.ProviderUnspecified, nil
+	}
+	provider, ok := providerid.Parse(raw)
+	if !ok || !provider.Valid() {
+		return providerid.ProviderUnspecified, fmt.Errorf("unsupported provider %q", raw)
+	}
+	return provider, nil
+}
+
+func cleanWorkspaceRoot(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	expanded := homedir.Expand(raw)
+	absolute, err := filepath.Abs(expanded)
+	if err == nil {
+		expanded = absolute
+	}
+	return filepath.Clean(expanded)
+}
+
+func formatListResult(result conv.ListResult) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "total_matched: %d\n", result.TotalMatched)
+	fmt.Fprintf(&out, "returned_count: %d\n", result.ReturnedCount)
+	fmt.Fprintf(&out, "offset: %d\n", result.Offset)
+	fmt.Fprintf(&out, "limit: %d\n", result.Limit)
+	fmt.Fprintf(&out, "next_offset: %d\n", result.NextOffset)
+	fmt.Fprintf(&out, "has_more: %t\n", result.HasMore)
+	if len(result.Records) == 0 {
+		out.WriteString("\nNo conversations found.\n")
+		return out.String()
+	}
+	out.WriteString("\n")
+	writeConversationRecordHeader(&out)
+	for _, record := range result.Records {
+		writeConversationRecordRow(&out, record)
+	}
+	return out.String()
+}
+
+func formatSearchConversationsResult(result conv.SearchConversationsResult) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "returned_count: %d\n", result.ReturnedCount)
+	fmt.Fprintf(&out, "limit: %d\n", result.Limit)
+	fmt.Fprintf(&out, "conversations_scanned: %d\n", result.ConversationsScanned)
+	fmt.Fprintf(&out, "has_more: %t\n", result.HasMore)
+	if len(result.Matches) == 0 {
+		out.WriteString("\nNo matching conversations found.\n")
+		return out.String()
+	}
+	out.WriteString("\n")
+	out.WriteString("conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\tartifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\tmessage_index\trole\ttimestamp\tsnippet\n")
+	for _, match := range result.Matches {
+		record := match.Record
+		fmt.Fprintf(
+			&out,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\t%d\t%s\t%s\t%s\n",
+			tsvField(record.ID),
+			tsvField(record.Provider.String()),
+			tsvField(record.NativeID),
+			tsvField(record.Title),
+			tsvField(shortPath(record.WorkspaceRoot)),
+			tsvField(record.ArtifactPath),
+			tsvField(record.ArtifactKind),
+			tsvField(record.Model),
+			formatTime(record.CreatedAt),
+			formatTime(record.UpdatedAt),
+			record.SizeBytes,
+			record.Archived,
+			match.MessageIndex,
+			tsvField(match.Role),
+			formatTime(match.Timestamp),
+			tsvField(match.Snippet),
+		)
+	}
+	return out.String()
+}
+
+func writeConversationRecordHeader(out *strings.Builder) {
+	out.WriteString("conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\tartifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\n")
+}
+
+func writeConversationRecordRow(out *strings.Builder, record conv.Record) {
+	fmt.Fprintf(
+		out,
+		"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\n",
+		tsvField(record.ID),
+		tsvField(record.Provider.String()),
+		tsvField(record.NativeID),
+		tsvField(record.Title),
+		tsvField(shortPath(record.WorkspaceRoot)),
+		tsvField(record.ArtifactPath),
+		tsvField(record.ArtifactKind),
+		tsvField(record.Model),
+		formatTime(record.CreatedAt),
+		formatTime(record.UpdatedAt),
+		record.SizeBytes,
+		record.Archived,
+	)
+}
+
+func tsvField(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 // logFail emits a surface-correct warning event and returns the wrapped error.

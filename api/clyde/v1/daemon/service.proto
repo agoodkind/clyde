@@ -13,6 +13,7 @@ service ClydeService {
   rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
   rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
   rpc GetConversationContext(GetConversationContextRequest) returns (GetConversationContextResponse);
+  rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc SearchConversation(SearchConversationRequest) returns (SearchConversationResponse);
   rpc GetSearchStatus(GetSearchStatusRequest) returns (GetSearchStatusResponse);
   rpc CancelSearch(CancelSearchRequest) returns (CancelSearchResponse);
@@ -72,7 +73,15 @@ message GetMITMStatusResponse {
   string ca_key_path = 3;
 }
 
-message ListConversationsRequest {}
+message ListConversationsRequest {
+  int64 limit = 1;
+  int64 offset = 2;
+  Provider provider = 3;
+  string workspace = 4;
+  string query = 5;
+  bool include_archived = 6;
+  bool all = 7;
+}
 
 message GetConversationRequest {
   string conversation_id = 1;
@@ -104,6 +113,30 @@ message SearchConversationRequest {
 message SearchConversationResponse {
   string text = 1;
   string result_id = 2;
+}
+
+message SearchConversationsRequest {
+  string query = 1;
+  int64 limit = 2;
+  Provider provider = 3;
+  string workspace = 4;
+  bool include_archived = 5;
+}
+
+message ConversationSearchMatch {
+  ConversationRecord conversation = 1;
+  int64 message_index = 2;
+  string role = 3;
+  int64 timestamp_unix = 4;
+  string snippet = 5;
+}
+
+message SearchConversationsResponse {
+  repeated ConversationSearchMatch matches = 1;
+  int64 conversations_scanned = 2;
+  int64 returned_count = 3;
+  int64 limit = 4;
+  bool has_more = 5;
 }
 
 // SearchStatus is the lifecycle state of an async search job.
@@ -190,4 +223,10 @@ message ConversationRecord {
 
 message ListConversationsResponse {
   repeated ConversationRecord conversations = 1;
+  int64 total_matched = 2;
+  int64 returned_count = 3;
+  int64 offset = 4;
+  int64 limit = 5;
+  int64 next_offset = 6;
+  bool has_more = 7;
 }

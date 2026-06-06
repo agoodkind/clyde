@@ -63,42 +63,41 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	return resp, nil
 }
 
-// ListConversations asks the running daemon for its conversation index and
-// returns the typed records. When the daemon is not reachable it returns a
-// clear error that names the rpc socket and points at `clyde daemon status`.
-func ListConversations(ctx context.Context) ([]conversation.Record, error) {
+// ListConversations asks the running daemon for a filtered conversation page.
+// When the daemon is not reachable it returns a clear error that names the rpc
+// socket and points at `clyde daemon status`.
+func ListConversations(ctx context.Context, options conversation.ListOptions) (conversation.ListResult, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
-		return nil, err
+		return conversation.ListResult{}, err
 	}
 	defer func() { _ = client.conn.Close() }()
 
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.ListConversations(rpcCtx, &clydev1.ListConversationsRequest{})
+	resp, err := client.rpc.ListConversations(rpcCtx, &clydev1.ListConversationsRequest{
+		Limit:           int64(options.Limit),
+		Offset:          int64(options.Offset),
+		Provider:        protoProvider(options.Provider),
+		Workspace:       options.WorkspaceRoot,
+		Query:           options.Query,
+		IncludeArchived: options.IncludeArchived,
+		All:             options.All,
+	})
 	if err != nil {
-		return nil, daemonRPCError(rpcCtx, "list conversations", err)
+		return conversation.ListResult{}, daemonRPCError(rpcCtx, "list conversations", err)
 	}
 
-	wireRecords := resp.GetConversations()
-	records := make([]conversation.Record, 0, len(wireRecords))
-	for _, wire := range wireRecords {
-		records = append(records, conversation.Record{
-			ID:            wire.GetId(),
-			Provider:      providerFromProto(wire.GetProvider()),
-			NativeID:      wire.GetNativeId(),
-			Title:         wire.GetTitle(),
-			WorkspaceRoot: wire.GetWorkspaceRoot(),
-			ArtifactPath:  wire.GetArtifactPath(),
-			ArtifactKind:  wire.GetArtifactKind(),
-			Model:         wire.GetModel(),
-			CreatedAt:     time.Unix(wire.GetCreatedAtUnix(), 0),
-			UpdatedAt:     time.Unix(wire.GetUpdatedAtUnix(), 0),
-			SizeBytes:     wire.GetSizeBytes(),
-			Archived:      wire.GetArchived(),
-		})
-	}
-	return records, nil
+	records := conversationRecordsFromProto(resp.GetConversations())
+	return conversation.ListResult{
+		Records:       records,
+		TotalMatched:  int(resp.GetTotalMatched()),
+		ReturnedCount: int(resp.GetReturnedCount()),
+		Offset:        int(resp.GetOffset()),
+		Limit:         int(resp.GetLimit()),
+		NextOffset:    int(resp.GetNextOffset()),
+		HasMore:       resp.GetHasMore(),
+	}, nil
 }
 
 // GetConversation asks the daemon for one conversation transcript rendered as
@@ -144,6 +143,47 @@ func GetConversationContext(ctx context.Context, conversationID, timestamp strin
 		return "", daemonRPCError(rpcCtx, "get conversation context", err)
 	}
 	return resp.GetText(), nil
+}
+
+// SearchConversations asks the daemon for bounded transcript text matches
+// across candidate conversations.
+func SearchConversations(ctx context.Context, options conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return conversation.SearchConversationsResult{}, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.SearchConversations(rpcCtx, &clydev1.SearchConversationsRequest{
+		Query:           options.Query,
+		Limit:           int64(options.Limit),
+		Provider:        protoProvider(options.Provider),
+		Workspace:       options.WorkspaceRoot,
+		IncludeArchived: options.IncludeArchived,
+	})
+	if err != nil {
+		return conversation.SearchConversationsResult{}, daemonRPCError(rpcCtx, "search conversations", err)
+	}
+	matches := make([]conversation.SearchMatch, 0, len(resp.GetMatches()))
+	for _, wire := range resp.GetMatches() {
+		record := conversationRecordFromProto(wire.GetConversation())
+		matches = append(matches, conversation.SearchMatch{
+			Record:       record,
+			MessageIndex: int(wire.GetMessageIndex()),
+			Role:         wire.GetRole(),
+			Timestamp:    time.Unix(wire.GetTimestampUnix(), 0),
+			Snippet:      wire.GetSnippet(),
+		})
+	}
+	return conversation.SearchConversationsResult{
+		Matches:              matches,
+		ConversationsScanned: int(resp.GetConversationsScanned()),
+		ReturnedCount:        int(resp.GetReturnedCount()),
+		Limit:                int(resp.GetLimit()),
+		HasMore:              resp.GetHasMore(),
+	}, nil
 }
 
 // SearchConversation asks the daemon to search one conversation and cache the
@@ -246,6 +286,31 @@ func searchStatusLabel(s clydev1.SearchStatus) string {
 		return "unspecified"
 	default:
 		return "unspecified"
+	}
+}
+
+func conversationRecordsFromProto(wireRecords []*clydev1.ConversationRecord) []conversation.Record {
+	records := make([]conversation.Record, 0, len(wireRecords))
+	for _, wire := range wireRecords {
+		records = append(records, conversationRecordFromProto(wire))
+	}
+	return records
+}
+
+func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.Record {
+	return conversation.Record{
+		ID:            wire.GetId(),
+		Provider:      providerFromProto(wire.GetProvider()),
+		NativeID:      wire.GetNativeId(),
+		Title:         wire.GetTitle(),
+		WorkspaceRoot: wire.GetWorkspaceRoot(),
+		ArtifactPath:  wire.GetArtifactPath(),
+		ArtifactKind:  wire.GetArtifactKind(),
+		Model:         wire.GetModel(),
+		CreatedAt:     time.Unix(wire.GetCreatedAtUnix(), 0),
+		UpdatedAt:     time.Unix(wire.GetUpdatedAtUnix(), 0),
+		SizeBytes:     wire.GetSizeBytes(),
+		Archived:      wire.GetArchived(),
 	}
 }
 

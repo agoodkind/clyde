@@ -25,6 +25,7 @@ const (
 	ClydeService_ListConversations_FullMethodName      = "/clyde.v1.ClydeService/ListConversations"
 	ClydeService_GetConversation_FullMethodName        = "/clyde.v1.ClydeService/GetConversation"
 	ClydeService_GetConversationContext_FullMethodName = "/clyde.v1.ClydeService/GetConversationContext"
+	ClydeService_SearchConversations_FullMethodName    = "/clyde.v1.ClydeService/SearchConversations"
 	ClydeService_SearchConversation_FullMethodName     = "/clyde.v1.ClydeService/SearchConversation"
 	ClydeService_GetSearchStatus_FullMethodName        = "/clyde.v1.ClydeService/GetSearchStatus"
 	ClydeService_CancelSearch_FullMethodName           = "/clyde.v1.ClydeService/CancelSearch"
@@ -46,6 +47,7 @@ type ClydeServiceClient interface {
 	ListConversations(ctx context.Context, in *ListConversationsRequest, opts ...grpc.CallOption) (*ListConversationsResponse, error)
 	GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error)
 	GetConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (*GetConversationContextResponse, error)
+	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
 	SearchConversation(ctx context.Context, in *SearchConversationRequest, opts ...grpc.CallOption) (*SearchConversationResponse, error)
 	GetSearchStatus(ctx context.Context, in *GetSearchStatusRequest, opts ...grpc.CallOption) (*GetSearchStatusResponse, error)
 	CancelSearch(ctx context.Context, in *CancelSearchRequest, opts ...grpc.CallOption) (*CancelSearchResponse, error)
@@ -128,6 +130,16 @@ func (c *clydeServiceClient) GetConversationContext(ctx context.Context, in *Get
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetConversationContextResponse)
 	err := c.cc.Invoke(ctx, ClydeService_GetConversationContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchConversationsResponse)
+	err := c.cc.Invoke(ctx, ClydeService_SearchConversations_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +246,7 @@ type ClydeServiceServer interface {
 	ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error)
 	GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error)
 	GetConversationContext(context.Context, *GetConversationContextRequest) (*GetConversationContextResponse, error)
+	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
 	SearchConversation(context.Context, *SearchConversationRequest) (*SearchConversationResponse, error)
 	GetSearchStatus(context.Context, *GetSearchStatusRequest) (*GetSearchStatusResponse, error)
 	CancelSearch(context.Context, *CancelSearchRequest) (*CancelSearchResponse, error)
@@ -269,6 +282,9 @@ func (UnimplementedClydeServiceServer) GetConversation(context.Context, *GetConv
 }
 func (UnimplementedClydeServiceServer) GetConversationContext(context.Context, *GetConversationContextRequest) (*GetConversationContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetConversationContext not implemented")
+}
+func (UnimplementedClydeServiceServer) SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchConversations not implemented")
 }
 func (UnimplementedClydeServiceServer) SearchConversation(context.Context, *SearchConversationRequest) (*SearchConversationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchConversation not implemented")
@@ -414,6 +430,24 @@ func _ClydeService_GetConversationContext_Handler(srv interface{}, ctx context.C
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClydeServiceServer).GetConversationContext(ctx, req.(*GetConversationContextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_SearchConversations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchConversationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).SearchConversations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_SearchConversations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).SearchConversations(ctx, req.(*SearchConversationsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -606,6 +640,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetConversationContext",
 			Handler:    _ClydeService_GetConversationContext_Handler,
+		},
+		{
+			MethodName: "SearchConversations",
+			Handler:    _ClydeService_SearchConversations_Handler,
 		},
 		{
 			MethodName: "SearchConversation",
