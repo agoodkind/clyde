@@ -5,9 +5,8 @@ artifacts, exposing conversation search and transcript export through CLI and
 MCP surfaces, hosting adapter ingress, and capturing provider traffic through
 daemon-owned MITM listeners.
 
-Clyde reads provider-owned artifacts. It does not create, resume, rename,
-isolate, compact, wrap, or present provider sessions. Run `claude` and `codex`
-directly for interactive work.
+Use Clyde for provider-owned artifact inspection. Use raw `claude` and `codex`
+for provider session lifecycle and interactive work.
 
 ## Current References
 
