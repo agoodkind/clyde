@@ -1,156 +1,97 @@
 # Clyde
 
-Clyde is a local Go CLI and daemon for raw Claude and Codex transcript reading, MCP/CLI search, transcript export, adapter ingress, and MITM capture. Clyde does not create, resume, rename, isolate, compact, or present provider sessions. Run `claude` and `codex` directly for interactive work.
+Clyde is a local Go CLI and daemon for reading raw Claude and Codex provider
+artifacts, exposing conversation search and transcript export through CLI and
+MCP surfaces, hosting adapter ingress, and capturing provider traffic through
+daemon-owned MITM listeners.
 
-## Command Surface
+Clyde reads provider-owned artifacts. It does not create, resume, rename,
+isolate, compact, wrap, or present provider sessions. Run `claude` and `codex`
+directly for interactive work.
 
-The `cmd/clyde` entrypoint owns Clyde-specific commands only:
+## Current References
 
-```text
-clyde
-clyde list-conversations
-clyde get-conversation CONVERSATION_ID
-clyde get-context CONVERSATION_ID
-clyde search-conversation CONVERSATION_ID QUERY
-clyde analyze-results RESULT_ID PROMPT
-clyde export-transcript CONVERSATION_ID
-clyde daemon ...
-clyde logs ...
-clyde mitm ...
-clyde mcp
+Clyde moves quickly, so this README intentionally avoids copied command tables,
+config schemas, route inventories, model catalogs, and listener lists. Use the
+current source or generated help for details that can drift:
+
+- CLI commands: `clyde --help` and `clyde <command> --help`.
+- Conversation CLI and MCP operations: `clyde conversation --help` and
+  `internal/clispec/`.
+- Runtime config: `clyde.example.toml` and `internal/config/`.
+- Adapter behavior: `docs/openai-adapter.md`, `docs/cursor.md`, and
+  `internal/adapter/`.
+- MITM listeners and capture behavior: `docs/mitm-listeners.md` and
+  `internal/mitm/`.
+- Logging, sinks, request paths, and inventory: `docs/SLOG.md` and
+  `docs/logging/`.
+
+`cmd/clyde/main.go` owns the root command routing. Conversation operations are
+declared once in `internal/clispec/` and rendered onto both CLI and MCP
+surfaces, with alignment covered by tests in that package.
+
+## Installation
+
+From a checkout:
+
+```bash
+make build
+make install
 ```
 
-Running `clyde` with no arguments shows help. Unknown commands fail through Cobra. Clyde does not forward unknown arguments to provider CLIs.
+Use the `Makefile` as the source of truth for exact build and install behavior.
 
-## Conversations
+## Configuration
 
-Clyde scans provider-owned artifacts and derives stable conversation IDs without writing provider files:
-
-```text
-claude:<provider-session-id>
-codex:<thread-id>
-artifact:<path-hash>
-```
-
-The raw conversation index scans Claude artifacts under `~/.claude/projects` and Codex artifacts under the configured or default Codex roots. The daemon loads the last completed cache quickly at startup and refreshes the index in a debounced background worker. Stale cache data is acceptable while a refresh is running.
-
-## MCP Tools
-
-`clyde mcp` exposes the same conversation operations as the CLI:
-
-```text
-clyde_list_conversations
-clyde_get_conversation
-clyde_get_context
-clyde_search_conversation
-clyde_analyze_results
-clyde_export_transcript
-```
-
-The tools use `conversation_id` arguments. There are no session-name aliases.
-
-## Transcript Export
-
-`clyde export-transcript` accepts a conversation ID and supports markdown, plain text, HTML, and JSON output. Export options include message filtering, thinking blocks, tool calls, tool outputs, raw JSON metadata, history start, and whitespace handling.
-
-## Adapter
-
-`clyde daemon` can host the OpenAI-compatible adapter. The adapter routes requests through the configured model registry and provider backends.
-
-The HTTP server registers these routes:
-
-```text
-/healthz
-/v1/models
-/v1/chat/completions
-/v1/completions
-/v1/messages
-/v1/messages/count_tokens
-/
-```
-
-The adapter config lives in:
+The common user config path is:
 
 ```text
 ~/.config/clyde/config.toml
 ```
 
-`clyde.example.toml` contains the reference config shape for adapter, auth, logging, search, and MITM sections.
+Copy only the sections you need from `clyde.example.toml`, then edit the local
+config for your adapter, logging, search, and MITM setup. The config structs in
+`internal/config/` are the implementation source of truth.
 
-## Provider Auth
+## Operations
 
-Clyde keeps provider credential handling behind a generic auth boundary. The daemon injects provider-specific readers for Anthropic/Claude and Codex. The Anthropic path reads the current Claude credential source for the local platform, including macOS keychain support and file-backed Linux support.
-
-## MITM Capture Proxy
-
-Clyde includes a local MITM capture proxy for provider request observability. The proxy listens on loopback, routes supported provider traffic to upstream services, and writes append-only capture records under the configured capture directory.
-
-MITM configuration lives under `[mitm]`:
-
-```toml
-[mitm]
-enabled_default = true
-providers = ["claude", "codex", "cursor"]
-
-[logging.raw_capture]
-enabled = false
-```
-
-`providers` is a provider set. Use explicit provider names such as `claude`, `codex`, and `cursor`, or use `["all"]` to capture every supported family.
-
-## Installation
+Use generated help to discover the current operational surface:
 
 ```bash
-git clone https://goodkind.io/clyde
-cd clyde
-make build
-make install
+clyde --help
+clyde conversation --help
+clyde daemon --help
+clyde logs --help
+clyde mitm --help
 ```
 
-`make install` copies the signed development binary to:
-
-```text
-~/.local/bin/clyde
-```
-
-## Quick Start
+Reload a running daemon after local config changes:
 
 ```bash
-make build
-make install
-clyde list-conversations
-clyde daemon
-```
-
-For adapter and MITM setup, create or edit the global config, copy the relevant sections from `clyde.example.toml`, then start or reload the daemon:
-
-```bash
-mkdir -p ~/.config/clyde
-$EDITOR ~/.config/clyde/config.toml
 clyde daemon reload
 ```
 
-## Data Locations
-
-Clyde keeps global config, caches, logs, adapter state, and MITM captures in XDG locations:
-
-- Global config: `~/.config/clyde/config.toml`, or `XDG_CONFIG_HOME`.
-- Conversation index cache, logs, adapter logs, and MITM captures: `~/.local/state/clyde/`, or `XDG_STATE_HOME`.
-- Daemon socket and runtime files: `$TMPDIR/clyde-<uid>/` on macOS, or `$XDG_RUNTIME_DIR/clyde/` when set.
+State, logs, caches, adapter records, and MITM captures follow Clyde's XDG path
+resolution. Use `clyde logs --help`, `docs/logging/`, and the config reference
+for current paths and retention behavior.
 
 ## Development
 
-Common targets:
+Common checks and build steps are Makefile-owned. Start with:
 
 ```bash
 make build
-make install
-make deploy
+make test
+make lint
 ```
+
+Use `make deploy` when the local daemon install and reload path needs to be
+validated.
 
 ## Original Credit
 
-Clyde is forked from Fabio Rehm's original [clotilde](https://github.com/fgrehm/clotilde) project.
+Clyde is forked from Fabio Rehm's original
+[clotilde](https://github.com/fgrehm/clotilde) project.
 
 ## License
 
