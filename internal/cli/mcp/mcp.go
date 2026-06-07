@@ -10,13 +10,29 @@ import (
 	"goodkind.io/clyde/internal/mcpserver"
 )
 
-// NewCmd returns the `clyde mcp` command that starts the MCP stdio server.
+// NewCmd returns the `clyde mcp` command tree.
 func NewCmd(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "mcp",
+		Short:   "Manage MCP server commands",
+		Long:    "Manage the Model Context Protocol stdio server commands.",
+		Example: "clyde mcp serve",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(newServeCmd(f))
+	return cmd
+}
+
+func newServeCmd(f *cli.Factory) *cobra.Command {
+	return &cobra.Command{
+		Use:     "serve",
 		Short:   "Start MCP stdio server for Claude Code integration",
 		Long:    "Start the Model Context Protocol stdio server. The MCP client spawns this command as a subprocess and speaks the protocol over its standard input and output; the tool handlers call the daemon over gRPC.",
-		Example: "clyde mcp",
+		Example: "clyde mcp serve",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = f
 			cliMCPLog.Logger().Info("cli.mcp.invoked", "concern",

@@ -1,7 +1,7 @@
 package slogger
 
 // CLI subsystem concern constants. Covers the user-facing commands
-// outside the daemon (clyde logs inventory, clyde mcp server, clyde
+// outside the daemon (clyde logs inventory, clyde mcp serve, clyde
 // mitm trust/show/status, clyde conversation export, clyde daemon
 // invocation).
 const (
