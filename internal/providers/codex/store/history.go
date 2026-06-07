@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"goodkind.io/clyde/internal/transcript"
 )
 
 // ThreadSource is the typed subset of Codex SessionSource that Clyde needs for
@@ -68,14 +66,10 @@ type ThreadSummary struct {
 // HistoryMessage is a normalized conversational message extracted from Codex
 // rollout entries.
 type HistoryMessage struct {
-	Role              string
-	ParentUUID        string
-	LogicalParentUUID string
-	Visibility        transcript.MessageVisibility
-	Compaction        *transcript.CompactionMetadata
-	Text              string
-	Timestamp         time.Time
-	Phase             string
+	Role      string
+	Text      string
+	Timestamp time.Time
+	Phase     string
 }
 
 // ReadThreadByRolloutPath returns a Codex rollout thread summary by JSONL path.
@@ -128,11 +122,6 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 			}
 		case historyEnvelopeEventMsg:
 			msg, ok := eventMessage(envelope.Payload, lineTime)
-			if ok {
-				applyMessage(&summary, msg, includeHistory)
-			}
-		case historyEnvelopeCompacted:
-			msg, ok := compactedMessage(envelope.Payload, lineTime)
 			if ok {
 				applyMessage(&summary, msg, includeHistory)
 			}
@@ -243,11 +232,6 @@ type eventPayload struct {
 	Phase   string `json:"phase"`
 }
 
-type compactedPayload struct {
-	Message            string            `json:"message"`
-	ReplacementHistory []responsePayload `json:"replacement_history"`
-}
-
 type turnContextPayload struct {
 	CWD string `json:"cwd"`
 }
@@ -305,31 +289,47 @@ func applyMessage(summary *ThreadSummary, msg HistoryMessage, includeHistory boo
 func responseItemMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
 	var payload responsePayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return emptyHistoryMessage(), false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	if payload.Type != "message" {
-		return emptyHistoryMessage(), false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	text := strings.TrimSpace(contentText(payload.Content))
 	if text == "" {
-		return emptyHistoryMessage(), false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	return HistoryMessage{
-		Role:              payload.Role,
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction:        nil,
-		Text:              text,
-		Timestamp:         timestamp,
-		Phase:             payload.Phase,
+		Role:      payload.Role,
+		Text:      text,
+		Timestamp: timestamp,
+		Phase:     payload.Phase,
 	}, true
 }
 
 func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
 	var payload eventPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return emptyHistoryMessage(), false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	var role string
 	switch eventMessageType(payload.Type) {
@@ -338,63 +338,28 @@ func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, boo
 	case eventMessageTypeAgent:
 		role = "assistant"
 	default:
-		return emptyHistoryMessage(), false
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
+
+			Phase: "",
+		}, false
 	}
 	text := strings.TrimSpace(payload.Message)
 	if text == "" {
-		return emptyHistoryMessage(), false
-	}
-	return HistoryMessage{
-		Role:              role,
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction:        nil,
-		Text:              text,
-		Timestamp:         timestamp,
-		Phase:             payload.Phase,
-	}, true
-}
+		return HistoryMessage{
+			Role: "", Text: "", Timestamp: time.
+				Time{},
 
-func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
-	var payload compactedPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return emptyHistoryMessage(), false
+			Phase: "",
+		}, false
 	}
 	return HistoryMessage{
-		Role:              "system",
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction: &transcript.CompactionMetadata{
-			Kind:                    transcript.CompactionKindBoundary,
-			Trigger:                 transcript.CompactionTriggerUnknown,
-			PreTokens:               0,
-			PostTokens:              0,
-			TokensSaved:             0,
-			MessagesSummarized:      0,
-			ReplacementHistoryCount: len(payload.ReplacementHistory),
-			HeadUUID:                "",
-			AnchorUUID:              "",
-			TailUUID:                "",
-		},
-		Text:      strings.TrimSpace(payload.Message),
+		Role:      role,
+		Text:      text,
 		Timestamp: timestamp,
-		Phase:     "",
+		Phase:     payload.Phase,
 	}, true
-}
-
-func emptyHistoryMessage() HistoryMessage {
-	return HistoryMessage{
-		Role:              "",
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Visibility:        "",
-		Compaction:        nil,
-		Text:              "",
-		Timestamp:         time.Time{},
-		Phase:             "",
-	}
 }
 
 func contentText(parts []contentPart) string {
@@ -457,7 +422,6 @@ const (
 	historyEnvelopeSessionMeta  historyEnvelopeType = "session_meta"
 	historyEnvelopeResponseItem historyEnvelopeType = "response_item"
 	historyEnvelopeEventMsg     historyEnvelopeType = "event_msg"
-	historyEnvelopeCompacted    historyEnvelopeType = "compacted"
 	historyEnvelopeTurnContext  historyEnvelopeType = "turn_context"
 )
 

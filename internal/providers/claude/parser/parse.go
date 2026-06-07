@@ -12,7 +12,6 @@ import (
 // parseOptions controls noise stripping while parsing Claude transcript lines.
 type parseOptions struct {
 	PreserveSystemPrompts bool
-	IncludeSystemMessages bool
 }
 
 // contentBlockType enumerates the content-block "type" strings the Claude
@@ -26,34 +25,12 @@ const (
 	contentBlockToolResult contentBlockType = "tool_result"
 )
 
-type claudeSystemSubtype string
-
-const (
-	claudeSystemSubtypeCompactBoundary      claudeSystemSubtype = "compact_boundary"
-	claudeSystemSubtypeMicrocompactBoundary claudeSystemSubtype = "microcompact_boundary"
-)
-
-type claudeCompactionTriggerValue string
-
-const (
-	claudeCompactionTriggerManual claudeCompactionTriggerValue = "manual"
-	claudeCompactionTriggerAuto   claudeCompactionTriggerValue = "auto"
-)
-
 // rawEntry mirrors one Claude transcript JSONL line.
 type rawEntry struct {
-	UUID                      string                    `json:"uuid"`
-	ParentUUID                string                    `json:"parentUuid"`
-	LogicalParentUUID         string                    `json:"logicalParentUuid"`
-	Type                      string                    `json:"type"`
-	Subtype                   claudeSystemSubtype       `json:"subtype"`
-	Content                   string                    `json:"content"`
-	IsMeta                    bool                      `json:"isMeta"`
-	IsVisibleInTranscriptOnly bool                      `json:"isVisibleInTranscriptOnly"`
-	IsCompactSummary          bool                      `json:"isCompactSummary"`
-	CompactMetadata           *rawClaudeCompactMetadata `json:"compactMetadata"`
-	Timestamp                 time.Time                 `json:"timestamp"`
-	Message                   json.RawMessage           `json:"message"`
+	UUID      string          `json:"uuid"`
+	Type      string          `json:"type"`
+	Timestamp time.Time       `json:"timestamp"`
+	Message   json.RawMessage `json:"message"`
 }
 
 type rawMessage struct {
@@ -68,22 +45,6 @@ type contentBlock struct {
 	ID       string                   `json:"id"`
 	Name     string                   `json:"name"`
 	Input    transcript.ToolInputJSON `json:"input"`
-}
-
-type rawClaudeCompactMetadata struct {
-	Trigger                 string                    `json:"trigger"`
-	PreTokens               int                       `json:"preTokens"`
-	PostTokens              int                       `json:"postTokens"`
-	TokensSaved             int                       `json:"tokensSaved"`
-	MessagesSummarized      int                       `json:"messagesSummarized"`
-	ReplacementHistoryCount int                       `json:"replacementHistoryCount"`
-	PreservedSegment        rawClaudePreservedSegment `json:"preservedSegment"`
-}
-
-type rawClaudePreservedSegment struct {
-	HeadUUID   string `json:"headUuid"`
-	AnchorUUID string `json:"anchorUuid"`
-	TailUUID   string `json:"tailUuid"`
 }
 
 var (
@@ -115,33 +76,22 @@ var noisePatterns = func() []*regexp.Regexp {
 // lines, written out so exhaustruct sees every field set.
 func emptyMessage() transcript.Message {
 	return transcript.Message{
-		UUID:              "",
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Role:              "",
-		Visibility:        "",
-		Compaction:        nil,
-		Timestamp:         time.Time{},
-		Text:              "",
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
+		UUID:      "",
+		Role:      "",
+		Timestamp: time.Time{},
+		Text:      "",
+		Thinking:  "",
+		HasTools:  false,
+		Tools:     nil,
 	}
 }
 
 // parseLine decodes one transcript line into a message. The boolean is false
-// when the line is not a usable user, assistant, or opted-in system compaction
-// turn.
+// when the line is not a usable user or assistant turn.
 func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	var entry rawEntry
 	if err := json.Unmarshal(line, &entry); err != nil {
 		return emptyMessage(), false
-	}
-	if entry.Type == "system" {
-		if !opts.IncludeSystemMessages {
-			return emptyMessage(), false
-		}
-		return parseSystemEntry(entry)
 	}
 	if entry.Type != "user" && entry.Type != "assistant" {
 		return emptyMessage(), false
@@ -156,17 +106,13 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	}
 
 	m := transcript.Message{
-		UUID:              entry.UUID,
-		ParentUUID:        entry.ParentUUID,
-		LogicalParentUUID: entry.LogicalParentUUID,
-		Role:              entry.Type,
-		Visibility:        messageVisibility(entry.IsMeta, entry.IsVisibleInTranscriptOnly),
-		Compaction:        nil,
-		Timestamp:         entry.Timestamp,
-		Text:              "",
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
+		UUID:      entry.UUID,
+		Role:      entry.Type,
+		Timestamp: entry.Timestamp,
+		Text:      "",
+		Thinking:  "",
+		HasTools:  false,
+		Tools:     nil,
 	}
 
 	if entry.Type == "user" {
@@ -179,12 +125,6 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 			text = stripSystemTags(text)
 		}
 		m.Text = strings.TrimSpace(text)
-		if entry.IsCompactSummary {
-			m.Compaction = claudeCompactionMetadata(
-				transcript.CompactionKindSummary,
-				entry.CompactMetadata,
-			)
-		}
 		return m, m.Text != ""
 	}
 
@@ -192,86 +132,6 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	parseAssistantBlocks(&m, msg.Content)
 	// Include assistant messages even if Text is empty (may have only tool calls).
 	return m, m.Text != "" || m.HasTools
-}
-
-func parseSystemEntry(entry rawEntry) (transcript.Message, bool) {
-	var kind transcript.CompactionKind
-	switch entry.Subtype {
-	case claudeSystemSubtypeCompactBoundary:
-		kind = transcript.CompactionKindBoundary
-	case claudeSystemSubtypeMicrocompactBoundary:
-		kind = transcript.CompactionKindMicroboundary
-	default:
-		return emptyMessage(), false
-	}
-	return transcript.Message{
-		UUID:              entry.UUID,
-		ParentUUID:        entry.ParentUUID,
-		LogicalParentUUID: entry.LogicalParentUUID,
-		Role:              "system",
-		Visibility:        messageVisibility(entry.IsMeta, entry.IsVisibleInTranscriptOnly),
-		Compaction:        claudeCompactionMetadata(kind, entry.CompactMetadata),
-		Timestamp:         entry.Timestamp,
-		Text:              strings.TrimSpace(entry.Content),
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
-	}, true
-}
-
-func messageVisibility(isMeta bool, transcriptOnly bool) transcript.MessageVisibility {
-	if isMeta {
-		return transcript.MessageVisibilityMetaOnly
-	}
-	if transcriptOnly {
-		return transcript.MessageVisibilityTranscriptOnly
-	}
-	return transcript.MessageVisibilityVisible
-}
-
-func claudeCompactionMetadata(
-	kind transcript.CompactionKind,
-	raw *rawClaudeCompactMetadata,
-) *transcript.CompactionMetadata {
-	metadata := &transcript.CompactionMetadata{
-		Kind:                    kind,
-		Trigger:                 transcript.CompactionTriggerUnknown,
-		PreTokens:               0,
-		PostTokens:              0,
-		TokensSaved:             0,
-		MessagesSummarized:      0,
-		ReplacementHistoryCount: 0,
-		HeadUUID:                "",
-		AnchorUUID:              "",
-		TailUUID:                "",
-	}
-	if raw == nil {
-		return metadata
-	}
-	metadata.Trigger = claudeCompactionTrigger(raw.Trigger)
-	metadata.PreTokens = raw.PreTokens
-	metadata.PostTokens = raw.PostTokens
-	metadata.TokensSaved = raw.TokensSaved
-	if metadata.TokensSaved == 0 && raw.PreTokens > 0 && raw.PostTokens > 0 && raw.PreTokens >= raw.PostTokens {
-		metadata.TokensSaved = raw.PreTokens - raw.PostTokens
-	}
-	metadata.MessagesSummarized = raw.MessagesSummarized
-	metadata.ReplacementHistoryCount = raw.ReplacementHistoryCount
-	metadata.HeadUUID = raw.PreservedSegment.HeadUUID
-	metadata.AnchorUUID = raw.PreservedSegment.AnchorUUID
-	metadata.TailUUID = raw.PreservedSegment.TailUUID
-	return metadata
-}
-
-func claudeCompactionTrigger(value string) transcript.CompactionTrigger {
-	switch claudeCompactionTriggerValue(strings.TrimSpace(strings.ToLower(value))) {
-	case claudeCompactionTriggerManual:
-		return transcript.CompactionTriggerManual
-	case claudeCompactionTriggerAuto:
-		return transcript.CompactionTriggerAuto
-	default:
-		return transcript.CompactionTriggerUnknown
-	}
 }
 
 // extractUserText gets the text from a user message's content field.

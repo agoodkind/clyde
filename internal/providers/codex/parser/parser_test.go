@@ -7,7 +7,6 @@ import (
 
 	"goodkind.io/clyde/internal/conversation"
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
-	"goodkind.io/clyde/internal/transcript"
 )
 
 func TestStreamShapesCodexConversationMessages(t *testing.T) {
@@ -16,17 +15,12 @@ func TestStreamShapesCodexConversationMessages(t *testing.T) {
 	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
 	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"[Image #1]\n\nshow me the exact diff"}]}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:09:05.500Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"second"}]}]}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"answer text","phase":"commentary"}}` + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write rollout: %v", err)
 	}
 
-	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	}))
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{IncludeSystemPrompts: false, IncludeToolOutputs: false}))
 	if err != nil {
 		t.Fatalf("collect codex messages: %v", err)
 	}
@@ -42,41 +36,6 @@ func TestStreamShapesCodexConversationMessages(t *testing.T) {
 	}
 	if messages[1].Text != "answer text" {
 		t.Fatalf("messages[1].Text = %q, want %q", messages[1].Text, "answer text")
-	}
-}
-
-func TestStreamIncludesCodexCompactionBoundariesWhenRequested(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
-	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:09:05.500Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"second"}]}]}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"answer text","phase":"commentary"}}` + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write rollout: %v", err)
-	}
-
-	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: true,
-		IncludeToolOutputs:    false,
-	}))
-	if err != nil {
-		t.Fatalf("collect codex messages: %v", err)
-	}
-	if len(messages) != 3 {
-		t.Fatalf("messages len = %d, want 3", len(messages))
-	}
-	compactionMessages := transcript.CompactionMessages(messages)
-	if len(compactionMessages) != 1 {
-		t.Fatalf("compaction messages len = %d, want 1", len(compactionMessages))
-	}
-	if compactionMessages[0].Compaction == nil || compactionMessages[0].Compaction.Kind != transcript.CompactionKindBoundary {
-		t.Fatalf("compaction = %#v", compactionMessages[0].Compaction)
-	}
-	if compactionMessages[0].Compaction.ReplacementHistoryCount != 2 {
-		t.Fatalf("replacement history count = %d, want 2", compactionMessages[0].Compaction.ReplacementHistoryCount)
 	}
 }
 
@@ -186,35 +145,5 @@ func TestScanRecordReadsCodexHeader(t *testing.T) {
 	}
 	if record.ArtifactKind != "rollout" {
 		t.Fatalf("artifact kind = %q, want rollout", record.ArtifactKind)
-	}
-}
-
-func TestStreamLiveCodexCompactionSmoke(t *testing.T) {
-	t.Parallel()
-	const path = "/Users/agoodkind/.codex/sessions/2026/04/27/rollout-2026-04-27T15-49-07-019dd121-d1ff-7ad3-862d-79b33d5fa300.jsonl"
-	if _, err := os.Stat(path); err != nil {
-		t.Skipf("live Codex rollout unavailable: %v", err)
-	}
-
-	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
-		IncludeSystemPrompts:  false,
-		IncludeSystemMessages: true,
-		IncludeToolOutputs:    false,
-	}))
-	if err != nil {
-		t.Fatalf("collect live Codex rollout: %v", err)
-	}
-
-	var boundaryCount int
-	for _, message := range transcript.CompactionMessages(messages) {
-		if message.Compaction == nil {
-			continue
-		}
-		if message.Compaction.Kind == transcript.CompactionKindBoundary {
-			boundaryCount++
-		}
-	}
-	if boundaryCount != 1 {
-		t.Fatalf("boundary count = %d, want 1", boundaryCount)
 	}
 }

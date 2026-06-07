@@ -32,9 +32,8 @@ type ScanCandidate struct {
 
 // LoadOptions configures how [Parser.Stream] reads a single artifact.
 type LoadOptions struct {
-	IncludeSystemPrompts  bool
-	IncludeSystemMessages bool
-	IncludeToolOutputs    bool
+	IncludeSystemPrompts bool
+	IncludeToolOutputs   bool
 }
 
 // Parser reads one provider's raw conversation artifacts. Each provider

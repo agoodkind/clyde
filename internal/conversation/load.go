@@ -26,9 +26,8 @@ func (idx *Index) resolveStream(record Record, opts LoadOptions) (iter.Seq2[tran
 // directly and stop early instead of calling this.
 func (idx *Index) LoadMessages(record Record, includeSystemPrompts bool, includeToolOutputs bool) ([]transcript.Message, error) {
 	stream, err := idx.resolveStream(record, LoadOptions{
-		IncludeSystemPrompts:  includeSystemPrompts,
-		IncludeSystemMessages: false,
-		IncludeToolOutputs:    includeToolOutputs,
+		IncludeSystemPrompts: includeSystemPrompts,
+		IncludeToolOutputs:   includeToolOutputs,
 	})
 	if err != nil {
 		return nil, err

@@ -108,13 +108,6 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 	return out
 }
 
-// NormalizeConversationOnlyText applies the same text normalization the
-// conversation-only shaping path uses, without reshaping message roles or tool
-// structure.
-func NormalizeConversationOnlyText(text string) string {
-	return normalizeConversationText(text, 0, true)
-}
-
 func normalizeConversationText(text string, maxRunes int, conversationOnly bool) string {
 	text = strings.ReplaceAll(text, "\r", "")
 	lines := strings.Split(text, "\n")

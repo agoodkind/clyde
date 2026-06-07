@@ -247,10 +247,7 @@ func (p Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tra
 			return
 		}
 		defer func() { _ = file.Close() }()
-		parseOpts := parseOptions{
-			PreserveSystemPrompts: opts.IncludeSystemPrompts,
-			IncludeSystemMessages: opts.IncludeSystemMessages,
-		}
+		parseOpts := parseOptions{PreserveSystemPrompts: opts.IncludeSystemPrompts}
 		reader := bufio.NewReader(file)
 		for {
 			line, readErr := reader.ReadBytes('\n')

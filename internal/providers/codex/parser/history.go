@@ -3,18 +3,30 @@ package parser
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/transcript"
 )
 
+// codexHistory is the provider-owned intermediate representation for a Codex
+// rollout thread. It sits above raw rollout discovery and below generic
+// conversation shaping, owning the one call into the codex store.
+type codexHistory struct {
+	modelProvider string
+	messages      []codexHistoryMessage
+}
+
+type codexHistoryMessage struct {
+	Role      string
+	Text      string
+	Timestamp time.Time
+}
+
 // readCodexHistory reads a Codex rollout thread with its full message history
-// and maps it directly onto shared transcript messages. It preserves the prior
-// conversation-only text normalization for user and assistant turns so the
-// default rendered and searched output is unchanged, while leaving compaction
-// boundary metadata on the raw shared stream for opt-in callers.
-func readCodexHistory(path string, includeSystemMessages bool) ([]transcript.Message, error) {
+// and exposes it through the shared transcript shaping layer.
+func readCodexHistory(path string) (codexHistory, error) {
 	thread, err := codexstore.ReadThreadByRolloutPath(path, true, false)
 	if err != nil {
 		slog.Warn("providers.codex.parser.read_failed",
@@ -24,64 +36,63 @@ func readCodexHistory(path string, includeSystemMessages bool) ([]transcript.Mes
 			"path", path,
 			"err", err,
 		)
-		return nil, fmt.Errorf("read codex rollout history: %w", err)
+		return codexHistory{}, fmt.Errorf("read codex rollout history: %w", err)
 	}
-	return codexMessagesFromThread(thread, includeSystemMessages), nil
+	return codexHistoryFromThread(thread), nil
 }
 
-func codexMessagesFromThread(
-	thread codexstore.ThreadSummary,
-	includeSystemMessages bool,
-) []transcript.Message {
-	messages := make([]transcript.Message, 0, len(thread.Messages))
+func codexHistoryFromThread(thread codexstore.ThreadSummary) codexHistory {
+	messages := make([]codexHistoryMessage, 0, len(thread.Messages))
 	for _, msg := range thread.Messages {
-		message, ok := codexTranscriptMessage(msg, includeSystemMessages)
-		if !ok {
-			continue
-		}
-		messages = append(messages, message)
+		messages = append(messages, codexHistoryMessage{
+			Role:      msg.Role,
+			Text:      msg.Text,
+			Timestamp: msg.Timestamp,
+		})
 	}
-	return messages
+	return codexHistory{
+		modelProvider: thread.ModelProvider,
+		messages:      messages,
+	}
 }
 
-func codexTranscriptMessage(
-	msg codexstore.HistoryMessage,
-	includeSystemMessages bool,
-) (transcript.Message, bool) {
-	if msg.Role == "system" {
-		if !includeSystemMessages {
-			return emptyMessage(), false
-		}
-		return transcript.Message{
-			UUID:              "",
-			ParentUUID:        msg.ParentUUID,
-			LogicalParentUUID: msg.LogicalParentUUID,
-			Role:              msg.Role,
-			Visibility:        msg.Visibility,
-			Compaction:        msg.Compaction,
-			Timestamp:         msg.Timestamp,
-			Text:              msg.Text,
-			Thinking:          "",
-			HasTools:          false,
-			Tools:             nil,
-		}, true
+// conversationMessages shapes the Codex history into generic transcript
+// messages, applying the same conversation-only normalization the prior loader
+// used (ConversationOnly with tool turns omitted and no rune cap) so the
+// rendered, searched, and exported output is unchanged. The raw rollout
+// messages carry no thinking or tool blocks, so shaping reduces to normalizing
+// and dropping empty text turns.
+func (h codexHistory) conversationMessages() []transcript.Message {
+	shapeOpts := transcript.ShapeOptions{
+		IncludeThinking:  false,
+		ConversationOnly: true,
+		MaxTextRunes:     0,
+		ToolOnly:         transcript.ToolOnlyOmit,
 	}
-
-	text := transcript.NormalizeConversationOnlyText(msg.Text)
-	if text == "" {
-		return emptyMessage(), false
+	raw := make([]transcript.Message, 0, len(h.messages))
+	for _, msg := range h.messages {
+		raw = append(raw, transcript.Message{
+			UUID:      "",
+			Role:      msg.Role,
+			Timestamp: msg.Timestamp,
+			Text:      msg.Text,
+			Thinking:  "",
+			HasTools:  false,
+			Tools:     nil,
+		})
 	}
-	return transcript.Message{
-		UUID:              "",
-		ParentUUID:        msg.ParentUUID,
-		LogicalParentUUID: msg.LogicalParentUUID,
-		Role:              msg.Role,
-		Visibility:        msg.Visibility,
-		Compaction:        msg.Compaction,
-		Timestamp:         msg.Timestamp,
-		Text:              text,
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
-	}, true
+	turns := transcript.ShapeConversation(raw, shapeOpts)
+	out := make([]transcript.Message, 0, len(turns))
+	for _, turn := range turns {
+		out = append(out, transcript.Message{
+			UUID:      "",
+			Role:      turn.Role,
+			Timestamp: turn.Timestamp,
+			Text:      turn.Text,
+			Thinking:  "",
+			HasTools:  false,
+			Tools:     nil,
+		})
+	}
+	return out
 }
