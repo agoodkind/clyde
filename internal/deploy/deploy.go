@@ -662,7 +662,7 @@ func (executor *executor) runQuietCommand(ctx context.Context, step string, curr
 	executor.logger.event(step+".start", field{Key: "command", Value: current.display()})
 	result := executor.runner.run(ctx, current)
 	if result.success() {
-		executor.logger.event(step+".success", field{Key: "command", Value: current.display()}, field{Key: "output", Value: strings.TrimSpace(result.output)})
+		executor.logger.event(step+".success", field{Key: "command", Value: current.display()})
 		return nil
 	}
 	err := newCommandRunError(step, current, result)
@@ -680,7 +680,7 @@ func (executor *executor) runActionCommand(ctx context.Context, step string, cur
 	result := executor.runner.run(ctx, current)
 	if result.success() {
 		writeCommandOutput(executor.stdout, result.output)
-		executor.logger.event(step+".success", field{Key: "command", Value: current.display()}, field{Key: "output", Value: strings.TrimSpace(result.output)})
+		executor.logger.event(step+".success", field{Key: "command", Value: current.display()})
 		return nil
 	}
 	writeCommandOutput(executor.stderr, result.output)
