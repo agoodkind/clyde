@@ -100,8 +100,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	roots := RenderCobra(NewConversationRegistry(), testFactory(&out))
-	if len(roots) != 2 {
-		t.Fatalf("root commands: got %d, want 2 (conversation and conversations)", len(roots))
+	if len(roots) != 1 {
+		t.Fatalf("root commands: got %d, want 1 (conversation)", len(roots))
 	}
 	parents := map[string]*cobra.Command{}
 	for _, root := range roots {
@@ -112,7 +112,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if conversationParent == nil {
 		t.Fatal("conversation parent missing")
 	}
-	wantConversationChildren := []string{"analyze", "context", "export", "get", "list", "search", "search-cancel", "search-status"}
+	wantConversationChildren := []string{"context", "export", "list", "search", "show"}
 	var gotChildren []string
 	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())
@@ -122,16 +122,21 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 		t.Fatalf("conversation children: got %v, want %v", gotChildren, wantConversationChildren)
 	}
 
-	conversationsParent := parents["conversations"]
-	if conversationsParent == nil {
-		t.Fatal("conversations parent missing")
+	searchParent, _, err := conversationParent.Find([]string{"search"})
+	if err != nil {
+		t.Fatalf("find conversation search: %v", err)
+	}
+	if searchParent == nil {
+		t.Fatal("search parent missing")
 	}
 	gotChildren = nil
-	for _, child := range conversationsParent.Commands() {
+	for _, child := range searchParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())
 	}
-	if strings.Join(gotChildren, ",") != "search" {
-		t.Fatalf("conversations children: got %v, want [search]", gotChildren)
+	sort.Strings(gotChildren)
+	wantSearchChildren := []string{"across", "analyze", "cancel", "status", "within"}
+	if strings.Join(gotChildren, ",") != strings.Join(wantSearchChildren, ",") {
+		t.Fatalf("search children: got %v, want %v", gotChildren, wantSearchChildren)
 	}
 }
 

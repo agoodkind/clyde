@@ -83,8 +83,7 @@ func (searchCancelInput) isClispecInput()        {}
 func (analyzeResultsInput) isClispecInput()      {}
 func (exportInput) isClispecInput()              {}
 
-// conversationGroup is the terminal parent for operations that act on one
-// selected conversation or list conversation metadata.
+// conversationGroup is the terminal parent for conversation operations.
 var conversationGroup = &Group{
 	Use:    "conversation",
 	Short:  "Inspect Claude and Codex conversations",
@@ -92,13 +91,13 @@ var conversationGroup = &Group{
 	Parent: nil,
 }
 
-// conversationsGroup is the terminal parent for corpus-wide conversation
-// operations.
-var conversationsGroup = &Group{
-	Use:    "conversations",
-	Short:  "Search Claude and Codex conversations",
+// searchGroup gathers the conversation-search package commands beneath the
+// conversation parent.
+var searchGroup = &Group{
+	Use:    "search",
+	Short:  "Search conversation text",
 	Long:   "",
-	Parent: nil,
+	Parent: conversationGroup,
 }
 
 var exportFormatValues = []string{
@@ -174,12 +173,12 @@ func listConversationsOp() Operation[listConversationsInput] {
 // getConversationOp prints a conversation transcript as plain text.
 func getConversationOp() Operation[getConversationInput] {
 	return Operation[getConversationInput]{
-		Name:     Name{Canonical: "get_conversation", CLIOverride: "get"},
+		Name:     Name{Canonical: "get_conversation", CLIOverride: "show"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "Get plain text from a conversation.",
+		Short:    "Show plain text from a conversation.",
 		Long:     "Print one conversation transcript as plain text. Resolve the conversation by id, native id, title, or artifact path.",
-		Examples: []string{"clyde conversation get claude:1a2b3c --last-n 20"},
+		Examples: []string{"clyde conversation show claude:1a2b3c --last-n 20"},
 		Args: []Arg[getConversationInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *getConversationInput, v string) { in.ConversationID = v }),
@@ -243,12 +242,12 @@ func getContextOp() Operation[getContextInput] {
 // bounded candidate conversation ids with first-match snippets.
 func searchConversationsOp() Operation[searchConversationsInput] {
 	return Operation[searchConversationsInput]{
-		Name:     Name{Canonical: "conversations_search", CLIOverride: "search"},
-		Group:    conversationsGroup,
+		Name:     Name{Canonical: "conversations_search", CLIOverride: "across"},
+		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Search across conversations for candidate ids.",
 		Long:     "Search transcript text across filtered conversations and return bounded candidate conversation ids with first-match snippets.",
-		Examples: []string{"clyde conversations search \"auth timeout\" --limit 10"},
+		Examples: []string{"clyde conversation search across \"auth timeout\" --limit 10"},
 		Args: []Arg[searchConversationsInput]{
 			PositionalArg("query", "Text query to find in transcript messages.",
 				func(in *searchConversationsInput, v string) { in.Query = v }),
@@ -288,19 +287,19 @@ func searchConversationsOp() Operation[searchConversationsInput] {
 	}
 }
 
-// searchConversationOp starts an async search and returns a result_id. The MCP
-// tool is task-augmentable: a Tasks-capable client that supplies task params
-// runs it to completion and gets the result through tasks/result, while a plain
-// call (CLI or a non-Tasks client) returns the result_id immediately and polls
-// search-status.
+// searchConversationOp starts an async search within one conversation and
+// returns a result_id. The MCP tool is task-augmentable: a Tasks-capable
+// client that supplies task params runs it to completion and gets the result
+// through tasks/result, while a plain call (CLI or a non-Tasks client) returns
+// the result_id immediately and polls search status.
 func searchConversationOp() Operation[searchConversationInput] {
 	return Operation[searchConversationInput]{
-		Name:     Name{Canonical: "search_conversation", CLIOverride: "search"},
-		Group:    conversationGroup,
+		Name:     Name{Canonical: "search_conversation", CLIOverride: "within"},
+		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "Start an async conversation search and return a result_id.",
-		Long:     "Start a search over one conversation and return a result_id immediately; the search runs in the background. Poll search-status with the result_id for progress and the result, then pass the result_id to analyze. A Tasks-capable MCP client can instead run this as a task and receive the result through tasks/result.",
-		Examples: []string{"clyde conversation search claude:1a2b3c \"auth timeout\" --depth normal"},
+		Short:    "Start an async search within one conversation and return a result_id.",
+		Long:     "Start a search over one conversation and return a result_id immediately; the search runs in the background. Poll conversation search status with the result_id for progress and the result, then pass the result_id to conversation search analyze. A Tasks-capable MCP client can instead run this as a task and receive the result through tasks/result.",
+		Examples: []string{"clyde conversation search within claude:1a2b3c \"auth timeout\" --depth normal"},
 		Args: []Arg[searchConversationInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *searchConversationInput, v string) { in.ConversationID = v }),
@@ -335,12 +334,12 @@ func searchConversationOp() Operation[searchConversationInput] {
 // searchStatusOp reports the state, progress, and result of an async search job.
 func searchStatusOp() Operation[searchStatusInput] {
 	return Operation[searchStatusInput]{
-		Name:     Name{Canonical: "search_status", CLIOverride: "search-status"},
-		Group:    conversationGroup,
+		Name:     Name{Canonical: "search_status", CLIOverride: "status"},
+		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Get the status, progress, and result of an async search.",
-		Long:     "Report the state (pending, running, complete, failed, or canceled), the live progress, and, once complete, the matching excerpts for a search started by search.",
-		Examples: []string{"clyde conversation search-status 7f3e2d10"},
+		Long:     "Report the state (pending, running, complete, failed, or canceled), the live progress, and, once complete, the matching excerpts for a search started by conversation search within.",
+		Examples: []string{"clyde conversation search status 7f3e2d10"},
 		Args: []Arg[searchStatusInput]{
 			PositionalArg("result_id", "The result_id returned by search.",
 				func(in *searchStatusInput, v string) { in.ResultID = v }),
@@ -362,12 +361,12 @@ func searchStatusOp() Operation[searchStatusInput] {
 // searchCancelOp cancels a running async search job.
 func searchCancelOp() Operation[searchCancelInput] {
 	return Operation[searchCancelInput]{
-		Name:     Name{Canonical: "search_cancel", CLIOverride: "search-cancel"},
-		Group:    conversationGroup,
+		Name:     Name{Canonical: "search_cancel", CLIOverride: "cancel"},
+		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Cancel a running async search.",
-		Long:     "Cancel a search started by search, freeing the local model, and report the resulting status.",
-		Examples: []string{"clyde conversation search-cancel 7f3e2d10"},
+		Long:     "Cancel a search started by conversation search within, freeing the local model, and report the resulting status.",
+		Examples: []string{"clyde conversation search cancel 7f3e2d10"},
 		Args: []Arg[searchCancelInput]{
 			PositionalArg("result_id", "The result_id returned by search.",
 				func(in *searchCancelInput, v string) { in.ResultID = v }),
@@ -390,11 +389,11 @@ func searchCancelOp() Operation[searchCancelInput] {
 func analyzeResultsOp() Operation[analyzeResultsInput] {
 	return Operation[analyzeResultsInput]{
 		Name:     Name{Canonical: "analyze_results", CLIOverride: "analyze"},
-		Group:    conversationGroup,
+		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Analyze cached results from clyde_search_conversation.",
 		Long:     "Run the analysis model over a cached search result set named by result_id, following the instruction in prompt.",
-		Examples: []string{"clyde conversation analyze 7f3e2d10 \"summarize the decisions made\""},
+		Examples: []string{"clyde conversation search analyze 7f3e2d10 \"summarize the decisions made\""},
 		Params:   nil,
 		Args: []Arg[analyzeResultsInput]{
 			PositionalArg("result_id", "The result_id returned by clyde_search_conversation.",

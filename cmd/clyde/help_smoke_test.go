@@ -15,7 +15,7 @@ func TestRootListsAllTopLevelCommands(t *testing.T) {
 		t.Fatalf("root help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"conversation", "conversations", "daemon", "logs", "mitm", "mcp"} {
+	for _, name := range []string{"conversation", "daemon", "logs", "mitm", "mcp"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("root help missing %q:\n%s", name, out)
 		}
@@ -32,9 +32,24 @@ func TestGroupNameListsSubcommands(t *testing.T) {
 		t.Fatalf("conversation help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"list", "get", "context", "search", "analyze", "export"} {
+	for _, name := range []string{"list", "show", "context", "search", "export"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation help missing subcommand %q:\n%s", name, out)
+		}
+	}
+}
+
+func TestSearchGroupNameListsSubcommands(t *testing.T) {
+	factory, stdout, _ := testFactory()
+	root := newRoot(factory)
+	root.SetArgs([]string{"conversation", "search", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("conversation search help: %v", err)
+	}
+	out := stdout.String()
+	for _, name := range []string{"across", "within", "status", "cancel", "analyze"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("conversation search help missing subcommand %q:\n%s", name, out)
 		}
 	}
 }

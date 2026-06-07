@@ -191,7 +191,7 @@ func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.Sea
 		)
 		return nil, status.Errorf(codes.Internal, "start search: %v", err)
 	}
-	hint := fmt.Sprintf("Search started.\nresult_id: %s\nPoll with: conversation search-status %s", resultID, resultID)
+	hint := fmt.Sprintf("Search started.\nresult_id: %s\nPoll with: conversation search status %s", resultID, resultID)
 	return &clydev1.SearchConversationResponse{Text: response.Text(ctx, hint), ResultId: resultID}, nil
 }
 
