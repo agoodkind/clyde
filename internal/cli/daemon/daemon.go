@@ -32,9 +32,29 @@ var (
 func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "daemon",
+		Short:   "Manage the background daemon",
+		Long:    "Manage the background daemon process and its control-plane commands.",
+		Example: "clyde daemon run",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(newRunCmd(f))
+	cmd.AddCommand(newWorkerCmd(f))
+	cmd.AddCommand(newDeployCmd(f))
+	cmd.AddCommand(newReloadCmd(f))
+	cmd.AddCommand(newStatusCmd(f))
+	cmd.AddCommand(newFingerprintCmd(f))
+	return cmd
+}
+
+func newRunCmd(f *cli.Factory) *cobra.Command {
+	return &cobra.Command{
+		Use:     "run",
 		Short:   "Start the background daemon",
 		Long:    "Start the background daemon process. launchd owns the daemon's lifecycle, so this entry point is normally invoked by the launch agent rather than directly.",
-		Example: "clyde daemon",
+		Example: "clyde daemon run",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slog.Info("cli.daemon.invoked", "concern", "cli.daemon", "component", "cli",
@@ -44,12 +64,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 			return runCommand(log)
 		},
 	}
-	cmd.AddCommand(newWorkerCmd(f))
-	cmd.AddCommand(newDeployCmd(f))
-	cmd.AddCommand(newReloadCmd(f))
-	cmd.AddCommand(newStatusCmd(f))
-	cmd.AddCommand(newSupervisorFingerprintCmd(f))
-	return cmd
 }
 
 func newWorkerCmd(_ *cli.Factory) *cobra.Command {
@@ -116,13 +130,13 @@ func newStatusCmd(f *cli.Factory) *cobra.Command {
 	}
 }
 
-func newSupervisorFingerprintCmd(f *cli.Factory) *cobra.Command {
+func newFingerprintCmd(f *cli.Factory) *cobra.Command {
 	var built bool
 	cmd := &cobra.Command{
-		Use:     "supervisor-fingerprint",
+		Use:     "fingerprint",
 		Short:   "Print the supervisor fingerprint",
 		Long:    "Print the supervisor fingerprint, the build identity the supervisor compares across a reload to decide whether the daemon binary changed.",
-		Example: "clyde daemon supervisor-fingerprint",
+		Example: "clyde daemon fingerprint",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if built {
