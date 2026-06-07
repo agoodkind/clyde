@@ -103,6 +103,47 @@ type rawClaudeSummarizeMetadata struct {
 	Direction          string `json:"direction"`
 }
 
+func emptyRawClaudeBoundaryMetadata() rawClaudeBoundaryMetadata {
+	return rawClaudeBoundaryMetadata{
+		Trigger:                   "",
+		PreTokens:                 0,
+		PostTokens:                0,
+		TokensSaved:               0,
+		MessagesSummarized:        0,
+		ReplacementHistoryCount:   0,
+		UserContext:               "",
+		Direction:                 "",
+		PreCompactDiscoveredTools: nil,
+		PreservedSegment: rawClaudePreservedSegment{
+			HeadUUID:   "",
+			AnchorUUID: "",
+			TailUUID:   "",
+		},
+	}
+}
+
+func emptyRawClaudeMicrocompactMetadata() rawClaudeMicrocompactMetadata {
+	return rawClaudeMicrocompactMetadata{
+		Trigger:                "",
+		PreTokens:              0,
+		PostTokens:             0,
+		TokensSaved:            0,
+		MessagesSummarized:     0,
+		UserContext:            "",
+		Direction:              "",
+		CompactedToolIDs:       nil,
+		ClearedAttachmentUUIDs: nil,
+	}
+}
+
+func emptyRawClaudeSummarizeMetadata() rawClaudeSummarizeMetadata {
+	return rawClaudeSummarizeMetadata{
+		MessagesSummarized: 0,
+		UserContext:        "",
+		Direction:          "",
+	}
+}
+
 type rawClaudePreservedSegment struct {
 	HeadUUID   string `json:"headUuid"`
 	AnchorUUID string `json:"anchorUuid"`
@@ -408,11 +449,11 @@ func parseClaudeBoundaryMetadata(
 	raw json.RawMessage,
 ) (rawClaudeBoundaryMetadata, bool) {
 	if len(raw) == 0 {
-		return rawClaudeBoundaryMetadata{}, false
+		return emptyRawClaudeBoundaryMetadata(), false
 	}
 	var metadata rawClaudeBoundaryMetadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
-		return rawClaudeBoundaryMetadata{}, false
+		return emptyRawClaudeBoundaryMetadata(), false
 	}
 	return metadata, true
 }
@@ -421,11 +462,11 @@ func parseClaudeMicrocompactMetadata(
 	raw json.RawMessage,
 ) (rawClaudeMicrocompactMetadata, bool) {
 	if len(raw) == 0 {
-		return rawClaudeMicrocompactMetadata{}, false
+		return emptyRawClaudeMicrocompactMetadata(), false
 	}
 	var metadata rawClaudeMicrocompactMetadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
-		return rawClaudeMicrocompactMetadata{}, false
+		return emptyRawClaudeMicrocompactMetadata(), false
 	}
 	return metadata, true
 }
@@ -434,11 +475,11 @@ func parseClaudeSummarizeMetadata(
 	raw json.RawMessage,
 ) (rawClaudeSummarizeMetadata, bool) {
 	if len(raw) == 0 {
-		return rawClaudeSummarizeMetadata{}, false
+		return emptyRawClaudeSummarizeMetadata(), false
 	}
 	var metadata rawClaudeSummarizeMetadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
-		return rawClaudeSummarizeMetadata{}, false
+		return emptyRawClaudeSummarizeMetadata(), false
 	}
 	return metadata, true
 }

@@ -7,8 +7,28 @@ import (
 )
 
 type rawCompactedItemType struct {
-	Type string `json:"type"`
+	Type compactedResponseItemType `json:"type"`
 }
+
+type compactedResponseItemType string
+
+const (
+	compactedResponseItemTypeMessage              compactedResponseItemType = "message"
+	compactedResponseItemTypeReasoning            compactedResponseItemType = "reasoning"
+	compactedResponseItemTypeLocalShellCall       compactedResponseItemType = "local_shell_call"
+	compactedResponseItemTypeFunctionCall         compactedResponseItemType = "function_call"
+	compactedResponseItemTypeToolSearchCall       compactedResponseItemType = "tool_search_call"
+	compactedResponseItemTypeFunctionCallOutput   compactedResponseItemType = "function_call_output"
+	compactedResponseItemTypeCustomToolCall       compactedResponseItemType = "custom_tool_call"
+	compactedResponseItemTypeCustomToolCallOutput compactedResponseItemType = "custom_tool_call_output"
+	compactedResponseItemTypeToolSearchOutput     compactedResponseItemType = "tool_search_output"
+	compactedResponseItemTypeWebSearchCall        compactedResponseItemType = "web_search_call"
+	compactedResponseItemTypeImageGenerationCall  compactedResponseItemType = "image_generation_call"
+	compactedResponseItemTypeCompaction           compactedResponseItemType = "compaction"
+	compactedResponseItemTypeCompactionSummary    compactedResponseItemType = "compaction_summary"
+	compactedResponseItemTypeCompactionTrigger    compactedResponseItemType = "compaction_trigger"
+	compactedResponseItemTypeContextCompaction    compactedResponseItemType = "context_compaction"
+)
 
 type rawCompactedMessageItem struct {
 	Type    string          `json:"type"`
@@ -136,36 +156,37 @@ func normalizeCompactedContextItem(
 		return otherCompactedContextItem("", rawItem)
 	}
 	switch itemType.Type {
-	case "message":
+	case compactedResponseItemTypeMessage:
 		return normalizeCompactedMessageItem(rawItem)
-	case "reasoning":
+	case compactedResponseItemTypeReasoning:
 		return normalizeCompactedReasoningItem(rawItem)
-	case "local_shell_call":
+	case compactedResponseItemTypeLocalShellCall:
 		return normalizeCompactedLocalShellCallItem(rawItem)
-	case "function_call":
+	case compactedResponseItemTypeFunctionCall:
 		return normalizeCompactedFunctionCallItem(rawItem)
-	case "tool_search_call":
+	case compactedResponseItemTypeToolSearchCall:
 		return normalizeCompactedToolSearchCallItem(rawItem)
-	case "function_call_output":
+	case compactedResponseItemTypeFunctionCallOutput:
 		return normalizeCompactedFunctionCallOutputItem(rawItem)
-	case "custom_tool_call":
+	case compactedResponseItemTypeCustomToolCall:
 		return normalizeCompactedCustomToolCallItem(rawItem)
-	case "custom_tool_call_output":
+	case compactedResponseItemTypeCustomToolCallOutput:
 		return normalizeCompactedCustomToolCallOutputItem(rawItem)
-	case "tool_search_output":
+	case compactedResponseItemTypeToolSearchOutput:
 		return normalizeCompactedToolSearchOutputItem(rawItem)
-	case "web_search_call":
+	case compactedResponseItemTypeWebSearchCall:
 		return normalizeCompactedWebSearchCallItem(rawItem)
-	case "image_generation_call":
+	case compactedResponseItemTypeImageGenerationCall:
 		return normalizeCompactedImageGenerationCallItem(rawItem)
-	case "compaction", "compaction_summary":
+	case compactedResponseItemTypeCompaction,
+		compactedResponseItemTypeCompactionSummary:
 		return normalizeCompactedCompactionItem(rawItem)
-	case "compaction_trigger":
+	case compactedResponseItemTypeCompactionTrigger:
 		return normalizeCompactedCompactionTriggerItem(rawItem)
-	case "context_compaction":
+	case compactedResponseItemTypeContextCompaction:
 		return normalizeCompactedContextCompactionItem(rawItem)
 	default:
-		return otherCompactedContextItem(itemType.Type, rawItem)
+		return otherCompactedContextItem(string(itemType.Type), rawItem)
 	}
 }
 
@@ -184,10 +205,11 @@ func normalizeCompactedMessageItem(
 		MessageClass: transcript.CompactedMessageClassOrdinary,
 		Raw:          cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:    transcript.CompactedContextItemKindMessage,
-		Message: &messageItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindMessage,
+	)
+	contextItem.Message = &messageItem
+	return contextItem
 }
 
 func normalizeCompactedMessageContentItems(
@@ -238,10 +260,11 @@ func normalizeCompactedReasoningItem(
 		EncryptedContent: item.EncryptedContent,
 		Raw:              cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:      transcript.CompactedContextItemKindReasoning,
-		Reasoning: &reasoningItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindReasoning,
+	)
+	contextItem.Reasoning = &reasoningItem
+	return contextItem
 }
 
 func normalizeCompactedReasoningSummaries(
@@ -287,10 +310,11 @@ func normalizeCompactedLocalShellCallItem(
 		ActionRaw: cloneRawMessage(item.Action),
 		Raw:       cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:           transcript.CompactedContextItemKindLocalShellCall,
-		LocalShellCall: &shellItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindLocalShellCall,
+	)
+	contextItem.LocalShellCall = &shellItem
+	return contextItem
 }
 
 func normalizeCompactedFunctionCallItem(
@@ -307,10 +331,11 @@ func normalizeCompactedFunctionCallItem(
 		CallID:    item.CallID,
 		Raw:       cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:         transcript.CompactedContextItemKindFunctionCall,
-		FunctionCall: &functionItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindFunctionCall,
+	)
+	contextItem.FunctionCall = &functionItem
+	return contextItem
 }
 
 func normalizeCompactedToolSearchCallItem(
@@ -327,10 +352,11 @@ func normalizeCompactedToolSearchCallItem(
 		ArgumentsRaw: cloneRawMessage(item.Arguments),
 		Raw:          cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:           transcript.CompactedContextItemKindToolSearchCall,
-		ToolSearchCall: &toolSearchItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindToolSearchCall,
+	)
+	contextItem.ToolSearchCall = &toolSearchItem
+	return contextItem
 }
 
 func normalizeCompactedFunctionCallOutputItem(
@@ -345,10 +371,11 @@ func normalizeCompactedFunctionCallOutputItem(
 		OutputRaw: cloneRawMessage(item.Output),
 		Raw:       cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:               transcript.CompactedContextItemKindFunctionCallOutput,
-		FunctionCallOutput: &outputItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindFunctionCallOutput,
+	)
+	contextItem.FunctionCallOutput = &outputItem
+	return contextItem
 }
 
 func normalizeCompactedCustomToolCallItem(
@@ -365,10 +392,11 @@ func normalizeCompactedCustomToolCallItem(
 		Status: item.Status,
 		Raw:    cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:           transcript.CompactedContextItemKindCustomToolCall,
-		CustomToolCall: &customItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindCustomToolCall,
+	)
+	contextItem.CustomToolCall = &customItem
+	return contextItem
 }
 
 func normalizeCompactedCustomToolCallOutputItem(
@@ -384,10 +412,11 @@ func normalizeCompactedCustomToolCallOutputItem(
 		OutputRaw: cloneRawMessage(item.Output),
 		Raw:       cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:                 transcript.CompactedContextItemKindCustomToolCallOutput,
-		CustomToolCallOutput: &customOutputItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindCustomToolCallOutput,
+	)
+	contextItem.CustomToolCallOutput = &customOutputItem
+	return contextItem
 }
 
 func normalizeCompactedToolSearchOutputItem(
@@ -408,10 +437,11 @@ func normalizeCompactedToolSearchOutputItem(
 		ToolsRaw:  tools,
 		Raw:       cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:             transcript.CompactedContextItemKindToolSearchOutput,
-		ToolSearchOutput: &outputItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindToolSearchOutput,
+	)
+	contextItem.ToolSearchOutput = &outputItem
+	return contextItem
 }
 
 func normalizeCompactedWebSearchCallItem(
@@ -427,10 +457,11 @@ func normalizeCompactedWebSearchCallItem(
 		ActionRaw: cloneRawMessage(item.Action),
 		Raw:       cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:          transcript.CompactedContextItemKindWebSearchCall,
-		WebSearchCall: &webSearchItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindWebSearchCall,
+	)
+	contextItem.WebSearchCall = &webSearchItem
+	return contextItem
 }
 
 func normalizeCompactedImageGenerationCallItem(
@@ -447,10 +478,11 @@ func normalizeCompactedImageGenerationCallItem(
 		Result:        item.Result,
 		Raw:           cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:                transcript.CompactedContextItemKindImageGenerationCall,
-		ImageGenerationCall: &imageItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindImageGenerationCall,
+	)
+	contextItem.ImageGenerationCall = &imageItem
+	return contextItem
 }
 
 func normalizeCompactedCompactionItem(
@@ -464,10 +496,11 @@ func normalizeCompactedCompactionItem(
 		EncryptedContent: item.EncryptedContent,
 		Raw:              cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:       transcript.CompactedContextItemKindCompaction,
-		Compaction: &compactionItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindCompaction,
+	)
+	contextItem.Compaction = &compactionItem
+	return contextItem
 }
 
 func normalizeCompactedCompactionTriggerItem(
@@ -476,10 +509,11 @@ func normalizeCompactedCompactionTriggerItem(
 	triggerItem := transcript.CompactedCompactionTriggerItem{
 		Raw: cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:              transcript.CompactedContextItemKindCompactionTrigger,
-		CompactionTrigger: &triggerItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindCompactionTrigger,
+	)
+	contextItem.CompactionTrigger = &triggerItem
+	return contextItem
 }
 
 func normalizeCompactedContextCompactionItem(
@@ -493,10 +527,11 @@ func normalizeCompactedContextCompactionItem(
 		EncryptedContent: item.EncryptedContent,
 		Raw:              cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:              transcript.CompactedContextItemKindContextCompaction,
-		ContextCompaction: &contextItem,
-	}
+	compactedItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindContextCompaction,
+	)
+	compactedItem.ContextCompaction = &contextItem
+	return compactedItem
 }
 
 func otherCompactedContextItem(
@@ -507,10 +542,11 @@ func otherCompactedContextItem(
 		Type: itemType,
 		Raw:  cloneRawMessage(rawItem),
 	}
-	return transcript.CompactedContextItem{
-		Kind:  transcript.CompactedContextItemKindOther,
-		Other: &otherItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindOther,
+	)
+	contextItem.Other = &otherItem
+	return contextItem
 }
 
 func legacyCompactedSummaryContextItem(
@@ -525,10 +561,11 @@ func legacyCompactedSummaryContextItem(
 		MessageClass: transcript.CompactedMessageClassSummary,
 		Raw:          cloneRawMessage(messageRaw),
 	}
-	return transcript.CompactedContextItem{
-		Kind:    transcript.CompactedContextItemKindMessage,
-		Message: &messageItem,
-	}
+	contextItem := emptyCompactedContextItem(
+		transcript.CompactedContextItemKindMessage,
+	)
+	contextItem.Message = &messageItem
+	return contextItem
 }
 
 func legacyCompactedSummaryContentItem(
@@ -578,4 +615,27 @@ func firstNonEmpty(a string, b string) string {
 		return a
 	}
 	return b
+}
+
+func emptyCompactedContextItem(
+	kind transcript.CompactedContextItemKind,
+) transcript.CompactedContextItem {
+	return transcript.CompactedContextItem{
+		Kind:                 kind,
+		Message:              nil,
+		Reasoning:            nil,
+		LocalShellCall:       nil,
+		FunctionCall:         nil,
+		ToolSearchCall:       nil,
+		FunctionCallOutput:   nil,
+		CustomToolCall:       nil,
+		CustomToolCallOutput: nil,
+		ToolSearchOutput:     nil,
+		WebSearchCall:        nil,
+		ImageGenerationCall:  nil,
+		Compaction:           nil,
+		CompactionTrigger:    nil,
+		ContextCompaction:    nil,
+		Other:                nil,
+	}
 }
