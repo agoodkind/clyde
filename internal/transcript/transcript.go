@@ -9,13 +9,67 @@ import (
 // the provider parsers produce and the renderers consume; the transcript package
 // owns the model and the rendering, not any provider's parsing.
 type Message struct {
-	UUID      string     // entry UUID (for linking to tool results)
-	Role      string     // "user" or "assistant"
-	Timestamp time.Time  // when this entry was created
-	Text      string     // concatenated text blocks (no tool calls, no thinking)
-	Thinking  string     // thinking block text (for HTML export)
-	HasTools  bool       // true if assistant message contained tool_use blocks
-	Tools     []ToolCall // parsed tool calls with inputs
+	UUID              string              // entry UUID (for linking to tool results)
+	ParentUUID        string              // direct provider parent entry UUID when present
+	LogicalParentUUID string              // provider logical parent UUID when present
+	Role              string              // "user", "assistant", or provider-internal "system"
+	Visibility        MessageVisibility   // provider visibility hint for this entry
+	Compaction        *CompactionMetadata // typed compaction-boundary metadata when present
+	Timestamp         time.Time           // when this entry was created
+	Text              string              // concatenated text blocks (no tool calls, no thinking)
+	Thinking          string              // thinking block text (for HTML export)
+	HasTools          bool                // true if assistant message contained tool_use blocks
+	Tools             []ToolCall          // parsed tool calls with inputs
+}
+
+// MessageVisibility is part of Clyde's typed adapter surface.
+type MessageVisibility string
+
+const (
+	// MessageVisibilityVisible marks entries that are part of the visible chat.
+	MessageVisibilityVisible MessageVisibility = "visible"
+	// MessageVisibilityTranscriptOnly marks entries that appear only in transcript views.
+	MessageVisibilityTranscriptOnly MessageVisibility = "transcript_only"
+	// MessageVisibilityMetaOnly marks entries that are metadata-only control records.
+	MessageVisibilityMetaOnly MessageVisibility = "meta_only"
+)
+
+// CompactionKind is part of Clyde's typed adapter surface.
+type CompactionKind string
+
+const (
+	// CompactionKindSummary marks a user-visible compact summary.
+	CompactionKindSummary CompactionKind = "summary"
+	// CompactionKindBoundary marks a provider compaction boundary.
+	CompactionKindBoundary CompactionKind = "boundary"
+	// CompactionKindMicroboundary marks a provider micro-compaction boundary.
+	CompactionKindMicroboundary CompactionKind = "microboundary"
+)
+
+// CompactionTrigger is part of Clyde's typed adapter surface.
+type CompactionTrigger string
+
+const (
+	// CompactionTriggerManual marks a manually-triggered compaction.
+	CompactionTriggerManual CompactionTrigger = "manual"
+	// CompactionTriggerAuto marks an automatically-triggered compaction.
+	CompactionTriggerAuto CompactionTrigger = "auto"
+	// CompactionTriggerUnknown marks a compaction whose trigger is not known.
+	CompactionTriggerUnknown CompactionTrigger = "unknown"
+)
+
+// CompactionMetadata is part of Clyde's typed adapter surface.
+type CompactionMetadata struct {
+	Kind                    CompactionKind
+	Trigger                 CompactionTrigger
+	PreTokens               int
+	PostTokens              int
+	TokensSaved             int
+	MessagesSummarized      int
+	ReplacementHistoryCount int
+	HeadUUID                string
+	AnchorUUID              string
+	TailUUID                string
 }
 
 // ToolInputJSON keeps a tool_use.input payload opaque at the model boundary.
@@ -70,4 +124,16 @@ func (m *Message) ToolNames() []string {
 		names[i] = t.Name
 	}
 	return names
+}
+
+// CompactionMessages returns only messages that carry typed compaction metadata.
+func CompactionMessages(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Compaction == nil {
+			continue
+		}
+		out = append(out, message)
+	}
+	return out
 }

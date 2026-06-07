@@ -78,13 +78,17 @@ func emptyRecord() conversation.Record {
 // out so exhaustruct sees every field set.
 func emptyMessage() transcript.Message {
 	return transcript.Message{
-		UUID:      "",
-		Role:      "",
-		Timestamp: time.Time{},
-		Text:      "",
-		Thinking:  "",
-		HasTools:  false,
-		Tools:     nil,
+		UUID:              "",
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Role:              "",
+		Visibility:        "",
+		Compaction:        nil,
+		Timestamp:         time.Time{},
+		Text:              "",
+		Thinking:          "",
+		HasTools:          false,
+		Tools:             nil,
 	}
 }
 
@@ -202,17 +206,17 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 }
 
 // Stream yields the rollout's conversation messages one at a time. Codex history
-// is shaped from the full rollout, so this reads the whole file once and then
-// emits each shaped message; a caller reading a window can still stop the range
-// early after the messages it needs.
-func (p *Parser) Stream(path string, _ conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+// still reads the whole rollout once, but the shared transcript messages now
+// carry direct per-message metadata and only filter system boundaries when the
+// caller leaves IncludeSystemMessages false.
+func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
-		history, err := readCodexHistory(path)
+		history, err := readCodexHistory(path, opts.IncludeSystemMessages)
 		if err != nil {
 			yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
 			return
 		}
-		for _, message := range history.conversationMessages() {
+		for _, message := range history {
 			if !yield(message, nil) {
 				return
 			}

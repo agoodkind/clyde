@@ -77,3 +77,49 @@ func TestRenderJSONUsesShapedConversation(t *testing.T) {
 		t.Fatalf("unexpected json export: %+v", out)
 	}
 }
+
+func TestCompactionMessagesReturnsOnlyCompactionMessages(t *testing.T) {
+	t.Parallel()
+	messages := []Message{
+		{
+			UUID:              "user-1",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "user",
+			Visibility:        MessageVisibilityVisible,
+			Compaction:        nil,
+			Text:              "plain message",
+		},
+		{
+			UUID:              "system-1",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "system",
+			Visibility:        MessageVisibilityVisible,
+			Compaction: &CompactionMetadata{
+				Kind:                    CompactionKindBoundary,
+				Trigger:                 CompactionTriggerManual,
+				PreTokens:               100,
+				PostTokens:              25,
+				TokensSaved:             75,
+				MessagesSummarized:      0,
+				ReplacementHistoryCount: 3,
+				HeadUUID:                "head",
+				AnchorUUID:              "anchor",
+				TailUUID:                "tail",
+			},
+			Text: "Conversation compacted",
+		},
+	}
+
+	compactionMessages := CompactionMessages(messages)
+	if len(compactionMessages) != 1 {
+		t.Fatalf("compaction messages len = %d, want 1", len(compactionMessages))
+	}
+	if compactionMessages[0].UUID != "system-1" {
+		t.Fatalf("compaction message uuid = %q, want system-1", compactionMessages[0].UUID)
+	}
+	if compactionMessages[0].Compaction == nil || compactionMessages[0].Compaction.Kind != CompactionKindBoundary {
+		t.Fatalf("compaction message = %#v", compactionMessages[0].Compaction)
+	}
+}
