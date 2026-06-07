@@ -47,15 +47,34 @@ func TestRootRegistersConversationCommands(t *testing.T) {
 	root := newRoot(factory)
 	expected := [][]string{
 		{"conversation", "list"},
-		{"conversation", "get"},
+		{"conversation", "show"},
 		{"conversation", "context"},
-		{"conversation", "search"},
-		{"conversation", "analyze"},
+		{"conversation", "search", "across"},
+		{"conversation", "search", "within"},
+		{"conversation", "search", "status"},
+		{"conversation", "search", "cancel"},
+		{"conversation", "search", "analyze"},
 		{"conversation", "export"},
 	}
 	for _, path := range expected {
 		if _, _, err := root.Find(path); err != nil {
 			t.Fatalf("conversation command %v not registered: %v", path, err)
+		}
+	}
+}
+
+func TestRootRegistersOperationalPackages(t *testing.T) {
+	factory, _, _ := testFactory()
+	root := newRoot(factory)
+	expected := [][]string{
+		{"daemon", "run"},
+		{"daemon", "fingerprint"},
+		{"mcp", "serve"},
+		{"mitm", "baseline", "seed"},
+	}
+	for _, path := range expected {
+		if _, _, err := root.Find(path); err != nil {
+			t.Fatalf("operational command %v not registered: %v", path, err)
 		}
 	}
 }
