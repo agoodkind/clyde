@@ -14,7 +14,7 @@ func TestSeedBaselineCommandRequiresUpstream(t *testing.T) {
 	out := &bytes.Buffer{}
 	factory := &cli.Factory{IOStreams: &cli.IOStreams{Out: out, Err: &bytes.Buffer{}, In: &bytes.Buffer{}}}
 
-	cmd := seedBaselineCommand(factory)
+	cmd := newBaselineSeedCmd(factory)
 	cmd.SetArgs([]string{"--from", "/does/not/matter.jsonl"})
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true

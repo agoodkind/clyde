@@ -25,11 +25,11 @@ func SeedBaseline(ctx context.Context, from, upstream, output string, includeUA,
 	empty := SeedBaselineResult{Written: "", Upstream: "", Flavors: 0}
 	upstream = strings.TrimSpace(upstream)
 	if upstream == "" {
-		return empty, errors.New("seed-baseline: upstream is required")
+		return empty, errors.New("baseline seed: upstream is required")
 	}
 	from = strings.TrimSpace(from)
 	if from == "" {
-		return empty, errors.New("seed-baseline: from is required")
+		return empty, errors.New("baseline seed: from is required")
 	}
 
 	outputPath := resolveSeedOutputPath(upstream, output)
@@ -50,19 +50,19 @@ func SeedBaseline(ctx context.Context, from, upstream, output string, includeUA,
 	if err != nil {
 		slog.WarnContext(ctx, "mitm.seed_baseline.extract_failed", "concern", "providers.mitm.lifecycle", "component", "daemon",
 			"upstream", upstream, "from", from, "err", err)
-		return empty, fmt.Errorf("seed-baseline: extract v2 snapshot from %s: %w", from, err)
+		return empty, fmt.Errorf("baseline seed: extract v2 snapshot from %s: %w", from, err)
 	}
 
 	written, err := WriteSnapshotV2TOML(snap, outputDir)
 	if err != nil {
 		slog.WarnContext(ctx, "mitm.seed_baseline.write_failed", "concern", "providers.mitm.lifecycle", "component", "daemon",
 			"upstream", upstream, "dir", outputDir, "err", err)
-		return empty, fmt.Errorf("seed-baseline: write baseline for upstream %q: %w", upstream, err)
+		return empty, fmt.Errorf("baseline seed: write baseline for upstream %q: %w", upstream, err)
 	}
 	if written != outputPath {
 		slog.WarnContext(ctx, "mitm.seed_baseline.path_mismatch", "concern", "providers.mitm.lifecycle", "component", "daemon",
 			"upstream", upstream, "written", written, "expected", outputPath)
-		return empty, fmt.Errorf("seed-baseline: wrote %s but expected %s", written, outputPath)
+		return empty, fmt.Errorf("baseline seed: wrote %s but expected %s", written, outputPath)
 	}
 
 	return SeedBaselineResult{Written: written, Upstream: snap.Upstream.Name, Flavors: len(snap.Flavors)}, nil

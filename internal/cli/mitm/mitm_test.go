@@ -29,6 +29,20 @@ func TestNewCmdRegistersMitmParent(t *testing.T) {
 	if trustCmd == nil || trustCmd.Name() != "trust" {
 		t.Fatalf("trust subcommand missing; got %v", trustCmd)
 	}
+	baselineCmd, _, err := cmd.Find([]string{"baseline"})
+	if err != nil {
+		t.Fatalf("find baseline: %v", err)
+	}
+	if baselineCmd == nil || baselineCmd.Name() != "baseline" {
+		t.Fatalf("baseline subcommand missing; got %v", baselineCmd)
+	}
+	seedCmd, _, err := cmd.Find([]string{"baseline", "seed"})
+	if err != nil {
+		t.Fatalf("find baseline seed: %v", err)
+	}
+	if seedCmd == nil || seedCmd.Name() != "seed" {
+		t.Fatalf("baseline seed subcommand missing; got %v", seedCmd)
+	}
 }
 
 func testFactory() *cli.Factory {

@@ -14,7 +14,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 	}
 	cmd.AddCommand(newStatusCmd(f))
 	cmd.AddCommand(newShowCmd(f))
+	cmd.AddCommand(newBaselineCmd(f))
 	cmd.AddCommand(newTrustCmd(f))
-	cmd.AddCommand(seedBaselineCommand(f))
 	return cmd
 }

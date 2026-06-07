@@ -57,7 +57,7 @@ Clyde captures and replays the last-seen value best-effort. A replayed attestati
 The baseline is normally learned automatically. This escape hatch seeds it from a JSONL file of captured wire records you already have.
 
 ```
-clyde mitm seed-baseline --upstream claude-code --from <captured-wire.jsonl>
+clyde mitm baseline seed --upstream claude-code --from <captured-wire.jsonl>
 ```
 
 `--from` is a JSONL file of captured MITM wire records, the same `http_request` / `ws_*` records the auto-learn loop reads (for example the drift writer's `<captureRoot>/drift/<upstream>.jsonl`). The command reads that file, runs the extractor over it, and writes `reference-v2.toml` under the default baseline root for the upstream (`<XDG_STATE_HOME>/clyde/mitm-baselines/<upstream>/reference-v2.toml`). The provider filter is derived from the upstream name. Pass `--output` to write elsewhere (the file must be named `reference-v2.toml`), and `--include-ua` / `--exclude-ua` to scope which captured caller flavor seeds the baseline (for example `--include-ua claude-cli` to keep only the upstream CLI and drop other clients sharing the proxy).
