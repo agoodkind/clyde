@@ -50,154 +50,154 @@ const (
 
 // CompactedContextItem is the shared typed union for provider compaction items.
 type CompactedContextItem struct {
-	Kind                 CompactedContextItemKind
-	Message              *CompactedMessageItem
-	Reasoning            *CompactedReasoningItem
-	LocalShellCall       *CompactedLocalShellCallItem
-	FunctionCall         *CompactedFunctionCallItem
-	ToolSearchCall       *CompactedToolSearchCallItem
-	FunctionCallOutput   *CompactedFunctionCallOutputItem
-	CustomToolCall       *CompactedCustomToolCallItem
-	CustomToolCallOutput *CompactedCustomToolCallOutputItem
-	ToolSearchOutput     *CompactedToolSearchOutputItem
-	WebSearchCall        *CompactedWebSearchCallItem
-	ImageGenerationCall  *CompactedImageGenerationCallItem
-	Compaction           *CompactedCompactionItem
-	CompactionTrigger    *CompactedCompactionTriggerItem
-	ContextCompaction    *CompactedContextCompactionItem
-	Other                *CompactedOtherItem
+	Kind                 CompactedContextItemKind           `json:"kind"`
+	Message              *CompactedMessageItem              `json:"message,omitempty"`
+	Reasoning            *CompactedReasoningItem            `json:"reasoning,omitempty"`
+	LocalShellCall       *CompactedLocalShellCallItem       `json:"local_shell_call,omitempty"`
+	FunctionCall         *CompactedFunctionCallItem         `json:"function_call,omitempty"`
+	ToolSearchCall       *CompactedToolSearchCallItem       `json:"tool_search_call,omitempty"`
+	FunctionCallOutput   *CompactedFunctionCallOutputItem   `json:"function_call_output,omitempty"`
+	CustomToolCall       *CompactedCustomToolCallItem       `json:"custom_tool_call,omitempty"`
+	CustomToolCallOutput *CompactedCustomToolCallOutputItem `json:"custom_tool_call_output,omitempty"`
+	ToolSearchOutput     *CompactedToolSearchOutputItem     `json:"tool_search_output,omitempty"`
+	WebSearchCall        *CompactedWebSearchCallItem        `json:"web_search_call,omitempty"`
+	ImageGenerationCall  *CompactedImageGenerationCallItem  `json:"image_generation_call,omitempty"`
+	Compaction           *CompactedCompactionItem           `json:"compaction,omitempty"`
+	CompactionTrigger    *CompactedCompactionTriggerItem    `json:"compaction_trigger,omitempty"`
+	ContextCompaction    *CompactedContextCompactionItem    `json:"context_compaction,omitempty"`
+	Other                *CompactedOtherItem                `json:"other,omitempty"`
 }
 
 // CompactedMessageItem preserves a compacted message item.
 type CompactedMessageItem struct {
-	Role         string
-	Phase        string
-	Content      []CompactedMessageContentItem
-	ContentRaw   json.RawMessage
-	MessageClass CompactedMessageClass
-	Raw          json.RawMessage
+	Role         string                        `json:"role"`
+	Phase        string                        `json:"phase"`
+	Content      []CompactedMessageContentItem `json:"content,omitempty"`
+	ContentRaw   json.RawMessage               `json:"content_raw,omitempty"`
+	MessageClass CompactedMessageClass         `json:"message_class"`
+	Raw          json.RawMessage               `json:"raw,omitempty"`
 }
 
 // CompactedMessageContentItem preserves one compacted message-content item.
 type CompactedMessageContentItem struct {
-	Type     string
-	Text     string
-	ImageURL string
-	Detail   string
-	Raw      json.RawMessage
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	ImageURL string          `json:"image_url"`
+	Detail   string          `json:"detail"`
+	Raw      json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedReasoningItem preserves a compacted reasoning item.
 type CompactedReasoningItem struct {
-	Summary          []CompactedReasoningSummary
-	SummaryRaw       json.RawMessage
-	ContentRaw       json.RawMessage
-	EncryptedContent string
-	Raw              json.RawMessage
+	Summary          []CompactedReasoningSummary `json:"summary,omitempty"`
+	SummaryRaw       json.RawMessage             `json:"summary_raw,omitempty"`
+	ContentRaw       json.RawMessage             `json:"content_raw,omitempty"`
+	EncryptedContent string                      `json:"encrypted_content"`
+	Raw              json.RawMessage             `json:"raw,omitempty"`
 }
 
 // CompactedReasoningSummary preserves one reasoning-summary block.
 type CompactedReasoningSummary struct {
-	Type string
-	Text string
-	Raw  json.RawMessage
+	Type string          `json:"type"`
+	Text string          `json:"text"`
+	Raw  json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedLocalShellCallItem preserves a compacted shell-call item.
 type CompactedLocalShellCallItem struct {
-	CallID    string
-	Status    string
-	ActionRaw json.RawMessage
-	Raw       json.RawMessage
+	CallID    string          `json:"call_id"`
+	Status    string          `json:"status"`
+	ActionRaw json.RawMessage `json:"action_raw,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedFunctionCallItem preserves a compacted function-call item.
 type CompactedFunctionCallItem struct {
-	Name      string
-	Namespace string
-	Arguments string
-	CallID    string
-	Raw       json.RawMessage
+	Name      string          `json:"name"`
+	Namespace string          `json:"namespace"`
+	Arguments string          `json:"arguments"`
+	CallID    string          `json:"call_id"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedToolSearchCallItem preserves a compacted tool-search call item.
 type CompactedToolSearchCallItem struct {
-	CallID       string
-	Status       string
-	Execution    string
-	ArgumentsRaw json.RawMessage
-	Raw          json.RawMessage
+	CallID       string          `json:"call_id"`
+	Status       string          `json:"status"`
+	Execution    string          `json:"execution"`
+	ArgumentsRaw json.RawMessage `json:"arguments_raw,omitempty"`
+	Raw          json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedFunctionCallOutputItem preserves a compacted function-call output item.
 type CompactedFunctionCallOutputItem struct {
-	CallID    string
-	OutputRaw json.RawMessage
-	Raw       json.RawMessage
+	CallID    string          `json:"call_id"`
+	OutputRaw json.RawMessage `json:"output_raw,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedCustomToolCallItem preserves a compacted custom-tool call item.
 type CompactedCustomToolCallItem struct {
-	CallID string
-	Name   string
-	Input  string
-	Status string
-	Raw    json.RawMessage
+	CallID string          `json:"call_id"`
+	Name   string          `json:"name"`
+	Input  string          `json:"input"`
+	Status string          `json:"status"`
+	Raw    json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedCustomToolCallOutputItem preserves a compacted custom-tool output item.
 type CompactedCustomToolCallOutputItem struct {
-	CallID    string
-	Name      string
-	OutputRaw json.RawMessage
-	Raw       json.RawMessage
+	CallID    string          `json:"call_id"`
+	Name      string          `json:"name"`
+	OutputRaw json.RawMessage `json:"output_raw,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedToolSearchOutputItem preserves a compacted tool-search output item.
 type CompactedToolSearchOutputItem struct {
-	CallID    string
-	Status    string
-	Execution string
-	ToolsRaw  []json.RawMessage
-	Raw       json.RawMessage
+	CallID    string            `json:"call_id"`
+	Status    string            `json:"status"`
+	Execution string            `json:"execution"`
+	ToolsRaw  []json.RawMessage `json:"tools_raw,omitempty"`
+	Raw       json.RawMessage   `json:"raw,omitempty"`
 }
 
 // CompactedWebSearchCallItem preserves a compacted web-search call item.
 type CompactedWebSearchCallItem struct {
-	ID        string
-	Status    string
-	ActionRaw json.RawMessage
-	Raw       json.RawMessage
+	ID        string          `json:"id"`
+	Status    string          `json:"status"`
+	ActionRaw json.RawMessage `json:"action_raw,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedImageGenerationCallItem preserves a compacted image-generation call item.
 type CompactedImageGenerationCallItem struct {
-	ID            string
-	Status        string
-	RevisedPrompt string
-	Result        string
-	Raw           json.RawMessage
+	ID            string          `json:"id"`
+	Status        string          `json:"status"`
+	RevisedPrompt string          `json:"revised_prompt"`
+	Result        string          `json:"result"`
+	Raw           json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedCompactionItem preserves a compacted nested compaction item.
 type CompactedCompactionItem struct {
-	EncryptedContent string
-	Raw              json.RawMessage
+	EncryptedContent string          `json:"encrypted_content"`
+	Raw              json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedCompactionTriggerItem preserves a compacted compaction-trigger item.
 type CompactedCompactionTriggerItem struct {
-	Raw json.RawMessage
+	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedContextCompactionItem preserves a compacted context-compaction item.
 type CompactedContextCompactionItem struct {
-	EncryptedContent string
-	Raw              json.RawMessage
+	EncryptedContent string          `json:"encrypted_content"`
+	Raw              json.RawMessage `json:"raw,omitempty"`
 }
 
 // CompactedOtherItem preserves any unknown compacted item type.
 type CompactedOtherItem struct {
-	Type string
-	Raw  json.RawMessage
+	Type string          `json:"type"`
+	Raw  json.RawMessage `json:"raw,omitempty"`
 }

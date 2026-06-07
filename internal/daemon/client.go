@@ -428,6 +428,7 @@ func ExportTranscript(ctx context.Context, conversationID string, options conver
 		Whitespace:             string(options.Whitespace),
 		HistoryStart:           int64(options.HistoryStart),
 		IncludeSystemPrompts:   options.IncludeSystemPrompts,
+		IncludeSystemMessages:  options.IncludeSystemMessages,
 		IncludeToolOutputs:     options.IncludeToolOutputs,
 		IncludeRawJsonMetadata: options.IncludeRawJSONMetadata,
 		IncludeThinking:        options.IncludeThinking,

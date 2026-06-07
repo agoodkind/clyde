@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 	"strings"
 	"testing"
@@ -21,16 +22,25 @@ func optionAwareStream(opts LoadOptions) []transcript.Message {
 			Role:              "system",
 			Visibility:        transcript.MessageVisibilityVisible,
 			Compaction: &transcript.CompactionMetadata{
-				Kind:                    transcript.CompactionKindBoundary,
-				Trigger:                 transcript.CompactionTriggerManual,
-				PreTokens:               10,
-				PostTokens:              5,
-				TokensSaved:             5,
-				MessagesSummarized:      0,
-				ReplacementHistoryCount: 1,
-				HeadUUID:                "",
-				AnchorUUID:              "",
-				TailUUID:                "",
+				Kind:                      transcript.CompactionKindBoundary,
+				Trigger:                   transcript.CompactionTriggerManual,
+				PreTokens:                 10,
+				PostTokens:                5,
+				TokensSaved:               5,
+				MessagesSummarized:        0,
+				ReplacementHistoryCount:   1,
+				HeadUUID:                  "",
+				AnchorUUID:                "",
+				TailUUID:                  "",
+				ContextItems:              nil,
+				UserContext:               "",
+				Direction:                 "",
+				PreCompactDiscoveredTools: nil,
+				CompactedToolIDs:          nil,
+				ClearedAttachmentUUIDs:    nil,
+				RawCompactMetadata:        nil,
+				RawMicrocompactMetadata:   nil,
+				RawSummarizeMetadata:      nil,
 			},
 			Timestamp: time.Unix(1, 0),
 			Text:      "Conversation compacted",
@@ -179,6 +189,7 @@ func TestExportDoesNotOptIntoSystemMessages(t *testing.T) {
 		IncludeChat:            true,
 		IncludeThinking:        false,
 		IncludeSystemPrompts:   true,
+		IncludeSystemMessages:  false,
 		IncludeToolCalls:       false,
 		IncludeToolOutputs:     false,
 		IncludeRawJSONMetadata: false,
@@ -192,5 +203,43 @@ func TestExportDoesNotOptIntoSystemMessages(t *testing.T) {
 	}
 	if !strings.Contains(text, "visible transcript message") {
 		t.Fatalf("export text = %q, want visible transcript message", text)
+	}
+}
+
+func TestExportJSONCanOptIntoSystemMessagesAndCheckpoints(t *testing.T) {
+	t.Parallel()
+	idx, record := newOptionAwareIndex()
+
+	body, err := idx.Export(record, ExportOptions{
+		Format:                 ExportFormatJSON,
+		HistoryStart:           0,
+		Whitespace:             WhitespacePreserve,
+		IncludeChat:            true,
+		IncludeThinking:        false,
+		IncludeSystemPrompts:   false,
+		IncludeSystemMessages:  true,
+		IncludeToolCalls:       false,
+		IncludeToolOutputs:     false,
+		IncludeRawJSONMetadata: true,
+	})
+	if err != nil {
+		t.Fatalf("Export returned error: %v", err)
+	}
+
+	var document struct {
+		Messages    []transcript.Message   `json:"messages"`
+		Checkpoints []CompactionCheckpoint `json:"compaction_checkpoints"`
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("unmarshal export body: %v", err)
+	}
+	if len(document.Messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(document.Messages))
+	}
+	if len(document.Checkpoints) != 1 {
+		t.Fatalf("checkpoints len = %d, want 1", len(document.Checkpoints))
+	}
+	if document.Checkpoints[0].BoundaryUUID != "system-1" {
+		t.Fatalf("checkpoint boundary uuid = %q, want system-1", document.Checkpoints[0].BoundaryUUID)
 	}
 }

@@ -25,11 +25,17 @@ func (idx *Index) resolveStream(record Record, opts LoadOptions) (iter.Seq2[tran
 // caller needs every message at once. Window reads should pull the stream
 // directly and stop early instead of calling this.
 func (idx *Index) LoadMessages(record Record, includeSystemPrompts bool, includeToolOutputs bool) ([]transcript.Message, error) {
-	stream, err := idx.resolveStream(record, LoadOptions{
+	return idx.LoadMessagesWithOptions(record, LoadOptions{
 		IncludeSystemPrompts:  includeSystemPrompts,
 		IncludeSystemMessages: false,
 		IncludeToolOutputs:    includeToolOutputs,
 	})
+}
+
+// LoadMessagesWithOptions reads the whole provider artifact into a slice of
+// generic messages with the supplied streaming options.
+func (idx *Index) LoadMessagesWithOptions(record Record, opts LoadOptions) ([]transcript.Message, error) {
+	stream, err := idx.resolveStream(record, opts)
 	if err != nil {
 		return nil, err
 	}

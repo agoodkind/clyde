@@ -300,6 +300,7 @@ func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.Expor
 		IncludeChat:            req.GetIncludeChat(),
 		IncludeThinking:        req.GetIncludeThinking(),
 		IncludeSystemPrompts:   req.GetIncludeSystemPrompts(),
+		IncludeSystemMessages:  req.GetIncludeSystemMessages(),
 		IncludeToolCalls:       req.GetIncludeToolCalls(),
 		IncludeToolOutputs:     req.GetIncludeToolOutputs(),
 		IncludeRawJSONMetadata: req.GetIncludeRawJsonMetadata(),

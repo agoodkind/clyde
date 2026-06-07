@@ -139,6 +139,7 @@ type ExportOptions struct {
 	IncludeChat            bool
 	IncludeThinking        bool
 	IncludeSystemPrompts   bool
+	IncludeSystemMessages  bool
 	IncludeToolCalls       bool
 	IncludeToolOutputs     bool
 	IncludeRawJSONMetadata bool

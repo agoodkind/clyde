@@ -13,7 +13,11 @@ import (
 // Export renders one raw conversation artifact. It collects every message
 // because the rendered document spans the whole conversation.
 func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
-	messages, err := idx.LoadMessages(record, options.IncludeSystemPrompts, options.IncludeToolOutputs)
+	messages, err := idx.LoadMessagesWithOptions(record, LoadOptions{
+		IncludeSystemPrompts:  options.IncludeSystemPrompts,
+		IncludeSystemMessages: options.IncludeSystemMessages,
+		IncludeToolOutputs:    options.IncludeToolOutputs,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -21,14 +25,22 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 	if options.Format == ExportFormatJSON && !options.IncludeRawJSONMetadata {
 		clearMetadata(messages)
 	}
-	body, err := renderMessages(messages, options)
+	body, err := renderMessages(record, messages, options)
 	if err != nil {
 		return nil, err
 	}
 	return compressWhitespace(body, options.Format, options.Whitespace), nil
 }
 
-func renderMessages(messages []transcript.Message, options ExportOptions) ([]byte, error) {
+type rawJSONExport struct {
+	ConversationID        string                 `json:"conversation_id"`
+	Provider              string                 `json:"provider"`
+	ArtifactPath          string                 `json:"artifact_path"`
+	Messages              []transcript.Message   `json:"messages"`
+	CompactionCheckpoints []CompactionCheckpoint `json:"compaction_checkpoints,omitempty"`
+}
+
+func renderMessages(record Record, messages []transcript.Message, options ExportOptions) ([]byte, error) {
 	shapeOptions := transcript.ShapeOptions{
 		IncludeThinking:  options.IncludeThinking,
 		ConversationOnly: !options.IncludeToolCalls,
@@ -42,6 +54,9 @@ func renderMessages(messages []transcript.Message, options ExportOptions) ([]byt
 	case ExportFormatHTML:
 		return []byte(transcript.RenderHTMLWithOptions(messages, shapeOptions)), nil
 	case ExportFormatJSON:
+		if options.IncludeRawJSONMetadata {
+			return renderRawJSON(record, messages, options)
+		}
 		body, err := transcript.RenderJSONWithOptions(messages, shapeOptions)
 		if err != nil {
 			slog.Warn("conversation.export.render_json_failed", "concern", "conversation.export", "component", "conversation", "err", err)
@@ -55,6 +70,25 @@ func renderMessages(messages []transcript.Message, options ExportOptions) ([]byt
 	default:
 		return nil, fmt.Errorf("unsupported export format %q", options.Format)
 	}
+}
+
+func renderRawJSON(record Record, messages []transcript.Message, options ExportOptions) ([]byte, error) {
+	document := rawJSONExport{
+		ConversationID:        record.ID,
+		Provider:              record.Provider.String(),
+		ArtifactPath:          record.ArtifactPath,
+		Messages:              messages,
+		CompactionCheckpoints: nil,
+	}
+	if options.IncludeSystemMessages {
+		document.CompactionCheckpoints = CompactionCheckpoints(messages)
+	}
+	body, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		slog.Warn("conversation.export.render_raw_json_failed", "concern", "conversation.export", "component", "conversation", "err", err)
+		return nil, fmt.Errorf("render raw json transcript: %w", err)
+	}
+	return append(body, '\n'), nil
 }
 
 func filterMessages(messages []transcript.Message, options ExportOptions) []transcript.Message {

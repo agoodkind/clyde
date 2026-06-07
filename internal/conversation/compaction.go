@@ -5,17 +5,17 @@ import "goodkind.io/clyde/internal/transcript"
 // CompactionCheckpoint is the provider-neutral compacted-context view built
 // from normalized transcript messages.
 type CompactionCheckpoint struct {
-	BoundaryIndex           int
-	BoundaryUUID            string
-	SummaryIndex            int
-	SummaryUUID             string
-	ContextItems            []transcript.CompactedContextItem
-	Trigger                 transcript.CompactionTrigger
-	HeadUUID                string
-	AnchorUUID              string
-	TailUUID                string
-	MessagesSummarized      int
-	ReplacementHistoryCount int
+	BoundaryIndex           int                               `json:"boundary_index"`
+	BoundaryUUID            string                            `json:"boundary_uuid"`
+	SummaryIndex            int                               `json:"summary_index"`
+	SummaryUUID             string                            `json:"summary_uuid"`
+	ContextItems            []transcript.CompactedContextItem `json:"context_items"`
+	Trigger                 transcript.CompactionTrigger      `json:"trigger"`
+	HeadUUID                string                            `json:"head_uuid"`
+	AnchorUUID              string                            `json:"anchor_uuid"`
+	TailUUID                string                            `json:"tail_uuid"`
+	MessagesSummarized      int                               `json:"messages_summarized"`
+	ReplacementHistoryCount int                               `json:"replacement_history_count"`
 }
 
 // CompactionCheckpoints groups normalized compaction messages into

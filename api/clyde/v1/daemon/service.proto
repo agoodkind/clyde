@@ -200,6 +200,7 @@ message ExportTranscriptRequest {
   bool include_thinking = 8;
   bool include_tool_calls = 9;
   bool include_chat = 10;
+  bool include_system_messages = 11;
 }
 
 message ExportTranscriptResponse {
