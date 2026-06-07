@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // countingReader records how many bytes were read and whether the underlying
@@ -36,7 +37,11 @@ func TestStreamStripsControlTagNoiseFromUserMessages(t *testing.T) {
 		t.Fatalf("write transcript: %v", err)
 	}
 
-	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{IncludeSystemPrompts: false, IncludeToolOutputs: false}))
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
 	if err != nil {
 		t.Fatalf("collect messages: %v", err)
 	}
@@ -141,5 +146,204 @@ func TestScanRecordHonorsLineCap(t *testing.T) {
 	// With no title found, the title falls back to the session id.
 	if record.Title != "sess-x" {
 		t.Fatalf("title=%q want fallback sess-x", record.Title)
+	}
+}
+
+func TestStreamMarksClaudeCompactSummaryMetadata(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compact-summary.jsonl")
+	body := `{"uuid":"summary-1","parentUuid":"parent-1","logicalParentUuid":"logical-1","type":"user","timestamp":"2026-06-03T23:17:32.185Z","isVisibleInTranscriptOnly":true,"isCompactSummary":true,"summarizeMetadata":{"messagesSummarized":7,"userContext":"keep the current release plan","direction":"backward"},"message":{"role":"user","content":"Summary block"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(messages))
+	}
+	message := messages[0]
+	if message.ParentUUID != "parent-1" || message.LogicalParentUUID != "logical-1" {
+		t.Fatalf("parent fields = %q/%q", message.ParentUUID, message.LogicalParentUUID)
+	}
+	if message.Visibility != transcript.MessageVisibilityTranscriptOnly {
+		t.Fatalf("visibility = %q, want transcript_only", message.Visibility)
+	}
+	if message.Compaction == nil || message.Compaction.Kind != transcript.CompactionKindSummary {
+		t.Fatalf("compaction = %#v", message.Compaction)
+	}
+	if message.Compaction.MessagesSummarized != 7 {
+		t.Fatalf("messages summarized = %d, want 7", message.Compaction.MessagesSummarized)
+	}
+	if message.Compaction.UserContext != "keep the current release plan" {
+		t.Fatalf("user context = %q", message.Compaction.UserContext)
+	}
+	if message.Compaction.Direction != "backward" {
+		t.Fatalf("direction = %q", message.Compaction.Direction)
+	}
+	if len(message.Compaction.RawSummarizeMetadata) == 0 {
+		t.Fatalf("raw summarize metadata was empty")
+	}
+	if len(message.Compaction.ContextItems) != 1 {
+		t.Fatalf("context items len = %d, want 1", len(message.Compaction.ContextItems))
+	}
+	contextItem := message.Compaction.ContextItems[0]
+	if contextItem.Kind != transcript.CompactedContextItemKindMessage ||
+		contextItem.Message == nil {
+		t.Fatalf("context item = %#v", contextItem)
+	}
+	if contextItem.Message.MessageClass != transcript.CompactedMessageClassSummary {
+		t.Fatalf("message class = %q, want summary", contextItem.Message.MessageClass)
+	}
+	if contextItem.Message.Role != "user" {
+		t.Fatalf("context role = %q, want user", contextItem.Message.Role)
+	}
+	if len(contextItem.Message.Content) != 1 {
+		t.Fatalf("content len = %d, want 1", len(contextItem.Message.Content))
+	}
+	if contextItem.Message.Content[0].Text != "Summary block" {
+		t.Fatalf("summary content = %q, want Summary block", contextItem.Message.Content[0].Text)
+	}
+	if len(contextItem.Message.Raw) == 0 {
+		t.Fatalf("summary raw was empty")
+	}
+}
+
+func TestStreamIncludesClaudeCompactionBoundariesOnlyWhenRequested(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "boundaries.jsonl")
+	body := `{"uuid":"boundary-1","parentUuid":"","logicalParentUuid":"tail-1","type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2026-06-03T23:17:32.186Z","compactMetadata":{"trigger":"manual","preTokens":977652,"postTokens":12951,"messagesSummarized":7,"userContext":"keep the current release plan","direction":"backward","preCompactDiscoveredTools":["Read","Bash"],"preservedSegment":{"headUuid":"head-1","anchorUuid":"anchor-1","tailUuid":"tail-1"}}}` + "\n" +
+		`{"uuid":"micro-1","parentUuid":"boundary-1","logicalParentUuid":"tail-2","type":"system","subtype":"microcompact_boundary","content":"Microcompact boundary","timestamp":"2026-06-03T23:17:33.186Z","compactMetadata":{"trigger":"manual","preTokens":999,"tokensSaved":1,"compactedToolIds":["legacy-tool"],"clearedAttachmentUUIDs":["legacy-attachment"]},"microcompactMetadata":{"trigger":"auto","preTokens":100,"postTokens":40,"tokensSaved":60,"compactedToolIds":["tool-1","tool-2"],"clearedAttachmentUUIDs":["attachment-1","attachment-2"]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	defaultMessages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect default messages: %v", err)
+	}
+	if len(defaultMessages) != 0 {
+		t.Fatalf("default messages len = %d, want 0", len(defaultMessages))
+	}
+
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: true,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect messages: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Compaction == nil || messages[0].Compaction.Kind != transcript.CompactionKindBoundary {
+		t.Fatalf("boundary compaction = %#v", messages[0].Compaction)
+	}
+	if messages[0].Compaction.Trigger != transcript.CompactionTriggerManual {
+		t.Fatalf("boundary trigger = %q, want manual", messages[0].Compaction.Trigger)
+	}
+	if messages[0].Compaction.TokensSaved != 964701 {
+		t.Fatalf("tokens saved = %d, want 964701", messages[0].Compaction.TokensSaved)
+	}
+	if messages[0].Compaction.MessagesSummarized != 7 {
+		t.Fatalf("messages summarized = %d, want 7", messages[0].Compaction.MessagesSummarized)
+	}
+	if messages[0].Compaction.UserContext != "keep the current release plan" {
+		t.Fatalf("boundary user context = %q", messages[0].Compaction.UserContext)
+	}
+	if messages[0].Compaction.Direction != "backward" {
+		t.Fatalf("boundary direction = %q", messages[0].Compaction.Direction)
+	}
+	if len(messages[0].Compaction.PreCompactDiscoveredTools) != 2 {
+		t.Fatalf("pre-compact discovered tools = %#v", messages[0].Compaction.PreCompactDiscoveredTools)
+	}
+	if messages[0].Compaction.HeadUUID != "head-1" || messages[0].Compaction.AnchorUUID != "anchor-1" || messages[0].Compaction.TailUUID != "tail-1" {
+		t.Fatalf("preserved segment = %#v", messages[0].Compaction)
+	}
+	if len(messages[0].Compaction.ContextItems) != 0 {
+		t.Fatalf("boundary context items = %#v, want none", messages[0].Compaction.ContextItems)
+	}
+	if len(messages[0].Compaction.RawCompactMetadata) == 0 {
+		t.Fatalf("raw compact metadata was empty")
+	}
+	if messages[1].Compaction == nil || messages[1].Compaction.Kind != transcript.CompactionKindMicroboundary {
+		t.Fatalf("microboundary compaction = %#v", messages[1].Compaction)
+	}
+	if messages[1].Compaction.Trigger != transcript.CompactionTriggerAuto {
+		t.Fatalf("microboundary trigger = %q, want auto", messages[1].Compaction.Trigger)
+	}
+	if messages[1].Compaction.PreTokens != 100 {
+		t.Fatalf("microboundary pre tokens = %d, want 100", messages[1].Compaction.PreTokens)
+	}
+	if messages[1].Compaction.TokensSaved != 60 {
+		t.Fatalf("microboundary tokens saved = %d, want 60", messages[1].Compaction.TokensSaved)
+	}
+	if len(messages[1].Compaction.CompactedToolIDs) != 2 {
+		t.Fatalf("compacted tool ids = %#v", messages[1].Compaction.CompactedToolIDs)
+	}
+	if len(messages[1].Compaction.ClearedAttachmentUUIDs) != 2 {
+		t.Fatalf("cleared attachment uuids = %#v", messages[1].Compaction.ClearedAttachmentUUIDs)
+	}
+	if len(messages[1].Compaction.ContextItems) != 0 {
+		t.Fatalf("microboundary context items = %#v, want none", messages[1].Compaction.ContextItems)
+	}
+	if len(messages[1].Compaction.RawMicrocompactMetadata) == 0 {
+		t.Fatalf("raw microcompact metadata was empty")
+	}
+}
+
+func TestStreamLiveClaudeCompactionSmoke(t *testing.T) {
+	t.Parallel()
+	const path = "/Users/agoodkind/.claude/projects/-Users-agoodkind-Sites/71545485-56c8-46a3-8cb7-1807f572ece1.jsonl"
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("live Claude transcript unavailable: %v", err)
+	}
+
+	messages, err := conversation.CollectMessages(New().Stream(path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: true,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect live Claude transcript: %v", err)
+	}
+
+	var summaryCount int
+	var boundaryCount int
+	var microboundaryCount int
+	for _, message := range transcript.CompactionMessages(messages) {
+		if message.Compaction == nil {
+			continue
+		}
+		switch message.Compaction.Kind {
+		case transcript.CompactionKindSummary:
+			summaryCount++
+		case transcript.CompactionKindBoundary:
+			boundaryCount++
+		case transcript.CompactionKindMicroboundary:
+			microboundaryCount++
+		}
+	}
+	if summaryCount != 1 {
+		t.Fatalf("summary count = %d, want 1", summaryCount)
+	}
+	if boundaryCount != 1 {
+		t.Fatalf("boundary count = %d, want 1", boundaryCount)
+	}
+	if microboundaryCount != 0 {
+		t.Fatalf("microboundary count = %d, want 0", microboundaryCount)
 	}
 }

@@ -65,7 +65,11 @@ func (idx *Index) ContextWindowText(record Record, timestamp string, messageInde
 // The header reports the highest index reached rather than the absolute total,
 // because computing the total would defeat the early stop.
 func (idx *Index) contextWindowByIndex(record Record, messageIndex, before, after int) (string, error) {
-	stream, err := idx.resolveStream(record, LoadOptions{IncludeSystemPrompts: false, IncludeToolOutputs: false})
+	stream, err := idx.resolveStream(record, LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	})
 	if err != nil {
 		return "", err
 	}

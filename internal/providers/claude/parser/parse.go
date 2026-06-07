@@ -12,6 +12,7 @@ import (
 // parseOptions controls noise stripping while parsing Claude transcript lines.
 type parseOptions struct {
 	PreserveSystemPrompts bool
+	IncludeSystemMessages bool
 }
 
 // contentBlockType enumerates the content-block "type" strings the Claude
@@ -25,12 +26,36 @@ const (
 	contentBlockToolResult contentBlockType = "tool_result"
 )
 
+type claudeSystemSubtype string
+
+const (
+	claudeSystemSubtypeCompactBoundary      claudeSystemSubtype = "compact_boundary"
+	claudeSystemSubtypeMicrocompactBoundary claudeSystemSubtype = "microcompact_boundary"
+)
+
+type claudeCompactionTriggerValue string
+
+const (
+	claudeCompactionTriggerManual claudeCompactionTriggerValue = "manual"
+	claudeCompactionTriggerAuto   claudeCompactionTriggerValue = "auto"
+)
+
 // rawEntry mirrors one Claude transcript JSONL line.
 type rawEntry struct {
-	UUID      string          `json:"uuid"`
-	Type      string          `json:"type"`
-	Timestamp time.Time       `json:"timestamp"`
-	Message   json.RawMessage `json:"message"`
+	UUID                      string              `json:"uuid"`
+	ParentUUID                string              `json:"parentUuid"`
+	LogicalParentUUID         string              `json:"logicalParentUuid"`
+	Type                      string              `json:"type"`
+	Subtype                   claudeSystemSubtype `json:"subtype"`
+	Content                   string              `json:"content"`
+	IsMeta                    bool                `json:"isMeta"`
+	IsVisibleInTranscriptOnly bool                `json:"isVisibleInTranscriptOnly"`
+	IsCompactSummary          bool                `json:"isCompactSummary"`
+	CompactMetadata           json.RawMessage     `json:"compactMetadata"`
+	MicrocompactMetadata      json.RawMessage     `json:"microcompactMetadata"`
+	SummarizeMetadata         json.RawMessage     `json:"summarizeMetadata"`
+	Timestamp                 time.Time           `json:"timestamp"`
+	Message                   json.RawMessage     `json:"message"`
 }
 
 type rawMessage struct {
@@ -45,6 +70,43 @@ type contentBlock struct {
 	ID       string                   `json:"id"`
 	Name     string                   `json:"name"`
 	Input    transcript.ToolInputJSON `json:"input"`
+}
+
+type rawClaudeBoundaryMetadata struct {
+	Trigger                   string                    `json:"trigger"`
+	PreTokens                 int                       `json:"preTokens"`
+	PostTokens                int                       `json:"postTokens"`
+	TokensSaved               int                       `json:"tokensSaved"`
+	MessagesSummarized        int                       `json:"messagesSummarized"`
+	ReplacementHistoryCount   int                       `json:"replacementHistoryCount"`
+	UserContext               string                    `json:"userContext"`
+	Direction                 string                    `json:"direction"`
+	PreCompactDiscoveredTools []string                  `json:"preCompactDiscoveredTools"`
+	PreservedSegment          rawClaudePreservedSegment `json:"preservedSegment"`
+}
+
+type rawClaudeMicrocompactMetadata struct {
+	Trigger                string   `json:"trigger"`
+	PreTokens              int      `json:"preTokens"`
+	PostTokens             int      `json:"postTokens"`
+	TokensSaved            int      `json:"tokensSaved"`
+	MessagesSummarized     int      `json:"messagesSummarized"`
+	UserContext            string   `json:"userContext"`
+	Direction              string   `json:"direction"`
+	CompactedToolIDs       []string `json:"compactedToolIds"`
+	ClearedAttachmentUUIDs []string `json:"clearedAttachmentUUIDs"`
+}
+
+type rawClaudeSummarizeMetadata struct {
+	MessagesSummarized int    `json:"messagesSummarized"`
+	UserContext        string `json:"userContext"`
+	Direction          string `json:"direction"`
+}
+
+type rawClaudePreservedSegment struct {
+	HeadUUID   string `json:"headUuid"`
+	AnchorUUID string `json:"anchorUuid"`
+	TailUUID   string `json:"tailUuid"`
 }
 
 var (
@@ -76,22 +138,33 @@ var noisePatterns = func() []*regexp.Regexp {
 // lines, written out so exhaustruct sees every field set.
 func emptyMessage() transcript.Message {
 	return transcript.Message{
-		UUID:      "",
-		Role:      "",
-		Timestamp: time.Time{},
-		Text:      "",
-		Thinking:  "",
-		HasTools:  false,
-		Tools:     nil,
+		UUID:              "",
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Role:              "",
+		Visibility:        "",
+		Compaction:        nil,
+		Timestamp:         time.Time{},
+		Text:              "",
+		Thinking:          "",
+		HasTools:          false,
+		Tools:             nil,
 	}
 }
 
 // parseLine decodes one transcript line into a message. The boolean is false
-// when the line is not a usable user or assistant turn.
+// when the line is not a usable user, assistant, or opted-in system compaction
+// turn.
 func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	var entry rawEntry
 	if err := json.Unmarshal(line, &entry); err != nil {
 		return emptyMessage(), false
+	}
+	if entry.Type == "system" {
+		if !opts.IncludeSystemMessages {
+			return emptyMessage(), false
+		}
+		return parseSystemEntry(entry)
 	}
 	if entry.Type != "user" && entry.Type != "assistant" {
 		return emptyMessage(), false
@@ -106,13 +179,17 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	}
 
 	m := transcript.Message{
-		UUID:      entry.UUID,
-		Role:      entry.Type,
-		Timestamp: entry.Timestamp,
-		Text:      "",
-		Thinking:  "",
-		HasTools:  false,
-		Tools:     nil,
+		UUID:              entry.UUID,
+		ParentUUID:        entry.ParentUUID,
+		LogicalParentUUID: entry.LogicalParentUUID,
+		Role:              entry.Type,
+		Visibility:        messageVisibility(entry.IsMeta, entry.IsVisibleInTranscriptOnly),
+		Compaction:        nil,
+		Timestamp:         entry.Timestamp,
+		Text:              "",
+		Thinking:          "",
+		HasTools:          false,
+		Tools:             nil,
 	}
 
 	if entry.Type == "user" {
@@ -125,6 +202,14 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 			text = stripSystemTags(text)
 		}
 		m.Text = strings.TrimSpace(text)
+		if entry.IsCompactSummary {
+			m.Compaction = claudeSummaryMetadata(
+				entry.SummarizeMetadata,
+				entry.Message,
+				msg.Content,
+				m.Text,
+			)
+		}
 		return m, m.Text != ""
 	}
 
@@ -132,6 +217,284 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 	parseAssistantBlocks(&m, msg.Content)
 	// Include assistant messages even if Text is empty (may have only tool calls).
 	return m, m.Text != "" || m.HasTools
+}
+
+func parseSystemEntry(entry rawEntry) (transcript.Message, bool) {
+	var metadata *transcript.CompactionMetadata
+	switch entry.Subtype {
+	case claudeSystemSubtypeCompactBoundary:
+		metadata = claudeBoundaryMetadata(entry.CompactMetadata)
+	case claudeSystemSubtypeMicrocompactBoundary:
+		metadata = claudeMicrocompactMetadata(
+			entry.MicrocompactMetadata,
+			entry.CompactMetadata,
+		)
+	default:
+		return emptyMessage(), false
+	}
+	return transcript.Message{
+		UUID:              entry.UUID,
+		ParentUUID:        entry.ParentUUID,
+		LogicalParentUUID: entry.LogicalParentUUID,
+		Role:              "system",
+		Visibility:        messageVisibility(entry.IsMeta, entry.IsVisibleInTranscriptOnly),
+		Compaction:        metadata,
+		Timestamp:         entry.Timestamp,
+		Text:              strings.TrimSpace(entry.Content),
+		Thinking:          "",
+		HasTools:          false,
+		Tools:             nil,
+	}, true
+}
+
+func messageVisibility(isMeta bool, transcriptOnly bool) transcript.MessageVisibility {
+	if isMeta {
+		return transcript.MessageVisibilityMetaOnly
+	}
+	if transcriptOnly {
+		return transcript.MessageVisibilityTranscriptOnly
+	}
+	return transcript.MessageVisibilityVisible
+}
+
+func claudeBoundaryMetadata(raw json.RawMessage) *transcript.CompactionMetadata {
+	metadata := &transcript.CompactionMetadata{
+		Kind:                      transcript.CompactionKindBoundary,
+		Trigger:                   transcript.CompactionTriggerUnknown,
+		PreTokens:                 0,
+		PostTokens:                0,
+		TokensSaved:               0,
+		MessagesSummarized:        0,
+		ReplacementHistoryCount:   0,
+		HeadUUID:                  "",
+		AnchorUUID:                "",
+		TailUUID:                  "",
+		ContextItems:              nil,
+		UserContext:               "",
+		Direction:                 "",
+		PreCompactDiscoveredTools: nil,
+		CompactedToolIDs:          nil,
+		ClearedAttachmentUUIDs:    nil,
+		RawCompactMetadata:        cloneRawMessage(raw),
+		RawMicrocompactMetadata:   nil,
+		RawSummarizeMetadata:      nil,
+	}
+	parsed, ok := parseClaudeBoundaryMetadata(raw)
+	if !ok {
+		return metadata
+	}
+	metadata.Trigger = claudeCompactionTrigger(parsed.Trigger)
+	metadata.PreTokens = parsed.PreTokens
+	metadata.PostTokens = parsed.PostTokens
+	metadata.TokensSaved = parsed.TokensSaved
+	if metadata.TokensSaved == 0 &&
+		parsed.PreTokens > 0 &&
+		parsed.PostTokens > 0 &&
+		parsed.PreTokens >= parsed.PostTokens {
+		metadata.TokensSaved = parsed.PreTokens - parsed.PostTokens
+	}
+	metadata.MessagesSummarized = parsed.MessagesSummarized
+	metadata.ReplacementHistoryCount = parsed.ReplacementHistoryCount
+	metadata.HeadUUID = parsed.PreservedSegment.HeadUUID
+	metadata.AnchorUUID = parsed.PreservedSegment.AnchorUUID
+	metadata.TailUUID = parsed.PreservedSegment.TailUUID
+	metadata.UserContext = parsed.UserContext
+	metadata.Direction = parsed.Direction
+	metadata.PreCompactDiscoveredTools = copyStringSlice(parsed.PreCompactDiscoveredTools)
+	return metadata
+}
+
+func claudeMicrocompactMetadata(
+	microcompactRaw json.RawMessage,
+	legacyCompactRaw json.RawMessage,
+) *transcript.CompactionMetadata {
+	metadata := &transcript.CompactionMetadata{
+		Kind:                      transcript.CompactionKindMicroboundary,
+		Trigger:                   transcript.CompactionTriggerUnknown,
+		PreTokens:                 0,
+		PostTokens:                0,
+		TokensSaved:               0,
+		MessagesSummarized:        0,
+		ReplacementHistoryCount:   0,
+		HeadUUID:                  "",
+		AnchorUUID:                "",
+		TailUUID:                  "",
+		ContextItems:              nil,
+		UserContext:               "",
+		Direction:                 "",
+		PreCompactDiscoveredTools: nil,
+		CompactedToolIDs:          nil,
+		ClearedAttachmentUUIDs:    nil,
+		RawCompactMetadata:        cloneRawMessage(legacyCompactRaw),
+		RawMicrocompactMetadata:   cloneRawMessage(microcompactRaw),
+		RawSummarizeMetadata:      nil,
+	}
+	parsed, ok := parseClaudeMicrocompactMetadata(microcompactRaw)
+	if !ok {
+		parsed, ok = parseClaudeMicrocompactMetadata(legacyCompactRaw)
+		if !ok {
+			return metadata
+		}
+	}
+	metadata.Trigger = claudeCompactionTrigger(parsed.Trigger)
+	metadata.PreTokens = parsed.PreTokens
+	metadata.PostTokens = parsed.PostTokens
+	metadata.TokensSaved = parsed.TokensSaved
+	if metadata.TokensSaved == 0 &&
+		parsed.PreTokens > 0 &&
+		parsed.PostTokens > 0 &&
+		parsed.PreTokens >= parsed.PostTokens {
+		metadata.TokensSaved = parsed.PreTokens - parsed.PostTokens
+	}
+	metadata.MessagesSummarized = parsed.MessagesSummarized
+	metadata.UserContext = parsed.UserContext
+	metadata.Direction = parsed.Direction
+	metadata.CompactedToolIDs = copyStringSlice(parsed.CompactedToolIDs)
+	metadata.ClearedAttachmentUUIDs = copyStringSlice(
+		parsed.ClearedAttachmentUUIDs,
+	)
+	return metadata
+}
+
+func claudeSummaryMetadata(
+	summaryRaw json.RawMessage,
+	messageRaw json.RawMessage,
+	contentRaw json.RawMessage,
+	text string,
+) *transcript.CompactionMetadata {
+	metadata := &transcript.CompactionMetadata{
+		Kind:                      transcript.CompactionKindSummary,
+		Trigger:                   transcript.CompactionTriggerUnknown,
+		PreTokens:                 0,
+		PostTokens:                0,
+		TokensSaved:               0,
+		MessagesSummarized:        0,
+		ReplacementHistoryCount:   0,
+		HeadUUID:                  "",
+		AnchorUUID:                "",
+		TailUUID:                  "",
+		ContextItems:              []transcript.CompactedContextItem{claudeSummaryContextItem(messageRaw, contentRaw, text)},
+		UserContext:               "",
+		Direction:                 "",
+		PreCompactDiscoveredTools: nil,
+		CompactedToolIDs:          nil,
+		ClearedAttachmentUUIDs:    nil,
+		RawCompactMetadata:        nil,
+		RawMicrocompactMetadata:   nil,
+		RawSummarizeMetadata:      cloneRawMessage(summaryRaw),
+	}
+	parsed, ok := parseClaudeSummarizeMetadata(summaryRaw)
+	if !ok {
+		return metadata
+	}
+	metadata.MessagesSummarized = parsed.MessagesSummarized
+	metadata.UserContext = parsed.UserContext
+	metadata.Direction = parsed.Direction
+	return metadata
+}
+
+func claudeCompactionTrigger(value string) transcript.CompactionTrigger {
+	switch claudeCompactionTriggerValue(strings.TrimSpace(strings.ToLower(value))) {
+	case claudeCompactionTriggerManual:
+		return transcript.CompactionTriggerManual
+	case claudeCompactionTriggerAuto:
+		return transcript.CompactionTriggerAuto
+	default:
+		return transcript.CompactionTriggerUnknown
+	}
+}
+
+func parseClaudeBoundaryMetadata(
+	raw json.RawMessage,
+) (rawClaudeBoundaryMetadata, bool) {
+	if len(raw) == 0 {
+		return rawClaudeBoundaryMetadata{}, false
+	}
+	var metadata rawClaudeBoundaryMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return rawClaudeBoundaryMetadata{}, false
+	}
+	return metadata, true
+}
+
+func parseClaudeMicrocompactMetadata(
+	raw json.RawMessage,
+) (rawClaudeMicrocompactMetadata, bool) {
+	if len(raw) == 0 {
+		return rawClaudeMicrocompactMetadata{}, false
+	}
+	var metadata rawClaudeMicrocompactMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return rawClaudeMicrocompactMetadata{}, false
+	}
+	return metadata, true
+}
+
+func parseClaudeSummarizeMetadata(
+	raw json.RawMessage,
+) (rawClaudeSummarizeMetadata, bool) {
+	if len(raw) == 0 {
+		return rawClaudeSummarizeMetadata{}, false
+	}
+	var metadata rawClaudeSummarizeMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return rawClaudeSummarizeMetadata{}, false
+	}
+	return metadata, true
+}
+
+func claudeSummaryContextItem(
+	messageRaw json.RawMessage,
+	contentRaw json.RawMessage,
+	text string,
+) transcript.CompactedContextItem {
+	contentItem := transcript.CompactedMessageContentItem{
+		Type:     "text",
+		Text:     text,
+		ImageURL: "",
+		Detail:   "",
+		Raw:      cloneRawMessage(contentRaw),
+	}
+	messageItem := transcript.CompactedMessageItem{
+		Role:         "user",
+		Phase:        "",
+		Content:      []transcript.CompactedMessageContentItem{contentItem},
+		ContentRaw:   cloneRawMessage(contentRaw),
+		MessageClass: transcript.CompactedMessageClassSummary,
+		Raw:          cloneRawMessage(messageRaw),
+	}
+	return transcript.CompactedContextItem{
+		Kind:                 transcript.CompactedContextItemKindMessage,
+		Message:              &messageItem,
+		Reasoning:            nil,
+		LocalShellCall:       nil,
+		FunctionCall:         nil,
+		ToolSearchCall:       nil,
+		FunctionCallOutput:   nil,
+		CustomToolCall:       nil,
+		CustomToolCallOutput: nil,
+		ToolSearchOutput:     nil,
+		WebSearchCall:        nil,
+		ImageGenerationCall:  nil,
+		Compaction:           nil,
+		CompactionTrigger:    nil,
+		ContextCompaction:    nil,
+		Other:                nil,
+	}
+}
+
+func cloneRawMessage(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
+}
+
+func copyStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return append([]string(nil), values...)
 }
 
 // extractUserText gets the text from a user message's content field.

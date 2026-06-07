@@ -59,6 +59,14 @@ func renderMessages(messages []transcript.Message, options ExportOptions) ([]byt
 
 func filterMessages(messages []transcript.Message, options ExportOptions) []transcript.Message {
 	out := make([]transcript.Message, 0, len(messages))
+	compactionMessages := transcript.CompactionMessages(messages)
+	compactionByMetadata := make(map[*transcript.CompactionMetadata]struct{}, len(compactionMessages))
+	for _, message := range compactionMessages {
+		if message.Compaction == nil {
+			continue
+		}
+		compactionByMetadata[message.Compaction] = struct{}{}
+	}
 	for i, message := range messages {
 		if options.HistoryStart > 0 && i < options.HistoryStart {
 			continue
@@ -73,7 +81,8 @@ func filterMessages(messages []transcript.Message, options ExportOptions) []tran
 			message.Tools = nil
 			message.HasTools = false
 		}
-		if message.Text == "" && message.Thinking == "" && len(message.Tools) == 0 {
+		_, keepEmptyCompaction := compactionByMetadata[message.Compaction]
+		if message.Text == "" && message.Thinking == "" && len(message.Tools) == 0 && !keepEmptyCompaction {
 			continue
 		}
 		out = append(out, message)

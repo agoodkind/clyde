@@ -77,3 +77,70 @@ func TestRenderJSONUsesShapedConversation(t *testing.T) {
 		t.Fatalf("unexpected json export: %+v", out)
 	}
 }
+
+func TestCompactionMessagesReturnsOnlyCompactionMessages(t *testing.T) {
+	t.Parallel()
+	contextItem := CompactedContextItem{
+		Kind: CompactedContextItemKindMessage,
+		Message: &CompactedMessageItem{
+			Role:         "user",
+			Phase:        "",
+			Content:      []CompactedMessageContentItem{{Type: "input_text", Text: "summary", Raw: json.RawMessage(`"summary"`)}},
+			ContentRaw:   json.RawMessage(`[{"type":"input_text","text":"summary"}]`),
+			MessageClass: CompactedMessageClassSummary,
+			Raw:          json.RawMessage(`{"type":"message","role":"user"}`),
+		},
+	}
+	messages := []Message{
+		{
+			UUID:              "user-1",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "user",
+			Visibility:        MessageVisibilityVisible,
+			Compaction:        nil,
+			Text:              "plain message",
+		},
+		{
+			UUID:              "system-1",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "system",
+			Visibility:        MessageVisibilityVisible,
+			Compaction: &CompactionMetadata{
+				Kind:                    CompactionKindBoundary,
+				Trigger:                 CompactionTriggerManual,
+				PreTokens:               100,
+				PostTokens:              25,
+				TokensSaved:             75,
+				MessagesSummarized:      0,
+				ReplacementHistoryCount: 3,
+				HeadUUID:                "head",
+				AnchorUUID:              "anchor",
+				TailUUID:                "tail",
+				ContextItems:            []CompactedContextItem{contextItem},
+			},
+			Text: "Conversation compacted",
+		},
+	}
+
+	compactionMessages := CompactionMessages(messages)
+	if len(compactionMessages) != 1 {
+		t.Fatalf("compaction messages len = %d, want 1", len(compactionMessages))
+	}
+	if compactionMessages[0].UUID != "system-1" {
+		t.Fatalf("compaction message uuid = %q, want system-1", compactionMessages[0].UUID)
+	}
+	if compactionMessages[0].Compaction == nil || compactionMessages[0].Compaction.Kind != CompactionKindBoundary {
+		t.Fatalf("compaction message = %#v", compactionMessages[0].Compaction)
+	}
+	if len(compactionMessages[0].Compaction.ContextItems) != 1 {
+		t.Fatalf("context items len = %d, want 1", len(compactionMessages[0].Compaction.ContextItems))
+	}
+	if compactionMessages[0].Compaction.ContextItems[0].Message == nil {
+		t.Fatalf("context item message was nil")
+	}
+	if compactionMessages[0].Compaction.ContextItems[0].Message.Content[0].Text != "summary" {
+		t.Fatalf("copied summary text = %q", compactionMessages[0].Compaction.ContextItems[0].Message.Content[0].Text)
+	}
+}

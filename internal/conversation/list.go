@@ -179,8 +179,9 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 
 func (idx *Index) firstTranscriptMatch(record Record, terms []string) (SearchMatch, bool, error) {
 	stream, err := idx.resolveStream(record, LoadOptions{
-		IncludeSystemPrompts: false,
-		IncludeToolOutputs:   false,
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
 	})
 	if err != nil {
 		return emptySearchMatch(), false, err

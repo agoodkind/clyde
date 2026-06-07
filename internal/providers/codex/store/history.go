@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // ThreadSource is the typed subset of Codex SessionSource that Clyde needs for
@@ -66,10 +68,14 @@ type ThreadSummary struct {
 // HistoryMessage is a normalized conversational message extracted from Codex
 // rollout entries.
 type HistoryMessage struct {
-	Role      string
-	Text      string
-	Timestamp time.Time
-	Phase     string
+	Role              string
+	ParentUUID        string
+	LogicalParentUUID string
+	Visibility        transcript.MessageVisibility
+	Compaction        *transcript.CompactionMetadata
+	Text              string
+	Timestamp         time.Time
+	Phase             string
 }
 
 // ReadThreadByRolloutPath returns a Codex rollout thread summary by JSONL path.
@@ -122,6 +128,11 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 			}
 		case historyEnvelopeEventMsg:
 			msg, ok := eventMessage(envelope.Payload, lineTime)
+			if ok {
+				applyMessage(&summary, msg, includeHistory)
+			}
+		case historyEnvelopeCompacted:
+			msg, ok := compactedMessage(envelope.Payload, lineTime)
 			if ok {
 				applyMessage(&summary, msg, includeHistory)
 			}
@@ -232,6 +243,11 @@ type eventPayload struct {
 	Phase   string `json:"phase"`
 }
 
+type compactedPayload struct {
+	Message            string             `json:"message"`
+	ReplacementHistory *[]json.RawMessage `json:"replacement_history"`
+}
+
 type turnContextPayload struct {
 	CWD string `json:"cwd"`
 }
@@ -289,47 +305,31 @@ func applyMessage(summary *ThreadSummary, msg HistoryMessage, includeHistory boo
 func responseItemMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
 	var payload responsePayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return HistoryMessage{
-			Role: "", Text: "", Timestamp: time.
-				Time{},
-
-			Phase: "",
-		}, false
+		return emptyHistoryMessage(), false
 	}
 	if payload.Type != "message" {
-		return HistoryMessage{
-			Role: "", Text: "", Timestamp: time.
-				Time{},
-
-			Phase: "",
-		}, false
+		return emptyHistoryMessage(), false
 	}
 	text := strings.TrimSpace(contentText(payload.Content))
 	if text == "" {
-		return HistoryMessage{
-			Role: "", Text: "", Timestamp: time.
-				Time{},
-
-			Phase: "",
-		}, false
+		return emptyHistoryMessage(), false
 	}
 	return HistoryMessage{
-		Role:      payload.Role,
-		Text:      text,
-		Timestamp: timestamp,
-		Phase:     payload.Phase,
+		Role:              payload.Role,
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Visibility:        transcript.MessageVisibilityVisible,
+		Compaction:        nil,
+		Text:              text,
+		Timestamp:         timestamp,
+		Phase:             payload.Phase,
 	}, true
 }
 
 func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
 	var payload eventPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return HistoryMessage{
-			Role: "", Text: "", Timestamp: time.
-				Time{},
-
-			Phase: "",
-		}, false
+		return emptyHistoryMessage(), false
 	}
 	var role string
 	switch eventMessageType(payload.Type) {
@@ -338,28 +338,83 @@ func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, boo
 	case eventMessageTypeAgent:
 		role = "assistant"
 	default:
-		return HistoryMessage{
-			Role: "", Text: "", Timestamp: time.
-				Time{},
-
-			Phase: "",
-		}, false
+		return emptyHistoryMessage(), false
 	}
 	text := strings.TrimSpace(payload.Message)
 	if text == "" {
-		return HistoryMessage{
-			Role: "", Text: "", Timestamp: time.
-				Time{},
-
-			Phase: "",
-		}, false
+		return emptyHistoryMessage(), false
 	}
 	return HistoryMessage{
-		Role:      role,
-		Text:      text,
-		Timestamp: timestamp,
-		Phase:     payload.Phase,
+		Role:              role,
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Visibility:        transcript.MessageVisibilityVisible,
+		Compaction:        nil,
+		Text:              text,
+		Timestamp:         timestamp,
+		Phase:             payload.Phase,
 	}, true
+}
+
+func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
+	var payload compactedPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return emptyHistoryMessage(), false
+	}
+	contextItems := []transcript.CompactedContextItem(nil)
+	replacementHistoryCount := 0
+	trimmedMessage := strings.TrimSpace(payload.Message)
+	if payload.ReplacementHistory != nil {
+		replacementHistoryCount = len(*payload.ReplacementHistory)
+		contextItems = normalizeCompactedContextItems(*payload.ReplacementHistory)
+	} else if trimmedMessage != "" {
+		contextItems = []transcript.CompactedContextItem{
+			legacyCompactedSummaryContextItem(trimmedMessage),
+		}
+	}
+	return HistoryMessage{
+		Role:              "system",
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Visibility:        transcript.MessageVisibilityVisible,
+		Compaction: &transcript.CompactionMetadata{
+			Kind:                      transcript.CompactionKindBoundary,
+			Trigger:                   transcript.CompactionTriggerUnknown,
+			PreTokens:                 0,
+			PostTokens:                0,
+			TokensSaved:               0,
+			MessagesSummarized:        0,
+			ReplacementHistoryCount:   replacementHistoryCount,
+			HeadUUID:                  "",
+			AnchorUUID:                "",
+			TailUUID:                  "",
+			ContextItems:              contextItems,
+			UserContext:               "",
+			Direction:                 "",
+			PreCompactDiscoveredTools: nil,
+			CompactedToolIDs:          nil,
+			ClearedAttachmentUUIDs:    nil,
+			RawCompactMetadata:        nil,
+			RawMicrocompactMetadata:   nil,
+			RawSummarizeMetadata:      nil,
+		},
+		Text:      trimmedMessage,
+		Timestamp: timestamp,
+		Phase:     "",
+	}, true
+}
+
+func emptyHistoryMessage() HistoryMessage {
+	return HistoryMessage{
+		Role:              "",
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Visibility:        "",
+		Compaction:        nil,
+		Text:              "",
+		Timestamp:         time.Time{},
+		Phase:             "",
+	}
 }
 
 func contentText(parts []contentPart) string {
@@ -422,6 +477,7 @@ const (
 	historyEnvelopeSessionMeta  historyEnvelopeType = "session_meta"
 	historyEnvelopeResponseItem historyEnvelopeType = "response_item"
 	historyEnvelopeEventMsg     historyEnvelopeType = "event_msg"
+	historyEnvelopeCompacted    historyEnvelopeType = "compacted"
 	historyEnvelopeTurnContext  historyEnvelopeType = "turn_context"
 )
 
