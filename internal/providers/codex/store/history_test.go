@@ -10,21 +10,21 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-func TestReadThreadByRolloutPathParsesSummaryAndHistory(t *testing.T) {
+func TestReadHeaderParsesSummaryAndStreamMessagesParsesHistory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
-	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+	body := `{"timestamp":"2026-05-02T17:09:03.000Z","type":"turn_context","payload":{"cwd":"/repo/subdir"}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"trace the scanner"}]}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"I am checking the rollout format.","phase":"commentary"}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:09:06.500Z","type":"turn_context","payload":{"cwd":"/repo/subdir"}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:07.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}],"phase":"final"}}` + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write rollout: %v", err)
 	}
 
-	thread, err := ReadThreadByRolloutPath(path, true, false)
+	thread, err := ReadHeader(path, false)
 	if err != nil {
-		t.Fatalf("ReadThreadByRolloutPath returned error: %v", err)
+		t.Fatalf("ReadHeader returned error: %v", err)
 	}
 	if thread.ID != "019de9aa-3a00-7010-bd9f-a6ee71559357" {
 		t.Fatalf("ID = %q", thread.ID)
@@ -41,18 +41,20 @@ func TestReadThreadByRolloutPathParsesSummaryAndHistory(t *testing.T) {
 	if thread.LatestCWD != "/repo/subdir" {
 		t.Fatalf("LatestCWD = %q, want /repo/subdir", thread.LatestCWD)
 	}
-	if thread.Preview != "trace the scanner" {
-		t.Fatalf("Preview = %q", thread.Preview)
+
+	messages := collectHistoryMessages(t, path, true)
+	if len(messages) != 3 {
+		t.Fatalf("Messages len = %d, want 3", len(messages))
 	}
-	if len(thread.Messages) != 3 {
-		t.Fatalf("Messages len = %d, want 3", len(thread.Messages))
+	if messages[0].Text != "trace the scanner" {
+		t.Fatalf("first message text = %q", messages[0].Text)
 	}
-	if thread.Messages[1].Role != "assistant" || thread.Messages[1].Phase != "commentary" {
-		t.Fatalf("assistant event message = %#v", thread.Messages[1])
+	if messages[1].Role != "assistant" || messages[1].Phase != "commentary" {
+		t.Fatalf("assistant event message = %#v", messages[1])
 	}
 }
 
-func TestReadThreadByRolloutPathReadsLargeCompactedLine(t *testing.T) {
+func TestStreamMessagesReadsLargeCompactedLine(t *testing.T) {
 	t.Parallel()
 	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
 	const postCompactionText = "post-compaction user message"
@@ -72,21 +74,58 @@ func TestReadThreadByRolloutPathReadsLargeCompactedLine(t *testing.T) {
 		t.Fatalf("write rollout: %v", err)
 	}
 
-	thread, err := ReadThreadByRolloutPath(path, true, false)
-	if err != nil {
-		t.Fatalf("ReadThreadByRolloutPath returned error: %v", err)
-	}
-	if thread.ID != threadID {
-		t.Fatalf("ID = %q, want %q", thread.ID, threadID)
-	}
-	found := thread.Preview == postCompactionText
-	for _, message := range thread.Messages {
+	messages := collectHistoryMessages(t, path, true)
+	found := false
+	for _, message := range messages {
 		if message.Text == postCompactionText {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("post-compaction message not found; preview = %q, messages len = %d", thread.Preview, len(thread.Messages))
+		t.Fatalf("post-compaction message not found; messages len = %d", len(messages))
+	}
+}
+
+func TestReadHeaderStopsAfterSessionMetaBeforeLargeCompactedLine(t *testing.T) {
+	t.Parallel()
+	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
+	const compactedLineMinimumBytes = 5 * 1024 * 1024
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-"+threadID+".jsonl")
+	largeText := strings.Repeat("x", compactedLineMinimumBytes)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"` + largeText + `","replacement_history":[]}}`
+	if len([]byte(compactedLine)) <= compactedLineMinimumBytes {
+		t.Fatalf("compacted line bytes = %d, want more than %d", len([]byte(compactedLine)), compactedLineMinimumBytes)
+	}
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + threadID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		compactedLine + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"turn_context","payload":{"cwd":"/repo/after-large-line"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	thread, err := ReadHeader(path, true)
+	if err != nil {
+		t.Fatalf("ReadHeader returned error: %v", err)
+	}
+	if thread.ID != threadID {
+		t.Fatalf("ID = %q, want %q", thread.ID, threadID)
+	}
+	if thread.CWD != "/repo" {
+		t.Fatalf("CWD = %q, want /repo", thread.CWD)
+	}
+	if thread.ModelProvider != "openai" {
+		t.Fatalf("ModelProvider = %q, want openai", thread.ModelProvider)
+	}
+	if !thread.IsArchived {
+		t.Fatalf("IsArchived = false, want true")
+	}
+	if !thread.UpdatedAt.IsZero() {
+		t.Fatalf("UpdatedAt = %v, want zero", thread.UpdatedAt)
+	}
+	if thread.LatestCWD != "" {
+		t.Fatalf("LatestCWD = %q, want empty because scan stops at session_meta", thread.LatestCWD)
 	}
 }
 
@@ -139,7 +178,7 @@ func TestStreamMessagesYieldsIncrementallyAndSkipsCompactedWithoutSystemMessages
 	}
 }
 
-func TestReadThreadByRolloutPathNormalizesCompactedContextItems(t *testing.T) {
+func TestStreamMessagesNormalizesCompactedContextItems(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name     string
@@ -413,14 +452,14 @@ func TestReadThreadByRolloutPathNormalizesCompactedContextItems(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			thread := readThreadWithCompactionPayload(
+			messages := streamMessagesWithCompactionPayload(
 				t,
 				`{"message":"","replacement_history":[`+testCase.rawItem+`]}`,
 			)
-			if len(thread.Messages) != 1 {
-				t.Fatalf("messages len = %d, want 1", len(thread.Messages))
+			if len(messages) != 1 {
+				t.Fatalf("messages len = %d, want 1", len(messages))
 			}
-			message := thread.Messages[0]
+			message := messages[0]
 			if message.Role != "system" {
 				t.Fatalf("role = %q, want system", message.Role)
 			}
@@ -448,16 +487,16 @@ func TestReadThreadByRolloutPathNormalizesCompactedContextItems(t *testing.T) {
 	}
 }
 
-func TestReadThreadByRolloutPathParsesLegacyCompactedSummary(t *testing.T) {
+func TestStreamMessagesParsesLegacyCompactedSummary(t *testing.T) {
 	t.Parallel()
-	thread := readThreadWithCompactionPayload(
+	messages := streamMessagesWithCompactionPayload(
 		t,
 		`{"message":"legacy summary only"}`,
 	)
-	if len(thread.Messages) != 1 {
-		t.Fatalf("messages len = %d, want 1", len(thread.Messages))
+	if len(messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(messages))
 	}
-	message := thread.Messages[0]
+	message := messages[0]
 	if message.Compaction == nil {
 		t.Fatalf("compaction metadata was nil")
 	}
@@ -482,10 +521,10 @@ func TestReadThreadByRolloutPathParsesLegacyCompactedSummary(t *testing.T) {
 	}
 }
 
-func readThreadWithCompactionPayload(
+func streamMessagesWithCompactionPayload(
 	t *testing.T,
 	compactedPayload string,
-) ThreadSummary {
+) []HistoryMessage {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(
@@ -497,11 +536,23 @@ func readThreadWithCompactionPayload(
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write rollout: %v", err)
 	}
-	thread, err := ReadThreadByRolloutPath(path, true, false)
-	if err != nil {
-		t.Fatalf("ReadThreadByRolloutPath returned error: %v", err)
+	return collectHistoryMessages(t, path, true)
+}
+
+func collectHistoryMessages(
+	t *testing.T,
+	path string,
+	includeSystemMessages bool,
+) []HistoryMessage {
+	t.Helper()
+	messages := []HistoryMessage{}
+	for message, err := range StreamMessages(path, includeSystemMessages) {
+		if err != nil {
+			t.Fatalf("StreamMessages returned error: %v", err)
+		}
+		messages = append(messages, message)
 	}
-	return thread
+	return messages
 }
 
 func rawForCompactedContextItem(

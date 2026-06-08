@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"goodkind.io/clyde/internal/conversation"
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
@@ -101,9 +102,8 @@ func TestStreamIncludesCodexCompactionBoundariesWhenRequested(t *testing.T) {
 
 // TestDiscoverAndScanResolvesDurableNameAndLatestWorkdir exercises the full
 // Discover then ScanRecord flow against a populated store, asserting the durable
-// thread name comes from the session index, the latest work dir wins over the
-// initial cwd, and the archived rollout is flagged. This is the behavior that
-// moved out of the codex store's incremental scanner into the parser.
+// thread name comes from the session index, a pre-header work dir wins over the
+// initial cwd, and the archived rollout is flagged.
 func TestDiscoverAndScanResolvesDurableNameAndLatestWorkdir(t *testing.T) {
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
@@ -122,8 +122,8 @@ func TestDiscoverAndScanResolvesDurableNameAndLatestWorkdir(t *testing.T) {
 	}
 	activeID := "019de9aa-3a00-7010-bd9f-a6ee71559357"
 	activePath := filepath.Join(activeDir, "rollout-2026-05-02T10-09-00-"+activeID+".jsonl")
-	activeBody := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + activeID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:10:00.000Z","type":"turn_context","payload":{"cwd":"/repo/subdir"}}` + "\n"
+	activeBody := `{"timestamp":"2026-05-02T17:09:03.000Z","type":"turn_context","payload":{"cwd":"/repo/subdir"}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + activeID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n"
 	if err := os.WriteFile(activePath, []byte(activeBody), 0o600); err != nil {
 		t.Fatalf("write active rollout: %v", err)
 	}
@@ -184,8 +184,9 @@ func TestScanRecordReadsCodexHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat rollout: %v", err)
 	}
+	stampMtime := time.Date(2026, time.May, 2, 18, 30, 0, 0, time.UTC)
 
-	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
+	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: stampMtime})
 	if !ok {
 		t.Fatalf("ScanRecord returned ok=false")
 	}
@@ -205,6 +206,9 @@ func TestScanRecordReadsCodexHeader(t *testing.T) {
 	}
 	if record.ArtifactKind != "rollout" {
 		t.Fatalf("artifact kind = %q, want rollout", record.ArtifactKind)
+	}
+	if !record.UpdatedAt.Equal(stampMtime) {
+		t.Fatalf("UpdatedAt = %v, want %v", record.UpdatedAt, stampMtime)
 	}
 }
 

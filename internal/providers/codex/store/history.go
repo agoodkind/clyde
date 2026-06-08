@@ -81,8 +81,11 @@ type HistoryMessage struct {
 	Phase             string
 }
 
-// ReadThreadByRolloutPath returns a Codex rollout thread summary by JSONL path.
-func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (ThreadSummary, error) {
+const headerLineCap = 64
+
+// ReadHeader returns a Codex rollout thread summary from the header JSONL
+// entries without reading message history.
+func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
@@ -91,46 +94,53 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 	defer func() { _ = f.Close() }()
 
 	summary := ThreadSummary{
-		RolloutPath: path,
-		IsArchived:  archived, ID: "", ForkedFromID: "", Preview: "", Name: "", ModelProvider: "", CreatedAt: time.
-				Time{},
-
-		UpdatedAt: time.
-			Time{},
-
-		CWD: "", LatestCWD: "", CLIVersion: "", Originator: "", Source: ThreadSource{Kind: "", ParentThreadID: "", AgentNickname: "", AgentRole: ""},
-
-		AgentNickname: "", AgentRole: "", IsSubagent: false, Messages: nil,
+		ID:            "",
+		RolloutPath:   path,
+		ForkedFromID:  "",
+		Preview:       "",
+		Name:          "",
+		ModelProvider: "",
+		CreatedAt:     time.Time{},
+		UpdatedAt:     time.Time{},
+		CWD:           "",
+		LatestCWD:     "",
+		CLIVersion:    "",
+		Originator:    "",
+		Source:        ThreadSource{Kind: "", ParentThreadID: "", AgentNickname: "", AgentRole: ""},
+		AgentNickname: "",
+		AgentRole:     "",
+		IsSubagent:    false,
+		IsArchived:    archived,
+		Messages:      nil,
 	}
-	// A rollout line is a single JSONL record. Codex compaction checkpoints inline
-	// the full pre-compaction history into one `compacted` line, which can reach
-	// tens of megabytes, so an uncapped bufio.Reader replaces bufio.Scanner (whose
-	// fixed token cap aborts with "token too long" on such lines).
+
 	reader := bufio.NewReader(f)
-	for {
+	for range headerLineCap {
 		raw, readErr := reader.ReadBytes('\n')
 		line := bytes.TrimRight(raw, "\r\n")
 		var envelope historyLine
-		// An unparseable line decodes to the zero envelope and is skipped, matching
-		// the prior scanner behavior; only a successful decode is folded in.
 		if len(line) > 0 && json.Unmarshal(line, &envelope) == nil {
-			if err := applyEnvelope(&summary, envelope, includeHistory, path); err != nil {
-				return ThreadSummary{}, err
+			switch historyEnvelopeType(envelope.Type) {
+			case historyEnvelopeSessionMeta:
+				var payload sessionMetaPayload
+				if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+					slog.Warn("codex.store.history.session_meta_unmarshal_failed", "concern", "providers.codex.store", "path", path, "err", err)
+					return ThreadSummary{}, fmt.Errorf("unmarshal codex session metadata %s: %w", path, err)
+				}
+				applySessionMeta(&summary, payload, parseCodexTime(envelope.Timestamp))
+				summary.UpdatedAt = time.Time{}
+				return summary, nil
+			case historyEnvelopeTurnContext:
+				applyTurnContext(&summary, envelope.Payload)
+			case historyEnvelopeResponseItem, historyEnvelopeEventMsg, historyEnvelopeCompacted:
 			}
 		}
 		if readErr == io.EOF {
 			break
 		}
 		if readErr != nil {
+			slog.Warn("codex.store.history.read_failed", "concern", "providers.codex.store", "path", path, "err", readErr)
 			return ThreadSummary{}, fmt.Errorf("read codex rollout %s: %w", path, readErr)
-		}
-	}
-	if summary.ID == "" {
-		return ThreadSummary{}, fmt.Errorf("codex rollout %s missing session_meta id", path)
-	}
-	if summary.UpdatedAt.IsZero() {
-		if stat, err := os.Stat(path); err == nil {
-			summary.UpdatedAt = stat.ModTime()
 		}
 	}
 	return summary, nil
@@ -171,39 +181,6 @@ func StreamMessages(path string, includeSystemMessages bool) iter.Seq2[HistoryMe
 			}
 		}
 	}
-}
-
-// applyEnvelope folds one decoded rollout envelope into summary. It returns an
-// error only when a session_meta payload cannot be decoded.
-func applyEnvelope(summary *ThreadSummary, envelope historyLine, includeHistory bool, path string) error {
-	lineTime := parseCodexTime(envelope.Timestamp)
-	if !lineTime.IsZero() {
-		summary.UpdatedAt = lineTime
-	}
-	switch historyEnvelopeType(envelope.Type) {
-	case historyEnvelopeSessionMeta:
-		var payload sessionMetaPayload
-		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			slog.Warn("codex.store.history.session_meta_unmarshal_failed", "concern", "providers.codex.store", "path", path, "err", err)
-			return fmt.Errorf("unmarshal codex session metadata %s: %w", path, err)
-		}
-		applySessionMeta(summary, payload, lineTime)
-	case historyEnvelopeResponseItem:
-		if msg, ok := responseItemMessage(envelope.Payload, lineTime); ok {
-			applyMessage(summary, msg, includeHistory)
-		}
-	case historyEnvelopeEventMsg:
-		if msg, ok := eventMessage(envelope.Payload, lineTime); ok {
-			applyMessage(summary, msg, includeHistory)
-		}
-	case historyEnvelopeCompacted:
-		if msg, ok := compactedMessage(envelope.Payload, lineTime); ok {
-			applyMessage(summary, msg, includeHistory)
-		}
-	case historyEnvelopeTurnContext:
-		applyTurnContext(summary, envelope.Payload)
-	}
-	return nil
 }
 
 func streamMessageFromEnvelope(envelope historyLine, includeSystemMessages bool) (HistoryMessage, bool) {
@@ -361,15 +338,6 @@ func applyTurnContext(summary *ThreadSummary, raw json.RawMessage) {
 	}
 	if strings.TrimSpace(payload.CWD) != "" {
 		summary.LatestCWD = payload.CWD
-	}
-}
-
-func applyMessage(summary *ThreadSummary, msg HistoryMessage, includeHistory bool) {
-	if summary.Preview == "" && msg.Role == "user" {
-		summary.Preview = msg.Text
-	}
-	if includeHistory {
-		summary.Messages = append(summary.Messages, msg)
 	}
 }
 

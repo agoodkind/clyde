@@ -166,16 +166,21 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	p.mu.Unlock()
 
 	archived := p.isArchivedPath(paths, path)
-	thread, err := codexstore.ReadThreadByRolloutPath(path, false, archived)
-	if err != nil {
+	thread, err := codexstore.ReadHeader(path, archived)
+	if err != nil || thread.ID == "" {
 		// A rollout too short or malformed to parse a header still gets a record
 		// from its filename identity, matching the prior incremental scanner.
 		fallback, ok := fallbackThread(path, archived)
 		if !ok {
+			if err == nil {
+				err = fmt.Errorf("codex rollout %s missing session_meta id", path)
+			}
 			slog.Warn("providers.codex.parser.header_failed", "concern", concern, "component", "codex", "path", path, "err", err)
 			return emptyRecord(), false
 		}
 		thread = fallback
+	} else {
+		thread.UpdatedAt = stamp.Mtime
 	}
 	if thread.IsSubagent {
 		return emptyRecord(), false
