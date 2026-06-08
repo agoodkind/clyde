@@ -54,6 +54,40 @@ func TestReadHeaderParsesSummaryAndStreamMessagesParsesHistory(t *testing.T) {
 	}
 }
 
+func TestReadHeaderParsesForkedFromID(t *testing.T) {
+	t.Parallel()
+	thread := readHeaderFromSessionMetaPayload(
+		t,
+		`{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","forked_from_id":"019de9aa-parent-thread","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}`,
+	)
+	if thread.ForkedFromID != "019de9aa-parent-thread" {
+		t.Fatalf("ForkedFromID = %q, want 019de9aa-parent-thread", thread.ForkedFromID)
+	}
+	if thread.Source.ParentThreadID != "" {
+		t.Fatalf("Source.ParentThreadID = %q, want empty", thread.Source.ParentThreadID)
+	}
+	if thread.IsSubagent {
+		t.Fatalf("IsSubagent = true, want false")
+	}
+}
+
+func TestReadHeaderKeepsSubagentParentOutOfForkedFromID(t *testing.T) {
+	t.Parallel()
+	thread := readHeaderFromSessionMetaPayload(
+		t,
+		`{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"subagent":{"thread_spawn":{"parent_thread_id":"019de9aa-spawn-parent","agent_nickname":"helper","agent_role":"analysis"}}},"model_provider":"openai"}`,
+	)
+	if thread.ForkedFromID != "" {
+		t.Fatalf("ForkedFromID = %q, want empty", thread.ForkedFromID)
+	}
+	if thread.Source.ParentThreadID != "019de9aa-spawn-parent" {
+		t.Fatalf("Source.ParentThreadID = %q, want 019de9aa-spawn-parent", thread.Source.ParentThreadID)
+	}
+	if !thread.IsSubagent {
+		t.Fatalf("IsSubagent = false, want true")
+	}
+}
+
 func TestStreamMessagesReadsLargeCompactedLine(t *testing.T) {
 	t.Parallel()
 	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
@@ -537,6 +571,27 @@ func streamMessagesWithCompactionPayload(
 		t.Fatalf("write rollout: %v", err)
 	}
 	return collectHistoryMessages(t, path, true)
+}
+
+func readHeaderFromSessionMetaPayload(
+	t *testing.T,
+	sessionMetaPayload string,
+) ThreadSummary {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(
+		dir,
+		"rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl",
+	)
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":` + sessionMetaPayload + `}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+	thread, err := ReadHeader(path, false)
+	if err != nil {
+		t.Fatalf("ReadHeader returned error: %v", err)
+	}
+	return thread
 }
 
 func collectHistoryMessages(

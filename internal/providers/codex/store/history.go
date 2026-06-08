@@ -210,6 +210,7 @@ type historyLine struct {
 
 type sessionMetaPayload struct {
 	ID            string      `json:"id"`
+	ForkedFromID  string      `json:"forked_from_id"`
 	Timestamp     string      `json:"timestamp"`
 	CWD           string      `json:"cwd"`
 	Originator    string      `json:"originator"`
@@ -315,7 +316,7 @@ func applySessionMeta(summary *ThreadSummary, payload sessionMetaPayload, lineTi
 	if summary.Source.AgentRole == "" {
 		summary.Source.AgentRole = payload.AgentRole
 	}
-	summary.ForkedFromID = payload.Source.ParentThreadID
+	summary.ForkedFromID = payload.ForkedFromID
 	summary.IsSubagent = payload.Source.Kind == ThreadSourceSubagent ||
 		payload.Source.Kind == ThreadSourceSubagentOld ||
 		payload.Source.ParentThreadID != "" ||
