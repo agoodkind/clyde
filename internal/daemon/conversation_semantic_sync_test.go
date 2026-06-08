@@ -291,6 +291,55 @@ func TestConversationSemanticSyncDoesNotMarkStampsWhenUpsertJobFails(t *testing.
 	}
 }
 
+func TestConversationSemanticSyncSkipsPassWhileJobInFlight(t *testing.T) {
+	conversationID := "codex:one"
+	oldStamp := semanticTestStamp(10, 100)
+	newStamp := semanticTestStamp(20, 200)
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: newStamp}},
+		messagesByID: map[string][]transcript.Message{
+			conversationID: {
+				{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "first"},
+			},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{
+		jobStateByID: map[string]string{"stuck-job": "running"},
+	}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker.lastPushed[conversationID] = oldStamp
+	worker.inFlightJobID = "stuck-job"
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error while job in flight: %v", err)
+	}
+	if len(client.upsertCalls) != 0 || len(client.deleteCalls) != 0 {
+		t.Fatalf("upsert=%d delete=%d, want both 0 while job in flight", len(client.upsertCalls), len(client.deleteCalls))
+	}
+	if worker.inFlightJobID != "stuck-job" {
+		t.Fatalf("inFlightJobID = %q, want stuck-job preserved while running", worker.inFlightJobID)
+	}
+	if pushed, ok := worker.lastPushed[conversationID]; !ok || !pushed.Equal(oldStamp) {
+		t.Fatalf("last pushed stamp = %+v, %t; want unchanged %+v while skipped", pushed, ok, oldStamp)
+	}
+
+	client.jobStateByID["stuck-job"] = semsearch.JobStateCompleted
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error after job completed: %v", err)
+	}
+	if len(client.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1 after in-flight job completed", len(client.upsertCalls))
+	}
+	if worker.inFlightJobID != "" {
+		t.Fatalf("inFlightJobID = %q, want cleared after terminal upsert", worker.inFlightJobID)
+	}
+	if pushed, ok := worker.lastPushed[conversationID]; !ok || !pushed.Equal(newStamp) {
+		t.Fatalf("last pushed stamp = %+v, %t; want %+v after pass proceeded", pushed, ok, newStamp)
+	}
+}
+
 func semanticTestRecord(conversationID string) conversation.Record {
 	return conversation.Record{
 		ID:            conversationID,

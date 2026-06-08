@@ -16,9 +16,9 @@ import (
 const (
 	conversationSemanticSyncInterval         = time.Minute
 	conversationSemanticMaxOperationsPerPass = 25
-	conversationSemanticMaxDocsPerBatch      = 5000
+	conversationSemanticMaxDocsPerBatch      = 800
 	conversationSemanticJobPollInterval      = time.Second
-	conversationSemanticJobTimeout           = 3 * time.Minute
+	conversationSemanticJobTimeout           = 10 * time.Minute
 	maxSemanticMessageIndex                  = int32(1<<31 - 1)
 )
 
@@ -47,6 +47,12 @@ type conversationSemanticSyncWorker struct {
 	interval             time.Duration
 	maxOperationsPerPass int
 	lastPushed           map[string]conversation.FileStamp
+	// inFlightJobID is the id of the most recent engine job this worker started
+	// that has not yet been observed in a terminal state. It carries across
+	// passes so a job that outlives its in-pass wait blocks the next pass from
+	// firing a second job, which the engine would reject as a conflicting active
+	// job.
+	inFlightJobID string
 }
 
 type conversationSemanticSyncStats struct {
@@ -106,6 +112,7 @@ func newConversationSemanticSyncWorker(
 		interval:             conversationSemanticSyncInterval,
 		maxOperationsPerPass: conversationSemanticMaxOperationsPerPass,
 		lastPushed:           make(map[string]conversation.FileStamp),
+		inFlightJobID:        "",
 	}
 }
 
@@ -140,6 +147,9 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	if w == nil || w.index == nil || w.client == nil {
 		return fmt.Errorf("semantic conversation sync worker is not configured")
 	}
+	if w.inFlightJobBlocksPass(ctx) {
+		return nil
+	}
 	stampedRecords, err := w.index.ListWithStamps(ctx)
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.list_failed",
@@ -162,11 +172,56 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	if err := w.deleteRemovedConversations(ctx, currentRecords, operationLimit, &stats); err != nil {
 		return err
 	}
-	if err := w.upsertChangedConversations(ctx, stampedRecords, operationLimit, &stats); err != nil {
-		return err
+	if w.inFlightJobID == "" {
+		if err := w.upsertChangedConversations(ctx, stampedRecords, operationLimit, &stats); err != nil {
+			return err
+		}
 	}
 	w.logPass(ctx, len(stampedRecords), operationLimit, stats)
 	return nil
+}
+
+// inFlightJobBlocksPass reports whether a previously started engine job is still
+// running, in which case the caller must skip the pass without firing a new
+// job. When the tracked job has reached a terminal state, or its lookup fails as
+// missing, the tracking id is cleared and the pass proceeds.
+func (w *conversationSemanticSyncWorker) inFlightJobBlocksPass(ctx context.Context) bool {
+	if w.inFlightJobID == "" {
+		return false
+	}
+	state, err := w.client.JobState(ctx, w.inFlightJobID)
+	if err == nil && !isTerminalSemanticJobState(state) {
+		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.waiting_in_flight",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"job_id", w.inFlightJobID,
+			"state", state,
+		)
+		return true
+	}
+	w.inFlightJobID = ""
+	return false
+}
+
+// settleJob clears the tracked in-flight job id when the engine job reached a
+// terminal state, and reports whether it settled. A non-terminal final state
+// (a wait timeout) leaves inFlightJobID set so the next pass's guard waits on it
+// rather than firing a conflicting second job.
+func (w *conversationSemanticSyncWorker) settleJob(finalState string) bool {
+	if isTerminalSemanticJobState(finalState) {
+		w.inFlightJobID = ""
+		return true
+	}
+	return false
+}
+
+func isTerminalSemanticJobState(state string) bool {
+	switch state {
+	case semsearch.JobStateCompleted, semsearch.JobStateFailed, semsearch.JobStateCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (w *conversationSemanticSyncWorker) operationLimit() int {
@@ -200,7 +255,9 @@ func (w *conversationSemanticSyncWorker) deleteRemovedConversations(
 			)
 			continue
 		}
+		w.inFlightJobID = jobID
 		finalState, waitErr := w.client.WaitForJob(ctx, jobID, conversationSemanticJobPollInterval, conversationSemanticJobTimeout)
+		settled := w.settleJob(finalState)
 		if waitErr != nil || finalState != semsearch.JobStateCompleted {
 			stats.failed++
 			w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.delete_incomplete",
@@ -211,6 +268,9 @@ func (w *conversationSemanticSyncWorker) deleteRemovedConversations(
 				"state", finalState,
 				"err", waitErr,
 			)
+			if !settled {
+				return nil
+			}
 			continue
 		}
 		delete(w.lastPushed, conversationID)
@@ -252,7 +312,9 @@ func (w *conversationSemanticSyncWorker) upsertChangedConversations(
 		)
 		return nil
 	}
+	w.inFlightJobID = jobID
 	finalState, waitErr := w.client.WaitForJob(ctx, jobID, conversationSemanticJobPollInterval, conversationSemanticJobTimeout)
+	w.settleJob(finalState)
 	if waitErr != nil || finalState != semsearch.JobStateCompleted {
 		stats.failed += len(members)
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_incomplete",
