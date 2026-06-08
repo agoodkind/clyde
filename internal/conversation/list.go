@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -226,20 +225,7 @@ func normalizeListOptions(options ListOptions) ListOptions {
 
 func emptySearchMatch() SearchMatch {
 	return SearchMatch{
-		Record: Record{
-			ID:            "",
-			Provider:      providerid.ProviderUnspecified,
-			NativeID:      "",
-			Title:         "",
-			WorkspaceRoot: "",
-			ArtifactPath:  "",
-			ArtifactKind:  "",
-			Model:         "",
-			CreatedAt:     time.Time{},
-			UpdatedAt:     time.Time{},
-			SizeBytes:     0,
-			Archived:      false,
-		},
+		Record:       emptyRecord(),
 		MessageIndex: 0,
 		Role:         "",
 		Timestamp:    time.Time{},

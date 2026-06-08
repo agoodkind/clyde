@@ -302,6 +302,7 @@ func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.
 		ID:            wire.GetId(),
 		Provider:      providerFromProto(wire.GetProvider()),
 		NativeID:      wire.GetNativeId(),
+		Lineage:       nil,
 		Title:         wire.GetTitle(),
 		WorkspaceRoot: wire.GetWorkspaceRoot(),
 		ArtifactPath:  wire.GetArtifactPath(),
