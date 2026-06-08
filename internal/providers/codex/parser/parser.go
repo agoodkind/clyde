@@ -157,8 +157,8 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 // ScanRecord reads only the rollout header (no message history) and derives the
 // record. It looks up the durable thread name from the session index cached by
 // Discover and derives the archived flag from the rollout path, so it never
-// reads the session index or the message body. A subagent rollout yields no
-// record.
+// reads the session index or the message body. Parentless subagent machinery
+// yields no record.
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
 	p.mu.Lock()
 	paths := p.paths
@@ -183,8 +183,26 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	} else {
 		thread.UpdatedAt = stamp.Mtime
 	}
-	if thread.IsSubagent {
+	if thread.IsSubagent && thread.Source.ParentThreadID == "" && thread.ForkedFromID == "" {
+		// Review and compact subagent machinery has no parent thread, while
+		// spawned child threads and forks carry lineage.
 		return emptyRecord(), false
+	}
+	var lineage *conversation.Lineage
+	if thread.ForkedFromID != "" {
+		lineage = &conversation.Lineage{
+			Kind:              conversation.ConversationLineageKindFork,
+			ParentProvider:    providerid.ProviderCodex,
+			ParentNativeID:    thread.ForkedFromID,
+			ParentMessageUUID: "",
+		}
+	} else if thread.Source.ParentThreadID != "" {
+		lineage = &conversation.Lineage{
+			Kind:              conversation.ConversationLineageKindSpawn,
+			ParentProvider:    providerid.ProviderCodex,
+			ParentNativeID:    thread.Source.ParentThreadID,
+			ParentMessageUUID: "",
+		}
 	}
 	name := ""
 	if indexOK {
@@ -199,7 +217,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		ID:            conversation.DerivedID(providerid.ProviderCodex, thread.ID, thread.RolloutPath),
 		Provider:      providerid.ProviderCodex,
 		NativeID:      thread.ID,
-		Lineage:       nil,
+		Lineage:       lineage,
 		Title:         title,
 		WorkspaceRoot: workspaceRoot,
 		ArtifactPath:  thread.RolloutPath,
