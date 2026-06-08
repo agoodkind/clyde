@@ -1,48 +1,9 @@
 package parser
 
 import (
-	"fmt"
-	"log/slog"
-
 	codexstore "goodkind.io/clyde/internal/providers/codex/store"
-	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/clyde/internal/transcript"
 )
-
-// readCodexHistory reads a Codex rollout thread with its full message history
-// and maps it directly onto shared transcript messages. It preserves the prior
-// conversation-only text normalization for user and assistant turns so the
-// default rendered and searched output is unchanged, while leaving compaction
-// boundary metadata on the raw shared stream for opt-in callers.
-func readCodexHistory(path string, includeSystemMessages bool) ([]transcript.Message, error) {
-	thread, err := codexstore.ReadThreadByRolloutPath(path, true, false)
-	if err != nil {
-		slog.Warn("providers.codex.parser.read_failed",
-			"component", "codex",
-			"subcomponent", "parser",
-			"concern", slogger.ConcernProviderCodexStore,
-			"path", path,
-			"err", err,
-		)
-		return nil, fmt.Errorf("read codex rollout history: %w", err)
-	}
-	return codexMessagesFromThread(thread, includeSystemMessages), nil
-}
-
-func codexMessagesFromThread(
-	thread codexstore.ThreadSummary,
-	includeSystemMessages bool,
-) []transcript.Message {
-	messages := make([]transcript.Message, 0, len(thread.Messages))
-	for _, msg := range thread.Messages {
-		message, ok := codexTranscriptMessage(msg, includeSystemMessages)
-		if !ok {
-			continue
-		}
-		messages = append(messages, message)
-	}
-	return messages
-}
 
 func codexTranscriptMessage(
 	msg codexstore.HistoryMessage,

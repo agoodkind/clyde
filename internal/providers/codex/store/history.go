@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"os"
 	"strings"
@@ -135,6 +136,43 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 	return summary, nil
 }
 
+// StreamMessages yields normalized Codex rollout messages as each JSONL envelope
+// is read. When system messages are excluded, compaction payloads are skipped
+// before decoding so replacement_history stays untouched.
+func StreamMessages(path string, includeSystemMessages bool) iter.Seq2[HistoryMessage, error] {
+	return func(yield func(HistoryMessage, error) bool) {
+		f, err := os.Open(path)
+		if err != nil {
+			slog.Warn("codex.store.history.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
+			yield(emptyHistoryMessage(), fmt.Errorf("open codex rollout %s: %w", path, err))
+			return
+		}
+		defer func() { _ = f.Close() }()
+
+		reader := bufio.NewReader(f)
+		for {
+			raw, readErr := reader.ReadBytes('\n')
+			line := bytes.TrimRight(raw, "\r\n")
+			var envelope historyLine
+			if len(line) > 0 && json.Unmarshal(line, &envelope) == nil {
+				if msg, ok := streamMessageFromEnvelope(envelope, includeSystemMessages); ok {
+					if !yield(msg, nil) {
+						return
+					}
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				slog.Warn("codex.store.history.read_failed", "concern", "providers.codex.store", "path", path, "err", readErr)
+				yield(emptyHistoryMessage(), fmt.Errorf("read codex rollout %s: %w", path, readErr))
+				return
+			}
+		}
+	}
+}
+
 // applyEnvelope folds one decoded rollout envelope into summary. It returns an
 // error only when a session_meta payload cannot be decoded.
 func applyEnvelope(summary *ThreadSummary, envelope historyLine, includeHistory bool, path string) error {
@@ -166,6 +204,25 @@ func applyEnvelope(summary *ThreadSummary, envelope historyLine, includeHistory 
 		applyTurnContext(summary, envelope.Payload)
 	}
 	return nil
+}
+
+func streamMessageFromEnvelope(envelope historyLine, includeSystemMessages bool) (HistoryMessage, bool) {
+	lineTime := parseCodexTime(envelope.Timestamp)
+	switch historyEnvelopeType(envelope.Type) {
+	case historyEnvelopeResponseItem:
+		return responseItemMessage(envelope.Payload, lineTime)
+	case historyEnvelopeEventMsg:
+		return eventMessage(envelope.Payload, lineTime)
+	case historyEnvelopeCompacted:
+		if !includeSystemMessages {
+			return emptyHistoryMessage(), false
+		}
+		return compactedMessage(envelope.Payload, lineTime)
+	case historyEnvelopeSessionMeta, historyEnvelopeTurnContext:
+		return emptyHistoryMessage(), false
+	default:
+		return emptyHistoryMessage(), false
+	}
 }
 
 type historyLine struct {

@@ -205,18 +205,18 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	}, true
 }
 
-// Stream yields the rollout's conversation messages one at a time. Codex history
-// still reads the whole rollout once, but the shared transcript messages now
-// carry direct per-message metadata and only filter system boundaries when the
-// caller leaves IncludeSystemMessages false.
+// Stream yields the rollout's conversation messages one at a time.
 func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
-		history, err := readCodexHistory(path, opts.IncludeSystemMessages)
-		if err != nil {
-			yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
-			return
-		}
-		for _, message := range history {
+		for msg, err := range codexstore.StreamMessages(path, opts.IncludeSystemMessages) {
+			if err != nil {
+				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
+				return
+			}
+			message, ok := codexTranscriptMessage(msg, opts.IncludeSystemMessages)
+			if !ok {
+				continue
+			}
 			if !yield(message, nil) {
 				return
 			}

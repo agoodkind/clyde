@@ -90,6 +90,55 @@ func TestReadThreadByRolloutPathReadsLargeCompactedLine(t *testing.T) {
 	}
 }
 
+func TestStreamMessagesYieldsIncrementallyAndSkipsCompactedWithoutSystemMessages(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first message"}]}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:05.500Z","type":"compacted","payload":{"message":"summary text","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"pre compact"}]}]}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"second message","phase":"commentary"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	var firstMessage HistoryMessage
+	firstCount := 0
+	for message, err := range StreamMessages(path, false) {
+		if err != nil {
+			t.Fatalf("StreamMessages returned error before first message: %v", err)
+		}
+		firstMessage = message
+		firstCount++
+		break
+	}
+	if firstCount != 1 {
+		t.Fatalf("first stream count = %d, want 1", firstCount)
+	}
+	if firstMessage.Text != "first message" {
+		t.Fatalf("first message text = %q, want first message", firstMessage.Text)
+	}
+
+	messages := []HistoryMessage{}
+	for message, err := range StreamMessages(path, false) {
+		if err != nil {
+			t.Fatalf("StreamMessages returned error: %v", err)
+		}
+		messages = append(messages, message)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Text != "first message" || messages[1].Text != "second message" {
+		t.Fatalf("message texts = %q/%q, want first message/second message", messages[0].Text, messages[1].Text)
+	}
+	for _, message := range messages {
+		if message.Role == "system" || message.Compaction != nil {
+			t.Fatalf("unexpected compacted message = %#v", message)
+		}
+	}
+}
+
 func TestReadThreadByRolloutPathNormalizesCompactedContextItems(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
