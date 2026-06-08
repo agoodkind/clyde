@@ -102,6 +102,9 @@ func TestScanRecordReadsBoundedHeader(t *testing.T) {
 	if record.CreatedAt.IsZero() {
 		t.Fatalf("created time was not parsed from the header")
 	}
+	if record.Lineage != nil {
+		t.Fatalf("lineage = %#v, want nil", record.Lineage)
+	}
 	if counter.hitEOF {
 		t.Fatalf("scanHeader read to EOF; the header read must stop early")
 	}
@@ -113,6 +116,42 @@ func TestScanRecordReadsBoundedHeader(t *testing.T) {
 	const headerReadCeiling = 1 << 20
 	if counter.bytes > headerReadCeiling {
 		t.Fatalf("scanHeader read %d bytes, want under %d (early stop should bound the read to the top)", counter.bytes, headerReadCeiling)
+	}
+}
+
+func TestScanRecordPopulatesForkLineageFromForkedFromHeader(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "forked.jsonl")
+
+	body := `{"sessionId":"child-session","cwd":"/repo","forkedFrom":{"sessionId":"parent-session","messageUuid":"parent-message"}}` + "\n" +
+		`{"sessionId":"child-session","type":"user","timestamp":"2026-04-24T19:00:00Z","content":"forked child","forkedFrom":{"sessionId":"later-parent","messageUuid":"later-message"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat transcript: %v", err)
+	}
+	record, ok := New().ScanRecord(path, conversation.FileStamp{Size: info.Size(), Mtime: info.ModTime()})
+	if !ok {
+		t.Fatalf("ScanRecord returned ok=false")
+	}
+	if record.Lineage == nil {
+		t.Fatalf("lineage = nil, want fork lineage")
+	}
+	if record.Lineage.Kind != conversation.ConversationLineageKindFork {
+		t.Fatalf("lineage kind = %q, want fork", record.Lineage.Kind)
+	}
+	if record.Lineage.ParentProvider != conversation.ProviderClaude {
+		t.Fatalf("parent provider = %v, want Claude", record.Lineage.ParentProvider)
+	}
+	if record.Lineage.ParentNativeID != "parent-session" {
+		t.Fatalf("parent native id = %q, want parent-session", record.Lineage.ParentNativeID)
+	}
+	if record.Lineage.ParentMessageUUID != "parent-message" {
+		t.Fatalf("parent message uuid = %q, want parent-message", record.Lineage.ParentMessageUUID)
 	}
 }
 

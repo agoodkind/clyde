@@ -69,12 +69,18 @@ func emptyRecord() conversation.Record {
 }
 
 type claudeHeader struct {
+	SessionID   string            `json:"sessionId"`
+	CWD         string            `json:"cwd"`
+	Timestamp   string            `json:"timestamp"`
+	Type        string            `json:"type"`
+	Content     string            `json:"content"`
+	CustomTitle string            `json:"customTitle"`
+	ForkedFrom  *claudeForkedFrom `json:"forkedFrom"`
+}
+
+type claudeForkedFrom struct {
 	SessionID   string `json:"sessionId"`
-	CWD         string `json:"cwd"`
-	Timestamp   string `json:"timestamp"`
-	Type        string `json:"type"`
-	Content     string `json:"content"`
-	CustomTitle string `json:"customTitle"`
+	MessageUUID string `json:"messageUuid"`
 }
 
 // Discover walks ~/.claude/projects and returns every transcript file as a scan
@@ -145,10 +151,12 @@ func (Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversatio
 // headerFields holds the record-shaping fields gathered from a transcript
 // header. providerID is required; the rest are best-effort.
 type headerFields struct {
-	providerID    string
-	title         string
-	workspaceRoot string
-	createdAt     time.Time
+	providerID            string
+	title                 string
+	workspaceRoot         string
+	createdAt             time.Time
+	forkedFromSessionID   string
+	forkedFromMessageUUID string
 }
 
 // scanHeader reads transcript lines from r and stops the moment it has the
@@ -156,7 +164,14 @@ type headerFields struct {
 // the reader-based core of [Parser.ScanRecord] so a test can wrap r to assert
 // the read stays bounded and never reaches EOF.
 func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (conversation.Record, bool) {
-	fields := headerFields{providerID: "", title: "", workspaceRoot: "", createdAt: time.Time{}}
+	fields := headerFields{
+		providerID:            "",
+		title:                 "",
+		workspaceRoot:         "",
+		createdAt:             time.Time{},
+		forkedFromSessionID:   "",
+		forkedFromMessageUUID: "",
+	}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), scanBufferMax)
 	lines := 0
@@ -193,11 +208,20 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 	if title == "" {
 		title = fields.providerID
 	}
+	var lineage *conversation.Lineage
+	if fields.forkedFromSessionID != "" {
+		lineage = &conversation.Lineage{
+			Kind:              conversation.ConversationLineageKindFork,
+			ParentProvider:    providerid.ProviderClaude,
+			ParentNativeID:    fields.forkedFromSessionID,
+			ParentMessageUUID: fields.forkedFromMessageUUID,
+		}
+	}
 	return conversation.Record{
 		ID:            conversation.DerivedID(providerid.ProviderClaude, fields.providerID, path),
 		Provider:      providerid.ProviderClaude,
 		NativeID:      fields.providerID,
-		Lineage:       nil,
+		Lineage:       lineage,
 		Title:         title,
 		WorkspaceRoot: fields.workspaceRoot,
 		ArtifactPath:  path,
@@ -216,6 +240,10 @@ func scanHeader(r io.Reader, path string, stamp conversation.FileStamp) (convers
 func applyHeaderLine(fields *headerFields, header claudeHeader) {
 	if header.SessionID != "" && fields.providerID == "" {
 		fields.providerID = header.SessionID
+	}
+	if header.ForkedFrom != nil && header.ForkedFrom.SessionID != "" && fields.forkedFromSessionID == "" {
+		fields.forkedFromSessionID = header.ForkedFrom.SessionID
+		fields.forkedFromMessageUUID = header.ForkedFrom.MessageUUID
 	}
 	if header.CWD != "" && fields.workspaceRoot == "" {
 		fields.workspaceRoot = header.CWD
