@@ -476,7 +476,7 @@ func peerString(client *peer.Peer) string {
 }
 
 func protoConversationRecord(record conversation.Record) *clydev1.ConversationRecord {
-	return &clydev1.ConversationRecord{
+	wire := &clydev1.ConversationRecord{
 		Id:            record.ID,
 		Provider:      protoProvider(record.Provider),
 		NativeId:      record.NativeID,
@@ -490,6 +490,15 @@ func protoConversationRecord(record conversation.Record) *clydev1.ConversationRe
 		SizeBytes:     record.SizeBytes,
 		Archived:      record.Archived,
 	}
+	if record.Lineage != nil {
+		wire.Lineage = &clydev1.ConversationLineage{
+			Kind:              string(record.Lineage.Kind),
+			ParentProvider:    protoProvider(record.Lineage.ParentProvider),
+			ParentNativeId:    record.Lineage.ParentNativeID,
+			ParentMessageUuid: record.Lineage.ParentMessageUUID,
+		}
+	}
+	return wire
 }
 
 func providerFromProto(provider clydev1.Provider) providerid.Provider {

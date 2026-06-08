@@ -207,6 +207,13 @@ message ExportTranscriptResponse {
   bytes body = 1;
 }
 
+message ConversationLineage {
+  string kind = 1;
+  Provider parent_provider = 2;
+  string parent_native_id = 3;
+  string parent_message_uuid = 4;
+}
+
 message ConversationRecord {
   string id = 1;
   Provider provider = 2;
@@ -220,6 +227,7 @@ message ConversationRecord {
   int64 updated_at_unix = 10;
   int64 size_bytes = 11;
   bool archived = 12;
+  ConversationLineage lineage = 13;
 }
 
 message ListConversationsResponse {
