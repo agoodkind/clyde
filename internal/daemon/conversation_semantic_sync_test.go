@@ -340,6 +340,86 @@ func TestConversationSemanticSyncSkipsPassWhileJobInFlight(t *testing.T) {
 	}
 }
 
+func TestConversationSemanticSyncCarriesForkParentIntoDocs(t *testing.T) {
+	conversationID := "codex:fork-child"
+	stamp := semanticTestStamp(20, 200)
+	record := semanticTestRecord(conversationID)
+	record.Lineage = &conversation.Lineage{
+		Kind:              conversation.ConversationLineageKindFork,
+		ParentProvider:    conversation.ProviderCodex,
+		ParentNativeID:    "parent-thread",
+		ParentMessageUUID: "msg",
+	}
+	wantParentID, ok := conversation.ParentConversationID(record)
+	if !ok || wantParentID == "" {
+		t.Fatalf("expected resolvable fork parent id, got (%q, %v)", wantParentID, ok)
+	}
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{{Record: record, Stamp: stamp}},
+		messagesByID: map[string][]transcript.Message{
+			conversationID: {
+				{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "first"},
+				{Role: "assistant", Timestamp: time.Unix(1710000030, 0), Text: "second"},
+			},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+
+	if len(client.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
+	}
+	docs := client.upsertCalls[0].Docs
+	if len(docs) != 2 {
+		t.Fatalf("upsert docs = %d, want 2", len(docs))
+	}
+	for index, doc := range docs {
+		if doc.ParentConversationID != wantParentID {
+			t.Fatalf("doc[%d] ParentConversationID = %q, want %q", index, doc.ParentConversationID, wantParentID)
+		}
+	}
+}
+
+func TestConversationSemanticSyncLeavesParentEmptyWithoutLineage(t *testing.T) {
+	conversationID := "codex:no-lineage"
+	stamp := semanticTestStamp(20, 200)
+	record := semanticTestRecord(conversationID)
+	if _, ok := conversation.ParentConversationID(record); ok {
+		t.Fatalf("expected no resolvable parent for record without lineage")
+	}
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{{Record: record, Stamp: stamp}},
+		messagesByID: map[string][]transcript.Message{
+			conversationID: {
+				{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "first"},
+			},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+
+	if len(client.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
+	}
+	docs := client.upsertCalls[0].Docs
+	if len(docs) != 1 {
+		t.Fatalf("upsert docs = %d, want 1", len(docs))
+	}
+	if docs[0].ParentConversationID != "" {
+		t.Fatalf("doc ParentConversationID = %q, want empty", docs[0].ParentConversationID)
+	}
+}
+
 func semanticTestRecord(conversationID string) conversation.Record {
 	return conversation.Record{
 		ID:            conversationID,

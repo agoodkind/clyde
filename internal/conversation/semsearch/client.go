@@ -30,20 +30,28 @@ const (
 // SemDoc is the conversation-message projection sent to lm-semantic-search.
 type SemDoc struct {
 	ConversationID string
-	MessageIndex   int32
-	Role           string
-	TimestampUnix  int64
-	Text           string
+	// ParentConversationID is the derived conversation id of this conversation's
+	// lineage parent, or "" when the conversation has no resolvable parent. It is
+	// the same for every message of one conversation so forks group with parents
+	// in the index.
+	ParentConversationID string
+	MessageIndex         int32
+	Role                 string
+	TimestampUnix        int64
+	Text                 string
 }
 
 // SemHit is one conversation-message match returned by the engine's
 // cross-conversation search.
 type SemHit struct {
 	ConversationID string
-	MessageIndex   int32
-	Role           string
-	TimestampUnix  int64
-	Content        string
+	// ParentConversationID is the derived conversation id of the matched
+	// conversation's lineage parent, or "" when it has no resolvable parent.
+	ParentConversationID string
+	MessageIndex         int32
+	Role                 string
+	TimestampUnix        int64
+	Content              string
 }
 
 // Client wraps the lm-semantic-search daemon gRPC client.
@@ -289,11 +297,12 @@ func conversationSearchHits(results []*lmsemanticsearchv1.ConversationSearchResu
 	out := make([]SemHit, 0, len(results))
 	for _, result := range results {
 		out = append(out, SemHit{
-			ConversationID: result.GetConversationId(),
-			MessageIndex:   result.GetMessageIndex(),
-			Role:           result.GetRole(),
-			TimestampUnix:  result.GetTimestampUnix(),
-			Content:        result.GetContent(),
+			ConversationID:       result.GetConversationId(),
+			ParentConversationID: result.GetParentConversationId(),
+			MessageIndex:         result.GetMessageIndex(),
+			Role:                 result.GetRole(),
+			TimestampUnix:        result.GetTimestampUnix(),
+			Content:              result.GetContent(),
 		})
 	}
 	return out
@@ -303,11 +312,12 @@ func conversationDocuments(docs []SemDoc) []*lmsemanticsearchv1.ConversationDocu
 	out := make([]*lmsemanticsearchv1.ConversationDocument, 0, len(docs))
 	for _, doc := range docs {
 		out = append(out, &lmsemanticsearchv1.ConversationDocument{
-			ConversationId: doc.ConversationID,
-			MessageIndex:   doc.MessageIndex,
-			Role:           doc.Role,
-			TimestampUnix:  doc.TimestampUnix,
-			Text:           doc.Text,
+			ConversationId:       doc.ConversationID,
+			ParentConversationId: doc.ParentConversationID,
+			MessageIndex:         doc.MessageIndex,
+			Role:                 doc.Role,
+			TimestampUnix:        doc.TimestampUnix,
+			Text:                 doc.Text,
 		})
 	}
 	return out

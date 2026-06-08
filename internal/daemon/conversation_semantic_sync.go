@@ -439,17 +439,25 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 		)
 		return nil, fmt.Errorf("load conversation-only messages for %s: %w", record.ID, err)
 	}
+	// All messages of one conversation share the same lineage parent, so derive
+	// it once. ParentConversationID returns ok=false for records with no
+	// resolvable parent, in which case the parent id stays "".
+	parentConversationID := ""
+	if derivedParentID, ok := conversation.ParentConversationID(record); ok {
+		parentConversationID = derivedParentID
+	}
 	docs := make([]semsearch.SemDoc, 0, len(messages))
 	for i, message := range messages {
 		if i > int(maxSemanticMessageIndex) {
 			return nil, fmt.Errorf("message index %d exceeds semantic search int32 limit", i)
 		}
 		docs = append(docs, semsearch.SemDoc{
-			ConversationID: record.ID,
-			MessageIndex:   int32(i),
-			Role:           message.Role,
-			TimestampUnix:  message.Timestamp.Unix(),
-			Text:           message.Text,
+			ConversationID:       record.ID,
+			ParentConversationID: parentConversationID,
+			MessageIndex:         int32(i),
+			Role:                 message.Role,
+			TimestampUnix:        message.Timestamp.Unix(),
+			Text:                 message.Text,
 		})
 	}
 	return docs, nil
