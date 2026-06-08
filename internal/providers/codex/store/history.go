@@ -2,8 +2,10 @@ package codexstore
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -99,49 +101,28 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 
 		AgentNickname: "", AgentRole: "", IsSubagent: false, Messages: nil,
 	}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	// A rollout line is a single JSONL record. Codex compaction checkpoints inline
+	// the full pre-compaction history into one `compacted` line, which can reach
+	// tens of megabytes, so an uncapped bufio.Reader replaces bufio.Scanner (whose
+	// fixed token cap aborts with "token too long" on such lines).
+	reader := bufio.NewReader(f)
+	for {
+		raw, readErr := reader.ReadBytes('\n')
+		line := bytes.TrimRight(raw, "\r\n")
 		var envelope historyLine
-		if err := json.Unmarshal(line, &envelope); err != nil {
-			continue
+		// An unparseable line decodes to the zero envelope and is skipped, matching
+		// the prior scanner behavior; only a successful decode is folded in.
+		if len(line) > 0 && json.Unmarshal(line, &envelope) == nil {
+			if err := applyEnvelope(&summary, envelope, includeHistory, path); err != nil {
+				return ThreadSummary{}, err
+			}
 		}
-		lineTime := parseCodexTime(envelope.Timestamp)
-		if !lineTime.IsZero() {
-			summary.UpdatedAt = lineTime
+		if readErr == io.EOF {
+			break
 		}
-		switch historyEnvelopeType(envelope.Type) {
-		case historyEnvelopeSessionMeta:
-			var payload sessionMetaPayload
-			if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-				return ThreadSummary{}, fmt.Errorf("unmarshal codex session metadata %s: %w", path, err)
-			}
-			applySessionMeta(&summary, payload, lineTime)
-		case historyEnvelopeResponseItem:
-			msg, ok := responseItemMessage(envelope.Payload, lineTime)
-			if ok {
-				applyMessage(&summary, msg, includeHistory)
-			}
-		case historyEnvelopeEventMsg:
-			msg, ok := eventMessage(envelope.Payload, lineTime)
-			if ok {
-				applyMessage(&summary, msg, includeHistory)
-			}
-		case historyEnvelopeCompacted:
-			msg, ok := compactedMessage(envelope.Payload, lineTime)
-			if ok {
-				applyMessage(&summary, msg, includeHistory)
-			}
-		case historyEnvelopeTurnContext:
-			applyTurnContext(&summary, envelope.Payload)
+		if readErr != nil {
+			return ThreadSummary{}, fmt.Errorf("read codex rollout %s: %w", path, readErr)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return ThreadSummary{}, fmt.Errorf("scan codex rollout %s: %w", path, err)
 	}
 	if summary.ID == "" {
 		return ThreadSummary{}, fmt.Errorf("codex rollout %s missing session_meta id", path)
@@ -152,6 +133,39 @@ func ReadThreadByRolloutPath(path string, includeHistory bool, archived bool) (T
 		}
 	}
 	return summary, nil
+}
+
+// applyEnvelope folds one decoded rollout envelope into summary. It returns an
+// error only when a session_meta payload cannot be decoded.
+func applyEnvelope(summary *ThreadSummary, envelope historyLine, includeHistory bool, path string) error {
+	lineTime := parseCodexTime(envelope.Timestamp)
+	if !lineTime.IsZero() {
+		summary.UpdatedAt = lineTime
+	}
+	switch historyEnvelopeType(envelope.Type) {
+	case historyEnvelopeSessionMeta:
+		var payload sessionMetaPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			slog.Warn("codex.store.history.session_meta_unmarshal_failed", "concern", "providers.codex.store", "path", path, "err", err)
+			return fmt.Errorf("unmarshal codex session metadata %s: %w", path, err)
+		}
+		applySessionMeta(summary, payload, lineTime)
+	case historyEnvelopeResponseItem:
+		if msg, ok := responseItemMessage(envelope.Payload, lineTime); ok {
+			applyMessage(summary, msg, includeHistory)
+		}
+	case historyEnvelopeEventMsg:
+		if msg, ok := eventMessage(envelope.Payload, lineTime); ok {
+			applyMessage(summary, msg, includeHistory)
+		}
+	case historyEnvelopeCompacted:
+		if msg, ok := compactedMessage(envelope.Payload, lineTime); ok {
+			applyMessage(summary, msg, includeHistory)
+		}
+	case historyEnvelopeTurnContext:
+		applyTurnContext(summary, envelope.Payload)
+	}
+	return nil
 }
 
 type historyLine struct {

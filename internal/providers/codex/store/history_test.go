@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/transcript"
@@ -48,6 +49,44 @@ func TestReadThreadByRolloutPathParsesSummaryAndHistory(t *testing.T) {
 	}
 	if thread.Messages[1].Role != "assistant" || thread.Messages[1].Phase != "commentary" {
 		t.Fatalf("assistant event message = %#v", thread.Messages[1])
+	}
+}
+
+func TestReadThreadByRolloutPathReadsLargeCompactedLine(t *testing.T) {
+	t.Parallel()
+	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
+	const postCompactionText = "post-compaction user message"
+	const compactedLineMinimumBytes = 5 * 1024 * 1024
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-"+threadID+".jsonl")
+	largeText := strings.Repeat("x", compactedLineMinimumBytes)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + largeText + `"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"kept"}]}]}}`
+	if len([]byte(compactedLine)) <= compactedLineMinimumBytes {
+		t.Fatalf("compacted line bytes = %d, want more than %d", len([]byte(compactedLine)), compactedLineMinimumBytes)
+	}
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + threadID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		compactedLine + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + postCompactionText + `"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	thread, err := ReadThreadByRolloutPath(path, true, false)
+	if err != nil {
+		t.Fatalf("ReadThreadByRolloutPath returned error: %v", err)
+	}
+	if thread.ID != threadID {
+		t.Fatalf("ID = %q, want %q", thread.ID, threadID)
+	}
+	found := thread.Preview == postCompactionText
+	for _, message := range thread.Messages {
+		if message.Text == postCompactionText {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("post-compaction message not found; preview = %q, messages len = %d", thread.Preview, len(thread.Messages))
 	}
 }
 
