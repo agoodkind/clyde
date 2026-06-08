@@ -1,6 +1,8 @@
 package codexstore
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -676,4 +678,196 @@ func rawForCompactedContextItem(
 		}
 	}
 	return nil
+}
+
+func TestStreamMessagesSkipsOversizedCompactedLineWithoutSystemMessages(t *testing.T) {
+	t.Parallel()
+	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
+	const postCompactionText = "post-compaction user message"
+	const compactedLineMinimumBytes = 5 * 1024 * 1024
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-"+threadID+".jsonl")
+	largeText := strings.Repeat("x", compactedLineMinimumBytes)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"` + largeText + `","replacement_history":[]}}`
+	if len([]byte(compactedLine)) <= compactedLineMinimumBytes {
+		t.Fatalf("compacted line bytes = %d, want more than %d", len([]byte(compactedLine)), compactedLineMinimumBytes)
+	}
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + threadID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		compactedLine + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + postCompactionText + `"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	excluded := collectHistoryMessages(t, path, false)
+	if len(excluded) != 1 {
+		t.Fatalf("excluded messages len = %d, want 1", len(excluded))
+	}
+	if excluded[0].Text != postCompactionText {
+		t.Fatalf("excluded message text = %q, want %q", excluded[0].Text, postCompactionText)
+	}
+	for _, message := range excluded {
+		if message.Role == "system" || message.Compaction != nil {
+			t.Fatalf("compacted boundary leaked into excluded stream = %#v", message)
+		}
+	}
+
+	included := collectHistoryMessages(t, path, true)
+	foundBoundary := false
+	foundPost := false
+	for _, message := range included {
+		if message.Compaction != nil {
+			foundBoundary = true
+		}
+		if message.Text == postCompactionText {
+			foundPost = true
+		}
+	}
+	if !foundBoundary {
+		t.Fatalf("compacted boundary missing from included stream; messages len = %d", len(included))
+	}
+	if !foundPost {
+		t.Fatalf("post-compaction message missing from included stream; messages len = %d", len(included))
+	}
+}
+
+func TestSkipLargeCompactedLineDrainsOversizedLine(t *testing.T) {
+	t.Parallel()
+	const followingText = "follow-up line"
+	largeText := strings.Repeat("y", 6*1024*1024)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"` + largeText + `","replacement_history":[]}}`
+	following := `{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"` + followingText + `"}}`
+
+	reader := bufio.NewReaderSize(strings.NewReader(compactedLine+"\n"+following+"\n"), streamReaderBufferSize)
+	skipped, err := skipLargeCompactedLine(reader)
+	if err != nil {
+		t.Fatalf("skipLargeCompactedLine returned error: %v", err)
+	}
+	if !skipped {
+		t.Fatalf("skipLargeCompactedLine = false, want true for oversized compacted line")
+	}
+	next, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("ReadBytes after drain returned error: %v", err)
+	}
+	if !bytes.Contains(next, []byte(followingText)) {
+		t.Fatalf("line after drain = %q, want it to contain %q", string(next), followingText)
+	}
+}
+
+func TestSkipLargeCompactedLineLeavesSmallAndNonCompactedLines(t *testing.T) {
+	t.Parallel()
+	smallCompacted := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"small","replacement_history":[]}}`
+	largeResponse := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + strings.Repeat("z", 6*1024*1024) + `"}]}}`
+
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "small_compacted_fits_prefix", line: smallCompacted},
+		{name: "large_non_compacted_response", line: largeResponse},
+	}
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			reader := bufio.NewReaderSize(strings.NewReader(testCase.line+"\n"), streamReaderBufferSize)
+			skipped, err := skipLargeCompactedLine(reader)
+			if err != nil {
+				t.Fatalf("skipLargeCompactedLine returned error: %v", err)
+			}
+			if skipped {
+				t.Fatalf("skipLargeCompactedLine = true, want false so the line is read normally")
+			}
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				t.Fatalf("ReadBytes returned error: %v", err)
+			}
+			if !bytes.Contains(line, []byte(`"type"`)) {
+				t.Fatalf("line was consumed unexpectedly; got %q", string(line[:min(len(line), 64)]))
+			}
+		})
+	}
+}
+
+func TestPeekedEnvelopeTypeReadsEnvelopeTypeFromPrefix(t *testing.T) {
+	t.Parallel()
+	prefix := []byte(`{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"x`)
+	got, ok := peekedEnvelopeType(prefix)
+	if !ok {
+		t.Fatalf("peekedEnvelopeType ok = false, want true")
+	}
+	if got != "compacted" {
+		t.Fatalf("peekedEnvelopeType = %q, want compacted", got)
+	}
+
+	truncated := []byte(`{"timestamp":"2026-05-02T17:09:05.000Z","type":"compac`)
+	if _, ok := peekedEnvelopeType(truncated); ok {
+		t.Fatalf("peekedEnvelopeType ok = true for truncated type value, want false")
+	}
+}
+
+func TestReadHeaderMarksMachinerySourcesAsSubagent(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		sessionMeta    string
+		wantAgentRole  string
+		wantSourceKind ThreadSourceKind
+	}{
+		{
+			name:           "internal_memory_consolidation_object",
+			sessionMeta:    `{"id":"019de9aa-internal","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"internal":"memory_consolidation"},"model_provider":"openai"}`,
+			wantAgentRole:  "memory_consolidation",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "subagent_memory_consolidation_scalar_object",
+			sessionMeta:    `{"id":"019de9aa-subagent-memcon","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"subagent":"memory_consolidation"},"model_provider":"openai"}`,
+			wantAgentRole:  "memory_consolidation",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "subagent_review_scalar_object",
+			sessionMeta:    `{"id":"019de9aa-subagent-review","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"subagent":"review"},"model_provider":"openai"}`,
+			wantAgentRole:  "review",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "internal_memory_consolidation_display_scalar",
+			sessionMeta:    `{"id":"019de9aa-internal-scalar","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"internal_memory_consolidation","model_provider":"openai"}`,
+			wantAgentRole:  "memory_consolidation",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "thread_source_field_memory_consolidation",
+			sessionMeta:    `{"id":"019de9aa-thread-source","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","thread_source":"memory_consolidation","model_provider":"openai"}`,
+			wantAgentRole:  "",
+			wantSourceKind: ThreadSourceCLI,
+		},
+	}
+
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			thread := readHeaderFromSessionMetaPayload(t, testCase.sessionMeta)
+			if !thread.IsSubagent {
+				t.Fatalf("IsSubagent = false, want true for machinery source")
+			}
+			if thread.Source.ParentThreadID != "" {
+				t.Fatalf("Source.ParentThreadID = %q, want empty", thread.Source.ParentThreadID)
+			}
+			if thread.ForkedFromID != "" {
+				t.Fatalf("ForkedFromID = %q, want empty", thread.ForkedFromID)
+			}
+			if thread.Source.Kind != testCase.wantSourceKind {
+				t.Fatalf("Source.Kind = %q, want %q", thread.Source.Kind, testCase.wantSourceKind)
+			}
+			if testCase.wantAgentRole != "" && thread.Source.AgentRole != testCase.wantAgentRole {
+				t.Fatalf("Source.AgentRole = %q, want %q", thread.Source.AgentRole, testCase.wantAgentRole)
+			}
+		})
+	}
 }
