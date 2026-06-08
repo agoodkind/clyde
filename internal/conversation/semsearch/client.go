@@ -7,10 +7,24 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	lmclient "goodkind.io/lm-semantic-search/client"
 	lmsemanticsearchv1 "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"google.golang.org/grpc"
+)
+
+// Engine job-state strings reported by the lm-semantic-search daemon GetJob RPC.
+// These mirror the engine's internal JobState vocabulary (queued, running,
+// cancelling, completed, failed, cancelled); the three terminal states below are
+// the only values that end a wait.
+const (
+	// JobStateCompleted is the engine's terminal success state.
+	JobStateCompleted = "completed"
+	// JobStateFailed is the engine's terminal failure state.
+	JobStateFailed = "failed"
+	// JobStateCancelled is the engine's terminal cancellation state.
+	JobStateCancelled = "cancelled"
 )
 
 // SemDoc is the conversation-message projection sent to lm-semantic-search.
@@ -145,6 +159,87 @@ func (c *Client) DeleteConversation(ctx context.Context, collectionID, conversat
 		return "", fmt.Errorf("delete semantic conversation %q from collection %q: %w", trimmedConversationID, trimmedCollectionID, err)
 	}
 	return response.GetJobId(), nil
+}
+
+// JobState fetches the current lifecycle state string for one engine job via the
+// GetJob RPC. It returns the empty string when the job is missing from the
+// response and wraps transport failures with the job id.
+func (c *Client) JobState(ctx context.Context, jobID string) (string, error) {
+	if c == nil || c.daemon == nil {
+		return "", fmt.Errorf("get semantic job state: client is nil")
+	}
+	trimmedJobID := strings.TrimSpace(jobID)
+	if trimmedJobID == "" {
+		return "", fmt.Errorf("get semantic job state: job id is empty")
+	}
+	response, err := c.daemon.GetJob(ctx, &lmsemanticsearchv1.GetJobRequest{
+		JobId: trimmedJobID,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.get_job_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"job_id", trimmedJobID,
+			"err", err,
+		)
+		return "", fmt.Errorf("get semantic job %q: %w", trimmedJobID, err)
+	}
+	return response.GetJob().GetState(), nil
+}
+
+// WaitForJob polls JobState on the given interval until the engine job reaches a
+// terminal state, the timeout elapses, or the context is done. It returns the
+// last observed state in every case; a timeout or cancellation also returns a
+// non-nil error wrapped with the job id and last state.
+func (c *Client) WaitForJob(ctx context.Context, jobID string, pollInterval, timeout time.Duration) (string, error) {
+	trimmedJobID := strings.TrimSpace(jobID)
+	if trimmedJobID == "" {
+		return "", fmt.Errorf("wait for semantic job: job id is empty")
+	}
+	effectiveInterval := pollInterval
+	if effectiveInterval <= 0 {
+		effectiveInterval = time.Second
+	}
+	waitCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	ticker := time.NewTicker(effectiveInterval)
+	defer ticker.Stop()
+	lastState := ""
+	for {
+		state, err := c.JobState(waitCtx, trimmedJobID)
+		if err != nil {
+			return lastState, fmt.Errorf("poll semantic job %q in state %q: %w", trimmedJobID, lastState, err)
+		}
+		lastState = state
+		if isTerminalJobState(state) {
+			return state, nil
+		}
+		select {
+		case <-waitCtx.Done():
+			slog.WarnContext(ctx, "conversation.semsearch.wait_job_unfinished",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"job_id", trimmedJobID,
+				"state", lastState,
+				"err", waitCtx.Err(),
+			)
+			return lastState, fmt.Errorf("wait for semantic job %q ended in state %q: %w", trimmedJobID, lastState, waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func isTerminalJobState(state string) bool {
+	switch state {
+	case JobStateCompleted, JobStateFailed, JobStateCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 // SearchConversations runs an engine-backed cross-conversation search over the

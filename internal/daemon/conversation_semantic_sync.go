@@ -16,6 +16,9 @@ import (
 const (
 	conversationSemanticSyncInterval         = time.Minute
 	conversationSemanticMaxOperationsPerPass = 25
+	conversationSemanticMaxDocsPerBatch      = 5000
+	conversationSemanticJobPollInterval      = time.Second
+	conversationSemanticJobTimeout           = 3 * time.Minute
 	maxSemanticMessageIndex                  = int32(1<<31 - 1)
 )
 
@@ -27,6 +30,13 @@ type conversationSemanticIndex interface {
 type conversationSemanticClient interface {
 	UpsertConversationDocuments(context.Context, string, []semsearch.SemDoc) (string, error)
 	DeleteConversation(context.Context, string, string) (string, error)
+	JobState(context.Context, string) (string, error)
+	WaitForJob(context.Context, string, time.Duration, time.Duration) (string, error)
+}
+
+type semanticBatchMember struct {
+	conversationID string
+	stamp          conversation.FileStamp
 }
 
 type conversationSemanticSyncWorker struct {
@@ -190,14 +200,28 @@ func (w *conversationSemanticSyncWorker) deleteRemovedConversations(
 			)
 			continue
 		}
+		finalState, waitErr := w.client.WaitForJob(ctx, jobID, conversationSemanticJobPollInterval, conversationSemanticJobTimeout)
+		if waitErr != nil || finalState != semsearch.JobStateCompleted {
+			stats.failed++
+			w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.delete_incomplete",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"conversation_id", conversationID,
+				"job_id", jobID,
+				"state", finalState,
+				"err", waitErr,
+			)
+			continue
+		}
 		delete(w.lastPushed, conversationID)
 		stats.deleted++
 		stats.operations++
-		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.delete_queued",
+		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.delete_completed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
 			"conversation_id", conversationID,
 			"job_id", jobID,
+			"state", finalState,
 		)
 	}
 	return nil
@@ -209,12 +233,77 @@ func (w *conversationSemanticSyncWorker) upsertChangedConversations(
 	operationLimit int,
 	stats *conversationSemanticSyncStats,
 ) error {
+	docs, members := w.collectChangedBatch(ctx, stampedRecords, operationLimit, stats)
+	if len(members) == 0 {
+		return nil
+	}
+	if semanticSyncContextDone(ctx) {
+		return nil
+	}
+	jobID, upsertErr := w.client.UpsertConversationDocuments(ctx, w.collectionID, docs)
+	if upsertErr != nil {
+		stats.failed += len(members)
+		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"conversations", len(members),
+			"documents", len(docs),
+			"err", upsertErr,
+		)
+		return nil
+	}
+	finalState, waitErr := w.client.WaitForJob(ctx, jobID, conversationSemanticJobPollInterval, conversationSemanticJobTimeout)
+	if waitErr != nil || finalState != semsearch.JobStateCompleted {
+		stats.failed += len(members)
+		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_incomplete",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"conversations", len(members),
+			"documents", len(docs),
+			"job_id", jobID,
+			"state", finalState,
+			"err", waitErr,
+		)
+		return nil
+	}
+	for _, member := range members {
+		w.lastPushed[member.conversationID] = member.stamp
+		stats.upserted++
+		stats.operations++
+	}
+	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_completed",
+		"concern", "conversation.semantic",
+		"component", "daemon",
+		"conversations", len(members),
+		"documents", len(docs),
+		"job_id", jobID,
+		"state", finalState,
+	)
+	return nil
+}
+
+// collectChangedBatch gathers the changed conversations for one pass into a
+// single combined document slice, bounded by the remaining per-pass operation
+// budget and the per-batch document cap, returning the docs and the parallel
+// list of conversations whose stamps should be marked once the job completes.
+func (w *conversationSemanticSyncWorker) collectChangedBatch(
+	ctx context.Context,
+	stampedRecords []conversation.StampedRecord,
+	operationLimit int,
+	stats *conversationSemanticSyncStats,
+) ([]semsearch.SemDoc, []semanticBatchMember) {
+	remaining := operationLimit - stats.operations
+	if remaining <= 0 {
+		return nil, nil
+	}
+	docs := make([]semsearch.SemDoc, 0)
+	members := make([]semanticBatchMember, 0)
 	for _, stampedRecord := range stampedRecords {
-		if stats.operations >= operationLimit {
+		if len(members) >= remaining {
 			break
 		}
 		if semanticSyncContextDone(ctx) {
-			return nil
+			break
 		}
 		record := stampedRecord.Record
 		if strings.TrimSpace(record.ID) == "" {
@@ -225,35 +314,21 @@ func (w *conversationSemanticSyncWorker) upsertChangedConversations(
 			stats.skipped++
 			continue
 		}
-		docs, loadErr := w.loadDocs(ctx, record)
+		conversationDocs, loadErr := w.loadDocs(ctx, record)
 		if loadErr != nil {
 			stats.failed++
 			continue
 		}
-		jobID, upsertErr := w.client.UpsertConversationDocuments(ctx, w.collectionID, docs)
-		if upsertErr != nil {
-			stats.failed++
-			w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"conversation_id", record.ID,
-				"documents", len(docs),
-				"err", upsertErr,
-			)
-			continue
+		if len(docs) > 0 && len(docs)+len(conversationDocs) > conversationSemanticMaxDocsPerBatch {
+			break
 		}
-		w.lastPushed[record.ID] = stampedRecord.Stamp
-		stats.upserted++
-		stats.operations++
-		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_queued",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", record.ID,
-			"documents", len(docs),
-			"job_id", jobID,
-		)
+		docs = append(docs, conversationDocs...)
+		members = append(members, semanticBatchMember{
+			conversationID: record.ID,
+			stamp:          stampedRecord.Stamp,
+		})
 	}
-	return nil
+	return docs, members
 }
 
 func (w *conversationSemanticSyncWorker) logPass(

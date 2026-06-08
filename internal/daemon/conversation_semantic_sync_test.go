@@ -24,8 +24,18 @@ type semanticDeleteCall struct {
 }
 
 type fakeConversationSemanticClient struct {
-	upsertCalls []semanticUpsertCall
-	deleteCalls []semanticDeleteCall
+	upsertCalls   []semanticUpsertCall
+	deleteCalls   []semanticDeleteCall
+	jobStateByID  map[string]string
+	waitedJobIDs  []string
+	terminalState string
+}
+
+func (c *fakeConversationSemanticClient) resolvedTerminalState() string {
+	if c.terminalState == "" {
+		return semsearch.JobStateCompleted
+	}
+	return c.terminalState
 }
 
 func (c *fakeConversationSemanticClient) UpsertConversationDocuments(_ context.Context, collectionID string, docs []semsearch.SemDoc) (string, error) {
@@ -43,6 +53,25 @@ func (c *fakeConversationSemanticClient) DeleteConversation(_ context.Context, c
 		ConversationID: conversationID,
 	})
 	return "delete-job", nil
+}
+
+func (c *fakeConversationSemanticClient) JobState(_ context.Context, jobID string) (string, error) {
+	if c.jobStateByID != nil {
+		if state, ok := c.jobStateByID[jobID]; ok {
+			return state, nil
+		}
+	}
+	return c.resolvedTerminalState(), nil
+}
+
+func (c *fakeConversationSemanticClient) WaitForJob(_ context.Context, jobID string, _, _ time.Duration) (string, error) {
+	c.waitedJobIDs = append(c.waitedJobIDs, jobID)
+	if c.jobStateByID != nil {
+		if state, ok := c.jobStateByID[jobID]; ok {
+			return state, nil
+		}
+	}
+	return c.resolvedTerminalState(), nil
 }
 
 type fakeConversationSemanticIndex struct {
@@ -176,6 +205,89 @@ func TestConversationSemanticSyncDeletesRemovedConversation(t *testing.T) {
 	}
 	if _, ok := worker.lastPushed[conversationID]; ok {
 		t.Fatalf("last pushed still contains %q after delete", conversationID)
+	}
+}
+
+func TestConversationSemanticSyncBatchesMultipleChangedConversations(t *testing.T) {
+	firstID := "codex:one"
+	secondID := "claude:two"
+	firstStamp := semanticTestStamp(20, 200)
+	secondStamp := semanticTestStamp(21, 210)
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(firstID), Stamp: firstStamp},
+			{Record: semanticTestRecord(secondID), Stamp: secondStamp},
+		},
+		messagesByID: map[string][]transcript.Message{
+			firstID: {
+				{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "first-a"},
+			},
+			secondID: {
+				{Role: "user", Timestamp: time.Unix(1710000100, 0), Text: "second-a"},
+				{Role: "assistant", Timestamp: time.Unix(1710000130, 0), Text: "second-b"},
+			},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+
+	if len(client.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1 (single batched call)", len(client.upsertCalls))
+	}
+	call := client.upsertCalls[0]
+	if len(call.Docs) != 3 {
+		t.Fatalf("batched docs = %d, want 3 across both conversations", len(call.Docs))
+	}
+	docConversationIDs := map[string]int{}
+	for _, doc := range call.Docs {
+		docConversationIDs[doc.ConversationID]++
+	}
+	if docConversationIDs[firstID] != 1 || docConversationIDs[secondID] != 2 {
+		t.Fatalf("docs per conversation = %v, want %s:1 %s:2", docConversationIDs, firstID, secondID)
+	}
+	if len(client.waitedJobIDs) != 1 || client.waitedJobIDs[0] != "upsert-job" {
+		t.Fatalf("waited job ids = %v, want exactly [upsert-job]", client.waitedJobIDs)
+	}
+	if pushed, ok := worker.lastPushed[firstID]; !ok || !pushed.Equal(firstStamp) {
+		t.Fatalf("first conversation stamp = %+v, %t; want %+v", pushed, ok, firstStamp)
+	}
+	if pushed, ok := worker.lastPushed[secondID]; !ok || !pushed.Equal(secondStamp) {
+		t.Fatalf("second conversation stamp = %+v, %t; want %+v", pushed, ok, secondStamp)
+	}
+}
+
+func TestConversationSemanticSyncDoesNotMarkStampsWhenUpsertJobFails(t *testing.T) {
+	conversationID := "codex:one"
+	oldStamp := semanticTestStamp(10, 100)
+	newStamp := semanticTestStamp(20, 200)
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: newStamp}},
+		messagesByID: map[string][]transcript.Message{
+			conversationID: {
+				{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "first"},
+			},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{terminalState: semsearch.JobStateFailed}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+	worker.lastPushed[conversationID] = oldStamp
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+
+	if len(client.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
+	}
+	pushed, ok := worker.lastPushed[conversationID]
+	if !ok || !pushed.Equal(oldStamp) {
+		t.Fatalf("last pushed stamp = %+v, %t; want unchanged %+v so the next pass retries", pushed, ok, oldStamp)
 	}
 }
 
