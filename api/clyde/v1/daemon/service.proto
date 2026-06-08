@@ -137,6 +137,7 @@ message SearchConversationsResponse {
   int64 returned_count = 3;
   int64 limit = 4;
   bool has_more = 5;
+  bool warming = 6;
 }
 
 // SearchStatus is the lifecycle state of an async search job.

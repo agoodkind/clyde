@@ -14,6 +14,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/providerid"
@@ -35,6 +36,27 @@ type controlServer struct {
 	mitmStatus    func() MITMStatus
 	showCapture   func(ctx context.Context, id string, asJSON bool) (string, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
+	// semanticSearch is the engine-backed cross-conversation search the daemon
+	// prefers before the live literal scan. It is nil when conversation semantic
+	// search is not configured. semanticCollectionID names the engine collection
+	// the search reads.
+	semanticSearch       conversationSemanticSearchClient
+	semanticCollectionID string
+}
+
+// conversationSemanticSearchClient is the engine-backed cross-conversation
+// search the control server prefers before the live literal scan. The semsearch
+// client satisfies it; tests supply a fake.
+type conversationSemanticSearchClient interface {
+	SearchConversations(ctx context.Context, collectionID, query string, limit int32) ([]semsearch.SemHit, error)
+}
+
+// searchConversationsIndex is the slice of the conversation index the
+// engine-first cross-conversation search needs: exact-id record lookup for
+// resolving engine hits, and the live literal scan used as the fallback.
+type searchConversationsIndex interface {
+	RecordByID(id string) (conversation.Record, bool)
+	SearchConversations(context.Context, conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error)
 }
 
 func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
@@ -137,11 +159,42 @@ func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1
 // returns bounded first matches that an agent can pass to get or context.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
-	client, _ := peer.FromContext(ctx)
 	if req.GetQuery() == "" {
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
-	result, err := s.index.SearchConversations(ctx, conversation.SearchConversationsOptions{
+	result, err := searchConversationsResult(ctx, s.index, s.semanticSearch, s.semanticCollectionID, req)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
+	}
+	return searchConversationsResponse(result), nil
+}
+
+// searchConversationsResult runs the engine-first cross-conversation search.
+// When the engine is configured and produces at least one match, those matches
+// are returned. Otherwise the live literal scan answers the request, and the
+// Warming flag is set whenever the engine was configured but its result was
+// empty or it failed.
+func searchConversationsResult(
+	ctx context.Context,
+	idx searchConversationsIndex,
+	semantic conversationSemanticSearchClient,
+	collectionID string,
+	req *clydev1.SearchConversationsRequest,
+) (conversation.SearchConversationsResult, error) {
+	if semantic != nil {
+		matches := engineSearchMatches(ctx, idx, semantic, collectionID, req)
+		if len(matches) >= 1 {
+			return conversation.SearchConversationsResult{
+				Matches:              matches,
+				ConversationsScanned: len(matches),
+				ReturnedCount:        len(matches),
+				Limit:                int(req.GetLimit()),
+				HasMore:              false,
+				Warming:              false,
+			}, nil
+		}
+	}
+	result, err := idx.SearchConversations(ctx, conversation.SearchConversationsOptions{
 		Query:           req.GetQuery(),
 		Limit:           int(req.GetLimit()),
 		Provider:        providerFromProto(req.GetProvider()),
@@ -149,12 +202,64 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		IncludeArchived: req.GetIncludeArchived(),
 	})
 	if err != nil {
-		slog.WarnContext(ctx, "daemon.search_conversations.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
+		slog.WarnContext(ctx, "daemon.search_conversations.live_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
-		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
+		return conversation.SearchConversationsResult{}, fmt.Errorf("live search conversations: %w", err)
 	}
+	result.Warming = semantic != nil
+	return result, nil
+}
+
+// engineSearchMatches resolves each engine hit to a cached record, skipping
+// hits with no record or that fail the request provider, workspace, or archived
+// filter, and returns the bounded matches. A nil result (engine error or no
+// usable hits) signals the caller to fall back to the live literal scan.
+func engineSearchMatches(
+	ctx context.Context,
+	idx searchConversationsIndex,
+	semantic conversationSemanticSearchClient,
+	collectionID string,
+	req *clydev1.SearchConversationsRequest,
+) []conversation.SearchMatch {
+	limit := int(req.GetLimit())
+	hits, err := semantic.SearchConversations(ctx, collectionID, req.GetQuery(), int32FromInt(limit))
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.search_conversations.engine_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"err", err,
+		)
+		return nil
+	}
+	provider := providerFromProto(req.GetProvider())
+	workspace := req.GetWorkspace()
+	includeArchived := req.GetIncludeArchived()
+	matches := make([]conversation.SearchMatch, 0, len(hits))
+	for _, hit := range hits {
+		record, ok := idx.RecordByID(hit.ConversationID)
+		if !ok {
+			continue
+		}
+		if !conversation.RecordMatchesFilter(record, provider, workspace, includeArchived) {
+			continue
+		}
+		matches = append(matches, conversation.SearchMatch{
+			Record:       record,
+			MessageIndex: int(hit.MessageIndex),
+			Role:         hit.Role,
+			Timestamp:    time.Unix(hit.TimestampUnix, 0),
+			Snippet:      conversation.Snippet(hit.Content),
+		})
+		if limit > 0 && len(matches) >= limit {
+			break
+		}
+	}
+	return matches
+}
+
+// searchConversationsResponse maps the cross-conversation search result onto its
+// wire response, carrying the Warming signal so the caller can show a live
+// fallback note while the engine collection is cold.
+func searchConversationsResponse(result conversation.SearchConversationsResult) *clydev1.SearchConversationsResponse {
 	matches := make([]*clydev1.ConversationSearchMatch, 0, len(result.Matches))
 	for _, match := range result.Matches {
 		matches = append(matches, &clydev1.ConversationSearchMatch{
@@ -171,7 +276,8 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 		ReturnedCount:        int64(result.ReturnedCount),
 		Limit:                int64(result.Limit),
 		HasMore:              result.HasMore,
-	}, nil
+		Warming:              result.Warming,
+	}
 }
 
 // SearchConversation starts an async search job and returns its result id

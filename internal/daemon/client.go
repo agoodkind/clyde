@@ -183,6 +183,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		ReturnedCount:        int(resp.GetReturnedCount()),
 		Limit:                int(resp.GetLimit()),
 		HasMore:              resp.GetHasMore(),
+		Warming:              resp.GetWarming(),
 	}, nil
 }
 

@@ -220,6 +220,12 @@ func newControlServer(
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
 ) *controlServer {
+	var semanticSearch conversationSemanticSearchClient
+	semanticCollectionID := ""
+	if runtime.semantic != nil && runtime.semantic.client != nil {
+		semanticSearch = runtime.semantic.client
+		semanticCollectionID = cfg.Conversation.Semantic.CollectionID
+	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,
@@ -237,6 +243,8 @@ func newControlServer(
 		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
 		},
+		semanticSearch:       semanticSearch,
+		semanticCollectionID: semanticCollectionID,
 	}
 }
 

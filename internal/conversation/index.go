@@ -108,6 +108,24 @@ func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
 	return cloneStampedRecords(idx.records, idx.prevStamps), nil
 }
 
+// RecordByID returns the cached record with the exact id from the in-memory
+// snapshot, taking no refresh. The second result is false when no record
+// matches.
+func (idx *Index) RecordByID(id string) (Record, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return emptyRecord(), false
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	for _, record := range idx.records {
+		if record.ID == id {
+			return record, true
+		}
+	}
+	return emptyRecord(), false
+}
+
 func (idx *Index) recordsSnapshot() []Record {
 	idx.mu.Lock()
 	records := cloneRecords(idx.records)

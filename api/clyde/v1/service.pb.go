@@ -1159,6 +1159,7 @@ type SearchConversationsResponse struct {
 	ReturnedCount        int64                      `protobuf:"varint,3,opt,name=returned_count,json=returnedCount,proto3" json:"returned_count,omitempty"`
 	Limit                int64                      `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
 	HasMore              bool                       `protobuf:"varint,5,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	Warming              bool                       `protobuf:"varint,6,opt,name=warming,proto3" json:"warming,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1224,6 +1225,13 @@ func (x *SearchConversationsResponse) GetLimit() int64 {
 func (x *SearchConversationsResponse) GetHasMore() bool {
 	if x != nil {
 		return x.HasMore
+	}
+	return false
+}
+
+func (x *SearchConversationsResponse) GetWarming() bool {
+	if x != nil {
+		return x.Warming
 	}
 	return false
 }
@@ -2165,13 +2173,14 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\rmessage_index\x18\x02 \x01(\x03R\fmessageIndex\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12%\n" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x18\n" +
-	"\asnippet\x18\x05 \x01(\tR\asnippet\"\xe7\x01\n" +
+	"\asnippet\x18\x05 \x01(\tR\asnippet\"\x81\x02\n" +
 	"\x1bSearchConversationsResponse\x12;\n" +
 	"\amatches\x18\x01 \x03(\v2!.clyde.v1.ConversationSearchMatchR\amatches\x123\n" +
 	"\x15conversations_scanned\x18\x02 \x01(\x03R\x14conversationsScanned\x12%\n" +
 	"\x0ereturned_count\x18\x03 \x01(\x03R\rreturnedCount\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\x03R\x05limit\x12\x19\n" +
-	"\bhas_more\x18\x05 \x01(\bR\ahasMore\"\xb5\x01\n" +
+	"\bhas_more\x18\x05 \x01(\bR\ahasMore\x12\x18\n" +
+	"\awarming\x18\x06 \x01(\bR\awarming\"\xb5\x01\n" +
 	"\x0eSearchProgress\x12\x1f\n" +
 	"\vchunks_done\x18\x01 \x01(\x03R\n" +
 	"chunksDone\x12!\n" +

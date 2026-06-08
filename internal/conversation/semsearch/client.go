@@ -22,6 +22,16 @@ type SemDoc struct {
 	Text           string
 }
 
+// SemHit is one conversation-message match returned by the engine's
+// cross-conversation search.
+type SemHit struct {
+	ConversationID string
+	MessageIndex   int32
+	Role           string
+	TimestampUnix  int64
+	Content        string
+}
+
 // Client wraps the lm-semantic-search daemon gRPC client.
 type Client struct {
 	conn   *grpc.ClientConn
@@ -137,6 +147,33 @@ func (c *Client) DeleteConversation(ctx context.Context, collectionID, conversat
 	return response.GetJobId(), nil
 }
 
+// SearchConversations runs an engine-backed cross-conversation search over the
+// named collection and returns the bounded message hits.
+func (c *Client) SearchConversations(ctx context.Context, collectionID, query string, limit int32) ([]SemHit, error) {
+	if c == nil || c.daemon == nil {
+		return nil, fmt.Errorf("search semantic conversations: client is nil")
+	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	if trimmedCollectionID == "" {
+		return nil, fmt.Errorf("search semantic conversations: collection id is empty")
+	}
+	response, err := c.daemon.SearchConversations(ctx, &lmsemanticsearchv1.SearchConversationsRequest{
+		CollectionId: trimmedCollectionID,
+		Query:        query,
+		Limit:        limit,
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.search_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", trimmedCollectionID,
+			"err", err,
+		)
+		return nil, fmt.Errorf("search semantic conversations in collection %q: %w", trimmedCollectionID, err)
+	}
+	return conversationSearchHits(response.GetResults()), nil
+}
+
 // Close closes the underlying daemon gRPC connection.
 func (c *Client) Close() error {
 	if c == nil || c.conn == nil {
@@ -151,6 +188,20 @@ func (c *Client) Close() error {
 		return fmt.Errorf("close semantic search daemon connection: %w", err)
 	}
 	return nil
+}
+
+func conversationSearchHits(results []*lmsemanticsearchv1.ConversationSearchResult) []SemHit {
+	out := make([]SemHit, 0, len(results))
+	for _, result := range results {
+		out = append(out, SemHit{
+			ConversationID: result.GetConversationId(),
+			MessageIndex:   result.GetMessageIndex(),
+			Role:           result.GetRole(),
+			TimestampUnix:  result.GetTimestampUnix(),
+			Content:        result.GetContent(),
+		})
+	}
+	return out
 }
 
 func conversationDocuments(docs []SemDoc) []*lmsemanticsearchv1.ConversationDocument {

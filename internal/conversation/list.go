@@ -72,6 +72,10 @@ type SearchConversationsResult struct {
 	ReturnedCount        int
 	Limit                int
 	HasMore              bool
+	// Warming is true when an engine-first search fell back to the live literal
+	// scan because the semantic collection was cold or the engine was
+	// unavailable.
+	Warming bool
 }
 
 // ListPage returns one filtered, bounded page from the cached index.
@@ -127,6 +131,7 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 			ReturnedCount:        0,
 			Limit:                options.Limit,
 			HasMore:              false,
+			Warming:              false,
 		}, errorsQueryRequired()
 	}
 
@@ -150,6 +155,7 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 		ReturnedCount:        0,
 		Limit:                options.Limit,
 		HasMore:              false,
+		Warming:              false,
 	}
 	for _, record := range candidates.Records {
 		select {
@@ -245,6 +251,23 @@ func normalizeSearchConversationsOptions(options SearchConversationsOptions) Sea
 	return options
 }
 
+// RecordMatchesFilter reports whether a record passes the provider, workspace,
+// and archived filters that the live cross-conversation search applies. It
+// reuses the list predicate so an engine-first caller filters resolved hits
+// exactly as the live literal path does.
+func RecordMatchesFilter(record Record, provider Provider, workspaceRoot string, includeArchived bool) bool {
+	options := normalizeListOptions(ListOptions{
+		Limit:           0,
+		Offset:          0,
+		Provider:        provider,
+		WorkspaceRoot:   workspaceRoot,
+		Query:           "",
+		IncludeArchived: includeArchived,
+		All:             true,
+	})
+	return recordMatchesListOptions(record, options)
+}
+
 func recordMatchesListOptions(record Record, options ListOptions) bool {
 	if !options.IncludeArchived && record.Archived {
 		return false
@@ -313,6 +336,12 @@ func cleanWorkspaceFilter(workspaceRoot string) string {
 		return ""
 	}
 	return filepath.Clean(workspaceRoot)
+}
+
+// Snippet normalizes and bounds free text to the cross-conversation search
+// snippet length so engine-first matches render like live literal matches.
+func Snippet(text string) string {
+	return snippet(text)
 }
 
 func snippet(text string) string {
