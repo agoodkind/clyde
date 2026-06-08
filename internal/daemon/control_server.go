@@ -92,7 +92,7 @@ func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.List
 	}
 	out := make([]*clydev1.ConversationRecord, 0, len(result.Records))
 	for _, record := range result.Records {
-		out = append(out, protoConversationRecord(record))
+		out = append(out, protoConversationRecord(ctx, s.index, record))
 	}
 	return &clydev1.ListConversationsResponse{
 		Conversations: out,
@@ -166,7 +166,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
 	}
-	return searchConversationsResponse(result), nil
+	return searchConversationsResponse(ctx, s.index, result), nil
 }
 
 // searchConversationsResult runs the engine-first cross-conversation search.
@@ -259,11 +259,11 @@ func engineSearchMatches(
 // searchConversationsResponse maps the cross-conversation search result onto its
 // wire response, carrying the Warming signal so the caller can show a live
 // fallback note while the engine collection is cold.
-func searchConversationsResponse(result conversation.SearchConversationsResult) *clydev1.SearchConversationsResponse {
+func searchConversationsResponse(ctx context.Context, idx *conversation.Index, result conversation.SearchConversationsResult) *clydev1.SearchConversationsResponse {
 	matches := make([]*clydev1.ConversationSearchMatch, 0, len(result.Matches))
 	for _, match := range result.Matches {
 		matches = append(matches, &clydev1.ConversationSearchMatch{
-			Conversation:  protoConversationRecord(match.Record),
+			Conversation:  protoConversationRecord(ctx, idx, match.Record),
 			MessageIndex:  int64(match.MessageIndex),
 			Role:          match.Role,
 			TimestampUnix: match.Timestamp.Unix(),
@@ -581,7 +581,12 @@ func peerString(client *peer.Peer) string {
 	return ""
 }
 
-func protoConversationRecord(record conversation.Record) *clydev1.ConversationRecord {
+// protoConversationRecord maps a conversation record onto its wire form. When
+// the record carries fork lineage whose parent is present in idx, it sets
+// parent_conversation_id to the resolved parent's derived id; spawn, unknown, or
+// unresolvable parents leave it empty. The parent lookup is a cheap snapshot read
+// with no index refresh.
+func protoConversationRecord(ctx context.Context, idx *conversation.Index, record conversation.Record) *clydev1.ConversationRecord {
 	wire := &clydev1.ConversationRecord{
 		Id:            record.ID,
 		Provider:      protoProvider(record.Provider),
@@ -603,6 +608,9 @@ func protoConversationRecord(record conversation.Record) *clydev1.ConversationRe
 			ParentNativeId:    record.Lineage.ParentNativeID,
 			ParentMessageUuid: record.Lineage.ParentMessageUUID,
 		}
+	}
+	if parent, ok, err := conversation.ResolveForkParent(ctx, idx, record); err == nil && ok {
+		wire.ParentConversationId = parent.ID
 	}
 	return wire
 }

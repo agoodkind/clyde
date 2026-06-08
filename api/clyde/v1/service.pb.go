@@ -1877,8 +1877,11 @@ type ConversationRecord struct {
 	SizeBytes     int64                  `protobuf:"varint,11,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	Archived      bool                   `protobuf:"varint,12,opt,name=archived,proto3" json:"archived,omitempty"`
 	Lineage       *ConversationLineage   `protobuf:"bytes,13,opt,name=lineage,proto3" json:"lineage,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// parent_conversation_id is the resolved derived id of this conversation's
+	// fork parent when that parent is present in the index, and empty otherwise.
+	ParentConversationId string `protobuf:"bytes,14,opt,name=parent_conversation_id,json=parentConversationId,proto3" json:"parent_conversation_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ConversationRecord) Reset() {
@@ -2000,6 +2003,13 @@ func (x *ConversationRecord) GetLineage() *ConversationLineage {
 		return x.Lineage
 	}
 	return nil
+}
+
+func (x *ConversationRecord) GetParentConversationId() string {
+	if x != nil {
+		return x.ParentConversationId
+	}
+	return ""
 }
 
 type ListConversationsResponse struct {
@@ -2231,7 +2241,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12;\n" +
 	"\x0fparent_provider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\x0eparentProvider\x12(\n" +
 	"\x10parent_native_id\x18\x03 \x01(\tR\x0eparentNativeId\x12.\n" +
-	"\x13parent_message_uuid\x18\x04 \x01(\tR\x11parentMessageUuid\"\xd2\x03\n" +
+	"\x13parent_message_uuid\x18\x04 \x01(\tR\x11parentMessageUuid\"\x88\x04\n" +
 	"\x12ConversationRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
 	"\bprovider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\bprovider\x12\x1b\n" +
@@ -2247,7 +2257,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\v \x01(\x03R\tsizeBytes\x12\x1a\n" +
 	"\barchived\x18\f \x01(\bR\barchived\x127\n" +
-	"\alineage\x18\r \x01(\v2\x1d.clyde.v1.ConversationLineageR\alineage\"\x95\x02\n" +
+	"\alineage\x18\r \x01(\v2\x1d.clyde.v1.ConversationLineageR\alineage\x124\n" +
+	"\x16parent_conversation_id\x18\x0e \x01(\tR\x14parentConversationId\"\x95\x02\n" +
 	"\x19ListConversationsResponse\x12B\n" +
 	"\rconversations\x18\x01 \x03(\v2\x1c.clyde.v1.ConversationRecordR\rconversations\x12#\n" +
 	"\rtotal_matched\x18\x02 \x01(\x03R\ftotalMatched\x12%\n" +

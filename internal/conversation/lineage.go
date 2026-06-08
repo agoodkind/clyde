@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -56,6 +57,47 @@ func (lineage *Lineage) UnmarshalJSON(data []byte) error {
 // HasLineage reports whether a conversation record has lineage metadata.
 func (r *Record) HasLineage() bool {
 	return r.Lineage != nil
+}
+
+// ParentConversationID returns the derived conversation id of a record's lineage
+// parent. The second result is false when the record carries no lineage or its
+// parent native id is empty, so callers can distinguish "this record has no
+// resolvable parent" from a real derived id. It uses the same [DerivedID]
+// derivation as every other record id, so the result matches the parent's own id
+// in the index.
+func ParentConversationID(record Record) (string, bool) {
+	if record.Lineage == nil {
+		return "", false
+	}
+	if record.Lineage.ParentNativeID == "" {
+		return "", false
+	}
+	return DerivedID(record.Lineage.ParentProvider, record.Lineage.ParentNativeID, ""), true
+}
+
+// ResolveForkParent resolves the parent record of a forked conversation from the
+// index's in-memory snapshot. It returns (parent, true, nil) only when record
+// carries fork lineage whose derived parent id is present in the index. Spawn,
+// unknown, or absent lineage, an empty parent id, a nil index, or a parent that
+// is not in the index all yield (emptyRecord(), false, nil); a parent missing
+// from the index is not an error. The lookup is a snapshot read with no refresh,
+// so it stays cheap on the daemon's read path.
+func ResolveForkParent(ctx context.Context, idx *Index, record Record) (Record, bool, error) {
+	if idx == nil {
+		return emptyRecord(), false, nil
+	}
+	if record.Lineage == nil || record.Lineage.Kind != ConversationLineageKindFork {
+		return emptyRecord(), false, nil
+	}
+	parentID, ok := ParentConversationID(record)
+	if !ok {
+		return emptyRecord(), false, nil
+	}
+	parent, found := idx.RecordByID(parentID)
+	if !found {
+		return emptyRecord(), false, nil
+	}
+	return parent, true, nil
 }
 
 func emptyRecord() Record {

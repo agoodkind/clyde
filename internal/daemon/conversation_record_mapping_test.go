@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
@@ -11,6 +12,10 @@ import (
 func TestConversationRecordProtoRoundTripCarriesLineage(t *testing.T) {
 	t.Parallel()
 
+	// An empty index resolves no fork parent, so parent_conversation_id stays
+	// empty and the round trip exercises only the lineage mapping.
+	idx := conversation.NewIndex(conversation.NewRegistry())
+
 	withLineage := testDaemonConversationRecord("codex:child", conversation.ProviderCodex)
 	withLineage.Lineage = &conversation.Lineage{
 		Kind:              conversation.ConversationLineageKindFork,
@@ -19,7 +24,7 @@ func TestConversationRecordProtoRoundTripCarriesLineage(t *testing.T) {
 		ParentMessageUUID: "parent-message",
 	}
 
-	withLineageWire := protoConversationRecord(withLineage)
+	withLineageWire := protoConversationRecord(context.Background(), idx, withLineage)
 	if withLineageWire.GetLineage() == nil {
 		t.Fatalf("wire lineage = nil, want fork lineage")
 	}
@@ -37,7 +42,7 @@ func TestConversationRecordProtoRoundTripCarriesLineage(t *testing.T) {
 	}
 
 	withoutLineage := testDaemonConversationRecord("codex:without-lineage", conversation.ProviderCodex)
-	withoutLineageWire := protoConversationRecord(withoutLineage)
+	withoutLineageWire := protoConversationRecord(context.Background(), idx, withoutLineage)
 	if withoutLineageWire.GetLineage() != nil {
 		t.Fatalf("wire lineage = %#v, want nil", withoutLineageWire.GetLineage())
 	}

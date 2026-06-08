@@ -229,6 +229,9 @@ message ConversationRecord {
   int64 size_bytes = 11;
   bool archived = 12;
   ConversationLineage lineage = 13;
+  // parent_conversation_id is the resolved derived id of this conversation's
+  // fork parent when that parent is present in the index, and empty otherwise.
+  string parent_conversation_id = 14;
 }
 
 message ListConversationsResponse {
