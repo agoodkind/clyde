@@ -38,6 +38,13 @@ type Record struct {
 	Archived      bool      `json:"archived"`
 }
 
+// StampedRecord pairs an index record with the artifact stamp used by the
+// latest cache refresh.
+type StampedRecord struct {
+	Record Record
+	Stamp  FileStamp
+}
+
 // UnmarshalJSON decodes provider labels while keeping Provider enum-backed in memory.
 func (record *Record) UnmarshalJSON(data []byte) error {
 	type recordWire struct {

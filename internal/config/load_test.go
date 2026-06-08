@@ -49,6 +49,39 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Logging.Rotation.MaxAgeDays).To(Equal(14))
 		Expect(cfg.Logging.Rotation.Compress).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
+		Expect(cfg.Conversation.Semantic.Enabled).To(BeFalse())
+		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("clyde-conversations"))
+	})
+
+	It("loads conversation semantic sync config", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		configText := "[conversation.semantic]\nenabled = true\nsocket_path = \"/tmp/lm-semantic.sock\"\ncollection_id = \"custom-conversations\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Conversation.Semantic.Enabled).To(BeTrue())
+		Expect(cfg.Conversation.Semantic.SocketPath).To(Equal("/tmp/lm-semantic.sock"))
+		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("custom-conversations"))
+	})
+
+	It("defaults blank conversation semantic collection id", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		configText := "[conversation.semantic]\nenabled = true\ncollection_id = \"   \"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Conversation.Semantic.Enabled).To(BeTrue())
+		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("clyde-conversations"))
 	})
 
 	It("loads MITM provider sets with cursor", func() {

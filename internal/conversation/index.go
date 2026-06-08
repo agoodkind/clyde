@@ -96,6 +96,18 @@ func (idx *Index) List(ctx context.Context) ([]Record, error) {
 	return cloneRecords(idx.records), nil
 }
 
+// ListWithStamps returns the cached records with their artifact file stamps and
+// starts a debounced background refresh.
+func (idx *Index) ListWithStamps(ctx context.Context) ([]StampedRecord, error) {
+	if err := idx.loadOnce(); err != nil {
+		return nil, err
+	}
+	idx.refreshAsync(ctx)
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	return cloneStampedRecords(idx.records, idx.prevStamps), nil
+}
+
 func (idx *Index) recordsSnapshot() []Record {
 	idx.mu.Lock()
 	records := cloneRecords(idx.records)
@@ -318,6 +330,20 @@ func cloneRecords(records []Record) []Record {
 	}
 	out := make([]Record, len(records))
 	copy(out, records)
+	return out
+}
+
+func cloneStampedRecords(records []Record, stamps map[string]FileStamp) []StampedRecord {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]StampedRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, StampedRecord{
+			Record: record,
+			Stamp:  stamps[record.ArtifactPath],
+		})
+	}
 	return out
 }
 
