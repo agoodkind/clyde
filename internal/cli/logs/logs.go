@@ -19,8 +19,14 @@ const defaultLargestFileLimit = 3
 // NewCmd returns the logs command tree.
 func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "logs",
-		Short: "Inspect Clyde log metadata",
+		Use:     "logs",
+		Short:   "Inspect Clyde log metadata",
+		Long:    "Inspect Clyde log metadata. The daemon performs the inventory scan; these commands render the daemon's reply without reading log bodies.",
+		Example: "clyde logs inventory --largest 5",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 	}
 	cmd.AddCommand(newInventoryCmd(f))
 	return cmd

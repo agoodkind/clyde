@@ -77,9 +77,10 @@ func (n Name) MCP() string {
 // under. Operations sharing the same *Group value land as subcommands of one
 // rendered parent.
 type Group struct {
-	Use   string
-	Short string
-	Long  string
+	Use     string
+	Short   string
+	Long    string
+	Example string
 	// Parent is the enclosing group, or nil for a top-level group. A non-nil
 	// Parent nests this group one level deeper, so a chain renders as nested
 	// terminal parents, for example mitm -> trust -> install.

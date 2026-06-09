@@ -41,6 +41,11 @@ func newTrustCmdWithDeps(
 			"MITM-signed certificates. Install requires admin and prompts " +
 			"once via /usr/bin/sudo. Status is read-only and never mutates " +
 			"the trust store.",
+		Example: "clyde mitm trust status\nclyde mitm trust install",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 	}
 	cmd.AddCommand(newTrustInstallCmd(f, registryFactory, loadConfig))
 	cmd.AddCommand(newTrustUninstallCmd(f, registryFactory))
