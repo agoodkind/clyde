@@ -29,7 +29,7 @@ func codexTranscriptMessage(
 	}
 
 	text := transcript.NormalizeConversationOnlyText(msg.Text)
-	if text == "" {
+	if text == "" && msg.Thinking == "" && len(msg.Tools) == 0 {
 		return emptyMessage(), false
 	}
 	return transcript.Message{
@@ -41,8 +41,8 @@ func codexTranscriptMessage(
 		Compaction:        msg.Compaction,
 		Timestamp:         msg.Timestamp,
 		Text:              text,
-		Thinking:          "",
-		HasTools:          false,
-		Tools:             nil,
+		Thinking:          msg.Thinking,
+		HasTools:          msg.HasTools,
+		Tools:             msg.Tools,
 	}, true
 }

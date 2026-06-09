@@ -230,8 +230,15 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	}, true
 }
 
-// Stream yields the rollout's conversation messages one at a time.
+// Stream yields the rollout's conversation messages one at a time. With
+// IncludeToolOutputs unset it stays streaming and drops the tool-output marker
+// records (they carry no renderable text). With IncludeToolOutputs set it
+// buffers so each output can be attached to its tool call by call_id, matching
+// the Claude parser's two-pass behavior.
 func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+	if opts.IncludeToolOutputs {
+		return p.streamWithToolOutputs(path, opts)
+	}
 	return func(yield func(transcript.Message, error) bool) {
 		for msg, err := range codexstore.StreamMessages(path, opts.IncludeSystemMessages) {
 			if err != nil {
@@ -247,6 +254,63 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 			}
 		}
 	}
+}
+
+// streamWithToolOutputs collects the whole rollout, links each tool-output
+// record to its tool call by call_id, and then yields the shaped messages.
+func (p *Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+	return func(yield func(transcript.Message, error) bool) {
+		var history []codexstore.HistoryMessage
+		for msg, err := range codexstore.StreamMessages(path, opts.IncludeSystemMessages) {
+			if err != nil {
+				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
+				return
+			}
+			history = append(history, msg)
+		}
+		for _, message := range attachCodexToolOutputs(history, opts.IncludeSystemMessages) {
+			if !yield(message, nil) {
+				return
+			}
+		}
+	}
+}
+
+// codexToolRef locates one tool call inside the shaped message slice so a later
+// tool-output record can fill its output by call_id.
+type codexToolRef struct {
+	messageIndex int
+	toolIndex    int
+}
+
+// attachCodexToolOutputs shapes the buffered history into transcript messages
+// and folds each tool-output marker into the matching tool call's Output.
+func attachCodexToolOutputs(history []codexstore.HistoryMessage, includeSystemMessages bool) []transcript.Message {
+	out := make([]transcript.Message, 0, len(history))
+	index := make(map[string]codexToolRef, len(history))
+	for _, hm := range history {
+		if hm.ToolOutputCallID != "" {
+			if ref, ok := index[hm.ToolOutputCallID]; ok {
+				out[ref.messageIndex].Tools[ref.toolIndex].Output = hm.ToolOutput
+				out[ref.messageIndex].Tools[ref.toolIndex].IsError = hm.ToolOutputIsError
+			}
+			continue
+		}
+		message, ok := codexTranscriptMessage(hm, includeSystemMessages)
+		if !ok {
+			continue
+		}
+		messageIndex := len(out)
+		out = append(out, message)
+		for toolIndex := range message.Tools {
+			callID := message.Tools[toolIndex].ID
+			if callID == "" {
+				continue
+			}
+			index[callID] = codexToolRef{messageIndex: messageIndex, toolIndex: toolIndex}
+		}
+	}
+	return out
 }
 
 // fallbackThread builds a minimal thread summary from a rollout filename when

@@ -70,7 +70,9 @@ type ThreadSummary struct {
 }
 
 // HistoryMessage is a normalized conversational message extracted from Codex
-// rollout entries.
+// rollout entries. A record carries chat text, reasoning text, or tool calls; a
+// tool-output record instead carries ToolOutputCallID so the parser can attach
+// the output to the matching call when tool outputs are requested.
 type HistoryMessage struct {
 	Role              string
 	ParentUUID        string
@@ -78,6 +80,12 @@ type HistoryMessage struct {
 	Visibility        transcript.MessageVisibility
 	Compaction        *transcript.CompactionMetadata
 	Text              string
+	Thinking          string
+	Tools             []transcript.ToolCall
+	HasTools          bool
+	ToolOutputCallID  string
+	ToolOutput        string
+	ToolOutputIsError bool
 	Timestamp         time.Time
 	Phase             string
 }
@@ -558,10 +566,15 @@ const (
 )
 
 type responsePayload struct {
-	Type    string        `json:"type"`
-	Role    string        `json:"role"`
-	Content []contentPart `json:"content"`
-	Phase   string        `json:"phase"`
+	Type      string          `json:"type"`
+	Role      string          `json:"role"`
+	Content   []contentPart   `json:"content"`
+	Phase     string          `json:"phase"`
+	Name      string          `json:"name"`
+	Arguments string          `json:"arguments"`
+	Input     string          `json:"input"`
+	CallID    string          `json:"call_id"`
+	Output    json.RawMessage `json:"output"`
 }
 
 type contentPart struct {
@@ -572,6 +585,7 @@ type contentPart struct {
 type eventPayload struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	Text    string `json:"text"`
 	Phase   string `json:"phase"`
 }
 
@@ -631,23 +645,27 @@ func responseItemMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessa
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
 	}
-	if payload.Type != "message" {
+	switch responseItemType(payload.Type) {
+	case responseItemMessageType:
+		text := strings.TrimSpace(contentText(payload.Content))
+		if text == "" {
+			return emptyHistoryMessage(), false
+		}
+		return textHistoryMessage(payload.Role, text, timestamp, payload.Phase), true
+	case responseItemFunctionCall:
+		return toolCallHistoryMessage(payload.CallID, payload.Name, payload.Arguments, timestamp)
+	case responseItemCustomToolCall:
+		return toolCallHistoryMessage(payload.CallID, payload.Name, payload.Input, timestamp)
+	case responseItemFunctionCallOutput, responseItemCustomToolCallOutput:
+		return toolOutputHistoryMessage(payload.CallID, payload.Output, timestamp)
+	case responseItemReasoning:
+		// Reasoning response items carry only encrypted_content with an empty
+		// summary, so the readable reasoning is surfaced from the
+		// agent_reasoning event instead.
+		return emptyHistoryMessage(), false
+	default:
 		return emptyHistoryMessage(), false
 	}
-	text := strings.TrimSpace(contentText(payload.Content))
-	if text == "" {
-		return emptyHistoryMessage(), false
-	}
-	return HistoryMessage{
-		Role:              payload.Role,
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction:        nil,
-		Text:              text,
-		Timestamp:         timestamp,
-		Phase:             payload.Phase,
-	}, true
 }
 
 func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
@@ -655,19 +673,36 @@ func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, boo
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return emptyHistoryMessage(), false
 	}
-	var role string
 	switch eventMessageType(payload.Type) {
 	case eventMessageTypeUser:
-		role = "user"
+		text := strings.TrimSpace(payload.Message)
+		if text == "" {
+			return emptyHistoryMessage(), false
+		}
+		return textHistoryMessage("user", text, timestamp, payload.Phase), true
 	case eventMessageTypeAgent:
-		role = "assistant"
+		text := strings.TrimSpace(payload.Message)
+		if text == "" {
+			return emptyHistoryMessage(), false
+		}
+		return textHistoryMessage("assistant", text, timestamp, payload.Phase), true
+	case eventMessageTypeReasoning:
+		thinking := strings.TrimSpace(payload.Text)
+		if thinking == "" {
+			return emptyHistoryMessage(), false
+		}
+		message := textHistoryMessage("assistant", "", timestamp, "")
+		message.Thinking = thinking
+		return message, true
 	default:
 		return emptyHistoryMessage(), false
 	}
-	text := strings.TrimSpace(payload.Message)
-	if text == "" {
-		return emptyHistoryMessage(), false
-	}
+}
+
+// textHistoryMessage builds a chat HistoryMessage with every field set so
+// exhaustruct stays satisfied; callers override the reasoning or tool fields
+// afterward when they need them.
+func textHistoryMessage(role, text string, timestamp time.Time, phase string) HistoryMessage {
 	return HistoryMessage{
 		Role:              role,
 		ParentUUID:        "",
@@ -675,9 +710,79 @@ func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, boo
 		Visibility:        transcript.MessageVisibilityVisible,
 		Compaction:        nil,
 		Text:              text,
+		Thinking:          "",
+		Tools:             nil,
+		HasTools:          false,
+		ToolOutputCallID:  "",
+		ToolOutput:        "",
+		ToolOutputIsError: false,
 		Timestamp:         timestamp,
-		Phase:             payload.Phase,
-	}, true
+		Phase:             phase,
+	}
+}
+
+// toolCallHistoryMessage builds an assistant message carrying one tool call.
+// raw is the JSON arguments string (function_call) or the raw tool input
+// (custom_tool_call); toolInputJSON keeps it as valid JSON for re-rendering.
+func toolCallHistoryMessage(callID, name, raw string, timestamp time.Time) (HistoryMessage, bool) {
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(callID) == "" {
+		return emptyHistoryMessage(), false
+	}
+	message := textHistoryMessage("assistant", "", timestamp, "")
+	message.Tools = []transcript.ToolCall{{
+		ID:      callID,
+		Name:    name,
+		Input:   toolInputJSON(raw),
+		Output:  "",
+		IsError: false,
+	}}
+	message.HasTools = true
+	return message, true
+}
+
+// toolOutputHistoryMessage builds an output-marker record. The parser attaches
+// its text to the matching tool call by call_id when tool outputs are
+// requested, and drops it otherwise.
+func toolOutputHistoryMessage(callID string, output json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
+	if strings.TrimSpace(callID) == "" {
+		return emptyHistoryMessage(), false
+	}
+	message := textHistoryMessage("assistant", "", timestamp, "")
+	message.ToolOutputCallID = callID
+	message.ToolOutput = outputText(output)
+	return message, true
+}
+
+// toolInputJSON keeps a tool argument payload as valid JSON. A function_call's
+// arguments is already a JSON string, while a custom_tool_call's input is a
+// raw string (for example a patch), so a non-JSON value is encoded as a JSON
+// string.
+func toolInputJSON(raw string) transcript.ToolInputJSON {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return transcript.ToolInputJSON{Raw: nil}
+	}
+	if json.Valid([]byte(trimmed)) {
+		return transcript.ToolInputJSON{Raw: json.RawMessage(trimmed)}
+	}
+	encoded, err := json.Marshal(trimmed)
+	if err != nil {
+		return transcript.ToolInputJSON{Raw: nil}
+	}
+	return transcript.ToolInputJSON{Raw: json.RawMessage(encoded)}
+}
+
+// outputText renders a tool output payload as text. Codex writes the output as
+// a JSON string, but an object or array payload is preserved as raw JSON.
+func outputText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	return string(raw)
 }
 
 func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
@@ -722,9 +827,15 @@ func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage,
 			RawMicrocompactMetadata:   nil,
 			RawSummarizeMetadata:      nil,
 		},
-		Text:      trimmedMessage,
-		Timestamp: timestamp,
-		Phase:     "",
+		Text:              trimmedMessage,
+		Thinking:          "",
+		Tools:             nil,
+		HasTools:          false,
+		ToolOutputCallID:  "",
+		ToolOutput:        "",
+		ToolOutputIsError: false,
+		Timestamp:         timestamp,
+		Phase:             "",
 	}, true
 }
 
@@ -736,6 +847,12 @@ func emptyHistoryMessage() HistoryMessage {
 		Visibility:        "",
 		Compaction:        nil,
 		Text:              "",
+		Thinking:          "",
+		Tools:             nil,
+		HasTools:          false,
+		ToolOutputCallID:  "",
+		ToolOutput:        "",
+		ToolOutputIsError: false,
 		Timestamp:         time.Time{},
 		Phase:             "",
 	}
@@ -806,12 +923,26 @@ const (
 )
 
 // eventMessageType enumerates the event_msg payload types codex uses
-// for user vs agent turns.
+// for user turns, agent turns, and rendered agent reasoning.
 type eventMessageType string
 
 const (
-	eventMessageTypeUser  eventMessageType = "user_message"
-	eventMessageTypeAgent eventMessageType = "agent_message"
+	eventMessageTypeUser      eventMessageType = "user_message"
+	eventMessageTypeAgent     eventMessageType = "agent_message"
+	eventMessageTypeReasoning eventMessageType = "agent_reasoning"
+)
+
+// responseItemType enumerates the response_item payload kinds Clyde surfaces:
+// chat messages, tool calls, tool outputs, and reasoning.
+type responseItemType string
+
+const (
+	responseItemMessageType          responseItemType = "message"
+	responseItemFunctionCall         responseItemType = "function_call"
+	responseItemCustomToolCall       responseItemType = "custom_tool_call"
+	responseItemFunctionCallOutput   responseItemType = "function_call_output"
+	responseItemCustomToolCallOutput responseItemType = "custom_tool_call_output"
+	responseItemReasoning            responseItemType = "reasoning"
 )
 
 // contentPartTypeKey enumerates the message content-part type strings
