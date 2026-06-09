@@ -17,9 +17,9 @@ require (
 	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	golang.org/x/sys v0.45.0
+	golang.org/x/sys v0.46.0
 	goodkind.io/gklog v0.4.4
-	goodkind.io/lm-semantic-search v0.0.0-20260608075657-30e5f3c75bfc
+	goodkind.io/lm-semantic-search v0.0.0-20260609020145-44494e7c4be6
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
