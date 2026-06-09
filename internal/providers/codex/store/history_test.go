@@ -179,7 +179,7 @@ func TestStreamMessagesYieldsIncrementallyAndSkipsCompactedWithoutSystemMessages
 
 	var firstMessage HistoryMessage
 	firstCount := 0
-	for message, err := range StreamMessages(path, false) {
+	for message, err := range StreamMessages(path, HistoryOptions{IncludeSystemMessages: false, IncludeSystemPrompts: false}) {
 		if err != nil {
 			t.Fatalf("StreamMessages returned error before first message: %v", err)
 		}
@@ -195,7 +195,7 @@ func TestStreamMessagesYieldsIncrementallyAndSkipsCompactedWithoutSystemMessages
 	}
 
 	messages := []HistoryMessage{}
-	for message, err := range StreamMessages(path, false) {
+	for message, err := range StreamMessages(path, HistoryOptions{IncludeSystemMessages: false, IncludeSystemPrompts: false}) {
 		if err != nil {
 			t.Fatalf("StreamMessages returned error: %v", err)
 		}
@@ -603,7 +603,7 @@ func collectHistoryMessages(
 ) []HistoryMessage {
 	t.Helper()
 	messages := []HistoryMessage{}
-	for message, err := range StreamMessages(path, includeSystemMessages) {
+	for message, err := range StreamMessages(path, HistoryOptions{IncludeSystemMessages: includeSystemMessages, IncludeSystemPrompts: false}) {
 		if err != nil {
 			t.Fatalf("StreamMessages returned error: %v", err)
 		}

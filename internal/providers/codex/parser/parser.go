@@ -240,7 +240,11 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 		return p.streamWithToolOutputs(path, opts)
 	}
 	return func(yield func(transcript.Message, error) bool) {
-		for msg, err := range codexstore.StreamMessages(path, opts.IncludeSystemMessages) {
+		streamOpts := codexstore.HistoryOptions{
+			IncludeSystemMessages: opts.IncludeSystemMessages,
+			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
+		}
+		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {
 				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
 				return
@@ -261,7 +265,11 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 func (p *Parser) streamWithToolOutputs(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
 		var history []codexstore.HistoryMessage
-		for msg, err := range codexstore.StreamMessages(path, opts.IncludeSystemMessages) {
+		streamOpts := codexstore.HistoryOptions{
+			IncludeSystemMessages: opts.IncludeSystemMessages,
+			IncludeSystemPrompts:  opts.IncludeSystemPrompts,
+		}
+		for msg, err := range codexstore.StreamMessages(path, streamOpts) {
 			if err != nil {
 				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
 				return

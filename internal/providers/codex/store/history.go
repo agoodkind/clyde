@@ -155,10 +155,19 @@ func ReadHeader(path string, archived bool) (ThreadSummary, error) {
 	return summary, nil
 }
 
+// HistoryOptions controls which non-conversational records StreamMessages
+// surfaces. System messages are the compaction boundaries; system prompts are
+// the session base instructions and the developer-role guidance messages. Both
+// default off so a plain history stays to user and assistant turns plus tools.
+type HistoryOptions struct {
+	IncludeSystemMessages bool
+	IncludeSystemPrompts  bool
+}
+
 // StreamMessages yields normalized Codex rollout messages as each JSONL envelope
 // is read. When system messages are excluded, compaction payloads are skipped
 // before decoding so replacement_history stays untouched.
-func StreamMessages(path string, includeSystemMessages bool) iter.Seq2[HistoryMessage, error] {
+func StreamMessages(path string, opts HistoryOptions) iter.Seq2[HistoryMessage, error] {
 	return func(yield func(HistoryMessage, error) bool) {
 		f, err := os.Open(path)
 		if err != nil {
@@ -170,7 +179,7 @@ func StreamMessages(path string, includeSystemMessages bool) iter.Seq2[HistoryMe
 
 		reader := bufio.NewReaderSize(f, streamReaderBufferSize)
 		for {
-			if !includeSystemMessages {
+			if !opts.IncludeSystemMessages {
 				skipped, skipErr := skipLargeCompactedLine(reader)
 				if skipErr != nil {
 					reportStreamReadError(path, skipErr, yield)
@@ -181,7 +190,7 @@ func StreamMessages(path string, includeSystemMessages bool) iter.Seq2[HistoryMe
 				}
 			}
 			raw, readErr := reader.ReadBytes('\n')
-			if !emitStreamLine(raw, includeSystemMessages, yield) {
+			if !emitStreamLine(raw, opts, yield) {
 				return
 			}
 			if readErr == io.EOF {
@@ -198,7 +207,7 @@ func StreamMessages(path string, includeSystemMessages bool) iter.Seq2[HistoryMe
 // emitStreamLine decodes one raw JSONL line and yields its normalized message
 // when the envelope produces one. It returns false when the consumer asked to
 // stop iterating, and true otherwise so the caller continues reading.
-func emitStreamLine(raw []byte, includeSystemMessages bool, yield func(HistoryMessage, error) bool) bool {
+func emitStreamLine(raw []byte, opts HistoryOptions, yield func(HistoryMessage, error) bool) bool {
 	line := bytes.TrimRight(raw, "\r\n")
 	if len(line) == 0 {
 		return true
@@ -207,7 +216,7 @@ func emitStreamLine(raw []byte, includeSystemMessages bool, yield func(HistoryMe
 	if json.Unmarshal(line, &envelope) != nil {
 		return true
 	}
-	msg, ok := streamMessageFromEnvelope(envelope, includeSystemMessages)
+	msg, ok := streamMessageFromEnvelope(envelope, opts)
 	if !ok {
 		return true
 	}
@@ -310,19 +319,24 @@ func peekedEnvelopeType(prefix []byte) (string, bool) {
 	return string(rest[valueStart:cursor]), true
 }
 
-func streamMessageFromEnvelope(envelope historyLine, includeSystemMessages bool) (HistoryMessage, bool) {
+func streamMessageFromEnvelope(envelope historyLine, opts HistoryOptions) (HistoryMessage, bool) {
 	lineTime := parseCodexTime(envelope.Timestamp)
 	switch historyEnvelopeType(envelope.Type) {
 	case historyEnvelopeResponseItem:
-		return responseItemMessage(envelope.Payload, lineTime)
+		return responseItemMessage(envelope.Payload, lineTime, opts.IncludeSystemPrompts)
 	case historyEnvelopeEventMsg:
 		return eventMessage(envelope.Payload, lineTime)
 	case historyEnvelopeCompacted:
-		if !includeSystemMessages {
+		if !opts.IncludeSystemMessages {
 			return emptyHistoryMessage(), false
 		}
 		return compactedMessage(envelope.Payload, lineTime)
-	case historyEnvelopeSessionMeta, historyEnvelopeTurnContext:
+	case historyEnvelopeSessionMeta:
+		if !opts.IncludeSystemPrompts {
+			return emptyHistoryMessage(), false
+		}
+		return sessionPromptMessage(envelope.Payload, lineTime)
+	case historyEnvelopeTurnContext:
 		return emptyHistoryMessage(), false
 	default:
 		return emptyHistoryMessage(), false
@@ -336,17 +350,24 @@ type historyLine struct {
 }
 
 type sessionMetaPayload struct {
-	ID            string            `json:"id"`
-	ForkedFromID  string            `json:"forked_from_id"`
-	Timestamp     string            `json:"timestamp"`
-	CWD           string            `json:"cwd"`
-	Originator    string            `json:"originator"`
-	CLIVersion    string            `json:"cli_version"`
-	ModelProvider string            `json:"model_provider"`
-	Source        sourceUnion       `json:"source"`
-	ThreadSource  threadSourceField `json:"thread_source"`
-	AgentNickname string            `json:"agent_nickname"`
-	AgentRole     string            `json:"agent_role"`
+	ID               string                  `json:"id"`
+	ForkedFromID     string                  `json:"forked_from_id"`
+	Timestamp        string                  `json:"timestamp"`
+	CWD              string                  `json:"cwd"`
+	Originator       string                  `json:"originator"`
+	CLIVersion       string                  `json:"cli_version"`
+	ModelProvider    string                  `json:"model_provider"`
+	Source           sourceUnion             `json:"source"`
+	ThreadSource     threadSourceField       `json:"thread_source"`
+	AgentNickname    string                  `json:"agent_nickname"`
+	AgentRole        string                  `json:"agent_role"`
+	BaseInstructions baseInstructionsPayload `json:"base_instructions"`
+}
+
+// baseInstructionsPayload mirrors codex-rs BaseInstructions, which serializes as
+// an object with a text field carrying the session system prompt.
+type baseInstructionsPayload struct {
+	Text string `json:"text"`
 }
 
 // threadSourceField models the top-level session_meta thread_source classifier
@@ -638,205 +659,6 @@ func applyTurnContext(summary *ThreadSummary, raw json.RawMessage) {
 	if strings.TrimSpace(payload.CWD) != "" {
 		summary.LatestCWD = payload.CWD
 	}
-}
-
-func responseItemMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
-	var payload responsePayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return emptyHistoryMessage(), false
-	}
-	switch responseItemType(payload.Type) {
-	case responseItemMessageType:
-		text := strings.TrimSpace(contentText(payload.Content))
-		if text == "" {
-			return emptyHistoryMessage(), false
-		}
-		return textHistoryMessage(payload.Role, text, timestamp, payload.Phase), true
-	case responseItemFunctionCall:
-		return toolCallHistoryMessage(payload.CallID, payload.Name, payload.Arguments, timestamp)
-	case responseItemCustomToolCall:
-		return toolCallHistoryMessage(payload.CallID, payload.Name, payload.Input, timestamp)
-	case responseItemFunctionCallOutput, responseItemCustomToolCallOutput:
-		return toolOutputHistoryMessage(payload.CallID, payload.Output, timestamp)
-	case responseItemReasoning:
-		// Reasoning response items carry only encrypted_content with an empty
-		// summary, so the readable reasoning is surfaced from the
-		// agent_reasoning event instead.
-		return emptyHistoryMessage(), false
-	default:
-		return emptyHistoryMessage(), false
-	}
-}
-
-func eventMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
-	var payload eventPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return emptyHistoryMessage(), false
-	}
-	switch eventMessageType(payload.Type) {
-	case eventMessageTypeUser:
-		text := strings.TrimSpace(payload.Message)
-		if text == "" {
-			return emptyHistoryMessage(), false
-		}
-		return textHistoryMessage("user", text, timestamp, payload.Phase), true
-	case eventMessageTypeAgent:
-		text := strings.TrimSpace(payload.Message)
-		if text == "" {
-			return emptyHistoryMessage(), false
-		}
-		return textHistoryMessage("assistant", text, timestamp, payload.Phase), true
-	case eventMessageTypeReasoning:
-		thinking := strings.TrimSpace(payload.Text)
-		if thinking == "" {
-			return emptyHistoryMessage(), false
-		}
-		message := textHistoryMessage("assistant", "", timestamp, "")
-		message.Thinking = thinking
-		return message, true
-	default:
-		return emptyHistoryMessage(), false
-	}
-}
-
-// textHistoryMessage builds a chat HistoryMessage with every field set so
-// exhaustruct stays satisfied; callers override the reasoning or tool fields
-// afterward when they need them.
-func textHistoryMessage(role, text string, timestamp time.Time, phase string) HistoryMessage {
-	return HistoryMessage{
-		Role:              role,
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction:        nil,
-		Text:              text,
-		Thinking:          "",
-		Tools:             nil,
-		HasTools:          false,
-		ToolOutputCallID:  "",
-		ToolOutput:        "",
-		ToolOutputIsError: false,
-		Timestamp:         timestamp,
-		Phase:             phase,
-	}
-}
-
-// toolCallHistoryMessage builds an assistant message carrying one tool call.
-// raw is the JSON arguments string (function_call) or the raw tool input
-// (custom_tool_call); toolInputJSON keeps it as valid JSON for re-rendering.
-func toolCallHistoryMessage(callID, name, raw string, timestamp time.Time) (HistoryMessage, bool) {
-	if strings.TrimSpace(name) == "" && strings.TrimSpace(callID) == "" {
-		return emptyHistoryMessage(), false
-	}
-	message := textHistoryMessage("assistant", "", timestamp, "")
-	message.Tools = []transcript.ToolCall{{
-		ID:      callID,
-		Name:    name,
-		Input:   toolInputJSON(raw),
-		Output:  "",
-		IsError: false,
-	}}
-	message.HasTools = true
-	return message, true
-}
-
-// toolOutputHistoryMessage builds an output-marker record. The parser attaches
-// its text to the matching tool call by call_id when tool outputs are
-// requested, and drops it otherwise.
-func toolOutputHistoryMessage(callID string, output json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
-	if strings.TrimSpace(callID) == "" {
-		return emptyHistoryMessage(), false
-	}
-	message := textHistoryMessage("assistant", "", timestamp, "")
-	message.ToolOutputCallID = callID
-	message.ToolOutput = outputText(output)
-	return message, true
-}
-
-// toolInputJSON keeps a tool argument payload as valid JSON. A function_call's
-// arguments is already a JSON string, while a custom_tool_call's input is a
-// raw string (for example a patch), so a non-JSON value is encoded as a JSON
-// string.
-func toolInputJSON(raw string) transcript.ToolInputJSON {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return transcript.ToolInputJSON{Raw: nil}
-	}
-	if json.Valid([]byte(trimmed)) {
-		return transcript.ToolInputJSON{Raw: json.RawMessage(trimmed)}
-	}
-	encoded, err := json.Marshal(trimmed)
-	if err != nil {
-		return transcript.ToolInputJSON{Raw: nil}
-	}
-	return transcript.ToolInputJSON{Raw: json.RawMessage(encoded)}
-}
-
-// outputText renders a tool output payload as text. Codex writes the output as
-// a JSON string, but an object or array payload is preserved as raw JSON.
-func outputText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	return string(raw)
-}
-
-func compactedMessage(raw json.RawMessage, timestamp time.Time) (HistoryMessage, bool) {
-	var payload compactedPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return emptyHistoryMessage(), false
-	}
-	contextItems := []transcript.CompactedContextItem(nil)
-	replacementHistoryCount := 0
-	trimmedMessage := strings.TrimSpace(payload.Message)
-	if payload.ReplacementHistory != nil {
-		replacementHistoryCount = len(*payload.ReplacementHistory)
-		contextItems = normalizeCompactedContextItems(*payload.ReplacementHistory)
-	} else if trimmedMessage != "" {
-		contextItems = []transcript.CompactedContextItem{
-			legacyCompactedSummaryContextItem(trimmedMessage),
-		}
-	}
-	return HistoryMessage{
-		Role:              "system",
-		ParentUUID:        "",
-		LogicalParentUUID: "",
-		Visibility:        transcript.MessageVisibilityVisible,
-		Compaction: &transcript.CompactionMetadata{
-			Kind:                      transcript.CompactionKindBoundary,
-			Trigger:                   transcript.CompactionTriggerUnknown,
-			PreTokens:                 0,
-			PostTokens:                0,
-			TokensSaved:               0,
-			MessagesSummarized:        0,
-			ReplacementHistoryCount:   replacementHistoryCount,
-			HeadUUID:                  "",
-			AnchorUUID:                "",
-			TailUUID:                  "",
-			ContextItems:              contextItems,
-			UserContext:               "",
-			Direction:                 "",
-			PreCompactDiscoveredTools: nil,
-			CompactedToolIDs:          nil,
-			ClearedAttachmentUUIDs:    nil,
-			RawCompactMetadata:        nil,
-			RawMicrocompactMetadata:   nil,
-			RawSummarizeMetadata:      nil,
-		},
-		Text:              trimmedMessage,
-		Thinking:          "",
-		Tools:             nil,
-		HasTools:          false,
-		ToolOutputCallID:  "",
-		ToolOutput:        "",
-		ToolOutputIsError: false,
-		Timestamp:         timestamp,
-		Phase:             "",
-	}, true
 }
 
 func emptyHistoryMessage() HistoryMessage {
