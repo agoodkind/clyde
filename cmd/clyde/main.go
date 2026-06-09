@@ -72,6 +72,8 @@ func newRoot(f *cli.Factory) *cobra.Command {
 	root := &cobra.Command{
 		Use:     "clyde",
 		Short:   "Search, inspect, and export Claude and Codex transcripts",
+		Long:    "Clyde reads raw Claude and Codex conversation artifacts and exposes them through terminal commands and an MCP server, alongside the background daemon, the MITM capture proxy, log inspection, and transcript export.",
+		Example: "clyde conversation list\nclyde conversation export claude:1a2b3c",
 		Version: "DEVELOPMENT",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -80,13 +82,9 @@ func newRoot(f *cli.Factory) *cobra.Command {
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SilenceErrors = true
-	root.SilenceUsage = true
 	root.SetIn(f.IOStreams.In)
 	root.SetOut(f.IOStreams.Out)
 	root.SetErr(f.IOStreams.Err)
-	root.SetHelpFunc(func(cmd *cobra.Command, _ []string) {
-		_ = response.WriteText(cmd.Context(), cmd.OutOrStdout(), helpText(cmd))
-	})
 
 	cli.RegisterGlobalFlags(root)
 	output.PersistentFlag(root)
@@ -99,19 +97,9 @@ func newRoot(f *cli.Factory) *cobra.Command {
 	for _, command := range clispec.RenderCobra(reg, f) {
 		root.AddCommand(command)
 	}
-	return root
-}
 
-func helpText(cmd *cobra.Command) string {
-	description := strings.TrimSpace(cmd.Long)
-	if description == "" {
-		description = strings.TrimSpace(cmd.Short)
-	}
-	usage := cmd.UsageString()
-	if description == "" {
-		return usage
-	}
-	return description + "\n\n" + usage
+	cli.InstallHelpRendering(root)
+	return root
 }
 
 func detectSlogRole(args []string) slogger.ProcessRole {
