@@ -2,6 +2,7 @@ package codexstore
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,13 +26,13 @@ type SessionIndex struct {
 }
 
 // ReadSessionIndex is part of Clyde's typed adapter surface.
-func ReadSessionIndex(path string) (SessionIndex, error) {
+func ReadSessionIndex(ctx context.Context, path string) (SessionIndex, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return SessionIndex{entriesByID: nil}, nil
 		}
-		slog.Warn("codex.store.session_index.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
+		slog.WarnContext(ctx, "codex.store.session_index.open_failed", "concern", "providers.codex.store", "path", path, "err", err)
 		return SessionIndex{}, fmt.Errorf("open codex session index %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()

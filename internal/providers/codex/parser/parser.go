@@ -128,7 +128,7 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 		slog.WarnContext(ctx, "providers.codex.parser.paths_failed", "concern", concern, "component", "codex", "err", err)
 		return nil, fmt.Errorf("resolve Codex store paths: %w", err)
 	}
-	index, err := codexstore.ReadSessionIndex(paths.SessionIndexPath)
+	index, err := codexstore.ReadSessionIndex(ctx, paths.SessionIndexPath)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.codex.parser.session_index_failed", "concern", concern, "component", "codex", "path", paths.SessionIndexPath, "err", err)
 		return nil, fmt.Errorf("read Codex session index: %w", err)
