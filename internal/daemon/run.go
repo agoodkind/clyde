@@ -129,6 +129,12 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 		}()
 		conversationIndex.Start(ctx, time.Minute)
 	}()
+	var semanticClient conversationSemanticClient
+	if runtime.semantic != nil {
+		semanticClient = runtime.semantic.client
+	}
+	semanticStop := startConversationSemanticSync(ctx, log, conversationIndex, semanticClient, cfg.Conversation.Semantic.CollectionID)
+	defer semanticStop()
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -145,6 +151,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	log.Info("daemon.worker.ready", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"adapter_enabled", cfg.Adapter.Enabled,
 		"mitm_enabled", cfg.MITM.EnabledDefault,
+		"conversation_semantic_enabled", runtime.semantic != nil,
 	)
 	startStartupCleanup(log, cfg)
 
@@ -213,6 +220,12 @@ func newControlServer(
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
 ) *controlServer {
+	var semanticSearch conversationSemanticSearchClient
+	semanticCollectionID := ""
+	if runtime.semantic != nil && runtime.semantic.client != nil {
+		semanticSearch = runtime.semantic.client
+		semanticCollectionID = cfg.Conversation.Semantic.CollectionID
+	}
 	return &controlServer{
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,
@@ -230,6 +243,8 @@ func newControlServer(
 		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
 		},
+		semanticSearch:       semanticSearch,
+		semanticCollectionID: semanticCollectionID,
 	}
 }
 
@@ -254,6 +269,7 @@ type runtimeServices struct {
 	// flushes before a new generation reopens the same db.
 	searchStore *searchstore.Store
 	searchJobs  *conversation.SearchJobManager
+	semantic    *conversationSemanticRuntime
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -294,6 +310,7 @@ func startRuntime(
 		captureStore:          nil,
 		searchStore:           searchStore,
 		searchJobs:            nil,
+		semantic:              nil,
 		pprofListener:         nil,
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},
@@ -332,6 +349,7 @@ func startRuntime(
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("pprof listener inherited but pprof is disabled; full daemon restart required")
 	}
+	runtime.semantic = startConversationSemanticRuntime(ctx, cfg, log)
 	return runtime, nil
 }
 
@@ -806,6 +824,7 @@ func (r *runtimeServices) closeStoresOnReload(parent, ctx context.Context, log *
 			log.WarnContext(ctx, "daemon.reload.search_store_close_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
 		}
 	}
+	r.closeConversationSemanticRuntime(ctx, log, "reload")
 	if r.captureStore != nil {
 		if err := r.captureStore.Close(parent, "reload"); err != nil {
 			log.WarnContext(ctx, "daemon.reload.capture_store_close_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
@@ -866,6 +885,7 @@ func (r *runtimeServices) shutdown(parent context.Context) {
 			slog.WarnContext(ctx, "daemon.shutdown.search_store_close_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		}
 	}
+	r.closeConversationSemanticRuntime(ctx, slog.Default(), "shutdown")
 	// Close the shared capture store after the proxies stop so the SQLite WAL
 	// flushes before the process exits.
 	if r.captureStore != nil {

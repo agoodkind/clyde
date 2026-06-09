@@ -62,6 +62,7 @@ func emptyRecord() conversation.Record {
 		ID:            "",
 		Provider:      providerid.ProviderUnspecified,
 		NativeID:      "",
+		Lineage:       nil,
 		Title:         "",
 		WorkspaceRoot: "",
 		ArtifactPath:  "",
@@ -156,8 +157,8 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 // ScanRecord reads only the rollout header (no message history) and derives the
 // record. It looks up the durable thread name from the session index cached by
 // Discover and derives the archived flag from the rollout path, so it never
-// reads the session index or the message body. A subagent rollout yields no
-// record.
+// reads the session index or the message body. Parentless subagent machinery
+// yields no record.
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
 	p.mu.Lock()
 	paths := p.paths
@@ -166,19 +167,42 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	p.mu.Unlock()
 
 	archived := p.isArchivedPath(paths, path)
-	thread, err := codexstore.ReadThreadByRolloutPath(path, false, archived)
-	if err != nil {
+	thread, err := codexstore.ReadHeader(path, archived)
+	if err != nil || thread.ID == "" {
 		// A rollout too short or malformed to parse a header still gets a record
 		// from its filename identity, matching the prior incremental scanner.
 		fallback, ok := fallbackThread(path, archived)
 		if !ok {
+			if err == nil {
+				err = fmt.Errorf("codex rollout %s missing session_meta id", path)
+			}
 			slog.Warn("providers.codex.parser.header_failed", "concern", concern, "component", "codex", "path", path, "err", err)
 			return emptyRecord(), false
 		}
 		thread = fallback
+	} else {
+		thread.UpdatedAt = stamp.Mtime
 	}
-	if thread.IsSubagent {
+	if thread.IsSubagent && thread.Source.ParentThreadID == "" && thread.ForkedFromID == "" {
+		// Review and compact subagent machinery has no parent thread, while
+		// spawned child threads and forks carry lineage.
 		return emptyRecord(), false
+	}
+	var lineage *conversation.Lineage
+	if thread.ForkedFromID != "" {
+		lineage = &conversation.Lineage{
+			Kind:              conversation.ConversationLineageKindFork,
+			ParentProvider:    providerid.ProviderCodex,
+			ParentNativeID:    thread.ForkedFromID,
+			ParentMessageUUID: "",
+		}
+	} else if thread.Source.ParentThreadID != "" {
+		lineage = &conversation.Lineage{
+			Kind:              conversation.ConversationLineageKindSpawn,
+			ParentProvider:    providerid.ProviderCodex,
+			ParentNativeID:    thread.Source.ParentThreadID,
+			ParentMessageUUID: "",
+		}
 	}
 	name := ""
 	if indexOK {
@@ -193,6 +217,7 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 		ID:            conversation.DerivedID(providerid.ProviderCodex, thread.ID, thread.RolloutPath),
 		Provider:      providerid.ProviderCodex,
 		NativeID:      thread.ID,
+		Lineage:       lineage,
 		Title:         title,
 		WorkspaceRoot: workspaceRoot,
 		ArtifactPath:  thread.RolloutPath,
@@ -205,18 +230,18 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	}, true
 }
 
-// Stream yields the rollout's conversation messages one at a time. Codex history
-// still reads the whole rollout once, but the shared transcript messages now
-// carry direct per-message metadata and only filter system boundaries when the
-// caller leaves IncludeSystemMessages false.
+// Stream yields the rollout's conversation messages one at a time.
 func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
-		history, err := readCodexHistory(path, opts.IncludeSystemMessages)
-		if err != nil {
-			yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
-			return
-		}
-		for _, message := range history {
+		for msg, err := range codexstore.StreamMessages(path, opts.IncludeSystemMessages) {
+			if err != nil {
+				yield(emptyMessage(), fmt.Errorf("read codex rollout: %w", err))
+				return
+			}
+			message, ok := codexTranscriptMessage(msg, opts.IncludeSystemMessages)
+			if !ok {
+				continue
+			}
 			if !yield(message, nil) {
 				return
 			}

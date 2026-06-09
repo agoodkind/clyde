@@ -573,6 +573,9 @@ func formatListResult(result conv.ListResult) string {
 
 func formatSearchConversationsResult(result conv.SearchConversationsResult) string {
 	var out strings.Builder
+	if result.Warming {
+		out.WriteString("Semantic index is warming; showing live results.\n")
+	}
 	fmt.Fprintf(&out, "returned_count: %d\n", result.ReturnedCount)
 	fmt.Fprintf(&out, "limit: %d\n", result.Limit)
 	fmt.Fprintf(&out, "conversations_scanned: %d\n", result.ConversationsScanned)

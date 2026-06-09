@@ -26,6 +26,7 @@ type Record struct {
 	ID            string    `json:"id"`
 	Provider      Provider  `json:"provider"`
 	NativeID      string    `json:"native_id"`
+	Lineage       *Lineage  `json:"lineage,omitempty"`
 	Title         string    `json:"title"`
 	WorkspaceRoot string    `json:"workspace_root"`
 	ArtifactPath  string    `json:"artifact_path"`
@@ -37,12 +38,20 @@ type Record struct {
 	Archived      bool      `json:"archived"`
 }
 
+// StampedRecord pairs an index record with the artifact stamp used by the
+// latest cache refresh.
+type StampedRecord struct {
+	Record Record
+	Stamp  FileStamp
+}
+
 // UnmarshalJSON decodes provider labels while keeping Provider enum-backed in memory.
 func (record *Record) UnmarshalJSON(data []byte) error {
 	type recordWire struct {
 		ID            string          `json:"id"`
 		Provider      json.RawMessage `json:"provider"`
 		NativeID      string          `json:"native_id"`
+		Lineage       *Lineage        `json:"lineage"`
 		Title         string          `json:"title"`
 		WorkspaceRoot string          `json:"workspace_root"`
 		ArtifactPath  string          `json:"artifact_path"`
@@ -65,6 +74,7 @@ func (record *Record) UnmarshalJSON(data []byte) error {
 		ID:            wire.ID,
 		Provider:      provider,
 		NativeID:      wire.NativeID,
+		Lineage:       wire.Lineage,
 		Title:         wire.Title,
 		WorkspaceRoot: wire.WorkspaceRoot,
 		ArtifactPath:  wire.ArtifactPath,

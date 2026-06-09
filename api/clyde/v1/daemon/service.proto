@@ -137,6 +137,7 @@ message SearchConversationsResponse {
   int64 returned_count = 3;
   int64 limit = 4;
   bool has_more = 5;
+  bool warming = 6;
 }
 
 // SearchStatus is the lifecycle state of an async search job.
@@ -207,6 +208,13 @@ message ExportTranscriptResponse {
   bytes body = 1;
 }
 
+message ConversationLineage {
+  string kind = 1;
+  Provider parent_provider = 2;
+  string parent_native_id = 3;
+  string parent_message_uuid = 4;
+}
+
 message ConversationRecord {
   string id = 1;
   Provider provider = 2;
@@ -220,6 +228,10 @@ message ConversationRecord {
   int64 updated_at_unix = 10;
   int64 size_bytes = 11;
   bool archived = 12;
+  ConversationLineage lineage = 13;
+  // parent_conversation_id is the resolved derived id of this conversation's
+  // fork parent when that parent is present in the index, and empty otherwise.
+  string parent_conversation_id = 14;
 }
 
 message ListConversationsResponse {

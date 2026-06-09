@@ -183,6 +183,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		ReturnedCount:        int(resp.GetReturnedCount()),
 		Limit:                int(resp.GetLimit()),
 		HasMore:              resp.GetHasMore(),
+		Warming:              resp.GetWarming(),
 	}, nil
 }
 
@@ -298,10 +299,20 @@ func conversationRecordsFromProto(wireRecords []*clydev1.ConversationRecord) []c
 }
 
 func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.Record {
+	var lineage *conversation.Lineage
+	if wireLineage := wire.GetLineage(); wireLineage != nil {
+		lineage = &conversation.Lineage{
+			Kind:              conversation.LineageKind(wireLineage.GetKind()),
+			ParentProvider:    providerFromProto(wireLineage.GetParentProvider()),
+			ParentNativeID:    wireLineage.GetParentNativeId(),
+			ParentMessageUUID: wireLineage.GetParentMessageUuid(),
+		}
+	}
 	return conversation.Record{
 		ID:            wire.GetId(),
 		Provider:      providerFromProto(wire.GetProvider()),
 		NativeID:      wire.GetNativeId(),
+		Lineage:       lineage,
 		Title:         wire.GetTitle(),
 		WorkspaceRoot: wire.GetWorkspaceRoot(),
 		ArtifactPath:  wire.GetArtifactPath(),

@@ -1,29 +1,32 @@
 package codexstore
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/transcript"
 )
 
-func TestReadThreadByRolloutPathParsesSummaryAndHistory(t *testing.T) {
+func TestReadHeaderParsesSummaryAndStreamMessagesParsesHistory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
-	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+	body := `{"timestamp":"2026-05-02T17:09:03.000Z","type":"turn_context","payload":{"cwd":"/repo/subdir"}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"trace the scanner"}]}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"I am checking the rollout format.","phase":"commentary"}}` + "\n" +
-		`{"timestamp":"2026-05-02T17:09:06.500Z","type":"turn_context","payload":{"cwd":"/repo/subdir"}}` + "\n" +
 		`{"timestamp":"2026-05-02T17:09:07.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}],"phase":"final"}}` + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write rollout: %v", err)
 	}
 
-	thread, err := ReadThreadByRolloutPath(path, true, false)
+	thread, err := ReadHeader(path, false)
 	if err != nil {
-		t.Fatalf("ReadThreadByRolloutPath returned error: %v", err)
+		t.Fatalf("ReadHeader returned error: %v", err)
 	}
 	if thread.ID != "019de9aa-3a00-7010-bd9f-a6ee71559357" {
 		t.Fatalf("ID = %q", thread.ID)
@@ -40,18 +43,178 @@ func TestReadThreadByRolloutPathParsesSummaryAndHistory(t *testing.T) {
 	if thread.LatestCWD != "/repo/subdir" {
 		t.Fatalf("LatestCWD = %q, want /repo/subdir", thread.LatestCWD)
 	}
-	if thread.Preview != "trace the scanner" {
-		t.Fatalf("Preview = %q", thread.Preview)
+
+	messages := collectHistoryMessages(t, path, true)
+	if len(messages) != 3 {
+		t.Fatalf("Messages len = %d, want 3", len(messages))
 	}
-	if len(thread.Messages) != 3 {
-		t.Fatalf("Messages len = %d, want 3", len(thread.Messages))
+	if messages[0].Text != "trace the scanner" {
+		t.Fatalf("first message text = %q", messages[0].Text)
 	}
-	if thread.Messages[1].Role != "assistant" || thread.Messages[1].Phase != "commentary" {
-		t.Fatalf("assistant event message = %#v", thread.Messages[1])
+	if messages[1].Role != "assistant" || messages[1].Phase != "commentary" {
+		t.Fatalf("assistant event message = %#v", messages[1])
 	}
 }
 
-func TestReadThreadByRolloutPathNormalizesCompactedContextItems(t *testing.T) {
+func TestReadHeaderParsesForkedFromID(t *testing.T) {
+	t.Parallel()
+	thread := readHeaderFromSessionMetaPayload(
+		t,
+		`{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","forked_from_id":"019de9aa-parent-thread","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}`,
+	)
+	if thread.ForkedFromID != "019de9aa-parent-thread" {
+		t.Fatalf("ForkedFromID = %q, want 019de9aa-parent-thread", thread.ForkedFromID)
+	}
+	if thread.Source.ParentThreadID != "" {
+		t.Fatalf("Source.ParentThreadID = %q, want empty", thread.Source.ParentThreadID)
+	}
+	if thread.IsSubagent {
+		t.Fatalf("IsSubagent = true, want false")
+	}
+}
+
+func TestReadHeaderKeepsSubagentParentOutOfForkedFromID(t *testing.T) {
+	t.Parallel()
+	thread := readHeaderFromSessionMetaPayload(
+		t,
+		`{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"subagent":{"thread_spawn":{"parent_thread_id":"019de9aa-spawn-parent","agent_nickname":"helper","agent_role":"analysis"}}},"model_provider":"openai"}`,
+	)
+	if thread.ForkedFromID != "" {
+		t.Fatalf("ForkedFromID = %q, want empty", thread.ForkedFromID)
+	}
+	if thread.Source.ParentThreadID != "019de9aa-spawn-parent" {
+		t.Fatalf("Source.ParentThreadID = %q, want 019de9aa-spawn-parent", thread.Source.ParentThreadID)
+	}
+	if !thread.IsSubagent {
+		t.Fatalf("IsSubagent = false, want true")
+	}
+}
+
+func TestStreamMessagesReadsLargeCompactedLine(t *testing.T) {
+	t.Parallel()
+	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
+	const postCompactionText = "post-compaction user message"
+	const compactedLineMinimumBytes = 5 * 1024 * 1024
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-"+threadID+".jsonl")
+	largeText := strings.Repeat("x", compactedLineMinimumBytes)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + largeText + `"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"kept"}]}]}}`
+	if len([]byte(compactedLine)) <= compactedLineMinimumBytes {
+		t.Fatalf("compacted line bytes = %d, want more than %d", len([]byte(compactedLine)), compactedLineMinimumBytes)
+	}
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + threadID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		compactedLine + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + postCompactionText + `"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	messages := collectHistoryMessages(t, path, true)
+	found := false
+	for _, message := range messages {
+		if message.Text == postCompactionText {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("post-compaction message not found; messages len = %d", len(messages))
+	}
+}
+
+func TestReadHeaderStopsAfterSessionMetaBeforeLargeCompactedLine(t *testing.T) {
+	t.Parallel()
+	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
+	const compactedLineMinimumBytes = 5 * 1024 * 1024
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-"+threadID+".jsonl")
+	largeText := strings.Repeat("x", compactedLineMinimumBytes)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"` + largeText + `","replacement_history":[]}}`
+	if len([]byte(compactedLine)) <= compactedLineMinimumBytes {
+		t.Fatalf("compacted line bytes = %d, want more than %d", len([]byte(compactedLine)), compactedLineMinimumBytes)
+	}
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + threadID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		compactedLine + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"turn_context","payload":{"cwd":"/repo/after-large-line"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	thread, err := ReadHeader(path, true)
+	if err != nil {
+		t.Fatalf("ReadHeader returned error: %v", err)
+	}
+	if thread.ID != threadID {
+		t.Fatalf("ID = %q, want %q", thread.ID, threadID)
+	}
+	if thread.CWD != "/repo" {
+		t.Fatalf("CWD = %q, want /repo", thread.CWD)
+	}
+	if thread.ModelProvider != "openai" {
+		t.Fatalf("ModelProvider = %q, want openai", thread.ModelProvider)
+	}
+	if !thread.IsArchived {
+		t.Fatalf("IsArchived = false, want true")
+	}
+	if !thread.UpdatedAt.IsZero() {
+		t.Fatalf("UpdatedAt = %v, want zero", thread.UpdatedAt)
+	}
+	if thread.LatestCWD != "" {
+		t.Fatalf("LatestCWD = %q, want empty because scan stops at session_meta", thread.LatestCWD)
+	}
+}
+
+func TestStreamMessagesYieldsIncrementallyAndSkipsCompactedWithoutSystemMessages(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl")
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"019de9aa-3a00-7010-bd9f-a6ee71559357","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first message"}]}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:05.500Z","type":"compacted","payload":{"message":"summary text","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"pre compact"}]}]}}` + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"second message","phase":"commentary"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	var firstMessage HistoryMessage
+	firstCount := 0
+	for message, err := range StreamMessages(path, false) {
+		if err != nil {
+			t.Fatalf("StreamMessages returned error before first message: %v", err)
+		}
+		firstMessage = message
+		firstCount++
+		break
+	}
+	if firstCount != 1 {
+		t.Fatalf("first stream count = %d, want 1", firstCount)
+	}
+	if firstMessage.Text != "first message" {
+		t.Fatalf("first message text = %q, want first message", firstMessage.Text)
+	}
+
+	messages := []HistoryMessage{}
+	for message, err := range StreamMessages(path, false) {
+		if err != nil {
+			t.Fatalf("StreamMessages returned error: %v", err)
+		}
+		messages = append(messages, message)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Text != "first message" || messages[1].Text != "second message" {
+		t.Fatalf("message texts = %q/%q, want first message/second message", messages[0].Text, messages[1].Text)
+	}
+	for _, message := range messages {
+		if message.Role == "system" || message.Compaction != nil {
+			t.Fatalf("unexpected compacted message = %#v", message)
+		}
+	}
+}
+
+func TestStreamMessagesNormalizesCompactedContextItems(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name     string
@@ -325,14 +488,14 @@ func TestReadThreadByRolloutPathNormalizesCompactedContextItems(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			thread := readThreadWithCompactionPayload(
+			messages := streamMessagesWithCompactionPayload(
 				t,
 				`{"message":"","replacement_history":[`+testCase.rawItem+`]}`,
 			)
-			if len(thread.Messages) != 1 {
-				t.Fatalf("messages len = %d, want 1", len(thread.Messages))
+			if len(messages) != 1 {
+				t.Fatalf("messages len = %d, want 1", len(messages))
 			}
-			message := thread.Messages[0]
+			message := messages[0]
 			if message.Role != "system" {
 				t.Fatalf("role = %q, want system", message.Role)
 			}
@@ -360,16 +523,16 @@ func TestReadThreadByRolloutPathNormalizesCompactedContextItems(t *testing.T) {
 	}
 }
 
-func TestReadThreadByRolloutPathParsesLegacyCompactedSummary(t *testing.T) {
+func TestStreamMessagesParsesLegacyCompactedSummary(t *testing.T) {
 	t.Parallel()
-	thread := readThreadWithCompactionPayload(
+	messages := streamMessagesWithCompactionPayload(
 		t,
 		`{"message":"legacy summary only"}`,
 	)
-	if len(thread.Messages) != 1 {
-		t.Fatalf("messages len = %d, want 1", len(thread.Messages))
+	if len(messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(messages))
 	}
-	message := thread.Messages[0]
+	message := messages[0]
 	if message.Compaction == nil {
 		t.Fatalf("compaction metadata was nil")
 	}
@@ -394,10 +557,10 @@ func TestReadThreadByRolloutPathParsesLegacyCompactedSummary(t *testing.T) {
 	}
 }
 
-func readThreadWithCompactionPayload(
+func streamMessagesWithCompactionPayload(
 	t *testing.T,
 	compactedPayload string,
-) ThreadSummary {
+) []HistoryMessage {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(
@@ -409,11 +572,44 @@ func readThreadWithCompactionPayload(
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write rollout: %v", err)
 	}
-	thread, err := ReadThreadByRolloutPath(path, true, false)
+	return collectHistoryMessages(t, path, true)
+}
+
+func readHeaderFromSessionMetaPayload(
+	t *testing.T,
+	sessionMetaPayload string,
+) ThreadSummary {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(
+		dir,
+		"rollout-2026-05-02T10-09-00-019de9aa-3a00-7010-bd9f-a6ee71559357.jsonl",
+	)
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":` + sessionMetaPayload + `}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+	thread, err := ReadHeader(path, false)
 	if err != nil {
-		t.Fatalf("ReadThreadByRolloutPath returned error: %v", err)
+		t.Fatalf("ReadHeader returned error: %v", err)
 	}
 	return thread
+}
+
+func collectHistoryMessages(
+	t *testing.T,
+	path string,
+	includeSystemMessages bool,
+) []HistoryMessage {
+	t.Helper()
+	messages := []HistoryMessage{}
+	for message, err := range StreamMessages(path, includeSystemMessages) {
+		if err != nil {
+			t.Fatalf("StreamMessages returned error: %v", err)
+		}
+		messages = append(messages, message)
+	}
+	return messages
 }
 
 func rawForCompactedContextItem(
@@ -482,4 +678,196 @@ func rawForCompactedContextItem(
 		}
 	}
 	return nil
+}
+
+func TestStreamMessagesSkipsOversizedCompactedLineWithoutSystemMessages(t *testing.T) {
+	t.Parallel()
+	const threadID = "019de9aa-3a00-7010-bd9f-a6ee71559357"
+	const postCompactionText = "post-compaction user message"
+	const compactedLineMinimumBytes = 5 * 1024 * 1024
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout-2026-05-02T10-09-00-"+threadID+".jsonl")
+	largeText := strings.Repeat("x", compactedLineMinimumBytes)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"` + largeText + `","replacement_history":[]}}`
+	if len([]byte(compactedLine)) <= compactedLineMinimumBytes {
+		t.Fatalf("compacted line bytes = %d, want more than %d", len([]byte(compactedLine)), compactedLineMinimumBytes)
+	}
+	body := `{"timestamp":"2026-05-02T17:09:04.407Z","type":"session_meta","payload":{"id":"` + threadID + `","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","model_provider":"openai"}}` + "\n" +
+		compactedLine + "\n" +
+		`{"timestamp":"2026-05-02T17:09:06.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + postCompactionText + `"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write rollout: %v", err)
+	}
+
+	excluded := collectHistoryMessages(t, path, false)
+	if len(excluded) != 1 {
+		t.Fatalf("excluded messages len = %d, want 1", len(excluded))
+	}
+	if excluded[0].Text != postCompactionText {
+		t.Fatalf("excluded message text = %q, want %q", excluded[0].Text, postCompactionText)
+	}
+	for _, message := range excluded {
+		if message.Role == "system" || message.Compaction != nil {
+			t.Fatalf("compacted boundary leaked into excluded stream = %#v", message)
+		}
+	}
+
+	included := collectHistoryMessages(t, path, true)
+	foundBoundary := false
+	foundPost := false
+	for _, message := range included {
+		if message.Compaction != nil {
+			foundBoundary = true
+		}
+		if message.Text == postCompactionText {
+			foundPost = true
+		}
+	}
+	if !foundBoundary {
+		t.Fatalf("compacted boundary missing from included stream; messages len = %d", len(included))
+	}
+	if !foundPost {
+		t.Fatalf("post-compaction message missing from included stream; messages len = %d", len(included))
+	}
+}
+
+func TestSkipLargeCompactedLineDrainsOversizedLine(t *testing.T) {
+	t.Parallel()
+	const followingText = "follow-up line"
+	largeText := strings.Repeat("y", 6*1024*1024)
+	compactedLine := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"` + largeText + `","replacement_history":[]}}`
+	following := `{"timestamp":"2026-05-02T17:09:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"` + followingText + `"}}`
+
+	reader := bufio.NewReaderSize(strings.NewReader(compactedLine+"\n"+following+"\n"), streamReaderBufferSize)
+	skipped, err := skipLargeCompactedLine(reader)
+	if err != nil {
+		t.Fatalf("skipLargeCompactedLine returned error: %v", err)
+	}
+	if !skipped {
+		t.Fatalf("skipLargeCompactedLine = false, want true for oversized compacted line")
+	}
+	next, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("ReadBytes after drain returned error: %v", err)
+	}
+	if !bytes.Contains(next, []byte(followingText)) {
+		t.Fatalf("line after drain = %q, want it to contain %q", string(next), followingText)
+	}
+}
+
+func TestSkipLargeCompactedLineLeavesSmallAndNonCompactedLines(t *testing.T) {
+	t.Parallel()
+	smallCompacted := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"small","replacement_history":[]}}`
+	largeResponse := `{"timestamp":"2026-05-02T17:09:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"` + strings.Repeat("z", 6*1024*1024) + `"}]}}`
+
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "small_compacted_fits_prefix", line: smallCompacted},
+		{name: "large_non_compacted_response", line: largeResponse},
+	}
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			reader := bufio.NewReaderSize(strings.NewReader(testCase.line+"\n"), streamReaderBufferSize)
+			skipped, err := skipLargeCompactedLine(reader)
+			if err != nil {
+				t.Fatalf("skipLargeCompactedLine returned error: %v", err)
+			}
+			if skipped {
+				t.Fatalf("skipLargeCompactedLine = true, want false so the line is read normally")
+			}
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				t.Fatalf("ReadBytes returned error: %v", err)
+			}
+			if !bytes.Contains(line, []byte(`"type"`)) {
+				t.Fatalf("line was consumed unexpectedly; got %q", string(line[:min(len(line), 64)]))
+			}
+		})
+	}
+}
+
+func TestPeekedEnvelopeTypeReadsEnvelopeTypeFromPrefix(t *testing.T) {
+	t.Parallel()
+	prefix := []byte(`{"timestamp":"2026-05-02T17:09:05.000Z","type":"compacted","payload":{"message":"x`)
+	got, ok := peekedEnvelopeType(prefix)
+	if !ok {
+		t.Fatalf("peekedEnvelopeType ok = false, want true")
+	}
+	if got != "compacted" {
+		t.Fatalf("peekedEnvelopeType = %q, want compacted", got)
+	}
+
+	truncated := []byte(`{"timestamp":"2026-05-02T17:09:05.000Z","type":"compac`)
+	if _, ok := peekedEnvelopeType(truncated); ok {
+		t.Fatalf("peekedEnvelopeType ok = true for truncated type value, want false")
+	}
+}
+
+func TestReadHeaderMarksMachinerySourcesAsSubagent(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		sessionMeta    string
+		wantAgentRole  string
+		wantSourceKind ThreadSourceKind
+	}{
+		{
+			name:           "internal_memory_consolidation_object",
+			sessionMeta:    `{"id":"019de9aa-internal","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"internal":"memory_consolidation"},"model_provider":"openai"}`,
+			wantAgentRole:  "memory_consolidation",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "subagent_memory_consolidation_scalar_object",
+			sessionMeta:    `{"id":"019de9aa-subagent-memcon","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"subagent":"memory_consolidation"},"model_provider":"openai"}`,
+			wantAgentRole:  "memory_consolidation",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "subagent_review_scalar_object",
+			sessionMeta:    `{"id":"019de9aa-subagent-review","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":{"subagent":"review"},"model_provider":"openai"}`,
+			wantAgentRole:  "review",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "internal_memory_consolidation_display_scalar",
+			sessionMeta:    `{"id":"019de9aa-internal-scalar","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"internal_memory_consolidation","model_provider":"openai"}`,
+			wantAgentRole:  "memory_consolidation",
+			wantSourceKind: ThreadSourceSubagent,
+		},
+		{
+			name:           "thread_source_field_memory_consolidation",
+			sessionMeta:    `{"id":"019de9aa-thread-source","timestamp":"2026-05-02T17:09:00.555Z","cwd":"/repo","originator":"codex-tui","cli_version":"0.128.0","source":"cli","thread_source":"memory_consolidation","model_provider":"openai"}`,
+			wantAgentRole:  "",
+			wantSourceKind: ThreadSourceCLI,
+		},
+	}
+
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			thread := readHeaderFromSessionMetaPayload(t, testCase.sessionMeta)
+			if !thread.IsSubagent {
+				t.Fatalf("IsSubagent = false, want true for machinery source")
+			}
+			if thread.Source.ParentThreadID != "" {
+				t.Fatalf("Source.ParentThreadID = %q, want empty", thread.Source.ParentThreadID)
+			}
+			if thread.ForkedFromID != "" {
+				t.Fatalf("ForkedFromID = %q, want empty", thread.ForkedFromID)
+			}
+			if thread.Source.Kind != testCase.wantSourceKind {
+				t.Fatalf("Source.Kind = %q, want %q", thread.Source.Kind, testCase.wantSourceKind)
+			}
+			if testCase.wantAgentRole != "" && thread.Source.AgentRole != testCase.wantAgentRole {
+				t.Fatalf("Source.AgentRole = %q, want %q", thread.Source.AgentRole, testCase.wantAgentRole)
+			}
+		})
+	}
 }

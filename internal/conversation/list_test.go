@@ -153,7 +153,7 @@ func (*messageMapParser) Discover(context.Context, map[string]Record) ([]ScanCan
 }
 
 func (*messageMapParser) ScanRecord(string, FileStamp) (Record, bool) {
-	return Record{}, false
+	return emptyRecord(), false
 }
 
 func (p *messageMapParser) Stream(path string, _ LoadOptions) iter.Seq2[transcript.Message, error] {
@@ -171,6 +171,7 @@ func testListRecord(id string, provider Provider) Record {
 		ID:            id,
 		Provider:      provider,
 		NativeID:      id,
+		Lineage:       nil,
 		Title:         id,
 		WorkspaceRoot: "/repo",
 		ArtifactPath:  "/tmp/" + id + ".jsonl",

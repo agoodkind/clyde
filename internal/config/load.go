@@ -283,6 +283,8 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 		return err
 	}
 
+	applyConversationDefaults(&cfg.Conversation)
+
 	cfg.Adapter.Codex.ReasoningSummary = normalizeCodexReasoningSummary(cfg.Adapter.Codex.ReasoningSummary)
 	switch codexReasoningSummary(cfg.Adapter.Codex.ReasoningSummary) {
 	case codexReasoningSummaryAuto, codexReasoningSummaryConcise, codexReasoningSummaryDetailed, codexReasoningSummaryNone:

@@ -17,6 +17,11 @@
 [logging]
 level = "debug"
 
+[conversation.semantic]
+enabled = false
+socket_path = ""
+collection_id = "clyde-conversations"
+
 [logging.rotation]
 enabled = true
 max_size_mb = 64
