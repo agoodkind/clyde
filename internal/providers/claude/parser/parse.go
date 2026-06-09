@@ -256,8 +256,11 @@ func parseLine(line []byte, opts parseOptions) (transcript.Message, bool) {
 
 	// Assistant: content is an array of blocks.
 	parseAssistantBlocks(&m, msg.Content)
-	// Include assistant messages even if Text is empty (may have only tool calls).
-	return m, m.Text != "" || m.HasTools
+	// Include assistant messages even if Text is empty: they may carry only
+	// tool calls, or only a thinking block. Claude streams each content block as
+	// its own assistant record, so a thinking block often lands in an entry with
+	// no text and no tool_use; dropping it would lose the thinking from export.
+	return m, m.Text != "" || m.HasTools || m.Thinking != ""
 }
 
 func parseSystemEntry(entry rawEntry) (transcript.Message, bool) {
