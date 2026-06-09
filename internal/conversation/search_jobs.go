@@ -16,7 +16,6 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/search"
 	searchstore "goodkind.io/clyde/internal/search/store"
-	"goodkind.io/clyde/internal/util"
 )
 
 const (
@@ -120,11 +119,12 @@ func (m *SearchJobManager) Start(ctx context.Context, conversationID, query, dep
 		m.log.WarnContext(ctx, "conversation.search.resolve_failed", "concern", "conversation.search", "conversation_id", conversationID, "err", err)
 		return "", fmt.Errorf("resolve conversation: %w", err)
 	}
-	resultID, err := util.GenerateUUIDE()
+	resultUUID, err := uuid.NewRandom()
 	if err != nil {
 		m.log.WarnContext(ctx, "conversation.search.result_id_failed", "concern", "conversation.search", "err", err)
 		return "", fmt.Errorf("generate result id: %w", err)
 	}
+	resultID := resultUUID.String()
 	bgCtx := context.WithoutCancel(ctx)
 	job := searchstore.Job{
 		ResultID:       resultID,
