@@ -33,6 +33,15 @@ Export a conversation transcript.
 - format (optional): markdown, html, json, or plain_text
 - whitespace (optional): preserve, tidy, compact, or dense
 
+Content types select what the export contains. Chat, thinking, and tool calls are included by default; pass the matching switch to drop one. Tool outputs, system prompts, system messages, and raw JSON metadata are excluded by default; pass the matching switch to add one.
+- no_chat (optional): exclude conversation chat text
+- no_thinking (optional): exclude assistant thinking blocks
+- no_tool_calls (optional): exclude tool calls
+- with_tool_outputs (optional): include tool result bodies
+- with_system_prompts (optional): include system-injected prompts
+- with_system_messages (optional): include provider system transcript records
+- with_raw_json_metadata (optional): include JSON metadata fields
+
 Typical workflow:
 1. Call clyde_list_conversations.
 2. Call clyde_search_conversation with depth=quick.
