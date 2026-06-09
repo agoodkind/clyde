@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,12 +14,9 @@ import (
 )
 
 const (
-	conversationSemanticSyncInterval         = time.Minute
-	conversationSemanticMaxOperationsPerPass = 25
-	conversationSemanticMaxDocsPerBatch      = 800
-	conversationSemanticJobPollInterval      = time.Second
-	conversationSemanticJobTimeout           = 10 * time.Minute
-	maxSemanticMessageIndex                  = int32(1<<31 - 1)
+	conversationSemanticSyncInterval    = time.Minute
+	conversationSemanticMaxDocsPerBatch = 800
+	maxSemanticMessageIndex             = int32(1<<31 - 1)
 )
 
 type conversationSemanticIndex interface {
@@ -27,40 +24,35 @@ type conversationSemanticIndex interface {
 	LoadMessagesWithOptions(conversation.Record, conversation.LoadOptions) ([]transcript.Message, error)
 }
 
+// conversationSemanticClient is the two-call feeder surface: state the full
+// manifest, learn which conversations the engine needs, then send only those.
 type conversationSemanticClient interface {
-	UpsertConversationDocuments(context.Context, string, []semsearch.SemDoc) (string, error)
-	DeleteConversation(context.Context, string, string) (string, error)
-	JobState(context.Context, string) (string, error)
-	WaitForJob(context.Context, string, time.Duration, time.Duration) (string, error)
+	SyncConversationManifest(context.Context, string, []semsearch.Fingerprint) ([]string, error)
+	UpsertConversationDocuments(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
 }
 
-type semanticBatchMember struct {
-	conversationID string
-	stamp          conversation.FileStamp
-}
-
+// conversationSemanticSyncWorker feeds the engine a content fingerprint per
+// conversation each pass and sends documents only for the conversations the
+// engine reports it needs. The engine owns drift, so the worker keeps no
+// change-tracking state and never waits on or retries an engine job: a slow
+// first embed runs once because the engine checkpoints each conversation, and a
+// busy engine simply rejects the next upsert, which the worker logs and retries
+// on the following pass.
 type conversationSemanticSyncWorker struct {
-	index                conversationSemanticIndex
-	client               conversationSemanticClient
-	collectionID         string
-	log                  *slog.Logger
-	interval             time.Duration
-	maxOperationsPerPass int
-	lastPushed           map[string]conversation.FileStamp
-	// inFlightJobID is the id of the most recent engine job this worker started
-	// that has not yet been observed in a terminal state. It carries across
-	// passes so a job that outlives its in-pass wait blocks the next pass from
-	// firing a second job, which the engine would reject as a conflicting active
-	// job.
-	inFlightJobID string
+	index           conversationSemanticIndex
+	client          conversationSemanticClient
+	collectionID    string
+	log             *slog.Logger
+	interval        time.Duration
+	maxDocsPerBatch int
 }
 
 type conversationSemanticSyncStats struct {
-	operations int
-	upserted   int
-	deleted    int
-	skipped    int
-	failed     int
+	manifest          int
+	needed            int
+	sentConversations int
+	documents         int
+	failed            int
 }
 
 func startConversationSemanticSync(
@@ -105,14 +97,12 @@ func newConversationSemanticSyncWorker(
 		log = slog.Default()
 	}
 	return &conversationSemanticSyncWorker{
-		index:                index,
-		client:               client,
-		collectionID:         strings.TrimSpace(collectionID),
-		log:                  log,
-		interval:             conversationSemanticSyncInterval,
-		maxOperationsPerPass: conversationSemanticMaxOperationsPerPass,
-		lastPushed:           make(map[string]conversation.FileStamp),
-		inFlightJobID:        "",
+		index:           index,
+		client:          client,
+		collectionID:    strings.TrimSpace(collectionID),
+		log:             log,
+		interval:        conversationSemanticSyncInterval,
+		maxDocsPerBatch: conversationSemanticMaxDocsPerBatch,
 	}
 }
 
@@ -147,9 +137,6 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 	if w == nil || w.index == nil || w.client == nil {
 		return fmt.Errorf("semantic conversation sync worker is not configured")
 	}
-	if w.inFlightJobBlocksPass(ctx) {
-		return nil
-	}
 	stampedRecords, err := w.index.ListWithStamps(ctx)
 	if err != nil {
 		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.list_failed",
@@ -159,221 +146,85 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		)
 		return fmt.Errorf("list conversation records with stamps: %w", err)
 	}
-	currentRecords := currentSemanticRecords(stampedRecords)
-	operationLimit := w.operationLimit()
-	stats := conversationSemanticSyncStats{
-		operations: 0,
-		upserted:   0,
-		deleted:    0,
-		skipped:    0,
-		failed:     0,
+
+	manifest, recordsByID := w.buildManifest(stampedRecords)
+	stats := conversationSemanticSyncStats{manifest: len(manifest), needed: 0, sentConversations: 0, documents: 0, failed: 0}
+	if len(manifest) == 0 {
+		w.logPass(ctx, stats)
+		return nil
 	}
 
-	if err := w.deleteRemovedConversations(ctx, currentRecords, operationLimit, &stats); err != nil {
-		return err
+	needed, err := w.client.SyncConversationManifest(ctx, w.collectionID, manifest)
+	if err != nil {
+		return fmt.Errorf("sync conversation manifest: %w", err)
 	}
-	if w.inFlightJobID == "" {
-		if err := w.upsertChangedConversations(ctx, stampedRecords, operationLimit, &stats); err != nil {
-			return err
-		}
+	stats.needed = len(needed)
+	if len(needed) == 0 {
+		w.logPass(ctx, stats)
+		return nil
 	}
-	w.logPass(ctx, len(stampedRecords), operationLimit, stats)
-	return nil
-}
 
-// inFlightJobBlocksPass reports whether a previously started engine job is still
-// running, in which case the caller must skip the pass without firing a new
-// job. When the tracked job has reached a terminal state, or its lookup fails as
-// missing, the tracking id is cleared and the pass proceeds.
-func (w *conversationSemanticSyncWorker) inFlightJobBlocksPass(ctx context.Context) bool {
-	if w.inFlightJobID == "" {
-		return false
-	}
-	state, err := w.client.JobState(ctx, w.inFlightJobID)
-	if err == nil && !isTerminalSemanticJobState(state) {
-		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.waiting_in_flight",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"job_id", w.inFlightJobID,
-			"state", state,
-		)
-		return true
-	}
-	w.inFlightJobID = ""
-	return false
-}
-
-// settleJob clears the tracked in-flight job id when the engine job reached a
-// terminal state, and reports whether it settled. A non-terminal final state
-// (a wait timeout) leaves inFlightJobID set so the next pass's guard waits on it
-// rather than firing a conflicting second job.
-func (w *conversationSemanticSyncWorker) settleJob(finalState string) bool {
-	if isTerminalSemanticJobState(finalState) {
-		w.inFlightJobID = ""
-		return true
-	}
-	return false
-}
-
-func isTerminalSemanticJobState(state string) bool {
-	switch state {
-	case semsearch.JobStateCompleted, semsearch.JobStateFailed, semsearch.JobStateCancelled:
-		return true
-	default:
-		return false
-	}
-}
-
-func (w *conversationSemanticSyncWorker) operationLimit() int {
-	if w.maxOperationsPerPass <= 0 {
-		return conversationSemanticMaxOperationsPerPass
-	}
-	return w.maxOperationsPerPass
-}
-
-func (w *conversationSemanticSyncWorker) deleteRemovedConversations(
-	ctx context.Context,
-	currentRecords map[string]conversation.StampedRecord,
-	operationLimit int,
-	stats *conversationSemanticSyncStats,
-) error {
-	for _, conversationID := range w.removedConversationIDs(currentRecords) {
-		if stats.operations >= operationLimit {
-			break
-		}
-		if semanticSyncContextDone(ctx) {
-			return nil
-		}
-		jobID, deleteErr := w.client.DeleteConversation(ctx, w.collectionID, conversationID)
-		if deleteErr != nil {
-			stats.failed++
-			w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.delete_failed",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"conversation_id", conversationID,
-				"err", deleteErr,
-			)
-			continue
-		}
-		w.inFlightJobID = jobID
-		finalState, waitErr := w.client.WaitForJob(ctx, jobID, conversationSemanticJobPollInterval, conversationSemanticJobTimeout)
-		settled := w.settleJob(finalState)
-		if waitErr != nil || finalState != semsearch.JobStateCompleted {
-			stats.failed++
-			w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.delete_incomplete",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"conversation_id", conversationID,
-				"job_id", jobID,
-				"state", finalState,
-				"err", waitErr,
-			)
-			if !settled {
-				return nil
-			}
-			continue
-		}
-		delete(w.lastPushed, conversationID)
-		stats.deleted++
-		stats.operations++
-		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.delete_completed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", conversationID,
-			"job_id", jobID,
-			"state", finalState,
-		)
-	}
-	return nil
-}
-
-func (w *conversationSemanticSyncWorker) upsertChangedConversations(
-	ctx context.Context,
-	stampedRecords []conversation.StampedRecord,
-	operationLimit int,
-	stats *conversationSemanticSyncStats,
-) error {
-	docs, members := w.collectChangedBatch(ctx, stampedRecords, operationLimit, stats)
-	if len(members) == 0 {
+	docs, sentConversations := w.collectNeededDocuments(ctx, needed, recordsByID, &stats)
+	if len(docs) == 0 {
+		w.logPass(ctx, stats)
 		return nil
 	}
 	if semanticSyncContextDone(ctx) {
 		return nil
 	}
-	jobID, upsertErr := w.client.UpsertConversationDocuments(ctx, w.collectionID, docs)
-	if upsertErr != nil {
-		stats.failed += len(members)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversations", len(members),
-			"documents", len(docs),
-			"err", upsertErr,
-		)
-		return nil
-	}
-	w.inFlightJobID = jobID
-	finalState, waitErr := w.client.WaitForJob(ctx, jobID, conversationSemanticJobPollInterval, conversationSemanticJobTimeout)
-	w.settleJob(finalState)
-	if waitErr != nil || finalState != semsearch.JobStateCompleted {
-		stats.failed += len(members)
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_incomplete",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversations", len(members),
-			"documents", len(docs),
-			"job_id", jobID,
-			"state", finalState,
-			"err", waitErr,
-		)
-		return nil
-	}
-	for _, member := range members {
-		w.lastPushed[member.conversationID] = member.stamp
-		stats.upserted++
-		stats.operations++
-	}
-	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_completed",
-		"concern", "conversation.semantic",
-		"component", "daemon",
-		"conversations", len(members),
-		"documents", len(docs),
-		"job_id", jobID,
-		"state", finalState,
-	)
+
+	w.sendDocuments(ctx, docs, manifest, sentConversations, &stats)
+	w.logPass(ctx, stats)
 	return nil
 }
 
-// collectChangedBatch gathers the changed conversations for one pass into a
-// single combined document slice, bounded by the remaining per-pass operation
-// budget and the per-batch document cap, returning the docs and the parallel
-// list of conversations whose stamps should be marked once the job completes.
-func (w *conversationSemanticSyncWorker) collectChangedBatch(
-	ctx context.Context,
-	stampedRecords []conversation.StampedRecord,
-	operationLimit int,
-	stats *conversationSemanticSyncStats,
-) ([]semsearch.SemDoc, []semanticBatchMember) {
-	remaining := operationLimit - stats.operations
-	if remaining <= 0 {
-		return nil, nil
-	}
-	docs := make([]semsearch.SemDoc, 0)
-	members := make([]semanticBatchMember, 0)
+// buildManifest renders the current conversation set as a fingerprint list and a
+// lookup from conversation id to its record, skipping records with no id.
+func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversation.StampedRecord) ([]semsearch.Fingerprint, map[string]conversation.Record) {
+	manifest := make([]semsearch.Fingerprint, 0, len(stampedRecords))
+	recordsByID := make(map[string]conversation.Record, len(stampedRecords))
 	for _, stampedRecord := range stampedRecords {
-		if len(members) >= remaining {
-			break
+		conversationID := strings.TrimSpace(stampedRecord.Record.ID)
+		if conversationID == "" {
+			continue
 		}
+		if _, seen := recordsByID[conversationID]; seen {
+			continue
+		}
+		recordsByID[conversationID] = stampedRecord.Record
+		manifest = append(manifest, semsearch.Fingerprint{
+			ConversationID: conversationID,
+			Value:          stampedRecord.Stamp.Fingerprint(),
+		})
+	}
+	return manifest, recordsByID
+}
+
+// collectNeededDocuments loads the documents for the conversations the engine
+// asked for, bounded by the per-batch document cap. The remaining needed
+// conversations are picked up on the next pass, when the engine reports them
+// still needed. It returns the documents and the count of conversations covered.
+func (w *conversationSemanticSyncWorker) collectNeededDocuments(
+	ctx context.Context,
+	needed []string,
+	recordsByID map[string]conversation.Record,
+	stats *conversationSemanticSyncStats,
+) ([]semsearch.SemDoc, int) {
+	ordered := make([]string, len(needed))
+	copy(ordered, needed)
+	sort.Strings(ordered)
+
+	docs := make([]semsearch.SemDoc, 0)
+	sentConversations := 0
+	for _, conversationID := range ordered {
 		if semanticSyncContextDone(ctx) {
 			break
 		}
-		record := stampedRecord.Record
-		if strings.TrimSpace(record.ID) == "" {
-			stats.skipped++
-			continue
-		}
-		if lastStamp, ok := w.lastPushed[record.ID]; ok && lastStamp.Equal(stampedRecord.Stamp) {
-			stats.skipped++
+		record, found := recordsByID[conversationID]
+		if !found {
+			// The engine needs a conversation the manifest no longer lists. It will
+			// drop on a later pass once the manifest reflects the removal; nothing to
+			// send now.
 			continue
 		}
 		conversationDocs, loadErr := w.loadDocs(ctx, record)
@@ -381,46 +232,83 @@ func (w *conversationSemanticSyncWorker) collectChangedBatch(
 			stats.failed++
 			continue
 		}
-		if len(docs) > 0 && len(docs)+len(conversationDocs) > conversationSemanticMaxDocsPerBatch {
+		if len(docs) > 0 && len(docs)+len(conversationDocs) > w.maxDocsPerBatch {
 			break
 		}
 		docs = append(docs, conversationDocs...)
-		members = append(members, semanticBatchMember{
-			conversationID: record.ID,
-			stamp:          stampedRecord.Stamp,
-		})
+		sentConversations++
 	}
-	return docs, members
+	return docs, sentConversations
 }
 
-func (w *conversationSemanticSyncWorker) logPass(
+// sendDocuments fires one upsert for the collected documents and the full
+// manifest. A conflicting-active-job rejection means a prior embed is still
+// running, which is expected and benign: the worker logs it and the next pass
+// retries once the engine is free. Any other failure is a real error.
+func (w *conversationSemanticSyncWorker) sendDocuments(
 	ctx context.Context,
-	recordCount int,
-	operationLimit int,
-	stats conversationSemanticSyncStats,
+	docs []semsearch.SemDoc,
+	manifest []semsearch.Fingerprint,
+	sentConversations int,
+	stats *conversationSemanticSyncStats,
 ) {
-	if stats.operations > 0 || stats.failed > 0 {
+	jobID, upsertErr := w.client.UpsertConversationDocuments(ctx, w.collectionID, docs, manifest)
+	if upsertErr != nil {
+		if isConflictingActiveJob(upsertErr) {
+			w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.engine_busy",
+				"concern", "conversation.semantic",
+				"component", "daemon",
+				"conversations", sentConversations,
+				"documents", len(docs),
+			)
+			return
+		}
+		stats.failed += sentConversations
+		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.upsert_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"conversations", sentConversations,
+			"documents", len(docs),
+			"err", upsertErr,
+		)
+		return
+	}
+	stats.sentConversations = sentConversations
+	stats.documents = len(docs)
+	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.upsert_started",
+		"concern", "conversation.semantic",
+		"component", "daemon",
+		"conversations", sentConversations,
+		"documents", len(docs),
+		"job_id", jobID,
+	)
+}
+
+// isConflictingActiveJob reports whether an upsert error is the engine's
+// rejection of a second job while one is already running for the collection.
+func isConflictingActiveJob(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "conflicting active job")
+}
+
+func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conversationSemanticSyncStats) {
+	if stats.sentConversations > 0 || stats.failed > 0 {
 		w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
 			"concern", "conversation.semantic",
 			"component", "daemon",
-			"records", recordCount,
-			"operations", stats.operations,
-			"upserted", stats.upserted,
-			"deleted", stats.deleted,
-			"skipped", stats.skipped,
+			"manifest", stats.manifest,
+			"needed", stats.needed,
+			"sent_conversations", stats.sentConversations,
+			"documents", stats.documents,
 			"failed", stats.failed,
-			"operation_limit", operationLimit,
 		)
-	} else {
-		w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"records", recordCount,
-			"operations", stats.operations,
-			"skipped", stats.skipped,
-			"operation_limit", operationLimit,
-		)
+		return
 	}
+	w.log.DebugContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
+		"concern", "conversation.semantic",
+		"component", "daemon",
+		"manifest", stats.manifest,
+		"needed", stats.needed,
+	)
 }
 
 func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) ([]semsearch.SemDoc, error) {
@@ -461,30 +349,6 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 		})
 	}
 	return docs, nil
-}
-
-func currentSemanticRecords(stampedRecords []conversation.StampedRecord) map[string]conversation.StampedRecord {
-	currentRecords := make(map[string]conversation.StampedRecord, len(stampedRecords))
-	for _, stampedRecord := range stampedRecords {
-		conversationID := strings.TrimSpace(stampedRecord.Record.ID)
-		if conversationID == "" {
-			continue
-		}
-		currentRecords[conversationID] = stampedRecord
-	}
-	return currentRecords
-}
-
-func (w *conversationSemanticSyncWorker) removedConversationIDs(currentRecords map[string]conversation.StampedRecord) []string {
-	removed := make([]string, 0)
-	for conversationID := range w.lastPushed {
-		if _, ok := currentRecords[conversationID]; ok {
-			continue
-		}
-		removed = append(removed, conversationID)
-	}
-	slices.Sort(removed)
-	return removed
 }
 
 func semanticSyncContextDone(ctx context.Context) bool {
