@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"time"
 
@@ -20,6 +21,14 @@ type FileStamp struct {
 // Equal reports whether two stamps describe the same on-disk file state.
 func (a FileStamp) Equal(b FileStamp) bool {
 	return a.Size == b.Size && a.Mtime.Equal(b.Mtime)
+}
+
+// Fingerprint renders the stamp as a stable content fingerprint string for the
+// engine's conversation manifest. It changes whenever the file's size or
+// modification time changes, which for an append-only transcript is exactly when
+// its content grows, so the engine re-embeds a conversation only when it changes.
+func (a FileStamp) Fingerprint() string {
+	return fmt.Sprintf("%d:%d", a.Size, a.Mtime.UnixNano())
 }
 
 // ScanCandidate is one artifact a provider's [Parser.Discover] surfaced for the

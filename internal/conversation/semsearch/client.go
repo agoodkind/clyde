@@ -41,6 +41,15 @@ type SemDoc struct {
 	Text                 string
 }
 
+// Fingerprint pairs a conversation id with a content fingerprint that changes
+// whenever the conversation's messages change. clyde sends the full set each
+// pass so the engine can diff against its checkpoint and reply with the ids it
+// needs.
+type Fingerprint struct {
+	ConversationID string
+	Value          string
+}
+
 // SemHit is one conversation-message match returned by the engine's
 // cross-conversation search.
 type SemHit struct {
@@ -113,8 +122,39 @@ func (c *Client) Register(ctx context.Context, collectionID string) error {
 	return nil
 }
 
-// UpsertConversationDocuments starts an async engine job for conversation docs.
-func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc) (string, error) {
+// SyncConversationManifest sends the full conversation manifest and returns the
+// conversation ids the engine needs: those new or changed since its last ingest.
+// The engine owns drift, so clyde keeps no change-tracking state of its own.
+func (c *Client) SyncConversationManifest(ctx context.Context, collectionID string, manifest []Fingerprint) ([]string, error) {
+	if c == nil || c.daemon == nil {
+		return nil, fmt.Errorf("sync semantic conversation manifest: client is nil")
+	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	if trimmedCollectionID == "" {
+		return nil, fmt.Errorf("sync semantic conversation manifest: collection id is empty")
+	}
+	response, err := c.daemon.SyncConversationManifest(ctx, &lmsemanticsearchv1.SyncConversationManifestRequest{
+		CollectionId: trimmedCollectionID,
+		Manifest:     conversationFingerprints(manifest),
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.sync_manifest_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", trimmedCollectionID,
+			"manifest", len(manifest),
+			"err", err,
+		)
+		return nil, fmt.Errorf("sync semantic conversation manifest for collection %q: %w", trimmedCollectionID, err)
+	}
+	return response.GetNeededConversationIds(), nil
+}
+
+// UpsertConversationDocuments starts an async engine job for the changed
+// conversations' documents. manifest is the full current conversation set with
+// fingerprints, so the engine drops conversations no longer present and skips
+// unchanged ones; documents cover only the conversations the engine asked for.
+func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
 	if c == nil || c.daemon == nil {
 		return "", fmt.Errorf("upsert semantic conversation documents: client is nil")
 	}
@@ -125,6 +165,7 @@ func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID s
 	response, err := c.daemon.UpsertConversationDocuments(ctx, &lmsemanticsearchv1.UpsertConversationDocumentsRequest{
 		CollectionId: trimmedCollectionID,
 		Documents:    conversationDocuments(docs),
+		Manifest:     conversationFingerprints(manifest),
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "conversation.semsearch.upsert_failed",
@@ -303,6 +344,17 @@ func conversationSearchHits(results []*lmsemanticsearchv1.ConversationSearchResu
 			Role:                 result.GetRole(),
 			TimestampUnix:        result.GetTimestampUnix(),
 			Content:              result.GetContent(),
+		})
+	}
+	return out
+}
+
+func conversationFingerprints(manifest []Fingerprint) []*lmsemanticsearchv1.ConversationFingerprint {
+	out := make([]*lmsemanticsearchv1.ConversationFingerprint, 0, len(manifest))
+	for _, fingerprint := range manifest {
+		out = append(out, &lmsemanticsearchv1.ConversationFingerprint{
+			ConversationId: fingerprint.ConversationID,
+			Fingerprint:    fingerprint.Value,
 		})
 	}
 	return out
