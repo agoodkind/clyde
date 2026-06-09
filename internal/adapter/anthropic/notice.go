@@ -25,9 +25,9 @@ func EarlyWarningUsageWindows(h http.Header) []adapterruntime.UsageWindowNoticeI
 	windows := make([]adapterruntime.UsageWindowNoticeInput, 0, 3)
 	for _, claim := range []string{"five_hour", "seven_day", "overage"} {
 		headerClaim := earlyWarningHeaderClaim(claim)
-		threshold := strings.TrimSpace(h.Get("anthropic-ratelimit-unified-" + headerClaim + "-surpassed-threshold"))
-		resetsAt := parseUnix(h.Get("anthropic-ratelimit-unified-" + headerClaim + "-reset"))
-		util, hasUtil := parseUtilization(h.Get("anthropic-ratelimit-unified-" + headerClaim + "-utilization"))
+		threshold := strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Surpassed-Threshold"))
+		resetsAt := parseUnix(h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Reset"))
+		util, hasUtil := parseUtilization(h.Get("Anthropic-Ratelimit-Unified-" + headerClaim + "-Utilization"))
 
 		if threshold == "" && !hasUtil && resetsAt.IsZero() {
 			continue

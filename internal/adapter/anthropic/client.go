@@ -421,7 +421,7 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 			beta = filtered
 		}
 	}
-	setHard("anthropic-beta", beta)
+	setHard("Anthropic-Beta", beta)
 
 	userAgent := flavor.UserAgent
 	if v := strings.TrimSpace(c.cfg.UserAgent); v != "" {

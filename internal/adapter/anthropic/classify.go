@@ -158,7 +158,7 @@ func populateWarningFlags(out *Classification, h http.Header) {
 		out.HasOverageActive = true
 	}
 	for _, claim := range []string{"5h", "7d", "overage"} {
-		v := strings.TrimSpace(h.Get("anthropic-ratelimit-unified-" + claim + "-surpassed-threshold"))
+		v := strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-" + claim + "-Surpassed-Threshold"))
 		if v != "" {
 			out.SurpassedThreshold = true
 			return
