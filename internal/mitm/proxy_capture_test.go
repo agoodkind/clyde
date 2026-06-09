@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -126,6 +127,82 @@ func TestProxyHTTPCapturePersistsExchangeToStore(t *testing.T) {
 	}
 	if !bytes.Equal(storedResponse, responseBody) {
 		t.Fatalf("stored response body mismatch: got %d bytes want %d", len(storedResponse), len(responseBody))
+	}
+}
+
+// TestProxyHTTPCaptureForwardsGzipBytesIntactWhileDecodingForStore is the
+// CLYDE-350 regression guard: a gzip-encoded upstream response must reach the
+// client byte-for-byte with its Content-Encoding intact (the capture path must
+// decode from its own buffer copy and never re-encode or corrupt the forwarded
+// stream), while the SQLite store holds the decoded body. The client sends an
+// explicit Accept-Encoding so the upstream transport forwards the compressed
+// bytes rather than transparently decoding them, matching the real client path.
+func TestProxyHTTPCaptureForwardsGzipBytesIntactWhileDecodingForStore(t *testing.T) {
+	decodedResponse := []byte(`{"id":"resp-gzip","output":"` + strings.Repeat("gzip-response-sentinel", 256) + `"}`)
+	var gzipBuf bytes.Buffer
+	gz := gzip.NewWriter(&gzipBuf)
+	if _, err := gz.Write(decodedResponse); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	compressedResponse := gzipBuf.Bytes()
+
+	requestBody := []byte(`{"model":"gpt-test","input":"probe"}`)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Header().Set("content-encoding", "gzip")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(compressedResponse)
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	dbPath := filepath.Join(captureDir, "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	proxy := newHTTPProxyForCaptureTest(t, captureDir, store, upstream)
+	req := httptest.NewRequest(http.MethodPost, "http://clyde.test/v1/responses", bytes.NewReader(requestBody))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept-encoding", "gzip")
+	recorder := httptest.NewRecorder()
+	proxy.handle(recorder, req)
+
+	if recorder.Result().StatusCode != http.StatusOK {
+		t.Fatalf("status = %d want %d", recorder.Result().StatusCode, http.StatusOK)
+	}
+	// The client must receive the upstream's gzip bytes unchanged.
+	if got := recorder.Body.Bytes(); !bytes.Equal(got, compressedResponse) {
+		t.Fatalf("client received %d bytes, want byte-identical %d-byte gzip stream", len(got), len(compressedResponse))
+	}
+	if enc := recorder.Result().Header.Get("Content-Encoding"); enc != "gzip" {
+		t.Fatalf("client Content-Encoding = %q want gzip", enc)
+	}
+
+	// The SQLite store must hold the DECODED body, proving capture decompressed
+	// from its own buffer copy without touching the forwarded client stream.
+	waitForCaptureRecordWithLeg(t, mitmWireConcernTestPath(captureDir), logevent.LegMITMCaptureIndex)
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open verifier db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	var rowID int64
+	if err := db.QueryRow(`SELECT id FROM requests ORDER BY ts DESC LIMIT 1`).Scan(&rowID); err != nil {
+		t.Fatalf("scan request row: %v", err)
+	}
+	var storedResponse []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`, rowID).Scan(&storedResponse); err != nil {
+		t.Fatalf("scan response body: %v", err)
+	}
+	if !bytes.Equal(storedResponse, decodedResponse) {
+		t.Fatalf("stored response = %d bytes, want decoded %d bytes (capture must hold the decompressed body)", len(storedResponse), len(decodedResponse))
 	}
 }
 
