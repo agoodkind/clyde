@@ -3,10 +3,24 @@ Description=Clyde daemon
 Documentation=https://github.com/agoodkind/clyde
 
 [Service]
+# `clyde daemon` alone prints help; `daemon run` starts the supervisor that owns
+# the adapter and MITM listeners. This mirrors the macOS LaunchAgent entry.
 Type=simple
-ExecStart=@@BIN_PATH@@ daemon
+ExecStart=@@BIN_PATH@@ daemon run
+WorkingDirectory=@@HOME@@
 Restart=always
 RestartSec=5
+# The daemon drains live HTTP, MITM CONNECT tunnels, and gRPC/MCP streams on
+# stop and reload (up to ~75s). Give the supervisor room before SIGKILL, and use
+# KillMode=mixed so the whole supervisor+worker cgroup is signalled, not just the
+# main process.
+TimeoutStopSec=90
+KillMode=mixed
+# stdout/stderr carry only panic and fatal fallback output; the daemon writes its
+# own structured JSONL logs under $XDG_STATE_HOME/clyde. Route the fallback to the
+# journal (journalctl --user -u clyde-daemon) rather than a file.
+StandardOutput=journal
+StandardError=journal
 Environment=HOME=@@HOME@@
 Environment=PATH=@@HOME@@/.local/bin:/usr/local/bin:/usr/bin:/bin
 
