@@ -5,8 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os/exec"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -27,17 +26,79 @@ func NewClientForModel(cfg config.SearchConfig, model string) Client {
 	return newClientForModel(cfg, model)
 }
 
-// newClientForModel creates a client using a specific model, inheriting
-// all other settings (URL, token, sampling params) from the local config.
+// defaultBackend is the search backend used when cfg.Backend is empty.
+const defaultBackend = "claude"
+
+// newClientForModel creates a client using a specific model. The built-in
+// "local" backend is constructed inline; every other backend name is resolved
+// through the backend registry, so provider-specific backends register
+// themselves rather than being named here.
 func newClientForModel(cfg config.SearchConfig, model string) Client {
 	if cfg.Backend == "local" {
 		localCfg := cfg.Local
 		localCfg.Model = model
 		return newLocalClient(localCfg)
 	}
-	claudeCfg := cfg.Claude
-	claudeCfg.Model = model
-	return newClaudeClient(claudeCfg)
+	backend := cfg.Backend
+	if backend == "" {
+		backend = defaultBackend
+	}
+	factory, ok := defaultBackendRegistry.lookup(backend)
+	if !ok {
+		return errorClient{err: fmt.Errorf("search backend %q is not registered", backend)}
+	}
+	return factory(model)
+}
+
+// BackendFactory builds a search [Client] for one model. A backend package
+// registers a factory under its name with [RegisterBackend].
+type BackendFactory func(model string) Client
+
+// backendRegistry maps a backend name to its client factory. Backend
+// implementations other than the built-in local backend (such as the Claude
+// CLI backend) live in their own package and self-register via init(); the
+// search package never imports a backend package, so the registry inverts the
+// dependency the way the MITM provider registry does.
+type backendRegistry struct {
+	mu        sync.RWMutex
+	factories map[string]BackendFactory
+}
+
+var defaultBackendRegistry = &backendRegistry{mu: sync.RWMutex{}, factories: map[string]BackendFactory{}}
+
+// RegisterBackend installs a backend factory under name. Backend packages call
+// it once from an init() function at package load. A second registration under
+// the same name replaces the first.
+func RegisterBackend(name string, factory BackendFactory) {
+	if factory == nil {
+		return
+	}
+	defaultBackendRegistry.register(name, factory)
+}
+
+func (r *backendRegistry) register(name string, factory BackendFactory) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.factories[name] = factory
+}
+
+func (r *backendRegistry) lookup(name string) (BackendFactory, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	factory, ok := r.factories[name]
+	return factory, ok
+}
+
+// errorClient is returned when no backend is registered for the configured
+// name. Its Complete reports the configuration error to the caller instead of
+// panicking, so a misconfigured backend surfaces as a clear search failure.
+type errorClient struct {
+	err error
+}
+
+// Complete reports the registration error.
+func (c errorClient) Complete(context.Context, string) (string, error) {
+	return "", c.err
 }
 
 // localRequestTimeout bounds one search completion so a wedged or unreachable
@@ -132,46 +193,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
-}
-
-// claudeClient shells out to `claude -p` for search.
-type claudeClient struct {
-	model string
-}
-
-func newClaudeClient(cfg config.SearchClaude) *claudeClient {
-	model := cfg.Model
-	if model == "" {
-		model = "haiku"
-	}
-	return &claudeClient{model: model}
-}
-
-func (c *claudeClient) Complete(ctx context.Context, prompt string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	model, err := cleanClaudeModelArg(c.model)
-	if err != nil {
-		return "", err
-	}
-	cmd := exec.CommandContext(ctx, "claude")
-	cmd.Args = []string{"claude", "-p", "--model", model, prompt}
-	output, err := cmd.Output()
-	if err != nil {
-		slog.ErrorContext(ctx, "claude search request failed", "concern", "search", "model", c.model, "err", err)
-		return "", fmt.Errorf("claude -p failed: %w", err)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func cleanClaudeModelArg(model string) (string, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return "", fmt.Errorf("empty claude model")
-	}
-	if strings.ContainsRune(model, 0) {
-		return "", fmt.Errorf("claude model contains NUL")
-	}
-	return model, nil
 }

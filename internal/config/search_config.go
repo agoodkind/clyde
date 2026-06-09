@@ -18,12 +18,14 @@ const (
 	SearchDepthExtraDeep SearchDepth = "extra-deep"
 )
 
-// SearchConfig configures the LLM backend for conversation search.
+// SearchConfig configures the LLM backend for conversation search. Backend
+// names a registered search backend; "local" is the built-in OpenAI-compatible
+// backend, and any other name (default "claude") resolves through the search
+// backend registry, so provider-specific backends stay out of this package.
 type SearchConfig struct {
-	// Backend is "claude" (default) or "local"
-	Backend string       `json:"backend,omitempty" toml:"backend,omitempty"`
-	Local   SearchLocal  `json:"local,omitzero" toml:"local,omitempty"`
-	Claude  SearchClaude `json:"claude,omitzero" toml:"claude,omitempty"`
+	// Backend is "claude" (default) or "local".
+	Backend string      `json:"backend,omitempty" toml:"backend,omitempty"`
+	Local   SearchLocal `json:"local,omitzero" toml:"local,omitempty"`
 }
 
 // SearchLocal configures a local OpenAI-compatible LLM endpoint.
@@ -119,9 +121,4 @@ func (s SearchLocal) ResolvePipeline(depth string) []SearchLayer {
 	}
 
 	return layers
-}
-
-// SearchClaude configures the Claude backend for search.
-type SearchClaude struct {
-	Model string `json:"model,omitempty" toml:"model,omitempty"`
 }
