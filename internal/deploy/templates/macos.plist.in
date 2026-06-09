@@ -8,6 +8,7 @@
     <array>
         <string>@@BIN_PATH@@</string>
         <string>daemon</string>
+        <string>run</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
