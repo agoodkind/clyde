@@ -43,9 +43,14 @@ func ensureGroup(group *Group, parents map[*Group]*cobra.Command, roots *[]*cobr
 		return existing
 	}
 	cmd := &cobra.Command{
-		Use:   group.Use,
-		Short: group.Short,
-		Long:  group.Long,
+		Use:     group.Use,
+		Short:   group.Short,
+		Long:    group.Long,
+		Example: group.Example,
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 	}
 	parents[group] = cmd
 	if group.Parent == nil {

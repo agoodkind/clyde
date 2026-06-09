@@ -85,19 +85,21 @@ func (exportInput) isClispecInput()              {}
 
 // conversationGroup is the terminal parent for conversation operations.
 var conversationGroup = &Group{
-	Use:    "conversation",
-	Short:  "Inspect Claude and Codex conversations",
-	Long:   "",
-	Parent: nil,
+	Use:     "conversation",
+	Short:   "Inspect Claude and Codex conversations",
+	Long:    "Inspect indexed Claude and Codex conversations: list and show transcripts, read a context window around a point, search across or within conversations, and export a transcript. Clyde reads provider-owned artifacts and never mutates them.",
+	Example: "clyde conversation list --limit 20\nclyde conversation export claude:1a2b3c",
+	Parent:  nil,
 }
 
 // searchGroup gathers the conversation-search package commands beneath the
 // conversation parent.
 var searchGroup = &Group{
-	Use:    "search",
-	Short:  "Search conversation text",
-	Long:   "",
-	Parent: conversationGroup,
+	Use:     "search",
+	Short:   "Search conversation text",
+	Long:    "Search conversation transcripts: scan across conversations for candidate ids, start an async search within one conversation, poll or cancel a running search, and analyze cached results.",
+	Example: "clyde conversation search across \"auth timeout\"\nclyde conversation search within claude:1a2b3c \"auth timeout\"",
+	Parent:  conversationGroup,
 }
 
 var exportFormatValues = []string{
