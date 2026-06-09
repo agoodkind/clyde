@@ -429,7 +429,10 @@ func exportTranscriptOp() Operation[exportInput] {
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
 		Long:     "Export one conversation transcript in the chosen format. The terminal always writes an artifact file and reports the written path; the MCP tool returns the body as text.",
-		Examples: []string{"clyde conversation export claude:1a2b3c --format markdown --output transcript.md"},
+		Examples: []string{
+			"clyde conversation export claude:1a2b3c --format markdown --output transcript.md",
+			"clyde conversation export claude:1a2b3c --no-thinking --no-tool-calls",
+		},
 		Args: []Arg[exportInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *exportInput, v string) { in.ConversationID = v }),
@@ -442,20 +445,26 @@ func exportTranscriptOp() Operation[exportInput] {
 			outputPathParam,
 			IntParam("history_start", "First message index to include.", 0,
 				func(in *exportInput, v int) { in.Options.HistoryStart = v }),
-			BoolParam("include_system_prompts", "Include system-injected prompts.", false,
-				func(in *exportInput, v bool) { in.Options.IncludeSystemPrompts = v }),
-			BoolParam("include_system_messages", "Include provider system transcript records.", false,
-				func(in *exportInput, v bool) { in.Options.IncludeSystemMessages = v }),
-			BoolParam("include_tool_outputs", "Include tool result bodies.", false,
+			// Default-on content types get a presence off-switch: the flag's
+			// presence sets v=true, which the setter inverts to exclude the type.
+			// This avoids the pflag `--flag=false` form needed to turn a
+			// default-true boolean off.
+			BoolParam("no_chat", "Exclude conversation chat text (included by default).", false,
+				func(in *exportInput, v bool) { in.Options.IncludeChat = !v }),
+			BoolParam("no_thinking", "Exclude assistant thinking blocks (included by default).", false,
+				func(in *exportInput, v bool) { in.Options.IncludeThinking = !v }),
+			BoolParam("no_tool_calls", "Exclude tool calls (included by default).", false,
+				func(in *exportInput, v bool) { in.Options.IncludeToolCalls = !v }),
+			// Default-off content types get a presence on-switch: the flag's
+			// presence sets v=true, which the setter maps straight to inclusion.
+			BoolParam("with_tool_outputs", "Include tool result bodies (excluded by default).", false,
 				func(in *exportInput, v bool) { in.Options.IncludeToolOutputs = v }),
-			BoolParam("include_raw_json_metadata", "Include JSON metadata fields.", false,
+			BoolParam("with_system_prompts", "Include system-injected prompts (excluded by default).", false,
+				func(in *exportInput, v bool) { in.Options.IncludeSystemPrompts = v }),
+			BoolParam("with_system_messages", "Include provider system transcript records (excluded by default).", false,
+				func(in *exportInput, v bool) { in.Options.IncludeSystemMessages = v }),
+			BoolParam("with_raw_json_metadata", "Include JSON metadata fields (excluded by default).", false,
 				func(in *exportInput, v bool) { in.Options.IncludeRawJSONMetadata = v }),
-			BoolParam("include_thinking", "Include thinking blocks.", true,
-				func(in *exportInput, v bool) { in.Options.IncludeThinking = v }),
-			BoolParam("include_tool_calls", "Include tool calls.", true,
-				func(in *exportInput, v bool) { in.Options.IncludeToolCalls = v }),
-			BoolParam("include_chat", "Include chat text.", true,
-				func(in *exportInput, v bool) { in.Options.IncludeChat = v }),
 		},
 		New: func() exportInput {
 			return exportInput{
