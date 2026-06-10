@@ -78,7 +78,10 @@ daemon = ""
 [adapter]
 enabled = true
 direct_oauth = true
-default_model = "clyde-opus-4-8"
+# The default points at a -thinking alias because fable-5 rejects an
+# explicit {"type":"disabled"} thinking block (400) and the non-thinking
+# aliases emit exactly that; see [adapter.families.fable-5].
+default_model = "clyde-fable-5-high-thinking"
 # Optional second adapter listener for Cursor BYOK. When set, requests arriving
 # on this port are tagged ingress=cursor while the primary port (default 11434)
 # is tagged ingress=openai, separating Cursor traffic from generic
@@ -147,6 +150,15 @@ model = ""
 # estimated cost at zero. Codex models price exactly the same way, which
 # is the only way codex spend is counted.
 #
+# Claude Fable 5 list pricing ($10/$50 per MTok in/out), verified against
+# the Claude API models overview 2026-06-09. Cache rates use Anthropic's
+# standard 5m-TTL multipliers: write = 1.25x input, read = 0.1x input.
+[adapter.pricing."claude-fable-5"]
+input_per_mtok = 10.0
+output_per_mtok = 50.0
+cache_write_per_mtok = 12.50
+cache_read_per_mtok = 1.00
+
 # Claude Opus 4.8 list pricing ($5/$25 per MTok in/out), verified against
 # the Claude API models overview 2026-05-28. Cache rates use Anthropic's
 # standard 5m-TTL multipliers: write = 1.25x input, read = 0.1x input.
@@ -252,6 +264,32 @@ supports_tools = true
 supports_vision = true
 efforts = ["low", "medium", "high", "max"]
 thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+thinking_wire_mode = "adaptive"
+max_output_tokens = 128000
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
+]
+
+# fable-5: Claude Fable 5 (id "claude-fable-5"), the current baseline /
+# latest model. 1M context, 128k max output, $10/$50 per MTok, adaptive
+# thinking always on. Verified 2026-06-09 against live wire probes and
+# the Claude API models overview (GA 2026-06-09). Probe results: efforts
+# low/medium/high/xhigh/max all 200; thinking {"type":"disabled"} 400s,
+# so thinking_wire_mode = "adaptive" is required and "disabled" is
+# intentionally absent from thinking_modes. The non-thinking aliases
+# emit an explicit disabled block and will 400 on this family, so
+# callers should use the -thinking aliases. The literal
+# "claude-fable-5[1m]" model id 404s upstream (unlike opus-4-8[1m]); the
+# 1M window rides the bare id plus the [1m] per_context_betas header,
+# and clyde strips the wire_suffix at egress, so the [1m] context entry
+# only selects the beta and the pricing/recording key.
+[adapter.families.fable-5]
+model = "claude-fable-5"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "xhigh", "max"]
+thinking_modes = ["default", "adaptive", "enabled"]
 thinking_wire_mode = "adaptive"
 max_output_tokens = 128000
 contexts = [
