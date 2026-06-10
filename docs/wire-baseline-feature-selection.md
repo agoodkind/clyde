@@ -1,41 +1,27 @@
 # Feature-aware wire flavor selection
 
-Northstar for making the Anthropic egress beta header correct per model, with zero config.
+How clyde chooses which learned claude-cli identity to replay on an Anthropic request, so the outbound beta header is always the one claude-cli itself would send for that model on this account.
 
-## Problem
+## The contract
 
-Egress ignores the request model. `selectInteractiveFlavor` picks the smallest interactive flavor and replays its beta set on every request. A Sonnet request gets a Fable flavor that carries `context-1m-2025-08-07`. The account blocks that beta on Sonnet, so the request fails with `rate_limit_error: "Usage credits are required for long context requests"`.
+Clyde never decides which betas a model gets. claude-cli decides, and clyde mirrors it. The user manages nothing. There is no beta config.
 
-Verified 2026-06-09 from `mitm/capture.db`: `context-1m` rides 680/682 Fable requests, 65/67 Opus, and 0/48 Haiku. The beta tracks the model, not the request size. claude-cli already gates it per model and per account. Clyde does not.
+## Why selection has to know the model
 
-## Goal
+The learned baseline holds one flavor per observed claude-cli wire shape. Flavors already differ by beta set, because claude-cli sends different betas for different models. The gap is selection: today the egress picks one interactive flavor and replays it on every request, ignoring the model it is actually serving.
 
-Select the learned flavor that matches the request's model and features. Replay its exact beta set. The header becomes whatever claude-cli sent for that combination on this account. No hand-maintained beta config.
+That misapplies model-specific betas. `context-1m-2025-08-07` is the clear case. claude-cli sends it for the models whose 1M window the account includes and omits it elsewhere. Observed in `mitm/capture.db` on 2026-06-09: present on 680/682 Fable requests and 65/67 Opus, absent on all 48 Haiku. The beta tracks the model, not the request. When clyde replays a Fable flavor onto a Sonnet request, Sonnet inherits a 1M beta the account does not grant for Sonnet, and Anthropic rejects it with `rate_limit_error: "Usage credits are required for long context requests"`.
 
-## Changes
+## How selection should work
 
-1. Flavor identity gains a feature vector: model, context tier, thinking mode, structured-output, tools. Source the values from the captured request body and headers.
-2. Each learned flavor records the feature vector it was seen with, next to its beta set and identity headers.
-3. Egress builds the resolved request's feature vector and selects the matching flavor. This replaces `selectInteractiveFlavor`.
-4. No matching flavor returns HTTP 503 with an actionable message: run claude-cli once with this model through the MITM to seed it. It fails loud instead of guessing.
-5. Plaintext thinking moves from config into code. Clyde always strips the two thinking-redaction betas (`thinking-token-count-2026-05-13`, `redact-thinking-2026-02-12`) so Cursor shows reasoning.
-6. Remove `per_context_betas` and `beta_suppress`. Nothing in `config.toml` manages betas.
+Each learned flavor carries the feature vector it was captured with: the model, the context tier, the thinking mode, whether structured output was set, whether tools were present. At request time the egress builds the same vector from the resolved request and replays the flavor that matches it. The beta header is then correct by construction, because it is the exact set claude-cli sent for that combination.
 
-## Files
+A model the proxy has never seen has no flavor to replay. The egress fails loud with an HTTP 503 that names the model and says to run claude-cli once with it through the MITM. Seeding is the only manual act, and it is a normal claude session, not a config edit.
 
-- `internal/mitm/flavors.go`: feature vector in the flavor signature.
-- `internal/mitm/snapshot.go` and the v2 baseline schema: capture and persist the feature vector per flavor.
-- `internal/adapter/anthropic/client.go`: feature-aware selection; `activeFlavor` takes the resolved request.
-- `internal/adapter/anthropic/wire_flavors_loader.go`: project the new fields; built-in thinking-redaction strip.
-- `internal/config/config.go`: drop `PerContextBetas` and `BetaSuppress`.
+## The one deliberate deviation
 
-## Verify
+Clyde shows reasoning in Cursor, so it always drops the two thinking-redaction betas claude-cli carries (`thinking-token-count-2026-05-13`, `redact-thinking-2026-02-12`). This is a fixed property of the adapter, not a setting. It is the single point where clyde does not mirror claude-cli, and it is the same for every model.
 
-- A Sonnet request selects a Sonnet flavor, never a Fable flavor.
-- A 200k Sonnet request carries no `context-1m`. A 1M Fable or Opus request carries it.
-- An un-seeded model returns the 503.
-- Thinking renders as plaintext in Cursor with no config set.
+## What this removes
 
-## Operate
-
-When a new model appears, run one real claude-cli session with it through the MITM. The flavor is learned. Clyde mirrors it.
+The `per_context_betas` and `beta_suppress` knobs go away. Both existed to patch the wrong-flavor problem by hand. Once selection is feature-aware, the learned flavor is already right, and there is nothing left to override.
