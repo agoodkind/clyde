@@ -63,6 +63,37 @@ func ReloadDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 	return resp, nil
 }
 
+// RebindDaemon asks the running worker to replace itself with one that binds
+// its config-driven listeners fresh, for a config edit that moves a listener
+// address. It takes the same daemon.reload.lock flock as ReloadDaemon so a
+// watcher-driven rebind serializes against any CLI-driven reload.
+func RebindDaemon(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
+	unlock, err := lockDaemonReload(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	retryCtx, cancel := context.WithTimeout(ctx, reloadClientOverallTimeout)
+	defer cancel()
+	client, err := connectDaemon(retryCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, rpcCancel := context.WithTimeout(retryCtx, reloadClientRPCTimeout)
+	defer rpcCancel()
+	resp, err := client.rpc.RebindDaemon(rpcCtx, &clydev1.ReloadDaemonRequest{})
+	if err != nil {
+		slog.WarnContext(rpcCtx, "daemon.client.rebind.rpc_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"err", err,
+		)
+		return nil, fmt.Errorf("daemon rebind rpc: %w", err)
+	}
+	return resp, nil
+}
+
 // ListConversations asks the running daemon for a filtered conversation page.
 // When the daemon is not reachable it returns a clear error that names the rpc
 // socket and points at `clyde daemon status`.

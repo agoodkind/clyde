@@ -36,6 +36,7 @@ type controlServer struct {
 	mitmStatus    func() MITMStatus
 	showCapture   func(ctx context.Context, id string, asJSON bool) (string, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
+	rebind        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	// semanticSearch is the engine-backed cross-conversation search the daemon
 	// prefers before the live literal scan. It is nil when conversation semantic
 	// search is not configured. semanticCollectionID names the engine collection
@@ -64,6 +65,13 @@ func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemo
 		return nil, status.Error(codes.FailedPrecondition, "daemon reload is not available")
 	}
 	return s.reload(ctx)
+}
+
+func (s *controlServer) RebindDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
+	if s.rebind == nil {
+		return nil, status.Error(codes.FailedPrecondition, "daemon rebind is not available")
+	}
+	return s.rebind(ctx)
 }
 
 func (s *controlServer) GetProviderStats(context.Context, *clydev1.GetProviderStatsRequest) (*clydev1.GetProviderStatsResponse, error) {

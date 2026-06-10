@@ -79,6 +79,11 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 		log.Warn("daemon.config.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return fmt.Errorf("load daemon config: %w", err)
 	}
+	// Hash the config now, before any reload child could re-trigger on the
+	// content it just loaded. The watcher started below skips a change whose
+	// hash equals this baseline, so a touch or a reload-child sees no change.
+	// ctx is not yet established here; configFileHash logs its own failures.
+	configBaselineHash, _ := configFileHash(context.Background(), log, config.GlobalConfigPath())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	defer trace.Op(ctx, "daemon.worker.run")(&err)
@@ -144,6 +149,10 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 		"mitm_enabled", cfg.MITM.EnabledDefault,
 		"conversation_semantic_enabled", runtime.semantic != nil,
 	)
+	// Start the config watcher only after readiness so a config edit landing
+	// during boot cannot trigger a reload before this worker is the
+	// established generation.
+	startConfigWatcher(ctx, log, runtime, configBaselineHash)
 	startStartupCleanup(log, cfg)
 
 	select {
@@ -161,6 +170,17 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 			return fmt.Errorf("daemon runtime failed: %w", err)
 		}
 		return nil
+	}
+}
+
+// startConfigWatcher constructs and starts the daemon's config-file watcher,
+// recording it on the runtime so reload and shutdown can drain it. A start
+// failure is non-fatal: the daemon keeps serving without auto-reload.
+func startConfigWatcher(ctx context.Context, log *slog.Logger, runtime *runtimeServices, baselineHash string) {
+	runtime.configWatcher = newConfigWatcher(log, baselineHash, runtime)
+	if err := runtime.configWatcher.start(ctx); err != nil {
+		log.WarnContext(ctx, "daemon.config_watch.start_failed", "concern", "process.daemon.config", "component", "daemon", "err", err)
+		runtime.configWatcher = nil
 	}
 }
 
@@ -233,6 +253,9 @@ func newControlServer(
 		},
 		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
+		},
+		rebind: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
+			return rebindDaemonWorker(ctx, log, grpcServer, runtime)
 		},
 		semanticSearch:       semanticSearch,
 		semanticCollectionID: semanticCollectionID,

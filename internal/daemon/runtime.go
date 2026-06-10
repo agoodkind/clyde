@@ -50,6 +50,9 @@ type runtimeServices struct {
 	errors        chan error
 	reloadMu      sync.Mutex
 	reloadDrain   <-chan struct{}
+	// configWatcher watches the config file and triggers an automatic reload
+	// when it changes. It is nil when config auto-reload has not started.
+	configWatcher *configWatcher
 }
 
 type inheritedRuntime struct {
@@ -88,6 +91,7 @@ func startRuntime(
 		errors:                make(chan error, 3),
 		reloadMu:              sync.Mutex{},
 		reloadDrain:           nil,
+		configWatcher:         nil,
 	}
 	if cfg.MITM.EnabledDefault {
 		if err := startMITM(ctx, cfg, log, runtime, inherited.listeners); err != nil {
@@ -391,12 +395,32 @@ func mitmCodexWireBaselinePath(cfg *config.Config) string {
 	return mitm.ResolveWireBaselinePath(codexCLIUpstream, configured)
 }
 
+// stopConfigWatcher cancels and drains the config watcher if one is running. It
+// is nil-safe and used on the shutdown path where the loop is idle.
+func (r *runtimeServices) stopConfigWatcher(ctx context.Context, reason string) {
+	if r == nil || r.configWatcher == nil {
+		return
+	}
+	r.configWatcher.stop(ctx, reason)
+}
+
+// cancelConfigWatcher cancels the config watcher loop without waiting. It is
+// nil-safe and used by reload and rebind, where the watcher may be the in-flight
+// caller and a blocking drain would deadlock.
+func (r *runtimeServices) cancelConfigWatcher() {
+	if r == nil || r.configWatcher == nil {
+		return
+	}
+	r.configWatcher.cancelLoop()
+}
+
 func (r *runtimeServices) shutdown(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, daemonShutdownTimeout)
 	defer cancel()
 	if r == nil {
 		return
 	}
+	r.stopConfigWatcher(ctx, "shutdown")
 	if r.listener != nil {
 		_ = r.listener.Close()
 	}
