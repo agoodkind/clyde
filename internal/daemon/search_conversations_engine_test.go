@@ -195,6 +195,51 @@ func TestSearchConversationsResultEngineEmptyFallsBackWarming(t *testing.T) {
 	}
 }
 
+// TestSearchConversationsResultPushesIDScope proves a provider-scoped request
+// resolves matching records into the conversation-id set the engine receives,
+// and an unscoped request pushes no id set.
+func TestSearchConversationsResultPushesIDScope(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records: map[string]conversation.Record{
+			"claude:one": daemonTestRecord("claude:one", false),
+		},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{
+		hits: []semsearch.SemHit{
+			{ConversationID: "claude:one", MessageIndex: 0, Role: "user", TimestampUnix: 5, Content: "hit", Score: 0.5, ParentConversationID: ""},
+		},
+		err:     nil,
+		filters: nil,
+	}
+	scoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Provider: clydev1.Provider_PROVIDER_CLAUDE}
+
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", scoped); err != nil {
+		t.Fatalf("scoped search: %v", err)
+	}
+	if len(semantic.filters) != 1 {
+		t.Fatalf("engine calls = %d, want 1", len(semantic.filters))
+	}
+	scopedFilter := semantic.filters[0]
+	if len(scopedFilter.ConversationIDs) != 1 || scopedFilter.ConversationIDs[0] != "claude:one" {
+		t.Fatalf("scoped filter ids = %v, want [claude:one]", scopedFilter.ConversationIDs)
+	}
+
+	unscoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", unscoped); err != nil {
+		t.Fatalf("unscoped search: %v", err)
+	}
+	if len(semantic.filters) != 2 {
+		t.Fatalf("engine calls = %d, want 2", len(semantic.filters))
+	}
+	if len(semantic.filters[1].ConversationIDs) != 0 {
+		t.Fatalf("unscoped filter ids = %v, want none", semantic.filters[1].ConversationIDs)
+	}
+}
+
 func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 	t.Parallel()
 	live := conversation.SearchConversationsResult{
