@@ -104,6 +104,11 @@ func registerFlag[I Input](cmd *cobra.Command, param Param[I]) func(in *I) {
 		cmd.Flags().BoolVar(holder, param.flagName(), param.DefaultBool, param.Description)
 		bind := param.bindBool
 		return func(in *I) { bind(in, *holder) }
+	case KindFloat:
+		holder := new(float64)
+		cmd.Flags().Float64Var(holder, param.flagName(), param.DefaultFloat, param.Description)
+		bind := param.bindFloat
+		return func(in *I) { bind(in, *holder) }
 	default:
 		return func(in *I) {}
 	}

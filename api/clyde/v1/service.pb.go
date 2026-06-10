@@ -892,9 +892,17 @@ type SearchConversationRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
 	Query          string                 `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
-	Depth          string                 `protobuf:"bytes,3,opt,name=depth,proto3" json:"depth,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	Limit          int64                  `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	// roles keeps only hits whose message role is in the set, e.g. "user".
+	Roles []string `protobuf:"bytes,5,rep,name=roles,proto3" json:"roles,omitempty"`
+	// from_unix / until_unix bound the message timestamp (inclusive from,
+	// exclusive until). Zero means unbounded.
+	FromUnix  int64 `protobuf:"varint,6,opt,name=from_unix,json=fromUnix,proto3" json:"from_unix,omitempty"`
+	UntilUnix int64 `protobuf:"varint,7,opt,name=until_unix,json=untilUnix,proto3" json:"until_unix,omitempty"`
+	// min_score drops hits scoring below the floor. Zero means no floor.
+	MinScore      float64 `protobuf:"fixed64,8,opt,name=min_score,json=minScore,proto3" json:"min_score,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchConversationRequest) Reset() {
@@ -941,11 +949,39 @@ func (x *SearchConversationRequest) GetQuery() string {
 	return ""
 }
 
-func (x *SearchConversationRequest) GetDepth() string {
+func (x *SearchConversationRequest) GetLimit() int64 {
 	if x != nil {
-		return x.Depth
+		return x.Limit
 	}
-	return ""
+	return 0
+}
+
+func (x *SearchConversationRequest) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *SearchConversationRequest) GetFromUnix() int64 {
+	if x != nil {
+		return x.FromUnix
+	}
+	return 0
+}
+
+func (x *SearchConversationRequest) GetUntilUnix() int64 {
+	if x != nil {
+		return x.UntilUnix
+	}
+	return 0
+}
+
+func (x *SearchConversationRequest) GetMinScore() float64 {
+	if x != nil {
+		return x.MinScore
+	}
+	return 0
 }
 
 type SearchConversationResponse struct {
@@ -1007,8 +1043,15 @@ type SearchConversationsRequest struct {
 	Provider        Provider               `protobuf:"varint,3,opt,name=provider,proto3,enum=clyde.v1.Provider" json:"provider,omitempty"`
 	Workspace       string                 `protobuf:"bytes,4,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	IncludeArchived bool                   `protobuf:"varint,5,opt,name=include_archived,json=includeArchived,proto3" json:"include_archived,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	Roles           []string               `protobuf:"bytes,6,rep,name=roles,proto3" json:"roles,omitempty"`
+	FromUnix        int64                  `protobuf:"varint,7,opt,name=from_unix,json=fromUnix,proto3" json:"from_unix,omitempty"`
+	UntilUnix       int64                  `protobuf:"varint,8,opt,name=until_unix,json=untilUnix,proto3" json:"until_unix,omitempty"`
+	MinScore        float64                `protobuf:"fixed64,9,opt,name=min_score,json=minScore,proto3" json:"min_score,omitempty"`
+	// per_conversation_limit caps hits per conversation so one large transcript
+	// does not monopolize the result list. Zero means uncapped.
+	PerConversationLimit int64 `protobuf:"varint,10,opt,name=per_conversation_limit,json=perConversationLimit,proto3" json:"per_conversation_limit,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SearchConversationsRequest) Reset() {
@@ -1076,6 +1119,41 @@ func (x *SearchConversationsRequest) GetIncludeArchived() bool {
 	return false
 }
 
+func (x *SearchConversationsRequest) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+func (x *SearchConversationsRequest) GetFromUnix() int64 {
+	if x != nil {
+		return x.FromUnix
+	}
+	return 0
+}
+
+func (x *SearchConversationsRequest) GetUntilUnix() int64 {
+	if x != nil {
+		return x.UntilUnix
+	}
+	return 0
+}
+
+func (x *SearchConversationsRequest) GetMinScore() float64 {
+	if x != nil {
+		return x.MinScore
+	}
+	return 0
+}
+
+func (x *SearchConversationsRequest) GetPerConversationLimit() int64 {
+	if x != nil {
+		return x.PerConversationLimit
+	}
+	return 0
+}
+
 type ConversationSearchMatch struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Conversation  *ConversationRecord    `protobuf:"bytes,1,opt,name=conversation,proto3" json:"conversation,omitempty"`
@@ -1083,6 +1161,8 @@ type ConversationSearchMatch struct {
 	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
 	TimestampUnix int64                  `protobuf:"varint,4,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
 	Snippet       string                 `protobuf:"bytes,5,opt,name=snippet,proto3" json:"snippet,omitempty"`
+	// score is the engine's retrieval relevance; zero on literal-scan matches.
+	Score         float64 `protobuf:"fixed64,6,opt,name=score,proto3" json:"score,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1150,6 +1230,13 @@ func (x *ConversationSearchMatch) GetSnippet() string {
 		return x.Snippet
 	}
 	return ""
+}
+
+func (x *ConversationSearchMatch) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
 }
 
 type SearchConversationsResponse struct {
@@ -2164,26 +2251,39 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x06before\x18\x04 \x01(\x03R\x06before\x12\x14\n" +
 	"\x05after\x18\x05 \x01(\x03R\x05after\"4\n" +
 	"\x1eGetConversationContextResponse\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"p\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"\xec\x01\n" +
 	"\x19SearchConversationRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x14\n" +
 	"\x05query\x18\x02 \x01(\tR\x05query\x12\x14\n" +
-	"\x05depth\x18\x03 \x01(\tR\x05depth\"M\n" +
+	"\x05limit\x18\x04 \x01(\x03R\x05limit\x12\x14\n" +
+	"\x05roles\x18\x05 \x03(\tR\x05roles\x12\x1b\n" +
+	"\tfrom_unix\x18\x06 \x01(\x03R\bfromUnix\x12\x1d\n" +
+	"\n" +
+	"until_unix\x18\a \x01(\x03R\tuntilUnix\x12\x1b\n" +
+	"\tmin_score\x18\b \x01(\x01R\bminScoreJ\x04\b\x03\x10\x04R\x05depth\"M\n" +
 	"\x1aSearchConversationResponse\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1b\n" +
-	"\tresult_id\x18\x02 \x01(\tR\bresultId\"\xc1\x01\n" +
+	"\tresult_id\x18\x02 \x01(\tR\bresultId\"\xe6\x02\n" +
 	"\x1aSearchConversationsRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x03R\x05limit\x12.\n" +
 	"\bprovider\x18\x03 \x01(\x0e2\x12.clyde.v1.ProviderR\bprovider\x12\x1c\n" +
 	"\tworkspace\x18\x04 \x01(\tR\tworkspace\x12)\n" +
-	"\x10include_archived\x18\x05 \x01(\bR\x0fincludeArchived\"\xd5\x01\n" +
+	"\x10include_archived\x18\x05 \x01(\bR\x0fincludeArchived\x12\x14\n" +
+	"\x05roles\x18\x06 \x03(\tR\x05roles\x12\x1b\n" +
+	"\tfrom_unix\x18\a \x01(\x03R\bfromUnix\x12\x1d\n" +
+	"\n" +
+	"until_unix\x18\b \x01(\x03R\tuntilUnix\x12\x1b\n" +
+	"\tmin_score\x18\t \x01(\x01R\bminScore\x124\n" +
+	"\x16per_conversation_limit\x18\n" +
+	" \x01(\x03R\x14perConversationLimit\"\xeb\x01\n" +
 	"\x17ConversationSearchMatch\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.clyde.v1.ConversationRecordR\fconversation\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x03R\fmessageIndex\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12%\n" +
 	"\x0etimestamp_unix\x18\x04 \x01(\x03R\rtimestampUnix\x12\x18\n" +
-	"\asnippet\x18\x05 \x01(\tR\asnippet\"\x81\x02\n" +
+	"\asnippet\x18\x05 \x01(\tR\asnippet\x12\x14\n" +
+	"\x05score\x18\x06 \x01(\x01R\x05score\"\x81\x02\n" +
 	"\x1bSearchConversationsResponse\x12;\n" +
 	"\amatches\x18\x01 \x03(\v2!.clyde.v1.ConversationSearchMatchR\amatches\x123\n" +
 	"\x15conversations_scanned\x18\x02 \x01(\x03R\x14conversationsScanned\x12%\n" +

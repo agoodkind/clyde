@@ -11,6 +11,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"goodkind.io/clyde/internal/clock"
 	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/homedir"
@@ -43,15 +44,24 @@ type getContextInput struct {
 type searchConversationInput struct {
 	ConversationID string
 	Query          string
-	Depth          string
+	Limit          int
+	Roles          string
+	After          string
+	Until          string
+	MinScore       float64
 }
 
 type searchConversationsInput struct {
-	Query           string
-	Limit           int
-	Provider        string
-	WorkspaceRoot   string
-	IncludeArchived bool
+	Query                string
+	Limit                int
+	Provider             string
+	WorkspaceRoot        string
+	IncludeArchived      bool
+	Roles                string
+	After                string
+	Until                string
+	MinScore             float64
+	PerConversationLimit int
 }
 
 type searchStatusInput struct {
@@ -263,14 +273,29 @@ func searchConversationsOp() Operation[searchConversationsInput] {
 				func(in *searchConversationsInput, v string) { in.WorkspaceRoot = v }),
 			BoolParam("include_archived", "Include archived conversations.", false,
 				func(in *searchConversationsInput, v bool) { in.IncludeArchived = v }),
+			StringParam("roles", "Comma-separated message roles to keep, such as user or assistant.", "", false,
+				func(in *searchConversationsInput, v string) { in.Roles = v }),
+			StringParam("after", "Keep messages at or after this time (RFC3339 or YYYY-MM-DD).", "", false,
+				func(in *searchConversationsInput, v string) { in.After = v }),
+			StringParam("until", "Keep messages before this time (RFC3339 or YYYY-MM-DD).", "", false,
+				func(in *searchConversationsInput, v string) { in.Until = v }),
+			FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
+				func(in *searchConversationsInput, v float64) { in.MinScore = v }),
+			IntParam("per_conversation_limit", "Cap hits per conversation; zero means uncapped.", 0,
+				func(in *searchConversationsInput, v int) { in.PerConversationLimit = v }),
 		},
 		New: func() searchConversationsInput {
 			return searchConversationsInput{
-				Query:           "",
-				Limit:           conv.DefaultSearchLimit,
-				Provider:        "",
-				WorkspaceRoot:   "",
-				IncludeArchived: false,
+				Query:                "",
+				Limit:                conv.DefaultSearchLimit,
+				Provider:             "",
+				WorkspaceRoot:        "",
+				IncludeArchived:      false,
+				Roles:                "",
+				After:                "",
+				Until:                "",
+				MinScore:             0,
+				PerConversationLimit: 0,
 			}
 		},
 		MCPTaskSupport: "",
@@ -300,8 +325,8 @@ func searchConversationOp() Operation[searchConversationInput] {
 		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Start an async search within one conversation and return a result_id.",
-		Long:     "Start a search over one conversation and return a result_id immediately; the search runs in the background. Poll conversation search status with the result_id for progress and the result, then pass the result_id to conversation search analyze. A Tasks-capable MCP client can instead run this as a task and receive the result through tasks/result.",
-		Examples: []string{"clyde conversation search within claude:1a2b3c \"auth timeout\" --depth normal"},
+		Long:     "Start a semantic search over one conversation's indexed messages, with a literal scan covering content the index does not hold yet, and return a result_id immediately. Poll conversation search status with the result_id for the result, then pass the result_id to conversation search analyze for LLM analysis. A Tasks-capable MCP client can instead run this as a task and receive the result through tasks/result.",
+		Examples: []string{"clyde conversation search within claude:1a2b3c \"auth timeout\" --roles user --limit 10"},
 		Args: []Arg[searchConversationInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *searchConversationInput, v string) { in.ConversationID = v }),
@@ -309,22 +334,38 @@ func searchConversationOp() Operation[searchConversationInput] {
 				func(in *searchConversationInput, v string) { in.Query = v }),
 		},
 		Params: []Param[searchConversationInput]{
-			StringParam("depth", "quick, normal, deep, or extra-deep.", "quick", false,
-				func(in *searchConversationInput, v string) { in.Depth = v }),
+			IntParam("limit", "Maximum matching messages to return.", 0,
+				func(in *searchConversationInput, v int) { in.Limit = v }),
+			StringParam("roles", "Comma-separated message roles to keep, such as user or assistant.", "", false,
+				func(in *searchConversationInput, v string) { in.Roles = v }),
+			StringParam("after", "Keep messages at or after this time (RFC3339 or YYYY-MM-DD).", "", false,
+				func(in *searchConversationInput, v string) { in.After = v }),
+			StringParam("until", "Keep messages before this time (RFC3339 or YYYY-MM-DD).", "", false,
+				func(in *searchConversationInput, v string) { in.Until = v }),
+			FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
+				func(in *searchConversationInput, v float64) { in.MinScore = v }),
 		},
 		New: func() searchConversationInput {
-			return searchConversationInput{ConversationID: "", Query: "", Depth: "quick"}
+			return searchConversationInput{ConversationID: "", Query: "", Limit: 0, Roles: "", After: "", Until: "", MinScore: 0}
 		},
 		MCPTaskSupport: mcp.TaskSupportOptional,
 		Run: func(ctx context.Context, in searchConversationInput, surface Surface, sink ResultSink) error {
-			text, err := daemon.SearchConversation(ctx, in.ConversationID, in.Query, in.Depth)
+			opts, err := withinSearchOptionsFromInput(in)
+			if err != nil {
+				return logFail(ctx, surface, "search_failed", "search conversation", err)
+			}
+			text, err := daemon.SearchConversation(ctx, in.ConversationID, in.Query, opts)
 			if err != nil {
 				return logFail(ctx, surface, "search_failed", "search conversation", err)
 			}
 			return sink.Text(text)
 		},
 		MCPTaskRun: func(ctx context.Context, in searchConversationInput, sink ResultSink) error {
-			text, err := daemon.SearchToCompletion(ctx, in.ConversationID, in.Query, in.Depth)
+			opts, err := withinSearchOptionsFromInput(in)
+			if err != nil {
+				return logFail(ctx, SurfaceMCP, "search_task_failed", "search conversation task", err)
+			}
+			text, err := daemon.SearchToCompletion(ctx, in.ConversationID, in.Query, opts)
 			if err != nil {
 				return logFail(ctx, SurfaceMCP, "search_task_failed", "search conversation task", err)
 			}
@@ -528,13 +569,80 @@ func searchConversationsOptionsFromInput(in searchConversationsInput) (conv.Sear
 	if err != nil {
 		return conv.SearchConversationsOptions{}, err
 	}
+	fromUnix, err := timeBoundUnix(in.After, "after")
+	if err != nil {
+		return conv.SearchConversationsOptions{}, err
+	}
+	untilUnix, err := timeBoundUnix(in.Until, "until")
+	if err != nil {
+		return conv.SearchConversationsOptions{}, err
+	}
 	return conv.SearchConversationsOptions{
-		Query:           in.Query,
-		Limit:           in.Limit,
-		Provider:        provider,
-		WorkspaceRoot:   cleanWorkspaceRoot(in.WorkspaceRoot),
-		IncludeArchived: in.IncludeArchived,
+		Query:                in.Query,
+		Limit:                in.Limit,
+		Provider:             provider,
+		WorkspaceRoot:        cleanWorkspaceRoot(in.WorkspaceRoot),
+		IncludeArchived:      in.IncludeArchived,
+		Roles:                splitRoles(in.Roles),
+		FromUnix:             fromUnix,
+		UntilUnix:            untilUnix,
+		MinScore:             in.MinScore,
+		PerConversationLimit: in.PerConversationLimit,
 	}, nil
+}
+
+func withinSearchOptionsFromInput(in searchConversationInput) (conv.WithinSearchOptions, error) {
+	fromUnix, err := timeBoundUnix(in.After, "after")
+	if err != nil {
+		return conv.WithinSearchOptions{}, err
+	}
+	untilUnix, err := timeBoundUnix(in.Until, "until")
+	if err != nil {
+		return conv.WithinSearchOptions{}, err
+	}
+	return conv.WithinSearchOptions{
+		Limit:     in.Limit,
+		Roles:     splitRoles(in.Roles),
+		FromUnix:  fromUnix,
+		UntilUnix: untilUnix,
+		MinScore:  in.MinScore,
+	}, nil
+}
+
+// splitRoles parses the comma-separated roles flag into the role set, dropping
+// empty entries.
+func splitRoles(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	roles := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			roles = append(roles, trimmed)
+		}
+	}
+	return roles
+}
+
+// timeBoundLayouts are the accepted spellings for the after and until flags.
+var timeBoundLayouts = []string{time.RFC3339, "2006-01-02 15:04", "2006-01-02T15:04", "2006-01-02"}
+
+// timeBoundUnix parses one time flag to a unix timestamp. Empty means
+// unbounded and returns zero. Naive spellings (no zone) are interpreted in the
+// host's current zone, since the flag describes the operator's wall clock.
+func timeBoundUnix(raw string, flagName string) (int64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, nil
+	}
+	hostZone := clock.Now().Location()
+	for _, layout := range timeBoundLayouts {
+		if parsed, err := time.ParseInLocation(layout, trimmed, hostZone); err == nil {
+			return parsed.Unix(), nil
+		}
+	}
+	return 0, fmt.Errorf("parse %s %q: want RFC3339, YYYY-MM-DD HH:MM, or YYYY-MM-DD", flagName, trimmed)
 }
 
 func providerFilter(raw string) (conv.Provider, error) {

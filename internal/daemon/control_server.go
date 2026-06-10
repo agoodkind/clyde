@@ -45,20 +45,32 @@ type controlServer struct {
 	semanticCollectionID string
 }
 
-// conversationSemanticSearchClient is the engine-backed cross-conversation
-// search the control server prefers before the live literal scan. The semsearch
-// client satisfies it; tests supply a fake.
+// conversationSemanticSearchClient is the engine-backed conversation retrieval
+// surface: the cross-conversation search the control server prefers before the
+// live literal scan, and the within-conversation search whose fingerprint
+// drives the literal-tail fallback. The semsearch client satisfies it; tests
+// supply a fake.
 type conversationSemanticSearchClient interface {
-	SearchConversations(ctx context.Context, collectionID, query string, limit int32) ([]semsearch.SemHit, error)
+	SearchConversations(ctx context.Context, collectionID, query string, limit int32, filter semsearch.SearchFilter, perConversationLimit int32) ([]semsearch.SemHit, error)
+	SearchWithinConversation(ctx context.Context, collectionID, conversationID, query string, limit int32, filter semsearch.SearchFilter) ([]semsearch.SemHit, string, error)
 }
 
 // searchConversationsIndex is the slice of the conversation index the
 // engine-first cross-conversation search needs: exact-id record lookup for
-// resolving engine hits, and the live literal scan used as the fallback.
+// resolving engine hits, record-filter resolution into the id set that scopes
+// engine retrieval, and the live literal scan used as the fallback.
 type searchConversationsIndex interface {
 	RecordByID(id string) (conversation.Record, bool)
+	ConversationIDsMatching(ctx context.Context, provider conversation.Provider, workspaceRoot string, includeArchived bool) ([]string, error)
 	SearchConversations(context.Context, conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error)
 }
+
+// maxConversationIDScope caps how many conversation ids are pushed into the
+// engine as retrieval scope. Each id becomes one path-prefix clause in the
+// vector store's filter expression, so an unbounded set would build an
+// enormous expression; past the cap the engine searches unscoped and the
+// record filter applies to the hits instead.
+const maxConversationIDScope = 64
 
 func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
 	if s.reload == nil {
@@ -203,11 +215,16 @@ func searchConversationsResult(
 		}
 	}
 	result, err := idx.SearchConversations(ctx, conversation.SearchConversationsOptions{
-		Query:           req.GetQuery(),
-		Limit:           int(req.GetLimit()),
-		Provider:        providerFromProto(req.GetProvider()),
-		WorkspaceRoot:   req.GetWorkspace(),
-		IncludeArchived: req.GetIncludeArchived(),
+		Query:                req.GetQuery(),
+		Limit:                int(req.GetLimit()),
+		Provider:             providerFromProto(req.GetProvider()),
+		WorkspaceRoot:        req.GetWorkspace(),
+		IncludeArchived:      req.GetIncludeArchived(),
+		Roles:                req.GetRoles(),
+		FromUnix:             req.GetFromUnix(),
+		UntilUnix:            req.GetUntilUnix(),
+		MinScore:             req.GetMinScore(),
+		PerConversationLimit: int(req.GetPerConversationLimit()),
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.live_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -231,16 +248,26 @@ func engineSearchMatches(
 	req *clydev1.SearchConversationsRequest,
 ) []conversation.SearchMatch {
 	limit := int(req.GetLimit())
-	hits, err := semantic.SearchConversations(ctx, collectionID, req.GetQuery(), int32FromInt(limit))
+	provider := providerFromProto(req.GetProvider())
+	workspace := req.GetWorkspace()
+	includeArchived := req.GetIncludeArchived()
+	filter := semsearch.SearchFilter{
+		Roles:                req.GetRoles(),
+		FromUnix:             req.GetFromUnix(),
+		UntilUnix:            req.GetUntilUnix(),
+		ConversationIDs:      scopeConversationIDs(ctx, idx, provider, workspace, includeArchived),
+		ParentConversationID: "",
+		MinScore:             req.GetMinScore(),
+		MessageIndexFrom:     0,
+		MessageIndexUntil:    0,
+	}
+	hits, err := semantic.SearchConversations(ctx, collectionID, req.GetQuery(), int32FromInt(limit), filter, int32FromInt(int(req.GetPerConversationLimit())))
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.engine_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
 		return nil
 	}
-	provider := providerFromProto(req.GetProvider())
-	workspace := req.GetWorkspace()
-	includeArchived := req.GetIncludeArchived()
 	matches := make([]conversation.SearchMatch, 0, len(hits))
 	for _, hit := range hits {
 		record, ok := idx.RecordByID(hit.ConversationID)
@@ -256,12 +283,34 @@ func engineSearchMatches(
 			Role:         hit.Role,
 			Timestamp:    time.Unix(hit.TimestampUnix, 0),
 			Snippet:      conversation.Snippet(hit.Content),
+			Score:        hit.Score,
 		})
 		if limit > 0 && len(matches) >= limit {
 			break
 		}
 	}
 	return matches
+}
+
+// scopeConversationIDs resolves the request's record-level filters into the
+// conversation-id set that scopes engine retrieval. It returns nil (no scope,
+// post-filtering still applies) when no record filter is set, when resolution
+// fails, or when the set is too large to push down as a filter expression.
+func scopeConversationIDs(ctx context.Context, idx searchConversationsIndex, provider conversation.Provider, workspace string, includeArchived bool) []string {
+	if !provider.Valid() && workspace == "" {
+		return nil
+	}
+	conversationIDs, err := idx.ConversationIDsMatching(ctx, provider, workspace, includeArchived)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.search_conversations.scope_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"err", err,
+		)
+		return nil
+	}
+	if len(conversationIDs) == 0 || len(conversationIDs) > maxConversationIDScope {
+		return nil
+	}
+	return conversationIDs
 }
 
 // searchConversationsResponse maps the cross-conversation search result onto its
@@ -276,6 +325,7 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 			Role:          match.Role,
 			TimestampUnix: match.Timestamp.Unix(),
 			Snippet:       match.Snippet,
+			Score:         match.Score,
 		})
 	}
 	return &clydev1.SearchConversationsResponse{
@@ -296,7 +346,13 @@ func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.Sea
 	if req.GetQuery() == "" {
 		return &clydev1.SearchConversationResponse{Text: response.Text(ctx, "query is required")}, nil
 	}
-	resultID, err := s.searchJobs.Start(ctx, req.GetConversationId(), req.GetQuery(), req.GetDepth())
+	resultID, err := s.searchJobs.Start(ctx, req.GetConversationId(), req.GetQuery(), conversation.WithinSearchOptions{
+		Limit:     int(req.GetLimit()),
+		Roles:     req.GetRoles(),
+		FromUnix:  req.GetFromUnix(),
+		UntilUnix: req.GetUntilUnix(),
+		MinScore:  req.GetMinScore(),
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search.start_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"peer", peerString(client),
