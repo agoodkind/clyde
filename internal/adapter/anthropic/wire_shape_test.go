@@ -183,8 +183,8 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 
 // TestAnthropicVersionFallsBackToConfig exercises the cfg fallback branch
 // directly: when a flavor carries no Anthropic-Version (a state the
-// loader rejects but the header builder still guards against), the
-// configured OAuthAnthropicVersion is used.
+// loader skips during projection but the header builder still guards
+// against), the configured OAuthAnthropicVersion is used.
 func TestAnthropicVersionFallsBackToConfig(t *testing.T) {
 	t.Parallel()
 	cli := &Client{

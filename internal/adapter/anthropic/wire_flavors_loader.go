@@ -22,9 +22,10 @@ const wireBaselineConcern = "adapter.providers.anthropic.wire"
 var ErrBaselineMissing = errors.New("anthropic wire baseline missing")
 
 // ErrBaselineInvalid reports that the on-disk MITM wire baseline exists
-// but failed to parse or failed validation (no flavors, or a flavor
-// with an empty User-Agent or Anthropic-Version). The wrapped cause
-// carries the specific failure.
+// but failed to parse or failed validation (no flavors, or no usable
+// flavor carrying both a constant User-Agent and Anthropic-Version).
+// Individual incomplete flavors are skipped with a warning rather than
+// failing the load. The wrapped cause carries the specific failure.
 var ErrBaselineInvalid = errors.New("anthropic wire baseline invalid")
 
 // WireFlavorsLoader reads the daemon-owned MITM baseline and projects
@@ -117,6 +118,12 @@ func loadWireFlavorsFromBaseline(path string) (map[string]WireFlavor, error) {
 		return nil, fmt.Errorf("%w: %s has no flavors", ErrBaselineInvalid, path)
 	}
 
+	// Incomplete flavors are skipped, not fatal: the learn loop also
+	// captures non-interactive caller flavors (bootstrap GETs, probes,
+	// axios sidecar calls) whose identity headers are absent or
+	// non-constant, and those must not invalidate the interactive
+	// flavor the egress actually selects. Only an entirely unusable
+	// baseline is an error.
 	out := make(map[string]WireFlavor, len(snap.Flavors))
 	for _, shape := range snap.Flavors {
 		flavor := projectFlavorShape(shape)
@@ -125,16 +132,23 @@ func loadWireFlavorsFromBaseline(path string) (map[string]WireFlavor, error) {
 				"path", path,
 				"slug", flavor.Slug,
 			)
-			return nil, fmt.Errorf("%w: flavor %q has empty User-Agent", ErrBaselineInvalid, flavor.Slug)
+			continue
 		}
 		if strings.TrimSpace(flavor.AnthropicVersion) == "" {
 			slog.Warn("anthropic.wire_baseline.flavor_missing_version", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 				"path", path,
 				"slug", flavor.Slug,
 			)
-			return nil, fmt.Errorf("%w: flavor %q has empty Anthropic-Version", ErrBaselineInvalid, flavor.Slug)
+			continue
 		}
 		out[flavor.Slug] = flavor
+	}
+	if len(out) == 0 {
+		slog.Warn("anthropic.wire_baseline.no_usable_flavors", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+			"path", path,
+			"flavors_total", len(snap.Flavors),
+		)
+		return nil, fmt.Errorf("%w: %s has no usable flavors (all missing User-Agent or Anthropic-Version)", ErrBaselineInvalid, path)
 	}
 	return out, nil
 }
