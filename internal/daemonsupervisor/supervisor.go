@@ -34,9 +34,15 @@ const (
 	buildFingerprintDefault = "development"
 	controlOperationStatus  = "status"
 	controlOperationReplace = "replace_daemon_worker"
-	requestTimeout          = 5 * time.Second
-	workerReadyTimeout      = 5 * time.Second
-	workerStopTimeout       = 5 * time.Second
+	// controlOperationRebind spawns a replacement worker that binds its
+	// config-driven listeners fresh, for a config edit that changes a listener
+	// address. It uses the same spawn path as replace; the worker decides which
+	// listener file descriptors to inherit (only the daemon control socket) and
+	// which to leave for a fresh bind.
+	controlOperationRebind = "rebind"
+	requestTimeout         = 5 * time.Second
+	workerReadyTimeout     = 5 * time.Second
+	workerStopTimeout      = 5 * time.Second
 )
 
 var (
@@ -225,6 +231,55 @@ func RequestReplacement(
 	}
 	if resp.PID <= 0 {
 		return 0, fmt.Errorf("supervisor reload returned invalid pid %d", resp.PID)
+	}
+	return resp.PID, nil
+}
+
+// RequestRebind asks the running supervisor to spawn a replacement worker that
+// binds its config-driven listeners fresh. The caller passes only the listener
+// file descriptors the replacement should inherit (the daemon control socket,
+// whose path never changes); every other listener is left for the new worker to
+// bind from config. This is the path for a config edit that moves a listener
+// address, which a file-descriptor-inheriting reload cannot do.
+func RequestRebind(
+	ctx context.Context,
+	socketPath string,
+	executablePath string,
+	listeners []ListenerSpec,
+	readyFD int,
+	environment []string,
+	files []*os.File,
+) (int, error) {
+	socketPath = strings.TrimSpace(socketPath)
+	if socketPath == "" {
+		return 0, fmt.Errorf("supervisor rebind socket is empty")
+	}
+	specJSON, err := json.Marshal(listeners)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.supervisor.rebind_request.encode_listeners_failed", "concern", "process.daemon.lifecycle", "err", err)
+		return 0, fmt.Errorf("encode inherited listeners: %w", err)
+	}
+	if environment == nil {
+		environment = os.Environ()
+	}
+	req := controlRequest{
+		Operation:      controlOperationRebind,
+		ExecutablePath: executablePath,
+		Arguments:      []string{executablePath, "daemon", "worker"},
+		Environment: EnvWithOverrides(environment,
+			EnvReloadChild+"=1",
+			EnvInheritedListeners+"="+string(specJSON),
+			EnvReadyFD+"="+strconv.Itoa(readyFD),
+		),
+		Listeners: listeners,
+		ReadyFD:   readyFD,
+	}
+	resp, err := sendControlRequest(ctx, socketPath, req, files)
+	if err != nil {
+		return 0, err
+	}
+	if resp.PID <= 0 {
+		return 0, fmt.Errorf("supervisor rebind returned invalid pid %d", resp.PID)
 	}
 	return resp.PID, nil
 }
@@ -446,7 +501,7 @@ func handleControl(log *slog.Logger, conn *net.UnixConn, replacementCh chan<- wo
 			)
 		}
 		return
-	case controlOperationReplace:
+	case controlOperationReplace, controlOperationRebind:
 	default:
 		writeControlError(conn, fmt.Errorf("unsupported supervisor operation %q", req.Operation))
 		return
