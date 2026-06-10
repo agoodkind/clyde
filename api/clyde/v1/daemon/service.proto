@@ -8,6 +8,9 @@ import "clyde/v1/daemon/provider.proto";
 
 service ClydeService {
   rpc ReloadDaemon(ReloadDaemonRequest) returns (ReloadDaemonResponse);
+  // RebindDaemon replaces the worker with one that binds listeners fresh from
+  // config, for edits that change a listener address or the listener set.
+  rpc RebindDaemon(ReloadDaemonRequest) returns (ReloadDaemonResponse);
   rpc GetProviderStats(GetProviderStatsRequest) returns (GetProviderStatsResponse);
   rpc SubscribeProviderStats(SubscribeProviderStatsRequest) returns (stream ProviderStatsEvent);
   rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);

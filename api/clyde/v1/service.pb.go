@@ -2274,9 +2274,10 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x15SEARCH_STATUS_RUNNING\x10\x02\x12\x1a\n" +
 	"\x16SEARCH_STATUS_COMPLETE\x10\x03\x12\x18\n" +
 	"\x14SEARCH_STATUS_FAILED\x10\x04\x12\x1a\n" +
-	"\x16SEARCH_STATUS_CANCELED\x10\x052\xab\v\n" +
+	"\x16SEARCH_STATUS_CANCELED\x10\x052\xfa\v\n" +
 	"\fClydeService\x12M\n" +
-	"\fReloadDaemon\x12\x1d.clyde.v1.ReloadDaemonRequest\x1a\x1e.clyde.v1.ReloadDaemonResponse\x12Y\n" +
+	"\fReloadDaemon\x12\x1d.clyde.v1.ReloadDaemonRequest\x1a\x1e.clyde.v1.ReloadDaemonResponse\x12M\n" +
+	"\fRebindDaemon\x12\x1d.clyde.v1.ReloadDaemonRequest\x1a\x1e.clyde.v1.ReloadDaemonResponse\x12Y\n" +
 	"\x10GetProviderStats\x12!.clyde.v1.GetProviderStatsRequest\x1a\".clyde.v1.GetProviderStatsResponse\x12a\n" +
 	"\x16SubscribeProviderStats\x12'.clyde.v1.SubscribeProviderStatsRequest\x1a\x1c.clyde.v1.ProviderStatsEvent0\x01\x12\\\n" +
 	"\x11ListConversations\x12\".clyde.v1.ListConversationsRequest\x1a#.clyde.v1.ListConversationsResponse\x12V\n" +
@@ -2362,39 +2363,41 @@ var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
 	29, // 10: clyde.v1.ConversationRecord.lineage:type_name -> clyde.v1.ConversationLineage
 	30, // 11: clyde.v1.ListConversationsResponse.conversations:type_name -> clyde.v1.ConversationRecord
 	33, // 12: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	34, // 13: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
-	35, // 14: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
-	10, // 15: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
-	11, // 16: clyde.v1.ClydeService.GetConversation:input_type -> clyde.v1.GetConversationRequest
-	13, // 17: clyde.v1.ClydeService.GetConversationContext:input_type -> clyde.v1.GetConversationContextRequest
-	17, // 18: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
-	15, // 19: clyde.v1.ClydeService.SearchConversation:input_type -> clyde.v1.SearchConversationRequest
-	21, // 20: clyde.v1.ClydeService.GetSearchStatus:input_type -> clyde.v1.GetSearchStatusRequest
-	23, // 21: clyde.v1.ClydeService.CancelSearch:input_type -> clyde.v1.CancelSearchRequest
-	25, // 22: clyde.v1.ClydeService.AnalyzeSearchResults:input_type -> clyde.v1.AnalyzeSearchResultsRequest
-	27, // 23: clyde.v1.ClydeService.ExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
-	7,  // 24: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
-	5,  // 25: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
-	3,  // 26: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
-	1,  // 27: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
-	36, // 28: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	37, // 29: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
-	38, // 30: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
-	31, // 31: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
-	12, // 32: clyde.v1.ClydeService.GetConversation:output_type -> clyde.v1.GetConversationResponse
-	14, // 33: clyde.v1.ClydeService.GetConversationContext:output_type -> clyde.v1.GetConversationContextResponse
-	19, // 34: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
-	16, // 35: clyde.v1.ClydeService.SearchConversation:output_type -> clyde.v1.SearchConversationResponse
-	22, // 36: clyde.v1.ClydeService.GetSearchStatus:output_type -> clyde.v1.GetSearchStatusResponse
-	24, // 37: clyde.v1.ClydeService.CancelSearch:output_type -> clyde.v1.CancelSearchResponse
-	26, // 38: clyde.v1.ClydeService.AnalyzeSearchResults:output_type -> clyde.v1.AnalyzeSearchResultsResponse
-	28, // 39: clyde.v1.ClydeService.ExportTranscript:output_type -> clyde.v1.ExportTranscriptResponse
-	9,  // 40: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
-	6,  // 41: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
-	4,  // 42: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
-	2,  // 43: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
-	28, // [28:44] is the sub-list for method output_type
-	12, // [12:28] is the sub-list for method input_type
+	33, // 13: clyde.v1.ClydeService.RebindDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	34, // 14: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
+	35, // 15: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
+	10, // 16: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
+	11, // 17: clyde.v1.ClydeService.GetConversation:input_type -> clyde.v1.GetConversationRequest
+	13, // 18: clyde.v1.ClydeService.GetConversationContext:input_type -> clyde.v1.GetConversationContextRequest
+	17, // 19: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
+	15, // 20: clyde.v1.ClydeService.SearchConversation:input_type -> clyde.v1.SearchConversationRequest
+	21, // 21: clyde.v1.ClydeService.GetSearchStatus:input_type -> clyde.v1.GetSearchStatusRequest
+	23, // 22: clyde.v1.ClydeService.CancelSearch:input_type -> clyde.v1.CancelSearchRequest
+	25, // 23: clyde.v1.ClydeService.AnalyzeSearchResults:input_type -> clyde.v1.AnalyzeSearchResultsRequest
+	27, // 24: clyde.v1.ClydeService.ExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
+	7,  // 25: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
+	5,  // 26: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
+	3,  // 27: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
+	1,  // 28: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
+	36, // 29: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	36, // 30: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	37, // 31: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
+	38, // 32: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
+	31, // 33: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
+	12, // 34: clyde.v1.ClydeService.GetConversation:output_type -> clyde.v1.GetConversationResponse
+	14, // 35: clyde.v1.ClydeService.GetConversationContext:output_type -> clyde.v1.GetConversationContextResponse
+	19, // 36: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
+	16, // 37: clyde.v1.ClydeService.SearchConversation:output_type -> clyde.v1.SearchConversationResponse
+	22, // 38: clyde.v1.ClydeService.GetSearchStatus:output_type -> clyde.v1.GetSearchStatusResponse
+	24, // 39: clyde.v1.ClydeService.CancelSearch:output_type -> clyde.v1.CancelSearchResponse
+	26, // 40: clyde.v1.ClydeService.AnalyzeSearchResults:output_type -> clyde.v1.AnalyzeSearchResultsResponse
+	28, // 41: clyde.v1.ClydeService.ExportTranscript:output_type -> clyde.v1.ExportTranscriptResponse
+	9,  // 42: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
+	6,  // 43: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
+	4,  // 44: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
+	2,  // 45: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
+	29, // [29:46] is the sub-list for method output_type
+	12, // [12:29] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name

@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	ClydeService_ReloadDaemon_FullMethodName           = "/clyde.v1.ClydeService/ReloadDaemon"
+	ClydeService_RebindDaemon_FullMethodName           = "/clyde.v1.ClydeService/RebindDaemon"
 	ClydeService_GetProviderStats_FullMethodName       = "/clyde.v1.ClydeService/GetProviderStats"
 	ClydeService_SubscribeProviderStats_FullMethodName = "/clyde.v1.ClydeService/SubscribeProviderStats"
 	ClydeService_ListConversations_FullMethodName      = "/clyde.v1.ClydeService/ListConversations"
@@ -42,6 +43,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ClydeServiceClient interface {
 	ReloadDaemon(ctx context.Context, in *ReloadDaemonRequest, opts ...grpc.CallOption) (*ReloadDaemonResponse, error)
+	// RebindDaemon replaces the worker with one that binds listeners fresh from
+	// config, for edits that change a listener address or the listener set.
+	RebindDaemon(ctx context.Context, in *ReloadDaemonRequest, opts ...grpc.CallOption) (*ReloadDaemonResponse, error)
 	GetProviderStats(ctx context.Context, in *GetProviderStatsRequest, opts ...grpc.CallOption) (*GetProviderStatsResponse, error)
 	SubscribeProviderStats(ctx context.Context, in *SubscribeProviderStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProviderStatsEvent], error)
 	ListConversations(ctx context.Context, in *ListConversationsRequest, opts ...grpc.CallOption) (*ListConversationsResponse, error)
@@ -71,6 +75,16 @@ func (c *clydeServiceClient) ReloadDaemon(ctx context.Context, in *ReloadDaemonR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReloadDaemonResponse)
 	err := c.cc.Invoke(ctx, ClydeService_ReloadDaemon_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) RebindDaemon(ctx context.Context, in *ReloadDaemonRequest, opts ...grpc.CallOption) (*ReloadDaemonResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReloadDaemonResponse)
+	err := c.cc.Invoke(ctx, ClydeService_RebindDaemon_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +255,9 @@ func (c *clydeServiceClient) LogsInventory(ctx context.Context, in *LogsInventor
 // for forward compatibility.
 type ClydeServiceServer interface {
 	ReloadDaemon(context.Context, *ReloadDaemonRequest) (*ReloadDaemonResponse, error)
+	// RebindDaemon replaces the worker with one that binds listeners fresh from
+	// config, for edits that change a listener address or the listener set.
+	RebindDaemon(context.Context, *ReloadDaemonRequest) (*ReloadDaemonResponse, error)
 	GetProviderStats(context.Context, *GetProviderStatsRequest) (*GetProviderStatsResponse, error)
 	SubscribeProviderStats(*SubscribeProviderStatsRequest, grpc.ServerStreamingServer[ProviderStatsEvent]) error
 	ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error)
@@ -267,6 +284,9 @@ type UnimplementedClydeServiceServer struct{}
 
 func (UnimplementedClydeServiceServer) ReloadDaemon(context.Context, *ReloadDaemonRequest) (*ReloadDaemonResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReloadDaemon not implemented")
+}
+func (UnimplementedClydeServiceServer) RebindDaemon(context.Context, *ReloadDaemonRequest) (*ReloadDaemonResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RebindDaemon not implemented")
 }
 func (UnimplementedClydeServiceServer) GetProviderStats(context.Context, *GetProviderStatsRequest) (*GetProviderStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetProviderStats not implemented")
@@ -347,6 +367,24 @@ func _ClydeService_ReloadDaemon_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClydeServiceServer).ReloadDaemon(ctx, req.(*ReloadDaemonRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClydeService_RebindDaemon_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReloadDaemonRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).RebindDaemon(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_RebindDaemon_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).RebindDaemon(ctx, req.(*ReloadDaemonRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -624,6 +662,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReloadDaemon",
 			Handler:    _ClydeService_ReloadDaemon_Handler,
+		},
+		{
+			MethodName: "RebindDaemon",
+			Handler:    _ClydeService_RebindDaemon_Handler,
 		},
 		{
 			MethodName: "GetProviderStats",
