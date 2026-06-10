@@ -116,6 +116,12 @@ func (p Param[I]) mcpOption() mcp.ToolOption {
 	case KindBool:
 		properties := []mcp.PropertyOption{mcp.Description(p.Description), mcp.DefaultBool(p.DefaultBool)}
 		return mcp.WithBoolean(p.Canonical, properties...)
+	case KindFloat:
+		properties := []mcp.PropertyOption{mcp.Description(p.Description)}
+		if p.DefaultFloat != 0 {
+			properties = append(properties, mcp.DefaultNumber(p.DefaultFloat))
+		}
+		return mcp.WithNumber(p.Canonical, properties...)
 	case KindString:
 		fallthrough
 	default:
@@ -144,6 +150,8 @@ func (p Param[I]) decodeMCP(in *I, req mcp.CallToolRequest) {
 		p.bindInt(in, req.GetInt(p.Canonical, p.DefaultInt))
 	case KindBool:
 		p.bindBool(in, req.GetBool(p.Canonical, p.DefaultBool))
+	case KindFloat:
+		p.bindFloat(in, req.GetFloat(p.Canonical, p.DefaultFloat))
 	case KindString:
 		fallthrough
 	default:

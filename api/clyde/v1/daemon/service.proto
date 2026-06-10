@@ -107,7 +107,19 @@ message GetConversationContextResponse {
 message SearchConversationRequest {
   string conversation_id = 1;
   string query = 2;
-  string depth = 3;
+  // reserved 3: the retired depth parameter; search is retrieval-only and the
+  // LLM lives in the analyze step.
+  reserved 3;
+  reserved "depth";
+  int64 limit = 4;
+  // roles keeps only hits whose message role is in the set, e.g. "user".
+  repeated string roles = 5;
+  // from_unix / until_unix bound the message timestamp (inclusive from,
+  // exclusive until). Zero means unbounded.
+  int64 from_unix = 6;
+  int64 until_unix = 7;
+  // min_score drops hits scoring below the floor. Zero means no floor.
+  double min_score = 8;
 }
 
 message SearchConversationResponse {
@@ -121,6 +133,13 @@ message SearchConversationsRequest {
   Provider provider = 3;
   string workspace = 4;
   bool include_archived = 5;
+  repeated string roles = 6;
+  int64 from_unix = 7;
+  int64 until_unix = 8;
+  double min_score = 9;
+  // per_conversation_limit caps hits per conversation so one large transcript
+  // does not monopolize the result list. Zero means uncapped.
+  int64 per_conversation_limit = 10;
 }
 
 message ConversationSearchMatch {
@@ -129,6 +148,8 @@ message ConversationSearchMatch {
   string role = 3;
   int64 timestamp_unix = 4;
   string snippet = 5;
+  // score is the engine's retrieval relevance; zero on literal-scan matches.
+  double score = 6;
 }
 
 message SearchConversationsResponse {

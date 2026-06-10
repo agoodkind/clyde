@@ -4,52 +4,35 @@ import (
 	"fmt"
 	"strings"
 
-	"goodkind.io/clyde/internal/search"
 	"goodkind.io/clyde/internal/transcript"
 )
 
-func renderSearchResults(
-	resultID string,
-	record Record,
-	messages []transcript.Message,
-	results []search.Result,
-) string {
-	indexByUUID := make(map[string]int, len(messages))
-	for i, message := range messages {
-		if message.UUID != "" {
-			indexByUUID[message.UUID] = i
-		}
-	}
+// renderWithinResults renders a completed within-conversation search: a header
+// naming the result id and conversation, an index-coverage note when the
+// literal scan ran, then one block per hit with its source, score, and message
+// window.
+func renderWithinResults(resultID string, record Record, messages []transcript.Message, hits []withinHit, literalUsed bool) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "result_id: %s\n", resultID)
-	fmt.Fprintf(&out, "conversation_id: %s\n\n", record.ID)
-	for _, result := range results {
-		if result.Summary != "" {
-			fmt.Fprintf(&out, "Found: %s\n\n", result.Summary)
+	fmt.Fprintf(&out, "conversation_id: %s\n", record.ID)
+	semanticCount := 0
+	for _, hit := range hits {
+		if hit.Source == hitSourceSemantic {
+			semanticCount++
 		}
-		for _, message := range result.Messages {
-			index, ok := indexByUUID[message.UUID]
-			if !ok {
-				index = -1
-			}
-			role := "User"
-			if message.Role == "assistant" {
-				role = "Assistant"
-			}
-			if index >= 0 {
-				fmt.Fprintf(&out, "[#%d][%s] %s:\n", index, message.Timestamp.Format("2006-01-02 15:04"), role)
-			} else {
-				fmt.Fprintf(&out, "[%s] %s:\n", message.Timestamp.Format("2006-01-02 15:04"), role)
-			}
-			if message.Text != "" {
-				out.WriteString(message.Text)
-				out.WriteString("\n")
-			}
-			if message.HasTools {
-				fmt.Fprintf(&out, "  [used: %s]\n", strings.Join(message.ToolNames(), ", "))
-			}
-			out.WriteString("\n")
+	}
+	fmt.Fprintf(&out, "matches: %d semantic, %d literal\n", semanticCount, len(hits)-semanticCount)
+	if literalUsed {
+		out.WriteString("note: the semantic index does not fully cover this transcript yet; literal matches fill the gap\n")
+	}
+	out.WriteString("\n")
+	for _, hit := range hits {
+		if hit.Source == hitSourceSemantic {
+			fmt.Fprintf(&out, "Match at message #%d (semantic, score %.2f):\n", hit.MessageIndex, hit.Score)
+		} else {
+			fmt.Fprintf(&out, "Match at message #%d (literal):\n", hit.MessageIndex)
 		}
+		out.WriteString(windowText(messages, hit.MessageIndex))
 		out.WriteString("---\n\n")
 	}
 	return out.String()

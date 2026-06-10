@@ -20,6 +20,8 @@ const (
 	// KindEnum is a string constrained to Values. The terminal rejects a
 	// value outside Values; the MCP tool falls back to the default.
 	KindEnum
+	// KindFloat is a decimal number.
+	KindFloat
 )
 
 // Param binds one named input into the per-operation input struct I. It is
@@ -39,13 +41,15 @@ type Param[I Input] struct {
 	// Values lists the accepted words for KindEnum. It is empty otherwise.
 	Values []string
 
-	DefaultStr  string
-	DefaultInt  int
-	DefaultBool bool
+	DefaultStr   string
+	DefaultInt   int
+	DefaultBool  bool
+	DefaultFloat float64
 
 	bindString func(in *I, v string)
 	bindInt    func(in *I, v int)
 	bindBool   func(in *I, v bool)
+	bindFloat  func(in *I, v float64)
 }
 
 // flagName returns the dash-spelled terminal flag for this parameter.
@@ -56,54 +60,80 @@ func (p Param[I]) flagName() string {
 // StringParam declares a free-text input.
 func StringParam[I Input](canonical, description, def string, required bool, set func(*I, string)) Param[I] {
 	return Param[I]{
-		Canonical:   canonical,
-		Kind:        KindString,
-		Required:    required,
-		Description: description,
-		CLIOnly:     false,
-		Values:      nil,
-		DefaultStr:  def,
-		DefaultInt:  0,
-		DefaultBool: false,
-		bindString:  set,
-		bindInt:     nil,
-		bindBool:    nil,
+		Canonical:    canonical,
+		Kind:         KindString,
+		Required:     required,
+		Description:  description,
+		CLIOnly:      false,
+		Values:       nil,
+		DefaultStr:   def,
+		DefaultInt:   0,
+		DefaultBool:  false,
+		DefaultFloat: 0,
+		bindString:   set,
+		bindInt:      nil,
+		bindBool:     nil,
+		bindFloat:    nil,
 	}
 }
 
 // IntParam declares a whole-number input.
 func IntParam[I Input](canonical, description string, def int, set func(*I, int)) Param[I] {
 	return Param[I]{
-		Canonical:   canonical,
-		Kind:        KindInt,
-		Required:    false,
-		Description: description,
-		CLIOnly:     false,
-		Values:      nil,
-		DefaultStr:  "",
-		DefaultInt:  def,
-		DefaultBool: false,
-		bindString:  nil,
-		bindInt:     set,
-		bindBool:    nil,
+		Canonical:    canonical,
+		Kind:         KindInt,
+		Required:     false,
+		Description:  description,
+		CLIOnly:      false,
+		Values:       nil,
+		DefaultStr:   "",
+		DefaultInt:   def,
+		DefaultBool:  false,
+		DefaultFloat: 0,
+		bindString:   nil,
+		bindInt:      set,
+		bindBool:     nil,
+		bindFloat:    nil,
 	}
 }
 
 // BoolParam declares an on/off input.
 func BoolParam[I Input](canonical, description string, def bool, set func(*I, bool)) Param[I] {
 	return Param[I]{
-		Canonical:   canonical,
-		Kind:        KindBool,
-		Required:    false,
-		Description: description,
-		CLIOnly:     false,
-		Values:      nil,
-		DefaultStr:  "",
-		DefaultInt:  0,
-		DefaultBool: def,
-		bindString:  nil,
-		bindInt:     nil,
-		bindBool:    set,
+		Canonical:    canonical,
+		Kind:         KindBool,
+		Required:     false,
+		Description:  description,
+		CLIOnly:      false,
+		Values:       nil,
+		DefaultStr:   "",
+		DefaultInt:   0,
+		DefaultBool:  def,
+		DefaultFloat: 0,
+		bindString:   nil,
+		bindInt:      nil,
+		bindBool:     set,
+		bindFloat:    nil,
+	}
+}
+
+// FloatParam declares a decimal-number input.
+func FloatParam[I Input](canonical, description string, def float64, set func(*I, float64)) Param[I] {
+	return Param[I]{
+		Canonical:    canonical,
+		Kind:         KindFloat,
+		Required:     false,
+		Description:  description,
+		CLIOnly:      false,
+		Values:       nil,
+		DefaultStr:   "",
+		DefaultInt:   0,
+		DefaultBool:  false,
+		DefaultFloat: def,
+		bindString:   nil,
+		bindInt:      nil,
+		bindBool:     nil,
+		bindFloat:    set,
 	}
 }
 
@@ -111,18 +141,20 @@ func BoolParam[I Input](canonical, description string, def bool, set func(*I, bo
 // unknown word; the MCP tool falls back to def. Both front ends share values.
 func EnumParam[I Input](canonical, description, def string, values []string, set func(*I, string)) Param[I] {
 	return Param[I]{
-		Canonical:   canonical,
-		Kind:        KindEnum,
-		Required:    false,
-		Description: description,
-		CLIOnly:     false,
-		Values:      values,
-		DefaultStr:  def,
-		DefaultInt:  0,
-		DefaultBool: false,
-		bindString:  set,
-		bindInt:     nil,
-		bindBool:    nil,
+		Canonical:    canonical,
+		Kind:         KindEnum,
+		Required:     false,
+		Description:  description,
+		CLIOnly:      false,
+		Values:       values,
+		DefaultStr:   def,
+		DefaultInt:   0,
+		DefaultBool:  false,
+		DefaultFloat: 0,
+		bindString:   set,
+		bindInt:      nil,
+		bindBool:     nil,
+		bindFloat:    nil,
 	}
 }
 

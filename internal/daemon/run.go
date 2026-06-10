@@ -95,7 +95,13 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	defer runtime.shutdown(context.Background())
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
-	searchJobs := conversation.NewSearchJobManager(conversationIndex, runtime.searchStore, cfg.Search, log)
+	var withinSearch conversation.WithinSearchClient
+	withinCollectionID := ""
+	if runtime.semantic != nil && runtime.semantic.client != nil {
+		withinSearch = runtime.semantic.client
+		withinCollectionID = cfg.Conversation.Semantic.CollectionID
+	}
+	searchJobs := conversation.NewSearchJobManager(conversationIndex, runtime.searchStore, cfg.Search, log, withinSearch, withinCollectionID)
 	runtime.searchJobs = searchJobs
 
 	grpcServer := grpc.NewServer()

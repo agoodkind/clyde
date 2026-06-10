@@ -61,6 +61,44 @@ type SemHit struct {
 	Role                 string
 	TimestampUnix        int64
 	Content              string
+	// Score is the engine's retrieval relevance: vector similarity from a
+	// semantic search, or the keyword rank from the engine's literal fallback.
+	Score float64
+}
+
+// SearchFilter narrows conversation retrieval by row attributes. Every field
+// is optional; the zero value matches everything. ConversationIDs is the
+// record-level scope: clyde resolves provider, workspace, and archived filters
+// into this set before calling the engine.
+type SearchFilter struct {
+	Roles                []string
+	FromUnix             int64
+	UntilUnix            int64
+	ConversationIDs      []string
+	ParentConversationID string
+	MinScore             float64
+	MessageIndexFrom     int32
+	MessageIndexUntil    int32
+}
+
+// wire converts the filter to its proto shape, nil when nothing is set so the
+// request stays minimal.
+func (filter SearchFilter) wire() *lmsemanticsearchv1.ConversationSearchFilter {
+	if len(filter.Roles) == 0 && filter.FromUnix == 0 && filter.UntilUnix == 0 &&
+		len(filter.ConversationIDs) == 0 && filter.ParentConversationID == "" &&
+		filter.MinScore == 0 && filter.MessageIndexFrom == 0 && filter.MessageIndexUntil == 0 {
+		return nil
+	}
+	return &lmsemanticsearchv1.ConversationSearchFilter{
+		Roles:                filter.Roles,
+		FromUnix:             filter.FromUnix,
+		UntilUnix:            filter.UntilUnix,
+		ConversationIds:      filter.ConversationIDs,
+		ParentConversationId: filter.ParentConversationID,
+		MinScore:             filter.MinScore,
+		MessageIndexFrom:     filter.MessageIndexFrom,
+		MessageIndexUntil:    filter.MessageIndexUntil,
+	}
 }
 
 // Client wraps the lm-semantic-search daemon gRPC client.
@@ -293,7 +331,7 @@ func isTerminalJobState(state string) bool {
 
 // SearchConversations runs an engine-backed cross-conversation search over the
 // named collection and returns the bounded message hits.
-func (c *Client) SearchConversations(ctx context.Context, collectionID, query string, limit int32) ([]SemHit, error) {
+func (c *Client) SearchConversations(ctx context.Context, collectionID, query string, limit int32, filter SearchFilter, perConversationLimit int32) ([]SemHit, error) {
 	if c == nil || c.daemon == nil {
 		return nil, fmt.Errorf("search semantic conversations: client is nil")
 	}
@@ -302,9 +340,11 @@ func (c *Client) SearchConversations(ctx context.Context, collectionID, query st
 		return nil, fmt.Errorf("search semantic conversations: collection id is empty")
 	}
 	response, err := c.daemon.SearchConversations(ctx, &lmsemanticsearchv1.SearchConversationsRequest{
-		CollectionId: trimmedCollectionID,
-		Query:        query,
-		Limit:        limit,
+		CollectionId:         trimmedCollectionID,
+		Query:                query,
+		Limit:                limit,
+		Filter:               filter.wire(),
+		PerConversationLimit: perConversationLimit,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "conversation.semsearch.search_failed",
@@ -316,6 +356,43 @@ func (c *Client) SearchConversations(ctx context.Context, collectionID, query st
 		return nil, fmt.Errorf("search semantic conversations in collection %q: %w", trimmedCollectionID, err)
 	}
 	return conversationSearchHits(response.GetResults()), nil
+}
+
+// SearchWithinConversation retrieves one conversation's matching rows plus the
+// content fingerprint the engine has embedded for it. An empty fingerprint
+// means the conversation is not indexed; one differing from the conversation's
+// current stamp means the index trails the transcript. The caller decides
+// whether to literal-scan newer content.
+func (c *Client) SearchWithinConversation(ctx context.Context, collectionID, conversationID, query string, limit int32, filter SearchFilter) ([]SemHit, string, error) {
+	if c == nil || c.daemon == nil {
+		return nil, "", fmt.Errorf("search within semantic conversation: client is nil")
+	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	if trimmedCollectionID == "" {
+		return nil, "", fmt.Errorf("search within semantic conversation: collection id is empty")
+	}
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedConversationID == "" {
+		return nil, "", fmt.Errorf("search within semantic conversation: conversation id is empty")
+	}
+	response, err := c.daemon.SearchWithinConversation(ctx, &lmsemanticsearchv1.SearchWithinConversationRequest{
+		CollectionId:   trimmedCollectionID,
+		ConversationId: trimmedConversationID,
+		Query:          query,
+		Limit:          limit,
+		Filter:         filter.wire(),
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.search_within_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", trimmedCollectionID,
+			"conversation_id", trimmedConversationID,
+			"err", err,
+		)
+		return nil, "", fmt.Errorf("search within semantic conversation %q: %w", trimmedConversationID, err)
+	}
+	return conversationSearchHits(response.GetResults()), response.GetIndexedFingerprint(), nil
 }
 
 // Close closes the underlying daemon gRPC connection.
@@ -344,6 +421,7 @@ func conversationSearchHits(results []*lmsemanticsearchv1.ConversationSearchResu
 			Role:                 result.GetRole(),
 			TimestampUnix:        result.GetTimestampUnix(),
 			Content:              result.GetContent(),
+			Score:                result.GetScore(),
 		})
 	}
 	return out

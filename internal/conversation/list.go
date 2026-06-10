@@ -53,6 +53,15 @@ type SearchConversationsOptions struct {
 	Provider        Provider
 	WorkspaceRoot   string
 	IncludeArchived bool
+	// Roles, FromUnix, UntilUnix, and MinScore narrow engine retrieval by row
+	// attributes; PerConversationLimit caps hits per conversation. The live
+	// literal fallback honors roles and time bounds and ignores the score
+	// knobs, which only mean something for engine relevance.
+	Roles                []string
+	FromUnix             int64
+	UntilUnix            int64
+	MinScore             float64
+	PerConversationLimit int
 }
 
 // SearchMatch is the first matching message found in one conversation during
@@ -63,6 +72,8 @@ type SearchMatch struct {
 	Role         string
 	Timestamp    time.Time
 	Snippet      string
+	// Score is the engine's retrieval relevance; zero on literal-scan matches.
+	Score float64
 }
 
 // SearchConversationsResult is a bounded set of candidate conversations.
@@ -85,6 +96,30 @@ func (idx *Index) ListPage(ctx context.Context, options ListOptions) (ListResult
 		return ListResult{}, err
 	}
 	return FilterRecords(records, options), nil
+}
+
+// ConversationIDsMatching resolves record-level filters (provider, workspace,
+// archived) into the conversation-id set that scopes engine retrieval, so a
+// record-scoped search filters in the vector store instead of post-filtering
+// engine hits.
+func (idx *Index) ConversationIDsMatching(ctx context.Context, provider Provider, workspaceRoot string, includeArchived bool) ([]string, error) {
+	result, err := idx.ListPage(ctx, ListOptions{
+		Limit:           0,
+		Offset:          0,
+		Provider:        provider,
+		WorkspaceRoot:   workspaceRoot,
+		Query:           "",
+		IncludeArchived: includeArchived,
+		All:             true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	conversationIDs := make([]string, 0, len(result.Records))
+	for _, record := range result.Records {
+		conversationIDs = append(conversationIDs, record.ID)
+	}
+	return conversationIDs, nil
 }
 
 // FilterRecords applies list filters and pagination to a pre-sorted record slice.
@@ -164,7 +199,7 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 		default:
 		}
 		result.ConversationsScanned++
-		match, ok, err := idx.firstTranscriptMatch(record, terms)
+		match, ok, err := idx.firstTranscriptMatch(record, terms, options)
 		if err != nil {
 			slog.WarnContext(ctx, "conversation.search_conversations.match_failed", "concern", "conversation.search", "conversation_id", record.ID, "err", err)
 			return result, fmt.Errorf("search conversation %s: %w", record.ID, err)
@@ -182,7 +217,7 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 	return result, nil
 }
 
-func (idx *Index) firstTranscriptMatch(record Record, terms []string) (SearchMatch, bool, error) {
+func (idx *Index) firstTranscriptMatch(record Record, terms []string, options SearchConversationsOptions) (SearchMatch, bool, error) {
 	stream, err := idx.resolveStream(record, LoadOptions{
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: false,
@@ -196,18 +231,45 @@ func (idx *Index) firstTranscriptMatch(record Record, terms []string) (SearchMat
 		if streamErr != nil {
 			return emptySearchMatch(), false, streamErr
 		}
-		if messageMatchesTerms(message, terms) {
+		if messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) && messageMatchesTerms(message, terms) {
 			return SearchMatch{
 				Record:       record,
 				MessageIndex: messageIndex,
 				Role:         message.Role,
 				Timestamp:    message.Timestamp,
 				Snippet:      snippet(message.Text),
+				Score:        0,
 			}, true, nil
 		}
 		messageIndex++
 	}
 	return emptySearchMatch(), false, nil
+}
+
+// messageMatchesRowFilters applies the role and time conditions shared by the
+// literal scans, mirroring the engine-side filter semantics: inclusive from,
+// exclusive until, case-insensitive roles, empty conditions match everything.
+func messageMatchesRowFilters(message transcript.Message, roles []string, fromUnix int64, untilUnix int64) bool {
+	if len(roles) > 0 {
+		matched := false
+		for _, role := range roles {
+			if strings.EqualFold(role, message.Role) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	timestamp := message.Timestamp.Unix()
+	if fromUnix > 0 && timestamp < fromUnix {
+		return false
+	}
+	if untilUnix > 0 && timestamp >= untilUnix {
+		return false
+	}
+	return true
 }
 
 func normalizeListOptions(options ListOptions) ListOptions {
@@ -236,6 +298,7 @@ func emptySearchMatch() SearchMatch {
 		Role:         "",
 		Timestamp:    time.Time{},
 		Snippet:      "",
+		Score:        0,
 	}
 }
 

@@ -157,11 +157,16 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
 	defer cancel()
 	resp, err := client.rpc.SearchConversations(rpcCtx, &clydev1.SearchConversationsRequest{
-		Query:           options.Query,
-		Limit:           int64(options.Limit),
-		Provider:        protoProvider(options.Provider),
-		Workspace:       options.WorkspaceRoot,
-		IncludeArchived: options.IncludeArchived,
+		Query:                options.Query,
+		Limit:                int64(options.Limit),
+		Provider:             protoProvider(options.Provider),
+		Workspace:            options.WorkspaceRoot,
+		IncludeArchived:      options.IncludeArchived,
+		Roles:                options.Roles,
+		FromUnix:             options.FromUnix,
+		UntilUnix:            options.UntilUnix,
+		MinScore:             options.MinScore,
+		PerConversationLimit: int64(options.PerConversationLimit),
 	})
 	if err != nil {
 		return conversation.SearchConversationsResult{}, daemonRPCError(rpcCtx, "search conversations", err)
@@ -175,6 +180,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 			Role:         wire.GetRole(),
 			Timestamp:    time.Unix(wire.GetTimestampUnix(), 0),
 			Snippet:      wire.GetSnippet(),
+			Score:        wire.GetScore(),
 		})
 	}
 	return conversation.SearchConversationsResult{
@@ -189,7 +195,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 
 // SearchConversation asks the daemon to search one conversation and cache the
 // result set for a later analyze call.
-func SearchConversation(ctx context.Context, conversationID, query, depth string) (string, error) {
+func SearchConversation(ctx context.Context, conversationID, query string, opts conversation.WithinSearchOptions) (string, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
 		return "", err
@@ -198,15 +204,24 @@ func SearchConversation(ctx context.Context, conversationID, query, depth string
 
 	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.SearchConversation(rpcCtx, &clydev1.SearchConversationRequest{
-		ConversationId: conversationID,
-		Query:          query,
-		Depth:          depth,
-	})
+	resp, err := client.rpc.SearchConversation(rpcCtx, withinSearchRequest(conversationID, query, opts))
 	if err != nil {
 		return "", daemonRPCError(rpcCtx, "search conversation", err)
 	}
 	return resp.GetText(), nil
+}
+
+// withinSearchRequest maps within-search options onto the wire request.
+func withinSearchRequest(conversationID, query string, opts conversation.WithinSearchOptions) *clydev1.SearchConversationRequest {
+	return &clydev1.SearchConversationRequest{
+		ConversationId: conversationID,
+		Query:          query,
+		Limit:          int64(opts.Limit),
+		Roles:          opts.Roles,
+		FromUnix:       opts.FromUnix,
+		UntilUnix:      opts.UntilUnix,
+		MinScore:       opts.MinScore,
+	}
 }
 
 // GetSearchStatus asks the daemon for the state, progress, and result of an
@@ -339,7 +354,7 @@ const maxSearchTaskPolls = 3600
 // the native MCP task handler; mcp-go runs it in a task goroutine so the client
 // is not blocked and can poll tasks/get. Canceling ctx (via tasks/cancel)
 // cancels the underlying search.
-func SearchToCompletion(ctx context.Context, conversationID, query, depth string) (string, error) {
+func SearchToCompletion(ctx context.Context, conversationID, query string, opts conversation.WithinSearchOptions) (string, error) {
 	// mcp-go v0.54.1 ties the task goroutine's context to the create-task
 	// request, which it cancels once the task handle is returned to the client.
 	// Detach the daemon operations from that context so the search runs to
@@ -353,11 +368,7 @@ func SearchToCompletion(ctx context.Context, conversationID, query, depth string
 	defer func() { _ = client.conn.Close() }()
 
 	startCtx, startCancel := context.WithTimeout(opCtx, analysisClientRPCTimeout)
-	startResp, err := client.rpc.SearchConversation(startCtx, &clydev1.SearchConversationRequest{
-		ConversationId: conversationID,
-		Query:          query,
-		Depth:          depth,
-	})
+	startResp, err := client.rpc.SearchConversation(startCtx, withinSearchRequest(conversationID, query, opts))
 	startCancel()
 	if err != nil {
 		slog.WarnContext(opCtx, "daemon.search_to_completion.start_failed", "concern", "mcp.server.context", "component", "daemon", "err", err)
