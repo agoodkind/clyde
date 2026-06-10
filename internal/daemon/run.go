@@ -100,12 +100,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	defer runtime.shutdown(context.Background())
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
-	var withinSearch conversation.WithinSearchClient
-	withinCollectionID := ""
-	if runtime.semantic != nil && runtime.semantic.client != nil {
-		withinSearch = runtime.semantic.client
-		withinCollectionID = cfg.Conversation.Semantic.CollectionID
-	}
+	withinSearch, withinCollectionID := withinSearchWiring(cfg, runtime)
 	searchJobs := conversation.NewSearchJobManager(conversationIndex, runtime.searchStore, cfg.Search, log, withinSearch, withinCollectionID)
 	runtime.searchJobs = searchJobs
 
@@ -188,6 +183,16 @@ func startConfigWatcher(ctx context.Context, log *slog.Logger, runtime *runtimeS
 		log.WarnContext(ctx, "daemon.config_watch.start_failed", "concern", "process.daemon.config", "component", "daemon", "err", err)
 		runtime.configWatcher = nil
 	}
+}
+
+// withinSearchWiring returns the engine retrieval client and collection id the
+// search job manager uses for within-conversation candidates, nil and empty
+// when conversation semantic search is not configured.
+func withinSearchWiring(cfg *config.Config, runtime *runtimeServices) (conversation.WithinSearchClient, string) {
+	if runtime.semantic == nil || runtime.semantic.client == nil {
+		return nil, ""
+	}
+	return runtime.semantic.client, cfg.Conversation.Semantic.CollectionID
 }
 
 func startStartupCleanup(log *slog.Logger, cfg *config.Config) {
