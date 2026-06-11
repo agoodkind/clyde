@@ -119,9 +119,15 @@ func testTypeRecord(id string, provider Provider) Record {
 		ArtifactPath:  "/tmp/" + id + ".jsonl",
 		ArtifactKind:  "transcript",
 		Model:         "model",
-		CreatedAt:     time.Unix(1, 0),
-		UpdatedAt:     time.Unix(2, 0),
-		SizeBytes:     10,
-		Archived:      false,
+		// Use UTC so the JSON round-trip is stable regardless of the host time
+		// zone. time.Unix returns a time in time.Local, which marshals with the
+		// local offset and parses back to time.Local only when that offset is
+		// non-zero; in a UTC environment (CI) it marshals as "Z" and parses back
+		// to time.UTC, so a reflect.DeepEqual against a time.Local value fails on
+		// the differing *Location even at the same instant.
+		CreatedAt: time.Unix(1, 0).UTC(),
+		UpdatedAt: time.Unix(2, 0).UTC(),
+		SizeBytes: 10,
+		Archived:  false,
 	}
 }
