@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/adapter/anthropic"
@@ -58,6 +59,10 @@ type runtimeServices struct {
 	// Quiesce drives reload and shutdown drains; AwaitQuiet backs the watcher's
 	// quiet-wait. Constructed in startRuntime before any subsystem.
 	group *livetrack.Group
+	// currentConfig holds the config the running generation is serving. The
+	// in-process apply path compares against it to classify a change and
+	// advances it after a successful hot apply.
+	currentConfig atomic.Pointer[config.Config]
 }
 
 type inheritedRuntime struct {
@@ -98,7 +103,9 @@ func startRuntime(
 		reloadDrain:           nil,
 		configWatcher:         nil,
 		group:                 newLifecycleGroup(log),
+		currentConfig:         atomic.Pointer[config.Config]{},
 	}
+	runtime.currentConfig.Store(cfg)
 	runtime.addSearchStoreCloseHook(searchStore)
 	if cfg.MITM.EnabledDefault {
 		if err := startMITM(ctx, cfg, log, runtime, inherited.listeners); err != nil {

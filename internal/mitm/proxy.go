@@ -224,6 +224,19 @@ func (p *Proxy) config() config.MITMConfig {
 	return p.cfg
 }
 
+// ApplyConfig swaps the proxy's config-derived state (provider routing, capture
+// settings) under the existing lock for an in-process config apply. Every
+// request reads the config through config(), so a new request sees the swapped
+// value while an established tunnel keeps the behavior it started with until it
+// closes, matching the docs/cursor.md drain contract. Listener topology is never
+// changed here (that routes to rebind), so no socket is touched.
+func (p *Proxy) ApplyConfig(newCfg config.MITMConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cfg = newCfg
+	return nil
+}
+
 // defaultCaptureBodyCap is the fallback response-body buffer cap when the
 // configured capture-store MaxBodyBytes is unset. It mirrors the capture
 // package's own default so a body that the store will persist in full is not

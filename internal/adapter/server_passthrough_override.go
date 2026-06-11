@@ -40,7 +40,7 @@ func (s *Server) forwardPassthroughOverride(w http.ResponseWriter, r *http.Reque
 	modelOverride := req.OpenAICompatPassthrough.Model
 	upstreamLabel := "openai_compat_passthrough"
 	if baseURL == "" {
-		override, ok := s.registry.PassthroughOverride(req.PassthroughOverrideName)
+		override, ok := s.modelRegistry().PassthroughOverride(req.PassthroughOverrideName)
 		if !ok || override.BaseURL == "" {
 			err := newAdapterError(adapterErrorUpstreamUnavailable,
 				"alias routes to passthrough override "+req.PassthroughOverrideName+" but no base URL is configured")

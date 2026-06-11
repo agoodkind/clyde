@@ -98,7 +98,7 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 		addrs = append(addrs, lis.Addr().String())
 	}
 	s.log.LogAttrs(ctx, slog.LevelInfo, "adapter listening", slog.String("concern", "process.daemon.listeners"), slog.Any("addrs", addrs),
-		slog.Int("models", len(s.registry.List())),
+		slog.Int("models", len(s.modelRegistry().List())),
 	)
 	errCh := make(chan error, len(listeners))
 	for _, lis := range listeners {

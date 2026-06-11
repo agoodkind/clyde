@@ -137,15 +137,18 @@ func onlyHotFieldsChanged(oldCfg, newCfg Config) bool {
 }
 
 // blankHotFields returns a copy of cfg with every hot-set field zeroed, so two
-// configs that differ only in the hot set compare equal.
+// configs that differ only in the hot set compare equal. The set is kept narrow
+// and exactly matches what the in-process apply swaps: the adapter
+// model-registry inputs and the MITM proxy provider routing. MITM drift is
+// deliberately excluded so a drift change takes a reload, where the periodic
+// drift sweep restarts with the new config rather than running stale.
 func blankHotFields(cfg Config) Config {
 	cfg.Adapter.Models = nil
 	cfg.Adapter.Families = nil
 	cfg.Adapter.Pricing = nil
 	cfg.Adapter.DefaultModel = ""
 	cfg.Adapter.PassthroughOverrides = nil
-	cfg.Adapter.OpenAICompatPassthrough = AdapterOpenAICompatPassthrough{}
+	cfg.Adapter.OpenAICompatPassthrough = AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""}
 	cfg.MITM.Providers = nil
-	cfg.MITM.Drift = MITMDriftConfig{}
 	return cfg
 }

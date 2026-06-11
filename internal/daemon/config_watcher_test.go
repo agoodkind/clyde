@@ -179,6 +179,88 @@ func TestHandleChangeSkipsReloadWhenRevertedDuringWait(t *testing.T) {
 	}
 }
 
+// TestHandleChangeHotApplies asserts a hot-appliable edit calls applyInProcess,
+// does not trigger a reload, updates the baseline hash, and returns false so the
+// watcher keeps looping without a process replacement.
+func TestHandleChangeHotApplies(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.ConfigFile)
+	writeConfig(t, path, "# baseline\n")
+	baseline := testConfigHash(t, path)
+	w, rec, _ := newTestConfigWatcher(t, path, baseline)
+	writeConfig(t, path, "# changed\n")
+	changedHash := testConfigHash(t, path)
+
+	applied := 0
+	w.classify = func(*config.Config) config.Route { return config.RouteHotApply }
+	w.applyInProcess = func(context.Context, *config.Config) error {
+		applied++
+		return nil
+	}
+
+	if triggered := w.handleChange(context.Background()); triggered {
+		t.Fatal("handleChange returned true; hot apply must keep the loop running")
+	}
+	if applied != 1 {
+		t.Fatalf("applyInProcess calls = %d, want 1", applied)
+	}
+	if reloads, rebinds := rec.counts(); reloads != 0 || rebinds != 0 {
+		t.Fatalf("triggers on hot apply: reloads=%d rebinds=%d, want 0 0", reloads, rebinds)
+	}
+	if w.baselineHash != changedHash {
+		t.Fatalf("baseline not advanced after hot apply: got %q, want %q", w.baselineHash, changedHash)
+	}
+}
+
+// TestHandleChangeFallsBackToReloadOnApplyFailure asserts that when
+// applyInProcess errors, the watcher proceeds to the quiet-wait reload path.
+func TestHandleChangeFallsBackToReloadOnApplyFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.ConfigFile)
+	writeConfig(t, path, "# baseline\n")
+	baseline := testConfigHash(t, path)
+	w, rec, _ := newTestConfigWatcher(t, path, baseline)
+	writeConfig(t, path, "# changed\n")
+
+	w.classify = func(*config.Config) config.Route { return config.RouteHotApply }
+	w.applyInProcess = func(context.Context, *config.Config) error {
+		return errTestApplyFailed
+	}
+
+	if triggered := w.handleChange(context.Background()); !triggered {
+		t.Fatal("handleChange returned false; expected reload fallback after apply failure")
+	}
+	if reloads, _ := rec.counts(); reloads != 1 {
+		t.Fatalf("reloads after apply failure = %d, want 1", reloads)
+	}
+}
+
+var errTestApplyFailed = errTestApply{}
+
+type errTestApply struct{}
+
+func (errTestApply) Error() string { return "test apply failed" }
+
+// TestHandleChangeRestartRequiredSkips asserts a restart-required change neither
+// hot-applies nor reloads; the operator must restart.
+func TestHandleChangeRestartRequiredSkips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.ConfigFile)
+	writeConfig(t, path, "# baseline\n")
+	baseline := testConfigHash(t, path)
+	w, rec, _ := newTestConfigWatcher(t, path, baseline)
+	writeConfig(t, path, "# changed\n")
+
+	w.classify = func(*config.Config) config.Route { return config.RouteRestartRequired }
+
+	if triggered := w.handleChange(context.Background()); triggered {
+		t.Fatal("handleChange returned true; restart-required must not re-exec")
+	}
+	if reloads, rebinds := rec.counts(); reloads != 0 || rebinds != 0 {
+		t.Fatalf("triggers on restart-required: reloads=%d rebinds=%d, want 0 0", reloads, rebinds)
+	}
+}
+
 // testConfigHash computes the watcher's content hash for path with a discard
 // logger, failing the test on a read error.
 func testConfigHash(t *testing.T, path string) string {

@@ -26,7 +26,7 @@ func (s *Server) handleModels(ctx context.Context, hctx *handlerCtx) error {
 	r := hctx.Request
 	corr := hctx.Correlation
 	clydeingress.SetHTTPHeaders(corr, w.Header())
-	entries := s.registry.List()
+	entries := s.modelRegistry().List()
 	fingerprint := modelCatalogFingerprint(entries)
 	resp := ModelsResponse{Object: "list", Data: nil}
 	for _, m := range entries {
@@ -144,7 +144,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	// the alias and reasoning effort to a typed ResolvedRequest carrying
 	// provider identity, effort, budget, and the per-provider knobs the
 	// dispatcher and backends consume directly.
-	resolvedReq, resolverErr := resolveCursorChatRequest(req, adapterresolver.NewModelRegistryAdapter(s.registry))
+	resolvedReq, resolverErr := resolveCursorChatRequest(req, adapterresolver.NewModelRegistryAdapter(s.modelRegistry()))
 	if resolverErr != nil {
 		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, resolverErr)
 		recorder.EmitError(ctx, "model_resolve_failed", resolverErr.Error())

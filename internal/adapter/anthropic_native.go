@@ -144,7 +144,7 @@ func anthropicIngressWireModel(requested string, resolvedModel string) string {
 // shared backend helpers (request alias derivation, betas) see the same
 // shape the OpenAI ingress path produces.
 func (s *Server) anthropicNativeResolvedRequest(ctx context.Context, requestedModel string) (adapterresolver.ResolvedRequest, bool) {
-	view, err := adapterresolver.NewModelRegistryAdapter(s.registry).Resolve(requestedModel, "")
+	view, err := adapterresolver.NewModelRegistryAdapter(s.modelRegistry()).Resolve(requestedModel, "")
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.anthropic.native_resolve_failed", "concern", "adapter.providers.anthropic.request", "model", requestedModel, "err", err)
 		return zeroNativeResolvedRequest(requestedModel), false

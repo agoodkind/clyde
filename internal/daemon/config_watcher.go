@@ -78,6 +78,16 @@ type configWatcher struct {
 	// instead of severing them. Defaults to awaitDaemonQuiet over the daemon
 	// lifecycle group; injected in tests. Returns true if quiet was reached.
 	quietWait func(context.Context) bool
+	// classify decides whether a parsed config change hot-applies, reloads,
+	// rebinds, or needs a restart, comparing against the running config.
+	// Defaults to config.ClassifyConfigChange over the runtime's current
+	// config; injected in tests.
+	classify func(next *config.Config) config.Route
+	// applyInProcess swaps the hot-appliable config-derived state without
+	// re-exec. Defaults to the runtime's applyConfigInProcess; injected in
+	// tests. A nil applyInProcess makes a hot-apply route fall through to
+	// reload.
+	applyInProcess func(context.Context, *config.Config) error
 }
 
 // newConfigWatcher builds the production watcher. The reload trigger is the
@@ -119,6 +129,16 @@ func newConfigWatcher(log *slog.Logger, baselineHash string, runtime *runtimeSer
 		},
 		quietWait: func(ctx context.Context) bool {
 			return awaitDaemonQuiet(ctx, runtime.group)
+		},
+		classify: func(next *config.Config) config.Route {
+			current := runtime.currentConfig.Load()
+			if current == nil || next == nil {
+				return config.RouteReload
+			}
+			return config.ClassifyConfigChange(*current, *next)
+		},
+		applyInProcess: func(ctx context.Context, next *config.Config) error {
+			return runtime.applyConfigInProcess(ctx, log, next)
 		},
 	}
 	// configWatcherMeta.IsLivetrackMeta is a pure marker the registry never
@@ -245,7 +265,8 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 	if hash == w.baselineHash {
 		return false
 	}
-	if _, err := w.parse(); err != nil {
+	next, err := w.parse()
+	if err != nil {
 		w.log.WarnContext(ctx, "daemon.config_watch.parse_failed", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
 			"path", w.path,
 			"err", err,
@@ -255,6 +276,36 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 	w.log.InfoContext(ctx, "daemon.config_watch.change_detected", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
 		"path", w.path,
 	)
+	// Classify the change. A restart-required change cannot be honored by the
+	// running generation, so log and keep watching rather than re-exec into a
+	// config it cannot serve. A hot-appliable change is swapped in process with
+	// no re-exec and no severed exchanges; on apply failure it falls through to
+	// the reload path below.
+	route := config.RouteReload
+	if w.classify != nil {
+		route = w.classify(next)
+	}
+	w.log.InfoContext(ctx, "daemon.config_watch.classified", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+		"path", w.path,
+		"route", route.String(),
+	)
+	if route == config.RouteRestartRequired {
+		w.log.WarnContext(ctx, "daemon.config_watch.restart_required", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", w.path,
+		)
+		return false
+	}
+	if route == config.RouteHotApply && w.applyInProcess != nil {
+		if applyErr := w.applyInProcess(ctx, next); applyErr != nil {
+			w.log.WarnContext(ctx, "daemon.config_watch.hot_apply_failed", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+				"path", w.path,
+				"err", applyErr,
+			)
+		} else {
+			w.baselineHash = hash
+			return false
+		}
+	}
 	// Wait for in-flight client exchanges to finish before triggering a reload
 	// or rebind that would sever them, bounded by the reload quiet-wait. A
 	// request longer than the bound still takes the drain.

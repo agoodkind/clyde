@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
@@ -58,6 +59,32 @@ func (s *Server) evaluateUsageNotices(ctx context.Context, windows []adapterrunt
 	return s.usageNoticeGate.Evaluate(ctx, windows, s.cfg.Notices, clock.Now())
 }
 
+// modelRegistry returns the current config-derived model registry. It is
+// lock-free on the request hot path; an in-process config apply swaps the
+// pointer so a request reads a consistent registry for its whole lifetime.
+func (s *Server) modelRegistry() *Registry {
+	return s.registry.Load()
+}
+
+// ApplyConfig rebuilds the model registry from newCfg and swaps it in for
+// subsequent requests, with no server restart. In-flight requests keep the
+// registry they loaded at dispatch, so nothing is severed. It returns an error
+// without swapping if the new config fails to build, so a bad apply leaves the
+// running registry intact. Only the model-registry inputs (Models, Families,
+// Pricing, DefaultModel, passthroughs) are hot-appliable here; the daemon's
+// change classifier routes any other adapter change to reload, so the fields
+// this Server reads directly off the fixed cfg stay consistent.
+func (s *Server) ApplyConfig(newCfg config.AdapterConfig) error {
+	registry, err := NewRegistry(newCfg)
+	if err != nil {
+		s.log.Warn("adapter.config.apply_failed", "concern", "adapter.http.ingress", "component", "adapter", "subcomponent", "adapter", "err", err)
+		return fmt.Errorf("adapter apply config: %w", err)
+	}
+	s.registry.Store(registry)
+	s.log.Info("adapter.config.applied", "concern", "adapter.http.ingress", "component", "adapter", "subcomponent", "adapter")
+	return nil
+}
+
 // systemFingerprint is the value the adapter reports in the OpenAI
 // response field of the same name. It changes when the binary is
 // rebuilt so clients can detect a behavioral change. Kept stable
@@ -75,7 +102,11 @@ type Server struct {
 	requestLog     *logevent.Emitter
 	logging        config.LoggingConfig
 	runtimeLogging *RuntimeLogging
-	registry       *Registry
+	// registry is the config-derived model registry, held behind an atomic
+	// pointer so an in-process config apply can swap it for the next request
+	// while in-flight requests keep the registry they loaded. Read via
+	// modelRegistry; swapped by ApplyConfig.
+	registry atomic.Pointer[Registry]
 	// egressRegistry tracks every in-flight outbound provider call
 	// (Anthropic Messages HTTP, Codex Responses websocket, retry
 	// attempts) so Shutdown can drain or force-close them under the
@@ -150,7 +181,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		),
 		logging:        logging,
 		runtimeLogging: runtimeLogging,
-		registry:       registry,
+		registry:       atomic.Pointer[Registry]{},
 		egressRegistry: egressReg,
 		sem:            make(chan struct{}, maxConcurrent),
 		token:          token,
@@ -170,6 +201,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		streamErrorRenderers: defaultBoundaryRegistry.snapshotStreamErrorRenderers(),
 		ingress:              newServerIngress(),
 	}
+	s.registry.Store(registry)
 	s.providerRegistry = adapterprovider.NewRegistry()
 	probeCfg := config.NewConfigWithDefaults()
 	probeCfg.Logging = logging
