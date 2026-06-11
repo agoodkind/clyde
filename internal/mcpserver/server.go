@@ -40,12 +40,17 @@ const maxConcurrentMCPTasks = 4
 type Server struct {
 	// Tunnels tracks every in-flight MCP tool call.
 	Tunnels *livetrack.Registry[MCPMeta]
+	// group owns Tunnels. The MCP server is a standalone process, so it holds
+	// its own single-member lifecycle group rather than the daemon's; shutdown
+	// drains it through group.Quiesce, the only drain entry point.
+	group *livetrack.Group
 
 	log     *slog.Logger
 	cleanup func()
 }
 
-// NewServer constructs a Server with an initialized livetrack registry.
+// NewServer constructs a Server with an initialized livetrack registry attached
+// to the server's own lifecycle group.
 func NewServer(auditRotation audit.RotationConfig) *Server {
 	MCPMeta{
 		ServerName: "",
@@ -55,7 +60,12 @@ func NewServer(auditRotation audit.RotationConfig) *Server {
 		Op:         "",
 	}.IsLivetrackMeta()
 	log, cleanup := audit.NewLogger("mcp", auditRotation)
-	registry := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: log})
+	registry := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[MCPMeta]{
 		Component:     "mcpserver",
 		Concern:       slogger.ConcernMCPServerRequest,
 		Log:           log,
@@ -66,6 +76,7 @@ func NewServer(auditRotation audit.RotationConfig) *Server {
 	})
 	return &Server{
 		Tunnels: registry,
+		group:   group,
 		log:     log,
 		cleanup: cleanup,
 	}
@@ -112,8 +123,12 @@ func (srv *Server) Serve(ctx context.Context) error {
 	mcpServer.Use(toolCallMiddleware(srv.Tunnels, "clyde"))
 	registerPrompt(mcpServer)
 	registerTools(mcpServer)
-	return serveStdioLocked(ctx, mcpServer, srv.Tunnels, os.Stdin, os.Stdout)
+	return serveStdioLocked(ctx, mcpServer, srv.group, mcpShutdownCap, os.Stdin, os.Stdout)
 }
+
+// mcpShutdownCap bounds how long the MCP server drains in-flight tool calls
+// before force-closing them on exit. It matches the previous 5s drain deadline.
+const mcpShutdownCap = 5 * time.Second
 
 func newHooks() *server.Hooks {
 	hooks := &server.Hooks{}
@@ -229,7 +244,7 @@ func registerTools(mcpServer *server.MCPServer) {
 	clispec.RenderMCP(clispec.NewConversationRegistry(), mcpServer)
 }
 
-func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, reg *livetrack.Registry[MCPMeta], stdin io.Reader, stdout io.Writer) error {
+func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *livetrack.Group, shutdownCap time.Duration, stdin io.Reader, stdout io.Writer) error {
 	stdio := server.NewStdioServer(mcpSrv)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -252,15 +267,10 @@ func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, reg *liv
 	}()
 
 	listenErr := stdio.Listen(ctx, stdin, newMCPStdoutWriter(stdout))
-	drainCtx, drainCancel := context.WithTimeout(parent, 5*time.Second)
-	defer drainCancel()
-	result := reg.Drain(drainCtx, "mcp.shutdown")
-	if result.ForceClosed > 0 {
-		slog.WarnContext(parent, "mcp.stdio.handlers_force_closed", "concern", "mcp.server.requests", "component", "mcpserver",
-			"force_closed", result.ForceClosed,
-			"duration_ms", result.Duration.Milliseconds(),
-		)
-	}
+	// Drain the in-flight MCP tool calls through the server's lifecycle group
+	// under shutdownCap. The registry emits its own drain-complete event with the
+	// force-closed count, so no bespoke force-close log is needed here.
+	group.Quiesce(parent, "mcp.shutdown", livetrack.Budget{Cap: shutdownCap, IdleGrace: 0})
 	if listenErr != nil {
 		slog.WarnContext(parent, "mcp.stdio.listen_failed", "concern", "mcp.server.requests", "component", "mcpserver", "err", listenErr)
 		return fmt.Errorf("mcpserver: stdio listen: %w", listenErr)

@@ -167,7 +167,12 @@ func TestToolCallMiddlewareRejectsWhenDraining(t *testing.T) {
 // reaches zero and the closer is invoked.
 func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 	t.Parallel()
-	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	reg := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[MCPMeta]{
 		Component:   "test",
 		Concern:     "test.mcp.drain",
 		PollEvery:   5 * time.Millisecond,
@@ -204,7 +209,7 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- serveStdioLocked(ctx, mcpSrv, reg, stdinR, &stdout)
+		serveDone <- serveStdioLocked(ctx, mcpSrv, group, 200*time.Millisecond, stdinR, &stdout)
 	}()
 
 	// Cancel the context to make serveStdioLocked exit, then close stdin so
