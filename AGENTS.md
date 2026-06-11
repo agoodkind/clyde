@@ -103,11 +103,6 @@ Common checks include:
 - `make test`
 - `make lint`
 - `make fmt` followed by `git diff --exit-code`
-- `make staticcheck`
-- `make staticcheck-extra`
-- `make deadcode`
-- `make audit`
-- `make govulncheck`
 - `make build`
 
 ### Failing make steps
