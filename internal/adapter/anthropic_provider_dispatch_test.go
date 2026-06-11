@@ -53,6 +53,40 @@ func TestAnthropicProviderErrorMapsClaudeAuthFailureToActionableInstruction(t *t
 	}
 }
 
+func TestAnthropicProviderErrorMapsUnseededFlavorToWireBaseline503(t *testing.T) {
+	t.Parallel()
+
+	err := fmt.Errorf("%w: model %q has no learned claude-cli wire flavor; run claude-cli once with that model through the Clyde MITM proxy to seed it", anthropic.ErrFlavorUnseeded, "claude-unseen-4-20260610")
+	aerr := anthropicProviderAdapterError(err)
+
+	if aerr.HTTPStatus != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusServiceUnavailable)
+	}
+	if aerr.Code != "wire_baseline_unavailable" {
+		t.Fatalf("code=%q want wire_baseline_unavailable", aerr.Code)
+	}
+	if aerr.Class != adapterErrorBaselineMissing {
+		t.Fatalf("class=%q want baseline_missing", aerr.Class)
+	}
+	if !strings.Contains(aerr.Message, "claude-unseen-4-20260610") {
+		t.Fatalf("message missing model: %q", aerr.Message)
+	}
+	if !strings.Contains(aerr.Message, "run claude-cli once with that model through the Clyde MITM proxy to seed it") {
+		t.Fatalf("message missing seeding instruction: %q", aerr.Message)
+	}
+
+	env := renderedOpenAIEnvelope(t, aerr)
+	if env.Error.Type != "invalid_request_error" {
+		t.Fatalf("rendered type=%q want invalid_request_error", env.Error.Type)
+	}
+	if env.Error.Code != "wire_baseline_unavailable" {
+		t.Fatalf("rendered code=%q want wire_baseline_unavailable", env.Error.Code)
+	}
+	if env.Error.Message != aerr.Message {
+		t.Fatalf("rendered message=%q want %q", env.Error.Message, aerr.Message)
+	}
+}
+
 func TestPrepareAnthropicProviderRequestPreservesOpenAIStreamIntent(t *testing.T) {
 	t.Parallel()
 

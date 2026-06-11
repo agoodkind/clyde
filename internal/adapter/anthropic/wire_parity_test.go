@@ -56,11 +56,13 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 		},
 	}
 
-	_, _, err = cli.StreamEvents(context.Background(), Request{
+	req := Request{
 		Model:     "claude-test",
 		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
 		MaxTokens: 10,
-	}, func(StreamEvent) error { return nil })
+	}
+	req.FeatureVector = testWireFlavorFeatureVector(req.Model, false)
+	_, _, err = cli.StreamEvents(context.Background(), req, func(StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -73,9 +75,9 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load baseline flavors: %v", err)
 	}
-	flavor, ok := selectInteractiveFlavor(loaded)
-	if !ok {
-		t.Fatal("baseline has no interactive flavor")
+	flavor, err := selectInteractiveFlavor(loaded, req.FeatureVector)
+	if err != nil {
+		t.Fatalf("selectInteractiveFlavor: %v", err)
 	}
 
 	if v := got.Get("User-Agent"); v != flavor.UserAgent {
@@ -109,6 +111,26 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	// flavor (fingerprint is inherently per-process).
 	if got.Get("X-Claude-Code-Session-Id") == "" {
 		t.Error("X-Claude-Code-Session-Id missing on outbound")
+	}
+}
+
+func TestFeatureAwareFlavorSelectionMatchesModelBeforeFlags(t *testing.T) {
+	t.Parallel()
+
+	loaded, err := newWireFlavorsLoader().Load(writeTestWireBaseline(t))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	flavor, err := selectInteractiveFlavor(loaded, testWireFlavorFeatureVector(testSonnetModel, false))
+	if err != nil {
+		t.Fatalf("selectInteractiveFlavor: %v", err)
+	}
+	if flavor.Slug != testSonnetFlavorSlug {
+		t.Fatalf("selected slug = %q, want %q", flavor.Slug, testSonnetFlavorSlug)
+	}
+	if flavor.Slug == testFableStandardFlavorSlug || flavor.Slug == testFable1MFlavorSlug {
+		t.Fatalf("sonnet request selected fable flavor %q", flavor.Slug)
 	}
 }
 

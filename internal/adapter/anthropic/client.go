@@ -291,7 +291,7 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 // request with no identity.
 func (c *Client) prepareRequestBody(ctx context.Context, req Request) (WireFlavor, []byte, error) {
 	log := anthropicRequestLog.Logger()
-	flavor, err := c.activeFlavor(req.FeatureVector)
+	flavor, err := c.activeFlavor(featureVectorForRequest(req))
 	if err != nil {
 		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
@@ -706,15 +706,14 @@ type freeHeader struct {
 }
 
 // activeFlavor returns the captured wire flavor we mirror on outbound
-// requests. Today this is the claude-cli interactive flavor; the
-// feature vector is threaded here for request-aware matching without
-// changing selection yet. The flavor is loaded at request time from the
-// daemon-owned MITM baseline so identity drift surfaces in daemon-owned
-// drift checks. There is no compiled-in fallback: a missing or invalid
-// baseline returns [ErrBaselineMissing] or [ErrBaselineInvalid] so the
-// caller can map it to an HTTP 503.
+// requests. The learned claude-cli interactive flavor is selected by
+// the request feature vector captured in the baseline. The flavor is
+// loaded at request time from the daemon-owned MITM baseline so
+// identity drift surfaces in daemon-owned drift checks. There is no
+// compiled-in fallback: a missing, invalid, or unseeded baseline error
+// returns a typed sentinel-bearing error so the caller can map it to an
+// HTTP 503.
 func (c *Client) activeFlavor(featureVector WireFlavorFeatureVector) (WireFlavor, error) {
-	_ = featureVector
 	var zero WireFlavor
 	if c.flavorLoader == nil {
 		c.flavorLoader = newWireFlavorsLoader()
@@ -726,43 +725,27 @@ func (c *Client) activeFlavor(featureVector WireFlavorFeatureVector) (WireFlavor
 		// can map it to an operator-actionable HTTP 503.
 		return zero, err
 	}
-	flavor, ok := selectInteractiveFlavor(flavors)
-	if !ok {
-		slog.Warn("anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"baseline_path", c.cfg.WireBaselinePath,
-		)
-		return zero, fmt.Errorf("%w: no claude-code-interactive flavor in baseline %s", ErrBaselineInvalid, c.cfg.WireBaselinePath)
+	flavor, err := selectInteractiveFlavor(flavors, featureVector)
+	if err != nil {
+		if errors.Is(err, ErrBaselineInvalid) {
+			slog.Warn("anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+				"baseline_path", c.cfg.WireBaselinePath,
+				"model", featureVector.ModelID,
+			)
+		}
+		if errors.Is(err, ErrFlavorUnseeded) {
+			slog.Warn("anthropic.wire_baseline.flavor_unseeded", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+				"baseline_path", c.cfg.WireBaselinePath,
+				"model", featureVector.ModelID,
+				"context_1m", featureVector.Context1M,
+				"thinking_mode", string(featureVector.ThinkingMode),
+				"structured_output_present", featureVector.StructuredOutputPresent,
+				"tools_present", featureVector.ToolsPresent,
+			)
+		}
+		return zero, err
 	}
 	return flavor, nil
-}
-
-// interactiveFlavorSlugPrefix is the slug prefix of the claude-cli
-// interactive caller flavor. The captured baseline can hold several
-// interactive flavors (one per observed claude-cli version); the
-// loader keys them by full slug and the selector picks the
-// lexicographically smallest matching slug, which equals the first
-// entry in the snapshot's slug-sorted order the old generated
-// WireFlavorClaudeCodeInteractive var was assigned from.
-const interactiveFlavorSlugPrefix = "claude-code-interactive"
-
-// selectInteractiveFlavor picks the interactive flavor from the
-// slug-keyed map. It chooses the smallest slug carrying the
-// interactive prefix so selection is deterministic across reloads.
-func selectInteractiveFlavor(flavors map[string]WireFlavor) (WireFlavor, bool) {
-	best := ""
-	for slug := range flavors {
-		if !strings.HasPrefix(slug, interactiveFlavorSlugPrefix) {
-			continue
-		}
-		if best == "" || slug < best {
-			best = slug
-		}
-	}
-	if best == "" {
-		var zero WireFlavor
-		return zero, false
-	}
-	return flavors[best], true
 }
 
 // freeIdentityHeaders returns the per-request identity headers that

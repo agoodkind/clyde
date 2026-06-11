@@ -68,7 +68,7 @@ func TestLoaderSkipsFlavorsMissingIdentityHeaders(t *testing.T) {
 	if _, ok := flavors["claude-code-other-10274fff"]; ok {
 		t.Fatal("incomplete flavor must be skipped, not projected")
 	}
-	flavor, ok := selectInteractiveFlavor(flavors)
+	flavor, ok := flavors["claude-code-interactive-17c1f069"]
 	if !ok {
 		t.Fatal("interactive flavor missing from loaded map")
 	}
@@ -102,9 +102,15 @@ func TestLoaderProjectsFeatureVectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	flavor, ok := selectInteractiveFlavor(flavors)
-	if !ok {
-		t.Fatal("interactive flavor missing from loaded map")
+	flavor, err := selectInteractiveFlavor(flavors, WireFlavorFeatureVector{
+		ModelID:                 "claude-opus-4-20250514",
+		Context1M:               true,
+		ThinkingMode:            WireFlavorThinkingEnabled,
+		StructuredOutputPresent: true,
+		ToolsPresent:            true,
+	})
+	if err != nil {
+		t.Fatalf("selectInteractiveFlavor: %v", err)
 	}
 	if len(flavor.FeatureVectors) != 2 {
 		t.Fatalf("FeatureVectors len = %d, want 2", len(flavor.FeatureVectors))
@@ -153,7 +159,7 @@ func TestLoaderProjectsMissingFeatureVectorsAsZeroValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	flavor, ok := selectInteractiveFlavor(flavors)
+	flavor, ok := flavors["claude-code-interactive-17c1f069"]
 	if !ok {
 		t.Fatal("interactive flavor missing from loaded map")
 	}

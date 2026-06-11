@@ -7,11 +7,27 @@ import (
 	"goodkind.io/clyde/internal/mitm"
 )
 
+const (
+	testDefaultModel            = "claude-test"
+	testSonnetModel             = "claude-sonnet-4-5-20250929"
+	testFableModel              = "claude-fable-4-20250514"
+	testOpusModel               = "claude-opus-4-20250514"
+	testStandardBetaHeader      = "claude-code-20250219,oauth-2025-04-20"
+	testContext1MBeta           = "context-1m-2025-08-07"
+	testContext1MBetaHeader     = testStandardBetaHeader + "," + testContext1MBeta
+	testDefaultFlavorSlug       = "claude-code-interactive-default-17c1f069"
+	testSonnetFlavorSlug        = "claude-code-interactive-sonnet-200k"
+	testFableStandardFlavorSlug = "claude-code-interactive-fable-200k"
+	testFable1MFlavorSlug       = "claude-code-interactive-fable-1m"
+	testOpus1MFlavorSlug        = "claude-code-interactive-opus-1m"
+)
+
 // writeTestWireBaseline writes a minimal but realistic v2 MITM baseline
-// to a temp dir and returns its path. The baseline carries one
-// interactive flavor (the one the client selects) and one probe flavor
-// so tests exercise the slug-keyed selection. There is no committed
-// default TOML: every test seeds its own baseline through the real
+// to a temp dir and returns its path. The baseline carries learned
+// interactive flavors for several model and context combinations plus
+// one probe flavor, so tests exercise feature-aware selection. There
+// is no committed default TOML: every test seeds its own baseline
+// through the real
 // [mitm.WriteSnapshotV2TOML] writer and loads it back through
 // [WireFlavorsLoader], the same path production uses.
 func writeTestWireBaseline(t *testing.T) string {
@@ -27,17 +43,21 @@ func writeTestWireBaseline(t *testing.T) string {
 func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
 	t.Helper()
 	dir := t.TempDir()
-	interactive := testInteractiveFlavorShape()
-	interactive.BillingAttestation = cch
+	defaultFlavor := testInteractiveFlavorShapeForModel(testDefaultFlavorSlug, testDefaultModel, testStandardBetaHeader, false)
+	defaultFlavor.BillingAttestation = cch
 	snap := mitm.SnapshotV2{
 		Upstream: mitm.V2Upstream{
 			Name:        "claude-code",
 			Version:     "",
 			CapturedAt:  "2026-04-30T04:30:53Z",
-			RecordCount: 4,
+			RecordCount: 8,
 		},
 		Flavors: []mitm.FlavorShape{
-			interactive,
+			defaultFlavor,
+			testInteractiveFlavorShapeForModel(testSonnetFlavorSlug, testSonnetModel, testStandardBetaHeader, false),
+			testInteractiveFlavorShapeForModel(testFableStandardFlavorSlug, testFableModel, testStandardBetaHeader, false),
+			testInteractiveFlavorShapeForModel(testFable1MFlavorSlug, testFableModel, testContext1MBetaHeader, true),
+			testInteractiveFlavorShapeForModel(testOpus1MFlavorSlug, testOpusModel, testContext1MBetaHeader, true),
 			testProbeFlavorShape(),
 		},
 	}
@@ -52,17 +72,27 @@ func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
 }
 
 func testInteractiveFlavorShape() mitm.FlavorShape {
+	return testInteractiveFlavorShapeWithBeta("claude-code-interactive-17c1f069", testStandardBetaHeader)
+}
+
+func testInteractiveFlavorShapeForModel(slug string, model string, betaHeader string, context1M bool) mitm.FlavorShape {
+	shape := testInteractiveFlavorShapeWithBeta(slug, betaHeader)
+	shape.FeatureVectors = []mitm.RequestFeatures{testRequestFeatures(model, context1M)}
+	return shape
+}
+
+func testInteractiveFlavorShapeWithBeta(slug string, betaHeader string) mitm.FlavorShape {
 	return mitm.FlavorShape{
-		Slug:        "claude-code-interactive-17c1f069",
+		Slug:        slug,
 		RecordCount: 1,
 		Methods:     []string{"POST"},
 		Paths:       []string{"/v1/messages"},
 		Signature: mitm.V2Signature{
 			UserAgent:       "claude-cli/2.1.123 (external, sdk-cli)",
-			BetaFingerprint: "claude-code-20250219,oauth-2025-04-20",
+			BetaFingerprint: betaHeader,
 			BodyKeys:        []string{"max_tokens", "messages", "metadata", "model", "stream", "system"},
 		},
-		Headers: testInteractiveFlavorHeaders(),
+		Headers: testInteractiveFlavorHeadersWithBeta(betaHeader),
 		Body: mitm.V2Body{
 			BodyType: "object",
 			Fields: []mitm.V2Field{
@@ -76,6 +106,10 @@ func testInteractiveFlavorShape() mitm.FlavorShape {
 }
 
 func testInteractiveFlavorHeaders() []mitm.V2Header {
+	return testInteractiveFlavorHeadersWithBeta(testStandardBetaHeader)
+}
+
+func testInteractiveFlavorHeadersWithBeta(betaHeader string) []mitm.V2Header {
 	constant := func(name, value string) mitm.V2Header {
 		return mitm.V2Header{
 			Name:           name,
@@ -88,7 +122,7 @@ func testInteractiveFlavorHeaders() []mitm.V2Header {
 	return []mitm.V2Header{
 		constant("user-agent", "claude-cli/2.1.123 (external, sdk-cli)"),
 		constant("anthropic-version", "2023-06-01"),
-		constant("anthropic-beta", "claude-code-20250219,oauth-2025-04-20"),
+		constant("anthropic-beta", betaHeader),
 		constant("anthropic-dangerous-direct-browser-access", "true"),
 		constant("x-app", "cli"),
 		constant("x-stainless-arch", "arm64"),
@@ -104,6 +138,26 @@ func testInteractiveFlavorHeaders() []mitm.V2Header {
 		// exclusion path.
 		constant("authorization", "<redacted>"),
 		constant("x-claude-code-session-id", "abc-123"),
+	}
+}
+
+func testRequestFeatures(model string, context1M bool) mitm.RequestFeatures {
+	return mitm.RequestFeatures{
+		ModelID:                 model,
+		Context1M:               context1M,
+		ThinkingMode:            mitm.RequestThinkingNone,
+		StructuredOutputPresent: false,
+		ToolsPresent:            false,
+	}
+}
+
+func testWireFlavorFeatureVector(model string, context1M bool) WireFlavorFeatureVector {
+	return WireFlavorFeatureVector{
+		ModelID:                 model,
+		Context1M:               context1M,
+		ThinkingMode:            WireFlavorThinkingNone,
+		StructuredOutputPresent: false,
+		ToolsPresent:            false,
 	}
 }
 
