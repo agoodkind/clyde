@@ -32,12 +32,16 @@ func (WsSessionMeta) IsLivetrackMeta() {}
 // wsSessionKind is the livetrack session kind for Codex websocket sessions.
 const wsSessionKind = "adapter.codex.ws_session"
 
-// NewWsSessionRegistry constructs the per-daemon registry that tracks
-// every live Codex websocket connection. Drain is called from
-// Provider.DrainSessions so the daemon reload deadline force-closes
-// any session the cache still holds.
-func NewWsSessionRegistry() *livetrack.Registry[WsSessionMeta] {
-	return livetrack.New[WsSessionMeta](livetrack.Options[WsSessionMeta]{
+// NewWsSessionRegistry constructs the per-daemon registry that tracks every
+// live Codex websocket connection, attached to the daemon lifecycle group as a
+// quiet-relevant PhaseEgress member so the reload deadline force-closes any
+// session the cache still holds and an active session holds quiet.
+func NewWsSessionRegistry(group *livetrack.Group) *livetrack.Registry[WsSessionMeta] {
+	return livetrack.Attach[WsSessionMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseEgress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[WsSessionMeta]{
 		Component:     "adapter.codex",
 		Concern:       "adapter.providers.codex.session-reuse",
 		Log:           nil,

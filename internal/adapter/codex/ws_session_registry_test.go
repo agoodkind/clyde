@@ -29,7 +29,7 @@ func (c *callRecordingCloser) Close(reason string) error {
 //     yields the same behavioral outcome as the legacy path.
 func TestWsSessionCacheRegistryParity(t *testing.T) {
 	t.Parallel()
-	reg := NewWsSessionRegistry()
+	reg := NewWsSessionRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	cache := NewWebsocketSessionCache(nil, time.Minute, reg)
 	ctx := context.Background()
 
@@ -60,7 +60,7 @@ func TestWsSessionCacheRegistryParity(t *testing.T) {
 
 func TestWsSessionCacheCloseAllUsesRegistry(t *testing.T) {
 	t.Parallel()
-	reg := NewWsSessionRegistry()
+	reg := NewWsSessionRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	cache := NewWebsocketSessionCache(nil, time.Minute, reg)
 	ctx := context.Background()
 
@@ -111,7 +111,7 @@ func TestWsSessionCacheCloseAllLegacyPathNoRegistry(t *testing.T) {
 // previous CloseAll-based shutdown now goes through ForceCloseMatching.
 func TestWsSessionRegistryForceCloseMatchingBehavior(t *testing.T) {
 	t.Parallel()
-	reg := NewWsSessionRegistry()
+	reg := NewWsSessionRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 
 	sess := &WebsocketSession{
 		ConversationID: "conv-force",

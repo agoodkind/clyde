@@ -47,12 +47,16 @@ const egressSessionKindWebsocket = "adapter.egress.websocket"
 // parent egress session.
 const egressSessionKindAttempt = "adapter.egress.attempt"
 
-// newEgressRegistry constructs the shared adapter egress registry. The
-// registry is constructed once per daemon generation; Drain is called
-// from Server.Shutdown so every in-flight outbound provider call
-// participates in the reload deadline.
-func newEgressRegistry() *livetrack.Registry[EgressMeta] {
-	return livetrack.New[EgressMeta](livetrack.Options[EgressMeta]{
+// newEgressRegistry constructs the shared adapter egress registry, attached to
+// the daemon lifecycle group as a quiet-relevant PhaseEgress member so every
+// in-flight outbound provider call participates in the reload deadline and
+// holds quiet until it completes.
+func newEgressRegistry(group *livetrack.Group) *livetrack.Registry[EgressMeta] {
+	return livetrack.Attach[EgressMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseEgress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[EgressMeta]{
 		Component:     "adapter.egress",
 		Concern:       "adapter.providers",
 		Log:           nil,

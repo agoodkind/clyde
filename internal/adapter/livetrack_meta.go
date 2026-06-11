@@ -59,12 +59,17 @@ func (c ingressConnCloser) Close(reason string) error {
 	return nil
 }
 
-// newAdapterIngressRegistry constructs the per-Server [livetrack.Registry]
-// for ingress request sessions. Component and Concern match the
-// adapter's slog routing so ingress lifecycle events land in the
-// correct concern log file.
-func newAdapterIngressRegistry(log *slog.Logger) *livetrack.Registry[IngressMeta] {
-	return livetrack.New[IngressMeta](livetrack.Options[IngressMeta]{
+// newAdapterIngressRegistry constructs the per-Server [livetrack.Registry] for
+// ingress request sessions, attached to the daemon lifecycle group as a
+// quiet-relevant PhaseIngress member so reload defers to in-flight requests and
+// Quiesce drains them first. Component and Concern match the adapter's slog
+// routing so ingress lifecycle events land in the correct concern log file.
+func newAdapterIngressRegistry(group *livetrack.Group, log *slog.Logger) *livetrack.Registry[IngressMeta] {
+	return livetrack.Attach[IngressMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[IngressMeta]{
 		Component:     "adapter",
 		Concern:       slogger.ConcernAdapterHTTPIngress,
 		Log:           log,

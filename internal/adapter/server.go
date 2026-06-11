@@ -129,8 +129,15 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		return nil, err
 	}
 	adapterLog := log.With("subcomponent", "adapter")
-	egressReg := newEgressRegistry()
-	wsReg := adaptercodex.NewWsSessionRegistry()
+	// The daemon supplies the real lifecycle group; isolated adapter tests pass
+	// a nil Group, so fall back to a throwaway group here. This keeps Attach the
+	// only registry-construction path while leaving test wiring untouched.
+	group := deps.Group
+	if group == nil {
+		group = livetrack.NewGroup(livetrack.GroupOptions{Log: adapterLog})
+	}
+	egressReg := newEgressRegistry(group)
+	wsReg := adaptercodex.NewWsSessionRegistry(group)
 	s := &Server{
 		cfg:      cfg,
 		logprobs: cfg.Logprobs,
@@ -149,7 +156,7 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 		token:          token,
 		mux:            nil,
 		httpSrv:        nil,
-		requests:       newAdapterIngressRegistry(adapterLog),
+		requests:       newAdapterIngressRegistry(group, adapterLog),
 		anthr:          nil,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,

@@ -4,6 +4,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm/capture"
 )
 
@@ -48,6 +49,11 @@ type Deps struct {
 	// mitm/capture.db without routing through the MITM proxy. A nil store
 	// disables egress recording.
 	CaptureStore *capture.Store
+	// Group is the daemon lifecycle group the adapter attaches its ingress,
+	// egress, and codex websocket session registries to. The daemon sets the
+	// real group; when nil (isolated adapter tests), New constructs a throwaway
+	// group so Attach stays the only registry-construction path.
+	Group *livetrack.Group
 }
 
 func (d Deps) authForProvider(id adapterresolver.ProviderID) adapterprovider.AuthLookup {

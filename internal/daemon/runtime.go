@@ -109,7 +109,7 @@ func startRuntime(
 		return nil, fmt.Errorf("mitm listener inherited but mitm is disabled; full daemon restart required")
 	}
 	if cfg.Adapter.Enabled {
-		server, adapterListener, adapterCursorListener, err := startAdapter(ctx, cfg, log, stats, runtime.captureStore, runtime.errors, inherited.listeners[listenerNameAdapter], inherited.listeners[listenerNameAdapterCursor])
+		server, adapterListener, adapterCursorListener, err := startAdapter(ctx, cfg, log, stats, runtime.captureStore, runtime.group, runtime.errors, inherited.listeners[listenerNameAdapter], inherited.listeners[listenerNameAdapterCursor])
 		if err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
 			return nil, err
@@ -246,6 +246,7 @@ func startAdapter(
 	log *slog.Logger,
 	stats *providerStatsRecorder,
 	store *capture.Store,
+	group *livetrack.Group,
 	errCh chan<- error,
 	inherited net.Listener,
 	inheritedCursor net.Listener,
@@ -258,6 +259,7 @@ func startAdapter(
 		AnthropicWireBaselinePath: mitmAnthropicWireBaselinePath(cfg),
 		CodexWireBaselinePath:     mitmCodexWireBaselinePath(cfg),
 		CaptureStore:              store,
+		Group:                     group,
 	}
 	server, err := adapter.New(ctx, cfg.Adapter, cfg.Logging, deps, log)
 	if err != nil {

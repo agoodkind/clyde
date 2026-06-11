@@ -22,7 +22,7 @@ func (f *fakeCloser) Close(reason string) error {
 
 func TestRegisterEgressRegistersAndReleasesSession(t *testing.T) {
 	t.Parallel()
-	reg := newEgressRegistry()
+	reg := newEgressRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	ctx := context.Background()
 
 	egressCtx, sess, release := registerEgress(ctx, reg, egressSessionKindHTTP, EgressMeta{
@@ -78,7 +78,7 @@ func TestRegisterEgressNilRegistryIsNoop(t *testing.T) {
 
 func TestRegisterEgressForceCloseViaContextCancel(t *testing.T) {
 	t.Parallel()
-	reg := newEgressRegistry()
+	reg := newEgressRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	ctx := context.Background()
 
 	// Register a session. The closer cancels the context.
@@ -112,7 +112,7 @@ func TestRegisterEgressForceCloseViaContextCancel(t *testing.T) {
 
 func TestRegisterEgressRetryAttemptParentLinkage(t *testing.T) {
 	t.Parallel()
-	reg := newEgressRegistry()
+	reg := newEgressRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	ctx := context.Background()
 
 	// Register the parent egress session.
