@@ -291,7 +291,7 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 // request with no identity.
 func (c *Client) prepareRequestBody(ctx context.Context, req Request) (WireFlavor, []byte, error) {
 	log := anthropicRequestLog.Logger()
-	flavor, err := c.activeFlavor()
+	flavor, err := c.activeFlavor(req.FeatureVector)
 	if err != nil {
 		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
@@ -706,14 +706,15 @@ type freeHeader struct {
 }
 
 // activeFlavor returns the captured wire flavor we mirror on outbound
-// requests. Today this is the claude-cli interactive flavor; future
-// work can pick a flavor per caller shape (e.g. a probe flavor for
-// short non-streaming requests). The flavor is loaded at request time
-// from the daemon-owned MITM baseline so identity drift surfaces in
-// daemon-owned drift checks. There is no compiled-in fallback: a
-// missing or invalid baseline returns [ErrBaselineMissing] or
-// [ErrBaselineInvalid] so the caller can map it to an HTTP 503.
-func (c *Client) activeFlavor() (WireFlavor, error) {
+// requests. Today this is the claude-cli interactive flavor; the
+// feature vector is threaded here for request-aware matching without
+// changing selection yet. The flavor is loaded at request time from the
+// daemon-owned MITM baseline so identity drift surfaces in daemon-owned
+// drift checks. There is no compiled-in fallback: a missing or invalid
+// baseline returns [ErrBaselineMissing] or [ErrBaselineInvalid] so the
+// caller can map it to an HTTP 503.
+func (c *Client) activeFlavor(featureVector WireFlavorFeatureVector) (WireFlavor, error) {
+	_ = featureVector
 	var zero WireFlavor
 	if c.flavorLoader == nil {
 		c.flavorLoader = newWireFlavorsLoader()

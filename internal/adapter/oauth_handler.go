@@ -43,6 +43,7 @@ func (s *Server) buildAnthropicWire(ctx context.Context, req ChatRequest, resolv
 		PromptCacheScope:                s.cfg.ClientIdentity.PromptCacheScope,
 		ToolResultCacheReferenceEnabled: s.cfg.Anthropic.OAuth.ToolResultCacheReferenceEnabled,
 		PerContextBetas:                 s.cfg.ClientIdentity.PerContextBetas,
+		StructuredOutputPresent:         jsonSpec.Mode != "",
 		Identity:                        s.anthropicIdentity(req),
 		InboundThinkingMaterialization:  adapterrender.MaterializationStrategy(s.cfg.Anthropic.Reasoning.ResolvedInboundThinking()),
 		Logger:                          s.log,

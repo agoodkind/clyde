@@ -317,6 +317,9 @@ type Request struct {
 	// outbound anthropic-beta header. Use for per-model / per-request
 	// flags the static config does not already include. Not serialized.
 	ExtraBetas []string `json:"-"`
+	// FeatureVector carries the resolved request features used for
+	// learned wire flavor matching. Not serialized.
+	FeatureVector WireFlavorFeatureVector `json:"-"`
 }
 
 // UnmarshalJSON is part of Clyde's typed adapter surface.
