@@ -341,6 +341,7 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 		Slug:        slug,
 		Signature:   V2Signature(sig),
 		RecordCount: len(requests), Methods: nil, Paths: nil, Headers: nil, Body: V2Body{BodyType: "", Fields: nil},
+		FeatureVectors:     nil,
 		BillingAttestation: "",
 	}
 
@@ -400,8 +401,95 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 		flav.Body.Fields = append(flav.Body.Fields, acc.materialize(name, len(requests)))
 	}
 	sort.Slice(flav.Body.Fields, func(i, j int) bool { return flav.Body.Fields[i].Name < flav.Body.Fields[j].Name })
+	flav.FeatureVectors = observedRequestFeatureVectors(requests)
 
 	return flav
+}
+
+func observedRequestFeatureVectors(requests []rawRequest) []RequestFeatures {
+	observed := make(map[RequestFeatures]bool, len(requests))
+	for _, req := range requests {
+		features, ok := requestFeaturesFromRawRequest(req)
+		if !ok {
+			continue
+		}
+		observed[features] = true
+	}
+	out := make([]RequestFeatures, 0, len(observed))
+	for features := range observed {
+		out = append(out, features)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return requestFeaturesLess(out[i], out[j])
+	})
+	return out
+}
+
+func requestFeaturesFromRawRequest(req rawRequest) (RequestFeatures, bool) {
+	if req.record.RequestFeatures != nil {
+		features := *req.record.RequestFeatures
+		return features, requestFeaturesUsable(features)
+	}
+	body := req.fields["request_body"]
+	if requestBodyIsCaptureSummary(body) {
+		return emptyRequestFeatures(), false
+	}
+	features, err := ExtractRequestFeatures(CapturedRequest{
+		RequestHeaders: requestHeaderMap(req.fields),
+		RequestBody:    body,
+	})
+	if err != nil || !requestFeaturesUsable(features) {
+		return emptyRequestFeatures(), false
+	}
+	return features, true
+}
+
+func emptyRequestFeatures() RequestFeatures {
+	return RequestFeatures{
+		ModelID:                 "",
+		Context1M:               false,
+		ThinkingMode:            "",
+		StructuredOutputPresent: false,
+		ToolsPresent:            false,
+	}
+}
+
+func requestFeaturesUsable(features RequestFeatures) bool {
+	return strings.TrimSpace(features.ModelID) != ""
+}
+
+func requestBodyIsCaptureSummary(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace([]byte(raw))
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+	fields := rawCaptureFields{}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	_, hasKeys := fields["keys"]
+	_, hasBodyType := fields["body_type"]
+	_, hasMode := fields["mode"]
+	return hasKeys && (hasBodyType || hasMode)
+}
+
+func requestFeaturesLess(left RequestFeatures, right RequestFeatures) bool {
+	if left.ModelID != right.ModelID {
+		return left.ModelID < right.ModelID
+	}
+	if left.Context1M != right.Context1M {
+		return !left.Context1M && right.Context1M
+	}
+	if left.ThinkingMode != right.ThinkingMode {
+		return left.ThinkingMode < right.ThinkingMode
+	}
+	if left.StructuredOutputPresent != right.StructuredOutputPresent {
+		return !left.StructuredOutputPresent && right.StructuredOutputPresent
+	}
+	if left.ToolsPresent != right.ToolsPresent {
+		return !left.ToolsPresent && right.ToolsPresent
+	}
+	return false
 }
 
 // stringFromRaw decodes a JSON-encoded string. Returns "" when the

@@ -36,6 +36,9 @@ type FlavorShape struct {
 	Paths       []string    `toml:"paths" json:"paths"`
 	Headers     []V2Header  `toml:"headers" json:"headers"`
 	Body        V2Body      `toml:"body" json:"body"`
+	// FeatureVectors records the distinct request feature vectors observed for
+	// this flavor across captured drift records.
+	FeatureVectors []RequestFeatures `toml:"feature_vectors,omitempty" json:"feature_vectors,omitempty"`
 	// BillingAttestation carries the claude-code `cch=<value>`
 	// attestation token observed across this flavor's drift records.
 	// It is empty for codex flavors, whose attestation rides through

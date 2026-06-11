@@ -27,11 +27,11 @@ const (
 // RequestFeatures is the request-side feature vector used to choose a learned
 // upstream beta flavor.
 type RequestFeatures struct {
-	ModelID                 string
-	Context1M               bool
-	ThinkingMode            RequestThinkingMode
-	StructuredOutputPresent bool
-	ToolsPresent            bool
+	ModelID                 string              `toml:"model_id" json:"model_id"`
+	Context1M               bool                `toml:"context_1m" json:"context_1m"`
+	ThinkingMode            RequestThinkingMode `toml:"thinking_mode" json:"thinking_mode"`
+	StructuredOutputPresent bool                `toml:"structured_output_present" json:"structured_output_present"`
+	ToolsPresent            bool                `toml:"tools_present" json:"tools_present"`
 }
 
 // CapturedRequest is the request-header and request-body subset needed for
