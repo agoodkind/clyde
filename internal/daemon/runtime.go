@@ -16,6 +16,7 @@ import (
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	searchstore "goodkind.io/clyde/internal/search/store"
@@ -53,6 +54,10 @@ type runtimeServices struct {
 	// configWatcher watches the config file and triggers an automatic reload
 	// when it changes. It is nil when config auto-reload has not started.
 	configWatcher *configWatcher
+	// group is the single lifecycle plan every long-lived registry attaches to.
+	// Quiesce drives reload and shutdown drains; AwaitQuiet backs the watcher's
+	// quiet-wait. Constructed in startRuntime before any subsystem.
+	group *livetrack.Group
 }
 
 type inheritedRuntime struct {
@@ -92,6 +97,7 @@ func startRuntime(
 		reloadMu:              sync.Mutex{},
 		reloadDrain:           nil,
 		configWatcher:         nil,
+		group:                 newLifecycleGroup(log),
 	}
 	if cfg.MITM.EnabledDefault {
 		if err := startMITM(ctx, cfg, log, runtime, inherited.listeners); err != nil {
