@@ -87,7 +87,11 @@ func newConfigWatcher(log *slog.Logger, baselineHash string, runtime *runtimeSer
 		debounce:     configReloadDebounce,
 		baselineHash: baselineHash,
 		cancel:       nil,
-		registry: livetrack.New[configWatcherMeta](livetrack.Options[configWatcherMeta]{
+		registry: livetrack.Attach[configWatcherMeta](runtime.group, livetrack.MemberSpec{
+			Phase:         livetrack.PhaseWorkers,
+			QuietRelevant: false,
+			CancelNoWait:  true,
+		}, livetrack.Options[configWatcherMeta]{
 			Component:     "daemon",
 			Concern:       slogger.ConcernProcessDaemonConfig,
 			Log:           log,

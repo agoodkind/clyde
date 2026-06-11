@@ -132,11 +132,21 @@ type SearchJobManager struct {
 // NewSearchJobManager constructs a manager. Background jobs run under contexts
 // derived with [context.WithoutCancel] from the request that started them, so a
 // job outlives the RPC that kicked it off.
-func NewSearchJobManager(index *Index, store *searchstore.Store, cfg config.SearchConfig, log *slog.Logger, semantic WithinSearchClient, semanticCollectionID string) *SearchJobManager {
+func NewSearchJobManager(index *Index, store *searchstore.Store, cfg config.SearchConfig, log *slog.Logger, semantic WithinSearchClient, semanticCollectionID string, group *livetrack.Group) *SearchJobManager {
 	if log == nil {
 		log = slog.Default()
 	}
-	registry := livetrack.New[SearchJobMeta](livetrack.Options[SearchJobMeta]{
+	if group == nil {
+		group = livetrack.NewGroup(livetrack.GroupOptions{Log: log})
+	}
+	// Search jobs attach as a non-quiet-relevant PhaseWorkers member: background
+	// jobs are internal restartable work, so they must not hold a reload to its
+	// quiet max-wait, but they still drain in the workers phase on reload.
+	registry := livetrack.Attach[SearchJobMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseWorkers,
+		QuietRelevant: false,
+		CancelNoWait:  false,
+	}, livetrack.Options[SearchJobMeta]{
 		Component:     "conversation",
 		Concern:       "conversation.search",
 		Log:           log,

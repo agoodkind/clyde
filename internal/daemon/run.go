@@ -101,7 +101,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
 	withinSearch, withinCollectionID := withinSearchWiring(cfg, runtime)
-	searchJobs := conversation.NewSearchJobManager(conversationIndex, runtime.searchStore, cfg.Search, log, withinSearch, withinCollectionID)
+	searchJobs := conversation.NewSearchJobManager(conversationIndex, runtime.searchStore, cfg.Search, log, withinSearch, withinCollectionID, runtime.group)
 	runtime.searchJobs = searchJobs
 
 	grpcServer := grpc.NewServer()
