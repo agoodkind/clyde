@@ -98,13 +98,6 @@ Existing loose types are technical debt, not precedent. When touching a loose su
 
 Write tests alongside behavior changes when practical. Cover success and error paths, keep tests independent, and use descriptive test names.
 
-Common checks include:
-
-- `make test`
-- `make lint`
-- `make fmt` followed by `git diff --exit-code`
-- `make build`
-
 ### Failing make steps
 
 If any step of a `make` target fails, fix the underlying code, test, configuration, or documentation honestly and truthfully.
