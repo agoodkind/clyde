@@ -130,7 +130,6 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	}
 	out.SystemBlocks = sysBlocks
 
-	out.ExtraBetas = DerivePerRequestBetas(resolved, cfg.PerContextBetas)
 	// Note: claude-cli does NOT send fine-grained-tool-streaming-2025-05-14
 	// (verified against the local Claude Code MITM baseline). The flavor's
 	// beta header is the canonical set; do not append it here.

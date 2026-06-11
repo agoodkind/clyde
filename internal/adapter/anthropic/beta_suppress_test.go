@@ -11,7 +11,7 @@ import (
 func TestSuppressBetaFlagsRemovesNamedFlagPreservingOrder(t *testing.T) {
 	t.Parallel()
 	const beta = "oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,claude-code-20250219"
-	got, removed := suppressBetaFlags(beta, []string{"thinking-token-count-2026-05-13"})
+	got, removed := suppressBetaFlags(beta, []betaFlag{thinkingTokenCountBetaFlag})
 	want := "oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,claude-code-20250219"
 	if got != want {
 		t.Fatalf("suppressBetaFlags=%q want %q", got, want)
@@ -26,7 +26,7 @@ func TestSuppressBetaFlagsRemovesNamedFlagPreservingOrder(t *testing.T) {
 func TestSuppressBetaFlagsCaseInsensitiveAndMultiple(t *testing.T) {
 	t.Parallel()
 	const beta = "a-flag,B-Flag,c-flag"
-	got, removed := suppressBetaFlags(beta, []string{"b-flag", "C-FLAG"})
+	got, removed := suppressBetaFlags(beta, []betaFlag{"b-flag", "C-FLAG"})
 	if got != "a-flag" {
 		t.Fatalf("suppressBetaFlags=%q want %q", got, "a-flag")
 	}
@@ -40,7 +40,7 @@ func TestSuppressBetaFlagsCaseInsensitiveAndMultiple(t *testing.T) {
 func TestSuppressBetaFlagsAbsentFlagIsNoOp(t *testing.T) {
 	t.Parallel()
 	const beta = "oauth-2025-04-20,claude-code-20250219"
-	got, removed := suppressBetaFlags(beta, []string{"not-present-2099-01-01"})
+	got, removed := suppressBetaFlags(beta, []betaFlag{"not-present-2099-01-01"})
 	if got != beta {
 		t.Fatalf("suppressBetaFlags=%q want unchanged %q", got, beta)
 	}
@@ -53,7 +53,7 @@ func TestSuppressBetaFlagsAbsentFlagIsNoOp(t *testing.T) {
 // empty-suppress fast paths.
 func TestSuppressBetaFlagsEmptyInputsAreNoOps(t *testing.T) {
 	t.Parallel()
-	if got, removed := suppressBetaFlags("", []string{"x"}); got != "" || removed != nil {
+	if got, removed := suppressBetaFlags("", []betaFlag{"x"}); got != "" || removed != nil {
 		t.Fatalf("empty beta: got=%q removed=%v", got, removed)
 	}
 	if got, removed := suppressBetaFlags("a,b", nil); got != "a,b" || removed != nil {

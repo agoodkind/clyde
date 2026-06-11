@@ -405,7 +405,7 @@ func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	}
 }
 
-func TestBuildRequestOmitsFineGrainedToolStreamingBeta(t *testing.T) {
+func TestBuildRequestDoesNotPopulateExtraBetas(t *testing.T) {
 	// CLYDE-124: claude-cli does NOT send fine-grained-tool-streaming
 	// even on streaming + tools requests. The captured reference at
 	// research/claude-code/snapshots/latest/reference.toml proves this.
@@ -425,15 +425,17 @@ func TestBuildRequestOmitsFineGrainedToolStreamingBeta(t *testing.T) {
 		ClaudeModel:     "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
+	cfg := requestBuilderConfig()
+	cfg.PerContextBetas = map[string]string{
+		"opus-4-7": "context-1m-2025-08-07",
+	}
 
-	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
+	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
-	for _, beta := range out.ExtraBetas {
-		if beta == FineGrainedToolStreamingBeta {
-			t.Fatalf("ExtraBetas=%v unexpectedly contains %q (claude-cli does not send it)", out.ExtraBetas, FineGrainedToolStreamingBeta)
-		}
+	if len(out.ExtraBetas) != 0 {
+		t.Fatalf("ExtraBetas=%v want empty", out.ExtraBetas)
 	}
 }
 

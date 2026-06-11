@@ -134,10 +134,46 @@ func TestFeatureAwareFlavorSelectionMatchesModelBeforeFlags(t *testing.T) {
 	}
 }
 
-// TestOutboundHeadersAllowConfigOverride confirms that
-// cfg.ClientIdentity.* overrides still take effect when set, so
-// operators can iterate without re-seeding the MITM baseline.
-func TestOutboundHeadersAllowConfigOverride(t *testing.T) {
+func TestOutboundBetaHeaderStripsThinkingRedactionFlags(t *testing.T) {
+	t.Parallel()
+
+	cli := &Client{
+		http:         &http.Client{},
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
+		cfg: Config{
+			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
+			OAuthAnthropicVersion: "2023-06-01",
+			BetaHeader:            "override-beta-flag",
+			BetaSuppress:          []string{"context-management-2025-06-27"},
+		},
+	}
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cli.cfg.MessagesURL, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flavor := WireFlavor{
+		Slug:             "test-redaction-strip",
+		UserAgent:        "claude-cli/2.1.123 (external, sdk-cli)",
+		AnthropicVersion: "2023-06-01",
+		AnthropicBeta:    "oauth-2025-04-20,Thinking-Token-Count-2026-05-13,context-management-2025-06-27,Redact-Thinking-2026-02-12,claude-code-20250219",
+	}
+	req := Request{
+		Model:      "claude-test",
+		ExtraBetas: []string{"extra-beta-flag"},
+	}
+
+	cli.applyMessagesHeaders(httpReq, req, "tok", flavor)
+
+	want := "oauth-2025-04-20,context-management-2025-06-27,claude-code-20250219"
+	if got := httpReq.Header.Get("Anthropic-Beta"); got != want {
+		t.Fatalf("Anthropic-Beta = %q, want %q", got, want)
+	}
+}
+
+// TestOutboundHeadersAllowNonBetaConfigOverride confirms that
+// non-beta cfg.ClientIdentity.* overrides still take effect when set.
+func TestOutboundHeadersAllowNonBetaConfigOverride(t *testing.T) {
 	t.Parallel()
 
 	var captured atomic.Pointer[http.Header]
@@ -171,11 +207,13 @@ func TestOutboundHeadersAllowConfigOverride(t *testing.T) {
 		},
 	}
 
-	_, _, err = cli.StreamEvents(context.Background(), Request{
+	req := Request{
 		Model:     "claude-test",
 		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
 		MaxTokens: 10,
-	}, func(StreamEvent) error { return nil })
+	}
+	req.FeatureVector = testWireFlavorFeatureVector(req.Model, false)
+	_, _, err = cli.StreamEvents(context.Background(), req, func(StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -186,7 +224,6 @@ func TestOutboundHeadersAllowConfigOverride(t *testing.T) {
 	}
 	wants := map[string]string{
 		"User-Agent":                  "override-cli/9.9.9 (test)",
-		"anthropic-beta":              "override-beta-flag",
 		"X-Stainless-Package-Version": "override-pkg",
 		"X-Stainless-Runtime":         "override-runtime",
 		"X-Stainless-Runtime-Version": "override-runtime-version",
@@ -195,5 +232,8 @@ func TestOutboundHeadersAllowConfigOverride(t *testing.T) {
 		if v := got.Get(name); v != want {
 			t.Errorf("%s = %q, want %q", name, v, want)
 		}
+	}
+	if v := got.Get("anthropic-beta"); v != testStandardBetaHeader {
+		t.Errorf("anthropic-beta = %q, want selected flavor beta %q", v, testStandardBetaHeader)
 	}
 }

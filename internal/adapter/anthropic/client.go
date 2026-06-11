@@ -22,6 +22,18 @@ import (
 	"goodkind.io/clyde/internal/clock"
 )
 
+type betaFlag string
+
+const (
+	thinkingTokenCountBetaFlag betaFlag = "thinking-token-count-2026-05-13"
+	redactThinkingBetaFlag     betaFlag = "redact-thinking-2026-02-12"
+)
+
+var thinkingRedactionBetaStripSet = []betaFlag{
+	thinkingTokenCountBetaFlag,
+	redactThinkingBetaFlag,
+}
+
 // sessionID is a per-daemon-process UUIDv4 used for the session
 // correlation header. Generated lazily once at the first messages
 // request and stable for the lifetime of the daemon.
@@ -390,36 +402,14 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 	}
 
 	beta := flavor.AnthropicBeta
-	if v := strings.TrimSpace(c.cfg.BetaHeader); v != "" {
-		beta = v
-	}
-	if len(req.ExtraBetas) > 0 {
-		existing := map[string]struct{}{}
-		for f := range strings.SplitSeq(beta, ",") {
-			existing[strings.TrimSpace(f)] = struct{}{}
-		}
-		for _, extra := range req.ExtraBetas {
-			extra = strings.TrimSpace(extra)
-			if extra == "" {
-				continue
-			}
-			if _, dup := existing[extra]; dup {
-				continue
-			}
-			beta = beta + "," + extra
-			existing[extra] = struct{}{}
-		}
-	}
-	if len(c.cfg.BetaSuppress) > 0 {
-		filtered, removed := suppressBetaFlags(beta, c.cfg.BetaSuppress)
-		if len(removed) > 0 {
-			anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.beta_suppressed",
-				"concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-				"model", req.Model,
-				"removed", removed,
-			)
-			beta = filtered
-		}
+	filtered, removed := suppressBetaFlags(beta, thinkingRedactionBetaStripSet)
+	if len(removed) > 0 {
+		anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.thinking_redaction_beta_stripped",
+			"concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"removed", removed,
+		)
+		beta = filtered
 	}
 	setHard("Anthropic-Beta", beta)
 
@@ -441,17 +431,17 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 // the rebuilt header value and the list of removed flags (in the order
 // they appeared in beta) so the caller can log exactly what changed. A
 // flag in suppress that is absent from beta is silently ignored.
-func suppressBetaFlags(beta string, suppress []string) (string, []string) {
+func suppressBetaFlags(beta string, suppress []betaFlag) (string, []string) {
 	if strings.TrimSpace(beta) == "" || len(suppress) == 0 {
 		return beta, nil
 	}
-	drop := make(map[string]struct{}, len(suppress))
+	drop := make(map[string]bool, len(suppress))
 	for _, s := range suppress {
-		s = strings.TrimSpace(s)
+		s := strings.TrimSpace(string(s))
 		if s == "" {
 			continue
 		}
-		drop[strings.ToLower(s)] = struct{}{}
+		drop[strings.ToLower(s)] = true
 	}
 	if len(drop) == 0 {
 		return beta, nil
@@ -463,7 +453,7 @@ func suppressBetaFlags(beta string, suppress []string) (string, []string) {
 		if flag == "" {
 			continue
 		}
-		if _, skip := drop[strings.ToLower(flag)]; skip {
+		if drop[strings.ToLower(flag)] {
 			removed = append(removed, flag)
 			continue
 		}
