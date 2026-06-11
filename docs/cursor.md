@@ -51,7 +51,7 @@ The ingress therefore returns every upstream failure as an HTTP 400 carrying an 
 
 An Anthropic rate limit, for instance, comes back as a 400 that reads "rate limit reached on the Anthropic OAuth bucket; try again shortly".
 
-If you feel like this sounds counterintuitive then you aren’t alone. It’s a half baked design on Cursor’s part, so always returning 4xx allows users to debug robustly without 
+If you feel like this sounds counterintuitive then you aren’t alone. It’s a half baked design on Cursor’s part, so always returning 4xx allows users to debug robustly without guessing.
 
 - Cursor MITM specifics is covered in [Cursor BYOK MITM setup](cursor-mitm-setup.md)
 - Cursor MITM PoC patching (along with other electron desktop clients) can be found at: https://github.com/agoodkind/desktop-via-clyde
