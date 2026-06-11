@@ -171,8 +171,26 @@ func projectFlavorShape(shape mitm.FlavorShape) WireFlavor {
 		StaticHeaders:      constantStaticHeadersFromShape(shape),
 		BodyFields:         copyStrings(shape.Signature.BodyKeys),
 		BodyFieldsRequired: requiredBodyFieldsFromShape(shape),
+		FeatureVectors:     featureVectorsFromShape(shape),
 		BillingAttestation: strings.TrimSpace(shape.BillingAttestation),
 	}
+}
+
+func featureVectorsFromShape(shape mitm.FlavorShape) []WireFlavorFeatureVector {
+	if len(shape.FeatureVectors) == 0 {
+		return nil
+	}
+	out := make([]WireFlavorFeatureVector, 0, len(shape.FeatureVectors))
+	for _, feature := range shape.FeatureVectors {
+		out = append(out, WireFlavorFeatureVector{
+			ModelID:                 feature.ModelID,
+			Context1M:               feature.Context1M,
+			ThinkingMode:            WireFlavorThinkingMode(feature.ThinkingMode),
+			StructuredOutputPresent: feature.StructuredOutputPresent,
+			ToolsPresent:            feature.ToolsPresent,
+		})
+	}
+	return out
 }
 
 // constantHeaderValueFromShape returns the single observed value of a
