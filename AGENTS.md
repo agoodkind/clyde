@@ -188,6 +188,8 @@ Store keys and tokens in environment variables or file references only. Referenc
 
 ## Documentation Hygiene
 
+**No agent creates, rewrites, restructures, or regenerates documentation unless the user explicitly directs that specific change.** This covers everything under `docs/`, this file, and any other Markdown doc. Docs here are durable and human-owned, so an unrequested rewrite is a regression even when it reads as an improvement. Correcting a typo or a broken link in a file you are already editing for a code change is fine; reshaping, condensing, expanding, or regenerating a doc is not, without an explicit instruction.
+
 Keep `AGENTS.md` durable and concise.
 
 - Prefer small files with one clear responsibility.
