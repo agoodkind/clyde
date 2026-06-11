@@ -374,6 +374,24 @@ func (r *Registry[M]) Count() int {
 	return len(r.sessions)
 }
 
+// ActiveCount returns the number of tracked sessions whose last activity is
+// within grace, walking live session pointers under the registry lock so
+// IdleSince reads real activity. Snapshot and CountByPredicate drop the state
+// pointer and would read IdleSince as zero, so the group's quiet check cannot
+// use them. A grace <= 0 counts every tracked session as active.
+func (r *Registry[M]) ActiveCount(grace time.Duration) int {
+	now := r.now()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	count := 0
+	for _, sess := range r.sessions {
+		if grace <= 0 || sess.IdleSince(now) <= grace {
+			count++
+		}
+	}
+	return count
+}
+
 // CountByPredicate returns the number of sessions for which p
 // returns true. The predicate is invoked under the registry lock so
 // it must not block.
