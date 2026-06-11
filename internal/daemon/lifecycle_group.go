@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"os"
 	"time"
 
 	"goodkind.io/clyde/internal/adapter"
@@ -21,10 +22,25 @@ var (
 	budgetShutdown = livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0}
 )
 
-// reloadQuietWait bounds the watcher's pre-reload quiet wait. A reload defers at
-// most this long for in-flight client exchanges before proceeding to the drain.
-// Held next to the budgets so all reload timing lives in one file.
-const reloadQuietWait = 30 * time.Second
+// defaultReloadQuietWait bounds the watcher's pre-reload quiet wait. A reload
+// defers at most this long for in-flight client exchanges before proceeding to
+// the drain. Held next to the budgets so all reload timing lives in one file.
+const defaultReloadQuietWait = 30 * time.Second
+
+// reloadQuietWait is the active quiet-wait bound. It is the default unless the
+// CLYDE_RELOAD_QUIET_WAIT env var sets a shorter (or longer) Go duration, which
+// the live validation suite uses to exercise the cap-fires path without a 30s
+// wait. Invalid or empty values keep the default.
+var reloadQuietWait = resolveReloadQuietWait()
+
+func resolveReloadQuietWait() time.Duration {
+	if raw := os.Getenv("CLYDE_RELOAD_QUIET_WAIT"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultReloadQuietWait
+}
 
 // newLifecycleGroup constructs the daemon's lifecycle group. Subsystems Attach
 // their registries to it at construction and AddHook their non-registry steps;

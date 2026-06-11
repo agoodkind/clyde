@@ -54,6 +54,9 @@ func newTestConfigWatcher(t *testing.T, path, baselineHash string) (*configWatch
 	t.Helper()
 	rec := &triggerRecorder{}
 	var parseErr atomic.Pointer[error]
+	// listenerChanged drives the test's reload-vs-rebind choice through classify:
+	// true classifies the change as a rebind, false as a reload. Tests that need
+	// hot-apply or restart-required override w.classify directly.
 	listenerChanged := &atomic.Bool{}
 	w := &configWatcher{
 		path:         path,
@@ -77,9 +80,14 @@ func newTestConfigWatcher(t *testing.T, path, baselineHash string) (*configWatch
 			}
 			return config.NewConfigWithDefaults(), nil
 		},
-		listenerChanged: listenerChanged.Load,
-		reload:          rec.reload,
-		rebind:          rec.rebind,
+		classify: func(*config.Config) config.Route {
+			if listenerChanged.Load() {
+				return config.RouteRebind
+			}
+			return config.RouteReload
+		},
+		reload: rec.reload,
+		rebind: rec.rebind,
 	}
 	// expose parseErr through a closure stored on the watcher via a field would
 	// require a struct change; instead the caller mutates via the returned

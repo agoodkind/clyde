@@ -187,6 +187,14 @@ func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, bu
 	}
 	var wg sync.WaitGroup
 	for _, m := range members {
+		if m.spec().CancelNoWait {
+			// Force-close immediately and do not wait: a CancelNoWait member's
+			// session is owned by a goroutine that may be the caller blocked in
+			// this very reload/rebind RPC, so waiting for its natural release
+			// would deadlock a synchronous drain.
+			m.forceCloseNow(ctx, reason)
+			continue
+		}
 		wg.Add(1)
 		go func(member drainMember) {
 			defer wg.Done()

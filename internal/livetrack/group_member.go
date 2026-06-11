@@ -12,6 +12,7 @@ type drainMember interface {
 	component() string
 	activeCount(grace time.Duration) int
 	drainWith(ctx context.Context, reason string, opts DrainOptions) DrainResult
+	forceCloseNow(ctx context.Context, reason string) int
 	spec() MemberSpec
 }
 
@@ -30,6 +31,14 @@ func (m registryMember[M]) activeCount(grace time.Duration) int {
 
 func (m registryMember[M]) drainWith(ctx context.Context, reason string, opts DrainOptions) DrainResult {
 	return m.reg.drainWith(ctx, reason, opts)
+}
+
+// forceCloseNow force-closes and removes every session immediately, without the
+// wait-then-deadline drain. The group uses it for CancelNoWait members (the
+// config watcher) so a synchronous reload/rebind drain does not block on a
+// session whose owning goroutine is the very caller of the reload RPC.
+func (m registryMember[M]) forceCloseNow(ctx context.Context, reason string) int {
+	return m.reg.ForceCloseMatching(ctx, func(Session[M]) bool { return true }, reason)
 }
 
 func (m registryMember[M]) spec() MemberSpec { return m.memSpec }

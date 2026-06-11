@@ -12,6 +12,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,10 +25,13 @@ import (
 
 // fakePorts holds the throwaway ports the live daemon binds. Every value differs
 // from a production default so a live run can never collide with the operator's
-// daemon. The adapter is disabled in the fake config, so only the MITM listener
-// port is bound.
+// daemon: adapter 11434 to 21434, cursor ingress 11435 to 21435, MITM 487xx to
+// 587xx. pprof is left off.
 type fakePorts struct {
-	MITMPort int // 58723 (production cli.claude-code is 48723)
+	MITMPort     int // 58723 (production cli.claude-code is 48723)
+	AdapterPort  int // 21434 (production 11434)
+	CursorPort   int // 21435 (production 11435)
+	TopologyPort int // 21436, the moved-to adapter port for the topology test
 }
 
 // harness owns the temp state/config/runtime roots, the fake config, and the
@@ -42,15 +47,21 @@ type harness struct {
 	configPath   string
 	daemonLog    string
 	prodPidsPre  map[int]bool
+	extraEnv     []string
+	requireToken string
 	cmd          *exec.Cmd
 }
 
 const (
 	fakeMITMPort       = 58723
-	daemonReadyMarker  = "daemon.mitm.started"
+	fakeAdapterPort    = 21434
+	fakeCursorPort     = 21435
+	fakeTopologyPort   = 21436
+	daemonReadyMarker  = "daemon.worker.ready"
 	hotApplyMarker     = "daemon.config.applied_in_process"
 	reloadTriggeredKey = "daemon.config_watch.reload_triggered"
 	classifiedMarker   = "daemon.config_watch.classified"
+	workerStartedKey   = "daemon.supervisor.worker_started"
 )
 
 func newHarness(t *testing.T) *harness {
@@ -68,7 +79,8 @@ func newHarness(t *testing.T) *harness {
 		stateRoot:   t.TempDir(),
 		configRoot:  t.TempDir(),
 		runtimeRoot: runtimeRoot,
-		cfg:         fakePorts{MITMPort: fakeMITMPort},
+		cfg:         fakePorts{MITMPort: fakeMITMPort, AdapterPort: fakeAdapterPort, CursorPort: fakeCursorPort, TopologyPort: fakeTopologyPort},
+		extraEnv:    nil,
 		binPath:     buildWorktreeBinary(t),
 		prodPidsPre: snapshotProductionPids(),
 		cmd:         nil,
@@ -84,8 +96,10 @@ func newHarness(t *testing.T) *harness {
 // preflight fails when the fake MITM port is already listening or a temp root is
 // missing, so the suite aborts before booting instead of risking a collision.
 func (h *harness) preflight() error {
-	if portListening(h.cfg.MITMPort) {
-		return fmt.Errorf("preflight: fake MITM port %d already listening; refusing to run", h.cfg.MITMPort)
+	for _, port := range []int{h.cfg.MITMPort, h.cfg.AdapterPort, h.cfg.CursorPort, h.cfg.TopologyPort} {
+		if portListening(port) {
+			return fmt.Errorf("preflight: fake port %d already listening; refusing to run", port)
+		}
 	}
 	for _, root := range []string{h.stateRoot, h.configRoot, h.runtimeRoot} {
 		isTemp := strings.Contains(root, os.TempDir()) ||
@@ -175,11 +189,209 @@ port = %d
 // env returns the XDG overrides that point the daemon at temp roots, isolating
 // its socket, capture db, and logs from production.
 func (h *harness) env() []string {
-	return append(os.Environ(),
+	base := append(os.Environ(),
 		"XDG_STATE_HOME="+h.stateRoot,
 		"XDG_CONFIG_HOME="+h.configRoot,
 		"XDG_RUNTIME_DIR="+h.runtimeRoot,
 	)
+	return append(base, h.extraEnv...)
+}
+
+// writeAdapterConfig writes a bootable adapter-enabled fake config on the fake
+// adapter/cursor ports with MITM disabled. adapterPort lets the topology test
+// move the listener. The passthroughURL is the OpenAI-compatible upstream the
+// "local-test" model routes to (a slow local server for the in-flight tests).
+// extraModels are extra [adapter.models.<name>] passthrough aliases appended so a
+// hot apply can add a model and assert it serves.
+func (h *harness) writeAdapterConfig(t *testing.T, adapterPort int, passthroughURL string, extraModels []string) {
+	t.Helper()
+	caDir := filepath.Join(h.stateRoot, "ca")
+	captureDir := filepath.Join(h.stateRoot, "mitm")
+	for _, dir := range []string{caDir, captureDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	extra := ""
+	for _, name := range extraModels {
+		extra += fmt.Sprintf("\n[adapter.models.%s]\nbackend = \"passthrough_override\"\npassthrough_override = \"local\"\ncontext = 8000\nefforts = [\"medium\"]\n", name)
+	}
+	requireToken := ""
+	if h.requireToken != "" {
+		requireToken = fmt.Sprintf("\nrequire_token = %q", h.requireToken)
+	}
+	content := fmt.Sprintf(`[logging]
+level = "debug"
+
+[conversation.semantic]
+enabled = false
+
+[adapter]
+enabled = true
+direct_oauth = false
+host = "[::1]"
+port = %d
+cursor_ingress_port = %d
+default_model = "local-test"%s
+
+[adapter.openai_compat_passthrough]
+base_url = %q
+
+[adapter.passthrough_overrides.local]
+base_url = %q
+
+[adapter.models.local-test]
+backend = "passthrough_override"
+passthrough_override = "local"
+context = 8000
+efforts = ["medium"]
+
+[adapter.client_identity]
+beta_header = "test-beta"
+user_agent = "clyde-live-test/0.0"
+system_prompt_prefix = "test-prefix"
+stainless_package_version = "0.0.0"
+stainless_runtime = "node"
+stainless_runtime_version = "v0.0.0"
+cc_version = "0.0.0"
+cc_entrypoint = "test"
+
+[adapter.families.testfam]
+model = "claude-test"
+supports_tools = true
+supports_vision = false
+efforts = ["medium"]
+thinking_modes = ["disabled"]
+max_output_tokens = 8000
+contexts = [{ tokens = 8000, alias_suffix = "", wire_suffix = "" }]
+%s
+[mitm]
+enabled_default = false
+`, adapterPort, h.cfg.CursorPort, requireToken, passthroughURL, passthroughURL, extra)
+	if err := os.WriteFile(h.configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fake adapter config: %v", err)
+	}
+}
+
+// writeReloadEdit rewrites the adapter config with a reload-routed change set
+// (require_token, which is not in the hot set), so the watcher classifies the
+// edit as reload and the quiet-wait gates it.
+func (h *harness) writeReloadEdit(t *testing.T, passthroughURL string) {
+	t.Helper()
+	h.requireToken = "live-reload-token"
+	h.writeAdapterConfig(t, h.cfg.AdapterPort, passthroughURL, nil)
+}
+
+// latestWorkerPid parses the most recent daemon.supervisor.worker_started pid
+// from the daemon log. It is the current worker pid: a hot apply leaves it
+// unchanged, a reload or rebind advances it.
+func (h *harness) latestWorkerPid() int {
+	pid := 0
+	_ = filepath.WalkDir(h.stateRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		f, openErr := os.Open(path)
+		if openErr != nil {
+			return nil
+		}
+		defer func() { _ = f.Close() }()
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.Contains(line, workerStartedKey) {
+				continue
+			}
+			if p := extractJSONInt(line, "pid"); p > 0 {
+				pid = p
+			}
+		}
+		return nil
+	})
+	return pid
+}
+
+// pidOnPort returns the pid listening on the given loopback TCP port, or 0 if
+// none. It uses lsof so the OS, not a log, is the source of truth for which
+// process owns the listener: the basis for the pid-changed/port-rebound
+// assertion.
+func pidOnPort(port int) int {
+	out, err := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN", "-t").Output()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Fields(string(out)) {
+		var pid int
+		if _, scanErr := fmt.Sscanf(line, "%d", &pid); scanErr == nil && pid > 0 {
+			return pid
+		}
+	}
+	return 0
+}
+
+// waitForPidOnPort polls until a process listens on port (returning its pid) or
+// timeout (returning 0).
+func waitForPidOnPort(port int, timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if pid := pidOnPort(port); pid > 0 {
+			return pid
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return 0
+}
+
+// extractJSONInt pulls an integer field value out of a JSON log line by key.
+func extractJSONInt(line, key string) int {
+	marker := fmt.Sprintf("%q:", key)
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return 0
+	}
+	rest := line[idx+len(marker):]
+	val := 0
+	for _, r := range rest {
+		if r >= '0' && r <= '9' {
+			val = val*10 + int(r-'0')
+			continue
+		}
+		if val > 0 {
+			break
+		}
+		if r == ' ' {
+			continue
+		}
+		break
+	}
+	return val
+}
+
+// adapterGet performs a GET against the live adapter on the fake port and
+// returns the body, or fails the test. It dials [::1] on adapterPort.
+func (h *harness) adapterGet(t *testing.T, adapterPort int, path string) string {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("[::1]:%d", adapterPort), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial adapter: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", path)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write adapter request: %v", err)
+	}
+	buf := make([]byte, 0, 64*1024)
+	tmp := make([]byte, 4096)
+	for {
+		n, readErr := conn.Read(tmp)
+		buf = append(buf, tmp[:n]...)
+		if readErr != nil {
+			break
+		}
+	}
+	return string(buf)
 }
 
 // boot starts `clyde daemon run` in its own process group with the temp env, and
@@ -301,6 +513,12 @@ func (h *harness) teardown(t *testing.T) {
 		}
 		h.cmd = nil
 	}
+	// A reload- or rebind-spawned worker re-parents to PID 1 and escapes the
+	// supervisor's process group, so kill anything still running the test binary
+	// by its unique temp path. This only ever matches this test's daemon, never
+	// the production binary at ~/.local/bin/clyde.
+	_ = exec.Command("pkill", "-f", h.binPath).Run()
+	time.Sleep(200 * time.Millisecond)
 	h.assertProductionUntouched(t)
 }
 
@@ -366,10 +584,98 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// touchReload nudges the daemon by editing the config and returns once the
-// watcher has classified the change, so a test can then assert the route taken.
-func (h *harness) waitForClassification(timeout time.Duration) bool {
-	return h.waitForDaemonLog(classifiedMarker, timeout)
+// slowUpstream is a local OpenAI-compatible upstream the adapter passthrough
+// routes to. Each request blocks until released, so a chat request through the
+// adapter holds its egress session in flight while the test edits the config.
+type slowUpstream struct {
+	server   *httptest.Server
+	released chan struct{}
+	gotReq   chan struct{}
+}
+
+// startSlowUpstream starts the upstream on an ephemeral port. requests block
+// until release() is called, then return a minimal chat completion.
+func startSlowUpstream(t *testing.T) *slowUpstream {
+	t.Helper()
+	u := &slowUpstream{
+		server:   nil,
+		released: make(chan struct{}),
+		gotReq:   make(chan struct{}, 8),
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case u.gotReq <- struct{}{}:
+		default:
+		}
+		<-u.released
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"local-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	})
+	u.server = httptest.NewServer(handler)
+	t.Cleanup(func() {
+		u.releaseAll()
+		u.server.Close()
+	})
+	return u
+}
+
+// baseURL returns the upstream base URL with the /v1 suffix the adapter
+// passthrough expects.
+func (u *slowUpstream) baseURL() string { return u.server.URL + "/v1" }
+
+// releaseAll unblocks every current and future upstream request.
+func (u *slowUpstream) releaseAll() {
+	select {
+	case <-u.released:
+	default:
+		close(u.released)
+	}
+}
+
+// waitForRequest blocks until the upstream has received at least one request, so
+// a test knows the adapter egress session is in flight.
+func (u *slowUpstream) waitForRequest(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-u.gotReq:
+	case <-time.After(timeout):
+		t.Fatalf("upstream received no request within %s", timeout)
+	}
+}
+
+// postChat sends a non-blocking chat completion to the adapter routed to the
+// passthrough model, returning a channel that receives the raw response when the
+// request completes. The request holds an adapter egress session until the
+// upstream is released.
+func (h *harness) postChat(t *testing.T, adapterPort int) <-chan string {
+	t.Helper()
+	done := make(chan string, 1)
+	body := `{"model":"local-test","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`
+	go func() {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("[::1]:%d", adapterPort), 2*time.Second)
+		if err != nil {
+			done <- "dial-error: " + err.Error()
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_ = conn.SetDeadline(time.Now().Add(60 * time.Second))
+		req := fmt.Sprintf("POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+		if _, err := conn.Write([]byte(req)); err != nil {
+			done <- "write-error: " + err.Error()
+			return
+		}
+		buf := make([]byte, 0, 16*1024)
+		tmp := make([]byte, 4096)
+		for {
+			n, readErr := conn.Read(tmp)
+			buf = append(buf, tmp[:n]...)
+			if readErr != nil {
+				break
+			}
+		}
+		done <- string(buf)
+	}()
+	return done
 }
 
 var _ = context.Background

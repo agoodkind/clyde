@@ -62,10 +62,6 @@ type configWatcher struct {
 	// parse validates the candidate config before triggering. Defaults to
 	// config.LoadGlobalOrDefault; injected in tests.
 	parse func() (*config.Config, error)
-	// listenerChanged reports whether the on-disk config moves a listener
-	// relative to the running runtime. Defaults to the runtime comparison;
-	// injected in tests.
-	listenerChanged func() bool
 	// reload triggers the zero-bind-gap reload. Defaults to ReloadDaemon;
 	// injected in tests.
 	reload func(context.Context) error
@@ -116,9 +112,6 @@ func newConfigWatcher(log *slog.Logger, baselineHash string, runtime *runtimeSer
 			Now:           nil,
 		}),
 		parse: config.LoadGlobalOrDefault,
-		listenerChanged: func() bool {
-			return validateReloadListenerConfig(runtime) != nil
-		},
 		reload: func(ctx context.Context) error {
 			_, err := ReloadDaemon(ctx)
 			return err
@@ -323,7 +316,11 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 		)
 		return false
 	}
-	if w.listenerChanged() {
+	// Route reload vs rebind on the single classifier decision: a listener move
+	// (RouteRebind) frees and rebinds the ports fresh, while every other
+	// reload-class change re-execs inheriting the open sockets. A hot apply that
+	// fell through here also takes the reload path.
+	if route == config.RouteRebind {
 		return w.trigger(ctx, "rebind", w.rebind)
 	}
 	return w.trigger(ctx, "reload", w.reload)
