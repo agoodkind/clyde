@@ -118,6 +118,13 @@ server hooks), `PhaseEgress` (adapter egress, codex websocket sessions),
 (capture store, search store close hooks). The capture store becomes a
 declared storage-phase member, fixing the standing flock-registration gap.
 
+The config watcher member keeps its non-blocking cancel semantics: on the
+reload path the watcher goroutine can be the caller blocked in its own reload
+RPC, so its member spec declares cancel-then-proceed (the closer cancels the
+loop context and `Quiesce` does not wait for its natural release on the
+reload path), preserving what `cancelConfigWatcher` does today
+(`internal/daemon/runtime.go:410`).
+
 Budgets replace the scattered constants with two named profiles declared next
 to the group: `BudgetReload{Cap: 60s, IdleGrace: 5s}` and
 `BudgetShutdown{Cap: 5s}`. The three call sites become:
@@ -137,6 +144,11 @@ across all members on the same tick:
   session active within `grace`, where active means `IdleSince <= grace`
   walked over live pointers. Unlike `Quiesce` it mutates nothing: registries
   stay open and new sessions register freely while waiting.
+
+Quiet-relevant members are the client-exchange surfaces: adapter ingress,
+adapter egress, codex websocket sessions, and MITM tunnels. Search jobs, the
+semantic runtime, and the config watcher are not quiet-relevant: they are
+internal restartable work and must not hold a reload to max-wait.
 
 Registry-level `waitForIdle` becomes this loop with a single member.
 `adapter.Server.WaitForIdle` and `ActiveRequestCount` delegate to group/member
