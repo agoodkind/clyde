@@ -47,7 +47,6 @@ type BuildRequestConfig struct {
 	PromptCacheTTL                  string
 	PromptCacheScope                string
 	ToolResultCacheReferenceEnabled bool
-	PerContextBetas                 map[string]string
 	StructuredOutputPresent         bool
 	// Identity sources metadata.user_id. AccountUUID and DeviceID
 	// stay constant across requests; the per-request session_id is

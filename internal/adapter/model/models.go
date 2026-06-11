@@ -227,10 +227,9 @@ func validateAdapterCoreConfig(cfg config.AdapterConfig) error {
 	if cfg.DefaultModel == "" {
 		return fmt.Errorf("adapter: default_model must be set in [adapter]")
 	}
-	// beta_header and user_agent are optional. When empty, the
-	// adapter falls through to the captured WireFlavor in
-	// internal/adapter/anthropic/wire_flavors_gen.go (CLYDE-124).
-	// Setting either is an explicit operator override.
+	// user_agent is optional. When empty, the adapter falls through to
+	// the captured WireFlavor in internal/adapter/anthropic/wire_flavors.go.
+	// Setting it is an explicit operator override.
 	if cfg.ClientIdentity.SystemPromptPrefix == "" {
 		return fmt.Errorf("adapter: [adapter.client_identity].system_prompt_prefix must be set")
 	}

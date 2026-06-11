@@ -552,20 +552,6 @@ type AdapterClientIdentity struct {
 	StainlessRuntimeVersion string `json:"stainlessRuntimeVersion,omitempty" toml:"stainless_runtime_version,omitempty"`
 	CCVersion               string `json:"ccVersion,omitempty" toml:"cc_version,omitempty"`
 	CCEntrypoint            string `json:"ccEntrypoint,omitempty" toml:"cc_entrypoint,omitempty"`
-	// PerContextBetas maps a substring of the wire model id (e.g. a
-	// context suffix) to an extra anthropic-beta flag for that variant.
-	PerContextBetas map[string]string `json:"perContextBetas,omitempty" toml:"per_context_betas,omitempty"`
-	// BetaSuppress lists anthropic-beta flags to remove from the learned
-	// wire baseline before egress. The learned baseline mirrors
-	// claude-cli byte-for-byte, including claude-cli's
-	// thinking-display-off opt-in (thinking-token-count-2026-05-13),
-	// which makes Opus 4.8 redact thinking text on the wire (empty
-	// thinking_delta plus an estimated_tokens heartbeat, real reasoning
-	// only in the encrypted signature). Removing that flag here restores
-	// plaintext thinking while keeping every other learned header
-	// identical. Each entry is an exact flag token (no commas); matching
-	// is case-insensitive.
-	BetaSuppress []string `json:"betaSuppress,omitempty" toml:"beta_suppress,omitempty"`
 	// PromptCachingEnabled toggles the typed-system-blocks form with
 	// cache_control markers on the billing / CLI-prefix / caller-system
 	// blocks. When nil or true, markers are stamped and system is sent
@@ -585,8 +571,8 @@ type AdapterClientIdentity struct {
 	// caching, same as today. "global" asks Anthropic for a shared
 	// cache key across sessions; only effective on accounts Anthropic
 	// allowlists. "org" scopes to the billing org. Anything else is
-	// ignored. Requires the prompt-caching-scope-2026-01-05 beta
-	// header in [adapter.client_identity.beta_header] to be effective.
+	// ignored. Requires the selected learned flavor to carry Anthropic's
+	// prompt-caching scope beta to be effective.
 	PromptCacheScope string `json:"promptCacheScope,omitempty" toml:"prompt_cache_scope,omitempty"`
 }
 

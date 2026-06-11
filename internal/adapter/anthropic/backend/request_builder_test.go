@@ -405,40 +405,6 @@ func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	}
 }
 
-func TestBuildRequestDoesNotPopulateExtraBetas(t *testing.T) {
-	// CLYDE-124: claude-cli does NOT send fine-grained-tool-streaming
-	// even on streaming + tools requests. The captured reference at
-	// research/claude-code/snapshots/latest/reference.toml proves this.
-	// Sending it diverges our wire fingerprint from claude-cli's.
-	req := requestBuilderChatRequest()
-	req.Stream = true
-	req.Tools = []adapteropenai.Tool{{
-		Type: "function",
-		Function: adapteropenai.ToolFunctionSchema{
-			Name:        "ReadFile",
-			Description: "read a file",
-			Parameters:  []byte(`{"type":"object"}`),
-		},
-	}}
-	model := adaptermodel.ResolvedAlias{
-		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
-		MaxOutputTokens: 32000,
-	}
-	cfg := requestBuilderConfig()
-	cfg.PerContextBetas = map[string]string{
-		"opus-4-7": "context-1m-2025-08-07",
-	}
-
-	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", cfg, "req-test")
-	if err != nil {
-		t.Fatalf("BuildRequest: %v", err)
-	}
-	if len(out.ExtraBetas) != 0 {
-		t.Fatalf("ExtraBetas=%v want empty", out.ExtraBetas)
-	}
-}
-
 // CLYDE-217: validate Anthropic system-prefix behavior.
 //
 // The tests below lock in the exact request prompt shape Clyde emits

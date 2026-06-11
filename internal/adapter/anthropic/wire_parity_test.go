@@ -145,7 +145,6 @@ func TestOutboundBetaHeaderStripsThinkingRedactionFlags(t *testing.T) {
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
 			BetaHeader:            "override-beta-flag",
-			BetaSuppress:          []string{"context-management-2025-06-27"},
 		},
 	}
 	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cli.cfg.MessagesURL, http.NoBody)
@@ -159,8 +158,7 @@ func TestOutboundBetaHeaderStripsThinkingRedactionFlags(t *testing.T) {
 		AnthropicBeta:    "oauth-2025-04-20,Thinking-Token-Count-2026-05-13,context-management-2025-06-27,Redact-Thinking-2026-02-12,claude-code-20250219",
 	}
 	req := Request{
-		Model:      "claude-test",
-		ExtraBetas: []string{"extra-beta-flag"},
+		Model: "claude-test",
 	}
 
 	cli.applyMessagesHeaders(httpReq, req, "tok", flavor)

@@ -7,7 +7,6 @@ import (
 
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
-	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 )
 
 // CacheBreakpointStats is part of Clyde's typed adapter surface.
@@ -59,7 +58,7 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 		// anthContentBlockToWire converts one typed AnthContentBlock variant to the
 		// anthropic.ContentBlock wire shape. Returns nil to signal that this block
 		// should be omitted (e.g. an empty unsigned thinking block).
-		OutputConfig: nil, Thinking: nil, Metadata: nil, ContextManagement: nil, OnHeaders: nil, ExtraBetas: nil,
+		OutputConfig: nil, Thinking: nil, Metadata: nil, ContextManagement: nil, OnHeaders: nil,
 		FeatureVector: anthropic.WireFlavorFeatureVector{
 			ModelID:                 "",
 			Context1M:               false,
@@ -497,21 +496,4 @@ func UsageFromAnthropic(a anthropic.Usage) adapteropenai.Usage {
 		u.PromptTokensDetails = &adapteropenai.PromptTokensDetails{CachedTokens: a.CacheReadInputTokens}
 	}
 	return u
-}
-
-// DerivePerRequestBetas is part of Clyde's typed adapter surface.
-func DerivePerRequestBetas(resolved *adapterresolver.ResolvedRequest, perCtx map[string]string) []string {
-	if len(perCtx) == 0 || resolved == nil {
-		return nil
-	}
-	var out []string
-	for suffix, beta := range perCtx {
-		if beta == "" {
-			continue
-		}
-		if strings.Contains(resolved.Model, suffix) {
-			out = append(out, beta)
-		}
-	}
-	return out
 }
