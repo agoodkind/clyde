@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/slogger"
@@ -228,7 +229,7 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 			string(logevent.SurfaceMITMIDE): {string(logevent.LegMITMIngress)},
 		},
 	}
-	proxy, err := NewProxy(mitmCfg, loggingRequest, logger, []net.Listener{listener}, nil, "test")
+	proxy, err := NewProxy(mitmCfg, loggingRequest, logger, []net.Listener{listener}, nil, "test", livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}

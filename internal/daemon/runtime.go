@@ -195,7 +195,7 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 		}
 		sockets = append(sockets, bound)
 	}
-	proxy, err := mitm.NewProxy(cfg.MITM, cfg.Logging.Request, log, sockets, runtime.captureStore, listenerCfg.ID)
+	proxy, err := mitm.NewProxy(cfg.MITM, cfg.Logging.Request, log, sockets, runtime.captureStore, listenerCfg.ID, runtime.group)
 	if err != nil {
 		closeSockets()
 		log.WarnContext(ctx, "daemon.mitm.init_failed", "concern", "process.daemon.lifecycle", "component", "daemon",

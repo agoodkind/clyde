@@ -80,7 +80,7 @@ type Proxy struct {
 // (required-leg overrides and incomplete-policy) the MITM emitter applies. A
 // zero-value [config.LoggingRequest] yields default required legs and the warn
 // policy, matching the adapter's behavior.
-func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listeners []net.Listener, store *capture.Store, client string) (*Proxy, error) {
+func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listeners []net.Listener, store *capture.Store, client string, group *livetrack.Group) (*Proxy, error) {
 	TunnelMeta{
 		ConnectHost:   "",
 		UpstreamAddr:  "",
@@ -122,7 +122,11 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 		),
 		store:  store,
 		client: client,
-		Tunnels: livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
+		Tunnels: livetrack.Attach[TunnelMeta](group, livetrack.MemberSpec{
+			Phase:         livetrack.PhaseIngress,
+			QuietRelevant: true,
+			CancelNoWait:  false,
+		}, livetrack.Options[TunnelMeta]{
 			Component:     "mitm",
 			Concern:       slogger.ConcernProviderMITMLifecycle,
 			Log:           log,
