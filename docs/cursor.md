@@ -33,7 +33,8 @@ flowchart LR
   provider --> ingress
   ingress --> cf
   cf --> servers
-  servers --> app
+  servers --> mitm
+  mitm --> app
 ```
 
 
