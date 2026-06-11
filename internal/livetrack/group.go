@@ -156,32 +156,34 @@ func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, bu
 		wg.Add(1)
 		go func(member drainMember) {
 			defer wg.Done()
-			defer recoverLifecycle(ctx, g.log, "livetrack.group.member_panic", member.component())
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					g.log.ErrorContext(ctx, "livetrack.group.member_panic", "concern", "livetrack",
+						"name", member.component(), "err", recovered)
+				}
+			}()
 			member.drainWith(ctx, reason, DrainOptions{IdleGrace: budget.IdleGrace})
 		}(m)
 	}
 	wg.Wait()
 	for _, h := range hooks {
-		runHook(ctx, g.log, phase, h)
+		g.runHook(ctx, phase, h)
 	}
 }
 
 // runHook executes one phase hook with panic recovery and structured logging on
 // error. A hook failure is logged but does not abort the phase, matching the
 // best-effort store-close behavior of the pre-refactor drain.
-func runHook(ctx context.Context, log *slog.Logger, phase Phase, h hook) {
-	defer recoverLifecycle(ctx, log, "livetrack.group.hook_panic", h.name)
+func (g *Group) runHook(ctx context.Context, phase Phase, h hook) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			g.log.ErrorContext(ctx, "livetrack.group.hook_panic", "concern", "livetrack",
+				"name", h.name, "err", recovered)
+		}
+	}()
 	if err := h.fn(ctx); err != nil {
-		log.WarnContext(ctx, "livetrack.group.hook_failed", "concern", "livetrack",
+		g.log.WarnContext(ctx, "livetrack.group.hook_failed", "concern", "livetrack",
 			"phase", phase.String(), "hook", h.name, "err", err)
-	}
-}
-
-// recoverLifecycle converts a panic in a member drain or hook into a logged
-// error so one panicking subsystem cannot abort the whole Quiesce.
-func recoverLifecycle(ctx context.Context, log *slog.Logger, event, name string) {
-	if recovered := recover(); recovered != nil {
-		log.ErrorContext(ctx, event, "concern", "livetrack", "name", name, "err", recovered)
 	}
 }
 
