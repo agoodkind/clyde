@@ -232,7 +232,7 @@ type Registry[M Meta] struct {
 // New constructs a Registry with the supplied options. Options fields
 // are validated and fall back to defaults so callers can pass a
 // zero-value Options[M]{} for the common case.
-func New[M Meta](opts Options[M]) *Registry[M] {
+func newRegistry[M Meta](opts Options[M]) *Registry[M] {
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()

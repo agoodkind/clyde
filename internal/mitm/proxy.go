@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -199,53 +198,22 @@ func (p *Proxy) Serve() error {
 	return nil
 }
 
-// Shutdown gracefully stops the proxy's HTTP server and drains
-// registered tunnels until ctx is canceled. The Cloudflare keepalive
-// case (api2.cursor.sh CONNECT tunnels that never close on their own)
-// is the empirical reason this is no longer a bare
-// [[http.Server].Shutdown]: the registry's force-close path
-// terminates wedged tunnels under the configured grace. The capture
-// index file handle and its cross-process flock are owned by the
-// slogger MITM-capture sink, not the proxy, so the async logger's
-// handler closer releases them on process shutdown. Idempotent:
-// multiple Shutdown calls are safe.
-func (p *Proxy) Shutdown(ctx context.Context) error {
-	return p.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: 0})
-}
-
-// ShutdownWith is the drain-option-aware sibling of [Proxy.Shutdown].
-// The daemon reload chain calls it with [livetrack.DrainOptions.IdleGrace]
-// set so the per-tunnel registry can force-close wedged keepalive
-// sessions at drain start instead of waiting them out against the
-// outer cap. The semantics and idempotency are identical to
-// [Proxy.Shutdown]; only the registry drain shape differs.
-func (p *Proxy) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) error {
+// ShutdownHTTP gracefully stops the proxy's HTTP server, which closes its
+// listeners and unblocks the per-listener Serve goroutines. The CONNECT and
+// per-request tunnels drain as lifecycle-group members (the Tunnels registry),
+// so this hook covers only the HTTP server lifecycle. The daemon registers it
+// as a PhaseIngress before-hook so the server stops accepting before the tunnel
+// registry drains, reproducing the pre-refactor ShutdownWith ordering. The
+// Cloudflare keepalive case (api2.cursor.sh CONNECT tunnels that never close on
+// their own) is handled by the tunnel registry's idle-grace force-close, not
+// here. Nil-safe and idempotent.
+func (p *Proxy) ShutdownHTTP(ctx context.Context) error {
 	if p.server == nil {
 		return nil
 	}
-	if p.Tunnels == nil || p.Tunnels.Count() == 0 {
-		for _, listener := range p.listeners {
-			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				return fmt.Errorf("close mitm listener %s: %w", listener.Addr().String(), err)
-			}
-		}
-		return nil
-	}
-	httpErr := p.server.Shutdown(ctx)
-	if httpErr != nil {
-		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "concern", "providers.mitm.wire", "err", httpErr)
-	}
-	if p.Tunnels != nil && (httpErr != nil || p.Tunnels.Count() > 0) {
-		result := p.Tunnels.DrainWith(ctx, "mitm.shutdown", opts)
-		p.log.InfoContext(
-			ctx, "mitm.proxy.tunnels_drained", "concern", "providers.mitm.wire", "final", result.Final.String(),
-			"remaining", result.Remaining,
-			"force_closed", result.ForceClosed,
-			"duration_ms", result.Duration.Milliseconds(),
-		)
-	}
-	if httpErr != nil {
-		return fmt.Errorf("mitm shutdown: %w", httpErr)
+	if err := p.server.Shutdown(ctx); err != nil {
+		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "concern", "providers.mitm.wire", "err", err)
+		return fmt.Errorf("mitm shutdown: %w", err)
 	}
 	return nil
 }

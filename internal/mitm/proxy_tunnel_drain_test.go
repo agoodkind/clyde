@@ -47,10 +47,16 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 		},
 		CaptureDir: t.TempDir(),
 	}
-	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test", livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test", group)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
+	// Register the proxy's HTTP-server shutdown as the daemon does, so Quiesce
+	// stops the server before draining the tunnel registry.
+	group.AddHookBefore(livetrack.PhaseIngress, "mitm.http_shutdown", func(hookCtx context.Context) error {
+		return proxy.ShutdownHTTP(hookCtx)
+	})
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
@@ -62,14 +68,15 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	shutdownDone := make(chan error, 1)
+	shutdownDone := make(chan struct{})
 	go func() {
-		shutdownDone <- proxy.Shutdown(ctx)
+		group.Quiesce(ctx, "test.reload", livetrack.Budget{Cap: 200 * time.Millisecond, IdleGrace: 0})
+		close(shutdownDone)
 	}()
 	select {
 	case <-shutdownDone:
 	case <-time.After(5 * time.Second):
-		t.Fatalf("Shutdown did not return within 5s; tunnel goroutines pinned reload")
+		t.Fatalf("Quiesce did not return within 5s; tunnel goroutines pinned reload")
 	}
 	if got := proxy.Tunnels.Count(); got != 0 {
 		t.Fatalf("Tunnels.Count after shutdown: got %d, want 0", got)
@@ -113,10 +120,14 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 		},
 		CaptureDir: t.TempDir(),
 	}
-	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test", livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test", group)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
+	group.AddHookBefore(livetrack.PhaseIngress, "mitm.http_shutdown", func(hookCtx context.Context) error {
+		return proxy.ShutdownHTTP(hookCtx)
+	})
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
@@ -140,9 +151,10 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 	// closing under a short deadline.
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelShutdown()
-	shutdownDone := make(chan error, 1)
+	shutdownDone := make(chan struct{})
 	go func() {
-		shutdownDone <- proxy.Shutdown(shutdownCtx)
+		group.Quiesce(shutdownCtx, "test.reload", livetrack.Budget{Cap: 30 * time.Second, IdleGrace: 0})
+		close(shutdownDone)
 	}()
 
 	select {
@@ -169,12 +181,9 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 	_ = clientConn.Close()
 
 	select {
-	case err := <-shutdownDone:
-		if err != nil {
-			t.Fatalf("proxy.Shutdown returned err: %v", err)
-		}
+	case <-shutdownDone:
 	case <-time.After(10 * time.Second):
-		t.Fatalf("proxy.Shutdown did not return after tunnel completed")
+		t.Fatalf("Quiesce did not return after tunnel completed")
 	}
 	if got := proxy.Tunnels.Count(); got != 0 {
 		t.Fatalf("Tunnels.Count after shutdown: got %d, want 0", got)
@@ -208,7 +217,7 @@ func TestRegisterPlainHTTPDecouplesUpstreamFromInboundContext(t *testing.T) {
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		Tunnels:         newTestTunnelRegistry(),
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{},
 		base:            "http://[::1]",

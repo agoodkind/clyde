@@ -15,6 +15,7 @@ import (
 type conversationSemanticRuntime struct {
 	client   *semsearch.Client
 	registry *livetrack.Registry[conversationSemanticConnectionMeta]
+	session  *livetrack.Session[conversationSemanticConnectionMeta]
 }
 
 type conversationSemanticConnectionMeta struct {
@@ -54,7 +55,7 @@ func (c *conversationSemanticConnectionCloser) Close(reason string) error {
 	return nil
 }
 
-func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, log *slog.Logger) *conversationSemanticRuntime {
+func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, log *slog.Logger, group *livetrack.Group) *conversationSemanticRuntime {
 	if cfg == nil || !cfg.Conversation.Semantic.Enabled {
 		return nil
 	}
@@ -72,7 +73,14 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 		)
 		return nil
 	}
-	registry := livetrack.New[conversationSemanticConnectionMeta](livetrack.Options[conversationSemanticConnectionMeta]{
+	// The semantic-search grpc connection is internal daemon-to-daemon work, so
+	// it attaches as a non-quiet-relevant PhaseWorkers member: the group drains
+	// it on reload and shutdown, but it never holds the quiet-wait.
+	registry := livetrack.Attach[conversationSemanticConnectionMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseWorkers,
+		QuietRelevant: false,
+		CancelNoWait:  false,
+	}, livetrack.Options[conversationSemanticConnectionMeta]{
 		Component:     "daemon",
 		Concern:       "conversation.semantic",
 		Log:           log,
@@ -86,7 +94,7 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 		SocketPath:   semanticCfg.SocketPath,
 	}
 	meta.IsLivetrackMeta()
-	_, registerErr := registry.Register(ctx, "conversation.semantic.grpc", meta, &conversationSemanticConnectionCloser{
+	session, registerErr := registry.Register(ctx, "conversation.semantic.grpc", meta, &conversationSemanticConnectionCloser{
 		closer: client.Conn(),
 		log:    log,
 	})
@@ -101,7 +109,7 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 		)
 		return nil
 	}
-	runtime := &conversationSemanticRuntime{client: client, registry: registry}
+	runtime := &conversationSemanticRuntime{client: client, registry: registry, session: session}
 	if err := client.Register(ctx, semanticCfg.CollectionID); err != nil {
 		runtime.close(ctx, log, "register_failed")
 		log.WarnContext(ctx, "daemon.conversation_semantic.collection_register_failed",
@@ -120,6 +128,11 @@ func startConversationSemanticRuntime(ctx context.Context, cfg *config.Config, l
 	return runtime
 }
 
+// close tears the semantic runtime down outside the group lifecycle. The group
+// drains the connection registry on reload and shutdown; close is the explicit
+// path used on the startup error branch and when the in-process config apply
+// restarts the runtime. It releases the livetrack session (so a later group
+// drain skips it) and closes the grpc client connection directly.
 func (r *conversationSemanticRuntime) close(ctx context.Context, log *slog.Logger, reason string) {
 	if r == nil {
 		return
@@ -127,20 +140,11 @@ func (r *conversationSemanticRuntime) close(ctx context.Context, log *slog.Logge
 	if log == nil {
 		log = slog.Default()
 	}
-	if r.registry != nil {
-		result := r.registry.Drain(ctx, reason)
-		if len(result.Errors) > 0 {
-			log.WarnContext(ctx, "daemon.conversation_semantic.close_failed",
-				"concern", "conversation.semantic",
-				"component", "daemon",
-				"reason", reason,
-				"err", errors.Join(result.Errors...),
-			)
-		}
-		r.registry = nil
-		r.client = nil
-		return
+	if r.session != nil && r.registry != nil {
+		r.registry.Release(ctx, r.session, reason)
+		r.session = nil
 	}
+	r.registry = nil
 	if r.client != nil {
 		if err := r.client.Close(); err != nil {
 			log.WarnContext(ctx, "daemon.conversation_semantic.close_failed",
@@ -152,12 +156,4 @@ func (r *conversationSemanticRuntime) close(ctx context.Context, log *slog.Logge
 		}
 		r.client = nil
 	}
-}
-
-func (r *runtimeServices) closeConversationSemanticRuntime(ctx context.Context, log *slog.Logger, reason string) {
-	if r == nil || r.semantic == nil {
-		return
-	}
-	r.semantic.close(ctx, log, reason)
-	r.semantic = nil
 }

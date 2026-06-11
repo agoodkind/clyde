@@ -5,7 +5,11 @@ import (
 	"log/slog"
 	"time"
 
+	"goodkind.io/clyde/internal/adapter"
 	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitm/capture"
+	searchstore "goodkind.io/clyde/internal/search/store"
 )
 
 // budgetReload and budgetShutdown replace the scattered reloadDrainCap,
@@ -39,4 +43,63 @@ func awaitDaemonQuiet(ctx context.Context, group *livetrack.Group) bool {
 	waitCtx, cancel := context.WithTimeout(ctx, reloadQuietWait)
 	defer cancel()
 	return group.AwaitQuiet(waitCtx, budgetReload.IdleGrace)
+}
+
+// storageHookReason labels the lifecycle store-close hooks. The drain reason
+// (reload vs shutdown) is not threaded into hooks, so a single stable label is
+// used; the registry and store emit their own per-event detail.
+const storageHookReason = "lifecycle.drain"
+
+// addAdapterLifecycleHooks registers the adapter's non-registry drain steps on
+// the group. Keepalives-off runs before the ingress registry drains; the HTTP
+// server shutdown runs after ingress drains but before egress, reproducing the
+// pre-refactor ShutdownWith ordering. The ingress, egress, and codex websocket
+// registries drain as group members.
+func (r *runtimeServices) addAdapterLifecycleHooks(server *adapter.Server) {
+	if r.group == nil || server == nil {
+		return
+	}
+	r.group.AddHookBefore(livetrack.PhaseIngress, "adapter.keepalives_off", func(context.Context) error {
+		server.DisableKeepAlives()
+		return nil
+	})
+	r.group.AddHookBefore(livetrack.PhaseEgress, "adapter.http_shutdown", func(ctx context.Context) error {
+		return server.ShutdownHTTP(ctx)
+	})
+}
+
+// addMITMLifecycleHook registers one MITM proxy's HTTP server shutdown as a
+// PhaseIngress before-hook so the server stops accepting before its tunnel
+// registry (a group member) drains.
+func (r *runtimeServices) addMITMLifecycleHook(id string, proxy *mitm.Proxy) {
+	if r.group == nil || proxy == nil {
+		return
+	}
+	r.group.AddHookBefore(livetrack.PhaseIngress, "mitm.http_shutdown."+id, func(ctx context.Context) error {
+		return proxy.ShutdownHTTP(ctx)
+	})
+}
+
+// addSearchStoreCloseHook registers the search store's close as a PhaseStorage
+// after-hook so its SQLite WAL flushes only after every surface and worker has
+// drained, matching the pre-refactor store-close ordering.
+func (r *runtimeServices) addSearchStoreCloseHook(store *searchstore.Store) {
+	if r.group == nil || store == nil {
+		return
+	}
+	r.group.AddHook(livetrack.PhaseStorage, "search_store.close", func(ctx context.Context) error {
+		return store.Close(ctx, storageHookReason)
+	})
+}
+
+// addCaptureStoreCloseHook registers the MITM capture store's close as a
+// PhaseStorage after-hook so its SQLite WAL flushes only after every surface
+// has drained.
+func (r *runtimeServices) addCaptureStoreCloseHook(store *capture.Store) {
+	if r.group == nil || store == nil {
+		return
+	}
+	r.group.AddHook(livetrack.PhaseStorage, "capture_store.close", func(ctx context.Context) error {
+		return store.Close(ctx, storageHookReason)
+	})
 }

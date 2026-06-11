@@ -21,7 +21,7 @@ import (
 // after the handler returns.
 func TestToolCallMiddlewareRegistersAndReleases(t *testing.T) {
 	t.Parallel()
-	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
+	reg := livetrack.Attach[MCPMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
 		Component: "test",
 		Concern:   "test.mcp.register",
 		PollEvery: 5 * time.Millisecond,
@@ -61,7 +61,7 @@ func TestToolCallMiddlewareRegistersAndReleases(t *testing.T) {
 // correct tool name, op, and server name from the request and closure.
 func TestToolCallMiddlewareMetaFields(t *testing.T) {
 	t.Parallel()
-	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
+	reg := livetrack.Attach[MCPMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
 		Component: "test",
 		Concern:   "test.mcp.meta",
 		PollEvery: 5 * time.Millisecond,
@@ -118,16 +118,20 @@ func TestMCPHookStampsRequestID(t *testing.T) {
 // begun draining.
 func TestToolCallMiddlewareRejectsWhenDraining(t *testing.T) {
 	t.Parallel()
-	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	reg := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
 		Component: "test",
 		Concern:   "test.mcp.reject",
 		PollEvery: 5 * time.Millisecond,
 	})
 
-	// Drain immediately with a short deadline so the registry moves to Draining.
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	// Drain immediately through the lifecycle group so the registry moves to
+	// Draining and rejects new tool calls.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer drainCancel()
-	go func() { reg.Drain(drainCtx, "test.drain") }()
+	go func() {
+		group.Quiesce(drainCtx, "test.drain", livetrack.Budget{Cap: 10 * time.Millisecond, IdleGrace: 0})
+	}()
 
 	// Wait until the registry is no longer Open.
 	deadline := time.Now().Add(time.Second)
@@ -247,7 +251,8 @@ func TestServeStdioLockedDrainsOnExit(t *testing.T) {
 // unblocks within a reasonable window after force-close fires.
 func TestForceCloseOnDeadlineCancelsHandlerContext(t *testing.T) {
 	t.Parallel()
-	reg := livetrack.New[MCPMeta](livetrack.Options[MCPMeta]{
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	reg := livetrack.Attach[MCPMeta](group, livetrack.MemberSpec{Phase: livetrack.PhaseIngress, QuietRelevant: true, CancelNoWait: false}, livetrack.Options[MCPMeta]{
 		Component:   "test",
 		Concern:     "test.mcp.forceclose",
 		PollEvery:   5 * time.Millisecond,
@@ -278,14 +283,12 @@ func TestForceCloseOnDeadlineCancelsHandlerContext(t *testing.T) {
 		reg.Release(context.Background(), sess, "test.handler.done")
 	}()
 
-	// Drain with a very short timeout to trigger force-close quickly.
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	// Drain through the group with a very short cap to trigger force-close
+	// quickly. The force-close cancels the handler context; the registry's own
+	// force-close count is unit-tested in livetrack/drain_test.go.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer drainCancel()
-	result := reg.Drain(drainCtx, "test.forceclose")
-
-	if result.ForceClosed != 1 {
-		t.Fatalf("force-closed: got %d, want 1", result.ForceClosed)
-	}
+	group.Quiesce(drainCtx, "test.forceclose", livetrack.Budget{Cap: 10 * time.Millisecond, IdleGrace: 0})
 
 	// The handler goroutine should have observed the cancellation.
 	select {

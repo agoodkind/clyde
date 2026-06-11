@@ -10,7 +10,6 @@ import (
 // of different Meta types in one slice.
 type drainMember interface {
 	component() string
-	count() int
 	activeCount(grace time.Duration) int
 	drainWith(ctx context.Context, reason string, opts DrainOptions) DrainResult
 	spec() MemberSpec
@@ -25,14 +24,12 @@ type registryMember[M Meta] struct {
 
 func (m registryMember[M]) component() string { return m.reg.component }
 
-func (m registryMember[M]) count() int { return m.reg.Count() }
-
 func (m registryMember[M]) activeCount(grace time.Duration) int {
 	return m.reg.ActiveCount(grace)
 }
 
 func (m registryMember[M]) drainWith(ctx context.Context, reason string, opts DrainOptions) DrainResult {
-	return m.reg.DrainWith(ctx, reason, opts)
+	return m.reg.drainWith(ctx, reason, opts)
 }
 
 func (m registryMember[M]) spec() MemberSpec { return m.memSpec }

@@ -67,11 +67,25 @@ type GroupOptions struct {
 	Log *slog.Logger
 }
 
+// hookTiming selects whether a hook runs before or after its phase's member
+// drains. Before-hooks reproduce steps the pre-refactor sequence ran ahead of a
+// registry drain (adapter keepalives-off before ingress drain, MITM
+// server.Shutdown before tunnel drain, adapter http.Server.Shutdown after
+// ingress drains but before egress drains). After-hooks run once the phase's
+// members have drained (store closes after every surface is drained).
+type hookTiming uint8
+
+const (
+	hookBefore hookTiming = iota
+	hookAfter
+)
+
 // hook is a named non-registry lifecycle step (keepalives-off,
-// http.Server.Shutdown, store close) run at a declared phase.
+// http.Server.Shutdown, store close) run at a declared phase and timing.
 type hook struct {
-	name string
-	fn   func(context.Context) error
+	name   string
+	timing hookTiming
+	fn     func(context.Context) error
 }
 
 // quietPollEvery is the AwaitQuiet poll cadence, matching the registry default
@@ -111,17 +125,29 @@ func (g *Group) MemberCount() int {
 // member cannot be constructed. Package-level (not a method) because Go methods
 // cannot take type parameters.
 func Attach[M Meta](g *Group, member MemberSpec, opts Options[M]) *Registry[M] {
-	reg := New[M](opts)
+	reg := newRegistry[M](opts)
 	g.mu.Lock()
 	g.members = append(g.members, registryMember[M]{reg: reg, memSpec: member})
 	g.mu.Unlock()
 	return reg
 }
 
-// AddHook registers a named non-registry step to run at phase during Quiesce.
+// AddHook registers a named non-registry step to run after the phase's members
+// drain during Quiesce. Use AddHookBefore for steps that must precede the
+// member drains.
 func (g *Group) AddHook(phase Phase, name string, fn func(context.Context) error) {
+	g.addHook(phase, hookAfter, name, fn)
+}
+
+// AddHookBefore registers a named non-registry step to run before the phase's
+// members drain during Quiesce.
+func (g *Group) AddHookBefore(phase Phase, name string, fn func(context.Context) error) {
+	g.addHook(phase, hookBefore, name, fn)
+}
+
+func (g *Group) addHook(phase Phase, timing hookTiming, name string, fn func(context.Context) error) {
 	g.mu.Lock()
-	g.hooks[phase] = append(g.hooks[phase], hook{name: name, fn: fn})
+	g.hooks[phase] = append(g.hooks[phase], hook{name: name, timing: timing, fn: fn})
 	g.mu.Unlock()
 }
 
@@ -137,9 +163,12 @@ func (g *Group) Quiesce(parent context.Context, reason string, budget Budget) {
 	}
 }
 
-// quiescePhase drains every member in phase concurrently, then runs that
-// phase's hooks. The member drain mirrors the WaitGroup fan-out in the
-// pre-refactor startReloadDrain so concurrent draining is preserved.
+// quiescePhase runs the phase's before-hooks, drains every member in the phase
+// concurrently, then runs the phase's after-hooks. The member drain mirrors the
+// WaitGroup fan-out in the pre-refactor startReloadDrain so concurrent draining
+// is preserved; before/after timing reproduces the per-subsystem ordering the
+// hand-sequenced drain ran (keepalives-off and http shutdown around the
+// registry drain, store closes after every surface drained).
 func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, budget Budget) {
 	g.mu.Lock()
 	members := make([]drainMember, 0)
@@ -151,6 +180,11 @@ func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, bu
 	hooks := append([]hook(nil), g.hooks[phase]...)
 	g.mu.Unlock()
 
+	for _, h := range hooks {
+		if h.timing == hookBefore {
+			g.runHook(ctx, phase, h)
+		}
+	}
 	var wg sync.WaitGroup
 	for _, m := range members {
 		wg.Add(1)
@@ -167,7 +201,9 @@ func (g *Group) quiescePhase(ctx context.Context, phase Phase, reason string, bu
 	}
 	wg.Wait()
 	for _, h := range hooks {
-		g.runHook(ctx, phase, h)
+		if h.timing == hookAfter {
+			g.runHook(ctx, phase, h)
+		}
 	}
 }
 

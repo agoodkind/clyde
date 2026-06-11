@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
 )
@@ -458,7 +459,7 @@ func newProxyForTest(t *testing.T, cfg config.MITMConfig) *Proxy {
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		Tunnels:         newTestTunnelRegistry(),
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             cfg,
@@ -477,7 +478,7 @@ func newWebsocketRequestLogProxy(t *testing.T, captureDir string, logger *slog.L
 		certMu:          sync.Mutex{},
 		ca:              nil,
 		tlsClientConfig: nil,
-		Tunnels:         newTestTunnelRegistry(),
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir},

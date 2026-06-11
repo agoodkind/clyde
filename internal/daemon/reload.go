@@ -8,14 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 
 	"google.golang.org/grpc"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/daemonsupervisor"
-	"goodkind.io/clyde/internal/livetrack"
 )
 
 func reloadDaemonWorker(ctx context.Context, log *slog.Logger, grpcServer *grpc.Server, runtime *runtimeServices) (*clydev1.ReloadDaemonResponse, error) {
@@ -294,6 +292,14 @@ func inheritedListenerFiles(runtime *runtimeServices) ([]*os.File, []daemonsuper
 	return files, specs, cleanup, nil
 }
 
+// startReloadDrain runs the lifecycle group's ordered Quiesce for a reload in a
+// recovered background goroutine, returning a channel closed when the drain
+// completes. Quiesce drains every attached registry (adapter ingress and egress,
+// codex websocket sessions, MITM tunnels, search jobs, config watcher) in phase
+// order and runs the registered hooks (keepalives-off, HTTP server shutdowns,
+// SQLite store closes), bounded by budgetReload. The store closes run in the
+// storage phase after every surface and worker has drained, so the WAL flushes
+// before the new generation reopens the db files.
 func (r *runtimeServices) startReloadDrain(parent context.Context, log *slog.Logger) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -305,64 +311,9 @@ func (r *runtimeServices) startReloadDrain(parent context.Context, log *slog.Log
 				)
 			}
 		}()
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), reloadDrainCap)
-		defer cancel()
-		var wg sync.WaitGroup
-		if r.adapter != nil {
-			wg.Go(func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						log.ErrorContext(parent, "daemon.reload.adapter_drain_panic", "concern", "daemon.workers.reload", "component", "daemon",
-							"err", fmt.Sprintf("panic: %v", recovered),
-						)
-					}
-				}()
-				if err := r.adapter.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: reloadDrainIdleGrace}); err != nil {
-					log.WarnContext(ctx, "daemon.reload.adapter_drain_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
-				}
-			})
-		}
-		for id, proxy := range r.mitmProxies {
-			wg.Go(func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						log.ErrorContext(parent, "daemon.reload.mitm_drain_panic", "concern", "daemon.workers.reload", "component", "daemon",
-							"listener_id", id,
-							"err", fmt.Sprintf("panic: %v", recovered),
-						)
-					}
-				}()
-				if err := proxy.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: reloadDrainIdleGrace}); err != nil {
-					log.WarnContext(ctx, "daemon.reload.mitm_drain_failed", "concern", "daemon.workers.reload", "component", "daemon", "listener_id", id, "err", err)
-				}
-			})
-		}
-		wg.Wait()
-		// Close the SQLite stores only after every public surface has drained so
-		// the WAL flushes before the new generation reopens the same db files.
-		r.closeStoresOnReload(parent, ctx, log)
+		r.group.Quiesce(parent, "reload", budgetReload)
 	}()
 	return done
-}
-
-// closeStoresOnReload drains in-flight search jobs and closes the search and
-// capture stores so their SQLite WALs flush before the reload child reopens
-// them.
-func (r *runtimeServices) closeStoresOnReload(parent, ctx context.Context, log *slog.Logger) {
-	if r.searchJobs != nil {
-		r.searchJobs.Drain(ctx, "reload")
-	}
-	if r.searchStore != nil {
-		if err := r.searchStore.Close(parent, "reload"); err != nil {
-			log.WarnContext(ctx, "daemon.reload.search_store_close_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
-		}
-	}
-	r.closeConversationSemanticRuntime(ctx, log, "reload")
-	if r.captureStore != nil {
-		if err := r.captureStore.Close(parent, "reload"); err != nil {
-			log.WarnContext(ctx, "daemon.reload.capture_store_close_failed", "concern", "daemon.workers.reload", "component", "daemon", "err", err)
-		}
-	}
 }
 
 func (r *runtimeServices) waitReloadDrain(log *slog.Logger) {

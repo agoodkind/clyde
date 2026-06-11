@@ -73,6 +73,11 @@ type configWatcher struct {
 	// restart-required error until the supervisor rebind path is wired;
 	// injected in tests.
 	rebind func(context.Context) error
+	// quietWait blocks until no client exchange is in flight, bounded by the
+	// reload quiet-wait, so a reload or rebind defers to in-flight requests
+	// instead of severing them. Defaults to awaitDaemonQuiet over the daemon
+	// lifecycle group; injected in tests. Returns true if quiet was reached.
+	quietWait func(context.Context) bool
 }
 
 // newConfigWatcher builds the production watcher. The reload trigger is the
@@ -111,6 +116,9 @@ func newConfigWatcher(log *slog.Logger, baselineHash string, runtime *runtimeSer
 		rebind: func(ctx context.Context) error {
 			_, err := RebindDaemon(ctx)
 			return err
+		},
+		quietWait: func(ctx context.Context) bool {
+			return awaitDaemonQuiet(ctx, runtime.group)
 		},
 	}
 	// configWatcherMeta.IsLivetrackMeta is a pure marker the registry never
@@ -171,23 +179,6 @@ func (w *configWatcher) cancelLoop() {
 		return
 	}
 	w.cancel()
-}
-
-// stop cancels the loop and drains the watcher's livetrack registry. Use it on
-// the shutdown path where the loop is idle, so Drain sees a zero count promptly.
-// Do not call it from a reload triggered by this watcher: the loop is then
-// blocked in its own reload RPC and Drain would wait for the deadline.
-func (w *configWatcher) stop(ctx context.Context, reason string) {
-	if w == nil || w.registry == nil {
-		return
-	}
-	if w.cancel != nil {
-		w.cancel()
-	}
-	w.registry.Drain(ctx, reason)
-	w.log.InfoContext(ctx, "daemon.config_watch.stopped", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
-		"reason", reason,
-	)
 }
 
 // loop is the select over fsnotify events, errors, and the debounce timer. A
@@ -264,6 +255,23 @@ func (w *configWatcher) handleChange(ctx context.Context) bool {
 	w.log.InfoContext(ctx, "daemon.config_watch.change_detected", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
 		"path", w.path,
 	)
+	// Wait for in-flight client exchanges to finish before triggering a reload
+	// or rebind that would sever them, bounded by the reload quiet-wait. A
+	// request longer than the bound still takes the drain.
+	if w.quietWait != nil && !w.quietWait(ctx) {
+		w.log.InfoContext(ctx, "daemon.config_watch.quiet_wait_timeout", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", w.path,
+		)
+	}
+	// Re-hash after the wait: an edit reverted to the baseline while we waited
+	// means there is nothing to apply, so skip the reload entirely.
+	postHash, postOK := configFileHash(ctx, w.log, w.path)
+	if !postOK || postHash == w.baselineHash {
+		w.log.InfoContext(ctx, "daemon.config_watch.reverted_during_wait", "concern", slogger.ConcernProcessDaemonConfig, "component", "daemon",
+			"path", w.path,
+		)
+		return false
+	}
 	if w.listenerChanged() {
 		return w.trigger(ctx, "rebind", w.rebind)
 	}

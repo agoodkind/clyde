@@ -99,6 +99,7 @@ func startRuntime(
 		configWatcher:         nil,
 		group:                 newLifecycleGroup(log),
 	}
+	runtime.addSearchStoreCloseHook(searchStore)
 	if cfg.MITM.EnabledDefault {
 		if err := startMITM(ctx, cfg, log, runtime, inherited.listeners); err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
@@ -117,6 +118,7 @@ func startRuntime(
 		runtime.adapter = server
 		runtime.adapterListener = adapterListener
 		runtime.adapterCursorListener = adapterCursorListener
+		runtime.addAdapterLifecycleHooks(server)
 	} else if inherited.listeners[listenerNameAdapter] != nil || inherited.listeners[listenerNameAdapterCursor] != nil {
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("adapter listener inherited but adapter is disabled; full daemon restart required")
@@ -132,7 +134,7 @@ func startRuntime(
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("pprof listener inherited but pprof is disabled; full daemon restart required")
 	}
-	runtime.semantic = startConversationSemanticRuntime(ctx, cfg, log)
+	runtime.semantic = startConversationSemanticRuntime(ctx, cfg, log, runtime.group)
 	return runtime, nil
 }
 
@@ -150,6 +152,7 @@ func startMITM(ctx context.Context, cfg *config.Config, log *slog.Logger, runtim
 		return err
 	}
 	runtime.captureStore = store
+	runtime.addCaptureStoreCloseHook(store)
 	for id, listenerCfg := range cfg.MITM.Listeners {
 		listenerCfg.ID = id
 		if err := startMITMListener(ctx, cfg, log, runtime, listenerCfg, inherited); err != nil {
@@ -207,6 +210,7 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 	}
 	runtime.mitmProxies[listenerCfg.ID] = proxy
 	runtime.mitmListeners[listenerCfg.ID] = sockets
+	runtime.addMITMLifecycleHook(listenerCfg.ID, proxy)
 	errCh := runtime.errors
 	go func() {
 		defer func() {
@@ -403,15 +407,6 @@ func mitmCodexWireBaselinePath(cfg *config.Config) string {
 	return mitm.ResolveWireBaselinePath(codexCLIUpstream, configured)
 }
 
-// stopConfigWatcher cancels and drains the config watcher if one is running. It
-// is nil-safe and used on the shutdown path where the loop is idle.
-func (r *runtimeServices) stopConfigWatcher(ctx context.Context, reason string) {
-	if r == nil || r.configWatcher == nil {
-		return
-	}
-	r.configWatcher.stop(ctx, reason)
-}
-
 // cancelConfigWatcher cancels the config watcher loop without waiting. It is
 // nil-safe and used by reload and rebind, where the watcher may be the in-flight
 // caller and a blocking drain would deadlock.
@@ -422,41 +417,27 @@ func (r *runtimeServices) cancelConfigWatcher() {
 	r.configWatcher.cancelLoop()
 }
 
+// shutdown stops the daemon generation through the lifecycle group. It cancels
+// the config watcher loop first (non-blocking, so a watcher that is itself the
+// caller cannot deadlock), closes the daemon and pprof listeners (which are not
+// registries), then runs the group's ordered Quiesce at the shutdown budget.
+// Quiesce drains every attached registry and runs the registered hooks
+// (keepalives-off, HTTP server shutdowns, SQLite store closes), so the adapter,
+// MITM proxies, search jobs, and stores are torn down in phase order with the
+// stores closed last. Safe on a partially started runtime: only the registries
+// and hooks that were attached run.
 func (r *runtimeServices) shutdown(parent context.Context) {
-	ctx, cancel := context.WithTimeout(parent, daemonShutdownTimeout)
-	defer cancel()
 	if r == nil {
 		return
 	}
-	r.stopConfigWatcher(ctx, "shutdown")
+	r.cancelConfigWatcher()
 	if r.listener != nil {
 		_ = r.listener.Close()
 	}
 	if r.pprofListener != nil {
 		_ = r.pprofListener.Close()
 	}
-	if r.adapter != nil {
-		_ = r.adapter.Shutdown(ctx)
-	}
-	for _, proxy := range r.mitmProxies {
-		_ = proxy.Shutdown(ctx)
-	}
-	// Drain in-flight search jobs and close their store so the SQLite WAL
-	// flushes before the process exits.
-	if r.searchJobs != nil {
-		r.searchJobs.Drain(ctx, "shutdown")
-	}
-	if r.searchStore != nil {
-		if err := r.searchStore.Close(parent, "shutdown"); err != nil {
-			slog.WarnContext(ctx, "daemon.shutdown.search_store_close_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
-		}
-	}
-	r.closeConversationSemanticRuntime(ctx, slog.Default(), "shutdown")
-	// Close the shared capture store after the proxies stop so the SQLite WAL
-	// flushes before the process exits.
-	if r.captureStore != nil {
-		if err := r.captureStore.Close(parent, "shutdown"); err != nil {
-			slog.WarnContext(ctx, "daemon.shutdown.capture_store_close_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
-		}
+	if r.group != nil {
+		r.group.Quiesce(parent, "shutdown", budgetShutdown)
 	}
 }

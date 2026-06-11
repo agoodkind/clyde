@@ -61,7 +61,7 @@ func TestPhaseOrder(t *testing.T) {
 func TestActiveCountUsesLiveActivity(t *testing.T) {
 	t.Parallel()
 	clock := newFakeClock()
-	r := New[testMeta](Options[testMeta]{Component: "test", Concern: "test.active", Now: clock.now})
+	r := newRegistry[testMeta](Options[testMeta]{Component: "test", Concern: "test.active", Now: clock.now})
 	s, err := r.Register(context.Background(), "k", testMeta{Tag: "k"}, &noopCloser{count: atomic.Int32{}, err: nil, delay: 0})
 	if err != nil {
 		t.Fatalf("register: %v", err)

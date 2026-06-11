@@ -60,7 +60,7 @@ func (c *blockingCloser) Close(reason string) error {
 
 func TestRegisterReleaseRace(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component: "test",
 		Concern:   "test.race",
 	})
@@ -87,7 +87,7 @@ func TestRegisterReleaseRace(t *testing.T) {
 
 func TestDrainIdle(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.idle",
 		PollEvery:   5 * time.Millisecond,
@@ -111,7 +111,7 @@ func TestDrainIdle(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	result := r.Drain(ctx, "test.idle")
+	result := r.drainWith(ctx, "test.idle", DrainOptions{IdleGrace: 0})
 	if result.Final != StateClosed {
 		t.Fatalf("final state: got %s, want closed", result.Final)
 	}
@@ -130,7 +130,7 @@ func TestDrainIdle(t *testing.T) {
 
 func TestDrainDeadline(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.deadline",
 		PollEvery:   5 * time.Millisecond,
@@ -154,7 +154,7 @@ func TestDrainDeadline(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	result := r.Drain(ctx, "test.deadline")
+	result := r.drainWith(ctx, "test.deadline", DrainOptions{IdleGrace: 0})
 	if result.Final != StateClosed {
 		t.Fatalf("final state: got %s, want closed", result.Final)
 	}
@@ -170,7 +170,7 @@ func TestDrainDeadline(t *testing.T) {
 
 func TestRegisterDuringDrainRejected(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.reject",
 		PollEvery:   5 * time.Millisecond,
@@ -187,7 +187,7 @@ func TestRegisterDuringDrainRejected(t *testing.T) {
 		close(drainStarted)
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
-		drainDone <- r.Drain(ctx, "test.reject")
+		drainDone <- r.drainWith(ctx, "test.reject", DrainOptions{IdleGrace: 0})
 	}()
 	<-drainStarted
 	// Wait for state to flip to Draining so Register sees the rejected
@@ -209,7 +209,7 @@ func TestRegisterDuringDrainRejected(t *testing.T) {
 
 func TestForceCloseIdempotent(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.force.idem",
 		PollEvery:   5 * time.Millisecond,
@@ -236,7 +236,7 @@ func TestForceCloseIdempotent(t *testing.T) {
 
 func TestParentTraversal(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component: "test",
 		Concern:   "test.parent",
 	})
@@ -277,7 +277,7 @@ func TestParentTraversal(t *testing.T) {
 
 func TestCorrelationPropagation(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.correlation",
 		PollEvery:   5 * time.Millisecond,
@@ -308,7 +308,7 @@ func TestCorrelationPropagation(t *testing.T) {
 // idleness sits below a generous ceiling that survives slow CI.
 func TestSessionTouchUpdatesLastActivity(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component: "test",
 		Concern:   "test.touch.update",
 	})
@@ -337,7 +337,7 @@ func TestSessionTouchUpdatesLastActivity(t *testing.T) {
 // under -race.
 func TestSessionTouchRaceFree(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component: "test",
 		Concern:   "test.touch.race",
 	})
@@ -372,7 +372,7 @@ func TestSessionTouchRaceFree(t *testing.T) {
 // backwards) would surface as a smaller second reading.
 func TestSessionIdleSinceMonotonic(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component: "test",
 		Concern:   "test.idle.monotonic",
 	})
@@ -390,7 +390,7 @@ func TestSessionIdleSinceMonotonic(t *testing.T) {
 
 func TestCloserErrorAggregation(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.errors",
 		PollEvery:   5 * time.Millisecond,
@@ -411,7 +411,7 @@ func TestCloserErrorAggregation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
-	result := r.Drain(ctx, "test.errors")
+	result := r.drainWith(ctx, "test.errors", DrainOptions{IdleGrace: 0})
 	if result.Final != StateClosed {
 		t.Fatalf("final state: got %s, want closed", result.Final)
 	}

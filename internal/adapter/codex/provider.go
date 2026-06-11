@@ -116,25 +116,6 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 	}
 }
 
-// DrainSessions blocks until all cached websocket sessions complete or
-// ctx expires. Callers (adapter.Server.Shutdown) use this so the reload
-// deadline participates in livetrack drain accounting.
-func (p *Provider) DrainSessions(ctx context.Context, reason string) {
-	if p == nil {
-		return
-	}
-	result := p.wsRegistry.Drain(ctx, reason)
-	if p.log != nil {
-		p.log.InfoContext(ctx, "adapter.codex.ws_sessions.drained", "concern", "adapter.providers.codex.request", "component", "adapter",
-			"subcomponent", "codex",
-			"final", result.Final.String(),
-			"remaining", result.Remaining,
-			"force_closed", result.ForceClosed,
-			"duration_ms", result.Duration.Milliseconds(),
-		)
-	}
-}
-
 // ID satisfies adapterprovider.Provider.
 func (p *Provider) ID() adapterresolver.ProviderID { return adapterresolver.ProviderCodex }
 

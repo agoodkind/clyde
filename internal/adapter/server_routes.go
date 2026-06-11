@@ -120,7 +120,7 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
-		_ = s.Shutdown(shutCtx)
+		_ = s.ShutdownHTTP(shutCtx)
 		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
@@ -130,137 +130,33 @@ func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener
 	}
 }
 
-// Shutdown stops accepting new adapter requests, drains in-flight
-// ingress sessions and outbound provider calls until ctx expires, and
-// closes the HTTP server. The paired registry.Drain call satisfies
-// the livetrack adopter lint: any subsystem that calls
-// [http.Server.Shutdown] must also call registry.Drain so the daemon
-// reload chain has bounded shutdown. Cached upstream websocket
-// sessions are also drained through their livetrack registry so the
-// reload deadline applies to egress traffic as well as ingress.
-func (s *Server) Shutdown(ctx context.Context) error {
-	return s.ShutdownWith(ctx, livetrack.DrainOptions{IdleGrace: 0})
+// DisableKeepAlives stops the adapter HTTP server from keeping connections
+// alive, so no new request rides an existing keepalive connection once reload
+// drain begins. Nil-safe: a not-yet-serving server is a no-op. The daemon
+// registers this as a PhaseIngress before-hook on the lifecycle group so it
+// runs ahead of the ingress registry drain, reproducing the keepalives-off
+// step the pre-refactor ShutdownWith ran first.
+func (s *Server) DisableKeepAlives() {
+	if s.httpSrv != nil {
+		s.httpSrv.SetKeepAlivesEnabled(false)
+	}
 }
 
-// ShutdownWith is the drain-option-aware sibling of [Server.Shutdown].
-// The daemon reload chain calls it with [livetrack.DrainOptions.IdleGrace]
-// set so the ingress and egress registries can force-close wedged
-// sessions at drain start instead of waiting them out against the
-// outer cap. Semantics and error handling are otherwise identical to
-// [Server.Shutdown].
-func (s *Server) ShutdownWith(ctx context.Context, opts livetrack.DrainOptions) error {
+// ShutdownHTTP gracefully shuts down the adapter HTTP server, closing its
+// listeners and waiting for non-hijacked handlers to return. The ingress,
+// egress, and codex websocket registries drain as lifecycle-group members, so
+// this hook covers only the HTTP server lifecycle. Nil-safe. The daemon
+// registers it as a PhaseEgress before-hook so it runs after ingress sessions
+// drain but before egress, matching the pre-refactor ShutdownWith ordering.
+func (s *Server) ShutdownHTTP(ctx context.Context) error {
 	if s.httpSrv == nil {
-		if s.egressRegistry != nil {
-			egressResult := s.egressRegistry.DrainWith(ctx, "adapter.shutdown", opts)
-			s.log.InfoContext(ctx, "adapter.egress.drained", "concern", "adapter.http.egress", "final", egressResult.Final.String(),
-				"remaining", egressResult.Remaining,
-				"force_closed", egressResult.ForceClosed,
-				"duration_ms", egressResult.Duration.Milliseconds(),
-			)
-		}
-		if s.codexProvider != nil {
-			s.codexProvider.DrainSessions(ctx, "adapter.shutdown")
-		}
 		return nil
 	}
-	s.httpSrv.SetKeepAlivesEnabled(false)
-	if s.requests != nil {
-		result := s.requests.DrainWith(ctx, "adapter.shutdown", opts)
-		if len(result.Errors) > 0 {
-			s.log.WarnContext(ctx, "adapter.ingress.drain_errors", "concern", "adapter.http.ingress", "subcomponent", "adapter",
-				"force_closed", result.ForceClosed,
-				"errors", len(result.Errors),
-			)
-		}
-	}
-	err := s.httpSrv.Shutdown(ctx)
-	if s.egressRegistry != nil {
-		egressResult := s.egressRegistry.DrainWith(ctx, "adapter.shutdown", opts)
-		s.log.InfoContext(ctx, "adapter.egress.drained", "concern", "adapter.http.egress", "final", egressResult.Final.String(),
-			"remaining", egressResult.Remaining,
-			"force_closed", egressResult.ForceClosed,
-			"duration_ms", egressResult.Duration.Milliseconds(),
-		)
-	}
-	if s.codexProvider != nil {
-		s.codexProvider.DrainSessions(ctx, "adapter.shutdown")
-	}
-	if err != nil {
+	if err := s.httpSrv.Shutdown(ctx); err != nil {
+		s.log.WarnContext(ctx, "adapter.server.http_shutdown_failed", "concern", "adapter.http.ingress", "subcomponent", "adapter", "err", err)
 		return fmt.Errorf("adapter HTTP shutdown: %w", err)
 	}
 	return nil
-}
-
-// Close force-closes all adapter HTTP connections. It is used after a
-// bounded reload drain so stale keepalive or active Cloudflare
-// connections cannot pin traffic to the old binary indefinitely.
-// ForceCloseAll terminates every in-flight request session tracked in
-// the ingress registry, then calls [http.Server.Close].
-func (s *Server) Close() error {
-	if s.httpSrv == nil {
-		return nil
-	}
-	s.ForceCloseAll()
-	if err := s.httpSrv.Close(); err != nil {
-		s.log.Warn("adapter.server.http_close_failed", "concern", "adapter.http.ingress", "err", err)
-		return fmt.Errorf("adapter HTTP close: %w", err)
-	}
-	return nil
-}
-
-// ActiveRequestCount returns the number of in-flight requests currently
-// tracked in the ingress registry. Cloudflare-style keep-alive
-// connections that are idle between requests are not counted because
-// the registry only holds sessions while a handler is executing.
-// Concurrent-safe.
-func (s *Server) ActiveRequestCount() int {
-	if s.requests == nil {
-		return 0
-	}
-	return s.requests.Count()
-}
-
-// WaitForIdle polls ActiveRequestCount until it drops to zero or the
-// supplied context is canceled. The polling cadence is 50ms, matching
-// the MITM registry poll so reload drain timing is symmetric across
-// HTTP surfaces. Returns the final count when the context fires.
-func (s *Server) WaitForIdle(ctx context.Context) int {
-	if s.requests == nil || s.requests.Count() == 0 {
-		return 0
-	}
-	t := time.NewTicker(50 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return s.ActiveRequestCount()
-		case <-t.C:
-			if s.requests.Count() == 0 {
-				return 0
-			}
-		}
-	}
-}
-
-// ForceCloseAll closes every in-flight request session tracked in the
-// ingress registry. The registry's force-close fan-out terminates each
-// session's underlying TCP connection so wedged SSE streams, tool-call
-// bridges, and synthetic-content marker round-trips do not outlive the
-// drain deadline. Callers (daemon reload chain) invoke this after
-// WaitForIdle returns non-zero.
-func (s *Server) ForceCloseAll() {
-	if s.requests == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	result := s.requests.Drain(ctx, "adapter.force_close_all")
-	if len(result.Errors) > 0 {
-		s.log.WarnContext(ctx, "adapter.ingress.force_close_errors", "concern", "adapter.http.ingress", "subcomponent", "adapter",
-			"force_closed", result.ForceClosed,
-			"errors", len(result.Errors),
-		)
-	}
 }
 
 // registerIngressSession registers a new ingress request session in the

@@ -15,18 +15,21 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 )
 
-// newTestServer constructs a minimal Server for ingress registry tests.
-// It uses an in-memory registry with a no-op log so tests run quietly.
-func newTestServer(t *testing.T) *Server {
+// newTestServer constructs a minimal Server for ingress registry tests, wired
+// to a lifecycle group the test controls. It returns the group so tests can
+// drive draining through group.Quiesce, the only public drain entry point.
+func newTestServer(t *testing.T) (*Server, *livetrack.Group) {
 	t.Helper()
 	cfg := baseConfig()
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
 	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{
 		ScratchDir: func() string { return t.TempDir() },
+		Group:      group,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return srv
+	return srv, group
 }
 
 // TestIngressRegistryRegisterAndRelease verifies that a request is
@@ -35,7 +38,7 @@ func newTestServer(t *testing.T) *Server {
 // execution and back to 0 after.
 func TestIngressRegistryRegisterAndRelease(t *testing.T) {
 	t.Parallel()
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 
 	inFlight := make(chan struct{})
 	release := make(chan struct{})
@@ -48,7 +51,7 @@ func TestIngressRegistryRegisterAndRelease(t *testing.T) {
 		return nil
 	})
 
-	if count := srv.ActiveRequestCount(); count != 0 {
+	if count := srv.requests.Count(); count != 0 {
 		t.Fatalf("initial count = %d, want 0", count)
 	}
 
@@ -66,7 +69,7 @@ func TestIngressRegistryRegisterAndRelease(t *testing.T) {
 		t.Fatalf("handler did not start")
 	}
 
-	if count := srv.ActiveRequestCount(); count != 1 {
+	if count := srv.requests.Count(); count != 1 {
 		t.Errorf("in-flight count = %d, want 1", count)
 	}
 
@@ -77,7 +80,7 @@ func TestIngressRegistryRegisterAndRelease(t *testing.T) {
 		t.Fatalf("request did not complete")
 	}
 
-	if count := srv.ActiveRequestCount(); count != 0 {
+	if count := srv.requests.Count(); count != 0 {
 		t.Errorf("post-release count = %d, want 0", count)
 	}
 }
@@ -90,12 +93,13 @@ func TestIngressRegistryRegisterAndRelease(t *testing.T) {
 // that the handler is not called and the response is an error.
 func TestIngressRegistryDrainRejectsNewRequests(t *testing.T) {
 	t.Parallel()
-	srv := newTestServer(t)
+	srv, group := newTestServer(t)
 
-	// Transition the registry to draining state.
+	// Transition the registry to draining/closed through the group, the only
+	// public drain entry point.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	srv.requests.Drain(drainCtx, "test.drain")
+	group.Quiesce(drainCtx, "test.drain", livetrack.Budget{Cap: 50 * time.Millisecond, IdleGrace: 0})
 
 	handlerCalled := false
 	handler := srv.handle(adapterRouteOpenAI, func(_ context.Context, hctx *handlerCtx) error {
@@ -116,83 +120,13 @@ func TestIngressRegistryDrainRejectsNewRequests(t *testing.T) {
 	}
 }
 
-// TestIngressRegistryWaitForIdleReturnZero verifies that WaitForIdle
-// returns 0 immediately when no requests are in flight, matching the
-// previous WaitForIdle semantics (which polled the conn-state map).
-func TestIngressRegistryWaitForIdleReturnZero(t *testing.T) {
-	t.Parallel()
-	srv := newTestServer(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	got := srv.WaitForIdle(ctx)
-	if got != 0 {
-		t.Fatalf("WaitForIdle() = %d, want 0 when idle", got)
-	}
-}
-
-// TestIngressRegistryWaitForIdlePollsCount verifies that WaitForIdle
-// blocks while a request is in flight and returns 0 once it completes,
-// providing parity with the previous conn-state-map-based semantics.
-func TestIngressRegistryWaitForIdlePollsCount(t *testing.T) {
-	t.Parallel()
-	srv := newTestServer(t)
-
-	inFlight := make(chan struct{})
-	release := make(chan struct{})
-
-	handler := srv.handle(adapterRouteOpenAI, func(ctx context.Context, hctx *handlerCtx) error {
-		close(inFlight)
-		<-release
-		writeJSON(hctx.Writer, json.RawMessage(`{"ok":"true"}`))
-		return nil
-	})
-
-	reqDone := make(chan struct{})
-	go func() {
-		defer close(reqDone)
-		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-		rec := httptest.NewRecorder()
-		handler(rec, req)
-	}()
-
-	select {
-	case <-inFlight:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("handler did not start")
-	}
-
-	idleDone := make(chan int)
-	go func() {
-		waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		idleDone <- srv.WaitForIdle(waitCtx)
-	}()
-
-	// Release the handler and verify WaitForIdle returns 0.
-	close(release)
-	select {
-	case count := <-idleDone:
-		if count != 0 {
-			t.Errorf("WaitForIdle returned %d after release, want 0", count)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("WaitForIdle did not return after handler released")
-	}
-
-	select {
-	case <-reqDone:
-	case <-time.After(time.Second):
-		t.Fatalf("request goroutine did not exit")
-	}
-}
-
-// TestIngressRegistryForceCloseOnDeadline verifies that ForceCloseAll
-// drains the ingress registry, terminating registered sessions so
-// WaitForIdle returns 0 afterwards.
+// TestIngressRegistryForceCloseOnDeadline verifies that the lifecycle group's
+// Quiesce force-closes an in-flight ingress session at the budget cap,
+// terminating it so the registry count drops to 0. The wait-for-idle polling
+// and force-close fan-out themselves are unit-tested in livetrack.
 func TestIngressRegistryForceCloseOnDeadline(t *testing.T) {
 	t.Parallel()
-	srv := newTestServer(t)
+	srv, group := newTestServer(t)
 
 	inFlight := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -217,24 +151,24 @@ func TestIngressRegistryForceCloseOnDeadline(t *testing.T) {
 		t.Fatalf("handler did not start")
 	}
 
-	if count := srv.ActiveRequestCount(); count != 1 {
+	if count := srv.requests.Count(); count != 1 {
 		t.Errorf("pre-force-close count = %d, want 1", count)
 	}
 
-	// ForceCloseAll drains the registry; httptest scenarios use a
-	// context-cancel closer and still remove the session from the
-	// registry so the count drops to 0.
-	srv.ForceCloseAll()
+	// Quiesce waits the short cap then force-closes the still-active session
+	// (the closer cancels the handler context) and removes it from the
+	// registry, so the count drops to 0.
+	group.Quiesce(context.Background(), "test.force_close", livetrack.Budget{Cap: 200 * time.Millisecond, IdleGrace: 0})
 	close(release)
 
-	if count := srv.ActiveRequestCount(); count != 0 {
+	if count := srv.requests.Count(); count != 0 {
 		t.Errorf("post-force-close count = %d, want 0", count)
 	}
 
 	select {
 	case <-reqDone:
 	case <-time.After(2 * time.Second):
-		t.Fatalf("request did not complete after ForceCloseAll")
+		t.Fatalf("request did not complete after force-close")
 	}
 }
 
@@ -244,7 +178,7 @@ func TestIngressRegistryForceCloseOnDeadline(t *testing.T) {
 // ingressConnCloser rather than a noopIngressCloser.
 func TestIngressRegistryConnContextInjectsCloser(t *testing.T) {
 	t.Parallel()
-	srv := newTestServer(t)
+	srv, _ := newTestServer(t)
 
 	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {

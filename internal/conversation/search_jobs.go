@@ -279,12 +279,6 @@ func (m *SearchJobManager) Analyze(ctx context.Context, resultID, prompt string)
 	return m.analyzeExcerpts(ctx, stored, prompt)
 }
 
-// Drain cancels every in-flight job and waits for the registry to quiesce. The
-// daemon calls it on reload and shutdown.
-func (m *SearchJobManager) Drain(ctx context.Context, reason string) livetrack.DrainResult {
-	return m.registry.Drain(ctx, reason)
-}
-
 func (m *SearchJobManager) spawn(bgCtx context.Context, record Record, resultID, query string, opts WithinSearchOptions) {
 	jobCtx, cancel := context.WithCancel(bgCtx)
 	meta := SearchJobMeta{ResultID: resultID, ConversationID: record.ID}

@@ -25,7 +25,7 @@ func TestSlogEventCoverage(t *testing.T) {
 		ReplaceAttr: nil,
 	})
 	logger := slog.New(handler)
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.slog.events",
 		Log:         logger,
@@ -52,7 +52,7 @@ func TestSlogEventCoverage(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
-	r.Drain(ctx, "test.drain")
+	r.drainWith(ctx, "test.drain", DrainOptions{IdleGrace: 0})
 
 	wantMessages := map[string]int{
 		"livetrack.session.registered":  2,
@@ -80,7 +80,7 @@ func TestDrainIdleGraceForceClosesSilentSessions(t *testing.T) {
 	guard := &syncWriter{w: buf}
 	handler := slog.NewJSONHandler(guard, &slog.HandlerOptions{Level: slog.LevelDebug})
 	logger := slog.New(handler)
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.idle_grace.silent",
 		Log:         logger,
@@ -101,7 +101,7 @@ func TestDrainIdleGraceForceClosesSilentSessions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	start := time.Now()
-	result := r.DrainWith(ctx, "test.idle_grace.silent", DrainOptions{IdleGrace: 5 * time.Millisecond})
+	result := r.drainWith(ctx, "test.idle_grace.silent", DrainOptions{IdleGrace: 5 * time.Millisecond})
 	elapsed := time.Since(start)
 	if elapsed > 200*time.Millisecond {
 		t.Fatalf("drain elapsed %v, want < 200ms (fast-path should evict immediately)", elapsed)
@@ -134,7 +134,7 @@ func TestDrainIdleGraceLetsActiveSessionsRun(t *testing.T) {
 	guard := &syncWriter{w: buf}
 	handler := slog.NewJSONHandler(guard, &slog.HandlerOptions{Level: slog.LevelDebug})
 	logger := slog.New(handler)
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.idle_grace.active",
 		Log:         logger,
@@ -173,7 +173,7 @@ func TestDrainIdleGraceLetsActiveSessionsRun(t *testing.T) {
 	defer cancel()
 	drainDone := make(chan DrainResult, 1)
 	go func() {
-		drainDone <- r.DrainWith(ctx, "test.idle_grace.active", DrainOptions{IdleGrace: 50 * time.Millisecond})
+		drainDone <- r.drainWith(ctx, "test.idle_grace.active", DrainOptions{IdleGrace: 50 * time.Millisecond})
 	}()
 	// Release closers a touch after the deadline so deadline-path
 	// force-close gets to fire.
@@ -202,7 +202,7 @@ func TestDrainIdleGraceLetsActiveSessionsRun(t *testing.T) {
 // while the active ones survive to the deadline-path force-close.
 func TestDrainMixedSessions(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.idle_grace.mixed",
 		PollEvery:   5 * time.Millisecond,
@@ -256,7 +256,7 @@ func TestDrainMixedSessions(t *testing.T) {
 	defer cancel()
 	drainDone := make(chan DrainResult, 1)
 	go func() {
-		drainDone <- r.DrainWith(ctx, "test.idle_grace.mixed", DrainOptions{IdleGrace: 5 * time.Millisecond})
+		drainDone <- r.drainWith(ctx, "test.idle_grace.mixed", DrainOptions{IdleGrace: 5 * time.Millisecond})
 	}()
 	time.AfterFunc(170*time.Millisecond, func() {
 		for _, closer := range activeClosers {
@@ -294,7 +294,7 @@ func TestDrainIdleGraceZeroSkipsFastPath(t *testing.T) {
 	guard := &syncWriter{w: buf}
 	handler := slog.NewJSONHandler(guard, &slog.HandlerOptions{Level: slog.LevelDebug})
 	logger := slog.New(handler)
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.idle_grace.zero",
 		Log:         logger,
@@ -319,7 +319,7 @@ func TestDrainIdleGraceZeroSkipsFastPath(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-	result := r.DrainWith(ctx, "test.idle_grace.zero", DrainOptions{IdleGrace: 0})
+	result := r.drainWith(ctx, "test.idle_grace.zero", DrainOptions{IdleGrace: 0})
 	if result.Final != StateClosed {
 		t.Fatalf("final state: got %s, want closed", result.Final)
 	}
@@ -339,7 +339,7 @@ func TestDrainIdleGraceZeroSkipsFastPath(t *testing.T) {
 
 func TestDrainAlreadyDraining(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component:   "test",
 		Concern:     "test.drain.dup",
 		PollEvery:   5 * time.Millisecond,
@@ -354,7 +354,7 @@ func TestDrainAlreadyDraining(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
-		firstDone <- r.Drain(ctx, "first")
+		firstDone <- r.drainWith(ctx, "first", DrainOptions{IdleGrace: 0})
 	}()
 	// Wait until Drain advances out of Open before calling again.
 	deadline := time.Now().Add(time.Second)
@@ -364,7 +364,7 @@ func TestDrainAlreadyDraining(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	dup := r.Drain(context.Background(), "second")
+	dup := r.drainWith(context.Background(), "second", DrainOptions{IdleGrace: 0})
 	if dup.Reason != "already_draining" {
 		t.Fatalf("duplicate reason: got %q, want already_draining", dup.Reason)
 	}
@@ -374,7 +374,7 @@ func TestDrainAlreadyDraining(t *testing.T) {
 
 func TestDescendantsOf(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component: "test",
 		Concern:   "test.descendants",
 	})
@@ -404,7 +404,7 @@ func TestDescendantsOf(t *testing.T) {
 
 func TestForEachAndSnapshot(t *testing.T) {
 	t.Parallel()
-	r := New[testMeta](Options[testMeta]{
+	r := newRegistry[testMeta](Options[testMeta]{
 		Component: "test",
 		Concern:   "test.foreach",
 	})

@@ -78,7 +78,8 @@ func TestRegisterEgressNilRegistryIsNoop(t *testing.T) {
 
 func TestRegisterEgressForceCloseViaContextCancel(t *testing.T) {
 	t.Parallel()
-	reg := newEgressRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	reg := newEgressRegistry(group)
 	ctx := context.Background()
 
 	// Register a session. The closer cancels the context.
@@ -91,17 +92,13 @@ func TestRegisterEgressForceCloseViaContextCancel(t *testing.T) {
 	})
 	defer release("cleanup")
 
-	// Simulate a wedged provider call by draining the registry with a
-	// very short deadline, which triggers force-close.
-	drainCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	// Simulate a wedged provider call by draining through the lifecycle group's
+	// Quiesce with a very short cap, which force-closes the unreleased session.
+	drainCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	result := reg.Drain(drainCtx, "test.shutdown")
+	group.Quiesce(drainCtx, "test.shutdown", livetrack.Budget{Cap: 50 * time.Millisecond, IdleGrace: 0})
 
-	// Force-close should have fired because the session was not released.
-	if result.ForceClosed == 0 {
-		t.Errorf("expected force-close to fire, got ForceClosed=%d", result.ForceClosed)
-	}
-	// The egress context should be canceled.
+	// Force-close should have canceled the egress context.
 	select {
 	case <-egressCtx.Done():
 		// expected

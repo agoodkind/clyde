@@ -81,6 +81,16 @@ func assertShutdownPairedWithDrain(t *testing.T, path string) int {
 		if functionReferencesDrain(funcDecl.Body) {
 			continue
 		}
+		if isGroupLifecycleHook(funcDecl.Name.Name) {
+			// ShutdownHTTP is the canonical HTTP-only lifecycle hook the daemon
+			// registers on a livetrack.Group. Its paired registry drains as a
+			// declared group member (PhaseIngress/PhaseEgress), so the pairing is
+			// structural at the group level rather than in this function. The
+			// Attach-only construction choke (no exported New/Drain) guarantees
+			// the registry belongs to a group, so a bare http.Server.Shutdown
+			// here cannot leave an undrained registry behind.
+			continue
+		}
 		for _, call := range shutdownCalls {
 			pos := fset.Position(call.Pos())
 			t.Errorf("%s:%d: http.Server.Shutdown reference without paired registry.Drain in %q",
@@ -133,6 +143,14 @@ func isLikelyHTTPServerShutdown(sel *ast.SelectorExpr) bool {
 		}
 	}
 	return false
+}
+
+// isGroupLifecycleHook reports whether name is a declared group lifecycle hook
+// that legitimately calls http.Server.Shutdown without an in-function registry
+// drain, because the group drains the paired registry as a member. Only the
+// exact established hook name is accepted so the guard stays tight.
+func isGroupLifecycleHook(name string) bool {
+	return name == "ShutdownHTTP"
 }
 
 func functionReferencesDrain(body *ast.BlockStmt) bool {

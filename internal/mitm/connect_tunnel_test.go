@@ -372,21 +372,25 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelDrain()
-	drainDone := make(chan livetrack.DrainResult, 1)
+	// Drive the drain through the lifecycle group's Quiesce, the only public
+	// drain entry point. The tunnel registry is the group's sole member here, so
+	// Quiesce drains it and transitions it to StateClosed once the in-flight
+	// request completes. The natural (non-force) completion is proven by the
+	// in-flight request finishing; the exact force-closed count is unit-tested in
+	// livetrack/drain_test.go.
+	drainDone := make(chan struct{})
 	go func() {
-		drainDone <- proxy.proxy.Tunnels.Drain(drainCtx, "test.reload")
+		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+		close(drainDone)
 	}()
 	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
 
 	assertProviderTLSRequestRejected(t, tlsClient, tlsReader, providerHost, "/second")
 
 	select {
-	case result := <-drainDone:
-		if result.Final != livetrack.StateClosed {
-			t.Fatalf("drain final state = %s, want closed", result.Final)
-		}
-		if result.ForceClosed != 0 {
-			t.Fatalf("drain force_closed = %d, want 0", result.ForceClosed)
+	case <-drainDone:
+		if got := proxy.proxy.Tunnels.State(); got != livetrack.StateClosed {
+			t.Fatalf("drain final state = %s, want closed", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for drain to finish after TLS close")
@@ -448,19 +452,20 @@ func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelDrain()
-	drainDone := make(chan livetrack.DrainResult, 1)
+	// Drive the drain through the lifecycle group's Quiesce, the only public
+	// drain entry point. With an idle keepalive tunnel and idle-grace set, the
+	// tunnel registry force-closes the wedged tunnel and reaches StateClosed.
+	drainDone := make(chan struct{})
 	go func() {
-		drainDone <- proxy.proxy.Tunnels.Drain(drainCtx, "test.reload")
+		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 50 * time.Millisecond})
+		close(drainDone)
 	}()
 	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
 
 	select {
-	case result := <-drainDone:
-		if result.Final != livetrack.StateClosed {
-			t.Fatalf("drain final state = %s, want closed", result.Final)
-		}
-		if result.ForceClosed != 0 {
-			t.Fatalf("drain force_closed = %d, want 0", result.ForceClosed)
+	case <-drainDone:
+		if got := proxy.proxy.Tunnels.State(); got != livetrack.StateClosed {
+			t.Fatalf("drain final state = %s, want closed", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for idle provider TLS tunnel to close during drain")
@@ -582,7 +587,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 		store:           nil,
 		client:          "test",
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
-		Tunnels:         newTestTunnelRegistry(),
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "",
@@ -657,6 +662,7 @@ func (s *echoServer) Close() {
 type testProxy struct {
 	server *http.Server
 	proxy  *Proxy
+	group  *livetrack.Group
 	addr   string
 }
 
@@ -734,8 +740,12 @@ func assertProviderTLSRequestRejected(t *testing.T, conn net.Conn, reader *bufio
 	}
 }
 
-func newTestTunnelRegistry() *livetrack.Registry[TunnelMeta] {
-	return livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
+func newTestTunnelRegistry(group *livetrack.Group) *livetrack.Registry[TunnelMeta] {
+	return livetrack.Attach[TunnelMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[TunnelMeta]{
 		Component:     "mitm",
 		Concern:       "providers.mitm.lifecycle",
 		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -753,6 +763,7 @@ func startTestProxy(t *testing.T) *testProxy {
 		t.Fatalf("listen: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
 	p := &Proxy{
 		log:             logger,
 		httpClient:      http.DefaultClient,
@@ -762,7 +773,7 @@ func startTestProxy(t *testing.T) *testProxy {
 		tlsClientConfig: nil,
 		store:           nil,
 		client:          "test",
-		Tunnels:         newTestTunnelRegistry(),
+		Tunnels:         newTestTunnelRegistry(group),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: t.TempDir()},
 		base:            "http://" + listener.Addr().String(),
@@ -771,7 +782,7 @@ func startTestProxy(t *testing.T) *testProxy {
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(listener) }()
-	return &testProxy{server: server, proxy: p, addr: listener.Addr().String()}
+	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
 }
 
 func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server, store *capture.Store) *testProxy {
@@ -798,6 +809,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	// full request/response bodies are persisted to the shared SQLite capture
 	// store. The proxy no longer owns a separate raw-file writer.
 	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
 	p := &Proxy{
 		log:             logger,
 		httpClient:      http.DefaultClient,
@@ -807,7 +819,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
 		store:           store,
 		client:          "test",
-		Tunnels:         newTestTunnelRegistry(),
+		Tunnels:         newTestTunnelRegistry(group),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
@@ -817,7 +829,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
 	go func() { _ = server.Serve(listener) }()
-	return &testProxy{server: server, proxy: p, addr: listener.Addr().String()}
+	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
 }
 
 type testCursorProvider struct {
@@ -988,7 +1000,11 @@ func reverse(s string) string {
 // daemon reload-drain idle-grace behavior.
 func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
 	t.Parallel()
-	registry := livetrack.New[TunnelMeta](livetrack.Options[TunnelMeta]{
+	registry := livetrack.Attach[TunnelMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[TunnelMeta]{
 		Component:   "test",
 		Concern:     "test.splice.touch",
 		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),

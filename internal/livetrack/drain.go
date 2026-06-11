@@ -26,15 +26,7 @@ type DrainOptions struct {
 	IdleGrace time.Duration
 }
 
-// Drain is the convenience wrapper that preserves the original
-// signature. It calls [Registry.DrainWith] with a zero-value
-// [DrainOptions] so legacy callers keep the wait-then-deadline path
-// they had before the IdleGrace fast-path landed.
-func (r *Registry[M]) Drain(ctx context.Context, reason string) DrainResult {
-	return r.DrainWith(ctx, reason, DrainOptions{IdleGrace: 0})
-}
-
-// DrainWith transitions the registry from Open to Draining and runs
+// drainWith transitions the registry from Open to Draining and runs
 // the configurable drain pipeline. The pipeline is:
 //
 //  1. If opts.IdleGrace > 0, snapshot the sessions and force-close
@@ -50,7 +42,7 @@ func (r *Registry[M]) Drain(ctx context.Context, reason string) DrainResult {
 // returns a DrainResult with Final set to the current state and
 // Reason "already_draining" so concurrent reload paths can detect
 // the duplicate without racing.
-func (r *Registry[M]) DrainWith(ctx context.Context, reason string, opts DrainOptions) DrainResult {
+func (r *Registry[M]) drainWith(ctx context.Context, reason string, opts DrainOptions) DrainResult {
 	if !r.state.CompareAndSwap(uint32(StateOpen), uint32(StateDraining)) {
 		return DrainResult{
 			Reason:      "already_draining",

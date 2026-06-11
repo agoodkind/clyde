@@ -236,7 +236,7 @@ func TestNewProxyAppliesLoggingRequiredLegsFromConfig(t *testing.T) {
 	t.Cleanup(func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = proxy.Shutdown(shutdownCtx)
+		_ = proxy.ShutdownHTTP(shutdownCtx)
 	})
 
 	recorder := proxy.requestLog.Begin(
@@ -494,7 +494,7 @@ func newHTTPProxyForCaptureTest(t *testing.T, captureDir string, store *capture.
 		tlsClientConfig: nil,
 		store:           store,
 		client:          "test",
-		Tunnels:         newTestTunnelRegistry(),
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
 		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
 		mu:              sync.RWMutex{},
 		cfg:             config.MITMConfig{CaptureDir: captureDir},

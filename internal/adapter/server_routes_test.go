@@ -3,7 +3,6 @@ package adapter
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +16,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/anthropic"
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
 )
 
 func TestStartOnListenerServesHealth(t *testing.T) {
@@ -88,7 +88,7 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 	}
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), time.Second)
-	if err := srv.Shutdown(shutCtx); err != nil {
+	if err := srv.ShutdownHTTP(shutCtx); err != nil {
 		shutCancel()
 		t.Fatalf("shutdown: %v", err)
 	}
@@ -111,6 +111,11 @@ func TestShutdownClosesIdleKeepaliveConnection(t *testing.T) {
 	}
 }
 
+// TestCloseForceClosesActiveConnection verifies that the lifecycle group's
+// Quiesce force-closes an active ingress connection at the budget cap: the
+// ingress session's closer terminates the underlying net.Conn, which cancels
+// the handler's request context and lets the HTTP server shut down. This is the
+// path that replaced the standalone Shutdown/ForceCloseAll/Close methods.
 func TestCloseForceClosesActiveConnection(t *testing.T) {
 	lis, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
@@ -118,19 +123,29 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 	}
 	cfg := baseConfig()
 	cfg.Enabled = true
-	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	srv, err := New(context.Background(), cfg, config.LoggingConfig{}, Deps{Group: group}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	// Register the adapter HTTP-server shutdown as the daemon does, so Quiesce
+	// stops the server once the force-closed handler returns.
+	group.AddHookBefore(livetrack.PhaseEgress, "adapter.http_shutdown", func(ctx context.Context) error {
+		return srv.ShutdownHTTP(ctx)
+	})
 	started := make(chan struct{})
 	release := make(chan struct{})
-	srv.mux.HandleFunc("/test/block", func(w http.ResponseWriter, r *http.Request) {
+	// Route through the ingress boundary (s.handle) so the request registers an
+	// ingress session backed by an ingressConnCloser over the real net.Conn.
+	// Quiesce force-closes that session, closing the connection.
+	srv.mux.HandleFunc("/test/block", srv.handle(adapterRouteOpenAI, func(ctx context.Context, hctx *handlerCtx) error {
 		close(started)
 		select {
 		case <-release:
-		case <-r.Context().Done():
+		case <-ctx.Done():
 		}
-	})
+		return nil
+	}))
 	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- srv.StartOnListener(ctx, lis) }()
@@ -151,17 +166,9 @@ func TestCloseForceClosesActiveConnection(t *testing.T) {
 		t.Fatalf("handler did not start")
 	}
 
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	if err := srv.Shutdown(shutCtx); err == nil {
-		shutCancel()
-		close(release)
-		t.Fatalf("shutdown unexpectedly completed while handler was active")
-	}
-	shutCancel()
-	if err := srv.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		close(release)
-		t.Fatalf("close: %v", err)
-	}
+	// Quiesce waits the short cap then force-closes the active ingress session,
+	// closing the connection and unblocking the handler and HTTP server.
+	group.Quiesce(context.Background(), "test.close", livetrack.Budget{Cap: 200 * time.Millisecond, IdleGrace: 0})
 
 	select {
 	case <-respCh:

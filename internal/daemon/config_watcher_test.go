@@ -60,7 +60,11 @@ func newTestConfigWatcher(t *testing.T, path, baselineHash string) (*configWatch
 		log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		debounce:     15 * time.Millisecond,
 		baselineHash: baselineHash,
-		registry: livetrack.New[configWatcherMeta](livetrack.Options[configWatcherMeta]{
+		registry: livetrack.Attach[configWatcherMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{
+			Phase:         livetrack.PhaseWorkers,
+			QuietRelevant: false,
+			CancelNoWait:  true,
+		}, livetrack.Options[configWatcherMeta]{
 			Component:   "daemon",
 			Concern:     slogger.ConcernProcessDaemonConfig,
 			Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -244,8 +248,11 @@ func TestConfigWatcherPortChangeRoutesToRebind(t *testing.T) {
 	}
 }
 
-// TestConfigWatcherStopExitsLoop confirms draining the watcher exits the loop.
-func TestConfigWatcherStopExitsLoop(t *testing.T) {
+// TestConfigWatcherCancelExitsLoop confirms cancelling the watcher loop exits it
+// and releases its livetrack session. The group owns draining the registry on
+// reload and shutdown; the watcher only cancels its own loop (non-blocking) so a
+// reload it triggered cannot deadlock on its own drain.
+func TestConfigWatcherCancelExitsLoop(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, config.ConfigFile)
 	writeConfig(t, path, "# baseline\n")
@@ -256,6 +263,6 @@ func TestConfigWatcherStopExitsLoop(t *testing.T) {
 	if err := w.start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	w.stop(context.Background(), "test")
-	waitFor(t, func() bool { return w.registry.State() != livetrack.StateOpen }, "registry drained")
+	w.cancelLoop()
+	waitFor(t, func() bool { return w.registry.Count() == 0 }, "watcher session released")
 }
