@@ -61,6 +61,8 @@ Preserve zero-bind-gap daemon reload semantics when changing `internal/daemon/`,
 - After child readiness, the old generation must stop accepting public traffic and drain or close existing traffic according to the daemon implementation.
 - Existing long-lived HTTP, CONNECT, websocket, MCP, and gRPC streams may stay on the old process until graceful drain completes.
 
+A config edit no longer always re-execs. The watcher classifies the change (`config.ClassifyConfigChange`) and either applies it in process, waits for quiet then reloads, rebinds, or asks for a restart. See `docs/reload-and-hot-apply.md`.
+
 Keep detailed reload behavior in daemon code comments, tests, or dedicated docs rather than expanding this file.
 
 ## Tracked Long-Lived Work
@@ -73,6 +75,8 @@ Forbidden in subsystems that have adopted livetrack:
 - Bare context cancellation as the sole shutdown mechanism for long-lived goroutines that hold OS resources.
 - Goroutine fanout without registry registration.
 - Per-subsystem hand-rolled equivalents of `WaitForIdle`, `ActiveCount`, or `CloseAll`.
+
+Registration is now enforced by the API, not by convention: `livetrack.New`, `Registry.Drain`, and `Registry.DrainWith` are unexported, so the only way to construct a registry is `livetrack.Attach` (which binds it to the daemon lifecycle group) and the only way to drain is `Group.Quiesce`. See `docs/reload-and-hot-apply.md`.
 
 The motivating empirical case for long-lived Cursor backend keepalives is documented in `docs/cursor.md`.
 
