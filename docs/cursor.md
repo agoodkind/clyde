@@ -1,6 +1,7 @@
 # Cursor
 
-Cursor permits users to supply their own publicly accessible OpenAI compatible end point. We can use this to route requests through native agent CLIs without needing to use a separate API key. 
+Cursor permits users to supply their own publicly accessible OpenAI compatible end point.
+We can use this to route requests through native agent CLIs without needing to use a separate API key. 
 
 ## Background
 
@@ -17,7 +18,6 @@ Cursor's own servers call this endpoint across the internet rather than the app 
 This limitation can be worked around by using a Cloudflare tunnel to quickly stand up a public facing endpoint that dumps onto your local host.
 
 ## Combined request lifecycle
-
 
 When you send a message, Cursor routes it out through its proxy setting to the local MITM proxy, on to Cursor’s own backend, through Cloudflare, and then into Clyde’s public ingress.
 
