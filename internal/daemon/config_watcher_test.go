@@ -110,6 +110,75 @@ func writeConfig(t *testing.T, path, content string) {
 	}
 }
 
+// TestHandleChangeWaitsForQuietThenTriggers asserts handleChange calls the
+// quiet wait before triggering the reload, so a reload defers to in-flight
+// client exchanges instead of severing them.
+func TestHandleChangeWaitsForQuietThenTriggers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.ConfigFile)
+	writeConfig(t, path, "# baseline\n")
+	baseline := testConfigHash(t, path)
+	w, rec, _ := newTestConfigWatcher(t, path, baseline)
+
+	// The changed content makes the post-wait hash differ from baseline.
+	writeConfig(t, path, "# changed\n")
+
+	quietReleased := make(chan struct{})
+	waitEntered := make(chan struct{})
+	w.quietWait = func(context.Context) bool {
+		close(waitEntered)
+		<-quietReleased
+		return true
+	}
+
+	handleDone := make(chan bool, 1)
+	go func() { handleDone <- w.handleChange(context.Background()) }()
+
+	<-waitEntered
+	if reloads, _ := rec.counts(); reloads != 0 {
+		t.Fatalf("reload fired before quiet: reloads=%d, want 0", reloads)
+	}
+	close(quietReleased)
+
+	select {
+	case triggered := <-handleDone:
+		if !triggered {
+			t.Fatal("handleChange returned false; expected reload to trigger after quiet")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleChange did not return after quiet released")
+	}
+	if reloads, _ := rec.counts(); reloads != 1 {
+		t.Fatalf("reloads after quiet = %d, want 1", reloads)
+	}
+}
+
+// TestHandleChangeSkipsReloadWhenRevertedDuringWait asserts that if the file
+// content returns to the baseline while waiting for quiet, no reload fires.
+func TestHandleChangeSkipsReloadWhenRevertedDuringWait(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, config.ConfigFile)
+	writeConfig(t, path, "# baseline\n")
+	baseline := testConfigHash(t, path)
+	w, rec, _ := newTestConfigWatcher(t, path, baseline)
+
+	// Change the content so handleChange's first hash differs from baseline.
+	writeConfig(t, path, "# changed\n")
+
+	// While "waiting for quiet", the operator reverts the edit back to baseline.
+	w.quietWait = func(context.Context) bool {
+		writeConfig(t, path, "# baseline\n")
+		return true
+	}
+
+	if triggered := w.handleChange(context.Background()); triggered {
+		t.Fatal("handleChange returned true; expected skip when reverted during wait")
+	}
+	if reloads, rebinds := rec.counts(); reloads != 0 || rebinds != 0 {
+		t.Fatalf("triggers after revert: reloads=%d rebinds=%d, want 0 0", reloads, rebinds)
+	}
+}
+
 // testConfigHash computes the watcher's content hash for path with a discard
 // logger, failing the test on a read error.
 func testConfigHash(t *testing.T, path string) string {
