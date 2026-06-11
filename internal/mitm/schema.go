@@ -83,6 +83,10 @@ type CaptureRecord struct {
 	// for egress replay; codex attestation rides through verbatim in
 	// the `x-oai-attestation` request header instead.
 	BillingAttestation string `json:"billing_attestation,omitempty"`
+	// RequestFeatures carries the prompt-free feature vector derived from the
+	// raw request before the drift writer reduces RequestBody to its safe
+	// summary.
+	RequestFeatures *RequestFeatures `json:"request_features,omitempty"`
 }
 
 // Snapshot is the typed reference for what an upstream client emits

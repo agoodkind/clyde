@@ -47,7 +47,7 @@ type BuildRequestConfig struct {
 	PromptCacheTTL                  string
 	PromptCacheScope                string
 	ToolResultCacheReferenceEnabled bool
-	PerContextBetas                 map[string]string
+	StructuredOutputPresent         bool
 	// Identity sources metadata.user_id. AccountUUID and DeviceID
 	// stay constant across requests; the per-request session_id is
 	// taken from Cursor's metadata.cursorConversationId via
@@ -129,7 +129,6 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 	}
 	out.SystemBlocks = sysBlocks
 
-	out.ExtraBetas = DerivePerRequestBetas(resolved, cfg.PerContextBetas)
 	// Note: claude-cli does NOT send fine-grained-tool-streaming-2025-05-14
 	// (verified against the local Claude Code MITM baseline). The flavor's
 	// beta header is the canonical set; do not append it here.
@@ -137,6 +136,7 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 		out.OutputConfig = &anthropic.OutputConfig{Effort: effort}
 	}
 	ApplyThinkingConfig(&out, resolved, strippedModel)
+	out.FeatureVector = resolvedRequestFeatureVector(resolved, out, cfg.StructuredOutputPresent)
 	if userID := cfg.Identity.EncodeUserID(); userID != "" {
 		out.Metadata = &anthropic.RequestMetadata{UserID: userID}
 	}
@@ -154,6 +154,43 @@ func BuildRequest(ctx context.Context, req adapteropenai.ChatRequest, resolved *
 		}
 	}
 	return out, nil
+}
+
+const featureContext1MTokens = 1_000_000
+
+func resolvedRequestFeatureVector(resolved *adapterresolver.ResolvedRequest, req anthropic.Request, structuredOutputPresent bool) anthropic.WireFlavorFeatureVector {
+	return anthropic.WireFlavorFeatureVector{
+		ModelID:                 strings.TrimSpace(req.Model),
+		Context1M:               resolvedRequestHas1MContext(resolved),
+		ThinkingMode:            requestThinkingMode(req.Thinking),
+		StructuredOutputPresent: structuredOutputPresent,
+		ToolsPresent:            len(req.Tools) > 0,
+	}
+}
+
+func resolvedRequestHas1MContext(resolved *adapterresolver.ResolvedRequest) bool {
+	if resolved == nil {
+		return false
+	}
+	return resolved.ContextBudget.InputTokens >= featureContext1MTokens
+}
+
+func requestThinkingMode(thinking *anthropic.Thinking) anthropic.WireFlavorThinkingMode {
+	if thinking == nil {
+		return anthropic.WireFlavorThinkingNone
+	}
+	switch anthropic.WireFlavorThinkingMode(strings.ToLower(strings.TrimSpace(thinking.Type))) {
+	case anthropic.WireFlavorThinkingNone:
+		return anthropic.WireFlavorThinkingNone
+	case anthropic.WireFlavorThinkingAdaptive:
+		return anthropic.WireFlavorThinkingAdaptive
+	case anthropic.WireFlavorThinkingEnabled:
+		return anthropic.WireFlavorThinkingEnabled
+	case anthropic.WireFlavorThinkingDisabled:
+		return anthropic.WireFlavorThinkingDisabled
+	default:
+		return anthropic.WireFlavorThinkingNone
+	}
 }
 
 func stripSystemPrefix(system, prefix string) string {

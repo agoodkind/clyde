@@ -6,29 +6,67 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
 )
 
+type claudeBillingBodyFixture struct {
+	Model          string                      `json:"model"`
+	System         []claudeContentBlock        `json:"system"`
+	Messages       []claudeMessageFixture      `json:"messages"`
+	Thinking       *requestThinkingFixture     `json:"thinking,omitempty"`
+	ResponseFormat json.RawMessage             `json:"response_format,omitempty"`
+	Tools          []requestFeatureToolFixture `json:"tools,omitempty"`
+}
+
+type claudeContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type claudeMessageFixture struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 // claudeSystemBillingBody builds a minimal claude messages body whose first
 // system block carries the billing header line with the supplied cch token.
 func claudeSystemBillingBody(t *testing.T, cch string) []byte {
 	t.Helper()
-	body := map[string]any{
-		"model": "claude-sonnet",
-		"system": []any{
-			map[string]any{
-				"type": "text",
-				"text": "x-anthropic-billing-header: cc_version=2.1.123.fp; cc_entrypoint=cli; cch=" + cch + ";",
+	body := newClaudeBillingBodyFixture(cch)
+	body.Model = "claude-sonnet"
+	return mustClaudeBillingBody(t, body)
+}
+
+func claudeFeatureBillingBody(t *testing.T, cch string) []byte {
+	t.Helper()
+	body := newClaudeBillingBodyFixture(cch)
+	body.Model = "claude-fable-4-20250514"
+	body.Thinking = &requestThinkingFixture{Type: "adaptive"}
+	body.ResponseFormat = json.RawMessage(`{"type":"json_schema"}`)
+	body.Tools = []requestFeatureToolFixture{{Name: "Read", Type: "custom"}}
+	return mustClaudeBillingBody(t, body)
+}
+
+func newClaudeBillingBodyFixture(cch string) claudeBillingBodyFixture {
+	return claudeBillingBodyFixture{
+		Model: "claude-sonnet",
+		System: []claudeContentBlock{
+			{
+				Type: "text",
+				Text: "x-anthropic-billing-header: cc_version=2.1.123.fp; cc_entrypoint=cli; cch=" + cch + ";",
 			},
-			map[string]any{"type": "text", "text": "You are a helpful assistant."},
+			{Type: "text", Text: "You are a helpful assistant."},
 		},
-		"messages": []any{
-			map[string]any{"role": "user", "content": "hi"},
-		},
+		Messages: []claudeMessageFixture{{Role: "user", Content: "hi"}},
 	}
+}
+
+func mustClaudeBillingBody(t *testing.T, body claudeBillingBodyFixture) []byte {
+	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal claude body: %v", err)
@@ -214,7 +252,7 @@ func TestExtractSnapshotV2FromDriftCaptureYieldsFlavorWithAttestation(t *testing
 	header := http.Header{}
 	header.Set("Authorization", "Bearer secret")
 	header.Set("User-Agent", "claude-cli/2.1.123 (external, sdk-cli)")
-	header.Set("Anthropic-Beta", "oauth-2025-04-20,claude-code-20250219")
+	header.Set("Anthropic-Beta", "oauth-2025-04-20,claude-code-20250219,context-1m-2025-08-07")
 
 	proxy := &Proxy{}
 	proxy.recordDriftCapture(cfg, driftCaptureInput{
@@ -223,7 +261,7 @@ func TestExtractSnapshotV2FromDriftCaptureYieldsFlavorWithAttestation(t *testing
 		path:        "/v1/messages",
 		upstreamURL: "https://api.anthropic.com/v1/messages",
 		header:      header,
-		body:        claudeSystemBillingBody(t, "deadbeef"),
+		body:        claudeFeatureBillingBody(t, "deadbeef"),
 	})
 
 	driftPath := driftCapturePath(captureRoot, string(driftUpstreamClaudeCode))
@@ -242,6 +280,18 @@ func TestExtractSnapshotV2FromDriftCaptureYieldsFlavorWithAttestation(t *testing
 	flavor := snap.Flavors[0]
 	if flavor.BillingAttestation != "deadbeef" {
 		t.Fatalf("flavor billing attestation=%q want deadbeef", flavor.BillingAttestation)
+	}
+	wantFeatures := []RequestFeatures{
+		{
+			ModelID:                 "claude-fable-4-20250514",
+			Context1M:               true,
+			ThinkingMode:            RequestThinkingAdaptive,
+			StructuredOutputPresent: true,
+			ToolsPresent:            true,
+		},
+	}
+	if !reflect.DeepEqual(flavor.FeatureVectors, wantFeatures) {
+		t.Fatalf("flavor feature vectors=%+v want %+v", flavor.FeatureVectors, wantFeatures)
 	}
 	if len(flavor.Headers) == 0 {
 		t.Fatalf("flavor headers empty")
@@ -269,7 +319,7 @@ func TestExtractSnapshotV2FromDriftCaptureYieldsFlavorWithAttestation(t *testing
 	}
 }
 
-func TestSnapshotV2TOMLRoundTripPreservesBillingAttestation(t *testing.T) {
+func TestSnapshotV2TOMLRoundTripPreservesFeatureVectors(t *testing.T) {
 	in := SnapshotV2{
 		Upstream: V2Upstream{Name: "claude-code", Version: "v1", CapturedAt: "", RecordCount: 1},
 		Flavors: []FlavorShape{
@@ -282,7 +332,23 @@ func TestSnapshotV2TOMLRoundTripPreservesBillingAttestation(t *testing.T) {
 				Headers: []V2Header{
 					{Name: "user-agent", Classification: V2HeaderClassConstant, Presence: V2HeaderPresenceRequired, ObservedValues: []string{"claude-cli/2.1"}, Pattern: "", OccurrenceRate: 1.0},
 				},
-				Body:               V2Body{BodyType: "json_object", Fields: []V2Field{{Name: "model", Kind: V2FieldKindString, Presence: V2HeaderPresenceRequired, OccurrenceRate: 1.0, SubFields: nil, ItemKind: "", ItemSubFields: nil, SampleValue: ""}}},
+				Body: V2Body{BodyType: "json_object", Fields: []V2Field{{Name: "model", Kind: V2FieldKindString, Presence: V2HeaderPresenceRequired, OccurrenceRate: 1.0, SubFields: nil, ItemKind: "", ItemSubFields: nil, SampleValue: ""}}},
+				FeatureVectors: []RequestFeatures{
+					{
+						ModelID:                 "claude-fable-4-20250514",
+						Context1M:               true,
+						ThinkingMode:            RequestThinkingAdaptive,
+						StructuredOutputPresent: true,
+						ToolsPresent:            true,
+					},
+					{
+						ModelID:                 "claude-haiku-4-5-20251001",
+						Context1M:               false,
+						ThinkingMode:            RequestThinkingDisabled,
+						StructuredOutputPresent: false,
+						ToolsPresent:            false,
+					},
+				},
 				BillingAttestation: "cch-token-9",
 			},
 		},
@@ -299,8 +365,47 @@ func TestSnapshotV2TOMLRoundTripPreservesBillingAttestation(t *testing.T) {
 	if len(out.Flavors) != 1 {
 		t.Fatalf("flavor count=%d want 1", len(out.Flavors))
 	}
-	if out.Flavors[0].BillingAttestation != "cch-token-9" {
-		t.Fatalf("billing attestation lost in round-trip: %q", out.Flavors[0].BillingAttestation)
+	if !reflect.DeepEqual(out, in) {
+		t.Fatalf("round-trip snapshot mismatch\ngot:  %+v\nwant: %+v", out, in)
+	}
+}
+
+func TestLoadSnapshotV2TOMLOmitsFeatureVectors(t *testing.T) {
+	raw := []byte(`
+[upstream]
+name = 'claude-code'
+version = 'v1'
+captured_at = ''
+record_count = 1
+
+[[flavors]]
+slug = 'claude-code-interactive'
+record_count = 1
+methods = ['POST']
+paths = ['/v1/messages']
+billing_attestation = 'cch-token-9'
+
+[flavors.signature]
+user_agent = 'claude-cli/2.1'
+beta_fingerprint = ''
+body_keys = ['model']
+
+[flavors.body]
+body_type = 'json_object'
+`)
+	path := filepath.Join(t.TempDir(), "reference-v2.toml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write old baseline TOML: %v", err)
+	}
+	snap, err := LoadSnapshotV2TOML(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshotV2TOML: %v", err)
+	}
+	if len(snap.Flavors) != 1 {
+		t.Fatalf("flavor count=%d want 1", len(snap.Flavors))
+	}
+	if snap.Flavors[0].FeatureVectors != nil {
+		t.Fatalf("feature vectors=%+v want nil", snap.Flavors[0].FeatureVectors)
 	}
 }
 

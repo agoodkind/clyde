@@ -28,6 +28,11 @@ var ErrBaselineMissing = errors.New("anthropic wire baseline missing")
 // failing the load. The wrapped cause carries the specific failure.
 var ErrBaselineInvalid = errors.New("anthropic wire baseline invalid")
 
+// ErrFlavorUnseeded reports that the MITM wire baseline has no learned
+// claude-cli flavor for the request's model and feature vector. The
+// adapter maps this to the same HTTP 503 class as baseline load failures.
+var ErrFlavorUnseeded = errors.New("anthropic wire flavor unseeded")
+
 // WireFlavorsLoader reads the daemon-owned MITM baseline and projects
 // each captured flavor into a [WireFlavor]. There are no compiled-in
 // defaults: the on-disk baseline is the single source of truth. The
@@ -171,8 +176,26 @@ func projectFlavorShape(shape mitm.FlavorShape) WireFlavor {
 		StaticHeaders:      constantStaticHeadersFromShape(shape),
 		BodyFields:         copyStrings(shape.Signature.BodyKeys),
 		BodyFieldsRequired: requiredBodyFieldsFromShape(shape),
+		FeatureVectors:     featureVectorsFromShape(shape),
 		BillingAttestation: strings.TrimSpace(shape.BillingAttestation),
 	}
+}
+
+func featureVectorsFromShape(shape mitm.FlavorShape) []WireFlavorFeatureVector {
+	if len(shape.FeatureVectors) == 0 {
+		return nil
+	}
+	out := make([]WireFlavorFeatureVector, 0, len(shape.FeatureVectors))
+	for _, feature := range shape.FeatureVectors {
+		out = append(out, WireFlavorFeatureVector{
+			ModelID:                 feature.ModelID,
+			Context1M:               feature.Context1M,
+			ThinkingMode:            WireFlavorThinkingMode(feature.ThinkingMode),
+			StructuredOutputPresent: feature.StructuredOutputPresent,
+			ToolsPresent:            feature.ToolsPresent,
+		})
+	}
+	return out
 }
 
 // constantHeaderValueFromShape returns the single observed value of a

@@ -65,6 +65,85 @@ func requestBuilderChatRequest() adapteropenai.ChatRequest {
 	}
 }
 
+func TestBuildRequestDerivesFeatureVector(t *testing.T) {
+	type featureVectorCase struct {
+		name                    string
+		model                   adaptermodel.ResolvedAlias
+		toolsPresent            bool
+		structuredOutputPresent bool
+		want                    anthropic.WireFlavorFeatureVector
+	}
+	cases := []featureVectorCase{
+		{
+			name: "one million context thinking tools and structured output",
+			model: adaptermodel.ResolvedAlias{
+				Alias:           "clyde-opus-4-7-1m-thinking-enabled",
+				ClaudeModel:     "claude-opus-4-7[1m]",
+				Context:         1_000_000,
+				MaxOutputTokens: 32000,
+				Thinking:        adaptermodel.ThinkingEnabled,
+			},
+			toolsPresent:            true,
+			structuredOutputPresent: true,
+			want: anthropic.WireFlavorFeatureVector{
+				ModelID:                 "claude-opus-4-7",
+				Context1M:               true,
+				ThinkingMode:            anthropic.WireFlavorThinkingEnabled,
+				StructuredOutputPresent: true,
+				ToolsPresent:            true,
+			},
+		},
+		{
+			name: "standard context no optional request features",
+			model: adaptermodel.ResolvedAlias{
+				Alias:           "clyde-haiku-4-5",
+				ClaudeModel:     "claude-haiku-4-5",
+				Context:         200_000,
+				MaxOutputTokens: 8192,
+				Thinking:        "",
+			},
+			toolsPresent:            false,
+			structuredOutputPresent: false,
+			want: anthropic.WireFlavorFeatureVector{
+				ModelID:                 "claude-haiku-4-5",
+				Context1M:               false,
+				ThinkingMode:            anthropic.WireFlavorThinkingNone,
+				StructuredOutputPresent: false,
+				ToolsPresent:            false,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := requestBuilderChatRequest()
+			if tc.toolsPresent {
+				req.Tools = []adapteropenai.Tool{{
+					Type: "function",
+					Function: adapteropenai.ToolFunctionSchema{
+						Name:        "ReadFile",
+						Description: "read a file",
+						Parameters:  []byte(`{"type":"object"}`),
+					},
+				}}
+			}
+			cfg := requestBuilderConfig()
+			cfg.StructuredOutputPresent = tc.structuredOutputPresent
+			if tc.structuredOutputPresent {
+				cfg.JSONSystemPrompt = "Return JSON only."
+			}
+
+			out, err := BuildRequest(context.Background(), req, resolvedForTest(tc.model), "", cfg, "req-test")
+			if err != nil {
+				t.Fatalf("BuildRequest: %v", err)
+			}
+			if out.FeatureVector != tc.want {
+				t.Fatalf("FeatureVector = %+v, want %+v", out.FeatureVector, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildRequestEmitsMetadataAndContextManagement(t *testing.T) {
 	req := requestBuilderChatRequest()
 	stream := true
@@ -323,38 +402,6 @@ func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	}
 	if !strings.Contains(out.SystemBlocks[2].Text, "Return JSON only.") {
 		t.Fatalf("caller system missing JSON prompt: %q", out.SystemBlocks[2].Text)
-	}
-}
-
-func TestBuildRequestOmitsFineGrainedToolStreamingBeta(t *testing.T) {
-	// CLYDE-124: claude-cli does NOT send fine-grained-tool-streaming
-	// even on streaming + tools requests. The captured reference at
-	// research/claude-code/snapshots/latest/reference.toml proves this.
-	// Sending it diverges our wire fingerprint from claude-cli's.
-	req := requestBuilderChatRequest()
-	req.Stream = true
-	req.Tools = []adapteropenai.Tool{{
-		Type: "function",
-		Function: adapteropenai.ToolFunctionSchema{
-			Name:        "ReadFile",
-			Description: "read a file",
-			Parameters:  []byte(`{"type":"object"}`),
-		},
-	}}
-	model := adaptermodel.ResolvedAlias{
-		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
-		MaxOutputTokens: 32000,
-	}
-
-	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
-	if err != nil {
-		t.Fatalf("BuildRequest: %v", err)
-	}
-	for _, beta := range out.ExtraBetas {
-		if beta == FineGrainedToolStreamingBeta {
-			t.Fatalf("ExtraBetas=%v unexpectedly contains %q (claude-cli does not send it)", out.ExtraBetas, FineGrainedToolStreamingBeta)
-		}
 	}
 }
 

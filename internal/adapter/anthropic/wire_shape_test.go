@@ -181,6 +181,66 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 	}
 }
 
+func TestFeatureAwareFlavorSelectionMatchesContextTier(t *testing.T) {
+	t.Parallel()
+
+	loaded, err := newWireFlavorsLoader().Load(writeTestWireBaseline(t))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cases := []struct {
+		name        string
+		vector      WireFlavorFeatureVector
+		wantContext bool
+	}{
+		{
+			name:        "fable_1m",
+			vector:      testWireFlavorFeatureVector(testFableModel, true),
+			wantContext: true,
+		},
+		{
+			name:        "opus_1m",
+			vector:      testWireFlavorFeatureVector(testOpusModel, true),
+			wantContext: true,
+		},
+		{
+			name:        "fable_200k",
+			vector:      testWireFlavorFeatureVector(testFableModel, false),
+			wantContext: false,
+		},
+		{
+			name:        "sonnet_200k",
+			vector:      testWireFlavorFeatureVector(testSonnetModel, false),
+			wantContext: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			flavor, err := selectInteractiveFlavor(loaded, tc.vector)
+			if err != nil {
+				t.Fatalf("selectInteractiveFlavor: %v", err)
+			}
+			gotContext := betaFlagsContain(flavor, testContext1MBeta)
+			if gotContext != tc.wantContext {
+				t.Fatalf("selected %q context-1m=%v, want %v", flavor.Slug, gotContext, tc.wantContext)
+			}
+		})
+	}
+}
+
+func betaFlagsContain(flavor WireFlavor, flag string) bool {
+	for _, betaFlag := range flavor.BetaFlags {
+		if betaFlag == flag {
+			return true
+		}
+	}
+	return false
+}
+
 // TestAnthropicVersionFallsBackToConfig exercises the cfg fallback branch
 // directly: when a flavor carries no Anthropic-Version (a state the
 // loader skips during projection but the header builder still guards

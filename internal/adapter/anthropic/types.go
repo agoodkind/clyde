@@ -52,18 +52,9 @@ const (
 // Config carries wire header and body-side values for the messages
 // API. Populated from the user's config; callers validate before New.
 type Config struct {
-	MessagesURL           string
-	OAuthAnthropicVersion string
-	BetaHeader            string
-	// BetaSuppress lists anthropic-beta flags removed from the assembled
-	// outbound header after the learned flavor and any per-request
-	// ExtraBetas merge. It is the surgical counterpart to BetaHeader
-	// (wholesale replace) and ExtraBetas (additive): it lets the learned
-	// MITM baseline stay the source of truth while dropping a single
-	// inherited claude-cli flag (e.g. thinking-token-count-2026-05-13,
-	// which forces Opus 4.8 to redact thinking text). Matching is exact
-	// per flag token and case-insensitive.
-	BetaSuppress            []string
+	MessagesURL             string
+	OAuthAnthropicVersion   string
+	BetaHeader              string
 	UserAgent               string
 	SystemPromptPrefix      string
 	StainlessPackageVersion string
@@ -313,10 +304,9 @@ type Request struct {
 	// The callback executes during do() after the /v1/messages request is
 	// committed and before status-specific processing.
 	OnHeaders func(http.Header) `json:"-"`
-	// ExtraBetas is appended to cfg.BetaHeader when building the
-	// outbound anthropic-beta header. Use for per-model / per-request
-	// flags the static config does not already include. Not serialized.
-	ExtraBetas []string `json:"-"`
+	// FeatureVector carries the resolved request features used for
+	// learned wire flavor matching. Not serialized.
+	FeatureVector WireFlavorFeatureVector `json:"-"`
 }
 
 // UnmarshalJSON is part of Clyde's typed adapter surface.

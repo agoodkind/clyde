@@ -222,6 +222,8 @@ func (p *Proxy) recordDriftCapture(cfg config.MITMConfig, input driftCaptureInpu
 // captured x-oai-attestation request header.
 func buildDriftCaptureRecord(input driftCaptureInput, upstream driftUpstreamName) CaptureRecord {
 	summary := summarizeBody(input.body)
+	requestHeaders := driftHeaderMap(input.header)
+	requestFeatures := driftRequestFeatures(requestHeaders, input.body)
 	bodyRaw, err := json.Marshal(captureBodySummary{
 		Mode:     summary.Mode,
 		BodyType: summary.BodyType,
@@ -261,7 +263,7 @@ func buildDriftCaptureRecord(input driftCaptureInput, upstream driftUpstreamName
 		BodyLen:            0,
 		Body:               nil,
 		RequestBody:        bodyRaw,
-		RequestHeaders:     driftHeaderMap(input.header),
+		RequestHeaders:     requestHeaders,
 		ResponseHeaders:    nil,
 		FromClient:         false,
 		Length:             0,
@@ -270,7 +272,19 @@ func buildDriftCaptureRecord(input driftCaptureInput, upstream driftUpstreamName
 		Messages:           0,
 		Err:                "",
 		BillingAttestation: billing,
+		RequestFeatures:    requestFeatures,
 	}
+}
+
+func driftRequestFeatures(headers map[string]string, body []byte) *RequestFeatures {
+	features, err := ExtractRequestFeatures(CapturedRequest{
+		RequestHeaders: headers,
+		RequestBody:    json.RawMessage(body),
+	})
+	if err != nil || strings.TrimSpace(features.ModelID) == "" {
+		return nil
+	}
+	return &features
 }
 
 // writeDriftCaptureRecord serializes rec as one JSONL line and appends it to

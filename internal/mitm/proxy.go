@@ -759,6 +759,12 @@ func summarizeJSON(body []byte, summary captureBodySummary) captureBodySummary {
 	summary.Input = rawFieldArrayLen(fields, "input")
 	summary.Tools = rawFieldArrayLen(fields, "tools")
 	summary.Model = rawFieldString(fields, "model")
+	if features, err := ExtractRequestFeatures(CapturedRequest{
+		RequestHeaders: nil,
+		RequestBody:    json.RawMessage(body),
+	}); err == nil {
+		summary.Model = features.ModelID
+	}
 	return summary
 }
 

@@ -452,16 +452,8 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 }
 
 func anthropicProviderAdapterError(err error) *adapterError {
-	if errors.Is(err, anthropic.ErrBaselineMissing) || errors.Is(err, anthropic.ErrBaselineInvalid) {
-		// The daemon-owned MITM wire baseline is absent or unparseable, so
-		// the adapter cannot mirror the claude-cli identity on outbound
-		// /v1/messages. Return an operator-actionable HTTP 503 rather than
-		// sending a request with no identity headers.
-		return adapterErrBaselineMissing(
-			"anthropic",
-			"anthropic wire baseline is unavailable: seed it by running claude-cli once through the Clyde MITM proxy, or restore the reference-v2.toml baseline file, then retry",
-			err,
-		)
+	if aerr := anthropicWireBaselineAdapterError(err); aerr != nil {
+		return aerr
 	}
 	var authErr *anthropic.AuthCredentialError
 	if errors.As(err, &authErr) {
@@ -535,6 +527,24 @@ func anthropicProviderAdapterError(err error) *adapterError {
 		return aerr
 	}
 	return adapterErrUpstreamFailed("anthropic", err.Error(), err)
+}
+
+func anthropicWireBaselineAdapterError(err error) *adapterError {
+	if errors.Is(err, anthropic.ErrFlavorUnseeded) {
+		return adapterErrBaselineMissing("anthropic", err.Error(), err)
+	}
+	if errors.Is(err, anthropic.ErrBaselineMissing) || errors.Is(err, anthropic.ErrBaselineInvalid) {
+		// The daemon-owned MITM wire baseline is absent or unparseable, so
+		// the adapter cannot mirror the claude-cli identity on outbound
+		// /v1/messages. Return an operator-actionable HTTP 503 rather than
+		// sending a request with no identity headers.
+		return adapterErrBaselineMissing(
+			"anthropic",
+			"anthropic wire baseline is unavailable: seed it by running claude-cli once through the Clyde MITM proxy, or restore the reference-v2.toml baseline file, then retry",
+			err,
+		)
+	}
+	return nil
 }
 
 // preparedRequestAlias returns the caller-facing alias for a prepared

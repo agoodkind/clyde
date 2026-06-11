@@ -69,6 +69,30 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("custom-conversations"))
 	})
 
+	It("loads adapter client identity without beta override knobs", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		configText := `[adapter.client_identity]
+user_agent = "REDACTED-UA"
+system_prompt_prefix = "REDACTED-SYSTEM-PREFIX"
+stainless_package_version = "0.81.0"
+stainless_runtime = "node"
+stainless_runtime_version = "v24.3.0"
+cc_version = "2.1.114"
+cc_entrypoint = "sdk-cli"
+`
+		configPath := filepath.Join(globalDir, "config.toml")
+		Expect(os.WriteFile(configPath, []byte(configText), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Adapter.ClientIdentity.UserAgent).To(Equal("REDACTED-UA"))
+		Expect(cfg.Adapter.ClientIdentity.CCEntrypoint).To(Equal("sdk-cli"))
+	})
+
 	It("defaults blank conversation semantic collection id", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)

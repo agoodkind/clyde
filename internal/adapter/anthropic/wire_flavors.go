@@ -11,6 +11,32 @@ type WireHeader struct {
 	Classification string // "constant" | "enum" | "free"
 }
 
+// WireFlavorThinkingMode is the learned request thinking mode that
+// participates in feature-aware flavor matching.
+type WireFlavorThinkingMode string
+
+const (
+	// WireFlavorThinkingNone means the captured request body omitted
+	// thinking.
+	WireFlavorThinkingNone WireFlavorThinkingMode = "none"
+	// WireFlavorThinkingAdaptive means thinking.type was adaptive.
+	WireFlavorThinkingAdaptive WireFlavorThinkingMode = "adaptive"
+	// WireFlavorThinkingEnabled means thinking.type was enabled.
+	WireFlavorThinkingEnabled WireFlavorThinkingMode = "enabled"
+	// WireFlavorThinkingDisabled means thinking.type was disabled.
+	WireFlavorThinkingDisabled WireFlavorThinkingMode = "disabled"
+)
+
+// WireFlavorFeatureVector is the request feature vector observed for a
+// learned wire flavor.
+type WireFlavorFeatureVector struct {
+	ModelID                 string
+	Context1M               bool
+	ThinkingMode            WireFlavorThinkingMode
+	StructuredOutputPresent bool
+	ToolsPresent            bool
+}
+
 // WireFlavor is the captured wire shape for one caller flavor of an
 // upstream. Fields are typed to satisfy strict type hygiene; no
 // map[string]string or interface{} appears here.
@@ -29,6 +55,7 @@ type WireFlavor struct {
 	StaticHeaders      []WireHeader
 	BodyFields         []string
 	BodyFieldsRequired []string
+	FeatureVectors     []WireFlavorFeatureVector
 	// BillingAttestation is the captured claude-code `cch=<value>`
 	// token observed across this flavor's drift records. The egress
 	// path substitutes it into the billing/attribution system block in

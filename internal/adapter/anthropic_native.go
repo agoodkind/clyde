@@ -186,12 +186,7 @@ func zeroNativeResolvedRequest(requestedModel string) adapterresolver.ResolvedRe
 }
 
 func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, anthropic.ErrBaselineMissing) || errors.Is(err, anthropic.ErrBaselineInvalid) {
-		aerr := adapterErrBaselineMissing(
-			"anthropic",
-			"anthropic wire baseline is unavailable: seed it by running claude-cli once through the Clyde MITM proxy, or restore the reference-v2.toml baseline file, then retry",
-			err,
-		)
+	if aerr := anthropicWireBaselineAdapterError(err); aerr != nil {
 		s.respondAdapterError(w, r, aerr)
 		return
 	}

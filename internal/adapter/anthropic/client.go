@@ -22,6 +22,18 @@ import (
 	"goodkind.io/clyde/internal/clock"
 )
 
+type betaFlag string
+
+const (
+	thinkingTokenCountBetaFlag betaFlag = "thinking-token-count-2026-05-13"
+	redactThinkingBetaFlag     betaFlag = "redact-thinking-2026-02-12"
+)
+
+var thinkingRedactionBetaStripSet = []betaFlag{
+	thinkingTokenCountBetaFlag,
+	redactThinkingBetaFlag,
+}
+
 // sessionID is a per-daemon-process UUIDv4 used for the session
 // correlation header. Generated lazily once at the first messages
 // request and stable for the lifetime of the daemon.
@@ -291,7 +303,7 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 // request with no identity.
 func (c *Client) prepareRequestBody(ctx context.Context, req Request) (WireFlavor, []byte, error) {
 	log := anthropicRequestLog.Logger()
-	flavor, err := c.activeFlavor()
+	flavor, err := c.activeFlavor(featureVectorForRequest(req))
 	if err != nil {
 		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
@@ -390,36 +402,14 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 	}
 
 	beta := flavor.AnthropicBeta
-	if v := strings.TrimSpace(c.cfg.BetaHeader); v != "" {
-		beta = v
-	}
-	if len(req.ExtraBetas) > 0 {
-		existing := map[string]struct{}{}
-		for f := range strings.SplitSeq(beta, ",") {
-			existing[strings.TrimSpace(f)] = struct{}{}
-		}
-		for _, extra := range req.ExtraBetas {
-			extra = strings.TrimSpace(extra)
-			if extra == "" {
-				continue
-			}
-			if _, dup := existing[extra]; dup {
-				continue
-			}
-			beta = beta + "," + extra
-			existing[extra] = struct{}{}
-		}
-	}
-	if len(c.cfg.BetaSuppress) > 0 {
-		filtered, removed := suppressBetaFlags(beta, c.cfg.BetaSuppress)
-		if len(removed) > 0 {
-			anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.beta_suppressed",
-				"concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
-				"model", req.Model,
-				"removed", removed,
-			)
-			beta = filtered
-		}
+	filtered, removed := suppressBetaFlags(beta, thinkingRedactionBetaStripSet)
+	if len(removed) > 0 {
+		anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.thinking_redaction_beta_stripped",
+			"concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
+			"model", req.Model,
+			"removed", removed,
+		)
+		beta = filtered
 	}
 	setHard("Anthropic-Beta", beta)
 
@@ -441,17 +431,17 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 // the rebuilt header value and the list of removed flags (in the order
 // they appeared in beta) so the caller can log exactly what changed. A
 // flag in suppress that is absent from beta is silently ignored.
-func suppressBetaFlags(beta string, suppress []string) (string, []string) {
+func suppressBetaFlags(beta string, suppress []betaFlag) (string, []string) {
 	if strings.TrimSpace(beta) == "" || len(suppress) == 0 {
 		return beta, nil
 	}
-	drop := make(map[string]struct{}, len(suppress))
+	drop := make(map[string]bool, len(suppress))
 	for _, s := range suppress {
-		s = strings.TrimSpace(s)
+		s := strings.TrimSpace(string(s))
 		if s == "" {
 			continue
 		}
-		drop[strings.ToLower(s)] = struct{}{}
+		drop[strings.ToLower(s)] = true
 	}
 	if len(drop) == 0 {
 		return beta, nil
@@ -463,7 +453,7 @@ func suppressBetaFlags(beta string, suppress []string) (string, []string) {
 		if flag == "" {
 			continue
 		}
-		if _, skip := drop[strings.ToLower(flag)]; skip {
+		if drop[strings.ToLower(flag)] {
 			removed = append(removed, flag)
 			continue
 		}
@@ -706,14 +696,14 @@ type freeHeader struct {
 }
 
 // activeFlavor returns the captured wire flavor we mirror on outbound
-// requests. Today this is the claude-cli interactive flavor; future
-// work can pick a flavor per caller shape (e.g. a probe flavor for
-// short non-streaming requests). The flavor is loaded at request time
-// from the daemon-owned MITM baseline so identity drift surfaces in
-// daemon-owned drift checks. There is no compiled-in fallback: a
-// missing or invalid baseline returns [ErrBaselineMissing] or
-// [ErrBaselineInvalid] so the caller can map it to an HTTP 503.
-func (c *Client) activeFlavor() (WireFlavor, error) {
+// requests. The learned claude-cli interactive flavor is selected by
+// the request feature vector captured in the baseline. The flavor is
+// loaded at request time from the daemon-owned MITM baseline so
+// identity drift surfaces in daemon-owned drift checks. There is no
+// compiled-in fallback: a missing, invalid, or unseeded baseline error
+// returns a typed sentinel-bearing error so the caller can map it to an
+// HTTP 503.
+func (c *Client) activeFlavor(featureVector WireFlavorFeatureVector) (WireFlavor, error) {
 	var zero WireFlavor
 	if c.flavorLoader == nil {
 		c.flavorLoader = newWireFlavorsLoader()
@@ -725,43 +715,27 @@ func (c *Client) activeFlavor() (WireFlavor, error) {
 		// can map it to an operator-actionable HTTP 503.
 		return zero, err
 	}
-	flavor, ok := selectInteractiveFlavor(flavors)
-	if !ok {
-		slog.Warn("anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"baseline_path", c.cfg.WireBaselinePath,
-		)
-		return zero, fmt.Errorf("%w: no claude-code-interactive flavor in baseline %s", ErrBaselineInvalid, c.cfg.WireBaselinePath)
+	flavor, err := selectInteractiveFlavor(flavors, featureVector)
+	if err != nil {
+		if errors.Is(err, ErrBaselineInvalid) {
+			slog.Warn("anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+				"baseline_path", c.cfg.WireBaselinePath,
+				"model", featureVector.ModelID,
+			)
+		}
+		if errors.Is(err, ErrFlavorUnseeded) {
+			slog.Warn("anthropic.wire_baseline.flavor_unseeded", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+				"baseline_path", c.cfg.WireBaselinePath,
+				"model", featureVector.ModelID,
+				"context_1m", featureVector.Context1M,
+				"thinking_mode", string(featureVector.ThinkingMode),
+				"structured_output_present", featureVector.StructuredOutputPresent,
+				"tools_present", featureVector.ToolsPresent,
+			)
+		}
+		return zero, err
 	}
 	return flavor, nil
-}
-
-// interactiveFlavorSlugPrefix is the slug prefix of the claude-cli
-// interactive caller flavor. The captured baseline can hold several
-// interactive flavors (one per observed claude-cli version); the
-// loader keys them by full slug and the selector picks the
-// lexicographically smallest matching slug, which equals the first
-// entry in the snapshot's slug-sorted order the old generated
-// WireFlavorClaudeCodeInteractive var was assigned from.
-const interactiveFlavorSlugPrefix = "claude-code-interactive"
-
-// selectInteractiveFlavor picks the interactive flavor from the
-// slug-keyed map. It chooses the smallest slug carrying the
-// interactive prefix so selection is deterministic across reloads.
-func selectInteractiveFlavor(flavors map[string]WireFlavor) (WireFlavor, bool) {
-	best := ""
-	for slug := range flavors {
-		if !strings.HasPrefix(slug, interactiveFlavorSlugPrefix) {
-			continue
-		}
-		if best == "" || slug < best {
-			best = slug
-		}
-	}
-	if best == "" {
-		var zero WireFlavor
-		return zero, false
-	}
-	return flavors[best], true
 }
 
 // freeIdentityHeaders returns the per-request identity headers that
