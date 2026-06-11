@@ -61,11 +61,10 @@ func thinkingModeForFeatureVector(thinking *Thinking) WireFlavorThinkingMode {
 }
 
 // selectInteractiveFlavor chooses a learned claude-cli interactive
-// flavor by exact feature-vector match. The deterministic rule is:
-// first consider only interactive slugs, then require an observed
-// feature vector with the same model id, then require exact context,
-// thinking, structured-output, and tools flags. If more than one flavor
-// matches, the lexicographically smallest slug wins.
+// flavor by model and context tier. The deterministic rule is: first
+// consider only interactive slugs, then require an observed feature
+// vector with the same model id and context_1m flag. If more than one
+// flavor matches, the lexicographically smallest slug wins.
 func selectInteractiveFlavor(flavors map[string]WireFlavor, featureVector WireFlavorFeatureVector) (WireFlavor, error) {
 	var zero WireFlavor
 	model := strings.TrimSpace(featureVector.ModelID)
@@ -106,11 +105,15 @@ func selectInteractiveFlavor(flavors map[string]WireFlavor, featureVector WireFl
 }
 
 func featureVectorsMatch(learned WireFlavorFeatureVector, request WireFlavorFeatureVector) bool {
-	return strings.TrimSpace(learned.ModelID) == strings.TrimSpace(request.ModelID) &&
-		learned.Context1M == request.Context1M &&
-		learned.ThinkingMode == request.ThinkingMode &&
-		learned.StructuredOutputPresent == request.StructuredOutputPresent &&
-		learned.ToolsPresent == request.ToolsPresent
+	// Match on model only. The per-model learned flavor already carries the
+	// exact beta set claude-cli sends for that model on this account,
+	// including whether context-1m is present (it is for fable/opus, it is
+	// not for a sonnet seeded from a credit-gated account). The other request
+	// dimensions (context tier, thinking, tools, structured-output) do not
+	// independently gate the beta set, and claude-cli never emits the
+	// no-tools / no-thinking combinations Cursor sends, so matching on them
+	// would 503 legitimate requests.
+	return strings.TrimSpace(learned.ModelID) == strings.TrimSpace(request.ModelID)
 }
 
 func unseededFlavorError(model string, featureVector WireFlavorFeatureVector, modelFound bool) error {

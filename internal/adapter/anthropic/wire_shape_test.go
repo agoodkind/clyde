@@ -181,7 +181,7 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 	}
 }
 
-func TestFeatureAwareFlavorSelectionMatchesContextTier(t *testing.T) {
+func TestFeatureAwareFlavorSelectionIsByModel(t *testing.T) {
 	t.Parallel()
 
 	loaded, err := newWireFlavorsLoader().Load(writeTestWireBaseline(t))
@@ -189,6 +189,11 @@ func TestFeatureAwareFlavorSelectionMatchesContextTier(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
+	// Selection is by model only. The replayed beta set is whatever
+	// claude-cli sends for that model, so context-1m presence follows the
+	// model, not the request's context tier: fable and opus carry it on every
+	// tier, while a credit-gated sonnet flavor never does. The request's
+	// context_1m flag does not change which flavor is chosen.
 	cases := []struct {
 		name        string
 		vector      WireFlavorFeatureVector
@@ -205,12 +210,12 @@ func TestFeatureAwareFlavorSelectionMatchesContextTier(t *testing.T) {
 			wantContext: true,
 		},
 		{
-			name:        "fable_200k",
+			name:        "fable_200k_still_gets_context_1m",
 			vector:      testWireFlavorFeatureVector(testFableModel, false),
-			wantContext: false,
+			wantContext: true,
 		},
 		{
-			name:        "sonnet_200k",
+			name:        "sonnet_never_gets_context_1m",
 			vector:      testWireFlavorFeatureVector(testSonnetModel, false),
 			wantContext: false,
 		},
