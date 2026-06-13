@@ -78,6 +78,11 @@ daemon = ""
 [adapter]
 enabled = true
 direct_oauth = true
+# Persist the raw OpenAI-shape ingress request and the rendered reply to
+# capture.db tagged client="adapter.ingress", alongside the always-on BYOK
+# egress capture. Off by default; it roughly doubles body volume against the
+# [mitm.capture_store] retention cap. Requires the capture store to be open.
+capture_ingress = false
 # The default points at a -thinking alias because fable-5 rejects an
 # explicit {"type":"disabled"} thinking block (400) and the non-thinking
 # aliases emit exactly that; see [adapter.families.fable-5].
