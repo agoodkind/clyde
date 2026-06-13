@@ -2,8 +2,6 @@ module goodkind.io/clyde
 
 go 1.26.4
 
-require goodkind.io/lmctl v0.0.0-20260415155018-40a95b881e3e
-
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofrs/flock v0.13.0
