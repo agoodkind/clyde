@@ -54,6 +54,11 @@ type HTTPTransportConfig struct {
 	// CaptureStore, when non-nil, receives one capture.Record for the
 	// exchange tagged client="adapter.codex". Nil records nothing.
 	CaptureStore *capture.Store
+	// StripWireFlags lists capability tokens to drop from the outbound
+	// codex capability headers, from the provider-neutral
+	// [adapter].strip_wire_flags config. Empty replays the learned headers
+	// untouched.
+	StripWireFlags []string
 }
 
 const httpErrorBodySnippetLimit = 512
@@ -79,6 +84,7 @@ func buildResponsesHTTPHeaders(cfg HTTPTransportConfig) http.Header {
 		UserAgent:            cfg.WireIdentity.UserAgent,
 		OpenAIBeta:           cfg.WireIdentity.OpenAIBeta,
 		Attestation:          cfg.WireIdentity.Attestation,
+		StripWireFlags:       cfg.StripWireFlags,
 	})
 	// Strip the websocket-only OpenAI-Beta upgrade-version header. The
 	// WS header builder Set()s it under its canonical form, so deleting

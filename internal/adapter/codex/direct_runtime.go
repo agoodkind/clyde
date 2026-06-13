@@ -81,6 +81,11 @@ type DirectConfig struct {
 	// constants, so a zero-value WireIdentity preserves the cold-start
 	// behavior.
 	WireIdentity WireIdentity
+	// StripWireFlags lists capability tokens to drop from the outbound
+	// codex capability headers, from the provider-neutral
+	// [adapter].strip_wire_flags config. Empty replays the learned headers
+	// untouched.
+	StripWireFlags []string
 }
 
 // RoundTripEncrypted is the closed enum the codex transport honors when the
@@ -189,6 +194,7 @@ func RunDirect(
 		AuthRefresh:        cfg.AuthRefresh,
 		WireIdentity:       cfg.WireIdentity,
 		CaptureStore:       cfg.CaptureStore,
+		StripWireFlags:     cfg.StripWireFlags,
 	}
 
 	// Websocket transport disabled by config: use the HTTP/SSE transport
@@ -220,6 +226,7 @@ func RunDirect(
 		AuthRefresh:        cfg.AuthRefresh,
 		WireIdentity:       cfg.WireIdentity,
 		CaptureStore:       cfg.CaptureStore,
+		StripWireFlags:     cfg.StripWireFlags,
 	}
 	result, err := RunWebsocketTransportEvents(ctx, wsCfg, wsReq, emit)
 	if errors.Is(err, ErrWebsocketFallbackToHTTP) {

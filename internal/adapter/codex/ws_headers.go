@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"goodkind.io/clyde/internal/adapter/wireflags"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/gklog/correlation"
 )
@@ -40,6 +41,11 @@ type ResponsesWebsocketHeaderConfig struct {
 	// Empty means the header is omitted, which is the cold-start default
 	// because Clyde does not mint this token.
 	Attestation string
+	// StripWireFlags lists capability tokens to drop from the outbound
+	// codex capability headers (X-Codex-Beta-Features and Openai-Beta), fed
+	// from the provider-neutral [adapter].strip_wire_flags config. Empty
+	// replays the learned headers untouched.
+	StripWireFlags []string
 }
 
 // BuildResponsesWebsocketHeaders is part of Clyde's typed adapter surface.
@@ -74,7 +80,8 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 	if windowID != "" {
 		header.Set(WindowIDHeader, windowID)
 	}
-	if betaFeatures := strings.TrimSpace(cfg.BetaFeatures); betaFeatures != "" {
+	betaFeatures, _ := wireflags.Suppress(strings.TrimSpace(cfg.BetaFeatures), cfg.StripWireFlags)
+	if betaFeatures != "" {
 		header.Set(CodexBetaFeaturesHeader, betaFeatures)
 	}
 	if turnState := cfg.TurnState.Value(); turnState != "" {
@@ -90,7 +97,14 @@ func BuildResponsesWebsocketHeaders(cfg ResponsesWebsocketHeaderConfig) http.Hea
 	if openAIBeta == "" {
 		openAIBeta = responsesWebsocketsV2BetaHeaderValue
 	}
-	header.Set(openAIBetaHeader, openAIBeta)
+	// Suppressing the responses-websocket upgrade token breaks the WS
+	// handshake, so the config doc warns operators not to list it. On the
+	// HTTP path this header is deleted downstream, making suppression there a
+	// no-op.
+	openAIBeta, _ = wireflags.Suppress(openAIBeta, cfg.StripWireFlags)
+	if openAIBeta != "" {
+		header.Set(openAIBetaHeader, openAIBeta)
+	}
 	originator := strings.TrimSpace(cfg.Originator)
 	if originator == "" {
 		originator = CodexOriginatorValue

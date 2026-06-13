@@ -48,6 +48,11 @@ type Provider struct {
 	// captureStore receives one capture.Record per outbound Codex
 	// exchange tagged client="adapter.codex". Nil disables recording.
 	captureStore *capture.Store
+	// stripWireFlags lists capability tokens to drop from the outbound
+	// codex capability headers, from the provider-neutral
+	// [adapter].strip_wire_flags config. Empty replays the learned headers
+	// untouched.
+	stripWireFlags []string
 }
 
 // ProviderOptions extends the generic provider.Deps with Codex-only
@@ -113,6 +118,7 @@ func NewProvider(deps adapterprovider.Deps, opts ProviderOptions) *Provider {
 		wireBaselinePath:   strings.TrimSpace(opts.WireBaselinePath),
 		wireBaselineLoader: NewWireBaselineLoader(),
 		captureStore:       opts.CaptureStore,
+		stripWireFlags:     deps.Config.StripWireFlags,
 	}
 }
 
@@ -203,10 +209,11 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		// BeforeAttempt is injected by the adapter dispatch layer via
 		// context so the server can register each retry attempt as a
 		// nested livetrack egress session without changing this interface.
-		BeforeAttempt: beforeAttemptFromContext(ctx),
-		AuthRefresh:   authRefresh,
-		WireIdentity:  p.resolveWireIdentity(ctx),
-		CaptureStore:  p.captureStore,
+		BeforeAttempt:  beforeAttemptFromContext(ctx),
+		AuthRefresh:    authRefresh,
+		WireIdentity:   p.resolveWireIdentity(ctx),
+		CaptureStore:   p.captureStore,
+		StripWireFlags: p.stripWireFlags,
 	}
 
 	warningWindows, usageWarningErr := ProbeUsageWarnings(ctx, usageWarningProbeConfig{

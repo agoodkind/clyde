@@ -151,6 +151,11 @@ type WebsocketTransportConfig struct {
 	// non-warmup websocket exchange tagged client="adapter.codex" with the
 	// full outbound and inbound frame streams. Nil records nothing.
 	CaptureStore *capture.Store
+	// StripWireFlags lists capability tokens to drop from the outbound
+	// codex capability headers, from the provider-neutral
+	// [adapter].strip_wire_flags config. Empty replays the learned headers
+	// untouched.
+	StripWireFlags []string
 }
 
 // Mirrors the observed Responses websocket envelope from
@@ -428,6 +433,7 @@ func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (
 		UserAgent:            cfg.WireIdentity.UserAgent,
 		OpenAIBeta:           cfg.WireIdentity.OpenAIBeta,
 		Attestation:          cfg.WireIdentity.Attestation,
+		StripWireFlags:       cfg.StripWireFlags,
 		IncludeTimingMetrics: false,
 	})
 	conn, resp, err := dialer.DialContext(ctx, cfg.URL, header)
