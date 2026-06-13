@@ -82,6 +82,14 @@ type AdapterConfig struct {
 	// at the configured messages URL using the current platform's
 	// Claude login credential store.
 	DirectOAuth bool `json:"directOauth,omitempty" toml:"direct_oauth,omitempty"`
+	// CaptureIngress, when true, persists the raw OpenAI-shape inbound
+	// /v1/chat/completions request and the rendered reply to the MITM
+	// capture store tagged client="adapter.ingress", in addition to the
+	// always-on BYOK egress capture. Off by default because it roughly
+	// doubles body volume in capture.db against the capture-store
+	// retention cap. Requires the capture store to be open; with it nil
+	// this knob does nothing.
+	CaptureIngress bool `json:"captureIngress,omitempty" toml:"capture_ingress,omitempty"`
 	// ClientIdentity carries wire request-shape fields (headers and
 	// body-side billing line inputs). There are no compiled-in defaults:
 	// NewRegistry rejects empty required fields. See clyde.example.toml.

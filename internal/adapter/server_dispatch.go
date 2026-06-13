@@ -14,6 +14,7 @@ import (
 	"goodkind.io/clyde/internal/adapter/ingresscontract"
 	adaptermodel "goodkind.io/clyde/internal/adapter/model"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/slogger"
@@ -94,6 +95,7 @@ func modelEntryFromResolved(m adaptermodel.ResolvedAlias) ModelEntry {
 
 func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	defer trace.Op(ctx, "adapter.openai.chat_completions")(&err)
+	started := clock.Now()
 	w := hctx.Writer
 	r := hctx.Request
 	if r.Method != http.MethodPost {
@@ -112,6 +114,12 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	if ingress == nil {
 		return adapterErrInternal("ingress contract not registered", nil)
 	}
+	if capW := s.beginIngressCapture(hctx); capW != nil {
+		w = hctx.Writer
+		defer func() {
+			s.finishIngressCapture(capW, hctx.Correlation, r, body, started, err)
+		}()
+	}
 	ctx, r, corr, headerFacets := applyHeaderIngressContext(ctx, r, corr, ingress)
 
 	recorder := s.beginChatLogRecorder(r, corr)
@@ -123,22 +131,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	if err != nil {
 		return err
 	}
-	ingressCtx := ingress.Translate(ingresscontract.ChatRequestPrimitive{Body: req})
-	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
-	identity := ingress.ResolveIdentity(corr, ingressCtx, ingresscontract.ChatRequestPrimitive{Body: req})
-	// Body-derived backfill must not overwrite a header-resolved ChatKey.
-	// WithChatKey is a first-wins setter; only the source/root/branch fields
-	// get rewritten as a unit when the body has the canonical identity.
-	corr = clydeingress.WithChatKey(corr, identity.ChatKey)
-	if identity.ChatKeySource != "" || identity.ChatRootKey != "" || identity.ChatBranchKey != "" {
-		corr = clydeingress.WithChatIdentity(corr, clydeingress.ChatKey(corr), identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
-	}
-	ctx = correlation.WithContext(ctx, corr)
-	r = r.WithContext(ctx)
-	bodyFacets := ingress.RequestFacets(ingressCtx)
-	s.emitChatClientMetadataLeg(ctx, recorder, corr, bodyFacets)
-	req.Model = ingressCtx.NormalizedModel
-	s.logChatForkDetected(ctx, corr, identity)
+	ctx, r, corr, ingressCtx, bodyFacets := s.applyBodyChatIdentity(ctx, r, corr, recorder, ingress, &req)
 
 	// The resolver is the authoritative single resolution path. It maps
 	// the alias and reasoning effort to a typed ResolvedRequest carrying
@@ -187,6 +180,30 @@ func applyHeaderIngressContext(ctx context.Context, r *http.Request, corr correl
 	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(headerIngressCtx)...)
 	ctx = correlation.WithContext(ctx, corr)
 	return ctx, r.WithContext(ctx), corr, ingress.RequestFacets(headerIngressCtx)
+}
+
+// applyBodyChatIdentity folds the body-derived ingress translation, chat
+// identity resolution, and correlation enrichment into ctx, r, and corr. It
+// normalizes req.Model, emits the client-metadata leg, and returns the
+// translated ingress context and body facets the dispatch path consumes.
+func (s *Server) applyBodyChatIdentity(ctx context.Context, r *http.Request, corr correlation.Context, recorder *logevent.Recorder, ingress ingresscontract.IngressContract, req *ChatRequest) (context.Context, *http.Request, correlation.Context, ingresscontract.IngressContext, []logevent.Facet) {
+	ingressCtx := ingress.Translate(ingresscontract.ChatRequestPrimitive{Body: *req})
+	corr = corr.WithIdentityAttributes(ingress.CorrelationAttrs(ingressCtx)...)
+	identity := ingress.ResolveIdentity(corr, ingressCtx, ingresscontract.ChatRequestPrimitive{Body: *req})
+	// Body-derived backfill must not overwrite a header-resolved ChatKey.
+	// WithChatKey is a first-wins setter; only the source/root/branch fields
+	// get rewritten as a unit when the body has the canonical identity.
+	corr = clydeingress.WithChatKey(corr, identity.ChatKey)
+	if identity.ChatKeySource != "" || identity.ChatRootKey != "" || identity.ChatBranchKey != "" {
+		corr = clydeingress.WithChatIdentity(corr, clydeingress.ChatKey(corr), identity.ChatKeySource, identity.ChatRootKey, identity.ChatBranchKey)
+	}
+	ctx = correlation.WithContext(ctx, corr)
+	r = r.WithContext(ctx)
+	bodyFacets := ingress.RequestFacets(ingressCtx)
+	s.emitChatClientMetadataLeg(ctx, recorder, corr, bodyFacets)
+	req.Model = ingressCtx.NormalizedModel
+	s.logChatForkDetected(ctx, corr, identity)
+	return ctx, r, corr, ingressCtx, bodyFacets
 }
 
 func (s *Server) prepareChatRequest(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, body []byte, bodyBytes int, recorder *logevent.Recorder) (ChatRequest, error) {
