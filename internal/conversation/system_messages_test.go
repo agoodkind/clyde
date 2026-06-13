@@ -183,16 +183,10 @@ func TestExportDoesNotOptIntoSystemMessages(t *testing.T) {
 	idx, record := newOptionAwareIndex()
 
 	body, err := idx.Export(record, ExportOptions{
-		Format:                 ExportFormatPlainText,
-		HistoryStart:           0,
-		Whitespace:             WhitespacePreserve,
-		IncludeChat:            true,
-		IncludeThinking:        false,
-		IncludeSystemPrompts:   true,
-		IncludeSystemMessages:  false,
-		IncludeToolCalls:       false,
-		IncludeToolOutputs:     false,
-		IncludeRawJSONMetadata: false,
+		Format:       ExportFormatPlainText,
+		HistoryStart: 0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat, ContentKindSystemPrompts),
 	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
@@ -211,16 +205,10 @@ func TestExportJSONCanOptIntoSystemMessagesAndCheckpoints(t *testing.T) {
 	idx, record := newOptionAwareIndex()
 
 	body, err := idx.Export(record, ExportOptions{
-		Format:                 ExportFormatJSON,
-		HistoryStart:           0,
-		Whitespace:             WhitespacePreserve,
-		IncludeChat:            true,
-		IncludeThinking:        false,
-		IncludeSystemPrompts:   false,
-		IncludeSystemMessages:  true,
-		IncludeToolCalls:       false,
-		IncludeToolOutputs:     false,
-		IncludeRawJSONMetadata: true,
+		Format:       ExportFormatJSON,
+		HistoryStart: 0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat, ContentKindSystemMessages, ContentKindRawJSONMetadata),
 	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)

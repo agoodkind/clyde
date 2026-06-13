@@ -30,17 +30,11 @@ Run an analysis pass over cached results from a previous search.
 ### clyde_export_transcript
 Export a conversation transcript.
 - conversation_id (required): conversation id, native id, title, or artifact path
+- only (required): an array naming the content kinds to include. The export selects nothing by default, so name at least one kind.
 - format (optional): markdown, html, json, or plain_text
 - whitespace (optional): preserve, tidy, compact, or dense
 
-Content types select what the export contains. Chat, thinking, and tool calls are included by default; pass the matching switch to drop one. Tool outputs, system prompts, system messages, and raw JSON metadata are excluded by default; pass the matching switch to add one.
-- no_chat (optional): exclude conversation chat text
-- no_thinking (optional): exclude assistant thinking blocks
-- no_tool_calls (optional): exclude tool calls
-- with_tool_outputs (optional): include tool result bodies
-- with_system_prompts (optional): include system-injected prompts
-- with_system_messages (optional): include provider system transcript records
-- with_raw_json_metadata (optional): include JSON metadata fields
+Content kinds for the `only` array: `chat`, `thinking`, `tool_calls`, `tool_outputs`, `system_prompts`, `system_messages`, `raw_json_metadata`. Two group values fan out: `tools` covers `tool_calls` + `tool_outputs`, and `all` covers every kind. Example: `only: ["chat", "thinking", "tool_calls"]` or `only: ["all"]`. Tool outputs render only with `tool_outputs`, and raw metadata and provider system messages surface only with `format: "json"`.
 
 Typical workflow:
 1. Call clyde_list_conversations.

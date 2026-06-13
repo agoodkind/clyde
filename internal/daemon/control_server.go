@@ -464,16 +464,10 @@ func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.Expor
 		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
 	}
 	options := conversation.ExportOptions{
-		Format:                 conversation.ExportFormat(req.GetFormat()),
-		HistoryStart:           int(req.GetHistoryStart()),
-		Whitespace:             conversation.WhitespaceMode(req.GetWhitespace()),
-		IncludeChat:            req.GetIncludeChat(),
-		IncludeThinking:        req.GetIncludeThinking(),
-		IncludeSystemPrompts:   req.GetIncludeSystemPrompts(),
-		IncludeSystemMessages:  req.GetIncludeSystemMessages(),
-		IncludeToolCalls:       req.GetIncludeToolCalls(),
-		IncludeToolOutputs:     req.GetIncludeToolOutputs(),
-		IncludeRawJSONMetadata: req.GetIncludeRawJsonMetadata(),
+		Format:       conversation.ExportFormat(req.GetFormat()),
+		HistoryStart: int(req.GetHistoryStart()),
+		Whitespace:   conversation.WhitespaceMode(req.GetWhitespace()),
+		Content:      contentKindSetFromExportRequest(req),
 	}
 	body, err := s.index.Export(record, options)
 	if err != nil {
@@ -485,6 +479,34 @@ func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.Expor
 		return nil, status.Errorf(codes.Internal, "export transcript: %v", err)
 	}
 	return &clydev1.ExportTranscriptResponse{Body: body}, nil
+}
+
+// contentKindSetFromExportRequest rebuilds the content-kind set from the export
+// request's per-kind booleans, which remain the wire encoding of the selection.
+func contentKindSetFromExportRequest(req *clydev1.ExportTranscriptRequest) conversation.ContentKindSet {
+	var kinds []conversation.ContentKind
+	if req.GetIncludeChat() {
+		kinds = append(kinds, conversation.ContentKindChat)
+	}
+	if req.GetIncludeThinking() {
+		kinds = append(kinds, conversation.ContentKindThinking)
+	}
+	if req.GetIncludeToolCalls() {
+		kinds = append(kinds, conversation.ContentKindToolCalls)
+	}
+	if req.GetIncludeToolOutputs() {
+		kinds = append(kinds, conversation.ContentKindToolOutputs)
+	}
+	if req.GetIncludeSystemPrompts() {
+		kinds = append(kinds, conversation.ContentKindSystemPrompts)
+	}
+	if req.GetIncludeSystemMessages() {
+		kinds = append(kinds, conversation.ContentKindSystemMessages)
+	}
+	if req.GetIncludeRawJsonMetadata() {
+		kinds = append(kinds, conversation.ContentKindRawJSONMetadata)
+	}
+	return conversation.NewContentKindSet(kinds...)
 }
 
 // GetMITMStatus reports each configured MITM listener address, whether the

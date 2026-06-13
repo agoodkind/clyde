@@ -141,16 +141,11 @@ const (
 	WhitespaceDense WhitespaceMode = "dense"
 )
 
-// ExportOptions configures transcript export.
+// ExportOptions configures transcript export. Content names the content kinds
+// to render; the export selects nothing implicitly.
 type ExportOptions struct {
-	Format                 ExportFormat
-	HistoryStart           int
-	Whitespace             WhitespaceMode
-	IncludeChat            bool
-	IncludeThinking        bool
-	IncludeSystemPrompts   bool
-	IncludeSystemMessages  bool
-	IncludeToolCalls       bool
-	IncludeToolOutputs     bool
-	IncludeRawJSONMetadata bool
+	Format       ExportFormat
+	HistoryStart int
+	Whitespace   WhitespaceMode
+	Content      ContentKindSet
 }

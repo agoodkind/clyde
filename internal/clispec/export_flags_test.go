@@ -2,6 +2,7 @@ package clispec
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -22,87 +23,94 @@ func exportParam(t *testing.T, canonical string) Param[exportInput] {
 	return Param[exportInput]{}
 }
 
-// exportToggleCases enumerate the seven content-type presence switches, the
-// ExportOptions field each governs, and the field value expected when the flag
-// is present (v=true) versus absent (v=false). The no_* switches invert; the
-// with_* switches pass through.
-var exportToggleCases = []struct {
-	canonical   string
-	read        func(conv.ExportOptions) bool
-	wantPresent bool
-	wantAbsent  bool
-}{
-	{"no_chat", func(o conv.ExportOptions) bool { return o.IncludeChat }, false, true},
-	{"no_thinking", func(o conv.ExportOptions) bool { return o.IncludeThinking }, false, true},
-	{"no_tool_calls", func(o conv.ExportOptions) bool { return o.IncludeToolCalls }, false, true},
-	{"with_tool_outputs", func(o conv.ExportOptions) bool { return o.IncludeToolOutputs }, true, false},
-	{"with_system_prompts", func(o conv.ExportOptions) bool { return o.IncludeSystemPrompts }, true, false},
-	{"with_system_messages", func(o conv.ExportOptions) bool { return o.IncludeSystemMessages }, true, false},
-	{"with_raw_json_metadata", func(o conv.ExportOptions) bool { return o.IncludeRawJSONMetadata }, true, false},
-}
-
-// TestExportToggleSettersMapBothPolarities asserts each presence switch maps to
-// its ExportOptions field correctly in both directions, starting from New().
-func TestExportToggleSettersMapBothPolarities(t *testing.T) {
+// TestExportOnlyParamShape asserts the --only selector is a required enum-list
+// over the content-kind selector values, and the per-type shortcuts are
+// CLI-only boolean flags.
+func TestExportOnlyParamShape(t *testing.T) {
 	t.Parallel()
-	for _, tc := range exportToggleCases {
-		param := exportParam(t, tc.canonical)
+	only := exportParam(t, "only")
+	if only.Kind != KindEnumList {
+		t.Errorf("only kind = %d, want KindEnumList", only.Kind)
+	}
+	if !only.Required {
+		t.Errorf("only should be required")
+	}
+	if !slices.Equal(only.Values, conv.ContentKindSelectorValues()) {
+		t.Errorf("only values = %v, want %v", only.Values, conv.ContentKindSelectorValues())
+	}
 
-		present := exportTranscriptOp().New()
-		param.bindBool(&present, true)
-		if got := tc.read(present.Options); got != tc.wantPresent {
-			t.Errorf("%s present: field = %t, want %t", tc.canonical, got, tc.wantPresent)
+	for _, canonical := range []string{
+		"chat", "thinking", "tool_calls", "tool_outputs",
+		"system_prompts", "system_messages", "raw_json_metadata", "tools", "all",
+	} {
+		shortcut := exportParam(t, canonical)
+		if shortcut.Kind != KindBool {
+			t.Errorf("shortcut %q kind = %d, want KindBool", canonical, shortcut.Kind)
 		}
-
-		absent := exportTranscriptOp().New()
-		param.bindBool(&absent, false)
-		if got := tc.read(absent.Options); got != tc.wantAbsent {
-			t.Errorf("%s absent: field = %t, want %t", tc.canonical, got, tc.wantAbsent)
+		if !shortcut.CLIOnly {
+			t.Errorf("shortcut %q should be CLI-only", canonical)
 		}
 	}
 }
 
-// TestExportToggleDecodeMCPMatchesCLI asserts the MCP decode path applies the
-// same mapping as the CLI binder, so a tool call with no_thinking=true excludes
-// thinking and with_tool_outputs=true includes tool outputs.
-func TestExportToggleDecodeMCPMatchesCLI(t *testing.T) {
+// TestExportSelectorsAppendKinds asserts both the --only list and the shortcut
+// flags append their selector values, and the union resolves correctly through
+// ResolveContentKinds (tools fans out to tool_calls + tool_outputs).
+func TestExportSelectorsAppendKinds(t *testing.T) {
 	t.Parallel()
-	for _, tc := range exportToggleCases {
-		param := exportParam(t, tc.canonical)
+	in := exportTranscriptOp().New()
+	exportParam(t, "only").bindStrSlice(&in, []string{"chat", "thinking"})
+	exportParam(t, "tools").bindBool(&in, true)
+	exportParam(t, "system_prompts").bindBool(&in, false) // absent, not appended
 
-		present := exportTranscriptOp().New()
-		req := mcp.CallToolRequest{}
-		req.Params.Arguments = map[string]any{tc.canonical: true}
-		param.decodeMCP(&present, req)
-		if got := tc.read(present.Options); got != tc.wantPresent {
-			t.Errorf("%s mcp present: field = %t, want %t", tc.canonical, got, tc.wantPresent)
-		}
-
-		absent := exportTranscriptOp().New()
-		param.decodeMCP(&absent, mcp.CallToolRequest{})
-		if got := tc.read(absent.Options); got != tc.wantAbsent {
-			t.Errorf("%s mcp absent: field = %t, want %t", tc.canonical, got, tc.wantAbsent)
-		}
+	set, err := conv.ResolveContentKinds(in.Kinds)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	want := []conv.ContentKind{
+		conv.ContentKindChat, conv.ContentKindThinking,
+		conv.ContentKindToolCalls, conv.ContentKindToolOutputs,
+	}
+	if got := set.Kinds(); !slices.Equal(got, want) {
+		t.Errorf("resolved kinds = %v, want %v", got, want)
+	}
+	if set.Has(conv.ContentKindSystemPrompts) {
+		t.Errorf("system_prompts should be absent")
 	}
 }
 
-// TestExportPresenceFlagsReplaceIncludeBools asserts the rendered terminal
-// command exposes the seven presence switches as plain bool flags, that the old
-// include-* flags are gone, and that a bare presence switch parses without the
-// pflag =false form.
-func TestExportPresenceFlagsReplaceIncludeBools(t *testing.T) {
+// TestExportEmptySelectionErrors asserts that selecting nothing is an error.
+func TestExportEmptySelectionErrors(t *testing.T) {
+	t.Parallel()
+	in := exportTranscriptOp().New()
+	if _, err := conv.ResolveContentKinds(in.Kinds); err == nil {
+		t.Fatal("expected an error when no content kind is selected")
+	}
+}
+
+// TestExportOnlyFlagAndShortcuts asserts the rendered terminal command exposes
+// --only as a list flag and the shortcuts as bool flags, the old presence
+// switches are gone, and --only rejects an unknown kind.
+func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	cmd := exportTranscriptOp().cobraCommand(testFactory(&out))
 
-	wantFlags := []string{
-		"no-chat", "no-thinking", "no-tool-calls",
-		"with-tool-outputs", "with-system-prompts", "with-system-messages", "with-raw-json-metadata",
+	only := cmd.Flags().Lookup("only")
+	if only == nil {
+		t.Fatal("missing --only flag")
 	}
-	for _, name := range wantFlags {
+	if only.Value.Type() == "bool" {
+		t.Errorf("--only should be a list flag, got type %s", only.Value.Type())
+	}
+
+	for _, name := range []string{
+		"chat", "thinking", "tool-calls", "tool-outputs",
+		"system-prompts", "system-messages", "raw-json-metadata", "tools", "all",
+	} {
 		flag := cmd.Flags().Lookup(name)
 		if flag == nil {
-			t.Errorf("missing flag --%s", name)
+			t.Errorf("missing shortcut flag --%s", name)
 			continue
 		}
 		if flag.Value.Type() != "bool" {
@@ -110,13 +118,60 @@ func TestExportPresenceFlagsReplaceIncludeBools(t *testing.T) {
 		}
 	}
 
-	for _, gone := range []string{"include-chat", "include-thinking", "include-tool-calls", "include-tool-outputs"} {
+	for _, gone := range []string{"no-thinking", "no-chat", "with-tool-outputs", "include-chat"} {
 		if cmd.Flags().Lookup(gone) != nil {
 			t.Errorf("old flag --%s should be removed", gone)
 		}
 	}
 
-	if err := cmd.Flags().Parse([]string{"--no-thinking", "--with-tool-outputs"}); err != nil {
-		t.Fatalf("parse presence flags without =false: %v", err)
+	if err := cmd.Flags().Set("only", "bogus"); err == nil {
+		t.Error("--only should reject an unknown kind")
+	}
+}
+
+// TestExportMCPOnlyIsRequiredArray asserts the MCP tool exposes only the `only`
+// argument as a required array.
+func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
+	t.Parallel()
+	tool, _ := exportTranscriptOp().mcpTool()
+
+	prop, ok := tool.InputSchema.Properties["only"]
+	if !ok {
+		t.Fatal("mcp tool missing only property")
+	}
+	schema, ok := prop.(map[string]any)
+	if !ok {
+		t.Fatalf("only property is %T, want map", prop)
+	}
+	if schema["type"] != "array" {
+		t.Errorf("only type = %v, want array", schema["type"])
+	}
+	if !slices.Contains(tool.InputSchema.Required, "only") {
+		t.Errorf("only should be required, required = %v", tool.InputSchema.Required)
+	}
+	for _, shortcut := range []string{"chat", "thinking", "tools", "all"} {
+		if _, present := tool.InputSchema.Properties[shortcut]; present {
+			t.Errorf("shortcut %q should not appear on the MCP surface", shortcut)
+		}
+	}
+}
+
+// TestExportMCPDecodeOnly asserts the MCP decode path reads the only array into
+// the kind selection.
+func TestExportMCPDecodeOnly(t *testing.T) {
+	t.Parallel()
+	in := exportTranscriptOp().New()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"only": []any{"chat", "tools"}}
+	exportParam(t, "only").decodeMCP(&in, req)
+
+	set, err := conv.ResolveContentKinds(in.Kinds)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	for _, want := range []conv.ContentKind{conv.ContentKindChat, conv.ContentKindToolCalls, conv.ContentKindToolOutputs} {
+		if !set.Has(want) {
+			t.Errorf("decoded set missing %s", want)
+		}
 	}
 }

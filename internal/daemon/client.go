@@ -480,13 +480,13 @@ func ExportTranscript(ctx context.Context, conversationID string, options conver
 		Format:                 string(options.Format),
 		Whitespace:             string(options.Whitespace),
 		HistoryStart:           int64(options.HistoryStart),
-		IncludeSystemPrompts:   options.IncludeSystemPrompts,
-		IncludeSystemMessages:  options.IncludeSystemMessages,
-		IncludeToolOutputs:     options.IncludeToolOutputs,
-		IncludeRawJsonMetadata: options.IncludeRawJSONMetadata,
-		IncludeThinking:        options.IncludeThinking,
-		IncludeToolCalls:       options.IncludeToolCalls,
-		IncludeChat:            options.IncludeChat,
+		IncludeSystemPrompts:   options.Content.Has(conversation.ContentKindSystemPrompts),
+		IncludeSystemMessages:  options.Content.Has(conversation.ContentKindSystemMessages),
+		IncludeToolOutputs:     options.Content.Has(conversation.ContentKindToolOutputs),
+		IncludeRawJsonMetadata: options.Content.Has(conversation.ContentKindRawJSONMetadata),
+		IncludeThinking:        options.Content.Has(conversation.ContentKindThinking),
+		IncludeToolCalls:       options.Content.Has(conversation.ContentKindToolCalls),
+		IncludeChat:            options.Content.Has(conversation.ContentKindChat),
 	})
 	if err != nil {
 		return nil, daemonRPCError(rpcCtx, "export transcript", err)

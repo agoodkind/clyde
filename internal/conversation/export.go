@@ -14,15 +14,15 @@ import (
 // because the rendered document spans the whole conversation.
 func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 	messages, err := idx.LoadMessagesWithOptions(record, LoadOptions{
-		IncludeSystemPrompts:  options.IncludeSystemPrompts,
-		IncludeSystemMessages: options.IncludeSystemMessages,
-		IncludeToolOutputs:    options.IncludeToolOutputs,
+		IncludeSystemPrompts:  options.Content.Has(ContentKindSystemPrompts),
+		IncludeSystemMessages: options.Content.Has(ContentKindSystemMessages),
+		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
 	})
 	if err != nil {
 		return nil, err
 	}
 	messages = filterMessages(messages, options)
-	if options.Format == ExportFormatJSON && !options.IncludeRawJSONMetadata {
+	if options.Format == ExportFormatJSON && !options.Content.Has(ContentKindRawJSONMetadata) {
 		clearMetadata(messages)
 	}
 	body, err := renderMessages(record, messages, options)
@@ -41,20 +41,21 @@ type rawJSONExport struct {
 }
 
 func renderMessages(record Record, messages []transcript.Message, options ExportOptions) ([]byte, error) {
+	includeToolCalls := options.Content.Has(ContentKindToolCalls)
 	shapeOptions := transcript.ShapeOptions{
-		IncludeThinking:  options.IncludeThinking,
-		ConversationOnly: !options.IncludeToolCalls,
+		IncludeThinking:  options.Content.Has(ContentKindThinking),
+		ConversationOnly: !includeToolCalls,
 		MaxTextRunes:     0,
 		ToolOnly:         transcript.ToolOnlyOmit,
 	}
-	if options.IncludeToolCalls {
+	if includeToolCalls {
 		shapeOptions.ToolOnly = transcript.ToolOnlyFullDetail
 	}
 	switch options.Format {
 	case ExportFormatHTML:
 		return []byte(transcript.RenderHTMLWithOptions(messages, shapeOptions)), nil
 	case ExportFormatJSON:
-		if options.IncludeRawJSONMetadata {
+		if options.Content.Has(ContentKindRawJSONMetadata) {
 			return renderRawJSON(record, messages, options)
 		}
 		body, err := transcript.RenderJSONWithOptions(messages, shapeOptions)
@@ -80,7 +81,7 @@ func renderRawJSON(record Record, messages []transcript.Message, options ExportO
 		Messages:              messages,
 		CompactionCheckpoints: nil,
 	}
-	if options.IncludeSystemMessages {
+	if options.Content.Has(ContentKindSystemMessages) {
 		document.CompactionCheckpoints = CompactionCheckpoints(messages)
 	}
 	body, err := json.MarshalIndent(document, "", "  ")
@@ -105,13 +106,13 @@ func filterMessages(messages []transcript.Message, options ExportOptions) []tran
 		if options.HistoryStart > 0 && i < options.HistoryStart {
 			continue
 		}
-		if !options.IncludeChat && message.Text != "" {
+		if !options.Content.Has(ContentKindChat) && message.Text != "" {
 			message.Text = ""
 		}
-		if !options.IncludeThinking {
+		if !options.Content.Has(ContentKindThinking) {
 			message.Thinking = ""
 		}
-		if !options.IncludeToolCalls {
+		if !options.Content.Has(ContentKindToolCalls) {
 			message.Tools = nil
 			message.HasTools = false
 		}

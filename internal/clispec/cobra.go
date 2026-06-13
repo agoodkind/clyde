@@ -109,6 +109,12 @@ func registerFlag[I Input](cmd *cobra.Command, param Param[I]) func(in *I) {
 		cmd.Flags().Float64Var(holder, param.flagName(), param.DefaultFloat, param.Description)
 		bind := param.bindFloat
 		return func(in *I) { bind(in, *holder) }
+	case KindEnumList:
+		holder := new([]string)
+		shim := &sliceEnumValue{allowed: param.Values, values: holder}
+		cmd.Flags().Var(shim, param.flagName(), param.Description)
+		bind := param.bindStrSlice
+		return func(in *I) { bind(in, *holder) }
 	default:
 		return func(in *I) {}
 	}
@@ -148,4 +154,45 @@ func (e *enumValue) Type() string {
 		return strings.Join(e.allowed, "|")
 	}
 	return "string"
+}
+
+// sliceEnumValue is a pflag.Value that accumulates list elements, each validated
+// against an allowed set. One flag may carry a comma-separated list, and the
+// flag may repeat; elements accumulate across both forms.
+type sliceEnumValue struct {
+	allowed []string
+	values  *[]string
+}
+
+// String renders the accumulated elements as a comma-separated list.
+func (v *sliceEnumValue) String() string {
+	if v.values == nil {
+		return ""
+	}
+	return strings.Join(*v.values, ",")
+}
+
+// Set splits the raw value on commas and appends each allowed element, rejecting
+// the first element outside the allowed set.
+func (v *sliceEnumValue) Set(raw string) error {
+	for part := range strings.SplitSeq(raw, ",") {
+		candidate := strings.TrimSpace(part)
+		if candidate == "" {
+			continue
+		}
+		if !enumContains(v.allowed, candidate) {
+			return fmt.Errorf("unsupported value %q (allowed: %s)", candidate, strings.Join(v.allowed, ", "))
+		}
+		*v.values = append(*v.values, candidate)
+	}
+	return nil
+}
+
+// Type names the flag value kind shown in help output, listing the accepted
+// words so the constraint shows inline.
+func (v *sliceEnumValue) Type() string {
+	if len(v.allowed) > 0 {
+		return strings.Join(v.allowed, "|")
+	}
+	return "strings"
 }

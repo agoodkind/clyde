@@ -81,6 +81,9 @@ type exportInput struct {
 	ConversationID string
 	Options        conv.ExportOptions
 	OutputPath     string
+	// Kinds accumulates the selected content-kind selector values from the
+	// --only list flag and the per-type shortcut flags. Run resolves them.
+	Kinds []string
 }
 
 func (listConversationsInput) isClispecInput()   {}
@@ -464,15 +467,34 @@ func exportTranscriptOp() Operation[exportInput] {
 		func(in *exportInput, v string) { in.OutputPath = v })
 	outputPathParam.CLIOnly = true
 
+	onlyParam := EnumListParam("only",
+		"Content kinds to export, comma-separated: chat, thinking, tool_calls, tool_outputs, system_prompts, system_messages, raw_json_metadata, plus the groups tools (tool_calls+tool_outputs) and all.",
+		conv.ContentKindSelectorValues(), true,
+		func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) })
+
+	// shortcut declares a CLI-only presence flag that adds one selector value to
+	// the kind set, so `--thinking` is sugar for `--only thinking`. The MCP
+	// surface keeps the single `only` argument.
+	shortcut := func(canonical, value, description string) Param[exportInput] {
+		param := BoolParam(canonical, description, false, func(in *exportInput, v bool) {
+			if v {
+				in.Kinds = append(in.Kinds, value)
+			}
+		})
+		param.CLIOnly = true
+		return param
+	}
+
 	return Operation[exportInput]{
 		Name:     Name{Canonical: "export_transcript", CLIOverride: "export"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
-		Long:     "Export one conversation transcript in the chosen format. The terminal always writes an artifact file and reports the written path; the MCP tool returns the body as text.",
+		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. The terminal always writes an artifact file and reports the written path; the MCP tool returns the body as text.",
 		Examples: []string{
-			"clyde conversation export claude:1a2b3c --format markdown --output transcript.md",
-			"clyde conversation export claude:1a2b3c --no-thinking --no-tool-calls",
+			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
+			"clyde conversation export claude:1a2b3c --thinking --tools",
+			"clyde conversation export claude:1a2b3c --all",
 		},
 		Args: []Arg[exportInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
@@ -486,48 +508,38 @@ func exportTranscriptOp() Operation[exportInput] {
 			outputPathParam,
 			IntParam("history_start", "First message index to include.", 0,
 				func(in *exportInput, v int) { in.Options.HistoryStart = v }),
-			// Default-on content types get a presence off-switch: the flag's
-			// presence sets v=true, which the setter inverts to exclude the type.
-			// This avoids the pflag `--flag=false` form needed to turn a
-			// default-true boolean off.
-			BoolParam("no_chat", "Exclude conversation chat text (included by default).", false,
-				func(in *exportInput, v bool) { in.Options.IncludeChat = !v }),
-			BoolParam("no_thinking", "Exclude assistant thinking blocks (included by default).", false,
-				func(in *exportInput, v bool) { in.Options.IncludeThinking = !v }),
-			BoolParam("no_tool_calls", "Exclude tool calls (included by default).", false,
-				func(in *exportInput, v bool) { in.Options.IncludeToolCalls = !v }),
-			// Default-off content types get a presence on-switch: the flag's
-			// presence sets v=true, which the setter maps straight to inclusion.
-			BoolParam("with_tool_outputs", "Include tool result bodies (excluded by default).", false,
-				func(in *exportInput, v bool) { in.Options.IncludeToolOutputs = v }),
-			BoolParam("with_system_prompts", "Include system-injected prompts (excluded by default).", false,
-				func(in *exportInput, v bool) { in.Options.IncludeSystemPrompts = v }),
-			BoolParam("with_system_messages", "Include provider system transcript records (excluded by default).", false,
-				func(in *exportInput, v bool) { in.Options.IncludeSystemMessages = v }),
-			BoolParam("with_raw_json_metadata", "Include JSON metadata fields (excluded by default).", false,
-				func(in *exportInput, v bool) { in.Options.IncludeRawJSONMetadata = v }),
+			onlyParam,
+			shortcut("chat", "chat", "Include conversation chat text."),
+			shortcut("thinking", "thinking", "Include assistant thinking blocks."),
+			shortcut("tool_calls", "tool_calls", "Include tool calls."),
+			shortcut("tool_outputs", "tool_outputs", "Include tool result bodies."),
+			shortcut("system_prompts", "system_prompts", "Include system-injected prompts."),
+			shortcut("system_messages", "system_messages", "Include provider system transcript records."),
+			shortcut("raw_json_metadata", "raw_json_metadata", "Include JSON metadata fields."),
+			shortcut("tools", "tools", "Include tool calls and tool outputs."),
+			shortcut("all", "all", "Include every content kind."),
 		},
 		New: func() exportInput {
 			return exportInput{
 				ConversationID: "",
 				OutputPath:     "",
+				Kinds:          nil,
 				Options: conv.ExportOptions{
-					Format:                 conv.ExportFormatMarkdown,
-					HistoryStart:           0,
-					Whitespace:             conv.WhitespacePreserve,
-					IncludeChat:            true,
-					IncludeThinking:        true,
-					IncludeSystemPrompts:   false,
-					IncludeSystemMessages:  false,
-					IncludeToolCalls:       true,
-					IncludeToolOutputs:     false,
-					IncludeRawJSONMetadata: false,
+					Format:       conv.ExportFormatMarkdown,
+					HistoryStart: 0,
+					Whitespace:   conv.WhitespacePreserve,
+					Content:      conv.NewContentKindSet(),
 				},
 			}
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		Run: func(ctx context.Context, in exportInput, surface Surface, sink ResultSink) error {
+			content, err := conv.ResolveContentKinds(in.Kinds)
+			if err != nil {
+				return logFail(ctx, surface, "export_invalid_content", "export transcript", err)
+			}
+			in.Options.Content = content
 			body, err := daemon.ExportTranscript(ctx, in.ConversationID, in.Options)
 			if err != nil {
 				return logFail(ctx, surface, "export_failed", "export transcript", err)
