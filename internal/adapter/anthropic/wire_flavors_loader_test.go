@@ -81,20 +81,8 @@ func TestLoaderProjectsFeatureVectors(t *testing.T) {
 	t.Parallel()
 	shape := testInteractiveFlavorShape()
 	shape.FeatureVectors = []mitm.RequestFeatures{
-		{
-			ModelID:                 "claude-opus-4-20250514",
-			Context1M:               true,
-			ThinkingMode:            mitm.RequestThinkingEnabled,
-			StructuredOutputPresent: true,
-			ToolsPresent:            true,
-		},
-		{
-			ModelID:                 "claude-haiku-3-5-20241022",
-			Context1M:               false,
-			ThinkingMode:            mitm.RequestThinkingNone,
-			StructuredOutputPresent: false,
-			ToolsPresent:            false,
-		},
+		{ModelID: "claude-opus-4-20250514"},
+		{ModelID: "claude-haiku-3-5-20241022"},
 	}
 	path := writeBaselineWithFlavors(t, []mitm.FlavorShape{shape})
 
@@ -102,52 +90,18 @@ func TestLoaderProjectsFeatureVectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	flavor, err := selectInteractiveFlavor(flavors, WireFlavorFeatureVector{
-		ModelID:                 "claude-opus-4-20250514",
-		Context1M:               true,
-		ThinkingMode:            WireFlavorThinkingEnabled,
-		StructuredOutputPresent: true,
-		ToolsPresent:            true,
-	})
+	flavor, err := selectInteractiveFlavor(flavors, WireFlavorFeatureVector{ModelID: "claude-opus-4-20250514"})
 	if err != nil {
 		t.Fatalf("selectInteractiveFlavor: %v", err)
 	}
 	if len(flavor.FeatureVectors) != 2 {
 		t.Fatalf("FeatureVectors len = %d, want 2", len(flavor.FeatureVectors))
 	}
-
-	first := flavor.FeatureVectors[0]
-	if first.ModelID != "claude-opus-4-20250514" {
-		t.Fatalf("FeatureVectors[0].ModelID = %q", first.ModelID)
+	if got := flavor.FeatureVectors[0].ModelID; got != "claude-opus-4-20250514" {
+		t.Fatalf("FeatureVectors[0].ModelID = %q", got)
 	}
-	if !first.Context1M {
-		t.Fatal("FeatureVectors[0].Context1M = false, want true")
-	}
-	if first.ThinkingMode != WireFlavorThinkingEnabled {
-		t.Fatalf("FeatureVectors[0].ThinkingMode = %q", first.ThinkingMode)
-	}
-	if !first.StructuredOutputPresent {
-		t.Fatal("FeatureVectors[0].StructuredOutputPresent = false, want true")
-	}
-	if !first.ToolsPresent {
-		t.Fatal("FeatureVectors[0].ToolsPresent = false, want true")
-	}
-
-	second := flavor.FeatureVectors[1]
-	if second.ModelID != "claude-haiku-3-5-20241022" {
-		t.Fatalf("FeatureVectors[1].ModelID = %q", second.ModelID)
-	}
-	if second.Context1M {
-		t.Fatal("FeatureVectors[1].Context1M = true, want false")
-	}
-	if second.ThinkingMode != WireFlavorThinkingNone {
-		t.Fatalf("FeatureVectors[1].ThinkingMode = %q", second.ThinkingMode)
-	}
-	if second.StructuredOutputPresent {
-		t.Fatal("FeatureVectors[1].StructuredOutputPresent = true, want false")
-	}
-	if second.ToolsPresent {
-		t.Fatal("FeatureVectors[1].ToolsPresent = true, want false")
+	if got := flavor.FeatureVectors[1].ModelID; got != "claude-haiku-3-5-20241022" {
+		t.Fatalf("FeatureVectors[1].ModelID = %q", got)
 	}
 }
 

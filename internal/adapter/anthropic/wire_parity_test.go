@@ -61,7 +61,7 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
 		MaxTokens: 10,
 	}
-	req.FeatureVector = testWireFlavorFeatureVector(req.Model, false)
+	req.FeatureVector = testWireFlavorFeatureVector(req.Model)
 	_, _, err = cli.StreamEvents(context.Background(), req, func(StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatalf("Send: %v", err)
@@ -122,7 +122,7 @@ func TestFeatureAwareFlavorSelectionMatchesModelBeforeFlags(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	flavor, err := selectInteractiveFlavor(loaded, testWireFlavorFeatureVector(testSonnetModel, false))
+	flavor, err := selectInteractiveFlavor(loaded, testWireFlavorFeatureVector(testSonnetModel))
 	if err != nil {
 		t.Fatalf("selectInteractiveFlavor: %v", err)
 	}
@@ -134,7 +134,12 @@ func TestFeatureAwareFlavorSelectionMatchesModelBeforeFlags(t *testing.T) {
 	}
 }
 
-func TestOutboundBetaHeaderStripsThinkingRedactionFlags(t *testing.T) {
+// TestOutboundBetaHeaderStripsConfiguredWireFlags asserts the outbound
+// anthropic-beta header drops exactly the tokens named in
+// cfg.StripWireFlags, case-insensitively, leaving every other learned flag
+// in order. The suppression list is operator config, so the test uses
+// generic fixture tokens rather than any provider's real flag vocabulary.
+func TestOutboundBetaHeaderStripsConfiguredWireFlags(t *testing.T) {
 	t.Parallel()
 
 	cli := &Client{
@@ -145,6 +150,7 @@ func TestOutboundBetaHeaderStripsThinkingRedactionFlags(t *testing.T) {
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
 			BetaHeader:            "override-beta-flag",
+			StripWireFlags:        []string{"strip-me-a", "strip-me-b"},
 		},
 	}
 	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cli.cfg.MessagesURL, http.NoBody)
@@ -152,10 +158,10 @@ func TestOutboundBetaHeaderStripsThinkingRedactionFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	flavor := WireFlavor{
-		Slug:             "test-redaction-strip",
+		Slug:             "test-wire-flag-strip",
 		UserAgent:        "claude-cli/2.1.123 (external, sdk-cli)",
 		AnthropicVersion: "2023-06-01",
-		AnthropicBeta:    "oauth-2025-04-20,Thinking-Token-Count-2026-05-13,context-management-2025-06-27,Redact-Thinking-2026-02-12,claude-code-20250219",
+		AnthropicBeta:    "keep-a,Strip-Me-A,keep-b,Strip-Me-B,keep-c",
 	}
 	req := Request{
 		Model: "claude-test",
@@ -163,7 +169,7 @@ func TestOutboundBetaHeaderStripsThinkingRedactionFlags(t *testing.T) {
 
 	cli.applyMessagesHeaders(httpReq, req, "tok", flavor)
 
-	want := "oauth-2025-04-20,context-management-2025-06-27,claude-code-20250219"
+	want := "keep-a,keep-b,keep-c"
 	if got := httpReq.Header.Get("Anthropic-Beta"); got != want {
 		t.Fatalf("Anthropic-Beta = %q, want %q", got, want)
 	}
@@ -210,7 +216,7 @@ func TestOutboundHeadersAllowNonBetaConfigOverride(t *testing.T) {
 		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
 		MaxTokens: 10,
 	}
-	req.FeatureVector = testWireFlavorFeatureVector(req.Model, false)
+	req.FeatureVector = testWireFlavorFeatureVector(req.Model)
 	_, _, err = cli.StreamEvents(context.Background(), req, func(StreamEvent) error { return nil })
 	if err != nil {
 		t.Fatalf("Send: %v", err)

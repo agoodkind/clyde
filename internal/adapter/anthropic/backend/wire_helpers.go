@@ -59,13 +59,7 @@ func ToAPIRequest(tr AnthRequest, claudeModel string, emitToolResultCacheReferen
 		// anthropic.ContentBlock wire shape. Returns nil to signal that this block
 		// should be omitted (e.g. an empty unsigned thinking block).
 		OutputConfig: nil, Thinking: nil, Metadata: nil, ContextManagement: nil, OnHeaders: nil,
-		FeatureVector: anthropic.WireFlavorFeatureVector{
-			ModelID:                 "",
-			Context1M:               false,
-			ThinkingMode:            "",
-			StructuredOutputPresent: false,
-			ToolsPresent:            false,
-		},
+		FeatureVector: anthropic.WireFlavorFeatureVector{ModelID: ""},
 	}, stats
 }
 

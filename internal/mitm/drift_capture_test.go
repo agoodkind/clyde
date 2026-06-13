@@ -14,12 +14,9 @@ import (
 )
 
 type claudeBillingBodyFixture struct {
-	Model          string                      `json:"model"`
-	System         []claudeContentBlock        `json:"system"`
-	Messages       []claudeMessageFixture      `json:"messages"`
-	Thinking       *requestThinkingFixture     `json:"thinking,omitempty"`
-	ResponseFormat json.RawMessage             `json:"response_format,omitempty"`
-	Tools          []requestFeatureToolFixture `json:"tools,omitempty"`
+	Model    string                 `json:"model"`
+	System   []claudeContentBlock   `json:"system"`
+	Messages []claudeMessageFixture `json:"messages"`
 }
 
 type claudeContentBlock struct {
@@ -45,9 +42,6 @@ func claudeFeatureBillingBody(t *testing.T, cch string) []byte {
 	t.Helper()
 	body := newClaudeBillingBodyFixture(cch)
 	body.Model = "claude-fable-4-20250514"
-	body.Thinking = &requestThinkingFixture{Type: "adaptive"}
-	body.ResponseFormat = json.RawMessage(`{"type":"json_schema"}`)
-	body.Tools = []requestFeatureToolFixture{{Name: "Read", Type: "custom"}}
 	return mustClaudeBillingBody(t, body)
 }
 
@@ -252,7 +246,7 @@ func TestExtractSnapshotV2FromDriftCaptureYieldsFlavorWithAttestation(t *testing
 	header := http.Header{}
 	header.Set("Authorization", "Bearer secret")
 	header.Set("User-Agent", "claude-cli/2.1.123 (external, sdk-cli)")
-	header.Set("Anthropic-Beta", "oauth-2025-04-20,claude-code-20250219,context-1m-2025-08-07")
+	header.Set("Anthropic-Beta", "oauth-2025-04-20,claude-code-20250219,model-gated-beta-2026-01-01")
 
 	proxy := &Proxy{}
 	proxy.recordDriftCapture(cfg, driftCaptureInput{
@@ -282,13 +276,7 @@ func TestExtractSnapshotV2FromDriftCaptureYieldsFlavorWithAttestation(t *testing
 		t.Fatalf("flavor billing attestation=%q want deadbeef", flavor.BillingAttestation)
 	}
 	wantFeatures := []RequestFeatures{
-		{
-			ModelID:                 "claude-fable-4-20250514",
-			Context1M:               true,
-			ThinkingMode:            RequestThinkingAdaptive,
-			StructuredOutputPresent: true,
-			ToolsPresent:            true,
-		},
+		{ModelID: "claude-fable-4-20250514"},
 	}
 	if !reflect.DeepEqual(flavor.FeatureVectors, wantFeatures) {
 		t.Fatalf("flavor feature vectors=%+v want %+v", flavor.FeatureVectors, wantFeatures)
@@ -334,20 +322,8 @@ func TestSnapshotV2TOMLRoundTripPreservesFeatureVectors(t *testing.T) {
 				},
 				Body: V2Body{BodyType: "json_object", Fields: []V2Field{{Name: "model", Kind: V2FieldKindString, Presence: V2HeaderPresenceRequired, OccurrenceRate: 1.0, SubFields: nil, ItemKind: "", ItemSubFields: nil, SampleValue: ""}}},
 				FeatureVectors: []RequestFeatures{
-					{
-						ModelID:                 "claude-fable-4-20250514",
-						Context1M:               true,
-						ThinkingMode:            RequestThinkingAdaptive,
-						StructuredOutputPresent: true,
-						ToolsPresent:            true,
-					},
-					{
-						ModelID:                 "claude-haiku-4-5-20251001",
-						Context1M:               false,
-						ThinkingMode:            RequestThinkingDisabled,
-						StructuredOutputPresent: false,
-						ToolsPresent:            false,
-					},
+					{ModelID: "claude-fable-4-20250514"},
+					{ModelID: "claude-haiku-4-5-20251001"},
 				},
 				BillingAttestation: "cch-token-9",
 			},

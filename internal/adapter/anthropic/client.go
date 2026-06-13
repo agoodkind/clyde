@@ -19,21 +19,10 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/clyde/internal/adapter/wireflags"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/mitm/capture"
 )
-
-type betaFlag string
-
-const (
-	thinkingTokenCountBetaFlag betaFlag = "thinking-token-count-2026-05-13"
-	redactThinkingBetaFlag     betaFlag = "redact-thinking-2026-02-12"
-)
-
-var thinkingRedactionBetaStripSet = []betaFlag{
-	thinkingTokenCountBetaFlag,
-	redactThinkingBetaFlag,
-}
 
 // sessionID is a per-daemon-process UUIDv4 used for the session
 // correlation header. Generated lazily once at the first messages
@@ -403,9 +392,9 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 	}
 
 	beta := flavor.AnthropicBeta
-	filtered, removed := suppressBetaFlags(beta, thinkingRedactionBetaStripSet)
+	filtered, removed := wireflags.Suppress(beta, c.cfg.StripWireFlags)
 	if len(removed) > 0 {
-		anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.thinking_redaction_beta_stripped",
+		anthropicRequestLog.Logger().DebugContext(httpReq.Context(), "anthropic.messages.wire_flags_stripped",
 			"concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
 			"removed", removed,
@@ -424,46 +413,6 @@ func (c *Client) applyMessagesHeaders(httpReq *http.Request, req Request, token 
 		httpReq.Header.Set(h.key, h.value)
 	}
 	return dropped
-}
-
-// suppressBetaFlags removes every flag in suppress from the comma-joined
-// anthropic-beta value, preserving the order of the surviving flags.
-// Matching is exact per trimmed token and case-insensitive. It returns
-// the rebuilt header value and the list of removed flags (in the order
-// they appeared in beta) so the caller can log exactly what changed. A
-// flag in suppress that is absent from beta is silently ignored.
-func suppressBetaFlags(beta string, suppress []betaFlag) (string, []string) {
-	if strings.TrimSpace(beta) == "" || len(suppress) == 0 {
-		return beta, nil
-	}
-	drop := make(map[string]bool, len(suppress))
-	for _, s := range suppress {
-		s := strings.TrimSpace(string(s))
-		if s == "" {
-			continue
-		}
-		drop[strings.ToLower(s)] = true
-	}
-	if len(drop) == 0 {
-		return beta, nil
-	}
-	kept := make([]string, 0)
-	removed := make([]string, 0)
-	for f := range strings.SplitSeq(beta, ",") {
-		flag := strings.TrimSpace(f)
-		if flag == "" {
-			continue
-		}
-		if drop[strings.ToLower(flag)] {
-			removed = append(removed, flag)
-			continue
-		}
-		kept = append(kept, flag)
-	}
-	if len(removed) == 0 {
-		return beta, nil
-	}
-	return strings.Join(kept, ","), removed
 }
 
 // maybeRetryOn401 is the do() boundary helper that invokes one on-401 retry
@@ -706,10 +655,6 @@ func (c *Client) activeFlavor(featureVector WireFlavorFeatureVector) (WireFlavor
 			slog.Warn("anthropic.wire_baseline.flavor_unseeded", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 				"baseline_path", c.cfg.WireBaselinePath,
 				"model", featureVector.ModelID,
-				"context_1m", featureVector.Context1M,
-				"thinking_mode", string(featureVector.ThinkingMode),
-				"structured_output_present", featureVector.StructuredOutputPresent,
-				"tools_present", featureVector.ToolsPresent,
 			)
 		}
 		return zero, err

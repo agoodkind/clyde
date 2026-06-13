@@ -8,13 +8,17 @@ import (
 )
 
 const (
-	testDefaultModel            = "claude-test"
-	testSonnetModel             = "claude-sonnet-4-5-20250929"
-	testFableModel              = "claude-fable-4-20250514"
-	testOpusModel               = "claude-opus-4-20250514"
-	testStandardBetaHeader      = "claude-code-20250219,oauth-2025-04-20"
-	testContext1MBeta           = "context-1m-2025-08-07"
-	testContext1MBetaHeader     = testStandardBetaHeader + "," + testContext1MBeta
+	testDefaultModel       = "claude-test"
+	testSonnetModel        = "claude-sonnet-4-5-20250929"
+	testFableModel         = "claude-fable-4-20250514"
+	testOpusModel          = "claude-opus-4-20250514"
+	testStandardBetaHeader = "claude-code-20250219,oauth-2025-04-20"
+	// testModelGatedBeta is a generic capability token the test baseline
+	// attaches only to the fable and opus flavors, standing in for any
+	// per-model beta the learned baseline carries. It is deliberately not a
+	// real provider flag, so no vendor wire vocabulary lives in the tests.
+	testModelGatedBeta          = "model-gated-beta-2026-01-01"
+	testModelGatedBetaHeader    = testStandardBetaHeader + "," + testModelGatedBeta
 	testDefaultFlavorSlug       = "claude-code-interactive-default-17c1f069"
 	testSonnetFlavorSlug        = "claude-code-interactive-sonnet-200k"
 	testFableStandardFlavorSlug = "claude-code-interactive-fable-200k"
@@ -43,7 +47,7 @@ func writeTestWireBaseline(t *testing.T) string {
 func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
 	t.Helper()
 	dir := t.TempDir()
-	defaultFlavor := testInteractiveFlavorShapeForModel(testDefaultFlavorSlug, testDefaultModel, testStandardBetaHeader, false)
+	defaultFlavor := testInteractiveFlavorShapeForModel(testDefaultFlavorSlug, testDefaultModel, testStandardBetaHeader)
 	defaultFlavor.BillingAttestation = cch
 	snap := mitm.SnapshotV2{
 		Upstream: mitm.V2Upstream{
@@ -54,10 +58,10 @@ func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
 		},
 		Flavors: []mitm.FlavorShape{
 			defaultFlavor,
-			testInteractiveFlavorShapeForModel(testSonnetFlavorSlug, testSonnetModel, testStandardBetaHeader, false),
-			testInteractiveFlavorShapeForModel(testFableStandardFlavorSlug, testFableModel, testStandardBetaHeader, false),
-			testInteractiveFlavorShapeForModel(testFable1MFlavorSlug, testFableModel, testContext1MBetaHeader, true),
-			testInteractiveFlavorShapeForModel(testOpus1MFlavorSlug, testOpusModel, testContext1MBetaHeader, true),
+			testInteractiveFlavorShapeForModel(testSonnetFlavorSlug, testSonnetModel, testStandardBetaHeader),
+			testInteractiveFlavorShapeForModel(testFableStandardFlavorSlug, testFableModel, testStandardBetaHeader),
+			testInteractiveFlavorShapeForModel(testFable1MFlavorSlug, testFableModel, testModelGatedBetaHeader),
+			testInteractiveFlavorShapeForModel(testOpus1MFlavorSlug, testOpusModel, testModelGatedBetaHeader),
 			testProbeFlavorShape(),
 		},
 	}
@@ -75,9 +79,9 @@ func testInteractiveFlavorShape() mitm.FlavorShape {
 	return testInteractiveFlavorShapeWithBeta("claude-code-interactive-17c1f069", testStandardBetaHeader)
 }
 
-func testInteractiveFlavorShapeForModel(slug string, model string, betaHeader string, context1M bool) mitm.FlavorShape {
+func testInteractiveFlavorShapeForModel(slug string, model string, betaHeader string) mitm.FlavorShape {
 	shape := testInteractiveFlavorShapeWithBeta(slug, betaHeader)
-	shape.FeatureVectors = []mitm.RequestFeatures{testRequestFeatures(model, context1M)}
+	shape.FeatureVectors = []mitm.RequestFeatures{testRequestFeatures(model)}
 	return shape
 }
 
@@ -141,24 +145,12 @@ func testInteractiveFlavorHeadersWithBeta(betaHeader string) []mitm.V2Header {
 	}
 }
 
-func testRequestFeatures(model string, context1M bool) mitm.RequestFeatures {
-	return mitm.RequestFeatures{
-		ModelID:                 model,
-		Context1M:               context1M,
-		ThinkingMode:            mitm.RequestThinkingNone,
-		StructuredOutputPresent: false,
-		ToolsPresent:            false,
-	}
+func testRequestFeatures(model string) mitm.RequestFeatures {
+	return mitm.RequestFeatures{ModelID: model}
 }
 
-func testWireFlavorFeatureVector(model string, context1M bool) WireFlavorFeatureVector {
-	return WireFlavorFeatureVector{
-		ModelID:                 model,
-		Context1M:               context1M,
-		ThinkingMode:            WireFlavorThinkingNone,
-		StructuredOutputPresent: false,
-		ToolsPresent:            false,
-	}
+func testWireFlavorFeatureVector(model string) WireFlavorFeatureVector {
+	return WireFlavorFeatureVector{ModelID: model}
 }
 
 func testProbeFlavorShape() mitm.FlavorShape {

@@ -11,30 +11,11 @@ type WireHeader struct {
 	Classification string // "constant" | "enum" | "free"
 }
 
-// WireFlavorThinkingMode is the learned request thinking mode that
-// participates in feature-aware flavor matching.
-type WireFlavorThinkingMode string
-
-const (
-	// WireFlavorThinkingNone means the captured request body omitted
-	// thinking.
-	WireFlavorThinkingNone WireFlavorThinkingMode = "none"
-	// WireFlavorThinkingAdaptive means thinking.type was adaptive.
-	WireFlavorThinkingAdaptive WireFlavorThinkingMode = "adaptive"
-	// WireFlavorThinkingEnabled means thinking.type was enabled.
-	WireFlavorThinkingEnabled WireFlavorThinkingMode = "enabled"
-	// WireFlavorThinkingDisabled means thinking.type was disabled.
-	WireFlavorThinkingDisabled WireFlavorThinkingMode = "disabled"
-)
-
 // WireFlavorFeatureVector is the request feature vector observed for a
-// learned wire flavor.
+// learned wire flavor. Flavor selection matches on model id alone, so the
+// vector carries only the model id.
 type WireFlavorFeatureVector struct {
-	ModelID                 string
-	Context1M               bool
-	ThinkingMode            WireFlavorThinkingMode
-	StructuredOutputPresent bool
-	ToolsPresent            bool
+	ModelID string
 }
 
 // WireFlavor is the captured wire shape for one caller flavor of an

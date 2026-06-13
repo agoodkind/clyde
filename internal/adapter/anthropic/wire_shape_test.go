@@ -189,35 +189,30 @@ func TestFeatureAwareFlavorSelectionIsByModel(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Selection is by model only. The replayed beta set is whatever
-	// claude-cli sends for that model, so context-1m presence follows the
-	// model, not the request's context tier: fable and opus carry it on every
-	// tier, while a credit-gated sonnet flavor never does. The request's
-	// context_1m flag does not change which flavor is chosen.
+	// Selection is by model only. The replayed beta set is whatever the
+	// learned flavor carries for that model, so the model-gated probe beta
+	// follows the model: fable and opus carry it (their flavors learned it),
+	// while the sonnet flavor never does. The request carries no other
+	// dimension that could change which flavor is chosen.
 	cases := []struct {
-		name        string
-		vector      WireFlavorFeatureVector
-		wantContext bool
+		name           string
+		vector         WireFlavorFeatureVector
+		wantModelGated bool
 	}{
 		{
-			name:        "fable_1m",
-			vector:      testWireFlavorFeatureVector(testFableModel, true),
-			wantContext: true,
+			name:           "fable",
+			vector:         testWireFlavorFeatureVector(testFableModel),
+			wantModelGated: true,
 		},
 		{
-			name:        "opus_1m",
-			vector:      testWireFlavorFeatureVector(testOpusModel, true),
-			wantContext: true,
+			name:           "opus",
+			vector:         testWireFlavorFeatureVector(testOpusModel),
+			wantModelGated: true,
 		},
 		{
-			name:        "fable_200k_still_gets_context_1m",
-			vector:      testWireFlavorFeatureVector(testFableModel, false),
-			wantContext: true,
-		},
-		{
-			name:        "sonnet_never_gets_context_1m",
-			vector:      testWireFlavorFeatureVector(testSonnetModel, false),
-			wantContext: false,
+			name:           "sonnet",
+			vector:         testWireFlavorFeatureVector(testSonnetModel),
+			wantModelGated: false,
 		},
 	}
 
@@ -229,9 +224,9 @@ func TestFeatureAwareFlavorSelectionIsByModel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("selectInteractiveFlavor: %v", err)
 			}
-			gotContext := betaFlagsContain(flavor, testContext1MBeta)
-			if gotContext != tc.wantContext {
-				t.Fatalf("selected %q context-1m=%v, want %v", flavor.Slug, gotContext, tc.wantContext)
+			gotModelGated := betaFlagsContain(flavor, testModelGatedBeta)
+			if gotModelGated != tc.wantModelGated {
+				t.Fatalf("selected %q model-gated-beta=%v, want %v", flavor.Slug, gotModelGated, tc.wantModelGated)
 			}
 		})
 	}

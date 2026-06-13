@@ -83,6 +83,11 @@ type Config struct {
 	// traffic. The daemon sets it from its shared capture store; a nil store
 	// records nothing.
 	CaptureStore *capture.Store
+	// StripWireFlags lists capability tokens to drop from the outbound
+	// anthropic-beta header, fed from the provider-neutral
+	// [adapter].strip_wire_flags config. Empty replays the learned beta set
+	// untouched.
+	StripWireFlags []string
 }
 
 // Client wraps an [http.Client] and an OAuth token source.

@@ -445,13 +445,7 @@ func requestFeaturesFromRawRequest(req rawRequest) (RequestFeatures, bool) {
 }
 
 func emptyRequestFeatures() RequestFeatures {
-	return RequestFeatures{
-		ModelID:                 "",
-		Context1M:               false,
-		ThinkingMode:            "",
-		StructuredOutputPresent: false,
-		ToolsPresent:            false,
-	}
+	return RequestFeatures{ModelID: ""}
 }
 
 func requestFeaturesUsable(features RequestFeatures) bool {
@@ -474,22 +468,7 @@ func requestBodyIsCaptureSummary(raw json.RawMessage) bool {
 }
 
 func requestFeaturesLess(left RequestFeatures, right RequestFeatures) bool {
-	if left.ModelID != right.ModelID {
-		return left.ModelID < right.ModelID
-	}
-	if left.Context1M != right.Context1M {
-		return !left.Context1M && right.Context1M
-	}
-	if left.ThinkingMode != right.ThinkingMode {
-		return left.ThinkingMode < right.ThinkingMode
-	}
-	if left.StructuredOutputPresent != right.StructuredOutputPresent {
-		return !left.StructuredOutputPresent && right.StructuredOutputPresent
-	}
-	if left.ToolsPresent != right.ToolsPresent {
-		return !left.ToolsPresent && right.ToolsPresent
-	}
-	return false
+	return left.ModelID < right.ModelID
 }
 
 // stringFromRaw decodes a JSON-encoded string. Returns "" when the

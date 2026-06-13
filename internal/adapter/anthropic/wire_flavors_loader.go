@@ -187,13 +187,7 @@ func featureVectorsFromShape(shape mitm.FlavorShape) []WireFlavorFeatureVector {
 	}
 	out := make([]WireFlavorFeatureVector, 0, len(shape.FeatureVectors))
 	for _, feature := range shape.FeatureVectors {
-		out = append(out, WireFlavorFeatureVector{
-			ModelID:                 feature.ModelID,
-			Context1M:               feature.Context1M,
-			ThinkingMode:            WireFlavorThinkingMode(feature.ThinkingMode),
-			StructuredOutputPresent: feature.StructuredOutputPresent,
-			ToolsPresent:            feature.ToolsPresent,
-		})
+		out = append(out, WireFlavorFeatureVector{ModelID: feature.ModelID})
 	}
 	return out
 }

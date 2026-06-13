@@ -287,6 +287,7 @@ func (s *Server) registerAnthropicProvider(
 		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
 		WireBaselinePath:        deps.AnthropicWireBaselinePath,
 		CaptureStore:            deps.CaptureStore,
+		StripWireFlags:          cfg.StripWireFlags,
 	})
 	anthropicSidecarRotation := policies.Sinks[logpolicy.SinkAnthropicSidecar].Rotation
 	s.anthropicProvider = anthropic.NewProvider(adapterprovider.Deps{

@@ -5,112 +5,31 @@ import (
 	"testing"
 )
 
-type requestFeatureBodyFixture struct {
-	Model          string                      `json:"model"`
-	Thinking       *requestThinkingFixture     `json:"thinking,omitempty"`
-	ResponseFormat json.RawMessage             `json:"response_format,omitempty"`
-	OutputFormat   json.RawMessage             `json:"output_format,omitempty"`
-	OutputConfig   json.RawMessage             `json:"output_config,omitempty"`
-	Tools          []requestFeatureToolFixture `json:"tools,omitempty"`
-}
-
-type requestThinkingFixture struct {
-	Type string `json:"type"`
-}
-
-type requestFeatureToolFixture struct {
-	Name string `json:"name,omitempty"`
-	Type string `json:"type,omitempty"`
-}
-
-func TestExtractRequestFeatures(t *testing.T) {
+// TestExtractRequestFeaturesModelID asserts the extractor pulls the model id
+// from the captured request body and ignores every other field, which is the
+// whole feature vector now that flavor selection matches on model alone.
+func TestExtractRequestFeaturesModelID(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name    string
-		request CapturedRequest
-		want    RequestFeatures
+		name        string
+		body        json.RawMessage
+		wantModelID string
 	}{
 		{
-			name: "fable_context_1m_adaptive_tools_response_format",
-			request: CapturedRequest{
-				RequestHeaders: map[string]string{
-					"Anthropic-Beta": "oauth-2025-04-20, context-1m-2025-08-07, claude-code-20250219",
-				},
-				RequestBody: mustRequestFeatureBody(t, requestFeatureBodyFixture{
-					Model:          "claude-fable-4-20250514",
-					Thinking:       &requestThinkingFixture{Type: "adaptive"},
-					ResponseFormat: json.RawMessage(`{"type":"json_schema"}`),
-					Tools: []requestFeatureToolFixture{
-						{Name: "Read", Type: "custom"},
-					},
-				}),
-			},
-			want: RequestFeatures{
-				ModelID:                 "claude-fable-4-20250514",
-				Context1M:               true,
-				ThinkingMode:            RequestThinkingAdaptive,
-				StructuredOutputPresent: true,
-				ToolsPresent:            true,
-			},
+			name:        "object body with ignored extra fields",
+			body:        json.RawMessage(`{"model":"claude-fable-4-20250514","thinking":{"type":"adaptive"},"tools":[{"name":"Read"}]}`),
+			wantModelID: "claude-fable-4-20250514",
 		},
 		{
-			name: "haiku_without_context_1m_disabled_no_tools_no_structured_output",
-			request: CapturedRequest{
-				RequestHeaders: map[string]string{
-					"anthropic-beta": "oauth-2025-04-20, claude-code-20250219",
-				},
-				RequestBody: mustRequestFeatureBody(t, requestFeatureBodyFixture{
-					Model:    "claude-haiku-4-5-20251001",
-					Thinking: &requestThinkingFixture{Type: "disabled"},
-				}),
-			},
-			want: RequestFeatures{
-				ModelID:                 "claude-haiku-4-5-20251001",
-				Context1M:               false,
-				ThinkingMode:            RequestThinkingDisabled,
-				StructuredOutputPresent: false,
-				ToolsPresent:            false,
-			},
+			name:        "response format ignored",
+			body:        json.RawMessage(`{"model":"claude-haiku-4-5-20251001","response_format":{"type":"json_object"}}`),
+			wantModelID: "claude-haiku-4-5-20251001",
 		},
 		{
-			name: "thinking_absent_output_format_no_tools",
-			request: CapturedRequest{
-				RequestHeaders: map[string]string{
-					"Anthropic-Beta": "oauth-2025-04-20, claude-code-20250219",
-				},
-				RequestBody: mustRequestFeatureBody(t, requestFeatureBodyFixture{
-					Model:        "claude-sonnet-4-5-20250929",
-					OutputFormat: json.RawMessage(`{"type":"json_object"}`),
-				}),
-			},
-			want: RequestFeatures{
-				ModelID:                 "claude-sonnet-4-5-20250929",
-				Context1M:               false,
-				ThinkingMode:            RequestThinkingNone,
-				StructuredOutputPresent: true,
-				ToolsPresent:            false,
-			},
-		},
-		{
-			name: "enabled_thinking_schema_bearing_output_config",
-			request: CapturedRequest{
-				RequestHeaders: map[string]string{
-					"Anthropic-Beta": "context-1m-2025-08-07",
-				},
-				RequestBody: mustRequestFeatureBody(t, requestFeatureBodyFixture{
-					Model:        "claude-opus-4-7",
-					Thinking:     &requestThinkingFixture{Type: "enabled"},
-					OutputConfig: json.RawMessage(`{"schema":{"type":"object"}}`),
-				}),
-			},
-			want: RequestFeatures{
-				ModelID:                 "claude-opus-4-7",
-				Context1M:               true,
-				ThinkingMode:            RequestThinkingEnabled,
-				StructuredOutputPresent: true,
-				ToolsPresent:            false,
-			},
+			name:        "string-wrapped json body",
+			body:        mustJSONString(t, `{"model":"claude-opus-4-7"}`),
+			wantModelID: "claude-opus-4-7",
 		},
 	}
 
@@ -118,23 +37,36 @@ func TestExtractRequestFeatures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ExtractRequestFeatures(tc.request)
+			got, err := ExtractRequestFeatures(CapturedRequest{RequestBody: tc.body})
 			if err != nil {
 				t.Fatalf("ExtractRequestFeatures: %v", err)
 			}
-			if got != tc.want {
-				t.Fatalf("ExtractRequestFeatures() = %+v, want %+v", got, tc.want)
+			want := RequestFeatures{ModelID: tc.wantModelID}
+			if got != want {
+				t.Fatalf("ExtractRequestFeatures() = %+v, want %+v", got, want)
 			}
 		})
 	}
 }
 
-func mustRequestFeatureBody(t *testing.T, body requestFeatureBodyFixture) json.RawMessage {
+// TestExtractRequestFeaturesRejectsNonObjectBody guards the decode error
+// branches: empty, null, and non-object bodies are not extractable.
+func TestExtractRequestFeaturesRejectsNonObjectBody(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"", "null", `"not-json"`, `[1,2]`} {
+		if _, err := ExtractRequestFeatures(CapturedRequest{RequestBody: json.RawMessage(body)}); err == nil {
+			t.Fatalf("ExtractRequestFeatures(%q) error = nil, want non-nil", body)
+		}
+	}
+}
+
+func mustJSONString(t *testing.T, s string) json.RawMessage {
 	t.Helper()
 
-	raw, err := json.Marshal(body)
+	raw, err := json.Marshal(s)
 	if err != nil {
-		t.Fatalf("marshal request feature body: %v", err)
+		t.Fatalf("marshal json string: %v", err)
 	}
 	return raw
 }
