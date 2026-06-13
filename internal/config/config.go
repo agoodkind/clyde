@@ -90,6 +90,15 @@ type AdapterConfig struct {
 	// retention cap. Requires the capture store to be open; with it nil
 	// this knob does nothing.
 	CaptureIngress bool `json:"captureIngress,omitempty" toml:"capture_ingress,omitempty"`
+	// StripWireFlags lists capability tokens to drop from the outbound
+	// provider capability header on egress (anthropic-beta on the Claude
+	// path, x-codex-beta-features and openai-beta on the Codex path), which
+	// all carry a comma-joined token list. It is provider-neutral and
+	// applies to every provider; default empty replays the learned wire
+	// identity untouched. Listing a token a provider requires for its
+	// handshake (for example a Codex websocket-upgrade token) will break
+	// that provider, so name only tokens the backend tolerates dropping.
+	StripWireFlags []string `json:"stripWireFlags,omitempty" toml:"strip_wire_flags,omitempty"`
 	// ClientIdentity carries wire request-shape fields (headers and
 	// body-side billing line inputs). There are no compiled-in defaults:
 	// NewRegistry rejects empty required fields. See clyde.example.toml.

@@ -83,6 +83,16 @@ direct_oauth = true
 # egress capture. Off by default; it roughly doubles body volume against the
 # [mitm.capture_store] retention cap. Requires the capture store to be open.
 capture_ingress = false
+# Provider-neutral list of capability tokens to drop from the outbound provider
+# capability header on egress (anthropic-beta on the Claude path,
+# x-codex-beta-features and openai-beta on the Codex path). Default empty replays
+# the learned wire identity untouched. Listing a token a provider requires for
+# its handshake will break that provider, so name only tokens the backend
+# tolerates dropping. The placeholders below stand in for the real provider
+# tokens, which are vendor-specific and belong only in your local config, not in
+# this committed example; one use is dropping a provider's thinking-redaction
+# capability so Cursor receives plaintext reasoning.
+# strip_wire_flags = ["example-capability-flag-a", "example-capability-flag-b"]
 # The default points at a -thinking alias because fable-5 rejects an
 # explicit {"type":"disabled"} thinking block (400) and the non-thinking
 # aliases emit exactly that; see [adapter.families.fable-5].
