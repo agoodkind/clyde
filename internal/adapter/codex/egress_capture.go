@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"time"
 
-	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
@@ -112,8 +111,7 @@ func recordCodexEgress(store *capture.Store, corr correlation.Context, in codexE
 		host = parsed.Host
 		path = parsed.Path
 	}
-	store.Record(capture.Record{
-		Timestamp:         clock.Now(),
+	store.RecordExchange(corr, capture.Exchange{
 		Client:            captureClientCodex,
 		Provider:          "codex",
 		Concern:           captureCodexConcern,
@@ -121,17 +119,15 @@ func recordCodexEgress(store *capture.Store, corr correlation.Context, in codexE
 		Method:            in.method,
 		Path:              path,
 		Status:            in.status,
-		RequestID:         corr.RequestID,
 		UpstreamRequestID: in.upstreamRequestID,
 		SessionID:         in.sessionID,
-		TraceID:           string(corr.TraceID),
 		RequestHeaders:    in.reqHeaders,
 		ResponseHeaders:   in.respHeaders,
 		RequestBody:       in.reqBody,
 		ResponseBody:      in.respBody,
 		RequestType:       in.reqType,
 		ResponseType:      in.respType,
-		Duration:          clock.Since(in.started),
+		Started:           in.started,
 	})
 }
 
@@ -153,31 +149,6 @@ func recordCodexHTTPEgress(store *capture.Store, corr correlation.Context, req *
 		respBody:          respBody,
 		started:           started,
 	})
-}
-
-// cappedSink is an [io.Writer] that buffers up to cap bytes and then drops the
-// rest, setting truncated. It always reports a full write so a wrapping
-// [io.TeeReader] never stalls the stream consumer. The codex HTTP transport
-// tees the SSE response body through it to capture the full reply without a
-// second read pass.
-type cappedSink struct {
-	buf       bytes.Buffer
-	cap       int
-	truncated bool
-}
-
-func (w *cappedSink) Write(p []byte) (int, error) {
-	remaining := w.cap - w.buf.Len()
-	switch {
-	case remaining <= 0:
-		w.truncated = true
-	case len(p) > remaining:
-		w.buf.Write(p[:remaining])
-		w.truncated = true
-	default:
-		w.buf.Write(p)
-	}
-	return len(p), nil
 }
 
 // joinFrames concatenates websocket frames into one newline-delimited byte

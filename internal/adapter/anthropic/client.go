@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 type betaFlag string
@@ -588,41 +589,37 @@ func emitWireCaptureFull(ctx context.Context, mode WireCaptureMode, base respons
 }
 
 // captureTee is the [io.ReadCloser] shim Full-mode wire capture wraps around
-// resp.Body. Reads pass through unchanged; bytes also accumulate in an
-// internal buffer up to cap. On Close, onClose fires once with the captured
-// slice, the truncation flag, and the total read count. Stream parsers
+// resp.Body. Reads pass through unchanged; bytes also accumulate in a shared
+// [capture.CappedBuffer] up to cap. On Close, onClose fires once with the
+// captured slice, the truncation flag, and the total read count. Stream parsers
 // downstream see a normal ReadCloser, so the lifecycle is invisible.
 type captureTee struct {
-	inner     io.ReadCloser
-	buf       bytes.Buffer
-	cap       int
-	totalRead int
-	truncated bool
-	onClose   func(captured []byte, truncated bool, totalRead int)
-	closed    bool
+	inner   io.ReadCloser
+	buf     *capture.CappedBuffer
+	onClose func(captured []byte, truncated bool, totalRead int)
+	closed  bool
 }
 
 func newCaptureTee(inner io.ReadCloser, capBytes int, onClose func(captured []byte, truncated bool, totalRead int)) *captureTee {
 	return &captureTee{
-		inner:     inner,
-		buf:       bytes.Buffer{},
-		cap:       capBytes,
-		totalRead: 0,
-		truncated: false,
-		onClose:   onClose,
-		closed:    false,
+		inner:   inner,
+		buf:     capture.NewCappedBuffer(capBytes),
+		onClose: onClose,
+		closed:  false,
 	}
 }
 
 // Read passes through the inner Read; bytes also accumulate (capped) in the
-// internal buffer. A terminal [io.EOF] is returned bare, not wrapped, because
+// shared buffer. A terminal [io.EOF] is returned bare, not wrapped, because
 // the SSE consumer is a [bufio.Scanner] whose Err() compares the read error
 // against [io.EOF] with == (see stdlib bufio/scan.go), so a wrapped EOF would
 // be mistaken for a real failure and abort the stream scan. Genuine non-EOF
 // errors are wrapped with context and emitted on the wire-capture concern.
 func (t *captureTee) Read(p []byte) (int, error) {
 	n, err := t.inner.Read(p)
-	t.recordCapturedBytes(p, n)
+	if n > 0 {
+		_, _ = t.buf.Write(p[:n])
+	}
 	if err == nil {
 		return n, nil
 	}
@@ -644,7 +641,7 @@ func (t *captureTee) Close() error {
 	if !t.closed {
 		t.closed = true
 		if t.onClose != nil {
-			t.onClose(t.buf.Bytes(), t.truncated, t.totalRead)
+			t.onClose(t.buf.Bytes(), t.buf.Truncated(), t.buf.TotalRead())
 		}
 	}
 	if err == nil {
@@ -654,24 +651,6 @@ func (t *captureTee) Close() error {
 		"err", err.Error(),
 	)
 	return fmt.Errorf("captureTee close: %w", err)
-}
-
-func (t *captureTee) recordCapturedBytes(p []byte, n int) {
-	if n <= 0 {
-		return
-	}
-	t.totalRead += n
-	if t.buf.Len() >= t.cap {
-		t.truncated = true
-		return
-	}
-	remain := t.cap - t.buf.Len()
-	if n <= remain {
-		t.buf.Write(p[:n])
-		return
-	}
-	t.buf.Write(p[:remain])
-	t.truncated = true
 }
 
 // probeDropSet returns the lowercased set of header names in CLYDE_PROBE_DROP.

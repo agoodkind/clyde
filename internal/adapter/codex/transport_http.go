@@ -232,7 +232,7 @@ func runHTTPTransportEventsOnce(
 	}
 	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
 	responseStarted := false
-	sink := &cappedSink{buf: bytes.Buffer{}, cap: codexCaptureBodyCap, truncated: false}
+	sink := capture.NewCappedBuffer(codexCaptureBodyCap)
 	var bodyReader io.Reader = resp.Body
 	if cfg.CaptureStore != nil {
 		bodyReader = io.TeeReader(resp.Body, sink)
@@ -243,7 +243,7 @@ func runHTTPTransportEventsOnce(
 		}
 		return emit(event)
 	}, logCtx, parseOpts)
-	recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, sink.buf.Bytes(), cfg.ConversationID, started)
+	recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, sink.Bytes(), cfg.ConversationID, started)
 	return result, responseStarted, parseErr
 }
 

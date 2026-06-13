@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/gklog/correlation"
 )
@@ -81,9 +80,7 @@ func (c *Client) recordEgress(ctx context.Context, ex egressExchange, status int
 	if store == nil {
 		return
 	}
-	corr := correlation.FromContext(ctx)
-	store.Record(capture.Record{
-		Timestamp:         clock.Now(),
+	store.RecordExchange(correlation.FromContext(ctx), capture.Exchange{
 		Client:            captureClientAnthropic,
 		Provider:          "anthropic",
 		Concern:           captureEgressConcern,
@@ -91,16 +88,14 @@ func (c *Client) recordEgress(ctx context.Context, ex egressExchange, status int
 		Method:            ex.method,
 		Path:              ex.path,
 		Status:            status,
-		RequestID:         corr.RequestID,
 		UpstreamRequestID: respHeaders.Get("Request-Id"),
 		SessionID:         sessionID,
-		TraceID:           string(corr.TraceID),
 		RequestHeaders:    ex.reqHeaders,
 		ResponseHeaders:   respHeaders,
 		RequestBody:       ex.reqBody,
 		ResponseBody:      respBody,
 		RequestType:       ex.reqType,
 		ResponseType:      respHeaders.Get("Content-Type"),
-		Duration:          clock.Since(ex.started),
+		Started:           ex.started,
 	})
 }
