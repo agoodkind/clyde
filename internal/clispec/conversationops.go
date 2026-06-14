@@ -85,6 +85,9 @@ type exportInput struct {
 	// Kinds accumulates the selected content-kind selector values from the
 	// --only list flag and the per-type shortcut flags. Run resolves them.
 	Kinds []string
+	// WhitespaceSelections records explicit CLI whitespace selectors, including
+	// --whitespace and the mode shortcuts, so Prepare can reject conflicts.
+	WhitespaceSelections []conv.WhitespaceMode
 }
 
 func (listConversationsInput) isClispecInput()   {}
@@ -567,9 +570,15 @@ func exportParams() []Param[exportInput] {
 	stdoutParam.CLIOnly = true
 
 	onlyParam := EnumListParam("only",
-		"Content kinds to export, comma-separated: chat, thinking, tool_calls, tool_outputs, system_prompts, system_messages, raw_json_metadata, plus the groups tools (tool_calls+tool_outputs) and all.",
+		"Content kinds to export, comma-separated: chat, thinking, tools, tool_calls, tool_outputs, system_prompts, system_messages, raw_json_metadata, plus all.",
 		conv.ContentKindSelectorValues(), true,
 		func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) })
+
+	whitespaceParam := EnumParam("whitespace", "preserve, tidy, compact, or dense.", string(conv.WhitespacePreserve), whitespaceValues,
+		func(in *exportInput, v string) { in.Options.Whitespace = conv.WhitespaceMode(v) })
+	whitespaceParam.bindOccurrences = func(in *exportInput, count int) {
+		recordWhitespaceSelection(in, in.Options.Whitespace, count)
+	}
 
 	// shortcut declares a CLI-only presence flag that adds one selector value to
 	// the kind set, so `--thinking` is sugar for `--only thinking`. The MCP
@@ -584,11 +593,27 @@ func exportParams() []Param[exportInput] {
 		return param
 	}
 
+	whitespaceShortcut := func(mode conv.WhitespaceMode) Param[exportInput] {
+		param := BoolParam(string(mode), "Use "+string(mode)+" whitespace.", false, func(in *exportInput, v bool) {
+			if v {
+				in.Options.Whitespace = mode
+			}
+		})
+		param.bindOccurrences = func(in *exportInput, count int) {
+			recordWhitespaceSelection(in, mode, count)
+		}
+		param.CLIOnly = true
+		return param
+	}
+
 	return []Param[exportInput]{
 		EnumParam("format", "markdown, html, json, or plain_text.", string(conv.ExportFormatMarkdown), exportFormatValues,
 			func(in *exportInput, v string) { in.Options.Format = conv.ExportFormat(v) }),
-		EnumParam("whitespace", "preserve, tidy, compact, or dense.", string(conv.WhitespacePreserve), whitespaceValues,
-			func(in *exportInput, v string) { in.Options.Whitespace = conv.WhitespaceMode(v) }),
+		whitespaceParam,
+		whitespaceShortcut(conv.WhitespacePreserve),
+		whitespaceShortcut(conv.WhitespaceTidy),
+		whitespaceShortcut(conv.WhitespaceCompact),
+		whitespaceShortcut(conv.WhitespaceDense),
 		outputPathParam,
 		stdoutParam,
 		IntParam("history_start", "First message index to include.", 0,
@@ -601,8 +626,8 @@ func exportParams() []Param[exportInput] {
 		shortcut("system_prompts", "system_prompts", "Include system-injected prompts."),
 		shortcut("system_messages", "system_messages", "Include provider system transcript records."),
 		shortcut("raw_json_metadata", "raw_json_metadata", "Include JSON metadata fields."),
-		shortcut("tools", "tools", "Include tool calls and tool outputs."),
-		shortcut("all", "all", "Include every content kind."),
+		shortcut("tools", "tools", "Include summary-only tool lines."),
+		shortcut("all", "all", "Include every non-tool kind plus tool outputs."),
 	}
 }
 
@@ -628,10 +653,11 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Params: exportParams(),
 		New: func() exportInput {
 			return exportInput{
-				ConversationID: "",
-				OutputPath:     "",
-				Stdout:         false,
-				Kinds:          nil,
+				ConversationID:       "",
+				OutputPath:           "",
+				Stdout:               false,
+				Kinds:                nil,
+				WhitespaceSelections: nil,
 				Options: conv.ExportOptions{
 					Format:       conv.ExportFormatMarkdown,
 					HistoryStart: 0,
@@ -643,6 +669,11 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		Prepare: func(in exportInput) (exportPayload, error) {
+			whitespace, err := resolveExportWhitespace(in)
+			if err != nil {
+				return exportPayload{}, fmt.Errorf("select whitespace: %w", err)
+			}
+			in.Options.Whitespace = whitespace
 			content, err := conv.ResolveContentKinds(in.Kinds)
 			if err != nil {
 				return exportPayload{}, fmt.Errorf("select content kinds: %w", err)

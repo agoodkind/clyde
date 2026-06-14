@@ -1726,6 +1726,7 @@ type ExportTranscriptRequest struct {
 	IncludeToolCalls       bool                   `protobuf:"varint,9,opt,name=include_tool_calls,json=includeToolCalls,proto3" json:"include_tool_calls,omitempty"`
 	IncludeChat            bool                   `protobuf:"varint,10,opt,name=include_chat,json=includeChat,proto3" json:"include_chat,omitempty"`
 	IncludeSystemMessages  bool                   `protobuf:"varint,11,opt,name=include_system_messages,json=includeSystemMessages,proto3" json:"include_system_messages,omitempty"`
+	IncludeToolSummaries   bool                   `protobuf:"varint,12,opt,name=include_tool_summaries,json=includeToolSummaries,proto3" json:"include_tool_summaries,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1833,6 +1834,13 @@ func (x *ExportTranscriptRequest) GetIncludeChat() bool {
 func (x *ExportTranscriptRequest) GetIncludeSystemMessages() bool {
 	if x != nil {
 		return x.IncludeSystemMessages
+	}
+	return false
+}
+
+func (x *ExportTranscriptRequest) GetIncludeToolSummaries() bool {
+	if x != nil {
+		return x.IncludeToolSummaries
 	}
 	return false
 }
@@ -2319,7 +2327,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\tresult_id\x18\x01 \x01(\tR\bresultId\x12\x16\n" +
 	"\x06prompt\x18\x02 \x01(\tR\x06prompt\"2\n" +
 	"\x1cAnalyzeSearchResultsResponse\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"\xf6\x03\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"\xac\x04\n" +
 	"\x17ExportTranscriptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x16\n" +
 	"\x06format\x18\x02 \x01(\tR\x06format\x12\x1e\n" +
@@ -2334,7 +2342,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x12include_tool_calls\x18\t \x01(\bR\x10includeToolCalls\x12!\n" +
 	"\finclude_chat\x18\n" +
 	" \x01(\bR\vincludeChat\x126\n" +
-	"\x17include_system_messages\x18\v \x01(\bR\x15includeSystemMessages\".\n" +
+	"\x17include_system_messages\x18\v \x01(\bR\x15includeSystemMessages\x124\n" +
+	"\x16include_tool_summaries\x18\f \x01(\bR\x14includeToolSummaries\".\n" +
 	"\x18ExportTranscriptResponse\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\fR\x04body\"\xc0\x01\n" +
 	"\x13ConversationLineage\x12\x12\n" +

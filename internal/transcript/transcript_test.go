@@ -22,6 +22,30 @@ func TestShapeConversationCompactsToolOnlyTurns(t *testing.T) {
 	}
 }
 
+func TestShapeConversationUsesToolInputSummary(t *testing.T) {
+	turns := ShapeConversation([]Message{{
+		Role:     "assistant",
+		HasTools: true,
+		Tools: []ToolCall{
+			{
+				Name:  "Bash",
+				Input: ToolInputJSON{Raw: json.RawMessage(`{"command":"echo \"===","description":"Diagnose streaming probe timeout: SSE bytes, crash, memory"}`)},
+			},
+			{
+				Name:  "Read",
+				Input: ToolInputJSON{Raw: json.RawMessage(`{"file_path":"/tmp/probe.log"}`)},
+			},
+		},
+	}}, ShapeOptions{ToolOnly: ToolOnlyInputSummary})
+	if len(turns) != 1 {
+		t.Fatalf("turns=%d want 1", len(turns))
+	}
+	want := "[tool: Bash] Diagnose streaming probe timeout: SSE bytes, crash, memory\n[tool: Read]"
+	if turns[0].Text != want {
+		t.Fatalf("text=%q want %q", turns[0].Text, want)
+	}
+}
+
 func TestShapeConversationOmitsToolOnlyTurns(t *testing.T) {
 	turns := ShapeConversation([]Message{{
 		Role:     "assistant",

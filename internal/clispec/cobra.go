@@ -1,7 +1,9 @@
 package clispec
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -97,50 +99,124 @@ func (op Operation[I, P]) longHelp() string {
 // closure that copies the parsed value into the input struct after cobra has
 // parsed the command line.
 func registerFlag[I Input](cmd *cobra.Command, param Param[I]) func(in *I) {
+	flagName := param.flagName()
 	switch param.Kind {
 	case KindEnum:
 		current := param.DefaultStr
-		shim := &enumValue{allowed: param.Values, value: &current}
-		cmd.Flags().Var(shim, param.flagName(), param.Description)
+		setCount := 0
+		shim := &enumValue{allowed: param.Values, value: &current, setCount: &setCount}
+		cmd.Flags().Var(shim, flagName, param.Description)
 		bind := param.bindString
-		return func(in *I) { bind(in, current) }
+		return func(in *I) {
+			bind(in, current)
+			bindParamOccurrences(param, in, setCount)
+		}
 	case KindString:
 		holder := new(string)
-		cmd.Flags().StringVar(holder, param.flagName(), param.DefaultStr, param.Description)
+		cmd.Flags().StringVar(holder, flagName, param.DefaultStr, param.Description)
 		bind := param.bindString
-		return func(in *I) { bind(in, *holder) }
+		return func(in *I) {
+			bind(in, *holder)
+			bindParamOccurrences(param, in, changedOccurrenceCount(cmd, flagName))
+		}
 	case KindInt:
 		holder := new(int)
-		cmd.Flags().IntVar(holder, param.flagName(), param.DefaultInt, param.Description)
+		cmd.Flags().IntVar(holder, flagName, param.DefaultInt, param.Description)
 		bind := param.bindInt
-		return func(in *I) { bind(in, *holder) }
+		return func(in *I) {
+			bind(in, *holder)
+			bindParamOccurrences(param, in, changedOccurrenceCount(cmd, flagName))
+		}
 	case KindBool:
 		holder := new(bool)
-		cmd.Flags().BoolVar(holder, param.flagName(), param.DefaultBool, param.Description)
+		*holder = param.DefaultBool
+		setCount := 0
+		shim := &boolValue{value: holder, setCount: &setCount}
+		cmd.Flags().Var(shim, flagName, param.Description)
+		cmd.Flags().Lookup(flagName).NoOptDefVal = "true"
 		bind := param.bindBool
-		return func(in *I) { bind(in, *holder) }
+		return func(in *I) {
+			bind(in, *holder)
+			bindParamOccurrences(param, in, setCount)
+		}
 	case KindFloat:
 		holder := new(float64)
-		cmd.Flags().Float64Var(holder, param.flagName(), param.DefaultFloat, param.Description)
+		cmd.Flags().Float64Var(holder, flagName, param.DefaultFloat, param.Description)
 		bind := param.bindFloat
-		return func(in *I) { bind(in, *holder) }
+		return func(in *I) {
+			bind(in, *holder)
+			bindParamOccurrences(param, in, changedOccurrenceCount(cmd, flagName))
+		}
 	case KindEnumList:
 		holder := new([]string)
-		shim := &sliceEnumValue{allowed: param.Values, values: holder}
-		cmd.Flags().Var(shim, param.flagName(), param.Description)
+		setCount := 0
+		shim := &sliceEnumValue{allowed: param.Values, values: holder, setCount: &setCount}
+		cmd.Flags().Var(shim, flagName, param.Description)
 		bind := param.bindStrSlice
-		return func(in *I) { bind(in, *holder) }
+		return func(in *I) {
+			bind(in, *holder)
+			bindParamOccurrences(param, in, setCount)
+		}
 	default:
 		return func(in *I) {}
 	}
+}
+
+func bindParamOccurrences[I Input](param Param[I], in *I, count int) {
+	if param.bindOccurrences == nil {
+		return
+	}
+	param.bindOccurrences(in, count)
+}
+
+func changedOccurrenceCount(cmd *cobra.Command, flagName string) int {
+	if cmd.Flags().Changed(flagName) {
+		return 1
+	}
+	return 0
+}
+
+// boolValue mirrors pflag's bool flag behavior while counting true
+// occurrences for changed-aware Prepare validation.
+type boolValue struct {
+	value    *bool
+	setCount *int
+}
+
+func (b *boolValue) String() string {
+	if b.value == nil {
+		return "false"
+	}
+	return strconv.FormatBool(*b.value)
+}
+
+func (b *boolValue) Set(raw string) error {
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return errors.New("parse bool flag " + strconv.Quote(raw) + ": " + err.Error())
+	}
+	*b.value = parsed
+	if parsed && b.setCount != nil {
+		*b.setCount++
+	}
+	return nil
+}
+
+func (*boolValue) Type() string {
+	return "bool"
+}
+
+func (*boolValue) IsBoolFlag() bool {
+	return true
 }
 
 // enumValue is a pflag.Value that rejects a word outside its allowed list. It
 // gives the terminal strict validation; the MCP tool decodes the same input
 // leniently and falls back to the default instead.
 type enumValue struct {
-	allowed []string
-	value   *string
+	allowed  []string
+	value    *string
+	setCount *int
 }
 
 // String returns the current value.
@@ -156,6 +232,9 @@ func (e *enumValue) Set(raw string) error {
 	candidate := strings.TrimSpace(raw)
 	if enumContains(e.allowed, candidate) {
 		*e.value = candidate
+		if e.setCount != nil {
+			*e.setCount++
+		}
 		return nil
 	}
 	return fmt.Errorf("unsupported value %q (allowed: %s)", raw, strings.Join(e.allowed, ", "))
@@ -175,8 +254,9 @@ func (e *enumValue) Type() string {
 // against an allowed set. One flag may carry a comma-separated list, and the
 // flag may repeat; elements accumulate across both forms.
 type sliceEnumValue struct {
-	allowed []string
-	values  *[]string
+	allowed  []string
+	values   *[]string
+	setCount *int
 }
 
 // String renders the accumulated elements as a comma-separated list.
@@ -190,6 +270,7 @@ func (v *sliceEnumValue) String() string {
 // Set splits the raw value on commas and appends each allowed element, rejecting
 // the first element outside the allowed set.
 func (v *sliceEnumValue) Set(raw string) error {
+	changed := false
 	for part := range strings.SplitSeq(raw, ",") {
 		candidate := strings.TrimSpace(part)
 		if candidate == "" {
@@ -199,6 +280,10 @@ func (v *sliceEnumValue) Set(raw string) error {
 			return fmt.Errorf("unsupported value %q (allowed: %s)", candidate, strings.Join(v.allowed, ", "))
 		}
 		*v.values = append(*v.values, candidate)
+		changed = true
+	}
+	if changed && v.setCount != nil {
+		*v.setCount++
 	}
 	return nil
 }

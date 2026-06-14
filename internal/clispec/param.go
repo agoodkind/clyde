@@ -56,6 +56,10 @@ type Param[I Input] struct {
 	bindBool     func(in *I, v bool)
 	bindFloat    func(in *I, v float64)
 	bindStrSlice func(in *I, v []string)
+	// bindOccurrences records how many times a terminal flag was explicitly
+	// set. It is nil for parameters that do not need changed-aware Prepare
+	// logic, and it is not used by MCP decoding.
+	bindOccurrences func(in *I, count int)
 }
 
 // flagName returns the dash-spelled terminal flag for this parameter.
@@ -82,6 +86,7 @@ func StringParam[I Input](canonical, description, def string, required bool, set
 		bindBool:        nil,
 		bindFloat:       nil,
 		bindStrSlice:    nil,
+		bindOccurrences: nil,
 	}
 }
 
@@ -104,6 +109,7 @@ func IntParam[I Input](canonical, description string, def int, set func(*I, int)
 		bindBool:        nil,
 		bindFloat:       nil,
 		bindStrSlice:    nil,
+		bindOccurrences: nil,
 	}
 }
 
@@ -126,6 +132,7 @@ func BoolParam[I Input](canonical, description string, def bool, set func(*I, bo
 		bindBool:        set,
 		bindFloat:       nil,
 		bindStrSlice:    nil,
+		bindOccurrences: nil,
 	}
 }
 
@@ -148,6 +155,7 @@ func FloatParam[I Input](canonical, description string, def float64, set func(*I
 		bindBool:        nil,
 		bindFloat:       set,
 		bindStrSlice:    nil,
+		bindOccurrences: nil,
 	}
 }
 
@@ -171,6 +179,7 @@ func EnumParam[I Input](canonical, description, def string, values []string, set
 		bindBool:        nil,
 		bindFloat:       nil,
 		bindStrSlice:    nil,
+		bindOccurrences: nil,
 	}
 }
 
@@ -196,6 +205,7 @@ func EnumListParam[I Input](canonical, description string, values []string, requ
 		bindBool:        nil,
 		bindFloat:       nil,
 		bindStrSlice:    set,
+		bindOccurrences: nil,
 	}
 }
 
