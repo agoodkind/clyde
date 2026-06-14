@@ -13,7 +13,7 @@ import (
 // the parameters, the positional placeholders and required count come from the
 // arguments, and the run step decodes everything into a fresh input struct
 // before calling the shared work function.
-func (op Operation[I]) cobraCommand(f *cli.Factory) *cobra.Command {
+func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 	var useBuilder strings.Builder
 	useBuilder.WriteString(op.Name.CLI())
 	for _, arg := range op.Args {
@@ -34,7 +34,14 @@ func (op Operation[I]) cobraCommand(f *cli.Factory) *cobra.Command {
 		applies = append(applies, registerFlag(cmd, param))
 	}
 
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+	// Prepare runs in PreRunE, which cobra invokes before RunE. The help
+	// renderer wraps only RunE to silence usage, so a Prepare error here keeps
+	// SilenceUsage false and cobra prints full command help, exactly as it does
+	// for a missing positional argument. The prepared payload is stashed for
+	// RunE, which is reached only after PreRunE returns nil; the command runs
+	// once, so the closure variable is safe.
+	var prepared P
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		in := op.New()
 		for i, arg := range op.Args {
 			arg.bind(&in, args[i])
@@ -42,8 +49,16 @@ func (op Operation[I]) cobraCommand(f *cli.Factory) *cobra.Command {
 		for _, apply := range applies {
 			apply(&in)
 		}
+		payload, err := op.Prepare(in)
+		if err != nil {
+			return logFail(cmd.Context(), SurfaceCLI, "invalid_input", op.Name.Canonical, err)
+		}
+		prepared = payload
+		return nil
+	}
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		sink := NewCLISink(cmd.Context(), f.IOStreams.Out)
-		return op.Run(cmd.Context(), in, SurfaceCLI, sink)
+		return op.Run(cmd.Context(), prepared, SurfaceCLI, sink)
 	}
 	return cmd
 }
@@ -52,7 +67,7 @@ func (op Operation[I]) cobraCommand(f *cli.Factory) *cobra.Command {
 // author's Long text, or the one-line Short when Long is empty, and appends a
 // documented Arguments section for every positional input so the reader sees
 // what each placeholder means without leaving the help screen.
-func (op Operation[I]) longHelp() string {
+func (op Operation[I, P]) longHelp() string {
 	var b strings.Builder
 	switch {
 	case op.Long != "":

@@ -46,10 +46,11 @@ const helpDelegatesToUsage = `{{.UsageString}}`
 //     Cobra resolves templates by walking to the parent, so setting them once
 //     on root covers every subcommand.
 //  2. Wraps every command's run function to set SilenceUsage just before the
-//     command body runs. Bad flags, bad args, and unknown subcommands all fail
-//     before that line, so Cobra renders full help; a failure inside the body
-//     happens after, so help is suppressed and only the error shows. The
-//     boundary is positional and never reads the error.
+//     command body runs. Bad flags, bad args, unknown subcommands, and input
+//     rejected by an operation's Prepare (which runs in PreRunE, before this
+//     line) all fail before that line, so Cobra renders full help; a failure
+//     inside the body happens after, so help is suppressed and only the error
+//     shows. The boundary is positional and never reads the error.
 func InstallHelpRendering(root *cobra.Command) {
 	root.SetUsageTemplate(fullHelpTemplate)
 	root.SetHelpTemplate(helpDelegatesToUsage)

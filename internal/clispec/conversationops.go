@@ -96,6 +96,77 @@ func (searchCancelInput) isClispecInput()        {}
 func (analyzeResultsInput) isClispecInput()      {}
 func (exportInput) isClispecInput()              {}
 
+// Prepared payloads. Each operation's Prepare turns its raw input into one of
+// these, which the work function then consumes. Run never sees the raw input, so
+// any input parsing or rejection has one home: Prepare. list and search-across
+// carry the resolved domain options; the rest bundle exactly what the work
+// function reads.
+
+// listPayload carries the resolved list options. It wraps conv.ListOptions
+// because a payload must satisfy the Prepared marker and a domain type from
+// another package cannot.
+type listPayload struct {
+	Opts conv.ListOptions
+}
+
+// searchConversationsPayload carries the resolved across-search options.
+type searchConversationsPayload struct {
+	Opts conv.SearchConversationsOptions
+}
+
+type getConversationPayload struct {
+	ConversationID string
+	LastN          int
+}
+
+type getContextPayload struct {
+	ConversationID string
+	Timestamp      string
+	MessageIndex   int
+	Before         int
+	After          int
+}
+
+// searchConversationPayload bundles the conversation id and query with the
+// resolved within-search options, because conv.WithinSearchOptions carries
+// neither and the work function needs all three.
+type searchConversationPayload struct {
+	ConversationID string
+	Query          string
+	Opts           conv.WithinSearchOptions
+}
+
+type searchStatusPayload struct {
+	ResultID string
+}
+
+type searchCancelPayload struct {
+	ResultID string
+}
+
+type analyzeResultsPayload struct {
+	ResultID string
+	Prompt   string
+}
+
+// exportPayload carries the resolved content selection inside Options together
+// with the destination, so Run does no parsing.
+type exportPayload struct {
+	ConversationID string
+	Options        conv.ExportOptions
+	OutputPath     string
+}
+
+func (listPayload) isClispecPrepared()                {}
+func (searchConversationsPayload) isClispecPrepared() {}
+func (getConversationPayload) isClispecPrepared()     {}
+func (getContextPayload) isClispecPrepared()          {}
+func (searchConversationPayload) isClispecPrepared()  {}
+func (searchStatusPayload) isClispecPrepared()        {}
+func (searchCancelPayload) isClispecPrepared()        {}
+func (analyzeResultsPayload) isClispecPrepared()      {}
+func (exportPayload) isClispecPrepared()              {}
+
 // conversationGroup is the terminal parent for conversation operations.
 var conversationGroup = &Group{
 	Use:     "conversation",
@@ -131,11 +202,11 @@ var whitespaceValues = []string{
 
 // listConversationsOp prints one filtered page of Claude and Codex
 // conversation metadata.
-func listConversationsOp() Operation[listConversationsInput] {
+func listConversationsOp() Operation[listConversationsInput, listPayload] {
 	allParam := BoolParam("all", "Return every matched conversation on the CLI.", false,
 		func(in *listConversationsInput, v bool) { in.All = v })
 	allParam.CLIOnly = true
-	return Operation[listConversationsInput]{
+	return Operation[listConversationsInput, listPayload]{
 		Name:     Name{Canonical: "list_conversations", CLIOverride: "list"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -171,12 +242,15 @@ func listConversationsOp() Operation[listConversationsInput] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in listConversationsInput, surface Surface, sink ResultSink) error {
-			options, err := listOptionsFromInput(in)
+		Prepare: func(in listConversationsInput) (listPayload, error) {
+			opts, err := listOptionsFromInput(in)
 			if err != nil {
-				return logFail(ctx, surface, "list_failed", "list conversations", err)
+				return listPayload{}, err
 			}
-			result, err := daemon.ListConversations(ctx, options)
+			return listPayload{Opts: opts}, nil
+		},
+		Run: func(ctx context.Context, p listPayload, surface Surface, sink ResultSink) error {
+			result, err := daemon.ListConversations(ctx, p.Opts)
 			if err != nil {
 				return logFail(ctx, surface, "list_failed", "list conversations", err)
 			}
@@ -186,8 +260,8 @@ func listConversationsOp() Operation[listConversationsInput] {
 }
 
 // getConversationOp prints a conversation transcript as plain text.
-func getConversationOp() Operation[getConversationInput] {
-	return Operation[getConversationInput]{
+func getConversationOp() Operation[getConversationInput, getConversationPayload] {
+	return Operation[getConversationInput, getConversationPayload]{
 		Name:     Name{Canonical: "get_conversation", CLIOverride: "show"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -205,8 +279,11 @@ func getConversationOp() Operation[getConversationInput] {
 		New:            func() getConversationInput { return getConversationInput{ConversationID: "", LastN: 0} },
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in getConversationInput, surface Surface, sink ResultSink) error {
-			text, err := daemon.GetConversation(ctx, in.ConversationID, in.LastN)
+		Prepare: func(in getConversationInput) (getConversationPayload, error) {
+			return getConversationPayload(in), nil
+		},
+		Run: func(ctx context.Context, p getConversationPayload, surface Surface, sink ResultSink) error {
+			text, err := daemon.GetConversation(ctx, p.ConversationID, p.LastN)
 			if err != nil {
 				return logFail(ctx, surface, "get_failed", "get conversation", err)
 			}
@@ -216,8 +293,8 @@ func getConversationOp() Operation[getConversationInput] {
 }
 
 // getContextOp prints the messages around a point in a conversation.
-func getContextOp() Operation[getContextInput] {
-	return Operation[getContextInput]{
+func getContextOp() Operation[getContextInput, getContextPayload] {
+	return Operation[getContextInput, getContextPayload]{
 		Name:     Name{Canonical: "get_context", CLIOverride: "context"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -243,8 +320,11 @@ func getContextOp() Operation[getContextInput] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in getContextInput, surface Surface, sink ResultSink) error {
-			text, err := daemon.GetConversationContext(ctx, in.ConversationID, in.Timestamp, in.MessageIndex, in.Before, in.After)
+		Prepare: func(in getContextInput) (getContextPayload, error) {
+			return getContextPayload(in), nil
+		},
+		Run: func(ctx context.Context, p getContextPayload, surface Surface, sink ResultSink) error {
+			text, err := daemon.GetConversationContext(ctx, p.ConversationID, p.Timestamp, p.MessageIndex, p.Before, p.After)
 			if err != nil {
 				return logFail(ctx, surface, "context_failed", "get conversation context", err)
 			}
@@ -255,8 +335,8 @@ func getContextOp() Operation[getContextInput] {
 
 // searchConversationsOp scans transcript text across conversations and returns
 // bounded candidate conversation ids with first-match snippets.
-func searchConversationsOp() Operation[searchConversationsInput] {
-	return Operation[searchConversationsInput]{
+func searchConversationsOp() Operation[searchConversationsInput, searchConversationsPayload] {
+	return Operation[searchConversationsInput, searchConversationsPayload]{
 		Name:     Name{Canonical: "conversations_search", CLIOverride: "across"},
 		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -303,12 +383,15 @@ func searchConversationsOp() Operation[searchConversationsInput] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in searchConversationsInput, surface Surface, sink ResultSink) error {
-			options, err := searchConversationsOptionsFromInput(in)
+		Prepare: func(in searchConversationsInput) (searchConversationsPayload, error) {
+			opts, err := searchConversationsOptionsFromInput(in)
 			if err != nil {
-				return logFail(ctx, surface, "search_conversations_failed", "search conversations", err)
+				return searchConversationsPayload{}, err
 			}
-			result, err := daemon.SearchConversations(ctx, options)
+			return searchConversationsPayload{Opts: opts}, nil
+		},
+		Run: func(ctx context.Context, p searchConversationsPayload, surface Surface, sink ResultSink) error {
+			result, err := daemon.SearchConversations(ctx, p.Opts)
 			if err != nil {
 				return logFail(ctx, surface, "search_conversations_failed", "search conversations", err)
 			}
@@ -322,8 +405,8 @@ func searchConversationsOp() Operation[searchConversationsInput] {
 // client that supplies task params runs it to completion and gets the result
 // through tasks/result, while a plain call (CLI or a non-Tasks client) returns
 // the result_id immediately and polls search status.
-func searchConversationOp() Operation[searchConversationInput] {
-	return Operation[searchConversationInput]{
+func searchConversationOp() Operation[searchConversationInput, searchConversationPayload] {
+	return Operation[searchConversationInput, searchConversationPayload]{
 		Name:     Name{Canonical: "search_conversation", CLIOverride: "within"},
 		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -352,23 +435,22 @@ func searchConversationOp() Operation[searchConversationInput] {
 			return searchConversationInput{ConversationID: "", Query: "", Limit: 0, Roles: "", After: "", Until: "", MinScore: 0}
 		},
 		MCPTaskSupport: mcp.TaskSupportOptional,
-		Run: func(ctx context.Context, in searchConversationInput, surface Surface, sink ResultSink) error {
+		Prepare: func(in searchConversationInput) (searchConversationPayload, error) {
 			opts, err := withinSearchOptionsFromInput(in)
 			if err != nil {
-				return logFail(ctx, surface, "search_failed", "search conversation", err)
+				return searchConversationPayload{}, err
 			}
-			text, err := daemon.SearchConversation(ctx, in.ConversationID, in.Query, opts)
+			return searchConversationPayload{ConversationID: in.ConversationID, Query: in.Query, Opts: opts}, nil
+		},
+		Run: func(ctx context.Context, p searchConversationPayload, surface Surface, sink ResultSink) error {
+			text, err := daemon.SearchConversation(ctx, p.ConversationID, p.Query, p.Opts)
 			if err != nil {
 				return logFail(ctx, surface, "search_failed", "search conversation", err)
 			}
 			return sink.Text(text)
 		},
-		MCPTaskRun: func(ctx context.Context, in searchConversationInput, sink ResultSink) error {
-			opts, err := withinSearchOptionsFromInput(in)
-			if err != nil {
-				return logFail(ctx, SurfaceMCP, "search_task_failed", "search conversation task", err)
-			}
-			text, err := daemon.SearchToCompletion(ctx, in.ConversationID, in.Query, opts)
+		MCPTaskRun: func(ctx context.Context, p searchConversationPayload, sink ResultSink) error {
+			text, err := daemon.SearchToCompletion(ctx, p.ConversationID, p.Query, p.Opts)
 			if err != nil {
 				return logFail(ctx, SurfaceMCP, "search_task_failed", "search conversation task", err)
 			}
@@ -378,8 +460,8 @@ func searchConversationOp() Operation[searchConversationInput] {
 }
 
 // searchStatusOp reports the state, progress, and result of an async search job.
-func searchStatusOp() Operation[searchStatusInput] {
-	return Operation[searchStatusInput]{
+func searchStatusOp() Operation[searchStatusInput, searchStatusPayload] {
+	return Operation[searchStatusInput, searchStatusPayload]{
 		Name:     Name{Canonical: "search_status", CLIOverride: "status"},
 		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -394,8 +476,11 @@ func searchStatusOp() Operation[searchStatusInput] {
 		New:            func() searchStatusInput { return searchStatusInput{ResultID: ""} },
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in searchStatusInput, surface Surface, sink ResultSink) error {
-			text, err := daemon.GetSearchStatus(ctx, in.ResultID)
+		Prepare: func(in searchStatusInput) (searchStatusPayload, error) {
+			return searchStatusPayload(in), nil
+		},
+		Run: func(ctx context.Context, p searchStatusPayload, surface Surface, sink ResultSink) error {
+			text, err := daemon.GetSearchStatus(ctx, p.ResultID)
 			if err != nil {
 				return logFail(ctx, surface, "search_status_failed", "get search status", err)
 			}
@@ -405,8 +490,8 @@ func searchStatusOp() Operation[searchStatusInput] {
 }
 
 // searchCancelOp cancels a running async search job.
-func searchCancelOp() Operation[searchCancelInput] {
-	return Operation[searchCancelInput]{
+func searchCancelOp() Operation[searchCancelInput, searchCancelPayload] {
+	return Operation[searchCancelInput, searchCancelPayload]{
 		Name:     Name{Canonical: "search_cancel", CLIOverride: "cancel"},
 		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -421,8 +506,11 @@ func searchCancelOp() Operation[searchCancelInput] {
 		New:            func() searchCancelInput { return searchCancelInput{ResultID: ""} },
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in searchCancelInput, surface Surface, sink ResultSink) error {
-			text, err := daemon.CancelSearch(ctx, in.ResultID)
+		Prepare: func(in searchCancelInput) (searchCancelPayload, error) {
+			return searchCancelPayload(in), nil
+		},
+		Run: func(ctx context.Context, p searchCancelPayload, surface Surface, sink ResultSink) error {
+			text, err := daemon.CancelSearch(ctx, p.ResultID)
 			if err != nil {
 				return logFail(ctx, surface, "search_cancel_failed", "cancel search", err)
 			}
@@ -432,8 +520,8 @@ func searchCancelOp() Operation[searchCancelInput] {
 }
 
 // analyzeResultsOp runs the local analysis model over cached search results.
-func analyzeResultsOp() Operation[analyzeResultsInput] {
-	return Operation[analyzeResultsInput]{
+func analyzeResultsOp() Operation[analyzeResultsInput, analyzeResultsPayload] {
+	return Operation[analyzeResultsInput, analyzeResultsPayload]{
 		Name:     Name{Canonical: "analyze_results", CLIOverride: "analyze"},
 		Group:    searchGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -450,8 +538,11 @@ func analyzeResultsOp() Operation[analyzeResultsInput] {
 		New:            func() analyzeResultsInput { return analyzeResultsInput{ResultID: "", Prompt: ""} },
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in analyzeResultsInput, surface Surface, sink ResultSink) error {
-			text, err := daemon.AnalyzeSearchResults(ctx, in.ResultID, in.Prompt)
+		Prepare: func(in analyzeResultsInput) (analyzeResultsPayload, error) {
+			return analyzeResultsPayload(in), nil
+		},
+		Run: func(ctx context.Context, p analyzeResultsPayload, surface Surface, sink ResultSink) error {
+			text, err := daemon.AnalyzeSearchResults(ctx, p.ResultID, p.Prompt)
 			if err != nil {
 				return logFail(ctx, surface, "analyze_failed", "analyze results", err)
 			}
@@ -462,7 +553,7 @@ func analyzeResultsOp() Operation[analyzeResultsInput] {
 
 // exportTranscriptOp exports a conversation transcript. The terminal can write
 // the body to a file via --output; the MCP tool returns the body as text.
-func exportTranscriptOp() Operation[exportInput] {
+func exportTranscriptOp() Operation[exportInput, exportPayload] {
 	outputPathParam := StringParam("output", "write output to path", "", false,
 		func(in *exportInput, v string) { in.OutputPath = v })
 	outputPathParam.CLIOnly = true
@@ -485,7 +576,7 @@ func exportTranscriptOp() Operation[exportInput] {
 		return param
 	}
 
-	return Operation[exportInput]{
+	return Operation[exportInput, exportPayload]{
 		Name:     Name{Canonical: "export_transcript", CLIOverride: "export"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
@@ -534,20 +625,23 @@ func exportTranscriptOp() Operation[exportInput] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
-		Run: func(ctx context.Context, in exportInput, surface Surface, sink ResultSink) error {
+		Prepare: func(in exportInput) (exportPayload, error) {
 			content, err := conv.ResolveContentKinds(in.Kinds)
 			if err != nil {
-				return logFail(ctx, surface, "export_invalid_content", "export transcript", err)
+				return exportPayload{}, fmt.Errorf("select content kinds: %w", err)
 			}
 			in.Options.Content = content
-			body, err := daemon.ExportTranscript(ctx, in.ConversationID, in.Options)
+			return exportPayload{ConversationID: in.ConversationID, Options: in.Options, OutputPath: in.OutputPath}, nil
+		},
+		Run: func(ctx context.Context, p exportPayload, surface Surface, sink ResultSink) error {
+			body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
 			if err != nil {
 				return logFail(ctx, surface, "export_failed", "export transcript", err)
 			}
 			if surface == SurfaceCLI {
-				path := in.OutputPath
+				path := p.OutputPath
 				if path == "" {
-					path = defaultExportOutputPath(in.ConversationID, in.Options.Format)
+					path = defaultExportOutputPath(p.ConversationID, p.Options.Format)
 				}
 				if err := sink.WriteFile(path, body); err != nil {
 					slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)

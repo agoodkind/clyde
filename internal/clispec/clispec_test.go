@@ -64,10 +64,14 @@ type probeInput struct {
 	Surface Surface
 }
 
-func (probeInput) isClispecInput() {}
+func (probeInput) isClispecInput()    {}
+func (probeInput) isClispecPrepared() {}
 
-func probeOp() Operation[probeInput] {
-	return Operation[probeInput]{
+// probeOp uses P = probeInput with an identity Prepare: the test exercises the
+// binding and rendering machinery, not input validation, so the prepared payload
+// is the bound input unchanged.
+func probeOp() Operation[probeInput, probeInput] {
+	return Operation[probeInput, probeInput]{
 		Name:     Name{Canonical: "probe_op"},
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "probe",
@@ -79,7 +83,8 @@ func probeOp() Operation[probeInput] {
 			BoolParam("on", "on", false, func(in *probeInput, v bool) { in.On = v }),
 			EnumParam("mode", "mode", "alpha", []string{"alpha", "beta"}, func(in *probeInput, v string) { in.Mode = v }),
 		},
-		New: func() probeInput { return probeInput{Count: 7, Mode: "alpha"} },
+		New:     func() probeInput { return probeInput{ID: "", Count: 7, On: false, Mode: "alpha", Surface: SurfaceCLI} },
+		Prepare: func(in probeInput) (probeInput, error) { return in, nil },
 		Run: func(_ context.Context, in probeInput, surface Surface, sink ResultSink) error {
 			in.Surface = surface
 			return sink.Text(formatProbe(in))

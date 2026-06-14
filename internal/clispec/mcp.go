@@ -19,7 +19,7 @@ import (
 // mcpDescription builds the tool description from the one-line summary, the
 // longer description, and the example command lines, so a caller with no help
 // screen reads the same guidance the terminal shows.
-func (op Operation[I]) mcpDescription() string {
+func (op Operation[I, P]) mcpDescription() string {
 	var b strings.Builder
 	b.WriteString(op.Short)
 	if op.Long != "" {
@@ -36,7 +36,7 @@ func (op Operation[I]) mcpDescription() string {
 // mcpTool renders the operation as an MCP tool plus its handler. The tool
 // schema comes from the arguments and parameters; the handler decodes the same
 // request into a fresh input struct and runs the shared work function.
-func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
+func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 	options := []mcp.ToolOption{mcp.WithDescription(op.mcpDescription())}
 	for _, arg := range op.Args {
 		properties := []mcp.PropertyOption{mcp.Required(), mcp.Description(arg.Description)}
@@ -73,6 +73,15 @@ func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 			}
 			param.decodeMCP(&in, req)
 		}
+		// Prepare is the only place input is rejected. It runs after binding and
+		// before the work, so an input error becomes the tool result text instead
+		// of reaching the work function. This mirrors the terminal, where Prepare
+		// runs in PreRunE before the help boundary.
+		prepared, prepErr := op.Prepare(in)
+		if prepErr != nil {
+			wrapped := logFail(ctx, SurfaceMCP, "invalid_input", op.Name.Canonical, prepErr)
+			return newMCPTextResult(ctx, wrapped.Error()), nil
+		}
 		sink := &MCPSink{buf: strings.Builder{}}
 		// A task-augmented call (the client supplied task params) runs the
 		// run-to-completion work function so the result reaches the client
@@ -81,9 +90,9 @@ func (op Operation[I]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 		// for an async operation returns immediately.
 		var runErr error
 		if op.MCPTaskRun != nil && req.Params.Task != nil {
-			runErr = op.MCPTaskRun(ctx, in, sink)
+			runErr = op.MCPTaskRun(ctx, prepared, sink)
 		} else {
-			runErr = op.Run(ctx, in, SurfaceMCP, sink)
+			runErr = op.Run(ctx, prepared, SurfaceMCP, sink)
 		}
 		text := sink.String()
 		if runErr != nil {
