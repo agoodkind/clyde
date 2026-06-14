@@ -96,12 +96,27 @@ type Input interface {
 	isClispecInput()
 }
 
-// Operation is one declared command. I is the per-operation input struct that
-// both adapters decode into. New returns a zeroed input pre-populated with
-// defaults. Run is the single shared work function. Group is nil for a
-// root-level operation and otherwise points at the parent the operation
-// attaches under.
-type Operation[I Input] struct {
+// Prepared is the constraint for per-operation prepared payloads, the value the
+// work function receives after Prepare turns the raw input into it. Like Input
+// it is a named marker rather than any, so the generic signatures name a
+// concrete constraint. A payload type that only the work function reads (it
+// never crosses an external boundary) is a small struct in this package; a
+// payload that wraps a domain options type embeds or carries it.
+type Prepared interface {
+	isClispecPrepared()
+}
+
+// Operation is one declared command. I is the per-operation raw input struct
+// that both adapters decode into. P is the prepared payload the work function
+// receives. New returns a zeroed input pre-populated with defaults. Prepare is
+// the single place that turns raw input into the prepared payload and the only
+// place that may reject input: it runs before the work on both surfaces (in
+// cobra PreRunE on the terminal, before the work function on MCP), so any input
+// error renders full command help on the terminal and becomes tool-error text
+// on MCP. Run is the shared work function; it receives only the prepared payload
+// and so cannot reject input late. Group is nil for a root-level operation and
+// otherwise points at the parent the operation attaches under.
+type Operation[I Input, P Prepared] struct {
 	Name     Name
 	Group    *Group
 	Surfaces SurfaceSet
@@ -113,7 +128,13 @@ type Operation[I Input] struct {
 	Args     []Arg[I]
 	Params   []Param[I]
 	New      func() I
-	Run      func(ctx context.Context, in I, surface Surface, sink ResultSink) error
+	// Prepare turns the decoded raw input into the prepared payload, returning an
+	// error for any input it rejects. It must be pure: no side effects, no I/O.
+	// It is the only function that sees raw input, so it is the only place input
+	// can be rejected, and it always runs before the help boundary on the
+	// terminal and before the work on MCP.
+	Prepare func(in I) (P, error)
+	Run     func(ctx context.Context, in P, surface Surface, sink ResultSink) error
 	// MCPTaskSupport, when set to optional or required, marks the rendered MCP
 	// tool as task-augmentable so a Tasks-capable client can run it as an MCP
 	// task. It is MCP-only: the terminal command ignores it. The zero value
@@ -123,15 +144,16 @@ type Operation[I Input] struct {
 	// (the client supplied task params). It typically runs the operation to
 	// completion so the result reaches the client through tasks/result, whereas
 	// Run returns immediately. It is only consulted when MCPTaskSupport is set
-	// and the request carries task params.
-	MCPTaskRun func(ctx context.Context, in I, sink ResultSink) error
+	// and the request carries task params. Like Run, it receives the prepared
+	// payload.
+	MCPTaskRun func(ctx context.Context, in P, sink ResultSink) error
 }
 
 // renderable is the type-erased view of an [Operation]. Concrete
-// Operation[I] values satisfy it; the type parameter I stays captured inside
-// the methods and never escapes as any. This mirrors how the output package's
-// Payload interface and the livetrack registry erase concrete types behind a
-// closed interface rather than through map[string]any.
+// Operation[I, P] values satisfy it; the type parameters I and P stay captured
+// inside the methods and never escape as any. This mirrors how the output
+// package's Payload interface and the livetrack registry erase concrete types
+// behind a closed interface rather than through map[string]any.
 type renderable interface {
 	surfaceSet() SurfaceSet
 	group() *Group
@@ -139,8 +161,8 @@ type renderable interface {
 	mcpTool() (mcp.Tool, server.ToolHandlerFunc)
 }
 
-func (op Operation[I]) surfaceSet() SurfaceSet { return op.Surfaces }
-func (op Operation[I]) group() *Group          { return op.Group }
+func (op Operation[I, P]) surfaceSet() SurfaceSet { return op.Surfaces }
+func (op Operation[I, P]) group() *Group          { return op.Group }
 
 // Registry is the one ordered list of every command. It holds two entry
 // kinds: full operations that render to both front ends, and pointers to
@@ -160,7 +182,12 @@ type HandwrittenCommand struct {
 
 // Register adds one operation to the registry. It is a free function rather
 // than a method because Go methods cannot introduce their own type parameter.
-func Register[I Input](r *Registry, op Operation[I]) {
+// The type system already forces an operation to name a prepared payload P and a
+// work function that takes only P, so input can be rejected only in Prepare. A
+// nil Prepare would fail every invocation at the prepare step; a test over the
+// operation constructors asserts none is nil, so the gap is caught in CI without
+// a production panic.
+func Register[I Input, P Prepared](r *Registry, op Operation[I, P]) {
 	r.ops = append(r.ops, op)
 }
 

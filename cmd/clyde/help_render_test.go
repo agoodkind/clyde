@@ -88,6 +88,23 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 			args:     []string{"conversation", "export", "claude:abc", "--nope"},
 			wantHelp: "Export one conversation transcript",
 		},
+		{
+			// The headline case: a valid id but no content selection is rejected
+			// in Prepare (PreRunE), so full help renders rather than a bare error.
+			name:     "export with no content kinds selected",
+			args:     []string{"conversation", "export", "claude:abc"},
+			wantHelp: "Export one conversation transcript",
+		},
+		{
+			name:     "unsupported provider value",
+			args:     []string{"conversation", "list", "--provider", "bogus"},
+			wantHelp: "List one filtered page of indexed Claude and Codex conversation metadata",
+		},
+		{
+			name:     "unparseable search time bound",
+			args:     []string{"conversation", "search", "within", "claude:abc", "auth", "--after", "nope"},
+			wantHelp: "Start a semantic search over one conversation",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

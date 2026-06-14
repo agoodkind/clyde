@@ -154,7 +154,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 func TestRenderMCPSkipsCLIOnlyOperation(t *testing.T) {
 	t.Parallel()
 	reg := &Registry{ops: nil, handwritten: nil}
-	Register(reg, Operation[probeInput]{
+	Register(reg, Operation[probeInput, probeInput]{
 		Name:     Name{Canonical: "cli_only_probe"},
 		Surfaces: SurfaceSet{CLI: true, MCP: false},
 		Short:    "cli only",
@@ -162,6 +162,7 @@ func TestRenderMCPSkipsCLIOnlyOperation(t *testing.T) {
 		Args:     nil,
 		Params:   nil,
 		New:      func() probeInput { return probeInput{ID: "", Count: 0, On: false, Mode: "", Surface: SurfaceCLI} },
+		Prepare:  func(in probeInput) (probeInput, error) { return in, nil },
 		Run: func(_ context.Context, _ probeInput, _ Surface, sink ResultSink) error {
 			return sink.Text("x")
 		},
