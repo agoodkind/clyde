@@ -41,14 +41,31 @@ func TestCLISinkWriteFile(t *testing.T) {
 	}
 }
 
+func TestCLISinkRawBytesSkipsMetadata(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	sink := NewCLISink(ctx, &out)
+	if err := sink.RawBytes([]byte("body")); err != nil {
+		t.Fatalf("RawBytes: %v", err)
+	}
+	if got := out.String(); got != "body" {
+		t.Errorf("raw bytes output: got %q, want %q", got, "body")
+	}
+}
+
 func TestMCPSinkCollects(t *testing.T) {
 	t.Parallel()
 	sink := &MCPSink{}
 	_ = sink.Text("a")
 	_ = sink.Bytes([]byte("b"))
-	_ = sink.WriteFile("ignored", []byte("c"))
-	if got := sink.String(); got != "abc" {
-		t.Errorf("String(): got %q, want %q", got, "abc")
+	_ = sink.RawBytes([]byte("c"))
+	_ = sink.WriteFile("ignored", []byte("d"))
+	if got := sink.String(); got != "abcd" {
+		t.Errorf("String(): got %q, want %q", got, "abcd")
 	}
 	if sink.Surface() != SurfaceMCP {
 		t.Errorf("Surface(): got %d, want SurfaceMCP", sink.Surface())

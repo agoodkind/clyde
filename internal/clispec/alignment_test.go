@@ -17,6 +17,7 @@ import (
 var cliOnlyFlags = map[string]bool{
 	"all":    true,
 	"output": true,
+	"stdout": true,
 	// export per-type shortcut flags: CLI sugar for the single MCP `only` array.
 	"chat":              true,
 	"thinking":          true,

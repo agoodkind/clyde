@@ -39,6 +39,14 @@ func TestExportOnlyParamShape(t *testing.T) {
 		t.Errorf("only values = %v, want %v", only.Values, conv.ContentKindSelectorValues())
 	}
 
+	stdout := exportParam(t, "stdout")
+	if stdout.Kind != KindBool {
+		t.Errorf("stdout kind = %d, want KindBool", stdout.Kind)
+	}
+	if !stdout.CLIOnly {
+		t.Errorf("stdout should be CLI-only")
+	}
+
 	for _, canonical := range []string{
 		"chat", "thinking", "tool_calls", "tool_outputs",
 		"system_prompts", "system_messages", "raw_json_metadata", "tools", "all",
@@ -118,6 +126,14 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 		}
 	}
 
+	stdout := cmd.Flags().Lookup("stdout")
+	if stdout == nil {
+		t.Fatal("missing --stdout flag")
+	}
+	if stdout.Value.Type() != "bool" {
+		t.Errorf("--stdout type = %s, want bool", stdout.Value.Type())
+	}
+
 	for _, gone := range []string{"no-thinking", "no-chat", "with-tool-outputs", "include-chat"} {
 		if cmd.Flags().Lookup(gone) != nil {
 			t.Errorf("old flag --%s should be removed", gone)
@@ -149,9 +165,9 @@ func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
 	if !slices.Contains(tool.InputSchema.Required, "only") {
 		t.Errorf("only should be required, required = %v", tool.InputSchema.Required)
 	}
-	for _, shortcut := range []string{"chat", "thinking", "tools", "all"} {
-		if _, present := tool.InputSchema.Properties[shortcut]; present {
-			t.Errorf("shortcut %q should not appear on the MCP surface", shortcut)
+	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout"} {
+		if _, present := tool.InputSchema.Properties[cliOnly]; present {
+			t.Errorf("cli-only property %q should not appear on the MCP surface", cliOnly)
 		}
 	}
 }
@@ -173,5 +189,58 @@ func TestExportMCPDecodeOnly(t *testing.T) {
 		if !set.Has(want) {
 			t.Errorf("decoded set missing %s", want)
 		}
+	}
+}
+
+// TestExportPrepareResolvesDestinations asserts the terminal destination flags
+// resolve before Run, so the work function can write bytes without parsing flags.
+func TestExportPrepareResolvesDestinations(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		outputPath     string
+		stdout         bool
+		wantOutputPath string
+		wantStdout     bool
+	}{
+		{name: "default file", outputPath: "", stdout: false, wantOutputPath: "", wantStdout: false},
+		{name: "explicit file", outputPath: "transcript.md", stdout: false, wantOutputPath: "transcript.md", wantStdout: false},
+		{name: "stdout flag", outputPath: "", stdout: true, wantOutputPath: "", wantStdout: true},
+		{name: "dash output", outputPath: "-", stdout: false, wantOutputPath: "-", wantStdout: true},
+		{name: "both stdout spellings", outputPath: "-", stdout: true, wantOutputPath: "-", wantStdout: true},
+	}
+	op := exportTranscriptOp()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := op.New()
+			in.Kinds = []string{"chat"}
+			in.OutputPath = tc.outputPath
+			in.Stdout = tc.stdout
+			payload, err := op.Prepare(in)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			if payload.OutputPath != tc.wantOutputPath {
+				t.Errorf("OutputPath = %q, want %q", payload.OutputPath, tc.wantOutputPath)
+			}
+			if payload.Stdout != tc.wantStdout {
+				t.Errorf("Stdout = %t, want %t", payload.Stdout, tc.wantStdout)
+			}
+		})
+	}
+}
+
+// TestExportPrepareRejectsStdoutFileConflict asserts stdout mode cannot also
+// name a regular output file.
+func TestExportPrepareRejectsStdoutFileConflict(t *testing.T) {
+	t.Parallel()
+	in := exportTranscriptOp().New()
+	in.Kinds = []string{"chat"}
+	in.Stdout = true
+	in.OutputPath = "transcript.md"
+	_, err := exportTranscriptOp().Prepare(in)
+	if err == nil {
+		t.Fatal("expected stdout plus output path conflict")
 	}
 }
