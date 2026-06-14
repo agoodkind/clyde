@@ -574,11 +574,12 @@ func exportParams() []Param[exportInput] {
 		conv.ContentKindSelectorValues(), true,
 		func(in *exportInput, v []string) { in.Kinds = append(in.Kinds, v...) })
 
-	whitespaceParam := EnumParam("whitespace", "preserve, tidy, compact, or dense.", string(conv.WhitespacePreserve), whitespaceValues,
-		func(in *exportInput, v string) { in.Options.Whitespace = conv.WhitespaceMode(v) })
-	whitespaceParam.bindChanged = func(in *exportInput, selected bool) {
-		recordWhitespaceSelection(in, in.Options.Whitespace, selected)
-	}
+	whitespaceParam := EnumParam("whitespace", "preserve, tidy, compact, or dense.", "", whitespaceValues,
+		func(in *exportInput, v string) {
+			mode := conv.WhitespaceMode(v)
+			in.Options.Whitespace = mode
+			recordWhitespaceSelection(in, mode)
+		})
 
 	// shortcut declares a CLI-only presence flag that adds one selector value to
 	// the kind set, so `--thinking` is sugar for `--only thinking`. The MCP
@@ -597,11 +598,9 @@ func exportParams() []Param[exportInput] {
 		param := BoolParam(string(mode), "Use "+string(mode)+" whitespace.", false, func(in *exportInput, v bool) {
 			if v {
 				in.Options.Whitespace = mode
+				recordWhitespaceSelection(in, mode)
 			}
 		})
-		param.bindChanged = func(in *exportInput, selected bool) {
-			recordWhitespaceSelection(in, mode, selected)
-		}
 		param.CLIOnly = true
 		return param
 	}

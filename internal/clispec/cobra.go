@@ -97,68 +97,42 @@ func (op Operation[I, P]) longHelp() string {
 // closure that copies the parsed value into the input struct after cobra has
 // parsed the command line.
 func registerFlag[I Input](cmd *cobra.Command, param Param[I]) func(in *I) {
-	flagName := param.flagName()
 	switch param.Kind {
 	case KindEnum:
 		current := param.DefaultStr
 		shim := &enumValue{allowed: param.Values, value: &current}
-		cmd.Flags().Var(shim, flagName, param.Description)
+		cmd.Flags().Var(shim, param.flagName(), param.Description)
 		bind := param.bindString
-		return func(in *I) {
-			bind(in, current)
-			bindParamChanged(param, in, cmd.Flags().Changed(flagName))
-		}
+		return func(in *I) { bind(in, current) }
 	case KindString:
 		holder := new(string)
-		cmd.Flags().StringVar(holder, flagName, param.DefaultStr, param.Description)
+		cmd.Flags().StringVar(holder, param.flagName(), param.DefaultStr, param.Description)
 		bind := param.bindString
-		return func(in *I) {
-			bind(in, *holder)
-			bindParamChanged(param, in, cmd.Flags().Changed(flagName))
-		}
+		return func(in *I) { bind(in, *holder) }
 	case KindInt:
 		holder := new(int)
-		cmd.Flags().IntVar(holder, flagName, param.DefaultInt, param.Description)
+		cmd.Flags().IntVar(holder, param.flagName(), param.DefaultInt, param.Description)
 		bind := param.bindInt
-		return func(in *I) {
-			bind(in, *holder)
-			bindParamChanged(param, in, cmd.Flags().Changed(flagName))
-		}
+		return func(in *I) { bind(in, *holder) }
 	case KindBool:
 		holder := new(bool)
-		cmd.Flags().BoolVar(holder, flagName, param.DefaultBool, param.Description)
+		cmd.Flags().BoolVar(holder, param.flagName(), param.DefaultBool, param.Description)
 		bind := param.bindBool
-		return func(in *I) {
-			bind(in, *holder)
-			bindParamChanged(param, in, cmd.Flags().Changed(flagName) && *holder)
-		}
+		return func(in *I) { bind(in, *holder) }
 	case KindFloat:
 		holder := new(float64)
-		cmd.Flags().Float64Var(holder, flagName, param.DefaultFloat, param.Description)
+		cmd.Flags().Float64Var(holder, param.flagName(), param.DefaultFloat, param.Description)
 		bind := param.bindFloat
-		return func(in *I) {
-			bind(in, *holder)
-			bindParamChanged(param, in, cmd.Flags().Changed(flagName))
-		}
+		return func(in *I) { bind(in, *holder) }
 	case KindEnumList:
 		holder := new([]string)
 		shim := &sliceEnumValue{allowed: param.Values, values: holder}
-		cmd.Flags().Var(shim, flagName, param.Description)
+		cmd.Flags().Var(shim, param.flagName(), param.Description)
 		bind := param.bindStrSlice
-		return func(in *I) {
-			bind(in, *holder)
-			bindParamChanged(param, in, cmd.Flags().Changed(flagName))
-		}
+		return func(in *I) { bind(in, *holder) }
 	default:
 		return func(in *I) {}
 	}
-}
-
-func bindParamChanged[I Input](param Param[I], in *I, selected bool) {
-	if param.bindChanged == nil {
-		return
-	}
-	param.bindChanged(in, selected)
 }
 
 // enumValue is a pflag.Value that rejects a word outside its allowed list. It
