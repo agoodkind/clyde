@@ -135,6 +135,17 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 		t.Errorf("--stdout type = %s, want bool", stdout.Value.Type())
 	}
 
+	for _, name := range []string{
+		"compaction-scope",
+		"compaction-detail",
+		"compaction-checkpoint",
+	} {
+		flag := cmd.Flags().Lookup(name)
+		if flag == nil {
+			t.Errorf("missing --%s flag", name)
+		}
+	}
+
 	for _, gone := range []string{"no-thinking", "no-chat", "with-tool-outputs", "include-chat"} {
 		if cmd.Flags().Lookup(gone) != nil {
 			t.Errorf("old flag --%s should be removed", gone)
@@ -165,6 +176,11 @@ func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
 	}
 	if !slices.Contains(tool.InputSchema.Required, "only") {
 		t.Errorf("only should be required, required = %v", tool.InputSchema.Required)
+	}
+	for _, name := range []string{"compaction_scope", "compaction_detail", "compaction_checkpoint"} {
+		if _, present := tool.InputSchema.Properties[name]; !present {
+			t.Errorf("mcp tool missing %s property", name)
+		}
 	}
 	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout", "preserve", "tidy", "compact", "dense"} {
 		if _, present := tool.InputSchema.Properties[cliOnly]; present {
@@ -282,5 +298,45 @@ func TestExportPrepareRejectsStdoutFileConflict(t *testing.T) {
 	_, err := exportTranscriptOp().Prepare(in)
 	if err == nil {
 		t.Fatal("expected stdout plus output path conflict")
+	}
+}
+
+// TestExportPrepareCompactionControls asserts compaction controls are normalized
+// and rejected before the daemon call.
+func TestExportPrepareCompactionControls(t *testing.T) {
+	t.Parallel()
+	op := exportTranscriptOp()
+
+	currentContext := op.New()
+	currentContext.Kinds = []string{"chat"}
+	currentContext.Options.Compaction.Scope = conv.CompactionExportScopeCurrentContext
+	payload, err := op.Prepare(currentContext)
+	if err != nil {
+		t.Fatalf("Prepare rejected current_context: %v", err)
+	}
+	if payload.Options.Compaction.Detail != conv.CompactionExportDetailContext {
+		t.Fatalf("detail = %q, want context", payload.Options.Compaction.Detail)
+	}
+
+	fromCheckpoint := op.New()
+	fromCheckpoint.Kinds = []string{"chat"}
+	fromCheckpoint.Options.Compaction.Scope = conv.CompactionExportScopeFromCheckpoint
+	if _, err := op.Prepare(fromCheckpoint); err == nil {
+		t.Fatal("from_checkpoint without checkpoint should be rejected")
+	}
+
+	wrongScope := op.New()
+	wrongScope.Kinds = []string{"chat"}
+	wrongScope.Options.Compaction.CheckpointNumber = 2
+	if _, err := op.Prepare(wrongScope); err == nil {
+		t.Fatal("checkpoint with full scope should be rejected")
+	}
+
+	historyStart := op.New()
+	historyStart.Kinds = []string{"chat"}
+	historyStart.Options.HistoryStart = 1
+	historyStart.Options.Compaction.Scope = conv.CompactionExportScopeCurrentContext
+	if _, err := op.Prepare(historyStart); err == nil {
+		t.Fatal("history_start with compaction scope should be rejected")
 	}
 }

@@ -468,6 +468,11 @@ func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.Expor
 		HistoryStart: int(req.GetHistoryStart()),
 		Whitespace:   conversation.WhitespaceMode(req.GetWhitespace()),
 		Content:      contentKindSetFromExportRequest(req),
+		Compaction: conversation.CompactionExportOptions{
+			Scope:            conversation.CompactionExportScope(req.GetCompactionScope()),
+			Detail:           conversation.CompactionExportDetail(req.GetCompactionDetail()),
+			CheckpointNumber: int(req.GetCompactionCheckpoint()),
+		},
 	}
 	body, err := s.index.Export(record, options)
 	if err != nil {

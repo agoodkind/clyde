@@ -496,6 +496,9 @@ func exportTranscriptRequest(conversationID string, options conversation.ExportO
 		IncludeToolSummaries:   options.Content.Has(conversation.ContentKindToolSummaries),
 		IncludeToolCalls:       options.Content.Has(conversation.ContentKindToolCalls),
 		IncludeChat:            options.Content.Has(conversation.ContentKindChat),
+		CompactionScope:        string(options.Compaction.Scope),
+		CompactionDetail:       string(options.Compaction.Detail),
+		CompactionCheckpoint:   int64(options.Compaction.CheckpointNumber),
 	}
 }
 
