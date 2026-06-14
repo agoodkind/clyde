@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -12,8 +11,8 @@ import (
 )
 
 // DriftCheckOptions configures one compare-only drift run against the
-// current local capture store. The Reference path's snapshot version
-// (v1 vs v2) is auto-detected. UA / body-key filters apply only to v2.
+// current local capture store. UA / body-key filters scope which
+// captured caller flavor the candidate snapshot is built from.
 type DriftCheckOptions struct {
 	Upstream        string
 	Reference       string
@@ -65,18 +64,12 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 		StartedAt:      startedAt, Timestamp: time.
 				Time{},
 
-		SchemaVersion: "", Diverged: false, Summary: "", V1: nil, V2: nil,
+		SchemaVersion: "", Diverged: false, Summary: "", V2: nil,
 	}
 
 	versionTag := "live-" + startedAt.Format("20060102T150405")
-	if isV2SnapshotFile(opts.Reference) {
-		if err := loadAndDiffSnapshotV2(ctx, opts, transcriptPath, versionTag, &outcome); err != nil {
-			return outcome, err
-		}
-	} else {
-		if err := loadAndDiffSnapshotV1(ctx, opts, transcriptPath, versionTag, &outcome); err != nil {
-			return outcome, err
-		}
+	if err := loadAndDiffSnapshotV2(ctx, opts, transcriptPath, versionTag, &outcome); err != nil {
+		return outcome, err
 	}
 
 	if err := AppendDriftOutcome(opts.DriftLogPath, outcome); err != nil {
@@ -88,9 +81,6 @@ func RunDriftCheck(ctx context.Context, opts DriftCheckOptions) (DriftOutcome, e
 	if outcome.SchemaVersion == "v2" && outcome.V2 != nil {
 		outcome.Diverged = outcome.V2.HasDiverged()
 		outcome.Summary = outcome.V2.SummaryString()
-	} else if outcome.SchemaVersion == "v1" && outcome.V1 != nil {
-		outcome.Diverged = outcome.V1.HasDiverged()
-		outcome.Summary = outcome.V1.SummaryString()
 	}
 	return outcome, nil
 }
@@ -127,42 +117,4 @@ func loadAndDiffSnapshotV2(ctx context.Context, opts DriftCheckOptions, transcri
 	outcome.SchemaVersion = "v2"
 	outcome.V2 = &report
 	return nil
-}
-
-// loadAndDiffSnapshotV1 is the v1 counterpart of loadAndDiffSnapshotV2.
-func loadAndDiffSnapshotV1(ctx context.Context, opts DriftCheckOptions, transcriptPath, versionTag string, outcome *DriftOutcome) error {
-	ref, err := LoadSnapshotTOML(opts.Reference)
-	if err != nil {
-		opts.Log.WarnContext(ctx, "mitm.drift.load_reference_failed", "concern", "providers.mitm.wire", "reference", opts.Reference,
-			"err", err,
-		)
-		return fmt.Errorf("load reference: %w", err)
-	}
-	cand, err := ExtractSnapshot(transcriptPath, SnapshotOptions{
-		UpstreamName:    opts.Upstream,
-		UpstreamVersion: versionTag,
-		ProviderFilter:  ProviderForUpstream(opts.Upstream),
-	})
-	if err != nil {
-		opts.Log.WarnContext(ctx, "mitm.drift.extract_failed", "concern", "providers.mitm.wire", "transcript", transcriptPath,
-			"upstream", opts.Upstream,
-			"err", err,
-		)
-		return fmt.Errorf("extract: %w", err)
-	}
-	report := DiffSnapshots(ref, cand)
-	outcome.SchemaVersion = "v1"
-	outcome.V1 = &report
-	return nil
-}
-
-// isV2SnapshotFile sniffs a reference TOML for the v2 [[flavors]]
-// table. Cheap heuristic; matches what the cli `isV2Snapshot` helper
-// does but lives in the mitm package so the daemon can reuse it.
-func isV2SnapshotFile(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
-		return false
-	}
-	return strings.Contains(string(data), "[[flavors]]")
 }

@@ -11,20 +11,16 @@ import (
 	"goodkind.io/clyde/internal/clock"
 )
 
-// driftSchemaVersion enumerates the snapshot schema versions the
-// drift log records carry. v1 is the legacy single-flavor format; v2
-// supports the [[flavors]] table introduced in Codex Desktop captures.
+// driftSchemaVersion tags the snapshot schema the drift log records
+// carry. The baseline uses the [[flavors]] table format.
 type driftSchemaVersion string
 
-const (
-	driftSchemaV1 driftSchemaVersion = "v1"
-	driftSchemaV2 driftSchemaVersion = "v2"
-)
+const driftSchemaV2 driftSchemaVersion = "v2"
 
-// DriftOutcome is one entry in the drift log. Exactly one of V1 or V2
-// is populated, matching SchemaVersion. The TranscriptPath points at
-// the JSONL capture that produced the candidate snapshot so the run
-// can be reconstructed later.
+// DriftOutcome is one entry in the drift log. V2 carries the flavor
+// diff when present. The TranscriptPath points at the JSONL capture
+// that produced the candidate snapshot so the run can be reconstructed
+// later.
 type DriftOutcome struct {
 	Timestamp      time.Time     `json:"timestamp"`
 	Upstream       string        `json:"upstream"`
@@ -34,7 +30,6 @@ type DriftOutcome struct {
 	StartedAt      time.Time     `json:"started_at"`
 	Diverged       bool          `json:"diverged"`
 	Summary        string        `json:"summary"`
-	V1             *DiffReport   `json:"v1,omitempty"`
 	V2             *DiffReportV2 `json:"v2,omitempty"`
 }
 
@@ -49,17 +44,9 @@ func AppendDriftOutcome(path string, outcome DriftOutcome) error {
 	if outcome.Timestamp.IsZero() {
 		outcome.Timestamp = clock.Now().UTC()
 	}
-	switch driftSchemaVersion(outcome.SchemaVersion) {
-	case driftSchemaV2:
-		if outcome.V2 != nil {
-			outcome.Diverged = outcome.V2.HasDiverged()
-			outcome.Summary = outcome.V2.SummaryString()
-		}
-	case driftSchemaV1:
-		if outcome.V1 != nil {
-			outcome.Diverged = outcome.V1.HasDiverged()
-			outcome.Summary = outcome.V1.SummaryString()
-		}
+	if driftSchemaVersion(outcome.SchemaVersion) == driftSchemaV2 && outcome.V2 != nil {
+		outcome.Diverged = outcome.V2.HasDiverged()
+		outcome.Summary = outcome.V2.SummaryString()
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		slog.Warn("mitm.drift_log.mkdir_failed", "concern", "providers.mitm.wire", "component", "mitm",
