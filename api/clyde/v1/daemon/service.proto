@@ -229,6 +229,7 @@ message ExportTranscriptRequest {
   string compaction_scope = 12;
   string compaction_detail = 13;
   int64 compaction_checkpoint = 14;
+  bool include_tool_summaries = 15;
 }
 
 message ExportTranscriptResponse {

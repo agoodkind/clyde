@@ -13,6 +13,8 @@ const (
 	ContentKindChat ContentKind = "chat"
 	// ContentKindThinking is assistant thinking or reasoning text.
 	ContentKindThinking ContentKind = "thinking"
+	// ContentKindToolSummaries is summary-only tool usage.
+	ContentKindToolSummaries ContentKind = "tools"
 	// ContentKindToolCalls is tool invocations.
 	ContentKindToolCalls ContentKind = "tool_calls"
 	// ContentKindToolOutputs is tool result bodies.
@@ -29,6 +31,7 @@ const (
 var AllContentKinds = []ContentKind{
 	ContentKindChat,
 	ContentKindThinking,
+	ContentKindToolSummaries,
 	ContentKindToolCalls,
 	ContentKindToolOutputs,
 	ContentKindSystemPrompts,
@@ -38,30 +41,28 @@ var AllContentKinds = []ContentKind{
 
 // Group selector values expand to several content kinds.
 const (
-	contentSelectorTools = "tools"
-	contentSelectorAll   = "all"
+	contentSelectorAll = "all"
 )
 
 // ContentKindSelectorValues lists every accepted selector value, the canonical
-// kinds plus the tools and all groups, for flag and MCP enum constraints.
+// kinds plus the all group, for flag and MCP enum constraints.
 func ContentKindSelectorValues() []string {
-	values := make([]string, 0, len(AllContentKinds)+2)
+	values := make([]string, 0, len(AllContentKinds)+1)
 	for _, kind := range AllContentKinds {
 		values = append(values, string(kind))
 	}
-	return append(values, contentSelectorTools, contentSelectorAll)
+	return append(values, contentSelectorAll)
 }
 
 // ExpandContentSelector maps one selector value to the content kinds it covers.
-// A canonical kind maps to itself, tools expands to tool_calls and tool_outputs,
-// and all expands to every kind. ok is false for an unrecognized value.
+// A canonical kind maps to itself, and all expands to every non-tool kind plus
+// tool_outputs, the highest-detail tool kind. ok is false for an unrecognized
+// value.
 func ExpandContentSelector(value string) (kinds []ContentKind, ok bool) {
 	trimmed := strings.TrimSpace(value)
 	switch trimmed {
-	case contentSelectorTools:
-		return []ContentKind{ContentKindToolCalls, ContentKindToolOutputs}, true
 	case contentSelectorAll:
-		return append([]ContentKind(nil), AllContentKinds...), true
+		return allSelectorContentKinds(), true
 	}
 	for _, kind := range AllContentKinds {
 		if string(kind) == trimmed {
@@ -69,6 +70,24 @@ func ExpandContentSelector(value string) (kinds []ContentKind, ok bool) {
 		}
 	}
 	return nil, false
+}
+
+func allSelectorContentKinds() []ContentKind {
+	values := make([]ContentKind, 0, len(AllContentKinds))
+	for _, kind := range AllContentKinds {
+		switch kind {
+		case ContentKindToolSummaries, ContentKindToolCalls:
+			continue
+		case ContentKindChat,
+			ContentKindThinking,
+			ContentKindToolOutputs,
+			ContentKindSystemPrompts,
+			ContentKindSystemMessages,
+			ContentKindRawJSONMetadata:
+			values = append(values, kind)
+		}
+	}
+	return values
 }
 
 // ContentKindSet is a set of content kinds with membership tests.
@@ -82,6 +101,7 @@ func NewContentKindSet(kinds ...ContentKind) ContentKindSet {
 	for _, kind := range kinds {
 		members[kind] = true
 	}
+	collapseToolContentKinds(members)
 	return ContentKindSet{members: members}
 }
 
@@ -123,8 +143,20 @@ func ResolveContentKinds(values []string) (ContentKindSet, error) {
 			members[kind] = true
 		}
 	}
+	collapseToolContentKinds(members)
 	if len(members) == 0 {
 		return ContentKindSet{members: nil}, fmt.Errorf("no content kinds selected; pass --only or a type shortcut with one or more of: %s", strings.Join(ContentKindSelectorValues(), ", "))
 	}
 	return ContentKindSet{members: members}, nil
+}
+
+func collapseToolContentKinds(members map[ContentKind]bool) {
+	if members[ContentKindToolOutputs] {
+		delete(members, ContentKindToolCalls)
+		delete(members, ContentKindToolSummaries)
+		return
+	}
+	if members[ContentKindToolCalls] {
+		delete(members, ContentKindToolSummaries)
+	}
 }

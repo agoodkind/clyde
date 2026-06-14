@@ -1729,6 +1729,7 @@ type ExportTranscriptRequest struct {
 	CompactionScope        string                 `protobuf:"bytes,12,opt,name=compaction_scope,json=compactionScope,proto3" json:"compaction_scope,omitempty"`
 	CompactionDetail       string                 `protobuf:"bytes,13,opt,name=compaction_detail,json=compactionDetail,proto3" json:"compaction_detail,omitempty"`
 	CompactionCheckpoint   int64                  `protobuf:"varint,14,opt,name=compaction_checkpoint,json=compactionCheckpoint,proto3" json:"compaction_checkpoint,omitempty"`
+	IncludeToolSummaries   bool                   `protobuf:"varint,15,opt,name=include_tool_summaries,json=includeToolSummaries,proto3" json:"include_tool_summaries,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1859,6 +1860,13 @@ func (x *ExportTranscriptRequest) GetCompactionCheckpoint() int64 {
 		return x.CompactionCheckpoint
 	}
 	return 0
+}
+
+func (x *ExportTranscriptRequest) GetIncludeToolSummaries() bool {
+	if x != nil {
+		return x.IncludeToolSummaries
+	}
+	return false
 }
 
 type ExportTranscriptResponse struct {
@@ -2343,7 +2351,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\tresult_id\x18\x01 \x01(\tR\bresultId\x12\x16\n" +
 	"\x06prompt\x18\x02 \x01(\tR\x06prompt\"2\n" +
 	"\x1cAnalyzeSearchResultsResponse\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"\x83\x05\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"\xb9\x05\n" +
 	"\x17ExportTranscriptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x16\n" +
 	"\x06format\x18\x02 \x01(\tR\x06format\x12\x1e\n" +
@@ -2361,7 +2369,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x17include_system_messages\x18\v \x01(\bR\x15includeSystemMessages\x12)\n" +
 	"\x10compaction_scope\x18\f \x01(\tR\x0fcompactionScope\x12+\n" +
 	"\x11compaction_detail\x18\r \x01(\tR\x10compactionDetail\x123\n" +
-	"\x15compaction_checkpoint\x18\x0e \x01(\x03R\x14compactionCheckpoint\".\n" +
+	"\x15compaction_checkpoint\x18\x0e \x01(\x03R\x14compactionCheckpoint\x124\n" +
+	"\x16include_tool_summaries\x18\x0f \x01(\bR\x14includeToolSummaries\".\n" +
 	"\x18ExportTranscriptResponse\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\fR\x04body\"\xc0\x01\n" +
 	"\x13ConversationLineage\x12\x12\n" +

@@ -14,8 +14,8 @@ func TestExpandContentSelector(t *testing.T) {
 	}{
 		{"chat", []ContentKind{ContentKindChat}, true},
 		{"raw_json_metadata", []ContentKind{ContentKindRawJSONMetadata}, true},
-		{"tools", []ContentKind{ContentKindToolCalls, ContentKindToolOutputs}, true},
-		{"all", AllContentKinds, true},
+		{"tools", []ContentKind{ContentKindToolSummaries}, true},
+		{"all", allSelectorContentKinds(), true},
 		{"bogus", nil, false},
 		{"", nil, false},
 	}
@@ -37,18 +37,34 @@ func TestResolveContentKinds(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	want := []ContentKind{
-		ContentKindChat, ContentKindThinking, ContentKindToolCalls, ContentKindToolOutputs,
+		ContentKindChat, ContentKindThinking, ContentKindToolSummaries,
 	}
 	if got := set.Kinds(); !slices.Equal(got, want) {
 		t.Errorf("kinds = %v, want %v", got, want)
+	}
+
+	callSet, err := ResolveContentKinds([]string{"tools", "tool_calls"})
+	if err != nil {
+		t.Fatalf("resolve tool_calls: %v", err)
+	}
+	if got := callSet.Kinds(); !slices.Equal(got, []ContentKind{ContentKindToolCalls}) {
+		t.Errorf("tool_calls precedence kinds = %v", got)
+	}
+
+	outputSet, err := ResolveContentKinds([]string{"tools", "tool_calls", "tool_outputs"})
+	if err != nil {
+		t.Fatalf("resolve tool_outputs: %v", err)
+	}
+	if got := outputSet.Kinds(); !slices.Equal(got, []ContentKind{ContentKindToolOutputs}) {
+		t.Errorf("tool_outputs precedence kinds = %v", got)
 	}
 
 	allSet, err := ResolveContentKinds([]string{"all"})
 	if err != nil {
 		t.Fatalf("resolve all: %v", err)
 	}
-	if got := allSet.Kinds(); !slices.Equal(got, AllContentKinds) {
-		t.Errorf("all kinds = %v, want %v", got, AllContentKinds)
+	if got := allSet.Kinds(); !slices.Equal(got, allSelectorContentKinds()) {
+		t.Errorf("all kinds = %v, want %v", got, allSelectorContentKinds())
 	}
 
 	if _, err := ResolveContentKinds([]string{"bogus"}); err == nil {

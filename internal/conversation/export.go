@@ -69,15 +69,15 @@ func renderMessagesWithCompaction(
 	options ExportOptions,
 	compactionBlock *compactionExportBlock,
 ) ([]byte, error) {
-	includeToolCalls := options.Content.Has(ContentKindToolCalls)
+	includeTools := hasToolContent(options.Content)
 	shapeOptions := transcript.ShapeOptions{
 		IncludeThinking:  options.Content.Has(ContentKindThinking),
-		ConversationOnly: !includeToolCalls,
+		ConversationOnly: !includeTools,
 		MaxTextRunes:     0,
 		ToolOnly:         transcript.ToolOnlyOmit,
 	}
-	if includeToolCalls {
-		shapeOptions.ToolOnly = transcript.ToolOnlyFullDetail
+	if includeTools {
+		shapeOptions.ToolOnly = exportToolOnlyMode(options.Content)
 	}
 	switch options.Format {
 	case ExportFormatHTML:
@@ -105,6 +105,19 @@ func renderMessagesWithCompaction(
 	default:
 		return nil, fmt.Errorf("unsupported export format %q", options.Format)
 	}
+}
+
+func hasToolContent(content ContentKindSet) bool {
+	return content.Has(ContentKindToolSummaries) ||
+		content.Has(ContentKindToolCalls) ||
+		content.Has(ContentKindToolOutputs)
+}
+
+func exportToolOnlyMode(content ContentKindSet) transcript.ToolOnlyMode {
+	if content.Has(ContentKindToolCalls) || content.Has(ContentKindToolOutputs) {
+		return transcript.ToolOnlyFullDetail
+	}
+	return transcript.ToolOnlyInputSummary
 }
 
 type shapedCompactionJSONExport struct {
@@ -396,7 +409,7 @@ func filterMessages(messages []transcript.Message, options ExportOptions) []tran
 		if !options.Content.Has(ContentKindThinking) {
 			message.Thinking = ""
 		}
-		if !options.Content.Has(ContentKindToolCalls) {
+		if !hasToolContent(options.Content) {
 			message.Tools = nil
 			message.HasTools = false
 		}

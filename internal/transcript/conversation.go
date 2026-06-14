@@ -10,15 +10,18 @@ import (
 	"time"
 )
 
-// ToolOnlyMode is part of Clyde's typed adapter surface.
+// ToolOnlyMode controls how ShapeConversation renders turns that contain only
+// tool calls.
 type ToolOnlyMode string
 
 const (
-	// ToolOnlyOmit is part of Clyde's typed adapter surface.
+	// ToolOnlyOmit drops tool-only turns.
 	ToolOnlyOmit ToolOnlyMode = "omit"
-	// ToolOnlyCompactSummary is part of Clyde's typed adapter surface.
+	// ToolOnlyCompactSummary renders one compact line from the tool names.
 	ToolOnlyCompactSummary ToolOnlyMode = "compact_summary"
-	// ToolOnlyFullDetail is part of Clyde's typed adapter surface.
+	// ToolOnlyInputSummary renders tool names and input descriptions when present.
+	ToolOnlyInputSummary ToolOnlyMode = "input_summary"
+	// ToolOnlyFullDetail renders tool input JSON and any loaded output text.
 	ToolOnlyFullDetail ToolOnlyMode = "full_detail"
 )
 
@@ -92,6 +95,8 @@ func ShapeConversation(messages []Message, opts ShapeOptions) []ConversationTurn
 				continue
 			case ToolOnlyCompactSummary:
 				text = toolSummaryText(turn.ToolNames)
+			case ToolOnlyInputSummary:
+				text = toolInputSummaryText(msg.Tools)
 			case ToolOnlyFullDetail:
 				text = toolFullDetailText(msg.Tools)
 			default:
@@ -164,6 +169,36 @@ func toolSummaryText(names []string) string {
 		return "[used tools]"
 	}
 	return "[used: " + strings.Join(names, ", ") + "]"
+}
+
+type toolDescriptionInput struct {
+	Description string `json:"description"`
+}
+
+func toolInputSummaryText(tools []ToolCall) string {
+	if len(tools) == 0 {
+		return "[used tools]"
+	}
+	lines := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		line := "[tool: " + tool.Name + "]"
+		if description := toolInputDescription(tool.Input); description != "" {
+			line += " " + description
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func toolInputDescription(input ToolInputJSON) string {
+	if input.Len() == 0 {
+		return ""
+	}
+	var parsed toolDescriptionInput
+	if err := json.Unmarshal(input.Raw, &parsed); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Description)
 }
 
 func toolFullDetailText(tools []ToolCall) string {

@@ -50,6 +50,7 @@ func TestExportOnlyParamShape(t *testing.T) {
 	for _, canonical := range []string{
 		"chat", "thinking", "tool_calls", "tool_outputs",
 		"system_prompts", "system_messages", "raw_json_metadata", "tools", "all",
+		"preserve", "tidy", "compact", "dense",
 	} {
 		shortcut := exportParam(t, canonical)
 		if shortcut.Kind != KindBool {
@@ -63,7 +64,7 @@ func TestExportOnlyParamShape(t *testing.T) {
 
 // TestExportSelectorsAppendKinds asserts both the --only list and the shortcut
 // flags append their selector values, and the union resolves correctly through
-// ResolveContentKinds (tools fans out to tool_calls + tool_outputs).
+// ResolveContentKinds (tools selects summary-only tool lines).
 func TestExportSelectorsAppendKinds(t *testing.T) {
 	t.Parallel()
 	in := exportTranscriptOp().New()
@@ -76,8 +77,7 @@ func TestExportSelectorsAppendKinds(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 	want := []conv.ContentKind{
-		conv.ContentKindChat, conv.ContentKindThinking,
-		conv.ContentKindToolCalls, conv.ContentKindToolOutputs,
+		conv.ContentKindChat, conv.ContentKindThinking, conv.ContentKindToolSummaries,
 	}
 	if got := set.Kinds(); !slices.Equal(got, want) {
 		t.Errorf("resolved kinds = %v, want %v", got, want)
@@ -115,6 +115,7 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 	for _, name := range []string{
 		"chat", "thinking", "tool-calls", "tool-outputs",
 		"system-prompts", "system-messages", "raw-json-metadata", "tools", "all",
+		"preserve", "tidy", "compact", "dense",
 	} {
 		flag := cmd.Flags().Lookup(name)
 		if flag == nil {
@@ -181,7 +182,7 @@ func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
 			t.Errorf("mcp tool missing %s property", name)
 		}
 	}
-	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout"} {
+	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout", "preserve", "tidy", "compact", "dense"} {
 		if _, present := tool.InputSchema.Properties[cliOnly]; present {
 			t.Errorf("cli-only property %q should not appear on the MCP surface", cliOnly)
 		}
@@ -201,10 +202,49 @@ func TestExportMCPDecodeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	for _, want := range []conv.ContentKind{conv.ContentKindChat, conv.ContentKindToolCalls, conv.ContentKindToolOutputs} {
+	for _, want := range []conv.ContentKind{conv.ContentKindChat, conv.ContentKindToolSummaries} {
 		if !set.Has(want) {
 			t.Errorf("decoded set missing %s", want)
 		}
+	}
+}
+
+func TestExportWhitespaceShortcutPrepare(t *testing.T) {
+	t.Parallel()
+	in := exportTranscriptOp().New()
+	in.Kinds = []string{"chat"}
+	in.WhitespaceSelections = []conv.WhitespaceMode{conv.WhitespaceDense}
+	payload, err := exportTranscriptOp().Prepare(in)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if payload.Options.Whitespace != conv.WhitespaceDense {
+		t.Fatalf("whitespace = %q, want %q", payload.Options.Whitespace, conv.WhitespaceDense)
+	}
+}
+
+func TestExportCLIRejectsMultipleWhitespaceSelectors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		flags []string
+	}{
+		{name: "two shortcuts", flags: []string{"--only", "chat", "--dense", "--compact"}},
+		{name: "enum and shortcut", flags: []string{"--only", "chat", "--whitespace", "compact", "--dense"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			cmd := exportTranscriptOp().cobraCommand(testFactory(&out))
+			if err := cmd.ParseFlags(tc.flags); err != nil {
+				t.Fatalf("ParseFlags: %v", err)
+			}
+			err := cmd.PreRunE(cmd, []string{"claude:probe"})
+			if err == nil {
+				t.Fatal("expected whitespace selector conflict")
+			}
+		})
 	}
 }
 

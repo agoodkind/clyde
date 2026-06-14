@@ -475,7 +475,15 @@ func ExportTranscript(ctx context.Context, conversationID string, options conver
 
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.ExportTranscript(rpcCtx, &clydev1.ExportTranscriptRequest{
+	resp, err := client.rpc.ExportTranscript(rpcCtx, exportTranscriptRequest(conversationID, options))
+	if err != nil {
+		return nil, daemonRPCError(rpcCtx, "export transcript", err)
+	}
+	return resp.GetBody(), nil
+}
+
+func exportTranscriptRequest(conversationID string, options conversation.ExportOptions) *clydev1.ExportTranscriptRequest {
+	return &clydev1.ExportTranscriptRequest{
 		ConversationId:         conversationID,
 		Format:                 string(options.Format),
 		Whitespace:             string(options.Whitespace),
@@ -485,16 +493,13 @@ func ExportTranscript(ctx context.Context, conversationID string, options conver
 		IncludeToolOutputs:     options.Content.Has(conversation.ContentKindToolOutputs),
 		IncludeRawJsonMetadata: options.Content.Has(conversation.ContentKindRawJSONMetadata),
 		IncludeThinking:        options.Content.Has(conversation.ContentKindThinking),
+		IncludeToolSummaries:   options.Content.Has(conversation.ContentKindToolSummaries),
 		IncludeToolCalls:       options.Content.Has(conversation.ContentKindToolCalls),
 		IncludeChat:            options.Content.Has(conversation.ContentKindChat),
 		CompactionScope:        string(options.Compaction.Scope),
 		CompactionDetail:       string(options.Compaction.Detail),
 		CompactionCheckpoint:   int64(options.Compaction.CheckpointNumber),
-	})
-	if err != nil {
-		return nil, daemonRPCError(rpcCtx, "export transcript", err)
 	}
-	return resp.GetBody(), nil
 }
 
 // GetMITMStatus asks the daemon for each MITM listener address, whether it is

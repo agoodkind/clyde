@@ -496,6 +496,9 @@ func contentKindSetFromExportRequest(req *clydev1.ExportTranscriptRequest) conve
 	if req.GetIncludeThinking() {
 		kinds = append(kinds, conversation.ContentKindThinking)
 	}
+	if req.GetIncludeToolSummaries() {
+		kinds = append(kinds, conversation.ContentKindToolSummaries)
+	}
 	if req.GetIncludeToolCalls() {
 		kinds = append(kinds, conversation.ContentKindToolCalls)
 	}
