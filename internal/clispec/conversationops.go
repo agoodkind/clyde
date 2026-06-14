@@ -81,6 +81,7 @@ type exportInput struct {
 	ConversationID string
 	Options        conv.ExportOptions
 	OutputPath     string
+	Stdout         bool
 	// Kinds accumulates the selected content-kind selector values from the
 	// --only list flag and the per-type shortcut flags. Run resolves them.
 	Kinds []string
@@ -155,6 +156,7 @@ type exportPayload struct {
 	ConversationID string
 	Options        conv.ExportOptions
 	OutputPath     string
+	Stdout         bool
 }
 
 func (listPayload) isClispecPrepared()                {}
@@ -551,12 +553,18 @@ func analyzeResultsOp() Operation[analyzeResultsInput, analyzeResultsPayload] {
 	}
 }
 
-// exportTranscriptOp exports a conversation transcript. The terminal can write
-// the body to a file via --output; the MCP tool returns the body as text.
-func exportTranscriptOp() Operation[exportInput, exportPayload] {
-	outputPathParam := StringParam("output", "write output to path", "", false,
+// exportParams builds the export operation's parameters: the format and
+// whitespace enums, the CLI-only destination flags (--output and --stdout), the
+// required --only content-kind list, and the per-type shortcut flags that
+// desugar into the same kind set.
+func exportParams() []Param[exportInput] {
+	outputPathParam := StringParam("output", "Write output to path, or use - for stdout.", "", false,
 		func(in *exportInput, v string) { in.OutputPath = v })
 	outputPathParam.CLIOnly = true
+
+	stdoutParam := BoolParam("stdout", "Write the export body directly to stdout. Equivalent to --output -.", false,
+		func(in *exportInput, v bool) { in.Stdout = v })
+	stdoutParam.CLIOnly = true
 
 	onlyParam := EnumListParam("only",
 		"Content kinds to export, comma-separated: chat, thinking, tool_calls, tool_outputs, system_prompts, system_messages, raw_json_metadata, plus the groups tools (tool_calls+tool_outputs) and all.",
@@ -576,44 +584,53 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		return param
 	}
 
+	return []Param[exportInput]{
+		EnumParam("format", "markdown, html, json, or plain_text.", string(conv.ExportFormatMarkdown), exportFormatValues,
+			func(in *exportInput, v string) { in.Options.Format = conv.ExportFormat(v) }),
+		EnumParam("whitespace", "preserve, tidy, compact, or dense.", string(conv.WhitespacePreserve), whitespaceValues,
+			func(in *exportInput, v string) { in.Options.Whitespace = conv.WhitespaceMode(v) }),
+		outputPathParam,
+		stdoutParam,
+		IntParam("history_start", "First message index to include.", 0,
+			func(in *exportInput, v int) { in.Options.HistoryStart = v }),
+		onlyParam,
+		shortcut("chat", "chat", "Include conversation chat text."),
+		shortcut("thinking", "thinking", "Include assistant thinking blocks."),
+		shortcut("tool_calls", "tool_calls", "Include tool calls."),
+		shortcut("tool_outputs", "tool_outputs", "Include tool result bodies."),
+		shortcut("system_prompts", "system_prompts", "Include system-injected prompts."),
+		shortcut("system_messages", "system_messages", "Include provider system transcript records."),
+		shortcut("raw_json_metadata", "raw_json_metadata", "Include JSON metadata fields."),
+		shortcut("tools", "tools", "Include tool calls and tool outputs."),
+		shortcut("all", "all", "Include every content kind."),
+	}
+}
+
+// exportTranscriptOp exports a conversation transcript. The terminal can write
+// the body to a file or stdout; the MCP tool returns the body as text.
+func exportTranscriptOp() Operation[exportInput, exportPayload] {
 	return Operation[exportInput, exportPayload]{
 		Name:     Name{Canonical: "export_transcript", CLIOverride: "export"},
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
-		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. The terminal always writes an artifact file and reports the written path; the MCP tool returns the body as text.",
+		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, or pass --stdout or --output - to write the export body directly to stdout for piping. The MCP tool returns the body as text.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
-			"clyde conversation export claude:1a2b3c --thinking --tools",
+			"clyde conversation export claude:1a2b3c --thinking --tools --stdout",
+			"clyde conversation export claude:1a2b3c --all --output - | pbcopy",
 			"clyde conversation export claude:1a2b3c --all",
 		},
 		Args: []Arg[exportInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *exportInput, v string) { in.ConversationID = v }),
 		},
-		Params: []Param[exportInput]{
-			EnumParam("format", "markdown, html, json, or plain_text.", string(conv.ExportFormatMarkdown), exportFormatValues,
-				func(in *exportInput, v string) { in.Options.Format = conv.ExportFormat(v) }),
-			EnumParam("whitespace", "preserve, tidy, compact, or dense.", string(conv.WhitespacePreserve), whitespaceValues,
-				func(in *exportInput, v string) { in.Options.Whitespace = conv.WhitespaceMode(v) }),
-			outputPathParam,
-			IntParam("history_start", "First message index to include.", 0,
-				func(in *exportInput, v int) { in.Options.HistoryStart = v }),
-			onlyParam,
-			shortcut("chat", "chat", "Include conversation chat text."),
-			shortcut("thinking", "thinking", "Include assistant thinking blocks."),
-			shortcut("tool_calls", "tool_calls", "Include tool calls."),
-			shortcut("tool_outputs", "tool_outputs", "Include tool result bodies."),
-			shortcut("system_prompts", "system_prompts", "Include system-injected prompts."),
-			shortcut("system_messages", "system_messages", "Include provider system transcript records."),
-			shortcut("raw_json_metadata", "raw_json_metadata", "Include JSON metadata fields."),
-			shortcut("tools", "tools", "Include tool calls and tool outputs."),
-			shortcut("all", "all", "Include every content kind."),
-		},
+		Params: exportParams(),
 		New: func() exportInput {
 			return exportInput{
 				ConversationID: "",
 				OutputPath:     "",
+				Stdout:         false,
 				Kinds:          nil,
 				Options: conv.ExportOptions{
 					Format:       conv.ExportFormatMarkdown,
@@ -631,7 +648,11 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 				return exportPayload{}, fmt.Errorf("select content kinds: %w", err)
 			}
 			in.Options.Content = content
-			return exportPayload{ConversationID: in.ConversationID, Options: in.Options, OutputPath: in.OutputPath}, nil
+			if in.Stdout && in.OutputPath != "" && in.OutputPath != "-" {
+				return exportPayload{}, fmt.Errorf("select output destination: --stdout cannot be combined with --output %q", in.OutputPath)
+			}
+			stdout := in.Stdout || in.OutputPath == "-"
+			return exportPayload{ConversationID: in.ConversationID, Options: in.Options, OutputPath: in.OutputPath, Stdout: stdout}, nil
 		},
 		Run: func(ctx context.Context, p exportPayload, surface Surface, sink ResultSink) error {
 			body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
@@ -639,6 +660,9 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 				return logFail(ctx, surface, "export_failed", "export transcript", err)
 			}
 			if surface == SurfaceCLI {
+				if p.Stdout {
+					return sink.RawBytes(body)
+				}
 				path := p.OutputPath
 				if path == "" {
 					path = defaultExportOutputPath(p.ConversationID, p.Options.Format)

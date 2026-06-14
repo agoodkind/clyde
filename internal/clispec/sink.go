@@ -20,6 +20,8 @@ type ResultSink interface {
 	Text(s string) error
 	// Bytes writes raw bytes, such as an export body.
 	Bytes(b []byte) error
+	// RawBytes writes exact bytes with no metadata or response envelope.
+	RawBytes(b []byte) error
 	// WriteFile writes bytes to a path on the terminal. The MCP sink has no
 	// file contract, so it folds the bytes into its in-memory buffer.
 	WriteFile(path string, b []byte) error
@@ -76,6 +78,16 @@ func (s *CLISink) Bytes(body []byte) error {
 	return nil
 }
 
+// RawBytes writes exact bytes to the terminal stream without metadata.
+func (s *CLISink) RawBytes(body []byte) error {
+	s.wrote = true
+	if _, err := s.out.Write(body); err != nil {
+		slog.Warn("clispec.sink.write_raw_byte_response_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("clispec: write raw byte response: %w", err)
+	}
+	return nil
+}
+
 // WriteFile writes the bytes to the path with owner-only permissions and logs
 // the outcome.
 func (s *CLISink) WriteFile(path string, body []byte) error {
@@ -105,6 +117,12 @@ func (s *MCPSink) Text(text string) error {
 
 // Bytes appends the bytes to the buffer.
 func (s *MCPSink) Bytes(body []byte) error {
+	s.buf.Write(body)
+	return nil
+}
+
+// RawBytes appends the bytes to the buffer.
+func (s *MCPSink) RawBytes(body []byte) error {
 	s.buf.Write(body)
 	return nil
 }
