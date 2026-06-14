@@ -17,8 +17,8 @@ type SeedBaselineResult struct {
 	Flavors  int
 }
 
-// SeedBaseline extracts a v2 wire baseline from a capture transcript JSONL and
-// writes reference-v2.toml for the given upstream. The provider filter is
+// SeedBaseline extracts a wire baseline from a capture transcript JSONL and
+// writes baseline-reference.toml for the given upstream. The provider filter is
 // derived from the upstream name. An explicit output names the file directly;
 // otherwise the path is derived from the default baseline root.
 func SeedBaseline(ctx context.Context, from, upstream, output string, includeUA, excludeUA []string) (SeedBaselineResult, error) {
@@ -68,12 +68,12 @@ func SeedBaseline(ctx context.Context, from, upstream, output string, includeUA,
 	return SeedBaselineResult{Written: written, Upstream: snap.Upstream.Name, Flavors: len(snap.Flavors)}, nil
 }
 
-// resolveSeedOutputPath returns the reference-v2.toml path to write. An explicit
-// output names the file directly; otherwise the path is derived from the
-// default baseline root joined with the upstream's reference-v2.toml.
+// resolveSeedOutputPath returns the baseline-reference.toml path to write. An
+// explicit output names the file directly; otherwise the path is derived from
+// the default baseline root joined with the upstream's baseline-reference.toml.
 func resolveSeedOutputPath(upstream, output string) string {
 	if trimmed := strings.TrimSpace(output); trimmed != "" {
 		return trimmed
 	}
-	return BaselineReferencePath(DefaultBaselineRoot(), upstream, true)
+	return BaselineReferencePath(DefaultBaselineRoot(), upstream)
 }

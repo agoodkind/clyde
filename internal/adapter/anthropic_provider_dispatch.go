@@ -540,7 +540,7 @@ func anthropicWireBaselineAdapterError(err error) *adapterError {
 		// sending a request with no identity headers.
 		return adapterErrBaselineMissing(
 			"anthropic",
-			"anthropic wire baseline is unavailable: seed it by running claude-cli once through the Clyde MITM proxy, or restore the reference-v2.toml baseline file, then retry",
+			"anthropic wire baseline is unavailable: seed it by running claude-cli once through the Clyde MITM proxy, or restore the baseline-reference.toml baseline file, then retry",
 			err,
 		)
 	}

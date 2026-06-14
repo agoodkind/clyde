@@ -553,7 +553,7 @@ func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptur
 }
 
 // SeedBaseline extracts a v2 wire baseline from a capture transcript and writes
-// reference-v2.toml for the given upstream.
+// baseline-reference.toml for the given upstream.
 func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBaselineRequest) (*clydev1.SeedBaselineResponse, error) {
 	result, err := mitm.SeedBaseline(ctx, req.GetFrom(), req.GetUpstream(), req.GetOutput(), req.GetIncludeUa(), req.GetExcludeUa())
 	if err != nil {

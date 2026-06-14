@@ -369,7 +369,7 @@ body_keys = ['model']
 [flavors.body]
 body_type = 'json_object'
 `)
-	path := filepath.Join(t.TempDir(), "reference-v2.toml")
+	path := filepath.Join(t.TempDir(), "baseline-reference.toml")
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("write old baseline TOML: %v", err)
 	}

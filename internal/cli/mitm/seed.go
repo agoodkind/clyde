@@ -28,7 +28,7 @@ func newBaselineSeedCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "seed",
 		Short: "Write a v2 MITM baseline from an existing capture transcript",
-		Long: "Seed extracts a v2 wire baseline (reference-v2.toml) " +
+		Long: "Seed extracts a v2 wire baseline (baseline-reference.toml) " +
 			"from a capture transcript JSONL and writes it for the given " +
 			"upstream. The provider filter is derived from the upstream name. " +
 			"Use --include-ua / --exclude-ua to scope which captured caller " +
@@ -51,7 +51,7 @@ func newBaselineSeedCmd(f *cli.Factory) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&upstream, "upstream", "", "Upstream name, e.g. claude-code or codex-cli (required)")
 	cmd.Flags().StringVar(&from, "from", "", "Path to a capture transcript JSONL to extract from (required)")
-	cmd.Flags().StringVar(&output, "output", "", "Baseline file path; defaults to <baseline-root>/<upstream>/reference-v2.toml")
+	cmd.Flags().StringVar(&output, "output", "", "Baseline file path; defaults to <baseline-root>/<upstream>/baseline-reference.toml")
 	cmd.Flags().StringSliceVar(&includeUA, "include-ua", nil, "Only seed from records whose User-Agent contains one of these substrings")
 	cmd.Flags().StringSliceVar(&excludeUA, "exclude-ua", nil, "Drop records whose User-Agent contains one of these substrings")
 	_ = cmd.MarkFlagRequired("upstream")

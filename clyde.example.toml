@@ -377,9 +377,9 @@ drift_log_dir = "~/.local/state/clyde/mitm-drift"
 capture_root = "~/.local/state/clyde/mitm"
 
 [mitm.drift.upstreams.claude-code]
-reference = "~/.local/state/clyde/mitm-baselines/claude-code/reference-v2.toml"
+reference = "~/.local/state/clyde/mitm-baselines/claude-code/baseline-reference.toml"
 include_ua = ["claude-cli"]
 
 [mitm.drift.upstreams.codex-cli]
-reference = "~/.local/state/clyde/mitm-baselines/codex-cli/reference-v2.toml"
+reference = "~/.local/state/clyde/mitm-baselines/codex-cli/baseline-reference.toml"
 include_ua = ["codex_cli_rs", "codex-tui"]
