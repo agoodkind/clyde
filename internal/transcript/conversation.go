@@ -10,17 +10,18 @@ import (
 	"time"
 )
 
-// ToolOnlyMode is part of Clyde's typed adapter surface.
+// ToolOnlyMode controls how ShapeConversation renders turns that contain only
+// tool calls.
 type ToolOnlyMode string
 
 const (
-	// ToolOnlyOmit is part of Clyde's typed adapter surface.
+	// ToolOnlyOmit drops tool-only turns.
 	ToolOnlyOmit ToolOnlyMode = "omit"
-	// ToolOnlyCompactSummary is part of Clyde's typed adapter surface.
+	// ToolOnlyCompactSummary renders one compact line from the tool names.
 	ToolOnlyCompactSummary ToolOnlyMode = "compact_summary"
-	// ToolOnlyInputSummary is part of Clyde's typed adapter surface.
+	// ToolOnlyInputSummary renders tool names and input descriptions when present.
 	ToolOnlyInputSummary ToolOnlyMode = "input_summary"
-	// ToolOnlyFullDetail is part of Clyde's typed adapter surface.
+	// ToolOnlyFullDetail renders tool input JSON and any loaded output text.
 	ToolOnlyFullDetail ToolOnlyMode = "full_detail"
 )
 
