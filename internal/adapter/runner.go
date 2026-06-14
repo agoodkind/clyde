@@ -27,7 +27,7 @@ type Deps struct {
 	// default auth manager.
 	GetAuth func(adapterresolver.ProviderID) adapterprovider.AuthLookup
 	// AnthropicWireBaselinePath is the absolute path to the daemon-owned
-	// MITM v2 baseline (reference-v2.toml) the Anthropic client reads at
+	// MITM v2 baseline (baseline-reference.toml) the Anthropic client reads at
 	// request time to project its outbound wire identity. The daemon
 	// resolves it from [mitm].drift.upstreams["claude-code"].reference,
 	// falling back to the default baseline root. There is no compiled-in
@@ -35,7 +35,7 @@ type Deps struct {
 	// an operator-actionable HTTP 503.
 	AnthropicWireBaselinePath string
 	// CodexWireBaselinePath is the absolute path to the daemon-owned MITM
-	// v2 baseline (reference-v2.toml) the Codex provider reads at request
+	// v2 baseline (baseline-reference.toml) the Codex provider reads at request
 	// time to project its outbound wire identity (originator, openai-beta,
 	// user-agent, beta-features, attestation). The daemon resolves it from
 	// [mitm].drift.upstreams["codex-cli"].reference, falling back to the

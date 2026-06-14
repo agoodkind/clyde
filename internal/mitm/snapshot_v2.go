@@ -3,6 +3,7 @@ package mitm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,6 +14,13 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 )
+
+// errNoSnapshotRecords is the sentinel the snapshot extractor returns when a
+// resolved transcript contains no usable wire records. The drift loop treats
+// this as a warn-and-skip condition rather than an infrastructure failure,
+// because the per-concern MITM wire log holds request-story leg records that
+// the extractor cannot turn into a snapshot.
+var errNoSnapshotRecords = errors.New("mitm snapshot: no usable wire records in transcript")
 
 // SnapshotV2Options configures v2 extraction.
 type SnapshotV2Options struct {
@@ -68,15 +76,15 @@ func ExtractSnapshotV2(path string, opts SnapshotV2Options) (SnapshotV2, error) 
 	return buildSnapshotV2(rawLines, records, opts)
 }
 
-// WriteSnapshotV2TOML persists a v2 snapshot under dir as
-// reference-v2.toml. The filename differs from v1's reference.toml
-// so both can coexist for the same upstream.
+// WriteSnapshotV2TOML persists a snapshot under dir as
+// baseline-reference.toml, the single wire baseline filename for an
+// upstream.
 func WriteSnapshotV2TOML(snap SnapshotV2, dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		slog.Warn("mitm.snapshot_v2.write_mkdir_failed", "concern", "providers.mitm.wire", "dir", dir, "err", err)
 		return "", fmt.Errorf("create v2 snapshot dir %s: %w", dir, err)
 	}
-	out := filepath.Join(dir, "reference-v2.toml")
+	out := filepath.Join(dir, baselineReferenceFilename)
 	raw, err := toml.Marshal(snap)
 	if err != nil {
 		slog.Warn("mitm.snapshot_v2.write_marshal_failed", "concern", "providers.mitm.wire", "path", out, "err", err)
@@ -89,7 +97,7 @@ func WriteSnapshotV2TOML(snap SnapshotV2, dir string) (string, error) {
 	return out, nil
 }
 
-// LoadSnapshotV2TOML reads a reference-v2.toml back into a typed
+// LoadSnapshotV2TOML reads a baseline-reference.toml back into a typed
 // SnapshotV2.
 func LoadSnapshotV2TOML(path string) (SnapshotV2, error) {
 	raw, err := os.ReadFile(path)

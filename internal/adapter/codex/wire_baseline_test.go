@@ -41,7 +41,7 @@ func writeTestCodexWireBaseline(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("WriteSnapshotV2TOML: %v", err)
 	}
-	if filepath.Base(out) != "reference-v2.toml" {
+	if filepath.Base(out) != "baseline-reference.toml" {
 		t.Fatalf("unexpected baseline filename %q", out)
 	}
 	return out
@@ -97,7 +97,7 @@ func testCodexFlavorHeaders() []mitm.V2Header {
 
 // TestCodexWireBaselineProjectsIdentity proves the loader projects the
 // originator, openai-beta, user-agent, beta-features, attestation, and
-// body field order from a reference-v2.toml.
+// body field order from a baseline-reference.toml.
 func TestCodexWireBaselineProjectsIdentity(t *testing.T) {
 	path := writeTestCodexWireBaseline(t)
 	loader := NewWireBaselineLoader()

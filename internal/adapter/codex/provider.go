@@ -37,7 +37,7 @@ type Provider struct {
 	fileLog        FileLogRotationConfig
 	retryPolicies  []adapterretry.Policy
 	// wireBaselinePath is the absolute path to the daemon-owned MITM v2
-	// baseline (reference-v2.toml) for the codex-cli upstream. Empty
+	// baseline (baseline-reference.toml) for the codex-cli upstream. Empty
 	// means no baseline is wired; the egress then uses the compiled-in
 	// identity constants on every request.
 	wireBaselinePath string
@@ -66,7 +66,7 @@ type ProviderOptions struct {
 	// drain or force-close them. Required.
 	WsSessionRegistry *livetrack.Registry[WsSessionMeta]
 	// WireBaselinePath is the absolute path to the daemon-owned MITM v2
-	// baseline (reference-v2.toml) for the codex-cli upstream. The
+	// baseline (baseline-reference.toml) for the codex-cli upstream. The
 	// daemon resolves it from
 	// [mitm].drift.upstreams["codex-cli"].reference, falling back to the
 	// default baseline root. Empty disables baseline-driven identity;

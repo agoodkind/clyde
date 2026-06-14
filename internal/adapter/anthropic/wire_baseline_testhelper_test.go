@@ -69,7 +69,7 @@ func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
 	if err != nil {
 		t.Fatalf("WriteSnapshotV2TOML: %v", err)
 	}
-	if filepath.Base(out) != "reference-v2.toml" {
+	if filepath.Base(out) != "baseline-reference.toml" {
 		t.Fatalf("unexpected baseline filename %q", out)
 	}
 	return out

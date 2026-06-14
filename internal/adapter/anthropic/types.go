@@ -68,7 +68,7 @@ type Config struct {
 	// short-retention diagnostics.
 	WireCaptureMode WireCaptureMode
 	// WireBaselinePath is the absolute path to the daemon-owned MITM v2
-	// baseline (reference-v2.toml) the client reads at request time to
+	// baseline (baseline-reference.toml) the client reads at request time to
 	// project its outbound wire identity. There is no compiled-in
 	// default; the daemon resolves this from
 	// [mitm].drift.upstreams["claude-code"].reference, falling back to

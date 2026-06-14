@@ -30,27 +30,29 @@ func DefaultDriftLogDir() string {
 	return filepath.Join(config.DefaultStateDir(), "mitm-drift")
 }
 
+// baselineReferenceFilename is the single on-disk wire baseline filename
+// for every upstream. The refresher, the seed command, and the adapter
+// loader all read and write this one name.
+const baselineReferenceFilename = "baseline-reference.toml"
+
 // BaselineReferencePath is part of Clyde's typed adapter surface.
-func BaselineReferencePath(root, upstream string, useV2 bool) string {
-	filename := "reference.toml"
-	if useV2 {
-		filename = "reference-v2.toml"
-	}
-	return filepath.Join(root, strings.TrimSpace(upstream), filename)
+func BaselineReferencePath(root, upstream string) string {
+	return filepath.Join(root, strings.TrimSpace(upstream), baselineReferenceFilename)
 }
 
-// ResolveWireBaselinePath returns the absolute path of the v2 wire
-// baseline (reference-v2.toml) for upstream. When configuredReference
-// is non-empty it wins (with a leading "~" expanded to the user's
-// home); otherwise the path is derived from [DefaultBaselineRoot]
-// joined with the upstream's reference-v2.toml. The adapter reads this
-// path at request time to project its outbound wire identity, so the
-// daemon resolves it once and hands it to the adapter.
+// ResolveWireBaselinePath returns the absolute path of the wire
+// baseline (baseline-reference.toml) for upstream. When
+// configuredReference is non-empty it wins (with a leading "~" expanded
+// to the user's home); otherwise the path is derived from
+// [DefaultBaselineRoot] joined with the upstream's
+// baseline-reference.toml. The adapter reads this path at request time
+// to project its outbound wire identity, so the daemon resolves it once
+// and hands it to the adapter.
 func ResolveWireBaselinePath(upstream, configuredReference string) string {
 	if ref := expandHome(strings.TrimSpace(configuredReference)); ref != "" {
 		return ref
 	}
-	return BaselineReferencePath(DefaultBaselineRoot(), upstream, true)
+	return BaselineReferencePath(DefaultBaselineRoot(), upstream)
 }
 
 // FindBaselineReference is part of Clyde's typed adapter surface.
@@ -59,11 +61,9 @@ func FindBaselineReference(root, upstream string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("baseline reference: upstream is required")
 	}
-	for _, useV2 := range []bool{true, false} {
-		path := BaselineReferencePath(root, name, useV2)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path, nil
-		}
+	path := BaselineReferencePath(root, name)
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path, nil
 	}
 	return "", fmt.Errorf("no local MITM baseline for %q under %s; wait for the daemon-owned MITM refresher to create one from live captures or pass --reference", name, filepath.Join(root, name))
 }
