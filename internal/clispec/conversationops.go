@@ -576,8 +576,8 @@ func exportParams() []Param[exportInput] {
 
 	whitespaceParam := EnumParam("whitespace", "preserve, tidy, compact, or dense.", string(conv.WhitespacePreserve), whitespaceValues,
 		func(in *exportInput, v string) { in.Options.Whitespace = conv.WhitespaceMode(v) })
-	whitespaceParam.bindOccurrences = func(in *exportInput, count int) {
-		recordWhitespaceSelection(in, in.Options.Whitespace, count)
+	whitespaceParam.bindChanged = func(in *exportInput, selected bool) {
+		recordWhitespaceSelection(in, in.Options.Whitespace, selected)
 	}
 
 	// shortcut declares a CLI-only presence flag that adds one selector value to
@@ -599,8 +599,8 @@ func exportParams() []Param[exportInput] {
 				in.Options.Whitespace = mode
 			}
 		})
-		param.bindOccurrences = func(in *exportInput, count int) {
-			recordWhitespaceSelection(in, mode, count)
+		param.bindChanged = func(in *exportInput, selected bool) {
+			recordWhitespaceSelection(in, mode, selected)
 		}
 		param.CLIOnly = true
 		return param

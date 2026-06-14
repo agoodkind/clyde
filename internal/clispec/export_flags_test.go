@@ -215,8 +215,6 @@ func TestExportCLIRejectsMultipleWhitespaceSelectors(t *testing.T) {
 	}{
 		{name: "two shortcuts", flags: []string{"--only", "chat", "--dense", "--compact"}},
 		{name: "enum and shortcut", flags: []string{"--only", "chat", "--whitespace", "compact", "--dense"}},
-		{name: "same shortcut twice", flags: []string{"--only", "chat", "--dense", "--dense"}},
-		{name: "same enum twice", flags: []string{"--only", "chat", "--whitespace", "compact", "--whitespace", "compact"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

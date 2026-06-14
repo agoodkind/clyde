@@ -6,8 +6,8 @@ import (
 	conv "goodkind.io/clyde/internal/conversation"
 )
 
-func recordWhitespaceSelection(in *exportInput, mode conv.WhitespaceMode, count int) {
-	for range count {
+func recordWhitespaceSelection(in *exportInput, mode conv.WhitespaceMode, selected bool) {
+	if selected {
 		in.WhitespaceSelections = append(in.WhitespaceSelections, mode)
 	}
 }
