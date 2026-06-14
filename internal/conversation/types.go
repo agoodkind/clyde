@@ -141,6 +141,39 @@ const (
 	WhitespaceDense WhitespaceMode = "dense"
 )
 
+// CompactionExportScope selects how export uses parsed compaction checkpoints.
+type CompactionExportScope string
+
+const (
+	// CompactionExportScopeFull preserves the current full-transcript export.
+	CompactionExportScopeFull CompactionExportScope = "full"
+	// CompactionExportScopeCurrentContext starts from the latest usable checkpoint.
+	CompactionExportScopeCurrentContext CompactionExportScope = "current_context"
+	// CompactionExportScopeFromCheckpoint starts from a selected checkpoint.
+	CompactionExportScopeFromCheckpoint CompactionExportScope = "from_checkpoint"
+)
+
+// CompactionExportDetail selects how much parsed compaction data to render.
+type CompactionExportDetail string
+
+const (
+	// CompactionExportDetailNone renders no compaction block.
+	CompactionExportDetailNone CompactionExportDetail = "none"
+	// CompactionExportDetailSummary renders parsed summary items only.
+	CompactionExportDetailSummary CompactionExportDetail = "summary"
+	// CompactionExportDetailContext renders parsed compacted context items.
+	CompactionExportDetailContext CompactionExportDetail = "context"
+	// CompactionExportDetailFull renders checkpoint metadata and context items.
+	CompactionExportDetailFull CompactionExportDetail = "full"
+)
+
+// CompactionExportOptions configures optional compaction-aware export behavior.
+type CompactionExportOptions struct {
+	Scope            CompactionExportScope
+	Detail           CompactionExportDetail
+	CheckpointNumber int
+}
+
 // ExportOptions configures transcript export. Content names the content kinds
 // to render; the export selects nothing implicitly.
 type ExportOptions struct {
@@ -148,4 +181,5 @@ type ExportOptions struct {
 	HistoryStart int
 	Whitespace   WhitespaceMode
 	Content      ContentKindSet
+	Compaction   CompactionExportOptions
 }

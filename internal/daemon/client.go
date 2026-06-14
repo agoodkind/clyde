@@ -487,6 +487,9 @@ func ExportTranscript(ctx context.Context, conversationID string, options conver
 		IncludeThinking:        options.Content.Has(conversation.ContentKindThinking),
 		IncludeToolCalls:       options.Content.Has(conversation.ContentKindToolCalls),
 		IncludeChat:            options.Content.Has(conversation.ContentKindChat),
+		CompactionScope:        string(options.Compaction.Scope),
+		CompactionDetail:       string(options.Compaction.Detail),
+		CompactionCheckpoint:   int64(options.Compaction.CheckpointNumber),
 	})
 	if err != nil {
 		return nil, daemonRPCError(rpcCtx, "export transcript", err)
