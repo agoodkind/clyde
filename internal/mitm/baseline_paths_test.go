@@ -37,26 +37,32 @@ func TestDefaultMITMStateRootsExpandXDGStateHome(t *testing.T) {
 	}
 }
 
-func TestFindBaselineReferencePrefersV2(t *testing.T) {
+func TestFindBaselineReferenceReturnsBaselineFile(t *testing.T) {
 	root := t.TempDir()
 	upstream := "claude-code"
 	if err := os.MkdirAll(filepath.Join(root, upstream), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	v1 := BaselineReferencePath(root, upstream, false)
-	v2 := BaselineReferencePath(root, upstream, true)
-	if err := os.WriteFile(v1, []byte("v1"), 0o644); err != nil {
-		t.Fatalf("write v1: %v", err)
+	ref := BaselineReferencePath(root, upstream)
+	if filepath.Base(ref) != "baseline-reference.toml" {
+		t.Fatalf("BaselineReferencePath base=%q want baseline-reference.toml", filepath.Base(ref))
 	}
-	if err := os.WriteFile(v2, []byte("v2"), 0o644); err != nil {
-		t.Fatalf("write v2: %v", err)
+	if err := os.WriteFile(ref, []byte("baseline"), 0o644); err != nil {
+		t.Fatalf("write baseline: %v", err)
 	}
 
 	got, err := FindBaselineReference(root, upstream)
 	if err != nil {
 		t.Fatalf("FindBaselineReference: %v", err)
 	}
-	if got != v2 {
-		t.Fatalf("FindBaselineReference()=%q want %q", got, v2)
+	if got != ref {
+		t.Fatalf("FindBaselineReference()=%q want %q", got, ref)
+	}
+}
+
+func TestFindBaselineReferenceMissingErrors(t *testing.T) {
+	root := t.TempDir()
+	if _, err := FindBaselineReference(root, "claude-code"); err == nil {
+		t.Fatal("FindBaselineReference: want error for missing baseline, got nil")
 	}
 }

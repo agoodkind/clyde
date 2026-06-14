@@ -65,7 +65,7 @@ func writeSeedTestTranscript(t *testing.T, dir string) string {
 func TestSeedBaselineWritesRoundTrippableV2Baseline(t *testing.T) {
 	tmp := t.TempDir()
 	transcript := writeSeedTestTranscript(t, tmp)
-	output := filepath.Join(tmp, "out", "reference-v2.toml")
+	output := filepath.Join(tmp, "out", "baseline-reference.toml")
 
 	result, err := SeedBaseline(context.Background(), transcript, "claude-code", output, []string{"claude-cli"}, nil)
 	if err != nil {
