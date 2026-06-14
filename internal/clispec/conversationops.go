@@ -202,6 +202,10 @@ var whitespaceValues = []string{
 	string(conv.WhitespaceDense),
 }
 
+var compactionScopeValues = conv.CompactionExportScopeValues()
+
+var compactionDetailValues = conv.CompactionExportDetailValues()
+
 // listConversationsOp prints one filtered page of Claude and Codex
 // conversation metadata.
 func listConversationsOp() Operation[listConversationsInput, listPayload] {
@@ -553,10 +557,8 @@ func analyzeResultsOp() Operation[analyzeResultsInput, analyzeResultsPayload] {
 	}
 }
 
-// exportParams builds the export operation's parameters: the format and
-// whitespace enums, the CLI-only destination flags (--output and --stdout), the
-// required --only content-kind list, and the per-type shortcut flags that
-// desugar into the same kind set.
+// exportParams builds the export operation's parameters: format, whitespace,
+// destination, content selection, and compaction controls.
 func exportParams() []Param[exportInput] {
 	outputPathParam := StringParam("output", "Write output to path, or use - for stdout.", "", false,
 		func(in *exportInput, v string) { in.OutputPath = v })
@@ -593,6 +595,12 @@ func exportParams() []Param[exportInput] {
 		stdoutParam,
 		IntParam("history_start", "First message index to include.", 0,
 			func(in *exportInput, v int) { in.Options.HistoryStart = v }),
+		EnumParam("compaction_scope", "Compaction scope: full, current_context, or from_checkpoint.", string(conv.CompactionExportScopeFull), compactionScopeValues,
+			func(in *exportInput, v string) { in.Options.Compaction.Scope = conv.CompactionExportScope(v) }),
+		EnumParam("compaction_detail", "Compaction detail: none, summary, context, or full.", "", compactionDetailValues,
+			func(in *exportInput, v string) { in.Options.Compaction.Detail = conv.CompactionExportDetail(v) }),
+		IntParam("compaction_checkpoint", "1-based compaction number for from_checkpoint scope.", 0,
+			func(in *exportInput, v int) { in.Options.Compaction.CheckpointNumber = v }),
 		onlyParam,
 		shortcut("chat", "chat", "Include conversation chat text."),
 		shortcut("thinking", "thinking", "Include assistant thinking blocks."),
@@ -614,9 +622,11 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
-		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, or pass --stdout or --output - to write the export body directly to stdout for piping. The MCP tool returns the body as text.",
+		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. Use --compaction-scope to export the full transcript, the current context after the latest usable compaction, or the tail after a selected compaction. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, or pass --stdout or --output - to write the export body directly to stdout for piping. The MCP tool returns the body as text.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
+			"clyde conversation export claude:1a2b3c --only chat --compaction-scope current_context --stdout",
+			"clyde conversation export claude:1a2b3c --only chat --compaction-scope from_checkpoint --compaction-checkpoint 2 --compaction-detail summary",
 			"clyde conversation export claude:1a2b3c --thinking --tools --stdout",
 			"clyde conversation export claude:1a2b3c --all --output - | pbcopy",
 			"clyde conversation export claude:1a2b3c --all",
@@ -637,6 +647,11 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 					HistoryStart: 0,
 					Whitespace:   conv.WhitespacePreserve,
 					Content:      conv.NewContentKindSet(),
+					Compaction: conv.CompactionExportOptions{
+						Scope:            conv.CompactionExportScopeFull,
+						Detail:           "",
+						CheckpointNumber: 0,
+					},
 				},
 			}
 		},
@@ -648,6 +663,14 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 				return exportPayload{}, fmt.Errorf("select content kinds: %w", err)
 			}
 			in.Options.Content = content
+			compactionOptions, err := conv.NormalizeCompactionExportOptions(
+				in.Options.Compaction,
+				in.Options.HistoryStart,
+			)
+			if err != nil {
+				return exportPayload{}, fmt.Errorf("select compaction controls: %w", err)
+			}
+			in.Options.Compaction = compactionOptions
 			if in.Stdout && in.OutputPath != "" && in.OutputPath != "-" {
 				return exportPayload{}, fmt.Errorf("select output destination: --stdout cannot be combined with --output %q", in.OutputPath)
 			}

@@ -1726,6 +1726,9 @@ type ExportTranscriptRequest struct {
 	IncludeToolCalls       bool                   `protobuf:"varint,9,opt,name=include_tool_calls,json=includeToolCalls,proto3" json:"include_tool_calls,omitempty"`
 	IncludeChat            bool                   `protobuf:"varint,10,opt,name=include_chat,json=includeChat,proto3" json:"include_chat,omitempty"`
 	IncludeSystemMessages  bool                   `protobuf:"varint,11,opt,name=include_system_messages,json=includeSystemMessages,proto3" json:"include_system_messages,omitempty"`
+	CompactionScope        string                 `protobuf:"bytes,12,opt,name=compaction_scope,json=compactionScope,proto3" json:"compaction_scope,omitempty"`
+	CompactionDetail       string                 `protobuf:"bytes,13,opt,name=compaction_detail,json=compactionDetail,proto3" json:"compaction_detail,omitempty"`
+	CompactionCheckpoint   int64                  `protobuf:"varint,14,opt,name=compaction_checkpoint,json=compactionCheckpoint,proto3" json:"compaction_checkpoint,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1835,6 +1838,27 @@ func (x *ExportTranscriptRequest) GetIncludeSystemMessages() bool {
 		return x.IncludeSystemMessages
 	}
 	return false
+}
+
+func (x *ExportTranscriptRequest) GetCompactionScope() string {
+	if x != nil {
+		return x.CompactionScope
+	}
+	return ""
+}
+
+func (x *ExportTranscriptRequest) GetCompactionDetail() string {
+	if x != nil {
+		return x.CompactionDetail
+	}
+	return ""
+}
+
+func (x *ExportTranscriptRequest) GetCompactionCheckpoint() int64 {
+	if x != nil {
+		return x.CompactionCheckpoint
+	}
+	return 0
 }
 
 type ExportTranscriptResponse struct {
@@ -2319,7 +2343,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\tresult_id\x18\x01 \x01(\tR\bresultId\x12\x16\n" +
 	"\x06prompt\x18\x02 \x01(\tR\x06prompt\"2\n" +
 	"\x1cAnalyzeSearchResultsResponse\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"\xf6\x03\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"\x83\x05\n" +
 	"\x17ExportTranscriptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x16\n" +
 	"\x06format\x18\x02 \x01(\tR\x06format\x12\x1e\n" +
@@ -2334,7 +2358,10 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x12include_tool_calls\x18\t \x01(\bR\x10includeToolCalls\x12!\n" +
 	"\finclude_chat\x18\n" +
 	" \x01(\bR\vincludeChat\x126\n" +
-	"\x17include_system_messages\x18\v \x01(\bR\x15includeSystemMessages\".\n" +
+	"\x17include_system_messages\x18\v \x01(\bR\x15includeSystemMessages\x12)\n" +
+	"\x10compaction_scope\x18\f \x01(\tR\x0fcompactionScope\x12+\n" +
+	"\x11compaction_detail\x18\r \x01(\tR\x10compactionDetail\x123\n" +
+	"\x15compaction_checkpoint\x18\x0e \x01(\x03R\x14compactionCheckpoint\".\n" +
 	"\x18ExportTranscriptResponse\x12\x12\n" +
 	"\x04body\x18\x01 \x01(\fR\x04body\"\xc0\x01\n" +
 	"\x13ConversationLineage\x12\x12\n" +
