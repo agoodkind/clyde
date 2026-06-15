@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/gklog"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -377,6 +379,93 @@ func TestSetupWithPolicyWritesInventoryIndexSink(t *testing.T) {
 	assertLogMissing(t, inventoryPath, "req-skip")
 }
 
+func TestInventoryIndexHandlerReusesRotatingWriter(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	policy := InventoryPolicy{
+		Enabled: true,
+		Root:    filepath.Join(root, "logs", "inventory"),
+		Rotation: RotationPolicy{
+			Enabled:    true,
+			MaxSizeMB:  1,
+			MaxBackups: 2,
+			MaxAgeDays: 1,
+			Compress:   new(false),
+		},
+	}
+	handler := buildInventoryIndexHandler(policy, filepath.Join(root, "logs"), slog.LevelInfo)
+	inventoryHandler := handler.(*inventoryFilterHandler)
+	writerFactory := &countingInventoryWriterFactory{}
+	inventoryHandler.state.writerFactory = writerFactory.newWriter
+	logger := slog.New(inventoryHandler)
+
+	const eventCount = 25
+	for i := range eventCount {
+		logger.Info(
+			"logging.request.leg",
+			"request_id", fmt.Sprintf("req-rotated-%d", i),
+			"sinks", []logevent.SinkName{logevent.SinkInventory},
+		)
+	}
+
+	if got := writerFactory.createdCount(); got != 1 {
+		t.Fatalf("writer create count = %d, want 1", got)
+	}
+	writer := writerFactory.onlyWriter(t)
+	if got := writer.writeCount(); got != eventCount {
+		t.Fatalf("writer write count = %d, want %d", got, eventCount)
+	}
+}
+
+func TestInventoryIndexHandlerCloseClosesCachedWriterOnce(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	policy := InventoryPolicy{
+		Enabled: true,
+		Root:    filepath.Join(root, "logs", "inventory"),
+		Rotation: RotationPolicy{
+			Enabled:    true,
+			MaxSizeMB:  1,
+			MaxBackups: 2,
+			MaxAgeDays: 1,
+			Compress:   new(false),
+		},
+	}
+	handler := buildInventoryIndexHandler(policy, filepath.Join(root, "logs"), slog.LevelInfo)
+	inventoryHandler := handler.(*inventoryFilterHandler)
+	writerFactory := &countingInventoryWriterFactory{}
+	inventoryHandler.state.writerFactory = writerFactory.newWriter
+	logger := slog.New(inventoryHandler)
+
+	logger.Info(
+		"logging.request.leg",
+		"request_id", "req-before-close",
+		"sinks", []logevent.SinkName{logevent.SinkInventory},
+	)
+	writer := writerFactory.onlyWriter(t)
+
+	if err := inventoryHandler.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := inventoryHandler.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if got := writer.closeCount(); got != 1 {
+		t.Fatalf("writer close count = %d, want 1", got)
+	}
+	logger.Info(
+		"logging.request.leg",
+		"request_id", "req-after-close",
+		"sinks", []logevent.SinkName{logevent.SinkInventory},
+	)
+	if got := writer.writeCount(); got != 1 {
+		t.Fatalf("writer write count after close = %d, want 1", got)
+	}
+	if inventoryHandler.Enabled(context.Background(), slog.LevelInfo) {
+		t.Fatal("closed inventory handler should not be enabled")
+	}
+}
+
 func TestInventoryIndexHandlerWritesValidJSONLUnderConcurrentOverlap(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -460,6 +549,77 @@ func TestInventoryIndexHandlerWritesValidJSONLUnderConcurrentOverlap(t *testing.
 			t.Fatalf("line %d invalid json: %v\n%s", index+1, err, line)
 		}
 	}
+}
+
+type countingInventoryWriterFactory struct {
+	mu          sync.Mutex
+	createCount int
+	writers     []*countingInventoryWriter
+}
+
+func (f *countingInventoryWriterFactory) newWriter(_ string, _ gklog.RotationConfig, _ bool) (io.WriteCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	writer := &countingInventoryWriter{}
+	f.createCount++
+	f.writers = append(f.writers, writer)
+	return writer, nil
+}
+
+func (f *countingInventoryWriterFactory) createdCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.createCount
+}
+
+func (f *countingInventoryWriterFactory) onlyWriter(t *testing.T) *countingInventoryWriter {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.writers) != 1 {
+		t.Fatalf("writer count = %d, want 1", len(f.writers))
+	}
+	return f.writers[0]
+}
+
+type countingInventoryWriter struct {
+	mu     sync.Mutex
+	writes int
+	closes int
+	closed bool
+}
+
+func (w *countingInventoryWriter) Write(record []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return 0, fmt.Errorf("write after close")
+	}
+	w.writes++
+	return len(record), nil
+}
+
+func (w *countingInventoryWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.closed = true
+	w.closes++
+	return nil
+}
+
+func (w *countingInventoryWriter) writeCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writes
+}
+
+func (w *countingInventoryWriter) closeCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closes
 }
 
 func assertLogContains(t *testing.T, path string, needle string) {
