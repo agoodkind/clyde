@@ -314,8 +314,8 @@ func TestExportPrepareCompactionControls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare rejected current_context: %v", err)
 	}
-	if payload.Options.Compaction.Detail != conv.CompactionExportDetailContext {
-		t.Fatalf("detail = %q, want context", payload.Options.Compaction.Detail)
+	if payload.Options.Compaction.Detail != conv.CompactionExportDetailFull {
+		t.Fatalf("detail = %q, want full", payload.Options.Compaction.Detail)
 	}
 
 	fromCheckpoint := op.New()

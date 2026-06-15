@@ -20,6 +20,11 @@ func TestExportFullScopeDoesNotLoadSystemCompactionMessages(t *testing.T) {
 		HistoryStart: 0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat),
+		Compaction: CompactionExportOptions{
+			Scope:            CompactionExportScopeFull,
+			Detail:           "",
+			CheckpointNumber: 0,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
@@ -36,6 +41,43 @@ func TestExportFullScopeDoesNotLoadSystemCompactionMessages(t *testing.T) {
 	}
 	if !strings.Contains(text, "tail after latest") {
 		t.Fatalf("full export text = %q, want visible tail", text)
+	}
+}
+
+func TestExportDefaultUsesLatestCompactionFullDetail(t *testing.T) {
+	t.Parallel()
+	idx, record, loadOptions := newCompactionExportIndex()
+
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+	})
+	if err != nil {
+		t.Fatalf("Export returned error: %v", err)
+	}
+	if len(*loadOptions) != 1 {
+		t.Fatalf("load options calls = %d, want 1", len(*loadOptions))
+	}
+	if !(*loadOptions)[0].IncludeSystemMessages {
+		t.Fatalf("default current context export did not load system messages")
+	}
+	text := string(body)
+	for _, want := range []string{
+		"Compaction 3 Full Details",
+		"latest boundary context",
+		"latest summary context",
+		"tail after latest",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("default current context export missing %q in:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"tail after first", "tail after micro", "latest boundary text"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("default current context export included %q in:\n%s", unwanted, text)
+		}
 	}
 }
 
@@ -65,7 +107,7 @@ func TestExportCurrentContextUsesLatestUsableCompaction(t *testing.T) {
 	}
 	text := string(body)
 	for _, want := range []string{
-		"Compaction 3 Context",
+		"Compaction 3 Full Details",
 		"latest boundary context",
 		"latest summary context",
 		"tail after latest",

@@ -34,7 +34,7 @@ func NormalizeCompactionExportOptions(
 	historyStart int,
 ) (CompactionExportOptions, error) {
 	if options.Scope == "" {
-		options.Scope = CompactionExportScopeFull
+		options.Scope = CompactionExportScopeCurrentContext
 	}
 	if !validCompactionScope(options.Scope) {
 		return CompactionExportOptions{}, fmt.Errorf(
@@ -96,7 +96,7 @@ func NormalizeCompactionExportOptions(
 func defaultCompactionDetail(scope CompactionExportScope) CompactionExportDetail {
 	switch scope {
 	case CompactionExportScopeCurrentContext, CompactionExportScopeFromCheckpoint:
-		return CompactionExportDetailContext
+		return CompactionExportDetailFull
 	case CompactionExportScopeFull, "":
 		fallthrough
 	default:
