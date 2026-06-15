@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
-	"syscall"
 
 	"goodkind.io/gklog"
 )
@@ -21,11 +21,16 @@ const (
 	inventorySinkAttrName  = "sinks"
 )
 
+type inventoryWriterFactory func(path string, rotation gklog.RotationConfig, rotationEnabled bool) (io.WriteCloser, error)
+
 type inventoryFilterState struct {
+	mu              sync.Mutex
 	path            string
 	level           slog.Level
 	rotation        gklog.RotationConfig
 	rotationEnabled bool
+	writer          io.WriteCloser
+	writerFactory   inventoryWriterFactory
 	closed          atomic.Bool
 }
 
@@ -56,10 +61,13 @@ func buildInventoryIndexHandler(policy InventoryPolicy, concernRoot string, leve
 		attrs:  nil,
 		groups: nil,
 		state: &inventoryFilterState{
+			mu:              sync.Mutex{},
 			path:            path,
 			level:           level,
 			rotation:        rotation,
 			rotationEnabled: policy.Rotation.Enabled,
+			writer:          nil,
+			writerFactory:   newInventoryIndexWriter,
 			closed:          atomic.Bool{},
 		},
 	}
@@ -69,7 +77,20 @@ func (h *inventoryFilterHandler) Close() error {
 	if h == nil || h.state == nil {
 		return nil
 	}
-	h.state.closed.Store(true)
+	if h.state.closed.Swap(true) {
+		return nil
+	}
+	h.state.mu.Lock()
+	defer h.state.mu.Unlock()
+	if h.state.writer == nil {
+		return nil
+	}
+	err := h.state.writer.Close()
+	h.state.writer = nil
+	if err != nil {
+		slog.Warn("slogger.inventory_index.close_failed", "component", "slogger", "path", h.state.path, "err", err)
+		return fmt.Errorf("close inventory index writer: %w", err)
+	}
 	return nil
 }
 
@@ -173,69 +194,26 @@ func shouldDedupeInventoryAttr(key string) bool {
 }
 
 func (h *inventoryFilterHandler) write(record []byte) error {
+	h.state.mu.Lock()
+	defer h.state.mu.Unlock()
+	if h.state.closed.Load() {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(h.state.path), 0o755); err != nil {
 		slog.Warn("slogger.inventory_index.mkdir_failed", "component", "slogger", "path", filepath.Dir(h.state.path), "err", err)
 		return fmt.Errorf("create inventory index dir: %w", err)
 	}
-	lock, err := lockInventoryIndex(h.state.path)
-	if err != nil {
-		return err
-	}
-	defer unlockInventoryIndex(lock)
-	if h.state.rotationEnabled {
-		writer := gklog.NewLumberjackWriterWithConfig(h.state.path, h.state.rotation)
-		defer func() { _ = writer.Close() }()
-		if _, err := writer.Write(record); err != nil {
-			slog.Warn("slogger.inventory_index.write_rotated_failed", "component", "slogger", "path", h.state.path, "err", err)
-			return fmt.Errorf("write rotated inventory index event: %w", err)
+	if h.state.writer == nil {
+		writer, err := h.state.writerFactory(h.state.path, h.state.rotation, h.state.rotationEnabled)
+		if err != nil {
+			slog.Warn("slogger.inventory_index.open_failed", "component", "slogger", "path", h.state.path, "err", err)
+			return fmt.Errorf("open inventory index writer: %w", err)
 		}
-		return nil
+		h.state.writer = writer
 	}
-	file, err := os.OpenFile(h.state.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		slog.Warn("slogger.inventory_index.open_failed", "component", "slogger", "path", h.state.path, "err", err)
-		return fmt.Errorf("open inventory index: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	if _, err := file.Write(record); err != nil {
+	if _, err := h.state.writer.Write(record); err != nil {
 		slog.Warn("slogger.inventory_index.write_failed", "component", "slogger", "path", h.state.path, "err", err)
 		return fmt.Errorf("write inventory index event: %w", err)
-	}
-	return nil
-}
-
-func lockInventoryIndex(path string) (*os.File, error) {
-	lockPath := path + ".lock"
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		slog.Warn("slogger.inventory_index.lock_open_failed", "component", "slogger", "path", lockPath, "err", err)
-		return nil, fmt.Errorf("open inventory index lock: %w", err)
-	}
-	if err := flockInventoryFile(file, syscall.LOCK_EX); err != nil {
-		_ = file.Close()
-		slog.Warn("slogger.inventory_index.lock_failed", "component", "slogger", "path", lockPath, "err", err)
-		return nil, fmt.Errorf("acquire inventory index lock: %w", err)
-	}
-	return file, nil
-}
-
-func unlockInventoryIndex(file *os.File) {
-	if file == nil {
-		return
-	}
-	_ = flockInventoryFile(file, syscall.LOCK_UN)
-	_ = file.Close()
-}
-
-func flockInventoryFile(file *os.File, how int) error {
-	fileDescriptor, err := strconv.Atoi(strconv.FormatUint(uint64(file.Fd()), 10))
-	if err != nil {
-		slog.Warn("slogger.inventory_index.lock_fd_failed", "component", "slogger", "err", err)
-		return fmt.Errorf("convert inventory index lock file descriptor: %w", err)
-	}
-	if err := syscall.Flock(fileDescriptor, how); err != nil {
-		slog.Warn("slogger.inventory_index.flock_failed", "component", "slogger", "err", err)
-		return fmt.Errorf("flock inventory index lock file: %w", err)
 	}
 	return nil
 }
@@ -245,4 +223,24 @@ func attrCarriesInventorySink(attr slog.Attr) bool {
 		return false
 	}
 	return strings.Contains(attr.Value.String(), inventoryIndexSinkName)
+}
+
+func newInventoryIndexWriter(path string, rotation gklog.RotationConfig, rotationEnabled bool) (io.WriteCloser, error) {
+	if rotationEnabled {
+		writer := gklog.NewLockedWriteCloser(path, gklog.NewLumberjackWriterWithConfig(path, rotation))
+		return requireInventoryIndexWriter(path, writer)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		slog.Warn("slogger.inventory_index.open_failed", "component", "slogger", "path", path, "err", err)
+		return nil, fmt.Errorf("open inventory index: %w", err)
+	}
+	return requireInventoryIndexWriter(path, gklog.NewLockedWriteCloser(path, file))
+}
+
+func requireInventoryIndexWriter(path string, writer io.WriteCloser) (io.WriteCloser, error) {
+	if writer == nil {
+		return nil, fmt.Errorf("inventory index writer is nil for %s", path)
+	}
+	return writer, nil
 }
