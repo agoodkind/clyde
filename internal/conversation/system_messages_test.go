@@ -187,6 +187,11 @@ func TestExportDoesNotOptIntoSystemMessages(t *testing.T) {
 		HistoryStart: 0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat, ContentKindSystemPrompts),
+		Compaction: CompactionExportOptions{
+			Scope:            CompactionExportScopeFull,
+			Detail:           "",
+			CheckpointNumber: 0,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
@@ -209,6 +214,11 @@ func TestExportJSONCanOptIntoSystemMessagesAndCheckpoints(t *testing.T) {
 		HistoryStart: 0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat, ContentKindSystemMessages, ContentKindRawJSONMetadata),
+		Compaction: CompactionExportOptions{
+			Scope:            CompactionExportScopeFull,
+			Detail:           "",
+			CheckpointNumber: 0,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)

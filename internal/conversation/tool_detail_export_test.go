@@ -116,6 +116,11 @@ func TestExportToolDetailLevels(t *testing.T) {
 				HistoryStart: 0,
 				Whitespace:   WhitespacePreserve,
 				Content:      tc.content,
+				Compaction: CompactionExportOptions{
+					Scope:            CompactionExportScopeFull,
+					Detail:           "",
+					CheckpointNumber: 0,
+				},
 			})
 			if err != nil {
 				t.Fatalf("Export returned error: %v", err)
