@@ -2,6 +2,7 @@ package mitm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 )
@@ -43,10 +45,12 @@ func isWebsocketUpgrade(r *http.Request) bool {
 // with the error message in the close field.
 func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider string, upstream string) {
 	cfg := p.config()
+	started := clock.Now()
 	upstreamURL := wsUpstreamURL(upstream, r.URL.RequestURI())
 	upstreamHeaders := wsUpstreamHeaders(r.Header)
 	requestContentType := r.Header.Get("Content-Type")
 	recorder := p.beginWSLogRecorder(r, provider, upstreamURL)
+	captureStoreRecorder := newWSCaptureStoreRecorder(p.captureBodyCap(cfg))
 	clientFacet := extractIdentityContribution(r.Host, r.URL.Path, r.Header).Facet
 	ctx := r.Context()
 
@@ -86,11 +90,12 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	}
 	closeBoth := wsCloseBoth(state, clientConn, upstreamConn)
 	relay := p.wsMakeRelay(ctx, wsRelayParams{
-		state:      state,
-		closeBoth:  closeBoth,
-		recorder:   recorder,
-		captureDir: cfg.CaptureDir,
-		session:    nil,
+		state:                state,
+		closeBoth:            closeBoth,
+		recorder:             recorder,
+		captureDir:           cfg.CaptureDir,
+		captureStoreRecorder: captureStoreRecorder,
+		session:              nil,
 	})
 	go func() {
 		defer func() {
@@ -114,6 +119,13 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	p.emitWSForwardLogLeg(ctx, recorder, cfg.CaptureDir, requestContentType, responseContentType, clientFacet)
 	p.recordWSEnd(ctx, recorder, cfg.CaptureDir, state.messageCount, state.closeErr)
 	p.emitWSCompleteLogLeg(ctx, recorder, cfg.CaptureDir, requestContentType, responseContentType, clientFacet)
+	p.recordWSCaptureStore(r, upstreamRespHeaders, wsCaptureStoreInput{
+		recorder: captureStoreRecorder,
+		provider: provider,
+		host:     r.Host,
+		status:   upstreamStatus,
+		started:  started,
+	})
 	if recorder != nil {
 		recorder.Complete(ctx)
 	}
@@ -123,11 +135,13 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 
 func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client net.Conn, reader *bufio.Reader, writer *bufio.Writer, r *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
 	cfg := p.config()
+	started := clock.Now()
 	providerID := provider.ID().String()
 	upstreamURL := wsUpstreamURL("https://"+target, r.URL.RequestURI())
 	upstreamHeaders := wsUpstreamHeaders(r.Header)
 	requestContentType := r.Header.Get("Content-Type")
 	recorder := p.beginWSLogRecorder(r, providerID, upstreamURL)
+	captureStoreRecorder := newWSCaptureStoreRecorder(p.captureBodyCap(cfg))
 	clientFacet := provider.ExtractIdentity(r.Header).Facet
 
 	p.emitWSInitialLogLegs(ctx, recorder, cfg.CaptureDir, requestContentType, clientFacet)
@@ -175,11 +189,12 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 	}
 	closeBoth := wsCloseBoth(state, clientConn, upstreamConn)
 	relay := p.wsMakeRelay(ctx, wsRelayParams{
-		state:      state,
-		closeBoth:  closeBoth,
-		recorder:   recorder,
-		captureDir: cfg.CaptureDir,
-		session:    parent,
+		state:                state,
+		closeBoth:            closeBoth,
+		recorder:             recorder,
+		captureDir:           cfg.CaptureDir,
+		captureStoreRecorder: captureStoreRecorder,
+		session:              parent,
 	})
 	go func() {
 		defer func() {
@@ -203,6 +218,13 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 	p.emitWSForwardLogLeg(ctx, recorder, cfg.CaptureDir, requestContentType, responseContentType, clientFacet)
 	p.recordWSEnd(ctx, recorder, cfg.CaptureDir, state.messageCount, state.closeErr)
 	p.emitWSCompleteLogLeg(ctx, recorder, cfg.CaptureDir, requestContentType, responseContentType, clientFacet)
+	p.recordWSCaptureStore(r, upstreamRespHeaders, wsCaptureStoreInput{
+		recorder: captureStoreRecorder,
+		provider: providerID,
+		host:     host,
+		status:   upstreamStatus,
+		started:  started,
+	})
 	if recorder != nil {
 		recorder.Complete(ctx)
 	}
@@ -261,10 +283,11 @@ func wsCloseBoth(state *wsRelayState, clientConn, upstreamConn *websocket.Conn) 
 }
 
 type wsRelayParams struct {
-	state      *wsRelayState
-	closeBoth  func(error)
-	recorder   *logevent.Recorder
-	captureDir string
+	state                *wsRelayState
+	closeBoth            func(error)
+	recorder             *logevent.Recorder
+	captureDir           string
+	captureStoreRecorder *wsCaptureStoreRecorder
 	// session, when non-nil, has its activity timestamp refreshed
 	// after every successful ReadMessage and WriteMessage so the
 	// daemon reload-drain idle-grace fast-path can tell an actively
@@ -312,9 +335,96 @@ func (p *Proxy) wsMakeRelay(ctx context.Context, params wsRelayParams) func(src,
 				params.closeBoth(err)
 				return
 			}
+			params.captureStoreRecorder.add(payload, fromClient)
 			params.session.Touch()
 		}
 	}
+}
+
+type wsCaptureStoreInput struct {
+	recorder *wsCaptureStoreRecorder
+	provider string
+	host     string
+	status   int
+	started  time.Time
+}
+
+func (p *Proxy) recordWSCaptureStore(r *http.Request, responseHeader http.Header, in wsCaptureStoreInput) {
+	requestBody, responseBody := in.recorder.bodies()
+	p.recordCaptureStore(r, responseHeader, captureStoreInput{
+		provider:     in.provider,
+		host:         in.host,
+		method:       "WEBSOCKET",
+		path:         r.URL.Path,
+		status:       in.status,
+		requestBody:  requestBody,
+		responseBody: responseBody,
+		duration:     clock.Since(in.started),
+	})
+}
+
+// wsCaptureStoreRecorder accumulates bridged websocket payloads for one
+// capture-store row. It mirrors the adapter Codex websocket capture shape:
+// client frames become the request body and upstream frames become the response
+// body, each newline-delimited and capped before persistence.
+type wsCaptureStoreRecorder struct {
+	mu       sync.Mutex
+	request  bytes.Buffer
+	response bytes.Buffer
+	capBytes int
+}
+
+func newWSCaptureStoreRecorder(capBytes int) *wsCaptureStoreRecorder {
+	if capBytes <= 0 {
+		capBytes = defaultCaptureBodyCap
+	}
+	return &wsCaptureStoreRecorder{
+		mu:       sync.Mutex{},
+		request:  bytes.Buffer{},
+		response: bytes.Buffer{},
+		capBytes: capBytes,
+	}
+}
+
+func (r *wsCaptureStoreRecorder) add(payload []byte, fromClient bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if fromClient {
+		appendCappedWSFrame(&r.request, payload, r.capBytes)
+		return
+	}
+	appendCappedWSFrame(&r.response, payload, r.capBytes)
+}
+
+func appendCappedWSFrame(dst *bytes.Buffer, payload []byte, capBytes int) {
+	if dst.Len() >= capBytes {
+		return
+	}
+	if dst.Len() > 0 {
+		if dst.Len()+1 > capBytes {
+			return
+		}
+		dst.WriteByte('\n')
+	}
+	remaining := capBytes - dst.Len()
+	if len(payload) > remaining {
+		payload = payload[:remaining]
+	}
+	dst.Write(payload)
+}
+
+func (r *wsCaptureStoreRecorder) bodies() ([]byte, []byte) {
+	if r == nil {
+		return nil, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	requestBody := append([]byte(nil), r.request.Bytes()...)
+	responseBody := append([]byte(nil), r.response.Bytes()...)
+	return requestBody, responseBody
 }
 
 // wsHandleRelayPanic logs a recovered panic from one of the relay
