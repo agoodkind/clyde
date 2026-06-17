@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +23,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/slogger"
 )
 
@@ -69,7 +73,17 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	defer upstream.Close()
 
 	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = store.Close(context.Background(), "test cleanup")
+	})
 	p := newProxyForTest(t, config.MITMConfig{CaptureDir: dir})
+	p.store = store
+	p.client = "test"
 	// Reroute the codex chatgpt upstream to the test server for the
 	// duration of this test.
 	defer overrideChatGPTUpstream(t, upstream.URL)()
@@ -95,7 +109,8 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 		defer resp.Body.Close()
 	}
 
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create"}`)); err != nil {
+	requestFrame := []byte(`{"type":"response.create"}`)
+	if err := conn.WriteMessage(websocket.TextMessage, requestFrame); err != nil {
 		t.Fatalf("write client frame: %v", err)
 	}
 	_, raw, err := conn.ReadMessage()
@@ -169,6 +184,11 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	if phases[string(logevent.PhaseCompleted)] < 2 {
 		t.Errorf("expected websocket completed records, got phases=%v directions=%v", phases, directions)
 	}
+
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	assertWebsocketCaptureStoreRow(t, dbPath, requestFrame, raw)
 }
 
 func TestProxyWebsocketCaptureBridgesCodexRemoteControlPath(t *testing.T) {
@@ -244,6 +264,72 @@ func waitForWebsocketHandler(t *testing.T, done <-chan struct{}) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("websocket handler did not finish after client close")
+	}
+}
+
+func assertWebsocketCaptureStoreRow(t *testing.T, dbPath string, wantRequest []byte, wantResponse []byte) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open verifier db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var (
+		rowID     int64
+		client    string
+		provider  string
+		method    string
+		path      string
+		status    int
+		reqBytes  int
+		respBytes int
+	)
+	row := db.QueryRow(`
+		SELECT id, client, provider, method, path, status, req_bytes, resp_bytes
+		FROM requests
+		WHERE path='/backend-api/codex/responses'
+		ORDER BY ts DESC
+		LIMIT 1
+	`)
+	if err := row.Scan(&rowID, &client, &provider, &method, &path, &status, &reqBytes, &respBytes); err != nil {
+		t.Fatalf("scan websocket capture row: %v", err)
+	}
+	if client != "test" {
+		t.Fatalf("client = %q want test", client)
+	}
+	if provider != "codex" {
+		t.Fatalf("provider = %q want codex", provider)
+	}
+	if method != "WEBSOCKET" {
+		t.Fatalf("method = %q want WEBSOCKET", method)
+	}
+	if path != "/backend-api/codex/responses" {
+		t.Fatalf("path = %q want /backend-api/codex/responses", path)
+	}
+	if status != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d want %d", status, http.StatusSwitchingProtocols)
+	}
+	if reqBytes != len(wantRequest) {
+		t.Fatalf("req_bytes = %d want %d", reqBytes, len(wantRequest))
+	}
+	if respBytes != len(wantResponse) {
+		t.Fatalf("resp_bytes = %d want %d", respBytes, len(wantResponse))
+	}
+
+	var storedRequest []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='request'`, rowID).Scan(&storedRequest); err != nil {
+		t.Fatalf("scan request body: %v", err)
+	}
+	if !bytes.Equal(storedRequest, wantRequest) {
+		t.Fatalf("stored request body = %q want %q", storedRequest, wantRequest)
+	}
+	var storedResponse []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=? AND which='response'`, rowID).Scan(&storedResponse); err != nil {
+		t.Fatalf("scan response body: %v", err)
+	}
+	if !bytes.Equal(storedResponse, wantResponse) {
+		t.Fatalf("stored response body = %q want %q", storedResponse, wantResponse)
 	}
 }
 
