@@ -16,6 +16,9 @@ permissions:
 jobs:
   go:
     uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
+    permissions:
+      contents: read
+      id-token: write
 
   project-test:
     name: Project Race Tests
