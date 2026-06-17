@@ -33,11 +33,23 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 		return nil, err
 	}
 	if compactionScoped {
-		body, err := renderCompactionScopedExport(record, messages, options)
+		selection, err := selectCompactionExportCheckpoint(
+			CompactionCheckpoints(messages),
+			options.Compaction,
+		)
 		if err != nil {
 			return nil, err
 		}
-		return compressWhitespace(body, options.Format, options.Whitespace), nil
+		if selection != nil {
+			body, err := renderCompactionScopedSelection(record, messages, options, *selection)
+			if err != nil {
+				return nil, err
+			}
+			return compressWhitespace(body, options.Format, options.Whitespace), nil
+		}
+		// current_context with no usable checkpoint: fall through to the
+		// full-transcript render below. filterMessages drops the system
+		// compaction messages the scoped load forced in.
 	}
 	messages = filterMessages(messages, options)
 	if options.Format == ExportFormatJSON && !options.Content.Has(ContentKindRawJSONMetadata) {
@@ -168,18 +180,12 @@ func renderRawJSON(
 	return append(body, '\n'), nil
 }
 
-func renderCompactionScopedExport(
+func renderCompactionScopedSelection(
 	record Record,
 	messages []transcript.Message,
 	options ExportOptions,
+	selection compactionExportSelection,
 ) ([]byte, error) {
-	selection, err := selectCompactionExportCheckpoint(
-		CompactionCheckpoints(messages),
-		options.Compaction,
-	)
-	if err != nil {
-		return nil, err
-	}
 	tailStart := min(selection.TailStart, len(messages))
 	tailMessages := filterMessages(messages[tailStart:], options)
 	if options.Format == ExportFormatJSON && !options.Content.Has(ContentKindRawJSONMetadata) {
@@ -189,32 +195,38 @@ func renderCompactionScopedExport(
 	return renderMessagesWithCompaction(record, tailMessages, options, compactionBlock)
 }
 
+// selectCompactionExportCheckpoint chooses the checkpoint to scope export to.
+// A nil selection with a nil error means current_context found no usable
+// checkpoint, so the caller falls back to a full-transcript render, since an
+// uncompacted conversation's current context is its whole transcript.
+// from_checkpoint stays strict: an explicitly requested missing checkpoint is
+// a real error.
 func selectCompactionExportCheckpoint(
 	checkpoints []CompactionCheckpoint,
 	options CompactionExportOptions,
-) (compactionExportSelection, error) {
+) (*compactionExportSelection, error) {
 	switch options.Scope {
 	case CompactionExportScopeCurrentContext:
 		for i, checkpoint := range slices.Backward(checkpoints) {
 			if checkpoint.HasUsableCompactedContext() {
-				return compactionExportSelection{
+				return &compactionExportSelection{
 					Number:     i + 1,
 					Checkpoint: checkpoint,
 					TailStart:  checkpointTailStart(checkpoint),
 				}, nil
 			}
 		}
-		return compactionExportSelection{}, fmt.Errorf("no compaction checkpoint with parsed context")
+		return nil, nil
 	case CompactionExportScopeFromCheckpoint:
 		if options.CheckpointNumber < 1 || options.CheckpointNumber > len(checkpoints) {
-			return compactionExportSelection{}, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"compaction checkpoint %d not found; conversation has %d checkpoints",
 				options.CheckpointNumber,
 				len(checkpoints),
 			)
 		}
 		checkpoint := checkpoints[options.CheckpointNumber-1]
-		return compactionExportSelection{
+		return &compactionExportSelection{
 			Number:     options.CheckpointNumber,
 			Checkpoint: checkpoint,
 			TailStart:  checkpointTailStart(checkpoint),
@@ -222,7 +234,7 @@ func selectCompactionExportCheckpoint(
 	case CompactionExportScopeFull:
 		fallthrough
 	default:
-		return compactionExportSelection{}, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"compaction scope %s does not select a checkpoint",
 			options.Scope,
 		)
