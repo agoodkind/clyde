@@ -195,11 +195,11 @@ func TestExportFromCheckpointJSONIncludesFullParsedDetail(t *testing.T) {
 	}
 }
 
-func TestExportCompactionRejectsMissingCurrentContext(t *testing.T) {
+func TestExportCurrentContextFallsBackToFullWithoutCheckpoint(t *testing.T) {
 	t.Parallel()
 	idx, record := newOptionAwareIndex()
 
-	_, err := idx.Export(record, ExportOptions{
+	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatMarkdown,
 		HistoryStart: 0,
 		Whitespace:   WhitespacePreserve,
@@ -210,8 +210,37 @@ func TestExportCompactionRejectsMissingCurrentContext(t *testing.T) {
 			CheckpointNumber: 0,
 		},
 	})
-	if err == nil {
-		t.Fatal("expected missing current-context checkpoint error")
+	if err != nil {
+		t.Fatalf("Export returned error: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "visible transcript message") {
+		t.Fatalf("fallback export = %q, want visible transcript message", text)
+	}
+	if strings.Contains(text, "Conversation compacted") {
+		t.Fatalf("fallback export leaked system message: %q", text)
+	}
+}
+
+func TestExportDefaultedScopeFallsBackToFullWithoutCheckpoint(t *testing.T) {
+	t.Parallel()
+	idx, record := newOptionAwareIndex()
+
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+	})
+	if err != nil {
+		t.Fatalf("Export returned error: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "visible transcript message") {
+		t.Fatalf("defaulted export = %q, want visible transcript message", text)
+	}
+	if strings.Contains(text, "Conversation compacted") {
+		t.Fatalf("defaulted export leaked system message: %q", text)
 	}
 }
 
