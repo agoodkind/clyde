@@ -12,7 +12,7 @@ Add these three settings to your Cursor user `settings.json`. The location depen
 "http.proxySupport": "override"
 ```
 
-The host and port must match the `[mitm.app.cursor]` listener (`host = "localhost"`, `port = 48725`). The full listener map is in [mitm-listeners.md](mitm-listeners.md).
+The host and port must match the `[mitm.app.cursor]` listener (`host = "localhost"`, `port = 48725`). The full listener map is the `[mitm.cli.*]` and `[mitm.app.*]` blocks in `clyde.example.toml`.
 
 ## Why the value matters
 

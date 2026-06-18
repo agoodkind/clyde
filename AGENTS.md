@@ -30,7 +30,7 @@ Prefer code and tests over this file for exact behavior.
 - Use `internal/daemon/` for daemon startup, adapter/MITM listener ownership, reload, and background conversation-index refresh.
 - Use `internal/adapter/` for adapter, Cursor, Codex, Anthropic, model routing, and request-shape details.
 - Use `internal/mitm/` plus `internal/providers/*/mitmcontrib/` for MITM provider registration, route claims, identity facets, and capture extensions.
-- Use `docs/SLOG.md`, `docs/logging/`, and `internal/slogger/` for logging, sink, inventory, and correlation contracts.
+- Use `docs/logging/` and `internal/slogger/` for logging, sink, inventory, and correlation contracts.
 - Use `docs/cursor.md` for the empirical reasons behind Cursor-specific adapter rules.
 
 Do not add stale snapshots of command tables, schemas, request payloads, local machine setup, or dated audits to this file. Add links or brief pointers instead.
@@ -127,7 +127,7 @@ The adapter HTTP listener serves three route families. They share the listener, 
 | Native Anthropic | `/v1/messages`, `/v1/messages/count_tokens` | Code shipped, untested in production. Proposed for cross-provider use. |
 | Health | `/healthz`, `/` | Ops only. |
 
-The MITM proxy is a separate surface, not an adapter route. It runs on its own per-client listeners under `internal/mitm/`, one loopback port per traffic type (see `docs/mitm-listeners.md`), acts as a forward proxy for arbitrary HTTPS targets, and is not subject to the adapter error boundary.
+The MITM proxy is a separate surface, not an adapter route. It runs on its own per-client listeners under `internal/mitm/`, one loopback port per traffic type, acts as a forward proxy for arbitrary HTTPS targets, and is not subject to the adapter error boundary.
 
 ### Routing rules
 

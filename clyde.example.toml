@@ -321,7 +321,7 @@ contexts = [
 # originating client. The id lands in the capture `client` column as the
 # group-qualified "cli.<name>" / "app.<name>", so the same leaf name (codex) can
 # appear in both groups. One traffic type per port keeps the `client` tag
-# unambiguous. The full map lives in docs/mitm-listeners.md.
+# unambiguous. The full map is the [mitm.cli.*] and [mitm.app.*] blocks below.
 
 # CLI model-API base URLs (passthrough; these capture the wire baseline source).
 [mitm.cli.claude-code]
