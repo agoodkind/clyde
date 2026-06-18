@@ -47,10 +47,6 @@ type DirectConfig struct {
 	// upstream. Empty string falls through to the Codex default (drop)
 	// inside [BuildRequestWithConfig] / [SanitizeForUpstreamCacheWithStrategy].
 	InboundThinkingMaterialization adapterrender.MaterializationStrategy
-	// WireCaptureMode controls the optional per-frame log of inbound
-	// websocket bodies. Off (default) is safe; the other modes route to
-	// adapter.providers.codex.wire_capture for short-retention diagnostics.
-	WireCaptureMode WireCaptureMode
 	// CaptureStore, when non-nil, receives one capture.Record per outbound
 	// Codex exchange tagged client="adapter.codex". Nil records nothing.
 	CaptureStore *capture.Store
@@ -114,21 +110,6 @@ const (
 	RoundTripSummaryNative    RoundTripSummary = "native_summary_field"
 	RoundTripSummaryDrop      RoundTripSummary = "drop"
 	RoundTripSummaryPlainText RoundTripSummary = "plain_text_concat"
-)
-
-// WireCaptureMode is the closed enum the codex transport honors when the
-// dispatcher passes a per-provider wire-capture lever. Mirrors
-// config.CodexWireCaptureMode value-for-value so the dispatcher does a
-// typed string conversion at the boundary without an import edge.
-type WireCaptureMode string
-
-// Codex wire-capture modes. WireCaptureOff is the safe default and matches
-// an empty configured value.
-const (
-	WireCaptureOff           WireCaptureMode = "off"
-	WireCaptureSummaryOnly   WireCaptureMode = "summary_only"
-	WireCaptureReasoningOnly WireCaptureMode = "reasoning_only"
-	WireCaptureFull          WireCaptureMode = "full"
 )
 
 // RunDirect is part of Clyde's typed adapter surface.
@@ -219,7 +200,6 @@ func RunDirect(
 		PrewarmTimeout:     0,
 		SessionCache:       cfg.SessionCache,
 		Log:                cfg.Log,
-		WireCaptureMode:    cfg.WireCaptureMode,
 		RoundTripEncrypted: cfg.RoundTripEncrypted,
 		RetryPolicies:      cfg.RetryPolicies,
 		BeforeAttempt:      cfg.BeforeAttempt,

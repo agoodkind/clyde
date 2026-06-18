@@ -36,38 +36,20 @@ type egressExchange struct {
 	started    time.Time
 }
 
-// attachEgressObservers wires the optional wire-capture log and the optional
-// capture-store record onto one outbound /v1/messages exchange. Summary-mode
-// wire capture emits immediately. Full-mode wire capture and the capture-store
-// record both need the streamed response body, so a single tee reader buffers
-// it (capped) and fires both on Close. With wire capture Off and no capture
-// store, resp.Body is left untouched.
+// attachEgressObservers tees the streamed response body (capped) into the
+// SQLite capture store so the outbound /v1/messages exchange lands in
+// capture.db with its full request and response bodies. With no capture store
+// configured, resp.Body is left untouched. Bodies are never written to a log.
 func (c *Client) attachEgressObservers(ctx context.Context, resp *http.Response, base responseEvent, ex egressExchange) {
-	mode := c.cfg.WireCaptureMode
-	if mode == WireCaptureSummaryOnly {
-		emitWireCaptureSummary(ctx, mode, base, redactedOutboundHeaders(resp.Header))
-	}
-	wantWireFull := mode == WireCaptureFull
-	wantStore := c.cfg.CaptureStore != nil
-	if !wantWireFull && !wantStore {
+	if c.cfg.CaptureStore == nil {
 		return
 	}
-	headers := redactedOutboundHeaders(resp.Header)
 	respHeaders := resp.Header.Clone()
 	// Detach from request cancellation so the on-close emission still fires
 	// after the SSE stream completes; correlation values survive WithoutCancel.
 	emitCtx := context.WithoutCancel(ctx)
-	capBytes := wireCaptureBodyCap
-	if wantStore && captureStoreBodyCap > capBytes {
-		capBytes = captureStoreBodyCap
-	}
-	resp.Body = newCaptureTee(resp.Body, capBytes, func(captured []byte, truncated bool, totalRead int) {
-		if wantWireFull {
-			emitWireCaptureFull(emitCtx, mode, base, headers, captured, truncated, totalRead)
-		}
-		if wantStore {
-			c.recordEgress(emitCtx, ex, base.Status, respHeaders, captured)
-		}
+	resp.Body = newCaptureTee(resp.Body, captureStoreBodyCap, func(captured []byte, _ bool, _ int) {
+		c.recordEgress(emitCtx, ex, base.Status, respHeaders, captured)
 	})
 }
 

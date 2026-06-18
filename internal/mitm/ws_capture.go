@@ -36,13 +36,13 @@ func isWebsocketUpgrade(r *http.Request) bool {
 }
 
 // handleWebsocket bridges a client websocket connection to the
-// upstream and records every text frame to the JSONL capture
-// stream. The schema matches the dump.py mitmproxy addon under
-// research/codex/captures/2026-04-27/ so existing captures and new
-// captures slot into the same toolchain.
+// upstream. Bridged frames accumulate into the SQLite capture store
+// (client frames as the request body, upstream frames as the response
+// body); the wire JSONL receives only lifecycle legs plus one terminal
+// capture-index leg carrying a content-free per-direction summary.
 //
-// On error at any stage we close both ends and emit a ws_end record
-// with the error message in the close field.
+// On error at any stage we close both ends and emit the terminal
+// capture-index leg with the error message in the close field.
 func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider string, upstream string) {
 	cfg := p.config()
 	started := clock.Now()
@@ -79,8 +79,6 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	}
 	defer func() { _ = clientConn.Close() }()
 
-	p.recordWSStart(ctx, recorder, cfg.CaptureDir, r.Header, upstreamRespHeaders)
-
 	state := &wsRelayState{
 		mu:           sync.Mutex{},
 		messageCount: 0,
@@ -89,7 +87,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 		closeChan:    make(chan struct{}),
 	}
 	closeBoth := wsCloseBoth(state, clientConn, upstreamConn)
-	relay := p.wsMakeRelay(ctx, wsRelayParams{
+	relay := p.wsMakeRelay(wsRelayParams{
 		state:                state,
 		closeBoth:            closeBoth,
 		recorder:             recorder,
@@ -178,8 +176,6 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 	}
 	defer func() { _ = clientConn.Close() }()
 
-	p.recordWSStart(ctx, recorder, cfg.CaptureDir, r.Header, upstreamRespHeaders)
-
 	state := &wsRelayState{
 		mu:           sync.Mutex{},
 		messageCount: 0,
@@ -188,7 +184,7 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 		closeChan:    make(chan struct{}),
 	}
 	closeBoth := wsCloseBoth(state, clientConn, upstreamConn)
-	relay := p.wsMakeRelay(ctx, wsRelayParams{
+	relay := p.wsMakeRelay(wsRelayParams{
 		state:                state,
 		closeBoth:            closeBoth,
 		recorder:             recorder,
@@ -298,15 +294,18 @@ type wsRelayParams struct {
 }
 
 // wsMakeRelay returns the per-direction relay loop. It reads frames
-// from src, mirrors them to dst, and records each frame to the JSONL
-// capture stream. On any read, write, or capture failure it triggers
-// the shared closeBoth so the partner direction also exits.
+// from src, mirrors them to dst, and accumulates each bridged frame
+// into the SQLite capture-store recorder. Frame content is never
+// written to the wire JSONL; the single capture-index leg emitted at
+// session close carries only a content-free per-direction summary. On
+// any read or write failure it triggers the shared closeBoth so the
+// partner direction also exits.
 //
 // When params.session is non-nil, each successful ReadMessage and
 // WriteMessage refreshes the session's activity timestamp so the
 // daemon reload-drain idle-grace fast-path can distinguish active
 // streaming bridges from wedged keepalive ones.
-func (p *Proxy) wsMakeRelay(ctx context.Context, params wsRelayParams) func(src, dst *websocket.Conn, fromClient bool) {
+func (p *Proxy) wsMakeRelay(params wsRelayParams) func(src, dst *websocket.Conn, fromClient bool) {
 	return func(src, dst *websocket.Conn, fromClient bool) {
 		for {
 			messageType, payload, err := src.ReadMessage()
@@ -317,20 +316,7 @@ func (p *Proxy) wsMakeRelay(ctx context.Context, params wsRelayParams) func(src,
 			params.session.Touch()
 			params.state.mu.Lock()
 			params.state.messageCount++
-			count := params.state.messageCount
 			params.state.mu.Unlock()
-			text := ""
-			if messageType == websocket.TextMessage {
-				text = string(payload)
-			}
-			p.recordWSMessage(ctx, wsMessageCaptureInput{
-				Recorder:   params.recorder,
-				CaptureDir: params.captureDir,
-				Payload:    payload,
-				Text:       text,
-				FromClient: fromClient,
-				Sequence:   count,
-			})
 			if err := dst.WriteMessage(messageType, payload); err != nil {
 				params.closeBoth(err)
 				return
@@ -630,7 +616,6 @@ type wsLogLegInput struct {
 	ErrorMessage        string
 	BytesIn             int64
 	BytesOut            int64
-	Payload             *logevent.PayloadView
 	Direction           string
 	Sequence            int
 	CloseReason         string
@@ -648,7 +633,6 @@ func newWSLogLegInput(captureDir string, requestContentType string, clientFacet 
 		ErrorMessage:        "",
 		BytesIn:             0,
 		BytesOut:            0,
-		Payload:             nil,
 		Direction:           "",
 		Sequence:            0,
 		CloseReason:         "",
@@ -682,7 +666,6 @@ func (p *Proxy) emitWSLogLeg(ctx context.Context, recorder *logevent.Recorder, l
 	event.Outcome.ErrorMessage = input.ErrorMessage
 	event.Outcome.BytesIn = input.BytesIn
 	event.Outcome.BytesOut = input.BytesOut
-	event.Payload = input.Payload
 	event.Facets.Set(facet)
 	if input.ClientFacet != nil {
 		event.Facets.Set(input.ClientFacet)
@@ -698,44 +681,11 @@ func (p *Proxy) recordWSFailure(ctx context.Context, recorder *logevent.Recorder
 	recorder.Complete(ctx)
 }
 
-// recordWSStart writes the ws_start capture event through the unified sink model.
-func (p *Proxy) recordWSStart(ctx context.Context, recorder *logevent.Recorder, captureDir string, requestHeaders http.Header, responseHeaders http.Header) {
-	input := newWSLogLegInput(captureDir, requestHeaders.Get("Content-Type"), nil)
-	input.ResponseContentType = responseHeaders.Get("Content-Type")
-	input.StatusCode = http.StatusSwitchingProtocols
-	p.emitWSLogLeg(ctx, recorder, logevent.LegMITMCaptureIndex, logevent.PhaseStarted, input)
-}
-
-type wsMessageCaptureInput struct {
-	Recorder   *logevent.Recorder
-	CaptureDir string
-	Payload    []byte
-	Text       string
-	FromClient bool
-	Sequence   int
-}
-
-// recordWSMessage writes a single ws_msg capture event through the unified sink model.
-func (p *Proxy) recordWSMessage(ctx context.Context, input wsMessageCaptureInput) {
-	direction := "upstream_to_client"
-	bytesIn := int64(0)
-	bytesOut := int64(len(input.Payload))
-	if input.FromClient {
-		direction = "client_to_upstream"
-		bytesIn = int64(len(input.Payload))
-		bytesOut = 0
-	}
-	payload := logevent.FilterPayload([]byte(input.Text), "text/plain")
-	legInput := newWSLogLegInput(input.CaptureDir, "", nil)
-	legInput.Direction = direction
-	legInput.Sequence = input.Sequence
-	legInput.BytesIn = bytesIn
-	legInput.BytesOut = bytesOut
-	legInput.Payload = &payload
-	p.emitWSLogLeg(ctx, input.Recorder, logevent.LegMITMCaptureIndex, logevent.PhaseCompleted, legInput)
-}
-
-// recordWSEnd writes the terminal ws_end capture event through the unified sink model.
+// recordWSEnd writes the single terminal lifecycle leg for a bridged websocket
+// session: the close status, the error/close reason, and the bridged message
+// count. It carries no payload and no content summary. The full client and
+// upstream frame streams live only in the SQLite capture store; the wire JSONL
+// states nothing about their content.
 func (p *Proxy) recordWSEnd(ctx context.Context, recorder *logevent.Recorder, captureDir string, messageCount int, closeErr error) {
 	closeReason := ""
 	status := logevent.StatusOK

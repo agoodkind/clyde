@@ -16,7 +16,7 @@ import (
 	"goodkind.io/clyde/internal/logevent"
 )
 
-func TestHandleChatLogsFixedFilteredPayload(t *testing.T) {
+func TestHandleChatLogsNoPayloadInRequestLeg(t *testing.T) {
 	t.Parallel()
 	srv, buf := newLoggingServer(t, config.LoggingConfig{})
 
@@ -34,23 +34,12 @@ func TestHandleChatLogsFixedFilteredPayload(t *testing.T) {
 	if payloadEvent["msg"] != "logging.request.leg" {
 		t.Fatalf("msg = %q", payloadEvent["msg"])
 	}
-	if _, hasBody := payloadEvent["body"]; hasBody {
-		t.Fatalf("fixed payload policy should not include body")
-	}
-	if _, hasBodyB64 := payloadEvent["body_b64"]; hasBodyB64 {
-		t.Fatalf("fixed payload policy should not include body_b64")
-	}
-	if _, hasBodySummary := payloadEvent["body_summary"]; hasBodySummary {
-		t.Fatalf("fixed payload policy should not include legacy body_summary")
-	}
-	if _, hasSummary := payloadEvent["payload_summary"]; !hasSummary {
-		t.Fatalf("fixed payload policy should include payload_summary")
-	}
-	if _, hasFields := payloadEvent["payload_fields"]; hasFields {
-		t.Fatalf("payload_fields must not be logged; bodies live in capture.db: %v", payloadEvent["payload_fields"])
-	}
-	if _, hasRemoved := payloadEvent["payload_removed"]; hasRemoved {
-		t.Fatalf("payload_removed must not be logged: %v", payloadEvent["payload_removed"])
+	// The request leg carries no payload view of any kind; the full request and
+	// response bodies live only in the SQLite capture store.
+	for _, field := range []string{"body", "body_b64", "body_summary", "payload_summary", "payload_fields", "payload_removed"} {
+		if _, present := payloadEvent[field]; present {
+			t.Fatalf("request leg must not include %q; bodies live in capture.db: %v", field, payloadEvent[field])
+		}
 	}
 }
 

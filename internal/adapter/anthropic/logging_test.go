@@ -80,15 +80,18 @@ func TestDedicatedAnthropicLoggerRotatesByVolume(t *testing.T) {
 		Compress:   &compress,
 	})
 
-	largeBody := strings.Repeat("x", 700*1024)
+	// Response bodies are never logged, so volume is driven by a large logged
+	// error string instead: three oversized error events push the sidecar past
+	// its 1 MB cap and force at least one rotation.
+	largeErr := strings.Repeat("x", 700*1024)
 	for range 3 {
-		logResponse(context.Background(), slog.LevelInfo, "anthropic.messages.response", responseEvent{
+		logResponse(context.Background(), slog.LevelError, "anthropic.messages.upstream_error", responseEvent{
 			Subcomponent: "anthropic",
 			Model:        "claude-sonnet-4-5",
-			Status:       200,
+			Status:       500,
 			RequestID:    "req-rotate",
-			BodyBytes:    len(largeBody),
-			Body:         largeBody,
+			BodyBytes:    len(largeErr),
+			Err:          largeErr,
 		})
 	}
 	if fileLoggerCloser != nil {

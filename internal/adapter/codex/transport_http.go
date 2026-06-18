@@ -217,8 +217,11 @@ func runHTTPTransportEventsOnce(
 		// HTTP 400 + invalid_request_error + upstream_* so Cursor never
 		// sees a raw 5xx or 429 and keeps the diagnostic message.
 		snippet := readHTTPErrorSnippet(resp.Body)
+		// The error body snippet is persisted to the capture store and surfaced
+		// to the client through statusErr, but kept out of the log; the log
+		// records only the upstream status so no response body lands in JSONL.
+		logHTTPTransportError(ctx, cfg, "upstream_non_200", fmt.Errorf("codex http transport: upstream status %d", resp.StatusCode))
 		statusErr := fmt.Errorf("codex http transport: upstream status %d: %s", resp.StatusCode, snippet)
-		logHTTPTransportError(ctx, cfg, "upstream_non_200", statusErr)
 		recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, []byte(snippet), cfg.ConversationID, started)
 		return NewRunResult("stop"), false, statusErr
 	}
