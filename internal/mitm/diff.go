@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// DiffReportV2 is the structured output of comparing two SnapshotV2
+// DiffReport is the structured output of comparing two Snapshot
 // values. Empty Mismatches/Missing/Extra/FlavorReports means the two
-// snapshots are equivalent under v2's contract.
-type DiffReportV2 struct {
+// snapshots are equivalent under the snapshot contract.
+type DiffReport struct {
 	Upstream       string             `json:"upstream"`
 	MissingFlavors []string           `json:"missing_flavors,omitempty"`
 	ExtraFlavors   []string           `json:"extra_flavors,omitempty"`
@@ -31,7 +31,7 @@ type FlavorDiffReport struct {
 }
 
 // HasDiverged reports whether any flavor or top-level shape diverged.
-func (r DiffReportV2) HasDiverged() bool {
+func (r DiffReport) HasDiverged() bool {
 	if len(r.MissingFlavors) > 0 || len(r.ExtraFlavors) > 0 {
 		return true
 	}
@@ -57,12 +57,12 @@ func (r FlavorDiffReport) HasDiverged() bool {
 
 // SummaryString renders a compact human-readable summary suitable
 // for cron logs and CLI output.
-func (r DiffReportV2) SummaryString() string {
+func (r DiffReport) SummaryString() string {
 	if !r.HasDiverged() {
-		return "v2 wire shape OK for upstream=" + r.Upstream
+		return "wire shape OK for upstream=" + r.Upstream
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "v2 wire shape DRIFT for upstream=%s\n", r.Upstream)
+	fmt.Fprintf(&b, "wire shape DRIFT for upstream=%s\n", r.Upstream)
 	if len(r.MissingFlavors) > 0 {
 		fmt.Fprintf(&b, "  missing flavors: %s\n", strings.Join(r.MissingFlavors, ", "))
 	}
@@ -106,11 +106,11 @@ func (r DiffReportV2) SummaryString() string {
 	return b.String()
 }
 
-// DiffSnapshotsV2 compares two v2 snapshots. The first argument is
-// the local baseline or explicit reference; the second is the
-// candidate observed in the latest capture.
-func DiffSnapshotsV2(reference, candidate SnapshotV2) DiffReportV2 {
-	report := DiffReportV2{Upstream: reference.Upstream.Name, MissingFlavors: nil, ExtraFlavors: nil, FlavorReports: nil}
+// DiffSnapshots compares two snapshots. The first argument is the local
+// baseline or explicit reference; the second is the candidate observed
+// in the latest capture.
+func DiffSnapshots(reference, candidate Snapshot) DiffReport {
+	report := DiffReport{Upstream: reference.Upstream.Name, MissingFlavors: nil, ExtraFlavors: nil, FlavorReports: nil}
 
 	refFlavors := make(map[string]FlavorShape, len(reference.Flavors))
 	for _, fl := range reference.Flavors {
@@ -171,12 +171,19 @@ func diffFlavor(ref, cand FlavorShape) FlavorDiffReport {
 		}
 	}
 
-	refHeaders := indexHeadersV2(ref.Headers)
-	candHeaders := indexHeadersV2(cand.Headers)
+	refHeaders := indexHeaders(ref.Headers)
+	candHeaders := indexHeaders(cand.Headers)
 	for name, refHdr := range refHeaders {
 		candHdr, ok := candHeaders[name]
 		if !ok {
 			out.HeaderMissing = append(out.HeaderMissing, name)
+			continue
+		}
+		// A volatile header (byte size, per-session id, attestation blob) churns
+		// per request and carries no wire identity, so only its presence matters.
+		// Skip its class and value diffs so request-size and session noise never
+		// reads as baseline drift.
+		if refHdr.Volatile || candHdr.Volatile {
 			continue
 		}
 		if refHdr.Classification != candHdr.Classification {
@@ -187,7 +194,7 @@ func diffFlavor(ref, cand FlavorShape) FlavorDiffReport {
 				Reason:   "header classification changed",
 			})
 		}
-		if refHdr.Classification == "constant" || refHdr.Classification == "enum" {
+		if refHdr.Classification == HeaderClassConstant || refHdr.Classification == HeaderClassEnum {
 			if !stringSlicesEqual(refHdr.ObservedValues, candHdr.ObservedValues) {
 				out.HeaderValuesDiff = append(out.HeaderValuesDiff, DiffMismatch{
 					Field:    name,
@@ -223,8 +230,8 @@ func diffFlavor(ref, cand FlavorShape) FlavorDiffReport {
 	return out
 }
 
-func indexHeadersV2(hs []V2Header) map[string]V2Header {
-	out := make(map[string]V2Header, len(hs))
+func indexHeaders(hs []Header) map[string]Header {
+	out := make(map[string]Header, len(hs))
 	for _, h := range hs {
 		out[strings.ToLower(h.Name)] = h
 	}

@@ -90,8 +90,8 @@ type CaptureRecord struct {
 }
 
 // DiffMismatch is one field-level disagreement between a reference
-// baseline and a freshly captured candidate. The v2 flavor diff
-// ([DiffReportV2]) groups these into mismatch, extra, and missing sets.
+// baseline and a freshly captured candidate. The flavor diff
+// ([DiffReport]) groups these into mismatch, extra, and missing sets.
 type DiffMismatch struct {
 	Field    string `json:"field"`
 	Expected string `json:"expected"`

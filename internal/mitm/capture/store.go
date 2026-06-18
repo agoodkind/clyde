@@ -120,7 +120,10 @@ type Store struct {
 	cfg     Config
 	log     *slog.Logger
 	db      *sql.DB
+	rdb     *sql.DB
 	records chan Record
+	shapes  chan DriftShape
+	checks  chan DriftCheck
 	done    chan struct{}
 	closed  atomic.Bool
 	wg      sync.WaitGroup
@@ -161,11 +164,23 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	if err := os.Chmod(cfg.DBPath, dbFileMode); err != nil {
 		log.WarnContext(ctx, "mitm.capture.chmod_failed", "path", cfg.DBPath, "err", err)
 	}
+	// A separate read-only handle serves the per-request adapter baseline reads
+	// (and drift/baseline queries) without contending on the single-writer
+	// connection. WAL lets readers see committed writes concurrently.
+	rdsn := "file:" + cfg.DBPath + "?mode=ro&_journal_mode=WAL&_busy_timeout=5000"
+	rdb, err := sql.Open("sqlite3", rdsn)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("capture: open read-only sqlite %s: %w", cfg.DBPath, err)
+	}
 	s := &Store{
 		cfg:     cfg,
 		log:     log,
 		db:      db,
+		rdb:     rdb,
 		records: make(chan Record, cfg.QueueDepth),
+		shapes:  make(chan DriftShape, cfg.QueueDepth),
+		checks:  make(chan DriftCheck, cfg.QueueDepth),
 		done:    make(chan struct{}),
 		closed:  atomic.Bool{},
 		wg:      sync.WaitGroup{},
@@ -227,7 +242,53 @@ CREATE TABLE IF NOT EXISTS bodies (
 	truncated INTEGER NOT NULL DEFAULT 0,
 	data BLOB,
 	PRIMARY KEY (request_row_id, which)
-);`
+);
+CREATE TABLE IF NOT EXISTS drift_shapes (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	provider TEXT NOT NULL DEFAULT '',
+	upstream TEXT NOT NULL DEFAULT '',
+	fingerprint TEXT NOT NULL DEFAULT '',
+	first_seen INTEGER NOT NULL DEFAULT 0,
+	last_seen INTEGER NOT NULL DEFAULT 0,
+	seen_count INTEGER NOT NULL DEFAULT 0,
+	method TEXT NOT NULL DEFAULT '',
+	path TEXT NOT NULL DEFAULT '',
+	url TEXT NOT NULL DEFAULT '',
+	request_headers TEXT NOT NULL DEFAULT '',
+	request_body TEXT NOT NULL DEFAULT '',
+	billing_attestation TEXT NOT NULL DEFAULT '',
+	request_features TEXT NOT NULL DEFAULT '',
+	UNIQUE(upstream, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_drift_shapes_upstream ON drift_shapes(upstream, last_seen);
+CREATE TABLE IF NOT EXISTS baselines (
+	upstream TEXT PRIMARY KEY,
+	snapshot TEXT NOT NULL DEFAULT '',
+	updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS baseline_diffs (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	upstream TEXT NOT NULL DEFAULT '',
+	flavor TEXT NOT NULL DEFAULT '',
+	category TEXT NOT NULL DEFAULT '',
+	field TEXT NOT NULL DEFAULT '',
+	before_value TEXT NOT NULL DEFAULT '',
+	after_value TEXT NOT NULL DEFAULT '',
+	reason TEXT NOT NULL DEFAULT '',
+	first_seen INTEGER NOT NULL DEFAULT 0,
+	last_seen INTEGER NOT NULL DEFAULT 0,
+	seen_count INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(upstream, flavor, category, field, before_value, after_value)
+);
+CREATE INDEX IF NOT EXISTS idx_baseline_diffs_upstream ON baseline_diffs(upstream);
+CREATE TABLE IF NOT EXISTS drift_checks (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	upstream TEXT NOT NULL DEFAULT '',
+	ts INTEGER NOT NULL DEFAULT 0,
+	diverged INTEGER NOT NULL DEFAULT 0,
+	summary TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_drift_checks_upstream ON drift_checks(upstream, ts);`
 
 // Record enqueues an exchange for asynchronous persistence. It never blocks: if
 // the writer queue is full or the store is closed, the record is dropped with a
@@ -250,6 +311,10 @@ func (s *Store) writeLoop(ctx context.Context) {
 		select {
 		case rec := <-s.records:
 			s.insert(ctx, rec)
+		case shape := <-s.shapes:
+			s.insertShape(ctx, shape)
+		case check := <-s.checks:
+			s.insertCheck(ctx, check)
 		case <-s.done:
 			s.drain(ctx)
 			return
@@ -262,6 +327,10 @@ func (s *Store) drain(ctx context.Context) {
 		select {
 		case rec := <-s.records:
 			s.insert(ctx, rec)
+		case shape := <-s.shapes:
+			s.insertShape(ctx, shape)
+		case check := <-s.checks:
+			s.insertCheck(ctx, check)
 		default:
 			return
 		}
@@ -423,6 +492,11 @@ func (s *Store) Close(ctx context.Context, reason string) error {
 	// the empty main file discards.
 	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.checkpoint_failed", "reason", reason, "err", err)
+	}
+	if s.rdb != nil {
+		if err := s.rdb.Close(); err != nil {
+			s.log.WarnContext(ctx, "mitm.capture.read_handle_close_failed", "reason", reason, "err", err)
+		}
 	}
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("capture: close db: %w", err)

@@ -138,7 +138,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 				log.Error("daemon.mitm_drift.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
-		mitm.RunPeriodicDrift(ctx, cfg.MITM, log)
+		mitm.RunPeriodicDrift(ctx, runtime.captureStore, cfg.MITM, log)
 	}()
 	startDebugFacilities(ctx, log)
 
@@ -270,6 +270,7 @@ func newControlServer(
 		},
 		semanticSearch:       semanticSearch,
 		semanticCollectionID: semanticCollectionID,
+		captureStore:         runtime.captureStore,
 	}
 }
 

@@ -3,11 +3,17 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 type staticToken struct{}
@@ -181,7 +187,7 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 
@@ -219,6 +225,82 @@ func TestStreamEvents_429InvokesOnHeaders(t *testing.T) {
 	}
 	if got := observed.Get("anthropic-ratelimit-unified-status"); got != "rejected" {
 		t.Fatalf("OnHeaders received status=%q; want rejected", got)
+	}
+}
+
+// TestStreamEvents_UpstreamErrorKeepsBodyOutOfLogButInClientMessage pins the
+// audit contract: a non-2xx upstream response logs only metadata (no response
+// body) to the dedicated anthropic JSONL sink, while the upstream body text
+// still reaches the caller through the UpstreamError message. The full body
+// lives in the SQLite capture store, which the wire log never restates.
+func TestStreamEvents_UpstreamErrorKeepsBodyOutOfLogButInClientMessage(t *testing.T) {
+	const sentinel = "anthropic-error-body-sentinel-9a1b"
+	upstreamBody := `{"type":"error","error":{"type":"api_error","message":"` + sentinel + `"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, upstreamBody)
+	}))
+	t.Cleanup(srv.Close)
+
+	logPath := filepath.Join(t.TempDir(), "anthropic.jsonl")
+	t.Setenv("CLYDE_ANTHROPIC_LOG_PATH", logPath)
+	resetDedicatedAnthropicLoggerForTest(t)
+
+	srvURL, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
+	cli := &Client{
+		http:         hc,
+		oauth:        &staticToken{},
+		flavorLoader: newWireFlavorsLoader(),
+		cfg: Config{
+			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
+			OAuthAnthropicVersion: "2023-06-01",
+			BetaHeader:            "REDACTED-OAUTH-BETA",
+			UserAgent:             "anthropic-test/0",
+			CCVersion:             "1.0.0",
+			CCEntrypoint:          "test",
+			CaptureStore:          seedTestWireBaseline(t),
+		},
+	}
+
+	_, _, err = cli.StreamEvents(context.Background(), Request{
+		Model:     "claude-test",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "x"}}}},
+		MaxTokens: 10,
+	}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatalf("StreamEvents returned nil error on 500; want one")
+	}
+	ue, ok := AsUpstreamError(err)
+	if !ok {
+		t.Fatalf("err must be *UpstreamError; got %T (%v)", err, err)
+	}
+	if !strings.Contains(ue.Message, sentinel) {
+		t.Fatalf("client-facing message must carry upstream body text; got %q", ue.Message)
+	}
+
+	// Flush the dedicated sink before reading it.
+	if fileLoggerCloser != nil {
+		if err := fileLoggerCloser.Close(); err != nil {
+			t.Fatalf("close anthropic logger: %v", err)
+		}
+	}
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read anthropic log: %v", err)
+	}
+	logText := string(logBytes)
+	if !strings.Contains(logText, "anthropic.messages.upstream_error") {
+		t.Fatalf("missing upstream_error event in anthropic log: %s", logText)
+	}
+	if strings.Contains(logText, sentinel) {
+		t.Fatalf("error body leaked into anthropic log: %s", logText)
+	}
+	if strings.Contains(logText, `"body":`) {
+		t.Fatalf("anthropic log carries a body field: %s", logText)
 	}
 }
 
@@ -263,7 +345,7 @@ func TestDoUsesIdentityEncodingForStreams(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 	req := Request{
@@ -395,7 +477,7 @@ func TestStreamEvents_fixtureSSE(t *testing.T) {
 			StainlessRuntimeVersion: "v0",
 			CCVersion:               "1.0.0",
 			CCEntrypoint:            "test",
-			WireBaselinePath:        writeTestWireBaseline(t),
+			CaptureStore:            seedTestWireBaseline(t),
 		},
 	}
 
@@ -535,7 +617,7 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 			StainlessRuntimeVersion: "v0",
 			CCVersion:               "1.0.0",
 			CCEntrypoint:            "test",
-			WireBaselinePath:        writeTestWireBaseline(t),
+			CaptureStore:            seedTestWireBaseline(t),
 		},
 	}
 
@@ -561,16 +643,16 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	}
 }
 
-// TestStreamEvents_wireCaptureFullDoesNotAbortScan guards the production
-// configuration [adapter.anthropic.wire_capture] mode = "full", which wraps the
-// upstream SSE body in a captureTee. A regression made captureTee.Read wrap the
+// TestStreamEvents_egressCaptureDoesNotAbortScan guards the egress capture
+// path, which wraps the upstream SSE body in a captureTee so the exchange lands
+// in the SQLite capture store. A regression made captureTee.Read wrap the
 // terminal io.EOF with %w, and the bufio.Scanner that consumes the SSE stream
 // compares its read error against io.EOF with == (stdlib bufio/scan.go), so the
 // wrapped EOF was mistaken for a real failure and StreamEvents returned
 // "anthropic stream scan: captureTee read: EOF" on an otherwise healthy 200
-// stream. This test drives a full, valid SSE stream with Full capture enabled
-// and asserts the scan completes and the events parse.
-func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
+// stream. This test drives a full, valid SSE stream with a capture store
+// attached and asserts the scan completes and the events parse.
+func TestStreamEvents_egressCaptureDoesNotAbortScan(t *testing.T) {
 	t.Parallel()
 	startPayload, err := json.Marshal(map[string]any{
 		"message": map[string]any{
@@ -641,6 +723,12 @@ func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: filepath.Join(t.TempDir(), "capture.db")}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+	seedBaselineIntoStore(t, store)
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -657,8 +745,7 @@ func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
 			StainlessRuntimeVersion: "v0",
 			CCVersion:               "1.0.0",
 			CCEntrypoint:            "test",
-			WireBaselinePath:        writeTestWireBaseline(t),
-			WireCaptureMode:         WireCaptureFull,
+			CaptureStore:            store,
 		},
 	}
 
@@ -672,7 +759,7 @@ func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("StreamEvents with WireCaptureFull returned error on healthy 200 stream: %v", err)
+		t.Fatalf("StreamEvents with egress capture returned error on healthy 200 stream: %v", err)
 	}
 	if stop != "end_turn" {
 		t.Fatalf("stop reason: got %q want end_turn", stop)

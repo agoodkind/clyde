@@ -1,78 +1,35 @@
 package mitm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"goodkind.io/clyde/internal/config"
 )
 
-// seedTestCaptureLine is the typed view of one synthetic capture transcript
-// record the seed-baseline test feeds to the v2 extractor.
-type seedTestCaptureLine struct {
-	Kind           string              `json:"kind"`
-	Provider       string              `json:"provider"`
-	T              int64               `json:"t"`
-	URL            string              `json:"url"`
-	Path           string              `json:"path"`
-	Method         string              `json:"method"`
-	RequestHeaders map[string]string   `json:"request_headers"`
-	RequestBody    seedTestRequestBody `json:"request_body"`
-}
+func TestSeedBaselineWritesStoredBaselineFromShapes(t *testing.T) {
+	store := openTestCaptureStore(t)
+	cfg := config.MITMConfig{Drift: config.MITMDriftConfig{Enabled: true}}
+	proxy := proxyWithStore(t, store)
+	header := http.Header{}
+	header.Set("User-Agent", "claude-cli/2.1.123 (external, sdk-cli)")
+	header.Set("Anthropic-Version", "2023-06-01")
+	proxy.recordDriftCapture(cfg, driftCaptureInput{
+		provider:    "claude",
+		method:      http.MethodPost,
+		path:        "/v1/messages",
+		upstreamURL: "https://api.anthropic.com/v1/messages",
+		header:      header,
+		body:        claudeSystemBillingBody(t, "cch-seed"),
+	})
+	waitForUpstreamShapes(t, store, "claude-code", 1)
 
-// seedTestRequestBody is the summary-mode body shape the proxy emits.
-type seedTestRequestBody struct {
-	BodyType string   `json:"body_type"`
-	Keys     []string `json:"keys"`
-}
-
-func writeSeedTestTranscript(t *testing.T, dir string) string {
-	t.Helper()
-	headers := map[string]string{
-		"User-Agent":        "claude-cli/2.1.123 (external, sdk-cli)",
-		"Anthropic-Beta":    "oauth-2025-04-20,claude-code-20250219",
-		"Anthropic-Version": "2023-06-01",
-	}
-	body := seedTestRequestBody{BodyType: "json", Keys: []string{"messages", "model", "system", "tools"}}
-	lines := []seedTestCaptureLine{
-		{
-			Kind: "http_request", Provider: "claude", T: 1700000000,
-			URL: "https://api.anthropic.com/v1/messages", Path: "/v1/messages", Method: "POST",
-			RequestHeaders: headers, RequestBody: body,
-		},
-		{
-			Kind: "http_request", Provider: "claude", T: 1700000001,
-			URL: "https://api.anthropic.com/v1/messages", Path: "/v1/messages", Method: "POST",
-			RequestHeaders: headers, RequestBody: body,
-		},
-	}
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	for _, line := range lines {
-		if err := encoder.Encode(line); err != nil {
-			t.Fatalf("encode transcript line: %v", err)
-		}
-	}
-	path := filepath.Join(dir, "capture.jsonl")
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-		t.Fatalf("write transcript: %v", err)
-	}
-	return path
-}
-
-func TestSeedBaselineWritesRoundTrippableV2Baseline(t *testing.T) {
-	tmp := t.TempDir()
-	transcript := writeSeedTestTranscript(t, tmp)
-	output := filepath.Join(tmp, "out", "baseline-reference.toml")
-
-	result, err := SeedBaseline(context.Background(), transcript, "claude-code", output, []string{"claude-cli"}, nil)
+	result, err := SeedBaseline(context.Background(), store, "claude-code", []string{"claude-cli"}, nil)
 	if err != nil {
 		t.Fatalf("SeedBaseline: %v", err)
-	}
-	if result.Written != output {
-		t.Fatalf("written=%q want %q", result.Written, output)
 	}
 	if result.Upstream != "claude-code" {
 		t.Fatalf("upstream=%q want claude-code", result.Upstream)
@@ -81,12 +38,13 @@ func TestSeedBaselineWritesRoundTrippableV2Baseline(t *testing.T) {
 		t.Fatalf("flavor count=%d want at least 1", result.Flavors)
 	}
 
-	if _, err := os.Stat(output); err != nil {
-		t.Fatalf("baseline not written: %v", err)
+	raw, ok, err := store.CurrentBaseline(context.Background(), "claude-code")
+	if err != nil || !ok {
+		t.Fatalf("CurrentBaseline: ok=%v err=%v want a stored baseline", ok, err)
 	}
-	snap, err := LoadSnapshotV2TOML(output)
+	snap, err := unmarshalSnapshot(raw)
 	if err != nil {
-		t.Fatalf("LoadSnapshotV2TOML: %v", err)
+		t.Fatalf("decode baseline: %v", err)
 	}
 	if snap.Upstream.Name != "claude-code" {
 		t.Fatalf("upstream name=%q want claude-code", snap.Upstream.Name)
@@ -99,11 +57,64 @@ func TestSeedBaselineWritesRoundTrippableV2Baseline(t *testing.T) {
 	}
 }
 
-func TestSeedBaselineRequiresUpstreamAndFrom(t *testing.T) {
-	if _, err := SeedBaseline(context.Background(), "/some/path.jsonl", "", "", nil, nil); err == nil {
+func TestSeedBaselineRequiresUpstreamAndStore(t *testing.T) {
+	store := openTestCaptureStore(t)
+	if _, err := SeedBaseline(context.Background(), store, "", nil, nil); err == nil {
 		t.Fatal("expected error when upstream is empty")
 	}
-	if _, err := SeedBaseline(context.Background(), "", "claude-code", "", nil, nil); err == nil {
-		t.Fatal("expected error when from is empty")
+	if _, err := SeedBaseline(context.Background(), nil, "claude-code", nil, nil); err == nil {
+		t.Fatal("expected error when store is nil")
+	}
+}
+
+func TestSeedBaselineErrorsWhenCorpusEmpty(t *testing.T) {
+	store := openTestCaptureStore(t)
+	if _, err := SeedBaseline(context.Background(), store, "claude-code", nil, nil); err == nil {
+		t.Fatal("expected error when the shape corpus is empty")
+	}
+}
+
+// TestHardCutoverWritesNoLegacyFiles is the hard-cutover guard: after a full
+// capture + refresh cycle against the store, no JSONL/TOML drift or baseline
+// files exist under the state dir, and the baseline lives only in capture.db.
+func TestHardCutoverWritesNoLegacyFiles(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	store := openTestCaptureStore(t)
+	cfg := config.MITMConfig{Drift: config.MITMDriftConfig{Enabled: true}}
+	proxy := proxyWithStore(t, store)
+	header := http.Header{}
+	header.Set("User-Agent", "claude-cli/2.1.123 (external, sdk-cli)")
+	header.Set("Anthropic-Version", "2023-06-01")
+	proxy.recordDriftCapture(cfg, driftCaptureInput{
+		provider:    "claude",
+		method:      http.MethodPost,
+		path:        "/v1/messages",
+		upstreamURL: "https://api.anthropic.com/v1/messages",
+		header:      header,
+		body:        claudeSystemBillingBody(t, "cch-cutover"),
+	})
+	waitForUpstreamShapes(t, store, "claude-code", 1)
+
+	if _, err := RefreshBaseline(context.Background(), store, BaselineRefreshOptions{Upstream: "claude-code", IncludeUA: []string{"claude-cli"}}); err != nil {
+		t.Fatalf("RefreshBaseline: %v", err)
+	}
+
+	stateRoot := config.DefaultStateDir()
+	for _, legacy := range []string{
+		filepath.Join(stateRoot, "mitm", "drift"),
+		filepath.Join(stateRoot, "mitm-drift"),
+		filepath.Join(stateRoot, "mitm-baselines"),
+		filepath.Join(stateRoot, "mitm-baselines", "claude-code", "baseline-reference.toml"),
+		filepath.Join(stateRoot, "mitm", "drift", "claude-code.jsonl"),
+	} {
+		if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+			t.Fatalf("legacy drift/baseline path exists after cutover: %s (stat err=%v)", legacy, err)
+		}
+	}
+
+	if _, ok, err := store.CurrentBaseline(context.Background(), "claude-code"); err != nil || !ok {
+		t.Fatalf("baseline not stored in capture.db after refresh: ok=%v err=%v", ok, err)
 	}
 }

@@ -4,9 +4,9 @@ Logging configuration is centralized under `[logging]`.
 
 Payload controls:
 
-- Normal JSONL request logs always use the fixed filtered inline payload view.
+- Normal JSONL request logs carry no payload view; no log line restates request or response body content, summary, or hash.
 - There is no user-facing payload mode ladder.
-- MITM request/response bodies are not a `[logging]` concern; they persist to the SQLite capture store at `mitm/capture.db`, configured under `[mitm.capture_store]`.
+- Request and response bodies are not a `[logging]` concern; they persist to the SQLite capture store at `mitm/capture.db`, configured under `[mitm.capture_store]`.
 
 Cleanup controls:
 

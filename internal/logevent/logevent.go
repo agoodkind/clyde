@@ -322,7 +322,6 @@ type Event struct {
 	Identity Identity
 	Path     Path
 	Outcome  Outcome
-	Payload  *PayloadView
 	Facets   Facets
 	Sinks    []SinkName
 }
@@ -333,9 +332,6 @@ func (e Event) Attrs() []slog.Attr {
 	attrs = appendIdentityAttrs(attrs, e.Identity)
 	attrs = appendPathAttrs(attrs, e.Path)
 	attrs = appendOutcomeAttrs(attrs, e.Outcome)
-	if e.Payload != nil {
-		attrs = appendPayloadAttrs(attrs, *e.Payload)
-	}
 	attrs = appendFacetAttrs(attrs, e.Facets)
 	if len(e.Sinks) > 0 {
 		attrs = append(attrs, slog.Any("sinks", e.Sinks))

@@ -188,7 +188,6 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 			DurationMs:   clock.Since(postStarted).Milliseconds(),
 			RateLimits:   nil,
 			RetryAfter:   "",
-			Body:         "",
 			Err:          err.Error(),
 		})
 		return nil, &UpstreamError{
@@ -209,7 +208,7 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		RequestID:    resp.Header.Get("Request-Id"),
 		BodyBytes:    len(body),
 		DurationMs:   clock.Since(postStarted).Milliseconds(),
-		RateLimits:   rateLimitAttrs(resp.Header), RetryAfter: "", Body: "", Err: "",
+		RateLimits:   rateLimitAttrs(resp.Header), RetryAfter: "", Err: "",
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -218,7 +217,9 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if resp.StatusCode != http.StatusOK {
 		errBody := readDecodedBody(resp)
 		ev := base
-		ev.Body = string(errBody)
+		// The error body is persisted to the capture store, not the log; the
+		// JSONL leg keeps only the byte count. The truncated body still reaches
+		// the client through the UpstreamError message below.
 		ev.BodyBytes = len(errBody)
 		logResponse(ctx, slog.LevelError, "anthropic.messages.upstream_error", ev)
 		c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
@@ -245,7 +246,9 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 	errBody := readDecodedBody(resp)
 	ev := base
 	ev.RetryAfter = resp.Header.Get("Retry-After")
-	ev.Body = string(errBody)
+	// The error body is persisted to the capture store, not the log; the JSONL
+	// leg keeps only the byte count. The body still reaches the client through
+	// the rate-limit message built below.
 	ev.BodyBytes = len(errBody)
 	logResponse(ctx, slog.LevelWarn, "anthropic.ratelimit", ev)
 	c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
@@ -293,11 +296,10 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 // request with no identity.
 func (c *Client) prepareRequestBody(ctx context.Context, req Request) (WireFlavor, []byte, error) {
 	log := anthropicRequestLog.Logger()
-	flavor, err := c.activeFlavor(featureVectorForRequest(req))
+	flavor, err := c.activeFlavor(ctx, featureVectorForRequest(req))
 	if err != nil {
 		log.WarnContext(ctx, "anthropic.messages.wire_baseline_unavailable", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 			"model", req.Model,
-			"baseline_path", c.cfg.WireBaselinePath,
 			"err", err.Error(),
 		)
 		return WireFlavor{}, nil, err
@@ -503,41 +505,7 @@ func (c *Client) retryAfter401(ctx context.Context, req Request, body []byte, fa
 	return retryResp, clock.Since(retryStarted), nil
 }
 
-// wireCaptureBodyCap bounds how many bytes a Full-mode wire-capture log buffers
-// in memory per response. SSE responses can exceed this on long thinking turns;
-// we truncate and surface the truncation flag so the operator knows to flip
-// rotation up if they need full bodies.
-const wireCaptureBodyCap = 2 * 1024 * 1024
-
-func emitWireCaptureSummary(ctx context.Context, mode WireCaptureMode, base responseEvent, headers map[string]string) {
-	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture", slog.String("concern", "adapter.providers.anthropic.wire_capture"), slog.String("subcomponent", "anthropic"),
-		slog.String("mode", string(mode)),
-		slog.String("model", base.Model),
-		slog.Int("status", base.Status),
-		slog.String("request_id", base.RequestID),
-		slog.Int("body_bytes_request", base.BodyBytes),
-		slog.Int64("duration_ms", base.DurationMs),
-		slog.Any("response_headers", headers),
-	)
-}
-
-func emitWireCaptureFull(ctx context.Context, mode WireCaptureMode, base responseEvent, headers map[string]string, captured []byte, truncated bool, totalRead int) {
-	anthropicWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.anthropic.wire_capture", slog.String("concern", "adapter.providers.anthropic.wire_capture"), slog.String("subcomponent", "anthropic"),
-		slog.String("mode", string(mode)),
-		slog.String("model", base.Model),
-		slog.Int("status", base.Status),
-		slog.String("request_id", base.RequestID),
-		slog.Int("body_bytes_request", base.BodyBytes),
-		slog.Int("body_bytes_response", totalRead),
-		slog.Int("body_bytes_captured", len(captured)),
-		slog.Bool("truncated", truncated),
-		slog.Int64("duration_ms", base.DurationMs),
-		slog.Any("response_headers", headers),
-		slog.String("body", string(captured)),
-	)
-}
-
-// captureTee is the [io.ReadCloser] shim Full-mode wire capture wraps around
+// captureTee is the [io.ReadCloser] shim the egress capture wraps around
 // resp.Body. Reads pass through unchanged; bytes also accumulate in a shared
 // [capture.CappedBuffer] up to cap. On Close, onClose fires once with the
 // captured slice, the truncation flag, and the total read count. Stream parsers
@@ -631,12 +599,12 @@ type freeHeader struct {
 // compiled-in fallback: a missing, invalid, or unseeded baseline error
 // returns a typed sentinel-bearing error so the caller can map it to an
 // HTTP 503.
-func (c *Client) activeFlavor(featureVector WireFlavorFeatureVector) (WireFlavor, error) {
+func (c *Client) activeFlavor(ctx context.Context, featureVector WireFlavorFeatureVector) (WireFlavor, error) {
 	var zero WireFlavor
 	if c.flavorLoader == nil {
 		c.flavorLoader = newWireFlavorsLoader()
 	}
-	flavors, err := c.flavorLoader.Load(c.cfg.WireBaselinePath)
+	flavors, err := c.flavorLoader.Load(ctx, c.cfg.CaptureStore)
 	if err != nil {
 		// The loader logs the specific cause on its concern; return the
 		// typed sentinel-bearing error unchanged so the dispatch layer
@@ -646,14 +614,12 @@ func (c *Client) activeFlavor(featureVector WireFlavorFeatureVector) (WireFlavor
 	flavor, err := selectInteractiveFlavor(flavors, featureVector)
 	if err != nil {
 		if errors.Is(err, ErrBaselineInvalid) {
-			slog.Warn("anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-				"baseline_path", c.cfg.WireBaselinePath,
+			slog.WarnContext(ctx, "anthropic.wire_baseline.no_interactive_flavor", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 				"model", featureVector.ModelID,
 			)
 		}
 		if errors.Is(err, ErrFlavorUnseeded) {
-			slog.Warn("anthropic.wire_baseline.flavor_unseeded", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-				"baseline_path", c.cfg.WireBaselinePath,
+			slog.WarnContext(ctx, "anthropic.wire_baseline.flavor_unseeded", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 				"model", featureVector.ModelID,
 			)
 		}

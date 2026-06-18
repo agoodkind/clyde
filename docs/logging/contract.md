@@ -43,12 +43,6 @@ Shared outcome fields:
 - `bytes_in`
 - `bytes_out`
 
-Shared payload fields:
-
-- `payload_summary`
-- `payload_fields`
-- `payload_removed`
-
 Sink field:
 
 - `sinks`
@@ -66,6 +60,6 @@ The supported phases are `started`, `completed`, and `failed`. The supported sta
 
 Unsupported request-log fields and event shapes:
 
-- Normal JSONL logs do not use `body`, `body_b64`, or `body_truncated`.
+- Normal JSONL logs do not use `body`, `body_b64`, `body_truncated`, `payload_summary`, `payload_fields`, or `payload_removed`. No log line carries request or response body content, summary, or hash; full bodies live only in the SQLite capture store at `mitm/capture.db`.
 - The user-facing `logging.body` and `mitm.body_mode` payload config surfaces are unsupported.
 - Request traffic does not add compatibility aliases for alternate event names or field names.

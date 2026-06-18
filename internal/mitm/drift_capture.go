@@ -3,16 +3,13 @@ package mitm
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/gklog"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 // driftUpstreamName is the typed drift-upstream slug a native provider maps to.
@@ -50,17 +47,6 @@ func driftUpstreamForProvider(provider string) (driftUpstreamName, bool) {
 		return driftUpstreamCodexCLI, true
 	}
 	return "", false
-}
-
-// driftCapturePath returns the per-upstream drift capture file path under
-// captureRoot. The drift refresh loop's [ResolveTranscriptPath] reads the same
-// path, so the two must stay in lockstep.
-func driftCapturePath(captureRoot, upstream string) string {
-	root := strings.TrimSpace(captureRoot)
-	if root == "" {
-		root = DefaultCaptureRoot()
-	}
-	return filepath.Join(expandHome(root), "drift", safePathPart(upstream)+".jsonl")
 }
 
 // driftRedactionToken is the fixed value the drift writer substitutes for true
@@ -185,14 +171,14 @@ type driftCaptureInput struct {
 	body        []byte
 }
 
-// recordDriftCapture appends one `http_request` CaptureRecord line to the
-// per-upstream drift file when [config.MITMDriftConfig.Enabled] is true and the
-// provider maps to a known drift upstream. The record masks true secret headers,
+// recordDriftCapture upserts one deduped native-request shape into the capture
+// store's drift table when [config.MITMDriftConfig.Enabled] is true and the
+// provider maps to a known drift upstream. The shape masks true secret headers,
 // captures identity/attestation headers verbatim, summarizes the body to its
-// field-set (no raw prompt text), and lifts the claude billing attestation when
-// present. The file is local-only state and rotates via the MITM capture
-// rotation policy. Failures are logged and swallowed so capture never blocks the
-// forward path.
+// field-set (no raw prompt text), and lifts the claude billing attestation. The
+// store dedupes by fingerprint and holds rows forever; a repeated identical
+// shape only advances its seen_count. The store write is non-blocking, so a
+// failed or full-queue drift write never blocks the forward path.
 func (p *Proxy) recordDriftCapture(cfg config.MITMConfig, input driftCaptureInput) {
 	if !cfg.Drift.Enabled {
 		return
@@ -201,41 +187,28 @@ func (p *Proxy) recordDriftCapture(cfg config.MITMConfig, input driftCaptureInpu
 	if !ok {
 		return
 	}
-	captureRoot := strings.TrimSpace(cfg.Drift.CaptureRoot)
-	if captureRoot == "" {
-		captureRoot = strings.TrimSpace(cfg.CaptureDir)
-	}
-	if captureRoot == "" {
-		captureRoot = DefaultCaptureRoot()
-	}
-	rec := buildDriftCaptureRecord(input, upstream)
-	// writeDriftCaptureRecord logs its own failure at Warn on the MITM wire
-	// concern, so the error is swallowed here: a failed drift write must never
-	// block the forward path.
-	_ = writeDriftCaptureRecord(captureRoot, string(upstream), cfg.Capture.Rotation, rec)
+	p.store.RecordShape(buildDriftShape(input, upstream))
 }
 
-// buildDriftCaptureRecord assembles the typed CaptureRecord for one native
+// buildDriftShape assembles the deduped [capture.DriftShape] for one native
 // request. The body summary keeps only the body_type discriminator and the
 // top-level key set (no raw prompt text). The billing attestation is captured
 // only for the claude upstream; codex attestation rides through verbatim in the
-// captured x-oai-attestation request header.
-func buildDriftCaptureRecord(input driftCaptureInput, upstream driftUpstreamName) CaptureRecord {
+// captured x-oai-attestation request header. The fingerprint is the dedup key.
+func buildDriftShape(input driftCaptureInput, upstream driftUpstreamName) capture.DriftShape {
 	summary := summarizeBody(input.body)
 	requestHeaders := driftHeaderMap(input.header)
-	requestFeatures := driftRequestFeatures(requestHeaders, input.body)
 	bodyRaw, err := json.Marshal(captureBodySummary{
 		Mode:     summary.Mode,
 		BodyType: summary.BodyType,
+		Keys:     summary.Keys,
 		Bytes:    0,
 		SHA256:   "",
-		Keys:     summary.Keys,
 		Messages: 0,
 		Input:    0,
 		Tools:    0,
 		Model:    "",
 		ArrayLen: 0,
-		Preview:  "",
 	})
 	if err != nil {
 		bodyRaw = json.RawMessage(`null`)
@@ -244,36 +217,80 @@ func buildDriftCaptureRecord(input driftCaptureInput, upstream driftUpstreamName
 	if upstream == driftUpstreamClaudeCode {
 		billing = driftBillingAttestationFromBody(input.body)
 	}
-	return CaptureRecord{
-		Kind:               RecordHTTPRequest,
-		T:                  clock.Now().UTC().Unix(),
-		URL:                input.upstreamURL,
-		Provider:           input.provider,
-		Concern:            "",
-		TraceID:            "",
-		SpanID:             "",
-		ParentSpanID:       "",
-		RequestID:          "",
-		UpstreamRequestID:  "",
-		UpstreamResponseID: "",
-		Method:             input.method,
-		Path:               input.path,
-		Status:             0,
-		Headers:            nil,
-		BodyLen:            0,
-		Body:               nil,
-		RequestBody:        bodyRaw,
-		RequestHeaders:     requestHeaders,
-		ResponseHeaders:    nil,
-		FromClient:         false,
-		Length:             0,
-		Text:               "",
-		Seq:                0,
-		Messages:           0,
-		Err:                "",
-		BillingAttestation: billing,
-		RequestFeatures:    requestFeatures,
+	var featuresRaw json.RawMessage
+	model := ""
+	if features := driftRequestFeatures(requestHeaders, input.body); features != nil {
+		if raw, marshalErr := json.Marshal(features); marshalErr == nil {
+			featuresRaw = raw
+		}
+		model = features.ModelID
 	}
+	return capture.DriftShape{
+		Timestamp:          clock.Now().UTC(),
+		Provider:           input.provider,
+		Upstream:           string(upstream),
+		Fingerprint:        driftFingerprint(input, string(upstream), requestHeaders, summary.Keys, billing != "", model),
+		Method:             input.method,
+		Path:               templateChurningPath(input.path),
+		URL:                templateChurningPath(input.upstreamURL),
+		RequestHeaders:     requestHeaders,
+		RequestBody:        bodyRaw,
+		BillingAttestation: billing,
+		RequestFeatures:    featuresRaw,
+		SeenCount:          0,
+	}
+}
+
+// driftFingerprint is the dedup key for one native request shape: provider,
+// upstream, method, path, the masked header set, the top-level body key set,
+// whether a billing attestation is present, and the model. Two requests with the
+// same fingerprint are the same wire shape for baseline learning and collapse to
+// one stored row.
+func driftFingerprint(input driftCaptureInput, upstream string, headers map[string]string, bodyKeys []string, billingPresent bool, model string) string {
+	var b strings.Builder
+	b.WriteString(input.provider)
+	b.WriteByte('\n')
+	b.WriteString(upstream)
+	b.WriteByte('\n')
+	b.WriteString(input.method)
+	b.WriteByte('\n')
+	// Template churning path segments (per-session ids) so endpoints that differ
+	// only by session collapse to one corpus row.
+	b.WriteString(templateChurningPath(input.path))
+	b.WriteByte('\n')
+	headerKeys := make([]string, 0, len(headers))
+	for k := range headers {
+		headerKeys = append(headerKeys, k)
+	}
+	sort.Strings(headerKeys)
+	for _, k := range headerKeys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		// Volatile header values (content-length, per-session ids, attestation
+		// blobs) churn per request and carry no wire identity. Fingerprint only
+		// their presence so requests differing only in those values dedupe to
+		// one row instead of exploding the corpus.
+		if headerValueIsVolatile(headers[k]) {
+			b.WriteString("<volatile>")
+		} else {
+			b.WriteString(headers[k])
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteByte('|')
+	keys := append([]string(nil), bodyKeys...)
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte(',')
+	}
+	b.WriteByte('|')
+	if billingPresent {
+		b.WriteString("billing")
+	}
+	b.WriteByte('|')
+	b.WriteString(model)
+	return sha256Hex([]byte(b.String()))
 }
 
 func driftRequestFeatures(headers map[string]string, body []byte) *RequestFeatures {
@@ -285,50 +302,4 @@ func driftRequestFeatures(headers map[string]string, body []byte) *RequestFeatur
 		return nil
 	}
 	return &features
-}
-
-// writeDriftCaptureRecord serializes rec as one JSONL line and appends it to
-// the per-upstream drift file, creating parent directories as needed. The write
-// goes through a flock-guarded rotating writer so concurrent daemon generations
-// during reload never interleave partial records. Each failure is logged at
-// Warn on the MITM wire concern before the wrapped error returns, matching the
-// rest of the MITM capture surface; the caller swallows the returned error so a
-// failed drift write never blocks the forward path.
-func writeDriftCaptureRecord(captureRoot, upstream string, rotation config.LoggingRotation, rec CaptureRecord) error {
-	path := driftCapturePath(captureRoot, upstream)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		slog.Warn("mitm.drift.capture_mkdir_failed", "concern", "providers.mitm.wire", "component", "mitm", "path", filepath.Dir(path), "err", err)
-		return fmt.Errorf("create drift capture dir: %w", err)
-	}
-	line, err := json.Marshal(rec)
-	if err != nil {
-		slog.Warn("mitm.drift.capture_marshal_failed", "concern", "providers.mitm.wire", "component", "mitm", "path", path, "err", err)
-		return fmt.Errorf("marshal drift capture record: %w", err)
-	}
-	line = append(line, '\n')
-	writer := gklog.NewLockedWriteCloser(path, gklog.NewLumberjackWriterWithConfig(path, driftRotationConfig(rotation)))
-	if writer == nil {
-		slog.Warn("mitm.drift.capture_writer_nil", "concern", "providers.mitm.wire", "component", "mitm", "path", path)
-		return fmt.Errorf("drift capture writer is nil for %s", path)
-	}
-	defer func() { _ = writer.Close() }()
-	if _, err := writer.Write(line); err != nil {
-		slog.Warn("mitm.drift.capture_write_failed", "concern", "providers.mitm.wire", "component", "mitm", "path", path, "err", err)
-		return fmt.Errorf("append drift capture record %s: %w", path, err)
-	}
-	return nil
-}
-
-// driftRotationConfig converts the MITM capture rotation policy into the gklog
-// rotation config the drift writer uses, falling back to gklog's own defaults
-// when the policy leaves the size unset. The drift file is size-bounded the same
-// way the rest of the MITM capture surface is.
-func driftRotationConfig(rotation config.LoggingRotation) gklog.RotationConfig {
-	return gklog.RotationConfig{
-		MaxSizeMB:  rotation.MaxSizeMB,
-		MaxBackups: rotation.MaxBackups,
-		MaxAgeDays: rotation.MaxAgeDays,
-		Compress:   rotation.Compress,
-		LocalTime:  nil,
-	}
 }

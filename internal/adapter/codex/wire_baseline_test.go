@@ -1,8 +1,9 @@
 package codex
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"goodkind.io/clyde/internal/mitm"
@@ -21,15 +22,30 @@ const (
 	learnedAttestation  = "att-token-learned-123"
 )
 
-// writeTestCodexWireBaseline writes a minimal but realistic v2 MITM
-// baseline carrying one codex-cli flavor to a temp dir and returns its
-// path. It uses the real [mitm.WriteSnapshotV2TOML] writer so the load
-// path under test matches production exactly.
-func writeTestCodexWireBaseline(t *testing.T) string {
+// fakeCodexBaselineStore satisfies codexBaselineStore from an in-memory
+// snapshot JSON, so the loader's store path is exercised without a real DB.
+type fakeCodexBaselineStore struct {
+	snapshot  json.RawMessage
+	updatedAt int64
+}
+
+func (f fakeCodexBaselineStore) CurrentBaseline(_ context.Context, _ string) (json.RawMessage, bool, error) {
+	if len(f.snapshot) == 0 {
+		return nil, false, nil
+	}
+	return f.snapshot, true, nil
+}
+
+func (f fakeCodexBaselineStore) CurrentBaselineUpdatedAt(_ context.Context, _ string) (int64, error) {
+	return f.updatedAt, nil
+}
+
+// newTestCodexBaselineStore builds a fake store carrying one codex-cli flavor
+// snapshot, marshaled to the same JSON the capture store would hold.
+func newTestCodexBaselineStore(t *testing.T) fakeCodexBaselineStore {
 	t.Helper()
-	dir := t.TempDir()
-	snap := mitm.SnapshotV2{
-		Upstream: mitm.V2Upstream{
+	snap := mitm.Snapshot{
+		Upstream: mitm.Upstream{
 			Name:        "codex-cli",
 			Version:     "",
 			CapturedAt:  "2026-05-29T00:00:00Z",
@@ -37,14 +53,11 @@ func writeTestCodexWireBaseline(t *testing.T) string {
 		},
 		Flavors: []mitm.FlavorShape{testCodexFlavorShape()},
 	}
-	out, err := mitm.WriteSnapshotV2TOML(snap, dir)
+	raw, err := json.Marshal(snap)
 	if err != nil {
-		t.Fatalf("WriteSnapshotV2TOML: %v", err)
+		t.Fatalf("marshal snapshot: %v", err)
 	}
-	if filepath.Base(out) != "baseline-reference.toml" {
-		t.Fatalf("unexpected baseline filename %q", out)
-	}
-	return out
+	return fakeCodexBaselineStore{snapshot: raw, updatedAt: 1700000000000000000}
 }
 
 func testCodexFlavorShape() mitm.FlavorShape {
@@ -53,37 +66,37 @@ func testCodexFlavorShape() mitm.FlavorShape {
 		RecordCount: 2,
 		Methods:     []string{"POST"},
 		Paths:       []string{"/responses"},
-		Signature: mitm.V2Signature{
+		Signature: mitm.Signature{
 			UserAgent:       learnedUserAgent,
 			BetaFingerprint: learnedBetaFeatures,
 			BodyKeys:        []string{"model", "instructions", "input", "tools", "stream"},
 		},
 		Headers:            testCodexFlavorHeaders(),
 		BillingAttestation: "",
-		Body: mitm.V2Body{
+		Body: mitm.Body{
 			BodyType: "object",
-			Fields: []mitm.V2Field{
-				{Name: "model", Kind: mitm.V2FieldKindString, Presence: mitm.V2HeaderPresenceRequired, OccurrenceRate: 1.0},
-				{Name: "input", Kind: mitm.V2FieldKindArray, Presence: mitm.V2HeaderPresenceRequired, OccurrenceRate: 1.0},
-				{Name: "instructions", Kind: mitm.V2FieldKindString, Presence: mitm.V2HeaderPresenceOptional, OccurrenceRate: 0.5},
-				{Name: "stream", Kind: mitm.V2FieldKindBool, Presence: mitm.V2HeaderPresenceRequired, OccurrenceRate: 1.0},
+			Fields: []mitm.Field{
+				{Name: "model", Kind: mitm.FieldKindString, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "input", Kind: mitm.FieldKindArray, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "instructions", Kind: mitm.FieldKindString, Presence: mitm.HeaderPresenceOptional, OccurrenceRate: 0.5},
+				{Name: "stream", Kind: mitm.FieldKindBool, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
 			},
 		},
 	}
 }
 
-func testCodexFlavorHeaders() []mitm.V2Header {
-	constant := func(name, value string) mitm.V2Header {
-		return mitm.V2Header{
+func testCodexFlavorHeaders() []mitm.Header {
+	constant := func(name, value string) mitm.Header {
+		return mitm.Header{
 			Name:           name,
-			Classification: mitm.V2HeaderClassConstant,
-			Presence:       mitm.V2HeaderPresenceRequired,
+			Classification: mitm.HeaderClassConstant,
+			Presence:       mitm.HeaderPresenceRequired,
 			ObservedValues: []string{value},
 			Pattern:        "",
 			OccurrenceRate: 1.0,
 		}
 	}
-	return []mitm.V2Header{
+	return []mitm.Header{
 		constant("originator", learnedOriginator),
 		constant("openai-beta", learnedOpenAIBeta),
 		constant("user-agent", learnedUserAgent),
@@ -97,11 +110,11 @@ func testCodexFlavorHeaders() []mitm.V2Header {
 
 // TestCodexWireBaselineProjectsIdentity proves the loader projects the
 // originator, openai-beta, user-agent, beta-features, attestation, and
-// body field order from a baseline-reference.toml.
+// body field order from the stored baseline.
 func TestCodexWireBaselineProjectsIdentity(t *testing.T) {
-	path := writeTestCodexWireBaseline(t)
+	store := newTestCodexBaselineStore(t)
 	loader := NewWireBaselineLoader()
-	identity, err := loader.Load(path)
+	identity, err := loader.Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -140,16 +153,16 @@ func TestCodexWireBaselineProjectsIdentity(t *testing.T) {
 	}
 }
 
-// TestCodexWireBaselineMtimeCache proves a second load with no file
-// change returns the cached identity (same path, no re-read needed).
-func TestCodexWireBaselineMtimeCache(t *testing.T) {
-	path := writeTestCodexWireBaseline(t)
+// TestCodexWireBaselineUpdatedAtCache proves a second load with an unchanged
+// updated-at returns the cached identity (no re-read needed).
+func TestCodexWireBaselineUpdatedAtCache(t *testing.T) {
+	store := newTestCodexBaselineStore(t)
 	loader := NewWireBaselineLoader()
-	first, err := loader.Load(path)
+	first, err := loader.Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("first Load: %v", err)
 	}
-	second, err := loader.Load(path)
+	second, err := loader.Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("second Load: %v", err)
 	}
@@ -159,21 +172,20 @@ func TestCodexWireBaselineMtimeCache(t *testing.T) {
 }
 
 // TestCodexWireBaselineMissingReturnsSentinel proves a missing baseline
-// yields ErrCodexBaselineMissing (the soft fall-back signal, not a hard
-// error).
+// (updated_at=0) yields ErrCodexBaselineMissing (the soft fall-back signal).
 func TestCodexWireBaselineMissingReturnsSentinel(t *testing.T) {
 	loader := NewWireBaselineLoader()
-	_, err := loader.Load(filepath.Join(t.TempDir(), "does-not-exist.toml"))
+	_, err := loader.Load(context.Background(), fakeCodexBaselineStore{})
 	if !errors.Is(err, ErrCodexBaselineMissing) {
 		t.Fatalf("err=%v want ErrCodexBaselineMissing", err)
 	}
 }
 
-// TestCodexWireBaselineEmptyPathReturnsSentinel proves an empty path
-// yields ErrCodexBaselineMissing rather than a stat panic.
-func TestCodexWireBaselineEmptyPathReturnsSentinel(t *testing.T) {
+// TestCodexWireBaselineNilStoreReturnsSentinel proves a nil store yields
+// ErrCodexBaselineMissing rather than a panic.
+func TestCodexWireBaselineNilStoreReturnsSentinel(t *testing.T) {
 	loader := NewWireBaselineLoader()
-	_, err := loader.Load("")
+	_, err := loader.Load(context.Background(), nil)
 	if !errors.Is(err, ErrCodexBaselineMissing) {
 		t.Fatalf("err=%v want ErrCodexBaselineMissing", err)
 	}
@@ -184,8 +196,8 @@ func TestCodexWireBaselineEmptyPathReturnsSentinel(t *testing.T) {
 // originator, openai-beta, user-agent, and beta-features, and replay the
 // captured x-oai-attestation header.
 func TestCodexHeadersUseLearnedIdentity(t *testing.T) {
-	path := writeTestCodexWireBaseline(t)
-	identity, err := NewWireBaselineLoader().Load(path)
+	store := newTestCodexBaselineStore(t)
+	identity, err := NewWireBaselineLoader().Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

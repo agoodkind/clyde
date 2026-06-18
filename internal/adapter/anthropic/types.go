@@ -17,22 +17,6 @@ import (
 // API defaults to "model max" which we approximate generously.
 const MaxOutputTokens = 8192
 
-// WireCaptureMode is the closed enum the anthropic client honors when the
-// dispatcher passes a per-provider wire-capture lever. Aliased from the
-// leaf [anthmode] package so the parent provider package and the
-// [internal/config] package share a single canonical type without an import
-// cycle.
-type WireCaptureMode = anthmode.WireCaptureMode
-
-// Anthropic wire-capture modes. Off is the safe default and matches an empty
-// configured value. Aliased from [anthmode] so callers may continue to use
-// the unqualified `anthropic.WireCapture*` names.
-const (
-	WireCaptureOff         = anthmode.WireCaptureOff
-	WireCaptureSummaryOnly = anthmode.WireCaptureSummaryOnly
-	WireCaptureFull        = anthmode.WireCaptureFull
-)
-
 // InboundThinking is the closed enum of strategies for the visible thinking
 // content block round-trip on the inbound (request-shaping) side. Aliased
 // from the leaf [anthmode] package so the parent provider package and the
@@ -62,26 +46,16 @@ type Config struct {
 	StainlessRuntimeVersion string
 	CCVersion               string
 	CCEntrypoint            string
-	// WireCaptureMode controls the optional per-success-path log of the
-	// upstream response shape. WireCaptureOff (default) is safe; the
-	// other modes route to adapter.providers.anthropic.wire_capture for
-	// short-retention diagnostics.
-	WireCaptureMode WireCaptureMode
-	// WireBaselinePath is the absolute path to the daemon-owned MITM v2
-	// baseline (baseline-reference.toml) the client reads at request time to
-	// project its outbound wire identity. There is no compiled-in
-	// default; the daemon resolves this from
-	// [mitm].drift.upstreams["claude-code"].reference, falling back to
-	// the default baseline root. An empty value or a missing file makes
-	// every /v1/messages request fail with [ErrBaselineMissing] so the
-	// adapter can return an operator-actionable HTTP 503 rather than
-	// sending a wrong-shaped request.
-	WireBaselinePath string
-	// CaptureStore, when non-nil, receives one [capture.Record] per
-	// outbound /v1/messages exchange tagged client="adapter.anthropic", so
-	// the BYOK egress lands in mitm/capture.db alongside proxied client
-	// traffic. The daemon sets it from its shared capture store; a nil store
-	// records nothing.
+	// CaptureStore is the daemon's shared SQLite capture store. The client
+	// reads the claude-code wire baseline (current baseline + updated-at)
+	// from it at request time to project its outbound wire identity, and
+	// records one [capture.Record] per outbound /v1/messages exchange tagged
+	// client="adapter.anthropic" so the BYOK egress lands in mitm/capture.db
+	// alongside proxied client traffic. There is no compiled-in default; a
+	// nil store or a missing baseline makes every /v1/messages request fail
+	// with [ErrBaselineMissing] so the adapter can return an
+	// operator-actionable HTTP 503 rather than sending a wrong-shaped
+	// request.
 	CaptureStore *capture.Store
 	// StripWireFlags lists capability tokens to drop from the outbound
 	// anthropic-beta header, fed from the provider-neutral

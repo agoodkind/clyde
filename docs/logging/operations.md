@@ -27,4 +27,4 @@ For Cursor chat issues, identify whether the traffic is adapter BYOK or MITM IDE
 
 For missing logs, check for `logging.request.incomplete`. That event names the required legs, observed legs, missing legs, and last observed phase in the JSON fields `expected_legs`, `observed_legs`, `missing_legs`, and `last_phase`.
 
-For sensitive data review, inspect `payload_removed` and confirm that it records context field removals. Do not paste raw prompts, tokens, cookies, credentials, or response bodies into tickets or chat.
+For sensitive data review, confirm that request and response logs carry no body content, summary, or hash; full bodies live only in the SQLite capture store at `mitm/capture.db`. Do not paste raw prompts, tokens, cookies, credentials, or response bodies into tickets or chat.

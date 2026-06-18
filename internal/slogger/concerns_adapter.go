@@ -20,8 +20,6 @@ const (
 	ConcernAdapterProviderAnthSSE         = "adapter.providers.anthropic.sse"
 	ConcernAdapterProviderAnthOAuth       = "adapter.providers.anthropic.oauth"
 	ConcernAdapterProviderAnthErr         = "adapter.providers.anthropic.errors"
-	ConcernAdapterProviderAnthWire        = "adapter.providers.anthropic.wire_capture"
-	ConcernAdapterProviderCodexWire       = "adapter.providers.codex.wire_capture"
 	ConcernAdapterProviderPassthroughReq  = "adapter.providers.passthrough_override.request"
 	ConcernAdapterProviderPassthroughCoer = "adapter.providers.passthrough_override.coercion"
 )

@@ -205,7 +205,6 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	s.providerRegistry = adapterprovider.NewRegistry()
 	probeCfg := config.NewConfigWithDefaults()
 	probeCfg.Logging = logging
-	probeCfg.Adapter.WireCapture = cfg.WireCapture
 	policies, err := logpolicy.Resolve(*probeCfg)
 	if err != nil {
 		log.LogAttrs(ctx, slog.LevelError, "adapter.logpolicy.resolve_failed", slog.String("concern", "adapter.http.errors"), slog.String("err", err.Error()))
@@ -245,7 +244,7 @@ func (s *Server) registerProviders(
 			HTTPClient: s.httpClient,
 			Telemetry:  nil,
 			Now:        nil,
-		}, codexProviderOptionsWithRegistry(wsReg, policies, deps.CodexWireBaselinePath, deps.CaptureStore))
+		}, codexProviderOptionsWithRegistry(wsReg, policies, deps.CaptureStore))
 		s.providerRegistry.Register(s.codexProvider)
 		log.LogAttrs(ctx, slog.LevelInfo, "adapter.provider_registry.registered", slog.String("concern", "adapter.http.ingress"), slog.String("provider", adapterresolver.ProviderCodex.String()),
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
@@ -284,8 +283,6 @@ func (s *Server) registerAnthropicProvider(
 		StainlessRuntimeVersion: id.StainlessRuntimeVersion,
 		CCVersion:               id.CCVersion,
 		CCEntrypoint:            id.CCEntrypoint,
-		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
-		WireBaselinePath:        deps.AnthropicWireBaselinePath,
 		CaptureStore:            deps.CaptureStore,
 		StripWireFlags:          cfg.StripWireFlags,
 	})
@@ -320,7 +317,6 @@ func (s *Server) registerAnthropicProvider(
 func codexProviderOptionsWithRegistry(
 	wsReg *livetrack.Registry[adaptercodex.WsSessionMeta],
 	policies logpolicy.PolicySet,
-	wireBaselinePath string,
 	captureStore *capture.Store,
 ) adaptercodex.ProviderOptions {
 	codexSidecarRotation := policies.Sinks[logpolicy.SinkCodexSidecar].Rotation
@@ -334,7 +330,6 @@ func codexProviderOptionsWithRegistry(
 		},
 		WsSessionIdleTTL:  0,
 		WsSessionRegistry: wsReg,
-		WireBaselinePath:  wireBaselinePath,
 		CaptureStore:      captureStore,
 	}
 }
