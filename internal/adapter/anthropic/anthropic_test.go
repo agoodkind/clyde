@@ -561,16 +561,9 @@ func TestStreamEvents_fixtureSSEWithCacheUsage(t *testing.T) {
 	}
 }
 
-// TestStreamEvents_wireCaptureFullDoesNotAbortScan guards the production
-// configuration [adapter.anthropic.wire_capture] mode = "full", which wraps the
-// upstream SSE body in a captureTee. A regression made captureTee.Read wrap the
-// terminal io.EOF with %w, and the bufio.Scanner that consumes the SSE stream
-// compares its read error against io.EOF with == (stdlib bufio/scan.go), so the
-// wrapped EOF was mistaken for a real failure and StreamEvents returned
-// "anthropic stream scan: captureTee read: EOF" on an otherwise healthy 200
-// stream. This test drives a full, valid SSE stream with Full capture enabled
+// TestStreamEvents_HealthyStreamScanCompletes drives a full, valid SSE stream
 // and asserts the scan completes and the events parse.
-func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
+func TestStreamEvents_HealthyStreamScanCompletes(t *testing.T) {
 	t.Parallel()
 	startPayload, err := json.Marshal(map[string]any{
 		"message": map[string]any{
@@ -658,7 +651,6 @@ func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
 			CCVersion:               "1.0.0",
 			CCEntrypoint:            "test",
 			WireBaselinePath:        writeTestWireBaseline(t),
-			WireCaptureMode:         WireCaptureFull,
 		},
 	}
 
@@ -672,7 +664,7 @@ func TestStreamEvents_wireCaptureFullDoesNotAbortScan(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("StreamEvents with WireCaptureFull returned error on healthy 200 stream: %v", err)
+		t.Fatalf("StreamEvents returned error on healthy 200 stream: %v", err)
 	}
 	if stop != "end_turn" {
 		t.Fatalf("stop reason: got %q want end_turn", stop)

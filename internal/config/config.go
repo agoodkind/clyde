@@ -255,7 +255,6 @@ type AdapterWireCapture struct {
 // AdapterAnthropic carries Anthropic-specific sub-blocks introduced after
 // the original AdapterConfig shape stabilized.
 type AdapterAnthropic struct {
-	WireCapture AdapterAnthropicWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
 	// OAuth holds Anthropic API URL, header metadata, and keychain label
 	// for the direct-OAuth path. Claude login credentials come from the
 	// current platform's normal Claude credential store.
@@ -284,14 +283,6 @@ type AdapterAnthropicReasoning struct {
 // default applied when unset.
 func (r AdapterAnthropicReasoning) ResolvedInboundThinking() anthmode.InboundThinking {
 	return r.InboundThinking.Resolved()
-}
-
-// AdapterAnthropicWireCapture is the per-provider wire-capture mode block
-// for Anthropic. The legal mode set lives in the Anthropic provider package
-// as [anthmode.WireCaptureMode]; empty mode is treated as
-// [anthmode.WireCaptureOff].
-type AdapterAnthropicWireCapture struct {
-	Mode anthmode.WireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
 }
 
 // CodexWireCaptureMode is the closed enum of legal modes for the Codex
@@ -387,12 +378,6 @@ func (r AdapterCodexReasoning) ResolvedRoundTripEncrypted() CodexRoundTripEncryp
 		return CodexRoundTripEncryptedRoundTrip
 	}
 	return r.RoundTripEncrypted
-}
-
-// ResolvedAnthropicWireCaptureMode returns the configured mode with the Off
-// default applied when the operator has not set a value.
-func (c AdapterAnthropic) ResolvedAnthropicWireCaptureMode() anthmode.WireCaptureMode {
-	return c.WireCapture.Mode.Resolved()
 }
 
 // ResolvedCodexWireCaptureMode returns the configured mode with the Off

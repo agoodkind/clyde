@@ -284,7 +284,6 @@ func (s *Server) registerAnthropicProvider(
 		StainlessRuntimeVersion: id.StainlessRuntimeVersion,
 		CCVersion:               id.CCVersion,
 		CCEntrypoint:            id.CCEntrypoint,
-		WireCaptureMode:         cfg.Anthropic.ResolvedAnthropicWireCaptureMode(),
 		WireBaselinePath:        deps.AnthropicWireBaselinePath,
 		CaptureStore:            deps.CaptureStore,
 		StripWireFlags:          cfg.StripWireFlags,
