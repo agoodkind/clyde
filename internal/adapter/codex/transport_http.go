@@ -217,8 +217,13 @@ func runHTTPTransportEventsOnce(
 		// HTTP 400 + invalid_request_error + upstream_* so Cursor never
 		// sees a raw 5xx or 429 and keeps the diagnostic message.
 		snippet := readHTTPErrorSnippet(resp.Body)
-		statusErr := fmt.Errorf("codex http transport: upstream status %d: %s", resp.StatusCode, snippet)
-		logHTTPTransportError(ctx, cfg, "upstream_non_200", statusErr)
+		// The error body snippet rides on a typed UpstreamStatusError whose
+		// Error() carries only the status, so the terminal failure log and every
+		// other err.Error() consumer stay free of the response body. The snippet
+		// reaches the client only through the error boundary's ClientMessage path
+		// and the capture store; it never lands in JSONL.
+		logHTTPTransportError(ctx, cfg, "upstream_non_200", fmt.Errorf("codex http transport: upstream status %d", resp.StatusCode))
+		statusErr := &UpstreamStatusError{Status: resp.StatusCode, Snippet: snippet}
 		recordCodexHTTPEgress(cfg.CaptureStore, cfg.Correlation, req, resp, body, []byte(snippet), cfg.ConversationID, started)
 		return NewRunResult("stop"), false, statusErr
 	}
@@ -292,6 +297,28 @@ func retryHTTPTransportAfterAuthRefresh(
 		return nil, cfg, wrapped
 	}
 	return retryResp, cfg, nil
+}
+
+// UpstreamStatusError is a non-2xx codex upstream HTTP response. Error() carries
+// only the status so the terminal failure log and any other err.Error() consumer
+// stay free of the upstream response body, satisfying the no-body-logging rule.
+// The error boundary recognizes this type and folds Snippet into the
+// Cursor-facing message via ClientMessage; the snippet also lives in the capture
+// store, but never in a log.
+type UpstreamStatusError struct {
+	Status  int
+	Snippet string
+}
+
+// Error returns the log-safe message: the upstream status with no response body.
+func (e *UpstreamStatusError) Error() string {
+	return fmt.Sprintf("codex http transport: upstream status %d", e.Status)
+}
+
+// ClientMessage returns the status plus the upstream body snippet for the
+// client-facing error envelope only. It is never passed to a logger.
+func (e *UpstreamStatusError) ClientMessage() string {
+	return fmt.Sprintf("codex http transport: upstream status %d: %s", e.Status, e.Snippet)
 }
 
 func readHTTPErrorSnippet(r io.Reader) string {

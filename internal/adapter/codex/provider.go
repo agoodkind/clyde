@@ -202,7 +202,6 @@ func (p *Provider) Execute(ctx context.Context, req adapterresolver.ResolvedRequ
 		FileLog:                        p.fileLog,
 		ReasoningSummary:               p.cfg.ReasoningSummary,
 		InboundThinkingMaterialization: codexSummaryRenderStrategy(p.cfg.Reasoning.ResolvedRoundTripSummary()),
-		WireCaptureMode:                WireCaptureMode(p.cfg.ResolvedCodexWireCaptureMode()),
 		RoundTripEncrypted:             RoundTripEncrypted(p.cfg.Reasoning.ResolvedRoundTripEncrypted()),
 		RoundTripSummary:               RoundTripSummary(p.cfg.Reasoning.ResolvedRoundTripSummary()),
 		RetryPolicies:                  p.retryPolicies,

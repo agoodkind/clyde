@@ -178,34 +178,6 @@ func TestResolveSinksInheritGlobalRotation(t *testing.T) {
 	}
 }
 
-func TestResolveAppliesAdapterWireCaptureRotationDefaults(t *testing.T) {
-	cfg := config.NewConfigWithDefaults()
-	cfg.Adapter.WireCapture.Rotation = config.LoggingRotation{
-		MaxSizeMB: 5,
-	}
-
-	policies, err := logpolicy.Resolve(*cfg)
-	if err != nil {
-		t.Fatalf("Resolve returned error: %v", err)
-	}
-
-	for _, concernName := range []string{
-		slogger.ConcernAdapterProviderAnthWire,
-		slogger.ConcernAdapterProviderCodexWire,
-	} {
-		concernPolicy := policies.Concerns[concernName]
-		if concernPolicy.Rotation.MaxSizeMB != 5 {
-			t.Fatalf("%s rotation max size = %d, want 5", concernName, concernPolicy.Rotation.MaxSizeMB)
-		}
-		if concernPolicy.Rotation.MaxBackups != 3 {
-			t.Fatalf("%s rotation max backups = %d, want 3", concernName, concernPolicy.Rotation.MaxBackups)
-		}
-		if concernPolicy.Rotation.MaxAgeDays != 2 {
-			t.Fatalf("%s rotation max age = %d, want 2", concernName, concernPolicy.Rotation.MaxAgeDays)
-		}
-	}
-}
-
 func TestResolveSloggerSetupConvertsPolicies(t *testing.T) {
 	cfg := config.NewConfigWithDefaults()
 	cfg.Logging.Sinks = config.LoggingSinks{

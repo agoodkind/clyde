@@ -113,12 +113,6 @@ type WebsocketTransportConfig struct {
 	// Log carries ws_session telemetry events. Optional; falls back
 	// to slog.Default().
 	Log *slog.Logger
-	// WireCaptureMode controls per-frame body capture. Off (default)
-	// emits nothing. SummaryOnly emits a fingerprint per frame.
-	// ReasoningOnly emits the body only on response.output_item.done
-	// frames carrying a reasoning item. Full emits the body on every
-	// inbound frame. Routed to adapter.providers.codex.wire_capture.
-	WireCaptureMode WireCaptureMode
 	// RoundTripEncrypted controls whether the SSE parser surfaces the
 	// encrypted_content blob from completed reasoning items on
 	// EventReasoningFinished. RoundTripEncryptedRoundTrip (the
@@ -192,7 +186,7 @@ func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, logCtx sseInstrumentationContext, wireMode WireCaptureMode, capCfg *wsEgressCapture) io.Reader {
+func streamWebsocketAsSyntheticSSE(conn *websocket.Conn, capCfg *wsEgressCapture) io.Reader {
 	pr, pw := io.Pipe()
 	rec := newWsFrameRecorder(capCfg)
 	go func() {
@@ -210,19 +204,17 @@ func streamWebsocketAsSyntheticSSE(ctx context.Context, conn *websocket.Conn, lo
 			rec.record(200)
 			_ = pw.Close()
 		}()
-		wsReadFrames(ctx, conn, pw, logCtx, wireMode, rec)
+		wsReadFrames(conn, pw, rec)
 	}()
 	return pr
 }
 
 // wsReadFrames runs the inbound websocket read loop for one turn. It mirrors
-// each text frame as a synthetic SSE frame onto pw, accumulates frames for the
-// capture record, and optionally logs per-frame wire capture. On a transport or
-// frame error it records a failed exchange and closes pw with the error. On a
-// clean completion frame it returns, leaving the caller's defer to record the
-// successful exchange and close pw.
-func wsReadFrames(ctx context.Context, conn *websocket.Conn, pw *io.PipeWriter, logCtx sseInstrumentationContext, wireMode WireCaptureMode, rec *wsFrameRecorder) {
-	seq := 0
+// each text frame as a synthetic SSE frame onto pw and accumulates frames for
+// the SQLite capture record. On a transport or frame error it records a failed
+// exchange and closes pw with the error. On a clean completion frame it returns,
+// leaving the caller's defer to record the successful exchange and close pw.
+func wsReadFrames(conn *websocket.Conn, pw *io.PipeWriter, rec *wsFrameRecorder) {
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
@@ -234,7 +226,6 @@ func wsReadFrames(ctx context.Context, conn *websocket.Conn, pw *io.PipeWriter, 
 			continue
 		}
 		rec.add(message)
-		seq++
 		frame, frameErr := websocketMessageToSyntheticSSE(message)
 		if frameErr != nil {
 			rec.record(0)
@@ -248,69 +239,10 @@ func wsReadFrames(ctx context.Context, conn *websocket.Conn, pw *io.PipeWriter, 
 		}
 		var raw websocketEventEnvelope
 		parseOK := json.Unmarshal(message, &raw) == nil
-		if wireMode != "" && wireMode != WireCaptureOff {
-			emitCodexWireCapture(ctx, wireMode, logCtx, seq, raw, message)
-		}
 		if parseOK && (raw.Type == "response.completed" || raw.Type == "response.failed") {
 			return
 		}
 	}
-}
-
-// codexReasoningItemDone reports whether the inbound frame is a
-// response.output_item.done event whose `item.type` is `reasoning`. This is
-// the cheapest predicate for proving encrypted_content arrival on the wire.
-func codexReasoningItemDone(message []byte) bool {
-	var probe struct {
-		Type string `json:"type"`
-		Item struct {
-			Type string `json:"type"`
-		} `json:"item"`
-	}
-	if err := json.Unmarshal(message, &probe); err != nil {
-		return false
-	}
-	return probe.Type == "response.output_item.done" && probe.Item.Type == "reasoning"
-}
-
-// emitCodexWireCapture routes one inbound frame to the
-// adapter.providers.codex.wire_capture concern according to mode. Off is
-// filtered by the caller. SummaryOnly emits a fingerprint with no body.
-// ReasoningOnly emits the body only on response.output_item.done frames
-// carrying a reasoning item. Full emits the body unconditionally. The body
-// is emitted as a [json.RawMessage] so the upstream JSON shape is preserved
-// without escaping.
-func emitCodexWireCapture(ctx context.Context, mode WireCaptureMode, logCtx sseInstrumentationContext, seq int, raw websocketEventEnvelope, message []byte) {
-	includeBody := false
-	switch mode {
-	case WireCaptureOff:
-		return
-	case WireCaptureSummaryOnly:
-		includeBody = false
-	case WireCaptureReasoningOnly:
-		includeBody = codexReasoningItemDone(message)
-		if !includeBody {
-			return
-		}
-	case WireCaptureFull:
-		includeBody = true
-	}
-	attrs := []slog.Attr{
-		slog.String("subcomponent", "codex"),
-		slog.String("mode", string(mode)),
-		slog.String("request_id", logCtx.RequestID),
-		slog.String("cursor_request_id", logCtx.CursorRequestID),
-		slog.String("conversation_id", logCtx.ConversationID),
-		slog.String("alias", logCtx.Alias),
-		slog.String("model", logCtx.Model),
-		slog.String("upstream_event_type", raw.Type),
-		slog.Int("frame_seq", seq),
-		slog.Int("payload_bytes", len(message)),
-	}
-	if includeBody {
-		attrs = append(attrs, slog.Any("body", json.RawMessage(message)))
-	}
-	codexWireCaptureLog.Logger().LogAttrs(ctx, slog.LevelInfo, "adapter.providers.codex.wire_capture", append([]slog.Attr{slog.String("concern", "adapter.providers.codex.wire_capture")}, attrs...)...)
 }
 
 func writeAndParseWebsocketRequest(
@@ -353,7 +285,7 @@ func writeAndParseWebsocketRequest(
 			started:   started,
 		}
 	}
-	synthetic := streamWebsocketAsSyntheticSSE(ctx, conn, logCtx, cfg.WireCaptureMode, capCfg)
+	synthetic := streamWebsocketAsSyntheticSSE(conn, capCfg)
 	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
 	responseStarted := false
 	result, err := ParseSSEEventsWithOptions(ctx, synthetic, func(event adapterrender.Event) error {
