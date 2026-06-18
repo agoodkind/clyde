@@ -179,11 +179,13 @@ func diffFlavor(ref, cand FlavorShape) FlavorDiffReport {
 			out.HeaderMissing = append(out.HeaderMissing, name)
 			continue
 		}
-		// A volatile header (byte size, per-session id, attestation blob) churns
-		// per request and carries no wire identity, so only its presence matters.
-		// Skip its class and value diffs so request-size and session noise never
-		// reads as baseline drift.
-		if refHdr.Volatile || candHdr.Volatile {
+		// A header that both sides agree is volatile (byte size, per-session id,
+		// attestation blob) churns per request and carries no wire identity, so
+		// only its presence matters: skip its class and value diffs. When the
+		// two sides disagree on volatility the header changed shape between
+		// baseline and candidate, which is real drift, so fall through and let
+		// the class/value diff surface it.
+		if refHdr.Volatile && candHdr.Volatile {
 			continue
 		}
 		if refHdr.Classification != candHdr.Classification {
