@@ -18,12 +18,10 @@ current source or generated help for details that can drift:
 - Conversation CLI and MCP operations: `clyde conversation --help` and
   `internal/clispec/`.
 - Runtime config: `clyde.example.toml` and `internal/config/`.
-- Adapter behavior: `docs/openai-adapter.md`, `docs/cursor.md`, and
-  `internal/adapter/`.
-- MITM listeners and capture behavior: `docs/mitm-listeners.md` and
-  `internal/mitm/`.
-- Logging, sinks, request paths, and inventory: `docs/SLOG.md` and
-  `docs/logging/`.
+- Adapter behavior: `docs/cursor.md` and `internal/adapter/`.
+- MITM listeners and capture behavior: `docs/wire-baseline.md`,
+  `docs/cursor-mitm-setup.md`, and `internal/mitm/`.
+- Logging, sinks, request paths, and inventory: `docs/logging/`.
 
 `cmd/clyde/main.go` owns the root command routing. Conversation operations are
 declared once in `internal/clispec/` and rendered onto both CLI and MCP
