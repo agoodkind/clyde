@@ -180,15 +180,16 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	}
 	if err != nil {
 		logResponse(ctx, slog.LevelError, "anthropic.messages.post_failed", responseEvent{
-			Subcomponent: "anthropic",
-			Model:        req.Model,
-			Status:       0,
-			RequestID:    "",
-			BodyBytes:    len(body),
-			DurationMs:   clock.Since(postStarted).Milliseconds(),
-			RateLimits:   nil,
-			RetryAfter:   "",
-			Err:          err.Error(),
+			Subcomponent:  "anthropic",
+			Model:         req.Model,
+			Status:        0,
+			RequestID:     "",
+			RequestBytes:  len(body),
+			ResponseBytes: 0,
+			DurationMs:    clock.Since(postStarted).Milliseconds(),
+			RateLimits:    nil,
+			RetryAfter:    "",
+			Err:           err.Error(),
 		})
 		return nil, &UpstreamError{
 			Classification: Classify(nil, err),
@@ -202,13 +203,14 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	resp, postStarted = c.maybeRetryOn401(ctx, req, body, token, flavor, resp, postStarted)
 
 	base := responseEvent{
-		Subcomponent: "anthropic",
-		Model:        req.Model,
-		Status:       resp.StatusCode,
-		RequestID:    resp.Header.Get("Request-Id"),
-		BodyBytes:    len(body),
-		DurationMs:   clock.Since(postStarted).Milliseconds(),
-		RateLimits:   rateLimitAttrs(resp.Header), RetryAfter: "", Err: "",
+		Subcomponent:  "anthropic",
+		Model:         req.Model,
+		Status:        resp.StatusCode,
+		RequestID:     resp.Header.Get("Request-Id"),
+		RequestBytes:  len(body),
+		ResponseBytes: 0,
+		DurationMs:    clock.Since(postStarted).Milliseconds(),
+		RateLimits:    rateLimitAttrs(resp.Header), RetryAfter: "", Err: "",
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -220,8 +222,8 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 		// The error body is persisted to the capture store when one is
 		// configured, never to the log; the JSONL leg keeps only the byte count.
 		// The truncated body still reaches the client through the UpstreamError
-		// message below. BodyBytes here is the error-response size for this leg.
-		ev.BodyBytes = len(errBody)
+		// message below. ResponseBytes records the upstream error-body size.
+		ev.ResponseBytes = len(errBody)
 		logResponse(ctx, slog.LevelError, "anthropic.messages.upstream_error", ev)
 		c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
 		return nil, &UpstreamError{
@@ -249,9 +251,9 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 	ev.RetryAfter = resp.Header.Get("Retry-After")
 	// The error body is persisted to the capture store when one is configured,
 	// never to the log; the JSONL leg keeps only the byte count. The body still
-	// reaches the client through the rate-limit message built below. BodyBytes
-	// here is the error-response size for this leg.
-	ev.BodyBytes = len(errBody)
+	// reaches the client through the rate-limit message built below. ResponseBytes
+	// records the upstream error-body size.
+	ev.ResponseBytes = len(errBody)
 	logResponse(ctx, slog.LevelWarn, "anthropic.ratelimit", ev)
 	c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
 
@@ -348,12 +350,14 @@ func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []b
 			"dropped", keys,
 		)
 	}
+	// The request body is never logged, even at Debug: it carries the user
+	// prompt. The full outbound body lives in the capture store; the log keeps
+	// only the size and the redacted headers.
 	log.DebugContext(ctx, "anthropic.messages.request", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 		"model", req.Model,
 		"url", c.cfg.MessagesURL,
-		"body_bytes", len(body),
+		"request_bytes", len(body),
 		"headers", redactedOutboundHeaders(httpReq.Header),
-		"body", string(body),
 	)
 	return httpReq, nil
 }
