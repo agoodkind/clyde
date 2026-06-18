@@ -84,6 +84,7 @@ type removedLoggingConfig struct {
 // silently; the scanner warns the operator instead.
 type removedAdapterSection struct {
 	Anthropic removedAdapterProvider `toml:"anthropic"`
+	Codex     removedAdapterProvider `toml:"codex"`
 }
 
 type removedAdapterProvider struct {
@@ -140,6 +141,9 @@ func warnRemovedLoggingConfig(data []byte, tomlPath string, log *slog.Logger) {
 	}
 	if removedConfig.Adapter.Anthropic.WireCapture != nil {
 		emitRemovedLoggingKeyWarning("adapter.anthropic.wire_capture")
+	}
+	if removedConfig.Adapter.Codex.WireCapture != nil {
+		emitRemovedLoggingKeyWarning("adapter.codex.wire_capture")
 	}
 }
 
