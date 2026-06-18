@@ -15,7 +15,9 @@ type capturingHandler struct {
 func (h capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h capturingHandler) Handle(_ context.Context, record slog.Record) error {
-	*h.records = append(*h.records, record)
+	// slog may reuse or mutate the record after Handle returns, so retain a
+	// clone for later inspection (slog.Handler contract).
+	*h.records = append(*h.records, record.Clone())
 	return nil
 }
 
