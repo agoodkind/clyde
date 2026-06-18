@@ -14,6 +14,7 @@ package capture
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	sq "github.com/Masterminds/squirrel"
 	_ "github.com/mattn/go-sqlite3" // database/sql driver "sqlite3"
 )
 
@@ -190,44 +192,11 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Store, error) {
 	return s, nil
 }
 
-const schemaSQL = `
-CREATE TABLE IF NOT EXISTS requests (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	ts INTEGER NOT NULL,
-	client TEXT NOT NULL DEFAULT '',
-	provider TEXT NOT NULL DEFAULT '',
-	concern TEXT NOT NULL DEFAULT '',
-	host TEXT NOT NULL DEFAULT '',
-	method TEXT NOT NULL DEFAULT '',
-	path TEXT NOT NULL DEFAULT '',
-	status INTEGER NOT NULL DEFAULT 0,
-	request_id TEXT NOT NULL DEFAULT '',
-	upstream_request_id TEXT NOT NULL DEFAULT '',
-	session_id TEXT NOT NULL DEFAULT '',
-	trace_id TEXT NOT NULL DEFAULT '',
-	req_headers TEXT NOT NULL DEFAULT '',
-	resp_headers TEXT NOT NULL DEFAULT '',
-	req_content_type TEXT NOT NULL DEFAULT '',
-	resp_content_type TEXT NOT NULL DEFAULT '',
-	req_bytes INTEGER NOT NULL DEFAULT 0,
-	resp_bytes INTEGER NOT NULL DEFAULT 0,
-	duration_ms INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts);
-CREATE INDEX IF NOT EXISTS idx_requests_client ON requests(client);
-CREATE INDEX IF NOT EXISTS idx_requests_host ON requests(host);
-CREATE INDEX IF NOT EXISTS idx_requests_concern ON requests(concern);
-CREATE INDEX IF NOT EXISTS idx_requests_request_id ON requests(request_id);
-CREATE INDEX IF NOT EXISTS idx_requests_trace_id ON requests(trace_id);
-CREATE TABLE IF NOT EXISTS bodies (
-	request_row_id INTEGER NOT NULL,
-	which TEXT NOT NULL,
-	content_type TEXT NOT NULL DEFAULT '',
-	is_text INTEGER NOT NULL DEFAULT 0,
-	truncated INTEGER NOT NULL DEFAULT 0,
-	data BLOB,
-	PRIMARY KEY (request_row_id, which)
-);`
+// schemaSQL is the capture store's DDL, kept in schema.sql so the schema is
+// well-defined SQL rather than a Go string literal, and embedded at build time.
+//
+//go:embed schema.sql
+var schemaSQL string
 
 // Record enqueues an exchange for asynchronous persistence. It never blocks: if
 // the writer queue is full or the store is closed, the record is dropped with a
@@ -277,18 +246,22 @@ func (s *Store) insert(ctx context.Context, rec Record) {
 		s.log.WarnContext(ctx, "mitm.capture.tx_begin_failed", "err", err)
 		return
 	}
-	res, err := tx.ExecContext(ctx,
-		`INSERT INTO requests (
-			ts, client, provider, concern, host, method, path, status,
-			request_id, upstream_request_id, session_id, trace_id,
-			req_headers, resp_headers, req_content_type, resp_content_type,
-			req_bytes, resp_bytes, duration_ms
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		rec.Timestamp.UnixNano(), rec.Client, rec.Provider, rec.Concern, rec.Host, rec.Method, rec.Path, rec.Status,
-		rec.RequestID, rec.UpstreamRequestID, rec.SessionID, rec.TraceID,
-		encodeHeaders(rec.RequestHeaders), encodeHeaders(rec.ResponseHeaders), rec.RequestType, rec.ResponseType,
-		len(rec.RequestBody), len(rec.ResponseBody), rec.Duration.Milliseconds(),
-	)
+	requestSQL, requestArgs, err := sq.Insert("requests").
+		Columns("ts", "client", "provider", "concern", "host", "method", "path", "status",
+			"request_id", "upstream_request_id", "session_id", "trace_id",
+			"req_headers", "resp_headers", "req_content_type", "resp_content_type",
+			"req_bytes", "resp_bytes", "duration_ms").
+		Values(rec.Timestamp.UnixNano(), rec.Client, rec.Provider, rec.Concern, rec.Host, rec.Method, rec.Path, rec.Status,
+			rec.RequestID, rec.UpstreamRequestID, rec.SessionID, rec.TraceID,
+			encodeHeaders(rec.RequestHeaders), encodeHeaders(rec.ResponseHeaders), rec.RequestType, rec.ResponseType,
+			len(rec.RequestBody), len(rec.ResponseBody), rec.Duration.Milliseconds()).
+		ToSql()
+	if err != nil {
+		_ = tx.Rollback()
+		s.log.WarnContext(ctx, "mitm.capture.build_request_insert_failed", "host", rec.Host, "path", rec.Path, "err", err)
+		return
+	}
+	res, err := tx.ExecContext(ctx, requestSQL, requestArgs...)
 	if err != nil {
 		_ = tx.Rollback()
 		s.log.WarnContext(ctx, "mitm.capture.insert_request_failed", "host", rec.Host, "path", rec.Path, "err", err)
@@ -321,10 +294,15 @@ func (s *Store) insertBody(ctx context.Context, tx *sql.Tx, rowID int64, which B
 	}
 	stored, truncated := s.capBody(body)
 	isText := utf8.Valid(stored)
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO bodies (request_row_id, which, content_type, is_text, truncated, data) VALUES (?,?,?,?,?,?)`,
-		rowID, string(which), contentType, boolToInt(isText), boolToInt(truncated), stored,
-	); err != nil {
+	bodySQL, bodyArgs, err := sq.Insert("bodies").
+		Columns("request_row_id", "which", "content_type", "is_text", "truncated", "data").
+		Values(rowID, string(which), contentType, boolToInt(isText), boolToInt(truncated), stored).
+		ToSql()
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.build_body_insert_failed", "which", string(which), "err", err)
+		return false
+	}
+	if _, err := tx.ExecContext(ctx, bodySQL, bodyArgs...); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.insert_body_failed", "which", string(which), "err", err)
 		return false
 	}
@@ -357,17 +335,24 @@ func (s *Store) retentionLoop(ctx context.Context) {
 // wall clock. Every failure is logged here; prune never returns an error.
 func (s *Store) prune(ctx context.Context) {
 	ageSeconds := int64(s.cfg.RetentionMaxAge / time.Second)
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM bodies WHERE request_row_id IN (SELECT id FROM requests WHERE ts < CAST(strftime('%s','now','-' || ? || ' seconds') AS INTEGER)*1000000000)`,
-		ageSeconds,
-	); err != nil {
+	ageCutoff := "ts < CAST(strftime('%s','now','-' || ? || ' seconds') AS INTEGER)*1000000000"
+	bodiesSQL, bodiesArgs, err := sq.Delete("bodies").
+		Where("request_row_id IN (SELECT id FROM requests WHERE "+ageCutoff+")", ageSeconds).
+		ToSql()
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.build_prune_age_bodies_failed", "err", err)
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, bodiesSQL, bodiesArgs...); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.prune_age_bodies_failed", "err", err)
 		return
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM requests WHERE ts < CAST(strftime('%s','now','-' || ? || ' seconds') AS INTEGER)*1000000000`,
-		ageSeconds,
-	); err != nil {
+	requestsSQL, requestsArgs, err := sq.Delete("requests").Where(ageCutoff, ageSeconds).ToSql()
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.build_prune_age_requests_failed", "err", err)
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, requestsSQL, requestsArgs...); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.prune_age_requests_failed", "err", err)
 		return
 	}
@@ -390,15 +375,22 @@ func (s *Store) enforceSizeCap(ctx context.Context) {
 	if pageCount*pageSize <= s.cfg.RetentionMaxBytes {
 		return
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM bodies WHERE request_row_id IN (SELECT id FROM requests ORDER BY ts ASC LIMIT max(1, (SELECT count(*) FROM requests)/10))`,
-	); err != nil {
+	oldestTenth := "(SELECT id FROM requests ORDER BY ts ASC LIMIT max(1, (SELECT count(*) FROM requests)/10))"
+	bodiesSQL, _, err := sq.Delete("bodies").Where("request_row_id IN " + oldestTenth).ToSql()
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.build_prune_size_bodies_failed", "err", err)
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, bodiesSQL); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.prune_size_bodies_failed", "err", err)
 		return
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM requests WHERE id IN (SELECT id FROM requests ORDER BY ts ASC LIMIT max(1, (SELECT count(*) FROM requests)/10))`,
-	); err != nil {
+	requestsSQL, _, err := sq.Delete("requests").Where("id IN " + oldestTenth).ToSql()
+	if err != nil {
+		s.log.WarnContext(ctx, "mitm.capture.build_prune_size_requests_failed", "err", err)
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, requestsSQL); err != nil {
 		s.log.WarnContext(ctx, "mitm.capture.prune_size_requests_failed", "err", err)
 		return
 	}
