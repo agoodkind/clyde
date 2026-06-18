@@ -231,8 +231,8 @@ func buildDriftShape(input driftCaptureInput, upstream driftUpstreamName) captur
 		Upstream:           string(upstream),
 		Fingerprint:        driftFingerprint(input, string(upstream), requestHeaders, summary.Keys, billing != "", model),
 		Method:             input.method,
-		Path:               input.path,
-		URL:                input.upstreamURL,
+		Path:               templateChurningPath(input.path),
+		URL:                templateChurningPath(input.upstreamURL),
 		RequestHeaders:     requestHeaders,
 		RequestBody:        bodyRaw,
 		BillingAttestation: billing,
@@ -254,7 +254,9 @@ func driftFingerprint(input driftCaptureInput, upstream string, headers map[stri
 	b.WriteByte('\n')
 	b.WriteString(input.method)
 	b.WriteByte('\n')
-	b.WriteString(input.path)
+	// Template churning path segments (per-session ids) so endpoints that differ
+	// only by session collapse to one corpus row.
+	b.WriteString(templateChurningPath(input.path))
 	b.WriteByte('\n')
 	headerKeys := make([]string, 0, len(headers))
 	for k := range headers {
@@ -264,7 +266,15 @@ func driftFingerprint(input driftCaptureInput, upstream string, headers map[stri
 	for _, k := range headerKeys {
 		b.WriteString(k)
 		b.WriteByte('=')
-		b.WriteString(headers[k])
+		// Volatile header values (content-length, per-session ids, attestation
+		// blobs) churn per request and carry no wire identity. Fingerprint only
+		// their presence so requests differing only in those values dedupe to
+		// one row instead of exploding the corpus.
+		if headerValueIsVolatile(headers[k]) {
+			b.WriteString("<volatile>")
+		} else {
+			b.WriteString(headers[k])
+		}
 		b.WriteByte('\n')
 	}
 	b.WriteByte('|')

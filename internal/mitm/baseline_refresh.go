@@ -103,14 +103,13 @@ func RefreshBaseline(ctx context.Context, store *capture.Store, opts BaselineRef
 		ForbidBodyKeys:             opts.ForbidBodyKeys, MaxBodyDepth: 0, EnumThreshold: 0,
 	})
 	if err != nil {
-		// An empty corpus is the expected cold-start case (no native traffic
-		// captured yet). Record the check and skip without surfacing an
-		// infrastructure failure.
+		// A no-op refresh (empty/filtered corpus) records no check row. The
+		// periodic sweep owns steady-state cadence; the per-request refresher
+		// records only meaningful changes, so its ~2s ticks do not pile up.
 		log.WarnContext(ctx, "mitm.baseline.no_usable_shapes", "concern", "providers.mitm.wire", "component", "mitm",
 			"upstream", upstream,
 			"err", err,
 		)
-		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: false, Summary: "no usable shapes"})
 		return outcome, nil
 	}
 
@@ -128,10 +127,13 @@ func RefreshBaseline(ctx context.Context, store *capture.Store, opts BaselineRef
 		outcome.Report = &report
 		outcome.Diverged = report.HasDiverged()
 		outcome.Summary = report.SummaryString()
-		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: outcome.Diverged, Summary: outcome.Summary})
 		if !outcome.Diverged {
+			// No drift: the per-request refresher records no steady-state check
+			// row, so its ~2s ticks do not accumulate. The periodic sweep keeps
+			// recording cadence.
 			return outcome, nil
 		}
+		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: true, Summary: outcome.Summary})
 		outcome.Updated = true
 		if err := putBaseline(ctx, store, upstream, candidate, report, startedAt); err != nil {
 			return outcome, err
