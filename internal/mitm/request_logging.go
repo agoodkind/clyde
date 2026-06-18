@@ -132,7 +132,6 @@ func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recor
 	if recorder == nil {
 		return
 	}
-	payload := logevent.FilterPayload(input.requestBody, r.Header.Get("Content-Type"))
 	mitmFacet := Facet{
 		Concern:             "providers.mitm.wire",
 		Transport:           "http",
@@ -152,7 +151,6 @@ func (p *Proxy) emitHTTPPayloadLeg(ctx context.Context, recorder *logevent.Recor
 	event.Outcome.Duration = input.duration
 	event.Outcome.BytesIn = int64(len(input.requestBody))
 	event.Outcome.BytesOut = input.responseLen
-	event.Payload = &payload
 	event.Facets.Set(mitmFacet)
 	if input.clientFacet != nil {
 		event.Facets.Set(input.clientFacet)
