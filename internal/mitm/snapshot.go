@@ -89,21 +89,26 @@ func unmarshalSnapshot(raw json.RawMessage) (Snapshot, error) {
 	return snap, nil
 }
 
-// rawCaptureFields is the typed view of one native request as a map of named
-// raw JSON fields. Each field stays opaque until a specific accessor decodes
-// it.
+// rawCaptureFields is a JSON object decoded into named raw-JSON members. The
+// extractor uses it only as a parse target for the body summary, never to
+// reconstruct a request from typed data.
 type rawCaptureFields map[string]json.RawMessage
 
-// rawRequest pairs a synthesized JSON field map of one deduped native request
-// with its typed CaptureRecord and dedup weight. The extractor needs the
-// typed record for stable BillingAttestation / RequestFeatures, the raw map
-// for the request_body.keys / request_headers fields, and the weight so a
-// deduped shape with seen_count=N classifies as if N identical raw requests
-// had been observed.
+// rawRequest is one deduped native request the flavor aggregator consumes,
+// carried as typed fields straight off the [capture.DriftShape]. Headers,
+// method, path, and url are typed values (no JSON round-trip); body stays
+// [json.RawMessage] because it genuinely is the JSON body summary the classifier
+// parses for its key set and body type. weight is the dedup count, so a shape
+// with seen_count=N classifies as if N identical requests had been observed.
 type rawRequest struct {
-	fields rawCaptureFields
-	record CaptureRecord
-	weight int
+	headers  map[string]string
+	body     json.RawMessage
+	method   string
+	path     string
+	url      string
+	features *RequestFeatures
+	billing  string
+	weight   int
 }
 
 // ExtractSnapshotFromShapes groups deduped native-request shapes by caller
@@ -132,7 +137,7 @@ func ExtractSnapshotFromShapes(shapes []capture.DriftShape, opts SnapshotOptions
 		if ts > 0 && (earliest == 0 || ts < earliest) {
 			earliest = ts
 		}
-		sig := classifyRequestRaw(req.fields, req.record)
+		sig := classifyRequest(req)
 		if !uaMatches(sig.UserAgent, opts.IncludeUserAgentSubstrings, opts.ExcludeUserAgentSubstrings) {
 			continue
 		}
@@ -175,59 +180,20 @@ func ExtractSnapshotFromShapes(shapes []capture.DriftShape, opts SnapshotOptions
 }
 
 // rawRequestFromShape converts a deduped [capture.DriftShape] into the internal
-// rawRequest the flavor aggregator consumes. It synthesizes the field map the
-// raw classifiers read (request_headers, request_body, method, path, url) and
-// carries the typed record fields (billing attestation, parsed feature vector)
-// plus the dedup weight (min 1).
+// rawRequest the flavor aggregator consumes, copying its typed fields directly.
+// The body summary stays as the shape's JSON; the feature vector is parsed once;
+// the dedup weight is at least 1.
 func rawRequestFromShape(shape capture.DriftShape) rawRequest {
-	fields := rawCaptureFields{}
-	if raw := encodeStringMapRaw(shape.RequestHeaders); raw != nil {
-		fields["request_headers"] = raw
+	return rawRequest{
+		headers:  shape.RequestHeaders,
+		body:     shape.RequestBody,
+		method:   shape.Method,
+		path:     shape.Path,
+		url:      shape.URL,
+		features: parseShapeFeatures(shape.RequestFeatures),
+		billing:  shape.BillingAttestation,
+		weight:   max(shape.SeenCount, 1),
 	}
-	if len(bytes.TrimSpace([]byte(shape.RequestBody))) > 0 {
-		fields["request_body"] = shape.RequestBody
-	}
-	if raw := encodeJSONString(shape.Method); raw != nil {
-		fields["method"] = raw
-	}
-	if raw := encodeJSONString(shape.Path); raw != nil {
-		fields["path"] = raw
-	}
-	if raw := encodeJSONString(shape.URL); raw != nil {
-		fields["url"] = raw
-	}
-	weight := max(shape.SeenCount, 1)
-	record := CaptureRecord{
-		Kind:               RecordHTTPRequest,
-		T:                  shape.Timestamp.Unix(),
-		URL:                shape.URL,
-		Provider:           shape.Provider,
-		Concern:            "",
-		TraceID:            "",
-		SpanID:             "",
-		ParentSpanID:       "",
-		RequestID:          "",
-		UpstreamRequestID:  "",
-		UpstreamResponseID: "",
-		Method:             shape.Method,
-		Path:               shape.Path,
-		Status:             0,
-		Headers:            nil,
-		BodyLen:            0,
-		Body:               nil,
-		RequestBody:        shape.RequestBody,
-		RequestHeaders:     nil,
-		ResponseHeaders:    nil,
-		FromClient:         false,
-		Length:             0,
-		Text:               "",
-		Seq:                0,
-		Messages:           0,
-		Err:                "",
-		BillingAttestation: shape.BillingAttestation,
-		RequestFeatures:    parseShapeFeatures(shape.RequestFeatures),
-	}
-	return rawRequest{fields: fields, record: record, weight: weight}
 }
 
 // parseShapeFeatures decodes the prompt-free feature vector JSON a shape
@@ -243,28 +209,6 @@ func parseShapeFeatures(raw json.RawMessage) *RequestFeatures {
 		return nil
 	}
 	return &features
-}
-
-func encodeStringMapRaw(m map[string]string) json.RawMessage {
-	if len(m) == 0 {
-		return nil
-	}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return nil
-	}
-	return raw
-}
-
-func encodeJSONString(value string) json.RawMessage {
-	if value == "" {
-		return nil
-	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil
-	}
-	return raw
 }
 
 // bodyKeyConstraintsMatch enforces the require/forbid lists against
@@ -319,34 +263,17 @@ func uaMatches(ua string, include, exclude []string) bool {
 	return false
 }
 
-// classifyRequestRaw pulls body keys from the raw map (which has the
-// summary-mode request_body.keys array) and the User-Agent / beta headers from
-// the request_headers field.
-func classifyRequestRaw(fields rawCaptureFields, rec CaptureRecord) FlavorSignature {
-	headers := requestHeaderMap(fields)
-	ua := lowerStringFromHeaders(headers, "user-agent")
-	beta := lowerStringFromHeaders(headers, "anthropic-beta")
-	keys := bodyKeysFromFields(fields)
-	_ = rec
+// classifyRequest derives a flavor signature from one request's typed headers
+// and its body summary: the User-Agent and anthropic-beta headers plus the
+// top-level body key set.
+func classifyRequest(req rawRequest) FlavorSignature {
+	ua := lowerStringFromHeaders(req.headers, "user-agent")
+	beta := lowerStringFromHeaders(req.headers, "anthropic-beta")
 	return FlavorSignature{
 		UserAgent:       ua,
 		BetaFingerprint: betaFingerprint(beta),
-		BodyKeys:        keys,
+		BodyKeys:        bodyKeysFromBody(req.body),
 	}
-}
-
-// requestHeaderMap pulls the request_headers (or legacy headers)
-// field from a captured request as a string→string map.
-func requestHeaderMap(fields rawCaptureFields) map[string]string {
-	if raw, ok := fields["request_headers"]; ok {
-		if out := stringMapFromRaw(raw); len(out) > 0 {
-			return out
-		}
-	}
-	if raw, ok := fields["headers"]; ok {
-		return stringMapFromRaw(raw)
-	}
-	return nil
 }
 
 func lowerStringFromHeaders(headers map[string]string, lower string) string {
@@ -361,56 +288,55 @@ func lowerStringFromHeaders(headers map[string]string, lower string) string {
 	return ""
 }
 
-// bodyKeysFromFields extracts the list of top-level body keys from a
-// captured request record's typed field map. Handles both summary
-// mode (request_body.keys array) and raw mode (request_body is the
-// full object encoded as a JSON object, JSON string, or nested
-// fields).
-func bodyKeysFromFields(fields rawCaptureFields) []string {
-	body, ok := fields["request_body"]
-	if !ok {
-		return nil
-	}
+// bodyKeysFromBody extracts the top-level body key set from a request body
+// summary. Summary mode carries an explicit keys array, decoded straight into
+// the typed [captureBodySummary]; a raw object (or a JSON-encoded object string)
+// falls back to its own top-level field names.
+func bodyKeysFromBody(body json.RawMessage) []string {
 	trimmed := bytes.TrimSpace([]byte(body))
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil
 	}
 	switch trimmed[0] {
 	case '{':
-		var asMap rawCaptureFields
-		if err := json.Unmarshal(body, &asMap); err != nil {
-			return nil
-		}
-		if keysRaw, ok := asMap["keys"]; ok {
-			var keys []string
-			if err := json.Unmarshal(keysRaw, &keys); err == nil && len(keys) > 0 {
-				sort.Strings(keys)
-				return keys
+		var summary captureBodySummary
+		// A capture summary is identified by its mode/body_type markers, not by
+		// the presence of a keys array: a raw body that merely carries a
+		// top-level "keys" field must not be read as a summary, and a summary for
+		// a non-object body (no keys) returns nil rather than its own metadata
+		// field names.
+		if err := json.Unmarshal(body, &summary); err == nil && (summary.Mode != "" || summary.BodyType != "") {
+			if len(summary.Keys) == 0 {
+				return nil
 			}
+			keys := append([]string(nil), summary.Keys...)
+			sort.Strings(keys)
+			return keys
 		}
-		out := make([]string, 0, len(asMap))
-		for k := range asMap {
-			out = append(out, k)
-		}
-		sort.Strings(out)
-		return out
+		return topLevelObjectKeys(body)
 	case '"':
 		var bodyStr string
 		if err := json.Unmarshal(body, &bodyStr); err != nil {
 			return nil
 		}
-		var parsed rawCaptureFields
-		if err := json.Unmarshal([]byte(bodyStr), &parsed); err != nil {
-			return nil
-		}
-		out := make([]string, 0, len(parsed))
-		for k := range parsed {
-			out = append(out, k)
-		}
-		sort.Strings(out)
-		return out
+		return topLevelObjectKeys(json.RawMessage(bodyStr))
 	}
 	return nil
+}
+
+// topLevelObjectKeys returns the sorted field names of a JSON object, or nil
+// when the payload is not a decodable object.
+func topLevelObjectKeys(raw json.RawMessage) []string {
+	var fields rawCaptureFields
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(fields))
+	for k := range fields {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, opts SnapshotOptions) FlavorShape {
@@ -436,18 +362,17 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 		// flavor's records becomes the flavor's attestation. Records
 		// share one caller flavor, so any populated token represents the
 		// flavor; preferring the first keeps the output stable.
-		if flav.BillingAttestation == "" && req.record.BillingAttestation != "" {
-			flav.BillingAttestation = req.record.BillingAttestation
+		if flav.BillingAttestation == "" && req.billing != "" {
+			flav.BillingAttestation = req.billing
 		}
-		if m := stringFromRaw(req.fields["method"]); m != "" {
-			methodSet[m] = true
+		if req.method != "" {
+			methodSet[req.method] = true
 		}
-		if p := stringFromRaw(req.fields["path"]); p != "" {
-			pathSet[p] = true
+		if req.path != "" {
+			pathSet[req.path] = true
 		}
-		headers := requestHeaderMap(req.fields)
 		seenInThisRecord := map[string]bool{}
-		for k, v := range headers {
+		for k, v := range req.headers {
 			lower := strings.ToLower(k)
 			seenInThisRecord[lower] = true
 			if headerObservations[lower] == nil {
@@ -458,11 +383,10 @@ func buildFlavorShape(slug string, sig FlavorSignature, requests []rawRequest, o
 		for h := range seenInThisRecord {
 			headerPresenceCount[h] += req.weight
 		}
-		body := req.fields["request_body"]
-		if t := bodyTypeFromRaw(body); t != "" {
+		if t := bodyTypeFromRaw(req.body); t != "" {
 			bodyTypeSet[t] = true
 		}
-		walkBodyTopLevel(body, fieldObservations, opts.MaxBodyDepth, req.weight)
+		walkBodyTopLevel(req.body, fieldObservations, opts.MaxBodyDepth, req.weight)
 	}
 
 	flav.RecordCount = totalWeight
@@ -506,17 +430,16 @@ func observedRequestFeatureVectors(requests []rawRequest) []RequestFeatures {
 }
 
 func requestFeaturesFromRawRequest(req rawRequest) (RequestFeatures, bool) {
-	if req.record.RequestFeatures != nil {
-		features := *req.record.RequestFeatures
+	if req.features != nil {
+		features := *req.features
 		return features, requestFeaturesUsable(features)
 	}
-	body := req.fields["request_body"]
-	if requestBodyIsCaptureSummary(body) {
+	if requestBodyIsCaptureSummary(req.body) {
 		return emptyRequestFeatures(), false
 	}
 	features, err := ExtractRequestFeatures(CapturedRequest{
-		RequestHeaders: requestHeaderMap(req.fields),
-		RequestBody:    body,
+		RequestHeaders: req.headers,
+		RequestBody:    req.body,
 	})
 	if err != nil || !requestFeaturesUsable(features) {
 		return emptyRequestFeatures(), false
@@ -580,29 +503,6 @@ func bodyTypeFromRaw(raw json.RawMessage) string {
 		return ""
 	}
 	return stringFromRaw(fields["body_type"])
-}
-
-// stringMapFromRaw decodes a JSON object with string values into a
-// flat map[string]string. Non-string values are skipped.
-func stringMapFromRaw(raw json.RawMessage) map[string]string {
-	if len(raw) == 0 {
-		return nil
-	}
-	trimmed := bytes.TrimSpace([]byte(raw))
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil
-	}
-	var fields rawCaptureFields
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return nil
-	}
-	out := make(map[string]string, len(fields))
-	for k, v := range fields {
-		if s := stringFromRaw(v); s != "" {
-			out[k] = s
-		}
-	}
-	return out
 }
 
 func sortedStringSet(set map[string]bool) []string {
