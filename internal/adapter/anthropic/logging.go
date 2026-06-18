@@ -142,21 +142,27 @@ func dedicatedLogger() *slog.Logger {
 // the response never came back (post_failed). Response bodies are never
 // logged; when a capture store is configured the full request and response
 // bodies (including error bodies) live in the SQLite capture store, so the
-// event carries only BodyBytes.
+// event carries only the byte counts.
+//
+// RequestBytes and ResponseBytes are accounted separately so the log never
+// conflates the two: RequestBytes is the outbound request body size, set on
+// every leg; ResponseBytes is the upstream body size and is only known on the
+// error and rate-limit legs (the success leg streams the body, so it stays 0).
 type responseEvent struct {
-	Subcomponent string
-	Model        string
-	Status       int
-	RequestID    string
-	BodyBytes    int
-	DurationMs   int64
-	RateLimits   []rateLimitAttr
-	RetryAfter   string
-	Err          string
+	Subcomponent  string
+	Model         string
+	Status        int
+	RequestID     string
+	RequestBytes  int
+	ResponseBytes int
+	DurationMs    int64
+	RateLimits    []rateLimitAttr
+	RetryAfter    string
+	Err           string
 }
 
 func (e responseEvent) toSlogAttrs() []slog.Attr {
-	attrs := make([]slog.Attr, 0, 7+len(e.RateLimits))
+	attrs := make([]slog.Attr, 0, 8+len(e.RateLimits))
 	if e.Subcomponent != "" {
 		attrs = append(attrs, slog.String("subcomponent", e.Subcomponent))
 	}
@@ -169,7 +175,8 @@ func (e responseEvent) toSlogAttrs() []slog.Attr {
 	if e.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", e.RequestID))
 	}
-	attrs = append(attrs, slog.Int("body_bytes", e.BodyBytes))
+	attrs = append(attrs, slog.Int("request_bytes", e.RequestBytes))
+	attrs = append(attrs, slog.Int("response_bytes", e.ResponseBytes))
 	attrs = append(attrs, slog.Int64("duration_ms", e.DurationMs))
 	for _, r := range e.RateLimits {
 		attrs = append(attrs, slog.String(r.Name, r.Value))

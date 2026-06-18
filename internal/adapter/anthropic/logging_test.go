@@ -47,11 +47,11 @@ func TestLogResponseDoubleWritesToDedicatedSink(t *testing.T) {
 	resetDedicatedAnthropicLoggerForTest(t)
 
 	logResponse(context.Background(), slog.LevelInfo, "anthropic.messages.response", responseEvent{
-		Subcomponent: "anthropic",
-		Model:        "claude-sonnet-4-5",
-		Status:       200,
-		RequestID:    "req-test",
-		BodyBytes:    42,
+		Subcomponent:  "anthropic",
+		Model:         "claude-sonnet-4-5",
+		Status:        200,
+		RequestID:     "req-test",
+		ResponseBytes: 42,
 	})
 
 	got, err := os.ReadFile(sinkPath)
@@ -86,12 +86,12 @@ func TestDedicatedAnthropicLoggerRotatesByVolume(t *testing.T) {
 	largeErr := strings.Repeat("x", 700*1024)
 	for range 3 {
 		logResponse(context.Background(), slog.LevelError, "anthropic.messages.upstream_error", responseEvent{
-			Subcomponent: "anthropic",
-			Model:        "claude-sonnet-4-5",
-			Status:       500,
-			RequestID:    "req-rotate",
-			BodyBytes:    len(largeErr),
-			Err:          largeErr,
+			Subcomponent:  "anthropic",
+			Model:         "claude-sonnet-4-5",
+			Status:        500,
+			RequestID:     "req-rotate",
+			ResponseBytes: len(largeErr),
+			Err:           largeErr,
 		})
 	}
 	if fileLoggerCloser != nil {
