@@ -350,12 +350,14 @@ func (c *Client) buildMessagesRequest(ctx context.Context, req Request, body []b
 			"dropped", keys,
 		)
 	}
+	// The request body is never logged, even at Debug: it carries the user
+	// prompt. The full outbound body lives in the capture store; the log keeps
+	// only the size and the redacted headers.
 	log.DebugContext(ctx, "anthropic.messages.request", "concern", "adapter.providers.anthropic.request", "subcomponent", "anthropic",
 		"model", req.Model,
 		"url", c.cfg.MessagesURL,
 		"request_bytes", len(body),
 		"headers", redactedOutboundHeaders(httpReq.Header),
-		"body", string(body),
 	)
 	return httpReq, nil
 }

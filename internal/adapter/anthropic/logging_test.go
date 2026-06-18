@@ -47,11 +47,11 @@ func TestLogResponseDoubleWritesToDedicatedSink(t *testing.T) {
 	resetDedicatedAnthropicLoggerForTest(t)
 
 	logResponse(context.Background(), slog.LevelInfo, "anthropic.messages.response", responseEvent{
-		Subcomponent:  "anthropic",
-		Model:         "claude-sonnet-4-5",
-		Status:        200,
-		RequestID:     "req-test",
-		ResponseBytes: 42,
+		Subcomponent: "anthropic",
+		Model:        "claude-sonnet-4-5",
+		Status:       200,
+		RequestID:    "req-test",
+		RequestBytes: 42,
 	})
 
 	got, err := os.ReadFile(sinkPath)
