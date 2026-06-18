@@ -40,7 +40,7 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	baselinePath := writeTestWireBaseline(t)
+	baselineStore := seedTestWireBaseline(t)
 	hc := &http.Client{Transport: &rewriteMessagesHost{serverURL: srvURL}}
 	cli := &Client{
 		http:         hc,
@@ -48,11 +48,11 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 		flavorLoader: newWireFlavorsLoader(),
 		// Empty cfg.* override fields force the flavor-driven defaults to
 		// be used. Only the fields Send requires before header build are
-		// set, plus the on-disk wire baseline.
+		// set, plus the capture-store wire baseline.
 		cfg: Config{
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
-			WireBaselinePath:      baselinePath,
+			CaptureStore:          baselineStore,
 		},
 	}
 
@@ -71,7 +71,7 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 	if got == nil {
 		t.Fatal("server did not capture any request")
 	}
-	loaded, err := cli.flavorLoader.Load(baselinePath)
+	loaded, err := cli.flavorLoader.Load(context.Background(), baselineStore)
 	if err != nil {
 		t.Fatalf("load baseline flavors: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestOutboundHeadersMatchClaudeCLIInteractiveFlavor(t *testing.T) {
 func TestFeatureAwareFlavorSelectionMatchesModelBeforeFlags(t *testing.T) {
 	t.Parallel()
 
-	loaded, err := newWireFlavorsLoader().Load(writeTestWireBaseline(t))
+	loaded, err := newWireFlavorsLoader().Load(context.Background(), seedTestWireBaseline(t))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestOutboundHeadersAllowNonBetaConfigOverride(t *testing.T) {
 			StainlessPackageVersion: "override-pkg",
 			StainlessRuntime:        "override-runtime",
 			StainlessRuntimeVersion: "override-runtime-version",
-			WireBaselinePath:        writeTestWireBaseline(t),
+			CaptureStore:            seedTestWireBaseline(t),
 		},
 	}
 

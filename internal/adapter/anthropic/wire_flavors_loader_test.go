@@ -1,10 +1,12 @@
 package anthropic
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 // testAncillaryFlavorShape mirrors the captured shape of a claude-cli
@@ -17,35 +19,30 @@ func testAncillaryFlavorShape() mitm.FlavorShape {
 		RecordCount: 12,
 		Methods:     []string{"GET"},
 		Paths:       []string{"/mcp-registry/v0/servers"},
-		Signature: mitm.V2Signature{
+		Signature: mitm.Signature{
 			UserAgent: "claude-cli/2.1.170 (external, cli)",
 			BodyKeys:  []string{"body_type", "mode"},
 		},
-		Headers: []mitm.V2Header{
-			{Name: "user-agent", Classification: mitm.V2HeaderClassConstant, Presence: mitm.V2HeaderPresenceRequired, ObservedValues: []string{"claude-cli/2.1.170 (external, cli)"}, OccurrenceRate: 1.0},
-			{Name: "accept", Classification: mitm.V2HeaderClassConstant, Presence: mitm.V2HeaderPresenceRequired, ObservedValues: []string{"application/json, text/plain, */*"}, OccurrenceRate: 1.0},
+		Headers: []mitm.Header{
+			{Name: "user-agent", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"claude-cli/2.1.170 (external, cli)"}, OccurrenceRate: 1.0},
+			{Name: "accept", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"application/json, text/plain, */*"}, OccurrenceRate: 1.0},
 		},
 	}
 }
 
-// writeBaselineWithFlavors seeds a v2 baseline holding exactly the given
-// flavors through the real writer, mirroring writeTestWireBaseline.
-func writeBaselineWithFlavors(t *testing.T, flavors []mitm.FlavorShape) string {
+// seedStoreWithFlavors seeds a capture store baseline holding exactly the given
+// flavors, mirroring seedTestWireBaseline.
+func seedStoreWithFlavors(t *testing.T, flavors []mitm.FlavorShape) *capture.Store {
 	t.Helper()
-	snap := mitm.SnapshotV2{
-		Upstream: mitm.V2Upstream{
+	return seedBaselineStore(t, mitm.Snapshot{
+		Upstream: mitm.Upstream{
 			Name:        "claude-code",
 			Version:     "",
 			CapturedAt:  "2026-06-09T17:34:00Z",
 			RecordCount: 13,
 		},
 		Flavors: flavors,
-	}
-	out, err := mitm.WriteSnapshotV2TOML(snap, t.TempDir())
-	if err != nil {
-		t.Fatalf("WriteSnapshotV2TOML: %v", err)
-	}
-	return out
+	})
 }
 
 // TestLoaderSkipsFlavorsMissingIdentityHeaders locks in that an
@@ -55,13 +52,12 @@ func writeBaselineWithFlavors(t *testing.T, flavors []mitm.FlavorShape) string {
 // entering the learned baseline turned every adapter egress request
 // into a 503 wire_baseline_unavailable.
 func TestLoaderSkipsFlavorsMissingIdentityHeaders(t *testing.T) {
-	t.Parallel()
-	path := writeBaselineWithFlavors(t, []mitm.FlavorShape{
+	store := seedStoreWithFlavors(t, []mitm.FlavorShape{
 		testInteractiveFlavorShape(),
 		testAncillaryFlavorShape(),
 	})
 
-	flavors, err := newWireFlavorsLoader().Load(path)
+	flavors, err := newWireFlavorsLoader().Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("Load: %v (incomplete ancillary flavor must not fail the load)", err)
 	}
@@ -78,15 +74,14 @@ func TestLoaderSkipsFlavorsMissingIdentityHeaders(t *testing.T) {
 }
 
 func TestLoaderProjectsFeatureVectors(t *testing.T) {
-	t.Parallel()
 	shape := testInteractiveFlavorShape()
 	shape.FeatureVectors = []mitm.RequestFeatures{
 		{ModelID: "claude-opus-4-20250514"},
 		{ModelID: "claude-haiku-3-5-20241022"},
 	}
-	path := writeBaselineWithFlavors(t, []mitm.FlavorShape{shape})
+	store := seedStoreWithFlavors(t, []mitm.FlavorShape{shape})
 
-	flavors, err := newWireFlavorsLoader().Load(path)
+	flavors, err := newWireFlavorsLoader().Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -106,10 +101,9 @@ func TestLoaderProjectsFeatureVectors(t *testing.T) {
 }
 
 func TestLoaderProjectsMissingFeatureVectorsAsZeroValue(t *testing.T) {
-	t.Parallel()
-	path := writeBaselineWithFlavors(t, []mitm.FlavorShape{testInteractiveFlavorShape()})
+	store := seedStoreWithFlavors(t, []mitm.FlavorShape{testInteractiveFlavorShape()})
 
-	flavors, err := newWireFlavorsLoader().Load(path)
+	flavors, err := newWireFlavorsLoader().Load(context.Background(), store)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -126,11 +120,25 @@ func TestLoaderProjectsMissingFeatureVectorsAsZeroValue(t *testing.T) {
 // where every flavor is incomplete still fails with ErrBaselineInvalid:
 // the skip is per-flavor tolerance, not a silent empty-identity path.
 func TestLoaderRejectsBaselineWithNoUsableFlavor(t *testing.T) {
-	t.Parallel()
-	path := writeBaselineWithFlavors(t, []mitm.FlavorShape{testAncillaryFlavorShape()})
+	store := seedStoreWithFlavors(t, []mitm.FlavorShape{testAncillaryFlavorShape()})
 
-	_, err := newWireFlavorsLoader().Load(path)
+	_, err := newWireFlavorsLoader().Load(context.Background(), store)
 	if !errors.Is(err, ErrBaselineInvalid) {
 		t.Fatalf("Load err = %v, want ErrBaselineInvalid", err)
+	}
+}
+
+// TestLoaderMissingBaselineReturnsSentinel locks in that an empty store (no
+// baseline row) yields ErrBaselineMissing so the adapter can map it to a 503.
+func TestLoaderMissingBaselineReturnsSentinel(t *testing.T) {
+	dbPath := t.TempDir() + "/capture.db"
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+
+	if _, err := newWireFlavorsLoader().Load(context.Background(), store); !errors.Is(err, ErrBaselineMissing) {
+		t.Fatalf("Load err = %v, want ErrBaselineMissing", err)
 	}
 }

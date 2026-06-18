@@ -553,10 +553,11 @@ func ShowCapture(ctx context.Context, id string, asJSON bool) (string, error) {
 	return resp.GetOutput(), nil
 }
 
-// SeedBaseline asks the daemon to extract a v2 wire baseline from a capture
-// transcript and write it for the given upstream.
-func SeedBaseline(ctx context.Context, upstream, from, output string, includeUA, excludeUA []string) (mitm.SeedBaselineResult, error) {
-	empty := mitm.SeedBaselineResult{Written: "", Upstream: "", Flavors: 0}
+// SeedBaseline asks the daemon to build a wire baseline from the capture
+// store's deduped shape corpus and write it as the current baseline for the
+// given upstream.
+func SeedBaseline(ctx context.Context, upstream string, includeUA, excludeUA []string) (mitm.SeedBaselineResult, error) {
+	empty := mitm.SeedBaselineResult{Upstream: "", Flavors: 0}
 	client, err := connectDaemon(ctx)
 	if err != nil {
 		return empty, err
@@ -567,8 +568,6 @@ func SeedBaseline(ctx context.Context, upstream, from, output string, includeUA,
 	defer cancel()
 	resp, err := client.rpc.SeedBaseline(rpcCtx, &clydev1.SeedBaselineRequest{
 		Upstream:  upstream,
-		From:      from,
-		Output:    output,
 		IncludeUa: includeUA,
 		ExcludeUa: excludeUA,
 	})
@@ -576,7 +575,6 @@ func SeedBaseline(ctx context.Context, upstream, from, output string, includeUA,
 		return empty, daemonRPCError(rpcCtx, "seed baseline", err)
 	}
 	return mitm.SeedBaselineResult{
-		Written:  resp.GetWritten(),
 		Upstream: resp.GetUpstream(),
 		Flavors:  int(resp.GetFlavors()),
 	}, nil

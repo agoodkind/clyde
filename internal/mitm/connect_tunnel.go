@@ -600,7 +600,7 @@ func (p *Proxy) recordProviderDriftCapture(ctx context.Context, params providerF
 		header:      params.req.Header,
 		body:        decodedBody,
 	})
-	queueBaselineRefresh(ctx, params.cfg, provider, p.log)
+	queueBaselineRefresh(ctx, p.store, params.cfg, provider, p.log)
 }
 
 // diagnoseProviderExchange invokes the claiming provider's optional

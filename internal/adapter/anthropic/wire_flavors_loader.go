@@ -1,10 +1,11 @@
 package anthropic
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -16,12 +17,17 @@ import (
 // projection diagnostics.
 const wireBaselineConcern = "adapter.providers.anthropic.wire"
 
-// ErrBaselineMissing reports that the on-disk MITM wire baseline does
-// not exist. The adapter maps this to an operator-actionable HTTP 503
-// rather than sending a wrong-shaped request with no identity headers.
+// anthropicWireUpstream is the upstream key the claude-code wire baseline is
+// stored under in the capture store's baselines table.
+const anthropicWireUpstream = "claude-code"
+
+// ErrBaselineMissing reports that the MITM wire baseline does not exist
+// in the capture store yet. The adapter maps this to an
+// operator-actionable HTTP 503 rather than sending a wrong-shaped
+// request with no identity headers.
 var ErrBaselineMissing = errors.New("anthropic wire baseline missing")
 
-// ErrBaselineInvalid reports that the on-disk MITM wire baseline exists
+// ErrBaselineInvalid reports that the stored MITM wire baseline exists
 // but failed to parse or failed validation (no flavors, or no usable
 // flavor carrying both a constant User-Agent and Anthropic-Version).
 // Individual incomplete flavors are skipped with a warning rather than
@@ -33,15 +39,23 @@ var ErrBaselineInvalid = errors.New("anthropic wire baseline invalid")
 // adapter maps this to the same HTTP 503 class as baseline load failures.
 var ErrFlavorUnseeded = errors.New("anthropic wire flavor unseeded")
 
-// WireFlavorsLoader reads the daemon-owned MITM baseline and projects
-// each captured flavor into a [WireFlavor]. There are no compiled-in
-// defaults: the on-disk baseline is the single source of truth. The
+// anthropicBaselineStore is the slice of the capture store the anthropic
+// wire-flavors loader needs: the current baseline JSON and a cheap updated-at
+// token to poll for changes. The capture store satisfies it.
+type anthropicBaselineStore interface {
+	CurrentBaseline(ctx context.Context, upstream string) (json.RawMessage, bool, error)
+	CurrentBaselineUpdatedAt(ctx context.Context, upstream string) (int64, error)
+}
+
+// WireFlavorsLoader reads the daemon-owned MITM baseline from the capture
+// store and projects each captured flavor into a [WireFlavor]. There are no
+// compiled-in defaults: the stored baseline is the single source of truth. The
 // loader is concurrency-safe and caches the projected map keyed by the
-// file's modification time, re-reading only when the file changes.
+// baseline's stored updated-at, re-reading only when it advances.
 type WireFlavorsLoader struct {
 	mu       sync.Mutex
 	cached   map[string]WireFlavor
-	cachedAt int64 // baseline file mtime (unix nanos) for the cached map
+	cachedAt int64 // baseline updated_at (unix nanos) for the cached map
 	cachedOK bool  // a successful load has populated the cache
 }
 
@@ -57,70 +71,72 @@ func newWireFlavorsLoader() *WireFlavorsLoader {
 	}
 }
 
-// Load reads baselinePath, projects every captured flavor into a
-// [WireFlavor], and returns them keyed by flavor slug. It stats the
-// path on every call and re-reads only when the file's mtime changes;
-// otherwise it returns the cached map. A missing file yields
+// Load reads the claude-code baseline from store, projects every captured
+// flavor into a [WireFlavor], and returns them keyed by flavor slug. It polls
+// the baseline's updated-at on every call and re-reads only when it advances;
+// otherwise it returns the cached map. A missing baseline yields
 // [ErrBaselineMissing]; a parse or validation failure yields
 // [ErrBaselineInvalid] wrapping the cause.
-func (l *WireFlavorsLoader) Load(baselinePath string) (map[string]WireFlavor, error) {
-	path := strings.TrimSpace(baselinePath)
-	if path == "" {
-		slog.Warn("anthropic.wire_baseline.path_empty", "concern", wireBaselineConcern, "subcomponent", "anthropic")
-		return nil, fmt.Errorf("%w: empty baseline path", ErrBaselineInvalid)
+func (l *WireFlavorsLoader) Load(ctx context.Context, store anthropicBaselineStore) (map[string]WireFlavor, error) {
+	if store == nil {
+		slog.WarnContext(ctx, "anthropic.wire_baseline.no_store", "concern", wireBaselineConcern, "subcomponent", "anthropic")
+		return nil, fmt.Errorf("%w: no capture store", ErrBaselineMissing)
 	}
 
-	info, err := os.Stat(path)
+	updatedAt, err := store.CurrentBaselineUpdatedAt(ctx, anthropicWireUpstream)
 	if err != nil {
-		if os.IsNotExist(err) {
-			slog.Warn("anthropic.wire_baseline.missing", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-				"path", path,
-			)
-			return nil, fmt.Errorf("%w: %s", ErrBaselineMissing, path)
-		}
-		slog.Warn("anthropic.wire_baseline.stat_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"path", path,
+		slog.WarnContext(ctx, "anthropic.wire_baseline.updated_at_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 			"err", err.Error(),
 		)
-		return nil, fmt.Errorf("%w: stat %s: %w", ErrBaselineInvalid, path, err)
+		return nil, fmt.Errorf("%w: updated_at: %w", ErrBaselineInvalid, err)
 	}
-
-	mtime := info.ModTime().UnixNano()
+	if updatedAt == 0 {
+		slog.WarnContext(ctx, "anthropic.wire_baseline.missing", "concern", wireBaselineConcern, "subcomponent", "anthropic")
+		return nil, fmt.Errorf("%w: no baseline for %s", ErrBaselineMissing, anthropicWireUpstream)
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.cachedOK && l.cachedAt == mtime {
+	if l.cachedOK && l.cachedAt == updatedAt {
 		return l.cached, nil
 	}
 
-	flavors, err := loadWireFlavorsFromBaseline(path)
+	flavors, err := loadWireFlavorsFromStore(ctx, store)
 	if err != nil {
 		return nil, err
 	}
 
 	l.cached = flavors
-	l.cachedAt = mtime
+	l.cachedAt = updatedAt
 	l.cachedOK = true
 	return flavors, nil
 }
 
-// loadWireFlavorsFromBaseline parses the v2 TOML baseline and projects
-// each flavor. It reuses [mitm.LoadSnapshotV2TOML] because the mitm
-// package does not import this package, so there is no import cycle.
-func loadWireFlavorsFromBaseline(path string) (map[string]WireFlavor, error) {
-	snap, err := mitm.LoadSnapshotV2TOML(path)
+// loadWireFlavorsFromStore reads the claude-code baseline JSON from the store,
+// decodes it, and projects each flavor. It reuses
+// [mitm.DecodeBaselineSnapshot] because the mitm package does not import this
+// package, so there is no import cycle.
+func loadWireFlavorsFromStore(ctx context.Context, store anthropicBaselineStore) (map[string]WireFlavor, error) {
+	raw, ok, err := store.CurrentBaseline(ctx, anthropicWireUpstream)
 	if err != nil {
-		slog.Warn("anthropic.wire_baseline.parse_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"path", path,
+		slog.WarnContext(ctx, "anthropic.wire_baseline.read_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 			"err", err.Error(),
 		)
-		return nil, fmt.Errorf("%w: parse %s: %w", ErrBaselineInvalid, path, err)
+		return nil, fmt.Errorf("%w: read %s: %w", ErrBaselineInvalid, anthropicWireUpstream, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: no baseline for %s", ErrBaselineMissing, anthropicWireUpstream)
+	}
+	snap, err := mitm.DecodeBaselineSnapshot(raw)
+	if err != nil {
+		slog.WarnContext(ctx, "anthropic.wire_baseline.parse_failed", "concern", wireBaselineConcern, "subcomponent", "anthropic",
+			"err", err.Error(),
+		)
+		return nil, fmt.Errorf("%w: parse %s: %w", ErrBaselineInvalid, anthropicWireUpstream, err)
 	}
 	if len(snap.Flavors) == 0 {
-		slog.Warn("anthropic.wire_baseline.no_flavors", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"path", path,
-		)
-		return nil, fmt.Errorf("%w: %s has no flavors", ErrBaselineInvalid, path)
+		slog.WarnContext(ctx, "anthropic.wire_baseline.no_flavors", "concern", wireBaselineConcern, "subcomponent", "anthropic")
+		return nil, fmt.Errorf("%w: %s has no flavors", ErrBaselineInvalid, anthropicWireUpstream)
 	}
 
 	// Incomplete flavors are skipped, not fatal: the learn loop also
@@ -133,15 +149,13 @@ func loadWireFlavorsFromBaseline(path string) (map[string]WireFlavor, error) {
 	for _, shape := range snap.Flavors {
 		flavor := projectFlavorShape(shape)
 		if strings.TrimSpace(flavor.UserAgent) == "" {
-			slog.Warn("anthropic.wire_baseline.flavor_missing_user_agent", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-				"path", path,
+			slog.WarnContext(ctx, "anthropic.wire_baseline.flavor_missing_user_agent", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 				"slug", flavor.Slug,
 			)
 			continue
 		}
 		if strings.TrimSpace(flavor.AnthropicVersion) == "" {
-			slog.Warn("anthropic.wire_baseline.flavor_missing_version", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-				"path", path,
+			slog.WarnContext(ctx, "anthropic.wire_baseline.flavor_missing_version", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 				"slug", flavor.Slug,
 			)
 			continue
@@ -149,19 +163,17 @@ func loadWireFlavorsFromBaseline(path string) (map[string]WireFlavor, error) {
 		out[flavor.Slug] = flavor
 	}
 	if len(out) == 0 {
-		slog.Warn("anthropic.wire_baseline.no_usable_flavors", "concern", wireBaselineConcern, "subcomponent", "anthropic",
-			"path", path,
+		slog.WarnContext(ctx, "anthropic.wire_baseline.no_usable_flavors", "concern", wireBaselineConcern, "subcomponent", "anthropic",
 			"flavors_total", len(snap.Flavors),
 		)
-		return nil, fmt.Errorf("%w: %s has no usable flavors (all missing User-Agent or Anthropic-Version)", ErrBaselineInvalid, path)
+		return nil, fmt.Errorf("%w: %s has no usable flavors (all missing User-Agent or Anthropic-Version)", ErrBaselineInvalid, anthropicWireUpstream)
 	}
 	return out, nil
 }
 
 // projectFlavorShape maps one captured [mitm.FlavorShape] into a typed
-// [WireFlavor]. It mirrors the build-time projection in
-// internal/mitm/codegen_v2.go exactly so the runtime output equals the
-// values the committed generated file held for the same baseline.
+// [WireFlavor]. It reads the verbatim value of each "constant"-classified
+// identity header and copies the body field set.
 func projectFlavorShape(shape mitm.FlavorShape) WireFlavor {
 	userAgent := constantHeaderValueFromShape(shape, "user-agent")
 	anthropicVersion := constantHeaderValueFromShape(shape, "anthropic-version")
@@ -195,13 +207,13 @@ func featureVectorsFromShape(shape mitm.FlavorShape) []WireFlavorFeatureVector {
 // constantHeaderValueFromShape returns the single observed value of a
 // "constant"-classified header by name (case-insensitive). It returns
 // "" when the header is not constant, not present, or carries more than
-// one observed value. Mirrors codegen_v2.constantHeaderValue.
+// one observed value.
 func constantHeaderValueFromShape(shape mitm.FlavorShape, name string) string {
 	for _, h := range shape.Headers {
 		if !strings.EqualFold(h.Name, name) {
 			continue
 		}
-		if h.Classification == mitm.V2HeaderClassConstant && len(h.ObservedValues) == 1 {
+		if h.Classification == mitm.HeaderClassConstant && len(h.ObservedValues) == 1 {
 			return h.ObservedValues[0]
 		}
 		return ""
@@ -211,8 +223,7 @@ func constantHeaderValueFromShape(shape mitm.FlavorShape, name string) string {
 
 // wireFlavorExcludedHeaders is the set of header names projected into
 // named fields or carrying secrets / per-session state, which must not
-// appear in StaticHeaders. It mirrors the excluded map in
-// codegen_v2.constantStaticHeaders.
+// appear in StaticHeaders.
 var wireFlavorExcludedHeaders = map[string]bool{
 	"user-agent":               true,
 	"anthropic-beta":           true,
@@ -229,15 +240,14 @@ var wireFlavorExcludedHeaders = map[string]bool{
 
 // constantStaticHeadersFromShape returns every "constant" header except
 // the well-known ones surfaced as named fields and the secret /
-// per-session ones. Sorted by canonical Name. Mirrors
-// codegen_v2.constantStaticHeaders.
+// per-session ones. Sorted by canonical Name.
 func constantStaticHeadersFromShape(shape mitm.FlavorShape) []WireHeader {
 	out := make([]WireHeader, 0, len(shape.Headers))
 	for _, h := range shape.Headers {
 		if wireFlavorExcludedHeaders[strings.ToLower(h.Name)] {
 			continue
 		}
-		if h.Classification != mitm.V2HeaderClassConstant {
+		if h.Classification != mitm.HeaderClassConstant {
 			continue
 		}
 		if len(h.ObservedValues) != 1 {
@@ -257,12 +267,11 @@ func constantStaticHeadersFromShape(shape mitm.FlavorShape) []WireHeader {
 }
 
 // requiredBodyFieldsFromShape returns the sorted names of body fields
-// whose presence is required across the flavor's records. Mirrors
-// codegen_v2.requiredBodyFields.
+// whose presence is required across the flavor's records.
 func requiredBodyFieldsFromShape(shape mitm.FlavorShape) []string {
 	out := make([]string, 0, len(shape.Body.Fields))
 	for _, f := range shape.Body.Fields {
-		if f.Presence == mitm.V2HeaderPresenceRequired {
+		if f.Presence == mitm.HeaderPresenceRequired {
 			out = append(out, f.Name)
 		}
 	}
@@ -274,7 +283,7 @@ func requiredBodyFieldsFromShape(shape mitm.FlavorShape) []string {
 }
 
 // splitBetaFlags splits a comma-joined anthropic-beta value into its
-// trimmed, non-empty parts. Mirrors codegen_v2.splitBetaFlags.
+// trimmed, non-empty parts.
 func splitBetaFlags(value string) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
@@ -294,8 +303,7 @@ func splitBetaFlags(value string) []string {
 }
 
 // canonicalWireHeaderName canonical-cases a header name (e.g.
-// "x-stainless-arch" to "X-Stainless-Arch"). Mirrors
-// codegen_v2.canonicalHeaderName.
+// "x-stainless-arch" to "X-Stainless-Arch").
 func canonicalWireHeaderName(name string) string {
 	parts := strings.Split(name, "-")
 	for i, p := range parts {

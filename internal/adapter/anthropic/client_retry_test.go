@@ -81,7 +81,7 @@ func TestDoRetriesOn401WithFreshToken(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 
@@ -135,7 +135,7 @@ func TestDoFallsThroughOnSecond401(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 
@@ -191,7 +191,7 @@ func TestDoSkipsRetryWhenRecoverErrors(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 
@@ -244,7 +244,7 @@ func TestDoSkipsRetryWhenTokenUnchanged(t *testing.T) {
 			UserAgent:             "anthropic-test/0",
 			CCVersion:             "1.0.0",
 			CCEntrypoint:          "test",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 

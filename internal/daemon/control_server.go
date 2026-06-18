@@ -17,6 +17,7 @@ import (
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/response"
 	searchstore "goodkind.io/clyde/internal/search/store"
@@ -43,6 +44,10 @@ type controlServer struct {
 	// the search reads.
 	semanticSearch       conversationSemanticSearchClient
 	semanticCollectionID string
+	// captureStore is the daemon's shared SQLite capture store. SeedBaseline
+	// reads the deduped shape corpus from it and writes the baseline through
+	// it; nil when MITM is disabled.
+	captureStore *capture.Store
 }
 
 // conversationSemanticSearchClient is the engine-backed conversation retrieval
@@ -557,10 +562,10 @@ func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptur
 	return &clydev1.ShowCaptureResponse{Output: output}, nil
 }
 
-// SeedBaseline extracts a v2 wire baseline from a capture transcript and writes
-// baseline-reference.toml for the given upstream.
+// SeedBaseline builds a wire baseline from the capture store's deduped shape
+// corpus and writes it as the current baseline for the given upstream.
 func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBaselineRequest) (*clydev1.SeedBaselineResponse, error) {
-	result, err := mitm.SeedBaseline(ctx, req.GetFrom(), req.GetUpstream(), req.GetOutput(), req.GetIncludeUa(), req.GetExcludeUa())
+	result, err := mitm.SeedBaseline(ctx, s.captureStore, req.GetUpstream(), req.GetIncludeUa(), req.GetExcludeUa())
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
 		slog.WarnContext(ctx, "daemon.seed_baseline.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -571,7 +576,7 @@ func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBasel
 		return nil, status.Errorf(codes.InvalidArgument, "seed baseline: %v", err)
 	}
 	return &clydev1.SeedBaselineResponse{
-		Written:  result.Written,
+		Written:  "",
 		Upstream: result.Upstream,
 		Flavors:  int64(result.Flavors),
 	}, nil

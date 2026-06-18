@@ -26,28 +26,16 @@ type Deps struct {
 	// to inject one. A nil result lets the adapter build the provider's
 	// default auth manager.
 	GetAuth func(adapterresolver.ProviderID) adapterprovider.AuthLookup
-	// AnthropicWireBaselinePath is the absolute path to the daemon-owned
-	// MITM v2 baseline (baseline-reference.toml) the Anthropic client reads at
-	// request time to project its outbound wire identity. The daemon
-	// resolves it from [mitm].drift.upstreams["claude-code"].reference,
-	// falling back to the default baseline root. There is no compiled-in
-	// flavor data; a missing or invalid file makes /v1/messages fail with
-	// an operator-actionable HTTP 503.
-	AnthropicWireBaselinePath string
-	// CodexWireBaselinePath is the absolute path to the daemon-owned MITM
-	// v2 baseline (baseline-reference.toml) the Codex provider reads at request
-	// time to project its outbound wire identity (originator, openai-beta,
-	// user-agent, beta-features, attestation). The daemon resolves it from
-	// [mitm].drift.upstreams["codex-cli"].reference, falling back to the
-	// default baseline root. Unlike the Anthropic path, a missing or
-	// invalid file is NOT fatal: the codex egress falls back to its
-	// compiled-in identity constants so a cold-start codex still works.
-	CodexWireBaselinePath string
-	// CaptureStore is the daemon's shared SQLite capture store. When set, the
-	// adapter records each outbound provider exchange (BYOK egress) to it
-	// tagged by an adapter.<provider> client id, so the egress lands in
-	// mitm/capture.db without routing through the MITM proxy. A nil store
-	// disables egress recording.
+	// CaptureStore is the daemon's shared SQLite capture store. The Anthropic
+	// client and Codex provider read their wire baseline (current baseline +
+	// updated-at) from it at request time to project their outbound wire
+	// identity, and when set the adapter records each outbound provider
+	// exchange (BYOK egress) to it tagged by an adapter.<provider> client id
+	// so the egress lands in mitm/capture.db without routing through the MITM
+	// proxy. A nil store disables both baseline-driven identity and egress
+	// recording; the Anthropic path then fails /v1/messages with an
+	// operator-actionable HTTP 503, while the codex path falls back to its
+	// compiled-in identity constants.
 	CaptureStore *capture.Store
 	// Group is the daemon lifecycle group the adapter attaches its ingress,
 	// egress, and codex websocket session registries to. The daemon sets the
