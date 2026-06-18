@@ -1,6 +1,6 @@
 # Wire baseline
 
-When Cursor (or any Agent chat interface) sends a chat through Clyde's OpenAI Chat Completions Endpoint, the request has to leave us looking exactly like the real native client the provider expects. If our outbound request does not match their expecte shape, they can reject it outright, bill it against the wrong plan, or miss the prompt cache and make every turn slower and more expensive. So Clyde learns what the provider client puts on the wire and replays it.
+When Cursor (or any Agent chat interface) sends a chat through Clyde's OpenAI Chat Completions Endpoint, the request has to leave us looking exactly like the real native client the provider expects. If our outbound request does not match their expected shape, they can reject it outright, bill it against the wrong plan, or miss the prompt cache and make every turn slower and more expensive. So Clyde learns what the provider client puts on the wire and replays it.
 
 We never hand-write that wire shape, we learn it from the genuine article. When you run real `claude` or `codex` through Clyde's MITM proxy (see [Cursor](cursor.md) for how that traffic is routed), the proxy watches each request and records its shape, the headers, the beta flags, and the body field set, with secrets stripped and no prompt text kept. That recording becomes a per-upstream baseline, one learned identity per model, and it keeps itself current as the real clients change. There is nothing to configure and no snapshot to maintain by hand.
 
@@ -33,7 +33,7 @@ If a provider computes a per-request attestation we cannot forge, for example th
 
 ## Drift
 
-A periodic check compares fresh captured traffic against the saved baseline and logs when they disagree. It is there to tell you the shape moved, nothing more, because the learner re-learns on its own and the live identity stays current without anyone touching it.
+A periodic check compares fresh captured traffic against the saved baseline and records when they disagree. It is there to tell you the shape moved, nothing more, because the learner re-learns on its own and the live identity stays current without anyone touching it.
 
 ## Seeding by hand
 

@@ -2,11 +2,9 @@
 
 Logging configuration is centralized under `[logging]`.
 
-Payload controls:
+Body capture:
 
-- Normal JSONL request logs always use the fixed filtered inline payload view.
-- There is no user-facing payload mode ladder.
-- MITM request/response bodies are not a `[logging]` concern; they persist to the SQLite capture store at `mitm/capture.db`, configured under `[mitm.capture_store]`.
+- Request and response bodies persist to the SQLite capture store at `mitm/capture.db`, configured under `[mitm.capture_store]` rather than `[logging]`.
 
 Cleanup controls:
 
@@ -30,5 +28,3 @@ Inventory controls:
 
 - `clyde logs inventory --output-format json` returns the default typed discovery view from configured active locations and the `inventory_index` sink, which backs the indexed inventory view at `logs/inventory/events.jsonl`.
 - `clyde logs inventory --deep --output-format json` adds `--deep` to perform an exact filesystem scan.
-
-Legacy payload controls are not user-facing logging controls and do not change the shape of normal request logs.

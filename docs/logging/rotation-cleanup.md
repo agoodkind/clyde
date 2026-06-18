@@ -10,7 +10,7 @@ When cleanup is disabled, Clyde may audit eligible files, but it should not dele
 
 Cleanup applies across the logging surfaces exposed by inventory, aligned to the inventory categories in `internal/cli/logs/inventory.go`:
 
-- MITM raw captures.
+- MITM capture-index wire logs.
 - MITM profile/process logs.
 - Top-level daemon/cli logs.
 - Provider sidecar logs.
