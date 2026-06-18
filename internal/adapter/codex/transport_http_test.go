@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -122,7 +123,7 @@ func TestRunHTTPTransportEventsParsesSSEAndCompletes(t *testing.T) {
 	}
 }
 
-func TestRunHTTPTransportEventsFoldsUpstreamStatusIntoErrorMessage(t *testing.T) {
+func TestRunHTTPTransportEventsKeepsUpstreamBodyOutOfErrorString(t *testing.T) {
 	t.Parallel()
 
 	for _, status := range []int{
@@ -146,16 +147,26 @@ func TestRunHTTPTransportEventsFoldsUpstreamStatusIntoErrorMessage(t *testing.T)
 		if err == nil {
 			t.Fatalf("status=%d err=nil want error", status)
 		}
-		// The status is preserved in the error message text so the
-		// Cursor-facing error.message carries diagnostics. The status
-		// must NOT propagate as an HTTP status code; the codex provider
-		// error boundary always maps codex failures to HTTP 400 +
-		// invalid_request_error + upstream_*.
+		// Error() is log-safe: it carries the status but never the upstream
+		// response body, so the terminal failure log (which serializes
+		// err.Error()) cannot leak a body snippet into JSONL.
 		if !strings.Contains(err.Error(), "upstream status") {
 			t.Fatalf("status=%d err=%q missing 'upstream status' text", status, err.Error())
 		}
-		if !strings.Contains(err.Error(), "upstream-non200-canary") {
-			t.Fatalf("status=%d err=%q missing body canary", status, err.Error())
+		if strings.Contains(err.Error(), "upstream-non200-canary") {
+			t.Fatalf("status=%d err=%q leaked body canary into the log-safe error string", status, err.Error())
+		}
+		// The body snippet rides on the typed error and reaches the client
+		// only through ClientMessage, never err.Error().
+		var statusErr *UpstreamStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("status=%d err=%q is not *UpstreamStatusError", status, err.Error())
+		}
+		if statusErr.Status != status {
+			t.Fatalf("status field=%d want %d", statusErr.Status, status)
+		}
+		if !strings.Contains(statusErr.ClientMessage(), "upstream-non200-canary") {
+			t.Fatalf("status=%d ClientMessage=%q missing body canary", status, statusErr.ClientMessage())
 		}
 	}
 }

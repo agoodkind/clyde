@@ -377,7 +377,14 @@ func codexProviderAdapterError(err error) *adapterError {
 		aerr.Cause = err
 		return aerr
 	}
+	// An upstream non-2xx carries its body snippet on a typed error whose
+	// Error() is snippet-free for logs; fold the snippet into the client
+	// message here, the one place that builds the Cursor-facing envelope.
 	message := err.Error()
+	var upstreamStatusErr *adaptercodex.UpstreamStatusError
+	if errors.As(err, &upstreamStatusErr) {
+		message = upstreamStatusErr.ClientMessage()
+	}
 	codeClass := codexClassifyError(message)
 	aerr := mapUpstreamForFamily(adapterRouteOpenAI, "codex", 0, codeClass, "", message)
 	aerr.Cause = err
