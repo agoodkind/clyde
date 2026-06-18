@@ -87,6 +87,11 @@ type Header struct {
 	ObservedValues []string             `json:"observed_values"`
 	Pattern        string               `json:"pattern,omitempty"`
 	OccurrenceRate float64              `json:"occurrence_rate"`
+	// Volatile marks a header whose value churns per request (a byte size,
+	// per-session id, or attestation blob) and so carries no wire identity.
+	// The diff tracks only such a header's presence, never its value or class,
+	// so request-size and session noise never reads as baseline drift.
+	Volatile bool `json:"volatile,omitempty"`
 }
 
 // Body is part of Clyde's typed adapter surface.

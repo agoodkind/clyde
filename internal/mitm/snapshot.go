@@ -536,14 +536,29 @@ func classifyHeader(name string, values map[string]int, presence, total int, opt
 	if total > 0 {
 		rate = float64(presence) / float64(total)
 	}
+	// A header is volatile when its observed values are all churning-shaped
+	// (byte sizes, per-session ids, attestation blobs). The shape check, not the
+	// cardinality, decides volatility: corpus dedup may collapse many churning
+	// values to one representative, so a churning header can look constant yet
+	// still carry no wire identity.
+	volatile := allValuesVolatile(observed)
 	out := Header{
 		Name:           name,
 		Classification: classification,
 		Presence:       pres,
 		OccurrenceRate: rate,
 		ObservedValues: observed, Pattern: "",
+		Volatile: volatile,
 	}
-	if classification == HeaderClassFree {
+	switch {
+	case volatile:
+		// Presence only: never persist a churning value, neither as an observed
+		// value nor as a derived Pattern, so request-size and session noise
+		// cannot enter the baseline.
+		out.ObservedValues = nil
+	case classification == HeaderClassFree:
+		// High-cardinality but non-churning: collapse the values to one
+		// canonical pattern instead of listing them.
 		out.Pattern = canonicalHeaderValue(name, observed[0])
 		out.ObservedValues = nil
 	}
