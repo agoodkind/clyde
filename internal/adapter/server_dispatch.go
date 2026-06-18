@@ -127,7 +127,7 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	s.emitChatRequestLeg(ctx, recorder, logevent.LegAdapterIngress, logevent.PhaseStarted, logevent.StatusOK, headerFacets)
 	discovery := DiscoverRequest(body)
 
-	req, err := s.prepareChatRequest(ctx, r, corr, reqID, body, bodyBytes, recorder)
+	req, err := s.prepareChatRequest(ctx, corr, reqID, body, bodyBytes, recorder)
 	if err != nil {
 		return err
 	}
@@ -206,10 +206,10 @@ func (s *Server) applyBodyChatIdentity(ctx context.Context, r *http.Request, cor
 	return ctx, r, corr, ingressCtx, bodyFacets
 }
 
-func (s *Server) prepareChatRequest(ctx context.Context, r *http.Request, corr correlation.Context, reqID string, body []byte, bodyBytes int, recorder *logevent.Recorder) (ChatRequest, error) {
+func (s *Server) prepareChatRequest(ctx context.Context, corr correlation.Context, reqID string, body []byte, bodyBytes int, recorder *logevent.Recorder) (ChatRequest, error) {
 	var req ChatRequest
 	parseErr := json.Unmarshal(body, &req)
-	s.emitChatPayloadLeg(ctx, recorder, body, r.Header.Get("Content-Type"), parseErr)
+	s.emitChatPayloadLeg(ctx, recorder, body, parseErr)
 	if parseErr != nil {
 		recorder.EmitError(ctx, "invalid_json", parseErr.Error())
 		s.logChatParseFailed(ctx, corr, reqID, bodyBytes, parseErr)

@@ -59,11 +59,10 @@ func (s *Server) emitChatRequestLeg(ctx context.Context, recorder *logevent.Reco
 	recorder.Emit(ctx, event)
 }
 
-func (s *Server) emitChatPayloadLeg(ctx context.Context, recorder *logevent.Recorder, body []byte, contentType string, parseErr error) {
+func (s *Server) emitChatPayloadLeg(ctx context.Context, recorder *logevent.Recorder, body []byte, parseErr error) {
 	if recorder == nil {
 		return
 	}
-	payload := logevent.FilterPayload(body, contentType)
 	status := logevent.StatusOK
 	errorMessage := ""
 	if parseErr != nil {
@@ -77,7 +76,6 @@ func (s *Server) emitChatPayloadLeg(ctx context.Context, recorder *logevent.Reco
 	event.Outcome.ErrorMessage = errorMessage
 	event.Outcome.BytesIn = int64(len(body))
 	event.Outcome.Duration = recorder.Duration()
-	event.Payload = &payload
 	recorder.Emit(ctx, event)
 }
 

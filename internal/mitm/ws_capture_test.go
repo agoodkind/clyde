@@ -47,6 +47,12 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// wsBodySentinel is a unique marker embedded in the websocket frames a capture
+// test sends. The upstream echoes it, so both the client and upstream frame
+// streams carry it; the wire JSONL must contain it nowhere, proving frame
+// content stays out of the log and lives only in the SQLite capture store.
+const wsBodySentinel = "ws-body-sentinel-7f3e2d10"
+
 func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 	t.Parallel()
 
@@ -109,7 +115,7 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 		defer resp.Body.Close()
 	}
 
-	requestFrame := []byte(`{"type":"response.create"}`)
+	requestFrame := []byte(`{"type":"response.create","probe":"` + wsBodySentinel + `"}`)
 	if err := conn.WriteMessage(websocket.TextMessage, requestFrame); err != nil {
 		t.Fatalf("write client frame: %v", err)
 	}
@@ -151,8 +157,17 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
+	// The wire JSONL must not restate any frame content: neither the client
+	// request frame nor the echoed upstream frame (both carry the sentinel).
+	// Frame bodies live only in the SQLite capture store.
+	rawWire := strings.Join(lines, "\n")
+	if strings.Contains(rawWire, wsBodySentinel) {
+		t.Fatalf("wire JSONL leaked websocket frame content %q:\n%s", wsBodySentinel, rawWire)
+	}
+
 	phases := map[string]int{}
 	directions := map[string]int{}
+	var completedLeg map[string]any
 	for _, line := range lines {
 		var ev map[string]any
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
@@ -161,28 +176,43 @@ func TestProxyWebsocketCaptureRecordsFramesBothDirections(t *testing.T) {
 		if ev["leg"] != string(logevent.LegMITMCaptureIndex) {
 			continue
 		}
-		if phase, _ := ev["phase"].(string); phase != "" {
+		phase, _ := ev["phase"].(string)
+		if phase != "" {
 			phases[phase]++
 		}
-		mitmFields, ok := ev["mitm"].(map[string]any)
-		if !ok {
-			continue
+		if phase == string(logevent.PhaseCompleted) {
+			completedLeg = ev
 		}
-		if direction, _ := mitmFields["direction"].(string); direction != "" {
-			directions[direction]++
+		if mitmFields, ok := ev["mitm"].(map[string]any); ok {
+			if direction, _ := mitmFields["direction"].(string); direction != "" {
+				directions[direction]++
+			}
 		}
 	}
-	if phases[string(logevent.PhaseStarted)] < 1 {
-		t.Errorf("expected websocket start record, got phases=%v directions=%v", phases, directions)
+
+	// The websocket path emits one terminal lifecycle leg per session, with no
+	// started leg and no per-frame direction legs. The log states nothing about
+	// frame content: no per-direction summary, no sha256, no payload view.
+	if phases[string(logevent.PhaseStarted)] != 0 {
+		t.Errorf("expected no capture-index started leg, got phases=%v", phases)
 	}
-	if directions["client_to_upstream"] < 1 {
-		t.Errorf("expected client websocket message record, got phases=%v directions=%v", phases, directions)
+	if phases[string(logevent.PhaseCompleted)] != 1 {
+		t.Errorf("expected exactly one terminal lifecycle leg, got phases=%v", phases)
 	}
-	if directions["upstream_to_client"] < 1 {
-		t.Errorf("expected upstream websocket message record, got phases=%v directions=%v", phases, directions)
+	if len(directions) != 0 {
+		t.Errorf("expected no per-frame direction legs, got directions=%v", directions)
 	}
-	if phases[string(logevent.PhaseCompleted)] < 2 {
-		t.Errorf("expected websocket completed records, got phases=%v directions=%v", phases, directions)
+	if completedLeg == nil {
+		t.Fatalf("missing terminal lifecycle leg in %v", lines)
+	}
+	if _, present := completedLeg["mitm_ws_capture"]; present {
+		t.Errorf("terminal leg carries a content summary facet; want none: %#v", completedLeg)
+	}
+	if _, present := completedLeg["payload_summary"]; present {
+		t.Errorf("terminal leg carries a payload summary; want none: %#v", completedLeg)
+	}
+	if strings.Contains(rawWire, `"sha256"`) {
+		t.Errorf("wire JSONL carries a content sha256; want none:\n%s", rawWire)
 	}
 
 	if err := store.Close(context.Background(), "test"); err != nil {
@@ -574,29 +604,23 @@ func newWebsocketRequestLogProxy(t *testing.T, captureDir string, logger *slog.L
 	return proxy
 }
 
+// hasWSEvents reports whether the per-concern wire JSONL contains the single
+// terminal websocket capture-index leg a finished bridge emits. The websocket
+// path no longer writes a started leg or per-frame direction legs, so detection
+// keys on the completed capture-index leg carrying the websocket transport.
 func hasWSEvents(lines []string) bool {
-	foundStart := false
-	foundClientMessage := false
-	foundUpstreamMessage := false
-	foundCompleted := false
 	for _, line := range lines {
 		if !strings.Contains(line, `"leg":"`+string(logevent.LegMITMCaptureIndex)+`"`) {
 			continue
 		}
-		if strings.Contains(line, `"phase":"`+string(logevent.PhaseStarted)+`"`) {
-			foundStart = true
+		if !strings.Contains(line, `"phase":"`+string(logevent.PhaseCompleted)+`"`) {
+			continue
 		}
-		if strings.Contains(line, `"direction":"client_to_upstream"`) {
-			foundClientMessage = true
-		}
-		if strings.Contains(line, `"direction":"upstream_to_client"`) {
-			foundUpstreamMessage = true
-		}
-		if strings.Contains(line, `"phase":"`+string(logevent.PhaseCompleted)+`"`) {
-			foundCompleted = true
+		if strings.Contains(line, `"transport":"websocket"`) {
+			return true
 		}
 	}
-	return foundStart && foundClientMessage && foundUpstreamMessage && foundCompleted
+	return false
 }
 
 // overrideChatGPTUpstream temporarily registers a typed test-only
