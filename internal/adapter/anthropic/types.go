@@ -17,22 +17,6 @@ import (
 // API defaults to "model max" which we approximate generously.
 const MaxOutputTokens = 8192
 
-// WireCaptureMode is the closed enum the anthropic client honors when the
-// dispatcher passes a per-provider wire-capture lever. Aliased from the
-// leaf [anthmode] package so the parent provider package and the
-// [internal/config] package share a single canonical type without an import
-// cycle.
-type WireCaptureMode = anthmode.WireCaptureMode
-
-// Anthropic wire-capture modes. Off is the safe default and matches an empty
-// configured value. Aliased from [anthmode] so callers may continue to use
-// the unqualified `anthropic.WireCapture*` names.
-const (
-	WireCaptureOff         = anthmode.WireCaptureOff
-	WireCaptureSummaryOnly = anthmode.WireCaptureSummaryOnly
-	WireCaptureFull        = anthmode.WireCaptureFull
-)
-
 // InboundThinking is the closed enum of strategies for the visible thinking
 // content block round-trip on the inbound (request-shaping) side. Aliased
 // from the leaf [anthmode] package so the parent provider package and the
@@ -62,11 +46,6 @@ type Config struct {
 	StainlessRuntimeVersion string
 	CCVersion               string
 	CCEntrypoint            string
-	// WireCaptureMode controls the optional per-success-path log of the
-	// upstream response shape. WireCaptureOff (default) is safe; the
-	// other modes route to adapter.providers.anthropic.wire_capture for
-	// short-retention diagnostics.
-	WireCaptureMode WireCaptureMode
 	// WireBaselinePath is the absolute path to the daemon-owned MITM v2
 	// baseline (baseline-reference.toml) the client reads at request time to
 	// project its outbound wire identity. There is no compiled-in

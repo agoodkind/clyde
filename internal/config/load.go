@@ -75,6 +75,23 @@ func loadConfig(dir string) (*Config, error) {
 type removedLoggingConfig struct {
 	Logging removedLoggingSection `toml:"logging"`
 	MITM    removedMITMSection    `toml:"mitm"`
+	Adapter removedAdapterSection `toml:"adapter"`
+}
+
+// removedAdapterSection scans for the per-provider wire-capture blocks removed
+// when the adapter wire-capture feature was dropped. go-toml/v2 ignores unknown
+// keys, so a stale [adapter.<provider>.wire_capture] block would otherwise load
+// silently; the scanner warns the operator instead.
+type removedAdapterSection struct {
+	Anthropic removedAdapterProvider `toml:"anthropic"`
+}
+
+type removedAdapterProvider struct {
+	WireCapture *removedWireCapture `toml:"wire_capture"`
+}
+
+type removedWireCapture struct {
+	Mode *string `toml:"mode"`
 }
 
 type removedLoggingSection struct {
@@ -120,6 +137,9 @@ func warnRemovedLoggingConfig(data []byte, tomlPath string, log *slog.Logger) {
 	}
 	if removedConfig.Logging.Cleanup.CleanupMode != nil {
 		emitRemovedLoggingKeyWarning("logging.cleanup.cleanup_mode")
+	}
+	if removedConfig.Adapter.Anthropic.WireCapture != nil {
+		emitRemovedLoggingKeyWarning("adapter.anthropic.wire_capture")
 	}
 }
 

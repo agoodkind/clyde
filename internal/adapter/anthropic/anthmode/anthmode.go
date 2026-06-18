@@ -1,56 +1,14 @@
-// Package anthmode declares the closed enums the Anthropic provider exposes
-// for operator configuration: wire-capture mode and inbound-thinking
-// materialization strategy. The package is a leaf with no internal Clyde
-// dependencies so [internal/config] can import it without creating a cycle
-// with [internal/adapter/anthropic], which depends on configuration-aware
-// packages elsewhere. The parent [internal/adapter/anthropic] package
-// re-exports these names via type aliases so callers inside the provider
-// continue to refer to them as `anthropic.WireCaptureMode` etc.
+// Package anthmode declares the closed enum the Anthropic provider exposes for
+// operator configuration: the inbound-thinking materialization strategy. The
+// package is a leaf with no internal Clyde dependencies so [internal/config]
+// can import it without creating a cycle with [internal/adapter/anthropic],
+// which depends on configuration-aware packages elsewhere. The parent
+// [internal/adapter/anthropic] package re-exports these names via type aliases
+// so callers inside the provider continue to refer to them as
+// `anthropic.InboundThinking` etc.
 package anthmode
 
 import "fmt"
-
-// WireCaptureMode is the closed enum the Anthropic provider honors when the
-// dispatcher passes a per-provider wire-capture lever. The provider package
-// owns this enum so config can use it directly as a typed field; the wire
-// values match the TOML/JSON contract under [adapter.anthropic.wire_capture].
-type WireCaptureMode string
-
-// Anthropic wire-capture modes. Off is the safe default and matches an empty
-// configured value.
-const (
-	// WireCaptureOff disables success-path body capture. Errors (429,
-	// non-200) continue to log their bodies via the existing
-	// anthropic.ratelimit and anthropic.messages.upstream_error events.
-	WireCaptureOff WireCaptureMode = "off"
-	// WireCaptureSummaryOnly emits a per-request fingerprint (status,
-	// request-id, byte counts, headers) without the body.
-	WireCaptureSummaryOnly WireCaptureMode = "summary_only"
-	// WireCaptureFull emits the full upstream response body on every
-	// successful request via a tee-reader. Combined with the small shared
-	// rotation budget, safe to leave on for diagnostic windows.
-	WireCaptureFull WireCaptureMode = "full"
-)
-
-// Validate reports whether the value is a legal wire-capture mode. The empty
-// string is accepted and resolves to [WireCaptureOff] via [WireCaptureMode.Resolved].
-func (m WireCaptureMode) Validate() error {
-	switch m {
-	case "", WireCaptureOff, WireCaptureSummaryOnly, WireCaptureFull:
-		return nil
-	default:
-		return fmt.Errorf("anthropic: wire_capture.mode must be one of off|summary_only|full (got %q)", string(m))
-	}
-}
-
-// Resolved returns the configured mode with the [WireCaptureOff] default
-// applied when the operator has not set a value.
-func (m WireCaptureMode) Resolved() WireCaptureMode {
-	if m == "" {
-		return WireCaptureOff
-	}
-	return m
-}
 
 // InboundThinking is the closed enum of strategies for the visible thinking
 // content block round-trip on the inbound (request-shaping) side. The provider

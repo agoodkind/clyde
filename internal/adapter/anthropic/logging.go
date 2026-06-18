@@ -138,8 +138,11 @@ func dedicatedLogger() *slog.Logger {
 // keeps the variadic shape contained to a single helper.
 //
 // Optional fields use the zero value as the "omit" sentinel:
-// RetryAfter/Body/Err empty strings are dropped, and Status==0 means
-// the response never came back (post_failed).
+// RetryAfter/Err empty strings are dropped, and Status==0 means
+// the response never came back (post_failed). Response bodies are never
+// logged; when a capture store is configured the full request and response
+// bodies (including error bodies) live in the SQLite capture store, so the
+// event carries only BodyBytes.
 type responseEvent struct {
 	Subcomponent string
 	Model        string
@@ -149,7 +152,6 @@ type responseEvent struct {
 	DurationMs   int64
 	RateLimits   []rateLimitAttr
 	RetryAfter   string
-	Body         string
 	Err          string
 }
 
@@ -174,9 +176,6 @@ func (e responseEvent) toSlogAttrs() []slog.Attr {
 	}
 	if e.RetryAfter != "" {
 		attrs = append(attrs, slog.String("retry_after", e.RetryAfter))
-	}
-	if e.Body != "" {
-		attrs = append(attrs, slog.String("body", e.Body))
 	}
 	if e.Err != "" {
 		attrs = append(attrs, slog.String("err", e.Err))
