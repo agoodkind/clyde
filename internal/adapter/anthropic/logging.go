@@ -140,8 +140,9 @@ func dedicatedLogger() *slog.Logger {
 // Optional fields use the zero value as the "omit" sentinel:
 // RetryAfter/Err empty strings are dropped, and Status==0 means
 // the response never came back (post_failed). Response bodies are never
-// logged; full request and response bodies (including error bodies) live in the
-// SQLite capture store, so the event carries only BodyBytes.
+// logged; when a capture store is configured the full request and response
+// bodies (including error bodies) live in the SQLite capture store, so the
+// event carries only BodyBytes.
 type responseEvent struct {
 	Subcomponent string
 	Model        string

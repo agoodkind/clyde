@@ -217,9 +217,10 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 	if resp.StatusCode != http.StatusOK {
 		errBody := readDecodedBody(resp)
 		ev := base
-		// The error body is persisted to the capture store, not the log; the
-		// JSONL leg keeps only the byte count. The truncated body still reaches
-		// the client through the UpstreamError message below.
+		// The error body is persisted to the capture store when one is
+		// configured, never to the log; the JSONL leg keeps only the byte count.
+		// The truncated body still reaches the client through the UpstreamError
+		// message below. BodyBytes here is the error-response size for this leg.
 		ev.BodyBytes = len(errBody)
 		logResponse(ctx, slog.LevelError, "anthropic.messages.upstream_error", ev)
 		c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)
@@ -246,9 +247,10 @@ func (c *Client) handle429Response(ctx context.Context, req Request, resp *http.
 	errBody := readDecodedBody(resp)
 	ev := base
 	ev.RetryAfter = resp.Header.Get("Retry-After")
-	// The error body is persisted to the capture store, not the log; the JSONL
-	// leg keeps only the byte count. The body still reaches the client through
-	// the rate-limit message built below.
+	// The error body is persisted to the capture store when one is configured,
+	// never to the log; the JSONL leg keeps only the byte count. The body still
+	// reaches the client through the rate-limit message built below. BodyBytes
+	// here is the error-response size for this leg.
 	ev.BodyBytes = len(errBody)
 	logResponse(ctx, slog.LevelWarn, "anthropic.ratelimit", ev)
 	c.recordEgress(ctx, ex, resp.StatusCode, resp.Header, errBody)

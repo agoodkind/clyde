@@ -36,10 +36,11 @@ type egressExchange struct {
 	started    time.Time
 }
 
-// attachEgressObservers tees the streamed response body (capped) into the
-// SQLite capture store so the outbound /v1/messages exchange lands in
-// capture.db with its full request and response bodies. With no capture store
-// configured, resp.Body is left untouched. Bodies are never written to a log.
+// attachEgressObservers tees the streamed response body into the SQLite capture
+// store so the outbound /v1/messages exchange lands in capture.db with its
+// request body and its response body up to captureStoreBodyCap. With no capture
+// store configured, resp.Body is left untouched. Bodies are never written to a
+// log.
 func (c *Client) attachEgressObservers(ctx context.Context, resp *http.Response, base responseEvent, ex egressExchange) {
 	if c.cfg.CaptureStore == nil {
 		return
