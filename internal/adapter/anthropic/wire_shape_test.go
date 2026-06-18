@@ -160,7 +160,7 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 			// Configured value differs from the flavor's 2023-06-01 so a
 			// regression that reads cfg instead of the flavor is visible.
 			OAuthAnthropicVersion: "1999-01-01",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 
@@ -184,7 +184,7 @@ func TestAnthropicVersionPrefersFlavor(t *testing.T) {
 func TestFeatureAwareFlavorSelectionIsByModel(t *testing.T) {
 	t.Parallel()
 
-	loaded, err := newWireFlavorsLoader().Load(writeTestWireBaseline(t))
+	loaded, err := newWireFlavorsLoader().Load(context.Background(), seedTestWireBaseline(t))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestBillingAttestationReplayedIntoOutboundBody(t *testing.T) {
 		cfg: Config{
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
-			WireBaselinePath:      writeTestWireBaselineWithAttestation(t, "captured-cch-7777"),
+			CaptureStore:          seedTestWireBaselineWithAttestation(t, "captured-cch-7777"),
 		},
 	}
 
@@ -352,7 +352,7 @@ func TestBillingAttestationEmptyKeepsPlaceholderOnWire(t *testing.T) {
 		cfg: Config{
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 
@@ -404,7 +404,7 @@ func TestOutboundBodyFieldSetMatchesLearnedShape(t *testing.T) {
 		cfg: Config{
 			MessagesURL:           "https://REDACTED-UPSTREAM/v1/messages",
 			OAuthAnthropicVersion: "2023-06-01",
-			WireBaselinePath:      writeTestWireBaseline(t),
+			CaptureStore:          seedTestWireBaseline(t),
 		},
 	}
 

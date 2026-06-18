@@ -3,12 +3,12 @@ package mitm
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 const baselineRefreshDebounce = 2 * time.Second
@@ -23,21 +23,17 @@ var defaultBaselineRefresher = &baselineRefresher{
 		Mutex{},
 }
 
-func queueBaselineRefresh(ctx context.Context, cfg config.MITMConfig, provider string, log *slog.Logger) {
+// queueBaselineRefresh debounces a baseline refresh for every configured
+// upstream matching provider, reading the deduped shape corpus from store and
+// writing the new baseline through it. A nil store or disabled drift is a
+// no-op.
+func queueBaselineRefresh(ctx context.Context, store *capture.Store, cfg config.MITMConfig, provider string, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
 	}
 	dcfg := cfg.Drift
-	if !dcfg.Enabled || len(dcfg.Upstreams) == 0 {
+	if !dcfg.Enabled || len(dcfg.Upstreams) == 0 || store == nil {
 		return
-	}
-	captureRoot := strings.TrimSpace(cfg.CaptureDir)
-	if captureRoot == "" {
-		captureRoot = DefaultCaptureRoot()
-	}
-	logDir := strings.TrimSpace(dcfg.DriftLogDir)
-	if logDir == "" {
-		logDir = DefaultDriftLogDir()
 	}
 	for upstream, entry := range dcfg.Upstreams {
 		if !upstreamMatchesProvider(upstream, provider) {
@@ -45,20 +41,17 @@ func queueBaselineRefresh(ctx context.Context, cfg config.MITMConfig, provider s
 		}
 		opts := BaselineRefreshOptions{
 			Upstream:        upstream,
-			CaptureRoot:     captureRoot,
-			Reference:       entry.Reference,
-			DriftLogPath:    filepath.Join(logDir, upstream+".jsonl"),
 			IncludeUA:       entry.IncludeUA,
 			ExcludeUA:       entry.ExcludeUA,
 			RequireBodyKeys: entry.RequireBodyKeys,
 			ForbidBodyKeys:  entry.ForbidBodyKeys,
-			Log:             log.With("upstream", upstream, "provider", provider), BaselineRoot: "",
+			Log:             log.With("upstream", upstream, "provider", provider),
 		}
-		defaultBaselineRefresher.schedule(ctx, opts)
+		defaultBaselineRefresher.schedule(ctx, store, opts)
 	}
 }
 
-func (r *baselineRefresher) schedule(ctx context.Context, opts BaselineRefreshOptions) {
+func (r *baselineRefresher) schedule(ctx context.Context, store *capture.Store, opts BaselineRefreshOptions) {
 	if r == nil {
 		return
 	}
@@ -76,7 +69,7 @@ func (r *baselineRefresher) schedule(ctx context.Context, opts BaselineRefreshOp
 	// (correlation IDs, slog handlers) without inheriting deadlines.
 	scheduledCtx := context.WithoutCancel(ctx)
 	r.timers[key] = time.AfterFunc(baselineRefreshDebounce, func() {
-		outcome, err := RefreshBaseline(scheduledCtx, opts)
+		outcome, err := RefreshBaseline(scheduledCtx, store, opts)
 		if err != nil {
 			opts.Log.WarnContext(scheduledCtx, "mitm.baseline.refresh_failed", "concern", "providers.mitm.wire", "err", err)
 		} else if outcome.Updated {
@@ -84,8 +77,7 @@ func (r *baselineRefresher) schedule(ctx context.Context, opts BaselineRefreshOp
 			if outcome.Diverged {
 				level = slog.LevelWarn
 			}
-			opts.Log.LogAttrs(scheduledCtx, level, "mitm.baseline.refreshed", slog.String("concern", "providers.mitm.wire"), slog.String("schema_version", outcome.SchemaVersion),
-				slog.String("baseline_path", outcome.BaselinePath),
+			opts.Log.LogAttrs(scheduledCtx, level, "mitm.baseline.refreshed", slog.String("concern", "providers.mitm.wire"),
 				slog.Bool("created", outcome.Created),
 				slog.Bool("diverged", outcome.Diverged),
 				slog.String("summary", outcome.Summary),

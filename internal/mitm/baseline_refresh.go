@@ -2,26 +2,45 @@ package mitm
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/clock"
-	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
-// BaselineRefreshOptions is part of Clyde's typed adapter surface.
+// baselineShapeWindow bounds how far back the refresh reads deduped shapes when
+// building a candidate snapshot. Shapes last seen before now-window are
+// excluded so a long-stale shape does not keep a retired wire flavor alive in
+// the baseline. The corpus itself is held forever; this only scopes one
+// refresh's input.
+const baselineShapeWindow = 7 * 24 * time.Hour
+
+// baselineDiffCategory is the typed bucket one flattened baseline difference
+// belongs to. Every [capture.BaselineDiff] row carries one of these, so the
+// difference matrix stays a closed, queryable set rather than free-form text.
+type baselineDiffCategory string
+
+const (
+	baselineDiffHeaderMissing      baselineDiffCategory = "header_missing"
+	baselineDiffHeaderExtra        baselineDiffCategory = "header_extra"
+	baselineDiffHeaderClassChanged baselineDiffCategory = "header_class_changed"
+	baselineDiffHeaderValuesDiff   baselineDiffCategory = "header_values_diff"
+	baselineDiffBodyMissing        baselineDiffCategory = "body_missing"
+	baselineDiffBodyExtra          baselineDiffCategory = "body_extra"
+	baselineDiffBetaFingerprint    baselineDiffCategory = "beta_fingerprint"
+	baselineDiffUserAgent          baselineDiffCategory = "user_agent"
+	baselineDiffFlavorMissing      baselineDiffCategory = "flavor_missing"
+	baselineDiffFlavorExtra        baselineDiffCategory = "flavor_extra"
+)
+
+// BaselineRefreshOptions configures one upstream's baseline refresh from the
+// capture store's deduped shape corpus. The keep filters scope which captured
+// caller flavor the candidate snapshot is built from.
 type BaselineRefreshOptions struct {
 	Upstream        string
-	CaptureRoot     string
-	BaselineRoot    string
-	Reference       string
-	DriftLogPath    string
 	IncludeUA       []string
 	ExcludeUA       []string
 	RequireBodyKeys []string
@@ -29,16 +48,20 @@ type BaselineRefreshOptions struct {
 	Log             *slog.Logger
 }
 
-// BaselineRefreshOutcome is part of Clyde's typed adapter surface.
+// BaselineRefreshOutcome reports the outcome of one baseline refresh.
 type BaselineRefreshOutcome struct {
 	DriftOutcome
-	BaselinePath string `json:"baseline_path"`
-	Created      bool   `json:"created"`
-	Updated      bool   `json:"updated"`
+	Created bool `json:"created"`
+	Updated bool `json:"updated"`
 }
 
-// RefreshBaseline is part of Clyde's typed adapter surface.
-func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (BaselineRefreshOutcome, error) {
+// RefreshBaseline rebuilds the candidate snapshot for one upstream from the
+// store's deduped shape corpus, diffs it against the current stored baseline,
+// and on a change (or first baseline) folds the differences into the deduped
+// difference matrix and writes the new authoritative baseline. Every run
+// records a drift-check outcome. The store is the single source of truth; no
+// file is read or written.
+func RefreshBaseline(ctx context.Context, store *capture.Store, opts BaselineRefreshOptions) (BaselineRefreshOutcome, error) {
 	log := opts.Log
 	if log == nil {
 		log = slog.Default()
@@ -47,118 +70,190 @@ func RefreshBaseline(ctx context.Context, opts BaselineRefreshOptions) (Baseline
 	if upstream == "" {
 		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh: upstream is required")
 	}
-	captureRoot := strings.TrimSpace(opts.CaptureRoot)
-	if captureRoot == "" {
-		captureRoot = DefaultCaptureRoot()
-	}
-	transcriptPath, err := ResolveTranscriptPath(captureRoot, upstream)
-	if err != nil {
-		log.WarnContext(ctx, "mitm.baseline.transcript_resolve_failed", "concern", "providers.mitm.wire", "component", "mitm",
-			"upstream", upstream,
-			"capture_root", captureRoot,
-			"err", err,
-		)
-		return BaselineRefreshOutcome{}, err
-	}
-	baselinePath := resolveBaselinePath(opts)
-	if err := os.MkdirAll(filepath.Dir(baselinePath), 0o755); err != nil {
-		log.WarnContext(ctx, "mitm.baseline.mkdir_failed", "concern", "providers.mitm.wire", "component", "mitm",
-			"path", filepath.Dir(baselinePath),
-			"err", err,
-		)
-		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh mkdir: %w", err)
+	if store == nil {
+		return BaselineRefreshOutcome{}, fmt.Errorf("baseline refresh: capture store is required")
 	}
 
-	versionTag := "live-" + clock.Now().UTC().Format("20060102T150405")
+	startedAt := clock.Now().UTC()
 	outcome := BaselineRefreshOutcome{
 		DriftOutcome: DriftOutcome{
-			Upstream:       upstream,
-			ReferencePath:  baselinePath,
-			TranscriptPath: transcriptPath,
-			StartedAt:      clock.Now().UTC(), Timestamp: time.
-					Time{},
-
-			SchemaVersion: "", Diverged: false, Summary: "", V2: nil,
+			Upstream:  upstream,
+			StartedAt: startedAt,
+			Timestamp: startedAt,
+			Diverged:  false,
+			Summary:   "",
+			Report:    nil,
 		},
-		BaselinePath: baselinePath, Created: false, Updated: false,
+		Created: false,
+		Updated: false,
 	}
-	result, refErr := refreshBaselineV2(log, outcome, opts, versionTag, transcriptPath, baselinePath)
-	if errors.Is(refErr, errNoSnapshotRecords) {
-		// The resolved per-concern wire transcript holds request-story leg
-		// records, not the http_request / ws_* CaptureRecord kinds the snapshot
-		// extractor needs, so an empty extraction is expected on live data.
-		// Skip the tick without surfacing it as an infrastructure failure.
-		log.WarnContext(ctx, "mitm.baseline.no_usable_records", "concern", "providers.mitm.wire", "component", "mitm",
-			"upstream", upstream,
-			"transcript", transcriptPath,
-		)
-		return result, nil
-	}
-	return result, refErr
-}
 
-func refreshBaselineV2(log *slog.Logger, outcome BaselineRefreshOutcome, opts BaselineRefreshOptions, versionTag, transcriptPath, baselinePath string) (BaselineRefreshOutcome, error) {
-	candidate, err := ExtractSnapshotV2(transcriptPath, SnapshotV2Options{
-		UpstreamName:               opts.Upstream,
+	since := startedAt.Add(-baselineShapeWindow)
+	shapes, err := store.ShapesForUpstream(ctx, upstream, since)
+	if err != nil {
+		return outcome, fmt.Errorf("baseline refresh: read shapes: %w", err)
+	}
+	versionTag := "live-" + startedAt.Format("20060102T150405")
+	candidate, err := ExtractSnapshotFromShapes(shapes, SnapshotOptions{
+		UpstreamName:               upstream,
 		UpstreamVersion:            versionTag,
-		ProviderFilter:             ProviderForUpstream(opts.Upstream),
 		IncludeUserAgentSubstrings: opts.IncludeUA,
 		ExcludeUserAgentSubstrings: opts.ExcludeUA,
 		RequireBodyKeys:            opts.RequireBodyKeys,
 		ForbidBodyKeys:             opts.ForbidBodyKeys, MaxBodyDepth: 0, EnumThreshold: 0,
 	})
 	if err != nil {
-		return outcome, err
+		// An empty corpus is the expected cold-start case (no native traffic
+		// captured yet). Record the check and skip without surfacing an
+		// infrastructure failure.
+		log.WarnContext(ctx, "mitm.baseline.no_usable_shapes", "concern", "providers.mitm.wire", "component", "mitm",
+			"upstream", upstream,
+			"err", err,
+		)
+		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: false, Summary: "no usable shapes"})
+		return outcome, nil
 	}
-	outcome.SchemaVersion = "v2"
-	if existing, err := LoadSnapshotV2TOML(baselinePath); err == nil {
-		report := DiffSnapshotsV2(existing, candidate)
-		outcome.V2 = &report
+
+	existingRaw, hasExisting, err := store.CurrentBaseline(ctx, upstream)
+	if err != nil {
+		return outcome, fmt.Errorf("baseline refresh: read current baseline: %w", err)
+	}
+
+	if hasExisting {
+		existing, err := unmarshalSnapshot(existingRaw)
+		if err != nil {
+			return outcome, fmt.Errorf("baseline refresh: decode current baseline: %w", err)
+		}
+		report := DiffSnapshots(existing, candidate)
+		outcome.Report = &report
 		outcome.Diverged = report.HasDiverged()
 		outcome.Summary = report.SummaryString()
+		store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: outcome.Diverged, Summary: outcome.Summary})
 		if !outcome.Diverged {
 			return outcome, nil
 		}
 		outcome.Updated = true
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return outcome, fmt.Errorf("load baseline v2: %w", err)
-	} else {
-		outcome.Created = true
-		outcome.Updated = true
-		outcome.Summary = "initialized local v2 baseline for upstream=" + opts.Upstream
-	}
-	if opts.DriftLogPath != "" {
-		if err := AppendDriftOutcome(opts.DriftLogPath, outcome.DriftOutcome); err != nil {
-			log.Warn("mitm.baseline.drift_log_append_failed", "concern", "providers.mitm.wire", "path", opts.DriftLogPath, "err", err)
+		if err := putBaseline(ctx, store, upstream, candidate, report, startedAt); err != nil {
+			return outcome, err
 		}
+		return outcome, nil
 	}
-	if err := writeSnapshotV2Atomic(candidate, baselinePath); err != nil {
+
+	outcome.Created = true
+	outcome.Updated = true
+	outcome.Summary = "initialized baseline for upstream=" + upstream
+	store.RecordCheck(capture.DriftCheck{Timestamp: startedAt, Upstream: upstream, Diverged: false, Summary: outcome.Summary})
+	if err := putBaseline(ctx, store, upstream, candidate, DiffReport{Upstream: upstream, MissingFlavors: nil, ExtraFlavors: nil, FlavorReports: nil}, startedAt); err != nil {
 		return outcome, err
 	}
 	return outcome, nil
 }
 
-// ResolveTranscriptPath returns the JSONL transcript the drift loop reads when
-// extracting a live wire snapshot for upstream. The transcript source is the
-// per-upstream drift capture file (<captureRoot>/drift/<upstream>.jsonl) the
-// drift-capture writer appends one `http_request` [CaptureRecord] line to for
-// every native request the MITM forwards. Those records carry request_headers,
-// the request_body field-set summary, and (for claude) the billing attestation,
-// which is exactly the shape the snapshot extractor consumes. The captureRoot is
-// the same root the drift writer uses; upstream selects the per-upstream file.
-//
-// When the drift file does not exist yet (no native traffic has been captured
-// since the loop started), the error is the graceful-skip signal; callers must
-// degrade rather than treat a missing drift file as an infrastructure failure.
-func ResolveTranscriptPath(captureRoot, upstream string) (string, error) {
-	path := driftCapturePath(captureRoot, upstream)
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		return path, nil
+// putBaseline serializes the candidate snapshot, flattens the diff report into
+// the deduped difference matrix, and persists both through one
+// [capture.Store.PutBaseline] transaction.
+func putBaseline(ctx context.Context, store *capture.Store, upstream string, candidate Snapshot, report DiffReport, ts time.Time) error {
+	snapshotJSON, err := marshalSnapshot(candidate)
+	if err != nil {
+		slog.WarnContext(ctx, "mitm.baseline.encode_candidate_failed", "concern", "providers.mitm.wire", "upstream", upstream, "err", err)
+		return fmt.Errorf("baseline refresh: encode candidate: %w", err)
 	}
-	return "", fmt.Errorf("no MITM drift capture transcript at %s", path)
+	diffs := flattenDiffReport(upstream, report, ts)
+	change := capture.BaselineChange{
+		Timestamp: ts,
+		Upstream:  upstream,
+		Snapshot:  snapshotJSON,
+		Diffs:     diffs,
+	}
+	if err := store.PutBaseline(ctx, change); err != nil {
+		slog.WarnContext(ctx, "mitm.baseline.put_baseline_failed", "concern", "providers.mitm.wire", "upstream", upstream, "err", err)
+		return fmt.Errorf("baseline refresh: put baseline: %w", err)
+	}
+	return nil
 }
 
-// ProviderForUpstream is part of Clyde's typed adapter surface.
+// flattenDiffReport turns a structured [DiffReport] into the flat list of
+// [capture.BaselineDiff] rows the difference matrix dedupes on. Whole-flavor
+// appearances and disappearances become one row each, and each per-flavor
+// mismatch across the header, body, and signature categories becomes one row.
+func flattenDiffReport(upstream string, report DiffReport, ts time.Time) []capture.BaselineDiff {
+	var out []capture.BaselineDiff
+	for _, slug := range report.MissingFlavors {
+		out = append(out, fieldDiff(upstream, slug, baselineDiffFlavorMissing, slug, "flavor missing in candidate", ts))
+	}
+	for _, slug := range report.ExtraFlavors {
+		out = append(out, fieldDiff(upstream, slug, baselineDiffFlavorExtra, slug, "flavor extra in candidate", ts))
+	}
+	for _, fr := range report.FlavorReports {
+		out = append(out, flavorDiffs(upstream, fr, ts)...)
+	}
+	return out
+}
+
+func flavorDiffs(upstream string, fr FlavorDiffReport, ts time.Time) []capture.BaselineDiff {
+	var out []capture.BaselineDiff
+	if fr.UserAgentChange != nil {
+		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffUserAgent, *fr.UserAgentChange, ts))
+	}
+	if fr.BetaFingerprintChange != nil {
+		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffBetaFingerprint, *fr.BetaFingerprintChange, ts))
+	}
+	for _, name := range fr.HeaderMissing {
+		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffHeaderMissing, name, "header missing in candidate", ts))
+	}
+	for _, name := range fr.HeaderExtra {
+		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffHeaderExtra, name, "header extra in candidate", ts))
+	}
+	for _, m := range fr.HeaderClassChanged {
+		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffHeaderClassChanged, m, ts))
+	}
+	for _, m := range fr.HeaderValuesDiff {
+		out = append(out, mismatchDiff(upstream, fr.Slug, baselineDiffHeaderValuesDiff, m, ts))
+	}
+	for _, name := range fr.BodyMissing {
+		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffBodyMissing, name, "body field missing in candidate", ts))
+	}
+	for _, name := range fr.BodyExtra {
+		out = append(out, fieldDiff(upstream, fr.Slug, baselineDiffBodyExtra, name, "body field extra in candidate", ts))
+	}
+	return out
+}
+
+func mismatchDiff(upstream, flavor string, category baselineDiffCategory, m DiffMismatch, ts time.Time) capture.BaselineDiff {
+	return capture.BaselineDiff{
+		Upstream:  upstream,
+		Flavor:    flavor,
+		Category:  string(category),
+		Field:     m.Field,
+		Before:    m.Expected,
+		After:     m.Got,
+		Reason:    m.Reason,
+		FirstSeen: ts,
+		LastSeen:  ts,
+		SeenCount: 1,
+	}
+}
+
+// fieldDiff builds one presence-style difference row (header/body added or
+// removed) where the before and after values are not meaningful, so both are
+// recorded empty.
+func fieldDiff(upstream, flavor string, category baselineDiffCategory, field, reason string, ts time.Time) capture.BaselineDiff {
+	return capture.BaselineDiff{
+		Upstream:  upstream,
+		Flavor:    flavor,
+		Category:  string(category),
+		Field:     field,
+		Before:    "",
+		After:     "",
+		Reason:    reason,
+		FirstSeen: ts,
+		LastSeen:  ts,
+		SeenCount: 1,
+	}
+}
+
+// ProviderForUpstream maps an upstream slug to its routed provider family. It
+// is the inverse of the drift writer's provider->upstream mapping.
 func ProviderForUpstream(upstream string) string {
 	name := strings.ToLower(strings.TrimSpace(upstream))
 	switch {
@@ -168,44 +263,4 @@ func ProviderForUpstream(upstream string) string {
 		return "codex"
 	}
 	return ""
-}
-
-// DefaultCaptureRoot is part of Clyde's typed adapter surface.
-func DefaultCaptureRoot() string {
-	return filepath.Join(config.DefaultStateDir(), "mitm")
-}
-
-func resolveBaselinePath(opts BaselineRefreshOptions) string {
-	if path := expandHome(strings.TrimSpace(opts.Reference)); path != "" {
-		return path
-	}
-	root := strings.TrimSpace(opts.BaselineRoot)
-	if root == "" {
-		root = DefaultBaselineRoot()
-	}
-	if existing, err := FindBaselineReference(root, opts.Upstream); err == nil {
-		return existing
-	}
-	return BaselineReferencePath(root, opts.Upstream)
-}
-
-func writeSnapshotV2Atomic(snap SnapshotV2, baselinePath string) error {
-	dir := filepath.Dir(baselinePath)
-	tmpDir, err := os.MkdirTemp(dir, "baseline-v2-")
-	if err != nil {
-		slog.Warn("mitm.baseline.v2_temp_dir_failed", "concern", "providers.mitm.wire", "component", "mitm",
-			"dir", dir,
-			"err", err,
-		)
-		return fmt.Errorf("baseline temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-	written, err := WriteSnapshotV2TOML(snap, tmpDir)
-	if err != nil {
-		return fmt.Errorf("write v2 snapshot temp file: %w", err)
-	}
-	if err := os.Rename(written, baselinePath); err != nil {
-		return fmt.Errorf("install v2 baseline %s: %w", baselinePath, err)
-	}
-	return nil
 }

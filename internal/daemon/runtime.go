@@ -263,14 +263,12 @@ func startAdapter(
 	inheritedCursor net.Listener,
 ) (*adapter.Server, net.Listener, net.Listener, error) {
 	deps := adapter.Deps{
-		ScratchDir:                ensureScratchDir,
-		RequestEvents:             stats.record,
-		RuntimeLogging:            adapter.NewRuntimeLogging(cfg.Logging),
-		GetAuth:                   getAuth(cfg, log),
-		AnthropicWireBaselinePath: mitmAnthropicWireBaselinePath(cfg),
-		CodexWireBaselinePath:     mitmCodexWireBaselinePath(cfg),
-		CaptureStore:              store,
-		Group:                     group,
+		ScratchDir:     ensureScratchDir,
+		RequestEvents:  stats.record,
+		RuntimeLogging: adapter.NewRuntimeLogging(cfg.Logging),
+		GetAuth:        getAuth(cfg, log),
+		CaptureStore:   store,
+		Group:          group,
 	}
 	server, err := adapter.New(ctx, cfg.Adapter, cfg.Logging, deps, log)
 	if err != nil {
@@ -367,51 +365,6 @@ func getAuth(cfg *config.Config, log *slog.Logger) func(adapterresolver.Provider
 			return nil
 		}
 	}
-}
-
-// claudeCodeUpstream is the upstream key the MITM drift config and the
-// baseline directory use for the claude-cli wire reference.
-const claudeCodeUpstream = "claude-code"
-
-// codexCLIUpstream is the upstream key the MITM drift config and the
-// baseline directory use for the codex-cli wire reference. It matches
-// the drift writer's driftUpstreamCodexCLI value so the same baseline
-// file feeds the codex egress.
-const codexCLIUpstream = "codex-cli"
-
-// mitmAnthropicWireBaselinePath resolves the absolute path the Anthropic
-// client reads to project its outbound wire identity. It prefers the
-// configured [mitm].drift.upstreams["claude-code"].reference and falls
-// back to the default baseline root. There is no compiled-in flavor
-// data; the adapter fails with an operator-actionable HTTP 503 when the
-// file is missing or invalid.
-func mitmAnthropicWireBaselinePath(cfg *config.Config) string {
-	if cfg == nil {
-		return mitm.ResolveWireBaselinePath(claudeCodeUpstream, "")
-	}
-	configured := ""
-	if up, ok := cfg.MITM.Drift.Upstreams[claudeCodeUpstream]; ok {
-		configured = up.Reference
-	}
-	return mitm.ResolveWireBaselinePath(claudeCodeUpstream, configured)
-}
-
-// mitmCodexWireBaselinePath resolves the absolute path the Codex
-// provider reads to project its outbound wire identity. It prefers the
-// configured [mitm].drift.upstreams["codex-cli"].reference and falls
-// back to the default baseline root. Unlike the Anthropic resolver, the
-// codex egress treats a missing or invalid file as a soft fall-back to
-// its compiled-in identity constants rather than an HTTP 503, so a
-// cold-start codex works before any baseline has been learned.
-func mitmCodexWireBaselinePath(cfg *config.Config) string {
-	if cfg == nil {
-		return mitm.ResolveWireBaselinePath(codexCLIUpstream, "")
-	}
-	configured := ""
-	if up, ok := cfg.MITM.Drift.Upstreams[codexCLIUpstream]; ok {
-		configured = up.Reference
-	}
-	return mitm.ResolveWireBaselinePath(codexCLIUpstream, configured)
 }
 
 // cancelConfigWatcher cancels the config watcher loop without waiting. It is

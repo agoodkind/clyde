@@ -128,7 +128,7 @@ func (p *Proxy) handleWebsocket(w http.ResponseWriter, r *http.Request, provider
 	if recorder != nil {
 		recorder.Complete(ctx)
 	}
-	queueBaselineRefresh(ctx, cfg, provider, p.log)
+	queueBaselineRefresh(ctx, p.store, cfg, provider, p.log)
 	p.log.Info("mitm.ws.closed", "concern", "providers.mitm.wire", "url", upstreamURL, "messages", state.messageCount)
 }
 
@@ -225,7 +225,7 @@ func (p *Proxy) handleProviderInterceptedWebsocket(ctx context.Context, client n
 	if recorder != nil {
 		recorder.Complete(ctx)
 	}
-	queueBaselineRefresh(ctx, cfg, providerID, p.log)
+	queueBaselineRefresh(ctx, p.store, cfg, providerID, p.log)
 	p.log.InfoContext(ctx, "mitm.provider.ws.closed", "concern", "providers.mitm.wire", "provider", providerID, "url", upstreamURL, "messages", state.messageCount)
 	return nil
 }

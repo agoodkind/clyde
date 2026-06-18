@@ -1,10 +1,14 @@
 package anthropic
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitm/capture"
 )
 
 const (
@@ -26,31 +30,77 @@ const (
 	testOpus1MFlavorSlug        = "claude-code-interactive-opus-1m"
 )
 
-// writeTestWireBaseline writes a minimal but realistic v2 MITM baseline
-// to a temp dir and returns its path. The baseline carries learned
-// interactive flavors for several model and context combinations plus
-// one probe flavor, so tests exercise feature-aware selection. There
-// is no committed default TOML: every test seeds its own baseline
-// through the real
-// [mitm.WriteSnapshotV2TOML] writer and loads it back through
-// [WireFlavorsLoader], the same path production uses.
-func writeTestWireBaseline(t *testing.T) string {
+// seedBaselineStore opens a real capture store, writes the given snapshot as
+// the current claude-code baseline through PutBaseline, and returns the store.
+// The adapter reads the baseline back through the same store the daemon uses in
+// production.
+func seedBaselineStore(t *testing.T, snap mitm.Snapshot) *capture.Store {
 	t.Helper()
-	return writeTestWireBaselineWithAttestation(t, "")
+	dbPath := filepath.Join(t.TempDir(), "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close(context.Background(), "test cleanup") })
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if err := store.PutBaseline(context.Background(), capture.BaselineChange{
+		Timestamp: time.Unix(1700000000, 0),
+		Upstream:  "claude-code",
+		Snapshot:  raw,
+		Diffs:     nil,
+	}); err != nil {
+		t.Fatalf("PutBaseline: %v", err)
+	}
+	return store
 }
 
-// writeTestWireBaselineWithAttestation seeds the same baseline as
-// [writeTestWireBaseline] but stamps the interactive flavor with the
-// given captured billing attestation (the `cch` token). An empty cch
-// leaves the flavor without an attestation so callers can exercise both
-// the substitution and placeholder-fallback egress branches.
-func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
+// seedBaselineIntoStore writes the standard test baseline into an existing
+// capture store, for tests that already opened a store (for example to record
+// egress) and need it to also serve the wire baseline.
+func seedBaselineIntoStore(t *testing.T, store *capture.Store) {
 	t.Helper()
-	dir := t.TempDir()
+	raw, err := json.Marshal(testWireBaselineSnapshot(""))
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if err := store.PutBaseline(context.Background(), capture.BaselineChange{
+		Timestamp: time.Unix(1700000000, 0),
+		Upstream:  "claude-code",
+		Snapshot:  raw,
+		Diffs:     nil,
+	}); err != nil {
+		t.Fatalf("PutBaseline: %v", err)
+	}
+}
+
+// seedTestWireBaseline seeds a real capture store with the standard test
+// baseline (several learned interactive flavors plus a probe flavor) and
+// returns the store. There is no committed default snapshot: every test seeds
+// its own baseline through PutBaseline and loads it back through
+// [WireFlavorsLoader], the same path production uses.
+func seedTestWireBaseline(t *testing.T) *capture.Store {
+	t.Helper()
+	return seedTestWireBaselineWithAttestation(t, "")
+}
+
+// seedTestWireBaselineWithAttestation seeds the same baseline as
+// [seedTestWireBaseline] but stamps the interactive flavor with the given
+// captured billing attestation (the `cch` token). An empty cch leaves the
+// flavor without an attestation so callers can exercise both the substitution
+// and placeholder-fallback egress branches.
+func seedTestWireBaselineWithAttestation(t *testing.T, cch string) *capture.Store {
+	t.Helper()
+	return seedBaselineStore(t, testWireBaselineSnapshot(cch))
+}
+
+func testWireBaselineSnapshot(cch string) mitm.Snapshot {
 	defaultFlavor := testInteractiveFlavorShapeForModel(testDefaultFlavorSlug, testDefaultModel, testStandardBetaHeader)
 	defaultFlavor.BillingAttestation = cch
-	snap := mitm.SnapshotV2{
-		Upstream: mitm.V2Upstream{
+	return mitm.Snapshot{
+		Upstream: mitm.Upstream{
 			Name:        "claude-code",
 			Version:     "",
 			CapturedAt:  "2026-04-30T04:30:53Z",
@@ -65,14 +115,6 @@ func writeTestWireBaselineWithAttestation(t *testing.T, cch string) string {
 			testProbeFlavorShape(),
 		},
 	}
-	out, err := mitm.WriteSnapshotV2TOML(snap, dir)
-	if err != nil {
-		t.Fatalf("WriteSnapshotV2TOML: %v", err)
-	}
-	if filepath.Base(out) != "baseline-reference.toml" {
-		t.Fatalf("unexpected baseline filename %q", out)
-	}
-	return out
 }
 
 func testInteractiveFlavorShape() mitm.FlavorShape {
@@ -91,39 +133,39 @@ func testInteractiveFlavorShapeWithBeta(slug string, betaHeader string) mitm.Fla
 		RecordCount: 1,
 		Methods:     []string{"POST"},
 		Paths:       []string{"/v1/messages"},
-		Signature: mitm.V2Signature{
+		Signature: mitm.Signature{
 			UserAgent:       "claude-cli/2.1.123 (external, sdk-cli)",
 			BetaFingerprint: betaHeader,
 			BodyKeys:        []string{"max_tokens", "messages", "metadata", "model", "stream", "system"},
 		},
 		Headers: testInteractiveFlavorHeadersWithBeta(betaHeader),
-		Body: mitm.V2Body{
+		Body: mitm.Body{
 			BodyType: "object",
-			Fields: []mitm.V2Field{
-				{Name: "max_tokens", Kind: mitm.V2FieldKindNumber, Presence: mitm.V2HeaderPresenceRequired, OccurrenceRate: 1.0},
-				{Name: "messages", Kind: mitm.V2FieldKindArray, Presence: mitm.V2HeaderPresenceRequired, OccurrenceRate: 1.0},
-				{Name: "model", Kind: mitm.V2FieldKindString, Presence: mitm.V2HeaderPresenceRequired, OccurrenceRate: 1.0},
-				{Name: "stream", Kind: mitm.V2FieldKindBool, Presence: mitm.V2HeaderPresenceOptional, OccurrenceRate: 0.5},
+			Fields: []mitm.Field{
+				{Name: "max_tokens", Kind: mitm.FieldKindNumber, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "messages", Kind: mitm.FieldKindArray, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "model", Kind: mitm.FieldKindString, Presence: mitm.HeaderPresenceRequired, OccurrenceRate: 1.0},
+				{Name: "stream", Kind: mitm.FieldKindBool, Presence: mitm.HeaderPresenceOptional, OccurrenceRate: 0.5},
 			},
 		},
 	}
 }
 
-func testInteractiveFlavorHeaders() []mitm.V2Header {
+func testInteractiveFlavorHeaders() []mitm.Header {
 	return testInteractiveFlavorHeadersWithBeta(testStandardBetaHeader)
 }
 
-func testInteractiveFlavorHeadersWithBeta(betaHeader string) []mitm.V2Header {
-	constant := func(name, value string) mitm.V2Header {
-		return mitm.V2Header{
+func testInteractiveFlavorHeadersWithBeta(betaHeader string) []mitm.Header {
+	constant := func(name, value string) mitm.Header {
+		return mitm.Header{
 			Name:           name,
-			Classification: mitm.V2HeaderClassConstant,
-			Presence:       mitm.V2HeaderPresenceRequired,
+			Classification: mitm.HeaderClassConstant,
+			Presence:       mitm.HeaderPresenceRequired,
 			ObservedValues: []string{value},
 			OccurrenceRate: 1.0,
 		}
 	}
-	return []mitm.V2Header{
+	return []mitm.Header{
 		constant("user-agent", "claude-cli/2.1.123 (external, sdk-cli)"),
 		constant("anthropic-version", "2023-06-01"),
 		constant("anthropic-beta", betaHeader),
@@ -159,14 +201,14 @@ func testProbeFlavorShape() mitm.FlavorShape {
 		RecordCount: 1,
 		Methods:     []string{"POST"},
 		Paths:       []string{"/v1/messages"},
-		Signature: mitm.V2Signature{
+		Signature: mitm.Signature{
 			UserAgent: "claude-cli/2.1.123 (external, sdk-cli)",
 			BodyKeys:  []string{"max_tokens", "messages", "model", "stream"},
 		},
-		Headers: []mitm.V2Header{
-			{Name: "user-agent", Classification: mitm.V2HeaderClassConstant, Presence: mitm.V2HeaderPresenceRequired, ObservedValues: []string{"claude-cli/2.1.123 (external, sdk-cli)"}, OccurrenceRate: 1.0},
-			{Name: "anthropic-version", Classification: mitm.V2HeaderClassConstant, Presence: mitm.V2HeaderPresenceRequired, ObservedValues: []string{"2023-06-01"}, OccurrenceRate: 1.0},
-			{Name: "anthropic-beta", Classification: mitm.V2HeaderClassConstant, Presence: mitm.V2HeaderPresenceRequired, ObservedValues: []string{"oauth-2025-04-20"}, OccurrenceRate: 1.0},
+		Headers: []mitm.Header{
+			{Name: "user-agent", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"claude-cli/2.1.123 (external, sdk-cli)"}, OccurrenceRate: 1.0},
+			{Name: "anthropic-version", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"2023-06-01"}, OccurrenceRate: 1.0},
+			{Name: "anthropic-beta", Classification: mitm.HeaderClassConstant, Presence: mitm.HeaderPresenceRequired, ObservedValues: []string{"oauth-2025-04-20"}, OccurrenceRate: 1.0},
 		},
 	}
 }

@@ -17,7 +17,6 @@ import (
 
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/homedir"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
 	"goodkind.io/clyde/internal/mitm/capture"
@@ -516,7 +515,7 @@ func (p *Proxy) finalizePlainHTTPCapture(r *http.Request, resp *http.Response, f
 		header:      r.Header,
 		body:        fin.requestBody,
 	})
-	queueBaselineRefresh(r.Context(), fin.cfg, fin.provider, p.log)
+	queueBaselineRefresh(r.Context(), p.store, fin.cfg, fin.provider, p.log)
 }
 
 // captureStoreInput bundles the typed fields needed to build a
@@ -631,7 +630,6 @@ type captureBodySummary struct {
 	Tools    int      `json:"tools,omitempty"`
 	Model    string   `json:"model,omitempty"`
 	ArrayLen int      `json:"array_len,omitempty"`
-	Preview  string   `json:"preview,omitempty"`
 }
 
 func newCaptureBodyIndexFromSummary(summary captureBodySummary) captureBodyIndex {
@@ -722,7 +720,6 @@ func summarizeBody(body []byte) captureBodySummary {
 		Tools:    0,
 		Model:    "",
 		ArrayLen: 0,
-		Preview:  "",
 	}
 	return summarizeJSON(body, summary)
 }
@@ -733,11 +730,9 @@ func summarizeJSON(body []byte, summary captureBodySummary) captureBodySummary {
 		return summary
 	}
 	if summary.BodyType == "bytes" {
-		if len(trimmed) > 512 {
-			summary.Preview = trimmed[:512]
-		} else {
-			summary.Preview = trimmed
-		}
+		// Non-JSON bodies carry no field set to summarize, and the raw bytes are
+		// never inlined into a summary; the full body lives only in the SQLite
+		// capture store.
 		return summary
 	}
 	if summary.BodyType == "json_array" {
@@ -851,11 +846,4 @@ func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher
 			return fmt.Errorf("stream upstream read: %w", err)
 		}
 	}
-}
-
-// expandHome resolves a leading "~" in a proxy config path against the
-// user's home directory. It delegates to [homedir.Expand] so the tilde
-// expansion logic lives in exactly one place.
-func expandHome(path string) string {
-	return homedir.Expand(path)
 }

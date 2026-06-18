@@ -606,7 +606,7 @@ func (c *Client) activeFlavor(ctx context.Context, featureVector WireFlavorFeatu
 	if c.flavorLoader == nil {
 		c.flavorLoader = newWireFlavorsLoader()
 	}
-	flavors, err := c.flavorLoader.Load(c.cfg.WireBaselinePath)
+	flavors, err := c.flavorLoader.Load(ctx, c.cfg.CaptureStore)
 	if err != nil {
 		// The loader logs the specific cause on its concern; return the
 		// typed sentinel-bearing error unchanged so the dispatch layer

@@ -46,21 +46,16 @@ type Config struct {
 	StainlessRuntimeVersion string
 	CCVersion               string
 	CCEntrypoint            string
-	// WireBaselinePath is the absolute path to the daemon-owned MITM v2
-	// baseline (baseline-reference.toml) the client reads at request time to
-	// project its outbound wire identity. There is no compiled-in
-	// default; the daemon resolves this from
-	// [mitm].drift.upstreams["claude-code"].reference, falling back to
-	// the default baseline root. An empty value or a missing file makes
-	// every /v1/messages request fail with [ErrBaselineMissing] so the
-	// adapter can return an operator-actionable HTTP 503 rather than
-	// sending a wrong-shaped request.
-	WireBaselinePath string
-	// CaptureStore, when non-nil, receives one [capture.Record] per
-	// outbound /v1/messages exchange tagged client="adapter.anthropic", so
-	// the BYOK egress lands in mitm/capture.db alongside proxied client
-	// traffic. The daemon sets it from its shared capture store; a nil store
-	// records nothing.
+	// CaptureStore is the daemon's shared SQLite capture store. The client
+	// reads the claude-code wire baseline (current baseline + updated-at)
+	// from it at request time to project its outbound wire identity, and
+	// records one [capture.Record] per outbound /v1/messages exchange tagged
+	// client="adapter.anthropic" so the BYOK egress lands in mitm/capture.db
+	// alongside proxied client traffic. There is no compiled-in default; a
+	// nil store or a missing baseline makes every /v1/messages request fail
+	// with [ErrBaselineMissing] so the adapter can return an
+	// operator-actionable HTTP 503 rather than sending a wrong-shaped
+	// request.
 	CaptureStore *capture.Store
 	// StripWireFlags lists capability tokens to drop from the outbound
 	// anthropic-beta header, fed from the provider-neutral

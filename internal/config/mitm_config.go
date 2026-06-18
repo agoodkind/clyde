@@ -194,16 +194,15 @@ type MITMDriftConfig struct {
 	// Interval is the periodic drift-check tick. It accepts a Go duration
 	// string such as "5m" via Duration's TextUnmarshaler; a raw
 	// time.Duration field would reject the string form go-toml v2 sees.
-	Interval    Duration                        `json:"interval,omitempty" toml:"interval,omitempty"`
-	DriftLogDir string                          `json:"driftLogDir,omitempty" toml:"drift_log_dir,omitempty"`
-	CaptureRoot string                          `json:"captureRoot,omitempty" toml:"capture_root,omitempty"`
-	CACertPath  string                          `json:"caCertPath,omitempty" toml:"ca_cert_path,omitempty"`
-	Upstreams   map[string]MITMDriftUpstreamCfg `json:"upstreams,omitempty" toml:"upstreams,omitempty"`
+	Interval  Duration                        `json:"interval,omitempty" toml:"interval,omitempty"`
+	Upstreams map[string]MITMDriftUpstreamCfg `json:"upstreams,omitempty" toml:"upstreams,omitempty"`
 }
 
 // MITMDriftUpstreamCfg configures one upstream's daemon-owned baseline refresh.
+// The baseline corpus, the current baseline, and the difference matrix all live
+// in the shared SQLite capture store, so the only per-upstream knobs are the
+// keep filters that scope which captured caller flavor seeds the baseline.
 type MITMDriftUpstreamCfg struct {
-	Reference       string   `json:"reference" toml:"reference"`
 	IncludeUA       []string `json:"includeUa,omitempty" toml:"include_ua,omitempty"`
 	ExcludeUA       []string `json:"excludeUa,omitempty" toml:"exclude_ua,omitempty"`
 	RequireBodyKeys []string `json:"requireBodyKeys,omitempty" toml:"require_body_keys,omitempty"`
