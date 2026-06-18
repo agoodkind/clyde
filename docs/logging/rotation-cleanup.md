@@ -8,9 +8,9 @@ Cleanup controls stale files. It is enabled by `logging.cleanup.enabled` and use
 
 When cleanup is disabled, Clyde may audit eligible files, but it should not delete them.
 
-Cleanup applies across the logging surfaces exposed by inventory, aligned to the inventory categories in `internal/cli/logs/inventory.go`:
+Cleanup applies across the logging surfaces exposed by inventory, aligned to the inventory categories in `internal/loginventory/inventory.go`:
 
-- MITM raw captures.
+- MITM capture-index wire logs.
 - MITM profile/process logs.
 - Top-level daemon/cli logs.
 - Provider sidecar logs.

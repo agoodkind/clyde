@@ -43,12 +43,6 @@ Shared outcome fields:
 - `bytes_in`
 - `bytes_out`
 
-Shared payload fields:
-
-- `payload_summary`
-- `payload_fields`
-- `payload_removed`
-
 Sink field:
 
 - `sinks`
@@ -64,8 +58,4 @@ The supported surfaces are `adapter_chat` and `mitm_ide_backend`. The supported 
 
 The supported phases are `started`, `completed`, and `failed`. The supported status values are `ok` and `error`.
 
-Unsupported request-log fields and event shapes:
-
-- Normal JSONL logs do not use `body`, `body_b64`, or `body_truncated`.
-- The user-facing `logging.body` and `mitm.body_mode` payload config surfaces are unsupported.
-- Request traffic does not add compatibility aliases for alternate event names or field names.
+The request log carries the identity, path, outcome, sink, and facet fields above. Full request and response bodies live only in the SQLite capture store at `mitm/capture.db`.
