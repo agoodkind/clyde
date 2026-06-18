@@ -205,7 +205,6 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	s.providerRegistry = adapterprovider.NewRegistry()
 	probeCfg := config.NewConfigWithDefaults()
 	probeCfg.Logging = logging
-	probeCfg.Adapter.WireCapture = cfg.WireCapture
 	policies, err := logpolicy.Resolve(*probeCfg)
 	if err != nil {
 		log.LogAttrs(ctx, slog.LevelError, "adapter.logpolicy.resolve_failed", slog.String("concern", "adapter.http.errors"), slog.String("err", err.Error()))

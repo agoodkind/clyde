@@ -130,12 +130,6 @@ type AdapterConfig struct {
 	// at [adapter.anthropic.oauth], alongside wire-capture and reasoning
 	// levers.
 	Anthropic AdapterAnthropic `json:"anthropic,omitzero" toml:"anthropic,omitempty"`
-	// WireCapture holds the shared rotation budget for upstream wire
-	// body logging. Per-provider mode levers live on each provider's
-	// sub-block (AdapterAnthropic.WireCapture, AdapterCodex.WireCapture).
-	// Rotation is shared because it is a filesystem concern, not a
-	// per-provider one; mode is per-provider because legal values differ.
-	WireCapture AdapterWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
 	// Retry declares operator-supplied adapter retry policies. This list
 	// holds only what config provides; provider packages append their
 	// own builtin policies at construction. There is no catch-all retry.
@@ -233,23 +227,11 @@ type AdapterCodex struct {
 	// Models declares the Codex-backed model catalog that Clyde
 	// advertises and resolves for first-party clyde-* aliases.
 	Models []AdapterCodexModel `json:"models,omitempty" toml:"models,omitempty"`
-	// WireCapture is the per-provider wire-capture mode block for Codex.
-	// Empty mode treats the lever as Off.
-	WireCapture AdapterCodexWireCapture `json:"wireCapture,omitzero" toml:"wire_capture,omitempty"`
 	// Reasoning carries the per-provider reasoning round-trip levers for
 	// the Codex backend. Codex Responses carries TWO independent levers
 	// per codex-rs context_manager/history.rs:361-405: visible summary
 	// text and encrypted_content memory blob.
 	Reasoning AdapterCodexReasoning `json:"reasoning,omitzero" toml:"reasoning,omitempty"`
-}
-
-// AdapterWireCapture holds the shared rotation budget that any per-provider
-// wire-capture concern uses. Rotation defaults are deliberately small so
-// always-on use stays bounded; operators set explicit values when they need
-// more retention. The per-provider mode enum lives on each provider's own
-// config block to keep legal modes typed per provider.
-type AdapterWireCapture struct {
-	Rotation LoggingRotation `json:"rotation,omitzero" toml:"rotation,omitempty"`
 }
 
 // AdapterAnthropic carries Anthropic-specific sub-blocks introduced after
@@ -283,33 +265,6 @@ type AdapterAnthropicReasoning struct {
 // default applied when unset.
 func (r AdapterAnthropicReasoning) ResolvedInboundThinking() anthmode.InboundThinking {
 	return r.InboundThinking.Resolved()
-}
-
-// CodexWireCaptureMode is the closed enum of legal modes for the Codex
-// wire-capture concern. The reasoning_only value is Codex-specific; it
-// matches inbound websocket frames where item.type == "reasoning" and is
-// the cheapest mode for working on the encrypted_content round-trip.
-type CodexWireCaptureMode string
-
-// Codex wire-capture modes.
-const (
-	// CodexWireCaptureOff disables inbound frame body capture.
-	CodexWireCaptureOff CodexWireCaptureMode = "off"
-	// CodexWireCaptureSummaryOnly emits a per-frame fingerprint plus
-	// the upstream_event_type without the body.
-	CodexWireCaptureSummaryOnly CodexWireCaptureMode = "summary_only"
-	// CodexWireCaptureReasoningOnly emits the body only on
-	// response.output_item.done frames carrying a reasoning item.
-	// Cheapest mode for round-trip work.
-	CodexWireCaptureReasoningOnly CodexWireCaptureMode = "reasoning_only"
-	// CodexWireCaptureFull emits the body on every inbound frame.
-	CodexWireCaptureFull CodexWireCaptureMode = "full"
-)
-
-// AdapterCodexWireCapture is the per-provider wire-capture mode block for
-// Codex. Empty mode is treated as Off.
-type AdapterCodexWireCapture struct {
-	Mode CodexWireCaptureMode `json:"mode,omitempty" toml:"mode,omitempty"`
 }
 
 // CodexRoundTripSummary is the closed enum of strategies for the visible
@@ -378,15 +333,6 @@ func (r AdapterCodexReasoning) ResolvedRoundTripEncrypted() CodexRoundTripEncryp
 		return CodexRoundTripEncryptedRoundTrip
 	}
 	return r.RoundTripEncrypted
-}
-
-// ResolvedCodexWireCaptureMode returns the configured mode with the Off
-// default applied when the operator has not set a value.
-func (c AdapterCodex) ResolvedCodexWireCaptureMode() CodexWireCaptureMode {
-	if c.WireCapture.Mode == "" {
-		return CodexWireCaptureOff
-	}
-	return c.WireCapture.Mode
 }
 
 // AdapterCodexModel is part of Clyde's typed adapter surface.

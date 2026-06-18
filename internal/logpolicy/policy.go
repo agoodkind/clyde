@@ -195,11 +195,9 @@ func resolveConcerns(
 	sinkPolicies map[SinkName]SinkPolicy,
 ) (map[string]ConcernPolicy, error) {
 	// Concerns are dynamic: the only concern files that need a resolved policy
-	// are those the config overrides explicitly plus the adapter wire-capture
-	// concerns that carry built-in rotation defaults. Every other concern uses
-	// the SinkConcerns sink defaults that slogger's router applies directly.
+	// are those the config overrides explicitly. Every other concern uses the
+	// SinkConcerns sink defaults that slogger's router applies directly.
 	policies := make(map[string]ConcernPolicy, len(cfg.Logging.Concerns))
-	applyAdapterWireCaptureConcernDefaults(cfg, sinkPolicies, policies)
 	for concernName, concernConfig := range cfg.Logging.Concerns {
 		policy, ok := policies[concernName]
 		if !ok {
@@ -249,44 +247,6 @@ func baseConcernPolicy(concernName string, sinkPolicy SinkPolicy) ConcernPolicy 
 		Rotation: sinkPolicy.Rotation,
 		Cleanup:  sinkPolicy.Cleanup,
 	}
-}
-
-func applyAdapterWireCaptureConcernDefaults(
-	cfg config.Config,
-	sinkPolicies map[SinkName]SinkPolicy,
-	policies map[string]ConcernPolicy,
-) {
-	rot := cfg.Adapter.WireCapture.Rotation
-	if !loggingRotationSet(rot) {
-		return
-	}
-	policy := RotationPolicy{
-		Enabled:    true,
-		MaxSizeMB:  8,
-		MaxBackups: 3,
-		MaxAgeDays: 2,
-		Compress:   true,
-	}
-	policy = resolveRotation(rot, policy)
-	for _, concernName := range []string{
-		slogger.ConcernAdapterProviderAnthWire,
-		slogger.ConcernAdapterProviderCodexWire,
-	} {
-		concernPolicy, ok := policies[concernName]
-		if !ok {
-			concernPolicy = baseConcernPolicy(concernName, sinkPolicies[SinkConcerns])
-		}
-		concernPolicy.Rotation = policy
-		policies[concernName] = concernPolicy
-	}
-}
-
-func loggingRotationSet(rot config.LoggingRotation) bool {
-	return rot.Enabled != nil ||
-		rot.MaxSizeMB != 0 ||
-		rot.MaxBackups != 0 ||
-		rot.MaxAgeDays != 0 ||
-		rot.Compress != nil
 }
 
 func resolveRotation(cfg config.LoggingRotation, inherited RotationPolicy) RotationPolicy {
