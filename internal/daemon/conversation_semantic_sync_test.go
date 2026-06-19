@@ -418,10 +418,11 @@ func semanticTestIndexWithTexts(textsByID map[string]string) *fakeConversationSe
 	}
 }
 
-// TestConversationSemanticSyncBatchesByBytes proves the batch budget counts
-// payload bytes, not documents: with a budget that fits only the first
-// conversation, the second waits for the next pass.
-func TestConversationSemanticSyncBatchesByBytes(t *testing.T) {
+// TestConversationSemanticSyncStreamsAllNeededInOnePass proves the worker no
+// longer splits the needed set by a byte budget: streaming carries every needed
+// conversation's documents in one upsert, which the stream client frames into
+// bounded chunks on the wire.
+func TestConversationSemanticSyncStreamsAllNeededInOnePass(t *testing.T) {
 	firstID := "codex:aaa"
 	secondID := "codex:bbb"
 	index := semanticTestIndexWithTexts(map[string]string{
@@ -430,33 +431,35 @@ func TestConversationSemanticSyncBatchesByBytes(t *testing.T) {
 	})
 	client := &fakeConversationSemanticClient{needed: []string{firstID, secondID}}
 	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
-	// One conversation costs ~overhead+text; two exceed the budget, one fits.
-	worker.maxBytesPerBatch = conversationSemanticDocOverheadBytes + 100
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
 	}
 
 	if len(client.upsertCalls) != 1 {
-		t.Fatalf("upsert calls = %d, want 1", len(client.upsertCalls))
+		t.Fatalf("upsert calls = %d, want 1 (single streamed upsert)", len(client.upsertCalls))
 	}
 	docs := client.upsertCalls[0].Docs
-	if len(docs) != 1 || docs[0].ConversationID != firstID {
-		t.Fatalf("delivered docs = %+v, want only %s within the byte budget", docs, firstID)
+	deliveredIDs := map[string]bool{}
+	for _, doc := range docs {
+		deliveredIDs[doc.ConversationID] = true
+	}
+	if !deliveredIDs[firstID] || !deliveredIDs[secondID] {
+		t.Fatalf("delivered docs = %+v, want both %s and %s in one stream", docs, firstID, secondID)
 	}
 }
 
-// TestConversationSemanticSyncShipsOversizedConversationAlone proves a single
-// conversation larger than the byte budget still ships whole: the engine
-// replaces a conversation atomically, so it must never be split or starved.
-func TestConversationSemanticSyncShipsOversizedConversationAlone(t *testing.T) {
+// TestConversationSemanticSyncShipsLargeConversationWhole proves a single large
+// conversation ships in one upsert, never split: the engine replaces a
+// conversation atomically, so streaming must deliver all of its documents
+// together.
+func TestConversationSemanticSyncShipsLargeConversationWhole(t *testing.T) {
 	conversationID := "codex:oversized"
 	index := semanticTestIndexWithTexts(map[string]string{
 		conversationID: "0123456789012345678901234567890123456789",
 	})
 	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
 	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
-	worker.maxBytesPerBatch = 8
 
 	if err := worker.runPass(context.Background()); err != nil {
 		t.Fatalf("runPass returned error: %v", err)
@@ -467,7 +470,7 @@ func TestConversationSemanticSyncShipsOversizedConversationAlone(t *testing.T) {
 	}
 	docs := client.upsertCalls[0].Docs
 	if len(docs) != 1 || docs[0].ConversationID != conversationID {
-		t.Fatalf("delivered docs = %+v, want the oversized conversation alone", docs)
+		t.Fatalf("delivered docs = %+v, want the large conversation whole", docs)
 	}
 }
 
@@ -553,11 +556,10 @@ func TestConversationSemanticSyncDefersActivelyGrowingConversation(t *testing.T)
 	}
 }
 
-// TestConversationSemanticSyncRotatesDeliveryAcrossPasses proves batch order
-// resumes after the previous batch's last delivery instead of restarting at
-// the lexicographically smallest needed id, so every needed conversation is
-// reached even when each batch fits only one.
-func TestConversationSemanticSyncRotatesDeliveryAcrossPasses(t *testing.T) {
+// TestConversationSemanticSyncDeliversEveryNeededConversation proves a pass now
+// streams every needed conversation in one upsert and advances the delivery
+// cursor to the last delivered id, so no needed conversation is starved.
+func TestConversationSemanticSyncDeliversEveryNeededConversation(t *testing.T) {
 	index := semanticTestIndexWithTexts(map[string]string{
 		"codex:a": "text-a",
 		"codex:b": "text-b",
@@ -565,19 +567,24 @@ func TestConversationSemanticSyncRotatesDeliveryAcrossPasses(t *testing.T) {
 	})
 	client := &fakeConversationSemanticClient{needed: []string{"codex:a", "codex:b", "codex:c"}}
 	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
-	worker.maxBytesPerBatch = 1
 
-	wantOrder := []string{"codex:a", "codex:b", "codex:c", "codex:a"}
-	for passIndex, wantID := range wantOrder {
-		if err := worker.runPass(context.Background()); err != nil {
-			t.Fatalf("pass %d returned error: %v", passIndex+1, err)
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+
+	if len(client.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1 (all needed in one stream)", len(client.upsertCalls))
+	}
+	deliveredIDs := map[string]bool{}
+	for _, doc := range client.upsertCalls[0].Docs {
+		deliveredIDs[doc.ConversationID] = true
+	}
+	for _, wantID := range []string{"codex:a", "codex:b", "codex:c"} {
+		if !deliveredIDs[wantID] {
+			t.Fatalf("delivered ids = %v, missing %s", deliveredIDs, wantID)
 		}
-		if len(client.upsertCalls) != passIndex+1 {
-			t.Fatalf("pass %d upsert calls = %d, want %d", passIndex+1, len(client.upsertCalls), passIndex+1)
-		}
-		docs := client.upsertCalls[passIndex].Docs
-		if len(docs) != 1 || docs[0].ConversationID != wantID {
-			t.Fatalf("pass %d delivered %+v, want one doc from %s", passIndex+1, docs, wantID)
-		}
+	}
+	if worker.deliveryCursor != "codex:c" {
+		t.Fatalf("delivery cursor = %q, want codex:c (last delivered)", worker.deliveryCursor)
 	}
 }
