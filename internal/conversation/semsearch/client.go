@@ -198,10 +198,23 @@ func (c *Client) SyncConversationManifest(ctx context.Context, collectionID stri
 	return response.GetNeededConversationIds(), nil
 }
 
+// upsertStreamMaxDocsPerChunk caps the documents in one stream chunk by count, so
+// a pass with many small messages still frames into bounded chunks.
+const upsertStreamMaxDocsPerChunk = 1000
+
+// upsertStreamMaxBytesPerChunk caps the documents in one stream chunk by
+// approximate payload bytes, so a pass with a few large transcripts still frames
+// into chunks under the gRPC max message size. The manifest ships as its own
+// chunk and is bounded the same way at the caller.
+const upsertStreamMaxBytesPerChunk = 16 << 20
+
 // UpsertConversationDocuments starts an async engine job for the changed
 // conversations' documents. manifest is the full current conversation set with
 // fingerprints, so the engine drops conversations no longer present and skips
 // unchanged ones; documents cover only the conversations the engine asked for.
+// It opens the client stream, sends the header, then the documents in bounded
+// chunks, then the manifest as one chunk, so neither the document set nor the
+// manifest is bounded by the gRPC max message size.
 func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
 	if c == nil || c.daemon == nil {
 		return "", fmt.Errorf("upsert semantic conversation documents: client is nil")
@@ -210,11 +223,21 @@ func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID s
 	if trimmedCollectionID == "" {
 		return "", fmt.Errorf("upsert semantic conversation documents: collection id is empty")
 	}
-	response, err := c.daemon.UpsertConversationDocuments(ctx, &lmsemanticsearchv1.UpsertConversationDocumentsRequest{
-		CollectionId: trimmedCollectionID,
-		Documents:    conversationDocuments(docs),
-		Manifest:     conversationFingerprints(manifest),
-	})
+	stream, err := c.daemon.UpsertConversationDocumentsStream(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.upsert_stream_open_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", trimmedCollectionID,
+			"documents", len(docs),
+			"err", err,
+		)
+		return "", fmt.Errorf("open semantic conversation upsert stream for collection %q: %w", trimmedCollectionID, err)
+	}
+	if sendErr := sendUpsertStream(ctx, stream, trimmedCollectionID, docs, manifest); sendErr != nil {
+		return "", fmt.Errorf("send semantic conversation upsert stream for collection %q: %w", trimmedCollectionID, sendErr)
+	}
+	response, err := stream.CloseAndRecv()
 	if err != nil {
 		slog.WarnContext(ctx, "conversation.semsearch.upsert_failed",
 			"concern", "conversation.semantic",
@@ -226,6 +249,119 @@ func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID s
 		return "", fmt.Errorf("upsert semantic conversation documents for collection %q: %w", trimmedCollectionID, err)
 	}
 	return response.GetJobId(), nil
+}
+
+// sendUpsertStream sends the header, then the documents in bounded chunks, then
+// the manifest as one chunk. The manifest is authoritative for deletion, so it
+// is sent whole rather than split.
+func sendUpsertStream(
+	ctx context.Context,
+	stream grpc.ClientStreamingClient[lmsemanticsearchv1.UpsertConversationDocumentsChunk, lmsemanticsearchv1.UpsertConversationDocumentsResponse],
+	collectionID string,
+	docs []SemDoc,
+	manifest []Fingerprint,
+) error {
+	header := &lmsemanticsearchv1.UpsertConversationDocumentsChunk{
+		Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Header{
+			Header: &lmsemanticsearchv1.UpsertConversationDocumentsHeader{
+				CollectionId: collectionID,
+				Client:       nil,
+			},
+		},
+	}
+	if err := stream.Send(header); err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.upsert_stream_header_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", collectionID,
+			"err", err,
+		)
+		return fmt.Errorf("send upsert header: %w", err)
+	}
+	if err := sendUpsertDocumentChunks(ctx, stream, docs); err != nil {
+		return err
+	}
+	manifestChunk := &lmsemanticsearchv1.UpsertConversationDocumentsChunk{
+		Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Manifest{
+			Manifest: &lmsemanticsearchv1.UpsertConversationDocumentsManifest{
+				Manifest: conversationFingerprints(manifest),
+			},
+		},
+	}
+	if err := stream.Send(manifestChunk); err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.upsert_stream_manifest_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", collectionID,
+			"manifest", len(manifest),
+			"err", err,
+		)
+		return fmt.Errorf("send upsert manifest: %w", err)
+	}
+	return nil
+}
+
+// sendUpsertDocumentChunks frames docs into chunks bounded by document count and
+// approximate payload bytes, sending each as a documents chunk. An empty docs
+// slice sends no documents chunk, which the engine reads as an empty document
+// set still governed by the manifest.
+func sendUpsertDocumentChunks(
+	ctx context.Context,
+	stream grpc.ClientStreamingClient[lmsemanticsearchv1.UpsertConversationDocumentsChunk, lmsemanticsearchv1.UpsertConversationDocumentsResponse],
+	docs []SemDoc,
+) error {
+	batch := make([]SemDoc, 0, upsertStreamMaxDocsPerChunk)
+	batchBytes := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		chunk := &lmsemanticsearchv1.UpsertConversationDocumentsChunk{
+			Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Documents{
+				Documents: &lmsemanticsearchv1.UpsertConversationDocumentsDocuments{
+					Documents: conversationDocuments(batch),
+				},
+			},
+		}
+		if err := stream.Send(chunk); err != nil {
+			slog.WarnContext(ctx, "conversation.semsearch.upsert_stream_documents_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"documents", len(batch),
+				"err", err,
+			)
+			return fmt.Errorf("send upsert documents chunk: %w", err)
+		}
+		batch = batch[:0]
+		batchBytes = 0
+		return nil
+	}
+	for _, doc := range docs {
+		if ctx.Err() != nil {
+			slog.WarnContext(ctx, "conversation.semsearch.upsert_stream_context_done",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"err", ctx.Err(),
+			)
+			return fmt.Errorf("send upsert documents chunk: %w", ctx.Err())
+		}
+		docBytes := semDocByteSize(doc)
+		if len(batch) > 0 && (len(batch) >= upsertStreamMaxDocsPerChunk || batchBytes+docBytes > upsertStreamMaxBytesPerChunk) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		batch = append(batch, doc)
+		batchBytes += docBytes
+	}
+	return flush()
+}
+
+// semDocByteSize approximates one document's wire size for chunk framing: the
+// text bytes plus the scalar fields plus a fixed framing allowance.
+func semDocByteSize(doc SemDoc) int {
+	const semDocFramingOverheadBytes = 256
+	return len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocFramingOverheadBytes
 }
 
 // DeleteConversation starts an async engine job that removes one conversation.
