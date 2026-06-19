@@ -19,19 +19,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ClydeService_ReloadDaemon_FullMethodName           = "/clyde.v1.ClydeService/ReloadDaemon"
-	ClydeService_RebindDaemon_FullMethodName           = "/clyde.v1.ClydeService/RebindDaemon"
-	ClydeService_GetProviderStats_FullMethodName       = "/clyde.v1.ClydeService/GetProviderStats"
-	ClydeService_SubscribeProviderStats_FullMethodName = "/clyde.v1.ClydeService/SubscribeProviderStats"
-	ClydeService_ListConversations_FullMethodName      = "/clyde.v1.ClydeService/ListConversations"
-	ClydeService_GetConversation_FullMethodName        = "/clyde.v1.ClydeService/GetConversation"
-	ClydeService_GetConversationContext_FullMethodName = "/clyde.v1.ClydeService/GetConversationContext"
-	ClydeService_SearchConversations_FullMethodName    = "/clyde.v1.ClydeService/SearchConversations"
-	ClydeService_ExportTranscript_FullMethodName       = "/clyde.v1.ClydeService/ExportTranscript"
-	ClydeService_GetMITMStatus_FullMethodName          = "/clyde.v1.ClydeService/GetMITMStatus"
-	ClydeService_ShowCapture_FullMethodName            = "/clyde.v1.ClydeService/ShowCapture"
-	ClydeService_SeedBaseline_FullMethodName           = "/clyde.v1.ClydeService/SeedBaseline"
-	ClydeService_LogsInventory_FullMethodName          = "/clyde.v1.ClydeService/LogsInventory"
+	ClydeService_ReloadDaemon_FullMethodName              = "/clyde.v1.ClydeService/ReloadDaemon"
+	ClydeService_RebindDaemon_FullMethodName              = "/clyde.v1.ClydeService/RebindDaemon"
+	ClydeService_GetProviderStats_FullMethodName          = "/clyde.v1.ClydeService/GetProviderStats"
+	ClydeService_SubscribeProviderStats_FullMethodName    = "/clyde.v1.ClydeService/SubscribeProviderStats"
+	ClydeService_ListConversations_FullMethodName         = "/clyde.v1.ClydeService/ListConversations"
+	ClydeService_GetConversation_FullMethodName           = "/clyde.v1.ClydeService/GetConversation"
+	ClydeService_GetConversationContext_FullMethodName    = "/clyde.v1.ClydeService/GetConversationContext"
+	ClydeService_SearchConversations_FullMethodName       = "/clyde.v1.ClydeService/SearchConversations"
+	ClydeService_ExportTranscript_FullMethodName          = "/clyde.v1.ClydeService/ExportTranscript"
+	ClydeService_StreamConversation_FullMethodName        = "/clyde.v1.ClydeService/StreamConversation"
+	ClydeService_StreamConversationContext_FullMethodName = "/clyde.v1.ClydeService/StreamConversationContext"
+	ClydeService_StreamExportTranscript_FullMethodName    = "/clyde.v1.ClydeService/StreamExportTranscript"
+	ClydeService_GetMITMStatus_FullMethodName             = "/clyde.v1.ClydeService/GetMITMStatus"
+	ClydeService_ShowCapture_FullMethodName               = "/clyde.v1.ClydeService/ShowCapture"
+	ClydeService_SeedBaseline_FullMethodName              = "/clyde.v1.ClydeService/SeedBaseline"
+	ClydeService_LogsInventory_FullMethodName             = "/clyde.v1.ClydeService/LogsInventory"
 )
 
 // ClydeServiceClient is the client API for ClydeService service.
@@ -49,6 +52,14 @@ type ClydeServiceClient interface {
 	GetConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (*GetConversationContextResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
 	ExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (*ExportTranscriptResponse, error)
+	// StreamConversation, StreamConversationContext, and StreamExportTranscript are
+	// the server-streaming forms of the three reads above. They carry the same
+	// request shape and produce the same payload, chunked so a large transcript or
+	// export is not bounded by the gRPC max message size. The unary forms remain
+	// for any caller that has not switched.
+	StreamConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConversationChunk], error)
+	StreamConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConversationChunk], error)
+	StreamExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error)
 	GetMITMStatus(ctx context.Context, in *GetMITMStatusRequest, opts ...grpc.CallOption) (*GetMITMStatusResponse, error)
 	ShowCapture(ctx context.Context, in *ShowCaptureRequest, opts ...grpc.CallOption) (*ShowCaptureResponse, error)
 	SeedBaseline(ctx context.Context, in *SeedBaselineRequest, opts ...grpc.CallOption) (*SeedBaselineResponse, error)
@@ -162,6 +173,63 @@ func (c *clydeServiceClient) ExportTranscript(ctx context.Context, in *ExportTra
 	return out, nil
 }
 
+func (c *clydeServiceClient) StreamConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConversationChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[1], ClydeService_StreamConversation_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetConversationRequest, ConversationChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamConversationClient = grpc.ServerStreamingClient[ConversationChunk]
+
+func (c *clydeServiceClient) StreamConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConversationChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[2], ClydeService_StreamConversationContext_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetConversationContextRequest, ConversationChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamConversationContextClient = grpc.ServerStreamingClient[ConversationChunk]
+
+func (c *clydeServiceClient) StreamExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClydeService_ServiceDesc.Streams[3], ClydeService_StreamExportTranscript_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExportTranscriptRequest, ExportChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamExportTranscriptClient = grpc.ServerStreamingClient[ExportChunk]
+
 func (c *clydeServiceClient) GetMITMStatus(ctx context.Context, in *GetMITMStatusRequest, opts ...grpc.CallOption) (*GetMITMStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetMITMStatusResponse)
@@ -217,6 +285,14 @@ type ClydeServiceServer interface {
 	GetConversationContext(context.Context, *GetConversationContextRequest) (*GetConversationContextResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
 	ExportTranscript(context.Context, *ExportTranscriptRequest) (*ExportTranscriptResponse, error)
+	// StreamConversation, StreamConversationContext, and StreamExportTranscript are
+	// the server-streaming forms of the three reads above. They carry the same
+	// request shape and produce the same payload, chunked so a large transcript or
+	// export is not bounded by the gRPC max message size. The unary forms remain
+	// for any caller that has not switched.
+	StreamConversation(*GetConversationRequest, grpc.ServerStreamingServer[ConversationChunk]) error
+	StreamConversationContext(*GetConversationContextRequest, grpc.ServerStreamingServer[ConversationChunk]) error
+	StreamExportTranscript(*ExportTranscriptRequest, grpc.ServerStreamingServer[ExportChunk]) error
 	GetMITMStatus(context.Context, *GetMITMStatusRequest) (*GetMITMStatusResponse, error)
 	ShowCapture(context.Context, *ShowCaptureRequest) (*ShowCaptureResponse, error)
 	SeedBaseline(context.Context, *SeedBaselineRequest) (*SeedBaselineResponse, error)
@@ -256,6 +332,15 @@ func (UnimplementedClydeServiceServer) SearchConversations(context.Context, *Sea
 }
 func (UnimplementedClydeServiceServer) ExportTranscript(context.Context, *ExportTranscriptRequest) (*ExportTranscriptResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExportTranscript not implemented")
+}
+func (UnimplementedClydeServiceServer) StreamConversation(*GetConversationRequest, grpc.ServerStreamingServer[ConversationChunk]) error {
+	return status.Error(codes.Unimplemented, "method StreamConversation not implemented")
+}
+func (UnimplementedClydeServiceServer) StreamConversationContext(*GetConversationContextRequest, grpc.ServerStreamingServer[ConversationChunk]) error {
+	return status.Error(codes.Unimplemented, "method StreamConversationContext not implemented")
+}
+func (UnimplementedClydeServiceServer) StreamExportTranscript(*ExportTranscriptRequest, grpc.ServerStreamingServer[ExportChunk]) error {
+	return status.Error(codes.Unimplemented, "method StreamExportTranscript not implemented")
 }
 func (UnimplementedClydeServiceServer) GetMITMStatus(context.Context, *GetMITMStatusRequest) (*GetMITMStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMITMStatus not implemented")
@@ -444,6 +529,39 @@ func _ClydeService_ExportTranscript_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_StreamConversation_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetConversationRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).StreamConversation(m, &grpc.GenericServerStream[GetConversationRequest, ConversationChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamConversationServer = grpc.ServerStreamingServer[ConversationChunk]
+
+func _ClydeService_StreamConversationContext_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetConversationContextRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).StreamConversationContext(m, &grpc.GenericServerStream[GetConversationContextRequest, ConversationChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamConversationContextServer = grpc.ServerStreamingServer[ConversationChunk]
+
+func _ClydeService_StreamExportTranscript_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ExportTranscriptRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClydeServiceServer).StreamExportTranscript(m, &grpc.GenericServerStream[ExportTranscriptRequest, ExportChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClydeService_StreamExportTranscriptServer = grpc.ServerStreamingServer[ExportChunk]
+
 func _ClydeService_GetMITMStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetMITMStatusRequest)
 	if err := dec(in); err != nil {
@@ -576,6 +694,21 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SubscribeProviderStats",
 			Handler:       _ClydeService_SubscribeProviderStats_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamConversation",
+			Handler:       _ClydeService_StreamConversation_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamConversationContext",
+			Handler:       _ClydeService_StreamConversationContext_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamExportTranscript",
+			Handler:       _ClydeService_StreamExportTranscript_Handler,
 			ServerStreams: true,
 		},
 	},
