@@ -177,20 +177,12 @@ func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1
 	return &clydev1.GetConversationContextResponse{Text: text}, nil
 }
 
-// searchContextWindowDefault is the per-hit inline window radius used when the
-// request leaves context_window at zero.
-const searchContextWindowDefault = 2
-
-// searchContextWindowMaxHits caps how many engine hits receive a rendered inline
-// context window, so a large result set does not balloon the payload. Later hits
-// keep an empty window and the caller can read them on demand.
-const searchContextWindowMaxHits = 10
-
-// SearchConversations scans transcript text for candidate conversations and
-// returns bounded first matches that an agent can pass to get or context. It
-// renders a small inline context window around the first few engine hits and
-// attaches the conversation-index freshness snapshot so a thin result is
-// distinguishable from a cold index.
+// SearchConversations returns a relevance-ranked list of conversation hits.
+// Each hit carries the matched passage as a byte-bounded excerpt (set in
+// engineSearchMatches), so the list is self-sufficient for triage and small
+// enough for any transport. The full surrounding window is a separate windowed
+// read; search never inlines it. The freshness snapshot lets a thin result be
+// distinguished from a cold index.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
 	if req.GetQuery() == "" {
@@ -200,7 +192,6 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
 	}
-	s.attachContextWindows(ctx, result.Matches, req)
 	result.Freshness = s.freshnessSnapshot()
 	return searchConversationsResponse(ctx, s.index, result), nil
 }
@@ -212,34 +203,6 @@ func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
 		return conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0}
 	}
 	return s.freshness()
-}
-
-// attachContextWindows renders an inline message window around the first
-// searchContextWindowMaxHits engine hits in place. A literal-scan match (zero
-// message index with an empty snippet) and a render failure both leave the
-// window empty so the search never fails on a window read.
-func (s *controlServer) attachContextWindows(ctx context.Context, matches []conversation.SearchMatch, req *clydev1.SearchConversationsRequest) {
-	window := int(req.GetContextWindow())
-	if window <= 0 {
-		window = searchContextWindowDefault
-	}
-	rendered := 0
-	for i := range matches {
-		if rendered >= searchContextWindowMaxHits {
-			return
-		}
-		text, err := s.index.HitContextWindow(matches[i].Record, matches[i].MessageIndex, window, window)
-		if err != nil {
-			slog.WarnContext(ctx, "daemon.search_conversations.context_window_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"conversation_id", matches[i].Record.ID,
-				"message_index", matches[i].MessageIndex,
-				"err", err,
-			)
-			continue
-		}
-		matches[i].ContextWindow = text
-		rendered++
-	}
 }
 
 // searchConversationsResult runs the engine-first cross-conversation search.
@@ -431,13 +394,16 @@ func engineSearchMatches(
 			continue
 		}
 		matches = append(matches, conversation.SearchMatch{
-			Record:        record,
-			MessageIndex:  int(hit.MessageIndex),
-			Role:          hit.Role,
-			Timestamp:     time.Unix(hit.TimestampUnix, 0),
-			Snippet:       conversation.Snippet(hit.Content),
-			Score:         hit.Score,
-			ContextWindow: "",
+			Record:       record,
+			MessageIndex: int(hit.MessageIndex),
+			Role:         hit.Role,
+			Timestamp:    time.Unix(hit.TimestampUnix, 0),
+			Snippet:      conversation.Snippet(hit.Content),
+			Score:        hit.Score,
+			// The excerpt is the matched passage the engine already returned,
+			// byte-bounded so the ranked list stays small. The full surrounding
+			// window is a separate windowed read; search never inlines it.
+			ContextWindow: conversation.Excerpt(hit.Content),
 		})
 		if limit > 0 && len(matches) >= limit {
 			break
