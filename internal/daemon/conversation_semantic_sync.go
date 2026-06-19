@@ -73,16 +73,21 @@ const (
 	// conversationSemanticMaxBytesPerBatch bounds one upsert by payload bytes
 	// instead of document count, because document counts say nothing about
 	// message size and one long transcript used to overflow the gRPC message
-	// ceiling. 32 MiB stays well under the daemon socket's 64 MiB ceiling with
-	// room for the manifest and proto framing. A single conversation larger
-	// than the budget still ships alone, because the engine replaces a
-	// conversation atomically and a partial delivery would store a truncated
-	// transcript.
+	// ceiling. 32 MiB stays well under the daemon socket's 128 MiB ceiling with
+	// room for the manifest and proto framing, both of which are now counted
+	// against the budget (the manifest ships with every upsert). A single
+	// conversation larger than the budget still ships alone, because the engine
+	// replaces a conversation atomically and a partial delivery would store a
+	// truncated transcript.
 	conversationSemanticMaxBytesPerBatch = 32 << 20
 	// conversationSemanticDocOverheadBytes approximates one document's
 	// non-text wire bytes (ids, role, timestamp, framing) when sizing a batch.
 	conversationSemanticDocOverheadBytes = 256
-	maxSemanticMessageIndex              = int32(1<<31 - 1)
+	// conversationSemanticFingerprintOverheadBytes approximates one manifest
+	// fingerprint's non-id wire bytes (the hash value and proto framing) when
+	// sizing the manifest that ships with every upsert.
+	conversationSemanticFingerprintOverheadBytes = 96
+	maxSemanticMessageIndex                      = int32(1<<31 - 1)
 )
 
 type conversationSemanticIndex interface {
@@ -259,7 +264,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	docs, sentConversations := w.collectNeededDocuments(ctx, needed, recordsByID, stampsByID, &stats)
+	docs, sentConversations := w.collectNeededDocuments(ctx, needed, manifest, recordsByID, stampsByID, &stats)
 	if len(docs) == 0 {
 		w.logPass(ctx, stats)
 		return nil
@@ -354,6 +359,7 @@ func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversa
 func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	ctx context.Context,
 	needed []string,
+	manifest []semsearch.Fingerprint,
 	recordsByID map[string]conversation.Record,
 	stampsByID map[string]conversation.FileStamp,
 	stats *conversationSemanticSyncStats,
@@ -364,7 +370,10 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	ordered = rotateAfter(ordered, w.deliveryCursor)
 
 	docs := make([]semsearch.SemDoc, 0)
-	batchBytes := 0
+	// Seed the running total with the manifest, which the engine requires on
+	// every upsert, so the document budget accounts for the bytes that ship
+	// alongside the documents rather than overflowing the gRPC ceiling.
+	batchBytes := manifestByteSize(manifest)
 	sentConversations := 0
 	for _, conversationID := range ordered {
 		if semanticSyncContextDone(ctx) {
@@ -411,6 +420,18 @@ func docsByteSize(docs []semsearch.SemDoc) int {
 	total := 0
 	for _, doc := range docs {
 		total += len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + conversationSemanticDocOverheadBytes
+	}
+	return total
+}
+
+// manifestByteSize approximates the full manifest's wire size: each
+// fingerprint's id and hash value plus a fixed per-fingerprint framing
+// overhead. The manifest ships with every upsert, so the batch budget counts it
+// alongside the documents to stay under the gRPC message ceiling.
+func manifestByteSize(manifest []semsearch.Fingerprint) int {
+	total := 0
+	for _, fingerprint := range manifest {
+		total += len(fingerprint.ConversationID) + len(fingerprint.Value) + conversationSemanticFingerprintOverheadBytes
 	}
 	return total
 }
@@ -545,8 +566,11 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 			MessageIndex:         int32(i),
 			Role:                 message.Role,
 			TimestampUnix:        message.Timestamp.Unix(),
-			Text:                 message.Text,
-			WorkspaceRoot:        record.WorkspaceRoot,
+			// Replace invalid UTF-8 so the protobuf upsert never fails to marshal
+			// on a transcript byte sequence the encoder rejects (one codex doc
+			// with invalid UTF-8 used to break the whole batch).
+			Text:          strings.ToValidUTF8(message.Text, ""),
+			WorkspaceRoot: record.WorkspaceRoot,
 		})
 	}
 	return docs, nil
