@@ -256,6 +256,7 @@ func newControlServer(
 		},
 		semanticSearch:       semanticSearch,
 		semanticCollectionID: semanticCollectionID,
+		literalFallback:      cfg.Conversation.Semantic.LiteralFallback,
 		captureStore:         runtime.captureStore,
 		freshness:            freshness,
 	}
