@@ -43,6 +43,11 @@ type controlServer struct {
 	// the search reads.
 	semanticSearch       conversationSemanticSearchClient
 	semanticCollectionID string
+	// literalFallback re-enables the live literal scan when the engine is
+	// configured but returns no matches. False (the default) makes a cold or
+	// empty engine surface a loud LiteralDisabledCold result instead of a
+	// misleading literal scan. It has no effect when semanticSearch is nil.
+	literalFallback bool
 	// captureStore is the daemon's shared SQLite capture store. SeedBaseline
 	// reads the deduped shape corpus from it and writes the baseline through
 	// it; nil when MITM is disabled.
@@ -191,7 +196,7 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	if req.GetQuery() == "" {
 		return nil, status.Error(codes.InvalidArgument, "query is required")
 	}
-	result, err := searchConversationsResult(ctx, s.index, s.semanticSearch, s.semanticCollectionID, req)
+	result, err := searchConversationsResult(ctx, s.index, s.semanticSearch, s.semanticCollectionID, s.literalFallback, req)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
 	}
@@ -239,15 +244,19 @@ func (s *controlServer) attachContextWindows(ctx context.Context, matches []conv
 
 // searchConversationsResult runs the engine-first cross-conversation search.
 // When the engine is configured and produces at least one match, those matches
-// are returned with Source semantic. Otherwise the live literal scan answers the
-// request with Source literal. Facets and the filter funnel are computed
-// clyde-side from the index. conversation_id, when set, scopes the engine to a
-// single conversation, the within-search behavior.
+// are returned with Source semantic. When the engine is configured but produces
+// nothing, the literalFallback flag decides: false (the dogfood default) returns
+// a loud LiteralDisabledCold result with no matches, true falls through to the
+// live literal scan. When the engine is not configured at all, the literal scan
+// always answers. Facets and the filter funnel are computed clyde-side from the
+// index. conversation_id, when set, scopes the engine to a single conversation,
+// the within-search behavior.
 func searchConversationsResult(
 	ctx context.Context,
 	idx searchConversationsIndex,
 	semantic conversationSemanticSearchClient,
 	collectionID string,
+	literalFallback bool,
 	req *clydev1.SearchConversationsRequest,
 ) (conversation.SearchConversationsResult, error) {
 	accounting := filterAccounting(ctx, idx, req)
@@ -264,6 +273,25 @@ func searchConversationsResult(
 				Facets:               conversation.ComputeFacets(matches, searchFacetTopN),
 				Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 				FilterAccounting:     appendReturnedStage(accounting, len(matches)),
+			}, nil
+		}
+		if !literalFallback {
+			// Dogfood: the engine is configured but cold or empty and the literal
+			// crutch is off, so return an explicit empty result the caller can
+			// branch on instead of a misleading literal scan.
+			slog.WarnContext(ctx, "daemon.search_conversations.literal_disabled_cold", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"query", req.GetQuery(),
+			)
+			return conversation.SearchConversationsResult{
+				Matches:              nil,
+				ConversationsScanned: 0,
+				ReturnedCount:        0,
+				Limit:                int(req.GetLimit()),
+				HasMore:              false,
+				Source:               conversation.SearchSourceLiteralDisabledCold,
+				Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
+				Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
+				FilterAccounting:     appendReturnedStage(accounting, 0),
 			}, nil
 		}
 	}

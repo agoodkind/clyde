@@ -104,7 +104,7 @@ func TestSearchConversationsResultEngineHitsReturnWithoutFallback(t *testing.T) 
 	}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestSearchConversationsResultEngineErrorFallsBackLiteral(t *testing.T) {
 	semantic := &fakeSemanticSearch{hits: nil, err: errors.New("engine down"), filters: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", true, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestSearchConversationsResultEngineEmptyFallsBackLiteral(t *testing.T) {
 	semantic := &fakeSemanticSearch{hits: nil, err: nil, filters: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", req)
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", true, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
@@ -210,6 +210,35 @@ func TestSearchConversationsResultEngineEmptyFallsBackLiteral(t *testing.T) {
 	}
 	if result.Source != conversation.SearchSourceLiteral {
 		t.Fatalf("source = %v, want literal on empty-engine fallback", result.Source)
+	}
+}
+
+// TestSearchConversationsResultLiteralDisabledCold proves the dogfood switch:
+// with the engine configured but empty and literalFallback off, the result is a
+// loud LiteralDisabledCold with no matches and no literal scan.
+func TestSearchConversationsResultLiteralDisabledCold(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records:   map[string]conversation.Record{"claude:one": daemonTestRecord("claude:one", false)},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{hits: nil, err: nil, filters: nil}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
+
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	if err != nil {
+		t.Fatalf("search conversations result: %v", err)
+	}
+	if idx.liveCalls != 0 {
+		t.Fatalf("live scan called %d times, want 0 when literal fallback is disabled", idx.liveCalls)
+	}
+	if result.Source != conversation.SearchSourceLiteralDisabledCold {
+		t.Fatalf("source = %v, want literal_disabled_cold", result.Source)
+	}
+	if len(result.Matches) != 0 {
+		t.Fatalf("matches = %d, want 0 on a cold disabled result", len(result.Matches))
 	}
 }
 
@@ -236,7 +265,7 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	}
 	providerScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Provider: clydev1.Provider_PROVIDER_CLAUDE}
 
-	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", providerScoped); err != nil {
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, providerScoped); err != nil {
 		t.Fatalf("provider-scoped search: %v", err)
 	}
 	if len(semantic.filters) != 1 {
@@ -251,7 +280,7 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	}
 
 	workspaceScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Workspace: "/repo"}
-	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", workspaceScoped); err != nil {
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, workspaceScoped); err != nil {
 		t.Fatalf("workspace-scoped search: %v", err)
 	}
 	if len(semantic.filters) != 2 {
@@ -263,7 +292,7 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	}
 
 	unscoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
-	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", unscoped); err != nil {
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, unscoped); err != nil {
 		t.Fatalf("unscoped search: %v", err)
 	}
 	if len(semantic.filters) != 3 {
@@ -290,7 +319,7 @@ func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 	idx := &fakeSearchIndex{records: nil, live: live, liveErr: nil, liveCalls: 0}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
-	result, err := searchConversationsResult(context.Background(), idx, nil, "", req)
+	result, err := searchConversationsResult(context.Background(), idx, nil, "", false, req)
 	if err != nil {
 		t.Fatalf("search conversations result: %v", err)
 	}
