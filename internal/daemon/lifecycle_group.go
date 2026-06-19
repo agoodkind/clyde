@@ -10,7 +10,6 @@ import (
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
-	searchstore "goodkind.io/clyde/internal/search/store"
 )
 
 // budgetReload and budgetShutdown replace the scattered reloadDrainCap,
@@ -93,18 +92,6 @@ func (r *runtimeServices) addMITMLifecycleHook(id string, proxy *mitm.Proxy) {
 	}
 	r.group.AddHookBefore(livetrack.PhaseIngress, "mitm.http_shutdown."+id, func(ctx context.Context) error {
 		return proxy.ShutdownHTTP(ctx)
-	})
-}
-
-// addSearchStoreCloseHook registers the search store's close as a PhaseStorage
-// after-hook so its SQLite WAL flushes only after every surface and worker has
-// drained, matching the pre-refactor store-close ordering.
-func (r *runtimeServices) addSearchStoreCloseHook(store *searchstore.Store) {
-	if r.group == nil || store == nil {
-		return
-	}
-	r.group.AddHook(livetrack.PhaseStorage, "search_store.close", func(ctx context.Context) error {
-		return store.Close(ctx, storageHookReason)
 	})
 }
 

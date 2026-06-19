@@ -58,6 +58,14 @@ func (idx *Index) ContextWindowText(record Record, timestamp string, messageInde
 	return renderContextWindow(messages, len(messages), center, before, after), nil
 }
 
+// HitContextWindow renders the messages around messageIndex as plain text, for
+// inlining a small window beside a search hit. It wraps the index-centered
+// reader, so it stops pulling the stream at the window end instead of reading
+// the whole artifact.
+func (idx *Index) HitContextWindow(record Record, messageIndex, before, after int) (string, error) {
+	return idx.contextWindowByIndex(record, messageIndex, before, after)
+}
+
 // contextWindowByIndex renders the window around messageIndex by pulling the
 // stream only as far as the window end, so a context read near the top of a
 // large conversation stops well before EOF. It holds at most the windowed

@@ -62,6 +62,12 @@ type SearchConversationsOptions struct {
 	UntilUnix            int64
 	MinScore             float64
 	PerConversationLimit int
+	// ConversationID scopes discovery to a single conversation, the within-search
+	// behavior. Empty means corpus-wide discovery.
+	ConversationID string
+	// ContextWindow is the number of messages before and after each hit to render
+	// inline on the match. Zero means the daemon's default small window.
+	ContextWindow int
 }
 
 // SearchMatch is the first matching message found in one conversation during
@@ -74,6 +80,9 @@ type SearchMatch struct {
 	Snippet      string
 	// Score is the engine's retrieval relevance; zero on literal-scan matches.
 	Score float64
+	// ContextWindow is the rendered messages surrounding this hit; empty on
+	// literal-scan matches and when the window render failed.
+	ContextWindow string
 }
 
 // SearchConversationsResult is a bounded set of candidate conversations.
@@ -83,10 +92,15 @@ type SearchConversationsResult struct {
 	ReturnedCount        int
 	Limit                int
 	HasMore              bool
-	// Warming is true when an engine-first search fell back to the live literal
-	// scan because the semantic collection was cold or the engine was
-	// unavailable.
-	Warming bool
+	// Source names which engine produced the matches: the vector engine, the
+	// literal fallback, or a cold index with the fallback disabled.
+	Source SearchSource
+	// Facets summarizes the match set by workspace, provider, and model.
+	Facets SearchFacets
+	// Freshness is the conversation-index sync state at query time.
+	Freshness SearchFreshness
+	// FilterAccounting is the ordered funnel of candidate counts per filter.
+	FilterAccounting []FilterStage
 }
 
 // ListPage returns one filtered, bounded page from the cached index.
@@ -166,7 +180,10 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 			ReturnedCount:        0,
 			Limit:                options.Limit,
 			HasMore:              false,
-			Warming:              false,
+			Source:               SearchSourceUnspecified,
+			Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
+			Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
+			FilterAccounting:     nil,
 		}, errorsQueryRequired()
 	}
 
@@ -190,7 +207,10 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 		ReturnedCount:        0,
 		Limit:                options.Limit,
 		HasMore:              false,
-		Warming:              false,
+		Source:               SearchSourceLiteral,
+		Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
+		Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
+		FilterAccounting:     nil,
 	}
 	for _, record := range candidates.Records {
 		select {
@@ -233,12 +253,13 @@ func (idx *Index) firstTranscriptMatch(record Record, terms []string, options Se
 		}
 		if messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) && messageMatchesTerms(message, terms) {
 			return SearchMatch{
-				Record:       record,
-				MessageIndex: messageIndex,
-				Role:         message.Role,
-				Timestamp:    message.Timestamp,
-				Snippet:      snippet(message.Text),
-				Score:        0,
+				Record:        record,
+				MessageIndex:  messageIndex,
+				Role:          message.Role,
+				Timestamp:     message.Timestamp,
+				Snippet:       snippet(message.Text),
+				Score:         0,
+				ContextWindow: "",
 			}, true, nil
 		}
 		messageIndex++
@@ -293,12 +314,13 @@ func normalizeListOptions(options ListOptions) ListOptions {
 
 func emptySearchMatch() SearchMatch {
 	return SearchMatch{
-		Record:       emptyRecord(),
-		MessageIndex: 0,
-		Role:         "",
-		Timestamp:    time.Time{},
-		Snippet:      "",
-		Score:        0,
+		Record:        emptyRecord(),
+		MessageIndex:  0,
+		Role:          "",
+		Timestamp:     time.Time{},
+		Snippet:       "",
+		Score:         0,
+		ContextWindow: "",
 	}
 }
 

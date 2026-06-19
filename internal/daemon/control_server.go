@@ -19,8 +19,6 @@ import (
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
 	"goodkind.io/clyde/internal/providerid"
-	"goodkind.io/clyde/internal/response"
-	searchstore "goodkind.io/clyde/internal/search/store"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -30,14 +28,15 @@ type controlServer struct {
 	clydev1.UnimplementedClydeServiceServer
 	stats         *providerStatsRecorder
 	index         *conversation.Index
-	searchJobs    *conversation.SearchJobManager
-	searchConfig  config.SearchConfig
 	loggingConfig config.LoggingConfig
 	mitmConfig    config.MITMConfig
 	mitmStatus    func() MITMStatus
 	showCapture   func(ctx context.Context, id string, asJSON bool) (string, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	rebind        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
+	// freshness reports the conversation-index sync snapshot at query time, set
+	// at construction. Nil yields the zero-value freshness.
+	freshness func() conversation.SearchFreshness
 	// semanticSearch is the engine-backed cross-conversation search the daemon
 	// prefers before the live literal scan. It is nil when conversation semantic
 	// search is not configured. semanticCollectionID names the engine collection
@@ -173,8 +172,20 @@ func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1
 	return &clydev1.GetConversationContextResponse{Text: text}, nil
 }
 
+// searchContextWindowDefault is the per-hit inline window radius used when the
+// request leaves context_window at zero.
+const searchContextWindowDefault = 2
+
+// searchContextWindowMaxHits caps how many engine hits receive a rendered inline
+// context window, so a large result set does not balloon the payload. Later hits
+// keep an empty window and the caller can read them on demand.
+const searchContextWindowMaxHits = 10
+
 // SearchConversations scans transcript text for candidate conversations and
-// returns bounded first matches that an agent can pass to get or context.
+// returns bounded first matches that an agent can pass to get or context. It
+// renders a small inline context window around the first few engine hits and
+// attaches the conversation-index freshness snapshot so a thin result is
+// distinguishable from a cold index.
 func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.SearchConversationsRequest) (*clydev1.SearchConversationsResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
 	if req.GetQuery() == "" {
@@ -184,14 +195,54 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
 	}
+	s.attachContextWindows(ctx, result.Matches, req)
+	result.Freshness = s.freshnessSnapshot()
 	return searchConversationsResponse(ctx, s.index, result), nil
+}
+
+// freshnessSnapshot reads the conversation-index sync snapshot, returning the
+// zero value when no freshness source is wired.
+func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {
+	if s.freshness == nil {
+		return conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0}
+	}
+	return s.freshness()
+}
+
+// attachContextWindows renders an inline message window around the first
+// searchContextWindowMaxHits engine hits in place. A literal-scan match (zero
+// message index with an empty snippet) and a render failure both leave the
+// window empty so the search never fails on a window read.
+func (s *controlServer) attachContextWindows(ctx context.Context, matches []conversation.SearchMatch, req *clydev1.SearchConversationsRequest) {
+	window := int(req.GetContextWindow())
+	if window <= 0 {
+		window = searchContextWindowDefault
+	}
+	rendered := 0
+	for i := range matches {
+		if rendered >= searchContextWindowMaxHits {
+			return
+		}
+		text, err := s.index.HitContextWindow(matches[i].Record, matches[i].MessageIndex, window, window)
+		if err != nil {
+			slog.WarnContext(ctx, "daemon.search_conversations.context_window_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"conversation_id", matches[i].Record.ID,
+				"message_index", matches[i].MessageIndex,
+				"err", err,
+			)
+			continue
+		}
+		matches[i].ContextWindow = text
+		rendered++
+	}
 }
 
 // searchConversationsResult runs the engine-first cross-conversation search.
 // When the engine is configured and produces at least one match, those matches
-// are returned. Otherwise the live literal scan answers the request, and the
-// Warming flag is set whenever the engine was configured but its result was
-// empty or it failed.
+// are returned with Source semantic. Otherwise the live literal scan answers the
+// request with Source literal. Facets and the filter funnel are computed
+// clyde-side from the index. conversation_id, when set, scopes the engine to a
+// single conversation, the within-search behavior.
 func searchConversationsResult(
 	ctx context.Context,
 	idx searchConversationsIndex,
@@ -199,6 +250,7 @@ func searchConversationsResult(
 	collectionID string,
 	req *clydev1.SearchConversationsRequest,
 ) (conversation.SearchConversationsResult, error) {
+	accounting := filterAccounting(ctx, idx, req)
 	if semantic != nil {
 		matches := engineSearchMatches(ctx, idx, semantic, collectionID, req)
 		if len(matches) >= 1 {
@@ -208,7 +260,10 @@ func searchConversationsResult(
 				ReturnedCount:        len(matches),
 				Limit:                int(req.GetLimit()),
 				HasMore:              false,
-				Warming:              false,
+				Source:               conversation.SearchSourceSemantic,
+				Facets:               conversation.ComputeFacets(matches, searchFacetTopN),
+				Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
+				FilterAccounting:     appendReturnedStage(accounting, len(matches)),
 			}, nil
 		}
 	}
@@ -223,6 +278,8 @@ func searchConversationsResult(
 		UntilUnix:            req.GetUntilUnix(),
 		MinScore:             req.GetMinScore(),
 		PerConversationLimit: int(req.GetPerConversationLimit()),
+		ConversationID:       req.GetConversationId(),
+		ContextWindow:        int(req.GetContextWindow()),
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.live_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -230,8 +287,51 @@ func searchConversationsResult(
 		)
 		return conversation.SearchConversationsResult{}, fmt.Errorf("live search conversations: %w", err)
 	}
-	result.Warming = semantic != nil
+	result.Source = conversation.SearchSourceLiteral
+	result.Facets = conversation.ComputeFacets(result.Matches, searchFacetTopN)
+	result.FilterAccounting = appendReturnedStage(accounting, len(result.Matches))
 	return result, nil
+}
+
+// searchFacetTopN bounds each facet dimension to its top values by count.
+const searchFacetTopN = 5
+
+// filterAccounting builds the ordered candidate-count funnel from the index:
+// the indexed baseline first, then one stage per active filter, computed by
+// reusing ConversationIDsMatching. A stage whose count cannot be resolved is
+// omitted rather than fabricated; the indexed baseline and the caller-appended
+// returned stage keep the funnel honest.
+func filterAccounting(ctx context.Context, idx searchConversationsIndex, req *clydev1.SearchConversationsRequest) []conversation.FilterStage {
+	var anyProvider conversation.Provider
+	stages := make([]conversation.FilterStage, 0, 5)
+	if all, err := idx.ConversationIDsMatching(ctx, anyProvider, "", true); err == nil {
+		stages = append(stages, conversation.FilterStage{Name: "indexed", Remaining: len(all)})
+	}
+	provider := providerFromProto(req.GetProvider())
+	if provider.Valid() {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, "", true); err == nil {
+			stages = append(stages, conversation.FilterStage{Name: "provider", Remaining: len(matched)})
+		}
+	}
+	if req.GetWorkspace() != "" {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, req.GetWorkspace(), true); err == nil {
+			stages = append(stages, conversation.FilterStage{Name: "workspace", Remaining: len(matched)})
+		}
+	}
+	if !req.GetIncludeArchived() {
+		if matched, err := idx.ConversationIDsMatching(ctx, provider, req.GetWorkspace(), false); err == nil {
+			stages = append(stages, conversation.FilterStage{Name: "archived_excluded", Remaining: len(matched)})
+		}
+	}
+	if req.GetConversationId() != "" {
+		stages = append(stages, conversation.FilterStage{Name: "conversation", Remaining: 1})
+	}
+	return stages
+}
+
+// appendReturnedStage closes the funnel with the count actually returned.
+func appendReturnedStage(stages []conversation.FilterStage, returned int) []conversation.FilterStage {
+	return append(stages, conversation.FilterStage{Name: "returned", Remaining: returned})
 }
 
 // engineSearchMatches resolves each engine hit to a cached record, skipping
@@ -255,7 +355,13 @@ func engineSearchMatches(
 		providers = []string{provider.String()}
 	}
 	var conversationIDs []string
-	if workspace != "" {
+	switch {
+	case req.GetConversationId() != "":
+		// A conversation_id scopes the engine to that one conversation, the
+		// within-search behavior. Provider and workspace scope are irrelevant
+		// then but still safe to pass; the id set is the tightest filter.
+		conversationIDs = []string{req.GetConversationId()}
+	case workspace != "":
 		conversationIDs = workspaceConversationIDs(ctx, idx, workspace)
 		if len(conversationIDs) == 0 {
 			// The workspace matched no conversations, so the result is empty. An
@@ -297,12 +403,13 @@ func engineSearchMatches(
 			continue
 		}
 		matches = append(matches, conversation.SearchMatch{
-			Record:       record,
-			MessageIndex: int(hit.MessageIndex),
-			Role:         hit.Role,
-			Timestamp:    time.Unix(hit.TimestampUnix, 0),
-			Snippet:      conversation.Snippet(hit.Content),
-			Score:        hit.Score,
+			Record:        record,
+			MessageIndex:  int(hit.MessageIndex),
+			Role:          hit.Role,
+			Timestamp:     time.Unix(hit.TimestampUnix, 0),
+			Snippet:       conversation.Snippet(hit.Content),
+			Score:         hit.Score,
+			ContextWindow: "",
 		})
 		if limit > 0 && len(matches) >= limit {
 			break
@@ -329,8 +436,8 @@ func workspaceConversationIDs(ctx context.Context, idx searchConversationsIndex,
 }
 
 // searchConversationsResponse maps the cross-conversation search result onto its
-// wire response, carrying the Warming signal so the caller can show a live
-// fallback note while the engine collection is cold.
+// wire response, carrying the source, facets, freshness, filter funnel, and the
+// per-hit inline context window.
 func searchConversationsResponse(ctx context.Context, idx *conversation.Index, result conversation.SearchConversationsResult) *clydev1.SearchConversationsResponse {
 	matches := make([]*clydev1.ConversationSearchMatch, 0, len(result.Matches))
 	for _, match := range result.Matches {
@@ -341,6 +448,7 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 			TimestampUnix: match.Timestamp.Unix(),
 			Snippet:       match.Snippet,
 			Score:         match.Score,
+			ContextWindow: match.ContextWindow,
 		})
 	}
 	return &clydev1.SearchConversationsResponse{
@@ -349,121 +457,66 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 		ReturnedCount:        int64(result.ReturnedCount),
 		Limit:                int64(result.Limit),
 		HasMore:              result.HasMore,
-		Warming:              result.Warming,
+		Source:               protoSearchSource(result.Source),
+		Facets:               protoSearchFacets(result.Facets),
+		Freshness:            protoSearchFreshness(result.Freshness),
+		FilterAccounting:     protoFilterAccounting(result.FilterAccounting),
 	}
 }
 
-// SearchConversation starts an async search job and returns its result id
-// immediately. The caller polls GetSearchStatus for progress and the result.
-func (s *controlServer) SearchConversation(ctx context.Context, req *clydev1.SearchConversationRequest) (*clydev1.SearchConversationResponse, error) {
-	ctx, _ = correlation.Ensure(ctx, "")
-	client, _ := peer.FromContext(ctx)
-	if req.GetQuery() == "" {
-		return &clydev1.SearchConversationResponse{Text: response.Text(ctx, "query is required")}, nil
-	}
-	resultID, err := s.searchJobs.Start(ctx, req.GetConversationId(), req.GetQuery(), conversation.WithinSearchOptions{
-		Limit:     int(req.GetLimit()),
-		Roles:     req.GetRoles(),
-		FromUnix:  req.GetFromUnix(),
-		UntilUnix: req.GetUntilUnix(),
-		MinScore:  req.GetMinScore(),
-	})
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.search.start_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", req.GetConversationId(),
-			"err", err,
-		)
-		return nil, status.Errorf(codes.Internal, "start search: %v", err)
-	}
-	hint := fmt.Sprintf("Search started.\nresult_id: %s\nPoll with: conversation search status %s", resultID, resultID)
-	return &clydev1.SearchConversationResponse{Text: response.Text(ctx, hint), ResultId: resultID}, nil
-}
-
-// GetSearchStatus returns the state, progress, and (when complete) the result of
-// an async search job.
-func (s *controlServer) GetSearchStatus(ctx context.Context, req *clydev1.GetSearchStatusRequest) (*clydev1.GetSearchStatusResponse, error) {
-	ctx, _ = correlation.Ensure(ctx, "")
-	if req.GetResultId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "result_id is required")
-	}
-	job, ok, err := s.searchJobs.Status(ctx, req.GetResultId())
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get search status: %v", err)
-	}
-	if !ok {
-		return &clydev1.GetSearchStatusResponse{Found: false, ResultId: req.GetResultId()}, nil
-	}
-	return &clydev1.GetSearchStatusResponse{
-		Found:    true,
-		ResultId: job.ResultID,
-		Status:   protoSearchStatus(job.Status),
-		Progress: &clydev1.SearchProgress{
-			ChunksDone:  int64(job.Progress.ChunksDone),
-			ChunksTotal: int64(job.Progress.ChunksTotal),
-			LayerIndex:  int64(job.Progress.LayerIndex),
-			LayerTotal:  int64(job.Progress.LayerTotal),
-			LayerName:   job.Progress.LayerName,
-		},
-		ResultText: job.ResultText,
-		Error:      job.Error,
-	}, nil
-}
-
-// CancelSearch cancels a running search job and reports its resulting status.
-func (s *controlServer) CancelSearch(ctx context.Context, req *clydev1.CancelSearchRequest) (*clydev1.CancelSearchResponse, error) {
-	ctx, _ = correlation.Ensure(ctx, "")
-	if req.GetResultId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "result_id is required")
-	}
-	if err := s.searchJobs.Cancel(ctx, req.GetResultId()); err != nil {
-		return nil, status.Errorf(codes.Internal, "cancel search: %v", err)
-	}
-	job, ok, err := s.searchJobs.Status(ctx, req.GetResultId())
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "cancel search: %v", err)
-	}
-	if !ok {
-		return &clydev1.CancelSearchResponse{Status: clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED}, nil
-	}
-	return &clydev1.CancelSearchResponse{Status: protoSearchStatus(job.Status)}, nil
-}
-
-// AnalyzeSearchResults runs the configured analysis model over a completed
-// search job's stored result set.
-func (s *controlServer) AnalyzeSearchResults(ctx context.Context, req *clydev1.AnalyzeSearchResultsRequest) (*clydev1.AnalyzeSearchResultsResponse, error) {
-	ctx, _ = correlation.Ensure(ctx, "")
-	client, _ := peer.FromContext(ctx)
-	if req.GetResultId() == "" || req.GetPrompt() == "" {
-		return &clydev1.AnalyzeSearchResultsResponse{Text: response.Text(ctx, "result_id and prompt are required")}, nil
-	}
-	text, err := s.searchJobs.Analyze(ctx, req.GetResultId(), req.GetPrompt())
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.analyze.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"result_id", req.GetResultId(),
-			"err", err,
-		)
-		return nil, status.Errorf(codes.Internal, "analyze results: %v", err)
-	}
-	return &clydev1.AnalyzeSearchResultsResponse{Text: response.Text(ctx, text)}, nil
-}
-
-func protoSearchStatus(s searchstore.Status) clydev1.SearchStatus {
-	switch s {
-	case searchstore.StatusPending:
-		return clydev1.SearchStatus_SEARCH_STATUS_PENDING
-	case searchstore.StatusRunning:
-		return clydev1.SearchStatus_SEARCH_STATUS_RUNNING
-	case searchstore.StatusComplete:
-		return clydev1.SearchStatus_SEARCH_STATUS_COMPLETE
-	case searchstore.StatusFailed:
-		return clydev1.SearchStatus_SEARCH_STATUS_FAILED
-	case searchstore.StatusCanceled:
-		return clydev1.SearchStatus_SEARCH_STATUS_CANCELED
+// protoSearchSource maps the domain search source onto its wire enum, mirroring
+// the protoProvider switch pattern.
+func protoSearchSource(source conversation.SearchSource) clydev1.SearchSource {
+	switch source {
+	case conversation.SearchSourceSemantic:
+		return clydev1.SearchSource_SEARCH_SOURCE_SEMANTIC
+	case conversation.SearchSourceLiteral:
+		return clydev1.SearchSource_SEARCH_SOURCE_LITERAL
+	case conversation.SearchSourceLiteralDisabledCold:
+		return clydev1.SearchSource_SEARCH_SOURCE_LITERAL_DISABLED_COLD
+	case conversation.SearchSourceUnspecified:
+		return clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED
 	default:
-		return clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED
+		return clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED
 	}
+}
+
+// protoSearchFacets maps the domain facets onto the wire facets.
+func protoSearchFacets(facets conversation.SearchFacets) *clydev1.SearchFacets {
+	return &clydev1.SearchFacets{
+		Workspaces: protoFacetCounts(facets.Workspaces),
+		Providers:  protoFacetCounts(facets.Providers),
+		Models:     protoFacetCounts(facets.Models),
+	}
+}
+
+// protoFacetCounts maps one facet dimension onto its wire counts.
+func protoFacetCounts(counts []conversation.SearchFacetCount) []*clydev1.SearchFacetCount {
+	out := make([]*clydev1.SearchFacetCount, 0, len(counts))
+	for _, count := range counts {
+		out = append(out, &clydev1.SearchFacetCount{Value: count.Value, Count: int64(count.Count)})
+	}
+	return out
+}
+
+// protoSearchFreshness maps the domain freshness onto its wire form.
+func protoSearchFreshness(freshness conversation.SearchFreshness) *clydev1.SearchFreshness {
+	return &clydev1.SearchFreshness{
+		Manifest:     int64(freshness.Manifest),
+		Needed:       int64(freshness.Needed),
+		Embedded:     int64(freshness.Embedded),
+		Pending:      int64(freshness.Pending),
+		LastSyncUnix: freshness.LastSyncUnix,
+	}
+}
+
+// protoFilterAccounting maps the domain filter funnel onto its wire form.
+func protoFilterAccounting(stages []conversation.FilterStage) *clydev1.FilterAccounting {
+	out := make([]*clydev1.FilterStage, 0, len(stages))
+	for _, stage := range stages {
+		out = append(out, &clydev1.FilterStage{Name: stage.Name, Remaining: int64(stage.Remaining)})
+	}
+	return &clydev1.FilterAccounting{Stages: out}
 }
 
 // ExportTranscript resolves one conversation and returns its exported body.

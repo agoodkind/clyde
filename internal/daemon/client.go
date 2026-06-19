@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -198,6 +197,8 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		UntilUnix:            options.UntilUnix,
 		MinScore:             options.MinScore,
 		PerConversationLimit: int64(options.PerConversationLimit),
+		ConversationId:       options.ConversationID,
+		ContextWindow:        int64(options.ContextWindow),
 	})
 	if err != nil {
 		return conversation.SearchConversationsResult{}, daemonRPCError(rpcCtx, "search conversations", err)
@@ -206,12 +207,13 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	for _, wire := range resp.GetMatches() {
 		record := conversationRecordFromProto(wire.GetConversation())
 		matches = append(matches, conversation.SearchMatch{
-			Record:       record,
-			MessageIndex: int(wire.GetMessageIndex()),
-			Role:         wire.GetRole(),
-			Timestamp:    time.Unix(wire.GetTimestampUnix(), 0),
-			Snippet:      wire.GetSnippet(),
-			Score:        wire.GetScore(),
+			Record:        record,
+			MessageIndex:  int(wire.GetMessageIndex()),
+			Role:          wire.GetRole(),
+			Timestamp:     time.Unix(wire.GetTimestampUnix(), 0),
+			Snippet:       wire.GetSnippet(),
+			Score:         wire.GetScore(),
+			ContextWindow: wire.GetContextWindow(),
 		})
 	}
 	return conversation.SearchConversationsResult{
@@ -220,120 +222,74 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		ReturnedCount:        int(resp.GetReturnedCount()),
 		Limit:                int(resp.GetLimit()),
 		HasMore:              resp.GetHasMore(),
-		Warming:              resp.GetWarming(),
+		Source:               searchSourceFromProto(resp.GetSource()),
+		Facets:               searchFacetsFromProto(resp.GetFacets()),
+		Freshness:            searchFreshnessFromProto(resp.GetFreshness()),
+		FilterAccounting:     filterAccountingFromProto(resp.GetFilterAccounting()),
 	}, nil
 }
 
-// SearchConversation asks the daemon to search one conversation and cache the
-// result set for a later analyze call.
-func SearchConversation(ctx context.Context, conversationID, query string, opts conversation.WithinSearchOptions) (string, error) {
-	client, err := connectDaemon(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = client.conn.Close() }()
-
-	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
-	defer cancel()
-	resp, err := client.rpc.SearchConversation(rpcCtx, withinSearchRequest(conversationID, query, opts))
-	if err != nil {
-		return "", daemonRPCError(rpcCtx, "search conversation", err)
-	}
-	return resp.GetText(), nil
-}
-
-// withinSearchRequest maps within-search options onto the wire request.
-func withinSearchRequest(conversationID, query string, opts conversation.WithinSearchOptions) *clydev1.SearchConversationRequest {
-	return &clydev1.SearchConversationRequest{
-		ConversationId: conversationID,
-		Query:          query,
-		Limit:          int64(opts.Limit),
-		Roles:          opts.Roles,
-		FromUnix:       opts.FromUnix,
-		UntilUnix:      opts.UntilUnix,
-		MinScore:       opts.MinScore,
-	}
-}
-
-// GetSearchStatus asks the daemon for the state, progress, and result of an
-// async search job, rendered for display.
-func GetSearchStatus(ctx context.Context, resultID string) (string, error) {
-	client, err := connectDaemon(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = client.conn.Close() }()
-
-	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
-	defer cancel()
-	resp, err := client.rpc.GetSearchStatus(rpcCtx, &clydev1.GetSearchStatusRequest{ResultId: resultID})
-	if err != nil {
-		return "", daemonRPCError(rpcCtx, "get search status", err)
-	}
-	return renderSearchStatus(resp), nil
-}
-
-// CancelSearch asks the daemon to cancel a running search job.
-func CancelSearch(ctx context.Context, resultID string) (string, error) {
-	client, err := connectDaemon(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = client.conn.Close() }()
-
-	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
-	defer cancel()
-	resp, err := client.rpc.CancelSearch(rpcCtx, &clydev1.CancelSearchRequest{ResultId: resultID})
-	if err != nil {
-		return "", daemonRPCError(rpcCtx, "cancel search", err)
-	}
-	return fmt.Sprintf("result_id: %s\nstatus: %s", resultID, searchStatusLabel(resp.GetStatus())), nil
-}
-
-func renderSearchStatus(resp *clydev1.GetSearchStatusResponse) string {
-	if !resp.GetFound() {
-		return fmt.Sprintf("result_id %s not found", resp.GetResultId())
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "result_id: %s\n", resp.GetResultId())
-	fmt.Fprintf(&b, "status: %s\n", searchStatusLabel(resp.GetStatus()))
-	p := resp.GetProgress()
-	if p != nil && (p.GetChunksTotal() > 0 || p.GetLayerTotal() > 0) {
-		fmt.Fprintf(&b, "progress: sweep %d/%d chunks, layer %d/%d (%s)\n",
-			p.GetChunksDone(), p.GetChunksTotal(), p.GetLayerIndex(), p.GetLayerTotal(), p.GetLayerName())
-	}
-	switch resp.GetStatus() {
-	case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
-		b.WriteString("\n")
-		b.WriteString(resp.GetResultText())
-	case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
-		fmt.Fprintf(&b, "error: %s\n", resp.GetError())
-	case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED,
-		clydev1.SearchStatus_SEARCH_STATUS_PENDING,
-		clydev1.SearchStatus_SEARCH_STATUS_RUNNING,
-		clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
-		// No extra body for non-terminal or canceled states.
-	}
-	return b.String()
-}
-
-func searchStatusLabel(s clydev1.SearchStatus) string {
-	switch s {
-	case clydev1.SearchStatus_SEARCH_STATUS_PENDING:
-		return "pending"
-	case clydev1.SearchStatus_SEARCH_STATUS_RUNNING:
-		return "running"
-	case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
-		return "complete"
-	case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
-		return "failed"
-	case clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
-		return "canceled"
-	case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED:
-		return "unspecified"
+// searchSourceFromProto maps the wire search source onto its domain enum.
+func searchSourceFromProto(source clydev1.SearchSource) conversation.SearchSource {
+	switch source {
+	case clydev1.SearchSource_SEARCH_SOURCE_SEMANTIC:
+		return conversation.SearchSourceSemantic
+	case clydev1.SearchSource_SEARCH_SOURCE_LITERAL:
+		return conversation.SearchSourceLiteral
+	case clydev1.SearchSource_SEARCH_SOURCE_LITERAL_DISABLED_COLD:
+		return conversation.SearchSourceLiteralDisabledCold
+	case clydev1.SearchSource_SEARCH_SOURCE_UNSPECIFIED:
+		return conversation.SearchSourceUnspecified
 	default:
-		return "unspecified"
+		return conversation.SearchSourceUnspecified
 	}
+}
+
+// searchFacetsFromProto maps the wire facets onto the domain facets. A nil
+// message yields empty facet slices.
+func searchFacetsFromProto(facets *clydev1.SearchFacets) conversation.SearchFacets {
+	return conversation.SearchFacets{
+		Workspaces: facetCountsFromProto(facets.GetWorkspaces()),
+		Providers:  facetCountsFromProto(facets.GetProviders()),
+		Models:     facetCountsFromProto(facets.GetModels()),
+	}
+}
+
+// facetCountsFromProto maps one wire facet dimension onto its domain counts.
+func facetCountsFromProto(counts []*clydev1.SearchFacetCount) []conversation.SearchFacetCount {
+	if len(counts) == 0 {
+		return nil
+	}
+	out := make([]conversation.SearchFacetCount, 0, len(counts))
+	for _, count := range counts {
+		out = append(out, conversation.SearchFacetCount{Value: count.GetValue(), Count: int(count.GetCount())})
+	}
+	return out
+}
+
+// searchFreshnessFromProto maps the wire freshness onto the domain form. A nil
+// message yields the zero value.
+func searchFreshnessFromProto(freshness *clydev1.SearchFreshness) conversation.SearchFreshness {
+	return conversation.SearchFreshness{
+		Manifest:     int(freshness.GetManifest()),
+		Needed:       int(freshness.GetNeeded()),
+		Embedded:     int(freshness.GetEmbedded()),
+		Pending:      int(freshness.GetPending()),
+		LastSyncUnix: freshness.GetLastSyncUnix(),
+	}
+}
+
+// filterAccountingFromProto maps the wire filter funnel onto the domain stages.
+func filterAccountingFromProto(accounting *clydev1.FilterAccounting) []conversation.FilterStage {
+	stages := accounting.GetStages()
+	if len(stages) == 0 {
+		return nil
+	}
+	out := make([]conversation.FilterStage, 0, len(stages))
+	for _, stage := range stages {
+		out = append(out, conversation.FilterStage{Name: stage.GetName(), Remaining: int(stage.GetRemaining())})
+	}
+	return out
 }
 
 func conversationRecordsFromProto(wireRecords []*clydev1.ConversationRecord) []conversation.Record {
@@ -369,99 +325,6 @@ func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.
 		SizeBytes:     wire.GetSizeBytes(),
 		Archived:      wire.GetArchived(),
 	}
-}
-
-// searchTaskPollInterval is how often the run-to-completion path polls the
-// daemon for a terminal search status.
-const searchTaskPollInterval = 500 * time.Millisecond
-
-// maxSearchTaskPolls bounds the run-to-completion poll loop so a stuck daemon
-// job cannot pin a task goroutine forever. At the 500ms interval this is about
-// 30 minutes, comfortably past even an extra-deep search.
-const maxSearchTaskPolls = 3600
-
-// SearchToCompletion starts a search and blocks until it reaches a terminal
-// state, returning the rendered result. It is the run-to-completion path used by
-// the native MCP task handler; mcp-go runs it in a task goroutine so the client
-// is not blocked and can poll tasks/get. Canceling ctx (via tasks/cancel)
-// cancels the underlying search.
-func SearchToCompletion(ctx context.Context, conversationID, query string, opts conversation.WithinSearchOptions) (string, error) {
-	// mcp-go v0.54.1 ties the task goroutine's context to the create-task
-	// request, which it cancels once the task handle is returned to the client.
-	// Detach the daemon operations from that context so the search runs to
-	// completion; the original ctx is still watched below so a real tasks/cancel
-	// (which cancels the task context) stops the underlying search.
-	opCtx := context.WithoutCancel(ctx)
-	client, err := connectDaemon(opCtx)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = client.conn.Close() }()
-
-	startCtx, startCancel := context.WithTimeout(opCtx, analysisClientRPCTimeout)
-	startResp, err := client.rpc.SearchConversation(startCtx, withinSearchRequest(conversationID, query, opts))
-	startCancel()
-	if err != nil {
-		slog.WarnContext(opCtx, "daemon.search_to_completion.start_failed", "concern", "mcp.server.context", "component", "daemon", "err", err)
-		return "", daemonRPCError(opCtx, "start search", err)
-	}
-	resultID := startResp.GetResultId()
-	if resultID == "" {
-		return startResp.GetText(), nil
-	}
-
-	// Do not select on ctx.Done() here: mcp-go cancels the task context the moment
-	// the task handle is returned, so it cannot distinguish a real tasks/cancel
-	// from that premature cancel. The search therefore runs to completion under
-	// opCtx; a Tasks client that wants to stop a running search calls the bespoke
-	// search_cancel with the result_id (which the result text carries). The poll
-	// is bounded so a stuck job cannot pin the task goroutine forever.
-	ticker := time.NewTicker(searchTaskPollInterval)
-	defer ticker.Stop()
-	for range maxSearchTaskPolls {
-		<-ticker.C
-		statusCtx, statusCancel := context.WithTimeout(opCtx, analysisClientRPCTimeout)
-		resp, err := client.rpc.GetSearchStatus(statusCtx, &clydev1.GetSearchStatusRequest{ResultId: resultID})
-		statusCancel()
-		if err != nil {
-			slog.WarnContext(opCtx, "daemon.search_to_completion.poll_failed", "concern", "mcp.server.context", "component", "daemon", "result_id", resultID, "err", err)
-			return "", daemonRPCError(opCtx, "poll search status", err)
-		}
-		switch resp.GetStatus() {
-		case clydev1.SearchStatus_SEARCH_STATUS_COMPLETE:
-			return renderSearchStatus(resp), nil
-		case clydev1.SearchStatus_SEARCH_STATUS_FAILED:
-			return "", fmt.Errorf("search failed: %s", resp.GetError())
-		case clydev1.SearchStatus_SEARCH_STATUS_CANCELED:
-			return "", fmt.Errorf("search canceled")
-		case clydev1.SearchStatus_SEARCH_STATUS_UNSPECIFIED,
-			clydev1.SearchStatus_SEARCH_STATUS_PENDING,
-			clydev1.SearchStatus_SEARCH_STATUS_RUNNING:
-			// Still running; keep polling.
-		}
-	}
-	return "", fmt.Errorf("search task timed out waiting for completion")
-}
-
-// AnalyzeSearchResults asks the daemon to run the analysis model over a stored
-// search result set.
-func AnalyzeSearchResults(ctx context.Context, resultID, prompt string) (string, error) {
-	client, err := connectDaemon(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = client.conn.Close() }()
-
-	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
-	defer cancel()
-	resp, err := client.rpc.AnalyzeSearchResults(rpcCtx, &clydev1.AnalyzeSearchResultsRequest{
-		ResultId: resultID,
-		Prompt:   prompt,
-	})
-	if err != nil {
-		return "", daemonRPCError(rpcCtx, "analyze results", err)
-	}
-	return resp.GetText(), nil
 }
 
 // ExportTranscript asks the daemon to export one conversation and returns the
