@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -251,6 +253,22 @@ func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID s
 	return response.GetJobId(), nil
 }
 
+// upsertClientInfo identifies clyde to the engine so an upsert job is
+// attributable to the calling process. caller_cwd is left empty because it only
+// resolves relative request paths, which a conversation upsert never carries.
+func upsertClientInfo() *lmsemanticsearchv1.ClientInfo {
+	pid := os.Getpid()
+	var clientPID int32
+	if pid >= 0 && pid <= math.MaxInt32 {
+		clientPID = int32(pid)
+	}
+	return &lmsemanticsearchv1.ClientInfo{
+		Name:      "clyde",
+		Pid:       clientPID,
+		CallerCwd: "",
+	}
+}
+
 // sendUpsertStream sends the header, then the documents in bounded chunks, then
 // the manifest as one chunk. The manifest is authoritative for deletion, so it
 // is sent whole rather than split.
@@ -265,7 +283,7 @@ func sendUpsertStream(
 		Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Header{
 			Header: &lmsemanticsearchv1.UpsertConversationDocumentsHeader{
 				CollectionId: collectionID,
-				Client:       nil,
+				Client:       upsertClientInfo(),
 			},
 		},
 	}
