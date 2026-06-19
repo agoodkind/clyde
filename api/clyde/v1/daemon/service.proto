@@ -18,6 +18,14 @@ service ClydeService {
   rpc GetConversationContext(GetConversationContextRequest) returns (GetConversationContextResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
   rpc ExportTranscript(ExportTranscriptRequest) returns (ExportTranscriptResponse);
+  // StreamConversation, StreamConversationContext, and StreamExportTranscript are
+  // the server-streaming forms of the three reads above. They carry the same
+  // request shape and produce the same payload, chunked so a large transcript or
+  // export is not bounded by the gRPC max message size. The unary forms remain
+  // for any caller that has not switched.
+  rpc StreamConversation(GetConversationRequest) returns (stream ConversationChunk);
+  rpc StreamConversationContext(GetConversationContextRequest) returns (stream ConversationChunk);
+  rpc StreamExportTranscript(ExportTranscriptRequest) returns (stream ExportChunk);
   rpc GetMITMStatus(GetMITMStatusRequest) returns (GetMITMStatusResponse);
   rpc ShowCapture(ShowCaptureRequest) returns (ShowCaptureResponse);
   rpc SeedBaseline(SeedBaselineRequest) returns (SeedBaselineResponse);
@@ -89,6 +97,20 @@ message GetConversationRequest {
 
 message GetConversationResponse {
   string text = 1;
+}
+
+// ConversationChunk is one UTF-8 text slice of a streamed transcript or context
+// window. The full payload is the concatenation of every chunk's text in
+// receive order; chunk boundaries carry no semantics and may split a multibyte
+// rune only at the transport layer, which the reassembler stitches back.
+message ConversationChunk {
+  bytes text = 1;
+}
+
+// ExportChunk is one byte slice of a streamed export body. The full export is
+// the concatenation of every chunk's body in receive order.
+message ExportChunk {
+  bytes body = 1;
 }
 
 message GetConversationContextRequest {

@@ -102,7 +102,10 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
 	semanticFreshness := newConversationSemanticFreshness()
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(controlMaxMessageBytes),
+		grpc.MaxSendMsgSize(controlMaxMessageBytes),
+	)
 	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, semanticFreshness.snapshot, grpcServer, runtime))
 	grpcDone := make(chan error, 1)
 	go func() {
