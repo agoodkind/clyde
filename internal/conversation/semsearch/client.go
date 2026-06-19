@@ -39,6 +39,10 @@ type SemDoc struct {
 	Role                 string
 	TimestampUnix        int64
 	Text                 string
+	// WorkspaceRoot is the conversation's workspace, sent so the engine stores it
+	// as a filterable scalar column. The same for every message of one
+	// conversation; empty when unknown.
+	WorkspaceRoot string
 }
 
 // Fingerprint pairs a conversation id with a content fingerprint that changes
@@ -67,10 +71,13 @@ type SemHit struct {
 }
 
 // SearchFilter narrows conversation retrieval by row attributes. Every field
-// is optional; the zero value matches everything. ConversationIDs is the
-// record-level scope: clyde resolves provider, workspace, and archived filters
-// into this set before calling the engine.
+// is optional; the zero value matches everything. Providers and WorkspaceRoots
+// filter natively on the engine's scalar columns; clyde resolves a workspace
+// prefix into the set of matching roots. ConversationIDs scopes to explicit
+// conversations (an explicit --conversation or a within-search).
 type SearchFilter struct {
+	Providers            []string
+	WorkspaceRoots       []string
 	Roles                []string
 	FromUnix             int64
 	UntilUnix            int64
@@ -84,12 +91,15 @@ type SearchFilter struct {
 // wire converts the filter to its proto shape, nil when nothing is set so the
 // request stays minimal.
 func (filter SearchFilter) wire() *lmsemanticsearchv1.ConversationSearchFilter {
-	if len(filter.Roles) == 0 && filter.FromUnix == 0 && filter.UntilUnix == 0 &&
+	if len(filter.Providers) == 0 && len(filter.WorkspaceRoots) == 0 &&
+		len(filter.Roles) == 0 && filter.FromUnix == 0 && filter.UntilUnix == 0 &&
 		len(filter.ConversationIDs) == 0 && filter.ParentConversationID == "" &&
 		filter.MinScore == 0 && filter.MessageIndexFrom == 0 && filter.MessageIndexUntil == 0 {
 		return nil
 	}
 	return &lmsemanticsearchv1.ConversationSearchFilter{
+		Providers:            filter.Providers,
+		WorkspaceRoots:       filter.WorkspaceRoots,
 		Roles:                filter.Roles,
 		FromUnix:             filter.FromUnix,
 		UntilUnix:            filter.UntilUnix,
@@ -448,6 +458,7 @@ func conversationDocuments(docs []SemDoc) []*lmsemanticsearchv1.ConversationDocu
 			Role:                 doc.Role,
 			TimestampUnix:        doc.TimestampUnix,
 			Text:                 doc.Text,
+			WorkspaceRoot:        doc.WorkspaceRoot,
 		})
 	}
 	return out

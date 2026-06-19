@@ -314,23 +314,6 @@ func normalizeSearchConversationsOptions(options SearchConversationsOptions) Sea
 	return options
 }
 
-// RecordMatchesFilter reports whether a record passes the provider, workspace,
-// and archived filters that the live cross-conversation search applies. It
-// reuses the list predicate so an engine-first caller filters resolved hits
-// exactly as the live literal path does.
-func RecordMatchesFilter(record Record, provider Provider, workspaceRoot string, includeArchived bool) bool {
-	options := normalizeListOptions(ListOptions{
-		Limit:           0,
-		Offset:          0,
-		Provider:        provider,
-		WorkspaceRoot:   workspaceRoot,
-		Query:           "",
-		IncludeArchived: includeArchived,
-		All:             true,
-	})
-	return recordMatchesListOptions(record, options)
-}
-
 func recordMatchesListOptions(record Record, options ListOptions) bool {
 	if !options.IncludeArchived && record.Archived {
 		return false
@@ -338,8 +321,15 @@ func recordMatchesListOptions(record Record, options ListOptions) bool {
 	if options.Provider.Valid() && record.Provider != options.Provider {
 		return false
 	}
-	if options.WorkspaceRoot != "" && cleanWorkspaceFilter(record.WorkspaceRoot) != options.WorkspaceRoot {
-		return false
+	if options.WorkspaceRoot != "" {
+		filterWorkspace := cleanWorkspaceFilter(options.WorkspaceRoot)
+		recordWorkspace := cleanWorkspaceFilter(record.WorkspaceRoot)
+		// Prefix match so a project-root filter includes its subdirectories: a
+		// filter of ~/Sites/clyde-dev matches ~/Sites/clyde-dev and
+		// ~/Sites/clyde-dev/clyde, not just the exact path.
+		if recordWorkspace != filterWorkspace && !strings.HasPrefix(recordWorkspace, filterWorkspace+"/") {
+			return false
+		}
 	}
 	terms := queryTerms(options.Query)
 	if len(terms) > 0 && !recordMatchesTerms(record, terms) {

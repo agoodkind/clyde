@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,9 +29,16 @@ func (f *fakeSearchIndex) RecordByID(id string) (conversation.Record, bool) {
 func (f *fakeSearchIndex) ConversationIDsMatching(_ context.Context, provider conversation.Provider, workspaceRoot string, includeArchived bool) ([]string, error) {
 	conversationIDs := make([]string, 0, len(f.records))
 	for id, record := range f.records {
-		if conversation.RecordMatchesFilter(record, provider, workspaceRoot, includeArchived) {
-			conversationIDs = append(conversationIDs, id)
+		if !includeArchived && record.Archived {
+			continue
 		}
+		if provider.Valid() && record.Provider != provider {
+			continue
+		}
+		if workspaceRoot != "" && record.WorkspaceRoot != workspaceRoot && !strings.HasPrefix(record.WorkspaceRoot, workspaceRoot+"/") {
+			continue
+		}
+		conversationIDs = append(conversationIDs, id)
 	}
 	return conversationIDs, nil
 }
@@ -195,10 +203,11 @@ func TestSearchConversationsResultEngineEmptyFallsBackWarming(t *testing.T) {
 	}
 }
 
-// TestSearchConversationsResultPushesIDScope proves a provider-scoped request
-// resolves matching records into the conversation-id set the engine receives,
-// and an unscoped request pushes no id set.
-func TestSearchConversationsResultPushesIDScope(t *testing.T) {
+// TestSearchConversationsResultNativeFilters proves a provider-scoped request
+// filters natively on the provider column (not a resolved id set), a
+// workspace-scoped request resolves to the conversation-id set under that
+// workspace, and an unscoped request pushes neither.
+func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	t.Parallel()
 	idx := &fakeSearchIndex{
 		records: map[string]conversation.Record{
@@ -215,28 +224,43 @@ func TestSearchConversationsResultPushesIDScope(t *testing.T) {
 		err:     nil,
 		filters: nil,
 	}
-	scoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Provider: clydev1.Provider_PROVIDER_CLAUDE}
+	providerScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Provider: clydev1.Provider_PROVIDER_CLAUDE}
 
-	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", scoped); err != nil {
-		t.Fatalf("scoped search: %v", err)
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", providerScoped); err != nil {
+		t.Fatalf("provider-scoped search: %v", err)
 	}
 	if len(semantic.filters) != 1 {
 		t.Fatalf("engine calls = %d, want 1", len(semantic.filters))
 	}
-	scopedFilter := semantic.filters[0]
-	if len(scopedFilter.ConversationIDs) != 1 || scopedFilter.ConversationIDs[0] != "claude:one" {
-		t.Fatalf("scoped filter ids = %v, want [claude:one]", scopedFilter.ConversationIDs)
+	providerFilter := semantic.filters[0]
+	if len(providerFilter.Providers) != 1 || providerFilter.Providers[0] != "claude" {
+		t.Fatalf("provider filter providers = %v, want [claude]", providerFilter.Providers)
+	}
+	if len(providerFilter.ConversationIDs) != 0 {
+		t.Fatalf("provider filter ids = %v, want none (provider is native)", providerFilter.ConversationIDs)
+	}
+
+	workspaceScoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Workspace: "/repo"}
+	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", workspaceScoped); err != nil {
+		t.Fatalf("workspace-scoped search: %v", err)
+	}
+	if len(semantic.filters) != 2 {
+		t.Fatalf("engine calls = %d, want 2", len(semantic.filters))
+	}
+	workspaceFilter := semantic.filters[1]
+	if len(workspaceFilter.ConversationIDs) != 1 || workspaceFilter.ConversationIDs[0] != "claude:one" {
+		t.Fatalf("workspace filter ids = %v, want [claude:one]", workspaceFilter.ConversationIDs)
 	}
 
 	unscoped := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 	if _, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", unscoped); err != nil {
 		t.Fatalf("unscoped search: %v", err)
 	}
-	if len(semantic.filters) != 2 {
-		t.Fatalf("engine calls = %d, want 2", len(semantic.filters))
+	if len(semantic.filters) != 3 {
+		t.Fatalf("engine calls = %d, want 3", len(semantic.filters))
 	}
-	if len(semantic.filters[1].ConversationIDs) != 0 {
-		t.Fatalf("unscoped filter ids = %v, want none", semantic.filters[1].ConversationIDs)
+	if len(semantic.filters[2].ConversationIDs) != 0 || len(semantic.filters[2].Providers) != 0 {
+		t.Fatalf("unscoped filter = %+v, want no provider or id scope", semantic.filters[2])
 	}
 }
 
