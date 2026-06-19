@@ -29,14 +29,7 @@ func requirePrepared[I Input, P Prepared](t *testing.T, name string, op Operatio
 // operation sets Prepare and Run.
 func TestEveryConversationOpDeclaresPrepare(t *testing.T) {
 	t.Parallel()
-	requirePrepared(t, "list_conversations", listConversationsOp())
-	requirePrepared(t, "get_conversation", getConversationOp())
-	requirePrepared(t, "get_context", getContextOp())
-	requirePrepared(t, "conversations_search", searchConversationsOp())
-	requirePrepared(t, "search_conversation", searchConversationOp())
-	requirePrepared(t, "search_status", searchStatusOp())
-	requirePrepared(t, "search_cancel", searchCancelOp())
-	requirePrepared(t, "analyze_results", analyzeResultsOp())
+	requirePrepared(t, "search", searchOp())
 	requirePrepared(t, "export_transcript", exportTranscriptOp())
 }
 
@@ -69,30 +62,43 @@ func TestExportPrepareRejectsBadSelection(t *testing.T) {
 	}
 }
 
-// TestListPrepareRejectsBadProvider asserts the list Prepare rejects an
+// TestSearchPrepareRejectsBadProvider asserts the search Prepare rejects an
 // unsupported provider, the validation that used to live inside Run.
-func TestListPrepareRejectsBadProvider(t *testing.T) {
+func TestSearchPrepareRejectsBadProvider(t *testing.T) {
 	t.Parallel()
-	op := listConversationsOp()
+	op := searchOp()
 	in := op.New()
 	in.Provider = "bogus"
 	if _, err := op.Prepare(in); err == nil {
-		t.Error("list Prepare should reject an unsupported provider")
+		t.Error("search Prepare should reject an unsupported provider")
 	}
 	if _, err := op.Prepare(op.New()); err != nil {
-		t.Errorf("list Prepare rejected valid input: %v", err)
+		t.Errorf("search Prepare rejected valid input: %v", err)
 	}
 }
 
-// TestSearchWithinPrepareRejectsBadDate asserts the within-search Prepare rejects
-// an unparseable time bound.
-func TestSearchWithinPrepareRejectsBadDate(t *testing.T) {
+// TestSearchPrepareRejectsBadDate asserts the search Prepare rejects an
+// unparseable time bound on a query search.
+func TestSearchPrepareRejectsBadDate(t *testing.T) {
 	t.Parallel()
-	op := searchConversationOp()
+	op := searchOp()
 	in := op.New()
+	in.Query = "auth"
 	in.After = "nope"
 	if _, err := op.Prepare(in); err == nil {
-		t.Error("within-search Prepare should reject an unparseable --after")
+		t.Error("search Prepare should reject an unparseable --after")
+	}
+}
+
+// TestSearchPrepareRejectsAroundWithoutConversation asserts a read window with
+// no conversation to center on is rejected in Prepare.
+func TestSearchPrepareRejectsAroundWithoutConversation(t *testing.T) {
+	t.Parallel()
+	op := searchOp()
+	in := op.New()
+	in.Around = 5
+	if _, err := op.Prepare(in); err == nil {
+		t.Error("search Prepare should reject around with no conversation")
 	}
 }
 

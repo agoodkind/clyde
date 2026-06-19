@@ -17,10 +17,6 @@ service ClydeService {
   rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
   rpc GetConversationContext(GetConversationContextRequest) returns (GetConversationContextResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
-  rpc SearchConversation(SearchConversationRequest) returns (SearchConversationResponse);
-  rpc GetSearchStatus(GetSearchStatusRequest) returns (GetSearchStatusResponse);
-  rpc CancelSearch(CancelSearchRequest) returns (CancelSearchResponse);
-  rpc AnalyzeSearchResults(AnalyzeSearchResultsRequest) returns (AnalyzeSearchResultsResponse);
   rpc ExportTranscript(ExportTranscriptRequest) returns (ExportTranscriptResponse);
   rpc GetMITMStatus(GetMITMStatusRequest) returns (GetMITMStatusResponse);
   rpc ShowCapture(ShowCaptureRequest) returns (ShowCaptureResponse);
@@ -107,29 +103,6 @@ message GetConversationContextResponse {
   string text = 1;
 }
 
-message SearchConversationRequest {
-  string conversation_id = 1;
-  string query = 2;
-  // reserved 3: the retired depth parameter; search is retrieval-only and the
-  // LLM lives in the analyze step.
-  reserved 3;
-  reserved "depth";
-  int64 limit = 4;
-  // roles keeps only hits whose message role is in the set, e.g. "user".
-  repeated string roles = 5;
-  // from_unix / until_unix bound the message timestamp (inclusive from,
-  // exclusive until). Zero means unbounded.
-  int64 from_unix = 6;
-  int64 until_unix = 7;
-  // min_score drops hits scoring below the floor. Zero means no floor.
-  double min_score = 8;
-}
-
-message SearchConversationResponse {
-  string text = 1;
-  string result_id = 2;
-}
-
 message SearchConversationsRequest {
   string query = 1;
   int64 limit = 2;
@@ -143,6 +116,26 @@ message SearchConversationsRequest {
   // per_conversation_limit caps hits per conversation so one large transcript
   // does not monopolize the result list. Zero means uncapped.
   int64 per_conversation_limit = 10;
+  // conversation_id scopes discovery to a single conversation, the within-search
+  // behavior. Empty means corpus-wide discovery.
+  string conversation_id = 11;
+  // context_window is the number of messages before and after each hit to render
+  // inline on the match. Zero means the daemon's default small window.
+  int64 context_window = 12;
+}
+
+// SearchSource names where the returned matches came from, replacing the old
+// warming bool with an explicit provenance the caller can branch on.
+enum SearchSource {
+  SEARCH_SOURCE_UNSPECIFIED = 0;
+  // SEARCH_SOURCE_SEMANTIC means the vector engine produced the matches.
+  SEARCH_SOURCE_SEMANTIC = 1;
+  // SEARCH_SOURCE_LITERAL means the engine was unavailable or empty and the
+  // literal transcript scan produced the matches.
+  SEARCH_SOURCE_LITERAL = 2;
+  // SEARCH_SOURCE_LITERAL_DISABLED_COLD means the engine produced nothing and
+  // the literal fallback is disabled, so no matches were returned on purpose.
+  SEARCH_SOURCE_LITERAL_DISABLED_COLD = 3;
 }
 
 message ConversationSearchMatch {
@@ -153,6 +146,46 @@ message ConversationSearchMatch {
   string snippet = 5;
   // score is the engine's retrieval relevance; zero on literal-scan matches.
   double score = 6;
+  // context_window is the rendered messages surrounding this hit, so the caller
+  // rarely needs a second read call.
+  string context_window = 7;
+}
+
+// SearchFacetCount is one facet value and how many matched conversations carry
+// it.
+message SearchFacetCount {
+  string value = 1;
+  int64 count = 2;
+}
+
+// SearchFacets summarizes the result set by workspace, provider, and model so
+// the caller can narrow without a second query.
+message SearchFacets {
+  repeated SearchFacetCount workspaces = 1;
+  repeated SearchFacetCount providers = 2;
+  repeated SearchFacetCount models = 3;
+}
+
+// SearchFreshness is the conversation-index sync state at query time, so the
+// caller can tell whether a thin result means a cold index versus a true miss.
+message SearchFreshness {
+  int64 manifest = 1;
+  int64 needed = 2;
+  int64 embedded = 3;
+  int64 pending = 4;
+  int64 last_sync_unix = 5;
+}
+
+// FilterStage records how many candidate conversations remained after one
+// filter was applied, so a legitimately narrow result shows its funnel.
+message FilterStage {
+  string name = 1;
+  int64 remaining = 2;
+}
+
+// FilterAccounting is the ordered funnel of filter stages for the query.
+message FilterAccounting {
+  repeated FilterStage stages = 1;
 }
 
 message SearchConversationsResponse {
@@ -161,57 +194,10 @@ message SearchConversationsResponse {
   int64 returned_count = 3;
   int64 limit = 4;
   bool has_more = 5;
-  bool warming = 6;
-}
-
-// SearchStatus is the lifecycle state of an async search job.
-enum SearchStatus {
-  SEARCH_STATUS_UNSPECIFIED = 0;
-  SEARCH_STATUS_PENDING = 1;
-  SEARCH_STATUS_RUNNING = 2;
-  SEARCH_STATUS_COMPLETE = 3;
-  SEARCH_STATUS_FAILED = 4;
-  SEARCH_STATUS_CANCELED = 5;
-}
-
-// SearchProgress is the live advancement of a running search across its chunk
-// sweep and its rerank layers.
-message SearchProgress {
-  int64 chunks_done = 1;
-  int64 chunks_total = 2;
-  int64 layer_index = 3;
-  int64 layer_total = 4;
-  string layer_name = 5;
-}
-
-message GetSearchStatusRequest {
-  string result_id = 1;
-}
-
-message GetSearchStatusResponse {
-  bool found = 1;
-  string result_id = 2;
-  SearchStatus status = 3;
-  SearchProgress progress = 4;
-  string result_text = 5;
-  string error = 6;
-}
-
-message CancelSearchRequest {
-  string result_id = 1;
-}
-
-message CancelSearchResponse {
-  SearchStatus status = 1;
-}
-
-message AnalyzeSearchResultsRequest {
-  string result_id = 1;
-  string prompt = 2;
-}
-
-message AnalyzeSearchResultsResponse {
-  string text = 1;
+  SearchSource source = 6;
+  SearchFacets facets = 7;
+  SearchFreshness freshness = 8;
+  FilterAccounting filter_accounting = 9;
 }
 
 message ExportTranscriptRequest {

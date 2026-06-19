@@ -16,11 +16,9 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
-	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
-	searchstore "goodkind.io/clyde/internal/search/store"
 )
 
 type runtimeServices struct {
@@ -38,13 +36,7 @@ type runtimeServices struct {
 	mitmProxies   map[string]*mitm.Proxy
 	mitmListeners map[string][]net.Listener
 	captureStore  *capture.Store
-	// searchStore is the SQLite store for async conversation search jobs, and
-	// searchJobs is the manager that runs them. The store is closed and the
-	// manager drained on reload and shutdown so in-flight jobs stop and the WAL
-	// flushes before a new generation reopens the same db.
-	searchStore *searchstore.Store
-	searchJobs  *conversation.SearchJobManager
-	semantic    *conversationSemanticRuntime
+	semantic      *conversationSemanticRuntime
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -81,11 +73,6 @@ func startRuntime(
 	if err != nil {
 		return nil, err
 	}
-	searchStore, err := openSearchStore(ctx, log)
-	if err != nil {
-		_ = listener.Close()
-		return nil, err
-	}
 	runtime := &runtimeServices{
 		listener:              listener,
 		adapter:               nil,
@@ -94,8 +81,6 @@ func startRuntime(
 		mitmProxies:           map[string]*mitm.Proxy{},
 		mitmListeners:         map[string][]net.Listener{},
 		captureStore:          nil,
-		searchStore:           searchStore,
-		searchJobs:            nil,
 		semantic:              nil,
 		pprofListener:         nil,
 		errors:                make(chan error, 3),
@@ -106,7 +91,6 @@ func startRuntime(
 		currentConfig:         atomic.Pointer[config.Config]{},
 	}
 	runtime.currentConfig.Store(cfg)
-	runtime.addSearchStoreCloseHook(searchStore)
 	if cfg.MITM.EnabledDefault {
 		if err := startMITM(ctx, cfg, log, runtime, inherited.listeners); err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
@@ -383,8 +367,8 @@ func (r *runtimeServices) cancelConfigWatcher() {
 // registries), then runs the group's ordered Quiesce at the shutdown budget.
 // Quiesce drains every attached registry and runs the registered hooks
 // (keepalives-off, HTTP server shutdowns, SQLite store closes), so the adapter,
-// MITM proxies, search jobs, and stores are torn down in phase order with the
-// stores closed last. Safe on a partially started runtime: only the registries
+// MITM proxies, and the capture store are torn down in phase order with the
+// store closed last. Safe on a partially started runtime: only the registries
 // and hooks that were attached run.
 func (r *runtimeServices) shutdown(parent context.Context) {
 	if r == nil {

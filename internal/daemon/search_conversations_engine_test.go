@@ -111,8 +111,8 @@ func TestSearchConversationsResultEngineHitsReturnWithoutFallback(t *testing.T) 
 	if idx.liveCalls != 0 {
 		t.Fatalf("live scan called %d times, want 0 on engine hit", idx.liveCalls)
 	}
-	if result.Warming {
-		t.Fatalf("warming = true, want false when the engine produced a match")
+	if result.Source != conversation.SearchSourceSemantic {
+		t.Fatalf("source = %v, want semantic when the engine produced a match", result.Source)
 	}
 	if len(result.Matches) != 1 {
 		t.Fatalf("matches = %d, want 1 (missing record and archived skipped)", len(result.Matches))
@@ -132,26 +132,31 @@ func TestSearchConversationsResultEngineHitsReturnWithoutFallback(t *testing.T) 
 	}
 }
 
-func TestSearchConversationsResultEngineErrorFallsBackWarming(t *testing.T) {
+func TestSearchConversationsResultEngineErrorFallsBackLiteral(t *testing.T) {
 	t.Parallel()
 	live := conversation.SearchConversationsResult{
 		Matches: []conversation.SearchMatch{
 			{
-				Record:       daemonTestRecord("claude:lit", false),
-				MessageIndex: 0,
-				Role:         "user",
-				Timestamp:    time.Unix(3, 0),
-				Snippet:      "literal match",
+				Record:        daemonTestRecord("claude:lit", false),
+				MessageIndex:  0,
+				Role:          "user",
+				Timestamp:     time.Unix(3, 0),
+				Snippet:       "literal match",
+				Score:         0,
+				ContextWindow: "",
 			},
 		},
 		ConversationsScanned: 1,
 		ReturnedCount:        1,
 		Limit:                10,
 		HasMore:              false,
-		Warming:              false,
+		Source:               conversation.SearchSourceLiteral,
+		Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
+		Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
+		FilterAccounting:     nil,
 	}
 	idx := &fakeSearchIndex{records: nil, live: live, liveErr: nil, liveCalls: 0}
-	semantic := &fakeSemanticSearch{hits: nil, err: errors.New("engine down")}
+	semantic := &fakeSemanticSearch{hits: nil, err: errors.New("engine down"), filters: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
 	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", req)
@@ -161,34 +166,39 @@ func TestSearchConversationsResultEngineErrorFallsBackWarming(t *testing.T) {
 	if idx.liveCalls != 1 {
 		t.Fatalf("live scan called %d times, want 1 on engine error", idx.liveCalls)
 	}
-	if !result.Warming {
-		t.Fatalf("warming = false, want true on engine-error fallback")
+	if result.Source != conversation.SearchSourceLiteral {
+		t.Fatalf("source = %v, want literal on engine-error fallback", result.Source)
 	}
 	if result.ReturnedCount != 1 || result.Matches[0].Record.ID != "claude:lit" {
 		t.Fatalf("fallback result = %+v, want the live literal match", result)
 	}
 }
 
-func TestSearchConversationsResultEngineEmptyFallsBackWarming(t *testing.T) {
+func TestSearchConversationsResultEngineEmptyFallsBackLiteral(t *testing.T) {
 	t.Parallel()
 	live := conversation.SearchConversationsResult{
 		Matches: []conversation.SearchMatch{
 			{
-				Record:       daemonTestRecord("claude:lit", false),
-				MessageIndex: 0,
-				Role:         "user",
-				Timestamp:    time.Unix(3, 0),
-				Snippet:      "literal match",
+				Record:        daemonTestRecord("claude:lit", false),
+				MessageIndex:  0,
+				Role:          "user",
+				Timestamp:     time.Unix(3, 0),
+				Snippet:       "literal match",
+				Score:         0,
+				ContextWindow: "",
 			},
 		},
 		ConversationsScanned: 1,
 		ReturnedCount:        1,
 		Limit:                10,
 		HasMore:              false,
-		Warming:              false,
+		Source:               conversation.SearchSourceLiteral,
+		Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
+		Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
+		FilterAccounting:     nil,
 	}
 	idx := &fakeSearchIndex{records: nil, live: live, liveErr: nil, liveCalls: 0}
-	semantic := &fakeSemanticSearch{hits: nil, err: nil}
+	semantic := &fakeSemanticSearch{hits: nil, err: nil, filters: nil}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
 
 	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", req)
@@ -198,8 +208,8 @@ func TestSearchConversationsResultEngineEmptyFallsBackWarming(t *testing.T) {
 	if idx.liveCalls != 1 {
 		t.Fatalf("live scan called %d times, want 1 on empty engine result", idx.liveCalls)
 	}
-	if !result.Warming {
-		t.Fatalf("warming = false, want true on empty-engine fallback")
+	if result.Source != conversation.SearchSourceLiteral {
+		t.Fatalf("source = %v, want literal on empty-engine fallback", result.Source)
 	}
 }
 
@@ -272,7 +282,10 @@ func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 		ReturnedCount:        0,
 		Limit:                10,
 		HasMore:              false,
-		Warming:              false,
+		Source:               conversation.SearchSourceLiteral,
+		Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
+		Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
+		FilterAccounting:     nil,
 	}
 	idx := &fakeSearchIndex{records: nil, live: live, liveErr: nil, liveCalls: 0}
 	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
@@ -284,7 +297,7 @@ func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 	if idx.liveCalls != 1 {
 		t.Fatalf("live scan called %d times, want 1 when no engine is configured", idx.liveCalls)
 	}
-	if result.Warming {
-		t.Fatalf("warming = true, want false when no engine is configured")
+	if result.Source != conversation.SearchSourceLiteral {
+		t.Fatalf("source = %v, want literal when no engine is configured", result.Source)
 	}
 }

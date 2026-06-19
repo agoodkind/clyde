@@ -6,12 +6,67 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/transcript"
 )
+
+// conversationSemanticFreshness is the mutex-guarded latest sync snapshot the
+// sync worker publishes after each pass and the control server reads at query
+// time. The zero value reports an empty snapshot until the first pass lands.
+type conversationSemanticFreshness struct {
+	mu        sync.Mutex
+	freshness conversation.SearchFreshness
+}
+
+// newConversationSemanticFreshness constructs an empty freshness holder.
+func newConversationSemanticFreshness() *conversationSemanticFreshness {
+	return &conversationSemanticFreshness{
+		mu: sync.Mutex{},
+		freshness: conversation.SearchFreshness{
+			Manifest:     0,
+			Needed:       0,
+			Embedded:     0,
+			Pending:      0,
+			LastSyncUnix: 0,
+		},
+	}
+}
+
+// snapshot returns the latest published freshness. Safe for concurrent reads
+// from the control server while the worker publishes.
+func (f *conversationSemanticFreshness) snapshot() conversation.SearchFreshness {
+	if f == nil {
+		return conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.freshness
+}
+
+// publish records one pass's stats as the latest freshness. embedded is the
+// documents the engine accepted this pass, pending is the conversations the
+// engine still needs that this pass did not cover, and last_sync is the pass
+// completion time on the repo clock.
+func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncStats) {
+	if f == nil {
+		return
+	}
+	pending := max(stats.needed-stats.sentConversations, 0)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.freshness = conversation.SearchFreshness{
+		Manifest:     stats.manifest,
+		Needed:       stats.needed,
+		Embedded:     stats.documents,
+		Pending:      pending,
+		LastSyncUnix: clock.Now().Unix(),
+	}
+}
 
 const (
 	conversationSemanticSyncInterval = time.Minute
@@ -67,6 +122,9 @@ type conversationSemanticSyncWorker struct {
 	deliveryCursor string
 	// now returns the wall clock; tests override it to pin deferral decisions.
 	now func() time.Time
+	// freshness receives the latest pass stats so the control server can report
+	// index sync state at query time. Nil disables publishing.
+	freshness *conversationSemanticFreshness
 }
 
 type conversationSemanticSyncStats struct {
@@ -84,11 +142,13 @@ func startConversationSemanticSync(
 	index *conversation.Index,
 	client conversationSemanticClient,
 	collectionID string,
+	freshness *conversationSemanticFreshness,
 ) func() {
 	if client == nil {
 		return func() {}
 	}
 	worker := newConversationSemanticSyncWorker(index, client, collectionID, log)
+	worker.freshness = freshness
 	workerCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -129,6 +189,7 @@ func newConversationSemanticSyncWorker(
 		activeJobID:      "",
 		deliveryCursor:   "",
 		now:              time.Now,
+		freshness:        nil,
 	}
 }
 
@@ -427,6 +488,7 @@ func isConflictingActiveJob(err error) bool {
 }
 
 func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conversationSemanticSyncStats) {
+	w.freshness.publish(stats)
 	if stats.sentConversations > 0 || stats.failed > 0 {
 		w.log.InfoContext(ctx, "daemon.conversation_semantic_sync.pass_completed",
 			"concern", "conversation.semantic",

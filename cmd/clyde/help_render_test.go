@@ -97,13 +97,13 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 		},
 		{
 			name:     "unsupported provider value",
-			args:     []string{"conversation", "list", "--provider", "bogus"},
-			wantHelp: "List one filtered page of indexed Claude and Codex conversation metadata",
+			args:     []string{"conversation", "search", "--provider", "bogus"},
+			wantHelp: "One operation over indexed Claude and Codex conversations",
 		},
 		{
 			name:     "unparseable search time bound",
-			args:     []string{"conversation", "search", "within", "claude:abc", "auth", "--after", "nope"},
-			wantHelp: "Start a semantic search over one conversation",
+			args:     []string{"conversation", "search", "--query", "auth", "--after", "nope"},
+			wantHelp: "One operation over indexed Claude and Codex conversations",
 		},
 	}
 	for _, tc := range cases {
