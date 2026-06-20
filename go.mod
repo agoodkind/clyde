@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.18.5
-	github.com/mark3labs/mcp-go v0.54.1
+	github.com/mark3labs/mcp-go v0.55.0
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.40.0
@@ -19,7 +19,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/sys v0.46.0
 	goodkind.io/gklog v0.4.4
-	goodkind.io/lm-semantic-search v0.0.0-20260610023959-63a594ba1008
+	goodkind.io/lm-semantic-search v0.0.0-20260619045315-656ef0814f16
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
