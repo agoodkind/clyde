@@ -18,7 +18,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/sys v0.46.0
 	goodkind.io/gklog v0.4.4
-	goodkind.io/lm-semantic-search v0.0.0-20260619211138-7ab0681f4bb9
+	goodkind.io/lm-semantic-search v0.0.0-20260620163844-ee87e504c0d1
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
