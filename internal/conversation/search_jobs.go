@@ -364,6 +364,8 @@ func (m *SearchJobManager) engineWithinHits(ctx context.Context, record Record, 
 		return nil, ""
 	}
 	filter := semsearch.SearchFilter{
+		Providers:            nil,
+		WorkspaceRoots:       nil,
 		Roles:                opts.Roles,
 		FromUnix:             opts.FromUnix,
 		UntilUnix:            opts.UntilUnix,

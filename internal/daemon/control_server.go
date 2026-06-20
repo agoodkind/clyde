@@ -70,13 +70,6 @@ type searchConversationsIndex interface {
 	SearchConversations(context.Context, conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error)
 }
 
-// maxConversationIDScope caps how many conversation ids are pushed into the
-// engine as retrieval scope. Each id becomes one path-prefix clause in the
-// vector store's filter expression, so an unbounded set would build an
-// enormous expression; past the cap the engine searches unscoped and the
-// record filter applies to the hits instead.
-const maxConversationIDScope = 64
-
 func (s *controlServer) ReloadDaemon(ctx context.Context, _ *clydev1.ReloadDaemonRequest) (*clydev1.ReloadDaemonResponse, error) {
 	if s.reload == nil {
 		return nil, status.Error(codes.FailedPrecondition, "daemon reload is not available")
@@ -256,11 +249,28 @@ func engineSearchMatches(
 	provider := providerFromProto(req.GetProvider())
 	workspace := req.GetWorkspace()
 	includeArchived := req.GetIncludeArchived()
+
+	var providers []string
+	if provider.Valid() {
+		providers = []string{provider.String()}
+	}
+	var conversationIDs []string
+	if workspace != "" {
+		conversationIDs = workspaceConversationIDs(ctx, idx, workspace)
+		if len(conversationIDs) == 0 {
+			// The workspace matched no conversations, so the result is empty. An
+			// empty id set would otherwise read as "no scope" and match the whole
+			// corpus, so short-circuit instead of calling the engine.
+			return []conversation.SearchMatch{}
+		}
+	}
 	filter := semsearch.SearchFilter{
+		Providers:            providers,
+		WorkspaceRoots:       nil,
 		Roles:                req.GetRoles(),
 		FromUnix:             req.GetFromUnix(),
 		UntilUnix:            req.GetUntilUnix(),
-		ConversationIDs:      scopeConversationIDs(ctx, idx, provider, workspace, includeArchived),
+		ConversationIDs:      conversationIDs,
 		ParentConversationID: "",
 		MinScore:             req.GetMinScore(),
 		MessageIndexFrom:     0,
@@ -279,7 +289,11 @@ func engineSearchMatches(
 		if !ok {
 			continue
 		}
-		if !conversation.RecordMatchesFilter(record, provider, workspace, includeArchived) {
+		// provider and workspace are filtered natively by the engine; archived is
+		// a clyde record flag not stored on the engine rows, so it stays a
+		// clyde-side check. Archived conversations are rare, so dropping one from
+		// the top-K has negligible effect on recall.
+		if record.Archived && !includeArchived {
 			continue
 		}
 		matches = append(matches, conversation.SearchMatch{
@@ -297,22 +311,18 @@ func engineSearchMatches(
 	return matches
 }
 
-// scopeConversationIDs resolves the request's record-level filters into the
-// conversation-id set that scopes engine retrieval. It returns nil (no scope,
-// post-filtering still applies) when no record filter is set, when resolution
-// fails, or when the set is too large to push down as a filter expression.
-func scopeConversationIDs(ctx context.Context, idx searchConversationsIndex, provider conversation.Provider, workspace string, includeArchived bool) []string {
-	if !provider.Valid() && workspace == "" {
-		return nil
-	}
-	conversationIDs, err := idx.ConversationIDsMatching(ctx, provider, workspace, includeArchived)
+// workspaceConversationIDs resolves a workspace filter to the conversation-id
+// set under it (prefix match, so a project root includes its subdirectories),
+// regardless of provider or archived state, which are handled separately. The
+// engine filters natively on the conversation_id column and batches a large
+// set. Returns nil on resolution failure.
+func workspaceConversationIDs(ctx context.Context, idx searchConversationsIndex, workspace string) []string {
+	var anyProvider conversation.Provider
+	conversationIDs, err := idx.ConversationIDsMatching(ctx, anyProvider, workspace, true)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.scope_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
-		return nil
-	}
-	if len(conversationIDs) == 0 || len(conversationIDs) > maxConversationIDScope {
 		return nil
 	}
 	return conversationIDs

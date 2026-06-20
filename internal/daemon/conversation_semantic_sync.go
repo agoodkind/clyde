@@ -349,7 +349,7 @@ func (w *conversationSemanticSyncWorker) isActivelyGrowing(stamp conversation.Fi
 func docsByteSize(docs []semsearch.SemDoc) int {
 	total := 0
 	for _, doc := range docs {
-		total += len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + conversationSemanticDocOverheadBytes
+		total += len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + conversationSemanticDocOverheadBytes
 	}
 	return total
 }
@@ -484,6 +484,7 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 			Role:                 message.Role,
 			TimestampUnix:        message.Timestamp.Unix(),
 			Text:                 message.Text,
+			WorkspaceRoot:        record.WorkspaceRoot,
 		})
 	}
 	return docs, nil
