@@ -276,26 +276,72 @@ func appendTailItems(items []ReorientItem, current Record, checkpoint *Compactio
 	return appendChunkedItems(items, ReorientItemKindTail, "In-flight work since last compaction", current.ID, tailStart, body)
 }
 
+// appendParentAnchorItem renders the window in the parent where this
+// conversation forked. Claude forks record the exact parent message uuid, so the
+// anchor is exact. Codex forks record only the parent thread id and copy the
+// parent's whole committed history, so no exact fork point is recoverable from
+// the rollout (confirmed against codex-rs: SessionMeta carries only
+// forked_from_id, the fork length is a runtime parameter that is never
+// persisted, and the copied prefix is unmarked). For Codex, anchor at the
+// parent's tail, which is the parent's state at fork time for a whole-thread
+// fork, and label it so the reader knows it is approximate.
 func (idx *Index) appendParentAnchorItem(items []ReorientItem, current Record, parent Record, hasParent bool, options ReorientOptions, report *ReorientReport) []ReorientItem {
-	if !hasParent || current.Lineage == nil || current.Lineage.ParentMessageUUID == "" {
+	if !hasParent || current.Lineage == nil {
 		return items
 	}
-	body, index, ok, err := idx.parentAnchorWindow(parent, current.Lineage.ParentMessageUUID, options.Before, options.After)
+	if current.Lineage.ParentMessageUUID != "" {
+		body, index, ok, err := idx.parentAnchorWindow(parent, current.Lineage.ParentMessageUUID, options.Before, options.After)
+		if err != nil {
+			report.Warnings = append(report.Warnings, fmt.Sprintf("parent anchor window: %v", err))
+			return items
+		}
+		if ok {
+			return append(items, ReorientItem{
+				Kind:           ReorientItemKindParentAnchor,
+				Title:          "Parent fork anchor",
+				Body:           body,
+				ConversationID: parent.ID,
+				MessageIndex:   index,
+			})
+		}
+		report.Warnings = append(report.Warnings, "parent anchor message not found in parent transcript; using parent tail")
+	}
+	body, index, ok, err := idx.parentTailWindow(parent, options.Before+options.After+1)
 	if err != nil {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("parent anchor window: %v", err))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("parent tail window: %v", err))
 		return items
 	}
 	if !ok {
-		report.Warnings = append(report.Warnings, "parent anchor message not found in parent transcript")
 		return items
 	}
 	return append(items, ReorientItem{
 		Kind:           ReorientItemKindParentAnchor,
-		Title:          "Parent fork anchor",
+		Title:          "Parent fork anchor (tail; provider records no exact fork point)",
 		Body:           body,
 		ConversationID: parent.ID,
 		MessageIndex:   index,
 	})
+}
+
+// parentTailWindow renders the last count messages of the parent transcript, the
+// best available anchor when the provider records no exact fork point.
+func (idx *Index) parentTailWindow(parent Record, count int) (string, int, bool, error) {
+	messages, err := idx.LoadMessagesWithOptions(parent, LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: true,
+		IncludeToolOutputs:    false,
+	})
+	if err != nil {
+		return "", 0, false, err
+	}
+	if len(messages) == 0 {
+		return "", 0, false, nil
+	}
+	if count < 1 {
+		count = 1
+	}
+	last := len(messages) - 1
+	return renderContextWindow(messages, len(messages), last, count-1, 0), last, true, nil
 }
 
 func (idx *Index) parentAnchorWindow(parent Record, parentMessageUUID string, before int, after int) (string, int, bool, error) {
