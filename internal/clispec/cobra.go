@@ -60,6 +60,12 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 		sink := NewCLISink(cmd.Context(), f.IOStreams.Out)
 		return op.Run(cmd.Context(), prepared, SurfaceCLI, sink)
 	}
+	for _, child := range op.Children {
+		if !child.surfaceSet().CLI {
+			continue
+		}
+		cmd.AddCommand(child.cobraCommand(f))
+	}
 	return cmd
 }
 

@@ -131,6 +131,22 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 		t.Fatalf("conversation children: got %v, want %v", gotChildren, wantConversationChildren)
 	}
 
+	exportParent, _, err := conversationParent.Find([]string{"export"})
+	if err != nil {
+		t.Fatalf("find conversation export: %v", err)
+	}
+	if exportParent == nil {
+		t.Fatal("export command missing")
+	}
+	gotChildren = nil
+	for _, child := range exportParent.Commands() {
+		gotChildren = append(gotChildren, child.Name())
+	}
+	sort.Strings(gotChildren)
+	if strings.Join(gotChildren, ",") != "tail" {
+		t.Fatalf("export children: got %v, want [tail]", gotChildren)
+	}
+
 	searchLeaf, _, err := conversationParent.Find([]string{"search"})
 	if err != nil {
 		t.Fatalf("find conversation search: %v", err)
@@ -156,6 +172,7 @@ func TestRenderMCPSkipsCLIOnlyOperation(t *testing.T) {
 		Args:     nil,
 		Params:   nil,
 		New:      func() probeInput { return probeInput{ID: "", Count: 0, On: false, Mode: "", Surface: SurfaceCLI} },
+		Children: nil,
 		Prepare:  func(in probeInput) (probeInput, error) { return in, nil },
 		Run: func(_ context.Context, _ probeInput, _ Surface, sink ResultSink) error {
 			return sink.Text("x")

@@ -128,6 +128,10 @@ type Operation[I Input, P Prepared] struct {
 	Args     []Arg[I]
 	Params   []Param[I]
 	New      func() I
+	// Children are terminal subcommands mounted under this operation's terminal
+	// command. They are still ordinary operations, so each child owns its input,
+	// preparation, help, and work function in the registry model.
+	Children []renderable
 	// Prepare turns the decoded raw input into the prepared payload, returning an
 	// error for any input it rejects. It must be pure: no side effects, no I/O.
 	// It is the only function that sees raw input, so it is the only place input
@@ -157,12 +161,14 @@ type Operation[I Input, P Prepared] struct {
 type renderable interface {
 	surfaceSet() SurfaceSet
 	group() *Group
+	children() []renderable
 	cobraCommand(f *cli.Factory) *cobra.Command
 	mcpTool() (mcp.Tool, server.ToolHandlerFunc)
 }
 
 func (op Operation[I, P]) surfaceSet() SurfaceSet { return op.Surfaces }
 func (op Operation[I, P]) group() *Group          { return op.Group }
+func (op Operation[I, P]) children() []renderable { return op.Children }
 
 // Registry is the one ordered list of every command. It holds two entry
 // kinds: full operations that render to both front ends, and pointers to

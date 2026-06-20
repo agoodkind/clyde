@@ -370,3 +370,53 @@ func TestExportPrepareCompactionControls(t *testing.T) {
 		t.Fatal("full_history with explicit segment should be rejected")
 	}
 }
+
+func TestExportTailPrepareUsesDenseMarkdownChatAndTools(t *testing.T) {
+	t.Parallel()
+	op := exportTailOp()
+	in := op.New()
+	in.ConversationID = "claude:probe"
+	in.LastN = 12
+
+	payload, err := op.Prepare(in)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if payload.ConversationID != "claude:probe" {
+		t.Fatalf("ConversationID = %q, want claude:probe", payload.ConversationID)
+	}
+	if payload.Options.Format != conv.ExportFormatMarkdown {
+		t.Fatalf("format = %q, want markdown", payload.Options.Format)
+	}
+	if payload.Options.Whitespace != conv.WhitespaceDense {
+		t.Fatalf("whitespace = %q, want dense", payload.Options.Whitespace)
+	}
+	if payload.Options.LastN != 12 {
+		t.Fatalf("last_n = %d, want 12", payload.Options.LastN)
+	}
+	if payload.Options.Compaction.IncludeSelector != "" {
+		t.Fatalf("selector = %q, want empty default", payload.Options.Compaction.IncludeSelector)
+	}
+	if !payload.Options.Content.Has(conv.ContentKindChat) {
+		t.Fatal("tail content missing chat")
+	}
+	if !payload.Options.Content.Has(conv.ContentKindToolSummaries) {
+		t.Fatal("tail content missing tool summaries")
+	}
+	if payload.Options.Content.Has(conv.ContentKindToolOutputs) {
+		t.Fatal("tail content should not include tool outputs")
+	}
+}
+
+func TestExportTailRequiresLastN(t *testing.T) {
+	t.Parallel()
+	op := exportTailOp()
+	in := op.New()
+	in.ConversationID = "claude:probe"
+
+	_, err := op.Prepare(in)
+
+	if err == nil {
+		t.Fatal("expected missing last_n error")
+	}
+}
