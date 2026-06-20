@@ -70,24 +70,7 @@ func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncSt
 
 const (
 	conversationSemanticSyncInterval = time.Minute
-	// conversationSemanticMaxBytesPerBatch bounds one upsert by payload bytes
-	// instead of document count, because document counts say nothing about
-	// message size and one long transcript used to overflow the gRPC message
-	// ceiling. 32 MiB stays well under the daemon socket's 128 MiB ceiling with
-	// room for the manifest and proto framing, both of which are now counted
-	// against the budget (the manifest ships with every upsert). A single
-	// conversation larger than the budget still ships alone, because the engine
-	// replaces a conversation atomically and a partial delivery would store a
-	// truncated transcript.
-	conversationSemanticMaxBytesPerBatch = 32 << 20
-	// conversationSemanticDocOverheadBytes approximates one document's
-	// non-text wire bytes (ids, role, timestamp, framing) when sizing a batch.
-	conversationSemanticDocOverheadBytes = 256
-	// conversationSemanticFingerprintOverheadBytes approximates one manifest
-	// fingerprint's non-id wire bytes (the hash value and proto framing) when
-	// sizing the manifest that ships with every upsert.
-	conversationSemanticFingerprintOverheadBytes = 96
-	maxSemanticMessageIndex                      = int32(1<<31 - 1)
+	maxSemanticMessageIndex          = int32(1<<31 - 1)
 )
 
 type conversationSemanticIndex interface {
@@ -113,12 +96,11 @@ type conversationSemanticClient interface {
 // runs, and the delivery cursor, which rotates batch order so late-sorting
 // conversations are not starved.
 type conversationSemanticSyncWorker struct {
-	index            conversationSemanticIndex
-	client           conversationSemanticClient
-	collectionID     string
-	log              *slog.Logger
-	interval         time.Duration
-	maxBytesPerBatch int
+	index        conversationSemanticIndex
+	client       conversationSemanticClient
+	collectionID string
+	log          *slog.Logger
+	interval     time.Duration
 	// activeJobID is the engine job started by the last accepted upsert. The
 	// worker runs in a single goroutine, so the field needs no lock.
 	activeJobID string
@@ -185,16 +167,15 @@ func newConversationSemanticSyncWorker(
 		log = slog.Default()
 	}
 	return &conversationSemanticSyncWorker{
-		index:            index,
-		client:           client,
-		collectionID:     strings.TrimSpace(collectionID),
-		log:              log,
-		interval:         conversationSemanticSyncInterval,
-		maxBytesPerBatch: conversationSemanticMaxBytesPerBatch,
-		activeJobID:      "",
-		deliveryCursor:   "",
-		now:              time.Now,
-		freshness:        nil,
+		index:          index,
+		client:         client,
+		collectionID:   strings.TrimSpace(collectionID),
+		log:            log,
+		interval:       conversationSemanticSyncInterval,
+		activeJobID:    "",
+		deliveryCursor: "",
+		now:            time.Now,
+		freshness:      nil,
 	}
 }
 
@@ -264,7 +245,7 @@ func (w *conversationSemanticSyncWorker) runPass(ctx context.Context) error {
 		return nil
 	}
 
-	docs, sentConversations := w.collectNeededDocuments(ctx, needed, manifest, recordsByID, stampsByID, &stats)
+	docs, sentConversations := w.collectNeededDocuments(ctx, needed, recordsByID, stampsByID, &stats)
 	if len(docs) == 0 {
 		w.logPass(ctx, stats)
 		return nil
@@ -359,7 +340,6 @@ func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversa
 func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	ctx context.Context,
 	needed []string,
-	manifest []semsearch.Fingerprint,
 	recordsByID map[string]conversation.Record,
 	stampsByID map[string]conversation.FileStamp,
 	stats *conversationSemanticSyncStats,
@@ -370,10 +350,10 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 	ordered = rotateAfter(ordered, w.deliveryCursor)
 
 	docs := make([]semsearch.SemDoc, 0)
-	// Seed the running total with the manifest, which the engine requires on
-	// every upsert, so the document budget accounts for the bytes that ship
-	// alongside the documents rather than overflowing the gRPC ceiling.
-	batchBytes := manifestByteSize(manifest)
+	// Streaming carries the whole needed set in one client-streamed upsert, so a
+	// pass collects every needed conversation rather than splitting by a byte
+	// budget. The stream client frames the documents and the manifest into
+	// bounded chunks on the wire.
 	sentConversations := 0
 	for _, conversationID := range ordered {
 		if semanticSyncContextDone(ctx) {
@@ -395,12 +375,7 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 			stats.failed++
 			continue
 		}
-		conversationBytes := docsByteSize(conversationDocs)
-		if len(docs) > 0 && batchBytes+conversationBytes > w.maxBytesPerBatch {
-			break
-		}
 		docs = append(docs, conversationDocs...)
-		batchBytes += conversationBytes
 		sentConversations++
 		w.deliveryCursor = conversationID
 	}
@@ -412,28 +387,6 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 // right now. It settles after one quiet interval and is delivered then.
 func (w *conversationSemanticSyncWorker) isActivelyGrowing(stamp conversation.FileStamp) bool {
 	return w.now().Sub(stamp.Mtime) < w.interval
-}
-
-// docsByteSize approximates one conversation's upsert payload size: the text
-// bytes plus a fixed per-document overhead for ids, role, and framing.
-func docsByteSize(docs []semsearch.SemDoc) int {
-	total := 0
-	for _, doc := range docs {
-		total += len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + conversationSemanticDocOverheadBytes
-	}
-	return total
-}
-
-// manifestByteSize approximates the full manifest's wire size: each
-// fingerprint's id and hash value plus a fixed per-fingerprint framing
-// overhead. The manifest ships with every upsert, so the batch budget counts it
-// alongside the documents to stay under the gRPC message ceiling.
-func manifestByteSize(manifest []semsearch.Fingerprint) int {
-	total := 0
-	for _, fingerprint := range manifest {
-		total += len(fingerprint.ConversationID) + len(fingerprint.Value) + conversationSemanticFingerprintOverheadBytes
-	}
-	return total
 }
 
 // rotateAfter returns ids rotated so iteration starts at the first id greater
