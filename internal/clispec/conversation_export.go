@@ -261,7 +261,7 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 					Whitespace:   conv.WhitespaceDense,
 					Content:      conv.NewContentKindSet(conv.ContentKindChat, conv.ContentKindToolSummaries),
 					Compaction: conv.CompactionExportOptions{
-						IncludeSelector: "",
+						IncludeSelector: "0",
 						FullHistory:     false,
 					},
 				},

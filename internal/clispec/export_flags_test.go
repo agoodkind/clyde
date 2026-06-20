@@ -394,8 +394,8 @@ func TestExportTailPrepareUsesDenseMarkdownChatAndTools(t *testing.T) {
 	if payload.Options.LastN != 12 {
 		t.Fatalf("last_n = %d, want 12", payload.Options.LastN)
 	}
-	if payload.Options.Compaction.IncludeSelector != "" {
-		t.Fatalf("selector = %q, want empty default", payload.Options.Compaction.IncludeSelector)
+	if payload.Options.Compaction.IncludeSelector != "0" {
+		t.Fatalf("selector = %q, want 0", payload.Options.Compaction.IncludeSelector)
 	}
 	if !payload.Options.Content.Has(conv.ContentKindChat) {
 		t.Fatal("tail content missing chat")
