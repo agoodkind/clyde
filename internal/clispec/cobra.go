@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/cli/output"
 )
 
 // cobraCommand renders the operation as a terminal command. Flags come from
@@ -57,6 +58,17 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 		return nil
 	}
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if op.runResult != nil {
+			format, err := outputFormatForCommand(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := op.runResult(withSurface(cmd.Context(), SurfaceCLI), prepared)
+			if err != nil {
+				return err
+			}
+			return renderCLIResult(cmd.Context(), f.IOStreams.Out, format, op.outputKind, result)
+		}
 		sink := NewCLISink(cmd.Context(), f.IOStreams.Out)
 		return op.Run(cmd.Context(), prepared, SurfaceCLI, sink)
 	}
@@ -67,6 +79,21 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 		cmd.AddCommand(child.cobraCommand(f))
 	}
 	return cmd
+}
+
+func outputFormatForCommand(cmd *cobra.Command) (output.Format, error) {
+	flag := cmd.Flags().Lookup(output.FlagName)
+	if flag == nil {
+		flag = cmd.InheritedFlags().Lookup(output.FlagName)
+	}
+	if flag == nil {
+		return output.FormatText, nil
+	}
+	format, err := output.ParseFormat(flag.Value.String())
+	if err != nil {
+		return "", logFail(cmd.Context(), SurfaceCLI, "parse_output_format_failed", output.FlagName, err)
+	}
+	return format, nil
 }
 
 // longHelp builds the full description shown by `--help`. It starts from the

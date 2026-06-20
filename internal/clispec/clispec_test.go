@@ -3,13 +3,16 @@ package clispec
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/spf13/cobra"
 
 	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -82,17 +85,26 @@ type probeInput struct {
 	Surface Surface
 }
 
-func (probeInput) isClispecInput()    {}
-func (probeInput) isClispecPrepared() {}
+type probePayload struct {
+	ID    string `json:"id"`
+	Count int    `json:"count"`
+	On    bool   `json:"on"`
+	Mode  string `json:"mode"`
+}
+
+func (probeInput) isClispecInput()               {}
+func (probeInput) isClispecPrepared()            {}
+func (probePayload) isClispecStructuredPayload() {}
 
 // probeOp uses P = probeInput with an identity Prepare: the test exercises the
 // binding and rendering machinery, not input validation, so the prepared payload
 // is the bound input unchanged.
 func probeOp() Operation[probeInput, probeInput] {
 	return Operation[probeInput, probeInput]{
-		Name:     Name{Canonical: "probe_op"},
-		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "probe",
+		Name:       Name{Canonical: "probe_op"},
+		Surfaces:   SurfaceSet{CLI: true, MCP: true},
+		outputKind: resultKindValue,
+		Short:      "probe",
 		Args: []Arg[probeInput]{
 			PositionalArg("the_id", "id", func(in *probeInput, v string) { in.ID = v }),
 		},
@@ -104,23 +116,20 @@ func probeOp() Operation[probeInput, probeInput] {
 		New:      func() probeInput { return probeInput{ID: "", Count: 7, On: false, Mode: "alpha", Surface: SurfaceCLI} },
 		Children: nil,
 		Prepare:  func(in probeInput) (probeInput, error) { return in, nil },
-		Run: func(_ context.Context, in probeInput, surface Surface, sink ResultSink) error {
-			in.Surface = surface
-			return sink.Text(formatProbe(in))
+		Run:      nil,
+		runResult: func(_ context.Context, in probeInput) (Result, error) {
+			payload := probePayload{ID: in.ID, Count: in.Count, On: in.On, Mode: in.Mode}
+			return valueResult{Payload: payload, Text: formatProbe(payload)}, nil
 		},
 	}
 }
 
-func formatProbe(in probeInput) string {
+func formatProbe(in probePayload) string {
 	onText := "off"
 	if in.On {
 		onText = "on"
 	}
-	surfaceText := "cli"
-	if in.Surface == SurfaceMCP {
-		surfaceText = "mcp"
-	}
-	return in.ID + ":" + itoa(in.Count) + ":" + onText + ":" + in.Mode + ":" + surfaceText
+	return in.ID + ":" + itoa(in.Count) + ":" + onText + ":" + in.Mode
 }
 
 func itoa(n int) string {
@@ -148,40 +157,113 @@ func testFactory(out *bytes.Buffer) *cli.Factory {
 	}
 }
 
+func rootWithChild(child *cobra.Command) *cobra.Command {
+	root := &cobra.Command{Use: "root"}
+	output.PersistentFlag(root)
+	root.AddCommand(child)
+	return root
+}
+
 func TestCobraRenderBindsAllKinds(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	cmd := probeOp().cobraCommand(testFactory(&out))
-	cmd.SetArgs([]string{"abc", "--count", "12", "--on", "--mode", "beta"})
-	if err := cmd.Execute(); err != nil {
+	root := rootWithChild(probeOp().cobraCommand(testFactory(&out)))
+	root.SetArgs([]string{"probe-op", "abc", "--count", "12", "--on", "--mode", "beta"})
+	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if got := out.String(); got != "abc:12:on:beta:cli" {
-		t.Errorf("cli output: got %q, want %q", got, "abc:12:on:beta:cli")
+	if got := out.String(); got != "abc:12:on:beta" {
+		t.Errorf("cli output: got %q, want %q", got, "abc:12:on:beta")
 	}
 }
 
 func TestCobraRenderUsesDefaults(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	cmd := probeOp().cobraCommand(testFactory(&out))
-	cmd.SetArgs([]string{"abc"})
-	if err := cmd.Execute(); err != nil {
+	root := rootWithChild(probeOp().cobraCommand(testFactory(&out)))
+	root.SetArgs([]string{"probe-op", "abc"})
+	if err := root.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if got := out.String(); got != "abc:7:off:alpha:cli" {
-		t.Errorf("cli output: got %q, want %q", got, "abc:7:off:alpha:cli")
+	if got := out.String(); got != "abc:7:off:alpha" {
+		t.Errorf("cli output: got %q, want %q", got, "abc:7:off:alpha")
+	}
+}
+
+func TestCobraRenderJSONUsesStructuredPayload(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	root := rootWithChild(probeOp().cobraCommand(testFactory(&out)))
+	root.SetArgs([]string{"--output-format", "json", "probe-op", "abc"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, out.String())
+	}
+	if _, ok := got["_meta"]; !ok {
+		t.Fatalf("json output missing _meta: %s", out.String())
+	}
+}
+
+type artifactProbePayload struct {
+	Text string `json:"text"`
+}
+
+func (artifactProbePayload) isClispecStructuredPayload() {}
+
+func artifactProbeOp() Operation[probeInput, probeInput] {
+	return Operation[probeInput, probeInput]{
+		Name:       Name{Canonical: "artifact_probe"},
+		Surfaces:   SurfaceSet{CLI: true, MCP: true},
+		outputKind: resultKindArtifact,
+		Short:      "artifact probe",
+		Args:       nil,
+		Params:     nil,
+		New:        func() probeInput { return probeInput{} },
+		Children:   nil,
+		Prepare:    func(in probeInput) (probeInput, error) { return in, nil },
+		Run:        nil,
+		runResult: func(_ context.Context, _ probeInput) (Result, error) {
+			return artifactResult{
+				Payload:     artifactProbePayload{Text: "json-text"},
+				Body:        []byte("body"),
+				DefaultPath: "",
+				Pipe:        false,
+				Copy:        false,
+				Text:        "human-text",
+				InlineText:  "inline-text",
+			}, nil
+		},
+	}
+}
+
+func TestCobraRenderJSONUsesStructuredPayloadForInlineArtifact(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	root := rootWithChild(artifactProbeOp().cobraCommand(testFactory(&out)))
+	root.SetArgs([]string{"--output-format", "json", "artifact-probe"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, out.String())
+	}
+	if _, ok := got["_meta"]; !ok {
+		t.Fatalf("json output missing _meta: %s", out.String())
 	}
 }
 
 func TestCobraRejectsUnknownEnum(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	cmd := probeOp().cobraCommand(testFactory(&out))
-	cmd.SetArgs([]string{"abc", "--mode", "gamma"})
-	cmd.SilenceErrors = true
-	cmd.SilenceUsage = true
-	if err := cmd.Execute(); err == nil {
+	root := rootWithChild(probeOp().cobraCommand(testFactory(&out)))
+	root.SetArgs([]string{"probe-op", "abc", "--mode", "gamma"})
+	root.SilenceErrors = true
+	root.SilenceUsage = true
+	if err := root.Execute(); err == nil {
 		t.Fatal("expected error for unknown enum value, got nil")
 	}
 }
@@ -201,8 +283,33 @@ func TestMCPHandlerBindsAndIsLenient(t *testing.T) {
 		t.Fatalf("handler: %v", err)
 	}
 	text := textOf(t, result)
-	if text != "xyz:3:on:alpha:mcp" {
-		t.Errorf("mcp output: got %q, want %q", text, "xyz:3:on:alpha:mcp")
+	if text != "xyz:3:on:alpha" {
+		t.Errorf("mcp output: got %q, want %q", text, "xyz:3:on:alpha")
+	}
+}
+
+func TestMCPHandlerStructuredContent(t *testing.T) {
+	t.Parallel()
+	_, handler := probeOp().mcpTool()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"the_id": "xyz"}
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if result.StructuredContent == nil {
+		t.Fatal("structured content missing")
+	}
+	raw, ok := result.StructuredContent.(json.RawMessage)
+	if !ok {
+		t.Fatalf("structured content type = %T, want json.RawMessage", result.StructuredContent)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal structured content: %v\n%s", err, string(raw))
+	}
+	if _, ok := got["_meta"]; !ok {
+		t.Fatalf("structured content missing _meta: %s", string(raw))
 	}
 }
 
@@ -221,7 +328,7 @@ func TestMCPHandlerPrependsCorrelationMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
-	want := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\nxyz:7:off:alpha:mcp"
+	want := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\nxyz:7:off:alpha"
 	if got := textOf(t, result); got != want {
 		t.Fatalf("mcp output: got %q, want %q", got, want)
 	}
@@ -238,6 +345,42 @@ func TestMCPHandlerRequiresPositional(t *testing.T) {
 	}
 	if got := textOf(t, result); got != "the_id is required" {
 		t.Errorf("missing positional: got %q, want %q", got, "the_id is required")
+	}
+}
+
+func taskOnlyProbeOp() Operation[probeInput, probeInput] {
+	return Operation[probeInput, probeInput]{
+		Name:           Name{Canonical: "task_only_probe"},
+		Surfaces:       SurfaceSet{CLI: false, MCP: true},
+		outputKind:     resultKindValue,
+		Short:          "task-only probe",
+		Args:           nil,
+		Params:         nil,
+		New:            func() probeInput { return probeInput{} },
+		Children:       nil,
+		Prepare:        func(in probeInput) (probeInput, error) { return in, nil },
+		Run:            nil,
+		runResult:      nil,
+		MCPTaskSupport: mcp.TaskSupportOptional,
+		MCPTaskRun:     nil,
+		mcpTaskResult: func(_ context.Context, _ probeInput) (Result, error) {
+			return valueResult{
+				Payload: probePayload{ID: "task", Count: 1, On: false, Mode: "alpha"},
+				Text:    "task-only",
+			}, nil
+		},
+	}
+}
+
+func TestMCPResultHandlerRejectsTaskOnlyOperationWithoutTask(t *testing.T) {
+	t.Parallel()
+	_, handler := taskOnlyProbeOp().mcpTool()
+	result, err := handler(context.Background(), mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if got := textOf(t, result); got != "task_only_probe requires task-augmented MCP calls" {
+		t.Fatalf("task-only error: got %q, want %q", got, "task_only_probe requires task-augmented MCP calls")
 	}
 }
 

@@ -3,7 +3,6 @@ package clispec
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	conv "goodkind.io/clyde/internal/conversation"
@@ -40,6 +39,20 @@ type reorientPayload struct {
 
 func (reorientPayload) isClispecPrepared() {}
 
+type reorientResultPayload struct {
+	ConversationID string `json:"conversation_id,omitempty"`
+	WorkspaceRoot  string `json:"workspace_root,omitempty"`
+	Topic          string `json:"topic,omitempty"`
+	Cursor         string `json:"cursor,omitempty"`
+	Window         int    `json:"window"`
+	Limit          int    `json:"limit"`
+	PageBytes      int    `json:"page_bytes,omitempty"`
+	JSON           bool   `json:"json"`
+	Text           string `json:"text"`
+}
+
+func (reorientResultPayload) isClispecStructuredPayload() {}
+
 // reorientOp is the conversation reorient operation. It renders to the terminal
 // command `clyde conversation reorient` and the MCP tool `clyde_reorient`. It
 // resolves the post-fork, post-compaction recovery context and returns one
@@ -47,11 +60,12 @@ func (reorientPayload) isClispecPrepared() {}
 // is zero.
 func reorientOp() Operation[reorientInput, reorientPayload] {
 	return Operation[reorientInput, reorientPayload]{
-		Name:     Name{Canonical: "reorient", CLIOverride: ""},
-		Group:    conversationGroup,
-		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "Rebuild post-compaction recovery context as paged evidence.",
-		Long:     "Resolve the recovery context for a conversation after a fork and a compaction, and return it as bounded, cursor-paged evidence. Reorient walks backward deterministically: it reads the latest compaction checkpoint, resolves the fork parent through conversation lineage, falls back to the same-conversation checkpoint when there was no fork, and enriches with project memory and a workspace-scoped search. Set conversation to a specific id, or set workspace to start from its newest conversation. Each page stays small enough to read inline; call again with the printed cursor until remaining is zero before reasoning.",
+		Name:       Name{Canonical: "reorient", CLIOverride: ""},
+		Group:      conversationGroup,
+		Surfaces:   SurfaceSet{CLI: true, MCP: true},
+		outputKind: resultKindArtifact,
+		Short:      "Rebuild post-compaction recovery context as paged evidence.",
+		Long:       "Resolve the recovery context for a conversation after a fork and a compaction, and return it as bounded, cursor-paged evidence. Reorient walks backward deterministically: it reads the latest compaction checkpoint, resolves the fork parent through conversation lineage, falls back to the same-conversation checkpoint when there was no fork, and enriches with project memory and a workspace-scoped search. Set conversation to a specific id, or set workspace to start from its newest conversation. Each page stays small enough to read inline; call again with the printed cursor until remaining is zero before reasoning.",
 		Examples: []string{
 			"clyde conversation reorient --conversation claude:1a2b3c",
 			"clyde conversation reorient --workspace ~/Sites/app --topic \"auth retry\"",
@@ -90,9 +104,47 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
 		Children:       nil,
 		Prepare:        prepareReorient,
-		Run:            runReorient,
+		Run:            nil,
+		runResult: func(ctx context.Context, p reorientPayload) (Result, error) {
+			text, _, _, err := daemon.ReorientConversation(ctx, p.ConversationID, p.WorkspaceRoot, p.Topic, p.Cursor, p.Window, p.Limit, p.PageBytes, p.JSON)
+			if err != nil {
+				return nil, logFail(ctx, surfaceFromContext(ctx), "reorient_failed", "reorient conversation", err)
+			}
+			payload := reorientResultPayload{
+				ConversationID: p.ConversationID,
+				WorkspaceRoot:  p.WorkspaceRoot,
+				Topic:          p.Topic,
+				Cursor:         p.Cursor,
+				Window:         p.Window,
+				Limit:          p.Limit,
+				PageBytes:      p.PageBytes,
+				JSON:           p.JSON,
+				Text:           text,
+			}
+			if p.JSON {
+				return artifactResult{
+					Payload:     payload,
+					Body:        []byte(text + "\n"),
+					DefaultPath: "",
+					Pipe:        true,
+					Copy:        false,
+					Text:        "",
+					InlineText:  text,
+				}, nil
+			}
+			return artifactResult{
+				Payload:     payload,
+				Body:        nil,
+				DefaultPath: "",
+				Pipe:        false,
+				Copy:        false,
+				Text:        text,
+				InlineText:  text,
+			}, nil
+		},
 	}
 }
 
@@ -114,29 +166,4 @@ func prepareReorient(in reorientInput) (reorientPayload, error) {
 		PageBytes:      in.PageBytes,
 		JSON:           in.JSON,
 	}, nil
-}
-
-// runReorient dispatches the prepared payload to the daemon and writes the
-// rendered page through the single sink call. The page text already carries the
-// continuation cursor and remaining count, so Run discards the typed values. The
-// JSON page goes through RawBytes so stdout stays a clean document for jq, while
-// the human page goes through Text so it carries the correlation header like
-// every other text response.
-func runReorient(ctx context.Context, p reorientPayload, surface Surface, sink ResultSink) error {
-	text, _, _, err := daemon.ReorientConversation(ctx, p.ConversationID, p.WorkspaceRoot, p.Topic, p.Cursor, p.Window, p.Limit, p.PageBytes, p.JSON)
-	if err != nil {
-		return logFail(ctx, surface, "reorient_failed", "reorient conversation", err)
-	}
-	if p.JSON {
-		if err := sink.RawBytes([]byte(text + "\n")); err != nil {
-			slog.WarnContext(ctx, "cli.conversation.reorient_write_failed", "concern", "cli.conversation", "component", "cli", "err", err)
-			return fmt.Errorf("write reorient result: %w", err)
-		}
-		return nil
-	}
-	if err := sink.Text(text); err != nil {
-		slog.WarnContext(ctx, "cli.conversation.reorient_write_failed", "concern", "cli.conversation", "component", "cli", "err", err)
-		return fmt.Errorf("write reorient result: %w", err)
-	}
-	return nil
 }

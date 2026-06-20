@@ -2,6 +2,7 @@ package clispec
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -82,25 +83,68 @@ func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 			wrapped := logFail(ctx, SurfaceMCP, "invalid_input", op.Name.Canonical, prepErr)
 			return newMCPTextResult(ctx, wrapped.Error()), nil
 		}
-		sink := &MCPSink{buf: strings.Builder{}}
 		// A task-augmented call (the client supplied task params) runs the
 		// run-to-completion work function so the result reaches the client
 		// through tasks/result. mcp-go runs this handler in its own task
 		// goroutine, so the caller is not blocked. A plain call runs Run, which
 		// for an async operation returns immediately.
-		var runErr error
-		if op.MCPTaskRun != nil && req.Params.Task != nil {
-			runErr = op.MCPTaskRun(ctx, prepared, sink)
-		} else {
-			runErr = op.Run(ctx, prepared, SurfaceMCP, sink)
+		if op.runResult != nil || op.mcpTaskResult != nil {
+			return runMCPResultOperation(ctx, req, op, prepared), nil
 		}
-		text := sink.String()
-		if runErr != nil {
-			text = runErr.Error()
-		}
-		return newMCPTextResult(ctx, text), nil
+		return runMCPLegacyOperation(ctx, req, op, prepared), nil
 	}
 	return tool, handler
+}
+
+func runMCPResultOperation[I Input, P Prepared](
+	ctx context.Context,
+	req mcp.CallToolRequest,
+	op Operation[I, P],
+	prepared P,
+) *mcp.CallToolResult {
+	ctx = withSurface(ctx, SurfaceMCP)
+	var (
+		result Result
+		runErr error
+	)
+	switch {
+	case op.mcpTaskResult != nil && req.Params.Task != nil:
+		result, runErr = op.mcpTaskResult(ctx, prepared)
+	case op.runResult != nil:
+		result, runErr = op.runResult(ctx, prepared)
+	case op.mcpTaskResult != nil:
+		runErr = fmt.Errorf("%s requires task-augmented MCP calls", op.Name.Canonical)
+	default:
+		runErr = fmt.Errorf("%s has no result execution path", op.Name.Canonical)
+	}
+	if runErr != nil {
+		return newMCPTextResult(ctx, runErr.Error())
+	}
+	rendered, err := renderMCPResult(ctx, op.outputKind, result)
+	if err != nil {
+		return newMCPTextResult(ctx, err.Error())
+	}
+	return rendered
+}
+
+func runMCPLegacyOperation[I Input, P Prepared](
+	ctx context.Context,
+	req mcp.CallToolRequest,
+	op Operation[I, P],
+	prepared P,
+) *mcp.CallToolResult {
+	sink := &MCPSink{buf: strings.Builder{}}
+	var runErr error
+	if op.MCPTaskRun != nil && req.Params.Task != nil {
+		runErr = op.MCPTaskRun(ctx, prepared, sink)
+	} else {
+		runErr = op.Run(ctx, prepared, SurfaceMCP, sink)
+	}
+	text := sink.String()
+	if runErr != nil {
+		text = runErr.Error()
+	}
+	return newMCPTextResult(ctx, text)
 }
 
 func newMCPTextResult(ctx context.Context, text string) *mcp.CallToolResult {

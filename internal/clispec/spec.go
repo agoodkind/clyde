@@ -36,6 +36,20 @@ const (
 	SurfaceMCP
 )
 
+type surfaceContextKey struct{}
+
+func withSurface(ctx context.Context, surface Surface) context.Context {
+	return context.WithValue(ctx, surfaceContextKey{}, surface)
+}
+
+func surfaceFromContext(ctx context.Context) Surface {
+	surface, ok := ctx.Value(surfaceContextKey{}).(Surface)
+	if !ok {
+		return SurfaceCLI
+	}
+	return surface
+}
+
 // SurfaceSet records which front ends an operation renders to. The six
 // conversation operations set both. The hand-written operational commands
 // are terminal-only and are not modeled as operations at all.
@@ -120,8 +134,11 @@ type Operation[I Input, P Prepared] struct {
 	Name     Name
 	Group    *Group
 	Surfaces SurfaceSet
-	Short    string
-	Long     string
+	// outputKind is required when runResult or mcpTaskResult is set. Legacy
+	// sink-based operations leave it as zero until they migrate.
+	outputKind resultKind
+	Short      string
+	Long       string
 	// Examples are complete command lines shown in terminal help and appended
 	// to the MCP tool description. Each entry is one runnable invocation.
 	Examples []string
@@ -138,7 +155,12 @@ type Operation[I Input, P Prepared] struct {
 	// can be rejected, and it always runs before the help boundary on the
 	// terminal and before the work on MCP.
 	Prepare func(in I) (P, error)
-	Run     func(ctx context.Context, in P, surface Surface, sink ResultSink) error
+	// Run is the legacy sink-based work function. New result-based operations
+	// leave this nil and use runResult instead.
+	Run func(ctx context.Context, in P, surface Surface, sink ResultSink) error
+	// runResult is the new result-based work function. When set, the central CLI
+	// and MCP renderers own serialization.
+	runResult func(ctx context.Context, in P) (Result, error)
 	// MCPTaskSupport, when set to optional or required, marks the rendered MCP
 	// tool as task-augmentable so a Tasks-capable client can run it as an MCP
 	// task. It is MCP-only: the terminal command ignores it. The zero value
@@ -151,6 +173,8 @@ type Operation[I Input, P Prepared] struct {
 	// and the request carries task params. Like Run, it receives the prepared
 	// payload.
 	MCPTaskRun func(ctx context.Context, in P, sink ResultSink) error
+	// mcpTaskResult is the result-based task path used by migrated tools.
+	mcpTaskResult func(ctx context.Context, in P) (Result, error)
 }
 
 // renderable is the type-erased view of an [Operation]. Concrete
