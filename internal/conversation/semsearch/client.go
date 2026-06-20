@@ -71,7 +71,7 @@ type SemHit struct {
 }
 
 // SearchFilter narrows conversation retrieval by row attributes. Every field
-// is optional; the zero value matches everything. Providers filters natively on
+// is optional; the zero value matches everything. Providers filter natively on
 // the engine's provider column. WorkspaceRoots maps to the engine's native
 // workspace column but is unused for the workspace filter today: workspace_root
 // is null on rows indexed before that column existed, so clyde instead resolves
