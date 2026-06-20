@@ -13,8 +13,6 @@ import (
 type Config struct {
 	// Logging configures process-wide runtime behavior.
 	Logging LoggingConfig `json:"logging" toml:"logging"`
-	// Search configures the conversation search LLM backend
-	Search SearchConfig `json:"search" toml:"search"`
 	// Conversation configures raw conversation indexing and background sync.
 	Conversation ConversationConfig `json:"conversation" toml:"conversation"`
 	// Adapter configures the OpenAI compatible HTTP adapter mounted

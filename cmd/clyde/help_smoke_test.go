@@ -32,14 +32,17 @@ func TestGroupNameListsSubcommands(t *testing.T) {
 		t.Fatalf("conversation help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"list", "show", "context", "search", "export"} {
+	for _, name := range []string{"search", "export"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation help missing subcommand %q:\n%s", name, out)
 		}
 	}
 }
 
-func TestSearchGroupNameListsSubcommands(t *testing.T) {
+// TestSearchLeafHelpListsFlags asserts the single search leaf prints its
+// optional flags, since the conversation surface collapsed to one operation and
+// search is no longer a parent with subcommands.
+func TestSearchLeafHelpListsFlags(t *testing.T) {
 	factory, stdout, _ := testFactory()
 	root := newRoot(factory)
 	root.SetArgs([]string{"conversation", "search", "--help"})
@@ -47,9 +50,9 @@ func TestSearchGroupNameListsSubcommands(t *testing.T) {
 		t.Fatalf("conversation search help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"across", "within", "status", "cancel", "analyze"} {
+	for _, name := range []string{"--query", "--conversation", "--around", "--window", "--provider"} {
 		if !strings.Contains(out, name) {
-			t.Errorf("conversation search help missing subcommand %q:\n%s", name, out)
+			t.Errorf("conversation search help missing flag %q:\n%s", name, out)
 		}
 	}
 }

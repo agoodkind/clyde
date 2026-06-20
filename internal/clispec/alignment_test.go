@@ -34,21 +34,14 @@ var cliOnlyFlags = map[string]bool{
 	"tools":             true,
 }
 
-// TestConversationRegistryNamesAreExactlyNine guards the operation set. It
+// TestConversationRegistryNamesAreExactlyTwo guards the operation set. It
 // stands in for the hand-maintained checklist that AGENTS.md used to carry.
-func TestConversationRegistryNamesAreExactlyNine(t *testing.T) {
+func TestConversationRegistryNamesAreExactlyTwo(t *testing.T) {
 	t.Parallel()
 	reg := NewConversationRegistry()
 	want := []string{
-		"clyde_analyze_results",
-		"clyde_conversations_search",
 		"clyde_export_transcript",
-		"clyde_get_context",
-		"clyde_get_conversation",
-		"clyde_list_conversations",
-		"clyde_search_cancel",
-		"clyde_search_conversation",
-		"clyde_search_status",
+		"clyde_search",
 	}
 	var got []string
 	for _, op := range reg.ops {
@@ -127,7 +120,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if conversationParent == nil {
 		t.Fatal("conversation parent missing")
 	}
-	wantConversationChildren := []string{"context", "export", "list", "search", "show"}
+	wantConversationChildren := []string{"export", "search"}
 	var gotChildren []string
 	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())
@@ -137,21 +130,15 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 		t.Fatalf("conversation children: got %v, want %v", gotChildren, wantConversationChildren)
 	}
 
-	searchParent, _, err := conversationParent.Find([]string{"search"})
+	searchLeaf, _, err := conversationParent.Find([]string{"search"})
 	if err != nil {
 		t.Fatalf("find conversation search: %v", err)
 	}
-	if searchParent == nil {
-		t.Fatal("search parent missing")
+	if searchLeaf == nil {
+		t.Fatal("search leaf missing")
 	}
-	gotChildren = nil
-	for _, child := range searchParent.Commands() {
-		gotChildren = append(gotChildren, child.Name())
-	}
-	sort.Strings(gotChildren)
-	wantSearchChildren := []string{"across", "analyze", "cancel", "status", "within"}
-	if strings.Join(gotChildren, ",") != strings.Join(wantSearchChildren, ",") {
-		t.Fatalf("search children: got %v, want %v", gotChildren, wantSearchChildren)
+	if len(searchLeaf.Commands()) != 0 {
+		t.Fatalf("search is a leaf, got %d subcommands", len(searchLeaf.Commands()))
 	}
 }
 

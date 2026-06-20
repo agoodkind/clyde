@@ -100,12 +100,10 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	defer runtime.shutdown(context.Background())
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
-	withinSearch, withinCollectionID := withinSearchWiring(cfg, runtime)
-	searchJobs := conversation.NewSearchJobManager(conversationIndex, runtime.searchStore, cfg.Search, log, withinSearch, withinCollectionID, runtime.group)
-	runtime.searchJobs = searchJobs
+	semanticFreshness := newConversationSemanticFreshness()
 
 	grpcServer := grpc.NewServer()
-	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, searchJobs, grpcServer, runtime))
+	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, semanticFreshness.snapshot, grpcServer, runtime))
 	grpcDone := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -130,7 +128,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if runtime.semantic != nil {
 		semanticClient = runtime.semantic.client
 	}
-	semanticStop := startConversationSemanticSync(ctx, log, conversationIndex, semanticClient, cfg.Conversation.Semantic.CollectionID)
+	semanticStop := startConversationSemanticSync(ctx, log, conversationIndex, semanticClient, cfg.Conversation.Semantic.CollectionID, semanticFreshness)
 	defer semanticStop()
 	go func() {
 		defer func() {
@@ -185,16 +183,6 @@ func startConfigWatcher(ctx context.Context, log *slog.Logger, runtime *runtimeS
 	}
 }
 
-// withinSearchWiring returns the engine retrieval client and collection id the
-// search job manager uses for within-conversation candidates, nil and empty
-// when conversation semantic search is not configured.
-func withinSearchWiring(cfg *config.Config, runtime *runtimeServices) (conversation.WithinSearchClient, string) {
-	if runtime.semantic == nil || runtime.semantic.client == nil {
-		return nil, ""
-	}
-	return runtime.semantic.client, cfg.Conversation.Semantic.CollectionID
-}
-
 func startStartupCleanup(log *slog.Logger, cfg *config.Config) {
 	go func() {
 		defer func() {
@@ -231,14 +219,14 @@ func runStartupCleanup(log *slog.Logger, cfg *config.Config) {
 }
 
 // newControlServer builds the gRPC control server, wiring the closures that
-// reach back into the daemon runtime for MITM status, capture rendering, and
-// reload.
+// reach back into the daemon runtime for MITM status, capture rendering,
+// conversation-index freshness, and reload.
 func newControlServer(
 	cfg *config.Config,
 	log *slog.Logger,
 	stats *providerStatsRecorder,
 	index *conversation.Index,
-	searchJobs *conversation.SearchJobManager,
+	freshness func() conversation.SearchFreshness,
 	grpcServer *grpc.Server,
 	runtime *runtimeServices,
 ) *controlServer {
@@ -252,8 +240,6 @@ func newControlServer(
 		UnimplementedClydeServiceServer: clydev1.UnimplementedClydeServiceServer{},
 		stats:                           stats,
 		index:                           index,
-		searchJobs:                      searchJobs,
-		searchConfig:                    cfg.Search,
 		loggingConfig:                   cfg.Logging,
 		mitmConfig:                      cfg.MITM,
 		mitmStatus: func() MITMStatus {
@@ -271,6 +257,7 @@ func newControlServer(
 		semanticSearch:       semanticSearch,
 		semanticCollectionID: semanticCollectionID,
 		captureStore:         runtime.captureStore,
+		freshness:            freshness,
 	}
 }
 

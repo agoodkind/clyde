@@ -46,14 +46,7 @@ func TestRootRegistersConversationCommands(t *testing.T) {
 	factory, _, _ := testFactory()
 	root := newRoot(factory)
 	expected := [][]string{
-		{"conversation", "list"},
-		{"conversation", "show"},
-		{"conversation", "context"},
-		{"conversation", "search", "across"},
-		{"conversation", "search", "within"},
-		{"conversation", "search", "status"},
-		{"conversation", "search", "cancel"},
-		{"conversation", "search", "analyze"},
+		{"conversation", "search"},
 		{"conversation", "export"},
 	}
 	for _, path := range expected {

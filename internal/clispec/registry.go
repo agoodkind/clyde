@@ -6,14 +6,7 @@ package clispec
 // entry point renders it directly.
 func NewConversationRegistry() *Registry {
 	reg := &Registry{ops: nil, handwritten: nil}
-	Register(reg, listConversationsOp())
-	Register(reg, getConversationOp())
-	Register(reg, getContextOp())
-	Register(reg, searchConversationsOp())
-	Register(reg, searchConversationOp())
-	Register(reg, searchStatusOp())
-	Register(reg, searchCancelOp())
-	Register(reg, analyzeResultsOp())
+	Register(reg, searchOp())
 	Register(reg, exportTranscriptOp())
 	return reg
 }

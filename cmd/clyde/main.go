@@ -20,7 +20,6 @@ import (
 	"goodkind.io/clyde/internal/clispec"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/logpolicy"
-	_ "goodkind.io/clyde/internal/providers/claude/clisearch"
 	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/cursor/mitmcontrib"
