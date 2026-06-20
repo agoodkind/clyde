@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -499,7 +500,7 @@ func formatConversationInfo(info conv.Info) string {
 		summaryIndex := ""
 		summaryTimestamp := ""
 		if segment.HasStartingSummary {
-			summaryIndex = fmt.Sprintf("%d", segment.SummaryMessageIndex)
+			summaryIndex = strconv.Itoa(segment.SummaryMessageIndex)
 			summaryTimestamp = formatTime(segment.SummaryTimestamp)
 		}
 		fmt.Fprintf(

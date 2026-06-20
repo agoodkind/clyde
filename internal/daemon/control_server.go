@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc"
@@ -780,7 +781,7 @@ func protoConversationSegments(
 			SummaryTimestampUnix: summaryUnix,
 			VisibleMessageCount:  int64(segment.VisibleMessageCount),
 			ToolCallCount:        int64(segment.ToolCallCount),
-			ExportSelector:       fmt.Sprintf("%d", segment.Index),
+			ExportSelector:       strconv.Itoa(segment.Index),
 		})
 	}
 	return wireSegments

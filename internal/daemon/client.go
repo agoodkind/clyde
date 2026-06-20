@@ -402,7 +402,15 @@ func conversationInfoFromProto(resp *clydev1.GetConversationInfoResponse) conver
 
 func conversationStatsFromProto(wire *clydev1.ConversationInfoStats) conversation.Stats {
 	if wire == nil {
-		return conversation.Stats{}
+		return conversation.Stats{
+			TotalMessages:     0,
+			VisibleMessages:   0,
+			UserMessages:      0,
+			AssistantMessages: 0,
+			SystemMessages:    0,
+			ToolCallCount:     0,
+			ToolOutputCount:   0,
+		}
 	}
 	return conversation.Stats{
 		TotalMessages:     int(wire.GetTotalMessages()),
@@ -434,7 +442,19 @@ func conversationSegmentsFromProto(
 			SummaryTimestamp:    summaryTimestamp,
 			VisibleMessageCount: int(wire.GetVisibleMessageCount()),
 			ToolCallCount:       int(wire.GetToolCallCount()),
-			Checkpoint:          conversation.CompactionCheckpoint{},
+			Checkpoint: conversation.CompactionCheckpoint{
+				BoundaryIndex:           -1,
+				BoundaryUUID:            "",
+				SummaryIndex:            -1,
+				SummaryUUID:             "",
+				ContextItems:            nil,
+				Trigger:                 "",
+				HeadUUID:                "",
+				AnchorUUID:              "",
+				TailUUID:                "",
+				MessagesSummarized:      0,
+				ReplacementHistoryCount: 0,
+			},
 		})
 	}
 	return segments
