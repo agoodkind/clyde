@@ -315,6 +315,9 @@ contexts = [
   { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
 ]
 
+[mitm]
+providers = ["claude", "codex", "conductor", "cursor"]
+
 # Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
 # ([mitm.app.<name>]). The table key is the client name; each gets its own
 # loopback port so every captured exchange in mitm/capture.db is tagged with the
@@ -360,6 +363,10 @@ port = 48726
 [mitm.app.codex]
 host = "localhost"
 port = 48727
+
+[mitm.app.conductor]
+host = "localhost"
+port = 48731
 
 # MITM baseline / drift loop.
 #

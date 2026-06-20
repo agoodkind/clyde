@@ -68,7 +68,8 @@ func memoryDir(provider providerid.Provider, workspaceRoot string) (string, bool
 		providerid.ProviderOpenAICompat,
 		providerid.ProviderMITM,
 		providerid.ProviderArtifact,
-		providerid.ProviderCursor:
+		providerid.ProviderCursor,
+		providerid.ProviderConductor:
 		return "", false
 	default:
 		return "", false
