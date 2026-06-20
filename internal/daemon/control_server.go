@@ -146,6 +146,29 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	return searchConversationsResponse(ctx, s.index, result), nil
 }
 
+// ReorientConversation resolves the recovery context for one conversation and
+// returns one cursor-paged page of evidence. The page is bounded so it renders
+// inline, and the caller loops on next_cursor until remaining is zero.
+func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.ReorientConversationRequest) (*clydev1.ReorientConversationResponse, error) {
+	ctx, _ = correlation.Ensure(ctx, "")
+	text, nextCursor, remaining, err := s.index.ReorientPageText(ctx, conversation.ReorientOptions{
+		ConversationID: req.GetConversationId(),
+		WorkspaceRoot:  req.GetWorkspace(),
+		Topic:          req.GetTopic(),
+		Before:         int(req.GetWindow()),
+		After:          int(req.GetWindow()),
+		Limit:          int(req.GetLimit()),
+	}, req.GetCursor(), int(req.GetPageBytes()), req.GetJson())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "reorient conversation: %v", err)
+	}
+	return &clydev1.ReorientConversationResponse{
+		Text:       text,
+		NextCursor: nextCursor,
+		Remaining:  int64(remaining),
+	}, nil
+}
+
 // freshnessSnapshot reads the conversation-index sync snapshot, returning the
 // zero value when no freshness source is wired.
 func (s *controlServer) freshnessSnapshot() conversation.SearchFreshness {

@@ -15,6 +15,12 @@ service ClydeService {
   rpc SubscribeProviderStats(SubscribeProviderStatsRequest) returns (stream ProviderStatsEvent);
   rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
   rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
+  // ReorientConversation resolves the post-fork, post-compaction recovery
+  // context for one conversation and returns one bounded, cursor-paged page of
+  // evidence. Each page stays small enough to render inline, so a caller loops
+  // with next_cursor until remaining is zero rather than receiving one large
+  // payload.
+  rpc ReorientConversation(ReorientConversationRequest) returns (ReorientConversationResponse);
   // StreamConversation, StreamConversationContext, and StreamExportTranscript are
   // the server-streaming conversation reads and export. They carry one request
   // and produce the rendered payload chunked, so a large transcript or export is
@@ -208,6 +214,37 @@ message SearchConversationsResponse {
   SearchFacets facets = 7;
   SearchFreshness freshness = 8;
   FilterAccounting filter_accounting = 9;
+}
+
+message ReorientConversationRequest {
+  // conversation_id selects the current conversation. Empty means the newest
+  // conversation in workspace.
+  string conversation_id = 1;
+  string workspace = 2;
+  // topic narrows memory docs and the fallback search.
+  string topic = 3;
+  // cursor continues a prior page. Empty starts at the first page.
+  string cursor = 4;
+  // window is the before/after message count for rendered context windows. Zero
+  // means the daemon default.
+  int64 window = 5;
+  // limit bounds memory and fallback-search evidence items. Zero means the
+  // daemon default.
+  int64 limit = 6;
+  // page_bytes bounds one page so it renders inline. Zero means the daemon
+  // default.
+  int64 page_bytes = 7;
+  // json selects the typed page document instead of the brief-input text.
+  bool json = 8;
+}
+
+message ReorientConversationResponse {
+  string text = 1;
+  // next_cursor continues to the next page. Empty on the final page.
+  string next_cursor = 2;
+  // remaining is the count of evidence items not yet delivered. Above zero means
+  // the caller has not seen all evidence.
+  int64 remaining = 3;
 }
 
 message ExportTranscriptRequest {
