@@ -144,7 +144,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Name:       Name{Canonical: "export_transcript", CLIOverride: "export"},
 		Group:      conversationGroup,
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
-		outputKind: 0,
+		outputKind: resultKindArtifact,
 		Short:      "Export a conversation transcript.",
 		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, pass --stdout or --output - to write the export body directly to stdout, or pass --copy to copy the raw body to the macOS pasteboard. The MCP tool returns the body as text.",
 		Examples: []string{
@@ -159,28 +159,8 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *exportInput, v string) { in.ConversationID = v }),
 		},
-		Params: exportParams(),
-		New: func() exportInput {
-			return exportInput{
-				ConversationID:       "",
-				OutputPath:           "",
-				Stdout:               false,
-				Copy:                 false,
-				Kinds:                nil,
-				WhitespaceSelections: nil,
-				Options: conv.ExportOptions{
-					Format:       conv.ExportFormatMarkdown,
-					HistoryStart: 0,
-					LastN:        0,
-					Whitespace:   conv.WhitespacePreserve,
-					Content:      conv.NewContentKindSet(),
-					Compaction: conv.CompactionExportOptions{
-						IncludeSelector: "",
-						FullHistory:     false,
-					},
-				},
-			}
-		},
+		Params:         exportParams(),
+		New:            newExportInput,
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
@@ -223,8 +203,63 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 			}, nil
 		},
 		Run:       runExportTranscript,
-		runResult: nil,
+		runResult: runExportTranscriptResult,
 	}
+}
+
+func newExportInput() exportInput {
+	return exportInput{
+		ConversationID:       "",
+		OutputPath:           "",
+		Stdout:               false,
+		Copy:                 false,
+		Kinds:                nil,
+		WhitespaceSelections: nil,
+		Options: conv.ExportOptions{
+			Format:       conv.ExportFormatMarkdown,
+			HistoryStart: 0,
+			LastN:        0,
+			Whitespace:   conv.WhitespacePreserve,
+			Content:      conv.NewContentKindSet(),
+			Compaction: conv.CompactionExportOptions{
+				IncludeSelector: "",
+				FullHistory:     false,
+			},
+		},
+	}
+}
+
+func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, error) {
+	body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
+	if err != nil {
+		return nil, logOperationError(ctx, "export transcript", err)
+	}
+	path := p.OutputPath
+	if path == "" && !p.Stdout && !p.Copy {
+		path = defaultExportOutputPath(p.ConversationID, p.Options.Format)
+	}
+	text := ""
+	if p.Copy {
+		text = "copied export body\n"
+	} else if !p.Stdout {
+		text = "wrote: " + path + "\n"
+	}
+	return artifactResult{
+		Payload: exportTranscriptOutput{
+			ConversationID: p.ConversationID,
+			Format:         string(p.Options.Format),
+			Path:           path,
+			Bytes:          len(body),
+			Pipe:           p.Stdout,
+			Copied:         p.Copy,
+		},
+		Body:        body,
+		DefaultPath: path,
+		Pipe:        p.Stdout,
+		Copy:        p.Copy,
+		Text:        text,
+		InlineText:  string(body),
+	}, nil
 }
 
 func exportTailOp() Operation[exportTailInput, exportTailPayload] {
