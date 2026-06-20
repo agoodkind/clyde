@@ -381,16 +381,17 @@ func formatListResult(result conv.ListResult) string {
 // indented underneath.
 func formatSearchConversationsResult(result conv.SearchConversationsResult) string {
 	var out strings.Builder
-	fmt.Fprintf(&out, "source: %s\n", result.Source.String())
 	fmt.Fprintf(&out, "returned_count: %d\n", result.ReturnedCount)
 	fmt.Fprintf(&out, "limit: %d\n", result.Limit)
-	fmt.Fprintf(&out, "conversations_scanned: %d\n", result.ConversationsScanned)
 	fmt.Fprintf(&out, "has_more: %t\n", result.HasMore)
+	if len(result.Matches) == 0 {
+		writeSearchOutcomeLine(&out, result.Outcome)
+	}
 	writeFreshnessLine(&out, result.Freshness)
 	writeFilterFunnelLine(&out, result.FilterAccounting)
 	writeFacetsBlock(&out, result.Facets)
 	if len(result.Matches) == 0 {
-		out.WriteString("\nNo matching conversations found.\n")
+		out.WriteString("\n")
 		return out.String()
 	}
 	out.WriteString("\n")
@@ -420,6 +421,23 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult) stri
 		writeMatchContextWindow(&out, match.ContextWindow)
 	}
 	return out.String()
+}
+
+// writeSearchOutcomeLine prints the caller-facing meaning of an empty search
+// result instead of implementation-detail source and scan counters.
+func writeSearchOutcomeLine(out *strings.Builder, outcome conv.SearchResultOutcome) {
+	fmt.Fprintf(out, "outcome: %s\n", outcome.String())
+	switch outcome {
+	case conv.SearchResultOutcomeNotIndexed:
+		out.WriteString("status: Search did not run against searchable conversation data. ")
+		out.WriteString("The scope may not be embedded yet, or the engine may be cold with literal fallback disabled.\n")
+	case conv.SearchResultOutcomeNoMatches:
+		out.WriteString("status: Search ran and found no matching conversations.\n")
+	case conv.SearchResultOutcomeDidNotLook:
+		out.WriteString("status: No search was performed.\n")
+	default:
+		out.WriteString("status: No search was performed.\n")
+	}
 }
 
 // writeFreshnessLine prints the conversation-index sync state as one compact

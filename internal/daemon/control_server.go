@@ -183,12 +183,15 @@ func searchConversationsResult(
 				Limit:                int(req.GetLimit()),
 				HasMore:              false,
 				Source:               conversation.SearchSourceSemantic,
+				Outcome:              conversation.SearchResultOutcomeFromSource(conversation.SearchSourceSemantic),
 				Facets:               conversation.ComputeFacets(matches, searchFacetTopN),
 				Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 				FilterAccounting:     appendReturnedStage(accounting, len(matches)),
 			}, nil
 		}
 		if !literalFallback {
+			// TODO: Replace this cold-or-empty guess when the engine reports scope
+			// coverage separately from a real no-match result.
 			// Dogfood: the engine is configured but cold or empty and the literal
 			// crutch is off, so return an explicit empty result the caller can
 			// branch on instead of a misleading literal scan.
@@ -202,6 +205,7 @@ func searchConversationsResult(
 				Limit:                int(req.GetLimit()),
 				HasMore:              false,
 				Source:               conversation.SearchSourceLiteralDisabledCold,
+				Outcome:              conversation.SearchResultOutcomeNotIndexed,
 				Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
 				Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 				FilterAccounting:     appendReturnedStage(accounting, 0),
@@ -229,6 +233,7 @@ func searchConversationsResult(
 		return conversation.SearchConversationsResult{}, fmt.Errorf("live search conversations: %w", err)
 	}
 	result.Source = conversation.SearchSourceLiteral
+	result.Outcome = conversation.SearchResultOutcomeFromSource(result.Source)
 	result.Facets = conversation.ComputeFacets(result.Matches, searchFacetTopN)
 	result.FilterAccounting = appendReturnedStage(accounting, len(result.Matches))
 	return result, nil

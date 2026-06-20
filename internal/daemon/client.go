@@ -219,6 +219,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	if err != nil {
 		return conversation.SearchConversationsResult{}, daemonRPCError(rpcCtx, "search conversations", err)
 	}
+	source := searchSourceFromProto(resp.GetSource())
 	matches := make([]conversation.SearchMatch, 0, len(resp.GetMatches()))
 	for _, wire := range resp.GetMatches() {
 		record := conversationRecordFromProto(wire.GetConversation())
@@ -238,7 +239,8 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		ReturnedCount:        int(resp.GetReturnedCount()),
 		Limit:                int(resp.GetLimit()),
 		HasMore:              resp.GetHasMore(),
-		Source:               searchSourceFromProto(resp.GetSource()),
+		Source:               source,
+		Outcome:              conversation.SearchResultOutcomeFromSource(source),
 		Facets:               searchFacetsFromProto(resp.GetFacets()),
 		Freshness:            searchFreshnessFromProto(resp.GetFreshness()),
 		FilterAccounting:     filterAccountingFromProto(resp.GetFilterAccounting()),

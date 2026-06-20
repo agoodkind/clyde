@@ -96,6 +96,9 @@ type SearchConversationsResult struct {
 	// Source names which engine produced the matches: the vector engine, the
 	// literal fallback, or a cold index with the fallback disabled.
 	Source SearchSource
+	// Outcome names what an empty result means to callers. Non-empty results are
+	// represented by Matches and ReturnedCount.
+	Outcome SearchResultOutcome
 	// Facets summarizes the match set by workspace, provider, and model.
 	Facets SearchFacets
 	// Freshness is the conversation-index sync state at query time.
@@ -182,6 +185,7 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 			Limit:                options.Limit,
 			HasMore:              false,
 			Source:               SearchSourceUnspecified,
+			Outcome:              SearchResultOutcomeDidNotLook,
 			Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
 			Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 			FilterAccounting:     nil,
@@ -209,6 +213,7 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 		Limit:                options.Limit,
 		HasMore:              false,
 		Source:               SearchSourceLiteral,
+		Outcome:              SearchResultOutcomeNoMatches,
 		Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
 		Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 		FilterAccounting:     nil,

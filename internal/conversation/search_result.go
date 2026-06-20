@@ -41,6 +41,53 @@ func (s SearchSource) String() string {
 	}
 }
 
+// SearchResultOutcome names what an empty cross-conversation search result
+// means to callers. Non-empty results are represented by Matches and
+// ReturnedCount, so this enum stays focused on the cold and empty cases.
+type SearchResultOutcome uint8
+
+const (
+	// SearchResultOutcomeDidNotLook means no search was actually performed.
+	SearchResultOutcomeDidNotLook SearchResultOutcome = iota
+	// SearchResultOutcomeNoMatches means search ran and found no matches.
+	SearchResultOutcomeNoMatches
+	// SearchResultOutcomeNotIndexed means the queried scope is not searchable yet.
+	SearchResultOutcomeNotIndexed
+)
+
+// String renders the outcome as a stable uppercase label for human and agent
+// output.
+func (o SearchResultOutcome) String() string {
+	switch o {
+	case SearchResultOutcomeNotIndexed:
+		return "NOT_INDEXED"
+	case SearchResultOutcomeNoMatches:
+		return "NO_MATCHES"
+	case SearchResultOutcomeDidNotLook:
+		return "DID_NOT_LOOK"
+	default:
+		return "DID_NOT_LOOK"
+	}
+}
+
+// SearchResultOutcomeFromSource maps the current implementation source signal
+// onto caller-meaningful empty-result states.
+func SearchResultOutcomeFromSource(source SearchSource) SearchResultOutcome {
+	switch source {
+	case SearchSourceLiteralDisabledCold:
+		return SearchResultOutcomeNotIndexed
+	case SearchSourceSemantic, SearchSourceLiteral:
+		// TODO: Replace this source-only stub once the engine reports whether an
+		// empty response means the queried scope is unindexed or genuinely has no
+		// matches.
+		return SearchResultOutcomeNoMatches
+	case SearchSourceUnspecified:
+		return SearchResultOutcomeDidNotLook
+	default:
+		return SearchResultOutcomeDidNotLook
+	}
+}
+
 // SearchFacetCount is one facet value and how many matched conversations carry
 // it.
 type SearchFacetCount struct {
