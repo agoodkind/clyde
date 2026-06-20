@@ -1,6 +1,10 @@
 package conversation
 
-import "goodkind.io/clyde/internal/transcript"
+import (
+	"slices"
+
+	"goodkind.io/clyde/internal/transcript"
+)
 
 // CompactionCheckpoint is the provider-neutral compacted-context view built
 // from normalized transcript messages.
@@ -67,6 +71,30 @@ func CompactionCheckpoints(
 // structured compacted-context item.
 func (checkpoint CompactionCheckpoint) HasUsableCompactedContext() bool {
 	return len(checkpoint.ContextItems) > 0
+}
+
+// LatestReorientCheckpoint returns the checkpoint reorient should anchor on: the
+// newest checkpoint that carries usable compacted context, or, when none does,
+// the newest checkpoint that has a real boundary. The first result is the
+// 1-based checkpoint number, matching the export numbering in
+// [selectCompactionExportCheckpoint]; it is 0 when there is no checkpoint to
+// anchor on. The second result is nil in that same case. The usable-first scan
+// mirrors current_context export selection, so reorient and export agree on
+// which checkpoint is current.
+func LatestReorientCheckpoint(checkpoints []CompactionCheckpoint) (int, *CompactionCheckpoint) {
+	for index, checkpoint := range slices.Backward(checkpoints) {
+		if checkpoint.HasUsableCompactedContext() {
+			selected := checkpoint
+			return index + 1, &selected
+		}
+	}
+	for index, checkpoint := range slices.Backward(checkpoints) {
+		if checkpoint.BoundaryIndex >= 0 {
+			selected := checkpoint
+			return index + 1, &selected
+		}
+	}
+	return 0, nil
 }
 
 func boundaryCheckpoint(
