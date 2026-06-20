@@ -117,11 +117,21 @@ func prepareReorient(in reorientInput) (reorientPayload, error) {
 
 // runReorient dispatches the prepared payload to the daemon and writes the
 // rendered page through the single sink call. The page text already carries the
-// continuation cursor and remaining count, so Run discards the typed values.
+// continuation cursor and remaining count, so Run discards the typed values. The
+// JSON page goes through RawBytes so stdout stays a clean document for jq, while
+// the human page goes through Text so it carries the correlation header like
+// every other text response.
 func runReorient(ctx context.Context, p reorientPayload, surface Surface, sink ResultSink) error {
 	text, _, _, err := daemon.ReorientConversation(ctx, p.ConversationID, p.WorkspaceRoot, p.Topic, p.Cursor, p.Window, p.Limit, p.PageBytes, p.JSON)
 	if err != nil {
 		return logFail(ctx, surface, "reorient_failed", "reorient conversation", err)
+	}
+	if p.JSON {
+		if err := sink.RawBytes([]byte(text + "\n")); err != nil {
+			slog.WarnContext(ctx, "cli.conversation.reorient_write_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+			return fmt.Errorf("write reorient result: %w", err)
+		}
+		return nil
 	}
 	if err := sink.Text(text); err != nil {
 		slog.WarnContext(ctx, "cli.conversation.reorient_write_failed", "concern", "cli.conversation", "component", "cli", "err", err)
