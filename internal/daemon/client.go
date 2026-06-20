@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,6 +21,12 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/mitm"
 )
+
+// controlMaxMessageBytes is the message-size ceiling for the control leg, set on
+// both the daemon server and the CLI/MCP client. Large reads and exports cross
+// the wire as chunk streams, so this is a belt-and-suspenders bound for any
+// remaining unary control RPC rather than the primary mechanism.
+const controlMaxMessageBytes = 128 << 20
 
 const (
 	reloadClientOverallTimeout = 60 * time.Second
@@ -141,14 +149,18 @@ func GetConversation(ctx context.Context, conversationID string, lastN int) (str
 
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.GetConversation(rpcCtx, &clydev1.GetConversationRequest{
+	stream, err := client.rpc.StreamConversation(rpcCtx, &clydev1.GetConversationRequest{
 		ConversationId: conversationID,
 		LastN:          int64(lastN),
 	})
 	if err != nil {
 		return "", daemonRPCError(rpcCtx, "get conversation", err)
 	}
-	return resp.GetText(), nil
+	text, err := reassembleConversationChunks(rpcCtx, stream)
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "get conversation", err)
+	}
+	return text, nil
 }
 
 // GetConversationContext asks the daemon for the messages around a center point
@@ -162,7 +174,7 @@ func GetConversationContext(ctx context.Context, conversationID, timestamp strin
 
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.GetConversationContext(rpcCtx, &clydev1.GetConversationContextRequest{
+	stream, err := client.rpc.StreamConversationContext(rpcCtx, &clydev1.GetConversationContextRequest{
 		ConversationId: conversationID,
 		Timestamp:      timestamp,
 		MessageIndex:   int64(messageIndex),
@@ -172,7 +184,11 @@ func GetConversationContext(ctx context.Context, conversationID, timestamp strin
 	if err != nil {
 		return "", daemonRPCError(rpcCtx, "get conversation context", err)
 	}
-	return resp.GetText(), nil
+	text, err := reassembleConversationChunks(rpcCtx, stream)
+	if err != nil {
+		return "", daemonRPCError(rpcCtx, "get conversation context", err)
+	}
+	return text, nil
 }
 
 // SearchConversations asks the daemon for bounded transcript text matches
@@ -338,11 +354,55 @@ func ExportTranscript(ctx context.Context, conversationID string, options conver
 
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.ExportTranscript(rpcCtx, exportTranscriptRequest(conversationID, options))
+	stream, err := client.rpc.StreamExportTranscript(rpcCtx, exportTranscriptRequest(conversationID, options))
 	if err != nil {
 		return nil, daemonRPCError(rpcCtx, "export transcript", err)
 	}
-	return resp.GetBody(), nil
+	body, err := reassembleExportChunks(rpcCtx, stream)
+	if err != nil {
+		return nil, daemonRPCError(rpcCtx, "export transcript", err)
+	}
+	return body, nil
+}
+
+// reassembleConversationChunks reads a ConversationChunk stream to completion and
+// returns the concatenated text. Chunk boundaries carry no semantics, so it
+// stitches the raw bytes and converts once at the end, which keeps a boundary
+// that falls inside a multibyte rune intact.
+func reassembleConversationChunks(ctx context.Context, stream grpc.ServerStreamingClient[clydev1.ConversationChunk]) (string, error) {
+	var body []byte
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return string(body), nil
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "daemon.client.conversation_chunk.recv_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"err", err,
+			)
+			return "", fmt.Errorf("receive conversation chunk: %w", err)
+		}
+		body = append(body, chunk.GetText()...)
+	}
+}
+
+// reassembleExportChunks reads an ExportChunk stream to completion and returns
+// the concatenated body bytes.
+func reassembleExportChunks(ctx context.Context, stream grpc.ServerStreamingClient[clydev1.ExportChunk]) ([]byte, error) {
+	var body []byte
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return body, nil
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "daemon.client.export_chunk.recv_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"err", err,
+			)
+			return nil, fmt.Errorf("receive export chunk: %w", err)
+		}
+		body = append(body, chunk.GetBody()...)
+	}
 }
 
 func exportTranscriptRequest(conversationID string, options conversation.ExportOptions) *clydev1.ExportTranscriptRequest {
@@ -506,7 +566,13 @@ func probeDaemonRPC(ctx context.Context) error {
 func connectDaemon(ctx context.Context) (*daemonClient, error) {
 	socketPath := config.DaemonSocketPath()
 	target := "unix://" + socketPath
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(controlMaxMessageBytes),
+			grpc.MaxCallSendMsgSize(controlMaxMessageBytes),
+		),
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.client.connect.new_client_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"socket_path", socketPath,
