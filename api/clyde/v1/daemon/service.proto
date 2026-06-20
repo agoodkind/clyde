@@ -259,10 +259,12 @@ message ExportTranscriptRequest {
   bool include_tool_calls = 9;
   bool include_chat = 10;
   bool include_system_messages = 11;
-  string compaction_scope = 12;
-  string compaction_detail = 13;
-  int64 compaction_checkpoint = 14;
+  reserved 12, 13, 14;
+  reserved "compaction_scope", "compaction_detail", "compaction_checkpoint";
   bool include_tool_summaries = 15;
+  string include_compactions = 16;
+  bool full_history = 17;
+  int64 last_n = 18;
 }
 
 message ConversationLineage {

@@ -50,7 +50,7 @@ func TestExportOnlyParamShape(t *testing.T) {
 	for _, canonical := range []string{
 		"chat", "thinking", "tool_calls", "tool_outputs",
 		"system_prompts", "system_messages", "raw_json_metadata", "tools", "all",
-		"preserve", "tidy", "compact", "dense",
+		"preserve", "tidy", "dense",
 	} {
 		shortcut := exportParam(t, canonical)
 		if shortcut.Kind != KindBool {
@@ -59,6 +59,13 @@ func TestExportOnlyParamShape(t *testing.T) {
 		if !shortcut.CLIOnly {
 			t.Errorf("shortcut %q should be CLI-only", canonical)
 		}
+	}
+	copyParam := exportParam(t, "copy")
+	if copyParam.Kind != KindBool {
+		t.Errorf("copy kind = %d, want KindBool", copyParam.Kind)
+	}
+	if !copyParam.CLIOnly {
+		t.Errorf("copy should be CLI-only")
 	}
 }
 
@@ -115,7 +122,7 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 	for _, name := range []string{
 		"chat", "thinking", "tool-calls", "tool-outputs",
 		"system-prompts", "system-messages", "raw-json-metadata", "tools", "all",
-		"preserve", "tidy", "compact", "dense",
+		"preserve", "tidy", "dense",
 	} {
 		flag := cmd.Flags().Lookup(name)
 		if flag == nil {
@@ -125,6 +132,9 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 		if flag.Value.Type() != "bool" {
 			t.Errorf("--%s type = %s, want bool", name, flag.Value.Type())
 		}
+	}
+	if cmd.Flags().Lookup("compact") != nil {
+		t.Error("removed whitespace shortcut --compact should not exist")
 	}
 
 	stdout := cmd.Flags().Lookup("stdout")
@@ -136,17 +146,18 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"compaction-scope",
-		"compaction-detail",
-		"compaction-checkpoint",
+		"include-compactions",
+		"full-history",
+		"last-n",
+		"copy",
 	} {
 		flag := cmd.Flags().Lookup(name)
 		if flag == nil {
-			t.Errorf("missing --%s flag", name)
+			t.Errorf("missing flag --%s", name)
 		}
 	}
 
-	for _, gone := range []string{"no-thinking", "no-chat", "with-tool-outputs", "include-chat"} {
+	for _, gone := range []string{"compaction-scope", "compaction-detail", "compaction-checkpoint", "no-thinking", "no-chat", "with-tool-outputs", "include-chat"} {
 		if cmd.Flags().Lookup(gone) != nil {
 			t.Errorf("old flag --%s should be removed", gone)
 		}
@@ -177,12 +188,17 @@ func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
 	if !slices.Contains(tool.InputSchema.Required, "only") {
 		t.Errorf("only should be required, required = %v", tool.InputSchema.Required)
 	}
-	for _, name := range []string{"compaction_scope", "compaction_detail", "compaction_checkpoint"} {
+	for _, name := range []string{"include_compactions", "full_history", "last_n"} {
 		if _, present := tool.InputSchema.Properties[name]; !present {
 			t.Errorf("mcp tool missing %s property", name)
 		}
 	}
-	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout", "preserve", "tidy", "compact", "dense"} {
+	for _, gone := range []string{"compaction_scope", "compaction_detail", "compaction_checkpoint"} {
+		if _, present := tool.InputSchema.Properties[gone]; present {
+			t.Errorf("old mcp property %q should be removed", gone)
+		}
+	}
+	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout", "copy", "preserve", "tidy", "dense"} {
 		if _, present := tool.InputSchema.Properties[cliOnly]; present {
 			t.Errorf("cli-only property %q should not appear on the MCP surface", cliOnly)
 		}
@@ -229,7 +245,7 @@ func TestExportCLIRejectsMultipleWhitespaceSelectors(t *testing.T) {
 		name  string
 		flags []string
 	}{
-		{name: "two shortcuts", flags: []string{"--only", "chat", "--dense", "--compact"}},
+		{name: "two shortcuts", flags: []string{"--only", "chat", "--dense", "--tidy"}},
 		{name: "enum and shortcut", flags: []string{"--only", "chat", "--whitespace", "compact", "--dense"}},
 	}
 	for _, tc := range cases {
@@ -301,42 +317,56 @@ func TestExportPrepareRejectsStdoutFileConflict(t *testing.T) {
 	}
 }
 
-// TestExportPrepareCompactionControls asserts compaction controls are normalized
-// and rejected before the daemon call.
+// TestExportPrepareCompactionControls asserts compaction segment controls are
+// normalized and rejected before the daemon call.
 func TestExportPrepareCompactionControls(t *testing.T) {
 	t.Parallel()
 	op := exportTranscriptOp()
 
-	currentContext := op.New()
-	currentContext.Kinds = []string{"chat"}
-	currentContext.Options.Compaction.Scope = conv.CompactionExportScopeCurrentContext
-	payload, err := op.Prepare(currentContext)
+	defaultSelection := op.New()
+	defaultSelection.Kinds = []string{"chat"}
+	payload, err := op.Prepare(defaultSelection)
 	if err != nil {
-		t.Fatalf("Prepare rejected current_context: %v", err)
+		t.Fatalf("Prepare rejected default selector: %v", err)
 	}
-	if payload.Options.Compaction.Detail != conv.CompactionExportDetailFull {
-		t.Fatalf("detail = %q, want full", payload.Options.Compaction.Detail)
-	}
-
-	fromCheckpoint := op.New()
-	fromCheckpoint.Kinds = []string{"chat"}
-	fromCheckpoint.Options.Compaction.Scope = conv.CompactionExportScopeFromCheckpoint
-	if _, err := op.Prepare(fromCheckpoint); err == nil {
-		t.Fatal("from_checkpoint without checkpoint should be rejected")
+	if payload.Options.Compaction.IncludeSelector != "0" {
+		t.Fatalf("selector = %q, want 0", payload.Options.Compaction.IncludeSelector)
 	}
 
-	wrongScope := op.New()
-	wrongScope.Kinds = []string{"chat"}
-	wrongScope.Options.Compaction.CheckpointNumber = 2
-	if _, err := op.Prepare(wrongScope); err == nil {
-		t.Fatal("checkpoint with full scope should be rejected")
+	fullHistory := op.New()
+	fullHistory.Kinds = []string{"chat"}
+	fullHistory.Options.Compaction.FullHistory = true
+	payload, err = op.Prepare(fullHistory)
+	if err != nil {
+		t.Fatalf("Prepare rejected full history: %v", err)
+	}
+	if payload.Options.Compaction.IncludeSelector != "all" {
+		t.Fatalf("selector = %q, want all", payload.Options.Compaction.IncludeSelector)
+	}
+
+	trimmedAll := op.New()
+	trimmedAll.Kinds = []string{"chat"}
+	trimmedAll.Options.Compaction.IncludeSelector = " all "
+	payload, err = op.Prepare(trimmedAll)
+	if err != nil {
+		t.Fatalf("Prepare rejected trimmed all selector: %v", err)
+	}
+	if payload.Options.Compaction.IncludeSelector != "all" {
+		t.Fatalf("selector = %q, want all", payload.Options.Compaction.IncludeSelector)
 	}
 
 	historyStart := op.New()
 	historyStart.Kinds = []string{"chat"}
 	historyStart.Options.HistoryStart = 1
-	historyStart.Options.Compaction.Scope = conv.CompactionExportScopeCurrentContext
 	if _, err := op.Prepare(historyStart); err == nil {
-		t.Fatal("history_start with compaction scope should be rejected")
+		t.Fatal("history_start without all segments should be rejected")
+	}
+
+	conflict := op.New()
+	conflict.Kinds = []string{"chat"}
+	conflict.Options.Compaction.IncludeSelector = "0"
+	conflict.Options.Compaction.FullHistory = true
+	if _, err := op.Prepare(conflict); err == nil {
+		t.Fatal("full_history with explicit segment should be rejected")
 	}
 }

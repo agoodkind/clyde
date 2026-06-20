@@ -17,6 +17,7 @@ type exportInput struct {
 	Options              conv.ExportOptions
 	OutputPath           string
 	Stdout               bool
+	Copy                 bool
 	Kinds                []string
 	WhitespaceSelections []conv.WhitespaceMode
 }
@@ -28,6 +29,7 @@ type exportPayload struct {
 	Options        conv.ExportOptions
 	OutputPath     string
 	Stdout         bool
+	Copy           bool
 }
 
 func (exportPayload) isClispecPrepared() {}
@@ -46,10 +48,6 @@ var whitespaceValues = []string{
 	string(conv.WhitespaceDense),
 }
 
-var compactionScopeValues = conv.CompactionExportScopeValues()
-
-var compactionDetailValues = conv.CompactionExportDetailValues()
-
 func exportParams() []Param[exportInput] {
 	outputPathParam := StringParam("output", "Write output to path, or use - for stdout.", "", false,
 		func(in *exportInput, v string) { in.OutputPath = v })
@@ -58,6 +56,10 @@ func exportParams() []Param[exportInput] {
 	stdoutParam := BoolParam("stdout", "Write the export body directly to stdout. Equivalent to --output -.", false,
 		func(in *exportInput, v bool) { in.Stdout = v })
 	stdoutParam.CLIOnly = true
+
+	copyParam := BoolParam("copy", "Copy the raw export body to the macOS pasteboard.", false,
+		func(in *exportInput, v bool) { in.Copy = v })
+	copyParam.CLIOnly = true
 
 	onlyParam := EnumListParam("only",
 		"Content kinds to export, comma-separated: chat, thinking, tools, tool_calls, tool_outputs, system_prompts, system_messages, raw_json_metadata, plus all.",
@@ -98,18 +100,18 @@ func exportParams() []Param[exportInput] {
 		whitespaceParam,
 		whitespaceShortcut(conv.WhitespacePreserve),
 		whitespaceShortcut(conv.WhitespaceTidy),
-		whitespaceShortcut(conv.WhitespaceCompact),
 		whitespaceShortcut(conv.WhitespaceDense),
 		outputPathParam,
 		stdoutParam,
+		copyParam,
 		IntParam("history_start", "First message index to include.", 0,
 			func(in *exportInput, v int) { in.Options.HistoryStart = v }),
-		EnumParam("compaction_scope", "Compaction scope: full, current_context, or from_checkpoint.", string(conv.CompactionExportScopeCurrentContext), compactionScopeValues,
-			func(in *exportInput, v string) { in.Options.Compaction.Scope = conv.CompactionExportScope(v) }),
-		EnumParam("compaction_detail", "Compaction detail: none, summary, context, or full. Defaults to full for compaction scopes and none for full transcript.", "", compactionDetailValues,
-			func(in *exportInput, v string) { in.Options.Compaction.Detail = conv.CompactionExportDetail(v) }),
-		IntParam("compaction_checkpoint", "1-based compaction number for from_checkpoint scope.", 0,
-			func(in *exportInput, v int) { in.Options.Compaction.CheckpointNumber = v }),
+		StringParam("include_compactions", "Compaction segments to export: 0, 0,1, 0..2, or all. Defaults to 0.", "", false,
+			func(in *exportInput, v string) { in.Options.Compaction.IncludeSelector = v }),
+		BoolParam("full_history", "Export all compaction segments. Equivalent to --include-compactions all.", false,
+			func(in *exportInput, v bool) { in.Options.Compaction.FullHistory = v }),
+		IntParam("last_n", "Keep only the last N visible messages after compaction segment selection.", 0,
+			func(in *exportInput, v int) { in.Options.LastN = v }),
 		onlyParam,
 		shortcut("chat", "chat", "Include conversation chat text."),
 		shortcut("thinking", "thinking", "Include assistant thinking blocks."),
@@ -129,13 +131,13 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Group:    conversationGroup,
 		Surfaces: SurfaceSet{CLI: true, MCP: true},
 		Short:    "Export a conversation transcript.",
-		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export starts at the latest usable compaction and renders full checkpoint detail; when the conversation has no usable compaction, export renders the full transcript. Use --compaction-scope full to export the full transcript, or --compaction-scope from_checkpoint with --compaction-checkpoint to start after a selected compaction. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, or pass --stdout or --output - to write the export body directly to stdout for piping. The MCP tool returns the body as text.",
+		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, pass --stdout or --output - to write the export body directly to stdout, or pass --copy to copy the raw body to the macOS pasteboard. The MCP tool returns the body as text.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
-			"clyde conversation export claude:1a2b3c --only chat --compaction-scope current_context --stdout",
-			"clyde conversation export claude:1a2b3c --only chat --compaction-scope from_checkpoint --compaction-checkpoint 2 --compaction-detail summary",
+			"clyde conversation export claude:1a2b3c --only chat --include-compactions 0 --stdout",
+			"clyde conversation export claude:1a2b3c --only chat --include-compactions 0..2 --last-n 20 --stdout",
 			"clyde conversation export claude:1a2b3c --thinking --tools --stdout",
-			"clyde conversation export claude:1a2b3c --all --output - | pbcopy",
+			"clyde conversation export claude:1a2b3c --all --copy",
 			"clyde conversation export claude:1a2b3c --all",
 		},
 		Args: []Arg[exportInput]{
@@ -148,17 +150,18 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 				ConversationID:       "",
 				OutputPath:           "",
 				Stdout:               false,
+				Copy:                 false,
 				Kinds:                nil,
 				WhitespaceSelections: nil,
 				Options: conv.ExportOptions{
 					Format:       conv.ExportFormatMarkdown,
 					HistoryStart: 0,
+					LastN:        0,
 					Whitespace:   conv.WhitespacePreserve,
 					Content:      conv.NewContentKindSet(),
 					Compaction: conv.CompactionExportOptions{
-						Scope:            conv.CompactionExportScopeCurrentContext,
-						Detail:           "",
-						CheckpointNumber: 0,
+						IncludeSelector: "",
+						FullHistory:     false,
 					},
 				},
 			}
@@ -168,50 +171,107 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Prepare: func(in exportInput) (exportPayload, error) {
 			whitespace, err := resolveExportWhitespace(in)
 			if err != nil {
-				return exportPayload{}, fmt.Errorf("select whitespace: %w", err)
+				return exportPayload{}, err
 			}
 			in.Options.Whitespace = whitespace
 			content, err := conv.ResolveContentKinds(in.Kinds)
 			if err != nil {
+				slog.Warn("cli.conversation.export_content_invalid", "concern", "cli.conversation", "component", "cli", "err", err)
 				return exportPayload{}, fmt.Errorf("select content kinds: %w", err)
 			}
 			in.Options.Content = content
 			compactionOptions, err := conv.NormalizeCompactionExportOptions(
 				in.Options.Compaction,
 				in.Options.HistoryStart,
+				in.Options.LastN,
 			)
 			if err != nil {
+				slog.Warn("cli.conversation.export_compaction_invalid", "concern", "cli.conversation", "component", "cli", "err", err)
 				return exportPayload{}, fmt.Errorf("select compaction controls: %w", err)
 			}
 			in.Options.Compaction = compactionOptions
+			if in.Copy && (in.Stdout || in.OutputPath != "") {
+				return exportPayload{}, fmt.Errorf("select output destination: --copy cannot be combined with --stdout or --output")
+			}
 			if in.Stdout && in.OutputPath != "" && in.OutputPath != "-" {
 				return exportPayload{}, fmt.Errorf("select output destination: --stdout cannot be combined with --output %q", in.OutputPath)
 			}
 			stdout := in.Stdout || in.OutputPath == "-"
-			return exportPayload{ConversationID: in.ConversationID, Options: in.Options, OutputPath: in.OutputPath, Stdout: stdout}, nil
+			return exportPayload{
+				ConversationID: in.ConversationID,
+				Options:        in.Options,
+				OutputPath:     in.OutputPath,
+				Stdout:         stdout,
+				Copy:           in.Copy,
+			}, nil
 		},
-		Run: func(ctx context.Context, p exportPayload, surface Surface, sink ResultSink) error {
-			body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
-			if err != nil {
-				return logFail(ctx, surface, "export_failed", "export transcript", err)
-			}
-			if surface == SurfaceCLI {
-				if p.Stdout {
-					return sink.RawBytes(body)
-				}
-				path := p.OutputPath
-				if path == "" {
-					path = defaultExportOutputPath(p.ConversationID, p.Options.Format)
-				}
-				if err := sink.WriteFile(path, body); err != nil {
-					slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
-					return fmt.Errorf("export transcript: write output %s: %w", path, err)
-				}
-				return sink.Text("wrote: " + path + "\n")
-			}
-			return sink.Bytes(body)
-		},
+		Run: runExportTranscript,
 	}
+}
+
+func runExportTranscript(
+	ctx context.Context,
+	p exportPayload,
+	surface Surface,
+	sink ResultSink,
+) error {
+	body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
+	if err != nil {
+		return logFail(ctx, surface, "export_failed", "export transcript", err)
+	}
+	if surface == SurfaceCLI {
+		return writeCLIExportBody(ctx, p, body, sink)
+	}
+	if err := sink.Bytes(body); err != nil {
+		slog.WarnContext(ctx, "mcp.conversation.export_write_failed", "concern", "mcp.server.context", "component", "mcpserver", "err", err)
+		return fmt.Errorf("export transcript: write MCP body: %w", err)
+	}
+	return nil
+}
+
+func writeCLIExportBody(
+	ctx context.Context,
+	p exportPayload,
+	body []byte,
+	sink ResultSink,
+) error {
+	if p.Copy {
+		if err := sink.Copy(ctx, body); err != nil {
+			slog.WarnContext(ctx, "cli.conversation.export_copy_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+			return fmt.Errorf("export transcript: copy output: %w", err)
+		}
+		if err := sink.Text("copied export body\n"); err != nil {
+			return fmt.Errorf("export transcript: write copy confirmation: %w", err)
+		}
+		return nil
+	}
+	if p.Stdout {
+		if err := sink.RawBytes(body); err != nil {
+			return fmt.Errorf("export transcript: write stdout: %w", err)
+		}
+		return nil
+	}
+	return writeCLIExportFile(ctx, p, body, sink)
+}
+
+func writeCLIExportFile(
+	ctx context.Context,
+	p exportPayload,
+	body []byte,
+	sink ResultSink,
+) error {
+	path := p.OutputPath
+	if path == "" {
+		path = defaultExportOutputPath(p.ConversationID, p.Options.Format)
+	}
+	if err := sink.WriteFile(path, body); err != nil {
+		slog.WarnContext(ctx, "cli.conversation.export_write_failed", "concern", "cli.conversation", "component", "cli", "path", path, "err", err)
+		return fmt.Errorf("export transcript: write output %s: %w", path, err)
+	}
+	if err := sink.Text("wrote: " + path + "\n"); err != nil {
+		return fmt.Errorf("export transcript: write confirmation: %w", err)
+	}
+	return nil
 }
 
 func defaultExportOutputPath(conversationID string, format conv.ExportFormat) string {

@@ -27,6 +27,9 @@ type CompactionCheckpoint struct {
 func CompactionCheckpoints(
 	messages []transcript.Message,
 ) []CompactionCheckpoint {
+	if len(transcript.CompactionMessages(messages)) == 0 {
+		return nil
+	}
 	checkpoints := make([]CompactionCheckpoint, 0)
 	attachedSummaries := make(map[int]struct{})
 	for index, message := range messages {

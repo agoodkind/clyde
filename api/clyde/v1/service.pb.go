@@ -1715,10 +1715,10 @@ type ExportTranscriptRequest struct {
 	IncludeToolCalls       bool                   `protobuf:"varint,9,opt,name=include_tool_calls,json=includeToolCalls,proto3" json:"include_tool_calls,omitempty"`
 	IncludeChat            bool                   `protobuf:"varint,10,opt,name=include_chat,json=includeChat,proto3" json:"include_chat,omitempty"`
 	IncludeSystemMessages  bool                   `protobuf:"varint,11,opt,name=include_system_messages,json=includeSystemMessages,proto3" json:"include_system_messages,omitempty"`
-	CompactionScope        string                 `protobuf:"bytes,12,opt,name=compaction_scope,json=compactionScope,proto3" json:"compaction_scope,omitempty"`
-	CompactionDetail       string                 `protobuf:"bytes,13,opt,name=compaction_detail,json=compactionDetail,proto3" json:"compaction_detail,omitempty"`
-	CompactionCheckpoint   int64                  `protobuf:"varint,14,opt,name=compaction_checkpoint,json=compactionCheckpoint,proto3" json:"compaction_checkpoint,omitempty"`
 	IncludeToolSummaries   bool                   `protobuf:"varint,15,opt,name=include_tool_summaries,json=includeToolSummaries,proto3" json:"include_tool_summaries,omitempty"`
+	IncludeCompactions     string                 `protobuf:"bytes,16,opt,name=include_compactions,json=includeCompactions,proto3" json:"include_compactions,omitempty"`
+	FullHistory            bool                   `protobuf:"varint,17,opt,name=full_history,json=fullHistory,proto3" json:"full_history,omitempty"`
+	LastN                  int64                  `protobuf:"varint,18,opt,name=last_n,json=lastN,proto3" json:"last_n,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1830,32 +1830,32 @@ func (x *ExportTranscriptRequest) GetIncludeSystemMessages() bool {
 	return false
 }
 
-func (x *ExportTranscriptRequest) GetCompactionScope() string {
-	if x != nil {
-		return x.CompactionScope
-	}
-	return ""
-}
-
-func (x *ExportTranscriptRequest) GetCompactionDetail() string {
-	if x != nil {
-		return x.CompactionDetail
-	}
-	return ""
-}
-
-func (x *ExportTranscriptRequest) GetCompactionCheckpoint() int64 {
-	if x != nil {
-		return x.CompactionCheckpoint
-	}
-	return 0
-}
-
 func (x *ExportTranscriptRequest) GetIncludeToolSummaries() bool {
 	if x != nil {
 		return x.IncludeToolSummaries
 	}
 	return false
+}
+
+func (x *ExportTranscriptRequest) GetIncludeCompactions() string {
+	if x != nil {
+		return x.IncludeCompactions
+	}
+	return ""
+}
+
+func (x *ExportTranscriptRequest) GetFullHistory() bool {
+	if x != nil {
+		return x.FullHistory
+	}
+	return false
+}
+
+func (x *ExportTranscriptRequest) GetLastN() int64 {
+	if x != nil {
+		return x.LastN
+	}
+	return 0
 }
 
 type ConversationLineage struct {
@@ -2296,7 +2296,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1f\n" +
 	"\vnext_cursor\x18\x02 \x01(\tR\n" +
 	"nextCursor\x12\x1c\n" +
-	"\tremaining\x18\x03 \x01(\x03R\tremaining\"\xb9\x05\n" +
+	"\tremaining\x18\x03 \x01(\x03R\tremaining\"\xe5\x05\n" +
 	"\x17ExportTranscriptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x16\n" +
 	"\x06format\x18\x02 \x01(\tR\x06format\x12\x1e\n" +
@@ -2311,11 +2311,11 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x12include_tool_calls\x18\t \x01(\bR\x10includeToolCalls\x12!\n" +
 	"\finclude_chat\x18\n" +
 	" \x01(\bR\vincludeChat\x126\n" +
-	"\x17include_system_messages\x18\v \x01(\bR\x15includeSystemMessages\x12)\n" +
-	"\x10compaction_scope\x18\f \x01(\tR\x0fcompactionScope\x12+\n" +
-	"\x11compaction_detail\x18\r \x01(\tR\x10compactionDetail\x123\n" +
-	"\x15compaction_checkpoint\x18\x0e \x01(\x03R\x14compactionCheckpoint\x124\n" +
-	"\x16include_tool_summaries\x18\x0f \x01(\bR\x14includeToolSummaries\"\xc0\x01\n" +
+	"\x17include_system_messages\x18\v \x01(\bR\x15includeSystemMessages\x124\n" +
+	"\x16include_tool_summaries\x18\x0f \x01(\bR\x14includeToolSummaries\x12/\n" +
+	"\x13include_compactions\x18\x10 \x01(\tR\x12includeCompactions\x12!\n" +
+	"\ffull_history\x18\x11 \x01(\bR\vfullHistory\x12\x15\n" +
+	"\x06last_n\x18\x12 \x01(\x03R\x05lastNJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fR\x10compaction_scopeR\x11compaction_detailR\x15compaction_checkpoint\"\xc0\x01\n" +
 	"\x13ConversationLineage\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12;\n" +
 	"\x0fparent_provider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\x0eparentProvider\x12(\n" +

@@ -90,12 +90,12 @@ func (s *controlServer) StreamExportTranscript(req *clydev1.ExportTranscriptRequ
 	options := conversation.ExportOptions{
 		Format:       conversation.ExportFormat(req.GetFormat()),
 		HistoryStart: int(req.GetHistoryStart()),
+		LastN:        int(req.GetLastN()),
 		Whitespace:   conversation.WhitespaceMode(req.GetWhitespace()),
 		Content:      contentKindSetFromExportRequest(req),
 		Compaction: conversation.CompactionExportOptions{
-			Scope:            conversation.CompactionExportScope(req.GetCompactionScope()),
-			Detail:           conversation.CompactionExportDetail(req.GetCompactionDetail()),
-			CheckpointNumber: int(req.GetCompactionCheckpoint()),
+			IncludeSelector: req.GetIncludeCompactions(),
+			FullHistory:     req.GetFullHistory(),
 		},
 	}
 	body, err := s.index.Export(record, options)

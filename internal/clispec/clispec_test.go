@@ -64,8 +64,9 @@ func TestMCPSinkCollects(t *testing.T) {
 	_ = sink.Bytes([]byte("b"))
 	_ = sink.RawBytes([]byte("c"))
 	_ = sink.WriteFile("ignored", []byte("d"))
-	if got := sink.String(); got != "abcd" {
-		t.Errorf("String(): got %q, want %q", got, "abcd")
+	_ = sink.Copy(context.Background(), []byte("e"))
+	if got := sink.String(); got != "abcde" {
+		t.Errorf("String(): got %q, want %q", got, "abcde")
 	}
 	if sink.Surface() != SurfaceMCP {
 		t.Errorf("Surface(): got %d, want SurfaceMCP", sink.Surface())

@@ -439,6 +439,7 @@ func exportTranscriptRequest(conversationID string, options conversation.ExportO
 		Format:                 string(options.Format),
 		Whitespace:             string(options.Whitespace),
 		HistoryStart:           int64(options.HistoryStart),
+		LastN:                  int64(options.LastN),
 		IncludeSystemPrompts:   options.Content.Has(conversation.ContentKindSystemPrompts),
 		IncludeSystemMessages:  options.Content.Has(conversation.ContentKindSystemMessages),
 		IncludeToolOutputs:     options.Content.Has(conversation.ContentKindToolOutputs),
@@ -447,9 +448,8 @@ func exportTranscriptRequest(conversationID string, options conversation.ExportO
 		IncludeToolSummaries:   options.Content.Has(conversation.ContentKindToolSummaries),
 		IncludeToolCalls:       options.Content.Has(conversation.ContentKindToolCalls),
 		IncludeChat:            options.Content.Has(conversation.ContentKindChat),
-		CompactionScope:        string(options.Compaction.Scope),
-		CompactionDetail:       string(options.Compaction.Detail),
-		CompactionCheckpoint:   int64(options.Compaction.CheckpointNumber),
+		IncludeCompactions:     options.Compaction.IncludeSelector,
+		FullHistory:            options.Compaction.FullHistory,
 	}
 }
 
