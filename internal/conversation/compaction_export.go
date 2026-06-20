@@ -1,6 +1,9 @@
 package conversation
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // NormalizeCompactionExportOptions validates compaction export controls and
 // fills the default segment selector.
@@ -15,6 +18,7 @@ func NormalizeCompactionExportOptions(
 	if lastN < 0 {
 		return CompactionExportOptions{}, fmt.Errorf("--last-n must be greater than or equal to 0")
 	}
+	options.IncludeSelector = strings.TrimSpace(options.IncludeSelector)
 	if options.FullHistory {
 		if options.IncludeSelector != "" && options.IncludeSelector != "all" {
 			return CompactionExportOptions{}, fmt.Errorf("--full-history cannot be combined with --include-compactions %s", options.IncludeSelector)

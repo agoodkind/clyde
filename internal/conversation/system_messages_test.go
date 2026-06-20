@@ -13,6 +13,13 @@ import (
 )
 
 func optionAwareStream(opts LoadOptions) []transcript.Message {
+	return optionAwareStreamWithSystemText(opts, "Conversation compacted")
+}
+
+func optionAwareStreamWithSystemText(
+	opts LoadOptions,
+	systemText string,
+) []transcript.Message {
 	messages := make([]transcript.Message, 0, 2)
 	if opts.IncludeSystemMessages {
 		messages = append(messages, transcript.Message{
@@ -43,7 +50,7 @@ func optionAwareStream(opts LoadOptions) []transcript.Message {
 				RawSummarizeMetadata:      nil,
 			},
 			Timestamp: time.Unix(1, 0),
-			Text:      "Conversation compacted",
+			Text:      systemText,
 			Thinking:  "",
 			HasTools:  false,
 			Tools:     nil,
@@ -84,6 +91,37 @@ func newOptionAwareIndex() (*Index, Record) {
 		Title:         "system-opt-out",
 		WorkspaceRoot: "/repo",
 		ArtifactPath:  "/tmp/system-opt-out.jsonl",
+		ArtifactKind:  "transcript",
+		Model:         "model",
+		CreatedAt:     time.Unix(1, 0),
+		UpdatedAt:     time.Unix(2, 0),
+		SizeBytes:     10,
+		Archived:      false,
+	}}
+	idx.loaded = true
+	record := idx.records[0]
+	return idx, record
+}
+
+func newOptionAwareIndexWithSystemText(systemText string) (*Index, Record) {
+	registry := NewRegistry()
+	registry.Register(&streamFuncParser{stream: func(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
+		return func(yield func(transcript.Message, error) bool) {
+			for _, message := range optionAwareStreamWithSystemText(opts, systemText) {
+				if !yield(message, nil) {
+					return
+				}
+			}
+		}
+	}})
+	idx := newTestIndex(registry)
+	idx.records = []Record{{
+		ID:            "claude:system-opt-out-empty",
+		Provider:      ProviderClaude,
+		NativeID:      "system-opt-out-empty",
+		Title:         "system-opt-out-empty",
+		WorkspaceRoot: "/repo",
+		ArtifactPath:  "/tmp/system-opt-out-empty.jsonl",
 		ArtifactKind:  "transcript",
 		Model:         "model",
 		CreatedAt:     time.Unix(1, 0),
@@ -239,5 +277,42 @@ func TestExportJSONCanOptIntoSystemMessagesAndCheckpoints(t *testing.T) {
 	}
 	if document.Checkpoints[0].BoundaryUUID != "system-1" {
 		t.Fatalf("checkpoint boundary uuid = %q, want system-1", document.Checkpoints[0].BoundaryUUID)
+	}
+}
+
+func TestExportJSONRetainsEmptyCompactionBoundaryWhenSystemMessagesSelected(t *testing.T) {
+	t.Parallel()
+	idx, record := newOptionAwareIndexWithSystemText("")
+
+	body, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatJSON,
+		HistoryStart: 0,
+		LastN:        0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindSystemMessages, ContentKindRawJSONMetadata),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "all",
+			FullHistory:     false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Export returned error: %v", err)
+	}
+
+	var document struct {
+		Messages    []transcript.Message   `json:"messages"`
+		Checkpoints []CompactionCheckpoint `json:"compaction_checkpoints"`
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("unmarshal export body: %v", err)
+	}
+	if len(document.Messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(document.Messages))
+	}
+	if document.Messages[0].UUID != "system-1" {
+		t.Fatalf("message uuid = %q, want system-1", document.Messages[0].UUID)
+	}
+	if len(document.Checkpoints) != 1 {
+		t.Fatalf("checkpoints len = %d, want 1", len(document.Checkpoints))
 	}
 }

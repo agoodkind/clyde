@@ -141,7 +141,7 @@ type compactionExportSegmentBlock struct {
 	EndMessageIndex     int                               `json:"end_message_index"`
 	SummaryMessageIndex int                               `json:"summary_message_index"`
 	SummaryUUID         string                            `json:"summary_uuid,omitempty"`
-	SummaryTimestamp    time.Time                         `json:"summary_timestamp,omitzero"`
+	SummaryTimestamp    *time.Time                        `json:"summary_timestamp,omitempty"`
 	SummaryItems        []transcript.CompactedContextItem `json:"summary_items,omitempty"`
 	ContextItems        []transcript.CompactedContextItem `json:"context_items,omitempty"`
 }
@@ -244,6 +244,11 @@ func buildCompactionExportBlock(selection CompactionSegmentSelection) *compactio
 		if !segment.HasStartingSummary {
 			continue
 		}
+		var summaryTimestamp *time.Time
+		if !segment.SummaryTimestamp.IsZero() {
+			timestamp := segment.SummaryTimestamp
+			summaryTimestamp = &timestamp
+		}
 		segmentBlocks = append(segmentBlocks, compactionExportSegmentBlock{
 			SegmentIndex:        segment.Index,
 			HasStartingSummary:  segment.HasStartingSummary,
@@ -251,7 +256,7 @@ func buildCompactionExportBlock(selection CompactionSegmentSelection) *compactio
 			EndMessageIndex:     segment.EndMessageIndex,
 			SummaryMessageIndex: segment.SummaryMessageIndex,
 			SummaryUUID:         segment.SummaryUUID,
-			SummaryTimestamp:    segment.SummaryTimestamp,
+			SummaryTimestamp:    summaryTimestamp,
 			SummaryItems:        summaryContextItems(segment.Checkpoint.ContextItems),
 			ContextItems:        copyContextItems(segment.Checkpoint.ContextItems),
 		})
@@ -379,6 +384,10 @@ func filterMessages(messages []transcript.Message, options ExportOptions) []tran
 		if !hasToolContent(options.Content) {
 			message.Tools = nil
 			message.HasTools = false
+		}
+		if message.Compaction != nil && options.Content.Has(ContentKindSystemMessages) {
+			out = append(out, message)
+			continue
 		}
 		if message.Text == "" && message.Thinking == "" && len(message.Tools) == 0 {
 			continue

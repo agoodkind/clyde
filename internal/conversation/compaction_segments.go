@@ -164,7 +164,11 @@ func checkpointSegmentStart(checkpoint CompactionCheckpoint) int {
 }
 
 func checkpointTailStart(checkpoint CompactionCheckpoint) int {
-	return checkpointSegmentStart(checkpoint)
+	start := checkpointSegmentStart(checkpoint)
+	if start < 0 {
+		return 0
+	}
+	return start + 1
 }
 
 func compactionSegmentSummaryUUID(checkpoint CompactionCheckpoint) string {

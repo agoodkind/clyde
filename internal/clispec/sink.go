@@ -116,6 +116,7 @@ func (s *CLISink) Copy(ctx context.Context, body []byte) error {
 		return fmt.Errorf("open pbcopy stdin: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		slog.WarnContext(ctx, "clispec.sink.copy_start_failed", "concern", "cli.conversation", "component", "cli", "err", err)
 		return fmt.Errorf("start pbcopy: %w", err)
 	}

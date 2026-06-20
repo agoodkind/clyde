@@ -344,6 +344,17 @@ func TestExportPrepareCompactionControls(t *testing.T) {
 		t.Fatalf("selector = %q, want all", payload.Options.Compaction.IncludeSelector)
 	}
 
+	trimmedAll := op.New()
+	trimmedAll.Kinds = []string{"chat"}
+	trimmedAll.Options.Compaction.IncludeSelector = " all "
+	payload, err = op.Prepare(trimmedAll)
+	if err != nil {
+		t.Fatalf("Prepare rejected trimmed all selector: %v", err)
+	}
+	if payload.Options.Compaction.IncludeSelector != "all" {
+		t.Fatalf("selector = %q, want all", payload.Options.Compaction.IncludeSelector)
+	}
+
 	historyStart := op.New()
 	historyStart.Kinds = []string{"chat"}
 	historyStart.Options.HistoryStart = 1
