@@ -24,10 +24,7 @@ const (
 	ClydeService_GetProviderStats_FullMethodName          = "/clyde.v1.ClydeService/GetProviderStats"
 	ClydeService_SubscribeProviderStats_FullMethodName    = "/clyde.v1.ClydeService/SubscribeProviderStats"
 	ClydeService_ListConversations_FullMethodName         = "/clyde.v1.ClydeService/ListConversations"
-	ClydeService_GetConversation_FullMethodName           = "/clyde.v1.ClydeService/GetConversation"
-	ClydeService_GetConversationContext_FullMethodName    = "/clyde.v1.ClydeService/GetConversationContext"
 	ClydeService_SearchConversations_FullMethodName       = "/clyde.v1.ClydeService/SearchConversations"
-	ClydeService_ExportTranscript_FullMethodName          = "/clyde.v1.ClydeService/ExportTranscript"
 	ClydeService_StreamConversation_FullMethodName        = "/clyde.v1.ClydeService/StreamConversation"
 	ClydeService_StreamConversationContext_FullMethodName = "/clyde.v1.ClydeService/StreamConversationContext"
 	ClydeService_StreamExportTranscript_FullMethodName    = "/clyde.v1.ClydeService/StreamExportTranscript"
@@ -48,15 +45,11 @@ type ClydeServiceClient interface {
 	GetProviderStats(ctx context.Context, in *GetProviderStatsRequest, opts ...grpc.CallOption) (*GetProviderStatsResponse, error)
 	SubscribeProviderStats(ctx context.Context, in *SubscribeProviderStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProviderStatsEvent], error)
 	ListConversations(ctx context.Context, in *ListConversationsRequest, opts ...grpc.CallOption) (*ListConversationsResponse, error)
-	GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error)
-	GetConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (*GetConversationContextResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
-	ExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (*ExportTranscriptResponse, error)
 	// StreamConversation, StreamConversationContext, and StreamExportTranscript are
-	// the server-streaming forms of the three reads above. They carry the same
-	// request shape and produce the same payload, chunked so a large transcript or
-	// export is not bounded by the gRPC max message size. The unary forms remain
-	// for any caller that has not switched.
+	// the server-streaming conversation reads and export. They carry one request
+	// and produce the rendered payload chunked, so a large transcript or export is
+	// not bounded by the gRPC max message size.
 	StreamConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConversationChunk], error)
 	StreamConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConversationChunk], error)
 	StreamExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error)
@@ -133,40 +126,10 @@ func (c *clydeServiceClient) ListConversations(ctx context.Context, in *ListConv
 	return out, nil
 }
 
-func (c *clydeServiceClient) GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetConversationResponse)
-	err := c.cc.Invoke(ctx, ClydeService_GetConversation_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *clydeServiceClient) GetConversationContext(ctx context.Context, in *GetConversationContextRequest, opts ...grpc.CallOption) (*GetConversationContextResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetConversationContextResponse)
-	err := c.cc.Invoke(ctx, ClydeService_GetConversationContext_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *clydeServiceClient) SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SearchConversationsResponse)
 	err := c.cc.Invoke(ctx, ClydeService_SearchConversations_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *clydeServiceClient) ExportTranscript(ctx context.Context, in *ExportTranscriptRequest, opts ...grpc.CallOption) (*ExportTranscriptResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ExportTranscriptResponse)
-	err := c.cc.Invoke(ctx, ClydeService_ExportTranscript_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -281,15 +244,11 @@ type ClydeServiceServer interface {
 	GetProviderStats(context.Context, *GetProviderStatsRequest) (*GetProviderStatsResponse, error)
 	SubscribeProviderStats(*SubscribeProviderStatsRequest, grpc.ServerStreamingServer[ProviderStatsEvent]) error
 	ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error)
-	GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error)
-	GetConversationContext(context.Context, *GetConversationContextRequest) (*GetConversationContextResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
-	ExportTranscript(context.Context, *ExportTranscriptRequest) (*ExportTranscriptResponse, error)
 	// StreamConversation, StreamConversationContext, and StreamExportTranscript are
-	// the server-streaming forms of the three reads above. They carry the same
-	// request shape and produce the same payload, chunked so a large transcript or
-	// export is not bounded by the gRPC max message size. The unary forms remain
-	// for any caller that has not switched.
+	// the server-streaming conversation reads and export. They carry one request
+	// and produce the rendered payload chunked, so a large transcript or export is
+	// not bounded by the gRPC max message size.
 	StreamConversation(*GetConversationRequest, grpc.ServerStreamingServer[ConversationChunk]) error
 	StreamConversationContext(*GetConversationContextRequest, grpc.ServerStreamingServer[ConversationChunk]) error
 	StreamExportTranscript(*ExportTranscriptRequest, grpc.ServerStreamingServer[ExportChunk]) error
@@ -321,17 +280,8 @@ func (UnimplementedClydeServiceServer) SubscribeProviderStats(*SubscribeProvider
 func (UnimplementedClydeServiceServer) ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListConversations not implemented")
 }
-func (UnimplementedClydeServiceServer) GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetConversation not implemented")
-}
-func (UnimplementedClydeServiceServer) GetConversationContext(context.Context, *GetConversationContextRequest) (*GetConversationContextResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetConversationContext not implemented")
-}
 func (UnimplementedClydeServiceServer) SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchConversations not implemented")
-}
-func (UnimplementedClydeServiceServer) ExportTranscript(context.Context, *ExportTranscriptRequest) (*ExportTranscriptResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ExportTranscript not implemented")
 }
 func (UnimplementedClydeServiceServer) StreamConversation(*GetConversationRequest, grpc.ServerStreamingServer[ConversationChunk]) error {
 	return status.Error(codes.Unimplemented, "method StreamConversation not implemented")
@@ -457,42 +407,6 @@ func _ClydeService_ListConversations_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ClydeService_GetConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetConversationRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ClydeServiceServer).GetConversation(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ClydeService_GetConversation_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClydeServiceServer).GetConversation(ctx, req.(*GetConversationRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ClydeService_GetConversationContext_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetConversationContextRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ClydeServiceServer).GetConversationContext(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ClydeService_GetConversationContext_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClydeServiceServer).GetConversationContext(ctx, req.(*GetConversationContextRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _ClydeService_SearchConversations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SearchConversationsRequest)
 	if err := dec(in); err != nil {
@@ -507,24 +421,6 @@ func _ClydeService_SearchConversations_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClydeServiceServer).SearchConversations(ctx, req.(*SearchConversationsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ClydeService_ExportTranscript_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExportTranscriptRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ClydeServiceServer).ExportTranscript(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ClydeService_ExportTranscript_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClydeServiceServer).ExportTranscript(ctx, req.(*ExportTranscriptRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -658,20 +554,8 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClydeService_ListConversations_Handler,
 		},
 		{
-			MethodName: "GetConversation",
-			Handler:    _ClydeService_GetConversation_Handler,
-		},
-		{
-			MethodName: "GetConversationContext",
-			Handler:    _ClydeService_GetConversationContext_Handler,
-		},
-		{
 			MethodName: "SearchConversations",
 			Handler:    _ClydeService_SearchConversations_Handler,
-		},
-		{
-			MethodName: "ExportTranscript",
-			Handler:    _ClydeService_ExportTranscript_Handler,
 		},
 		{
 			MethodName: "GetMITMStatus",

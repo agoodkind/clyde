@@ -127,56 +127,6 @@ func (s *controlServer) ListConversations(ctx context.Context, req *clydev1.List
 	}, nil
 }
 
-// GetConversation resolves one conversation and returns its transcript rendered
-// as plain text.
-func (s *controlServer) GetConversation(ctx context.Context, req *clydev1.GetConversationRequest) (*clydev1.GetConversationResponse, error) {
-	client, _ := peer.FromContext(ctx)
-	record, err := s.index.Resolve(ctx, req.GetConversationId())
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.get_conversation.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", req.GetConversationId(),
-			"err", err,
-		)
-		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
-	}
-	text, err := s.index.RenderPlainText(record, int(req.GetLastN()))
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.get_conversation.render_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", record.ID,
-			"err", err,
-		)
-		return nil, status.Errorf(codes.Internal, "render conversation: %v", err)
-	}
-	return &clydev1.GetConversationResponse{Text: text}, nil
-}
-
-// GetConversationContext resolves one conversation and returns the messages
-// around a center point rendered as plain text.
-func (s *controlServer) GetConversationContext(ctx context.Context, req *clydev1.GetConversationContextRequest) (*clydev1.GetConversationContextResponse, error) {
-	client, _ := peer.FromContext(ctx)
-	record, err := s.index.Resolve(ctx, req.GetConversationId())
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.get_context.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", req.GetConversationId(),
-			"err", err,
-		)
-		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
-	}
-	text, err := s.index.ContextWindowText(record, req.GetTimestamp(), int(req.GetMessageIndex()), int(req.GetBefore()), int(req.GetAfter()))
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.get_context.render_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", record.ID,
-			"err", err,
-		)
-		return nil, status.Errorf(codes.Internal, "render context: %v", err)
-	}
-	return &clydev1.GetConversationContextResponse{Text: text}, nil
-}
-
 // SearchConversations returns a relevance-ranked list of conversation hits.
 // Each hit carries the matched passage as a byte-bounded excerpt (set in
 // engineSearchMatches), so the list is self-sufficient for triage and small
@@ -511,41 +461,6 @@ func protoFilterAccounting(stages []conversation.FilterStage) *clydev1.FilterAcc
 		out = append(out, &clydev1.FilterStage{Name: stage.Name, Remaining: int64(stage.Remaining)})
 	}
 	return &clydev1.FilterAccounting{Stages: out}
-}
-
-// ExportTranscript resolves one conversation and returns its exported body.
-func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.ExportTranscriptRequest) (*clydev1.ExportTranscriptResponse, error) {
-	client, _ := peer.FromContext(ctx)
-	record, err := s.index.Resolve(ctx, req.GetConversationId())
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.export.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", req.GetConversationId(),
-			"err", err,
-		)
-		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
-	}
-	options := conversation.ExportOptions{
-		Format:       conversation.ExportFormat(req.GetFormat()),
-		HistoryStart: int(req.GetHistoryStart()),
-		Whitespace:   conversation.WhitespaceMode(req.GetWhitespace()),
-		Content:      contentKindSetFromExportRequest(req),
-		Compaction: conversation.CompactionExportOptions{
-			Scope:            conversation.CompactionExportScope(req.GetCompactionScope()),
-			Detail:           conversation.CompactionExportDetail(req.GetCompactionDetail()),
-			CheckpointNumber: int(req.GetCompactionCheckpoint()),
-		},
-	}
-	body, err := s.index.Export(record, options)
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.export.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", record.ID,
-			"err", err,
-		)
-		return nil, status.Errorf(codes.Internal, "export transcript: %v", err)
-	}
-	return &clydev1.ExportTranscriptResponse{Body: body}, nil
 }
 
 // contentKindSetFromExportRequest rebuilds the content-kind set from the export
