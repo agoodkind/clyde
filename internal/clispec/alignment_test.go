@@ -34,12 +34,13 @@ var cliOnlyFlags = map[string]bool{
 	"tools":             true,
 }
 
-// TestConversationRegistryNamesAreExactlyThree guards the operation set. It
+// TestConversationRegistryNames guards the operation set. It
 // stands in for the hand-maintained checklist that AGENTS.md used to carry.
-func TestConversationRegistryNamesAreExactlyThree(t *testing.T) {
+func TestConversationRegistryNames(t *testing.T) {
 	t.Parallel()
 	reg := NewConversationRegistry()
 	want := []string{
+		"clyde_conversation_info",
 		"clyde_export_transcript",
 		"clyde_reorient",
 		"clyde_search",
@@ -121,7 +122,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if conversationParent == nil {
 		t.Fatal("conversation parent missing")
 	}
-	wantConversationChildren := []string{"export", "reorient", "search"}
+	wantConversationChildren := []string{"export", "info", "reorient", "search"}
 	var gotChildren []string
 	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())
@@ -145,6 +146,17 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	sort.Strings(gotChildren)
 	if strings.Join(gotChildren, ",") != "tail" {
 		t.Fatalf("export children: got %v, want [tail]", gotChildren)
+	}
+
+	infoLeaf, _, err := conversationParent.Find([]string{"info"})
+	if err != nil {
+		t.Fatalf("find conversation info: %v", err)
+	}
+	if infoLeaf == nil {
+		t.Fatal("info leaf missing")
+	}
+	if len(infoLeaf.Commands()) != 0 {
+		t.Fatalf("info is a leaf, got %d subcommands", len(infoLeaf.Commands()))
 	}
 
 	searchLeaf, _, err := conversationParent.Find([]string{"search"})

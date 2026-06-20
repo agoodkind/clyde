@@ -163,6 +163,26 @@ func GetConversation(ctx context.Context, conversationID string, lastN int) (str
 	return text, nil
 }
 
+// GetConversationInfo asks the daemon for one conversation's static metadata
+// and compaction segment stack.
+func GetConversationInfo(ctx context.Context, conversationID string) (conversation.Info, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return conversation.Info{}, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.GetConversationInfo(rpcCtx, &clydev1.GetConversationInfoRequest{
+		ConversationId: conversationID,
+	})
+	if err != nil {
+		return conversation.Info{}, daemonRPCError(rpcCtx, "get conversation info", err)
+	}
+	return conversationInfoFromProto(resp), nil
+}
+
 // GetConversationContext asks the daemon for the messages around a center point
 // rendered as plain text.
 func GetConversationContext(ctx context.Context, conversationID, timestamp string, messageIndex, before, after int) (string, error) {
@@ -369,6 +389,55 @@ func conversationRecordFromProto(wire *clydev1.ConversationRecord) conversation.
 		SizeBytes:     wire.GetSizeBytes(),
 		Archived:      wire.GetArchived(),
 	}
+}
+
+func conversationInfoFromProto(resp *clydev1.GetConversationInfoResponse) conversation.Info {
+	return conversation.Info{
+		Record:          conversationRecordFromProto(resp.GetConversation()),
+		Stats:           conversationStatsFromProto(resp.GetStats()),
+		CompactionCount: int(resp.GetCompactionCount()),
+		Segments:        conversationSegmentsFromProto(resp.GetSegments()),
+	}
+}
+
+func conversationStatsFromProto(wire *clydev1.ConversationInfoStats) conversation.Stats {
+	if wire == nil {
+		return conversation.Stats{}
+	}
+	return conversation.Stats{
+		TotalMessages:     int(wire.GetTotalMessages()),
+		VisibleMessages:   int(wire.GetVisibleMessages()),
+		UserMessages:      int(wire.GetUserMessages()),
+		AssistantMessages: int(wire.GetAssistantMessages()),
+		SystemMessages:    int(wire.GetSystemMessages()),
+		ToolCallCount:     int(wire.GetToolCallCount()),
+		ToolOutputCount:   int(wire.GetToolOutputCount()),
+	}
+}
+
+func conversationSegmentsFromProto(
+	wireSegments []*clydev1.ConversationCompactionSegment,
+) []conversation.CompactionSegment {
+	segments := make([]conversation.CompactionSegment, 0, len(wireSegments))
+	for _, wire := range wireSegments {
+		summaryTimestamp := time.Time{}
+		if wire.GetHasStartingSummary() {
+			summaryTimestamp = time.Unix(wire.GetSummaryTimestampUnix(), 0)
+		}
+		segments = append(segments, conversation.CompactionSegment{
+			Index:               int(wire.GetIndex()),
+			StartMessageIndex:   int(wire.GetStartMessageIndex()),
+			EndMessageIndex:     int(wire.GetEndMessageIndex()),
+			HasStartingSummary:  wire.GetHasStartingSummary(),
+			SummaryMessageIndex: int(wire.GetSummaryMessageIndex()),
+			SummaryUUID:         wire.GetSummaryUuid(),
+			SummaryTimestamp:    summaryTimestamp,
+			VisibleMessageCount: int(wire.GetVisibleMessageCount()),
+			ToolCallCount:       int(wire.GetToolCallCount()),
+			Checkpoint:          conversation.CompactionCheckpoint{},
+		})
+	}
+	return segments
 }
 
 // ExportTranscript asks the daemon to export one conversation and returns the

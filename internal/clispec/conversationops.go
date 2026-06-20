@@ -35,6 +35,12 @@ type searchInput struct {
 
 func (searchInput) isClispecInput() {}
 
+type conversationInfoInput struct {
+	ConversationID string
+}
+
+func (conversationInfoInput) isClispecInput() {}
+
 // searchMode is the closed set of behaviors the single search operation
 // dispatches to, chosen in Prepare from which inputs are set.
 type searchMode uint8
@@ -68,13 +74,49 @@ type searchPayload struct {
 
 func (searchPayload) isClispecPrepared() {}
 
+type conversationInfoPayload struct {
+	ConversationID string
+}
+
+func (conversationInfoPayload) isClispecPrepared() {}
+
 // conversationGroup is the terminal parent for conversation operations.
 var conversationGroup = &Group{
 	Use:     "conversation",
 	Short:   "Inspect Claude and Codex conversations",
-	Long:    "Inspect indexed Claude and Codex conversations: search across or within conversations, read a transcript or a context window, browse metadata, and export a transcript. Clyde reads provider-owned artifacts and never mutates them.",
-	Example: "clyde conversation search --query \"auth timeout\"\nclyde conversation export claude:1a2b3c",
+	Long:    "Inspect indexed Claude and Codex conversations: search across or within conversations, inspect static conversation info, read a transcript or a context window, browse metadata, and export a transcript. Clyde reads provider-owned artifacts and never mutates them.",
+	Example: "clyde conversation search --query \"auth timeout\"\nclyde conversation info claude:1a2b3c\nclyde conversation export claude:1a2b3c",
 	Parent:  nil,
+}
+
+func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPayload] {
+	return Operation[conversationInfoInput, conversationInfoPayload]{
+		Name:     Name{Canonical: "conversation_info", CLIOverride: "info"},
+		Group:    conversationGroup,
+		Surfaces: SurfaceSet{CLI: true, MCP: true},
+		Short:    "Show static information about a conversation.",
+		Long:     "Print one conversation's record metadata, message and tool counts, compaction count, and compaction segment stack.",
+		Examples: []string{"clyde conversation info claude:1a2b3c"},
+		Args: []Arg[conversationInfoInput]{
+			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
+				func(in *conversationInfoInput, v string) { in.ConversationID = v }),
+		},
+		Params:         nil,
+		New:            func() conversationInfoInput { return conversationInfoInput{ConversationID: ""} },
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		Children:       nil,
+		Prepare: func(in conversationInfoInput) (conversationInfoPayload, error) {
+			return conversationInfoPayload(in), nil
+		},
+		Run: func(ctx context.Context, p conversationInfoPayload, surface Surface, sink ResultSink) error {
+			info, err := daemon.GetConversationInfo(ctx, p.ConversationID)
+			if err != nil {
+				return logFail(ctx, surface, "info_failed", "get conversation info", err)
+			}
+			return sink.Text(formatConversationInfo(info))
+		},
+	}
 }
 
 // searchOp is the single conversation read-and-search operation. It renders to
@@ -419,6 +461,60 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult) stri
 			tsvField(match.Snippet),
 		)
 		writeMatchContextWindow(&out, match.ContextWindow)
+	}
+	return out.String()
+}
+
+func formatConversationInfo(info conv.Info) string {
+	var out strings.Builder
+	record := info.Record
+	stats := info.Stats
+	fmt.Fprintf(&out, "conversation_id: %s\n", record.ID)
+	fmt.Fprintf(&out, "provider: %s\n", record.Provider.String())
+	fmt.Fprintf(&out, "native_id: %s\n", record.NativeID)
+	fmt.Fprintf(&out, "title: %s\n", record.Title)
+	fmt.Fprintf(&out, "workspace_root: %s\n", record.WorkspaceRoot)
+	fmt.Fprintf(&out, "artifact_path: %s\n", record.ArtifactPath)
+	fmt.Fprintf(&out, "artifact_kind: %s\n", record.ArtifactKind)
+	fmt.Fprintf(&out, "model: %s\n", record.Model)
+	fmt.Fprintf(&out, "created_at: %s\n", formatTime(record.CreatedAt))
+	fmt.Fprintf(&out, "updated_at: %s\n", formatTime(record.UpdatedAt))
+	fmt.Fprintf(&out, "size_bytes: %d\n", record.SizeBytes)
+	fmt.Fprintf(&out, "archived: %t\n", record.Archived)
+	fmt.Fprintf(&out, "total_messages: %d\n", stats.TotalMessages)
+	fmt.Fprintf(&out, "visible_messages: %d\n", stats.VisibleMessages)
+	fmt.Fprintf(&out, "user_messages: %d\n", stats.UserMessages)
+	fmt.Fprintf(&out, "assistant_messages: %d\n", stats.AssistantMessages)
+	fmt.Fprintf(&out, "system_messages: %d\n", stats.SystemMessages)
+	fmt.Fprintf(&out, "tool_calls: %d\n", stats.ToolCallCount)
+	fmt.Fprintf(&out, "tool_outputs: %d\n", stats.ToolOutputCount)
+	fmt.Fprintf(&out, "compactions: %d\n", info.CompactionCount)
+	if len(info.Segments) == 0 {
+		out.WriteString("\nNo compaction segments found.\n")
+		return out.String()
+	}
+	out.WriteString("\n")
+	out.WriteString("segment\thas_summary\tstart_message_index\tend_message_index\tsummary_message_index\tsummary_timestamp\tvisible_messages\ttool_calls\texport_selector\n")
+	for _, segment := range info.Segments {
+		summaryIndex := ""
+		summaryTimestamp := ""
+		if segment.HasStartingSummary {
+			summaryIndex = fmt.Sprintf("%d", segment.SummaryMessageIndex)
+			summaryTimestamp = formatTime(segment.SummaryTimestamp)
+		}
+		fmt.Fprintf(
+			&out,
+			"%d\t%t\t%d\t%d\t%s\t%s\t%d\t%d\t%d\n",
+			segment.Index,
+			segment.HasStartingSummary,
+			segment.StartMessageIndex,
+			segment.EndMessageIndex,
+			summaryIndex,
+			summaryTimestamp,
+			segment.VisibleMessageCount,
+			segment.ToolCallCount,
+			segment.Index,
+		)
 	}
 	return out.String()
 }
