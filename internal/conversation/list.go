@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -426,6 +427,28 @@ func snippet(text string) string {
 		return normalized
 	}
 	return string(runes[:searchSnippetRunes]) + "..."
+}
+
+// searchExcerptMaxBytes bounds one hit's excerpt. A ranked result carries the
+// matched passage like a code-search snippet, generous enough to read in place
+// but capped so the whole result list stays small for any transport. The full
+// surrounding window is a separate windowed read.
+const searchExcerptMaxBytes = 4096
+
+// Excerpt bounds the matched passage to the byte budget on a rune boundary,
+// preserving line breaks so a hit renders as a readable multi-line block. A
+// truncated excerpt ends with an ellipsis so the reader knows to drill in for
+// the rest.
+func Excerpt(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if len(trimmed) <= searchExcerptMaxBytes {
+		return trimmed
+	}
+	cut := searchExcerptMaxBytes
+	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+		cut--
+	}
+	return strings.TrimRight(trimmed[:cut], " \t\n") + "\n..."
 }
 
 func errorsQueryRequired() error {
