@@ -15,6 +15,8 @@ config schemas, route inventories, model catalogs, and listener lists. Use the
 current source or generated help for details that can drift:
 
 - CLI commands: `clyde --help` and `clyde <command> --help`.
+- Conversation model, ids, indexing, compaction segments, and export selection:
+  `docs/conversations.md`.
 - Conversation CLI and MCP operations: `clyde conversation --help` and
   `internal/clispec/`.
 - Runtime config: `clyde.example.toml` and `internal/config/`.
