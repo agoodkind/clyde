@@ -101,8 +101,9 @@ func probeOp() Operation[probeInput, probeInput] {
 			BoolParam("on", "on", false, func(in *probeInput, v bool) { in.On = v }),
 			EnumParam("mode", "mode", "alpha", []string{"alpha", "beta"}, func(in *probeInput, v string) { in.Mode = v }),
 		},
-		New:     func() probeInput { return probeInput{ID: "", Count: 7, On: false, Mode: "alpha", Surface: SurfaceCLI} },
-		Prepare: func(in probeInput) (probeInput, error) { return in, nil },
+		New:      func() probeInput { return probeInput{ID: "", Count: 7, On: false, Mode: "alpha", Surface: SurfaceCLI} },
+		Children: nil,
+		Prepare:  func(in probeInput) (probeInput, error) { return in, nil },
 		Run: func(_ context.Context, in probeInput, surface Surface, sink ResultSink) error {
 			in.Surface = surface
 			return sink.Text(formatProbe(in))

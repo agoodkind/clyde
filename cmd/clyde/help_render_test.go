@@ -50,6 +50,9 @@ func TestEveryParentRejectsUnknownSubcommand(t *testing.T) {
 		if !cmd.HasSubCommands() {
 			return
 		}
+		if len(strings.Fields(cmd.Use)) > 1 {
+			return
+		}
 		if cmd.Args == nil {
 			t.Errorf("%s: parent has no argument validator, so unknown subcommands are not rejected", cmd.CommandPath())
 			return

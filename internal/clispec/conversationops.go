@@ -142,6 +142,7 @@ func searchOp() Operation[searchInput, searchPayload] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		Children:       nil,
 		Prepare:        prepareSearch,
 		Run:            runSearch,
 	}

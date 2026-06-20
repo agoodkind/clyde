@@ -34,6 +34,20 @@ type exportPayload struct {
 
 func (exportPayload) isClispecPrepared() {}
 
+type exportTailInput struct {
+	ConversationID string
+	LastN          int
+}
+
+func (exportTailInput) isClispecInput() {}
+
+type exportTailPayload struct {
+	ConversationID string
+	Options        conv.ExportOptions
+}
+
+func (exportTailPayload) isClispecPrepared() {}
+
 var exportFormatValues = []string{
 	string(conv.ExportFormatMarkdown),
 	string(conv.ExportFormatHTML),
@@ -168,6 +182,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		Children:       []renderable{exportTailOp()},
 		Prepare: func(in exportInput) (exportPayload, error) {
 			whitespace, err := resolveExportWhitespace(in)
 			if err != nil {
@@ -206,6 +221,62 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 			}, nil
 		},
 		Run: runExportTranscript,
+	}
+}
+
+func exportTailOp() Operation[exportTailInput, exportTailPayload] {
+	return Operation[exportTailInput, exportTailPayload]{
+		Name:     Name{Canonical: "export_tail", CLIOverride: "tail"},
+		Group:    nil,
+		Surfaces: SurfaceSet{CLI: true, MCP: false},
+		Short:    "Export the latest conversation messages.",
+		Long:     "Export the latest visible messages from compaction segment 0 as dense Markdown with chat text and tool summaries.",
+		Examples: []string{
+			"clyde conversation export tail claude:1a2b3c --last-n 20",
+		},
+		Args: []Arg[exportTailInput]{
+			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
+				func(in *exportTailInput, v string) { in.ConversationID = v }),
+		},
+		Params: []Param[exportTailInput]{
+			IntParam("last_n", "Visible message count to keep.", 0,
+				func(in *exportTailInput, v int) { in.LastN = v }),
+		},
+		New: func() exportTailInput {
+			return exportTailInput{ConversationID: "", LastN: 0}
+		},
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		Children:       nil,
+		Prepare: func(in exportTailInput) (exportTailPayload, error) {
+			if in.LastN <= 0 {
+				return exportTailPayload{}, fmt.Errorf("--last-n must be greater than 0")
+			}
+			return exportTailPayload{
+				ConversationID: in.ConversationID,
+				Options: conv.ExportOptions{
+					Format:       conv.ExportFormatMarkdown,
+					HistoryStart: 0,
+					LastN:        in.LastN,
+					Whitespace:   conv.WhitespaceDense,
+					Content:      conv.NewContentKindSet(conv.ContentKindChat, conv.ContentKindToolSummaries),
+					Compaction: conv.CompactionExportOptions{
+						IncludeSelector: "0",
+						FullHistory:     false,
+					},
+				},
+			}, nil
+		},
+		Run: func(ctx context.Context, p exportTailPayload, surface Surface, sink ResultSink) error {
+			payload := exportPayload{
+				ConversationID: p.ConversationID,
+				Options:        p.Options,
+				OutputPath:     "",
+				Stdout:         true,
+				Copy:           false,
+			}
+			return runExportTranscript(ctx, payload, surface, sink)
+		},
 	}
 }
 

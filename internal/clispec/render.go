@@ -66,10 +66,16 @@ func ensureGroup(group *Group, parents map[*Group]*cobra.Command, roots *[]*cobr
 // regardless of how the tool was built, so this function only adds tools.
 func RenderMCP(reg *Registry, mcpServer *server.MCPServer) {
 	for _, op := range reg.ops {
-		if !op.surfaceSet().MCP {
-			continue
-		}
+		renderMCPTools(op, mcpServer)
+	}
+}
+
+func renderMCPTools(op renderable, mcpServer *server.MCPServer) {
+	if op.surfaceSet().MCP {
 		tool, handler := op.mcpTool()
 		mcpServer.AddTool(tool, handler)
+	}
+	for _, child := range op.children() {
+		renderMCPTools(child, mcpServer)
 	}
 }
