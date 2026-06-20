@@ -488,41 +488,6 @@ func protoFilterAccounting(stages []conversation.FilterStage) *clydev1.FilterAcc
 	return &clydev1.FilterAccounting{Stages: out}
 }
 
-// ExportTranscript resolves one conversation and returns its exported body.
-func (s *controlServer) ExportTranscript(ctx context.Context, req *clydev1.ExportTranscriptRequest) (*clydev1.ExportTranscriptResponse, error) {
-	client, _ := peer.FromContext(ctx)
-	record, err := s.index.Resolve(ctx, req.GetConversationId())
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.export.resolve_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", req.GetConversationId(),
-			"err", err,
-		)
-		return nil, status.Errorf(codes.NotFound, "resolve conversation: %v", err)
-	}
-	options := conversation.ExportOptions{
-		Format:       conversation.ExportFormat(req.GetFormat()),
-		HistoryStart: int(req.GetHistoryStart()),
-		LastN:        int(req.GetLastN()),
-		Whitespace:   conversation.WhitespaceMode(req.GetWhitespace()),
-		Content:      contentKindSetFromExportRequest(req),
-		Compaction: conversation.CompactionExportOptions{
-			IncludeSelector: req.GetIncludeCompactions(),
-			FullHistory:     req.GetFullHistory(),
-		},
-	}
-	body, err := s.index.Export(record, options)
-	if err != nil {
-		slog.WarnContext(ctx, "daemon.export.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"peer", peerString(client),
-			"conversation_id", record.ID,
-			"err", err,
-		)
-		return nil, status.Errorf(codes.Internal, "export transcript: %v", err)
-	}
-	return &clydev1.ExportTranscriptResponse{Body: body}, nil
-}
-
 // contentKindSetFromExportRequest rebuilds the content-kind set from the export
 // request's per-kind booleans, which remain the wire encoding of the selection.
 func contentKindSetFromExportRequest(req *clydev1.ExportTranscriptRequest) conversation.ContentKindSet {
