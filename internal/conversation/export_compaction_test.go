@@ -11,46 +11,14 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-func TestExportFullScopeDoesNotLoadSystemCompactionMessages(t *testing.T) {
-	t.Parallel()
-	idx, record, loadOptions := newCompactionExportIndex()
-
-	body, err := idx.Export(record, ExportOptions{
-		Format:       ExportFormatPlainText,
-		HistoryStart: 0,
-		Whitespace:   WhitespacePreserve,
-		Content:      NewContentKindSet(ContentKindChat),
-		Compaction: CompactionExportOptions{
-			Scope:            CompactionExportScopeFull,
-			Detail:           "",
-			CheckpointNumber: 0,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Export returned error: %v", err)
-	}
-	if len(*loadOptions) != 1 {
-		t.Fatalf("load options calls = %d, want 1", len(*loadOptions))
-	}
-	if (*loadOptions)[0].IncludeSystemMessages {
-		t.Fatalf("full export loaded system messages")
-	}
-	text := string(body)
-	if strings.Contains(text, "boundary text") {
-		t.Fatalf("full export leaked system boundary text: %q", text)
-	}
-	if !strings.Contains(text, "tail after latest") {
-		t.Fatalf("full export text = %q, want visible tail", text)
-	}
-}
-
-func TestExportDefaultUsesLatestCompactionFullDetail(t *testing.T) {
+func TestExportDefaultUsesLatestCompactionSegment(t *testing.T) {
 	t.Parallel()
 	idx, record, loadOptions := newCompactionExportIndex()
 
 	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatMarkdown,
 		HistoryStart: 0,
+		LastN:        0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat),
 	})
@@ -61,81 +29,39 @@ func TestExportDefaultUsesLatestCompactionFullDetail(t *testing.T) {
 		t.Fatalf("load options calls = %d, want 1", len(*loadOptions))
 	}
 	if !(*loadOptions)[0].IncludeSystemMessages {
-		t.Fatalf("default current context export did not load system messages")
+		t.Fatalf("default segment export did not load system messages")
 	}
 	text := string(body)
 	for _, want := range []string{
-		"Compaction 3 Full Details",
+		"Compaction Segments 0",
 		"latest boundary context",
 		"latest summary context",
 		"tail after latest",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("default current context export missing %q in:\n%s", want, text)
+			t.Fatalf("default segment export missing %q in:\n%s", want, text)
 		}
 	}
 	for _, unwanted := range []string{"tail after first", "tail after micro", "latest boundary text"} {
 		if strings.Contains(text, unwanted) {
-			t.Fatalf("default current context export included %q in:\n%s", unwanted, text)
+			t.Fatalf("default segment export included %q in:\n%s", unwanted, text)
 		}
 	}
 }
 
-func TestExportCurrentContextUsesLatestUsableCompaction(t *testing.T) {
-	t.Parallel()
-	idx, record, loadOptions := newCompactionExportIndex()
-
-	body, err := idx.Export(record, ExportOptions{
-		Format:       ExportFormatMarkdown,
-		HistoryStart: 0,
-		Whitespace:   WhitespacePreserve,
-		Content:      NewContentKindSet(ContentKindChat),
-		Compaction: CompactionExportOptions{
-			Scope:            CompactionExportScopeCurrentContext,
-			Detail:           "",
-			CheckpointNumber: 0,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Export returned error: %v", err)
-	}
-	if len(*loadOptions) != 1 {
-		t.Fatalf("load options calls = %d, want 1", len(*loadOptions))
-	}
-	if !(*loadOptions)[0].IncludeSystemMessages {
-		t.Fatalf("current context export did not load system messages")
-	}
-	text := string(body)
-	for _, want := range []string{
-		"Compaction 3 Full Details",
-		"latest boundary context",
-		"latest summary context",
-		"tail after latest",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("current context export missing %q in:\n%s", want, text)
-		}
-	}
-	for _, unwanted := range []string{"tail after first", "tail after micro", "latest boundary text"} {
-		if strings.Contains(text, unwanted) {
-			t.Fatalf("current context export included %q in:\n%s", unwanted, text)
-		}
-	}
-}
-
-func TestExportFromCheckpointRendersSummaryOnly(t *testing.T) {
+func TestExportSelectorRangeRendersChronologicalSegments(t *testing.T) {
 	t.Parallel()
 	idx, record, _ := newCompactionExportIndex()
 
 	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatMarkdown,
 		HistoryStart: 0,
+		LastN:        0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat),
 		Compaction: CompactionExportOptions{
-			Scope:            CompactionExportScopeFromCheckpoint,
-			Detail:           CompactionExportDetailSummary,
-			CheckpointNumber: 1,
+			IncludeSelector: "0..2",
+			FullHistory:     false,
 		},
 	})
 	if err != nil {
@@ -143,34 +69,39 @@ func TestExportFromCheckpointRendersSummaryOnly(t *testing.T) {
 	}
 	text := string(body)
 	for _, want := range []string{
-		"Compaction 1 Summary",
+		"Compaction Segments 0..2",
 		"first summary context",
+		"micro context",
+		"latest summary context",
 		"tail after first",
+		"tail after micro",
+		"tail after latest",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("from-checkpoint export missing %q in:\n%s", want, text)
+			t.Fatalf("range export missing %q in:\n%s", want, text)
 		}
 	}
-	for _, unwanted := range []string{"first boundary context", "micro boundary text"} {
-		if strings.Contains(text, unwanted) {
-			t.Fatalf("from-checkpoint export included %q in:\n%s", unwanted, text)
-		}
+	first := strings.Index(text, "tail after first")
+	micro := strings.Index(text, "tail after micro")
+	latest := strings.Index(text, "tail after latest")
+	if first < 0 || micro < 0 || latest < 0 || !(first < micro && micro < latest) {
+		t.Fatalf("range export order first=%d micro=%d latest=%d in:\n%s", first, micro, latest, text)
 	}
 }
 
-func TestExportFromCheckpointJSONIncludesFullParsedDetail(t *testing.T) {
+func TestExportFullHistorySelectsAllSegments(t *testing.T) {
 	t.Parallel()
 	idx, record, _ := newCompactionExportIndex()
 
 	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatJSON,
 		HistoryStart: 0,
+		LastN:        0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat),
 		Compaction: CompactionExportOptions{
-			Scope:            CompactionExportScopeFromCheckpoint,
-			Detail:           CompactionExportDetailFull,
-			CheckpointNumber: 2,
+			IncludeSelector: "",
+			FullHistory:     true,
 		},
 	})
 	if err != nil {
@@ -183,52 +114,78 @@ func TestExportFromCheckpointJSONIncludesFullParsedDetail(t *testing.T) {
 	if document.Compaction == nil {
 		t.Fatal("compaction block was nil")
 	}
-	if document.Compaction.CheckpointNumber != 2 {
-		t.Fatalf("checkpoint number = %d, want 2", document.Compaction.CheckpointNumber)
+	if document.Compaction.Selector != "all" {
+		t.Fatalf("selector = %q, want all", document.Compaction.Selector)
 	}
-	if document.Compaction.Checkpoint == nil ||
-		document.Compaction.Checkpoint.BoundaryUUID != "micro-2" {
-		t.Fatalf("checkpoint = %#v, want micro-2", document.Compaction.Checkpoint)
+	if len(document.Compaction.Segments) != 3 {
+		t.Fatalf("compaction segments = %d, want 3 starting summaries", len(document.Compaction.Segments))
 	}
-	if len(document.Messages) == 0 || document.Messages[0].Text != "tail after micro" {
-		t.Fatalf("messages = %#v, want tail after micro first", document.Messages)
+	if len(document.Messages) != 3 {
+		t.Fatalf("messages = %d, want 3 visible messages", len(document.Messages))
 	}
 }
 
-func TestExportCurrentContextFallsBackToFullWithoutCheckpoint(t *testing.T) {
+func TestExportLastNPreservesStartingSummary(t *testing.T) {
 	t.Parallel()
-	idx, record := newOptionAwareIndex()
+	idx, record, _ := newCompactionExportIndex()
 
 	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatMarkdown,
 		HistoryStart: 0,
+		LastN:        2,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat),
 		Compaction: CompactionExportOptions{
-			Scope:            CompactionExportScopeCurrentContext,
-			Detail:           CompactionExportDetailContext,
-			CheckpointNumber: 0,
+			IncludeSelector: "0..2",
+			FullHistory:     false,
 		},
 	})
 	if err != nil {
 		t.Fatalf("Export returned error: %v", err)
 	}
 	text := string(body)
-	if !strings.Contains(text, "visible transcript message") {
-		t.Fatalf("fallback export = %q, want visible transcript message", text)
+	for _, want := range []string{"micro context", "latest summary context", "tail after micro", "tail after latest"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("last-n export missing %q in:\n%s", want, text)
+		}
 	}
-	if strings.Contains(text, "Conversation compacted") {
-		t.Fatalf("fallback export leaked system message: %q", text)
+	if strings.Contains(text, "tail after first") {
+		t.Fatalf("last-n export included older message in:\n%s", text)
 	}
 }
 
-func TestExportDefaultedScopeFallsBackToFullWithoutCheckpoint(t *testing.T) {
+func TestExportRejectsOutOfRangeSegment(t *testing.T) {
 	t.Parallel()
-	idx, record := newOptionAwareIndex()
+	idx, record, _ := newCompactionExportIndex()
+
+	_, err := idx.Export(record, ExportOptions{
+		Format:       ExportFormatMarkdown,
+		HistoryStart: 0,
+		LastN:        0,
+		Whitespace:   WhitespacePreserve,
+		Content:      NewContentKindSet(ContentKindChat),
+		Compaction: CompactionExportOptions{
+			IncludeSelector: "4",
+			FullHistory:     false,
+		},
+	})
+
+	if err == nil {
+		t.Fatal("expected out-of-range segment error")
+	}
+	if !strings.Contains(err.Error(), "conversation has compaction segments 0..3") {
+		t.Fatalf("error = %q, want segment range", err.Error())
+	}
+}
+
+func TestExportDefaultedSegmentWithoutCompactionRendersConversation(t *testing.T) {
+	t.Parallel()
+	idx, record := newPlainExportIndex()
 
 	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatMarkdown,
 		HistoryStart: 0,
+		LastN:        0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat),
 	})
@@ -236,11 +193,11 @@ func TestExportDefaultedScopeFallsBackToFullWithoutCheckpoint(t *testing.T) {
 		t.Fatalf("Export returned error: %v", err)
 	}
 	text := string(body)
-	if !strings.Contains(text, "visible transcript message") {
+	if !strings.Contains(text, "plain visible message") {
 		t.Fatalf("defaulted export = %q, want visible transcript message", text)
 	}
-	if strings.Contains(text, "Conversation compacted") {
-		t.Fatalf("defaulted export leaked system message: %q", text)
+	if strings.Contains(text, "Compaction Segments") {
+		t.Fatalf("uncompacted export rendered compaction block: %q", text)
 	}
 }
 
@@ -265,6 +222,22 @@ func newCompactionExportIndex() (*Index, Record, *[]LoadOptions) {
 	idx.loaded = true
 	record := idx.records[0]
 	return idx, record, &loadOptions
+}
+
+func newPlainExportIndex() (*Index, Record) {
+	registry := NewRegistry()
+	registry.Register(&streamFuncParser{stream: func(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
+		return func(yield func(transcript.Message, error) bool) {
+			if !yield(exportChatMessage("plain-1", "user", "plain visible message", 1), nil) {
+				return
+			}
+		}
+	}})
+	idx := newTestIndex(registry)
+	idx.records = []Record{compactionExportRecord()}
+	idx.loaded = true
+	record := idx.records[0]
+	return idx, record
 }
 
 func compactionExportRecord() Record {
@@ -458,7 +431,21 @@ func exportMessageContextItem(
 		Raw:          json.RawMessage(`{"type":"message","role":"user"}`),
 	}
 	return transcript.CompactedContextItem{
-		Kind:    transcript.CompactedContextItemKindMessage,
-		Message: &messageItem,
+		Kind:                 transcript.CompactedContextItemKindMessage,
+		Message:              &messageItem,
+		Reasoning:            nil,
+		LocalShellCall:       nil,
+		FunctionCall:         nil,
+		ToolSearchCall:       nil,
+		FunctionCallOutput:   nil,
+		CustomToolCall:       nil,
+		CustomToolCallOutput: nil,
+		ToolSearchOutput:     nil,
+		WebSearchCall:        nil,
+		ImageGenerationCall:  nil,
+		Compaction:           nil,
+		CompactionTrigger:    nil,
+		ContextCompaction:    nil,
+		Other:                nil,
 	}
 }

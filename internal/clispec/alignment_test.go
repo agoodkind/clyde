@@ -16,12 +16,12 @@ import (
 // omission visible.
 var cliOnlyFlags = map[string]bool{
 	"all":    true,
+	"copy":   true,
 	"output": true,
 	"stdout": true,
 	// export whitespace shortcut flags: CLI sugar for the shared whitespace enum.
 	"preserve": true,
 	"tidy":     true,
-	"compact":  true,
 	"dense":    true,
 	// export per-type shortcut flags: CLI sugar for the single MCP `only` array.
 	"chat":              true,

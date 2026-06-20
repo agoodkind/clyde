@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -18,44 +19,36 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 	compactionOptions, err := NormalizeCompactionExportOptions(
 		options.Compaction,
 		options.HistoryStart,
+		options.LastN,
 	)
 	if err != nil {
 		return nil, err
 	}
 	options.Compaction = compactionOptions
-	compactionScoped := options.Compaction.Scope != CompactionExportScopeFull
 	messages, err := idx.LoadMessagesWithOptions(record, LoadOptions{
 		IncludeSystemPrompts:  options.Content.Has(ContentKindSystemPrompts),
-		IncludeSystemMessages: options.Content.Has(ContentKindSystemMessages) || compactionScoped,
+		IncludeSystemMessages: true,
 		IncludeToolOutputs:    options.Content.Has(ContentKindToolOutputs),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if compactionScoped {
-		selection, err := selectCompactionExportCheckpoint(
-			CompactionCheckpoints(messages),
-			options.Compaction,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if selection != nil {
-			body, err := renderCompactionScopedSelection(record, messages, options, *selection)
-			if err != nil {
-				return nil, err
-			}
-			return compressWhitespace(body, options.Format, options.Whitespace), nil
-		}
-		// current_context with no usable checkpoint: fall through to the
-		// full-transcript render below. filterMessages drops the system
-		// compaction messages the scoped load forced in.
+	segments := CompactionSegments(messages)
+	selection, err := SelectCompactionSegments(
+		segments,
+		options.Compaction.IncludeSelector,
+	)
+	if err != nil {
+		return nil, err
 	}
-	messages = filterMessages(messages, options)
+	selection = applyLastNToSegmentSelection(messages, selection, options.LastN)
+	selectedMessages := selectedCompactionSegmentMessages(messages, selection)
+	selectedMessages = filterMessages(selectedMessages, options)
 	if options.Format == ExportFormatJSON && !options.Content.Has(ContentKindRawJSONMetadata) {
-		clearMetadata(messages)
+		clearMetadata(selectedMessages)
 	}
-	body, err := renderMessages(record, messages, options)
+	compactionBlock := buildCompactionExportBlock(selection)
+	body, err := renderMessagesWithCompaction(record, selectedMessages, options, compactionBlock)
 	if err != nil {
 		return nil, err
 	}
@@ -69,10 +62,6 @@ type rawJSONExport struct {
 	Compaction            *compactionExportBlock `json:"compaction,omitempty"`
 	Messages              []transcript.Message   `json:"messages"`
 	CompactionCheckpoints []CompactionCheckpoint `json:"compaction_checkpoints,omitempty"`
-}
-
-func renderMessages(record Record, messages []transcript.Message, options ExportOptions) ([]byte, error) {
-	return renderMessagesWithCompaction(record, messages, options, nil)
 }
 
 func renderMessagesWithCompaction(
@@ -140,19 +129,21 @@ type shapedCompactionJSONExport struct {
 	Messages       []transcript.ConversationTurn `json:"messages"`
 }
 
-type compactionExportSelection struct {
-	Number     int
-	Checkpoint CompactionCheckpoint
-	TailStart  int
+type compactionExportBlock struct {
+	Selector string                         `json:"selector"`
+	Segments []compactionExportSegmentBlock `json:"segments"`
 }
 
-type compactionExportBlock struct {
-	CheckpointNumber int                               `json:"checkpoint_number"`
-	Scope            CompactionExportScope             `json:"scope"`
-	Detail           CompactionExportDetail            `json:"detail"`
-	Checkpoint       *CompactionCheckpoint             `json:"checkpoint,omitempty"`
-	SummaryItems     []transcript.CompactedContextItem `json:"summary_items,omitempty"`
-	ContextItems     []transcript.CompactedContextItem `json:"context_items,omitempty"`
+type compactionExportSegmentBlock struct {
+	SegmentIndex        int                               `json:"segment_index"`
+	HasStartingSummary  bool                              `json:"has_starting_summary"`
+	StartMessageIndex   int                               `json:"start_message_index"`
+	EndMessageIndex     int                               `json:"end_message_index"`
+	SummaryMessageIndex int                               `json:"summary_message_index"`
+	SummaryUUID         string                            `json:"summary_uuid,omitempty"`
+	SummaryTimestamp    time.Time                         `json:"summary_timestamp,omitzero"`
+	SummaryItems        []transcript.CompactedContextItem `json:"summary_items,omitempty"`
+	ContextItems        []transcript.CompactedContextItem `json:"context_items,omitempty"`
 }
 
 func renderRawJSON(
@@ -180,112 +171,97 @@ func renderRawJSON(
 	return append(body, '\n'), nil
 }
 
-func renderCompactionScopedSelection(
-	record Record,
+func applyLastNToSegmentSelection(
 	messages []transcript.Message,
-	options ExportOptions,
-	selection compactionExportSelection,
-) ([]byte, error) {
-	tailStart := min(selection.TailStart, len(messages))
-	tailMessages := filterMessages(messages[tailStart:], options)
-	if options.Format == ExportFormatJSON && !options.Content.Has(ContentKindRawJSONMetadata) {
-		clearMetadata(tailMessages)
+	selection CompactionSegmentSelection,
+	lastN int,
+) CompactionSegmentSelection {
+	if lastN <= 0 {
+		return selection
 	}
-	compactionBlock := buildCompactionExportBlock(selection, options.Compaction)
-	return renderMessagesWithCompaction(record, tailMessages, options, compactionBlock)
-}
-
-// selectCompactionExportCheckpoint chooses the checkpoint to scope export to.
-// A nil selection with a nil error means current_context found no usable
-// checkpoint, so the caller falls back to a full-transcript render, since an
-// uncompacted conversation's current context is its whole transcript.
-// from_checkpoint stays strict: an explicitly requested missing checkpoint is
-// a real error.
-func selectCompactionExportCheckpoint(
-	checkpoints []CompactionCheckpoint,
-	options CompactionExportOptions,
-) (*compactionExportSelection, error) {
-	switch options.Scope {
-	case CompactionExportScopeCurrentContext:
-		for i, checkpoint := range slices.Backward(checkpoints) {
-			if checkpoint.HasUsableCompactedContext() {
-				return &compactionExportSelection{
-					Number:     i + 1,
-					Checkpoint: checkpoint,
-					TailStart:  checkpointTailStart(checkpoint),
-				}, nil
+	remaining := lastN
+	cutoffSelectionIndex := 0
+	cutoffMessageIndex := -1
+	for i, segment := range slices.Backward(selection.Segments) {
+		for messageIndex := min(segment.EndMessageIndex, len(messages)) - 1; messageIndex >= segment.StartMessageIndex; messageIndex-- {
+			if !messageCountsForLastN(messages[messageIndex]) {
+				continue
+			}
+			remaining--
+			if remaining == 0 {
+				cutoffSelectionIndex = i
+				cutoffMessageIndex = messageIndex
+				break
 			}
 		}
-		return nil, nil
-	case CompactionExportScopeFromCheckpoint:
-		if options.CheckpointNumber < 1 || options.CheckpointNumber > len(checkpoints) {
-			return nil, fmt.Errorf(
-				"compaction checkpoint %d not found; conversation has %d checkpoints",
-				options.CheckpointNumber,
-				len(checkpoints),
-			)
+		if cutoffMessageIndex >= 0 {
+			break
 		}
-		checkpoint := checkpoints[options.CheckpointNumber-1]
-		return &compactionExportSelection{
-			Number:     options.CheckpointNumber,
-			Checkpoint: checkpoint,
-			TailStart:  checkpointTailStart(checkpoint),
-		}, nil
-	case CompactionExportScopeFull:
-		fallthrough
-	default:
-		return nil, fmt.Errorf(
-			"compaction scope %s does not select a checkpoint",
-			options.Scope,
-		)
+	}
+	if cutoffMessageIndex < 0 {
+		return selection
+	}
+	out := make([]CompactionSegment, 0, len(selection.Segments)-cutoffSelectionIndex)
+	for i := cutoffSelectionIndex; i < len(selection.Segments); i++ {
+		segment := selection.Segments[i]
+		if i == cutoffSelectionIndex {
+			segment.StartMessageIndex = cutoffMessageIndex
+		}
+		out = append(out, segment)
+	}
+	return CompactionSegmentSelection{
+		Selector: selection.Selector,
+		Segments: out,
 	}
 }
 
-func checkpointTailStart(checkpoint CompactionCheckpoint) int {
-	lastIndex := max(checkpoint.BoundaryIndex, checkpoint.SummaryIndex)
-	if lastIndex < 0 {
-		return 0
+func messageCountsForLastN(message transcript.Message) bool {
+	if message.Compaction != nil {
+		return false
 	}
-	return lastIndex + 1
+	return message.Visibility != transcript.MessageVisibilityMetaOnly
 }
 
-func buildCompactionExportBlock(
-	selection compactionExportSelection,
-	options CompactionExportOptions,
-) *compactionExportBlock {
-	switch options.Detail {
-	case CompactionExportDetailNone:
+func selectedCompactionSegmentMessages(
+	messages []transcript.Message,
+	selection CompactionSegmentSelection,
+) []transcript.Message {
+	selected := make([]transcript.Message, 0)
+	for _, segment := range selection.Segments {
+		start := max(segment.StartMessageIndex, 0)
+		end := min(segment.EndMessageIndex, len(messages))
+		if start >= end {
+			continue
+		}
+		selected = append(selected, messages[start:end]...)
+	}
+	return selected
+}
+
+func buildCompactionExportBlock(selection CompactionSegmentSelection) *compactionExportBlock {
+	segmentBlocks := make([]compactionExportSegmentBlock, 0, len(selection.Segments))
+	for _, segment := range selection.Segments {
+		if !segment.HasStartingSummary {
+			continue
+		}
+		segmentBlocks = append(segmentBlocks, compactionExportSegmentBlock{
+			SegmentIndex:        segment.Index,
+			HasStartingSummary:  segment.HasStartingSummary,
+			StartMessageIndex:   segment.StartMessageIndex,
+			EndMessageIndex:     segment.EndMessageIndex,
+			SummaryMessageIndex: segment.SummaryMessageIndex,
+			SummaryUUID:         segment.SummaryUUID,
+			SummaryTimestamp:    segment.SummaryTimestamp,
+			SummaryItems:        summaryContextItems(segment.Checkpoint.ContextItems),
+			ContextItems:        copyContextItems(segment.Checkpoint.ContextItems),
+		})
+	}
+	if len(segmentBlocks) == 0 {
 		return nil
-	case CompactionExportDetailSummary:
-		return &compactionExportBlock{
-			CheckpointNumber: selection.Number,
-			Scope:            options.Scope,
-			Detail:           options.Detail,
-			Checkpoint:       nil,
-			SummaryItems:     summaryContextItems(selection.Checkpoint.ContextItems),
-			ContextItems:     nil,
-		}
-	case CompactionExportDetailContext:
-		return &compactionExportBlock{
-			CheckpointNumber: selection.Number,
-			Scope:            options.Scope,
-			Detail:           options.Detail,
-			Checkpoint:       nil,
-			SummaryItems:     nil,
-			ContextItems:     copyContextItems(selection.Checkpoint.ContextItems),
-		}
-	case CompactionExportDetailFull:
-		checkpoint := selection.Checkpoint
-		return &compactionExportBlock{
-			CheckpointNumber: selection.Number,
-			Scope:            options.Scope,
-			Detail:           options.Detail,
-			Checkpoint:       &checkpoint,
-			SummaryItems:     nil,
-			ContextItems:     nil,
-		}
-	default:
-		return nil
+	}
+	return &compactionExportBlock{
+		Selector: selection.Selector,
+		Segments: segmentBlocks,
 	}
 }
 
@@ -382,37 +358,16 @@ func renderCompactionBlock(
 }
 
 func compactionBlockTitle(compactionBlock *compactionExportBlock) string {
-	var label string
-	switch compactionBlock.Detail {
-	case CompactionExportDetailSummary:
-		label = "Summary"
-	case CompactionExportDetailFull:
-		label = "Full Details"
-	case CompactionExportDetailNone, CompactionExportDetailContext:
-		label = "Context"
-	default:
-		label = "Context"
-	}
-	return fmt.Sprintf("Compaction %d %s", compactionBlock.CheckpointNumber, label)
+	return "Compaction Segments " + compactionBlock.Selector
 }
 
 func filterMessages(messages []transcript.Message, options ExportOptions) []transcript.Message {
 	out := make([]transcript.Message, 0, len(messages))
-	compactionMessages := transcript.CompactionMessages(messages)
-	compactionByMetadata := make(map[*transcript.CompactionMetadata]struct{}, len(compactionMessages))
-	for _, message := range compactionMessages {
-		if message.Compaction == nil {
-			continue
-		}
-		compactionByMetadata[message.Compaction] = struct{}{}
-	}
 	for i, message := range messages {
 		if options.HistoryStart > 0 && i < options.HistoryStart {
 			continue
 		}
-		if message.Role == "system" &&
-			message.Compaction != nil &&
-			!options.Content.Has(ContentKindSystemMessages) {
+		if message.Compaction != nil && !options.Content.Has(ContentKindSystemMessages) {
 			continue
 		}
 		if !options.Content.Has(ContentKindChat) && message.Text != "" {
@@ -425,8 +380,7 @@ func filterMessages(messages []transcript.Message, options ExportOptions) []tran
 			message.Tools = nil
 			message.HasTools = false
 		}
-		_, keepEmptyCompaction := compactionByMetadata[message.Compaction]
-		if message.Text == "" && message.Thinking == "" && len(message.Tools) == 0 && !keepEmptyCompaction {
+		if message.Text == "" && message.Thinking == "" && len(message.Tools) == 0 {
 			continue
 		}
 		out = append(out, message)

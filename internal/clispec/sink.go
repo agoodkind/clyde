@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"goodkind.io/clyde/internal/response"
@@ -25,6 +27,8 @@ type ResultSink interface {
 	// WriteFile writes bytes to a path on the terminal. The MCP sink has no
 	// file contract, so it folds the bytes into its in-memory buffer.
 	WriteFile(path string, b []byte) error
+	// Copy writes bytes to the system clipboard when the terminal supports it.
+	Copy(ctx context.Context, b []byte) error
 	// Surface reports the calling front end so a work function can pick a
 	// rendering variant where the two front ends differ.
 	Surface() Surface
@@ -99,6 +103,41 @@ func (s *CLISink) WriteFile(path string, body []byte) error {
 	return nil
 }
 
+// Copy writes the bytes to pbcopy on macOS.
+func (s *CLISink) Copy(ctx context.Context, body []byte) error {
+	if runtime.GOOS != "darwin" {
+		slog.WarnContext(ctx, "clispec.sink.copy_unsupported_platform", "concern", "cli.conversation", "component", "cli", "goos", runtime.GOOS)
+		return fmt.Errorf("--copy requires macOS pbcopy; use --stdout or --output on this platform")
+	}
+	cmd := exec.CommandContext(ctx, "pbcopy")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		slog.WarnContext(ctx, "clispec.sink.copy_stdin_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("open pbcopy stdin: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		slog.WarnContext(ctx, "clispec.sink.copy_start_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("start pbcopy: %w", err)
+	}
+	if _, err := stdin.Write(body); err != nil {
+		_ = stdin.Close()
+		_ = cmd.Wait()
+		slog.WarnContext(ctx, "clispec.sink.copy_write_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("write pbcopy stdin: %w", err)
+	}
+	if err := stdin.Close(); err != nil {
+		_ = cmd.Wait()
+		slog.WarnContext(ctx, "clispec.sink.copy_close_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("close pbcopy stdin: %w", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		slog.WarnContext(ctx, "clispec.sink.copy_wait_failed", "concern", "cli.conversation", "component", "cli", "err", err)
+		return fmt.Errorf("finish pbcopy: %w", err)
+	}
+	slog.DebugContext(ctx, "clispec.sink.copy", "concern", "cli.conversation", "component", "cli", "bytes", len(body))
+	return nil
+}
+
 // Surface reports SurfaceCLI.
 func (s *CLISink) Surface() Surface {
 	return SurfaceCLI
@@ -131,6 +170,13 @@ func (s *MCPSink) RawBytes(body []byte) error {
 // contract, so a work function never reaches this on the MCP surface; the
 // method exists to satisfy ResultSink.
 func (s *MCPSink) WriteFile(_ string, body []byte) error {
+	s.buf.Write(body)
+	return nil
+}
+
+// Copy folds the bytes into the buffer. The MCP surface has no clipboard
+// contract, so a work function should only call this from CLI-only paths.
+func (s *MCPSink) Copy(_ context.Context, body []byte) error {
 	s.buf.Write(body)
 	return nil
 }

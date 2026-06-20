@@ -185,12 +185,12 @@ func TestExportDoesNotOptIntoSystemMessages(t *testing.T) {
 	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatPlainText,
 		HistoryStart: 0,
+		LastN:        0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat, ContentKindSystemPrompts),
 		Compaction: CompactionExportOptions{
-			Scope:            CompactionExportScopeFull,
-			Detail:           "",
-			CheckpointNumber: 0,
+			IncludeSelector: "all",
+			FullHistory:     false,
 		},
 	})
 	if err != nil {
@@ -212,12 +212,12 @@ func TestExportJSONCanOptIntoSystemMessagesAndCheckpoints(t *testing.T) {
 	body, err := idx.Export(record, ExportOptions{
 		Format:       ExportFormatJSON,
 		HistoryStart: 0,
+		LastN:        0,
 		Whitespace:   WhitespacePreserve,
 		Content:      NewContentKindSet(ContentKindChat, ContentKindSystemMessages, ContentKindRawJSONMetadata),
 		Compaction: CompactionExportOptions{
-			Scope:            CompactionExportScopeFull,
-			Detail:           "",
-			CheckpointNumber: 0,
+			IncludeSelector: "all",
+			FullHistory:     false,
 		},
 	})
 	if err != nil {

@@ -14,7 +14,7 @@ func recordWhitespaceSelection(in *exportInput, mode conv.WhitespaceMode) {
 
 func resolveExportWhitespace(in exportInput) (conv.WhitespaceMode, error) {
 	if len(in.WhitespaceSelections) > 1 {
-		return "", fmt.Errorf("specify only one whitespace selector; use one of --whitespace, --preserve, --tidy, --compact, or --dense")
+		return "", fmt.Errorf("specify only one whitespace selector; use one of --whitespace, --preserve, --tidy, or --dense")
 	}
 	if len(in.WhitespaceSelections) == 1 {
 		return in.WhitespaceSelections[0], nil

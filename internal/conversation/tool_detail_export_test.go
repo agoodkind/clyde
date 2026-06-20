@@ -114,12 +114,12 @@ func TestExportToolDetailLevels(t *testing.T) {
 			body, err := idx.Export(record, ExportOptions{
 				Format:       ExportFormatPlainText,
 				HistoryStart: 0,
+				LastN:        0,
 				Whitespace:   WhitespacePreserve,
 				Content:      tc.content,
 				Compaction: CompactionExportOptions{
-					Scope:            CompactionExportScopeFull,
-					Detail:           "",
-					CheckpointNumber: 0,
+					IncludeSelector: "all",
+					FullHistory:     false,
 				},
 			})
 			if err != nil {
