@@ -173,9 +173,13 @@ func (idx *Index) Reorient(ctx context.Context, options ReorientOptions) (Reorie
 		report.Warnings = append(report.Warnings, "fork parent not in index; falling back to memory and search")
 	}
 
+	// Order the evidence so the orienting frame comes before the bulky tail: the
+	// recovered summary and the parent fork anchor first, then the in-flight work
+	// since the last compaction, then memory and search.
 	var items []ReorientItem
-	items = appendCheckpointItems(items, current, checkpoint, messages)
+	items = appendRecoveredContextItems(items, current, checkpoint)
 	items = idx.appendParentAnchorItem(items, current, parent, hasParent, options, &report)
+	items = appendTailItems(items, current, checkpoint, messages)
 	items = idx.appendMemoryItems(items, current, parent, hasParent, options)
 	if !hasParent {
 		items = idx.appendSearchItems(ctx, items, current, options)
@@ -243,20 +247,33 @@ func (idx *Index) resolveReorientCurrent(ctx context.Context, options ReorientOp
 	return page.Records[0], nil
 }
 
-func appendCheckpointItems(items []ReorientItem, current Record, checkpoint *CompactionCheckpoint, messages []transcript.Message) []ReorientItem {
+// appendRecoveredContextItems appends the checkpoint's recovered summary text.
+// It adds nothing when the conversation is uncompacted or the checkpoint carries
+// no summary-class text, which is common for Codex boundaries.
+func appendRecoveredContextItems(items []ReorientItem, current Record, checkpoint *CompactionCheckpoint) []ReorientItem {
+	if checkpoint == nil {
+		return items
+	}
+	summary := renderCheckpointSummary(*checkpoint)
+	return appendChunkedItems(items, ReorientItemKindRecoveredContext, "Recovered context (checkpoint summary)", current.ID, checkpoint.SummaryIndex, summary)
+}
+
+// appendTailItems appends the in-flight work. For a compacted conversation that
+// is everything after the latest boundary; for an uncompacted one it is the last
+// few messages. The tail is the bulkiest evidence, so it follows the orienting
+// items.
+func appendTailItems(items []ReorientItem, current Record, checkpoint *CompactionCheckpoint, messages []transcript.Message) []ReorientItem {
 	if checkpoint == nil {
 		start := max(len(messages)-reorientUncompactedTail, 0)
 		body := transcript.RenderPlainTextWithOptions(messages[start:], transcript.DefaultShapeOptions())
 		return appendChunkedItems(items, ReorientItemKindTail, "Recent messages (uncompacted conversation)", current.ID, start, body)
 	}
-	summary := renderCheckpointSummary(*checkpoint)
-	items = appendChunkedItems(items, ReorientItemKindRecoveredContext, "Recovered context (checkpoint summary)", current.ID, checkpoint.SummaryIndex, summary)
 	tailStart := checkpointTailStart(*checkpoint)
-	if tailStart < len(messages) {
-		body := transcript.RenderPlainTextWithOptions(messages[tailStart:], transcript.DefaultShapeOptions())
-		items = appendChunkedItems(items, ReorientItemKindTail, "In-flight work since last compaction", current.ID, tailStart, body)
+	if tailStart >= len(messages) {
+		return items
 	}
-	return items
+	body := transcript.RenderPlainTextWithOptions(messages[tailStart:], transcript.DefaultShapeOptions())
+	return appendChunkedItems(items, ReorientItemKindTail, "In-flight work since last compaction", current.ID, tailStart, body)
 }
 
 func (idx *Index) appendParentAnchorItem(items []ReorientItem, current Record, parent Record, hasParent bool, options ReorientOptions, report *ReorientReport) []ReorientItem {
