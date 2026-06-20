@@ -90,6 +90,7 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		Children:       nil,
 		Prepare:        prepareReorient,
 		Run:            runReorient,
 	}
