@@ -37,19 +37,6 @@ type reorientPayload struct {
 
 func (reorientPayload) isClispecPrepared() {}
 
-type reorientResultPayload struct {
-	ConversationID string `json:"conversation_id,omitempty"`
-	WorkspaceRoot  string `json:"workspace_root,omitempty"`
-	Topic          string `json:"topic,omitempty"`
-	Cursor         string `json:"cursor,omitempty"`
-	Window         int    `json:"window"`
-	Limit          int    `json:"limit"`
-	PageBytes      int    `json:"page_bytes,omitempty"`
-	Text           string `json:"text"`
-}
-
-func (reorientResultPayload) isClispecStructuredPayload() {}
-
 // reorientOp is the conversation reorient operation. It renders to the terminal
 // command `clyde conversation reorient` and the MCP tool `clyde_reorient`. It
 // resolves the post-fork, post-compaction recovery context and returns one
@@ -60,7 +47,7 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 		Name:       Name{Canonical: "reorient", CLIOverride: ""},
 		Group:      conversationGroup,
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
-		outputKind: resultKindArtifact,
+		outputKind: resultKindValue,
 		Short:      "Rebuild post-compaction recovery context as paged evidence.",
 		Long:       "Resolve the recovery context for a conversation after a fork and a compaction, and return it as bounded, cursor-paged evidence. Reorient walks backward deterministically: it reads the latest compaction checkpoint, resolves the fork parent through conversation lineage, falls back to the same-conversation checkpoint when there was no fork, and enriches with project memory and a workspace-scoped search. Set conversation to a specific id, or set workspace to start from its newest conversation. Each page stays small enough to read inline; call again with the printed cursor until remaining is zero before reasoning.",
 		Examples: []string{
@@ -103,28 +90,14 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 		Prepare:        prepareReorient,
 		Run:            nil,
 		runResult: func(ctx context.Context, p reorientPayload) (Result, error) {
-			text, _, _, err := daemon.ReorientConversation(ctx, p.ConversationID, p.WorkspaceRoot, p.Topic, p.Cursor, p.Window, p.Limit, p.PageBytes, false)
+			page, err := daemon.ReorientConversation(ctx, p.ConversationID, p.WorkspaceRoot, p.Topic, p.Cursor, p.Window, p.Limit, p.PageBytes)
 			if err != nil {
 				return nil, logFail(ctx, surfaceFromContext(ctx), "reorient_failed", "reorient conversation", err)
 			}
-			payload := reorientResultPayload{
-				ConversationID: p.ConversationID,
-				WorkspaceRoot:  p.WorkspaceRoot,
-				Topic:          p.Topic,
-				Cursor:         p.Cursor,
-				Window:         p.Window,
-				Limit:          p.Limit,
-				PageBytes:      p.PageBytes,
-				Text:           text,
-			}
-			return artifactResult{
-				Payload:     payload,
-				Body:        nil,
-				DefaultPath: "",
-				Pipe:        false,
-				Copy:        false,
-				Text:        text,
-				InlineText:  text,
+			text := conv.RenderReorientPageText(page)
+			return valueResult{
+				Payload: reorientPageOutputFromDomain(page),
+				Text:    text,
 			}, nil
 		},
 	}
