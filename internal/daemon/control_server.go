@@ -336,10 +336,12 @@ func engineSearchMatches(
 		if !ok {
 			continue
 		}
-		// provider and workspace are filtered natively by the engine; archived is
-		// a clyde record flag not stored on the engine rows, so it stays a
-		// clyde-side check. Archived conversations are rare, so dropping one from
-		// the top-K has negligible effect on recall.
+		// provider is filtered natively by the engine; workspace is filtered via
+		// the resolved conversation-id set above, not the native workspace column,
+		// which is null on rows indexed before it existed. archived is a clyde
+		// record flag not stored on the engine rows, so it stays a clyde-side
+		// check. Archived conversations are rare, so dropping one from the top-K
+		// has negligible effect on recall.
 		if record.Archived && !includeArchived {
 			continue
 		}
