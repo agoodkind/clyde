@@ -20,7 +20,6 @@ type reorientInput struct {
 	Window        int
 	Limit         int
 	PageBytes     int
-	JSON          bool
 }
 
 func (reorientInput) isClispecInput() {}
@@ -34,7 +33,6 @@ type reorientPayload struct {
 	Window         int
 	Limit          int
 	PageBytes      int
-	JSON           bool
 }
 
 func (reorientPayload) isClispecPrepared() {}
@@ -47,7 +45,6 @@ type reorientResultPayload struct {
 	Window         int    `json:"window"`
 	Limit          int    `json:"limit"`
 	PageBytes      int    `json:"page_bytes,omitempty"`
-	JSON           bool   `json:"json"`
 	Text           string `json:"text"`
 }
 
@@ -87,8 +84,6 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 				func(in *reorientInput, v int) { in.Limit = v }),
 			IntParam("page_bytes", "Per-page byte budget. Zero uses the daemon default that keeps a page inline.", 0,
 				func(in *reorientInput, v int) { in.PageBytes = v }),
-			BoolParam("json", "Emit the typed page document instead of brief-input text.", false,
-				func(in *reorientInput, v bool) { in.JSON = v }),
 		},
 		New: func() reorientInput {
 			return reorientInput{
@@ -99,7 +94,6 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 				Window:        conv.DefaultReorientWindow,
 				Limit:         conv.DefaultReorientSearchLimit,
 				PageBytes:     0,
-				JSON:          false,
 			}
 		},
 		MCPTaskSupport: "",
@@ -109,7 +103,7 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 		Prepare:        prepareReorient,
 		Run:            nil,
 		runResult: func(ctx context.Context, p reorientPayload) (Result, error) {
-			text, _, _, err := daemon.ReorientConversation(ctx, p.ConversationID, p.WorkspaceRoot, p.Topic, p.Cursor, p.Window, p.Limit, p.PageBytes, p.JSON)
+			text, _, _, err := daemon.ReorientConversation(ctx, p.ConversationID, p.WorkspaceRoot, p.Topic, p.Cursor, p.Window, p.Limit, p.PageBytes, false)
 			if err != nil {
 				return nil, logFail(ctx, surfaceFromContext(ctx), "reorient_failed", "reorient conversation", err)
 			}
@@ -121,19 +115,7 @@ func reorientOp() Operation[reorientInput, reorientPayload] {
 				Window:         p.Window,
 				Limit:          p.Limit,
 				PageBytes:      p.PageBytes,
-				JSON:           p.JSON,
 				Text:           text,
-			}
-			if p.JSON {
-				return artifactResult{
-					Payload:     payload,
-					Body:        []byte(text + "\n"),
-					DefaultPath: "",
-					Pipe:        true,
-					Copy:        false,
-					Text:        "",
-					InlineText:  text,
-				}, nil
 			}
 			return artifactResult{
 				Payload:     payload,
@@ -164,6 +146,5 @@ func prepareReorient(in reorientInput) (reorientPayload, error) {
 		Window:         in.Window,
 		Limit:          in.Limit,
 		PageBytes:      in.PageBytes,
-		JSON:           in.JSON,
 	}, nil
 }
