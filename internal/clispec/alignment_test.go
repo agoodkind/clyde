@@ -34,13 +34,14 @@ var cliOnlyFlags = map[string]bool{
 	"tools":             true,
 }
 
-// TestConversationRegistryNamesAreExactlyTwo guards the operation set. It
+// TestConversationRegistryNamesAreExactlyThree guards the operation set. It
 // stands in for the hand-maintained checklist that AGENTS.md used to carry.
-func TestConversationRegistryNamesAreExactlyTwo(t *testing.T) {
+func TestConversationRegistryNamesAreExactlyThree(t *testing.T) {
 	t.Parallel()
 	reg := NewConversationRegistry()
 	want := []string{
 		"clyde_export_transcript",
+		"clyde_reorient",
 		"clyde_search",
 	}
 	var got []string
@@ -120,7 +121,7 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	if conversationParent == nil {
 		t.Fatal("conversation parent missing")
 	}
-	wantConversationChildren := []string{"export", "search"}
+	wantConversationChildren := []string{"export", "reorient", "search"}
 	var gotChildren []string
 	for _, child := range conversationParent.Commands() {
 		gotChildren = append(gotChildren, child.Name())

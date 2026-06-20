@@ -25,6 +25,7 @@ const (
 	ClydeService_SubscribeProviderStats_FullMethodName    = "/clyde.v1.ClydeService/SubscribeProviderStats"
 	ClydeService_ListConversations_FullMethodName         = "/clyde.v1.ClydeService/ListConversations"
 	ClydeService_SearchConversations_FullMethodName       = "/clyde.v1.ClydeService/SearchConversations"
+	ClydeService_ReorientConversation_FullMethodName      = "/clyde.v1.ClydeService/ReorientConversation"
 	ClydeService_StreamConversation_FullMethodName        = "/clyde.v1.ClydeService/StreamConversation"
 	ClydeService_StreamConversationContext_FullMethodName = "/clyde.v1.ClydeService/StreamConversationContext"
 	ClydeService_StreamExportTranscript_FullMethodName    = "/clyde.v1.ClydeService/StreamExportTranscript"
@@ -46,6 +47,12 @@ type ClydeServiceClient interface {
 	SubscribeProviderStats(ctx context.Context, in *SubscribeProviderStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ProviderStatsEvent], error)
 	ListConversations(ctx context.Context, in *ListConversationsRequest, opts ...grpc.CallOption) (*ListConversationsResponse, error)
 	SearchConversations(ctx context.Context, in *SearchConversationsRequest, opts ...grpc.CallOption) (*SearchConversationsResponse, error)
+	// ReorientConversation resolves the post-fork, post-compaction recovery
+	// context for one conversation and returns one bounded, cursor-paged page of
+	// evidence. Each page stays small enough to render inline, so a caller loops
+	// with next_cursor until remaining is zero rather than receiving one large
+	// payload.
+	ReorientConversation(ctx context.Context, in *ReorientConversationRequest, opts ...grpc.CallOption) (*ReorientConversationResponse, error)
 	// StreamConversation, StreamConversationContext, and StreamExportTranscript are
 	// the server-streaming conversation reads and export. They carry one request
 	// and produce the rendered payload chunked, so a large transcript or export is
@@ -130,6 +137,16 @@ func (c *clydeServiceClient) SearchConversations(ctx context.Context, in *Search
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SearchConversationsResponse)
 	err := c.cc.Invoke(ctx, ClydeService_SearchConversations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clydeServiceClient) ReorientConversation(ctx context.Context, in *ReorientConversationRequest, opts ...grpc.CallOption) (*ReorientConversationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReorientConversationResponse)
+	err := c.cc.Invoke(ctx, ClydeService_ReorientConversation_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +262,12 @@ type ClydeServiceServer interface {
 	SubscribeProviderStats(*SubscribeProviderStatsRequest, grpc.ServerStreamingServer[ProviderStatsEvent]) error
 	ListConversations(context.Context, *ListConversationsRequest) (*ListConversationsResponse, error)
 	SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error)
+	// ReorientConversation resolves the post-fork, post-compaction recovery
+	// context for one conversation and returns one bounded, cursor-paged page of
+	// evidence. Each page stays small enough to render inline, so a caller loops
+	// with next_cursor until remaining is zero rather than receiving one large
+	// payload.
+	ReorientConversation(context.Context, *ReorientConversationRequest) (*ReorientConversationResponse, error)
 	// StreamConversation, StreamConversationContext, and StreamExportTranscript are
 	// the server-streaming conversation reads and export. They carry one request
 	// and produce the rendered payload chunked, so a large transcript or export is
@@ -282,6 +305,9 @@ func (UnimplementedClydeServiceServer) ListConversations(context.Context, *ListC
 }
 func (UnimplementedClydeServiceServer) SearchConversations(context.Context, *SearchConversationsRequest) (*SearchConversationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchConversations not implemented")
+}
+func (UnimplementedClydeServiceServer) ReorientConversation(context.Context, *ReorientConversationRequest) (*ReorientConversationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReorientConversation not implemented")
 }
 func (UnimplementedClydeServiceServer) StreamConversation(*GetConversationRequest, grpc.ServerStreamingServer[ConversationChunk]) error {
 	return status.Error(codes.Unimplemented, "method StreamConversation not implemented")
@@ -425,6 +451,24 @@ func _ClydeService_SearchConversations_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClydeService_ReorientConversation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReorientConversationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClydeServiceServer).ReorientConversation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClydeService_ReorientConversation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClydeServiceServer).ReorientConversation(ctx, req.(*ReorientConversationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClydeService_StreamConversation_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(GetConversationRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -556,6 +600,10 @@ var ClydeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SearchConversations",
 			Handler:    _ClydeService_SearchConversations_Handler,
+		},
+		{
+			MethodName: "ReorientConversation",
+			Handler:    _ClydeService_ReorientConversation_Handler,
 		},
 		{
 			MethodName: "GetMITMStatus",

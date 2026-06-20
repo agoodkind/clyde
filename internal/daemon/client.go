@@ -245,6 +245,34 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	}, nil
 }
 
+// ReorientConversation asks the daemon for one cursor-paged page of reorient
+// evidence. It returns the rendered page text, the cursor for the next page
+// (empty on the final page), and the count of evidence items not yet delivered.
+func ReorientConversation(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int, asJSON bool) (string, string, int, error) {
+	client, err := connectDaemon(ctx)
+	if err != nil {
+		return "", "", 0, err
+	}
+	defer func() { _ = client.conn.Close() }()
+
+	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
+	defer cancel()
+	resp, err := client.rpc.ReorientConversation(rpcCtx, &clydev1.ReorientConversationRequest{
+		ConversationId: conversationID,
+		Workspace:      workspace,
+		Topic:          topic,
+		Cursor:         cursor,
+		Window:         int64(window),
+		Limit:          int64(limit),
+		PageBytes:      int64(pageBytes),
+		Json:           asJSON,
+	})
+	if err != nil {
+		return "", "", 0, daemonRPCError(rpcCtx, "reorient conversation", err)
+	}
+	return resp.GetText(), resp.GetNextCursor(), int(resp.GetRemaining()), nil
+}
+
 // searchSourceFromProto maps the wire search source onto its domain enum.
 func searchSourceFromProto(source clydev1.SearchSource) conversation.SearchSource {
 	switch source {
