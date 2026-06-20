@@ -7,6 +7,7 @@ package clispec
 func NewConversationRegistry() *Registry {
 	reg := &Registry{ops: nil, handwritten: nil}
 	Register(reg, searchOp())
+	Register(reg, conversationInfoOp())
 	Register(reg, exportTranscriptOp())
 	Register(reg, reorientOp())
 	return reg
