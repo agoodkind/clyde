@@ -71,10 +71,13 @@ type SemHit struct {
 }
 
 // SearchFilter narrows conversation retrieval by row attributes. Every field
-// is optional; the zero value matches everything. Providers and WorkspaceRoots
-// filter natively on the engine's scalar columns; clyde resolves a workspace
-// prefix into the set of matching roots. ConversationIDs scopes to explicit
-// conversations (an explicit --conversation or a within-search).
+// is optional; the zero value matches everything. Providers filters natively on
+// the engine's provider column. WorkspaceRoots maps to the engine's native
+// workspace column but is unused for the workspace filter today: workspace_root
+// is null on rows indexed before that column existed, so clyde instead resolves
+// a workspace prefix to the matching ConversationIDs, which every row carries.
+// ConversationIDs scopes to explicit conversations (an explicit --conversation
+// or a within-search) and to that resolved workspace set.
 type SearchFilter struct {
 	Providers            []string
 	WorkspaceRoots       []string
