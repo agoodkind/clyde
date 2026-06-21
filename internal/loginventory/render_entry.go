@@ -1,21 +1,15 @@
 package loginventory
 
 import (
-	"encoding/json"
-	"fmt"
-	"log/slog"
 	"strings"
-	"time"
 
+	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 )
 
-// Render builds the log inventory under stateRoot and returns it as a
-// human-readable table or as a single JSON document. An empty stateRoot
-// defaults to the Clyde state directory. The deep flag forces an exact
-// filesystem scan; otherwise the configured inventory mode applies. The daemon
-// owns the log files, so this runs daemon-side and the CLI prints the result.
-func Render(stateRoot string, largestFileLimit int, deep bool, logging config.LoggingConfig, mitm config.MITMConfig, asJSON bool) (string, error) {
+// Build constructs the typed log inventory under stateRoot. An empty stateRoot
+// defaults to the Clyde state directory.
+func Build(stateRoot string, largestFileLimit int, deep bool, logging config.LoggingConfig, mitm config.MITMConfig) (Inventory, error) {
 	root := stateRoot
 	if root == "" {
 		root = config.DefaultStateDir()
@@ -30,23 +24,20 @@ func Render(stateRoot string, largestFileLimit int, deep bool, logging config.Lo
 	currentInventory, err := buildInventory(inventoryOptions{
 		StateRoot:        root,
 		LargestFileLimit: largestFileLimit,
-		Now:              time.Time{},
+		Now:              clock.Wall{}.Now().UTC(),
 		Mode:             mode,
 		Logging:          logging,
 		MITM:             mitm,
 	})
 	if err != nil {
-		return "", err
+		return Inventory{}, err
 	}
+	return currentInventory, nil
+}
 
+// RenderText renders the typed inventory as the human-readable table surface.
+func RenderText(currentInventory Inventory) (string, error) {
 	var builder strings.Builder
-	if asJSON {
-		if encodeErr := json.NewEncoder(&builder).Encode(currentInventory); encodeErr != nil {
-			slog.Warn("loginventory.render.encode_json_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", encodeErr)
-			return "", fmt.Errorf("encode log inventory: %w", encodeErr)
-		}
-		return builder.String(), nil
-	}
 	if writeErr := writeInventoryTable(&builder, currentInventory); writeErr != nil {
 		return "", writeErr
 	}

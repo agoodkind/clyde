@@ -19,6 +19,7 @@ import (
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitmshow"
 )
@@ -402,80 +403,6 @@ func conversationInfoFromProto(resp *clydev1.GetConversationInfoResponse) conver
 	}
 }
 
-func reorientPageFromProto(resp *clydev1.ReorientConversationResponse) conversation.ReorientPage {
-	return conversation.ReorientPage{
-		CurrentConversation: reorientConversationRefFromProto(resp.GetCurrentConversation()),
-		ParentConversation:  optionalReorientConversationRefFromProto(resp.GetParentConversation()),
-		CheckpointNumber:    int(resp.GetCheckpointNumber()),
-		Items:               reorientItemsFromProto(resp.GetItems()),
-		NextCursor:          resp.GetNextCursor(),
-		Remaining:           int(resp.GetRemaining()),
-		Offset:              int(resp.GetOffset()),
-		TotalItems:          int(resp.GetTotalItems()),
-		Warnings:            resp.GetWarnings(),
-	}
-}
-
-func reorientConversationRefFromProto(wire *clydev1.ReorientConversationRef) conversation.ReorientConversationRef {
-	if wire == nil {
-		return conversation.ReorientConversationRef{
-			ID:            "",
-			Provider:      "",
-			Title:         "",
-			WorkspaceRoot: "",
-		}
-	}
-	return conversation.ReorientConversationRef{
-		ID:            wire.GetId(),
-		Provider:      providerFromProto(wire.GetProvider()).String(),
-		Title:         wire.GetTitle(),
-		WorkspaceRoot: wire.GetWorkspaceRoot(),
-	}
-}
-
-func optionalReorientConversationRefFromProto(wire *clydev1.ReorientConversationRef) *conversation.ReorientConversationRef {
-	if wire == nil {
-		return nil
-	}
-	ref := reorientConversationRefFromProto(wire)
-	return &ref
-}
-
-func reorientItemsFromProto(wireItems []*clydev1.ReorientItem) []conversation.ReorientItem {
-	items := make([]conversation.ReorientItem, 0, len(wireItems))
-	for _, wire := range wireItems {
-		items = append(items, conversation.ReorientItem{
-			Kind:           reorientItemKindFromProto(wire.GetKind()),
-			Title:          wire.GetTitle(),
-			Body:           wire.GetBody(),
-			ConversationID: wire.GetConversationId(),
-			MessageIndex:   int(wire.GetMessageIndex()),
-		})
-	}
-	return items
-}
-
-func reorientItemKindFromProto(kind clydev1.ReorientItemKind) conversation.ReorientItemKind {
-	switch kind {
-	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_UNSPECIFIED:
-		return conversation.ReorientItemKind("")
-	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_HEADER:
-		return conversation.ReorientItemKindHeader
-	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_RECOVERED_CONTEXT:
-		return conversation.ReorientItemKindRecoveredContext
-	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_TAIL:
-		return conversation.ReorientItemKindTail
-	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PARENT_ANCHOR:
-		return conversation.ReorientItemKindParentAnchor
-	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_MEMORY_DOC:
-		return conversation.ReorientItemKindMemoryDoc
-	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_SEARCH_HIT:
-		return conversation.ReorientItemKindSearchHit
-	default:
-		return conversation.ReorientItemKind("")
-	}
-}
-
 func showCaptureOutputFromProto(resp *clydev1.ShowCaptureResponse) mitmshow.ShowOutput {
 	return mitmshow.ShowOutput{
 		Query:       resp.GetQuery(),
@@ -569,6 +496,123 @@ func showCaptureRowsFromProto(wire *clydev1.ShowCaptureRows) mitmshow.CaptureSec
 		Path:   wire.GetPath(),
 		Rows:   rows,
 	}
+}
+
+func logsInventoryFromProto(resp *clydev1.LogsInventoryResponse) loginventory.Inventory {
+	generated := time.Time{}
+	if resp.GetGeneratedUnix() > 0 {
+		generated = time.Unix(resp.GetGeneratedUnix(), 0)
+	}
+	return loginventory.Inventory{
+		StateRoot:      resp.GetStateRoot(),
+		Generated:      generated,
+		Mode:           loginventory.InventoryMode(resp.GetMode()),
+		CleanupEnabled: resp.GetCleanupEnabled(),
+		Categories:     logsInventoryCategoriesFromProto(resp.GetCategories()),
+	}
+}
+
+func logsInventoryCategoriesFromProto(wireCategories []*clydev1.LogsInventoryCategory) []loginventory.CategorySummary {
+	categories := make([]loginventory.CategorySummary, 0, len(wireCategories))
+	for _, wire := range wireCategories {
+		categories = append(categories, loginventory.CategorySummary{
+			Category:           loginventory.Category(wire.GetCategory()),
+			Sink:               wire.GetSink(),
+			Source:             loginventory.InventorySource(wire.GetSource()),
+			Count:              int(wire.GetCount()),
+			TotalBytes:         wire.GetTotalBytes(),
+			LatestModified:     unixOrZero(wire.GetLatestModifiedUnix()),
+			RepresentativePath: wire.GetRepresentativePath(),
+			LastEventTimestamp: unixOrZero(wire.GetLastEventTimestampUnix()),
+			LastEventRequestID: wire.GetLastEventRequestId(),
+			LastCleanupResult:  logsInventoryCleanupSummaryFromProto(wire.GetLastCleanupResult()),
+			CleanupEnabled:     wire.GetCleanupEnabled(),
+			Rotation:           logsInventoryRotationFromProto(wire.GetRotation()),
+			Cleanup:            logsInventoryCleanupFromProto(wire.GetCleanup()),
+			LargestFiles:       logsInventoryFilesFromProto(wire.GetLargestFiles()),
+		})
+	}
+	return categories
+}
+
+func logsInventoryRotationFromProto(wire *clydev1.LogsInventoryRotation) config.LoggingRotation {
+	if wire == nil {
+		return config.LoggingRotation{
+			Enabled:    nil,
+			MaxSizeMB:  0,
+			MaxBackups: 0,
+			MaxAgeDays: 0,
+			Compress:   nil,
+		}
+	}
+	return config.LoggingRotation{
+		Enabled:    wire.Enabled,
+		MaxSizeMB:  int(wire.GetMaxSizeMb()),
+		MaxBackups: int(wire.GetMaxBackups()),
+		MaxAgeDays: int(wire.GetMaxAgeDays()),
+		Compress:   wire.Compress,
+	}
+}
+
+func logsInventoryCleanupFromProto(wire *clydev1.LogsInventoryCleanup) config.LoggingCleanup {
+	if wire == nil {
+		return config.LoggingCleanup{
+			Enabled:    nil,
+			MaxAgeDays: nil,
+			MaxBackups: nil,
+			MaxTotalMB: nil,
+		}
+	}
+	return config.LoggingCleanup{
+		Enabled:    wire.Enabled,
+		MaxAgeDays: int64PtrToIntPtr(wire.MaxAgeDays),
+		MaxBackups: int64PtrToIntPtr(wire.MaxBackups),
+		MaxTotalMB: int64PtrToIntPtr(wire.MaxTotalMb),
+	}
+}
+
+func logsInventoryFilesFromProto(wireFiles []*clydev1.LogsInventoryFileSummary) []loginventory.FileSummary {
+	files := make([]loginventory.FileSummary, 0, len(wireFiles))
+	for _, wire := range wireFiles {
+		files = append(files, loginventory.FileSummary{
+			RelativePath: wire.GetRelativePath(),
+			SizeBytes:    wire.GetSizeBytes(),
+			Modified:     unixOrZero(wire.GetModifiedUnix()),
+		})
+	}
+	return files
+}
+
+func logsInventoryCleanupSummaryFromProto(wire *clydev1.LogsInventoryCleanupSummary) *loginventory.InventoryCleanupSummary {
+	if wire == nil {
+		return nil
+	}
+	return &loginventory.InventoryCleanupSummary{
+		Timestamp:    unixOrZero(wire.GetTimestampUnix()),
+		Root:         wire.GetRoot(),
+		ScannedRoots: wire.GetScannedRoots(),
+		Candidates:   int(wire.GetCandidates()),
+		Deleted:      int(wire.GetDeleted()),
+		BytesDeleted: wire.GetBytesDeleted(),
+		Skipped:      wire.GetSkipped(),
+		Errors:       wire.GetErrors(),
+		DurationMS:   wire.GetDurationMs(),
+	}
+}
+
+func unixOrZero(unix int64) time.Time {
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
+}
+
+func int64PtrToIntPtr(value *int64) *int {
+	if value == nil {
+		return nil
+	}
+	intValue := int(*value)
+	return &intValue
 }
 
 func conversationStatsFromProto(wire *clydev1.ConversationInfoStats) conversation.Stats {
@@ -795,11 +839,11 @@ func SeedBaseline(ctx context.Context, upstream string, includeUA, excludeUA []s
 }
 
 // LogsInventory asks the daemon to build a metadata-only inventory of its log
-// files and return it rendered as a table or as JSON.
-func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, deep, asJSON bool) (string, error) {
+// files and return it as typed data.
+func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, deep bool) (loginventory.Inventory, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
-		return "", err
+		return loginventory.Inventory{}, err
 	}
 	defer func() { _ = client.conn.Close() }()
 
@@ -809,12 +853,11 @@ func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, 
 		StateRoot:        stateRoot,
 		LargestFileLimit: int64(largestFileLimit),
 		Deep:             deep,
-		Json:             asJSON,
 	})
 	if err != nil {
-		return "", daemonRPCError(rpcCtx, "logs inventory", err)
+		return loginventory.Inventory{}, daemonRPCError(rpcCtx, "logs inventory", err)
 	}
-	return resp.GetOutput(), nil
+	return logsInventoryFromProto(resp), nil
 }
 
 // daemonRPCError translates a failed control-plane rpc into a caller-facing

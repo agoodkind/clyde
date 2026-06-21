@@ -39,11 +39,64 @@ message LogsInventoryRequest {
   string state_root = 1;
   int64 largest_file_limit = 2;
   bool deep = 3;
-  bool json = 4;
+}
+
+message LogsInventoryRotation {
+  optional bool enabled = 1;
+  int64 max_size_mb = 2;
+  int64 max_backups = 3;
+  int64 max_age_days = 4;
+  optional bool compress = 5;
+}
+
+message LogsInventoryCleanup {
+  optional bool enabled = 1;
+  optional int64 max_age_days = 2;
+  optional int64 max_backups = 3;
+  optional int64 max_total_mb = 4;
+}
+
+message LogsInventoryFileSummary {
+  string relative_path = 1;
+  int64 size_bytes = 2;
+  int64 modified_unix = 3;
+}
+
+message LogsInventoryCleanupSummary {
+  int64 timestamp_unix = 1;
+  string root = 2;
+  repeated string scanned_roots = 3;
+  int64 candidates = 4;
+  int64 deleted = 5;
+  int64 bytes_deleted = 6;
+  repeated string skipped = 7;
+  repeated string errors = 8;
+  int64 duration_ms = 9;
+}
+
+message LogsInventoryCategory {
+  string category = 1;
+  string sink = 2;
+  string source = 3;
+  int64 count = 4;
+  int64 total_bytes = 5;
+  int64 latest_modified_unix = 6;
+  string representative_path = 7;
+  int64 last_event_timestamp_unix = 8;
+  optional string last_event_request_id = 9;
+  bool cleanup_enabled = 10;
+  LogsInventoryRotation rotation = 11;
+  LogsInventoryCleanup cleanup = 12;
+  repeated LogsInventoryFileSummary largest_files = 13;
+  LogsInventoryCleanupSummary last_cleanup_result = 14;
 }
 
 message LogsInventoryResponse {
-  string output = 1;
+  string state_root = 1;
+  int64 generated_unix = 2;
+  string mode = 3;
+  bool cleanup_enabled = 4;
+  repeated LogsInventoryCategory categories = 5;
 }
 
 message SeedBaselineRequest {
