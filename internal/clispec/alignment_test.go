@@ -110,8 +110,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	roots := RenderCobra(NewConversationRegistry(), testFactory(&out))
-	if len(roots) != 1 {
-		t.Fatalf("root commands: got %d, want 1 (conversation)", len(roots))
+	if len(roots) != 2 {
+		t.Fatalf("root commands: got %d, want 2 (conversation, logs)", len(roots))
 	}
 	parents := map[string]*cobra.Command{}
 	for _, root := range roots {
@@ -168,6 +168,19 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	}
 	if len(searchLeaf.Commands()) != 0 {
 		t.Fatalf("search is a leaf, got %d subcommands", len(searchLeaf.Commands()))
+	}
+
+	logsParent := parents["logs"]
+	if logsParent == nil {
+		t.Fatal("logs parent missing")
+	}
+	gotChildren = nil
+	for _, child := range logsParent.Commands() {
+		gotChildren = append(gotChildren, child.Name())
+	}
+	sort.Strings(gotChildren)
+	if strings.Join(gotChildren, ",") != "inventory" {
+		t.Fatalf("logs children: got %v, want [inventory]", gotChildren)
 	}
 }
 
