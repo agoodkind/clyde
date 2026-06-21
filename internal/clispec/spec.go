@@ -9,8 +9,11 @@
 //
 // The package imports goodkind.io/clyde/internal/cli for the dependency
 // factory and goodkind.io/clyde/internal/conversation for the domain calls.
-// It does not import internal/cli/conversation or internal/mcpserver, so the
-// two surface packages import this package without an import cycle.
+// Most operations stay free of surface packages, but a small set of CLI-only
+// operational commands can depend on implementation packages such as
+// internal/mcpserver. The terminal and MCP entrypoints still import this
+// package without an import cycle because the shared operation contracts do not
+// depend back on the surface packages.
 package clispec
 
 import (
