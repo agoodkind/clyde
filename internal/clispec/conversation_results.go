@@ -106,11 +106,21 @@ type filterStageOutput struct {
 	Remaining int    `json:"remaining"`
 }
 
+type exportTranscriptOutput struct {
+	ConversationID string `json:"conversation_id"`
+	Format         string `json:"format"`
+	Path           string `json:"path,omitempty"`
+	Bytes          int    `json:"bytes"`
+	Pipe           bool   `json:"pipe,omitempty"`
+	Copied         bool   `json:"copied,omitempty"`
+}
+
 func (listConversationsOutput) isClispecStructuredPayload()   {}
 func (getConversationOutput) isClispecStructuredPayload()     {}
 func (getContextOutput) isClispecStructuredPayload()          {}
 func (conversationInfoOutput) isClispecStructuredPayload()    {}
 func (searchConversationsOutput) isClispecStructuredPayload() {}
+func (exportTranscriptOutput) isClispecStructuredPayload()    {}
 
 func listConversationsOutputFromDomain(result conv.ListResult) listConversationsOutput {
 	return listConversationsOutput{
