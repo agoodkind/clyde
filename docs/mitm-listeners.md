@@ -1,5 +1,10 @@
 # MITM listeners
 
+This table mirrors the `[mitm.cli.*]` and `[mitm.app.*]` blocks in
+`clyde.example.toml`, which is the source of truth for listener hosts and ports.
+The live ports come from the operator config, so this table can drift; treat
+`clyde.example.toml` as authoritative if they disagree.
+
 | Listener | Host | Port | Traffic |
 | --- | --- | ---: | --- |
 | `cli.claude-code` | `localhost` | 48723 | Claude Code model API traffic |

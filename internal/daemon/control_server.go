@@ -803,6 +803,8 @@ func providerFromProto(provider clydev1.Provider) providerid.Provider {
 		return providerid.ProviderArtifact
 	case clydev1.Provider_PROVIDER_CURSOR:
 		return providerid.ProviderCursor
+	case clydev1.Provider_PROVIDER_CONDUCTOR:
+		return providerid.ProviderConductor
 	case clydev1.Provider_PROVIDER_UNSPECIFIED:
 		return providerid.ProviderUnspecified
 	default:
@@ -827,7 +829,7 @@ func protoProvider(provider providerid.Provider) clydev1.Provider {
 	case providerid.ProviderCursor:
 		return clydev1.Provider_PROVIDER_CURSOR
 	case providerid.ProviderConductor:
-		return clydev1.Provider_PROVIDER_UNSPECIFIED
+		return clydev1.Provider_PROVIDER_CONDUCTOR
 	case providerid.ProviderUnspecified:
 		return clydev1.Provider_PROVIDER_UNSPECIFIED
 	default:

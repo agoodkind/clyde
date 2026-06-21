@@ -4,6 +4,13 @@ package mitmcontrib
 
 import "strings"
 
+// isConductorHost reports whether host belongs to Conductor.app's traffic.
+// The suffix matches are intentionally broad, including the *.vercel.run
+// sandbox connections and the *.posthog.com / *.honeycomb.io telemetry
+// vendors, because this provider only classifies traffic arriving on the
+// dedicated app.conductor MITM listener. That listener carries Conductor.app's
+// own egress (its injected HTTPS_PROXY points there) and never sees unrelated
+// clients, so a broad suffix claim cannot over-intercept another app's traffic.
 func isConductorHost(host string) bool {
 	host = strings.Trim(strings.ToLower(host), ".")
 
