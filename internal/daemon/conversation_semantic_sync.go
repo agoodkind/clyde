@@ -49,20 +49,23 @@ func (f *conversationSemanticFreshness) snapshot() conversation.SearchFreshness 
 }
 
 // publish records one pass's stats as the latest freshness. embedded is the
-// documents the engine accepted this pass, pending is the conversations the
-// engine still needs that this pass did not cover, and last_sync is the pass
-// completion time on the repo clock.
+// cumulative conversation coverage (manifest minus the conversations the engine
+// still needs), pending is the conversations the engine still needs that this
+// pass did not cover, and last_sync is the pass completion time on the repo
+// clock. embedded is conversations, not the per-pass document count, so
+// embedded + needed == manifest and the number tracks real coverage.
 func (f *conversationSemanticFreshness) publish(stats conversationSemanticSyncStats) {
 	if f == nil {
 		return
 	}
 	pending := max(stats.needed-stats.sentConversations, 0)
+	embedded := max(stats.manifest-stats.needed, 0)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.freshness = conversation.SearchFreshness{
 		Manifest:     stats.manifest,
 		Needed:       stats.needed,
-		Embedded:     stats.documents,
+		Embedded:     embedded,
 		Pending:      pending,
 		LastSyncUnix: clock.Now().Unix(),
 	}

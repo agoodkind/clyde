@@ -588,3 +588,27 @@ func TestConversationSemanticSyncDeliversEveryNeededConversation(t *testing.T) {
 		t.Fatalf("delivery cursor = %q, want codex:c (last delivered)", worker.deliveryCursor)
 	}
 }
+
+func TestConversationSemanticFreshnessEmbeddedIsCumulativeCoverage(t *testing.T) {
+	t.Parallel()
+	freshness := newConversationSemanticFreshness()
+	// The engine knows 1539 conversations and still needs 66; this pass sent 10
+	// of them as 3200 documents. Embedded must report cumulative conversation
+	// coverage (manifest - needed = 1473), not the per-pass document count.
+	freshness.publish(conversationSemanticSyncStats{
+		manifest:          1539,
+		needed:            66,
+		sentConversations: 10,
+		documents:         3200,
+		deferred:          0,
+		failed:            0,
+	})
+
+	got := freshness.snapshot()
+	if got.Embedded != 1539-66 {
+		t.Fatalf("embedded = %d, want %d (manifest - needed), not the per-pass document count", got.Embedded, 1539-66)
+	}
+	if got.Embedded+got.Needed != got.Manifest {
+		t.Fatalf("embedded(%d) + needed(%d) = %d, want manifest %d", got.Embedded, got.Needed, got.Embedded+got.Needed, got.Manifest)
+	}
+}
