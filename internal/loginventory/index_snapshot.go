@@ -46,6 +46,10 @@ type inventoryCleanupSummary struct {
 	DurationMS   int64     `json:"duration_ms"`
 }
 
+// InventoryCleanupSummary is the exported alias for the indexed cleanup event
+// summary embedded in category summaries.
+type InventoryCleanupSummary = inventoryCleanupSummary
+
 // inventoryIndexEventRecord is the typed shape used to decode lines of
 // the inventory index file. It is intentionally narrow: only fields
 // the snapshot reader actually consumes appear here, so unrelated slog

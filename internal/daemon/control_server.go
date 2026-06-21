@@ -608,15 +608,14 @@ func (s *controlServer) SeedBaseline(ctx context.Context, req *clydev1.SeedBasel
 }
 
 // LogsInventory builds a metadata-only inventory of the daemon's log files and
-// returns it rendered as a table or as JSON.
+// returns it as typed data for the client-side renderer.
 func (s *controlServer) LogsInventory(ctx context.Context, req *clydev1.LogsInventoryRequest) (*clydev1.LogsInventoryResponse, error) {
-	output, err := loginventory.Render(
+	output, err := loginventory.Build(
 		req.GetStateRoot(),
 		int(req.GetLargestFileLimit()),
 		req.GetDeep(),
 		s.loggingConfig,
 		s.mitmConfig,
-		req.GetJson(),
 	)
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
@@ -626,7 +625,7 @@ func (s *controlServer) LogsInventory(ctx context.Context, req *clydev1.LogsInve
 		)
 		return nil, status.Errorf(codes.Internal, "logs inventory: %v", err)
 	}
-	return &clydev1.LogsInventoryResponse{Output: output}, nil
+	return protoLogsInventory(output), nil
 }
 
 func (s *controlServer) SubscribeProviderStats(_ *clydev1.SubscribeProviderStatsRequest, stream grpc.ServerStreamingServer[clydev1.ProviderStatsEvent]) error {
@@ -891,6 +890,13 @@ func protoShowCaptureCaptureRows(rows []mitmshow.CaptureRow) []*clydev1.ShowCapt
 		})
 	}
 	return wireRows
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func protoConversationStats(stats conversation.Stats) *clydev1.ConversationInfoStats {

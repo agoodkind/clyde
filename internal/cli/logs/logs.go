@@ -3,6 +3,7 @@
 package logs
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -11,6 +12,7 @@ import (
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/response"
 )
 
@@ -50,15 +52,23 @@ func newInventoryCmd(f *cli.Factory) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("parse output format: %w", err)
 			}
-			result, err := daemon.LogsInventory(cmd.Context(), stateRoot, largestFileLimit, deep, format == output.FormatJSON)
+			result, err := daemon.LogsInventory(cmd.Context(), stateRoot, largestFileLimit, deep)
 			if err != nil {
 				slog.WarnContext(cmd.Context(), "cli.logs.inventory.failed", "concern", "cli.logs", "component", "cli", "err", err)
 				return fmt.Errorf("logs inventory: %w", err)
 			}
 			if format == output.FormatJSON {
-				return response.WriteJSON(cmd.Context(), f.IOStreams.Out, []byte(result), response.JSONCompact)
+				body, err := json.Marshal(result)
+				if err != nil {
+					return fmt.Errorf("encode logs inventory: %w", err)
+				}
+				return response.WriteJSON(cmd.Context(), f.IOStreams.Out, body, response.JSONCompact)
 			}
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, result)
+			text, err := loginventory.RenderText(result)
+			if err != nil {
+				return fmt.Errorf("render logs inventory: %w", err)
+			}
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, text)
 		},
 	}
 	cmd.Flags().StringVar(&stateRoot, "state-root", "", "Override the Clyde state root to inventory")

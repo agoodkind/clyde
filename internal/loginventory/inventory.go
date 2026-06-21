@@ -20,6 +20,9 @@ const defaultLargestFileLimit = 3
 
 type category string
 
+// Category is the exported alias for log inventory category labels.
+type Category = category
+
 const (
 	categoryMITMCaptureStore       category = "MITM capture store"
 	categoryMITMProfileProcessLogs category = "MITM profile/process logs"
@@ -48,7 +51,13 @@ var categoryOrder = []category{
 
 type inventoryMode string
 
+// InventoryMode is the exported alias for the inventory discovery mode.
+type InventoryMode = inventoryMode
+
 type inventorySource string
+
+// InventorySource is the exported alias for the inventory data source label.
+type InventorySource = inventorySource
 
 const (
 	inventoryModeIndexed inventoryMode = "indexed"
@@ -78,6 +87,9 @@ type inventory struct {
 	Categories     []categorySummary `json:"categories"`
 }
 
+// Inventory is the exported alias for the typed log inventory payload.
+type Inventory = inventory
+
 type categorySummary struct {
 	Category           category                 `json:"category"`
 	Sink               string                   `json:"sink"`
@@ -95,11 +107,17 @@ type categorySummary struct {
 	LargestFiles       []fileSummary            `json:"largest_files"`
 }
 
+// CategorySummary is the exported alias for one inventory category summary.
+type CategorySummary = categorySummary
+
 type fileSummary struct {
 	RelativePath string    `json:"relative_path"`
 	SizeBytes    int64     `json:"size_bytes"`
 	Modified     time.Time `json:"modified"`
 }
+
+// FileSummary is the exported alias for one file-level inventory summary.
+type FileSummary = fileSummary
 
 func buildInventory(options inventoryOptions) (inventory, error) {
 	stateRoot := filepath.Clean(strings.TrimSpace(options.StateRoot))

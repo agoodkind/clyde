@@ -7,7 +7,9 @@ import (
 	"time"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/loginventory"
 )
 
 func TestConversationRecordProtoRoundTripCarriesLineage(t *testing.T) {
@@ -210,5 +212,74 @@ func TestReorientPageProtoMappingCarriesPagingAndItems(t *testing.T) {
 	roundTrip := reorientPageFromProto(wire)
 	if !reflect.DeepEqual(roundTrip, page) {
 		t.Fatalf("round-trip page = %#v, want %#v", roundTrip, page)
+	}
+}
+
+func TestLogsInventoryProtoMappingCarriesCategoriesAndCleanup(t *testing.T) {
+	t.Parallel()
+
+	rotationEnabled := true
+	cleanupEnabled := false
+	maxAgeDays := 14
+	maxBackups := 9
+	maxTotalMB := 512
+	inventory := loginventory.Inventory{
+		StateRoot:      "/state",
+		Generated:      time.Unix(100, 0),
+		Mode:           loginventory.InventoryMode("indexed"),
+		CleanupEnabled: true,
+		Categories: []loginventory.CategorySummary{{
+			Category:           loginventory.Category("Concern logs"),
+			Sink:               "concerns",
+			Source:             loginventory.InventorySource("indexed"),
+			Count:              2,
+			TotalBytes:         42,
+			LatestModified:     time.Unix(101, 0),
+			RepresentativePath: "logs/adapter/http/ingress.jsonl",
+			LastEventTimestamp: time.Unix(102, 0),
+			LastEventRequestID: "req-1",
+			LastCleanupResult: &loginventory.InventoryCleanupSummary{
+				Timestamp:    time.Unix(103, 0),
+				Root:         "/state",
+				ScannedRoots: []string{"/state"},
+				Candidates:   3,
+				Deleted:      2,
+				BytesDeleted: 64,
+				Skipped:      []string{"skip"},
+				Errors:       []string{"err"},
+				DurationMS:   7,
+			},
+			CleanupEnabled: true,
+			Rotation: config.LoggingRotation{
+				Enabled:    &rotationEnabled,
+				MaxSizeMB:  64,
+				MaxBackups: 8,
+				MaxAgeDays: 3,
+				Compress:   &rotationEnabled,
+			},
+			Cleanup: config.LoggingCleanup{
+				Enabled:    &cleanupEnabled,
+				MaxAgeDays: &maxAgeDays,
+				MaxBackups: &maxBackups,
+				MaxTotalMB: &maxTotalMB,
+			},
+			LargestFiles: []loginventory.FileSummary{{
+				RelativePath: "logs/adapter/http/ingress.jsonl",
+				SizeBytes:    42,
+				Modified:     time.Unix(101, 0),
+			}},
+		}},
+	}
+
+	wire := protoLogsInventory(inventory)
+	if wire.GetStateRoot() != "/state" {
+		t.Fatalf("state_root = %q, want /state", wire.GetStateRoot())
+	}
+	if len(wire.GetCategories()) != 1 {
+		t.Fatalf("categories = %d, want 1", len(wire.GetCategories()))
+	}
+	roundTrip := logsInventoryFromProto(wire)
+	if !reflect.DeepEqual(roundTrip, inventory) {
+		t.Fatalf("round-trip inventory = %#v, want %#v", roundTrip, inventory)
 	}
 }
