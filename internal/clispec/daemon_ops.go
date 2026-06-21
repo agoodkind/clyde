@@ -96,6 +96,22 @@ type daemonDeployPayload struct {
 
 func (daemonDeployPayload) isClispecPrepared() {}
 
+type daemonRunInput struct{}
+
+func (daemonRunInput) isClispecInput() {}
+
+type daemonRunPayload struct{}
+
+func (daemonRunPayload) isClispecPrepared() {}
+
+type daemonWorkerInput struct{}
+
+func (daemonWorkerInput) isClispecInput() {}
+
+type daemonWorkerPayload struct{}
+
+func (daemonWorkerPayload) isClispecPrepared() {}
+
 var daemonGroup = &Group{
 	Use:     "daemon",
 	Short:   "Manage the background daemon",
@@ -281,6 +297,58 @@ func daemonDeployOp() Operation[daemonDeployInput, daemonDeployPayload] {
 				return fmt.Errorf("daemon deploy: %w", err)
 			}
 			return nil
+		},
+		runResult: nil,
+	}
+}
+
+func daemonRunOp() Operation[daemonRunInput, daemonRunPayload] {
+	return Operation[daemonRunInput, daemonRunPayload]{
+		Name:           Name{Canonical: "daemon_run", CLIOverride: "run"},
+		Group:          daemonGroup,
+		Surfaces:       SurfaceSet{CLI: true, MCP: false},
+		outputKind:     0,
+		Short:          "Start the background daemon",
+		Long:           "Start the background daemon process. launchd owns the daemon's lifecycle, so this entry point is normally invoked by the launch agent rather than directly.",
+		Examples:       []string{"clyde daemon run"},
+		Args:           nil,
+		Params:         nil,
+		New:            func() daemonRunInput { return daemonRunInput{} },
+		Children:       nil,
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
+		Prepare:        func(in daemonRunInput) (daemonRunPayload, error) { return daemonRunPayload{}, nil },
+		Run: func(ctx context.Context, _ daemonRunPayload, _ Surface, _ ResultSink) error {
+			slog.Info("cli.daemon.invoked", "concern", "cli.daemon", "component", "clispec")
+			log := slog.Default().With("component", "daemon")
+			return daemonsvc.RunCommandContext(ctx, log)
+		},
+		runResult: nil,
+	}
+}
+
+func daemonWorkerOp() Operation[daemonWorkerInput, daemonWorkerPayload] {
+	return Operation[daemonWorkerInput, daemonWorkerPayload]{
+		Name:           Name{Canonical: "daemon_worker", CLIOverride: "worker"},
+		Group:          daemonGroup,
+		Surfaces:       SurfaceSet{CLI: true, MCP: false},
+		outputKind:     0,
+		Short:          "Run the daemon worker service",
+		Long:           "Run the daemon worker service, the process that owns the public listeners. The supervisor spawns the worker during startup and reload; it is not normally run directly.",
+		Examples:       []string{"clyde daemon worker"},
+		Args:           nil,
+		Params:         nil,
+		New:            func() daemonWorkerInput { return daemonWorkerInput{} },
+		Children:       nil,
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
+		Prepare:        func(in daemonWorkerInput) (daemonWorkerPayload, error) { return daemonWorkerPayload{}, nil },
+		Run: func(ctx context.Context, _ daemonWorkerPayload, _ Surface, _ ResultSink) error {
+			slog.Info("cli.daemon.worker.invoked", "concern", "cli.daemon", "component", "clispec")
+			log := slog.Default().With("component", "daemon")
+			return daemonsvc.RunContext(ctx, log)
 		},
 		runResult: nil,
 	}

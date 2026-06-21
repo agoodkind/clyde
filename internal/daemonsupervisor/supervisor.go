@@ -101,20 +101,21 @@ func SocketPath(runtimeDir string) string {
 	return filepath.Join(runtimeDir, "daemon.supervisor.sock")
 }
 
-// Supervise runs the launchd-owned supervisor loop for Clyde's daemon worker.
-func Supervise(log *slog.Logger, runtimeDir string) error {
+// SuperviseContext runs the launchd-owned supervisor loop for Clyde's daemon
+// worker and honors ctx cancellation.
+func SuperviseContext(ctx context.Context, log *slog.Logger, runtimeDir string) error {
 	if strings.TrimSpace(runtimeDir) == "" {
 		return fmt.Errorf("daemon supervisor runtime dir is empty")
 	}
 	executablePath, err := supervisorExecutablePath()
 	if err != nil {
-		log.Warn("daemon.supervisor.executable_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		log.WarnContext(ctx, "daemon.supervisor.executable_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return fmt.Errorf("resolve daemon supervisor executable: %w", err)
 	}
 
 	readyRead, readyWrite, err := os.Pipe()
 	if err != nil {
-		log.Warn("daemon.supervisor.ready_pipe_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		log.WarnContext(ctx, "daemon.supervisor.ready_pipe_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return fmt.Errorf("create daemon worker readiness pipe: %w", err)
 	}
 	defer func() { _ = readyRead.Close() }()
@@ -124,7 +125,7 @@ func Supervise(log *slog.Logger, runtimeDir string) error {
 	_ = os.Remove(socketPath)
 	controlListener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
-		log.Warn("daemon.supervisor.reload_socket_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "socket_path", socketPath, "err", err)
+		log.WarnContext(ctx, "daemon.supervisor.reload_socket_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "socket_path", socketPath, "err", err)
 		return fmt.Errorf("listen daemon supervisor reload socket %s: %w", socketPath, err)
 	}
 	defer func() { _ = controlListener.Close() }()
@@ -132,7 +133,7 @@ func Supervise(log *slog.Logger, runtimeDir string) error {
 
 	handle, err := startWorker(workerCommand(executablePath, readyWrite, 3, socketPath))
 	if err != nil {
-		log.Warn("daemon.supervisor.worker_start_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		log.WarnContext(ctx, "daemon.supervisor.worker_start_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return fmt.Errorf("start daemon worker: %w", err)
 	}
 	_ = readyWrite.Close()
@@ -141,7 +142,7 @@ func Supervise(log *slog.Logger, runtimeDir string) error {
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signalCh)
 
-	log.Info("daemon.supervisor.worker_started", "concern", "process.daemon.lifecycle", "component", "daemon",
+	log.InfoContext(ctx, "daemon.supervisor.worker_started", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"pid", handle.cmd.Process.Pid,
 		"socket_path", socketPath,
 		"fingerprint", CompiledFingerprint(),
@@ -154,12 +155,12 @@ func Supervise(log *slog.Logger, runtimeDir string) error {
 				logSupervisorPanic(log, "daemon.supervisor.worker_ready_wait", fmt.Sprint(recovered))
 			}
 		}()
-		readyCh <- waitForWorkerReady(context.Background(), readyRead, handle.waitCh)
+		readyCh <- waitForWorkerReady(ctx, readyRead, handle.waitCh)
 	}()
 
 	select {
 	case sig := <-signalCh:
-		log.Info("daemon.supervisor.signal_received", "concern", "process.daemon.lifecycle", "component", "daemon",
+		log.InfoContext(ctx, "daemon.supervisor.signal_received", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"signal", fmt.Sprint(sig),
 			"pid", handle.cmd.Process.Pid,
 		)
@@ -172,8 +173,11 @@ func Supervise(log *slog.Logger, runtimeDir string) error {
 			}
 			return err
 		}
+	case <-ctx.Done():
+		stopWorker(log, handle.cmd, syscall.SIGTERM, handle.waitCh)
+		return nil
 	}
-	log.Info("daemon.supervisor.worker_ready", "concern", "process.daemon.lifecycle", "component", "daemon",
+	log.InfoContext(ctx, "daemon.supervisor.worker_ready", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"pid", handle.cmd.Process.Pid,
 	)
 
@@ -188,7 +192,7 @@ func Supervise(log *slog.Logger, runtimeDir string) error {
 		serveControl(log, controlListener, replacementCh, controlErrCh)
 	}()
 
-	return runSupervisorLoop(log, signalCh, handle, replacementCh, controlErrCh)
+	return runSupervisorLoop(ctx, log, signalCh, handle, replacementCh, controlErrCh)
 }
 
 // RequestReplacement asks the running supervisor to replace its worker process.
@@ -329,12 +333,12 @@ func EnvWithOverrides(base []string, overrides ...string) []string {
 	return out
 }
 
-func runSupervisorLoop(log *slog.Logger, signalCh <-chan os.Signal, handle workerHandle, replacementCh <-chan workerHandle, controlErrCh <-chan error) error {
+func runSupervisorLoop(ctx context.Context, log *slog.Logger, signalCh <-chan os.Signal, handle workerHandle, replacementCh <-chan workerHandle, controlErrCh <-chan error) error {
 	current := handle
 	for {
 		select {
 		case sig := <-signalCh:
-			log.Debug("daemon.supervisor.signal_received", "concern", "process.daemon.lifecycle", "component", "daemon",
+			log.DebugContext(ctx, "daemon.supervisor.signal_received", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"signal", fmt.Sprint(sig),
 				"pid", current.cmd.Process.Pid,
 			)
@@ -342,13 +346,16 @@ func runSupervisorLoop(log *slog.Logger, signalCh <-chan os.Signal, handle worke
 			return nil
 		case replacement := <-replacementCh:
 			current = replacement
-			log.Debug("daemon.supervisor.worker_replaced", "concern", "process.daemon.lifecycle", "component", "daemon",
+			log.DebugContext(ctx, "daemon.supervisor.worker_replaced", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"pid", current.cmd.Process.Pid,
 			)
 		case err := <-current.waitCh:
 			return workerExitError(err)
 		case err := <-controlErrCh:
 			return err
+		case <-ctx.Done():
+			stopWorker(log, current.cmd, syscall.SIGTERM, current.waitCh)
+			return nil
 		}
 	}
 }

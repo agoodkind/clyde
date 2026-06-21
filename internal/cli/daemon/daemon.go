@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -19,11 +18,6 @@ import (
 // ReloadCommandTimeout is the shared timeout for daemon reload command paths.
 const ReloadCommandTimeout = 75 * time.Second
 
-var (
-	runCommand = daemonsvc.RunCommand
-	runWorker  = daemonsvc.Run
-)
-
 // NewCmd is part of Clyde's typed adapter surface.
 func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd := &cobra.Command{
@@ -36,42 +30,8 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newRunCmd(f))
-	cmd.AddCommand(newWorkerCmd(f))
 	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
 	return cmd
-}
-
-func newRunCmd(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:     "run",
-		Short:   "Start the background daemon",
-		Long:    "Start the background daemon process. launchd owns the daemon's lifecycle, so this entry point is normally invoked by the launch agent rather than directly.",
-		Example: "clyde daemon run",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			slog.Info("cli.daemon.invoked", "concern", "cli.daemon", "component", "cli",
-				"version", f.Build.Version,
-			)
-			log := slog.Default().With("component", "daemon")
-			return runCommand(log)
-		},
-	}
-}
-
-func newWorkerCmd(_ *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:     "worker",
-		Short:   "Run the daemon worker service",
-		Long:    "Run the daemon worker service, the process that owns the public listeners. The supervisor spawns the worker during startup and reload; it is not normally run directly.",
-		Example: "clyde daemon worker",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			slog.Info("cli.daemon.worker.invoked", "concern", "cli.daemon", "component", "cli")
-			log := slog.Default().With("component", "daemon")
-			return runWorker(log)
-		},
-	}
 }
 
 // ReloadCommandError normalizes reload command errors into user-facing wording.
