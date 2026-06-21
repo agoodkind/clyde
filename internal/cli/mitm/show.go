@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -8,6 +9,7 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/mitmshow"
 	"goodkind.io/clyde/internal/response"
 )
 
@@ -24,15 +26,19 @@ func newShowCmd(f *cli.Factory) *cobra.Command {
 		Example: "clyde mitm show chatcmpl-abc123",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			output, err := daemon.ShowCapture(cmd.Context(), args[0], asJSON)
+			output, err := daemon.ShowCapture(cmd.Context(), args[0])
 			if err != nil {
 				slog.WarnContext(cmd.Context(), "cli.mitm.show.failed", "concern", "cli.mitm", "component", "cli", "err", err)
 				return fmt.Errorf("mitm show: %w", err)
 			}
 			if asJSON {
-				return response.WriteJSON(cmd.Context(), f.IOStreams.Out, []byte(output), response.JSONIndented)
+				body, err := json.Marshal(output)
+				if err != nil {
+					return fmt.Errorf("mitm show: encode json: %w", err)
+				}
+				return response.WriteJSON(cmd.Context(), f.IOStreams.Out, body, response.JSONIndented)
 			}
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, output)
+			return response.WriteText(cmd.Context(), f.IOStreams.Out, mitmshow.RenderText(output))
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit a typed JSON document instead of human-readable text")

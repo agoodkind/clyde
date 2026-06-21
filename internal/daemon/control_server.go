@@ -19,6 +19,7 @@ import (
 	"goodkind.io/clyde/internal/loginventory"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
+	"goodkind.io/clyde/internal/mitmshow"
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/gklog/correlation"
 )
@@ -32,7 +33,7 @@ type controlServer struct {
 	loggingConfig config.LoggingConfig
 	mitmConfig    config.MITMConfig
 	mitmStatus    func() MITMStatus
-	showCapture   func(ctx context.Context, id string, asJSON bool) (string, error)
+	showCapture   func(ctx context.Context, id string) (mitmshow.ShowOutput, error)
 	reload        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	rebind        func(context.Context) (*clydev1.ReloadDaemonResponse, error)
 	// freshness reports the conversation-index sync snapshot at query time, set
@@ -564,12 +565,17 @@ func (s *controlServer) GetMITMStatus(context.Context, *clydev1.GetMITMStatusReq
 }
 
 // ShowCapture correlates one request id across the daemon's logs and the SQLite
-// capture store and returns the rendered text or JSON document.
+// capture store and returns the typed lookup result.
 func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptureRequest) (*clydev1.ShowCaptureResponse, error) {
 	if s.showCapture == nil {
-		return &clydev1.ShowCaptureResponse{Output: ""}, nil
+		return &clydev1.ShowCaptureResponse{
+			Query:       req.GetId(),
+			Kind:        string(mitmshow.ClassifyID(req.GetId())),
+			Correlation: &clydev1.ShowCaptureCorrelation{},
+			Passes:      nil,
+		}, nil
 	}
-	output, err := s.showCapture(ctx, req.GetId(), req.GetJson())
+	output, err := s.showCapture(ctx, req.GetId())
 	if err != nil {
 		client, _ := peer.FromContext(ctx)
 		slog.WarnContext(ctx, "daemon.show_capture.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -578,7 +584,7 @@ func (s *controlServer) ShowCapture(ctx context.Context, req *clydev1.ShowCaptur
 		)
 		return nil, status.Errorf(codes.Internal, "show capture: %v", err)
 	}
-	return &clydev1.ShowCaptureResponse{Output: output}, nil
+	return protoShowCaptureOutput(output), nil
 }
 
 // SeedBaseline builds a wire baseline from the capture store's deduped shape
@@ -812,6 +818,79 @@ func protoReorientItemKind(kind conversation.ReorientItemKind) clydev1.ReorientI
 	default:
 		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_UNSPECIFIED
 	}
+}
+
+func protoShowCaptureOutput(output mitmshow.ShowOutput) *clydev1.ShowCaptureResponse {
+	return &clydev1.ShowCaptureResponse{
+		Output:      mitmshow.RenderText(output),
+		Query:       output.Query,
+		Kind:        string(output.Kind),
+		Correlation: protoShowCaptureCorrelation(output.Correlation),
+		Passes:      protoShowCapturePasses(output.Passes),
+	}
+}
+
+func protoShowCaptureCorrelation(correlation mitmshow.Correlation) *clydev1.ShowCaptureCorrelation {
+	return &clydev1.ShowCaptureCorrelation{
+		ClydeRequestId:    correlation.ClydeRequestID,
+		CursorRequestId:   correlation.CursorRequestID,
+		UpstreamRequestId: correlation.UpstreamRequestID,
+		TraceId:           correlation.TraceID,
+	}
+}
+
+func protoShowCapturePasses(passes []mitmshow.LookupPass) []*clydev1.ShowCapturePass {
+	wirePasses := make([]*clydev1.ShowCapturePass, 0, len(passes))
+	for _, pass := range passes {
+		wirePasses = append(wirePasses, &clydev1.ShowCapturePass{
+			Id:       pass.ID,
+			Sections: protoShowCaptureSections(pass.Sections),
+			Capture:  protoShowCaptureRows(pass.Capture),
+			Found:    protoShowCaptureCorrelation(pass.Found),
+		})
+	}
+	return wirePasses
+}
+
+func protoShowCaptureSections(sections []mitmshow.Section) []*clydev1.ShowCaptureSection {
+	wireSections := make([]*clydev1.ShowCaptureSection, 0, len(sections))
+	for _, section := range sections {
+		wireSections = append(wireSections, &clydev1.ShowCaptureSection{
+			Source:  section.Source,
+			Path:    section.Path,
+			Matches: section.Matches,
+		})
+	}
+	return wireSections
+}
+
+func protoShowCaptureRows(capture mitmshow.CaptureSection) *clydev1.ShowCaptureRows {
+	return &clydev1.ShowCaptureRows{
+		Source: capture.Source,
+		Path:   capture.Path,
+		Rows:   protoShowCaptureCaptureRows(capture.Rows),
+	}
+}
+
+func protoShowCaptureCaptureRows(rows []mitmshow.CaptureRow) []*clydev1.ShowCaptureCaptureRow {
+	wireRows := make([]*clydev1.ShowCaptureCaptureRow, 0, len(rows))
+	for _, row := range rows {
+		wireRows = append(wireRows, &clydev1.ShowCaptureCaptureRow{
+			Ts:                row.Timestamp,
+			Client:            row.Client,
+			Provider:          row.Provider,
+			Concern:           row.Concern,
+			Host:              row.Host,
+			Method:            row.Method,
+			Path:              row.Path,
+			Status:            int64(row.Status),
+			RequestId:         row.RequestID,
+			UpstreamRequestId: row.UpstreamRequestID,
+			SessionId:         row.SessionID,
+			TraceId:           row.TraceID,
+		})
+	}
+	return wireRows
 }
 
 func protoConversationStats(stats conversation.Stats) *clydev1.ConversationInfoStats {

@@ -20,6 +20,7 @@ import (
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/mitm"
+	"goodkind.io/clyde/internal/mitmshow"
 )
 
 // controlMaxMessageBytes is the message-size ceiling for the control leg, set on
@@ -475,6 +476,101 @@ func reorientItemKindFromProto(kind clydev1.ReorientItemKind) conversation.Reori
 	}
 }
 
+func showCaptureOutputFromProto(resp *clydev1.ShowCaptureResponse) mitmshow.ShowOutput {
+	return mitmshow.ShowOutput{
+		Query:       resp.GetQuery(),
+		Kind:        mitmshow.IDKind(resp.GetKind()),
+		Correlation: showCaptureCorrelationFromProto(resp.GetCorrelation()),
+		Passes:      showCapturePassesFromProto(resp.GetPasses()),
+	}
+}
+
+func legacyShowCaptureOutput(resp *clydev1.ShowCaptureResponse) string {
+	if resp == nil {
+		return ""
+	}
+	message := resp.ProtoReflect()
+	field := message.Descriptor().Fields().ByName("output")
+	if field == nil {
+		return ""
+	}
+	return message.Get(field).String()
+}
+
+func showCaptureCorrelationFromProto(wire *clydev1.ShowCaptureCorrelation) mitmshow.Correlation {
+	if wire == nil {
+		return mitmshow.Correlation{
+			ClydeRequestID:    "",
+			CursorRequestID:   "",
+			UpstreamRequestID: "",
+			TraceID:           "",
+		}
+	}
+	return mitmshow.Correlation{
+		ClydeRequestID:    wire.GetClydeRequestId(),
+		CursorRequestID:   wire.GetCursorRequestId(),
+		UpstreamRequestID: wire.GetUpstreamRequestId(),
+		TraceID:           wire.GetTraceId(),
+	}
+}
+
+func showCapturePassesFromProto(wirePasses []*clydev1.ShowCapturePass) []mitmshow.LookupPass {
+	passes := make([]mitmshow.LookupPass, 0, len(wirePasses))
+	for _, wire := range wirePasses {
+		passes = append(passes, mitmshow.LookupPass{
+			ID:       wire.GetId(),
+			Sections: showCaptureSectionsFromProto(wire.GetSections()),
+			Capture:  showCaptureRowsFromProto(wire.GetCapture()),
+			Found:    showCaptureCorrelationFromProto(wire.GetFound()),
+		})
+	}
+	return passes
+}
+
+func showCaptureSectionsFromProto(wireSections []*clydev1.ShowCaptureSection) []mitmshow.Section {
+	sections := make([]mitmshow.Section, 0, len(wireSections))
+	for _, wire := range wireSections {
+		sections = append(sections, mitmshow.Section{
+			Source:  wire.GetSource(),
+			Path:    wire.GetPath(),
+			Matches: wire.GetMatches(),
+		})
+	}
+	return sections
+}
+
+func showCaptureRowsFromProto(wire *clydev1.ShowCaptureRows) mitmshow.CaptureSection {
+	if wire == nil {
+		return mitmshow.CaptureSection{
+			Source: "",
+			Path:   "",
+			Rows:   nil,
+		}
+	}
+	rows := make([]mitmshow.CaptureRow, 0, len(wire.GetRows()))
+	for _, item := range wire.GetRows() {
+		rows = append(rows, mitmshow.CaptureRow{
+			Timestamp:         item.GetTs(),
+			Client:            item.GetClient(),
+			Provider:          item.GetProvider(),
+			Concern:           item.GetConcern(),
+			Host:              item.GetHost(),
+			Method:            item.GetMethod(),
+			Path:              item.GetPath(),
+			Status:            int(item.GetStatus()),
+			RequestID:         item.GetRequestId(),
+			UpstreamRequestID: item.GetUpstreamRequestId(),
+			SessionID:         item.GetSessionId(),
+			TraceID:           item.GetTraceId(),
+		})
+	}
+	return mitmshow.CaptureSection{
+		Source: wire.GetSource(),
+		Path:   wire.GetPath(),
+		Rows:   rows,
+	}
+}
+
 func conversationStatsFromProto(wire *clydev1.ConversationInfoStats) conversation.Stats {
 	if wire == nil {
 		return conversation.Stats{
@@ -651,21 +747,24 @@ func GetMITMStatus(ctx context.Context) (MITMStatus, error) {
 }
 
 // ShowCapture asks the daemon to correlate one request id across its logs and
-// the SQLite capture store and returns the rendered text or JSON document.
-func ShowCapture(ctx context.Context, id string, asJSON bool) (string, error) {
+// the SQLite capture store and returns the typed lookup result.
+func ShowCapture(ctx context.Context, id string) (mitmshow.ShowOutput, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
-		return "", err
+		return mitmshow.ShowOutput{}, err
 	}
 	defer func() { _ = client.conn.Close() }()
 
 	rpcCtx, cancel := context.WithTimeout(ctx, queryClientRPCTimeout)
 	defer cancel()
-	resp, err := client.rpc.ShowCapture(rpcCtx, &clydev1.ShowCaptureRequest{Id: id, Json: asJSON})
+	resp, err := client.rpc.ShowCapture(rpcCtx, &clydev1.ShowCaptureRequest{Id: id})
 	if err != nil {
-		return "", daemonRPCError(rpcCtx, "show capture", err)
+		return mitmshow.ShowOutput{}, daemonRPCError(rpcCtx, "show capture", err)
 	}
-	return resp.GetOutput(), nil
+	if len(resp.GetPasses()) == 0 && legacyShowCaptureOutput(resp) != "" {
+		return mitmshow.ShowOutput{}, fmt.Errorf("show capture: daemon returned legacy text-only response; deploy matching daemon binary")
+	}
+	return showCaptureOutputFromProto(resp), nil
 }
 
 // SeedBaseline asks the daemon to build a wire baseline from the capture

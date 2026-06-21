@@ -392,7 +392,6 @@ func (x *SeedBaselineResponse) GetFlavors() int64 {
 type ShowCaptureRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Json          bool                   `protobuf:"varint,2,opt,name=json,proto3" json:"json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -434,23 +433,409 @@ func (x *ShowCaptureRequest) GetId() string {
 	return ""
 }
 
-func (x *ShowCaptureRequest) GetJson() bool {
+type ShowCaptureSection struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Matches       []string               `protobuf:"bytes,3,rep,name=matches,proto3" json:"matches,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShowCaptureSection) Reset() {
+	*x = ShowCaptureSection{}
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShowCaptureSection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShowCaptureSection) ProtoMessage() {}
+
+func (x *ShowCaptureSection) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[5]
 	if x != nil {
-		return x.Json
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
 	}
-	return false
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShowCaptureSection.ProtoReflect.Descriptor instead.
+func (*ShowCaptureSection) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ShowCaptureSection) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *ShowCaptureSection) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ShowCaptureSection) GetMatches() []string {
+	if x != nil {
+		return x.Matches
+	}
+	return nil
+}
+
+type ShowCaptureCaptureRow struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Ts                int64                  `protobuf:"varint,1,opt,name=ts,proto3" json:"ts,omitempty"`
+	Client            string                 `protobuf:"bytes,2,opt,name=client,proto3" json:"client,omitempty"`
+	Provider          string                 `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	Concern           string                 `protobuf:"bytes,4,opt,name=concern,proto3" json:"concern,omitempty"`
+	Host              string                 `protobuf:"bytes,5,opt,name=host,proto3" json:"host,omitempty"`
+	Method            string                 `protobuf:"bytes,6,opt,name=method,proto3" json:"method,omitempty"`
+	Path              string                 `protobuf:"bytes,7,opt,name=path,proto3" json:"path,omitempty"`
+	Status            int64                  `protobuf:"varint,8,opt,name=status,proto3" json:"status,omitempty"`
+	RequestId         string                 `protobuf:"bytes,9,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	UpstreamRequestId string                 `protobuf:"bytes,10,opt,name=upstream_request_id,json=upstreamRequestId,proto3" json:"upstream_request_id,omitempty"`
+	SessionId         string                 `protobuf:"bytes,11,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	TraceId           string                 `protobuf:"bytes,12,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ShowCaptureCaptureRow) Reset() {
+	*x = ShowCaptureCaptureRow{}
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShowCaptureCaptureRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShowCaptureCaptureRow) ProtoMessage() {}
+
+func (x *ShowCaptureCaptureRow) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShowCaptureCaptureRow.ProtoReflect.Descriptor instead.
+func (*ShowCaptureCaptureRow) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ShowCaptureCaptureRow) GetTs() int64 {
+	if x != nil {
+		return x.Ts
+	}
+	return 0
+}
+
+func (x *ShowCaptureCaptureRow) GetClient() string {
+	if x != nil {
+		return x.Client
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetConcern() string {
+	if x != nil {
+		return x.Concern
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetStatus() int64 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *ShowCaptureCaptureRow) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetUpstreamRequestId() string {
+	if x != nil {
+		return x.UpstreamRequestId
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ShowCaptureCaptureRow) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+type ShowCaptureRows struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Source        string                   `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	Path          string                   `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Rows          []*ShowCaptureCaptureRow `protobuf:"bytes,3,rep,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShowCaptureRows) Reset() {
+	*x = ShowCaptureRows{}
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShowCaptureRows) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShowCaptureRows) ProtoMessage() {}
+
+func (x *ShowCaptureRows) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShowCaptureRows.ProtoReflect.Descriptor instead.
+func (*ShowCaptureRows) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ShowCaptureRows) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *ShowCaptureRows) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ShowCaptureRows) GetRows() []*ShowCaptureCaptureRow {
+	if x != nil {
+		return x.Rows
+	}
+	return nil
+}
+
+type ShowCaptureCorrelation struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ClydeRequestId    string                 `protobuf:"bytes,1,opt,name=clyde_request_id,json=clydeRequestId,proto3" json:"clyde_request_id,omitempty"`
+	CursorRequestId   string                 `protobuf:"bytes,2,opt,name=cursor_request_id,json=cursorRequestId,proto3" json:"cursor_request_id,omitempty"`
+	UpstreamRequestId string                 `protobuf:"bytes,3,opt,name=upstream_request_id,json=upstreamRequestId,proto3" json:"upstream_request_id,omitempty"`
+	TraceId           string                 `protobuf:"bytes,4,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ShowCaptureCorrelation) Reset() {
+	*x = ShowCaptureCorrelation{}
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShowCaptureCorrelation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShowCaptureCorrelation) ProtoMessage() {}
+
+func (x *ShowCaptureCorrelation) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShowCaptureCorrelation.ProtoReflect.Descriptor instead.
+func (*ShowCaptureCorrelation) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ShowCaptureCorrelation) GetClydeRequestId() string {
+	if x != nil {
+		return x.ClydeRequestId
+	}
+	return ""
+}
+
+func (x *ShowCaptureCorrelation) GetCursorRequestId() string {
+	if x != nil {
+		return x.CursorRequestId
+	}
+	return ""
+}
+
+func (x *ShowCaptureCorrelation) GetUpstreamRequestId() string {
+	if x != nil {
+		return x.UpstreamRequestId
+	}
+	return ""
+}
+
+func (x *ShowCaptureCorrelation) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+type ShowCapturePass struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Id            string                  `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Sections      []*ShowCaptureSection   `protobuf:"bytes,2,rep,name=sections,proto3" json:"sections,omitempty"`
+	Capture       *ShowCaptureRows        `protobuf:"bytes,3,opt,name=capture,proto3" json:"capture,omitempty"`
+	Found         *ShowCaptureCorrelation `protobuf:"bytes,4,opt,name=found,proto3" json:"found,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShowCapturePass) Reset() {
+	*x = ShowCapturePass{}
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShowCapturePass) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShowCapturePass) ProtoMessage() {}
+
+func (x *ShowCapturePass) ProtoReflect() protoreflect.Message {
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShowCapturePass.ProtoReflect.Descriptor instead.
+func (*ShowCapturePass) Descriptor() ([]byte, []int) {
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ShowCapturePass) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ShowCapturePass) GetSections() []*ShowCaptureSection {
+	if x != nil {
+		return x.Sections
+	}
+	return nil
+}
+
+func (x *ShowCapturePass) GetCapture() *ShowCaptureRows {
+	if x != nil {
+		return x.Capture
+	}
+	return nil
+}
+
+func (x *ShowCapturePass) GetFound() *ShowCaptureCorrelation {
+	if x != nil {
+		return x.Found
+	}
+	return nil
 }
 
 type ShowCaptureResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Output        string                 `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in clyde/v1/daemon/service.proto.
+	Output        string                  `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"`
+	Query         string                  `protobuf:"bytes,10,opt,name=query,proto3" json:"query,omitempty"`
+	Kind          string                  `protobuf:"bytes,11,opt,name=kind,proto3" json:"kind,omitempty"`
+	Correlation   *ShowCaptureCorrelation `protobuf:"bytes,12,opt,name=correlation,proto3" json:"correlation,omitempty"`
+	Passes        []*ShowCapturePass      `protobuf:"bytes,13,rep,name=passes,proto3" json:"passes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ShowCaptureResponse) Reset() {
 	*x = ShowCaptureResponse{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[5]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -462,7 +847,7 @@ func (x *ShowCaptureResponse) String() string {
 func (*ShowCaptureResponse) ProtoMessage() {}
 
 func (x *ShowCaptureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[5]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -475,14 +860,43 @@ func (x *ShowCaptureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShowCaptureResponse.ProtoReflect.Descriptor instead.
 func (*ShowCaptureResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{5}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{10}
 }
 
+// Deprecated: Marked as deprecated in clyde/v1/daemon/service.proto.
 func (x *ShowCaptureResponse) GetOutput() string {
 	if x != nil {
 		return x.Output
 	}
 	return ""
+}
+
+func (x *ShowCaptureResponse) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *ShowCaptureResponse) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ShowCaptureResponse) GetCorrelation() *ShowCaptureCorrelation {
+	if x != nil {
+		return x.Correlation
+	}
+	return nil
+}
+
+func (x *ShowCaptureResponse) GetPasses() []*ShowCapturePass {
+	if x != nil {
+		return x.Passes
+	}
+	return nil
 }
 
 type GetMITMStatusRequest struct {
@@ -493,7 +907,7 @@ type GetMITMStatusRequest struct {
 
 func (x *GetMITMStatusRequest) Reset() {
 	*x = GetMITMStatusRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[6]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -505,7 +919,7 @@ func (x *GetMITMStatusRequest) String() string {
 func (*GetMITMStatusRequest) ProtoMessage() {}
 
 func (x *GetMITMStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[6]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -518,7 +932,7 @@ func (x *GetMITMStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMITMStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetMITMStatusRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{6}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{11}
 }
 
 type MITMListenerStatus struct {
@@ -532,7 +946,7 @@ type MITMListenerStatus struct {
 
 func (x *MITMListenerStatus) Reset() {
 	*x = MITMListenerStatus{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[7]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +958,7 @@ func (x *MITMListenerStatus) String() string {
 func (*MITMListenerStatus) ProtoMessage() {}
 
 func (x *MITMListenerStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[7]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +971,7 @@ func (x *MITMListenerStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MITMListenerStatus.ProtoReflect.Descriptor instead.
 func (*MITMListenerStatus) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{7}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MITMListenerStatus) GetId() string {
@@ -592,7 +1006,7 @@ type GetMITMStatusResponse struct {
 
 func (x *GetMITMStatusResponse) Reset() {
 	*x = GetMITMStatusResponse{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[8]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -604,7 +1018,7 @@ func (x *GetMITMStatusResponse) String() string {
 func (*GetMITMStatusResponse) ProtoMessage() {}
 
 func (x *GetMITMStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[8]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -617,7 +1031,7 @@ func (x *GetMITMStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMITMStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetMITMStatusResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{8}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetMITMStatusResponse) GetListeners() []*MITMListenerStatus {
@@ -656,7 +1070,7 @@ type ListConversationsRequest struct {
 
 func (x *ListConversationsRequest) Reset() {
 	*x = ListConversationsRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[9]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -668,7 +1082,7 @@ func (x *ListConversationsRequest) String() string {
 func (*ListConversationsRequest) ProtoMessage() {}
 
 func (x *ListConversationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[9]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -681,7 +1095,7 @@ func (x *ListConversationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConversationsRequest.ProtoReflect.Descriptor instead.
 func (*ListConversationsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{9}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListConversationsRequest) GetLimit() int64 {
@@ -743,7 +1157,7 @@ type GetConversationRequest struct {
 
 func (x *GetConversationRequest) Reset() {
 	*x = GetConversationRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[10]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -755,7 +1169,7 @@ func (x *GetConversationRequest) String() string {
 func (*GetConversationRequest) ProtoMessage() {}
 
 func (x *GetConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[10]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -768,7 +1182,7 @@ func (x *GetConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConversationRequest.ProtoReflect.Descriptor instead.
 func (*GetConversationRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{10}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetConversationRequest) GetConversationId() string {
@@ -794,7 +1208,7 @@ type GetConversationInfoRequest struct {
 
 func (x *GetConversationInfoRequest) Reset() {
 	*x = GetConversationInfoRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[11]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -806,7 +1220,7 @@ func (x *GetConversationInfoRequest) String() string {
 func (*GetConversationInfoRequest) ProtoMessage() {}
 
 func (x *GetConversationInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[11]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -819,7 +1233,7 @@ func (x *GetConversationInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConversationInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetConversationInfoRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{11}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetConversationInfoRequest) GetConversationId() string {
@@ -842,7 +1256,7 @@ type ConversationChunk struct {
 
 func (x *ConversationChunk) Reset() {
 	*x = ConversationChunk{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[12]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -854,7 +1268,7 @@ func (x *ConversationChunk) String() string {
 func (*ConversationChunk) ProtoMessage() {}
 
 func (x *ConversationChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[12]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -867,7 +1281,7 @@ func (x *ConversationChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationChunk.ProtoReflect.Descriptor instead.
 func (*ConversationChunk) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{12}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ConversationChunk) GetText() []byte {
@@ -888,7 +1302,7 @@ type ExportChunk struct {
 
 func (x *ExportChunk) Reset() {
 	*x = ExportChunk{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[13]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -900,7 +1314,7 @@ func (x *ExportChunk) String() string {
 func (*ExportChunk) ProtoMessage() {}
 
 func (x *ExportChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[13]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -913,7 +1327,7 @@ func (x *ExportChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportChunk.ProtoReflect.Descriptor instead.
 func (*ExportChunk) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{13}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ExportChunk) GetBody() []byte {
@@ -936,7 +1350,7 @@ type GetConversationContextRequest struct {
 
 func (x *GetConversationContextRequest) Reset() {
 	*x = GetConversationContextRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[14]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +1362,7 @@ func (x *GetConversationContextRequest) String() string {
 func (*GetConversationContextRequest) ProtoMessage() {}
 
 func (x *GetConversationContextRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[14]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +1375,7 @@ func (x *GetConversationContextRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConversationContextRequest.ProtoReflect.Descriptor instead.
 func (*GetConversationContextRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{14}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetConversationContextRequest) GetConversationId() string {
@@ -1025,7 +1439,7 @@ type SearchConversationsRequest struct {
 
 func (x *SearchConversationsRequest) Reset() {
 	*x = SearchConversationsRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[15]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +1451,7 @@ func (x *SearchConversationsRequest) String() string {
 func (*SearchConversationsRequest) ProtoMessage() {}
 
 func (x *SearchConversationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[15]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +1464,7 @@ func (x *SearchConversationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchConversationsRequest.ProtoReflect.Descriptor instead.
 func (*SearchConversationsRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{15}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SearchConversationsRequest) GetQuery() string {
@@ -1155,7 +1569,7 @@ type ConversationSearchMatch struct {
 
 func (x *ConversationSearchMatch) Reset() {
 	*x = ConversationSearchMatch{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[16]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1167,7 +1581,7 @@ func (x *ConversationSearchMatch) String() string {
 func (*ConversationSearchMatch) ProtoMessage() {}
 
 func (x *ConversationSearchMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[16]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1180,7 +1594,7 @@ func (x *ConversationSearchMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationSearchMatch.ProtoReflect.Descriptor instead.
 func (*ConversationSearchMatch) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{16}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ConversationSearchMatch) GetConversation() *ConversationRecord {
@@ -1244,7 +1658,7 @@ type SearchFacetCount struct {
 
 func (x *SearchFacetCount) Reset() {
 	*x = SearchFacetCount{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[17]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1256,7 +1670,7 @@ func (x *SearchFacetCount) String() string {
 func (*SearchFacetCount) ProtoMessage() {}
 
 func (x *SearchFacetCount) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[17]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1269,7 +1683,7 @@ func (x *SearchFacetCount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchFacetCount.ProtoReflect.Descriptor instead.
 func (*SearchFacetCount) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{17}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SearchFacetCount) GetValue() string {
@@ -1299,7 +1713,7 @@ type SearchFacets struct {
 
 func (x *SearchFacets) Reset() {
 	*x = SearchFacets{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[18]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1311,7 +1725,7 @@ func (x *SearchFacets) String() string {
 func (*SearchFacets) ProtoMessage() {}
 
 func (x *SearchFacets) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[18]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1324,7 +1738,7 @@ func (x *SearchFacets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchFacets.ProtoReflect.Descriptor instead.
 func (*SearchFacets) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{18}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SearchFacets) GetWorkspaces() []*SearchFacetCount {
@@ -1363,7 +1777,7 @@ type SearchFreshness struct {
 
 func (x *SearchFreshness) Reset() {
 	*x = SearchFreshness{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[19]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1375,7 +1789,7 @@ func (x *SearchFreshness) String() string {
 func (*SearchFreshness) ProtoMessage() {}
 
 func (x *SearchFreshness) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[19]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1388,7 +1802,7 @@ func (x *SearchFreshness) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchFreshness.ProtoReflect.Descriptor instead.
 func (*SearchFreshness) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{19}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SearchFreshness) GetManifest() int64 {
@@ -1438,7 +1852,7 @@ type FilterStage struct {
 
 func (x *FilterStage) Reset() {
 	*x = FilterStage{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[20]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1450,7 +1864,7 @@ func (x *FilterStage) String() string {
 func (*FilterStage) ProtoMessage() {}
 
 func (x *FilterStage) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[20]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1463,7 +1877,7 @@ func (x *FilterStage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilterStage.ProtoReflect.Descriptor instead.
 func (*FilterStage) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{20}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *FilterStage) GetName() string {
@@ -1490,7 +1904,7 @@ type FilterAccounting struct {
 
 func (x *FilterAccounting) Reset() {
 	*x = FilterAccounting{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[21]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1502,7 +1916,7 @@ func (x *FilterAccounting) String() string {
 func (*FilterAccounting) ProtoMessage() {}
 
 func (x *FilterAccounting) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[21]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1515,7 +1929,7 @@ func (x *FilterAccounting) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilterAccounting.ProtoReflect.Descriptor instead.
 func (*FilterAccounting) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{21}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *FilterAccounting) GetStages() []*FilterStage {
@@ -1542,7 +1956,7 @@ type SearchConversationsResponse struct {
 
 func (x *SearchConversationsResponse) Reset() {
 	*x = SearchConversationsResponse{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[22]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1554,7 +1968,7 @@ func (x *SearchConversationsResponse) String() string {
 func (*SearchConversationsResponse) ProtoMessage() {}
 
 func (x *SearchConversationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[22]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1567,7 +1981,7 @@ func (x *SearchConversationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchConversationsResponse.ProtoReflect.Descriptor instead.
 func (*SearchConversationsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{22}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SearchConversationsResponse) GetMatches() []*ConversationSearchMatch {
@@ -1648,7 +2062,7 @@ type ConversationInfoStats struct {
 
 func (x *ConversationInfoStats) Reset() {
 	*x = ConversationInfoStats{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[23]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1660,7 +2074,7 @@ func (x *ConversationInfoStats) String() string {
 func (*ConversationInfoStats) ProtoMessage() {}
 
 func (x *ConversationInfoStats) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[23]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1673,7 +2087,7 @@ func (x *ConversationInfoStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationInfoStats.ProtoReflect.Descriptor instead.
 func (*ConversationInfoStats) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{23}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ConversationInfoStats) GetTotalMessages() int64 {
@@ -1743,7 +2157,7 @@ type ConversationCompactionSegment struct {
 
 func (x *ConversationCompactionSegment) Reset() {
 	*x = ConversationCompactionSegment{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[24]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1755,7 +2169,7 @@ func (x *ConversationCompactionSegment) String() string {
 func (*ConversationCompactionSegment) ProtoMessage() {}
 
 func (x *ConversationCompactionSegment) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[24]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1768,7 +2182,7 @@ func (x *ConversationCompactionSegment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationCompactionSegment.ProtoReflect.Descriptor instead.
 func (*ConversationCompactionSegment) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{24}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ConversationCompactionSegment) GetIndex() int64 {
@@ -1853,7 +2267,7 @@ type GetConversationInfoResponse struct {
 
 func (x *GetConversationInfoResponse) Reset() {
 	*x = GetConversationInfoResponse{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[25]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1865,7 +2279,7 @@ func (x *GetConversationInfoResponse) String() string {
 func (*GetConversationInfoResponse) ProtoMessage() {}
 
 func (x *GetConversationInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[25]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1878,7 +2292,7 @@ func (x *GetConversationInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConversationInfoResponse.ProtoReflect.Descriptor instead.
 func (*GetConversationInfoResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{25}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetConversationInfoResponse) GetConversation() *ConversationRecord {
@@ -1934,7 +2348,7 @@ type ReorientConversationRequest struct {
 
 func (x *ReorientConversationRequest) Reset() {
 	*x = ReorientConversationRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[26]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1946,7 +2360,7 @@ func (x *ReorientConversationRequest) String() string {
 func (*ReorientConversationRequest) ProtoMessage() {}
 
 func (x *ReorientConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[26]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1959,7 +2373,7 @@ func (x *ReorientConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorientConversationRequest.ProtoReflect.Descriptor instead.
 func (*ReorientConversationRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{26}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ReorientConversationRequest) GetConversationId() string {
@@ -2023,7 +2437,7 @@ type ReorientConversationRef struct {
 
 func (x *ReorientConversationRef) Reset() {
 	*x = ReorientConversationRef{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[27]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2035,7 +2449,7 @@ func (x *ReorientConversationRef) String() string {
 func (*ReorientConversationRef) ProtoMessage() {}
 
 func (x *ReorientConversationRef) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[27]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2048,7 +2462,7 @@ func (x *ReorientConversationRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorientConversationRef.ProtoReflect.Descriptor instead.
 func (*ReorientConversationRef) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{27}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ReorientConversationRef) GetId() string {
@@ -2092,7 +2506,7 @@ type ReorientItem struct {
 
 func (x *ReorientItem) Reset() {
 	*x = ReorientItem{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[28]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2104,7 +2518,7 @@ func (x *ReorientItem) String() string {
 func (*ReorientItem) ProtoMessage() {}
 
 func (x *ReorientItem) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[28]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2117,7 +2531,7 @@ func (x *ReorientItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorientItem.ProtoReflect.Descriptor instead.
 func (*ReorientItem) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{28}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ReorientItem) GetKind() ReorientItemKind {
@@ -2180,7 +2594,7 @@ type ReorientConversationResponse struct {
 
 func (x *ReorientConversationResponse) Reset() {
 	*x = ReorientConversationResponse{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[29]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2192,7 +2606,7 @@ func (x *ReorientConversationResponse) String() string {
 func (*ReorientConversationResponse) ProtoMessage() {}
 
 func (x *ReorientConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[29]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2205,7 +2619,7 @@ func (x *ReorientConversationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorientConversationResponse.ProtoReflect.Descriptor instead.
 func (*ReorientConversationResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{29}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{34}
 }
 
 // Deprecated: Marked as deprecated in clyde/v1/daemon/service.proto.
@@ -2302,7 +2716,7 @@ type ExportTranscriptRequest struct {
 
 func (x *ExportTranscriptRequest) Reset() {
 	*x = ExportTranscriptRequest{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2314,7 +2728,7 @@ func (x *ExportTranscriptRequest) String() string {
 func (*ExportTranscriptRequest) ProtoMessage() {}
 
 func (x *ExportTranscriptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[30]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2327,7 +2741,7 @@ func (x *ExportTranscriptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportTranscriptRequest.ProtoReflect.Descriptor instead.
 func (*ExportTranscriptRequest) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{30}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ExportTranscriptRequest) GetConversationId() string {
@@ -2447,7 +2861,7 @@ type ConversationLineage struct {
 
 func (x *ConversationLineage) Reset() {
 	*x = ConversationLineage{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[31]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2459,7 +2873,7 @@ func (x *ConversationLineage) String() string {
 func (*ConversationLineage) ProtoMessage() {}
 
 func (x *ConversationLineage) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[31]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2472,7 +2886,7 @@ func (x *ConversationLineage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationLineage.ProtoReflect.Descriptor instead.
 func (*ConversationLineage) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{31}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ConversationLineage) GetKind() string {
@@ -2527,7 +2941,7 @@ type ConversationRecord struct {
 
 func (x *ConversationRecord) Reset() {
 	*x = ConversationRecord{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[32]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2539,7 +2953,7 @@ func (x *ConversationRecord) String() string {
 func (*ConversationRecord) ProtoMessage() {}
 
 func (x *ConversationRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[32]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2552,7 +2966,7 @@ func (x *ConversationRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationRecord.ProtoReflect.Descriptor instead.
 func (*ConversationRecord) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{32}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ConversationRecord) GetId() string {
@@ -2668,7 +3082,7 @@ type ListConversationsResponse struct {
 
 func (x *ListConversationsResponse) Reset() {
 	*x = ListConversationsResponse{}
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[33]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2680,7 +3094,7 @@ func (x *ListConversationsResponse) String() string {
 func (*ListConversationsResponse) ProtoMessage() {}
 
 func (x *ListConversationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clyde_v1_daemon_service_proto_msgTypes[33]
+	mi := &file_clyde_v1_daemon_service_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2693,7 +3107,7 @@ func (x *ListConversationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConversationsResponse.ProtoReflect.Descriptor instead.
 func (*ListConversationsResponse) Descriptor() ([]byte, []int) {
-	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{33}
+	return file_clyde_v1_daemon_service_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ListConversationsResponse) GetConversations() []*ConversationRecord {
@@ -2769,12 +3183,50 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x14SeedBaselineResponse\x12\x18\n" +
 	"\awritten\x18\x01 \x01(\tR\awritten\x12\x1a\n" +
 	"\bupstream\x18\x02 \x01(\tR\bupstream\x12\x18\n" +
-	"\aflavors\x18\x03 \x01(\x03R\aflavors\"8\n" +
+	"\aflavors\x18\x03 \x01(\x03R\aflavors\"0\n" +
 	"\x12ShowCaptureRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04json\x18\x02 \x01(\bR\x04json\"-\n" +
-	"\x13ShowCaptureResponse\x12\x16\n" +
-	"\x06output\x18\x01 \x01(\tR\x06output\"\x16\n" +
+	"\x02id\x18\x01 \x01(\tR\x02idJ\x04\b\x02\x10\x03R\x04json\"Z\n" +
+	"\x12ShowCaptureSection\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x18\n" +
+	"\amatches\x18\x03 \x03(\tR\amatches\"\xd6\x02\n" +
+	"\x15ShowCaptureCaptureRow\x12\x0e\n" +
+	"\x02ts\x18\x01 \x01(\x03R\x02ts\x12\x16\n" +
+	"\x06client\x18\x02 \x01(\tR\x06client\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12\x18\n" +
+	"\aconcern\x18\x04 \x01(\tR\aconcern\x12\x12\n" +
+	"\x04host\x18\x05 \x01(\tR\x04host\x12\x16\n" +
+	"\x06method\x18\x06 \x01(\tR\x06method\x12\x12\n" +
+	"\x04path\x18\a \x01(\tR\x04path\x12\x16\n" +
+	"\x06status\x18\b \x01(\x03R\x06status\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\t \x01(\tR\trequestId\x12.\n" +
+	"\x13upstream_request_id\x18\n" +
+	" \x01(\tR\x11upstreamRequestId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\v \x01(\tR\tsessionId\x12\x19\n" +
+	"\btrace_id\x18\f \x01(\tR\atraceId\"r\n" +
+	"\x0fShowCaptureRows\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x123\n" +
+	"\x04rows\x18\x03 \x03(\v2\x1f.clyde.v1.ShowCaptureCaptureRowR\x04rows\"\xb9\x01\n" +
+	"\x16ShowCaptureCorrelation\x12(\n" +
+	"\x10clyde_request_id\x18\x01 \x01(\tR\x0eclydeRequestId\x12*\n" +
+	"\x11cursor_request_id\x18\x02 \x01(\tR\x0fcursorRequestId\x12.\n" +
+	"\x13upstream_request_id\x18\x03 \x01(\tR\x11upstreamRequestId\x12\x19\n" +
+	"\btrace_id\x18\x04 \x01(\tR\atraceId\"\xc8\x01\n" +
+	"\x0fShowCapturePass\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
+	"\bsections\x18\x02 \x03(\v2\x1c.clyde.v1.ShowCaptureSectionR\bsections\x123\n" +
+	"\acapture\x18\x03 \x01(\v2\x19.clyde.v1.ShowCaptureRowsR\acapture\x126\n" +
+	"\x05found\x18\x04 \x01(\v2 .clyde.v1.ShowCaptureCorrelationR\x05found\"\xd2\x01\n" +
+	"\x13ShowCaptureResponse\x12\x1a\n" +
+	"\x06output\x18\x01 \x01(\tB\x02\x18\x01R\x06output\x12\x14\n" +
+	"\x05query\x18\n" +
+	" \x01(\tR\x05query\x12\x12\n" +
+	"\x04kind\x18\v \x01(\tR\x04kind\x12B\n" +
+	"\vcorrelation\x18\f \x01(\v2 .clyde.v1.ShowCaptureCorrelationR\vcorrelation\x121\n" +
+	"\x06passes\x18\r \x03(\v2\x19.clyde.v1.ShowCapturePassR\x06passes\"\x16\n" +
 	"\x14GetMITMStatusRequest\"N\n" +
 	"\x12MITMListenerStatus\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
@@ -3014,7 +3466,7 @@ func file_clyde_v1_daemon_service_proto_rawDescGZIP() []byte {
 }
 
 var file_clyde_v1_daemon_service_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_clyde_v1_daemon_service_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_clyde_v1_daemon_service_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(SearchSource)(0),                     // 0: clyde.v1.SearchSource
 	(ReorientItemKind)(0),                 // 1: clyde.v1.ReorientItemKind
@@ -3023,104 +3475,115 @@ var file_clyde_v1_daemon_service_proto_goTypes = []any{
 	(*SeedBaselineRequest)(nil),           // 4: clyde.v1.SeedBaselineRequest
 	(*SeedBaselineResponse)(nil),          // 5: clyde.v1.SeedBaselineResponse
 	(*ShowCaptureRequest)(nil),            // 6: clyde.v1.ShowCaptureRequest
-	(*ShowCaptureResponse)(nil),           // 7: clyde.v1.ShowCaptureResponse
-	(*GetMITMStatusRequest)(nil),          // 8: clyde.v1.GetMITMStatusRequest
-	(*MITMListenerStatus)(nil),            // 9: clyde.v1.MITMListenerStatus
-	(*GetMITMStatusResponse)(nil),         // 10: clyde.v1.GetMITMStatusResponse
-	(*ListConversationsRequest)(nil),      // 11: clyde.v1.ListConversationsRequest
-	(*GetConversationRequest)(nil),        // 12: clyde.v1.GetConversationRequest
-	(*GetConversationInfoRequest)(nil),    // 13: clyde.v1.GetConversationInfoRequest
-	(*ConversationChunk)(nil),             // 14: clyde.v1.ConversationChunk
-	(*ExportChunk)(nil),                   // 15: clyde.v1.ExportChunk
-	(*GetConversationContextRequest)(nil), // 16: clyde.v1.GetConversationContextRequest
-	(*SearchConversationsRequest)(nil),    // 17: clyde.v1.SearchConversationsRequest
-	(*ConversationSearchMatch)(nil),       // 18: clyde.v1.ConversationSearchMatch
-	(*SearchFacetCount)(nil),              // 19: clyde.v1.SearchFacetCount
-	(*SearchFacets)(nil),                  // 20: clyde.v1.SearchFacets
-	(*SearchFreshness)(nil),               // 21: clyde.v1.SearchFreshness
-	(*FilterStage)(nil),                   // 22: clyde.v1.FilterStage
-	(*FilterAccounting)(nil),              // 23: clyde.v1.FilterAccounting
-	(*SearchConversationsResponse)(nil),   // 24: clyde.v1.SearchConversationsResponse
-	(*ConversationInfoStats)(nil),         // 25: clyde.v1.ConversationInfoStats
-	(*ConversationCompactionSegment)(nil), // 26: clyde.v1.ConversationCompactionSegment
-	(*GetConversationInfoResponse)(nil),   // 27: clyde.v1.GetConversationInfoResponse
-	(*ReorientConversationRequest)(nil),   // 28: clyde.v1.ReorientConversationRequest
-	(*ReorientConversationRef)(nil),       // 29: clyde.v1.ReorientConversationRef
-	(*ReorientItem)(nil),                  // 30: clyde.v1.ReorientItem
-	(*ReorientConversationResponse)(nil),  // 31: clyde.v1.ReorientConversationResponse
-	(*ExportTranscriptRequest)(nil),       // 32: clyde.v1.ExportTranscriptRequest
-	(*ConversationLineage)(nil),           // 33: clyde.v1.ConversationLineage
-	(*ConversationRecord)(nil),            // 34: clyde.v1.ConversationRecord
-	(*ListConversationsResponse)(nil),     // 35: clyde.v1.ListConversationsResponse
-	(Provider)(0),                         // 36: clyde.v1.Provider
-	(*ReloadDaemonRequest)(nil),           // 37: clyde.v1.ReloadDaemonRequest
-	(*GetProviderStatsRequest)(nil),       // 38: clyde.v1.GetProviderStatsRequest
-	(*SubscribeProviderStatsRequest)(nil), // 39: clyde.v1.SubscribeProviderStatsRequest
-	(*ReloadDaemonResponse)(nil),          // 40: clyde.v1.ReloadDaemonResponse
-	(*GetProviderStatsResponse)(nil),      // 41: clyde.v1.GetProviderStatsResponse
-	(*ProviderStatsEvent)(nil),            // 42: clyde.v1.ProviderStatsEvent
+	(*ShowCaptureSection)(nil),            // 7: clyde.v1.ShowCaptureSection
+	(*ShowCaptureCaptureRow)(nil),         // 8: clyde.v1.ShowCaptureCaptureRow
+	(*ShowCaptureRows)(nil),               // 9: clyde.v1.ShowCaptureRows
+	(*ShowCaptureCorrelation)(nil),        // 10: clyde.v1.ShowCaptureCorrelation
+	(*ShowCapturePass)(nil),               // 11: clyde.v1.ShowCapturePass
+	(*ShowCaptureResponse)(nil),           // 12: clyde.v1.ShowCaptureResponse
+	(*GetMITMStatusRequest)(nil),          // 13: clyde.v1.GetMITMStatusRequest
+	(*MITMListenerStatus)(nil),            // 14: clyde.v1.MITMListenerStatus
+	(*GetMITMStatusResponse)(nil),         // 15: clyde.v1.GetMITMStatusResponse
+	(*ListConversationsRequest)(nil),      // 16: clyde.v1.ListConversationsRequest
+	(*GetConversationRequest)(nil),        // 17: clyde.v1.GetConversationRequest
+	(*GetConversationInfoRequest)(nil),    // 18: clyde.v1.GetConversationInfoRequest
+	(*ConversationChunk)(nil),             // 19: clyde.v1.ConversationChunk
+	(*ExportChunk)(nil),                   // 20: clyde.v1.ExportChunk
+	(*GetConversationContextRequest)(nil), // 21: clyde.v1.GetConversationContextRequest
+	(*SearchConversationsRequest)(nil),    // 22: clyde.v1.SearchConversationsRequest
+	(*ConversationSearchMatch)(nil),       // 23: clyde.v1.ConversationSearchMatch
+	(*SearchFacetCount)(nil),              // 24: clyde.v1.SearchFacetCount
+	(*SearchFacets)(nil),                  // 25: clyde.v1.SearchFacets
+	(*SearchFreshness)(nil),               // 26: clyde.v1.SearchFreshness
+	(*FilterStage)(nil),                   // 27: clyde.v1.FilterStage
+	(*FilterAccounting)(nil),              // 28: clyde.v1.FilterAccounting
+	(*SearchConversationsResponse)(nil),   // 29: clyde.v1.SearchConversationsResponse
+	(*ConversationInfoStats)(nil),         // 30: clyde.v1.ConversationInfoStats
+	(*ConversationCompactionSegment)(nil), // 31: clyde.v1.ConversationCompactionSegment
+	(*GetConversationInfoResponse)(nil),   // 32: clyde.v1.GetConversationInfoResponse
+	(*ReorientConversationRequest)(nil),   // 33: clyde.v1.ReorientConversationRequest
+	(*ReorientConversationRef)(nil),       // 34: clyde.v1.ReorientConversationRef
+	(*ReorientItem)(nil),                  // 35: clyde.v1.ReorientItem
+	(*ReorientConversationResponse)(nil),  // 36: clyde.v1.ReorientConversationResponse
+	(*ExportTranscriptRequest)(nil),       // 37: clyde.v1.ExportTranscriptRequest
+	(*ConversationLineage)(nil),           // 38: clyde.v1.ConversationLineage
+	(*ConversationRecord)(nil),            // 39: clyde.v1.ConversationRecord
+	(*ListConversationsResponse)(nil),     // 40: clyde.v1.ListConversationsResponse
+	(Provider)(0),                         // 41: clyde.v1.Provider
+	(*ReloadDaemonRequest)(nil),           // 42: clyde.v1.ReloadDaemonRequest
+	(*GetProviderStatsRequest)(nil),       // 43: clyde.v1.GetProviderStatsRequest
+	(*SubscribeProviderStatsRequest)(nil), // 44: clyde.v1.SubscribeProviderStatsRequest
+	(*ReloadDaemonResponse)(nil),          // 45: clyde.v1.ReloadDaemonResponse
+	(*GetProviderStatsResponse)(nil),      // 46: clyde.v1.GetProviderStatsResponse
+	(*ProviderStatsEvent)(nil),            // 47: clyde.v1.ProviderStatsEvent
 }
 var file_clyde_v1_daemon_service_proto_depIdxs = []int32{
-	9,  // 0: clyde.v1.GetMITMStatusResponse.listeners:type_name -> clyde.v1.MITMListenerStatus
-	36, // 1: clyde.v1.ListConversationsRequest.provider:type_name -> clyde.v1.Provider
-	36, // 2: clyde.v1.SearchConversationsRequest.provider:type_name -> clyde.v1.Provider
-	34, // 3: clyde.v1.ConversationSearchMatch.conversation:type_name -> clyde.v1.ConversationRecord
-	19, // 4: clyde.v1.SearchFacets.workspaces:type_name -> clyde.v1.SearchFacetCount
-	19, // 5: clyde.v1.SearchFacets.providers:type_name -> clyde.v1.SearchFacetCount
-	19, // 6: clyde.v1.SearchFacets.models:type_name -> clyde.v1.SearchFacetCount
-	22, // 7: clyde.v1.FilterAccounting.stages:type_name -> clyde.v1.FilterStage
-	18, // 8: clyde.v1.SearchConversationsResponse.matches:type_name -> clyde.v1.ConversationSearchMatch
-	0,  // 9: clyde.v1.SearchConversationsResponse.source:type_name -> clyde.v1.SearchSource
-	20, // 10: clyde.v1.SearchConversationsResponse.facets:type_name -> clyde.v1.SearchFacets
-	21, // 11: clyde.v1.SearchConversationsResponse.freshness:type_name -> clyde.v1.SearchFreshness
-	23, // 12: clyde.v1.SearchConversationsResponse.filter_accounting:type_name -> clyde.v1.FilterAccounting
-	34, // 13: clyde.v1.GetConversationInfoResponse.conversation:type_name -> clyde.v1.ConversationRecord
-	25, // 14: clyde.v1.GetConversationInfoResponse.stats:type_name -> clyde.v1.ConversationInfoStats
-	26, // 15: clyde.v1.GetConversationInfoResponse.segments:type_name -> clyde.v1.ConversationCompactionSegment
-	36, // 16: clyde.v1.ReorientConversationRef.provider:type_name -> clyde.v1.Provider
-	1,  // 17: clyde.v1.ReorientItem.kind:type_name -> clyde.v1.ReorientItemKind
-	29, // 18: clyde.v1.ReorientConversationResponse.current_conversation:type_name -> clyde.v1.ReorientConversationRef
-	29, // 19: clyde.v1.ReorientConversationResponse.parent_conversation:type_name -> clyde.v1.ReorientConversationRef
-	30, // 20: clyde.v1.ReorientConversationResponse.items:type_name -> clyde.v1.ReorientItem
-	36, // 21: clyde.v1.ConversationLineage.parent_provider:type_name -> clyde.v1.Provider
-	36, // 22: clyde.v1.ConversationRecord.provider:type_name -> clyde.v1.Provider
-	33, // 23: clyde.v1.ConversationRecord.lineage:type_name -> clyde.v1.ConversationLineage
-	34, // 24: clyde.v1.ListConversationsResponse.conversations:type_name -> clyde.v1.ConversationRecord
-	37, // 25: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	37, // 26: clyde.v1.ClydeService.RebindDaemon:input_type -> clyde.v1.ReloadDaemonRequest
-	38, // 27: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
-	39, // 28: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
-	11, // 29: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
-	13, // 30: clyde.v1.ClydeService.GetConversationInfo:input_type -> clyde.v1.GetConversationInfoRequest
-	17, // 31: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
-	28, // 32: clyde.v1.ClydeService.ReorientConversation:input_type -> clyde.v1.ReorientConversationRequest
-	12, // 33: clyde.v1.ClydeService.StreamConversation:input_type -> clyde.v1.GetConversationRequest
-	16, // 34: clyde.v1.ClydeService.StreamConversationContext:input_type -> clyde.v1.GetConversationContextRequest
-	32, // 35: clyde.v1.ClydeService.StreamExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
-	8,  // 36: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
-	6,  // 37: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
-	4,  // 38: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
-	2,  // 39: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
-	40, // 40: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	40, // 41: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
-	41, // 42: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
-	42, // 43: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
-	35, // 44: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
-	27, // 45: clyde.v1.ClydeService.GetConversationInfo:output_type -> clyde.v1.GetConversationInfoResponse
-	24, // 46: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
-	31, // 47: clyde.v1.ClydeService.ReorientConversation:output_type -> clyde.v1.ReorientConversationResponse
-	14, // 48: clyde.v1.ClydeService.StreamConversation:output_type -> clyde.v1.ConversationChunk
-	14, // 49: clyde.v1.ClydeService.StreamConversationContext:output_type -> clyde.v1.ConversationChunk
-	15, // 50: clyde.v1.ClydeService.StreamExportTranscript:output_type -> clyde.v1.ExportChunk
-	10, // 51: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
-	7,  // 52: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
-	5,  // 53: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
-	3,  // 54: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
-	40, // [40:55] is the sub-list for method output_type
-	25, // [25:40] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	8,  // 0: clyde.v1.ShowCaptureRows.rows:type_name -> clyde.v1.ShowCaptureCaptureRow
+	7,  // 1: clyde.v1.ShowCapturePass.sections:type_name -> clyde.v1.ShowCaptureSection
+	9,  // 2: clyde.v1.ShowCapturePass.capture:type_name -> clyde.v1.ShowCaptureRows
+	10, // 3: clyde.v1.ShowCapturePass.found:type_name -> clyde.v1.ShowCaptureCorrelation
+	10, // 4: clyde.v1.ShowCaptureResponse.correlation:type_name -> clyde.v1.ShowCaptureCorrelation
+	11, // 5: clyde.v1.ShowCaptureResponse.passes:type_name -> clyde.v1.ShowCapturePass
+	14, // 6: clyde.v1.GetMITMStatusResponse.listeners:type_name -> clyde.v1.MITMListenerStatus
+	41, // 7: clyde.v1.ListConversationsRequest.provider:type_name -> clyde.v1.Provider
+	41, // 8: clyde.v1.SearchConversationsRequest.provider:type_name -> clyde.v1.Provider
+	39, // 9: clyde.v1.ConversationSearchMatch.conversation:type_name -> clyde.v1.ConversationRecord
+	24, // 10: clyde.v1.SearchFacets.workspaces:type_name -> clyde.v1.SearchFacetCount
+	24, // 11: clyde.v1.SearchFacets.providers:type_name -> clyde.v1.SearchFacetCount
+	24, // 12: clyde.v1.SearchFacets.models:type_name -> clyde.v1.SearchFacetCount
+	27, // 13: clyde.v1.FilterAccounting.stages:type_name -> clyde.v1.FilterStage
+	23, // 14: clyde.v1.SearchConversationsResponse.matches:type_name -> clyde.v1.ConversationSearchMatch
+	0,  // 15: clyde.v1.SearchConversationsResponse.source:type_name -> clyde.v1.SearchSource
+	25, // 16: clyde.v1.SearchConversationsResponse.facets:type_name -> clyde.v1.SearchFacets
+	26, // 17: clyde.v1.SearchConversationsResponse.freshness:type_name -> clyde.v1.SearchFreshness
+	28, // 18: clyde.v1.SearchConversationsResponse.filter_accounting:type_name -> clyde.v1.FilterAccounting
+	39, // 19: clyde.v1.GetConversationInfoResponse.conversation:type_name -> clyde.v1.ConversationRecord
+	30, // 20: clyde.v1.GetConversationInfoResponse.stats:type_name -> clyde.v1.ConversationInfoStats
+	31, // 21: clyde.v1.GetConversationInfoResponse.segments:type_name -> clyde.v1.ConversationCompactionSegment
+	41, // 22: clyde.v1.ReorientConversationRef.provider:type_name -> clyde.v1.Provider
+	1,  // 23: clyde.v1.ReorientItem.kind:type_name -> clyde.v1.ReorientItemKind
+	34, // 24: clyde.v1.ReorientConversationResponse.current_conversation:type_name -> clyde.v1.ReorientConversationRef
+	34, // 25: clyde.v1.ReorientConversationResponse.parent_conversation:type_name -> clyde.v1.ReorientConversationRef
+	35, // 26: clyde.v1.ReorientConversationResponse.items:type_name -> clyde.v1.ReorientItem
+	41, // 27: clyde.v1.ConversationLineage.parent_provider:type_name -> clyde.v1.Provider
+	41, // 28: clyde.v1.ConversationRecord.provider:type_name -> clyde.v1.Provider
+	38, // 29: clyde.v1.ConversationRecord.lineage:type_name -> clyde.v1.ConversationLineage
+	39, // 30: clyde.v1.ListConversationsResponse.conversations:type_name -> clyde.v1.ConversationRecord
+	42, // 31: clyde.v1.ClydeService.ReloadDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	42, // 32: clyde.v1.ClydeService.RebindDaemon:input_type -> clyde.v1.ReloadDaemonRequest
+	43, // 33: clyde.v1.ClydeService.GetProviderStats:input_type -> clyde.v1.GetProviderStatsRequest
+	44, // 34: clyde.v1.ClydeService.SubscribeProviderStats:input_type -> clyde.v1.SubscribeProviderStatsRequest
+	16, // 35: clyde.v1.ClydeService.ListConversations:input_type -> clyde.v1.ListConversationsRequest
+	18, // 36: clyde.v1.ClydeService.GetConversationInfo:input_type -> clyde.v1.GetConversationInfoRequest
+	22, // 37: clyde.v1.ClydeService.SearchConversations:input_type -> clyde.v1.SearchConversationsRequest
+	33, // 38: clyde.v1.ClydeService.ReorientConversation:input_type -> clyde.v1.ReorientConversationRequest
+	17, // 39: clyde.v1.ClydeService.StreamConversation:input_type -> clyde.v1.GetConversationRequest
+	21, // 40: clyde.v1.ClydeService.StreamConversationContext:input_type -> clyde.v1.GetConversationContextRequest
+	37, // 41: clyde.v1.ClydeService.StreamExportTranscript:input_type -> clyde.v1.ExportTranscriptRequest
+	13, // 42: clyde.v1.ClydeService.GetMITMStatus:input_type -> clyde.v1.GetMITMStatusRequest
+	6,  // 43: clyde.v1.ClydeService.ShowCapture:input_type -> clyde.v1.ShowCaptureRequest
+	4,  // 44: clyde.v1.ClydeService.SeedBaseline:input_type -> clyde.v1.SeedBaselineRequest
+	2,  // 45: clyde.v1.ClydeService.LogsInventory:input_type -> clyde.v1.LogsInventoryRequest
+	45, // 46: clyde.v1.ClydeService.ReloadDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	45, // 47: clyde.v1.ClydeService.RebindDaemon:output_type -> clyde.v1.ReloadDaemonResponse
+	46, // 48: clyde.v1.ClydeService.GetProviderStats:output_type -> clyde.v1.GetProviderStatsResponse
+	47, // 49: clyde.v1.ClydeService.SubscribeProviderStats:output_type -> clyde.v1.ProviderStatsEvent
+	40, // 50: clyde.v1.ClydeService.ListConversations:output_type -> clyde.v1.ListConversationsResponse
+	32, // 51: clyde.v1.ClydeService.GetConversationInfo:output_type -> clyde.v1.GetConversationInfoResponse
+	29, // 52: clyde.v1.ClydeService.SearchConversations:output_type -> clyde.v1.SearchConversationsResponse
+	36, // 53: clyde.v1.ClydeService.ReorientConversation:output_type -> clyde.v1.ReorientConversationResponse
+	19, // 54: clyde.v1.ClydeService.StreamConversation:output_type -> clyde.v1.ConversationChunk
+	19, // 55: clyde.v1.ClydeService.StreamConversationContext:output_type -> clyde.v1.ConversationChunk
+	20, // 56: clyde.v1.ClydeService.StreamExportTranscript:output_type -> clyde.v1.ExportChunk
+	15, // 57: clyde.v1.ClydeService.GetMITMStatus:output_type -> clyde.v1.GetMITMStatusResponse
+	12, // 58: clyde.v1.ClydeService.ShowCapture:output_type -> clyde.v1.ShowCaptureResponse
+	5,  // 59: clyde.v1.ClydeService.SeedBaseline:output_type -> clyde.v1.SeedBaselineResponse
+	3,  // 60: clyde.v1.ClydeService.LogsInventory:output_type -> clyde.v1.LogsInventoryResponse
+	46, // [46:61] is the sub-list for method output_type
+	31, // [31:46] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_clyde_v1_daemon_service_proto_init() }
@@ -3135,7 +3598,7 @@ func file_clyde_v1_daemon_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clyde_v1_daemon_service_proto_rawDesc), len(file_clyde_v1_daemon_service_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   34,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

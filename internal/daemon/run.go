@@ -248,8 +248,8 @@ func newControlServer(
 		mitmStatus: func() MITMStatus {
 			return collectMITMStatus(cfg.MITM, runtime.mitmListeners)
 		},
-		showCapture: func(showCtx context.Context, id string, asJSON bool) (string, error) {
-			return mitmshow.Render(showCtx, cfg, id, asJSON)
+		showCapture: func(showCtx context.Context, id string) (mitmshow.ShowOutput, error) {
+			return mitmshow.Lookup(showCtx, cfg, id)
 		},
 		reload: func(ctx context.Context) (*clydev1.ReloadDaemonResponse, error) {
 			return reloadDaemonWorker(ctx, log, grpcServer, runtime)
