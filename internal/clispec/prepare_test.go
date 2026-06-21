@@ -10,23 +10,21 @@ import (
 	conv "goodkind.io/clyde/internal/conversation"
 )
 
-// requirePrepared asserts an operation declares both a Prepare and a Run. With
-// Run receiving only the prepared payload, Prepare is the sole place input can be
-// rejected, so a nil Prepare would leave an operation unable to reject input
-// before the help boundary. This is the construction guard: it walks the actual
-// operation constructors, so adding an operation that forgets Prepare fails here.
+// requirePrepared asserts an operation declares a Prepare function and at least
+// one execution path. Prepare remains the sole place input can be rejected
+// before the help boundary.
 func requirePrepared[I Input, P Prepared](t *testing.T, name string, op Operation[I, P]) {
 	t.Helper()
 	if op.Prepare == nil {
 		t.Errorf("%s: Prepare is nil; input could not be rejected before the help boundary", name)
 	}
-	if op.Run == nil {
-		t.Errorf("%s: Run is nil", name)
+	if op.Run == nil && op.runResult == nil {
+		t.Errorf("%s: Run and runResult are both nil", name)
 	}
 }
 
 // TestEveryConversationOpDeclaresPrepare enforces that every conversation
-// operation sets Prepare and Run.
+// operation sets Prepare and an execution path.
 func TestEveryConversationOpDeclaresPrepare(t *testing.T) {
 	t.Parallel()
 	requirePrepared(t, "search", searchOp())

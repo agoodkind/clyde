@@ -120,7 +120,7 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 			}
 			text := formatConversationInfo(info)
 			return valueResult{
-				Payload: textResultPayload{Text: text},
+				Payload: conversationInfoOutputFromDomain(info),
 				Text:    text,
 			}, nil
 		},
@@ -134,12 +134,58 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 // the search to one conversation, conversation alone reads it (a context window
 // when around is set, otherwise the whole transcript), and neither browses
 // metadata.
+func searchParams() []Param[searchInput] {
+	return []Param[searchInput]{
+		StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
+			func(in *searchInput, v string) { in.Query = v }),
+		StringParam("conversation", "Conversation id, native id, title, or artifact path to scope or read.", "", false,
+			func(in *searchInput, v string) { in.Conversation = v }),
+		StringParam("provider", "Provider filter, such as claude or codex.", "", false,
+			func(in *searchInput, v string) { in.Provider = v }),
+		StringParam("workspace", "Workspace root filter.", "", false,
+			func(in *searchInput, v string) { in.WorkspaceRoot = v }),
+		StringParam("roles", "Comma-separated message roles to keep, such as user or assistant.", "", false,
+			func(in *searchInput, v string) { in.Roles = v }),
+		StringParam("after", "Keep messages at or after this time (RFC3339 or YYYY-MM-DD).", "", false,
+			func(in *searchInput, v string) { in.After = v }),
+		StringParam("until", "Keep messages before this time (RFC3339 or YYYY-MM-DD).", "", false,
+			func(in *searchInput, v string) { in.Until = v }),
+		IntParam("limit", "Maximum matches or conversations to return.", conv.DefaultSearchLimit,
+			func(in *searchInput, v int) { in.Limit = v }),
+		IntParam("around", "Message index to center a read window on; requires conversation.", -1,
+			func(in *searchInput, v int) { in.Around = v }),
+		IntParam("window", "Messages before and after for the read window and per-hit inline context.", 5,
+			func(in *searchInput, v int) { in.Window = v }),
+		FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
+			func(in *searchInput, v float64) { in.MinScore = v }),
+		BoolParam("include_archived", "Include archived conversations.", false,
+			func(in *searchInput, v bool) { in.IncludeArchived = v }),
+	}
+}
+
+func newSearchInput() searchInput {
+	return searchInput{
+		Query:           "",
+		Conversation:    "",
+		Provider:        "",
+		WorkspaceRoot:   "",
+		Roles:           "",
+		After:           "",
+		Until:           "",
+		Limit:           conv.DefaultSearchLimit,
+		Around:          -1,
+		Window:          5,
+		MinScore:        0,
+		IncludeArchived: false,
+	}
+}
+
 func searchOp() Operation[searchInput, searchPayload] {
 	return Operation[searchInput, searchPayload]{
 		Name:       Name{Canonical: "search", CLIOverride: ""},
 		Group:      conversationGroup,
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
-		outputKind: 0,
+		outputKind: resultKindValue,
 		Short:      "Search, read, or browse Claude and Codex conversations.",
 		Long:       "One operation over indexed Claude and Codex conversations. Set query to search the corpus, or query and conversation to search within one conversation; both print ranked matches with inline context, source, freshness, a filter funnel, and facets. Set conversation alone to read it: with around, a context window centered on that message index; otherwise the whole transcript. Set neither to browse conversation metadata.",
 		Examples: []string{
@@ -148,56 +194,16 @@ func searchOp() Operation[searchInput, searchPayload] {
 			"clyde conversation search --conversation claude:1a2b3c --around 42 --window 5",
 			"clyde conversation search --provider claude --limit 20",
 		},
-		Args: nil,
-		Params: []Param[searchInput]{
-			StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
-				func(in *searchInput, v string) { in.Query = v }),
-			StringParam("conversation", "Conversation id, native id, title, or artifact path to scope or read.", "", false,
-				func(in *searchInput, v string) { in.Conversation = v }),
-			StringParam("provider", "Provider filter, such as claude or codex.", "", false,
-				func(in *searchInput, v string) { in.Provider = v }),
-			StringParam("workspace", "Workspace root filter.", "", false,
-				func(in *searchInput, v string) { in.WorkspaceRoot = v }),
-			StringParam("roles", "Comma-separated message roles to keep, such as user or assistant.", "", false,
-				func(in *searchInput, v string) { in.Roles = v }),
-			StringParam("after", "Keep messages at or after this time (RFC3339 or YYYY-MM-DD).", "", false,
-				func(in *searchInput, v string) { in.After = v }),
-			StringParam("until", "Keep messages before this time (RFC3339 or YYYY-MM-DD).", "", false,
-				func(in *searchInput, v string) { in.Until = v }),
-			IntParam("limit", "Maximum matches or conversations to return.", conv.DefaultSearchLimit,
-				func(in *searchInput, v int) { in.Limit = v }),
-			IntParam("around", "Message index to center a read window on; requires conversation.", -1,
-				func(in *searchInput, v int) { in.Around = v }),
-			IntParam("window", "Messages before and after for the read window and per-hit inline context.", 5,
-				func(in *searchInput, v int) { in.Window = v }),
-			FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
-				func(in *searchInput, v float64) { in.MinScore = v }),
-			BoolParam("include_archived", "Include archived conversations.", false,
-				func(in *searchInput, v bool) { in.IncludeArchived = v }),
-		},
-		New: func() searchInput {
-			return searchInput{
-				Query:           "",
-				Conversation:    "",
-				Provider:        "",
-				WorkspaceRoot:   "",
-				Roles:           "",
-				After:           "",
-				Until:           "",
-				Limit:           conv.DefaultSearchLimit,
-				Around:          -1,
-				Window:          5,
-				MinScore:        0,
-				IncludeArchived: false,
-			}
-		},
+		Args:           nil,
+		Params:         searchParams(),
+		New:            newSearchInput,
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
 		mcpTaskResult:  nil,
 		Children:       nil,
 		Prepare:        prepareSearch,
-		Run:            runSearch,
-		runResult:      nil,
+		Run:            nil,
+		runResult:      runSearchResult,
 	}
 }
 
@@ -256,50 +262,57 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 	}
 }
 
-// runSearch dispatches the prepared payload to the daemon, renders the matching
-// surface text, and writes it through the single terminal sink call.
-func runSearch(ctx context.Context, p searchPayload, surface Surface, sink ResultSink) error {
-	text, err := searchText(ctx, p, surface)
-	if err != nil {
-		return err
-	}
-	if err := sink.Text(text); err != nil {
-		slog.WarnContext(ctx, "cli.conversation.search_write_failed", "concern", "cli.conversation", "component", "cli", "err", err)
-		return fmt.Errorf("write search result: %w", err)
-	}
-	return nil
-}
-
-// searchText runs the daemon call for the prepared mode and returns the
-// rendered text. The error is already surface-wrapped through logFail.
-func searchText(ctx context.Context, p searchPayload, surface Surface) (string, error) {
+func runSearchResult(ctx context.Context, p searchPayload) (Result, error) {
 	switch p.Mode {
 	case searchModeDiscover:
 		result, err := daemon.SearchConversations(ctx, p.SearchOpts)
 		if err != nil {
-			return "", logFail(ctx, surface, "search_failed", "search conversations", err)
+			return nil, logOperationError(ctx, "search conversations", err)
 		}
-		return formatSearchConversationsResult(result), nil
+		return valueResult{
+			Payload: searchConversationsOutputFromDomain(result),
+			Text:    formatSearchConversationsResult(result),
+		}, nil
 	case searchModeReadWindow:
 		text, err := daemon.GetConversationContext(ctx, p.Conversation, "", p.Around, p.Window, p.Window)
 		if err != nil {
-			return "", logFail(ctx, surface, "context_failed", "get conversation context", err)
+			return nil, logOperationError(ctx, "get conversation context", err)
 		}
-		return text, nil
+		return valueResult{
+			Payload: getContextOutput{
+				ConversationID: p.Conversation,
+				Timestamp:      "",
+				MessageIndex:   p.Around,
+				Before:         p.Window,
+				After:          p.Window,
+				Text:           text,
+			},
+			Text: text,
+		}, nil
 	case searchModeReadConversation:
 		text, err := daemon.GetConversation(ctx, p.Conversation, 0)
 		if err != nil {
-			return "", logFail(ctx, surface, "get_failed", "get conversation", err)
+			return nil, logOperationError(ctx, "get conversation", err)
 		}
-		return text, nil
+		return valueResult{
+			Payload: getConversationOutput{
+				ConversationID: p.Conversation,
+				LastN:          0,
+				Text:           text,
+			},
+			Text: text,
+		}, nil
 	case searchModeBrowse:
 		result, err := daemon.ListConversations(ctx, p.ListOpts)
 		if err != nil {
-			return "", logFail(ctx, surface, "list_failed", "list conversations", err)
+			return nil, logOperationError(ctx, "list conversations", err)
 		}
-		return formatListResult(result), nil
+		return valueResult{
+			Payload: listConversationsOutputFromDomain(result),
+			Text:    formatListResult(result),
+		}, nil
 	default:
-		return "", fmt.Errorf("unknown search mode %d", p.Mode)
+		return nil, fmt.Errorf("unknown search mode %d", p.Mode)
 	}
 }
 
@@ -631,6 +644,11 @@ func formatUnix(unix int64) string {
 		return "never"
 	}
 	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
+}
+
+func logOperationError(ctx context.Context, operation string, err error) error {
+	slog.WarnContext(ctx, "clispec.operation.failed", "concern", "cli.conversation", "component", "clispec", "operation", operation, "err", err)
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 // logFail emits a surface-correct warning event and returns the wrapped error.

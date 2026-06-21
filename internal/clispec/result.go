@@ -50,10 +50,6 @@ type valueResult struct {
 	Text    string
 }
 
-type textResultPayload struct {
-	Text string `json:"text"`
-}
-
 type artifactResult struct {
 	Payload     StructuredPayload
 	Body        []byte
@@ -64,9 +60,8 @@ type artifactResult struct {
 	InlineText  string
 }
 
-func (valueResult) isClispecResult()                  {}
-func (artifactResult) isClispecResult()               {}
-func (textResultPayload) isClispecStructuredPayload() {}
+func (valueResult) isClispecResult()    {}
+func (artifactResult) isClispecResult() {}
 
 func (valueResult) kind() resultKind    { return resultKindValue }
 func (artifactResult) kind() resultKind { return resultKindArtifact }
