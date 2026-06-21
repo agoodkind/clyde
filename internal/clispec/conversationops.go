@@ -92,12 +92,13 @@ var conversationGroup = &Group{
 
 func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPayload] {
 	return Operation[conversationInfoInput, conversationInfoPayload]{
-		Name:     Name{Canonical: "conversation_info", CLIOverride: "info"},
-		Group:    conversationGroup,
-		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "Show static information about a conversation.",
-		Long:     "Print one conversation's record metadata, message and tool counts, compaction count, and compaction segment stack.",
-		Examples: []string{"clyde conversation info claude:1a2b3c"},
+		Name:       Name{Canonical: "conversation_info", CLIOverride: "info"},
+		Group:      conversationGroup,
+		Surfaces:   SurfaceSet{CLI: true, MCP: true},
+		outputKind: resultKindValue,
+		Short:      "Show static information about a conversation.",
+		Long:       "Print one conversation's record metadata, message and tool counts, compaction count, and compaction segment stack.",
+		Examples:   []string{"clyde conversation info claude:1a2b3c"},
 		Args: []Arg[conversationInfoInput]{
 			PositionalArg("conversation_id", "Conversation id, native id, title, or artifact path.",
 				func(in *conversationInfoInput, v string) { in.ConversationID = v }),
@@ -106,16 +107,22 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 		New:            func() conversationInfoInput { return conversationInfoInput{ConversationID: ""} },
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
 		Children:       nil,
 		Prepare: func(in conversationInfoInput) (conversationInfoPayload, error) {
 			return conversationInfoPayload(in), nil
 		},
-		Run: func(ctx context.Context, p conversationInfoPayload, surface Surface, sink ResultSink) error {
+		Run: nil,
+		runResult: func(ctx context.Context, p conversationInfoPayload) (Result, error) {
 			info, err := daemon.GetConversationInfo(ctx, p.ConversationID)
 			if err != nil {
-				return logFail(ctx, surface, "info_failed", "get conversation info", err)
+				return nil, logFail(ctx, surfaceFromContext(ctx), "info_failed", "get conversation info", err)
 			}
-			return sink.Text(formatConversationInfo(info))
+			text := formatConversationInfo(info)
+			return valueResult{
+				Payload: textResultPayload{Text: text},
+				Text:    text,
+			}, nil
 		},
 	}
 }
@@ -129,11 +136,12 @@ func conversationInfoOp() Operation[conversationInfoInput, conversationInfoPaylo
 // metadata.
 func searchOp() Operation[searchInput, searchPayload] {
 	return Operation[searchInput, searchPayload]{
-		Name:     Name{Canonical: "search", CLIOverride: ""},
-		Group:    conversationGroup,
-		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "Search, read, or browse Claude and Codex conversations.",
-		Long:     "One operation over indexed Claude and Codex conversations. Set query to search the corpus, or query and conversation to search within one conversation; both print ranked matches with inline context, source, freshness, a filter funnel, and facets. Set conversation alone to read it: with around, a context window centered on that message index; otherwise the whole transcript. Set neither to browse conversation metadata.",
+		Name:       Name{Canonical: "search", CLIOverride: ""},
+		Group:      conversationGroup,
+		Surfaces:   SurfaceSet{CLI: true, MCP: true},
+		outputKind: 0,
+		Short:      "Search, read, or browse Claude and Codex conversations.",
+		Long:       "One operation over indexed Claude and Codex conversations. Set query to search the corpus, or query and conversation to search within one conversation; both print ranked matches with inline context, source, freshness, a filter funnel, and facets. Set conversation alone to read it: with around, a context window centered on that message index; otherwise the whole transcript. Set neither to browse conversation metadata.",
 		Examples: []string{
 			"clyde conversation search --query \"auth timeout\" --limit 10",
 			"clyde conversation search --query \"auth timeout\" --conversation claude:1a2b3c",
@@ -185,9 +193,11 @@ func searchOp() Operation[searchInput, searchPayload] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
 		Children:       nil,
 		Prepare:        prepareSearch,
 		Run:            runSearch,
+		runResult:      nil,
 	}
 }
 

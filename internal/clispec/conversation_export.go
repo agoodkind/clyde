@@ -141,11 +141,12 @@ func exportParams() []Param[exportInput] {
 
 func exportTranscriptOp() Operation[exportInput, exportPayload] {
 	return Operation[exportInput, exportPayload]{
-		Name:     Name{Canonical: "export_transcript", CLIOverride: "export"},
-		Group:    conversationGroup,
-		Surfaces: SurfaceSet{CLI: true, MCP: true},
-		Short:    "Export a conversation transcript.",
-		Long:     "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, pass --stdout or --output - to write the export body directly to stdout, or pass --copy to copy the raw body to the macOS pasteboard. The MCP tool returns the body as text.",
+		Name:       Name{Canonical: "export_transcript", CLIOverride: "export"},
+		Group:      conversationGroup,
+		Surfaces:   SurfaceSet{CLI: true, MCP: true},
+		outputKind: 0,
+		Short:      "Export a conversation transcript.",
+		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, pass --stdout or --output - to write the export body directly to stdout, or pass --copy to copy the raw body to the macOS pasteboard. The MCP tool returns the body as text.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
 			"clyde conversation export claude:1a2b3c --only chat --include-compactions 0 --stdout",
@@ -182,6 +183,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
 		Children:       []renderable{exportTailOp()},
 		Prepare: func(in exportInput) (exportPayload, error) {
 			whitespace, err := resolveExportWhitespace(in)
@@ -220,17 +222,19 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 				Copy:           in.Copy,
 			}, nil
 		},
-		Run: runExportTranscript,
+		Run:       runExportTranscript,
+		runResult: nil,
 	}
 }
 
 func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 	return Operation[exportTailInput, exportTailPayload]{
-		Name:     Name{Canonical: "export_tail", CLIOverride: "tail"},
-		Group:    nil,
-		Surfaces: SurfaceSet{CLI: true, MCP: false},
-		Short:    "Export the latest conversation messages.",
-		Long:     "Export the latest visible messages from compaction segment 0 as dense Markdown with chat text and tool summaries.",
+		Name:       Name{Canonical: "export_tail", CLIOverride: "tail"},
+		Group:      nil,
+		Surfaces:   SurfaceSet{CLI: true, MCP: false},
+		outputKind: 0,
+		Short:      "Export the latest conversation messages.",
+		Long:       "Export the latest visible messages from compaction segment 0 as dense Markdown with chat text and tool summaries.",
 		Examples: []string{
 			"clyde conversation export tail claude:1a2b3c --last-n 20",
 		},
@@ -247,6 +251,7 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 		},
 		MCPTaskSupport: "",
 		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
 		Children:       nil,
 		Prepare: func(in exportTailInput) (exportTailPayload, error) {
 			if in.LastN <= 0 {
@@ -277,6 +282,7 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 			}
 			return runExportTranscript(ctx, payload, surface, sink)
 		},
+		runResult: nil,
 	}
 }
 
