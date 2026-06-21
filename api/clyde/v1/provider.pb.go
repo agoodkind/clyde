@@ -32,6 +32,7 @@ const (
 	Provider_PROVIDER_MITM          Provider = 5
 	Provider_PROVIDER_ARTIFACT      Provider = 6
 	Provider_PROVIDER_CURSOR        Provider = 7
+	Provider_PROVIDER_CONDUCTOR     Provider = 8
 )
 
 // Enum value maps for Provider.
@@ -45,6 +46,7 @@ var (
 		5: "PROVIDER_MITM",
 		6: "PROVIDER_ARTIFACT",
 		7: "PROVIDER_CURSOR",
+		8: "PROVIDER_CONDUCTOR",
 	}
 	Provider_value = map[string]int32{
 		"PROVIDER_UNSPECIFIED":   0,
@@ -55,6 +57,7 @@ var (
 		"PROVIDER_MITM":          5,
 		"PROVIDER_ARTIFACT":      6,
 		"PROVIDER_CURSOR":        7,
+		"PROVIDER_CONDUCTOR":     8,
 	}
 )
 
@@ -538,7 +541,7 @@ const file_clyde_v1_daemon_provider_proto_rawDesc = "" +
 	"\x14ReloadDaemonResponse\x12'\n" +
 	"\x0fbinary_reloaded\x18\x01 \x01(\bR\x0ebinaryReloaded\x12'\n" +
 	"\x0factive_surfaces\x18\x02 \x01(\x03R\x0eactiveSurfaces\x12\x17\n" +
-	"\anew_pid\x18\x03 \x01(\x03R\x06newPid*\xc0\x01\n" +
+	"\anew_pid\x18\x03 \x01(\x03R\x06newPid*\xd8\x01\n" +
 	"\bProvider\x12\x18\n" +
 	"\x14PROVIDER_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fPROVIDER_CLAUDE\x10\x01\x12\x12\n" +
@@ -547,7 +550,8 @@ const file_clyde_v1_daemon_provider_proto_rawDesc = "" +
 	"\x16PROVIDER_OPENAI_COMPAT\x10\x04\x12\x11\n" +
 	"\rPROVIDER_MITM\x10\x05\x12\x15\n" +
 	"\x11PROVIDER_ARTIFACT\x10\x06\x12\x13\n" +
-	"\x0fPROVIDER_CURSOR\x10\aB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
+	"\x0fPROVIDER_CURSOR\x10\a\x12\x16\n" +
+	"\x12PROVIDER_CONDUCTOR\x10\bB(Z&goodkind.io/clyde/api/clyde/v1;clydev1b\x06proto3"
 
 var (
 	file_clyde_v1_daemon_provider_proto_rawDescOnce sync.Once

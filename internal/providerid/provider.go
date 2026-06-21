@@ -27,6 +27,8 @@ const (
 	ProviderArtifact
 	// ProviderCursor identifies Cursor MITM traffic.
 	ProviderCursor
+	// ProviderConductor identifies Conductor MITM traffic.
+	ProviderConductor
 )
 
 type providerLabel string
@@ -47,6 +49,7 @@ const (
 	labelMITM                 providerLabel = "mitm"
 	labelArtifact             providerLabel = "artifact"
 	labelCursor               providerLabel = "cursor"
+	labelConductor            providerLabel = "conductor"
 	passthroughOverridePrefix               = "passthrough-override-"
 )
 
@@ -72,6 +75,8 @@ func Parse(raw string) (Provider, bool) {
 		return ProviderArtifact, true
 	case labelCursor:
 		return ProviderCursor, true
+	case labelConductor:
+		return ProviderConductor, true
 	default:
 		if strings.HasPrefix(string(label), passthroughOverridePrefix) {
 			return ProviderOpenAICompat, true
@@ -108,6 +113,8 @@ func (p Provider) String() string {
 		return "artifact"
 	case ProviderCursor:
 		return "cursor"
+	case ProviderConductor:
+		return "conductor"
 	default:
 		return "unspecified"
 	}
@@ -128,7 +135,7 @@ func (p Provider) Valid() bool {
 	switch p {
 	case ProviderUnspecified:
 		return false
-	case ProviderClaude, ProviderCodex, ProviderAnthropic, ProviderOpenAICompat, ProviderMITM, ProviderArtifact, ProviderCursor:
+	case ProviderClaude, ProviderCodex, ProviderAnthropic, ProviderOpenAICompat, ProviderMITM, ProviderArtifact, ProviderCursor, ProviderConductor:
 		return true
 	default:
 		return false

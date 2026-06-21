@@ -19,3 +19,19 @@ func TestProviderJSONUsesStableLabel(t *testing.T) {
 		t.Fatalf("provider JSON = %s, want string label", string(data))
 	}
 }
+
+func TestProviderParseAndStringIncludeConductor(t *testing.T) {
+	provider, ok := Parse("conductor")
+	if !ok {
+		t.Fatal("Parse(conductor) ok = false, want true")
+	}
+	if provider != ProviderConductor {
+		t.Fatalf("Parse(conductor) = %v, want %v", provider, ProviderConductor)
+	}
+	if provider.String() != "conductor" {
+		t.Fatalf("ProviderConductor.String() = %q, want conductor", provider.String())
+	}
+	if !provider.Valid() {
+		t.Fatal("ProviderConductor.Valid() = false, want true")
+	}
+}

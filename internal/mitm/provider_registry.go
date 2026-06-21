@@ -23,6 +23,8 @@ const (
 	ProviderIDCodex ProviderID = ProviderID(providerid.ProviderCodex)
 	// ProviderIDCursor identifies Cursor MITM traffic.
 	ProviderIDCursor ProviderID = ProviderID(providerid.ProviderCursor)
+	// ProviderIDConductor identifies Conductor MITM traffic.
+	ProviderIDConductor ProviderID = ProviderID(providerid.ProviderConductor)
 )
 
 // String returns the stable provider label used in capture logs.

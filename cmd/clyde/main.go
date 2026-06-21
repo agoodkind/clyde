@@ -22,6 +22,7 @@ import (
 	"goodkind.io/clyde/internal/logpolicy"
 	_ "goodkind.io/clyde/internal/providers/claude/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/codex/mitmcontrib"
+	_ "goodkind.io/clyde/internal/providers/conductor/mitmcontrib"
 	_ "goodkind.io/clyde/internal/providers/cursor/mitmcontrib"
 	"goodkind.io/clyde/internal/response"
 	"goodkind.io/clyde/internal/slogger"
