@@ -14,15 +14,14 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
-	"goodkind.io/clyde/internal/response"
 )
 
-const reloadCommandTimeout = 75 * time.Second
+// ReloadCommandTimeout is the shared timeout for daemon reload command paths.
+const ReloadCommandTimeout = 75 * time.Second
 
 var (
 	runCommand         = daemonsvc.RunCommand
 	runWorker          = daemonsvc.Run
-	reloadDaemon       = daemonsvc.ReloadDaemon
 	builtFingerprint   = daemonsvc.CompiledSupervisorFingerprint
 	runningFingerprint = daemonsvc.RunningSupervisorFingerprint
 )
@@ -42,7 +41,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd.AddCommand(newRunCmd(f))
 	cmd.AddCommand(newWorkerCmd(f))
 	cmd.AddCommand(newDeployCmd(f))
-	cmd.AddCommand(newReloadCmd(f))
 	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
 	return cmd
 }
@@ -79,33 +77,10 @@ func newWorkerCmd(_ *cli.Factory) *cobra.Command {
 	}
 }
 
-func newReloadCmd(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:     "reload",
-		Short:   "Reload the running daemon without restarting it",
-		Long:    "Reload the running daemon in place, handing its live listeners to a supervisor-spawned replacement worker so public traffic keeps flowing across the swap.",
-		Example: "clyde daemon reload",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), reloadCommandTimeout)
-			defer cancel()
-			resp, err := reloadDaemon(ctx)
-			if err != nil {
-				return reloadCommandError(err)
-			}
-			status := "unchanged"
-			if resp.GetBinaryReloaded() {
-				status = "reloaded"
-			}
-			body := fmt.Sprintf("daemon binary %s: active_surfaces=%d new_pid=%d\n", status, resp.GetActiveSurfaces(), resp.GetNewPid())
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, body)
-		},
-	}
-}
-
-func reloadCommandError(err error) error {
+// ReloadCommandError normalizes reload command errors into user-facing wording.
+func ReloadCommandError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errors.New("daemon reload did not complete within " + reloadCommandTimeout.String() + " and no reload confirmation was received; check `clyde daemon status` and the daemon log, then rerun `clyde daemon reload`: " + err.Error())
+		return errors.New("daemon reload did not complete within " + ReloadCommandTimeout.String() + " and no reload confirmation was received; check `clyde daemon status` and the daemon log, then rerun `clyde daemon reload`: " + err.Error())
 	}
 	return err
 }
