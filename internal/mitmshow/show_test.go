@@ -96,10 +96,11 @@ func TestRunShowFindsMatchesInRequestAndErrorsLogs(t *testing.T) {
 		t.Fatalf("write errors log: %v", err)
 	}
 
-	got, err := Render(context.Background(), cfg, clydeID, false)
+	output, err := Lookup(context.Background(), cfg, clydeID)
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("Lookup: %v", err)
 	}
+	got := RenderText(output)
 	if !strings.Contains(got, requestLine) {
 		t.Fatalf("request log line missing in output: %q", got)
 	}
@@ -132,13 +133,17 @@ func TestRunShowJSONShape(t *testing.T) {
 		t.Fatalf("write request log: %v", err)
 	}
 
-	rendered, err := Render(context.Background(), cfg, clydeID, true)
+	renderedOutput, err := Lookup(context.Background(), cfg, clydeID)
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("Lookup: %v", err)
+	}
+	body, err := json.Marshal(renderedOutput)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
 	var got ShowOutput
-	if err := json.Unmarshal([]byte(rendered), &got); err != nil {
-		t.Fatalf("unmarshal: %v\n%s", err, rendered)
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, string(body))
 	}
 	if got.Query != clydeID {
 		t.Fatalf("query=%q want %q", got.Query, clydeID)
@@ -189,13 +194,17 @@ func TestRunShowExpandsToUpstreamRequestID(t *testing.T) {
 		t.Fatalf("write errors log: %v", err)
 	}
 
-	rendered, err := Render(context.Background(), cfg, clydeID, true)
+	renderedOutput, err := Lookup(context.Background(), cfg, clydeID)
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("Lookup: %v", err)
+	}
+	body, err := json.Marshal(renderedOutput)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
 	var got ShowOutput
-	if err := json.Unmarshal([]byte(rendered), &got); err != nil {
-		t.Fatalf("unmarshal: %v\n%s", err, rendered)
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, string(body))
 	}
 	if len(got.Passes) != 2 {
 		t.Fatalf("passes=%d want 2 (initial + expansion)", len(got.Passes))

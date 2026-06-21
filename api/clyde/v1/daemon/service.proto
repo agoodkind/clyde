@@ -62,11 +62,57 @@ message SeedBaselineResponse {
 
 message ShowCaptureRequest {
   string id = 1;
-  bool json = 2;
+  reserved 2;
+  reserved "json";
+}
+
+message ShowCaptureSection {
+  string source = 1;
+  string path = 2;
+  repeated string matches = 3;
+}
+
+message ShowCaptureCaptureRow {
+  int64 ts = 1;
+  string client = 2;
+  string provider = 3;
+  string concern = 4;
+  string host = 5;
+  string method = 6;
+  string path = 7;
+  int64 status = 8;
+  string request_id = 9;
+  string upstream_request_id = 10;
+  string session_id = 11;
+  string trace_id = 12;
+}
+
+message ShowCaptureRows {
+  string source = 1;
+  string path = 2;
+  repeated ShowCaptureCaptureRow rows = 3;
+}
+
+message ShowCaptureCorrelation {
+  string clyde_request_id = 1;
+  string cursor_request_id = 2;
+  string upstream_request_id = 3;
+  string trace_id = 4;
+}
+
+message ShowCapturePass {
+  string id = 1;
+  repeated ShowCaptureSection sections = 2;
+  ShowCaptureRows capture = 3;
+  ShowCaptureCorrelation found = 4;
 }
 
 message ShowCaptureResponse {
-  string output = 1;
+  string output = 1 [deprecated = true];
+  string query = 10;
+  string kind = 11;
+  ShowCaptureCorrelation correlation = 12;
+  repeated ShowCapturePass passes = 13;
 }
 
 message GetMITMStatusRequest {}

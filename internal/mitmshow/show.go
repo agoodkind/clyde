@@ -121,25 +121,11 @@ func ClassifyID(id string) IDKind {
 	return IDKindAny
 }
 
-// Render runs the lookup for inputID and returns either the human-readable text
-// report or the typed JSON document as a string.
-func Render(ctx context.Context, cfg *config.Config, inputID string, asJSON bool) (string, error) {
-	var buf strings.Builder
-	if err := runShow(ctx, &buf, cfg, inputID, asJSON); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
-}
-
-// runShow executes the lookup for inputID and writes either the human readable
-// text report or the typed JSON document to out. It performs at most one
-// expansion: when the first pass matches an adapter line that exposes an
-// upstream_request_id we did not start with, the lookup runs a second time
-// against that upstream id and both rounds are reported.
-func runShow(ctx context.Context, out io.Writer, cfg *config.Config, inputID string, asJSON bool) error {
+// Lookup runs the capture correlation lookup and returns the typed output.
+func Lookup(ctx context.Context, cfg *config.Config, inputID string) (ShowOutput, error) {
 	inputID = strings.TrimSpace(inputID)
 	if inputID == "" {
-		return errors.New("id must not be empty")
+		return ShowOutput{}, errors.New("id must not be empty")
 	}
 	sources := resolveSources(cfg)
 	kind := ClassifyID(inputID)
@@ -171,24 +157,12 @@ func runShow(ctx context.Context, out io.Writer, cfg *config.Config, inputID str
 		passes = append(passes, secondPass)
 	}
 
-	output := ShowOutput{
+	return ShowOutput{
 		Query:       inputID,
 		Kind:        kind,
 		Correlation: correlation,
 		Passes:      passes,
-	}
-
-	if asJSON {
-		encoder := json.NewEncoder(out)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(output); err != nil {
-			slog.WarnContext(ctx, "mitmshow.encode_json_failed", "concern", "providers.mitm.lifecycle", "component", "daemon", "err", err)
-			return fmt.Errorf("encode json: %w", err)
-		}
-		return nil
-	}
-	writeText(out, output)
-	return nil
+	}, nil
 }
 
 // sourceSet groups every input path the lookup walks for one config snapshot.
@@ -440,6 +414,13 @@ func mergeCorrelation(dst *Correlation, src Correlation) {
 	if dst.TraceID == "" {
 		dst.TraceID = src.TraceID
 	}
+}
+
+// RenderText renders the human-readable report.
+func RenderText(output ShowOutput) string {
+	var builder strings.Builder
+	writeText(&builder, output)
+	return builder.String()
 }
 
 // writeText renders the human-readable report. One section per source, header
