@@ -9,9 +9,10 @@ import (
 )
 
 // TestFormatSearchConversationsResultCleanList proves the search render is a
-// scannable numbered list led by the [workspace] tag, and that the diagnostic
-// fields (freshness, facets, filter funnel, raw score, per-record columns) stay
-// out of the default text output.
+// scannable numbered list led by the [workspace] tag, shows the message date
+// with hour and minute, and keeps internal numbers (message index, rank) and the
+// diagnostic fields (freshness, facets, filter funnel, raw score, per-record
+// columns) out of the default text output.
 func TestFormatSearchConversationsResultCleanList(t *testing.T) {
 	t.Parallel()
 	result := conv.SearchConversationsResult{
@@ -22,6 +23,7 @@ func TestFormatSearchConversationsResultCleanList(t *testing.T) {
 					Provider:      conv.ProviderClaude,
 					Title:         "Add daemon reload command",
 					WorkspaceRoot: "/repo/alpha",
+					Archived:      false,
 				},
 				MessageIndex: 82,
 				Role:         "user",
@@ -40,10 +42,9 @@ func TestFormatSearchConversationsResultCleanList(t *testing.T) {
 	out := formatSearchConversationsResult(result, "daemon reload")
 
 	for _, want := range []string{
-		`Found 1 conversations for "daemon reload"`,
+		`Found 1 results for "daemon reload"`,
 		"1. [/repo/alpha]  Add daemon reload command (claude)",
-		"message 82",
-		"Rank 1",
+		"2026-04-26 13:53 · user",
 		"I meant the reload should force a new binary",
 		"1 results.",
 	} {
@@ -51,10 +52,41 @@ func TestFormatSearchConversationsResultCleanList(t *testing.T) {
 			t.Fatalf("output missing %q:\n%s", want, out)
 		}
 	}
-	for _, unwanted := range []string{"freshness:", "facets:", "filters:", "conversation_id", "0.0163"} {
+	// No internal numbers, no diagnostic chrome, and no archived marker on a
+	// conversation that is not archived.
+	for _, unwanted := range []string{"message 82", "Rank 1", "Rank", "freshness:", "facets:", "filters:", "conversation_id", "0.0163", "archived"} {
 		if strings.Contains(out, unwanted) {
-			t.Fatalf("output should not contain diagnostic %q:\n%s", unwanted, out)
+			t.Fatalf("output should not contain %q:\n%s", unwanted, out)
 		}
+	}
+}
+
+// TestFormatSearchConversationsResultArchivedMarker proves the archived marker
+// appears only when the conversation is archived.
+func TestFormatSearchConversationsResultArchivedMarker(t *testing.T) {
+	t.Parallel()
+	result := conv.SearchConversationsResult{
+		Matches: []conv.SearchMatch{
+			{
+				Record: conv.Record{
+					ID:            "claude:old",
+					Provider:      conv.ProviderClaude,
+					Title:         "Old session",
+					WorkspaceRoot: "/repo/alpha",
+					Archived:      true,
+				},
+				Role:      "assistant",
+				Timestamp: time.Date(2026, 3, 1, 9, 5, 0, 0, time.UTC),
+				Snippet:   "an old answer",
+			},
+		},
+		ReturnedCount: 1,
+	}
+
+	out := formatSearchConversationsResult(result, "old")
+
+	if !strings.Contains(out, "2026-03-01 09:05 · assistant · archived") {
+		t.Fatalf("archived conversation should show the archived marker:\n%s", out)
 	}
 }
 
@@ -63,7 +95,7 @@ func TestFormatSearchConversationsResultCleanList(t *testing.T) {
 func TestFormatSearchConversationsResultEmpty(t *testing.T) {
 	t.Parallel()
 	out := formatSearchConversationsResult(conv.SearchConversationsResult{}, "nothing here")
-	if out != "No conversations found for \"nothing here\".\n" {
+	if out != "No results found for \"nothing here\".\n" {
 		t.Fatalf("empty render = %q", out)
 	}
 }
