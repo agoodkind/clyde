@@ -445,17 +445,18 @@ func formatListResult(result conv.ListResult) string {
 
 // formatSearchConversationsResult renders the search result as a scannable
 // numbered list in the lm-semantic-search style: a Found header, then one entry
-// per match leading with its [workspace] tag, title, and provider, a compact
-// date/position/rank line, and the matching snippet. The full structured data
+// per match leading with its [workspace] tag, title, and provider, a line with
+// the message date and time and role (plus an archived marker when the
+// conversation is archived), and the matching snippet. The full structured data
 // (source, freshness, facets, filter funnel, and the per-record fields) stays
 // available through --output-format json.
 func formatSearchConversationsResult(result conv.SearchConversationsResult, query string) string {
 	var out strings.Builder
 	if len(result.Matches) == 0 {
-		fmt.Fprintf(&out, "No conversations found for %q.\n", query)
+		fmt.Fprintf(&out, "No results found for %q.\n", query)
 		return out.String()
 	}
-	fmt.Fprintf(&out, "Found %d conversations for %q\n\n", len(result.Matches), query)
+	fmt.Fprintf(&out, "Found %d results for %q\n\n", len(result.Matches), query)
 	for index, match := range result.Matches {
 		record := match.Record
 		workspace := shortPath(record.WorkspaceRoot)
@@ -471,7 +472,11 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 			role = "unknown"
 		}
 		fmt.Fprintf(&out, "%d. [%s]  %s (%s)\n", index+1, workspace, title, record.Provider.String())
-		fmt.Fprintf(&out, "   %s · message %d · %s · Rank %d\n", match.Timestamp.Format("2006-01-02"), match.MessageIndex, role, index+1)
+		meta := fmt.Sprintf("%s · %s", match.Timestamp.Format("2006-01-02 15:04"), role)
+		if record.Archived {
+			meta += " · archived"
+		}
+		fmt.Fprintf(&out, "   %s\n", meta)
 		if snippet := collapseWhitespace(match.Snippet); snippet != "" {
 			fmt.Fprintf(&out, "   %s\n", snippet)
 		}
