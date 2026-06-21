@@ -61,6 +61,27 @@ type daemonFingerprintOutput struct {
 
 func (daemonFingerprintOutput) isClispecStructuredPayload() {}
 
+type daemonReloadInput struct {
+	TimeoutSeconds int
+}
+
+func (daemonReloadInput) isClispecInput() {}
+
+type daemonReloadPayload struct {
+	Timeout time.Duration
+}
+
+func (daemonReloadPayload) isClispecPrepared() {}
+
+type daemonReloadOutput struct {
+	Status         string `json:"status"`
+	BinaryReloaded bool   `json:"binary_reloaded"`
+	ActiveSurfaces int64  `json:"active_surfaces"`
+	NewPID         int64  `json:"new_pid"`
+}
+
+func (daemonReloadOutput) isClispecStructuredPayload() {}
+
 var daemonGroup = &Group{
 	Use:     "daemon",
 	Short:   "Manage the background daemon",
@@ -161,6 +182,52 @@ func daemonFingerprintOp() Operation[daemonFingerprintInput, daemonFingerprintPa
 			return valueResult{
 				Payload: daemonFingerprintOutput{Built: false, Fingerprint: fingerprint},
 				Text:    fingerprint + "\n",
+			}, nil
+		},
+	}
+}
+
+func daemonReloadOp() Operation[daemonReloadInput, daemonReloadPayload] {
+	return Operation[daemonReloadInput, daemonReloadPayload]{
+		Name:       Name{Canonical: "daemon_reload", CLIOverride: "reload"},
+		Group:      daemonGroup,
+		Surfaces:   SurfaceSet{CLI: true, MCP: false},
+		outputKind: resultKindValue,
+		Short:      "Reload the running daemon without restarting it",
+		Long:       "Reload the running daemon in place, handing its live listeners to a supervisor-spawned replacement worker so public traffic keeps flowing across the swap.",
+		Examples:   []string{"clyde daemon reload"},
+		Args:       nil,
+		Params:     nil,
+		New: func() daemonReloadInput {
+			return daemonReloadInput{TimeoutSeconds: int(daemoncmd.ReloadCommandTimeout / time.Second)}
+		},
+		Children:       nil,
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
+		Prepare: func(in daemonReloadInput) (daemonReloadPayload, error) {
+			return daemonReloadPayload{Timeout: time.Duration(in.TimeoutSeconds) * time.Second}, nil
+		},
+		Run: nil,
+		runResult: func(ctx context.Context, payload daemonReloadPayload) (Result, error) {
+			reloadCtx, cancel := context.WithTimeout(ctx, payload.Timeout)
+			defer cancel()
+			resp, err := daemonsvc.ReloadDaemon(reloadCtx)
+			if err != nil {
+				return nil, daemoncmd.ReloadCommandError(err)
+			}
+			status := "unchanged"
+			if resp.GetBinaryReloaded() {
+				status = "reloaded"
+			}
+			return valueResult{
+				Payload: daemonReloadOutput{
+					Status:         status,
+					BinaryReloaded: resp.GetBinaryReloaded(),
+					ActiveSurfaces: resp.GetActiveSurfaces(),
+					NewPID:         resp.GetNewPid(),
+				},
+				Text: fmt.Sprintf("daemon binary %s: active_surfaces=%d new_pid=%d\n", status, resp.GetActiveSurfaces(), resp.GetNewPid()),
 			}, nil
 		},
 	}
