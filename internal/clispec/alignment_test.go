@@ -192,8 +192,24 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 		gotChildren = append(gotChildren, child.Name())
 	}
 	sort.Strings(gotChildren)
-	if strings.Join(gotChildren, ",") != "show,status" {
-		t.Fatalf("mitm children: got %v, want [show status]", gotChildren)
+	if strings.Join(gotChildren, ",") != "baseline,show,status" {
+		t.Fatalf("mitm children: got %v, want [baseline show status]", gotChildren)
+	}
+
+	baselineParent, _, err := mitmParent.Find([]string{"baseline"})
+	if err != nil {
+		t.Fatalf("find mitm baseline: %v", err)
+	}
+	if baselineParent == nil {
+		t.Fatal("baseline command missing")
+	}
+	gotChildren = nil
+	for _, child := range baselineParent.Commands() {
+		gotChildren = append(gotChildren, child.Name())
+	}
+	sort.Strings(gotChildren)
+	if strings.Join(gotChildren, ",") != "seed" {
+		t.Fatalf("baseline children: got %v, want [seed]", gotChildren)
 	}
 
 	daemonParent := parents["daemon"]

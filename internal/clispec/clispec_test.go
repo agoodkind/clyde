@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -96,6 +97,18 @@ func (probeInput) isClispecInput()               {}
 func (probeInput) isClispecPrepared()            {}
 func (probePayload) isClispecStructuredPayload() {}
 
+type stringListProbeInput struct {
+	Items []string
+}
+
+type stringListProbePayload struct {
+	Items []string `json:"items"`
+}
+
+func (stringListProbeInput) isClispecInput()               {}
+func (stringListProbeInput) isClispecPrepared()            {}
+func (stringListProbePayload) isClispecStructuredPayload() {}
+
 // probeOp uses P = probeInput with an identity Prepare: the test exercises the
 // binding and rendering machinery, not input validation, so the prepared payload
 // is the bound input unchanged.
@@ -120,6 +133,29 @@ func probeOp() Operation[probeInput, probeInput] {
 		runResult: func(_ context.Context, in probeInput) (Result, error) {
 			payload := probePayload{ID: in.ID, Count: in.Count, On: in.On, Mode: in.Mode}
 			return valueResult{Payload: payload, Text: formatProbe(payload)}, nil
+		},
+	}
+}
+
+func stringListProbeOp() Operation[stringListProbeInput, stringListProbeInput] {
+	return Operation[stringListProbeInput, stringListProbeInput]{
+		Name:       Name{Canonical: "string_list_probe"},
+		Surfaces:   SurfaceSet{CLI: true, MCP: true},
+		outputKind: resultKindValue,
+		Short:      "string-list probe",
+		Args:       nil,
+		Params: []Param[stringListProbeInput]{
+			StringSliceParam("items", "items", nil, func(in *stringListProbeInput, v []string) { in.Items = append([]string(nil), v...) }),
+		},
+		New:      func() stringListProbeInput { return stringListProbeInput{Items: nil} },
+		Children: nil,
+		Prepare:  func(in stringListProbeInput) (stringListProbeInput, error) { return in, nil },
+		Run:      nil,
+		runResult: func(_ context.Context, in stringListProbeInput) (Result, error) {
+			return valueResult{
+				Payload: stringListProbePayload{Items: append([]string(nil), in.Items...)},
+				Text:    strings.Join(in.Items, ","),
+			}, nil
 		},
 	}
 }
@@ -187,6 +223,19 @@ func TestCobraRenderUsesDefaults(t *testing.T) {
 	}
 	if got := out.String(); got != "abc:7:off:alpha" {
 		t.Errorf("cli output: got %q, want %q", got, "abc:7:off:alpha")
+	}
+}
+
+func TestCobraRenderBindsStringSliceParam(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	root := rootWithChild(stringListProbeOp().cobraCommand(testFactory(&out)))
+	root.SetArgs([]string{"string-list-probe", "--items", "alpha,beta", "--items", "gamma"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if got := out.String(); got != "alpha,beta,gamma" {
+		t.Fatalf("string list cli output: got %q, want %q", got, "alpha,beta,gamma")
 	}
 }
 
@@ -268,6 +317,19 @@ func TestCobraRejectsUnknownEnum(t *testing.T) {
 	}
 }
 
+func TestMitmBaselineSeedCommandRejectsMissingUpstream(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	root := rootWithChild(mitmBaselineSeedOp().cobraCommand(testFactory(&out)))
+	root.SetArgs([]string{"seed"})
+	root.SilenceErrors = true
+	if err := root.Execute(); err == nil {
+		t.Fatal("expected error for missing upstream")
+	} else if !strings.Contains(err.Error(), "upstream is required") {
+		t.Fatalf("missing upstream error = %q, want substring %q", err.Error(), "upstream is required")
+	}
+}
+
 func TestMCPHandlerBindsAndIsLenient(t *testing.T) {
 	t.Parallel()
 	_, handler := probeOp().mcpTool()
@@ -345,6 +407,20 @@ func TestMCPHandlerRequiresPositional(t *testing.T) {
 	}
 	if got := textOf(t, result); got != "the_id is required" {
 		t.Errorf("missing positional: got %q, want %q", got, "the_id is required")
+	}
+}
+
+func TestMCPHandlerBindsStringSliceParam(t *testing.T) {
+	t.Parallel()
+	_, handler := stringListProbeOp().mcpTool()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"items": []any{"alpha", "beta"}}
+	result, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if got := textOf(t, result); got != "alpha,beta" {
+		t.Fatalf("string list mcp output: got %q, want %q", got, "alpha,beta")
 	}
 }
 

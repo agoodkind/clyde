@@ -50,12 +50,43 @@ type mitmStatusOutput struct {
 
 func (mitmStatusOutput) isClispecStructuredPayload() {}
 
+type mitmBaselineSeedInput struct {
+	Upstream  string
+	IncludeUA []string
+	ExcludeUA []string
+}
+
+func (mitmBaselineSeedInput) isClispecInput() {}
+
+type mitmBaselineSeedPayload struct {
+	Upstream  string
+	IncludeUA []string
+	ExcludeUA []string
+}
+
+func (mitmBaselineSeedPayload) isClispecPrepared() {}
+
+type mitmBaselineSeedOutput struct {
+	Upstream string `json:"upstream"`
+	Flavors  int    `json:"flavors"`
+}
+
+func (mitmBaselineSeedOutput) isClispecStructuredPayload() {}
+
 var mitmGroup = &Group{
 	Use:     "mitm",
 	Short:   "Inspect the daemon-owned MITM proxy",
 	Long:    "Inspect the daemon-owned MITM capture proxy: report listener status, show captured exchanges by request id, manage wire baselines, and manage the OS trust store for the MITM CA.",
 	Example: "clyde mitm status\nclyde mitm show chatcmpl-abc123",
 	Parent:  nil,
+}
+
+var mitmBaselineGroup = &Group{
+	Use:     "baseline",
+	Short:   "Manage MITM wire baselines",
+	Long:    "Manage MITM wire baselines that Clyde learns from captured native traffic.",
+	Example: "clyde mitm baseline seed --upstream claude-code",
+	Parent:  mitmGroup,
 }
 
 func mitmShowOp() Operation[mitmShowInput, mitmShowPayload] {
@@ -141,6 +172,61 @@ func mitmStatusOp() Operation[mitmStatusInput, mitmStatusPayload] {
 					CAKeyPath:  status.CAKeyPath,
 				},
 				Text: out.String(),
+			}, nil
+		},
+	}
+}
+
+func mitmBaselineSeedOp() Operation[mitmBaselineSeedInput, mitmBaselineSeedPayload] {
+	return Operation[mitmBaselineSeedInput, mitmBaselineSeedPayload]{
+		Name:       Name{Canonical: "mitm_baseline_seed", CLIOverride: "seed"},
+		Group:      mitmBaselineGroup,
+		Surfaces:   SurfaceSet{CLI: true, MCP: false},
+		outputKind: resultKindValue,
+		Short:      "Write a MITM baseline from the capture store's deduped shape corpus",
+		Long: "Seed builds a wire baseline from the deduped native-request " +
+			"shapes already captured in the MITM capture store and writes it " +
+			"as the current baseline for the given upstream. The provider " +
+			"filter is derived from the upstream name. Use --include-ua / " +
+			"--exclude-ua to scope which captured caller flavor seeds the " +
+			"baseline (for example --include-ua claude-cli). The daemon " +
+			"performs the build and write against its capture store.",
+		Examples: []string{"clyde mitm baseline seed --upstream claude-code --include-ua claude-cli"},
+		Args:     nil,
+		Params: []Param[mitmBaselineSeedInput]{
+			StringParam("upstream", "Upstream name, e.g. claude-code or codex-cli.", "", true,
+				func(in *mitmBaselineSeedInput, v string) { in.Upstream = v }),
+			StringSliceParam("include_ua", "Only seed from shapes whose User-Agent contains one of these substrings.", nil,
+				func(in *mitmBaselineSeedInput, v []string) { in.IncludeUA = append(in.IncludeUA, v...) }),
+			StringSliceParam("exclude_ua", "Drop shapes whose User-Agent contains one of these substrings.", nil,
+				func(in *mitmBaselineSeedInput, v []string) { in.ExcludeUA = append(in.ExcludeUA, v...) }),
+		},
+		New: func() mitmBaselineSeedInput {
+			return mitmBaselineSeedInput{Upstream: "", IncludeUA: nil, ExcludeUA: nil}
+		},
+		Children:       nil,
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
+		Prepare: func(in mitmBaselineSeedInput) (mitmBaselineSeedPayload, error) {
+			if strings.TrimSpace(in.Upstream) == "" {
+				return mitmBaselineSeedPayload{}, fmt.Errorf("upstream is required")
+			}
+			return mitmBaselineSeedPayload(in), nil
+		},
+		Run: nil,
+		runResult: func(ctx context.Context, p mitmBaselineSeedPayload) (Result, error) {
+			result, err := daemon.SeedBaseline(ctx, p.Upstream, p.IncludeUA, p.ExcludeUA)
+			if err != nil {
+				slog.WarnContext(ctx, "cli.mitm.seed_baseline.failed", "concern", "cli.mitm", "component", "clispec", "upstream", p.Upstream, "err", err)
+				return nil, fmt.Errorf("baseline seed: %w", err)
+			}
+			var out strings.Builder
+			fmt.Fprintf(&out, "upstream: %s\n", result.Upstream)
+			fmt.Fprintf(&out, "flavors: %d\n", result.Flavors)
+			return valueResult{
+				Payload: mitmBaselineSeedOutput{Upstream: result.Upstream, Flavors: result.Flavors},
+				Text:    out.String(),
 			}, nil
 		},
 	}

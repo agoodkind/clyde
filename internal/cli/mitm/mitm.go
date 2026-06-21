@@ -18,7 +18,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newBaselineCmd(f))
 	cmd.AddCommand(newTrustCmd(f))
 	return cmd
 }

@@ -135,3 +135,11 @@ func TestLogsInventoryPrepareRejectsNonPositiveLargest(t *testing.T) {
 		t.Fatalf("logs inventory Prepare rejected valid input: %v", err)
 	}
 }
+
+func TestMitmBaselineSeedPrepareRejectsMissingUpstream(t *testing.T) {
+	t.Parallel()
+	op := mitmBaselineSeedOp()
+	if _, err := op.Prepare(op.New()); err == nil {
+		t.Fatal("expected missing upstream to fail in Prepare")
+	}
+}

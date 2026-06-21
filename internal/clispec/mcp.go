@@ -175,6 +175,9 @@ func (p Param[I]) mcpOption() mcp.ToolOption {
 			properties = append(properties, mcp.DefaultNumber(p.DefaultFloat))
 		}
 		return mcp.WithNumber(p.Canonical, properties...)
+	case KindStringList:
+		properties := []mcp.PropertyOption{mcp.Description(p.Description)}
+		return mcp.WithArray(p.Canonical, properties...)
 	case KindEnumList:
 		properties := []mcp.PropertyOption{mcp.Description(p.Description), mcp.WithStringEnumItems(p.Values)}
 		if p.Required {
@@ -211,6 +214,8 @@ func (p Param[I]) decodeMCP(in *I, req mcp.CallToolRequest) {
 		p.bindBool(in, req.GetBool(p.Canonical, p.DefaultBool))
 	case KindFloat:
 		p.bindFloat(in, req.GetFloat(p.Canonical, p.DefaultFloat))
+	case KindStringList:
+		p.bindStrSlice(in, req.GetStringSlice(p.Canonical, p.DefaultStrSlice))
 	case KindEnumList:
 		raw := req.GetStringSlice(p.Canonical, nil)
 		valid := make([]string, 0, len(raw))
