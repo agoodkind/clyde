@@ -13,7 +13,6 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/daemon"
-	"goodkind.io/clyde/internal/cli/mcp"
 	cliMITM "goodkind.io/clyde/internal/cli/mitm"
 	"goodkind.io/clyde/internal/cli/output"
 	"goodkind.io/clyde/internal/clispec"
@@ -92,7 +91,6 @@ func newRoot(f *cli.Factory) *cobra.Command {
 	reg := clispec.NewConversationRegistry()
 	reg.AddHandwritten(clispec.HandwrittenCommand{Build: daemon.NewCmd})
 	reg.AddHandwritten(clispec.HandwrittenCommand{Build: cliMITM.NewCmd})
-	reg.AddHandwritten(clispec.HandwrittenCommand{Build: mcp.NewCmd})
 	for _, command := range clispec.RenderCobra(reg, f) {
 		root.AddCommand(command)
 	}

@@ -21,7 +21,6 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"goodkind.io/clyde/internal/audit"
-	"goodkind.io/clyde/internal/clispec"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/correlation"
@@ -52,6 +51,7 @@ type Server struct {
 	// drains it through group.Quiesce, the only drain entry point.
 	group *livetrack.Group
 
+	mcp     *server.MCPServer
 	log     *slog.Logger
 	cleanup func()
 }
@@ -81,12 +81,27 @@ func NewServer(auditRotation audit.RotationConfig) *Server {
 		ParallelClose: false,
 		Now:           nil,
 	})
+	mcpServer := server.NewMCPServer("clyde", "0.13.0-dev",
+		server.WithHooks(newHooks()),
+		server.WithTaskCapabilities(true, true, true),
+		server.WithMaxConcurrentTasks(maxConcurrentMCPTasks),
+	)
+	mcpServer.Use(toolCallMiddleware(registry, "clyde"))
+	registerPrompt(mcpServer)
+	registerReorientResource(mcpServer)
+	registerReorientPrompt(mcpServer)
 	return &Server{
 		Tunnels: registry,
 		group:   group,
+		mcp:     mcpServer,
 		log:     log,
 		cleanup: cleanup,
 	}
+}
+
+// MCPServer exposes the underlying MCP server so callers can register tools.
+func (srv *Server) MCPServer() *server.MCPServer {
+	return srv.mcp
 }
 
 // Serve starts the MCP stdio server and blocks until the client disconnects.
@@ -107,32 +122,7 @@ func (srv *Server) Serve(ctx context.Context) error {
 		defer srv.Tunnels.Release(ctx, serveHandle, "mcp.serve.done")
 	}
 
-	mcpServer := server.NewMCPServer("clyde", "0.13.0-dev",
-		server.WithHooks(newHooks()),
-		// Enable the 2025-11-25 Tasks primitive (list, cancel, tool-call tasks)
-		// so a Tasks-capable client can run a task-augmented search_conversation
-		// and poll tasks/get, tasks/list, tasks/result, and tasks/cancel. The
-		// task result carries the rendered search output, including the
-		// result_id, which also resolves through the bespoke search_status and
-		// analyze tools.
-		//
-		// Two mark3labs/mcp-go v0.54.1 quirks are worked around. (1) Its server
-		// returns a tool result's content at the top level of the tasks/result
-		// response, but its own client parser (mcp.ParseTaskResultResult) reads
-		// it from result.content, so mcp-go-based clients see empty content even
-		// though the wire response is correct; non-mcp-go clients are unaffected.
-		// (2) It cancels the task context as soon as the task handle is returned,
-		// so the run-to-completion path in daemon.SearchToCompletion detaches its
-		// daemon calls with context.WithoutCancel to let the search finish.
-		server.WithTaskCapabilities(true, true, true),
-		server.WithMaxConcurrentTasks(maxConcurrentMCPTasks),
-	)
-	mcpServer.Use(toolCallMiddleware(srv.Tunnels, "clyde"))
-	registerPrompt(mcpServer)
-	registerReorientResource(mcpServer)
-	registerReorientPrompt(mcpServer)
-	registerTools(mcpServer)
-	return serveStdioLocked(ctx, mcpServer, srv.group, mcpShutdownCap, os.Stdin, os.Stdout)
+	return serveStdioLocked(ctx, srv.mcp, srv.group, mcpShutdownCap, os.Stdin, os.Stdout)
 }
 
 // mcpShutdownCap bounds how long the MCP server drains in-flight tool calls
@@ -299,10 +289,6 @@ func registerReorientPrompt(mcpServer *server.MCPServer) {
 			}, nil
 		},
 	)
-}
-
-func registerTools(mcpServer *server.MCPServer) {
-	clispec.RenderMCP(clispec.NewConversationRegistry(), mcpServer)
 }
 
 func serveStdioLocked(parent context.Context, mcpSrv *server.MCPServer, group *livetrack.Group, shutdownCap time.Duration, stdin io.Reader, stdout io.Writer) error {
