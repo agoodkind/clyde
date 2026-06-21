@@ -46,6 +46,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd.AddCommand(newReloadCmd(f))
 	cmd.AddCommand(newStatusCmd(f))
 	cmd.AddCommand(newFingerprintCmd(f))
+	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
 	return cmd
 }
 
