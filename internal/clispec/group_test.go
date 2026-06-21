@@ -3,6 +3,10 @@ package clispec
 import (
 	"bytes"
 	"testing"
+
+	"github.com/spf13/cobra"
+
+	"goodkind.io/clyde/internal/cli"
 )
 
 // TestRenderCobraNestsGroups asserts a group chain renders as nested terminal
@@ -41,5 +45,40 @@ func TestRenderCobraNestsGroups(t *testing.T) {
 	}
 	if leaf.Name() != "probe-op" {
 		t.Fatalf("leaf name: got %q, want probe-op", leaf.Name())
+	}
+}
+
+func TestRenderCobraMergesGroupedOpsIntoHandwrittenRoot(t *testing.T) {
+	t.Parallel()
+
+	group := &Group{Use: "shared", Short: "shared group", Long: "", Parent: nil}
+	op := probeOp()
+	op.Group = group
+
+	reg := &Registry{ops: nil, handwritten: nil}
+	Register(reg, op)
+	reg.AddHandwritten(HandwrittenCommand{
+		Build: func(_ *cli.Factory) *cobra.Command {
+			cmd := &cobra.Command{Use: "shared"}
+			cmd.AddCommand(&cobra.Command{Use: "handwritten"})
+			return cmd
+		},
+	})
+
+	var out bytes.Buffer
+	roots := RenderCobra(reg, testFactory(&out))
+	if len(roots) != 1 {
+		t.Fatalf("roots: got %d, want 1", len(roots))
+	}
+
+	shared := roots[0]
+	if shared.Name() != "shared" {
+		t.Fatalf("root name: got %q, want shared", shared.Name())
+	}
+	if _, _, err := shared.Find([]string{"probe-op"}); err != nil {
+		t.Fatalf("find clispec child under shared root: %v", err)
+	}
+	if _, _, err := shared.Find([]string{"handwritten"}); err != nil {
+		t.Fatalf("find handwritten child under shared root: %v", err)
 	}
 }

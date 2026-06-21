@@ -30,9 +30,23 @@ func RenderCobra(reg *Registry, f *cli.Factory) []*cobra.Command {
 		parent.AddCommand(child)
 	}
 	for _, hand := range reg.handwritten {
-		commands = append(commands, hand.Build(f))
+		mergeOrAppendRoot(&commands, hand.Build(f))
 	}
 	return commands
+}
+
+func mergeOrAppendRoot(roots *[]*cobra.Command, candidate *cobra.Command) {
+	for index, existing := range *roots {
+		if existing.Name() != candidate.Name() {
+			continue
+		}
+		for _, child := range existing.Commands() {
+			candidate.AddCommand(child)
+		}
+		(*roots)[index] = candidate
+		return
+	}
+	*roots = append(*roots, candidate)
 }
 
 // ensureGroup returns the cobra parent for one group, building the whole parent
