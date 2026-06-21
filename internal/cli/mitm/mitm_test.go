@@ -2,6 +2,8 @@ package mitm
 
 import (
 	"bytes"
+	"sort"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/cli"
@@ -15,12 +17,14 @@ func TestNewCmdRegistersMitmParent(t *testing.T) {
 	if cmd.Name() != "mitm" {
 		t.Fatalf("cmd.Name = %q, want mitm", cmd.Name())
 	}
-	statusCmd, _, err := cmd.Find([]string{"status"})
-	if err != nil {
-		t.Fatalf("find status: %v", err)
+
+	var childNames []string
+	for _, child := range cmd.Commands() {
+		childNames = append(childNames, child.Name())
 	}
-	if statusCmd == nil || statusCmd.Name() != "status" {
-		t.Fatalf("status subcommand missing; got %v", statusCmd)
+	sort.Strings(childNames)
+	if strings.Join(childNames, ",") != "baseline,trust" {
+		t.Fatalf("mitm handwritten children: got %v, want [baseline trust]", childNames)
 	}
 	trustCmd, _, err := cmd.Find([]string{"trust"})
 	if err != nil {

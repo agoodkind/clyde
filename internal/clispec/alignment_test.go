@@ -192,8 +192,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 		gotChildren = append(gotChildren, child.Name())
 	}
 	sort.Strings(gotChildren)
-	if strings.Join(gotChildren, ",") != "show" {
-		t.Fatalf("mitm children: got %v, want [show]", gotChildren)
+	if strings.Join(gotChildren, ",") != "show,status" {
+		t.Fatalf("mitm children: got %v, want [show status]", gotChildren)
 	}
 
 	daemonParent := parents["daemon"]
