@@ -110,8 +110,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	roots := RenderCobra(NewConversationRegistry(), testFactory(&out))
-	if len(roots) != 3 {
-		t.Fatalf("root commands: got %d, want 3 (conversation, logs, mitm)", len(roots))
+	if len(roots) != 4 {
+		t.Fatalf("root commands: got %d, want 4 (conversation, logs, mitm, daemon)", len(roots))
 	}
 	parents := map[string]*cobra.Command{}
 	for _, root := range roots {
@@ -194,6 +194,19 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 	sort.Strings(gotChildren)
 	if strings.Join(gotChildren, ",") != "show" {
 		t.Fatalf("mitm children: got %v, want [show]", gotChildren)
+	}
+
+	daemonParent := parents["daemon"]
+	if daemonParent == nil {
+		t.Fatal("daemon parent missing")
+	}
+	gotChildren = nil
+	for _, child := range daemonParent.Commands() {
+		gotChildren = append(gotChildren, child.Name())
+	}
+	sort.Strings(gotChildren)
+	if strings.Join(gotChildren, ",") != "fingerprint,status" {
+		t.Fatalf("daemon children: got %v, want [fingerprint status]", gotChildren)
 	}
 }
 
