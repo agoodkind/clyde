@@ -54,38 +54,52 @@ const (
 // ExtraLoop is a small daemon-owned background loop hook.
 type ExtraLoop func(*slog.Logger) func()
 
-// RunCommand starts the launchd or systemd-owned supervisor process.
-func RunCommand(log *slog.Logger, _ ...ExtraLoop) error {
+// RunCommandContext starts the launchd or systemd-owned supervisor process and
+// forwards context cancellation as a process-level termination signal.
+func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) error {
 	if log == nil {
 		log = slog.Default()
 	}
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}
-	if err := daemonsupervisor.Supervise(log, config.RuntimeDir()); err != nil {
-		log.Warn("daemon.supervisor.failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
-		return fmt.Errorf("run daemon supervisor: %w", err)
+	superviseErr := startSupervisorProcess(ctx, log)
+	select {
+	case err := <-superviseErr:
+		if err != nil {
+			log.WarnContext(ctx, "daemon.supervisor.failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+			return fmt.Errorf("run daemon supervisor: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		err := <-superviseErr
+		if err != nil {
+			log.WarnContext(ctx, "daemon.supervisor.failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+			return fmt.Errorf("run daemon supervisor: %w", err)
+		}
+		return nil
 	}
-	return nil
 }
 
-// Run starts the daemon worker process.
-func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
+// RunContext starts the daemon worker process using ctx as the parent context
+// for shutdown and child loops.
+func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if log == nil {
 		log = slog.Default()
 	}
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
-		log.Warn("daemon.config.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+		log.WarnContext(parent, "daemon.config.load_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
 		return fmt.Errorf("load daemon config: %w", err)
 	}
 	// Hash the config now, before any reload child could re-trigger on the
 	// content it just loaded. The watcher started below skips a change whose
 	// hash equals this baseline, so a touch or a reload-child sees no change.
 	// ctx is not yet established here; configFileHash logs its own failures.
-	configBaselineHash, _ := configFileHash(context.Background(), log, config.GlobalConfigPath())
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	configBaselineHash, _ := configFileHash(parent, log, config.GlobalConfigPath())
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	watchSignals(ctx, log, cancel)
 	defer trace.Op(ctx, "daemon.worker.run")(&err)
 
 	inherited, err := loadInheritedRuntime()
@@ -97,7 +111,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if err != nil {
 		return fmt.Errorf("start daemon runtime: %w", err)
 	}
-	defer runtime.shutdown(context.Background())
+	defer runtime.shutdown(ctx)
 
 	conversationIndex := conversation.NewIndex(newConversationRegistry())
 	semanticFreshness := newConversationSemanticFreshness()
@@ -122,7 +136,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.Error("daemon.conversation_index.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
+				log.ErrorContext(ctx, "daemon.conversation_index.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
 		conversationIndex.Start(ctx, time.Minute)
@@ -136,7 +150,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.Error("daemon.mitm_drift.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
+				log.ErrorContext(ctx, "daemon.mitm_drift.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
 		mitm.RunPeriodicDrift(ctx, runtime.captureStore, cfg.MITM, log)
@@ -146,7 +160,7 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 	if err := signalReady(); err != nil {
 		return fmt.Errorf("signal daemon readiness: %w", err)
 	}
-	log.Info("daemon.worker.ready", "concern", "process.daemon.lifecycle", "component", "daemon",
+	log.InfoContext(ctx, "daemon.worker.ready", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"adapter_enabled", cfg.Adapter.Enabled,
 		"mitm_enabled", cfg.MITM.EnabledDefault,
 		"conversation_semantic_enabled", runtime.semantic != nil,
@@ -173,6 +187,37 @@ func Run(log *slog.Logger, extraLoops ...ExtraLoop) (err error) {
 		}
 		return nil
 	}
+}
+
+func startSupervisorProcess(ctx context.Context, log *slog.Logger) <-chan error {
+	superviseErr := make(chan error, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				superviseErr <- fmt.Errorf("daemon supervisor panic: %v", recovered)
+			}
+		}()
+		superviseErr <- daemonsupervisor.SuperviseContext(ctx, log, config.RuntimeDir())
+	}()
+	return superviseErr
+}
+
+func watchSignals(ctx context.Context, log *slog.Logger, cancel context.CancelFunc) {
+	signalCh := make(chan os.Signal, 2)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		defer func() {
+			signal.Stop(signalCh)
+			if recovered := recover(); recovered != nil {
+				log.ErrorContext(ctx, "daemon.worker.signal_watch_panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
+			}
+		}()
+		select {
+		case <-signalCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 }
 
 // startConfigWatcher constructs and starts the daemon's config-file watcher,
