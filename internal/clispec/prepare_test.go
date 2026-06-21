@@ -116,3 +116,22 @@ func TestExportMCPHandlerRejectsEmptyOnly(t *testing.T) {
 		t.Errorf("expected the no-content-kinds error in tool text, got: %q", text)
 	}
 }
+
+func TestLogsInventoryPrepareRejectsNonPositiveLargest(t *testing.T) {
+	t.Parallel()
+	op := logsInventoryOp()
+
+	invalid := op.New()
+	invalid.LargestFileLimit = 0
+	if _, err := op.Prepare(invalid); err == nil {
+		t.Fatal("logs inventory Prepare should reject a non-positive --largest")
+	} else if !strings.Contains(err.Error(), "--largest") {
+		t.Fatalf("logs inventory error = %q, want mention of --largest", err.Error())
+	}
+
+	valid := op.New()
+	valid.LargestFileLimit = 5
+	if _, err := op.Prepare(valid); err != nil {
+		t.Fatalf("logs inventory Prepare rejected valid input: %v", err)
+	}
+}
