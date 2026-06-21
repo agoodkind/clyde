@@ -16,3 +16,11 @@ func newConversationRegistry() *conversation.Registry {
 	registry.Register(codexparser.New())
 	return registry
 }
+
+// NewConversationIndex builds a disk-backed conversation index with the Claude
+// and Codex parsers wired in. It serves callers outside the daemon worker, such
+// as the scalar-backfill CLI command, that need the same derived records the
+// daemon serves without standing up the full daemon.
+func NewConversationIndex() *conversation.Index {
+	return conversation.NewIndex(newConversationRegistry())
+}

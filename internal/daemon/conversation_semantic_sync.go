@@ -524,6 +524,7 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 			// with invalid UTF-8 used to break the whole batch).
 			Text:          strings.ToValidUTF8(message.Text, ""),
 			WorkspaceRoot: record.WorkspaceRoot,
+			Archived:      record.Archived,
 		})
 	}
 	return docs, nil

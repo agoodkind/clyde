@@ -45,6 +45,10 @@ type SemDoc struct {
 	// as a filterable scalar column. The same for every message of one
 	// conversation; empty when unknown.
 	WorkspaceRoot string
+	// Archived is the conversation's archived status, sent so the engine stores
+	// it as a filterable scalar column. The same for every message of one
+	// conversation.
+	Archived bool
 }
 
 // Fingerprint pairs a conversation id with a content fingerprint that changes
@@ -54,6 +58,16 @@ type SemDoc struct {
 type Fingerprint struct {
 	ConversationID string
 	Value          string
+}
+
+// BackfillScalarEntry is one conversation's clyde-sourced enrichment for the
+// scalar backfill: the workspace root and archived status clyde observed,
+// keyed by conversation id. The engine writes these onto rows whose
+// workspaceRoot is empty, preserving each row's vector.
+type BackfillScalarEntry struct {
+	ConversationID string
+	WorkspaceRoot  string
+	Archived       bool
 }
 
 // SemHit is one conversation-message match returned by the engine's
@@ -379,10 +393,105 @@ func sendUpsertDocumentChunks(
 }
 
 // semDocByteSize approximates one document's wire size for chunk framing: the
-// text bytes plus the scalar fields plus a fixed framing allowance.
+// text bytes plus the scalar fields plus a fixed framing allowance. The Archived
+// bool contributes its protobuf tag plus value regardless of true or false.
 func semDocByteSize(doc SemDoc) int {
 	const semDocFramingOverheadBytes = 256
-	return len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocFramingOverheadBytes
+	const semDocArchivedFieldBytes = 2
+	return len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
+}
+
+// backfillScalarEntriesPerChunk caps the entries in one stream chunk so a large
+// corpus frames into bounded messages well under the gRPC max message size.
+const backfillScalarEntriesPerChunk = 500
+
+// BackfillConversationScalars streams clyde's per-conversation enrichment to the
+// engine, which writes workspaceRoot and archived onto the rows whose
+// workspaceRoot is empty, preserving each row's dense vector so nothing is
+// re-embedded. When dryRun is true the engine counts the would-change and orphan
+// rows and writes nothing. It opens the client stream, sends the header, then
+// the entries in bounded chunks, and returns the engine's (changed, orphan)
+// counts.
+func (c *Client) BackfillConversationScalars(ctx context.Context, collectionID string, entries []BackfillScalarEntry, dryRun bool) (int64, int64, error) {
+	if c == nil || c.daemon == nil {
+		return 0, 0, fmt.Errorf("backfill conversation scalars: client is nil")
+	}
+	trimmedCollectionID := strings.TrimSpace(collectionID)
+	if trimmedCollectionID == "" {
+		return 0, 0, fmt.Errorf("backfill conversation scalars: collection id is empty")
+	}
+	stream, err := c.daemon.BackfillConversationScalars(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.backfill_scalars_open_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", trimmedCollectionID,
+			"err", err,
+		)
+		return 0, 0, fmt.Errorf("open conversation scalar backfill stream for collection %q: %w", trimmedCollectionID, err)
+	}
+	header := &lmsemanticsearchv1.BackfillConversationScalarsChunk{
+		Chunk: &lmsemanticsearchv1.BackfillConversationScalarsChunk_Header{
+			Header: &lmsemanticsearchv1.BackfillConversationScalarsHeader{
+				CollectionId: trimmedCollectionID,
+				DryRun:       dryRun,
+				Client:       upsertClientInfo(),
+			},
+		},
+	}
+	if sendErr := stream.Send(header); sendErr != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.backfill_scalars_header_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", trimmedCollectionID,
+			"err", sendErr,
+		)
+		return 0, 0, fmt.Errorf("send conversation scalar backfill header for collection %q: %w", trimmedCollectionID, sendErr)
+	}
+	for start := 0; start < len(entries); start += backfillScalarEntriesPerChunk {
+		end := min(start+backfillScalarEntriesPerChunk, len(entries))
+		chunk := &lmsemanticsearchv1.BackfillConversationScalarsChunk{
+			Chunk: &lmsemanticsearchv1.BackfillConversationScalarsChunk_Entries{
+				Entries: &lmsemanticsearchv1.BackfillConversationScalarsEntries{
+					Entries: backfillScalarEntries(entries[start:end]),
+				},
+			},
+		}
+		if sendErr := stream.Send(chunk); sendErr != nil {
+			slog.WarnContext(ctx, "conversation.semsearch.backfill_scalars_entries_failed",
+				"concern", "conversation.semantic",
+				"component", "conversation",
+				"collection_id", trimmedCollectionID,
+				"entries", end-start,
+				"err", sendErr,
+			)
+			return 0, 0, fmt.Errorf("send conversation scalar backfill entries for collection %q: %w", trimmedCollectionID, sendErr)
+		}
+	}
+	response, err := stream.CloseAndRecv()
+	if err != nil {
+		slog.WarnContext(ctx, "conversation.semsearch.backfill_scalars_failed",
+			"concern", "conversation.semantic",
+			"component", "conversation",
+			"collection_id", trimmedCollectionID,
+			"entries", len(entries),
+			"err", err,
+		)
+		return 0, 0, fmt.Errorf("backfill conversation scalars for collection %q: %w", trimmedCollectionID, err)
+	}
+	return response.GetChanged(), response.GetOrphan(), nil
+}
+
+func backfillScalarEntries(entries []BackfillScalarEntry) []*lmsemanticsearchv1.BackfillConversationScalarEntry {
+	out := make([]*lmsemanticsearchv1.BackfillConversationScalarEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, &lmsemanticsearchv1.BackfillConversationScalarEntry{
+			ConversationId: entry.ConversationID,
+			WorkspaceRoot:  entry.WorkspaceRoot,
+			Archived:       entry.Archived,
+		})
+	}
+	return out
 }
 
 // DeleteConversation starts an async engine job that removes one conversation.
@@ -616,6 +725,7 @@ func conversationDocuments(docs []SemDoc) []*lmsemanticsearchv1.ConversationDocu
 			TimestampUnix:        doc.TimestampUnix,
 			Text:                 doc.Text,
 			WorkspaceRoot:        doc.WorkspaceRoot,
+			Archived:             doc.Archived,
 		})
 	}
 	return out
