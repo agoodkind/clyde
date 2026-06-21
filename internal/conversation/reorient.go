@@ -94,6 +94,8 @@ type ReorientPage struct {
 	Items               []ReorientItem           `json:"items"`
 	NextCursor          string                   `json:"next_cursor,omitempty"`
 	Remaining           int                      `json:"remaining"`
+	Offset              int                      `json:"offset"`
+	TotalItems          int                      `json:"total_items"`
 	Warnings            []string                 `json:"warnings,omitempty"`
 }
 
@@ -190,18 +192,15 @@ func (idx *Index) Reorient(ctx context.Context, options ReorientOptions) (Reorie
 	return report, nil
 }
 
-// ReorientPageText resolves a reorient report and returns one paged slice of it.
-// asJSON selects the typed ReorientPage JSON document; otherwise it returns the
-// brief-input text surface. nextCursor is empty on the final page, and remaining
-// is the count of undelivered items.
-func (idx *Index) ReorientPageText(ctx context.Context, options ReorientOptions, cursor string, pageBytes int, asJSON bool) (text string, nextCursor string, remaining int, err error) {
+// ReorientPage resolves a reorient report and returns one bounded page.
+func (idx *Index) ReorientPage(ctx context.Context, options ReorientOptions, cursor string, pageBytes int) (ReorientPage, error) {
 	report, err := idx.Reorient(ctx, options)
 	if err != nil {
-		return "", "", 0, err
+		return ReorientPage{}, err
 	}
 	offset, err := unmarshalReorientCursor(cursor)
 	if err != nil {
-		return "", "", 0, err
+		return ReorientPage{}, err
 	}
 	if pageBytes <= 0 {
 		pageBytes = DefaultReorientPageBytes
@@ -210,16 +209,39 @@ func (idx *Index) ReorientPageText(ctx context.Context, options ReorientOptions,
 		offset = len(report.Items)
 	}
 	pageItems, nextOffset := pageReorientItems(report.Items, offset, pageBytes)
-	remaining = len(report.Items) - nextOffset
+	remaining := len(report.Items) - nextOffset
+	nextCursor := ""
 	if nextOffset < len(report.Items) {
 		nextCursor = encodeReorientCursor(nextOffset)
 	}
-	if asJSON {
-		text, err = marshalReorientPageJSON(report, pageItems, nextCursor, remaining)
-		return text, nextCursor, remaining, err
+	return ReorientPage{
+		CurrentConversation: report.CurrentConversation,
+		ParentConversation:  report.ParentConversation,
+		CheckpointNumber:    report.CheckpointNumber,
+		Items:               pageItems,
+		NextCursor:          nextCursor,
+		Remaining:           remaining,
+		Offset:              offset,
+		TotalItems:          len(report.Items),
+		Warnings:            report.Warnings,
+	}, nil
+}
+
+// ReorientPageText resolves a reorient report and returns one paged slice of it.
+// asJSON selects the typed ReorientPage JSON document; otherwise it returns the
+// brief-input text surface. nextCursor is empty on the final page, and remaining
+// is the count of undelivered items.
+func (idx *Index) ReorientPageText(ctx context.Context, options ReorientOptions, cursor string, pageBytes int, asJSON bool) (text string, nextCursor string, remaining int, err error) {
+	page, err := idx.ReorientPage(ctx, options, cursor, pageBytes)
+	if err != nil {
+		return "", "", 0, err
 	}
-	text = renderReorientPageText(pageItems, offset, len(report.Items), remaining, nextCursor)
-	return text, nextCursor, remaining, nil
+	if asJSON {
+		text, err = marshalReorientPageJSON(page)
+		return text, page.NextCursor, page.Remaining, err
+	}
+	text = RenderReorientPageText(page)
+	return text, page.NextCursor, page.Remaining, nil
 }
 
 func (idx *Index) resolveReorientCurrent(ctx context.Context, options ReorientOptions) (Record, error) {
@@ -674,35 +696,28 @@ func unmarshalReorientCursor(cursor string) (int, error) {
 	return decoded.Offset, nil
 }
 
-func renderReorientPageText(pageItems []ReorientItem, offset int, total int, remaining int, nextCursor string) string {
+// RenderReorientPageText formats one typed reorient page as the brief-input
+// text surface shown on the CLI and MCP text responses.
+func RenderReorientPageText(page ReorientPage) string {
 	var builder strings.Builder
-	for _, item := range pageItems {
+	for _, item := range page.Items {
 		fmt.Fprintf(&builder, "## %s\n\n%s\n\n", item.Title, item.Body)
 	}
-	if len(pageItems) == 0 {
-		fmt.Fprintf(&builder, "---\nno items at this cursor; %d of %d delivered\n", min(offset, total), total)
+	if len(page.Items) == 0 {
+		fmt.Fprintf(&builder, "---\nno items at this cursor; %d of %d delivered\n", min(page.Offset, page.TotalItems), page.TotalItems)
 	} else {
-		last := offset + len(pageItems)
-		fmt.Fprintf(&builder, "---\nitems %d-%d of %d; remaining %d\n", offset+1, last, total, remaining)
+		last := page.Offset + len(page.Items)
+		fmt.Fprintf(&builder, "---\nitems %d-%d of %d; remaining %d\n", page.Offset+1, last, page.TotalItems, page.Remaining)
 	}
-	if remaining > 0 {
-		fmt.Fprintf(&builder, "Not finished: call reorient again with cursor=%s. Read every page before reasoning.\n", nextCursor)
+	if page.Remaining > 0 {
+		fmt.Fprintf(&builder, "Not finished: call reorient again with cursor=%s. Read every page before reasoning.\n", page.NextCursor)
 	} else {
 		builder.WriteString("All evidence delivered. You may now write the reorientation brief.\n")
 	}
 	return builder.String()
 }
 
-func marshalReorientPageJSON(report ReorientReport, pageItems []ReorientItem, nextCursor string, remaining int) (string, error) {
-	page := ReorientPage{
-		CurrentConversation: report.CurrentConversation,
-		ParentConversation:  report.ParentConversation,
-		CheckpointNumber:    report.CheckpointNumber,
-		Items:               pageItems,
-		NextCursor:          nextCursor,
-		Remaining:           remaining,
-		Warnings:            report.Warnings,
-	}
+func marshalReorientPageJSON(page ReorientPage) (string, error) {
 	body, err := json.MarshalIndent(page, "", "  ")
 	if err != nil {
 		slog.Warn("conversation.reorient.page_marshal_failed", "concern", "conversation.reorient", "component", "conversation", "err", err)

@@ -269,17 +269,49 @@ message ReorientConversationRequest {
   // page_bytes bounds one page so it renders inline. Zero means the daemon
   // default.
   int64 page_bytes = 7;
-  // json selects the typed page document instead of the brief-input text.
-  bool json = 8;
+}
+
+enum ReorientItemKind {
+  REORIENT_ITEM_KIND_UNSPECIFIED = 0;
+  REORIENT_ITEM_KIND_HEADER = 1;
+  REORIENT_ITEM_KIND_RECOVERED_CONTEXT = 2;
+  REORIENT_ITEM_KIND_TAIL = 3;
+  REORIENT_ITEM_KIND_PARENT_ANCHOR = 4;
+  REORIENT_ITEM_KIND_MEMORY_DOC = 5;
+  REORIENT_ITEM_KIND_SEARCH_HIT = 6;
+}
+
+message ReorientConversationRef {
+  string id = 1;
+  Provider provider = 2;
+  string title = 3;
+  string workspace_root = 4;
+}
+
+message ReorientItem {
+  ReorientItemKind kind = 1;
+  string title = 2;
+  string body = 3;
+  string conversation_id = 4;
+  int64 message_index = 5;
 }
 
 message ReorientConversationResponse {
-  string text = 1;
+  // text keeps the legacy rendered page body for older clients while the typed
+  // fields below roll out. New clients should use the typed fields instead.
+  string text = 1 [deprecated = true];
   // next_cursor continues to the next page. Empty on the final page.
   string next_cursor = 2;
   // remaining is the count of evidence items not yet delivered. Above zero means
   // the caller has not seen all evidence.
   int64 remaining = 3;
+  ReorientConversationRef current_conversation = 10;
+  ReorientConversationRef parent_conversation = 11;
+  int64 checkpoint_number = 12;
+  repeated ReorientItem items = 13;
+  int64 offset = 14;
+  int64 total_items = 15;
+  repeated string warnings = 16;
 }
 
 message ExportTranscriptRequest {

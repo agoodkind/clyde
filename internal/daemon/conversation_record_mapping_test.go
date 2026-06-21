@@ -155,3 +155,60 @@ func TestConversationInfoProtoMappingCarriesStatsAndSegments(t *testing.T) {
 		t.Fatalf("round-trip segments = %#v", roundTrip.Segments)
 	}
 }
+
+func TestReorientPageProtoMappingCarriesPagingAndItems(t *testing.T) {
+	t.Parallel()
+
+	page := conversation.ReorientPage{
+		CurrentConversation: conversation.ReorientConversationRef{
+			ID:            "claude:current",
+			Provider:      "claude",
+			Title:         "Current",
+			WorkspaceRoot: "/repo",
+		},
+		ParentConversation: &conversation.ReorientConversationRef{
+			ID:            "codex:parent",
+			Provider:      "codex",
+			Title:         "Parent",
+			WorkspaceRoot: "/repo",
+		},
+		CheckpointNumber: 2,
+		Items: []conversation.ReorientItem{{
+			Kind:           conversation.ReorientItemKindTail,
+			Title:          "In-flight work since last compaction",
+			Body:           "body",
+			ConversationID: "claude:current",
+			MessageIndex:   14,
+		}},
+		NextCursor: "cursor-2",
+		Remaining:  3,
+		Offset:     1,
+		TotalItems: 5,
+		Warnings:   []string{"warning"},
+	}
+
+	wire := protoReorientPage(page)
+	if wire.GetText() == "" {
+		t.Fatal("legacy text field should stay populated for older clients")
+	}
+	if wire.GetCurrentConversation().GetId() != "claude:current" {
+		t.Fatalf("current id = %q, want claude:current", wire.GetCurrentConversation().GetId())
+	}
+	if wire.GetCurrentConversation().GetProvider() != protoProvider(conversation.ProviderClaude) {
+		t.Fatalf("current provider = %v, want %v", wire.GetCurrentConversation().GetProvider(), protoProvider(conversation.ProviderClaude))
+	}
+	if wire.GetParentConversation().GetId() != "codex:parent" {
+		t.Fatalf("parent id = %q, want codex:parent", wire.GetParentConversation().GetId())
+	}
+	if wire.GetOffset() != 1 || wire.GetTotalItems() != 5 {
+		t.Fatalf("offset or total_items = %d/%d, want 1/5", wire.GetOffset(), wire.GetTotalItems())
+	}
+	if len(wire.GetItems()) != 1 || wire.GetItems()[0].GetKind() != clydev1.ReorientItemKind_REORIENT_ITEM_KIND_TAIL {
+		t.Fatalf("wire items = %#v", wire.GetItems())
+	}
+
+	roundTrip := reorientPageFromProto(wire)
+	if !reflect.DeepEqual(roundTrip, page) {
+		t.Fatalf("round-trip page = %#v, want %#v", roundTrip, page)
+	}
+}
