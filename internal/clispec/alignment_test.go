@@ -205,8 +205,8 @@ func TestRenderCobraGroupsConversationOps(t *testing.T) {
 		gotChildren = append(gotChildren, child.Name())
 	}
 	sort.Strings(gotChildren)
-	if strings.Join(gotChildren, ",") != "fingerprint,reload,status" {
-		t.Fatalf("daemon children: got %v, want [fingerprint reload status]", gotChildren)
+	if strings.Join(gotChildren, ",") != "deploy,fingerprint,reload,status" {
+		t.Fatalf("daemon children: got %v, want [deploy fingerprint reload status]", gotChildren)
 	}
 }
 

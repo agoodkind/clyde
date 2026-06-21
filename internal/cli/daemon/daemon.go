@@ -20,10 +20,8 @@ import (
 const ReloadCommandTimeout = 75 * time.Second
 
 var (
-	runCommand         = daemonsvc.RunCommand
-	runWorker          = daemonsvc.Run
-	builtFingerprint   = daemonsvc.CompiledSupervisorFingerprint
-	runningFingerprint = daemonsvc.RunningSupervisorFingerprint
+	runCommand = daemonsvc.RunCommand
+	runWorker  = daemonsvc.Run
 )
 
 // NewCmd is part of Clyde's typed adapter surface.
@@ -40,7 +38,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 	}
 	cmd.AddCommand(newRunCmd(f))
 	cmd.AddCommand(newWorkerCmd(f))
-	cmd.AddCommand(newDeployCmd(f))
 	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
 	return cmd
 }

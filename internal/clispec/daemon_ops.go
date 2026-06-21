@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	daemoncmd "goodkind.io/clyde/internal/cli/daemon"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
+	"goodkind.io/clyde/internal/deploy"
 )
 
 type daemonStatusInput struct {
@@ -81,6 +83,18 @@ type daemonReloadOutput struct {
 }
 
 func (daemonReloadOutput) isClispecStructuredPayload() {}
+
+type daemonDeployInput struct {
+	ReloadOnly bool
+}
+
+func (daemonDeployInput) isClispecInput() {}
+
+type daemonDeployPayload struct {
+	ReloadOnly bool
+}
+
+func (daemonDeployPayload) isClispecPrepared() {}
 
 var daemonGroup = &Group{
 	Use:     "daemon",
@@ -230,5 +244,44 @@ func daemonReloadOp() Operation[daemonReloadInput, daemonReloadPayload] {
 				Text: fmt.Sprintf("daemon binary %s: active_surfaces=%d new_pid=%d\n", status, resp.GetActiveSurfaces(), resp.GetNewPid()),
 			}, nil
 		},
+	}
+}
+
+func daemonDeployOp() Operation[daemonDeployInput, daemonDeployPayload] {
+	return Operation[daemonDeployInput, daemonDeployPayload]{
+		Name:       Name{Canonical: "daemon_deploy", CLIOverride: "deploy"},
+		Group:      daemonGroup,
+		Surfaces:   SurfaceSet{CLI: true, MCP: false},
+		outputKind: 0,
+		Short:      "Install or refresh the daemon service and reload it safely",
+		Long:       "Deploy ensures the daemon service config matches the current binary, installs or refreshes it when needed, and otherwise performs the supervisor-aware reload or restart decision.",
+		Examples:   []string{"clyde daemon deploy"},
+		Args:       nil,
+		Params: []Param[daemonDeployInput]{
+			BoolParam("reload_only", "Refuse service config changes and only perform the runtime reload-or-restart decision.", false,
+				func(in *daemonDeployInput, v bool) { in.ReloadOnly = v }),
+		},
+		New:            func() daemonDeployInput { return daemonDeployInput{ReloadOnly: false} },
+		Children:       nil,
+		MCPTaskSupport: "",
+		MCPTaskRun:     nil,
+		mcpTaskResult:  nil,
+		Prepare:        func(in daemonDeployInput) (daemonDeployPayload, error) { return daemonDeployPayload(in), nil },
+		Run: func(ctx context.Context, p daemonDeployPayload, _ Surface, sink ResultSink) error {
+			outputSink, ok := sink.(*CLISink)
+			if !ok {
+				return fmt.Errorf("daemon deploy: cli sink required")
+			}
+			fingerprints := deploy.Fingerprints{
+				Compiled: daemonsvc.CompiledSupervisorFingerprint,
+				Running:  daemonsvc.RunningSupervisorFingerprint,
+			}
+			if err := deploy.RunFromEnv(ctx, os.LookupEnv, p.ReloadOnly, outputSink.out, outputSink.out, fingerprints); err != nil {
+				slog.WarnContext(ctx, "cli.daemon.deploy.failed", "concern", "cli.daemon", "component", "clispec", "err", err)
+				return fmt.Errorf("daemon deploy: %w", err)
+			}
+			return nil
+		},
+		runResult: nil,
 	}
 }
