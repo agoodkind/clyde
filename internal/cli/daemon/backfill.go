@@ -78,16 +78,49 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 	return nil
 }
 
-// buildBackfillEntries projects every conversation record into the enrichment
-// entry the engine needs: its id, workspace root, and archived status.
+// buildBackfillEntries projects each conversation into the enrichment entry the
+// engine needs: its id, workspace root, and archived status. Multiple artifacts
+// can share one derived conversation id (the same session recorded under two
+// project dirs), producing several records with conflicting workspace roots. The
+// engine keys enrichment by conversation id and lets the last entry win, so
+// emitting every record could overwrite a real workspace with an empty one.
+// buildBackfillEntries coalesces to one entry per id, preferring a record with a
+// non-empty workspace root and then the most recently updated one, and emits the
+// entries in first-seen order so the result is deterministic. See CLYDE-538.
 func buildBackfillEntries(records []conversation.Record) []semsearch.BackfillScalarEntry {
-	entries := make([]semsearch.BackfillScalarEntry, 0, len(records))
+	best := make(map[string]conversation.Record, len(records))
 	for _, record := range records {
+		if existing, seen := best[record.ID]; seen && !preferBackfillRecord(record, existing) {
+			continue
+		}
+		best[record.ID] = record
+	}
+	entries := make([]semsearch.BackfillScalarEntry, 0, len(best))
+	emitted := make(map[string]struct{}, len(best))
+	for _, record := range records {
+		if _, done := emitted[record.ID]; done {
+			continue
+		}
+		emitted[record.ID] = struct{}{}
+		chosen := best[record.ID]
 		entries = append(entries, semsearch.BackfillScalarEntry{
-			ConversationID: record.ID,
-			WorkspaceRoot:  record.WorkspaceRoot,
-			Archived:       record.Archived,
+			ConversationID: chosen.ID,
+			WorkspaceRoot:  chosen.WorkspaceRoot,
+			Archived:       chosen.Archived,
 		})
 	}
 	return entries
+}
+
+// preferBackfillRecord reports whether candidate is a better backfill enrichment
+// source than current for the same conversation id. A record with a non-empty
+// workspace root beats one without; among records equal on that, the more
+// recently updated one wins. A tie keeps current, so selection is stable.
+func preferBackfillRecord(candidate, current conversation.Record) bool {
+	candidateHasWorkspace := candidate.WorkspaceRoot != ""
+	currentHasWorkspace := current.WorkspaceRoot != ""
+	if candidateHasWorkspace != currentHasWorkspace {
+		return candidateHasWorkspace
+	}
+	return candidate.UpdatedAt.After(current.UpdatedAt)
 }
