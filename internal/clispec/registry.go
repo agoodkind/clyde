@@ -13,5 +13,7 @@ func NewConversationRegistry() *Registry {
 	Register(reg, reorientOp())
 	Register(reg, logsInventoryOp())
 	Register(reg, mitmShowOp())
+	Register(reg, daemonStatusOp())
+	Register(reg, daemonFingerprintOp())
 	return reg
 }

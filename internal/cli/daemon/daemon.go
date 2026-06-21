@@ -20,12 +20,11 @@ import (
 const reloadCommandTimeout = 75 * time.Second
 
 var (
-	runCommand          = daemonsvc.RunCommand
-	runWorker           = daemonsvc.Run
-	reloadDaemon        = daemonsvc.ReloadDaemon
-	inspectDaemonStatus = daemonsvc.InspectStatus
-	builtFingerprint    = daemonsvc.CompiledSupervisorFingerprint
-	runningFingerprint  = daemonsvc.RunningSupervisorFingerprint
+	runCommand         = daemonsvc.RunCommand
+	runWorker          = daemonsvc.Run
+	reloadDaemon       = daemonsvc.ReloadDaemon
+	builtFingerprint   = daemonsvc.CompiledSupervisorFingerprint
+	runningFingerprint = daemonsvc.RunningSupervisorFingerprint
 )
 
 // NewCmd is part of Clyde's typed adapter surface.
@@ -44,8 +43,6 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 	cmd.AddCommand(newWorkerCmd(f))
 	cmd.AddCommand(newDeployCmd(f))
 	cmd.AddCommand(newReloadCmd(f))
-	cmd.AddCommand(newStatusCmd(f))
-	cmd.AddCommand(newFingerprintCmd(f))
 	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
 	return cmd
 }
@@ -113,50 +110,8 @@ func reloadCommandError(err error) error {
 	return err
 }
 
-func newStatusCmd(f *cli.Factory) *cobra.Command {
-	return &cobra.Command{
-		Use:     "status",
-		Short:   "Report daemon supervisor and worker status",
-		Long:    "Report whether the launch agent, the supervisor, and the worker are reachable, including the control socket paths the CLI uses to reach them.",
-		Example: "clyde daemon status",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
-			defer cancel()
-			report := inspectDaemonStatus(ctx)
-			var body strings.Builder
-			writeStatusReport(&body, report)
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, body.String())
-		},
-	}
-}
-
-func newFingerprintCmd(f *cli.Factory) *cobra.Command {
-	var built bool
-	cmd := &cobra.Command{
-		Use:     "fingerprint",
-		Short:   "Print the supervisor fingerprint",
-		Long:    "Print the supervisor fingerprint, the build identity the supervisor compares across a reload to decide whether the daemon binary changed.",
-		Example: "clyde daemon fingerprint",
-		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if built {
-				return response.WriteText(cmd.Context(), f.IOStreams.Out, builtFingerprint()+"\n")
-			}
-			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
-			defer cancel()
-			fingerprint, err := runningFingerprint(ctx)
-			if err != nil {
-				return err
-			}
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, fingerprint+"\n")
-		},
-	}
-	cmd.Flags().BoolVar(&built, "built", false, "print the compiled supervisor fingerprint")
-	return cmd
-}
-
-func writeStatusReport(out io.Writer, report daemonsvc.StatusReport) {
+// WriteStatusReport writes the human-readable daemon status report.
+func WriteStatusReport(out io.Writer, report daemonsvc.StatusReport) {
 	_, _ = fmt.Fprintln(out, "daemon status")
 	switch {
 	case report.LaunchdTarget == "":
