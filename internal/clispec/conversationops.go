@@ -148,7 +148,7 @@ func searchParams() []Param[searchInput] {
 			func(in *searchInput, v string) { in.Roles = v }),
 		StringParam("after", "Keep messages at or after this time (RFC3339 or YYYY-MM-DD).", "", false,
 			func(in *searchInput, v string) { in.After = v }),
-		StringParam("until", "Keep messages before this time (RFC3339 or YYYY-MM-DD).", "", false,
+		StringParam("before", "Keep messages before this time (RFC3339 or YYYY-MM-DD).", "", false,
 			func(in *searchInput, v string) { in.Until = v }),
 		IntParam("limit", "Maximum matches or conversations to return.", conv.DefaultSearchLimit,
 			func(in *searchInput, v int) { in.Limit = v }),
@@ -187,9 +187,10 @@ func searchOp() Operation[searchInput, searchPayload] {
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindValue,
 		Short:      "Search, read, or browse Claude and Codex conversations.",
-		Long:       "One operation over indexed Claude and Codex conversations. Set query to search the corpus, or query and conversation to search within one conversation; both print ranked matches with inline context, source, freshness, a filter funnel, and facets. Set conversation alone to read it: with around, a context window centered on that message index; otherwise the whole transcript. Set neither to browse conversation metadata.",
+		Long:       "One operation over indexed Claude and Codex conversations. Set query to search the corpus, or query and conversation to search within one conversation; both print a ranked numbered list of matching conversations, each leading with its [workspace] tag. Narrow by date with --after and --before, which filter natively before ranking. Pass --output-format json for the full structured result with source, freshness, facets, and the filter funnel. Set conversation alone to read it: with around, a context window centered on that message index; otherwise the whole transcript. Set neither to browse conversation metadata.",
 		Examples: []string{
 			"clyde conversation search --query \"auth timeout\" --limit 10",
+			"clyde conversation search --query \"auth timeout\" --after 2026-05-01 --before 2026-05-21",
 			"clyde conversation search --query \"auth timeout\" --conversation claude:1a2b3c",
 			"clyde conversation search --conversation claude:1a2b3c --around 42 --window 5",
 			"clyde conversation search --provider claude --limit 20",
@@ -271,7 +272,7 @@ func runSearchResult(ctx context.Context, p searchPayload) (Result, error) {
 		}
 		return valueResult{
 			Payload: searchConversationsOutputFromDomain(result),
-			Text:    formatSearchConversationsResult(result),
+			Text:    formatSearchConversationsResult(result, p.SearchOpts.Query),
 		}, nil
 	case searchModeReadWindow:
 		text, err := daemon.GetConversationContext(ctx, p.Conversation, "", p.Around, p.Window, p.Window)
@@ -341,7 +342,7 @@ func searchConversationsOptionsFromInput(in searchInput) (conv.SearchConversatio
 	if err != nil {
 		return conv.SearchConversationsOptions{}, err
 	}
-	untilUnix, err := timeBoundUnix(in.Until, "until")
+	untilUnix, err := timeBoundUnix(in.Until, "before")
 	if err != nil {
 		return conv.SearchConversationsOptions{}, err
 	}
@@ -442,51 +443,52 @@ func formatListResult(result conv.ListResult) string {
 	return out.String()
 }
 
-// formatSearchConversationsResult renders the fat search result as scannable
-// text: the source, the counters, a compact freshness line, the filter funnel,
-// the facet block, then each match's TSV row with its inline context window
-// indented underneath.
-func formatSearchConversationsResult(result conv.SearchConversationsResult) string {
+// formatSearchConversationsResult renders the search result as a scannable
+// numbered list in the lm-semantic-search style: a Found header, then one entry
+// per match leading with its [workspace] tag, title, and provider, a compact
+// date/position/rank line, and the matching snippet. The full structured data
+// (source, freshness, facets, filter funnel, and the per-record fields) stays
+// available through --output-format json.
+func formatSearchConversationsResult(result conv.SearchConversationsResult, query string) string {
 	var out strings.Builder
-	fmt.Fprintf(&out, "source: %s\n", result.Source.String())
-	fmt.Fprintf(&out, "returned_count: %d\n", result.ReturnedCount)
-	fmt.Fprintf(&out, "limit: %d\n", result.Limit)
-	fmt.Fprintf(&out, "conversations_scanned: %d\n", result.ConversationsScanned)
-	fmt.Fprintf(&out, "has_more: %t\n", result.HasMore)
-	writeFreshnessLine(&out, result.Freshness)
-	writeFilterFunnelLine(&out, result.FilterAccounting)
-	writeFacetsBlock(&out, result.Facets)
 	if len(result.Matches) == 0 {
-		out.WriteString("\nNo matching conversations found.\n")
+		fmt.Fprintf(&out, "No conversations found for %q.\n", query)
 		return out.String()
 	}
-	out.WriteString("\n")
-	out.WriteString("conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\tartifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\tmessage_index\trole\ttimestamp\tsnippet\n")
-	for _, match := range result.Matches {
+	fmt.Fprintf(&out, "Found %d conversations for %q\n\n", len(result.Matches), query)
+	for index, match := range result.Matches {
 		record := match.Record
-		fmt.Fprintf(
-			&out,
-			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\t%d\t%s\t%s\t%s\n",
-			tsvField(record.ID),
-			tsvField(record.Provider.String()),
-			tsvField(record.NativeID),
-			tsvField(record.Title),
-			tsvField(shortPath(record.WorkspaceRoot)),
-			tsvField(record.ArtifactPath),
-			tsvField(record.ArtifactKind),
-			tsvField(record.Model),
-			formatTime(record.CreatedAt),
-			formatTime(record.UpdatedAt),
-			record.SizeBytes,
-			record.Archived,
-			match.MessageIndex,
-			tsvField(match.Role),
-			formatTime(match.Timestamp),
-			tsvField(match.Snippet),
-		)
-		writeMatchContextWindow(&out, match.ContextWindow)
+		workspace := shortPath(record.WorkspaceRoot)
+		if workspace == "" {
+			workspace = "no workspace"
+		}
+		title := record.Title
+		if title == "" {
+			title = record.ID
+		}
+		role := match.Role
+		if role == "" {
+			role = "unknown"
+		}
+		fmt.Fprintf(&out, "%d. [%s]  %s (%s)\n", index+1, workspace, title, record.Provider.String())
+		fmt.Fprintf(&out, "   %s · message %d · %s · Rank %d\n", match.Timestamp.Format("2006-01-02"), match.MessageIndex, role, index+1)
+		if snippet := collapseWhitespace(match.Snippet); snippet != "" {
+			fmt.Fprintf(&out, "   %s\n", snippet)
+		}
+		out.WriteString("\n")
 	}
+	fmt.Fprintf(&out, "%d results.", len(result.Matches))
+	if result.HasMore {
+		out.WriteString("  More available: narrow with --before / --after or a tighter query.")
+	}
+	out.WriteString("\n")
 	return out.String()
+}
+
+// collapseWhitespace folds every run of whitespace, including newlines, into a
+// single space so a snippet renders on one line.
+func collapseWhitespace(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func formatConversationInfo(info conv.Info) string {
@@ -543,67 +545,6 @@ func formatConversationInfo(info conv.Info) string {
 	return out.String()
 }
 
-// writeFreshnessLine prints the conversation-index sync state as one compact
-// line.
-func writeFreshnessLine(out *strings.Builder, freshness conv.SearchFreshness) {
-	fmt.Fprintf(
-		out,
-		"freshness: manifest=%d needed=%d embedded=%d pending=%d last_sync=%s\n",
-		freshness.Manifest,
-		freshness.Needed,
-		freshness.Embedded,
-		freshness.Pending,
-		formatUnix(freshness.LastSyncUnix),
-	)
-}
-
-// writeFilterFunnelLine prints the candidate-count funnel as one line of
-// name=count stages.
-func writeFilterFunnelLine(out *strings.Builder, stages []conv.FilterStage) {
-	if len(stages) == 0 {
-		out.WriteString("filters: (none)\n")
-		return
-	}
-	parts := make([]string, 0, len(stages))
-	for _, stage := range stages {
-		parts = append(parts, fmt.Sprintf("%s=%d", stage.Name, stage.Remaining))
-	}
-	fmt.Fprintf(out, "filters: %s\n", strings.Join(parts, " -> "))
-}
-
-// writeFacetsBlock prints the workspace, provider, and model facet tallies.
-func writeFacetsBlock(out *strings.Builder, facets conv.SearchFacets) {
-	out.WriteString("facets:\n")
-	writeFacetDimension(out, "workspaces", facets.Workspaces)
-	writeFacetDimension(out, "providers", facets.Providers)
-	writeFacetDimension(out, "models", facets.Models)
-}
-
-// writeFacetDimension prints one facet dimension's counts, or a none marker
-// when it is empty.
-func writeFacetDimension(out *strings.Builder, name string, counts []conv.SearchFacetCount) {
-	if len(counts) == 0 {
-		fmt.Fprintf(out, "  %s: (none)\n", name)
-		return
-	}
-	parts := make([]string, 0, len(counts))
-	for _, count := range counts {
-		parts = append(parts, fmt.Sprintf("%s(%d)", count.Value, count.Count))
-	}
-	fmt.Fprintf(out, "  %s: %s\n", name, strings.Join(parts, ", "))
-}
-
-// writeMatchContextWindow prints the rendered inline window for one match,
-// indented under its row, when the window is non-empty.
-func writeMatchContextWindow(out *strings.Builder, window string) {
-	if strings.TrimSpace(window) == "" {
-		return
-	}
-	for line := range strings.SplitSeq(strings.TrimRight(window, "\n"), "\n") {
-		fmt.Fprintf(out, "    %s\n", line)
-	}
-}
-
 func writeConversationRecordHeader(out *strings.Builder) {
 	out.WriteString("conversation_id\tprovider\tnative_id\ttitle\tworkspace_root\tartifact_path\tartifact_kind\tmodel\tcreated_at\tupdated_at\tsize_bytes\tarchived\n")
 }
@@ -636,14 +577,6 @@ func formatTime(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339)
-}
-
-// formatUnix renders a unix timestamp as RFC3339, or a dash sentinel when zero.
-func formatUnix(unix int64) string {
-	if unix <= 0 {
-		return "never"
-	}
-	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
 }
 
 func logOperationError(ctx context.Context, operation string, err error) error {
