@@ -22,6 +22,10 @@ const (
 	KindEnum
 	// KindFloat is a decimal number.
 	KindFloat
+	// KindStringList is a list of free-text strings. The terminal renders a
+	// repeatable, comma-aware string-slice flag; the MCP tool renders a string
+	// array property.
+	KindStringList
 	// KindEnumList is a list of strings each constrained to Values. The terminal
 	// rejects an element outside Values; the MCP tool renders an array-of-enum
 	// property and drops unrecognized elements.
@@ -171,6 +175,30 @@ func EnumParam[I Input](canonical, description, def string, values []string, set
 		bindBool:        nil,
 		bindFloat:       nil,
 		bindStrSlice:    nil,
+	}
+}
+
+// StringSliceParam declares a repeatable, comma-aware list of free-text
+// strings. The terminal accepts repeated flags and comma-separated values; the
+// MCP tool renders an optional array-of-string property.
+func StringSliceParam[I Input](canonical, description string, def []string, set func(*I, []string)) Param[I] {
+	return Param[I]{
+		Canonical:       canonical,
+		Kind:            KindStringList,
+		Required:        false,
+		Description:     description,
+		CLIOnly:         false,
+		Values:          nil,
+		DefaultStr:      "",
+		DefaultInt:      0,
+		DefaultBool:     false,
+		DefaultFloat:    0,
+		DefaultStrSlice: def,
+		bindString:      nil,
+		bindInt:         nil,
+		bindBool:        nil,
+		bindFloat:       nil,
+		bindStrSlice:    set,
 	}
 }
 

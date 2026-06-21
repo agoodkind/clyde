@@ -157,6 +157,11 @@ func registerFlag[I Input](cmd *cobra.Command, param Param[I]) func(in *I) {
 		cmd.Flags().Float64Var(holder, param.flagName(), param.DefaultFloat, param.Description)
 		bind := param.bindFloat
 		return func(in *I) { bind(in, *holder) }
+	case KindStringList:
+		holder := new([]string)
+		cmd.Flags().StringSliceVar(holder, param.flagName(), param.DefaultStrSlice, param.Description)
+		bind := param.bindStrSlice
+		return func(in *I) { bind(in, *holder) }
 	case KindEnumList:
 		holder := new([]string)
 		shim := &sliceEnumValue{allowed: param.Values, values: holder}
