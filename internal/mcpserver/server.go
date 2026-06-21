@@ -329,7 +329,7 @@ func toolCallMiddleware(reg *livetrack.Registry[MCPMeta], serverName string) ser
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		return func(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 			requestID := strings.TrimSpace(req.Header.Get(mcpRequestIDHeader))
-			handlerCtx, corr := correlation.Ensure(ctx, requestID)
+			handlerCtx, corr := newToolCallContext(ctx, requestID)
 			defer trace.Op(handlerCtx, "mcp.tool_call."+req.Params.Name)(&err)
 			handlerCtx, handlerCancel := context.WithCancel(handlerCtx)
 			closer := &contextCancelCloser{cancel: handlerCancel}
@@ -351,6 +351,17 @@ func toolCallMiddleware(reg *livetrack.Registry[MCPMeta], serverName string) ser
 			return result, err
 		}
 	}
+}
+
+// newToolCallContext starts a fresh correlation for one MCP tool call. MCP stdio
+// carries no inbound trace, and the serve process seeds one shared correlation
+// on the base context that mcp-go derives every handler context from, so using
+// correlation.Ensure here would reuse that one trace and span across every call.
+// Minting a fresh correlation per call gives each tool call its own trace and
+// span while keeping the per-call request id.
+func newToolCallContext(ctx context.Context, requestID string) (context.Context, correlation.Context) {
+	corr := correlation.New(requestID)
+	return correlation.WithContext(ctx, corr), corr
 }
 
 type contextCancelCloser struct {
