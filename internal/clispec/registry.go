@@ -12,5 +12,6 @@ func NewConversationRegistry() *Registry {
 	Register(reg, exportTranscriptOp())
 	Register(reg, reorientOp())
 	Register(reg, logsInventoryOp())
+	Register(reg, mitmShowOp())
 	return reg
 }
