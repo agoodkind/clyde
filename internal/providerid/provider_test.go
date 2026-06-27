@@ -35,3 +35,23 @@ func TestProviderParseAndStringIncludeConductor(t *testing.T) {
 		t.Fatal("ProviderConductor.Valid() = false, want true")
 	}
 }
+
+func TestProviderParseAndStringIncludeZedAliases(t *testing.T) {
+	t.Parallel()
+
+	for _, label := range []string{"zed", "zed-agent", "zed_agent"} {
+		provider, ok := Parse(label)
+		if !ok {
+			t.Fatalf("Parse(%q) ok = false, want true", label)
+		}
+		if provider != ProviderZed {
+			t.Fatalf("Parse(%q) = %v, want %v", label, provider, ProviderZed)
+		}
+		if provider.String() != "zed" {
+			t.Fatalf("ProviderZed.String() = %q, want zed", provider.String())
+		}
+		if !provider.Valid() {
+			t.Fatalf("ProviderZed.Valid() = false for label %q, want true", label)
+		}
+	}
+}

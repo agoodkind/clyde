@@ -1,4 +1,5 @@
-// Package conversation indexes raw Claude and Codex transcript artifacts.
+// Package conversation defines the generic model Clyde uses for provider-owned
+// conversation artifacts.
 package conversation
 
 import (
@@ -19,6 +20,8 @@ const (
 	ProviderCodex Provider = providerid.ProviderCodex
 	// ProviderArtifact identifies an artifact whose native id was missing.
 	ProviderArtifact Provider = providerid.ProviderArtifact
+	// ProviderZed identifies Zed thread artifacts.
+	ProviderZed Provider = providerid.ProviderZed
 )
 
 // Record is a derived index row for one raw provider conversation.
