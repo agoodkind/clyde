@@ -6,32 +6,46 @@ import (
 	adapteropenai "goodkind.io/clyde/internal/adapter/openai"
 )
 
-// renderReasoning intentionally writes reasoning to two stream surfaces:
+// renderReasoning intentionally writes reasoning to one or two stream
+// surfaces depending on the configured render mode:
 //
-//   - delta.content gets a marker-wrapped synthetic block from the shared
-//     [FormatSyntheticContentDeltaWithRef] fabric because Cursor's custom OpenAI/BYOK
-//     ingress does not currently honor reasoning_content the way Cursor honors
-//     it for first-party reasoning models. Putting the thinking block in
-//     content gives BYOK users the same visible inline-thinking effect.
-//   - delta.reasoning_content gets the same reasoning as plain text in case
-//     Cursor starts honoring that field again for custom OpenAI/BYOK streams.
+//   - [ReasoningRenderModeDualSurface] writes marker-wrapped synthetic
+//     reasoning to delta.content and also mirrors it in
+//     delta.reasoning_content for Cursor BYOK.
+//   - [ReasoningRenderModeReasoningContentOnly] writes the reasoning text
+//     only to delta.reasoning_content for generic OpenAI-compatible clients.
 //
-// Do not remove the delta.content emission just because reasoning_content
-// exists. Without the marker-wrapped content path, Cursor BYOK users may see
-// no thinking at all. Before the next upstream request, the per-backend
-// mapper calls [ExtractSyntheticParts] and materializes each kind per its
-// upstream contract (Anthropic emits a native thinking block; Codex drops).
+// Before the next upstream request, the per-backend mapper calls
+// [ExtractSyntheticParts] and materializes each kind per its upstream
+// contract (Anthropic emits a native thinking block; Codex drops).
 func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropenai.StreamChunk {
 	r.captureReasoningItemIDFromString(ev.ItemID)
 	text := strings.TrimSpace(ev.Text)
 	if text == "" && ev.Text == "" {
 		return nil
 	}
+	decorated := r.decorateReasoningFromDelta(ev)
 	if isThinkingPlaceholder(text) && !r.reasoningBodyEmitted {
+		if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
+			return nil
+		}
 		if !r.reasoningOpen {
 			return r.renderReasoningOpen()
 		}
 		return nil
+	}
+	if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
+		r.reasoningBodyEmitted = true
+		delta := adapteropenai.StreamDelta{
+			Content:          "",
+			ReasoningContent: decorated, Role: "", Reasoning: "", ToolCalls: nil, Refusal: "",
+		}
+		if !r.seenRole {
+			delta.Role = "assistant"
+			r.seenRole = true
+		}
+		ch := r.baseChunk(delta)
+		return &ch
 	}
 	open := !r.reasoningOpen
 	// leadingQuote covers two cases the split-chunk path needs: the
@@ -40,7 +54,6 @@ func (r *EventRenderer) renderReasoningFromDelta(ev ReasoningDelta) *adapteropen
 	// but reasoningBodyEmitted=false). Without this, the body's first
 	// line lands at column 0 and terminates the markdown blockquote.
 	leadingQuote := open || !r.reasoningBodyEmitted
-	decorated := r.decorateReasoningFromDelta(ev)
 	kind := r.activeSyntheticReasoningKind()
 	contentOut := FormatSyntheticContentDeltaWithRef(kind, open, leadingQuote, r.lastReasoningItemID, r.backendOrigin(), decorated)
 	r.reasoningOpen = true

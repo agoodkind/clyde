@@ -22,8 +22,8 @@ const (
 	// EventReasoningSignaled means the upstream response reported reasoning even
 	// if it did not stream a reasoning body.
 	EventReasoningSignaled EventKind = "reasoning_signaled"
-	// EventReasoningDelta is reasoning text that must be rendered through the
-	// synthetic Cursor-visible path and the reasoning_content field.
+	// EventReasoningDelta is reasoning text that the renderer emits
+	// according to the configured reasoning render mode.
 	EventReasoningDelta EventKind = "reasoning_delta"
 	// EventReasoningFinished closes any synthetic Cursor-visible reasoning block.
 	EventReasoningFinished EventKind = "reasoning_finished"
@@ -79,8 +79,8 @@ type ReasoningSignaled struct {
 func (ReasoningSignaled) isEvent()             {}
 func (ReasoningSignaled) eventKind() EventKind { return EventReasoningSignaled }
 
-// ReasoningDelta is reasoning text that must be rendered through the synthetic
-// Cursor-visible path and the reasoning_content field.
+// ReasoningDelta is reasoning text rendered according to the configured
+// reasoning render mode.
 //
 // ReasoningKind qualifies the delta kind. "text" for native thinking text.
 // "summary" for Codex summary deltas. "redacted" for Anthropic redacted blocks.
@@ -153,12 +153,13 @@ type RendererState struct {
 }
 
 // EventRenderer converts normalized adapter events into OpenAI-compatible stream
-// chunks while preserving Cursor-specific synthetic reasoning state.
+// chunks while preserving synthetic reasoning state when enabled.
 type EventRenderer struct {
 	createdUnix           int64
 	modelAlias            string
 	reqID                 string
 	backend               string
+	reasoningRenderMode   ReasoningRenderMode
 	contextFunc           func() context.Context
 	log                   *slog.Logger
 	suppressed            map[EventKind]*deltaSummary
@@ -213,12 +214,38 @@ type EventRenderer struct {
 
 // NewEventRenderer constructs a renderer with a detached diagnostic context.
 func NewEventRenderer(reqID, modelAlias, backend string, log *slog.Logger) *EventRenderer {
-	return NewEventRendererWithContext(context.Background(), reqID, modelAlias, backend, log)
+	return NewEventRendererWithOptions(
+		reqID,
+		modelAlias,
+		backend,
+		log,
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface},
+	)
+}
+
+// NewEventRendererWithOptions constructs a renderer with a detached
+// diagnostic context and explicit render options.
+func NewEventRendererWithOptions(reqID, modelAlias, backend string, log *slog.Logger, options EventRendererOptions) *EventRenderer {
+	return NewEventRendererWithContextAndOptions(context.Background(), reqID, modelAlias, backend, log, options)
 }
 
 // NewEventRendererWithContext constructs a renderer with correlation-aware
 // logging context attached to each diagnostic log event.
 func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend string, log *slog.Logger) *EventRenderer {
+	return NewEventRendererWithContextAndOptions(
+		ctx,
+		reqID,
+		modelAlias,
+		backend,
+		log,
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface},
+	)
+}
+
+// NewEventRendererWithContextAndOptions constructs a renderer with
+// correlation-aware logging context attached to each diagnostic log event
+// and explicit render options.
+func NewEventRendererWithContextAndOptions(ctx context.Context, reqID, modelAlias, backend string, log *slog.Logger, options EventRendererOptions) *EventRenderer {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -228,6 +255,7 @@ func NewEventRendererWithContext(ctx context.Context, reqID, modelAlias, backend
 		modelAlias:                modelAlias,
 		reqID:                     reqID,
 		backend:                   backend,
+		reasoningRenderMode:       normalizeReasoningRenderMode(options.ReasoningRenderMode),
 		contextFunc:               func() context.Context { return ctx },
 		log:                       log,
 		suppressed:                nil,
@@ -346,6 +374,9 @@ func (r *EventRenderer) handleReasoningSignaled(ev ReasoningSignaled) []adaptero
 	if kind := strings.TrimSpace(ev.ReasoningKind); kind != "" {
 		r.lastReasoningKind = kind
 	}
+	if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
+		return nil
+	}
 	// Open the synthetic content block that makes reasoning visible in Cursor BYOK.
 	// Later reasoning deltas fill it; otherwise finish closes an empty block.
 	if r.reasoningVisible || r.reasoningOpen {
@@ -393,6 +424,15 @@ func (r *EventRenderer) handleReasoningFinished(ev ReasoningFinished) []adaptero
 	}
 	if sig := strings.TrimSpace(ev.Signature); sig != "" {
 		r.lastReasoningSignature = sig
+	}
+	if r.reasoningRenderMode == ReasoningRenderModeReasoningContentOnly {
+		r.lastReasoningEncrypted = ""
+		r.lastReasoningSignature = ""
+		r.lastReasoningRedactedData = ""
+		r.lastReasoningKind = ""
+		r.reasoningBodyEmitted = false
+		r.reasoningOpen = false
+		return nil
 	}
 	chunk := r.renderReasoningClose()
 	if chunk == nil {

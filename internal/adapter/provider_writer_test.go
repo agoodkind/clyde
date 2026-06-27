@@ -171,6 +171,73 @@ func TestProviderStreamWriterWritesMappedErrorEnvelope(t *testing.T) {
 	}
 }
 
+func TestProviderStreamWriterOpenAIIngressStreamsReasoningContentOnly(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+	rec := httptest.NewRecorder()
+	ctx := context.WithValue(context.Background(), ingressLabelKey{}, "openai")
+	writer, err := newProviderStreamWriter(ctx, srv, rec, "req-openai-thinking", "alias-openai", "codex")
+	if err != nil {
+		t.Fatalf("newProviderStreamWriter: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""}); err != nil {
+		t.Fatalf("WriteEvent signaled: %v", err)
+	}
+	if rec.Body.String() != "" {
+		t.Fatalf("signaled should not emit generic ingress output: %q", rec.Body.String())
+	}
+	if err := writer.WriteEvent(adapterrender.ReasoningDelta{Text: "checking constraints", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""}); err != nil {
+		t.Fatalf("WriteEvent reasoning: %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"reasoning_content":"checking constraints"`) {
+		t.Fatalf("body missing reasoning_content: %s", body)
+	}
+	if strings.Contains(body, "clyde-thinking") {
+		t.Fatalf("body unexpectedly contains synthetic thinking markers: %s", body)
+	}
+}
+
+func TestProviderStreamWriterCursorIngressPreservesDualSurfaceReasoning(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newLoggingServer(t, config.LoggingConfig{})
+	rec := httptest.NewRecorder()
+	ctx := context.WithValue(context.Background(), ingressLabelKey{}, "cursor")
+	writer, err := newProviderStreamWriter(ctx, srv, rec, "req-cursor-thinking", "alias-cursor", "codex")
+	if err != nil {
+		t.Fatalf("newProviderStreamWriter: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""}); err != nil {
+		t.Fatalf("WriteEvent signaled: %v", err)
+	}
+	if err := writer.WriteEvent(adapterrender.ReasoningDelta{Text: "checking constraints", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""}); err != nil {
+		t.Fatalf("WriteEvent reasoning: %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"reasoning_content":"checking constraints"`) {
+		t.Fatalf("body missing reasoning_content: %s", body)
+	}
+	if !strings.Contains(body, "clyde-thinking") {
+		t.Fatalf("body missing synthetic thinking markers: %s", body)
+	}
+}
+
+func TestStreamReasoningRenderModeUsesIngressLabel(t *testing.T) {
+	t.Parallel()
+
+	if got := streamReasoningRenderMode(context.WithValue(context.Background(), ingressLabelKey{}, "cursor")); got != adapterrender.ReasoningRenderModeDualSurface {
+		t.Fatalf("cursor mode=%q want %q", got, adapterrender.ReasoningRenderModeDualSurface)
+	}
+	if got := streamReasoningRenderMode(context.WithValue(context.Background(), ingressLabelKey{}, "openai")); got != adapterrender.ReasoningRenderModeReasoningContentOnly {
+		t.Fatalf("openai mode=%q want %q", got, adapterrender.ReasoningRenderModeReasoningContentOnly)
+	}
+	if got := streamReasoningRenderMode(context.Background()); got != adapterrender.ReasoningRenderModeReasoningContentOnly {
+		t.Fatalf("default mode=%q want %q", got, adapterrender.ReasoningRenderModeReasoningContentOnly)
+	}
+}
+
 func TestProviderStreamWriterLogsSSEChunkFlushShapeWithoutContent(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

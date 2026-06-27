@@ -1,6 +1,7 @@
 package anthropicbackend
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -75,7 +76,7 @@ type StreamTranslator struct {
 }
 
 // NewStreamTranslator builds per-request stream state.
-func NewStreamTranslator(reqID, modelAlias string) *StreamTranslator {
+func NewStreamTranslator(ctx context.Context, reqID, modelAlias string) *StreamTranslator {
 	return &StreamTranslator{
 		currentBlockType:   "",
 		toolCallIndex:      0,
@@ -85,7 +86,7 @@ func NewStreamTranslator(reqID, modelAlias string) *StreamTranslator {
 		lastOutputTokens:   0,
 		visibleText:        strings.Builder{},
 		thinkingTextSeen:   false,
-		renderer:           NewEventRenderer(reqID, modelAlias, "anthropic", slog.Default()),
+		renderer:           adapterrender.NewEventRendererWithContext(ctx, reqID, modelAlias, "anthropic", slog.Default()),
 	}
 }
 

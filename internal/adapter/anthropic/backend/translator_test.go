@@ -1,6 +1,7 @@
 package anthropicbackend
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 )
 
 func newTranslatorForTest() *StreamTranslator {
-	return NewStreamTranslator("req1", "clyde-test")
+	return NewStreamTranslator(context.Background(), "req1", "clyde-test")
 }
 
 func TestStreamTranslatorThinkingEmitsBlockquoteContent(t *testing.T) {
@@ -162,7 +163,7 @@ func TestStreamTranslatorThinkingWithTextKeepsSignature(t *testing.T) {
 
 func TestStreamTextTranslator(t *testing.T) {
 	t.Parallel()
-	tr := NewStreamTranslator("chatcmpl-s", "alias")
+	tr := NewStreamTranslator(context.Background(), "chatcmpl-s", "alias")
 	renderer := adapterrender.NewEventRenderer("chatcmpl-s", "alias", "anthropic", nil)
 	var all []adapteropenai.StreamChunk
 	feed := func(name string, payload string) {
@@ -204,7 +205,7 @@ func TestStreamTextTranslator(t *testing.T) {
 
 func TestStreamToolTranslator(t *testing.T) {
 	t.Parallel()
-	tr := NewStreamTranslator("chatcmpl-t", "alias")
+	tr := NewStreamTranslator(context.Background(), "chatcmpl-t", "alias")
 	renderer := adapterrender.NewEventRenderer("chatcmpl-t", "alias", "anthropic", nil)
 	var all []adapteropenai.StreamChunk
 	var finishReason string
@@ -259,7 +260,7 @@ func TestStreamToolTranslator(t *testing.T) {
 
 func TestStreamTranslatorEventPathEmitsToolCallEvents(t *testing.T) {
 	t.Parallel()
-	tr := NewStreamTranslator("chatcmpl-event-tool", "alias")
+	tr := NewStreamTranslator(context.Background(), "chatcmpl-event-tool", "alias")
 
 	events, _, _, _, err := tr.HandleEventEvents(
 		"content_block_start",
@@ -285,7 +286,7 @@ func TestStreamTranslatorEventPathEmitsToolCallEvents(t *testing.T) {
 
 func TestStreamTranslatorEventPathEmitsRefusalEvent(t *testing.T) {
 	t.Parallel()
-	tr := NewStreamTranslator("chatcmpl-event-refusal", "alias")
+	tr := NewStreamTranslator(context.Background(), "chatcmpl-event-refusal", "alias")
 
 	if _, _, _, _, err := tr.HandleEventEvents("message_start", []byte(`{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}`)); err != nil {
 		t.Fatalf("message_start: %v", err)

@@ -1,6 +1,7 @@
 package anthropicbackend
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 // content_block_delta envelope.
 func TestStreamTranslatorSignatureDeltaProducesReasoningEventWithSignature(t *testing.T) {
 	t.Parallel()
-	tr := NewStreamTranslator("req-sig", "alias-sig")
+	tr := NewStreamTranslator(context.Background(), "req-sig", "alias-sig")
 	const payload = `{"index":3,"delta":{"type":"signature_delta","signature":"sig-bytes-xyz"}}`
 	events, finished, reason, usage, err := tr.HandleEventEvents("content_block_delta", []byte(payload))
 	if err != nil {
