@@ -51,6 +51,7 @@ type ListResult struct {
 type SearchConversationsOptions struct {
 	Query           string
 	Limit           int
+	Offset          int
 	Provider        Provider
 	WorkspaceRoot   string
 	IncludeArchived bool
@@ -92,6 +93,8 @@ type SearchConversationsResult struct {
 	ConversationsScanned int
 	ReturnedCount        int
 	Limit                int
+	Offset               int
+	NextOffset           int
 	HasMore              bool
 	// Source names which engine produced the matches: the vector engine, the
 	// literal fallback, or a cold index with the fallback disabled.
@@ -180,6 +183,8 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 			ConversationsScanned: 0,
 			ReturnedCount:        0,
 			Limit:                options.Limit,
+			Offset:               options.Offset,
+			NextOffset:           options.Offset,
 			HasMore:              false,
 			Source:               SearchSourceUnspecified,
 			Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
@@ -207,12 +212,15 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 		ConversationsScanned: 0,
 		ReturnedCount:        0,
 		Limit:                options.Limit,
+		Offset:               options.Offset,
+		NextOffset:           options.Offset,
 		HasMore:              false,
 		Source:               SearchSourceLiteral,
 		Facets:               SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
 		Freshness:            SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
 		FilterAccounting:     nil,
 	}
+	seenMatches := 0
 	for _, record := range candidates.Records {
 		select {
 		case <-ctx.Done():
@@ -228,8 +236,14 @@ func (idx *Index) SearchConversations(ctx context.Context, options SearchConvers
 		if !ok {
 			continue
 		}
+		if seenMatches < options.Offset {
+			seenMatches++
+			continue
+		}
 		result.Matches = append(result.Matches, match)
 		result.ReturnedCount = len(result.Matches)
+		result.NextOffset = options.Offset + result.ReturnedCount
+		seenMatches++
 		if result.ReturnedCount >= options.Limit {
 			result.HasMore = result.ConversationsScanned < len(candidates.Records)
 			return result, nil
@@ -328,6 +342,9 @@ func emptySearchMatch() SearchMatch {
 func normalizeSearchConversationsOptions(options SearchConversationsOptions) SearchConversationsOptions {
 	options.Query = strings.TrimSpace(options.Query)
 	options.WorkspaceRoot = cleanWorkspaceFilter(options.WorkspaceRoot)
+	if options.Offset < 0 {
+		options.Offset = 0
+	}
 	if options.Limit <= 0 {
 		options.Limit = DefaultSearchLimit
 	}

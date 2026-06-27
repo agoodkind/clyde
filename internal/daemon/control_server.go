@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -167,6 +168,10 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	}
 	result, err := searchConversationsResult(ctx, s.index, s.semanticSearch, s.semanticCollectionID, s.literalFallback, req)
 	if err != nil {
+		var invalidBounds invalidSearchBoundsError
+		if errors.As(err, &invalidBounds) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 		return nil, status.Errorf(codes.Internal, "search conversations: %v", err)
 	}
 	result.Freshness = s.freshnessSnapshot()
@@ -219,44 +224,21 @@ func searchConversationsResult(
 	req *clydev1.SearchConversationsRequest,
 ) (conversation.SearchConversationsResult, error) {
 	accounting := filterAccounting(ctx, idx, req)
+	normalizedLimit := normalizedSearchLimit(req.GetLimit())
+	normalizedOffset := normalizedPagingOffset(req.GetOffset())
 	if semantic != nil {
-		matches := engineSearchMatches(ctx, idx, semantic, collectionID, req)
-		if len(matches) >= 1 {
-			return conversation.SearchConversationsResult{
-				Matches:              matches,
-				ConversationsScanned: len(matches),
-				ReturnedCount:        len(matches),
-				Limit:                int(req.GetLimit()),
-				HasMore:              false,
-				Source:               conversation.SearchSourceSemantic,
-				Facets:               conversation.ComputeFacets(matches, searchFacetTopN),
-				Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-				FilterAccounting:     appendReturnedStage(accounting, len(matches)),
-			}, nil
+		semanticResult, handled, err := semanticSearchResult(ctx, idx, semantic, collectionID, literalFallback, req, accounting, normalizedLimit, normalizedOffset)
+		if err != nil {
+			return conversation.SearchConversationsResult{}, err
 		}
-		if !literalFallback {
-			// Dogfood: the engine is configured but cold or empty and the literal
-			// crutch is off, so return an explicit empty result the caller can
-			// branch on instead of a misleading literal scan.
-			slog.WarnContext(ctx, "daemon.search_conversations.literal_disabled_cold", "concern", "process.daemon.lifecycle", "component", "daemon",
-				"query", req.GetQuery(),
-			)
-			return conversation.SearchConversationsResult{
-				Matches:              nil,
-				ConversationsScanned: 0,
-				ReturnedCount:        0,
-				Limit:                int(req.GetLimit()),
-				HasMore:              false,
-				Source:               conversation.SearchSourceLiteralDisabledCold,
-				Facets:               conversation.SearchFacets{Workspaces: nil, Providers: nil, Models: nil},
-				Freshness:            conversation.SearchFreshness{Manifest: 0, Needed: 0, Embedded: 0, Pending: 0, LastSyncUnix: 0},
-				FilterAccounting:     appendReturnedStage(accounting, 0),
-			}, nil
+		if handled {
+			return semanticResult, nil
 		}
 	}
 	result, err := idx.SearchConversations(ctx, conversation.SearchConversationsOptions{
 		Query:                req.GetQuery(),
-		Limit:                int(req.GetLimit()),
+		Limit:                normalizedLimit,
+		Offset:               normalizedOffset,
 		Provider:             providerFromProto(req.GetProvider()),
 		WorkspaceRoot:        req.GetWorkspace(),
 		IncludeArchived:      req.GetIncludeArchived(),
@@ -331,8 +313,11 @@ func engineSearchMatches(
 	semantic conversationSemanticSearchClient,
 	collectionID string,
 	req *clydev1.SearchConversationsRequest,
-) []conversation.SearchMatch {
-	limit := int(req.GetLimit())
+) ([]conversation.SearchMatch, error) {
+	limit, offset, searchLimit, err := semanticSearchPageBounds(req)
+	if err != nil {
+		return nil, err
+	}
 	provider := providerFromProto(req.GetProvider())
 	workspace := req.GetWorkspace()
 	includeArchived := req.GetIncludeArchived()
@@ -354,7 +339,7 @@ func engineSearchMatches(
 			// The workspace matched no conversations, so the result is empty. An
 			// empty id set would otherwise read as "no scope" and match the whole
 			// corpus, so short-circuit instead of calling the engine.
-			return []conversation.SearchMatch{}
+			return []conversation.SearchMatch{}, nil
 		}
 	}
 	filter := semsearch.SearchFilter{
@@ -369,14 +354,15 @@ func engineSearchMatches(
 		MessageIndexFrom:     0,
 		MessageIndexUntil:    0,
 	}
-	hits, err := semantic.SearchConversations(ctx, collectionID, req.GetQuery(), int32FromInt(limit), filter, int32FromInt(int(req.GetPerConversationLimit())))
+	hits, err := semantic.SearchConversations(ctx, collectionID, req.GetQuery(), int32FromInt(searchLimit), filter, int32FromInt(int(req.GetPerConversationLimit())))
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.search_conversations.engine_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"err", err,
 		)
-		return nil
+		return nil, nil
 	}
 	matches := make([]conversation.SearchMatch, 0, len(hits))
+	seenMatches := 0
 	for _, hit := range hits {
 		record, ok := idx.RecordByID(hit.ConversationID)
 		if !ok {
@@ -391,6 +377,10 @@ func engineSearchMatches(
 		if record.Archived && !includeArchived {
 			continue
 		}
+		if seenMatches < offset {
+			seenMatches++
+			continue
+		}
 		matches = append(matches, conversation.SearchMatch{
 			Record:       record,
 			MessageIndex: int(hit.MessageIndex),
@@ -403,11 +393,12 @@ func engineSearchMatches(
 			// window is a separate windowed read; search never inlines it.
 			ContextWindow: conversation.Excerpt(hit.Content),
 		})
+		seenMatches++
 		if limit > 0 && len(matches) >= limit {
 			break
 		}
 	}
-	return matches
+	return matches, nil
 }
 
 // workspaceConversationIDs resolves a workspace filter to the conversation-id
@@ -448,6 +439,8 @@ func searchConversationsResponse(ctx context.Context, idx *conversation.Index, r
 		ConversationsScanned: int64(result.ConversationsScanned),
 		ReturnedCount:        int64(result.ReturnedCount),
 		Limit:                int64(result.Limit),
+		Offset:               int64(result.Offset),
+		NextOffset:           int64(result.NextOffset),
 		HasMore:              result.HasMore,
 		Source:               protoSearchSource(result.Source),
 		Facets:               protoSearchFacets(result.Facets),
@@ -684,7 +677,6 @@ func providerStatsResponse(recorder *providerStatsRecorder) *clydev1.GetProvider
 }
 
 func int32FromInt(value int) int32 {
-	const maxInt32Value = 2147483647
 	const minInt32Value = -2147483648
 	if value > maxInt32Value {
 		return maxInt32Value
@@ -934,54 +926,4 @@ func protoConversationSegments(
 		})
 	}
 	return wireSegments
-}
-
-func providerFromProto(provider clydev1.Provider) providerid.Provider {
-	switch provider {
-	case clydev1.Provider_PROVIDER_CLAUDE:
-		return providerid.ProviderClaude
-	case clydev1.Provider_PROVIDER_CODEX:
-		return providerid.ProviderCodex
-	case clydev1.Provider_PROVIDER_ANTHROPIC:
-		return providerid.ProviderAnthropic
-	case clydev1.Provider_PROVIDER_OPENAI_COMPAT:
-		return providerid.ProviderOpenAICompat
-	case clydev1.Provider_PROVIDER_MITM:
-		return providerid.ProviderMITM
-	case clydev1.Provider_PROVIDER_ARTIFACT:
-		return providerid.ProviderArtifact
-	case clydev1.Provider_PROVIDER_CURSOR:
-		return providerid.ProviderCursor
-	case clydev1.Provider_PROVIDER_CONDUCTOR:
-		return providerid.ProviderConductor
-	case clydev1.Provider_PROVIDER_UNSPECIFIED:
-		return providerid.ProviderUnspecified
-	default:
-		return providerid.ProviderUnspecified
-	}
-}
-
-func protoProvider(provider providerid.Provider) clydev1.Provider {
-	switch provider {
-	case providerid.ProviderClaude:
-		return clydev1.Provider_PROVIDER_CLAUDE
-	case providerid.ProviderCodex:
-		return clydev1.Provider_PROVIDER_CODEX
-	case providerid.ProviderAnthropic:
-		return clydev1.Provider_PROVIDER_ANTHROPIC
-	case providerid.ProviderOpenAICompat:
-		return clydev1.Provider_PROVIDER_OPENAI_COMPAT
-	case providerid.ProviderMITM:
-		return clydev1.Provider_PROVIDER_MITM
-	case providerid.ProviderArtifact:
-		return clydev1.Provider_PROVIDER_ARTIFACT
-	case providerid.ProviderCursor:
-		return clydev1.Provider_PROVIDER_CURSOR
-	case providerid.ProviderConductor:
-		return clydev1.Provider_PROVIDER_CONDUCTOR
-	case providerid.ProviderUnspecified:
-		return clydev1.Provider_PROVIDER_UNSPECIFIED
-	default:
-		return clydev1.Provider_PROVIDER_UNSPECIFIED
-	}
 }

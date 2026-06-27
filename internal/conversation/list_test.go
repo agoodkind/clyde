@@ -141,6 +141,60 @@ func TestSearchConversationsReturnsBoundedTranscriptMatches(t *testing.T) {
 	}
 }
 
+func TestSearchConversationsAppliesOffsetToTranscriptMatches(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry()
+	parser := &messageMapParser{
+		provider: providerid.ProviderClaude,
+		messages: map[string][]transcript.Message{
+			"/tmp/one.jsonl": {
+				{Role: "user", Text: "nothing relevant"},
+			},
+			"/tmp/two.jsonl": {
+				{Role: "assistant", Text: "The auth timeout happens during login.", Timestamp: time.Unix(20, 0)},
+			},
+			"/tmp/three.jsonl": {
+				{Role: "user", Text: "Another auth timeout note.", Timestamp: time.Unix(30, 0)},
+			},
+		},
+	}
+	registry.Register(parser)
+	idx := &Index{
+		mu:           sync.Mutex{},
+		registry:     registry,
+		records:      []Record{testSearchRecord("claude:one", "/tmp/one.jsonl"), testSearchRecord("claude:two", "/tmp/two.jsonl"), testSearchRecord("claude:three", "/tmp/three.jsonl")},
+		prevRecords:  nil,
+		prevStamps:   nil,
+		loaded:       true,
+		refreshing:   false,
+		lastRefresh:  time.Now(),
+		cachePath:    "",
+		debounce:     time.Hour,
+		scanProvider: scan,
+	}
+
+	result, err := idx.SearchConversations(context.Background(), SearchConversationsOptions{
+		Query:  "auth timeout",
+		Limit:  1,
+		Offset: 1,
+	})
+	if err != nil {
+		t.Fatalf("search conversations: %v", err)
+	}
+	if result.Offset != 1 || result.NextOffset != 2 {
+		t.Fatalf("offsets = %d/%d, want 1/2", result.Offset, result.NextOffset)
+	}
+	if result.ReturnedCount != 1 {
+		t.Fatalf("returned count = %d, want 1", result.ReturnedCount)
+	}
+	if result.HasMore {
+		t.Fatalf("has more = true, want false")
+	}
+	if result.Matches[0].Record.ID != "claude:three" {
+		t.Fatalf("match record = %q, want claude:three", result.Matches[0].Record.ID)
+	}
+}
+
 type messageMapParser struct {
 	provider providerid.Provider
 	messages map[string][]transcript.Message

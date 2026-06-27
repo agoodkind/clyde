@@ -59,7 +59,7 @@ func TestSearchLeafHelpListsFlags(t *testing.T) {
 		t.Fatalf("conversation search help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"search [CONVERSATION_ID]", "--query", "--around", "--window", "--provider"} {
+	for _, name := range []string{"search [CONVERSATION_ID]", "--query", "--around", "--window", "--provider", "--offset"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation search help missing flag %q:\n%s", name, out)
 		}

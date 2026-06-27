@@ -447,6 +447,7 @@ func (idx *Index) appendSearchItems(ctx context.Context, items []ReorientItem, c
 	result, err := idx.SearchConversations(ctx, SearchConversationsOptions{
 		Query:                options.Topic,
 		Limit:                options.Limit,
+		Offset:               0,
 		Provider:             providerid.ProviderUnspecified,
 		WorkspaceRoot:        current.WorkspaceRoot,
 		IncludeArchived:      false,
