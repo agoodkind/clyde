@@ -43,8 +43,8 @@ type Index struct {
 }
 
 // NewIndex returns an index backed by the default XDG cache path that resolves
-// artifacts through registry. The daemon registers the Claude and Codex parsers
-// before constructing the index.
+// artifacts through registry. The daemon wires the provider parsers in before
+// constructing the index.
 func NewIndex(registry *Registry) *Index {
 	return &Index{
 		mu:           sync.Mutex{},

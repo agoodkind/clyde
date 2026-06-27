@@ -21,8 +21,10 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-const concern = "providers.zed.parser"
-const artifactKindZedThread = "zed_thread"
+const (
+	concern               = "providers.zed.parser"
+	artifactKindZedThread = "zed_thread"
+)
 
 type discoveredThread struct {
 	Row      zedstore.ThreadRow
@@ -157,7 +159,7 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 			yield(emptyMessage(), fmt.Errorf("zed stream path not discovered: %s", path))
 			return
 		}
-		thread, err := zedstore.ParseThreadDocument(discovered.Row.Data)
+		thread, err := zedstore.ParseThreadDocument(discovered.Row.DataType, discovered.Row.Data)
 		if err != nil {
 			yield(emptyMessage(), fmt.Errorf("parse zed thread document: %w", err))
 			return
@@ -395,11 +397,11 @@ func userMessageText(message *zedstore.UserMessage) string {
 	parts := make([]string, 0, len(message.Content))
 	for _, part := range message.Content {
 		switch part.Kind {
-		case "Text":
+		case zedstore.UserContentKindText:
 			if strings.TrimSpace(part.Text) != "" {
 				parts = append(parts, part.Text)
 			}
-		case "Mention":
+		case zedstore.UserContentKindMention:
 			if part.Mention == nil {
 				continue
 			}
@@ -419,15 +421,15 @@ func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) 
 	tools := make([]transcript.ToolCall, 0)
 	for _, part := range message.Content {
 		switch part.Kind {
-		case "Text":
+		case zedstore.AgentContentKindText:
 			if strings.TrimSpace(part.Text) != "" {
 				textParts = append(textParts, part.Text)
 			}
-		case "Thinking", "RedactedThinking":
+		case zedstore.AgentContentKindThinking, zedstore.AgentContentKindRedactedThinking:
 			if strings.TrimSpace(part.Text) != "" {
 				thinkingParts = append(thinkingParts, part.Text)
 			}
-		case "ToolUse":
+		case zedstore.AgentContentKindToolUse:
 			if part.ToolUse == nil {
 				continue
 			}
@@ -462,7 +464,7 @@ func zedToolResultOutput(result zedstore.ToolResult) (string, bool) {
 
 func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.CompactionMetadata, string) {
 	switch message.Kind {
-	case "Summary":
+	case zedstore.CompactionMessageKindSummary:
 		return &transcript.CompactionMetadata{
 			Kind:                      transcript.CompactionKindSummary,
 			Trigger:                   transcript.CompactionTriggerUnknown,
@@ -484,7 +486,7 @@ func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.Compac
 			RawMicrocompactMetadata:   nil,
 			RawSummarizeMetadata:      nil,
 		}, message.Summary
-	case "ProviderNative":
+	case zedstore.CompactionMessageKindProviderNative:
 		raw, err := json.Marshal(message.Items)
 		if err != nil {
 			return nil, ""

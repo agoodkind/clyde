@@ -19,13 +19,18 @@ type VirtualPath struct {
 // BuildVirtualPath returns the stable synthetic path Clyde uses for one native
 // Zed thread.
 func BuildVirtualPath(rootDir, channel, sessionID string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(rootDir)))
-	rootHash := hex.EncodeToString(sum[:8])
-	path := virtualPathPrefix + rootHash + "/" + strings.TrimSpace(channel) + "/" + strings.TrimSpace(sessionID)
+	path := virtualPathPrefix + RootHash(rootDir) + "/" + strings.TrimSpace(channel) + "/" + strings.TrimSpace(sessionID)
 	if _, err := ParseVirtualPath(path); err != nil {
 		return ""
 	}
 	return path
+}
+
+// RootHash returns the stable short hash Clyde uses to identify one Zed data
+// root inside virtual artifact paths.
+func RootHash(rootDir string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(rootDir)))
+	return hex.EncodeToString(sum[:8])
 }
 
 // ParseVirtualPath decodes one synthetic Zed conversation path.
