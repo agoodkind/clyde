@@ -32,9 +32,18 @@ func TestGroupNameListsSubcommands(t *testing.T) {
 		t.Fatalf("conversation help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"search", "export"} {
+	for _, name := range []string{"export", "info", "reorient", "search"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation help missing subcommand %q:\n%s", name, out)
+		}
+	}
+	for _, want := range []string{
+		"inspect static conversation info",
+		"clyde conversation search claude:1a2b3c --around 42",
+		"clyde conversation export claude:1a2b3c --only chat --stdout",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("conversation help missing %q:\n%s", want, out)
 		}
 	}
 }
@@ -50,9 +59,21 @@ func TestSearchLeafHelpListsFlags(t *testing.T) {
 		t.Fatalf("conversation search help: %v", err)
 	}
 	out := stdout.String()
-	for _, name := range []string{"--query", "--conversation", "--around", "--window", "--provider"} {
+	for _, name := range []string{"search [CONVERSATION_ID]", "--query", "--around", "--window", "--provider"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("conversation search help missing flag %q:\n%s", name, out)
+		}
+	}
+	if strings.Contains(out, "--conversation") {
+		t.Errorf("conversation search help still exposes --conversation:\n%s", out)
+	}
+	for _, want := range []string{
+		"pass CONVERSATION_ID plus --query",
+		"clyde conversation search claude:1a2b3c --query \"auth timeout\"",
+		"clyde conversation search claude:1a2b3c --around 42 --window 5",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("conversation search help missing %q:\n%s", want, out)
 		}
 	}
 }

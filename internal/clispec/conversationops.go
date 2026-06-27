@@ -16,12 +16,12 @@ import (
 	"goodkind.io/clyde/internal/providerid"
 )
 
-// searchInput is the raw input of the single conversation operation. Every flag
-// is optional because the architecture forces a positional to be required on
-// MCP, and which behavior runs is decided from which flags are set.
+// searchInput is the raw input of the single conversation operation. The
+// optional conversation id positional selects one conversation; the remaining
+// flags decide whether the operation searches, reads, windows, or browses.
 type searchInput struct {
 	Query           string
-	Conversation    string
+	ConversationID  string
 	Provider        string
 	WorkspaceRoot   string
 	Roles           string
@@ -85,8 +85,8 @@ func (conversationInfoPayload) isClispecPrepared() {}
 var conversationGroup = &Group{
 	Use:     "conversation",
 	Short:   "Inspect Claude and Codex conversations",
-	Long:    "Inspect indexed Claude and Codex conversations: search across or within conversations, inspect static conversation info, read a transcript or a context window, browse metadata, and export a transcript. Clyde reads provider-owned artifacts and never mutates them.",
-	Example: "clyde conversation search --query \"auth timeout\"\nclyde conversation info claude:1a2b3c\nclyde conversation export claude:1a2b3c",
+	Long:    "Inspect indexed Claude and Codex conversations: search across or within conversations, read a transcript or a context window, browse metadata, inspect static conversation info, rebuild recovery context, and export transcripts. Clyde reads provider-owned artifacts and never mutates them.",
+	Example: "clyde conversation search --query \"auth timeout\"\nclyde conversation search claude:1a2b3c --around 42\nclyde conversation export claude:1a2b3c --only chat --stdout",
 	Parent:  nil,
 }
 
@@ -138,8 +138,6 @@ func searchParams() []Param[searchInput] {
 	return []Param[searchInput]{
 		StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
 			func(in *searchInput, v string) { in.Query = v }),
-		StringParam("conversation", "Conversation id, native id, title, or artifact path to scope or read.", "", false,
-			func(in *searchInput, v string) { in.Conversation = v }),
 		StringParam("provider", "Provider filter, such as claude or codex.", "", false,
 			func(in *searchInput, v string) { in.Provider = v }),
 		StringParam("workspace", "Workspace root filter.", "", false,
@@ -152,9 +150,9 @@ func searchParams() []Param[searchInput] {
 			func(in *searchInput, v string) { in.Until = v }),
 		IntParam("limit", "Maximum matches or conversations to return.", conv.DefaultSearchLimit,
 			func(in *searchInput, v int) { in.Limit = v }),
-		IntParam("around", "Message index to center a read window on; requires conversation.", -1,
+		IntParam("around", "Message index to center a read window on.", -1,
 			func(in *searchInput, v int) { in.Around = v }),
-		IntParam("window", "Messages before and after for the read window and per-hit inline context.", 5,
+		IntParam("window", "Messages before and after for a context window.", 5,
 			func(in *searchInput, v int) { in.Window = v }),
 		FloatParam("min_score", "Drop hits scoring below this relevance floor.", 0,
 			func(in *searchInput, v float64) { in.MinScore = v }),
@@ -166,7 +164,7 @@ func searchParams() []Param[searchInput] {
 func newSearchInput() searchInput {
 	return searchInput{
 		Query:           "",
-		Conversation:    "",
+		ConversationID:  "",
 		Provider:        "",
 		WorkspaceRoot:   "",
 		Roles:           "",
@@ -187,15 +185,18 @@ func searchOp() Operation[searchInput, searchPayload] {
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindValue,
 		Short:      "Search, read, or browse Claude and Codex conversations.",
-		Long:       "One operation over indexed Claude and Codex conversations. Set query to search the corpus, or query and conversation to search within one conversation; both print a ranked numbered list of matching conversations, each leading with its [workspace] tag. Narrow by date with --after and --before, which filter natively before ranking. Pass --output-format json for the full structured result with source, freshness, facets, and the filter funnel. Set conversation alone to read it: with around, a context window centered on that message index; otherwise the whole transcript. Set neither to browse conversation metadata.",
+		Long:       "One operation over indexed Claude and Codex conversations. Set --query to search the corpus, or pass CONVERSATION_ID plus --query to search within one conversation. Pass CONVERSATION_ID without --query to read a whole transcript, or add --around to read a context window. Set neither --query nor CONVERSATION_ID to browse conversation metadata.",
 		Examples: []string{
 			"clyde conversation search --query \"auth timeout\" --limit 10",
 			"clyde conversation search --query \"auth timeout\" --after 2026-05-01 --before 2026-05-21",
-			"clyde conversation search --query \"auth timeout\" --conversation claude:1a2b3c",
-			"clyde conversation search --conversation claude:1a2b3c --around 42 --window 5",
+			"clyde conversation search claude:1a2b3c --query \"auth timeout\"",
+			"clyde conversation search claude:1a2b3c --around 42 --window 5",
 			"clyde conversation search --provider claude --limit 20",
 		},
-		Args:           nil,
+		Args: []Arg[searchInput]{
+			OptionalPositionalArg("conversation_id", "Conversation id, native id, title, or artifact path to scope or read.",
+				func(in *searchInput, v string) { in.ConversationID = v }),
+		},
 		Params:         searchParams(),
 		New:            newSearchInput,
 		MCPTaskSupport: "",
@@ -214,7 +215,7 @@ func searchOp() Operation[searchInput, searchPayload] {
 // conversation to center on.
 func prepareSearch(in searchInput) (searchPayload, error) {
 	query := strings.TrimSpace(in.Query)
-	conversation := strings.TrimSpace(in.Conversation)
+	conversation := strings.TrimSpace(in.ConversationID)
 	if in.Around >= 0 && conversation == "" {
 		return searchPayload{}, fmt.Errorf("around requires a conversation to center on")
 	}
@@ -357,7 +358,7 @@ func searchConversationsOptionsFromInput(in searchInput) (conv.SearchConversatio
 		UntilUnix:            untilUnix,
 		MinScore:             in.MinScore,
 		PerConversationLimit: 0,
-		ConversationID:       strings.TrimSpace(in.Conversation),
+		ConversationID:       strings.TrimSpace(in.ConversationID),
 		ContextWindow:        in.Window,
 	}, nil
 }

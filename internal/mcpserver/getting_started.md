@@ -7,19 +7,19 @@ Available tools:
 Search, read, or browse Claude and Codex conversations. One operation with
 several modes, chosen from which inputs are set.
 - query: text or semantic query to find in transcript messages.
-- conversation: conversation id, native id, title, or artifact path to scope or
-  read.
-- around: message index to center a read window on; requires conversation.
-- window: messages before and after for the read window and per-hit inline hit
-  context.
-- provider, workspace, roles, after, until, limit, min_score,
+- conversation_id: optional conversation id, native id, title, or artifact path
+  to scope or read.
+- around: message index to center a read window on; requires conversation_id.
+- window: messages before and after for a context window.
+- provider, workspace, roles, after, before, limit, min_score,
   include_archived: filters for discovery.
 
 Modes:
-- query alone searches the corpus. Query and conversation together search
+- query alone searches the corpus. Query and conversation_id together search
   within one conversation.
-- conversation alone reads one conversation. Add around to read a local window.
-- neither query nor conversation browses conversation metadata.
+- conversation_id alone reads one conversation. Add around to read a local
+  window.
+- neither query nor conversation_id browses conversation metadata.
 
 ### clyde_conversation_info
 Get static metadata for one conversation.
@@ -34,8 +34,8 @@ latest compaction summary through the latest message.
 Rebuild post-compaction recovery context as bounded, cursor-paged evidence, then
 resume the work. Use this after a fork and a compaction to recover dropped
 detail.
-- conversation: current conversation id. Empty uses the newest conversation in
-  workspace.
+- conversation_id: current conversation id. Empty uses the newest conversation
+  in workspace.
 - workspace: workspace root. Required when conversation is empty; also scopes
   memory and the fallback search.
 - topic: narrows memory docs and the fallback search.
@@ -76,8 +76,8 @@ starting summary.
 
 Typical workflow:
 1. Call `clyde_search` with a query to find where a topic was discussed.
-2. Call `clyde_search` with a conversation and around to read the window around
-   a useful message index.
+2. Call `clyde_search` with a conversation_id and around to read the window
+   around a useful message index.
 3. Call `clyde_conversation_info` before export when you need metadata or
    segment numbers.
 4. Call `clyde_reorient` after a fork and compaction to rebuild the in-flight

@@ -466,7 +466,7 @@ func (idx *Index) appendSearchItems(ctx context.Context, items []ReorientItem, c
 			continue
 		}
 		body := fmt.Sprintf(
-			"%s\n\nDeeper: clyde conversation search --conversation %s --around %d --window %d",
+			"%s\n\nDeeper: clyde conversation search %s --around %d --window %d",
 			match.Snippet,
 			match.Record.ID,
 			match.MessageIndex,
