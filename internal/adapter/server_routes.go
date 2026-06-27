@@ -78,8 +78,8 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 // listeners that share the single HTTP server and mux. Each accepted
 // connection is tagged with an ingress label by its local port, so the
 // generic OpenAI-compatible port and the Cursor BYOK port are
-// distinguishable in request telemetry without any change to translation,
-// routing, or error mapping.
+// distinguishable for both request telemetry and streaming reasoning
+// render mode selection.
 func (s *Server) StartOnListeners(ctx context.Context, listeners ...net.Listener) error {
 	if len(listeners) == 0 {
 		return fmt.Errorf("adapter: no listeners to serve")

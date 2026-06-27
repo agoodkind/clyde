@@ -54,9 +54,10 @@ type AdapterConfig struct {
 	// listener on Host:port. Requests arriving there are tagged
 	// ingress=cursor while the primary Port is tagged ingress=openai, so
 	// Cursor BYOK traffic is separated from generic OpenAI-compatible
-	// clients for accounting. It changes nothing about translation,
-	// routing, or error mapping. Zero (default) binds only the primary
-	// listener.
+	// clients and keeps the dual-surface streaming reasoning render
+	// path on that listener. The primary listener serves generic
+	// OpenAI-compatible clients with reasoning_content-only streaming
+	// reasoning. Zero (default) binds only the primary listener.
 	CursorIngressPort int `json:"cursorIngressPort,omitempty" toml:"cursor_ingress_port,omitempty"`
 	// DefaultModel is the fallback when a request does not name one.
 	DefaultModel string `json:"defaultModel,omitempty" toml:"default_model,omitempty"`

@@ -100,8 +100,10 @@ default_model = "clyde-fable-5-high-thinking"
 # Optional second adapter listener for Cursor BYOK. When set, requests arriving
 # on this port are tagged ingress=cursor while the primary port (default 11434)
 # is tagged ingress=openai, separating Cursor traffic from generic
-# OpenAI-compatible clients for accounting. It changes nothing about
-# translation, routing, or error mapping. Omit to bind only the primary port.
+# OpenAI-compatible clients and keeping Cursor on the dual-surface streaming
+# reasoning path. The primary listener stays generic and emits
+# reasoning_content-only streaming reasoning. Omit to bind only the primary
+# port.
 cursor_ingress_port = 11435
 
 [adapter.notices]

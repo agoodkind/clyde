@@ -1,6 +1,7 @@
 package anthropicbackend
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ import (
 // the surrounding visible-text flow.
 func TestStreamTranslatorRedactedThinkingFlowsThroughHandleEvents(t *testing.T) {
 	t.Parallel()
-	tr := NewStreamTranslator("req-redacted", "alias-redacted")
+	tr := NewStreamTranslator(context.Background(), "req-redacted", "alias-redacted")
 
 	type step struct {
 		name    string

@@ -49,11 +49,14 @@ func newProviderStreamWriter(
 		return nil, fmt.Errorf("create provider SSE writer: %w", err)
 	}
 	flusher, _ := w.(http.Flusher)
+	renderOptions := adapterrender.EventRendererOptions{
+		ReasoningRenderMode: streamReasoningRenderMode(ctx),
+	}
 	return &providerStreamWriter{
 		sse:               sse,
 		systemFingerprint: systemFingerprint,
 		flusher:           flusher,
-		renderer:          adapterrender.NewEventRendererWithContext(ctx, reqID, modelAlias, backend, s.log),
+		renderer:          adapterrender.NewEventRendererWithContextAndOptions(ctx, reqID, modelAlias, backend, s.log, renderOptions),
 		reqID:             reqID,
 		modelAlias:        modelAlias,
 		logContext:        func() context.Context { return ctx },

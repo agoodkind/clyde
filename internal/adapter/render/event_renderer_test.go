@@ -146,6 +146,65 @@ func TestEventRendererKeepsCursorThinkingMapping(t *testing.T) {
 	}
 }
 
+func TestEventRendererDualSurfaceModePreservesSyntheticThinking(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-thinking-dual",
+		"alias",
+		"codex",
+		nil,
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeDualSurface},
+	)
+	chunks := r.HandleEvent(ReasoningDelta{Text: "checking constraints", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	delta := chunks[0].Choices[0].Delta
+	if !strings.Contains(delta.Content, `<!--clyde-thinking data-origin="codex"-->`) {
+		t.Fatalf("missing content thinking marker: %q", delta.Content)
+	}
+	if delta.ReasoningContent != "checking constraints" {
+		t.Fatalf("reasoning_content=%q want checking constraints", delta.ReasoningContent)
+	}
+	if chunks := r.HandleEvent(ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""}); len(chunks) != 0 {
+		t.Fatalf("signaled after open chunks=%d want 0", len(chunks))
+	}
+	if chunks := r.HandleEvent(ReasoningFinished{ReasoningKind: "", EncryptedContent: "", Signature: "", ItemID: "", ItemType: ""}); len(chunks) != 1 {
+		t.Fatalf("finish chunks=%d want 1", len(chunks))
+	} else if close := chunks[0].Choices[0].Delta.Content; close != SyntheticContentClose(SyntheticReasoning) {
+		t.Fatalf("close=%q want %q", close, SyntheticContentClose(SyntheticReasoning))
+	}
+}
+
+func TestEventRendererReasoningContentOnlyOmitsSyntheticThinking(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-thinking-openai",
+		"alias",
+		"codex",
+		nil,
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeReasoningContentOnly},
+	)
+	if chunks := r.HandleEvent(ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""}); len(chunks) != 0 {
+		t.Fatalf("signaled chunks=%d want 0", len(chunks))
+	}
+	chunks := r.HandleEvent(ReasoningDelta{Text: "checking constraints", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	if len(chunks) != 1 {
+		t.Fatalf("chunks=%d want 1", len(chunks))
+	}
+	delta := chunks[0].Choices[0].Delta
+	if delta.Role != "assistant" {
+		t.Fatalf("role=%q want assistant", delta.Role)
+	}
+	if delta.Content != "" {
+		t.Fatalf("content=%q want empty", delta.Content)
+	}
+	if delta.ReasoningContent != "checking constraints" {
+		t.Fatalf("reasoning_content=%q want checking constraints", delta.ReasoningContent)
+	}
+	if chunks := r.HandleEvent(ReasoningFinished{ReasoningKind: "", EncryptedContent: "", Signature: "", ItemID: "", ItemType: ""}); len(chunks) != 0 {
+		t.Fatalf("finish chunks=%d want 0", len(chunks))
+	}
+}
+
 func TestEventRendererEmitsSyntheticThinkingWhenReasoningIsSignaled(t *testing.T) {
 	r := NewEventRenderer("req-thinking-signal", "alias", "codex", nil)
 	chunks := r.HandleEvent(ReasoningSignaled{ReasoningKind: "", ItemID: "", ItemType: ""})
@@ -275,6 +334,66 @@ func TestEventRendererDoesNotPrefixFirstBoldSummaryAfterReasoningSignal(t *testi
 	}
 	if !strings.Contains(got, "**Checking git changes**") {
 		t.Fatalf("missing bold summary: %q", got)
+	}
+}
+
+func TestEventRendererReasoningContentOnlyDoesNotCloseBeforeText(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-thinking-openai-text",
+		"alias",
+		"codex",
+		nil,
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeReasoningContentOnly},
+	)
+	reasoningChunks := r.HandleEvent(ReasoningDelta{Text: "internal reasoning", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	if len(reasoningChunks) != 1 {
+		t.Fatalf("reasoning chunks=%d want 1", len(reasoningChunks))
+	}
+	textChunks := r.HandleEvent(TextDelta{Text: "final answer"})
+	if len(textChunks) != 1 {
+		t.Fatalf("text chunks=%d want 1", len(textChunks))
+	}
+	delta := textChunks[0].Choices[0].Delta
+	if delta.Content != "final answer" {
+		t.Fatalf("content=%q want final answer", delta.Content)
+	}
+	if strings.Contains(delta.Content, "<!--/clyde-thinking") {
+		t.Fatalf("unexpected synthetic close in text chunk: %q", delta.Content)
+	}
+}
+
+func TestEventRendererReasoningContentOnlyDoesNotCloseBeforeToolCall(t *testing.T) {
+	r := NewEventRendererWithOptions(
+		"req-thinking-openai-tool",
+		"alias",
+		"codex",
+		nil,
+		EventRendererOptions{ReasoningRenderMode: ReasoningRenderModeReasoningContentOnly},
+	)
+	reasoningChunks := r.HandleEvent(ReasoningDelta{Text: "internal reasoning", ReasoningKind: "text", SummaryIndex: nil, Signature: "", RedactedData: "", ItemID: "", ItemType: ""})
+	if len(reasoningChunks) != 1 {
+		t.Fatalf("reasoning chunks=%d want 1", len(reasoningChunks))
+	}
+	toolChunks := r.HandleEvent(ToolCallDelta{
+		ToolCalls: []adapteropenai.ToolCall{{
+			Index: 0,
+			ID:    "call_1",
+			Type:  "function",
+			Function: adapteropenai.ToolCallFunction{
+				Name:      "Read",
+				Arguments: `{"path":"README.md"}`,
+			},
+		}},
+	})
+	if len(toolChunks) != 1 {
+		t.Fatalf("tool chunks=%d want 1", len(toolChunks))
+	}
+	delta := toolChunks[0].Choices[0].Delta
+	if len(delta.ToolCalls) != 1 {
+		t.Fatalf("tool_calls=%d want 1", len(delta.ToolCalls))
+	}
+	if delta.Content != "" {
+		t.Fatalf("content=%q want empty", delta.Content)
 	}
 }
 

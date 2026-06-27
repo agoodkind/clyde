@@ -25,7 +25,7 @@ func RunTranslatorEvents(
 	reqID string,
 	emit func(adapterrender.Event) error,
 ) (anthropic.Usage, string, string, error) {
-	tr := NewStreamTranslator(reqID, requestAlias(resolved))
+	tr := NewStreamTranslator(ctx, reqID, requestAlias(resolved))
 	msgStartPayload, err := json.Marshal(struct {
 		Message struct {
 			Usage struct {
