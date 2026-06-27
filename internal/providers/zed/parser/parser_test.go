@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/transcript"
 )
@@ -309,7 +310,54 @@ func TestStreamCanReloadDiscoveredVirtualPathWithoutCachedDiscovery(t *testing.T
 	}
 }
 
+func TestStreamDecodesZstdZedThreadPayloads(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	updatedAt := time.Date(2026, time.June, 27, 15, 0, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Thread title",
+		"updated_at":"2026-06-27T15:00:00Z",
+		"messages":[
+			{"User":{"id":"user-1","content":[{"Text":"compressed hello"}]}}
+		]
+	}`)
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter returned error: %v", err)
+	}
+	compressed := encoder.EncodeAll(threadJSON, nil)
+	if closeErr := encoder.Close(); closeErr != nil {
+		t.Fatalf("zstd encoder close: %v", closeErr)
+	}
+
+	writeThreadsRowWithDataType(t, root, "thread-zstd", "", updatedAt, "zstd", compressed)
+	writeSidebarRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), "thread-zstd", "", "Thread title", "", updatedAt)
+
+	p := New()
+	candidates, err := p.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	messages, err := conversation.CollectMessages(p.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Text != "compressed hello" {
+		t.Fatalf("messages = %#v", messages)
+	}
+}
+
 func writeThreadsRow(t *testing.T, root, sessionID, parentID string, updatedAt time.Time, data []byte) {
+	t.Helper()
+	writeThreadsRowWithDataType(t, root, sessionID, parentID, updatedAt, "json", data)
+}
+
+func writeThreadsRowWithDataType(t *testing.T, root, sessionID, parentID string, updatedAt time.Time, dataType string, data []byte) {
 	t.Helper()
 	dbPath := filepath.Join(root, "threads", "threads.db")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -324,7 +372,7 @@ func writeThreadsRow(t *testing.T, root, sessionID, parentID string, updatedAt t
 		t.Fatalf("create threads table: %v", err)
 	}
 	ts := updatedAt.Format(time.RFC3339)
-	if _, err := db.Exec(`INSERT INTO threads(id,parent_id,folder_paths,folder_paths_order,summary,updated_at,data_type,data,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, sessionID, parentID, "/repo", "0", "Summary", ts, "json", data, ts); err != nil {
+	if _, err := db.Exec(`INSERT INTO threads(id,parent_id,folder_paths,folder_paths_order,summary,updated_at,data_type,data,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, sessionID, parentID, "/repo", "0", "Summary", ts, dataType, data, ts); err != nil {
 		t.Fatalf("insert threads row: %v", err)
 	}
 }
