@@ -14,6 +14,7 @@ enum Provider {
   PROVIDER_ARTIFACT = 6;
   PROVIDER_CURSOR = 7;
   PROVIDER_CONDUCTOR = 8;
+  PROVIDER_ZED = 9;
 }
 
 message GetProviderStatsRequest {}

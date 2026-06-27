@@ -158,6 +158,23 @@ func TestConversationInfoProtoMappingCarriesStatsAndSegments(t *testing.T) {
 	}
 }
 
+func TestConversationRecordProtoRoundTripCarriesZedProvider(t *testing.T) {
+	t.Parallel()
+
+	idx := conversation.NewIndex(conversation.NewRegistry())
+	record := testDaemonConversationRecord("zed:thread", conversation.ProviderZed)
+
+	wire := protoConversationRecord(context.Background(), idx, record)
+	if wire.GetProvider() != clydev1.Provider_PROVIDER_ZED {
+		t.Fatalf("wire provider = %v, want %v", wire.GetProvider(), clydev1.Provider_PROVIDER_ZED)
+	}
+
+	roundTrip := conversationRecordFromProto(wire)
+	if !reflect.DeepEqual(roundTrip, record) {
+		t.Fatalf("round-trip record = %#v, want %#v", roundTrip, record)
+	}
+}
+
 func TestReorientPageProtoMappingCarriesPagingAndItems(t *testing.T) {
 	t.Parallel()
 
