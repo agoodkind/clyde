@@ -183,6 +183,9 @@ func TestStreamShapesBasicZedMessagesWithoutCompactionByDefault(t *testing.T) {
 	if !messages[1].HasTools || len(messages[1].Tools) != 1 || messages[1].Tools[0].Name != "Read" {
 		t.Fatalf("assistant tools = %#v", messages[1].Tools)
 	}
+	if messages[1].Tools[0].Output != "" || messages[1].Tools[0].IsError {
+		t.Fatalf("assistant tool output = %#v, want empty output without IncludeToolOutputs", messages[1].Tools[0])
+	}
 	if messages[2].Role != "user" || messages[2].Text != "Continue where you left off" {
 		t.Fatalf("resume message = %#v", messages[2])
 	}
@@ -226,6 +229,48 @@ func TestStreamIncludesZedCompactionMessagesWhenRequested(t *testing.T) {
 	}
 	if messages[1].Compaction == nil || messages[1].Compaction.Kind != transcript.CompactionKindBoundary {
 		t.Fatalf("provider-native compaction = %#v", messages[1])
+	}
+}
+
+func TestStreamAttachesZedToolResultsWhenRequested(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	updatedAt := time.Date(2026, time.June, 27, 14, 0, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Thread title",
+		"updated_at":"2026-06-27T14:00:00Z",
+		"messages":[
+			{"Agent":{
+				"content":[{"ToolUse":{"id":"call-1","name":"Read","input":{"path":"/repo/readme"}}}],
+				"tool_results":{
+					"call-1":{"tool_use_id":"call-1","is_error":true,"content":["tool output"],"output":{"ok":false}}
+				}
+			}}
+		]
+	}`)
+
+	writeThreadsRow(t, root, "thread-3", "", updatedAt, threadJSON)
+	writeSidebarRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), "thread-3", "", "Thread title", "", updatedAt)
+
+	p := New()
+	candidates, err := p.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	messages, err := conversation.CollectMessages(p.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    true,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 1 || len(messages[0].Tools) != 1 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[0].Tools[0].Output != "tool output" || !messages[0].Tools[0].IsError {
+		t.Fatalf("tool output = %#v", messages[0].Tools[0])
 	}
 }
 

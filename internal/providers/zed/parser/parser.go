@@ -340,7 +340,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 		if message.Agent == nil {
 			return emptyMessage(), false
 		}
-		text, thinking, tools := agentMessageParts(message.Agent)
+		text, thinking, tools := agentMessageParts(message.Agent, opts.IncludeToolOutputs)
 		return transcript.Message{
 			UUID:              "",
 			ParentUUID:        "",
@@ -413,7 +413,7 @@ func userMessageText(message *zedstore.UserMessage) string {
 	return strings.Join(parts, "\n")
 }
 
-func agentMessageParts(message *zedstore.AgentMessage) (string, string, []transcript.ToolCall) {
+func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) (string, string, []transcript.ToolCall) {
 	textParts := make([]string, 0, len(message.Content))
 	thinkingParts := make([]string, 0, len(message.Content))
 	tools := make([]transcript.ToolCall, 0)
@@ -431,16 +431,33 @@ func agentMessageParts(message *zedstore.AgentMessage) (string, string, []transc
 			if part.ToolUse == nil {
 				continue
 			}
+			output, isError := "", false
+			if includeToolOutputs {
+				output, isError = zedToolResultOutput(message.ToolResults[part.ToolUse.ID])
+			}
 			tools = append(tools, transcript.ToolCall{
 				ID:      part.ToolUse.ID,
 				Name:    part.ToolUse.Name,
 				Input:   transcript.ToolInputJSON{Raw: append([]byte(nil), part.ToolUse.Input...)},
-				Output:  "",
-				IsError: false,
+				Output:  output,
+				IsError: isError,
 			})
 		}
 	}
 	return strings.Join(textParts, "\n"), strings.Join(thinkingParts, "\n"), tools
+}
+
+func zedToolResultOutput(result zedstore.ToolResult) (string, bool) {
+	for _, part := range result.Content {
+		var text string
+		if err := json.Unmarshal(part, &text); err == nil && strings.TrimSpace(text) != "" {
+			return text, result.IsError
+		}
+	}
+	if len(result.Output) > 0 && string(result.Output) != "null" {
+		return string(result.Output), result.IsError
+	}
+	return "", result.IsError
 }
 
 func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.CompactionMetadata, string) {
