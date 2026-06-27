@@ -79,12 +79,14 @@ func TestLoadMissingDirReturnsNoDocs(t *testing.T) {
 
 func TestLoadUnsupportedProvider(t *testing.T) {
 	t.Parallel()
-	docs, err := Load(providerid.ProviderArtifact, "/x")
-	if err != nil {
-		t.Fatalf("unsupported provider err = %v, want nil", err)
-	}
-	if docs != nil {
-		t.Fatalf("unsupported provider docs = %#v, want nil", docs)
+	for _, provider := range []providerid.Provider{providerid.ProviderArtifact, providerid.ProviderZed} {
+		docs, err := Load(provider, "/x")
+		if err != nil {
+			t.Fatalf("unsupported provider %q err = %v, want nil", provider, err)
+		}
+		if docs != nil {
+			t.Fatalf("unsupported provider %q docs = %#v, want nil", provider, docs)
+		}
 	}
 }
 
