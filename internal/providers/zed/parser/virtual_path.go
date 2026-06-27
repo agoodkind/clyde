@@ -9,15 +9,15 @@ import (
 
 const virtualPathPrefix = "zed://"
 
-// VirtualPath is the parsed shape of one synthetic Zed conversation path.
+// VirtualPath names one stable virtual Zed artifact path.
 type VirtualPath struct {
 	RootHash  string
 	Channel   string
 	SessionID string
 }
 
-// BuildVirtualPath returns the stable synthetic path Clyde uses for one native
-// Zed thread.
+// BuildVirtualPath returns the stable virtual artifact path Clyde uses for one
+// Zed session within one Zed metadata channel.
 func BuildVirtualPath(rootDir, channel, sessionID string) string {
 	path := virtualPathPrefix + RootHash(rootDir) + "/" + strings.TrimSpace(channel) + "/" + strings.TrimSpace(sessionID)
 	if _, err := ParseVirtualPath(path); err != nil {
@@ -33,7 +33,8 @@ func RootHash(rootDir string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// ParseVirtualPath decodes one synthetic Zed conversation path.
+// ParseVirtualPath decodes one Zed virtual artifact path back into its root
+// hash, channel, and session ID components.
 func ParseVirtualPath(raw string) (VirtualPath, error) {
 	if !strings.HasPrefix(raw, virtualPathPrefix) {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)

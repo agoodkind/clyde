@@ -172,16 +172,6 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 	}
 }
 
-func emptyRecord() conversation.Record {
-	var record conversation.Record
-	return record
-}
-
-func emptyMessage() transcript.Message {
-	var message transcript.Message
-	return message
-}
-
 func readThreadRowsForRoot(ctx context.Context, root zedstore.DataRoot) ([]zedstore.ThreadRow, error) {
 	if _, err := os.Stat(root.ThreadsDBPath); err != nil {
 		if os.IsNotExist(err) {
@@ -539,7 +529,7 @@ func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.Compac
 	case zedstore.CompactionMessageKindProviderNative:
 		raw, err := json.Marshal(message.Items)
 		if err != nil {
-			return nil, ""
+			raw = nil
 		}
 		return &transcript.CompactionMetadata{
 			Kind:                      transcript.CompactionKindBoundary,
@@ -564,5 +554,39 @@ func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.Compac
 		}, ""
 	default:
 		return nil, ""
+	}
+}
+
+func emptyRecord() conversation.Record {
+	return conversation.Record{
+		ID:            "",
+		Provider:      providerid.ProviderUnspecified,
+		NativeID:      "",
+		Lineage:       nil,
+		Title:         "",
+		WorkspaceRoot: "",
+		ArtifactPath:  "",
+		ArtifactKind:  "",
+		Model:         "",
+		CreatedAt:     time.Time{},
+		UpdatedAt:     time.Time{},
+		SizeBytes:     0,
+		Archived:      false,
+	}
+}
+
+func emptyMessage() transcript.Message {
+	return transcript.Message{
+		UUID:              "",
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Role:              "",
+		Visibility:        "",
+		Compaction:        nil,
+		Timestamp:         time.Time{},
+		Text:              "",
+		Thinking:          "",
+		HasTools:          false,
+		Tools:             nil,
 	}
 }
