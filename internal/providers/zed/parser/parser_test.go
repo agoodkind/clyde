@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"goodkind.io/clyde/internal/conversation"
 )
 
 func TestDiscoverReturnsVirtualCandidateForNativeZedThread(t *testing.T) {
@@ -56,6 +58,86 @@ func TestDiscoverSkipsMetadataOnlyAndExternalAgentThreads(t *testing.T) {
 	}
 }
 
+func TestScanRecordUsesDiscoveredThreadMetadataAndCurrentThreadJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	rowUpdatedAt := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
+	metadataUpdatedAt := time.Date(2026, time.June, 27, 12, 5, 0, 0, time.UTC)
+	metadataCreatedAt := time.Date(2026, time.June, 26, 8, 0, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Thread title from payload",
+		"updated_at":"2026-06-27T12:00:00Z",
+		"model":{"provider":"anthropic","model":"claude-sonnet"},
+		"subagent_context":{"parent_thread_id":"parent-thread","depth":1},
+		"messages":[]
+	}`)
+
+	writeThreadsRow(t, root, "thread-1", "", rowUpdatedAt, threadJSON)
+	writeSidebarRowWithOptions(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), sidebarRowOptions{
+		SessionID:              "thread-1",
+		Title:                  "Metadata title",
+		TitleOverride:          "User title",
+		UpdatedAt:              metadataUpdatedAt,
+		CreatedAt:              metadataCreatedAt,
+		FolderPaths:            "/repo/a\n/repo/b",
+		FolderPathsOrder:       "1,0",
+		Archived:               true,
+		MainWorktreePaths:      "/repo/a\n/repo/b",
+		MainWorktreePathsOrder: "1,0",
+	})
+
+	p := New()
+	candidates, err := p.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates len = %d, want 1", len(candidates))
+	}
+
+	record, ok := p.ScanRecord(candidates[0].Path, candidates[0].Stamp)
+	if !ok {
+		t.Fatal("ScanRecord returned ok=false")
+	}
+	if record.ID != conversation.DerivedID(conversation.ProviderZed, "thread-1", candidates[0].Path) {
+		t.Fatalf("record.ID = %q", record.ID)
+	}
+	if record.Provider != conversation.ProviderZed || record.NativeID != "thread-1" {
+		t.Fatalf("record = %#v", record)
+	}
+	if record.Title != "User title" {
+		t.Fatalf("record.Title = %q, want user override", record.Title)
+	}
+	if record.WorkspaceRoot != "/repo/b" {
+		t.Fatalf("record.WorkspaceRoot = %q, want ordered first folder path", record.WorkspaceRoot)
+	}
+	if record.ArtifactKind != "zed_thread" {
+		t.Fatalf("record.ArtifactKind = %q, want zed_thread", record.ArtifactKind)
+	}
+	if record.Model != "anthropic/claude-sonnet" {
+		t.Fatalf("record.Model = %q, want anthropic/claude-sonnet", record.Model)
+	}
+	if !record.CreatedAt.Equal(metadataCreatedAt) || !record.UpdatedAt.Equal(metadataUpdatedAt) {
+		t.Fatalf("created or updated times = %v / %v", record.CreatedAt, record.UpdatedAt)
+	}
+	if !record.Archived {
+		t.Fatal("record.Archived = false, want true")
+	}
+	if record.Lineage == nil || record.Lineage.Kind != conversation.ConversationLineageKindSpawn || record.Lineage.ParentNativeID != "parent-thread" {
+		t.Fatalf("record.Lineage = %#v", record.Lineage)
+	}
+}
+
+func TestScanRecordReturnsFalseForUnknownVirtualPath(t *testing.T) {
+	t.Parallel()
+
+	record, ok := New().ScanRecord("zed://deadbeef/0-stable/thread-1", conversation.FileStamp{})
+	if ok {
+		t.Fatalf("ScanRecord returned ok=true with record %#v, want false", record)
+	}
+}
+
 func writeThreadsRow(t *testing.T, root, sessionID, parentID string, updatedAt time.Time, data []byte) {
 	t.Helper()
 	dbPath := filepath.Join(root, "threads", "threads.db")
@@ -78,6 +160,37 @@ func writeThreadsRow(t *testing.T, root, sessionID, parentID string, updatedAt t
 
 func writeSidebarRow(t *testing.T, dbPath, sessionID, agentID, title, titleOverride string, updatedAt time.Time) {
 	t.Helper()
+	writeSidebarRowWithOptions(t, dbPath, sidebarRowOptions{
+		SessionID:              sessionID,
+		AgentID:                agentID,
+		Title:                  title,
+		TitleOverride:          titleOverride,
+		UpdatedAt:              updatedAt,
+		CreatedAt:              updatedAt,
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		Archived:               false,
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+	})
+}
+
+type sidebarRowOptions struct {
+	SessionID              string
+	AgentID                string
+	Title                  string
+	TitleOverride          string
+	UpdatedAt              time.Time
+	CreatedAt              time.Time
+	FolderPaths            string
+	FolderPathsOrder       string
+	Archived               bool
+	MainWorktreePaths      string
+	MainWorktreePathsOrder string
+}
+
+func writeSidebarRowWithOptions(t *testing.T, dbPath string, options sidebarRowOptions) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatalf("mkdir metadata dir: %v", err)
 	}
@@ -89,8 +202,9 @@ func writeSidebarRow(t *testing.T, dbPath, sessionID, agentID, title, titleOverr
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sidebar_threads(session_id TEXT PRIMARY KEY,agent_id TEXT,title TEXT NOT NULL,title_override TEXT,updated_at TEXT NOT NULL,created_at TEXT,folder_paths TEXT,folder_paths_order TEXT,archived INTEGER DEFAULT 0,main_worktree_paths TEXT,main_worktree_paths_order TEXT) STRICT;`); err != nil {
 		t.Fatalf("create sidebar table: %v", err)
 	}
-	ts := updatedAt.Format(time.RFC3339)
-	if _, err := db.Exec(`INSERT INTO sidebar_threads(session_id,agent_id,title,title_override,updated_at,created_at,folder_paths,folder_paths_order,archived,main_worktree_paths,main_worktree_paths_order) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, sessionID, nullable(agentID), title, nullable(titleOverride), ts, ts, "/repo", "0", 0, "/repo", "0"); err != nil {
+	updatedAt := options.UpdatedAt.Format(time.RFC3339)
+	createdAt := options.CreatedAt.Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO sidebar_threads(session_id,agent_id,title,title_override,updated_at,created_at,folder_paths,folder_paths_order,archived,main_worktree_paths,main_worktree_paths_order) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, options.SessionID, nullable(options.AgentID), options.Title, nullable(options.TitleOverride), updatedAt, createdAt, options.FolderPaths, options.FolderPathsOrder, options.Archived, options.MainWorktreePaths, options.MainWorktreePathsOrder); err != nil {
 		t.Fatalf("insert sidebar row: %v", err)
 	}
 }

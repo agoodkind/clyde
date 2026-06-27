@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/providerid"
@@ -19,6 +21,7 @@ import (
 )
 
 const concern = "providers.zed.parser"
+const artifactKindZedThread = "zed_thread"
 
 type discoveredThread struct {
 	Row      zedstore.ThreadRow
@@ -110,16 +113,46 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 	return candidates, nil
 }
 
-// ScanRecord returns no record until a later branch adds Zed thread header
-// decoding.
-func (*Parser) ScanRecord(string, conversation.FileStamp) (conversation.Record, bool) {
-	var record conversation.Record
-	return record, false
+// ScanRecord turns one discovered native Zed thread into a derived Clyde
+// record without streaming the full transcript.
+func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
+	p.mu.Lock()
+	discovered, ok := p.discovered[path]
+	p.mu.Unlock()
+	if !ok {
+		return emptyRecord(), false
+	}
+
+	thread, err := zedstore.ParseThreadDocument(discovered.Row.DataType, discovered.Row.Data)
+	if err != nil {
+		return emptyRecord(), false
+	}
+
+	return conversation.Record{
+		ID:            conversation.DerivedID(providerid.ProviderZed, discovered.Row.SessionID, path),
+		Provider:      providerid.ProviderZed,
+		NativeID:      discovered.Row.SessionID,
+		Lineage:       buildLineage(discovered.Row.ParentSessionID, thread.SubagentContext),
+		Title:         resolvedTitle(discovered.Metadata, thread),
+		WorkspaceRoot: firstNonEmptyString(firstPath(discovered.Metadata.FolderPaths), firstPath(discovered.Row.FolderPaths)),
+		ArtifactPath:  path,
+		ArtifactKind:  artifactKindZedThread,
+		Model:         resolvedModel(thread.Model),
+		CreatedAt:     firstNonZeroTime(discovered.Metadata.CreatedAt, discovered.Row.CreatedAt, thread.UpdatedAt),
+		UpdatedAt:     firstNonZeroTime(discovered.Metadata.UpdatedAt, discovered.Row.UpdatedAt, thread.UpdatedAt),
+		SizeBytes:     stamp.Size,
+		Archived:      discovered.Metadata.Archived,
+	}, true
 }
 
 // Stream yields no messages until a later branch adds Zed transcript parsing.
 func (*Parser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(func(transcript.Message, error) bool) {}
+}
+
+func emptyRecord() conversation.Record {
+	var record conversation.Record
+	return record
 }
 
 func readThreadRowsForRoot(ctx context.Context, root zedstore.DataRoot) ([]zedstore.ThreadRow, error) {
@@ -194,4 +227,63 @@ func parsableThreadRows(ctx context.Context, path string, rows []zedstore.Thread
 		}
 	}
 	return filtered
+}
+
+func buildLineage(parentSessionID string, subagentContext *zedstore.SubagentContext) *conversation.Lineage {
+	parentNativeID := strings.TrimSpace(parentSessionID)
+	if subagentContext != nil && strings.TrimSpace(subagentContext.ParentThreadID) != "" {
+		parentNativeID = strings.TrimSpace(subagentContext.ParentThreadID)
+	}
+	if parentNativeID == "" {
+		return nil
+	}
+	return &conversation.Lineage{
+		Kind:              conversation.ConversationLineageKindSpawn,
+		ParentProvider:    providerid.ProviderZed,
+		ParentNativeID:    parentNativeID,
+		ParentMessageUUID: "",
+	}
+}
+
+func resolvedTitle(metadata zedstore.SidebarThreadMetadata, thread zedstore.ThreadDocument) string {
+	title := firstNonEmptyString(metadata.TitleOverride, metadata.Title, thread.Title)
+	if title == "" {
+		return "Untitled Zed Thread"
+	}
+	return title
+}
+
+func resolvedModel(model *zedstore.ThreadModel) string {
+	if model == nil {
+		return ""
+	}
+	if model.Provider == "" || model.Model == "" {
+		return ""
+	}
+	return model.Provider + "/" + model.Model
+}
+
+func firstPath(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonZeroTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
 }
