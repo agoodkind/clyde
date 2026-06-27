@@ -119,10 +119,8 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 // ScanRecord turns one discovered native Zed thread into a derived Clyde
 // record without streaming the full transcript.
 func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
-	p.mu.Lock()
-	discovered, ok := p.discovered[path]
-	p.mu.Unlock()
-	if !ok {
+	discovered, err := p.resolveDiscoveredThread(path)
+	if err != nil {
 		return emptyRecord(), false
 	}
 
@@ -152,11 +150,9 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 // thread.
 func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(yield func(transcript.Message, error) bool) {
-		p.mu.Lock()
-		discovered, ok := p.discovered[path]
-		p.mu.Unlock()
-		if !ok {
-			yield(emptyMessage(), fmt.Errorf("zed stream path not discovered: %s", path))
+		discovered, err := p.resolveDiscoveredThread(path)
+		if err != nil {
+			yield(emptyMessage(), err)
 			return
 		}
 		thread, err := zedstore.ParseThreadDocument(discovered.Row.DataType, discovered.Row.Data)
@@ -258,6 +254,60 @@ func parsableThreadRows(ctx context.Context, path string, rows []zedstore.Thread
 		}
 	}
 	return filtered
+}
+
+func (p *Parser) resolveDiscoveredThread(path string) (discoveredThread, error) {
+	p.mu.Lock()
+	discovered, ok := p.discovered[path]
+	p.mu.Unlock()
+	if ok {
+		return discovered, nil
+	}
+
+	virtualPath, err := ParseVirtualPath(path)
+	if err != nil {
+		slog.Warn("providers.zed.parser.virtual_path_parse_failed", "concern", concern, "path", path, "err", err)
+		return discoveredThread{}, fmt.Errorf("parse zed virtual path: %w", err)
+	}
+	roots, err := zedstore.ResolveDataRootsFromEnv(context.Background())
+	if err != nil {
+		slog.Warn("providers.zed.parser.resolve_roots_failed", "concern", concern, "path", path, "err", err)
+		return discoveredThread{}, fmt.Errorf("resolve zed data roots: %w", err)
+	}
+	for _, root := range roots {
+		if RootHash(root.RootDir) != virtualPath.RootHash {
+			continue
+		}
+		rows, err := readThreadRowsForRoot(context.Background(), root)
+		if err != nil {
+			return discoveredThread{}, err
+		}
+		metadataBySession, err := readMetadataForRoot(context.Background(), root)
+		if err != nil {
+			return discoveredThread{}, err
+		}
+		metadata, ok := metadataBySession[virtualPath.SessionID]
+		if !ok || metadata.Channel != virtualPath.Channel || metadata.Metadata.AgentID != "" {
+			continue
+		}
+		for _, row := range rows {
+			if row.SessionID != virtualPath.SessionID {
+				continue
+			}
+			resolved := discoveredThread{
+				Row:      row,
+				Metadata: metadata.Metadata,
+				RootDir:  root.RootDir,
+				Channel:  metadata.Channel,
+			}
+			p.mu.Lock()
+			p.discovered[path] = resolved
+			p.mu.Unlock()
+			return resolved, nil
+		}
+	}
+	slog.Warn("providers.zed.parser.virtual_path_not_found", "concern", concern, "path", path, "session_id", virtualPath.SessionID, "channel", virtualPath.Channel)
+	return discoveredThread{}, fmt.Errorf("zed stream path not discovered: %s", path)
 }
 
 func buildLineage(parentSessionID string, subagentContext *zedstore.SubagentContext) *conversation.Lineage {

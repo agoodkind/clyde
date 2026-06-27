@@ -274,6 +274,41 @@ func TestStreamAttachesZedToolResultsWhenRequested(t *testing.T) {
 	}
 }
 
+func TestStreamCanReloadDiscoveredVirtualPathWithoutCachedDiscovery(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	updatedAt := time.Date(2026, time.June, 27, 14, 30, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Thread title",
+		"updated_at":"2026-06-27T14:30:00Z",
+		"messages":[
+			{"User":{"id":"user-1","content":[{"Text":"hello again"}]}}
+		]
+	}`)
+
+	writeThreadsRow(t, root, "thread-4", "", updatedAt, threadJSON)
+	writeSidebarRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), "thread-4", "", "Thread title", "", updatedAt)
+
+	firstParser := New()
+	candidates, err := firstParser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	freshParser := New()
+	messages, err := conversation.CollectMessages(freshParser.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Text != "hello again" {
+		t.Fatalf("messages = %#v", messages)
+	}
+}
+
 func writeThreadsRow(t *testing.T, root, sessionID, parentID string, updatedAt time.Time, data []byte) {
 	t.Helper()
 	dbPath := filepath.Join(root, "threads", "threads.db")
