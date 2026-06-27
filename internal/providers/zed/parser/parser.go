@@ -101,6 +101,9 @@ func discoverThreadsDatabase(ctx context.Context, root zedstore.DataRoot) (conve
 	if len(rows) == 0 {
 		return emptyCandidate(), false
 	}
+	if !hasDecodableThreadPayload(ctx, root.ThreadsDBPath, rows) {
+		return emptyCandidate(), false
+	}
 
 	return conversation.ScanCandidate{
 		Path: root.ThreadsDBPath,
@@ -132,4 +135,15 @@ func rootHasSidebarMetadata(ctx context.Context, root zedstore.DataRoot) (bool, 
 		}
 	}
 	return false, nil
+}
+
+func hasDecodableThreadPayload(ctx context.Context, path string, rows []zedstore.ThreadRow) bool {
+	for _, row := range rows {
+		_, decodeErr := zedstore.DecodeThreadJSON(row.DataType, row.Data)
+		if decodeErr == nil {
+			return true
+		}
+		slog.WarnContext(ctx, "providers.zed.parser.decode_thread_payload_failed", "concern", concern, "path", path, "session_id", row.SessionID, "data_type", string(row.DataType), "err", decodeErr)
+	}
+	return false
 }
