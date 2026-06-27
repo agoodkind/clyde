@@ -529,6 +529,69 @@ func TestStreamIncludesZedCompactionMessagesWhenRequested(t *testing.T) {
 	}
 }
 
+func TestStreamPreservesNonStringToolResultContentAsRawJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+
+	updatedAt := time.Date(2026, time.June, 27, 14, 0, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Thread title",
+		"updated_at":"2026-06-27T14:00:00Z",
+		"messages":[
+			{"Agent":{
+				"content":[{"ToolUse":{"id":"call-1","name":"Read","input":{"path":"/repo/readme"}}}],
+				"tool_results":{
+					"call-1":{"tool_use_id":"call-1","is_error":true,"content":["tool output",{"ok":false},7],"output":"tail output"}
+				}
+			}}
+		]
+	}`)
+
+	writeThreadRow(t, root, threadRowOptions{
+		ThreadID:  "thread-3",
+		ParentID:  "",
+		UpdatedAt: updatedAt,
+		CreatedAt: updatedAt,
+		DataType:  "json",
+		Data:      threadJSON,
+	})
+	writeSidebarThreadRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), sidebarThreadRowOptions{
+		SessionID:              "thread-3",
+		Title:                  "Thread title",
+		UpdatedAt:              updatedAt,
+		CreatedAt:              updatedAt,
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		Archived:               false,
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+	})
+
+	parser := New()
+	candidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	messages, err := conversation.CollectMessages(parser.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    true,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 1 || len(messages[0].Tools) != 1 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[0].Tools[0].Output != "tool output\n{\"ok\":false}\n7\ntail output" {
+		t.Fatalf("tool output = %#v", messages[0].Tools[0])
+	}
+	if !messages[0].Tools[0].IsError {
+		t.Fatalf("tool call = %#v, want IsError=true", messages[0].Tools[0])
+	}
+}
+
 type threadRowOptions struct {
 	ThreadID  string
 	ParentID  string
