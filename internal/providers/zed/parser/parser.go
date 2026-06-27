@@ -4,6 +4,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -147,14 +148,49 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	}, true
 }
 
-// Stream yields no messages until a later branch adds Zed transcript parsing.
-func (*Parser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
-	return func(func(transcript.Message, error) bool) {}
+// Stream lazily yields transcript-shaped messages for one discovered Zed
+// thread.
+func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
+	return func(yield func(transcript.Message, error) bool) {
+		p.mu.Lock()
+		discovered, ok := p.discovered[path]
+		p.mu.Unlock()
+		if !ok {
+			yield(emptyMessage(), fmt.Errorf("zed stream path not discovered: %s", path))
+			return
+		}
+		thread := discovered.Thread
+		for _, message := range thread.Messages {
+			mapped, include := transcriptMessage(thread, message, opts)
+			if !include {
+				continue
+			}
+			if !yield(mapped, nil) {
+				return
+			}
+		}
+	}
 }
 
 func emptyRecord() conversation.Record {
 	var record conversation.Record
 	return record
+}
+
+func emptyMessage() transcript.Message {
+	return transcript.Message{
+		UUID:              "",
+		ParentUUID:        "",
+		LogicalParentUUID: "",
+		Role:              "",
+		Visibility:        "",
+		Compaction:        nil,
+		Timestamp:         time.Time{},
+		Text:              "",
+		Thinking:          "",
+		HasTools:          false,
+		Tools:             nil,
+	}
 }
 
 func readThreadRowsForRoot(ctx context.Context, root zedstore.DataRoot) ([]zedstore.ThreadRow, error) {
@@ -287,4 +323,203 @@ func latestNonZeroTime(values ...time.Time) time.Time {
 		}
 	}
 	return latest
+}
+
+func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMessage, opts conversation.LoadOptions) (transcript.Message, bool) {
+	switch message.Kind {
+	case zedstore.ThreadMessageKindUser:
+		if message.User == nil {
+			return emptyMessage(), false
+		}
+		text := userMessageText(message.User)
+		if strings.TrimSpace(text) == "" {
+			return emptyMessage(), false
+		}
+		return transcript.Message{
+			UUID:              message.User.ID,
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "user",
+			Visibility:        transcript.MessageVisibilityVisible,
+			Compaction:        nil,
+			Timestamp:         thread.UpdatedAt,
+			Text:              text,
+			Thinking:          "",
+			HasTools:          false,
+			Tools:             nil,
+		}, true
+	case zedstore.ThreadMessageKindAgent:
+		if message.Agent == nil {
+			return emptyMessage(), false
+		}
+		text, thinking, tools := agentMessageParts(message.Agent)
+		if text == "" && thinking == "" && len(tools) == 0 {
+			return emptyMessage(), false
+		}
+		return transcript.Message{
+			UUID:              "",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "assistant",
+			Visibility:        transcript.MessageVisibilityVisible,
+			Compaction:        nil,
+			Timestamp:         thread.UpdatedAt,
+			Text:              text,
+			Thinking:          thinking,
+			HasTools:          len(tools) > 0,
+			Tools:             tools,
+		}, true
+	case zedstore.ThreadMessageKindResume:
+		return transcript.Message{
+			UUID:              "",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "user",
+			Visibility:        transcript.MessageVisibilityVisible,
+			Compaction:        nil,
+			Timestamp:         thread.UpdatedAt,
+			Text:              "Continue where you left off",
+			Thinking:          "",
+			HasTools:          false,
+			Tools:             nil,
+		}, true
+	case zedstore.ThreadMessageKindCompaction:
+		if !opts.IncludeSystemMessages || message.Compaction == nil {
+			return emptyMessage(), false
+		}
+		compaction, text := compactionMetadata(message.Compaction)
+		if compaction == nil || strings.TrimSpace(text) == "" {
+			return emptyMessage(), false
+		}
+		return transcript.Message{
+			UUID:              "",
+			ParentUUID:        "",
+			LogicalParentUUID: "",
+			Role:              "system",
+			Visibility:        transcript.MessageVisibilityTranscriptOnly,
+			Compaction:        compaction,
+			Timestamp:         thread.UpdatedAt,
+			Text:              text,
+			Thinking:          "",
+			HasTools:          false,
+			Tools:             nil,
+		}, true
+	default:
+		return emptyMessage(), false
+	}
+}
+
+func userMessageText(message *zedstore.UserMessage) string {
+	parts := make([]string, 0, len(message.Content))
+	for _, part := range message.Content {
+		switch part.Kind {
+		case zedstore.UserContentKindText:
+			if strings.TrimSpace(part.Text) != "" {
+				parts = append(parts, part.Text)
+			}
+		case zedstore.UserContentKindMention:
+			if part.Mention == nil {
+				continue
+			}
+			if strings.TrimSpace(part.Mention.Content) != "" {
+				parts = append(parts, part.Mention.Content)
+			} else if strings.TrimSpace(part.Mention.URI) != "" {
+				parts = append(parts, part.Mention.URI)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func agentMessageParts(message *zedstore.AgentMessage) (string, string, []transcript.ToolCall) {
+	textParts := make([]string, 0, len(message.Content))
+	thinkingParts := make([]string, 0, len(message.Content))
+	tools := make([]transcript.ToolCall, 0)
+	for _, part := range message.Content {
+		switch part.Kind {
+		case zedstore.AgentContentKindText:
+			if strings.TrimSpace(part.Text) != "" {
+				textParts = append(textParts, part.Text)
+			}
+		case zedstore.AgentContentKindThinking, zedstore.AgentContentKindRedactedThinking:
+			if strings.TrimSpace(part.Text) != "" {
+				thinkingParts = append(thinkingParts, part.Text)
+			}
+		case zedstore.AgentContentKindToolUse:
+			if part.ToolUse == nil {
+				continue
+			}
+			tools = append(tools, transcript.ToolCall{
+				ID:      part.ToolUse.ID,
+				Name:    part.ToolUse.Name,
+				Input:   transcript.ToolInputJSON{Raw: append([]byte(nil), part.ToolUse.Input...)},
+				Output:  "",
+				IsError: false,
+			})
+		}
+	}
+	return strings.Join(textParts, "\n"), strings.Join(thinkingParts, "\n"), tools
+}
+
+func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.CompactionMetadata, string) {
+	switch message.Kind {
+	case zedstore.CompactionMessageKindSummary:
+		summary := strings.TrimSpace(message.Summary)
+		if summary == "" {
+			return nil, ""
+		}
+		return &transcript.CompactionMetadata{
+			Kind:                      transcript.CompactionKindSummary,
+			Trigger:                   transcript.CompactionTriggerUnknown,
+			PreTokens:                 0,
+			PostTokens:                0,
+			TokensSaved:               0,
+			MessagesSummarized:        0,
+			ReplacementHistoryCount:   0,
+			HeadUUID:                  "",
+			AnchorUUID:                "",
+			TailUUID:                  "",
+			ContextItems:              nil,
+			UserContext:               "",
+			Direction:                 "",
+			PreCompactDiscoveredTools: nil,
+			CompactedToolIDs:          nil,
+			ClearedAttachmentUUIDs:    nil,
+			RawCompactMetadata:        nil,
+			RawMicrocompactMetadata:   nil,
+			RawSummarizeMetadata:      nil,
+		}, summary
+	case zedstore.CompactionMessageKindProviderNative:
+		raw, err := json.Marshal(message.Items)
+		if err != nil {
+			return nil, ""
+		}
+		text := "Conversation compacted"
+		if provider := strings.TrimSpace(message.Provider); provider != "" {
+			text = provider + " compaction boundary"
+		}
+		return &transcript.CompactionMetadata{
+			Kind:                      transcript.CompactionKindBoundary,
+			Trigger:                   transcript.CompactionTriggerUnknown,
+			PreTokens:                 0,
+			PostTokens:                0,
+			TokensSaved:               0,
+			MessagesSummarized:        0,
+			ReplacementHistoryCount:   0,
+			HeadUUID:                  "",
+			AnchorUUID:                "",
+			TailUUID:                  "",
+			ContextItems:              nil,
+			UserContext:               "",
+			Direction:                 "",
+			PreCompactDiscoveredTools: nil,
+			CompactedToolIDs:          nil,
+			ClearedAttachmentUUIDs:    nil,
+			RawCompactMetadata:        raw,
+			RawMicrocompactMetadata:   nil,
+			RawSummarizeMetadata:      nil,
+		}, text
+	default:
+		return nil, ""
+	}
 }
