@@ -227,6 +227,7 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	resp, err := client.rpc.SearchConversations(rpcCtx, &clydev1.SearchConversationsRequest{
 		Query:                options.Query,
 		Limit:                int64(options.Limit),
+		Offset:               int64(options.Offset),
 		Provider:             protoProvider(options.Provider),
 		Workspace:            options.WorkspaceRoot,
 		IncludeArchived:      options.IncludeArchived,
@@ -259,6 +260,8 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 		ConversationsScanned: int(resp.GetConversationsScanned()),
 		ReturnedCount:        int(resp.GetReturnedCount()),
 		Limit:                int(resp.GetLimit()),
+		Offset:               int(resp.GetOffset()),
+		NextOffset:           int(resp.GetNextOffset()),
 		HasMore:              resp.GetHasMore(),
 		Source:               searchSourceFromProto(resp.GetSource()),
 		Facets:               searchFacetsFromProto(resp.GetFacets()),

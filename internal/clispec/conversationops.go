@@ -28,6 +28,7 @@ type searchInput struct {
 	After           string
 	Until           string
 	Limit           int
+	Offset          int
 	Around          int
 	Window          int
 	MinScore        float64
@@ -150,6 +151,8 @@ func searchParams() []Param[searchInput] {
 			func(in *searchInput, v string) { in.Until = v }),
 		IntParam("limit", "Maximum matches or conversations to return.", conv.DefaultSearchLimit,
 			func(in *searchInput, v int) { in.Limit = v }),
+		IntParam("offset", "Result offset for the next page.", 0,
+			func(in *searchInput, v int) { in.Offset = v }),
 		IntParam("around", "Message index to center a read window on.", -1,
 			func(in *searchInput, v int) { in.Around = v }),
 		IntParam("window", "Messages before and after for a context window.", 5,
@@ -171,6 +174,7 @@ func newSearchInput() searchInput {
 		After:           "",
 		Until:           "",
 		Limit:           conv.DefaultSearchLimit,
+		Offset:          0,
 		Around:          -1,
 		Window:          5,
 		MinScore:        0,
@@ -242,7 +246,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         mode,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0},
 			ListOpts:     conv.ListOptions{Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", Query: "", IncludeArchived: false, All: false},
 			Conversation: conversation,
 			Around:       in.Around,
@@ -255,7 +259,7 @@ func prepareSearch(in searchInput) (searchPayload, error) {
 		}
 		return searchPayload{
 			Mode:         searchModeBrowse,
-			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0},
+			SearchOpts:   conv.SearchConversationsOptions{Query: "", Limit: 0, Offset: 0, Provider: providerid.ProviderUnspecified, WorkspaceRoot: "", IncludeArchived: false, Roles: nil, FromUnix: 0, UntilUnix: 0, MinScore: 0, PerConversationLimit: 0, ConversationID: "", ContextWindow: 0},
 			ListOpts:     opts,
 			Conversation: "",
 			Around:       in.Around,
@@ -325,7 +329,7 @@ func listOptionsFromInput(in searchInput) (conv.ListOptions, error) {
 	}
 	return conv.ListOptions{
 		Limit:           in.Limit,
-		Offset:          0,
+		Offset:          in.Offset,
 		Provider:        provider,
 		WorkspaceRoot:   cleanWorkspaceRoot(in.WorkspaceRoot),
 		Query:           "",
@@ -350,6 +354,7 @@ func searchConversationsOptionsFromInput(in searchInput) (conv.SearchConversatio
 	return conv.SearchConversationsOptions{
 		Query:                in.Query,
 		Limit:                in.Limit,
+		Offset:               in.Offset,
 		Provider:             provider,
 		WorkspaceRoot:        cleanWorkspaceRoot(in.WorkspaceRoot),
 		IncludeArchived:      in.IncludeArchived,
@@ -485,7 +490,7 @@ func formatSearchConversationsResult(result conv.SearchConversationsResult, quer
 	}
 	fmt.Fprintf(&out, "%d results.", len(result.Matches))
 	if result.HasMore {
-		out.WriteString("  More available: narrow with --before / --after or a tighter query.")
+		fmt.Fprintf(&out, " More: --offset %d", result.NextOffset)
 	}
 	out.WriteString("\n")
 	return out.String()

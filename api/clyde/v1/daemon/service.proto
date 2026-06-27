@@ -242,6 +242,8 @@ message SearchConversationsRequest {
   // context_window is the number of messages before and after each hit to render
   // inline on the match. Zero means the daemon's default small window.
   int64 context_window = 12;
+  // offset skips this many matching results before returning the current page.
+  int64 offset = 13;
 }
 
 // SearchSource names where the returned matches came from, replacing the old
@@ -318,6 +320,8 @@ message SearchConversationsResponse {
   SearchFacets facets = 7;
   SearchFreshness freshness = 8;
   FilterAccounting filter_accounting = 9;
+  int64 offset = 10;
+  int64 next_offset = 11;
 }
 
 message ConversationInfoStats {

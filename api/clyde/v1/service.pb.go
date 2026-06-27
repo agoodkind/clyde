@@ -1917,6 +1917,8 @@ type SearchConversationsRequest struct {
 	// context_window is the number of messages before and after each hit to render
 	// inline on the match. Zero means the daemon's default small window.
 	ContextWindow int64 `protobuf:"varint,12,opt,name=context_window,json=contextWindow,proto3" json:"context_window,omitempty"`
+	// offset skips this many matching results before returning the current page.
+	Offset        int64 `protobuf:"varint,13,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2031,6 +2033,13 @@ func (x *SearchConversationsRequest) GetConversationId() string {
 func (x *SearchConversationsRequest) GetContextWindow() int64 {
 	if x != nil {
 		return x.ContextWindow
+	}
+	return 0
+}
+
+func (x *SearchConversationsRequest) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
 	}
 	return 0
 }
@@ -2434,6 +2443,8 @@ type SearchConversationsResponse struct {
 	Facets               *SearchFacets              `protobuf:"bytes,7,opt,name=facets,proto3" json:"facets,omitempty"`
 	Freshness            *SearchFreshness           `protobuf:"bytes,8,opt,name=freshness,proto3" json:"freshness,omitempty"`
 	FilterAccounting     *FilterAccounting          `protobuf:"bytes,9,opt,name=filter_accounting,json=filterAccounting,proto3" json:"filter_accounting,omitempty"`
+	Offset               int64                      `protobuf:"varint,10,opt,name=offset,proto3" json:"offset,omitempty"`
+	NextOffset           int64                      `protobuf:"varint,11,opt,name=next_offset,json=nextOffset,proto3" json:"next_offset,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2529,6 +2540,20 @@ func (x *SearchConversationsResponse) GetFilterAccounting() *FilterAccounting {
 		return x.FilterAccounting
 	}
 	return nil
+}
+
+func (x *SearchConversationsResponse) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *SearchConversationsResponse) GetNextOffset() int64 {
+	if x != nil {
+		return x.NextOffset
+	}
+	return 0
 }
 
 type ConversationInfoStats struct {
@@ -3809,7 +3834,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\ttimestamp\x18\x02 \x01(\tR\ttimestamp\x12#\n" +
 	"\rmessage_index\x18\x03 \x01(\x03R\fmessageIndex\x12\x16\n" +
 	"\x06before\x18\x04 \x01(\x03R\x06before\x12\x14\n" +
-	"\x05after\x18\x05 \x01(\x03R\x05after\"\xb6\x03\n" +
+	"\x05after\x18\x05 \x01(\x03R\x05after\"\xce\x03\n" +
 	"\x1aSearchConversationsRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x03R\x05limit\x12.\n" +
@@ -3824,7 +3849,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x16per_conversation_limit\x18\n" +
 	" \x01(\x03R\x14perConversationLimit\x12'\n" +
 	"\x0fconversation_id\x18\v \x01(\tR\x0econversationId\x12%\n" +
-	"\x0econtext_window\x18\f \x01(\x03R\rcontextWindow\"\x92\x02\n" +
+	"\x0econtext_window\x18\f \x01(\x03R\rcontextWindow\x12\x16\n" +
+	"\x06offset\x18\r \x01(\x03R\x06offset\"\x92\x02\n" +
 	"\x17ConversationSearchMatch\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.clyde.v1.ConversationRecordR\fconversation\x12#\n" +
 	"\rmessage_index\x18\x02 \x01(\x03R\fmessageIndex\x12\x12\n" +
@@ -3852,7 +3878,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tremaining\x18\x02 \x01(\x03R\tremaining\"A\n" +
 	"\x10FilterAccounting\x12-\n" +
-	"\x06stages\x18\x01 \x03(\v2\x15.clyde.v1.FilterStageR\x06stages\"\xc9\x03\n" +
+	"\x06stages\x18\x01 \x03(\v2\x15.clyde.v1.FilterStageR\x06stages\"\x82\x04\n" +
 	"\x1bSearchConversationsResponse\x12;\n" +
 	"\amatches\x18\x01 \x03(\v2!.clyde.v1.ConversationSearchMatchR\amatches\x123\n" +
 	"\x15conversations_scanned\x18\x02 \x01(\x03R\x14conversationsScanned\x12%\n" +
@@ -3862,7 +3888,11 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x06source\x18\x06 \x01(\x0e2\x16.clyde.v1.SearchSourceR\x06source\x12.\n" +
 	"\x06facets\x18\a \x01(\v2\x16.clyde.v1.SearchFacetsR\x06facets\x127\n" +
 	"\tfreshness\x18\b \x01(\v2\x19.clyde.v1.SearchFreshnessR\tfreshness\x12G\n" +
-	"\x11filter_accounting\x18\t \x01(\v2\x1a.clyde.v1.FilterAccountingR\x10filterAccounting\"\xba\x02\n" +
+	"\x11filter_accounting\x18\t \x01(\v2\x1a.clyde.v1.FilterAccountingR\x10filterAccounting\x12\x16\n" +
+	"\x06offset\x18\n" +
+	" \x01(\x03R\x06offset\x12\x1f\n" +
+	"\vnext_offset\x18\v \x01(\x03R\n" +
+	"nextOffset\"\xba\x02\n" +
 	"\x15ConversationInfoStats\x12%\n" +
 	"\x0etotal_messages\x18\x01 \x01(\x03R\rtotalMessages\x12)\n" +
 	"\x10visible_messages\x18\x02 \x01(\x03R\x0fvisibleMessages\x12#\n" +

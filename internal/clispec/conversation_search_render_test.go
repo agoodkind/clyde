@@ -99,3 +99,34 @@ func TestFormatSearchConversationsResultEmpty(t *testing.T) {
 		t.Fatalf("empty render = %q", out)
 	}
 }
+
+// TestFormatSearchConversationsResultShowsOffsetHint proves the default text
+// output points the next page at the shared --offset flag.
+func TestFormatSearchConversationsResultShowsOffsetHint(t *testing.T) {
+	t.Parallel()
+	result := conv.SearchConversationsResult{
+		Matches: []conv.SearchMatch{
+			{
+				Record: conv.Record{
+					ID:            "claude:abc",
+					Provider:      conv.ProviderClaude,
+					Title:         "Auth timeout",
+					WorkspaceRoot: "/repo/alpha",
+				},
+				Role:      "user",
+				Timestamp: time.Date(2026, 4, 26, 13, 53, 48, 0, time.UTC),
+				Snippet:   "auth timeout",
+			},
+		},
+		ReturnedCount: 1,
+		Limit:         1,
+		NextOffset:    21,
+		HasMore:       true,
+	}
+
+	out := formatSearchConversationsResult(result, "auth")
+
+	if !strings.Contains(out, "1 results. More: --offset 21") {
+		t.Fatalf("output missing offset hint:\n%s", out)
+	}
+}

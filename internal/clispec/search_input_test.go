@@ -73,3 +73,36 @@ func TestPrepareSearchUsesConversationIDPositional(t *testing.T) {
 		t.Fatalf("mode = %v, want read conversation", readPayload.Mode)
 	}
 }
+
+// TestPrepareSearchCarriesOffset proves paging applies to search and browse
+// modes from the shared --offset flag.
+func TestPrepareSearchCarriesOffset(t *testing.T) {
+	t.Parallel()
+
+	searchPayload, err := prepareSearch(searchInput{
+		Query:  "auth timeout",
+		Limit:  20,
+		Offset: 40,
+		Window: 5,
+		Around: -1,
+	})
+	if err != nil {
+		t.Fatalf("prepare search: %v", err)
+	}
+	if searchPayload.SearchOpts.Offset != 40 {
+		t.Fatalf("search offset = %d, want 40", searchPayload.SearchOpts.Offset)
+	}
+
+	browsePayload, err := prepareSearch(searchInput{
+		Limit:  20,
+		Offset: 40,
+		Window: 5,
+		Around: -1,
+	})
+	if err != nil {
+		t.Fatalf("prepare browse: %v", err)
+	}
+	if browsePayload.ListOpts.Offset != 40 {
+		t.Fatalf("browse offset = %d, want 40", browsePayload.ListOpts.Offset)
+	}
+}

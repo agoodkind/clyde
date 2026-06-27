@@ -19,6 +19,7 @@ type fakeSearchIndex struct {
 	live      conversation.SearchConversationsResult
 	liveErr   error
 	liveCalls int
+	lastLive  conversation.SearchConversationsOptions
 }
 
 func (f *fakeSearchIndex) RecordByID(id string) (conversation.Record, bool) {
@@ -43,8 +44,9 @@ func (f *fakeSearchIndex) ConversationIDsMatching(_ context.Context, provider co
 	return conversationIDs, nil
 }
 
-func (f *fakeSearchIndex) SearchConversations(context.Context, conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error) {
+func (f *fakeSearchIndex) SearchConversations(_ context.Context, options conversation.SearchConversationsOptions) (conversation.SearchConversationsResult, error) {
 	f.liveCalls++
+	f.lastLive = options
 	return f.live, f.liveErr
 }
 
@@ -54,10 +56,12 @@ type fakeSemanticSearch struct {
 	hits    []semsearch.SemHit
 	err     error
 	filters []semsearch.SearchFilter
+	limits  []int32
 }
 
-func (f *fakeSemanticSearch) SearchConversations(_ context.Context, _ string, _ string, _ int32, filter semsearch.SearchFilter, _ int32) ([]semsearch.SemHit, error) {
+func (f *fakeSemanticSearch) SearchConversations(_ context.Context, _ string, _ string, limit int32, filter semsearch.SearchFilter, _ int32) ([]semsearch.SemHit, error) {
 	f.filters = append(f.filters, filter)
+	f.limits = append(f.limits, limit)
 	return f.hits, f.err
 }
 
@@ -129,6 +133,162 @@ func TestSearchConversationsResultEngineHitsReturnWithoutFallback(t *testing.T) 
 	}
 	if !match.Timestamp.Equal(time.Unix(7, 0)) {
 		t.Fatalf("timestamp = %v, want %v", match.Timestamp, time.Unix(7, 0))
+	}
+}
+
+func TestSearchConversationsResultEngineAppliesOffset(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records: map[string]conversation.Record{
+			"claude:one": daemonTestRecord("claude:one", false),
+			"claude:two": daemonTestRecord("claude:two", false),
+		},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{
+		hits: []semsearch.SemHit{
+			{ConversationID: "claude:one", MessageIndex: 0, Role: "user", TimestampUnix: 5, Content: "first auth timeout"},
+			{ConversationID: "claude:two", MessageIndex: 1, Role: "assistant", TimestampUnix: 6, Content: "second auth timeout"},
+		},
+		err: nil,
+	}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 1, Offset: 1}
+
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	if err != nil {
+		t.Fatalf("search conversations result: %v", err)
+	}
+	if len(semantic.limits) != 1 || semantic.limits[0] != 2 {
+		t.Fatalf("engine limits = %v, want [2]", semantic.limits)
+	}
+	if result.Offset != 1 || result.NextOffset != 2 {
+		t.Fatalf("offsets = %d/%d, want 1/2", result.Offset, result.NextOffset)
+	}
+	if len(result.Matches) != 1 || result.Matches[0].Record.ID != "claude:two" {
+		t.Fatalf("matches = %+v, want claude:two", result.Matches)
+	}
+}
+
+func TestSearchConversationsResultEngineNormalizesLimit(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records: map[string]conversation.Record{
+			"claude:one": daemonTestRecord("claude:one", false),
+			"claude:two": daemonTestRecord("claude:two", false),
+		},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{
+		hits: []semsearch.SemHit{
+			{ConversationID: "claude:one", MessageIndex: 0, Role: "user", TimestampUnix: 5, Content: "first auth timeout"},
+			{ConversationID: "claude:two", MessageIndex: 1, Role: "assistant", TimestampUnix: 6, Content: "second auth timeout"},
+		},
+		err: nil,
+	}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 0, Offset: 1}
+
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	if err != nil {
+		t.Fatalf("search conversations result: %v", err)
+	}
+	if len(semantic.limits) != 1 || semantic.limits[0] != int32(conversation.DefaultSearchLimit+1) {
+		t.Fatalf("engine limits = %v, want [%d]", semantic.limits, conversation.DefaultSearchLimit+1)
+	}
+	if result.Limit != conversation.DefaultSearchLimit {
+		t.Fatalf("limit = %d, want %d", result.Limit, conversation.DefaultSearchLimit)
+	}
+	if result.Offset != 1 || result.NextOffset != 2 {
+		t.Fatalf("offsets = %d/%d, want 1/2", result.Offset, result.NextOffset)
+	}
+}
+
+func TestSearchConversationsResultEngineNormalizesNegativeOffset(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records: map[string]conversation.Record{
+			"claude:one": daemonTestRecord("claude:one", false),
+		},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{
+		hits: []semsearch.SemHit{
+			{ConversationID: "claude:one", MessageIndex: 0, Role: "user", TimestampUnix: 5, Content: "auth timeout"},
+		},
+		err: nil,
+	}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 1, Offset: -5}
+
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	if err != nil {
+		t.Fatalf("search conversations result: %v", err)
+	}
+	if len(semantic.limits) != 1 || semantic.limits[0] != 1 {
+		t.Fatalf("engine limits = %v, want [1]", semantic.limits)
+	}
+	if result.Offset != 0 || result.NextOffset != 1 {
+		t.Fatalf("offsets = %d/%d, want 0/1", result.Offset, result.NextOffset)
+	}
+}
+
+func TestSearchConversationsResultEngineRejectsOffsetTooLarge(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records:   map[string]conversation.Record{"claude:one": daemonTestRecord("claude:one", false)},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{
+		hits: nil,
+		err:  nil,
+	}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Offset: int64(maxInt32Value)}
+
+	_, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	if err == nil {
+		t.Fatal("expected an error for an offset that overflows the semantic page size")
+	}
+	if !strings.Contains(err.Error(), "offset too large") {
+		t.Fatalf("error = %q, want offset too large", err.Error())
+	}
+}
+
+func TestSearchConversationsResultEngineEmptyPageStaysSemantic(t *testing.T) {
+	t.Parallel()
+	idx := &fakeSearchIndex{
+		records: map[string]conversation.Record{
+			"claude:one": daemonTestRecord("claude:one", false),
+		},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{
+		hits: []semsearch.SemHit{
+			{ConversationID: "claude:one", MessageIndex: 0, Role: "user", TimestampUnix: 5, Content: "auth timeout"},
+		},
+		err: nil,
+	}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 1, Offset: 1}
+
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", true, req)
+	if err != nil {
+		t.Fatalf("search conversations result: %v", err)
+	}
+	if idx.liveCalls != 0 {
+		t.Fatalf("live scan called %d times, want 0 when semantic results exist but the requested page is past the end", idx.liveCalls)
+	}
+	if result.Source != conversation.SearchSourceSemantic {
+		t.Fatalf("source = %v, want semantic", result.Source)
+	}
+	if result.ReturnedCount != 0 || result.Offset != 1 || result.NextOffset != 1 {
+		t.Fatalf("result = %+v, want an empty semantic page at offset 1", result)
 	}
 }
 
@@ -317,7 +477,7 @@ func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 		FilterAccounting:     nil,
 	}
 	idx := &fakeSearchIndex{records: nil, live: live, liveErr: nil, liveCalls: 0}
-	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 0, Offset: -5}
 
 	result, err := searchConversationsResult(context.Background(), idx, nil, "", false, req)
 	if err != nil {
@@ -325,6 +485,9 @@ func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 	}
 	if idx.liveCalls != 1 {
 		t.Fatalf("live scan called %d times, want 1 when no engine is configured", idx.liveCalls)
+	}
+	if idx.lastLive.Limit != conversation.DefaultSearchLimit || idx.lastLive.Offset != 0 {
+		t.Fatalf("live options = %+v, want normalized default limit and zero offset", idx.lastLive)
 	}
 	if result.Source != conversation.SearchSourceLiteral {
 		t.Fatalf("source = %v, want literal when no engine is configured", result.Source)

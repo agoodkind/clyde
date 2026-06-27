@@ -63,6 +63,8 @@ type conversationSegmentInfoOutput struct {
 type searchConversationsOutput struct {
 	ReturnedCount        int                              `json:"returned_count"`
 	Limit                int                              `json:"limit"`
+	Offset               int                              `json:"offset"`
+	NextOffset           int                              `json:"next_offset"`
 	ConversationsScanned int                              `json:"conversations_scanned"`
 	HasMore              bool                             `json:"has_more"`
 	Source               string                           `json:"source"`
@@ -209,6 +211,8 @@ func searchConversationsOutputFromDomain(result conv.SearchConversationsResult) 
 	return searchConversationsOutput{
 		ReturnedCount:        result.ReturnedCount,
 		Limit:                result.Limit,
+		Offset:               result.Offset,
+		NextOffset:           result.NextOffset,
 		ConversationsScanned: result.ConversationsScanned,
 		HasMore:              result.HasMore,
 		Source:               result.Source.String(),
