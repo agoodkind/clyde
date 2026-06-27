@@ -104,6 +104,83 @@ func ReadSidebarThreads(ctx context.Context, db *sql.DB) ([]SidebarThreadMetadat
 	return metadata, nil
 }
 
+// ReadSidebarThreadBySession reads one typed Zed sidebar thread metadata row.
+func ReadSidebarThreadBySession(ctx context.Context, db *sql.DB, sessionID string) (SidebarThreadMetadata, bool, error) {
+	var emptyMetadata SidebarThreadMetadata
+
+	exists, err := TableExists(ctx, db, "sidebar_threads")
+	if err != nil {
+		return emptyMetadata, false, err
+	}
+	if !exists {
+		return emptyMetadata, false, nil
+	}
+
+	row := db.QueryRowContext(
+		ctx,
+		`SELECT session_id, agent_id, title, title_override, updated_at, created_at,
+		 folder_paths, folder_paths_order, archived, main_worktree_paths, main_worktree_paths_order
+		 FROM sidebar_threads
+		 WHERE session_id = ?
+		 ORDER BY updated_at DESC
+		 LIMIT 1`,
+		sessionID,
+	)
+
+	var rowSessionID string
+	var agentID sql.NullString
+	var title string
+	var titleOverride sql.NullString
+	var updatedAt string
+	var createdAt sql.NullString
+	var folderPaths sql.NullString
+	var folderPathsOrder sql.NullString
+	var archived sql.NullInt64
+	var mainWorktreePaths sql.NullString
+	var mainWorktreePathsOrder sql.NullString
+	if err := row.Scan(
+		&rowSessionID,
+		&agentID,
+		&title,
+		&titleOverride,
+		&updatedAt,
+		&createdAt,
+		&folderPaths,
+		&folderPathsOrder,
+		&archived,
+		&mainWorktreePaths,
+		&mainWorktreePathsOrder,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return emptyMetadata, false, nil
+		}
+		slog.WarnContext(ctx, "providers.zed.store.sidebar_row_by_session_scan_failed", "concern", "providers.zed.store", "session_id", sessionID, "err", err)
+		return emptyMetadata, false, fmt.Errorf("scan sidebar_threads row by session: %w", err)
+	}
+
+	updatedTime, err := time.Parse(time.RFC3339, strings.TrimSpace(updatedAt))
+	if err != nil {
+		return emptyMetadata, false, fmt.Errorf("parse sidebar_threads updated_at %q: %w", updatedAt, err)
+	}
+	createdTime, err := parseOptionalRFC3339(ctx, createdAt)
+	if err != nil {
+		return emptyMetadata, false, fmt.Errorf("parse sidebar_threads created_at %q: %w", createdAt.String, err)
+	}
+	isArchived := archived.Valid && archived.Int64 != 0
+
+	return SidebarThreadMetadata{
+		SessionID:         rowSessionID,
+		AgentID:           agentID.String,
+		Title:             title,
+		TitleOverride:     titleOverride.String,
+		UpdatedAt:         updatedTime,
+		CreatedAt:         createdTime,
+		FolderPaths:       deserializePathList(folderPaths.String, folderPathsOrder.String),
+		MainWorktreePaths: deserializePathList(mainWorktreePaths.String, mainWorktreePathsOrder.String),
+		Archived:          isArchived,
+	}, true, nil
+}
+
 func deserializePathList(pathsText, orderText string) []string {
 	trimmedPaths := strings.TrimSpace(pathsText)
 	if trimmedPaths == "" {

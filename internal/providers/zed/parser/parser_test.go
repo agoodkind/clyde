@@ -401,6 +401,82 @@ func TestScanRecordDerivesFieldsFromDiscoveredThreadAndMetadata(t *testing.T) {
 	}
 }
 
+func TestFreshParserReloadsDiscoveredVirtualPathForScanAndStream(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+
+	updatedAt := time.Date(2026, time.June, 27, 14, 0, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Reloaded thread",
+		"updated_at":"2026-06-27T14:00:00Z",
+		"messages":[
+			{"User":{"id":"user-1","content":[{"Text":"hello"}]}},
+			{"Agent":{"content":[{"Text":"answer"}],"tool_results":{}}}
+		]
+	}`)
+
+	writeThreadRow(t, root, threadRowOptions{
+		ThreadID:  "thread-reload",
+		ParentID:  "",
+		UpdatedAt: updatedAt,
+		CreatedAt: updatedAt,
+		DataType:  "json",
+		Data:      threadJSON,
+	})
+	writeSidebarThreadRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), sidebarThreadRowOptions{
+		SessionID:              "thread-reload",
+		Title:                  "Reload metadata title",
+		UpdatedAt:              updatedAt,
+		CreatedAt:              updatedAt,
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		Archived:               false,
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+	})
+
+	discoverParser := New()
+	candidates, err := discoverParser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates len = %d, want 1", len(candidates))
+	}
+
+	scanParser := New()
+	record, ok := scanParser.ScanRecord(candidates[0].Path, candidates[0].Stamp)
+	if !ok {
+		t.Fatal("ScanRecord returned ok=false")
+	}
+	if record.NativeID != "thread-reload" {
+		t.Fatalf("record.NativeID = %q, want thread-reload", record.NativeID)
+	}
+	if record.Title != "Reload metadata title" {
+		t.Fatalf("record.Title = %q, want reload metadata title", record.Title)
+	}
+
+	streamParser := New()
+	messages, err := conversation.CollectMessages(streamParser.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Role != "user" || messages[0].Text != "hello" {
+		t.Fatalf("first message = %#v", messages[0])
+	}
+	if messages[1].Role != "assistant" || messages[1].Text != "answer" {
+		t.Fatalf("second message = %#v", messages[1])
+	}
+}
+
 func TestStreamShapesVisibleZedMessagesWithoutCompactionByDefault(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
