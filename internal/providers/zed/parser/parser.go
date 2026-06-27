@@ -44,6 +44,7 @@ func (Parser) Discover(ctx context.Context, _ map[string]conversation.Record) ([
 
 	candidates := make([]conversation.ScanCandidate, 0, len(roots))
 	for _, root := range roots {
+		warmSidebarMetadata(ctx, root)
 		candidate, ok := discoverThreadsDatabase(ctx, root)
 		if ok {
 			candidates = append(candidates, candidate)
@@ -101,4 +102,22 @@ func discoverThreadsDatabase(ctx context.Context, root zedstore.DataRoot) (conve
 			Mtime: info.ModTime(),
 		},
 	}, true
+}
+
+func warmSidebarMetadata(ctx context.Context, root zedstore.DataRoot) {
+	for _, dbPath := range root.MetadataDBPaths {
+		if _, err := os.Stat(dbPath); err != nil {
+			continue
+		}
+		db, err := zedstore.OpenReadOnlyDatabase(ctx, dbPath)
+		if err != nil {
+			slog.WarnContext(ctx, "providers.zed.parser.open_metadata_db_failed", "concern", concern, "path", dbPath, "err", err)
+			continue
+		}
+		_, readErr := zedstore.ReadSidebarThreads(ctx, db)
+		_ = db.Close()
+		if readErr != nil {
+			slog.WarnContext(ctx, "providers.zed.parser.read_metadata_failed", "concern", concern, "path", dbPath, "err", readErr)
+		}
+	}
 }
