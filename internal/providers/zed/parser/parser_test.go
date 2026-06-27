@@ -39,6 +39,7 @@ func TestDiscoverReturnsThreadsDatabaseCandidate(t *testing.T) {
 	}
 
 	now := "2026-06-27T09:00:00Z"
+	payload := []byte(`{"version":"0.3.0","title":"Thread","updated_at":"2026-06-27T09:00:00Z","messages":[]}`)
 	if _, err := db.Exec(
 		`INSERT INTO threads(id, parent_id, folder_paths, folder_paths_order, summary, updated_at, data_type, data, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -49,7 +50,7 @@ func TestDiscoverReturnsThreadsDatabaseCandidate(t *testing.T) {
 		"Summary",
 		now,
 		"json",
-		[]byte("{}"),
+		payload,
 		now,
 	); err != nil {
 		t.Fatalf("insert thread row: %v", err)

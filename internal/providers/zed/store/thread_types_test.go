@@ -1,0 +1,71 @@
+package zedstore
+
+import "testing"
+
+func TestParseCurrentThreadJSONParsesCurrentThreadShape(t *testing.T) {
+	t.Parallel()
+	jsonBody := []byte(`{
+		"version": "0.3.0",
+		"title": "Thread title",
+		"updated_at": "2026-06-27T10:00:00Z",
+		"detailed_summary": "Short summary",
+		"model": {"provider": "anthropic", "model": "claude-sonnet"},
+		"subagent_context": {"parent_thread_id": "parent-1", "depth": 1},
+		"messages": [
+			{"User": {"id": "user-1", "content": [{"Text": "hello"}]}},
+			{"Agent": {
+				"content": [
+					{"Text": "answer"},
+					{"Thinking": {"text": "reason", "signature": "sig"}},
+					{"ToolUse": {"id": "call-1", "name": "Read", "input": {"path": "/tmp/file"}}}
+				],
+				"tool_results": {
+					"call-1": {
+						"tool_use_id": "call-1",
+						"is_error": false,
+						"content": ["tool output"],
+						"output": {"ok": true}
+					}
+				},
+				"reasoning_details": {"kind": "opaque"}
+			}},
+			"Resume",
+			{"Compaction": {"Summary": "Previous summary"}},
+			{"Compaction": {"ProviderNative": {"provider": "anthropic", "items": [{"type": "thinking"}]}}}
+		]
+	}`)
+
+	thread, err := ParseCurrentThreadJSON(jsonBody)
+	if err != nil {
+		t.Fatalf("ParseCurrentThreadJSON returned error: %v", err)
+	}
+	if thread.Version != "0.3.0" || thread.Title != "Thread title" {
+		t.Fatalf("thread = %#v", thread)
+	}
+	if thread.Model == nil || thread.Model.Provider != "anthropic" || thread.SubagentContext == nil {
+		t.Fatalf("thread = %#v", thread)
+	}
+	if len(thread.Messages) != 5 {
+		t.Fatalf("messages len = %d, want 5", len(thread.Messages))
+	}
+	if thread.Messages[0].Kind != ThreadMessageKindUser || thread.Messages[1].Kind != ThreadMessageKindAgent {
+		t.Fatalf("message kinds = %#v", thread.Messages)
+	}
+	if thread.Messages[2].Kind != ThreadMessageKindResume || thread.Messages[3].Compaction == nil {
+		t.Fatalf("message kinds = %#v", thread.Messages)
+	}
+	if thread.Messages[4].Compaction == nil || thread.Messages[4].Compaction.Provider != "anthropic" {
+		t.Fatalf("provider-native compaction = %#v", thread.Messages[4].Compaction)
+	}
+	if thread.Messages[1].Agent == nil || thread.Messages[1].Agent.ToolResults["call-1"].ToolUseID != "call-1" {
+		t.Fatalf("agent = %#v", thread.Messages[1].Agent)
+	}
+}
+
+func TestParseCurrentThreadJSONRejectsUnexpectedVersion(t *testing.T) {
+	t.Parallel()
+	_, err := ParseCurrentThreadJSON([]byte(`{"version":"0.2.0","title":"Old","messages":[],"updated_at":"2026-06-27T10:00:00Z"}`))
+	if err == nil {
+		t.Fatal("ParseCurrentThreadJSON returned nil error, want unsupported version error")
+	}
+}
