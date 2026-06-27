@@ -127,16 +127,11 @@ func warmSidebarMetadata(ctx context.Context, root zedstore.DataRoot) {
 
 func hasDecodableThreadPayload(ctx context.Context, path string, rows []zedstore.ThreadRow) bool {
 	for _, row := range rows {
-		jsonData, decodeErr := zedstore.DecodeThreadJSON(row.DataType, row.Data)
-		if decodeErr != nil {
-			slog.WarnContext(ctx, "providers.zed.parser.decode_thread_payload_failed", "concern", concern, "path", path, "thread_id", row.ThreadID, "data_type", string(row.DataType), "err", decodeErr)
-			continue
-		}
-		_, parseErr := zedstore.ParseCurrentThreadJSON(jsonData)
-		if parseErr == nil {
+		_, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
+		if err == nil {
 			return true
 		}
-		slog.WarnContext(ctx, "providers.zed.parser.parse_current_thread_failed", "concern", concern, "path", path, "thread_id", row.ThreadID, "err", parseErr)
+		slog.WarnContext(ctx, "providers.zed.parser.parse_thread_payload_failed", "concern", concern, "path", path, "thread_id", row.ThreadID, "data_type", string(row.DataType), "err", err)
 	}
 	return false
 }
