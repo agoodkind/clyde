@@ -81,7 +81,7 @@ func ReadSidebarThreads(ctx context.Context, db *sql.DB) ([]SidebarThreadMetadat
 		if err != nil {
 			return nil, fmt.Errorf("parse sidebar_threads updated_at %q: %w", updatedAt, err)
 		}
-		createdTime, err := parseOptionalRFC3339(createdAt)
+		createdTime, err := parseOptionalRFC3339(ctx, createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("parse sidebar_threads created_at: %w", err)
 		}
@@ -139,13 +139,13 @@ func deserializePathList(pathsText, orderText string) []string {
 	return out
 }
 
-func parseOptionalRFC3339(value sql.NullString) (time.Time, error) {
+func parseOptionalRFC3339(ctx context.Context, value sql.NullString) (time.Time, error) {
 	if !value.Valid || strings.TrimSpace(value.String) == "" {
 		return time.Time{}, nil
 	}
 	parsed, err := time.Parse(time.RFC3339, value.String)
 	if err != nil {
-		slog.Warn("providers.zed.store.optional_time_parse_failed", "concern", "providers.zed.store", "value", value.String, "err", err)
+		slog.WarnContext(ctx, "providers.zed.store.optional_time_parse_failed", "concern", "providers.zed.store", "value", value.String, "err", err)
 		return time.Time{}, fmt.Errorf("parse optional RFC3339 %q: %w", value.String, err)
 	}
 	return parsed, nil
