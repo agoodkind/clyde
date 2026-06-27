@@ -346,6 +346,34 @@ func TestLeafForHostClampsValidityToCAExpiry(t *testing.T) {
 	}
 }
 
+func TestLeafForHostKeepsNotAfterAfterClampedNotBefore(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2030, 6, 1, 12, 0, 0, 0, time.UTC)
+	ca, err := loadOrCreateCertAuthority(
+		filepath.Join(dir, "ca.crt"),
+		filepath.Join(dir, "ca.key"),
+		fixedClock(base),
+	)
+	if err != nil {
+		t.Fatalf("loadOrCreateCertAuthority: %v", err)
+	}
+	ca.cert.NotBefore = base.Add(leafValidity + 2*time.Hour)
+	ca.cert.NotAfter = ca.cert.NotBefore.Add(24 * time.Hour)
+	ca.now = fixedClock(base)
+
+	leaf, err := ca.leafForHost("api.anthropic.com")
+	if err != nil {
+		t.Fatalf("leafForHost: %v", err)
+	}
+	parsed := parseLeaf(t, leaf)
+	if !parsed.NotBefore.Equal(ca.cert.NotBefore) {
+		t.Fatalf("leaf NotBefore = %s, want CA NotBefore %s", parsed.NotBefore, ca.cert.NotBefore)
+	}
+	if !parsed.NotAfter.After(parsed.NotBefore) {
+		t.Fatalf("leaf NotAfter = %s, want after NotBefore %s", parsed.NotAfter, parsed.NotBefore)
+	}
+}
+
 func TestLeafForHostUsesShortBrowserCompatibleValidity(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2030, 6, 1, 12, 0, 0, 0, time.UTC)

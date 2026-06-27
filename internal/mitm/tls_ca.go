@@ -353,7 +353,7 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 	if notBefore.Before(ca.cert.NotBefore) {
 		notBefore = ca.cert.NotBefore
 	}
-	notAfter := now.Add(leafValidity)
+	notAfter := notBefore.Add(leafValidity + leafBackdate)
 	if notAfter.After(ca.cert.NotAfter) {
 		notAfter = ca.cert.NotAfter
 	}
