@@ -4,6 +4,7 @@ import (
 	"goodkind.io/clyde/internal/conversation"
 	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
 	codexparser "goodkind.io/clyde/internal/providers/codex/parser"
+	zedparser "goodkind.io/clyde/internal/providers/zed/parser"
 )
 
 // newConversationRegistry builds the conversation parser registry the daemon
@@ -14,13 +15,14 @@ func newConversationRegistry() *conversation.Registry {
 	registry := conversation.NewRegistry()
 	registry.Register(claudeparser.New())
 	registry.Register(codexparser.New())
+	registry.Register(zedparser.New())
 	return registry
 }
 
-// NewConversationIndex builds a disk-backed conversation index with the Claude
-// and Codex parsers wired in. It serves callers outside the daemon worker, such
-// as the scalar-backfill CLI command, that need the same derived records the
-// daemon serves without standing up the full daemon.
+// NewConversationIndex builds a disk-backed conversation index with the Claude,
+// Codex, and Zed parsers wired in. It serves callers outside the daemon worker,
+// such as the scalar-backfill CLI command, that need the same derived records
+// the daemon serves without standing up the full daemon.
 func NewConversationIndex() *conversation.Index {
 	return conversation.NewIndex(newConversationRegistry())
 }
