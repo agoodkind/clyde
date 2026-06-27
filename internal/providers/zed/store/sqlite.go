@@ -12,6 +12,9 @@ import (
 
 // OpenReadOnlyDatabase opens one SQLite database in read-only immutable mode.
 func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("open zed sqlite database %s: nil context", path)
+	}
 	dsn := (&url.URL{
 		Scheme:   "file",
 		Path:     path,
