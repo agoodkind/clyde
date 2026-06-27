@@ -39,8 +39,8 @@ func TestGroupNameListsSubcommands(t *testing.T) {
 	}
 	for _, want := range []string{
 		"inspect static conversation info",
-		"clyde conversation search claude:1a2b3c --around 42",
-		"clyde conversation export claude:1a2b3c --only chat --stdout",
+		"clyde conversation search zed:1a2b3c --around 42",
+		"clyde conversation export zed:1a2b3c --only chat --stdout",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("conversation help missing %q:\n%s", want, out)
