@@ -42,6 +42,11 @@ type certAuthority struct {
 // next start regenerate it.
 const caValidity = 10 * 365 * 24 * time.Hour
 
+// leafValidity bounds each minted server leaf so native clients do not reject
+// the proxy on certificate lifetime policy alone while the persisted CA remains
+// long-lived and trusted.
+const leafValidity = 90 * 24 * time.Hour
+
 // leafBackdate offsets a freshly minted leaf's NotBefore so a small clock
 // difference between the proxy and a connecting client does not reject an
 // otherwise valid leaf.
@@ -49,9 +54,8 @@ const leafBackdate = time.Hour
 
 // leafRenewBefore re-mints a cached leaf once the clock comes within this
 // window of the leaf's NotAfter, so a handshake never presents a leaf inside
-// its final expiry margin. A leaf's NotAfter tracks the signing CA's NotAfter,
-// so this path engages only as the CA itself approaches expiry.
-const leafRenewBefore = time.Hour
+// its final expiry margin.
+const leafRenewBefore = 7 * 24 * time.Hour
 
 const (
 	caCertFileMode os.FileMode = 0o644
@@ -342,19 +346,22 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The leaf is valid for the entire remaining life of the signing CA, so a
-	// long-running daemon can never serve a leaf that has outlived its own
-	// stamp. NotBefore is backdated for clock skew but never precedes the CA's
-	// own NotBefore.
+	// The leaf stays short-lived for native client trust compatibility while
+	// the CA itself remains long-lived on disk. NotBefore is backdated for
+	// clock skew but never precedes the CA's own NotBefore.
 	notBefore := now.Add(-leafBackdate)
 	if notBefore.Before(ca.cert.NotBefore) {
 		notBefore = ca.cert.NotBefore
+	}
+	notAfter := now.Add(leafValidity)
+	if notAfter.After(ca.cert.NotAfter) {
+		notAfter = ca.cert.NotAfter
 	}
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
 		NotBefore:    notBefore,
-		NotAfter:     ca.cert.NotAfter,
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{host},
@@ -376,8 +383,11 @@ func (ca *certAuthority) leafForHost(host string) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("load mitm leaf cert: %w", err)
 	}
 	ca.cache[host] = cachedLeaf{cert: &cert, notAfter: template.NotAfter}
+	validityHours := int64(template.NotAfter.Sub(template.NotBefore).Hours())
 	slog.Info("mitm.tls.leaf_minted", "concern", "providers.mitm.wire", "host", logHost,
+		"not_before", template.NotBefore.UTC().Format(time.RFC3339),
 		"not_after", template.NotAfter.UTC().Format(time.RFC3339),
+		"validity_hours", validityHours,
 		"reminted", reminted,
 	)
 	return &cert, nil

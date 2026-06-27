@@ -285,16 +285,17 @@ func TestLeafForHostBindsValidityToCAAndRenews(t *testing.T) {
 		t.Fatalf("first leafForHost: %v", err)
 	}
 	firstLeaf := parseLeaf(t, first)
-	if !firstLeaf.NotAfter.Equal(ca.cert.NotAfter) {
-		t.Errorf("leaf NotAfter = %s, want CA NotAfter %s", firstLeaf.NotAfter, ca.cert.NotAfter)
+	wantFirstNotAfter := base.Add(leafValidity)
+	if !firstLeaf.NotAfter.Equal(wantFirstNotAfter) {
+		t.Errorf("leaf NotAfter = %s, want %s", firstLeaf.NotAfter, wantFirstNotAfter)
 	}
 	if firstLeaf.NotBefore.Before(ca.cert.NotBefore) {
 		t.Errorf("leaf NotBefore = %s, earlier than CA NotBefore %s", firstLeaf.NotBefore, ca.cert.NotBefore)
 	}
 
-	// A request far later but still well within the CA horizon reuses the
-	// cached leaf rather than minting a new one.
-	current = base.Add(365 * 24 * time.Hour)
+	// A request still well inside the leaf lifetime reuses the cached leaf rather
+	// than minting a new one.
+	current = base.Add(14 * 24 * time.Hour)
 	reused, err := ca.leafForHost(host)
 	if err != nil {
 		t.Fatalf("reuse leafForHost: %v", err)
@@ -304,9 +305,9 @@ func TestLeafForHostBindsValidityToCAAndRenews(t *testing.T) {
 			firstLeaf.SerialNumber, parseLeaf(t, reused).SerialNumber)
 	}
 
-	// Inside the renewal window before the CA's own expiry, the cached leaf is
-	// re-minted with a fresh serial and the same CA-bound NotAfter.
-	current = ca.cert.NotAfter.Add(-leafRenewBefore / 2)
+	// Inside the renewal window before the leaf expires, the cached leaf is
+	// re-minted with a fresh serial and a new short-lived NotAfter.
+	current = firstLeaf.NotAfter.Add(-leafRenewBefore / 2)
 	renewed, err := ca.leafForHost(host)
 	if err != nil {
 		t.Fatalf("renew leafForHost: %v", err)
@@ -315,8 +316,56 @@ func TestLeafForHostBindsValidityToCAAndRenews(t *testing.T) {
 	if renewedLeaf.SerialNumber.Cmp(firstLeaf.SerialNumber) == 0 {
 		t.Errorf("expected re-mint (different serial), got the cached serial %s", firstLeaf.SerialNumber)
 	}
-	if !renewedLeaf.NotAfter.Equal(ca.cert.NotAfter) {
-		t.Errorf("renewed leaf NotAfter = %s, want CA NotAfter %s", renewedLeaf.NotAfter, ca.cert.NotAfter)
+	wantRenewedNotAfter := current.Add(leafValidity)
+	if !renewedLeaf.NotAfter.Equal(wantRenewedNotAfter) {
+		t.Errorf("renewed leaf NotAfter = %s, want %s", renewedLeaf.NotAfter, wantRenewedNotAfter)
+	}
+}
+
+func TestLeafForHostClampsValidityToCAExpiry(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2030, 6, 1, 12, 0, 0, 0, time.UTC)
+	ca, err := loadOrCreateCertAuthority(
+		filepath.Join(dir, "ca.crt"),
+		filepath.Join(dir, "ca.key"),
+		fixedClock(base),
+	)
+	if err != nil {
+		t.Fatalf("loadOrCreateCertAuthority: %v", err)
+	}
+	ca.cert.NotAfter = base.Add(12 * time.Hour)
+	ca.now = fixedClock(base)
+
+	leaf, err := ca.leafForHost("api.anthropic.com")
+	if err != nil {
+		t.Fatalf("leafForHost: %v", err)
+	}
+	parsed := parseLeaf(t, leaf)
+	if !parsed.NotAfter.Equal(ca.cert.NotAfter) {
+		t.Fatalf("leaf NotAfter = %s, want CA NotAfter %s", parsed.NotAfter, ca.cert.NotAfter)
+	}
+}
+
+func TestLeafForHostUsesShortBrowserCompatibleValidity(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2030, 6, 1, 12, 0, 0, 0, time.UTC)
+	ca, err := loadOrCreateCertAuthority(
+		filepath.Join(dir, "ca.crt"),
+		filepath.Join(dir, "ca.key"),
+		fixedClock(base),
+	)
+	if err != nil {
+		t.Fatalf("loadOrCreateCertAuthority: %v", err)
+	}
+	ca.now = fixedClock(base)
+
+	leaf, err := ca.leafForHost("api.anthropic.com")
+	if err != nil {
+		t.Fatalf("leafForHost: %v", err)
+	}
+	parsed := parseLeaf(t, leaf)
+	if got, want := parsed.NotAfter.Sub(parsed.NotBefore), leafValidity+leafBackdate; got != want {
+		t.Fatalf("leaf validity = %s, want %s", got, want)
 	}
 }
 
