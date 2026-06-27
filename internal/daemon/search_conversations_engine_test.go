@@ -463,6 +463,45 @@ func TestSearchConversationsResultNativeFilters(t *testing.T) {
 	}
 }
 
+func TestSearchConversationsResultNativeFiltersSupportZedProvider(t *testing.T) {
+	t.Parallel()
+
+	record := daemonTestRecord("zed:one", false)
+	record.Provider = conversation.ProviderZed
+	idx := &fakeSearchIndex{
+		records: map[string]conversation.Record{
+			"zed:one": record,
+		},
+		live:      conversation.SearchConversationsResult{},
+		liveErr:   nil,
+		liveCalls: 0,
+	}
+	semantic := &fakeSemanticSearch{
+		hits: []semsearch.SemHit{
+			{ConversationID: "zed:one", MessageIndex: 0, Role: "user", TimestampUnix: 5, Content: "hit", Score: 0.5, ParentConversationID: ""},
+		},
+		err: nil,
+	}
+	req := &clydev1.SearchConversationsRequest{Query: "auth", Limit: 10, Provider: clydev1.Provider_PROVIDER_ZED}
+
+	result, err := searchConversationsResult(context.Background(), idx, semantic, "conversations", false, req)
+	if err != nil {
+		t.Fatalf("zed provider search: %v", err)
+	}
+	if len(semantic.filters) != 1 {
+		t.Fatalf("engine calls = %d, want 1", len(semantic.filters))
+	}
+	if len(semantic.filters[0].Providers) != 1 || semantic.filters[0].Providers[0] != "zed" {
+		t.Fatalf("provider filter providers = %v, want [zed]", semantic.filters[0].Providers)
+	}
+	if len(semantic.filters[0].ConversationIDs) != 0 {
+		t.Fatalf("provider filter ids = %v, want none for native zed filtering", semantic.filters[0].ConversationIDs)
+	}
+	if len(result.Matches) != 1 || result.Matches[0].Record.Provider != conversation.ProviderZed {
+		t.Fatalf("matches = %+v", result.Matches)
+	}
+}
+
 func TestSearchConversationsResultNoEngineLiveOnly(t *testing.T) {
 	t.Parallel()
 	live := conversation.SearchConversationsResult{

@@ -367,6 +367,36 @@ func TestConversationSemanticSyncLeavesParentEmptyWithoutLineage(t *testing.T) {
 	}
 }
 
+func TestConversationSemanticSyncCarriesZedWorkspaceAndArchivedFlags(t *testing.T) {
+	conversationID := "zed:thread-1"
+	record := semanticTestRecord(conversationID)
+	record.Provider = conversation.ProviderZed
+	record.WorkspaceRoot = "/repo/zed"
+	record.Archived = true
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{{Record: record, Stamp: semanticTestStamp(22, 220)}},
+		messagesByID: map[string][]transcript.Message{
+			conversationID: {
+				{Role: "user", Timestamp: time.Unix(1710001000, 0), Text: "zed text"},
+			},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+	if len(client.upsertCalls) != 1 || len(client.upsertCalls[0].Docs) != 1 {
+		t.Fatalf("upsert calls = %+v", client.upsertCalls)
+	}
+	doc := client.upsertCalls[0].Docs[0]
+	if doc.ConversationID != conversationID || doc.WorkspaceRoot != "/repo/zed" || !doc.Archived {
+		t.Fatalf("doc = %+v", doc)
+	}
+}
+
 func semanticTestRecord(conversationID string) conversation.Record {
 	return conversation.Record{
 		ID:            conversationID,
