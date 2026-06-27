@@ -673,7 +673,7 @@ func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.Compac
 	case zedstore.CompactionMessageKindProviderNative:
 		raw, err := json.Marshal(message.Items)
 		if err != nil {
-			return nil, ""
+			raw = nil
 		}
 		text := "Conversation compacted"
 		if provider := strings.TrimSpace(message.Provider); provider != "" {
