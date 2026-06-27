@@ -9,7 +9,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-func TestDiscoverReturnsThreadsDatabaseCandidate(t *testing.T) {
+func TestDiscoverReturnsVirtualZedThreadCandidate(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
 
@@ -17,6 +17,7 @@ func TestDiscoverReturnsThreadsDatabaseCandidate(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatalf("mkdir threads dir: %v", err)
 	}
+	now := "2026-06-27T09:00:00Z"
 
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
@@ -39,8 +40,50 @@ func TestDiscoverReturnsThreadsDatabaseCandidate(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
+	metadataPath := filepath.Join(root, "db", "0-stable", "db.sqlite")
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		t.Fatalf("mkdir metadata dir: %v", err)
+	}
+	metadataDB, err := sql.Open("sqlite3", "file:"+metadataPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open metadata db returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = metadataDB.Close() })
+	if _, err := metadataDB.Exec(`
+		CREATE TABLE sidebar_threads(
+			session_id TEXT PRIMARY KEY,
+			agent_id TEXT,
+			title TEXT NOT NULL,
+			title_override TEXT,
+			updated_at TEXT NOT NULL,
+			created_at TEXT,
+			folder_paths TEXT,
+			folder_paths_order TEXT,
+			archived INTEGER DEFAULT 0,
+			main_worktree_paths TEXT,
+			main_worktree_paths_order TEXT
+		) STRICT
+	`); err != nil {
+		t.Fatalf("create sidebar_threads table: %v", err)
+	}
+	if _, err := metadataDB.Exec(
+		`INSERT INTO sidebar_threads(session_id, agent_id, title, title_override, updated_at, created_at, folder_paths, folder_paths_order, archived, main_worktree_paths, main_worktree_paths_order)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"thread-1",
+		"",
+		"Thread title",
+		"",
+		now,
+		now,
+		"/repo",
+		"0",
+		0,
+		"/repo",
+		"0",
+	); err != nil {
+		t.Fatalf("insert sidebar row: %v", err)
+	}
 
-	now := "2026-06-27T09:00:00Z"
 	payload := []byte(`{"version":"0.3.0","title":"Thread","updated_at":"2026-06-27T09:00:00Z","messages":[]}`)
 	if _, err := db.Exec(
 		`INSERT INTO threads(id, parent_id, folder_paths, folder_paths_order, summary, updated_at, data_type, data, created_at)
@@ -65,12 +108,16 @@ func TestDiscoverReturnsThreadsDatabaseCandidate(t *testing.T) {
 	if len(candidates) != 1 {
 		t.Fatalf("candidates len = %d, want 1", len(candidates))
 	}
-	if candidates[0].Path != dbPath {
-		t.Fatalf("candidate path = %q, want %q", candidates[0].Path, dbPath)
+	parsed, err := ParseVirtualPath(candidates[0].Path)
+	if err != nil {
+		t.Fatalf("ParseVirtualPath returned error: %v", err)
+	}
+	if parsed.Channel != "0-stable" || parsed.SessionID != "thread-1" {
+		t.Fatalf("parsed virtual path = %#v", parsed)
 	}
 }
 
-func TestDiscoverReturnsThreadsDatabaseCandidateForZstdPayload(t *testing.T) {
+func TestDiscoverSkipsUnreadableThreadsDatabaseCandidate(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
 
@@ -78,6 +125,7 @@ func TestDiscoverReturnsThreadsDatabaseCandidateForZstdPayload(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		t.Fatalf("mkdir threads dir: %v", err)
 	}
+	now := "2026-06-27T09:00:00Z"
 
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
 	if err != nil {
@@ -100,78 +148,50 @@ func TestDiscoverReturnsThreadsDatabaseCandidateForZstdPayload(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
-
-	payload := []byte(`{"version":"0.3.0","title":"Thread","updated_at":"2026-06-27T09:00:00Z","messages":[]}`)
-	encoder, err := zstd.NewWriter(nil)
+	metadataPath := filepath.Join(root, "db", "0-stable", "db.sqlite")
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		t.Fatalf("mkdir metadata dir: %v", err)
+	}
+	metadataDB, err := sql.Open("sqlite3", "file:"+metadataPath+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("zstd.NewWriter returned error: %v", err)
+		t.Fatalf("sql.Open metadata db returned error: %v", err)
 	}
-	compressed := encoder.EncodeAll(payload, nil)
-	if closeErr := encoder.Close(); closeErr != nil {
-		t.Fatalf("zstd encoder close: %v", closeErr)
+	t.Cleanup(func() { _ = metadataDB.Close() })
+	if _, err := metadataDB.Exec(`
+		CREATE TABLE sidebar_threads(
+			session_id TEXT PRIMARY KEY,
+			agent_id TEXT,
+			title TEXT NOT NULL,
+			title_override TEXT,
+			updated_at TEXT NOT NULL,
+			created_at TEXT,
+			folder_paths TEXT,
+			folder_paths_order TEXT,
+			archived INTEGER DEFAULT 0,
+			main_worktree_paths TEXT,
+			main_worktree_paths_order TEXT
+		) STRICT
+	`); err != nil {
+		t.Fatalf("create sidebar_threads table: %v", err)
 	}
-
-	now := "2026-06-27T09:00:00Z"
-	if _, err := db.Exec(
-		`INSERT INTO threads(id, parent_id, folder_paths, folder_paths_order, summary, updated_at, data_type, data, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if _, err := metadataDB.Exec(
+		`INSERT INTO sidebar_threads(session_id, agent_id, title, title_override, updated_at, created_at, folder_paths, folder_paths_order, archived, main_worktree_paths, main_worktree_paths_order)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"thread-1",
 		"",
+		"Thread title",
 		"",
-		"",
-		"Summary",
 		now,
-		"zstd",
-		compressed,
 		now,
+		"/repo",
+		"0",
+		0,
+		"/repo",
+		"0",
 	); err != nil {
-		t.Fatalf("insert thread row: %v", err)
+		t.Fatalf("insert sidebar row: %v", err)
 	}
 
-	candidates, err := New().Discover(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("Discover returned error: %v", err)
-	}
-	if len(candidates) != 1 {
-		t.Fatalf("candidates len = %d, want 1", len(candidates))
-	}
-	if candidates[0].Path != dbPath {
-		t.Fatalf("candidate path = %q, want %q", candidates[0].Path, dbPath)
-	}
-}
-
-func TestDiscoverSkipsThreadsDatabaseCandidateWhenPayloadUnreadable(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
-
-	dbPath := filepath.Join(root, "threads", "threads.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		t.Fatalf("mkdir threads dir: %v", err)
-	}
-
-	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
-	if err != nil {
-		t.Fatalf("sql.Open returned error: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	if _, err := db.Exec(`
-		CREATE TABLE threads(
-			id TEXT PRIMARY KEY,
-			parent_id TEXT,
-			folder_paths TEXT,
-			folder_paths_order TEXT,
-			summary TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			data_type TEXT NOT NULL,
-			data BLOB NOT NULL,
-			created_at TEXT NOT NULL
-		) STRICT
-	`); err != nil {
-		t.Fatalf("create table: %v", err)
-	}
-
-	now := "2026-06-27T09:00:00Z"
 	if _, err := db.Exec(
 		`INSERT INTO threads(id, parent_id, folder_paths, folder_paths_order, summary, updated_at, data_type, data, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -181,8 +201,8 @@ func TestDiscoverSkipsThreadsDatabaseCandidateWhenPayloadUnreadable(t *testing.T
 		"",
 		"Summary",
 		now,
-		"zstd",
-		[]byte("not-zstd"),
+		"json",
+		[]byte("{not json"),
 		now,
 	); err != nil {
 		t.Fatalf("insert thread row: %v", err)
@@ -194,5 +214,114 @@ func TestDiscoverSkipsThreadsDatabaseCandidateWhenPayloadUnreadable(t *testing.T
 	}
 	if len(candidates) != 0 {
 		t.Fatalf("candidates len = %d, want 0", len(candidates))
+	}
+}
+
+func TestDiscoverReturnsVirtualZedThreadCandidateForZstdPayload(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+
+	dbPath := filepath.Join(root, "threads", "threads.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("mkdir threads dir: %v", err)
+	}
+	now := "2026-06-27T09:00:00Z"
+
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(`
+		CREATE TABLE threads(
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			folder_paths TEXT,
+			folder_paths_order TEXT,
+			summary TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			data_type TEXT NOT NULL,
+			data BLOB NOT NULL,
+			created_at TEXT NOT NULL
+		) STRICT
+	`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	metadataPath := filepath.Join(root, "db", "0-stable", "db.sqlite")
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		t.Fatalf("mkdir metadata dir: %v", err)
+	}
+	metadataDB, err := sql.Open("sqlite3", "file:"+metadataPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open metadata db returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = metadataDB.Close() })
+	if _, err := metadataDB.Exec(`
+		CREATE TABLE sidebar_threads(
+			session_id TEXT PRIMARY KEY,
+			agent_id TEXT,
+			title TEXT NOT NULL,
+			title_override TEXT,
+			updated_at TEXT NOT NULL,
+			created_at TEXT,
+			folder_paths TEXT,
+			folder_paths_order TEXT,
+			archived INTEGER DEFAULT 0,
+			main_worktree_paths TEXT,
+			main_worktree_paths_order TEXT
+		) STRICT
+	`); err != nil {
+		t.Fatalf("create sidebar_threads table: %v", err)
+	}
+	if _, err := metadataDB.Exec(
+		`INSERT INTO sidebar_threads(session_id, agent_id, title, title_override, updated_at, created_at, folder_paths, folder_paths_order, archived, main_worktree_paths, main_worktree_paths_order)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"thread-1",
+		"",
+		"Thread title",
+		"",
+		now,
+		now,
+		"/repo",
+		"0",
+		0,
+		"/repo",
+		"0",
+	); err != nil {
+		t.Fatalf("insert sidebar row: %v", err)
+	}
+
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter returned error: %v", err)
+	}
+	payload := encoder.EncodeAll([]byte(`{"version":"0.3.0","title":"Thread","updated_at":"2026-06-27T09:00:00Z","messages":[]}`), nil)
+	if closeErr := encoder.Close(); closeErr != nil {
+		t.Fatalf("zstd encoder close: %v", closeErr)
+	}
+
+	if _, err := db.Exec(
+		`INSERT INTO threads(id, parent_id, folder_paths, folder_paths_order, summary, updated_at, data_type, data, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"thread-1",
+		"",
+		"",
+		"",
+		"Summary",
+		now,
+		"zstd",
+		payload,
+		now,
+	); err != nil {
+		t.Fatalf("insert thread row: %v", err)
+	}
+
+	candidates, err := New().Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates len = %d, want 1", len(candidates))
 	}
 }
