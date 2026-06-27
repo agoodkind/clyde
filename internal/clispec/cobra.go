@@ -27,7 +27,7 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 		Short:   op.Short,
 		Long:    op.longHelp(),
 		Example: strings.Join(op.Examples, "\n"),
-		Args:    cobra.ExactArgs(len(op.Args)),
+		Args:    cobra.RangeArgs(requiredArgCount(op.Args), len(op.Args)),
 	}
 
 	applies := make([]func(in *I), 0, len(op.Params))
@@ -45,6 +45,9 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		in := op.New()
 		for i, arg := range op.Args {
+			if i >= len(args) {
+				continue
+			}
 			arg.bind(&in, args[i])
 		}
 		for _, apply := range applies {
@@ -98,8 +101,8 @@ func outputFormatForCommand(cmd *cobra.Command) (output.Format, error) {
 
 // longHelp builds the full description shown by `--help`. It starts from the
 // author's Long text, or the one-line Short when Long is empty, and appends a
-// documented Arguments section for every positional input so the reader sees
-// what each placeholder means without leaving the help screen.
+// documented Arguments section for required positionals so the reader sees what
+// each required placeholder means without leaving the help screen.
 func (op Operation[I, P]) longHelp() string {
 	var b strings.Builder
 	switch {
@@ -109,8 +112,17 @@ func (op Operation[I, P]) longHelp() string {
 		b.WriteString(op.Short)
 	}
 	if len(op.Args) > 0 {
-		width := 0
+		requiredArgs := make([]Arg[I], 0, len(op.Args))
 		for _, arg := range op.Args {
+			if arg.Required {
+				requiredArgs = append(requiredArgs, arg)
+			}
+		}
+		if len(requiredArgs) == 0 {
+			return b.String()
+		}
+		width := 0
+		for _, arg := range requiredArgs {
 			if len(arg.placeholder()) > width {
 				width = len(arg.placeholder())
 			}
@@ -119,11 +131,21 @@ func (op Operation[I, P]) longHelp() string {
 			b.WriteString("\n\n")
 		}
 		b.WriteString("Arguments:")
-		for _, arg := range op.Args {
+		for _, arg := range requiredArgs {
 			fmt.Fprintf(&b, "\n  %-*s  %s", width, arg.placeholder(), arg.Description)
 		}
 	}
 	return b.String()
+}
+
+func requiredArgCount[I Input](args []Arg[I]) int {
+	required := 0
+	for _, arg := range args {
+		if arg.Required {
+			required++
+		}
+	}
+	return required
 }
 
 // registerFlag registers one parameter as a terminal flag and returns a

@@ -38,42 +38,15 @@ func (op Operation[I, P]) mcpDescription() string {
 // schema comes from the arguments and parameters; the handler decodes the same
 // request into a fresh input struct and runs the shared work function.
 func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
-	options := []mcp.ToolOption{mcp.WithDescription(op.mcpDescription())}
-	for _, arg := range op.Args {
-		properties := []mcp.PropertyOption{mcp.Required(), mcp.Description(arg.Description)}
-		options = append(options, mcp.WithString(arg.MCPName, properties...))
-	}
-	for _, param := range op.Params {
-		if param.CLIOnly {
-			continue
-		}
-		options = append(options, param.mcpOption())
-	}
-	if op.MCPTaskSupport != "" {
-		options = append(options, mcp.WithTaskSupport(op.MCPTaskSupport))
-	}
-	tool := mcp.NewTool(op.Name.MCP(), options...)
+	tool := mcp.NewTool(op.Name.MCP(), op.mcpToolOptions()...)
 
 	handler := func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		in := op.New()
-		missingArg := ""
-		for _, arg := range op.Args {
-			value, err := req.RequireString(arg.MCPName)
-			if err != nil {
-				missingArg = arg.MCPName
-				break
-			}
-			arg.bind(&in, value)
-		}
+		missingArg := bindMCPArgs(&in, op.Args, req)
 		if missingArg != "" {
 			return newMCPTextResult(ctx, missingArg+" is required"), nil
 		}
-		for _, param := range op.Params {
-			if param.CLIOnly {
-				continue
-			}
-			param.decodeMCP(&in, req)
-		}
+		bindMCPParams(&in, op.Params, req)
 		// Prepare is the only place input is rejected. It runs after binding and
 		// before the work, so an input error becomes the tool result text instead
 		// of reaching the work function. This mirrors the terminal, where Prepare
@@ -94,6 +67,65 @@ func (op Operation[I, P]) mcpTool() (mcp.Tool, server.ToolHandlerFunc) {
 		return runMCPLegacyOperation(ctx, req, op, prepared), nil
 	}
 	return tool, handler
+}
+
+func (op Operation[I, P]) mcpToolOptions() []mcp.ToolOption {
+	options := []mcp.ToolOption{mcp.WithDescription(op.mcpDescription())}
+	for _, arg := range op.Args {
+		properties := []mcp.PropertyOption{mcp.Description(arg.Description)}
+		if arg.Required {
+			properties = append(properties, mcp.Required())
+		}
+		options = append(options, mcp.WithString(arg.MCPName, properties...))
+	}
+	for _, param := range op.Params {
+		if param.CLIOnly {
+			continue
+		}
+		options = append(options, param.mcpOption())
+	}
+	if op.MCPTaskSupport != "" {
+		options = append(options, mcp.WithTaskSupport(op.MCPTaskSupport))
+	}
+	return options
+}
+
+func bindMCPArgs[I Input](in *I, args []Arg[I], req mcp.CallToolRequest) string {
+	for _, arg := range args {
+		missing, ok := bindMCPArg(in, arg, req)
+		if !ok {
+			return missing
+		}
+	}
+	return ""
+}
+
+func bindMCPArg[I Input](in *I, arg Arg[I], req mcp.CallToolRequest) (string, bool) {
+	if arg.Required {
+		value, err := req.RequireString(arg.MCPName)
+		if err != nil {
+			return arg.MCPName, false
+		}
+		if strings.TrimSpace(value) == "" {
+			return arg.MCPName, false
+		}
+		arg.bind(in, value)
+		return "", true
+	}
+	value := req.GetString(arg.MCPName, "")
+	if strings.TrimSpace(value) != "" {
+		arg.bind(in, value)
+	}
+	return "", true
+}
+
+func bindMCPParams[I Input](in *I, params []Param[I], req mcp.CallToolRequest) {
+	for _, param := range params {
+		if param.CLIOnly {
+			continue
+		}
+		param.decodeMCP(in, req)
+	}
 }
 
 func runMCPResultOperation[I Input, P Prepared](

@@ -92,8 +92,8 @@ type SemHit struct {
 // workspace column but is unused for the workspace filter today: workspace_root
 // is null on rows indexed before that column existed, so clyde instead resolves
 // a workspace prefix to the matching ConversationIDs, which every row carries.
-// ConversationIDs scopes to explicit conversations (an explicit --conversation
-// or a within-search) and to that resolved workspace set.
+// ConversationIDs scopes to explicit conversations (a positional conversation
+// id or a within-search) and to that resolved workspace set.
 type SearchFilter struct {
 	Providers            []string
 	WorkspaceRoots       []string

@@ -94,11 +94,15 @@ func TestConversationAlignment(t *testing.T) {
 				t.Errorf("%s: terminal flag %q has no mcp input and is not declared cli-only", tool.Name, name)
 			}
 		}
-		// Every positional is a required MCP input.
+		// Every required positional is a required MCP input. Optional
+		// positionals still appear on both surfaces but stay optional in MCP.
 		required := sliceSet(tool.InputSchema.Required)
-		for name := range positionals {
-			if !required[name] {
+		for name, requiredOnCLI := range positionals {
+			if requiredOnCLI && !required[name] {
 				t.Errorf("%s: positional %q is not required on the mcp surface", tool.Name, name)
+			}
+			if !requiredOnCLI && required[name] {
+				t.Errorf("%s: optional positional %q is required on the mcp surface", tool.Name, name)
 			}
 		}
 	}
@@ -270,12 +274,19 @@ func TestRenderMCPSkipsCLIOnlyOperation(t *testing.T) {
 }
 
 // positionalNames extracts the snake_case names of a command's positional
-// arguments from its Use string, e.g. "get-context CONVERSATION_ID".
+// arguments from its Use string, e.g. "get-context CONVERSATION_ID". The
+// returned value is true when the positional is required.
 func positionalNames(cmd *cobra.Command) map[string]bool {
 	names := map[string]bool{}
 	fields := strings.Fields(cmd.Use)
 	for _, field := range fields[1:] {
-		names[strings.ToLower(field)] = true
+		required := true
+		normalized := field
+		if strings.HasPrefix(normalized, "[") && strings.HasSuffix(normalized, "]") {
+			required = false
+			normalized = strings.TrimPrefix(strings.TrimSuffix(normalized, "]"), "[")
+		}
+		names[strings.ToLower(normalized)] = required
 	}
 	return names
 }

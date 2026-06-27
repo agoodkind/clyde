@@ -229,10 +229,11 @@ func EnumListParam[I Input](canonical, description string, values []string, requ
 
 // Arg is a terminal positional input that maps to a named MCP input. The
 // terminal reads it as a bare word in declaration order; the MCP tool reads it
-// as a named property under MCPName. Every Arg in this package is required.
+// as a named property under MCPName.
 type Arg[I Input] struct {
 	MCPName     string
 	Description string
+	Required    bool
 	bind        func(in *I, v string)
 }
 
@@ -241,6 +242,17 @@ func PositionalArg[I Input](mcpName, description string, set func(*I, string)) A
 	return Arg[I]{
 		MCPName:     mcpName,
 		Description: description,
+		Required:    true,
+		bind:        set,
+	}
+}
+
+// OptionalPositionalArg declares an optional terminal positional input.
+func OptionalPositionalArg[I Input](mcpName, description string, set func(*I, string)) Arg[I] {
+	return Arg[I]{
+		MCPName:     mcpName,
+		Description: description,
+		Required:    false,
 		bind:        set,
 	}
 }
@@ -248,7 +260,11 @@ func PositionalArg[I Input](mcpName, description string, set func(*I, string)) A
 // placeholder returns the upper-case token shown in terminal usage, e.g.
 // CONVERSATION_ID.
 func (a Arg[I]) placeholder() string {
-	return strings.ToUpper(a.MCPName)
+	placeholder := strings.ToUpper(a.MCPName)
+	if !a.Required {
+		return "[" + placeholder + "]"
+	}
+	return placeholder
 }
 
 func enumContains(values []string, candidate string) bool {
