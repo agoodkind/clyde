@@ -18,7 +18,8 @@ func (err UnknownThreadDataTypeError) Error() string {
 	return fmt.Sprintf("unsupported zed thread data type %q", err.DataType)
 }
 
-// DecodeThreadJSON decodes one stored Zed thread payload into raw JSON bytes.
+// DecodeThreadJSON decodes one persisted Zed thread payload into raw JSON
+// bytes, handling both plain JSON and Zstandard-compressed storage.
 func DecodeThreadJSON(dataType DataType, data []byte) ([]byte, error) {
 	switch dataType {
 	case DataTypeJSON:

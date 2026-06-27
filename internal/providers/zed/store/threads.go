@@ -8,17 +8,17 @@ import (
 	"time"
 )
 
-// DataType names the stored encoding of one Zed thread payload blob.
+// DataType names the persisted encoding of one Zed thread payload row.
 type DataType string
 
 const (
-	// DataTypeJSON stores plain JSON bytes.
+	// DataTypeJSON marks an uncompressed Zed thread payload.
 	DataTypeJSON DataType = "json"
-	// DataTypeZstd stores a zstd-compressed JSON payload.
+	// DataTypeZstd marks a Zstandard-compressed Zed thread payload.
 	DataTypeZstd DataType = "zstd"
 )
 
-// ThreadRow is the typed projection of one `threads` row.
+// ThreadRow is the typed projection of one `threads` table row.
 type ThreadRow struct {
 	SessionID       string
 	ParentSessionID string
@@ -30,7 +30,7 @@ type ThreadRow struct {
 	Data            []byte
 }
 
-// ReadThreadRows reads typed Zed thread rows from one threads database.
+// ReadThreadRows reads typed Zed thread rows from one `threads.db` database.
 func ReadThreadRows(ctx context.Context, db *sql.DB) ([]ThreadRow, error) {
 	exists, err := TableExists(ctx, db, "threads")
 	if err != nil {
