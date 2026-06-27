@@ -22,8 +22,37 @@ func TestDiscoverReturnsThreadsDatabaseCandidate(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if _, err := db.Exec("CREATE TABLE threads(id INTEGER PRIMARY KEY)"); err != nil {
+	if _, err := db.Exec(`
+		CREATE TABLE threads(
+			id TEXT PRIMARY KEY,
+			parent_id TEXT,
+			folder_paths TEXT,
+			folder_paths_order TEXT,
+			summary TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			data_type TEXT NOT NULL,
+			data BLOB NOT NULL,
+			created_at TEXT NOT NULL
+		) STRICT
+	`); err != nil {
 		t.Fatalf("create table: %v", err)
+	}
+
+	now := "2026-06-27T09:00:00Z"
+	if _, err := db.Exec(
+		`INSERT INTO threads(id, parent_id, folder_paths, folder_paths_order, summary, updated_at, data_type, data, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"thread-1",
+		"",
+		"",
+		"",
+		"Summary",
+		now,
+		"json",
+		[]byte("{}"),
+		now,
+	); err != nil {
+		t.Fatalf("insert thread row: %v", err)
 	}
 
 	candidates, err := New().Discover(t.Context(), nil)
