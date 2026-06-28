@@ -29,6 +29,8 @@ const (
 	ProviderCursor
 	// ProviderConductor identifies Conductor MITM traffic.
 	ProviderConductor
+	// ProviderZed identifies Zed thread artifacts.
+	ProviderZed
 )
 
 type providerLabel string
@@ -50,6 +52,9 @@ const (
 	labelArtifact             providerLabel = "artifact"
 	labelCursor               providerLabel = "cursor"
 	labelConductor            providerLabel = "conductor"
+	labelZed                  providerLabel = "zed"
+	labelZedAgent             providerLabel = "zed-agent"
+	labelZedAgentUnderscore   providerLabel = "zed_agent"
 	passthroughOverridePrefix               = "passthrough-override-"
 )
 
@@ -77,6 +82,8 @@ func Parse(raw string) (Provider, bool) {
 		return ProviderCursor, true
 	case labelConductor:
 		return ProviderConductor, true
+	case labelZed, labelZedAgent, labelZedAgentUnderscore:
+		return ProviderZed, true
 	default:
 		if strings.HasPrefix(string(label), passthroughOverridePrefix) {
 			return ProviderOpenAICompat, true
@@ -115,6 +122,8 @@ func (p Provider) String() string {
 		return "cursor"
 	case ProviderConductor:
 		return "conductor"
+	case ProviderZed:
+		return "zed"
 	default:
 		return "unspecified"
 	}
@@ -135,7 +144,7 @@ func (p Provider) Valid() bool {
 	switch p {
 	case ProviderUnspecified:
 		return false
-	case ProviderClaude, ProviderCodex, ProviderAnthropic, ProviderOpenAICompat, ProviderMITM, ProviderArtifact, ProviderCursor, ProviderConductor:
+	case ProviderClaude, ProviderCodex, ProviderAnthropic, ProviderOpenAICompat, ProviderMITM, ProviderArtifact, ProviderCursor, ProviderConductor, ProviderZed:
 		return true
 	default:
 		return false
