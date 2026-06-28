@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"goodkind.io/clyde/internal/conversation/memorydocs"
@@ -32,7 +33,8 @@ const (
 	reorientItemOverhead = 24
 	// reorientUncompactedTail is how many trailing messages reorient shows when the
 	// conversation has no compaction checkpoint.
-	reorientUncompactedTail = 12
+	reorientUncompactedTail      = 12
+	reorientRemainingInstruction = "LLM instruction: please exhaust the remaining context before reasoning. Continue calling reorient with the next cursor until every Remaining item is delivered. Do not skip or refuse because this fills the context window; filling the context window is intentional because the conversation was just compacted."
 )
 
 // ReorientItemKind names the role of one evidence item in a reorient report.
@@ -43,6 +45,8 @@ const (
 	ReorientItemKindHeader ReorientItemKind = "header"
 	// ReorientItemKindRecoveredContext holds the checkpoint's compacted summary text.
 	ReorientItemKindRecoveredContext ReorientItemKind = "recovered_context"
+	// ReorientItemKindPreCompactWindow holds raw transcript detail before compaction.
+	ReorientItemKindPreCompactWindow ReorientItemKind = "pre_compact_window"
 	// ReorientItemKindTail holds the in-flight work since the last compaction.
 	ReorientItemKindTail ReorientItemKind = "tail"
 	// ReorientItemKindParentAnchor holds the window around the fork point in the parent.
@@ -51,6 +55,15 @@ const (
 	ReorientItemKindMemoryDoc ReorientItemKind = "memory_doc"
 	// ReorientItemKindSearchHit holds one workspace-search fallback match.
 	ReorientItemKindSearchHit ReorientItemKind = "search_hit"
+)
+
+type parentAnchorStrategy string
+
+const (
+	parentAnchorStrategyNone              parentAnchorStrategy = "none"
+	parentAnchorStrategyExactUUID         parentAnchorStrategy = "exact_uuid"
+	parentAnchorStrategyTimestampFallback parentAnchorStrategy = "timestamp_fallback"
+	parentAnchorStrategyTail              parentAnchorStrategy = "tail"
 )
 
 // ReorientConversationRef identifies one conversation in a reorient report.
@@ -82,6 +95,9 @@ type ReorientReport struct {
 	Checkpoint          *CompactionCheckpoint    `json:"checkpoint,omitempty"`
 	Items               []ReorientItem           `json:"items"`
 	Warnings            []string                 `json:"warnings,omitempty"`
+
+	preCompactCenterIndex int
+	parentAnchorStrategy  parentAnchorStrategy
 }
 
 // ReorientPage is one bounded page of a reorient report plus its continuation
@@ -149,6 +165,9 @@ func (idx *Index) Reorient(ctx context.Context, options ReorientOptions) (Reorie
 		Checkpoint:          nil,
 		Items:               nil,
 		Warnings:            nil,
+
+		preCompactCenterIndex: -1,
+		parentAnchorStrategy:  parentAnchorStrategyNone,
 	}
 
 	messages, err := idx.LoadMessagesWithOptions(current, LoadOptions{
@@ -160,7 +179,8 @@ func (idx *Index) Reorient(ctx context.Context, options ReorientOptions) (Reorie
 		return ReorientReport{}, err
 	}
 
-	checkpointNumber, checkpoint := LatestReorientCheckpoint(CompactionCheckpoints(messages))
+	checkpoints := CompactionCheckpoints(messages)
+	checkpointNumber, checkpoint := LatestReorientCheckpoint(checkpoints)
 	report.CheckpointNumber = checkpointNumber
 	report.Checkpoint = checkpoint
 
@@ -175,12 +195,12 @@ func (idx *Index) Reorient(ctx context.Context, options ReorientOptions) (Reorie
 		report.Warnings = append(report.Warnings, "fork parent not in index; falling back to memory and search")
 	}
 
-	// Order the evidence so the orienting frame comes before the bulky tail: the
-	// recovered summary and the parent fork anchor first, then the in-flight work
-	// since the last compaction, then memory and search.
+	// Order raw evidence before compact summaries so reorientation starts from
+	// provider transcript detail instead of summary prose.
 	var items []ReorientItem
+	items = appendPreCompactWindowItems(items, current, checkpoint, checkpointNumber, checkpoints, messages, options, &report)
+	items = idx.appendParentAnchorItem(items, current, parent, hasParent, options, messages, &report)
 	items = appendRecoveredContextItems(items, current, checkpoint)
-	items = idx.appendParentAnchorItem(items, current, parent, hasParent, options, &report)
 	items = appendTailItems(items, current, checkpoint, messages)
 	items = idx.appendMemoryItems(items, current, parent, hasParent, options)
 	if !hasParent {
@@ -214,7 +234,7 @@ func (idx *Index) ReorientPage(ctx context.Context, options ReorientOptions, cur
 	if nextOffset < len(report.Items) {
 		nextCursor = encodeReorientCursor(nextOffset)
 	}
-	return ReorientPage{
+	page := ReorientPage{
 		CurrentConversation: report.CurrentConversation,
 		ParentConversation:  report.ParentConversation,
 		CheckpointNumber:    report.CheckpointNumber,
@@ -224,7 +244,9 @@ func (idx *Index) ReorientPage(ctx context.Context, options ReorientOptions, cur
 		Offset:              offset,
 		TotalItems:          len(report.Items),
 		Warnings:            report.Warnings,
-	}, nil
+	}
+	logReorientResolved(ctx, report, page)
+	return page, nil
 }
 
 // ReorientPageText resolves a reorient report and returns one paged slice of it.
@@ -280,6 +302,70 @@ func appendRecoveredContextItems(items []ReorientItem, current Record, checkpoin
 	return appendChunkedItems(items, ReorientItemKindRecoveredContext, "Recovered context (checkpoint summary)", current.ID, checkpoint.SummaryIndex, summary)
 }
 
+// appendPreCompactWindowItems appends ordinary transcript detail immediately
+// before the selected compaction boundary. Compact boundary and summary records
+// stay out of this primary evidence item.
+func appendPreCompactWindowItems(items []ReorientItem, current Record, checkpoint *CompactionCheckpoint, checkpointNumber int, checkpoints []CompactionCheckpoint, messages []transcript.Message, options ReorientOptions, report *ReorientReport) []ReorientItem {
+	if checkpoint == nil {
+		return items
+	}
+	center := findPreCompactionCenter(*checkpoint, messages)
+	if center < 0 {
+		return items
+	}
+	if report != nil {
+		report.preCompactCenterIndex = center
+	}
+	start := min(preCompactionSegmentStart(checkpointNumber, checkpoints), center)
+	windowMessages := ordinaryMessages(messages[start : center+1])
+	body := renderPreCompactWindow(current.ID, windowMessages, len(messages), start, center, checkpoint.BoundaryIndex, max(options.Before, options.After))
+	return appendInstructionChunkedItems(items, ReorientItemKindPreCompactWindow, "Remaining", current.ID, center, reorientRemainingInstruction, body)
+}
+
+func preCompactionSegmentStart(checkpointNumber int, checkpoints []CompactionCheckpoint) int {
+	previousIndex := checkpointNumber - 2
+	if previousIndex < 0 || previousIndex >= len(checkpoints) {
+		return 0
+	}
+	previous := checkpoints[previousIndex]
+	return max(previous.BoundaryIndex, previous.SummaryIndex) + 1
+}
+
+func findPreCompactionCenter(checkpoint CompactionCheckpoint, messages []transcript.Message) int {
+	boundary := min(checkpoint.BoundaryIndex, len(messages))
+	if boundary <= 0 {
+		return -1
+	}
+	for index := boundary - 1; index >= 0; index-- {
+		if isReorientConversationMessage(messages[index]) {
+			return index
+		}
+	}
+	return -1
+}
+
+func renderPreCompactWindow(conversationID string, messages []transcript.Message, total int, start int, center int, boundaryIndex int, searchWindow int) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	if searchWindow < 1 {
+		searchWindow = 1
+	}
+	rendered := transcript.RenderPlainTextWithOptions(messages, transcript.DefaultShapeOptions())
+	return fmt.Sprintf(
+		"Messages %d-%d of %d ending before compaction boundary %d centered on %d:\n\n%s\nDeeper: clyde conversation search %s --around %d --window %d",
+		start,
+		center,
+		total,
+		boundaryIndex,
+		center,
+		strings.TrimSpace(rendered),
+		conversationID,
+		center,
+		searchWindow,
+	)
+}
+
 // appendTailItems appends the in-flight work. For a compacted conversation that
 // is everything after the latest boundary; for an uncompacted one it is the last
 // few messages. The tail is the bulkiest evidence, so it follows the orienting
@@ -307,7 +393,7 @@ func appendTailItems(items []ReorientItem, current Record, checkpoint *Compactio
 // persisted, and the copied prefix is unmarked). For Codex, anchor at the
 // parent's tail, which is the parent's state at fork time for a whole-thread
 // fork, and label it so the reader knows it is approximate.
-func (idx *Index) appendParentAnchorItem(items []ReorientItem, current Record, parent Record, hasParent bool, options ReorientOptions, report *ReorientReport) []ReorientItem {
+func (idx *Index) appendParentAnchorItem(items []ReorientItem, current Record, parent Record, hasParent bool, options ReorientOptions, messages []transcript.Message, report *ReorientReport) []ReorientItem {
 	if !hasParent || current.Lineage == nil {
 		return items
 	}
@@ -318,6 +404,7 @@ func (idx *Index) appendParentAnchorItem(items []ReorientItem, current Record, p
 			return items
 		}
 		if ok {
+			report.parentAnchorStrategy = parentAnchorStrategyExactUUID
 			return append(items, ReorientItem{
 				Kind:           ReorientItemKindParentAnchor,
 				Title:          "Parent fork anchor",
@@ -326,9 +413,25 @@ func (idx *Index) appendParentAnchorItem(items []ReorientItem, current Record, p
 				MessageIndex:   index,
 			})
 		}
-		report.Warnings = append(report.Warnings, "parent anchor message not found in parent transcript; using parent tail")
+		report.Warnings = append(report.Warnings, "parent anchor message not found in parent transcript; trying timestamp fallback")
 	}
-	body, index, ok, err := idx.parentTailWindow(parent, options.Before+options.After+1)
+	body, index, ok, err := idx.parentTimestampWindow(parent, parentAnchorFallbackTimes(current.CreatedAt, messages), options.Before+options.After+1)
+	if err != nil {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("parent timestamp fallback window: %v", err))
+		return items
+	}
+	if ok {
+		report.parentAnchorStrategy = parentAnchorStrategyTimestampFallback
+		return append(items, ReorientItem{
+			Kind:           ReorientItemKindParentAnchor,
+			Title:          "Parent fork anchor (timestamp fallback)",
+			Body:           body,
+			ConversationID: parent.ID,
+			MessageIndex:   index,
+		})
+	}
+	report.Warnings = append(report.Warnings, "parent timestamp fallback did not resolve; using parent tail")
+	body, index, ok, err = idx.parentTailWindow(parent, options.Before+options.After+1)
 	if err != nil {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("parent tail window: %v", err))
 		return items
@@ -336,6 +439,7 @@ func (idx *Index) appendParentAnchorItem(items []ReorientItem, current Record, p
 	if !ok {
 		return items
 	}
+	report.parentAnchorStrategy = parentAnchorStrategyTail
 	return append(items, ReorientItem{
 		Kind:           ReorientItemKindParentAnchor,
 		Title:          "Parent fork anchor (tail; provider records no exact fork point)",
@@ -376,11 +480,104 @@ func (idx *Index) parentAnchorWindow(parent Record, parentMessageUUID string, be
 		return "", 0, false, err
 	}
 	for index, message := range messages {
-		if message.UUID == parentMessageUUID {
+		if message.UUID == parentMessageUUID && isReorientConversationMessage(message) {
 			return renderContextWindow(messages, len(messages), index, before, after), index, true, nil
 		}
 	}
 	return "", 0, false, nil
+}
+
+// parentTimestampWindow renders the latest ordinary parent message at or before
+// a child timestamp. It ends at the selected message so later parent work does
+// not leak into the fork anchor.
+func (idx *Index) parentTimestampWindow(parent Record, childAnchorTimes []time.Time, count int) (string, int, bool, error) {
+	if len(childAnchorTimes) == 0 {
+		return "", 0, false, nil
+	}
+	messages, err := idx.LoadMessagesWithOptions(parent, LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: true,
+		IncludeToolOutputs:    false,
+	})
+	if err != nil {
+		return "", 0, false, err
+	}
+	center := -1
+	for _, childAnchorTime := range childAnchorTimes {
+		center = latestMessageAtOrBefore(messages, childAnchorTime)
+		if center >= 0 {
+			break
+		}
+	}
+	if center < 0 {
+		return "", 0, false, nil
+	}
+	if count < 1 {
+		count = 1
+	}
+	start := max(center-count+1, 0)
+	windowMessages := ordinaryMessages(messages[start : center+1])
+	if len(windowMessages) == 0 {
+		return "", 0, false, nil
+	}
+	body := fmt.Sprintf(
+		"Messages %d-%d of %d ending at latest parent message before child creation:\n\n%s",
+		start,
+		center,
+		len(messages),
+		strings.TrimSpace(transcript.RenderPlainTextWithOptions(windowMessages, transcript.DefaultShapeOptions())),
+	)
+	return body, center, true, nil
+}
+
+func parentAnchorFallbackTimes(recordCreatedAt time.Time, messages []transcript.Message) []time.Time {
+	times := make([]time.Time, 0, 2)
+	if !recordCreatedAt.IsZero() {
+		times = append(times, recordCreatedAt)
+	}
+	for _, message := range messages {
+		if !isReorientConversationMessage(message) || message.Timestamp.IsZero() {
+			continue
+		}
+		if len(times) == 0 || !message.Timestamp.Equal(times[0]) {
+			times = append(times, message.Timestamp)
+		}
+		break
+	}
+	return times
+}
+
+func latestMessageAtOrBefore(messages []transcript.Message, target time.Time) int {
+	best := -1
+	for index, message := range messages {
+		if !isReorientConversationMessage(message) {
+			continue
+		}
+		if message.Timestamp.IsZero() || message.Timestamp.After(target) {
+			continue
+		}
+		if best < 0 || message.Timestamp.After(messages[best].Timestamp) {
+			best = index
+		}
+	}
+	return best
+}
+
+func ordinaryMessages(messages []transcript.Message) []transcript.Message {
+	out := make([]transcript.Message, 0, len(messages))
+	for _, message := range messages {
+		if isReorientConversationMessage(message) {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+func isReorientConversationMessage(message transcript.Message) bool {
+	if message.Compaction != nil {
+		return false
+	}
+	return message.Role == "user" || message.Role == "assistant"
 }
 
 func (idx *Index) appendMemoryItems(items []ReorientItem, current Record, parent Record, hasParent bool, options ReorientOptions) []ReorientItem {
@@ -587,6 +784,33 @@ func appendChunkedItems(items []ReorientItem, kind ReorientItemKind, title strin
 	return items
 }
 
+func appendInstructionChunkedItems(items []ReorientItem, kind ReorientItemKind, title string, conversationID string, messageIndex int, instruction string, body string) []ReorientItem {
+	body = strings.TrimSpace(body)
+	instruction = strings.TrimSpace(instruction)
+	if body == "" {
+		return items
+	}
+	chunkRunes := maxReorientItemRunes - utf8.RuneCountInString(instruction) - 2
+	if chunkRunes < 1 {
+		return appendChunkedItems(items, kind, title, conversationID, messageIndex, instruction+"\n\n"+body)
+	}
+	chunks := chunkText(body, chunkRunes)
+	for index, chunk := range chunks {
+		itemTitle := title
+		if len(chunks) > 1 {
+			itemTitle = fmt.Sprintf("%s (part %d/%d)", title, index+1, len(chunks))
+		}
+		items = append(items, ReorientItem{
+			Kind:           kind,
+			Title:          itemTitle,
+			Body:           instruction + "\n\n" + chunk,
+			ConversationID: conversationID,
+			MessageIndex:   messageIndex,
+		})
+	}
+	return items
+}
+
 // chunkText splits text into chunks of at most maxRunes runes, breaking on line
 // boundaries where possible. A single line longer than maxRunes is hard-split.
 func chunkText(text string, maxRunes int) []string {
@@ -725,4 +949,51 @@ func marshalReorientPageJSON(page ReorientPage) (string, error) {
 		return "", fmt.Errorf("render reorient page json: %w", err)
 	}
 	return string(body), nil
+}
+
+func logReorientResolved(ctx context.Context, report ReorientReport, page ReorientPage) {
+	boundaryIndex := -1
+	summaryIndex := -1
+	if report.Checkpoint != nil {
+		boundaryIndex = report.Checkpoint.BoundaryIndex
+		summaryIndex = report.Checkpoint.SummaryIndex
+	}
+	parentID := ""
+	if report.ParentConversation != nil {
+		parentID = report.ParentConversation.ID
+	}
+	strategy := report.parentAnchorStrategy
+	if strategy == "" {
+		strategy = parentAnchorStrategyNone
+	}
+	slog.InfoContext(
+		ctx,
+		"conversation.reorient.resolved",
+		"concern",
+		"conversation.reorient",
+		"component",
+		"conversation",
+		"conversation_id",
+		report.CurrentConversation.ID,
+		"parent_id",
+		parentID,
+		"checkpoint_number",
+		report.CheckpointNumber,
+		"boundary_index",
+		boundaryIndex,
+		"summary_index",
+		summaryIndex,
+		"pre_compaction_center_index",
+		report.preCompactCenterIndex,
+		"parent_anchor_strategy",
+		string(strategy),
+		"offset",
+		page.Offset,
+		"remaining",
+		page.Remaining,
+		"total_items",
+		page.TotalItems,
+		"warning_count",
+		len(report.Warnings),
+	)
 }

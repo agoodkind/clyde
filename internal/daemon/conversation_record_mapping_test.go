@@ -176,8 +176,8 @@ func TestReorientPageProtoMappingCarriesPagingAndItems(t *testing.T) {
 		},
 		CheckpointNumber: 2,
 		Items: []conversation.ReorientItem{{
-			Kind:           conversation.ReorientItemKindTail,
-			Title:          "In-flight work since last compaction",
+			Kind:           conversation.ReorientItemKindPreCompactWindow,
+			Title:          "Raw context before compaction",
 			Body:           "body",
 			ConversationID: "claude:current",
 			MessageIndex:   14,
@@ -205,7 +205,7 @@ func TestReorientPageProtoMappingCarriesPagingAndItems(t *testing.T) {
 	if wire.GetOffset() != 1 || wire.GetTotalItems() != 5 {
 		t.Fatalf("offset or total_items = %d/%d, want 1/5", wire.GetOffset(), wire.GetTotalItems())
 	}
-	if len(wire.GetItems()) != 1 || wire.GetItems()[0].GetKind() != clydev1.ReorientItemKind_REORIENT_ITEM_KIND_TAIL {
+	if len(wire.GetItems()) != 1 || wire.GetItems()[0].GetKind() != clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW {
 		t.Fatalf("wire items = %#v", wire.GetItems())
 	}
 
