@@ -28,6 +28,9 @@ func TestDiscoverReturnsVirtualCandidateForNativeZedThread(t *testing.T) {
 	if len(candidates) != 1 {
 		t.Fatalf("candidates len = %d, want 1", len(candidates))
 	}
+	if candidates[0].Path != "zed://"+RootHash(root)+"/0-stable/thread-1" {
+		t.Fatalf("candidate path = %q, want legacy 3-segment native path", candidates[0].Path)
+	}
 
 	parsed, err := ParseVirtualPath(candidates[0].Path)
 	if err != nil {
@@ -41,17 +44,15 @@ func TestDiscoverReturnsVirtualCandidateForNativeZedThread(t *testing.T) {
 	}
 }
 
-func TestDiscoverSkipsMetadataOnlyAndExternalAgentThreads(t *testing.T) {
+func TestDiscoverSkipsExternalAgentMetadataWithoutNativeThreadRow(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
 	updatedAt := time.Date(2026, time.June, 27, 12, 30, 0, 0, time.UTC)
-	threadJSON := []byte(`{"version":"0.3.0","title":"Thread","messages":[],"updated_at":"2026-06-27T12:30:00Z"}`)
 
-	writeSidebarRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), "metadata-only", "", "Only metadata", "", updatedAt)
-	writeThreadsRow(t, root, "external-1", "", updatedAt, threadJSON)
 	writeSidebarRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), "external-1", "claude", "External", "", updatedAt)
 
-	candidates, err := New().Discover(t.Context(), nil)
+	parser := New()
+	candidates, err := parser.Discover(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
 	}
@@ -468,6 +469,193 @@ func TestStreamDecodesZstdZedThreadPayloads(t *testing.T) {
 	}
 }
 
+func TestDiscoverIncludesTerminalMetadataWithoutTranscriptRow(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	updatedAt := time.Date(2026, time.June, 27, 15, 15, 0, 0, time.UTC)
+	dbPath := filepath.Join(root, "db", "0-stable", "db.sqlite")
+	writeTerminalSidebarRow(t, dbPath, terminalSidebarRowOptions{
+		TerminalID:             "terminal-1",
+		Title:                  "Terminal thread",
+		CustomTitle:            "Build output",
+		CreatedAt:              updatedAt,
+		WorkingDirectory:       "/repo",
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+		RemoteConnection:       "",
+	})
+
+	parser := New()
+	candidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates len = %d, want 1", len(candidates))
+	}
+
+	record, ok := parser.ScanRecord(candidates[0].Path, candidates[0].Stamp)
+	if !ok {
+		t.Fatal("ScanRecord returned ok=false")
+	}
+	if record.Provider != conversation.ProviderZed {
+		t.Fatalf("record.Provider = %v, want zed", record.Provider)
+	}
+	if record.ArtifactKind != "zed_terminal_thread" {
+		t.Fatalf("record.ArtifactKind = %q, want zed_terminal_thread", record.ArtifactKind)
+	}
+	if record.ID != "zed:terminal-terminal-1" {
+		t.Fatalf("record.ID = %q, want zed:terminal-terminal-1", record.ID)
+	}
+	if record.SizeBytes != 0 {
+		t.Fatalf("record.SizeBytes = %d, want 0 for metadata-only terminal records", record.SizeBytes)
+	}
+
+	messages, err := conversation.CollectMessages(parser.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: true,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(messages))
+	}
+	if messages[0].Visibility != transcript.MessageVisibilityMetaOnly {
+		t.Fatalf("messages[0].Visibility = %q, want meta_only", messages[0].Visibility)
+	}
+	if messages[0].Text == "" {
+		t.Fatalf("messages[0].Text empty, want explicit unavailable reason")
+	}
+}
+
+func TestTerminalMetadataIsHiddenWhenSystemMessagesAreExcluded(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	createdAt := time.Date(2026, time.June, 27, 15, 15, 0, 0, time.UTC)
+	dbPath := filepath.Join(root, "db", "0-stable", "db.sqlite")
+	writeTerminalSidebarRow(t, dbPath, terminalSidebarRowOptions{
+		TerminalID:             "terminal-1",
+		Title:                  "Terminal thread",
+		CustomTitle:            "",
+		CreatedAt:              createdAt,
+		WorkingDirectory:       "/repo",
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+		RemoteConnection:       "",
+	})
+
+	parser := New()
+	candidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates len = %d, want 1", len(candidates))
+	}
+
+	messages, err := conversation.CollectMessages(parser.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("messages len = %d, want 0 when system messages are excluded", len(messages))
+	}
+}
+
+func TestTerminalMetadataStampChangesWhenTitleChangesButLengthDoesNot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	createdAt := time.Date(2026, time.June, 27, 15, 15, 0, 0, time.UTC)
+	dbPath := filepath.Join(root, "db", "0-stable", "db.sqlite")
+
+	writeTerminalSidebarRow(t, dbPath, terminalSidebarRowOptions{
+		TerminalID:             "terminal-1",
+		Title:                  "Alpha",
+		CustomTitle:            "",
+		CreatedAt:              createdAt,
+		WorkingDirectory:       "/repo",
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+		RemoteConnection:       "",
+	})
+
+	parser := New()
+	firstCandidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("first Discover returned error: %v", err)
+	}
+	if len(firstCandidates) != 1 {
+		t.Fatalf("first candidates len = %d, want 1", len(firstCandidates))
+	}
+
+	updateTerminalSidebarRowTitle(t, dbPath, "terminal-1", "Bravo")
+
+	secondCandidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("second Discover returned error: %v", err)
+	}
+	if len(secondCandidates) != 1 {
+		t.Fatalf("second candidates len = %d, want 1", len(secondCandidates))
+	}
+	if firstCandidates[0].Stamp.Equal(secondCandidates[0].Stamp) {
+		t.Fatalf("terminal metadata stamp did not change after same-length title update: %#v", secondCandidates[0].Stamp)
+	}
+}
+
+func TestTerminalMetadataStampChangesWhenFolderPathChangesButLengthDoesNot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+	createdAt := time.Date(2026, time.June, 27, 15, 15, 0, 0, time.UTC)
+	dbPath := filepath.Join(root, "db", "0-stable", "db.sqlite")
+
+	writeTerminalSidebarRow(t, dbPath, terminalSidebarRowOptions{
+		TerminalID:             "terminal-1",
+		Title:                  "Terminal thread",
+		CustomTitle:            "",
+		CreatedAt:              createdAt,
+		WorkingDirectory:       "/repo",
+		FolderPaths:            "/repo/a",
+		FolderPathsOrder:       "0",
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+		RemoteConnection:       "",
+	})
+
+	parser := New()
+	firstCandidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("first Discover returned error: %v", err)
+	}
+	if len(firstCandidates) != 1 {
+		t.Fatalf("first candidates len = %d, want 1", len(firstCandidates))
+	}
+
+	updateTerminalSidebarRowFolderPath(t, dbPath, "terminal-1", "/repo/b")
+
+	secondCandidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("second Discover returned error: %v", err)
+	}
+	if len(secondCandidates) != 1 {
+		t.Fatalf("second candidates len = %d, want 1", len(secondCandidates))
+	}
+	if firstCandidates[0].Stamp.Equal(secondCandidates[0].Stamp) {
+		t.Fatalf("terminal metadata stamp did not change after same-length folder path update: %#v", secondCandidates[0].Stamp)
+	}
+}
+
 func writeThreadsRow(t *testing.T, root, sessionID, parentID string, updatedAt time.Time, data []byte) {
 	t.Helper()
 	writeThreadsRowWithDataType(t, root, sessionID, parentID, updatedAt, "json", data)
@@ -545,6 +733,73 @@ func writeSidebarRowWithOptions(t *testing.T, dbPath string, options sidebarRowO
 	}
 	if _, err := db.Exec(`INSERT INTO sidebar_threads(session_id,agent_id,title,title_override,updated_at,created_at,folder_paths,folder_paths_order,archived,main_worktree_paths,main_worktree_paths_order) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, options.SessionID, nullable(options.AgentID), options.Title, nullable(options.TitleOverride), updatedAt, createdAt, options.FolderPaths, options.FolderPathsOrder, archivedValue, options.MainWorktreePaths, options.MainWorktreePathsOrder); err != nil {
 		t.Fatalf("insert sidebar row: %v", err)
+	}
+}
+
+type terminalSidebarRowOptions struct {
+	TerminalID             string
+	Title                  string
+	CustomTitle            string
+	CreatedAt              time.Time
+	WorkingDirectory       string
+	FolderPaths            string
+	FolderPathsOrder       string
+	MainWorktreePaths      string
+	MainWorktreePathsOrder string
+	RemoteConnection       string
+}
+
+func writeTerminalSidebarRow(t *testing.T, dbPath string, options terminalSidebarRowOptions) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("mkdir metadata dir: %v", err)
+	}
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open metadata db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sidebar_terminal_threads(terminal_id TEXT PRIMARY KEY,title TEXT NOT NULL,custom_title TEXT,created_at TEXT NOT NULL,working_directory TEXT,folder_paths TEXT,folder_paths_order TEXT,main_worktree_paths TEXT,main_worktree_paths_order TEXT,remote_connection TEXT) STRICT;`); err != nil {
+		t.Fatalf("create terminal sidebar table: %v", err)
+	}
+	createdAt := options.CreatedAt.Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO sidebar_terminal_threads(terminal_id,title,custom_title,created_at,working_directory,folder_paths,folder_paths_order,main_worktree_paths,main_worktree_paths_order,remote_connection) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		options.TerminalID,
+		options.Title,
+		nullable(options.CustomTitle),
+		createdAt,
+		nullable(options.WorkingDirectory),
+		nullable(options.FolderPaths),
+		nullable(options.FolderPathsOrder),
+		nullable(options.MainWorktreePaths),
+		nullable(options.MainWorktreePathsOrder),
+		nullable(options.RemoteConnection),
+	); err != nil {
+		t.Fatalf("insert terminal sidebar row: %v", err)
+	}
+}
+
+func updateTerminalSidebarRowTitle(t *testing.T, dbPath string, terminalID string, title string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open metadata db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`UPDATE sidebar_terminal_threads SET title = ? WHERE terminal_id = ?`, title, terminalID); err != nil {
+		t.Fatalf("update terminal sidebar row: %v", err)
+	}
+}
+
+func updateTerminalSidebarRowFolderPath(t *testing.T, dbPath string, terminalID string, folderPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open metadata db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`UPDATE sidebar_terminal_threads SET folder_paths = ? WHERE terminal_id = ?`, folderPath, terminalID); err != nil {
+		t.Fatalf("update terminal sidebar folder path: %v", err)
 	}
 }
 

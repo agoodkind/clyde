@@ -1,8 +1,11 @@
 package zedstore
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sort"
 	"time"
 )
 
@@ -112,6 +115,22 @@ type MentionPart struct {
 	Content string `json:"content"`
 }
 
+var mentionURIKeyPriority = map[string]int{
+	"File": 0,
+	"Path": 1,
+	"Http": 2,
+	"Url":  3,
+	"Uri":  4,
+	"Rule": 5,
+}
+
+var mentionURILeafPriority = map[string]int{
+	"abs_path": 0,
+	"path":     1,
+	"url":      2,
+	"uri":      3,
+}
+
 // AgentMessage is one decoded Zed assistant message payload.
 type AgentMessage struct {
 	Content          []AgentContentPart    `json:"content"`
@@ -186,6 +205,27 @@ func ParseCurrentThreadJSON(data []byte) (ThreadDocument, error) {
 	return thread, nil
 }
 
+// UnmarshalJSON decodes one Zed mention part, accepting string, null, or
+// object-shaped `uri` values.
+func (part *MentionPart) UnmarshalJSON(data []byte) error {
+	*part = MentionPart{URI: "", Content: ""}
+	var raw struct {
+		URI     json.RawMessage `json:"uri"`
+		Content string          `json:"content"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decode zed mention payload: %w", err)
+	}
+	part.Content = raw.Content
+
+	uri, err := decodeMentionURI(raw.URI)
+	if err != nil {
+		return err
+	}
+	part.URI = uri
+	return nil
+}
+
 // UnmarshalJSON decodes the tagged Zed message union into one ThreadMessage.
 func (message *ThreadMessage) UnmarshalJSON(data []byte) error {
 	*message = ThreadMessage{Kind: "", User: nil, Agent: nil, Compaction: nil}
@@ -247,6 +287,91 @@ func (part *UserContentPart) UnmarshalJSON(data []byte) error {
 	default:
 		return fmt.Errorf("unsupported user content variant %q", kind)
 	}
+}
+
+func decodeMentionURI(raw json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", nil
+	}
+	uri, ok := findMentionURIValue(raw)
+	if !ok {
+		return "", fmt.Errorf("decode zed mention uri: no leaf string found")
+	}
+	return uri, nil
+}
+
+func findMentionURIValue(raw json.RawMessage) (string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", false
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, true
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err == nil {
+		for _, key := range orderedMentionKeys(object) {
+			uri, ok := findMentionURIValue(object[key])
+			if ok {
+				return uri, true
+			}
+		}
+		return "", false
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err == nil {
+		for _, item := range items {
+			uri, ok := findMentionURIValue(item)
+			if ok {
+				return uri, true
+			}
+		}
+		return "", false
+	}
+
+	slog.Warn("providers.zed.store.mention_uri_decode_failed", "concern", "providers.zed.store", "raw_length", len(raw))
+	return "", false
+}
+
+func orderedMentionKeys(values map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		leftPriority, leftOK := mentionURIKeyPriority[keys[i]]
+		rightPriority, rightOK := mentionURIKeyPriority[keys[j]]
+		switch {
+		case leftOK && rightOK:
+			if leftPriority != rightPriority {
+				return leftPriority < rightPriority
+			}
+		case leftOK:
+			return true
+		case rightOK:
+			return false
+		}
+
+		leftLeafPriority, leftLeafOK := mentionURILeafPriority[keys[i]]
+		rightLeafPriority, rightLeafOK := mentionURILeafPriority[keys[j]]
+		switch {
+		case leftLeafOK && rightLeafOK:
+			if leftLeafPriority != rightLeafPriority {
+				return leftLeafPriority < rightLeafPriority
+			}
+		case leftLeafOK:
+			return true
+		case rightLeafOK:
+			return false
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
 }
 
 // UnmarshalJSON decodes one tagged Zed assistant content union block.

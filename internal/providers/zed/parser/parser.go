@@ -24,13 +24,17 @@ import (
 const (
 	concern               = "providers.zed.parser"
 	artifactKindZedThread = "zed_thread"
+	artifactKindZedTerm   = "zed_terminal_thread"
 	resolveLookupTimeout  = 5 * time.Second
+	terminalPathPrefix    = "terminal-"
 )
 
 type discoveredThread struct {
 	Row      zedstore.ThreadRow
 	Thread   zedstore.ThreadDocument
 	Metadata zedstore.SidebarThreadMetadata
+	Terminal *zedstore.SidebarTerminalThreadMetadata
+	Source   string
 	RootDir  string
 	Channel  string
 }
@@ -75,10 +79,10 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 		if err != nil {
 			return nil, err
 		}
-		if len(rows) == 0 {
+		terminalMetadata := readTerminalMetadataForRoot(ctx, root)
+		if len(rows) == 0 && len(terminalMetadata) == 0 {
 			continue
 		}
-
 		metadataByThread := readMetadataForRoot(ctx, root)
 		rootHash := RootHash(root.RootDir)
 
@@ -100,13 +104,19 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 				Path:  path,
 				Stamp: conversation.FileStamp{Size: int64(len(row.Data)), Mtime: row.UpdatedAt},
 			})
-			discovered[path] = discoveredThread{
-				Row:      row,
-				Thread:   thread,
-				Metadata: metadata.Metadata,
-				RootDir:  root.RootDir,
-				Channel:  metadata.Channel,
+			discovered[path] = newNativeDiscoveredThread(row, thread, metadata.Metadata, root.RootDir, metadata.Channel)
+		}
+
+		for _, terminal := range terminalMetadata {
+			path := buildVirtualPathFromRootHash(rootHash, terminal.Channel, terminalSessionID(terminal.Metadata.TerminalID))
+			if path == "" {
+				continue
 			}
+			candidates = append(candidates, conversation.ScanCandidate{
+				Path:  path,
+				Stamp: terminalMetadataStamp(terminal.Metadata),
+			})
+			discovered[path] = newTerminalDiscoveredThread(terminal.Metadata, root.RootDir, terminal.Channel)
 		}
 	}
 
@@ -127,6 +137,31 @@ func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversa
 	discovered, err := p.resolveDiscoveredThread(path)
 	if err != nil {
 		return emptyRecord(), false
+	}
+	if discovered.Source == artifactKindZedTerm {
+		if discovered.Terminal == nil {
+			return emptyRecord(), false
+		}
+		terminal := discovered.Terminal
+		title := firstNonEmptyString(terminal.CustomTitle, terminal.Title)
+		if title == "" {
+			title = "Untitled Zed Terminal"
+		}
+		return conversation.Record{
+			ID:            conversation.DerivedID(providerid.ProviderZed, terminalSessionID(terminal.TerminalID), path),
+			Provider:      providerid.ProviderZed,
+			NativeID:      terminal.TerminalID,
+			Lineage:       nil,
+			Title:         title,
+			WorkspaceRoot: firstNonEmptyString(terminal.WorkingDirectory, firstPath(terminal.FolderPaths), firstPath(terminal.MainWorktreePaths)),
+			ArtifactPath:  path,
+			ArtifactKind:  artifactKindZedTerm,
+			Model:         "",
+			CreatedAt:     terminal.CreatedAt,
+			UpdatedAt:     terminal.CreatedAt,
+			SizeBytes:     0,
+			Archived:      false,
+		}, true
 	}
 
 	thread := discovered.Thread
@@ -154,6 +189,25 @@ func (p *Parser) Stream(path string, opts conversation.LoadOptions) iter.Seq2[tr
 		discovered, err := p.resolveDiscoveredThread(path)
 		if err != nil {
 			yield(emptyMessage(), err)
+			return
+		}
+		if discovered.Source == artifactKindZedTerm {
+			if !opts.IncludeSystemMessages || discovered.Terminal == nil {
+				return
+			}
+			yield(transcript.Message{
+				UUID:              "",
+				ParentUUID:        "",
+				LogicalParentUUID: "",
+				Role:              "system",
+				Visibility:        transcript.MessageVisibilityMetaOnly,
+				Compaction:        nil,
+				Timestamp:         discovered.Terminal.CreatedAt,
+				Text:              terminalMetadataUnavailableText(*discovered.Terminal),
+				Thinking:          "",
+				HasTools:          false,
+				Tools:             nil,
+			}, nil)
 			return
 		}
 		thread := discovered.Thread
@@ -278,7 +332,24 @@ func (p *Parser) resolveDiscoveredThread(path string) (discoveredThread, error) 
 		if RootHash(root.RootDir) != virtualPath.RootHash {
 			continue
 		}
-		row, ok, err := readThreadRowByIDForRoot(ctx, root, virtualPath.SessionID)
+		terminalID, isTerminal := strings.CutPrefix(virtualPath.SessionID, terminalPathPrefix)
+		if isTerminal {
+			resolved, ok, err := resolveTerminalDiscoveredThread(ctx, root, virtualPath.Channel, terminalID)
+			if err != nil {
+				if firstLookupErr == nil {
+					firstLookupErr = err
+				}
+				continue
+			}
+			if !ok {
+				continue
+			}
+			p.mu.Lock()
+			p.discovered[path] = resolved
+			p.mu.Unlock()
+			return resolved, nil
+		}
+		resolved, ok, err := resolveNativeDiscoveredThread(ctx, root, virtualPath.Channel, virtualPath.SessionID)
 		if err != nil {
 			if firstLookupErr == nil {
 				firstLookupErr = err
@@ -287,30 +358,6 @@ func (p *Parser) resolveDiscoveredThread(path string) (discoveredThread, error) 
 		}
 		if !ok {
 			continue
-		}
-		metadata, ok, err := readSidebarThreadMetadataForRoot(ctx, root, virtualPath.SessionID, virtualPath.Channel)
-		if err != nil {
-			if firstLookupErr == nil {
-				firstLookupErr = err
-			}
-			continue
-		}
-		if !ok || metadata.Metadata.AgentID != "" {
-			continue
-		}
-		thread, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
-		if err != nil {
-			if firstLookupErr == nil {
-				firstLookupErr = fmt.Errorf("parse zed thread document: %w", err)
-			}
-			continue
-		}
-		resolved := discoveredThread{
-			Row:      row,
-			Thread:   thread,
-			Metadata: metadata.Metadata,
-			RootDir:  root.RootDir,
-			Channel:  metadata.Channel,
 		}
 		p.mu.Lock()
 		p.discovered[path] = resolved
