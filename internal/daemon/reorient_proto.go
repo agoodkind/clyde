@@ -66,6 +66,8 @@ func reorientItemKindFromProto(kind clydev1.ReorientItemKind) conversation.Reori
 		return conversation.ReorientItemKindHeader
 	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_RECOVERED_CONTEXT:
 		return conversation.ReorientItemKindRecoveredContext
+	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW:
+		return conversation.ReorientItemKindPreCompactWindow
 	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_TAIL:
 		return conversation.ReorientItemKindTail
 	case clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PARENT_ANCHOR:

@@ -798,6 +798,8 @@ func protoReorientItemKind(kind conversation.ReorientItemKind) clydev1.ReorientI
 		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_HEADER
 	case conversation.ReorientItemKindRecoveredContext:
 		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_RECOVERED_CONTEXT
+	case conversation.ReorientItemKindPreCompactWindow:
+		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW
 	case conversation.ReorientItemKindTail:
 		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_TAIL
 	case conversation.ReorientItemKindParentAnchor:

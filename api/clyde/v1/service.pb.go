@@ -83,13 +83,14 @@ func (SearchSource) EnumDescriptor() ([]byte, []int) {
 type ReorientItemKind int32
 
 const (
-	ReorientItemKind_REORIENT_ITEM_KIND_UNSPECIFIED       ReorientItemKind = 0
-	ReorientItemKind_REORIENT_ITEM_KIND_HEADER            ReorientItemKind = 1
-	ReorientItemKind_REORIENT_ITEM_KIND_RECOVERED_CONTEXT ReorientItemKind = 2
-	ReorientItemKind_REORIENT_ITEM_KIND_TAIL              ReorientItemKind = 3
-	ReorientItemKind_REORIENT_ITEM_KIND_PARENT_ANCHOR     ReorientItemKind = 4
-	ReorientItemKind_REORIENT_ITEM_KIND_MEMORY_DOC        ReorientItemKind = 5
-	ReorientItemKind_REORIENT_ITEM_KIND_SEARCH_HIT        ReorientItemKind = 6
+	ReorientItemKind_REORIENT_ITEM_KIND_UNSPECIFIED        ReorientItemKind = 0
+	ReorientItemKind_REORIENT_ITEM_KIND_HEADER             ReorientItemKind = 1
+	ReorientItemKind_REORIENT_ITEM_KIND_RECOVERED_CONTEXT  ReorientItemKind = 2
+	ReorientItemKind_REORIENT_ITEM_KIND_TAIL               ReorientItemKind = 3
+	ReorientItemKind_REORIENT_ITEM_KIND_PARENT_ANCHOR      ReorientItemKind = 4
+	ReorientItemKind_REORIENT_ITEM_KIND_MEMORY_DOC         ReorientItemKind = 5
+	ReorientItemKind_REORIENT_ITEM_KIND_SEARCH_HIT         ReorientItemKind = 6
+	ReorientItemKind_REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW ReorientItemKind = 7
 )
 
 // Enum value maps for ReorientItemKind.
@@ -102,15 +103,17 @@ var (
 		4: "REORIENT_ITEM_KIND_PARENT_ANCHOR",
 		5: "REORIENT_ITEM_KIND_MEMORY_DOC",
 		6: "REORIENT_ITEM_KIND_SEARCH_HIT",
+		7: "REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW",
 	}
 	ReorientItemKind_value = map[string]int32{
-		"REORIENT_ITEM_KIND_UNSPECIFIED":       0,
-		"REORIENT_ITEM_KIND_HEADER":            1,
-		"REORIENT_ITEM_KIND_RECOVERED_CONTEXT": 2,
-		"REORIENT_ITEM_KIND_TAIL":              3,
-		"REORIENT_ITEM_KIND_PARENT_ANCHOR":     4,
-		"REORIENT_ITEM_KIND_MEMORY_DOC":        5,
-		"REORIENT_ITEM_KIND_SEARCH_HIT":        6,
+		"REORIENT_ITEM_KIND_UNSPECIFIED":        0,
+		"REORIENT_ITEM_KIND_HEADER":             1,
+		"REORIENT_ITEM_KIND_RECOVERED_CONTEXT":  2,
+		"REORIENT_ITEM_KIND_TAIL":               3,
+		"REORIENT_ITEM_KIND_PARENT_ANCHOR":      4,
+		"REORIENT_ITEM_KIND_MEMORY_DOC":         5,
+		"REORIENT_ITEM_KIND_SEARCH_HIT":         6,
+		"REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW": 7,
 	}
 )
 
@@ -4006,7 +4009,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x19SEARCH_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SEARCH_SOURCE_SEMANTIC\x10\x01\x12\x19\n" +
 	"\x15SEARCH_SOURCE_LITERAL\x10\x02\x12'\n" +
-	"#SEARCH_SOURCE_LITERAL_DISABLED_COLD\x10\x03*\x88\x02\n" +
+	"#SEARCH_SOURCE_LITERAL_DISABLED_COLD\x10\x03*\xb3\x02\n" +
 	"\x10ReorientItemKind\x12\"\n" +
 	"\x1eREORIENT_ITEM_KIND_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19REORIENT_ITEM_KIND_HEADER\x10\x01\x12(\n" +
@@ -4014,7 +4017,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x17REORIENT_ITEM_KIND_TAIL\x10\x03\x12$\n" +
 	" REORIENT_ITEM_KIND_PARENT_ANCHOR\x10\x04\x12!\n" +
 	"\x1dREORIENT_ITEM_KIND_MEMORY_DOC\x10\x05\x12!\n" +
-	"\x1dREORIENT_ITEM_KIND_SEARCH_HIT\x10\x062\xc8\n" +
+	"\x1dREORIENT_ITEM_KIND_SEARCH_HIT\x10\x06\x12)\n" +
+	"%REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW\x10\a2\xc8\n" +
 	"\n" +
 	"\fClydeService\x12M\n" +
 	"\fReloadDaemon\x12\x1d.clyde.v1.ReloadDaemonRequest\x1a\x1e.clyde.v1.ReloadDaemonResponse\x12M\n" +
