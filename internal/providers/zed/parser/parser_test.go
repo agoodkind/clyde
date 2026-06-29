@@ -9,6 +9,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 func TestDiscoverReturnsVirtualZedThreadCandidate(t *testing.T) {
@@ -397,6 +398,134 @@ func TestScanRecordDerivesFieldsFromDiscoveredThreadAndMetadata(t *testing.T) {
 	}
 	if !record.UpdatedAt.Equal(rowUpdatedAt) {
 		t.Fatalf("record.UpdatedAt = %v, want %v", record.UpdatedAt, rowUpdatedAt)
+	}
+}
+
+func TestStreamShapesVisibleZedMessagesWithoutCompactionByDefault(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+
+	updatedAt := time.Date(2026, time.June, 27, 13, 0, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Thread title",
+		"updated_at":"2026-06-27T13:00:00Z",
+		"messages":[
+			{"User":{"id":"user-empty","content":[{"Text":"   "}]}},
+			{"User":{"id":"user-1","content":[{"Text":"hello"},{"Mention":{"uri":"file:///repo/readme","content":"README excerpt"}}]}},
+			{"Agent":{"content":[{"Text":"   "},{"Thinking":{"text":"   ","signature":"sig"}}],"tool_results":{}}},
+			{"Agent":{"content":[{"Text":"answer"},{"Thinking":{"text":"reasoning","signature":"sig"}},{"ToolUse":{"id":"call-1","name":"Read","input":{"path":"/repo/readme"}}}],"tool_results":{}}},
+			"Resume",
+			{"Compaction":{"Summary":"Earlier summary"}}
+		]
+	}`)
+
+	writeThreadRow(t, root, threadRowOptions{
+		ThreadID:  "thread-1",
+		ParentID:  "",
+		UpdatedAt: updatedAt,
+		CreatedAt: updatedAt,
+		DataType:  "json",
+		Data:      threadJSON,
+	})
+	writeSidebarThreadRow(t, filepath.Join(root, "db", "0-stable", "db.sqlite"), sidebarThreadRowOptions{
+		SessionID:              "thread-1",
+		Title:                  "Thread title",
+		UpdatedAt:              updatedAt,
+		CreatedAt:              updatedAt,
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		Archived:               false,
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+	})
+
+	parser := New()
+	candidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	messages, err := conversation.CollectMessages(parser.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: false,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(messages))
+	}
+	if messages[0].Role != "user" || messages[0].Text != "hello\nREADME excerpt" {
+		t.Fatalf("user message = %#v", messages[0])
+	}
+	if messages[1].Role != "assistant" || messages[1].Text != "answer" || messages[1].Thinking != "reasoning" {
+		t.Fatalf("assistant message = %#v", messages[1])
+	}
+	if !messages[1].HasTools || len(messages[1].Tools) != 1 || messages[1].Tools[0].Name != "Read" {
+		t.Fatalf("assistant tools = %#v", messages[1].Tools)
+	}
+	if messages[2].Role != "user" || messages[2].Text != "Continue where you left off" {
+		t.Fatalf("resume message = %#v", messages[2])
+	}
+}
+
+func TestStreamIncludesZedCompactionMessagesWhenRequested(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CLYDE_ZED_DATA_DIRS", root)
+
+	updatedAt := time.Date(2026, time.June, 27, 13, 30, 0, 0, time.UTC)
+	threadJSON := []byte(`{
+		"version":"0.3.0",
+		"title":"Thread title",
+		"updated_at":"2026-06-27T13:30:00Z",
+		"messages":[
+			{"Compaction":{"Summary":"Earlier summary"}},
+			{"Compaction":{"ProviderNative":{"provider":"anthropic","items":[{"type":"thinking"}]}}}
+		]
+	}`)
+
+	writeThreadRow(t, root, threadRowOptions{
+		ThreadID:  "thread-2",
+		ParentID:  "",
+		UpdatedAt: updatedAt,
+		CreatedAt: updatedAt,
+		DataType:  "json",
+		Data:      threadJSON,
+	})
+	writeSidebarThreadRow(t, filepath.Join(root, "db", "0-preview", "db.sqlite"), sidebarThreadRowOptions{
+		SessionID:              "thread-2",
+		Title:                  "Thread title",
+		UpdatedAt:              updatedAt,
+		CreatedAt:              updatedAt,
+		FolderPaths:            "/repo",
+		FolderPathsOrder:       "0",
+		Archived:               false,
+		MainWorktreePaths:      "/repo",
+		MainWorktreePathsOrder: "0",
+	})
+
+	parser := New()
+	candidates, err := parser.Discover(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	messages, err := conversation.CollectMessages(parser.Stream(candidates[0].Path, conversation.LoadOptions{
+		IncludeSystemPrompts:  false,
+		IncludeSystemMessages: true,
+		IncludeToolOutputs:    false,
+	}))
+	if err != nil {
+		t.Fatalf("collect stream messages: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[0].Role != "system" || messages[0].Compaction == nil || messages[0].Compaction.Kind != transcript.CompactionKindSummary || messages[0].Text != "Earlier summary" {
+		t.Fatalf("summary compaction = %#v", messages[0])
+	}
+	if messages[1].Role != "system" || messages[1].Compaction == nil || messages[1].Compaction.Kind != transcript.CompactionKindBoundary || messages[1].Text != "anthropic compaction boundary" {
+		t.Fatalf("provider-native compaction = %#v", messages[1])
 	}
 }
 
