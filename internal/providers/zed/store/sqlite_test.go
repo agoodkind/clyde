@@ -42,6 +42,27 @@ func TestOpenReadOnlyDatabaseAllowsReadsAndRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyDatabaseRejectsNilContext(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "zed.sqlite")
+	writable, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = writable.Close() })
+
+	if _, err := writable.Exec("CREATE TABLE threads(id INTEGER PRIMARY KEY, title TEXT)"); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	readonly, err := OpenReadOnlyDatabase(nil, dbPath)
+	if err == nil {
+		t.Fatal("OpenReadOnlyDatabase(nil) returned nil error, want nil-context guard")
+	}
+	if readonly != nil {
+		t.Fatalf("OpenReadOnlyDatabase(nil) returned db %v, want nil", readonly)
+	}
+}
+
 func TestTableExistsReportsPresentAndMissingTables(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "zed.sqlite")
 	writable, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
