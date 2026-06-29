@@ -12,7 +12,7 @@ const (
 	rootHashHexLength = 16
 )
 
-// VirtualPath is the parsed shape of one synthetic Zed conversation path.
+// VirtualPath names one stable virtual Zed artifact path.
 type VirtualPath struct {
 	RootHash  string
 	Channel   string
@@ -30,7 +30,8 @@ func RootHash(rootDir string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// ParseVirtualPath decodes one synthetic Zed conversation path.
+// ParseVirtualPath decodes one Zed virtual artifact path back into its root
+// hash, channel, and session ID components.
 func ParseVirtualPath(raw string) (VirtualPath, error) {
 	if !strings.HasPrefix(raw, virtualPathPrefix) {
 		return VirtualPath{}, fmt.Errorf("invalid zed virtual path %q", raw)
