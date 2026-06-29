@@ -148,3 +148,113 @@ func TestParseCurrentThreadJSONRejectsUnsupportedCompactionVariant(t *testing.T)
 		t.Fatalf("error = %q", got)
 	}
 }
+
+func TestParseCurrentThreadJSONAcceptsObjectMentionURI(t *testing.T) {
+	t.Parallel()
+	jsonBody := []byte(`{
+		"version": "0.3.0",
+		"title": "Thread title",
+		"updated_at": "2026-06-27T10:00:00Z",
+		"messages": [
+			{"User": {"id": "user-1", "content": [
+				{"Mention": {
+					"uri": {"File": {"abs_path": "/tmp/settings.json"}},
+					"content": ""
+				}}
+			]}}
+		]
+	}`)
+
+	thread, err := ParseCurrentThreadJSON(jsonBody)
+	if err != nil {
+		t.Fatalf("ParseCurrentThreadJSON returned error: %v", err)
+	}
+	if len(thread.Messages) != 1 || thread.Messages[0].User == nil {
+		t.Fatalf("thread.Messages = %#v", thread.Messages)
+	}
+	if len(thread.Messages[0].User.Content) != 1 || thread.Messages[0].User.Content[0].Mention == nil {
+		t.Fatalf("user content = %#v", thread.Messages[0].User.Content)
+	}
+	if thread.Messages[0].User.Content[0].Mention.URI != "/tmp/settings.json" {
+		t.Fatalf("mention URI = %q, want /tmp/settings.json", thread.Messages[0].User.Content[0].Mention.URI)
+	}
+}
+
+func TestParseCurrentThreadJSONUsesDeterministicMentionURIChoice(t *testing.T) {
+	t.Parallel()
+	jsonBody := []byte(`{
+		"version": "0.3.0",
+		"title": "Thread title",
+		"updated_at": "2026-06-27T10:00:00Z",
+		"messages": [
+			{"User": {"id": "user-1", "content": [
+				{"Mention": {
+					"uri": {
+						"Http": {"url": "https://example.test/secondary"},
+						"File": {"abs_path": "/tmp/primary.txt"}
+					},
+					"content": ""
+				}}
+			]}}
+		]
+	}`)
+
+	first, err := ParseCurrentThreadJSON(jsonBody)
+	if err != nil {
+		t.Fatalf("first ParseCurrentThreadJSON returned error: %v", err)
+	}
+	second, err := ParseCurrentThreadJSON(jsonBody)
+	if err != nil {
+		t.Fatalf("second ParseCurrentThreadJSON returned error: %v", err)
+	}
+	firstURI := first.Messages[0].User.Content[0].Mention.URI
+	secondURI := second.Messages[0].User.Content[0].Mention.URI
+	if firstURI != secondURI {
+		t.Fatalf("mention URI changed between parses: %q vs %q", firstURI, secondURI)
+	}
+	if firstURI != "/tmp/primary.txt" {
+		t.Fatalf("mention URI = %q, want deterministic preferred file path", firstURI)
+	}
+}
+
+func TestParseCurrentThreadJSONRejectsMentionURIWithoutLeafString(t *testing.T) {
+	t.Parallel()
+	jsonBody := []byte(`{
+		"version": "0.3.0",
+		"title": "Thread title",
+		"updated_at": "2026-06-27T10:00:00Z",
+		"messages": [
+			{"User": {"id": "user-1", "content": [
+				{"Mention": {
+					"uri": {"File": {"present": true}},
+					"content": ""
+				}}
+			]}}
+		]
+	}`)
+
+	_, err := ParseCurrentThreadJSON(jsonBody)
+	if err == nil {
+		t.Fatal("ParseCurrentThreadJSON returned nil error, want mention URI decode failure")
+	}
+}
+
+func TestParseCurrentThreadJSONAcceptsMentionURINullWithWhitespace(t *testing.T) {
+	t.Parallel()
+	jsonBody := []byte("{\n\t\"version\": \"0.3.0\",\n\t\"title\": \"Thread title\",\n\t\"updated_at\": \"2026-06-27T10:00:00Z\",\n\t\"messages\": [\n\t\t{\"User\": {\"id\": \"user-1\", \"content\": [\n\t\t\t{\"Mention\": {\n\t\t\t\t\"uri\":  null,\n\t\t\t\t\"content\": \"fallback text\"\n\t\t\t}}\n\t\t]}}\n\t]\n}")
+
+	thread, err := ParseCurrentThreadJSON(jsonBody)
+	if err != nil {
+		t.Fatalf("ParseCurrentThreadJSON returned error: %v", err)
+	}
+	if len(thread.Messages) != 1 || thread.Messages[0].User == nil {
+		t.Fatalf("thread.Messages = %#v", thread.Messages)
+	}
+	mention := thread.Messages[0].User.Content[0].Mention
+	if mention == nil {
+		t.Fatalf("mention = nil, want mention part")
+	}
+	if mention.URI != "" || mention.Content != "fallback text" {
+		t.Fatalf("mention = %#v", mention)
+	}
+}

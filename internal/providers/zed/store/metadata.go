@@ -24,6 +24,19 @@ type SidebarThreadMetadata struct {
 	Archived          bool
 }
 
+// SidebarTerminalThreadMetadata is the typed projection of one
+// `sidebar_terminal_threads` row.
+type SidebarTerminalThreadMetadata struct {
+	TerminalID        string
+	Title             string
+	CustomTitle       string
+	CreatedAt         time.Time
+	WorkingDirectory  string
+	FolderPaths       []string
+	MainWorktreePaths []string
+	RemoteConnection  string
+}
+
 // ReadSidebarThreads reads typed Zed sidebar thread metadata rows from one
 // metadata database.
 func ReadSidebarThreads(ctx context.Context, db *sql.DB) ([]SidebarThreadMetadata, error) {
@@ -178,6 +191,148 @@ func ReadSidebarThreadBySession(ctx context.Context, db *sql.DB, sessionID strin
 		FolderPaths:       deserializePathList(folderPaths.String, folderPathsOrder.String),
 		MainWorktreePaths: deserializePathList(mainWorktreePaths.String, mainWorktreePathsOrder.String),
 		Archived:          isArchived,
+	}, true, nil
+}
+
+// ReadSidebarTerminalThreads reads typed terminal metadata rows from one Zed
+// metadata database.
+func ReadSidebarTerminalThreads(ctx context.Context, db *sql.DB) ([]SidebarTerminalThreadMetadata, error) {
+	exists, err := TableExists(ctx, db, "sidebar_terminal_threads")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	rows, err := db.QueryContext(
+		ctx,
+		`SELECT terminal_id, title, custom_title, created_at, working_directory,
+		 folder_paths, folder_paths_order, main_worktree_paths, main_worktree_paths_order,
+		 remote_connection
+		 FROM sidebar_terminal_threads
+		 WHERE terminal_id IS NOT NULL
+		 ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		slog.WarnContext(ctx, "providers.zed.store.sidebar_terminal_query_failed", "concern", "providers.zed.store", "err", err)
+		return nil, fmt.Errorf("query sidebar_terminal_threads: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	metadata := make([]SidebarTerminalThreadMetadata, 0)
+	for rows.Next() {
+		var terminalID string
+		var title string
+		var customTitle sql.NullString
+		var createdAt string
+		var workingDirectory sql.NullString
+		var folderPaths sql.NullString
+		var folderPathsOrder sql.NullString
+		var mainWorktreePaths sql.NullString
+		var mainWorktreePathsOrder sql.NullString
+		var remoteConnection sql.NullString
+		if err := rows.Scan(
+			&terminalID,
+			&title,
+			&customTitle,
+			&createdAt,
+			&workingDirectory,
+			&folderPaths,
+			&folderPathsOrder,
+			&mainWorktreePaths,
+			&mainWorktreePathsOrder,
+			&remoteConnection,
+		); err != nil {
+			return nil, fmt.Errorf("scan sidebar_terminal_threads row: %w", err)
+		}
+		createdTime, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
+		if err != nil {
+			return nil, fmt.Errorf("parse sidebar_terminal_threads created_at %q: %w", createdAt, err)
+		}
+		metadata = append(metadata, SidebarTerminalThreadMetadata{
+			TerminalID:        terminalID,
+			Title:             title,
+			CustomTitle:       customTitle.String,
+			CreatedAt:         createdTime,
+			WorkingDirectory:  workingDirectory.String,
+			FolderPaths:       deserializePathList(folderPaths.String, folderPathsOrder.String),
+			MainWorktreePaths: deserializePathList(mainWorktreePaths.String, mainWorktreePathsOrder.String),
+			RemoteConnection:  remoteConnection.String,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sidebar_terminal_threads rows: %w", err)
+	}
+	return metadata, nil
+}
+
+// ReadSidebarTerminalByID reads one typed terminal metadata row from a Zed
+// metadata database.
+func ReadSidebarTerminalByID(ctx context.Context, db *sql.DB, terminalID string) (SidebarTerminalThreadMetadata, bool, error) {
+	var emptyMetadata SidebarTerminalThreadMetadata
+
+	exists, err := TableExists(ctx, db, "sidebar_terminal_threads")
+	if err != nil {
+		return emptyMetadata, false, err
+	}
+	if !exists {
+		return emptyMetadata, false, nil
+	}
+
+	row := db.QueryRowContext(
+		ctx,
+		`SELECT terminal_id, title, custom_title, created_at, working_directory,
+		 folder_paths, folder_paths_order, main_worktree_paths, main_worktree_paths_order,
+		 remote_connection
+		 FROM sidebar_terminal_threads
+		 WHERE terminal_id = ?
+		 LIMIT 1`,
+		terminalID,
+	)
+
+	var rowTerminalID string
+	var title string
+	var customTitle sql.NullString
+	var createdAt string
+	var workingDirectory sql.NullString
+	var folderPaths sql.NullString
+	var folderPathsOrder sql.NullString
+	var mainWorktreePaths sql.NullString
+	var mainWorktreePathsOrder sql.NullString
+	var remoteConnection sql.NullString
+	if err := row.Scan(
+		&rowTerminalID,
+		&title,
+		&customTitle,
+		&createdAt,
+		&workingDirectory,
+		&folderPaths,
+		&folderPathsOrder,
+		&mainWorktreePaths,
+		&mainWorktreePathsOrder,
+		&remoteConnection,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return emptyMetadata, false, nil
+		}
+		slog.WarnContext(ctx, "providers.zed.store.sidebar_terminal_row_scan_failed", "concern", "providers.zed.store", "terminal_id", terminalID, "err", err)
+		return emptyMetadata, false, fmt.Errorf("scan sidebar_terminal_threads row by terminal id: %w", err)
+	}
+
+	createdTime, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
+	if err != nil {
+		return emptyMetadata, false, fmt.Errorf("parse sidebar_terminal_threads created_at %q: %w", createdAt, err)
+	}
+	return SidebarTerminalThreadMetadata{
+		TerminalID:        rowTerminalID,
+		Title:             title,
+		CustomTitle:       customTitle.String,
+		CreatedAt:         createdTime,
+		WorkingDirectory:  workingDirectory.String,
+		FolderPaths:       deserializePathList(folderPaths.String, folderPathsOrder.String),
+		MainWorktreePaths: deserializePathList(mainWorktreePaths.String, mainWorktreePathsOrder.String),
+		RemoteConnection:  remoteConnection.String,
 	}, true, nil
 }
 
