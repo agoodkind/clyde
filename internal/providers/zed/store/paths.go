@@ -1,4 +1,3 @@
-// Package zedstore resolves and reads local Zed SQLite stores.
 package zedstore
 
 import (
