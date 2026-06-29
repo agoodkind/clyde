@@ -96,6 +96,68 @@ func ReadThreadRows(ctx context.Context, db *sql.DB) ([]ThreadRow, error) {
 	return threads, nil
 }
 
+// ReadThreadRowByID reads one typed Zed thread row from a threads database.
+func ReadThreadRowByID(ctx context.Context, db *sql.DB, threadID string) (ThreadRow, bool, error) {
+	var emptyRow ThreadRow
+
+	exists, err := TableExists(ctx, db, "threads")
+	if err != nil {
+		return emptyRow, false, err
+	}
+	if !exists {
+		return emptyRow, false, nil
+	}
+
+	row := db.QueryRowContext(
+		ctx,
+		`SELECT id, parent_id, folder_paths, folder_paths_order, summary, updated_at, created_at, data_type, data
+		 FROM threads
+		 WHERE id = ?`,
+		threadID,
+	)
+
+	var rowThreadID string
+	var parentThreadID sql.NullString
+	var folderPaths sql.NullString
+	var folderPathsOrder sql.NullString
+	var summary string
+	var updatedAt string
+	var createdAt string
+	var dataType string
+	var data []byte
+	if err := row.Scan(&rowThreadID, &parentThreadID, &folderPaths, &folderPathsOrder, &summary, &updatedAt, &createdAt, &dataType, &data); err != nil {
+		if err == sql.ErrNoRows {
+			return emptyRow, false, nil
+		}
+		slog.WarnContext(ctx, "providers.zed.store.thread_row_by_id_scan_failed", "concern", "providers.zed.store", "thread_id", threadID, "err", err)
+		return emptyRow, false, fmt.Errorf("scan threads row by id: %w", err)
+	}
+
+	updatedTime, err := time.Parse(time.RFC3339, strings.TrimSpace(updatedAt))
+	if err != nil {
+		return emptyRow, false, fmt.Errorf("parse threads updated_at %q: %w", updatedAt, err)
+	}
+	createdTime, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
+	if err != nil {
+		return emptyRow, false, fmt.Errorf("parse threads created_at %q: %w", createdAt, err)
+	}
+	typedDataType, err := parseDataType(dataType, rowThreadID)
+	if err != nil {
+		return emptyRow, false, err
+	}
+
+	return ThreadRow{
+		ThreadID:       rowThreadID,
+		ParentThreadID: parentThreadID.String,
+		Summary:        summary,
+		UpdatedAt:      updatedTime,
+		CreatedAt:      createdTime,
+		FolderPaths:    deserializePathList(folderPaths.String, folderPathsOrder.String),
+		DataType:       typedDataType,
+		Data:           append([]byte(nil), data...),
+	}, true, nil
+}
+
 func parseDataType(raw string, threadID string) (DataType, error) {
 	switch typed := DataType(strings.TrimSpace(raw)); typed {
 	case DataTypeJSON, DataTypeZstd:
