@@ -352,7 +352,7 @@ func transcriptMessage(thread zedstore.ThreadDocument, message zedstore.ThreadMe
 		if message.Agent == nil {
 			return emptyMessage(), false
 		}
-		text, thinking, tools := agentMessageParts(message.Agent)
+		text, thinking, tools := agentMessageParts(message.Agent, opts.IncludeToolOutputs)
 		if text == "" && thinking == "" && len(tools) == 0 {
 			return emptyMessage(), false
 		}
@@ -431,7 +431,7 @@ func userMessageText(message *zedstore.UserMessage) string {
 	return strings.Join(parts, "\n")
 }
 
-func agentMessageParts(message *zedstore.AgentMessage) (string, string, []transcript.ToolCall) {
+func agentMessageParts(message *zedstore.AgentMessage, includeToolOutputs bool) (string, string, []transcript.ToolCall) {
 	textParts := make([]string, 0, len(message.Content))
 	thinkingParts := make([]string, 0, len(message.Content))
 	tools := make([]transcript.ToolCall, 0)
@@ -449,16 +449,60 @@ func agentMessageParts(message *zedstore.AgentMessage) (string, string, []transc
 			if part.ToolUse == nil {
 				continue
 			}
+			output, isError := "", false
+			if includeToolOutputs {
+				output, isError = zedToolResultOutput(message.ToolResults[part.ToolUse.ID])
+			}
 			tools = append(tools, transcript.ToolCall{
 				ID:      part.ToolUse.ID,
 				Name:    part.ToolUse.Name,
 				Input:   transcript.ToolInputJSON{Raw: append([]byte(nil), part.ToolUse.Input...)},
-				Output:  "",
-				IsError: false,
+				Output:  output,
+				IsError: isError,
 			})
 		}
 	}
 	return strings.Join(textParts, "\n"), strings.Join(thinkingParts, "\n"), tools
+}
+
+func zedToolResultOutput(result zedstore.ToolResult) (string, bool) {
+	textParts := make([]string, 0, len(result.Content))
+	for _, part := range result.Content {
+		var text string
+		if err := json.Unmarshal(part, &text); err == nil {
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			textParts = append(textParts, text)
+			continue
+		}
+		trimmedPart := strings.TrimSpace(string(part))
+		if trimmedPart != "" && trimmedPart != "null" {
+			textParts = append(textParts, trimmedPart)
+		}
+	}
+	if outputText := zedToolResultFallbackOutput(result.Output); outputText != "" {
+		textParts = append(textParts, outputText)
+	}
+	if len(textParts) > 0 {
+		return strings.Join(textParts, "\n"), result.IsError
+	}
+	return "", result.IsError
+}
+
+func zedToolResultFallbackOutput(raw json.RawMessage) string {
+	trimmedOutput := strings.TrimSpace(string(raw))
+	if trimmedOutput == "" || trimmedOutput == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		if strings.TrimSpace(text) == "" {
+			return ""
+		}
+		return text
+	}
+	return trimmedOutput
 }
 
 func compactionMetadata(message *zedstore.CompactionMessage) (*transcript.CompactionMetadata, string) {
