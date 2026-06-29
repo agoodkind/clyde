@@ -86,12 +86,12 @@ func discoverThreadsDatabase(ctx context.Context, root zedstore.DataRoot) (conve
 	}
 	defer func() { _ = db.Close() }()
 
-	exists, err := zedstore.TableExists(ctx, db, "threads")
+	rows, err := zedstore.ReadThreadRows(ctx, db)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.zed.parser.check_threads_table_failed", "concern", concern, "path", root.ThreadsDBPath, "err", err)
+		slog.WarnContext(ctx, "providers.zed.parser.read_threads_failed", "concern", concern, "path", root.ThreadsDBPath, "err", err)
 		return emptyCandidate(), false
 	}
-	if !exists {
+	if len(rows) == 0 {
 		return emptyCandidate(), false
 	}
 
