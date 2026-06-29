@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/providerid"
@@ -18,10 +20,14 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-const concern = "providers.zed.parser"
+const (
+	concern               = "providers.zed.parser"
+	artifactKindZedThread = "zed_thread"
+)
 
 type discoveredThread struct {
 	Row      zedstore.ThreadRow
+	Thread   zedstore.ThreadDocument
 	Metadata zedstore.SidebarThreadMetadata
 	RootDir  string
 	Channel  string
@@ -67,7 +73,6 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 		if err != nil {
 			return nil, err
 		}
-		rows = parsableThreadRows(ctx, root.ThreadsDBPath, rows)
 		if len(rows) == 0 {
 			continue
 		}
@@ -80,6 +85,11 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 			if !ok || metadata.Metadata.AgentID != "" {
 				continue
 			}
+			thread, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
+			if err != nil {
+				slog.WarnContext(ctx, "providers.zed.parser.discover_parse_thread_payload_failed", "concern", concern, "component", "zed", "path", root.ThreadsDBPath, "thread_id", row.ThreadID, "data_type", string(row.DataType), "err", err)
+				continue
+			}
 			path := buildVirtualPathFromRootHash(rootHash, metadata.Channel, row.ThreadID)
 			if path == "" {
 				continue
@@ -90,6 +100,7 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 			})
 			discovered[path] = discoveredThread{
 				Row:      row,
+				Thread:   thread,
 				Metadata: metadata.Metadata,
 				RootDir:  root.RootDir,
 				Channel:  metadata.Channel,
@@ -108,16 +119,42 @@ func (p *Parser) Discover(ctx context.Context, _ map[string]conversation.Record)
 	return candidates, nil
 }
 
-// ScanRecord returns no record until a later branch adds Zed thread header
-// decoding.
-func (*Parser) ScanRecord(string, conversation.FileStamp) (conversation.Record, bool) {
-	var record conversation.Record
-	return record, false
+// ScanRecord turns one discovered native Zed thread into a derived Clyde
+// record without streaming the full transcript.
+func (p *Parser) ScanRecord(path string, stamp conversation.FileStamp) (conversation.Record, bool) {
+	p.mu.Lock()
+	discovered, ok := p.discovered[path]
+	p.mu.Unlock()
+	if !ok {
+		return emptyRecord(), false
+	}
+
+	thread := discovered.Thread
+	return conversation.Record{
+		ID:            conversation.DerivedID(providerid.ProviderZed, discovered.Row.ThreadID, path),
+		Provider:      providerid.ProviderZed,
+		NativeID:      discovered.Row.ThreadID,
+		Lineage:       buildLineage(discovered.Row.ParentThreadID, thread.SubagentContext),
+		Title:         resolvedTitle(discovered.Metadata, thread),
+		WorkspaceRoot: firstNonEmptyString(firstPath(discovered.Metadata.FolderPaths), firstPath(discovered.Row.FolderPaths)),
+		ArtifactPath:  path,
+		ArtifactKind:  artifactKindZedThread,
+		Model:         resolvedModel(thread.Model),
+		CreatedAt:     firstNonZeroTime(discovered.Metadata.CreatedAt, discovered.Row.CreatedAt),
+		UpdatedAt:     latestNonZeroTime(discovered.Metadata.UpdatedAt, discovered.Row.UpdatedAt, thread.UpdatedAt),
+		SizeBytes:     stamp.Size,
+		Archived:      discovered.Metadata.Archived,
+	}, true
 }
 
 // Stream yields no messages until a later branch adds Zed transcript parsing.
 func (*Parser) Stream(string, conversation.LoadOptions) iter.Seq2[transcript.Message, error] {
 	return func(func(transcript.Message, error) bool) {}
+}
+
+func emptyRecord() conversation.Record {
+	var record conversation.Record
+	return record
 }
 
 func readThreadRowsForRoot(ctx context.Context, root zedstore.DataRoot) ([]zedstore.ThreadRow, error) {
@@ -179,20 +216,75 @@ func readMetadataForRoot(ctx context.Context, root zedstore.DataRoot) map[string
 	return metadataByThread
 }
 
-func parsableThreadRows(ctx context.Context, path string, rows []zedstore.ThreadRow) []zedstore.ThreadRow {
-	filtered := make([]zedstore.ThreadRow, 0, len(rows))
-	rowFailureCount := 0
-	for _, row := range rows {
-		_, err := zedstore.ParseThreadDocument(row.DataType, row.Data)
-		if err == nil {
-			filtered = append(filtered, row)
+func buildLineage(parentSessionID string, subagentContext *zedstore.SubagentContext) *conversation.Lineage {
+	parentNativeID := strings.TrimSpace(parentSessionID)
+	if subagentContext != nil && strings.TrimSpace(subagentContext.ParentThreadID) != "" {
+		parentNativeID = strings.TrimSpace(subagentContext.ParentThreadID)
+	}
+	if parentNativeID == "" {
+		return nil
+	}
+	return &conversation.Lineage{
+		Kind:              conversation.ConversationLineageKindSpawn,
+		ParentProvider:    providerid.ProviderZed,
+		ParentNativeID:    parentNativeID,
+		ParentMessageUUID: "",
+	}
+}
+
+func resolvedTitle(metadata zedstore.SidebarThreadMetadata, thread zedstore.ThreadDocument) string {
+	title := firstNonEmptyString(metadata.TitleOverride, metadata.Title, thread.Title)
+	if title == "" {
+		return "Untitled Zed Thread"
+	}
+	return title
+}
+
+func resolvedModel(model *zedstore.ThreadModel) string {
+	if model == nil {
+		return ""
+	}
+	if model.Provider == "" || model.Model == "" {
+		return ""
+	}
+	return model.Provider + "/" + model.Model
+}
+
+func firstPath(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func firstNonZeroTime(values ...time.Time) time.Time {
+	for _, value := range values {
+		if !value.IsZero() {
+			return value
+		}
+	}
+	return time.Time{}
+}
+
+func latestNonZeroTime(values ...time.Time) time.Time {
+	latest := time.Time{}
+	for _, value := range values {
+		if value.IsZero() {
 			continue
 		}
-		rowFailureCount++
-		slog.DebugContext(ctx, "providers.zed.parser.parse_thread_payload_failed", "concern", concern, "path", path, "thread_id", row.ThreadID, "data_type", string(row.DataType), "err", err)
+		if latest.IsZero() || value.After(latest) {
+			latest = value
+		}
 	}
-	if rowFailureCount > 0 && len(filtered) == 0 {
-		slog.WarnContext(ctx, "providers.zed.parser.no_decodable_thread_payloads", "concern", concern, "path", path, "count", rowFailureCount)
-	}
-	return filtered
+	return latest
 }
