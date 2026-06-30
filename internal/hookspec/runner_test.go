@@ -3,6 +3,7 @@ package hookspec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -270,6 +271,64 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 	}
 	if !strings.Contains(decoded.FollowupMessage, "## Cursor") {
 		t.Fatalf("followup message missing snapshot:\n%s", decoded.FollowupMessage)
+	}
+}
+
+func TestRunnerReturnsMissingSnapshotError(t *testing.T) {
+	t.Parallel()
+
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "SessionStart",
+			"source": "compact",
+			"transcript_path": "/tmp/session.jsonl",
+			"cwd": "/tmp/project"
+		}`),
+		Output:        &strings.Builder{},
+		SnapshotStore: newMemorySnapshotStore(),
+	}
+
+	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
+	if err == nil {
+		t.Fatal("Run returned nil error")
+	}
+	if !strings.Contains(err.Error(), "snapshot not found") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunnerReturnsDaemonErrorForPreCompactCapture(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("daemon unavailable")
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "PreCompact",
+			"transcript_path": "/tmp/session.jsonl",
+			"cwd": "/tmp/project"
+		}`),
+		Output:        &strings.Builder{},
+		SnapshotStore: newMemorySnapshotStore(),
+		Reorient: func(
+			context.Context,
+			string,
+			string,
+			string,
+			string,
+			int,
+			int,
+			int,
+			bool,
+		) (conversation.ReorientPage, error) {
+			return conversation.ReorientPage{}, expectedErr
+		},
+	}
+
+	err := runner.Run(context.Background(), HookIDReorientBeforeCompact)
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("Run error = %v, want %v", err, expectedErr)
 	}
 }
 
