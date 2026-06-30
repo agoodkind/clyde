@@ -6,20 +6,34 @@ import (
 )
 
 var (
-	_ = shellCommand
-	_ = shellQuote
-	_ = isShellBareWord
-	_ = SupportedClients
-	_ = writeAdditionalContext
-	_ = writeCursorFollowup
-	_ = NewFileSnapshotStore
-	_ = FileSnapshotStore.Save
-	_ = FileSnapshotStore.Consume
-	_ = normalizeSnapshotKey
-	_ = shellCommand("", nil)
-	_ = SupportedClients()
-	_ = writeAdditionalContext(io.Discard, ClientClaudeCode, "", "")
-	_ = writeCursorFollowup(io.Discard, "")
+	_    = shellCommand
+	_    = shellQuote
+	_    = isShellBareWord
+	_    = SupportedClients
+	_    = writeAdditionalContext
+	_    = writeCursorFollowup
+	_    = NewFileSnapshotStore
+	_    = FileSnapshotStore.Save
+	_    = FileSnapshotStore.Consume
+	_    = normalizeSnapshotKey
+	_    = marshalCodexHookInstalls
+	_    = removeCodexCommandHookGroups
+	_    = isCodexHookGroupHeader
+	_    = isNonHookTableHeader
+	_    = codexGroupContainsCommand
+	_    = parseTomlAssignment
+	_    = removeCodexManagedBlock
+	_    = ensureCodexHooksFeature
+	_    = isTomlTableHeader
+	_    = renderCodexManagedBlock
+	_    = codexCommandSignatures
+	_    = codexEventName
+	_    = marshalCodexTrustedHash
+	_    = shellCommand("", nil)
+	_    = SupportedClients()
+	_    = writeAdditionalContext(io.Discard, ClientClaudeCode, "", "")
+	_    = writeCursorFollowup(io.Discard, "")
+	_, _ = marshalCodexHookInstalls(nil, nil, nil, "", "")
 )
 
 func init() {
