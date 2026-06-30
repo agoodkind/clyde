@@ -2853,9 +2853,12 @@ type ReorientConversationRequest struct {
 	Limit int64 `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
 	// page_bytes bounds one page so it renders inline. Zero means the daemon
 	// default.
-	PageBytes     int64 `protobuf:"varint,7,opt,name=page_bytes,json=pageBytes,proto3" json:"page_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PageBytes int64 `protobuf:"varint,7,opt,name=page_bytes,json=pageBytes,proto3" json:"page_bytes,omitempty"`
+	// synthetic_precompact treats the current transcript end as a compaction
+	// boundary for hooks that run before provider compaction.
+	SyntheticPrecompact bool `protobuf:"varint,8,opt,name=synthetic_precompact,json=syntheticPrecompact,proto3" json:"synthetic_precompact,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ReorientConversationRequest) Reset() {
@@ -2935,6 +2938,13 @@ func (x *ReorientConversationRequest) GetPageBytes() int64 {
 		return x.PageBytes
 	}
 	return 0
+}
+
+func (x *ReorientConversationRequest) GetSyntheticPrecompact() bool {
+	if x != nil {
+		return x.SyntheticPrecompact
+	}
+	return false
 }
 
 type ReorientConversationRef struct {
@@ -3920,7 +3930,7 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.clyde.v1.ConversationRecordR\fconversation\x125\n" +
 	"\x05stats\x18\x02 \x01(\v2\x1f.clyde.v1.ConversationInfoStatsR\x05stats\x12)\n" +
 	"\x10compaction_count\x18\x03 \x01(\x03R\x0fcompactionCount\x12C\n" +
-	"\bsegments\x18\x04 \x03(\v2'.clyde.v1.ConversationCompactionSegmentR\bsegments\"\xdf\x01\n" +
+	"\bsegments\x18\x04 \x03(\v2'.clyde.v1.ConversationCompactionSegmentR\bsegments\"\x92\x02\n" +
 	"\x1bReorientConversationRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1c\n" +
 	"\tworkspace\x18\x02 \x01(\tR\tworkspace\x12\x14\n" +
@@ -3929,7 +3939,8 @@ const file_clyde_v1_daemon_service_proto_rawDesc = "" +
 	"\x06window\x18\x05 \x01(\x03R\x06window\x12\x14\n" +
 	"\x05limit\x18\x06 \x01(\x03R\x05limit\x12\x1d\n" +
 	"\n" +
-	"page_bytes\x18\a \x01(\x03R\tpageBytes\"\x96\x01\n" +
+	"page_bytes\x18\a \x01(\x03R\tpageBytes\x121\n" +
+	"\x14synthetic_precompact\x18\b \x01(\bR\x13syntheticPrecompact\"\x96\x01\n" +
 	"\x17ReorientConversationRef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
 	"\bprovider\x18\x02 \x01(\x0e2\x12.clyde.v1.ProviderR\bprovider\x12\x14\n" +
