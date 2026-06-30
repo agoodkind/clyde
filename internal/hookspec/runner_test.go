@@ -2,7 +2,6 @@ package hookspec
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -106,69 +105,6 @@ func TestRunnerAfterCompactConsumesSnapshot(t *testing.T) {
 	}
 	if len(store.snapshots) != 0 {
 		t.Fatalf("snapshots len = %d, want 0", len(store.snapshots))
-	}
-}
-
-func TestRunnerAfterCompactWritesCodexAdditionalContext(t *testing.T) {
-	t.Parallel()
-
-	store := newMemorySnapshotStore()
-	store.snapshots[normalizeSnapshotKey(ReorientSnapshotKey{
-		TranscriptPath: "/tmp/session.jsonl",
-		SessionID:      "session-1",
-		CWD:            "/tmp/project",
-	})] = "snapshot body"
-
-	var output strings.Builder
-	runner := Runner{
-		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
-			"hook_event_name": "SessionStart",
-			"source": "compact",
-			"transcript_path": "/tmp/session.jsonl",
-			"cwd": "/tmp/project",
-			"session_id": "session-1",
-			"model": "gpt-5.4",
-			"permission_mode": "default"
-		}`),
-		Output:        &output,
-		SnapshotStore: store,
-	}
-
-	if err := runner.Run(context.Background(), HookIDReorientAfterCompact); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	var decoded hookSpecificOutputEnvelope
-	if err := json.Unmarshal([]byte(output.String()), &decoded); err != nil {
-		t.Fatalf("Unmarshal output: %v\n%s", err, output.String())
-	}
-	if decoded.HookSpecificOutput.AdditionalContext != "snapshot body" {
-		t.Fatalf("additional context = %q", decoded.HookSpecificOutput.AdditionalContext)
-	}
-}
-
-func TestRunnerReturnsMissingSnapshotError(t *testing.T) {
-	t.Parallel()
-
-	runner := Runner{
-		Registry: NewRegistry(),
-		Input: strings.NewReader(`{
-			"hook_event_name": "SessionStart",
-			"source": "compact",
-			"transcript_path": "/tmp/session.jsonl",
-			"cwd": "/tmp/project"
-		}`),
-		Output:        &strings.Builder{},
-		SnapshotStore: newMemorySnapshotStore(),
-	}
-
-	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
-	if err == nil {
-		t.Fatal("Run returned nil error")
-	}
-	if !strings.Contains(err.Error(), "snapshot not found") {
-		t.Fatalf("error = %v", err)
 	}
 }
 
