@@ -1,0 +1,394 @@
+# Reference [adapter] stanza for ~/.config/clyde/config.toml.
+#
+# Copy sections into your
+# config; the adapter refuses to start when required tables are
+# missing ([adapter.families], [adapter.client_identity], [adapter.anthropic.oauth]
+# when direct_oauth = true).
+#
+# Bootstrap:
+#   cat clyde.example.toml >> ~/.config/clyde/config.toml
+#   $EDITOR ~/.config/clyde/config.toml
+#   launchctl kickstart -k gui/$UID/io.goodkind.clyde
+#
+# Operator note: [adapter.anthropic.oauth] and the stainless/* / cc_* fields under
+# [adapter.client_identity] must match the canonical desktop client you
+# use for login (capture from your environment or vendor docs).
+
+[logging]
+level = "debug"
+
+[conversation.semantic]
+enabled = false
+socket_path = ""
+collection_id = "clyde-conversations"
+
+[logging.rotation]
+enabled = true
+max_size_mb = 64
+max_backups = 192
+max_age_days = 14
+compress = false
+
+# Logging sinks. The canonical sink names are: daemon, cli, codex_sidecar,
+# anthropic_sidecar, audit, concerns, transcripts, inventory_index.
+# Each sink is enabled by default (transcripts additionally requires
+# logging.transcript.enabled). MITM wire events land in the per-concern file
+# logs/providers/mitm/wire.jsonl via the concerns sink; full MITM request and
+# response bodies persist to mitm/capture.db (see [mitm.capture_store]).
+#
+# Back-compatible flat form: restrict the active sink set to an explicit
+# allowlist. When set, only the listed sinks stay enabled.
+#
+# [logging.sinks]
+# enabled = ["daemon", "cli", "concerns", "inventory_index"]
+#
+# Per-sink table form: configure one sink at a time with its own enabled flag,
+# level, path, and rotation. Each sink inherits the global [logging.rotation]
+# block above unless its own [logging.sinks.<name>.rotation] table overrides a
+# field. The flat allowlist and the per-sink tables can be used together; an
+# explicit [logging.sinks.<name>] enabled value wins over the flat allowlist for
+# that sink.
+#
+# [logging.sinks.audit]
+# enabled = true
+# level = "warn"
+# [logging.sinks.audit.rotation]
+# enabled = true
+# max_size_mb = 16
+# max_backups = 6
+# max_age_days = 3
+# compress = true
+#
+# [logging.sinks.anthropic_sidecar]
+# enabled = true
+# [logging.sinks.anthropic_sidecar.rotation]
+# enabled = true
+# max_size_mb = 32
+# max_backups = 12
+# max_age_days = 3
+# compress = true
+
+# Optional per-process log file overrides.
+# Defaults:
+#   CLI commands   -> $XDG_STATE_HOME/clyde/clyde-cli.jsonl
+#   daemon command -> $XDG_STATE_HOME/clyde/clyde-daemon.jsonl
+[logging.paths]
+cli = ""
+daemon = ""
+[adapter]
+enabled = true
+direct_oauth = true
+# Persist the raw OpenAI-shape ingress request and the rendered reply to
+# capture.db tagged client="adapter.ingress", alongside the always-on BYOK
+# egress capture. Off by default; it roughly doubles body volume against the
+# [mitm.capture_store] retention cap. Requires the capture store to be open.
+capture_ingress = false
+# Provider-neutral list of capability tokens to drop from the outbound provider
+# capability header on egress (anthropic-beta on the Claude path,
+# x-codex-beta-features and openai-beta on the Codex path). Default empty replays
+# the learned wire identity untouched. Listing a token a provider requires for
+# its handshake will break that provider, so name only tokens the backend
+# tolerates dropping. The placeholders below stand in for the real provider
+# tokens, which are vendor-specific and belong only in your local config, not in
+# this committed example; one use is dropping a provider's thinking-redaction
+# capability so Cursor receives plaintext reasoning.
+# strip_wire_flags = ["example-capability-flag-a", "example-capability-flag-b"]
+# The default points at a -thinking alias because fable-5 rejects an
+# explicit {"type":"disabled"} thinking block (400) and the non-thinking
+# aliases emit exactly that; see [adapter.families.fable-5].
+default_model = "clyde-fable-5-high-thinking"
+# Optional second adapter listener for Cursor BYOK. When set, requests arriving
+# on this port are tagged ingress=cursor while the primary port (default 11434)
+# is tagged ingress=openai, separating Cursor traffic from generic
+# OpenAI-compatible clients and keeping Cursor on the dual-surface streaming
+# reasoning path. The primary listener stays generic and emits
+# reasoning_content-only streaming reasoning. Omit to bind only the primary
+# port.
+cursor_ingress_port = 11435
+
+[adapter.notices]
+enabled = true
+
+[adapter.codex]
+enabled = true
+native_model_routing = "codex"
+
+# GPT/Codex model aliases are config-owned. `tokens` is the advertised
+# catalog window; `observed_tokens` is the Responses HTTP window Clyde
+# should expose when HTTP is the active Codex transport.
+[[adapter.codex.models]]
+alias_prefix = "gpt-5.4"
+model = "gpt-5.4"
+# Optional: prepend a shared developer instruction file before any caller
+# system message. Paths resolve relative to this config.toml.
+# instructions_file = "prompts/gpt-5.4.md"
+efforts = ["low", "medium", "high", "xhigh"]
+max_output_tokens = 128000
+contexts = [
+  { tokens = 1000000, observed_tokens = 272000, alias_suffix = "1m", advertised_native_aliases = [
+    "gpt-5.4",
+  ] },
+]
+
+[[adapter.codex.models]]
+alias_prefix = "codex-5.5"
+model = "gpt-5.5"
+efforts = ["low", "medium", "high", "xhigh"]
+max_output_tokens = 128000
+contexts = [{ tokens = 272000, native_aliases = ["gpt-5.5"] }]
+
+# Optional: forward otherwise-unknown model aliases to one
+# OpenAI-compatible upstream. The caller's model value is preserved unless
+# model is set.
+[adapter.openai_compat_passthrough]
+base_url = "http://[::1]:1234/v1"
+api_key = ""
+api_key_env = ""
+model = ""
+
+# Optional: route specific model aliases to named passthrough overrides.
+# Use backend = "passthrough_override" when you want the model entry to
+# be explicit even if passthrough_override is present.
+# [adapter.passthrough_overrides.local]
+# base_url = "http://localhost:1234/v1"
+# api_key = ""
+# api_key_env = ""
+# model = "local-model"
+#
+# [adapter.models.gpt-local]
+# backend = "passthrough_override"
+# passthrough_override = "local"
+
+# Optional: per-model public list pricing in dollars-per-million-tokens.
+# The daemon prices recorded token counts at read time from this table,
+# matching the recorded model id by longest-prefix so one entry covers
+# context-suffixed and snapshot variants (e.g. "claude-opus-4-8" covers
+# "claude-opus-4-8[1m]"). Omit a sub-table to leave that model's
+# estimated cost at zero. Codex models price exactly the same way, which
+# is the only way codex spend is counted.
+#
+# Claude Fable 5 list pricing ($10/$50 per MTok in/out), verified against
+# the Claude API models overview 2026-06-09. Cache rates use Anthropic's
+# standard 5m-TTL multipliers: write = 1.25x input, read = 0.1x input.
+[adapter.pricing."claude-fable-5"]
+input_per_mtok = 10.0
+output_per_mtok = 50.0
+cache_write_per_mtok = 12.50
+cache_read_per_mtok = 1.00
+
+# Claude Opus 4.8 list pricing ($5/$25 per MTok in/out), verified against
+# the Claude API models overview 2026-05-28. Cache rates use Anthropic's
+# standard 5m-TTL multipliers: write = 1.25x input, read = 0.1x input.
+[adapter.pricing."claude-opus-4-8"]
+input_per_mtok = 5.0
+output_per_mtok = 25.0
+cache_write_per_mtok = 6.25
+cache_read_per_mtok = 0.50
+
+# [adapter.pricing."gpt-5"]
+# input_per_mtok = 1.25
+# output_per_mtok = 10
+# cache_read_per_mtok = 0.125
+
+[adapter.anthropic.oauth]
+token_url = "https://REDACTED-OAUTH-HOST/v1/oauth/token"
+messages_url = "https://REDACTED-UPSTREAM/v1/messages"
+client_id = "REDACTED-CLIENT-ID"
+anthropic_beta = "REDACTED-OAUTH-BETA"
+anthropic_version = "2023-06-01"
+keychain_service = "REDACTED-KEYCHAIN"
+scopes = [
+  "user:profile",
+  "user:inference",
+  "user:sessions:claude_code",
+  "user:mcp_servers",
+  "user:file_upload",
+]
+
+[adapter.client_identity]
+user_agent = "REDACTED-UA"
+system_prompt_prefix = "REDACTED-SYSTEM-PREFIX"
+stainless_package_version = "0.81.0"
+stainless_runtime = "node"
+stainless_runtime_version = "v24.3.0"
+cc_version = "2.1.114"
+cc_entrypoint = "sdk-cli"
+
+# Per-backend handling of the OpenAI logprobs / top_logprobs
+# request fields. "reject" returns 400 when the caller sets
+# logprobs; "drop" silently strips the field. OpenAI-compatible
+# passthrough routes pass through verbatim regardless of this stanza.
+[adapter.logprobs]
+anthropic = "reject"
+
+# opus-4-6: adaptive/default/enabled/disabled thinking, low/medium/high/max
+# effort, 200k and 1M context. Claude Code upstream names this exact family
+# "claude-opus-4-6". Verified against bundled upstream docs 2026-04-24.
+# observed_tokens is a safe-window cap (~90% of nominal) Clyde surfaces to
+# OpenAI-SDK clients via /v1/models so other consumers see a truthful
+# capacity. Cursor does not consult these for its in-chat indicator.
+[adapter.families.opus-4-6]
+model = "claude-opus-4-6"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "max"]
+thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+max_output_tokens = 128000
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
+]
+
+# opus-4-8: Claude Opus 4.8 (id "claude-opus-4-8"). 1M context, 128k max
+# output, $5/$25 per MTok in/out, adaptive thinking. low/medium/high/max
+# effort, all four thinking modes, 200k and 1M context. Verified against
+# the Claude API models overview 2026-05-28.
+# thinking_wire_mode = "adaptive" is required: the registry no longer
+# applies an implicit per-model remap, so the family must declare it.
+# Tip: for an evergreen Cursor id, set alias_prefix to a version-free stem
+# (e.g. alias_prefix = "opal") so aliases like clyde-opal-1m-high survive
+# model bumps; this example keeps the slug-derived clyde-opus-4-8-* aliases.
+[adapter.families.opus-4-8]
+model = "claude-opus-4-8"
+# Optional: prepend a shared developer instruction file before any caller
+# system message. Paths resolve relative to this config.toml.
+# instructions_file = "prompts/opus-4-8.md"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "max"]
+thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+thinking_wire_mode = "adaptive"
+max_output_tokens = 128000
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
+]
+
+# fable-5: Claude Fable 5 (id "claude-fable-5"), the current baseline /
+# latest model. 1M context, 128k max output, $10/$50 per MTok, adaptive
+# thinking always on. Verified 2026-06-09 against live wire probes and
+# the Claude API models overview (GA 2026-06-09). Probe results: efforts
+# low/medium/high/xhigh/max all 200; thinking {"type":"disabled"} 400s,
+# so thinking_wire_mode = "adaptive" is required and "disabled" is
+# intentionally absent from thinking_modes. The non-thinking aliases
+# emit an explicit disabled block and will 400 on this family, so
+# callers should use the -thinking aliases. The literal
+# "claude-fable-5[1m]" model id 404s upstream (unlike opus-4-8[1m]).
+# Clyde strips the wire_suffix at egress, so the [1m] context entry only
+# selects the feature-aware learned flavor and the pricing/recording key.
+[adapter.families.fable-5]
+model = "claude-fable-5"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "xhigh", "max"]
+thinking_modes = ["default", "adaptive", "enabled"]
+thinking_wire_mode = "adaptive"
+max_output_tokens = 128000
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+  { tokens = 1000000, observed_tokens = 900000, alias_suffix = "1m", wire_suffix = "[1m]" },
+]
+
+# sonnet-4-6: same effort + thinking matrix as opus-4-7, single
+# 200k context. Verified 2026-04-18.
+[adapter.families.sonnet-4-6]
+model = "claude-sonnet-4-6"
+supports_tools = true
+supports_vision = true
+efforts = ["low", "medium", "high", "max"]
+thinking_modes = ["default", "adaptive", "enabled", "disabled"]
+max_output_tokens = 64000
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+]
+
+# haiku-4-5: server rejects effort
+# (`400 This model does not support the effort parameter`) and
+# adaptive thinking. Enabled and disabled thinking work; default
+# omits the block. Verified 2026-04-18.
+[adapter.families.haiku-4-5]
+model = "claude-haiku-4-5-20251001"
+supports_tools = true
+supports_vision = true
+efforts = []
+thinking_modes = ["default", "enabled", "disabled"]
+max_output_tokens = 16000
+contexts = [
+  { tokens = 200000, observed_tokens = 180000, alias_suffix = "", wire_suffix = "" },
+]
+
+[mitm]
+providers = ["claude", "codex", "conductor", "cursor"]
+
+# Per-client MITM listeners, split into CLIs ([mitm.cli.<name>]) and desktop apps
+# ([mitm.app.<name>]). The table key is the client name; each gets its own
+# loopback port so every captured exchange in mitm/capture.db is tagged with the
+# originating client. The id lands in the capture `client` column as the
+# group-qualified "cli.<name>" / "app.<name>", so the same leaf name (codex) can
+# appear in both groups. One traffic type per port keeps the `client` tag
+# unambiguous. The full map is the [mitm.cli.*] and [mitm.app.*] blocks below.
+
+# CLI model-API base URLs (passthrough; these capture the wire baseline source).
+[mitm.cli.claude-code]
+host = "localhost"
+port = 48723
+
+[mitm.cli.codex]
+host = "localhost"
+port = 48724
+
+# CLI everything-else via HTTPS_PROXY (telemetry, updates, and so on).
+[mitm.cli.claude-code-proxy]
+host = "localhost"
+port = 48728
+
+[mitm.cli.codex-proxy]
+host = "localhost"
+port = 48729
+
+# Codex CLI chatgpt_base_url backend (auth, cloud, analytics; codex auth bypasses
+# HTTPS_PROXY, so this is the only listener that captures it).
+[mitm.cli.codex-backend]
+host = "localhost"
+port = 48730
+
+# Desktop Electron shells (the apps' own non-CLI traffic; the embedded CLI rides
+# the cli.* listeners above).
+[mitm.app.cursor]
+host = "localhost"
+port = 48725
+
+[mitm.app.claude]
+host = "localhost"
+port = 48726
+
+[mitm.app.codex]
+host = "localhost"
+port = 48727
+
+[mitm.app.conductor]
+host = "localhost"
+port = 48731
+
+# MITM baseline / drift loop.
+#
+# The loop closes the cycle capture -> baseline refresh -> drift log:
+# every captured request to a known upstream debounces a baseline refresh,
+# and the daemon also runs a periodic compare-only drift check that diffs
+# the current local capture store against a pinned reference snapshot and
+# appends the outcome to <drift_log_dir>/<upstream>.jsonl. Operators enable
+# the loop by adding this [mitm.drift] block; with enabled = false (or the
+# block absent) nothing runs.
+[mitm.drift]
+enabled = true
+interval = "5m"
+drift_log_dir = "~/.local/state/clyde/mitm-drift"
+capture_root = "~/.local/state/clyde/mitm"
+
+[mitm.drift.upstreams.claude-code]
+reference = "~/.local/state/clyde/mitm-baselines/claude-code/baseline-reference.toml"
+include_ua = ["claude-cli"]
+
+[mitm.drift.upstreams.codex-cli]
+reference = "~/.local/state/clyde/mitm-baselines/codex-cli/baseline-reference.toml"
+include_ua = ["codex_cli_rs", "codex-tui"]

@@ -1,0 +1,17 @@
+# Local configuration - copy to config.mk and fill in your values.
+# config.mk is gitignored and never committed.
+
+# Developer ID Application certificate SHA-1 or common name.
+# If unset on macOS, the Makefile auto-selects the first
+# "Developer ID Application" identity from:
+#   security find-identity -v -p codesigning
+CERT_ID = YOUR_CERT_SHA_OR_NAME_HERE
+
+# Apple Developer Team ID (from developer.apple.com or: security find-identity -v | grep "Developer ID")
+TEAM_ID = YOUR_TEAM_ID_HERE
+
+# Keychain profile for notarytool (store with: xcrun notarytool store-credentials "ACPASSWORD")
+NOTARY_PROFILE = ACPASSWORD
+
+# Bundle ID for the clyde daemon LaunchAgent
+BUNDLE_ID = io.goodkind.clyde

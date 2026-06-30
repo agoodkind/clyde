@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package clyde.v1;
+
+option go_package = "goodkind.io/clyde/api/clyde/v1;clydev1";
+
+enum Provider {
+  PROVIDER_UNSPECIFIED = 0;
+  PROVIDER_CLAUDE = 1;
+  PROVIDER_CODEX = 2;
+  PROVIDER_ANTHROPIC = 3;
+  PROVIDER_OPENAI_COMPAT = 4;
+  PROVIDER_MITM = 5;
+  PROVIDER_ARTIFACT = 6;
+  PROVIDER_CURSOR = 7;
+  PROVIDER_CONDUCTOR = 8;
+  PROVIDER_ZED = 9;
+}
+
+message GetProviderStatsRequest {}
+
+message SubscribeProviderStatsRequest {}
+
+message ProviderStats {
+  Provider provider = 1;
+  int32 requests = 2;
+  int32 inflight = 3;
+  int32 streaming = 4;
+  int64 input_tokens = 5;
+  int64 output_tokens = 6;
+  int64 cache_read_tokens = 7;
+  int64 cache_creation_tokens = 8;
+  double hit_ratio = 9;
+  int64 estimated_cost_microcents = 10;
+  int64 last_seen_unix = 11;
+  string error = 12;
+  int64 derived_cache_creation_tokens = 13;
+  string provider_detail = 14;
+}
+
+message GetProviderStatsResponse {
+  repeated ProviderStats providers = 1;
+  int64 loaded_at_unix = 2;
+}
+
+message ProviderStatsEvent {
+  ProviderStats stats = 1;
+  int64 emitted_at_unix = 2;
+}
+
+message ReloadDaemonRequest {}
+
+message ReloadDaemonResponse {
+  bool binary_reloaded = 1;
+  int64 active_surfaces = 2;
+  int64 new_pid = 3;
+}

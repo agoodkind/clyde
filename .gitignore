@@ -1,0 +1,74 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+
+# Go artifacts
+vendor/
+dist/
+.goreleaser-dist/
+*.test
+*.out
+coverage.html
+coverage.txt
+go.work
+go.work.sum
+
+
+# Exported sessions
+/*.html
+
+# env file
+.env
+notarize.env
+
+# Local build config (signing creds, never commit)
+config.mk
+
+# Claude Code
+.claude/settings.local.json
+.claude
+.codex
+.cursor
+CLAUDE.local.md
+CODEX.local.md
+CURSOR.local.md
+
+
+# Reverse-engineering and decompile artifacts (large, regenerable)
+/research
+tmp
+tmp/
+tmp_*
+.tmp*
+
+# Local scratch / build leftovers
+.DS_Store
+/.DS_Store
+/.clyde-build.lock
+/.make/
+/.tmp/
+/.tmp_print_clyde_models.go
+/clyde
+/tmp_check_detail_*.go
+
+# Cursor IDE plan exports and chat transcripts (local, regenerable)
+/.cursor/
+
+# Added by ggshield
+.cache_ggshield

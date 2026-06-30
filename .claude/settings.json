@@ -1,0 +1,19 @@
+{
+  "hooks": {},
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(ginkgo:*)",
+      "Bash(git mv:*)",
+      "Bash(go run:*)",
+      "Bash(go test:*)",
+      "Bash(make build:*)",
+      "Bash(make lint:*)",
+      "Bash(make test:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch"
+    ],
+    "ask": [],
+    "deny": []
+  }
+}

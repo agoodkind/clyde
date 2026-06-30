@@ -1,0 +1,921 @@
+package codex
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"goodkind.io/clyde/codexwire"
+	adapterrender "goodkind.io/clyde/internal/adapter/render"
+	adapterretry "goodkind.io/clyde/internal/adapter/retry"
+	"goodkind.io/clyde/internal/clock"
+	"goodkind.io/clyde/internal/clydeingress"
+	"goodkind.io/clyde/internal/mitm/capture"
+	"goodkind.io/gklog/correlation"
+)
+
+// ResponseCreateClientMetadata is part of Clyde's typed adapter surface.
+type ResponseCreateClientMetadata map[string]string
+
+// ResponseCreateWsRequest is part of Clyde's typed adapter surface.
+type ResponseCreateWsRequest struct {
+	Type               string                       `json:"type"`
+	Model              string                       `json:"model,omitempty"`
+	Instructions       string                       `json:"instructions,omitempty"`
+	Input              []codexwire.InputItem        `json:"input,omitempty"`
+	Tools              []codexwire.ToolSpec         `json:"tools,omitempty"`
+	ToolChoice         string                       `json:"tool_choice,omitempty"`
+	ParallelToolCalls  bool                         `json:"parallel_tool_calls,omitempty"`
+	Reasoning          *Reasoning                   `json:"reasoning,omitempty"`
+	Store              bool                         `json:"store"`
+	Stream             bool                         `json:"stream"`
+	Include            []string                     `json:"include,omitempty"`
+	ServiceTier        string                       `json:"service_tier,omitempty"`
+	PromptCacheKey     string                       `json:"prompt_cache_key,omitempty"`
+	Text               json.RawMessage              `json:"text,omitempty"`
+	ClientMetadata     ResponseCreateClientMetadata `json:"client_metadata,omitempty"`
+	PreviousResponseID string                       `json:"previous_response_id,omitempty"`
+	Generate           *bool                        `json:"generate,omitempty"`
+}
+
+// ResponseCreateRequestFromHTTP is part of Clyde's typed adapter surface.
+func ResponseCreateRequestFromHTTP(req HTTPTransportRequest) ResponseCreateWsRequest {
+	return ResponseCreateWsRequest{
+		Type:              "response.create",
+		Model:             req.Model,
+		Instructions:      req.Instructions,
+		Input:             req.Input,
+		Tools:             req.Tools,
+		ToolChoice:        req.ToolChoice,
+		ParallelToolCalls: req.ParallelToolCalls,
+		Reasoning:         req.Reasoning,
+		Store:             req.Store,
+		Stream:            req.Stream,
+		Include:           req.Include,
+		ServiceTier:       req.ServiceTier,
+		PromptCacheKey:    req.PromptCache,
+		Text:              req.Text,
+		ClientMetadata:    ResponseCreateClientMetadata(req.ClientMetadata.ToMap()),
+		// PreviousResponseID stays empty on the codex path: store=false
+		// (ChatGPT-Pro auth) means responses are not persisted upstream,
+		// so any previous_response_id reference returns "not found".
+		PreviousResponseID: "",
+		Generate:           nil,
+	}
+}
+
+// WithWarmupGenerateFalse is part of Clyde's typed adapter surface.
+func WithWarmupGenerateFalse(req ResponseCreateWsRequest) ResponseCreateWsRequest {
+	generate := false
+	req.Generate = &generate
+	return req
+}
+
+// WithPreviousResponseID is part of Clyde's typed adapter surface.
+func WithPreviousResponseID(req ResponseCreateWsRequest, previousResponseID string, incrementalInput []codexwire.InputItem) ResponseCreateWsRequest {
+	req.PreviousResponseID = previousResponseID
+	if incrementalInput != nil {
+		req.Input = incrementalInput
+	}
+	return req
+}
+
+// WebsocketTransportConfig is part of Clyde's typed adapter surface.
+type WebsocketTransportConfig struct {
+	URL             string
+	Token           string
+	AccountID       string
+	RequestID       string
+	CursorRequestID string
+	Correlation     correlation.Context
+	Alias           string
+	ConversationID  string
+	TurnState       *TurnState
+	TurnMetadata    string
+	Prewarm         bool
+	PrewarmTimeout  time.Duration
+
+	// SessionCache enables persistent ws session reuse when set. The
+	// transport takes the cached session for ConversationID, sends a
+	// delta payload referencing the cached LastResponseID, then puts
+	// the session back on success. When nil or ConversationID is
+	// empty, the transport falls back to the legacy fresh-dial path
+	// that warms up and closes per call.
+	SessionCache *WebsocketSessionCache
+	// Log carries ws_session telemetry events. Optional; falls back
+	// to slog.Default().
+	Log *slog.Logger
+	// RoundTripEncrypted controls whether the SSE parser surfaces the
+	// encrypted_content blob from completed reasoning items on
+	// EventReasoningFinished. RoundTripEncryptedRoundTrip (the
+	// codex-rs default) keeps the blob; RoundTripEncryptedDrop strips
+	// it so the synthetic-thinking close marker stays bare. Empty
+	// resolves to RoundTripEncryptedRoundTrip.
+	RoundTripEncrypted RoundTripEncrypted
+	// RetryPolicies are generic adapter retry rules compiled at daemon startup.
+	RetryPolicies []adapterretry.Policy
+	// WireIdentity carries the baseline-driven outbound wire identity
+	// (originator, openai-beta, user-agent, beta-features, attestation)
+	// projected from the daemon-owned MITM codex-cli baseline. Empty
+	// fields fall back to the compiled-in identity constants, so a
+	// zero-value WireIdentity preserves the cold-start behavior.
+	WireIdentity WireIdentity
+	// BeforeAttempt, when non-nil, is called at the start of every
+	// retry attempt (one-based attempt number). It returns a
+	// (possibly derived) context to use for the attempt and a release
+	// function the transport calls when the attempt ends. The caller
+	// (adapter.Server) uses this to register each attempt as a nested
+	// livetrack egress session without importing the adapter package
+	// from here.
+	BeforeAttempt func(ctx context.Context, attemptNo int) (context.Context, func(string))
+	// AuthRefresh, when non-nil, is invoked when the websocket upgrade
+	// responds with HTTP 401 or 403. It returns a refreshed access
+	// token (or an error if the refresh itself failed) so the dial can
+	// retry once with the new token before propagating the failure.
+	AuthRefresh func(ctx context.Context) (string, error)
+	// CaptureStore, when non-nil, receives one capture.Record per
+	// non-warmup websocket exchange tagged client="adapter.codex" with the
+	// full outbound and inbound frame streams. Nil records nothing.
+	CaptureStore *capture.Store
+	// StripWireFlags lists capability tokens to drop from the outbound
+	// codex capability headers, from the provider-neutral
+	// [adapter].strip_wire_flags config. Empty replays the learned headers
+	// untouched.
+	StripWireFlags []string
+}
+
+// Mirrors the observed Responses websocket envelope from
+// research/codex/scripts/mock_responses_websocket_server.py.
+type websocketEventEnvelope struct {
+	Type  string                 `json:"type"`
+	Error *websocketErrorPayload `json:"error,omitempty"`
+}
+
+type websocketErrorPayload struct {
+	Message string `json:"message,omitempty"`
+}
+
+func websocketMessageToSyntheticSSE(message []byte) ([]byte, error) {
+	var raw websocketEventEnvelope
+	if err := json.Unmarshal(message, &raw); err != nil {
+		slog.Warn("adapter.codex.ws.envelope_unmarshal_failed", "concern", "adapter.providers.codex.request", "err", err)
+		return nil, fmt.Errorf("unmarshal websocket event envelope: %w", err)
+	}
+	kind := strings.TrimSpace(raw.Type)
+	if kind == "" {
+		return nil, fmt.Errorf("codex websocket message missing type")
+	}
+	if kind == "error" {
+		msg := "codex websocket error"
+		if raw.Error != nil && strings.TrimSpace(raw.Error.Message) != "" {
+			msg = raw.Error.Message
+		}
+		return nil, codexResponseFailedError(msg)
+	}
+	var b bytes.Buffer
+	_, _ = fmt.Fprintf(&b, "event: %s\n", kind)
+	_, _ = fmt.Fprintf(&b, "data: %s\n\n", bytes.TrimSpace(message))
+	return b.Bytes(), nil
+}
+
+func streamWebsocketAsSyntheticSSE(conn *websocket.Conn, capCfg *wsEgressCapture) io.Reader {
+	pr, pw := io.Pipe()
+	rec := newWsFrameRecorder(capCfg)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				rec.record(0)
+				slog.Default().Error("adapter.codex.websocket_reader_panic", "concern", "adapter.providers.codex.request", "component", "adapter",
+					"subcomponent", "codex",
+					"err", fmt.Sprintf("panic: %v", recovered),
+					"panic", recovered,
+				)
+				_ = pw.CloseWithError(fmt.Errorf("codex websocket reader panic: %v", recovered))
+				return
+			}
+			rec.record(200)
+			_ = pw.Close()
+		}()
+		wsReadFrames(conn, pw, rec)
+	}()
+	return pr
+}
+
+// wsReadFrames runs the inbound websocket read loop for one turn. It mirrors
+// each text frame as a synthetic SSE frame onto pw and accumulates frames for
+// the SQLite capture record. On a transport or frame error it records a failed
+// exchange and closes pw with the error. On a clean completion frame it returns,
+// leaving the caller's defer to record the successful exchange and close pw.
+func wsReadFrames(conn *websocket.Conn, pw *io.PipeWriter, rec *wsFrameRecorder) {
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			rec.record(0)
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if messageType != websocket.TextMessage {
+			continue
+		}
+		rec.add(message)
+		frame, frameErr := websocketMessageToSyntheticSSE(message)
+		if frameErr != nil {
+			rec.record(0)
+			_ = pw.CloseWithError(frameErr)
+			return
+		}
+		if _, writeErr := pw.Write(frame); writeErr != nil {
+			rec.record(0)
+			_ = pw.CloseWithError(writeErr)
+			return
+		}
+		var raw websocketEventEnvelope
+		parseOK := json.Unmarshal(message, &raw) == nil
+		if parseOK && (raw.Type == "response.completed" || raw.Type == "response.failed") {
+			return
+		}
+	}
+}
+
+func writeAndParseWebsocketRequest(
+	ctx context.Context,
+	conn *websocket.Conn,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+	warmup bool,
+) (RunResult, bool, error) {
+	started := clock.Now()
+	raw, err := MarshalResponseCreateWsRequest(payload)
+	if err != nil {
+		return NewRunResult("stop"), false, err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+		return NewRunResult("stop"), false, err
+	}
+	logCtx := sseInstrumentationContext{
+		RequestID:          cfg.RequestID,
+		CursorRequestID:    cfg.CursorRequestID,
+		ConversationID:     cfg.ConversationID,
+		Correlation:        cfg.Correlation,
+		Alias:              cfg.Alias,
+		Model:              payload.Model,
+		Transport:          "responses_websocket",
+		ServiceTier:        payload.ServiceTier,
+		PromptCacheKey:     payload.PromptCacheKey,
+		PreviousResponseID: payload.PreviousResponseID,
+		Warmup:             warmup,
+	}
+	var capCfg *wsEgressCapture
+	if cfg.CaptureStore != nil && !warmup {
+		capCfg = &wsEgressCapture{
+			store:     cfg.CaptureStore,
+			corr:      cfg.Correlation,
+			url:       cfg.URL,
+			outbound:  raw,
+			sessionID: cfg.ConversationID,
+			started:   started,
+		}
+	}
+	synthetic := streamWebsocketAsSyntheticSSE(conn, capCfg)
+	parseOpts := SSEParseOptions{DropEncryptedContent: cfg.RoundTripEncrypted == RoundTripEncryptedDrop, DeclaredTools: payload.Tools}
+	responseStarted := false
+	result, err := ParseSSEEventsWithOptions(ctx, synthetic, func(event adapterrender.Event) error {
+		if codexRenderEventStartsClientResponse(event) {
+			responseStarted = true
+		}
+		return emit(event)
+	}, logCtx, parseOpts)
+	if err == nil || strings.TrimSpace(result.ResponseID) != "" || result.UsageTelemetry.UsagePresent {
+		LogUsageTelemetry(ctx, cfg.Log, result.UsageTelemetry, UsageLogContext{
+			RequestID:          cfg.RequestID,
+			CursorRequestID:    cfg.CursorRequestID,
+			Correlation:        cfg.Correlation,
+			Alias:              cfg.Alias,
+			UpstreamModel:      payload.Model,
+			Transport:          "responses_websocket",
+			ServiceTier:        payload.ServiceTier,
+			PromptCacheKey:     payload.PromptCacheKey,
+			PreviousResponseID: payload.PreviousResponseID,
+			ResponseID:         result.ResponseID,
+			ConversationID:     cfg.ConversationID,
+			WebsocketWarmup:    warmup,
+		})
+	}
+	if strings.TrimSpace(result.ResponseID) != "" {
+		corr := clydeingress.WithUpstreamResponseID(cfg.Correlation, result.ResponseID)
+		attrs := []slog.Attr{
+			slog.String("component", "adapter"),
+			slog.String("subcomponent", "codex"),
+			slog.String("request_id", cfg.RequestID),
+			slog.String("conversation_id", cfg.ConversationID),
+			slog.Bool("warmup", warmup),
+		}
+		attrs = append(attrs, corr.Attrs()...)
+		logCodexEvent(ctx, slog.LevelInfo, "adapter.codex.response.received", attrs)
+	}
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return result, responseStarted, nil
+	}
+	return result, responseStarted, err
+}
+
+func codexRenderEventStartsClientResponse(event adapterrender.Event) bool {
+	switch event.(type) {
+	case adapterrender.TextDelta,
+		adapterrender.RefusalDelta,
+		adapterrender.ReasoningSignaled,
+		adapterrender.ReasoningDelta,
+		adapterrender.ToolCallDelta:
+		return true
+	default:
+		return false
+	}
+}
+
+func dialResponsesWebsocket(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, error) {
+	dialer := websocket.Dialer{}
+	installationID, _ := LoadInstallationID()
+	turnMetadataJSON := strings.TrimSpace(cfg.TurnMetadata)
+	conv := strings.TrimSpace(cfg.ConversationID)
+	if conv != "" && turnMetadataJSON == "" {
+		if json, err := NewTurnMetadata(conv, "").MarshalCompact(); err == nil {
+			turnMetadataJSON = json
+		}
+	}
+	header := BuildResponsesWebsocketHeaders(ResponsesWebsocketHeaderConfig{
+		RequestID:            cfg.RequestID,
+		ConversationID:       cfg.ConversationID,
+		Correlation:          cfg.Correlation,
+		Token:                cfg.Token,
+		InstallationID:       installationID,
+		TurnState:            cfg.TurnState,
+		TurnMetadata:         turnMetadataJSON,
+		WindowID:             "",
+		BetaFeatures:         cfg.WireIdentity.BetaFeatures,
+		Originator:           cfg.WireIdentity.Originator,
+		UserAgent:            cfg.WireIdentity.UserAgent,
+		OpenAIBeta:           cfg.WireIdentity.OpenAIBeta,
+		Attestation:          cfg.WireIdentity.Attestation,
+		StripWireFlags:       cfg.StripWireFlags,
+		IncludeTimingMetrics: false,
+	})
+	conn, resp, err := dialer.DialContext(ctx, cfg.URL, header)
+	statusCode := 0
+	if resp != nil && cfg.TurnState != nil {
+		cfg.TurnState.CaptureFromHeaders(resp.Header)
+	}
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil && statusCode != 0 {
+		return conn, statusCode, &websocketHandshakeError{Status: statusCode, Err: err}
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "adapter.codex.ws.dial_failed", "concern", "adapter.providers.codex.request", "status", statusCode, "err", err)
+		return conn, statusCode, fmt.Errorf("dial codex websocket: %w", err)
+	}
+	return conn, statusCode, nil
+}
+
+func logWebsocketPrepared(ctx context.Context, cfg WebsocketTransportConfig, payload ResponseCreateWsRequest, telemetry TransportTelemetry) {
+	telemetry.RequestID = cfg.RequestID
+	telemetry.CursorRequestID = cfg.CursorRequestID
+	telemetry.Correlation = cfg.Correlation
+	telemetry.Alias = cfg.Alias
+	telemetry.UpstreamModel = payload.Model
+	telemetry.Transport = "responses_websocket"
+	telemetry.ServiceTier = payload.ServiceTier
+	telemetry.PromptCacheKey = payload.PromptCacheKey
+	telemetry.ClientMetadata = map[string]string(payload.ClientMetadata)
+	telemetry.InputCount = len(payload.Input)
+	telemetry.ToolCount = len(payload.Tools)
+	telemetry.PreviousResponseID = payload.PreviousResponseID
+	telemetry.TurnStatePresent = cfg.TurnState.Value() != ""
+	LogTransportPrepared(ctx, nil, telemetry)
+}
+
+// RunWebsocketTransportEvents is part of Clyde's typed adapter surface.
+func RunWebsocketTransportEvents(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+) (RunResult, error) {
+	return runWebsocketTransportEventsWithRetry(ctx, cfg, payload, emit, adapterretry.Sleep)
+}
+
+func runWebsocketTransportEventsWithRetry(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+	sleep adapterretry.Sleeper,
+) (RunResult, error) {
+	if sleep == nil {
+		sleep = adapterretry.Sleep
+	}
+	operation := codexWebsocketRetryOperation
+	attempt := 1
+	lastPolicyName := ""
+	lastMaxAttempts := 0
+	for {
+		// Register each attempt as a nested egress session when the
+		// caller supplied a BeforeAttempt hook. The hook supplies a
+		// possibly-derived context (e.g. with a cancel tied to livetrack
+		// force-close) and a release function to call when the attempt
+		// ends. When the hook is nil the original ctx and a no-op
+		// release are used so the retry loop is unconditionally safe.
+		attemptCtx := ctx
+		releaseAttempt := func(string) {}
+		if cfg.BeforeAttempt != nil {
+			attemptCtx, releaseAttempt = cfg.BeforeAttempt(ctx, attempt)
+		}
+		result, responseStarted, err := runWebsocketTransportEventsOnce(attemptCtx, cfg, payload, emit)
+		if err == nil {
+			releaseAttempt("codex.attempt.success")
+			logCodexRetryTerminal(ctx, cfg, attempt, lastPolicyName, "success", lastMaxAttempts)
+			return result, nil
+		}
+		if errors.Is(err, ErrWebsocketFallbackToHTTP) {
+			// The upstream asked for the HTTP transport (HTTP 426). This
+			// is a transport switch, not a retryable failure, so it must
+			// propagate to RunDirect unconsumed by the retry policy.
+			releaseAttempt("codex.attempt.fallback_http")
+			return result, err
+		}
+		if IsPermanentRefreshFailure(err) {
+			// The auth refresh itself failed permanently (refresh token
+			// expired, reused, or revoked). Retry cannot recover, so
+			// bypass the policy and surface the error immediately so the
+			// user sees the diagnostic instead of three identical
+			// attempts.
+			releaseAttempt("codex.attempt.auth_permanent")
+			return result, err
+		}
+		releaseAttempt("codex.attempt.failed")
+		signal := adapterretry.Signal{
+			Backend:         "codex",
+			Operation:       operation,
+			Status:          0,
+			ErrorClass:      codexRetryErrorClass(err),
+			ErrorCode:       "",
+			Message:         err.Error(),
+			ResponseStarted: responseStarted,
+		}
+		decision := adapterretry.Decide(cfg.RetryPolicies, signal, attempt, nil)
+		if !decision.Retry {
+			maxAttempts := adapterretry.MaxAttempts(cfg.RetryPolicies, decision.PolicyName)
+			logCodexRetryDecision(ctx, cfg, decision, attempt, maxAttempts, "failed")
+			return result, err
+		}
+		maxAttempts := adapterretry.MaxAttempts(cfg.RetryPolicies, decision.PolicyName)
+		logCodexRetryDecision(ctx, cfg, decision, attempt, maxAttempts, "retrying")
+		lastPolicyName = decision.PolicyName
+		lastMaxAttempts = maxAttempts
+		if err := sleep(ctx, decision.Delay); err != nil {
+			return result, err
+		}
+		attempt++
+	}
+}
+
+func runWebsocketTransportEventsOnce(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+) (RunResult, bool, error) {
+	if cfg.SessionCache != nil && strings.TrimSpace(cfg.ConversationID) != "" {
+		return runWebsocketWithCache(ctx, cfg, payload, emit)
+	}
+	return runWebsocketFreshDial(ctx, cfg, payload, emit)
+}
+
+func codexRetryErrorClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	var handshakeErr *websocketHandshakeError
+	if errors.As(err, &handshakeErr) {
+		// Every handshake failure (401, 403, 429, 5xx, or a bare bad
+		// handshake) surfaces before any response bytes are emitted, so
+		// it is safe to retry. The 401 and 403 cases also trigger one
+		// auth-refresh-and-redial inside the dial wrapper before
+		// reaching the retry policy; a token that is still rejected
+		// after refresh classifies as response_failed here and exhausts
+		// the bounded retry budget.
+		return "response_failed"
+	}
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+		return "websocket_close"
+	}
+	if strings.Contains(err.Error(), "codex websocket") {
+		return "websocket_error"
+	}
+	return "response_failed"
+}
+
+// dialResponsesWebsocketWithAuthRefresh wraps dialResponsesWebsocket so
+// that a 401 or 403 on the upgrade triggers one auth refresh and a
+// re-dial with the refreshed token. The refresh runs at most once per
+// call. A successful refresh that produces an empty token, or a refresh
+// that itself fails, propagates the original handshake error wrapped
+// with the refresh outcome so the retry loop can decide what to do.
+// Returns the (possibly updated) cfg so the caller's later dials see
+// the new token.
+func dialResponsesWebsocketWithAuthRefresh(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, WebsocketTransportConfig, error) {
+	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	if err == nil || cfg.AuthRefresh == nil {
+		return conn, statusCode, cfg, err
+	}
+	var handshakeErr *websocketHandshakeError
+	if !errors.As(err, &handshakeErr) {
+		return conn, statusCode, cfg, err
+	}
+	if handshakeErr.Status != http.StatusUnauthorized && handshakeErr.Status != http.StatusForbidden {
+		return conn, statusCode, cfg, err
+	}
+	newToken, refreshErr := cfg.AuthRefresh(ctx)
+	if refreshErr != nil {
+		return conn, statusCode, cfg, refreshErr
+	}
+	if strings.TrimSpace(newToken) == "" {
+		return conn, statusCode, cfg, err
+	}
+	cfg.Token = newToken
+	return dialResponsesWebsocketAfterRefresh(ctx, cfg)
+}
+
+func dialResponsesWebsocketAfterRefresh(ctx context.Context, cfg WebsocketTransportConfig) (*websocket.Conn, int, WebsocketTransportConfig, error) {
+	conn, statusCode, err := dialResponsesWebsocket(ctx, cfg)
+	return conn, statusCode, cfg, err
+}
+
+func logCodexRetryDecision(ctx context.Context, cfg WebsocketTransportConfig, decision adapterretry.Decision, attempt int, maxAttempts int, finalOutcome string) {
+	adapterretry.LogDecision(ctx, cfg.Log, decision, attempt, maxAttempts, adapterretry.AttemptLogContext{
+		RequestID: cfg.RequestID,
+		TraceID:   string(cfg.Correlation.TraceID),
+		ChatKey:   clydeingress.ChatKey(cfg.Correlation),
+		Operation: codexWebsocketRetryOperation,
+	}, finalOutcome)
+}
+
+func logCodexRetryTerminal(ctx context.Context, cfg WebsocketTransportConfig, attempt int, policyName string, finalOutcome string, maxAttempts int) {
+	if attempt <= 1 {
+		return
+	}
+	logCodexRetryDecision(ctx, cfg, adapterretry.Decision{
+		Retry:      false,
+		PolicyName: policyName,
+		Delay:      0,
+		Reason:     "operation_succeeded",
+	}, attempt, maxAttempts, finalOutcome)
+}
+
+// prewarmTelemetry tracks the outcome of a websocket warmup attempt
+// so the caller can populate TransportTelemetry without re-running
+// the logic.
+type prewarmTelemetry struct {
+	PrewarmUsed      bool
+	PrewarmFailed    bool
+	ConnectionReused bool
+	FallbackToHTTP   bool
+}
+
+// prewarmWebsocketTurn issues a generate=false probe on conn, captures
+// the response_id as previous_response_id for the real frame, and on
+// failure closes the conn and re-dials with auth refresh. The returned
+// conn is the connection the caller should use for the real frame;
+// when the re-dial fires the original conn is closed inside the helper
+// and the caller is responsible for installing a defer on the new conn.
+// FallbackToHTTP signals the caller to return ErrWebsocketFallbackToHTTP.
+func prewarmWebsocketTurn(
+	ctx context.Context,
+	conn *websocket.Conn,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+) (*websocket.Conn, WebsocketTransportConfig, ResponseCreateWsRequest, prewarmTelemetry, error) {
+	warmup := WithWarmupGenerateFalse(payload)
+	warmup.Tools = []codexwire.ToolSpec{}
+	logWebsocketPrepared(ctx, cfg, warmup, TransportTelemetry{
+		WebsocketWarmup: true, RequestID: "", CursorRequestID: "", Correlation: correlation.
+					Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
+
+		Alias: "", UpstreamModel: "", Transport: "", ServiceTier: "", PromptCacheKey: "", ClientMetadata: nil, InputCount: 0, ToolCount: 0, NativeShellCount: 0, NativeCustomCount: 0, FunctionToolCount: 0, WebsocketPrewarmUsed: false, WebsocketPrewarmFailed: false, WebsocketConnectionReuse: false, PreviousResponseID: "", TurnStatePresent: false, FallbackToHTTP: false, ContextWindowError: false,
+	})
+	prewarmTimeout := cfg.PrewarmTimeout
+	if prewarmTimeout <= 0 {
+		prewarmTimeout = defaultWebsocketPrewarmTimeout
+	}
+	_ = conn.SetReadDeadline(clock.Now().Add(prewarmTimeout))
+	warmupResult, _, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
+		return nil
+	}, true)
+	_ = conn.SetReadDeadline(time.Time{})
+	if warmupErr == nil && strings.TrimSpace(warmupResult.ResponseID) != "" {
+		payload = WithPreviousResponseID(payload, warmupResult.ResponseID, []codexwire.InputItem{})
+		return conn, cfg, payload, prewarmTelemetry{PrewarmUsed: true, ConnectionReused: true, PrewarmFailed: false, FallbackToHTTP: false}, nil
+	}
+	_ = conn.Close()
+	newConn, statusCode, refreshedCfg, err := dialResponsesWebsocketWithAuthRefresh(ctx, cfg)
+	cfg = refreshedCfg
+	if statusCode == http.StatusUpgradeRequired {
+		logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
+			FallbackToHTTP:         true,
+			WebsocketPrewarmFailed: true, RequestID: "", CursorRequestID: "", Correlation: correlation.
+						Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
+
+			Alias: "", UpstreamModel: "", Transport: "", ServiceTier: "", PromptCacheKey: "", ClientMetadata: nil, InputCount: 0, ToolCount: 0, NativeShellCount: 0, NativeCustomCount: 0, FunctionToolCount: 0, WebsocketWarmup: false, WebsocketPrewarmUsed: false, WebsocketConnectionReuse: false, PreviousResponseID: "", TurnStatePresent: false, ContextWindowError: false,
+		})
+		return nil, cfg, payload, prewarmTelemetry{PrewarmFailed: true, FallbackToHTTP: true, PrewarmUsed: false, ConnectionReused: false}, nil
+	}
+	if err != nil {
+		return nil, cfg, payload, prewarmTelemetry{PrewarmFailed: true, PrewarmUsed: false, ConnectionReused: false, FallbackToHTTP: false}, err
+	}
+	return newConn, cfg, payload, prewarmTelemetry{PrewarmFailed: true, PrewarmUsed: false, ConnectionReused: false, FallbackToHTTP: false}, nil
+}
+
+// runWebsocketFreshDial is the legacy path. Dial a fresh websocket,
+// optionally warm up, send one frame, close. Preserved so tests and
+// non-cache callers do not break. Tagged for removal once all
+// callers route through runWebsocketWithCache.
+func runWebsocketFreshDial(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+) (RunResult, bool, error) {
+	conn, statusCode, refreshedCfg, err := dialResponsesWebsocketWithAuthRefresh(ctx, cfg)
+	cfg = refreshedCfg
+	if statusCode == http.StatusUpgradeRequired {
+		logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
+			FallbackToHTTP: true, RequestID: "", CursorRequestID: "", Correlation: correlation.
+					Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
+
+			Alias: "", UpstreamModel: "", Transport: "", ServiceTier: "", PromptCacheKey: "", ClientMetadata: nil, InputCount: 0, ToolCount: 0, NativeShellCount: 0, NativeCustomCount: 0, FunctionToolCount: 0, WebsocketWarmup: false, WebsocketPrewarmUsed: false, WebsocketPrewarmFailed: false, WebsocketConnectionReuse: false, PreviousResponseID: "", TurnStatePresent: false, ContextWindowError: false,
+		})
+		return NewRunResult("stop"), false, ErrWebsocketFallbackToHTTP
+	}
+	if err != nil {
+		return NewRunResult("stop"), false, err
+	}
+	defer func(c *websocket.Conn) { _ = c.Close() }(conn)
+
+	prewarmUsed := false
+	prewarmFailed := false
+	connectionReused := false
+	if cfg.Prewarm && strings.TrimSpace(payload.PreviousResponseID) == "" {
+		newConn, newCfg, newPayload, tel, prewarmErr := prewarmWebsocketTurn(ctx, conn, cfg, payload)
+		cfg = newCfg
+		payload = newPayload
+		prewarmUsed = tel.PrewarmUsed
+		prewarmFailed = tel.PrewarmFailed
+		connectionReused = tel.ConnectionReused
+		if tel.FallbackToHTTP {
+			return NewRunResult("stop"), false, ErrWebsocketFallbackToHTTP
+		}
+		if prewarmErr != nil {
+			return NewRunResult("stop"), false, prewarmErr
+		}
+		if newConn != nil && newConn != conn {
+			conn = newConn
+			defer func(c *websocket.Conn) { _ = c.Close() }(conn)
+		}
+	}
+
+	logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
+		WebsocketPrewarmUsed:     prewarmUsed,
+		WebsocketPrewarmFailed:   prewarmFailed,
+		WebsocketConnectionReuse: connectionReused, RequestID: "", CursorRequestID: "", Correlation: correlation.
+						Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
+
+		Alias: "", UpstreamModel: "", Transport: "", ServiceTier: "", PromptCacheKey: "", ClientMetadata: nil, InputCount: 0, ToolCount: 0, NativeShellCount: 0, NativeCustomCount: 0, FunctionToolCount: 0, WebsocketWarmup: false, PreviousResponseID: "", TurnStatePresent: false, FallbackToHTTP: false, ContextWindowError: false,
+	})
+
+	return writeAndParseWebsocketRequest(ctx, conn, cfg, payload, emit, false)
+}
+
+// runWebsocketWithCache implements the parity-superset path. The
+// transport takes a cached session keyed on ConversationID, computes
+// a delta of the input items relative to the prior baseline, sets
+// previous_response_id from the cache entry, sends one frame, and
+// returns the session to the cache on success. On any error the
+// session is invalidated. Reference: codex-rs/core/src/client.rs
+// stream_responses().
+func runWebsocketWithCache(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	emit func(adapterrender.Event) error,
+) (RunResult, bool, error) {
+	log := cfg.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	conv := strings.TrimSpace(cfg.ConversationID)
+	fullInput := payload.Input
+	session, payload, hit := acquireCachedSession(ctx, cfg, payload, fullInput, log)
+	if !hit {
+		opened, err := openSessionAndWarmup(ctx, cfg, payload, log)
+		if err != nil {
+			log.WarnContext(ctx, "adapter.codex.ws_session.warmup_fallback_uncached", "concern", "adapter.providers.codex.request", "component", "adapter",
+				"subcomponent", "codex",
+				"conversation_id", conv,
+				"request_id", cfg.RequestID,
+				"err", err.Error(),
+			)
+			freshCfg := cfg
+			freshCfg.SessionCache = nil
+			freshCfg.Prewarm = false
+			return runWebsocketFreshDial(ctx, freshCfg, payload, emit)
+		}
+		session = opened
+		if strings.TrimSpace(session.LastResponseID) != "" {
+			payload = WithPreviousResponseID(payload, session.LastResponseID, fullInput)
+		}
+	}
+
+	logWebsocketPrepared(ctx, cfg, payload, TransportTelemetry{
+		WebsocketConnectionReuse: hit, RequestID: "", CursorRequestID: "", Correlation: correlation.
+						Context{TraceID: "", SpanID: "", ParentSpanID: "", RequestID: "", IdentityAttributes: nil},
+
+		Alias: "", UpstreamModel: "", Transport: "", ServiceTier: "", PromptCacheKey: "", ClientMetadata: nil, InputCount: 0, ToolCount: 0, NativeShellCount: 0, NativeCustomCount: 0, FunctionToolCount: 0, WebsocketWarmup: false, WebsocketPrewarmUsed: false, WebsocketPrewarmFailed: false, PreviousResponseID: "", TurnStatePresent: false, FallbackToHTTP: false, ContextWindowError: false,
+	})
+	log.InfoContext(ctx, "adapter.codex.frame.sent", "concern", "adapter.providers.codex.request", "component", "adapter",
+		"subcomponent", "codex",
+		"conversation_id", conv,
+		"request_id", cfg.RequestID,
+		"prev_response_id", payload.PreviousResponseID,
+		"delta_input_count", len(payload.Input),
+		"full_input_count", len(fullInput),
+		"is_warmup", false,
+	)
+
+	result, responseStarted, err := writeAndParseWebsocketRequest(ctx, session.Conn, cfg, payload, emit, false)
+	if err != nil {
+		cfg.SessionCache.Invalidate(ctx, conv, "ws_io_error")
+		return result, responseStarted, err
+	}
+
+	session.LastResponseID = strings.TrimSpace(result.ResponseID)
+	if session.LastResponseID == "" {
+		// Server completed without an id. Drop the connection rather
+		// than re-cache without a chain anchor.
+		cfg.SessionCache.Invalidate(ctx, conv, "missing_response_id")
+		return result, responseStarted, nil
+	}
+	session.Model = payload.Model
+	session.PromptCacheKey = payload.PromptCacheKey
+	session.LastInputItems = cloneInputItems(fullInput)
+	session.FrameCount++
+	cfg.SessionCache.Put(ctx, session)
+	log.InfoContext(ctx, "adapter.codex.ws_session.put", "concern", "adapter.providers.codex.request", "component", "adapter",
+		"subcomponent", "codex",
+		"conversation_id", conv,
+		"last_response_id", session.LastResponseID,
+		"frame_count", session.FrameCount,
+	)
+	return result, responseStarted, nil
+}
+
+// acquireCachedSession looks up a cached websocket session for the
+// conversation, validates compatibility, computes the input delta,
+// and returns the session with payload patched to chain off the
+// session's previous_response_id. Returns hit=false when the cache
+// misses, the session is incompatible, or the delta is not extensible.
+// On invalidation the session is removed from the cache.
+func acquireCachedSession(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	fullInput []codexwire.InputItem,
+	log *slog.Logger,
+) (*WebsocketSession, ResponseCreateWsRequest, bool) {
+	conv := strings.TrimSpace(cfg.ConversationID)
+	session, hit := cfg.SessionCache.Take(ctx, conv)
+	if !hit {
+		return nil, payload, false
+	}
+	log.InfoContext(ctx, "adapter.codex.ws_session.taken", "concern", "adapter.providers.codex.request", "component", "adapter",
+		"subcomponent", "codex",
+		"conversation_id", conv,
+		"last_response_id", session.LastResponseID,
+		"session_model", session.Model,
+		"request_model", payload.Model,
+		"frame_count", session.FrameCount,
+		"age_ms", clock.Since(session.OpenedAt).Milliseconds(),
+	)
+	if !websocketSessionCompatible(session, payload) {
+		cfg.SessionCache.invalidateEntry(session, "model_mismatch")
+		return nil, payload, false
+	}
+	delta := ComputeDelta(session.LastInputItems, fullInput)
+	switch {
+	case delta.Ok:
+		return session, WithPreviousResponseID(payload, session.LastResponseID, delta.Items), true
+	case delta.Reason == "no_extension":
+		cfg.SessionCache.invalidateEntry(session, "no_extension")
+		return nil, payload, false
+	default:
+		cfg.SessionCache.invalidateEntry(session, delta.Reason)
+		return nil, payload, false
+	}
+}
+
+// openSessionAndWarmup dials a fresh websocket, sends the warmup
+// frame (generate=false, empty input, no prev), captures the
+// response_id, and returns a populated WebsocketSession ready to
+// carry a real frame. The caller is responsible for installing the
+// session in the cache after the first real frame succeeds.
+func openSessionAndWarmup(
+	ctx context.Context,
+	cfg WebsocketTransportConfig,
+	payload ResponseCreateWsRequest,
+	log *slog.Logger,
+) (*WebsocketSession, error) {
+	conv := strings.TrimSpace(cfg.ConversationID)
+	conn, statusCode, _, err := dialResponsesWebsocketWithAuthRefresh(ctx, cfg)
+	if statusCode == http.StatusUpgradeRequired {
+		return nil, ErrWebsocketFallbackToHTTP
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	warmup := WithWarmupGenerateFalse(payload)
+	warmup.Tools = []codexwire.ToolSpec{}
+	warmup.Input = []codexwire.InputItem{}
+	warmup.PreviousResponseID = ""
+	prewarmTimeout := cfg.PrewarmTimeout
+	if prewarmTimeout <= 0 {
+		prewarmTimeout = defaultWebsocketPrewarmTimeout
+	}
+	_ = conn.SetReadDeadline(clock.Now().Add(prewarmTimeout))
+	warmupResult, _, warmupErr := writeAndParseWebsocketRequest(ctx, conn, cfg, warmup, func(adapterrender.Event) error {
+		return nil
+	}, true)
+	_ = conn.SetReadDeadline(time.Time{})
+	if warmupErr != nil || strings.TrimSpace(warmupResult.ResponseID) == "" {
+		_ = conn.Close()
+		if warmupErr != nil {
+			log.WarnContext(ctx, "adapter.codex.ws_session.warmup_failed", "concern", "adapter.providers.codex.request", "component", "adapter",
+				"subcomponent", "codex",
+				"conversation_id", conv,
+				"err", warmupErr.Error(),
+			)
+			return nil, fmt.Errorf("codex websocket warmup failed: %w", warmupErr)
+		}
+		log.WarnContext(ctx, "adapter.codex.ws_session.warmup_missing_response_id", "concern", "adapter.providers.codex.request", "component", "adapter",
+			"subcomponent", "codex",
+			"conversation_id", conv,
+		)
+		return nil, errors.New("codex websocket warmup failed: missing response_id")
+	}
+	now := clock.Now()
+	session := &WebsocketSession{
+		Conn:           conn,
+		ConversationID: conv,
+		Model:          payload.Model,
+		PromptCacheKey: payload.PromptCacheKey,
+		LastResponseID: warmupResult.ResponseID,
+		OpenedAt:       now,
+		LastUsed:       now, LastInputItems: nil, FrameCount: 0, Closed: false, InvalidationReason: "",
+	}
+	if log != nil {
+		log.InfoContext(ctx, "adapter.codex.ws_session.opened", "concern", "adapter.providers.codex.request", "component", "adapter",
+			"subcomponent", "codex",
+			"conversation_id", conv,
+			"warmup_response_id", warmupResult.ResponseID,
+		)
+	}
+	return session, nil
+}
+
+func websocketSessionCompatible(session *WebsocketSession, payload ResponseCreateWsRequest) bool {
+	if session == nil {
+		return false
+	}
+	sessionModel := strings.TrimSpace(session.Model)
+	requestModel := strings.TrimSpace(payload.Model)
+	if sessionModel != "" && requestModel != "" && sessionModel != requestModel {
+		return false
+	}
+	sessionPromptCacheKey := strings.TrimSpace(session.PromptCacheKey)
+	requestPromptCacheKey := strings.TrimSpace(payload.PromptCacheKey)
+	if sessionPromptCacheKey != "" && requestPromptCacheKey != "" && sessionPromptCacheKey != requestPromptCacheKey {
+		return false
+	}
+	return true
+}

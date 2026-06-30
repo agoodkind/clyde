@@ -1,0 +1,11 @@
+version: v2
+plugins:
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: api
+    opt:
+      - module=goodkind.io/clyde/api
+  - local: ["go", "tool", "protoc-gen-go-grpc"]
+    out: api
+    opt:
+      - module=goodkind.io/clyde/api
+      - require_unimplemented_servers=false

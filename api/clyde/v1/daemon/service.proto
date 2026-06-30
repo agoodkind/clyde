@@ -1,0 +1,475 @@
+syntax = "proto3";
+
+package clyde.v1;
+
+option go_package = "goodkind.io/clyde/api/clyde/v1;clydev1";
+
+import "clyde/v1/daemon/provider.proto";
+
+service ClydeService {
+  rpc ReloadDaemon(ReloadDaemonRequest) returns (ReloadDaemonResponse);
+  // RebindDaemon replaces the worker with one that binds listeners fresh from
+  // config, for edits that change a listener address or the listener set.
+  rpc RebindDaemon(ReloadDaemonRequest) returns (ReloadDaemonResponse);
+  rpc GetProviderStats(GetProviderStatsRequest) returns (GetProviderStatsResponse);
+  rpc SubscribeProviderStats(SubscribeProviderStatsRequest) returns (stream ProviderStatsEvent);
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
+  rpc GetConversationInfo(GetConversationInfoRequest) returns (GetConversationInfoResponse);
+  rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
+  // ReorientConversation resolves the post-fork, post-compaction recovery
+  // context for one conversation and returns one bounded, cursor-paged page of
+  // evidence. Each page stays small enough to render inline, so a caller loops
+  // with next_cursor until remaining is zero rather than receiving one large
+  // payload.
+  rpc ReorientConversation(ReorientConversationRequest) returns (ReorientConversationResponse);
+  // StreamConversation, StreamConversationContext, and StreamExportTranscript are
+  // the server-streaming conversation reads and export. They carry one request
+  // and produce the rendered payload chunked, so a large transcript or export is
+  // not bounded by the gRPC max message size.
+  rpc StreamConversation(GetConversationRequest) returns (stream ConversationChunk);
+  rpc StreamConversationContext(GetConversationContextRequest) returns (stream ConversationChunk);
+  rpc StreamExportTranscript(ExportTranscriptRequest) returns (stream ExportChunk);
+  rpc GetMITMStatus(GetMITMStatusRequest) returns (GetMITMStatusResponse);
+  rpc ShowCapture(ShowCaptureRequest) returns (ShowCaptureResponse);
+  rpc SeedBaseline(SeedBaselineRequest) returns (SeedBaselineResponse);
+  rpc LogsInventory(LogsInventoryRequest) returns (LogsInventoryResponse);
+}
+
+message LogsInventoryRequest {
+  string state_root = 1;
+  int64 largest_file_limit = 2;
+  bool deep = 3;
+}
+
+message LogsInventoryRotation {
+  optional bool enabled = 1;
+  int64 max_size_mb = 2;
+  int64 max_backups = 3;
+  int64 max_age_days = 4;
+  optional bool compress = 5;
+}
+
+message LogsInventoryCleanup {
+  optional bool enabled = 1;
+  optional int64 max_age_days = 2;
+  optional int64 max_backups = 3;
+  optional int64 max_total_mb = 4;
+}
+
+message LogsInventoryFileSummary {
+  string relative_path = 1;
+  int64 size_bytes = 2;
+  int64 modified_unix = 3;
+}
+
+message LogsInventoryCleanupSummary {
+  int64 timestamp_unix = 1;
+  string root = 2;
+  repeated string scanned_roots = 3;
+  int64 candidates = 4;
+  int64 deleted = 5;
+  int64 bytes_deleted = 6;
+  repeated string skipped = 7;
+  repeated string errors = 8;
+  int64 duration_ms = 9;
+}
+
+message LogsInventoryCategory {
+  string category = 1;
+  string sink = 2;
+  string source = 3;
+  int64 count = 4;
+  int64 total_bytes = 5;
+  int64 latest_modified_unix = 6;
+  string representative_path = 7;
+  int64 last_event_timestamp_unix = 8;
+  optional string last_event_request_id = 9;
+  bool cleanup_enabled = 10;
+  LogsInventoryRotation rotation = 11;
+  LogsInventoryCleanup cleanup = 12;
+  repeated LogsInventoryFileSummary largest_files = 13;
+  LogsInventoryCleanupSummary last_cleanup_result = 14;
+}
+
+message LogsInventoryResponse {
+  string state_root = 1;
+  int64 generated_unix = 2;
+  string mode = 3;
+  bool cleanup_enabled = 4;
+  repeated LogsInventoryCategory categories = 5;
+}
+
+message SeedBaselineRequest {
+  string upstream = 1;
+  string from = 2;
+  string output = 3;
+  repeated string include_ua = 4;
+  repeated string exclude_ua = 5;
+}
+
+message SeedBaselineResponse {
+  string written = 1;
+  string upstream = 2;
+  int64 flavors = 3;
+}
+
+message ShowCaptureRequest {
+  string id = 1;
+  reserved 2;
+  reserved "json";
+}
+
+message ShowCaptureSection {
+  string source = 1;
+  string path = 2;
+  repeated string matches = 3;
+}
+
+message ShowCaptureCaptureRow {
+  int64 ts = 1;
+  string client = 2;
+  string provider = 3;
+  string concern = 4;
+  string host = 5;
+  string method = 6;
+  string path = 7;
+  int64 status = 8;
+  string request_id = 9;
+  string upstream_request_id = 10;
+  string session_id = 11;
+  string trace_id = 12;
+}
+
+message ShowCaptureRows {
+  string source = 1;
+  string path = 2;
+  repeated ShowCaptureCaptureRow rows = 3;
+}
+
+message ShowCaptureCorrelation {
+  string clyde_request_id = 1;
+  string cursor_request_id = 2;
+  string upstream_request_id = 3;
+  string trace_id = 4;
+}
+
+message ShowCapturePass {
+  string id = 1;
+  repeated ShowCaptureSection sections = 2;
+  ShowCaptureRows capture = 3;
+  ShowCaptureCorrelation found = 4;
+}
+
+message ShowCaptureResponse {
+  string output = 1 [deprecated = true];
+  string query = 10;
+  string kind = 11;
+  ShowCaptureCorrelation correlation = 12;
+  repeated ShowCapturePass passes = 13;
+}
+
+message GetMITMStatusRequest {}
+
+message MITMListenerStatus {
+  string id = 1;
+  string address = 2;
+  bool up = 3;
+}
+
+message GetMITMStatusResponse {
+  repeated MITMListenerStatus listeners = 1;
+  string ca_cert_path = 2;
+  string ca_key_path = 3;
+}
+
+message ListConversationsRequest {
+  int64 limit = 1;
+  int64 offset = 2;
+  Provider provider = 3;
+  string workspace = 4;
+  string query = 5;
+  bool include_archived = 6;
+  bool all = 7;
+}
+
+message GetConversationRequest {
+  string conversation_id = 1;
+  int64 last_n = 2;
+}
+
+message GetConversationInfoRequest {
+  string conversation_id = 1;
+}
+
+// ConversationChunk is one UTF-8 text slice of a streamed transcript or context
+// window. The full payload is the concatenation of every chunk's text in
+// receive order; chunk boundaries carry no semantics and may split a multibyte
+// rune only at the transport layer, which the reassembler stitches back.
+message ConversationChunk {
+  bytes text = 1;
+}
+
+// ExportChunk is one byte slice of a streamed export body. The full export is
+// the concatenation of every chunk's body in receive order.
+message ExportChunk {
+  bytes body = 1;
+}
+
+message GetConversationContextRequest {
+  string conversation_id = 1;
+  string timestamp = 2;
+  int64 message_index = 3;
+  int64 before = 4;
+  int64 after = 5;
+}
+
+message SearchConversationsRequest {
+  string query = 1;
+  int64 limit = 2;
+  Provider provider = 3;
+  string workspace = 4;
+  bool include_archived = 5;
+  repeated string roles = 6;
+  int64 from_unix = 7;
+  int64 until_unix = 8;
+  double min_score = 9;
+  // per_conversation_limit caps hits per conversation so one large transcript
+  // does not monopolize the result list. Zero means uncapped.
+  int64 per_conversation_limit = 10;
+  // conversation_id scopes discovery to a single conversation, the within-search
+  // behavior. Empty means corpus-wide discovery.
+  string conversation_id = 11;
+  // context_window is the number of messages before and after each hit to render
+  // inline on the match. Zero means the daemon's default small window.
+  int64 context_window = 12;
+  // offset skips this many matching results before returning the current page.
+  int64 offset = 13;
+}
+
+// SearchSource names where the returned matches came from, replacing the old
+// warming bool with an explicit provenance the caller can branch on.
+enum SearchSource {
+  SEARCH_SOURCE_UNSPECIFIED = 0;
+  // SEARCH_SOURCE_SEMANTIC means the vector engine produced the matches.
+  SEARCH_SOURCE_SEMANTIC = 1;
+  // SEARCH_SOURCE_LITERAL means the engine was unavailable or empty and the
+  // literal transcript scan produced the matches.
+  SEARCH_SOURCE_LITERAL = 2;
+  // SEARCH_SOURCE_LITERAL_DISABLED_COLD means the engine produced nothing and
+  // the literal fallback is disabled, so no matches were returned on purpose.
+  SEARCH_SOURCE_LITERAL_DISABLED_COLD = 3;
+}
+
+message ConversationSearchMatch {
+  ConversationRecord conversation = 1;
+  int64 message_index = 2;
+  string role = 3;
+  int64 timestamp_unix = 4;
+  string snippet = 5;
+  // score is the engine's retrieval relevance; zero on literal-scan matches.
+  double score = 6;
+  // context_window is the rendered messages surrounding this hit, so the caller
+  // rarely needs a second read call.
+  string context_window = 7;
+}
+
+// SearchFacetCount is one facet value and how many matched conversations carry
+// it.
+message SearchFacetCount {
+  string value = 1;
+  int64 count = 2;
+}
+
+// SearchFacets summarizes the result set by workspace, provider, and model so
+// the caller can narrow without a second query.
+message SearchFacets {
+  repeated SearchFacetCount workspaces = 1;
+  repeated SearchFacetCount providers = 2;
+  repeated SearchFacetCount models = 3;
+}
+
+// SearchFreshness is the conversation-index sync state at query time, so the
+// caller can tell whether a thin result means a cold index versus a true miss.
+message SearchFreshness {
+  int64 manifest = 1;
+  int64 needed = 2;
+  int64 embedded = 3;
+  int64 pending = 4;
+  int64 last_sync_unix = 5;
+}
+
+// FilterStage records how many candidate conversations remained after one
+// filter was applied, so a legitimately narrow result shows its funnel.
+message FilterStage {
+  string name = 1;
+  int64 remaining = 2;
+}
+
+// FilterAccounting is the ordered funnel of filter stages for the query.
+message FilterAccounting {
+  repeated FilterStage stages = 1;
+}
+
+message SearchConversationsResponse {
+  repeated ConversationSearchMatch matches = 1;
+  int64 conversations_scanned = 2;
+  int64 returned_count = 3;
+  int64 limit = 4;
+  bool has_more = 5;
+  SearchSource source = 6;
+  SearchFacets facets = 7;
+  SearchFreshness freshness = 8;
+  FilterAccounting filter_accounting = 9;
+  int64 offset = 10;
+  int64 next_offset = 11;
+}
+
+message ConversationInfoStats {
+  int64 total_messages = 1;
+  int64 visible_messages = 2;
+  int64 user_messages = 3;
+  int64 assistant_messages = 4;
+  int64 system_messages = 5;
+  int64 tool_call_count = 6;
+  int64 tool_output_count = 7;
+}
+
+message ConversationCompactionSegment {
+  int64 index = 1;
+  int64 start_message_index = 2;
+  int64 end_message_index = 3;
+  bool has_starting_summary = 4;
+  int64 summary_message_index = 5;
+  string summary_uuid = 6;
+  int64 summary_timestamp_unix = 7;
+  int64 visible_message_count = 8;
+  int64 tool_call_count = 9;
+  string export_selector = 10;
+}
+
+message GetConversationInfoResponse {
+  ConversationRecord conversation = 1;
+  ConversationInfoStats stats = 2;
+  int64 compaction_count = 3;
+  repeated ConversationCompactionSegment segments = 4;
+}
+
+message ReorientConversationRequest {
+  // conversation_id selects the current conversation. Empty means the newest
+  // conversation in workspace.
+  string conversation_id = 1;
+  string workspace = 2;
+  // topic narrows memory docs and the fallback search.
+  string topic = 3;
+  // cursor continues a prior page. Empty starts at the first page.
+  string cursor = 4;
+  // window is the before/after message count for rendered context windows. Zero
+  // means the daemon default.
+  int64 window = 5;
+  // limit bounds memory and fallback-search evidence items. Zero means the
+  // daemon default.
+  int64 limit = 6;
+  // page_bytes bounds one page so it renders inline. Zero means the daemon
+  // default.
+  int64 page_bytes = 7;
+}
+
+enum ReorientItemKind {
+  REORIENT_ITEM_KIND_UNSPECIFIED = 0;
+  REORIENT_ITEM_KIND_HEADER = 1;
+  REORIENT_ITEM_KIND_RECOVERED_CONTEXT = 2;
+  REORIENT_ITEM_KIND_TAIL = 3;
+  REORIENT_ITEM_KIND_PARENT_ANCHOR = 4;
+  REORIENT_ITEM_KIND_MEMORY_DOC = 5;
+  REORIENT_ITEM_KIND_SEARCH_HIT = 6;
+  REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW = 7;
+}
+
+message ReorientConversationRef {
+  string id = 1;
+  Provider provider = 2;
+  string title = 3;
+  string workspace_root = 4;
+}
+
+message ReorientItem {
+  ReorientItemKind kind = 1;
+  string title = 2;
+  string body = 3;
+  string conversation_id = 4;
+  int64 message_index = 5;
+}
+
+message ReorientConversationResponse {
+  // text keeps the legacy rendered page body for older clients while the typed
+  // fields below roll out. New clients should use the typed fields instead.
+  string text = 1 [deprecated = true];
+  // next_cursor continues to the next page. Empty on the final page.
+  string next_cursor = 2;
+  // remaining is the count of evidence items not yet delivered. Above zero means
+  // the caller has not seen all evidence.
+  int64 remaining = 3;
+  ReorientConversationRef current_conversation = 10;
+  ReorientConversationRef parent_conversation = 11;
+  int64 checkpoint_number = 12;
+  repeated ReorientItem items = 13;
+  int64 offset = 14;
+  int64 total_items = 15;
+  repeated string warnings = 16;
+}
+
+message ExportTranscriptRequest {
+  string conversation_id = 1;
+  string format = 2;
+  string whitespace = 3;
+  int64 history_start = 4;
+  bool include_system_prompts = 5;
+  bool include_tool_outputs = 6;
+  bool include_raw_json_metadata = 7;
+  bool include_thinking = 8;
+  bool include_tool_calls = 9;
+  bool include_chat = 10;
+  bool include_system_messages = 11;
+  reserved 12, 13, 14;
+  reserved "compaction_scope", "compaction_detail", "compaction_checkpoint";
+  bool include_tool_summaries = 15;
+  string include_compactions = 16;
+  bool full_history = 17;
+  int64 last_n = 18;
+}
+
+message ConversationLineage {
+  string kind = 1;
+  Provider parent_provider = 2;
+  string parent_native_id = 3;
+  string parent_message_uuid = 4;
+}
+
+message ConversationRecord {
+  string id = 1;
+  Provider provider = 2;
+  string native_id = 3;
+  string title = 4;
+  string workspace_root = 5;
+  string artifact_path = 6;
+  string artifact_kind = 7;
+  string model = 8;
+  int64 created_at_unix = 9;
+  int64 updated_at_unix = 10;
+  int64 size_bytes = 11;
+  bool archived = 12;
+  ConversationLineage lineage = 13;
+  // parent_conversation_id is the resolved derived id of this conversation's
+  // fork parent when that parent is present in the index, and empty otherwise.
+  string parent_conversation_id = 14;
+}
+
+message ListConversationsResponse {
+  repeated ConversationRecord conversations = 1;
+  int64 total_matched = 2;
+  int64 returned_count = 3;
+  int64 offset = 4;
+  int64 limit = 5;
+  int64 next_offset = 6;
+  bool has_more = 7;
+}

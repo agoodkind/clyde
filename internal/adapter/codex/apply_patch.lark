@@ -1,0 +1,34 @@
+// Vendored reference copy of the codex apply_patch freeform tool grammar.
+//
+// Source: research/codex/codex-rs/core/src/tools/handlers/apply_patch.lark
+// Used by: research/codex/codex-rs/core/src/tools/handlers/apply_patch_spec.rs
+//          (create_apply_patch_freeform_tool), where it is embedded as the
+//          FreeformTool grammar definition with syntax "lark". The tool
+//          description states "do not wrap the patch in JSON", which is the
+//          contract UnwrapApplyPatchInput enforces in native_tools.go.
+//
+// This file is a documentation reference for the well-formed patch shape the
+// upstream parser requires. apply_patch_grammar_test.go asserts that the
+// output of RepairApplyPatchInput is consistent with the begin/hunk/end
+// structure this grammar defines. Keep it byte-identical to the source on
+// every codex-rs sync; do not edit the grammar rules here.
+
+start: begin_patch hunk+ end_patch
+begin_patch: "*** Begin Patch" LF
+end_patch: "*** End Patch" LF?
+
+hunk: add_hunk | delete_hunk | update_hunk
+add_hunk: "*** Add File: " filename LF add_line+
+delete_hunk: "*** Delete File: " filename LF
+update_hunk: "*** Update File: " filename LF change_move? change?
+
+filename: /(.+)/
+add_line: "+" /(.*)/ LF -> line
+
+change_move: "*** Move to: " filename LF
+change: (change_context | change_line)+ eof_line?
+change_context: ("@@" | "@@ " /(.+)/) LF
+change_line: ("+" | "-" | " ") /(.*)/ LF
+eof_line: "*** End of File" LF
+
+%import common.LF

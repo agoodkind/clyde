@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    uses: agoodkind/go-makefile/.github/workflows/_ci.yml@main
+    permissions:
+      contents: read
+      id-token: write
+
+  project-test:
+    name: Project Race Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      # Race coverage runs the suites with `go test -race` (Go's own runner)
+      # rather than `ginkgo -r --race`. The ginkgo CLI orchestrator wedges after
+      # the suites finish on linux/amd64 under -race (reproduced on every CI run,
+      # both ginkgo v2.28.1 and v2.29.0; clean on arm64; go test runs the same
+      # RunSpecs suites fine), matching ginkgo issue #871. -shuffle=on keeps the
+      # randomized-order coverage; -timeout makes any real deadlock fail fast with
+      # a full goroutine dump instead of hanging. -count stays at 1 because Ginkgo
+      # rejects -count>1 ("Only -count=1 is allowed"), so any higher value fails
+      # every RunSpecs package before a test executes.
+      - name: Race tests
+        env:
+          GOTRACEBACK: all
+        run: go test -race -shuffle=on -count=1 -timeout=8m ./...

@@ -1,0 +1,1097 @@
+package mitm
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/livetrack"
+	"goodkind.io/clyde/internal/logevent"
+	"goodkind.io/clyde/internal/mitm/capture"
+	"goodkind.io/clyde/internal/slogger"
+)
+
+// TestHandleConnectTunnelsBytesBothWays stands up a fake upstream
+// that echoes a fixed prefix on connect, accepts a payload from the
+// tunneled client, and returns it reversed. The proxy is invoked
+// directly through its handle method against a hijackable
+// httptest-style listener. Verifies the tunnel:
+//
+//   - returns "HTTP/1.1 200 Connection Established"
+//   - splices client-to-upstream and upstream-to-client bytes
+//   - emits the tunnel_open / tunnel_closed log events
+func TestHandleConnectTunnelsBytesBothWays(t *testing.T) {
+	upstream := startEchoServer(t)
+	defer upstream.Close()
+
+	proxy := startTestProxy(t)
+	defer proxy.shutdown()
+
+	client, err := net.DialTimeout("tcp", proxy.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+
+	if _, err := fmt.Fprintf(client, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", upstream.addr, upstream.addr); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+
+	br := bufio.NewReader(client)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
+		t.Fatalf("status = %q, want 200 Connection Established", strings.TrimSpace(statusLine))
+	}
+	// Drain headers up to the empty line.
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+
+	// Send a payload through the tunnel. The echo upstream will
+	// reverse it and write it back.
+	payload := "hello-clyde-tunnel"
+	if _, err := client.Write([]byte(payload + "\n")); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	// Half-close client write so upstream's reader returns EOF and
+	// the server's reverse-and-write goroutine flushes.
+	if cw, ok := client.(interface{ CloseWrite() error }); ok {
+		_ = cw.CloseWrite()
+	}
+
+	got, err := io.ReadAll(br)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("read tunneled response: %v", err)
+	}
+	want := reverse(payload)
+	if !strings.Contains(string(got), want) {
+		t.Errorf("tunneled response %q does not contain reversed payload %q", string(got), want)
+	}
+}
+
+func TestHandleConnectRejectsMissingTarget(t *testing.T) {
+	proxy := startTestProxy(t)
+	defer proxy.shutdown()
+
+	client, err := net.DialTimeout("tcp", proxy.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	if _, err := client.Write([]byte("CONNECT  HTTP/1.1\r\nHost: \r\n\r\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	br := bufio.NewReader(client)
+	status, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// Either 400 from our handler or 400/404 from net/http parsing
+	// before our handler sees it. Both are acceptable rejections.
+	if !strings.Contains(status, "400") && !strings.Contains(status, "404") {
+		t.Errorf("missing-target CONNECT status = %q, want 4xx", strings.TrimSpace(status))
+	}
+}
+
+func TestHandleConnectInterceptsCursorTLSAndCapturesRawFiles(t *testing.T) {
+	const cursorHost = "api2.cursor.sh"
+	const requestID = "req_cursor_capture_123"
+	const sentinel = "CURSOR_SENTINEL_DO_NOT_LOG"
+	upstreamBody := bytes.Repeat([]byte("streaming-cursor-response\n"), 900)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 1 {
+			t.Errorf("upstream protocol = %s, want HTTP/1.x", r.Proto)
+		}
+		if r.URL.Path != "/aiserver.v1.AiService/BidiAppend" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upstream body: %v", err)
+		}
+		decodedBody, _ := decodeForCapture(body, r.Header.Get("content-encoding"))
+		if !bytes.Contains(decodedBody, []byte(sentinel)) {
+			t.Errorf("upstream body did not contain sentinel")
+		}
+		w.Header().Set("content-type", "application/protobuf")
+		w.WriteHeader(http.StatusAccepted)
+		for i := 0; i < len(upstreamBody); i += 1024 {
+			end := i + 1024
+			if end > len(upstreamBody) {
+				end = len(upstreamBody)
+			}
+			_, _ = w.Write(upstreamBody[i:end])
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	dbPath := filepath.Join(captureDir, "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	proxy := startCursorMITMTestProxy(t, captureDir, cursorHost, upstream, store)
+	defer proxy.shutdown()
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(proxy.proxy.ca.cert)
+	client, err := net.DialTimeout("tcp", proxy.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", cursorHost, cursorHost); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+	br := bufio.NewReader(client)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT status: %v", err)
+	}
+	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read CONNECT header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
+		ServerName: cursorHost,
+		RootCAs:    caPool,
+		NextProtos: []string{"http/1.1"},
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatalf("client TLS handshake: %v", err)
+	}
+	defer tlsClient.Close()
+
+	requestBody := gzipBytes(t, cursorBidiAppendPayload(requestID, 7, []byte("prefix "+sentinel+" suffix")))
+	req, err := http.NewRequest(http.MethodPost, "https://"+cursorHost+"/aiserver.v1.AiService/BidiAppend", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("content-encoding", "gzip")
+	req.Header.Set("content-type", "application/protobuf")
+	req.Header.Set("authorization", "Bearer should-not-appear-in-jsonl")
+	req.Header.Set("x-request-id", requestID)
+	req.Header.Set("x-original-request-id", "orig-123")
+	req.Header.Set("x-session-id", "sess-123")
+	req.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+	if err := req.Write(tlsClient); err != nil {
+		t.Fatalf("write TLS HTTP request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tlsClient), req)
+	if err != nil {
+		t.Fatalf("read TLS HTTP response: %v", err)
+	}
+	gotBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d want %d", resp.StatusCode, http.StatusAccepted)
+	}
+	if len(gotBody) != len(upstreamBody) {
+		t.Fatalf("response bytes = %d want %d", len(gotBody), len(upstreamBody))
+	}
+
+	// capture.jsonl is gone; MITM legs now land in this per-concern file.
+	// recordHTTPCapture runs in the tunnel goroutine after the response is
+	// streamed to the client, so the capture-index leg can land a moment
+	// after the client read returns; poll until that leg appears.
+	capturePath := mitmWireConcernTestPath(captureDir)
+	records := waitForCaptureRecordWithLeg(t, capturePath, logevent.LegMITMCaptureIndex)
+	// Cursor now rides the same unified leg path as claude and codex:
+	// each MITM request emits the LegMITMCaptureIndex record (plus the
+	// other leg records) instead of a separate cursor_tls_http record.
+	record := firstCaptureRecordWithLeg(t, records, logevent.LegMITMCaptureIndex)
+	if record["provider"] != "cursor" {
+		t.Fatalf("provider = %q want cursor: %#v", record["provider"], record)
+	}
+	if record["request_id"] != requestID || record["upstream_request_id"] != "orig-123" || record["session_id"] != "sess-123" {
+		t.Fatalf("metadata ids not captured: %#v", record)
+	}
+	cursorFacet, ok := record["cursor"].(map[string]any)
+	if !ok || cursorFacet["request_id"] != requestID {
+		t.Fatalf("cursor facet missing request id: %#v", record)
+	}
+	for _, line := range records {
+		if strings.Contains(fmt.Sprint(line), sentinel) {
+			t.Fatalf("JSONL metadata leaked sentinel prompt text: %#v", line)
+		}
+		if strings.Contains(fmt.Sprint(line), "should-not-appear") {
+			t.Fatalf("JSONL metadata leaked authorization header: %#v", line)
+		}
+	}
+	// The full decoded request/response bodies persist to the SQLite capture
+	// store, not to per-leg .raw files. Close flushes the writer queue so the
+	// row is committed before we query it.
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open verifier db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var (
+		gotClient   string
+		gotProvider string
+		gotConcern  string
+	)
+	row := db.QueryRow(`SELECT client, provider, concern FROM requests WHERE request_id=? ORDER BY ts DESC LIMIT 1`, requestID)
+	if err := row.Scan(&gotClient, &gotProvider, &gotConcern); err != nil {
+		t.Fatalf("scan request row: %v", err)
+	}
+	if gotClient != "test" {
+		t.Fatalf("client = %q want test", gotClient)
+	}
+	if gotProvider != "cursor" {
+		t.Fatalf("provider = %q want cursor", gotProvider)
+	}
+	if gotConcern != "cursor.bidi" {
+		t.Fatalf("concern = %q want cursor.bidi", gotConcern)
+	}
+
+	var storedResponse []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='response'`, requestID).Scan(&storedResponse); err != nil {
+		t.Fatalf("scan response body: %v", err)
+	}
+	if len(storedResponse) != len(upstreamBody) {
+		t.Fatalf("stored response length = %d want %d (full body, not the old 16 KiB cap)", len(storedResponse), len(upstreamBody))
+	}
+	if !bytes.Contains(storedResponse, upstreamBody[:128]) {
+		t.Fatalf("stored response missing upstream payload prefix")
+	}
+
+	var storedRequest []byte
+	if err := db.QueryRow(`SELECT data FROM bodies WHERE request_row_id=(SELECT id FROM requests WHERE request_id=?) AND which='request'`, requestID).Scan(&storedRequest); err != nil {
+		t.Fatalf("scan request body: %v", err)
+	}
+	// The proxy decodes the gzip content-encoding before storing, so the
+	// sentinel prompt text is present in cleartext in the stored request body.
+	if !bytes.Contains(storedRequest, []byte(sentinel)) {
+		t.Fatalf("stored request body missing decoded sentinel payload")
+	}
+}
+
+func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
+	const providerHost = "chatgpt.com"
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+	}))
+	defer upstream.Close()
+
+	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
+	defer proxy.shutdown()
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(proxy.proxy.ca.cert)
+	client, err := net.DialTimeout("tcp", proxy.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", providerHost, providerHost); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+	br := bufio.NewReader(client)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT status: %v", err)
+	}
+	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read CONNECT header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
+		ServerName: providerHost,
+		RootCAs:    caPool,
+		NextProtos: []string{"http/1.1"},
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatalf("client TLS handshake: %v", err)
+	}
+	defer tlsClient.Close()
+	tlsReader := bufio.NewReader(tlsClient)
+
+	assertProviderTLSRequest(t, tlsClient, tlsReader, providerHost, "/first")
+	waitForExactTunnelCount(t, proxy.proxy, 1, 2*time.Second)
+
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelDrain()
+	// Drive the drain through the lifecycle group's Quiesce, the only public
+	// drain entry point. The tunnel registry is the group's sole member here, so
+	// Quiesce drains it and transitions it to StateClosed once the in-flight
+	// request completes. The natural (non-force) completion is proven by the
+	// in-flight request finishing; the exact force-closed count is unit-tested in
+	// livetrack/drain_test.go.
+	drainDone := make(chan struct{})
+	go func() {
+		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+		close(drainDone)
+	}()
+	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
+
+	assertProviderTLSRequestRejected(t, tlsClient, tlsReader, providerHost, "/second")
+
+	select {
+	case <-drainDone:
+		if got := proxy.proxy.Tunnels.State(); got != livetrack.StateClosed {
+			t.Fatalf("drain final state = %s, want closed", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for drain to finish after TLS close")
+	}
+}
+
+func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
+	const providerHost = "chatgpt.com"
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+	}))
+	defer upstream.Close()
+
+	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
+	defer proxy.shutdown()
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(proxy.proxy.ca.cert)
+	client, err := net.DialTimeout("tcp", proxy.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", providerHost, providerHost); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+	br := bufio.NewReader(client)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT status: %v", err)
+	}
+	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read CONNECT header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
+		ServerName: providerHost,
+		RootCAs:    caPool,
+		NextProtos: []string{"http/1.1"},
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatalf("client TLS handshake: %v", err)
+	}
+	defer tlsClient.Close()
+	tlsReader := bufio.NewReader(tlsClient)
+
+	assertProviderTLSRequest(t, tlsClient, tlsReader, providerHost, "/first")
+	waitForExactTunnelCount(t, proxy.proxy, 1, 2*time.Second)
+
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelDrain()
+	// Drive the drain through the lifecycle group's Quiesce, the only public
+	// drain entry point. With an idle keepalive tunnel and idle-grace set, the
+	// tunnel registry force-closes the wedged tunnel and reaches StateClosed.
+	drainDone := make(chan struct{})
+	go func() {
+		proxy.group.Quiesce(drainCtx, "test.reload", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 50 * time.Millisecond})
+		close(drainDone)
+	}()
+	waitForTunnelState(t, proxy.proxy, livetrack.StateDraining, 2*time.Second)
+
+	select {
+	case <-drainDone:
+		if got := proxy.proxy.Tunnels.State(); got != livetrack.StateClosed {
+			t.Fatalf("drain final state = %s, want closed", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for idle provider TLS tunnel to close during drain")
+	}
+}
+
+func TestHandleConnectInterceptsProviderTLSWebsocket(t *testing.T) {
+	const providerHost = "chatgpt.com"
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upstream upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		messageType, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("upstream read: %v", err)
+			return
+		}
+		if messageType != websocket.TextMessage {
+			t.Errorf("message type = %d, want text", messageType)
+		}
+		if string(payload) != `{"type":"response.create"}` {
+			t.Errorf("payload = %s", payload)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed"}`)); err != nil {
+			t.Errorf("upstream write: %v", err)
+		}
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	proxy := startCursorMITMTestProxy(t, captureDir, providerHost, upstream, nil)
+	defer proxy.shutdown()
+	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
+	proxy.proxy.log = logger
+	proxy.proxy.requestLog = logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil)
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(proxy.proxy.ca.cert)
+	proxyURL := &url.URL{Scheme: "http", Host: proxy.addr}
+	dialer := websocket.Dialer{
+		Proxy: http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{
+			RootCAs:    caPool,
+			ServerName: providerHost,
+			NextProtos: []string{"http/1.1"},
+		},
+		HandshakeTimeout: 2 * time.Second,
+	}
+	conn, resp, err := dialer.Dial("wss://"+providerHost+"/backend-api/codex/responses", nil)
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("dial websocket through CONNECT: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create"}`)); err != nil {
+		t.Fatalf("write websocket message: %v", err)
+	}
+	messageType, payload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read websocket message: %v", err)
+	}
+	if messageType != websocket.TextMessage {
+		t.Fatalf("message type = %d, want text", messageType)
+	}
+	if string(payload) != `{"type":"response.completed"}` {
+		t.Fatalf("payload = %s", payload)
+	}
+	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+		t.Fatalf("write websocket close: %v", err)
+	}
+
+	// capture.jsonl is gone; MITM legs now land in this per-concern file.
+	capturePath := mitmWireConcernTestPath(captureDir)
+	deadline := time.Now().Add(2 * time.Second)
+	var lines []string
+	foundCapture := false
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(capturePath); err == nil {
+			lines = strings.Split(string(readFile(t, capturePath)), "\n")
+			if hasWSEvents(lines) {
+				foundCapture = true
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !foundCapture {
+		t.Fatalf("websocket capture records were not written: %v", lines)
+	}
+	_ = conn.Close()
+	waitForExactTunnelCount(t, proxy.proxy, 0, 2*time.Second)
+}
+
+func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing.T) {
+	const cursorHost = "api2.cursor.sh"
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
+	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
+	proxy := &Proxy{
+		log:             logger,
+		httpClient:      http.DefaultClient,
+		dialContext:     mappedDialContext(cursorHost+":443", upstreamAddr),
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
+		store:           nil,
+		client:          "test",
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		Tunnels:         newTestTunnelRegistry(livetrack.NewGroup(livetrack.GroupOptions{Log: nil})),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
+		base:            "",
+		server:          nil,
+	}
+
+	requestBody := []byte(`{"probe":"summary"}`)
+	req := httptest.NewRequest(http.MethodPost, "https://"+cursorHost+"/aiserver.v1.AnalyticsService/Batch", bytes.NewReader(requestBody))
+	req.Header.Set("content-type", "application/json")
+	var output bytes.Buffer
+	writer := bufio.NewWriter(&output)
+	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, writer, req, cursorHost+":443", cursorHost, testCursorProvider{}, nil); err != nil {
+		t.Fatalf("handle cursor request: %v", err)
+	}
+
+	// capture.jsonl is gone; MITM legs now land in this per-concern file.
+	records := readCaptureJSONL(t, mitmWireConcernTestPath(captureDir))
+	record := firstCaptureRecordWithLeg(t, records, logevent.LegMITMCaptureIndex)
+	mitmFields := mitmFieldsFromCaptureRecord(t, record)
+	if mitmFields["raw_request_path"] != nil || mitmFields["raw_response_path"] != nil {
+		t.Fatalf("raw paths = %#v %#v, want absent", mitmFields["raw_request_path"], mitmFields["raw_response_path"])
+	}
+	if _, err := os.Stat(filepath.Join(captureDir, "concerns", "unknown", "raw")); !os.IsNotExist(err) {
+		t.Fatalf("raw dir stat err=%v want not exist", err)
+	}
+	if !strings.Contains(output.String(), "HTTP/1.1 200 OK") {
+		t.Fatalf("response missing status: %q", output.String())
+	}
+}
+
+// echoServer accepts TCP connections, reads a line, and writes back
+// the reversed line. Used as a tunneled upstream in proxy tests.
+type echoServer struct {
+	listener net.Listener
+	addr     string
+	wg       sync.WaitGroup
+}
+
+func startEchoServer(t *testing.T) *echoServer {
+	t.Helper()
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := &echoServer{listener: listener, addr: listener.Addr().String()}
+	server.wg.Add(1)
+	go server.serve()
+	return server
+}
+
+func (s *echoServer) serve() {
+	defer s.wg.Done()
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			return
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			line, _ := bufio.NewReader(c).ReadString('\n')
+			line = strings.TrimRight(line, "\r\n")
+			_, _ = c.Write([]byte(reverse(line)))
+		}(conn)
+	}
+}
+
+func (s *echoServer) Close() {
+	_ = s.listener.Close()
+	s.wg.Wait()
+}
+
+type testProxy struct {
+	server *http.Server
+	proxy  *Proxy
+	group  *livetrack.Group
+	addr   string
+}
+
+func (t *testProxy) shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = t.server.Shutdown(ctx)
+}
+
+func waitForExactTunnelCount(t *testing.T, proxy *Proxy, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if proxy.Tunnels.Count() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("Tunnels.Count: got %d, want %d after %s", proxy.Tunnels.Count(), want, timeout)
+}
+
+func waitForTunnelState(t *testing.T, proxy *Proxy, want livetrack.State, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if proxy.Tunnels.State() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("Tunnels.State: got %s, want %s after %s", proxy.Tunnels.State(), want, timeout)
+}
+
+func assertProviderTLSRequest(t *testing.T, conn net.Conn, reader *bufio.Reader, host string, path string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "https://"+host+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if err := req.Write(conn); err != nil {
+		t.Fatalf("write provider TLS request %s: %v", path, err)
+	}
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		t.Fatalf("read provider TLS response %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read provider TLS response body %s: %v", path, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status for %s = %d want %d; body=%q", path, resp.StatusCode, http.StatusOK, body)
+	}
+	if !bytes.Contains(body, []byte(path)) {
+		t.Fatalf("response for %s missing path marker: %q", path, body)
+	}
+}
+
+func assertProviderTLSRequestRejected(t *testing.T, conn net.Conn, reader *bufio.Reader, host string, path string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "https://"+host+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+	if err := req.Write(conn); err != nil {
+		return
+	}
+	resp, err := http.ReadResponse(reader, req)
+	if err == nil {
+		defer resp.Body.Close()
+		t.Fatalf("expected provider TLS request %s to fail during drain, got status %d", path, resp.StatusCode)
+	}
+}
+
+func newTestTunnelRegistry(group *livetrack.Group) *livetrack.Registry[TunnelMeta] {
+	return livetrack.Attach[TunnelMeta](group, livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[TunnelMeta]{
+		Component:     "mitm",
+		Concern:       "providers.mitm.lifecycle",
+		Log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:     5 * time.Millisecond,
+		CloserGrace:   200 * time.Millisecond,
+		ParallelClose: false,
+		Now:           nil,
+	})
+}
+
+func startTestProxy(t *testing.T) *testProxy {
+	t.Helper()
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	p := &Proxy{
+		log:             logger,
+		httpClient:      http.DefaultClient,
+		dialContext:     (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		certMu:          sync.Mutex{},
+		ca:              nil,
+		tlsClientConfig: nil,
+		store:           nil,
+		client:          "test",
+		Tunnels:         newTestTunnelRegistry(group),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: t.TempDir()},
+		base:            "http://" + listener.Addr().String(),
+		server:          nil,
+	}
+	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
+	p.server = server
+	go func() { _ = server.Serve(listener) }()
+	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
+}
+
+func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string, upstream *httptest.Server, store *capture.Store) *testProxy {
+	t.Helper()
+	RegisterProviderFirst(testCursorProvider{host: cursorHost})
+	t.Cleanup(func() {
+		UnregisterProvider(ProviderIDCursor)
+	})
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
+	caDir := t.TempDir()
+	ca, err := loadOrCreateCertAuthority(
+		filepath.Join(caDir, "ca.crt"),
+		filepath.Join(caDir, "ca.key"),
+		time.Now,
+	)
+	if err != nil {
+		t.Fatalf("load ca: %v", err)
+	}
+	// MITM wire legs land in the per-concern providers/mitm/wire.jsonl file;
+	// full request/response bodies are persisted to the shared SQLite capture
+	// store. The proxy no longer owns a separate raw-file writer.
+	logger := slog.New(newMITMCaptureTestHandler(t, captureDir))
+	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
+	p := &Proxy{
+		log:             logger,
+		httpClient:      http.DefaultClient,
+		dialContext:     mappedDialContext(cursorHost+":443", upstreamAddr),
+		certMu:          sync.Mutex{},
+		ca:              ca,
+		tlsClientConfig: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}},
+		store:           store,
+		client:          "test",
+		Tunnels:         newTestTunnelRegistry(group),
+		requestLog:      logevent.NewEmitter(slogger.WithConcern(logger, slogger.ConcernProviderMITMWire), nil),
+		mu:              sync.RWMutex{},
+		cfg:             config.MITMConfig{CaptureDir: captureDir},
+		base:            "http://" + listener.Addr().String(),
+		server:          nil,
+	}
+	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
+	p.server = server
+	go func() { _ = server.Serve(listener) }()
+	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
+}
+
+type testCursorProvider struct {
+	id   ProviderID
+	host string
+}
+
+func (p testCursorProvider) ID() ProviderID {
+	if p.id != ProviderIDUnknown {
+		return p.id
+	}
+	return ProviderIDCursor
+}
+
+func (p testCursorProvider) ClassifyConnect(host string) ConnectClaim {
+	return ConnectClaim{
+		Claimed:    host == p.host || p.host == "",
+		Host:       host,
+		ProviderID: p.ID(),
+	}
+}
+
+func (p testCursorProvider) ClassifyPlain(path string) PlainRouteClaim {
+	return PlainRouteClaim{
+		Claimed:     false,
+		Provider:    "",
+		UpstreamURL: "",
+	}
+}
+
+func (p testCursorProvider) ExtractIdentity(headers http.Header) IdentityContribution {
+	facet := testCursorFacet{
+		RequestID:         headers.Get("x-request-id"),
+		OriginalRequestID: headers.Get("x-original-request-id"),
+		SessionID:         headers.Get("x-session-id"),
+	}
+	return IdentityContribution{
+		PreferredRequestID:         headers.Get("x-request-id"),
+		PreferredUpstreamRequestID: headers.Get("x-original-request-id"),
+		SessionID:                  headers.Get("x-session-id"),
+		Facet:                      facet,
+	}
+}
+
+type testCursorFacet struct {
+	RequestID         string
+	OriginalRequestID string
+	SessionID         string
+}
+
+func (f testCursorFacet) FacetKey() string {
+	return "cursor"
+}
+
+func (f testCursorFacet) FacetAttrs() []slog.Attr {
+	return []slog.Attr{
+		slog.String("request_id", f.RequestID),
+		slog.String("original_request_id", f.OriginalRequestID),
+		slog.String("session_id", f.SessionID),
+	}
+}
+
+func (f testCursorFacet) SinkHints() logevent.SinkHints {
+	return logevent.SinkHints{
+		NeedsProviderSidecar: false,
+	}
+}
+
+func mappedDialContext(from string, to string) func(context.Context, string, string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	return func(ctx context.Context, network string, address string) (net.Conn, error) {
+		if address == from {
+			address = to
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+}
+
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
+func cursorBidiAppendPayload(requestID string, seqno uint64, payload []byte) []byte {
+	var out []byte
+	out = appendProtoString(out, 1, requestID)
+	out = appendProtoVarint(out, 2, seqno)
+	out = appendProtoBytes(out, 3, payload)
+	return out
+}
+
+func readCaptureJSONL(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	raw := readFile(t, path)
+	lines := bytes.Split(bytes.TrimSpace(raw), []byte("\n"))
+	records := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatalf("unmarshal capture record: %v\n%s", err, line)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return raw
+}
+
+// waitForCaptureRecordWithLeg polls the per-concern wire file until at
+// least one JSONL record carries the wanted leg, then returns every
+// parsed record. The capture leg is emitted from the tunnel goroutine
+// after the response is streamed to the client, so a bare file-exists
+// wait can race ahead of the capture-index write.
+func waitForCaptureRecordWithLeg(t *testing.T, path string, leg logevent.Leg) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if raw, err := os.ReadFile(path); err == nil {
+			records := make([]map[string]any, 0)
+			for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+				if len(line) == 0 {
+					continue
+				}
+				var record map[string]any
+				if err := json.Unmarshal(line, &record); err != nil {
+					continue
+				}
+				records = append(records, record)
+			}
+			for _, record := range records {
+				if record["leg"] == string(leg) {
+					return records
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for capture record with leg %s at %s", leg, path)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func reverse(s string) string {
+	b := []byte(s)
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
+	return string(b)
+}
+
+// TestSpliceConnectionsTouchesSessionOnWrite drives a pair of
+// net.Pipe connections through spliceConnections, sends bytes in one
+// direction at a time, and asserts the registered livetrack session's
+// IdleSince drops back under 10ms after each successful write. The
+// test exists so a refactor that drops the touchOnWrite wrapper from
+// spliceConnections fails here instead of silently regressing the
+// daemon reload-drain idle-grace behavior.
+func TestSpliceConnectionsTouchesSessionOnWrite(t *testing.T) {
+	t.Parallel()
+	registry := livetrack.Attach[TunnelMeta](livetrack.NewGroup(livetrack.GroupOptions{Log: nil}), livetrack.MemberSpec{
+		Phase:         livetrack.PhaseIngress,
+		QuietRelevant: true,
+		CancelNoWait:  false,
+	}, livetrack.Options[TunnelMeta]{
+		Component:   "test",
+		Concern:     "test.splice.touch",
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		PollEvery:   5 * time.Millisecond,
+		CloserGrace: 100 * time.Millisecond,
+	})
+	clientLocal, clientRemote := net.Pipe()
+	upstreamLocal, upstreamRemote := net.Pipe()
+	sess, err := registry.Register(context.Background(), "splice.test", TunnelMeta{
+		ConnectHost:   "test.host",
+		UpstreamAddr:  "test.host:443",
+		CaptureFile:   "",
+		KeepaliveSeen: false,
+	}, newTunnelCloser(&connCloser{conn: clientLocal}, &connCloser{conn: upstreamLocal}))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Sleep so initial IdleSince comfortably exceeds 10ms before any
+	// byte flows, giving the post-write assertion something to drop
+	// against.
+	time.Sleep(15 * time.Millisecond)
+	if before := sess.IdleSince(time.Now()); before < 10*time.Millisecond {
+		t.Fatalf("pre-splice idle: got %v, want >= 10ms (test fixture timing)", before)
+	}
+
+	spliceDone := make(chan struct{})
+	go func() {
+		defer close(spliceDone)
+		_, _ = spliceConnections(clientLocal, upstreamLocal, sess)
+	}()
+
+	// Send one byte from client to upstream and drain it on the
+	// remote side. The corresponding spliceConnections goroutine
+	// writes into upstreamLocal via touchOnWrite, which fires
+	// sess.Touch on success.
+	go func() {
+		_, _ = clientRemote.Write([]byte("c"))
+	}()
+	readBuf := make([]byte, 1)
+	if _, err := upstreamRemote.Read(readBuf); err != nil {
+		t.Fatalf("upstream read after client write: %v", err)
+	}
+	// Allow the io.Copy goroutine in spliceConnections to return
+	// from its write call so Touch has fired.
+	deadlineCh := time.After(500 * time.Millisecond)
+	for sess.IdleSince(time.Now()) >= 10*time.Millisecond {
+		select {
+		case <-deadlineCh:
+			t.Fatalf("client->upstream touch never observed: idle=%v", sess.IdleSince(time.Now()))
+		default:
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Now drive a byte the other direction and confirm Touch fires
+	// from the downstream goroutine too.
+	preDown := sess.IdleSince(time.Now())
+	time.Sleep(15 * time.Millisecond)
+	if mid := sess.IdleSince(time.Now()); mid <= preDown {
+		t.Fatalf("idle should grow during silence: pre=%v mid=%v", preDown, mid)
+	}
+	go func() {
+		_, _ = upstreamRemote.Write([]byte("u"))
+	}()
+	if _, err := clientRemote.Read(readBuf); err != nil {
+		t.Fatalf("client read after upstream write: %v", err)
+	}
+	deadlineCh = time.After(500 * time.Millisecond)
+	for sess.IdleSince(time.Now()) >= 10*time.Millisecond {
+		select {
+		case <-deadlineCh:
+			t.Fatalf("upstream->client touch never observed: idle=%v", sess.IdleSince(time.Now()))
+		default:
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Close both ends so spliceConnections returns. clientRemote
+	// and upstreamRemote close together; the spliceConnections
+	// goroutines exit when both io.Copy calls return.
+	_ = clientRemote.Close()
+	_ = upstreamRemote.Close()
+	_ = clientLocal.Close()
+	_ = upstreamLocal.Close()
+	select {
+	case <-spliceDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("spliceConnections did not return after closing pipes")
+	}
+}
