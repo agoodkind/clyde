@@ -5,8 +5,6 @@ import (
 	"fmt"
 )
 
-const expectedBubbleSchemaVersion int = 3
-
 // CursorJSONDecodeError reports one failure while decoding Cursor's
 // undocumented, version-pinned on-disk JSON format.
 type CursorJSONDecodeError struct {
@@ -31,12 +29,6 @@ func DecodeComposerHeaderJSON(data []byte) (ComposerHeader, error) {
 		return ComposerHeader{}, CursorJSONDecodeError{Description: "composer header", Err: err}
 	}
 	return header, nil
-}
-
-// IsExpectedBubbleSchemaVersion reports whether a Cursor bubble `_v` field
-// matches the schema version this package expects.
-func IsExpectedBubbleSchemaVersion(version int) bool {
-	return version == expectedBubbleSchemaVersion
 }
 
 func decodeWorkspaceDescriptorJSON(data []byte) (workspaceDescriptor, error) {

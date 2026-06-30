@@ -3,7 +3,9 @@ package cursorstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 
 	_ "github.com/mattn/go-sqlite3" // database/sql driver "sqlite3"
@@ -13,6 +15,8 @@ import (
 type KVTableName string
 
 const (
+	concern = "providers.cursor.store"
+
 	// KVTableItemTable names Cursor's legacy ItemTable key-value table.
 	KVTableItemTable KVTableName = "ItemTable"
 	// KVTableCursorDiskKV names Cursor's cursorDiskKV key-value table.
@@ -49,10 +53,12 @@ func OpenReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	}).String()
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.sqlite_open_failed", "concern", concern, "path", path, "err", err)
 		return nil, fmt.Errorf("open cursor sqlite database %s: %w", path, err)
 	}
 	if pingErr := db.PingContext(ctx); pingErr != nil {
 		_ = db.Close()
+		slog.WarnContext(ctx, "providers.cursor.store.sqlite_ping_failed", "concern", concern, "path", path, "err", pingErr)
 		return nil, fmt.Errorf("ping cursor sqlite database %s: %w", path, pingErr)
 	}
 	return db, nil
@@ -67,6 +73,7 @@ func TableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 		table,
 	).Scan(&count)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.sqlite_master_query_failed", "concern", concern, "table", table, "err", err)
 		return false, fmt.Errorf("query sqlite_master for %s: %w", table, err)
 	}
 	return count > 0, nil
@@ -86,13 +93,17 @@ func ReadKVValue(ctx context.Context, db *sql.DB, tableName KVTableName, key str
 		return nil, false, nil
 	}
 
-	query := fmt.Sprintf("SELECT value FROM %s WHERE key = ?", sqlTableName)
+	query, err := tableName.selectValueByKeyQuery()
+	if err != nil {
+		return nil, false, err
+	}
 	var value []byte
 	err = db.QueryRowContext(ctx, query, key).Scan(&value)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
 		}
+		slog.WarnContext(ctx, "providers.cursor.store.kv_value_scan_failed", "concern", concern, "table", sqlTableName, "key", key, "err", err)
 		return nil, false, fmt.Errorf("scan cursor %s value for key %q: %w", sqlTableName, key, err)
 	}
 	return append([]byte(nil), value...), true, nil
@@ -113,9 +124,13 @@ func ReadKVRowsByPrefix(ctx context.Context, db *sql.DB, tableName KVTableName, 
 		return nil, nil
 	}
 
-	query := fmt.Sprintf("SELECT key, value FROM %s WHERE key LIKE ? || '%%' ORDER BY key", sqlTableName)
+	query, err := tableName.selectRowsByPrefixQuery()
+	if err != nil {
+		return nil, err
+	}
 	rows, err := db.QueryContext(ctx, query, keyPrefix)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.kv_rows_query_failed", "concern", concern, "table", sqlTableName, "key_prefix", keyPrefix, "err", err)
 		return nil, fmt.Errorf("query cursor %s rows by prefix %q: %w", sqlTableName, keyPrefix, err)
 	}
 	defer func() { _ = rows.Close() }()
@@ -124,12 +139,14 @@ func ReadKVRowsByPrefix(ctx context.Context, db *sql.DB, tableName KVTableName, 
 	for rows.Next() {
 		var row KVRow
 		if err := rows.Scan(&row.Key, &row.Value); err != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.kv_row_scan_failed", "concern", concern, "table", sqlTableName, "key_prefix", keyPrefix, "err", err)
 			return nil, fmt.Errorf("scan cursor %s row by prefix %q: %w", sqlTableName, keyPrefix, err)
 		}
 		row.Value = append([]byte(nil), row.Value...)
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.kv_rows_iterate_failed", "concern", concern, "table", sqlTableName, "key_prefix", keyPrefix, "err", err)
 		return nil, fmt.Errorf("iterate cursor %s rows by prefix %q: %w", sqlTableName, keyPrefix, err)
 	}
 	return out, nil
@@ -141,6 +158,28 @@ func (tableName KVTableName) sqlTableName() (string, error) {
 		return string(KVTableItemTable), nil
 	case KVTableCursorDiskKV:
 		return string(KVTableCursorDiskKV), nil
+	default:
+		return "", UnknownKVTableNameError{TableName: tableName}
+	}
+}
+
+func (tableName KVTableName) selectValueByKeyQuery() (string, error) {
+	switch tableName {
+	case KVTableItemTable:
+		return "SELECT value FROM ItemTable WHERE key = ?", nil
+	case KVTableCursorDiskKV:
+		return "SELECT value FROM cursorDiskKV WHERE key = ?", nil
+	default:
+		return "", UnknownKVTableNameError{TableName: tableName}
+	}
+}
+
+func (tableName KVTableName) selectRowsByPrefixQuery() (string, error) {
+	switch tableName {
+	case KVTableItemTable:
+		return "SELECT key, value FROM ItemTable WHERE key LIKE ? || '%' ORDER BY key", nil
+	case KVTableCursorDiskKV:
+		return "SELECT key, value FROM cursorDiskKV WHERE key LIKE ? || '%' ORDER BY key", nil
 	default:
 		return "", UnknownKVTableNameError{TableName: tableName}
 	}

@@ -43,12 +43,3 @@ func TestDecodeComposerHeaderJSONWrapsInvalidJSON(t *testing.T) {
 		t.Fatalf("error = %T, want CursorJSONDecodeError", err)
 	}
 }
-
-func TestIsExpectedBubbleSchemaVersionReportsExpectedVersion(t *testing.T) {
-	if !IsExpectedBubbleSchemaVersion(3) {
-		t.Fatal("IsExpectedBubbleSchemaVersion(3) = false, want true")
-	}
-	if IsExpectedBubbleSchemaVersion(2) {
-		t.Fatal("IsExpectedBubbleSchemaVersion(2) = true, want false")
-	}
-}

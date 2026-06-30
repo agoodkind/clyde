@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -36,6 +37,7 @@ func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (Com
 
 	value, found, err := ReadKVValue(ctx, db, KVTableCursorDiskKV, composerDataKey(composerID))
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_read_failed", "concern", concern, "composer_id", composerID, "err", err)
 		return emptyHeader, false, fmt.Errorf("read cursor composer header %q: %w", composerID, err)
 	}
 	if !found {
@@ -44,6 +46,7 @@ func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (Com
 
 	header, err := DecodeComposerHeaderJSON(value)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_header_decode_failed", "concern", concern, "composer_id", composerID, "err", err)
 		return emptyHeader, false, fmt.Errorf("decode cursor composer header %q: %w", composerID, err)
 	}
 	return header, true, nil
@@ -53,6 +56,7 @@ func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (Com
 func ListComposerIDs(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKeyPrefix)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.composer_ids_list_failed", "concern", concern, "key_prefix", composerDataKeyPrefix, "err", err)
 		return nil, fmt.Errorf("list cursor composer ids: %w", err)
 	}
 	composerIDs := make([]string, 0, len(rows))

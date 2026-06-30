@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -71,6 +72,7 @@ func (root DataRoot) ListWorkspaceEntries() ([]WorkspaceEntry, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
+		slog.Warn("providers.cursor.store.workspace_storage_read_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
 		return nil, fmt.Errorf("read cursor workspace storage dir %s: %w", root.WorkspaceStorageDir, err)
 	}
 
@@ -106,14 +108,17 @@ func (root DataRoot) ListWorkspaceEntries() ([]WorkspaceEntry, error) {
 func ReadWorkspaceFolderPath(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		slog.Warn("providers.cursor.store.workspace_descriptor_read_failed", "concern", concern, "path", path, "err", err)
 		return "", fmt.Errorf("read cursor workspace descriptor %s: %w", path, err)
 	}
 	descriptor, err := decodeWorkspaceDescriptorJSON(data)
 	if err != nil {
+		slog.Warn("providers.cursor.store.workspace_descriptor_decode_failed", "concern", concern, "path", path, "err", err)
 		return "", fmt.Errorf("decode cursor workspace descriptor %s: %w", path, err)
 	}
 	folderPath, err := fileURIToPath(descriptor.Folder)
 	if err != nil {
+		slog.Warn("providers.cursor.store.workspace_folder_decode_failed", "concern", concern, "path", path, "err", err)
 		return "", fmt.Errorf("decode cursor workspace folder %s: %w", path, err)
 	}
 	return folderPath, nil
@@ -154,37 +159,40 @@ func resolveDataDirList(ctx context.Context, dataDirs string) ([]string, error) 
 }
 
 func defaultCursorDataDir(ctx context.Context) (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
+	if runtime.GOOS == "darwin" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
 		return filepath.Join(userHome, "Library", "Application Support", "Cursor", "User"), nil
-	case "linux":
+	}
+	if runtime.GOOS == "linux" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
 		return filepath.Join(userHome, ".config", "Cursor", "User"), nil
-	case "windows":
+	}
+	if runtime.GOOS == "windows" {
 		appData := strings.TrimSpace(os.Getenv("APPDATA"))
 		if appData != "" {
 			return filepath.Join(appData, "Cursor", "User"), nil
 		}
 		userHome, err := os.UserHomeDir()
 		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
 			return "", fmt.Errorf("resolve cursor home: %w", err)
 		}
 		return filepath.Join(userHome, "AppData", "Roaming", "Cursor", "User"), nil
-	default:
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve cursor home for %s: %w", runtime.GOOS, err)
-		}
-		_ = ctx
-		return filepath.Join(userHome, ".config", "Cursor", "User"), nil
 	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.home_resolve_failed", "concern", concern, "goos", runtime.GOOS, "err", err)
+		return "", fmt.Errorf("resolve cursor home for %s: %w", runtime.GOOS, err)
+	}
+	return filepath.Join(userHome, ".config", "Cursor", "User"), nil
 }
 
 func fileExists(path string) bool {
@@ -199,6 +207,7 @@ func fileURIToPath(folder string) (string, error) {
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
+		slog.Warn("providers.cursor.store.file_uri_parse_failed", "concern", concern, "folder", folder, "err", err)
 		return "", fmt.Errorf("parse file uri %q: %w", folder, err)
 	}
 	if parsed.Scheme != "file" {
