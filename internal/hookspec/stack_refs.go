@@ -5,3 +5,7 @@ var (
 	_ = shellQuote
 	_ = isShellBareWord
 )
+
+func init() {
+	_ = shellCommand("", nil)
+}
