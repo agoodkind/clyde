@@ -57,7 +57,7 @@ func TestInstallerCreatesUserClaudeSettings(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("Changed = false, want true")
 	}
-	if !slices.Equal(result.Installed, []HookID{HookIDClaudeCodeReorientAfterCompact}) {
+	if !slices.Equal(result.Installed, []HookID{HookIDReorientBeforeCompact, HookIDReorientAfterCompact}) {
 		t.Fatalf("installed = %#v", result.Installed)
 	}
 
