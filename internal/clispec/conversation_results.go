@@ -4,6 +4,7 @@ import (
 	"time"
 
 	conv "goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/hookspec"
 )
 
 type listConversationsOutput struct {
@@ -144,6 +145,14 @@ type exportTranscriptOutput struct {
 	Copied         bool   `json:"copied,omitempty"`
 }
 
+type installHooksOutput struct {
+	SettingsPath string   `json:"settings_path"`
+	Installed    []string `json:"installed"`
+	Changed      bool     `json:"changed"`
+	DryRun       bool     `json:"dry_run,omitempty"`
+	Preview      string   `json:"preview,omitempty"`
+}
+
 func (listConversationsOutput) isClispecStructuredPayload()   {}
 func (getConversationOutput) isClispecStructuredPayload()     {}
 func (getContextOutput) isClispecStructuredPayload()          {}
@@ -151,6 +160,7 @@ func (conversationInfoOutput) isClispecStructuredPayload()    {}
 func (searchConversationsOutput) isClispecStructuredPayload() {}
 func (reorientPageOutput) isClispecStructuredPayload()        {}
 func (exportTranscriptOutput) isClispecStructuredPayload()    {}
+func (installHooksOutput) isClispecStructuredPayload()        {}
 
 func listConversationsOutputFromDomain(result conv.ListResult) listConversationsOutput {
 	return listConversationsOutput{
@@ -308,4 +318,22 @@ func optionalReorientConversationRefOutputFromDomain(ref *conv.ReorientConversat
 		Title:         ref.Title,
 		WorkspaceRoot: ref.WorkspaceRoot,
 	}
+}
+
+func installHooksOutputFromResult(result hookspec.InstallResult) installHooksOutput {
+	installed := make([]string, 0, len(result.Installed))
+	for _, id := range result.Installed {
+		installed = append(installed, string(id))
+	}
+	output := installHooksOutput{
+		SettingsPath: result.SettingsPath,
+		Installed:    installed,
+		Changed:      result.Changed,
+		DryRun:       result.DryRun,
+		Preview:      "",
+	}
+	if result.DryRun {
+		output.Preview = string(result.Preview)
+	}
+	return output
 }
