@@ -4,6 +4,7 @@ var (
 	_ = shellCommand
 	_ = shellQuote
 	_ = isShellBareWord
+	_ = SupportedClients
 )
 
 func init() {
