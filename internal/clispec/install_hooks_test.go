@@ -11,7 +11,7 @@ import (
 	"goodkind.io/clyde/internal/cli/output"
 )
 
-func TestInstallHooksCommandWritesUserClaudeSettings(t *testing.T) {
+func TestInstallHooksCommandWritesUserHookSettings(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
 
@@ -32,14 +32,35 @@ func TestInstallHooksCommandWritesUserClaudeSettings(t *testing.T) {
 		t.Fatalf("execute install hooks: %v", err)
 	}
 
-	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
-	body, err := os.ReadFile(settingsPath)
+	claudePath := filepath.Join(homeDir, ".claude", "settings.json")
+	claudeBody, err := os.ReadFile(claudePath)
 	if err != nil {
-		t.Fatalf("ReadFile settings: %v", err)
+		t.Fatalf("ReadFile Claude settings: %v", err)
 	}
-	if !bytes.Contains(body, []byte("reorient-after-compact")) ||
-		!bytes.Contains(body, []byte("reorient-before-compact")) {
-		t.Fatalf("settings missing reorient hook:\n%s", string(body))
+	if bytes.Contains(claudeBody, []byte("claude-code-reorient-after-compact")) {
+		t.Fatalf("Claude settings retained legacy hook id:\n%s", string(claudeBody))
+	}
+	if !bytes.Contains(claudeBody, []byte(`"command": "/usr/local/bin/clyde"`)) ||
+		!bytes.Contains(claudeBody, []byte(`"reorient-after-compact"`)) ||
+		!bytes.Contains(claudeBody, []byte(`"reorient-before-compact"`)) {
+		t.Fatalf("Claude settings missing reorient hooks:\n%s", string(claudeBody))
+	}
+	codexBody, err := os.ReadFile(filepath.Join(homeDir, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile Codex settings: %v", err)
+	}
+	if !bytes.Contains(codexBody, []byte("[[hooks.session_start]]")) ||
+		!bytes.Contains(codexBody, []byte("[[hooks.pre_compact]]")) ||
+		!bytes.Contains(codexBody, []byte(`command = "/usr/local/bin/clyde hooks run reorient-after-compact"`)) ||
+		!bytes.Contains(codexBody, []byte(`command = "/usr/local/bin/clyde hooks run reorient-before-compact"`)) {
+		t.Fatalf("Codex settings missing expected hooks:\n%s", string(codexBody))
+	}
+	cursorBody, err := os.ReadFile(filepath.Join(homeDir, ".cursor", "hooks.json"))
+	if err != nil {
+		t.Fatalf("ReadFile Cursor hooks: %v", err)
+	}
+	if !bytes.Contains(cursorBody, []byte(`/usr/local/bin/clyde hooks run reorient-stop-followup`)) {
+		t.Fatalf("Cursor hooks missing stop followup hook:\n%s", string(cursorBody))
 	}
 	if !bytes.Contains(out.Bytes(), []byte("installed hooks")) {
 		t.Fatalf("output missing install summary:\n%s", out.String())
