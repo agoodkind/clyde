@@ -18,9 +18,19 @@ func appendSyntheticPreCompactCheckpoint(checkpoints []CompactionCheckpoint, mes
 		HeadUUID:                "",
 		AnchorUUID:              "",
 		TailUUID:                "",
-		MessagesSummarized:      len(ordinaryMessages(messages)),
+		MessagesSummarized:      countReorientConversationMessages(messages),
 		ReplacementHistoryCount: 0,
 	})
+}
+
+func countReorientConversationMessages(messages []transcript.Message) int {
+	count := 0
+	for _, message := range messages {
+		if isReorientConversationMessage(message) {
+			count++
+		}
+	}
+	return count
 }
 
 func latestSyntheticPreCompactCheckpoint(checkpoints []CompactionCheckpoint) (int, *CompactionCheckpoint) {
