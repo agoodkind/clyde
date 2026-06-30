@@ -9,4 +9,5 @@ var (
 
 func init() {
 	_ = shellCommand("", nil)
+	_ = SupportedClients()
 }
