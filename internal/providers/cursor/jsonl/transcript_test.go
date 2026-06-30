@@ -20,13 +20,17 @@ func TestStreamMessagesYieldsMessagesInOrderAndSkipsEventsAndMalformedLines(t *t
 	}
 	writeTestFile(t, path, strings.Join(lines, "\n")+"\n")
 
-	messages, err := ReadMessages(path)
+	messages := make([]TranscriptMessage, 0)
+	err := StreamMessages(path, func(message TranscriptMessage) error {
+		messages = append(messages, message)
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("ReadMessages returned error: %v", err)
+		t.Fatalf("StreamMessages returned error: %v", err)
 	}
 
 	if len(messages) != 2 {
-		t.Fatalf("ReadMessages returned %d messages, want 2: %#v", len(messages), messages)
+		t.Fatalf("StreamMessages returned %d messages, want 2: %#v", len(messages), messages)
 	}
 	if messages[0].Role != RoleUser {
 		t.Fatalf("first role = %q, want %q", messages[0].Role, RoleUser)
@@ -70,13 +74,17 @@ func TestStreamMessagesParsesLineLongerThanScannerDefault(t *testing.T) {
 	line := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"write_file","input":{"content":"` + longValue + `"}}]}}`
 	writeTestFile(t, path, line+"\n")
 
-	messages, err := ReadMessages(path)
+	messages := make([]TranscriptMessage, 0)
+	err := StreamMessages(path, func(message TranscriptMessage) error {
+		messages = append(messages, message)
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("ReadMessages returned error: %v", err)
+		t.Fatalf("StreamMessages returned error: %v", err)
 	}
 
 	if len(messages) != 1 {
-		t.Fatalf("ReadMessages returned %d messages, want 1", len(messages))
+		t.Fatalf("StreamMessages returned %d messages, want 1", len(messages))
 	}
 	var toolInput struct {
 		Content string `json:"content"`

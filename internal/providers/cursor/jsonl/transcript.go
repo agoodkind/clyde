@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,6 +74,7 @@ func (e DecodeError) Unwrap() error {
 func ScanHeader(path string) (TranscriptHeader, error) {
 	file, err := os.Open(path)
 	if err != nil {
+		slog.Warn("providers.cursor.jsonl.transcript_open_failed", "concern", concern, "path", path, "err", err)
 		return TranscriptHeader{}, fmt.Errorf("open cursor transcript %s: %w", path, err)
 	}
 	defer func() { _ = file.Close() }()
@@ -105,6 +107,7 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 			return header, nil
 		}
 		if readErr != nil {
+			slog.Warn("providers.cursor.jsonl.transcript_read_failed", "concern", concern, "path", path, "line", lineNumber, "err", readErr)
 			return TranscriptHeader{}, fmt.Errorf("read cursor transcript %s line %d: %w", path, lineNumber, readErr)
 		}
 	}
@@ -114,6 +117,7 @@ func ScanHeader(path string) (TranscriptHeader, error) {
 func StreamMessages(path string, fn func(TranscriptMessage) error) error {
 	file, err := os.Open(path)
 	if err != nil {
+		slog.Warn("providers.cursor.jsonl.transcript_open_failed", "concern", concern, "path", path, "err", err)
 		return fmt.Errorf("open cursor transcript %s: %w", path, err)
 	}
 	defer func() { _ = file.Close() }()
@@ -129,6 +133,7 @@ func StreamMessages(path string, fn func(TranscriptMessage) error) error {
 		}
 		if ok {
 			if err := fn(message); err != nil {
+				slog.Warn("providers.cursor.jsonl.transcript_stream_failed", "concern", concern, "path", path, "line", lineNumber, "err", err)
 				return fmt.Errorf("stream cursor transcript %s line %d: %w", path, lineNumber, err)
 			}
 		}
@@ -136,22 +141,10 @@ func StreamMessages(path string, fn func(TranscriptMessage) error) error {
 			return nil
 		}
 		if readErr != nil {
+			slog.Warn("providers.cursor.jsonl.transcript_read_failed", "concern", concern, "path", path, "line", lineNumber, "err", readErr)
 			return fmt.Errorf("read cursor transcript %s line %d: %w", path, lineNumber, readErr)
 		}
 	}
-}
-
-// ReadMessages reads all chat messages from a Cursor transcript.
-func ReadMessages(path string) ([]TranscriptMessage, error) {
-	messages := make([]TranscriptMessage, 0)
-	err := StreamMessages(path, func(message TranscriptMessage) error {
-		messages = append(messages, message)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return messages, nil
 }
 
 func decodeMessageLine(path string, lineNumber int, rawBytes []byte) (TranscriptMessage, bool, error) {

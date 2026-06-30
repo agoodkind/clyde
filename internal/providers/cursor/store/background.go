@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 )
@@ -68,6 +69,7 @@ func DecodeBackgroundComposerWindowMappingJSON(data []byte) (BackgroundComposerW
 func ListBackgroundComposers(ctx context.Context, globalDB *sql.DB) ([]BackgroundComposer, error) {
 	rows, err := ReadKVRowsByPrefix(ctx, globalDB, KVTableItemTable, backgroundComposerKeyPrefix)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.background_composers_list_failed", "concern", concern, "key_prefix", backgroundComposerKeyPrefix, "err", err)
 		return nil, fmt.Errorf("list cursor background composer rows: %w", err)
 	}
 

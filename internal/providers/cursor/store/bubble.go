@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
 const bubbleKeyPrefix = "bubbleId:"
@@ -30,16 +31,16 @@ type Bubble struct {
 // BubbleThinking models the consumed assistant reasoning fields in a Cursor
 // bubble payload.
 type BubbleThinking struct {
-	Text string
+	Text string `json:"text"`
 }
 
 // BubbleToolCall models the consumed tool call fields in a Cursor bubble
 // payload.
 type BubbleToolCall struct {
-	Name    string
-	RawArgs string
-	Result  string
-	Status  string
+	Name    string `json:"name"`
+	RawArgs string `json:"rawArgs"`
+	Result  string `json:"result"`
+	Status  string `json:"status"`
 }
 
 type bubbleWire struct {
@@ -54,7 +55,7 @@ type bubbleWire struct {
 // DecodeBubbleJSON decodes one Cursor bubble value. A bubble whose `_v` schema
 // version differs from the expected version is still decoded best-effort
 // because the consumed fields are stable across versions; callers can detect a
-// mismatch via the returned SchemaVersion and IsExpectedBubbleSchemaVersion.
+// mismatch via the returned SchemaVersion.
 func DecodeBubbleJSON(data []byte) (Bubble, error) {
 	var wire bubbleWire
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -77,6 +78,7 @@ func ReadBubble(ctx context.Context, db *sql.DB, composerID string, bubbleID str
 
 	value, found, err := ReadKVValue(ctx, db, KVTableCursorDiskKV, bubbleKey(composerID, bubbleID))
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.bubble_read_failed", "concern", concern, "composer_id", composerID, "bubble_id", bubbleID, "err", err)
 		return emptyBubble, false, fmt.Errorf("read cursor bubble %q for composer %q: %w", bubbleID, composerID, err)
 	}
 	if !found {
@@ -85,6 +87,7 @@ func ReadBubble(ctx context.Context, db *sql.DB, composerID string, bubbleID str
 
 	bubble, err := DecodeBubbleJSON(value)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.bubble_decode_failed", "concern", concern, "composer_id", composerID, "bubble_id", bubbleID, "err", err)
 		return emptyBubble, false, fmt.Errorf("decode cursor bubble %q for composer %q: %w", bubbleID, composerID, err)
 	}
 	return bubble, true, nil
@@ -97,6 +100,7 @@ func LoadBubblesForComposer(ctx context.Context, db *sql.DB, header ComposerHead
 	for _, bubbleRef := range header.FullConversationHeadersOnly {
 		bubble, found, err := ReadBubble(ctx, db, header.ComposerID, bubbleRef.BubbleID)
 		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.store.composer_bubbles_load_failed", "concern", concern, "composer_id", header.ComposerID, "bubble_id", bubbleRef.BubbleID, "err", err)
 			return nil, fmt.Errorf("load cursor bubbles for composer %q: %w", header.ComposerID, err)
 		}
 		if !found {

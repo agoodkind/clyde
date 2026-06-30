@@ -1,8 +1,10 @@
+// Package cursorjsonl reads Cursor's modern JSONL transcript artifacts.
 package cursorjsonl
 
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +14,8 @@ import (
 )
 
 const (
+	concern = "providers.cursor.jsonl"
+
 	cursorProjectsDirsEnvVar = "CLYDE_CURSOR_PROJECTS_DIRS"
 	cursorProjectsSubdir     = ".cursor/projects"
 	agentTranscriptsDirName  = "agent-transcripts"
@@ -37,6 +41,7 @@ func ResolveProjectRoots() ([]ProjectRoot, error) {
 	if configuredRoots == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
+			slog.Warn("providers.cursor.jsonl.projects_home_resolve_failed", "concern", concern, "err", err)
 			return nil, fmt.Errorf("resolve cursor projects home: %w", err)
 		}
 		configuredRoots = filepath.Join(userHome, cursorProjectsSubdir)
@@ -89,6 +94,7 @@ func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {
 			return nil
 		})
 		if err != nil {
+			slog.Warn("providers.cursor.jsonl.transcript_root_walk_failed", "concern", concern, "path", root.Path, "err", err)
 			return nil, fmt.Errorf("walk cursor transcript root %s: %w", root.Path, err)
 		}
 	}
@@ -110,25 +116,27 @@ func WorkspacePathFromProjectKey(projectKey string) string {
 }
 
 func transcriptFileFromPath(rootPath string, path string) (TranscriptFile, bool) {
+	var emptyFile TranscriptFile
+
 	if filepath.Ext(path) != jsonlExtension {
-		return TranscriptFile{}, false
+		return emptyFile, false
 	}
 	relativePath, err := filepath.Rel(rootPath, path)
 	if err != nil {
-		return TranscriptFile{}, false
+		return emptyFile, false
 	}
 	parts := splitPathParts(relativePath)
 	if len(parts) != 4 {
-		return TranscriptFile{}, false
+		return emptyFile, false
 	}
 	projectKey := parts[0]
 	if parts[1] != agentTranscriptsDirName {
-		return TranscriptFile{}, false
+		return emptyFile, false
 	}
 	conversationID := parts[2]
 	filenameStem := strings.TrimSuffix(parts[3], jsonlExtension)
 	if conversationID == "" || filenameStem != conversationID {
-		return TranscriptFile{}, false
+		return emptyFile, false
 	}
 	return TranscriptFile{
 		Path:           path,

@@ -248,20 +248,12 @@ func discoverJSONL(
 				Mtime: info.ModTime(),
 			},
 		})
-		discovered[file.Path] = discoveredArtifact{
-			Kind:           discoveredKindJSONL,
-			Path:           file.Path,
-			ConversationID: file.ConversationID,
-			ProjectKey:     file.ProjectKey,
-			RootDir:        "",
-			ComposerID:     "",
-			ComposerHeader: cursorstore.ComposerHeader{},
-			ComposerInfo:   cursorstore.WorkspaceComposerInfo{},
-			HasInfo:        false,
-			IsBackground:   false,
-			LegacyTab:      cursorstore.LegacyChatTab{},
-			WorkspaceRoot:  "",
-		}
+		var artifact discoveredArtifact
+		artifact.Kind = discoveredKindJSONL
+		artifact.Path = file.Path
+		artifact.ConversationID = file.ConversationID
+		artifact.ProjectKey = file.ProjectKey
+		discovered[file.Path] = artifact
 		seenConversationIDs[file.ConversationID] = true
 	}
 	return candidates, nil
@@ -332,20 +324,16 @@ func discoverComposersForRoot(
 				Mtime: msToTime(header.LastUpdatedAt),
 			},
 		})
-		discovered[path] = discoveredArtifact{
-			Kind:           discoveredKindComposer,
-			Path:           path,
-			ConversationID: "",
-			ProjectKey:     "",
-			RootDir:        root.RootDir,
-			ComposerID:     composerID,
-			ComposerHeader: header,
-			ComposerInfo:   info,
-			HasInfo:        hasInfo,
-			IsBackground:   backgroundIDs[composerID],
-			LegacyTab:      cursorstore.LegacyChatTab{},
-			WorkspaceRoot:  "",
-		}
+		var artifact discoveredArtifact
+		artifact.Kind = discoveredKindComposer
+		artifact.Path = path
+		artifact.RootDir = root.RootDir
+		artifact.ComposerID = composerID
+		artifact.ComposerHeader = header
+		artifact.ComposerInfo = info
+		artifact.HasInfo = hasInfo
+		artifact.IsBackground = backgroundIDs[composerID]
+		discovered[path] = artifact
 	}
 	return candidates
 }
@@ -406,20 +394,12 @@ func discoverLegacyForEntry(
 				Mtime: time.Time{},
 			},
 		})
-		discovered[path] = discoveredArtifact{
-			Kind:           discoveredKindLegacy,
-			Path:           path,
-			ConversationID: "",
-			ProjectKey:     "",
-			RootDir:        "",
-			ComposerID:     "",
-			ComposerHeader: cursorstore.ComposerHeader{},
-			ComposerInfo:   cursorstore.WorkspaceComposerInfo{},
-			HasInfo:        false,
-			IsBackground:   false,
-			LegacyTab:      tab,
-			WorkspaceRoot:  workspaceRoot,
-		}
+		var artifact discoveredArtifact
+		artifact.Kind = discoveredKindLegacy
+		artifact.Path = path
+		artifact.LegacyTab = tab
+		artifact.WorkspaceRoot = workspaceRoot
+		discovered[path] = artifact
 	}
 	return candidates
 }
@@ -492,51 +472,43 @@ func (p *Parser) resolveDiscovered(path string) (discoveredArtifact, error) {
 func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifact, error) {
 	if _, err := os.Stat(path); err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.stat_jsonl_failed", "concern", concern, "path", path, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("stat cursor transcript %s: %w", path, err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("stat cursor transcript %s: %w", path, err)
 	}
 	roots, err := cursorjsonl.ResolveProjectRoots()
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.resolve_project_roots_failed", "concern", concern, "path", path, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("resolve cursor project roots: %w", err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("resolve cursor project roots: %w", err)
 	}
 	files, err := cursorjsonl.DiscoverTranscriptFiles(roots)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.discover_transcripts_failed", "concern", concern, "path", path, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("discover cursor transcript files: %w", err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("discover cursor transcript files: %w", err)
 	}
 	for _, file := range files {
 		if file.Path != path {
 			continue
 		}
-		return discoveredArtifact{
-			Kind:           discoveredKindJSONL,
-			Path:           file.Path,
-			ConversationID: file.ConversationID,
-			ProjectKey:     file.ProjectKey,
-			RootDir:        "",
-			ComposerID:     "",
-			ComposerHeader: cursorstore.ComposerHeader{},
-			ComposerInfo:   cursorstore.WorkspaceComposerInfo{},
-			HasInfo:        false,
-			IsBackground:   false,
-			LegacyTab:      cursorstore.LegacyChatTab{},
-			WorkspaceRoot:  "",
-		}, nil
+		var artifact discoveredArtifact
+		artifact.Kind = discoveredKindJSONL
+		artifact.Path = file.Path
+		artifact.ConversationID = file.ConversationID
+		artifact.ProjectKey = file.ProjectKey
+		return artifact, nil
 	}
 	slog.WarnContext(ctx, "providers.cursor.parser.jsonl_path_not_found", "concern", concern, "path", path)
-	return discoveredArtifact{}, fmt.Errorf("cursor transcript path not discovered: %s", path)
+	return emptyDiscoveredArtifact(), fmt.Errorf("cursor transcript path not discovered: %s", path)
 }
 
 func resolveVirtualDiscovered(ctx context.Context, path string) (discoveredArtifact, error) {
 	virtualPath, err := ParseVirtualPath(path)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.virtual_path_parse_failed", "concern", concern, "path", path, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("parse cursor virtual path: %w", err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("parse cursor virtual path: %w", err)
 	}
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", path, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("resolve cursor data roots: %w", err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 	for _, root := range roots {
 		if RootHash(root.RootDir) != virtualPath.RootHash {
@@ -550,7 +522,7 @@ func resolveVirtualDiscovered(ctx context.Context, path string) (discoveredArtif
 		}
 	}
 	slog.WarnContext(ctx, "providers.cursor.parser.virtual_path_not_found", "concern", concern, "path", path, "kind", virtualPath.Kind, "id", virtualPath.ID)
-	return discoveredArtifact{}, fmt.Errorf("cursor path not discovered: %s", path)
+	return emptyDiscoveredArtifact(), fmt.Errorf("cursor path not discovered: %s", path)
 }
 
 func resolveComposerDiscovered(
@@ -561,35 +533,31 @@ func resolveComposerDiscovered(
 ) (discoveredArtifact, error) {
 	db, ok := openOptionalDatabase(ctx, root.GlobalDBPath, "global_db")
 	if !ok {
-		return discoveredArtifact{}, fmt.Errorf("cursor global db not found: %s", root.GlobalDBPath)
+		return emptyDiscoveredArtifact(), fmt.Errorf("cursor global db not found: %s", root.GlobalDBPath)
 	}
 	defer func() { _ = db.Close() }()
 
 	header, found, err := cursorstore.ReadComposerHeader(ctx, db, composerID)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.read_composer_header_failed", "concern", concern, "path", root.GlobalDBPath, "composer_id", composerID, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("read cursor composer header %q: %w", composerID, err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("read cursor composer header %q: %w", composerID, err)
 	}
 	if !found {
-		return discoveredArtifact{}, fmt.Errorf("cursor composer %q not found", composerID)
+		return emptyDiscoveredArtifact(), fmt.Errorf("cursor composer %q not found", composerID)
 	}
 	workspaceIndex := workspaceComposerIndex(ctx, root)
 	info, hasInfo := workspaceIndex[composerID]
 	backgroundIDs := backgroundComposerIDSet(ctx, db, root.GlobalDBPath)
-	return discoveredArtifact{
-		Kind:           discoveredKindComposer,
-		Path:           path,
-		ConversationID: "",
-		ProjectKey:     "",
-		RootDir:        root.RootDir,
-		ComposerID:     composerID,
-		ComposerHeader: header,
-		ComposerInfo:   info,
-		HasInfo:        hasInfo,
-		IsBackground:   backgroundIDs[composerID],
-		LegacyTab:      cursorstore.LegacyChatTab{},
-		WorkspaceRoot:  "",
-	}, nil
+	var artifact discoveredArtifact
+	artifact.Kind = discoveredKindComposer
+	artifact.Path = path
+	artifact.RootDir = root.RootDir
+	artifact.ComposerID = composerID
+	artifact.ComposerHeader = header
+	artifact.ComposerInfo = info
+	artifact.HasInfo = hasInfo
+	artifact.IsBackground = backgroundIDs[composerID]
+	return artifact, nil
 }
 
 func resolveLegacyDiscovered(
@@ -600,12 +568,12 @@ func resolveLegacyDiscovered(
 ) (discoveredArtifact, error) {
 	workspaceHash, tabID, ok := splitLegacyID(id)
 	if !ok {
-		return discoveredArtifact{}, fmt.Errorf("invalid cursor legacy id %q", id)
+		return emptyDiscoveredArtifact(), fmt.Errorf("invalid cursor legacy id %q", id)
 	}
 	entries, err := root.ListWorkspaceEntries()
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.list_workspace_entries_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("list cursor workspace entries: %w", err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("list cursor workspace entries: %w", err)
 	}
 	for _, entry := range entries {
 		if entry.WorkspaceHash != workspaceHash {
@@ -613,7 +581,7 @@ func resolveLegacyDiscovered(
 		}
 		return resolveLegacyDiscoveredForEntry(ctx, path, tabID, entry)
 	}
-	return discoveredArtifact{}, fmt.Errorf("cursor workspace %q not found", workspaceHash)
+	return emptyDiscoveredArtifact(), fmt.Errorf("cursor workspace %q not found", workspaceHash)
 }
 
 func resolveLegacyDiscoveredForEntry(
@@ -624,38 +592,30 @@ func resolveLegacyDiscoveredForEntry(
 ) (discoveredArtifact, error) {
 	db, ok := openOptionalDatabase(ctx, entry.StateDBPath, "workspace_db")
 	if !ok {
-		return discoveredArtifact{}, fmt.Errorf("cursor workspace db not found: %s", entry.StateDBPath)
+		return emptyDiscoveredArtifact(), fmt.Errorf("cursor workspace db not found: %s", entry.StateDBPath)
 	}
 	defer func() { _ = db.Close() }()
 
 	chatData, found, err := cursorstore.ReadLegacyChatData(ctx, db)
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.read_legacy_chat_failed", "concern", concern, "path", entry.StateDBPath, "workspace_hash", entry.WorkspaceHash, "err", err)
-		return discoveredArtifact{}, fmt.Errorf("read cursor legacy chat: %w", err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("read cursor legacy chat: %w", err)
 	}
 	if !found {
-		return discoveredArtifact{}, fmt.Errorf("cursor legacy chat data not found")
+		return emptyDiscoveredArtifact(), fmt.Errorf("cursor legacy chat data not found")
 	}
 	for _, tab := range chatData.Tabs {
 		if tab.TabID != tabID || len(tab.Bubbles) == 0 {
 			continue
 		}
-		return discoveredArtifact{
-			Kind:           discoveredKindLegacy,
-			Path:           path,
-			ConversationID: "",
-			ProjectKey:     "",
-			RootDir:        "",
-			ComposerID:     "",
-			ComposerHeader: cursorstore.ComposerHeader{},
-			ComposerInfo:   cursorstore.WorkspaceComposerInfo{},
-			HasInfo:        false,
-			IsBackground:   false,
-			LegacyTab:      tab,
-			WorkspaceRoot:  readWorkspaceRoot(ctx, entry),
-		}, nil
+		var artifact discoveredArtifact
+		artifact.Kind = discoveredKindLegacy
+		artifact.Path = path
+		artifact.LegacyTab = tab
+		artifact.WorkspaceRoot = readWorkspaceRoot(ctx, entry)
+		return artifact, nil
 	}
-	return discoveredArtifact{}, fmt.Errorf("cursor legacy tab %q not found", tabID)
+	return emptyDiscoveredArtifact(), fmt.Errorf("cursor legacy tab %q not found", tabID)
 }
 
 func openOptionalDatabase(ctx context.Context, path string, component string) (*sql.DB, bool) {
@@ -715,6 +675,7 @@ func globalDBPathForDiscovered(
 	if discovered.RootDir != "" {
 		roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 		if err != nil {
+			slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", discovered.Path, "err", err)
 			return "", fmt.Errorf("resolve cursor data roots: %w", err)
 		}
 		for _, root := range roots {
@@ -725,10 +686,12 @@ func globalDBPathForDiscovered(
 	}
 	virtualPath, err := ParseVirtualPath(discovered.Path)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.parser.virtual_path_parse_failed", "concern", concern, "path", discovered.Path, "err", err)
 		return "", fmt.Errorf("parse cursor virtual path: %w", err)
 	}
 	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", discovered.Path, "err", err)
 		return "", fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 	for _, root := range roots {
@@ -736,6 +699,7 @@ func globalDBPathForDiscovered(
 			return root.GlobalDBPath, nil
 		}
 	}
+	slog.WarnContext(ctx, "providers.cursor.parser.root_not_found", "concern", concern, "path", discovered.Path)
 	return "", fmt.Errorf("cursor root not found for %s", discovered.Path)
 }
 
@@ -775,4 +739,9 @@ func truncateTitle(title string) string {
 func emptyRecord() conversation.Record {
 	var record conversation.Record
 	return record
+}
+
+func emptyDiscoveredArtifact() discoveredArtifact {
+	var artifact discoveredArtifact
+	return artifact
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
 const allComposersKey = "composer.composerData.allComposers"
@@ -54,6 +55,7 @@ func DecodeAllComposersJSON(data []byte) (AllComposersDocument, error) {
 func BuildWorkspaceComposerIndex(ctx context.Context, root DataRoot) (map[string]WorkspaceComposerInfo, error) {
 	entries, err := root.ListWorkspaceEntries()
 	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.store.workspace_entries_list_failed", "concern", concern, "path", root.WorkspaceStorageDir, "err", err)
 		return nil, fmt.Errorf("list cursor workspace entries in %s: %w", root.WorkspaceStorageDir, err)
 	}
 

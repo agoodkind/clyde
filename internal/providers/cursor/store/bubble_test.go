@@ -63,9 +63,6 @@ func TestDecodeBubbleJSONToleratesUnexpectedSchemaVersion(t *testing.T) {
 	if bubble.SchemaVersion != 4 {
 		t.Fatalf("SchemaVersion = %d, want 4", bubble.SchemaVersion)
 	}
-	if IsExpectedBubbleSchemaVersion(bubble.SchemaVersion) {
-		t.Fatal("IsExpectedBubbleSchemaVersion(4) = true, want false")
-	}
 	if bubble.Text != "hello" {
 		t.Fatalf("Text = %q, want hello", bubble.Text)
 	}

@@ -11,6 +11,14 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
+type composerToolStatus string
+
+const (
+	composerToolStatusError     composerToolStatus = "error"
+	composerToolStatusFailed    composerToolStatus = "failed"
+	composerToolStatusCancelled composerToolStatus = "cancelled"
+)
+
 func mapJSONLMessage(
 	message cursorjsonl.TranscriptMessage,
 	_ conversation.LoadOptions,
@@ -150,8 +158,9 @@ func rawArgsToJSON(raw string) json.RawMessage {
 }
 
 func toolErrored(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "error", "failed", "cancelled":
+	normalizedStatus := composerToolStatus(strings.ToLower(strings.TrimSpace(status)))
+	switch normalizedStatus {
+	case composerToolStatusError, composerToolStatusFailed, composerToolStatusCancelled:
 		return true
 	default:
 		return false
