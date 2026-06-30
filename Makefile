@@ -43,7 +43,7 @@ include bootstrap.mk
 BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
-.PHONY: test-ginkgo test-watch coverage setup-hooks \
+.PHONY: test-ginkgo test-watch coverage setup-hooks install-hooks \
         deploy daemon-reload deadcode proto
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
@@ -85,6 +85,9 @@ setup-hooks: ## Configure git hooks
 	@git config core.hooksPath .githooks
 	@chmod +x .githooks/*
 	@echo "git hooks configured"
+
+install-hooks: install ## Install user-scoped Clyde hooks
+	@"$(INSTALL_BIN)" install hooks --clyde-bin "$(INSTALL_BIN)"
 
 # ---------------------------------------------------------------------------
 # Deploy: install canonical binary, ensure supervisor ownership, reload daemon.
