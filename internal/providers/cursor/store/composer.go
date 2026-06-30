@@ -1,0 +1,67 @@
+package cursorstore
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+)
+
+const composerDataKeyPrefix = "composerData:"
+
+// ComposerHeader models the indexed subset of Cursor's undocumented,
+// version-pinned `composerData:<composerId>` on-disk payload.
+type ComposerHeader struct {
+	ComposerID                  string              `json:"composerId"`
+	Name                        string              `json:"name"`
+	CreatedAt                   int64               `json:"createdAt"`
+	LastUpdatedAt               int64               `json:"lastUpdatedAt"`
+	Status                      string              `json:"status"`
+	UnifiedMode                 string              `json:"unifiedMode"`
+	ForceMode                   string              `json:"forceMode"`
+	FullConversationHeadersOnly []ComposerBubbleRef `json:"fullConversationHeadersOnly"`
+}
+
+// ComposerBubbleRef is one ordered bubble reference stored in a composer
+// header.
+type ComposerBubbleRef struct {
+	BubbleID string `json:"bubbleId"`
+	Type     int    `json:"type"`
+}
+
+// ReadComposerHeader reads and decodes one `composerData:<composerId>` row from
+// a Cursor global database.
+func ReadComposerHeader(ctx context.Context, db *sql.DB, composerID string) (ComposerHeader, bool, error) {
+	var emptyHeader ComposerHeader
+
+	value, found, err := ReadKVValue(ctx, db, KVTableCursorDiskKV, composerDataKey(composerID))
+	if err != nil {
+		return emptyHeader, false, fmt.Errorf("read cursor composer header %q: %w", composerID, err)
+	}
+	if !found {
+		return emptyHeader, false, nil
+	}
+
+	header, err := DecodeComposerHeaderJSON(value)
+	if err != nil {
+		return emptyHeader, false, fmt.Errorf("decode cursor composer header %q: %w", composerID, err)
+	}
+	return header, true, nil
+}
+
+// ListComposerIDs lists composer ids present in a Cursor global database.
+func ListComposerIDs(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := ReadKVRowsByPrefix(ctx, db, KVTableCursorDiskKV, composerDataKeyPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("list cursor composer ids: %w", err)
+	}
+	composerIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		composerIDs = append(composerIDs, strings.TrimPrefix(row.Key, composerDataKeyPrefix))
+	}
+	return composerIDs, nil
+}
+
+func composerDataKey(composerID string) string {
+	return composerDataKeyPrefix + composerID
+}
