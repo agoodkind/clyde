@@ -70,11 +70,15 @@ func mapComposerBubble(
 	}
 	tools := make([]transcript.ToolCall, 0)
 	if bubble.ToolCall != nil {
+		toolOutput := ""
+		if opts.IncludeToolOutputs {
+			toolOutput = bubble.ToolCall.Result
+		}
 		tools = append(tools, transcript.ToolCall{
 			ID:      "",
 			Name:    bubble.ToolCall.Name,
 			Input:   transcript.ToolInputJSON{Raw: rawArgsToJSON(bubble.ToolCall.RawArgs)},
-			Output:  outputIf(opts.IncludeToolOutputs, bubble.ToolCall.Result),
+			Output:  toolOutput,
 			IsError: toolErrored(bubble.ToolCall.Status),
 		})
 	}
@@ -167,9 +171,3 @@ func toolErrored(status string) bool {
 	}
 }
 
-func outputIf(include bool, output string) string {
-	if include {
-		return output
-	}
-	return ""
-}

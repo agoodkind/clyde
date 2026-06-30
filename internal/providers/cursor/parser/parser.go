@@ -474,29 +474,21 @@ func resolveJSONLDiscovered(ctx context.Context, path string) (discoveredArtifac
 		slog.WarnContext(ctx, "providers.cursor.parser.stat_jsonl_failed", "concern", concern, "path", path, "err", err)
 		return emptyDiscoveredArtifact(), fmt.Errorf("stat cursor transcript %s: %w", path, err)
 	}
-	roots, err := cursorjsonl.ResolveProjectRoots()
+	file, ok, err := cursorjsonl.MatchTranscriptFile(path)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_project_roots_failed", "concern", concern, "path", path, "err", err)
-		return emptyDiscoveredArtifact(), fmt.Errorf("resolve cursor project roots: %w", err)
+		slog.WarnContext(ctx, "providers.cursor.parser.match_transcript_failed", "concern", concern, "path", path, "err", err)
+		return emptyDiscoveredArtifact(), fmt.Errorf("match cursor transcript file: %w", err)
 	}
-	files, err := cursorjsonl.DiscoverTranscriptFiles(roots)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.discover_transcripts_failed", "concern", concern, "path", path, "err", err)
-		return emptyDiscoveredArtifact(), fmt.Errorf("discover cursor transcript files: %w", err)
+	if !ok {
+		slog.WarnContext(ctx, "providers.cursor.parser.jsonl_path_not_found", "concern", concern, "path", path)
+		return emptyDiscoveredArtifact(), fmt.Errorf("cursor transcript path not discovered: %s", path)
 	}
-	for _, file := range files {
-		if file.Path != path {
-			continue
-		}
-		var artifact discoveredArtifact
-		artifact.Kind = discoveredKindJSONL
-		artifact.Path = file.Path
-		artifact.ConversationID = file.ConversationID
-		artifact.ProjectKey = file.ProjectKey
-		return artifact, nil
-	}
-	slog.WarnContext(ctx, "providers.cursor.parser.jsonl_path_not_found", "concern", concern, "path", path)
-	return emptyDiscoveredArtifact(), fmt.Errorf("cursor transcript path not discovered: %s", path)
+	var artifact discoveredArtifact
+	artifact.Kind = discoveredKindJSONL
+	artifact.Path = file.Path
+	artifact.ConversationID = file.ConversationID
+	artifact.ProjectKey = file.ProjectKey
+	return artifact, nil
 }
 
 func resolveVirtualDiscovered(ctx context.Context, path string) (discoveredArtifact, error) {
@@ -672,12 +664,12 @@ func globalDBPathForDiscovered(
 	ctx context.Context,
 	discovered discoveredArtifact,
 ) (string, error) {
+	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", discovered.Path, "err", err)
+		return "", fmt.Errorf("resolve cursor data roots: %w", err)
+	}
 	if discovered.RootDir != "" {
-		roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
-		if err != nil {
-			slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", discovered.Path, "err", err)
-			return "", fmt.Errorf("resolve cursor data roots: %w", err)
-		}
 		for _, root := range roots {
 			if root.RootDir == discovered.RootDir {
 				return root.GlobalDBPath, nil
@@ -688,11 +680,6 @@ func globalDBPathForDiscovered(
 	if err != nil {
 		slog.WarnContext(ctx, "providers.cursor.parser.virtual_path_parse_failed", "concern", concern, "path", discovered.Path, "err", err)
 		return "", fmt.Errorf("parse cursor virtual path: %w", err)
-	}
-	roots, err := cursorstore.ResolveDataRootsFromEnv(ctx)
-	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.parser.resolve_data_roots_failed", "concern", concern, "path", discovered.Path, "err", err)
-		return "", fmt.Errorf("resolve cursor data roots: %w", err)
 	}
 	for _, root := range roots {
 		if RootHash(root.RootDir) == virtualPath.RootHash {

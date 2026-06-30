@@ -71,6 +71,23 @@ func ResolveProjectRoots() ([]ProjectRoot, error) {
 	return roots, nil
 }
 
+// MatchTranscriptFile resolves one absolute JSONL path against configured
+// project roots without walking the filesystem.
+func MatchTranscriptFile(path string) (TranscriptFile, bool, error) {
+	roots, err := ResolveProjectRoots()
+	if err != nil {
+		return TranscriptFile{}, false, err
+	}
+	for _, root := range roots {
+		file, ok := transcriptFileFromPath(root.Path, path)
+		if ok {
+			return file, true, nil
+		}
+	}
+	var emptyFile TranscriptFile
+	return emptyFile, false, nil
+}
+
 // DiscoverTranscriptFiles walks Cursor modern transcript roots and returns
 // files matching <projectKey>/agent-transcripts/<uuid>/<uuid>.jsonl.
 func DiscoverTranscriptFiles(roots []ProjectRoot) ([]TranscriptFile, error) {

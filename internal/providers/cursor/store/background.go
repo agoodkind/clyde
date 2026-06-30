@@ -10,10 +10,11 @@ import (
 	"strconv"
 )
 
-const (
-	backgroundComposerKeyPrefix        = "backgroundComposer"
-	backgroundComposerWindowMappingKey = "backgroundComposer.windowBcMapping"
-)
+const backgroundComposerWindowMappingKey = "backgroundComposer.windowBcMapping"
+
+// backgroundComposerWindowMappingWire is Cursor's observed
+// backgroundComposer.windowBcMapping JSON shape: window id -> composer ids.
+type backgroundComposerWindowMappingWire map[string][]string
 
 // BackgroundComposer models one consumed background composer identity from
 // Cursor's undocumented, version-pinned background composer mapping payload.
@@ -38,7 +39,7 @@ type BackgroundComposerWindow struct {
 // DecodeBackgroundComposerWindowMappingJSON decodes Cursor's observed
 // `backgroundComposer.windowBcMapping` payload.
 func DecodeBackgroundComposerWindowMappingJSON(data []byte) (BackgroundComposerWindowMapping, error) {
-	var wire map[string][]string
+	var wire backgroundComposerWindowMappingWire
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return BackgroundComposerWindowMapping{}, CursorJSONDecodeError{
 			Description: "background composer window mapping",
@@ -67,24 +68,19 @@ func DecodeBackgroundComposerWindowMappingJSON(data []byte) (BackgroundComposerW
 // global database. Individually malformed rows are skipped because Cursor may
 // retain stale background composer keys across versions.
 func ListBackgroundComposers(ctx context.Context, globalDB *sql.DB) ([]BackgroundComposer, error) {
-	rows, err := ReadKVRowsByPrefix(ctx, globalDB, KVTableItemTable, backgroundComposerKeyPrefix)
+	value, found, err := ReadKVValue(ctx, globalDB, KVTableItemTable, backgroundComposerWindowMappingKey)
 	if err != nil {
-		slog.WarnContext(ctx, "providers.cursor.store.background_composers_list_failed", "concern", concern, "key_prefix", backgroundComposerKeyPrefix, "err", err)
-		return nil, fmt.Errorf("list cursor background composer rows: %w", err)
+		slog.WarnContext(ctx, "providers.cursor.store.background_composers_read_failed", "concern", concern, "key", backgroundComposerWindowMappingKey, "err", err)
+		return nil, fmt.Errorf("read cursor background composer window mapping: %w", err)
 	}
-
-	composers := make([]BackgroundComposer, 0)
-	for _, row := range rows {
-		if row.Key != backgroundComposerWindowMappingKey {
-			continue
-		}
-		mapping, decodeErr := DecodeBackgroundComposerWindowMappingJSON(row.Value)
-		if decodeErr != nil {
-			continue
-		}
-		composers = append(composers, backgroundComposersFromWindowMapping(mapping)...)
+	if !found {
+		return nil, nil
 	}
-	return composers, nil
+	mapping, decodeErr := DecodeBackgroundComposerWindowMappingJSON(value)
+	if decodeErr != nil {
+		return nil, nil
+	}
+	return backgroundComposersFromWindowMapping(mapping), nil
 }
 
 func backgroundComposersFromWindowMapping(mapping BackgroundComposerWindowMapping) []BackgroundComposer {
