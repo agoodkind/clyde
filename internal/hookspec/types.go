@@ -13,6 +13,15 @@ import (
 type HookID string
 
 const (
+	// HookIDReorientBeforeCompact captures Clyde reorient evidence before a
+	// client compacts the current conversation.
+	HookIDReorientBeforeCompact HookID = "reorient-before-compact"
+	// HookIDReorientAfterCompact injects a previously captured reorient snapshot
+	// after a client restarts from compaction.
+	HookIDReorientAfterCompact HookID = "reorient-after-compact"
+	// HookIDReorientStopFollowup replays a captured snapshot through a stop hook
+	// follow-up message.
+	HookIDReorientStopFollowup HookID = "reorient-stop-followup"
 	// HookIDClaudeCodeReorientAfterCompact injects Clyde reorient evidence after
 	// Claude Code compacts a session.
 	HookIDClaudeCodeReorientAfterCompact HookID = "claude-code-reorient-after-compact"
@@ -22,9 +31,20 @@ const (
 type Client string
 
 const (
+	// ClientAll installs every supported user-scoped hook client.
+	ClientAll Client = "all"
 	// ClientClaudeCode installs hooks into Claude Code user settings.
 	ClientClaudeCode Client = "claude-code"
+	// ClientCodex installs hooks into Codex user settings.
+	ClientCodex Client = "codex"
+	// ClientCursor installs hooks into Cursor user settings.
+	ClientCursor Client = "cursor"
 )
+
+// SupportedClients is the stable install order for --client all.
+func SupportedClients() []Client {
+	return []Client{ClientClaudeCode, ClientCodex, ClientCursor}
+}
 
 // ClaudeCodeEvent names a Claude Code hook lifecycle event.
 type ClaudeCodeEvent string
@@ -35,6 +55,14 @@ const (
 	ClaudeCodeEventSessionStart ClaudeCodeEvent = "SessionStart"
 )
 
+// Hook event names used by supported clients.
+const (
+	EventPreCompact   = "PreCompact"
+	EventSessionStart = string(ClaudeCodeEventSessionStart)
+	EventCursorPre    = "preCompact"
+	EventCursorStop   = "stop"
+)
+
 // ClaudeCodeHook declares the Claude Code settings entry for one hook.
 type ClaudeCodeHook struct {
 	Event          ClaudeCodeEvent
@@ -42,6 +70,25 @@ type ClaudeCodeHook struct {
 	Args           []string
 	TimeoutSeconds int
 	StatusMessage  string
+}
+
+// InstallSpec declares one client-specific settings entry for a hook.
+type InstallSpec struct {
+	Client         Client
+	Event          string
+	Matcher        string
+	Args           []string
+	TimeoutSeconds int
+	StatusMessage  string
+	FailClosed     bool
+	LoopLimit      int
+}
+
+// RegisteredInstall binds one generic hook id to one client-specific install
+// shape.
+type RegisteredInstall struct {
+	HookID HookID
+	Spec   InstallSpec
 }
 
 // Hook declares one Clyde-managed hook.
