@@ -51,14 +51,15 @@ func TestInstallerCreatesUserClaudeSettings(t *testing.T) {
 	}
 
 	expectedPath := filepath.Join(homeDir, ".claude", "settings.json")
-	if result.SettingsPath != expectedPath {
-		t.Fatalf("settings path = %q, want %q", result.SettingsPath, expectedPath)
+	file := singleInstallFile(t, result)
+	if file.SettingsPath != expectedPath {
+		t.Fatalf("settings path = %q, want %q", file.SettingsPath, expectedPath)
 	}
 	if !result.Changed {
 		t.Fatal("Changed = false, want true")
 	}
-	if !slices.Equal(result.Installed, []HookID{HookIDReorientBeforeCompact, HookIDReorientAfterCompact}) {
-		t.Fatalf("installed = %#v", result.Installed)
+	if !slices.Equal(file.Installed, []HookID{HookIDReorientBeforeCompact, HookIDReorientAfterCompact}) {
+		t.Fatalf("installed = %#v", file.Installed)
 	}
 
 	settings := readTestClaudeSettings(t, expectedPath)
@@ -70,7 +71,7 @@ func TestInstallerCreatesUserClaudeSettings(t *testing.T) {
 	if handler.Command != "/usr/local/bin/clyde" {
 		t.Fatalf("command = %q", handler.Command)
 	}
-	expectedArgs := []string{"hooks", "run", string(HookIDClaudeCodeReorientAfterCompact)}
+	expectedArgs := []string{"hooks", "run", string(HookIDReorientAfterCompact)}
 	if !slices.Equal(handler.Args, expectedArgs) {
 		t.Fatalf("args = %#v, want %#v", handler.Args, expectedArgs)
 	}
@@ -159,7 +160,6 @@ func TestInstallerDryRunWritesNoFiles(t *testing.T) {
 	t.Parallel()
 
 	homeDir := t.TempDir()
-	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
 	installer := Installer{Registry: NewRegistry()}
 	result, err := installer.Install(context.Background(), InstallOptions{
 		HomeDir:  homeDir,
@@ -174,10 +174,11 @@ func TestInstallerDryRunWritesNoFiles(t *testing.T) {
 	if !result.DryRun {
 		t.Fatal("DryRun = false, want true")
 	}
-	if len(result.Preview) == 0 {
+	file := singleInstallFile(t, result)
+	if len(file.Preview) == 0 {
 		t.Fatal("Preview was empty")
 	}
-	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(file.SettingsPath); !os.IsNotExist(err) {
 		t.Fatalf("settings file exists after dry run, stat err = %v", err)
 	}
 }
@@ -279,4 +280,13 @@ func findTestHookHandler(
 	}
 	t.Fatalf("missing hook group matcher %q", matcher)
 	return testClaudeHookHandler{}
+}
+
+func singleInstallFile(t *testing.T, result InstallResult) InstallFileResult {
+	t.Helper()
+
+	if len(result.Files) != 1 {
+		t.Fatalf("files len = %d, want 1", len(result.Files))
+	}
+	return result.Files[0]
 }

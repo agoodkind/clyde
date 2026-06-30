@@ -39,7 +39,7 @@ func installHooksOp() Operation[installHooksInput, installHooksPayload] {
 		Surfaces:   SurfaceSet{CLI: true, MCP: false},
 		outputKind: resultKindValue,
 		Short:      "Install user-scoped Clyde hooks.",
-		Long:       "Install user-scoped Clyde hooks. Claude Code hooks are written to ~/.claude/settings.json so they follow the user across projects.",
+		Long:       "Install user-scoped Clyde hooks. By default this installs Claude Code, Codex, and Cursor hooks into user settings so they follow the user across projects.",
 		Examples: []string{
 			"clyde install hooks",
 			"clyde install hooks --client cursor",

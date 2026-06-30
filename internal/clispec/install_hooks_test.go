@@ -37,7 +37,8 @@ func TestInstallHooksCommandWritesUserClaudeSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile settings: %v", err)
 	}
-	if !bytes.Contains(body, []byte("claude-code-reorient-after-compact")) {
+	if !bytes.Contains(body, []byte("reorient-after-compact")) ||
+		!bytes.Contains(body, []byte("reorient-before-compact")) {
 		t.Fatalf("settings missing reorient hook:\n%s", string(body))
 	}
 	if !bytes.Contains(out.Bytes(), []byte("installed hooks")) {
