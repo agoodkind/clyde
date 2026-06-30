@@ -25,7 +25,8 @@ const (
 	ProviderMITM
 	// ProviderArtifact identifies an artifact whose native provider is unknown.
 	ProviderArtifact
-	// ProviderCursor identifies Cursor MITM traffic.
+	// ProviderCursor identifies Cursor MITM traffic and Cursor conversation
+	// artifacts (composers, legacy chat panels, and agent transcripts).
 	ProviderCursor
 	// ProviderConductor identifies Conductor MITM traffic.
 	ProviderConductor

@@ -20,6 +20,9 @@ const (
 	ProviderCodex Provider = providerid.ProviderCodex
 	// ProviderArtifact identifies an artifact whose native id was missing.
 	ProviderArtifact Provider = providerid.ProviderArtifact
+	// ProviderCursor identifies Cursor composer, legacy chat, and agent
+	// transcript artifacts.
+	ProviderCursor Provider = providerid.ProviderCursor
 	// ProviderZed identifies Zed thread artifacts.
 	ProviderZed Provider = providerid.ProviderZed
 )
