@@ -282,6 +282,8 @@ func ReorientConversationForHook(ctx context.Context, conversationID, workspace,
 	return reorientConversation(ctx, conversationID, workspace, topic, cursor, window, limit, pageBytes, syntheticPreCompact)
 }
 
+var _ = ReorientConversationForHook
+
 func reorientConversation(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int, syntheticPreCompact bool) (conversation.ReorientPage, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
