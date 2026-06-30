@@ -274,7 +274,56 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 	}
 }
 
-func TestRunnerReturnsMissingSnapshotError(t *testing.T) {
+func TestRunnerIgnoresNonCompactSessionStart(t *testing.T) {
+	t.Parallel()
+
+	var output strings.Builder
+	store := newMemorySnapshotStore()
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "SessionStart",
+			"source": "startup",
+			"transcript_path": "/tmp/session.jsonl",
+			"cwd": "/tmp/project"
+		}`),
+		Output:        &output,
+		SnapshotStore: store,
+	}
+
+	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty", output.String())
+	}
+}
+
+func TestRunnerCursorStopWithNoSnapshotReturnsNoOutput(t *testing.T) {
+	t.Parallel()
+
+	var output strings.Builder
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "stop",
+			"conversation_id": "cursor-conv",
+			"session_id": "session-1"
+		}`),
+		Output:        &output,
+		SnapshotStore: newMemorySnapshotStore(),
+	}
+	err := runner.Run(context.Background(), HookIDReorientStopFollowup)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty", output.String())
+	}
+}
+
+func TestRunnerAfterCompactMissingSnapshotErrors(t *testing.T) {
 	t.Parallel()
 
 	runner := Runner{
@@ -288,7 +337,6 @@ func TestRunnerReturnsMissingSnapshotError(t *testing.T) {
 		Output:        &strings.Builder{},
 		SnapshotStore: newMemorySnapshotStore(),
 	}
-
 	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
 	if err == nil {
 		t.Fatal("Run returned nil error")
@@ -298,7 +346,43 @@ func TestRunnerReturnsMissingSnapshotError(t *testing.T) {
 	}
 }
 
-func TestRunnerReturnsDaemonErrorForPreCompactCapture(t *testing.T) {
+func TestRunnerPreCompactErrorsWhenReorientCursorStalls(t *testing.T) {
+	t.Parallel()
+
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "PreCompact",
+			"transcript_path": "/tmp/session.jsonl",
+			"cwd": "/tmp/project"
+		}`),
+		Output:        &strings.Builder{},
+		SnapshotStore: newMemorySnapshotStore(),
+		Reorient: func(
+			context.Context,
+			string,
+			string,
+			string,
+			string,
+			int,
+			int,
+			int,
+			bool,
+		) (conversation.ReorientPage, error) {
+			return conversation.ReorientPage{Remaining: 1, NextCursor: ""}, nil
+		},
+	}
+
+	err := runner.Run(context.Background(), HookIDReorientBeforeCompact)
+	if err == nil {
+		t.Fatal("Run returned nil error")
+	}
+	if !strings.Contains(err.Error(), "remaining 1 but next cursor is empty") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunnerPreCompactReturnsDaemonErrors(t *testing.T) {
 	t.Parallel()
 
 	expectedErr := errors.New("daemon unavailable")
@@ -329,6 +413,106 @@ func TestRunnerReturnsDaemonErrorForPreCompactCapture(t *testing.T) {
 	err := runner.Run(context.Background(), HookIDReorientBeforeCompact)
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("Run error = %v, want %v", err, expectedErr)
+	}
+}
+
+func TestRunnerPreCompactFallsBackToWorkspaceWhenTranscriptNotFound(t *testing.T) {
+	t.Parallel()
+
+	calls := make([]testReorientCall, 0, 2)
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "PreCompact",
+			"transcript_path": "/tmp/missing-session.jsonl",
+			"cwd": "/tmp/project"
+		}`),
+		Output:        &strings.Builder{},
+		SnapshotStore: newMemorySnapshotStore(),
+		Reorient: func(
+			_ context.Context,
+			conversationID string,
+			workspace string,
+			_ string,
+			cursor string,
+			_ int,
+			_ int,
+			_ int,
+			syntheticPreCompact bool,
+		) (conversation.ReorientPage, error) {
+			calls = append(calls, testReorientCall{
+				ConversationID:      conversationID,
+				Workspace:           workspace,
+				Cursor:              cursor,
+				SyntheticPreCompact: syntheticPreCompact,
+			})
+			if len(calls) == 1 {
+				return conversation.ReorientPage{}, errors.New("conversation not found")
+			}
+			return conversation.ReorientPage{Remaining: 0}, nil
+		},
+	}
+
+	err := runner.Run(context.Background(), HookIDReorientBeforeCompact)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	expectedCalls := []testReorientCall{
+		{
+			ConversationID:      "/tmp/missing-session.jsonl",
+			Workspace:           "/tmp/project",
+			Cursor:              "",
+			SyntheticPreCompact: true,
+		},
+		{
+			ConversationID:      "",
+			Workspace:           "/tmp/project",
+			Cursor:              "",
+			SyntheticPreCompact: true,
+		},
+	}
+	if !slices.Equal(calls, expectedCalls) {
+		t.Fatalf("calls = %#v, want %#v", calls, expectedCalls)
+	}
+}
+
+func TestRunnerPreCompactStopsWhenContextIsCanceledBetweenPages(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	callCount := 0
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "PreCompact",
+			"transcript_path": "/tmp/session.jsonl",
+			"cwd": "/tmp/project"
+		}`),
+		Output:        &strings.Builder{},
+		SnapshotStore: newMemorySnapshotStore(),
+		Reorient: func(
+			context.Context,
+			string,
+			string,
+			string,
+			string,
+			int,
+			int,
+			int,
+			bool,
+		) (conversation.ReorientPage, error) {
+			callCount++
+			cancel()
+			return conversation.ReorientPage{Remaining: 1, NextCursor: "next"}, nil
+		},
+	}
+
+	err := runner.Run(ctx, HookIDReorientBeforeCompact)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("reorient calls = %d, want 1", callCount)
 	}
 }
 
