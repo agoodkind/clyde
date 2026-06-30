@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -27,16 +28,21 @@ type testClaudeHookHandler struct {
 	StatusMessage string   `json:"statusMessage,omitempty"`
 }
 
-type testRawClaudeSettings struct {
-	Hooks map[string][]testRawClaudeHookGroup `json:"hooks,omitempty"`
+type testCursorHooks struct {
+	Version int                                   `json:"version"`
+	Extra   bool                                  `json:"extra,omitempty"`
+	Hooks   map[string][]testCursorHookDefinition `json:"hooks"`
 }
 
-type testRawClaudeHookGroup struct {
-	Matcher string          `json:"matcher,omitempty"`
-	Hooks   json.RawMessage `json:"hooks"`
+type testCursorHookDefinition struct {
+	Command    string `json:"command"`
+	Timeout    int    `json:"timeout"`
+	Matcher    string `json:"matcher,omitempty"`
+	FailClosed bool   `json:"failClosed"`
+	LoopLimit  int    `json:"loop_limit,omitempty"`
 }
 
-func TestInstallerCreatesUserClaudeSettings(t *testing.T) {
+func TestInstallerCreatesUserHookSettingsForAllClients(t *testing.T) {
 	t.Parallel()
 
 	homeDir := t.TempDir()
@@ -44,40 +50,50 @@ func TestInstallerCreatesUserClaudeSettings(t *testing.T) {
 	result, err := installer.Install(context.Background(), InstallOptions{
 		HomeDir:  homeDir,
 		ClydeBin: "/usr/local/bin/clyde",
-		Client:   ClientClaudeCode,
 	})
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-
-	expectedPath := filepath.Join(homeDir, ".claude", "settings.json")
-	file := singleInstallFile(t, result)
-	if file.SettingsPath != expectedPath {
-		t.Fatalf("settings path = %q, want %q", file.SettingsPath, expectedPath)
-	}
 	if !result.Changed {
 		t.Fatal("Changed = false, want true")
 	}
-	if !slices.Equal(file.Installed, []HookID{HookIDReorientBeforeCompact, HookIDReorientAfterCompact}) {
-		t.Fatalf("installed = %#v", file.Installed)
+	if result.DryRun {
+		t.Fatal("DryRun = true, want false")
 	}
 
-	settings := readTestClaudeSettings(t, expectedPath)
-	groups := settings.Hooks[string(ClaudeCodeEventSessionStart)]
-	handler := findTestHookHandler(t, groups, "compact")
-	if handler.Type != "command" {
-		t.Fatalf("type = %q, want command", handler.Type)
+	claudePath := filepath.Join(homeDir, ".claude", "settings.json")
+	codexPath := filepath.Join(homeDir, ".codex", "config.toml")
+	cursorPath := filepath.Join(homeDir, ".cursor", "hooks.json")
+	assertInstallFile(t, result, ClientClaudeCode, claudePath, []HookID{HookIDReorientBeforeCompact, HookIDReorientAfterCompact})
+	assertInstallFile(t, result, ClientCodex, codexPath, []HookID{HookIDReorientBeforeCompact, HookIDReorientAfterCompact})
+	assertInstallFile(t, result, ClientCursor, cursorPath, []HookID{HookIDReorientBeforeCompact, HookIDReorientStopFollowup})
+
+	claude := readTestClaudeSettings(t, claudePath)
+	assertClaudeHandler(t, claude, EventPreCompact, "", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-before-compact"}, 600)
+	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-after-compact"}, 600)
+
+	codexBody := readTextFile(t, codexPath)
+	for _, want := range []string{
+		"[features]",
+		"hooks = true",
+		"[[hooks.pre_compact]]",
+		"[[hooks.session_start]]",
+		"matcher = \"compact\"",
+		"command = \"/usr/local/bin/clyde hooks run reorient-before-compact\"",
+		"command = \"/usr/local/bin/clyde hooks run reorient-after-compact\"",
+		"trusted_hash = \"sha256:",
+	} {
+		if !strings.Contains(codexBody, want) {
+			t.Fatalf("Codex config missing %q:\n%s", want, codexBody)
+		}
 	}
-	if handler.Command != "/usr/local/bin/clyde" {
-		t.Fatalf("command = %q", handler.Command)
+
+	cursor := readTestCursorHooks(t, cursorPath)
+	if cursor.Version != 1 {
+		t.Fatalf("Cursor version = %d, want 1", cursor.Version)
 	}
-	expectedArgs := []string{"hooks", "run", string(HookIDReorientAfterCompact)}
-	if !slices.Equal(handler.Args, expectedArgs) {
-		t.Fatalf("args = %#v, want %#v", handler.Args, expectedArgs)
-	}
-	if handler.Timeout != 600 {
-		t.Fatalf("timeout = %d, want 600", handler.Timeout)
-	}
+	assertCursorCommand(t, cursor, EventCursorPre, "/usr/local/bin/clyde hooks run reorient-before-compact", 0)
+	assertCursorCommand(t, cursor, EventCursorStop, "/usr/local/bin/clyde hooks run reorient-stop-followup", 1)
 }
 
 func TestInstallerIsIdempotent(t *testing.T) {
@@ -88,7 +104,7 @@ func TestInstallerIsIdempotent(t *testing.T) {
 	options := InstallOptions{
 		HomeDir:  homeDir,
 		ClydeBin: "/usr/local/bin/clyde",
-		Client:   ClientClaudeCode,
+		Client:   ClientAll,
 	}
 
 	first, err := installer.Install(context.Background(), options)
@@ -99,7 +115,6 @@ func TestInstallerIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Install: %v", err)
 	}
-
 	if !first.Changed {
 		t.Fatal("first Changed = false, want true")
 	}
@@ -112,48 +127,156 @@ func TestInstallerPreservesUnrelatedSettingsAndHooks(t *testing.T) {
 	t.Parallel()
 
 	homeDir := t.TempDir()
-	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	initial := []byte(`{
+	writeTestFile(t, filepath.Join(homeDir, ".claude", "settings.json"), `{
   "theme": "dark",
   "hooks": {
     "SessionStart": [
       {
         "matcher": "startup",
         "hooks": [
-          {
-            "type": "command",
-            "command": "/bin/echo",
-            "args": ["hello"]
-          }
+          {"type": "command", "command": "/bin/echo", "args": ["hello"]}
         ]
       }
     ]
   }
 }`)
-	if err := os.WriteFile(settingsPath, initial, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	writeTestFile(t, filepath.Join(homeDir, ".codex", "config.toml"), `[features]
+experimental = true
+
+approval_policy = "never"
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/bin/echo old"
+`)
+	writeTestFile(t, filepath.Join(homeDir, ".cursor", "hooks.json"), `{
+  "version": 1,
+  "extra": true,
+  "hooks": {
+    "preToolUse": [{"command": "/bin/echo old", "timeout": 1}]
+  }
+}`)
 
 	installer := Installer{Registry: NewRegistry()}
 	_, err := installer.Install(context.Background(), InstallOptions{
 		HomeDir:  homeDir,
 		ClydeBin: "/usr/local/bin/clyde",
-		Client:   ClientClaudeCode,
+		Client:   ClientAll,
 	})
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
-	settings := readTestClaudeSettings(t, settingsPath)
-	if settings.Theme != "dark" {
-		t.Fatalf("theme = %q, want dark", settings.Theme)
+	claude := readTestClaudeSettings(t, filepath.Join(homeDir, ".claude", "settings.json"))
+	if claude.Theme != "dark" {
+		t.Fatalf("theme = %q, want dark", claude.Theme)
 	}
-	groups := settings.Hooks[string(ClaudeCodeEventSessionStart)]
-	_ = findTestHookHandler(t, groups, "startup")
-	_ = findTestHookHandler(t, groups, "compact")
+	assertClaudeHandler(t, claude, EventSessionStart, "startup", "/bin/echo", []string{"hello"}, 0)
+	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-after-compact"}, 600)
+
+	codexBody := readTextFile(t, filepath.Join(homeDir, ".codex", "config.toml"))
+	for _, want := range []string{"experimental = true", "approval_policy = \"never\"", "command = \"/bin/echo old\""} {
+		if !strings.Contains(codexBody, want) {
+			t.Fatalf("Codex config missing preserved %q:\n%s", want, codexBody)
+		}
+	}
+
+	cursor := readTestCursorHooks(t, filepath.Join(homeDir, ".cursor", "hooks.json"))
+	if !cursor.Extra {
+		t.Fatal("Cursor extra field was not preserved")
+	}
+	assertCursorCommand(t, cursor, "preToolUse", "/bin/echo old", 0)
+}
+
+func TestInstallerReplacesOldClydeSignatures(t *testing.T) {
+	t.Parallel()
+
+	homeDir := t.TempDir()
+	writeTestFile(t, filepath.Join(homeDir, ".claude", "settings.json"), `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {"type": "command", "command": "/old/clyde", "args": ["hooks", "run", "claude-code-reorient-after-compact"]}
+        ]
+      }
+    ]
+  }
+}`)
+	writeTestFile(t, filepath.Join(homeDir, ".codex", "config.toml"), `[[hooks.SessionStart]]
+matcher = "compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/usr/local/bin/clyde hooks run claude-code-reorient-after-compact"
+`)
+	writeTestFile(t, filepath.Join(homeDir, ".cursor", "hooks.json"), `{
+  "version": 1,
+  "hooks": {
+    "stop": [{"command": "/usr/local/bin/clyde hooks run reorient-stop-followup", "timeout": 10}]
+  }
+}`)
+
+	installer := Installer{Registry: NewRegistry()}
+	_, err := installer.Install(context.Background(), InstallOptions{
+		HomeDir:  homeDir,
+		ClydeBin: "/usr/local/bin/clyde",
+		Client:   ClientAll,
+	})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	if strings.Contains(readTextFile(t, filepath.Join(homeDir, ".claude", "settings.json")), "claude-code-reorient-after-compact") {
+		t.Fatal("legacy Claude hook signature was preserved")
+	}
+	claude := readTestClaudeSettings(t, filepath.Join(homeDir, ".claude", "settings.json"))
+	assertClaudeHandler(t, claude, EventSessionStart, "compact", "/usr/local/bin/clyde", []string{"hooks", "run", "reorient-after-compact"}, 600)
+	codexBody := readTextFile(t, filepath.Join(homeDir, ".codex", "config.toml"))
+	if strings.Contains(codexBody, "claude-code-reorient-after-compact") {
+		t.Fatal("legacy Codex hook signature was preserved")
+	}
+	if !strings.Contains(codexBody, "reorient-after-compact") {
+		t.Fatal("new Codex after-compact hook signature was missing")
+	}
+	cursor := readTestCursorHooks(t, filepath.Join(homeDir, ".cursor", "hooks.json"))
+	if len(cursor.Hooks[EventCursorStop]) != 1 {
+		t.Fatalf("Cursor stop hooks len = %d, want 1", len(cursor.Hooks[EventCursorStop]))
+	}
+	if cursor.Hooks[EventCursorStop][0].Command != "/usr/local/bin/clyde hooks run reorient-stop-followup" {
+		t.Fatalf("Cursor stop command = %q", cursor.Hooks[EventCursorStop][0].Command)
+	}
+}
+
+func TestInstallerClientCursorWritesOnlyCursorConfig(t *testing.T) {
+	t.Parallel()
+
+	homeDir := t.TempDir()
+	installer := Installer{Registry: NewRegistry()}
+	result, err := installer.Install(context.Background(), InstallOptions{
+		HomeDir:  homeDir,
+		ClydeBin: "/usr/local/bin/clyde",
+		Client:   ClientCursor,
+	})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if len(result.Files) != 1 || result.Files[0].Client != ClientCursor {
+		t.Fatalf("files = %#v, want only Cursor", result.Files)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".cursor", "hooks.json")); err != nil {
+		t.Fatalf("Cursor hooks stat: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("Claude settings unexpectedly exist, err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("Codex settings unexpectedly exist, err = %v", err)
+	}
 }
 
 func TestInstallerDryRunWritesNoFiles(t *testing.T) {
@@ -164,88 +287,94 @@ func TestInstallerDryRunWritesNoFiles(t *testing.T) {
 	result, err := installer.Install(context.Background(), InstallOptions{
 		HomeDir:  homeDir,
 		ClydeBin: "/usr/local/bin/clyde",
-		Client:   ClientClaudeCode,
+		Client:   ClientAll,
 		DryRun:   true,
 	})
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-
 	if !result.DryRun {
 		t.Fatal("DryRun = false, want true")
 	}
-	file := singleInstallFile(t, result)
-	if len(file.Preview) == 0 {
-		t.Fatal("Preview was empty")
+	if len(result.Files) != 3 {
+		t.Fatalf("files len = %d, want 3", len(result.Files))
 	}
-	if _, err := os.Stat(file.SettingsPath); !os.IsNotExist(err) {
-		t.Fatalf("settings file exists after dry run, stat err = %v", err)
+	for _, file := range result.Files {
+		if len(file.Preview) == 0 {
+			t.Fatalf("%s preview was empty", file.Client)
+		}
+		if _, err := os.Stat(file.SettingsPath); !os.IsNotExist(err) {
+			t.Fatalf("%s exists after dry run, stat err = %v", file.SettingsPath, err)
+		}
 	}
 }
 
-func TestInstallerDoesNotOverwriteMalformedExistingHookGroup(t *testing.T) {
-	t.Parallel()
+func assertInstallFile(t *testing.T, result InstallResult, client Client, path string, installed []HookID) {
+	t.Helper()
 
-	homeDir := t.TempDir()
-	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	for _, file := range result.Files {
+		if file.Client != client {
+			continue
+		}
+		if file.SettingsPath != path {
+			t.Fatalf("%s path = %q, want %q", client, file.SettingsPath, path)
+		}
+		if !slices.Equal(file.Installed, installed) {
+			t.Fatalf("%s installed = %#v, want %#v", client, file.Installed, installed)
+		}
+		return
 	}
-	initial := []byte(`{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "compact",
-        "hooks": {
-          "unexpected": true
-        }
-      }
-    ]
-  }
-}`)
-	if err := os.WriteFile(settingsPath, initial, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	t.Fatalf("missing install file for %s", client)
+}
 
-	installer := Installer{Registry: NewRegistry()}
-	_, err := installer.Install(context.Background(), InstallOptions{
-		HomeDir:  homeDir,
-		ClydeBin: "/usr/local/bin/clyde",
-		Client:   ClientClaudeCode,
-	})
-	if err != nil {
-		t.Fatalf("Install: %v", err)
-	}
+func assertClaudeHandler(t *testing.T, settings testClaudeSettings, event string, matcher string, command string, args []string, timeout int) {
+	t.Helper()
 
-	body, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+	groups := settings.Hooks[event]
+	handler := findTestClaudeHookHandler(t, groups, matcher)
+	if handler.Type != "command" {
+		t.Fatalf("type = %q, want command", handler.Type)
 	}
-	var settings testRawClaudeSettings
-	if err := json.Unmarshal(body, &settings); err != nil {
-		t.Fatalf("Unmarshal settings: %v\n%s", err, string(body))
+	if handler.Command != command {
+		t.Fatalf("%s/%s command = %q, want %q", event, matcher, handler.Command, command)
 	}
-	groups := settings.Hooks[string(ClaudeCodeEventSessionStart)]
-	if len(groups) != 2 {
-		t.Fatalf("SessionStart groups len = %d, want 2", len(groups))
+	if !slices.Equal(handler.Args, args) {
+		t.Fatalf("%s/%s args = %#v, want %#v", event, matcher, handler.Args, args)
 	}
-	var preserved map[string]json.RawMessage
-	if err := json.Unmarshal(groups[0].Hooks, &preserved); err != nil {
-		t.Fatalf("Unmarshal preserved hooks: %v", err)
+	if handler.Timeout != timeout {
+		t.Fatalf("%s/%s timeout = %d, want %d", event, matcher, handler.Timeout, timeout)
 	}
-	if _, ok := preserved["unexpected"]; !ok {
-		t.Fatalf("preserved hooks = %#v, want unexpected key", preserved)
+}
+
+func findTestClaudeHookHandler(t *testing.T, groups []testClaudeHookGroup, matcher string) testClaudeHookHandler {
+	t.Helper()
+
+	for _, group := range groups {
+		if group.Matcher != matcher {
+			continue
+		}
+		if len(group.Hooks) == 0 {
+			t.Fatalf("group %q had no hooks", matcher)
+		}
+		return group.Hooks[0]
 	}
-	var handlers []testClaudeHookHandler
-	if err := json.Unmarshal(groups[1].Hooks, &handlers); err != nil {
-		t.Fatalf("Unmarshal added handlers: %v", err)
+	t.Fatalf("missing hook group matcher %q", matcher)
+	return testClaudeHookHandler{}
+}
+
+func assertCursorCommand(t *testing.T, settings testCursorHooks, event string, command string, loopLimit int) {
+	t.Helper()
+
+	for _, hook := range settings.Hooks[event] {
+		if hook.Command != command {
+			continue
+		}
+		if hook.LoopLimit != loopLimit {
+			t.Fatalf("%s loop_limit = %d, want %d", event, hook.LoopLimit, loopLimit)
+		}
+		return
 	}
-	if len(handlers) != 1 {
-		t.Fatalf("added handlers len = %d, want 1", len(handlers))
-	}
-	if handlers[0].Command != "/usr/local/bin/clyde" {
-		t.Fatalf("added command = %q", handlers[0].Command)
-	}
+	t.Fatalf("missing Cursor command %q under %s", command, event)
 }
 
 func readTestClaudeSettings(t *testing.T, path string) testClaudeSettings {
@@ -262,31 +391,37 @@ func readTestClaudeSettings(t *testing.T, path string) testClaudeSettings {
 	return settings
 }
 
-func findTestHookHandler(
-	t *testing.T,
-	groups []testClaudeHookGroup,
-	matcher string,
-) testClaudeHookHandler {
+func readTestCursorHooks(t *testing.T, path string) testCursorHooks {
 	t.Helper()
 
-	for _, group := range groups {
-		if group.Matcher != matcher {
-			continue
-		}
-		if len(group.Hooks) == 0 {
-			t.Fatalf("group %q had no hooks", matcher)
-		}
-		return group.Hooks[0]
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
 	}
-	t.Fatalf("missing hook group matcher %q", matcher)
-	return testClaudeHookHandler{}
+	var settings testCursorHooks
+	if err := json.Unmarshal(body, &settings); err != nil {
+		t.Fatalf("Unmarshal Cursor hooks: %v\n%s", err, string(body))
+	}
+	return settings
 }
 
-func singleInstallFile(t *testing.T, result InstallResult) InstallFileResult {
+func readTextFile(t *testing.T, path string) string {
 	t.Helper()
 
-	if len(result.Files) != 1 {
-		t.Fatalf("files len = %d, want 1", len(result.Files))
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
 	}
-	return result.Files[0]
+	return string(body)
+}
+
+func writeTestFile(t *testing.T, path string, body string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 }
