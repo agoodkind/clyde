@@ -66,6 +66,15 @@ type hookInput struct {
 	ConversationKey string   `json:"conversationId"`
 }
 
+func (input hookInput) reorientSnapshotKey() ReorientSnapshotKey {
+	return ReorientSnapshotKey{
+		TranscriptPath: strings.TrimSpace(input.TranscriptPath),
+		ConversationID: strings.TrimSpace(input.conversationSelector()),
+		SessionID:      strings.TrimSpace(input.SessionID),
+		CWD:            strings.TrimSpace(input.workspace()),
+	}
+}
+
 func (input hookInput) eventName() string {
 	if strings.TrimSpace(input.HookEventName) != "" {
 		return strings.TrimSpace(input.HookEventName)

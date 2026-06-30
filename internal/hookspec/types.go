@@ -273,7 +273,7 @@ func reorientBeforeCompactHook() Hook {
 				LoopLimit:      0,
 			},
 		},
-		Run: nil,
+		Run: runReorientBeforeCompact,
 	}
 }
 
@@ -311,7 +311,7 @@ func reorientAfterCompactHook() Hook {
 				LoopLimit:      0,
 			},
 		},
-		Run: runClaudeCodeReorientAfterCompact,
+		Run: runReorientAfterCompact,
 	}
 }
 
@@ -337,6 +337,6 @@ func reorientStopFollowupHook() Hook {
 			FailClosed:     false,
 			LoopLimit:      1,
 		}},
-		Run: nil,
+		Run: runReorientStopFollowup,
 	}
 }
