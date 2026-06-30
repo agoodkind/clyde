@@ -47,6 +47,9 @@ var (
 	_    = (*rawCursorHookHandler).setString
 	_    = (*rawCursorHookHandler).setInt
 	_    = (*rawCursorHookHandler).setBool
+	_    = Registry{hooks: nil}.HooksForClient
+	_    = Registry{hooks: nil}.InstallsForClient
+	_    = Registry{hooks: nil}.ClydeCommandSignatures
 	_    = shellCommand("", nil)
 	_    = SupportedClients()
 	_    = writeAdditionalContext(io.Discard, ClientClaudeCode, "", "")

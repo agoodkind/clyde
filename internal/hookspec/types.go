@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 )
 
@@ -96,6 +97,8 @@ type Hook struct {
 	ID         HookID
 	Client     Client
 	ClaudeCode ClaudeCodeHook
+	Aliases    []HookID
+	Installs   []InstallSpec
 	Run        Handler
 }
 
@@ -127,14 +130,29 @@ func Register(registry *Registry, hook Hook) error {
 	if _, ok := registry.Hook(hook.ID); ok {
 		return fmt.Errorf("hook %q already registered", hook.ID)
 	}
+	for _, alias := range hook.Aliases {
+		if strings.TrimSpace(string(alias)) == "" {
+			return fmt.Errorf("hook %q has an empty alias", hook.ID)
+		}
+		if alias == hook.ID {
+			return fmt.Errorf("hook %q has alias equal to hook id", hook.ID)
+		}
+		if seenAliases[alias] {
+			return fmt.Errorf("hook %q has duplicate alias %q", hook.ID, alias)
+		}
+		seenAliases[alias] = true
+		if _, ok := registry.Hook(alias); ok {
+			return fmt.Errorf("hook alias %q already registered", alias)
+		}
+	}
 	registry.hooks = append(registry.hooks, hook)
 	return nil
 }
 
-// Hook returns one hook declaration by id.
+// Hook returns one hook declaration by id or runtime alias.
 func (registry Registry) Hook(id HookID) (Hook, bool) {
 	for _, hook := range registry.hooks {
-		if hook.ID == id {
+		if hook.ID == id || slices.Contains(hook.Aliases, id) {
 			return hook, true
 		}
 	}
@@ -163,6 +181,43 @@ func (registry Registry) HooksForClient(client Client) []Hook {
 	return hooks
 }
 
+// InstallsForClient returns every install spec for one client.
+func (registry Registry) InstallsForClient(client Client) []RegisteredInstall {
+	installs := make([]RegisteredInstall, 0, len(registry.hooks))
+	for _, hook := range registry.hooks {
+		for _, install := range hook.Installs {
+			if install.Client != client {
+				continue
+			}
+			installs = append(installs, RegisteredInstall{
+				HookID: hook.ID,
+				Spec:   install.clone(),
+			})
+		}
+	}
+	return installs
+}
+
+// ClydeCommandSignatures returns every current and legacy runtime args shape
+// that marks a hook handler as Clyde-owned.
+func (registry Registry) ClydeCommandSignatures() [][]string {
+	var signatures [][]string
+	for _, hook := range registry.hooks {
+		for _, install := range hook.Installs {
+			signatures = append(signatures, slices.Clone(install.Args))
+		}
+		for _, alias := range hook.Aliases {
+			signatures = append(signatures, []string{"hooks", "run", string(alias)})
+		}
+	}
+	return signatures
+}
+
+func (install InstallSpec) clone() InstallSpec {
+	install.Args = slices.Clone(install.Args)
+	return install
+}
+
 func claudeCodeReorientHook() Hook {
 	return Hook{
 		ID:     HookIDClaudeCodeReorientAfterCompact,
@@ -174,6 +229,17 @@ func claudeCodeReorientHook() Hook {
 			TimeoutSeconds: 600,
 			StatusMessage:  "Recovering Clyde reorient context",
 		},
+		Aliases: nil,
+		Installs: []InstallSpec{{
+			Client:         ClientClaudeCode,
+			Event:          EventSessionStart,
+			Matcher:        "compact",
+			Args:           []string{"hooks", "run", string(HookIDClaudeCodeReorientAfterCompact)},
+			TimeoutSeconds: 600,
+			StatusMessage:  "Recovering Clyde reorient context",
+			FailClosed:     false,
+			LoopLimit:      0,
+		}},
 		Run: runClaudeCodeReorientAfterCompact,
 	}
 }

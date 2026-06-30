@@ -9,9 +9,9 @@ func TestRegisterRejectsDuplicateHookID(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
-	hook, ok := registry.Hook(HookIDClaudeCodeReorientAfterCompact)
+	hook, ok := registry.Hook(HookIDReorientAfterCompact)
 	if !ok {
-		t.Fatal("default registry did not include Claude Code reorient hook")
+		t.Fatal("default registry did not include reorient-after-compact")
 	}
 
 	err := Register(&registry, hook)
@@ -20,32 +20,70 @@ func TestRegisterRejectsDuplicateHookID(t *testing.T) {
 	}
 }
 
-func TestNewRegistryDeclaresClaudeCodeReorientHook(t *testing.T) {
+func TestNewRegistryResolvesLegacyAliasWithoutInstallingIt(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
 	hook, ok := registry.Hook(HookIDClaudeCodeReorientAfterCompact)
 	if !ok {
-		t.Fatal("default registry did not include Claude Code reorient hook")
+		t.Fatal("legacy Claude Code hook alias did not resolve")
+	}
+	if hook.ID != HookIDReorientAfterCompact {
+		t.Fatalf("legacy alias resolved to %q, want %q", hook.ID, HookIDReorientAfterCompact)
 	}
 
-	if hook.Client != ClientClaudeCode {
-		t.Fatalf("client = %q, want %q", hook.Client, ClientClaudeCode)
+	for _, install := range registry.InstallsForClient(ClientClaudeCode) {
+		if install.HookID == HookIDClaudeCodeReorientAfterCompact {
+			t.Fatalf("legacy alias was installed: %#v", install)
+		}
 	}
-	if hook.ClaudeCode.Event != ClaudeCodeEventSessionStart {
-		t.Fatalf("event = %q, want %q", hook.ClaudeCode.Event, ClaudeCodeEventSessionStart)
+}
+
+func TestNewRegistryDeclaresExpectedInstallSpecs(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	hook, ok := registry.Hook(HookIDReorientBeforeCompact)
+	if !ok {
+		t.Fatal("missing reorient-before-compact hook")
 	}
-	if hook.ClaudeCode.Matcher != "compact" {
-		t.Fatalf("matcher = %q, want compact", hook.ClaudeCode.Matcher)
+	if hook.ClaudeCode.Event != ClaudeCodeEventPreCompact || !slices.Equal(hook.ClaudeCode.Args, []string{"hooks", "run", "reorient-before-compact"}) {
+		t.Fatalf("Claude Code pre-compact shape = %#v", hook.ClaudeCode)
 	}
-	if hook.ClaudeCode.TimeoutSeconds != 600 {
-		t.Fatalf("timeout = %d, want 600", hook.ClaudeCode.TimeoutSeconds)
+	assertInstallSpec(t, registry, ClientClaudeCode, HookIDReorientBeforeCompact, EventPreCompact, "", []string{"hooks", "run", "reorient-before-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientClaudeCode, HookIDReorientAfterCompact, EventSessionStart, "compact", []string{"hooks", "run", "reorient-after-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCodex, HookIDReorientBeforeCompact, EventPreCompact, "", []string{"hooks", "run", "reorient-before-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCodex, HookIDReorientAfterCompact, EventSessionStart, "compact", []string{"hooks", "run", "reorient-after-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCursor, HookIDReorientBeforeCompact, EventCursorPre, "", []string{"hooks", "run", "reorient-before-compact"}, 600, 0)
+	assertInstallSpec(t, registry, ClientCursor, HookIDReorientStopFollowup, EventCursorStop, "", []string{"hooks", "run", "reorient-stop-followup"}, 600, 1)
+}
+
+func assertInstallSpec(t *testing.T, registry Registry, client Client, id HookID, event string, matcher string, args []string, timeout int, loopLimit int) {
+	t.Helper()
+
+	for _, install := range registry.InstallsForClient(client) {
+		if install.HookID != id {
+			continue
+		}
+		if install.Spec.Event != event {
+			t.Fatalf("%s/%s event = %q, want %q", client, id, install.Spec.Event, event)
+		}
+		if install.Spec.Matcher != matcher {
+			t.Fatalf("%s/%s matcher = %q, want %q", client, id, install.Spec.Matcher, matcher)
+		}
+		if !slices.Equal(install.Spec.Args, args) {
+			t.Fatalf("%s/%s args = %#v, want %#v", client, id, install.Spec.Args, args)
+		}
+		if install.Spec.TimeoutSeconds != timeout {
+			t.Fatalf("%s/%s timeout = %d, want %d", client, id, install.Spec.TimeoutSeconds, timeout)
+		}
+		if install.Spec.LoopLimit != loopLimit {
+			t.Fatalf("%s/%s loop_limit = %d, want %d", client, id, install.Spec.LoopLimit, loopLimit)
+		}
+		if install.Spec.Client != client {
+			t.Fatalf("%s/%s client = %q, want %q", client, id, install.Spec.Client, client)
+		}
+		return
 	}
-	expectedArgs := []string{"hooks", "run", string(HookIDClaudeCodeReorientAfterCompact)}
-	if !slices.Equal(hook.ClaudeCode.Args, expectedArgs) {
-		t.Fatalf("args = %#v, want %#v", hook.ClaudeCode.Args, expectedArgs)
-	}
-	if hook.Run == nil {
-		t.Fatal("run handler was nil")
-	}
+	t.Fatalf("missing install spec %s/%s", client, id)
 }
