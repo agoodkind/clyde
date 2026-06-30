@@ -51,6 +51,8 @@ func SupportedClients() []Client {
 type ClaudeCodeEvent string
 
 const (
+	// ClaudeCodeEventPreCompact fires before Claude Code compacts a session.
+	ClaudeCodeEventPreCompact ClaudeCodeEvent = "PreCompact"
 	// ClaudeCodeEventSessionStart fires when Claude Code starts, resumes, clears,
 	// or restarts after compaction.
 	ClaudeCodeEventSessionStart ClaudeCodeEvent = "SessionStart"
@@ -136,6 +138,7 @@ func Register(registry *Registry, hook Hook) error {
 	if _, ok := registry.Hook(hook.ID); ok {
 		return fmt.Errorf("hook %q already registered", hook.ID)
 	}
+	seenAliases := map[HookID]bool{}
 	for _, alias := range hook.Aliases {
 		if strings.TrimSpace(string(alias)) == "" {
 			return fmt.Errorf("hook %q has an empty alias", hook.ID)
@@ -174,7 +177,7 @@ func (registry Registry) Hook(id HookID) (Hook, bool) {
 		},
 		Aliases:  nil,
 		Installs: nil,
-		Run: nil,
+		Run:      nil,
 	}, false
 }
 

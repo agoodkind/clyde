@@ -20,6 +20,32 @@ func TestRegisterRejectsDuplicateHookID(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsDuplicateAliases(t *testing.T) {
+	t.Parallel()
+
+	registry := Registry{}
+	err := Register(&registry, Hook{
+		ID:      "hook-a",
+		Aliases: []HookID{"alias-a", "alias-a"},
+	})
+	if err == nil {
+		t.Fatal("Register duplicate aliases returned nil error")
+	}
+}
+
+func TestRegisterRejectsAliasMatchingHookID(t *testing.T) {
+	t.Parallel()
+
+	registry := Registry{}
+	err := Register(&registry, Hook{
+		ID:      "hook-a",
+		Aliases: []HookID{"hook-a"},
+	})
+	if err == nil {
+		t.Fatal("Register alias matching hook id returned nil error")
+	}
+}
+
 func TestNewRegistryResolvesLegacyAliasWithoutInstallingIt(t *testing.T) {
 	t.Parallel()
 
