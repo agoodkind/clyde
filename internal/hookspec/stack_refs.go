@@ -5,6 +5,10 @@ import (
 	"io"
 )
 
+// These references keep deliberately split helper branches buildable under the
+// repository deadcode gate until their consumer branches land upstack.
+var stackRefsCursorDocument = &cursorHooksDocument{fields: nil}
+
 var (
 	_    = shellCommand
 	_    = shellQuote
@@ -29,11 +33,27 @@ var (
 	_    = codexCommandSignatures
 	_    = codexEventName
 	_    = marshalCodexTrustedHash
+	_    = unmarshalCursorHooksDocument
+	_    = (*cursorHooksDocument).MarshalJSON
+	_    = (*cursorHooksDocument).marshalCursorHookInstalls
+	_    = (*cursorHooksDocument).unmarshalCursorHooks
+	_    = (*cursorHooksDocument).setInt
+	_    = cursorCommandSignatures
+	_    = removeCursorHookHandlers
+	_    = newCursorCommandHookHandler
+	_    = (*rawCursorHookHandler).MarshalJSON
+	_    = (*rawCursorHookHandler).UnmarshalJSON
+	_    = (*rawCursorHookHandler).command
+	_    = (*rawCursorHookHandler).setString
+	_    = (*rawCursorHookHandler).setInt
+	_    = (*rawCursorHookHandler).setBool
 	_    = shellCommand("", nil)
 	_    = SupportedClients()
 	_    = writeAdditionalContext(io.Discard, ClientClaudeCode, "", "")
 	_    = writeCursorFollowup(io.Discard, "")
 	_, _ = marshalCodexHookInstalls(nil, nil, nil, "", "")
+	_    = stackRefsCursorDocument.marshalCursorHookInstalls
+	_    = stackRefsCursorDocument.MarshalJSON
 )
 
 func init() {
@@ -44,10 +64,12 @@ func init() {
 		CWD:            "",
 	}
 	_ = normalizeSnapshotKey(key)
-	if SupportedClients() == nil {
+	if stackRefsCursorDocument == nil {
 		store := NewFileSnapshotStore("")
 		_ = store.Save(context.Background(), key, "")
 		_, _, _ = store.Consume(context.Background(), key)
 		_ = store.pathForKey(key)
 	}
+	document, _ := unmarshalCursorHooksDocument(nil)
+	_ = document
 }
