@@ -1,0 +1,110 @@
+package cursorstore
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+)
+
+const (
+	backgroundComposerKeyPrefix        = "backgroundComposer"
+	backgroundComposerWindowMappingKey = "backgroundComposer.windowBcMapping"
+)
+
+// BackgroundComposer models one consumed background composer identity from
+// Cursor's undocumented, version-pinned background composer mapping payload.
+type BackgroundComposer struct {
+	ComposerID string
+	WindowID   string
+}
+
+// BackgroundComposerWindowMapping models the consumed window-to-composer
+// mapping stored by Cursor for background composers.
+type BackgroundComposerWindowMapping struct {
+	Windows []BackgroundComposerWindow
+}
+
+// BackgroundComposerWindow models one Cursor window id and its background
+// composer ids.
+type BackgroundComposerWindow struct {
+	WindowID    string
+	ComposerIDs []string
+}
+
+// DecodeBackgroundComposerWindowMappingJSON decodes Cursor's observed
+// `backgroundComposer.windowBcMapping` payload.
+func DecodeBackgroundComposerWindowMappingJSON(data []byte) (BackgroundComposerWindowMapping, error) {
+	var wire map[string][]string
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return BackgroundComposerWindowMapping{}, CursorJSONDecodeError{
+			Description: "background composer window mapping",
+			Err:         err,
+		}
+	}
+
+	windowIDs := make([]string, 0, len(wire))
+	for windowID := range wire {
+		windowIDs = append(windowIDs, windowID)
+	}
+	sortWindowIDs(windowIDs)
+
+	windows := make([]BackgroundComposerWindow, 0, len(windowIDs))
+	for _, windowID := range windowIDs {
+		composerIDs := append([]string(nil), wire[windowID]...)
+		windows = append(windows, BackgroundComposerWindow{
+			WindowID:    windowID,
+			ComposerIDs: composerIDs,
+		})
+	}
+	return BackgroundComposerWindowMapping{Windows: windows}, nil
+}
+
+// ListBackgroundComposers lists background composer identities from a Cursor
+// global database. Individually malformed rows are skipped because Cursor may
+// retain stale background composer keys across versions.
+func ListBackgroundComposers(ctx context.Context, globalDB *sql.DB) ([]BackgroundComposer, error) {
+	rows, err := ReadKVRowsByPrefix(ctx, globalDB, KVTableItemTable, backgroundComposerKeyPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("list cursor background composer rows: %w", err)
+	}
+
+	composers := make([]BackgroundComposer, 0)
+	for _, row := range rows {
+		if row.Key != backgroundComposerWindowMappingKey {
+			continue
+		}
+		mapping, decodeErr := DecodeBackgroundComposerWindowMappingJSON(row.Value)
+		if decodeErr != nil {
+			continue
+		}
+		composers = append(composers, backgroundComposersFromWindowMapping(mapping)...)
+	}
+	return composers, nil
+}
+
+func backgroundComposersFromWindowMapping(mapping BackgroundComposerWindowMapping) []BackgroundComposer {
+	composers := make([]BackgroundComposer, 0)
+	for _, window := range mapping.Windows {
+		for _, composerID := range window.ComposerIDs {
+			composers = append(composers, BackgroundComposer{
+				ComposerID: composerID,
+				WindowID:   window.WindowID,
+			})
+		}
+	}
+	return composers
+}
+
+func sortWindowIDs(windowIDs []string) {
+	sort.SliceStable(windowIDs, func(i, j int) bool {
+		left, leftErr := strconv.ParseInt(windowIDs[i], 10, 64)
+		right, rightErr := strconv.ParseInt(windowIDs[j], 10, 64)
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		return windowIDs[i] < windowIDs[j]
+	})
+}
