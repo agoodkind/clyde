@@ -79,7 +79,7 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 		{
 			name:     "unknown subcommand under a generated parent",
 			args:     []string{"conversation", "bogus"},
-			wantHelp: "Inspect indexed Claude, Codex, and Zed conversations",
+			wantHelp: "Inspect indexed Claude, Codex, Cursor, and Zed conversations",
 		},
 		{
 			name:     "unknown subcommand under a handwritten parent",
@@ -101,12 +101,12 @@ func TestMisuseRendersFullHelp(t *testing.T) {
 		{
 			name:     "unsupported provider value",
 			args:     []string{"conversation", "search", "--provider", "bogus"},
-			wantHelp: "One operation over indexed Claude, Codex, and Zed conversations",
+			wantHelp: "One operation over indexed Claude, Codex, Cursor, and Zed conversations",
 		},
 		{
 			name:     "unparseable search time bound",
 			args:     []string{"conversation", "search", "--query", "auth", "--after", "nope"},
-			wantHelp: "One operation over indexed Claude, Codex, and Zed conversations",
+			wantHelp: "One operation over indexed Claude, Codex, Cursor, and Zed conversations",
 		},
 	}
 	for _, tc := range cases {
