@@ -336,6 +336,42 @@ func TestReorientParentAnchorUsesTimestampFallbackBeforeTail(t *testing.T) {
 	}
 }
 
+func TestReorientSyntheticPreCompactBoundarySkipsCompactSummary(t *testing.T) {
+	t.Parallel()
+	fixture := newReorientFixture(t)
+	report, err := fixture.index.Reorient(context.Background(), ReorientOptions{
+		ConversationID:      fixture.child.ID,
+		Before:              2,
+		After:               2,
+		Limit:               1,
+		SyntheticPreCompact: true,
+	})
+	if err != nil {
+		t.Fatalf("Reorient err = %v", err)
+	}
+	preCompactBody := joinedReorientItemBodies(report.Items, ReorientItemKindPreCompactWindow)
+	if !strings.Contains(preCompactBody, "post compact tail") || !strings.Contains(preCompactBody, "tail request") {
+		t.Fatalf("synthetic pre-compact body missing transcript tail:\n%s", preCompactBody)
+	}
+	if strings.Contains(preCompactBody, "compact summary should stay supplemental") {
+		t.Fatalf("synthetic pre-compact body included prior compact summary:\n%s", preCompactBody)
+	}
+	if _, ok := findReorientItem(report.Items, ReorientItemKindRecoveredContext); ok {
+		t.Fatalf("synthetic pre-compact report included recovered compact summary")
+	}
+	header, ok := findReorientItem(report.Items, ReorientItemKindHeader)
+	if !ok {
+		t.Fatalf("missing header item")
+	}
+	if report.Checkpoint == nil {
+		t.Fatalf("synthetic report checkpoint is nil")
+	}
+	wantBoundary := fmt.Sprintf("boundary=%d", report.Checkpoint.BoundaryIndex)
+	if !strings.Contains(header.Body, wantBoundary) {
+		t.Fatalf("synthetic header missing %s:\n%s", wantBoundary, header.Body)
+	}
+}
+
 func testReorientItem(title string, bodyBytes int) ReorientItem {
 	return ReorientItem{
 		Kind:         ReorientItemKindTail,
