@@ -276,6 +276,12 @@ func ReorientConversation(ctx context.Context, conversationID, workspace, topic,
 	return reorientConversation(ctx, conversationID, workspace, topic, cursor, window, limit, pageBytes, false)
 }
 
+// ReorientConversationForHook asks the daemon for one reorient page and lets
+// hook callers request a synthetic pre-compact boundary.
+func ReorientConversationForHook(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int, syntheticPreCompact bool) (conversation.ReorientPage, error) {
+	return reorientConversation(ctx, conversationID, workspace, topic, cursor, window, limit, pageBytes, syntheticPreCompact)
+}
+
 func reorientConversation(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int, syntheticPreCompact bool) (conversation.ReorientPage, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {

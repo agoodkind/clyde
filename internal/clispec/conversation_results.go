@@ -146,10 +146,16 @@ type exportTranscriptOutput struct {
 }
 
 type installHooksOutput struct {
+	Files   []installHooksFileOutput `json:"files"`
+	Changed bool                     `json:"changed"`
+	DryRun  bool                     `json:"dry_run,omitempty"`
+}
+
+type installHooksFileOutput struct {
+	Client       string   `json:"client"`
 	SettingsPath string   `json:"settings_path"`
 	Installed    []string `json:"installed"`
 	Changed      bool     `json:"changed"`
-	DryRun       bool     `json:"dry_run,omitempty"`
 	Preview      string   `json:"preview,omitempty"`
 }
 
@@ -321,19 +327,27 @@ func optionalReorientConversationRefOutputFromDomain(ref *conv.ReorientConversat
 }
 
 func installHooksOutputFromResult(result hookspec.InstallResult) installHooksOutput {
-	installed := make([]string, 0, len(result.Installed))
-	for _, id := range result.Installed {
-		installed = append(installed, string(id))
-	}
 	output := installHooksOutput{
-		SettingsPath: result.SettingsPath,
-		Installed:    installed,
-		Changed:      result.Changed,
-		DryRun:       result.DryRun,
-		Preview:      "",
+		Files:   make([]installHooksFileOutput, 0, len(result.Files)),
+		Changed: result.Changed,
+		DryRun:  result.DryRun,
 	}
-	if result.DryRun {
-		output.Preview = string(result.Preview)
+	for _, file := range result.Files {
+		installed := make([]string, 0, len(file.Installed))
+		for _, id := range file.Installed {
+			installed = append(installed, string(id))
+		}
+		fileOutput := installHooksFileOutput{
+			Client:       string(file.Client),
+			SettingsPath: file.SettingsPath,
+			Installed:    installed,
+			Changed:      file.Changed,
+			Preview:      "",
+		}
+		if result.DryRun {
+			fileOutput.Preview = string(file.Preview)
+		}
+		output.Files = append(output.Files, fileOutput)
 	}
 	return output
 }
