@@ -372,6 +372,9 @@ message ReorientConversationRequest {
   // page_bytes bounds one page so it renders inline. Zero means the daemon
   // default.
   int64 page_bytes = 7;
+  // synthetic_precompact treats the current transcript end as a compaction
+  // boundary for hooks that run before provider compaction.
+  bool synthetic_precompact = 8;
 }
 
 enum ReorientItemKind {

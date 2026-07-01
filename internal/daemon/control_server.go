@@ -184,12 +184,13 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.ReorientConversationRequest) (*clydev1.ReorientConversationResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
 	page, err := s.index.ReorientPage(ctx, conversation.ReorientOptions{
-		ConversationID: req.GetConversationId(),
-		WorkspaceRoot:  req.GetWorkspace(),
-		Topic:          req.GetTopic(),
-		Before:         int(req.GetWindow()),
-		After:          int(req.GetWindow()),
-		Limit:          int(req.GetLimit()),
+		ConversationID:      req.GetConversationId(),
+		WorkspaceRoot:       req.GetWorkspace(),
+		Topic:               req.GetTopic(),
+		Before:              int(req.GetWindow()),
+		After:               int(req.GetWindow()),
+		Limit:               int(req.GetLimit()),
+		SyntheticPreCompact: req.GetSyntheticPrecompact(),
 	}, req.GetCursor(), int(req.GetPageBytes()))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "reorient conversation: %v", err)

@@ -273,6 +273,10 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 // ReorientConversation asks the daemon for one cursor-paged page of reorient
 // evidence as typed data.
 func ReorientConversation(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int) (conversation.ReorientPage, error) {
+	return reorientConversation(ctx, conversationID, workspace, topic, cursor, window, limit, pageBytes, false)
+}
+
+func reorientConversation(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int, syntheticPreCompact bool) (conversation.ReorientPage, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
 		return conversation.ReorientPage{}, err
@@ -282,13 +286,14 @@ func ReorientConversation(ctx context.Context, conversationID, workspace, topic,
 	rpcCtx, cancel := context.WithTimeout(ctx, analysisClientRPCTimeout)
 	defer cancel()
 	resp, err := client.rpc.ReorientConversation(rpcCtx, &clydev1.ReorientConversationRequest{
-		ConversationId: conversationID,
-		Workspace:      workspace,
-		Topic:          topic,
-		Cursor:         cursor,
-		Window:         int64(window),
-		Limit:          int64(limit),
-		PageBytes:      int64(pageBytes),
+		ConversationId:      conversationID,
+		Workspace:           workspace,
+		Topic:               topic,
+		Cursor:              cursor,
+		Window:              int64(window),
+		Limit:               int64(limit),
+		PageBytes:           int64(pageBytes),
+		SyntheticPrecompact: syntheticPreCompact,
 	})
 	if err != nil {
 		return conversation.ReorientPage{}, daemonRPCError(rpcCtx, "reorient conversation", err)
