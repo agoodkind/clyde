@@ -85,8 +85,8 @@ func (conversationInfoPayload) isClispecPrepared() {}
 // conversationGroup is the terminal parent for conversation operations.
 var conversationGroup = &Group{
 	Use:     "conversation",
-	Short:   "Inspect Claude, Codex, and Zed conversations",
-	Long:    "Inspect indexed Claude, Codex, and Zed conversations: search across or within conversations, read a transcript or a context window, browse metadata, inspect static conversation info, rebuild recovery context, and export transcripts. Clyde reads provider-owned artifacts and never mutates them.",
+	Short:   "Inspect Claude, Codex, Cursor, and Zed conversations",
+	Long:    "Inspect indexed Claude, Codex, Cursor, and Zed conversations: search across or within conversations, read a transcript or a context window, browse metadata, inspect static conversation info, rebuild recovery context, and export transcripts. Clyde reads provider-owned artifacts and never mutates them.",
 	Example: "clyde conversation search --query \"auth timeout\"\nclyde conversation search zed:1a2b3c --around 42\nclyde conversation export zed:1a2b3c --only chat --stdout",
 	Parent:  nil,
 }
@@ -139,7 +139,7 @@ func searchParams() []Param[searchInput] {
 	return []Param[searchInput]{
 		StringParam("query", "Text or semantic query to find in transcript messages.", "", false,
 			func(in *searchInput, v string) { in.Query = v }),
-		StringParam("provider", "Provider filter, such as claude, codex, or zed.", "", false,
+		StringParam("provider", "Provider filter, such as claude, codex, cursor, or zed.", "", false,
 			func(in *searchInput, v string) { in.Provider = v }),
 		StringParam("workspace", "Workspace root filter.", "", false,
 			func(in *searchInput, v string) { in.WorkspaceRoot = v }),
@@ -188,8 +188,8 @@ func searchOp() Operation[searchInput, searchPayload] {
 		Group:      conversationGroup,
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindValue,
-		Short:      "Search, read, or browse Claude, Codex, and Zed conversations.",
-		Long:       "One operation over indexed Claude, Codex, and Zed conversations. Set --query to search the corpus, or pass CONVERSATION_ID plus --query to search within one conversation. Pass CONVERSATION_ID without --query to read a whole transcript, or add --around to read a context window. Set neither --query nor CONVERSATION_ID to browse conversation metadata.",
+		Short:      "Search, read, or browse Claude, Codex, Cursor, and Zed conversations.",
+		Long:       "One operation over indexed Claude, Codex, Cursor, and Zed conversations. Set --query to search the corpus, or pass CONVERSATION_ID plus --query to search within one conversation. Pass CONVERSATION_ID without --query to read a whole transcript, or add --around to read a context window. Set neither --query nor CONVERSATION_ID to browse conversation metadata.",
 		Examples: []string{
 			"clyde conversation search --query \"auth timeout\" --limit 10",
 			"clyde conversation search --query \"auth timeout\" --after 2026-05-01 --before 2026-05-21",

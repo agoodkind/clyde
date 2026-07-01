@@ -71,9 +71,9 @@ func run() int {
 func newRoot(f *cli.Factory) *cobra.Command {
 	root := &cobra.Command{
 		Use:     "clyde",
-		Short:   "Search, inspect, and export Claude, Codex, and Zed transcripts",
-		Long:    "Clyde reads raw Claude, Codex, and Zed conversation artifacts and exposes them through terminal commands and an MCP server, alongside the background daemon, the MITM capture proxy, log inspection, and transcript export.",
-		Example: "clyde conversation list\nclyde conversation export zed:1a2b3c",
+		Short:   "Search, inspect, and export Claude, Codex, Cursor, and Zed transcripts",
+		Long:    "Clyde reads raw Claude, Codex, Cursor, and Zed conversation artifacts and exposes them through terminal commands and an MCP server, alongside the background daemon, the MITM capture proxy, log inspection, and transcript export.",
+		Example: "clyde conversation search\nclyde conversation export zed:1a2b3c",
 		Version: "DEVELOPMENT",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
