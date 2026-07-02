@@ -207,6 +207,68 @@ func TestAnthropicProviderErrorResponseMapsSSEErrorEventToTypedClass(t *testing.
 	}
 }
 
+// TestAnthropicProviderErrorResponseWordsOverloadedForCursorPassthrough
+// pins the client-visible wording for an Anthropic capacity shed on the
+// OpenAI route family. Cursor's backend erases error.message when the
+// text looks like a rate limit ("overloaded_error: Overloaded" lands in
+// its canned API-key-rate-limit bucket), so both spellings of the shed
+// (HTTP 529 and the SSE overloaded_error frame on a 200 stream) must
+// surface the neutral wording instead of the upstream text. The rule is
+// documented in docs/cursor.md.
+func TestAnthropicProviderErrorResponseWordsOverloadedForCursorPassthrough(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		upstreamErr *anthropic.UpstreamError
+	}{
+		{
+			name: "sse overloaded_error frame on 200 stream",
+			upstreamErr: &anthropic.UpstreamError{
+				Classification: anthropic.Classification{Class: anthropic.ResponseClassRetryableError, Retryable: true},
+				Status:         0,
+				Message:        "anthropic error: overloaded_error: Overloaded",
+				ErrorType:      anthropic.ErrorKindOverloaded,
+			},
+		},
+		{
+			name: "http 529 status with raw error body",
+			upstreamErr: &anthropic.UpstreamError{
+				Classification: anthropic.Classification{Class: anthropic.ResponseClassRetryableError, Retryable: true},
+				Status:         529,
+				Message:        `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+				ErrorType:      anthropic.ErrorKindNone,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			aerr := anthropicProviderAdapterError(tc.upstreamErr)
+			if aerr.HTTPStatus != http.StatusBadRequest {
+				t.Fatalf("status=%d want %d", aerr.HTTPStatus, http.StatusBadRequest)
+			}
+			if aerr.Code != "upstream_failed" {
+				t.Fatalf("code=%q want upstream_failed", aerr.Code)
+			}
+			if aerr.Message != anthropicOverloadedClientMessage {
+				t.Fatalf("message=%q want %q", aerr.Message, anthropicOverloadedClientMessage)
+			}
+			if aerr.UpstreamStatus != tc.upstreamErr.Status {
+				t.Fatalf("upstream status=%d want %d", aerr.UpstreamStatus, tc.upstreamErr.Status)
+			}
+			env := renderedOpenAIEnvelope(t, aerr)
+			if env.Error.Type != "invalid_request_error" || env.Error.Code != "upstream_failed" {
+				t.Fatalf("rendered envelope=%+v", env.Error)
+			}
+			// The boundary suffixes the rendered message with the Clyde
+			// request id diagnostic, so pin the prefix rather than equality.
+			if !strings.HasPrefix(env.Error.Message, anthropicOverloadedClientMessage) {
+				t.Fatalf("rendered message=%q want prefix %q", env.Error.Message, anthropicOverloadedClientMessage)
+			}
+		})
+	}
+}
+
 func TestAnthropicProviderErrorResponseMapsWrappedTransportFailure(t *testing.T) {
 	t.Parallel()
 

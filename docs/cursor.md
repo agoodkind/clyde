@@ -54,5 +54,7 @@ An Anthropic rate limit, for instance, comes back as a 400 that reads "rate limi
 
 If you feel like this sounds counterintuitive then you aren’t alone. It’s a half baked design on Cursor’s part, so always returning 4xx allows users to debug robustly without guessing.
 
+HTTP 400 alone is not sufficient. Cursor’s backend also classifies the error body text: it sorts BYOK provider failures into a verbatim passthrough bucket (its `PROVIDER_ERROR`, rendered in the chat as “Provider returned error: {our full JSON}”) and a canned “User Provided API Key Rate Limit Exceeded” bucket that erases `error.message` entirely. During the 2026-07-01 Anthropic Opus incident, a compliant 400 whose message read “anthropic error: overloaded_error: Overloaded” landed in the canned bucket, while past messages containing the bare word “overload” passed through verbatim. The ingress therefore words Anthropic capacity sheds (HTTP 529 or an SSE `overloaded_error` frame) without the upstream tokens; `anthropicOverloadedClientMessage` in `internal/adapter/anthropic_provider_dispatch.go` and its test hold the enforced wording.
+
 - Cursor MITM specifics is covered in [Cursor BYOK MITM setup](cursor-mitm-setup.md)
 - Cursor MITM PoC patching (along with other electron desktop clients) can be found at: https://github.com/agoodkind/desktop-via-clyde
