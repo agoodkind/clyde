@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"goodkind.io/clyde/codexwire"
@@ -94,12 +95,14 @@ func assertAssistantMessageContainsText(t *testing.T, items []codexwire.InputIte
 	if !found {
 		t.Fatalf("expected assistant message, got %#v", items)
 	}
+	var joined strings.Builder
 	for _, content := range item.Content {
-		if content.Text == want {
-			return
-		}
+		joined.WriteString(content.Text)
 	}
-	t.Fatalf("assistant message content = %#v, want text %q", item.Content, want)
+	if strings.Contains(joined.String(), want) {
+		return
+	}
+	t.Fatalf("assistant message content = %#v, want joined text containing %q", item.Content, want)
 }
 
 func extractSummaryTexts(item codexwire.InputItem) []string {
@@ -272,6 +275,7 @@ func TestPhase6PlainTextConcatRoundTripWithoutEncryptedEmitsNoReasoningItem(t *t
 	if _, ok := findFirstReasoningItem(items); ok {
 		t.Fatalf("expected no reasoning item")
 	}
+	assertAssistantMessageContainsText(t, items, "thinking")
 }
 
 // plain_text_concat + drop. No reasoning item even when the marker
