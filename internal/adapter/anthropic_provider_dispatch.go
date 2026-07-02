@@ -451,6 +451,22 @@ func (s *Server) executeAnthropicPreparedStreamNative(
 	}, nil
 }
 
+// anthropicOverloadedStatus is Anthropic's non-standard HTTP status for
+// server-side capacity shedding. The same condition arrives on a 200
+// stream as an SSE `event: error` frame with error.type
+// "overloaded_error"; both spellings mean the identical retryable state.
+const anthropicOverloadedStatus = 529
+
+// anthropicOverloadedClientMessage is the client-visible wording for an
+// Anthropic capacity shed on the OpenAI route family. Cursor's backend
+// sorts BYOK provider failures into a verbatim passthrough bucket and a
+// canned "API key rate limit" bucket that erases error.message; the
+// upstream wording ("overloaded_error: Overloaded") lands in the canned
+// bucket, so this message avoids those tokens while staying truthful.
+// The empirical rule is recorded in docs/cursor.md; the original status
+// stays visible to diagnostics through UpstreamStatus.
+const anthropicOverloadedClientMessage = "anthropic reports its servers are temporarily busy (upstream capacity shed); retry shortly"
+
 func anthropicProviderAdapterError(err error) *adapterError {
 	if aerr := anthropicWireBaselineAdapterError(err); aerr != nil {
 		return aerr
@@ -520,6 +536,9 @@ func anthropicProviderAdapterError(err error) *adapterError {
 			codeClass = upstreamClassServerError
 		case upstreamErr.Status >= 400:
 			codeClass = upstreamClassInvalidRequest
+		}
+		if upstreamErr.ErrorType == anthropic.ErrorKindOverloaded || upstreamErr.Status == anthropicOverloadedStatus {
+			message = anthropicOverloadedClientMessage
 		}
 		aerr := mapUpstreamForFamily(adapterRouteOpenAI, "anthropic", upstreamErr.Status, codeClass, "", message)
 		aerr.Cause = err
