@@ -469,12 +469,16 @@ func BuildRequestWithConfig(
 		input = append(input, MessageContent("user", string(codexwire.ContentItemInputText), " "))
 	}
 	reasoning := EffectiveReasoningWithDefaultSummary(req, effort, cfg.ReasoningSummary)
+	encryptedMode := cfg.RoundTripEncrypted
+	if encryptedMode == "" {
+		encryptedMode = RoundTripEncryptedRoundTrip
+	}
 	// codex-rs serializes `tools` and `include` as Vec<...> with no
 	// skip_serializing_if, so they appear as `[]` when empty rather than
 	// being omitted or null. Go marshals a nil slice as `null`, so the
 	// empty case is coerced to a non-nil empty slice to match codex-cli on
 	// the wire (research/codex/codex-rs/codex-api/src/common.rs).
-	include := RequestInclude(req.Include, reasoning != nil)
+	include := RequestInclude(req.Include, encryptedMode == RoundTripEncryptedRoundTrip)
 	if include == nil {
 		include = []string{}
 	}

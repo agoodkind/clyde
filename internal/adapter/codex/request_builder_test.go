@@ -364,8 +364,9 @@ func TestBuildCodexRequestOmitsNonCodexCLIWireFields(t *testing.T) {
 // the websocket session key never leaks into the body. Reference:
 // research/codex/codex-rs/codex-api/src/common.rs ResponsesApiRequest.
 func TestBuildCodexRequestSerializesCodexCLIFaithfulEnvelope(t *testing.T) {
-	// No tools, no reasoning effort: tools must still be `[]`, reasoning
-	// must still be `null`, include must still be `[]`.
+	// No tools, no reasoning effort: tools must still be `[]`,
+	// reasoning must still be `null`, and the default round-trip lever
+	// still requests encrypted reasoning.
 	req := ChatRequest{
 		ReasoningEffort: "max", // invalid effort -> reasoning stays nil
 		Metadata:        mustRaw(`{"conversation_id":"thread-xyz"}`),
@@ -389,8 +390,8 @@ func TestBuildCodexRequestSerializesCodexCLIFaithfulEnvelope(t *testing.T) {
 	if !strings.Contains(raw, `"tools":[]`) {
 		t.Fatalf("tools must serialize as []: %s", raw)
 	}
-	if !strings.Contains(raw, `"include":[]`) {
-		t.Fatalf("include must serialize as []: %s", raw)
+	if !strings.Contains(raw, `"include":["reasoning.encrypted_content"]`) {
+		t.Fatalf("include must request encrypted reasoning: %s", raw)
 	}
 	if !strings.Contains(raw, `"tool_choice":"auto"`) {
 		t.Fatalf("tool_choice must serialize: %s", raw)
@@ -1046,6 +1047,44 @@ func TestBuildCodexRequestAddsEncryptedReasoningIncludeAutomatically(t *testing.
 	out := BuildRequest(req, model, "")
 	if len(out.Include) != 1 || out.Include[0] != "reasoning.encrypted_content" {
 		t.Fatalf("include=%v", out.Include)
+	}
+}
+
+func TestBuildCodexRequestIncludesEncryptedReasoningForDefaultRoundTripLever(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	model := ResolvedAlias{Alias: "gpt-5.5"}
+
+	out := BuildRequest(req, model, "")
+	if out.Reasoning != nil {
+		t.Fatalf("reasoning=%+v want nil", out.Reasoning)
+	}
+	if len(out.Include) != 1 || out.Include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include=%v", out.Include)
+	}
+}
+
+func TestBuildCodexRequestOmitsEncryptedReasoningIncludeWhenRoundTripDrop(t *testing.T) {
+	req := ChatRequest{
+		Messages: []ChatMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"hello"`),
+		}},
+	}
+	model := ResolvedAlias{Alias: "gpt-5.5"}
+
+	out := BuildRequestWithConfig(req, codexResolvedForTest(model), "", RequestBuilderConfig{
+		RoundTripEncrypted: RoundTripEncryptedDrop,
+	})
+	if out.Reasoning != nil {
+		t.Fatalf("reasoning=%+v want nil", out.Reasoning)
+	}
+	if len(out.Include) != 0 {
+		t.Fatalf("include=%v want empty", out.Include)
 	}
 }
 
