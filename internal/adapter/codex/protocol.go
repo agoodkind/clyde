@@ -241,6 +241,22 @@ func SanitizeForUpstreamCache(text string) string {
 // Codex Reasoning input item. The body is injected into the assistant
 // message text instead so the prior reasoning stays in context.
 func SanitizeForUpstreamCacheWithStrategy(text string, strategy adapterrender.MaterializationStrategy) string {
+	return sanitizeForUpstreamCacheWithEncryptedMode(text, strategy, RoundTripEncryptedRoundTrip)
+}
+
+func sanitizeForUpstreamCacheWithRequestConfig(
+	text string,
+	strategy adapterrender.MaterializationStrategy,
+	cfg RequestBuilderConfig,
+) string {
+	return sanitizeForUpstreamCacheWithEncryptedMode(text, strategy, effectiveRoundTripEncrypted(cfg.RoundTripEncrypted))
+}
+
+func sanitizeForUpstreamCacheWithEncryptedMode(
+	text string,
+	strategy adapterrender.MaterializationStrategy,
+	encryptedMode RoundTripEncrypted,
+) string {
 	parts := adapterrender.ExtractSyntheticParts(text)
 	if len(parts) == 1 && parts[0].Kind == adapterrender.SyntheticKindText {
 		return parts[0].Body
@@ -251,7 +267,7 @@ func SanitizeForUpstreamCacheWithStrategy(text string, strategy adapterrender.Ma
 		case adapterrender.SyntheticKindText:
 			b.WriteString(p.Body)
 		case adapterrender.SyntheticReasoning:
-			b.WriteString(sanitizeReasoningPartForCodex(p, strategy))
+			b.WriteString(sanitizeReasoningPartForCodex(p, strategy, encryptedMode))
 		case adapterrender.SyntheticRedactedThinking, adapterrender.SyntheticNotice:
 			// Redacted thinking and notice envelopes never ride in the
 			// Codex upstream message body.
@@ -263,14 +279,21 @@ func SanitizeForUpstreamCacheWithStrategy(text string, strategy adapterrender.Ma
 // sanitizeReasoningPartForCodex picks the message-text contribution for one
 // reasoning piece. A Codex-origin piece follows the configured strategy
 // (its body normally rides on the separate Reasoning input item instead of
-// the message body). A foreign or unknown origin piece always injects its
-// body into the message body so the prior reasoning stays in context for
-// the next turn.
-func sanitizeReasoningPartForCodex(part adapterrender.SyntheticPart, strategy adapterrender.MaterializationStrategy) string {
+// the message body). When a Codex-origin piece has a captured rs_* ref but no
+// effective encrypted_content, the body falls back to message text because
+// store=false cannot resolve a bare rs_* id. A foreign or unknown origin piece
+// always injects its body into the message body so the prior reasoning stays
+// in context for the next turn.
+func sanitizeReasoningPartForCodex(
+	part adapterrender.SyntheticPart,
+	strategy adapterrender.MaterializationStrategy,
+	encryptedMode RoundTripEncrypted,
+) string {
 	body := strings.TrimSpace(part.Body)
 	if body == "" {
 		return ""
 	}
+	hasRef := strings.TrimSpace(part.Ref) != ""
 	if part.Origin == adapterrender.OriginCodex {
 		switch strategy {
 		case adapterrender.MaterializePlainTextConcat:
@@ -278,8 +301,9 @@ func sanitizeReasoningPartForCodex(part adapterrender.SyntheticPart, strategy ad
 		case adapterrender.MaterializePassthrough:
 			return adapterrender.FormatSyntheticContent(adapterrender.SyntheticReasoning, body)
 		case adapterrender.MaterializeNativeThinkingBlock, adapterrender.MaterializeDrop:
-			// Native Codex emits the body via a separate Reasoning
-			// input item; drop from the message body.
+			if hasRef && codexReasoningEncryptedContent(part, encryptedMode) == "" {
+				return body
+			}
 			return ""
 		default:
 			return ""
@@ -290,6 +314,23 @@ func sanitizeReasoningPartForCodex(part adapterrender.SyntheticPart, strategy ad
 		"body_len", len(body),
 	)
 	return body
+}
+
+func effectiveRoundTripEncrypted(encryptedMode RoundTripEncrypted) RoundTripEncrypted {
+	if encryptedMode == "" {
+		return RoundTripEncryptedRoundTrip
+	}
+	return encryptedMode
+}
+
+func codexReasoningEncryptedContent(
+	part adapterrender.SyntheticPart,
+	encryptedMode RoundTripEncrypted,
+) string {
+	if effectiveRoundTripEncrypted(encryptedMode) != RoundTripEncryptedRoundTrip {
+		return ""
+	}
+	return strings.TrimSpace(part.Encrypted)
 }
 
 // ClientMetadataWithTurn builds the typed codex-cli client_metadata

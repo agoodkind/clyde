@@ -105,27 +105,42 @@ func MessageContentItems(role string, content codexwire.ContentItems) codexwire.
 	}
 }
 
-func codexContentFromRaw(raw json.RawMessage, textType codexwire.ContentItemType, strategy adapterrender.MaterializationStrategy) codexwire.ContentItems {
+func codexContentFromRaw(
+	raw json.RawMessage,
+	textType codexwire.ContentItemType,
+	strategy adapterrender.MaterializationStrategy,
+	cfg RequestBuilderConfig,
+) codexwire.ContentItems {
 	parts, _ := adaptercontent.NormalizeRaw(raw)
-	return codexContentFromParts(parts, textType, strategy)
+	return codexContentFromParts(parts, textType, strategy, cfg)
 }
 
 // codexContentFromContent flattens a raw content payload (string,
 // array, or object) parsed from an inbound responses-input item.
-func codexContentFromContent(raw inputItemContent, textType codexwire.ContentItemType, strategy adapterrender.MaterializationStrategy) codexwire.ContentItems {
+func codexContentFromContent(
+	raw inputItemContent,
+	textType codexwire.ContentItemType,
+	strategy adapterrender.MaterializationStrategy,
+	cfg RequestBuilderConfig,
+) codexwire.ContentItems {
 	encoded, err := json.Marshal(raw)
 	if err != nil {
 		return nil
 	}
-	return codexContentFromRaw(encoded, textType, strategy)
+	return codexContentFromRaw(encoded, textType, strategy, cfg)
 }
 
-func codexContentFromParts(parts []adaptercontent.Part, textType codexwire.ContentItemType, strategy adapterrender.MaterializationStrategy) codexwire.ContentItems {
+func codexContentFromParts(
+	parts []adaptercontent.Part,
+	textType codexwire.ContentItemType,
+	strategy adapterrender.MaterializationStrategy,
+	cfg RequestBuilderConfig,
+) codexwire.ContentItems {
 	content := make(codexwire.ContentItems, 0, len(parts))
 	for _, part := range parts {
 		switch part.Kind {
 		case adaptercontent.PartText:
-			text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(part.Text, strategy))
+			text := strings.TrimSpace(sanitizeForUpstreamCacheWithRequestConfig(part.Text, strategy, cfg))
 			if text == "" {
 				continue
 			}
@@ -146,7 +161,7 @@ func codexContentFromParts(parts []adaptercontent.Part, textType codexwire.Conte
 			}
 			content = append(content, item)
 		case adaptercontent.PartRefusal:
-			text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(part.Refusal, strategy))
+			text := strings.TrimSpace(sanitizeForUpstreamCacheWithRequestConfig(part.Refusal, strategy, cfg))
 			if text == "" {
 				continue
 			}
@@ -243,13 +258,11 @@ func (r reasoningInputItem) toInputItem() codexwire.InputItem {
 // lookup: Cursor's transcript carries the blob inline, so this
 // function is pure.
 //
-// Legacy markers without a data-ref AND without an encrypted blob
-// are skipped silently when the round-trip mode would emit a stub
-// with no useful payload (matches pre-rewrite drop behavior). For
-// `plain_text_concat` summary mode the body is left to the existing
-// message-text materializer; only the encrypted_content half (if
-// any) is emitted as a separate Reasoning item to preserve codex-rs
-// continuity.
+// Markers whose effective encrypted_content is empty are skipped so
+// store=false never receives an id-only Reasoning reference. When a
+// skipped marker has a body, sanitizeReasoningPartForCodex folds it into
+// the assistant message text through the same path foreign-origin
+// reasoning uses.
 func emitReasoningItemsFromAssistantContent(
 	out []codexwire.InputItem,
 	contentText string,
@@ -263,10 +276,7 @@ func emitReasoningItemsFromAssistantContent(
 	if summaryMode == "" {
 		summaryMode = RoundTripSummaryNative
 	}
-	encryptedMode := cfg.RoundTripEncrypted
-	if encryptedMode == "" {
-		encryptedMode = RoundTripEncryptedRoundTrip
-	}
+	encryptedMode := effectiveRoundTripEncrypted(cfg.RoundTripEncrypted)
 	for _, part := range parts {
 		if part.Kind != adapterrender.SyntheticReasoning {
 			continue
@@ -295,10 +305,7 @@ func buildReasoningItem(
 ) (reasoningInputItem, bool) {
 	body := strings.TrimSpace(part.Body)
 	ref := strings.TrimSpace(part.Ref)
-	encrypted := ""
-	if encryptedMode == RoundTripEncryptedRoundTrip {
-		encrypted = strings.TrimSpace(part.Encrypted)
-	}
+	encrypted := codexReasoningEncryptedContent(part, encryptedMode)
 	zero := reasoningInputItem{ID: "", Summary: nil, EncryptedContent: ""}
 	// Cross-provider rule: a foreign or unknown origin reasoning piece
 	// (Anthropic, pre-upgrade transcript) cannot reproduce a Codex
@@ -317,6 +324,9 @@ func buildReasoningItem(
 	if ref == "" {
 		return zero, false
 	}
+	if encrypted == "" {
+		return zero, false
+	}
 	switch summaryMode {
 	case RoundTripSummaryNative:
 		summary := []reasoningSummaryText(nil)
@@ -329,11 +339,7 @@ func buildReasoningItem(
 	case RoundTripSummaryPlainText:
 		// The summary body is folded into the assistant message body
 		// by MaterializePlainTextConcat; only the encrypted_content
-		// half is emitted as a Reasoning item, and only when the
-		// marker carried one.
-		if encrypted == "" {
-			return zero, false
-		}
+		// half is emitted as a Reasoning item.
 		return reasoningInputItem{ID: ref, Summary: nil, EncryptedContent: encrypted}, true
 	}
 	return zero, false
@@ -469,10 +475,7 @@ func BuildRequestWithConfig(
 		input = append(input, MessageContent("user", string(codexwire.ContentItemInputText), " "))
 	}
 	reasoning := EffectiveReasoningWithDefaultSummary(req, effort, cfg.ReasoningSummary)
-	encryptedMode := cfg.RoundTripEncrypted
-	if encryptedMode == "" {
-		encryptedMode = RoundTripEncryptedRoundTrip
-	}
+	encryptedMode := effectiveRoundTripEncrypted(cfg.RoundTripEncrypted)
 	// codex-rs serializes `tools` and `include` as Vec<...> with no
 	// skip_serializing_if, so they appear as `[]` when empty rather than
 	// being omitted or null. Go marshals a nil slice as `null`, so the
@@ -537,7 +540,7 @@ func appendChatMessageInputs(
 ) ([]codexwire.InputItem, []string) {
 	for _, msg := range messages {
 		rawText := adaptercontent.FlattenRaw(msg.Content)
-		text := strings.TrimSpace(SanitizeForUpstreamCacheWithStrategy(rawText, strategy))
+		text := strings.TrimSpace(sanitizeForUpstreamCacheWithRequestConfig(rawText, strategy, cfg))
 		switch codexChatRole(strings.ToLower(msg.Role)) {
 		case codexChatRoleSystem, codexChatRoleDeveloper:
 			if text != "" {
@@ -548,7 +551,7 @@ func appendChatMessageInputs(
 		case codexChatRoleTool, codexChatRoleFunction:
 			input = appendToolResultInput(input, msg, text)
 		default:
-			if content := codexContentFromRaw(msg.Content, codexwire.ContentItemInputText, strategy); len(content) > 0 {
+			if content := codexContentFromRaw(msg.Content, codexwire.ContentItemInputText, strategy, cfg); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
 		}
@@ -573,7 +576,7 @@ func appendAssistantInput(
 		input = append(input, FunctionCallItem(tc))
 	}
 	input = emitReasoningItemsFromAssistantContent(input, rawText, cfg)
-	if content := codexContentFromRaw(msg.Content, codexwire.ContentItemOutputText, strategy); len(content) > 0 {
+	if content := codexContentFromRaw(msg.Content, codexwire.ContentItemOutputText, strategy, cfg); len(content) > 0 {
 		input = append(input, MessageContentItems("assistant", content))
 	}
 	return input
@@ -862,7 +865,7 @@ func inputFromResponsesInput(
 				*developerSections = append(*developerSections, text)
 			}
 		case role == "user":
-			if content := codexContentFromContent(item.Content, codexwire.ContentItemInputText, strategy); len(content) > 0 {
+			if content := codexContentFromContent(item.Content, codexwire.ContentItemInputText, strategy, cfg); len(content) > 0 {
 				input = append(input, MessageContentItems("user", content))
 			}
 		case role == string(codexChatRoleAssistant):
@@ -870,7 +873,7 @@ func inputFromResponsesInput(
 			// they belong to in the input array; codex-rs
 			// history.rs preserves that order.
 			input = emitReasoningItemsFromAssistantContent(input, assistantRawText(item.Content), cfg)
-			if content := codexContentFromContent(item.Content, codexwire.ContentItemOutputText, strategy); len(content) > 0 {
+			if content := codexContentFromContent(item.Content, codexwire.ContentItemOutputText, strategy, cfg); len(content) > 0 {
 				input = append(input, MessageContentItems("assistant", content))
 			}
 		case itemType == string(codexwire.ItemTypeFunctionCall):
