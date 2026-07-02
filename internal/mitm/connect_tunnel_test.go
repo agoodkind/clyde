@@ -397,6 +397,61 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 	}
 }
 
+// TestProviderTLSAcceptsH2OnlyALPNOffer verifies the intercepting TLS server
+// no longer sends a fatal no_application_protocol alert when a client offers
+// only "h2" in its ClientHello. The fix removes the server's static
+// NextProtos restriction generically for every claimed host, so this test
+// dials with an arbitrary provider host rather than any specific hostname.
+func TestProviderTLSAcceptsH2OnlyALPNOffer(t *testing.T) {
+	const providerHost = "chatgpt.com"
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+	}))
+	defer upstream.Close()
+
+	proxy := startCursorMITMTestProxy(t, t.TempDir(), providerHost, upstream, nil)
+	defer proxy.shutdown()
+
+	caPool := x509.NewCertPool()
+	caPool.AddCert(proxy.proxy.ca.cert)
+	client, err := net.DialTimeout("tcp", proxy.addr, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer client.Close()
+	if _, err := fmt.Fprintf(client, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\n\r\n", providerHost, providerHost); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+	br := bufio.NewReader(client)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT status: %v", err)
+	}
+	if !strings.HasPrefix(statusLine, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT status = %q", strings.TrimSpace(statusLine))
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read CONNECT header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	tlsClient := tls.Client(&bufferedConn{Conn: client, reader: br}, &tls.Config{
+		ServerName: providerHost,
+		RootCAs:    caPool,
+		NextProtos: []string{"h2"},
+		MinVersion: tls.VersionTLS12,
+	})
+	defer tlsClient.Close()
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatalf("client TLS handshake with h2-only ALPN offer failed: %v", err)
+	}
+}
+
 func TestProviderTLSIdleKeepaliveTunnelClosesDuringDrain(t *testing.T) {
 	const providerHost = "chatgpt.com"
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
