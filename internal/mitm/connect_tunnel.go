@@ -246,10 +246,19 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		p.log.WarnContext(ctx, "mitm.provider.connect.leaf_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
+	// NextProtos is intentionally omitted so the server performs no ALPN
+	// negotiation: a client that offers any protocol set, including h2-only
+	// backends the downstream HTTP/1.1 parser cannot serve, still completes
+	// the handshake instead of receiving a fatal no_application_protocol
+	// alert. GetConfigForClient exists only to log the offer generically, per
+	// host, with no host-specific branching.
 	tlsConn := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
-		NextProtos:   []string{"http/1.1"},
 		MinVersion:   tls.VersionTLS12,
+		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+			p.log.DebugContext(ctx, "mitm.provider.connect.alpn_offer", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "protos", info.SupportedProtos)
+			return nil, nil
+		},
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		p.log.WarnContext(ctx, "mitm.provider.connect.client_tls_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
