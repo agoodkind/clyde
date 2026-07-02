@@ -369,7 +369,9 @@ func loadCodexModels(r *Registry, models []config.AdapterCodexModel) error {
 		if err := addCodexModelAliases(r.codexModels, model); err != nil {
 			return err
 		}
-		if err := addNativeCodexModelAliases(r.nativeCodexModels, r.nativeAdvertised, model); err != nil {
+	}
+	for _, model := range models {
+		if err := addNativeCodexModelAliases(r, model); err != nil {
 			return err
 		}
 	}
@@ -560,7 +562,7 @@ func addCodexModelAliases(out map[string]ResolvedAlias, cfg config.AdapterCodexM
 	return nil
 }
 
-func addNativeCodexModelAliases(out map[string]ResolvedAlias, advertised map[string]bool, cfg config.AdapterCodexModel) error {
+func addNativeCodexModelAliases(r *Registry, cfg config.AdapterCodexModel) error {
 	if strings.TrimSpace(cfg.Model) == "" {
 		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing model", cfg.AliasPrefix)
 	}
@@ -568,48 +570,76 @@ func addNativeCodexModelAliases(out map[string]ResolvedAlias, advertised map[str
 		return fmt.Errorf("adapter: [adapter.codex.models.%s] missing contexts", cfg.AliasPrefix)
 	}
 	for _, ctx := range cfg.Contexts {
-		nativeAliases := append([]string(nil), ctx.NativeAliases...)
-		nativeAliases = append(nativeAliases, ctx.AdvertisedNativeAliases...)
-		for _, alias := range nativeAliases {
-			addNativeCodexModelAlias(out, alias, cfg, ctx)
-		}
-		for _, alias := range ctx.AdvertisedNativeAliases {
-			alias = strings.TrimSpace(alias)
-			if alias != "" {
-				advertised[strings.ToLower(alias)] = true
+		for _, alias := range ctx.NativeAliases {
+			if err := addNativeCodexModelAlias(r, alias, cfg, ctx); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func addNativeCodexModelAlias(out map[string]ResolvedAlias, alias string, cfg config.AdapterCodexModel, ctx config.AdapterCodexModelContext) {
-	alias = strings.TrimSpace(alias)
-	if alias == "" {
-		return
+func addNativeCodexModelAlias(
+	r *Registry,
+	alias config.AdapterCodexNativeAlias,
+	cfg config.AdapterCodexModel,
+	ctx config.AdapterCodexModelContext,
+) error {
+	aliasID := strings.TrimSpace(alias.ID)
+	if aliasID == "" {
+		return fmt.Errorf("adapter: [adapter.codex.models.%s] native alias id must be non-empty", cfg.AliasPrefix)
 	}
-	key := strings.ToLower(alias)
-	if _, ok := out[key]; ok {
-		return
+	key := strings.ToLower(aliasID)
+	effort := strings.ToLower(strings.TrimSpace(alias.Effort))
+	if effort != "" && !contains(cfg.Efforts, effort) {
+		return fmt.Errorf(
+			"adapter: [adapter.codex.models.%s] native alias %q binds unsupported effort %q (allowed: %s)",
+			cfg.AliasPrefix,
+			aliasID,
+			effort,
+			strings.Join(cfg.Efforts, ", "),
+		)
 	}
-	out[key] = ResolvedAlias{
-		Alias:           alias,
-		Backend:         backendFromConfig(cfg.Backend, BackendCodex),
-		ClaudeModel:     cfg.Model,
-		Instructions:    cfg.Instructions,
-		Context:         ctx.Tokens,
-		ObservedContext: ctx.ObservedTokens,
-		Efforts:         cfg.Efforts,
-		MaxOutputTokens: cfg.MaxOutputTokens, Effort: "",
-
-		// resolveFromConfig converts a user provided AdapterModel entry into
-		// a ResolvedAlias. Missing fields default to the claude backend so
-		// a minimal config stanza (just a Model name) works.
-		ThinkingModes: nil, Thinking: "", SupportsTools: false, SupportsVision: false, PassthroughOverride: "", OpenAICompatPassthrough: config.
-				AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""},
-
+	if _, ok := r.models[key]; ok {
+		return fmt.Errorf("adapter: duplicate native alias %q collides with declared alias key", aliasID)
+	}
+	if _, ok := r.codexModels[key]; ok {
+		return fmt.Errorf("adapter: duplicate native alias %q collides with declared alias key", aliasID)
+	}
+	if _, ok := r.nativeCodexModels[key]; ok {
+		return fmt.Errorf("adapter: duplicate native alias %q collides with declared alias key", aliasID)
+	}
+	efforts := cfg.Efforts
+	if effort != "" {
+		efforts = []string{effort}
+	}
+	r.nativeCodexModels[key] = ResolvedAlias{
+		Alias:               aliasID,
+		Backend:             backendFromConfig(cfg.Backend, BackendCodex),
+		ClaudeModel:         cfg.Model,
+		Instructions:        cfg.Instructions,
+		Context:             ctx.Tokens,
+		ObservedContext:     ctx.ObservedTokens,
+		Efforts:             efforts,
+		MaxOutputTokens:     cfg.MaxOutputTokens,
+		Effort:              effort,
+		ThinkingModes:       nil,
+		Thinking:            "",
+		SupportsTools:       false,
+		SupportsVision:      false,
+		PassthroughOverride: "",
+		OpenAICompatPassthrough: config.AdapterOpenAICompatPassthrough{
+			BaseURL:   "",
+			APIKey:    "",
+			APIKeyEnv: "",
+			Model:     "",
+		},
 		FamilySlug: "",
 	}
+	if alias.Advertise {
+		r.nativeAdvertised[key] = true
+	}
+	return nil
 }
 
 func resolveFromConfig(alias string, m config.AdapterModel) ResolvedAlias {
@@ -718,8 +748,8 @@ func resolveCodexEffortModel(m ResolvedAlias, reqEffort string) (ResolvedAlias, 
 }
 
 // resolveNativeCodexModel resolves a declared native alias (an entry
-// from [adapter.codex.models].contexts.native_aliases /
-// advertised_native_aliases) honoring the codex native-routing mode.
+// from [adapter.codex.models].contexts.native_aliases) honoring the
+// codex native-routing mode.
 // The alias must already be a declared key in r.nativeCodexModels; the
 // matched model is passed in. native_model_routing controls the
 // outcome: "codex" (the enabled default) routes to the declared Codex
@@ -731,7 +761,15 @@ func (r *Registry) resolveNativeCodexModel(alias string, m ResolvedAlias, reqEff
 		effort := strings.ToLower(strings.TrimSpace(reqEffort))
 		out := m
 		out.Alias = alias
-		if effort != "" && len(out.Efforts) > 0 && !contains(out.Efforts, effort) {
+		switch {
+		case effort == "" && out.Effort != "":
+			effort = out.Effort
+		case out.Effort != "" && effort != out.Effort:
+			return ResolvedAlias{}, "", fmt.Errorf(
+				"effort %q conflicts with effort-bound model %q",
+				effort, alias,
+			)
+		case out.Effort == "" && effort != "" && len(out.Efforts) > 0 && !contains(out.Efforts, effort):
 			return ResolvedAlias{}, "", fmt.Errorf(
 				"effort %q not supported for %q (allowed: %s)",
 				effort, alias, strings.Join(out.Efforts, ", "),
