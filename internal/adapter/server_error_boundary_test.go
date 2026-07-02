@@ -3,8 +3,11 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,6 +17,7 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	"goodkind.io/clyde/internal/clydeingress"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/slogger"
 )
 
 func TestAdapterErrorBoundaryPanicEnvelopeFollowsRouteFamily(t *testing.T) {
@@ -117,6 +121,139 @@ func TestAdapterErrorBoundaryLogsCorrelationFields(t *testing.T) {
 	}
 	if evt["method"] != http.MethodGet || evt["path"] != "/v1/models" || evt["user_agent"] != "Cursor/boundary-fields" {
 		t.Fatalf("boundary route fields=%v", evt)
+	}
+}
+
+func TestAdapterErrorBoundaryWritesLogHintConcernFile(t *testing.T) {
+	root := t.TempDir()
+	// SetupWithPolicy mutates the global slog default. Capture the
+	// configured logger, restore the previous default immediately, and
+	// pass the captured logger into New so a concurrent t.Parallel test in
+	// this package never observes the mutated global default.
+	previous := slog.Default()
+	closer, err := slogger.SetupWithPolicy(slogger.SetupPolicy{
+		Level: slog.LevelDebug,
+		ProcessSink: slogger.FileSinkPolicy{
+			Enabled: true,
+			Path:    filepath.Join(root, "clyde-daemon.jsonl"),
+			Rotation: slogger.RotationPolicy{
+				Enabled:    false,
+				MaxSizeMB:  0,
+				MaxBackups: 0,
+				MaxAgeDays: 0,
+				Compress:   nil,
+			},
+		},
+		ConcernRoot: filepath.Join(root, "logs"),
+	})
+	if err != nil {
+		t.Fatalf("SetupWithPolicy: %v", err)
+	}
+	policyLogger := slog.Default()
+	slog.SetDefault(previous)
+	t.Cleanup(func() { _ = closer.Close() })
+
+	srv, err := New(context.Background(), baseConfig(), config.LoggingConfig{}, Deps{
+		ScratchDir: func() string { return t.TempDir() },
+	}, policyLogger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
+		return adapterErrInvalidRequest("missing field foo", nil)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set(clydeingress.HeaderRequestID, "req-log-hint-file")
+	resp := httptest.NewRecorder()
+	handler(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var out adapteropenai.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal OpenAI error: %v body=%s", err, resp.Body.String())
+	}
+	if out.Error.Clyde == nil {
+		t.Fatalf("missing diagnostics in body=%s", resp.Body.String())
+	}
+	if out.Error.Clyde.LogHint != "adapter/http/errors.jsonl request_id=req-log-hint-file" {
+		t.Fatalf("log_hint=%q", out.Error.Clyde.LogHint)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+
+	errorsPath := filepath.Join(root, "logs", "adapter", "http", "errors.jsonl")
+	content, err := os.ReadFile(errorsPath)
+	if err != nil {
+		t.Fatalf("read errors concern log %s: %v", errorsPath, err)
+	}
+	if !strings.Contains(string(content), "adapter.error.responded") {
+		t.Fatalf("errors concern log missing adapter.error.responded: %s", content)
+	}
+	if !strings.Contains(string(content), "req-log-hint-file") {
+		t.Fatalf("errors concern log missing request id: %s", content)
+	}
+}
+
+func TestAdapterRequestPanicWritesErrorsConcernFile(t *testing.T) {
+	root := t.TempDir()
+	// See TestAdapterErrorBoundaryWritesLogHintConcernFile: restore the
+	// global slog default immediately and thread the captured logger into
+	// New so the mutation is never visible to a parallel sibling test.
+	previous := slog.Default()
+	closer, err := slogger.SetupWithPolicy(slogger.SetupPolicy{
+		Level: slog.LevelDebug,
+		ProcessSink: slogger.FileSinkPolicy{
+			Enabled: true,
+			Path:    filepath.Join(root, "clyde-daemon.jsonl"),
+			Rotation: slogger.RotationPolicy{
+				Enabled:    false,
+				MaxSizeMB:  0,
+				MaxBackups: 0,
+				MaxAgeDays: 0,
+				Compress:   nil,
+			},
+		},
+		ConcernRoot: filepath.Join(root, "logs"),
+	})
+	if err != nil {
+		t.Fatalf("SetupWithPolicy: %v", err)
+	}
+	policyLogger := slog.Default()
+	slog.SetDefault(previous)
+	t.Cleanup(func() { _ = closer.Close() })
+
+	srv, err := New(context.Background(), baseConfig(), config.LoggingConfig{}, Deps{
+		ScratchDir: func() string { return t.TempDir() },
+	}, policyLogger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	handler := srv.handle(adapterRouteOpenAI, func(context.Context, *handlerCtx) error {
+		panic("panic concern file probe")
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set(clydeingress.HeaderRequestID, "req-panic-file")
+	resp := httptest.NewRecorder()
+	handler(resp, req)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+
+	errorsPath := filepath.Join(root, "logs", "adapter", "http", "errors.jsonl")
+	content, err := os.ReadFile(errorsPath)
+	if err != nil {
+		t.Fatalf("read errors concern log %s: %v", errorsPath, err)
+	}
+	if !strings.Contains(string(content), "adapter.request.panic") {
+		t.Fatalf("errors concern log missing adapter.request.panic: %s", content)
+	}
+	if !strings.Contains(string(content), "req-panic-file") {
+		t.Fatalf("errors concern log missing request id: %s", content)
 	}
 }
 

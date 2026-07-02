@@ -99,6 +99,8 @@ type Server struct {
 	logprobs       config.AdapterLogprobs
 	deps           Deps
 	log            *slog.Logger
+	errorLog       *slog.Logger
+	dispatchLog    *slog.Logger
 	requestLog     *logevent.Emitter
 	logging        config.LoggingConfig
 	runtimeLogging *RuntimeLogging
@@ -142,7 +144,10 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	if log == nil {
 		log = slog.Default()
 	}
+	baseLog := log
 	log = slogger.WithConcern(log, slogger.ConcernAdapterHTTPIngress)
+	errorLog := slogger.WithConcern(baseLog.With("subcomponent", "adapter"), slogger.ConcernAdapterHTTPErrors)
+	dispatchLog := slogger.WithConcern(baseLog.With("subcomponent", "adapter"), slogger.ConcernAdapterChatDispatch)
 	runtimeLogging := deps.RuntimeLogging
 	if runtimeLogging == nil {
 		runtimeLogging = NewRuntimeLogging(logging)
@@ -170,12 +175,14 @@ func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingCo
 	egressReg := newEgressRegistry(group)
 	wsReg := adaptercodex.NewWsSessionRegistry(group)
 	s := &Server{
-		cfg:      cfg,
-		logprobs: cfg.Logprobs,
-		deps:     deps,
-		log:      adapterLog,
+		cfg:         cfg,
+		logprobs:    cfg.Logprobs,
+		deps:        deps,
+		log:         adapterLog,
+		errorLog:    errorLog,
+		dispatchLog: dispatchLog,
 		requestLog: logevent.NewEmitter(
-			slogger.WithConcern(adapterLog, slogger.ConcernAdapterChatDispatch),
+			dispatchLog,
 			logevent.RequiredLegsFromStrings(logging.Request.RequiredLegs),
 			adapterEmitterOptions(logging.Request)...,
 		),
