@@ -8,21 +8,38 @@ import (
 )
 
 func TestDecodeBackgroundComposerWindowMappingJSONDecodesWindows(t *testing.T) {
-	mapping, err := DecodeBackgroundComposerWindowMappingJSON([]byte(`{"6":["composer-a"],"24":["composer-b","composer-c"]}`))
+	mapping, err := DecodeBackgroundComposerWindowMappingJSON([]byte(`{"1":[{"bcId":"composer-a"}],"6":[],"24":[{"bcId":"composer-b"},{"bcId":"composer-c"}]}`))
 	if err != nil {
 		t.Fatalf("DecodeBackgroundComposerWindowMappingJSON returned error: %v", err)
 	}
-	if len(mapping.Windows) != 2 {
-		t.Fatalf("Windows len = %d, want 2", len(mapping.Windows))
+	if len(mapping.Windows) != 3 {
+		t.Fatalf("Windows len = %d, want 3", len(mapping.Windows))
 	}
-	if mapping.Windows[0].WindowID != "6" {
-		t.Fatalf("first WindowID = %q, want 6", mapping.Windows[0].WindowID)
+	if mapping.Windows[0].WindowID != "1" {
+		t.Fatalf("first WindowID = %q, want 1", mapping.Windows[0].WindowID)
 	}
-	if len(mapping.Windows[1].ComposerIDs) != 2 {
-		t.Fatalf("second ComposerIDs len = %d, want 2", len(mapping.Windows[1].ComposerIDs))
+	if len(mapping.Windows[0].ComposerIDs) != 1 || mapping.Windows[0].ComposerIDs[0] != "composer-a" {
+		t.Fatalf("first ComposerIDs = %v, want [composer-a]", mapping.Windows[0].ComposerIDs)
 	}
-	if mapping.Windows[1].ComposerIDs[1] != "composer-c" {
-		t.Fatalf("second ComposerIDs[1] = %q, want composer-c", mapping.Windows[1].ComposerIDs[1])
+	if len(mapping.Windows[1].ComposerIDs) != 0 {
+		t.Fatalf("empty window ComposerIDs len = %d, want 0", len(mapping.Windows[1].ComposerIDs))
+	}
+	if len(mapping.Windows[2].ComposerIDs) != 2 {
+		t.Fatalf("third ComposerIDs len = %d, want 2", len(mapping.Windows[2].ComposerIDs))
+	}
+	if mapping.Windows[2].ComposerIDs[1] != "composer-c" {
+		t.Fatalf("third ComposerIDs[1] = %q, want composer-c", mapping.Windows[2].ComposerIDs[1])
+	}
+}
+
+func TestDecodeBackgroundComposerWindowMappingJSONRejectsBareStringRefs(t *testing.T) {
+	_, err := DecodeBackgroundComposerWindowMappingJSON([]byte(`{"6":["composer-a"]}`))
+	if err == nil {
+		t.Fatal("DecodeBackgroundComposerWindowMappingJSON returned nil error for bare-string refs, want decode error")
+	}
+	var typedErr CursorJSONDecodeError
+	if !errors.As(err, &typedErr) {
+		t.Fatalf("error = %T, want CursorJSONDecodeError", err)
 	}
 }
 
@@ -44,7 +61,7 @@ func TestListBackgroundComposersReturnsWindowMappingsFromWindowMappingKey(t *tes
 		t.Fatalf("sql.Open returned error: %v", err)
 	}
 	statements := []string{
-		`INSERT INTO ItemTable(key, value) VALUES ('backgroundComposer.windowBcMapping', '{"6":["composer-a"],"24":["composer-b","composer-c"]}')`,
+		`INSERT INTO ItemTable(key, value) VALUES ('backgroundComposer.windowBcMapping', '{"6":[{"bcId":"composer-a"}],"24":[{"bcId":"composer-b"},{"bcId":"composer-c"}]}')`,
 	}
 	for _, statement := range statements {
 		if _, err := writable.Exec(statement); err != nil {

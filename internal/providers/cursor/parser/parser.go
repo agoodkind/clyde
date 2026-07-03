@@ -317,6 +317,14 @@ func discoverComposersForRoot(
 		if !found {
 			continue
 		}
+		if len(header.FullConversationHeadersOnly) == 0 {
+			// A composer with no bubble headers has no conversation content to
+			// deliver, so it is a draft or empty pane rather than a real
+			// conversation. Mirror the legacy-chat guard below and skip it so it
+			// never enters the manifest. A composer mid-first-message re-enters
+			// discovery once it gains headers.
+			continue
+		}
 		path := BuildVirtualPath(rootHash, VirtualKindComposer, composerID)
 		if path == "" {
 			continue
