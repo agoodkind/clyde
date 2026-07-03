@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/http2"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
@@ -246,18 +247,20 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		p.log.WarnContext(ctx, "mitm.provider.connect.leaf_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
-	// NextProtos is intentionally omitted so the server performs no ALPN
-	// negotiation: a client that offers any protocol set, including h2-only
-	// backends the downstream HTTP/1.1 parser cannot serve, still completes
-	// the handshake instead of receiving a fatal no_application_protocol
-	// alert. GetConfigForClient exists only to log the offer generically, per
-	// host, with no host-specific branching.
 	tlsConn := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
 		MinVersion:   tls.VersionTLS12,
 		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
 			p.log.DebugContext(ctx, "mitm.provider.connect.alpn_offer", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "protos", info.SupportedProtos)
-			return nil, nil
+			nextProtos := mitmALPNProtocols(info.SupportedProtos)
+			if len(nextProtos) == 0 {
+				return nil, nil
+			}
+			return &tls.Config{
+				Certificates: []tls.Certificate{*leaf},
+				MinVersion:   tls.VersionTLS12,
+				NextProtos:   nextProtos,
+			}, nil
 		},
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
@@ -277,7 +280,12 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 	}
 	defer p.Tunnels.Release(ctx, sess, "mitm."+providerID+".tls.closed")
 	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_open", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host)
-	p.serveProviderInterceptedHTTP(ctx, tlsConn, target, host, provider, sess)
+	switch tlsConn.ConnectionState().NegotiatedProtocol {
+	case http2.NextProtoTLS:
+		p.serveProviderInterceptedHTTP2(ctx, tlsConn, target, host, provider, sess)
+	default:
+		p.serveProviderInterceptedHTTP1(ctx, tlsConn, target, host, provider, sess)
+	}
 	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_closed", "concern", "providers.mitm.wire", "provider", providerID,
 		"target", target,
 		"host", host,
@@ -285,10 +293,20 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 	)
 }
 
-func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Conn, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) {
+func mitmALPNProtocols(offered []string) []string {
+	for _, protocol := range offered {
+		if protocol == http2.NextProtoTLS || protocol == "http/1.1" {
+			return []string{http2.NextProtoTLS, "http/1.1"}
+		}
+	}
+	return nil
+}
+
+func (p *Proxy) serveProviderInterceptedHTTP1(ctx context.Context, client *tls.Conn, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) {
 	providerID := provider.ID().String()
 	reader := bufio.NewReader(client)
 	writer := bufio.NewWriter(client)
+	sink := &bufioProviderResponseSink{proxy: p, bufw: writer}
 	stopWatcher := make(chan struct{})
 	var activeRequests atomic.Int32
 	go func() {
@@ -342,7 +360,7 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			p.log.DebugContext(ctx, "mitm.provider.http.request_rejected_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
 			return
 		}
-		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider, parent); err != nil {
+		if err := p.handleProviderInterceptedRequest(ctx, client, reader, sink, req, target, host, provider, parent, reqSess); err != nil {
 			activeRequests.Add(-1)
 			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 			if reqSess != nil {
@@ -397,11 +415,12 @@ func (p *Proxy) watchProviderTunnelDrain(ctx context.Context, client *tls.Conn, 
 }
 
 func buildProviderFailureInput(params providerForwardParams, requestIndex captureBodyIndex, responseIndex captureBodyIndex, statusCode int) httpCaptureRecordInput {
+	requestBody := params.capturedRequestBody()
 	return buildHTTPFailureCaptureInput(
 		params.cfg,
 		params.provider.ID().String(),
 		"https://"+params.host+params.req.URL.RequestURI(),
-		params.body,
+		requestBody,
 		requestIndex,
 		responseIndex,
 		clock.Since(params.started),
@@ -414,38 +433,110 @@ func (p *Proxy) recordProviderFailure(req *http.Request, responseHeader http.Hea
 	return fmt.Errorf(failure.errorCode+": %s", failure.errorMessage)
 }
 
-func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer *bufio.Writer, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
+type providerResponseSink interface {
+	writeProviderResponse(resp *http.Response, bodyCap int) (bytesWritten int64, captured []byte, err error)
+}
+
+type bufioProviderResponseSink struct {
+	proxy *Proxy
+	bufw  *bufio.Writer
+}
+
+func (s *bufioProviderResponseSink) writeProviderResponse(resp *http.Response, bodyCap int) (int64, []byte, error) {
+	return s.proxy.forwardAndCaptureProviderResponse(s.bufw, resp, bodyCap)
+}
+
+// providerRequestCapture tees the request body into a bounded capture buffer
+// while the upstream transport reads it. The tee copies the raw bytes as read
+// from req.Body; any content-decoding for capture happens later. It
+// deliberately does not read ahead, so streaming provider requests can reach
+// the real upstream before the client has closed the request body.
+type providerRequestCapture struct {
+	body    io.ReadCloser
+	capture *limitedBuffer
+	session *livetrack.Session[TunnelMeta]
+	mu      sync.Mutex
+	bytes   atomic.Int64
+}
+
+func newProviderRequestCapture(body io.ReadCloser, bodyCap int, session *livetrack.Session[TunnelMeta]) *providerRequestCapture {
+	if body == nil {
+		body = http.NoBody
+	}
+	return &providerRequestCapture{
+		body:    body,
+		capture: &limitedBuffer{limit: bodyCap, buf: bytes.Buffer{}},
+		session: session,
+		mu:      sync.Mutex{},
+		bytes:   atomic.Int64{},
+	}
+}
+
+func (c *providerRequestCapture) Read(p []byte) (int, error) {
+	n, err := c.body.Read(p)
+	if n > 0 {
+		c.bytes.Add(int64(n))
+		c.mu.Lock()
+		_, _ = c.capture.Write(p[:n])
+		c.mu.Unlock()
+		if c.session != nil {
+			c.session.Touch()
+		}
+	}
+	switch {
+	case err == nil:
+		return n, nil
+	case errors.Is(err, io.EOF):
+		return n, io.EOF
+	default:
+		return n, fmt.Errorf("capture provider request body: %w", err)
+	}
+}
+
+func (c *providerRequestCapture) Close() error {
+	if err := c.body.Close(); err != nil {
+		wrapped := fmt.Errorf("close provider request body: %w", err)
+		slog.Warn("mitm.provider.request_body.close_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
+		return wrapped
+	}
+	return nil
+}
+
+func (c *providerRequestCapture) Bytes() []byte {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.capture.Bytes()...)
+}
+
+func (c *providerRequestCapture) BytesRead() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.bytes.Load()
+}
+
+// handleProviderInterceptedRequest runs one intercepted provider request
+// through the shared upstream and capture path. HTTP/2 callers pass nil for
+// client and reader because h2 request bodies are already decoded by http2
+// ServeConn and RFC 7540 does not use the HTTP/1.1 Upgrade websocket branch.
+func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer providerResponseSink, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta], streamSession *livetrack.Session[TunnelMeta]) error {
 	started := clock.Now()
 	cfg := p.config()
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		return p.recordProviderFailure(req, http.Header{}, buildHTTPFailureCaptureInput(
-			cfg,
-			provider.ID().String(),
-			"https://"+host+req.URL.RequestURI(),
-			nil,
-			emptyCaptureBodyIndex(),
-			emptyCaptureBodyIndex(),
-			clock.Since(started),
-			http.StatusBadRequest,
-		), httpFailureRecord{
-			includePayload:      false,
-			includeUpstreamSend: false,
-			errorCode:           "request_read_failed",
-			errorMessage:        err.Error(),
-		})
-	}
-	_ = req.Body.Close()
-	req.Body = io.NopCloser(bytes.NewReader(body))
 	req.RequestURI = ""
 	req.URL.Scheme = "https"
 	req.URL.Host = target
 	if isWebsocketUpgrade(req) {
-		if client == nil || reader == nil {
+		bufioSink, ok := writer.(*bufioProviderResponseSink)
+		if client == nil || reader == nil || !ok || bufioSink == nil {
 			return fmt.Errorf("provider websocket requires intercepted TLS connection")
 		}
-		return p.handleProviderInterceptedWebsocket(ctx, client, reader, writer, req, target, host, provider, parent)
+		return p.handleProviderInterceptedWebsocket(ctx, client, reader, bufioSink.bufw, req, target, host, provider, parent)
 	}
+	requestCapture := newProviderRequestCapture(req.Body, p.captureBodyCap(cfg), streamSession)
+	req.Body = requestCapture
 
 	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{
 		Provider:            provider.ID().String(),
@@ -456,32 +547,15 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 		ResponseContentType: "",
 	})
 	params := providerForwardParams{
-		writer:       writer,
-		req:          req,
-		body:         body,
-		target:       target,
-		host:         host,
-		provider:     provider,
-		started:      started,
-		concern:      concern,
-		requestBytes: int64(len(body)),
-		cfg:          cfg,
-	}
-
-	if rule, ok := matchHookRule(cfg.Hooks, host, req.Method, req.URL.Path); ok {
-		return p.runHookedProviderRequest(ctx, hookedProviderParams{
-			writer:       writer,
-			req:          req,
-			body:         body,
-			target:       target,
-			host:         host,
-			provider:     provider,
-			rule:         rule,
-			started:      started,
-			concern:      concern,
-			requestBytes: int64(len(body)),
-			cfg:          cfg,
-		})
+		writer:         writer,
+		req:            req,
+		requestCapture: requestCapture,
+		target:         target,
+		host:           host,
+		provider:       provider,
+		started:        started,
+		concern:        concern,
+		cfg:            cfg,
 	}
 
 	return p.forwardProviderRequestToUpstream(ctx, params)
@@ -492,16 +566,23 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 // upstream round-trip and capture-metadata write without a wide
 // parameter list.
 type providerForwardParams struct {
-	writer       *bufio.Writer
-	req          *http.Request
-	body         []byte
-	target       string
-	host         string
-	provider     Provider
-	started      time.Time
-	concern      string
-	requestBytes int64
-	cfg          config.MITMConfig
+	writer         providerResponseSink
+	req            *http.Request
+	requestCapture *providerRequestCapture
+	target         string
+	host           string
+	provider       Provider
+	started        time.Time
+	concern        string
+	cfg            config.MITMConfig
+}
+
+func (p providerForwardParams) capturedRequestBody() []byte {
+	return p.requestCapture.Bytes()
+}
+
+func (p providerForwardParams) requestBytes() int64 {
+	return p.requestCapture.BytesRead()
 }
 
 // forwardProviderRequestToUpstream runs the standard (non-hook)
@@ -510,7 +591,7 @@ type providerForwardParams struct {
 // handleProviderInterceptedRequest to keep both functions under the
 // funlen ceiling.
 func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params providerForwardParams) error {
-	resp, err := p.providerUpstreamRoundTrip(params.req, params.body, params.target, params.host)
+	resp, err := p.roundTripProviderRequest(params.req, params.target, params.host)
 	if err != nil {
 		return p.recordProviderFailure(params.req, http.Header{}, buildProviderFailureInput(params, emptyCaptureBodyIndex(), emptyCaptureBodyIndex(), http.StatusBadGateway), httpFailureRecord{
 			includePayload:      true,
@@ -521,7 +602,7 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	responseBytes, responseBody, err := p.forwardAndCaptureProviderResponse(params.writer, resp, p.captureBodyCap(params.cfg))
+	responseBytes, responseBody, err := params.writer.writeProviderResponse(resp, p.captureBodyCap(params.cfg))
 	if err != nil {
 		return err
 	}
@@ -532,7 +613,7 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 		"path", params.req.URL.Path,
 		"status", resp.StatusCode,
 		"duration_ms", clock.Since(params.started).Milliseconds(),
-		"request_bytes", params.requestBytes,
+		"request_bytes", params.requestBytes(),
 		"response_bytes", responseBytes,
 	)
 	p.recordHTTPCapture(params.req, resp.Header, providerHTTPCaptureRecordInput(params, resp.StatusCode, responseBytes))
@@ -542,19 +623,27 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 	return nil
 }
 
+func (p *Proxy) roundTripProviderRequest(req *http.Request, target string, host string) (*http.Response, error) {
+	if req.ProtoMajor == 3 {
+		return p.providerHTTP3UpstreamRoundTrip(req, target, host)
+	}
+	return p.providerUpstreamRoundTrip(req, target, host)
+}
+
 // recordProviderCaptureStore persists an intercepted-TLS provider exchange to
 // the shared SQLite capture store, tagged with this proxy's client id. The
 // response body is the decoded buffer captured by
 // [Proxy.forwardAndCaptureProviderResponse] up to the store cap. Identity and
 // concern are derived from the same extraction the wire-leg emitter uses.
 func (p *Proxy) recordProviderCaptureStore(params providerForwardParams, responseHeader http.Header, status int, responseBody []byte) {
+	requestBody := params.capturedRequestBody()
 	decodedBody, decoded := decodeForCapture(responseBody, responseHeader.Get("Content-Encoding"))
 	if !decoded {
 		decodedBody = responseBody
 	}
-	decodedRequest, requestDecoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
+	decodedRequest, requestDecoded := decodeForCapture(requestBody, params.req.Header.Get("Content-Encoding"))
 	if !requestDecoded {
-		decodedRequest = params.body
+		decodedRequest = requestBody
 	}
 	concern := resolveCaptureConcern(params.cfg.CaptureRules, captureConcernInput{
 		Provider:            params.provider.ID().String(),
@@ -597,9 +686,10 @@ func (p *Proxy) recordProviderCaptureStore(params providerForwardParams, respons
 // this path, so the drift baseline learns from real client requests here.
 func (p *Proxy) recordProviderDriftCapture(ctx context.Context, params providerForwardParams) {
 	provider := params.provider.ID().String()
-	decodedBody, decoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
+	requestBody := params.capturedRequestBody()
+	decodedBody, decoded := decodeForCapture(requestBody, params.req.Header.Get("Content-Encoding"))
 	if !decoded {
-		decodedBody = params.body
+		decodedBody = requestBody
 	}
 	p.recordDriftCapture(params.cfg, driftCaptureInput{
 		provider:    provider,
@@ -624,9 +714,10 @@ func (p *Proxy) diagnoseProviderExchange(ctx context.Context, params providerFor
 	if !ok {
 		return
 	}
-	decodedRequestBody, decoded := decodeForCapture(params.body, params.req.Header.Get("Content-Encoding"))
+	requestBody := params.capturedRequestBody()
+	decodedRequestBody, decoded := decodeForCapture(requestBody, params.req.Header.Get("Content-Encoding"))
 	if !decoded {
-		decodedRequestBody = params.body
+		decodedRequestBody = requestBody
 	}
 	diagnostician.DiagnoseExchange(ctx, p.log, ExchangeDiagnostic{
 		RequestHeader:      params.req.Header,
@@ -645,13 +736,14 @@ func (p *Proxy) diagnoseProviderExchange(ctx context.Context, params providerFor
 // so the wire-leg indexes carry the same filtered inline summaries the
 // plain-HTTP path emits rather than raw-file references.
 func providerHTTPCaptureRecordInput(params providerForwardParams, statusCode int, responseBytes int64) httpCaptureRecordInput {
+	requestBody := params.capturedRequestBody()
 	return httpCaptureRecordInput{
 		config:         params.cfg,
 		provider:       params.provider.ID().String(),
 		upstreamURL:    "https://" + params.host + params.req.URL.RequestURI(),
-		requestBody:    params.body,
+		requestBody:    requestBody,
 		responseBody:   nil,
-		requestIndex:   newCaptureBodyIndexFromSummary(summarizeBody(params.body)),
+		requestIndex:   newCaptureBodyIndexFromSummary(summarizeBody(requestBody)),
 		responseIndex:  emptyCaptureBodyIndex(),
 		responseLen:    responseBytes,
 		duration:       clock.Since(params.started),
@@ -666,7 +758,7 @@ func providerHTTPCaptureRecordInput(params providerForwardParams, statusCode int
 // funlen threshold; the transport is constructed per-request and its
 // idle connections are closed on return so this helper owns the
 // transport's lifetime end-to-end.
-func (p *Proxy) providerUpstreamRoundTrip(req *http.Request, body []byte, target string, host string) (*http.Response, error) {
+func (p *Proxy) providerUpstreamRoundTrip(req *http.Request, target string, host string) (*http.Response, error) {
 	transport := &http.Transport{
 		Proxy:               nil,
 		ForceAttemptHTTP2:   false,
@@ -676,7 +768,7 @@ func (p *Proxy) providerUpstreamRoundTrip(req *http.Request, body []byte, target
 		TLSHandshakeTimeout: 30 * time.Second,
 	}
 	defer transport.CloseIdleConnections()
-	resp, err := transport.RoundTrip(providerUpstreamRequest(req, body, target, host))
+	resp, err := transport.RoundTrip(providerUpstreamRequest(req, target, host))
 	if err != nil {
 		p.log.Warn("mitm.provider.upstream_round_trip_failed",
 			"component", "mitm",
@@ -685,15 +777,16 @@ func (p *Proxy) providerUpstreamRoundTrip(req *http.Request, body []byte, target
 			"path", req.URL.Path,
 			"err", err,
 		)
-		return nil, fmt.Errorf("cursor upstream round trip: %w", err)
+		return nil, fmt.Errorf("provider upstream round trip: %w", err)
 	}
 	return resp, nil
 }
 
-func providerUpstreamRequest(req *http.Request, body []byte, target string, host string) *http.Request {
+func providerUpstreamRequest(req *http.Request, target string, host string) *http.Request {
 	upstreamReq := req.Clone(req.Context())
-	upstreamReq.Body = io.NopCloser(bytes.NewReader(body))
-	upstreamReq.ContentLength = int64(len(body))
+	upstreamReq.Body = req.Body
+	upstreamReq.ContentLength = req.ContentLength
+	upstreamReq.GetBody = nil
 	upstreamReq.Host = host
 	upstreamReq.URL.Scheme = "https"
 	upstreamReq.URL.Host = target

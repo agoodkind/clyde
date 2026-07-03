@@ -88,6 +88,20 @@ func findFirstAssistantMessage(items []codexwire.InputItem) (int, codexwire.Inpu
 	return -1, codexwire.InputItem{}, false
 }
 
+func assertAssistantMessageContainsText(t *testing.T, items []codexwire.InputItem, want string) {
+	t.Helper()
+	_, item, found := findFirstAssistantMessage(items)
+	if !found {
+		t.Fatalf("expected assistant message, got %#v", items)
+	}
+	for _, content := range item.Content {
+		if content.Text == want {
+			return
+		}
+	}
+	t.Fatalf("assistant message content = %#v, want text %q", item.Content, want)
+}
+
 func extractSummaryTexts(item codexwire.InputItem) []string {
 	out := make([]string, 0, len(item.Summary))
 	for _, entry := range item.Summary {
@@ -127,19 +141,10 @@ func TestPhase6NativeSummaryRoundTripWithoutEncryptedOmitsField(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
 	})
-	r, ok := findFirstReasoningItem(items)
-	if !ok {
-		t.Fatalf("expected reasoning item")
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected no reasoning item")
 	}
-	if r.EncryptedContent != "" {
-		t.Fatalf("encrypted_content should be absent when marker had none, got %q", r.EncryptedContent)
-	}
-	if r.ID != "rs_miss" {
-		t.Fatalf("id = %q", r.ID)
-	}
-	if got := extractSummaryTexts(r); len(got) != 1 || got[0] != "thinking" {
-		t.Fatalf("summary = %v", got)
-	}
+	assertAssistantMessageContainsText(t, items, "thinking")
 }
 
 // Case 3: native_summary_field + drop. Even when the marker carries an
@@ -150,16 +155,10 @@ func TestPhase6NativeSummaryDropEncryptedOmitsField(t *testing.T) {
 		RoundTripSummary:   RoundTripSummaryNative,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
 	})
-	r, ok := findFirstReasoningItem(items)
-	if !ok {
-		t.Fatalf("expected reasoning item")
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected no reasoning item")
 	}
-	if r.EncryptedContent != "" {
-		t.Fatalf("encrypted_content present under drop mode")
-	}
-	if got := extractSummaryTexts(r); len(got) != 1 || got[0] != "thinking" {
-		t.Fatalf("summary = %v", got)
-	}
+	assertAssistantMessageContainsText(t, items, "thinking")
 }
 
 // Case 4: drop summary + round_trip + marker carries encrypted.
@@ -184,54 +183,42 @@ func TestPhase6DropSummaryRoundTripWithEncryptedOnlyEncrypted(t *testing.T) {
 	}
 }
 
-// Case 5: drop summary + round_trip + marker carries no encrypted.
-// The reasoning stub still emits because the ref is present.
-func TestPhase6DropSummaryRoundTripWithoutEncryptedEmitsStubID(t *testing.T) {
+// Case 5: drop summary + round_trip + marker carries no encrypted. No
+// reasoning item is emitted; the body folds into the assistant message.
+func TestPhase6DropSummaryRoundTripWithoutEncryptedEmitsNoReasoningItem(t *testing.T) {
 	t.Parallel()
 	items := buildPhase6Request(t, envelopeWithRef("rs_only", "thinking"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
 	})
-	r, ok := findFirstReasoningItem(items)
-	if !ok {
-		t.Fatalf("expected stub reasoning item with just id")
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected no reasoning item")
 	}
-	if r.ID != "rs_only" {
-		t.Fatalf("id = %q", r.ID)
-	}
-	if r.Summary == nil {
-		t.Fatalf("summary slice must be present (Codex Responses requires it; empty array allowed)")
-	}
-	if len(r.Summary) != 0 {
-		t.Fatalf("summary must be an empty slice, got %v", r.Summary)
-	}
-	if r.EncryptedContent != "" {
-		t.Fatalf("encrypted_content must be absent on miss")
-	}
+	assertAssistantMessageContainsText(t, items, "thinking")
 }
 
-// Case 6: drop summary + drop. Stub by id alone is still emitted.
-func TestPhase6DropSummaryDropEncryptedEmitsStubIDWhenRefPresent(t *testing.T) {
+// Case 6: drop summary + drop. RoundTripEncryptedDrop clears encrypted
+// payloads, so no reasoning item is emitted even when a ref is present.
+func TestPhase6DropSummaryDropEncryptedEmitsNoReasoningItemWhenRefPresent(t *testing.T) {
 	t.Parallel()
 	items := buildPhase6Request(t, envelopeWithRefAndEncrypted("rs_id", "thinking", "ENC_ignored"), RequestBuilderConfig{
 		RoundTripSummary:   RoundTripSummaryDrop,
 		RoundTripEncrypted: RoundTripEncryptedDrop,
 	})
-	r, ok := findFirstReasoningItem(items)
-	if !ok {
-		t.Fatalf("expected reasoning stub")
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected no reasoning item")
 	}
-	if r.ID != "rs_id" {
-		t.Fatalf("id = %q", r.ID)
-	}
-	if r.Summary == nil {
-		t.Fatalf("summary slice must be present (Codex Responses requires it; empty array allowed)")
-	}
-	if len(r.Summary) != 0 {
-		t.Fatalf("summary must be an empty slice, got %v", r.Summary)
-	}
-	if r.EncryptedContent != "" {
-		t.Fatalf("encrypted_content must be absent under drop mode")
+	assertAssistantMessageContainsText(t, items, "thinking")
+}
+
+func TestPhase6RefOnlyMarkerNeverEmitsReasoningItemUnderStoreFalse(t *testing.T) {
+	t.Parallel()
+	items := buildPhase6Request(t, envelopeWithRef("rs_poisoned", ""), RequestBuilderConfig{
+		RoundTripSummary:   RoundTripSummaryNative,
+		RoundTripEncrypted: RoundTripEncryptedRoundTrip,
+	})
+	if _, ok := findFirstReasoningItem(items); ok {
+		t.Fatalf("expected no reasoning item for ref-only marker under store=false")
 	}
 }
 

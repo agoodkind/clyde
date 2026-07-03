@@ -244,7 +244,12 @@ func inheritedListenerFiles(runtime *runtimeServices) ([]*os.File, []daemonsuper
 		name string
 		lis  net.Listener
 	}
+	type namedPacketConn struct {
+		name string
+		conn net.PacketConn
+	}
 	listeners := []namedListener{{name: listenerNameDaemon, lis: runtime.listener}}
+	packetConns := make([]namedPacketConn, 0)
 	if runtime.adapterListener != nil {
 		listeners = append(listeners, namedListener{name: listenerNameAdapter, lis: runtime.adapterListener})
 	}
@@ -264,8 +269,18 @@ func inheritedListenerFiles(runtime *runtimeServices) ([]*os.File, []daemonsuper
 			listeners = append(listeners, namedListener{name: mitmSocketKey(id, socket.Addr().String()), lis: socket})
 		}
 	}
-	files := make([]*os.File, 0, len(listeners))
-	specs := make([]daemonsupervisor.ListenerSpec, 0, len(listeners))
+	mitmUDPIDs := make([]string, 0, len(runtime.mitmPacketConns))
+	for id := range runtime.mitmPacketConns {
+		mitmUDPIDs = append(mitmUDPIDs, id)
+	}
+	slices.Sort(mitmUDPIDs)
+	for _, id := range mitmUDPIDs {
+		for _, conn := range runtime.mitmPacketConns[id] {
+			packetConns = append(packetConns, namedPacketConn{name: mitmUDPSocketKey(id, conn.LocalAddr().String()), conn: conn})
+		}
+	}
+	files := make([]*os.File, 0, len(listeners)+len(packetConns))
+	specs := make([]daemonsupervisor.ListenerSpec, 0, len(listeners)+len(packetConns))
 	cleanup := func() {
 		for _, file := range files {
 			_ = file.Close()
@@ -286,6 +301,24 @@ func inheritedListenerFiles(runtime *runtimeServices) ([]*os.File, []daemonsuper
 			Name:    named.name,
 			Network: named.lis.Addr().Network(),
 			Addr:    named.lis.Addr().String(),
+			FD:      3 + len(files) - 1,
+		})
+	}
+	for _, named := range packetConns {
+		file, err := packetConnFile(named.conn)
+		if err != nil {
+			cleanup()
+			slog.Warn("daemon.reload.packet_conn_file_failed", "concern", "daemon.workers.reload", "component", "daemon",
+				"name", named.name,
+				"err", err,
+			)
+			return nil, nil, func() {}, fmt.Errorf("inherit packet conn %s: %w", named.name, err)
+		}
+		files = append(files, file)
+		specs = append(specs, daemonsupervisor.ListenerSpec{
+			Name:    named.name,
+			Network: named.conn.LocalAddr().Network(),
+			Addr:    named.conn.LocalAddr().String(),
 			FD:      3 + len(files) - 1,
 		})
 	}

@@ -22,6 +22,10 @@ func mitmSocketKey(id, addr string) string {
 	return mitmListenerKey(id) + "#" + addr
 }
 
+func mitmUDPSocketKey(id, addr string) string {
+	return mitmSocketKey(id, addr) + "#udp"
+}
+
 // mitmBindAddrs expands a configured MITM listener host into the concrete
 // loopback addresses the daemon binds. "localhost" binds both loopback stacks
 // ([::1] and 127.0.0.1) so a client reaches the proxy over IPv6 or IPv4; an
@@ -72,6 +76,22 @@ func validateMITMListenerSet(runtime *runtimeServices, cfg *config.Config) error
 			slog.Warn("daemon.reload.mitm_listener_address_changed", "concern", "daemon.workers.reload", "component", "daemon",
 				"listener_id", id, "running", gotAddrs, "configured", wantAddrs)
 			return fmt.Errorf("mitm listener %q address changed from %v to %v; full daemon restart required", id, gotAddrs, wantAddrs)
+		}
+	}
+	for id, conns := range runtime.mitmPacketConns {
+		wantAddrs, ok := configured[id]
+		if !ok {
+			slog.Warn("daemon.reload.mitm_udp_listener_removed", "concern", "daemon.workers.reload", "component", "daemon", "listener_id", id)
+			return fmt.Errorf("mitm udp listener %q removed; full daemon restart required", id)
+		}
+		gotAddrs := make([]string, 0, len(conns))
+		for _, conn := range conns {
+			gotAddrs = append(gotAddrs, conn.LocalAddr().String())
+		}
+		if !equalStringSet(gotAddrs, wantAddrs) {
+			slog.Warn("daemon.reload.mitm_udp_listener_address_changed", "concern", "daemon.workers.reload", "component", "daemon",
+				"listener_id", id, "running", gotAddrs, "configured", wantAddrs)
+			return fmt.Errorf("mitm udp listener %q address changed from %v to %v; full daemon restart required", id, gotAddrs, wantAddrs)
 		}
 	}
 	return nil
