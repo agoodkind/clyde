@@ -32,7 +32,7 @@ func TestNewProxyAttachesToGroup(t *testing.T) {
 		CaptureDir: t.TempDir(),
 	}
 
-	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "cli.test", g)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, nil, "cli.test", g)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
