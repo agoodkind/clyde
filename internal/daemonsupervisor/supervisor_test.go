@@ -3,6 +3,7 @@ package daemonsupervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -167,6 +168,74 @@ func TestRequestReplacementSendsRequestAndFiles(t *testing.T) {
 	}
 	if count := <-receivedFileCount; count != 2 {
 		t.Fatalf("received file count = %d, want 2", count)
+	}
+}
+
+func TestRequestReplacementSendsLargeEnvironment(t *testing.T) {
+	socketDir := filepath.Join("/tmp", fmt.Sprintf("clyde-supervisor-large-%d", os.Getpid()))
+	if err := os.MkdirAll(socketDir, 0o755); err != nil {
+		t.Fatalf("mkdir socket dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(socketDir)
+	})
+	socketPath := filepath.Join(socketDir, "supervisor.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	if err != nil {
+		t.Fatalf("listen supervisor: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan controlRequest, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.AcceptUnix()
+		if acceptErr != nil {
+			serverErr <- acceptErr
+			return
+		}
+		defer conn.Close()
+
+		req, files, readErr := readControlRequest(conn)
+		if readErr != nil {
+			serverErr <- readErr
+			return
+		}
+		defer closeFiles(files)
+		received <- req
+		_, writeErr := conn.Write([]byte(`{"pid":9876}` + "\n"))
+		serverErr <- writeErr
+	}()
+
+	// A single large environment value pushes the request body past the roughly
+	// 8 KiB stream-socket send buffer that used to short-write the reload.
+	largeValue := strings.Repeat("x", 32*1024)
+	environment := []string{
+		EnvReloadChild + "=stale",
+		EnvReadyFD + "=3",
+		"CLYDE_LARGE_ENV=" + largeValue,
+	}
+	pid, err := RequestReplacement(
+		context.Background(),
+		socketPath,
+		"/bin/clyde",
+		[]ListenerSpec{{Name: "daemon", Network: "unix", Addr: "/tmp/clyde.sock", FD: 3}},
+		4,
+		environment,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("request supervisor replacement with large environment: %v", err)
+	}
+	if pid != 9876 {
+		t.Fatalf("pid = %d, want 9876", pid)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("supervisor server: %v", err)
+	}
+	req := <-received
+	if !envContains(req.Environment, "CLYDE_LARGE_ENV="+largeValue) {
+		t.Fatalf("large environment value did not survive the framed round-trip")
 	}
 }
 
