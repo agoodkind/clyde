@@ -215,6 +215,14 @@ func (t *touchOnWrite) Write(p []byte) (int, error) {
 }
 
 func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWriter, target string, host string, provider Provider, started time.Time) {
+	// The sniff front-door (newSniffListener) now fronts every listener, so this
+	// CONNECT arrives through a prefixConn. That changes how http.Server detects
+	// the hijack and it cancels r.Context() sooner, which would abort the
+	// terminated TLS handshake and the intercepted stream mid-flight. Break the
+	// cancel chain the same way the plain-HTTP path does (CLYDE-324): keep
+	// request-scoped values, drop cancellation. Drain still force-closes the
+	// tunnel through the livetrack registry closer, not through ctx.
+	ctx = context.WithoutCancel(ctx)
 	providerID := provider.ID().String()
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
@@ -267,7 +275,18 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		p.log.WarnContext(ctx, "mitm.provider.connect.client_tls_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
-	closer := newTunnelCloser(&connCloser{conn: tlsConn}, &connCloser{conn: clientConn})
+	p.serveInterceptedTLS(ctx, tlsConn, clientConn, target, host, provider, started)
+}
+
+// serveInterceptedTLS runs the post-handshake half of a terminated provider
+// TLS session: it registers the tunnel with livetrack, branches to the h2 or
+// h1 interception path by negotiated ALPN, and logs the intercept lifecycle.
+// Both the CONNECT path and the transparent front-door share it. clientRaw is
+// the underlying pre-TLS connection whose Close force-closes the client side
+// during drain.
+func (p *Proxy) serveInterceptedTLS(ctx context.Context, tlsConn *tls.Conn, clientRaw net.Conn, target string, host string, provider Provider, started time.Time) {
+	providerID := provider.ID().String()
+	closer := newTunnelCloser(&connCloser{conn: tlsConn}, &connCloser{conn: clientRaw})
 	sess, err := p.Tunnels.Register(ctx, "mitm."+providerID+".tls", TunnelMeta{
 		ConnectHost:   host,
 		UpstreamAddr:  target,

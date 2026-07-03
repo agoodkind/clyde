@@ -188,11 +188,12 @@ func mitmEmitterOptions(request config.LoggingRequest) []logevent.EmitterOption 
 // and returns the first non-[http.ErrServerClosed] error any listener produced.
 // A single [http.Server] may serve multiple listeners; its Shutdown closes all
 // of them, so the per-listener goroutines unblock together on drain.
-func (p *Proxy) Serve() error {
+func (p *Proxy) Serve(ctx context.Context) error {
 	if len(p.listeners) == 0 {
 		return fmt.Errorf("mitm: proxy has no listener")
 	}
-	p.log.Info(
+	p.log.InfoContext(
+		ctx,
 		"mitm.proxy.started", "concern", "providers.mitm.lifecycle", "base_url", p.base,
 		"capture_dir", p.cfg.CaptureDir,
 		"providers", p.cfg.Providers,
@@ -203,8 +204,8 @@ func (p *Proxy) Serve() error {
 	var wg sync.WaitGroup
 	for _, listener := range p.listeners {
 		wg.Go(func() {
-			if err := p.server.Serve(listener); err != nil && err != http.ErrServerClosed {
-				p.log.Error("mitm.proxy.serve_failed", "concern", "providers.mitm.wire", "addr", listener.Addr().String(), "err", err)
+			if err := p.server.Serve(newSniffListener(ctx, listener, p)); err != nil && err != http.ErrServerClosed {
+				p.log.ErrorContext(ctx, "mitm.proxy.serve_failed", "concern", "providers.mitm.wire", "addr", listener.Addr().String(), "err", err)
 				errs <- fmt.Errorf("mitm serve %s: %w", listener.Addr().String(), err)
 			}
 		})
