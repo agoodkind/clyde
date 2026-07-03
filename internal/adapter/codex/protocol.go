@@ -318,8 +318,8 @@ func ClientMetadataWithTurn(installationID, windowID, turnMetadataJSON string) *
 }
 
 // RequestInclude is part of Clyde's typed adapter surface.
-func RequestInclude(requested []string, reasoningEnabled bool) []string {
-	if len(requested) == 0 && !reasoningEnabled {
+func RequestInclude(requested []string, includeEncryptedReasoning bool) []string {
+	if len(requested) == 0 && !includeEncryptedReasoning {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(requested)+1)
@@ -335,7 +335,7 @@ func RequestInclude(requested []string, reasoningEnabled bool) []string {
 		seen[item] = struct{}{}
 		out = append(out, item)
 	}
-	if reasoningEnabled {
+	if includeEncryptedReasoning {
 		const encryptedReasoning = "reasoning.encrypted_content"
 		if _, ok := seen[encryptedReasoning]; !ok {
 			out = append(out, encryptedReasoning)
