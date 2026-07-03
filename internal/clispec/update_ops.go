@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
+	"strings"
 	"time"
 
 	"goodkind.io/clyde/internal/updatehandoff"
@@ -215,10 +215,14 @@ func (runner updateRunner) runApply(ctx context.Context, payload updateApplyPayl
 	}
 	handoff := false
 	if result.Applied {
-		if err := runner.deploy(ctx, os.Stdout, os.Stderr); err != nil {
-			slog.WarnContext(ctx, "cli.update.deploy_handoff_failed", "concern", updateLogConcern, "component", "clispec", "err", err)
+		// Deploy output goes through the log, never the result stream: mixing
+		// subprocess output into stdout corrupts --output json rendering.
+		var deployOutput strings.Builder
+		if err := runner.deploy(ctx, &deployOutput, &deployOutput); err != nil {
+			slog.WarnContext(ctx, "cli.update.deploy_handoff_failed", "concern", updateLogConcern, "component", "clispec", "err", err, "deploy_output", deployOutput.String())
 			return nil, fmt.Errorf("update apply deploy handoff: %w", err)
 		}
+		slog.InfoContext(ctx, "cli.update.deploy_handoff_done", "concern", updateLogConcern, "component", "clispec", "deploy_output", deployOutput.String())
 		handoff = true
 	}
 	output := updateApplyOutput{
@@ -281,8 +285,17 @@ func statusOutput(options selfupdate.Options, state selfupdate.State) updateStat
 		LastError:             state.LastError,
 		ResolvedStatePath:     options.StatePath,
 		ResolvedCacheDir:      options.CacheDir,
-		CandidateValidateArgs: "--version",
+		CandidateValidateArgs: candidateValidateArgs(options.Config),
 	}
+}
+
+// candidateValidateArgs mirrors the validation invocation the update engine
+// actually runs, so status output cannot drift from updateopts configuration.
+func candidateValidateArgs(cfg selfupdate.Config) string {
+	if len(cfg.ValidateArgs) == 0 {
+		return "version"
+	}
+	return strings.Join(cfg.ValidateArgs, " ")
 }
 
 func formatCheckOutput(output updateCheckOutput) string {
@@ -330,6 +343,15 @@ func formatStatusOutput(output updateStatusOutput) string {
 	}
 	if output.AppliedTag != "" {
 		text += "applied tag:       " + output.AppliedTag + "\n"
+	}
+	if output.InstalledVersion != "" {
+		text += "installed version: " + output.InstalledVersion + "\n"
+	}
+	if output.InstalledCommit != "" {
+		text += "installed commit:  " + output.InstalledCommit + "\n"
+	}
+	if output.InstalledBuildHash != "" {
+		text += "installed build hash: " + output.InstalledBuildHash + "\n"
 	}
 	if output.LastResult != "" {
 		text += "last result:       " + output.LastResult + "\n"

@@ -9,7 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// deployTimeout bounds the daemon deploy subprocess. A deploy legally takes up
+// to a minute of worker drain plus service manager operations; the bound only
+// stops a wedged deploy from blocking an update forever under the long-lived
+// contexts both callers pass in.
+const deployTimeout = 5 * time.Minute
 
 // Deploy resolves the current executable path and runs its daemon deploy
 // command as a subprocess.
@@ -29,7 +36,9 @@ func DeployPath(ctx context.Context, installedPath string, stdout io.Writer, std
 		return fmt.Errorf("installed binary path is required")
 	}
 	slog.InfoContext(ctx, "update.deploy_handoff.start", "concern", "cli.update", "component", "updatehandoff", "path", installedPath)
-	cmd := exec.CommandContext(ctx, installedPath, "daemon", "deploy")
+	deployCtx, cancel := context.WithTimeout(ctx, deployTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(deployCtx, installedPath, "daemon", "deploy")
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {

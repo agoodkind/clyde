@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"os"
+	"strings"
 
 	"goodkind.io/clyde/internal/updatehandoff"
 	"goodkind.io/clyde/internal/updateopts"
@@ -60,9 +60,14 @@ func startSelfUpdateSchedulerWith(
 				})
 			},
 			StopForRelaunch: func() {
-				if err := deploy(schedulerCtx, os.Stdout, os.Stderr); err != nil {
-					log.WarnContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err)
+				// Deploy output goes through the daemon log rather than the
+				// supervisor's stdio, which belongs to the service manager.
+				var deployOutput strings.Builder
+				if err := deploy(schedulerCtx, &deployOutput, &deployOutput); err != nil {
+					log.WarnContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err, "deploy_output", deployOutput.String())
+					return
 				}
+				log.InfoContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_done", "concern", "process.daemon.lifecycle", "component", "daemon", "deploy_output", deployOutput.String())
 			},
 			Log: log,
 		})
