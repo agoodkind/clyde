@@ -468,22 +468,6 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 		cfg:          cfg,
 	}
 
-	if rule, ok := matchHookRule(cfg.Hooks, host, req.Method, req.URL.Path); ok {
-		return p.runHookedProviderRequest(ctx, hookedProviderParams{
-			writer:       writer,
-			req:          req,
-			body:         body,
-			target:       target,
-			host:         host,
-			provider:     provider,
-			rule:         rule,
-			started:      started,
-			concern:      concern,
-			requestBytes: int64(len(body)),
-			cfg:          cfg,
-		})
-	}
-
 	return p.forwardProviderRequestToUpstream(ctx, params)
 }
 

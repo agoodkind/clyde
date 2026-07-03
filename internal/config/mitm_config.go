@@ -13,12 +13,7 @@ type MITMConfig struct {
 	CaptureDir     string                 `json:"captureDir,omitempty" toml:"capture_dir,omitempty"`
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
-	// Hooks fire in TOML declaration order: matchHookRule returns the first
-	// [[mitm.hook]] whose host/method/path match, so the order [[mitm.hook]]
-	// blocks appear in the config file is the order they are evaluated and
-	// the first match wins. Config load preserves this slice order.
-	Hooks []MITMHookRule  `json:"hooks,omitempty" toml:"hook,omitempty"`
-	Drift MITMDriftConfig `json:"drift,omitzero" toml:"drift,omitempty"`
+	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
 	// App maps each desktop (Electron) client name to its MITM listen endpoint,
 	// declared as [mitm.app.<name>] (for example [mitm.app.cursor]). CLI maps
 	// each CLI client name, declared as [mitm.cli.<name>] (for example
@@ -151,41 +146,6 @@ type MITMCaptureRouteRule struct {
 	PathPrefix          string         `json:"pathPrefix,omitempty" toml:"path_prefix,omitempty"`
 	PathContains        string         `json:"pathContains,omitempty" toml:"path_contains,omitempty"`
 	ContentTypeContains string         `json:"contentTypeContains,omitempty" toml:"content_type_contains,omitempty"`
-}
-
-// MITMHookMode names one of the three supported hook execution modes
-// for [[mitm.hook]] rules.
-type MITMHookMode string
-
-const (
-	// MITMHookModeSynthesize skips the upstream call entirely.
-	MITMHookModeSynthesize MITMHookMode = "synthesize"
-	// MITMHookModeTransformRequest invokes the hook before the upstream call.
-	MITMHookModeTransformRequest MITMHookMode = "transform_request"
-	// MITMHookModeTransformResponse invokes the hook after the upstream call.
-	MITMHookModeTransformResponse MITMHookMode = "transform_response"
-)
-
-// IsValid reports whether the mode is one of the three known values.
-func (m MITMHookMode) IsValid() bool {
-	switch m {
-	case MITMHookModeSynthesize, MITMHookModeTransformRequest, MITMHookModeTransformResponse:
-		return true
-	}
-	return false
-}
-
-// MITMHookRule declares an external subprocess that Clyde forks for matching
-// MITM-decrypted requests.
-type MITMHookRule struct {
-	Name           string       `json:"name" toml:"name"`
-	MatchHost      string       `json:"matchHost,omitempty" toml:"match_host,omitempty"`
-	MatchPathRegex string       `json:"matchPathRegex,omitempty" toml:"match_path_regex,omitempty"`
-	MatchMethod    string       `json:"matchMethod,omitempty" toml:"match_method,omitempty"`
-	Mode           MITMHookMode `json:"mode,omitempty" toml:"mode,omitempty"`
-	Command        string       `json:"command" toml:"command"`
-	Args           []string     `json:"args,omitempty" toml:"args,omitempty"`
-	Timeout        Duration     `json:"timeout,omitempty" toml:"timeout,omitempty"`
 }
 
 // MITMDriftConfig configures daemon-owned baseline refresh and drift reporting.
