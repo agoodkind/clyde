@@ -219,10 +219,10 @@ func (runner updateRunner) runApply(ctx context.Context, payload updateApplyPayl
 		// subprocess output into stdout corrupts --output json rendering.
 		var deployOutput strings.Builder
 		if err := runner.deploy(ctx, &deployOutput, &deployOutput); err != nil {
-			slog.WarnContext(ctx, "cli.update.deploy_handoff_failed", "concern", updateLogConcern, "component", "clispec", "err", err, "deploy_output", deployOutput.String())
+			slog.WarnContext(ctx, "cli.update.deploy_handoff_failed", "concern", updateLogConcern, "component", "clispec", "err", err, "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
 			return nil, fmt.Errorf("update apply deploy handoff: %w", err)
 		}
-		slog.InfoContext(ctx, "cli.update.deploy_handoff_done", "concern", updateLogConcern, "component", "clispec", "deploy_output", deployOutput.String())
+		slog.InfoContext(ctx, "cli.update.deploy_handoff_done", "concern", updateLogConcern, "component", "clispec", "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
 		handoff = true
 	}
 	output := updateApplyOutput{

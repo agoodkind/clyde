@@ -64,10 +64,10 @@ func startSelfUpdateSchedulerWith(
 				// supervisor's stdio, which belongs to the service manager.
 				var deployOutput strings.Builder
 				if err := deploy(schedulerCtx, &deployOutput, &deployOutput); err != nil {
-					log.WarnContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err, "deploy_output", deployOutput.String())
+					log.WarnContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_failed", "concern", "process.daemon.lifecycle", "component", "daemon", "err", err, "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
 					return
 				}
-				log.InfoContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_done", "concern", "process.daemon.lifecycle", "component", "daemon", "deploy_output", deployOutput.String())
+				log.InfoContext(schedulerCtx, "daemon.update_scheduler.deploy_handoff_done", "concern", "process.daemon.lifecycle", "component", "daemon", "deploy_output", updatehandoff.TruncateForLog(deployOutput.String()))
 			},
 			Log: log,
 		})
