@@ -23,5 +23,8 @@ func NewConversationRegistry() *Registry {
 	Register(reg, mcpServeOp())
 	Register(reg, daemonRunOp())
 	Register(reg, daemonWorkerOp())
+	Register(reg, updateCheckOp())
+	Register(reg, updateApplyOp())
+	Register(reg, updateStatusOp())
 	return reg
 }

@@ -63,6 +63,8 @@ func RunCommandContext(ctx context.Context, log *slog.Logger, _ ...ExtraLoop) er
 	if err := config.EnsureRuntimeDir(); err != nil {
 		return fmt.Errorf("ensure runtime dir: %w", err)
 	}
+	stopUpdateScheduler := startSelfUpdateScheduler(ctx, log)
+	defer stopUpdateScheduler()
 	superviseErr := startSupervisorProcess(ctx, log)
 	select {
 	case err := <-superviseErr:
