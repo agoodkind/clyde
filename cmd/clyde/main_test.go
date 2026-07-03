@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/gklog/version"
 )
 
 func TestRootNoArgsShowsHelp(t *testing.T) {
@@ -69,6 +70,15 @@ func TestRootRegistersOperationalPackages(t *testing.T) {
 		if _, _, err := root.Find(path); err != nil {
 			t.Fatalf("operational command %v not registered: %v", path, err)
 		}
+	}
+}
+
+func TestRootUsesStampedGklogVersion(t *testing.T) {
+	factory, _, _ := testFactory()
+	root := newRoot(factory)
+
+	if root.Version != version.Version {
+		t.Fatalf("root version = %q, want stamped gklog version %q", root.Version, version.Version)
 	}
 }
 

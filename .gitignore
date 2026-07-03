@@ -72,3 +72,9 @@ tmp_*
 
 # Added by ggshield
 .cache_ggshield
+.make/
+!.golangci-lint-baseline.txt
+!.gocyclo-baseline.txt
+!.deadcode-baseline.txt
+!.staticcheck-extra-baseline.txt
+!.go-mk-applied-notices

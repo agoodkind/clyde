@@ -26,6 +26,7 @@ import (
 	"goodkind.io/clyde/internal/response"
 	"goodkind.io/clyde/internal/slogger"
 	"goodkind.io/gklog/correlation"
+	"goodkind.io/gklog/version"
 )
 
 func main() {
@@ -57,7 +58,7 @@ func run() int {
 	defer func() { _ = closer.Close() }()
 
 	slog.Info("cli.main.start", "concern", "cmd.dispatch", "component", "cli")
-	f := cli.NewSystemFactory(cli.BuildInfo{Version: "DEVELOPMENT", Commit: "", Date: ""})
+	f := cli.NewSystemFactory(cli.BuildInfo{Version: version.Version, Commit: version.Commit, Date: version.BuildTime})
 	root := newRoot(f)
 	root.SetContext(rootCtx)
 	root.SetArgs(os.Args[1:])
@@ -74,7 +75,7 @@ func newRoot(f *cli.Factory) *cobra.Command {
 		Short:   "Search, inspect, and export Claude, Codex, Cursor, and Zed transcripts",
 		Long:    "Clyde reads raw Claude, Codex, Cursor, and Zed conversation artifacts and exposes them through terminal commands and an MCP server, alongside the background daemon, the MITM capture proxy, log inspection, and transcript export.",
 		Example: "clyde conversation search\nclyde conversation export zed:1a2b3c",
-		Version: "DEVELOPMENT",
+		Version: version.Version,
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
