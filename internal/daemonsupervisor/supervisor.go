@@ -606,10 +606,12 @@ func sendControlRequest(ctx context.Context, socketPath string, req controlReque
 	// buffer (about 8 KiB on macOS), so the body cannot ride one WriteMsgUnix.
 	// The ancillary file descriptors must travel with the first write, so the
 	// length prefix carries them and the body follows on a stream Write that
-	// flushes every byte. The mask bounds the value to 32 bits for the length
-	// prefix; the guard above already keeps it well within that range.
+	// flushes every byte. Widen to uint64 before masking so the math.MaxUint32
+	// constant does not overflow int on 32-bit architectures; the mask bounds
+	// the value to 32 bits for the length prefix, and the guard above already
+	// keeps it well within that range.
 	var header [controlLengthPrefixBytes]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(payload)&math.MaxUint32))
+	binary.BigEndian.PutUint32(header[:], uint32(uint64(len(payload))&math.MaxUint32))
 	descriptors := fileDescriptors(files)
 	var rights []byte
 	if len(descriptors) > 0 {
