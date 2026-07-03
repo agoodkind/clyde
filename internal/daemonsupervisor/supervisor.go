@@ -3,11 +3,13 @@ package daemonsupervisor
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -43,6 +45,12 @@ const (
 	requestTimeout         = 5 * time.Second
 	workerReadyTimeout     = 5 * time.Second
 	workerStopTimeout      = 5 * time.Second
+	// controlLengthPrefixBytes is the fixed big-endian length header written
+	// before a control request body so the receiver knows the exact body size.
+	controlLengthPrefixBytes = 4
+	// maxControlRequestBytes bounds a control request body so a corrupt or
+	// oversized length prefix cannot force a huge allocation on the receiver.
+	maxControlRequestBytes uint32 = 1 << 20
 )
 
 var (
@@ -590,19 +598,40 @@ func sendControlRequest(ctx context.Context, socketPath string, req controlReque
 		slog.WarnContext(ctx, "daemon.supervisor.control.encode_request_failed", "concern", "process.daemon.lifecycle", "err", err)
 		return controlResponse{}, fmt.Errorf("encode supervisor request: %w", err)
 	}
-	payload = append(payload, '\n')
+	if len(payload) > int(maxControlRequestBytes) {
+		return controlResponse{}, fmt.Errorf("supervisor request payload %d bytes exceeds limit %d", len(payload), maxControlRequestBytes)
+	}
+	// Frame the request as a fixed length prefix followed by the JSON body. A
+	// stream unix socket short-writes once a single message exceeds the send
+	// buffer (about 8 KiB on macOS), so the body cannot ride one WriteMsgUnix.
+	// The ancillary file descriptors must travel with the first write, so the
+	// length prefix carries them and the body follows on a stream Write that
+	// flushes every byte. Widen to uint64 before masking so the math.MaxUint32
+	// constant does not overflow int on 32-bit architectures; the mask bounds
+	// the value to 32 bits for the length prefix, and the guard above already
+	// keeps it well within that range.
+	var header [controlLengthPrefixBytes]byte
+	binary.BigEndian.PutUint32(header[:], uint32(uint64(len(payload))&math.MaxUint32))
 	descriptors := fileDescriptors(files)
 	var rights []byte
 	if len(descriptors) > 0 {
 		rights = syscall.UnixRights(descriptors...)
 	}
-	n, _, err := unixConn.WriteMsgUnix(payload, rights, nil)
+	n, _, err := unixConn.WriteMsgUnix(header[:], rights, nil)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.supervisor.control.send_request_failed", "concern", "process.daemon.lifecycle", "err", err)
-		return controlResponse{}, fmt.Errorf("send supervisor request: %w", err)
+		return controlResponse{}, fmt.Errorf("send supervisor request header: %w", err)
 	}
-	if n != len(payload) {
-		return controlResponse{}, fmt.Errorf("send supervisor request: short write %d of %d bytes", n, len(payload))
+	if n != len(header) {
+		return controlResponse{}, fmt.Errorf("send supervisor request header: short write %d of %d bytes", n, len(header))
+	}
+	written, err := unixConn.Write(payload)
+	if err != nil {
+		slog.WarnContext(ctx, "daemon.supervisor.control.send_request_failed", "concern", "process.daemon.lifecycle", "err", err)
+		return controlResponse{}, fmt.Errorf("send supervisor request body: %w", err)
+	}
+	if written != len(payload) {
+		return controlResponse{}, fmt.Errorf("send supervisor request body: short write %d of %d bytes", written, len(payload))
 	}
 
 	var resp controlResponse
@@ -617,24 +646,58 @@ func sendControlRequest(ctx context.Context, socketPath string, req controlReque
 }
 
 func readControlRequest(conn *net.UnixConn) (controlRequest, []*os.File, error) {
-	buffer := make([]byte, 64*1024)
+	// The sender attaches the ancillary file descriptors to the length prefix,
+	// so read the prefix with ReadMsgUnix to capture them, then read the exact
+	// body length from the stream.
+	var header [controlLengthPrefixBytes]byte
 	oob := make([]byte, syscall.CmsgSpace(256*4))
-	n, oobn, _, _, err := conn.ReadMsgUnix(buffer, oob)
+	headerRead, oobn, recvFlags, _, err := conn.ReadMsgUnix(header[:], oob)
 	if err != nil {
 		slog.Warn("daemon.supervisor.reload_request.read_failed", "concern", "process.daemon.lifecycle", "err", err)
-		return controlRequest{}, nil, fmt.Errorf("read supervisor request: %w", err)
+		return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", err)
 	}
-	if n == 0 {
-		return controlRequest{}, nil, fmt.Errorf("read supervisor request: %w", io.ErrUnexpectedEOF)
-	}
-	var req controlRequest
-	if err := json.Unmarshal(bytesTrimSpace(buffer[:n]), &req); err != nil {
-		slog.Warn("daemon.supervisor.reload_request.decode_failed", "concern", "process.daemon.lifecycle", "err", err)
-		return controlRequest{}, nil, fmt.Errorf("decode supervisor request: %w", err)
+	if headerRead == 0 {
+		return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", io.ErrUnexpectedEOF)
 	}
 	files, err := filesFromUnixRights(oob[:oobn])
 	if err != nil {
 		return controlRequest{}, nil, err
+	}
+	// A truncated control message means the ancillary buffer was too small for
+	// the sender's file descriptors, so the received set is incomplete. Reject
+	// the request rather than spawn a worker missing inherited listeners.
+	if recvFlags&syscall.MSG_CTRUNC != 0 {
+		closeFiles(files)
+		slog.Warn("daemon.supervisor.reload_request.control_truncated", "concern", "process.daemon.lifecycle")
+		return controlRequest{}, nil, fmt.Errorf("read supervisor request: control message truncated")
+	}
+	if headerRead < len(header) {
+		if _, err := io.ReadFull(conn, header[headerRead:]); err != nil {
+			closeFiles(files)
+			slog.Warn("daemon.supervisor.reload_request.read_failed", "concern", "process.daemon.lifecycle", "err", err)
+			return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", err)
+		}
+	}
+	length := binary.BigEndian.Uint32(header[:])
+	if length == 0 {
+		closeFiles(files)
+		return controlRequest{}, nil, fmt.Errorf("read supervisor request: empty body")
+	}
+	if length > maxControlRequestBytes {
+		closeFiles(files)
+		return controlRequest{}, nil, fmt.Errorf("supervisor request body %d bytes exceeds limit %d", length, maxControlRequestBytes)
+	}
+	body := make([]byte, length)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		closeFiles(files)
+		slog.Warn("daemon.supervisor.reload_request.read_failed", "concern", "process.daemon.lifecycle", "err", err)
+		return controlRequest{}, nil, fmt.Errorf("read supervisor request body: %w", err)
+	}
+	var req controlRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		closeFiles(files)
+		slog.Warn("daemon.supervisor.reload_request.decode_failed", "concern", "process.daemon.lifecycle", "err", err)
+		return controlRequest{}, nil, fmt.Errorf("decode supervisor request: %w", err)
 	}
 	return req, files, nil
 }
@@ -707,17 +770,6 @@ func closeFiles(files []*os.File) {
 			_ = file.Close()
 		}
 	}
-}
-
-func bytesTrimSpace(data []byte) []byte {
-	for len(data) > 0 {
-		last := data[len(data)-1]
-		if last != '\n' && last != '\r' && last != ' ' && last != '\t' {
-			break
-		}
-		data = data[:len(data)-1]
-	}
-	return data
 }
 
 func logSupervisorPanic(log *slog.Logger, event string, recovered string) {
