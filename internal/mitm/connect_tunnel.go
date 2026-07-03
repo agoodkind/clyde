@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/http2"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
@@ -246,18 +247,20 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		p.log.WarnContext(ctx, "mitm.provider.connect.leaf_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
-	// NextProtos is intentionally omitted so the server performs no ALPN
-	// negotiation: a client that offers any protocol set, including h2-only
-	// backends the downstream HTTP/1.1 parser cannot serve, still completes
-	// the handshake instead of receiving a fatal no_application_protocol
-	// alert. GetConfigForClient exists only to log the offer generically, per
-	// host, with no host-specific branching.
 	tlsConn := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
 		MinVersion:   tls.VersionTLS12,
 		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
 			p.log.DebugContext(ctx, "mitm.provider.connect.alpn_offer", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "protos", info.SupportedProtos)
-			return nil, nil
+			nextProtos := mitmALPNProtocols(info.SupportedProtos)
+			if len(nextProtos) == 0 {
+				return nil, nil
+			}
+			return &tls.Config{
+				Certificates: []tls.Certificate{*leaf},
+				MinVersion:   tls.VersionTLS12,
+				NextProtos:   nextProtos,
+			}, nil
 		},
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
@@ -277,7 +280,12 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 	}
 	defer p.Tunnels.Release(ctx, sess, "mitm."+providerID+".tls.closed")
 	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_open", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host)
-	p.serveProviderInterceptedHTTP(ctx, tlsConn, target, host, provider, sess)
+	switch tlsConn.ConnectionState().NegotiatedProtocol {
+	case http2.NextProtoTLS:
+		p.serveProviderInterceptedHTTP2(ctx, tlsConn, target, host, provider, sess)
+	default:
+		p.serveProviderInterceptedHTTP1(ctx, tlsConn, target, host, provider, sess)
+	}
 	p.log.InfoContext(ctx, "mitm.provider.connect.intercept_closed", "concern", "providers.mitm.wire", "provider", providerID,
 		"target", target,
 		"host", host,
@@ -285,10 +293,20 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 	)
 }
 
-func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Conn, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) {
+func mitmALPNProtocols(offered []string) []string {
+	for _, protocol := range offered {
+		if protocol == http2.NextProtoTLS || protocol == "http/1.1" {
+			return []string{http2.NextProtoTLS, "http/1.1"}
+		}
+	}
+	return nil
+}
+
+func (p *Proxy) serveProviderInterceptedHTTP1(ctx context.Context, client *tls.Conn, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) {
 	providerID := provider.ID().String()
 	reader := bufio.NewReader(client)
 	writer := bufio.NewWriter(client)
+	sink := &bufioProviderResponseSink{proxy: p, bufw: writer}
 	stopWatcher := make(chan struct{})
 	var activeRequests atomic.Int32
 	go func() {
@@ -342,7 +360,7 @@ func (p *Proxy) serveProviderInterceptedHTTP(ctx context.Context, client *tls.Co
 			p.log.DebugContext(ctx, "mitm.provider.http.request_rejected_reload_drain", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "err", registerErr)
 			return
 		}
-		if err := p.handleProviderInterceptedRequest(ctx, client, reader, writer, req, target, host, provider, parent); err != nil {
+		if err := p.handleProviderInterceptedRequest(ctx, client, reader, sink, req, target, host, provider, parent); err != nil {
 			activeRequests.Add(-1)
 			p.log.WarnContext(ctx, "mitm.provider.http.request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
 			if reqSess != nil {
@@ -414,7 +432,24 @@ func (p *Proxy) recordProviderFailure(req *http.Request, responseHeader http.Hea
 	return fmt.Errorf(failure.errorCode+": %s", failure.errorMessage)
 }
 
-func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer *bufio.Writer, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
+type providerResponseSink interface {
+	writeProviderResponse(resp *http.Response, bodyCap int) (bytesWritten int64, captured []byte, err error)
+}
+
+type bufioProviderResponseSink struct {
+	proxy *Proxy
+	bufw  *bufio.Writer
+}
+
+func (s *bufioProviderResponseSink) writeProviderResponse(resp *http.Response, bodyCap int) (int64, []byte, error) {
+	return s.proxy.forwardAndCaptureProviderResponse(s.bufw, resp, bodyCap)
+}
+
+// handleProviderInterceptedRequest runs one intercepted provider request
+// through the shared upstream and capture path. HTTP/2 callers pass nil for
+// client and reader because h2 request bodies are already decoded by http2
+// ServeConn and RFC 7540 does not use the HTTP/1.1 Upgrade websocket branch.
+func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tls.Conn, reader *bufio.Reader, writer providerResponseSink, req *http.Request, target string, host string, provider Provider, parent *livetrack.Session[TunnelMeta]) error {
 	started := clock.Now()
 	cfg := p.config()
 	body, err := io.ReadAll(req.Body)
@@ -441,10 +476,11 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 	req.URL.Scheme = "https"
 	req.URL.Host = target
 	if isWebsocketUpgrade(req) {
-		if client == nil || reader == nil {
+		bufioSink, ok := writer.(*bufioProviderResponseSink)
+		if client == nil || reader == nil || !ok || bufioSink == nil {
 			return fmt.Errorf("provider websocket requires intercepted TLS connection")
 		}
-		return p.handleProviderInterceptedWebsocket(ctx, client, reader, writer, req, target, host, provider, parent)
+		return p.handleProviderInterceptedWebsocket(ctx, client, reader, bufioSink.bufw, req, target, host, provider, parent)
 	}
 
 	concern := resolveCaptureConcern(cfg.CaptureRules, captureConcernInput{
@@ -476,7 +512,7 @@ func (p *Proxy) handleProviderInterceptedRequest(ctx context.Context, client *tl
 // upstream round-trip and capture-metadata write without a wide
 // parameter list.
 type providerForwardParams struct {
-	writer       *bufio.Writer
+	writer       providerResponseSink
 	req          *http.Request
 	body         []byte
 	target       string
@@ -505,7 +541,7 @@ func (p *Proxy) forwardProviderRequestToUpstream(ctx context.Context, params pro
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	responseBytes, responseBody, err := p.forwardAndCaptureProviderResponse(params.writer, resp, p.captureBodyCap(params.cfg))
+	responseBytes, responseBody, err := params.writer.writeProviderResponse(resp, p.captureBodyCap(params.cfg))
 	if err != nil {
 		return err
 	}

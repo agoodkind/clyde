@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/http2"
+
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/logevent"
@@ -398,10 +400,9 @@ func TestProviderTLSKeepaliveRequestsStopAtDrainBoundary(t *testing.T) {
 }
 
 // TestProviderTLSAcceptsH2OnlyALPNOffer verifies the intercepting TLS server
-// no longer sends a fatal no_application_protocol alert when a client offers
-// only "h2" in its ClientHello. The fix removes the server's static
-// NextProtos restriction generically for every claimed host, so this test
-// dials with an arbitrary provider host rather than any specific hostname.
+// negotiates h2 when a client offers only h2 in its ClientHello. The dynamic
+// ALPN selection remains generic for every claimed host, so this test dials
+// with an arbitrary provider host rather than any specific hostname.
 func TestProviderTLSAcceptsH2OnlyALPNOffer(t *testing.T) {
 	const providerHost = "chatgpt.com"
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +450,9 @@ func TestProviderTLSAcceptsH2OnlyALPNOffer(t *testing.T) {
 	defer tlsClient.Close()
 	if err := tlsClient.Handshake(); err != nil {
 		t.Fatalf("client TLS handshake with h2-only ALPN offer failed: %v", err)
+	}
+	if got := tlsClient.ConnectionState().NegotiatedProtocol; got != http2.NextProtoTLS {
+		t.Fatalf("negotiated protocol = %q want %q", got, http2.NextProtoTLS)
 	}
 }
 
@@ -647,6 +651,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "",
 		server:          nil,
+		h2Server:        &http2.Server{},
 	}
 
 	requestBody := []byte(`{"probe":"summary"}`)
@@ -654,7 +659,8 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	req.Header.Set("content-type", "application/json")
 	var output bytes.Buffer
 	writer := bufio.NewWriter(&output)
-	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, writer, req, cursorHost+":443", cursorHost, testCursorProvider{}, nil); err != nil {
+	sink := &bufioProviderResponseSink{proxy: proxy, bufw: writer}
+	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, sink, req, cursorHost+":443", cursorHost, testCursorProvider{}, nil); err != nil {
 		t.Fatalf("handle cursor request: %v", err)
 	}
 
@@ -833,6 +839,7 @@ func startTestProxy(t *testing.T) *testProxy {
 		cfg:             config.MITMConfig{CaptureDir: t.TempDir()},
 		base:            "http://" + listener.Addr().String(),
 		server:          nil,
+		h2Server:        &http2.Server{},
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
@@ -880,6 +887,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 		cfg:             config.MITMConfig{CaptureDir: captureDir},
 		base:            "http://" + listener.Addr().String(),
 		server:          nil,
+		h2Server:        &http2.Server{},
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server

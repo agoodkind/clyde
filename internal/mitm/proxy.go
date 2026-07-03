@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/http2"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/livetrack"
@@ -62,6 +63,7 @@ type Proxy struct {
 	// so every captured exchange across them carries the same client tag.
 	listeners []net.Listener
 	server    *http.Server
+	h2Server  *http2.Server
 }
 
 // NewProxy constructs a Proxy bound to the supplied listener. The
@@ -138,6 +140,7 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 		base:      "http://" + listeners[0].Addr().String(),
 		listeners: listeners,
 		server:    nil,
+		h2Server:  &http2.Server{},
 	}
 	p.server = &http.Server{
 		Handler:           http.HandlerFunc(p.handle),
@@ -579,12 +582,18 @@ const (
 	hopByHopContentLength    hopByHopHeader = "content-length"
 	hopByHopTransferEncoding hopByHopHeader = "transfer-encoding"
 	hopByHopConnection       hopByHopHeader = "connection"
+	hopByHopKeepAlive        hopByHopHeader = "keep-alive"
+	hopByHopProxyConnection  hopByHopHeader = "proxy-connection"
+	hopByHopUpgrade          hopByHopHeader = "upgrade"
+	hopByHopTE               hopByHopHeader = "te"
+	hopByHopTrailer          hopByHopHeader = "trailer"
 )
 
 func forwardResponseHeaders(dst http.Header, src http.Header) {
 	for key, values := range src {
 		switch hopByHopHeader(strings.ToLower(key)) {
-		case hopByHopContentLength, hopByHopTransferEncoding, hopByHopConnection:
+		case hopByHopContentLength, hopByHopTransferEncoding, hopByHopConnection,
+			hopByHopKeepAlive, hopByHopProxyConnection, hopByHopUpgrade, hopByHopTE, hopByHopTrailer:
 			continue
 		}
 		for _, value := range values {
