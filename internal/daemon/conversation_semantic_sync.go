@@ -110,6 +110,14 @@ type conversationSemanticSyncWorker struct {
 	// deliveryCursor is the last conversation id delivered; each batch resumes
 	// after it instead of restarting at the lexicographically smallest id.
 	deliveryCursor string
+	// emptyDelivered maps a conversation id to the fingerprint at which it
+	// rendered zero deliverable documents. The engine only marks a conversation
+	// satisfied once it receives a document, so a zero-document conversation
+	// would stay in the needed set forever. The next manifest omits any
+	// conversation whose current fingerprint still matches its entry here, and
+	// re-includes it once its content, and therefore its fingerprint, changes.
+	// The worker runs in a single goroutine, so the map needs no lock.
+	emptyDelivered map[string]string
 	// now returns the wall clock; tests override it to pin deferral decisions.
 	now func() time.Time
 	// freshness receives the latest pass stats so the control server can report
@@ -177,6 +185,7 @@ func newConversationSemanticSyncWorker(
 		interval:       conversationSemanticSyncInterval,
 		activeJobID:    "",
 		deliveryCursor: "",
+		emptyDelivered: make(map[string]string),
 		now:            time.Now,
 		freshness:      nil,
 	}
@@ -313,22 +322,43 @@ func (w *conversationSemanticSyncWorker) buildManifest(stampedRecords []conversa
 	manifest := make([]semsearch.Fingerprint, 0, len(stampedRecords))
 	recordsByID := make(map[string]conversation.Record, len(stampedRecords))
 	stampsByID := make(map[string]conversation.FileStamp, len(stampedRecords))
+	seen := make(map[string]bool, len(stampedRecords))
 	for _, stampedRecord := range stampedRecords {
 		conversationID := strings.TrimSpace(stampedRecord.Record.ID)
 		if conversationID == "" {
 			continue
 		}
-		if _, seen := recordsByID[conversationID]; seen {
+		if seen[conversationID] {
 			continue
+		}
+		seen[conversationID] = true
+		fingerprint := stampedRecord.Stamp.Fingerprint()
+		if priorFingerprint, delivered := w.emptyDelivered[conversationID]; delivered {
+			if priorFingerprint == fingerprint {
+				continue
+			}
+			delete(w.emptyDelivered, conversationID)
 		}
 		recordsByID[conversationID] = stampedRecord.Record
 		stampsByID[conversationID] = stampedRecord.Stamp
 		manifest = append(manifest, semsearch.Fingerprint{
 			ConversationID: conversationID,
-			Value:          stampedRecord.Stamp.Fingerprint(),
+			Value:          fingerprint,
 		})
 	}
+	w.pruneEmptyDelivered(seen)
 	return manifest, recordsByID, stampsByID
+}
+
+// pruneEmptyDelivered drops zero-document entries for conversations that no
+// longer appear in the scanned set, so the map stays bounded by the current
+// conversation count rather than growing across the daemon's lifetime.
+func (w *conversationSemanticSyncWorker) pruneEmptyDelivered(seen map[string]bool) {
+	for conversationID := range w.emptyDelivered {
+		if !seen[conversationID] {
+			delete(w.emptyDelivered, conversationID)
+		}
+	}
 }
 
 // collectNeededDocuments loads the documents for the conversations the engine
@@ -376,6 +406,16 @@ func (w *conversationSemanticSyncWorker) collectNeededDocuments(
 		conversationDocs, loadErr := w.loadDocs(ctx, record)
 		if loadErr != nil {
 			stats.failed++
+			continue
+		}
+		if len(conversationDocs) == 0 {
+			// The conversation rendered no deliverable documents, so the engine
+			// can never mark it satisfied and would keep listing it as needed.
+			// Record its fingerprint so the next manifest omits it until its
+			// content changes, and do not count it as a delivered conversation.
+			if stamp, stamped := stampsByID[conversationID]; stamped {
+				w.emptyDelivered[conversationID] = stamp.Fingerprint()
+			}
 			continue
 		}
 		docs = append(docs, conversationDocs...)
