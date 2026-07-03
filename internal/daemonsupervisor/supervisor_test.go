@@ -173,6 +173,11 @@ func TestRequestReplacementSendsRequestAndFiles(t *testing.T) {
 
 func TestRequestReplacementSendsLargeEnvironment(t *testing.T) {
 	socketDir := filepath.Join("/tmp", fmt.Sprintf("clyde-supervisor-large-%d", os.Getpid()))
+	// Clear any directory a previous interrupted run left behind so a stale
+	// supervisor.sock cannot fail ListenUnix with "address already in use".
+	if err := os.RemoveAll(socketDir); err != nil {
+		t.Fatalf("clear stale socket dir: %v", err)
+	}
 	if err := os.MkdirAll(socketDir, 0o755); err != nil {
 		t.Fatalf("mkdir socket dir: %v", err)
 	}

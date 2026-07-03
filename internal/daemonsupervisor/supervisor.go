@@ -623,9 +623,13 @@ func sendControlRequest(ctx context.Context, socketPath string, req controlReque
 	if n != len(header) {
 		return controlResponse{}, fmt.Errorf("send supervisor request header: short write %d of %d bytes", n, len(header))
 	}
-	if _, err := unixConn.Write(payload); err != nil {
+	written, err := unixConn.Write(payload)
+	if err != nil {
 		slog.WarnContext(ctx, "daemon.supervisor.control.send_request_failed", "concern", "process.daemon.lifecycle", "err", err)
 		return controlResponse{}, fmt.Errorf("send supervisor request body: %w", err)
+	}
+	if written != len(payload) {
+		return controlResponse{}, fmt.Errorf("send supervisor request body: short write %d of %d bytes", written, len(payload))
 	}
 
 	var resp controlResponse
@@ -645,7 +649,7 @@ func readControlRequest(conn *net.UnixConn) (controlRequest, []*os.File, error) 
 	// body length from the stream.
 	var header [controlLengthPrefixBytes]byte
 	oob := make([]byte, syscall.CmsgSpace(256*4))
-	headerRead, oobn, _, _, err := conn.ReadMsgUnix(header[:], oob)
+	headerRead, oobn, recvFlags, _, err := conn.ReadMsgUnix(header[:], oob)
 	if err != nil {
 		slog.Warn("daemon.supervisor.reload_request.read_failed", "concern", "process.daemon.lifecycle", "err", err)
 		return controlRequest{}, nil, fmt.Errorf("read supervisor request header: %w", err)
@@ -656,6 +660,14 @@ func readControlRequest(conn *net.UnixConn) (controlRequest, []*os.File, error) 
 	files, err := filesFromUnixRights(oob[:oobn])
 	if err != nil {
 		return controlRequest{}, nil, err
+	}
+	// A truncated control message means the ancillary buffer was too small for
+	// the sender's file descriptors, so the received set is incomplete. Reject
+	// the request rather than spawn a worker missing inherited listeners.
+	if recvFlags&syscall.MSG_CTRUNC != 0 {
+		closeFiles(files)
+		slog.Warn("daemon.supervisor.reload_request.control_truncated", "concern", "process.daemon.lifecycle")
+		return controlRequest{}, nil, fmt.Errorf("read supervisor request: control message truncated")
 	}
 	if headerRead < len(header) {
 		if _, err := io.ReadFull(conn, header[headerRead:]); err != nil {
