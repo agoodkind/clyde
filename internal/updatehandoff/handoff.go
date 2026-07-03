@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -17,6 +18,20 @@ import (
 // stops a wedged deploy from blocking an update forever under the long-lived
 // contexts both callers pass in.
 const deployTimeout = 5 * time.Minute
+
+// MaxLogBytes bounds captured deploy output before it is attached to a log
+// event, so a chatty or looping deploy cannot produce huge log entries or
+// spike memory.
+const MaxLogBytes = 8 << 10
+
+// TruncateForLog caps s at MaxLogBytes, marking the cut so a truncated log
+// field is not mistaken for the full output.
+func TruncateForLog(s string) string {
+	if len(s) <= MaxLogBytes {
+		return s
+	}
+	return s[:MaxLogBytes] + "... (truncated)"
+}
 
 // Deploy resolves the current executable path and runs its daemon deploy
 // command as a subprocess.
@@ -34,6 +49,13 @@ func DeployPath(ctx context.Context, installedPath string, stdout io.Writer, std
 	if strings.TrimSpace(installedPath) == "" {
 		slog.WarnContext(ctx, "update.deploy_handoff.path_missing", "concern", "cli.update", "component", "updatehandoff")
 		return fmt.Errorf("installed binary path is required")
+	}
+	// Require an absolute path so exec.CommandContext runs the installed binary
+	// directly rather than resolving a bare name through PATH, which could exec
+	// an unintended binary during this security-sensitive handoff.
+	if !filepath.IsAbs(installedPath) {
+		slog.WarnContext(ctx, "update.deploy_handoff.path_not_absolute", "concern", "cli.update", "component", "updatehandoff", "path", installedPath)
+		return fmt.Errorf("installed binary path must be absolute: %q", installedPath)
 	}
 	slog.InfoContext(ctx, "update.deploy_handoff.start", "concern", "cli.update", "component", "updatehandoff", "path", installedPath)
 	deployCtx, cancel := context.WithTimeout(ctx, deployTimeout)
