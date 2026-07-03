@@ -125,9 +125,7 @@ model = "gpt-5.4"
 efforts = ["low", "medium", "high", "xhigh"]
 max_output_tokens = 128000
 contexts = [
-  { tokens = 1000000, observed_tokens = 272000, alias_suffix = "1m", advertised_native_aliases = [
-    "gpt-5.4",
-  ] },
+  { tokens = 1000000, observed_tokens = 272000, alias_suffix = "1m", native_aliases = [{ id = "gpt-5.4", advertise = true }] },
 ]
 
 [[adapter.codex.models]]
@@ -135,7 +133,7 @@ alias_prefix = "codex-5.5"
 model = "gpt-5.5"
 efforts = ["low", "medium", "high", "xhigh"]
 max_output_tokens = 128000
-contexts = [{ tokens = 272000, native_aliases = ["gpt-5.5"] }]
+contexts = [{ tokens = 272000, native_aliases = [{ id = "gpt-5.5" }, { id = "gpt-5.5-extra", effort = "xhigh" }] }]
 
 # Optional: forward otherwise-unknown model aliases to one
 # OpenAI-compatible upstream. The caller's model value is preserved unless

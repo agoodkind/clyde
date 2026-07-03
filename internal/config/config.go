@@ -208,8 +208,9 @@ type AdapterCodex struct {
 	// AuthFile points at Codex auth state. Defaults to ~/.codex/auth.json.
 	AuthFile string `json:"authFile,omitempty" toml:"auth_file,omitempty"`
 	// NativeModelRouting controls how declared native OpenAI/Codex aliases
-	// (the native_aliases / advertised_native_aliases entries under
-	// [adapter.codex.models]) resolve. Empty and "off" reject them as
+	// (the native_aliases entries on each [adapter.codex.models] context,
+	// i.e. [adapter.codex.models].contexts[*].native_aliases) resolve.
+	// Empty and "off" reject them as
 	// unknown models. "codex" routes through the direct Codex backend.
 	// "passthrough_override" routes to NativeModelPassthroughOverride.
 	// There is no model-name prefix guessing: an alias routes to Codex
@@ -352,20 +353,27 @@ type AdapterCodexModel struct {
 	Contexts         []AdapterCodexModelContext `json:"contexts,omitempty" toml:"contexts,omitempty"`
 }
 
+// AdapterCodexNativeAlias declares one foreign model id that resolves to
+// this context. Effort optionally binds the id to one effort tier; empty
+// means the request-supplied effort (or upstream default) applies.
+// Advertise includes the id in /v1/models, and only takes effect when
+// Codex is enabled and native_model_routing is "codex"; under "off" or
+// "passthrough_override" the id is never listed.
+type AdapterCodexNativeAlias struct {
+	ID        string `json:"id,omitempty" toml:"id,omitempty"`
+	Effort    string `json:"effort,omitempty" toml:"effort,omitempty"`
+	Advertise bool   `json:"advertise,omitempty" toml:"advertise,omitempty"`
+}
+
 // AdapterCodexModelContext is part of Clyde's typed adapter surface.
 type AdapterCodexModelContext struct {
 	Tokens int `json:"tokens,omitempty" toml:"tokens,omitempty"`
 	// ObservedTokens is the context window the Codex Responses HTTP
 	// transport has actually accepted for this advertised variant.
 	// When zero, Clyde treats the observed window as equal to Tokens.
-	ObservedTokens int    `json:"observedTokens,omitempty" toml:"observed_tokens,omitempty"`
-	AliasSuffix    string `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
-	// NativeAliases are OpenAI/Codex-looking ids that should resolve to
-	// this context when [adapter.codex].native_model_routing is "codex".
-	NativeAliases []string `json:"nativeAliases,omitempty" toml:"native_aliases,omitempty"`
-	// AdvertisedNativeAliases is the subset of native aliases Clyde should
-	// include in /v1/models. Aliases listed here also resolve natively.
-	AdvertisedNativeAliases []string `json:"advertisedNativeAliases,omitempty" toml:"advertised_native_aliases,omitempty"`
+	ObservedTokens int                       `json:"observedTokens,omitempty" toml:"observed_tokens,omitempty"`
+	AliasSuffix    string                    `json:"aliasSuffix,omitempty" toml:"alias_suffix,omitempty"`
+	NativeAliases  []AdapterCodexNativeAlias `json:"nativeAliases,omitempty" toml:"native_aliases,omitempty"`
 }
 
 // AdapterLogprobs picks the per-backend behavior. Each value is

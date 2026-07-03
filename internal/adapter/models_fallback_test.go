@@ -118,10 +118,12 @@ func testCodexModels() []config.AdapterCodexModel {
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
 				{
-					Tokens:                  1000000,
-					ObservedTokens:          272000,
-					AliasSuffix:             "1m",
-					AdvertisedNativeAliases: []string{"gpt-5.4"},
+					Tokens:         1000000,
+					ObservedTokens: 272000,
+					AliasSuffix:    "1m",
+					NativeAliases: []config.AdapterCodexNativeAlias{
+						{ID: "gpt-5.4", Advertise: true},
+					},
 				},
 			},
 		},
@@ -131,7 +133,13 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 272000, NativeAliases: []string{"gpt-5.5"}},
+				{
+					Tokens: 272000,
+					NativeAliases: []config.AdapterCodexNativeAlias{
+						{ID: "gpt-5.5"},
+						{ID: "gpt-5.5-extra", Effort: EffortXHigh},
+					},
+				},
 			},
 		},
 		{
@@ -140,7 +148,7 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 272000, NativeAliases: []string{"gpt-5.3-codex"}},
+				{Tokens: 272000, NativeAliases: []config.AdapterCodexNativeAlias{{ID: "gpt-5.3-codex"}}},
 			},
 		},
 		{
@@ -149,7 +157,7 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 272000, NativeAliases: []string{"gpt-5.3-codex-spark"}},
+				{Tokens: 272000, NativeAliases: []config.AdapterCodexNativeAlias{{ID: "gpt-5.3-codex-spark"}}},
 			},
 		},
 		{
@@ -158,7 +166,7 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 272000, NativeAliases: []string{"gpt-5.2"}},
+				{Tokens: 272000, NativeAliases: []config.AdapterCodexNativeAlias{{ID: "gpt-5.2"}}},
 			},
 		},
 		{
@@ -167,7 +175,7 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 272000, NativeAliases: []string{"gpt-5.4-mini"}},
+				{Tokens: 272000, NativeAliases: []config.AdapterCodexNativeAlias{{ID: "gpt-5.4-mini"}}},
 			},
 		},
 		{
@@ -176,7 +184,7 @@ func testCodexModels() []config.AdapterCodexModel {
 			Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
 			MaxOutputTokens: 128000,
 			Contexts: []config.AdapterCodexModelContext{
-				{Tokens: 272000, NativeAliases: []string{"o3"}},
+				{Tokens: 272000, NativeAliases: []config.AdapterCodexNativeAlias{{ID: "o3"}}},
 			},
 		},
 	}
@@ -210,10 +218,12 @@ func TestNewRegistryPropagatesInstructionsFromConfig(t *testing.T) {
 		Efforts:         []string{EffortMedium},
 		MaxOutputTokens: 128000,
 		Contexts: []config.AdapterCodexModelContext{{
-			Tokens:                  1000000,
-			ObservedTokens:          272000,
-			AliasSuffix:             "1m",
-			AdvertisedNativeAliases: []string{"gpt-5.4"},
+			Tokens:         1000000,
+			ObservedTokens: 272000,
+			AliasSuffix:    "1m",
+			NativeAliases: []config.AdapterCodexNativeAlias{
+				{ID: "gpt-5.4", Advertise: true},
+			},
 		}},
 	}}
 
@@ -248,7 +258,7 @@ func TestNewRegistryPropagatesInstructionsFromConfig(t *testing.T) {
 }
 
 // TestResolveRoutesDeclaredNativeCodexAlias locks in that a declared
-// native alias (an advertised_native_aliases entry) routes to Codex
+// native alias routes to Codex
 // under native_model_routing = "codex". There is no prefix guessing;
 // the alias resolves because it is declared.
 func TestResolveRoutesDeclaredNativeCodexAlias(t *testing.T) {
@@ -272,6 +282,113 @@ func TestResolveRoutesDeclaredNativeCodexAlias(t *testing.T) {
 	}
 	if effort != "" {
 		t.Fatalf("effort = %q want empty", effort)
+	}
+}
+
+func TestResolveRoutesBoundNativeCodexAliasWithDefaultEffort(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.NativeModelRouting = "codex"
+	cfg.Codex.Models = testCodexModels()
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	m, effort, err := r.Resolve("gpt-5.5-extra", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Backend != BackendCodex {
+		t.Fatalf("backend = %q want %q", m.Backend, BackendCodex)
+	}
+	if m.ClaudeModel != "gpt-5.5" {
+		t.Fatalf("ClaudeModel = %q want gpt-5.5", m.ClaudeModel)
+	}
+	if m.Context != 272000 {
+		t.Fatalf("Context = %d want 272000", m.Context)
+	}
+	if m.Effort != EffortXHigh {
+		t.Fatalf("bound Effort = %q want %q", m.Effort, EffortXHigh)
+	}
+	if len(m.Efforts) != 1 || m.Efforts[0] != EffortXHigh {
+		t.Fatalf("Efforts = %#v want [%q]", m.Efforts, EffortXHigh)
+	}
+	if effort != EffortXHigh {
+		t.Fatalf("effort = %q want %q", effort, EffortXHigh)
+	}
+}
+
+func TestResolveRejectsConflictingBoundNativeCodexAliasEffort(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.NativeModelRouting = "codex"
+	cfg.Codex.Models = testCodexModels()
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	_, _, err = r.Resolve("gpt-5.5-extra", EffortHigh)
+	if err == nil {
+		t.Fatal("expected conflicting request effort to fail")
+	}
+	want := `effort "high" conflicts with effort-bound model "gpt-5.5-extra"`
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v want substring %q", err, want)
+	}
+}
+
+func TestNewRegistryRejectsInvalidNativeCodexAliases(t *testing.T) {
+	cases := []struct {
+		name  string
+		alias config.AdapterCodexNativeAlias
+		extra []config.AdapterCodexNativeAlias
+		want  string
+	}{
+		{
+			name:  "empty_id",
+			alias: config.AdapterCodexNativeAlias{ID: " "},
+			want:  "native alias id must be non-empty",
+		},
+		{
+			name:  "unsupported_effort",
+			alias: config.AdapterCodexNativeAlias{ID: "gpt-bad", Effort: "turbo"},
+			want:  `native alias "gpt-bad" binds unsupported effort "turbo"`,
+		},
+		{
+			name:  "duplicate_native_id",
+			alias: config.AdapterCodexNativeAlias{ID: "gpt-dup"},
+			extra: []config.AdapterCodexNativeAlias{{ID: "gpt-dup"}},
+			want:  `duplicate native alias "gpt-dup"`,
+		},
+		{
+			name:  "duplicate_generated_alias_id",
+			alias: config.AdapterCodexNativeAlias{ID: "clyde-codex-5.5-high"},
+			want:  `duplicate native alias "clyde-codex-5.5-high"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseConfig()
+			cfg.Codex.Enabled = true
+			cfg.Codex.NativeModelRouting = "codex"
+			cfg.Codex.Models = []config.AdapterCodexModel{{
+				AliasPrefix:     "codex-5.5",
+				Model:           "gpt-5.5",
+				Efforts:         []string{EffortLow, EffortMedium, EffortHigh, EffortXHigh},
+				MaxOutputTokens: 128000,
+				Contexts: []config.AdapterCodexModelContext{{
+					Tokens:        272000,
+					NativeAliases: append([]config.AdapterCodexNativeAlias{tc.alias}, tc.extra...),
+				}},
+			}}
+			_, err := NewRegistry(cfg)
+			if err == nil {
+				t.Fatal("expected NewRegistry to fail")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v want substring %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -322,6 +439,30 @@ func TestResolveRoutesNativeCodexByDefaultWhenCodexEnabled(t *testing.T) {
 	}
 	if effort != "medium" {
 		t.Fatalf("effort = %q want medium", effort)
+	}
+}
+
+func TestListHonorsNativeCodexAliasAdvertiseFlag(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Codex.Enabled = true
+	cfg.Codex.Models = testCodexModels()
+	r, err := NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	models := make(map[string]adaptermodel.ResolvedAlias)
+	for _, model := range r.List() {
+		models[model.Alias] = model
+	}
+	if _, ok := models["gpt-5.4"]; !ok {
+		t.Fatalf("advertised native gpt-5.4 missing from model list")
+	}
+	if _, ok := models["gpt-5.5"]; ok {
+		t.Fatalf("unadvertised native gpt-5.5 should be absent from model list")
+	}
+	if _, ok := models["gpt-5.5-extra"]; ok {
+		t.Fatalf("unadvertised native gpt-5.5-extra should be absent from model list")
 	}
 }
 
