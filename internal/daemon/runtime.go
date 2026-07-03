@@ -33,10 +33,11 @@ type runtimeServices struct {
 	// entries. captureStore is the single SQLite capture sink shared by every
 	// proxy; it is closed after the proxies drain so the WAL flushes before any
 	// new generation reopens it.
-	mitmProxies   map[string]*mitm.Proxy
-	mitmListeners map[string][]net.Listener
-	captureStore  *capture.Store
-	semantic      *conversationSemanticRuntime
+	mitmProxies     map[string]*mitm.Proxy
+	mitmListeners   map[string][]net.Listener
+	mitmPacketConns map[string][]net.PacketConn
+	captureStore    *capture.Store
+	semantic        *conversationSemanticRuntime
 	// pprofListener is the optional loopback pprof socket. It is nil when pprof
 	// is off. When set, it is inherited across reload like the adapter and MITM
 	// listeners so the debug surface survives a hot reload with no bind gap.
@@ -58,8 +59,9 @@ type runtimeServices struct {
 }
 
 type inheritedRuntime struct {
-	listeners map[string]net.Listener
-	ready     *os.File
+	listeners   map[string]net.Listener
+	packetConns map[string]net.PacketConn
+	ready       *os.File
 }
 
 func startRuntime(
@@ -80,6 +82,7 @@ func startRuntime(
 		adapterCursorListener: nil,
 		mitmProxies:           map[string]*mitm.Proxy{},
 		mitmListeners:         map[string][]net.Listener{},
+		mitmPacketConns:       map[string][]net.PacketConn{},
 		captureStore:          nil,
 		semantic:              nil,
 		pprofListener:         nil,
@@ -92,11 +95,11 @@ func startRuntime(
 	}
 	runtime.currentConfig.Store(cfg)
 	if cfg.MITM.EnabledDefault {
-		if err := startMITM(ctx, cfg, log, runtime, inherited.listeners); err != nil {
+		if err := startMITM(ctx, cfg, log, runtime, inherited); err != nil {
 			runtime.shutdown(context.WithoutCancel(ctx))
 			return nil, err
 		}
-	} else if hasInheritedMITMListener(inherited.listeners) {
+	} else if hasInheritedMITMListener(inherited) {
 		runtime.shutdown(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("mitm listener inherited but mitm is disabled; full daemon restart required")
 	}
@@ -133,7 +136,7 @@ func startRuntime(
 // configured MITM listener, populating runtime.captureStore, runtime.mitmProxies,
 // and runtime.mitmListeners. On any failure the caller drains the runtime, which
 // closes whatever proxies and the store were already started.
-func startMITM(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, inherited map[string]net.Listener) error {
+func startMITM(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, inherited inheritedRuntime) error {
 	store, err := openMITMCaptureStore(ctx, cfg, log)
 	if err != nil {
 		log.WarnContext(ctx, "daemon.mitm.capture_store_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
@@ -156,22 +159,27 @@ func startMITM(ctx context.Context, cfg *config.Config, log *slog.Logger, runtim
 // startMITMListener binds (or validates the inherited FDs for) every loopback
 // socket of one MITM listener, constructs the single proxy that serves them all
 // against the shared capture store tagged with the listener id, starts serving,
-// and records the proxy and its sockets under the listener id in runtime. A
-// "localhost" listener has two sockets ([::1] and 127.0.0.1); an explicit-IP
-// listener has one.
-func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, listenerCfg config.MITMListenerConfig, inherited map[string]net.Listener) error {
-	addrs := mitmBindAddrs(listenerCfg.Host, listenerCfg.Port)
-	sockets := make([]net.Listener, 0, len(addrs))
-	closeSockets := func() {
-		for _, socket := range sockets {
-			_ = socket.Close()
-		}
+// closeMITMSockets closes any TCP listeners and UDP packet connections a
+// partially-started MITM listener bound before an error aborted startup.
+func closeMITMSockets(sockets []net.Listener, packetConns []net.PacketConn) {
+	for _, socket := range sockets {
+		_ = socket.Close()
 	}
+	for _, conn := range packetConns {
+		_ = conn.Close()
+	}
+}
+
+// bindMITMStreamListeners binds (or adopts inherited) TCP listeners for every
+// address the listener id expands to. It closes any it bound before returning
+// an error, so the caller never leaks a half-bound set.
+func bindMITMStreamListeners(ctx context.Context, log *slog.Logger, listenerCfg config.MITMListenerConfig, addrs []string, inherited inheritedRuntime) ([]net.Listener, error) {
+	sockets := make([]net.Listener, 0, len(addrs))
 	for _, addr := range addrs {
-		if existing := inherited[mitmSocketKey(listenerCfg.ID, addr)]; existing != nil {
+		if existing := inherited.listeners[mitmSocketKey(listenerCfg.ID, addr)]; existing != nil {
 			if got := existing.Addr().String(); got != addr {
-				closeSockets()
-				return fmt.Errorf("mitm listener %q inherited address %s does not match config %s; full daemon restart required", listenerCfg.ID, got, addr)
+				closeMITMSockets(sockets, nil)
+				return nil, fmt.Errorf("mitm listener %q inherited address %s does not match config %s; full daemon restart required", listenerCfg.ID, got, addr)
 			}
 			sockets = append(sockets, existing)
 			continue
@@ -179,19 +187,66 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 		listenConfig := net.ListenConfig{}
 		bound, err := listenConfig.Listen(ctx, "tcp", addr)
 		if err != nil {
-			closeSockets()
+			closeMITMSockets(sockets, nil)
 			log.WarnContext(ctx, "daemon.mitm.listen_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 				"listener_id", listenerCfg.ID,
 				"addr", addr,
 				"err", err,
 			)
-			return fmt.Errorf("mitm listen %s for listener %q: %w", addr, listenerCfg.ID, err)
+			return nil, fmt.Errorf("mitm listen %s for listener %q: %w", addr, listenerCfg.ID, err)
 		}
 		sockets = append(sockets, bound)
 	}
-	proxy, err := mitm.NewProxy(cfg.MITM, cfg.Logging.Request, log, sockets, runtime.captureStore, listenerCfg.ID, runtime.group)
+	return sockets, nil
+}
+
+// bindMITMPacketConns binds (or adopts inherited) UDP packet connections for
+// the same addresses, carrying HTTP/3 traffic on the listener id's port. It
+// closes any it bound before returning an error.
+func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg config.MITMListenerConfig, addrs []string, inherited inheritedRuntime) ([]net.PacketConn, error) {
+	packetConns := make([]net.PacketConn, 0, len(addrs))
+	for _, addr := range addrs {
+		if existing := inherited.packetConns[mitmUDPSocketKey(listenerCfg.ID, addr)]; existing != nil {
+			if got := existing.LocalAddr().String(); got != addr {
+				closeMITMSockets(nil, packetConns)
+				return nil, fmt.Errorf("mitm udp listener %q inherited address %s does not match config %s; full daemon restart required", listenerCfg.ID, got, addr)
+			}
+			packetConns = append(packetConns, existing)
+			continue
+		}
+		listenConfig := net.ListenConfig{}
+		bound, err := listenConfig.ListenPacket(ctx, "udp", addr)
+		if err != nil {
+			closeMITMSockets(nil, packetConns)
+			log.WarnContext(ctx, "daemon.mitm.quic_listen_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+				"listener_id", listenerCfg.ID,
+				"addr", addr,
+				"err", err,
+			)
+			return nil, fmt.Errorf("mitm udp listen %s for listener %q: %w", addr, listenerCfg.ID, err)
+		}
+		packetConns = append(packetConns, bound)
+	}
+	return packetConns, nil
+}
+
+// and records the proxy and its sockets under the listener id in runtime. A
+// "localhost" listener has two sockets ([::1] and 127.0.0.1); an explicit-IP
+// listener has one.
+func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, listenerCfg config.MITMListenerConfig, inherited inheritedRuntime) error {
+	addrs := mitmBindAddrs(listenerCfg.Host, listenerCfg.Port)
+	sockets, err := bindMITMStreamListeners(ctx, log, listenerCfg, addrs, inherited)
 	if err != nil {
-		closeSockets()
+		return err
+	}
+	packetConns, err := bindMITMPacketConns(ctx, log, listenerCfg, addrs, inherited)
+	if err != nil {
+		closeMITMSockets(sockets, nil)
+		return err
+	}
+	proxy, err := mitm.NewProxy(cfg.MITM, cfg.Logging.Request, log, sockets, packetConns, runtime.captureStore, listenerCfg.ID, runtime.group)
+	if err != nil {
+		closeMITMSockets(sockets, packetConns)
 		log.WarnContext(ctx, "daemon.mitm.init_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"listener_id", listenerCfg.ID,
 			"addrs", addrs,
@@ -201,6 +256,7 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 	}
 	runtime.mitmProxies[listenerCfg.ID] = proxy
 	runtime.mitmListeners[listenerCfg.ID] = sockets
+	runtime.mitmPacketConns[listenerCfg.ID] = packetConns
 	runtime.addMITMLifecycleHook(listenerCfg.ID, proxy)
 	errCh := runtime.errors
 	go func() {
@@ -216,6 +272,19 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 			errCh <- serveErr
 		}
 	}()
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.ErrorContext(ctx, "daemon.mitm.quic_serve_panic", "concern", "process.daemon.lifecycle", "component", "daemon",
+					"listener_id", listenerCfg.ID,
+					"err", fmt.Sprintf("panic: %v", recovered),
+				)
+			}
+		}()
+		if serveErr := proxy.ServeQUIC(ctx); serveErr != nil {
+			errCh <- serveErr
+		}
+	}()
 	log.InfoContext(ctx, "daemon.mitm.started", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"listener_id", listenerCfg.ID,
 		"addrs", addrs,
@@ -226,8 +295,13 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 // hasInheritedMITMListener reports whether any inherited listener key belongs to
 // a MITM listener, used to reject a reload that disables MITM while a previous
 // generation's MITM file descriptors are still being inherited.
-func hasInheritedMITMListener(inherited map[string]net.Listener) bool {
-	for name := range inherited {
+func hasInheritedMITMListener(inherited inheritedRuntime) bool {
+	for name := range inherited.listeners {
+		if strings.HasPrefix(name, listenerNameMITMPrefix) {
+			return true
+		}
+	}
+	for name := range inherited.packetConns {
 		if strings.HasPrefix(name, listenerNameMITMPrefix) {
 			return true
 		}

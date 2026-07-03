@@ -48,7 +48,7 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 		CaptureDir: t.TempDir(),
 	}
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test", group)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, nil, "test", group)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 		CaptureDir: t.TempDir(),
 	}
 	group := livetrack.NewGroup(livetrack.GroupOptions{Log: nil})
-	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test", group)
+	proxy, err := NewProxy(mitmCfg, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, nil, "test", group)
 	if err != nil {
 		t.Fatalf("new proxy: %v", err)
 	}

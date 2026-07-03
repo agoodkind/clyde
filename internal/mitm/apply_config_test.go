@@ -26,7 +26,7 @@ func TestProxyApplyConfigSwapsRouting(t *testing.T) {
 		CaptureDir: t.TempDir(),
 		Providers:  []string{"anthropic"},
 	}
-	proxy, err := NewProxy(cfgA, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, "test", livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
+	proxy, err := NewProxy(cfgA, config.LoggingRequest{}, nil, []net.Listener{listener}, nil, nil, "test", livetrack.NewGroup(livetrack.GroupOptions{Log: nil}))
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}

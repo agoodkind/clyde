@@ -78,15 +78,14 @@ func (p *Proxy) handleProviderH2Stream(ctx context.Context, client *tls.Conn, w 
 	}()
 
 	sink := &h2ProviderResponseSink{rw: w, session: streamSession, wroteHeader: false}
-	if err := p.handleProviderInterceptedRequest(ctx, nil, nil, sink, req, target, host, provider, parent); err != nil {
+	if err := p.handleProviderInterceptedRequest(ctx, nil, nil, sink, req, target, host, provider, parent, streamSession); err != nil {
 		releaseReason = "mitm." + providerID + ".http2.failed"
 		p.log.WarnContext(ctx, "mitm.provider.http2.request_failed", "concern", "providers.mitm.wire", "provider", providerID, "host", host, "path", req.URL.Path, "err", err)
-		// A failure before any header was written (upstream round-trip or
-		// body-read failure) would otherwise leave the h2 stream with no
-		// explicit response; net/http2 implicitly closes it as a 200 with an
-		// empty body, misleading the client into treating the failure as
-		// success. A failure after headers were already sent cannot be
-		// retroactively changed, so only respond here when nothing went out.
+		// A failure before any header was written would otherwise leave the h2
+		// stream with no explicit response; net/http2 implicitly closes it as a
+		// 200 with an empty body, misleading the client into treating the
+		// failure as success. A failure after headers were already sent cannot
+		// be retroactively changed, so only respond here when nothing went out.
 		if !sink.wroteHeader {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		}

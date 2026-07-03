@@ -660,7 +660,7 @@ func TestHandleConnectInterceptsCursorTLSAndSkipsRawFilesWhenDisabled(t *testing
 	var output bytes.Buffer
 	writer := bufio.NewWriter(&output)
 	sink := &bufioProviderResponseSink{proxy: proxy, bufw: writer}
-	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, sink, req, cursorHost+":443", cursorHost, testCursorProvider{}, nil); err != nil {
+	if err := proxy.handleProviderInterceptedRequest(context.Background(), nil, nil, sink, req, cursorHost+":443", cursorHost, testCursorProvider{}, nil, nil); err != nil {
 		t.Fatalf("handle cursor request: %v", err)
 	}
 
@@ -731,6 +731,10 @@ func (t *testProxy) shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = t.server.Shutdown(ctx)
+	if t.proxy != nil {
+		_ = t.proxy.ShutdownQUIC(ctx)
+		_ = t.proxy.CloseQUICTransport()
+	}
 }
 
 func waitForExactTunnelCount(t *testing.T, proxy *Proxy, want int, timeout time.Duration) {

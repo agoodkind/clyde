@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
 	"goodkind.io/clyde/internal/clock"
 	"goodkind.io/clyde/internal/config"
@@ -62,8 +64,14 @@ type Proxy struct {
 	// binds two loopback sockets ([::1] and 127.0.0.1) served by this one proxy,
 	// so every captured exchange across them carries the same client tag.
 	listeners []net.Listener
+	h3Conns   []net.PacketConn
 	server    *http.Server
 	h2Server  *http2.Server
+	h3Server  *http3.Server
+
+	h3Mu             sync.Mutex
+	h3Transport      *http3.Transport
+	h3ResolveUDPAddr func(context.Context, string) (net.Addr, error)
 }
 
 // NewProxy constructs a Proxy bound to the supplied listener. The
@@ -80,7 +88,7 @@ type Proxy struct {
 // (required-leg overrides and incomplete-policy) the MITM emitter applies. A
 // zero-value [config.LoggingRequest] yields default required legs and the warn
 // policy, matching the adapter's behavior.
-func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listeners []net.Listener, store *capture.Store, client string, group *livetrack.Group) (*Proxy, error) {
+func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Logger, listeners []net.Listener, h3Conns []net.PacketConn, store *capture.Store, client string, group *livetrack.Group) (*Proxy, error) {
 	TunnelMeta{
 		ConnectHost:   "",
 		UpstreamAddr:  "",
@@ -93,6 +101,11 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 	for index, listener := range listeners {
 		if listener == nil {
 			return nil, fmt.Errorf("mitm: listener %d is nil", index)
+		}
+	}
+	for index, conn := range h3Conns {
+		if conn == nil {
+			return nil, fmt.Errorf("mitm: h3 packet conn %d is nil", index)
 		}
 	}
 	if log == nil {
@@ -139,8 +152,14 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 		cfg:       cfg,
 		base:      "http://" + listeners[0].Addr().String(),
 		listeners: listeners,
+		h3Conns:   h3Conns,
 		server:    nil,
 		h2Server:  &http2.Server{},
+		h3Server:  nil,
+
+		h3Mu:             sync.Mutex{},
+		h3Transport:      nil,
+		h3ResolveUDPAddr: nil,
 	}
 	p.server = &http.Server{
 		Handler:           http.HandlerFunc(p.handle),
@@ -217,6 +236,54 @@ func (p *Proxy) ShutdownHTTP(ctx context.Context) error {
 		p.log.WarnContext(ctx, "mitm.proxy.http_shutdown_failed", "concern", "providers.mitm.wire", "err", err)
 		return fmt.Errorf("mitm shutdown: %w", err)
 	}
+	return nil
+}
+
+// ShutdownQUIC stops the HTTP/3 server and closes the UDP packet connections
+// the daemon handed to this proxy. The upstream HTTP/3 transport is closed by a
+// separate lifecycle hook after the tunnel registry drains, so in-flight
+// streams can finish before their pooled upstream QUIC connections close.
+func (p *Proxy) ShutdownQUIC(ctx context.Context) error {
+	// providerHTTP3Server lazily initializes p.h3Server under h3Mu from the
+	// ServeQUIC goroutines, so read the pointer under the same lock to avoid a
+	// race with that first init, then release before the blocking Shutdown so
+	// the lock never wraps a draining call.
+	p.h3Mu.Lock()
+	h3Server := p.h3Server
+	p.h3Mu.Unlock()
+	var closeErrs []error
+	if h3Server != nil {
+		if err := h3Server.Shutdown(ctx); err != nil {
+			p.log.WarnContext(ctx, "mitm.proxy.quic_shutdown_failed", "concern", "providers.mitm.wire", "err", err)
+			closeErrs = append(closeErrs, fmt.Errorf("shutdown h3 server: %w", err))
+		}
+	}
+	for _, conn := range p.h3Conns {
+		if conn == nil {
+			continue
+		}
+		if err := conn.Close(); err != nil {
+			p.log.WarnContext(ctx, "mitm.proxy.quic_packet_conn_close_failed", "concern", "providers.mitm.wire", "addr", conn.LocalAddr().String(), "err", err)
+			closeErrs = append(closeErrs, fmt.Errorf("close h3 packet conn %s: %w", conn.LocalAddr().String(), err))
+		}
+	}
+	return errors.Join(closeErrs...)
+}
+
+// CloseQUICTransport closes the shared upstream HTTP/3 transport after the
+// proxy's livetrack sessions have drained.
+func (p *Proxy) CloseQUICTransport() error {
+	p.h3Mu.Lock()
+	defer p.h3Mu.Unlock()
+	if p.h3Transport == nil {
+		return nil
+	}
+	if err := p.h3Transport.Close(); err != nil {
+		wrapped := fmt.Errorf("close h3 upstream transport: %w", err)
+		p.log.Warn("mitm.quic.upstream_transport_close_failed", "concern", "providers.mitm.wire", "component", "mitm", "err", wrapped)
+		return wrapped
+	}
+	p.h3Transport = nil
 	return nil
 }
 
@@ -846,7 +913,9 @@ func streamWithFlush(client io.Writer, capture io.Writer, src io.Reader, flusher
 			if flusher != nil {
 				flusher.Flush()
 			}
-			session.Touch()
+			if session != nil {
+				session.Touch()
+			}
 		}
 		if err == io.EOF {
 			return nil

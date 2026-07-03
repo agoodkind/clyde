@@ -1,12 +1,14 @@
 package daemon
 
 import (
+	"encoding/json"
 	"net"
 	"strconv"
 	"strings"
 	"testing"
 
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/daemonsupervisor"
 )
 
 // boundLoopbackListener binds an ephemeral [::1] TCP listener and returns it
@@ -89,6 +91,50 @@ func TestValidateMITMListenerSetDualStackMatchingSetReloadsHot(t *testing.T) {
 	cfg.MITM.Listeners = map[string]config.MITMListenerConfig{"app.cursor": cfgLocal}
 	if err := validateMITMListenerSet(runtime, cfg); err != nil {
 		t.Fatalf("matching dual-stack set must reload hot, got error: %v", err)
+	}
+}
+
+func TestLoadInheritedListenersRestoresUDPPacketConn(t *testing.T) {
+	conn, err := net.ListenPacket("udp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("bind udp loopback listener: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	file, err := packetConnFile(conn)
+	if err != nil {
+		t.Fatalf("packetConnFile: %v", err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	name := mitmUDPSocketKey("app.cursor", conn.LocalAddr().String())
+	raw, err := json.Marshal([]daemonsupervisor.ListenerSpec{{
+		Name:    name,
+		Network: conn.LocalAddr().Network(),
+		Addr:    conn.LocalAddr().String(),
+		FD:      int(file.Fd()),
+	}})
+	if err != nil {
+		t.Fatalf("marshal listener spec: %v", err)
+	}
+	listeners := map[string]net.Listener{}
+	packetConns := map[string]net.PacketConn{}
+
+	if err := loadInheritedListeners(string(raw), listeners, packetConns); err != nil {
+		t.Fatalf("loadInheritedListeners: %v", err)
+	}
+	restored := packetConns[name]
+	if restored == nil {
+		t.Fatalf("restored packet conn %q missing", name)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+	if restored.LocalAddr().Network() != "udp" {
+		t.Fatalf("network = %q want udp", restored.LocalAddr().Network())
+	}
+	if restored.LocalAddr().String() != conn.LocalAddr().String() {
+		t.Fatalf("addr = %q want %q", restored.LocalAddr().String(), conn.LocalAddr().String())
+	}
+	if _, exists := listeners[name]; exists {
+		t.Fatalf("udp spec populated listener map")
 	}
 }
 

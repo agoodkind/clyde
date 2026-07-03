@@ -104,6 +104,27 @@ func TestProviderTLSHTTP2UpstreamFailureRespondsBadGateway(t *testing.T) {
 	}
 }
 
+func TestProviderUpstreamRequestStreamsOriginalBody(t *testing.T) {
+	body := &trackingReadCloser{reader: strings.NewReader("stream me")}
+	req, err := http.NewRequest(http.MethodPost, "https://api2direct.cursor.sh/stream", body)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.ContentLength = -1
+
+	upstream := providerUpstreamRequest(req, "api2direct.cursor.sh:443", "api2direct.cursor.sh")
+
+	if upstream.Body != body {
+		t.Fatalf("upstream body was replaced; request bodies must stream to upstream without pre-buffering")
+	}
+	if upstream.ContentLength != -1 {
+		t.Fatalf("content length = %d want -1 for streaming body", upstream.ContentLength)
+	}
+	if body.readCount.Load() != 0 {
+		t.Fatalf("body was read while building upstream request")
+	}
+}
+
 func TestHandleConnectInterceptsCursorTLSHTTP2AndCapturesBodies(t *testing.T) {
 	const cursorHost = "api2direct.cursor.sh"
 	const requestID = "req_cursor_h2_capture_123"
@@ -188,6 +209,22 @@ func TestHandleConnectInterceptsCursorTLSHTTP2AndCapturesBodies(t *testing.T) {
 	if !bytes.Equal(storedResponse, upstreamBody) {
 		t.Fatalf("stored response mismatch: got %d bytes want %d bytes", len(storedResponse), len(upstreamBody))
 	}
+}
+
+type trackingReadCloser struct {
+	reader    *strings.Reader
+	readCount atomic.Int64
+	closed    atomic.Bool
+}
+
+func (r *trackingReadCloser) Read(p []byte) (int, error) {
+	r.readCount.Add(1)
+	return r.reader.Read(p)
+}
+
+func (r *trackingReadCloser) Close() error {
+	r.closed.Store(true)
+	return nil
 }
 
 func TestProviderTLSHTTP2ConcurrentStreamsStayIsolated(t *testing.T) {

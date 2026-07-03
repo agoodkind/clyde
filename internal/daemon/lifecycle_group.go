@@ -93,6 +93,12 @@ func (r *runtimeServices) addMITMLifecycleHook(id string, proxy *mitm.Proxy) {
 	r.group.AddHookBefore(livetrack.PhaseIngress, "mitm.http_shutdown."+id, func(ctx context.Context) error {
 		return proxy.ShutdownHTTP(ctx)
 	})
+	r.group.AddHookBefore(livetrack.PhaseIngress, "mitm.quic_shutdown."+id, func(ctx context.Context) error {
+		return proxy.ShutdownQUIC(ctx)
+	})
+	r.group.AddHook(livetrack.PhaseIngress, "mitm.quic_transport_close."+id, func(context.Context) error {
+		return proxy.CloseQUICTransport()
+	})
 }
 
 // addCaptureStoreCloseHook registers the MITM capture store's close as a

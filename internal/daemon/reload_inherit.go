@@ -39,6 +39,20 @@ func listenerFile(listener net.Listener) (*os.File, error) {
 	}
 }
 
+func packetConnFile(conn net.PacketConn) (*os.File, error) {
+	switch typed := conn.(type) {
+	case *net.UDPConn:
+		file, err := typed.File()
+		if err != nil {
+			slog.Warn("daemon.listener.duplicate_udp_failed", "concern", "process.daemon.lifecycle", "err", err)
+			return nil, fmt.Errorf("duplicate udp listener file: %w", err)
+		}
+		return file, nil
+	default:
+		return nil, fmt.Errorf("unsupported packet conn type %T", conn)
+	}
+}
+
 // validateReloadListenerConfig rejects a reload whose new config would change
 // the bound listener set or any listener address, since those require a fresh
 // bind that a file-descriptor-inheriting reload cannot perform. A matching
@@ -118,10 +132,14 @@ func waitForReplacementDaemon(ctx context.Context, ready io.Reader) error {
 // loadInheritedRuntime reconstructs the listeners a reload parent passed through
 // the environment, returning an empty set on a cold start where no parent exists.
 func loadInheritedRuntime() (inheritedRuntime, error) {
-	runtime := inheritedRuntime{listeners: make(map[string]net.Listener), ready: nil}
+	runtime := inheritedRuntime{
+		listeners:   make(map[string]net.Listener),
+		packetConns: make(map[string]net.PacketConn),
+		ready:       nil,
+	}
 	raw := os.Getenv(daemonsupervisor.EnvInheritedListeners)
 	if raw != "" {
-		if err := loadInheritedListeners(raw, runtime.listeners); err != nil {
+		if err := loadInheritedListeners(raw, runtime.listeners, runtime.packetConns); err != nil {
 			return runtime, err
 		}
 	}
@@ -132,7 +150,7 @@ func loadInheritedRuntime() (inheritedRuntime, error) {
 // rebuilds each listener from its inherited file descriptor, and verifies the
 // reconstructed network and address match the spec so a mismatched descriptor
 // fails the reload instead of serving the wrong socket.
-func loadInheritedListeners(raw string, listeners map[string]net.Listener) error {
+func loadInheritedListeners(raw string, listeners map[string]net.Listener, packetConns map[string]net.PacketConn) error {
 	var specs []daemonsupervisor.ListenerSpec
 	if err := json.Unmarshal([]byte(raw), &specs); err != nil {
 		slog.Warn("daemon.reload.inherited_specs_decode_failed", "concern", "daemon.workers.reload", "component", "daemon",
@@ -144,6 +162,24 @@ func loadInheritedListeners(raw string, listeners map[string]net.Listener) error
 		file := os.NewFile(uintptr(spec.FD), spec.Name)
 		if file == nil {
 			return fmt.Errorf("listener %s fd %d unavailable", spec.Name, spec.FD)
+		}
+		if spec.Network == "udp" {
+			conn, err := net.FilePacketConn(file)
+			_ = file.Close()
+			if err != nil {
+				slog.Warn("daemon.reload.inherited_packet_conn_failed", "concern", "daemon.workers.reload", "component", "daemon",
+					"name", spec.Name,
+					"fd", spec.FD,
+					"err", err,
+				)
+				return fmt.Errorf("packet conn %s from fd %d: %w", spec.Name, spec.FD, err)
+			}
+			if conn.LocalAddr().Network() != spec.Network || conn.LocalAddr().String() != spec.Addr {
+				_ = conn.Close()
+				return fmt.Errorf("packet conn %s inherited as %s/%s, expected %s/%s", spec.Name, conn.LocalAddr().Network(), conn.LocalAddr().String(), spec.Network, spec.Addr)
+			}
+			packetConns[spec.Name] = conn
+			continue
 		}
 		listener, err := net.FileListener(file)
 		_ = file.Close()
