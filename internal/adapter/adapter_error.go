@@ -283,7 +283,7 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		slog.String("err", aerr.Error()),
 	}
 	attrs = append(attrs, corr.Attrs()...)
-	slogger.WithConcern(s.log, slogger.ConcernAdapterHTTPErrors).LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", append([]slog.Attr{slog.String("concern", "adapter.http.errors")}, attrs...)...)
+	s.adapterErrorLog().LogAttrs(r.Context(), slog.LevelWarn, "adapter.error.responded", attrs...)
 	info := adapterErrorInfoForRequest(family, aerr, message, corr, r)
 	renderer, ok := s.lookupErrorRenderer(family)
 	if !ok {
@@ -291,10 +291,24 @@ func (s *Server) writeShapedError(w http.ResponseWriter, r *http.Request, err er
 		return
 	}
 	if writeErr := renderer.Render(w, aerr.HTTPStatus, info); writeErr != nil {
-		s.log.LogAttrs(r.Context(), slog.LevelWarn, "adapter.error_boundary.render_failed", slog.String("concern", "adapter.http.errors"), slog.String("route_family", string(family)),
+		s.adapterErrorLog().LogAttrs(r.Context(), slog.LevelWarn, "adapter.error_boundary.render_failed", slog.String("route_family", string(family)),
 			slog.Any("err", writeErr),
 		)
 	}
+}
+
+func (s *Server) adapterErrorLog() *slog.Logger {
+	if s == nil || s.errorLog == nil {
+		return slogger.For(slogger.ConcernAdapterHTTPErrors)
+	}
+	return s.errorLog
+}
+
+func (s *Server) adapterChatDispatchLog() *slog.Logger {
+	if s == nil || s.dispatchLog == nil {
+		return slogger.For(slogger.ConcernAdapterChatDispatch)
+	}
+	return s.dispatchLog
 }
 
 // adapterErrorInfoForFamily builds the primitive ErrorInfo the
@@ -480,7 +494,7 @@ func (s *Server) lookupStreamErrorRenderer(family adapterRouteFamily) (errcontra
 // minimal-on-purpose JSON string body; callers add the warning log so
 // regressions in registration get noticed.
 func (s *Server) writeFallbackError(ctx context.Context, w http.ResponseWriter, family adapterRouteFamily, status int, info errcontract.ErrorInfo) {
-	s.log.LogAttrs(ctx, slog.LevelWarn, "adapter.error_boundary.no_renderer_for_family", slog.String("concern", "adapter.http.errors"), slog.String("route_family", string(family)),
+	s.adapterErrorLog().LogAttrs(ctx, slog.LevelWarn, "adapter.error_boundary.no_renderer_for_family", slog.String("route_family", string(family)),
 		slog.Int("status", status),
 		slog.String("error_type", info.Type),
 		slog.String("error_code", info.Code),
