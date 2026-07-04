@@ -772,7 +772,6 @@ func protoReorientConversationRef(ref conversation.ReorientConversationRef) *cly
 
 func protoShowCaptureOutput(output mitmshow.ShowOutput) *clydev1.ShowCaptureResponse {
 	return &clydev1.ShowCaptureResponse{
-		Output:      mitmshow.RenderText(output),
 		Query:       output.Query,
 		Kind:        string(output.Kind),
 		Correlation: protoShowCaptureCorrelation(output.Correlation),

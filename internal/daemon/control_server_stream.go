@@ -91,7 +91,7 @@ func (s *controlServer) StreamExportTranscript(req *clydev1.ExportTranscriptRequ
 		Format:       conversation.ExportFormat(req.GetFormat()),
 		HistoryStart: int(req.GetHistoryStart()),
 		LastN:        int(req.GetLastN()),
-		MaxLines:     0,
+		MaxLines:     int(req.GetMaxLines()),
 		Whitespace:   conversation.WhitespaceMode(req.GetWhitespace()),
 		Content:      contentKindSetFromExportRequest(req),
 		Compaction: conversation.CompactionExportOptions{

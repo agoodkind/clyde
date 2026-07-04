@@ -26,6 +26,19 @@ func TestExportTranscriptRequestIncludesToolSummaries(t *testing.T) {
 	}
 }
 
+func TestExportTranscriptRequestCarriesMaxLines(t *testing.T) {
+	t.Parallel()
+	req := exportTranscriptRequest("claude:probe", conversation.ExportOptions{
+		Format:     conversation.ExportFormatMarkdown,
+		Whitespace: conversation.WhitespacePreserve,
+		Content:    conversation.NewContentKindSet(conversation.ContentKindChat),
+		MaxLines:   1200,
+	})
+	if req.GetMaxLines() != 1200 {
+		t.Fatalf("MaxLines = %d, want 1200", req.GetMaxLines())
+	}
+}
+
 func TestContentKindSetFromExportRequestIncludesToolSummaries(t *testing.T) {
 	t.Parallel()
 	set := contentKindSetFromExportRequest(&clydev1.ExportTranscriptRequest{
