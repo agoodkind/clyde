@@ -32,6 +32,11 @@ type Factory struct {
 	// to print extra diagnostic detail to IOStreams.Out.
 	Verbose func() bool
 
+	// Copy returns true when the user passed --copy on the root
+	// command. The shared output layer consults this to copy the
+	// command's body to the clipboard; no command reads it directly.
+	Copy func() bool
+
 	// Config loads the merged global+project configuration. Returns
 	// the zero value with no error when no config file exists so
 	// subcommands can rely on the defaults without special casing.
@@ -46,6 +51,7 @@ func NewSystemFactory(build BuildInfo) *Factory {
 		Logger:    slog.Default(),
 		Build:     build,
 		Verbose:   func() bool { return verbose },
+		Copy:      func() bool { return copyOutput },
 		Config:    config.LoadGlobalOrDefault,
 	}
 }

@@ -135,7 +135,6 @@ type exportTranscriptOutput struct {
 	Path           string `json:"path,omitempty"`
 	Bytes          int    `json:"bytes"`
 	Pipe           bool   `json:"pipe,omitempty"`
-	Copied         bool   `json:"copied,omitempty"`
 }
 
 type installHooksOutput struct {

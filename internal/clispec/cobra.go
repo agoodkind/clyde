@@ -70,7 +70,7 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderCLIResult(cmd.Context(), f.IOStreams.Out, format, op.outputKind, result)
+			return renderCLIResult(withCopy(cmd.Context(), factoryCopy(f)), f.IOStreams.Out, f.IOStreams.Err, format, op.outputKind, result)
 		}
 		sink := NewCLISink(cmd.Context(), f.IOStreams.Out)
 		return op.Run(cmd.Context(), prepared, SurfaceCLI, sink)
@@ -82,6 +82,15 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 		cmd.AddCommand(child.cobraCommand(f))
 	}
 	return cmd
+}
+
+// factoryCopy reads the global --copy flag through the factory, treating a
+// factory with no Copy closure as copy-off.
+func factoryCopy(f *cli.Factory) bool {
+	if f == nil || f.Copy == nil {
+		return false
+	}
+	return f.Copy()
 }
 
 func outputFormatForCommand(cmd *cobra.Command) (output.Format, error) {
