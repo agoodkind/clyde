@@ -619,6 +619,79 @@ func TestConversationSemanticSyncDeliversEveryNeededConversation(t *testing.T) {
 	}
 }
 
+// TestConversationSemanticSyncOmitsZeroDocumentConversation proves a
+// conversation that renders zero deliverable documents is dropped from the next
+// manifest so the engine stops listing it as needed, and that it re-enters the
+// manifest once its content, and therefore its fingerprint, changes. Without
+// this the engine keeps requesting a conversation it can never mark satisfied,
+// so the needed count never reaches zero.
+func TestConversationSemanticSyncOmitsZeroDocumentConversation(t *testing.T) {
+	emptyID := "cursor:empty"
+	realID := "codex:real"
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{
+			{Record: semanticTestRecord(emptyID), Stamp: semanticTestStamp(0, 200)},
+			{Record: semanticTestRecord(realID), Stamp: semanticTestStamp(10, 210)},
+		},
+		messagesByID: map[string][]transcript.Message{
+			emptyID: {},
+			realID:  {{Role: "user", Timestamp: time.Unix(1710000000, 0), Text: "real"}},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{needed: []string{emptyID, realID}}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("first runPass returned error: %v", err)
+	}
+	if len(client.syncCalls[0].Manifest) != 2 {
+		t.Fatalf("first manifest size = %d, want 2 (both conversations advertised)", len(client.syncCalls[0].Manifest))
+	}
+	if len(client.upsertCalls) != 1 {
+		t.Fatalf("upsert calls = %d, want 1 (only the real conversation delivers)", len(client.upsertCalls))
+	}
+	for _, doc := range client.upsertCalls[0].Docs {
+		if doc.ConversationID == emptyID {
+			t.Fatalf("zero-document conversation was delivered: %+v", doc)
+		}
+	}
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("second runPass returned error: %v", err)
+	}
+	if len(client.syncCalls) != 2 {
+		t.Fatalf("sync calls = %d, want 2", len(client.syncCalls))
+	}
+	secondManifest := client.syncCalls[1].Manifest
+	if len(secondManifest) != 1 || secondManifest[0].ConversationID != realID {
+		t.Fatalf("second manifest = %+v, want only %q (zero-document conversation omitted)", secondManifest, realID)
+	}
+
+	// The conversation gains content, so its fingerprint changes and it must be
+	// advertised and delivered again.
+	index.records = []conversation.StampedRecord{
+		{Record: semanticTestRecord(emptyID), Stamp: semanticTestStamp(5, 300)},
+		{Record: semanticTestRecord(realID), Stamp: semanticTestStamp(10, 210)},
+	}
+	index.messagesByID[emptyID] = []transcript.Message{
+		{Role: "user", Timestamp: time.Unix(1710000500, 0), Text: "now real"},
+	}
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("third runPass returned error: %v", err)
+	}
+	thirdManifest := client.syncCalls[2].Manifest
+	reincluded := false
+	for _, fingerprint := range thirdManifest {
+		if fingerprint.ConversationID == emptyID {
+			reincluded = true
+		}
+	}
+	if !reincluded {
+		t.Fatalf("third manifest = %+v, want %q re-included after its content changed", thirdManifest, emptyID)
+	}
+}
+
 func TestConversationSemanticFreshnessEmbeddedIsCumulativeCoverage(t *testing.T) {
 	t.Parallel()
 	freshness := newConversationSemanticFreshness()

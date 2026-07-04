@@ -13,8 +13,16 @@ import (
 const backgroundComposerWindowMappingKey = "backgroundComposer.windowBcMapping"
 
 // backgroundComposerWindowMappingWire is Cursor's observed
-// backgroundComposer.windowBcMapping JSON shape: window id -> composer ids.
-type backgroundComposerWindowMappingWire map[string][]string
+// backgroundComposer.windowBcMapping JSON shape: window id -> background
+// composer refs. Each element is an object carrying the composer id under
+// `bcId`, not a bare string.
+type backgroundComposerWindowMappingWire map[string][]backgroundComposerRef
+
+// backgroundComposerRef is one background composer reference stored under a
+// window id in Cursor's window-to-composer mapping.
+type backgroundComposerRef struct {
+	BcID string `json:"bcId"`
+}
 
 // BackgroundComposer models one consumed background composer identity from
 // Cursor's undocumented, version-pinned background composer mapping payload.
@@ -55,7 +63,14 @@ func DecodeBackgroundComposerWindowMappingJSON(data []byte) (BackgroundComposerW
 
 	windows := make([]BackgroundComposerWindow, 0, len(windowIDs))
 	for _, windowID := range windowIDs {
-		composerIDs := append([]string(nil), wire[windowID]...)
+		refs := wire[windowID]
+		composerIDs := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			if ref.BcID == "" {
+				continue
+			}
+			composerIDs = append(composerIDs, ref.BcID)
+		}
 		windows = append(windows, BackgroundComposerWindow{
 			WindowID:    windowID,
 			ComposerIDs: composerIDs,

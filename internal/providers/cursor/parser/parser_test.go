@@ -174,6 +174,56 @@ func TestParserDiscoversScansAndStreamsCursorSources(t *testing.T) {
 	}
 }
 
+func TestParserSkipsEmptyHeaderComposers(t *testing.T) {
+	rootDir := t.TempDir()
+	projectsDir := t.TempDir()
+	t.Setenv("CLYDE_CURSOR_DATA_DIRS", rootDir)
+	t.Setenv("CLYDE_CURSOR_PROJECTS_DIRS", projectsDir)
+
+	globalDBPath := filepath.Join(rootDir, "globalStorage", "state.vscdb")
+	if err := os.MkdirAll(filepath.Dir(globalDBPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll global db dir: %v", err)
+	}
+	db, err := sql.Open("sqlite3", "file:"+globalDBPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("sql.Open global db: %v", err)
+	}
+	emptyComposerID := "44444444-4444-4444-8444-444444444444"
+	realComposerID := "55555555-5555-4555-8555-555555555555"
+	statements := []string{
+		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
+		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)",
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + emptyComposerID + `', '{"composerId":"` + emptyComposerID + `","name":"","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"isDraft":true,"fullConversationHeadersOnly":[]}')`,
+		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:` + realComposerID + `', '{"composerId":"` + realComposerID + `","name":"Real","createdAt":1710000000200,"lastUpdatedAt":1710000000300,"fullConversationHeadersOnly":[{"bubbleId":"real-user","type":1}]}')`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("exec statement %q: %v", statement, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close global db: %v", err)
+	}
+
+	parser := New()
+	candidates, err := parser.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	paths := candidatePaths(candidates)
+	if slices.ContainsFunc(paths, func(path string) bool {
+		return strings.Contains(path, emptyComposerID)
+	}) {
+		t.Fatalf("empty-header composer was offered as a candidate: %#v", paths)
+	}
+	if !slices.ContainsFunc(paths, func(path string) bool {
+		return strings.Contains(path, realComposerID)
+	}) {
+		t.Fatalf("real composer missing from candidates: %#v", paths)
+	}
+}
+
 func candidatePaths(candidates []conversation.ScanCandidate) []string {
 	paths := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -227,7 +277,7 @@ func createCursorParserGlobalDB(t *testing.T, dbPath string) {
 	statements := []string{
 		"CREATE TABLE ItemTable(key TEXT UNIQUE, value BLOB)",
 		"CREATE TABLE cursorDiskKV(key TEXT UNIQUE, value BLOB)",
-		`INSERT INTO ItemTable(key, value) VALUES ('backgroundComposer.windowBcMapping', '{"1":["33333333-3333-4333-8333-333333333333"]}')`,
+		`INSERT INTO ItemTable(key, value) VALUES ('backgroundComposer.windowBcMapping', '{"1":[{"bcId":"33333333-3333-4333-8333-333333333333"}]}')`,
 		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:11111111-1111-4111-8111-111111111111', '{"composerId":"11111111-1111-4111-8111-111111111111","name":"Shared Composer","createdAt":1710000000000,"lastUpdatedAt":1710000000100,"status":"none","unifiedMode":"agent","forceMode":"","fullConversationHeadersOnly":[{"bubbleId":"shared-user","type":1}]}')`,
 		`INSERT INTO cursorDiskKV(key, value) VALUES ('composerData:33333333-3333-4333-8333-333333333333', '{"composerId":"33333333-3333-4333-8333-333333333333","name":"","createdAt":1710000000200,"lastUpdatedAt":1710000000300,"status":"none","unifiedMode":"agent","forceMode":"","fullConversationHeadersOnly":[{"bubbleId":"composer-user","type":1},{"bubbleId":"composer-assistant","type":2}]}')`,
 		`INSERT INTO cursorDiskKV(key, value) VALUES ('bubbleId:33333333-3333-4333-8333-333333333333:composer-user', '{"_v":3,"type":1,"bubbleId":"composer-user","text":"composer question"}')`,
