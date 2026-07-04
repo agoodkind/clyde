@@ -61,11 +61,11 @@ connection. The desktop-via-clyde half redirects the extension host's sockets to
 
 ### clyde half: transparent raw-TLS front-door
 
-The MITM TCP listener accepts only HTTP CONNECT today. A transparently redirected client sends a
-raw TLS ClientHello with no CONNECT, so the listener needs a front-door that sniffs the first byte,
-routes a `0x16` TLS record by SNI into the existing provider TLS interception, and captures it like
-a CONNECT-tunneled connection. This is clyde PR #169 (`internal/mitm/transparent.go`,
-`serveInterceptedTLS`). The HTTP/2 termination it reuses shipped earlier (PR #159).
+The MITM TCP listener accepted only HTTP CONNECT before this work. A transparently redirected
+client sends a raw TLS ClientHello with no CONNECT, so the listener needs a front-door that sniffs
+the first byte, routes a `0x16` TLS record by SNI into the existing provider TLS interception, and
+captures it like a CONNECT-tunneled connection. The clyde repo added this front-door in the
+transparent-front-door change, reusing the HTTP/2 termination that shipped earlier.
 
 ### desktop-via-clyde half: interpose redirect plus dev-signing
 
@@ -110,23 +110,28 @@ same class of re-sign routes an Electron child's traffic through clyde.
 The MITM proxy captures the app-to-backend legs. The adapter ingress captures the model-completion
 leg for a bring-your-own-key model, since Cursor's servers call the clyde public ingress for that.
 For a Cursor-subscription model the completion stays inside Cursor's backend, so only the MITM can
-capture it. Source: `docs/cursor.md`.
+capture it. The clyde repo documents this split in its Cursor MITM notes.
 
 ## Verification method
 
 Confirm routing with `lsof`: the extension-host process should carry `DYLD_INSERT_LIBRARIES` and
-connect to `[::1]:48725`, not directly to a public `:443`. Confirm capture with a unique probe
-phrase in a chat: `capture.db` should hold `api2.cursor.sh` `BidiAppend` and `RunSSE` rows
-containing the probe text at a real upstream status, not only `NameTab`.
+connect to the configured Cursor MITM loopback port, not directly to a public `:443`. The listener
+binds `localhost`, so the connection may show as either IPv6 or IPv4 loopback. Confirm capture with
+a unique probe phrase in a chat: `capture.db` should hold `api2.cursor.sh` `BidiAppend` and `RunSSE`
+rows containing the probe text at a real upstream status, not only `NameTab`.
 
 ## Operational facts to carry forward
 
-The clyde Cursor MITM listener port is 48725 in the live config and 48723 in the repo fixture. The
-interpose redirect target and the launch-policy `proxy_port` must match this port. The clyde
-listener serves the CONNECT proxy and the transparent front-door on the same loopback port.
+Read the Cursor MITM loopback port from the live config rather than assuming a value. The interpose
+redirect target and the app launch-policy proxy port must all agree on that one port, and the clyde
+listener serves both the CONNECT proxy and the transparent front-door on it. In the config observed
+during this work the clyde `[mitm.app.cursor]` listener used port 48725, while a separate listener
+used 48723, so the two are easy to confuse.
 
-`capture.db` retains only about 30 minutes of rows, so a verification probe must be inspected
-promptly.
+`capture.db` prunes by age and size, and its default retention is far longer than 30 minutes. During
+this work the live database happened to hold only about 30 minutes of rows, so a verification probe
+was inspected promptly. Confirm the current retention from the capture-store config rather than
+assuming the observed window.
 
 Test the interpose on an isolated Cursor copy first, never the live app, to avoid a `SIGKILL` from a
 bad signature. An isolated copy needs a short `--user-data-dir` path, because a long path overflows
@@ -137,6 +142,8 @@ isolated copy.
 
 ## Status at last update
 
-The interpose mechanism is proven on an isolated re-signed Cursor. The clyde front-door is built and
-lint-green in PR #169. The desktop-via-clyde interpose plus Cursor dev-signing is in progress. The
-live end-to-end capture of `BidiAppend` and `RunSSE` is not yet confirmed.
+The interpose mechanism is proven on an isolated re-signed Cursor: the insert reached the
+`Cursor Helper (Plugin)` extension-host child. The clyde transparent front-door is merged. The
+desktop-via-clyde interpose plus Cursor dev-signing is up for review. The live end-to-end capture of
+`BidiAppend` and `RunSSE` is not yet confirmed, because it needs a signed-in Cursor probe after both
+changes deploy.
