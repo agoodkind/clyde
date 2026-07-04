@@ -17,6 +17,12 @@ import (
 const (
 	transparentTLSHandshakeRecord byte = 0x16
 	transparentSniffTimeout            = 30 * time.Second
+	// transparentMaxSniffWorkers bounds the concurrent first-byte sniff
+	// goroutines so a slow or stalled downstream server cannot let accepted
+	// connections pile up and exhaust file descriptors under load or abuse. The
+	// accept loop blocks on the semaphore once the limit is reached, which stops
+	// draining the OS accept backlog until a worker frees.
+	transparentMaxSniffWorkers = 512
 )
 
 type prefixConn struct {
@@ -69,6 +75,7 @@ type sniffListener struct {
 	conns     chan net.Conn
 	acceptErr chan error
 	done      chan struct{}
+	workers   chan struct{}
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -80,6 +87,7 @@ func newSniffListener(ctx context.Context, listener net.Listener, proxy *Proxy) 
 		conns:     make(chan net.Conn),
 		acceptErr: make(chan error, 1),
 		done:      make(chan struct{}),
+		workers:   make(chan struct{}, transparentMaxSniffWorkers),
 		closeOnce: sync.Once{},
 		closeErr:  nil,
 	}
@@ -108,7 +116,16 @@ func (l *sniffListener) Accept() (net.Conn, error) {
 	}
 	select {
 	case conn := <-l.conns:
-		return conn, nil
+		// Select does not prioritize a closed done over a ready conn, so a
+		// close that raced this receive must still surface as ErrClosed rather
+		// than hand a caller a connection during teardown.
+		select {
+		case <-l.done:
+			_ = conn.Close()
+			return nil, net.ErrClosed
+		default:
+			return conn, nil
+		}
 	case err := <-l.acceptErr:
 		return nil, err
 	case <-l.done:
@@ -144,7 +161,18 @@ func (l *sniffListener) acceptLoop(ctx context.Context) {
 			l.fail(fmt.Errorf("transparent sniff accept: %w", err))
 			return
 		}
+		// Acquire a worker slot before sniffing so concurrent sniff goroutines
+		// stay bounded. When the limit is reached this blocks, which pauses the
+		// accept loop and applies backpressure to the OS accept backlog until a
+		// worker frees. On close, the done branch releases the loop.
+		select {
+		case l.workers <- struct{}{}:
+		case <-l.done:
+			_ = conn.Close()
+			return
+		}
 		go func(rawConn net.Conn) {
+			defer func() { <-l.workers }()
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					l.proxy.log.WarnContext(ctx, "mitm.transparent.conn_sniff_panicked", "concern", "providers.mitm.wire", "panic", recovered)
