@@ -271,8 +271,21 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 			}, nil
 		},
 	})
+	// ctx has no cancellation (CLYDE-324 above), and the tunnel is not yet
+	// registered with livetrack, so drain cannot force-close a stalled
+	// handshake. Bound it with a deadline so a client that opens the tunnel and
+	// then stalls before or during the ClientHello cannot pin this goroutine and
+	// its fd. Clear the deadline after a successful handshake.
+	if err := clientConn.SetDeadline(clock.Now().Add(transparentSniffTimeout)); err != nil {
+		p.log.WarnContext(ctx, "mitm.provider.connect.set_handshake_deadline_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
+		return
+	}
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		p.log.WarnContext(ctx, "mitm.provider.connect.client_tls_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
+		return
+	}
+	if err := clientConn.SetDeadline(time.Time{}); err != nil {
+		p.log.WarnContext(ctx, "mitm.provider.connect.clear_handshake_deadline_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
 		return
 	}
 	p.serveInterceptedTLS(ctx, tlsConn, clientConn, target, host, provider, started)
