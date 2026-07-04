@@ -211,6 +211,87 @@ func TestHandleConnectInterceptsCursorTLSHTTP2AndCapturesBodies(t *testing.T) {
 	}
 }
 
+func TestHandleConnectInterceptsUnclaimedTLSHTTP2AndCapturesBodies(t *testing.T) {
+	const claimedHost = "api2direct.cursor.sh"
+	const unclaimedHost = "telemetry.example.test"
+	const requestID = "req_unclaimed_h2_capture_123"
+	const sentinel = "UNCLAIMED_H2_SENTINEL"
+	requestBody := []byte("prefix " + sentinel + " suffix")
+	upstreamBody := []byte(`{"ok":true,"transport":"connect-unclaimed-h2"}`)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/unclaimed/connect" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read upstream body: %v", err)
+		}
+		if !bytes.Contains(body, []byte(sentinel)) {
+			t.Errorf("upstream body did not contain sentinel")
+		}
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write(upstreamBody)
+	}))
+	defer upstream.Close()
+
+	captureDir := t.TempDir()
+	dbPath := filepath.Join(captureDir, "capture.db")
+	store, err := capture.Open(context.Background(), capture.Config{DBPath: dbPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open capture store: %v", err)
+	}
+	proxy := startCursorMITMTestProxy(t, captureDir, claimedHost, upstream, store)
+	defer proxy.shutdown()
+	upstreamAddr := strings.TrimPrefix(upstream.URL, "https://")
+	proxy.proxy.dialContext = mappedDialContext(unclaimedHost+":443", upstreamAddr)
+
+	clientConn, tlsClient, h2Client := connectProviderH2ClientConn(t, proxy, unclaimedHost)
+	defer clientConn.Close()
+	defer tlsClient.Close()
+	defer h2Client.Close()
+
+	req, err := http.NewRequest(http.MethodPost, "https://"+unclaimedHost+"/v1/unclaimed/connect", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("x-request-id", requestID)
+	resp, err := h2Client.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("h2 round trip: %v", err)
+	}
+	gotBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d want %d", resp.StatusCode, http.StatusCreated)
+	}
+	if !bytes.Equal(gotBody, upstreamBody) {
+		t.Fatalf("response body = %q want %q", gotBody, upstreamBody)
+	}
+
+	if err := store.Close(context.Background(), "test"); err != nil {
+		t.Fatalf("close capture store: %v", err)
+	}
+	metadata := readStoredCaptureMetadata(t, dbPath, requestID)
+	if metadata.provider != "unspecified" {
+		t.Fatalf("provider = %q want unspecified", metadata.provider)
+	}
+	if metadata.host != unclaimedHost {
+		t.Fatalf("host = %q want %q", metadata.host, unclaimedHost)
+	}
+	storedRequest, storedResponse := readStoredCaptureBodies(t, dbPath, requestID)
+	if !bytes.Contains(storedRequest, []byte(sentinel)) {
+		t.Fatalf("stored request body did not contain sentinel")
+	}
+	if !bytes.Equal(storedResponse, upstreamBody) {
+		t.Fatalf("stored response body = %q want %q", storedResponse, upstreamBody)
+	}
+}
+
 // TestProviderH2UpstreamUsesHTTP2WhenBackendSupportsIt guards the fix for
 // Cursor's agent stream: an HTTP/2 intercepted client must be forwarded
 // upstream over HTTP/2 when the backend speaks it, not downgraded to HTTP/1.1.
@@ -514,4 +595,27 @@ func readStoredCaptureBodies(t *testing.T, dbPath string, requestID string) ([]b
 		t.Fatalf("scan response body: %v", err)
 	}
 	return storedRequest, storedResponse
+}
+
+type storedCaptureMetadata struct {
+	client   string
+	provider string
+	host     string
+	status   int
+}
+
+func readStoredCaptureMetadata(t *testing.T, dbPath string, requestID string) storedCaptureMetadata {
+	t.Helper()
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open verifier db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var metadata storedCaptureMetadata
+	row := db.QueryRow(`SELECT client, provider, host, status FROM requests WHERE request_id=? ORDER BY ts DESC LIMIT 1`, requestID)
+	if err := row.Scan(&metadata.client, &metadata.provider, &metadata.host, &metadata.status); err != nil {
+		t.Fatalf("scan request row: %v", err)
+	}
+	return metadata
 }
