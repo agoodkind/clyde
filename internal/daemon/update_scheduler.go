@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -41,7 +42,7 @@ func startSelfUpdateSchedulerWith(
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.ErrorContext(schedulerCtx, "daemon.update_scheduler.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", recovered)
+				log.ErrorContext(schedulerCtx, "daemon.update_scheduler.panic", "concern", "process.daemon.lifecycle", "component", "daemon", "err", fmt.Sprintf("panic: %v", recovered))
 			}
 		}()
 		runScheduler(schedulerCtx, selfupdate.SchedulerHooks{
