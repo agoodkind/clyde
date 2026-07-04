@@ -728,9 +728,18 @@ type testProxy struct {
 }
 
 func (t *testProxy) shutdown() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = t.server.Shutdown(ctx)
+	if t.group != nil {
+		// Drain the tunnel registry so intercepted-stream goroutines finish
+		// their wire-leg logging before the test's t.TempDir cleanup runs.
+		// Otherwise a late log write into <captureDir>/providers/mitm races
+		// t.TempDir's RemoveAll and fails with "directory not empty". Quiesce
+		// on an already-drained group is a no-op, so tests that drain the group
+		// themselves before calling shutdown stay correct.
+		t.group.Quiesce(ctx, "test.shutdown", livetrack.Budget{Cap: 5 * time.Second, IdleGrace: 0})
+	}
 	if t.proxy != nil {
 		_ = t.proxy.ShutdownQUIC(ctx)
 		_ = t.proxy.CloseQUICTransport()
