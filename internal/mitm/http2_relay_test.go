@@ -211,6 +211,50 @@ func TestHandleConnectInterceptsCursorTLSHTTP2AndCapturesBodies(t *testing.T) {
 	}
 }
 
+// TestProviderH2UpstreamUsesHTTP2WhenBackendSupportsIt guards the fix for
+// Cursor's agent stream: an HTTP/2 intercepted client must be forwarded
+// upstream over HTTP/2 when the backend speaks it, not downgraded to HTTP/1.1.
+// gRPC streaming endpoints (for example agent.v1.AgentService/Run) require
+// HTTP/2 end to end, and an HTTP/2-only backend drops an HTTP/1.1 forward.
+func TestProviderH2UpstreamUsesHTTP2WhenBackendSupportsIt(t *testing.T) {
+	const cursorHost = "api2direct.cursor.sh"
+	var upstreamProtoMajor atomic.Int32
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamProtoMajor.Store(int32(r.ProtoMajor))
+		w.Header().Set("content-type", "application/grpc")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	upstream.EnableHTTP2 = true
+	upstream.StartTLS()
+	defer upstream.Close()
+
+	proxy := startCursorMITMTestProxy(t, t.TempDir(), cursorHost, upstream, nil)
+	defer proxy.shutdown()
+
+	clientConn, tlsClient, h2Client := connectProviderH2ClientConn(t, proxy, cursorHost)
+	defer clientConn.Close()
+	defer tlsClient.Close()
+	defer h2Client.Close()
+
+	req, err := http.NewRequest(http.MethodPost, "https://"+cursorHost+"/agent.v1.AgentService/Run", strings.NewReader("req"))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("content-type", "application/grpc")
+	resp, err := h2Client.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("h2 round trip: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d want %d", resp.StatusCode, http.StatusOK)
+	}
+	if got := upstreamProtoMajor.Load(); got != 2 {
+		t.Fatalf("upstream protocol major = %d want 2 (h2 client must forward upstream over HTTP/2)", got)
+	}
+}
+
 type trackingReadCloser struct {
 	reader    *strings.Reader
 	readCount atomic.Int64

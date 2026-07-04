@@ -791,11 +791,22 @@ func providerHTTPCaptureRecordInput(params providerForwardParams, statusCode int
 // idle connections are closed on return so this helper owns the
 // transport's lifetime end-to-end.
 func (p *Proxy) providerUpstreamRoundTrip(req *http.Request, target string, host string) (*http.Response, error) {
+	// Match the intercepted client's protocol upstream. When the client
+	// negotiated HTTP/2, forward over HTTP/2 too: gRPC streaming calls (for
+	// example agent.v1.AgentService/Run) require HTTP/2 end to end, and an
+	// HTTP/2-only backend drops an HTTP/1.1 forward. The shared upstream TLS
+	// config advertises only http/1.1, so h2 requests need an ALPN clone.
+	tlsConfig := p.tlsClientConfig
+	forceHTTP2 := false
+	if req.ProtoMajor == 2 {
+		forceHTTP2 = true
+		tlsConfig = upstreamTLSConfigWithHTTP2ALPN(p.tlsClientConfig)
+	}
 	transport := &http.Transport{
 		Proxy:               nil,
-		ForceAttemptHTTP2:   false,
+		ForceAttemptHTTP2:   forceHTTP2,
 		DisableCompression:  true,
-		TLSClientConfig:     p.tlsClientConfig,
+		TLSClientConfig:     tlsConfig,
 		DialContext:         p.dialContext,
 		TLSHandshakeTimeout: 30 * time.Second,
 	}
@@ -812,6 +823,20 @@ func (p *Proxy) providerUpstreamRoundTrip(req *http.Request, target string, host
 		return nil, fmt.Errorf("provider upstream round trip: %w", err)
 	}
 	return resp, nil
+}
+
+// upstreamTLSConfigWithHTTP2ALPN clones the shared upstream TLS client config
+// and advertises h2 ahead of http/1.1 in ALPN, so an HTTP/2 upstream round trip
+// can negotiate HTTP/2. The shared config advertises only http/1.1, which pins
+// the upstream to HTTP/1.1 even when ForceAttemptHTTP2 is set. A nil base
+// yields a minimal TLS 1.2 config with the h2/http1 ALPN list.
+func upstreamTLSConfigWithHTTP2ALPN(base *tls.Config) *tls.Config {
+	cfg := base.Clone()
+	if cfg == nil {
+		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	cfg.NextProtos = []string{http2.NextProtoTLS, "http/1.1"}
+	return cfg
 }
 
 func providerUpstreamRequest(req *http.Request, target string, host string) *http.Request {
