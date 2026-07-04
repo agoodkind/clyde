@@ -60,7 +60,7 @@ func TestProxyShutdownDrainsCloudflareKeepaliveTunnel(t *testing.T) {
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
-		_ = proxy.Serve()
+		_ = proxy.Serve(context.Background())
 	}()
 
 	connectClient(t, proxy.base, upstreamAddr)
@@ -131,7 +131,7 @@ func TestProxyShutdownPreservesInFlightTunnelUntilUpstreamCloses(t *testing.T) {
 	serveDone := make(chan struct{})
 	go func() {
 		defer close(serveDone)
-		_ = proxy.Serve()
+		_ = proxy.Serve(context.Background())
 	}()
 
 	clientConn := openConnectTunnel(t, proxy.base, upstreamAddr)
