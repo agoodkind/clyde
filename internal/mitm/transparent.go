@@ -36,6 +36,11 @@ func (c *prefixConn) Read(b []byte) (int, error) {
 	}
 	n, err := c.Conn.Read(b)
 	switch {
+	case n > 0 && errors.Is(err, io.EOF):
+		// Deliver the bytes now with a nil error per the io.Reader contract; the
+		// next Read returns (0, io.EOF). Returning (n>0, io.EOF) makes net/http
+		// and crypto/tls treat the stream as closed while bytes are still unread.
+		return n, nil
 	case err == nil:
 		return n, nil
 	case errors.Is(err, io.EOF):
@@ -81,7 +86,11 @@ func newSniffListener(ctx context.Context, listener net.Listener, proxy *Proxy) 
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				proxy.log.WarnContext(ctx, "mitm.transparent.accept_loop_panicked", "concern", "providers.mitm.wire", "panic", recovered)
+				panicErr := fmt.Errorf("transparent sniff accept loop panic: %v", recovered)
+				proxy.log.WarnContext(ctx, "mitm.transparent.accept_loop_panicked", "concern", "providers.mitm.wire", "panic", recovered, "err", panicErr)
+				// Close done and the listener so a caller blocked in Accept does
+				// not hang forever after the accept loop dies.
+				sniffer.fail(panicErr)
 			}
 		}()
 		sniffer.acceptLoop(ctx)
@@ -217,6 +226,9 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 		MinVersion: tls.VersionTLS12,
 		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
 			sniHost = normalizeConnectHost(info.ServerName)
+			if sniHost == "" {
+				return nil, fmt.Errorf("transparent client hello has no SNI")
+			}
 			leaf, leafErr := ca.leafForHost(sniHost)
 			if leafErr != nil {
 				return nil, fmt.Errorf("mint transparent leaf for %q: %w", sniHost, leafErr)
@@ -233,8 +245,20 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 			return config, nil
 		},
 	})
+	// Bound the handshake so a client that sends only the 0x16 record byte and
+	// then stalls cannot pin this goroutine and its fd indefinitely. The sniff
+	// read deadline was already cleared, and ctx has no cancellation, so this
+	// deadline is the only bound on the ClientHello read.
+	if err := client.SetDeadline(clock.Now().Add(transparentSniffTimeout)); err != nil {
+		p.log.WarnContext(ctx, "mitm.transparent.set_handshake_deadline_failed", "concern", "providers.mitm.wire", "err", err)
+		return
+	}
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		p.log.WarnContext(ctx, "mitm.transparent.client_tls_failed", "concern", "providers.mitm.wire", "host", sniHost, "err", err)
+		return
+	}
+	if err := client.SetDeadline(time.Time{}); err != nil {
+		p.log.WarnContext(ctx, "mitm.transparent.clear_handshake_deadline_failed", "concern", "providers.mitm.wire", "host", sniHost, "err", err)
 		return
 	}
 	host := sniHost

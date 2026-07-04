@@ -71,7 +71,9 @@ func TestTransparentRawTLSInterceptsAndCaptures(t *testing.T) {
 		NextProtos: []string{http2.NextProtoTLS},
 		MinVersion: tls.VersionTLS12,
 	})
-	if err := tlsClient.Handshake(); err != nil {
+	handshakeCtx, cancelHandshake := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelHandshake()
+	if err := tlsClient.HandshakeContext(handshakeCtx); err != nil {
 		t.Fatalf("client TLS handshake: %v", err)
 	}
 	defer func() { _ = tlsClient.Close() }()
@@ -93,6 +95,9 @@ func TestTransparentRawTLSInterceptsAndCaptures(t *testing.T) {
 	req.Header.Set("x-request-id", requestID)
 	req.Header.Set("x-original-request-id", "orig-transparent-123")
 	req.Header.Set("x-session-id", "sess-transparent-123")
+	roundTripCtx, cancelRoundTrip := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRoundTrip()
+	req = req.WithContext(roundTripCtx)
 	resp, err := h2Client.RoundTrip(req)
 	if err != nil {
 		t.Fatalf("h2 round trip: %v", err)
