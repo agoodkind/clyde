@@ -24,8 +24,11 @@ func TestOptionsUseClydeReleaseIdentityAndLibraryDefaultPaths(t *testing.T) {
 	if options.Config.CurrentCommit != version.Commit {
 		t.Fatalf("CurrentCommit = %q, want %q", options.Config.CurrentCommit, version.Commit)
 	}
-	if options.Config.CurrentBuildHash != version.BinHash {
-		t.Fatalf("CurrentBuildHash = %q, want %q", options.Config.CurrentBuildHash, version.BinHash)
+	if options.Config.CurrentBuildHash != version.BuildHash() {
+		t.Fatalf("CurrentBuildHash = %q, want %q", options.Config.CurrentBuildHash, version.BuildHash())
+	}
+	if options.Config.CurrentDirty != (version.Dirty == "true") {
+		t.Fatalf("CurrentDirty = %v, want %v", options.Config.CurrentDirty, version.Dirty == "true")
 	}
 	if options.Config.AllowPrerelease != nil {
 		t.Fatal("AllowPrerelease is non-nil, want library rolling default")
