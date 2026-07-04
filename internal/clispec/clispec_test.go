@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,9 +69,8 @@ func TestMCPSinkCollects(t *testing.T) {
 	_ = sink.Bytes([]byte("b"))
 	_ = sink.RawBytes([]byte("c"))
 	_ = sink.WriteFile("ignored", []byte("d"))
-	_ = sink.Copy(context.Background(), []byte("e"))
-	if got := sink.String(); got != "abcde" {
-		t.Errorf("String(): got %q, want %q", got, "abcde")
+	if got := sink.String(); got != "abcd" {
+		t.Errorf("String(): got %q, want %q", got, "abcd")
 	}
 	if sink.Surface() != SurfaceMCP {
 		t.Errorf("Surface(): got %d, want SurfaceMCP", sink.Surface())
@@ -280,7 +280,6 @@ func artifactProbeOp() Operation[probeInput, probeInput] {
 				Body:        []byte("body"),
 				DefaultPath: "",
 				Pipe:        false,
-				Copy:        false,
 				Text:        "human-text",
 				InlineText:  "inline-text",
 			}, nil
@@ -302,6 +301,236 @@ func TestCobraRenderJSONUsesStructuredPayloadForInlineArtifact(t *testing.T) {
 	}
 	if _, ok := got["_meta"]; !ok {
 		t.Fatalf("json output missing _meta: %s", out.String())
+	}
+}
+
+func TestCopyLineCount(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "trailing newline", body: "a\nb\nc\n", want: 3},
+		{name: "no trailing newline", body: "a\nb\nc", want: 3},
+		{name: "empty", body: "", want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := copyLineCount([]byte(tc.body)); got != tc.want {
+				t.Errorf("copyLineCount() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderCopyResultCopiesArtifactBody asserts --copy is additive: the normal
+// output still renders to stdout, the artifact body is copied, and the line-count
+// confirmation lands on stderr, not stdout.
+func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
+	body := []byte("alpha\nbeta\n")
+	var copied []byte
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, got []byte) error {
+		copied = append([]byte(nil), got...)
+		return nil
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := artifactResult{
+		Payload:     artifactProbePayload{Text: "json-text"},
+		Body:        body,
+		DefaultPath: "",
+		Pipe:        false,
+		Text:        "human-text",
+		InlineText:  "inline-text",
+	}
+
+	err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatText,
+		resultKindArtifact,
+		result,
+	)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if !bytes.Equal(copied, body) {
+		t.Fatalf("copied body = %q, want %q", string(copied), string(body))
+	}
+	if got := out.String(); got != "human-text" {
+		t.Fatalf("normal output = %q, want %q", got, "human-text")
+	}
+	if got := errOut.String(); got != "copied 2 lines\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines\n")
+	}
+}
+
+// TestRenderCopyResultCopiesValueText asserts the value text is copied and the
+// singular "line" form is used for a one-line body.
+func TestRenderCopyResultCopiesValueText(t *testing.T) {
+	var copied []byte
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, got []byte) error {
+		copied = append([]byte(nil), got...)
+		return nil
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := valueResult{
+		Payload: probePayload{ID: "copy", Count: 2, On: false, Mode: "alpha"},
+		Text:    "value text",
+	}
+
+	err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatText,
+		resultKindValue,
+		result,
+	)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if got := string(copied); got != "value text" {
+		t.Fatalf("copied value = %q, want %q", got, "value text")
+	}
+	if got := out.String(); got != "value text" {
+		t.Fatalf("normal output = %q, want %q", got, "value text")
+	}
+	if got := errOut.String(); got != "copied 1 line\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 1 line\n")
+	}
+}
+
+// TestRenderCopyResultJSONCopiesJSON asserts --format json copies the JSON
+// document a reader would see, not the plain text body, and that the copied
+// bytes match what the terminal rendered.
+func TestRenderCopyResultJSONCopiesJSON(t *testing.T) {
+	var copied []byte
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, got []byte) error {
+		copied = append([]byte(nil), got...)
+		return nil
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := valueResult{
+		Payload: probePayload{ID: "copy", Count: 2, On: true, Mode: "beta"},
+		Text:    "value text",
+	}
+
+	err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatJSON,
+		resultKindValue,
+		result,
+	)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	var copiedDoc map[string]json.RawMessage
+	if err := json.Unmarshal(copied, &copiedDoc); err != nil {
+		t.Fatalf("copied bytes are not JSON: %v\n%s", err, string(copied))
+	}
+	if string(copied) == "value text" {
+		t.Fatal("copied the text body, want the JSON document")
+	}
+	if got := out.String(); got != string(copied) {
+		t.Fatalf("copied JSON %q does not match rendered stdout %q", string(copied), got)
+	}
+}
+
+// TestRenderCopyResultAdditiveWithStdout asserts copy and --stdout do both: the
+// raw body streams to stdout uncorrupted, the body is copied, and the
+// confirmation is isolated on stderr.
+func TestRenderCopyResultAdditiveWithStdout(t *testing.T) {
+	body := []byte("line1\nline2\nline3\n")
+	var copied []byte
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, got []byte) error {
+		copied = append([]byte(nil), got...)
+		return nil
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := artifactResult{
+		Payload:     artifactProbePayload{Text: "json-text"},
+		Body:        body,
+		DefaultPath: "",
+		Pipe:        true,
+		Text:        "",
+		InlineText:  string(body),
+	}
+
+	err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatText,
+		resultKindArtifact,
+		result,
+	)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if got := out.String(); got != string(body) {
+		t.Fatalf("stdout = %q, want raw body %q", got, string(body))
+	}
+	if !bytes.Equal(copied, body) {
+		t.Fatalf("copied body = %q, want %q", string(copied), string(body))
+	}
+	if got := errOut.String(); got != "copied 3 lines\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 3 lines\n")
+	}
+}
+
+// TestRenderCopyResultSurfacesClipboardError asserts a clipboard failure (as on
+// non-macOS platforms) surfaces as an error after the body was written, with no
+// false "copied" confirmation.
+func TestRenderCopyResultSurfacesClipboardError(t *testing.T) {
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, _ []byte) error {
+		return errors.New("clipboard copy is not supported on this platform")
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := artifactResult{
+		Payload:     artifactProbePayload{Text: "json-text"},
+		Body:        []byte("data\n"),
+		DefaultPath: "",
+		Pipe:        true,
+		Text:        "",
+		InlineText:  "data\n",
+	}
+
+	err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatText,
+		resultKindArtifact,
+		result,
+	)
+	if err == nil {
+		t.Fatal("expected clipboard error to surface")
+	}
+	if got := out.String(); got != "data\n" {
+		t.Fatalf("stdout = %q, want body written before copy failure", got)
+	}
+	if got := errOut.String(); got != "" {
+		t.Fatalf("no confirmation should print on copy failure, got %q", got)
 	}
 }
 

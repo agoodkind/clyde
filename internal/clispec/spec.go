@@ -53,6 +53,20 @@ func surfaceFromContext(ctx context.Context) Surface {
 	return surface
 }
 
+type copyContextKey struct{}
+
+// withCopy stashes the global --copy flag so the shared result renderer can
+// honor it without a widened signature and without any command implementing
+// copy. It is the single carrier of copy intent into the output layer.
+func withCopy(ctx context.Context, enabled bool) context.Context {
+	return context.WithValue(ctx, copyContextKey{}, enabled)
+}
+
+func copyRequested(ctx context.Context) bool {
+	enabled, _ := ctx.Value(copyContextKey{}).(bool)
+	return enabled
+}
+
 // SurfaceSet records which front ends an operation renders to. The six
 // conversation operations set both. The hand-written operational commands
 // are terminal-only and are not modeled as operations at all.

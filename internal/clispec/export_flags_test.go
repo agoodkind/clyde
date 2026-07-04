@@ -60,13 +60,6 @@ func TestExportOnlyParamShape(t *testing.T) {
 			t.Errorf("shortcut %q should be CLI-only", canonical)
 		}
 	}
-	copyParam := exportParam(t, "copy")
-	if copyParam.Kind != KindBool {
-		t.Errorf("copy kind = %d, want KindBool", copyParam.Kind)
-	}
-	if !copyParam.CLIOnly {
-		t.Errorf("copy should be CLI-only")
-	}
 }
 
 // TestExportSelectorsAppendKinds asserts both the --only list and the shortcut
@@ -149,7 +142,6 @@ func TestExportOnlyFlagAndShortcuts(t *testing.T) {
 		"include-compactions",
 		"full-history",
 		"last-n",
-		"copy",
 	} {
 		flag := cmd.Flags().Lookup(name)
 		if flag == nil {
@@ -198,7 +190,7 @@ func TestExportMCPOnlyIsRequiredArray(t *testing.T) {
 			t.Errorf("old mcp property %q should be removed", gone)
 		}
 	}
-	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout", "copy", "preserve", "tidy", "dense"} {
+	for _, cliOnly := range []string{"chat", "thinking", "tools", "all", "stdout", "preserve", "tidy", "dense"} {
 		if _, present := tool.InputSchema.Properties[cliOnly]; present {
 			t.Errorf("cli-only property %q should not appear on the MCP surface", cliOnly)
 		}
