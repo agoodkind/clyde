@@ -19,8 +19,8 @@ require (
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/net v0.55.0
 	golang.org/x/sys v0.46.0
-	goodkind.io/gklog v0.4.5-0.20260702232325-ad10cc197e6c
-	goodkind.io/go-makefile/selfupdate v0.0.0-20260703030139-1d33d4f11d19
+	goodkind.io/gklog v0.4.5-0.20260704010614-fd04ab29700e
+	goodkind.io/go-makefile/selfupdate v0.0.0-20260704015044-f28c82087910
 	goodkind.io/lm-semantic-search v0.0.0-20260621003952-47a996ecac93
 	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
