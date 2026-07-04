@@ -110,15 +110,16 @@ type filterStageOutput struct {
 }
 
 type reorientPageOutput struct {
-	CurrentConversation reorientConversationRefOutput  `json:"current_conversation"`
-	ParentConversation  *reorientConversationRefOutput `json:"parent_conversation,omitempty"`
-	CheckpointNumber    int                            `json:"checkpoint_number,omitempty"`
-	Items               []reorientItemOutput           `json:"items"`
-	NextCursor          string                         `json:"next_cursor,omitempty"`
-	Remaining           int                            `json:"remaining"`
-	Offset              int                            `json:"offset"`
-	TotalItems          int                            `json:"total_items"`
-	Warnings            []string                       `json:"warnings,omitempty"`
+	CurrentConversation reorientConversationRefOutput `json:"current_conversation"`
+	Body                string                        `json:"body"`
+	NextCursor          string                        `json:"next_cursor,omitempty"`
+	Remaining           int                           `json:"remaining"`
+	Offset              int                           `json:"offset"`
+	TotalBytes          int                           `json:"total_bytes"`
+	TotalLines          int                           `json:"total_lines"`
+	Truncated           bool                          `json:"truncated,omitempty"`
+	Restart             bool                          `json:"restart,omitempty"`
+	Warnings            []string                      `json:"warnings,omitempty"`
 }
 
 type reorientConversationRefOutput struct {
@@ -126,14 +127,6 @@ type reorientConversationRefOutput struct {
 	Provider      string `json:"provider"`
 	Title         string `json:"title"`
 	WorkspaceRoot string `json:"workspace_root"`
-}
-
-type reorientItemOutput struct {
-	Kind           string `json:"kind"`
-	Title          string `json:"title"`
-	Body           string `json:"body"`
-	ConversationID string `json:"conversation_id,omitempty"`
-	MessageIndex   int    `json:"message_index"`
 }
 
 type exportTranscriptOutput struct {
@@ -286,16 +279,6 @@ func filterStageOutputsFromDomain(stages []conv.FilterStage) []filterStageOutput
 }
 
 func reorientPageOutputFromDomain(page conv.ReorientPage) reorientPageOutput {
-	items := make([]reorientItemOutput, 0, len(page.Items))
-	for _, item := range page.Items {
-		items = append(items, reorientItemOutput{
-			Kind:           string(item.Kind),
-			Title:          item.Title,
-			Body:           item.Body,
-			ConversationID: item.ConversationID,
-			MessageIndex:   item.MessageIndex,
-		})
-	}
 	return reorientPageOutput{
 		CurrentConversation: reorientConversationRefOutput{
 			ID:            page.CurrentConversation.ID,
@@ -303,26 +286,15 @@ func reorientPageOutputFromDomain(page conv.ReorientPage) reorientPageOutput {
 			Title:         page.CurrentConversation.Title,
 			WorkspaceRoot: page.CurrentConversation.WorkspaceRoot,
 		},
-		ParentConversation: optionalReorientConversationRefOutputFromDomain(page.ParentConversation),
-		CheckpointNumber:   page.CheckpointNumber,
-		Items:              items,
-		NextCursor:         page.NextCursor,
-		Remaining:          page.Remaining,
-		Offset:             page.Offset,
-		TotalItems:         page.TotalItems,
-		Warnings:           page.Warnings,
-	}
-}
-
-func optionalReorientConversationRefOutputFromDomain(ref *conv.ReorientConversationRef) *reorientConversationRefOutput {
-	if ref == nil {
-		return nil
-	}
-	return &reorientConversationRefOutput{
-		ID:            ref.ID,
-		Provider:      ref.Provider,
-		Title:         ref.Title,
-		WorkspaceRoot: ref.WorkspaceRoot,
+		Body:       page.Body,
+		NextCursor: page.NextCursor,
+		Remaining:  page.Remaining,
+		Offset:     page.Offset,
+		TotalBytes: page.TotalBytes,
+		TotalLines: page.TotalLines,
+		Truncated:  page.Truncated,
+		Restart:    page.Restart,
+		Warnings:   page.Warnings,
 	}
 }
 

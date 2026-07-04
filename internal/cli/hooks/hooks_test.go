@@ -32,19 +32,17 @@ func TestRunCommandDispatchesHookRuntime(t *testing.T) {
 		_ context.Context,
 		conversationID string,
 		workspace string,
-		_ string,
 		cursor string,
 		_ int,
 		_ int,
-		_ int,
+		_ bool,
 		syntheticPreCompact bool,
 	) (conversation.ReorientPage, error) {
 		calls = append(calls, conversationID+"|"+workspace+"|"+cursor+"|"+boolString(syntheticPreCompact))
 		return conversation.ReorientPage{
-			Items:      []conversation.ReorientItem{{Title: "Hook", Body: "body"}},
-			Remaining:  0,
-			Offset:     0,
-			TotalItems: 1,
+			Body:      "hook body",
+			Remaining: 0,
+			Offset:    0,
 		}, nil
 	}
 

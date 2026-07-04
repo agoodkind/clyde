@@ -163,14 +163,6 @@ func checkpointSegmentStart(checkpoint CompactionCheckpoint) int {
 	return checkpoint.BoundaryIndex
 }
 
-func checkpointTailStart(checkpoint CompactionCheckpoint) int {
-	start := checkpointSegmentStart(checkpoint)
-	if start < 0 {
-		return 0
-	}
-	return start + 1
-}
-
 func compactionSegmentSummaryUUID(checkpoint CompactionCheckpoint) string {
 	if checkpoint.SummaryUUID != "" {
 		return checkpoint.SummaryUUID

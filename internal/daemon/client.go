@@ -270,19 +270,20 @@ func SearchConversations(ctx context.Context, options conversation.SearchConvers
 	}, nil
 }
 
-// ReorientConversation asks the daemon for one cursor-paged page of reorient
-// evidence as typed data.
-func ReorientConversation(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int) (conversation.ReorientPage, error) {
-	return reorientConversation(ctx, conversationID, workspace, topic, cursor, window, limit, pageBytes, false)
+// ReorientConversation asks the daemon for one cursor-paged page of the
+// recovered pre-compaction transcript as typed data.
+func ReorientConversation(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs bool) (conversation.ReorientPage, error) {
+	return reorientConversation(ctx, conversationID, workspace, cursor, maxLines, pageBytes, includeToolOutputs, false)
 }
 
 // ReorientConversationForHook asks the daemon for one reorient page and lets
-// hook callers request a synthetic pre-compact boundary.
-func ReorientConversationForHook(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int, syntheticPreCompact bool) (conversation.ReorientPage, error) {
-	return reorientConversation(ctx, conversationID, workspace, topic, cursor, window, limit, pageBytes, syntheticPreCompact)
+// hook callers recover the current conversation before the provider compacts.
+// The recovered transcript is still capped by maxLines (or the daemon default).
+func ReorientConversationForHook(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs, syntheticPreCompact bool) (conversation.ReorientPage, error) {
+	return reorientConversation(ctx, conversationID, workspace, cursor, maxLines, pageBytes, includeToolOutputs, syntheticPreCompact)
 }
 
-func reorientConversation(ctx context.Context, conversationID, workspace, topic, cursor string, window, limit, pageBytes int, syntheticPreCompact bool) (conversation.ReorientPage, error) {
+func reorientConversation(ctx context.Context, conversationID, workspace, cursor string, maxLines, pageBytes int, includeToolOutputs, syntheticPreCompact bool) (conversation.ReorientPage, error) {
 	client, err := connectDaemon(ctx)
 	if err != nil {
 		return conversation.ReorientPage{}, err
@@ -294,18 +295,17 @@ func reorientConversation(ctx context.Context, conversationID, workspace, topic,
 	resp, err := client.rpc.ReorientConversation(rpcCtx, &clydev1.ReorientConversationRequest{
 		ConversationId:      conversationID,
 		Workspace:           workspace,
-		Topic:               topic,
 		Cursor:              cursor,
-		Window:              int64(window),
-		Limit:               int64(limit),
+		MaxLines:            int64(maxLines),
 		PageBytes:           int64(pageBytes),
+		IncludeToolOutputs:  includeToolOutputs,
 		SyntheticPrecompact: syntheticPreCompact,
 	})
 	if err != nil {
 		return conversation.ReorientPage{}, daemonRPCError(rpcCtx, "reorient conversation", err)
 	}
 	if resp.GetCurrentConversation() == nil {
-		return conversation.ReorientPage{}, fmt.Errorf("reorient conversation: daemon returned legacy text-only response; deploy matching daemon binary")
+		return conversation.ReorientPage{}, fmt.Errorf("reorient conversation: daemon returned no current conversation; deploy matching daemon binary")
 	}
 	return reorientPageFromProto(resp), nil
 }

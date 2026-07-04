@@ -16,11 +16,10 @@ type ReorientFunc func(
 	ctx context.Context,
 	conversationID string,
 	workspace string,
-	topic string,
 	cursor string,
-	window int,
-	limit int,
+	maxLines int,
 	pageBytes int,
+	includeToolOutputs bool,
 	syntheticPreCompact bool,
 ) (conversation.ReorientPage, error)
 
@@ -288,7 +287,7 @@ func collectReorientPages(ctx context.Context, reorient ReorientFunc, conversati
 			slog.WarnContext(ctx, "reorient hook page collection failed", "err", wrapped)
 			return "", wrapped
 		}
-		page, err := reorient(ctx, conversationID, workspace, "", cursor, 0, 0, 0, syntheticPreCompact)
+		page, err := reorient(ctx, conversationID, workspace, cursor, 0, 0, false, syntheticPreCompact)
 		if err != nil {
 			if allowWorkspaceFallback && cursor == "" && isReorientNotFoundError(err) {
 				conversationID = ""

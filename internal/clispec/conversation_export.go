@@ -219,6 +219,7 @@ func newExportInput() exportInput {
 			Format:       conv.ExportFormatMarkdown,
 			HistoryStart: 0,
 			LastN:        0,
+			MaxLines:     0,
 			Whitespace:   conv.WhitespacePreserve,
 			Content:      conv.NewContentKindSet(),
 			Compaction: conv.CompactionExportOptions{
@@ -298,6 +299,7 @@ func exportTailOp() Operation[exportTailInput, exportTailPayload] {
 					Format:       conv.ExportFormatMarkdown,
 					HistoryStart: 0,
 					LastN:        in.LastN,
+					MaxLines:     0,
 					Whitespace:   conv.WhitespaceDense,
 					Content:      conv.NewContentKindSet(conv.ContentKindChat, conv.ContentKindToolSummaries),
 					Compaction: conv.CompactionExportOptions{
