@@ -47,29 +47,30 @@ func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 	calls := make([]testReorientCall, 0, 2)
 	pages := []conversation.ReorientPage{
 		{
-			Items:      []conversation.ReorientItem{{Title: "First", Body: "one"}},
+			Body:       "first page one",
 			NextCursor: "cursor-two",
-			Remaining:  1,
+			Remaining:  15,
 			Offset:     0,
-			TotalItems: 2,
+			TotalBytes: 29,
+			TotalLines: 1,
 		},
 		{
-			Items:      []conversation.ReorientItem{{Title: "Second", Body: "two"}},
+			Body:       "second page two",
 			NextCursor: "",
 			Remaining:  0,
-			Offset:     1,
-			TotalItems: 2,
+			Offset:     14,
+			TotalBytes: 29,
+			TotalLines: 1,
 		},
 	}
 	reorient := func(
 		_ context.Context,
 		conversationID string,
 		workspace string,
-		_ string,
 		cursor string,
 		_ int,
 		_ int,
-		_ int,
+		_ bool,
 		syntheticPreCompact bool,
 	) (conversation.ReorientPage, error) {
 		calls = append(calls, testReorientCall{
@@ -124,7 +125,7 @@ func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 		SessionID:      "session-1",
 		CWD:            "/Users/me/project",
 	})
-	if !strings.Contains(body, "## First") || !strings.Contains(body, "## Second") {
+	if !strings.Contains(body, "first page one") || !strings.Contains(body, "second page two") {
 		t.Fatalf("snapshot missing pages:\n%s", body)
 	}
 }
@@ -221,16 +222,16 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 		string,
 		string,
 		string,
-		string,
-		int,
 		int,
 		int,
 		bool,
+		bool,
 	) (conversation.ReorientPage, error) {
 		return conversation.ReorientPage{
-			Items:      []conversation.ReorientItem{{Title: "Cursor", Body: "snapshot"}},
+			Body:       "cursor snapshot body",
 			Remaining:  0,
-			TotalItems: 1,
+			TotalBytes: 20,
+			TotalLines: 1,
 		}, nil
 	}
 	pre := Runner{
@@ -269,7 +270,7 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 	if err := json.Unmarshal([]byte(output.String()), &decoded); err != nil {
 		t.Fatalf("Unmarshal output: %v\n%s", err, output.String())
 	}
-	if !strings.Contains(decoded.FollowupMessage, "## Cursor") {
+	if !strings.Contains(decoded.FollowupMessage, "cursor snapshot body") {
 		t.Fatalf("followup message missing snapshot:\n%s", decoded.FollowupMessage)
 	}
 }
@@ -363,10 +364,9 @@ func TestRunnerPreCompactErrorsWhenReorientCursorStalls(t *testing.T) {
 			string,
 			string,
 			string,
-			string,
 			int,
 			int,
-			int,
+			bool,
 			bool,
 		) (conversation.ReorientPage, error) {
 			return conversation.ReorientPage{Remaining: 1, NextCursor: ""}, nil
@@ -400,10 +400,9 @@ func TestRunnerPreCompactErrorsWhenReorientCursorRepeats(t *testing.T) {
 			string,
 			string,
 			string,
-			string,
 			int,
 			int,
-			int,
+			bool,
 			bool,
 		) (conversation.ReorientPage, error) {
 			callCount++
@@ -441,10 +440,9 @@ func TestRunnerPreCompactReturnsDaemonErrors(t *testing.T) {
 			string,
 			string,
 			string,
-			string,
 			int,
 			int,
-			int,
+			bool,
 			bool,
 		) (conversation.ReorientPage, error) {
 			return conversation.ReorientPage{}, expectedErr
@@ -474,11 +472,10 @@ func TestRunnerPreCompactFallsBackToWorkspaceWhenTranscriptNotFound(t *testing.T
 			_ context.Context,
 			conversationID string,
 			workspace string,
-			_ string,
 			cursor string,
 			_ int,
 			_ int,
-			_ int,
+			_ bool,
 			syntheticPreCompact bool,
 		) (conversation.ReorientPage, error) {
 			calls = append(calls, testReorientCall{
@@ -536,10 +533,9 @@ func TestRunnerPreCompactStopsWhenContextIsCanceledBetweenPages(t *testing.T) {
 			string,
 			string,
 			string,
-			string,
 			int,
 			int,
-			int,
+			bool,
 			bool,
 		) (conversation.ReorientPage, error) {
 			callCount++

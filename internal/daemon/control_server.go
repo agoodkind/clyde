@@ -178,18 +178,16 @@ func (s *controlServer) SearchConversations(ctx context.Context, req *clydev1.Se
 	return searchConversationsResponse(ctx, s.index, result), nil
 }
 
-// ReorientConversation resolves the recovery context for one conversation and
-// returns one cursor-paged page of evidence. The page is bounded so it renders
-// inline, and the caller loops on next_cursor until remaining is zero.
+// ReorientConversation builds the recovered pre-compaction transcript for one
+// conversation and returns one cursor-paged page of it. The page is bounded so
+// it renders inline, and the caller loops on next_cursor until remaining is zero.
 func (s *controlServer) ReorientConversation(ctx context.Context, req *clydev1.ReorientConversationRequest) (*clydev1.ReorientConversationResponse, error) {
 	ctx, _ = correlation.Ensure(ctx, "")
 	page, err := s.index.ReorientPage(ctx, conversation.ReorientOptions{
 		ConversationID:      req.GetConversationId(),
 		WorkspaceRoot:       req.GetWorkspace(),
-		Topic:               req.GetTopic(),
-		Before:              int(req.GetWindow()),
-		After:               int(req.GetWindow()),
-		Limit:               int(req.GetLimit()),
+		MaxLines:            int(req.GetMaxLines()),
+		IncludeToolOutputs:  req.GetIncludeToolOutputs(),
 		SyntheticPreCompact: req.GetSyntheticPrecompact(),
 	}, req.GetCursor(), int(req.GetPageBytes()))
 	if err != nil {
@@ -746,15 +744,15 @@ func protoConversationInfo(
 
 func protoReorientPage(page conversation.ReorientPage) *clydev1.ReorientConversationResponse {
 	return &clydev1.ReorientConversationResponse{
-		Text:                conversation.RenderReorientPageText(page),
 		CurrentConversation: protoReorientConversationRef(page.CurrentConversation),
-		ParentConversation:  protoOptionalReorientConversationRef(page.ParentConversation),
-		CheckpointNumber:    int64(page.CheckpointNumber),
-		Items:               protoReorientItems(page.Items),
+		PageBody:            []byte(page.Body),
 		NextCursor:          page.NextCursor,
 		Remaining:           int64(page.Remaining),
 		Offset:              int64(page.Offset),
-		TotalItems:          int64(page.TotalItems),
+		TotalBytes:          int64(page.TotalBytes),
+		TotalLines:          int64(page.TotalLines),
+		Truncated:           page.Truncated,
+		Restart:             page.Restart,
 		Warnings:            page.Warnings,
 	}
 }
@@ -769,48 +767,6 @@ func protoReorientConversationRef(ref conversation.ReorientConversationRef) *cly
 		Provider:      protoProvider(provider),
 		Title:         ref.Title,
 		WorkspaceRoot: ref.WorkspaceRoot,
-	}
-}
-
-func protoOptionalReorientConversationRef(ref *conversation.ReorientConversationRef) *clydev1.ReorientConversationRef {
-	if ref == nil {
-		return nil
-	}
-	return protoReorientConversationRef(*ref)
-}
-
-func protoReorientItems(items []conversation.ReorientItem) []*clydev1.ReorientItem {
-	wireItems := make([]*clydev1.ReorientItem, 0, len(items))
-	for _, item := range items {
-		wireItems = append(wireItems, &clydev1.ReorientItem{
-			Kind:           protoReorientItemKind(item.Kind),
-			Title:          item.Title,
-			Body:           item.Body,
-			ConversationId: item.ConversationID,
-			MessageIndex:   int64(item.MessageIndex),
-		})
-	}
-	return wireItems
-}
-
-func protoReorientItemKind(kind conversation.ReorientItemKind) clydev1.ReorientItemKind {
-	switch kind {
-	case conversation.ReorientItemKindHeader:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_HEADER
-	case conversation.ReorientItemKindRecoveredContext:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_RECOVERED_CONTEXT
-	case conversation.ReorientItemKindPreCompactWindow:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW
-	case conversation.ReorientItemKindTail:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_TAIL
-	case conversation.ReorientItemKindParentAnchor:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PARENT_ANCHOR
-	case conversation.ReorientItemKindMemoryDoc:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_MEMORY_DOC
-	case conversation.ReorientItemKindSearchHit:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_SEARCH_HIT
-	default:
-		return clydev1.ReorientItemKind_REORIENT_ITEM_KIND_UNSPECIFIED
 	}
 }
 

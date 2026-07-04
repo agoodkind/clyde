@@ -158,7 +158,11 @@ type ExportOptions struct {
 	Format       ExportFormat
 	HistoryStart int
 	LastN        int
-	Whitespace   WhitespaceMode
-	Content      ContentKindSet
-	Compaction   CompactionExportOptions
+	// MaxLines keeps only the last N rendered lines. Zero leaves the output
+	// uncapped. It runs after whitespace compression so the cap counts real
+	// content lines.
+	MaxLines   int
+	Whitespace WhitespaceMode
+	Content    ContentKindSet
+	Compaction CompactionExportOptions
 }

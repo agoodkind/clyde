@@ -268,7 +268,7 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 				)
 			}
 		}()
-		if serveErr := proxy.Serve(); serveErr != nil {
+		if serveErr := proxy.Serve(ctx); serveErr != nil {
 			errCh <- serveErr
 		}
 	}()

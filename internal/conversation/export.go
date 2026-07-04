@@ -52,7 +52,44 @@ func (idx *Index) Export(record Record, options ExportOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return compressWhitespace(body, options.Format, options.Whitespace), nil
+	body = compressWhitespace(body, options.Format, options.Whitespace)
+	if options.MaxLines > 0 {
+		capped, _, _ := capToLastLines(string(body), options.MaxLines)
+		body = []byte(capped)
+	}
+	return body, nil
+}
+
+// capToLastLines keeps only the last maxLines lines of text. It returns the
+// capped text, the line count of the returned text, and whether earlier lines
+// were dropped. A maxLines of zero or below leaves the text unchanged. The
+// returned text ends with a trailing newline when it was capped so the last
+// line is complete.
+func capToLastLines(text string, maxLines int) (string, int, bool) {
+	trimmed := strings.TrimRight(text, "\n")
+	if trimmed == "" {
+		return text, 0, false
+	}
+	total := strings.Count(trimmed, "\n") + 1
+	if maxLines <= 0 || total <= maxLines {
+		return text, total, false
+	}
+	// Scan backward for the newline before the first kept line, so a large
+	// transcript is not split into one slice entry per line.
+	cut := len(trimmed)
+	for range maxLines {
+		idx := strings.LastIndexByte(trimmed[:cut], '\n')
+		if idx < 0 {
+			cut = 0
+			break
+		}
+		cut = idx
+	}
+	start := cut
+	if start > 0 {
+		start++
+	}
+	return trimmed[start:] + "\n", maxLines, true
 }
 
 type rawJSONExport struct {

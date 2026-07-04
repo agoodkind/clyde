@@ -847,7 +847,7 @@ func startTestProxy(t *testing.T) *testProxy {
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
-	go func() { _ = server.Serve(listener) }()
+	go func() { _ = server.Serve(newSniffListener(context.Background(), listener, p)) }()
 	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
 }
 
@@ -895,7 +895,7 @@ func startCursorMITMTestProxy(t *testing.T, captureDir string, cursorHost string
 	}
 	server := &http.Server{Handler: http.HandlerFunc(p.handle)}
 	p.server = server
-	go func() { _ = server.Serve(listener) }()
+	go func() { _ = server.Serve(newSniffListener(context.Background(), listener, p)) }()
 	return &testProxy{server: server, proxy: p, group: group, addr: listener.Addr().String()}
 }
 

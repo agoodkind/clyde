@@ -359,22 +359,30 @@ message ReorientConversationRequest {
   // conversation in workspace.
   string conversation_id = 1;
   string workspace = 2;
-  // topic narrows memory docs and the fallback search.
-  string topic = 3;
+  // topic is ignored. It is retained for wire compatibility after reorient
+  // dropped memory and fallback-search enrichment.
+  string topic = 3 [deprecated = true];
   // cursor continues a prior page. Empty starts at the first page.
   string cursor = 4;
-  // window is the before/after message count for rendered context windows. Zero
-  // means the daemon default.
-  int64 window = 5;
-  // limit bounds memory and fallback-search evidence items. Zero means the
-  // daemon default.
-  int64 limit = 6;
+  // window is ignored. It is retained for wire compatibility after reorient
+  // stopped rendering fixed context windows.
+  int64 window = 5 [deprecated = true];
+  // limit is ignored. It is retained for wire compatibility after reorient
+  // dropped memory and fallback-search enrichment.
+  int64 limit = 6 [deprecated = true];
   // page_bytes bounds one page so it renders inline. Zero means the daemon
   // default.
   int64 page_bytes = 7;
-  // synthetic_precompact treats the current transcript end as a compaction
-  // boundary for hooks that run before provider compaction.
+  // synthetic_precompact recovers the current conversation, for hooks that run
+  // before the provider compacts and there is no boundary yet. The result is
+  // still capped by max_lines.
   bool synthetic_precompact = 8;
+  // max_lines caps the recovered transcript to its last N lines. Zero means the
+  // daemon default.
+  int64 max_lines = 9;
+  // include_tool_outputs renders full tool result bodies instead of the default
+  // tool-call commands.
+  bool include_tool_outputs = 10;
 }
 
 enum ReorientItemKind {
@@ -404,21 +412,28 @@ message ReorientItem {
 }
 
 message ReorientConversationResponse {
-  // text keeps the legacy rendered page body for older clients while the typed
-  // fields below roll out. New clients should use the typed fields instead.
-  string text = 1 [deprecated = true];
+  reserved 1, 11, 12, 13, 15;
+  reserved "text", "parent_conversation", "checkpoint_number", "items", "total_items";
   // next_cursor continues to the next page. Empty on the final page.
   string next_cursor = 2;
-  // remaining is the count of evidence items not yet delivered. Above zero means
-  // the caller has not seen all evidence.
+  // remaining is the number of recovered transcript bytes not yet delivered.
+  // Above zero means the caller has not paged to the end.
   int64 remaining = 3;
   ReorientConversationRef current_conversation = 10;
-  ReorientConversationRef parent_conversation = 11;
-  int64 checkpoint_number = 12;
-  repeated ReorientItem items = 13;
-  int64 offset = 14;
-  int64 total_items = 15;
   repeated string warnings = 16;
+  // page_body is this page's slice of the recovered pre-compaction transcript.
+  bytes page_body = 17;
+  // offset is the byte offset of page_body within the whole recovered transcript.
+  int64 offset = 14;
+  // total_bytes is the size of the whole recovered transcript.
+  int64 total_bytes = 18;
+  // total_lines is the line count of the whole recovered transcript.
+  int64 total_lines = 19;
+  // truncated reports that the line cap dropped older lines from the top.
+  bool truncated = 20;
+  // restart reports that the conversation was compacted again since the cursor
+  // was issued, so paging restarted from the first page of the new transcript.
+  bool restart = 21;
 }
 
 message ExportTranscriptRequest {

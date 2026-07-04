@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,385 +13,289 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
-func TestChunkTextSplitsOnLineBoundaries(t *testing.T) {
+func TestCapToLastLines(t *testing.T) {
 	t.Parallel()
-	body := strings.Repeat("line\n", 200)
-	chunks := chunkText(body, 100)
-	if len(chunks) < 2 {
-		t.Fatalf("chunks len = %d, want >= 2", len(chunks))
+	text := "l1\nl2\nl3\nl4\nl5\n"
+	capped, total, truncated := capToLastLines(text, 3)
+	if capped != "l3\nl4\nl5\n" {
+		t.Fatalf("capped = %q, want last three lines", capped)
 	}
-	for index, chunk := range chunks {
-		if runeLen(chunk) > 100 {
-			t.Fatalf("chunk %d has %d runes, want <= 100", index, runeLen(chunk))
+	if total != 3 || !truncated {
+		t.Fatalf("total = %d truncated = %v, want 3 and true", total, truncated)
+	}
+
+	whole, total, truncated := capToLastLines(text, 10)
+	if whole != text || total != 5 || truncated {
+		t.Fatalf("uncapped whole = %q total = %d truncated = %v", whole, total, truncated)
+	}
+
+	zero, total, truncated := capToLastLines(text, 0)
+	if zero != text || total != 5 || truncated {
+		t.Fatalf("zero cap whole = %q total = %d truncated = %v", zero, total, truncated)
+	}
+
+	empty, total, truncated := capToLastLines("", 3)
+	if empty != "" || total != 0 || truncated {
+		t.Fatalf("empty cap = %q total = %d truncated = %v", empty, total, truncated)
+	}
+}
+
+func TestSliceReorientBodyAdvancesAndReassembles(t *testing.T) {
+	t.Parallel()
+	var builder strings.Builder
+	for index := range 40 {
+		fmt.Fprintf(&builder, "line %02d of the recovered transcript\n", index)
+	}
+	body := builder.String()
+
+	var rebuilt strings.Builder
+	offset := 0
+	pages := 0
+	for offset < len(body) {
+		slice, next := sliceReorientBody(body, offset, 100)
+		if next <= offset {
+			t.Fatalf("slice did not advance: offset %d next %d", offset, next)
+		}
+		if slice != body[offset:next] {
+			t.Fatalf("slice mismatch at offset %d", offset)
+		}
+		rebuilt.WriteString(slice)
+		offset = next
+		pages++
+		if pages > 1000 {
+			t.Fatalf("slice loop did not terminate")
 		}
 	}
-	if joinedRuneLen(chunks) == 0 {
-		t.Fatalf("chunks dropped all content")
+	if rebuilt.String() != body {
+		t.Fatalf("reassembled body != original")
+	}
+	if pages < 2 {
+		t.Fatalf("pages = %d, want more than one", pages)
 	}
 }
 
-func TestChunkTextShortBodyStaysWhole(t *testing.T) {
+func TestSliceReorientBodyHardCutsLongLine(t *testing.T) {
 	t.Parallel()
-	chunks := chunkText("short body", 100)
-	if len(chunks) != 1 || chunks[0] != "short body" {
-		t.Fatalf("chunks = %#v, want one whole chunk", chunks)
-	}
-}
-
-func TestChunkTextHardSplitsLongSingleLine(t *testing.T) {
-	t.Parallel()
-	line := strings.Repeat("x", 250)
-	chunks := chunkText(line, 100)
-	if len(chunks) != 3 {
-		t.Fatalf("chunks len = %d, want 3", len(chunks))
-	}
-	if chunks[0] != strings.Repeat("x", 100) || chunks[2] != strings.Repeat("x", 50) {
-		t.Fatalf("hard-split chunks = %#v", chunks)
-	}
-}
-
-func TestPageReorientItemsRespectsBudgetAndAdvances(t *testing.T) {
-	t.Parallel()
-	items := []ReorientItem{
-		testReorientItem("a", 40),
-		testReorientItem("b", 40),
-		testReorientItem("c", 40),
-	}
-	page, next := pageReorientItems(items, 0, 80)
-	if len(page) != 1 {
-		t.Fatalf("page len = %d, want 1 (budget fits one item plus overhead)", len(page))
-	}
-	if next != 1 {
-		t.Fatalf("next offset = %d, want 1", next)
-	}
-	page, next = pageReorientItems(items, next, 80)
-	if len(page) != 1 || next != 2 {
-		t.Fatalf("second page len = %d next = %d, want 1 and 2", len(page), next)
-	}
-}
-
-func TestPageReorientItemsAlwaysReturnsAtLeastOne(t *testing.T) {
-	t.Parallel()
-	items := []ReorientItem{testReorientItem("big", 10_000)}
-	page, next := pageReorientItems(items, 0, 100)
-	if len(page) != 1 {
-		t.Fatalf("oversized item: page len = %d, want 1", len(page))
-	}
-	if next != 1 {
-		t.Fatalf("next offset = %d, want 1", next)
-	}
-}
-
-func TestPageReorientItemsOffsetPastEnd(t *testing.T) {
-	t.Parallel()
-	items := []ReorientItem{testReorientItem("a", 10)}
-	page, next := pageReorientItems(items, 5, 100)
-	if page != nil || next != len(items) {
-		t.Fatalf("past-end page = %#v next = %d, want nil and %d", page, next, len(items))
+	body := strings.Repeat("x", 250)
+	slice, next := sliceReorientBody(body, 0, 100)
+	if len(slice) != 100 || next != 100 {
+		t.Fatalf("hard cut slice len = %d next = %d, want 100 and 100", len(slice), next)
 	}
 }
 
 func TestReorientCursorRoundTrip(t *testing.T) {
 	t.Parallel()
-	for _, offset := range []int{0, 1, 42, 9999} {
-		encoded := encodeReorientCursor(offset)
-		decoded, err := unmarshalReorientCursor(encoded)
+	cases := []reorientCursor{
+		{Fingerprint: "", Offset: 0},
+		{Fingerprint: "child-37", Offset: 42},
+		{Fingerprint: "boundary-uuid", Offset: 9999},
+	}
+	for _, want := range cases {
+		encoded := encodeReorientCursor(want)
+		got, err := decodeReorientCursor(encoded)
 		if err != nil {
-			t.Fatalf("unmarshal(%q) err = %v", encoded, err)
+			t.Fatalf("decode(%q) err = %v", encoded, err)
 		}
-		if decoded != offset {
-			t.Fatalf("round trip offset = %d, want %d", decoded, offset)
+		if got != want {
+			t.Fatalf("round trip = %#v, want %#v", got, want)
 		}
 	}
 }
 
 func TestReorientCursorEmptyIsZero(t *testing.T) {
 	t.Parallel()
-	decoded, err := unmarshalReorientCursor("")
+	got, err := decodeReorientCursor("")
 	if err != nil {
 		t.Fatalf("empty cursor err = %v", err)
 	}
-	if decoded != 0 {
-		t.Fatalf("empty cursor offset = %d, want 0", decoded)
+	if got != (reorientCursor{Fingerprint: "", Offset: 0}) {
+		t.Fatalf("empty cursor = %#v, want zero", got)
 	}
 }
 
 func TestReorientCursorRejectsGarbage(t *testing.T) {
 	t.Parallel()
-	if _, err := unmarshalReorientCursor("!!!not-base64!!!"); err == nil {
+	if _, err := decodeReorientCursor("!!!not-base64!!!"); err == nil {
 		t.Fatalf("garbage cursor accepted, want error")
 	}
 }
 
-func TestAppendChunkedItemsSkipsEmpty(t *testing.T) {
+func TestReorientSelectorPicksPreBoundaryHistory(t *testing.T) {
 	t.Parallel()
-	items := appendChunkedItems(nil, ReorientItemKindTail, "Tail", "claude:1", 3, "   ")
-	if items != nil {
-		t.Fatalf("empty body added items: %#v", items)
+	baseTime := time.Date(2026, 6, 27, 12, 0, 0, 0, time.UTC)
+	messages := reorientChildMessages(baseTime)
+	if got := reorientSelector(messages, false); got != "1..2" {
+		t.Fatalf("selector = %q, want 1..2 (all segments before the latest boundary)", got)
+	}
+	if got := reorientSelector(messages, true); got != "all" {
+		t.Fatalf("synthetic selector = %q, want all", got)
+	}
+	uncompacted := []transcript.Message{{UUID: "a", Role: "user", Text: "hi"}}
+	if got := reorientSelector(uncompacted, false); got != "0" {
+		t.Fatalf("uncompacted selector = %q, want 0", got)
 	}
 }
 
-func TestAppendChunkedItemsNumbersMultipleParts(t *testing.T) {
+func TestReorientFingerprintIsLatestBoundary(t *testing.T) {
 	t.Parallel()
-	body := strings.Repeat("line\n", 2000)
-	items := appendChunkedItems(nil, ReorientItemKindTail, "Tail", "claude:1", 3, body)
-	if len(items) < 2 {
-		t.Fatalf("items len = %d, want >= 2", len(items))
+	baseTime := time.Date(2026, 6, 27, 12, 0, 0, 0, time.UTC)
+	messages := reorientChildMessages(baseTime)
+	if got := reorientFingerprint(messages); got != "child-37" {
+		t.Fatalf("fingerprint = %q, want child-37", got)
 	}
-	if !strings.Contains(items[0].Title, "part 1/") {
-		t.Fatalf("first item title = %q, want a part marker", items[0].Title)
+	uncompacted := []transcript.Message{{UUID: "a", Role: "user", Text: "hi"}}
+	if got := reorientFingerprint(uncompacted); got != "" {
+		t.Fatalf("uncompacted fingerprint = %q, want empty", got)
 	}
-	for _, item := range items {
-		if item.Kind != ReorientItemKindTail || item.ConversationID != "claude:1" || item.MessageIndex != 3 {
-			t.Fatalf("item metadata not propagated: %#v", item)
+}
+
+func TestReorientPageRecoversPreBoundaryHistoryOnly(t *testing.T) {
+	t.Parallel()
+	fixture := newReorientFixture(t)
+	body, total, pages := collectReorientPages(t, fixture.index, ReorientOptions{ConversationID: fixture.child.ID})
+	if total <= 0 || pages < 1 {
+		t.Fatalf("total = %d pages = %d, want positive", total, pages)
+	}
+	for _, want := range []string{"segment beginning detail", "I rather idiot proof it", "working before compact"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("recovered body missing pre-boundary detail %q:\n%s", want, body)
+		}
+	}
+	for _, unwanted := range []string{"post compact tail", "tail request"} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("recovered body included post-boundary tail %q:\n%s", unwanted, body)
 		}
 	}
 }
 
-func TestAppendInstructionChunkedItemsBoundsOverlongInstruction(t *testing.T) {
+func TestReorientPageStableWhenTailGrows(t *testing.T) {
 	t.Parallel()
-	instruction := strings.Repeat("i", maxReorientItemRunes+10)
-	body := strings.Repeat("b", 100)
-	items := appendInstructionChunkedItems(nil, ReorientItemKindPreCompactWindow, "Remaining", "claude:1", 7, instruction, body)
-	if len(items) < 2 {
-		t.Fatalf("items len = %d, want chunked output", len(items))
-	}
-	for index, item := range items {
-		if runeLen(item.Body) > maxReorientItemRunes {
-			t.Fatalf("item %d body runes = %d, want <= %d", index, runeLen(item.Body), maxReorientItemRunes)
-		}
-		if item.Kind != ReorientItemKindPreCompactWindow || item.ConversationID != "claude:1" || item.MessageIndex != 7 {
-			t.Fatalf("item metadata not propagated: %#v", item)
-		}
-	}
-	if !strings.Contains(joinedReorientItemBodies(items, ReorientItemKindPreCompactWindow), body) {
-		t.Fatalf("chunked items dropped body text")
-	}
-}
+	baseTime := time.Date(2026, 6, 27, 12, 0, 0, 0, time.UTC)
+	base := buildReorientFixture(t, nil)
+	baseBody, baseTotal, _ := collectReorientPages(t, base.index, ReorientOptions{ConversationID: base.child.ID})
 
-func TestRenderCheckpointSummaryExtractsSummaryText(t *testing.T) {
-	t.Parallel()
-	checkpoint := CompactionCheckpoint{
-		BoundaryIndex: 0,
-		SummaryIndex:  1,
-		ContextItems: []transcript.CompactedContextItem{
-			{
-				Kind: transcript.CompactedContextItemKindMessage,
-				Message: &transcript.CompactedMessageItem{
-					MessageClass: transcript.CompactedMessageClassSummary,
-					Content: []transcript.CompactedMessageContentItem{
-						{Type: "text", Text: "the work so far"},
-					},
-				},
-			},
-			{
-				Kind: transcript.CompactedContextItemKindMessage,
-				Message: &transcript.CompactedMessageItem{
-					MessageClass: transcript.CompactedMessageClassOrdinary,
-					Content: []transcript.CompactedMessageContentItem{
-						{Type: "text", Text: "ignored ordinary text"},
-					},
-				},
-			},
+	grown := buildReorientFixture(t, []transcript.Message{
+		{
+			UUID:      "child-40",
+			Role:      "assistant",
+			Timestamp: baseTime.Add(41 * time.Minute),
+			Text:      "new post compact work after the loop started",
 		},
-	}
-	got := renderCheckpointSummary(checkpoint)
-	if got != "the work so far" {
-		t.Fatalf("summary = %q, want %q", got, "the work so far")
-	}
-}
-
-func TestBuildReorientHeaderReportsParentAndCheckpoint(t *testing.T) {
-	t.Parallel()
-	current := Record{
-		ID:       "claude:child",
-		Provider: providerid.ProviderClaude,
-		Title:    "Child",
-		Lineage: &Lineage{
-			Kind:           ConversationLineageKindFork,
-			ParentProvider: providerid.ProviderClaude,
-			ParentNativeID: "parent",
+		{
+			UUID:      "child-41",
+			Role:      "user",
+			Timestamp: baseTime.Add(42 * time.Minute),
+			Text:      "even more new tail",
 		},
+	})
+	grownBody, grownTotal, _ := collectReorientPages(t, grown.index, ReorientOptions{ConversationID: grown.child.ID})
+
+	if grownTotal != baseTotal {
+		t.Fatalf("total bytes changed after tail growth: base %d grown %d", baseTotal, grownTotal)
 	}
-	parent := &ReorientConversationRef{ID: "claude:parent", Provider: "claude"}
-	checkpoint := &CompactionCheckpoint{BoundaryIndex: 10, SummaryIndex: 8, MessagesSummarized: 4}
-	header := buildReorientHeader(current, parent, []string{"watch out"}, 2, checkpoint)
-	if header.Kind != ReorientItemKindHeader {
-		t.Fatalf("header kind = %q", header.Kind)
+	if grownBody != baseBody {
+		t.Fatalf("recovered body changed after tail growth")
 	}
-	for _, want := range []string{"claude:child", "claude:parent", "[fork]", "boundary=10", "warning: watch out"} {
-		if !strings.Contains(header.Body, want) {
-			t.Fatalf("header body missing %q:\n%s", want, header.Body)
-		}
+	if strings.Contains(grownBody, "new post compact work") || strings.Contains(grownBody, "even more new tail") {
+		t.Fatalf("recovered body leaked post-boundary growth:\n%s", grownBody)
 	}
 }
 
-func TestBuildReorientHeaderNoParentNoCheckpoint(t *testing.T) {
-	t.Parallel()
-	current := Record{ID: "codex:solo", Provider: providerid.ProviderCodex}
-	header := buildReorientHeader(current, nil, nil, 0, nil)
-	for _, want := range []string{"parent:  none", "checkpoint: none"} {
-		if !strings.Contains(header.Body, want) {
-			t.Fatalf("header body missing %q:\n%s", want, header.Body)
-		}
-	}
-}
-
-func TestReorientPlacesPreCompactWindowBeforeSummary(t *testing.T) {
+func TestReorientPageRestartsOnFingerprintMismatch(t *testing.T) {
 	t.Parallel()
 	fixture := newReorientFixture(t)
-	report, err := fixture.index.Reorient(context.Background(), ReorientOptions{
-		ConversationID: fixture.child.ID,
-		Before:         2,
-		After:          2,
-		Limit:          1,
-	})
+	staleCursor := encodeReorientCursor(reorientCursor{Fingerprint: "stale-fingerprint", Offset: 24})
+	page, err := fixture.index.ReorientPage(context.Background(), ReorientOptions{ConversationID: fixture.child.ID}, staleCursor, 200)
 	if err != nil {
-		t.Fatalf("Reorient err = %v", err)
+		t.Fatalf("ReorientPage: %v", err)
 	}
-	if len(report.Items) < 3 {
-		t.Fatalf("items len = %d, want at least 3", len(report.Items))
+	if !page.Restart {
+		t.Fatalf("restart = false, want true on fingerprint mismatch")
 	}
-	if report.Items[0].Kind != ReorientItemKindHeader {
-		t.Fatalf("first item kind = %q, want header", report.Items[0].Kind)
+	if page.Offset != 0 {
+		t.Fatalf("offset = %d, want 0 after restart", page.Offset)
 	}
-	preCompactItem := report.Items[1]
-	if preCompactItem.Kind != ReorientItemKindPreCompactWindow {
-		t.Fatalf("first non-header item kind = %q, want pre_compact_window", preCompactItem.Kind)
+	firstPage, err := fixture.index.ReorientPage(context.Background(), ReorientOptions{ConversationID: fixture.child.ID}, "", 200)
+	if err != nil {
+		t.Fatalf("ReorientPage first: %v", err)
 	}
-	for _, item := range report.Items {
-		if item.Kind != ReorientItemKindPreCompactWindow {
-			continue
-		}
-		if !strings.HasPrefix(item.Title, "Remaining") {
-			t.Fatalf("pre-compact title = %q, want Remaining", item.Title)
-		}
-		if strings.Contains(item.Title, "Raw context") || strings.Contains(item.Body, "Raw context") {
-			t.Fatalf("pre-compact item retained raw context label: %#v", item)
-		}
-		if !strings.Contains(item.Body, "LLM instruction: please exhaust the remaining context before reasoning.") {
-			t.Fatalf("pre-compact item missing LLM instruction:\n%s", item.Body)
-		}
-		if !strings.Contains(item.Body, "Do not skip or refuse because this fills the context window") {
-			t.Fatalf("pre-compact item missing refusal mitigation:\n%s", item.Body)
-		}
-	}
-	preCompactBody := joinedReorientItemBodies(report.Items, ReorientItemKindPreCompactWindow)
-	if !strings.Contains(preCompactBody, "segment beginning detail") {
-		t.Fatalf("pre-compact body missing segment start detail:\n%s", preCompactBody)
-	}
-	if !strings.Contains(preCompactBody, "I rather idiot proof it") {
-		t.Fatalf("pre-compact body missing raw detail:\n%s", preCompactBody)
-	}
-	for _, unwanted := range []string{
-		"ancient pre-previous checkpoint should not appear",
-		"previous compact summary should not appear",
-		"compact summary should stay supplemental",
-		"post compact tail",
-	} {
-		if strings.Contains(preCompactBody, unwanted) {
-			t.Fatalf("pre-compact body included %q:\n%s", unwanted, preCompactBody)
-		}
-	}
-	if !strings.Contains(preCompactBody, "Deeper: clyde conversation search claude:child --around ") ||
-		!strings.Contains(preCompactBody, "--window 2") {
-		t.Fatalf("pre-compact body missing deeper search line:\n%s", preCompactBody)
-	}
-
-	recoveredItem, ok := findReorientItem(report.Items, ReorientItemKindRecoveredContext)
-	if !ok {
-		t.Fatalf("missing recovered context item")
-	}
-	if !strings.Contains(recoveredItem.Body, "compact summary should stay supplemental") {
-		t.Fatalf("recovered context missing summary:\n%s", recoveredItem.Body)
+	if page.Body != firstPage.Body {
+		t.Fatalf("restart body != first page body")
 	}
 }
 
-func TestReorientParentAnchorUsesTimestampFallbackBeforeTail(t *testing.T) {
+func TestExportMaxLinesKeepsLastLines(t *testing.T) {
 	t.Parallel()
 	fixture := newReorientFixture(t)
-	report, err := fixture.index.Reorient(context.Background(), ReorientOptions{
-		ConversationID: fixture.child.ID,
-		Before:         2,
-		After:          2,
-		Limit:          1,
-	})
+	options := ExportOptions{
+		Format:     ExportFormatMarkdown,
+		Whitespace: WhitespaceDense,
+		Content:    NewContentKindSet(ContentKindChat, ContentKindToolCalls),
+		Compaction: CompactionExportOptions{IncludeSelector: "all"},
+	}
+	full, err := fixture.index.Export(fixture.child, options)
 	if err != nil {
-		t.Fatalf("Reorient err = %v", err)
+		t.Fatalf("Export full: %v", err)
 	}
-	parentAnchor, ok := findReorientItem(report.Items, ReorientItemKindParentAnchor)
-	if !ok {
-		t.Fatalf("missing parent anchor item")
+	fullLines := countLines(string(full))
+	if fullLines <= 5 {
+		t.Fatalf("fixture export has %d lines, want more than 5 for a meaningful cap", fullLines)
 	}
-	if parentAnchor.MessageIndex != 1 {
-		t.Fatalf("parent anchor index = %d, want 1", parentAnchor.MessageIndex)
-	}
-	if !strings.Contains(parentAnchor.Title, "timestamp") {
-		t.Fatalf("parent anchor title = %q, want timestamp fallback marker", parentAnchor.Title)
-	}
-	if !strings.Contains(parentAnchor.Body, "parent anchor before child") {
-		t.Fatalf("parent anchor body missing pre-fork message:\n%s", parentAnchor.Body)
-	}
-	if strings.Contains(parentAnchor.Body, "parent post fork tail should not appear") {
-		t.Fatalf("parent anchor body included parent tail:\n%s", parentAnchor.Body)
-	}
-}
 
-func TestReorientSyntheticPreCompactBoundarySkipsCompactSummary(t *testing.T) {
-	t.Parallel()
-	fixture := newReorientFixture(t)
-	report, err := fixture.index.Reorient(context.Background(), ReorientOptions{
-		ConversationID:      fixture.child.ID,
-		Before:              2,
-		After:               2,
-		Limit:               1,
-		SyntheticPreCompact: true,
-	})
+	options.MaxLines = 5
+	capped, err := fixture.index.Export(fixture.child, options)
 	if err != nil {
-		t.Fatalf("Reorient err = %v", err)
+		t.Fatalf("Export capped: %v", err)
 	}
-	preCompactBody := joinedReorientItemBodies(report.Items, ReorientItemKindPreCompactWindow)
-	if !strings.Contains(preCompactBody, "post compact tail") || !strings.Contains(preCompactBody, "tail request") {
-		t.Fatalf("synthetic pre-compact body missing transcript tail:\n%s", preCompactBody)
+	if got := countLines(string(capped)); got != 5 {
+		t.Fatalf("capped export has %d lines, want 5", got)
 	}
-	if strings.Contains(preCompactBody, "compact summary should stay supplemental") {
-		t.Fatalf("synthetic pre-compact body included prior compact summary:\n%s", preCompactBody)
-	}
-	if _, ok := findReorientItem(report.Items, ReorientItemKindRecoveredContext); ok {
-		t.Fatalf("synthetic pre-compact report included recovered compact summary")
-	}
-	header, ok := findReorientItem(report.Items, ReorientItemKindHeader)
-	if !ok {
-		t.Fatalf("missing header item")
-	}
-	if report.Checkpoint == nil {
-		t.Fatalf("synthetic report checkpoint is nil")
-	}
-	wantBoundary := fmt.Sprintf("boundary=%d", report.Checkpoint.BoundaryIndex)
-	if !strings.Contains(header.Body, wantBoundary) {
-		t.Fatalf("synthetic header missing %s:\n%s", wantBoundary, header.Body)
+	if !strings.HasSuffix(strings.TrimRight(string(full), "\n"), strings.TrimRight(string(capped), "\n")) {
+		t.Fatalf("capped export is not the tail of the full export:\ncapped=%q", string(capped))
 	}
 }
 
-func testReorientItem(title string, bodyBytes int) ReorientItem {
-	return ReorientItem{
-		Kind:         ReorientItemKindTail,
-		Title:        title,
-		Body:         strings.Repeat("x", bodyBytes),
-		MessageIndex: -1,
+func countLines(text string) int {
+	trimmed := strings.TrimRight(text, "\n")
+	if trimmed == "" {
+		return 0
 	}
+	return strings.Count(trimmed, "\n") + 1
 }
 
-func runeLen(text string) int {
-	return len([]rune(text))
-}
-
-func joinedRuneLen(chunks []string) int {
-	total := 0
-	for _, chunk := range chunks {
-		total += runeLen(chunk)
+func collectReorientPages(t *testing.T, idx *Index, options ReorientOptions) (string, int, int) {
+	t.Helper()
+	var builder strings.Builder
+	cursor := ""
+	total := -1
+	pages := 0
+	seen := map[string]bool{}
+	for {
+		page, err := idx.ReorientPage(context.Background(), options, cursor, 200)
+		if err != nil {
+			t.Fatalf("ReorientPage: %v", err)
+		}
+		if total < 0 {
+			total = page.TotalBytes
+		}
+		builder.WriteString(page.Body)
+		pages++
+		if page.Remaining <= 0 {
+			break
+		}
+		if page.NextCursor == "" {
+			t.Fatalf("remaining %d but next cursor is empty", page.Remaining)
+		}
+		if seen[page.NextCursor] {
+			t.Fatalf("repeated next cursor %q", page.NextCursor)
+		}
+		seen[page.NextCursor] = true
+		cursor = page.NextCursor
+		if pages > 1000 {
+			t.Fatalf("reorient page loop did not terminate")
+		}
 	}
-	return total
+	return builder.String(), total, pages
 }
 
 type reorientFixture struct {
@@ -427,6 +332,11 @@ func (parser staticParser) Stream(path string, _ LoadOptions) iter.Seq2[transcri
 
 func newReorientFixture(t *testing.T) reorientFixture {
 	t.Helper()
+	return buildReorientFixture(t, nil)
+}
+
+func buildReorientFixture(t *testing.T, extraChildTail []transcript.Message) reorientFixture {
+	t.Helper()
 	baseTime := time.Date(2026, 6, 27, 12, 0, 0, 0, time.UTC)
 	parent := Record{
 		ID:           "claude:parent",
@@ -450,18 +360,29 @@ func newReorientFixture(t *testing.T) reorientFixture {
 			ParentMessageUUID: "missing-parent-message",
 		},
 	}
+	childMessages := reorientChildMessages(baseTime)
+	if len(extraChildTail) > 0 {
+		childMessages = append(childMessages, extraChildTail...)
+	}
 	registry := NewRegistry()
 	registry.Register(staticParser{
 		provider: providerid.ProviderClaude,
 		messagesByPath: map[string][]transcript.Message{
 			parent.ArtifactPath: reorientParentMessages(baseTime),
-			child.ArtifactPath:  reorientChildMessages(baseTime),
+			child.ArtifactPath:  childMessages,
 		},
 	})
 	index := NewIndex(registry)
-	index.records = []Record{child, parent}
+	records := []Record{child, parent}
+	index.records = records
 	index.prevRecords = recordsByPath(index.records)
 	index.loaded = true
+	index.lastRefresh = time.Now()
+	index.cachePath = filepath.Join(t.TempDir(), cacheFilename)
+	index.debounce = time.Hour
+	index.scanProvider = func(context.Context, *Registry, scanCache) (scanResult, error) {
+		return scanResult{records: records, stamps: nil}, nil
+	}
 	return reorientFixture{index: index, child: child}
 }
 
@@ -494,7 +415,7 @@ func reorientChildMessages(baseTime time.Time) []transcript.Message {
 			UUID:      "child-0",
 			Role:      "user",
 			Timestamp: baseTime.Add(time.Minute),
-			Text:      "ancient pre-previous checkpoint should not appear",
+			Text:      "oldest pre-boundary detail",
 		},
 		{
 			UUID:      "child-1",
@@ -600,23 +521,4 @@ func reorientChildMessages(baseTime time.Time) []transcript.Message {
 		},
 	)
 	return messages
-}
-
-func findReorientItem(items []ReorientItem, kind ReorientItemKind) (ReorientItem, bool) {
-	for _, item := range items {
-		if item.Kind == kind {
-			return item, true
-		}
-	}
-	return ReorientItem{}, false
-}
-
-func joinedReorientItemBodies(items []ReorientItem, kind ReorientItemKind) string {
-	var bodies []string
-	for _, item := range items {
-		if item.Kind == kind {
-			bodies = append(bodies, item.Body)
-		}
-	}
-	return strings.Join(bodies, "\n")
 }

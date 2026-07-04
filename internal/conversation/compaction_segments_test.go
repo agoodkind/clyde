@@ -76,26 +76,6 @@ func TestSelectCompactionSegmentsRejectsOutOfRangeSegment(t *testing.T) {
 	}
 }
 
-func TestCheckpointTailStartBeginsAfterCheckpointMarker(t *testing.T) {
-	t.Parallel()
-
-	withSummary := CompactionCheckpoint{
-		BoundaryIndex: -1,
-		SummaryIndex:  4,
-	}
-	if got := checkpointTailStart(withSummary); got != 5 {
-		t.Fatalf("tail start with summary = %d, want 5", got)
-	}
-
-	withBoundaryOnly := CompactionCheckpoint{
-		BoundaryIndex: 7,
-		SummaryIndex:  -1,
-	}
-	if got := checkpointTailStart(withBoundaryOnly); got != 8 {
-		t.Fatalf("tail start with boundary = %d, want 8", got)
-	}
-}
-
 func assertSegment(
 	t *testing.T,
 	segment CompactionSegment,
