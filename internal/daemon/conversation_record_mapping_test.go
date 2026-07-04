@@ -175,7 +175,7 @@ func TestConversationRecordProtoRoundTripCarriesZedProvider(t *testing.T) {
 	}
 }
 
-func TestReorientPageProtoMappingCarriesPagingAndItems(t *testing.T) {
+func TestReorientPageProtoMappingCarriesPagingAndBody(t *testing.T) {
 	t.Parallel()
 
 	page := conversation.ReorientPage{
@@ -185,45 +185,32 @@ func TestReorientPageProtoMappingCarriesPagingAndItems(t *testing.T) {
 			Title:         "Current",
 			WorkspaceRoot: "/repo",
 		},
-		ParentConversation: &conversation.ReorientConversationRef{
-			ID:            "codex:parent",
-			Provider:      "codex",
-			Title:         "Parent",
-			WorkspaceRoot: "/repo",
-		},
-		CheckpointNumber: 2,
-		Items: []conversation.ReorientItem{{
-			Kind:           conversation.ReorientItemKindPreCompactWindow,
-			Title:          "Raw context before compaction",
-			Body:           "body",
-			ConversationID: "claude:current",
-			MessageIndex:   14,
-		}},
+		Body:       "recovered transcript slice",
 		NextCursor: "cursor-2",
 		Remaining:  3,
 		Offset:     1,
-		TotalItems: 5,
+		TotalBytes: 26,
+		TotalLines: 4,
+		Truncated:  true,
+		Restart:    false,
 		Warnings:   []string{"warning"},
 	}
 
 	wire := protoReorientPage(page)
-	if wire.GetText() == "" {
-		t.Fatal("legacy text field should stay populated for older clients")
-	}
 	if wire.GetCurrentConversation().GetId() != "claude:current" {
 		t.Fatalf("current id = %q, want claude:current", wire.GetCurrentConversation().GetId())
 	}
 	if wire.GetCurrentConversation().GetProvider() != protoProvider(conversation.ProviderClaude) {
 		t.Fatalf("current provider = %v, want %v", wire.GetCurrentConversation().GetProvider(), protoProvider(conversation.ProviderClaude))
 	}
-	if wire.GetParentConversation().GetId() != "codex:parent" {
-		t.Fatalf("parent id = %q, want codex:parent", wire.GetParentConversation().GetId())
+	if string(wire.GetPageBody()) != "recovered transcript slice" {
+		t.Fatalf("page body = %q, want recovered transcript slice", string(wire.GetPageBody()))
 	}
-	if wire.GetOffset() != 1 || wire.GetTotalItems() != 5 {
-		t.Fatalf("offset or total_items = %d/%d, want 1/5", wire.GetOffset(), wire.GetTotalItems())
+	if wire.GetOffset() != 1 || wire.GetTotalBytes() != 26 || wire.GetTotalLines() != 4 {
+		t.Fatalf("offset/total_bytes/total_lines = %d/%d/%d, want 1/26/4", wire.GetOffset(), wire.GetTotalBytes(), wire.GetTotalLines())
 	}
-	if len(wire.GetItems()) != 1 || wire.GetItems()[0].GetKind() != clydev1.ReorientItemKind_REORIENT_ITEM_KIND_PRE_COMPACT_WINDOW {
-		t.Fatalf("wire items = %#v", wire.GetItems())
+	if !wire.GetTruncated() || wire.GetRestart() {
+		t.Fatalf("truncated/restart = %v/%v, want true/false", wire.GetTruncated(), wire.GetRestart())
 	}
 
 	roundTrip := reorientPageFromProto(wire)

@@ -8,22 +8,27 @@ import (
 )
 
 // RenderReorientPageText formats one typed reorient page as the brief-input
-// text surface shown on the CLI and MCP text responses.
+// text surface shown on the CLI and MCP text responses. It renders any warnings,
+// then the recovered transcript slice, then a footer telling the caller how much
+// is left and how to page.
 func RenderReorientPageText(page ReorientPage) string {
 	var builder strings.Builder
-	for _, item := range page.Items {
-		fmt.Fprintf(&builder, "## %s\n\n%s\n\n", item.Title, item.Body)
+	for _, warning := range page.Warnings {
+		fmt.Fprintf(&builder, "> %s\n", warning)
 	}
-	if len(page.Items) == 0 {
-		fmt.Fprintf(&builder, "---\nno items at this cursor; %d of %d delivered\n", min(page.Offset, page.TotalItems), page.TotalItems)
-	} else {
-		last := page.Offset + len(page.Items)
-		fmt.Fprintf(&builder, "---\nitems %d-%d of %d; remaining %d\n", page.Offset+1, last, page.TotalItems, page.Remaining)
+	if len(page.Warnings) > 0 {
+		builder.WriteString("\n")
 	}
+	builder.WriteString(page.Body)
+	if page.Body != "" && !strings.HasSuffix(page.Body, "\n") {
+		builder.WriteString("\n")
+	}
+	lastByte := page.Offset + len(page.Body)
+	fmt.Fprintf(&builder, "---\nrecovered bytes %d-%d of %d (%d lines total)\n", page.Offset, lastByte, page.TotalBytes, page.TotalLines)
 	if page.Remaining > 0 {
-		fmt.Fprintf(&builder, "Not finished: call reorient again with cursor=%s. Read every page before reasoning.\n", page.NextCursor)
+		fmt.Fprintf(&builder, "Not finished: call reorient again with cursor=%s. %d bytes remaining. Read every page in full before reasoning.\n", page.NextCursor, page.Remaining)
 	} else {
-		builder.WriteString("All evidence delivered. You may now write the reorientation brief.\n")
+		builder.WriteString("End of recovered transcript.\n")
 	}
 	return builder.String()
 }
