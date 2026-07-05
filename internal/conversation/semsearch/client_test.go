@@ -9,8 +9,8 @@ import (
 )
 
 // fakeUpsertStreamClient captures the chunks sendUpsertStream sends. It embeds
-// the generated client-streaming interface so the unused stream methods satisfy
-// the type; only Send and CloseAndRecv are exercised.
+// the generated client-streaming interface so the stream methods satisfy the
+// type; only Send is exercised, since sendUpsertStream never calls CloseAndRecv.
 type fakeUpsertStreamClient struct {
 	grpc.ClientStreamingClient[lmsemanticsearchv1.UpsertConversationDocumentsChunk, lmsemanticsearchv1.UpsertConversationDocumentsResponse]
 	sent []*lmsemanticsearchv1.UpsertConversationDocumentsChunk
@@ -21,14 +21,10 @@ func (f *fakeUpsertStreamClient) Send(chunk *lmsemanticsearchv1.UpsertConversati
 	return nil
 }
 
-func (f *fakeUpsertStreamClient) CloseAndRecv() (*lmsemanticsearchv1.UpsertConversationDocumentsResponse, error) {
-	return &lmsemanticsearchv1.UpsertConversationDocumentsResponse{JobId: "job-test", DisplayText: ""}, nil
-}
-
-// TestSendUpsertStreamDeclaresRetainReconcileMode proves clyde declares RETAIN on
-// the upsert header, so the engine keeps a conversation absent from the manifest
-// rather than deleting it. This is the additive-only contract stated explicitly
-// on the wire rather than relying on the engine's default.
+// TestSendUpsertStreamDeclaresRetainReconcileMode asserts clyde sets RETAIN on the
+// upsert header rather than relying on the engine's default, so the additive-only
+// intent is stated explicitly on the wire. The engine's own tests cover what
+// RETAIN does; this only checks what clyde sends.
 func TestSendUpsertStreamDeclaresRetainReconcileMode(t *testing.T) {
 	t.Parallel()
 
