@@ -121,19 +121,9 @@ func TestHookInputDetectRuntime(t *testing.T) {
 	}
 }
 
-func clearRuntimeDetectionEnvironment(t *testing.T) {
-	t.Helper()
-
-	for _, key := range []string{
-		"CODEX_THREAD_ID",
-		"CODEX_CI",
-		"CURSOR_VERSION",
-		"CURSOR_WORKSPACE_NAME",
-		"CURSOR_MODE",
-		"CLAUDE_CODE_ENTRYPOINT",
-		"AI_AGENT",
-	} {
-		t.Setenv(key, "")
+func getenvFromMap(environment map[string]string) func(string) string {
+	return func(key string) string {
+		return environment[key]
 	}
 }
 
@@ -228,7 +218,7 @@ func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 }
 
 func TestRunnerAfterCompactConsumesClaudeSnapshot(t *testing.T) {
-	clearRuntimeDetectionEnvironment(t)
+	t.Parallel()
 
 	store := newMemorySnapshotStore()
 	key := ReorientSnapshotKey{
@@ -251,14 +241,23 @@ func TestRunnerAfterCompactConsumesClaudeSnapshot(t *testing.T) {
 			"session_id": "session-1"
 		}`),
 		Output:        &output,
+		Getenv:        getenvFromMap(nil),
 		SnapshotStore: store,
 	}
 	err := runner.Run(context.Background(), HookIDClaudeCodeReorientAfterCompact)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if output.String() != "snapshot body" {
-		t.Fatalf("output = %q, want snapshot body", output.String())
+
+	var decoded hookSpecificOutputEnvelope
+	if err := json.Unmarshal([]byte(output.String()), &decoded); err != nil {
+		t.Fatalf("Unmarshal output: %v\n%s", err, output.String())
+	}
+	if decoded.HookSpecificOutput.HookEventName != EventSessionStart {
+		t.Fatalf("hook event = %q", decoded.HookSpecificOutput.HookEventName)
+	}
+	if decoded.HookSpecificOutput.AdditionalContext != "snapshot body" {
+		t.Fatalf("additional context = %q", decoded.HookSpecificOutput.AdditionalContext)
 	}
 	if _, ok := store.snapshots[normalizeSnapshotKey(key)]; ok {
 		t.Fatal("snapshot was not consumed")
@@ -266,7 +265,7 @@ func TestRunnerAfterCompactConsumesClaudeSnapshot(t *testing.T) {
 }
 
 func TestRunnerAfterCompactWritesCodexAdditionalContext(t *testing.T) {
-	clearRuntimeDetectionEnvironment(t)
+	t.Parallel()
 
 	store := newMemorySnapshotStore()
 	key := ReorientSnapshotKey{
@@ -291,6 +290,7 @@ func TestRunnerAfterCompactWritesCodexAdditionalContext(t *testing.T) {
 			"permission_mode": "default"
 		}`),
 		Output:        &output,
+		Getenv:        getenvFromMap(nil),
 		SnapshotStore: store,
 	}
 	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
@@ -307,6 +307,45 @@ func TestRunnerAfterCompactWritesCodexAdditionalContext(t *testing.T) {
 	}
 	if decoded.HookSpecificOutput.AdditionalContext != "snapshot body" {
 		t.Fatalf("additional context = %q", decoded.HookSpecificOutput.AdditionalContext)
+	}
+}
+
+func TestRunnerAfterCompactCursorRuntimeNoOps(t *testing.T) {
+	t.Parallel()
+
+	store := newMemorySnapshotStore()
+	key := ReorientSnapshotKey{
+		TranscriptPath: "/tmp/session.jsonl",
+		SessionID:      "session-1",
+		CWD:            "/tmp/project",
+	}
+	if err := store.Save(context.Background(), key, "snapshot body"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var output strings.Builder
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "SessionStart",
+			"source": "compact",
+			"transcript_path": "/tmp/session.jsonl",
+			"cwd": "/tmp/project",
+			"session_id": "session-1"
+		}`),
+		Output:        &output,
+		Getenv:        getenvFromMap(map[string]string{"CURSOR_VERSION": "1.2.3"}),
+		SnapshotStore: store,
+	}
+	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty", output.String())
+	}
+	if got := storedSnapshot(t, store, key); got != "snapshot body" {
+		t.Fatalf("snapshot = %q, want snapshot body", got)
 	}
 }
 
@@ -358,6 +397,7 @@ func TestRunnerCursorPreCompactStoresAndStopReturnsFollowup(t *testing.T) {
 			"workspace_roots": ["/tmp/project"]
 		}`),
 		Output:        &output,
+		Getenv:        getenvFromMap(map[string]string{"CURSOR_VERSION": "1.2.3"}),
 		SnapshotStore: store,
 	}
 	if err := stop.Run(context.Background(), HookIDReorientStopFollowup); err != nil {
@@ -421,6 +461,45 @@ func TestRunnerCursorStopWithNoSnapshotReturnsNoOutput(t *testing.T) {
 	}
 }
 
+func TestRunnerStopFollowupNonCursorRuntimeNoOps(t *testing.T) {
+	t.Parallel()
+
+	store := newMemorySnapshotStore()
+	key := ReorientSnapshotKey{
+		TranscriptPath: "/tmp/cursor.jsonl",
+		SessionID:      "session-1",
+		CWD:            "/tmp/project",
+	}
+	if err := store.Save(context.Background(), key, "cursor snapshot body"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var output strings.Builder
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "stop",
+			"conversation_id": "cursor-conv",
+			"session_id": "session-1",
+			"transcript_path": "/tmp/cursor.jsonl",
+			"workspace_roots": ["/tmp/project"]
+		}`),
+		Output:        &output,
+		Getenv:        getenvFromMap(map[string]string{"CODEX_THREAD_ID": "thread-1"}),
+		SnapshotStore: store,
+	}
+	err := runner.Run(context.Background(), HookIDReorientStopFollowup)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty", output.String())
+	}
+	if got := storedSnapshot(t, store, key); got != "cursor snapshot body" {
+		t.Fatalf("snapshot = %q, want cursor snapshot body", got)
+	}
+}
+
 func TestRunnerAfterCompactMissingSnapshotErrors(t *testing.T) {
 	t.Parallel()
 
@@ -433,6 +512,7 @@ func TestRunnerAfterCompactMissingSnapshotErrors(t *testing.T) {
 			"cwd": "/tmp/project"
 		}`),
 		Output:        &strings.Builder{},
+		Getenv:        getenvFromMap(nil),
 		SnapshotStore: newMemorySnapshotStore(),
 	}
 	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
