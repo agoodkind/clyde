@@ -35,9 +35,10 @@ type codexHookIdentityHandler struct {
 func marshalCodexHookInstalls(existing []byte, installs []RegisteredInstall, signatures [][]string, clydeBin string, settingsPath string) ([]byte, error) {
 	base := removeCodexManagedBlock(string(existing))
 	base = removeCodexCommandHookGroups(base, signatures)
+	existingHookGroups := countExistingCodexHookGroups(base)
 	base = ensureCodexHooksFeature(base)
 	base = strings.TrimRight(base, "\n")
-	block, err := renderCodexManagedBlock(installs, clydeBin, settingsPath)
+	block, err := renderCodexManagedBlock(installs, clydeBin, settingsPath, existingHookGroups)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +206,48 @@ func ensureCodexHooksFeature(input string) string {
 	return strings.Join(out, "\n")
 }
 
+func countExistingCodexHookGroups(base string) map[string]int {
+	counts := map[string]int{}
+	if strings.TrimSpace(base) == "" {
+		return counts
+	}
+	for line := range strings.SplitSeq(base, "\n") {
+		eventName, ok := codexHookGroupEventName(line)
+		if !ok {
+			continue
+		}
+		normalizedEventName := normalizeCodexEventName(eventName)
+		if normalizedEventName == "state" {
+			continue
+		}
+		counts[normalizedEventName]++
+	}
+	return counts
+}
+
+func codexHookGroupEventName(line string) (string, bool) {
+	trimmed := tomlHeaderText(line)
+	if !strings.HasPrefix(trimmed, "[[hooks.") || !strings.HasSuffix(trimmed, "]]") {
+		return "", false
+	}
+	trimmed = strings.TrimSuffix(strings.TrimPrefix(trimmed, "[[hooks."), "]]")
+	if strings.Contains(trimmed, ".") {
+		return "", false
+	}
+	decoded, err := strconv.Unquote(trimmed)
+	if err == nil {
+		return decoded, true
+	}
+	if strings.HasPrefix(trimmed, "'") && strings.HasSuffix(trimmed, "'") && len(trimmed) >= 2 {
+		return strings.TrimSuffix(strings.TrimPrefix(trimmed, "'"), "'"), true
+	}
+	return trimmed, true
+}
+
+func normalizeCodexEventName(eventName string) string {
+	return strings.ReplaceAll(strings.ToLower(eventName), "_", "")
+}
+
 func isTomlTableHeader(line string) bool {
 	trimmed := tomlHeaderText(line)
 	return strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")
@@ -214,18 +257,22 @@ func tomlHeaderText(line string) string {
 	return strings.TrimSpace(trimTomlInlineComment(line))
 }
 
-func renderCodexManagedBlock(installs []RegisteredInstall, clydeBin string, settingsPath string) (string, error) {
+func renderCodexManagedBlock(installs []RegisteredInstall, clydeBin string, settingsPath string, existingHookGroups map[string]int) (string, error) {
 	var builder strings.Builder
 	builder.WriteString(codexManagedBegin)
 	builder.WriteString("\n")
 	builder.WriteString("# This block is managed by clyde install hooks.\n")
-	builder.WriteString("[hooks]\n\n")
+	builder.WriteString("\n")
 
 	eventCounters := map[string]int{}
 	for _, install := range installs {
 		eventName := codexEventName(install.Spec.Event)
-		groupIndex := eventCounters[eventName]
-		eventCounters[eventName] = groupIndex + 1
+		counterKey := normalizeCodexEventName(eventName)
+		groupIndex, ok := eventCounters[counterKey]
+		if !ok {
+			groupIndex = existingHookGroups[counterKey]
+		}
+		eventCounters[counterKey] = groupIndex + 1
 		command := shellCommand(clydeBin, install.Spec.Args)
 		hash, err := marshalCodexTrustedHash(eventName, install.Spec, command)
 		if err != nil {
