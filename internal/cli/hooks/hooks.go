@@ -43,6 +43,7 @@ func newRunCmd(f *cli.Factory, reorient hookspec.ReorientFunc) *cobra.Command {
 				Registry:      hookspec.NewRegistry(),
 				Input:         f.IOStreams.In,
 				Output:        f.IOStreams.Out,
+				Getenv:        nil,
 				Reorient:      reorient,
 				SnapshotStore: nil,
 			}

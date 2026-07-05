@@ -34,6 +34,7 @@ type SnapshotStore interface {
 type RunEnvironment struct {
 	Input         io.Reader
 	Output        io.Writer
+	Getenv        func(string) string
 	Reorient      ReorientFunc
 	SnapshotStore SnapshotStore
 }
@@ -43,6 +44,7 @@ type Runner struct {
 	Registry      Registry
 	Input         io.Reader
 	Output        io.Writer
+	Getenv        func(string) string
 	Reorient      ReorientFunc
 	SnapshotStore SnapshotStore
 }
@@ -163,9 +165,14 @@ func (runner Runner) Run(ctx context.Context, id HookID) error {
 	if store == nil {
 		store = NewFileSnapshotStore("")
 	}
+	getenv := runner.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
 	return hook.Run(ctx, RunEnvironment{
 		Input:         input,
 		Output:        output,
+		Getenv:        getenv,
 		Reorient:      runner.Reorient,
 		SnapshotStore: store,
 	})
@@ -221,6 +228,10 @@ func runReorientAfterCompact(ctx context.Context, env RunEnvironment) error {
 	if !isSessionStartEvent(eventName) || !input.compactSource() {
 		return nil
 	}
+	client := input.detectRuntime(env.Getenv)
+	if client == ClientCursor {
+		return nil
+	}
 	if env.SnapshotStore == nil {
 		err := fmt.Errorf("reorient-after-compact requires a snapshot store")
 		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientAfterCompact, "err", err)
@@ -247,7 +258,6 @@ func runReorientAfterCompact(ctx context.Context, env RunEnvironment) error {
 		}
 		body = fallbackBody
 	}
-	client := input.detectRuntime(os.Getenv)
 	if err := writeAdditionalContext(env.Output, client, eventName, body); err != nil {
 		wrapped := fmt.Errorf("write reorient snapshot output: %w", err)
 		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientAfterCompact, "err", wrapped)
@@ -262,6 +272,9 @@ func runReorientStopFollowup(ctx context.Context, env RunEnvironment) error {
 		return err
 	}
 	if input.eventName() != EventCursorStop {
+		return nil
+	}
+	if input.detectRuntime(env.Getenv) != ClientCursor {
 		return nil
 	}
 	if env.SnapshotStore == nil {

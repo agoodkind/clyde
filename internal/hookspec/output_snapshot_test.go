@@ -2,6 +2,7 @@ package hookspec
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -13,8 +14,31 @@ func TestWriteAdditionalContextForCodex(t *testing.T) {
 	if err := writeAdditionalContext(&builder, ClientCodex, EventSessionStart, "context body"); err != nil {
 		t.Fatalf("writeAdditionalContext: %v", err)
 	}
-	if !strings.Contains(builder.String(), `"additionalContext":"context body"`) {
-		t.Fatalf("output = %q", builder.String())
+	assertAdditionalContextOutput(t, builder.String())
+}
+
+func TestWriteAdditionalContextForClaude(t *testing.T) {
+	t.Parallel()
+
+	var builder strings.Builder
+	if err := writeAdditionalContext(&builder, ClientClaudeCode, EventSessionStart, "context body"); err != nil {
+		t.Fatalf("writeAdditionalContext: %v", err)
+	}
+	assertAdditionalContextOutput(t, builder.String())
+}
+
+func assertAdditionalContextOutput(t *testing.T, output string) {
+	t.Helper()
+
+	var decoded hookSpecificOutputEnvelope
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
+		t.Fatalf("Unmarshal output: %v\n%s", err, output)
+	}
+	if decoded.HookSpecificOutput.HookEventName != EventSessionStart {
+		t.Fatalf("hook event = %q", decoded.HookSpecificOutput.HookEventName)
+	}
+	if decoded.HookSpecificOutput.AdditionalContext != "context body" {
+		t.Fatalf("additional context = %q", decoded.HookSpecificOutput.AdditionalContext)
 	}
 }
 

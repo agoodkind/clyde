@@ -22,7 +22,7 @@ type cursorFollowupOutput struct {
 
 func writeAdditionalContext(writer io.Writer, client Client, eventName string, body string) error {
 	switch client {
-	case ClientCodex:
+	case ClientCodex, ClientClaudeCode:
 		envelope := hookSpecificOutputEnvelope{
 			HookSpecificOutput: hookSpecificAdditionalContext{
 				HookEventName:     eventName,
@@ -31,20 +31,13 @@ func writeAdditionalContext(writer io.Writer, client Client, eventName string, b
 		}
 		encoded, err := json.Marshal(envelope)
 		if err != nil {
-			wrapped := fmt.Errorf("marshal Codex additional context output: %w", err)
+			wrapped := fmt.Errorf("marshal additional context output: %w", err)
 			slog.Warn("hook output marshal failed", "client", client, "event", eventName, "err", wrapped)
 			return wrapped
 		}
 		encoded = append(encoded, '\n')
 		if _, err := writer.Write(encoded); err != nil {
-			wrapped := fmt.Errorf("write Codex additional context output: %w", err)
-			slog.Warn("hook output write failed", "client", client, "event", eventName, "err", wrapped)
-			return wrapped
-		}
-		return nil
-	case ClientClaudeCode:
-		if _, err := io.WriteString(writer, body); err != nil {
-			wrapped := fmt.Errorf("write Claude additional context output: %w", err)
+			wrapped := fmt.Errorf("write additional context output: %w", err)
 			slog.Warn("hook output write failed", "client", client, "event", eventName, "err", wrapped)
 			return wrapped
 		}
