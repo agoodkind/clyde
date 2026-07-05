@@ -3,6 +3,8 @@ package hookspec
 import (
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestMarshalCodexHookInstalls(t *testing.T) {
@@ -45,6 +47,76 @@ func TestMarshalCodexHookInstalls(t *testing.T) {
 		}
 	}
 	assertCodexTrustedHash(t, text)
+}
+
+func TestMarshalCodexHookInstallsAvoidsDuplicateStateKeysWithExistingHooks(t *testing.T) {
+	t.Parallel()
+
+	settingsPath := "/Users/me/.codex/config.toml"
+	base := strings.Join([]string{
+		"[[hooks.pre_compact]]",
+		"",
+		"[[hooks.pre_compact.hooks]]",
+		"type = \"command\"",
+		"command = \"/opt/cmux hooks feed --event PreCompact\"",
+		"",
+		"[hooks.state.\"/Users/me/.codex/config.toml:pre_compact:0:0\"]",
+		"trusted_hash = \"sha256:deadbeef\"",
+		"",
+	}, "\n")
+
+	body, err := marshalCodexHookInstalls(
+		[]byte(base),
+		NewRegistry().InstallsForClient(ClientCodex),
+		NewRegistry().ClydeCommandSignatures(),
+		"/usr/local/bin/clyde",
+		settingsPath,
+	)
+	if err != nil {
+		t.Fatalf("marshalCodexHookInstalls: %v", err)
+	}
+
+	text := string(body)
+	var document struct {
+		Features struct {
+			Hooks bool `toml:"hooks"`
+		} `toml:"features"`
+	}
+	if err := toml.Unmarshal(body, &document); err != nil {
+		t.Fatalf("output is invalid TOML: %v\n%s", err, text)
+	}
+
+	existingStateHeader := "[hooks.state.\"/Users/me/.codex/config.toml:pre_compact:0:0\"]"
+	if count := strings.Count(text, existingStateHeader); count != 1 {
+		t.Fatalf("state header %q count = %d, want 1:\n%s", existingStateHeader, count, text)
+	}
+	wantStateHeader := "[hooks.state.\"/Users/me/.codex/config.toml:pre_compact:1:0\"]"
+	if !strings.Contains(text, wantStateHeader) {
+		t.Fatalf("body missing %q:\n%s", wantStateHeader, text)
+	}
+}
+
+func TestCountExistingCodexHookGroupsScansUnparseableConfig(t *testing.T) {
+	t.Parallel()
+
+	base := strings.Join([]string{
+		"[[hooks.pre_compact]]",
+		"matcher = \"compact\"",
+		"",
+		"[unclosed",
+		"value = true",
+		"",
+		"[[hooks.session_start]]",
+		"matcher = \"startup\"",
+	}, "\n")
+
+	got := countExistingCodexHookGroups(base)
+	if got["precompact"] != 1 {
+		t.Fatalf("precompact count = %d, want 1", got["precompact"])
+	}
+	if got["sessionstart"] != 1 {
+		t.Fatalf("sessionstart count = %d, want 1", got["sessionstart"])
+	}
 }
 
 func TestRemoveCodexCommandHookGroupsMatchesInlineComments(t *testing.T) {
