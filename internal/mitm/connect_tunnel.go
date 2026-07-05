@@ -32,10 +32,10 @@ import (
 // default mux returns 404 and the client cannot establish the
 // upstream connection.
 //
-// Provider-owned CONNECT hosts terminate TLS inside Clyde with a
-// generated leaf certificate, then route the decoded HTTP request
-// through the provider capture path. Unclaimed CONNECT hosts keep
-// opaque tunnel mode and forward bytes without payload capture.
+// TLS CONNECT hosts terminate inside Clyde with a generated leaf
+// certificate, then route the decoded HTTP request through the
+// provider capture path. Non-TLS CONNECT hosts keep opaque tunnel
+// mode and forward bytes without payload capture.
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	var spanErr error
 	defer trace.Op(r.Context(), "mitm.connect.tunnel")(&spanErr)
@@ -57,29 +57,20 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		p.handleProviderTLSConnect(r.Context(), w, cleanTarget, claim.Host, provider, started)
 		return
 	}
+	p.handleUnclaimedConnect(r.Context(), w, cleanTarget, connectHost, started)
+}
 
+func (p *Proxy) handleUnclaimedConnect(ctx context.Context, w http.ResponseWriter, cleanTarget string, connectHost string, started time.Time) {
+	ctx = context.WithoutCancel(ctx)
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
 		return
 	}
 
-	dialCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	upstream, err := new(net.Dialer).DialContext(dialCtx, "tcp", cleanTarget)
-	if err != nil {
-		p.log.Warn("mitm.connect.upstream_dial_failed", "concern", "providers.mitm.errors", "target", cleanTarget,
-			"err", err,
-		)
-		http.Error(w, "upstream dial failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = upstream.Close() }()
-
 	clientConn, bufrw, err := hijacker.Hijack()
 	if err != nil {
-		p.log.Warn("mitm.connect.hijack_failed", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
-		_ = upstream.Close()
+		p.log.WarnContext(ctx, "mitm.connect.hijack_failed", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
 		return
 	}
 	defer func() { _ = clientConn.Close() }()
@@ -87,32 +78,54 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Tell the client the tunnel is established. The client will
 	// follow with TLS handshake + websocket frames.
 	if _, err := bufrw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		p.log.Warn("mitm.connect.write_established_failed", "concern", "providers.mitm.errors", "err", err)
+		p.log.WarnContext(ctx, "mitm.connect.write_established_failed", "concern", "providers.mitm.errors", "err", err)
 		return
 	}
 	if err := bufrw.Flush(); err != nil {
-		p.log.Warn("mitm.connect.flush_failed", "concern", "providers.mitm.errors", "err", err)
+		p.log.WarnContext(ctx, "mitm.connect.flush_failed", "concern", "providers.mitm.errors", "err", err)
 		return
 	}
 
+	start, ok := p.classifyUnclaimedConnectStart(ctx, clientConn, cleanTarget)
+	if !ok {
+		return
+	}
+	if start.interceptTLS {
+		p.interceptHijackedConnectTLS(ctx, clientConn, start.clientPrefix, cleanTarget, connectHost, unclaimedProvider{}, started)
+		return
+	}
+	p.spliceHijackedConnect(ctx, clientConn, start.upstream, start.clientPrefix, start.upstreamPrefix, cleanTarget, connectHost, started)
+}
+
+func (p *Proxy) spliceHijackedConnect(ctx context.Context, clientConn net.Conn, upstream net.Conn, clientPrefix []byte, upstreamPrefix []byte, cleanTarget string, connectHost string, started time.Time) {
+	defer func() { _ = upstream.Close() }()
+
 	closer := newTunnelCloser(&connCloser{conn: clientConn}, &connCloser{conn: upstream})
-	sess, err := p.Tunnels.Register(r.Context(), "mitm.connect", TunnelMeta{
+	sess, err := p.Tunnels.Register(ctx, "mitm.connect", TunnelMeta{
 		ConnectHost:   connectHost,
 		UpstreamAddr:  cleanTarget,
 		CaptureFile:   "",
 		KeepaliveSeen: false,
 	}, closer)
 	if err != nil {
-		p.log.WarnContext(r.Context(), "mitm.connect.register_rejected", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
+		p.log.WarnContext(ctx, "mitm.connect.register_rejected", "concern", "providers.mitm.errors", "target", cleanTarget, "err", err)
 		return
 	}
-	defer p.Tunnels.Release(r.Context(), sess, "mitm.connect.tunnel_closed")
+	defer p.Tunnels.Release(ctx, sess, "mitm.connect.tunnel_closed")
 
-	p.log.Info("mitm.connect.tunnel_open", "concern", "providers.mitm.wire", "target", cleanTarget,
+	p.log.InfoContext(ctx, "mitm.connect.tunnel_open", "concern", "providers.mitm.wire", "target", cleanTarget,
 		"host", connectHost,
 	)
-	bytesUp, bytesDown := spliceConnections(clientConn, upstream, sess)
-	p.log.Info("mitm.connect.tunnel_closed", "concern", "providers.mitm.wire", "target", cleanTarget,
+	client := clientConn
+	if len(clientPrefix) > 0 {
+		client = &prefixConn{Conn: clientConn, prefix: clientPrefix}
+	}
+	upstreamSide := upstream
+	if len(upstreamPrefix) > 0 {
+		upstreamSide = &prefixConn{Conn: upstream, prefix: upstreamPrefix}
+	}
+	bytesUp, bytesDown := spliceConnections(client, upstreamSide, sess)
+	p.log.InfoContext(ctx, "mitm.connect.tunnel_closed", "concern", "providers.mitm.wire", "target", cleanTarget,
 		"host", connectHost,
 		"duration_ms", clock.Since(started).Milliseconds(),
 		"bytes_up", bytesUp,
@@ -245,6 +258,15 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		return
 	}
 
+	p.interceptHijackedConnectTLS(ctx, clientConn, nil, target, host, provider, started)
+}
+
+// interceptHijackedConnectTLS completes the server-side TLS handshake for a
+// hijacked CONNECT stream and passes the terminated connection into the shared
+// intercepted HTTP path.
+func (p *Proxy) interceptHijackedConnectTLS(ctx context.Context, clientConn net.Conn, prefix []byte, target string, host string, provider Provider, started time.Time) {
+	ctx = context.WithoutCancel(ctx)
+	providerID := provider.ID().String()
 	ca, err := p.mitmCA()
 	if err != nil {
 		p.log.WarnContext(ctx, "mitm.provider.connect.ca_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "err", err)
@@ -255,7 +277,11 @@ func (p *Proxy) handleProviderTLSConnect(ctx context.Context, w http.ResponseWri
 		p.log.WarnContext(ctx, "mitm.provider.connect.leaf_failed", "concern", "providers.mitm.wire", "provider", providerID, "target", target, "host", host, "err", err)
 		return
 	}
-	tlsConn := tls.Server(clientConn, &tls.Config{
+	tlsInput := clientConn
+	if len(prefix) > 0 {
+		tlsInput = &prefixConn{Conn: clientConn, prefix: append([]byte(nil), prefix...)}
+	}
+	tlsConn := tls.Server(tlsInput, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
 		MinVersion:   tls.VersionTLS12,
 		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {

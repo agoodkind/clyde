@@ -5,6 +5,11 @@ This table mirrors the `[mitm.cli.*]` and `[mitm.app.*]` blocks in
 The live ports come from the operator config, so this table can drift; treat
 `clyde.example.toml` as authoritative if they disagree.
 
+Each listener is one loopback port for one application. Every exchange it
+captures carries that listener id in the capture `client` column. The listener
+captures every host reached on its port, not only provider-claimed hosts; see
+[capture.md](capture.md) for how capture is organized and searched.
+
 | Listener | Host | Port | Traffic |
 | --- | --- | ---: | --- |
 | `cli.claude-code` | `localhost` | 48723 | Claude Code model API traffic |

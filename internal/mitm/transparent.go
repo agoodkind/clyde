@@ -294,11 +294,14 @@ func (p *Proxy) handleTransparentTLS(parentCtx context.Context, client net.Conn)
 		p.log.WarnContext(ctx, "mitm.transparent.missing_sni", "concern", "providers.mitm.wire")
 		return
 	}
-	provider, claim, ok := providerForConnect(net.JoinHostPort(host, "443"))
+	provider, _, ok := providerForConnect(net.JoinHostPort(host, "443"))
 	if !ok {
-		p.log.DebugContext(ctx, "mitm.transparent.unclaimed_host", "concern", "providers.mitm.wire", "host", host)
-		return
+		// No registered provider claims this SNI host. The listener's port
+		// already scopes capture to its application, so intercept and capture
+		// every host as unclaimed metadata instead of dropping it. The leaf was
+		// already minted for this SNI during the handshake above.
+		provider = unclaimedProvider{}
+		p.log.DebugContext(ctx, "mitm.transparent.unclaimed_host_captured", "concern", "providers.mitm.wire", "host", host)
 	}
-	target := net.JoinHostPort(claim.Host, "443")
-	p.serveInterceptedTLS(ctx, tlsConn, client, target, claim.Host, provider, started)
+	p.serveInterceptedTLS(ctx, tlsConn, client, net.JoinHostPort(host, "443"), host, provider, started)
 }
