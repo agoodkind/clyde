@@ -229,11 +229,12 @@ const upsertStreamMaxBytesPerChunk = 16 << 20
 
 // UpsertConversationDocuments starts an async engine job for the changed
 // conversations' documents. manifest is the full current conversation set with
-// fingerprints, so the engine drops conversations no longer present and skips
-// unchanged ones; documents cover only the conversations the engine asked for.
-// It opens the client stream, sends the header, then the documents in bounded
-// chunks, then the manifest as one chunk, so neither the document set nor the
-// manifest is bounded by the gRPC max message size.
+// fingerprints, so the engine skips unchanged conversations; documents cover
+// only the conversations the engine asked for. The header declares RETAIN, so a
+// conversation absent from the manifest is kept rather than deleted. It opens the
+// client stream, sends the header, then the documents in bounded chunks so the
+// document set is not capped by the gRPC max message size, then the manifest as
+// one chunk, which must fit within a single message.
 func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
 	if c == nil || c.daemon == nil {
 		return "", fmt.Errorf("upsert semantic conversation documents: client is nil")
@@ -287,8 +288,9 @@ func upsertClientInfo() *lmsemanticsearchv1.ClientInfo {
 }
 
 // sendUpsertStream sends the header, then the documents in bounded chunks, then
-// the manifest as one chunk. The manifest is authoritative for deletion, so it
-// is sent whole rather than split.
+// the manifest as one chunk. The header's reconcile mode governs a conversation
+// the manifest omits (clyde sends RETAIN, so it is kept); the manifest is sent
+// whole rather than split.
 func sendUpsertStream(
 	ctx context.Context,
 	stream grpc.ClientStreamingClient[lmsemanticsearchv1.UpsertConversationDocumentsChunk, lmsemanticsearchv1.UpsertConversationDocumentsResponse],
@@ -301,6 +303,10 @@ func sendUpsertStream(
 			Header: &lmsemanticsearchv1.UpsertConversationDocumentsHeader{
 				CollectionId: collectionID,
 				Client:       upsertClientInfo(),
+				// clyde declares RETAIN explicitly: a conversation absent from the
+				// manifest is kept, never deleted. Only an explicit delete removes one,
+				// so a transient short manifest cannot drop conversations from the index.
+				ReconcileMode: lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
 			},
 		},
 	}
