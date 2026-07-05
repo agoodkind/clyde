@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 
 	"goodkind.io/clyde/internal/conversation"
@@ -109,6 +110,25 @@ func (input hookInput) conversationSelector() string {
 		return strings.TrimSpace(input.ConversationID)
 	}
 	return strings.TrimSpace(input.ConversationKey)
+}
+
+func (input hookInput) detectRuntime(getenv func(string) string) Client {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	if getenv("CODEX_THREAD_ID") != "" || getenv("CODEX_CI") != "" {
+		return ClientCodex
+	}
+	if getenv("CURSOR_VERSION") != "" || getenv("CURSOR_WORKSPACE_NAME") != "" || getenv("CURSOR_MODE") != "" {
+		return ClientCursor
+	}
+	if getenv("CLAUDE_CODE_ENTRYPOINT") != "" {
+		return ClientClaudeCode
+	}
+	if value := getenv("AI_AGENT"); strings.HasPrefix(value, "claude-code/") {
+		return ClientClaudeCode
+	}
+	return input.detectedClient()
 }
 
 func (input hookInput) detectedClient() Client {
@@ -227,7 +247,7 @@ func runReorientAfterCompact(ctx context.Context, env RunEnvironment) error {
 		}
 		body = fallbackBody
 	}
-	client := input.detectedClient()
+	client := input.detectRuntime(os.Getenv)
 	if err := writeAdditionalContext(env.Output, client, eventName, body); err != nil {
 		wrapped := fmt.Errorf("write reorient snapshot output: %w", err)
 		slog.WarnContext(ctx, "reorient hook failed", "hook_id", HookIDReorientAfterCompact, "err", wrapped)

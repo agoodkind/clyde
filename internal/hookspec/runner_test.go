@@ -40,6 +40,103 @@ func (store *memorySnapshotStore) Consume(_ context.Context, key ReorientSnapsho
 	return body, ok, nil
 }
 
+func TestHookInputDetectRuntime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       hookInput
+		environment map[string]string
+		want        Client
+	}{
+		{
+			name: "codex thread env wins over cursor payload",
+			input: hookInput{
+				ComposerID: "composer-1",
+			},
+			environment: map[string]string{
+				"CODEX_THREAD_ID": "thread-1",
+			},
+			want: ClientCodex,
+		},
+		{
+			name: "cursor version env wins over payload fallback",
+			input: hookInput{
+				PermissionMode: "default",
+			},
+			environment: map[string]string{
+				"CURSOR_VERSION": "1.2.3",
+			},
+			want: ClientCursor,
+		},
+		{
+			name: "claude entrypoint env gives claude",
+			environment: map[string]string{
+				"CLAUDE_CODE_ENTRYPOINT": "cli",
+			},
+			want: ClientClaudeCode,
+		},
+		{
+			name: "claude ai agent prefix gives claude",
+			environment: map[string]string{
+				"AI_AGENT": "claude-code/2.1/agent",
+			},
+			want: ClientClaudeCode,
+		},
+		{
+			name: "empty env falls back to cursor payload",
+			input: hookInput{
+				ComposerID: "composer-1",
+			},
+			want: ClientCursor,
+		},
+		{
+			name: "empty env falls back to codex payload",
+			input: hookInput{
+				PermissionMode: "default",
+			},
+			want: ClientCodex,
+		},
+		{
+			name: "empty env falls back to claude payload",
+			input: hookInput{
+				HookEventName: EventSessionStart,
+			},
+			want: ClientClaudeCode,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			getenv := func(key string) string {
+				return testCase.environment[key]
+			}
+			got := testCase.input.detectRuntime(getenv)
+			if got != testCase.want {
+				t.Fatalf("detectRuntime() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+func clearRuntimeDetectionEnvironment(t *testing.T) {
+	t.Helper()
+
+	for _, key := range []string{
+		"CODEX_THREAD_ID",
+		"CODEX_CI",
+		"CURSOR_VERSION",
+		"CURSOR_WORKSPACE_NAME",
+		"CURSOR_MODE",
+		"CLAUDE_CODE_ENTRYPOINT",
+		"AI_AGENT",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -131,7 +228,7 @@ func TestRunnerPreCompactStoresSyntheticBoundarySnapshot(t *testing.T) {
 }
 
 func TestRunnerAfterCompactConsumesClaudeSnapshot(t *testing.T) {
-	t.Parallel()
+	clearRuntimeDetectionEnvironment(t)
 
 	store := newMemorySnapshotStore()
 	key := ReorientSnapshotKey{
@@ -169,7 +266,7 @@ func TestRunnerAfterCompactConsumesClaudeSnapshot(t *testing.T) {
 }
 
 func TestRunnerAfterCompactWritesCodexAdditionalContext(t *testing.T) {
-	t.Parallel()
+	clearRuntimeDetectionEnvironment(t)
 
 	store := newMemorySnapshotStore()
 	key := ReorientSnapshotKey{
