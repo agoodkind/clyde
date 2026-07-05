@@ -183,8 +183,11 @@ func readConnectByte(conn net.Conn, timeout time.Duration) connectByteRead {
 	}
 	var firstByte [1]byte
 	n, readErr := conn.Read(firstByte[:])
-	clearErr := conn.SetReadDeadline(time.Time{})
-	if n == 0 && clearErr != nil {
+	// Clear the deadline regardless of the read result. If clearing fails the
+	// connection is left with an active deadline that would spuriously time out
+	// later reads (the TLS handshake or the splice), so treat that as a read
+	// failure even when a byte arrived rather than hand back a broken conn.
+	if clearErr := conn.SetReadDeadline(time.Time{}); clearErr != nil {
 		return connectByteRead{value: 0, ok: false, err: clearErr}
 	}
 	if n == 0 {
@@ -249,8 +252,14 @@ func stopPendingConnectRead(conn net.Conn, readCh <-chan connectByteRead) connec
 	if readCh == nil {
 		return connectByteRead{value: 0, ok: false, err: nil}
 	}
+	// Expire the deadline to interrupt the pending read, collect its result,
+	// then clear the deadline so the connection is usable for the splice or the
+	// terminated TLS handshake that follows. Leaving the past deadline set would
+	// make every later read on this connection time out immediately.
 	_ = conn.SetReadDeadline(clock.Now())
-	return <-readCh
+	read := <-readCh
+	_ = conn.SetReadDeadline(time.Time{})
+	return read
 }
 
 func emptyUnclaimedConnectStart() unclaimedConnectStart {

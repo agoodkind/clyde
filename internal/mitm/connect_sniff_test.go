@@ -90,6 +90,44 @@ func TestHandleConnectSplicesUnclaimedServerFirstWithoutCapture(t *testing.T) {
 	assertNoCaptureRows(t, dbPath)
 }
 
+// TestStopPendingConnectReadClearsDeadline guards the sniffer's deadline
+// hygiene: stopPendingConnectRead expires the read deadline to interrupt a
+// pending byte read, but it must clear the deadline afterward so the connection
+// it hands to the splice or the terminated TLS handshake is not left with a
+// stale past deadline that instantly times out every later read.
+func TestStopPendingConnectReadClearsDeadline(t *testing.T) {
+	local, remote := net.Pipe()
+	defer func() { _ = local.Close() }()
+	defer func() { _ = remote.Close() }()
+
+	// Seed the interrupted state: a past deadline, as the pending read leaves it.
+	if err := local.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("seed deadline: %v", err)
+	}
+	readCh := make(chan connectByteRead, 1)
+	readCh <- connectByteRead{value: transparentTLSHandshakeRecord, ok: true}
+
+	got := stopPendingConnectRead(local, readCh)
+	if !got.ok || got.value != transparentTLSHandshakeRecord {
+		t.Fatalf("stopPendingConnectRead = %+v, want the buffered byte", got)
+	}
+
+	// With the deadline cleared, a read with no data blocks. Without the clear it
+	// returns an i/o timeout immediately.
+	done := make(chan error, 1)
+	go func() {
+		var b [1]byte
+		_, err := local.Read(b[:])
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("read returned early (%v); stopPendingConnectRead left a stale deadline", err)
+	case <-time.After(150 * time.Millisecond):
+		// Blocked as expected: the deadline was cleared.
+	}
+}
+
 func assertNoCaptureRows(t *testing.T, dbPath string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?_busy_timeout=5000")
