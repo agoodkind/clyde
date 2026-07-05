@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"goodkind.io/clyde/internal/conversation"
 )
@@ -55,6 +57,7 @@ type hookInput struct {
 	Source          string   `json:"source"`
 	Trigger         string   `json:"trigger"`
 	ConversationID  string   `json:"conversation_id"`
+	CursorVersion   string   `json:"cursor_version"`
 	SessionID       string   `json:"session_id"`
 	TranscriptPath  string   `json:"transcript_path"`
 	CWD             string   `json:"cwd"`
@@ -64,7 +67,9 @@ type hookInput struct {
 	PermissionMode  string   `json:"permission_mode"`
 	PromptID        string   `json:"prompt_id"`
 	ComposerID      string   `json:"composer_id"`
+	GenerationID    string   `json:"generation_id"`
 	GenerationUUID  string   `json:"generation_uuid"`
+	UserEmail       string   `json:"user_email"`
 	ConversationKey string   `json:"conversationId"`
 }
 
@@ -135,13 +140,43 @@ func (input hookInput) detectRuntime(getenv func(string) string) Client {
 
 func (input hookInput) detectedClient() Client {
 	eventName := input.eventName()
-	if eventName == EventCursorPre || eventName == EventCursorStop || input.PromptID != "" || input.ComposerID != "" || input.GenerationUUID != "" {
+	if isCursorEventName(eventName) || input.hasCursorPayload() {
 		return ClientCursor
 	}
 	if input.Model != "" || input.PermissionMode != "" {
 		return ClientCodex
 	}
 	return ClientClaudeCode
+}
+
+func (input hookInput) hasCursorPayload() bool {
+	return input.CursorVersion != "" ||
+		input.ConversationID != "" ||
+		input.GenerationID != "" ||
+		len(input.WorkspaceRoots) > 0 ||
+		input.UserEmail != "" ||
+		input.PromptID != "" ||
+		input.ComposerID != "" ||
+		input.GenerationUUID != ""
+}
+
+func isCursorEventName(name string) bool {
+	if name == EventCursorPre || name == EventCursorStop {
+		return true
+	}
+	if name == "" {
+		return false
+	}
+	first, size := utf8.DecodeRuneInString(name)
+	if !unicode.IsLower(first) {
+		return false
+	}
+	for _, r := range name[size:] {
+		if unicode.IsUpper(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // Run executes one hook by id.

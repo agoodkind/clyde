@@ -98,6 +98,21 @@ func TestHookInputDetectRuntime(t *testing.T) {
 			want: ClientCodex,
 		},
 		{
+			name: "empty env treats codex snake case event as codex payload",
+			input: hookInput{
+				EventName:      "session_start",
+				PermissionMode: "default",
+			},
+			want: ClientCodex,
+		},
+		{
+			name: "empty env treats cursor camel case event as cursor payload",
+			input: hookInput{
+				EventName: "afterAgentResponse",
+			},
+			want: ClientCursor,
+		},
+		{
 			name: "empty env falls back to claude payload",
 			input: hookInput{
 				HookEventName: EventSessionStart,
@@ -116,6 +131,57 @@ func TestHookInputDetectRuntime(t *testing.T) {
 			got := testCase.input.detectRuntime(getenv)
 			if got != testCase.want {
 				t.Fatalf("detectRuntime() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestHookInputDetectRuntimeDetectsCursorPayloadFallbackFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "cursor version",
+			payload: `{"cursor_version": "1.2.3"}`,
+		},
+		{
+			name:    "lowercase cursor event",
+			payload: `{"hook_event_name": "beforeSubmitPrompt"}`,
+		},
+		{
+			name:    "conversation id",
+			payload: `{"conversation_id": "conversation-1"}`,
+		},
+		{
+			name:    "generation id",
+			payload: `{"generation_id": "generation-1"}`,
+		},
+		{
+			name:    "workspace roots",
+			payload: `{"workspace_roots": ["/tmp/project"]}`,
+		},
+		{
+			name:    "user email",
+			payload: `{"user_email": "person@example.com"}`,
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			input, err := decodeHookInput(strings.NewReader(testCase.payload))
+			if err != nil {
+				t.Fatalf("decodeHookInput: %v", err)
+			}
+			got := input.detectRuntime(func(string) string {
+				return ""
+			})
+			if got != ClientCursor {
+				t.Fatalf("detectRuntime() = %q, want %q", got, ClientCursor)
 			}
 		})
 	}
@@ -335,6 +401,46 @@ func TestRunnerAfterCompactCursorRuntimeNoOps(t *testing.T) {
 		}`),
 		Output:        &output,
 		Getenv:        getenvFromMap(map[string]string{"CURSOR_VERSION": "1.2.3"}),
+		SnapshotStore: store,
+	}
+	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if output.String() != "" {
+		t.Fatalf("output = %q, want empty", output.String())
+	}
+	if got := storedSnapshot(t, store, key); got != "snapshot body" {
+		t.Fatalf("snapshot = %q, want snapshot body", got)
+	}
+}
+
+func TestRunnerAfterCompactEnvlessCursorPayloadPreservesSnapshot(t *testing.T) {
+	t.Parallel()
+
+	store := newMemorySnapshotStore()
+	key := ReorientSnapshotKey{
+		TranscriptPath: "/tmp/session.jsonl",
+		SessionID:      "session-1",
+		CWD:            "/tmp/project",
+	}
+	if err := store.Save(context.Background(), key, "snapshot body"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var output strings.Builder
+	runner := Runner{
+		Registry: NewRegistry(),
+		Input: strings.NewReader(`{
+			"hook_event_name": "SessionStart",
+			"source": "compact",
+			"transcript_path": "/tmp/session.jsonl",
+			"cwd": "/tmp/project",
+			"session_id": "session-1",
+			"cursor_version": "1.2.3"
+		}`),
+		Output:        &output,
+		Getenv:        getenvFromMap(nil),
 		SnapshotStore: store,
 	}
 	err := runner.Run(context.Background(), HookIDReorientAfterCompact)
