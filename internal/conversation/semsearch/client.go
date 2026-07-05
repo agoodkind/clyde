@@ -232,9 +232,9 @@ const upsertStreamMaxBytesPerChunk = 16 << 20
 // fingerprints, so the engine skips unchanged conversations; documents cover
 // only the conversations the engine asked for. The header declares RETAIN, so a
 // conversation absent from the manifest is kept rather than deleted. It opens the
-// client stream, sends the header, then the documents in bounded chunks, then
-// the manifest as one chunk, so neither the document set nor the manifest is
-// bounded by the gRPC max message size.
+// client stream, sends the header, then the documents in bounded chunks so the
+// document set is not capped by the gRPC max message size, then the manifest as
+// one chunk, which must fit within a single message.
 func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
 	if c == nil || c.daemon == nil {
 		return "", fmt.Errorf("upsert semantic conversation documents: client is nil")
