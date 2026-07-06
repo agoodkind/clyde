@@ -18,8 +18,10 @@ import (
 	"google.golang.org/grpc"
 
 	clydev1 "goodkind.io/clyde/api/clyde/v1"
+	"goodkind.io/clyde/api/contextpb"
 	adapterruntime "goodkind.io/clyde/internal/adapter/runtime"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/contextsvc"
 	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/daemonsupervisor"
 	"goodkind.io/clyde/internal/logpolicy"
@@ -123,6 +125,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		grpc.MaxSendMsgSize(controlMaxMessageBytes),
 	)
 	clydev1.RegisterClydeServiceServer(grpcServer, newControlServer(cfg, log, stats, conversationIndex, semanticFreshness.snapshot, grpcServer, runtime))
+	registerConversationContextService(grpcServer, conversationIndex)
 	grpcDone := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -189,6 +192,10 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 		}
 		return nil
 	}
+}
+
+func registerConversationContextService(grpcServer *grpc.Server, index *conversation.Index) {
+	contextpb.RegisterConversationContextServer(grpcServer, contextsvc.New(index))
 }
 
 func startSupervisorProcess(ctx context.Context, log *slog.Logger) <-chan error {
