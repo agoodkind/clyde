@@ -15,6 +15,7 @@ import (
 
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/cli/output"
+	conv "goodkind.io/clyde/internal/conversation"
 	"goodkind.io/gklog/correlation"
 )
 
@@ -370,6 +371,47 @@ func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
 	}
 }
 
+func TestRenderCopyOnlyArtifactWritesNoFile(t *testing.T) {
+	var copied []byte
+	originalClipboardCopy := clipboardCopy
+	clipboardCopy = func(_ context.Context, got []byte) error {
+		copied = append([]byte(nil), got...)
+		return nil
+	}
+	t.Cleanup(func() { clipboardCopy = originalClipboardCopy })
+
+	var out, errOut bytes.Buffer
+	result := artifactResult{
+		Payload:     artifactProbePayload{Text: "json-text"},
+		Body:        []byte("a\nb\n"),
+		DefaultPath: "",
+		Pipe:        false,
+		Text:        "",
+		InlineText:  "",
+	}
+
+	err := renderCLIResult(
+		withCopy(context.Background(), true),
+		&out,
+		&errOut,
+		output.FormatText,
+		resultKindArtifact,
+		result,
+	)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("stdout = %q, want empty", got)
+	}
+	if !bytes.Equal(copied, []byte("a\nb\n")) {
+		t.Fatalf("copied body = %q, want %q", string(copied), "a\nb\n")
+	}
+	if got := errOut.String(); got != "copied 2 lines\n" {
+		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines\n")
+	}
+}
+
 // TestRenderCopyResultCopiesValueText asserts the value text is copied and the
 // singular "line" form is used for a one-line body.
 func TestRenderCopyResultCopiesValueText(t *testing.T) {
@@ -694,6 +736,45 @@ func TestDefaultExportOutputPath(t *testing.T) {
 	got := defaultExportOutputPath("claude:1a2b/3c", "json")
 	if got != "claude-1a2b-3c.json" {
 		t.Fatalf("defaultExportOutputPath() = %q, want %q", got, "claude-1a2b-3c.json")
+	}
+}
+
+func TestExportDestinationPath(t *testing.T) {
+	t.Parallel()
+	defaultPath := defaultExportOutputPath("claude:probe", conv.ExportFormatMarkdown)
+	cases := []struct {
+		name       string
+		outputPath string
+		stdout     bool
+		copy       bool
+		want       string
+	}{
+		{name: "implicit file", outputPath: "", stdout: false, copy: false, want: defaultPath},
+		{name: "explicit file", outputPath: "transcript.md", stdout: false, copy: false, want: "transcript.md"},
+		{name: "explicit file with copy", outputPath: "transcript.md", stdout: false, copy: true, want: "transcript.md"},
+		{name: "stdout", outputPath: "", stdout: true, copy: false, want: ""},
+		{name: "copy only", outputPath: "", stdout: false, copy: true, want: ""},
+		{name: "stdout with copy", outputPath: "", stdout: true, copy: true, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			if tc.copy {
+				ctx = withCopy(ctx, true)
+			}
+			payload := exportPayload{
+				ConversationID: "claude:probe",
+				Options: conv.ExportOptions{
+					Format: conv.ExportFormatMarkdown,
+				},
+				OutputPath: tc.outputPath,
+				Stdout:     tc.stdout,
+			}
+			if got := exportDestinationPath(ctx, payload); got != tc.want {
+				t.Fatalf("exportDestinationPath() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

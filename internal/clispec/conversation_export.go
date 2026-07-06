@@ -141,7 +141,7 @@ func exportTranscriptOp() Operation[exportInput, exportPayload] {
 		Surfaces:   SurfaceSet{CLI: true, MCP: true},
 		outputKind: resultKindArtifact,
 		Short:      "Export a conversation transcript.",
-		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, omit a destination to write the default artifact file, pass --output PATH to choose a file, or pass --stdout or --output - to write the export body directly to stdout. The global --copy flag also copies the body to the clipboard, matching the selected format; clipboard copy is macOS only for now and errors on other platforms. The MCP tool returns the body as text.",
+		Long:       "Export one conversation transcript in the chosen format. Name the content kinds with --only or the per-type shortcut flags; export selects nothing by default. By default, export includes compaction segment 0, which is the latest compaction summary through the latest message. Use --include-compactions all or --full-history to export every segment. On the terminal, with no destination and no --copy, export writes the default artifact file; pass --output PATH to write a file, or --stdout or --output - to write the export body to stdout. The global --copy flag copies the body to the clipboard and, on its own, replaces the default file write, so --copy alone copies without writing a file; combine --copy with --output to also write a file. Clipboard copy matches the selected format, is macOS only for now, and errors on other platforms. The MCP tool returns the body as text.",
 		Examples: []string{
 			"clyde conversation export claude:1a2b3c --only chat,thinking,tool_calls --output transcript.md",
 			"clyde conversation export claude:1a2b3c --only chat --include-compactions 0 --stdout",
@@ -221,17 +221,30 @@ func newExportInput() exportInput {
 	}
 }
 
+// exportDestinationPath returns the file path export should write to, or ""
+// when export should not write a file. An explicit --output always wins.
+// With no explicit path, export writes the implicit default file, unless the
+// body is already going to stdout (--stdout) or the clipboard (--copy);
+// either of those replaces the implicit file, so --copy alone copies without
+// writing a file.
+func exportDestinationPath(ctx context.Context, p exportPayload) string {
+	if p.OutputPath != "" {
+		return p.OutputPath
+	}
+	if p.Stdout || copyRequested(ctx) {
+		return ""
+	}
+	return defaultExportOutputPath(p.ConversationID, p.Options.Format)
+}
+
 func runExportTranscriptResult(ctx context.Context, p exportPayload) (Result, error) {
 	body, err := daemon.ExportTranscript(ctx, p.ConversationID, p.Options)
 	if err != nil {
 		return nil, logOperationError(ctx, "export transcript", err)
 	}
-	path := p.OutputPath
-	if path == "" && !p.Stdout {
-		path = defaultExportOutputPath(p.ConversationID, p.Options.Format)
-	}
+	path := exportDestinationPath(ctx, p)
 	text := ""
-	if !p.Stdout {
+	if path != "" {
 		text = "wrote: " + path + "\n"
 	}
 	return artifactResult{
