@@ -1,0 +1,15 @@
+syntax = "proto3";
+package clydecontext.v1;
+option go_package = "goodkind.io/clyde/api/contextpb";
+
+service ConversationContext {
+  rpc GetRecentTurns(GetRecentTurnsRequest) returns (GetRecentTurnsReply);
+}
+message GetRecentTurnsRequest {
+  string workspace_ref = 1;      // filesystem cwd of the session
+  string session_ref = 2;        // optional; empty means newest for workspace
+  int32 turn_budget = 3;         // default 4
+  int32 max_chars_per_turn = 4;  // default 280
+}
+message GetRecentTurnsReply { repeated Turn turns = 1; }
+message Turn { string role = 1; string text = 2; string ts = 3; }
