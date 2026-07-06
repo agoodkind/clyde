@@ -1,0 +1,21 @@
+# Reorient Delivery Overview
+
+Reorient delivery restores a conversation's pre-compaction transcript after a `/compact`, so the model keeps the detail the compaction summary drops. It ships in two tiers that share the same recovered-transcript content: Tier 1 (the paging note) covers Claude Code, Codex, and Cursor, while Tier 2 (the MITM summary injection) is Claude-Code-specific.
+
+Observed behavior of the current Claude Code client is that a large SessionStart `additionalContext` hook output is spilled to a file and only a short preview is injected, so the model never receives a full transcript delivered that way (this is client behavior, not defined in this repo). Both tiers work around that limit through a channel the client does not spill.
+
+## Tier 1: paging note (no MITM)
+
+The hook emits a small note, under the client's hook-output size limit, that tells the model to page its pre-compaction transcript in through the clyde reorient tool. The note carries the conversation selector from the hook input. Claude Code and Codex emit it from `runReorientAfterCompact` on the post-compact SessionStart event. Cursor has no post-compact event, so `runReorientAfterCompact` no-ops for it and the same note is emitted from `runReorientStopFollowup` on the stop event, but only when a pre-compact snapshot exists for the conversation (`SnapshotStore.Consume` returns ok); a stop event with no snapshot emits nothing. Both hooks live in `internal/hookspec/runner.go`. `internal/hookspec/runner_test.go` and `internal/hookspec/output_snapshot_test.go` hold the behavior.
+
+## Tier 2: MITM summary injection (opt-in)
+
+When `MITMConfig.ReorientSummaryInjection` is on (`internal/config/mitm_config.go`, default false), the MITM proxy injects the recovered transcript into the `/compact` summary response, so the client persists it in the `isCompactSummary` user message: in the transcript, uncut, and re-sent every turn. The transcript is inserted inside the model's `<summary>` span (before `</summary>`), because the client's `formatCompactSummary` keeps only the text between `<summary>` and `</summary>` and drops a separately appended trailing block; a response with no `</summary>` falls back to a trailing appended block, which the client keeps when there is no summary span. `internal/reorientinject/hook.go` holds detection, correlation, and the SSE injection; `internal/reorientinject/hook_test.go` and `internal/daemon/reorient_inject_e2e_test.go` hold the behavior.
+
+Detection matches a stable substring of Claude Code's compaction prompt in the request's final message. The summarization request is otherwise structurally identical to a normal turn on the wire, because it carries the full tool schema, so the prompt text is the only reliable discriminator observed in the capture store. Correlation reads the Claude session id from the request's `metadata.user_id` field, which is a double-encoded JSON string (a JSON string value that itself contains an encoded JSON object) whose `session_id` names the on-disk transcript file. `internal/providers/claude/parser/session_path.go` resolves that session id to a path without the index (`internal/providers/claude/parser/session_path_test.go`).
+
+Content comes from `Index.RenderReorientArtifact` in `internal/conversation/reorient.go`, which builds the record directly from the transcript path and renders it with the reorient knobs, so it avoids the index resolve and refresh path. `internal/conversation/reorient_artifact_test.go` holds the behavior.
+
+## Hook seam
+
+Tier 2 rides an in-process MITM request/response hook seam in `internal/mitm/response_hook.go`, registered per proxy through `SetRequestResponseHooks` and attached at the shared forward paths so one registration covers every listener. The seam decodes a matched response body (gzip, deflate, zstd) before the transformer rewrites it, and forwards an undecodable encoding untouched so a compressed body is never handed back mislabeled. `internal/mitm/response_hook_test.go` and `internal/mitm/response_hook_decode_test.go` hold the behavior. The daemon registers the reorient hook in `internal/daemon/runtime.go` only when the flag is on (`internal/daemon/reorient_inject_wiring_test.go`).
