@@ -66,7 +66,7 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := op.runResult(withSurface(cmd.Context(), SurfaceCLI), prepared)
+			result, err := op.runResult(withCopy(withSurface(cmd.Context(), SurfaceCLI), factoryCopy(f)), prepared)
 			if err != nil {
 				return err
 			}
