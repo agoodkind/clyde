@@ -83,7 +83,7 @@ func newTrustInstallCmd(
 			var out strings.Builder
 			fmt.Fprintf(&out, "installed: %s\n", cfg.MITM.CA.CertPath)
 			fmt.Fprintf(&out, "platform: %s\n", reg.Platform())
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
+			return response.WriteResult(cmd.Context(), f.IOStreams.Out, f.IOStreams.Err, out.String())
 		},
 	}
 	return cmd
@@ -112,7 +112,7 @@ func newTrustUninstallCmd(
 			var out strings.Builder
 			fmt.Fprintf(&out, "uninstalled\n")
 			fmt.Fprintf(&out, "platform: %s\n", reg.Platform())
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
+			return response.WriteResult(cmd.Context(), f.IOStreams.Out, f.IOStreams.Err, out.String())
 		},
 	}
 	return cmd
@@ -143,12 +143,12 @@ func newTrustStatusCmd(
 				wrapped := fmt.Errorf("cli.mitm.trust: read truststore status: %w", statusErr)
 				var out strings.Builder
 				writeTrustStatus(&out, status, cfg.MITM.CA.CertPath, wrapped)
-				_ = response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
+				_ = response.WriteResult(cmd.Context(), f.IOStreams.Out, f.IOStreams.Err, out.String())
 				return wrapped
 			}
 			var out strings.Builder
 			writeTrustStatus(&out, status, cfg.MITM.CA.CertPath, nil)
-			return response.WriteText(cmd.Context(), f.IOStreams.Out, out.String())
+			return response.WriteResult(cmd.Context(), f.IOStreams.Out, f.IOStreams.Err, out.String())
 		},
 	}
 	return cmd

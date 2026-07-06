@@ -34,7 +34,7 @@ func TestCLISinkWriteFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.txt")
-	sink := NewCLISink(context.Background(), &bytes.Buffer{})
+	sink := NewCLISink(context.Background(), &bytes.Buffer{}, &bytes.Buffer{})
 	if err := sink.WriteFile(path, []byte("body")); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -50,16 +50,63 @@ func TestCLISinkWriteFile(t *testing.T) {
 func TestCLISinkRawBytesSkipsMetadata(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
+	var errOut bytes.Buffer
 	ctx := correlation.WithContext(context.Background(), correlation.Context{
 		TraceID: correlation.TraceID("11111111111111111111111111111111"),
 		SpanID:  correlation.SpanID("2222222222222222"),
 	})
-	sink := NewCLISink(ctx, &out)
+	sink := NewCLISink(ctx, &out, &errOut)
 	if err := sink.RawBytes([]byte("body")); err != nil {
 		t.Fatalf("RawBytes: %v", err)
 	}
 	if got := out.String(); got != "body" {
 		t.Errorf("raw bytes output: got %q, want %q", got, "body")
+	}
+	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
+	if got := errOut.String(); got != wantHeader {
+		t.Errorf("raw bytes metadata: got %q, want %q", got, wantHeader)
+	}
+}
+
+func TestCLISinkTextWritesMetadataToErrOut(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	sink := NewCLISink(ctx, &out, &errOut)
+	if err := sink.Text("body"); err != nil {
+		t.Fatalf("Text: %v", err)
+	}
+	if got := out.String(); got != "body" {
+		t.Errorf("text output: got %q, want %q", got, "body")
+	}
+	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
+	if got := errOut.String(); got != wantHeader {
+		t.Errorf("text metadata: got %q, want %q", got, wantHeader)
+	}
+}
+
+func TestCLISinkBytesWritesMetadataToErrOut(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	sink := NewCLISink(ctx, &out, &errOut)
+	if err := sink.Bytes([]byte("body")); err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	if got := out.String(); got != "body" {
+		t.Errorf("byte output: got %q, want %q", got, "body")
+	}
+	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
+	if got := errOut.String(); got != wantHeader {
+		t.Errorf("byte metadata: got %q, want %q", got, wantHeader)
 	}
 }
 
@@ -326,6 +373,88 @@ func TestCopyLineCount(t *testing.T) {
 	}
 }
 
+func TestRenderCLIResultTextWritesMetadataToErrOut(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	result := valueResult{
+		Payload: probePayload{ID: "trace", Count: 1, On: false, Mode: "alpha"},
+		Text:    "value text",
+	}
+
+	err := renderCLIResult(ctx, &out, &errOut, output.FormatText, resultKindValue, result)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+
+	if got := out.String(); got != "value text" {
+		t.Fatalf("stdout = %q, want %q", got, "value text")
+	}
+	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
+	if got := errOut.String(); got != wantHeader {
+		t.Fatalf("stderr = %q, want %q", got, wantHeader)
+	}
+}
+
+func TestRenderCLIResultTextRoutesStampedHeaderToErrOut(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	result := valueResult{
+		Payload: probePayload{ID: "trace", Count: 1, On: false, Mode: "alpha"},
+		Text:    "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\nvalue text",
+	}
+
+	err := renderCLIResult(context.Background(), &out, &errOut, output.FormatText, resultKindValue, result)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+
+	if got := out.String(); got != "value text" {
+		t.Fatalf("stdout = %q, want %q", got, "value text")
+	}
+	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
+	if got := errOut.String(); got != wantHeader {
+		t.Fatalf("stderr = %q, want %q", got, wantHeader)
+	}
+}
+
+func TestRenderCLIResultPipeWritesMetadataToErrOut(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	body := []byte("raw body\n")
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	result := artifactResult{
+		Payload:     artifactProbePayload{Text: "json-text"},
+		Body:        body,
+		DefaultPath: "",
+		Pipe:        true,
+		Text:        "",
+		InlineText:  string(body),
+	}
+
+	err := renderCLIResult(ctx, &out, &errOut, output.FormatText, resultKindArtifact, result)
+	if err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+
+	if got := out.String(); got != string(body) {
+		t.Fatalf("stdout = %q, want %q", got, string(body))
+	}
+	wantHeader := "🔎 trace_id=11111111111111111111111111111111 span_id=2222222222222222\n"
+	if got := errOut.String(); got != wantHeader {
+		t.Fatalf("stderr = %q, want %q", got, wantHeader)
+	}
+}
+
 // TestRenderCopyResultCopiesArtifactBody asserts --copy is additive: the normal
 // output still renders to stdout, the artifact body is copied, and the line-count
 // confirmation lands on stderr, not stdout.
@@ -368,6 +497,31 @@ func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
 	}
 	if got := errOut.String(); got != "copied 2 lines\n" {
 		t.Fatalf("copy confirmation = %q, want %q", got, "copied 2 lines\n")
+	}
+}
+
+// TestRenderJSONResultWritesNoHeaderToErrOut asserts JSON output keeps its
+// metadata inside the document as _meta and does not also emit the text
+// trace-id header on stderr, so JSON behavior is unchanged.
+func TestRenderJSONResultWritesNoHeaderToErrOut(t *testing.T) {
+	t.Parallel()
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	var out, errOut bytes.Buffer
+	result := valueResult{
+		Payload: probePayload{ID: "json", Count: 1, On: false, Mode: "alpha"},
+		Text:    "value text",
+	}
+	if err := renderCLIResult(ctx, &out, &errOut, output.FormatJSON, resultKindValue, result); err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if got := errOut.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty (JSON keeps _meta in the document, no stderr header)", got)
+	}
+	if !strings.Contains(out.String(), "_meta") {
+		t.Fatalf("stdout = %q, want JSON containing _meta", out.String())
 	}
 }
 
