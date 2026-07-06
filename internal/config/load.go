@@ -284,6 +284,9 @@ func applyLoggingDefaultsAndValidate(cfg *Config) error {
 	if cfg == nil {
 		return nil
 	}
+	if err := applyDaemonDefaultsAndValidate(&cfg.Daemon); err != nil {
+		return err
+	}
 	if err := applyLoggingCoreDefaults(&cfg.Logging); err != nil {
 		return err
 	}

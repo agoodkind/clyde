@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 
 	"goodkind.io/clyde/internal/config"
@@ -206,8 +207,15 @@ func loadInheritedListeners(raw string, listeners map[string]net.Listener, packe
 // daemonListener returns the inherited daemon control socket when a reload passed
 // one, and otherwise binds a fresh unix socket after clearing any stale path. It
 // keeps the socket file on close so a reload child can rebind the same path.
-func daemonListener(ctx context.Context, socketPath string, inherited net.Listener) (net.Listener, error) {
+func daemonListener(ctx context.Context, grpcAddress string, inherited net.Listener) (net.Listener, error) {
+	socketPath, err := config.DaemonSocketPathFromGRPCAddress(grpcAddress)
+	if err != nil {
+		return nil, fmt.Errorf("resolve daemon grpc address %q: %w", grpcAddress, err)
+	}
 	if inherited != nil {
+		if inherited.Addr().Network() != "unix" || inherited.Addr().String() != socketPath {
+			return nil, fmt.Errorf("daemon inherited listener address %s/%s does not match config unix/%s; full daemon restart required", inherited.Addr().Network(), inherited.Addr().String(), socketPath)
+		}
 		if unixListener, ok := inherited.(*net.UnixListener); ok {
 			unixListener.SetUnlinkOnClose(false)
 		}
@@ -216,6 +224,13 @@ func daemonListener(ctx context.Context, socketPath string, inherited net.Listen
 			"addr", inherited.Addr().String(),
 		)
 		return inherited, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		slog.WarnContext(ctx, "daemon.listener.mkdir_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
+			"socket_path", socketPath,
+			"err", err,
+		)
+		return nil, fmt.Errorf("create daemon socket dir %s: %w", filepath.Dir(socketPath), err)
 	}
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		slog.WarnContext(ctx, "daemon.listener.remove_stale_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
