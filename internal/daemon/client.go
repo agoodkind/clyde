@@ -877,16 +877,16 @@ func LogsInventory(ctx context.Context, stateRoot string, largestFileLimit int, 
 
 // daemonRPCError translates a failed control-plane rpc into a caller-facing
 // error. An Unavailable code means the daemon is not running, so the message
-// names the rpc socket and how to check the daemon.
+// names the rpc target and how to check the daemon.
 func daemonRPCError(ctx context.Context, operation string, err error) error {
-	socketPath := config.DaemonSocketPath()
+	target := daemonGRPCAddress()
 	if status.Code(err) == codes.Unavailable {
 		slog.WarnContext(ctx, "daemon.client.rpc.unavailable", "concern", "process.daemon.lifecycle", "component", "daemon",
 			"operation", operation,
-			"socket_path", socketPath,
+			"grpc_address", target,
 			"err", err,
 		)
-		return fmt.Errorf("clyde daemon is not running at %s; check `clyde daemon status` (launchd starts the daemon): %w", socketPath, err)
+		return fmt.Errorf("clyde daemon is not running at %s; check `clyde daemon status` (launchd starts the daemon): %w", target, err)
 	}
 	slog.WarnContext(ctx, "daemon.client.rpc.failed", "concern", "process.daemon.lifecycle", "component", "daemon",
 		"operation", operation,
@@ -913,8 +913,7 @@ func probeDaemonRPC(ctx context.Context) error {
 }
 
 func connectDaemon(ctx context.Context) (*daemonClient, error) {
-	socketPath := config.DaemonSocketPath()
-	target := "unix://" + socketPath
+	target := daemonGRPCAddress()
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(
@@ -924,15 +923,23 @@ func connectDaemon(ctx context.Context) (*daemonClient, error) {
 	)
 	if err != nil {
 		slog.WarnContext(ctx, "daemon.client.connect.new_client_failed", "concern", "process.daemon.lifecycle", "component", "daemon",
-			"socket_path", socketPath,
+			"grpc_address", target,
 			"err", err,
 		)
-		return nil, fmt.Errorf("connect daemon at %s: %w", socketPath, err)
+		return nil, fmt.Errorf("connect daemon at %s: %w", target, err)
 	}
 	return &daemonClient{
 		conn: conn,
 		rpc:  clydev1.NewClydeServiceClient(conn),
 	}, nil
+}
+
+func daemonGRPCAddress() string {
+	cfg, err := config.LoadGlobalOrDefault()
+	if err != nil {
+		return config.DefaultDaemonGRPCAddress()
+	}
+	return cfg.Daemon.GRPCAddress
 }
 
 func lockDaemonReload(ctx context.Context) (func(), error) {

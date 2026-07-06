@@ -34,12 +34,17 @@ type StatusReport struct {
 func InspectStatus(ctx context.Context) StatusReport {
 	runtimeDir := config.RuntimeDir()
 	supervisorSocketPath := daemonsupervisor.SocketPath(runtimeDir)
+	daemonAddress := daemonGRPCAddress()
+	daemonSocketPath, err := config.DaemonSocketPathFromGRPCAddress(daemonAddress)
+	if err != nil {
+		daemonSocketPath = config.DaemonSocketPath()
+	}
 	report := StatusReport{
 		LaunchdTarget:          "",
 		LaunchdError:           "",
 		SupervisorPID:          0,
-		DaemonSocketPath:       config.DaemonSocketPath(),
-		DaemonSocketExists:     socketExists(config.DaemonSocketPath()),
+		DaemonSocketPath:       daemonSocketPath,
+		DaemonSocketExists:     socketExists(daemonSocketPath),
 		DaemonResponding:       false,
 		DaemonError:            "",
 		SupervisorSocketPath:   supervisorSocketPath,

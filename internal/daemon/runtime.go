@@ -75,7 +75,7 @@ func startRuntime(
 	stats *providerStatsRecorder,
 	inherited inheritedRuntime,
 ) (*runtimeServices, error) {
-	listener, err := daemonListener(ctx, config.DaemonSocketPath(), inherited.listeners[listenerNameDaemon])
+	listener, err := daemonListener(ctx, cfg.Daemon.GRPCAddress, inherited.listeners[listenerNameDaemon])
 	if err != nil {
 		return nil, err
 	}

@@ -25,6 +25,7 @@ func TestClassifyConfigChange(t *testing.T) {
 		want   Route
 	}{
 		{"no change", func(*Config) {}, RouteReload},
+		{"daemon grpc address", func(c *Config) { c.Daemon.GRPCAddress = "unix:///tmp/clyde-daemon.sock" }, RouteRestartRequired},
 		{"adapter disabled", func(c *Config) { c.Adapter.Enabled = false }, RouteRestartRequired},
 		{"mitm disabled", func(c *Config) { c.MITM.EnabledDefault = false }, RouteRestartRequired},
 		{"adapter port", func(c *Config) { c.Adapter.Port = 21434 }, RouteRebind},
