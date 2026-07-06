@@ -90,6 +90,59 @@ func WriteText(ctx context.Context, writer io.Writer, body string) error {
 	return nil
 }
 
+// WriteHeaderLine writes the correlation header line to w when the context
+// carries visible metadata. It writes nothing when there is no metadata.
+func WriteHeaderLine(ctx context.Context, w io.Writer) error {
+	header := FromContext(ctx).HeaderLine()
+	if header == "" {
+		return nil
+	}
+	if _, err := io.WriteString(w, header+"\n"); err != nil {
+		slog.WarnContext(ctx, "response.write_header_line_failed", "concern", "cli.output", "component", "response", "err", err)
+		return fmt.Errorf("response: write header line: %w", err)
+	}
+	return nil
+}
+
+// SplitHeader returns the leading correlation header line and the remaining
+// body when body begins with the shared header marker, else "" and body
+// unchanged. It lets a CLI front end route an already-stamped header to
+// stderr instead of leaking it onto stdout.
+func SplitHeader(body string) (header string, rest string) {
+	if !strings.HasPrefix(body, headerMarker) {
+		return "", body
+	}
+	headerLine, rest, found := strings.Cut(body, "\n")
+	if !found {
+		return body, ""
+	}
+	return headerLine, rest
+}
+
+// WriteResult writes the correlation header to errOut and the body to out, so
+// the trace-id metadata never mixes into piped stdout data. It uses the
+// context metadata header when present, otherwise a header the body already
+// carries, and always writes the body to out header-free. This is the shared
+// entry point for hand-written CLI commands that render a text result.
+func WriteResult(ctx context.Context, out io.Writer, errOut io.Writer, body string) error {
+	stampedHeader, rest := SplitHeader(body)
+	if FromContext(ctx).HeaderLine() != "" {
+		if err := WriteHeaderLine(ctx, errOut); err != nil {
+			return err
+		}
+	} else if stampedHeader != "" {
+		if _, err := io.WriteString(errOut, stampedHeader+"\n"); err != nil {
+			slog.WarnContext(ctx, "response.write_stamped_header_failed", "concern", "cli.output", "component", "response", "err", err)
+			return fmt.Errorf("response: write stamped header: %w", err)
+		}
+	}
+	if _, err := io.WriteString(out, rest); err != nil {
+		slog.WarnContext(ctx, "response.write_result_body_failed", "concern", "cli.output", "component", "response", "err", err)
+		return fmt.Errorf("response: write result body: %w", err)
+	}
+	return nil
+}
+
 // JSONStyle controls how a JSON response envelope is formatted.
 type JSONStyle uint8
 

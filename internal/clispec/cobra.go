@@ -72,7 +72,7 @@ func (op Operation[I, P]) cobraCommand(f *cli.Factory) *cobra.Command {
 			}
 			return renderCLIResult(withCopy(cmd.Context(), factoryCopy(f)), f.IOStreams.Out, f.IOStreams.Err, format, op.outputKind, result)
 		}
-		sink := NewCLISink(cmd.Context(), f.IOStreams.Out)
+		sink := NewCLISink(cmd.Context(), f.IOStreams.Out, f.IOStreams.Err)
 		return op.Run(cmd.Context(), prepared, SurfaceCLI, sink)
 	}
 	for _, child := range op.Children {

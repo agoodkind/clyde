@@ -68,7 +68,7 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 	if dryRun {
 		mode = "Dry run counted"
 	}
-	if writeErr := response.WriteText(ctx, f.IOStreams.Out, fmt.Sprintf(
+	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, fmt.Sprintf(
 		"%s conversation scalars from %d conversations: %d rows changed, %d orphan rows.\n",
 		mode, len(entries), changed, orphan,
 	)); writeErr != nil {
