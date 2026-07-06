@@ -14,6 +14,13 @@ type MITMConfig struct {
 	Capture        MITMCapture            `json:"capture,omitzero" toml:"capture,omitempty"`
 	CaptureRules   []MITMCaptureRouteRule `json:"captureRules,omitempty" toml:"capture_rules,omitempty"`
 	Drift          MITMDriftConfig        `json:"drift,omitzero" toml:"drift,omitempty"`
+	// ReorientSummaryInjection turns on the MITM reorient hook: when set, the
+	// proxy detects a Claude Code compaction summarization request and rewrites
+	// its streaming summary response, appending the recovered pre-compaction
+	// transcript (read off disk by the request's session id) so the client
+	// persists it in the isCompactSummary message. Default false; enabling it
+	// makes the proxy read the local transcript and rewrite that one response.
+	ReorientSummaryInjection bool `json:"reorientSummaryInjection,omitempty" toml:"reorient_summary_injection,omitempty"`
 	// App maps each desktop (Electron) client name to its MITM listen endpoint,
 	// declared as [mitm.app.<name>] (for example [mitm.app.cursor]). CLI maps
 	// each CLI client name, declared as [mitm.cli.<name>] (for example

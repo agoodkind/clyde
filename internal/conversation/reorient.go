@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -106,6 +107,14 @@ func (idx *Index) buildReorientSnapshot(ctx context.Context, options ReorientOpt
 	if err != nil {
 		return reorientSnapshot{}, err
 	}
+	return idx.renderReorientSnapshot(current, options)
+}
+
+// renderReorientSnapshot renders one already-resolved Record into the recovered
+// transcript snapshot. It reads the artifact only and never consults the index,
+// so a caller that built the Record directly from a path renders it without the
+// resolve/refresh race.
+func (idx *Index) renderReorientSnapshot(current Record, options ReorientOptions) (reorientSnapshot, error) {
 	content := NewContentKindSet(ContentKindChat, ContentKindToolCalls)
 	if options.IncludeToolOutputs {
 		content = NewContentKindSet(ContentKindChat, ContentKindToolOutputs)
@@ -274,6 +283,72 @@ func (idx *Index) resolveReorientCurrent(ctx context.Context, options ReorientOp
 		return Record{}, fmt.Errorf("no conversations found for workspace %q", options.WorkspaceRoot)
 	}
 	return page.Records[0], nil
+}
+
+// RenderReorientArtifact recovers a conversation from a concrete on-disk
+// transcript path and returns its rendered pre-compaction transcript body. It
+// builds the Record directly through the provider parser rather than the index,
+// so a caller that already holds the path (the MITM reorient-injection hook,
+// which resolves the session id from the intercepted request to a transcript
+// file) recovers the conversation without the index resolve/refresh race. The
+// options select the render knobs (tool outputs, line cap, synthetic
+// pre-compact recovery).
+func (idx *Index) RenderReorientArtifact(path string, preferred providerid.Provider, options ReorientOptions) (string, error) {
+	options = normalizeReorientOptions(options)
+	record, ok, err := idx.resolveArtifactRecord(path, preferred)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("reorient artifact %q: no registered provider parsed it", path)
+	}
+	snapshot, err := idx.renderReorientSnapshot(record, options)
+	if err != nil {
+		return "", err
+	}
+	return snapshot.Body, nil
+}
+
+// resolveArtifactRecord builds a Record for a concrete existing transcript path
+// through the provider parsers, without consulting the index. It scans the
+// preferred provider first when one is given, so a caller that knows the artifact
+// belongs to a specific provider (the reorient-injection hook always resolves a
+// Claude transcript) does not trigger every other provider's scan-failure logs.
+// It falls back to the remaining providers so a hintless caller still resolves.
+// The second return is false when the path exists but no provider recognizes it.
+func (idx *Index) resolveArtifactRecord(path string, preferred providerid.Provider) (Record, bool, error) {
+	var zero Record
+	info, err := os.Stat(path)
+	if err != nil {
+		slog.Warn("conversation.reorient.artifact_stat_failed", "concern", "conversation.reorient", "component", "conversation", "path", path, "err", err)
+		return zero, false, fmt.Errorf("stat reorient artifact %q: %w", path, err)
+	}
+	if info.IsDir() {
+		slog.Warn("conversation.reorient.artifact_not_file", "concern", "conversation.reorient", "component", "conversation", "path", path)
+		return zero, false, fmt.Errorf("reorient artifact %q is a directory", path)
+	}
+	stamp := FileStamp{Size: info.Size(), Mtime: info.ModTime()}
+	if preferred.Valid() {
+		if parser, lookupErr := idx.registry.Lookup(preferred); lookupErr == nil {
+			if record, ok := parser.ScanRecord(path, stamp); ok {
+				return record, true, nil
+			}
+		}
+	}
+	for _, provider := range idx.registry.Providers() {
+		if provider == preferred {
+			continue
+		}
+		parser, lookupErr := idx.registry.Lookup(provider)
+		if lookupErr != nil {
+			continue
+		}
+		record, ok := parser.ScanRecord(path, stamp)
+		if ok {
+			return record, true, nil
+		}
+	}
+	return zero, false, nil
 }
 
 // sliceReorientBody returns the slice of body starting at offset that fits

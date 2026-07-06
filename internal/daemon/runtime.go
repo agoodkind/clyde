@@ -16,9 +16,13 @@ import (
 	adapterprovider "goodkind.io/clyde/internal/adapter/provider"
 	adapterresolver "goodkind.io/clyde/internal/adapter/resolver"
 	"goodkind.io/clyde/internal/config"
+	"goodkind.io/clyde/internal/conversation"
 	"goodkind.io/clyde/internal/livetrack"
 	"goodkind.io/clyde/internal/mitm"
 	"goodkind.io/clyde/internal/mitm/capture"
+	"goodkind.io/clyde/internal/providerid"
+	claudeparser "goodkind.io/clyde/internal/providers/claude/parser"
+	"goodkind.io/clyde/internal/reorientinject"
 )
 
 type runtimeServices struct {
@@ -230,9 +234,54 @@ func bindMITMPacketConns(ctx context.Context, log *slog.Logger, listenerCfg conf
 	return packetConns, nil
 }
 
-// and records the proxy and its sockets under the listener id in runtime. A
-// "localhost" listener has two sockets ([::1] and 127.0.0.1); an explicit-IP
-// listener has one.
+// reorientInjectHooks returns the MITM request/response hooks enabled by config.
+// It returns the reorient summary-injection hook only when the feature is on, so
+// the default configuration registers no hooks and the proxy path stays
+// byte-for-byte unchanged.
+func reorientInjectHooks(mitmCfg config.MITMConfig) []mitm.RequestResponseHook {
+	if !mitmCfg.ReorientSummaryInjection {
+		return nil
+	}
+	return []mitm.RequestResponseHook{reorientinject.New(newReorientInjectContentProvider())}
+}
+
+// newReorientInjectContentProvider builds the reorient content provider. It
+// closes over a dedicated conversation index used only to render a transcript
+// directly from its on-disk path: the index never scans and is independent of
+// the daemon's shared index and its refresh cycle. Given the session id parsed
+// from the intercepted compaction request, the provider resolves the Claude
+// transcript file and renders the recovered pre-compaction transcript off disk
+// with clyde's reorient knobs (tool outputs, dense, line-capped). An empty or
+// unresolvable session id yields empty content, which passes the response
+// through unchanged.
+func newReorientInjectContentProvider() reorientinject.ContentProvider {
+	index := NewConversationIndex()
+	return func(ctx context.Context, sessionID string) (string, error) {
+		if sessionID == "" {
+			return "", nil
+		}
+		// Honor cancellation (client disconnect or timeout) before the filesystem
+		// walk and the render, so a canceled compaction does not keep scanning
+		// ~/.claude/projects or rendering a large transcript. The transformer
+		// treats a provider error as pass-through, so injection is skipped.
+		if err := ctx.Err(); err != nil {
+			slog.WarnContext(ctx, "daemon.reorient_inject.canceled", "concern", "providers.mitm.wire", "component", "daemon", "err", err)
+			return "", fmt.Errorf("reorient inject canceled: %w", err)
+		}
+		path, ok := claudeparser.TranscriptPathForSession(sessionID)
+		if !ok {
+			return "", nil
+		}
+		return index.RenderReorientArtifact(path, providerid.ProviderClaude, conversation.ReorientOptions{
+			ConversationID:      "",
+			WorkspaceRoot:       "",
+			MaxLines:            0,
+			IncludeToolOutputs:  true,
+			SyntheticPreCompact: true,
+		})
+	}
+}
+
 func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger, runtime *runtimeServices, listenerCfg config.MITMListenerConfig, inherited inheritedRuntime) error {
 	addrs := mitmBindAddrs(listenerCfg.Host, listenerCfg.Port)
 	sockets, err := bindMITMStreamListeners(ctx, log, listenerCfg, addrs, inherited)
@@ -254,6 +303,7 @@ func startMITMListener(ctx context.Context, cfg *config.Config, log *slog.Logger
 		)
 		return fmt.Errorf("init mitm proxy for listener %q: %w", listenerCfg.ID, err)
 	}
+	proxy.SetRequestResponseHooks(reorientInjectHooks(cfg.MITM))
 	runtime.mitmProxies[listenerCfg.ID] = proxy
 	runtime.mitmListeners[listenerCfg.ID] = sockets
 	runtime.mitmPacketConns[listenerCfg.ID] = packetConns
