@@ -500,6 +500,31 @@ func TestRenderCopyResultCopiesArtifactBody(t *testing.T) {
 	}
 }
 
+// TestRenderJSONResultWritesNoHeaderToErrOut asserts JSON output keeps its
+// metadata inside the document as _meta and does not also emit the text
+// trace-id header on stderr, so JSON behavior is unchanged.
+func TestRenderJSONResultWritesNoHeaderToErrOut(t *testing.T) {
+	t.Parallel()
+	ctx := correlation.WithContext(context.Background(), correlation.Context{
+		TraceID: correlation.TraceID("11111111111111111111111111111111"),
+		SpanID:  correlation.SpanID("2222222222222222"),
+	})
+	var out, errOut bytes.Buffer
+	result := valueResult{
+		Payload: probePayload{ID: "json", Count: 1, On: false, Mode: "alpha"},
+		Text:    "value text",
+	}
+	if err := renderCLIResult(ctx, &out, &errOut, output.FormatJSON, resultKindValue, result); err != nil {
+		t.Fatalf("renderCLIResult: %v", err)
+	}
+	if got := errOut.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty (JSON keeps _meta in the document, no stderr header)", got)
+	}
+	if !strings.Contains(out.String(), "_meta") {
+		t.Fatalf("stdout = %q, want JSON containing _meta", out.String())
+	}
+}
+
 func TestRenderCopyOnlyArtifactWritesNoFile(t *testing.T) {
 	var copied []byte
 	originalClipboardCopy := clipboardCopy

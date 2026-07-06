@@ -69,10 +69,17 @@ func renderCLIResult(ctx context.Context, out io.Writer, errOut io.Writer, forma
 	if err := requireResultKind(wantKind, result); err != nil {
 		return err
 	}
-	contextHeaderWritten := response.FromContext(ctx).HeaderLine() != ""
-	if err := response.WriteHeaderLine(ctx, errOut); err != nil {
-		slog.WarnContext(ctx, "clispec.result.write_header_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
-		return fmt.Errorf("write cli result header: %w", err)
+	// The trace-id header is a text-mode concern. JSON output already carries
+	// the metadata inside the document as _meta, so emitting the header on
+	// stderr as well would duplicate it and change JSON behavior. Keep JSON as
+	// is and route the header to stderr only for text output.
+	contextHeaderWritten := false
+	if format != output.FormatJSON {
+		if err := response.WriteHeaderLine(ctx, errOut); err != nil {
+			slog.WarnContext(ctx, "clispec.result.write_header_failed", "concern", "cli.conversation", "component", "clispec", "err", err)
+			return fmt.Errorf("write cli result header: %w", err)
+		}
+		contextHeaderWritten = response.FromContext(ctx).HeaderLine() != ""
 	}
 	if err := renderCLIResultBody(ctx, out, errOut, contextHeaderWritten, format, result); err != nil {
 		return err

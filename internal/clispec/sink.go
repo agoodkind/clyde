@@ -38,7 +38,9 @@ type CLISink struct {
 	headerWritten bool
 }
 
-// NewCLISink builds a terminal sink over the given output stream.
+// NewCLISink builds a terminal sink that writes result bodies to out and
+// routes the correlation header to errOut, so the trace-id metadata never
+// mixes into piped stdout data.
 func NewCLISink(ctx context.Context, out io.Writer, errOut io.Writer) *CLISink {
 	return &CLISink{
 		metadata:      response.FromContext(ctx),
