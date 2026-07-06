@@ -31,14 +31,9 @@ surfaces, with alignment covered by tests in that package.
 
 ## Installation
 
-From a checkout:
-
 ```bash
-make build
-make install
+curl -fsSL https://raw.githubusercontent.com/agoodkind/clyde/main/install.sh | bash
 ```
-
-Use the `Makefile` as the source of truth for exact build and install behavior.
 
 ## Configuration
 
