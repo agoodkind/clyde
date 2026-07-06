@@ -10,24 +10,26 @@ import (
 func TestWriteAdditionalContextForCodex(t *testing.T) {
 	t.Parallel()
 
+	note := buildReorientAfterCompactNote("/tmp/session.jsonl")
 	var builder strings.Builder
-	if err := writeAdditionalContext(&builder, ClientCodex, EventSessionStart, "context body"); err != nil {
+	if err := writeAdditionalContext(&builder, ClientCodex, EventSessionStart, note); err != nil {
 		t.Fatalf("writeAdditionalContext: %v", err)
 	}
-	assertAdditionalContextOutput(t, builder.String())
+	assertAdditionalContextOutput(t, builder.String(), note)
 }
 
 func TestWriteAdditionalContextForClaude(t *testing.T) {
 	t.Parallel()
 
+	note := buildReorientAfterCompactNote("/tmp/session.jsonl")
 	var builder strings.Builder
-	if err := writeAdditionalContext(&builder, ClientClaudeCode, EventSessionStart, "context body"); err != nil {
+	if err := writeAdditionalContext(&builder, ClientClaudeCode, EventSessionStart, note); err != nil {
 		t.Fatalf("writeAdditionalContext: %v", err)
 	}
-	assertAdditionalContextOutput(t, builder.String())
+	assertAdditionalContextOutput(t, builder.String(), note)
 }
 
-func assertAdditionalContextOutput(t *testing.T, output string) {
+func assertAdditionalContextOutput(t *testing.T, output string, want string) {
 	t.Helper()
 
 	var decoded hookSpecificOutputEnvelope
@@ -37,7 +39,7 @@ func assertAdditionalContextOutput(t *testing.T, output string) {
 	if decoded.HookSpecificOutput.HookEventName != EventSessionStart {
 		t.Fatalf("hook event = %q", decoded.HookSpecificOutput.HookEventName)
 	}
-	if decoded.HookSpecificOutput.AdditionalContext != "context body" {
+	if decoded.HookSpecificOutput.AdditionalContext != want {
 		t.Fatalf("additional context = %q", decoded.HookSpecificOutput.AdditionalContext)
 	}
 }
@@ -45,12 +47,48 @@ func assertAdditionalContextOutput(t *testing.T, output string) {
 func TestWriteCursorFollowup(t *testing.T) {
 	t.Parallel()
 
+	note := buildReorientAfterCompactNote("/tmp/cursor.jsonl")
 	var builder strings.Builder
-	if err := writeCursorFollowup(&builder, "follow up"); err != nil {
+	if err := writeCursorFollowup(&builder, note); err != nil {
 		t.Fatalf("writeCursorFollowup: %v", err)
 	}
-	if !strings.Contains(builder.String(), `"followup_message":"follow up"`) {
-		t.Fatalf("output = %q", builder.String())
+	var decoded cursorFollowupOutput
+	if err := json.Unmarshal([]byte(builder.String()), &decoded); err != nil {
+		t.Fatalf("Unmarshal output: %v\n%s", err, builder.String())
+	}
+	assertReorientAfterCompactNote(t, decoded.FollowupMessage, "/tmp/cursor.jsonl")
+}
+
+func TestReorientAfterCompactNoteIncludesPagingInstructions(t *testing.T) {
+	t.Parallel()
+
+	note := buildReorientAfterCompactNote("/tmp/session.jsonl")
+
+	assertReorientAfterCompactNote(t, note, "/tmp/session.jsonl")
+}
+
+func assertReorientAfterCompactNote(t *testing.T, body string, selector string) {
+	t.Helper()
+
+	if len(body) >= 10_000 {
+		t.Fatalf("note length = %d, want under hook output limit", len(body))
+	}
+	lowerBody := strings.ToLower(body)
+	requiredParts := []string{
+		"conversation was just compacted",
+		"before continuing",
+		"clyde reorient tool",
+		"conversation set to",
+		"returned cursor",
+		"remaining is zero",
+	}
+	for _, requiredPart := range requiredParts {
+		if !strings.Contains(lowerBody, requiredPart) {
+			t.Fatalf("note missing %q:\n%s", requiredPart, body)
+		}
+	}
+	if !strings.Contains(body, selector) {
+		t.Fatalf("note missing selector %q:\n%s", selector, body)
 	}
 }
 
