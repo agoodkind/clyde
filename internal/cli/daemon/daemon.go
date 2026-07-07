@@ -31,6 +31,7 @@ func NewCmd(f *cli.Factory) *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newBackfillConversationScalarsCmd(f))
+	cmd.AddCommand(newBackfillConversationDocumentsCmd(f))
 	return cmd
 }
 

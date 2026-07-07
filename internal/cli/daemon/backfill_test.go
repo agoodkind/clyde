@@ -1,10 +1,17 @@
 package daemon
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"goodkind.io/clyde/internal/cli"
+	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 func testBackfillRecord(id, workspace string, archived bool) conversation.Record {
@@ -112,5 +119,147 @@ func TestBuildBackfillEntriesDuplicateIDPrefersMostRecentWhenWorkspacesEqualPres
 		if entries[0].WorkspaceRoot != "/repo/new" || !entries[0].Archived {
 			t.Fatalf("entries[0] = %+v, want newer {/repo/new true}", entries[0])
 		}
+	}
+}
+
+type fakeDocumentBackfillIndex struct {
+	stampedRecords []conversation.StampedRecord
+	messagesByID   map[string][]transcript.Message
+	refreshCount   int
+	loadedIDs      []string
+	loadOptions    []conversation.LoadOptions
+}
+
+func (idx *fakeDocumentBackfillIndex) Refresh(_ context.Context) error {
+	idx.refreshCount++
+	return nil
+}
+
+func (idx *fakeDocumentBackfillIndex) ListWithStamps(_ context.Context) ([]conversation.StampedRecord, error) {
+	return append([]conversation.StampedRecord(nil), idx.stampedRecords...), nil
+}
+
+func (idx *fakeDocumentBackfillIndex) LoadMessagesWithOptions(record conversation.Record, opts conversation.LoadOptions) ([]transcript.Message, error) {
+	idx.loadedIDs = append(idx.loadedIDs, record.ID)
+	idx.loadOptions = append(idx.loadOptions, opts)
+	messages, ok := idx.messagesByID[record.ID]
+	if !ok {
+		return nil, errors.New("missing messages for " + record.ID)
+	}
+	return append([]transcript.Message(nil), messages...), nil
+}
+
+func TestBackfillConversationDocumentsDryRunSelectsLimit(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+			testDocumentStampedRecord("claude:two", 20),
+			testDocumentStampedRecord("claude:three", 30),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one":   {{Role: "user", Text: "one"}},
+			"claude:two":   {{Role: "assistant", Text: "two"}},
+			"claude:three": {{Role: "user", Text: "three"}},
+		},
+	}
+	dialCalled := false
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: true, Limit: 2, ConversationID: ""},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			dialCalled = true
+			return nil, errors.New("unexpected dial")
+		},
+	)
+	if err != nil {
+		t.Fatalf("run backfill conversation documents: %v", err)
+	}
+
+	if index.refreshCount != 1 {
+		t.Fatalf("refresh count = %d, want 1", index.refreshCount)
+	}
+	if strings.Join(index.loadedIDs, ",") != "claude:one,claude:two" {
+		t.Fatalf("loaded ids = %v, want first two records", index.loadedIDs)
+	}
+	for _, opts := range index.loadOptions {
+		if !opts.IncludeToolOutputs {
+			t.Fatalf("load options = %+v, want IncludeToolOutputs true", opts)
+		}
+	}
+	if dialCalled {
+		t.Fatal("dry-run dialed semantic client")
+	}
+	if !strings.Contains(output.String(), "Would send conversation documents from 2 conversations: 2 documents.") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestBackfillConversationDocumentsDryRunSelectsConversation(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+			testDocumentStampedRecord("codex:target", 20),
+			testDocumentStampedRecord("claude:three", 30),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one":   {{Role: "user", Text: "one"}},
+			"codex:target": {{Role: "assistant", Text: "target"}},
+			"claude:three": {{Role: "user", Text: "three"}},
+		},
+	}
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: true, Limit: 0, ConversationID: "codex:target"},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			return nil, errors.New("unexpected dial")
+		},
+	)
+	if err != nil {
+		t.Fatalf("run backfill conversation documents: %v", err)
+	}
+
+	if strings.Join(index.loadedIDs, ",") != "codex:target" {
+		t.Fatalf("loaded ids = %v, want only codex:target", index.loadedIDs)
+	}
+	if !strings.Contains(output.String(), "Would send conversation documents from 1 conversations: 1 documents.") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func testDocumentStampedRecord(conversationID string, unixSeconds int64) conversation.StampedRecord {
+	return conversation.StampedRecord{
+		Record: testBackfillRecord(conversationID, "/repo", false),
+		Stamp: conversation.FileStamp{
+			Size:  int64(len(conversationID)),
+			Mtime: time.Unix(unixSeconds, 0),
+		},
+	}
+}
+
+func testDocumentBackfillFactory(output *bytes.Buffer) *cli.Factory {
+	return &cli.Factory{
+		IOStreams: &cli.IOStreams{
+			In:  strings.NewReader(""),
+			Out: output,
+			Err: &bytes.Buffer{},
+		},
+		Logger: nil,
+		Build:  cli.BuildInfo{Version: "test", Commit: "", Date: ""},
+		Verbose: func() bool {
+			return false
+		},
+		Config: func() (*config.Config, error) {
+			return &config.Config{}, nil
+		},
 	}
 }
