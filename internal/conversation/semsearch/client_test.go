@@ -47,3 +47,56 @@ func TestSendUpsertStreamDeclaresRetainReconcileMode(t *testing.T) {
 		t.Fatalf("upsert header reconcile mode = %v, want CONVERSATION_RECONCILE_MODE_RETAIN", got)
 	}
 }
+
+func TestConversationDocumentsCarriesToolsAndThinking(t *testing.T) {
+	t.Parallel()
+
+	documents := conversationDocuments([]SemDoc{
+		{
+			ConversationID: "codex:tools",
+			MessageIndex:   7,
+			Text:           "assistant prose",
+			Thinking:       "reasoning text",
+			Tools: []SemToolCall{
+				{
+					Name:      "Bash\xff",
+					InputJSON: `{"command":"printf hi"}` + "\xff",
+					Command:   "printf hi\xff",
+					LangHint:  "bash\xff",
+					Output:    "hi\xff",
+					IsError:   true,
+				},
+			},
+		},
+	})
+
+	if len(documents) != 1 {
+		t.Fatalf("documents = %d, want 1", len(documents))
+	}
+	document := documents[0]
+	if document.GetThinking() != "reasoning text" {
+		t.Fatalf("thinking = %q, want reasoning text", document.GetThinking())
+	}
+	if len(document.GetTools()) != 1 {
+		t.Fatalf("tools = %d, want 1", len(document.GetTools()))
+	}
+	tool := document.GetTools()[0]
+	if tool.GetName() != "Bash" {
+		t.Fatalf("tool name = %q, want Bash", tool.GetName())
+	}
+	if tool.GetInputJson() != `{"command":"printf hi"}` {
+		t.Fatalf("tool input_json = %q, want command JSON", tool.GetInputJson())
+	}
+	if tool.GetCommand() != "printf hi" {
+		t.Fatalf("tool command = %q, want printf hi", tool.GetCommand())
+	}
+	if tool.GetLangHint() != "bash" {
+		t.Fatalf("tool lang_hint = %q, want bash", tool.GetLangHint())
+	}
+	if tool.GetOutput() != "hi" {
+		t.Fatalf("tool output = %q, want hi", tool.GetOutput())
+	}
+	if !tool.GetIsError() {
+		t.Fatal("tool is_error = false, want true")
+	}
+}

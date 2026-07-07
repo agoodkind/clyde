@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,6 +84,114 @@ func (idx *fakeConversationSemanticIndex) LoadMessagesWithOptions(record convers
 	return append([]transcript.Message(nil), messages...), nil
 }
 
+func TestDeriveToolCommandAndLang(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		toolName    string
+		input       transcript.ToolInputJSON
+		wantCommand string
+		wantLang    string
+	}{
+		{
+			name:        "Claude command key",
+			toolName:    "Bash",
+			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"command":"go test ./..."}`)},
+			wantCommand: "go test ./...",
+			wantLang:    "bash",
+		},
+		{
+			name:        "Codex cmd key",
+			toolName:    "exec_command",
+			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"make check"}`)},
+			wantCommand: "make check",
+			wantLang:    "bash",
+		},
+		{
+			name:        "ExitPlanMode markdown",
+			toolName:    "ExitPlanMode",
+			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"plan":"ship it"}`)},
+			wantCommand: "",
+			wantLang:    "markdown",
+		},
+		{
+			name:        "unknown JSON tool",
+			toolName:    "Read",
+			input:       transcript.ToolInputJSON{Raw: json.RawMessage(`{"file_path":"/tmp/x"}`)},
+			wantCommand: "",
+			wantLang:    "json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			command, langHint := deriveToolCommandAndLang(tt.toolName, tt.input)
+			if command != tt.wantCommand || langHint != tt.wantLang {
+				t.Fatalf("deriveToolCommandAndLang() = (%q, %q), want (%q, %q)", command, langHint, tt.wantCommand, tt.wantLang)
+			}
+		})
+	}
+}
+
+func TestConversationSemanticSyncCarriesToolsAndThinkingIntoDocs(t *testing.T) {
+	conversationID := "codex:tools"
+	index := &fakeConversationSemanticIndex{
+		records: []conversation.StampedRecord{{Record: semanticTestRecord(conversationID), Stamp: semanticTestStamp(50, 500)}},
+		messagesByID: map[string][]transcript.Message{
+			conversationID: {
+				{
+					Role:      "assistant",
+					Timestamp: time.Unix(1710000000, 0),
+					Text:      "prose only",
+					Thinking:  "thinking text",
+					HasTools:  true,
+					Tools: []transcript.ToolCall{
+						{
+							ID:      "tool-1",
+							Name:    "exec_command",
+							Input:   transcript.ToolInputJSON{Raw: json.RawMessage(`{"cmd":"date"}`)},
+							Output:  "Mon Jul 6",
+							IsError: true,
+						},
+					},
+				},
+			},
+		},
+		loadOptions: nil,
+	}
+	client := &fakeConversationSemanticClient{needed: []string{conversationID}}
+	worker := newConversationSemanticSyncWorker(index, client, "collection-test", semanticTestLogger())
+
+	if err := worker.runPass(context.Background()); err != nil {
+		t.Fatalf("runPass returned error: %v", err)
+	}
+
+	if len(index.loadOptions) != 1 {
+		t.Fatalf("load options calls = %d, want 1", len(index.loadOptions))
+	}
+	if !index.loadOptions[0].IncludeToolOutputs {
+		t.Fatalf("IncludeToolOutputs = false, want true")
+	}
+	if len(client.upsertCalls) != 1 || len(client.upsertCalls[0].Docs) != 1 {
+		t.Fatalf("upsert calls = %+v", client.upsertCalls)
+	}
+	doc := client.upsertCalls[0].Docs[0]
+	if doc.Text != "prose only" {
+		t.Fatalf("doc text = %q, want prose only", doc.Text)
+	}
+	if doc.Thinking != "thinking text" {
+		t.Fatalf("doc thinking = %q, want thinking text", doc.Thinking)
+	}
+	if len(doc.Tools) != 1 {
+		t.Fatalf("doc tools = %d, want 1", len(doc.Tools))
+	}
+	tool := doc.Tools[0]
+	if tool.Name != "exec_command" || tool.InputJSON != `{"cmd":"date"}` || tool.Command != "date" || tool.LangHint != "bash" || tool.Output != "Mon Jul 6" || !tool.IsError {
+		t.Fatalf("tool = %+v, want structured exec_command with output and error flag", tool)
+	}
+}
+
 // TestConversationSemanticSyncSendsNeededConversations proves the two-call
 // feeder: the worker states the full manifest with one fingerprint per
 // conversation, and on the engine reporting one conversation needed, sends that
@@ -149,8 +258,8 @@ func TestConversationSemanticSyncSendsNeededConversations(t *testing.T) {
 		t.Fatalf("load options calls = %d, want 1", len(index.loadOptions))
 	}
 	opts := index.loadOptions[0]
-	if opts.IncludeSystemPrompts || opts.IncludeSystemMessages || opts.IncludeToolOutputs {
-		t.Fatalf("load options = %+v, want all semantic projection flags false", opts)
+	if opts.IncludeSystemPrompts || opts.IncludeSystemMessages || !opts.IncludeToolOutputs {
+		t.Fatalf("load options = %+v, want system fields false and tool outputs true", opts)
 	}
 }
 

@@ -41,6 +41,8 @@ type SemDoc struct {
 	Role                 string
 	TimestampUnix        int64
 	Text                 string
+	Tools                []SemToolCall
+	Thinking             string
 	// WorkspaceRoot is the conversation's workspace, sent so the engine stores it
 	// as a filterable scalar column. The same for every message of one
 	// conversation; empty when unknown.
@@ -49,6 +51,16 @@ type SemDoc struct {
 	// it as a filterable scalar column. The same for every message of one
 	// conversation.
 	Archived bool
+}
+
+// SemToolCall is one structured tool call attached to a semantic document.
+type SemToolCall struct {
+	Name      string
+	InputJSON string
+	Command   string
+	LangHint  string
+	Output    string
+	IsError   bool
 }
 
 // Fingerprint pairs a conversation id with a content fingerprint that changes
@@ -404,7 +416,11 @@ func sendUpsertDocumentChunks(
 func semDocByteSize(doc SemDoc) int {
 	const semDocFramingOverheadBytes = 256
 	const semDocArchivedFieldBytes = 2
-	return len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
+	size := len(doc.Text) + len(doc.Thinking) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
+	for _, tool := range doc.Tools {
+		size += len(tool.Name) + len(tool.InputJSON) + len(tool.Command) + len(tool.LangHint) + len(tool.Output)
+	}
+	return size
 }
 
 // backfillScalarEntriesPerChunk caps the entries in one stream chunk so a large
@@ -730,8 +746,25 @@ func conversationDocuments(docs []SemDoc) []*lmsemanticsearchv1.ConversationDocu
 			Role:                 doc.Role,
 			TimestampUnix:        doc.TimestampUnix,
 			Text:                 doc.Text,
+			Tools:                conversationToolCalls(doc.Tools),
+			Thinking:             strings.ToValidUTF8(doc.Thinking, ""),
 			WorkspaceRoot:        doc.WorkspaceRoot,
 			Archived:             doc.Archived,
+		})
+	}
+	return out
+}
+
+func conversationToolCalls(tools []SemToolCall) []*lmsemanticsearchv1.ConversationToolCall {
+	out := make([]*lmsemanticsearchv1.ConversationToolCall, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, &lmsemanticsearchv1.ConversationToolCall{
+			Name:      strings.ToValidUTF8(tool.Name, ""),
+			InputJson: strings.ToValidUTF8(tool.InputJSON, ""),
+			Command:   strings.ToValidUTF8(tool.Command, ""),
+			LangHint:  strings.ToValidUTF8(tool.LangHint, ""),
+			Output:    strings.ToValidUTF8(tool.Output, ""),
+			IsError:   tool.IsError,
 		})
 	}
 	return out
