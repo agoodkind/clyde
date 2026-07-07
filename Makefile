@@ -43,7 +43,7 @@ include bootstrap.mk
 BUNDLE_ID         ?= io.goodkind.clyde
 CODESIGN_IDENTITY := $(or $(CERT_ID),$(shell if [ "$$(uname)" = "Darwin" ]; then security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $$2; exit }'; fi))
 
-.PHONY: test-ginkgo test-watch coverage setup-hooks install-hooks \
+.PHONY: test-ginkgo test-watch coverage live setup-hooks install-hooks \
         deploy daemon-reload deadcode proto
 
 # Tests via Ginkgo. go.mk's `test` target uses `go test ./...` which already
@@ -65,6 +65,14 @@ coverage: ## Generate coverage report via ginkgo
 	@go run github.com/onsi/ginkgo/v2/ginkgo -r --randomize-all --randomize-suites --cover --coverprofile=coverage.txt
 	@go tool cover -html=coverage.txt -o coverage.html
 	@echo "coverage report: coverage.html"
+
+# Live daemon validation. Boots the real daemon binary in isolated temp XDG roots
+# on throwaway ports and drives its listeners; the default `go test ./...` never
+# runs it (build tag `live`). To run several isolated instances at once, export a
+# disjoint port set per run: CLYDE_TEST_ADAPTER_PORT, CLYDE_TEST_MITM_PORT,
+# CLYDE_TEST_CURSOR_PORT, CLYDE_TEST_TOPOLOGY_PORT, CLYDE_TEST_MOVED_MITM_PORT.
+live: ## Run the live daemon validation suite (opt-in, build tag live)
+	@go test -tags live -count=1 ./test/live/
 
 deadcode: lint-deadcode ## Alias for the central deadcode gate
 
