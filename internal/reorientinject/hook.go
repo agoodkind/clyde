@@ -23,7 +23,7 @@ const (
 	// this-conversation partial variants all open with it). The compaction
 	// summarization request is structurally identical to a normal turn on the wire
 	// (it carries the full tool schema and the same top-level shape), so this
-	// first-party control string in the request's final user message is the only
+	// first-party control string in the request's last user message is the only
 	// reliable discriminator. The imperative "Your task is to ..." framing keeps a
 	// user who merely asks for a summary from matching. If Claude Code changes the
 	// prompt this stops matching, so detection fails safe to no injection.
@@ -146,7 +146,7 @@ func requestIsCompactionSummary(request anthropicSummaryRequest) bool {
 }
 
 // anthropicSummaryRequest is the minimal decode of the /v1/messages request the
-// hook needs: the messages (to find the compaction prompt in the final message)
+// hook needs: the messages (to find the compaction prompt in the last user message)
 // and metadata.user_id (to correlate to the on-disk transcript). The Anthropic
 // Messages API keeps content as string-or-array and metadata.user_id as a
 // double-encoded JSON string, so both stay opaque here and are narrowed by the
