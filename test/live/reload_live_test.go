@@ -50,7 +50,7 @@ func TestLiveTopologyChangeReexecs(t *testing.T) {
 	h.boot(t)
 
 	// Move the MITM listener to a different fake port: a topology change.
-	const movedPort = fakeMITMPort + 1
+	movedPort := h.cfg.MovedMITMPort
 	if portListening(movedPort) {
 		t.Skipf("moved port %d already in use; skipping", movedPort)
 	}

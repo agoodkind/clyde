@@ -115,6 +115,8 @@ For changes that affect the OpenAI-compatible adapter, Cursor BYOK ingress, SSE 
 
 Use the real Cursor client for final verification when the rendered chat output or actual SSE bytes matter. Keep prompts read-only and include a unique probe id. Build, install, and reload the daemon before the probe. Operator-specific automation belongs in a separate runbook, not in this file.
 
+Use `docs/testing/overview.md` for the live daemon test harness and its parallel-run port overrides.
+
 ## Adapter And Model Routing
 
 The adapter is a safety boundary. For model aliases, effort tiers, context budgets, request shaping, and provider-specific behavior, prefer config-driven and typed resolver paths over hard-coded facts.

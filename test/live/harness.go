@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -28,10 +29,11 @@ import (
 // daemon: adapter 11434 to 21434, cursor ingress 11435 to 21435, MITM 487xx to
 // 587xx. pprof is left off.
 type fakePorts struct {
-	MITMPort     int // 58723 (production cli.claude-code is 48723)
-	AdapterPort  int // 21434 (production 11434)
-	CursorPort   int // 21435 (production 11435)
-	TopologyPort int // 21436, the moved-to adapter port for the topology test
+	MITMPort      int // 58723 (production cli.claude-code is 48723)
+	AdapterPort   int // 21434 (production 11434)
+	CursorPort    int // 21435 (production 11435)
+	TopologyPort  int // 21436, the moved-to adapter port for the topology test
+	MovedMITMPort int // 58724, the moved-to MITM port for the reload topology test
 }
 
 // harness owns the temp state/config/runtime roots, the fake config, and the
@@ -64,6 +66,47 @@ const (
 	workerStartedKey   = "daemon.supervisor.worker_started"
 )
 
+// resolveFakePorts reads each throwaway port from its CLYDE_TEST_*_PORT env var,
+// falling back to the package default when the var is unset. Each worktree or
+// terminal can export a distinct set so several isolated daemons run at once
+// without colliding, mirroring lmd's LMD_TEST_PORT. The moved MITM port defaults to
+// one above the resolved MITM port so an overridden base still gets a paired port,
+// stepping down when the MITM port is already at the maximum so the default stays a
+// valid port.
+func resolveFakePorts() fakePorts {
+	mitm := envPortOr("CLYDE_TEST_MITM_PORT", fakeMITMPort)
+	movedDefault := mitm + 1
+	if movedDefault > maxTCPPort {
+		movedDefault = mitm - 1
+	}
+	return fakePorts{
+		MITMPort:      mitm,
+		AdapterPort:   envPortOr("CLYDE_TEST_ADAPTER_PORT", fakeAdapterPort),
+		CursorPort:    envPortOr("CLYDE_TEST_CURSOR_PORT", fakeCursorPort),
+		TopologyPort:  envPortOr("CLYDE_TEST_TOPOLOGY_PORT", fakeTopologyPort),
+		MovedMITMPort: envPortOr("CLYDE_TEST_MOVED_MITM_PORT", movedDefault),
+	}
+}
+
+// maxTCPPort is the highest valid TCP port, used to reject out-of-range overrides.
+const maxTCPPort = 65535
+
+// envPortOr returns the integer value of the env var named name, or def when the
+// var is unset, blank, or does not parse as a port in the range 1 to 65535. It
+// trims surrounding whitespace so an accidental newline in the override does not
+// silently drop back to the default.
+func envPortOr(name string, def int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil || val < 1 || val > maxTCPPort {
+		return def
+	}
+	return val
+}
+
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	// The runtime root holds the supervisor's Unix control socket, whose path
@@ -79,7 +122,7 @@ func newHarness(t *testing.T) *harness {
 		stateRoot:   t.TempDir(),
 		configRoot:  t.TempDir(),
 		runtimeRoot: runtimeRoot,
-		cfg:         fakePorts{MITMPort: fakeMITMPort, AdapterPort: fakeAdapterPort, CursorPort: fakeCursorPort, TopologyPort: fakeTopologyPort},
+		cfg:         resolveFakePorts(),
 		extraEnv:    nil,
 		binPath:     buildWorktreeBinary(t),
 		prodPidsPre: snapshotProductionPids(),
@@ -96,21 +139,60 @@ func newHarness(t *testing.T) *harness {
 // preflight fails when the fake MITM port is already listening or a temp root is
 // missing, so the suite aborts before booting instead of risking a collision.
 func (h *harness) preflight() error {
-	for _, port := range []int{h.cfg.MITMPort, h.cfg.AdapterPort, h.cfg.CursorPort, h.cfg.TopologyPort} {
-		if portListening(port) {
-			return fmt.Errorf("preflight: fake port %d already listening; refusing to run", port)
+	seen := map[int]string{}
+	for _, p := range []struct {
+		name string
+		port int
+	}{
+		{"MITM", h.cfg.MITMPort},
+		{"adapter", h.cfg.AdapterPort},
+		{"cursor", h.cfg.CursorPort},
+		{"topology", h.cfg.TopologyPort},
+		{"moved MITM", h.cfg.MovedMITMPort},
+	} {
+		if other, dup := seen[p.port]; dup {
+			return fmt.Errorf("preflight: %s port %d duplicates the %s port; set distinct CLYDE_TEST_*_PORT values", p.name, p.port, other)
+		}
+		seen[p.port] = p.name
+		if portListening(p.port) {
+			return fmt.Errorf("preflight: fake %s port %d already listening; refusing to run", p.name, p.port)
 		}
 	}
 	for _, root := range []string{h.stateRoot, h.configRoot, h.runtimeRoot} {
-		isTemp := strings.Contains(root, os.TempDir()) ||
-			strings.HasPrefix(root, "/var") ||
-			strings.HasPrefix(root, "/private") ||
-			strings.HasPrefix(root, "/tmp/")
-		if !isTemp {
+		if !underTempRoot(root) {
 			return fmt.Errorf("preflight: root %q is not a temp dir; refusing to run", root)
 		}
 	}
 	return nil
+}
+
+// underTempRoot reports whether path lives under a temp root. The live harness
+// puts every sandbox dir and its built binary under a temp path, so this
+// distinguishes a live-test artifact from a production one at a stable location
+// such as ~/.local/bin/clyde. It matches only on a path-segment boundary against
+// the OS temp dir and the explicit /tmp and /private roots macOS resolves it
+// through, so a production path that merely contains "tmp" as a substring, or one
+// under an unrelated /var directory, is not misclassified as a temp daemon.
+func underTempRoot(path string) bool {
+	clean := filepath.Clean(path)
+	for _, root := range tempRoots() {
+		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// tempRoots returns the directories the live harness treats as temp: the OS temp
+// dir plus the explicit /tmp and /private roots macOS resolves it through. The OS
+// temp dir covers t.TempDir sandboxes and the built test binary; the /tmp roots
+// cover the short runtime dir the harness makes with os.MkdirTemp("/tmp", ...).
+func tempRoots() []string {
+	roots := []string{"/tmp", "/private/tmp", "/private/var/folders"}
+	if osTemp := filepath.Clean(os.TempDir()); osTemp != "" && osTemp != "." {
+		roots = append(roots, osTemp)
+	}
+	return roots
 }
 
 // occupyPort binds the fake port so a test can assert preflight rejects it.
@@ -534,10 +616,12 @@ func (h *harness) assertProductionUntouched(t *testing.T) {
 	}
 }
 
-// snapshotProductionPids returns the set of running production clyde daemon
-// pids (those NOT under a temp XDG root). It shells to pgrep and filters by the
-// absence of a temp runtime dir in the environment is not feasible here, so it
-// matches the production binary path; the test binary lives under a temp dir.
+// snapshotProductionPids returns the set of running production clyde daemon pids,
+// meaning those whose binary lives at a stable install path rather than a temp
+// root. It lists every "clyde daemon" pid and keeps only the ones ps confirms are
+// production. Keeping only confirmed production pids keeps assertProductionUntouched
+// correct when several isolated instances run at once: a concurrent test daemon's
+// shutdown no longer looks like a production pid disappearing.
 func snapshotProductionPids() map[int]bool {
 	out, err := exec.Command("pgrep", "-f", "clyde daemon").Output()
 	pids := map[int]bool{}
@@ -546,11 +630,36 @@ func snapshotProductionPids() map[int]bool {
 	}
 	for _, line := range strings.Fields(string(out)) {
 		var pid int
-		if _, scanErr := fmt.Sscanf(line, "%d", &pid); scanErr == nil && pid > 0 {
+		if _, scanErr := fmt.Sscanf(line, "%d", &pid); scanErr != nil || pid <= 0 {
+			continue
+		}
+		if isProductionDaemon(pid) {
 			pids[pid] = true
 		}
 	}
 	return pids
+}
+
+// isProductionDaemon reports whether pid is the operator's installed production
+// daemon rather than a live-test daemon. It requires ps to resolve the command AND
+// that command's executable path to sit outside every temp root. A ps failure or
+// empty output is treated as not-production so a temp daemon caught exiting mid
+// shutdown is skipped instead of landing in the production set, where it would
+// later trip assertProductionUntouched as a false isolation breach.
+func isProductionDaemon(pid int) bool {
+	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return false
+	}
+	command := strings.TrimSpace(string(out))
+	if command == "" {
+		return false
+	}
+	execPath := command
+	if idx := strings.IndexByte(command, ' '); idx >= 0 {
+		execPath = command[:idx]
+	}
+	return !underTempRoot(execPath)
 }
 
 func buildWorktreeBinary(t *testing.T) string {
