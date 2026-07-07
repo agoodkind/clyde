@@ -81,6 +81,24 @@ func TestSendUpsertStreamSetsReexamineDeliveredWhenRequested(t *testing.T) {
 	}
 }
 
+func TestTruncateSemDocStringToMaxBytesNeverExceedsBudget(t *testing.T) {
+	t.Parallel()
+
+	// When maxBytes is smaller than the truncation marker, the helper must still
+	// return no more than maxBytes bytes and stay valid UTF-8, so the per-document
+	// size guard can never be defeated by the marker itself.
+	value := strings.Repeat("a", 100)
+	for _, maxBytes := range []int{0, 1, 5, 10, 20} {
+		got := truncateSemDocStringToMaxBytes(value, maxBytes)
+		if len(got) > maxBytes {
+			t.Fatalf("truncateSemDocStringToMaxBytes(_, %d) len = %d, want <= %d (%q)", maxBytes, len(got), maxBytes, got)
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncateSemDocStringToMaxBytes(_, %d) = %q, not valid UTF-8", maxBytes, got)
+		}
+	}
+}
+
 func TestSendUpsertStreamSplitsDocumentsUnderSafeByteBudget(t *testing.T) {
 	t.Parallel()
 

@@ -534,7 +534,18 @@ func truncateSemDocStringToMaxBytes(value string, maxBytes int) string {
 			return value[:cut] + marker
 		}
 	}
-	return semDocTruncationMarker(len(value))
+	// Even the marker alone exceeds maxBytes. Return the marker clamped to a
+	// UTF-8 boundary within maxBytes so this helper never returns more than
+	// maxBytes bytes, which keeps the per-document size guard sound.
+	marker := semDocTruncationMarker(len(value))
+	if len(marker) <= maxBytes {
+		return marker
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(marker[cut]) {
+		cut--
+	}
+	return marker[:cut]
 }
 
 func semDocTruncationMarker(omittedBytes int) string {
