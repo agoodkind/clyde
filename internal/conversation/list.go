@@ -256,7 +256,7 @@ func (idx *Index) firstTranscriptMatch(record Record, terms []string, options Se
 	stream, err := idx.resolveStream(record, LoadOptions{
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
+		IncludeToolOutputs:    true,
 	})
 	if err != nil {
 		return emptySearchMatch(), false, err
@@ -266,13 +266,14 @@ func (idx *Index) firstTranscriptMatch(record Record, terms []string, options Se
 		if streamErr != nil {
 			return emptySearchMatch(), false, streamErr
 		}
-		if messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) && messageMatchesTerms(message, terms) {
+		indexText := transcript.RenderMessageIndexText(message)
+		if messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) && messageIndexTextMatchesTerms(indexText, terms) {
 			return SearchMatch{
 				Record:        record,
 				MessageIndex:  messageIndex,
 				Role:          message.Role,
 				Timestamp:     message.Timestamp,
-				Snippet:       snippet(message.Text),
+				Snippet:       snippet(indexText),
 				Score:         0,
 				ContextWindow: "",
 			}, true, nil
@@ -398,8 +399,8 @@ func recordMatchesTerms(record Record, terms []string) bool {
 	return true
 }
 
-func messageMatchesTerms(message transcript.Message, terms []string) bool {
-	text := strings.ToLower(message.Text)
+func messageIndexTextMatchesTerms(indexText string, terms []string) bool {
+	text := strings.ToLower(indexText)
 	for _, term := range terms {
 		if !strings.Contains(text, term) {
 			return false

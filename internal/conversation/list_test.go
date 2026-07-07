@@ -4,6 +4,7 @@ import (
 	"context"
 	"iter"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -195,9 +196,75 @@ func TestSearchConversationsAppliesOffsetToTranscriptMatches(t *testing.T) {
 	}
 }
 
+func TestSearchConversationsMatchesRenderedMessageIndexText(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry()
+	parser := &messageMapParser{
+		provider: providerid.ProviderClaude,
+		messages: map[string][]transcript.Message{
+			"/tmp/tools.jsonl": {
+				{
+					Role:      "assistant",
+					Text:      "ordinary prose",
+					Thinking:  "reasoning-needle",
+					Timestamp: time.Unix(40, 0),
+					HasTools:  true,
+					Tools: []transcript.ToolCall{
+						{
+							Name:   "Bash",
+							Input:  transcript.ToolInputJSON{Raw: []byte(`{"command":"printf command-needle"}`)},
+							Output: "output-needle",
+						},
+					},
+				},
+			},
+		},
+		loadOptions: nil,
+	}
+	registry.Register(parser)
+	idx := &Index{
+		mu:           sync.Mutex{},
+		registry:     registry,
+		records:      []Record{testSearchRecord("claude:tools", "/tmp/tools.jsonl")},
+		prevRecords:  nil,
+		prevStamps:   nil,
+		loaded:       true,
+		refreshing:   false,
+		lastRefresh:  time.Now(),
+		cachePath:    "",
+		debounce:     time.Hour,
+		scanProvider: scan,
+	}
+
+	result, err := idx.SearchConversations(context.Background(), SearchConversationsOptions{
+		Query: "reasoning-needle command-needle output-needle",
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("search conversations: %v", err)
+	}
+
+	if result.ReturnedCount != 1 {
+		t.Fatalf("returned count = %d, want 1", result.ReturnedCount)
+	}
+	if len(parser.loadOptions) != 1 {
+		t.Fatalf("load options calls = %d, want 1", len(parser.loadOptions))
+	}
+	if !parser.loadOptions[0].IncludeToolOutputs {
+		t.Fatalf("IncludeToolOutputs = false, want true")
+	}
+	snippet := result.Matches[0].Snippet
+	for _, want := range []string{"reasoning-needle", "command-needle", "output-needle"} {
+		if !strings.Contains(snippet, want) {
+			t.Fatalf("snippet = %q, missing %q", snippet, want)
+		}
+	}
+}
+
 type messageMapParser struct {
-	provider providerid.Provider
-	messages map[string][]transcript.Message
+	provider    providerid.Provider
+	messages    map[string][]transcript.Message
+	loadOptions []LoadOptions
 }
 
 func (p *messageMapParser) Provider() providerid.Provider { return p.provider }
@@ -210,7 +277,8 @@ func (*messageMapParser) ScanRecord(string, FileStamp) (Record, bool) {
 	return emptyRecord(), false
 }
 
-func (p *messageMapParser) Stream(path string, _ LoadOptions) iter.Seq2[transcript.Message, error] {
+func (p *messageMapParser) Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
+	p.loadOptions = append(p.loadOptions, opts)
 	return func(yield func(transcript.Message, error) bool) {
 		for _, message := range p.messages[path] {
 			if !yield(message, nil) {

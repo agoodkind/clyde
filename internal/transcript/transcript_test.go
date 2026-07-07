@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,43 @@ func TestShapeConversationConversationOnlyStripsImagePlaceholderLines(t *testing
 	}
 	if turns[0].Text != "can you align the arrows and double check all the numbers make sense?" {
 		t.Fatalf("text=%q", turns[0].Text)
+	}
+}
+
+func TestRenderMessageIndexTextSurfacesToolsAndThinking(t *testing.T) {
+	t.Parallel()
+
+	exitPlanText := RenderMessageIndexText(Message{
+		Role:     "assistant",
+		HasTools: true,
+		Tools: []ToolCall{
+			{
+				Name:  "ExitPlanMode",
+				Input: ToolInputJSON{Raw: json.RawMessage(`{"plan":"Run the staged backfill in dry-run mode first."}`)},
+			},
+		},
+	})
+	if !strings.Contains(exitPlanText, "ExitPlanMode") || !strings.Contains(exitPlanText, "staged backfill") {
+		t.Fatalf("exit plan index text = %q, want tool name and plan text", exitPlanText)
+	}
+
+	mixedText := RenderMessageIndexText(Message{
+		Role:     "assistant",
+		Text:     "  prose answer\r\n\r\n",
+		Thinking: "  thinking trace  ",
+		HasTools: true,
+		Tools: []ToolCall{
+			{
+				Name:   "Bash",
+				Input:  ToolInputJSON{Raw: json.RawMessage(`{"command":"go test ./internal/transcript"}`)},
+				Output: "ok",
+			},
+		},
+	})
+	for _, want := range []string{"prose answer", "thinking trace", "Bash", "go test ./internal/transcript", "ok"} {
+		if !strings.Contains(mixedText, want) {
+			t.Fatalf("mixed index text = %q, missing %q", mixedText, want)
+		}
 	}
 }
 
