@@ -33,6 +33,7 @@ Prefer code and tests over this file for exact behavior.
 - Use `internal/mitm/` plus `internal/providers/*/mitmcontrib/` for MITM provider registration, route claims, identity facets, and capture extensions.
 - Use `docs/logging/` and `internal/slogger/` for logging, sink, inventory, and correlation contracts.
 - Use `docs/cursor.md` for the empirical reasons behind Cursor-specific adapter rules.
+- Use `docs/reorient/overview.md` for the two-tier reorient-after-compaction delivery and the MITM summary-injection hook.
 
 Do not add stale snapshots of command tables, schemas, request payloads, local machine setup, or dated audits to this file. Add links or brief pointers instead.
 
