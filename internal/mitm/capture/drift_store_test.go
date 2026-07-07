@@ -31,6 +31,34 @@ func waitForShapeCount(t *testing.T, store *Store, upstream string, want int) {
 	}
 }
 
+// waitForShapeSeenCount polls a fresh verifier connection until the drift_shapes
+// seen_count for the upstream and fingerprint reaches at least want. RecordShape
+// commits asynchronously, so waiting only for the row to exist (waitForShapeCount)
+// races the later dedup upserts; a test asserting the final seen_count must wait
+// for that count, not just the row.
+func waitForShapeSeenCount(t *testing.T, store *Store, upstream, fingerprint string, want int) {
+	t.Helper()
+	// Keep the busy timeout well under the poll deadline: a locked query returns
+	// quickly and the loop retries, rather than blocking past the deadline.
+	db, err := sql.Open("sqlite3", "file:"+store.cfg.DBPath+"?_busy_timeout=200")
+	if err != nil {
+		t.Fatalf("open shape verifier: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var seen sql.NullInt64
+		scanErr := db.QueryRow(`SELECT max(seen_count) FROM drift_shapes WHERE upstream=? AND fingerprint=?`, upstream, fingerprint).Scan(&seen)
+		if scanErr == nil && seen.Valid && int(seen.Int64) >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for seen_count>=%d for upstream %q fingerprint %q", want, upstream, fingerprint)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func sampleShape(upstream, fingerprint string, ts time.Time) DriftShape {
 	return DriftShape{
 		Timestamp:          ts,
@@ -53,7 +81,10 @@ func TestRecordShapeDedupBumpsSeenCount(t *testing.T) {
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts))
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts.Add(time.Minute)))
 	store.RecordShape(sampleShape("claude-code", "fp-1", ts.Add(2*time.Minute)))
-	waitForShapeCount(t, store, "claude-code", 1)
+	// Wait for the final dedup count, not just the row: the three RecordShape
+	// upserts commit asynchronously, so asserting after only the row exists races
+	// the second and third upserts.
+	waitForShapeSeenCount(t, store, "claude-code", "fp-1", 3)
 
 	db := openVerifier(t, store.cfg.DBPath)
 	var rows, seen int
