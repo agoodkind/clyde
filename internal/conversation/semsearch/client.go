@@ -420,6 +420,7 @@ func truncateSemDocForUpsert(doc SemDoc) SemDoc {
 	out.Tools = append([]SemToolCall(nil), doc.Tools...)
 	out = truncateSemDocToolField(out, semToolStringOutput)
 	out = truncateSemDocToolField(out, semToolStringInputJSON)
+	out = truncateSemDocToolField(out, semToolStringCommand)
 	out.Text = truncateSemDocStringField(out.Text, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
 	out.Thinking = truncateSemDocStringField(out.Thinking, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
 	return out
@@ -430,6 +431,7 @@ type semToolStringField int
 const (
 	semToolStringOutput semToolStringField = iota
 	semToolStringInputJSON
+	semToolStringCommand
 )
 
 func truncateSemDocToolField(doc SemDoc, field semToolStringField) SemDoc {
@@ -444,6 +446,8 @@ func truncateSemDocToolField(doc SemDoc, field semToolStringField) SemDoc {
 			doc.Tools[index].Output = truncateSemDocStringField(doc.Tools[index].Output, requiredReduction)
 		case semToolStringInputJSON:
 			doc.Tools[index].InputJSON = truncateSemDocStringField(doc.Tools[index].InputJSON, requiredReduction)
+		case semToolStringCommand:
+			doc.Tools[index].Command = truncateSemDocStringField(doc.Tools[index].Command, requiredReduction)
 		default:
 			return doc
 		}
@@ -461,6 +465,8 @@ func largestShrinkableToolStringIndex(tools []SemToolCall, field semToolStringFi
 			value = tool.Output
 		case semToolStringInputJSON:
 			value = tool.InputJSON
+		case semToolStringCommand:
+			value = tool.Command
 		default:
 			return -1
 		}
