@@ -256,8 +256,8 @@ func writeBackfillConversationDocumentsResult(ctx context.Context, f *cli.Factor
 		suffix = fmt.Sprintf(", %d skipped %s; manifest sync reported %d needed; job %s.", skipped, backfillConversationNoun(skipped), needed, jobID)
 	}
 	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, fmt.Sprintf(
-		"%s conversation documents from %d conversations: %d documents%s\n",
-		action, conversations, documents, suffix,
+		"%s conversation documents from %d %s: %d %s%s\n",
+		action, conversations, backfillConversationNoun(conversations), documents, backfillDocumentNoun(documents), suffix,
 	)); writeErr != nil {
 		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.write_failed", "concern", "cli.daemon", "component", "cli", "err", writeErr)
 		return fmt.Errorf("write backfill documents result: %w", writeErr)
@@ -270,6 +270,13 @@ func backfillConversationNoun(count int) string {
 		return "conversation"
 	}
 	return "conversations"
+}
+
+func backfillDocumentNoun(count int) string {
+	if count == 1 {
+		return "document"
+	}
+	return "documents"
 }
 
 // buildBackfillEntries projects each conversation into the enrichment entry the

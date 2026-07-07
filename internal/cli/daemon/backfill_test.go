@@ -330,7 +330,7 @@ func TestBackfillConversationDocumentsDryRunSelectsConversation(t *testing.T) {
 	if strings.Join(index.loadedIDs, ",") != "codex:target" {
 		t.Fatalf("loaded ids = %v, want only codex:target", index.loadedIDs)
 	}
-	if !strings.Contains(output.String(), "Would send conversation documents from 1 conversations: 1 documents, 0 skipped conversations.") {
+	if !strings.Contains(output.String(), "Would send conversation documents from 1 conversation: 1 document, 0 skipped conversations.") {
 		t.Fatalf("output = %q", output.String())
 	}
 }
