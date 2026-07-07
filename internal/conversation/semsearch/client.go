@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	lmclient "goodkind.io/lm-semantic-search/client"
 	lmsemanticsearchv1 "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
@@ -398,16 +399,113 @@ func sendUpsertDocumentChunks(
 			)
 			return fmt.Errorf("send upsert documents chunk: %w", ctx.Err())
 		}
-		docBytes := semDocByteSize(doc)
+		boundedDoc := truncateSemDocForUpsert(doc)
+		docBytes := semDocByteSize(boundedDoc)
 		if len(batch) > 0 && (len(batch) >= upsertStreamMaxDocsPerChunk || batchBytes+docBytes > upsertStreamMaxBytesPerChunk) {
 			if err := flush(); err != nil {
 				return err
 			}
 		}
-		batch = append(batch, doc)
+		batch = append(batch, boundedDoc)
 		batchBytes += docBytes
 	}
 	return flush()
+}
+
+func truncateSemDocForUpsert(doc SemDoc) SemDoc {
+	if semDocByteSize(doc) <= upsertStreamMaxBytesPerChunk {
+		return doc
+	}
+	out := doc
+	out.Tools = append([]SemToolCall(nil), doc.Tools...)
+	out = truncateSemDocToolField(out, semToolStringOutput)
+	out = truncateSemDocToolField(out, semToolStringInputJSON)
+	out.Text = truncateSemDocStringField(out.Text, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
+	out.Thinking = truncateSemDocStringField(out.Thinking, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
+	return out
+}
+
+type semToolStringField int
+
+const (
+	semToolStringOutput semToolStringField = iota
+	semToolStringInputJSON
+)
+
+func truncateSemDocToolField(doc SemDoc, field semToolStringField) SemDoc {
+	for semDocByteSize(doc) > upsertStreamMaxBytesPerChunk {
+		index := largestShrinkableToolStringIndex(doc.Tools, field)
+		if index < 0 {
+			return doc
+		}
+		requiredReduction := semDocByteSize(doc) - upsertStreamMaxBytesPerChunk
+		switch field {
+		case semToolStringOutput:
+			doc.Tools[index].Output = truncateSemDocStringField(doc.Tools[index].Output, requiredReduction)
+		case semToolStringInputJSON:
+			doc.Tools[index].InputJSON = truncateSemDocStringField(doc.Tools[index].InputJSON, requiredReduction)
+		default:
+			return doc
+		}
+	}
+	return doc
+}
+
+func largestShrinkableToolStringIndex(tools []SemToolCall, field semToolStringField) int {
+	index := -1
+	largestBytes := 0
+	for i, tool := range tools {
+		var value string
+		switch field {
+		case semToolStringOutput:
+			value = tool.Output
+		case semToolStringInputJSON:
+			value = tool.InputJSON
+		default:
+			return -1
+		}
+		if len(value) <= largestBytes || !canShrinkSemDocString(value) {
+			continue
+		}
+		index = i
+		largestBytes = len(value)
+	}
+	return index
+}
+
+func truncateSemDocStringField(value string, requiredReduction int) string {
+	if requiredReduction <= 0 || !canShrinkSemDocString(value) {
+		return value
+	}
+	maxBytes := len(value) - requiredReduction
+	return truncateSemDocStringToMaxBytes(value, maxBytes)
+}
+
+func canShrinkSemDocString(value string) bool {
+	return len(value) > len(semDocTruncationMarker(len(value)))
+}
+
+func truncateSemDocStringToMaxBytes(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	for cut := min(maxBytes, len(value)); cut >= 0; cut-- {
+		if cut > 0 && cut < len(value) && !utf8.RuneStart(value[cut]) {
+			continue
+		}
+		marker := semDocTruncationMarker(len(value) - cut)
+		if cut+len(marker) <= maxBytes {
+			return value[:cut] + marker
+		}
+	}
+	return semDocTruncationMarker(len(value))
+}
+
+func semDocTruncationMarker(omittedBytes int) string {
+	return fmt.Sprintf("\n…[truncated %d bytes]", omittedBytes)
 }
 
 // semDocByteSize approximates one document's wire size for chunk framing: the

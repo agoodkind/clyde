@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	lmsemanticsearchv1 "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
 	"google.golang.org/grpc"
@@ -84,6 +85,64 @@ func TestSendUpsertStreamSplitsDocumentsUnderSafeByteBudget(t *testing.T) {
 	}
 	if documentCount != len(docs) {
 		t.Fatalf("streamed documents = %d, want %d", documentCount, len(docs))
+	}
+}
+
+func TestSendUpsertStreamTruncatesSingleOversizedToolOutput(t *testing.T) {
+	t.Parallel()
+
+	stream := &fakeUpsertStreamClient{ClientStreamingClient: nil, sent: nil}
+	docs := []SemDoc{
+		{
+			ConversationID: "codex:oversized",
+			MessageIndex:   0,
+			Role:           "assistant",
+			Text:           "searchable assistant text",
+			Tools: []SemToolCall{
+				{
+					Name:      "Bash",
+					InputJSON: `{"command":"generate-large-output"}`,
+					Command:   "generate-large-output",
+					LangHint:  "bash",
+					Output:    strings.Repeat("é", upsertStreamMaxBytesPerChunk/2+1024),
+				},
+			},
+		},
+	}
+
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil); err != nil {
+		t.Fatalf("sendUpsertStream returned error: %v", err)
+	}
+
+	documentChunks := make([]*lmsemanticsearchv1.UpsertConversationDocumentsDocuments, 0)
+	for _, chunk := range stream.sent {
+		if documents := chunk.GetDocuments(); documents != nil {
+			documentChunks = append(documentChunks, documents)
+		}
+	}
+	if len(documentChunks) != 1 {
+		t.Fatalf("document chunks = %d, want 1", len(documentChunks))
+	}
+	documents := documentChunks[0].GetDocuments()
+	if len(documents) != 1 {
+		t.Fatalf("documents = %d, want 1", len(documents))
+	}
+	chunkBytes := protoDocumentChunkByteSize(documents)
+	if chunkBytes > upsertStreamMaxBytesPerChunk {
+		t.Fatalf("document chunk bytes = %d, want <= %d", chunkBytes, upsertStreamMaxBytesPerChunk)
+	}
+	tool := documents[0].GetTools()[0]
+	if tool.GetName() != "Bash" || tool.GetCommand() != "generate-large-output" || tool.GetLangHint() != "bash" {
+		t.Fatalf("tool identity = %+v, want name, command, and lang hint intact", tool)
+	}
+	if !strings.Contains(tool.GetOutput(), "\n…[truncated ") {
+		t.Fatalf("tool output was not truncated: suffix %q", tool.GetOutput()[len(tool.GetOutput())-64:])
+	}
+	if !utf8.ValidString(tool.GetOutput()) {
+		t.Fatalf("tool output is not valid UTF-8")
+	}
+	if tool.GetInputJson() != `{"command":"generate-large-output"}` {
+		t.Fatalf("tool input_json = %q, want intact input", tool.GetInputJson())
 	}
 }
 
