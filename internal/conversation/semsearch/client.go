@@ -421,6 +421,14 @@ func truncateSemDocForUpsert(doc SemDoc) SemDoc {
 	out = truncateSemDocToolField(out, semToolStringOutput)
 	out = truncateSemDocToolField(out, semToolStringInputJSON)
 	out = truncateSemDocToolField(out, semToolStringCommand)
+	if semDocByteSize(out) > upsertStreamMaxBytesPerChunk {
+		// Non-shrinkable tool overhead can keep the document over budget after
+		// field truncation: a very high tool-call count, or long tool names and
+		// lang hints, which never shrink. Drop the tool calls before truncating
+		// prose so searchable Text survives, rather than being cut to make room
+		// for overhead that would still blow the gRPC message cap.
+		out.Tools = nil
+	}
 	out.Text = truncateSemDocStringField(out.Text, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
 	out.Thinking = truncateSemDocStringField(out.Thinking, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
 	return out

@@ -146,6 +146,57 @@ func TestSendUpsertStreamTruncatesSingleOversizedToolOutput(t *testing.T) {
 	}
 }
 
+func TestSendUpsertStreamDropsToolsWhenOverheadStaysOverBudget(t *testing.T) {
+	t.Parallel()
+
+	// Oversize dominated by non-shrinkable tool overhead: tool names never
+	// truncate, so field truncation cannot reduce the document and the final
+	// guard must drop the tool calls to keep the chunk under budget.
+	oversizedName := strings.Repeat("n", upsertStreamMaxBytesPerChunk/2)
+	stream := &fakeUpsertStreamClient{ClientStreamingClient: nil, sent: nil}
+	docs := []SemDoc{
+		{
+			ConversationID: "codex:overhead",
+			MessageIndex:   0,
+			Role:           "assistant",
+			Text:           "searchable assistant text",
+			Tools: []SemToolCall{
+				{Name: oversizedName, LangHint: "bash"},
+				{Name: oversizedName, LangHint: "bash"},
+				{Name: oversizedName, LangHint: "bash"},
+			},
+		},
+	}
+
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil); err != nil {
+		t.Fatalf("sendUpsertStream returned error: %v", err)
+	}
+
+	documentChunks := make([]*lmsemanticsearchv1.UpsertConversationDocumentsDocuments, 0)
+	for _, chunk := range stream.sent {
+		if documents := chunk.GetDocuments(); documents != nil {
+			documentChunks = append(documentChunks, documents)
+		}
+	}
+	if len(documentChunks) != 1 {
+		t.Fatalf("document chunks = %d, want 1", len(documentChunks))
+	}
+	documents := documentChunks[0].GetDocuments()
+	if len(documents) != 1 {
+		t.Fatalf("documents = %d, want 1", len(documents))
+	}
+	chunkBytes := protoDocumentChunkByteSize(documents)
+	if chunkBytes > upsertStreamMaxBytesPerChunk {
+		t.Fatalf("document chunk bytes = %d, want <= %d", chunkBytes, upsertStreamMaxBytesPerChunk)
+	}
+	if got := len(documents[0].GetTools()); got != 0 {
+		t.Fatalf("tools = %d, want 0 after overhead guard drops them", got)
+	}
+	if documents[0].GetText() != "searchable assistant text" {
+		t.Fatalf("text = %q, want searchable assistant text intact", documents[0].GetText())
+	}
+}
+
 func TestConversationDocumentsCarriesToolsAndThinking(t *testing.T) {
 	t.Parallel()
 
