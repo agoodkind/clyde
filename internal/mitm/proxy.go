@@ -55,8 +55,9 @@ type Proxy struct {
 	// connections.
 	Tunnels *livetrack.Registry[TunnelMeta]
 
-	mu  sync.RWMutex
-	cfg config.MITMConfig
+	mu                   sync.RWMutex
+	cfg                  config.MITMConfig
+	requestResponseHooks []RequestResponseHook
 	// base is the loopback HTTP URL of the first bound listener, returned by
 	// BaseURL for in-process clients (the adapter egress).
 	base string
@@ -148,14 +149,15 @@ func NewProxy(cfg config.MITMConfig, logging config.LoggingRequest, log *slog.Lo
 			ParallelClose: false,
 			Now:           nil,
 		}),
-		mu:        sync.RWMutex{},
-		cfg:       cfg,
-		base:      "http://" + listeners[0].Addr().String(),
-		listeners: listeners,
-		h3Conns:   h3Conns,
-		server:    nil,
-		h2Server:  &http2.Server{},
-		h3Server:  nil,
+		mu:                   sync.RWMutex{},
+		cfg:                  cfg,
+		requestResponseHooks: nil,
+		base:                 "http://" + listeners[0].Addr().String(),
+		listeners:            listeners,
+		h3Conns:              h3Conns,
+		server:               nil,
+		h2Server:             &http2.Server{},
+		h3Server:             nil,
 
 		h3Mu:             sync.Mutex{},
 		h3Transport:      nil,
@@ -479,6 +481,13 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 	_ = r.Body.Close()
 
 	requestBodyIndex := newCaptureBodyIndexFromSummary(summarizeBody(body))
+	transformer, err := p.matchRequestResponseHook(newRequestResponseHookRequest(provider, r.Host, r, newStaticRequestResponseHookBody(body)))
+	if err != nil {
+		// A hook is an optional enhancement, so a match failure must not abort the
+		// client request; forward it with no transformer. matchRequestResponseHook
+		// already logged the failure, so do not log it again here.
+		transformer = nil
+	}
 	resp, ok := p.dispatchUpstream(upstreamCtx, w, upstreamRequest{
 		method:   r.Method,
 		path:     r.URL.RequestURI(),
@@ -492,20 +501,32 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+	streamResp, err := p.applyResponseHook(upstreamCtx, transformer, resp)
+	if err != nil {
+		p.log.WarnContext(upstreamCtx, "mitm.proxy.response_hook_transform_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", err)
+		http.Error(w, "response hook failed", http.StatusBadGateway)
+		return
+	}
+	// Close the transformed body only when the hook produced a new response; when
+	// no transform ran applyResponseHook returns resp unchanged, so the defer
+	// above already covers it and a second close would double-close.
+	if streamResp != resp {
+		defer func() { _ = streamResp.Body.Close() }()
+	}
 
-	forwardResponseHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
+	forwardResponseHeaders(w.Header(), streamResp.Header)
+	w.WriteHeader(streamResp.StatusCode)
 	// Buffer the response up to the store body cap so the full body reaches
 	// the capture store while still streaming to the client. The wire-leg
 	// summary is derived from this same buffer (summarizeBody previews/caps).
 	captureBuffer := &limitedBuffer{limit: p.captureBodyCap(cfg), buf: bytes.Buffer{}}
 	flusher, _ := w.(http.Flusher)
-	copyErr := streamWithFlush(w, captureBuffer, resp.Body, flusher, plainHTTPSession)
+	copyErr := streamWithFlush(w, captureBuffer, streamResp.Body, flusher, plainHTTPSession)
 	duration := clock.Since(started)
 	if copyErr != nil {
 		p.log.Warn("mitm.proxy.copy_failed", "concern", "providers.mitm.wire", "provider", provider, "path", r.URL.Path, "err", copyErr)
 	}
-	p.finalizePlainHTTPCapture(r, resp, plainHTTPCaptureFinalize{
+	p.finalizePlainHTTPCapture(r, streamResp, plainHTTPCaptureFinalize{
 		cfg:              cfg,
 		provider:         provider,
 		upstream:         upstream,
