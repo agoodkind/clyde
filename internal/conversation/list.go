@@ -266,8 +266,12 @@ func (idx *Index) firstTranscriptMatch(record Record, terms []string, options Se
 		if streamErr != nil {
 			return emptySearchMatch(), false, streamErr
 		}
+		if !messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) {
+			messageIndex++
+			continue
+		}
 		indexText := transcript.RenderMessageIndexText(message)
-		if messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) && messageIndexTextMatchesTerms(indexText, terms) {
+		if messageIndexTextMatchesTerms(indexText, terms) {
 			return SearchMatch{
 				Record:        record,
 				MessageIndex:  messageIndex,

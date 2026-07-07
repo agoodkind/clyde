@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"iter"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,6 +259,68 @@ func TestSearchConversationsMatchesRenderedMessageIndexText(t *testing.T) {
 		if !strings.Contains(snippet, want) {
 			t.Fatalf("snippet = %q, missing %q", snippet, want)
 		}
+	}
+}
+
+func TestSearchConversationsAppliesRowFiltersBeforeRenderingIndexText(t *testing.T) {
+	registry := NewRegistry()
+	largeToolOutput := strings.Repeat("filtered output ", 256*1024)
+	parser := &messageMapParser{
+		provider: providerid.ProviderClaude,
+		messages: map[string][]transcript.Message{
+			"/tmp/filtered-tools.jsonl": {
+				{
+					Role:      "user",
+					Text:      "filtered user message",
+					Timestamp: time.Unix(40, 0),
+					HasTools:  true,
+					Tools: []transcript.ToolCall{
+						{
+							Name:   "Bash",
+							Input:  transcript.ToolInputJSON{Raw: []byte(`{"command":"printf filtered"}`)},
+							Output: largeToolOutput,
+						},
+					},
+				},
+				{Role: "assistant", Text: "assistant target needle", Timestamp: time.Unix(50, 0)},
+			},
+		},
+		loadOptions: nil,
+	}
+	registry.Register(parser)
+	idx := &Index{
+		mu:           sync.Mutex{},
+		registry:     registry,
+		records:      []Record{testSearchRecord("claude:filtered-tools", "/tmp/filtered-tools.jsonl")},
+		prevRecords:  nil,
+		prevStamps:   nil,
+		loaded:       true,
+		refreshing:   false,
+		lastRefresh:  time.Now(),
+		cachePath:    "",
+		debounce:     time.Hour,
+		scanProvider: scan,
+	}
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	result, err := idx.SearchConversations(context.Background(), SearchConversationsOptions{
+		Query: "assistant target needle",
+		Limit: 1,
+		Roles: []string{"assistant"},
+	})
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("search conversations: %v", err)
+	}
+	if result.ReturnedCount != 1 {
+		t.Fatalf("returned count = %d, want 1", result.ReturnedCount)
+	}
+	allocatedBytes := after.TotalAlloc - before.TotalAlloc
+	if allocatedBytes > uint64(len(largeToolOutput)/2) {
+		t.Fatalf("search allocated %d bytes, want less than %d", allocatedBytes, len(largeToolOutput)/2)
 	}
 }
 
