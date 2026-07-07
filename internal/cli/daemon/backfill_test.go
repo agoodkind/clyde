@@ -149,6 +149,72 @@ func (idx *fakeDocumentBackfillIndex) LoadMessagesWithOptions(record conversatio
 	return append([]transcript.Message(nil), messages...), nil
 }
 
+func TestSelectBackfillDocumentRecordsPrefersFreshestDuplicate(t *testing.T) {
+	t.Parallel()
+	stale := testDocumentStampedRecord("claude:dup", 10)
+	stale.Record.ArtifactPath = "/tmp/clyde-backfill-stale.jsonl"
+	stale.Record.UpdatedAt = time.Unix(100, 0)
+	fresh := testDocumentStampedRecord("claude:dup", 20)
+	fresh.Record.ArtifactPath = "/tmp/clyde-backfill-fresh.jsonl"
+	fresh.Record.UpdatedAt = time.Unix(200, 0)
+	other := testDocumentStampedRecord("claude:other", 30)
+
+	selected, err := selectBackfillDocumentRecords([]conversation.StampedRecord{
+		stale,
+		other,
+		fresh,
+	}, 0, "")
+	if err != nil {
+		t.Fatalf("select document records: %v", err)
+	}
+
+	if len(selected) != 2 {
+		t.Fatalf("selected records = %d, want 2", len(selected))
+	}
+	if selected[0].Record.ArtifactPath != fresh.Record.ArtifactPath {
+		t.Fatalf("selected duplicate path = %q, want %q", selected[0].Record.ArtifactPath, fresh.Record.ArtifactPath)
+	}
+	if selected[0].Stamp.Fingerprint() != fresh.Stamp.Fingerprint() {
+		t.Fatalf("selected duplicate fingerprint = %q, want %q", selected[0].Stamp.Fingerprint(), fresh.Stamp.Fingerprint())
+	}
+	if selected[1].Record.ID != other.Record.ID {
+		t.Fatalf("second selected record = %q, want %q", selected[1].Record.ID, other.Record.ID)
+	}
+}
+
+func TestBuildBackfillConversationDocumentsSkipsLoadFailure(t *testing.T) {
+	t.Parallel()
+	index := fakeDocumentBackfillIndex{
+		messagesByID: map[string][]transcript.Message{
+			"claude:one":   {{Role: "user", Text: "one"}},
+			"claude:three": {{Role: "assistant", Text: "three"}},
+		},
+	}
+	stampedRecords := []conversation.StampedRecord{
+		testDocumentStampedRecord("claude:one", 10),
+		testDocumentStampedRecord("claude:missing", 20),
+		testDocumentStampedRecord("claude:three", 30),
+	}
+
+	docs, manifest, skipped := buildBackfillConversationDocuments(context.Background(), &index, stampedRecords)
+
+	if skipped != 1 {
+		t.Fatalf("skipped = %d, want 1", skipped)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("documents = %d, want 2", len(docs))
+	}
+	if len(manifest) != 2 {
+		t.Fatalf("manifest = %d, want 2", len(manifest))
+	}
+	if manifest[0].ConversationID != "claude:one" || manifest[1].ConversationID != "claude:three" {
+		t.Fatalf("manifest = %+v, want successful conversations only", manifest)
+	}
+	if strings.Join(index.loadedIDs, ",") != "claude:one,claude:missing,claude:three" {
+		t.Fatalf("loaded ids = %v, want all selected conversations attempted", index.loadedIDs)
+	}
+}
+
 func TestBackfillConversationDocumentsDryRunSelectsLimit(t *testing.T) {
 	t.Parallel()
 	output := &bytes.Buffer{}
@@ -194,7 +260,40 @@ func TestBackfillConversationDocumentsDryRunSelectsLimit(t *testing.T) {
 	if dialCalled {
 		t.Fatal("dry-run dialed semantic client")
 	}
-	if !strings.Contains(output.String(), "Would send conversation documents from 2 conversations: 2 documents.") {
+	if !strings.Contains(output.String(), "Would send conversation documents from 2 conversations: 2 documents, 0 skipped conversations.") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestBackfillConversationDocumentsDryRunReportsSkippedConversations(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+			testDocumentStampedRecord("claude:missing", 20),
+			testDocumentStampedRecord("claude:three", 30),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one":   {{Role: "user", Text: "one"}},
+			"claude:three": {{Role: "assistant", Text: "three"}},
+		},
+	}
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: true, Limit: 0, ConversationID: ""},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			return nil, errors.New("unexpected dial")
+		},
+	)
+	if err != nil {
+		t.Fatalf("run backfill conversation documents: %v", err)
+	}
+
+	if !strings.Contains(output.String(), "Would send conversation documents from 3 conversations: 2 documents, 1 skipped conversation.") {
 		t.Fatalf("output = %q", output.String())
 	}
 }
@@ -231,7 +330,7 @@ func TestBackfillConversationDocumentsDryRunSelectsConversation(t *testing.T) {
 	if strings.Join(index.loadedIDs, ",") != "codex:target" {
 		t.Fatalf("loaded ids = %v, want only codex:target", index.loadedIDs)
 	}
-	if !strings.Contains(output.String(), "Would send conversation documents from 1 conversations: 1 documents.") {
+	if !strings.Contains(output.String(), "Would send conversation documents from 1 conversations: 1 documents, 0 skipped conversations.") {
 		t.Fatalf("output = %q", output.String())
 	}
 }
