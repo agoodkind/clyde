@@ -27,6 +27,17 @@ const normalRequestBody = `{"messages":[` +
 	`{"role":"user","content":"say a color"}` +
 	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
 
+// compactWithTrailingSystemBody is an interactive summarization request: the
+// compaction prompt is the last user message, but a trailing system-reminder
+// message follows it, so the final message is not the prompt. Detection must
+// still match by scanning back to the last user message.
+const compactWithTrailingSystemBody = `{"messages":[` +
+	`{"role":"user","content":"hi"},` +
+	`{"role":"assistant","content":"ok"},` +
+	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]},` +
+	`{"role":"system","content":"The task tools haven't been used recently. Consider using TaskCreate."}` +
+	`],"metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"a\",\"session_id\":\"sess-abc\"}"}}`
+
 const summarySSEResponse = "event: message_start\n" +
 	`data: {"type":"message_start","message":{"id":"m","content":[]}}` + "\n\n" +
 	"event: content_block_start\n" +
@@ -87,6 +98,33 @@ func TestHookMatchesCompactionSummaryRequest(t *testing.T) {
 	}
 	if match.Transformer == nil {
 		t.Fatal("expected a transformer on match")
+	}
+	appender, ok := match.Transformer.(responseAppendTransformer)
+	if !ok {
+		t.Fatalf("transformer type = %T, want responseAppendTransformer", match.Transformer)
+	}
+	if appender.sessionID != "sess-abc" {
+		t.Fatalf("sessionID = %q, want %q", appender.sessionID, "sess-abc")
+	}
+}
+
+func TestHookMatchesCompactionWithTrailingSystemMessage(t *testing.T) {
+	t.Parallel()
+	// Interactive Claude Code appends a system-reminder after the compaction
+	// prompt, so the final message is not the prompt. Detection must scan back to
+	// the last user message and still match.
+	hook := New(fixedContentProvider("recovered"))
+	match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{},
+		Body:   staticHookBody{body: []byte(compactWithTrailingSystemBody)},
+	})
+	if err != nil {
+		t.Fatalf("MatchRequestResponse err = %v", err)
+	}
+	if !match.Matched {
+		t.Fatal("a compaction request with a trailing system message must match")
 	}
 	appender, ok := match.Transformer.(responseAppendTransformer)
 	if !ok {
