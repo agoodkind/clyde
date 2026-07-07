@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"goodkind.io/clyde/internal/mitm"
@@ -22,7 +23,7 @@ const (
 	// this-conversation partial variants all open with it). The compaction
 	// summarization request is structurally identical to a normal turn on the wire
 	// (it carries the full tool schema and the same top-level shape), so this
-	// first-party control string in the request's final user message is the only
+	// first-party control string in the request's last user message is the only
 	// reliable discriminator. The imperative "Your task is to ..." framing keeps a
 	// user who merely asks for a summary from matching. If Claude Code changes the
 	// prompt this stops matching, so detection fails safe to no injection.
@@ -125,23 +126,27 @@ func unmatchedRequestResponseHookMatch() mitm.RequestResponseHookMatch {
 	}
 }
 
-// requestIsCompactionSummary reports whether the request's final message carries
-// Claude Code's compaction prompt. The prompt is the last user message of the
-// summarization request, so matching the final message keeps a normal turn
-// (whose final message is the user's own input) from matching.
+// requestIsCompactionSummary reports whether the request's last user message
+// carries Claude Code's compaction prompt. The prompt is the last user message
+// of the summarization request, but interactive Claude Code appends a trailing
+// system-reminder message after it, so the final message is not always the
+// prompt. Scanning back to the last user message matches both the headless case
+// (the prompt is the final message) and the interactive case (a system-reminder
+// follows the prompt). Matching the last user message still keeps a normal turn
+// (whose last user message is the user's own input) from matching, because the
+// signature is Claude Code's own distinctive control string.
 func requestIsCompactionSummary(request anthropicSummaryRequest) bool {
-	if len(request.Messages) == 0 {
-		return false
+	for _, message := range slices.Backward(request.Messages) {
+		if message.Role != "user" {
+			continue
+		}
+		return strings.Contains(message.text(), compactPromptSignature)
 	}
-	last := request.Messages[len(request.Messages)-1]
-	if last.Role != "user" {
-		return false
-	}
-	return strings.Contains(last.text(), compactPromptSignature)
+	return false
 }
 
 // anthropicSummaryRequest is the minimal decode of the /v1/messages request the
-// hook needs: the messages (to find the compaction prompt in the final message)
+// hook needs: the messages (to find the compaction prompt in the last user message)
 // and metadata.user_id (to correlate to the on-disk transcript). The Anthropic
 // Messages API keeps content as string-or-array and metadata.user_id as a
 // double-encoded JSON string, so both stay opaque here and are narrowed by the
