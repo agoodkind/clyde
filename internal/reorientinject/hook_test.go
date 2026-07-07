@@ -38,6 +38,17 @@ const compactWithTrailingSystemBody = `{"messages":[` +
 	`{"role":"system","content":"The task tools haven't been used recently. Consider using TaskCreate."}` +
 	`],"metadata":{"user_id":"{\"device_id\":\"d\",\"account_uuid\":\"a\",\"session_id\":\"sess-abc\"}"}}`
 
+// compactWithMultipleTrailingBody has the compaction prompt as the last user
+// message followed by several trailing non-user messages (a system reminder and
+// an assistant message). Detection must scan back past all of them.
+const compactWithMultipleTrailingBody = `{"messages":[` +
+	`{"role":"user","content":"hi"},` +
+	`{"role":"assistant","content":"ok"},` +
+	`{"role":"user","content":[{"type":"text","text":"Your task is to create a detailed summary of the conversation so far."}]},` +
+	`{"role":"system","content":"The task tools haven't been used recently."},` +
+	`{"role":"assistant","content":"noted"}` +
+	`],"metadata":{"user_id":"{\"session_id\":\"sess-abc\"}"}}`
+
 const summarySSEResponse = "event: message_start\n" +
 	`data: {"type":"message_start","message":{"id":"m","content":[]}}` + "\n\n" +
 	"event: content_block_start\n" +
@@ -105,6 +116,38 @@ func TestHookMatchesCompactionSummaryRequest(t *testing.T) {
 	}
 	if appender.sessionID != "sess-abc" {
 		t.Fatalf("sessionID = %q, want %q", appender.sessionID, "sess-abc")
+	}
+}
+
+func TestHookDetectionTable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"prompt is final user message (headless)", compactRequestBody, true},
+		{"prompt then one trailing system message (interactive)", compactWithTrailingSystemBody, true},
+		{"prompt then multiple trailing non-user messages", compactWithMultipleTrailingBody, true},
+		{"normal turn with ordinary last user message", normalRequestBody, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			hook := New(fixedContentProvider("recovered"))
+			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
+				Method: http.MethodPost,
+				Path:   "/v1/messages",
+				Header: http.Header{},
+				Body:   staticHookBody{body: []byte(tc.body)},
+			})
+			if err != nil {
+				t.Fatalf("MatchRequestResponse err = %v", err)
+			}
+			if match.Matched != tc.want {
+				t.Fatalf("Matched = %v, want %v", match.Matched, tc.want)
+			}
+		})
 	}
 }
 
