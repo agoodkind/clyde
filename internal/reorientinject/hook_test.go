@@ -133,7 +133,6 @@ func TestHookDetectionTable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			hook := New(fixedContentProvider("recovered"))
 			match, err := hook.MatchRequestResponse(mitm.RequestResponseHookRequest{
 				Method: http.MethodPost,
