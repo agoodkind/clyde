@@ -52,7 +52,7 @@ type conversationDocumentBackfillIndex interface {
 
 type conversationDocumentBackfillClient interface {
 	SyncConversationManifest(context.Context, string, []semsearch.Fingerprint) ([]string, error)
-	UpsertConversationDocuments(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
+	ReexamineConversationDocuments(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
 	Close() error
 }
 
@@ -180,7 +180,7 @@ func runBackfillConversationDocumentsWithDeps(
 		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.sync_failed", "concern", "cli.daemon", "component", "cli", "err", err)
 		return fmt.Errorf("sync selected conversation manifest: %w", err)
 	}
-	jobID, err := client.UpsertConversationDocuments(ctx, cfg.Conversation.Semantic.CollectionID, docs, manifest)
+	jobID, err := client.ReexamineConversationDocuments(ctx, cfg.Conversation.Semantic.CollectionID, docs, manifest)
 	if err != nil {
 		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.upsert_failed", "concern", "cli.daemon", "component", "cli", "documents", len(docs), "err", err)
 		return fmt.Errorf("upsert selected conversation documents: %w", err)

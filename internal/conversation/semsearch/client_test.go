@@ -32,7 +32,7 @@ func TestSendUpsertStreamDeclaresRetainReconcileMode(t *testing.T) {
 
 	stream := &fakeUpsertStreamClient{ClientStreamingClient: nil, sent: nil}
 	manifest := []Fingerprint{{ConversationID: "conv-1", Value: "fp-1"}}
-	if err := sendUpsertStream(context.Background(), stream, "collection-test", nil, manifest); err != nil {
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", nil, manifest, false); err != nil {
 		t.Fatalf("sendUpsertStream returned error: %v", err)
 	}
 
@@ -45,6 +45,37 @@ func TestSendUpsertStreamDeclaresRetainReconcileMode(t *testing.T) {
 	if header == nil {
 		t.Fatal("sendUpsertStream sent no header chunk")
 	}
+	if got := header.GetReconcileMode(); got != lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN {
+		t.Fatalf("upsert header reconcile mode = %v, want CONVERSATION_RECONCILE_MODE_RETAIN", got)
+	}
+	if header.GetReexamineDelivered() {
+		t.Fatal("upsert header reexamine_delivered = true, want false for a normal upsert")
+	}
+}
+
+func TestSendUpsertStreamSetsReexamineDeliveredWhenRequested(t *testing.T) {
+	t.Parallel()
+
+	stream := &fakeUpsertStreamClient{ClientStreamingClient: nil, sent: nil}
+	manifest := []Fingerprint{{ConversationID: "conv-1", Value: "fp-1"}}
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", nil, manifest, true); err != nil {
+		t.Fatalf("sendUpsertStream returned error: %v", err)
+	}
+
+	var header *lmsemanticsearchv1.UpsertConversationDocumentsHeader
+	for _, chunk := range stream.sent {
+		if h := chunk.GetHeader(); h != nil {
+			header = h
+		}
+	}
+	if header == nil {
+		t.Fatal("sendUpsertStream sent no header chunk")
+	}
+	if !header.GetReexamineDelivered() {
+		t.Fatal("upsert header reexamine_delivered = false, want true when reexamine requested")
+	}
+	// Re-examination must not change the retain semantics: a delivered conversation
+	// set still keeps every conversation the manifest omits.
 	if got := header.GetReconcileMode(); got != lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN {
 		t.Fatalf("upsert header reconcile mode = %v, want CONVERSATION_RECONCILE_MODE_RETAIN", got)
 	}
@@ -62,7 +93,7 @@ func TestSendUpsertStreamSplitsDocumentsUnderSafeByteBudget(t *testing.T) {
 		{ConversationID: "codex:three", MessageIndex: 0, Role: "user", Text: largeText},
 	}
 
-	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil); err != nil {
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil, false); err != nil {
 		t.Fatalf("sendUpsertStream returned error: %v", err)
 	}
 
@@ -110,7 +141,7 @@ func TestSendUpsertStreamTruncatesSingleOversizedToolOutput(t *testing.T) {
 		},
 	}
 
-	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil); err != nil {
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil, false); err != nil {
 		t.Fatalf("sendUpsertStream returned error: %v", err)
 	}
 
@@ -168,7 +199,7 @@ func TestSendUpsertStreamDropsToolsWhenOverheadStaysOverBudget(t *testing.T) {
 		},
 	}
 
-	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil); err != nil {
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil, false); err != nil {
 		t.Fatalf("sendUpsertStream returned error: %v", err)
 	}
 

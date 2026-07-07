@@ -11,6 +11,7 @@ import (
 	"goodkind.io/clyde/internal/cli"
 	"goodkind.io/clyde/internal/config"
 	"goodkind.io/clyde/internal/conversation"
+	"goodkind.io/clyde/internal/conversation/semsearch"
 	"goodkind.io/clyde/internal/transcript"
 )
 
@@ -331,6 +332,71 @@ func TestBackfillConversationDocumentsDryRunSelectsConversation(t *testing.T) {
 		t.Fatalf("loaded ids = %v, want only codex:target", index.loadedIDs)
 	}
 	if !strings.Contains(output.String(), "Would send conversation documents from 1 conversation: 1 document, 0 skipped conversations.") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+type fakeReexamineBackfillClient struct {
+	reexamineCalls int
+	syncCalls      int
+	deliveredDocs  int
+	closed         bool
+}
+
+func (c *fakeReexamineBackfillClient) SyncConversationManifest(_ context.Context, _ string, _ []semsearch.Fingerprint) ([]string, error) {
+	c.syncCalls++
+	return nil, nil
+}
+
+func (c *fakeReexamineBackfillClient) ReexamineConversationDocuments(_ context.Context, _ string, docs []semsearch.SemDoc, _ []semsearch.Fingerprint) (string, error) {
+	c.reexamineCalls++
+	c.deliveredDocs = len(docs)
+	return "job-test", nil
+}
+
+func (c *fakeReexamineBackfillClient) Close() error {
+	c.closed = true
+	return nil
+}
+
+// TestBackfillConversationDocumentsExecuteReexamines proves an --execute backfill
+// forces re-examination of the delivered conversation rather than a plain upsert,
+// so an old conversation whose fingerprint is unchanged still gets re-indexed.
+func TestBackfillConversationDocumentsExecuteReexamines(t *testing.T) {
+	t.Parallel()
+	output := &bytes.Buffer{}
+	index := fakeDocumentBackfillIndex{
+		stampedRecords: []conversation.StampedRecord{
+			testDocumentStampedRecord("claude:one", 10),
+		},
+		messagesByID: map[string][]transcript.Message{
+			"claude:one": {{Role: "user", Text: "one"}},
+		},
+	}
+	client := &fakeReexamineBackfillClient{}
+
+	err := runBackfillConversationDocumentsWithDeps(
+		context.Background(),
+		testDocumentBackfillFactory(output),
+		backfillConversationDocumentsOptions{DryRun: false, Limit: 0, ConversationID: "claude:one"},
+		&index,
+		func(context.Context, string) (conversationDocumentBackfillClient, error) {
+			return client, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("run backfill conversation documents: %v", err)
+	}
+	if client.reexamineCalls != 1 {
+		t.Fatalf("ReexamineConversationDocuments calls = %d, want 1 (execute must force re-examination)", client.reexamineCalls)
+	}
+	if client.deliveredDocs != 1 {
+		t.Fatalf("delivered documents = %d, want 1", client.deliveredDocs)
+	}
+	if !client.closed {
+		t.Fatal("backfill did not close the semantic client")
+	}
+	if !strings.Contains(output.String(), "Sent conversation documents from 1 conversation") {
 		t.Fatalf("output = %q", output.String())
 	}
 }

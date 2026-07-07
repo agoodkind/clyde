@@ -249,6 +249,20 @@ const upsertStreamMaxBytesPerChunk = 3 << 20
 // document set is not capped by the gRPC max message size, then the manifest as
 // one chunk, which must fit within a single message.
 func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
+	return c.upsertConversationDocuments(ctx, collectionID, docs, manifest, false)
+}
+
+// ReexamineConversationDocuments upserts documents like UpsertConversationDocuments,
+// but asks the engine to re-examine every delivered conversation even when its
+// fingerprint is unchanged. It is the wire path for the operator-run backfill that
+// corrects conversations indexed before a new indexing capability shipped: the
+// engine reuses existing vectors and embeds only genuinely-new chunks, so this is
+// not a force-reindex. The normal daemon sync never sets it.
+func (c *Client) ReexamineConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
+	return c.upsertConversationDocuments(ctx, collectionID, docs, manifest, true)
+}
+
+func (c *Client) upsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint, reexamine bool) (string, error) {
 	if c == nil || c.daemon == nil {
 		return "", fmt.Errorf("upsert semantic conversation documents: client is nil")
 	}
@@ -267,7 +281,7 @@ func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID s
 		)
 		return "", fmt.Errorf("open semantic conversation upsert stream for collection %q: %w", trimmedCollectionID, err)
 	}
-	if sendErr := sendUpsertStream(ctx, stream, trimmedCollectionID, docs, manifest); sendErr != nil {
+	if sendErr := sendUpsertStream(ctx, stream, trimmedCollectionID, docs, manifest, reexamine); sendErr != nil {
 		return "", fmt.Errorf("send semantic conversation upsert stream for collection %q: %w", trimmedCollectionID, sendErr)
 	}
 	response, err := stream.CloseAndRecv()
@@ -310,6 +324,7 @@ func sendUpsertStream(
 	collectionID string,
 	docs []SemDoc,
 	manifest []Fingerprint,
+	reexamine bool,
 ) error {
 	header := &lmsemanticsearchv1.UpsertConversationDocumentsChunk{
 		Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Header{
@@ -320,6 +335,10 @@ func sendUpsertStream(
 				// manifest is kept, never deleted. Only an explicit delete removes one,
 				// so a transient short manifest cannot drop conversations from the index.
 				ReconcileMode: lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+				// reexamine is set only by the operator-run backfill, so the engine
+				// re-examines delivered conversations whose fingerprint is unchanged.
+				// The normal sync leaves it false.
+				ReexamineDelivered: reexamine,
 			},
 		},
 	}
