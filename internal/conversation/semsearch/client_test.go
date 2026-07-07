@@ -2,6 +2,7 @@ package semsearch
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	lmsemanticsearchv1 "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
@@ -45,6 +46,44 @@ func TestSendUpsertStreamDeclaresRetainReconcileMode(t *testing.T) {
 	}
 	if got := header.GetReconcileMode(); got != lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN {
 		t.Fatalf("upsert header reconcile mode = %v, want CONVERSATION_RECONCILE_MODE_RETAIN", got)
+	}
+}
+
+func TestSendUpsertStreamSplitsDocumentsUnderSafeByteBudget(t *testing.T) {
+	t.Parallel()
+
+	const safeByteBudget = 3 << 20
+	largeText := strings.Repeat("x", safeByteBudget/2)
+	stream := &fakeUpsertStreamClient{ClientStreamingClient: nil, sent: nil}
+	docs := []SemDoc{
+		{ConversationID: "codex:one", MessageIndex: 0, Role: "user", Text: largeText},
+		{ConversationID: "codex:two", MessageIndex: 0, Role: "user", Text: largeText},
+		{ConversationID: "codex:three", MessageIndex: 0, Role: "user", Text: largeText},
+	}
+
+	if err := sendUpsertStream(context.Background(), stream, "collection-test", docs, nil); err != nil {
+		t.Fatalf("sendUpsertStream returned error: %v", err)
+	}
+
+	documentChunks := make([]*lmsemanticsearchv1.UpsertConversationDocumentsDocuments, 0)
+	for _, chunk := range stream.sent {
+		if documents := chunk.GetDocuments(); documents != nil {
+			documentChunks = append(documentChunks, documents)
+		}
+	}
+	if len(documentChunks) < 2 {
+		t.Fatalf("document chunks = %d, want at least 2 chunks under %d bytes", len(documentChunks), safeByteBudget)
+	}
+	documentCount := 0
+	for _, chunk := range documentChunks {
+		chunkBytes := protoDocumentChunkByteSize(chunk.GetDocuments())
+		if chunkBytes > safeByteBudget {
+			t.Fatalf("document chunk bytes = %d, want <= %d", chunkBytes, safeByteBudget)
+		}
+		documentCount += len(chunk.GetDocuments())
+	}
+	if documentCount != len(docs) {
+		t.Fatalf("streamed documents = %d, want %d", documentCount, len(docs))
 	}
 }
 
@@ -99,4 +138,38 @@ func TestConversationDocumentsCarriesToolsAndThinking(t *testing.T) {
 	if !tool.GetIsError() {
 		t.Fatal("tool is_error = false, want true")
 	}
+}
+
+func protoDocumentChunkByteSize(documents []*lmsemanticsearchv1.ConversationDocument) int {
+	size := 0
+	for _, document := range documents {
+		size += semDocByteSize(SemDoc{
+			ConversationID:       document.GetConversationId(),
+			ParentConversationID: document.GetParentConversationId(),
+			MessageIndex:         document.GetMessageIndex(),
+			Role:                 document.GetRole(),
+			TimestampUnix:        document.GetTimestampUnix(),
+			Text:                 document.GetText(),
+			Tools:                protoToolCalls(document.GetTools()),
+			Thinking:             document.GetThinking(),
+			WorkspaceRoot:        document.GetWorkspaceRoot(),
+			Archived:             document.GetArchived(),
+		})
+	}
+	return size
+}
+
+func protoToolCalls(tools []*lmsemanticsearchv1.ConversationToolCall) []SemToolCall {
+	out := make([]SemToolCall, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, SemToolCall{
+			Name:      tool.GetName(),
+			InputJSON: tool.GetInputJson(),
+			Command:   tool.GetCommand(),
+			LangHint:  tool.GetLangHint(),
+			Output:    tool.GetOutput(),
+			IsError:   tool.GetIsError(),
+		})
+	}
+	return out
 }

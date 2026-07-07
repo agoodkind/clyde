@@ -235,9 +235,9 @@ const upsertStreamMaxDocsPerChunk = 1000
 
 // upsertStreamMaxBytesPerChunk caps the documents in one stream chunk by
 // approximate payload bytes, so a pass with a few large transcripts still frames
-// into chunks under the gRPC max message size. The manifest ships as its own
-// chunk and is bounded the same way at the caller.
-const upsertStreamMaxBytesPerChunk = 16 << 20
+// into chunks under the default gRPC max message size. The manifest ships as
+// its own chunk and must fit within a single message.
+const upsertStreamMaxBytesPerChunk = 3 << 20
 
 // UpsertConversationDocuments starts an async engine job for the changed
 // conversations' documents. manifest is the full current conversation set with
