@@ -442,7 +442,23 @@ func Snippet(text string) string {
 	return snippet(text)
 }
 
+// snippetInputMaxBytes bounds how much leading text snippet normalizes. The
+// snippet is the leading searchSnippetRunes of the message's index text, which
+// now includes tool outputs that can be several megabytes. Normalizing all of it
+// just to render a few hundred runes wastes CPU and allocates, and clamping the
+// leading bytes cannot change the output because the leading runes come from the
+// leading bytes. The budget is far larger than searchSnippetRunes*4 (the most
+// bytes those runes can occupy), so a full snippet still renders.
+const snippetInputMaxBytes = searchSnippetRunes * 8
+
 func snippet(text string) string {
+	if len(text) > snippetInputMaxBytes {
+		cut := snippetInputMaxBytes
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut]
+	}
 	normalized := strings.Join(strings.Fields(text), " ")
 	runes := []rune(normalized)
 	if len(runes) <= searchSnippetRunes {

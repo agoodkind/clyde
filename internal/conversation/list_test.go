@@ -14,6 +14,23 @@ import (
 	"goodkind.io/clyde/internal/transcript"
 )
 
+func TestSnippetBoundsHugeInput(t *testing.T) {
+	t.Parallel()
+	// A matched message can now carry multi-megabyte tool output. snippet must
+	// still return a bounded leading excerpt without normalizing the whole tail.
+	head := strings.Repeat("token ", 400)
+	huge := head + strings.Repeat("z", 8<<20)
+
+	got := snippet(huge)
+
+	if runes := []rune(got); len(runes) > searchSnippetRunes+3 {
+		t.Fatalf("snippet rune count = %d, want <= %d", len(runes), searchSnippetRunes+3)
+	}
+	if !strings.HasPrefix(got, "token token") {
+		t.Fatalf("snippet = %q, want leading tokens", got)
+	}
+}
+
 func TestFilterRecordsDefaultsToBoundedPage(t *testing.T) {
 	t.Parallel()
 	records := make([]Record, 0, 25)
