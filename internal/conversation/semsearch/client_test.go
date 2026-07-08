@@ -81,6 +81,31 @@ func TestSendUpsertStreamSetsReexamineDeliveredWhenRequested(t *testing.T) {
 	}
 }
 
+func TestTruncateSemDocForUpsertPreservesTextWhenThinkingOversized(t *testing.T) {
+	t.Parallel()
+
+	// A document oversized almost entirely by its Thinking block must keep its
+	// searchable Text intact: shrinking Thinking alone brings it under budget, so
+	// Text should never be cut to make room for Thinking.
+	text := "searchable text that must survive truncation"
+	doc := SemDoc{
+		ConversationID: "claude:thinking-heavy",
+		MessageIndex:   0,
+		Role:           "assistant",
+		Text:           text,
+		Thinking:       strings.Repeat("z", upsertStreamMaxBytesPerChunk*2),
+	}
+
+	out := truncateSemDocForUpsert(doc)
+
+	if got := semDocByteSize(out); got > upsertStreamMaxBytesPerChunk {
+		t.Fatalf("truncated doc size = %d, want <= %d", got, upsertStreamMaxBytesPerChunk)
+	}
+	if out.Text != text {
+		t.Fatalf("Text was truncated to %q though shrinking Thinking alone fit the budget", out.Text)
+	}
+}
+
 func TestTruncateSemDocStringToMaxBytesNeverExceedsBudget(t *testing.T) {
 	t.Parallel()
 

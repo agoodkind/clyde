@@ -448,8 +448,12 @@ func truncateSemDocForUpsert(doc SemDoc) SemDoc {
 		// for overhead that would still blow the gRPC message cap.
 		out.Tools = nil
 	}
-	out.Text = truncateSemDocStringField(out.Text, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
+	// Truncate Thinking before Text so a document oversized mainly by a large
+	// Thinking block does not cut searchable Text to fit. truncateSemDocStringField
+	// is a no-op when the required reduction is <= 0, so once shrinking Thinking
+	// brings the document under budget, Text is left intact.
 	out.Thinking = truncateSemDocStringField(out.Thinking, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
+	out.Text = truncateSemDocStringField(out.Text, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
 	return out
 }
 
