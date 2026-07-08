@@ -256,7 +256,7 @@ func (idx *Index) firstTranscriptMatch(record Record, terms []string, options Se
 	stream, err := idx.resolveStream(record, LoadOptions{
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
+		IncludeToolOutputs:    true,
 	})
 	if err != nil {
 		return emptySearchMatch(), false, err
@@ -266,13 +266,18 @@ func (idx *Index) firstTranscriptMatch(record Record, terms []string, options Se
 		if streamErr != nil {
 			return emptySearchMatch(), false, streamErr
 		}
-		if messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) && messageMatchesTerms(message, terms) {
+		if !messageMatchesRowFilters(message, options.Roles, options.FromUnix, options.UntilUnix) {
+			messageIndex++
+			continue
+		}
+		indexText := transcript.RenderMessageIndexText(message)
+		if messageIndexTextMatchesTerms(indexText, terms) {
 			return SearchMatch{
 				Record:        record,
 				MessageIndex:  messageIndex,
 				Role:          message.Role,
 				Timestamp:     message.Timestamp,
-				Snippet:       snippet(message.Text),
+				Snippet:       snippet(indexText),
 				Score:         0,
 				ContextWindow: "",
 			}, true, nil
@@ -398,14 +403,36 @@ func recordMatchesTerms(record Record, terms []string) bool {
 	return true
 }
 
-func messageMatchesTerms(message transcript.Message, terms []string) bool {
-	text := strings.ToLower(message.Text)
+func messageIndexTextMatchesTerms(indexText string, terms []string) bool {
+	// indexText can be multi-megabyte once tool outputs are included, and
+	// strings.ToLower allocates a full copy. Skip it when the text is already
+	// pure-ASCII-lowercase (common for paths, commands, and code output), matching
+	// the raw text directly; only allocate the lowercase copy when the text holds
+	// ASCII uppercase or any non-ASCII byte that may be a Unicode uppercase rune.
+	text := indexText
+	if needsLowering(indexText) {
+		text = strings.ToLower(indexText)
+	}
 	for _, term := range terms {
 		if !strings.Contains(text, term) {
 			return false
 		}
 	}
 	return true
+}
+
+// needsLowering reports whether s must be lowercased before a case-insensitive
+// match. It scans bytes without allocating and returns true on the first ASCII
+// uppercase letter or non-ASCII byte, so pure-ASCII-lowercase text is matched
+// as-is while anything that could hold an uppercase rune is lowercased.
+func needsLowering(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || c >= 0x80 {
+			return true
+		}
+	}
+	return false
 }
 
 func queryTerms(query string) []string {
@@ -437,7 +464,23 @@ func Snippet(text string) string {
 	return snippet(text)
 }
 
+// snippetInputMaxBytes bounds how much leading text snippet normalizes. The
+// snippet is the leading searchSnippetRunes of the message's index text, which
+// now includes tool outputs that can be several megabytes. Normalizing all of it
+// just to render a few hundred runes wastes CPU and allocates, and clamping the
+// leading bytes cannot change the output because the leading runes come from the
+// leading bytes. The budget is far larger than searchSnippetRunes*4 (the most
+// bytes those runes can occupy), so a full snippet still renders.
+const snippetInputMaxBytes = searchSnippetRunes * 8
+
 func snippet(text string) string {
+	if len(text) > snippetInputMaxBytes {
+		cut := snippetInputMaxBytes
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut]
+	}
 	normalized := strings.Join(strings.Fields(text), " ")
 	runes := []rune(normalized)
 	if len(runes) <= searchSnippetRunes {

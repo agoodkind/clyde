@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	lmclient "goodkind.io/lm-semantic-search/client"
 	lmsemanticsearchv1 "goodkind.io/lm-semantic-search/gen/go/lmsemanticsearch/v1"
@@ -41,6 +42,8 @@ type SemDoc struct {
 	Role                 string
 	TimestampUnix        int64
 	Text                 string
+	Tools                []SemToolCall
+	Thinking             string
 	// WorkspaceRoot is the conversation's workspace, sent so the engine stores it
 	// as a filterable scalar column. The same for every message of one
 	// conversation; empty when unknown.
@@ -49,6 +52,16 @@ type SemDoc struct {
 	// it as a filterable scalar column. The same for every message of one
 	// conversation.
 	Archived bool
+}
+
+// SemToolCall is one structured tool call attached to a semantic document.
+type SemToolCall struct {
+	Name      string
+	InputJSON string
+	Command   string
+	LangHint  string
+	Output    string
+	IsError   bool
 }
 
 // Fingerprint pairs a conversation id with a content fingerprint that changes
@@ -223,9 +236,9 @@ const upsertStreamMaxDocsPerChunk = 1000
 
 // upsertStreamMaxBytesPerChunk caps the documents in one stream chunk by
 // approximate payload bytes, so a pass with a few large transcripts still frames
-// into chunks under the gRPC max message size. The manifest ships as its own
-// chunk and is bounded the same way at the caller.
-const upsertStreamMaxBytesPerChunk = 16 << 20
+// into chunks under the default gRPC max message size. The manifest ships as
+// its own chunk and must fit within a single message.
+const upsertStreamMaxBytesPerChunk = 3 << 20
 
 // UpsertConversationDocuments starts an async engine job for the changed
 // conversations' documents. manifest is the full current conversation set with
@@ -236,6 +249,20 @@ const upsertStreamMaxBytesPerChunk = 16 << 20
 // document set is not capped by the gRPC max message size, then the manifest as
 // one chunk, which must fit within a single message.
 func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
+	return c.upsertConversationDocuments(ctx, collectionID, docs, manifest, false)
+}
+
+// ReexamineConversationDocuments upserts documents like UpsertConversationDocuments,
+// but asks the engine to re-examine every delivered conversation even when its
+// fingerprint is unchanged. It is the wire path for the operator-run backfill that
+// corrects conversations indexed before a new indexing capability shipped: the
+// engine reuses existing vectors and embeds only genuinely-new chunks, so this is
+// not a force-reindex. The normal daemon sync never sets it.
+func (c *Client) ReexamineConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint) (string, error) {
+	return c.upsertConversationDocuments(ctx, collectionID, docs, manifest, true)
+}
+
+func (c *Client) upsertConversationDocuments(ctx context.Context, collectionID string, docs []SemDoc, manifest []Fingerprint, reexamine bool) (string, error) {
 	if c == nil || c.daemon == nil {
 		return "", fmt.Errorf("upsert semantic conversation documents: client is nil")
 	}
@@ -254,7 +281,7 @@ func (c *Client) UpsertConversationDocuments(ctx context.Context, collectionID s
 		)
 		return "", fmt.Errorf("open semantic conversation upsert stream for collection %q: %w", trimmedCollectionID, err)
 	}
-	if sendErr := sendUpsertStream(ctx, stream, trimmedCollectionID, docs, manifest); sendErr != nil {
+	if sendErr := sendUpsertStream(ctx, stream, trimmedCollectionID, docs, manifest, reexamine); sendErr != nil {
 		return "", fmt.Errorf("send semantic conversation upsert stream for collection %q: %w", trimmedCollectionID, sendErr)
 	}
 	response, err := stream.CloseAndRecv()
@@ -287,6 +314,20 @@ func upsertClientInfo() *lmsemanticsearchv1.ClientInfo {
 	}
 }
 
+// estimateManifestBytes approximates the manifest message's wire size: each
+// fingerprint's conversation id and value plus a conservative per-entry framing
+// allowance, plus a fixed message overhead. It bounds the one-message manifest
+// against the per-chunk budget so an oversized corpus fails with a clear error.
+func estimateManifestBytes(manifest []Fingerprint) int {
+	const manifestFramingOverheadBytes = 64
+	const perFingerprintFramingBytes = 8
+	size := manifestFramingOverheadBytes
+	for _, fingerprint := range manifest {
+		size += len(fingerprint.ConversationID) + len(fingerprint.Value) + perFingerprintFramingBytes
+	}
+	return size
+}
+
 // sendUpsertStream sends the header, then the documents in bounded chunks, then
 // the manifest as one chunk. The header's reconcile mode governs a conversation
 // the manifest omits (clyde sends RETAIN, so it is kept); the manifest is sent
@@ -297,6 +338,7 @@ func sendUpsertStream(
 	collectionID string,
 	docs []SemDoc,
 	manifest []Fingerprint,
+	reexamine bool,
 ) error {
 	header := &lmsemanticsearchv1.UpsertConversationDocumentsChunk{
 		Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Header{
@@ -307,6 +349,10 @@ func sendUpsertStream(
 				// manifest is kept, never deleted. Only an explicit delete removes one,
 				// so a transient short manifest cannot drop conversations from the index.
 				ReconcileMode: lmsemanticsearchv1.ConversationReconcileMode_CONVERSATION_RECONCILE_MODE_RETAIN,
+				// reexamine is set only by the operator-run backfill, so the engine
+				// re-examines delivered conversations whose fingerprint is unchanged.
+				// The normal sync leaves it false.
+				ReexamineDelivered: reexamine,
 			},
 		},
 	}
@@ -321,6 +367,13 @@ func sendUpsertStream(
 	}
 	if err := sendUpsertDocumentChunks(ctx, stream, docs); err != nil {
 		return err
+	}
+	// The manifest is one gRPC message the server reads whole (it does not
+	// accumulate manifest chunks), so guard its size explicitly. Without this a
+	// very large corpus could exceed the daemon's max message size and fail the
+	// whole stream with an opaque transport error; this returns a clear one first.
+	if manifestBytes := estimateManifestBytes(manifest); manifestBytes > upsertStreamMaxBytesPerChunk {
+		return fmt.Errorf("conversation manifest is %d bytes for %d conversations, exceeding the %d-byte per-message budget; select fewer conversations per backfill", manifestBytes, len(manifest), upsertStreamMaxBytesPerChunk)
 	}
 	manifestChunk := &lmsemanticsearchv1.UpsertConversationDocumentsChunk{
 		Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Manifest{
@@ -386,16 +439,142 @@ func sendUpsertDocumentChunks(
 			)
 			return fmt.Errorf("send upsert documents chunk: %w", ctx.Err())
 		}
-		docBytes := semDocByteSize(doc)
+		boundedDoc := truncateSemDocForUpsert(doc)
+		docBytes := semDocByteSize(boundedDoc)
 		if len(batch) > 0 && (len(batch) >= upsertStreamMaxDocsPerChunk || batchBytes+docBytes > upsertStreamMaxBytesPerChunk) {
 			if err := flush(); err != nil {
 				return err
 			}
 		}
-		batch = append(batch, doc)
+		batch = append(batch, boundedDoc)
 		batchBytes += docBytes
 	}
 	return flush()
+}
+
+func truncateSemDocForUpsert(doc SemDoc) SemDoc {
+	if semDocByteSize(doc) <= upsertStreamMaxBytesPerChunk {
+		return doc
+	}
+	out := doc
+	out.Tools = append([]SemToolCall(nil), doc.Tools...)
+	out = truncateSemDocToolField(out, semToolStringOutput)
+	out = truncateSemDocToolField(out, semToolStringInputJSON)
+	out = truncateSemDocToolField(out, semToolStringCommand)
+	if semDocByteSize(out) > upsertStreamMaxBytesPerChunk {
+		// Non-shrinkable tool overhead can keep the document over budget after
+		// field truncation: a very high tool-call count, or long tool names and
+		// lang hints, which never shrink. Drop the tool calls before truncating
+		// prose so searchable Text survives, rather than being cut to make room
+		// for overhead that would still blow the gRPC message cap.
+		out.Tools = nil
+	}
+	// Truncate Thinking before Text so a document oversized mainly by a large
+	// Thinking block does not cut searchable Text to fit. truncateSemDocStringField
+	// is a no-op when the required reduction is <= 0, so once shrinking Thinking
+	// brings the document under budget, Text is left intact.
+	out.Thinking = truncateSemDocStringField(out.Thinking, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
+	out.Text = truncateSemDocStringField(out.Text, semDocByteSize(out)-upsertStreamMaxBytesPerChunk)
+	return out
+}
+
+type semToolStringField int
+
+const (
+	semToolStringOutput semToolStringField = iota
+	semToolStringInputJSON
+	semToolStringCommand
+)
+
+func truncateSemDocToolField(doc SemDoc, field semToolStringField) SemDoc {
+	for semDocByteSize(doc) > upsertStreamMaxBytesPerChunk {
+		index := largestShrinkableToolStringIndex(doc.Tools, field)
+		if index < 0 {
+			return doc
+		}
+		requiredReduction := semDocByteSize(doc) - upsertStreamMaxBytesPerChunk
+		switch field {
+		case semToolStringOutput:
+			doc.Tools[index].Output = truncateSemDocStringField(doc.Tools[index].Output, requiredReduction)
+		case semToolStringInputJSON:
+			doc.Tools[index].InputJSON = truncateSemDocStringField(doc.Tools[index].InputJSON, requiredReduction)
+		case semToolStringCommand:
+			doc.Tools[index].Command = truncateSemDocStringField(doc.Tools[index].Command, requiredReduction)
+		default:
+			return doc
+		}
+	}
+	return doc
+}
+
+func largestShrinkableToolStringIndex(tools []SemToolCall, field semToolStringField) int {
+	index := -1
+	largestBytes := 0
+	for i, tool := range tools {
+		var value string
+		switch field {
+		case semToolStringOutput:
+			value = tool.Output
+		case semToolStringInputJSON:
+			value = tool.InputJSON
+		case semToolStringCommand:
+			value = tool.Command
+		default:
+			return -1
+		}
+		if len(value) <= largestBytes || !canShrinkSemDocString(value) {
+			continue
+		}
+		index = i
+		largestBytes = len(value)
+	}
+	return index
+}
+
+func truncateSemDocStringField(value string, requiredReduction int) string {
+	if requiredReduction <= 0 || !canShrinkSemDocString(value) {
+		return value
+	}
+	maxBytes := len(value) - requiredReduction
+	return truncateSemDocStringToMaxBytes(value, maxBytes)
+}
+
+func canShrinkSemDocString(value string) bool {
+	return len(value) > len(semDocTruncationMarker(len(value)))
+}
+
+func truncateSemDocStringToMaxBytes(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	for cut := min(maxBytes, len(value)); cut >= 0; cut-- {
+		if cut > 0 && cut < len(value) && !utf8.RuneStart(value[cut]) {
+			continue
+		}
+		marker := semDocTruncationMarker(len(value) - cut)
+		if cut+len(marker) <= maxBytes {
+			return value[:cut] + marker
+		}
+	}
+	// Even the marker alone exceeds maxBytes. Return the marker clamped to a
+	// UTF-8 boundary within maxBytes so this helper never returns more than
+	// maxBytes bytes, which keeps the per-document size guard sound.
+	marker := semDocTruncationMarker(len(value))
+	if len(marker) <= maxBytes {
+		return marker
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(marker[cut]) {
+		cut--
+	}
+	return marker[:cut]
+}
+
+func semDocTruncationMarker(omittedBytes int) string {
+	return fmt.Sprintf("\n…[truncated %d bytes]", omittedBytes)
 }
 
 // semDocByteSize approximates one document's wire size for chunk framing: the
@@ -404,7 +583,18 @@ func sendUpsertDocumentChunks(
 func semDocByteSize(doc SemDoc) int {
 	const semDocFramingOverheadBytes = 256
 	const semDocArchivedFieldBytes = 2
-	return len(doc.Text) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
+	// Each tool call is an embedded message with several length-delimited string
+	// fields plus an is_error bool, so on the wire it carries protobuf framing (the
+	// message tag and length prefix, and a tag and varint length per field) beyond
+	// its raw string bytes. Add a conservative fixed allowance per tool so a message
+	// with many small tool calls does not under-estimate its encoded size and slip
+	// past the per-chunk budget into a gRPC message-size failure.
+	const semDocPerToolFramingBytes = 64
+	size := len(doc.Text) + len(doc.Thinking) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
+	for _, tool := range doc.Tools {
+		size += len(tool.Name) + len(tool.InputJSON) + len(tool.Command) + len(tool.LangHint) + len(tool.Output) + semDocPerToolFramingBytes
+	}
+	return size
 }
 
 // backfillScalarEntriesPerChunk caps the entries in one stream chunk so a large
@@ -730,8 +920,25 @@ func conversationDocuments(docs []SemDoc) []*lmsemanticsearchv1.ConversationDocu
 			Role:                 doc.Role,
 			TimestampUnix:        doc.TimestampUnix,
 			Text:                 doc.Text,
+			Tools:                conversationToolCalls(doc.Tools),
+			Thinking:             strings.ToValidUTF8(doc.Thinking, ""),
 			WorkspaceRoot:        doc.WorkspaceRoot,
 			Archived:             doc.Archived,
+		})
+	}
+	return out
+}
+
+func conversationToolCalls(tools []SemToolCall) []*lmsemanticsearchv1.ConversationToolCall {
+	out := make([]*lmsemanticsearchv1.ConversationToolCall, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, &lmsemanticsearchv1.ConversationToolCall{
+			Name:      strings.ToValidUTF8(tool.Name, ""),
+			InputJson: strings.ToValidUTF8(tool.InputJSON, ""),
+			Command:   strings.ToValidUTF8(tool.Command, ""),
+			LangHint:  strings.ToValidUTF8(tool.LangHint, ""),
+			Output:    strings.ToValidUTF8(tool.Output, ""),
+			IsError:   tool.IsError,
 		})
 	}
 	return out

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -12,6 +13,7 @@ import (
 	"goodkind.io/clyde/internal/conversation/semsearch"
 	daemonsvc "goodkind.io/clyde/internal/daemon"
 	"goodkind.io/clyde/internal/response"
+	"goodkind.io/clyde/internal/transcript"
 )
 
 // newBackfillConversationScalarsCmd builds the one-shot scalar-backfill command.
@@ -33,6 +35,50 @@ func newBackfillConversationScalarsCmd(f *cli.Factory) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&execute, "execute", false, "Perform the write. Without this flag the command is a read-only dry-run.")
+	return cmd
+}
+
+type backfillConversationDocumentsOptions struct {
+	DryRun         bool
+	Limit          int
+	ConversationID string
+}
+
+type conversationDocumentBackfillIndex interface {
+	Refresh(context.Context) error
+	ListWithStamps(context.Context) ([]conversation.StampedRecord, error)
+	LoadMessagesWithOptions(conversation.Record, conversation.LoadOptions) ([]transcript.Message, error)
+}
+
+type conversationDocumentBackfillClient interface {
+	SyncConversationManifest(context.Context, string, []semsearch.Fingerprint) ([]string, error)
+	ReexamineConversationDocuments(context.Context, string, []semsearch.SemDoc, []semsearch.Fingerprint) (string, error)
+	Close() error
+}
+
+type conversationDocumentBackfillDialer func(context.Context, string) (conversationDocumentBackfillClient, error)
+
+func newBackfillConversationDocumentsCmd(f *cli.Factory) *cobra.Command {
+	execute := false
+	limit := 0
+	conversationID := ""
+	cmd := &cobra.Command{
+		Use:     "backfill-conversation-documents",
+		Short:   "Force selected conversation documents back into semantic search",
+		Long:    "Build semantic conversation documents from the current Clyde conversation index and optionally force those selected documents back into lm-semantic-search. Runs as a read-only dry-run by default; pass --execute to upsert documents.",
+		Example: "clyde daemon backfill-conversation-documents --limit 10\nclyde daemon backfill-conversation-documents --conversation codex:abc --execute",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runBackfillConversationDocuments(cmd.Context(), f, backfillConversationDocumentsOptions{
+				DryRun:         !execute,
+				Limit:          limit,
+				ConversationID: conversationID,
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&execute, "execute", false, "Perform the document upsert. Without this flag the command is a read-only dry-run.")
+	cmd.Flags().IntVar(&limit, "limit", 0, "Maximum number of conversations to select. Zero selects all conversations.")
+	cmd.Flags().StringVar(&conversationID, "conversation", "", "Select one conversation id to backfill.")
 	return cmd
 }
 
@@ -76,6 +122,164 @@ func runBackfillConversationScalars(ctx context.Context, f *cli.Factory, dryRun 
 		return fmt.Errorf("write backfill result: %w", writeErr)
 	}
 	return nil
+}
+
+func runBackfillConversationDocuments(ctx context.Context, f *cli.Factory, options backfillConversationDocumentsOptions) error {
+	index := daemonsvc.NewConversationIndex()
+	return runBackfillConversationDocumentsWithDeps(ctx, f, options, index, func(dialCtx context.Context, socketPath string) (conversationDocumentBackfillClient, error) {
+		return semsearch.Dial(dialCtx, socketPath)
+	})
+}
+
+func runBackfillConversationDocumentsWithDeps(
+	ctx context.Context,
+	f *cli.Factory,
+	options backfillConversationDocumentsOptions,
+	index conversationDocumentBackfillIndex,
+	dial conversationDocumentBackfillDialer,
+) error {
+	if options.Limit < 0 {
+		return fmt.Errorf("limit must be non-negative")
+	}
+	if strings.TrimSpace(options.ConversationID) != "" && options.Limit > 0 {
+		return fmt.Errorf("--conversation and --limit cannot be used together")
+	}
+	if refreshErr := index.Refresh(ctx); refreshErr != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.refresh_failed", "concern", "cli.daemon", "component", "cli", "err", refreshErr)
+		return fmt.Errorf("refresh conversation index: %w", refreshErr)
+	}
+	stampedRecords, err := index.ListWithStamps(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.list_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("list conversations with stamps: %w", err)
+	}
+	selectedRecords, err := selectBackfillDocumentRecords(stampedRecords, options.Limit, options.ConversationID)
+	if err != nil {
+		return err
+	}
+	docs, manifest, skipped := buildBackfillConversationDocuments(ctx, index, selectedRecords)
+	if options.DryRun {
+		return writeBackfillConversationDocumentsResult(ctx, f, "Would send", len(selectedRecords), len(docs), skipped, "", 0)
+	}
+	if len(docs) == 0 {
+		// Nothing to upsert: either no conversation was selected, or every selected
+		// conversation failed to load/build (all skipped). Skip the engine round
+		// trip and report the skips instead of queuing an empty upsert job.
+		return writeBackfillConversationDocumentsResult(ctx, f, "Sent", len(selectedRecords), 0, skipped, "", 0)
+	}
+	cfg, err := f.Config()
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.config_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("load config: %w", err)
+	}
+	client, err := dial(ctx, cfg.Conversation.Semantic.SocketPath)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.dial_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("dial semantic engine: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+	needed, err := client.SyncConversationManifest(ctx, cfg.Conversation.Semantic.CollectionID, manifest)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.sync_failed", "concern", "cli.daemon", "component", "cli", "err", err)
+		return fmt.Errorf("sync selected conversation manifest: %w", err)
+	}
+	jobID, err := client.ReexamineConversationDocuments(ctx, cfg.Conversation.Semantic.CollectionID, docs, manifest)
+	if err != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.upsert_failed", "concern", "cli.daemon", "component", "cli", "documents", len(docs), "err", err)
+		return fmt.Errorf("upsert selected conversation documents: %w", err)
+	}
+	return writeBackfillConversationDocumentsResult(ctx, f, "Sent", len(selectedRecords), len(docs), skipped, jobID, len(needed))
+}
+
+func selectBackfillDocumentRecords(stampedRecords []conversation.StampedRecord, limit int, conversationID string) ([]conversation.StampedRecord, error) {
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	order := make([]string, 0, len(stampedRecords))
+	selected := make(map[string]bool, len(stampedRecords))
+	best := make(map[string]conversation.StampedRecord, len(stampedRecords))
+	for _, stampedRecord := range stampedRecords {
+		recordID := strings.TrimSpace(stampedRecord.Record.ID)
+		if recordID == "" {
+			continue
+		}
+		if trimmedConversationID != "" && recordID != trimmedConversationID {
+			continue
+		}
+		if !selected[recordID] {
+			if trimmedConversationID == "" && limit > 0 && len(order) >= limit {
+				continue
+			}
+			selected[recordID] = true
+			order = append(order, recordID)
+			best[recordID] = stampedRecord
+			continue
+		}
+		if preferBackfillRecord(stampedRecord.Record, best[recordID].Record) {
+			best[recordID] = stampedRecord
+		}
+	}
+	if trimmedConversationID != "" && len(order) == 0 {
+		return nil, fmt.Errorf("conversation %q not found", trimmedConversationID)
+	}
+	selectedRecords := make([]conversation.StampedRecord, 0, len(order))
+	for _, recordID := range order {
+		selectedRecords = append(selectedRecords, best[recordID])
+	}
+	return selectedRecords, nil
+}
+
+func buildBackfillConversationDocuments(ctx context.Context, index conversationDocumentBackfillIndex, stampedRecords []conversation.StampedRecord) ([]semsearch.SemDoc, []semsearch.Fingerprint, int) {
+	docs := make([]semsearch.SemDoc, 0)
+	manifest := make([]semsearch.Fingerprint, 0, len(stampedRecords))
+	skipped := 0
+	for _, stampedRecord := range stampedRecords {
+		messages, err := index.LoadMessagesWithOptions(stampedRecord.Record, daemonsvc.SemanticConversationLoadOptions())
+		if err != nil {
+			slog.WarnContext(ctx, "cli.daemon.backfill_documents.load_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", stampedRecord.Record.ID, "err", err)
+			skipped++
+			continue
+		}
+		conversationDocs, err := daemonsvc.BuildSemanticConversationDocuments(stampedRecord.Record, messages)
+		if err != nil {
+			slog.WarnContext(ctx, "cli.daemon.backfill_documents.build_failed", "concern", "cli.daemon", "component", "cli", "conversation_id", stampedRecord.Record.ID, "err", err)
+			skipped++
+			continue
+		}
+		docs = append(docs, conversationDocs...)
+		manifest = append(manifest, semsearch.Fingerprint{
+			ConversationID: stampedRecord.Record.ID,
+			Value:          stampedRecord.Stamp.Fingerprint(),
+		})
+	}
+	return docs, manifest, skipped
+}
+
+func writeBackfillConversationDocumentsResult(ctx context.Context, f *cli.Factory, action string, conversations int, documents int, skipped int, jobID string, needed int) error {
+	suffix := fmt.Sprintf(", %d skipped %s.", skipped, backfillConversationNoun(skipped))
+	if jobID != "" {
+		suffix = fmt.Sprintf(", %d skipped %s; manifest sync reported %d needed; job %s.", skipped, backfillConversationNoun(skipped), needed, jobID)
+	}
+	if writeErr := response.WriteResult(ctx, f.IOStreams.Out, f.IOStreams.Err, fmt.Sprintf(
+		"%s conversation documents from %d %s: %d %s%s\n",
+		action, conversations, backfillConversationNoun(conversations), documents, backfillDocumentNoun(documents), suffix,
+	)); writeErr != nil {
+		slog.ErrorContext(ctx, "cli.daemon.backfill_documents.write_failed", "concern", "cli.daemon", "component", "cli", "err", writeErr)
+		return fmt.Errorf("write backfill documents result: %w", writeErr)
+	}
+	return nil
+}
+
+func backfillConversationNoun(count int) string {
+	if count == 1 {
+		return "conversation"
+	}
+	return "conversations"
+}
+
+func backfillDocumentNoun(count int) string {
+	if count == 1 {
+		return "document"
+	}
+	return "documents"
 }
 
 // buildBackfillEntries projects each conversation into the enrichment entry the

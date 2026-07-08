@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -528,25 +529,19 @@ func (w *conversationSemanticSyncWorker) logPass(ctx context.Context, stats conv
 	)
 }
 
-func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) ([]semsearch.SemDoc, error) {
-	messages, err := w.index.LoadMessagesWithOptions(record, conversation.LoadOptions{
+// SemanticConversationLoadOptions returns the transcript load options for
+// semantic document production.
+func SemanticConversationLoadOptions() conversation.LoadOptions {
+	return conversation.LoadOptions{
 		IncludeSystemPrompts:  false,
 		IncludeSystemMessages: false,
-		IncludeToolOutputs:    false,
-	})
-	if err != nil {
-		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
-			"concern", "conversation.semantic",
-			"component", "daemon",
-			"conversation_id", record.ID,
-			"provider", record.Provider.String(),
-			"err", err,
-		)
-		return nil, fmt.Errorf("load conversation-only messages for %s: %w", record.ID, err)
+		IncludeToolOutputs:    true,
 	}
-	// All messages of one conversation share the same lineage parent, so derive
-	// it once. ParentConversationID returns ok=false for records with no
-	// resolvable parent, in which case the parent id stays "".
+}
+
+// BuildSemanticConversationDocuments projects loaded transcript messages into
+// the document shape sent to lm-semantic-search.
+func BuildSemanticConversationDocuments(record conversation.Record, messages []transcript.Message) ([]semsearch.SemDoc, error) {
 	parentConversationID := ""
 	if derivedParentID, ok := conversation.ParentConversationID(record); ok {
 		parentConversationID = derivedParentID
@@ -566,9 +561,67 @@ func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record co
 			// on a transcript byte sequence the encoder rejects (one codex doc
 			// with invalid UTF-8 used to break the whole batch).
 			Text:          strings.ToValidUTF8(message.Text, ""),
+			Tools:         semanticToolCalls(message.Tools),
+			Thinking:      strings.ToValidUTF8(message.Thinking, ""),
 			WorkspaceRoot: record.WorkspaceRoot,
 			Archived:      record.Archived,
 		})
+	}
+	return docs, nil
+}
+
+func semanticToolCalls(tools []transcript.ToolCall) []semsearch.SemToolCall {
+	out := make([]semsearch.SemToolCall, 0, len(tools))
+	for _, tool := range tools {
+		command, langHint := deriveToolCommandAndLang(tool.Name, tool.Input)
+		out = append(out, semsearch.SemToolCall{
+			Name:      tool.Name,
+			InputJSON: string(tool.Input.Raw),
+			Command:   command,
+			LangHint:  langHint,
+			Output:    tool.Output,
+			IsError:   tool.IsError,
+		})
+	}
+	return out
+}
+
+type semanticToolCommandInput struct {
+	Command string `json:"command"`
+	Cmd     string `json:"cmd"`
+}
+
+func deriveToolCommandAndLang(name string, input transcript.ToolInputJSON) (string, string) {
+	var parsed semanticToolCommandInput
+	if len(input.Raw) > 0 && json.Unmarshal(input.Raw, &parsed) == nil {
+		if strings.TrimSpace(parsed.Command) != "" {
+			return parsed.Command, "bash"
+		}
+		if strings.TrimSpace(parsed.Cmd) != "" {
+			return parsed.Cmd, "bash"
+		}
+	}
+	if name == "ExitPlanMode" {
+		return "", "markdown"
+	}
+	return "", "json"
+}
+
+func (w *conversationSemanticSyncWorker) loadDocs(ctx context.Context, record conversation.Record) ([]semsearch.SemDoc, error) {
+	messages, err := w.index.LoadMessagesWithOptions(record, SemanticConversationLoadOptions())
+	if err != nil {
+		w.log.WarnContext(ctx, "daemon.conversation_semantic_sync.load_failed",
+			"concern", "conversation.semantic",
+			"component", "daemon",
+			"conversation_id", record.ID,
+			"provider", record.Provider.String(),
+			"err", err,
+		)
+		return nil, fmt.Errorf("load conversation messages for %s: %w", record.ID, err)
+	}
+	docs, err := BuildSemanticConversationDocuments(record, messages)
+	if err != nil {
+		return nil, err
 	}
 	return docs, nil
 }

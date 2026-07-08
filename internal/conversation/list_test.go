@@ -3,7 +3,9 @@ package conversation
 import (
 	"context"
 	"iter"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +13,23 @@ import (
 	"goodkind.io/clyde/internal/providerid"
 	"goodkind.io/clyde/internal/transcript"
 )
+
+func TestSnippetBoundsHugeInput(t *testing.T) {
+	t.Parallel()
+	// A matched message can now carry multi-megabyte tool output. snippet must
+	// still return a bounded leading excerpt without normalizing the whole tail.
+	head := strings.Repeat("token ", 400)
+	huge := head + strings.Repeat("z", 8<<20)
+
+	got := snippet(huge)
+
+	if runes := []rune(got); len(runes) > searchSnippetRunes+3 {
+		t.Fatalf("snippet rune count = %d, want <= %d", len(runes), searchSnippetRunes+3)
+	}
+	if !strings.HasPrefix(got, "token token") {
+		t.Fatalf("snippet = %q, want leading tokens", got)
+	}
+}
 
 func TestFilterRecordsDefaultsToBoundedPage(t *testing.T) {
 	t.Parallel()
@@ -195,9 +214,137 @@ func TestSearchConversationsAppliesOffsetToTranscriptMatches(t *testing.T) {
 	}
 }
 
+func TestSearchConversationsMatchesRenderedMessageIndexText(t *testing.T) {
+	t.Parallel()
+	registry := NewRegistry()
+	parser := &messageMapParser{
+		provider: providerid.ProviderClaude,
+		messages: map[string][]transcript.Message{
+			"/tmp/tools.jsonl": {
+				{
+					Role:      "assistant",
+					Text:      "ordinary prose",
+					Thinking:  "reasoning-needle",
+					Timestamp: time.Unix(40, 0),
+					HasTools:  true,
+					Tools: []transcript.ToolCall{
+						{
+							Name:   "Bash",
+							Input:  transcript.ToolInputJSON{Raw: []byte(`{"command":"printf command-needle"}`)},
+							Output: "output-needle",
+						},
+					},
+				},
+			},
+		},
+		loadOptions: nil,
+	}
+	registry.Register(parser)
+	idx := &Index{
+		mu:           sync.Mutex{},
+		registry:     registry,
+		records:      []Record{testSearchRecord("claude:tools", "/tmp/tools.jsonl")},
+		prevRecords:  nil,
+		prevStamps:   nil,
+		loaded:       true,
+		refreshing:   false,
+		lastRefresh:  time.Now(),
+		cachePath:    "",
+		debounce:     time.Hour,
+		scanProvider: scan,
+	}
+
+	result, err := idx.SearchConversations(context.Background(), SearchConversationsOptions{
+		Query: "reasoning-needle command-needle output-needle",
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("search conversations: %v", err)
+	}
+
+	if result.ReturnedCount != 1 {
+		t.Fatalf("returned count = %d, want 1", result.ReturnedCount)
+	}
+	if len(parser.loadOptions) != 1 {
+		t.Fatalf("load options calls = %d, want 1", len(parser.loadOptions))
+	}
+	if !parser.loadOptions[0].IncludeToolOutputs {
+		t.Fatalf("IncludeToolOutputs = false, want true")
+	}
+	snippet := result.Matches[0].Snippet
+	for _, want := range []string{"reasoning-needle", "command-needle", "output-needle"} {
+		if !strings.Contains(snippet, want) {
+			t.Fatalf("snippet = %q, missing %q", snippet, want)
+		}
+	}
+}
+
+func TestSearchConversationsAppliesRowFiltersBeforeRenderingIndexText(t *testing.T) {
+	registry := NewRegistry()
+	largeToolOutput := strings.Repeat("filtered output ", 256*1024)
+	parser := &messageMapParser{
+		provider: providerid.ProviderClaude,
+		messages: map[string][]transcript.Message{
+			"/tmp/filtered-tools.jsonl": {
+				{
+					Role:      "user",
+					Text:      "filtered user message",
+					Timestamp: time.Unix(40, 0),
+					HasTools:  true,
+					Tools: []transcript.ToolCall{
+						{
+							Name:   "Bash",
+							Input:  transcript.ToolInputJSON{Raw: []byte(`{"command":"printf filtered"}`)},
+							Output: largeToolOutput,
+						},
+					},
+				},
+				{Role: "assistant", Text: "assistant target needle", Timestamp: time.Unix(50, 0)},
+			},
+		},
+		loadOptions: nil,
+	}
+	registry.Register(parser)
+	idx := &Index{
+		mu:           sync.Mutex{},
+		registry:     registry,
+		records:      []Record{testSearchRecord("claude:filtered-tools", "/tmp/filtered-tools.jsonl")},
+		prevRecords:  nil,
+		prevStamps:   nil,
+		loaded:       true,
+		refreshing:   false,
+		lastRefresh:  time.Now(),
+		cachePath:    "",
+		debounce:     time.Hour,
+		scanProvider: scan,
+	}
+
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	result, err := idx.SearchConversations(context.Background(), SearchConversationsOptions{
+		Query: "assistant target needle",
+		Limit: 1,
+		Roles: []string{"assistant"},
+	})
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("search conversations: %v", err)
+	}
+	if result.ReturnedCount != 1 {
+		t.Fatalf("returned count = %d, want 1", result.ReturnedCount)
+	}
+	allocatedBytes := after.TotalAlloc - before.TotalAlloc
+	if allocatedBytes > uint64(len(largeToolOutput)/2) {
+		t.Fatalf("search allocated %d bytes, want less than %d", allocatedBytes, len(largeToolOutput)/2)
+	}
+}
+
 type messageMapParser struct {
-	provider providerid.Provider
-	messages map[string][]transcript.Message
+	provider    providerid.Provider
+	messages    map[string][]transcript.Message
+	loadOptions []LoadOptions
 }
 
 func (p *messageMapParser) Provider() providerid.Provider { return p.provider }
@@ -210,7 +357,8 @@ func (*messageMapParser) ScanRecord(string, FileStamp) (Record, bool) {
 	return emptyRecord(), false
 }
 
-func (p *messageMapParser) Stream(path string, _ LoadOptions) iter.Seq2[transcript.Message, error] {
+func (p *messageMapParser) Stream(path string, opts LoadOptions) iter.Seq2[transcript.Message, error] {
+	p.loadOptions = append(p.loadOptions, opts)
 	return func(yield func(transcript.Message, error) bool) {
 		for _, message := range p.messages[path] {
 			if !yield(message, nil) {
