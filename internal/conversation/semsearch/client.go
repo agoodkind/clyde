@@ -314,6 +314,20 @@ func upsertClientInfo() *lmsemanticsearchv1.ClientInfo {
 	}
 }
 
+// estimateManifestBytes approximates the manifest message's wire size: each
+// fingerprint's conversation id and value plus a conservative per-entry framing
+// allowance, plus a fixed message overhead. It bounds the one-message manifest
+// against the per-chunk budget so an oversized corpus fails with a clear error.
+func estimateManifestBytes(manifest []Fingerprint) int {
+	const manifestFramingOverheadBytes = 64
+	const perFingerprintFramingBytes = 8
+	size := manifestFramingOverheadBytes
+	for _, fingerprint := range manifest {
+		size += len(fingerprint.ConversationID) + len(fingerprint.Value) + perFingerprintFramingBytes
+	}
+	return size
+}
+
 // sendUpsertStream sends the header, then the documents in bounded chunks, then
 // the manifest as one chunk. The header's reconcile mode governs a conversation
 // the manifest omits (clyde sends RETAIN, so it is kept); the manifest is sent
@@ -353,6 +367,13 @@ func sendUpsertStream(
 	}
 	if err := sendUpsertDocumentChunks(ctx, stream, docs); err != nil {
 		return err
+	}
+	// The manifest is one gRPC message the server reads whole (it does not
+	// accumulate manifest chunks), so guard its size explicitly. Without this a
+	// very large corpus could exceed the daemon's max message size and fail the
+	// whole stream with an opaque transport error; this returns a clear one first.
+	if manifestBytes := estimateManifestBytes(manifest); manifestBytes > upsertStreamMaxBytesPerChunk {
+		return fmt.Errorf("conversation manifest is %d bytes for %d conversations, exceeding the %d-byte per-message budget; select fewer conversations per backfill", manifestBytes, len(manifest), upsertStreamMaxBytesPerChunk)
 	}
 	manifestChunk := &lmsemanticsearchv1.UpsertConversationDocumentsChunk{
 		Chunk: &lmsemanticsearchv1.UpsertConversationDocumentsChunk_Manifest{

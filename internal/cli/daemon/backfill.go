@@ -161,8 +161,11 @@ func runBackfillConversationDocumentsWithDeps(
 	if options.DryRun {
 		return writeBackfillConversationDocumentsResult(ctx, f, "Would send", len(selectedRecords), len(docs), skipped, "", 0)
 	}
-	if len(selectedRecords) == 0 {
-		return writeBackfillConversationDocumentsResult(ctx, f, "Sent", 0, 0, skipped, "", 0)
+	if len(docs) == 0 {
+		// Nothing to upsert: either no conversation was selected, or every selected
+		// conversation failed to load/build (all skipped). Skip the engine round
+		// trip and report the skips instead of queuing an empty upsert job.
+		return writeBackfillConversationDocumentsResult(ctx, f, "Sent", len(selectedRecords), 0, skipped, "", 0)
 	}
 	cfg, err := f.Config()
 	if err != nil {
