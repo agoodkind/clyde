@@ -123,6 +123,74 @@ func TestProviderUpstreamRequestStreamsOriginalBody(t *testing.T) {
 	if body.readCount.Load() != 0 {
 		t.Fatalf("body was read while building upstream request")
 	}
+	if body.closed.Load() {
+		t.Fatalf("body was closed while building streaming upstream request")
+	}
+}
+
+func TestProviderUpstreamRequestDropsBodylessGetAndHeadBody(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+	}{
+		{name: "get", method: http.MethodGet},
+		{name: "head", method: http.MethodHead},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := &trackingReadCloser{reader: strings.NewReader("")}
+			req, err := http.NewRequest(test.method, "https://claude.ai/edge-api/bootstrap/org/app_start", body)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			req.ContentLength = 0
+
+			upstream := providerUpstreamRequest(req, "claude.ai:443", "claude.ai")
+
+			if upstream.Body != http.NoBody {
+				t.Fatalf("upstream body = %T, want http.NoBody", upstream.Body)
+			}
+			if req.Body != http.NoBody {
+				t.Fatalf("original request body = %T, want http.NoBody", req.Body)
+			}
+			if upstream.ContentLength != 0 {
+				t.Fatalf("content length = %d want 0", upstream.ContentLength)
+			}
+			if req.ContentLength != 0 {
+				t.Fatalf("original request content length = %d want 0", req.ContentLength)
+			}
+			if body.readCount.Load() != 0 {
+				t.Fatalf("body was read while building upstream request")
+			}
+			if !body.closed.Load() {
+				t.Fatalf("original body was not closed")
+			}
+		})
+	}
+}
+
+func TestProviderUpstreamRequestPreservesEmptyPostBody(t *testing.T) {
+	body := &trackingReadCloser{reader: strings.NewReader("")}
+	req, err := http.NewRequest(http.MethodPost, "https://api2direct.cursor.sh/empty", body)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.ContentLength = 0
+
+	upstream := providerUpstreamRequest(req, "api2direct.cursor.sh:443", "api2direct.cursor.sh")
+
+	if upstream.Body != body {
+		t.Fatalf("upstream body was replaced; empty POST bodies must preserve request semantics")
+	}
+	if upstream.ContentLength != 0 {
+		t.Fatalf("content length = %d want 0", upstream.ContentLength)
+	}
+	if body.readCount.Load() != 0 {
+		t.Fatalf("body was read while building upstream request")
+	}
+	if body.closed.Load() {
+		t.Fatalf("body was closed while building empty POST upstream request")
+	}
 }
 
 func TestHandleConnectInterceptsCursorTLSHTTP2AndCapturesBodies(t *testing.T) {

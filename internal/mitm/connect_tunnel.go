@@ -893,8 +893,16 @@ func upstreamTLSConfigWithHTTP2ALPN(base *tls.Config) *tls.Config {
 
 func providerUpstreamRequest(req *http.Request, target string, host string) *http.Request {
 	upstreamReq := req.Clone(req.Context())
-	upstreamReq.Body = req.Body
-	upstreamReq.ContentLength = req.ContentLength
+	if providerRequestShouldForwardNoBody(req) {
+		closeProviderNoBodyRequest(req.Body)
+		req.Body = http.NoBody
+		req.ContentLength = 0
+		upstreamReq.Body = http.NoBody
+		upstreamReq.ContentLength = 0
+	} else {
+		upstreamReq.Body = req.Body
+		upstreamReq.ContentLength = req.ContentLength
+	}
 	upstreamReq.GetBody = nil
 	upstreamReq.Host = host
 	upstreamReq.URL.Scheme = "https"
@@ -902,4 +910,27 @@ func providerUpstreamRequest(req *http.Request, target string, host string) *htt
 	upstreamReq.RequestURI = ""
 	upstreamReq.Header = req.Header.Clone()
 	return upstreamReq
+}
+
+func closeProviderNoBodyRequest(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	if body == http.NoBody {
+		return
+	}
+	_ = body.Close()
+}
+
+func providerRequestShouldForwardNoBody(req *http.Request) bool {
+	if req.ContentLength != 0 {
+		return false
+	}
+	if req.Method == http.MethodGet {
+		return true
+	}
+	if req.Method == http.MethodHead {
+		return true
+	}
+	return false
 }
