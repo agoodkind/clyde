@@ -937,6 +937,11 @@ func connectDaemon(ctx context.Context) (*daemonClient, error) {
 func daemonGRPCAddress() string {
 	cfg, err := config.LoadGlobalOrDefault()
 	if err != nil {
+		// Surface the config error before falling back so an operator sees why
+		// the CLI targeted the default socket instead of their configured one.
+		slog.Warn("daemon.client.grpc_address.load_failed",
+			"concern", "process.daemon.lifecycle", "component", "daemon",
+			"fallback", config.DefaultDaemonGRPCAddress(), "err", err)
 		return config.DefaultDaemonGRPCAddress()
 	}
 	return cfg.Daemon.GRPCAddress

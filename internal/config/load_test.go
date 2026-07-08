@@ -75,6 +75,23 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(roundTripped.Daemon.GRPCAddress).To(Equal("unix:///tmp/clyde-context.sock"))
 	})
 
+	DescribeTable("rejects an invalid daemon grpc address",
+		func(grpcAddress string) {
+			tmpDir := GinkgoT().TempDir()
+			_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+			globalDir := filepath.Join(tmpDir, "clyde")
+			Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+			configText := "[daemon]\ngrpc_address = \"" + grpcAddress + "\"\n"
+			Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
+
+			_, err := config.LoadGlobalOrDefault()
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("non-unix scheme", "tcp://127.0.0.1:9"),
+		Entry("relative socket path", "unix://relative/clyde.sock"),
+	)
+
 	It("loads conversation semantic sync config", func() {
 		tmpDir := GinkgoT().TempDir()
 		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
