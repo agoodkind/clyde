@@ -894,6 +894,13 @@ func upstreamTLSConfigWithHTTP2ALPN(base *tls.Config) *tls.Config {
 func providerUpstreamRequest(req *http.Request, target string, host string) *http.Request {
 	upstreamReq := req.Clone(req.Context())
 	if providerRequestShouldForwardNoBody(req) {
+		// A bodyless GET/HEAD forwarded over HTTP/2 with a non-nil Body makes the
+		// Go h2 client emit an empty DATA frame, which the Cloudflare Ion worker
+		// rejects with 500 (claude.ai /edge-api/* app_start). Forward http.NoBody
+		// so the client sends END_STREAM on HEADERS with no DATA frame. The
+		// original req is reset too, not just upstreamReq: its Body is closed
+		// here, so leaving req.Body pointing at the closed capture reader would
+		// let a later drain (server teardown) read from a closed body.
 		closeProviderNoBodyRequest(req.Body)
 		req.Body = http.NoBody
 		req.ContentLength = 0
@@ -923,6 +930,13 @@ func closeProviderNoBodyRequest(body io.ReadCloser) {
 }
 
 func providerRequestShouldForwardNoBody(req *http.Request) bool {
+	// The guard is exactly ContentLength == 0, not <= 0. An intercepted bodyless
+	// GET/HEAD arrives as 0 (h2 END_STREAM on HEADERS, or an explicit
+	// Content-Length: 0), which is the reproduced app_start case. ContentLength
+	// -1 means unknown length: the request may carry a real streaming body, and
+	// clyde forwards request bodies without pre-buffering, so it cannot peek to
+	// tell an empty -1 body from a streaming one. Dropping a -1 body could
+	// truncate a real request, so those are forwarded unchanged.
 	if req.ContentLength != 0 {
 		return false
 	}
