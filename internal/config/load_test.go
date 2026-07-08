@@ -8,6 +8,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/pelletier/go-toml/v2"
 
 	"goodkind.io/clyde/internal/config"
 )
@@ -49,9 +50,47 @@ var _ = Describe("LoadGlobalOrDefault", func() {
 		Expect(cfg.Logging.Rotation.MaxAgeDays).To(Equal(14))
 		Expect(cfg.Logging.Rotation.Compress).NotTo(BeNil())
 		Expect(*cfg.Logging.Rotation.Compress).To(BeTrue())
+		Expect(cfg.Daemon.GRPCAddress).To(Equal(config.DefaultDaemonGRPCAddress()))
 		Expect(cfg.Conversation.Semantic.Enabled).To(BeFalse())
 		Expect(cfg.Conversation.Semantic.CollectionID).To(Equal("clyde-conversations"))
 	})
+
+	It("loads and round-trips daemon grpc address", func() {
+		tmpDir := GinkgoT().TempDir()
+		_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		globalDir := filepath.Join(tmpDir, "clyde")
+		Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+		configText := "[daemon]\ngrpc_address = \"unix:///tmp/clyde-context.sock\"\n"
+		Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
+
+		cfg, err := config.LoadGlobalOrDefault()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Daemon.GRPCAddress).To(Equal("unix:///tmp/clyde-context.sock"))
+
+		encoded, err := toml.Marshal(cfg)
+		Expect(err).NotTo(HaveOccurred())
+		var roundTripped config.Config
+		Expect(toml.Unmarshal(encoded, &roundTripped)).To(Succeed())
+		Expect(roundTripped.Daemon.GRPCAddress).To(Equal("unix:///tmp/clyde-context.sock"))
+	})
+
+	DescribeTable("rejects an invalid daemon grpc address",
+		func(grpcAddress string) {
+			tmpDir := GinkgoT().TempDir()
+			_ = os.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+			globalDir := filepath.Join(tmpDir, "clyde")
+			Expect(os.MkdirAll(globalDir, 0o755)).To(Succeed())
+			configText := "[daemon]\ngrpc_address = \"" + grpcAddress + "\"\n"
+			Expect(os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte(configText), 0o644)).To(Succeed())
+
+			_, err := config.LoadGlobalOrDefault()
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("non-unix scheme", "tcp://127.0.0.1:9"),
+		Entry("relative socket path", "unix://relative/clyde.sock"),
+	)
 
 	It("loads conversation semantic sync config", func() {
 		tmpDir := GinkgoT().TempDir()

@@ -54,6 +54,9 @@ func (r Route) String() string {
 // Every other field change routes to reload (or rebind/restart for listener and
 // surface-toggle changes).
 func ClassifyConfigChange(oldCfg, newCfg Config) Route {
+	if oldCfg.Daemon.GRPCAddress != newCfg.Daemon.GRPCAddress {
+		return RouteRestartRequired
+	}
 	if oldCfg.Adapter.Enabled != newCfg.Adapter.Enabled {
 		return RouteRestartRequired
 	}

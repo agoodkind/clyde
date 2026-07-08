@@ -11,6 +11,8 @@ import (
 
 // Config represents the clyde configuration.
 type Config struct {
+	// Daemon configures daemon control-plane surfaces.
+	Daemon DaemonConfig `json:"daemon" toml:"daemon"`
 	// Logging configures process-wide runtime behavior.
 	Logging LoggingConfig `json:"logging" toml:"logging"`
 	// Conversation configures raw conversation indexing and background sync.
@@ -24,6 +26,13 @@ type Config struct {
 	// Debug configures opt-in daemon diagnostics such as the loopback
 	// pprof endpoint. It is empty by default, so no debug surface is exposed.
 	Debug DebugConfig `json:"debug" toml:"debug"`
+}
+
+// DaemonConfig holds daemon control-plane settings.
+type DaemonConfig struct {
+	// GRPCAddress is the gRPC target for the daemon control socket.
+	// It defaults to the user-scoped Unix socket under RuntimeDir.
+	GRPCAddress string `json:"grpcAddress,omitempty" toml:"grpc_address,omitempty"`
 }
 
 // DebugConfig holds opt-in daemon diagnostics. Everything here is off by

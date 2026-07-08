@@ -47,6 +47,9 @@ Copy only the sections you need from `clyde.example.toml`, then edit the local
 config for your adapter, logging, search, and MITM setup. The config structs in
 `internal/config/` are the implementation source of truth.
 
+External gRPC clients can read `[daemon] grpc_address`; it defaults to `unix://`
+plus the user-scoped daemon socket path from `internal/config`.
+
 ## Operations
 
 Use generated help to discover the current operational surface:
