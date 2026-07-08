@@ -453,6 +453,8 @@ goodkind.io/lm-semantic-search v0.0.0-20260707224247-870e149eabf2 h1:22WUN6fMVQ2
 goodkind.io/lm-semantic-search v0.0.0-20260707224247-870e149eabf2/go.mod h1:nL8842ibwWiLJk2UWAMhmqSsaE7O5Cmp0TPBD65mBA8=
 goodkind.io/lm-semantic-search v0.0.0-20260708042756-5be6601dea22 h1:vpxCDQ8V7gA0E3b5wAPAWJxgYVJ1WUsB6e16PPRPvug=
 goodkind.io/lm-semantic-search v0.0.0-20260708042756-5be6601dea22/go.mod h1:nL8842ibwWiLJk2UWAMhmqSsaE7O5Cmp0TPBD65mBA8=
+goodkind.io/lm-semantic-search v0.0.0-20260708061941-e99bd59cf3f5 h1:0NlSSsifdiWC8wkgR0ZDEa9fwfqN+13Ef9kKHlhN/bE=
+goodkind.io/lm-semantic-search v0.0.0-20260708061941-e99bd59cf3f5/go.mod h1:nL8842ibwWiLJk2UWAMhmqSsaE7O5Cmp0TPBD65mBA8=
 google.golang.org/api v0.280.0 h1:F4OfEHZhZh6a7uTufJAXXVd/2TQ8EjM4vZH+jX/vFYk=
 google.golang.org/api v0.280.0/go.mod h1:oGKmPZRDoD3vdkf6MA7F4VNkR1rxCiuaPSkhsf3EolU=
 google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 h1:XzmzkmB14QhVhgnawEVsOn6OFsnpyxNPRY9QV01dNB0=
