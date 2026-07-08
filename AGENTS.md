@@ -32,6 +32,7 @@ Prefer code and tests over this file for exact behavior.
 - Use `internal/adapter/` for adapter, Cursor, Codex, Anthropic, model routing, and request-shape details.
 - Use `internal/mitm/` plus `internal/providers/*/mitmcontrib/` for MITM provider registration, route claims, identity facets, and capture extensions.
 - Use `docs/logging/` and `internal/slogger/` for logging, sink, inventory, and correlation contracts.
+- Use `internal/contextsvc/` and `docs/context/overview.md` for the ConversationContext gRPC service that returns recent conversation turns.
 - Use `docs/cursor.md` for the empirical reasons behind Cursor-specific adapter rules.
 - Use `docs/reorient/overview.md` for the two-tier reorient-after-compaction delivery and the MITM summary-injection hook.
 
