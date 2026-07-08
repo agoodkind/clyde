@@ -562,9 +562,16 @@ func semDocTruncationMarker(omittedBytes int) string {
 func semDocByteSize(doc SemDoc) int {
 	const semDocFramingOverheadBytes = 256
 	const semDocArchivedFieldBytes = 2
+	// Each tool call is an embedded message with several length-delimited string
+	// fields plus an is_error bool, so on the wire it carries protobuf framing (the
+	// message tag and length prefix, and a tag and varint length per field) beyond
+	// its raw string bytes. Add a conservative fixed allowance per tool so a message
+	// with many small tool calls does not under-estimate its encoded size and slip
+	// past the per-chunk budget into a gRPC message-size failure.
+	const semDocPerToolFramingBytes = 64
 	size := len(doc.Text) + len(doc.Thinking) + len(doc.ConversationID) + len(doc.ParentConversationID) + len(doc.Role) + len(doc.WorkspaceRoot) + semDocArchivedFieldBytes + semDocFramingOverheadBytes
 	for _, tool := range doc.Tools {
-		size += len(tool.Name) + len(tool.InputJSON) + len(tool.Command) + len(tool.LangHint) + len(tool.Output)
+		size += len(tool.Name) + len(tool.InputJSON) + len(tool.Command) + len(tool.LangHint) + len(tool.Output) + semDocPerToolFramingBytes
 	}
 	return size
 }

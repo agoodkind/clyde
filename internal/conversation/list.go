@@ -404,13 +404,35 @@ func recordMatchesTerms(record Record, terms []string) bool {
 }
 
 func messageIndexTextMatchesTerms(indexText string, terms []string) bool {
-	text := strings.ToLower(indexText)
+	// indexText can be multi-megabyte once tool outputs are included, and
+	// strings.ToLower allocates a full copy. Skip it when the text is already
+	// pure-ASCII-lowercase (common for paths, commands, and code output), matching
+	// the raw text directly; only allocate the lowercase copy when the text holds
+	// ASCII uppercase or any non-ASCII byte that may be a Unicode uppercase rune.
+	text := indexText
+	if needsLowering(indexText) {
+		text = strings.ToLower(indexText)
+	}
 	for _, term := range terms {
 		if !strings.Contains(text, term) {
 			return false
 		}
 	}
 	return true
+}
+
+// needsLowering reports whether s must be lowercased before a case-insensitive
+// match. It scans bytes without allocating and returns true on the first ASCII
+// uppercase letter or non-ASCII byte, so pure-ASCII-lowercase text is matched
+// as-is while anything that could hold an uppercase rune is lowercased.
+func needsLowering(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || c >= 0x80 {
+			return true
+		}
+	}
+	return false
 }
 
 func queryTerms(query string) []string {
