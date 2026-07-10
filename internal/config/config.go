@@ -75,10 +75,18 @@ type AdapterConfig struct {
 	// RequireToken, when set, demands a matching bearer token on
 	// every request. The env var CLYDE_ADAPTER_TOKEN overrides.
 	RequireToken string `json:"requireToken,omitempty" toml:"require_token,omitempty"`
-	// Models lets users add or override adapter model entries.
-	// Keys are the public (OpenAI style or real Claude) aliases the
-	// client sends. Values name the backend and its tuning knobs.
-	Models map[string]AdapterModel `json:"models,omitempty" toml:"models,omitempty"`
+	// ModelProfiles declares reusable exact-model capability profiles.
+	ModelProfiles map[string]AdapterModelProfile `json:"modelProfiles,omitempty" toml:"model_profiles,omitempty"`
+	// Models declares canonical exact request IDs and their provider mapping.
+	Models map[string]AdapterModelDeclaration `json:"models,omitempty" toml:"models,omitempty"`
+	// ModelRoutes declares ordered wildcard provider claims.
+	ModelRoutes []AdapterModelRoute `json:"modelRoutes,omitempty" toml:"model_routes,omitempty"`
+	// Families is a source-only bridge for the legacy registry. Its TOML and
+	// JSON tags exclude it; the declarative registry conversion removes it.
+	Families map[string]AdapterFamily `json:"-" toml:"-"`
+	// Pricing is a source-only bridge for the legacy cost reader. Model-local
+	// pricing replaces it, and the declarative registry conversion removes it.
+	Pricing map[string]AdapterModelPricing `json:"-" toml:"-"`
 	// PassthroughOverrides lets users forward specific aliases to an
 	// upstream OpenAI-compatible endpoint.
 	PassthroughOverrides map[string]AdapterPassthroughOverride `json:"passthroughOverrides,omitempty" toml:"passthrough_overrides,omitempty"`
@@ -123,11 +131,6 @@ type AdapterConfig struct {
 	// Omitted defaults to true so operators can disable by setting
 	// enabled = false.
 	Notices AdapterNotices `json:"notices,omitzero" toml:"notices,omitempty"`
-	// Families declares the per-family Claude capability matrix the
-	// registry expands into the public alias set at load time. Keyed
-	// by a stable family slug (e.g. "opus-4-7", "sonnet-4-6",
-	// "haiku-4-5"). Empty disables direct-OAuth model resolution.
-	Families map[string]AdapterFamily `json:"families,omitempty" toml:"families,omitempty"`
 	// Codex configures routing for ChatGPT model names (gpt-*, o*)
 	// through the Codex backend-api surface. This keeps Cursor on the
 	// same adapter endpoint/port while letting model name choose
@@ -142,15 +145,6 @@ type AdapterConfig struct {
 	// holds only what config provides; provider packages append their
 	// own builtin policies at construction. There is no catch-all retry.
 	Retry AdapterRetry `json:"retry,omitzero" toml:"retry,omitempty"`
-	// Pricing maps a wire model id to its public per-token billing rates
-	// expressed in dollars-per-million-tokens. The read-time cost
-	// aggregator (internal/daemon provider stats) consumes this map to
-	// translate recorded token counts into an estimated dollar cost.
-	// Keys are matched against the recorded model id by longest-prefix,
-	// so "claude-opus-4-8" covers "claude-opus-4-8[1m]" and snapshot
-	// variants. Empty disables read-time cost estimation. There are no
-	// compiled-in rate defaults; operators declare the table they trust.
-	Pricing map[string]AdapterModelPricing `json:"pricing,omitempty" toml:"pricing,omitempty"`
 }
 
 // AdapterModelPricing declares one model's public list rates in
@@ -216,26 +210,18 @@ type AdapterCodex struct {
 	WebsocketEnabled bool `json:"websocketEnabled,omitempty" toml:"websocket_enabled,omitempty"`
 	// AuthFile points at Codex auth state. Defaults to ~/.codex/auth.json.
 	AuthFile string `json:"authFile,omitempty" toml:"auth_file,omitempty"`
-	// NativeModelRouting controls how declared native OpenAI/Codex aliases
-	// (the native_aliases entries on each [adapter.codex.models] context,
-	// i.e. [adapter.codex.models].contexts[*].native_aliases) resolve.
-	// Empty and "off" reject them as
-	// unknown models. "codex" routes through the direct Codex backend.
-	// "passthrough_override" routes to NativeModelPassthroughOverride.
-	// There is no model-name prefix guessing: an alias routes to Codex
-	// only when it is declared.
-	NativeModelRouting string `json:"nativeModelRouting,omitempty" toml:"native_model_routing,omitempty"`
-	// NativeModelPassthroughOverride is used when NativeModelRouting is
-	// "passthrough_override".
-	NativeModelPassthroughOverride string `json:"nativeModelPassthroughOverride,omitempty" toml:"native_model_passthrough_override,omitempty"`
+	// NativeModelRouting is a source-only bridge for the legacy registry.
+	NativeModelRouting string `json:"-" toml:"-"`
+	// NativeModelPassthroughOverride is a source-only bridge for the legacy registry.
+	NativeModelPassthroughOverride string `json:"-" toml:"-"`
 	// ReasoningSummary is the default Codex Responses reasoning.summary
 	// value Clyde sends when a reasoning effort is active and the request
 	// did not explicitly set reasoning.summary. Valid values match Codex:
 	// auto, concise, detailed, none. Empty defaults to auto.
 	ReasoningSummary string `json:"reasoningSummary,omitempty" toml:"reasoning_summary,omitempty"`
-	// Models declares the Codex-backed model catalog that Clyde
-	// advertises and resolves for first-party clyde-* aliases.
-	Models []AdapterCodexModel `json:"models,omitempty" toml:"models,omitempty"`
+	// Models is a source-only bridge for the legacy registry. Its TOML and JSON
+	// tags exclude it; the declarative registry conversion removes it.
+	Models []AdapterCodexModel `json:"-" toml:"-"`
 	// Reasoning carries the per-provider reasoning round-trip levers for
 	// the Codex backend. Codex Responses carries TWO independent levers
 	// per codex-rs context_manager/history.rs:361-405: visible summary
@@ -246,6 +232,11 @@ type AdapterCodex struct {
 // AdapterAnthropic carries Anthropic-specific sub-blocks introduced after
 // the original AdapterConfig shape stabilized.
 type AdapterAnthropic struct {
+	// Enabled allows exact declarations and route rules to select Anthropic.
+	Enabled bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	// DefaultWireProfile names the learned wire profile used by wildcard
+	// routes when no exact declaration supplies one.
+	DefaultWireProfile string `json:"defaultWireProfile,omitempty" toml:"default_wire_profile,omitempty"`
 	// OAuth holds Anthropic API URL, header metadata, and keychain label
 	// for the direct-OAuth path. Claude login credentials come from the
 	// current platform's normal Claude credential store.
@@ -621,33 +612,9 @@ type AdapterModelContext struct {
 	WireSuffix     string `json:"wireSuffix,omitempty" toml:"wire_suffix,omitempty"`
 }
 
-// AdapterModel describes one backend the adapter can route to.
-// Backend is either "claude" or "passthrough_override". For claude
-// backends, Model names the real Claude model passed through via
-// --model. Context sets the advertised context window. Efforts names
-// the allowed reasoning effort tiers for this model. The first entry
-// is the default when the request does not specify one.
-type AdapterModel struct {
-	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
-	Model   string `json:"model,omitempty" toml:"model,omitempty"`
-	// InstructionsFile points at a markdown file whose verbatim contents
-	// are loaded once during config parsing. Relative paths resolve from
-	// the declaring config.toml directory.
-	InstructionsFile string `json:"instructionsFile,omitempty" toml:"instructions_file,omitempty"`
-	// Instructions carries the loaded file contents for registry
-	// construction. It is not serialized back to disk.
-	Instructions string `json:"-" toml:"-"`
-	Context      int    `json:"context,omitempty" toml:"context,omitempty"`
-	// ObservedContext is the provider-specific context window Clyde
-	// should surface for capability reports when it differs from the
-	// advertised context. Zero means use Context.
-	ObservedContext int      `json:"observedContext,omitempty" toml:"observed_context,omitempty"`
-	Efforts         []string `json:"efforts,omitempty" toml:"efforts,omitempty"`
-	// PassthroughOverride names an entry in
-	// AdapterConfig.PassthroughOverrides for backend
-	// "passthrough_override".
-	PassthroughOverride string `json:"passthroughOverride,omitempty" toml:"passthrough_override,omitempty"`
-}
+// AdapterModel temporarily aliases the declarative model type for legacy Go
+// registry callers. It is not a separate configuration schema.
+type AdapterModel = AdapterModelDeclaration
 
 // AdapterPassthroughOverride points to an upstream OpenAI-compatible endpoint.
 type AdapterPassthroughOverride struct {

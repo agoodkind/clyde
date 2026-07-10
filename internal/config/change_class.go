@@ -46,9 +46,9 @@ func (r Route) String() string {
 //
 // The v1 hot set, the only fields the in-process apply path knows how to swap
 // without re-exec, is:
-//   - adapter: Models, Families, Pricing, DefaultModel, PassthroughOverrides,
-//     OpenAICompatPassthrough (the model-registry inputs; the daemon rebuilds
-//     and atomically swaps the adapter model registry)
+//   - adapter: ModelProfiles, Models, ModelRoutes, DefaultModel,
+//     PassthroughOverrides, OpenAICompatPassthrough (the model-registry inputs;
+//     the daemon rebuilds and atomically swaps the adapter model registry)
 //   - mitm: Providers, Drift (the proxy swaps its config-derived routing)
 //
 // Every other field change routes to reload (or rebind/restart for listener and
@@ -147,8 +147,8 @@ func onlyHotFieldsChanged(oldCfg, newCfg Config) bool {
 // drift sweep restarts with the new config rather than running stale.
 func blankHotFields(cfg Config) Config {
 	cfg.Adapter.Models = nil
-	cfg.Adapter.Families = nil
-	cfg.Adapter.Pricing = nil
+	cfg.Adapter.ModelProfiles = nil
+	cfg.Adapter.ModelRoutes = nil
 	cfg.Adapter.DefaultModel = ""
 	cfg.Adapter.PassthroughOverrides = nil
 	cfg.Adapter.OpenAICompatPassthrough = AdapterOpenAICompatPassthrough{BaseURL: "", APIKey: "", APIKeyEnv: "", Model: ""}
