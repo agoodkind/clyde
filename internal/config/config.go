@@ -125,10 +125,9 @@ type AdapterConfig struct {
 	// Omitted defaults to true so operators can disable by setting
 	// enabled = false.
 	Notices AdapterNotices `json:"notices,omitzero" toml:"notices,omitempty"`
-	// Codex configures routing for ChatGPT model names (gpt-*, o*)
-	// through the Codex backend-api surface. This keeps Cursor on the
-	// same adapter endpoint/port while letting model name choose
-	// backend.
+	// Codex configures the direct Codex provider transport and
+	// authentication. Model declarations and ordered model routes select
+	// this provider.
 	Codex AdapterCodex `json:"codex,omitzero" toml:"codex,omitempty"`
 	// Anthropic carries Anthropic-specific sub-blocks under the canonical
 	// [adapter.anthropic] root. Provider-specific endpoint metadata lives

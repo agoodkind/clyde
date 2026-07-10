@@ -20,7 +20,9 @@ current source or generated help for details that can drift:
 - Conversation CLI and MCP operations: `clyde conversation --help` and
   `internal/clispec/`.
 - Runtime config: `clyde.example.toml` and `internal/config/`.
-- Adapter behavior: `docs/cursor.md` and `internal/adapter/`.
+- Adapter model routing and catalog behavior:
+  [adapter model routing](docs/adapter/overview.md).
+- Cursor ingress and error behavior: `docs/cursor.md`.
 - MITM listeners and capture behavior: `docs/wire-baseline.md`,
   `docs/cursor-mitm-setup.md`, and `internal/mitm/`.
 - Logging, sinks, request paths, and inventory: `docs/logging/`.
