@@ -22,13 +22,9 @@ import (
 // exercises both providers.
 func resolverToWireConfig() config.AdapterConfig {
 	cfg := modelMatrixConfig()
-	family := cfg.Families["opus-4-7"]
-	family.Instructions = "family base instructions"
-	cfg.Families["opus-4-7"] = family
-	// DirectOAuth must be true so the registry rewrites BackendClaude
-	// models to BackendAnthropic; otherwise the resolver returns
-	// ErrUnresolvedProvider and the test never reaches the wire.
-	cfg.DirectOAuth = true
+	opus := cfg.Models["clyde-opus-4.7-medium"]
+	opus.Instructions = "family base instructions"
+	cfg.Models["clyde-opus-4.7-medium"] = opus
 	cfg.Anthropic.OAuth = config.AdapterOAuth{
 		MessagesURL:      "https://example.test/v1/messages",
 		AnthropicBeta:    "test-beta",
@@ -37,10 +33,9 @@ func resolverToWireConfig() config.AdapterConfig {
 	}
 	cfg.Codex.Enabled = true
 	cfg.Codex.AuthFile = "~/.codex/auth.json"
-	if len(cfg.Codex.Models) > 0 {
-		cfg.Codex.Models[0].Instructions = "model base instructions"
-		cfg.Codex.Models[0].Efforts = []string{EffortMedium, EffortHigh}
-	}
+	codex := cfg.Models["gpt-5.4"]
+	codex.Instructions = "model base instructions"
+	cfg.Models["gpt-5.4"] = codex
 	return cfg
 }
 
@@ -78,7 +73,7 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 		},
 		{
 			alias:        "clyde-opus-4.7-medium",
-			wantThinking: "disabled",
+			wantThinking: "",
 		},
 		{
 			// opus-4-6 declares no thinking_wire_mode, so the empty-default
@@ -91,13 +86,16 @@ func TestResolverToAnthropicWirePropagatesThinking(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.alias, func(t *testing.T) {
 			cursorReq := buildCursorRequest(tc.alias)
-			resolved, err := adapterresolver.Resolve(cursorReq, bridge)
+			resolved, err := adapterresolver.Resolve(adapterresolver.IngressCursor, cursorReq, bridge)
 			if err != nil {
 				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
 			}
 			prepared, err := server.prepareAnthropicProviderRequest(context.Background(), resolved, "req-resolver-wire-"+tc.alias)
 			if err != nil {
 				t.Fatalf("prepareAnthropicProviderRequest: %v", err)
+			}
+			if tc.wantThinking == "" && prepared.Request.Thinking == nil {
+				return
 			}
 			if prepared.Request.Thinking == nil {
 				t.Fatalf("Thinking is nil; expected Type=%q", tc.wantThinking)
@@ -135,7 +133,7 @@ func TestResolverToAnthropicWirePropagatesEffort(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.alias, func(t *testing.T) {
 			cursorReq := buildCursorRequest(tc.alias)
-			resolved, err := adapterresolver.Resolve(cursorReq, bridge)
+			resolved, err := adapterresolver.Resolve(adapterresolver.IngressCursor, cursorReq, bridge)
 			if err != nil {
 				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
 			}
@@ -164,7 +162,7 @@ func TestResolverToAnthropicWirePropagatesInstructions(t *testing.T) {
 	server := newAnthropicWireServer(t)
 
 	cursorReq := buildCursorRequest("clyde-opus-4.7-medium")
-	resolved, err := adapterresolver.Resolve(cursorReq, bridge)
+	resolved, err := adapterresolver.Resolve(adapterresolver.IngressCursor, cursorReq, bridge)
 	if err != nil {
 		t.Fatalf("resolver.Resolve: %v", err)
 	}
@@ -217,7 +215,7 @@ func TestResolverToCodexWirePropagatesEffort(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.alias, func(t *testing.T) {
 			cursorReq := buildCursorRequest(tc.alias)
-			resolved, err := adapterresolver.Resolve(cursorReq, bridge)
+			resolved, err := adapterresolver.Resolve(adapterresolver.IngressCursor, cursorReq, bridge)
 			if err != nil {
 				t.Fatalf("resolver.Resolve(%s): %v", tc.alias, err)
 			}

@@ -2,4 +2,7 @@ package model
 
 import "goodkind.io/clyde/internal/slogger"
 
-var modelCatalogLog = slogger.Concern(slogger.ConcernAdapterModelsCatalog)
+var (
+	modelCatalogLog = slogger.Concern(slogger.ConcernAdapterModelsCatalog)
+	modelResolveLog = slogger.Concern(slogger.ConcernAdapterModelsResolve)
+)

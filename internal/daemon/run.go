@@ -110,7 +110,7 @@ func RunContext(parent context.Context, log *slog.Logger, extraLoops ...ExtraLoo
 	if err != nil {
 		return fmt.Errorf("load inherited daemon runtime: %w", err)
 	}
-	stats := newProviderStatsRecorder(adapterruntime.NewPricingTable(cfg.Adapter.Pricing))
+	stats := newProviderStatsRecorder(adapterruntime.NewPricingTable(cfg.Adapter.ModelPricing()))
 	runtime, err := startRuntime(ctx, cfg, log, stats, inherited)
 	if err != nil {
 		return fmt.Errorf("start daemon runtime: %w", err)

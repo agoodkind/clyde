@@ -13,7 +13,7 @@ import (
 type modelCatalogFingerprintRow struct {
 	Alias               string
 	Backend             string
-	ClaudeModel         string
+	WireModel           string
 	Context             int
 	MaxOutputTokens     int
 	Efforts             string
@@ -23,7 +23,7 @@ type modelCatalogFingerprintRow struct {
 	SupportsTools       bool
 	SupportsVision      bool
 	PassthroughOverride string
-	FamilySlug          string
+	Profile             string
 }
 
 func modelCatalogFingerprint(models []adaptermodel.ResolvedAlias) string {
@@ -32,7 +32,7 @@ func modelCatalogFingerprint(models []adaptermodel.ResolvedAlias) string {
 		rows = append(rows, modelCatalogFingerprintRow{
 			Alias:               m.Alias,
 			Backend:             m.Backend.String(),
-			ClaudeModel:         m.ClaudeModel,
+			WireModel:           m.WireModel,
 			Context:             m.Context,
 			MaxOutputTokens:     m.MaxOutputTokens,
 			Efforts:             sortedJoined(m.Efforts),
@@ -42,7 +42,7 @@ func modelCatalogFingerprint(models []adaptermodel.ResolvedAlias) string {
 			SupportsTools:       m.SupportsTools,
 			SupportsVision:      m.SupportsVision,
 			PassthroughOverride: m.PassthroughOverride,
-			FamilySlug:          m.FamilySlug,
+			Profile:             m.Profile,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -54,7 +54,7 @@ func modelCatalogFingerprint(models []adaptermodel.ResolvedAlias) string {
 		_, _ = fmt.Fprintf(&b, "%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%t\t%t\t%s\t%s\n",
 			row.Alias,
 			row.Backend,
-			row.ClaudeModel,
+			row.WireModel,
 			row.Context,
 			row.MaxOutputTokens,
 			row.Efforts,
@@ -64,7 +64,7 @@ func modelCatalogFingerprint(models []adaptermodel.ResolvedAlias) string {
 			row.SupportsTools,
 			row.SupportsVision,
 			row.PassthroughOverride,
-			row.FamilySlug,
+			row.Profile,
 		)
 	}
 	sum := sha256.Sum256([]byte(b.String()))

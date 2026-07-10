@@ -70,10 +70,11 @@ func (s *Server) modelRegistry() *Registry {
 // subsequent requests, with no server restart. In-flight requests keep the
 // registry they loaded at dispatch, so nothing is severed. It returns an error
 // without swapping if the new config fails to build, so a bad apply leaves the
-// running registry intact. Only the model-registry inputs (Models, Families,
-// Pricing, DefaultModel, passthroughs) are hot-appliable here; the daemon's
-// change classifier routes any other adapter change to reload, so the fields
-// this Server reads directly off the fixed cfg stay consistent.
+// running registry intact. Only the model-registry inputs (Models,
+// ModelProfiles, ModelRoutes, DefaultModel, and passthroughs) are hot-appliable
+// here; the daemon's change classifier routes any other adapter change to
+// reload, so the fields this Server reads directly off the fixed cfg stay
+// consistent.
 func (s *Server) ApplyConfig(newCfg config.AdapterConfig) error {
 	registry, err := NewRegistry(newCfg)
 	if err != nil {
@@ -137,9 +138,9 @@ type Server struct {
 // New constructs a Server from the given adapter config. The deps
 // hooks come from the daemon process so the adapter reuses existing
 // binary resolution and scratch dir wiring. Returns an error when
-// the registry cannot be built (missing families, default model, or
-// required client_identity fields); the daemon refuses to start the
-// listener in that case.
+// the registry cannot be built because the catalog, default model, or
+// required client_identity fields are invalid; the daemon refuses to start
+// the listener in that case.
 func New(ctx context.Context, cfg config.AdapterConfig, logging config.LoggingConfig, deps Deps, log *slog.Logger) (*Server, error) {
 	if log == nil {
 		log = slog.Default()
@@ -257,7 +258,7 @@ func (s *Server) registerProviders(
 			slog.Int("registered_count", len(s.providerRegistry.IDs())),
 		)
 	}
-	if cfg.DirectOAuth {
+	if cfg.Anthropic.Enabled || cfg.DirectOAuth {
 		s.registerAnthropicProvider(ctx, cfg, deps, log, maxConcurrent, policies)
 	}
 }

@@ -42,14 +42,14 @@ func BuildRequest(req adapteropenai.ChatRequest, model adaptermodel.ResolvedAlia
 func codexResolvedForTest(model adaptermodel.ResolvedAlias) *adapterresolver.ResolvedRequest {
 	// The production resolver always carries a non-empty wire model; these
 	// older fixtures sometimes set only Alias and relied on the builder's
-	// ClaudeModel-to-Alias fallback, so reproduce that fallback here.
-	wireModel := strings.TrimSpace(model.ClaudeModel)
+	// WireModel-to-Alias fallback, so reproduce that fallback here.
+	wireModel := strings.TrimSpace(model.WireModel)
 	if wireModel == "" {
 		wireModel = model.Alias
 	}
 	resolved := &adapterresolver.ResolvedRequest{
 		Provider:        adaptermodel.BackendCodex,
-		Family:          model.FamilySlug,
+		Family:          model.Profile,
 		Model:           wireModel,
 		Effort:          adapterresolver.Effort(model.Effort),
 		ContextBudget:   adapterresolver.ContextBudget{InputTokens: model.Context, OutputTokens: model.MaxOutputTokens, TotalTokens: model.Context},
@@ -163,8 +163,8 @@ func TestBuildCodexRequestUsesNormalizedUpstreamModel(t *testing.T) {
 		}},
 	}
 	model := ResolvedAlias{
-		Alias:       "clyde-gpt-5.4",
-		ClaudeModel: "gpt-5.4",
+		Alias:     "clyde-gpt-5.4",
+		WireModel: "gpt-5.4",
 	}
 
 	out := BuildRequest(req, model, "")
@@ -181,8 +181,8 @@ func TestBuildCodexRequestUsesSparkModelSlug(t *testing.T) {
 		}},
 	}
 	model := ResolvedAlias{
-		Alias:       "clyde-gpt-5.3-codex-spark",
-		ClaudeModel: "gpt-5.3-codex-spark",
+		Alias:     "clyde-gpt-5.3-codex-spark",
+		WireModel: "gpt-5.3-codex-spark",
 	}
 
 	out := BuildRequest(req, model, "")
@@ -199,8 +199,8 @@ func TestBuildCodexRequestUsesNativeModelAndRequestEffort(t *testing.T) {
 		}},
 	}
 	model := ResolvedAlias{
-		Alias:       "gpt-5.4",
-		ClaudeModel: "gpt-5.4",
+		Alias:     "gpt-5.4",
+		WireModel: "gpt-5.4",
 	}
 
 	out := BuildRequest(req, model, EffortXHigh)
@@ -990,7 +990,7 @@ func TestBuildCodexRequestPreservesResponsesInputToolHistory(t *testing.T) {
 		},
 	}
 
-	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", WireModel: "gpt-5.4"}, "")
 	var sawGlobCall, sawGlobOutput, sawShellCommand, sawShellOutput bool
 	for _, item := range out.Input {
 		switch codexItemTypeString(item) {
@@ -1156,7 +1156,7 @@ func TestBuildCodexRequestFromCapturedWriteReplay(t *testing.T) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
-	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"}, "")
+	out := BuildRequest(req, ResolvedAlias{Alias: "gpt-5.4", WireModel: "gpt-5.4"}, "")
 	if len(out.Tools) == 0 {
 		t.Fatalf("expected tools")
 	}
@@ -1731,22 +1731,22 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 	}{
 		{
 			name:      "native_alias_preserves_upstream_model",
-			model:     ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			model:     ResolvedAlias{Alias: "gpt-5.4", WireModel: "gpt-5.4"},
 			wantModel: "gpt-5.4",
 		},
 		{
 			name:      "native_long_context_alias_preserves_upstream_model",
-			model:     ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			model:     ResolvedAlias{Alias: "gpt-5.4", WireModel: "gpt-5.4"},
 			wantModel: "gpt-5.4",
 		},
 		{
 			name:      "spark_alias_preserves_spark_slug",
-			model:     ResolvedAlias{Alias: "gpt-5.3-codex-spark", ClaudeModel: "gpt-5.3-codex-spark"},
+			model:     ResolvedAlias{Alias: "gpt-5.3-codex-spark", WireModel: "gpt-5.3-codex-spark"},
 			wantModel: "gpt-5.3-codex-spark",
 		},
 		{
 			name:      "service_tier_passthrough_drops_max_completion",
-			model:     ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			model:     ResolvedAlias{Alias: "gpt-5.4", WireModel: "gpt-5.4"},
 			metadata:  mustRaw(`{"service_tier":"fast"}`),
 			wantModel: "gpt-5.4",
 			wantTier:  "priority",
@@ -1757,7 +1757,7 @@ func TestBuildCodexRequestParityMatrixPreservesAliasIntent(t *testing.T) {
 		},
 		{
 			name:                 "text_passthrough_drops_truncation_and_retention",
-			model:                ResolvedAlias{Alias: "gpt-5.4", ClaudeModel: "gpt-5.4"},
+			model:                ResolvedAlias{Alias: "gpt-5.4", WireModel: "gpt-5.4"},
 			wantModel:            "gpt-5.4",
 			wantTier:             "priority",
 			serviceTier:          "fast",

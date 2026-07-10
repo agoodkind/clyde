@@ -17,129 +17,120 @@ func TestProviderIDAliasesBackendID(t *testing.T) {
 		{adaptermodel.BackendPassthroughOverride, ProviderPassthrough},
 		{adaptermodel.BackendID(""), ProviderUnknown},
 	}
-	for _, tc := range cases {
-		if tc.backend != tc.want {
-			t.Errorf("backend %q != provider constant %q", tc.backend, tc.want)
+	for _, test := range cases {
+		if test.backend != test.want {
+			t.Errorf("backend %q != provider constant %q", test.backend, test.want)
 		}
 	}
 }
 
 func TestModelRegistryAdapterNilInner(t *testing.T) {
-	a := NewModelRegistryAdapter(nil)
-	if _, err := a.Resolve("anything", ""); err == nil {
+	adapter := NewModelRegistryAdapter(nil)
+	if _, err := adapter.Resolve(IngressOpenAI, "anything", ""); err == nil {
 		t.Fatal("expected error from nil-inner adapter, got nil")
 	}
 	var nilAdapter *ModelRegistryAdapter
-	if _, err := nilAdapter.Resolve("anything", ""); err == nil {
+	if _, err := nilAdapter.Resolve(IngressOpenAI, "anything", ""); err == nil {
 		t.Fatal("expected error from nil adapter, got nil")
 	}
 }
 
-func TestModelRegistryAdapterPreservesInstructions(t *testing.T) {
-	cfg := config.AdapterConfig{
-		DefaultModel: "clyde-haiku-4.5",
-		ClientIdentity: config.AdapterClientIdentity{
-			SystemPromptPrefix:      "prefix",
-			StainlessPackageVersion: "test",
-			StainlessRuntime:        "go",
-			StainlessRuntimeVersion: "1.0",
-			CCVersion:               "1.0.0",
-			CCEntrypoint:            "test",
-		},
-		Families: map[string]config.AdapterFamily{
-			"haiku-4-5": {
-				AliasPrefix:     "haiku-4.5",
-				Model:           "claude-haiku-4-5-20251001",
-				Efforts:         []string{"medium"},
-				ThinkingModes:   []string{"default"},
-				MaxOutputTokens: 16000,
-				SupportsTools:   new(true),
-				SupportsVision:  new(true),
-				Contexts: []config.AdapterModelContext{{
-					Tokens: 200000,
-				}},
-			},
-		},
-		Models: map[string]config.AdapterModel{
-			"custom-model": {
-				Backend:      adaptermodel.BackendAnthropic.String(),
-				Model:        "claude-custom",
-				Instructions: "follow repo conventions",
-				Context:      200000,
-				Efforts:      []string{"medium"},
-			},
-		},
-	}
-	registry, err := adaptermodel.NewRegistry(cfg)
+func TestModelRegistryAdapterProjectsExactCatalogFields(t *testing.T) {
+	registry, err := adaptermodel.NewRegistry(resolverCatalogConfig())
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	adapter := NewModelRegistryAdapter(registry)
-	got, err := adapter.Resolve("custom-model", "medium")
+	got, err := adapter.Resolve(IngressOpenAI, "gpt-alias", "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
+	if got.Provider != ProviderCodex || got.Model != "gpt-wire" {
+		t.Fatalf("provider/model = %q/%q", got.Provider, got.Model)
+	}
 	if got.Instructions != "follow repo conventions" {
-		t.Fatalf("Instructions = %q want %q", got.Instructions, "follow repo conventions")
+		t.Fatalf("instructions = %q", got.Instructions)
+	}
+	if got.Effort != Effort("future-tier") {
+		t.Fatalf("effort = %q, want future-tier", got.Effort)
+	}
+	if got.ToolsCapability == nil || !*got.ToolsCapability {
+		t.Fatalf("tools capability = %v, want known true", got.ToolsCapability)
+	}
+	if got.VisionCapability == nil || *got.VisionCapability {
+		t.Fatalf("vision capability = %v, want known false", got.VisionCapability)
+	}
+	if got.Context != 200000 || got.MaxOutputTokens != 16000 {
+		t.Fatalf("context/output = %d/%d", got.Context, got.MaxOutputTokens)
+	}
+	if got.Family != "standard" || got.Pricing.InputPerMTok != 2.5 || got.Pricing.OutputPerMTok != 15 {
+		t.Fatalf("profile/pricing = %q/%+v", got.Family, got.Pricing)
 	}
 }
 
-func TestModelRegistryAdapterProjectsCapabilityFields(t *testing.T) {
-	cfg := config.AdapterConfig{
-		DefaultModel: "clyde-haiku-4.5",
-		ClientIdentity: config.AdapterClientIdentity{
-			SystemPromptPrefix:      "prefix",
-			StainlessPackageVersion: "test",
-			StainlessRuntime:        "go",
-			StainlessRuntimeVersion: "1.0",
-			CCVersion:               "1.0.0",
-			CCEntrypoint:            "test",
-		},
-		Families: map[string]config.AdapterFamily{
-			"haiku-4-5": {
-				AliasPrefix:     "haiku-4.5",
-				Model:           "claude-haiku-4-5-20251001",
-				Efforts:         []string{"medium"},
-				ThinkingModes:   []string{"default", "enabled"},
-				MaxOutputTokens: 16000,
-				SupportsTools:   new(true),
-				SupportsVision:  new(false),
-				Contexts: []config.AdapterModelContext{{
-					Tokens:         200000,
-					ObservedTokens: 272000,
-				}},
-			},
-		},
-	}
+func TestModelRegistryAdapterPreservesWildcardUnknownCapabilities(t *testing.T) {
+	cfg := resolverCatalogConfig()
+	cfg.ModelRoutes = []config.AdapterModelRoute{{
+		Match:            "gpt-*",
+		Surfaces:         []config.AdapterIngressSurface{config.AdapterIngressCursor},
+		Provider:         config.AdapterModelProviderCodex,
+		WireModelPolicy:  config.AdapterWireModelPolicyPreserve,
+		CapabilityPolicy: config.AdapterWildcardCapabilityPolicyPassthrough,
+	}}
 	registry, err := adaptermodel.NewRegistry(cfg)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	adapter := NewModelRegistryAdapter(registry)
-	got, err := adapter.Resolve("clyde-haiku-4.5-medium", "medium")
+	got, err := NewModelRegistryAdapter(registry).Resolve(IngressCursor, "gpt-future", "ultra")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got.Alias != "clyde-haiku-4.5-medium" {
-		t.Errorf("Alias = %q, want clyde-haiku-4.5-medium", got.Alias)
+	if got.Model != "gpt-future" || got.Effort != Effort("ultra") {
+		t.Fatalf("model/effort = %q/%q", got.Model, got.Effort)
 	}
-	if !got.SupportsTools {
-		t.Errorf("SupportsTools = %v, want true", got.SupportsTools)
-	}
-	if got.SupportsVision {
-		t.Errorf("SupportsVision = %v, want false", got.SupportsVision)
-	}
-	if got.ObservedContext != 272000 {
-		t.Errorf("ObservedContext = %d, want 272000", got.ObservedContext)
-	}
-	if len(got.ThinkingModes) != 2 || got.ThinkingModes[0] != "default" || got.ThinkingModes[1] != "enabled" {
-		t.Errorf("ThinkingModes = %v, want [default enabled]", got.ThinkingModes)
+	if got.ToolsCapability != nil || got.VisionCapability != nil {
+		t.Fatalf("wildcard capabilities = %v/%v, want unknown", got.ToolsCapability, got.VisionCapability)
 	}
 }
 
 func TestModelRegistryAdapterProjectsPassthroughOverride(t *testing.T) {
-	cfg := config.AdapterConfig{
-		DefaultModel: "clyde-haiku-4.5",
+	cfg := resolverCatalogConfig()
+	cfg.PassthroughOverrides = map[string]config.AdapterPassthroughOverride{
+		"vendor-x": {
+			BaseURL:   "https://upstream.invalid/v1",
+			APIKeyEnv: "UPSTREAM_API_KEY",
+			Model:     "upstream-model",
+		},
+	}
+	cfg.Models["vendor-alias"] = config.AdapterModelDeclaration{
+		Provider:            config.AdapterModelProviderPassthroughOverride,
+		WireModel:           "upstream-model",
+		Profile:             "standard",
+		PassthroughOverride: "vendor-x",
+	}
+	registry, err := adaptermodel.NewRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	got, err := NewModelRegistryAdapter(registry).Resolve(IngressOpenAI, "vendor-alias", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Provider != ProviderPassthrough || got.PassthroughOverrideName != "vendor-x" {
+		t.Fatalf("provider/override = %q/%q", got.Provider, got.PassthroughOverrideName)
+	}
+	if got.PassthroughOverride.BaseURL != "https://upstream.invalid/v1" ||
+		got.PassthroughOverride.APIKeyEnv != "UPSTREAM_API_KEY" ||
+		got.PassthroughOverride.Model != "upstream-model" {
+		t.Fatalf("passthrough override snapshot = %+v", got.PassthroughOverride)
+	}
+}
+
+func resolverCatalogConfig() config.AdapterConfig {
+	tools := true
+	vision := false
+	return config.AdapterConfig{
+		DefaultModel: "gpt-exact",
 		ClientIdentity: config.AdapterClientIdentity{
 			SystemPromptPrefix:      "prefix",
 			StainlessPackageVersion: "test",
@@ -148,47 +139,26 @@ func TestModelRegistryAdapterProjectsPassthroughOverride(t *testing.T) {
 			CCVersion:               "1.0.0",
 			CCEntrypoint:            "test",
 		},
-		Families: map[string]config.AdapterFamily{
-			"haiku-4-5": {
-				AliasPrefix:     "haiku-4.5",
-				Model:           "claude-haiku-4-5-20251001",
-				Efforts:         []string{"medium"},
-				ThinkingModes:   []string{"default"},
-				MaxOutputTokens: 16000,
-				SupportsTools:   new(true),
-				SupportsVision:  new(true),
-				Contexts: []config.AdapterModelContext{{
-					Tokens: 200000,
-				}},
+		Codex: config.AdapterCodex{Enabled: true},
+		ModelProfiles: map[string]config.AdapterModelProfile{
+			"standard": {
+				Contexts:         []config.AdapterModelProfileContext{{Name: "standard", Tokens: 200000}},
+				MaxOutputTokens:  16000,
+				ReasoningEfforts: []config.AdapterReasoningEffort{"future-tier"},
+				DefaultEffort:    "future-tier",
+				SupportsTools:    &tools,
+				SupportsVision:   &vision,
 			},
 		},
-		PassthroughOverrides: map[string]config.AdapterPassthroughOverride{
-			"vendor-x": {
-				BaseURL:   "https://upstream.invalid/v1",
-				APIKeyEnv: "UPSTREAM_API_KEY",
-				Model:     "upstream-model",
+		Models: map[string]config.AdapterModelDeclaration{
+			"gpt-exact": {
+				Provider:     config.AdapterModelProviderCodex,
+				WireModel:    "gpt-wire",
+				Profile:      "standard",
+				Instructions: "follow repo conventions",
+				Pricing:      config.AdapterModelPricing{InputPerMTok: 2.5, OutputPerMTok: 15},
+				Aliases:      []config.AdapterModelAlias{{ID: "gpt-alias"}},
 			},
 		},
-		Models: map[string]config.AdapterModel{
-			"vendor-alias": {
-				Backend:             adaptermodel.BackendPassthroughOverride.String(),
-				PassthroughOverride: "vendor-x",
-			},
-		},
-	}
-	registry, err := adaptermodel.NewRegistry(cfg)
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	adapter := NewModelRegistryAdapter(registry)
-	got, err := adapter.Resolve("vendor-alias", "")
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if got.Provider != ProviderPassthrough {
-		t.Errorf("Provider = %v, want %v", got.Provider, ProviderPassthrough)
-	}
-	if got.PassthroughOverrideName != "vendor-x" {
-		t.Errorf("PassthroughOverrideName = %q, want vendor-x", got.PassthroughOverrideName)
 	}
 }

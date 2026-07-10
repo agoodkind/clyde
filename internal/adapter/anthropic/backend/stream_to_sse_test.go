@@ -76,7 +76,7 @@ func TestStreamPipelineDeliversToolCallsAndThinking(t *testing.T) {
 
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 	req := anthropic.Request{Model: "claude-sonnet-4-6"}
-	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-sonnet-4.6-medium-thinking", ClaudeModel: "claude-sonnet-4-6"})
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-sonnet-4.6-medium-thinking", WireModel: "claude-sonnet-4-6"})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
@@ -188,7 +188,7 @@ func TestRunStreamExecutionRecoversFinishReasonAfterLateError(t *testing.T) {
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 
 	req := anthropic.Request{Model: "claude-opus-4-7"}
-	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000})
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", WireModel: "claude-opus-4-7", Context: 200_000})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)
@@ -244,7 +244,7 @@ func TestRunStreamExecutionRecoversFinishReasonFromToolUseStopReason(t *testing.
 	dispatcher.sseWriter = &fakeResponseSSEWriter{}
 
 	req := anthropic.Request{Model: "claude-opus-4-7"}
-	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", ClaudeModel: "claude-opus-4-7", Context: 200_000})
+	resolved := resolvedForTest(adaptermodel.ResolvedAlias{Alias: "clyde-opus-4-7", WireModel: "claude-opus-4-7", Context: 200_000})
 
 	emit := func(ev adapterrender.Event) error {
 		return dispatcher.WriteEvent(ev)

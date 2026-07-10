@@ -125,7 +125,7 @@ func (s *Server) validateVision(ctx context.Context, req *ChatRequest, resolved 
 	if !requestHasImageContent(req) {
 		return nil
 	}
-	if resolved.Provider == BackendAnthropic && !resolved.SupportsVision {
+	if resolved.Provider == BackendAnthropic && resolved.VisionCapability != nil && !*resolved.VisionCapability {
 		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.vision_rejected", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 			slog.String("model", req.Model),
 		)
@@ -163,7 +163,7 @@ func (s *Server) validateToolChoice(ctx context.Context, req *ChatRequest, resol
 		return nil
 	}
 	wantsTools := len(req.Tools) > 0 || len(req.Functions) > 0 || toolChoiceRequestsTools(req.ToolChoice)
-	if wantsTools && !resolved.SupportsTools {
+	if wantsTools && resolved.ToolsCapability != nil && !*resolved.ToolsCapability {
 		slogger.WithConcern(s.log, slogger.ConcernAdapterChatPreflight).LogAttrs(ctx, slog.LevelWarn, "adapter.preflight.tools_rejected", slog.String("concern", "adapter.chat.preflight"), slog.String("request_id", reqID),
 			slog.String("model", req.Model),
 		)

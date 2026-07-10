@@ -48,6 +48,18 @@ func newProviderStatsRecorder(pricing adapterruntime.PricingTable) *providerStat
 	}
 }
 
+// replacePricing swaps the immutable pricing table under the same lock used
+// for terminal-event cost calculation. A concurrent record call therefore
+// observes either the complete old table or the complete new table.
+func (r *providerStatsRecorder) replacePricing(pricing adapterruntime.PricingTable) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pricing = pricing
+}
+
 func (r *providerStatsRecorder) snapshot() ([]ProviderStats, time.Time) {
 	if r == nil {
 		return nil, time.Unix(0, 0)

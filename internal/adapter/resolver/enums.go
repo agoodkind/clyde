@@ -1,6 +1,10 @@
 package resolver
 
-import adaptermodel "goodkind.io/clyde/internal/adapter/model"
+import (
+	"strings"
+
+	adaptermodel "goodkind.io/clyde/internal/adapter/model"
+)
 
 // ProviderID is the typed enum naming the upstream provider that the
 // resolved request will be dispatched to. It is a type alias of the
@@ -25,10 +29,7 @@ const (
 	ProviderPassthrough = adaptermodel.BackendPassthroughOverride
 )
 
-// Effort is the typed reasoning-effort enum carried on a ResolvedRequest.
-// The set mirrors the values the existing model registry accepts; the
-// resolver narrows the wire string to one of these canonical values
-// (or returns an error at the boundary).
+// Effort is a named provider-owned reasoning tier string.
 type Effort string
 
 const (
@@ -54,36 +55,17 @@ func (e Effort) String() string {
 	return string(e)
 }
 
-// Valid reports whether the Effort is one of the known typed values
-// (including EffortUnset, since unset is a legitimate state).
+// Valid reports whether the effort is empty or a trimmed nonempty string.
+// Exact model profiles validate membership before the resolver sees it;
+// wildcard routes intentionally preserve future provider tiers.
 func (e Effort) Valid() bool {
-	switch e {
-	case EffortUnset, EffortNone, EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
-		return true
-	}
-	return false
+	return string(e) == strings.TrimSpace(string(e))
 }
 
-// ParseEffort maps a wire-form effort string to a typed Effort. Empty
-// input is EffortUnset. Whitespace is trimmed. An unrecognised value
-// returns EffortUnset and false; callers may decide whether that is
-// fatal at their boundary.
+// ParseEffort preserves a trimmed provider-owned effort string.
 func ParseEffort(raw string) (Effort, bool) {
-	switch raw {
-	case "":
-		return EffortUnset, true
-	case string(EffortNone):
-		return EffortNone, true
-	case string(EffortLow):
-		return EffortLow, true
-	case string(EffortMedium):
-		return EffortMedium, true
-	case string(EffortHigh):
-		return EffortHigh, true
-	case string(EffortXHigh):
-		return EffortXHigh, true
-	case string(EffortMax):
-		return EffortMax, true
+	if raw != strings.TrimSpace(raw) {
+		return EffortUnset, false
 	}
-	return EffortUnset, false
+	return Effort(raw), true
 }

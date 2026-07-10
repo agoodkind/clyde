@@ -28,7 +28,7 @@ func directOAuthConfig() config.AdapterConfig {
 	}
 	cfg.Codex.Enabled = true
 	cfg.Codex.AuthFile = "~/.codex/auth.json"
-	cfg.Codex.Models = testCodexModels()
+	addTestCodexModel(&cfg)
 	return cfg
 }
 
@@ -58,8 +58,8 @@ func TestDispatchUnknownBackendReturnsUnsupportedBackend(t *testing.T) {
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
-	if ids := srv.providerRegistry.IDs(); len(ids) != 0 {
-		t.Fatalf("expected empty registry for baseConfig, got %v", ids)
+	if ids := srv.providerRegistry.IDs(); !slices.Equal(ids, []adapterresolver.ProviderID{adapterresolver.ProviderAnthropic}) {
+		t.Fatalf("provider registry = %v, want anthropic only", ids)
 	}
 
 	unknownBackend := adaptermodel.BackendID("mystery")
@@ -91,8 +91,8 @@ func TestDispatchKnownBackendWithoutRegisteredProviderReturnsUpstreamUnavailable
 	t.Parallel()
 	srv, _ := newLoggingServer(t, config.LoggingConfig{})
 
-	if ids := srv.providerRegistry.IDs(); len(ids) != 0 {
-		t.Fatalf("expected empty registry for baseConfig, got %v", ids)
+	if ids := srv.providerRegistry.IDs(); !slices.Equal(ids, []adapterresolver.ProviderID{adapterresolver.ProviderAnthropic}) {
+		t.Fatalf("provider registry = %v, want anthropic only", ids)
 	}
 
 	out, status := dispatchToErrorEnvelope(t, srv, dispatchArgs{

@@ -89,7 +89,7 @@ func modelEntryFromResolved(m adaptermodel.ResolvedAlias) ModelEntry {
 		ContextTokenLimitForMaxModeCamel: advertised,
 		Efforts:                          m.Efforts,
 		Backend:                          m.Backend.String(),
-		ClaudeModel:                      m.ClaudeModel,
+		ClaudeModel:                      m.WireModel,
 	}
 }
 
@@ -137,7 +137,11 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	// the alias and reasoning effort to a typed ResolvedRequest carrying
 	// provider identity, effort, budget, and the per-provider knobs the
 	// dispatcher and backends consume directly.
-	resolvedReq, resolverErr := resolveCursorChatRequest(req, adapterresolver.NewModelRegistryAdapter(s.modelRegistry()))
+	resolvedReq, resolverErr := resolveCursorChatRequest(
+		openAIIngressSurface(ctx),
+		req,
+		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
+	)
 	if resolverErr != nil {
 		s.logChatResolveFailed(ctx, corr, reqID, req, ingressCtx, ingress, resolverErr)
 		recorder.EmitError(ctx, "model_resolve_failed", resolverErr.Error())
@@ -170,6 +174,13 @@ func (s *Server) handleChat(ctx context.Context, hctx *handlerCtx) (err error) {
 	s.dispatchResolvedChat(w, r, req, effort, reqID, body, ingressCtx, resolvedReq)
 	s.completeChatDispatchLegs(ctx, recorder, corr, req, &resolvedReq, effort, bodyFacets)
 	return nil
+}
+
+func openAIIngressSurface(ctx context.Context) adapterresolver.IngressSurface {
+	if ingressLabelFromContext(ctx) == string(adapterresolver.IngressCursor) {
+		return adapterresolver.IngressCursor
+	}
+	return adapterresolver.IngressOpenAI
 }
 
 func applyHeaderIngressContext(ctx context.Context, r *http.Request, corr correlation.Context, ingress ingresscontract.IngressContract) (context.Context, *http.Request, correlation.Context, []logevent.Facet) {

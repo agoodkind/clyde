@@ -21,8 +21,8 @@ import (
 func resolvedForTest(model adaptermodel.ResolvedAlias) *adapterresolver.ResolvedRequest {
 	resolved := &adapterresolver.ResolvedRequest{
 		Provider:        adaptermodel.BackendAnthropic,
-		Family:          model.FamilySlug,
-		Model:           model.ClaudeModel,
+		Family:          model.Profile,
+		Model:           model.WireModel,
 		Effort:          adapterresolver.Effort(model.Effort),
 		ContextBudget:   adapterresolver.ContextBudget{InputTokens: model.Context, OutputTokens: model.MaxOutputTokens, TotalTokens: model.Context},
 		Thinking:        model.Thinking,
@@ -79,7 +79,7 @@ func TestBuildRequestDerivesFeatureVector(t *testing.T) {
 			name: "one million context suffix stripped",
 			model: adaptermodel.ResolvedAlias{
 				Alias:           "clyde-opus-4-7-1m-thinking-enabled",
-				ClaudeModel:     "claude-opus-4-7[1m]",
+				WireModel:       "claude-opus-4-7[1m]",
 				Context:         1_000_000,
 				MaxOutputTokens: 32000,
 				Thinking:        adaptermodel.ThinkingEnabled,
@@ -90,7 +90,7 @@ func TestBuildRequestDerivesFeatureVector(t *testing.T) {
 			name: "standard context model id verbatim",
 			model: adaptermodel.ResolvedAlias{
 				Alias:           "clyde-haiku-4-5",
-				ClaudeModel:     "claude-haiku-4-5",
+				WireModel:       "claude-haiku-4-5",
 				Context:         200_000,
 				MaxOutputTokens: 8192,
 				Thinking:        "",
@@ -122,7 +122,7 @@ func TestBuildRequestEmitsMetadataAndContextManagement(t *testing.T) {
 	req.Stream = stream
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-medium-thinking-enabled",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
@@ -159,7 +159,7 @@ func TestBuildRequestSkipsContextManagementWhenThinkingOff(t *testing.T) {
 	req.Stream = true
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-haiku-4-5",
-		ClaudeModel:     "claude-haiku-4-5",
+		WireModel:       "claude-haiku-4-5",
 		MaxOutputTokens: 4096,
 	}
 	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), "", requestBuilderConfig(), "req-test")
@@ -175,7 +175,7 @@ func TestBuildRequestThinkingDisplaySummarizedWhenEnabled(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-haiku-4-5-thinking-enabled",
-		ClaudeModel:     "claude-haiku-4-5-20251001",
+		WireModel:       "claude-haiku-4-5-20251001",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
@@ -206,7 +206,7 @@ func TestBuildRequestPassesThinkingAdaptiveThrough(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-medium-thinking",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingAdaptive,
 	}
@@ -234,10 +234,11 @@ func TestBuildRequestPassesThinkingAdaptiveThrough(t *testing.T) {
 func TestBuildRequestPassesThinkingEnabledThrough(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedAlias{
-		Alias:           "clyde-opus-4-7-medium-thinking",
-		ClaudeModel:     "claude-opus-4-7",
-		MaxOutputTokens: 32000,
-		Thinking:        adaptermodel.ThinkingEnabled,
+		Alias:                "clyde-opus-4-7-medium-thinking",
+		WireModel:            "claude-opus-4-7",
+		MaxOutputTokens:      32000,
+		Thinking:             adaptermodel.ThinkingEnabled,
+		ThinkingBudgetTokens: 7000,
 	}
 
 	out, err := BuildRequest(context.Background(), req, resolvedForTest(model), adaptermodel.EffortMedium, requestBuilderConfig(), "req-test")
@@ -259,7 +260,7 @@ func TestBuildRequestHaikuEnabledStaysManual(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-haiku-4-5-thinking-enabled",
-		ClaudeModel:     "claude-haiku-4-5-20251001",
+		WireModel:       "claude-haiku-4-5-20251001",
 		MaxOutputTokens: 16000,
 		Thinking:        adaptermodel.ThinkingEnabled,
 	}
@@ -283,7 +284,7 @@ func TestBuildRequestThinkingAdaptiveKeepsSummarizedDisplay(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-thinking-adaptive",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingAdaptive,
 	}
@@ -307,7 +308,7 @@ func TestBuildRequestThinkingDisabledHasNoDisplay(t *testing.T) {
 	req := requestBuilderChatRequest()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7-thinking-disabled",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Thinking:        adaptermodel.ThinkingDisabled,
 	}
@@ -332,7 +333,7 @@ func TestBuildRequestAddsModelInstructionsBeforeCallerSystem(t *testing.T) {
 	cfg := requestBuilderConfig()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 		Instructions:    "model base instructions",
 	}
@@ -355,7 +356,7 @@ func TestBuildRequestAddsJSONPromptWithoutDuplicatingPrefix(t *testing.T) {
 	cfg.JSONSystemPrompt = "Return JSON only."
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 
@@ -400,7 +401,7 @@ func TestBuildRequestSystemPrefixBlockOrderingAndCache(t *testing.T) {
 	cfg.PromptCacheScope = "global"
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: []byte(`"caller system text"`)}
@@ -460,7 +461,7 @@ func TestBuildRequestEmptyPrefixOmitsPrefixBlock(t *testing.T) {
 	cfg.SystemPromptPrefix = ""
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: []byte(`"only caller"`)}
@@ -491,7 +492,7 @@ func TestBuildRequestPrefixBlockEmittedWithoutCallerSystem(t *testing.T) {
 	cfg := requestBuilderConfig()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 
@@ -518,7 +519,7 @@ func TestBuildRequestStripsPrefixWhenCallerAlreadyPrepended(t *testing.T) {
 	cfg := requestBuilderConfig()
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 	// Caller smuggled the prefix into their system content; Clyde
@@ -559,7 +560,7 @@ func TestBuildRequestCachingDisabledDropsCacheMarkers(t *testing.T) {
 	cfg.PromptCachingEnabled = &disabled
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 	systemMsg := adapteropenai.ChatMessage{Role: "system", Content: []byte(`"caller text"`)}
@@ -590,7 +591,7 @@ func TestBuildRequestNormalizesPromptCacheTTLAndScope(t *testing.T) {
 	cfg.PromptCacheScope = "team"
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 
@@ -626,7 +627,7 @@ func TestBuildRequestJSONPromptAppendsAfterCallerSystemBelowPrefix(t *testing.T)
 	cfg.JSONSystemPrompt = "Return JSON only."
 	model := adaptermodel.ResolvedAlias{
 		Alias:           "clyde-opus-4-7",
-		ClaudeModel:     "claude-opus-4-7",
+		WireModel:       "claude-opus-4-7",
 		MaxOutputTokens: 32000,
 	}
 	callerSystem := "caller policy"

@@ -52,19 +52,13 @@ func (s *Server) handleAnthropicMessages(ctx context.Context, hctx *handlerCtx) 
 
 	requestedModel := strings.TrimSpace(req.Model)
 	resolved, resolveOK := s.anthropicNativeResolvedRequest(ctx, requestedModel)
-	nativeClaudeModel := isNativeClaudeModelID(requestedModel)
-	resolvedToAnthropic := resolveOK && (resolved.Provider == BackendAnthropic || resolved.Provider == BackendClaude)
 	switch {
-	case !resolveOK && !nativeClaudeModel:
-		return adapterErrModelNotFound("model " + requestedModel + " does not resolve to a known backend")
 	case !resolveOK:
-		resolved = anthropicNativeClaudeResolvedRequest(requestedModel)
-	case !nativeClaudeModel && !resolvedToAnthropic:
+		return adapterErrModelNotFound("model " + requestedModel + " does not resolve to a known backend")
+	case resolved.Provider != BackendAnthropic:
 		return adapterErrInvalidRequest("model does not resolve to the anthropic backend", nil)
-	case nativeClaudeModel && !resolvedToAnthropic:
-		resolved = anthropicNativeClaudeResolvedRequest(requestedModel)
 	}
-	req.Model = anthropicIngressWireModel(requestedModel, resolved.Model)
+	req.Model = anthropicbackend.StripContextSuffix(resolved.Model)
 
 	attrs := []slog.Attr{
 		slog.String("request_id", reqID),
@@ -126,63 +120,24 @@ func (s *Server) handleAnthropicCountTokens(_ context.Context, hctx *handlerCtx)
 	return err
 }
 
-func isNativeClaudeModelID(model string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-")
-}
-
-func anthropicIngressWireModel(requested string, resolvedModel string) string {
-	if isNativeClaudeModelID(requested) {
-		return anthropicbackend.StripContextSuffix(requested)
-	}
-	return anthropicbackend.StripContextSuffix(resolvedModel)
-}
-
 // anthropicNativeResolvedRequest resolves a native `/v1/messages` model
-// id through the resolver bridge and projects the result into a
-// ResolvedRequest. The native ingress execution path does not read most
-// of these fields, but the alias and resolved wire model are carried so
-// shared backend helpers (request alias derivation, betas) see the same
-// shape the OpenAI ingress path produces.
+// through the same typed resolver and canonical projection used by the
+// OpenAI-shaped surfaces. This keeps every catalog field available to the
+// native provider path without a second manual projection to maintain.
 func (s *Server) anthropicNativeResolvedRequest(ctx context.Context, requestedModel string) (adapterresolver.ResolvedRequest, bool) {
-	view, err := adapterresolver.NewModelRegistryAdapter(s.modelRegistry()).Resolve(requestedModel, "")
+	var request ChatRequest
+	request.Model = requestedModel
+	resolved, err := resolveCursorChatRequest(
+		adapterresolver.IngressAnthropic,
+		request,
+		adapterresolver.NewModelRegistryAdapter(s.modelRegistry()),
+	)
 	if err != nil {
 		s.log.WarnContext(ctx, "adapter.anthropic.native_resolve_failed", "concern", "adapter.providers.anthropic.request", "model", requestedModel, "err", err)
-		return zeroNativeResolvedRequest(requestedModel), false
+		var empty adapterresolver.ResolvedRequest
+		return empty, false
 	}
-	resolved := zeroNativeResolvedRequest(requestedModel)
-	resolved.Provider = view.Provider
-	resolved.Family = view.Family
-	resolved.Model = view.Model
-	resolved.ContextBudget = adapterresolver.ContextBudget{InputTokens: view.Context, OutputTokens: view.MaxOutputTokens, TotalTokens: view.Context}
-	resolved.MaxOutputTokens = view.MaxOutputTokens
-	resolved.Alias = view.Alias
 	return resolved, true
-}
-
-// anthropicNativeClaudeResolvedRequest builds the fallback ResolvedRequest
-// for a native `claude-*` model id that the registry did not map to the
-// anthropic backend. It pins the provider to claude and carries the raw
-// requested id as both the alias and the wire model, matching the prior
-// inline ResolvedAlias fallback.
-func anthropicNativeClaudeResolvedRequest(requestedModel string) adapterresolver.ResolvedRequest {
-	resolved := zeroNativeResolvedRequest(requestedModel)
-	resolved.Provider = BackendClaude
-	resolved.Model = requestedModel
-	resolved.Alias = requestedModel
-	return resolved
-}
-
-// zeroNativeResolvedRequest returns a zero-value ResolvedRequest the
-// native ingress callers fill in. Native ingress does not consume the
-// per-provider knobs (effort, thinking, betas), so they stay at their
-// zero values; the OpenAI model is carried so the shared request-alias
-// derivation has the requested id. Built from the zero value rather than
-// a struct literal so the OpenAI/Cursor sub-structs need not be
-// enumerated field-by-field.
-func zeroNativeResolvedRequest(requestedModel string) adapterresolver.ResolvedRequest {
-	var resolved adapterresolver.ResolvedRequest
-	resolved.OpenAI.Model = requestedModel
-	return resolved
 }
 
 func (s *Server) writeAnthropicIngressProviderError(w http.ResponseWriter, r *http.Request, err error) {
@@ -261,11 +216,11 @@ func (w *nativeAnthropicJSONWriter) Flush() error {
 	return nil
 }
 
-func (w *nativeAnthropicJSONWriter) capture(status int, header http.Header, body []byte) error {
+func (w *nativeAnthropicJSONWriter) capture(header http.Header, body []byte) error {
 	if w == nil {
 		return fmt.Errorf("native anthropic writer missing")
 	}
-	w.status = status
+	w.status = http.StatusOK
 	w.body = append(w.body[:0], body...)
 	w.header = make(http.Header, len(header))
 	for key, values := range header {

@@ -53,10 +53,10 @@ func TestHandleModelsIncludesLegacyAndOpenAIContextFields(t *testing.T) {
 
 func TestModelEntryFromResolvedIsBackendNeutral(t *testing.T) {
 	entry := modelEntryFromResolved(adaptermodel.ResolvedAlias{
-		Alias:       "clyde-gpt-5.4-1m-high",
-		Backend:     BackendCodex,
-		ClaudeModel: "gpt-5.4",
-		Context:     1_000_000,
+		Alias:     "clyde-gpt-5.4-1m-high",
+		Backend:   BackendCodex,
+		WireModel: "gpt-5.4",
+		Context:   1_000_000,
 	})
 
 	if entry.ID != "clyde-gpt-5.4-1m-high" || entry.Backend != BackendCodex.String() {
@@ -71,14 +71,14 @@ func TestCodexCapabilityOverlayAppliesTransportAwareContextTruth(t *testing.T) {
 	entry := modelEntryFromResolved(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-configured-codex-1m-high",
 		Backend:         BackendCodex,
-		ClaudeModel:     "configured-codex-model",
+		WireModel:       "configured-codex-model",
 		Context:         1_000_000,
 		ObservedContext: 333_000,
 	})
 	entry = adaptercodex.ApplyCapabilityReport(entry, adaptercodex.CapabilityReportForModel(adaptermodel.ResolvedAlias{
 		Alias:           "clyde-configured-codex-1m-high",
 		Backend:         BackendCodex,
-		ClaudeModel:     "configured-codex-model",
+		WireModel:       "configured-codex-model",
 		Context:         1_000_000,
 		ObservedContext: 333_000,
 	}, adaptercodex.CapabilityMode{WebsocketEnabled: false}))
@@ -100,18 +100,18 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 		{
 			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
-			ClaudeModel:     "gpt-5.5",
+			WireModel:       "gpt-5.5",
 			Context:         200_000,
 			MaxOutputTokens: 128_000,
 			Efforts:         []string{EffortHigh, EffortMedium},
 			Effort:          EffortHigh,
 			SupportsTools:   true,
-			FamilySlug:      "codex-5.5",
+			Profile:         "codex-5.5",
 		},
 		{
 			Alias:           "clyde-sonnet-4.6-medium-thinking",
 			Backend:         BackendAnthropic,
-			ClaudeModel:     "claude-sonnet-4-6-20260415",
+			WireModel:       "claude-sonnet-4-6-20260415",
 			Context:         200_000,
 			MaxOutputTokens: 64_000,
 			Efforts:         []string{EffortMedium},
@@ -120,14 +120,14 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 			Thinking:        ThinkingEnabled,
 			SupportsTools:   true,
 			SupportsVision:  true,
-			FamilySlug:      "sonnet-4.6",
+			Profile:         "sonnet-4.6",
 		},
 	}
 	reordered := []adaptermodel.ResolvedAlias{
 		{
 			Alias:           "clyde-sonnet-4.6-medium-thinking",
 			Backend:         BackendAnthropic,
-			ClaudeModel:     "claude-sonnet-4-6-20260415",
+			WireModel:       "claude-sonnet-4-6-20260415",
 			Context:         200_000,
 			MaxOutputTokens: 64_000,
 			Efforts:         []string{EffortMedium},
@@ -136,18 +136,18 @@ func TestModelCatalogFingerprintIsStableAcrossModelAndCapabilityOrder(t *testing
 			Thinking:        ThinkingEnabled,
 			SupportsTools:   true,
 			SupportsVision:  true,
-			FamilySlug:      "sonnet-4.6",
+			Profile:         "sonnet-4.6",
 		},
 		{
 			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
-			ClaudeModel:     "gpt-5.5",
+			WireModel:       "gpt-5.5",
 			Context:         200_000,
 			MaxOutputTokens: 128_000,
 			Efforts:         []string{EffortMedium, EffortHigh},
 			Effort:          EffortHigh,
 			SupportsTools:   true,
-			FamilySlug:      "codex-5.5",
+			Profile:         "codex-5.5",
 		},
 	}
 
@@ -161,7 +161,7 @@ func TestModelCatalogFingerprintChangesWhenCatalogSemanticsChange(t *testing.T) 
 		{
 			Alias:           "clyde-codex-5.5-high",
 			Backend:         BackendCodex,
-			ClaudeModel:     "gpt-5.5",
+			WireModel:       "gpt-5.5",
 			Context:         200_000,
 			MaxOutputTokens: 128_000,
 			Effort:          EffortHigh,

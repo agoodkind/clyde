@@ -27,10 +27,11 @@ func TestApplyConfigSwapsModelRegistry(t *testing.T) {
 	}
 
 	next := baseConfig()
-	if next.Models == nil {
-		next.Models = map[string]config.AdapterModel{}
+	next.Models[alias] = config.AdapterModelDeclaration{
+		Provider:  config.AdapterModelProviderAnthropic,
+		WireModel: "claude-haiku-4-5-20251001",
+		Profile:   "haiku",
 	}
-	next.Models[alias] = config.AdapterModel{Backend: "claude", Model: "claude-haiku-4-5-20251001", Context: 200000, Efforts: []string{"medium"}}
 
 	if err := srv.ApplyConfig(next); err != nil {
 		t.Fatalf("ApplyConfig: %v", err)
